@@ -267,26 +267,74 @@ AELL_TOOLS.create_comp = function (args) {
                      duration: dur, frameRate: fps });
 };
 
+/*
+ * Apply style fields from args onto a text layer's TextDocument.
+ * Handles: text, fontSize, font, fillColor, tracking, leading (switches
+ * autoLeading off), justification. Returns a summary of the result.
+ */
+function AELL_applyTextStyle(layer, args) {
+  var textProp = layer.property("ADBE Text Properties")
+                      .property("ADBE Text Document");
+  var doc = textProp.value;
+  if (typeof args.text === "string" && args.text !== "") doc.text = args.text;
+  if (args.fontSize > 0) doc.fontSize = args.fontSize;
+  if (typeof args.font === "string" && args.font !== "") doc.font = args.font;
+  if (AELLJSON.isArray(args.fillColor) && args.fillColor.length >= 3) {
+    doc.fillColor = [args.fillColor[0], args.fillColor[1], args.fillColor[2]];
+    doc.applyFill = true;
+  }
+  if (typeof args.tracking === "number") doc.tracking = args.tracking;
+  if (typeof args.leading === "number") {
+    doc.autoLeading = false;
+    doc.leading = args.leading;
+  }
+  if (typeof args.justification === "string" && args.justification !== "") {
+    var j = String(args.justification).toLowerCase();
+    if (j === "left") doc.justification = ParagraphJustification.LEFT_JUSTIFY;
+    else if (j === "center") doc.justification = ParagraphJustification.CENTER_JUSTIFY;
+    else if (j === "right") doc.justification = ParagraphJustification.RIGHT_JUSTIFY;
+    else throw new Error("'justification' must be left, center or right");
+  }
+  textProp.setValue(doc);
+
+  var out = textProp.value;
+  var summary = { fontSize: out.fontSize, font: out.font };
+  try { summary.tracking = out.tracking; } catch (e1) {}
+  try {
+    summary.leading = out.autoLeading ? "auto" : out.leading;
+  } catch (e2) {}
+  return summary;
+}
+
 AELL_TOOLS.add_text_layer = function (args) {
   var comp = AELL_resolveComp(args.comp);
   if (typeof args.text !== "string" || args.text === "") {
     return AELL_err("'text' is required");
   }
   var layer = comp.layers.addText(args.text);
-  var textProp = layer.property("ADBE Text Properties")
-                      .property("ADBE Text Document");
-  var doc = textProp.value;
-  if (args.fontSize > 0) doc.fontSize = args.fontSize;
-  if (AELLJSON.isArray(args.fillColor) && args.fillColor.length >= 3) {
-    doc.fillColor = [args.fillColor[0], args.fillColor[1], args.fillColor[2]];
-  }
-  if (typeof args.font === "string" && args.font !== "") doc.font = args.font;
-  textProp.setValue(doc);
+  var style = AELL_applyTextStyle(layer, {
+    fontSize: args.fontSize,
+    font: args.font,
+    fillColor: args.fillColor,
+    tracking: args.tracking,
+    leading: args.leading,
+    justification: args.justification
+  });
   if (AELLJSON.isArray(args.position) && args.position.length >= 2) {
     layer.property("ADBE Transform Group").property("ADBE Position")
          .setValue(args.position);
   }
-  return AELL_okay({ index: layer.index, name: layer.name });
+  return AELL_okay({ index: layer.index, name: layer.name, style: style });
+};
+
+AELL_TOOLS.set_text_style = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  var layer = AELL_resolveLayer(comp, args.layer);
+  if (!(layer instanceof TextLayer)) {
+    return AELL_err("Not a text layer: " + layer.name);
+  }
+  var style = AELL_applyTextStyle(layer, args);
+  return AELL_okay({ layer: layer.name, style: style });
 };
 
 AELL_TOOLS.add_solid = function (args) {
@@ -323,6 +371,32 @@ AELL_TOOLS.add_keyframe = function (args) {
                      time: args.time, numKeys: prop.numKeys });
 };
 
+/* Escape a layer/effect name for embedding in generated expression code. */
+function AELL_escapeExprName(s) {
+  return String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+/*
+ * Assign an expression and surface AE's own validation verdict. Returns
+ * null on success, or the AE error text (with the expression cleared so a
+ * broken one never lingers) on failure — the model sees the real reason
+ * and can correct itself instead of guessing.
+ */
+function AELL_setExpr(prop, expr) {
+  try {
+    prop.expression = expr;
+  } catch (e) {
+    return e && e.message ? e.message : String(e);
+  }
+  var err = "";
+  try { err = String(prop.expressionError || ""); } catch (e2) {}
+  if (err !== "") {
+    try { prop.expression = ""; } catch (e3) {}
+    return err;
+  }
+  return null;
+}
+
 AELL_TOOLS.set_expression = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var layer = AELL_resolveLayer(comp, args.layer);
@@ -330,9 +404,191 @@ AELL_TOOLS.set_expression = function (args) {
   if (!prop.canSetExpression) {
     return AELL_err("Property cannot take an expression: " + args.property);
   }
-  prop.expression = typeof args.expression === "string" ? args.expression : "";
+  var expr = typeof args.expression === "string" ? args.expression : "";
+  if (expr === "") {
+    prop.expression = "";
+    return AELL_okay({ layer: layer.name, property: args.property,
+                       expression: "cleared" });
+  }
+  var err = AELL_setExpr(prop, expr);
+  if (err) {
+    return AELL_err("After Effects rejected the expression (" + err +
+      "). Do not invent syntax — prefer link_property or " +
+      "apply_expression_preset, or fix the reported problem and retry.");
+  }
   return AELL_okay({ layer: layer.name, property: args.property,
                      expressionEnabled: prop.expressionEnabled });
+};
+
+// ------------------------------------------------------- rigging (controls)
+
+var AELL_CONTROL_TYPES = {
+  slider:   { match: "ADBE Slider Control",   dims: 1 },
+  angle:    { match: "ADBE Angle Control",    dims: 1 },
+  checkbox: { match: "ADBE Checkbox Control", dims: 1 },
+  color:    { match: "ADBE Color Control",    dims: 4 },
+  point:    { match: "ADBE Point Control",    dims: 2 }
+};
+
+AELL_TOOLS.add_null = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  var layer = comp.layers.addNull(comp.duration);
+  if (args.name) layer.name = String(args.name);
+  if (AELLJSON.isArray(args.position) && args.position.length >= 2) {
+    layer.property("ADBE Transform Group").property("ADBE Position")
+         .setValue(args.position);
+  }
+  return AELL_okay({ index: layer.index, name: layer.name });
+};
+
+AELL_TOOLS.add_control = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  var layer = AELL_resolveLayer(comp, args.layer);
+  var type = String(args.type || "slider").toLowerCase();
+  var t = AELL_CONTROL_TYPES[type];
+  if (!t) {
+    return AELL_err("'type' must be slider, angle, checkbox, color or point");
+  }
+  if (!args.name) return AELL_err("'name' is required (e.g. 'Speed')");
+  var effects = layer.property("ADBE Effect Parade");
+  if (!effects) return AELL_err("This layer type cannot take effects");
+  var fx = effects.addProperty(t.match);
+  fx.name = String(args.name);
+  if (typeof args.value !== "undefined" && args.value !== null) {
+    try {
+      fx.property(1).setValue(args.value);
+    } catch (e) {
+      return AELL_err("Control '" + fx.name + "' added, but the initial " +
+                      "value was rejected: " + e.message);
+    }
+  }
+  return AELL_okay({ layer: layer.name, control: fx.name, type: type,
+                     hint: "Link with link_property {controlLayer: \"" +
+                           layer.name + "\", controlEffect: \"" + fx.name +
+                           "\"}" });
+};
+
+AELL_TOOLS.link_property = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  var layer = AELL_resolveLayer(comp, args.layer);
+  var prop = AELL_resolveProperty(layer, args.property);
+  if (!prop.canSetExpression) {
+    return AELL_err("Property cannot take an expression: " + args.property);
+  }
+  var ctrlLayer = AELL_resolveLayer(comp, args.controlLayer);
+  var effects = ctrlLayer.property("ADBE Effect Parade");
+  var fx = effects && args.controlEffect
+    ? effects.property(args.controlEffect) : null;
+  if (!fx) {
+    return AELL_err("Control effect not found on '" + ctrlLayer.name +
+                    "': " + args.controlEffect + ". Create it with " +
+                    "add_control first.");
+  }
+
+  var ctrlDims = 1;
+  if (fx.matchName === "ADBE Point Control") ctrlDims = 2;
+  else if (fx.matchName === "ADBE Color Control") ctrlDims = 4;
+  var v = prop.value;
+  var targetDims = AELLJSON.isArray(v) ? v.length : 1;
+
+  var scale = typeof args.scale === "number" ? args.scale : 1;
+  var offset = typeof args.offset === "number" ? args.offset : 0;
+  var src = 'thisComp.layer("' + AELL_escapeExprName(ctrlLayer.name) +
+            '").effect("' + AELL_escapeExprName(fx.name) + '")(1)';
+  var arith = "";
+  if (scale !== 1) arith += " * " + scale;
+  if (offset !== 0) arith += " + " + offset;
+
+  var expr;
+  if (ctrlDims === 1 && targetDims === 1) {
+    expr = src + arith + ";";
+  } else if (ctrlDims === 1 && targetDims > 1) {
+    // Broadcast a scalar control across every target component.
+    var comps = [];
+    for (var i = 0; i < targetDims; i++) comps.push("c");
+    expr = "var c = " + src + arith + ";\n[" + comps.join(", ") + "];";
+  } else if (ctrlDims === targetDims) {
+    if (arith === "") {
+      expr = src + ";";
+    } else {
+      var parts = [];
+      for (var j = 0; j < targetDims; j++) {
+        parts.push("c[" + j + "]" + arith);
+      }
+      expr = "var c = " + src + ";\n[" + parts.join(", ") + "];";
+    }
+  } else {
+    return AELL_err("Dimension mismatch: control '" + fx.name + "' has " +
+      ctrlDims + " dimension(s) but " + args.property + " has " +
+      targetDims + ". Use a slider for scalar targets, a point control " +
+      "for 2D targets.");
+  }
+
+  var err = AELL_setExpr(prop, expr);
+  if (err) return AELL_err("Link failed — AE rejected the expression: " + err);
+  return AELL_okay({ layer: layer.name, property: args.property,
+                     linkedTo: ctrlLayer.name + " > " + fx.name,
+                     expression: expr });
+};
+
+AELL_TOOLS.apply_expression_preset = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  var layer = AELL_resolveLayer(comp, args.layer);
+  var prop = AELL_resolveProperty(layer, args.property);
+  if (!prop.canSetExpression) {
+    return AELL_err("Property cannot take an expression: " + args.property);
+  }
+
+  // Resolve an optional {layer, effect} control reference to a scalar
+  // expression source, so sliders can drive preset parameters.
+  function ctrlRef(c) {
+    var l = AELL_resolveLayer(comp, c.layer);
+    var effects = l.property("ADBE Effect Parade");
+    var fx = effects && c.effect ? effects.property(c.effect) : null;
+    if (!fx) {
+      throw new Error("Control not found: '" + c.effect + "' on layer '" +
+                      String(c.layer) + "'. Use add_control first.");
+    }
+    return 'thisComp.layer("' + AELL_escapeExprName(l.name) +
+           '").effect("' + AELL_escapeExprName(fx.name) + '")(1)';
+  }
+
+  var preset = String(args.preset || "").toLowerCase();
+  var expr = null;
+  var isArrayTarget = AELLJSON.isArray(prop.value);
+
+  if (preset === "wiggle") {
+    var f = args.freqControl ? ctrlRef(args.freqControl)
+      : (typeof args.frequency === "number" ? args.frequency : 2);
+    var a = args.ampControl ? ctrlRef(args.ampControl)
+      : (typeof args.amplitude === "number" ? args.amplitude : 20);
+    expr = "wiggle(" + f + ", " + a + ");";
+  } else if (preset === "loop_cycle") {
+    expr = 'loopOut("cycle");';
+  } else if (preset === "loop_pingpong") {
+    expr = 'loopOut("pingpong");';
+  } else if (preset === "loop_offset") {
+    expr = 'loopOut("offset");';
+  } else if (preset === "time_linear") {
+    if (isArrayTarget) {
+      return AELL_err("time_linear works on scalar properties (rotation, " +
+                      "opacity, slider). For position drift, keyframe it " +
+                      "or rig a slider with link_property.");
+    }
+    var r = args.rateControl ? ctrlRef(args.rateControl)
+      : (typeof args.rate === "number" ? args.rate : 100);
+    expr = "value + time * (" + r + ");";
+  } else {
+    return AELL_err("Unknown preset '" + args.preset + "'. Available: " +
+      "wiggle, loop_cycle, loop_pingpong, loop_offset, time_linear");
+  }
+
+  var err = AELL_setExpr(prop, expr);
+  if (err) {
+    return AELL_err("AE rejected the '" + preset + "' expression: " + err);
+  }
+  return AELL_okay({ layer: layer.name, property: args.property,
+                     preset: preset, expression: expr });
 };
 
 AELL_TOOLS.apply_effect = function (args) {
@@ -621,7 +877,9 @@ var AELL_MUTATING = {
   delete_layer: true, set_comp_setting: true, import_file: true,
   add_to_render_queue: true, add_shape_layer: true, add_mask: true,
   precompose: true, add_camera: true, add_marker: true,
-  set_layer_3d: true, set_layer_parent: true
+  set_layer_3d: true, set_layer_parent: true,
+  add_null: true, add_control: true, link_property: true,
+  apply_expression_preset: true, set_text_style: true
 };
 
 // --------------------------------------------------------------- entry point

@@ -105,12 +105,23 @@ and undo groups. Unknown tools are rejected panel-side, so the blast radius
 is exactly the tool list — currently:
 
 `get_project_info`, `get_comp_details`, `create_comp`, `add_text_layer`,
-`add_solid`, `add_shape_layer`, `add_mask`, `precompose`, `add_camera`,
-`add_marker`, `set_layer_3d`, `set_layer_parent`, `set_transform`,
-`add_keyframe`, `set_expression`, `apply_effect`, `set_effect_param`,
-`set_layer_timing`, `delete_layer`, `set_comp_setting`, `import_file`,
-`add_to_render_queue`, `comfy_status`, `comfy_list_workflows`,
-`comfy_generate`
+`set_text_style`, `add_solid`, `add_shape_layer`, `add_mask`, `precompose`,
+`add_camera`, `add_marker`, `add_null`, `add_control`, `link_property`,
+`apply_expression_preset`, `set_layer_3d`, `set_layer_parent`,
+`set_transform`, `add_keyframe`, `set_expression`, `apply_effect`,
+`set_effect_param`, `set_layer_timing`, `delete_layer`, `set_comp_setting`,
+`import_file`, `add_to_render_queue`, `comfy_status`,
+`comfy_list_workflows`, `comfy_generate`
+
+Rigging is first-class: *"put Speed and Wobble sliders on a null and drive
+the title's rotation and wiggle from them"* becomes `add_null` →
+`add_control` → `link_property` / `apply_expression_preset`. The panel
+generates every expression itself (dimension-aware, names escaped), so the
+model never hand-writes expression syntax; when it does use raw
+`set_expression`, AE's own validation error is fed back so it can correct
+itself. Text layers support full styling: font, size, fill, tracking,
+leading, justification — at creation (`add_text_layer`) or later
+(`set_text_style`).
 
 While the model streams its answer you see the reply text live, and the
 **Send** button becomes **Stop** — cancelling aborts generation on the
