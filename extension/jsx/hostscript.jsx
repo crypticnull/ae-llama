@@ -351,14 +351,115 @@ AELL_TOOLS.add_solid = function (args) {
 AELL_TOOLS.set_transform = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var layer = AELL_resolveLayer(comp, args.layer);
-  if (!AELL_TRANSFORM_MAP[args.property]) {
+  var propName = args.property;
+  if (!AELL_TRANSFORM_MAP[propName]) {
     return AELL_err("'property' must be one of: position, scale, rotation, " +
                     "opacity, anchorPoint");
   }
-  var prop = AELL_resolveProperty(layer, args.property);
-  prop.setValue(args.value);
-  return AELL_okay({ layer: layer.name, property: args.property,
-                     value: args.value });
+  var prop = AELL_resolveProperty(layer, propName);
+  var value = args.value;
+  var i;
+
+  if (args.relative) {
+    // Apply value relative to the current state:
+    //   scale/opacity: multiply by value/100  (relative 200 = double)
+    //   position/anchorPoint: add the offset
+    //   rotation: add degrees
+    var cur = prop.value;
+    if (propName === "scale" || propName === "opacity") {
+      if (AELLJSON.isArray(cur)) {
+        var factors = AELLJSON.isArray(value) ? value : null;
+        var out = [];
+        for (i = 0; i < cur.length; i++) {
+          var f = factors ? factors[Math.min(i, factors.length - 1)] : value;
+          out.push(cur[i] * (Number(f) / 100));
+        }
+        value = out;
+      } else {
+        value = cur * (Number(value) / 100);
+      }
+    } else if (propName === "rotation") {
+      value = cur + Number(value);
+    } else { // position / anchorPoint: element-wise offset
+      if (!AELLJSON.isArray(value)) {
+        return AELL_err("relative " + propName + " needs an offset array " +
+                        "like [dx, dy]");
+      }
+      var moved = [];
+      for (i = 0; i < cur.length; i++) {
+        moved.push(cur[i] + (Number(value[i]) || 0));
+      }
+      value = moved;
+    }
+  }
+
+  prop.setValue(value);
+
+  var result = { layer: layer.name, property: propName, value: value };
+
+  // Unit sanity: AE scale is PERCENT. A model that thinks in fractions
+  // sends 2 meaning "200%" and shrinks the layer to 2%. Warn loudly in the
+  // result so the next round can correct it.
+  if (propName === "scale" && !args.relative) {
+    var vals = AELLJSON.isArray(value) ? value : [value];
+    var allTiny = true;
+    for (i = 0; i < vals.length; i++) {
+      if (Math.abs(Number(vals[i])) > 5) { allTiny = false; break; }
+    }
+    if (allTiny) {
+      result.warning = "Scale is in PERCENT (100 = normal size). You just " +
+        "set " + AELLJSON.stringify(value) + " percent, which is nearly " +
+        "invisible. If you meant a multiplier, resend with the value * 100 " +
+        "(e.g. 200 for double size).";
+    }
+  }
+  return AELL_okay(result);
+};
+
+AELL_TOOLS.center_anchor_point = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  var layer = AELL_resolveLayer(comp, args.layer);
+  if (typeof layer.sourceRectAtTime !== "function") {
+    return AELL_err("Layer type has no measurable content bounds: " +
+                    layer.name);
+  }
+  var rect = layer.sourceRectAtTime(comp.time, false);
+  var transform = layer.property("ADBE Transform Group");
+  var apProp = transform.property("ADBE Anchor Point");
+  var posProp = transform.property("ADBE Position");
+  var oldAp = apProp.value;
+  var newAp = [rect.left + rect.width / 2, rect.top + rect.height / 2];
+  if (oldAp.length > 2) newAp.push(oldAp[2]);   // keep z on 3D layers
+
+  var preserve = args.preservePosition !== false;   // default true
+  var note = "";
+
+  if (preserve && !layer.threeDLayer) {
+    // Shifting the anchor moves the layer by the same amount in layer
+    // space; offset position by that delta run through scale+rotation so
+    // the layer stays visually in place.
+    var scl = transform.property("ADBE Scale").value;
+    var rot = transform.property("ADBE Rotate Z").value;
+    var dx = (newAp[0] - oldAp[0]) * (scl[0] / 100);
+    var dy = (newAp[1] - oldAp[1]) * (scl[1] / 100);
+    var rad = rot * Math.PI / 180;
+    var dpx = dx * Math.cos(rad) - dy * Math.sin(rad);
+    var dpy = dx * Math.sin(rad) + dy * Math.cos(rad);
+    var pos = posProp.value;
+    var newPos = [pos[0] + dpx, pos[1] + dpy];
+    if (pos.length > 2) newPos.push(pos[2]);
+    apProp.setValue(newAp);
+    posProp.setValue(newPos);
+    note = "anchor centered on content; position compensated so the " +
+           "layer did not move";
+  } else {
+    apProp.setValue(newAp);
+    note = layer.threeDLayer
+      ? "anchor centered; 3D layer, position NOT compensated"
+      : "anchor centered; position not compensated (preservePosition=false)";
+  }
+  return AELL_okay({ layer: layer.name, oldAnchor: oldAp, newAnchor: newAp,
+                     note: note });
 };
 
 AELL_TOOLS.add_keyframe = function (args) {
@@ -879,7 +980,8 @@ var AELL_MUTATING = {
   precompose: true, add_camera: true, add_marker: true,
   set_layer_3d: true, set_layer_parent: true,
   add_null: true, add_control: true, link_property: true,
-  apply_expression_preset: true, set_text_style: true
+  apply_expression_preset: true, set_text_style: true,
+  center_anchor_point: true
 };
 
 // --------------------------------------------------------------- entry point

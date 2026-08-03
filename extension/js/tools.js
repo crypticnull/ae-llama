@@ -30,8 +30,18 @@
       desc: "Add a solid layer.",
       args: "{comp?: string, name: string, color: [r,g,b] 0..1, width?: int, height?: int}" },
     { name: "set_transform", mutating: true,
-      desc: "Set a transform property on a layer.",
-      args: "{comp?: string, layer: name|index, property: 'position'|'scale'|'rotation'|'opacity'|'anchorPoint', value: number|[..]}" },
+      desc: "Set a transform property. UNITS: scale/opacity are PERCENT " +
+            "(100 = normal, 200 = double), rotation is degrees, position/" +
+            "anchorPoint are pixels. relative:true applies against the " +
+            "current value ('scale by 200%' => {property:'scale', " +
+            "value:200, relative:true}; relative position adds [dx,dy]).",
+      args: "{comp?: string, layer: name|index, property: 'position'|'scale'|'rotation'|'opacity'|'anchorPoint', value: number|[..], relative?: bool}" },
+    { name: "center_anchor_point", mutating: true,
+      desc: "Center a layer's anchor point on its visible content " +
+            "(sourceRect math done host-side; position compensated so the " +
+            "layer does not jump). ALWAYS use this instead of guessing " +
+            "anchor coordinates.",
+      args: "{comp?: string, layer: name|index, preservePosition?: bool = true}" },
     { name: "add_keyframe", mutating: true,
       desc: "Add a keyframe on a layer property at a time (seconds).",
       args: "{comp?: string, layer: name|index, property: transform name or 'effect.<EffectName>.<ParamName>', time: seconds, value: number|[..]}" },
@@ -159,6 +169,16 @@
       "- Look at TOOL RESULTS before continuing; fix errors they report.",
       "- Times are in seconds. Colors are [r,g,b] floats 0..1.",
       "- Positions are pixel coordinates [x,y] from the comp's top-left.",
+      "- UNITS: scale and opacity are PERCENT (100 = normal size, 200 =",
+      "  double, 50 = half). NEVER send 2 to mean 200%. Rotation is in",
+      "  degrees. 'scale BY X%' is relative:true; 'scale TO X%' is absolute.",
+      "- Anchor points are in LAYER space, not comp space. To center one,",
+      "  call center_anchor_point — never set anchorPoint coordinates by",
+      "  guesswork.",
+      "- Your reply text is shown BEFORE your commands run. Phrase it as",
+      "  intent ('Centering the anchor point…'), then after reading TOOL",
+      "  RESULTS confirm what actually happened — including any 'warning'",
+      "  fields, which mean the result is probably not what the user wanted.",
       "- 'layer' accepts a layer name or a 1-based index from the top.",
       "- Omit 'comp' to target the active comp.",
       "- Prefer inspecting (get_project_info / get_comp_details) before",
