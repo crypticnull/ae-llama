@@ -27,6 +27,10 @@
       <button id="btn-server-toggle" class="primary" title="Start / stop llama-server">Start</button>
     </section>
 
+    <section id="starter-row" class="hidden">
+      <button id="btn-get-model" class="primary">Download starter model (~4.7 GB)</button>
+    </section>
+
     <section id="settings-drawer" class="drawer hidden">
       <h3>Settings</h3>
 
@@ -105,6 +109,13 @@
         <button id="btn-comfy-test">Test connection</button>
         <button id="btn-settings-close">Close</button>
       </div>
+
+      <h3>Updates</h3>
+      <p id="version-line" class="fineprint"></p>
+      <div class="drawer-actions" style="justify-content: flex-start;">
+        <button id="btn-check-updates">Check for updates</button>
+        <button id="btn-update-engine">Reinstall / update engine</button>
+      </div>
     </section>
 
     <section id="log-drawer" class="drawer hidden">
@@ -130,9 +141,11 @@
   </div>
 
   <script src="js/libs/cep-bridge.js"></script>
+  <script src="js/version.js"></script>
   <script src="js/settings.js"></script>
   <script src="js/llama.js"></script>
   <script src="js/comfy.js"></script>
+  <script src="js/setup.js"></script>
   <script src="js/tools.js"></script>
   <script src="js/main.js"></script>
 </body>

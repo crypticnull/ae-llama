@@ -92,6 +92,15 @@
       return null;
     },
 
+    /** Open a URL in the user's default browser (external, not the panel). */
+    openURL: function (url) {
+      if (!/^https?:\/\//i.test(String(url))) return;
+      if (global.cep && global.cep.util &&
+          typeof global.cep.util.openURLInDefaultBrowser === "function") {
+        global.cep.util.openURLInDefaultBrowser(url);
+      }
+    },
+
     /** CEP's embedded Node.js require(). Throws if Node is unavailable. */
     nodeRequire: function (name) {
       if (global.cep_node && typeof global.cep_node.require === "function") {

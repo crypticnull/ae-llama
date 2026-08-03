@@ -1,8 +1,11 @@
 # ComfyUI workflow templates
 
-Each `.json` file here is a ComfyUI workflow in **API format** and shows up
-as a generation template the LLM can pick (`comfy_generate {workflow: "name"}`).
-The folder location is definable in the panel's ⚙ Settings.
+Each `.json` file is a ComfyUI workflow in **API format** and shows up as a
+generation template the LLM can pick (`comfy_generate {workflow: "name"}`).
+
+The live folder is `%APPDATA%\AE-Llama\comfy-workflows\` (definable in the
+panel's ⚙ Settings); the files in this extension folder are just the
+bundled starters, copied there on first run.
 
 ## Adding your own
 

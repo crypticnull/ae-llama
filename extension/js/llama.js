@@ -78,13 +78,17 @@
     return found;
   }
 
-  /** Find llama-server.exe under the vendor folder if the default is stale. */
+  /** Find llama-server.exe under the vendor folders if the default is stale. */
   function findServerExe(preferredPath) {
     ensureNode();
     if (preferredPath && fs.existsSync(preferredPath)) return preferredPath;
-    var root = global.AEBridge.getExtensionPath();
-    if (!root) return "";
-    var vendor = path.join(root, "vendor");
+    var roots = [];
+    try {
+      var dataRoot = global.Settings.dataRoot();
+      if (dataRoot) roots.push(path.join(dataRoot, "vendor"));
+    } catch (e) {}
+    var ext = global.AEBridge.getExtensionPath();
+    if (ext) roots.push(path.join(ext, "vendor"));   // pre-0.2 dev installs
     var hit = "";
     function walk(d, depth) {
       if (hit || depth > 4) return;
@@ -102,7 +106,7 @@
         }
       }
     }
-    walk(vendor, 0);
+    for (var r = 0; r < roots.length && !hit; r++) walk(roots[r], 0);
     return hit;
   }
 

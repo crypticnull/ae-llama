@@ -58,6 +58,20 @@ html, body {
 
 #model-select { flex: 1 1 auto; min-width: 0; }
 
+#starter-row {
+  padding: 6px 8px;
+  background: #262626;
+  border-bottom: 1px solid #111;
+  flex: 0 0 auto;
+  display: flex;
+}
+#starter-row.hidden { display: none; }
+#starter-row button { flex: 1 1 auto; }
+
+.fineprint { color: #888; font-size: 11px; margin-bottom: 6px; }
+
+.msg a { color: #6db3e8; text-decoration: underline; cursor: pointer; }
+
 /* ---------- generic controls ---------- */
 
 button {

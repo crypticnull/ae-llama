@@ -1,22 +1,25 @@
 <#
 .SYNOPSIS
   Downloads llama.cpp prebuilt Windows binaries (llama-server.exe) into
-  extension\vendor\llama.cpp.
+  %APPDATA%\AE-Llama\vendor\llama.cpp (the panel's persistent data folder).
+
+  NOTE: the panel does all of this by itself on first launch (auto GPU
+  detection included) -- this script exists for development, CI, and offline
+  prep. The default -Variant auto performs the same detection as the panel.
 
 .EXAMPLE
-  .\scripts\get-llama.ps1                 # CPU build (works everywhere)
-  .\scripts\get-llama.ps1 -Variant cuda   # NVIDIA GPU build (+ CUDA runtime DLLs)
+  .\scripts\get-llama.ps1                 # auto: detect NVIDIA GPU, else CPU
+  .\scripts\get-llama.ps1 -Variant cpu    # force CPU build
   .\scripts\get-llama.ps1 -Variant cuda -CudaVersion 13  # force a toolkit line
   .\scripts\get-llama.ps1 -Tag b6099      # pin a specific release tag
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('cpu', 'cuda')]
-    [string]$Variant = 'cpu',
+    [ValidateSet('auto', 'cpu', 'cuda')]
+    [string]$Variant = 'auto',
     [string]$Tag = 'latest',
-    # Major CUDA toolkit line to prefer (e.g. '12' or '13'). Default prefers
-    # the lowest published line: newer toolkits drop older GPUs (Maxwell/
-    # Pascal/Volta) and demand newer drivers, so lowest is the safe default.
+    # Major CUDA toolkit line to force (e.g. '12' or '13'). With -Variant
+    # auto the right line is chosen from the driver + GPU compute capability.
     [string]$CudaVersion = ''
 )
 
@@ -26,8 +29,46 @@ $ProgressPreference = 'SilentlyContinue'
 # Windows PowerShell 5 defaults to TLS 1.0/1.1, which GitHub rejects.
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$repoRoot  = Split-Path -Parent $PSScriptRoot
-$vendorDir = Join-Path $repoRoot 'extension\vendor\llama.cpp'
+$vendorDir = Join-Path $env:APPDATA 'AE-Llama\vendor\llama.cpp'
+
+# --------------------------------------------------------------- detection
+
+function Get-NvidiaInfo {
+    if (-not (Get-Command nvidia-smi -ErrorAction SilentlyContinue)) { return $null }
+    $out = ''
+    try { $out = (& nvidia-smi 2>$null) | Out-String } catch { return $null }
+    if (-not $out) { return $null }
+    $cuda = $null
+    if ($out -match 'CUDA Version:\s*([\d\.]+)') { $cuda = $Matches[1] }
+    $cc = $null
+    try {
+        $q = (& nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>$null) |
+             Select-Object -First 1
+        if ($q -and $q.Trim() -match '^[\d\.]+$') { $cc = [double]$q.Trim() }
+    } catch {}
+    [pscustomobject]@{ CudaVersion = $cuda; ComputeCap = $cc }
+}
+
+function ConvertTo-PaddedVersion([string]$v) {
+    # [version] needs at least two parts: pad '13' -> 13.0, '12.2.0' stays.
+    $parts = $v.Split('.')
+    while ($parts.Count -lt 2) { $parts += '0' }
+    return [version]($parts -join '.')
+}
+
+$gpu = $null
+if ($Variant -eq 'auto') {
+    $gpu = Get-NvidiaInfo
+    if ($gpu) {
+        Write-Host "NVIDIA GPU detected (driver CUDA: $($gpu.CudaVersion); compute capability: $($gpu.ComputeCap))"
+        $Variant = 'cuda'
+    } else {
+        Write-Host 'No NVIDIA GPU detected - using the CPU build.'
+        $Variant = 'cpu'
+    }
+}
+
+# ----------------------------------------------------------- release query
 
 if ($Tag -eq 'latest') {
     $apiUrl = 'https://api.github.com/repos/ggml-org/llama.cpp/releases/latest'
@@ -55,26 +96,28 @@ try {
 }
 Write-Host "Release: $($release.tag_name)"
 
+# ----------------------------------------------------------- asset choice
+
 # Asset naming has changed over the years:
 #   modern : llama-b7399-bin-win-cpu-x64.zip / llama-b7399-bin-win-cuda-12.4-x64.zip
 #   older  : llama-b3660-bin-win-avx2-x64.zip / llama-b3660-bin-win-cuda-cu12.2.0-x64.zip
-function ConvertTo-PaddedVersion([string]$v) {
-    # [version] needs at least two parts: pad '13' -> 13.0, '12.2.0' stays.
-    $parts = $v.Split('.')
-    while ($parts.Count -lt 2) { $parts += '0' }
-    return [version]($parts -join '.')
-}
 
 $assets = @($release.assets)
+
+function Select-CpuAsset {
+    $a = $assets | Where-Object { $_.name -match '^llama-.*-bin-win-cpu-x64\.zip$' } |
+         Select-Object -First 1
+    if (-not $a) {
+        $a = $assets | Where-Object { $_.name -match '^llama-.*-bin-win-avx2-x64\.zip$' } |
+             Select-Object -First 1
+    }
+    return $a
+}
+
 $toDownload = @()
 
 if ($Variant -eq 'cpu') {
-    $main = $assets | Where-Object { $_.name -match '^llama-.*-bin-win-cpu-x64\.zip$' } |
-            Select-Object -First 1
-    if (-not $main) {
-        $main = $assets | Where-Object { $_.name -match '^llama-.*-bin-win-avx2-x64\.zip$' } |
-                Select-Object -First 1
-    }
+    $main = Select-CpuAsset
     if (-not $main) { throw "No Windows CPU x64 asset found in $($release.tag_name). Check https://github.com/ggml-org/llama.cpp/releases" }
     $toDownload += $main
 } else {
@@ -86,6 +129,7 @@ if ($Variant -eq 'cpu') {
         }
     if (-not $cudaAssets) { throw "No Windows CUDA x64 asset found in $($release.tag_name)." }
 
+    $pick = $null
     if ($CudaVersion) {
         $pick = $cudaAssets | Where-Object { $_.VerString -like "$CudaVersion*" } |
                 Sort-Object Ver | Select-Object -Last 1
@@ -93,21 +137,49 @@ if ($Variant -eq 'cpu') {
             $available = ($cudaAssets | ForEach-Object VerString) -join ', '
             throw "No CUDA $CudaVersion asset in this release. Available: $available"
         }
+    } elseif ($gpu) {
+        # Driver supports toolkits up to its reported CUDA version; CUDA 13
+        # builds additionally drop GPUs below compute capability 7.5.
+        $eligible = $cudaAssets | Where-Object {
+            $ok = $true
+            if ($gpu.CudaVersion) {
+                $ok = $_.Ver -le (ConvertTo-PaddedVersion $gpu.CudaVersion)
+            }
+            if ($ok -and $null -ne $gpu.ComputeCap -and $gpu.ComputeCap -lt 7.5) {
+                $ok = $_.Ver -lt (ConvertTo-PaddedVersion '13')
+            }
+            $ok
+        }
+        if ($eligible) {
+            $pick = $eligible | Sort-Object Ver | Select-Object -Last 1
+        } else {
+            Write-Warning ("No published CUDA build is compatible with this " +
+                "GPU/driver - falling back to the CPU build. (Update your " +
+                "NVIDIA driver and re-run to enable GPU acceleration.)")
+            $main = Select-CpuAsset
+            if (-not $main) { throw "No Windows CPU x64 asset found either." }
+            $toDownload += $main
+        }
     } else {
-        # Lowest published line = broadest GPU/driver compatibility.
+        # Explicit -Variant cuda with no detection info: lowest published
+        # line = broadest GPU/driver compatibility.
         $pick = $cudaAssets | Sort-Object Ver | Select-Object -First 1
     }
-    $toDownload += $pick.Asset
-    Write-Host "CUDA toolkit line: $($pick.VerString)  (older GPUs need lower lines; newer GPUs may want -CudaVersion 13)"
 
-    $cudartRegex = "^cudart-llama-bin-win-(?:cuda-)?(?:cu)?$([regex]::Escape($pick.VerString))-x64\.zip$"
-    $cudart = $assets | Where-Object { $_.name -match $cudartRegex } | Select-Object -First 1
-    if ($cudart) {
-        $toDownload += $cudart
-    } else {
-        Write-Warning "No cudart bundle found for CUDA $($pick.VerString). If llama-server.exe complains about missing DLLs, install that CUDA runtime."
+    if ($pick) {
+        $toDownload += $pick.Asset
+        Write-Host "CUDA toolkit line: $($pick.VerString)"
+        $cudartRegex = "^cudart-llama-bin-win-(?:cuda-)?(?:cu)?$([regex]::Escape($pick.VerString))-x64\.zip$"
+        $cudart = $assets | Where-Object { $_.name -match $cudartRegex } | Select-Object -First 1
+        if ($cudart) {
+            $toDownload += $cudart
+        } else {
+            Write-Warning "No cudart bundle found for CUDA $($pick.VerString). If llama-server.exe complains about missing DLLs, install that CUDA runtime."
+        }
     }
 }
+
+# ------------------------------------------------------ download & install
 
 # A running server from the panel locks its exe -- clearing vendor would
 # half-delete the old install and then fail.
