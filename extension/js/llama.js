@@ -394,55 +394,74 @@
 
   // ----------------------------------------------------------------- chat
 
+  function parseModelContent(content, cb) {
+    var obj = null;
+    try {
+      obj = JSON.parse(content);
+    } catch (e) {
+      // Constrained decoding failed or was unsupported — salvage the first
+      // JSON object in the text.
+      var m = content.match(/\{[\s\S]*\}/);
+      if (m) { try { obj = JSON.parse(m[0]); } catch (e2) {} }
+    }
+    if (!obj) {
+      cb(new Error("Model returned unparseable output: " +
+                   content.slice(0, 300)));
+      return;
+    }
+    cb(null, obj, content);
+  }
+
   /**
-   * One non-streaming chat completion constrained to `schema`.
-   * cb(err, parsedObject, rawText)
+   * One STREAMING chat completion constrained to `schema`.
+   * onDelta(accumulatedText) fires as tokens arrive.
+   * cb(err, parsedObject, rawText) — exactly once; a user cancel yields an
+   * Error with .cancelled === true.
+   * Returns a handle: { cancel: fn } — cancelling also frees the server slot
+   * (llama-server aborts generation when the connection drops).
    */
-  function chat(opts, messages, schema, cb) {
+  function chat(opts, messages, schema, onDelta, cb) {
+    ensureNode();
     var body = {
       model: "default",
       messages: messages,
       temperature: opts.temperature,
       max_tokens: 2048,
       cache_prompt: true,
+      stream: true,
       response_format: {
         type: "json_schema",
         json_schema: { name: "ae_actions", schema: schema }
       }
     };
 
-    function parseContent(json, rawText) {
-      var content = null;
-      try { content = json.choices[0].message.content; } catch (e) {}
-      if (typeof content !== "string") {
-        cb(new Error("Unexpected server response: " + rawText.slice(0, 300)));
-        return;
-      }
-      var obj = null;
-      try {
-        obj = JSON.parse(content);
-      } catch (e) {
-        // Constrained decoding failed or was unsupported — salvage the first
-        // JSON object in the text.
-        var m = content.match(/\{[\s\S]*\}/);
-        if (m) { try { obj = JSON.parse(m[0]); } catch (e2) {} }
-      }
-      if (!obj) {
-        cb(new Error("Model returned unparseable output: " +
-                     content.slice(0, 300)));
-        return;
-      }
-      cb(null, obj, content);
+    var cancelled = false;
+    var called = false;
+    function once(err, obj, raw) {
+      if (called) return;
+      called = true;
+      cb(err, obj, raw);
     }
 
-    requestJson("POST", opts.port, "/v1/chat/completions", body, 600000,
-      function (err, statusCode, json, rawText) {
-        if (err) { cb(err); return; }
-        if (statusCode === 200 && json) { parseContent(json, rawText); return; }
-
-        // Older llama-server builds may reject response_format json_schema.
-        // Retry once without the constraint.
-        if (statusCode >= 400 && body.response_format) {
+    var payload = JSON.stringify(body);
+    var req = http.request({
+      host: "127.0.0.1",
+      port: opts.port,
+      path: "/v1/chat/completions",
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Content-Length": NodeBuffer.byteLength(payload),
+        "Accept": "text/event-stream"
+      }
+    }, function (res) {
+      if (res.statusCode !== 200) {
+        // Older llama-server builds may reject response_format/stream —
+        // retry once, non-streaming and unconstrained.
+        var chunks = [];
+        res.on("data", function (c) { chunks.push(c); });
+        res.on("end", function () {
+          if (cancelled) { deliverCancel(); return; }
           var relaxed = {
             model: body.model,
             messages: messages,
@@ -452,16 +471,90 @@
           };
           requestJson("POST", opts.port, "/v1/chat/completions", relaxed,
             600000, function (err2, sc2, json2, rawText2) {
-              if (err2) { cb(err2); return; }
-              if (sc2 === 200 && json2) { parseContent(json2, rawText2); return; }
-              cb(new Error("llama-server HTTP " + sc2 + ": " +
-                           (rawText2 || "").slice(0, 300)));
+              if (err2) { once(err2); return; }
+              var content = null;
+              try { content = json2.choices[0].message.content; } catch (e) {}
+              if (sc2 === 200 && typeof content === "string") {
+                parseModelContent(content, once);
+                return;
+              }
+              once(new Error("llama-server HTTP " + sc2 + ": " +
+                             (rawText2 || "").slice(0, 300)));
             });
+        });
+        res.on("error", function () {});
+        return;
+      }
+
+      var buffer = "";
+      var content = "";
+      var finished = false;
+
+      function handleLine(line) {
+        line = line.replace(/^\s+|\s+$/g, "");
+        if (line.indexOf("data:") !== 0) return;
+        var data = line.slice(5).replace(/^\s+/, "");
+        if (data === "[DONE]") { finished = true; return; }
+        var json = null;
+        try { json = JSON.parse(data); } catch (e) { return; }
+        var delta = null;
+        try { delta = json.choices[0].delta.content; } catch (e) {}
+        if (typeof delta === "string" && delta) {
+          content += delta;
+          if (onDelta) {
+            try { onDelta(content); } catch (e) {}
+          }
+        }
+      }
+
+      res.on("data", function (c) {
+        buffer += c.toString("utf8");
+        var idx;
+        while ((idx = buffer.indexOf("\n")) !== -1) {
+          handleLine(buffer.slice(0, idx));
+          buffer = buffer.slice(idx + 1);
+        }
+      });
+      res.on("end", function () {
+        if (buffer) handleLine(buffer);
+        if (cancelled) { deliverCancel(); return; }
+        if (!content) {
+          once(new Error(finished ? "Model returned an empty response"
+                                  : "Stream ended unexpectedly"));
           return;
         }
-        cb(new Error("llama-server HTTP " + statusCode + ": " +
-                     (rawText || "").slice(0, 300)));
+        parseModelContent(content, once);
       });
+      res.on("error", function (err) {
+        if (cancelled) { deliverCancel(); return; }
+        once(err);
+      });
+    });
+
+    function deliverCancel() {
+      var e = new Error("Cancelled");
+      e.cancelled = true;
+      once(e);
+    }
+
+    req.on("error", function (err) {
+      if (cancelled) { deliverCancel(); return; }
+      once(err);
+    });
+    req.setTimeout(600000, function () {
+      req.destroy(new Error("Chat request timed out"));
+    });
+    req.write(payload);
+    req.end();
+
+    return {
+      cancel: function () {
+        if (called) return;
+        cancelled = true;
+        try { req.destroy(); } catch (e) {}
+        deliverCancel();
+      }
+    };
   }
 
   // ------------------------------------------------------------------ api

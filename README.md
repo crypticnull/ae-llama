@@ -105,10 +105,16 @@ and undo groups. Unknown tools are rejected panel-side, so the blast radius
 is exactly the tool list — currently:
 
 `get_project_info`, `get_comp_details`, `create_comp`, `add_text_layer`,
-`add_solid`, `set_transform`, `add_keyframe`, `set_expression`,
-`apply_effect`, `set_effect_param`, `set_layer_timing`, `delete_layer`,
-`set_comp_setting`, `import_file`, `add_to_render_queue`,
-`comfy_status`, `comfy_list_workflows`, `comfy_generate`
+`add_solid`, `add_shape_layer`, `add_mask`, `precompose`, `add_camera`,
+`add_marker`, `set_layer_3d`, `set_layer_parent`, `set_transform`,
+`add_keyframe`, `set_expression`, `apply_effect`, `set_effect_param`,
+`set_layer_timing`, `delete_layer`, `set_comp_setting`, `import_file`,
+`add_to_render_queue`, `comfy_status`, `comfy_list_workflows`,
+`comfy_generate`
+
+While the model streams its answer you see the reply text live, and the
+**Send** button becomes **Stop** — cancelling aborts generation on the
+server immediately and halts any remaining tool commands.
 
 ## ComfyUI integration (image / video generation)
 
@@ -166,6 +172,13 @@ settings, or the engine.
 
 ## Distributing & updating (aescripts.com)
 
+Every push builds a signed ZXP on CI (**Actions ▸ Build ZXP ▸ artifact
+`AE-Llama-zxp`**); pushing a `v*` tag (e.g. `git tag v0.3.0 && git push
+--tags`) additionally attaches it to a GitHub Release — that's the
+downloadable package. For a stable signing identity across releases, add
+repo secrets `ZXP_CERT_B64` (base64 of your .p12) and `ZXP_CERT_PASSWORD`;
+otherwise CI self-signs per build (still installs fine).
+
 Release flow:
 
 1. Bump the version in **both** `extension/CSXS/manifest.xml`
@@ -198,11 +211,15 @@ extension/            the CEP panel (ships as the ZXP)
                       mgmt, ComfyUI client, auto-setup/updates, tools, UI)
   jsx/hostscript.jsx  ExtendScript tool implementations (allowlist + undo)
   comfy-workflows/    bundled workflow templates (seeded into the data dir)
+native/               AEGP C++ plugin scaffold (phase 2, experimental):
+                      Window-menu command that opens the panel; see
+                      native/README.md for SDK setup and build
 scripts/
   get-llama.ps1       dev/CI engine download (-Variant auto|cpu|cuda)
   install.ps1         dev install: junction the panel + PlayerDebugMode
   uninstall.ps1       remove the dev junction
   package-zxp.ps1     build the signed ZXP for distribution
+.github/workflows/    CI: builds the signed ZXP, attaches it to releases
 update.json           update-channel manifest template (host your copy)
 ```
 
@@ -230,9 +247,11 @@ update.json           update-channel manifest template (host your copy)
   `http://localhost:8092` in a browser for CEF DevTools (see
   `extension/.debug`).
 
-## Roadmap (phase 2)
+## Roadmap
 
-- AEGP C++ native plugin: menu commands, in-process inference option,
-  render-hook integrations.
-- Streaming token display and cancel button.
-- More tools: shape layers, masks, precomposing, camera work, markers.
+- [x] Streaming reply display and Stop button
+- [x] Shape layers, masks, precomposing, cameras, markers, 3D, parenting
+- [x] AEGP C++ scaffold (`native/`) — menu command opening the panel;
+      needs a local AE SDK to compile (untested until then)
+- [ ] AEGP in-process inference (llama.cpp linked directly) + render hooks
+- [ ] Starter model catalog (multiple sizes) in the update manifest

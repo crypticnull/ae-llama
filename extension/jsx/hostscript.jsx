@@ -410,6 +410,199 @@ AELL_TOOLS.import_file = function (args) {
   return AELL_okay({ name: item.name, id: item.id });
 };
 
+AELL_TOOLS.add_shape_layer = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  var layer = comp.layers.addShape();
+  if (args.name) layer.name = String(args.name);
+  var group = layer.property("ADBE Root Vectors Group")
+                   .addProperty("ADBE Vector Group");
+  var vectors = group.property("ADBE Vectors Group");
+  var size = (AELLJSON.isArray(args.size) && args.size.length >= 2)
+    ? [args.size[0], args.size[1]] : [200, 200];
+  var kind = args.shape ? String(args.shape) : "rectangle";
+  var shp;
+  if (kind === "ellipse") {
+    shp = vectors.addProperty("ADBE Vector Shape - Ellipse");
+    shp.property("ADBE Vector Ellipse Size").setValue(size);
+  } else if (kind === "polygon" || kind === "star") {
+    shp = vectors.addProperty("ADBE Vector Shape - Star");
+    shp.property("ADBE Vector Star Type").setValue(kind === "polygon" ? 2 : 1);
+    if (args.points > 2) {
+      shp.property("ADBE Vector Star Points").setValue(Math.round(args.points));
+    }
+    var outer = Math.max(size[0], size[1]) / 2;
+    shp.property("ADBE Vector Star Outer Radius").setValue(outer);
+    if (kind === "star") {
+      shp.property("ADBE Vector Star Inner Radius").setValue(outer / 2);
+    }
+  } else {
+    shp = vectors.addProperty("ADBE Vector Shape - Rect");
+    shp.property("ADBE Vector Rect Size").setValue(size);
+    if (args.roundness > 0) {
+      shp.property("ADBE Vector Rect Roundness").setValue(args.roundness);
+    }
+  }
+  if (AELLJSON.isArray(args.fillColor) && args.fillColor.length >= 3) {
+    var fill = vectors.addProperty("ADBE Vector Graphic - Fill");
+    fill.property("ADBE Vector Fill Color").setValue(
+      [args.fillColor[0], args.fillColor[1], args.fillColor[2], 1]);
+  }
+  if (AELLJSON.isArray(args.strokeColor) && args.strokeColor.length >= 3) {
+    var stroke = vectors.addProperty("ADBE Vector Graphic - Stroke");
+    stroke.property("ADBE Vector Stroke Color").setValue(
+      [args.strokeColor[0], args.strokeColor[1], args.strokeColor[2], 1]);
+    if (args.strokeWidth > 0) {
+      stroke.property("ADBE Vector Stroke Width").setValue(args.strokeWidth);
+    }
+  }
+  if (AELLJSON.isArray(args.position) && args.position.length >= 2) {
+    layer.property("ADBE Transform Group").property("ADBE Position")
+         .setValue(args.position);
+  }
+  return AELL_okay({ index: layer.index, name: layer.name, shape: kind });
+};
+
+var AELL_MASK_MODES = null;
+function AELL_maskMode(name) {
+  if (!AELL_MASK_MODES) {
+    AELL_MASK_MODES = {
+      none: MaskMode.NONE, add: MaskMode.ADD, subtract: MaskMode.SUBTRACT,
+      intersect: MaskMode.INTERSECT, lighten: MaskMode.LIGHTEN,
+      darken: MaskMode.DARKEN, difference: MaskMode.DIFFERENCE
+    };
+  }
+  return AELL_MASK_MODES[String(name).toLowerCase()];
+}
+
+AELL_TOOLS.add_mask = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  var layer = AELL_resolveLayer(comp, args.layer);
+  var masks = layer.property("ADBE Mask Parade");
+  if (!masks) return AELL_err("This layer type cannot take masks");
+  var shape = new Shape();
+  shape.closed = true;
+  var kind = args.shape ? String(args.shape) : "rectangle";
+  if (kind === "custom") {
+    if (!AELLJSON.isArray(args.vertices) || args.vertices.length < 3) {
+      return AELL_err("'vertices' ([[x,y],...] in LAYER space, >= 3 points) " +
+                      "is required for a custom mask");
+    }
+    shape.vertices = args.vertices;
+  } else {
+    var b = (AELLJSON.isArray(args.bounds) && args.bounds.length >= 4)
+      ? args.bounds
+      : [0, 0, layer.width || comp.width, layer.height || comp.height];
+    var x = b[0], y = b[1], w = b[2], h = b[3];
+    if (kind === "ellipse") {
+      var cx = x + w / 2, cy = y + h / 2, rx = w / 2, ry = h / 2;
+      var kx = rx * 0.5523, ky = ry * 0.5523;
+      shape.vertices = [[cx, cy - ry], [cx + rx, cy], [cx, cy + ry], [cx - rx, cy]];
+      shape.inTangents  = [[-kx, 0], [0, -ky], [kx, 0], [0, ky]];
+      shape.outTangents = [[kx, 0], [0, ky], [-kx, 0], [0, -ky]];
+    } else {
+      shape.vertices = [[x, y], [x + w, y], [x + w, y + h], [x, y + h]];
+    }
+  }
+  var mask = masks.addProperty("ADBE Mask Atom");
+  if (args.name) mask.name = String(args.name);
+  mask.property("ADBE Mask Shape").setValue(shape);
+  if (args.mode) {
+    var mode = AELL_maskMode(args.mode);
+    if (typeof mode === "undefined") {
+      return AELL_err("Unknown mask mode: " + args.mode +
+                      " (use add/subtract/intersect/lighten/darken/difference/none)");
+    }
+    mask.maskMode = mode;
+  }
+  if (args.inverted) mask.inverted = true;
+  if (args.feather > 0) {
+    mask.property("ADBE Mask Feather").setValue([args.feather, args.feather]);
+  }
+  return AELL_okay({ layer: layer.name, mask: mask.name, shape: kind });
+};
+
+AELL_TOOLS.precompose = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  if (!args.name) return AELL_err("'name' is required");
+  if (!AELLJSON.isArray(args.layers) || args.layers.length === 0) {
+    return AELL_err("'layers' (array of names or 1-based indices) is required");
+  }
+  var indices = [];
+  for (var i = 0; i < args.layers.length; i++) {
+    indices.push(AELL_resolveLayer(comp, args.layers[i]).index);
+  }
+  var move = args.moveAttributes !== false;
+  var pre = comp.layers.precompose(indices, String(args.name), move);
+  return AELL_okay({ precomp: pre.name, id: pre.id,
+                     layersMoved: indices.length });
+};
+
+AELL_TOOLS.add_camera = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  var center = [comp.width / 2, comp.height / 2];
+  var cam = comp.layers.addCamera(args.name ? String(args.name) : "Camera",
+                                  center);
+  var xform = cam.property("ADBE Transform Group");
+  if (AELLJSON.isArray(args.position) && args.position.length >= 3) {
+    xform.property("ADBE Position").setValue(args.position);
+  }
+  if (AELLJSON.isArray(args.pointOfInterest) &&
+      args.pointOfInterest.length >= 3) {
+    xform.property("ADBE Anchor Point").setValue(args.pointOfInterest);
+  }
+  if (args.zoom > 0) {
+    cam.property("ADBE Camera Options Group")
+       .property("ADBE Camera Zoom").setValue(args.zoom);
+  }
+  return AELL_okay({ index: cam.index, name: cam.name,
+                     note: "Layers must be 3D (set_layer_3d) to be seen by a camera" });
+};
+
+AELL_TOOLS.add_marker = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  if (typeof args.time !== "number") {
+    return AELL_err("'time' (seconds) is required");
+  }
+  var mv = new MarkerValue(typeof args.comment === "string" ? args.comment : "");
+  if (args.duration > 0) mv.duration = args.duration;
+  var target;
+  var where;
+  if (args.layer !== null && typeof args.layer !== "undefined" &&
+      args.layer !== "") {
+    var layer = AELL_resolveLayer(comp, args.layer);
+    target = layer.property("ADBE Marker");
+    where = "layer " + layer.name;
+  } else {
+    target = comp.markerProperty;
+    where = "comp " + comp.name;
+  }
+  target.setValueAtTime(args.time, mv);
+  return AELL_okay({ marker: where, time: args.time });
+};
+
+AELL_TOOLS.set_layer_3d = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  var layer = AELL_resolveLayer(comp, args.layer);
+  layer.threeDLayer = !!args.enabled;
+  return AELL_okay({ layer: layer.name, threeD: layer.threeDLayer });
+};
+
+AELL_TOOLS.set_layer_parent = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  var layer = AELL_resolveLayer(comp, args.layer);
+  if (args.parent === null || typeof args.parent === "undefined" ||
+      args.parent === "") {
+    layer.parent = null;
+    return AELL_okay({ layer: layer.name, parent: null });
+  }
+  var parent = AELL_resolveLayer(comp, args.parent);
+  if (parent.index === layer.index) {
+    return AELL_err("A layer cannot be parented to itself");
+  }
+  layer.parent = parent;
+  return AELL_okay({ layer: layer.name, parent: parent.name });
+};
+
 AELL_TOOLS.add_to_render_queue = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var rqItem = app.project.renderQueue.items.add(comp);
@@ -426,7 +619,9 @@ var AELL_MUTATING = {
   set_transform: true, add_keyframe: true, set_expression: true,
   apply_effect: true, set_effect_param: true, set_layer_timing: true,
   delete_layer: true, set_comp_setting: true, import_file: true,
-  add_to_render_queue: true
+  add_to_render_queue: true, add_shape_layer: true, add_mask: true,
+  precompose: true, add_camera: true, add_marker: true,
+  set_layer_3d: true, set_layer_parent: true
 };
 
 // --------------------------------------------------------------- entry point

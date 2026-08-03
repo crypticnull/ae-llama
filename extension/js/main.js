@@ -211,6 +211,34 @@
     });
   }
 
+  var currentChat = null;     // in-flight streaming request handle
+  var cancelRequested = false;
+
+  /** Pull the partially-streamed "reply" string out of incomplete JSON. */
+  function extractPartialReply(text) {
+    var m = text.match(/"reply"\s*:\s*"((?:[^"\\]|\\.)*)/);
+    if (!m) return "";
+    var frag = m[1];
+    // A trailing lone backslash is an unfinished escape — drop it.
+    var trailing = frag.match(/\\+$/);
+    if (trailing && trailing[0].length % 2 === 1) {
+      frag = frag.slice(0, -1);
+    }
+    try { return JSON.parse('"' + frag + '"'); } catch (e) { return ""; }
+  }
+
+  function setSendMode(running) {
+    if (running) {
+      els.sendBtn.textContent = "Stop";
+      els.sendBtn.classList.remove("primary");
+      els.sendBtn.classList.add("danger");
+    } else {
+      els.sendBtn.textContent = "Send";
+      els.sendBtn.classList.add("primary");
+      els.sendBtn.classList.remove("danger");
+    }
+  }
+
   function sendMessage() {
     if (busy) return;
     var text = els.chatInput.value.replace(/^\s+|\s+$/g, "");
@@ -225,7 +253,8 @@
     history.push({ role: "user", content: text });
 
     busy = true;
-    els.sendBtn.disabled = true;
+    cancelRequested = false;
+    setSendMode(true);
     els.clearChatBtn.disabled = true;   // clearing mid-round corrupts history
     var thinking = appendMsg("info", "Thinking…");
 
@@ -238,7 +267,8 @@
 
     function finish() {
       busy = false;
-      els.sendBtn.disabled = false;
+      currentChat = null;
+      setSendMode(false);
       els.clearChatBtn.disabled = false;
       if (thinking && thinking.parentNode) {
         thinking.parentNode.removeChild(thinking);
@@ -247,14 +277,29 @@
     }
 
     function runRound(system, round) {
+      if (cancelRequested) { finish(); return; }
       var messages = [{ role: "system", content: system }].concat(history);
-      global.Llama.chat(
+      currentChat = global.Llama.chat(
         { port: s.port, temperature: s.temperature },
         messages,
         global.Tools.RESPONSE_SCHEMA,
+        function (accumulated) {
+          // Live-stream the model's reply text as it decodes.
+          var partial = extractPartialReply(accumulated);
+          if (thinking) {
+            thinking.textContent = partial ? partial + " ▌" : "Thinking…";
+            els.chat.scrollTop = els.chat.scrollHeight;
+          }
+        },
         function (err, obj, raw) {
+          currentChat = null;
+          if (thinking) thinking.textContent = "Thinking…";
           if (err) {
-            appendMsg("error", "Model error: " + err.message);
+            if (err.cancelled) {
+              appendMsg("info", "Stopped.");
+            } else {
+              appendMsg("error", "Model error: " + err.message);
+            }
             finish();
             return;
           }
@@ -264,10 +309,12 @@
           var commands = obj.commands instanceof Array ? obj.commands : [];
           if (reply) appendMsg("assistant", reply);
 
-          if (commands.length === 0) { finish(); return; }
+          if (commands.length === 0 || cancelRequested) { finish(); return; }
 
           global.Tools.executeCommands(
-            commands, s.dryRun,
+            commands,
+            { dryRun: s.dryRun,
+              shouldStop: function () { return cancelRequested; } },
             function (i, cmd, result) {
               var head = cmd.tool + " " + JSON.stringify(cmd.args || {});
               var body = result.ok
@@ -282,6 +329,7 @@
                 role: "user",
                 content: "TOOL RESULTS:\n" + JSON.stringify(results)
               });
+              if (cancelRequested) { finish(); return; }
               if (round + 1 >= s.maxRounds) {
                 appendMsg("info",
                   "Stopped after " + s.maxRounds + " tool rounds.");
@@ -291,6 +339,13 @@
               runRound(system, round + 1);
             });
         });
+    }
+  }
+
+  function cancelMessage() {
+    cancelRequested = true;
+    if (currentChat) {
+      currentChat.cancel();   // frees the llama-server slot immediately
     }
   }
 
@@ -609,12 +664,15 @@
       appendMsg("info", text);
     });
 
-    // -- chat
-    els.sendBtn.addEventListener("click", sendMessage);
+    // -- chat (Send doubles as Stop while a round-trip is in flight)
+    els.sendBtn.addEventListener("click", function () {
+      if (busy) cancelMessage();
+      else sendMessage();
+    });
     els.chatInput.addEventListener("keydown", function (e) {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
-        sendMessage();
+        if (!busy) sendMessage();
       }
     });
     els.clearChatBtn.addEventListener("click", function () {
