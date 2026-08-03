@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<ExtensionManifest ExtensionBundleId="com.cptk.aellama"
+                   ExtensionBundleName="AE Llama"
+                   ExtensionBundleVersion="0.1.0"
+                   Version="7.0"
+                   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <ExtensionList>
+    <Extension Id="com.cptk.aellama.panel" Version="0.1.0"/>
+  </ExtensionList>
+  <ExecutionEnvironment>
+    <HostList>
+      <!-- AEFT = After Effects. Wide range so the panel loads in AE 2024 (24.x)
+           through AE 2026 (26.x) and later. -->
+      <Host Name="AEFT" Version="[24.0,99.9]"/>
+    </HostList>
+    <LocaleList>
+      <Locale Code="All"/>
+    </LocaleList>
+    <RequiredRuntimeList>
+      <RequiredRuntime Name="CSXS" Version="11.0"/>
+    </RequiredRuntimeList>
+  </ExecutionEnvironment>
+  <DispatchInfoList>
+    <Extension Id="com.cptk.aellama.panel">
+      <DispatchInfo>
+        <Resources>
+          <MainPath>./index.html</MainPath>
+          <ScriptPath>./jsx/hostscript.jsx</ScriptPath>
+          <CEFCommandLine>
+            <Parameter>--enable-nodejs</Parameter>
+            <Parameter>--mixed-context</Parameter>
+          </CEFCommandLine>
+        </Resources>
+        <Lifecycle>
+          <AutoVisible>true</AutoVisible>
+        </Lifecycle>
+        <UI>
+          <Type>Panel</Type>
+          <Menu>AE Llama</Menu>
+          <Geometry>
+            <Size>
+              <Height>640</Height>
+              <Width>420</Width>
+            </Size>
+            <MinSize>
+              <Height>320</Height>
+              <Width>300</Width>
+            </MinSize>
+          </Geometry>
+          <Icons/>
+        </UI>
+      </DispatchInfo>
+    </Extension>
+  </DispatchInfoList>
+</ExtensionManifest>

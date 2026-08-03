@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8"/>
+  <title>AE Llama</title>
+  <link rel="stylesheet" href="css/style.css"/>
+</head>
+<body>
+  <div id="app">
+
+    <header id="topbar">
+      <div id="status">
+        <span id="status-dot" class="dot off"></span>
+        <span id="status-text">Server stopped</span>
+      </div>
+      <div id="topbar-buttons">
+        <button id="btn-settings" title="Settings">&#9881;</button>
+        <button id="btn-logs" title="Server log">&#9636;</button>
+      </div>
+    </header>
+
+    <section id="model-row">
+      <select id="model-select" title="Model file (.gguf)">
+        <option value="">Loading models&hellip;</option>
+      </select>
+      <button id="btn-refresh-models" title="Rescan models folder">&#8635;</button>
+      <button id="btn-server-toggle" class="primary" title="Start / stop llama-server">Start</button>
+    </section>
+
+    <section id="settings-drawer" class="drawer hidden">
+      <h3>Settings</h3>
+
+      <label>llama-server.exe
+        <div class="pathfield">
+          <input id="set-server-path" type="text" spellcheck="false"/>
+          <button id="btn-browse-server">&hellip;</button>
+        </div>
+      </label>
+
+      <label>Models folder
+        <div class="pathfield">
+          <input id="set-models-dir" type="text" spellcheck="false"/>
+          <button id="btn-browse-models-dir">&hellip;</button>
+        </div>
+      </label>
+
+      <div class="grid2">
+        <label>Port
+          <input id="set-port" type="number" min="1024" max="65535"/>
+        </label>
+        <label>Context size
+          <input id="set-ctx" type="number" min="512" step="512"/>
+        </label>
+        <label>GPU layers (-ngl)
+          <input id="set-ngl" type="number" min="0" max="999"/>
+        </label>
+        <label>Temperature
+          <input id="set-temp" type="number" min="0" max="2" step="0.1"/>
+        </label>
+        <label>Max tool rounds
+          <input id="set-rounds" type="number" min="1" max="8"/>
+        </label>
+        <label class="check">
+          <input id="set-dryrun" type="checkbox"/>
+          <span>Dry run (show commands, don't apply)</span>
+        </label>
+      </div>
+
+      <div class="drawer-actions">
+        <button id="btn-settings-close">Close</button>
+      </div>
+    </section>
+
+    <section id="log-drawer" class="drawer hidden">
+      <h3>Server log</h3>
+      <pre id="log-output"></pre>
+      <div class="drawer-actions">
+        <button id="btn-log-clear">Clear</button>
+        <button id="btn-log-close">Close</button>
+      </div>
+    </section>
+
+    <main id="chat"></main>
+
+    <footer id="composer">
+      <textarea id="chat-input" rows="2"
+        placeholder="Ask the model to do something in After Effects&hellip;"></textarea>
+      <div id="composer-buttons">
+        <button id="btn-send" class="primary" title="Send (Enter)">Send</button>
+        <button id="btn-clear-chat" title="Clear conversation">Clear</button>
+      </div>
+    </footer>
+
+  </div>
+
+  <script src="js/libs/cep-bridge.js"></script>
+  <script src="js/settings.js"></script>
+  <script src="js/llama.js"></script>
+  <script src="js/tools.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>

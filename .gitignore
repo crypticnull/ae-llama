@@ -1,0 +1,10 @@
+# llama.cpp binaries (fetched by scripts/get-llama.ps1)
+extension/vendor/
+
+# model files are huge — keep them out of git
+extension/models/*
+!extension/models/README.md
+
+node_modules/
+Thumbs.db
+.DS_Store
