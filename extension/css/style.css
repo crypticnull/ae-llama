@@ -1,0 +1,183 @@
+/* AE-dark themed panel. Kept intentionally simple and dependency-free. */
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  height: 100%;
+  background: #232323;
+  color: #d6d6d6;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 12px;
+  overflow: hidden;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* ---------- top bar ---------- */
+
+#topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 8px;
+  background: #1d1d1d;
+  border-bottom: 1px solid #111;
+  flex: 0 0 auto;
+}
+
+#status { display: flex; align-items: center; gap: 6px; min-width: 0; }
+#status-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.dot {
+  width: 9px; height: 9px;
+  border-radius: 50%;
+  display: inline-block;
+  flex: 0 0 auto;
+}
+.dot.off      { background: #666; }
+.dot.starting { background: #d9a13c; }
+.dot.on       { background: #57b757; }
+.dot.error    { background: #c25050; }
+
+#topbar-buttons { display: flex; gap: 4px; }
+
+/* ---------- model row ---------- */
+
+#model-row {
+  display: flex;
+  gap: 4px;
+  padding: 6px 8px;
+  background: #262626;
+  border-bottom: 1px solid #111;
+  flex: 0 0 auto;
+}
+
+#model-select { flex: 1 1 auto; min-width: 0; }
+
+/* ---------- generic controls ---------- */
+
+button {
+  background: #3a3a3a;
+  color: #d6d6d6;
+  border: 1px solid #202020;
+  border-radius: 3px;
+  padding: 4px 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+button:hover { background: #464646; }
+button:active { background: #2d2d2d; }
+button:disabled { opacity: 0.45; cursor: default; }
+button.primary { background: #2d6ca2; border-color: #1d4a72; }
+button.primary:hover { background: #3579b4; }
+button.danger { background: #8a3535; border-color: #5f2222; }
+
+input, select, textarea {
+  background: #191919;
+  color: #d6d6d6;
+  border: 1px solid #101010;
+  border-radius: 3px;
+  padding: 4px 6px;
+  font-size: 12px;
+  font-family: inherit;
+}
+input:focus, select:focus, textarea:focus { outline: 1px solid #2d6ca2; }
+
+/* ---------- drawers ---------- */
+
+.drawer {
+  background: #2a2a2a;
+  border-bottom: 1px solid #111;
+  padding: 8px;
+  flex: 0 0 auto;
+  max-height: 55%;
+  overflow-y: auto;
+}
+.drawer.hidden { display: none; }
+.drawer h3 { font-size: 12px; margin-bottom: 8px; color: #aaa; }
+.drawer label { display: block; margin-bottom: 8px; color: #bbb; }
+.drawer label input[type="text"], .drawer label input[type="number"] {
+  display: block; width: 100%; margin-top: 3px;
+}
+.drawer .check { display: flex; align-items: center; gap: 6px; }
+.drawer .check input { margin: 0; }
+.drawer-actions { display: flex; gap: 6px; justify-content: flex-end; }
+
+.pathfield { display: flex; gap: 4px; margin-top: 3px; }
+.pathfield input { flex: 1 1 auto; min-width: 0; }
+.pathfield button { flex: 0 0 auto; }
+
+.grid2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 10px;
+  margin-bottom: 8px;
+}
+
+#log-output {
+  background: #141414;
+  border: 1px solid #101010;
+  border-radius: 3px;
+  padding: 6px;
+  height: 160px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-family: Consolas, monospace;
+  font-size: 11px;
+  color: #9a9a9a;
+  margin-bottom: 8px;
+}
+
+/* ---------- chat ---------- */
+
+#chat {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.msg {
+  max-width: 92%;
+  padding: 6px 9px;
+  border-radius: 6px;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  line-height: 1.45;
+}
+.msg.user      { align-self: flex-end; background: #2d5d8a; color: #eaf2f9; }
+.msg.assistant { align-self: flex-start; background: #333; }
+.msg.tool      { align-self: flex-start; background: #24322a; color: #a9c8b1;
+                 font-family: Consolas, monospace; font-size: 11px; }
+.msg.error     { align-self: flex-start; background: #442626; color: #e0b1b1; }
+.msg.info      { align-self: center; background: transparent; color: #888;
+                 font-style: italic; }
+
+.msg .msg-label {
+  display: block;
+  font-size: 10px;
+  opacity: 0.6;
+  margin-bottom: 2px;
+  font-style: normal;
+  font-family: "Segoe UI", system-ui, sans-serif;
+}
+
+/* ---------- composer ---------- */
+
+#composer {
+  display: flex;
+  gap: 6px;
+  padding: 8px;
+  background: #1d1d1d;
+  border-top: 1px solid #111;
+  flex: 0 0 auto;
+}
+#chat-input { flex: 1 1 auto; resize: none; }
+#composer-buttons { display: flex; flex-direction: column; gap: 4px; }
