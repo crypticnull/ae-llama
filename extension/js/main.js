@@ -59,7 +59,8 @@
         options.push({ value: scanned[i], label: basename(scanned[i]) });
       }
     }
-    var kept = [];
+    // Missing custom entries (unplugged drive, network share asleep) are
+    // hidden but never pruned — they come back when the path does.
     for (i = 0; i < s.customModels.length; i++) {
       var p = s.customModels[i];
       var exists = false;
@@ -68,14 +69,8 @@
       } catch (e) {}
       if (exists && !seen[p]) {
         seen[p] = true;
-        kept.push(p);
         options.push({ value: p, label: basename(p) + "  (custom)" });
-      } else if (exists) {
-        kept.push(p);   // scanned already covers it; keep remembering it
       }
-    }
-    if (kept.length !== s.customModels.length) {
-      global.Settings.set({ customModels: kept });
     }
 
     els.modelSelect.innerHTML = "";
@@ -202,6 +197,7 @@
 
     busy = true;
     els.sendBtn.disabled = true;
+    els.clearChatBtn.disabled = true;   // clearing mid-round corrupts history
     var thinking = appendMsg("info", "Thinking…");
 
     var s = global.Settings.get();
@@ -214,6 +210,7 @@
     function finish() {
       busy = false;
       els.sendBtn.disabled = false;
+      els.clearChatBtn.disabled = false;
       if (thinking && thinking.parentNode) {
         thinking.parentNode.removeChild(thinking);
         thinking = null;
@@ -346,6 +343,14 @@
       return;
     }
 
+    // Populate the settings form up front so no code path can ever persist
+    // never-filled (empty) fields over the real settings.
+    settingsToForm();
+
+    // A llama-server from a previous session may have survived panel
+    // teardown (CEP doesn't reliably fire unload) — reap it now.
+    try { global.Llama.reapOrphan(); } catch (e) {}
+
     // -- server status + logs
     global.Llama.on("status", function (state, detail) {
       var cls = { stopped: "off", starting: "starting",
@@ -381,7 +386,9 @@
       if (st === "running" || st === "starting") {
         global.Llama.stop();
       } else {
-        formToSettings();
+        // Settings are already persisted by each field's change listener —
+        // do NOT snapshot the form here: on first run the drawer has never
+        // been populated and doing so would wipe the path defaults.
         startServer();
       }
     });

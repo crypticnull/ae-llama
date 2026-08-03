@@ -34,10 +34,19 @@ Everything runs on your machine. No cloud calls, no telemetry.
 From the repo root in PowerShell:
 
 ```powershell
+# 0. Stock Windows PowerShell blocks local scripts (Restricted policy).
+#    Either allow them once for your user:
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+#    …or prefix each script call with:
+#    powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\<name>.ps1
+#    (If you downloaded a ZIP instead of git-cloning, also run:
+#     Unblock-File .\scripts\*.ps1)
+
 # 1. Download llama.cpp server binaries into extension\vendor\
 .\scripts\get-llama.ps1              # CPU build
 #  …or, with an NVIDIA GPU:
-.\scripts\get-llama.ps1 -Variant cuda
+.\scripts\get-llama.ps1 -Variant cuda            # oldest CUDA line (max GPU compat)
+.\scripts\get-llama.ps1 -Variant cuda -CudaVersion 13   # newer line for recent GPUs
 
 # 2. Register the panel with After Effects (junction + PlayerDebugMode)
 .\scripts\install.ps1
@@ -155,8 +164,9 @@ scripts/
 ## Troubleshooting
 
 - **Panel missing from Window ▸ Extensions** — re-run `scripts\install.ps1`,
-  fully restart AE. Check that
-  `HKCU\Software\Adobe\CSXS.12\PlayerDebugMode` = `1` (string) and that
+  fully restart AE. Check the PlayerDebugMode string value = `1` under the
+  key for *your* AE version: `HKCU\Software\Adobe\CSXS.11` for AE 2024,
+  `HKCU\Software\Adobe\CSXS.12` for AE 2025/2026. Also confirm
   `%APPDATA%\Adobe\CEP\extensions\com.cptk.aellama` exists.
 - **"llama-server.exe not found"** — run `scripts\get-llama.ps1`, or set the
   path in ⚙ Settings.

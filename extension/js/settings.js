@@ -39,9 +39,17 @@
       if (raw) {
         var saved = JSON.parse(raw);
         for (var k in saved) {
-          if (Object.prototype.hasOwnProperty.call(merged, k)) {
-            merged[k] = saved[k];
+          if (!Object.prototype.hasOwnProperty.call(merged, k)) continue;
+          var val = saved[k];
+          // Heal bad persisted paths from earlier builds/bugs: never let an
+          // empty string or an un-normalized file:// URL shadow a live
+          // extension-relative default.
+          if (typeof merged[k] === "string" && merged[k] !== "" &&
+              typeof val === "string" &&
+              (val === "" || val.indexOf("file://") === 0)) {
+            continue;
           }
+          merged[k] = val;
         }
       }
     } catch (e) { /* corrupted storage -> fall back to defaults */ }

@@ -62,9 +62,18 @@ var AELLJSON = (function () {
     return "null";
   }
 
-  // Input comes only from our own panel, so eval-based parsing is acceptable.
+  // Crockford-style validation (pure ES3) so eval can only ever see JSON —
+  // AELL_call is on $.global and reachable from other extensions, so the
+  // input cannot be assumed to be our panel's well-formed encoding.
   function parse(s) {
     if (!s) return {};
+    var probe = String(s)
+      .replace(/\\(?:["\\\/bfnrt]|u[0-9a-fA-F]{4})/g, "@")
+      .replace(/"[^"\\\n\r]*"|true|false|null|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?/g, "]")
+      .replace(/(?:^|:|,)(?:\s*\[)+/g, "");
+    if (!/^[\],:{}\s]*$/.test(probe)) {
+      throw new Error("Arguments are not valid JSON");
+    }
     return eval("(" + s + ")");
   }
 
@@ -79,6 +88,10 @@ function AELL_okay(data) { return { ok: true, data: data }; }
 function AELL_resolveComp(name) {
   var proj = app.project;
   if (!proj) throw new Error("No project open");
+  // Digit-only comp names ("1080") may arrive as JSON numbers.
+  if (name !== null && typeof name !== "undefined" && name !== "") {
+    name = String(name);
+  }
   if (!name) {
     var item = proj.activeItem;
     if (item && item instanceof CompItem) return item;
@@ -123,15 +136,24 @@ function AELL_resolveProperty(layer, spec) {
   }
   var parts = spec.split(".");
   if (parts.length >= 3 && parts[0] === "effect") {
-    var effectName = parts[1];
-    var paramName = parts.slice(2).join(".");
     var effects = layer.property("ADBE Effect Parade");
     if (!effects) throw new Error("Layer has no effects group");
-    var fx = effects.property(effectName);
-    if (!fx) throw new Error("Effect not found on layer: " + effectName);
-    var param = fx.property(paramName);
-    if (!param) throw new Error("Effect parameter not found: " + paramName);
-    return param;
+    // Effect display names can themselves contain dots ("Glow v2.5"), so
+    // try the longest effect-name split first and work backwards.
+    for (var cut = parts.length - 1; cut >= 2; cut--) {
+      var effectName = parts.slice(1, cut).join(".");
+      var fx = effects.property(effectName);
+      if (fx) {
+        var paramName = parts.slice(cut).join(".");
+        var param = fx.property(paramName);
+        if (!param) {
+          throw new Error("Effect parameter not found: " + paramName +
+                          " (on effect " + effectName + ")");
+        }
+        return param;
+      }
+    }
+    throw new Error("Effect not found on layer: " + parts[1]);
   }
   throw new Error(
     "Unknown property '" + spec + "'. Use position/scale/rotation/opacity/" +

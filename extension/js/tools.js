@@ -69,7 +69,11 @@
   ];
 
   var TOOL_NAMES = [];
-  for (var i = 0; i < TOOL_DEFS.length; i++) TOOL_NAMES.push(TOOL_DEFS[i].name);
+  var MUTATING = {};
+  for (var i = 0; i < TOOL_DEFS.length; i++) {
+    TOOL_NAMES.push(TOOL_DEFS[i].name);
+    if (TOOL_DEFS[i].mutating) MUTATING[TOOL_DEFS[i].name] = true;
+  }
 
   // Forced output shape for constrained decoding (llama.cpp json_schema).
   var RESPONSE_SCHEMA = {
@@ -251,6 +255,11 @@
       return;
     }
     var argsLiteral = JSON.stringify(JSON.stringify(args || {}));
+    // U+2028/U+2029 are legal raw inside modern JSON.stringify output but
+    // are line terminators to ExtendScript (ES3) — they'd kill the eval.
+    argsLiteral = argsLiteral
+      .replace(/\u2028/g, "\\u2028")
+      .replace(/\u2029/g, "\\u2029");
     var script = 'AELL_call("' + tool + '", ' + argsLiteral + ')';
     global.AEBridge.evalScript(script, function (result, isError) {
       if (isError) {
@@ -274,24 +283,37 @@
    * onEach(index, command, result) fires per command; done(results) at end.
    * dryRun: report what would run without touching AE.
    */
+  var MAX_COMMANDS_PER_ROUND = 20;
+
   function executeCommands(commands, dryRun, onEach, done) {
     var results = [];
+    if (commands.length > MAX_COMMANDS_PER_ROUND) {
+      commands = commands.slice(0, MAX_COMMANDS_PER_ROUND);
+    }
     function step(i) {
       if (i >= commands.length) { done(results); return; }
       var cmd = commands[i] || {};
-      if (dryRun) {
-        var r = { ok: true, dryRun: true,
-                  note: "Dry run — not applied" };
-        results.push(r);
-        if (onEach) onEach(i, cmd, r);
-        step(i + 1);
-        return;
-      }
-      callTool(cmd.tool, cmd.args, function (result) {
+      // A buggy tool must not be able to double-invoke the continuation —
+      // that would fork the remaining command list and the chat round.
+      var settled = false;
+      function onResult(result) {
+        if (settled) return;
+        settled = true;
         results.push(result);
         if (onEach) onEach(i, cmd, result);
         step(i + 1);
-      });
+      }
+      if (typeof cmd.tool !== "string") {
+        onResult({ ok: false, error: "Malformed command (no tool name)" });
+        return;
+      }
+      // Dry run still executes read-only tools — the model needs real
+      // project data to plan; only mutations are stubbed.
+      if (dryRun && MUTATING[cmd.tool]) {
+        onResult({ ok: true, dryRun: true, note: "Dry run — not applied" });
+        return;
+      }
+      callTool(cmd.tool, cmd.args, onResult);
     }
     step(0);
   }
@@ -299,10 +321,22 @@
   /** Route a command to a panel-side implementation or the AE host. */
   function callTool(tool, args, cb) {
     if (Object.prototype.hasOwnProperty.call(PANEL_TOOLS, tool)) {
+      var delivered = false;
+      var once = function (r) {
+        if (delivered) return;
+        delivered = true;
+        cb(r);
+      };
       try {
-        PANEL_TOOLS[tool](args || {}, cb);
+        PANEL_TOOLS[tool](args || {}, once);
       } catch (e) {
-        cb({ ok: false, error: tool + " failed: " + e.message });
+        // If cb already ran, this throw came from downstream of the tool —
+        // don't re-deliver, just surface it in the console.
+        if (!delivered) {
+          once({ ok: false, error: tool + " failed: " + e.message });
+        } else if (global.console && global.console.error) {
+          global.console.error(e);
+        }
       }
       return;
     }
