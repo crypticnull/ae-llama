@@ -225,6 +225,18 @@ update.json           update-channel manifest template (host your copy)
 
 ## Troubleshooting
 
+- **ZXP Installer says "no compatible program available" / asks for a
+  Creative Cloud login you already have** — the installer's Adobe-app
+  detection is failing, not the ZXP. In order: update to the latest
+  [ZXP/UXP Installer](https://aescripts.com/learn/zxp-installer/) (older
+  builds don't recognize new AE releases like 2026); launch it normally,
+  NOT "Run as administrator" (elevation changes the user context, which
+  breaks both app detection and the CC login check); sign out/in of the
+  Creative Cloud desktop app and retry. Or skip the installer entirely:
+  `.\scripts\install-zxp.ps1 -ZxpPath <path to .zxp>` extracts the signed
+  panel straight into the CEP extensions folder (equivalently: rename the
+  `.zxp` to `.zip` and extract it to
+  `%APPDATA%\Adobe\CEP\extensions\com.cptk.aellama`).
 - **Panel missing from Window ▸ Extensions** — re-run `scripts\install.ps1`,
   fully restart AE. Check the PlayerDebugMode string value = `1` under the
   key for *your* AE version: `HKCU\Software\Adobe\CSXS.11` for AE 2024,
