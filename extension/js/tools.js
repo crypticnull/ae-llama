@@ -55,7 +55,17 @@
       args: "{path: string (absolute)}" },
     { name: "add_to_render_queue", mutating: true,
       desc: "Add a comp to the render queue.",
-      args: "{comp?: string, outputPath?: string (absolute)}" }
+      args: "{comp?: string, outputPath?: string (absolute)}" },
+    { name: "comfy_status", mutating: false,
+      desc: "Check the local ComfyUI instance (online? queue depth?).",
+      args: "{}" },
+    { name: "comfy_list_workflows", mutating: false,
+      desc: "List available ComfyUI generation workflow templates by name.",
+      args: "{}" },
+    { name: "comfy_generate", mutating: true,
+      desc: "Generate an image/video with local ComfyUI and import it into " +
+            "the AE project. Blocks until finished (may take minutes).",
+      args: "{workflow: string (name from comfy_list_workflows), prompt: string, negative?: string, width?: int, height?: int, seed?: int, frames?: int (video workflows), import?: bool = true}" }
   ];
 
   var TOOL_NAMES = [];
@@ -104,6 +114,12 @@
       "- Omit 'comp' to target the active comp.",
       "- Prefer inspecting (get_project_info / get_comp_details) before",
       "  modifying things you have not seen.",
+      "- comfy_generate renders with a LOCAL ComfyUI instance and imports",
+      "  the result into the project (result data lists imported item",
+      "  names). Check comfy_status first; pick a template via",
+      "  comfy_list_workflows. Match width/height to the target comp when",
+      "  it makes sense. Generation can take minutes — do not repeat a",
+      "  request that already succeeded.",
       "",
       "Available tools:"
     ];
@@ -126,6 +142,107 @@
     }
     return false;
   }
+
+  // ------------------------------------------------- panel-side tools
+
+  // Progress sink so long generations can narrate into the chat UI.
+  var progressSink = null;
+
+  var PANEL_TOOLS = {
+
+    comfy_status: function (args, cb) {
+      var s = global.Settings.get();
+      global.Comfy.status(s.comfyUrl, function (err, st) {
+        cb({ ok: true, data: st });
+      });
+    },
+
+    comfy_list_workflows: function (args, cb) {
+      var s = global.Settings.get();
+      var list = global.Comfy.listWorkflows(s.comfyWorkflowsDir);
+      var names = [];
+      for (var i = 0; i < list.length; i++) names.push(list[i].name);
+      if (names.length === 0) {
+        cb({ ok: false, error: "No workflow templates in " +
+             s.comfyWorkflowsDir + ". Export API-format workflows from " +
+             "ComfyUI into that folder." });
+        return;
+      }
+      cb({ ok: true, data: { workflows: names } });
+    },
+
+    comfy_generate: function (args, cb) {
+      var s = global.Settings.get();
+      if (!args || typeof args.prompt !== "string" || !args.prompt) {
+        cb({ ok: false, error: "'prompt' is required" });
+        return;
+      }
+      var list = global.Comfy.listWorkflows(s.comfyWorkflowsDir);
+      if (list.length === 0) {
+        cb({ ok: false, error: "No workflow templates in " +
+             s.comfyWorkflowsDir });
+        return;
+      }
+      var chosen = list[0];
+      if (args.workflow) {
+        var found = null;
+        for (var i = 0; i < list.length; i++) {
+          if (list[i].name.toLowerCase() === String(args.workflow).toLowerCase()) {
+            found = list[i];
+            break;
+          }
+        }
+        if (!found) {
+          var names = [];
+          for (var j = 0; j < list.length; j++) names.push(list[j].name);
+          cb({ ok: false, error: "Unknown workflow '" + args.workflow +
+               "'. Available: " + names.join(", ") });
+          return;
+        }
+        chosen = found;
+      }
+
+      global.Comfy.generate({
+        comfyUrl: s.comfyUrl,
+        workflowFile: chosen.file,
+        outDir: s.comfyOutDir,
+        timeoutSec: s.comfyTimeoutSec,
+        params: {
+          prompt: args.prompt,
+          negative: args.negative,
+          width: args.width,
+          height: args.height,
+          seed: args.seed,
+          frames: args.frames
+        }
+      }, function (elapsed) {
+        if (progressSink) {
+          progressSink("ComfyUI still generating… " + elapsed + "s");
+        }
+      }, function (err, result) {
+        if (err) { cb({ ok: false, error: err.message }); return; }
+        if (args["import"] === false) {
+          cb({ ok: true, data: { files: result.files,
+                                 applied: result.applied } });
+          return;
+        }
+        // Import each rendered file into the AE project.
+        var imported = [];
+        (function next(i) {
+          if (i >= result.files.length) {
+            cb({ ok: true, data: { files: result.files, imported: imported,
+                                   applied: result.applied } });
+            return;
+          }
+          callHostTool("import_file", { path: result.files[i] },
+            function (r) {
+              imported.push(r.ok ? r.data : { error: r.error });
+              next(i + 1);
+            });
+        })(0);
+      });
+    }
+  };
 
   /** Call one host tool. cb(resultObject) — never throws. */
   function callHostTool(tool, args, cb) {
@@ -170,7 +287,7 @@
         step(i + 1);
         return;
       }
-      callHostTool(cmd.tool, cmd.args, function (result) {
+      callTool(cmd.tool, cmd.args, function (result) {
         results.push(result);
         if (onEach) onEach(i, cmd, result);
         step(i + 1);
@@ -179,12 +296,26 @@
     step(0);
   }
 
+  /** Route a command to a panel-side implementation or the AE host. */
+  function callTool(tool, args, cb) {
+    if (Object.prototype.hasOwnProperty.call(PANEL_TOOLS, tool)) {
+      try {
+        PANEL_TOOLS[tool](args || {}, cb);
+      } catch (e) {
+        cb({ ok: false, error: tool + " failed: " + e.message });
+      }
+      return;
+    }
+    callHostTool(tool, args, cb);
+  }
+
   global.Tools = {
     TOOL_DEFS: TOOL_DEFS,
     RESPONSE_SCHEMA: RESPONSE_SCHEMA,
     buildSystemPrompt: buildSystemPrompt,
     callHostTool: callHostTool,
-    executeCommands: executeCommands
+    executeCommands: executeCommands,
+    setProgressSink: function (fn) { progressSink = fn; }
   };
 
 })(window);

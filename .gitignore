@@ -5,6 +5,9 @@ extension/vendor/
 extension/models/*
 !extension/models/README.md
 
+# ComfyUI renders downloaded by the panel
+extension/generated/
+
 node_modules/
 Thumbs.db
 .DS_Store

@@ -94,7 +94,41 @@ is exactly the tool list — currently:
 `get_project_info`, `get_comp_details`, `create_comp`, `add_text_layer`,
 `add_solid`, `set_transform`, `add_keyframe`, `set_expression`,
 `apply_effect`, `set_effect_param`, `set_layer_timing`, `delete_layer`,
-`set_comp_setting`, `import_file`, `add_to_render_queue`
+`set_comp_setting`, `import_file`, `add_to_render_queue`,
+`comfy_status`, `comfy_list_workflows`, `comfy_generate`
+
+## ComfyUI integration (image / video generation)
+
+If you have a local [ComfyUI](https://github.com/comfyanonymous/ComfyUI)
+install, the LLM can render images and video and pull them straight into
+your AE project:
+
+> *"Generate a 1920×1080 stormy sky background and add it to the Intro comp"*
+
+runs `comfy_generate` → queues an API-format workflow on your ComfyUI
+instance → waits → downloads the render → imports it into the project, all
+locally.
+
+Setup (all paths definable in ⚙ Settings):
+
+1. **Instance URL** — where ComfyUI listens (default `http://127.0.0.1:8188`).
+   If ComfyUI is already running, that's all you need — press
+   **Test connection**.
+2. **Install folder** — optional; lets the panel's **Launch ComfyUI** button
+   start it for you. Portable builds (`run_nvidia_gpu.bat` / `run_cpu.bat` /
+   embedded Python) and plain checkouts (`main.py` + `python` on PATH) are
+   detected. Custom venv setups: start ComfyUI yourself and just set the URL.
+3. **Workflow templates folder** — drop ComfyUI **Export (API)** JSON files
+   here (default `extension\comfy-workflows\`, which includes a starter
+   txt2img example — edit its `ckpt_name` first). The panel injects
+   prompt/negative/size/seed/frames into your graph by node introspection;
+   see `extension/comfy-workflows/README.md` for the exact rules.
+4. **Generated files folder** — where renders are saved before being
+   imported (default `extension\generated\`).
+
+Video workflows should end in an AE-importable container (mp4/H.264 via
+SaveVideo or VHS Video Combine — AE can't import animated webp), and may
+need a higher *Generation timeout*.
 
 Structured output is enforced with llama.cpp's JSON-schema constrained
 decoding (with a graceful fallback for older server builds).
@@ -105,10 +139,13 @@ decoding (with a graceful fallback for older server builds).
 extension/            the CEP panel (this folder gets junctioned into AE)
   CSXS/manifest.xml   CEP manifest (AEFT 24.0–99.9, CSXS 11)
   index.html          panel markup
-  js/                 panel logic (bridge, settings, server mgmt, tools, UI)
+  js/                 panel logic (bridge, settings, llama server mgmt,
+                      ComfyUI client, tools, UI)
   jsx/hostscript.jsx  ExtendScript tool implementations (allowlist + undo)
+  comfy-workflows/    ComfyUI API-format workflow templates
   models/             put .gguf files here (gitignored)
   vendor/             llama.cpp binaries land here (gitignored)
+  generated/          ComfyUI renders land here (gitignored)
 scripts/
   get-llama.ps1       fetch llama.cpp Windows release binaries
   install.ps1         junction the panel + set PlayerDebugMode
@@ -129,6 +166,10 @@ scripts/
 - **Model produces junk commands** — small/base models struggle with tool
   use; prefer an *instruct* model ≥7B, or lower the temperature.
 - **Port in use** — change the port in ⚙ Settings.
+- **ComfyUI unreachable** — start it (Launch button or manually) and check
+  the URL with **Test connection**. `comfy_generate` errors mentioning a
+  node usually mean the workflow references a checkpoint/custom node your
+  ComfyUI doesn't have — fix the template in ComfyUI and re-export.
 - **Debugging the panel** — with the panel open, visit
   `http://localhost:8092` in a browser for CEF DevTools (see
   `extension/.debug`).

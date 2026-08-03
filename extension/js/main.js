@@ -280,6 +280,11 @@
     els.setTemp.value = s.temperature;
     els.setRounds.value = s.maxRounds;
     els.setDryRun.checked = !!s.dryRun;
+    els.setComfyUrl.value = s.comfyUrl;
+    els.setComfyDir.value = s.comfyDir;
+    els.setComfyWorkflows.value = s.comfyWorkflowsDir;
+    els.setComfyOut.value = s.comfyOutDir;
+    els.setComfyTimeout.value = s.comfyTimeoutSec;
   }
 
   function formToSettings() {
@@ -293,7 +298,12 @@
       temperature: parseFloat(els.setTemp.value) >= 0
         ? parseFloat(els.setTemp.value) : 0.7,
       maxRounds: parseInt(els.setRounds.value, 10) || 4,
-      dryRun: !!els.setDryRun.checked
+      dryRun: !!els.setDryRun.checked,
+      comfyUrl: els.setComfyUrl.value || "http://127.0.0.1:8188",
+      comfyDir: els.setComfyDir.value,
+      comfyWorkflowsDir: els.setComfyWorkflows.value,
+      comfyOutDir: els.setComfyOut.value,
+      comfyTimeoutSec: parseInt(els.setComfyTimeout.value, 10) || 600
     });
   }
 
@@ -322,7 +332,12 @@
       setNgl: $("set-ngl"),
       setTemp: $("set-temp"),
       setRounds: $("set-rounds"),
-      setDryRun: $("set-dryrun")
+      setDryRun: $("set-dryrun"),
+      setComfyUrl: $("set-comfy-url"),
+      setComfyDir: $("set-comfy-dir"),
+      setComfyWorkflows: $("set-comfy-workflows"),
+      setComfyOut: $("set-comfy-out"),
+      setComfyTimeout: $("set-comfy-timeout")
     };
 
     if (!global.AEBridge.available()) {
@@ -397,7 +412,9 @@
     // settings fields persist on change
     var persistIds = ["set-server-path", "set-models-dir", "set-port",
                       "set-ctx", "set-ngl", "set-temp", "set-rounds",
-                      "set-dryrun"];
+                      "set-dryrun", "set-comfy-url", "set-comfy-dir",
+                      "set-comfy-workflows", "set-comfy-out",
+                      "set-comfy-timeout"];
     for (var i = 0; i < persistIds.length; i++) {
       $(persistIds[i]).addEventListener("change", formToSettings);
     }
@@ -423,6 +440,51 @@
         formToSettings();
         populateModelDropdown();
       }
+    });
+
+    // -- ComfyUI controls
+    function browseIntoField(el, title, folder) {
+      var picked = global.AEBridge.showOpenDialog({
+        title: title,
+        initialPath: el.value,
+        folder: folder
+      });
+      if (picked) {
+        el.value = picked;
+        formToSettings();
+      }
+    }
+    $("btn-browse-comfy-dir").addEventListener("click", function () {
+      browseIntoField(els.setComfyDir, "Locate your ComfyUI install folder", true);
+    });
+    $("btn-browse-comfy-workflows").addEventListener("click", function () {
+      browseIntoField(els.setComfyWorkflows, "Choose workflow templates folder", true);
+    });
+    $("btn-browse-comfy-out").addEventListener("click", function () {
+      browseIntoField(els.setComfyOut, "Choose generated files folder", true);
+    });
+    $("btn-comfy-launch").addEventListener("click", function () {
+      formToSettings();
+      global.Comfy.launch(global.Settings.get().comfyDir, function (err, msg) {
+        appendMsg(err ? "error" : "info", err ? err.message : msg);
+      });
+    });
+    $("btn-comfy-test").addEventListener("click", function () {
+      formToSettings();
+      global.Comfy.status(global.Settings.get().comfyUrl, function (err, st) {
+        if (st && st.online) {
+          appendMsg("info", "ComfyUI online at " + st.url +
+            " — running: " + st.running + ", queued: " + st.pending);
+        } else {
+          appendMsg("error", "ComfyUI not reachable at " +
+            (st ? st.url : "?") + ". " + (st && st.hint ? st.hint : ""));
+        }
+      });
+    });
+
+    // long generations narrate progress into the chat
+    global.Tools.setProgressSink(function (text) {
+      appendMsg("info", text);
     });
 
     // -- chat

@@ -66,7 +66,43 @@
         </label>
       </div>
 
+      <h3>ComfyUI (image / video generation)</h3>
+
+      <label>Instance URL
+        <input id="set-comfy-url" type="text" spellcheck="false"
+               placeholder="http://127.0.0.1:8188"/>
+      </label>
+
+      <label>Install folder (for Launch button)
+        <div class="pathfield">
+          <input id="set-comfy-dir" type="text" spellcheck="false"/>
+          <button id="btn-browse-comfy-dir">&hellip;</button>
+        </div>
+      </label>
+
+      <label>Workflow templates folder (API-format .json)
+        <div class="pathfield">
+          <input id="set-comfy-workflows" type="text" spellcheck="false"/>
+          <button id="btn-browse-comfy-workflows">&hellip;</button>
+        </div>
+      </label>
+
+      <label>Generated files folder
+        <div class="pathfield">
+          <input id="set-comfy-out" type="text" spellcheck="false"/>
+          <button id="btn-browse-comfy-out">&hellip;</button>
+        </div>
+      </label>
+
+      <div class="grid2">
+        <label>Generation timeout (s)
+          <input id="set-comfy-timeout" type="number" min="30" step="30"/>
+        </label>
+      </div>
+
       <div class="drawer-actions">
+        <button id="btn-comfy-launch">Launch ComfyUI</button>
+        <button id="btn-comfy-test">Test connection</button>
         <button id="btn-settings-close">Close</button>
       </div>
     </section>
@@ -96,6 +132,7 @@
   <script src="js/libs/cep-bridge.js"></script>
   <script src="js/settings.js"></script>
   <script src="js/llama.js"></script>
+  <script src="js/comfy.js"></script>
   <script src="js/tools.js"></script>
   <script src="js/main.js"></script>
 </body>

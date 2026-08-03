@@ -22,7 +22,13 @@
       gpuLayers: 99,
       temperature: 0.7,
       maxRounds: 4,
-      dryRun: false
+      dryRun: false,
+      // --- ComfyUI (image/video generation) ---
+      comfyUrl: "http://127.0.0.1:8188",
+      comfyDir: "",            // definable install folder (for Launch)
+      comfyWorkflowsDir: root ? root + "/comfy-workflows" : "",
+      comfyOutDir: root ? root + "/generated" : "",
+      comfyTimeoutSec: 600
     };
   }
 
