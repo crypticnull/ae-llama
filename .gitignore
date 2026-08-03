@@ -1,12 +1,13 @@
-# llama.cpp binaries (fetched by scripts/get-llama.ps1)
+# legacy dev locations (0.1.x kept binaries/models inside the extension;
+# they now live in %APPDATA%\AE-Llama, outside the repo)
 extension/vendor/
-
-# model files are huge — keep them out of git
-extension/models/*
-!extension/models/README.md
-
-# ComfyUI renders downloaded by the panel
+extension/models/
 extension/generated/
+
+# packaging output + signing material
+dist/
+tools/ZXPSignCmd.exe
+*.p12
 
 node_modules/
 Thumbs.db

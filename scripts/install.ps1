@@ -35,8 +35,11 @@ foreach ($v in 11, 12) {
 # --- 2. Junction into the CEP extensions folder -----------------------------
 New-Item -ItemType Directory -Force -Path $extDir | Out-Null
 
-if (Test-Path $linkPath) {
-    $existing = Get-Item $linkPath -Force
+# Test-Path follows reparse points and reports $false for a DANGLING
+# junction (repo moved/deleted since the last install) -- Get-Item -Force
+# sees the link itself, so re-runs recover from that state too.
+$existing = Get-Item -LiteralPath $linkPath -Force -ErrorAction SilentlyContinue
+if ($existing) {
     if ($existing.LinkType) {
         # A junction/symlink: remove the link only, never its target contents.
         $existing.Delete()

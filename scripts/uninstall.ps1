@@ -10,8 +10,10 @@ $ErrorActionPreference = 'Stop'
 
 $linkPath = Join-Path $env:APPDATA 'Adobe\CEP\extensions\com.cptk.aellama'
 
-if (Test-Path $linkPath) {
-    $item = Get-Item $linkPath -Force
+# Get-Item -Force (not Test-Path, which follows the link) so a DANGLING
+# junction -- repo already moved or deleted -- is still found and removed.
+$item = Get-Item -LiteralPath $linkPath -Force -ErrorAction SilentlyContinue
+if ($item) {
     if ($item.LinkType) {
         $item.Delete()   # removes the junction only, target stays intact
     } else {

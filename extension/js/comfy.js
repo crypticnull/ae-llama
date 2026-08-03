@@ -35,16 +35,23 @@
   // ------------------------------------------------------------------ http
 
   function parseBase(comfyUrl) {
+    var raw = String(comfyUrl || "");
+    // "localhost:8189" / "192.168.1.5:8188" are valid user input but not
+    // valid URLs — give them a scheme instead of silently probing defaults.
+    if (raw && raw.indexOf("://") === -1) raw = "http://" + raw;
     var u;
     try {
-      u = new URL(comfyUrl);
+      u = new URL(raw);
     } catch (e) {
       u = new URL("http://127.0.0.1:8188");
     }
+    var isHttps = u.protocol === "https:";
     return {
-      isHttps: u.protocol === "https:",
+      isHttps: isHttps,
       host: u.hostname || "127.0.0.1",
-      port: u.port ? parseInt(u.port, 10) : (u.protocol === "https:" ? 443 : 8188)
+      port: u.port ? parseInt(u.port, 10) : (isHttps ? 443 : 8188),
+      label: (u.hostname || "127.0.0.1") + ":" +
+             (u.port || (isHttps ? "443" : "8188"))
     };
   }
 
@@ -147,6 +154,106 @@
     return graph;
   }
 
+  // -------------------------------------------------------- param grafting
+
+  var NEUTRAL_COND_INPUTS = {
+    conditioning: true, conditioning_1: true, conditioning_2: true,
+    conditioning_to: true, conditioning_from: true
+  };
+
+  function isTextEncode(node) {
+    return !!(node && node.class_type &&
+              node.class_type.indexOf("CLIPTextEncode") === 0);
+  }
+
+  /**
+   * Polarity-aware upstream walk: seed from every node that has
+   * positive/negative link inputs (samplers, ControlNet appliers, …) and
+   * follow conditioning chains without ever crossing polarity, marking the
+   * CLIPTextEncode* nodes each side reaches.
+   */
+  function classifyEncoders(graph) {
+    var pos = {};
+    var neg = {};
+
+    function walk(id, polarity, visited) {
+      if (!id || visited[id]) return;
+      visited[id] = true;
+      var node = graph[id];
+      if (!node || !node.inputs) return;
+      if (isTextEncode(node)) {
+        (polarity === "neg" ? neg : pos)[id] = true;
+        return;
+      }
+      for (var key in node.inputs) {
+        if (!node.inputs.hasOwnProperty(key)) continue;
+        var v = node.inputs[key];
+        if (!(v instanceof Array) || v.length < 1) continue;
+        if (key === "positive") {
+          if (polarity === "pos") walk(String(v[0]), "pos", visited);
+        } else if (key === "negative") {
+          if (polarity === "neg") walk(String(v[0]), "neg", visited);
+        } else if (NEUTRAL_COND_INPUTS[key]) {
+          walk(String(v[0]), polarity, visited);
+        }
+      }
+    }
+
+    for (var k in graph) {
+      if (!graph.hasOwnProperty(k)) continue;
+      var node = graph[k];
+      if (!node || !node.inputs) continue;
+      if (node.inputs.positive instanceof Array) {
+        walk(String(node.inputs.positive[0]), "pos", {});
+      }
+      if (node.inputs.negative instanceof Array) {
+        walk(String(node.inputs.negative[0]), "neg", {});
+      }
+    }
+    return { pos: pos, neg: neg };
+  }
+
+  /**
+   * Write `text` into an encoder node. Handles the three real export shapes:
+   * literal inputs.text, SDXL text_g/text_l, and a text widget converted to
+   * an input link (followed one hop to a literal string source).
+   * Returns a short description of what was set, or null if nothing could be.
+   */
+  function setEncoderText(graph, id, text) {
+    var node = graph[id];
+    if (!node || !node.inputs) return null;
+    if (typeof node.inputs.text === "string") {
+      node.inputs.text = text;
+      return "node " + id;
+    }
+    if (typeof node.inputs.text_g === "string" ||
+        typeof node.inputs.text_l === "string") {
+      if (typeof node.inputs.text_g === "string") node.inputs.text_g = text;
+      if (typeof node.inputs.text_l === "string") node.inputs.text_l = text;
+      return "node " + id + " (sdxl g+l)";
+    }
+    if (node.inputs.text instanceof Array) {
+      var up = graph[String(node.inputs.text[0])];
+      if (up && up.inputs) {
+        var stringKeys = [];
+        var candidates = ["text", "string", "value"];
+        for (var i = 0; i < candidates.length; i++) {
+          if (typeof up.inputs[candidates[i]] === "string") {
+            stringKeys.push(candidates[i]);
+          }
+        }
+        // Only rewrite an unambiguous single-string source node; anything
+        // fancier (concat/style/wildcard nodes) is left as authored.
+        if (stringKeys.length === 1) {
+          up.inputs[stringKeys[0]] = text;
+          return "node " + String(node.inputs.text[0]) +
+                 " (via link from node " + id + ")";
+        }
+      }
+    }
+    return null;
+  }
+
   /**
    * Graft params onto the graph. Returns a list of what was changed so the
    * LLM (and user) can see how the template was used.
@@ -154,39 +261,39 @@
    */
   function injectParams(graph, params) {
     var applied = [];
+    var cls = classifyEncoders(graph);
     var k, node;
 
-    // Positive/negative text: follow sampler links when possible.
-    var positiveIds = {};
-    var negativeIds = {};
     for (k in graph) {
       if (!graph.hasOwnProperty(k)) continue;
       node = graph[k];
       if (!node || !node.inputs) continue;
-      var pos = node.inputs.positive;
-      var neg = node.inputs.negative;
-      if (pos && pos instanceof Array) positiveIds[String(pos[0])] = true;
-      if (neg && neg instanceof Array) negativeIds[String(neg[0])] = true;
-    }
-
-    for (k in graph) {
-      if (!graph.hasOwnProperty(k)) continue;
-      node = graph[k];
-      if (!node || !node.inputs) continue;
-      var isTextEncode = node.class_type &&
-        node.class_type.indexOf("CLIPTextEncode") === 0 &&
-        typeof node.inputs.text === "string";
       var title = (node._meta && node._meta.title ? node._meta.title : "");
 
-      if (isTextEncode) {
-        var isNegative = negativeIds[k] ||
-          (!positiveIds[k] && /neg/i.test(title));
-        if (isNegative && typeof params.negative === "string") {
-          node.inputs.text = params.negative;
-          applied.push("negative -> node " + k);
-        } else if (!isNegative && typeof params.prompt === "string") {
-          node.inputs.text = params.prompt;
-          applied.push("prompt -> node " + k);
+      if (isTextEncode(node)) {
+        var inPos = !!cls.pos[k];
+        var inNeg = !!cls.neg[k];
+        var polarity;
+        if (inPos && inNeg) {
+          // Reachable from both sides — refuse to guess.
+          polarity = /neg/i.test(title) ? "neg" : null;
+          if (!polarity) {
+            applied.push("skipped ambiguous-polarity encoder node " + k);
+          }
+        } else if (inNeg) {
+          polarity = "neg";
+        } else if (inPos) {
+          polarity = "pos";
+        } else {
+          // Unreachable from any sampler chain — fall back to the title.
+          polarity = /neg/i.test(title) ? "neg" : "pos";
+        }
+        if (polarity === "neg" && typeof params.negative === "string") {
+          var wn = setEncoderText(graph, k, params.negative);
+          if (wn) applied.push("negative -> " + wn);
+        } else if (polarity === "pos" && typeof params.prompt === "string") {
+          var wp = setEncoderText(graph, k, params.prompt);
+          if (wp) applied.push("prompt -> " + wp);
         }
       }
 
@@ -229,6 +336,30 @@
     return applied;
   }
 
+  // -------------------------------------------------------- error details
+
+  /** Flatten ComfyUI's node_errors bag into a readable, capped string. */
+  function describeNodeErrors(nodeErrors) {
+    var parts = [];
+    try {
+      for (var nid in nodeErrors) {
+        if (!nodeErrors.hasOwnProperty(nid)) continue;
+        var ne = nodeErrors[nid];
+        if (ne && ne.errors instanceof Array && ne.errors.length > 0) {
+          for (var j = 0; j < ne.errors.length; j++) {
+            var e = ne.errors[j];
+            parts.push("node " + nid + " (" + (ne.class_type || "?") + "): " +
+              (e.message || "error") + (e.details ? " — " + e.details : ""));
+          }
+        } else {
+          parts.push("node " + nid);
+        }
+      }
+    } catch (e2) { /* server-controlled shape — best effort */ }
+    var text = parts.join("; ");
+    return text.length > 600 ? text.slice(0, 600) + "…" : text;
+  }
+
   // ------------------------------------------------------------ generation
 
   function collectOutputFiles(historyEntry) {
@@ -255,6 +386,7 @@
    * opts: {comfyUrl, workflowFile, params, outDir, timeoutSec}
    * onProgress(secondsElapsed) fires periodically while waiting.
    * cb(err, {files: [absolute paths], applied: [...], promptId})
+   * cb fires exactly once.
    */
   function generate(opts, onProgress, cb) {
     ensureNode();
@@ -268,12 +400,28 @@
       return;
     }
 
+    // A prompt that lands nowhere means the render would use the template's
+    // baked-in text — fail fast instead of burning GPU minutes on it.
+    if (opts.params && typeof opts.params.prompt === "string" &&
+        opts.params.prompt !== "") {
+      var landed = false;
+      for (var ai = 0; ai < applied.length; ai++) {
+        if (applied[ai].indexOf("prompt -> ") === 0) { landed = true; break; }
+      }
+      if (!landed) {
+        cb(new Error("This workflow has no editable prompt text (its text " +
+          "widget may be converted to a non-literal input). Un-convert it " +
+          "in ComfyUI and re-export, or use another template."));
+        return;
+      }
+    }
+
     var clientId = "aellama-" + Math.floor(Math.random() * 1e9);
     requestJson(base, "POST", "/prompt",
       { prompt: graph, client_id: clientId }, 30000,
       function (err, statusCode, json, rawText) {
         if (err) {
-          cb(new Error("ComfyUI unreachable at " + opts.comfyUrl + " — " +
+          cb(new Error("ComfyUI unreachable at " + base.label + " — " +
                        err.message));
           return;
         }
@@ -282,12 +430,8 @@
           if (json && json.error && json.error.message) {
             detail = json.error.message;
             if (json.node_errors) {
-              for (var nid in json.node_errors) {
-                if (json.node_errors.hasOwnProperty(nid)) {
-                  detail += " [node " + nid + "]";
-                  break;
-                }
-              }
+              var nd = describeNodeErrors(json.node_errors);
+              if (nd) detail += " [" + nd + "]";
             }
           } else {
             detail = (rawText || "").slice(0, 200);
@@ -296,52 +440,87 @@
           return;
         }
 
+        // Partial validation: valid branches queued, broken ones dropped.
+        // Surface what was skipped alongside the eventual result.
+        if (json.node_errors) {
+          var skipped = describeNodeErrors(json.node_errors);
+          if (skipped) applied.push("WARNING skipped branches: " + skipped);
+        }
+
         var promptId = json.prompt_id;
-        var waitedMs = 0;
+        var startedAt = Date.now();
+        var lastProgressAt = startedAt;
         var POLL_MS = 2000;
         var timeoutMs = (opts.timeoutSec > 0 ? opts.timeoutSec : 600) * 1000;
 
-        var timer = global.setInterval(function () {
-          waitedMs += POLL_MS;
-          if (onProgress && waitedMs % 10000 === 0) {
-            onProgress(Math.round(waitedMs / 1000));
+        // cb must fire exactly once, and no work may happen after settling —
+        // in-flight /history responses can land after the timer is cleared.
+        var finished = false;
+        var inFlight = false;
+        var timer = null;
+
+        function settle(err2, res2) {
+          if (finished) return;
+          finished = true;
+          if (timer) global.clearInterval(timer);
+          cb(err2, res2);
+        }
+
+        timer = global.setInterval(function () {
+          if (finished) return;
+          var elapsed = Date.now() - startedAt;
+          if (onProgress && Date.now() - lastProgressAt >= 10000) {
+            lastProgressAt = Date.now();
+            onProgress(Math.round(elapsed / 1000));
           }
-          if (waitedMs >= timeoutMs) {
-            global.clearInterval(timer);
-            cb(new Error("Generation timed out after " +
-                         Math.round(timeoutMs / 1000) + "s (prompt " +
-                         promptId + " may still finish in ComfyUI)"));
+          if (elapsed >= timeoutMs) {
+            settle(new Error("Generation timed out after " +
+                             Math.round(elapsed / 1000) + "s (prompt " +
+                             promptId + " may still finish in ComfyUI)"));
             return;
           }
+          if (inFlight) return;
+          inFlight = true;
           requestJson(base, "GET", "/history/" + promptId, null, 10000,
             function (herr, hstatus, hjson) {
+              inFlight = false;
+              if (finished) return;
               if (herr || hstatus !== 200 || !hjson) return; // retry next tick
               var entry = hjson[promptId];
               if (!entry) return;                            // still queued/running
               var st = entry.status || {};
               if (st.status_str === "error") {
-                global.clearInterval(timer);
                 var msg = "ComfyUI reported an execution error";
                 try {
                   var msgs = st.messages || [];
                   for (var i = 0; i < msgs.length; i++) {
+                    if (msgs[i][0] === "execution_interrupted") {
+                      msg = "Generation was cancelled/interrupted in ComfyUI" +
+                        (msgs[i][1] && msgs[i][1].node_type
+                          ? " at node " + msgs[i][1].node_type : "");
+                      break;
+                    }
                     if (msgs[i][0] === "execution_error") {
                       msg += ": " + (msgs[i][1].exception_message || "");
                       break;
                     }
                   }
                 } catch (e) {}
-                cb(new Error(msg));
+                settle(new Error(msg));
                 return;
               }
               var files = collectOutputFiles(entry);
               if (files.length === 0 && !st.completed) return; // keep waiting
-              global.clearInterval(timer);
               if (files.length === 0) {
-                cb(new Error("Workflow finished but produced no output " +
-                             "files (no SaveImage/SaveVideo node?)"));
+                settle(new Error("Workflow finished but produced no output " +
+                                 "files (no SaveImage/SaveVideo node?)"));
                 return;
               }
+              // Terminal success path: latch BEFORE the downloads so a
+              // straggler poll response can't start a second download chain.
+              if (finished) return;
+              finished = true;
+              global.clearInterval(timer);
               try {
                 if (!fs.existsSync(opts.outDir)) {
                   fs.mkdirSync(opts.outDir, { recursive: true });
@@ -381,16 +560,17 @@
     requestJson(base, "GET", "/queue", null, 5000,
       function (err, statusCode, json) {
         if (err || statusCode !== 200 || !json) {
-          cb(null, { online: false, url: comfyUrl,
+          cb(null, { online: false, url: comfyUrl, target: base.label,
                      hint: "Start ComfyUI (Launch button in settings, or " +
-                           "manually) and check the URL." });
+                           "manually) and check the URL (tried " +
+                           base.label + ")." });
           return;
         }
         var running = json.queue_running instanceof Array
           ? json.queue_running.length : 0;
         var pending = json.queue_pending instanceof Array
           ? json.queue_pending.length : 0;
-        cb(null, { online: true, url: comfyUrl,
+        cb(null, { online: true, url: comfyUrl, target: base.label,
                    running: running, pending: pending });
       });
   }

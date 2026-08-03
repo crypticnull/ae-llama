@@ -11,6 +11,7 @@
   var els = {};
   var busy = false;          // a chat round-trip is in flight
   var history = [];          // [{role, content}] — excludes system prompt
+  var updateManifest = null; // cached update.json from the update channel
 
   // ------------------------------------------------------------ utilities
 
@@ -38,6 +39,29 @@
     els.statusText.textContent = text;
   }
 
+  /** Info message ending in a clickable link that opens externally. */
+  function appendLinkMsg(text, linkLabel, url) {
+    var div = appendMsg("info", text + " ");
+    var a = document.createElement("a");
+    a.textContent = linkLabel;
+    a.addEventListener("click", function () {
+      global.AEBridge.openURL(url);
+    });
+    div.appendChild(a);
+    return div;
+  }
+
+  /** A single reusable status line (for setup progress spam control). */
+  var setupLine = null;
+  function setupStatus(text) {
+    if (!setupLine || !setupLine.parentNode) {
+      setupLine = appendMsg("info", text);
+    } else {
+      setupLine.textContent = text;
+    }
+    els.chat.scrollTop = els.chat.scrollHeight;
+  }
+
   // ------------------------------------------------------- model dropdown
 
   function populateModelDropdown() {
@@ -59,7 +83,8 @@
         options.push({ value: scanned[i], label: basename(scanned[i]) });
       }
     }
-    var kept = [];
+    // Missing custom entries (unplugged drive, network share asleep) are
+    // hidden but never pruned — they come back when the path does.
     for (i = 0; i < s.customModels.length; i++) {
       var p = s.customModels[i];
       var exists = false;
@@ -68,14 +93,8 @@
       } catch (e) {}
       if (exists && !seen[p]) {
         seen[p] = true;
-        kept.push(p);
         options.push({ value: p, label: basename(p) + "  (custom)" });
-      } else if (exists) {
-        kept.push(p);   // scanned already covers it; keep remembering it
       }
-    }
-    if (kept.length !== s.customModels.length) {
-      global.Settings.set({ customModels: kept });
     }
 
     els.modelSelect.innerHTML = "";
@@ -94,6 +113,11 @@
       addOption(options[i].value, options[i].label, false);
     }
     addOption(BROWSE_VALUE, "Browse for model file…", false);
+
+    // Offer the one-click starter model only while the dropdown is empty.
+    if (els.starterRow) {
+      els.starterRow.classList.toggle("hidden", options.length > 0);
+    }
 
     // Restore previous selection when it still exists.
     if (s.modelPath && seen[s.modelPath]) {
@@ -187,6 +211,34 @@
     });
   }
 
+  var currentChat = null;     // in-flight streaming request handle
+  var cancelRequested = false;
+
+  /** Pull the partially-streamed "reply" string out of incomplete JSON. */
+  function extractPartialReply(text) {
+    var m = text.match(/"reply"\s*:\s*"((?:[^"\\]|\\.)*)/);
+    if (!m) return "";
+    var frag = m[1];
+    // A trailing lone backslash is an unfinished escape — drop it.
+    var trailing = frag.match(/\\+$/);
+    if (trailing && trailing[0].length % 2 === 1) {
+      frag = frag.slice(0, -1);
+    }
+    try { return JSON.parse('"' + frag + '"'); } catch (e) { return ""; }
+  }
+
+  function setSendMode(running) {
+    if (running) {
+      els.sendBtn.textContent = "Stop";
+      els.sendBtn.classList.remove("primary");
+      els.sendBtn.classList.add("danger");
+    } else {
+      els.sendBtn.textContent = "Send";
+      els.sendBtn.classList.add("primary");
+      els.sendBtn.classList.remove("danger");
+    }
+  }
+
   function sendMessage() {
     if (busy) return;
     var text = els.chatInput.value.replace(/^\s+|\s+$/g, "");
@@ -201,7 +253,9 @@
     history.push({ role: "user", content: text });
 
     busy = true;
-    els.sendBtn.disabled = true;
+    cancelRequested = false;
+    setSendMode(true);
+    els.clearChatBtn.disabled = true;   // clearing mid-round corrupts history
     var thinking = appendMsg("info", "Thinking…");
 
     var s = global.Settings.get();
@@ -213,7 +267,9 @@
 
     function finish() {
       busy = false;
-      els.sendBtn.disabled = false;
+      currentChat = null;
+      setSendMode(false);
+      els.clearChatBtn.disabled = false;
       if (thinking && thinking.parentNode) {
         thinking.parentNode.removeChild(thinking);
         thinking = null;
@@ -221,14 +277,29 @@
     }
 
     function runRound(system, round) {
+      if (cancelRequested) { finish(); return; }
       var messages = [{ role: "system", content: system }].concat(history);
-      global.Llama.chat(
+      currentChat = global.Llama.chat(
         { port: s.port, temperature: s.temperature },
         messages,
         global.Tools.RESPONSE_SCHEMA,
+        function (accumulated) {
+          // Live-stream the model's reply text as it decodes.
+          var partial = extractPartialReply(accumulated);
+          if (thinking) {
+            thinking.textContent = partial ? partial + " ▌" : "Thinking…";
+            els.chat.scrollTop = els.chat.scrollHeight;
+          }
+        },
         function (err, obj, raw) {
+          currentChat = null;
+          if (thinking) thinking.textContent = "Thinking…";
           if (err) {
-            appendMsg("error", "Model error: " + err.message);
+            if (err.cancelled) {
+              appendMsg("info", "Stopped.");
+            } else {
+              appendMsg("error", "Model error: " + err.message);
+            }
             finish();
             return;
           }
@@ -238,10 +309,12 @@
           var commands = obj.commands instanceof Array ? obj.commands : [];
           if (reply) appendMsg("assistant", reply);
 
-          if (commands.length === 0) { finish(); return; }
+          if (commands.length === 0 || cancelRequested) { finish(); return; }
 
           global.Tools.executeCommands(
-            commands, s.dryRun,
+            commands,
+            { dryRun: s.dryRun,
+              shouldStop: function () { return cancelRequested; } },
             function (i, cmd, result) {
               var head = cmd.tool + " " + JSON.stringify(cmd.args || {});
               var body = result.ok
@@ -256,6 +329,7 @@
                 role: "user",
                 content: "TOOL RESULTS:\n" + JSON.stringify(results)
               });
+              if (cancelRequested) { finish(); return; }
               if (round + 1 >= s.maxRounds) {
                 appendMsg("info",
                   "Stopped after " + s.maxRounds + " tool rounds.");
@@ -266,6 +340,90 @@
             });
         });
     }
+  }
+
+  function cancelMessage() {
+    cancelRequested = true;
+    if (currentChat) {
+      currentChat.cancel();   // frees the llama-server slot immediately
+    }
+  }
+
+  // ---------------------------------------------------- setup & updates
+
+  /** Hands-off first-run: install the inference engine if it's missing. */
+  function autoBootstrap() {
+    var s = global.Settings.get();
+    if (global.Llama.findServerExe(s.serverPath)) return;   // already good
+    appendMsg("info", "First-run setup: installing the local AI engine " +
+      "(one time, fully automatic).");
+    var tag = updateManifest && updateManifest.llamaTag
+      ? updateManifest.llamaTag : "latest";
+    global.Setup.bootstrapEngine({ tag: tag }, setupStatus,
+      function (err, res) {
+        setupLine = null;
+        if (err) {
+          appendMsg("error", "Engine setup failed: " + err.message +
+            " — use 'Reinstall / update engine' in settings to retry.");
+        } else if (!res.skipped) {
+          appendMsg("info", "Engine installed. Pick a model and press Start.");
+          populateModelDropdown();
+        }
+      });
+  }
+
+  function updateEngine() {
+    if (global.Llama.getState() !== "stopped" &&
+        global.Llama.getState() !== "error") {
+      global.Llama.stop();
+    }
+    var tag = updateManifest && updateManifest.llamaTag
+      ? updateManifest.llamaTag : "latest";
+    global.Setup.bootstrapEngine({ force: true, tag: tag }, setupStatus,
+      function (err) {
+        setupLine = null;
+        appendMsg(err ? "error" : "info",
+          err ? "Engine update failed: " + err.message
+              : "Engine updated.");
+      });
+  }
+
+  function checkForUpdates(verbose) {
+    global.Setup.checkForUpdates(function (err, result) {
+      if (err || !result) {
+        if (verbose) {
+          appendMsg("info", "Update check failed (offline?): " +
+            (err ? err.message : "no manifest"));
+        }
+        return;
+      }
+      updateManifest = result.manifest;
+      if (result.panelUpdate) {
+        appendLinkMsg("Update available: AE Llama " +
+          result.panelUpdate.version +
+          (result.panelUpdate.notes ? " — " + result.panelUpdate.notes : "") +
+          ".", "Get it here", result.panelUpdate.url);
+      } else if (verbose) {
+        appendMsg("info", "You are on the latest version (" +
+          global.AELL.VERSION + ").");
+      }
+    });
+  }
+
+  function downloadStarterModel() {
+    els.getModelBtn.disabled = true;
+    global.Setup.downloadStarterModel(updateManifest, setupStatus,
+      function (err, dest) {
+        setupLine = null;
+        els.getModelBtn.disabled = false;
+        if (err) {
+          appendMsg("error", "Model download failed: " + err.message);
+          return;
+        }
+        appendMsg("info", "Model downloaded.");
+        global.Settings.set({ modelPath: dest });
+        populateModelDropdown();
+      });
   }
 
   // -------------------------------------------------------------- settings
@@ -337,7 +495,10 @@
       setComfyDir: $("set-comfy-dir"),
       setComfyWorkflows: $("set-comfy-workflows"),
       setComfyOut: $("set-comfy-out"),
-      setComfyTimeout: $("set-comfy-timeout")
+      setComfyTimeout: $("set-comfy-timeout"),
+      starterRow: $("starter-row"),
+      getModelBtn: $("btn-get-model"),
+      versionLine: $("version-line")
     };
 
     if (!global.AEBridge.available()) {
@@ -345,6 +506,20 @@
         "CEP runtime not detected. This page must run inside After Effects.");
       return;
     }
+
+    // Populate the settings form up front so no code path can ever persist
+    // never-filled (empty) fields over the real settings.
+    settingsToForm();
+
+    // A llama-server from a previous session may have survived panel
+    // teardown (CEP doesn't reliably fire unload) — reap it now.
+    try { global.Llama.reapOrphan(); } catch (e) {}
+
+    // Persistent data folders (survive extension updates) + seeding.
+    try { global.Setup.ensureDataDirs(); } catch (e) {}
+
+    els.versionLine.textContent = "AE Llama " + global.AELL.VERSION +
+      " — data folder: " + global.Settings.dataRoot();
 
     // -- server status + logs
     global.Llama.on("status", function (state, detail) {
@@ -381,7 +556,9 @@
       if (st === "running" || st === "starting") {
         global.Llama.stop();
       } else {
-        formToSettings();
+        // Settings are already persisted by each field's change listener —
+        // do NOT snapshot the form here: on first run the drawer has never
+        // been populated and doing so would wipe the path defaults.
         startServer();
       }
     });
@@ -487,12 +664,15 @@
       appendMsg("info", text);
     });
 
-    // -- chat
-    els.sendBtn.addEventListener("click", sendMessage);
+    // -- chat (Send doubles as Stop while a round-trip is in flight)
+    els.sendBtn.addEventListener("click", function () {
+      if (busy) cancelMessage();
+      else sendMessage();
+    });
     els.chatInput.addEventListener("keydown", function (e) {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
-        sendMessage();
+        if (!busy) sendMessage();
       }
     });
     els.clearChatBtn.addEventListener("click", function () {
@@ -506,10 +686,23 @@
       try { global.Llama.stop(); } catch (e) {}
     });
 
+    // -- updates + starter model + auto-bootstrap
+    els.getModelBtn.addEventListener("click", downloadStarterModel);
+    $("btn-check-updates").addEventListener("click", function () {
+      checkForUpdates(true);
+    });
+    $("btn-update-engine").addEventListener("click", updateEngine);
+
     var env = global.AEBridge.getHostEnvironment();
-    appendMsg("info", "AE Llama ready" +
+    appendMsg("info", "AE Llama " + global.AELL.VERSION + " ready" +
       (env && env.appVersion ? " — After Effects " + env.appVersion : "") +
-      ". Pick a model and press Start.");
+      ".");
+
+    // Silent update check, then hands-off engine install if needed.
+    // (checkForUpdates caches the manifest so bootstrap can use its pinned
+    // llamaTag; bootstrap proceeds regardless after a short head start.)
+    checkForUpdates(false);
+    global.setTimeout(autoBootstrap, 2500);
   }
 
   document.addEventListener("DOMContentLoaded", init);

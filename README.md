@@ -24,28 +24,38 @@ Everything runs on your machine. No cloud calls, no telemetry.
 
 - Windows 10/11
 - After Effects 2024, 2025, or 2026
-- PowerShell (preinstalled on Windows)
-- A GGUF model file. Good starting points: Qwen2.5-7B-Instruct,
-  Llama-3.1-8B-Instruct, or any instruct model in Q4_K_M quantization
-  (~4–5 GB). Tool-following quality scales with model size.
+- Disk space for the engine (~100–400 MB) and a model (~4–5 GB)
 
-## Install (once)
+## Install
 
-From the repo root in PowerShell:
+**As a buyer (ZXP)** — install the `.zxp` with the
+[aescripts ZXP Installer](https://aescripts.com/learn/zxp-installer/),
+restart AE, open **Window ▸ Extensions ▸ AE Llama**. That's it — on first
+launch the panel sets itself up:
+
+1. Detects your GPU (`nvidia-smi`) and picks the right llama.cpp build —
+   the newest CUDA line your driver supports, CUDA 12 for pre-Turing cards,
+   CPU when there's no NVIDIA GPU.
+2. Downloads and unpacks the engine into `%APPDATA%\AE-Llama\` (outside the
+   extension, so updates never touch it).
+3. If you have no model yet, one button downloads a good starter model
+   (Qwen2.5-7B-Instruct, ~4.7 GB). Or drop any `.gguf` into
+   `%APPDATA%\AE-Llama\models\` / use **Browse…** in the dropdown.
+
+**As a developer (this repo)** — from the repo root in PowerShell:
 
 ```powershell
-# 1. Download llama.cpp server binaries into extension\vendor\
-.\scripts\get-llama.ps1              # CPU build
-#  …or, with an NVIDIA GPU:
-.\scripts\get-llama.ps1 -Variant cuda
+# Stock Windows PowerShell blocks local scripts (Restricted policy):
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+#   (or prefix calls with: powershell -NoProfile -ExecutionPolicy Bypass -File ...)
+#   (ZIP download instead of git clone? also run: Unblock-File .\scripts\*.ps1)
 
-# 2. Register the panel with After Effects (junction + PlayerDebugMode)
-.\scripts\install.ps1
+.\scripts\install.ps1      # junction the panel + PlayerDebugMode
 ```
 
-Then drop one or more `.gguf` files into `extension\models\` (or use the
-panel's **Browse…** later), restart After Effects, and open
-**Window ▸ Extensions ▸ AE Llama**.
+Restart AE and open the panel — the same hands-off first-run setup applies.
+`scripts\get-llama.ps1` still exists for CI/offline prep (`-Variant auto`
+does the same GPU detection; `cpu`/`cuda -CudaVersion 13` force builds).
 
 ## Using the panel
 
@@ -74,13 +84,16 @@ your project.
 
 | Setting | Default | Notes |
 |---|---|---|
-| llama-server.exe | auto-found under `extension\vendor\` | Browse to any build you like |
-| Models folder | `extension\models` | Scanned recursively for `.gguf` |
+| llama-server.exe | auto-installed under `%APPDATA%\AE-Llama\vendor\` | Browse to any build you like |
+| Models folder | `%APPDATA%\AE-Llama\models` | Scanned recursively for `.gguf` |
 | Port | 8737 | Change if something else uses it |
 | Context size | 8192 | Tokens; larger = more memory |
 | GPU layers (-ngl) | 99 | 0 = CPU only; 99 = as many as fit |
 | Temperature | 0.7 | Lower = more deterministic tool use |
 | Max tool rounds | 4 | Caps the model's act→observe loop per message |
+
+The **Updates** section of the drawer shows the installed version, checks
+the update channel on demand, and can force-reinstall the engine.
 
 ## How it drives After Effects (safety model)
 
@@ -92,10 +105,16 @@ and undo groups. Unknown tools are rejected panel-side, so the blast radius
 is exactly the tool list — currently:
 
 `get_project_info`, `get_comp_details`, `create_comp`, `add_text_layer`,
-`add_solid`, `set_transform`, `add_keyframe`, `set_expression`,
-`apply_effect`, `set_effect_param`, `set_layer_timing`, `delete_layer`,
-`set_comp_setting`, `import_file`, `add_to_render_queue`,
-`comfy_status`, `comfy_list_workflows`, `comfy_generate`
+`add_solid`, `add_shape_layer`, `add_mask`, `precompose`, `add_camera`,
+`add_marker`, `set_layer_3d`, `set_layer_parent`, `set_transform`,
+`add_keyframe`, `set_expression`, `apply_effect`, `set_effect_param`,
+`set_layer_timing`, `delete_layer`, `set_comp_setting`, `import_file`,
+`add_to_render_queue`, `comfy_status`, `comfy_list_workflows`,
+`comfy_generate`
+
+While the model streams its answer you see the reply text live, and the
+**Send** button becomes **Stop** — cancelling aborts generation on the
+server immediately and halts any remaining tool commands.
 
 ## ComfyUI integration (image / video generation)
 
@@ -119,12 +138,12 @@ Setup (all paths definable in ⚙ Settings):
    embedded Python) and plain checkouts (`main.py` + `python` on PATH) are
    detected. Custom venv setups: start ComfyUI yourself and just set the URL.
 3. **Workflow templates folder** — drop ComfyUI **Export (API)** JSON files
-   here (default `extension\comfy-workflows\`, which includes a starter
-   txt2img example — edit its `ckpt_name` first). The panel injects
+   here (default `%APPDATA%\AE-Llama\comfy-workflows\`, seeded with a
+   starter txt2img example — edit its `ckpt_name` first). The panel injects
    prompt/negative/size/seed/frames into your graph by node introspection;
    see `extension/comfy-workflows/README.md` for the exact rules.
 4. **Generated files folder** — where renders are saved before being
-   imported (default `extension\generated\`).
+   imported (default `%APPDATA%\AE-Llama\generated\`).
 
 Video workflows should end in an AE-importable container (mp4/H.264 via
 SaveVideo or VHS Video Combine — AE can't import animated webp), and may
@@ -133,36 +152,90 @@ need a higher *Generation timeout*.
 Structured output is enforced with llama.cpp's JSON-schema constrained
 decoding (with a graceful fallback for older server builds).
 
+## Data folder & what survives updates
+
+Everything heavy or user-owned lives in `%APPDATA%\AE-Llama\`, **outside**
+the extension, because an extension update replaces the extension folder
+wholesale:
+
+```
+%APPDATA%\AE-Llama\
+  vendor\llama.cpp\   engine binaries (auto-installed, re-downloadable)
+  models\             your .gguf models
+  comfy-workflows\    your generation templates (seeded on first run)
+  generated\          ComfyUI renders
+  settings.json       settings mirror (localStorage backup)
+```
+
+Updating or reinstalling the panel never touches models, templates,
+settings, or the engine.
+
+## Distributing & updating (aescripts.com)
+
+Every push builds a signed ZXP on CI (**Actions ▸ Build ZXP ▸ artifact
+`AE-Llama-zxp`**); pushing a `v*` tag (e.g. `git tag v0.3.0 && git push
+--tags`) additionally attaches it to a GitHub Release — that's the
+downloadable package. For a stable signing identity across releases, add
+repo secrets `ZXP_CERT_B64` (base64 of your .p12) and `ZXP_CERT_PASSWORD`;
+otherwise CI self-signs per build (still installs fine).
+
+Release flow:
+
+1. Bump the version in **both** `extension/CSXS/manifest.xml`
+   (`ExtensionBundleVersion` + `Extension Version`) and
+   `extension/js/version.js` — the packager refuses a mismatch.
+2. Build the signed ZXP: `.\scripts\package-zxp.ps1`
+   (needs [ZXPSignCmd](https://github.com/Adobe-CEP/CEP-Resources) once;
+   creates and reuses a self-signed cert — sufficient for CEP, buyers
+   install via the aescripts ZXP Installer, no debug mode involved).
+   Output: `dist\AE-Llama-<version>.zxp`. Dev files (`.debug`) and any
+   local binaries are excluded automatically.
+3. Upload to aescripts.com.
+4. Update the hosted `update.json` (template in the repo root; host it at
+   any stable URL you control and point `UPDATE_MANIFEST_URL` in
+   `extension/js/version.js` at it **before** building):
+   - `panelVersion` / `panelUrl` / `notes` — installed panels compare
+     versions on launch and show a "get it at aescripts.com" banner (panels
+     never self-download builds, so aescripts licensing stays intact).
+   - `llamaTag` — pin the llama.cpp release your build was tested against;
+     the panel's engine installs/updates use it instead of `latest`.
+   - `starterModel` — swap the recommended model without shipping a new ZXP.
+
 ## Repository layout
 
 ```
-extension/            the CEP panel (this folder gets junctioned into AE)
+extension/            the CEP panel (ships as the ZXP)
   CSXS/manifest.xml   CEP manifest (AEFT 24.0–99.9, CSXS 11)
   index.html          panel markup
-  js/                 panel logic (bridge, settings, llama server mgmt,
-                      ComfyUI client, tools, UI)
+  js/                 panel logic (bridge, version, settings, llama server
+                      mgmt, ComfyUI client, auto-setup/updates, tools, UI)
   jsx/hostscript.jsx  ExtendScript tool implementations (allowlist + undo)
-  comfy-workflows/    ComfyUI API-format workflow templates
-  models/             put .gguf files here (gitignored)
-  vendor/             llama.cpp binaries land here (gitignored)
-  generated/          ComfyUI renders land here (gitignored)
+  comfy-workflows/    bundled workflow templates (seeded into the data dir)
+native/               AEGP C++ plugin scaffold (phase 2, experimental):
+                      Window-menu command that opens the panel; see
+                      native/README.md for SDK setup and build
 scripts/
-  get-llama.ps1       fetch llama.cpp Windows release binaries
-  install.ps1         junction the panel + set PlayerDebugMode
-  uninstall.ps1       remove the junction
+  get-llama.ps1       dev/CI engine download (-Variant auto|cpu|cuda)
+  install.ps1         dev install: junction the panel + PlayerDebugMode
+  uninstall.ps1       remove the dev junction
+  package-zxp.ps1     build the signed ZXP for distribution
+.github/workflows/    CI: builds the signed ZXP, attaches it to releases
+update.json           update-channel manifest template (host your copy)
 ```
 
 ## Troubleshooting
 
 - **Panel missing from Window ▸ Extensions** — re-run `scripts\install.ps1`,
-  fully restart AE. Check that
-  `HKCU\Software\Adobe\CSXS.12\PlayerDebugMode` = `1` (string) and that
+  fully restart AE. Check the PlayerDebugMode string value = `1` under the
+  key for *your* AE version: `HKCU\Software\Adobe\CSXS.11` for AE 2024,
+  `HKCU\Software\Adobe\CSXS.12` for AE 2025/2026. Also confirm
   `%APPDATA%\Adobe\CEP\extensions\com.cptk.aellama` exists.
-- **"llama-server.exe not found"** — run `scripts\get-llama.ps1`, or set the
-  path in ⚙ Settings.
+- **"llama-server.exe not found" / first-run setup failed** — use
+  **Reinstall / update engine** in ⚙ Settings (needs internet), or run
+  `scripts\get-llama.ps1`, or Browse to any llama-server.exe you have.
 - **Server never turns green** — open the log (▤). Out-of-memory on GPU?
-  Lower *GPU layers*. Wrong binary (CUDA build without an NVIDIA driver)?
-  Re-run `get-llama.ps1` without `-Variant cuda`.
+  Lower *GPU layers*. Wrong build for your GPU? **Reinstall / update
+  engine** re-detects, or force one with `get-llama.ps1 -Variant cpu`.
 - **Model produces junk commands** — small/base models struggle with tool
   use; prefer an *instruct* model ≥7B, or lower the temperature.
 - **Port in use** — change the port in ⚙ Settings.
@@ -174,9 +247,11 @@ scripts/
   `http://localhost:8092` in a browser for CEF DevTools (see
   `extension/.debug`).
 
-## Roadmap (phase 2)
+## Roadmap
 
-- AEGP C++ native plugin: menu commands, in-process inference option,
-  render-hook integrations.
-- Streaming token display and cancel button.
-- More tools: shape layers, masks, precomposing, camera work, markers.
+- [x] Streaming reply display and Stop button
+- [x] Shape layers, masks, precomposing, cameras, markers, 3D, parenting
+- [x] AEGP C++ scaffold (`native/`) — menu command opening the panel;
+      needs a local AE SDK to compile (untested until then)
+- [ ] AEGP in-process inference (llama.cpp linked directly) + render hooks
+- [ ] Starter model catalog (multiple sizes) in the update manifest

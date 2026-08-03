@@ -53,6 +53,27 @@
     { name: "import_file", mutating: true,
       desc: "Import a footage/image/video file into the project.",
       args: "{path: string (absolute)}" },
+    { name: "add_shape_layer", mutating: true,
+      desc: "Add a shape layer (rectangle, ellipse, polygon, or star).",
+      args: "{comp?: string, name?: string, shape?: 'rectangle'|'ellipse'|'polygon'|'star', size?: [w,h], position?: [x,y], fillColor?: [r,g,b] 0..1, strokeColor?: [r,g,b], strokeWidth?: px, roundness?: px (rectangle), points?: int (polygon/star)}" },
+    { name: "add_mask", mutating: true,
+      desc: "Add a mask to a layer. Coordinates are in LAYER space.",
+      args: "{comp?: string, layer: name|index, shape?: 'rectangle'|'ellipse'|'custom', bounds?: [x,y,w,h], vertices?: [[x,y],...] (custom), mode?: 'add'|'subtract'|'intersect'|..., inverted?: bool, feather?: px, name?: string}" },
+    { name: "precompose", mutating: true,
+      desc: "Move layers into a new nested comp (precompose).",
+      args: "{comp?: string, layers: [name|index, ...], name: string, moveAttributes?: bool = true}" },
+    { name: "add_camera", mutating: true,
+      desc: "Add a camera. Only 3D layers (set_layer_3d) are affected by it.",
+      args: "{comp?: string, name?: string, position?: [x,y,z], pointOfInterest?: [x,y,z], zoom?: px}" },
+    { name: "add_marker", mutating: true,
+      desc: "Add a marker to the comp (omit 'layer') or to a layer.",
+      args: "{comp?: string, layer?: name|index, time: seconds, comment?: string, duration?: seconds}" },
+    { name: "set_layer_3d", mutating: true,
+      desc: "Enable/disable a layer's 3D switch.",
+      args: "{comp?: string, layer: name|index, enabled: bool}" },
+    { name: "set_layer_parent", mutating: true,
+      desc: "Parent a layer to another (null/omit parent to unparent).",
+      args: "{comp?: string, layer: name|index, parent?: name|index|null}" },
     { name: "add_to_render_queue", mutating: true,
       desc: "Add a comp to the render queue.",
       args: "{comp?: string, outputPath?: string (absolute)}" },
@@ -69,7 +90,11 @@
   ];
 
   var TOOL_NAMES = [];
-  for (var i = 0; i < TOOL_DEFS.length; i++) TOOL_NAMES.push(TOOL_DEFS[i].name);
+  var MUTATING = {};
+  for (var i = 0; i < TOOL_DEFS.length; i++) {
+    TOOL_NAMES.push(TOOL_DEFS[i].name);
+    if (TOOL_DEFS[i].mutating) MUTATING[TOOL_DEFS[i].name] = true;
+  }
 
   // Forced output shape for constrained decoding (llama.cpp json_schema).
   var RESPONSE_SCHEMA = {
@@ -251,6 +276,11 @@
       return;
     }
     var argsLiteral = JSON.stringify(JSON.stringify(args || {}));
+    // U+2028/U+2029 are legal raw inside modern JSON.stringify output but
+    // are line terminators to ExtendScript (ES3) — they'd kill the eval.
+    argsLiteral = argsLiteral
+      .replace(/\u2028/g, "\\u2028")
+      .replace(/\u2029/g, "\\u2029");
     var script = 'AELL_call("' + tool + '", ' + argsLiteral + ')';
     global.AEBridge.evalScript(script, function (result, isError) {
       if (isError) {
@@ -269,29 +299,50 @@
     });
   }
 
+  var MAX_COMMANDS_PER_ROUND = 20;
+
   /**
    * Execute a command list sequentially.
    * onEach(index, command, result) fires per command; done(results) at end.
-   * dryRun: report what would run without touching AE.
+   * opts: {dryRun?: bool, shouldStop?: fn -> bool (checked between commands)}
    */
-  function executeCommands(commands, dryRun, onEach, done) {
+  function executeCommands(commands, opts, onEach, done) {
+    opts = opts || {};
+    var dryRun = !!opts.dryRun;
     var results = [];
+    if (commands.length > MAX_COMMANDS_PER_ROUND) {
+      commands = commands.slice(0, MAX_COMMANDS_PER_ROUND);
+    }
     function step(i) {
       if (i >= commands.length) { done(results); return; }
-      var cmd = commands[i] || {};
-      if (dryRun) {
-        var r = { ok: true, dryRun: true,
-                  note: "Dry run — not applied" };
-        results.push(r);
-        if (onEach) onEach(i, cmd, r);
-        step(i + 1);
+      if (opts.shouldStop && opts.shouldStop()) {
+        results.push({ ok: false, error: "Cancelled by user — remaining " +
+                       "commands were not run" });
+        done(results);
         return;
       }
-      callTool(cmd.tool, cmd.args, function (result) {
+      var cmd = commands[i] || {};
+      // A buggy tool must not be able to double-invoke the continuation —
+      // that would fork the remaining command list and the chat round.
+      var settled = false;
+      function onResult(result) {
+        if (settled) return;
+        settled = true;
         results.push(result);
         if (onEach) onEach(i, cmd, result);
         step(i + 1);
-      });
+      }
+      if (typeof cmd.tool !== "string") {
+        onResult({ ok: false, error: "Malformed command (no tool name)" });
+        return;
+      }
+      // Dry run still executes read-only tools — the model needs real
+      // project data to plan; only mutations are stubbed.
+      if (dryRun && MUTATING[cmd.tool]) {
+        onResult({ ok: true, dryRun: true, note: "Dry run — not applied" });
+        return;
+      }
+      callTool(cmd.tool, cmd.args, onResult);
     }
     step(0);
   }
@@ -299,10 +350,22 @@
   /** Route a command to a panel-side implementation or the AE host. */
   function callTool(tool, args, cb) {
     if (Object.prototype.hasOwnProperty.call(PANEL_TOOLS, tool)) {
+      var delivered = false;
+      var once = function (r) {
+        if (delivered) return;
+        delivered = true;
+        cb(r);
+      };
       try {
-        PANEL_TOOLS[tool](args || {}, cb);
+        PANEL_TOOLS[tool](args || {}, once);
       } catch (e) {
-        cb({ ok: false, error: tool + " failed: " + e.message });
+        // If cb already ran, this throw came from downstream of the tool —
+        // don't re-deliver, just surface it in the console.
+        if (!delivered) {
+          once({ ok: false, error: tool + " failed: " + e.message });
+        } else if (global.console && global.console.error) {
+          global.console.error(e);
+        }
       }
       return;
     }

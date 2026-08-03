@@ -38,12 +38,24 @@
       });
     },
 
-    /** Absolute path of this extension's root folder (no trailing slash). */
+    /**
+     * Absolute filesystem path of this extension's root (no trailing slash).
+     * The raw getSystemPath() return is a percent-encoded file:// URL
+     * (e.g. "file:///C:/Program%20Files%20(x86)/..."), which no fs API can
+     * use — normalize it the same way Adobe's CSInterface does.
+     */
     getExtensionPath: function () {
       var core = cepCore();
       if (!core) return "";
       var p = core.getSystemPath("extension");
-      return p ? p.replace(/[\\\/]+$/, "") : "";
+      if (!p) return "";
+      try { p = decodeURI(p); } catch (e) { /* malformed %-seq: keep raw */ }
+      if (navigator.platform.indexOf("Win") === 0) {
+        p = p.replace(/^file:\/\/\//, "");
+      } else {
+        p = p.replace(/^file:\/\//, "");
+      }
+      return p.replace(/[\\\/]+$/, "");
     },
 
     /** Parsed host environment: { appName, appVersion, ... } or null. */
@@ -78,6 +90,15 @@
         return result.data[0];
       }
       return null;
+    },
+
+    /** Open a URL in the user's default browser (external, not the panel). */
+    openURL: function (url) {
+      if (!/^https?:\/\//i.test(String(url))) return;
+      if (global.cep && global.cep.util &&
+          typeof global.cep.util.openURLInDefaultBrowser === "function") {
+        global.cep.util.openURLInDefaultBrowser(url);
+      }
     },
 
     /** CEP's embedded Node.js require(). Throws if Node is unavailable. */

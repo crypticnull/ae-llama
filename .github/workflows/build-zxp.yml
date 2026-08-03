@@ -1,0 +1,85 @@
+name: Build ZXP
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, "claude/**" ]
+    tags: [ "v*" ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write   # attach the ZXP to releases on tag builds
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Syntax-check panel JavaScript
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem extension/js -Recurse -Filter *.js
+          foreach ($f in $files) {
+            node --check $f.FullName
+            if ($LASTEXITCODE -ne 0) { throw "Syntax error in $($f.Name)" }
+          }
+          Write-Host "OK: $($files.Count) files"
+
+      - name: Download ZXPSignCmd
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force tools | Out-Null
+          $urls = @(
+            'https://github.com/Adobe-CEP/CEP-Resources/raw/master/ZXPSignCMD/4.1.2/win64/ZXPSignCmd.exe',
+            'https://github.com/Adobe-CEP/CEP-Resources/raw/master/ZXPSignCMD/4.1.1/win64/ZXPSignCmd.exe'
+          )
+          foreach ($u in $urls) {
+            try {
+              Invoke-WebRequest -Uri $u -OutFile tools/ZXPSignCmd.exe -UseBasicParsing
+              break
+            } catch { Write-Warning "Failed: $u" }
+          }
+          if (-not (Test-Path tools/ZXPSignCmd.exe)) { throw 'Could not download ZXPSignCmd' }
+
+      # Optional stable signing identity: set repo secrets ZXP_CERT_B64
+      # (base64 of a .p12) and ZXP_CERT_PASSWORD. Without them each build
+      # signs with a fresh self-signed cert, which installs fine via the
+      # aescripts ZXP Installer but changes identity per build.
+      - name: Restore signing certificate (optional)
+        shell: pwsh
+        env:
+          CERT_B64: ${{ secrets.ZXP_CERT_B64 }}
+        run: |
+          if ($env:CERT_B64) {
+            [IO.File]::WriteAllBytes("$PWD/signing.p12",
+              [Convert]::FromBase64String($env:CERT_B64))
+            "CERT_FILE=$PWD/signing.p12" >> $env:GITHUB_ENV
+            Write-Host 'Using certificate from repo secret.'
+          } else {
+            Write-Host 'No ZXP_CERT_B64 secret - using a per-build self-signed cert.'
+          }
+
+      - name: Build signed ZXP
+        shell: pwsh
+        env:
+          CERT_PASSWORD: ${{ secrets.ZXP_CERT_PASSWORD }}
+        run: |
+          $params = @{ ZxpSignCmd = "$PWD/tools/ZXPSignCmd.exe" }
+          if ($env:CERT_FILE) {
+            $params.CertFile = $env:CERT_FILE
+            $params.CertPassword = $env:CERT_PASSWORD
+          }
+          .\scripts\package-zxp.ps1 @params
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AE-Llama-zxp
+          path: dist/*.zxp
+          if-no-files-found: error
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zxp
+          generate_release_notes: true

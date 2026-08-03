@@ -1,0 +1,11 @@
+{
+  "panelVersion": "0.3.0",
+  "panelUrl": "https://aescripts.com/",
+  "notes": "Initial release.",
+  "llamaTag": "latest",
+  "starterModel": {
+    "name": "Qwen2.5-7B-Instruct-Q4_K_M.gguf",
+    "url": "https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/resolve/main/Qwen2.5-7B-Instruct-Q4_K_M.gguf",
+    "sizeMB": 4700
+  }
+}
