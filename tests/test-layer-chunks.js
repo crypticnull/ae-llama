@@ -271,4 +271,29 @@ const r15 = call("reorder_layers", { layers: ["early"] });
 assert(!r15.ok && /at least 2/.test(r15.error),
        "reorder with fewer than 2 targets refused");
 
+// duplicate_layer count: the "12 circles" field case in ONE call
+const comp9 = new Comp("Dups", 10);
+Object.setPrototypeOf(comp9, Object.create(CompItem.prototype,
+  Object.getOwnPropertyDescriptors(Comp.prototype)));
+comp9._layers.push(new Layer("Circle", comp9, 0, 10, 0));
+project.activeItem = comp9;
+const r16 = call("duplicate_layer", { layer: "Circle", count: 11 });
+assert(r16.ok && r16.data.created === 11 &&
+       r16.data.totalLayersInComp === 12,
+       "count: 11 makes 11 copies in one call (12 total): " +
+       (r16.error || ""));
+const names9 = comp9._layers.map(l => l.name);
+assert(new Set(names9).size === 12,
+       "every copy gets a unique name (got " + names9.join(", ") + ")");
+assert(names9.includes("Circle 2") && names9.includes("Circle 12"),
+       "copies auto-number Circle 2..Circle 12");
+
+// explicit name that collides still auto-numbers
+const r17 = call("duplicate_layer", { layer: "Circle", name: "Circle" });
+assert(r17.ok && r17.data.names === "Circle 13" &&
+       /auto-numbered/.test(r17.data.note),
+       "explicit colliding name auto-numbers with a note");
+const r18 = call("duplicate_layer", { layer: "Circle", count: 101 });
+assert(!r18.ok && /capped at 100/.test(r18.error), "count > 100 refused");
+
 console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");
