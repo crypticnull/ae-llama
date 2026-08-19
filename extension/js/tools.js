@@ -102,8 +102,10 @@
       desc: "Arrange layers into a grid rigged to a control null: the " +
             "grid centers on the null's position and its 'Grid X Spacing'/" +
             "'Grid Y Spacing' sliders drive spacing live (all expressions " +
-            "generated host-side). Omit 'layers' to use the layers the " +
-            "user has selected in AE. Re-running re-flows into the same rig.",
+            "generated host-side). Creates its OWN control null — never " +
+            "add_null first. Omit 'layers' to use the selection; with " +
+            "nothing selected it grids ALL content layers in the comp " +
+            "(nulls/cameras/lights excluded). Re-running re-flows the rig.",
       args: "{comp?: string, layers?: [name|index] (omit = user's selection), columns?: int (default ~square; 1 = column, n = row), spacingX?: px, spacingY?: px, controlLayer?: string = 'GRID CTRL'}" },
     { name: "apply_expression_preset", mutating: true,
       desc: "Apply a known-good expression. Presets: wiggle (frequency/" +
@@ -338,6 +340,11 @@
       "  supply numbers first: split_layer_into_chunks leaves its chunks",
       "  SELECTED, so a follow-up like 'stagger them' is just",
       "  stagger_layers {} with no arguments.",
+      "- grid_layout creates its own control null (controlLayer only",
+      "  names it) — NEVER call add_null before gridding. With nothing",
+      "  selected it grids ALL content layers, so 'arrange all layers in",
+      "  a grid' is ONE grid_layout call with 'layers' omitted. Never",
+      "  pass layers: [] — omit the argument instead.",
       "- SCOPE: do ONLY what the user asked, then stop. Never bolt on",
       "  extra steps they did not request (grids, effects, styling,",
       "  animation). Defaults decide HOW a requested step runs — never",
