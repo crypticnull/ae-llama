@@ -14,6 +14,7 @@
         <span id="status-text">Server stopped</span>
       </div>
       <div id="topbar-buttons">
+        <button id="btn-visualizer" title="Visualizer">&#128200;</button>
         <button id="btn-settings" title="Settings">&#9881;</button>
         <button id="btn-logs" title="Server log">&#9636;</button>
       </div>
@@ -28,18 +29,32 @@
     </section>
 
     <section id="starter-row" class="hidden">
-      <button id="btn-get-model" class="primary">Download starter model (~4.7 GB)</button>
+      <select id="starter-select" title="Curated models sized to your GPU"></select>
+      <button id="btn-get-model" class="primary">Download</button>
+    </section>
+
+    <section id="progress-row" class="hidden">
+      <div id="progress-info">
+        <span id="progress-label"></span>
+        <div id="progress-track"><div id="progress-fill"></div></div>
+      </div>
+      <button id="btn-progress-cancel" class="danger" title="Cancel download">&#10005;</button>
     </section>
 
     <section id="settings-drawer" class="drawer hidden">
-      <h3>Settings</h3>
-
-      <label>llama-server.exe
-        <div class="pathfield">
-          <input id="set-server-path" type="text" spellcheck="false"/>
-          <button id="btn-browse-server">&hellip;</button>
-        </div>
+      <h3>Updates</h3>
+      <p id="version-line" class="fineprint"></p>
+      <label class="check">
+        <input id="set-auto-update" type="checkbox"/>
+        <span>Install panel updates automatically</span>
       </label>
+      <div class="drawer-actions" style="justify-content: flex-start;">
+        <button id="btn-check-updates">Check for updates</button>
+        <button id="btn-update-panel">Update panel now</button>
+        <button id="btn-update-engine">Reinstall / update engine</button>
+      </div>
+
+      <h3>Settings</h3>
 
       <label>Models folder
         <div class="pathfield">
@@ -48,26 +63,40 @@
         </div>
       </label>
 
-      <div class="grid2">
-        <label>Port
-          <input id="set-port" type="number" min="1024" max="65535"/>
+      <label class="check">
+        <input id="set-dryrun" type="checkbox"/>
+        <span>Dry run (show commands, don't apply)</span>
+      </label>
+
+      <div class="drawer-actions" style="justify-content: flex-start;">
+        <button id="btn-advanced-toggle">Advanced &#9656;</button>
+      </div>
+
+      <div id="advanced-settings" class="hidden">
+        <label>llama-server.exe
+          <div class="pathfield">
+            <input id="set-server-path" type="text" spellcheck="false"/>
+            <button id="btn-browse-server">&hellip;</button>
+          </div>
         </label>
-        <label>Context size
-          <input id="set-ctx" type="number" min="512" step="512"/>
-        </label>
-        <label>GPU layers (-ngl)
-          <input id="set-ngl" type="number" min="0" max="999"/>
-        </label>
-        <label>Temperature
-          <input id="set-temp" type="number" min="0" max="2" step="0.1"/>
-        </label>
-        <label>Max tool rounds
-          <input id="set-rounds" type="number" min="1" max="8"/>
-        </label>
-        <label class="check">
-          <input id="set-dryrun" type="checkbox"/>
-          <span>Dry run (show commands, don't apply)</span>
-        </label>
+
+        <div class="grid2">
+          <label>Port
+            <input id="set-port" type="number" min="1024" max="65535"/>
+          </label>
+          <label>Context size
+            <input id="set-ctx" type="number" min="512" step="512"/>
+          </label>
+          <label>GPU layers (-ngl)
+            <input id="set-ngl" type="number" min="0" max="999"/>
+          </label>
+          <label>Temperature
+            <input id="set-temp" type="number" min="0" max="2" step="0.1"/>
+          </label>
+          <label>Max tool rounds
+            <input id="set-rounds" type="number" min="1" max="8"/>
+          </label>
+        </div>
       </div>
 
       <h3>ComfyUI (image / video generation)</h3>
@@ -110,12 +139,14 @@
         <button id="btn-settings-close">Close</button>
       </div>
 
-      <h3>Updates</h3>
-      <p id="version-line" class="fineprint"></p>
-      <div class="drawer-actions" style="justify-content: flex-start;">
-        <button id="btn-check-updates">Check for updates</button>
-        <button id="btn-update-engine">Reinstall / update engine</button>
+      <h3>Models</h3>
+      <p class="fineprint">Curated GGUF models sized to your GPU; the best
+        fit for your VRAM is preselected. Downloads go to the models folder.</p>
+      <div class="pathfield">
+        <select id="set-model-select"></select>
+        <button id="btn-get-model-settings">Download</button>
       </div>
+
     </section>
 
     <section id="log-drawer" class="drawer hidden">
@@ -127,7 +158,82 @@
       </div>
     </section>
 
-    <main id="chat"></main>
+    <div id="main-split">
+      <main id="chat"></main>
+
+      <aside id="visualizer" class="hidden">
+        <div class="viz-title">Visualizer</div>
+
+        <select id="viz-mode">
+          <option value="stagger">Stagger start times</option>
+          <option value="property">Distribute property</option>
+          <option value="ease">Keyframe ease</option>
+        </select>
+
+        <canvas id="viz-canvas" width="240" height="240"></canvas>
+
+        <div id="viz-presets">
+          <button data-bez="0.25,0.25,0.75,0.75">Linear</button>
+          <button data-bez="0.42,0,1,1">In</button>
+          <button data-bez="0,0,0.58,1">Out</button>
+          <button data-bez="0.42,0,0.58,1">In-Out</button>
+          <button data-bez="0.34,1.56,0.64,1">Overshoot</button>
+        </div>
+
+        <div id="viz-params-stagger" class="viz-params">
+          <label>Spread (s)
+            <input id="viz-spread" type="number" min="0.1" step="0.5" value="5"/>
+          </label>
+          <label>Start at (s, blank = keep earliest)
+            <input id="viz-startat" type="number" step="0.5"/>
+          </label>
+          <label>Order
+            <select id="viz-order">
+              <option value="in">By inPoint (chunks)</option>
+              <option value="stack">Layer stack</option>
+              <option value="reverse">Reverse stack</option>
+            </select>
+          </label>
+        </div>
+
+        <div id="viz-params-property" class="viz-params hidden">
+          <label>Property
+            <select id="viz-prop">
+              <option value="opacity">Opacity (%)</option>
+              <option value="scale">Scale (%)</option>
+              <option value="rotation">Rotation (°)</option>
+              <option value="position_x">Position X (px)</option>
+              <option value="position_y">Position Y (px)</option>
+            </select>
+          </label>
+          <div class="grid2">
+            <label>From
+              <input id="viz-from" type="number" step="1" value="0"/>
+            </label>
+            <label>To
+              <input id="viz-to" type="number" step="1" value="100"/>
+            </label>
+          </div>
+        </div>
+
+        <div id="viz-params-ease" class="viz-params hidden">
+          <label>Layer (name, blank = selected)
+            <input id="viz-ease-layer" type="text" spellcheck="false"/>
+          </label>
+          <label>Property
+            <input id="viz-ease-prop" type="text" value="position"
+                   spellcheck="false"/>
+          </label>
+          <label class="check">
+            <input id="viz-ease-all" type="checkbox" checked/>
+            <span>All keyframe pairs</span>
+          </label>
+        </div>
+
+        <button id="viz-apply" class="primary">Apply to selection</button>
+        <p id="viz-hint" class="fineprint"></p>
+      </aside>
+    </div>
 
     <footer id="composer">
       <textarea id="chat-input" rows="2"
@@ -147,6 +253,7 @@
   <script src="js/comfy.js"></script>
   <script src="js/setup.js"></script>
   <script src="js/tools.js"></script>
+  <script src="js/visualizer.js"></script>
   <script src="js/main.js"></script>
 </body>
 </html>

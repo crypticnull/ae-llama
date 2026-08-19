@@ -39,15 +39,18 @@
     els.statusText.textContent = text;
   }
 
-  /** Info message ending in a clickable link that opens externally. */
-  function appendLinkMsg(text, linkLabel, url) {
+  /** Info message with trailing clickable actions [{label, onClick}]. */
+  function appendActionMsg(text, actions) {
     var div = appendMsg("info", text + " ");
-    var a = document.createElement("a");
-    a.textContent = linkLabel;
-    a.addEventListener("click", function () {
-      global.AEBridge.openURL(url);
-    });
-    div.appendChild(a);
+    for (var i = 0; i < actions.length; i++) {
+      (function (action) {
+        var a = document.createElement("a");
+        a.textContent = action.label;
+        a.addEventListener("click", action.onClick);
+        div.appendChild(a);
+        div.appendChild(document.createTextNode("  "));
+      })(actions[i]);
+    }
     return div;
   }
 
@@ -359,17 +362,23 @@
       "(one time, fully automatic).");
     var tag = updateManifest && updateManifest.llamaTag
       ? updateManifest.llamaTag : "latest";
-    global.Setup.bootstrapEngine({ tag: tag }, setupStatus,
+    var ctrl = global.Setup.bootstrapEngine(
+      { tag: tag, onProgress: paintProgress }, setupStatus,
       function (err, res) {
+        hideProgress();
         setupLine = null;
         if (err) {
-          appendMsg("error", "Engine setup failed: " + err.message +
-            " — use 'Reinstall / update engine' in settings to retry.");
+          appendMsg(err.cancelled ? "info" : "error",
+            err.cancelled
+              ? "Engine download cancelled — use 'Reinstall / update engine' in settings to retry."
+              : "Engine setup failed: " + err.message +
+                " — use 'Reinstall / update engine' in settings to retry.");
         } else if (!res.skipped) {
           appendMsg("info", "Engine installed. Pick a model and press Start.");
           populateModelDropdown();
         }
       });
+    if (ctrl) showProgress("AI engine", function () { ctrl.cancel(); });
   }
 
   function updateEngine() {
@@ -379,12 +388,68 @@
     }
     var tag = updateManifest && updateManifest.llamaTag
       ? updateManifest.llamaTag : "latest";
-    global.Setup.bootstrapEngine({ force: true, tag: tag }, setupStatus,
+    var ctrl = global.Setup.bootstrapEngine(
+      { force: true, tag: tag, onProgress: paintProgress }, setupStatus,
       function (err) {
+        hideProgress();
         setupLine = null;
-        appendMsg(err ? "error" : "info",
-          err ? "Engine update failed: " + err.message
+        appendMsg(err ? (err.cancelled ? "info" : "error") : "info",
+          err ? (err.cancelled ? "Engine update cancelled."
+                               : "Engine update failed: " + err.message)
               : "Engine updated.");
+      });
+    if (ctrl) showProgress("AI engine", function () { ctrl.cancel(); });
+  }
+
+  var panelUpdateBusy = false;
+
+  /**
+   * Reload the panel in place: CEF re-reads index.html + js from the
+   * extension folder, and init() re-evaluates the host jsx — so a freshly
+   * installed update goes live without closing the panel.
+   */
+  function reloadPanel() {
+    try { global.Llama.stop(); } catch (e) {}
+    global.location.reload();
+  }
+
+  function installPanelUpdate(quiet) {
+    if (panelUpdateBusy) return;
+    panelUpdateBusy = true;
+    global.Setup.installUpdate(updateManifest, setupStatus,
+      function (err, res) {
+        panelUpdateBusy = false;
+        setupLine = null;
+        if (err) {
+          appendMsg("error", "Panel update failed: " + err.message);
+          return;
+        }
+        if (res.kind === "git" && !res.changed) {
+          // Nothing new: stay silent on the launch-time auto check.
+          if (!quiet) appendMsg("info", "Repo already up to date.");
+          return;
+        }
+        if (quiet) {
+          // Launch-time auto-update: apply it immediately (once per CEF
+          // session, so a misbehaving feed can never cause a reload loop).
+          var done = null;
+          try { done = global.sessionStorage.getItem("aell-auto-reloaded"); } catch (e) {}
+          if (!done) {
+            try { global.sessionStorage.setItem("aell-auto-reloaded", "1"); } catch (e) {}
+            appendMsg("info", "Panel updated — reloading with the new version…");
+            global.setTimeout(reloadPanel, 1200);
+            return;
+          }
+          // Guard tripped (already auto-reloaded once): hand over control.
+          appendActionMsg("Panel updated" +
+            (res.output ? " (" + res.output + ")" : "") + ".",
+            [{ label: "Reload panel now", onClick: reloadPanel }]);
+          return;
+        }
+        // User-initiated update: they asked for it — apply it.
+        appendMsg("info", "Panel updated" +
+          (res.output ? " (" + res.output + ")" : "") + " — reloading…");
+        global.setTimeout(reloadPanel, 1200);
       });
   }
 
@@ -399,10 +464,28 @@
       }
       updateManifest = result.manifest;
       if (result.panelUpdate) {
-        appendLinkMsg("Update available: AE Llama " +
+        var s = global.Settings.get();
+        var installable = global.Setup.detectInstallKind().kind === "git" ||
+                          !!updateManifest.panelPackageUrl;
+        var label = "Update available: AE Llama " +
           result.panelUpdate.version +
           (result.panelUpdate.notes ? " — " + result.panelUpdate.notes : "") +
-          ".", "Get it here", result.panelUpdate.url);
+          ".";
+        if (installable && s.autoInstallUpdates) {
+          appendMsg("info", label + " Installing (auto-update is on)…");
+          installPanelUpdate();
+        } else {
+          var actions = [];
+          if (installable) {
+            actions.push({ label: "Update now", onClick: installPanelUpdate });
+          }
+          if (result.panelUpdate.url) {
+            actions.push({ label: "Get it here", onClick: function () {
+              global.AEBridge.openURL(result.panelUpdate.url);
+            } });
+          }
+          appendActionMsg(label, actions);
+        }
       } else if (verbose) {
         appendMsg("info", "You are on the latest version (" +
           global.AELL.VERSION + ").");
@@ -410,20 +493,107 @@
     });
   }
 
-  function downloadStarterModel() {
+  var gpuInfo = null;
+
+  // ------------------------------------------------- download progress bar
+
+  var currentCancel = null;
+  var progressBase = "";
+  var lastBarPaint = 0;
+
+  function fmtBytes(b) {
+    if (b >= 1e9) return (b / 1e9).toFixed(2) + " GB";
+    return Math.max(1, Math.round(b / 1e6)) + " MB";
+  }
+
+  function showProgress(label, cancelFn) {
+    progressBase = label;
+    currentCancel = cancelFn || null;
+    els.progressLabel.textContent = label + " — starting…";
+    els.progressFill.style.width = "0%";
+    els.progressRow.classList.remove("hidden");
+    // The bar lives above the drawers, but close settings so the user sees
+    // the chat status lines too.
+    els.settingsDrawer.classList.add("hidden");
+  }
+
+  function paintProgress(rec, total) {
+    var now = Date.now();
+    if (now - lastBarPaint < 150) return;
+    lastBarPaint = now;
+    if (total > 0) {
+      var pct = Math.min(100, (rec / total) * 100);
+      els.progressFill.style.width = pct.toFixed(1) + "%";
+      els.progressLabel.textContent = progressBase + " — " +
+        Math.floor(pct) + "%  (" + fmtBytes(rec) + " / " + fmtBytes(total) + ")";
+    } else {
+      els.progressLabel.textContent = progressBase + " — " + fmtBytes(rec);
+    }
+  }
+
+  function hideProgress() {
+    els.progressRow.classList.add("hidden");
+    currentCancel = null;
+  }
+
+  /** Fill both catalog pickers, best fit for the detected GPU preselected. */
+  function populateModelCatalog() {
+    var catalog = global.Setup.modelCatalog(updateManifest);
+    var rec = global.Setup.recommendModel(catalog, gpuInfo);
+    var selects = [els.starterSelect, els.setModelSelect];
+    for (var s = 0; s < selects.length; s++) {
+      var sel = selects[s];
+      if (!sel) continue;
+      sel.innerHTML = "";
+      for (var i = 0; i < catalog.length; i++) {
+        var m = catalog[i];
+        var fits = gpuInfo && gpuInfo.vramGB
+          ? gpuInfo.vramGB >= m.minVramGB
+          : !!m.cpuDefault;
+        var label = m.label + " · " + (m.sizeMB / 1000).toFixed(1) + " GB";
+        if (!fits) label += " — needs " + m.minVramGB + "+ GB VRAM";
+        if (rec && m.name === rec.name) label += "  ✓ recommended";
+        var o = document.createElement("option");
+        o.value = m.name;
+        o.textContent = label;
+        sel.appendChild(o);
+      }
+      if (rec) sel.value = rec.name;
+    }
+  }
+
+  function downloadCatalogModel(selectEl) {
+    var catalog = global.Setup.modelCatalog(updateManifest);
+    var chosen = null;
+    for (var i = 0; i < catalog.length; i++) {
+      if (catalog[i].name === selectEl.value) { chosen = catalog[i]; break; }
+    }
+    if (!chosen) { appendMsg("error", "Pick a model first."); return; }
+    if (currentCancel) {
+      appendMsg("info", "A download is already running — cancel it first (✕).");
+      return;
+    }
     els.getModelBtn.disabled = true;
-    global.Setup.downloadStarterModel(updateManifest, setupStatus,
-      function (err, dest) {
-        setupLine = null;
-        els.getModelBtn.disabled = false;
-        if (err) {
-          appendMsg("error", "Model download failed: " + err.message);
-          return;
-        }
-        appendMsg("info", "Model downloaded.");
-        global.Settings.set({ modelPath: dest });
-        populateModelDropdown();
-      });
+    var ctrl = global.Setup.downloadModel(chosen, {
+      status: setupStatus,
+      progress: paintProgress
+    }, function (err, dest) {
+      hideProgress();
+      setupLine = null;
+      els.getModelBtn.disabled = false;
+      if (err) {
+        appendMsg(err.cancelled ? "info" : "error",
+          err.cancelled ? "Model download cancelled."
+                        : "Model download failed: " + err.message);
+        return;
+      }
+      appendMsg("info", chosen.label + " downloaded.");
+      global.Settings.set({ modelPath: dest });
+      populateModelDropdown();
+    });
+    if (ctrl) {
+      showProgress(chosen.label, function () { ctrl.cancel(); });
+    }
   }
 
   // -------------------------------------------------------------- settings
@@ -443,6 +613,7 @@
     els.setComfyWorkflows.value = s.comfyWorkflowsDir;
     els.setComfyOut.value = s.comfyOutDir;
     els.setComfyTimeout.value = s.comfyTimeoutSec;
+    els.setAutoUpdate.checked = !!s.autoInstallUpdates;
   }
 
   function formToSettings() {
@@ -461,7 +632,8 @@
       comfyDir: els.setComfyDir.value,
       comfyWorkflowsDir: els.setComfyWorkflows.value,
       comfyOutDir: els.setComfyOut.value,
-      comfyTimeoutSec: parseInt(els.setComfyTimeout.value, 10) || 600
+      comfyTimeoutSec: parseInt(els.setComfyTimeout.value, 10) || 600,
+      autoInstallUpdates: !!els.setAutoUpdate.checked
     });
   }
 
@@ -496,9 +668,15 @@
       setComfyWorkflows: $("set-comfy-workflows"),
       setComfyOut: $("set-comfy-out"),
       setComfyTimeout: $("set-comfy-timeout"),
+      setAutoUpdate: $("set-auto-update"),
       starterRow: $("starter-row"),
+      starterSelect: $("starter-select"),
+      setModelSelect: $("set-model-select"),
       getModelBtn: $("btn-get-model"),
-      versionLine: $("version-line")
+      versionLine: $("version-line"),
+      progressRow: $("progress-row"),
+      progressLabel: $("progress-label"),
+      progressFill: $("progress-fill")
     };
 
     if (!global.AEBridge.available()) {
@@ -506,6 +684,15 @@
         "CEP runtime not detected. This page must run inside After Effects.");
       return;
     }
+
+    // Re-evaluate the host script: CEP only auto-loads ScriptPath on the
+    // extension's FIRST load, so after an in-place update + reload this is
+    // what brings the newest ExtendScript tools live too.
+    try {
+      var jsxPath = (global.AEBridge.getExtensionPath() + "/jsx/hostscript.jsx")
+        .replace(/\\/g, "/").replace(/"/g, '\\"');
+      global.AEBridge.evalScript('$.evalFile("' + jsxPath + '")');
+    } catch (e) {}
 
     // Populate the settings form up front so no code path can ever persist
     // never-filled (empty) fields over the real settings.
@@ -563,6 +750,18 @@
       }
     });
 
+    // -- visualizer pane
+    global.Viz.init({
+      $: $,
+      appendMsg: appendMsg,
+      callHostTool: global.Tools.callHostTool
+    });
+    $("btn-visualizer").addEventListener("click", function () {
+      var v = $("visualizer");
+      var nowHidden = v.classList.toggle("hidden");
+      if (!nowHidden) global.Viz.onShow();
+    });
+
     // -- drawers
     els.settingsBtn.addEventListener("click", function () {
       settingsToForm();
@@ -591,7 +790,7 @@
                       "set-ctx", "set-ngl", "set-temp", "set-rounds",
                       "set-dryrun", "set-comfy-url", "set-comfy-dir",
                       "set-comfy-workflows", "set-comfy-out",
-                      "set-comfy-timeout"];
+                      "set-comfy-timeout", "set-auto-update"];
     for (var i = 0; i < persistIds.length; i++) {
       $(persistIds[i]).addEventListener("change", formToSettings);
     }
@@ -686,11 +885,35 @@
       try { global.Llama.stop(); } catch (e) {}
     });
 
-    // -- updates + starter model + auto-bootstrap
-    els.getModelBtn.addEventListener("click", downloadStarterModel);
+    // -- advanced settings reveal
+    $("btn-advanced-toggle").addEventListener("click", function () {
+      var adv = $("advanced-settings");
+      var open = adv.classList.toggle("hidden");
+      this.innerHTML = open ? "Advanced &#9656;" : "Advanced &#9662;";
+    });
+
+    // -- updates + model catalog + auto-bootstrap
+    $("btn-progress-cancel").addEventListener("click", function () {
+      if (currentCancel) {
+        els.progressLabel.textContent = progressBase + " — cancelling…";
+        currentCancel();
+      }
+    });
+    els.getModelBtn.addEventListener("click", function () {
+      downloadCatalogModel(els.starterSelect);
+    });
+    $("btn-get-model-settings").addEventListener("click", function () {
+      downloadCatalogModel(els.setModelSelect);
+    });
+    populateModelCatalog();                       // sensible list immediately
+    global.Setup.detectGpu(function (g) {         // then VRAM-aware refresh
+      gpuInfo = g;
+      populateModelCatalog();
+    });
     $("btn-check-updates").addEventListener("click", function () {
       checkForUpdates(true);
     });
+    $("btn-update-panel").addEventListener("click", installPanelUpdate);
     $("btn-update-engine").addEventListener("click", updateEngine);
 
     var env = global.AEBridge.getHostEnvironment();
@@ -703,6 +926,17 @@
     // llamaTag; bootstrap proceeds regardless after a short head start.)
     checkForUpdates(false);
     global.setTimeout(autoBootstrap, 2500);
+
+    // Git installs need no hosted update feed at all — the repo IS the
+    // feed. With auto-update on, pull on every launch.
+    global.setTimeout(function () {
+      try {
+        if (global.Settings.get().autoInstallUpdates &&
+            global.Setup.detectInstallKind().kind === "git") {
+          installPanelUpdate(true);
+        }
+      } catch (e) {}
+    }, 4000);
   }
 
   document.addEventListener("DOMContentLoaded", init);

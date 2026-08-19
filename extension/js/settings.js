@@ -60,7 +60,14 @@
       comfyDir: "",            // definable install folder (for Launch)
       comfyWorkflowsDir: j("comfy-workflows"),
       comfyOutDir: j("generated"),
-      comfyTimeoutSec: 600
+      comfyTimeoutSec: 600,
+      // Install panel updates without asking (git pull for dev installs,
+      // panelPackageUrl download for package installs). Store builds
+      // without a panelPackageUrl are unaffected — they only show the
+      // banner. Opt out in settings.
+      autoInstallUpdates: true,
+      // Visualizer curve (CSS cubic-bezier handles), persisted across runs.
+      vizBezier: [0.25, 0.25, 0.75, 0.75]
     };
   }
 

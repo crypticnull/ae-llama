@@ -104,13 +104,27 @@ The model never writes or runs raw scripts. It can only emit JSON like
 and undo groups. Unknown tools are rejected panel-side, so the blast radius
 is exactly the tool list — currently:
 
-`get_project_info`, `get_comp_details`, `create_comp`, `add_text_layer`,
-`add_solid`, `add_shape_layer`, `add_mask`, `precompose`, `add_camera`,
-`add_marker`, `set_layer_3d`, `set_layer_parent`, `set_transform`,
-`add_keyframe`, `set_expression`, `apply_effect`, `set_effect_param`,
-`set_layer_timing`, `delete_layer`, `set_comp_setting`, `import_file`,
-`add_to_render_queue`, `comfy_status`, `comfy_list_workflows`,
-`comfy_generate`
+`get_project_info`, `get_comp_details`, `create_folder`, `move_to_folder`,
+`rename_item`, `delete_item`, `duplicate_comp`, `organize_project`,
+`create_comp`, `add_text_layer`,
+`set_text_style`, `add_solid`, `add_shape_layer`, `add_mask`, `precompose`,
+`add_camera`, `add_marker`, `add_null`, `add_control`, `link_property`,
+`apply_expression_preset`, `grid_layout`, `set_layer_3d`, `set_layer_parent`,
+`set_transform`, `center_anchor_point`, `add_keyframe`, `set_expression`,
+`apply_effect`,
+`set_effect_param`, `set_layer_timing`, `delete_layer`, `set_comp_setting`,
+`import_file`, `add_to_render_queue`, `comfy_status`,
+`comfy_list_workflows`, `comfy_generate`
+
+Rigging is first-class: *"put Speed and Wobble sliders on a null and drive
+the title's rotation and wiggle from them"* becomes `add_null` →
+`add_control` → `link_property` / `apply_expression_preset`. The panel
+generates every expression itself (dimension-aware, names escaped), so the
+model never hand-writes expression syntax; when it does use raw
+`set_expression`, AE's own validation error is fed back so it can correct
+itself. Text layers support full styling: font, size, fill, tracking,
+leading, justification — at creation (`add_text_layer`) or later
+(`set_text_style`).
 
 While the model streams its answer you see the reply text live, and the
 **Send** button becomes **Stop** — cancelling aborts generation on the
@@ -195,8 +209,15 @@ Release flow:
    any stable URL you control and point `UPDATE_MANIFEST_URL` in
    `extension/js/version.js` at it **before** building):
    - `panelVersion` / `panelUrl` / `notes` — installed panels compare
-     versions on launch and show a "get it at aescripts.com" banner (panels
-     never self-download builds, so aescripts licensing stays intact).
+     versions on launch and show an update banner.
+   - `panelPackageUrl` (optional) — direct self-update. When set to a
+     downloadable `.zxp`/`.zip` of the new version, the banner gains an
+     **Update now** action that installs it in place (reopen the panel to
+     load it), and the ⚙ *Install panel updates automatically* toggle makes
+     the whole loop hands-off. Leave it **empty** for aescripts builds so
+     buyers go through the store and licensing stays intact. Dev installs
+     (extension junctioned from a git clone) ignore this field entirely —
+     for them "Update panel now" simply runs `git pull` in the repo.
    - `llamaTag` — pin the llama.cpp release your build was tested against;
      the panel's engine installs/updates use it instead of `latest`.
    - `starterModel` — swap the recommended model without shipping a new ZXP.
@@ -225,6 +246,18 @@ update.json           update-channel manifest template (host your copy)
 
 ## Troubleshooting
 
+- **ZXP Installer says "no compatible program available" / asks for a
+  Creative Cloud login you already have** — the installer's Adobe-app
+  detection is failing, not the ZXP. In order: update to the latest
+  [ZXP/UXP Installer](https://aescripts.com/learn/zxp-installer/) (older
+  builds don't recognize new AE releases like 2026); launch it normally,
+  NOT "Run as administrator" (elevation changes the user context, which
+  breaks both app detection and the CC login check); sign out/in of the
+  Creative Cloud desktop app and retry. Or skip the installer entirely:
+  `.\scripts\install-zxp.ps1 -ZxpPath <path to .zxp>` extracts the signed
+  panel straight into the CEP extensions folder (equivalently: rename the
+  `.zxp` to `.zip` and extract it to
+  `%APPDATA%\Adobe\CEP\extensions\com.cptk.aellama`).
 - **Panel missing from Window ▸ Extensions** — re-run `scripts\install.ps1`,
   fully restart AE. Check the PlayerDebugMode string value = `1` under the
   key for *your* AE version: `HKCU\Software\Adobe\CSXS.11` for AE 2024,

@@ -17,23 +17,101 @@
     { name: "get_comp_details", mutating: false,
       desc: "Layers of a comp with index, name, type, timing, effects.",
       args: "{comp?: string}  // omit for the active comp" },
+    { name: "create_folder", mutating: true,
+      desc: "Create a project-panel folder. Same name in different parents " +
+            "is fine; existence is checked per-parent.",
+      args: "{name: string, parent?: folder name, id, path, or 'root' (default: root)}" },
+    { name: "move_to_folder", mutating: true,
+      desc: "Move project items into a folder (batch).",
+      args: "{items: name|id|path|[..], folder: name, id, path 'A/B', or 'root'}" },
+    { name: "rename_item", mutating: true,
+      desc: "Rename any project item (comp, footage, folder).",
+      args: "{item: name|id|path 'A/B/Item', name: string}" },
+    { name: "delete_item", mutating: true,
+      desc: "Delete a project item. Deleting a folder removes its contents. " +
+            "Use a path when names repeat.",
+      args: "{item: name|id|path 'A/B/Item'}" },
+    { name: "duplicate_comp", mutating: true,
+      desc: "Duplicate a composition.",
+      args: "{comp: string, name?: string}" },
+    { name: "organize_project", mutating: true,
+      desc: "File loose root-level items into Comps/Footage/Solids/Audio/" +
+            "Images folders. Leaves existing folder structure alone.",
+      args: "{}" },
     { name: "create_comp", mutating: true,
       desc: "Create a composition and open it.",
       args: "{name: string, width: int, height: int, duration: seconds, frameRate: number, bgColor?: [r,g,b] 0..1}" },
     { name: "add_text_layer", mutating: true,
       desc: "Add a text layer to a comp.",
-      args: "{comp?: string, text: string, fontSize?: px, fillColor?: [r,g,b] 0..1, position?: [x,y], font?: string (PostScript name)}" },
+      args: "{comp?: string, text: string, fontSize?: px, fillColor?: [r,g,b] 0..1, position?: [x,y], font?: string (PostScript name), tracking?: number, leading?: px, justification?: 'left'|'center'|'right'}" },
+    { name: "set_text_style", mutating: true,
+      desc: "Restyle an existing text layer (any subset of fields).",
+      args: "{comp?: string, layer: name|index, text?: string, fontSize?: px, font?: string, fillColor?: [r,g,b] 0..1, tracking?: number, leading?: px, justification?: 'left'|'center'|'right'}" },
     { name: "add_solid", mutating: true,
       desc: "Add a solid layer.",
       args: "{comp?: string, name: string, color: [r,g,b] 0..1, width?: int, height?: int}" },
     { name: "set_transform", mutating: true,
-      desc: "Set a transform property on a layer.",
-      args: "{comp?: string, layer: name|index, property: 'position'|'scale'|'rotation'|'opacity'|'anchorPoint', value: number|[..]}" },
+      desc: "Set a transform property. UNITS: scale/opacity are PERCENT " +
+            "(100 = normal, 200 = double), rotation is degrees, position/" +
+            "anchorPoint are pixels. relative:true applies against the " +
+            "current value ('scale by 200%' => {property:'scale', " +
+            "value:200, relative:true}; relative position adds [dx,dy]).",
+      args: "{comp?: string, layer: name|index, property: 'position'|'scale'|'rotation'|'opacity'|'anchorPoint', value: number|[..], relative?: bool}" },
+    { name: "center_anchor_point", mutating: true,
+      desc: "Center a layer's anchor point on its visible content " +
+            "(sourceRect math done host-side; position compensated so the " +
+            "layer does not jump). ALWAYS use this instead of guessing " +
+            "anchor coordinates.",
+      args: "{comp?: string, layer: name|index, preservePosition?: bool = true}" },
     { name: "add_keyframe", mutating: true,
       desc: "Add a keyframe on a layer property at a time (seconds).",
       args: "{comp?: string, layer: name|index, property: transform name or 'effect.<EffectName>.<ParamName>', time: seconds, value: number|[..]}" },
+    { name: "add_null", mutating: true,
+      desc: "Add a null layer (use as a controller or parent).",
+      args: "{comp?: string, name?: string, position?: [x,y]}" },
+    { name: "add_control", mutating: true,
+      desc: "Add a named expression control (Slider/Angle/Checkbox/Color/" +
+            "Point Control effect) to a layer — usually a null.",
+      args: "{comp?: string, layer: name|index, type: 'slider'|'angle'|'checkbox'|'color'|'point', name: string, value?: number|[..]}" },
+    { name: "link_property", mutating: true,
+      desc: "Drive a layer property from a control. The panel writes the " +
+            "expression itself with correct syntax (dimension-aware; " +
+            "optional value = control*scale + offset).",
+      args: "{comp?: string, layer: name|index, property: transform name or 'effect.<Effect>.<Param>', controlLayer: name|index, controlEffect: string (control name), scale?: number, offset?: number}" },
+    { name: "stagger_layers", mutating: true,
+      desc: "Distribute layer START TIMES along a cubic-bezier easing " +
+            "curve: layer i (of n) starts at startAt + bezierY(i/(n-1)) * " +
+            "spread. Uses the user's selected layers when 'layers' omitted. " +
+            "bezier is CSS-style [x1,y1,x2,y2] (linear = [0.25,0.25,0.75,0.75], " +
+            "ease-out = [0,0,0.58,1], ease-in = [0.42,0,1,1]).",
+      args: "{comp?: string, layers?: [name|index], bezier: [x1,y1,x2,y2], spread: seconds, startAt?: s, order?: 'in'|'stack'|'reverse'}" },
+    { name: "distribute_property", mutating: true,
+      desc: "Distribute a property VALUE across layers along a bezier " +
+            "curve: layer i gets from + bezierY(i/(n-1)) * (to-from).",
+      args: "{comp?: string, layers?: [name|index], bezier: [x1,y1,x2,y2], property: 'opacity'|'rotation'|'scale'|'position_x'|'position_y', from: number, to: number, order?: 'in'|'stack'|'reverse'}" },
+    { name: "apply_keyframe_ease", mutating: true,
+      desc: "Apply a bezier as TEMPORAL easing between keyframes on one " +
+            "property (converts to AE speed/influence ease). keyIndex " +
+            "eases pair k..k+1; omit for all pairs.",
+      args: "{comp?: string, layer: name|index, property: transform name or 'effect.<Effect>.<Param>', bezier: [x1,y1,x2,y2], keyIndex?: int, allPairs?: bool}" },
+    { name: "grid_layout", mutating: true,
+      desc: "Arrange layers into a grid rigged to a control null: the " +
+            "grid centers on the null's position and its 'Grid X Spacing'/" +
+            "'Grid Y Spacing' sliders drive spacing live (all expressions " +
+            "generated host-side). Omit 'layers' to use the layers the " +
+            "user has selected in AE. Re-running re-flows into the same rig.",
+      args: "{comp?: string, layers?: [name|index] (omit = user's selection), columns?: int (default ~square; 1 = column, n = row), spacingX?: px, spacingY?: px, controlLayer?: string = 'GRID CTRL'}" },
+    { name: "apply_expression_preset", mutating: true,
+      desc: "Apply a known-good expression. Presets: wiggle (frequency/" +
+            "amplitude as numbers OR freqControl/ampControl {layer, effect} " +
+            "to drive from sliders), loop_cycle, loop_pingpong, loop_offset " +
+            "(need keyframes), time_linear (scalar props; rate or rateControl).",
+      args: "{comp?: string, layer: name|index, property: string, preset: string, frequency?: n, amplitude?: n, rate?: n, freqControl?: {layer, effect}, ampControl?: {layer, effect}, rateControl?: {layer, effect}}" },
     { name: "set_expression", mutating: true,
-      desc: "Set (or clear with '') an expression on a layer property.",
+      desc: "LAST RESORT: set a raw expression (or clear with ''). Prefer " +
+            "link_property / apply_expression_preset — they generate " +
+            "correct syntax. Invalid expressions are rejected with AE's " +
+            "error text.",
       args: "{comp?: string, layer: name|index, property: transform name or 'effect.<EffectName>.<ParamName>', expression: string}" },
     { name: "apply_effect", mutating: true,
       desc: "Apply an effect to a layer. Returns the effect's parameter names.",
@@ -44,6 +122,19 @@
     { name: "set_layer_timing", mutating: true,
       desc: "Set layer inPoint/outPoint/startTime (seconds).",
       args: "{comp?: string, layer: name|index, inPoint?: s, outPoint?: s, startTime?: s}" },
+    { name: "duplicate_layer", mutating: true,
+      desc: "Duplicate a LAYER inside its comp (use duplicate_comp only " +
+            "for whole compositions). Omit 'layer' to use the user's " +
+            "selected layer.",
+      args: "{comp?: string, layer?: name|index (omit = selected layer), name?: string}" },
+    { name: "split_layer_into_chunks", mutating: true,
+      desc: "Cut a layer into fixed-length chunks, each on its own layer " +
+            "trimmed to its own window — ONE call does the whole edit " +
+            "('cut into N-second pieces / stagger without overlap'). " +
+            "Omit 'layer' to use the user's selected layer. Chunks play " +
+            "seamlessly end-to-end; offsetPerChunk slides chunk i by " +
+            "i*offset seconds extra.",
+      args: "{comp?: string, layer?: name|index (omit = selected layer), chunkSeconds: s, offsetPerChunk?: s}" },
     { name: "delete_layer", mutating: true,
       desc: "Delete a layer from a comp.",
       args: "{comp?: string, layer: name|index}" },
@@ -135,10 +226,76 @@
       "- Look at TOOL RESULTS before continuing; fix errors they report.",
       "- Times are in seconds. Colors are [r,g,b] floats 0..1.",
       "- Positions are pixel coordinates [x,y] from the comp's top-left.",
+      "- UNITS: scale and opacity are PERCENT (100 = normal size, 200 =",
+      "  double, 50 = half). NEVER send 2 to mean 200%. Rotation is in",
+      "  degrees. 'scale BY X%' is relative:true; 'scale TO X%' is absolute.",
+      "- Anchor points are in LAYER space, not comp space. To center one,",
+      "  call center_anchor_point — never set anchorPoint coordinates by",
+      "  guesswork.",
+      "- Your reply text is shown BEFORE your commands run. Phrase it as",
+      "  intent ('Centering the anchor point…'), then after reading TOOL",
+      "  RESULTS confirm what actually happened — including any 'warning'",
+      "  fields, which mean the result is probably not what the user wanted.",
       "- 'layer' accepts a layer name or a 1-based index from the top.",
       "- Omit 'comp' to target the active comp.",
       "- Prefer inspecting (get_project_info / get_comp_details) before",
       "  modifying things you have not seen.",
+      "- Layers the user has SELECTED in AE are marked selected: true in",
+      "  the comp details. When the user says 'the selected layer(s)' /",
+      "  'this layer' / 'these layers', OMIT the layer/layers argument —",
+      "  grid_layout, stagger_layers, distribute_property, duplicate_layer",
+      "  and split_layer_into_chunks all use the selection automatically.",
+      "  NEVER pass placeholder text like \"these layers\" or \"selected\"",
+      "  as a layer name — layer args must be real names or indexes from",
+      "  the project state, or omitted.",
+      "- Omitting 'comp' targets the ACTIVE comp — creating or duplicating",
+      "  a comp does NOT make it active. After create_comp/duplicate_comp/",
+      "  precompose, always pass comp: \"<name>\" explicitly.",
+      "- To cut a layer into timed pieces ('split into chunks', 'stagger",
+      "  segments'), use split_layer_into_chunks — ONE call. Never emulate",
+      "  it with duplicate_comp or repeated retiming of the same layer.",
+      "- Curve requests: 'stagger with an ease' = stagger_layers;",
+      "  'ramp opacity/scale across these layers' = distribute_property;",
+      "  'ease between the keyframes' = apply_keyframe_ease. All take the",
+      "  same CSS-style bezier [x1,y1,x2,y2].",
+      "",
+      "Project panel management:",
+      "- create_folder / move_to_folder / rename_item / delete_item /",
+      "  duplicate_comp / organize_project manage the project panel. Items",
+      "  are referenced by name or id; folders also by PATH written as",
+      "  ParentName/ChildName, or 'root' for the project root.",
+      "  get_project_info shows each item's parent folder and each",
+      "  folder's path. Same-named folders under different parents are",
+      "  normal — use paths when names repeat.",
+      "- Use ONLY folder and item names that appear in CURRENT PROJECT",
+      "  STATE or a get_project_info result. NEVER guess a name and never",
+      "  copy placeholder names from these instructions. If a lookup",
+      "  fails, the error lists the folders that really exist — pick from",
+      "  those or ask the user; do not invent a fallback.",
+      "- Batch requests ('a subfolder inside every folder within X'):",
+      "  inspect, filter folders whose parent is X, then emit one",
+      "  create_folder per real path, all in ONE commands array.",
+      "- NEVER claim an action you did not emit commands for in this same",
+      "  response. If no available tool can do it, say so plainly and",
+      "  return commands: [].",
+      "",
+      "Rigging (sliders on nulls driving properties):",
+      "1. add_null {name: 'CTRL'}",
+      "2. add_control {layer: 'CTRL', type: 'slider', name: 'Speed', value: 50}",
+      "3. link_property {layer: 'Title', property: 'rotation',",
+      "   controlLayer: 'CTRL', controlEffect: 'Speed'}",
+      "The panel generates all expression code itself with correct syntax.",
+      "",
+      "Expressions:",
+      "- NEVER write expression code yourself when link_property or",
+      "  apply_expression_preset can do it — they cannot produce syntax",
+      "  errors, your hand-written code often does.",
+      "- set_expression is a last resort. If AE rejects your expression, the",
+      "  error text comes back in TOOL RESULTS — read it and fix that exact",
+      "  problem; do not resend the same code.",
+      "- Known-good forms if you must write one: wiggle(2, 30)",
+      "  | loopOut(\"cycle\") | value + time * 50",
+      "  | thisComp.layer(\"CTRL\").effect(\"Speed\")(1)",
       "- comfy_generate renders with a LOCAL ComfyUI instance and imports",
       "  the result into the project (result data lists imported item",
       "  names). Check comfy_status first; pick a template via",

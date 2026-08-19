@@ -60,31 +60,73 @@
 
   /**
    * Detect NVIDIA capability via nvidia-smi (ships with the driver).
-   * cb({hasNvidia, cudaVersion: "12.8"|null, computeCap: 8.6|null})
+   * cb({hasNvidia, cudaVersion: "12.8"|null, computeCap: 8.6|null,
+   *     vramGB: 32|null})
    */
   function detectGpu(cb) {
     ensureNode();
     child_process.execFile("nvidia-smi", [], { timeout: 15000 },
       function (err, stdout) {
         if (err) {
-          cb({ hasNvidia: false, cudaVersion: null, computeCap: null });
+          cb({ hasNvidia: false, cudaVersion: null, computeCap: null,
+               vramGB: null });
           return;
         }
         var cuda = null;
         var m = String(stdout).match(/CUDA Version:\s*([\d.]+)/);
         if (m) cuda = m[1];
         child_process.execFile("nvidia-smi",
-          ["--query-gpu=compute_cap", "--format=csv,noheader"],
+          ["--query-gpu=compute_cap,memory.total",
+           "--format=csv,noheader,nounits"],
           { timeout: 15000 },
           function (err2, stdout2) {
             var cc = null;
+            var vramGB = null;
             if (!err2) {
-              var line = String(stdout2).split(/\r?\n/)[0].trim();
-              if (/^\d+(\.\d+)?$/.test(line)) cc = parseFloat(line);
+              var parts = String(stdout2).split(/\r?\n/)[0].split(",");
+              if (parts[0] && /^\d+(\.\d+)?$/.test(parts[0].trim())) {
+                cc = parseFloat(parts[0].trim());
+              }
+              if (parts[1] && /^\d+$/.test(parts[1].trim())) {
+                vramGB = Math.round(parseInt(parts[1].trim(), 10) / 1024);
+              }
             }
-            cb({ hasNvidia: true, cudaVersion: cuda, computeCap: cc });
+            cb({ hasNvidia: true, cudaVersion: cuda, computeCap: cc,
+                 vramGB: vramGB });
           });
       });
+  }
+
+  /**
+   * Pick the best catalog model for this machine: the largest entry whose
+   * VRAM floor the GPU clears; the cpuDefault entry when there's no NVIDIA
+   * GPU (or VRAM is unknown); the smallest entry as a last resort.
+   */
+  function recommendModel(catalog, gpu) {
+    if (!catalog || catalog.length === 0) return null;
+    var best = null;
+    var i;
+    function smallest() {
+      var s = catalog[0];
+      for (var j = 1; j < catalog.length; j++) {
+        if (catalog[j].sizeMB < s.sizeMB) s = catalog[j];
+      }
+      return s;
+    }
+    var vram = gpu && typeof gpu.vramGB === "number" ? gpu.vramGB : null;
+    if (gpu && gpu.hasNvidia && vram) {
+      for (i = 0; i < catalog.length; i++) {
+        if (vram >= catalog[i].minVramGB &&
+            (!best || catalog[i].sizeMB > best.sizeMB)) {
+          best = catalog[i];
+        }
+      }
+      return best || smallest();   // tiny GPU: lightest model, not CPU pick
+    }
+    for (i = 0; i < catalog.length; i++) {
+      if (catalog[i].cpuDefault) best = catalog[i];
+    }
+    return best || smallest();
   }
 
   // --------------------------------------------------------------- http(s)
@@ -130,13 +172,39 @@
 
   /**
    * Download url to destPath, following redirects (GitHub/HF assets 302 to
-   * a CDN). onProgress(receivedBytes, totalBytes|0) throttled by caller.
+   * a CDN). onProgress(receivedBytes, totalBytes|0) fires per chunk.
+   * Returns a controller: {cancel()} aborts the transfer (across redirects),
+   * deletes the partial file, and calls cb with err.cancelled = true.
    */
-  function downloadToFile(url, destPath, onProgress, cb, redirects) {
+  function downloadToFile(url, destPath, onProgress, cb, redirects, ctrl) {
     ensureNode();
     redirects = redirects || 0;
+    if (!ctrl) {
+      ctrl = {
+        cancelled: false,
+        _req: null,
+        cancel: function () {
+          ctrl.cancelled = true;
+          try {
+            if (ctrl._req) ctrl._req.destroy(new Error("cancelled"));
+          } catch (e) {}
+        }
+      };
+    }
+    var settled = false;
+    function done(err, result) {
+      if (settled) return;
+      settled = true;
+      if (err && ctrl.cancelled) {
+        err = new Error("Download cancelled");
+        err.cancelled = true;
+      }
+      if (err) { try { fs.unlinkSync(destPath); } catch (e) {} }
+      cb(err, result);
+    }
+
     var u;
-    try { u = new URL(url); } catch (e) { cb(e); return; }
+    try { u = new URL(url); } catch (e) { done(e); return ctrl; }
     var mod = u.protocol === "https:" ? https : http;
     var req = mod.request({
       host: u.hostname,
@@ -148,13 +216,14 @@
       if (res.statusCode >= 300 && res.statusCode < 400 &&
           res.headers.location && redirects < 5) {
         res.resume();
+        settled = true;   // hand off to the redirect leg
         downloadToFile(res.headers.location, destPath, onProgress, cb,
-                       redirects + 1);
+                       redirects + 1, ctrl);
         return;
       }
       if (res.statusCode !== 200) {
         res.resume();
-        cb(new Error("Download failed (HTTP " + res.statusCode + ")"));
+        done(new Error("Download failed (HTTP " + res.statusCode + ")"));
         return;
       }
       var total = parseInt(res.headers["content-length"] || "0", 10);
@@ -162,16 +231,18 @@
       var out = fs.createWriteStream(destPath);
       res.on("data", function (c) {
         received += c.length;
-        if (onProgress) onProgress(received, total);
+        if (onProgress && !ctrl.cancelled) onProgress(received, total);
       });
       res.pipe(out);
-      out.on("finish", function () { out.close(); cb(null, destPath); });
-      out.on("error", function (e) { cb(e); });
-      res.on("error", function (e) { cb(e); });
+      out.on("finish", function () { out.close(); done(null, destPath); });
+      out.on("error", function (e) { try { out.destroy(); } catch (e2) {} done(e); });
+      res.on("error", function (e) { try { out.destroy(); } catch (e2) {} done(e); });
     });
-    req.on("error", function (e) { cb(e); });
+    ctrl._req = req;
+    req.on("error", function (e) { done(e); });
     // No idle timeout on multi-GB downloads; errors/aborts still fire.
     req.end();
+    return ctrl;
   }
 
   function extractZip(zipPath, destDir, cb) {
@@ -276,7 +347,20 @@
    */
   function bootstrapEngine(opts, onStatus, cb) {
     ensureNode();
-    if (bootstrapBusy) { cb(new Error("Setup is already running")); return; }
+    // Controller returned to the caller; cancel() aborts the in-flight
+    // download and stops the asset queue.
+    var ctrl = {
+      cancelled: false,
+      _dl: null,
+      cancel: function () {
+        ctrl.cancelled = true;
+        try { if (ctrl._dl) ctrl._dl.cancel(); } catch (e) {}
+      }
+    };
+    if (bootstrapBusy) {
+      cb(new Error("Setup is already running"));
+      return ctrl;
+    }
     opts = opts || {};
     function status(t) { if (onStatus) onStatus(t); }
 
@@ -287,7 +371,7 @@
     var existing = global.Llama.findServerExe(global.Settings.get().serverPath);
     if (existing && !opts.force) {
       cb(null, { serverPath: existing, skipped: true });
-      return;
+      return ctrl;
     }
 
     bootstrapBusy = true;
@@ -300,7 +384,8 @@
     detectGpu(function (gpu) {
       status(gpu.hasNvidia
         ? "NVIDIA GPU found (driver CUDA " + (gpu.cudaVersion || "?") +
-          (gpu.computeCap !== null ? ", compute " + gpu.computeCap : "") + ")"
+          (gpu.computeCap !== null ? ", compute " + gpu.computeCap : "") +
+          (gpu.vramGB ? ", " + gpu.vramGB + " GB VRAM" : "") + ")"
         : "No NVIDIA GPU detected — using the CPU build");
 
       var tag = opts.tag || "latest";
@@ -345,19 +430,21 @@
             finish(null, { serverPath: exe });
             return;
           }
+          if (ctrl.cancelled) {
+            var ce = new Error("Download cancelled");
+            ce.cancelled = true;
+            finish(ce);
+            return;
+          }
           var asset = queue.shift();
           var zipPath = path.join(vendorRoot, asset.name);
           var mb = Math.round((asset.size || 0) / 1048576);
           status("Downloading " + asset.name +
                  (mb ? " (" + mb + " MB)…" : "…"));
-          var lastPct = -10;
-          downloadToFile(asset.browser_download_url, zipPath,
+          ctrl._dl = downloadToFile(asset.browser_download_url, zipPath,
             function (rec, total) {
-              if (!total) return;
-              var pct = Math.floor((rec / total) * 100);
-              if (pct >= lastPct + 10) {
-                lastPct = pct;
-                status(asset.name + ": " + pct + "%");
+              if (opts.onProgress) {
+                opts.onProgress(rec, total || asset.size || 0);
               }
             },
             function (derr) {
@@ -372,34 +459,44 @@
         })();
       });
     });
+    return ctrl;
   }
 
   // -------------------------------------------------------- starter model
 
-  function downloadStarterModel(manifest, onStatus, cb) {
+  /** The live model catalog: hosted override, else the built-in list. */
+  function modelCatalog(manifest) {
+    if (manifest && manifest.modelCatalog instanceof Array &&
+        manifest.modelCatalog.length > 0) {
+      return manifest.modelCatalog;
+    }
+    return global.AELL.MODEL_CATALOG;
+  }
+
+  /**
+   * Download a catalog model into the models folder.
+   * ui: {status(text)?, progress(receivedBytes, totalBytes)?}
+   * Returns the download controller ({cancel()}).
+   */
+  function downloadModel(model, ui, cb) {
     ensureNode();
     ensureDataDirs();
-    var model = (manifest && manifest.starterModel) ||
-                global.AELL.FALLBACK_STARTER_MODEL;
-    if (!model || !model.url) {
-      cb(new Error("No starter model configured"));
-      return;
+    ui = ui || {};
+    if (!model || !model.url || !model.name) {
+      cb(new Error("No model configured"));
+      return null;
     }
     var dest = path.join(global.Settings.dataRoot(), "models", model.name);
-    if (fs.existsSync(dest)) { cb(null, dest); return; }
+    if (fs.existsSync(dest)) { cb(null, dest); return null; }
     var tmp = dest + ".part";
-    if (onStatus) {
-      onStatus("Downloading " + model.name +
+    if (ui.status) {
+      ui.status("Downloading " + model.name +
         (model.sizeMB ? " (~" + Math.round(model.sizeMB / 1024 * 10) / 10 +
          " GB — this can take a while)…" : "…"));
     }
-    var lastPct = -5;
-    downloadToFile(model.url, tmp, function (rec, total) {
-      if (!total || !onStatus) return;
-      var pct = Math.floor((rec / total) * 100);
-      if (pct >= lastPct + 5) {
-        lastPct = pct;
-        onStatus(model.name + ": " + pct + "%");
+    return downloadToFile(model.url, tmp, function (rec, total) {
+      if (ui.progress) {
+        ui.progress(rec, total || (model.sizeMB ? model.sizeMB * 1048576 : 0));
       }
     }, function (err) {
       if (err) {
@@ -426,11 +523,130 @@
   }
 
   /**
+   * How is this panel installed?
+   * - "git": the extension folder is (a junction into) a git checkout —
+   *   updating means `git pull` in the repo root.
+   * - "package": an extracted ZXP — updating means downloading the
+   *   manifest's panelPackageUrl and extracting it over ourselves.
+   */
+  function detectInstallKind() {
+    ensureNode();
+    var ext = global.AEBridge.getExtensionPath();
+    var real = ext;
+    try { real = fs.realpathSync(ext); } catch (e) {}
+    try {
+      var repoRoot = path.dirname(real);
+      if (fs.existsSync(path.join(repoRoot, ".git"))) {
+        return { kind: "git", repoRoot: repoRoot, extensionReal: real };
+      }
+    } catch (e2) {}
+    return { kind: "package", extensionReal: real };
+  }
+
+  /**
+   * Pull the newest panel code in, matching the install kind. The updated
+   * files load on the next panel open (CEP reads the extension at launch),
+   * so the caller should tell the user to reopen the panel / restart AE.
+   * cb(err, {kind, changed, output?})
+   */
+  function installUpdate(manifest, onStatus, cb) {
+    ensureNode();
+    var install = detectInstallKind();
+    function status(t) { if (onStatus) onStatus(t); }
+
+    if (install.kind === "git") {
+      status("Dev install detected — git pull in " + install.repoRoot + "…");
+      child_process.execFile("git", ["pull", "--ff-only"],
+        { cwd: install.repoRoot, timeout: 120000 },
+        function (err, stdout, stderr) {
+          if (err) {
+            cb(new Error("git pull failed: " +
+               String(stderr || err.message).slice(0, 300) +
+               " — update the repo manually."));
+            return;
+          }
+          var out = String(stdout || "").replace(/\s+$/, "");
+          cb(null, { kind: "git", output: out.slice(-300),
+                     changed: !/Already up to date/i.test(out) });
+        });
+      return;
+    }
+
+    var url = manifest && manifest.panelPackageUrl;
+    if (!url) {
+      cb(new Error("This update has no direct install package — get it " +
+                   "from " + ((manifest && manifest.panelUrl) || "the store") +
+                   " and reinstall the ZXP."));
+      return;
+    }
+    var tmp = path.join(global.Settings.dataRoot(), "panel-update.zip");
+    status("Downloading panel update…");
+
+    // Freshly published files can 404 for a few minutes while GitHub's raw
+    // CDN propagates — and that 404 gets negatively cached per exact URL.
+    // A per-attempt cache-buster makes every retry a brand-new cache entry,
+    // and we retry on our own so propagation lag self-heals.
+    var attempt = 0;
+    var MAX_ATTEMPTS = 4;
+    var RETRY_MS = 45000;
+
+    function tryDownload() {
+      attempt++;
+      var sep = url.indexOf("?") === -1 ? "?" : "&";
+      var freshUrl = url + sep + "r=" + new Date().getTime();
+      var lastPct = -10;
+      downloadToFile(freshUrl, tmp, function (rec, total) {
+        if (!total) return;
+        var pct = Math.floor((rec / total) * 100);
+        if (pct >= lastPct + 10) {
+          lastPct = pct;
+          status("Panel update: " + pct + "%");
+        }
+      }, function (err) {
+        if (err && /HTTP 404/.test(err.message) && attempt < MAX_ATTEMPTS) {
+          status("Update file still propagating (404) — retrying in " +
+                 Math.round(RETRY_MS / 1000) + "s (attempt " + attempt +
+                 "/" + (MAX_ATTEMPTS - 1) + ")…");
+          global.setTimeout(tryDownload, RETRY_MS);
+          return;
+        }
+        afterDownload(err);
+      });
+    }
+
+    function afterDownload(err) {
+      if (err) {
+        if (/HTTP 404/.test(err.message)) {
+          err = new Error("Update package not reachable after " +
+            MAX_ATTEMPTS + " attempts (HTTP 404) — the feed may not have " +
+            "published yet. It will retry on the next panel launch.");
+        }
+        cb(err);
+        return;
+      }
+      status("Installing into " + install.extensionReal + "…");
+      // A .zxp is a zip; extracting over the live extension folder is fine
+      // on Windows — CEP loads files at panel launch and holds no locks.
+      extractZip(tmp, install.extensionReal, function (xerr) {
+        try { fs.unlinkSync(tmp); } catch (e) {}
+        if (xerr) { cb(xerr); return; }
+        cb(null, { kind: "package", changed: true });
+      });
+    }
+
+    tryDownload();
+  }
+
+  /**
    * Fetch the hosted update manifest. cb(err, {manifest, panelUpdate})
    * where panelUpdate is set when a newer panel version is published.
+   * The cache-buster keeps the CDN from serving a stale manifest.
    */
   function checkForUpdates(cb) {
-    fetchJson(global.AELL.UPDATE_MANIFEST_URL, 15000,
+    var mUrl = global.AELL.UPDATE_MANIFEST_URL;
+    mUrl += (mUrl.indexOf("?") === -1 ? "?" : "&") +
+            "r=" + new Date().getTime();
+    fetchJson(mUrl, 15000,
       function (err, manifest) {
         if (err || !manifest) { cb(err || new Error("No manifest")); return; }
         var panelUpdate = null;
@@ -450,8 +666,12 @@
     ensureDataDirs: ensureDataDirs,
     detectGpu: detectGpu,
     bootstrapEngine: bootstrapEngine,
-    downloadStarterModel: downloadStarterModel,
+    downloadModel: downloadModel,
+    modelCatalog: modelCatalog,
+    recommendModel: recommendModel,
     checkForUpdates: checkForUpdates,
+    detectInstallKind: detectInstallKind,
+    installUpdate: installUpdate,
     isBusy: function () { return bootstrapBusy; }
   };
 

@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <ExtensionManifest ExtensionBundleId="com.cptk.aellama"
                    ExtensionBundleName="AE Llama"
-                   ExtensionBundleVersion="0.3.0"
+                   ExtensionBundleVersion="0.5.2"
                    Version="7.0"
                    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
   <ExtensionList>
-    <Extension Id="com.cptk.aellama.panel" Version="0.3.0"/>
+    <Extension Id="com.cptk.aellama.panel" Version="0.5.2"/>
   </ExtensionList>
   <ExecutionEnvironment>
     <HostList>
@@ -47,7 +47,13 @@
               <Width>300</Width>
             </MinSize>
           </Geometry>
-          <Icons/>
+          <Icons>
+            <Icon Type="Normal">./icons/icon-normal.png</Icon>
+            <Icon Type="RollOver">./icons/icon-rollover.png</Icon>
+            <Icon Type="Disabled">./icons/icon-disabled.png</Icon>
+            <Icon Type="DarkNormal">./icons/icon-dark.png</Icon>
+            <Icon Type="DarkRollOver">./icons/icon-dark-rollover.png</Icon>
+          </Icons>
         </UI>
       </DispatchInfo>
     </Extension>

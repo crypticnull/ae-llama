@@ -1,0 +1,174 @@
+// Regression test: split_layer_into_chunks / duplicate_layer against a
+// stubbed AE object model — the exact "cut the sequence into 5s chunks"
+// field scenario (35.94s footage layer).
+"use strict";
+const fs = require("fs");
+const path = require("path");
+
+function Layer(name, comp, inP, outP, start) {
+  this.name = name; this.comp = comp;
+  this.inPoint = inP; this.outPoint = outP; this.startTime = start;
+  this.selected = false;
+}
+Layer.prototype.duplicate = function () {
+  const d = new Layer(this.name, this.comp, this.inPoint, this.outPoint,
+                      this.startTime);
+  this.comp._layers.splice(this.comp._layers.indexOf(this), 0, d);
+  this.comp._reindex();
+  return d;
+};
+Object.defineProperty(Layer.prototype, "index", {
+  get() { return this.comp._layers.indexOf(this) + 1; }
+});
+Layer.prototype.property = function () { return null; };
+
+function Comp(name, dur) {
+  this.name = name; this.duration = dur; this.time = 0;
+  this.width = 3840; this.height = 2860;
+  this._layers = [];
+}
+Comp.prototype._reindex = function () {};
+Comp.prototype.layer = function (ref) {
+  const l = typeof ref === "number"
+    ? this._layers[ref - 1]
+    : this._layers.find(x => x.name === ref);
+  if (!l) throw new Error("no layer " + ref);
+  return l;
+};
+Object.defineProperty(Comp.prototype, "numLayers", {
+  get() { return this._layers.length; }
+});
+Object.defineProperty(Comp.prototype, "selectedLayers", {
+  get() { return this._layers.filter(l => l.selected); }
+});
+
+function CompItem() {} function FolderItem() {} function FootageItem() {}
+function TextLayer() {} function ShapeLayer() {} function CameraLayer() {}
+function LightLayer() {} function AVLayer() {} function SolidSource() {}
+const ParagraphJustification = {};
+
+const comp = new Comp("Car Wash", 35.9359359359359);
+Object.setPrototypeOf(comp, Object.create(CompItem.prototype,
+  Object.getOwnPropertyDescriptors(Comp.prototype)));
+const seq = new Layer("Car Wash[0000-1076].png", comp, 0, 35.9359359359359, 0);
+comp._layers.push(seq);
+
+const project = { rootFolder: { name: "(root)" }, numItems: 0,
+                  item() { return null; }, items: {}, activeItem: comp };
+const app = { project, beginUndoGroup() {}, endUndoGroup() {} };
+const $ = { global: {} };
+
+eval(fs.readFileSync(path.join(__dirname, "..", "extension", "jsx",
+                                "hostscript.jsx"), "utf8"));
+
+function call(tool, args) {
+  return JSON.parse($.global.AELL_call(tool, JSON.stringify(args)));
+}
+function assert(cond, msg) {
+  if (!cond) { console.error("FAIL:", msg); process.exitCode = 1; }
+  else console.log("ok  -", msg);
+}
+
+// the exact field request: 35.94s layer, 5s chunks
+const r = call("split_layer_into_chunks",
+               { layer: "Car Wash[0000-1076].png", chunkSeconds: 5 });
+assert(r.ok, "split succeeds: " + (r.error || ""));
+assert(r.data.chunks === 8, "35.94s / 5s -> 8 chunks (got " + r.data.chunks + ")");
+assert(comp._layers.length === 8, "comp now holds 8 layers");
+
+const windows = comp._layers
+  .map(l => [l.inPoint, l.outPoint])
+  .sort((a, b) => a[0] - b[0]);
+let contiguous = true;
+for (let i = 0; i < windows.length - 1; i++) {
+  if (Math.abs(windows[i][1] - windows[i + 1][0]) > 1e-9) contiguous = false;
+}
+assert(contiguous, "chunk windows are contiguous (no overlap, no gaps)");
+assert(Math.abs(windows[0][0] - 0) < 1e-9 &&
+       Math.abs(windows[7][1] - 35.9359359359359) < 1e-9,
+       "full original span covered");
+assert(comp._layers.every(l => l.startTime === 0),
+       "startTime untouched -> seamless playback");
+assert(comp._layers.every(l => /chunk \d+$/.test(l.name)),
+       "chunks renamed for clarity");
+
+// stagger with per-chunk offset
+const comp2 = new Comp("B", 12);
+Object.setPrototypeOf(comp2, Object.create(CompItem.prototype,
+  Object.getOwnPropertyDescriptors(Comp.prototype)));
+comp2._layers.push(new Layer("clip", comp2, 0, 12, 0));
+project.activeItem = comp2;
+const r2 = call("split_layer_into_chunks",
+                { layer: "clip", chunkSeconds: 4, offsetPerChunk: 1 });
+assert(r2.ok && r2.data.chunks === 3, "12s / 4s -> 3 chunks");
+const starts = comp2._layers.map(l => l.startTime).sort((a, b) => a - b);
+assert(JSON.stringify(starts) === "[0,1,2]",
+       "offsetPerChunk slides chunk i by i*offset (starts: " + starts + ")");
+
+// guards
+const comp3 = new Comp("C", 3);
+Object.setPrototypeOf(comp3, Object.create(CompItem.prototype,
+  Object.getOwnPropertyDescriptors(Comp.prototype)));
+comp3._layers.push(new Layer("tiny", comp3, 0, 3, 0));
+project.activeItem = comp3;
+const r3 = call("split_layer_into_chunks", { layer: "tiny", chunkSeconds: 5 });
+assert(!r3.ok && /nothing to split/.test(r3.error),
+       "too-short layer refused with clear error");
+
+// duplicate_layer basic
+project.activeItem = comp3;
+const r4 = call("duplicate_layer", { layer: "tiny", name: "tiny copy" });
+assert(r4.ok && comp3._layers.length === 2 &&
+       comp3._layers.some(l => l.name === "tiny copy"),
+       "duplicate_layer duplicates and renames");
+
+// selection default: omitted layer resolves to the single selected layer
+const comp4 = new Comp("Car Wash 2", 8);
+Object.setPrototypeOf(comp4, Object.create(CompItem.prototype,
+  Object.getOwnPropertyDescriptors(Comp.prototype)));
+comp4._layers.push(new Layer("bg", comp4, 0, 8, 0));
+const hero = new Layer("hero", comp4, 0, 8, 0);
+hero.selected = true;
+comp4._layers.push(hero);
+project.activeItem = comp4;
+const r5 = call("split_layer_into_chunks", { comp: null, chunkSeconds: 2 });
+assert(r5.ok && r5.data.chunks === 4,
+       "omitted layer -> splits the selected layer (8s/2s -> 4 chunks): " +
+       (r5.error || ""));
+assert(comp4._layers.filter(l => /^hero chunk \d+$/.test(l.name)).length === 4,
+       "chunks come from the selected layer, not an arbitrary one");
+assert(comp4._layers.some(l => l.name === "bg"),
+       "unselected layer left untouched");
+
+// omitted layer with nothing selected -> clear guidance, no guessing
+comp4._layers.forEach(l => { l.selected = false; });
+const r6 = call("split_layer_into_chunks", { chunkSeconds: 2 });
+assert(!r6.ok && /No layer selected/.test(r6.error),
+       "no selection + omitted layer -> 'No layer selected' error");
+
+// omitted layer with several selected -> error names them
+comp4.layer("bg").selected = true;
+comp4.layer("hero chunk 1").selected = true;
+const r7 = call("duplicate_layer", {});
+assert(!r7.ok && /2 layers selected/.test(r7.error) && /bg/.test(r7.error),
+       "multi-selection error lists the selected layer names");
+
+// the exact field failure: model passed the placeholder "these layers"
+const r8 = call("split_layer_into_chunks",
+                { comp: null, layer: "these layers", chunkSeconds: 2 });
+assert(!r8.ok && /Actual layers:/.test(r8.error),
+       "placeholder layer name -> grounded error listing real layers");
+assert(/\(SELECTED\)/.test(r8.error),
+       "grounded error marks which layers are selected");
+assert(/OMIT the 'layer' argument/.test(r8.error),
+       "grounded error tells the model to omit the layer arg");
+
+// duplicate_layer also honors the selection default
+comp4._layers.forEach(l => { l.selected = false; });
+comp4.layer("bg").selected = true;
+const r9 = call("duplicate_layer", { name: "bg copy" });
+assert(r9.ok && r9.data.duplicatedFrom === "bg" &&
+       comp4._layers.some(l => l.name === "bg copy"),
+       "duplicate_layer defaults to the selected layer");
+
+console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");
