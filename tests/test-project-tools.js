@@ -146,4 +146,23 @@ const rn2 = call("rename_item", { item: "_COMPS/Social/_ARCHIVE", name: "_ARCHIV
 assert(rn2.ok && social.children.some(c => c.name === "_ARCHIVE_OLD"),
        "path-addressed rename hit the right folder");
 
+// 8. "at the root" phrasings all work for create_folder.
+const atRoot = call("create_folder", { name: "_ARCHIVE", parent: "root" });
+assert(atRoot.ok && ALL_ITEMS.some(i => i.name === "_ARCHIVE" && i._parent === root),
+       "create_folder parent:'root' creates at project root");
+const noParent = call("create_folder", { name: "_RENDERS" });
+assert(noParent.ok && ALL_ITEMS.some(i => i.name === "_RENDERS" && i._parent === root),
+       "create_folder with parent omitted defaults to root");
+const parenRoot = call("move_to_folder", { items: "_RENDERS", folder: "(root)" });
+assert(parenRoot.ok, "move_to_folder accepts '(root)' alias");
+
+// 9. failed lookups list the folders that actually exist (grounded retry).
+const badParent = call("create_folder", { name: "X", parent: "NoSuchFolder" });
+assert(!badParent.ok && /Existing folders:.*_COMPS/.test(badParent.error),
+       "failed parent lookup lists real folders: " +
+       badParent.error.slice(0, 100));
+const badMove = call("move_to_folder", { items: "_RENDERS", folder: "Imaginary" });
+assert(!badMove.ok && /Existing folders:/.test(badMove.error),
+       "failed move target lists real folders");
+
 console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");

@@ -291,6 +291,25 @@ function AELL_folderPath(folder) {
   return parts.join("/");
 }
 
+/* Existing folder paths, for grounding failed-lookup errors. */
+function AELL_listFolderPaths(cap) {
+  var proj = app.project;
+  var out = [];
+  for (var i = 1; i <= proj.numItems && out.length < cap; i++) {
+    var it = proj.item(i);
+    if (it instanceof FolderItem) out.push(AELL_folderPath(it));
+  }
+  return out.length > 0 ? out.join(", ") : "(none yet)";
+}
+
+/* Ways the model plausibly says "the project root". */
+function AELL_isRootRef(ref) {
+  if (ref === null || typeof ref === "undefined") return true;
+  var s = String(ref).toLowerCase();
+  return s === "" || s === "root" || s === "(root)" || s === "/" ||
+         s === "project" || s === "project root";
+}
+
 /*
  * Resolve a folder reference: numeric id, a path like "A/B" (walked from
  * the root, so same-named folders in different parents disambiguate), or a
@@ -328,12 +347,12 @@ AELL_TOOLS.create_folder = function (args) {
   if (!args.name) return AELL_err("'name' is required");
   var proj = app.project;
   var parent = proj.rootFolder;
-  if (args.parent) {
+  if (!AELL_isRootRef(args.parent)) {
     var p = AELL_resolveFolderRef(args.parent);
     if (!p) {
       return AELL_err("Parent folder not found: " + args.parent +
-        ". Use a name, id, or path like '_COMPS/Promo' " +
-        "(see get_project_info).");
+        ". Existing folders: " + AELL_listFolderPaths(20) +
+        ". Use one of those (or a path/id), or 'root' for the project root.");
     }
     parent = p;
   }
@@ -359,15 +378,15 @@ AELL_TOOLS.move_to_folder = function (args) {
   }
   var proj = app.project;
   var folder;
-  if (String(args.folder).toLowerCase() === "root") {
+  if (AELL_isRootRef(args.folder)) {
     folder = proj.rootFolder;
   } else {
     folder = AELL_resolveFolderRef(args.folder);
   }
   if (!folder) {
     return AELL_err("Folder not found: " + args.folder +
-                    ". Create it with create_folder first (paths like " +
-                    "'_COMPS/Promo' work).");
+                    ". Existing folders: " + AELL_listFolderPaths(20) +
+                    ". Use one of those, or create_folder first.");
   }
   var refs = AELLJSON.isArray(args.items) ? args.items : [args.items];
   var moved = [];
