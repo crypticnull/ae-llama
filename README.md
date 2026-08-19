@@ -104,7 +104,9 @@ The model never writes or runs raw scripts. It can only emit JSON like
 and undo groups. Unknown tools are rejected panel-side, so the blast radius
 is exactly the tool list — currently:
 
-`get_project_info`, `get_comp_details`, `create_comp`, `add_text_layer`,
+`get_project_info`, `get_comp_details`, `create_folder`, `move_to_folder`,
+`rename_item`, `delete_item`, `duplicate_comp`, `organize_project`,
+`create_comp`, `add_text_layer`,
 `set_text_style`, `add_solid`, `add_shape_layer`, `add_mask`, `precompose`,
 `add_camera`, `add_marker`, `add_null`, `add_control`, `link_property`,
 `apply_expression_preset`, `set_layer_3d`, `set_layer_parent`,

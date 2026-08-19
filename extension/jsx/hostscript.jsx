@@ -199,6 +199,12 @@ AELL_TOOLS.get_project_info = function (args) {
   for (var i = 1; i <= proj.numItems; i++) {
     var it = proj.item(i);
     var entry = { name: it.name, id: it.id };
+    if (it.parentFolder && it.parentFolder !== proj.rootFolder) {
+      entry.folder = it.parentFolder.name;
+    }
+    if (it instanceof FolderItem) {
+      entry.path = AELL_folderPath(it);
+    }
     if (it instanceof CompItem) {
       entry.type = "comp";
       entry.width = it.width;
@@ -223,6 +229,245 @@ AELL_TOOLS.get_project_info = function (args) {
     items: items,
     activeComp: active
   });
+};
+
+// -------------------------------------------------- project panel management
+
+function AELL_findFolder(name) {
+  var proj = app.project;
+  for (var i = 1; i <= proj.numItems; i++) {
+    var it = proj.item(i);
+    if (it instanceof FolderItem && it.name === String(name)) return it;
+  }
+  return null;
+}
+
+/*
+ * Find any project item by id (number from get_project_info), by path
+ * ("A/B" for a folder, "A/B/Item" for an item inside a folder — required
+ * to disambiguate same-named items), or by bare name (first match).
+ */
+function AELL_findItem(ref) {
+  var proj = app.project;
+  var i, it;
+  if (typeof ref === "number") {
+    for (i = 1; i <= proj.numItems; i++) {
+      it = proj.item(i);
+      if (it.id === ref) return it;
+    }
+    return null;
+  }
+  var s = String(ref);
+  if (s.indexOf("/") !== -1) {
+    var asFolder = AELL_resolveFolderRef(s);
+    if (asFolder) return asFolder;
+    var cut = s.lastIndexOf("/");
+    var parent = AELL_resolveFolderRef(s.substring(0, cut));
+    var childName = s.substring(cut + 1);
+    if (parent) {
+      for (i = 1; i <= parent.numItems; i++) {
+        it = parent.item(i);
+        if (it.name === childName) return it;
+      }
+    }
+    return null;
+  }
+  for (i = 1; i <= proj.numItems; i++) {
+    it = proj.item(i);
+    if (it.name === s) return it;
+  }
+  return null;
+}
+
+/* Full path of a folder from the project root, e.g. "_COMPS/Promo". */
+function AELL_folderPath(folder) {
+  var parts = [];
+  var f = folder;
+  var proj = app.project;
+  while (f && f !== proj.rootFolder) {
+    parts.unshift(f.name);
+    f = f.parentFolder;
+  }
+  return parts.join("/");
+}
+
+/*
+ * Resolve a folder reference: numeric id, a path like "A/B" (walked from
+ * the root, so same-named folders in different parents disambiguate), or a
+ * bare name (first match anywhere).
+ */
+function AELL_resolveFolderRef(ref) {
+  var proj = app.project;
+  if (typeof ref === "number") {
+    var byId = AELL_findItem(ref);
+    return (byId && byId instanceof FolderItem) ? byId : null;
+  }
+  var s = String(ref);
+  if (s.indexOf("/") !== -1) {
+    var parts = s.split("/");
+    var cur = proj.rootFolder;
+    for (var i = 0; i < parts.length; i++) {
+      if (parts[i] === "") continue;
+      var next = null;
+      for (var j = 1; j <= cur.numItems; j++) {
+        var it = cur.item(j);
+        if (it instanceof FolderItem && it.name === parts[i]) {
+          next = it;
+          break;
+        }
+      }
+      if (!next) return null;
+      cur = next;
+    }
+    return cur === proj.rootFolder ? null : cur;
+  }
+  return AELL_findFolder(s);
+}
+
+AELL_TOOLS.create_folder = function (args) {
+  if (!args.name) return AELL_err("'name' is required");
+  var proj = app.project;
+  var parent = proj.rootFolder;
+  if (args.parent) {
+    var p = AELL_resolveFolderRef(args.parent);
+    if (!p) {
+      return AELL_err("Parent folder not found: " + args.parent +
+        ". Use a name, id, or path like '_COMPS/Promo' " +
+        "(see get_project_info).");
+    }
+    parent = p;
+  }
+  // Existence is checked INSIDE the target parent only — same-named
+  // folders under different parents are normal AE practice.
+  for (var i = 1; i <= parent.numItems; i++) {
+    var it = parent.item(i);
+    if (it instanceof FolderItem && it.name === String(args.name)) {
+      return AELL_okay({ name: it.name, id: it.id,
+                         path: AELL_folderPath(it),
+                         note: "Folder already existed in this parent" });
+    }
+  }
+  var folder = proj.items.addFolder(String(args.name));
+  if (parent !== proj.rootFolder) folder.parentFolder = parent;
+  return AELL_okay({ name: folder.name, id: folder.id,
+                     path: AELL_folderPath(folder) });
+};
+
+AELL_TOOLS.move_to_folder = function (args) {
+  if (!args.folder && args.folder !== 0) {
+    return AELL_err("'folder' is required (a folder name, or 'root')");
+  }
+  var proj = app.project;
+  var folder;
+  if (String(args.folder).toLowerCase() === "root") {
+    folder = proj.rootFolder;
+  } else {
+    folder = AELL_resolveFolderRef(args.folder);
+  }
+  if (!folder) {
+    return AELL_err("Folder not found: " + args.folder +
+                    ". Create it with create_folder first (paths like " +
+                    "'_COMPS/Promo' work).");
+  }
+  var refs = AELLJSON.isArray(args.items) ? args.items : [args.items];
+  var moved = [];
+  var missing = [];
+  // Resolve everything BEFORE moving — reparenting reorders the project
+  // item collection under the iteration otherwise.
+  var found = [];
+  var i;
+  for (i = 0; i < refs.length; i++) {
+    var it = AELL_findItem(refs[i]);
+    if (!it) missing.push(refs[i]);
+    else if (it !== folder) found.push(it);
+  }
+  for (i = 0; i < found.length; i++) {
+    found[i].parentFolder = folder;
+    moved.push(found[i].name);
+  }
+  var data = { folder: folder === proj.rootFolder ? "(root)" : folder.name,
+               moved: moved };
+  if (missing.length > 0) data.notFound = missing;
+  if (moved.length === 0) {
+    return AELL_err("Nothing was moved" +
+      (missing.length ? " — items not found: " + missing.join(", ") : ""));
+  }
+  return AELL_okay(data);
+};
+
+AELL_TOOLS.rename_item = function (args) {
+  if (typeof args.item === "undefined" || args.item === null ||
+      args.item === "") {
+    return AELL_err("'item' is required (name or id from get_project_info)");
+  }
+  if (!args.name) return AELL_err("'name' is required");
+  var it = AELL_findItem(args.item);
+  if (!it) return AELL_err("Project item not found: " + args.item);
+  var old = it.name;
+  it.name = String(args.name);
+  return AELL_okay({ oldName: old, name: it.name });
+};
+
+AELL_TOOLS.delete_item = function (args) {
+  var it = AELL_findItem(args.item);
+  if (!it) return AELL_err("Project item not found: " + args.item);
+  var name = it.name;
+  var note = "";
+  if (it instanceof FolderItem && it.numItems > 0) {
+    note = "Folder contained " + it.numItems +
+           " item(s), removed with it (Ctrl+Z undoes)";
+  }
+  it.remove();
+  var data = { removed: name };
+  if (note) data.note = note;
+  return AELL_okay(data);
+};
+
+AELL_TOOLS.duplicate_comp = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  var dup = comp.duplicate();
+  if (args.name) dup.name = String(args.name);
+  return AELL_okay({ name: dup.name, id: dup.id, duplicatedFrom: comp.name });
+};
+
+AELL_TOOLS.organize_project = function (args) {
+  var proj = app.project;
+  if (!proj) return AELL_err("No project open");
+  function ensureFolder(name) {
+    var f = AELL_findFolder(name);
+    if (!f) f = proj.items.addFolder(name);
+    return f;
+  }
+  // Collect first: reparenting reorders proj.item() indices mid-loop.
+  var toMove = [];
+  var i, it;
+  for (i = 1; i <= proj.numItems; i++) {
+    it = proj.item(i);
+    if (it instanceof FolderItem) continue;
+    if (it.parentFolder !== proj.rootFolder) continue;  // respect existing org
+    toMove.push(it);
+  }
+  var counts = { Comps: 0, Solids: 0, Audio: 0, Images: 0, Footage: 0 };
+  for (i = 0; i < toMove.length; i++) {
+    it = toMove[i];
+    var dest = null;
+    if (it instanceof CompItem) {
+      dest = "Comps";
+    } else if (it instanceof FootageItem) {
+      var src = it.mainSource;
+      if (src instanceof SolidSource) dest = "Solids";
+      else if (it.hasAudio && !it.hasVideo) dest = "Audio";
+      else if (src && src.isStill) dest = "Images";
+      else dest = "Footage";
+    }
+    if (dest) {
+      it.parentFolder = ensureFolder(dest);
+      counts[dest]++;
+    }
+  }
+  return AELL_okay({ organized: counts,
+    note: "Only loose items at the project root were filed; existing " +
+          "folder structure was left alone" });
 };
 
 AELL_TOOLS.get_comp_details = function (args) {
@@ -981,7 +1226,9 @@ var AELL_MUTATING = {
   set_layer_3d: true, set_layer_parent: true,
   add_null: true, add_control: true, link_property: true,
   apply_expression_preset: true, set_text_style: true,
-  center_anchor_point: true
+  center_anchor_point: true,
+  create_folder: true, move_to_folder: true, rename_item: true,
+  delete_item: true, duplicate_comp: true, organize_project: true
 };
 
 // --------------------------------------------------------------- entry point
