@@ -257,7 +257,9 @@
       args: "{}" },
     { name: "comfy_generate", mutating: true,
       desc: "Generate an image/video with local ComfyUI and import it into " +
-            "the AE project. Blocks until finished (may take minutes).",
+            "the AE project. Blocks until finished (may take minutes). If " +
+            "the hidden backend is installed it BOOTS AUTOMATICALLY — " +
+            "never tell the user to start ComfyUI first.",
       args: "{workflow: string (name from comfy_list_workflows), prompt: string, negative?: string, width?: int, height?: int, seed?: int, frames?: int (video workflows), import?: bool = true}" }
   ];
 
@@ -456,10 +458,11 @@
       "  | thisComp.layer(\"CTRL\").effect(\"Speed\")(1)",
       "- comfy_generate renders with a LOCAL ComfyUI instance and imports",
       "  the result into the project (result data lists imported item",
-      "  names). Check comfy_status first; pick a template via",
-      "  comfy_list_workflows. Match width/height to the target comp when",
-      "  it makes sense. Generation can take minutes — do not repeat a",
-      "  request that already succeeded.",
+      "  names). The hidden backend auto-starts when installed — just",
+      "  call comfy_generate; do not ask the user to launch anything.",
+      "  Pick a template via comfy_list_workflows. Match width/height to",
+      "  the target comp when it makes sense. Generation can take",
+      "  minutes — do not repeat a request that already succeeded.",
       "",
       "Available tools:"
     ];
@@ -542,6 +545,12 @@
         chosen = found;
       }
 
+      // Boot the hidden backend first if nothing answers at the URL —
+      // the user never has to start ComfyUI by hand.
+      global.Comfy.ensureRunning(s.comfyUrl, function (bootMsg) {
+        if (progressSink) progressSink(bootMsg);
+      }, function (bootErr) {
+      if (bootErr) { cb({ ok: false, error: bootErr.message }); return; }
       global.Comfy.generate({
         comfyUrl: s.comfyUrl,
         workflowFile: chosen.file,
@@ -580,6 +589,7 @@
               next(i + 1);
             });
         })(0);
+      });
       });
     }
   };
