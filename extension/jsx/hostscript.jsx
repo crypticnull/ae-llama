@@ -606,7 +606,9 @@ AELL_TOOLS.add_text_layer = function (args) {
   if (typeof args.text !== "string" || args.text === "") {
     return AELL_err("'text' is required");
   }
-  var layer = comp.layers.addText(args.text);
+  var layer = AELL_keepSelection(comp, function () {
+    return comp.layers.addText(args.text);
+  });
   var style = AELL_applyTextStyle(layer, {
     fontSize: args.fontSize,
     font: args.font,
@@ -639,7 +641,9 @@ AELL_TOOLS.add_solid = function (args) {
     ? [args.color[0], args.color[1], args.color[2]] : [0.5, 0.5, 0.5];
   var w = args.width > 0 ? Math.round(args.width) : comp.width;
   var h = args.height > 0 ? Math.round(args.height) : comp.height;
-  var layer = comp.layers.addSolid(color, args.name, w, h, 1, comp.duration);
+  var layer = AELL_keepSelection(comp, function () {
+    return comp.layers.addSolid(color, args.name, w, h, 1, comp.duration);
+  });
   return AELL_okay({ index: layer.index, name: layer.name });
 };
 
@@ -826,9 +830,32 @@ var AELL_CONTROL_TYPES = {
   point:    { match: "ADBE Point Control",    dims: 2 }
 };
 
+/*
+ * Adding a layer selects it and deselects everything else — silently
+ * destroying the user's selection between two commands in a round. Run a
+ * creation fn, then restore the selection that existed before (the new
+ * layer ends up unselected).
+ */
+function AELL_keepSelection(comp, fn) {
+  var prev = [];
+  var i;
+  try {
+    var sel = comp.selectedLayers;
+    for (i = 0; i < sel.length; i++) prev.push(sel[i]);
+  } catch (e) {}
+  var out = fn();
+  try {
+    for (i = 1; i <= comp.numLayers; i++) comp.layer(i).selected = false;
+    for (i = 0; i < prev.length; i++) prev[i].selected = true;
+  } catch (e2) {}
+  return out;
+}
+
 AELL_TOOLS.add_null = function (args) {
   var comp = AELL_resolveComp(args.comp);
-  var layer = comp.layers.addNull(comp.duration);
+  var layer = AELL_keepSelection(comp, function () {
+    return comp.layers.addNull(comp.duration);
+  });
   if (args.name) layer.name = String(args.name);
   if (AELLJSON.isArray(args.position) && args.position.length >= 2) {
     layer.property("ADBE Transform Group").property("ADBE Position")
@@ -936,7 +963,9 @@ AELL_TOOLS.grid_layout = function (args) {
   var layers = [];
   var i;
 
-  // Explicit layer list wins; otherwise the user's live selection in AE.
+  // Explicit layer list wins; else the user's live selection; else ALL
+  // content layers in the comp ("arrange all layers in a grid") — nulls,
+  // cameras and lights are riggers, not grid content, so they're skipped.
   if (AELLJSON.isArray(args.layers) && args.layers.length > 0) {
     for (i = 0; i < args.layers.length; i++) {
       layers.push(AELL_resolveLayer(comp, args.layers[i]));
@@ -945,8 +974,21 @@ AELL_TOOLS.grid_layout = function (args) {
     var sel = comp.selectedLayers;
     for (i = 0; i < sel.length; i++) layers.push(sel[i]);
     if (layers.length === 0) {
-      return AELL_err("No layers selected in '" + comp.name + "'. Select " +
-                      "the layers in AE first, or pass {layers: [...]}.");
+      for (i = 1; i <= comp.numLayers; i++) {
+        var cand = comp.layer(i);
+        var isNull = false;
+        try { isNull = !!cand.nullLayer; } catch (eN) {}
+        if (isNull) continue;
+        if ((typeof CameraLayer === "function" &&
+             cand instanceof CameraLayer) ||
+            (typeof LightLayer === "function" &&
+             cand instanceof LightLayer)) continue;
+        layers.push(cand);
+      }
+      if (layers.length === 0) {
+        return AELL_err("No layers to grid in '" + comp.name + "' — the " +
+                        "comp has no content layers.");
+      }
     }
   }
 
@@ -973,7 +1015,9 @@ AELL_TOOLS.grid_layout = function (args) {
   var ctrl = null;
   try { ctrl = comp.layer(ctrlName); } catch (e) { ctrl = null; }
   if (!ctrl) {
-    ctrl = comp.layers.addNull(comp.duration);
+    ctrl = AELL_keepSelection(comp, function () {
+      return comp.layers.addNull(comp.duration);
+    });
     ctrl.name = ctrlName;
     ctrl.property("ADBE Transform Group").property("ADBE Position")
         .setValue([comp.width / 2, comp.height / 2]);
@@ -1687,7 +1731,9 @@ AELL_TOOLS.import_file = function (args) {
 
 AELL_TOOLS.add_shape_layer = function (args) {
   var comp = AELL_resolveComp(args.comp);
-  var layer = comp.layers.addShape();
+  var layer = AELL_keepSelection(comp, function () {
+    return comp.layers.addShape();
+  });
   if (args.name) layer.name = String(args.name);
   var group = layer.property("ADBE Root Vectors Group")
                    .addProperty("ADBE Vector Group");
@@ -1815,8 +1861,10 @@ AELL_TOOLS.precompose = function (args) {
 AELL_TOOLS.add_camera = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var center = [comp.width / 2, comp.height / 2];
-  var cam = comp.layers.addCamera(args.name ? String(args.name) : "Camera",
-                                  center);
+  var cam = AELL_keepSelection(comp, function () {
+    return comp.layers.addCamera(args.name ? String(args.name) : "Camera",
+                                 center);
+  });
   var xform = cam.property("ADBE Transform Group");
   if (AELLJSON.isArray(args.position) && args.position.length >= 3) {
     xform.property("ADBE Position").setValue(args.position);

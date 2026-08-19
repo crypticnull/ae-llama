@@ -77,6 +77,10 @@ function Comp(name, w, h) {
     addNull() {
       const l = new Layer("Null " + (self._layers.length + 1), self,
                           [w / 2, h / 2]);
+      l.nullLayer = true;   // AE marks nulls; the all-layers fallback skips them
+      // Real AE selects the new layer and deselects everything else.
+      self._layers.forEach(x => { x.selected = false; });
+      l.selected = true;
       self._layers.unshift(l);
       self._reindex();
       return l;
@@ -210,10 +214,26 @@ assert(r4.ok, "3D layer grid succeeds");
 assert(/value\[2\]/.test(l3d._transform["ADBE Position"].expression),
        "3D layer expression preserves z via value[2]");
 
-// 6. selection empty -> clear error
+// 6. selection empty -> "all layers" fallback grids every content layer
+// (nulls like the two control layers are excluded automatically)
 comp._layers.forEach(l => { l.selected = false; });
 const r5 = call("grid_layout", {});
-assert(!r5.ok && /No layers selected/.test(r5.error),
-       "empty selection returns actionable error");
+assert(r5.ok, "empty selection grids all content layers: " +
+       (r5.error || ""));
+assert(!r5.data.placed.some(p => /CTRL/.test(p.layer)),
+       "control nulls excluded from the all-layers grid");
+assert(r5.data.placed.length === 7,
+       "all 7 content layers gridded (5 tiles + Background + Cube), got " +
+       r5.data.placed.length);
+
+// 7. creating layers must not destroy the user's selection
+tiles.forEach(t => { t.selected = true; });
+const r6 = call("add_null", { name: "SEL TEST" });
+assert(r6.ok, "add_null succeeds");
+assert(comp.selectedLayers.length === 5 &&
+       comp.selectedLayers.every(l => /^Tile /.test(l.name)),
+       "selection preserved across add_null (got " +
+       comp.selectedLayers.map(l => l.name).join(", ") + ")");
+assert(!comp.layer("SEL TEST").selected, "the new null is not selected");
 
 console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");
