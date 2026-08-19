@@ -180,6 +180,25 @@
     { name: "add_mask", mutating: true,
       desc: "Add a mask to a layer. Coordinates are in LAYER space.",
       args: "{comp?: string, layer: name|index, shape?: 'rectangle'|'ellipse'|'custom', bounds?: [x,y,w,h], vertices?: [[x,y],...] (custom), mode?: 'add'|'subtract'|'intersect'|..., inverted?: bool, feather?: px, name?: string}" },
+    { name: "set_mask", mutating: true,
+      desc: "Edit an EXISTING mask: mode, feather, expansion, opacity, " +
+            "inverted, rename. Omit 'mask' when the layer has exactly one.",
+      args: "{comp?: string, layer?: name|index (omit = selected), mask?: name|1-based index, mode?: add|subtract|intersect|lighten|darken|difference|none, feather?: px|[x,y], expansion?: px, opacity?: %, inverted?: bool, name?: string}" },
+    { name: "set_mask_path", mutating: true,
+      desc: "Replace or ANIMATE a mask's path. Points are LAYER-space " +
+            "[[x,y],…]; curves via inTangents/outTangents (offsets from " +
+            "each vertex). atTime keyframes one shape; keys animates " +
+            "several in one call.",
+      args: "{comp?: string, layer?: name|index, mask?: name|index, vertices?: [[x,y],…], inTangents?: [[x,y],…], outTangents?: [[x,y],…], closed?: bool (default true), atTime?: s, keys?: [{time: s, vertices, inTangents?, outTangents?}, …]}" },
+    { name: "add_shape_content", mutating: true,
+      desc: "Add content INSIDE a shape layer: kinds group, rectangle, " +
+            "ellipse, star, polygon, path, fill, stroke, gradient_fill, " +
+            "gradient_stroke, repeater, trim_paths, merge_paths, " +
+            "offset_paths, rounded_corners, pucker_bloat, twist, zigzag. " +
+            "params sets the new item's values by name ({Size: [200,200], " +
+            "Color: [1,0,0], Copies: 5, End: 50}). Animate afterwards via " +
+            "set_keyframes on 'contents/…' paths.",
+      args: "{comp?: string, layer?: name|index (shape layer; omit = selected), kind: string, group?: name (add inside this group), name?: string, params?: {ParamName: value, …}}" },
     { name: "precompose", mutating: true,
       desc: "Move layers into a new nested comp (precompose).",
       args: "{comp?: string, layers: [name|index, ...], name: string, moveAttributes?: bool = true}" },
@@ -379,6 +398,20 @@
       "- set_track_matte mattes one layer with another (alpha/luma,",
       "  inverted variants, 'none' removes). set_layer_parent parents",
       "  (selection default, visual position preserved).",
+      "",
+      "Masks & shape content:",
+      "- add_mask creates a mask (rectangle/ellipse/custom points);",
+      "  set_mask edits mode/feather/expansion/opacity/inverted;",
+      "  set_mask_path moves or ANIMATES the points (atTime or keys).",
+      "  Mask points are LAYER space, not comp space.",
+      "- Build shape layers in steps: add_shape_layer once, then",
+      "  add_shape_content per item — a group, then shapes/fills/strokes/",
+      "  repeaters/trim_paths inside it via {group}. Set initial values",
+      "  with params; animate them with set_keyframes on",
+      "  'contents/<Group>/<Item>/<Param>' paths.",
+      "- 'animate the mask / wipe it on' = set_mask_path {keys: […]} or",
+      "  add trim_paths and keyframe its End — never hand-write",
+      "  expressions for plain keyframe animation.",
       "- Curve requests: 'stagger with an ease' = stagger_layers;",
       "  'ramp opacity/scale across these layers' = distribute_property;",
       "  'ease between the keyframes' = apply_keyframe_ease. All take the",

@@ -1842,6 +1842,303 @@ AELL_TOOLS.add_mask = function (args) {
   return AELL_okay({ layer: layer.name, mask: mask.name, shape: kind });
 };
 
+/*
+ * Resolve a mask by name or 1-based index. With one mask on the layer and
+ * no ref, that mask wins. Failures list the real masks — grounded.
+ */
+function AELL_findMask(layer, ref) {
+  var masks = layer.property("ADBE Mask Parade");
+  if (!masks) throw new Error("Layer '" + layer.name + "' cannot have masks");
+  var n = 0;
+  try { n = masks.numProperties || 0; } catch (e) {}
+  var i;
+  if (typeof ref === "number") {
+    var byIdx = null;
+    try { byIdx = masks.property(Math.round(ref)); } catch (e2) {}
+    if (byIdx) return byIdx;
+  } else if (ref !== null && typeof ref !== "undefined" && ref !== "") {
+    for (i = 1; i <= n; i++) {
+      var m = masks.property(i);
+      if (m && (m.name === String(ref))) return m;
+    }
+  } else if (n === 1) {
+    return masks.property(1);
+  }
+  var names = [];
+  for (i = 1; i <= n; i++) {
+    try { names.push(masks.property(i).name); } catch (e3) {}
+  }
+  throw new Error("Mask not found on '" + layer.name + "'" +
+    (ref ? ": " + ref : " (several masks — pass {mask: name|index})") +
+    ". Masks here: " + (names.join(", ") || "(none — add_mask creates one)"));
+}
+
+AELL_TOOLS.set_mask = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  var layer = AELL_layerOrSelection(comp, args.layer);
+  var mask;
+  try { mask = AELL_findMask(layer, args.mask); }
+  catch (e) { return AELL_err(e.message); }
+  var changed = [];
+  if (args.mode) {
+    var mode = AELL_maskMode(args.mode);
+    if (typeof mode === "undefined") {
+      return AELL_err("Unknown mask mode: " + args.mode +
+        " (use add/subtract/intersect/lighten/darken/difference/none)");
+    }
+    mask.maskMode = mode;
+    changed.push("mode=" + args.mode);
+  }
+  if (typeof args.inverted === "boolean") {
+    mask.inverted = args.inverted;
+    changed.push("inverted=" + args.inverted);
+  }
+  if (typeof args.feather === "number" || AELLJSON.isArray(args.feather)) {
+    var f = AELLJSON.isArray(args.feather)
+      ? [Number(args.feather[0]), Number(args.feather[1])]
+      : [Number(args.feather), Number(args.feather)];
+    mask.property("ADBE Mask Feather").setValue(f);
+    changed.push("feather=" + f.join("/"));
+  }
+  if (typeof args.expansion === "number") {
+    mask.property("ADBE Mask Offset").setValue(args.expansion);
+    changed.push("expansion=" + args.expansion);
+  }
+  if (typeof args.opacity === "number") {
+    mask.property("ADBE Mask Opacity").setValue(args.opacity);
+    changed.push("opacity=" + args.opacity);
+  }
+  if (args.name) {
+    mask.name = String(args.name);
+    changed.push("name=" + args.name);
+  }
+  if (changed.length === 0) {
+    return AELL_err("Nothing to change — pass mode, feather, expansion, " +
+                    "opacity, inverted and/or name");
+  }
+  return AELL_okay({ layer: layer.name, mask: mask.name,
+                     changed: changed.join(", ") });
+};
+
+AELL_TOOLS.set_mask_path = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  var layer = AELL_layerOrSelection(comp, args.layer);
+  var mask;
+  try { mask = AELL_findMask(layer, args.mask); }
+  catch (e) { return AELL_err(e.message); }
+  var pathProp = mask.property("ADBE Mask Shape");
+  function buildShape(spec, closedDefault) {
+    if (!AELLJSON.isArray(spec.vertices) || spec.vertices.length < 3) {
+      throw new Error("'vertices' ([[x,y],…] in LAYER space, >= 3 points) " +
+                      "is required");
+    }
+    var s = new Shape();
+    s.closed = typeof spec.closed === "boolean" ? spec.closed : closedDefault;
+    s.vertices = spec.vertices;
+    if (AELLJSON.isArray(spec.inTangents)) s.inTangents = spec.inTangents;
+    if (AELLJSON.isArray(spec.outTangents)) s.outTangents = spec.outTangents;
+    return s;
+  }
+  var closedDefault = args.closed !== false;
+  try {
+    if (AELLJSON.isArray(args.keys) && args.keys.length > 0) {
+      if (args.keys.length > 50) return AELL_err("'keys' capped at 50");
+      for (var i = 0; i < args.keys.length; i++) {
+        var k = args.keys[i] || {};
+        if (typeof k.time !== "number") {
+          return AELL_err("keys[" + i + "] needs {time (seconds), vertices}");
+        }
+        pathProp.setValueAtTime(k.time, buildShape(k, closedDefault));
+      }
+      return AELL_okay({ layer: layer.name, mask: mask.name,
+        keysSet: args.keys.length, numKeys: pathProp.numKeys,
+        note: "Mask path animated" });
+    }
+    var shape = buildShape(args, closedDefault);
+    if (typeof args.atTime === "number") {
+      pathProp.setValueAtTime(args.atTime, shape);
+      return AELL_okay({ layer: layer.name, mask: mask.name,
+        keyframed: true, time: args.atTime, numKeys: pathProp.numKeys });
+    }
+    pathProp.setValue(shape);
+    return AELL_okay({ layer: layer.name, mask: mask.name,
+                       points: args.vertices.length });
+  } catch (e2) {
+    return AELL_err(e2.message || String(e2));
+  }
+};
+
+// -------------------------------------------------- shape layer contents
+
+var AELL_SHAPE_KINDS = {
+  group:            "ADBE Vector Group",
+  rectangle:        "ADBE Vector Shape - Rect",
+  ellipse:          "ADBE Vector Shape - Ellipse",
+  star:             "ADBE Vector Shape - Star",
+  polygon:          "ADBE Vector Shape - Star",
+  path:             "ADBE Vector Shape - Group",
+  fill:             "ADBE Vector Graphic - Fill",
+  stroke:           "ADBE Vector Graphic - Stroke",
+  gradient_fill:    "ADBE Vector Graphic - G-Fill",
+  gradient_stroke:  "ADBE Vector Graphic - G-Stroke",
+  repeater:         "ADBE Vector Filter - Repeater",
+  trim_paths:       "ADBE Vector Filter - Trim",
+  merge_paths:      "ADBE Vector Filter - Merge",
+  offset_paths:     "ADBE Vector Filter - Offset",
+  rounded_corners:  "ADBE Vector Filter - RC",
+  pucker_bloat:     "ADBE Vector Filter - PB",
+  twist:            "ADBE Vector Filter - Twist",
+  zigzag:           "ADBE Vector Filter - Zigzag"
+};
+
+/* Find a shape group by name anywhere in the contents tree. */
+function AELL_findShapeGroup(node, name, depth) {
+  var n = 0;
+  try { n = node.numProperties || 0; } catch (e) { return null; }
+  for (var i = 1; i <= n; i++) {
+    var c = null;
+    try { c = node.property(i); } catch (e2) { continue; }
+    if (!c || c.matchName !== "ADBE Vector Group") continue;
+    if (c.name === name) return c;
+    if (depth > 1) {
+      var inner = c.property("ADBE Vectors Group");
+      var hit = inner ? AELL_findShapeGroup(inner, name, depth - 1) : null;
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
+function AELL_listShapeGroups(node, out, depth) {
+  var n = 0;
+  try { n = node.numProperties || 0; } catch (e) { return; }
+  for (var i = 1; i <= n; i++) {
+    var c = null;
+    try { c = node.property(i); } catch (e2) { continue; }
+    if (!c || c.matchName !== "ADBE Vector Group") continue;
+    out.push(c.name);
+    if (depth > 1) {
+      var inner = c.property("ADBE Vectors Group");
+      if (inner) AELL_listShapeGroups(inner, out, depth - 1);
+    }
+  }
+}
+
+/* Depth-limited search for a descendant LEAF property by name/matchName. */
+function AELL_findDescendantProp(node, name, depth) {
+  var n = 0;
+  try { n = node.numProperties || 0; } catch (e) { return null; }
+  var i, c;
+  for (i = 1; i <= n; i++) {
+    try { c = node.property(i); } catch (e2) { continue; }
+    if (c && (c.name === name || c.matchName === name) &&
+        AELL_isLeafProp(c)) return c;
+  }
+  if (depth > 1) {
+    for (i = 1; i <= n; i++) {
+      try { c = node.property(i); } catch (e3) { continue; }
+      if (c && !AELL_isLeafProp(c)) {
+        var hit = AELL_findDescendantProp(c, name, depth - 1);
+        if (hit) return hit;
+      }
+    }
+  }
+  return null;
+}
+
+function AELL_leafNames(node, out, depth) {
+  var n = 0;
+  try { n = node.numProperties || 0; } catch (e) { return; }
+  for (var i = 1; i <= n && out.length < 20; i++) {
+    var c = null;
+    try { c = node.property(i); } catch (e2) { continue; }
+    if (!c) continue;
+    if (AELL_isLeafProp(c)) out.push(c.name);
+    else if (depth > 1) AELL_leafNames(c, out, depth - 1);
+  }
+}
+
+AELL_TOOLS.add_shape_content = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  var layer = AELL_layerOrSelection(comp, args.layer);
+  var root = layer.property("ADBE Root Vectors Group");
+  if (!root) {
+    return AELL_err("Layer '" + layer.name + "' is not a SHAPE layer — " +
+                    "create one with add_shape_layer first");
+  }
+  var kindKey = String(args.kind || "");
+  var matchName = AELL_SHAPE_KINDS[kindKey] ||
+    (kindKey.indexOf("ADBE ") === 0 ? kindKey : null);
+  if (!matchName) {
+    var kinds = [];
+    for (var kk in AELL_SHAPE_KINDS) {
+      if (AELL_SHAPE_KINDS.hasOwnProperty(kk)) kinds.push(kk);
+    }
+    return AELL_err("Unknown kind '" + args.kind + "'. Kinds: " +
+                    kinds.join(", ") + " (or a raw ADBE match name)");
+  }
+  var container = root;
+  var into = "(layer root)";
+  if (args.group) {
+    var grp = AELL_findShapeGroup(root, String(args.group), 3);
+    if (!grp) {
+      var gnames = [];
+      AELL_listShapeGroups(root, gnames, 3);
+      return AELL_err("Group not found: " + args.group + ". Groups here: " +
+        (gnames.join(", ") || "(none — add one with kind: 'group')"));
+    }
+    container = grp.property("ADBE Vectors Group") || grp;
+    into = grp.name;
+  }
+  var can = true;
+  try {
+    if (typeof container.canAddProperty === "function") {
+      can = container.canAddProperty(matchName);
+    }
+  } catch (eC) {}
+  if (!can) {
+    return AELL_err("'" + kindKey + "' cannot be added into " + into);
+  }
+  var item;
+  try {
+    item = container.addProperty(matchName);
+  } catch (e) {
+    return AELL_err("AE refused to add '" + kindKey + "': " +
+                    (e.message || e));
+  }
+  if (args.name) item.name = String(args.name);
+  if (kindKey === "polygon") {
+    var typeProp = AELL_findDescendantProp(item, "ADBE Vector Star Type", 2);
+    if (typeProp) typeProp.setValue(2);
+  }
+  var applied = [];
+  if (args.params && typeof args.params === "object") {
+    for (var key in args.params) {
+      if (!args.params.hasOwnProperty(key)) continue;
+      var prop = AELL_findDescendantProp(item, key, 3);
+      if (!prop) {
+        var leaves = [];
+        AELL_leafNames(item, leaves, 3);
+        return AELL_err("Param '" + key + "' not found on the new " +
+          kindKey + " ('" + item.name + "' WAS added). Its params: " +
+          (leaves.join(", ") || "(none)"));
+      }
+      try {
+        prop.setValue(args.params[key]);
+      } catch (e2) {
+        return AELL_err("AE rejected param '" + key + "': " +
+                        (e2.message || e2));
+      }
+      applied.push(key);
+    }
+  }
+  return AELL_okay({ layer: layer.name, added: item.name,
+    matchName: matchName, container: into, params: applied.join(", "),
+    note: "Animatable via set_keyframes on 'contents/" +
+          (into === "(layer root)" ? "" : into + "/") + item.name +
+          "/<param>' paths" });
+};
+
 AELL_TOOLS.precompose = function (args) {
   var comp = AELL_resolveComp(args.comp);
   if (!args.name) return AELL_err("'name' is required");
@@ -2341,7 +2638,8 @@ var AELL_MUTATING = {
   stagger_layers: true, distribute_property: true, apply_keyframe_ease: true,
   scale_comp: true, reorder_layers: true,
   set_property: true, set_keyframes: true, remove_keyframes: true,
-  set_track_matte: true
+  set_track_matte: true,
+  set_mask: true, set_mask_path: true, add_shape_content: true
 };
 
 // --------------------------------------------------------------- entry point
