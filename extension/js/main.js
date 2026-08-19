@@ -19,6 +19,12 @@
     return String(p).replace(/[\\\/]+$/, "").split(/[\\\/]/).pop();
   }
 
+  /** Version as shown to the user: "0.5.4-alpha". Comparisons stay numeric. */
+  function displayVersion() {
+    return global.AELL.VERSION +
+      (global.AELL.CHANNEL ? "-" + global.AELL.CHANNEL : "");
+  }
+
   function appendMsg(kind, text, label) {
     var div = document.createElement("div");
     div.className = "msg " + kind;
@@ -504,7 +510,7 @@
         }
       } else if (verbose) {
         appendMsg("info", "You are on the latest version (" +
-          global.AELL.VERSION + ").");
+          displayVersion() + ").");
       }
     });
   }
@@ -721,7 +727,7 @@
     // Persistent data folders (survive extension updates) + seeding.
     try { global.Setup.ensureDataDirs(); } catch (e) {}
 
-    els.versionLine.textContent = "AE Llama " + global.AELL.VERSION +
+    els.versionLine.textContent = "AE Llama " + displayVersion() +
       " — data folder: " + global.Settings.dataRoot();
 
     // -- server status + logs
@@ -908,6 +914,13 @@
       this.innerHTML = open ? "Advanced &#9656;" : "Advanced &#9662;";
     });
 
+    // -- comfyui settings reveal
+    $("btn-comfy-toggle").addEventListener("click", function () {
+      var cfy = $("comfy-settings");
+      var open = cfy.classList.toggle("hidden");
+      this.innerHTML = open ? "ComfyUI &#9656;" : "ComfyUI &#9662;";
+    });
+
     // -- updates + model catalog + auto-bootstrap
     $("btn-progress-cancel").addEventListener("click", function () {
       if (currentCancel) {
@@ -933,7 +946,7 @@
     $("btn-update-engine").addEventListener("click", updateEngine);
 
     var env = global.AEBridge.getHostEnvironment();
-    appendMsg("info", "AE Llama " + global.AELL.VERSION + " ready" +
+    appendMsg("info", "AE Llama " + displayVersion() + " ready" +
       (env && env.appVersion ? " — After Effects " + env.appVersion : "") +
       ".");
 

@@ -8,7 +8,11 @@
   "use strict";
 
   global.AELL = {
-    VERSION: "0.5.3",
+    VERSION: "0.5.4",
+
+    // Release channel label, shown wherever the version is displayed.
+    // Purely cosmetic — update comparisons use the numeric VERSION only.
+    CHANNEL: "alpha",
 
     // Hosted JSON the panel polls for updates (see update.json in the repo
     // root for the format). Host it anywhere stable you control — your own

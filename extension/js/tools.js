@@ -82,9 +82,9 @@
       desc: "Distribute layer START TIMES along a cubic-bezier easing " +
             "curve: layer i (of n) starts at startAt + bezierY(i/(n-1)) * " +
             "spread. Uses the user's selected layers when 'layers' omitted. " +
-            "bezier is CSS-style [x1,y1,x2,y2] (linear = [0.25,0.25,0.75,0.75], " +
-            "ease-out = [0,0,0.58,1], ease-in = [0.42,0,1,1]).",
-      args: "{comp?: string, layers?: [name|index], bezier: [x1,y1,x2,y2], spread: seconds, startAt?: s, order?: 'in'|'stack'|'reverse'}" },
+            "Omit spread/startAt to fill the comp's WORK AREA; omit bezier " +
+            "for linear (ease-out = [0,0,0.58,1], ease-in = [0.42,0,1,1]).",
+      args: "{comp?: string, layers?: [name|index], bezier?: [x1,y1,x2,y2] (default linear), spread?: seconds (default: work area), startAt?: s, order?: 'in'|'stack'|'reverse'}" },
     { name: "distribute_property", mutating: true,
       desc: "Distribute a property VALUE across layers along a bezier " +
             "curve: layer i gets from + bezierY(i/(n-1)) * (to-from).",
@@ -134,14 +134,26 @@
             "OR chunkSeconds for a fixed piece length; the host does all " +
             "math. Omit 'layer' to use the user's selected layer. Chunks " +
             "NEVER overlap and play seamlessly end-to-end; offsetPerChunk " +
-            "only adds EXTRA spacing (gaps) of i*offset seconds.",
-      args: "{comp?: string, layer?: name|index (omit = selected layer), chunks?: exact piece count, chunkSeconds?: s, offsetPerChunk?: s (extra gaps only)}" },
+            "only adds EXTRA spacing (gaps) of i*offset seconds. Chunks " +
+            "stack top-to-bottom in order (chunk 1 on top) and end up " +
+            "SELECTED, so follow-up commands can target them by selection.",
+      args: "{comp?: string, layer?: name|index (omit = selected layer), chunks?: exact piece count, chunkSeconds?: s, offsetPerChunk?: s (extra gaps only), order?: 'ascending'|'descending' (stack order, default ascending)}" },
     { name: "delete_layer", mutating: true,
       desc: "Delete a layer from a comp.",
       args: "{comp?: string, layer: name|index}" },
     { name: "set_comp_setting", mutating: true,
-      desc: "Change a comp setting.",
+      desc: "Change a comp setting (duration, frame rate, bg color). Its " +
+            "width/height change ONLY the canvas and leave layers stuck at " +
+            "the top-left — to resize a comp, use scale_comp instead.",
       args: "{comp?: string, duration?: s, frameRate?: number, width?: int, height?: int, bgColor?: [r,g,b] 0..1}" },
+    { name: "scale_comp", mutating: true,
+      desc: "Resize a comp AND scale its content to match, re-centered — " +
+            "like the native 'Scale Composition' script. Uniform factor " +
+            "(no distortion): when the aspect changes, mode 'fit' " +
+            "letterboxes (default) and 'fill' crops. Parented layers " +
+            "follow their parents automatically. Use this for any 'make " +
+            "the comp WxH' / 'scale the comp' request.",
+      args: "{comp?: string, width?: px, height?: px (omit one to keep aspect), factor?: number (e.g. 0.5 = half), mode?: 'fit'|'fill'}" },
     { name: "import_file", mutating: true,
       desc: "Import a footage/image/video file into the project.",
       args: "{path: string (absolute)}" },
@@ -259,7 +271,18 @@
       "  layer's span itself; NEVER compute chunkSeconds from durations.",
       "  'split into X-second chunks' = {chunkSeconds: X}. Chunks never",
       "  overlap on their own — omit offsetPerChunk unless the user",
-      "  explicitly wants extra gaps between the pieces.",
+      "  explicitly wants extra gaps between the pieces. Chunks stack",
+      "  ascending (chunk 1 on top); order: 'descending' flips that.",
+      "- To RESIZE a comp ('make it 1920x1080', 'scale the comp down'),",
+      "  use scale_comp — it scales and re-centers the content like the",
+      "  native Scale Composition script. set_comp_setting width/height",
+      "  strands the layers at the old top-left; never use it to resize.",
+      "- ACT, DON'T ASK: tools have working defaults — omit 'layers' for",
+      "  the selection, omit spread/startAt to use the comp's work area,",
+      "  omit bezier for linear. NEVER tell the user to select layers or",
+      "  supply numbers first: split_layer_into_chunks leaves its chunks",
+      "  SELECTED, so a follow-up like 'stagger them' is just",
+      "  stagger_layers {} with no arguments.",
       "- Curve requests: 'stagger with an ease' = stagger_layers;",
       "  'ramp opacity/scale across these layers' = distribute_property;",
       "  'ease between the keyframes' = apply_keyframe_ease. All take the",

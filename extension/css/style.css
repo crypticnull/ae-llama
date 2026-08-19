@@ -30,6 +30,7 @@ html, body {
 }
 
 #status { display: flex; align-items: center; gap: 6px; min-width: 0; }
+#brand-icon { image-rendering: pixelated; flex: 0 0 auto; }
 #status-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .dot {
