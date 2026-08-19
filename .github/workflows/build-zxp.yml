@@ -118,9 +118,13 @@ jobs:
           }
           Get-ChildItem ../feedwt -Exclude .git | Remove-Item -Recurse -Force
           Copy-Item dist/*.zxp ../feedwt/
+          # Stable filename so the raw CDN path is always warm (new per-version
+          # paths can 404 for minutes after a push); the ?v= cache-buster in
+          # the URL forces a fresh fetch per version.
+          Copy-Item dist/*.zxp ../feedwt/AE-Llama.zxp
           $feed = Get-Content -Raw update.json | ConvertFrom-Json
           $feed.panelVersion = $ver
-          $feed.panelPackageUrl = "https://raw.githubusercontent.com/crypticnull/ae-llama-updates/main/AE-Llama-$ver.zxp"
+          $feed.panelPackageUrl = "https://raw.githubusercontent.com/crypticnull/ae-llama-updates/main/AE-Llama.zxp?v=$ver"
           $feed.notes = "AE Llama $ver"
           $feed | ConvertTo-Json -Depth 8 | Set-Content ../feedwt/update.json -Encoding UTF8
           Push-Location ../feedwt

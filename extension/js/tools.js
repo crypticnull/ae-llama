@@ -106,6 +106,17 @@
     { name: "set_layer_timing", mutating: true,
       desc: "Set layer inPoint/outPoint/startTime (seconds).",
       args: "{comp?: string, layer: name|index, inPoint?: s, outPoint?: s, startTime?: s}" },
+    { name: "duplicate_layer", mutating: true,
+      desc: "Duplicate a LAYER inside its comp (use duplicate_comp only " +
+            "for whole compositions).",
+      args: "{comp?: string, layer: name|index, name?: string}" },
+    { name: "split_layer_into_chunks", mutating: true,
+      desc: "Cut a layer into fixed-length chunks, each on its own layer " +
+            "trimmed to its own window — ONE call does the whole edit " +
+            "('cut into N-second pieces / stagger without overlap'). " +
+            "Chunks play seamlessly end-to-end; offsetPerChunk slides " +
+            "chunk i by i*offset seconds extra.",
+      args: "{comp?: string, layer: name|index, chunkSeconds: s, offsetPerChunk?: s}" },
     { name: "delete_layer", mutating: true,
       desc: "Delete a layer from a comp.",
       args: "{comp?: string, layer: name|index}" },
@@ -215,6 +226,12 @@
       "  the comp details. 'these layers' / 'the selected layers' means",
       "  those. grid_layout uses the selection automatically when 'layers'",
       "  is omitted.",
+      "- Omitting 'comp' targets the ACTIVE comp — creating or duplicating",
+      "  a comp does NOT make it active. After create_comp/duplicate_comp/",
+      "  precompose, always pass comp: \"<name>\" explicitly.",
+      "- To cut a layer into timed pieces ('split into chunks', 'stagger",
+      "  segments'), use split_layer_into_chunks — ONE call. Never emulate",
+      "  it with duplicate_comp or repeated retiming of the same layer.",
       "",
       "Project panel management:",
       "- create_folder / move_to_folder / rename_item / delete_item /",

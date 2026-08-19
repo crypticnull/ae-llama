@@ -1092,6 +1092,67 @@ AELL_TOOLS.set_effect_param = function (args) {
                      value: args.value });
 };
 
+AELL_TOOLS.duplicate_layer = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  var layer = AELL_resolveLayer(comp, args.layer);
+  var dup = layer.duplicate();
+  if (args.name) dup.name = String(args.name);
+  return AELL_okay({ index: dup.index, name: dup.name,
+                     duplicatedFrom: layer.name });
+};
+
+/*
+ * Cut a layer into fixed-length chunks, each on its own layer trimmed to
+ * its own time window — the "split into staggered pieces" edit, done with
+ * host-side math in a single call. Chunk i keeps the original startTime, so
+ * pieces play back seamlessly end-to-end without overlap; offsetPerChunk
+ * additionally slides chunk i by i*offset seconds for spaced staggering.
+ */
+AELL_TOOLS.split_layer_into_chunks = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  var layer = AELL_resolveLayer(comp, args.layer);
+  var chunk = args.chunkSeconds > 0 ? Number(args.chunkSeconds) : 5;
+  var inP = layer.inPoint;
+  var outP = layer.outPoint;
+  var span = outP - inP;
+  if (span <= chunk) {
+    return AELL_err("Layer '" + layer.name + "' is only " +
+      (Math.round(span * 100) / 100) + "s from inPoint to outPoint — " +
+      "nothing to split at " + chunk + "s chunks");
+  }
+  var n = Math.ceil(span / chunk - 0.000001);
+  if (n > 60) {
+    return AELL_err("Would create " + n + " chunks (cap 60) — use a " +
+                    "larger chunkSeconds");
+  }
+  var offset = typeof args.offsetPerChunk === "number"
+    ? args.offsetPerChunk : 0;
+
+  // Duplicate FIRST (each copy inherits the full span), then trim each
+  // copy to its own window. The original becomes chunk 1.
+  var pieces = [layer];
+  var i;
+  for (i = 1; i < n; i++) pieces.push(layer.duplicate());
+
+  var baseName = layer.name;
+  var made = [];
+  for (i = 0; i < n; i++) {
+    var s = inP + i * chunk;
+    var e = i === n - 1 ? outP : inP + (i + 1) * chunk;
+    var piece = pieces[i];
+    piece.inPoint = s;
+    piece.outPoint = e;
+    if (offset !== 0) piece.startTime = piece.startTime + offset * i;
+    piece.name = baseName + " chunk " + (i + 1);
+    made.push({ layer: piece.name, index: piece.index,
+                inPoint: s, outPoint: e });
+  }
+  return AELL_okay({ chunks: n, chunkSeconds: chunk, pieces: made,
+    note: offset === 0
+      ? "Chunks play seamlessly end-to-end on separate layers (no overlap)"
+      : "Each chunk additionally slid by " + offset + "s per index" });
+};
+
 AELL_TOOLS.set_layer_timing = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var layer = AELL_resolveLayer(comp, args.layer);
@@ -1348,7 +1409,7 @@ var AELL_MUTATING = {
   center_anchor_point: true,
   create_folder: true, move_to_folder: true, rename_item: true,
   delete_item: true, duplicate_comp: true, organize_project: true,
-  grid_layout: true
+  grid_layout: true, duplicate_layer: true, split_layer_into_chunks: true
 };
 
 // --------------------------------------------------------------- entry point

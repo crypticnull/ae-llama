@@ -590,7 +590,15 @@
         status("Panel update: " + pct + "%");
       }
     }, function (err) {
-      if (err) { cb(err); return; }
+      if (err) {
+        if (/HTTP 404/.test(err.message)) {
+          err = new Error("Update package not reachable yet (HTTP 404) — " +
+            "the feed is likely still propagating. Try 'Update panel now' " +
+            "again in a couple of minutes.");
+        }
+        cb(err);
+        return;
+      }
       status("Installing into " + install.extensionReal + "…");
       // A .zxp is a zip; extracting over the live extension folder is fine
       // on Windows — CEP loads files at panel launch and holds no locks.
