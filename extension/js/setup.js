@@ -60,31 +60,73 @@
 
   /**
    * Detect NVIDIA capability via nvidia-smi (ships with the driver).
-   * cb({hasNvidia, cudaVersion: "12.8"|null, computeCap: 8.6|null})
+   * cb({hasNvidia, cudaVersion: "12.8"|null, computeCap: 8.6|null,
+   *     vramGB: 32|null})
    */
   function detectGpu(cb) {
     ensureNode();
     child_process.execFile("nvidia-smi", [], { timeout: 15000 },
       function (err, stdout) {
         if (err) {
-          cb({ hasNvidia: false, cudaVersion: null, computeCap: null });
+          cb({ hasNvidia: false, cudaVersion: null, computeCap: null,
+               vramGB: null });
           return;
         }
         var cuda = null;
         var m = String(stdout).match(/CUDA Version:\s*([\d.]+)/);
         if (m) cuda = m[1];
         child_process.execFile("nvidia-smi",
-          ["--query-gpu=compute_cap", "--format=csv,noheader"],
+          ["--query-gpu=compute_cap,memory.total",
+           "--format=csv,noheader,nounits"],
           { timeout: 15000 },
           function (err2, stdout2) {
             var cc = null;
+            var vramGB = null;
             if (!err2) {
-              var line = String(stdout2).split(/\r?\n/)[0].trim();
-              if (/^\d+(\.\d+)?$/.test(line)) cc = parseFloat(line);
+              var parts = String(stdout2).split(/\r?\n/)[0].split(",");
+              if (parts[0] && /^\d+(\.\d+)?$/.test(parts[0].trim())) {
+                cc = parseFloat(parts[0].trim());
+              }
+              if (parts[1] && /^\d+$/.test(parts[1].trim())) {
+                vramGB = Math.round(parseInt(parts[1].trim(), 10) / 1024);
+              }
             }
-            cb({ hasNvidia: true, cudaVersion: cuda, computeCap: cc });
+            cb({ hasNvidia: true, cudaVersion: cuda, computeCap: cc,
+                 vramGB: vramGB });
           });
       });
+  }
+
+  /**
+   * Pick the best catalog model for this machine: the largest entry whose
+   * VRAM floor the GPU clears; the cpuDefault entry when there's no NVIDIA
+   * GPU (or VRAM is unknown); the smallest entry as a last resort.
+   */
+  function recommendModel(catalog, gpu) {
+    if (!catalog || catalog.length === 0) return null;
+    var best = null;
+    var i;
+    function smallest() {
+      var s = catalog[0];
+      for (var j = 1; j < catalog.length; j++) {
+        if (catalog[j].sizeMB < s.sizeMB) s = catalog[j];
+      }
+      return s;
+    }
+    var vram = gpu && typeof gpu.vramGB === "number" ? gpu.vramGB : null;
+    if (gpu && gpu.hasNvidia && vram) {
+      for (i = 0; i < catalog.length; i++) {
+        if (vram >= catalog[i].minVramGB &&
+            (!best || catalog[i].sizeMB > best.sizeMB)) {
+          best = catalog[i];
+        }
+      }
+      return best || smallest();   // tiny GPU: lightest model, not CPU pick
+    }
+    for (i = 0; i < catalog.length; i++) {
+      if (catalog[i].cpuDefault) best = catalog[i];
+    }
+    return best || smallest();
   }
 
   // --------------------------------------------------------------- http(s)
@@ -300,7 +342,8 @@
     detectGpu(function (gpu) {
       status(gpu.hasNvidia
         ? "NVIDIA GPU found (driver CUDA " + (gpu.cudaVersion || "?") +
-          (gpu.computeCap !== null ? ", compute " + gpu.computeCap : "") + ")"
+          (gpu.computeCap !== null ? ", compute " + gpu.computeCap : "") +
+          (gpu.vramGB ? ", " + gpu.vramGB + " GB VRAM" : "") + ")"
         : "No NVIDIA GPU detected — using the CPU build");
 
       var tag = opts.tag || "latest";
@@ -376,13 +419,20 @@
 
   // -------------------------------------------------------- starter model
 
-  function downloadStarterModel(manifest, onStatus, cb) {
+  /** The live model catalog: hosted override, else the built-in list. */
+  function modelCatalog(manifest) {
+    if (manifest && manifest.modelCatalog instanceof Array &&
+        manifest.modelCatalog.length > 0) {
+      return manifest.modelCatalog;
+    }
+    return global.AELL.MODEL_CATALOG;
+  }
+
+  function downloadModel(model, onStatus, cb) {
     ensureNode();
     ensureDataDirs();
-    var model = (manifest && manifest.starterModel) ||
-                global.AELL.FALLBACK_STARTER_MODEL;
-    if (!model || !model.url) {
-      cb(new Error("No starter model configured"));
+    if (!model || !model.url || !model.name) {
+      cb(new Error("No model configured"));
       return;
     }
     var dest = path.join(global.Settings.dataRoot(), "models", model.name);
@@ -530,7 +580,9 @@
     ensureDataDirs: ensureDataDirs,
     detectGpu: detectGpu,
     bootstrapEngine: bootstrapEngine,
-    downloadStarterModel: downloadStarterModel,
+    downloadModel: downloadModel,
+    modelCatalog: modelCatalog,
+    recommendModel: recommendModel,
     checkForUpdates: checkForUpdates,
     detectInstallKind: detectInstallKind,
     installUpdate: installUpdate,

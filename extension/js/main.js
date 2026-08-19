@@ -456,20 +456,53 @@
     });
   }
 
-  function downloadStarterModel() {
+  var gpuInfo = null;
+
+  /** Fill both catalog pickers, best fit for the detected GPU preselected. */
+  function populateModelCatalog() {
+    var catalog = global.Setup.modelCatalog(updateManifest);
+    var rec = global.Setup.recommendModel(catalog, gpuInfo);
+    var selects = [els.starterSelect, els.setModelSelect];
+    for (var s = 0; s < selects.length; s++) {
+      var sel = selects[s];
+      if (!sel) continue;
+      sel.innerHTML = "";
+      for (var i = 0; i < catalog.length; i++) {
+        var m = catalog[i];
+        var fits = gpuInfo && gpuInfo.vramGB
+          ? gpuInfo.vramGB >= m.minVramGB
+          : !!m.cpuDefault;
+        var label = m.label + " · " + (m.sizeMB / 1000).toFixed(1) + " GB";
+        if (!fits) label += " — needs " + m.minVramGB + "+ GB VRAM";
+        if (rec && m.name === rec.name) label += "  ✓ recommended";
+        var o = document.createElement("option");
+        o.value = m.name;
+        o.textContent = label;
+        sel.appendChild(o);
+      }
+      if (rec) sel.value = rec.name;
+    }
+  }
+
+  function downloadCatalogModel(selectEl) {
+    var catalog = global.Setup.modelCatalog(updateManifest);
+    var chosen = null;
+    for (var i = 0; i < catalog.length; i++) {
+      if (catalog[i].name === selectEl.value) { chosen = catalog[i]; break; }
+    }
+    if (!chosen) { appendMsg("error", "Pick a model first."); return; }
     els.getModelBtn.disabled = true;
-    global.Setup.downloadStarterModel(updateManifest, setupStatus,
-      function (err, dest) {
-        setupLine = null;
-        els.getModelBtn.disabled = false;
-        if (err) {
-          appendMsg("error", "Model download failed: " + err.message);
-          return;
-        }
-        appendMsg("info", "Model downloaded.");
-        global.Settings.set({ modelPath: dest });
-        populateModelDropdown();
-      });
+    global.Setup.downloadModel(chosen, setupStatus, function (err, dest) {
+      setupLine = null;
+      els.getModelBtn.disabled = false;
+      if (err) {
+        appendMsg("error", "Model download failed: " + err.message);
+        return;
+      }
+      appendMsg("info", chosen.label + " downloaded.");
+      global.Settings.set({ modelPath: dest });
+      populateModelDropdown();
+    });
   }
 
   // -------------------------------------------------------------- settings
@@ -546,6 +579,8 @@
       setComfyTimeout: $("set-comfy-timeout"),
       setAutoUpdate: $("set-auto-update"),
       starterRow: $("starter-row"),
+      starterSelect: $("starter-select"),
+      setModelSelect: $("set-model-select"),
       getModelBtn: $("btn-get-model"),
       versionLine: $("version-line")
     };
@@ -735,8 +770,18 @@
       try { global.Llama.stop(); } catch (e) {}
     });
 
-    // -- updates + starter model + auto-bootstrap
-    els.getModelBtn.addEventListener("click", downloadStarterModel);
+    // -- updates + model catalog + auto-bootstrap
+    els.getModelBtn.addEventListener("click", function () {
+      downloadCatalogModel(els.starterSelect);
+    });
+    $("btn-get-model-settings").addEventListener("click", function () {
+      downloadCatalogModel(els.setModelSelect);
+    });
+    populateModelCatalog();                       // sensible list immediately
+    global.Setup.detectGpu(function (g) {         // then VRAM-aware refresh
+      gpuInfo = g;
+      populateModelCatalog();
+    });
     $("btn-check-updates").addEventListener("click", function () {
       checkForUpdates(true);
     });

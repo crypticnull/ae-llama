@@ -28,7 +28,8 @@
     </section>
 
     <section id="starter-row" class="hidden">
-      <button id="btn-get-model" class="primary">Download starter model (~4.7 GB)</button>
+      <select id="starter-select" title="Curated models sized to your GPU"></select>
+      <button id="btn-get-model" class="primary">Download</button>
     </section>
 
     <section id="settings-drawer" class="drawer hidden">
@@ -108,6 +109,14 @@
         <button id="btn-comfy-launch">Launch ComfyUI</button>
         <button id="btn-comfy-test">Test connection</button>
         <button id="btn-settings-close">Close</button>
+      </div>
+
+      <h3>Models</h3>
+      <p class="fineprint">Curated GGUF models sized to your GPU; the best
+        fit for your VRAM is preselected. Downloads go to the models folder.</p>
+      <div class="pathfield">
+        <select id="set-model-select"></select>
+        <button id="btn-get-model-settings">Download</button>
       </div>
 
       <h3>Updates</h3>

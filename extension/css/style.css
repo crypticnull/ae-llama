@@ -66,7 +66,10 @@ html, body {
   display: flex;
 }
 #starter-row.hidden { display: none; }
-#starter-row button { flex: 1 1 auto; }
+#starter-row { gap: 4px; }
+#starter-row select { flex: 1 1 auto; min-width: 0; }
+#starter-row button { flex: 0 0 auto; }
+.pathfield select { flex: 1 1 auto; min-width: 0; }
 
 .fineprint { color: #888; font-size: 11px; margin-bottom: 6px; }
 
