@@ -581,20 +581,45 @@
     }
     var tmp = path.join(global.Settings.dataRoot(), "panel-update.zip");
     status("Downloading panel update…");
-    var lastPct = -10;
-    downloadToFile(url, tmp, function (rec, total) {
-      if (!total) return;
-      var pct = Math.floor((rec / total) * 100);
-      if (pct >= lastPct + 10) {
-        lastPct = pct;
-        status("Panel update: " + pct + "%");
-      }
-    }, function (err) {
+
+    // Freshly published files can 404 for a few minutes while GitHub's raw
+    // CDN propagates — and that 404 gets negatively cached per exact URL.
+    // A per-attempt cache-buster makes every retry a brand-new cache entry,
+    // and we retry on our own so propagation lag self-heals.
+    var attempt = 0;
+    var MAX_ATTEMPTS = 4;
+    var RETRY_MS = 45000;
+
+    function tryDownload() {
+      attempt++;
+      var sep = url.indexOf("?") === -1 ? "?" : "&";
+      var freshUrl = url + sep + "r=" + new Date().getTime();
+      var lastPct = -10;
+      downloadToFile(freshUrl, tmp, function (rec, total) {
+        if (!total) return;
+        var pct = Math.floor((rec / total) * 100);
+        if (pct >= lastPct + 10) {
+          lastPct = pct;
+          status("Panel update: " + pct + "%");
+        }
+      }, function (err) {
+        if (err && /HTTP 404/.test(err.message) && attempt < MAX_ATTEMPTS) {
+          status("Update file still propagating (404) — retrying in " +
+                 Math.round(RETRY_MS / 1000) + "s (attempt " + attempt +
+                 "/" + (MAX_ATTEMPTS - 1) + ")…");
+          global.setTimeout(tryDownload, RETRY_MS);
+          return;
+        }
+        afterDownload(err);
+      });
+    }
+
+    function afterDownload(err) {
       if (err) {
         if (/HTTP 404/.test(err.message)) {
-          err = new Error("Update package not reachable yet (HTTP 404) — " +
-            "the feed is likely still propagating. Try 'Update panel now' " +
-            "again in a couple of minutes.");
+          err = new Error("Update package not reachable after " +
+            MAX_ATTEMPTS + " attempts (HTTP 404) — the feed may not have " +
+            "published yet. It will retry on the next panel launch.");
         }
         cb(err);
         return;
@@ -607,15 +632,21 @@
         if (xerr) { cb(xerr); return; }
         cb(null, { kind: "package", changed: true });
       });
-    });
+    }
+
+    tryDownload();
   }
 
   /**
    * Fetch the hosted update manifest. cb(err, {manifest, panelUpdate})
    * where panelUpdate is set when a newer panel version is published.
+   * The cache-buster keeps the CDN from serving a stale manifest.
    */
   function checkForUpdates(cb) {
-    fetchJson(global.AELL.UPDATE_MANIFEST_URL, 15000,
+    var mUrl = global.AELL.UPDATE_MANIFEST_URL;
+    mUrl += (mUrl.indexOf("?") === -1 ? "?" : "&") +
+            "r=" + new Date().getTime();
+    fetchJson(mUrl, 15000,
       function (err, manifest) {
         if (err || !manifest) { cb(err || new Error("No manifest")); return; }
         var panelUpdate = null;
