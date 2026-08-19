@@ -65,7 +65,9 @@
       // panelPackageUrl download for package installs). Store builds
       // without a panelPackageUrl are unaffected — they only show the
       // banner. Opt out in settings.
-      autoInstallUpdates: true
+      autoInstallUpdates: true,
+      // Visualizer curve (CSS cubic-bezier handles), persisted across runs.
+      vizBezier: [0.25, 0.25, 0.75, 0.75]
     };
   }
 

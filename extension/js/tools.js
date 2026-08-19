@@ -78,6 +78,22 @@
             "expression itself with correct syntax (dimension-aware; " +
             "optional value = control*scale + offset).",
       args: "{comp?: string, layer: name|index, property: transform name or 'effect.<Effect>.<Param>', controlLayer: name|index, controlEffect: string (control name), scale?: number, offset?: number}" },
+    { name: "stagger_layers", mutating: true,
+      desc: "Distribute layer START TIMES along a cubic-bezier easing " +
+            "curve: layer i (of n) starts at startAt + bezierY(i/(n-1)) * " +
+            "spread. Uses the user's selected layers when 'layers' omitted. " +
+            "bezier is CSS-style [x1,y1,x2,y2] (linear = [0.25,0.25,0.75,0.75], " +
+            "ease-out = [0,0,0.58,1], ease-in = [0.42,0,1,1]).",
+      args: "{comp?: string, layers?: [name|index], bezier: [x1,y1,x2,y2], spread: seconds, startAt?: s, order?: 'in'|'stack'|'reverse'}" },
+    { name: "distribute_property", mutating: true,
+      desc: "Distribute a property VALUE across layers along a bezier " +
+            "curve: layer i gets from + bezierY(i/(n-1)) * (to-from).",
+      args: "{comp?: string, layers?: [name|index], bezier: [x1,y1,x2,y2], property: 'opacity'|'rotation'|'scale'|'position_x'|'position_y', from: number, to: number, order?: 'in'|'stack'|'reverse'}" },
+    { name: "apply_keyframe_ease", mutating: true,
+      desc: "Apply a bezier as TEMPORAL easing between keyframes on one " +
+            "property (converts to AE speed/influence ease). keyIndex " +
+            "eases pair k..k+1; omit for all pairs.",
+      args: "{comp?: string, layer: name|index, property: transform name or 'effect.<Effect>.<Param>', bezier: [x1,y1,x2,y2], keyIndex?: int, allPairs?: bool}" },
     { name: "grid_layout", mutating: true,
       desc: "Arrange layers into a grid rigged to a control null: the " +
             "grid centers on the null's position and its 'Grid X Spacing'/" +
@@ -232,6 +248,10 @@
       "- To cut a layer into timed pieces ('split into chunks', 'stagger",
       "  segments'), use split_layer_into_chunks — ONE call. Never emulate",
       "  it with duplicate_comp or repeated retiming of the same layer.",
+      "- Curve requests: 'stagger with an ease' = stagger_layers;",
+      "  'ramp opacity/scale across these layers' = distribute_property;",
+      "  'ease between the keyframes' = apply_keyframe_ease. All take the",
+      "  same CSS-style bezier [x1,y1,x2,y2].",
       "",
       "Project panel management:",
       "- create_folder / move_to_folder / rename_item / delete_item /",

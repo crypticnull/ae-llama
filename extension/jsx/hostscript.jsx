@@ -1153,6 +1153,215 @@ AELL_TOOLS.split_layer_into_chunks = function (args) {
       : "Each chunk additionally slid by " + offset + "s per index" });
 };
 
+// ---------------------------------------------------------- curve tools
+
+/*
+ * Y value of a CSS-style cubic bezier (0,0)-(x1,y1)-(x2,y2)-(1,1) at
+ * horizontal position x, via bisection on the curve parameter (x1/x2 are
+ * clamped to [0,1] by the callers' UI, so X(u) is monotonic).
+ */
+function AELL_bezierY(x1, y1, x2, y2, x) {
+  if (x <= 0) return 0;
+  if (x >= 1) return 1;
+  function X(u) {
+    var v = 1 - u;
+    return 3 * v * v * u * x1 + 3 * v * u * u * x2 + u * u * u;
+  }
+  var lo = 0;
+  var hi = 1;
+  var u = x;
+  for (var i = 0; i < 40; i++) {
+    var cx = X(u);
+    if (Math.abs(cx - x) < 0.00001) break;
+    if (cx < x) lo = u; else hi = u;
+    u = (lo + hi) / 2;
+  }
+  var w = 1 - u;
+  return 3 * w * w * u * y1 + 3 * w * u * u * y2 + u * u * u;
+}
+
+function AELL_bezierArgs(args) {
+  var b = args.bezier;
+  if (!AELLJSON.isArray(b) || b.length < 4) {
+    throw new Error("'bezier' must be [x1, y1, x2, y2] (CSS cubic-bezier)");
+  }
+  return [Math.max(0, Math.min(1, Number(b[0]))), Number(b[1]),
+          Math.max(0, Math.min(1, Number(b[2]))), Number(b[3])];
+}
+
+/* Resolve target layers: explicit list, else the user's selection. */
+function AELL_targetLayers(comp, args) {
+  var layers = [];
+  var i;
+  if (AELLJSON.isArray(args.layers) && args.layers.length > 0) {
+    for (i = 0; i < args.layers.length; i++) {
+      layers.push(AELL_resolveLayer(comp, args.layers[i]));
+    }
+  } else {
+    var sel = comp.selectedLayers;
+    for (i = 0; i < sel.length; i++) layers.push(sel[i]);
+  }
+  if (layers.length < 2) {
+    throw new Error("Need at least 2 layers (got " + layers.length +
+                    ") — select them in AE or pass {layers: [...]}");
+  }
+  var order = String(args.order || "in");
+  if (order === "stack") {
+    layers.sort(function (a, b) { return a.index - b.index; });
+  } else if (order === "reverse") {
+    layers.sort(function (a, b) { return b.index - a.index; });
+  } else {   // "in": by current inPoint — natural for chunked sequences
+    layers.sort(function (a, b) { return a.inPoint - b.inPoint; });
+  }
+  return layers;
+}
+
+AELL_TOOLS.stagger_layers = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  var bez = AELL_bezierArgs(args);
+  var layers = AELL_targetLayers(comp, args);
+  var spread = args.spread > 0 ? Number(args.spread) : null;
+  if (spread === null) return AELL_err("'spread' (seconds) is required");
+  var base;
+  if (typeof args.startAt === "number") {
+    base = args.startAt;
+  } else {
+    base = layers[0].startTime;
+    for (var j = 1; j < layers.length; j++) {
+      if (layers[j].startTime < base) base = layers[j].startTime;
+    }
+  }
+  var n = layers.length;
+  var placed = [];
+  for (var i = 0; i < n; i++) {
+    var t = i / (n - 1);
+    var y = AELL_bezierY(bez[0], bez[1], bez[2], bez[3], t);
+    layers[i].startTime = base + y * spread;
+    placed.push({ layer: layers[i].name,
+                  startTime: Math.round(layers[i].startTime * 1000) / 1000 });
+  }
+  return AELL_okay({ layers: n, spread: spread, startAt: base,
+                     bezier: bez, placed: placed });
+};
+
+var AELL_DIST_PROPS = {
+  opacity:    { path: "opacity",  kind: "scalar" },
+  rotation:   { path: "rotation", kind: "scalar" },
+  scale:      { path: "scale",    kind: "uniform" },   // [v, v]
+  position_x: { path: "position", kind: "component", axis: 0 },
+  position_y: { path: "position", kind: "component", axis: 1 }
+};
+
+AELL_TOOLS.distribute_property = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  var bez = AELL_bezierArgs(args);
+  var layers = AELL_targetLayers(comp, args);
+  var spec = AELL_DIST_PROPS[String(args.property || "")];
+  if (!spec) {
+    return AELL_err("'property' must be one of: opacity, rotation, scale, " +
+                    "position_x, position_y");
+  }
+  if (typeof args.from !== "number" || typeof args.to !== "number") {
+    return AELL_err("'from' and 'to' values are required (numbers; " +
+                    "scale/opacity in percent, position in pixels)");
+  }
+  var n = layers.length;
+  var applied = [];
+  for (var i = 0; i < n; i++) {
+    var y = AELL_bezierY(bez[0], bez[1], bez[2], bez[3], i / (n - 1));
+    var v = args.from + y * (args.to - args.from);
+    var prop = AELL_resolveProperty(layers[i], spec.path);
+    if (spec.kind === "scalar") {
+      prop.setValue(v);
+    } else if (spec.kind === "uniform") {
+      var cur = prop.value;
+      var arr = [v, v];
+      if (cur.length > 2) arr.push(cur[2]);
+      prop.setValue(arr);
+    } else {   // component
+      var pos = prop.value;
+      var out = [];
+      for (var d = 0; d < pos.length; d++) out.push(pos[d]);
+      out[spec.axis] = v;
+      prop.setValue(out);
+    }
+    applied.push({ layer: layers[i].name,
+                   value: Math.round(v * 100) / 100 });
+  }
+  return AELL_okay({ property: args.property, layers: n, applied: applied });
+};
+
+AELL_TOOLS.apply_keyframe_ease = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  var layer = AELL_resolveLayer(comp, args.layer);
+  var prop = AELL_resolveProperty(layer, args.property);
+  var bez = AELL_bezierArgs(args);
+  if (prop.numKeys < 2) {
+    return AELL_err("Property has " + prop.numKeys + " keyframe(s) — need " +
+                    "at least 2 to ease between");
+  }
+  var pairs = [];
+  if (args.allPairs || typeof args.keyIndex !== "number") {
+    for (var p = 1; p < prop.numKeys; p++) pairs.push(p);
+  } else {
+    if (args.keyIndex < 1 || args.keyIndex >= prop.numKeys + 0) {
+      return AELL_err("'keyIndex' must be 1.." + (prop.numKeys - 1));
+    }
+    pairs.push(Math.round(args.keyIndex));
+  }
+
+  // Temporal-ease dimensionality: spatial props take 1 ease, others one
+  // per value dimension.
+  var isSpatial = false;
+  try {
+    var mn = prop.matchName;
+    isSpatial = (mn === "ADBE Position" || mn === "ADBE Anchor Point");
+  } catch (e) {}
+  var sample = prop.value;
+  var dims = AELLJSON.isArray(sample) ? (isSpatial ? 1 : sample.length) : 1;
+
+  function clampInf(v) { return Math.max(0.1, Math.min(100, v)); }
+
+  for (var q = 0; q < pairs.length; q++) {
+    var k = pairs[q];
+    var t1 = prop.keyTime(k);
+    var t2 = prop.keyTime(k + 1);
+    var v1 = prop.keyValue(k);
+    var v2 = prop.keyValue(k + 1);
+    var dt = Math.max(0.0001, t2 - t1);
+
+    var outEase = [];
+    var inEase = [];
+    for (var d = 0; d < dims; d++) {
+      var a = AELLJSON.isArray(v1) ? v1[d] : v1;
+      var b = AELLJSON.isArray(v2) ? v2[d] : v2;
+      if (isSpatial) {
+        // spatial speed uses the full positional delta
+        var dd = 0;
+        for (var s = 0; s < v1.length; s++) {
+          dd += (v2[s] - v1[s]) * (v2[s] - v1[s]);
+        }
+        a = 0; b = Math.sqrt(dd);
+      }
+      var avg = Math.abs(b - a) / dt;
+      var outSpeed = bez[0] === 0 ? 0 : (bez[1] / bez[0]) * avg;
+      var inSpeed = bez[2] === 1 ? 0 : ((1 - bez[3]) / (1 - bez[2])) * avg;
+      outEase.push(new KeyframeEase(outSpeed, clampInf(bez[0] * 100)));
+      inEase.push(new KeyframeEase(inSpeed, clampInf((1 - bez[2]) * 100)));
+    }
+
+    prop.setInterpolationTypeAtKey(k, KeyframeInterpolationType.BEZIER,
+                                   KeyframeInterpolationType.BEZIER);
+    prop.setInterpolationTypeAtKey(k + 1, KeyframeInterpolationType.BEZIER,
+                                   KeyframeInterpolationType.BEZIER);
+    // Replace only the facing sides of the pair; keep the far sides.
+    prop.setTemporalEaseAtKey(k, prop.keyInTemporalEase(k), outEase);
+    prop.setTemporalEaseAtKey(k + 1, inEase, prop.keyOutTemporalEase(k + 1));
+  }
+  return AELL_okay({ layer: layer.name, property: args.property,
+                     easedPairs: pairs.length, bezier: bez });
+};
+
 AELL_TOOLS.set_layer_timing = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var layer = AELL_resolveLayer(comp, args.layer);
@@ -1409,7 +1618,8 @@ var AELL_MUTATING = {
   center_anchor_point: true,
   create_folder: true, move_to_folder: true, rename_item: true,
   delete_item: true, duplicate_comp: true, organize_project: true,
-  grid_layout: true, duplicate_layer: true, split_layer_into_chunks: true
+  grid_layout: true, duplicate_layer: true, split_layer_into_chunks: true,
+  stagger_layers: true, distribute_property: true, apply_keyframe_ease: true
 };
 
 // --------------------------------------------------------------- entry point

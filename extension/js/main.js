@@ -750,6 +750,18 @@
       }
     });
 
+    // -- visualizer pane
+    global.Viz.init({
+      $: $,
+      appendMsg: appendMsg,
+      callHostTool: global.Tools.callHostTool
+    });
+    $("btn-visualizer").addEventListener("click", function () {
+      var v = $("visualizer");
+      var nowHidden = v.classList.toggle("hidden");
+      if (!nowHidden) global.Viz.onShow();
+    });
+
     // -- drawers
     els.settingsBtn.addEventListener("click", function () {
       settingsToForm();
