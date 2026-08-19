@@ -128,13 +128,14 @@
             "selected layer.",
       args: "{comp?: string, layer?: name|index (omit = selected layer), name?: string}" },
     { name: "split_layer_into_chunks", mutating: true,
-      desc: "Cut a layer into fixed-length chunks, each on its own layer " +
-            "trimmed to its own window — ONE call does the whole edit " +
-            "('cut into N-second pieces / stagger without overlap'). " +
-            "Omit 'layer' to use the user's selected layer. Chunks play " +
-            "seamlessly end-to-end; offsetPerChunk slides chunk i by " +
-            "i*offset seconds extra.",
-      args: "{comp?: string, layer?: name|index (omit = selected layer), chunkSeconds: s, offsetPerChunk?: s}" },
+      desc: "Cut a layer into chunks, each on its own layer trimmed to " +
+            "its own window — ONE call does the whole edit. Pass chunks " +
+            "for an exact piece count ('5 equal chunks' = {chunks: 5}) " +
+            "OR chunkSeconds for a fixed piece length; the host does all " +
+            "math. Omit 'layer' to use the user's selected layer. Chunks " +
+            "NEVER overlap and play seamlessly end-to-end; offsetPerChunk " +
+            "only adds EXTRA spacing (gaps) of i*offset seconds.",
+      args: "{comp?: string, layer?: name|index (omit = selected layer), chunks?: exact piece count, chunkSeconds?: s, offsetPerChunk?: s (extra gaps only)}" },
     { name: "delete_layer", mutating: true,
       desc: "Delete a layer from a comp.",
       args: "{comp?: string, layer: name|index}" },
@@ -254,6 +255,11 @@
       "- To cut a layer into timed pieces ('split into chunks', 'stagger",
       "  segments'), use split_layer_into_chunks — ONE call. Never emulate",
       "  it with duplicate_comp or repeated retiming of the same layer.",
+      "  'split into N chunks/pieces' = {chunks: N} — the host divides the",
+      "  layer's span itself; NEVER compute chunkSeconds from durations.",
+      "  'split into X-second chunks' = {chunkSeconds: X}. Chunks never",
+      "  overlap on their own — omit offsetPerChunk unless the user",
+      "  explicitly wants extra gaps between the pieces.",
       "- Curve requests: 'stagger with an ease' = stagger_layers;",
       "  'ramp opacity/scale across these layers' = distribute_property;",
       "  'ease between the keyframes' = apply_keyframe_ease. All take the",
