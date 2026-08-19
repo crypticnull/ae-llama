@@ -156,8 +156,49 @@ comp._layers[0].selected = true;
 r = call("stagger_layers", { bezier: [0, 0, 1, 1], spread: 5 });
 assert(!r.ok && /at least 2 layers/.test(r.error),
        "single-layer selection refused with clear error");
+// no spread, no work area, no comp duration -> still a clear error
 r = call("stagger_layers", { bezier: [0, 0, 1, 1],
                              layers: ["L1", "L2"] });
-assert(!r.ok && /'spread'/.test(r.error), "missing spread refused");
+assert(!r.ok && /'spread'/.test(r.error),
+       "no spread and no work area -> clear error");
+
+// 7. omitted spread/startAt/bezier fill the comp's WORK AREA linearly
+comp.workAreaStart = 2;
+comp.workAreaDuration = 10;
+r = call("stagger_layers", { layers: ["L1", "L2"] });
+assert(r.ok && near(r.data.spread, 10) && near(r.data.startAt, 2),
+       "bare stagger fills the work area (spread=" +
+       (r.ok ? r.data.spread : r.error) + ", startAt=" +
+       (r.ok ? r.data.startAt : "-") + ")");
+assert(near(comp.layer("L1").startTime, 2) &&
+       near(comp.layer("L2").startTime, 12),
+       "layers span work area 2..12 with the default linear curve");
+
+// 8. scale_comp: resize + uniform content scale, re-centered (the field
+// case: 3840x2860 -> 1920x1080)
+comp.width = 3840; comp.height = 2860;
+const lay = comp.layer("L1");
+lay._transform["ADBE Position"].setValue([1920, 1430]); // old dead center
+lay._transform["ADBE Scale"].setValue([100, 100]);
+r = call("scale_comp", { width: 1920, height: 1080 });
+const sFit = Math.min(1920 / 3840, 1080 / 2860);
+assert(r.ok && near(r.data.scaleFactor, sFit, 1e-3),
+       "fit mode picks the min ratio (" + sFit.toFixed(4) + "): " +
+       (r.error || ""));
+assert(comp.width === 1920 && comp.height === 1080, "comp canvas resized");
+const pC = lay._transform["ADBE Position"].value;
+assert(near(pC[0], 960) && near(pC[1], 540),
+       "old comp center maps to new comp center (got " +
+       pC.map(v => v.toFixed(1)) + ")");
+const scC = lay._transform["ADBE Scale"].value;
+assert(near(scC[0], 100 * sFit, 0.1) && near(scC[1], 100 * sFit, 0.1),
+       "layer scale multiplied by the factor");
+
+// fill mode crops instead of letterboxing
+comp.width = 3840; comp.height = 2860;
+lay._transform["ADBE Position"].setValue([1920, 1430]);
+r = call("scale_comp", { width: 1920, height: 1080, mode: "fill" });
+assert(r.ok && near(r.data.scaleFactor, 0.5, 1e-3),
+       "fill mode picks the max ratio (0.5)");
 
 console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");

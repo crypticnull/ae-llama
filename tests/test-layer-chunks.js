@@ -21,6 +21,16 @@ Object.defineProperty(Layer.prototype, "index", {
   get() { return this.comp._layers.indexOf(this) + 1; }
 });
 Layer.prototype.property = function () { return null; };
+Layer.prototype.moveAfter = function (other) {
+  const arr = this.comp._layers;
+  arr.splice(arr.indexOf(this), 1);
+  arr.splice(arr.indexOf(other) + 1, 0, this);
+};
+Layer.prototype.moveBefore = function (other) {
+  const arr = this.comp._layers;
+  arr.splice(arr.indexOf(this), 1);
+  arr.splice(arr.indexOf(other), 0, this);
+};
 
 function Comp(name, dur) {
   this.name = name; this.duration = dur; this.time = 0;
@@ -194,6 +204,12 @@ assert(equal5, "all 5 pieces are exactly span/5 long");
 assert(Math.abs(w5[0][0]) < 1e-9 &&
        Math.abs(w5[4][1] - 35.9359359359359) < 1e-9,
        "5 equal pieces cover the full span");
+assert(comp5._layers.map(l => l.name).join("|") ===
+       "seq chunk 1|seq chunk 2|seq chunk 3|seq chunk 4|seq chunk 5",
+       "chunks stack ascending — chunk 1 on top (got " +
+       comp5._layers.map(l => l.name).join("|") + ")");
+assert(comp5._layers.every(l => l.selected),
+       "chunks are left selected for follow-up commands");
 
 // chunk-count guards
 const rBad = call("split_layer_into_chunks", { layer: 1, chunks: 100 });
@@ -216,5 +232,18 @@ assert(r11.ok && r11.data.chunks === 36 && r11.data.pieces.length === 3 &&
 assert(JSON.stringify(r11.data).length < 600,
        "large split result stays compact (" +
        JSON.stringify(r11.data).length + " chars)");
+
+// stack order flips on request
+const comp7 = new Comp("Desc", 9);
+Object.setPrototypeOf(comp7, Object.create(CompItem.prototype,
+  Object.getOwnPropertyDescriptors(Comp.prototype)));
+comp7._layers.push(new Layer("d", comp7, 0, 9, 0));
+project.activeItem = comp7;
+const r12 = call("split_layer_into_chunks",
+                 { layer: "d", chunks: 3, order: "descending" });
+assert(r12.ok && comp7._layers.map(l => l.name).join("|") ===
+       "d chunk 3|d chunk 2|d chunk 1",
+       "order: 'descending' stacks the last chunk on top (got " +
+       comp7._layers.map(l => l.name).join("|") + ")");
 
 console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");

@@ -1179,7 +1179,6 @@ AELL_TOOLS.split_layer_into_chunks = function (args) {
   for (i = 1; i < n; i++) pieces.push(layer.duplicate());
 
   var baseName = layer.name;
-  var made = [];
   for (i = 0; i < n; i++) {
     var s = inP + i * chunk;
     var e = i === n - 1 ? outP : inP + (i + 1) * chunk;
@@ -1188,17 +1187,36 @@ AELL_TOOLS.split_layer_into_chunks = function (args) {
     piece.outPoint = e;
     if (offset !== 0) piece.startTime = piece.startTime + offset * i;
     piece.name = baseName + " chunk " + (i + 1);
-    // Report only a sample of a big batch — a huge JSON result would eat
-    // the model's context window.
-    if (n <= 8 || made.length < 3) {
-      made.push({ layer: piece.name, index: piece.index,
-                  inPoint: Math.round(s * 100) / 100,
-                  outPoint: Math.round(e * 100) / 100 });
+  }
+
+  // Stack the chunks in order — duplicates are born ABOVE the original,
+  // which would otherwise strand chunk 1 at the bottom of the pile.
+  var descending = /^desc/i.test(String(args.order || ""));
+  if (pieces[0].moveAfter && pieces[0].moveBefore) {
+    for (i = 1; i < n; i++) {
+      if (descending) pieces[i].moveBefore(pieces[i - 1]);
+      else pieces[i].moveAfter(pieces[i - 1]);
     }
+  }
+
+  // Leave exactly the chunks selected, so a follow-up command ("stagger
+  // them") targets the batch without the user re-selecting anything.
+  for (i = 1; i <= comp.numLayers; i++) comp.layer(i).selected = false;
+  for (i = 0; i < n; i++) pieces[i].selected = true;
+
+  // Report only a sample of a big batch — a huge JSON result would eat
+  // the model's context window.
+  var made = [];
+  for (i = 0; i < n && (n <= 8 || i < 3); i++) {
+    made.push({ layer: pieces[i].name, index: pieces[i].index,
+                inPoint: Math.round(pieces[i].inPoint * 100) / 100,
+                outPoint: Math.round(pieces[i].outPoint * 100) / 100 });
   }
   var note = offset === 0
     ? "Chunks play seamlessly end-to-end on separate layers (no overlap)"
     : "Each chunk additionally slid by " + offset + "s per index";
+  note += "; stacked " + (descending ? "descending" : "ascending") +
+          " and now SELECTED";
   if (n > 8) {
     note += "; listing 3 of " + n + " pieces (all named '" + baseName +
             " chunk <i>')";
@@ -1237,6 +1255,7 @@ function AELL_bezierY(x1, y1, x2, y2, x) {
 
 function AELL_bezierArgs(args) {
   var b = args.bezier;
+  if (b === null || typeof b === "undefined") return [0, 0, 1, 1]; // linear
   if (!AELLJSON.isArray(b) || b.length < 4) {
     throw new Error("'bezier' must be [x1, y1, x2, y2] (CSS cubic-bezier)");
   }
@@ -1275,11 +1294,25 @@ AELL_TOOLS.stagger_layers = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var bez = AELL_bezierArgs(args);
   var layers = AELL_targetLayers(comp, args);
+  // No spread declared -> fill the comp's WORK AREA (fall back to the
+  // full comp duration), so bare requests need no numbers at all.
   var spread = args.spread > 0 ? Number(args.spread) : null;
-  if (spread === null) return AELL_err("'spread' (seconds) is required");
+  var usedWorkArea = false;
+  if (spread === null) {
+    if (comp.workAreaDuration > 0) {
+      spread = Number(comp.workAreaDuration);
+      usedWorkArea = true;
+    } else if (comp.duration > 0) {
+      spread = Number(comp.duration);
+    } else {
+      return AELL_err("'spread' (seconds) is required");
+    }
+  }
   var base;
   if (typeof args.startAt === "number") {
     base = args.startAt;
+  } else if (usedWorkArea) {
+    base = Number(comp.workAreaStart) || 0;
   } else {
     base = layers[0].startTime;
     for (var j = 1; j < layers.length; j++) {
@@ -1446,6 +1479,79 @@ AELL_TOOLS.set_comp_setting = function (args) {
   }
   return AELL_okay({ name: comp.name, width: comp.width, height: comp.height,
                      duration: comp.duration, frameRate: comp.frameRate });
+};
+
+/* Apply fn to a property's value — at every keyframe when it has keys. */
+function AELL_mapPropValues(prop, fn) {
+  if (prop.numKeys > 0) {
+    for (var k = 1; k <= prop.numKeys; k++) {
+      prop.setValueAtKey(k, fn(prop.keyValue(k)));
+    }
+  } else {
+    prop.setValue(fn(prop.value));
+  }
+}
+
+/*
+ * Resize a comp AND scale its content to match, centered — the behavior
+ * of the native "Scale Composition" script. Uniform factor so nothing
+ * distorts; when the target aspect differs, 'fit' letterboxes and 'fill'
+ * crops. Only unparented layers are touched: children inherit the change
+ * through their parent chain.
+ */
+AELL_TOOLS.scale_comp = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  var ow = comp.width, oh = comp.height;
+  var nw, nh, s;
+  if (args.factor > 0) {
+    s = Number(args.factor);
+    nw = Math.round(ow * s);
+    nh = Math.round(oh * s);
+  } else if (args.width > 0 || args.height > 0) {
+    nw = args.width > 0 ? Math.round(Number(args.width)) : 0;
+    nh = args.height > 0 ? Math.round(Number(args.height)) : 0;
+    if (!nw) nw = Math.round(nh * ow / oh);
+    if (!nh) nh = Math.round(nw * oh / ow);
+    var rw = nw / ow;
+    var rh = nh / oh;
+    s = String(args.mode || "fit") === "fill"
+      ? Math.max(rw, rh) : Math.min(rw, rh);
+  } else {
+    return AELL_err("Pass width/height (pixels) or factor (e.g. 0.5)");
+  }
+  comp.width = nw;
+  comp.height = nh;
+  var scaled = 0, inherited = 0, i;
+  for (i = 1; i <= comp.numLayers; i++) {
+    var L = comp.layer(i);
+    if (L.parent) { inherited++; continue; }
+    try {
+      AELL_mapPropValues(AELL_resolveProperty(L, "position"), function (v) {
+        var out = [(v[0] - ow / 2) * s + nw / 2,
+                   (v[1] - oh / 2) * s + nh / 2];
+        if (v.length > 2) out.push(v[2] * s);
+        return out;
+      });
+      var sc = null;
+      try { sc = AELL_resolveProperty(L, "scale"); } catch (e1) {}
+      if (sc) {
+        AELL_mapPropValues(sc, function (v) {
+          var out = [];
+          for (var d = 0; d < v.length; d++) out.push(v[d] * s);
+          return out;
+        });
+      }
+      try {
+        if (L.zoom) AELL_mapPropValues(L.zoom, function (z) { return z * s; });
+      } catch (e2) {}
+      scaled++;
+    } catch (e3) { inherited++; }
+  }
+  return AELL_okay({ comp: comp.name, width: nw, height: nh,
+    scaleFactor: Math.round(s * 10000) / 10000,
+    layersScaled: scaled, layersInherited: inherited,
+    note: "Content scaled uniformly and re-centered " +
+          "(like the native Scale Composition script)" });
 };
 
 AELL_TOOLS.import_file = function (args) {
@@ -1674,7 +1780,8 @@ var AELL_MUTATING = {
   create_folder: true, move_to_folder: true, rename_item: true,
   delete_item: true, duplicate_comp: true, organize_project: true,
   grid_layout: true, duplicate_layer: true, split_layer_into_chunks: true,
-  stagger_layers: true, distribute_property: true, apply_keyframe_ease: true
+  stagger_layers: true, distribute_property: true, apply_keyframe_ease: true,
+  scale_comp: true
 };
 
 // --------------------------------------------------------------- entry point
