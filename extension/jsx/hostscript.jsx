@@ -1140,19 +1140,34 @@ AELL_TOOLS.duplicate_layer = function (args) {
 AELL_TOOLS.split_layer_into_chunks = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var layer = AELL_layerOrSelection(comp, args.layer);
-  var chunk = args.chunkSeconds > 0 ? Number(args.chunkSeconds) : 5;
   var inP = layer.inPoint;
   var outP = layer.outPoint;
   var span = outP - inP;
-  if (span <= chunk) {
-    return AELL_err("Layer '" + layer.name + "' is only " +
-      (Math.round(span * 100) / 100) + "s from inPoint to outPoint — " +
-      "nothing to split at " + chunk + "s chunks");
+  if (span <= 0) {
+    return AELL_err("Layer '" + layer.name + "' has no duration — " +
+                    "nothing to split");
   }
-  var n = Math.ceil(span / chunk - 0.000001);
-  if (n > 60) {
-    return AELL_err("Would create " + n + " chunks (cap 60) — use a " +
-                    "larger chunkSeconds");
+  var n, chunk;
+  if (args.chunks > 0) {
+    // Exact piece count: the host does the division, not the model.
+    n = Math.round(Number(args.chunks));
+    if (n < 2) return AELL_err("'chunks' must be at least 2");
+    if (n > 60) {
+      return AELL_err("'chunks' is capped at 60 (asked for " + n + ")");
+    }
+    chunk = span / n;
+  } else {
+    chunk = args.chunkSeconds > 0 ? Number(args.chunkSeconds) : 5;
+    if (span <= chunk) {
+      return AELL_err("Layer '" + layer.name + "' is only " +
+        (Math.round(span * 100) / 100) + "s from inPoint to outPoint — " +
+        "nothing to split at " + chunk + "s chunks");
+    }
+    n = Math.ceil(span / chunk - 0.000001);
+    if (n > 60) {
+      return AELL_err("Would create " + n + " chunks (cap 60) — use a " +
+        "larger chunkSeconds, or pass {chunks: N} for exactly N pieces");
+    }
   }
   var offset = typeof args.offsetPerChunk === "number"
     ? args.offsetPerChunk : 0;
@@ -1173,13 +1188,24 @@ AELL_TOOLS.split_layer_into_chunks = function (args) {
     piece.outPoint = e;
     if (offset !== 0) piece.startTime = piece.startTime + offset * i;
     piece.name = baseName + " chunk " + (i + 1);
-    made.push({ layer: piece.name, index: piece.index,
-                inPoint: s, outPoint: e });
+    // Report only a sample of a big batch — a huge JSON result would eat
+    // the model's context window.
+    if (n <= 8 || made.length < 3) {
+      made.push({ layer: piece.name, index: piece.index,
+                  inPoint: Math.round(s * 100) / 100,
+                  outPoint: Math.round(e * 100) / 100 });
+    }
   }
-  return AELL_okay({ chunks: n, chunkSeconds: chunk, pieces: made,
-    note: offset === 0
-      ? "Chunks play seamlessly end-to-end on separate layers (no overlap)"
-      : "Each chunk additionally slid by " + offset + "s per index" });
+  var note = offset === 0
+    ? "Chunks play seamlessly end-to-end on separate layers (no overlap)"
+    : "Each chunk additionally slid by " + offset + "s per index";
+  if (n > 8) {
+    note += "; listing 3 of " + n + " pieces (all named '" + baseName +
+            " chunk <i>')";
+  }
+  return AELL_okay({ chunks: n,
+                     chunkSeconds: Math.round(chunk * 1000) / 1000,
+                     pieces: made, note: note });
 };
 
 // ---------------------------------------------------------- curve tools

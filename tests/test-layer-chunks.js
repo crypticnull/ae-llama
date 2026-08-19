@@ -171,4 +171,50 @@ assert(r9.ok && r9.data.duplicatedFrom === "bg" &&
        comp4._layers.some(l => l.name === "bg copy"),
        "duplicate_layer defaults to the selected layer");
 
+// exact piece count: "5 equal chunks" -> {chunks: 5}, host does the math
+const comp5 = new Comp("Car Wash 3", 35.9359359359359);
+Object.setPrototypeOf(comp5, Object.create(CompItem.prototype,
+  Object.getOwnPropertyDescriptors(Comp.prototype)));
+const seq5 = new Layer("seq", comp5, 0, 35.9359359359359, 0);
+seq5.selected = true;
+comp5._layers.push(seq5);
+project.activeItem = comp5;
+const r10 = call("split_layer_into_chunks", { chunks: 5 });
+assert(r10.ok && r10.data.chunks === 5,
+       "{chunks: 5} makes exactly 5 pieces (got " +
+       (r10.ok ? r10.data.chunks : r10.error) + ")");
+assert(comp5._layers.length === 5, "comp holds exactly 5 layers");
+const w5 = comp5._layers.map(l => [l.inPoint, l.outPoint])
+  .sort((a, b) => a[0] - b[0]);
+let equal5 = true;
+for (const [s, e] of w5) {
+  if (Math.abs((e - s) - 35.9359359359359 / 5) > 1e-9) equal5 = false;
+}
+assert(equal5, "all 5 pieces are exactly span/5 long");
+assert(Math.abs(w5[0][0]) < 1e-9 &&
+       Math.abs(w5[4][1] - 35.9359359359359) < 1e-9,
+       "5 equal pieces cover the full span");
+
+// chunk-count guards
+const rBad = call("split_layer_into_chunks", { layer: 1, chunks: 100 });
+assert(!rBad.ok && /capped at 60/.test(rBad.error),
+       "chunks > 60 refused");
+const rOne = call("split_layer_into_chunks", { layer: 1, chunks: 1 });
+assert(!rOne.ok && /at least 2/.test(rOne.error), "chunks: 1 refused");
+
+// big batches report a sample, not every piece (context-window safety)
+const comp6 = new Comp("Long", 36);
+Object.setPrototypeOf(comp6, Object.create(CompItem.prototype,
+  Object.getOwnPropertyDescriptors(Comp.prototype)));
+comp6._layers.push(new Layer("clip36", comp6, 0, 36, 0));
+project.activeItem = comp6;
+const r11 = call("split_layer_into_chunks",
+                 { layer: "clip36", chunkSeconds: 1 });
+assert(r11.ok && r11.data.chunks === 36 && r11.data.pieces.length === 3 &&
+       /listing 3 of 36/.test(r11.data.note),
+       "36-chunk result lists only a 3-piece sample");
+assert(JSON.stringify(r11.data).length < 600,
+       "large split result stays compact (" +
+       JSON.stringify(r11.data).length + " chars)");
+
 console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");

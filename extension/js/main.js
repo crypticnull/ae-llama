@@ -279,6 +279,22 @@
       }
     }
 
+    // A verbose tool result must never blow the model's context window —
+    // cap each result and the combined feedback before it enters history.
+    function compactToolResults(results) {
+      var parts = [];
+      for (var i = 0; i < results.length; i++) {
+        var s;
+        try { s = JSON.stringify(results[i]); }
+        catch (e) { s = String(results[i]); }
+        if (s.length > 1200) s = s.slice(0, 1200) + " …(truncated)";
+        parts.push(s);
+      }
+      var out = "[" + parts.join(",\n") + "]";
+      if (out.length > 6000) out = out.slice(0, 6000) + " …(truncated)";
+      return out;
+    }
+
     function runRound(system, round) {
       if (cancelRequested) { finish(); return; }
       var messages = [{ role: "system", content: system }].concat(history);
@@ -330,7 +346,7 @@
             function (results) {
               history.push({
                 role: "user",
-                content: "TOOL RESULTS:\n" + JSON.stringify(results)
+                content: "TOOL RESULTS:\n" + compactToolResults(results)
               });
               if (cancelRequested) { finish(); return; }
               if (round + 1 >= s.maxRounds) {
