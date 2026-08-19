@@ -109,7 +109,7 @@ is exactly the tool list — currently:
 `create_comp`, `add_text_layer`,
 `set_text_style`, `add_solid`, `add_shape_layer`, `add_mask`, `precompose`,
 `add_camera`, `add_marker`, `add_null`, `add_control`, `link_property`,
-`apply_expression_preset`, `set_layer_3d`, `set_layer_parent`,
+`apply_expression_preset`, `grid_layout`, `set_layer_3d`, `set_layer_parent`,
 `set_transform`, `center_anchor_point`, `add_keyframe`, `set_expression`,
 `apply_effect`,
 `set_effect_param`, `set_layer_timing`, `delete_layer`, `set_comp_setting`,

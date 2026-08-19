@@ -78,6 +78,13 @@
             "expression itself with correct syntax (dimension-aware; " +
             "optional value = control*scale + offset).",
       args: "{comp?: string, layer: name|index, property: transform name or 'effect.<Effect>.<Param>', controlLayer: name|index, controlEffect: string (control name), scale?: number, offset?: number}" },
+    { name: "grid_layout", mutating: true,
+      desc: "Arrange layers into a grid rigged to a control null: the " +
+            "grid centers on the null's position and its 'Grid X Spacing'/" +
+            "'Grid Y Spacing' sliders drive spacing live (all expressions " +
+            "generated host-side). Omit 'layers' to use the layers the " +
+            "user has selected in AE. Re-running re-flows into the same rig.",
+      args: "{comp?: string, layers?: [name|index] (omit = user's selection), columns?: int (default ~square; 1 = column, n = row), spacingX?: px, spacingY?: px, controlLayer?: string = 'GRID CTRL'}" },
     { name: "apply_expression_preset", mutating: true,
       desc: "Apply a known-good expression. Presets: wiggle (frequency/" +
             "amplitude as numbers OR freqControl/ampControl {layer, effect} " +
@@ -204,6 +211,10 @@
       "- Omit 'comp' to target the active comp.",
       "- Prefer inspecting (get_project_info / get_comp_details) before",
       "  modifying things you have not seen.",
+      "- Layers the user has SELECTED in AE are marked selected: true in",
+      "  the comp details. 'these layers' / 'the selected layers' means",
+      "  those. grid_layout uses the selection automatically when 'layers'",
+      "  is omitted.",
       "",
       "Project panel management:",
       "- create_folder / move_to_folder / rename_item / delete_item /",

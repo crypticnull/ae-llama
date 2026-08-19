@@ -475,7 +475,7 @@ AELL_TOOLS.get_comp_details = function (args) {
   var layers = [];
   for (var i = 1; i <= comp.numLayers; i++) {
     var layer = comp.layer(i);
-    layers.push({
+    var entry = {
       index: i,
       name: layer.name,
       type: AELL_layerType(layer),
@@ -484,7 +484,9 @@ AELL_TOOLS.get_comp_details = function (args) {
       outPoint: layer.outPoint,
       startTime: layer.startTime,
       effects: AELL_effectNames(layer)
-    });
+    };
+    if (layer.selected) entry.selected = true;
+    layers.push(entry);
   }
   return AELL_okay({
     name: comp.name,
@@ -877,6 +879,104 @@ AELL_TOOLS.link_property = function (args) {
                      expression: expr });
 };
 
+AELL_TOOLS.grid_layout = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  var layers = [];
+  var i;
+
+  // Explicit layer list wins; otherwise the user's live selection in AE.
+  if (AELLJSON.isArray(args.layers) && args.layers.length > 0) {
+    for (i = 0; i < args.layers.length; i++) {
+      layers.push(AELL_resolveLayer(comp, args.layers[i]));
+    }
+  } else {
+    var sel = comp.selectedLayers;
+    for (i = 0; i < sel.length; i++) layers.push(sel[i]);
+    if (layers.length === 0) {
+      return AELL_err("No layers selected in '" + comp.name + "'. Select " +
+                      "the layers in AE first, or pass {layers: [...]}.");
+    }
+  }
+
+  var ctrlName = args.controlLayer ? String(args.controlLayer) : "GRID CTRL";
+
+  // Never grid the control null itself, and keep a stable top-to-bottom
+  // order regardless of selection order.
+  var filtered = [];
+  for (i = 0; i < layers.length; i++) {
+    if (layers[i].name !== ctrlName) filtered.push(layers[i]);
+  }
+  layers = filtered;
+  layers.sort(function (a, b) { return a.index - b.index; });
+
+  var n = layers.length;
+  if (n < 2) return AELL_err("Need at least 2 layers for a grid (got " + n + ")");
+  var cols = args.columns > 0 ? Math.round(args.columns) : Math.ceil(Math.sqrt(n));
+  if (cols > n) cols = n;
+  var rows = Math.ceil(n / cols);
+
+  // Control null: the grid centers on its position; two sliders drive
+  // spacing. Reused when it already exists so re-running re-flows layers
+  // into the same rig.
+  var ctrl = null;
+  try { ctrl = comp.layer(ctrlName); } catch (e) { ctrl = null; }
+  if (!ctrl) {
+    ctrl = comp.layers.addNull(comp.duration);
+    ctrl.name = ctrlName;
+    ctrl.property("ADBE Transform Group").property("ADBE Position")
+        .setValue([comp.width / 2, comp.height / 2]);
+  }
+  var effects = ctrl.property("ADBE Effect Parade");
+  function ensureSlider(name, value) {
+    var fx = effects.property(name);
+    if (!fx) {
+      fx = effects.addProperty("ADBE Slider Control");
+      fx.name = name;
+      fx.property(1).setValue(value);
+    }
+    return fx;
+  }
+  var defX = args.spacingX > 0 ? args.spacingX
+    : Math.round(comp.width / (cols + 1));
+  var defY = args.spacingY > 0 ? args.spacingY
+    : Math.round(comp.height / (rows + 1));
+  ensureSlider("Grid X Spacing", defX);
+  ensureSlider("Grid Y Spacing", defY);
+
+  var escCtrl = AELL_escapeExprName(ctrl.name);
+  var placed = [];
+  for (i = 0; i < n; i++) {
+    var layer = layers[i];
+    var col = i % cols;
+    var row = Math.floor(i / cols);
+    // Offsets are centered so the grid stays symmetric around the null.
+    var cOff = col - (cols - 1) / 2;
+    var rOff = row - (rows - 1) / 2;
+    var posProp = layer.property("ADBE Transform Group")
+                       .property("ADBE Position");
+    var is3d = AELLJSON.isArray(posProp.value) && posProp.value.length > 2;
+    var expr =
+      'var o = thisComp.layer("' + escCtrl + '").transform.position;\n' +
+      'var sx = thisComp.layer("' + escCtrl + '").effect("Grid X Spacing")(1);\n' +
+      'var sy = thisComp.layer("' + escCtrl + '").effect("Grid Y Spacing")(1);\n' +
+      '[o[0] + (' + cOff + ') * sx, o[1] + (' + rOff + ') * sy' +
+      (is3d ? ', value[2]' : '') + '];';
+    var err = AELL_setExpr(posProp, expr);
+    if (err) {
+      return AELL_err("Grid expression rejected on '" + layer.name +
+                      "': " + err);
+    }
+    placed.push({ layer: layer.name, row: row, col: col });
+  }
+  return AELL_okay({
+    control: ctrl.name, columns: cols, rows: rows,
+    sliders: ["Grid X Spacing", "Grid Y Spacing"],
+    initialSpacing: [defX, defY], placed: placed,
+    note: "Move '" + ctrl.name + "' to move the whole grid; its sliders " +
+          "control X/Y spacing live"
+  });
+};
+
 AELL_TOOLS.apply_expression_preset = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var layer = AELL_resolveLayer(comp, args.layer);
@@ -1228,7 +1328,8 @@ var AELL_MUTATING = {
   apply_expression_preset: true, set_text_style: true,
   center_anchor_point: true,
   create_folder: true, move_to_folder: true, rename_item: true,
-  delete_item: true, duplicate_comp: true, organize_project: true
+  delete_item: true, duplicate_comp: true, organize_project: true,
+  grid_layout: true
 };
 
 // --------------------------------------------------------------- entry point
