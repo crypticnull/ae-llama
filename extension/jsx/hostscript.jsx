@@ -760,7 +760,7 @@ AELL_TOOLS.center_anchor_point = function (args) {
 AELL_TOOLS.add_keyframe = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var layer = AELL_resolveLayer(comp, args.layer);
-  var prop = AELL_resolveProperty(layer, args.property);
+  var prop = AELL_anyProperty(layer, args.property);
   if (typeof args.time !== "number") return AELL_err("'time' (seconds) required");
   prop.setValueAtTime(args.time, args.value);
   return AELL_okay({ layer: layer.name, property: args.property,
@@ -796,7 +796,7 @@ function AELL_setExpr(prop, expr) {
 AELL_TOOLS.set_expression = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var layer = AELL_resolveLayer(comp, args.layer);
-  var prop = AELL_resolveProperty(layer, args.property);
+  var prop = AELL_anyProperty(layer, args.property);
   if (!prop.canSetExpression) {
     return AELL_err("Property cannot take an expression: " + args.property);
   }
@@ -867,7 +867,7 @@ AELL_TOOLS.add_control = function (args) {
 AELL_TOOLS.link_property = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var layer = AELL_resolveLayer(comp, args.layer);
-  var prop = AELL_resolveProperty(layer, args.property);
+  var prop = AELL_anyProperty(layer, args.property);
   if (!prop.canSetExpression) {
     return AELL_err("Property cannot take an expression: " + args.property);
   }
@@ -1505,7 +1505,7 @@ AELL_TOOLS.distribute_property = function (args) {
 AELL_TOOLS.apply_keyframe_ease = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var layer = AELL_resolveLayer(comp, args.layer);
-  var prop = AELL_resolveProperty(layer, args.property);
+  var prop = AELL_anyProperty(layer, args.property);
   var bez = AELL_bezierArgs(args);
   if (prop.numKeys < 2) {
     return AELL_err("Property has " + prop.numKeys + " keyframe(s) — need " +
@@ -1864,18 +1864,50 @@ AELL_TOOLS.set_layer_3d = function (args) {
 
 AELL_TOOLS.set_layer_parent = function (args) {
   var comp = AELL_resolveComp(args.comp);
-  var layer = AELL_resolveLayer(comp, args.layer);
-  if (args.parent === null || typeof args.parent === "undefined" ||
-      args.parent === "") {
-    layer.parent = null;
-    return AELL_okay({ layer: layer.name, parent: null });
+  var targets = [];
+  var i;
+  if (AELLJSON.isArray(args.layers) && args.layers.length > 0) {
+    for (i = 0; i < args.layers.length; i++) {
+      targets.push(AELL_resolveLayer(comp, args.layers[i]));
+    }
+  } else if (args.layer !== null && typeof args.layer !== "undefined" &&
+             args.layer !== "") {
+    targets.push(AELL_resolveLayer(comp, args.layer));
+  } else {
+    var sel = comp.selectedLayers;
+    for (i = 0; i < sel.length; i++) targets.push(sel[i]);
   }
-  var parent = AELL_resolveLayer(comp, args.parent);
-  if (parent.index === layer.index) {
-    return AELL_err("A layer cannot be parented to itself");
+  if (targets.length === 0) {
+    return AELL_err("No target layers — select some in AE or pass " +
+                    "{layer} / {layers: [...]}");
   }
-  layer.parent = parent;
-  return AELL_okay({ layer: layer.name, parent: parent.name });
+  var clearing = args.parent === null || typeof args.parent === "undefined" ||
+                 args.parent === "" ||
+                 String(args.parent).toLowerCase() === "none";
+  var parent = clearing ? null : AELL_resolveLayer(comp, args.parent);
+  var jump = args.keepPosition !== false;   // default: no visual jump
+  var done = [], skipped = [];
+  for (i = 0; i < targets.length; i++) {
+    var L = targets[i];
+    if (parent && L === parent) {
+      skipped.push(L.name + " (is the parent)");
+      continue;
+    }
+    try {
+      if (jump && typeof L.setParentWithJump === "function") {
+        L.setParentWithJump(parent);
+      } else {
+        L.parent = parent;
+      }
+      done.push(L.name);
+    } catch (e) {
+      skipped.push(L.name + " (" + (e.message || e) + ")");
+    }
+  }
+  return AELL_okay({ parent: parent ? parent.name : "(none)",
+    parented: done.join(", ") || "(none)",
+    skipped: skipped.join("; "),
+    note: jump ? "Visual positions preserved" : "" });
 };
 
 AELL_TOOLS.add_to_render_queue = function (args) {
@@ -1886,6 +1918,361 @@ AELL_TOOLS.add_to_render_queue = function (args) {
   }
   return AELL_okay({ comp: comp.name,
                      queuePosition: app.project.renderQueue.numItems });
+};
+
+// ------------------------------------------- universal property access
+// The introspection backbone (docs/NATIVE_COVERAGE_PLAN.md): the model
+// DISCOVERS real property paths instead of guessing names, then reads and
+// writes them generically. Convenience tools stay; these reach everything.
+
+var AELL_ROOT_ALIASES = {
+  transform: "ADBE Transform Group",
+  effects:   "ADBE Effect Parade",
+  masks:     "ADBE Mask Parade",
+  text:      "ADBE Text Properties",
+  contents:  "ADBE Root Vectors Group",
+  styles:    "ADBE Layer Styles",
+  camera:    "ADBE Camera Options Group",
+  light:     "ADBE Light Options Group",
+  material:  "ADBE Material Options Group",
+  audio:     "ADBE Audio Group",
+  timeRemap: "ADBE Time Remapping"
+};
+
+/* Leaf properties can setValue; groups cannot. */
+function AELL_isLeafProp(node) {
+  return !!node && typeof node.setValue === "function";
+}
+
+function AELL_childNames(node, cap) {
+  var names = [];
+  var n = 0;
+  try { n = node.numProperties || 0; } catch (e) { n = 0; }
+  for (var i = 1; i <= n && names.length < cap; i++) {
+    try { names.push(node.property(i).name); } catch (e2) {}
+  }
+  return names;
+}
+
+/*
+ * Walk a '/'-separated path of display or match names from a layer down
+ * to any property or group. A failed segment throws a grounded error
+ * listing the real children at that level.
+ */
+function AELL_resolvePropPath(layer, pathStr) {
+  var segs = String(pathStr).split("/");
+  var node = layer;
+  var walked = [];
+  for (var i = 0; i < segs.length; i++) {
+    var seg = segs[i].replace(/^\s+|\s+$/g, "");
+    if (seg === "") continue;
+    var lookup = (walked.length === 0 && AELL_ROOT_ALIASES[seg])
+      ? AELL_ROOT_ALIASES[seg] : seg;
+    var child = null;
+    try { child = node.property(lookup); } catch (e) { child = null; }
+    if (!child && lookup !== seg) {
+      try { child = node.property(seg); } catch (e2) { child = null; }
+    }
+    if (!child) {
+      var at = walked.length ? "'" + walked.join("/") + "'"
+                             : "layer '" + layer.name + "'";
+      throw new Error("Path segment '" + seg + "' not found under " + at +
+        ". Children here: " +
+        (AELL_childNames(node, 30).join(", ") || "(none)") +
+        ". Use list_properties to inspect the real tree.");
+    }
+    node = child;
+    walked.push(seg);
+  }
+  return node;
+}
+
+/* Accept friendly specs (position, effect.X.Y) AND '/'-joined paths. */
+function AELL_anyProperty(layer, spec) {
+  var s = String(spec || "");
+  if (s === "") throw new Error("Missing 'property'");
+  if (s.indexOf("/") !== -1) return AELL_resolvePropPath(layer, s);
+  try {
+    return AELL_resolveProperty(layer, s);
+  } catch (friendlyErr) {
+    try {
+      return AELL_resolvePropPath(layer, s);
+    } catch (pathErr) {
+      throw (s.indexOf(".") !== -1) ? friendlyErr : pathErr;
+    }
+  }
+}
+
+/* Compact, context-safe rendering of any property value. */
+function AELL_sampleRaw(v) {
+  if (v === null || typeof v === "undefined") return null;
+  if (typeof v === "number") return Math.round(v * 1000) / 1000;
+  if (typeof v === "boolean") return v;
+  if (typeof v === "string") {
+    return v.length > 60 ? v.slice(0, 60) + "…" : v;
+  }
+  if (AELLJSON.isArray(v)) {
+    if (v.length > 4) return "[array of " + v.length + "]";
+    var out = [];
+    for (var i = 0; i < v.length; i++) {
+      out.push(typeof v[i] === "number"
+        ? Math.round(v[i] * 1000) / 1000 : v[i]);
+    }
+    return out;
+  }
+  return "[" + (typeof v) + "]";   // Shape, TextDocument, marker, …
+}
+
+function AELL_sampleValue(prop) {
+  var v;
+  try { v = prop.value; } catch (e) { return null; }
+  return AELL_sampleRaw(v);
+}
+
+AELL_TOOLS.list_properties = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  var layer = AELL_layerOrSelection(comp, args.layer);
+  var root = args.path ? AELL_resolvePropPath(layer, String(args.path))
+                       : layer;
+  if (args.path && AELL_isLeafProp(root)) {
+    return AELL_err("'" + args.path + "' is a PROPERTY, not a group — " +
+                    "use get_property for its value");
+  }
+  var depth = args.depth > 0 ? Math.min(Math.round(args.depth), 3) : 2;
+  var CAP = 60;
+  var entries = [];
+  var truncated = false;
+  function walk(node, prefix, d) {
+    var n = 0;
+    try { n = node.numProperties || 0; } catch (e) { n = 0; }
+    for (var i = 1; i <= n; i++) {
+      if (entries.length >= CAP) { truncated = true; return; }
+      var child = null;
+      try { child = node.property(i); } catch (e2) { continue; }
+      if (!child) continue;
+      var p = prefix ? prefix + "/" + child.name : child.name;
+      var leaf = AELL_isLeafProp(child);
+      var entry = { path: p, matchName: child.matchName,
+                    kind: leaf ? "prop" : "group" };
+      if (leaf) {
+        var sv = AELL_sampleValue(child);
+        if (sv !== null) entry.value = sv;
+        try {
+          if (child.numKeys > 0) entry.numKeys = child.numKeys;
+        } catch (e3) {}
+        try { if (child.expression) entry.hasExpression = true; } catch (e4) {}
+      }
+      entries.push(entry);
+      if (!leaf && d > 1) walk(child, p, d - 1);
+    }
+  }
+  walk(root, args.path ? String(args.path) : "", depth);
+  return AELL_okay({ layer: layer.name, root: args.path || "(layer)",
+    count: entries.length, properties: entries,
+    note: truncated
+      ? "Capped at " + CAP + " entries — narrow with {path: \"…\"}"
+      : "" });
+};
+
+AELL_TOOLS.get_property = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  var layer = AELL_layerOrSelection(comp, args.layer);
+  var prop = AELL_anyProperty(layer, args.property);
+  if (!AELL_isLeafProp(prop)) {
+    return AELL_err("'" + args.property + "' is a GROUP — use " +
+      "list_properties {path: \"" + args.property + "\"} to see inside");
+  }
+  var data = { layer: layer.name, property: String(args.property),
+               matchName: prop.matchName, value: AELL_sampleValue(prop) };
+  var nk = 0;
+  try { nk = prop.numKeys || 0; } catch (e) {}
+  data.numKeys = nk;
+  if (nk > 0) {
+    var keys = [];
+    for (var k = 1; k <= nk && k <= 10; k++) {
+      keys.push({ time: Math.round(prop.keyTime(k) * 1000) / 1000,
+                  value: AELL_sampleRaw(prop.keyValue(k)) });
+    }
+    data.keys = keys;
+    if (nk > 10) data.moreKeys = nk - 10;
+  }
+  try {
+    if (prop.expression) {
+      data.expression = String(prop.expression).slice(0, 200);
+    }
+  } catch (e2) {}
+  return AELL_okay(data);
+};
+
+AELL_TOOLS.set_property = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  var layer = AELL_layerOrSelection(comp, args.layer);
+  var prop = AELL_anyProperty(layer, args.property);
+  if (!AELL_isLeafProp(prop)) {
+    return AELL_err("'" + args.property + "' is a GROUP — set one of its " +
+      "properties instead (list_properties {path: \"" + args.property +
+      "\"} shows them)");
+  }
+  if (typeof args.value === "undefined") {
+    return AELL_err("'value' is required");
+  }
+  try {
+    if (typeof args.atTime === "number") {
+      prop.setValueAtTime(args.atTime, args.value);
+    } else {
+      prop.setValue(args.value);
+    }
+  } catch (e) {
+    return AELL_err("AE rejected the value for '" + args.property + "': " +
+      (e.message || e) + ". Current value: " +
+      AELLJSON.stringify(AELL_sampleValue(prop)));
+  }
+  var nk = 0;
+  try { nk = prop.numKeys || 0; } catch (e2) {}
+  return AELL_okay({ layer: layer.name, property: String(args.property),
+    value: AELL_sampleRaw(args.value),
+    keyframed: typeof args.atTime === "number", numKeys: nk });
+};
+
+AELL_TOOLS.set_keyframes = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  var layer = AELL_layerOrSelection(comp, args.layer);
+  var prop = AELL_anyProperty(layer, args.property);
+  if (!AELL_isLeafProp(prop)) {
+    return AELL_err("'" + args.property + "' is a GROUP — keyframes go on " +
+                    "a property inside it");
+  }
+  if (!AELLJSON.isArray(args.keys) || args.keys.length === 0) {
+    return AELL_err("'keys' must be [{time: s, value: …}, …]");
+  }
+  if (args.keys.length > 100) {
+    return AELL_err("'keys' is capped at 100 per call");
+  }
+  var set = 0;
+  for (var i = 0; i < args.keys.length; i++) {
+    var k = args.keys[i] || {};
+    if (typeof k.time !== "number" || typeof k.value === "undefined") {
+      return AELL_err("keys[" + i + "] needs {time (seconds), value}" +
+        (set > 0 ? " — " + set + " earlier key(s) were already applied" : ""));
+    }
+    try {
+      prop.setValueAtTime(k.time, k.value);
+      set++;
+    } catch (e) {
+      return AELL_err("AE rejected keys[" + i + "] (" + (e.message || e) +
+        ")" + (set > 0 ? " — " + set + " earlier key(s) were applied" : ""));
+    }
+  }
+  return AELL_okay({ layer: layer.name, property: String(args.property),
+    keysSet: set, numKeys: prop.numKeys,
+    hint: "apply_keyframe_ease adds easing between the new keys" });
+};
+
+AELL_TOOLS.remove_keyframes = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  var layer = AELL_layerOrSelection(comp, args.layer);
+  var prop = AELL_anyProperty(layer, args.property);
+  if (!AELL_isLeafProp(prop)) {
+    return AELL_err("'" + args.property + "' is a GROUP");
+  }
+  var nk = 0;
+  try { nk = prop.numKeys || 0; } catch (e) {}
+  if (nk === 0) {
+    return AELL_okay({ layer: layer.name, property: String(args.property),
+                       removed: 0, note: "No keyframes to remove" });
+  }
+  var removed = 0;
+  if (AELLJSON.isArray(args.times) && args.times.length > 0) {
+    for (var i = 0; i < args.times.length; i++) {
+      var t = Number(args.times[i]);
+      var best = 0, bestD = 1e9;
+      for (var k = prop.numKeys; k >= 1; k--) {
+        var d = Math.abs(prop.keyTime(k) - t);
+        if (d < bestD) { bestD = d; best = k; }
+      }
+      if (best > 0 && bestD < 0.05) { prop.removeKey(best); removed++; }
+    }
+  } else {
+    while (prop.numKeys > 0) { prop.removeKey(1); removed++; }
+  }
+  return AELL_okay({ layer: layer.name, property: String(args.property),
+                     removed: removed, remaining: prop.numKeys });
+};
+
+AELL_TOOLS.set_track_matte = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  var layer = AELL_layerOrSelection(comp, args.layer);
+  var mode = String(args.mode || "alpha").toLowerCase();
+  if (mode === "none" || mode === "off" || mode === "remove") {
+    try {
+      if (typeof layer.removeTrackMatte === "function") {
+        layer.removeTrackMatte();
+      } else {
+        layer.trackMatteType = TrackMatteType.NO_TRACK_MATTE;
+      }
+    } catch (e) {
+      return AELL_err("Could not remove the matte: " + (e.message || e));
+    }
+    return AELL_okay({ layer: layer.name, matte: "removed" });
+  }
+  var MAP = { alpha: "ALPHA", alpha_inverted: "ALPHA_INVERTED",
+              luma: "LUMA", luma_inverted: "LUMA_INVERTED" };
+  if (!MAP[mode]) {
+    return AELL_err("'mode' must be alpha, alpha_inverted, luma, " +
+                    "luma_inverted or none");
+  }
+  if (args.matteLayer === null || typeof args.matteLayer === "undefined" ||
+      args.matteLayer === "") {
+    return AELL_err("'matteLayer' is required — the layer whose alpha/" +
+                    "luma cuts this one");
+  }
+  var matte = AELL_resolveLayer(comp, args.matteLayer);
+  if (matte === layer) return AELL_err("A layer cannot matte itself");
+  var tmt = TrackMatteType[MAP[mode]];
+  try {
+    if (typeof layer.setTrackMatte === "function") {
+      // AE 23+: any layer can be the matte, no stacking requirement.
+      layer.setTrackMatte(matte, tmt);
+    } else {
+      // Legacy AE: matte must sit directly above the layer.
+      if (matte.index !== layer.index - 1) matte.moveBefore(layer);
+      layer.trackMatteType = tmt;
+    }
+  } catch (e) {
+    return AELL_err("AE rejected the matte: " + (e.message || e));
+  }
+  return AELL_okay({ layer: layer.name, matte: matte.name, mode: mode });
+};
+
+AELL_TOOLS.list_effects = function (args) {
+  var all = null;
+  try { all = app.effects; } catch (e) { all = null; }
+  if (!all || !all.length) {
+    return AELL_err("Installed-effect catalog unavailable in this host");
+  }
+  var filter = args.filter ? String(args.filter).toLowerCase() : "";
+  var offset = args.offset > 0 ? Math.round(args.offset) : 0;
+  var LIMIT = 40;
+  var hits = [];
+  var total = 0;
+  for (var i = 0; i < all.length; i++) {
+    var e2 = all[i];
+    var dn = String(e2.displayName || "");
+    if (dn === "") continue;
+    var cat = String(e2.category || "");
+    if (filter && dn.toLowerCase().indexOf(filter) === -1 &&
+        cat.toLowerCase().indexOf(filter) === -1) continue;
+    total++;
+    if (total > offset && hits.length < LIMIT) {
+      hits.push({ name: dn, matchName: e2.matchName, category: cat });
+    }
+  }
+  return AELL_okay({ total: total, offset: offset, listed: hits.length,
+    effects: hits,
+    note: total > offset + hits.length
+      ? "More matches — pass {offset: " + (offset + hits.length) +
+        "} or a narrower {filter}"
+      : "" });
 };
 
 // Tools that modify the project get wrapped in an undo group.
@@ -1904,7 +2291,9 @@ var AELL_MUTATING = {
   delete_item: true, duplicate_comp: true, organize_project: true,
   grid_layout: true, duplicate_layer: true, split_layer_into_chunks: true,
   stagger_layers: true, distribute_property: true, apply_keyframe_ease: true,
-  scale_comp: true, reorder_layers: true
+  scale_comp: true, reorder_layers: true,
+  set_property: true, set_keyframes: true, remove_keyframes: true,
+  set_track_matte: true
 };
 
 // --------------------------------------------------------------- entry point

@@ -191,8 +191,40 @@
       desc: "Enable/disable a layer's 3D switch.",
       args: "{comp?: string, layer: name|index, enabled: bool}" },
     { name: "set_layer_parent", mutating: true,
-      desc: "Parent a layer to another (null/omit parent to unparent).",
-      args: "{comp?: string, layer: name|index, parent?: name|index|null}" },
+      desc: "Parent layers to another layer (omit/null parent to " +
+            "unparent). Visual positions are preserved by default. Omit " +
+            "layer/layers to use the selection.",
+      args: "{comp?: string, layer?: name|index, layers?: [name|index], parent?: name|index|null, keepPosition?: bool (default true)}" },
+    { name: "list_properties", mutating: false,
+      desc: "DISCOVER a layer's real property tree — names, paths, types, " +
+            "current values. Use this whenever a parameter/effect/mask " +
+            "path is unknown instead of guessing. Narrow with path " +
+            "('effects/Gaussian Blur', 'masks', 'text') and depth.",
+      args: "{comp?: string, layer?: name|index (omit = selected layer), path?: string, depth?: 1-3 (default 2)}" },
+    { name: "get_property", mutating: false,
+      desc: "Read ANY property by path: value, keyframes, expression.",
+      args: "{comp?: string, layer?: name|index, property: friendly name | 'effect.X.Y' | 'group/child/…' path}" },
+    { name: "set_property", mutating: true,
+      desc: "Set ANY property by path — the universal fallback when no " +
+            "dedicated tool fits. atTime creates a keyframe at that time.",
+      args: "{comp?: string, layer?: name|index, property: path (see get_property), value: number|[..]|string|bool, atTime?: seconds}" },
+    { name: "set_keyframes", mutating: true,
+      desc: "Batch-set keyframes on any property in ONE call; follow with " +
+            "apply_keyframe_ease for easing.",
+      args: "{comp?: string, layer?: name|index, property: path, keys: [{time: s, value: any}, …] (max 100)}" },
+    { name: "remove_keyframes", mutating: true,
+      desc: "Remove keyframes from a property — specific times or all.",
+      args: "{comp?: string, layer?: name|index, property: path, times?: [s, …] (omit = remove ALL)}" },
+    { name: "set_track_matte", mutating: true,
+      desc: "Use one layer as another's track matte (alpha or luma, " +
+            "optionally inverted), or remove it with mode 'none'. No " +
+            "layer-stacking requirement.",
+      args: "{comp?: string, layer?: name|index (the layer being matted; omit = selected), matteLayer: name|index, mode: 'alpha'|'alpha_inverted'|'luma'|'luma_inverted'|'none'}" },
+    { name: "list_effects", mutating: false,
+      desc: "Enumerate effects INSTALLED in this AE (name, matchName, " +
+            "category), filtered and paged. Check here before apply_effect " +
+            "when unsure of a name.",
+      args: "{filter?: substring of name/category, offset?: int}" },
     { name: "add_to_render_queue", mutating: true,
       desc: "Add a comp to the render queue.",
       args: "{comp?: string, outputPath?: string (absolute)}" },
@@ -321,6 +353,25 @@
       "- 'distribute/space layers equidistantly / every X px' =",
       "  distribute_property {property: position_x, step: X} — ONE call,",
       "  never a chain of set_transform/duplicate calls.",
+      "",
+      "Universal property access (reach ANY parameter in AE):",
+      "- Unknown parameter, effect setting, mask or text property? NEVER",
+      "  guess names — call list_properties {layer} (narrow with {path:",
+      "  \"effects/Gaussian Blur\"}) to see the real tree, then",
+      "  get_property / set_property with a discovered path.",
+      "- Paths join names with '/' (display or match names):",
+      "  'transform/Position', 'effects/Gaussian Blur/Blurriness',",
+      "  'masks/Mask 1/Mask Feather'. Root aliases: transform, effects,",
+      "  masks, text, contents, styles, camera, light, audio, timeRemap.",
+      "- Animate anything: set_keyframes {property, keys: [{time, value},",
+      "  …]} in ONE call, then apply_keyframe_ease for easing.",
+      "  set_property {atTime} sets a single keyframed value.",
+      "- Unsure an effect exists or of its exact name? list_effects",
+      "  {filter} searches everything installed; apply_effect accepts the",
+      "  returned name or matchName.",
+      "- set_track_matte mattes one layer with another (alpha/luma,",
+      "  inverted variants, 'none' removes). set_layer_parent parents",
+      "  (selection default, visual position preserved).",
       "- Curve requests: 'stagger with an ease' = stagger_layers;",
       "  'ramp opacity/scale across these layers' = distribute_property;",
       "  'ease between the keyframes' = apply_keyframe_ease. All take the",
