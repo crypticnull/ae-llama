@@ -39,15 +39,18 @@
     els.statusText.textContent = text;
   }
 
-  /** Info message ending in a clickable link that opens externally. */
-  function appendLinkMsg(text, linkLabel, url) {
+  /** Info message with trailing clickable actions [{label, onClick}]. */
+  function appendActionMsg(text, actions) {
     var div = appendMsg("info", text + " ");
-    var a = document.createElement("a");
-    a.textContent = linkLabel;
-    a.addEventListener("click", function () {
-      global.AEBridge.openURL(url);
-    });
-    div.appendChild(a);
+    for (var i = 0; i < actions.length; i++) {
+      (function (action) {
+        var a = document.createElement("a");
+        a.textContent = action.label;
+        a.addEventListener("click", action.onClick);
+        div.appendChild(a);
+        div.appendChild(document.createTextNode("  "));
+      })(actions[i]);
+    }
     return div;
   }
 
@@ -388,6 +391,25 @@
       });
   }
 
+  function installPanelUpdate() {
+    global.Setup.installUpdate(updateManifest, setupStatus,
+      function (err, res) {
+        setupLine = null;
+        if (err) {
+          appendMsg("error", "Panel update failed: " + err.message);
+          return;
+        }
+        if (res.kind === "git" && !res.changed) {
+          appendMsg("info", "Repo already up to date.");
+          return;
+        }
+        appendMsg("info", "Panel updated" +
+          (res.output ? " (" + res.output + ")" : "") +
+          ". Close and reopen the panel (Window ▸ Extensions ▸ AE Llama) — " +
+          "or restart After Effects — to load the new version.");
+      });
+  }
+
   function checkForUpdates(verbose) {
     global.Setup.checkForUpdates(function (err, result) {
       if (err || !result) {
@@ -399,10 +421,28 @@
       }
       updateManifest = result.manifest;
       if (result.panelUpdate) {
-        appendLinkMsg("Update available: AE Llama " +
+        var s = global.Settings.get();
+        var installable = global.Setup.detectInstallKind().kind === "git" ||
+                          !!updateManifest.panelPackageUrl;
+        var label = "Update available: AE Llama " +
           result.panelUpdate.version +
           (result.panelUpdate.notes ? " — " + result.panelUpdate.notes : "") +
-          ".", "Get it here", result.panelUpdate.url);
+          ".";
+        if (installable && s.autoInstallUpdates) {
+          appendMsg("info", label + " Installing (auto-update is on)…");
+          installPanelUpdate();
+        } else {
+          var actions = [];
+          if (installable) {
+            actions.push({ label: "Update now", onClick: installPanelUpdate });
+          }
+          if (result.panelUpdate.url) {
+            actions.push({ label: "Get it here", onClick: function () {
+              global.AEBridge.openURL(result.panelUpdate.url);
+            } });
+          }
+          appendActionMsg(label, actions);
+        }
       } else if (verbose) {
         appendMsg("info", "You are on the latest version (" +
           global.AELL.VERSION + ").");
@@ -443,6 +483,7 @@
     els.setComfyWorkflows.value = s.comfyWorkflowsDir;
     els.setComfyOut.value = s.comfyOutDir;
     els.setComfyTimeout.value = s.comfyTimeoutSec;
+    els.setAutoUpdate.checked = !!s.autoInstallUpdates;
   }
 
   function formToSettings() {
@@ -461,7 +502,8 @@
       comfyDir: els.setComfyDir.value,
       comfyWorkflowsDir: els.setComfyWorkflows.value,
       comfyOutDir: els.setComfyOut.value,
-      comfyTimeoutSec: parseInt(els.setComfyTimeout.value, 10) || 600
+      comfyTimeoutSec: parseInt(els.setComfyTimeout.value, 10) || 600,
+      autoInstallUpdates: !!els.setAutoUpdate.checked
     });
   }
 
@@ -496,6 +538,7 @@
       setComfyWorkflows: $("set-comfy-workflows"),
       setComfyOut: $("set-comfy-out"),
       setComfyTimeout: $("set-comfy-timeout"),
+      setAutoUpdate: $("set-auto-update"),
       starterRow: $("starter-row"),
       getModelBtn: $("btn-get-model"),
       versionLine: $("version-line")
@@ -591,7 +634,7 @@
                       "set-ctx", "set-ngl", "set-temp", "set-rounds",
                       "set-dryrun", "set-comfy-url", "set-comfy-dir",
                       "set-comfy-workflows", "set-comfy-out",
-                      "set-comfy-timeout"];
+                      "set-comfy-timeout", "set-auto-update"];
     for (var i = 0; i < persistIds.length; i++) {
       $(persistIds[i]).addEventListener("change", formToSettings);
     }
@@ -691,6 +734,7 @@
     $("btn-check-updates").addEventListener("click", function () {
       checkForUpdates(true);
     });
+    $("btn-update-panel").addEventListener("click", installPanelUpdate);
     $("btn-update-engine").addEventListener("click", updateEngine);
 
     var env = global.AEBridge.getHostEnvironment();

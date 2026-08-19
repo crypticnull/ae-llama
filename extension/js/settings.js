@@ -60,7 +60,10 @@
       comfyDir: "",            // definable install folder (for Launch)
       comfyWorkflowsDir: j("comfy-workflows"),
       comfyOutDir: j("generated"),
-      comfyTimeoutSec: 600
+      comfyTimeoutSec: 600,
+      // Install panel updates without asking (git pull for dev installs,
+      // panelPackageUrl download for package installs).
+      autoInstallUpdates: false
     };
   }
 

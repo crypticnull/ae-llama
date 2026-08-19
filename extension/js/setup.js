@@ -426,6 +426,86 @@
   }
 
   /**
+   * How is this panel installed?
+   * - "git": the extension folder is (a junction into) a git checkout —
+   *   updating means `git pull` in the repo root.
+   * - "package": an extracted ZXP — updating means downloading the
+   *   manifest's panelPackageUrl and extracting it over ourselves.
+   */
+  function detectInstallKind() {
+    ensureNode();
+    var ext = global.AEBridge.getExtensionPath();
+    var real = ext;
+    try { real = fs.realpathSync(ext); } catch (e) {}
+    try {
+      var repoRoot = path.dirname(real);
+      if (fs.existsSync(path.join(repoRoot, ".git"))) {
+        return { kind: "git", repoRoot: repoRoot, extensionReal: real };
+      }
+    } catch (e2) {}
+    return { kind: "package", extensionReal: real };
+  }
+
+  /**
+   * Pull the newest panel code in, matching the install kind. The updated
+   * files load on the next panel open (CEP reads the extension at launch),
+   * so the caller should tell the user to reopen the panel / restart AE.
+   * cb(err, {kind, changed, output?})
+   */
+  function installUpdate(manifest, onStatus, cb) {
+    ensureNode();
+    var install = detectInstallKind();
+    function status(t) { if (onStatus) onStatus(t); }
+
+    if (install.kind === "git") {
+      status("Dev install detected — git pull in " + install.repoRoot + "…");
+      child_process.execFile("git", ["pull", "--ff-only"],
+        { cwd: install.repoRoot, timeout: 120000 },
+        function (err, stdout, stderr) {
+          if (err) {
+            cb(new Error("git pull failed: " +
+               String(stderr || err.message).slice(0, 300) +
+               " — update the repo manually."));
+            return;
+          }
+          var out = String(stdout || "").replace(/\s+$/, "");
+          cb(null, { kind: "git", output: out.slice(-300),
+                     changed: !/Already up to date/i.test(out) });
+        });
+      return;
+    }
+
+    var url = manifest && manifest.panelPackageUrl;
+    if (!url) {
+      cb(new Error("This update has no direct install package — get it " +
+                   "from " + ((manifest && manifest.panelUrl) || "the store") +
+                   " and reinstall the ZXP."));
+      return;
+    }
+    var tmp = path.join(global.Settings.dataRoot(), "panel-update.zip");
+    status("Downloading panel update…");
+    var lastPct = -10;
+    downloadToFile(url, tmp, function (rec, total) {
+      if (!total) return;
+      var pct = Math.floor((rec / total) * 100);
+      if (pct >= lastPct + 10) {
+        lastPct = pct;
+        status("Panel update: " + pct + "%");
+      }
+    }, function (err) {
+      if (err) { cb(err); return; }
+      status("Installing into " + install.extensionReal + "…");
+      // A .zxp is a zip; extracting over the live extension folder is fine
+      // on Windows — CEP loads files at panel launch and holds no locks.
+      extractZip(tmp, install.extensionReal, function (xerr) {
+        try { fs.unlinkSync(tmp); } catch (e) {}
+        if (xerr) { cb(xerr); return; }
+        cb(null, { kind: "package", changed: true });
+      });
+    });
+  }
+
+  /**
    * Fetch the hosted update manifest. cb(err, {manifest, panelUpdate})
    * where panelUpdate is set when a newer panel version is published.
    */
@@ -452,6 +532,8 @@
     bootstrapEngine: bootstrapEngine,
     downloadStarterModel: downloadStarterModel,
     checkForUpdates: checkForUpdates,
+    detectInstallKind: detectInstallKind,
+    installUpdate: installUpdate,
     isBusy: function () { return bootstrapBusy; }
   };
 

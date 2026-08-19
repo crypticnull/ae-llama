@@ -209,8 +209,15 @@ Release flow:
    any stable URL you control and point `UPDATE_MANIFEST_URL` in
    `extension/js/version.js` at it **before** building):
    - `panelVersion` / `panelUrl` / `notes` — installed panels compare
-     versions on launch and show a "get it at aescripts.com" banner (panels
-     never self-download builds, so aescripts licensing stays intact).
+     versions on launch and show an update banner.
+   - `panelPackageUrl` (optional) — direct self-update. When set to a
+     downloadable `.zxp`/`.zip` of the new version, the banner gains an
+     **Update now** action that installs it in place (reopen the panel to
+     load it), and the ⚙ *Install panel updates automatically* toggle makes
+     the whole loop hands-off. Leave it **empty** for aescripts builds so
+     buyers go through the store and licensing stays intact. Dev installs
+     (extension junctioned from a git clone) ignore this field entirely —
+     for them "Update panel now" simply runs `git pull` in the repo.
    - `llamaTag` — pin the llama.cpp release your build was tested against;
      the panel's engine installs/updates use it instead of `latest`.
    - `starterModel` — swap the recommended model without shipping a new ZXP.
