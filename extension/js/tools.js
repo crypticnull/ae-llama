@@ -125,8 +125,10 @@
     { name: "duplicate_layer", mutating: true,
       desc: "Duplicate a LAYER inside its comp (use duplicate_comp only " +
             "for whole compositions). Omit 'layer' to use the user's " +
-            "selected layer.",
-      args: "{comp?: string, layer?: name|index (omit = selected layer), name?: string}" },
+            "selected layer. Make N copies in ONE call with count — " +
+            "copies auto-number ('Circle 2', 'Circle 3', …) because " +
+            "duplicate names break name-based references.",
+      args: "{comp?: string, layer?: name|index (omit = selected layer), name?: string (base name), count?: copies to make (default 1, max 100)}" },
     { name: "split_layer_into_chunks", mutating: true,
       desc: "Cut a layer into chunks, each on its own layer trimmed to " +
             "its own window — ONE call does the whole edit. Pass chunks " +
@@ -300,6 +302,15 @@
       "  supply numbers first: split_layer_into_chunks leaves its chunks",
       "  SELECTED, so a follow-up like 'stagger them' is just",
       "  stagger_layers {} with no arguments.",
+      "- SCOPE: do ONLY what the user asked, then stop. Never bolt on",
+      "  extra steps they did not request (grids, effects, styling,",
+      "  animation). Defaults decide HOW a requested step runs — never",
+      "  WHAT gets done.",
+      "- 'put N copies/shapes in a comp' = create ONE layer, then ONE",
+      "  duplicate_layer call with {count: N-1}. Never chain single",
+      "  duplicates, and NEVER give two layers the same name.",
+      "- Report counts from tool results (created / totalLayersInComp) —",
+      "  never claim a number you did not verify.",
       "- Curve requests: 'stagger with an ease' = stagger_layers;",
       "  'ramp opacity/scale across these layers' = distribute_property;",
       "  'ease between the keyframes' = apply_keyframe_ease. All take the",

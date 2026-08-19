@@ -895,23 +895,27 @@ AELL_TOOLS.link_property = function (args) {
   if (scale !== 1) arith += " * " + scale;
   if (offset !== 0) arith += " + " + offset;
 
+  // .value everywhere a control reference is stored or embedded: the JS
+  // expression engine does not auto-resolve Property objects inside vars
+  // or array literals (subscripts/elements come back undefined).
   var expr;
   if (ctrlDims === 1 && targetDims === 1) {
-    expr = src + arith + ";";
+    expr = src + ".value" + arith + ";";
   } else if (ctrlDims === 1 && targetDims > 1) {
     // Broadcast a scalar control across every target component.
     var comps = [];
     for (var i = 0; i < targetDims; i++) comps.push("c");
-    expr = "var c = " + src + arith + ";\n[" + comps.join(", ") + "];";
+    expr = "var c = " + src + ".value" + arith + ";\n[" +
+           comps.join(", ") + "];";
   } else if (ctrlDims === targetDims) {
     if (arith === "") {
-      expr = src + ";";
+      expr = src + ".value;";
     } else {
       var parts = [];
       for (var j = 0; j < targetDims; j++) {
         parts.push("c[" + j + "]" + arith);
       }
-      expr = "var c = " + src + ";\n[" + parts.join(", ") + "];";
+      expr = "var c = " + src + ".value;\n[" + parts.join(", ") + "];";
     }
   } else {
     return AELL_err("Dimension mismatch: control '" + fx.name + "' has " +
@@ -1003,10 +1007,15 @@ AELL_TOOLS.grid_layout = function (args) {
     var posProp = layer.property("ADBE Transform Group")
                        .property("ADBE Position");
     var is3d = AELLJSON.isArray(posProp.value) && posProp.value.length > 2;
+    // .value on every stored reference: AE's JavaScript expression engine
+    // returns Property objects from transform/effect lookups, and
+    // subscripting one (o[0]) yields undefined ("out of range array
+    // subscript"). .value resolves them in both engines.
     var expr =
-      'var o = thisComp.layer("' + escCtrl + '").transform.position;\n' +
-      'var sx = thisComp.layer("' + escCtrl + '").effect("Grid X Spacing")(1);\n' +
-      'var sy = thisComp.layer("' + escCtrl + '").effect("Grid Y Spacing")(1);\n' +
+      'var c = thisComp.layer("' + escCtrl + '");\n' +
+      'var o = c.transform.position.value;\n' +
+      'var sx = c.effect("Grid X Spacing")(1).value;\n' +
+      'var sy = c.effect("Grid Y Spacing")(1).value;\n' +
       '[o[0] + (' + cOff + ') * sx, o[1] + (' + rOff + ') * sy' +
       (is3d ? ', value[2]' : '') + '];';
     var err = AELL_setExpr(posProp, expr);
@@ -1043,8 +1052,10 @@ AELL_TOOLS.apply_expression_preset = function (args) {
       throw new Error("Control not found: '" + c.effect + "' on layer '" +
                       String(c.layer) + "'. Use add_control first.");
     }
+    // .value so the reference resolves inside function arguments too
+    // (the JS expression engine does not coerce Property objects there).
     return 'thisComp.layer("' + AELL_escapeExprName(l.name) +
-           '").effect("' + AELL_escapeExprName(fx.name) + '")(1)';
+           '").effect("' + AELL_escapeExprName(fx.name) + '")(1).value';
   }
 
   var preset = String(args.preset || "").toLowerCase();
@@ -1121,13 +1132,40 @@ AELL_TOOLS.set_effect_param = function (args) {
                      value: args.value });
 };
 
+/* First free name of the form "base", "base 2", "base 3", … in a comp. */
+function AELL_uniqueLayerName(comp, base) {
+  var taken = {};
+  for (var i = 1; i <= comp.numLayers; i++) taken[comp.layer(i).name] = true;
+  if (!taken[base]) return base;
+  var k = 2;
+  while (taken[base + " " + k]) k++;
+  return base + " " + k;
+}
+
 AELL_TOOLS.duplicate_layer = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var layer = AELL_layerOrSelection(comp, args.layer);
-  var dup = layer.duplicate();
-  if (args.name) dup.name = String(args.name);
-  return AELL_okay({ index: dup.index, name: dup.name,
-                     duplicatedFrom: layer.name });
+  var count = args.count > 0 ? Math.round(Number(args.count)) : 1;
+  if (count > 100) return AELL_err("'count' is capped at 100 copies");
+  var base = args.name ? String(args.name) : layer.name;
+  var names = [];
+  var autoNumbered = false;
+  for (var i = 0; i < count; i++) {
+    var dup = layer.duplicate();
+    // Never leave two layers with the same name — duplicate names break
+    // every name-based reference (expressions, later tool calls).
+    var nm = AELL_uniqueLayerName(comp, base);
+    if (nm !== base) autoNumbered = true;
+    dup.name = nm;
+    names.push(nm);
+  }
+  return AELL_okay({ created: count, duplicatedFrom: layer.name,
+    names: (names.length > 10 ? names.slice(0, 10) : names).join(", ") +
+           (names.length > 10 ? ", …" : ""),
+    totalLayersInComp: comp.numLayers,
+    note: autoNumbered
+      ? "Copies auto-numbered to keep layer names unique"
+      : "" });
 };
 
 /*

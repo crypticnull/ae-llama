@@ -175,6 +175,12 @@ assert(/\(0\) \* sx/.test(e5) && /\(0\.5\) \* sy/.test(e5),
 assert(/effect\("Grid X Spacing"\)\(1\)/.test(e1) &&
        /thisComp\.layer\("GRID CTRL"\)/.test(e1),
        "expression references the null's sliders");
+// The JS expression engine returns Property objects from these lookups;
+// without .value, o[0]/sx come back undefined and AE disables the rig.
+assert(/transform\.position\.value/.test(e1) &&
+       /effect\("Grid X Spacing"\)\(1\)\.value/.test(e1) &&
+       /effect\("Grid Y Spacing"\)\(1\)\.value/.test(e1),
+       "stored references resolve with .value (JS-engine safe)");
 assert(bystander._transform["ADBE Position"].expression === "",
        "unselected layer untouched");
 
