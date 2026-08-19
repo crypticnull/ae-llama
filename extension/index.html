@@ -41,14 +41,19 @@
     </section>
 
     <section id="settings-drawer" class="drawer hidden">
-      <h3>Settings</h3>
-
-      <label>llama-server.exe
-        <div class="pathfield">
-          <input id="set-server-path" type="text" spellcheck="false"/>
-          <button id="btn-browse-server">&hellip;</button>
-        </div>
+      <h3>Updates</h3>
+      <p id="version-line" class="fineprint"></p>
+      <label class="check">
+        <input id="set-auto-update" type="checkbox"/>
+        <span>Install panel updates automatically</span>
       </label>
+      <div class="drawer-actions" style="justify-content: flex-start;">
+        <button id="btn-check-updates">Check for updates</button>
+        <button id="btn-update-panel">Update panel now</button>
+        <button id="btn-update-engine">Reinstall / update engine</button>
+      </div>
+
+      <h3>Settings</h3>
 
       <label>Models folder
         <div class="pathfield">
@@ -57,26 +62,40 @@
         </div>
       </label>
 
-      <div class="grid2">
-        <label>Port
-          <input id="set-port" type="number" min="1024" max="65535"/>
+      <label class="check">
+        <input id="set-dryrun" type="checkbox"/>
+        <span>Dry run (show commands, don't apply)</span>
+      </label>
+
+      <div class="drawer-actions" style="justify-content: flex-start;">
+        <button id="btn-advanced-toggle">Advanced &#9656;</button>
+      </div>
+
+      <div id="advanced-settings" class="hidden">
+        <label>llama-server.exe
+          <div class="pathfield">
+            <input id="set-server-path" type="text" spellcheck="false"/>
+            <button id="btn-browse-server">&hellip;</button>
+          </div>
         </label>
-        <label>Context size
-          <input id="set-ctx" type="number" min="512" step="512"/>
-        </label>
-        <label>GPU layers (-ngl)
-          <input id="set-ngl" type="number" min="0" max="999"/>
-        </label>
-        <label>Temperature
-          <input id="set-temp" type="number" min="0" max="2" step="0.1"/>
-        </label>
-        <label>Max tool rounds
-          <input id="set-rounds" type="number" min="1" max="8"/>
-        </label>
-        <label class="check">
-          <input id="set-dryrun" type="checkbox"/>
-          <span>Dry run (show commands, don't apply)</span>
-        </label>
+
+        <div class="grid2">
+          <label>Port
+            <input id="set-port" type="number" min="1024" max="65535"/>
+          </label>
+          <label>Context size
+            <input id="set-ctx" type="number" min="512" step="512"/>
+          </label>
+          <label>GPU layers (-ngl)
+            <input id="set-ngl" type="number" min="0" max="999"/>
+          </label>
+          <label>Temperature
+            <input id="set-temp" type="number" min="0" max="2" step="0.1"/>
+          </label>
+          <label>Max tool rounds
+            <input id="set-rounds" type="number" min="1" max="8"/>
+          </label>
+        </div>
       </div>
 
       <h3>ComfyUI (image / video generation)</h3>
@@ -127,17 +146,6 @@
         <button id="btn-get-model-settings">Download</button>
       </div>
 
-      <h3>Updates</h3>
-      <p id="version-line" class="fineprint"></p>
-      <label class="check">
-        <input id="set-auto-update" type="checkbox"/>
-        <span>Install panel updates automatically (reopen panel to apply)</span>
-      </label>
-      <div class="drawer-actions" style="justify-content: flex-start;">
-        <button id="btn-check-updates">Check for updates</button>
-        <button id="btn-update-panel">Update panel now</button>
-        <button id="btn-update-engine">Reinstall / update engine</button>
-      </div>
     </section>
 
     <section id="log-drawer" class="drawer hidden">

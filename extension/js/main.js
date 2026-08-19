@@ -429,9 +429,6 @@
           if (!quiet) appendMsg("info", "Repo already up to date.");
           return;
         }
-        appendActionMsg("Panel updated" +
-          (res.output ? " (" + res.output + ")" : "") + ".",
-          [{ label: "Reload panel now", onClick: reloadPanel }]);
         if (quiet) {
           // Launch-time auto-update: apply it immediately (once per CEF
           // session, so a misbehaving feed can never cause a reload loop).
@@ -439,10 +436,20 @@
           try { done = global.sessionStorage.getItem("aell-auto-reloaded"); } catch (e) {}
           if (!done) {
             try { global.sessionStorage.setItem("aell-auto-reloaded", "1"); } catch (e) {}
-            appendMsg("info", "Reloading with the new version…");
+            appendMsg("info", "Panel updated — reloading with the new version…");
             global.setTimeout(reloadPanel, 1200);
+            return;
           }
+          // Guard tripped (already auto-reloaded once): hand over control.
+          appendActionMsg("Panel updated" +
+            (res.output ? " (" + res.output + ")" : "") + ".",
+            [{ label: "Reload panel now", onClick: reloadPanel }]);
+          return;
         }
+        // User-initiated update: they asked for it — apply it.
+        appendMsg("info", "Panel updated" +
+          (res.output ? " (" + res.output + ")" : "") + " — reloading…");
+        global.setTimeout(reloadPanel, 1200);
       });
   }
 
@@ -864,6 +871,13 @@
     // -- shut the server down with the panel
     global.addEventListener("unload", function () {
       try { global.Llama.stop(); } catch (e) {}
+    });
+
+    // -- advanced settings reveal
+    $("btn-advanced-toggle").addEventListener("click", function () {
+      var adv = $("advanced-settings");
+      var open = adv.classList.toggle("hidden");
+      this.innerHTML = open ? "Advanced &#9656;" : "Advanced &#9662;";
     });
 
     // -- updates + model catalog + auto-bootstrap
