@@ -84,7 +84,7 @@
             "spread. Uses the user's selected layers when 'layers' omitted. " +
             "Omit spread/startAt to fill the comp's WORK AREA; omit bezier " +
             "for linear (ease-out = [0,0,0.58,1], ease-in = [0.42,0,1,1]).",
-      args: "{comp?: string, layers?: [name|index], bezier?: [x1,y1,x2,y2] (default linear), spread?: seconds (default: work area), startAt?: s, order?: 'in'|'stack'|'reverse'}" },
+      args: "{comp?: string, layers?: [name|index], bezier?: [x1,y1,x2,y2] (default linear), spread?: seconds (default: work area), startAt?: s, order?: 'in'|'stack'|'reverse'|'ascending'|'descending'}" },
     { name: "distribute_property", mutating: true,
       desc: "Distribute a property VALUE across layers along a bezier " +
             "curve: layer i gets from + bezierY(i/(n-1)) * (to-from).",
@@ -135,9 +135,18 @@
             "math. Omit 'layer' to use the user's selected layer. Chunks " +
             "NEVER overlap and play seamlessly end-to-end; offsetPerChunk " +
             "only adds EXTRA spacing (gaps) of i*offset seconds. Chunks " +
-            "stack top-to-bottom in order (chunk 1 on top) and end up " +
-            "SELECTED, so follow-up commands can target them by selection.",
+            "stack ascending by default (later chunks HIGHER in the " +
+            "stack — bars staircase upward; 'descending' puts chunk 1 on " +
+            "top) and end up SELECTED, so follow-up commands can target " +
+            "them by selection.",
       args: "{comp?: string, layer?: name|index (omit = selected layer), chunks?: exact piece count, chunkSeconds?: s, offsetPerChunk?: s (extra gaps only), order?: 'ascending'|'descending' (stack order, default ascending)}" },
+    { name: "reorder_layers", mutating: true,
+      desc: "Restack layers WITHOUT changing their timing. 'ascending' " +
+            "(default) = later start times sit higher in the stack (bars " +
+            "staircase upward); 'descending' = earliest on top. Targets " +
+            "the selection when 'layers' omitted, else every layer in the " +
+            "comp. Use for 'change/sort the layer order'.",
+      args: "{comp?: string, layers?: [name|index] (omit = selection, else all), by?: 'startTime'|'inPoint'|'name' (default startTime), order?: 'ascending'|'descending'}" },
     { name: "delete_layer", mutating: true,
       desc: "Delete a layer from a comp.",
       args: "{comp?: string, layer: name|index}" },
@@ -272,7 +281,15 @@
       "  'split into X-second chunks' = {chunkSeconds: X}. Chunks never",
       "  overlap on their own — omit offsetPerChunk unless the user",
       "  explicitly wants extra gaps between the pieces. Chunks stack",
-      "  ascending (chunk 1 on top); order: 'descending' flips that.",
+      "  ascending by default (later chunks HIGHER in the stack, bars",
+      "  building a staircase upward); order: 'descending' = chunk 1 on",
+      "  top, staircase downward.",
+      "- 'change/sort the layer order or stacking' = reorder_layers. It",
+      "  restacks only — start times are untouched. ascending = later",
+      "  start times higher in the stack (staircase up); descending =",
+      "  earliest on top (staircase down). Omit 'layers' to use the",
+      "  selection (or all layers when nothing is selected). Do NOT use",
+      "  stagger_layers to reorder — it changes TIMES, not stacking.",
       "- To RESIZE a comp ('make it 1920x1080', 'scale the comp down'),",
       "  use scale_comp — it scales and re-centers the content like the",
       "  native Scale Composition script. set_comp_setting width/height",

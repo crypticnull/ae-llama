@@ -1189,13 +1189,15 @@ AELL_TOOLS.split_layer_into_chunks = function (args) {
     piece.name = baseName + " chunk " + (i + 1);
   }
 
-  // Stack the chunks in order — duplicates are born ABOVE the original,
-  // which would otherwise strand chunk 1 at the bottom of the pile.
+  // Stack the chunks deliberately — duplicates are born ABOVE the
+  // original, which would otherwise strand chunk 1 at the bottom.
+  // Ascending (default): later chunks sit HIGHER in the stack (chunk 1 at
+  // the bottom). Descending: chunk 1 on top.
   var descending = /^desc/i.test(String(args.order || ""));
   if (pieces[0].moveAfter && pieces[0].moveBefore) {
     for (i = 1; i < n; i++) {
-      if (descending) pieces[i].moveBefore(pieces[i - 1]);
-      else pieces[i].moveAfter(pieces[i - 1]);
+      if (descending) pieces[i].moveAfter(pieces[i - 1]);
+      else pieces[i].moveBefore(pieces[i - 1]);
     }
   }
 
@@ -1280,6 +1282,10 @@ function AELL_targetLayers(comp, args) {
                     ") — select them in AE or pass {layers: [...]}");
   }
   var order = String(args.order || "in");
+  // User-facing aliases: 'ascending' assigns the earliest slot to the
+  // BOTTOM layer (bars staircase upward); 'descending' to the top layer.
+  if (/^asc/i.test(order)) order = "reverse";
+  else if (/^desc/i.test(order)) order = "stack";
   if (order === "stack") {
     layers.sort(function (a, b) { return a.index - b.index; });
   } else if (order === "reverse") {
@@ -1289,6 +1295,63 @@ function AELL_targetLayers(comp, args) {
   }
   return layers;
 }
+
+/*
+ * Restack layers WITHOUT touching their timing. Ascending (default):
+ * later start times sit higher in the stack, so the timeline bars build
+ * a staircase going UP; descending: earliest on top, staircase going
+ * down. Targets the explicit list, else the selection, else every layer
+ * in the comp.
+ */
+AELL_TOOLS.reorder_layers = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  var layers = [];
+  var i;
+  if (AELLJSON.isArray(args.layers) && args.layers.length > 0) {
+    for (i = 0; i < args.layers.length; i++) {
+      layers.push(AELL_resolveLayer(comp, args.layers[i]));
+    }
+  } else {
+    var sel = comp.selectedLayers;
+    for (i = 0; i < sel.length; i++) layers.push(sel[i]);
+    if (layers.length === 0) {
+      for (i = 1; i <= comp.numLayers; i++) layers.push(comp.layer(i));
+    }
+  }
+  if (layers.length < 2) {
+    return AELL_err("Need at least 2 layers to reorder (got " +
+                    layers.length + ")");
+  }
+  var by = String(args.by || "startTime");
+  function keyOf(L) {
+    if (by === "inPoint") return L.inPoint;
+    if (by === "name") return L.name;
+    return L.startTime;
+  }
+  var sorted = layers.slice(0);
+  sorted.sort(function (a, b) {
+    var ka = keyOf(a), kb = keyOf(b);
+    return ka < kb ? -1 : (ka > kb ? 1 : 0);
+  });
+  var descending = /^desc/i.test(String(args.order || ""));
+  // Top-first sequence: ascending puts the LATEST key on top.
+  var topFirst = descending ? sorted : sorted.slice(0).reverse();
+  // Anchor the cluster where its topmost member currently sits.
+  var top = layers[0];
+  for (i = 1; i < layers.length; i++) {
+    if (layers[i].index < top.index) top = layers[i];
+  }
+  if (topFirst[0] !== top) topFirst[0].moveBefore(top);
+  for (i = 1; i < topFirst.length; i++) {
+    topFirst[i].moveAfter(topFirst[i - 1]);
+  }
+  var stacked = [];
+  for (i = 0; i < topFirst.length && i < 5; i++) stacked.push(topFirst[i].name);
+  return AELL_okay({ layers: layers.length, by: by,
+    order: descending ? "descending" : "ascending",
+    topToBottom: stacked.join(" | ") + (topFirst.length > 5 ? " | …" : ""),
+    note: "Stacking changed only — start times untouched" });
+};
 
 AELL_TOOLS.stagger_layers = function (args) {
   var comp = AELL_resolveComp(args.comp);
@@ -1781,7 +1844,7 @@ var AELL_MUTATING = {
   delete_item: true, duplicate_comp: true, organize_project: true,
   grid_layout: true, duplicate_layer: true, split_layer_into_chunks: true,
   stagger_layers: true, distribute_property: true, apply_keyframe_ease: true,
-  scale_comp: true
+  scale_comp: true, reorder_layers: true
 };
 
 // --------------------------------------------------------------- entry point
