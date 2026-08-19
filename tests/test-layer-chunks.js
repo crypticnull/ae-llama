@@ -205,9 +205,9 @@ assert(Math.abs(w5[0][0]) < 1e-9 &&
        Math.abs(w5[4][1] - 35.9359359359359) < 1e-9,
        "5 equal pieces cover the full span");
 assert(comp5._layers.map(l => l.name).join("|") ===
-       "seq chunk 1|seq chunk 2|seq chunk 3|seq chunk 4|seq chunk 5",
-       "chunks stack ascending — chunk 1 on top (got " +
-       comp5._layers.map(l => l.name).join("|") + ")");
+       "seq chunk 5|seq chunk 4|seq chunk 3|seq chunk 2|seq chunk 1",
+       "chunks stack ascending — later chunks higher, chunk 1 at the " +
+       "bottom (got " + comp5._layers.map(l => l.name).join("|") + ")");
 assert(comp5._layers.every(l => l.selected),
        "chunks are left selected for follow-up commands");
 
@@ -242,8 +242,33 @@ project.activeItem = comp7;
 const r12 = call("split_layer_into_chunks",
                  { layer: "d", chunks: 3, order: "descending" });
 assert(r12.ok && comp7._layers.map(l => l.name).join("|") ===
-       "d chunk 3|d chunk 2|d chunk 1",
-       "order: 'descending' stacks the last chunk on top (got " +
+       "d chunk 1|d chunk 2|d chunk 3",
+       "order: 'descending' puts chunk 1 on top — staircase down (got " +
        comp7._layers.map(l => l.name).join("|") + ")");
+
+// reorder_layers: restack by start time, timing untouched
+const comp8 = new Comp("Stack", 20);
+Object.setPrototypeOf(comp8, Object.create(CompItem.prototype,
+  Object.getOwnPropertyDescriptors(Comp.prototype)));
+const rA = new Layer("early", comp8, 0, 5, 0);
+const rB = new Layer("late", comp8, 0, 5, 5);
+const rC = new Layer("mid", comp8, 0, 5, 2);
+comp8._layers.push(rA, rB, rC);
+project.activeItem = comp8;
+const r13 = call("reorder_layers", {});   // nothing selected -> all layers
+assert(r13.ok && comp8._layers.map(l => l.name).join("|") ===
+       "late|mid|early",
+       "ascending: later start times stack higher — staircase up (got " +
+       comp8._layers.map(l => l.name).join("|") + ")");
+assert(rA.startTime === 0 && rB.startTime === 5 && rC.startTime === 2,
+       "reorder_layers leaves start times untouched");
+const r14 = call("reorder_layers", { order: "descending" });
+assert(r14.ok && comp8._layers.map(l => l.name).join("|") ===
+       "early|mid|late",
+       "descending: earliest on top — staircase down (got " +
+       comp8._layers.map(l => l.name).join("|") + ")");
+const r15 = call("reorder_layers", { layers: ["early"] });
+assert(!r15.ok && /at least 2/.test(r15.error),
+       "reorder with fewer than 2 targets refused");
 
 console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");
