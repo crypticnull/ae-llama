@@ -426,7 +426,10 @@
       model: "default",
       messages: messages,
       temperature: opts.temperature,
-      max_tokens: 2048,
+      // Room for large-but-legit command batches; a reply that still hits
+      // this cap arrives truncated and unparseable, and main.js answers
+      // with a compact-retry round.
+      max_tokens: 3072,
       cache_prompt: true,
       stream: true,
       response_format: {
@@ -466,7 +469,7 @@
             model: body.model,
             messages: messages,
             temperature: opts.temperature,
-            max_tokens: 2048,
+            max_tokens: 3072,
             cache_prompt: true
           };
           requestJson("POST", opts.port, "/v1/chat/completions", relaxed,
