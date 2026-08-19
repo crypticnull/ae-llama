@@ -391,16 +391,22 @@
       });
   }
 
-  function installPanelUpdate() {
+  var panelUpdateBusy = false;
+
+  function installPanelUpdate(quiet) {
+    if (panelUpdateBusy) return;
+    panelUpdateBusy = true;
     global.Setup.installUpdate(updateManifest, setupStatus,
       function (err, res) {
+        panelUpdateBusy = false;
         setupLine = null;
         if (err) {
           appendMsg("error", "Panel update failed: " + err.message);
           return;
         }
         if (res.kind === "git" && !res.changed) {
-          appendMsg("info", "Repo already up to date.");
+          // Nothing new: stay silent on the launch-time auto check.
+          if (!quiet) appendMsg("info", "Repo already up to date.");
           return;
         }
         appendMsg("info", "Panel updated" +
@@ -747,6 +753,17 @@
     // llamaTag; bootstrap proceeds regardless after a short head start.)
     checkForUpdates(false);
     global.setTimeout(autoBootstrap, 2500);
+
+    // Git installs need no hosted update feed at all — the repo IS the
+    // feed. With auto-update on, pull on every launch.
+    global.setTimeout(function () {
+      try {
+        if (global.Settings.get().autoInstallUpdates &&
+            global.Setup.detectInstallKind().kind === "git") {
+          installPanelUpdate(true);
+        }
+      } catch (e) {}
+    }, 4000);
   }
 
   document.addEventListener("DOMContentLoaded", init);
