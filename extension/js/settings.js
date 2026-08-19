@@ -62,8 +62,10 @@
       comfyOutDir: j("generated"),
       comfyTimeoutSec: 600,
       // Install panel updates without asking (git pull for dev installs,
-      // panelPackageUrl download for package installs).
-      autoInstallUpdates: false
+      // panelPackageUrl download for package installs). Store builds
+      // without a panelPackageUrl are unaffected — they only show the
+      // banner. Opt out in settings.
+      autoInstallUpdates: true
     };
   }
 
