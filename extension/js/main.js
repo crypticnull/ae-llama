@@ -403,6 +403,16 @@
 
   var panelUpdateBusy = false;
 
+  /**
+   * Reload the panel in place: CEF re-reads index.html + js from the
+   * extension folder, and init() re-evaluates the host jsx — so a freshly
+   * installed update goes live without closing the panel.
+   */
+  function reloadPanel() {
+    try { global.Llama.stop(); } catch (e) {}
+    global.location.reload();
+  }
+
   function installPanelUpdate(quiet) {
     if (panelUpdateBusy) return;
     panelUpdateBusy = true;
@@ -419,10 +429,20 @@
           if (!quiet) appendMsg("info", "Repo already up to date.");
           return;
         }
-        appendMsg("info", "Panel updated" +
-          (res.output ? " (" + res.output + ")" : "") +
-          ". Close and reopen the panel (Window ▸ Extensions ▸ AE Llama) — " +
-          "or restart After Effects — to load the new version.");
+        appendActionMsg("Panel updated" +
+          (res.output ? " (" + res.output + ")" : "") + ".",
+          [{ label: "Reload panel now", onClick: reloadPanel }]);
+        if (quiet) {
+          // Launch-time auto-update: apply it immediately (once per CEF
+          // session, so a misbehaving feed can never cause a reload loop).
+          var done = null;
+          try { done = global.sessionStorage.getItem("aell-auto-reloaded"); } catch (e) {}
+          if (!done) {
+            try { global.sessionStorage.setItem("aell-auto-reloaded", "1"); } catch (e) {}
+            appendMsg("info", "Reloading with the new version…");
+            global.setTimeout(reloadPanel, 1200);
+          }
+        }
       });
   }
 
@@ -657,6 +677,15 @@
         "CEP runtime not detected. This page must run inside After Effects.");
       return;
     }
+
+    // Re-evaluate the host script: CEP only auto-loads ScriptPath on the
+    // extension's FIRST load, so after an in-place update + reload this is
+    // what brings the newest ExtendScript tools live too.
+    try {
+      var jsxPath = (global.AEBridge.getExtensionPath() + "/jsx/hostscript.jsx")
+        .replace(/\\/g, "/").replace(/"/g, '\\"');
+      global.AEBridge.evalScript('$.evalFile("' + jsxPath + '")');
+    } catch (e) {}
 
     // Populate the settings form up front so no code path can ever persist
     // never-filled (empty) fields over the real settings.
