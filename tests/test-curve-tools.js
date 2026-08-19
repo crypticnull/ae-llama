@@ -174,6 +174,29 @@ assert(near(comp.layer("L1").startTime, 2) &&
        near(comp.layer("L2").startTime, 12),
        "layers span work area 2..12 with the default linear curve");
 
+// 7b. equidistant step mode: "space them every 120px" in one call
+comp.layer("L1")._transform["ADBE Position"].setValue([200, 540]);
+r = call("distribute_property", {
+  property: "position_x", step: 120, layers: ["L1", "L2", "L3"],
+  order: "stack"
+});
+const xs = ["L1", "L2", "L3"].map(nm =>
+  comp.layer(nm)._transform["ADBE Position"].value[0]);
+assert(r.ok && near(xs[0], 200) && near(xs[1], 320) && near(xs[2], 440),
+       "step 120 anchors at L1's x and spaces 200/320/440 (got " +
+       xs.map(v => v.toFixed(0)) + ")");
+r = call("distribute_property", {
+  property: "position_x", step: 50, from: 0, layers: ["L1", "L2"],
+  order: "stack"
+});
+assert(r.ok && near(comp.layer("L2")._transform["ADBE Position"].value[0], 50),
+       "explicit from overrides the anchor in step mode");
+r = call("distribute_property", {
+  property: "position_x", layers: ["L1", "L2"], order: "stack"
+});
+assert(!r.ok && /'step'/.test(r.error),
+       "missing from/to AND step -> clear error naming both modes");
+
 // 8. scale_comp: resize + uniform content scale, re-centered (the field
 // case: 3840x2860 -> 1920x1080)
 comp.width = 3840; comp.height = 2860;

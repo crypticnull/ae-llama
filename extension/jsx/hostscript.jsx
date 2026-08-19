@@ -1450,15 +1450,37 @@ AELL_TOOLS.distribute_property = function (args) {
     return AELL_err("'property' must be one of: opacity, rotation, scale, " +
                     "position_x, position_y");
   }
-  if (typeof args.from !== "number" || typeof args.to !== "number") {
-    return AELL_err("'from' and 'to' values are required (numbers; " +
-                    "scale/opacity in percent, position in pixels)");
+  // Two modes: from/to sweep along the bezier, or fixed 'step' between
+  // consecutive layers (equidistant — no curve involved).
+  var useStep = typeof args.step === "number";
+  if (!useStep &&
+      (typeof args.from !== "number" || typeof args.to !== "number")) {
+    return AELL_err("Pass 'from' and 'to' (curve sweep), or 'step' for " +
+                    "equidistant spacing (numbers; scale/opacity in " +
+                    "percent, position in pixels)");
+  }
+  var stepStart = null;
+  if (useStep) {
+    if (typeof args.from === "number") {
+      stepStart = args.from;
+    } else {
+      // Anchor at the first layer's current value on that property/axis.
+      var p0 = AELL_resolveProperty(layers[0], spec.path);
+      var v0 = p0.value;
+      stepStart = spec.kind === "scalar" ? v0
+        : (spec.kind === "uniform" ? v0[0] : v0[spec.axis]);
+    }
   }
   var n = layers.length;
   var applied = [];
   for (var i = 0; i < n; i++) {
-    var y = AELL_bezierY(bez[0], bez[1], bez[2], bez[3], i / (n - 1));
-    var v = args.from + y * (args.to - args.from);
+    var v;
+    if (useStep) {
+      v = stepStart + i * Number(args.step);
+    } else {
+      var y = AELL_bezierY(bez[0], bez[1], bez[2], bez[3], i / (n - 1));
+      v = args.from + y * (args.to - args.from);
+    }
     var prop = AELL_resolveProperty(layers[i], spec.path);
     if (spec.kind === "scalar") {
       prop.setValue(v);

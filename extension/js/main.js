@@ -263,6 +263,7 @@
 
     busy = true;
     cancelRequested = false;
+    var parseRetried = false;   // one compact-retry per send on truncation
     setSendMode(true);
     els.clearChatBtn.disabled = true;   // clearing mid-round corrupts history
     var thinking = appendMsg("info", "Thinking…");
@@ -322,9 +323,27 @@
           if (err) {
             if (err.cancelled) {
               appendMsg("info", "Stopped.");
-            } else {
-              appendMsg("error", "Model error: " + err.message);
+              finish();
+              return;
             }
+            // A reply that hit the output-token cap arrives as truncated,
+            // unparseable JSON. Discard it and ask once for a compact redo
+            // instead of failing the whole request.
+            if (/unparseable/i.test(err.message) && !parseRetried) {
+              parseRetried = true;
+              history.push({ role: "user", content:
+                "SYSTEM: Your previous response was truncated before it " +
+                "completed and was DISCARDED — no commands ran. Re-issue " +
+                "the plan as valid JSON with AT MOST 8 compact commands " +
+                "(use batch options like duplicate_layer count or " +
+                "distribute_property step instead of repeating similar " +
+                "commands); leave the rest for the next round." });
+              appendMsg("info", "Reply was cut off — asking the model to " +
+                        "retry compactly…");
+              runRound(system, round);
+              return;
+            }
+            appendMsg("error", "Model error: " + err.message);
             finish();
             return;
           }

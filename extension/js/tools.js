@@ -86,9 +86,13 @@
             "for linear (ease-out = [0,0,0.58,1], ease-in = [0.42,0,1,1]).",
       args: "{comp?: string, layers?: [name|index], bezier?: [x1,y1,x2,y2] (default linear), spread?: seconds (default: work area), startAt?: s, order?: 'in'|'stack'|'reverse'|'ascending'|'descending'}" },
     { name: "distribute_property", mutating: true,
-      desc: "Distribute a property VALUE across layers along a bezier " +
-            "curve: layer i gets from + bezierY(i/(n-1)) * (to-from).",
-      args: "{comp?: string, layers?: [name|index], bezier: [x1,y1,x2,y2], property: 'opacity'|'rotation'|'scale'|'position_x'|'position_y', from: number, to: number, order?: 'in'|'stack'|'reverse'}" },
+      desc: "Distribute a property VALUE across layers. Curve mode: layer " +
+            "i gets from + bezierY(i/(n-1)) * (to-from). Equidistant " +
+            "mode: pass step and layer i gets from + i*step (from " +
+            "defaults to the first layer's current value; step is " +
+            "center-to-center, so 100px shapes with a 20px gap = step " +
+            "120). Use step for 'space them every X px / equidistant'.",
+      args: "{comp?: string, layers?: [name|index], property: 'opacity'|'rotation'|'scale'|'position_x'|'position_y', from?: number, to?: number, step?: number (equidistant), bezier?: [x1,y1,x2,y2], order?: 'in'|'stack'|'reverse'}" },
     { name: "apply_keyframe_ease", mutating: true,
       desc: "Apply a bezier as TEMPORAL easing between keyframes on one " +
             "property (converts to AE speed/influence ease). keyIndex " +
@@ -311,6 +315,12 @@
       "  duplicates, and NEVER give two layers the same name.",
       "- Report counts from tool results (created / totalLayersInComp) —",
       "  never claim a number you did not verify.",
+      "- Emit AT MOST 8 commands per reply and keep them compact — output",
+      "  space is limited and an oversized reply gets cut off. More work?",
+      "  Stop after 8 and continue after TOOL RESULTS.",
+      "- 'distribute/space layers equidistantly / every X px' =",
+      "  distribute_property {property: position_x, step: X} — ONE call,",
+      "  never a chain of set_transform/duplicate calls.",
       "- Curve requests: 'stagger with an ease' = stagger_layers;",
       "  'ramp opacity/scale across these layers' = distribute_property;",
       "  'ease between the keyframes' = apply_keyframe_ease. All take the",
