@@ -8,7 +8,7 @@
   "use strict";
 
   global.AELL = {
-    VERSION: "0.3.9",
+    VERSION: "0.4.0",
 
     // Hosted JSON the panel polls for updates (see update.json in the repo
     // root for the format). Host it anywhere stable you control — your own

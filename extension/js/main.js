@@ -362,17 +362,23 @@
       "(one time, fully automatic).");
     var tag = updateManifest && updateManifest.llamaTag
       ? updateManifest.llamaTag : "latest";
-    global.Setup.bootstrapEngine({ tag: tag }, setupStatus,
+    var ctrl = global.Setup.bootstrapEngine(
+      { tag: tag, onProgress: paintProgress }, setupStatus,
       function (err, res) {
+        hideProgress();
         setupLine = null;
         if (err) {
-          appendMsg("error", "Engine setup failed: " + err.message +
-            " — use 'Reinstall / update engine' in settings to retry.");
+          appendMsg(err.cancelled ? "info" : "error",
+            err.cancelled
+              ? "Engine download cancelled — use 'Reinstall / update engine' in settings to retry."
+              : "Engine setup failed: " + err.message +
+                " — use 'Reinstall / update engine' in settings to retry.");
         } else if (!res.skipped) {
           appendMsg("info", "Engine installed. Pick a model and press Start.");
           populateModelDropdown();
         }
       });
+    if (ctrl) showProgress("AI engine", function () { ctrl.cancel(); });
   }
 
   function updateEngine() {
@@ -382,13 +388,17 @@
     }
     var tag = updateManifest && updateManifest.llamaTag
       ? updateManifest.llamaTag : "latest";
-    global.Setup.bootstrapEngine({ force: true, tag: tag }, setupStatus,
+    var ctrl = global.Setup.bootstrapEngine(
+      { force: true, tag: tag, onProgress: paintProgress }, setupStatus,
       function (err) {
+        hideProgress();
         setupLine = null;
-        appendMsg(err ? "error" : "info",
-          err ? "Engine update failed: " + err.message
+        appendMsg(err ? (err.cancelled ? "info" : "error") : "info",
+          err ? (err.cancelled ? "Engine update cancelled."
+                               : "Engine update failed: " + err.message)
               : "Engine updated.");
       });
+    if (ctrl) showProgress("AI engine", function () { ctrl.cancel(); });
   }
 
   var panelUpdateBusy = false;
@@ -458,6 +468,47 @@
 
   var gpuInfo = null;
 
+  // ------------------------------------------------- download progress bar
+
+  var currentCancel = null;
+  var progressBase = "";
+  var lastBarPaint = 0;
+
+  function fmtBytes(b) {
+    if (b >= 1e9) return (b / 1e9).toFixed(2) + " GB";
+    return Math.max(1, Math.round(b / 1e6)) + " MB";
+  }
+
+  function showProgress(label, cancelFn) {
+    progressBase = label;
+    currentCancel = cancelFn || null;
+    els.progressLabel.textContent = label + " — starting…";
+    els.progressFill.style.width = "0%";
+    els.progressRow.classList.remove("hidden");
+    // The bar lives above the drawers, but close settings so the user sees
+    // the chat status lines too.
+    els.settingsDrawer.classList.add("hidden");
+  }
+
+  function paintProgress(rec, total) {
+    var now = Date.now();
+    if (now - lastBarPaint < 150) return;
+    lastBarPaint = now;
+    if (total > 0) {
+      var pct = Math.min(100, (rec / total) * 100);
+      els.progressFill.style.width = pct.toFixed(1) + "%";
+      els.progressLabel.textContent = progressBase + " — " +
+        Math.floor(pct) + "%  (" + fmtBytes(rec) + " / " + fmtBytes(total) + ")";
+    } else {
+      els.progressLabel.textContent = progressBase + " — " + fmtBytes(rec);
+    }
+  }
+
+  function hideProgress() {
+    els.progressRow.classList.add("hidden");
+    currentCancel = null;
+  }
+
   /** Fill both catalog pickers, best fit for the detected GPU preselected. */
   function populateModelCatalog() {
     var catalog = global.Setup.modelCatalog(updateManifest);
@@ -491,18 +542,31 @@
       if (catalog[i].name === selectEl.value) { chosen = catalog[i]; break; }
     }
     if (!chosen) { appendMsg("error", "Pick a model first."); return; }
+    if (currentCancel) {
+      appendMsg("info", "A download is already running — cancel it first (✕).");
+      return;
+    }
     els.getModelBtn.disabled = true;
-    global.Setup.downloadModel(chosen, setupStatus, function (err, dest) {
+    var ctrl = global.Setup.downloadModel(chosen, {
+      status: setupStatus,
+      progress: paintProgress
+    }, function (err, dest) {
+      hideProgress();
       setupLine = null;
       els.getModelBtn.disabled = false;
       if (err) {
-        appendMsg("error", "Model download failed: " + err.message);
+        appendMsg(err.cancelled ? "info" : "error",
+          err.cancelled ? "Model download cancelled."
+                        : "Model download failed: " + err.message);
         return;
       }
       appendMsg("info", chosen.label + " downloaded.");
       global.Settings.set({ modelPath: dest });
       populateModelDropdown();
     });
+    if (ctrl) {
+      showProgress(chosen.label, function () { ctrl.cancel(); });
+    }
   }
 
   // -------------------------------------------------------------- settings
@@ -582,7 +646,10 @@
       starterSelect: $("starter-select"),
       setModelSelect: $("set-model-select"),
       getModelBtn: $("btn-get-model"),
-      versionLine: $("version-line")
+      versionLine: $("version-line"),
+      progressRow: $("progress-row"),
+      progressLabel: $("progress-label"),
+      progressFill: $("progress-fill")
     };
 
     if (!global.AEBridge.available()) {
@@ -771,6 +838,12 @@
     });
 
     // -- updates + model catalog + auto-bootstrap
+    $("btn-progress-cancel").addEventListener("click", function () {
+      if (currentCancel) {
+        els.progressLabel.textContent = progressBase + " — cancelling…";
+        currentCancel();
+      }
+    });
     els.getModelBtn.addEventListener("click", function () {
       downloadCatalogModel(els.starterSelect);
     });

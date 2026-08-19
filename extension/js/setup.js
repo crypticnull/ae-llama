@@ -172,13 +172,39 @@
 
   /**
    * Download url to destPath, following redirects (GitHub/HF assets 302 to
-   * a CDN). onProgress(receivedBytes, totalBytes|0) throttled by caller.
+   * a CDN). onProgress(receivedBytes, totalBytes|0) fires per chunk.
+   * Returns a controller: {cancel()} aborts the transfer (across redirects),
+   * deletes the partial file, and calls cb with err.cancelled = true.
    */
-  function downloadToFile(url, destPath, onProgress, cb, redirects) {
+  function downloadToFile(url, destPath, onProgress, cb, redirects, ctrl) {
     ensureNode();
     redirects = redirects || 0;
+    if (!ctrl) {
+      ctrl = {
+        cancelled: false,
+        _req: null,
+        cancel: function () {
+          ctrl.cancelled = true;
+          try {
+            if (ctrl._req) ctrl._req.destroy(new Error("cancelled"));
+          } catch (e) {}
+        }
+      };
+    }
+    var settled = false;
+    function done(err, result) {
+      if (settled) return;
+      settled = true;
+      if (err && ctrl.cancelled) {
+        err = new Error("Download cancelled");
+        err.cancelled = true;
+      }
+      if (err) { try { fs.unlinkSync(destPath); } catch (e) {} }
+      cb(err, result);
+    }
+
     var u;
-    try { u = new URL(url); } catch (e) { cb(e); return; }
+    try { u = new URL(url); } catch (e) { done(e); return ctrl; }
     var mod = u.protocol === "https:" ? https : http;
     var req = mod.request({
       host: u.hostname,
@@ -190,13 +216,14 @@
       if (res.statusCode >= 300 && res.statusCode < 400 &&
           res.headers.location && redirects < 5) {
         res.resume();
+        settled = true;   // hand off to the redirect leg
         downloadToFile(res.headers.location, destPath, onProgress, cb,
-                       redirects + 1);
+                       redirects + 1, ctrl);
         return;
       }
       if (res.statusCode !== 200) {
         res.resume();
-        cb(new Error("Download failed (HTTP " + res.statusCode + ")"));
+        done(new Error("Download failed (HTTP " + res.statusCode + ")"));
         return;
       }
       var total = parseInt(res.headers["content-length"] || "0", 10);
@@ -204,16 +231,18 @@
       var out = fs.createWriteStream(destPath);
       res.on("data", function (c) {
         received += c.length;
-        if (onProgress) onProgress(received, total);
+        if (onProgress && !ctrl.cancelled) onProgress(received, total);
       });
       res.pipe(out);
-      out.on("finish", function () { out.close(); cb(null, destPath); });
-      out.on("error", function (e) { cb(e); });
-      res.on("error", function (e) { cb(e); });
+      out.on("finish", function () { out.close(); done(null, destPath); });
+      out.on("error", function (e) { try { out.destroy(); } catch (e2) {} done(e); });
+      res.on("error", function (e) { try { out.destroy(); } catch (e2) {} done(e); });
     });
-    req.on("error", function (e) { cb(e); });
+    ctrl._req = req;
+    req.on("error", function (e) { done(e); });
     // No idle timeout on multi-GB downloads; errors/aborts still fire.
     req.end();
+    return ctrl;
   }
 
   function extractZip(zipPath, destDir, cb) {
@@ -318,7 +347,20 @@
    */
   function bootstrapEngine(opts, onStatus, cb) {
     ensureNode();
-    if (bootstrapBusy) { cb(new Error("Setup is already running")); return; }
+    // Controller returned to the caller; cancel() aborts the in-flight
+    // download and stops the asset queue.
+    var ctrl = {
+      cancelled: false,
+      _dl: null,
+      cancel: function () {
+        ctrl.cancelled = true;
+        try { if (ctrl._dl) ctrl._dl.cancel(); } catch (e) {}
+      }
+    };
+    if (bootstrapBusy) {
+      cb(new Error("Setup is already running"));
+      return ctrl;
+    }
     opts = opts || {};
     function status(t) { if (onStatus) onStatus(t); }
 
@@ -329,7 +371,7 @@
     var existing = global.Llama.findServerExe(global.Settings.get().serverPath);
     if (existing && !opts.force) {
       cb(null, { serverPath: existing, skipped: true });
-      return;
+      return ctrl;
     }
 
     bootstrapBusy = true;
@@ -388,19 +430,21 @@
             finish(null, { serverPath: exe });
             return;
           }
+          if (ctrl.cancelled) {
+            var ce = new Error("Download cancelled");
+            ce.cancelled = true;
+            finish(ce);
+            return;
+          }
           var asset = queue.shift();
           var zipPath = path.join(vendorRoot, asset.name);
           var mb = Math.round((asset.size || 0) / 1048576);
           status("Downloading " + asset.name +
                  (mb ? " (" + mb + " MB)…" : "…"));
-          var lastPct = -10;
-          downloadToFile(asset.browser_download_url, zipPath,
+          ctrl._dl = downloadToFile(asset.browser_download_url, zipPath,
             function (rec, total) {
-              if (!total) return;
-              var pct = Math.floor((rec / total) * 100);
-              if (pct >= lastPct + 10) {
-                lastPct = pct;
-                status(asset.name + ": " + pct + "%");
+              if (opts.onProgress) {
+                opts.onProgress(rec, total || asset.size || 0);
               }
             },
             function (derr) {
@@ -415,6 +459,7 @@
         })();
       });
     });
+    return ctrl;
   }
 
   // -------------------------------------------------------- starter model
@@ -428,28 +473,30 @@
     return global.AELL.MODEL_CATALOG;
   }
 
-  function downloadModel(model, onStatus, cb) {
+  /**
+   * Download a catalog model into the models folder.
+   * ui: {status(text)?, progress(receivedBytes, totalBytes)?}
+   * Returns the download controller ({cancel()}).
+   */
+  function downloadModel(model, ui, cb) {
     ensureNode();
     ensureDataDirs();
+    ui = ui || {};
     if (!model || !model.url || !model.name) {
       cb(new Error("No model configured"));
-      return;
+      return null;
     }
     var dest = path.join(global.Settings.dataRoot(), "models", model.name);
-    if (fs.existsSync(dest)) { cb(null, dest); return; }
+    if (fs.existsSync(dest)) { cb(null, dest); return null; }
     var tmp = dest + ".part";
-    if (onStatus) {
-      onStatus("Downloading " + model.name +
+    if (ui.status) {
+      ui.status("Downloading " + model.name +
         (model.sizeMB ? " (~" + Math.round(model.sizeMB / 1024 * 10) / 10 +
          " GB — this can take a while)…" : "…"));
     }
-    var lastPct = -5;
-    downloadToFile(model.url, tmp, function (rec, total) {
-      if (!total || !onStatus) return;
-      var pct = Math.floor((rec / total) * 100);
-      if (pct >= lastPct + 5) {
-        lastPct = pct;
-        onStatus(model.name + ": " + pct + "%");
+    return downloadToFile(model.url, tmp, function (rec, total) {
+      if (ui.progress) {
+        ui.progress(rec, total || (model.sizeMB ? model.sizeMB * 1048576 : 0));
       }
     }, function (err) {
       if (err) {

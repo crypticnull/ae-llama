@@ -73,6 +73,44 @@ html, body {
 
 .fineprint { color: #888; font-size: 11px; margin-bottom: 6px; }
 
+/* ---------- download progress ---------- */
+
+#progress-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  background: #262626;
+  border-bottom: 1px solid #111;
+  flex: 0 0 auto;
+}
+#progress-row.hidden { display: none; }
+#progress-info { flex: 1 1 auto; min-width: 0; }
+#progress-label {
+  display: block;
+  font-size: 11px;
+  color: #bbb;
+  margin-bottom: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#progress-track {
+  height: 10px;
+  background: #141414;
+  border: 1px solid #101010;
+  border-radius: 5px;
+  overflow: hidden;
+}
+#progress-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #2d6ca2, #57b757);
+  border-radius: 5px;
+  transition: width 0.2s ease;
+}
+#btn-progress-cancel { flex: 0 0 auto; }
+
 .msg a { color: #6db3e8; text-decoration: underline; cursor: pointer; }
 
 /* ---------- generic controls ---------- */
