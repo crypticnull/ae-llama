@@ -124,15 +124,17 @@
       args: "{comp?: string, layer: name|index, inPoint?: s, outPoint?: s, startTime?: s}" },
     { name: "duplicate_layer", mutating: true,
       desc: "Duplicate a LAYER inside its comp (use duplicate_comp only " +
-            "for whole compositions).",
-      args: "{comp?: string, layer: name|index, name?: string}" },
+            "for whole compositions). Omit 'layer' to use the user's " +
+            "selected layer.",
+      args: "{comp?: string, layer?: name|index (omit = selected layer), name?: string}" },
     { name: "split_layer_into_chunks", mutating: true,
       desc: "Cut a layer into fixed-length chunks, each on its own layer " +
             "trimmed to its own window — ONE call does the whole edit " +
             "('cut into N-second pieces / stagger without overlap'). " +
-            "Chunks play seamlessly end-to-end; offsetPerChunk slides " +
-            "chunk i by i*offset seconds extra.",
-      args: "{comp?: string, layer: name|index, chunkSeconds: s, offsetPerChunk?: s}" },
+            "Omit 'layer' to use the user's selected layer. Chunks play " +
+            "seamlessly end-to-end; offsetPerChunk slides chunk i by " +
+            "i*offset seconds extra.",
+      args: "{comp?: string, layer?: name|index (omit = selected layer), chunkSeconds: s, offsetPerChunk?: s}" },
     { name: "delete_layer", mutating: true,
       desc: "Delete a layer from a comp.",
       args: "{comp?: string, layer: name|index}" },
@@ -239,9 +241,13 @@
       "- Prefer inspecting (get_project_info / get_comp_details) before",
       "  modifying things you have not seen.",
       "- Layers the user has SELECTED in AE are marked selected: true in",
-      "  the comp details. 'these layers' / 'the selected layers' means",
-      "  those. grid_layout uses the selection automatically when 'layers'",
-      "  is omitted.",
+      "  the comp details. When the user says 'the selected layer(s)' /",
+      "  'this layer' / 'these layers', OMIT the layer/layers argument —",
+      "  grid_layout, stagger_layers, distribute_property, duplicate_layer",
+      "  and split_layer_into_chunks all use the selection automatically.",
+      "  NEVER pass placeholder text like \"these layers\" or \"selected\"",
+      "  as a layer name — layer args must be real names or indexes from",
+      "  the project state, or omitted.",
       "- Omitting 'comp' targets the ACTIVE comp — creating or duplicating",
       "  a comp does NOT make it active. After create_comp/duplicate_comp/",
       "  precompose, always pass comp: \"<name>\" explicitly.",

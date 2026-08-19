@@ -122,4 +122,53 @@ assert(r4.ok && comp3._layers.length === 2 &&
        comp3._layers.some(l => l.name === "tiny copy"),
        "duplicate_layer duplicates and renames");
 
+// selection default: omitted layer resolves to the single selected layer
+const comp4 = new Comp("Car Wash 2", 8);
+Object.setPrototypeOf(comp4, Object.create(CompItem.prototype,
+  Object.getOwnPropertyDescriptors(Comp.prototype)));
+comp4._layers.push(new Layer("bg", comp4, 0, 8, 0));
+const hero = new Layer("hero", comp4, 0, 8, 0);
+hero.selected = true;
+comp4._layers.push(hero);
+project.activeItem = comp4;
+const r5 = call("split_layer_into_chunks", { comp: null, chunkSeconds: 2 });
+assert(r5.ok && r5.data.chunks === 4,
+       "omitted layer -> splits the selected layer (8s/2s -> 4 chunks): " +
+       (r5.error || ""));
+assert(comp4._layers.filter(l => /^hero chunk \d+$/.test(l.name)).length === 4,
+       "chunks come from the selected layer, not an arbitrary one");
+assert(comp4._layers.some(l => l.name === "bg"),
+       "unselected layer left untouched");
+
+// omitted layer with nothing selected -> clear guidance, no guessing
+comp4._layers.forEach(l => { l.selected = false; });
+const r6 = call("split_layer_into_chunks", { chunkSeconds: 2 });
+assert(!r6.ok && /No layer selected/.test(r6.error),
+       "no selection + omitted layer -> 'No layer selected' error");
+
+// omitted layer with several selected -> error names them
+comp4.layer("bg").selected = true;
+comp4.layer("hero chunk 1").selected = true;
+const r7 = call("duplicate_layer", {});
+assert(!r7.ok && /2 layers selected/.test(r7.error) && /bg/.test(r7.error),
+       "multi-selection error lists the selected layer names");
+
+// the exact field failure: model passed the placeholder "these layers"
+const r8 = call("split_layer_into_chunks",
+                { comp: null, layer: "these layers", chunkSeconds: 2 });
+assert(!r8.ok && /Actual layers:/.test(r8.error),
+       "placeholder layer name -> grounded error listing real layers");
+assert(/\(SELECTED\)/.test(r8.error),
+       "grounded error marks which layers are selected");
+assert(/OMIT the 'layer' argument/.test(r8.error),
+       "grounded error tells the model to omit the layer arg");
+
+// duplicate_layer also honors the selection default
+comp4._layers.forEach(l => { l.selected = false; });
+comp4.layer("bg").selected = true;
+const r9 = call("duplicate_layer", { name: "bg copy" });
+assert(r9.ok && r9.data.duplicatedFrom === "bg" &&
+       comp4._layers.some(l => l.name === "bg copy"),
+       "duplicate_layer defaults to the selected layer");
+
 console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");

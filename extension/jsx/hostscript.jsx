@@ -111,9 +111,38 @@ function AELL_resolveLayer(comp, ref) {
   var layer = null;
   try { layer = comp.layer(ref); } catch (e) { layer = null; }
   if (!layer) {
-    throw new Error("Layer not found in '" + comp.name + "': " + ref);
+    // Ground the retry in reality: list what actually exists.
+    var names = [];
+    for (var i = 1; i <= comp.numLayers && i <= 20; i++) {
+      var L = comp.layer(i);
+      names.push(L.name + (L.selected ? " (SELECTED)" : ""));
+    }
+    throw new Error("Layer not found in '" + comp.name + "': " + ref +
+      ". Actual layers: " + (names.join(", ") || "(none)") +
+      ". For the user's selection, OMIT the 'layer' argument on tools " +
+      "that support it.");
   }
   return layer;
+}
+
+/*
+ * Resolve a layer arg that may be omitted to mean "the user's selection".
+ * Exactly one selected layer is required when omitted.
+ */
+function AELL_layerOrSelection(comp, ref) {
+  if (ref !== null && typeof ref !== "undefined" && ref !== "") {
+    return AELL_resolveLayer(comp, ref);
+  }
+  var sel = comp.selectedLayers;
+  if (sel.length === 1) return sel[0];
+  if (sel.length === 0) {
+    throw new Error("No layer selected in '" + comp.name + "' — select " +
+                    "one in AE or pass {layer: name|index}");
+  }
+  var names = [];
+  for (var i = 0; i < sel.length; i++) names.push(sel[i].name);
+  throw new Error(sel.length + " layers selected (" + names.join(", ") +
+                  ") — pass {layer: name} to pick one");
 }
 
 var AELL_TRANSFORM_MAP = {
@@ -1094,7 +1123,7 @@ AELL_TOOLS.set_effect_param = function (args) {
 
 AELL_TOOLS.duplicate_layer = function (args) {
   var comp = AELL_resolveComp(args.comp);
-  var layer = AELL_resolveLayer(comp, args.layer);
+  var layer = AELL_layerOrSelection(comp, args.layer);
   var dup = layer.duplicate();
   if (args.name) dup.name = String(args.name);
   return AELL_okay({ index: dup.index, name: dup.name,
@@ -1110,7 +1139,7 @@ AELL_TOOLS.duplicate_layer = function (args) {
  */
 AELL_TOOLS.split_layer_into_chunks = function (args) {
   var comp = AELL_resolveComp(args.comp);
-  var layer = AELL_resolveLayer(comp, args.layer);
+  var layer = AELL_layerOrSelection(comp, args.layer);
   var chunk = args.chunkSeconds > 0 ? Number(args.chunkSeconds) : 5;
   var inP = layer.inPoint;
   var outP = layer.outPoint;
