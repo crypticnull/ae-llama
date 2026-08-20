@@ -57,3 +57,24 @@ fix. Start from item 1 of `docs/WORKPLAN.md`.
   Next up in item 2: `center_anchor_point` on rotated/scaled/parented
   layers, then `scale_comp` with cameras and keyframed properties —
   the two most likely to be hiding a real bug behind stub-only proof.
+
+## 2026-08-20 (remote) — the two follow-ups logged above
+
+- Changed: `scripts/ae-selftest.jsx` — `writeOut()` no longer depends on
+  `AELLJSON`; it serializes with a self-contained escaper, so a failure
+  to load hostscript.jsx can now report itself instead of throwing
+  inside the catch block meant to report it. Error text also carries
+  `err.line` when AE provides it. `scripts/run-ae-selftest.ps1` — new
+  exit code 4: polls for a `#32770` dialog owned by AfterFX during the
+  wait and prints its caption plus child text, instead of timing out
+  after 240s and blaming the scripting preference. The generated
+  wrapper also try/catches `$.evalFile` and writes what it caught.
+- Harness: NOT run from here (no AE, no PowerShell in the remote
+  environment). Stubbed suite 11/11, both scripts verified pure ASCII.
+- Notes: the dialog probe is the reliable path; the wrapper's try/catch
+  is best-effort because a COMPILE error may surface as a modal rather
+  than a catchable exception — unverified either way, so the probe does
+  not depend on it. First real exercise of exit 4 happens on the AE
+  machine. To test it deliberately: put `var final = 1;` in
+  `scripts/ae-selftest.jsx`, run the harness, expect exit 4 with the
+  dialog text rather than a 4-minute timeout.
