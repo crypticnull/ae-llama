@@ -16,16 +16,39 @@
   var repo = $.global.AELL_TEST_REPO;
   var outPath = $.global.AELL_TEST_OUT;
 
-  function writeOut(obj) {
+  // Deliberately self-contained: no AELLJSON, no helpers from anywhere
+  // else. writeOut is the ONLY channel this script has for reporting
+  // failure, so it must survive the case where nothing else loaded --
+  // when hostscript.jsx fails, AELLJSON does not exist, and a writeOut
+  // that used it would throw inside the very catch block meant to
+  // report the problem, leaving the runner with a silent timeout.
+  function jsonStr(s) {
+    var out = "", i, c;
+    s = String(s);
+    for (i = 0; i < s.length; i++) {
+      c = s.charAt(i);
+      if (c === '"') { out += '\\"'; }
+      else if (c === "\\") { out += "\\\\"; }
+      else if (c === "\n") { out += "\\n"; }
+      else if (c === "\r") { out += "\\r"; }
+      else if (c === "\t") { out += "\\t"; }
+      else if (c < " ") { out += " "; }
+      else { out += c; }
+    }
+    return '"' + out + '"';
+  }
+
+  function writeOut(passed, total, text) {
     try {
       var f = new File(outPath);
       f.encoding = "UTF-8";
       f.open("w");
-      f.write(AELLJSON.stringify(obj));
+      f.write('{"passed":' + (passed | 0) + ',"total":' + (total | 0) +
+              ',"text":' + jsonStr(text) + '}');
       f.close();
     } catch (e) {
-      // Without file access there is nothing more we can do; the runner
-      // times out and points at the AE scripting preference.
+      // File access denied. Nothing left to report with; the runner
+      // times out and names the AE scripting preference.
     }
   }
 
@@ -49,23 +72,21 @@
       cb(AELLJSON.parse(raw));
     }
 
-    var final = null;
+    var finalRes = null;
     SelfTest.run({
       callHostTool: callHostTool,
       onLine: function () {},
-      onDone: function (res) { final = res; }
+      onDone: function (res) { finalRes = res; }
     });
     // Shimmed setTimeout is synchronous, so the run has finished here.
-    if (final) {
-      writeOut({ passed: final.passed, total: final.total,
-                 text: final.text });
+    if (finalRes) {
+      writeOut(finalRes.passed, finalRes.total, finalRes.text);
     } else {
-      writeOut({ passed: 0, total: 0,
-                 text: "Self-test never completed (runner error)" });
+      writeOut(0, 0, "Self-test never completed (runner error)");
     }
   } catch (err) {
-    writeOut({ passed: 0, total: 0,
-               text: "Self-test crashed: " + (err && err.message
-                 ? err.message : String(err)) });
+    writeOut(0, 0, "Self-test crashed: " +
+      (err && err.message ? err.message : String(err)) +
+      (err && err.line ? " (line " + err.line + ")" : ""));
   }
 })();

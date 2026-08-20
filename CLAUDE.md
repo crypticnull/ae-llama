@@ -36,7 +36,7 @@ interactive session does NOT self-start; it answers one prompt and waits.
    file, or all of them — CI runs exactly this on every push.
 2. **REAL AE self-test (the one that matters):**
    `powershell -ExecutionPolicy Bypass -File scripts/run-ae-selftest.ps1`
-   Drives AfterFX.exe through the panel's 24-step suite in a scratch comp
+   Drives AfterFX.exe through the panel's 26-step suite in a scratch comp
    (grid rig expressions, padded-dims eases, batch keys, masks, shape
    contents, effects, mattes, parenting) and prints PASS/FAIL. Exit 0 =
    green. Needs AE's "Allow Scripts to Write Files and Access Network"
