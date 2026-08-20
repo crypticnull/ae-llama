@@ -32,7 +32,7 @@ assert(names.size === steps.length, "step names are unique");
 
 // canned happy-path results per tool
 let createCount = 0;
-function cannedOk(tool) {
+function cannedOk(tool, args) {
   switch (tool) {
     case "create_comp":
       createCount++;
@@ -43,7 +43,17 @@ function cannedOk(tool) {
     case "grid_layout":
       return { sliders: ["Grid X Spacing", "Grid Y Spacing",
                          "Grid Columns"] };
-    case "get_property": return { value: 3 };
+    case "get_property":
+      // Position on a 2D layer: the scripting API pads the value to 3
+      // components ([x, y, 0]) even though the expression engine sees
+      // 2 — model that faithfully, and give the two grid squares
+      // different cells so the "distinct cells" step is real.
+      if (args && args.property === "Position") {
+        return args.layer === "ST Square 2"
+          ? { value: [640, 180, 0], expression: "// grid rig" }
+          : { value: [320, 180, 0], expression: "// grid rig" };
+      }
+      return { value: 3 };
     case "set_keyframes": return { keysSet: 18 };
     case "apply_keyframe_ease": return { easedPairs: 9 };
     case "stagger_layers": return { layers: 9 };
@@ -64,7 +74,7 @@ SelfTest.run({
     calls.push(tool);
     assert(args && typeof args === "object",
            "args object for " + tool);
-    cb({ ok: true, data: cannedOk(tool) });
+    cb({ ok: true, data: cannedOk(tool, args) });
   },
   onLine() {},
   onDone(res) {
@@ -84,7 +94,7 @@ SelfTest.run({
           cb({ ok: false, error: "boom" });
           return;
         }
-        cb({ ok: true, data: cannedOk(tool) });
+        cb({ ok: true, data: cannedOk(tool, args) });
       },
       onLine() {},
       onDone(res2) {

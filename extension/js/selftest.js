@@ -86,6 +86,47 @@
           return d.value === 3 || "value " + JSON.stringify(d.value);
         } },
 
+      // Verified in real AE 2026 under BOTH expression engines
+      // (javascript-1.0 and legacy extendscript). grid_layout only
+      // reports the sliders it made; these two steps prove the rig
+      // actually EVALUATES, which is the part that silently breaks when
+      // a generated expression is malformed for the active engine.
+      { name: "grid rig evaluates (expression drives Position)",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: "ST Square",
+                   property: "Position" };
+        },
+        check: function (d, ctx) {
+          if (!d.expression) { return "Position carries no expression"; }
+          var v = d.value;
+          if (!v || typeof v.length !== "number" || v.length < 2) {
+            return "value " + JSON.stringify(v);
+          }
+          if (!isFinite(v[0]) || !isFinite(v[1])) {
+            return "non-finite value " + JSON.stringify(v);
+          }
+          ctx.gridCell = v[0] + "," + v[1];
+          return true;
+        } },
+
+      { name: "grid rig places layers in distinct cells",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: "ST Square 2",
+                   property: "Position" };
+        },
+        check: function (d, ctx) {
+          var v = d.value;
+          if (!v || typeof v.length !== "number" || v.length < 2) {
+            return "value " + JSON.stringify(v);
+          }
+          var cell = v[0] + "," + v[1];
+          return cell !== ctx.gridCell ||
+            "ST Square 2 evaluates to the same cell as ST Square (" +
+            cell + ")";
+        } },
+
       { name: "control-effect path write (Grid X Spacing = 222)",
         tool: "set_property",
         args: function (ctx) {
