@@ -65,6 +65,9 @@
       // video models are tens of GB, so users can point them at a big
       // drive. Blank = the backend's own models folder.
       comfyModelsDir: "",
+      // Stop the chat LLM during image/video generation so the two never
+      // fight over VRAM; it restarts automatically before the reply.
+      comfyPauseLlm: true,
       // Install panel updates without asking (git pull for dev installs,
       // panelPackageUrl download for package installs). Store builds
       // without a panelPackageUrl are unaffected — they only show the

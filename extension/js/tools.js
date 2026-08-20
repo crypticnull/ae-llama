@@ -548,12 +548,32 @@
         chosen = found;
       }
 
+      // Generation models and the chat LLM fight over VRAM — optionally
+      // stop llama-server for the render and restart it before replying
+      // (the next chat round needs it back). Transparent to the model.
+      var pausedForVram = false;
+      function resumeLlm(done) {
+        if (!pausedForVram) { done(); return; }
+        pausedForVram = false;
+        if (progressSink) progressSink("Restarting the chat model…");
+        global.Llama.start({
+          serverPath: s.serverPath,
+          modelPath: s.modelPath,
+          port: s.port,
+          ctxSize: s.ctxSize,
+          gpuLayers: s.gpuLayers
+        }, function () { done(); });
+      }
+      function finish(result) {
+        resumeLlm(function () { cb(result); });
+      }
+      function begin() {
       // Boot the hidden backend first if nothing answers at the URL —
       // the user never has to start ComfyUI by hand.
       global.Comfy.ensureRunning(s.comfyUrl, function (bootMsg) {
         if (progressSink) progressSink(bootMsg);
       }, function (bootErr) {
-      if (bootErr) { cb({ ok: false, error: bootErr.message }); return; }
+      if (bootErr) { finish({ ok: false, error: bootErr.message }); return; }
       global.Comfy.generate({
         comfyUrl: s.comfyUrl,
         workflowFile: chosen.file,
@@ -572,18 +592,19 @@
           progressSink("ComfyUI still generating… " + elapsed + "s");
         }
       }, function (err, result) {
-        if (err) { cb({ ok: false, error: err.message }); return; }
+        if (err) { finish({ ok: false, error: err.message }); return; }
         if (args["import"] === false) {
-          cb({ ok: true, data: { files: result.files,
-                                 applied: result.applied } });
+          finish({ ok: true, data: { files: result.files,
+                                     applied: result.applied } });
           return;
         }
         // Import each rendered file into the AE project.
         var imported = [];
         (function next(i) {
           if (i >= result.files.length) {
-            cb({ ok: true, data: { files: result.files, imported: imported,
-                                   applied: result.applied } });
+            finish({ ok: true,
+                     data: { files: result.files, imported: imported,
+                             applied: result.applied } });
             return;
           }
           callHostTool("import_file", { path: result.files[i] },
@@ -594,6 +615,20 @@
         })(0);
       });
       });
+      }
+      if (s.comfyPauseLlm !== false &&
+          global.Llama.getState() === "running") {
+        pausedForVram = true;
+        if (progressSink) {
+          progressSink("Pausing the chat model to free VRAM for " +
+                       "generation…");
+        }
+        global.Llama.stop();
+        // Give the old process a beat to release its VRAM.
+        global.setTimeout(begin, 1500);
+      } else {
+        begin();
+      }
     }
   };
 

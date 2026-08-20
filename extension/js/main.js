@@ -707,6 +707,7 @@
     els.setComfyOut.value = s.comfyOutDir;
     els.setComfyModels.value = s.comfyModelsDir || "";
     els.setComfyTimeout.value = s.comfyTimeoutSec;
+    els.setComfyPauseLlm.checked = s.comfyPauseLlm !== false;
     els.setAutoUpdate.checked = !!s.autoInstallUpdates;
   }
 
@@ -728,6 +729,7 @@
       comfyOutDir: els.setComfyOut.value,
       comfyModelsDir: els.setComfyModels.value,
       comfyTimeoutSec: parseInt(els.setComfyTimeout.value, 10) || 600,
+      comfyPauseLlm: !!els.setComfyPauseLlm.checked,
       autoInstallUpdates: !!els.setAutoUpdate.checked
     });
   }
@@ -764,6 +766,7 @@
       setComfyOut: $("set-comfy-out"),
       setComfyModels: $("set-comfy-models"),
       setComfyTimeout: $("set-comfy-timeout"),
+      setComfyPauseLlm: $("set-comfy-pause-llm"),
       setAutoUpdate: $("set-auto-update"),
       starterRow: $("starter-row"),
       starterSelect: $("starter-select"),
