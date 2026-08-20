@@ -979,6 +979,18 @@
       browseIntoField(els.setComfyModels,
         "Choose a folder for generation models (they get big)", true);
     });
+    // -- one-click real-AE self-test with a copyable report
+    $("btn-self-test").addEventListener("click", function () {
+      els.settingsDrawer.classList.add("hidden");
+      global.SelfTest.run({
+        callHostTool: global.Tools.callHostTool,
+        onLine: function (t) { appendMsg("info", t); },
+        onDone: function (res) {
+          appendMsg(res.passed === res.total ? "info" : "error", res.text);
+        }
+      });
+    });
+
     // -- one-click chat copy (transcript + version/model/GPU header)
     $("btn-copy-chat").addEventListener("click", function () {
       var text = chatTranscript();
