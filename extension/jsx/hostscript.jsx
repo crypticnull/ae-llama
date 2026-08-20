@@ -163,6 +163,35 @@ function AELL_layerOrSelection(comp, ref) {
                   ") — pass {layer: name} to pick one");
 }
 
+/*
+ * Resolve a MULTI-layer target: explicit layers[], else a single layer,
+ * else the whole selection (any count), else the comp's only layer.
+ * Used by batch tools so ONE call can touch hundreds of layers.
+ */
+function AELL_layersOrSelection(comp, args) {
+  var out = [];
+  var i;
+  if (AELLJSON.isArray(args.layers) && args.layers.length > 0) {
+    for (i = 0; i < args.layers.length; i++) {
+      out.push(AELL_resolveLayer(comp, args.layers[i]));
+    }
+    return out;
+  }
+  if (args.layer !== null && typeof args.layer !== "undefined" &&
+      args.layer !== "") {
+    out.push(AELL_resolveLayer(comp, args.layer));
+    return out;
+  }
+  var sel = comp.selectedLayers;
+  for (i = 0; i < sel.length; i++) out.push(sel[i]);
+  if (out.length === 0 && comp.numLayers === 1) out.push(comp.layer(1));
+  if (out.length === 0) {
+    throw new Error("No target layers in '" + comp.name + "' — select " +
+                    "layers in AE or pass {layer} / {layers: […]}");
+  }
+  return out;
+}
+
 var AELL_TRANSFORM_MAP = {
   position:    "ADBE Position",
   scale:       "ADBE Scale",
@@ -1265,6 +1294,7 @@ AELL_TOOLS.duplicate_layer = function (args) {
   var base = args.name ? String(args.name) : layer.name;
   var names = [];
   var autoNumbered = false;
+  var made = [];
   for (var i = 0; i < count; i++) {
     var dup = layer.duplicate();
     // Never leave two layers with the same name — duplicate names break
@@ -1273,6 +1303,16 @@ AELL_TOOLS.duplicate_layer = function (args) {
     if (nm !== base) autoNumbered = true;
     dup.name = nm;
     names.push(nm);
+    made.push(dup);
+  }
+  // AE inserts duplicates ABOVE the original, stranding it at the bottom
+  // of the pile — keep the ORIGINAL on top with copies in order below.
+  if (typeof layer.moveAfter === "function") {
+    var prev = layer;
+    for (var m = 0; m < made.length; m++) {
+      made[m].moveAfter(prev);
+      prev = made[m];
+    }
   }
   return AELL_okay({ created: count, duplicatedFrom: layer.name,
     names: (names.length > 12 ? names.slice(0, 12) : names).join(", ") +
@@ -1617,27 +1657,26 @@ AELL_TOOLS.distribute_property = function (args) {
   return AELL_okay({ property: args.property, layers: n, applied: applied });
 };
 
-AELL_TOOLS.apply_keyframe_ease = function (args) {
-  var comp = AELL_resolveComp(args.comp);
-  var layer = AELL_resolveLayer(comp, args.layer);
-  var prop = AELL_anyProperty(layer, args.property);
-  var bez = AELL_bezierArgs(args);
+/* Ease every requested key pair on one property. Returns pair count. */
+function AELL_easeProp(prop, bez, keyIndex, allPairs) {
   if (prop.numKeys < 2) {
-    return AELL_err("Property has " + prop.numKeys + " keyframe(s) — need " +
-                    "at least 2 to ease between");
+    throw new Error("has " + prop.numKeys + " keyframe(s) — need at " +
+                    "least 2 to ease between");
   }
   var pairs = [];
-  if (args.allPairs || typeof args.keyIndex !== "number") {
+  if (allPairs || typeof keyIndex !== "number") {
     for (var p = 1; p < prop.numKeys; p++) pairs.push(p);
   } else {
-    if (args.keyIndex < 1 || args.keyIndex >= prop.numKeys + 0) {
-      return AELL_err("'keyIndex' must be 1.." + (prop.numKeys - 1));
+    if (keyIndex < 1 || keyIndex >= prop.numKeys + 0) {
+      throw new Error("'keyIndex' must be 1.." + (prop.numKeys - 1));
     }
-    pairs.push(Math.round(args.keyIndex));
+    pairs.push(Math.round(keyIndex));
   }
 
-  // Temporal-ease dimensionality: spatial props take 1 ease, others one
-  // per value dimension.
+  // Temporal-ease dimensionality: spatial props take 1 ease, everything
+  // else one per SCRIPTING value component — the PADDED count. AE demands
+  // 3 ease elements for Scale even on 2D layers; expressions are 2D
+  // there, eases are not. Two different dimension rules.
   var isSpatial = false;
   try {
     var mn = prop.matchName;
@@ -1645,13 +1684,6 @@ AELL_TOOLS.apply_keyframe_ease = function (args) {
   } catch (e) {}
   var sample = prop.value;
   var dims = AELLJSON.isArray(sample) ? (isSpatial ? 1 : sample.length) : 1;
-  // 2D layers report padded 3-component Scale via scripting; the ease
-  // array must match the EXPRESSION dimension (2) there.
-  try {
-    if (dims > 2 && prop.matchName === "ADBE Scale" && !layer.threeDLayer) {
-      dims = 2;
-    }
-  } catch (eD) {}
 
   function clampInf(v) { return Math.max(0.1, Math.min(100, v)); }
 
@@ -1691,8 +1723,33 @@ AELL_TOOLS.apply_keyframe_ease = function (args) {
     prop.setTemporalEaseAtKey(k, prop.keyInTemporalEase(k), outEase);
     prop.setTemporalEaseAtKey(k + 1, inEase, prop.keyOutTemporalEase(k + 1));
   }
-  return AELL_okay({ layer: layer.name, property: args.property,
-                     easedPairs: pairs.length, bezier: bez });
+  return pairs.length;
+}
+
+AELL_TOOLS.apply_keyframe_ease = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  var layers;
+  try { layers = AELL_layersOrSelection(comp, args); }
+  catch (eL) { return AELL_err(eL.message); }
+  var bez = AELL_bezierArgs(args);
+  var totalPairs = 0;
+  for (var i = 0; i < layers.length; i++) {
+    var prop;
+    try { prop = AELL_anyProperty(layers[i], args.property); }
+    catch (eP) {
+      return AELL_err("On '" + layers[i].name + "': " + eP.message);
+    }
+    try {
+      totalPairs += AELL_easeProp(prop, bez, args.keyIndex, args.allPairs);
+    } catch (e) {
+      return AELL_err("On '" + layers[i].name + "', " + args.property +
+        " " + (e.message || e) +
+        (totalPairs ? " — " + totalPairs + " pair(s) eased before this"
+                    : ""));
+    }
+  }
+  return AELL_okay({ layers: layers.length, property: args.property,
+                     easedPairs: totalPairs, bezier: bez });
 };
 
 AELL_TOOLS.set_layer_timing = function (args) {
@@ -2559,67 +2616,144 @@ AELL_TOOLS.set_property = function (args) {
 
 AELL_TOOLS.set_keyframes = function (args) {
   var comp = AELL_resolveComp(args.comp);
-  var layer = AELL_layerOrSelection(comp, args.layer);
-  var prop = AELL_anyProperty(layer, args.property);
-  if (!AELL_isLeafProp(prop)) {
-    return AELL_err("'" + args.property + "' is a GROUP — keyframes go on " +
-                    "a property inside it");
-  }
+  var layers;
+  try { layers = AELL_layersOrSelection(comp, args); }
+  catch (eL) { return AELL_err(eL.message); }
   if (!AELLJSON.isArray(args.keys) || args.keys.length === 0) {
     return AELL_err("'keys' must be [{time: s, value: …}, …]");
   }
   if (args.keys.length > 100) {
     return AELL_err("'keys' is capped at 100 per call");
   }
-  var set = 0;
-  for (var i = 0; i < args.keys.length; i++) {
-    var k = args.keys[i] || {};
-    if (typeof k.time !== "number" || typeof k.value === "undefined") {
-      return AELL_err("keys[" + i + "] needs {time (seconds), value}" +
-        (set > 0 ? " — " + set + " earlier key(s) were already applied" : ""));
-    }
-    try {
-      prop.setValueAtTime(k.time, k.value);
-      set++;
-    } catch (e) {
-      return AELL_err("AE rejected keys[" + i + "] (" + (e.message || e) +
-        ")" + (set > 0 ? " — " + set + " earlier key(s) were applied" : ""));
+  for (var v = 0; v < args.keys.length; v++) {
+    var kv = args.keys[v] || {};
+    if (typeof kv.time !== "number" || typeof kv.value === "undefined") {
+      return AELL_err("keys[" + v + "] needs {time (seconds), value}");
     }
   }
-  return AELL_okay({ layer: layer.name, property: String(args.property),
-    keysSet: set, numKeys: prop.numKeys,
-    hint: "apply_keyframe_ease adds easing between the new keys" });
+  // relativeTo 'inPoint' shifts every key by each layer's own start, so
+  // one call animates a STAGGERED batch and the offsets ride along.
+  var rel = String(args.relativeTo || "");
+  var relative = rel === "inPoint" || rel === "layerStart";
+  var total = 0;
+  for (var L = 0; L < layers.length; L++) {
+    var layer = layers[L];
+    var prop;
+    try { prop = AELL_anyProperty(layer, args.property); }
+    catch (eP) { return AELL_err("On '" + layer.name + "': " + eP.message); }
+    if (!AELL_isLeafProp(prop)) {
+      return AELL_err("'" + args.property + "' is a GROUP — keyframes go " +
+                      "on a property inside it");
+    }
+    var base = relative ? layer.inPoint : 0;
+    for (var i = 0; i < args.keys.length; i++) {
+      var k = args.keys[i];
+      try {
+        prop.setValueAtTime(base + k.time, k.value);
+        total++;
+      } catch (e) {
+        return AELL_err("AE rejected keys[" + i + "] on '" + layer.name +
+          "' (" + (e.message || e) + ") — " + total +
+          " key(s) were applied before this");
+      }
+    }
+  }
+  var res = { layers: layers.length,
+    property: String(args.property), keysSet: total,
+    note: relative
+      ? "Key times offset by each layer's inPoint — staggered starts kept"
+      : "",
+    hint: "apply_keyframe_ease (same layers arg) adds easing" };
+  if (layers.length === 1) {
+    try { res.numKeys = prop.numKeys; } catch (eN) {}
+  }
+  return AELL_okay(res);
 };
 
 AELL_TOOLS.remove_keyframes = function (args) {
   var comp = AELL_resolveComp(args.comp);
-  var layer = AELL_layerOrSelection(comp, args.layer);
-  var prop = AELL_anyProperty(layer, args.property);
-  if (!AELL_isLeafProp(prop)) {
-    return AELL_err("'" + args.property + "' is a GROUP");
-  }
-  var nk = 0;
-  try { nk = prop.numKeys || 0; } catch (e) {}
-  if (nk === 0) {
-    return AELL_okay({ layer: layer.name, property: String(args.property),
-                       removed: 0, note: "No keyframes to remove" });
-  }
+  var layers;
+  try { layers = AELL_layersOrSelection(comp, args); }
+  catch (eL) { return AELL_err(eL.message); }
   var removed = 0;
-  if (AELLJSON.isArray(args.times) && args.times.length > 0) {
-    for (var i = 0; i < args.times.length; i++) {
-      var t = Number(args.times[i]);
-      var best = 0, bestD = 1e9;
-      for (var k = prop.numKeys; k >= 1; k--) {
-        var d = Math.abs(prop.keyTime(k) - t);
-        if (d < bestD) { bestD = d; best = k; }
-      }
-      if (best > 0 && bestD < 0.05) { prop.removeKey(best); removed++; }
+  for (var L = 0; L < layers.length; L++) {
+    var prop;
+    try { prop = AELL_anyProperty(layers[L], args.property); }
+    catch (eP) { return AELL_err("On '" + layers[L].name + "': " + eP.message); }
+    if (!AELL_isLeafProp(prop)) {
+      return AELL_err("'" + args.property + "' is a GROUP");
     }
-  } else {
-    while (prop.numKeys > 0) { prop.removeKey(1); removed++; }
+    var nk = 0;
+    try { nk = prop.numKeys || 0; } catch (e) {}
+    if (nk === 0) continue;
+    if (AELLJSON.isArray(args.times) && args.times.length > 0) {
+      for (var i = 0; i < args.times.length; i++) {
+        var t = Number(args.times[i]);
+        var best = 0, bestD = 1e9;
+        for (var k = prop.numKeys; k >= 1; k--) {
+          var d = Math.abs(prop.keyTime(k) - t);
+          if (d < bestD) { bestD = d; best = k; }
+        }
+        if (best > 0 && bestD < 0.05) { prop.removeKey(best); removed++; }
+      }
+    } else {
+      while (prop.numKeys > 0) { prop.removeKey(1); removed++; }
+    }
   }
-  return AELL_okay({ layer: layer.name, property: String(args.property),
-                     removed: removed, remaining: prop.numKeys });
+  var res = { layers: layers.length,
+              property: String(args.property), removed: removed };
+  if (layers.length === 1) {
+    try { res.remaining = prop.numKeys; } catch (eR) {}
+  }
+  return AELL_okay(res);
+};
+
+/*
+ * Run ANY layer tool once per target layer, host-side — the "script"
+ * for batch requests: one model call, hundreds of layers, no per-layer
+ * inference. The layer is injected by INDEX (names can repeat).
+ */
+AELL_TOOLS.for_each_layer = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  var layers;
+  try { layers = AELL_layersOrSelection(comp, args); }
+  catch (eL) { return AELL_err(eL.message); }
+  if (layers.length > 200) {
+    return AELL_err("Capped at 200 layers per call (got " + layers.length +
+                    ")");
+  }
+  var toolName = String(args.tool || "");
+  var tool = AELL_TOOLS[toolName];
+  if (!tool || toolName === "for_each_layer") {
+    return AELL_err("'tool' must name a layer tool, e.g. set_transform, " +
+                    "apply_effect, set_property, set_keyframes, " +
+                    "center_anchor_point");
+  }
+  var failures = [];
+  var okCount = 0;
+  for (var i = 0; i < layers.length; i++) {
+    var sub = {};
+    var src = args.args || {};
+    for (var key in src) {
+      if (Object.prototype.hasOwnProperty.call(src, key)) sub[key] = src[key];
+    }
+    sub.comp = args.comp;
+    sub.layer = layers[i].index;
+    delete sub.layers;
+    var r = tool(sub);
+    if (r && r.ok) {
+      okCount++;
+    } else {
+      failures.push(layers[i].name + ": " + (r ? r.error : "unknown error"));
+      if (failures.length >= 5) {
+        return AELL_err("Stopped after 5 failures (" + okCount +
+          " layers succeeded first). Failures: " + failures.join(" | "));
+      }
+    }
+  }
+  return AELL_okay({ tool: toolName, layers: layers.length,
+    succeeded: okCount,
+    failures: failures.length ? failures.join(" | ") : "" });
 };
 
 AELL_TOOLS.set_track_matte = function (args) {
@@ -2717,7 +2851,8 @@ var AELL_MUTATING = {
   scale_comp: true, reorder_layers: true,
   set_property: true, set_keyframes: true, remove_keyframes: true,
   set_track_matte: true,
-  set_mask: true, set_mask_path: true, add_shape_content: true
+  set_mask: true, set_mask_path: true, add_shape_content: true,
+  for_each_layer: true
 };
 
 // --------------------------------------------------------------- entry point

@@ -53,7 +53,7 @@
       ctxSize: 16384,
       gpuLayers: 99,
       temperature: 0.7,
-      maxRounds: 4,
+      maxRounds: 6,
       dryRun: false,
       // --- ComfyUI (image/video generation) ---
       comfyUrl: "http://127.0.0.1:8188",
@@ -68,6 +68,9 @@
       // Stop the chat LLM during image/video generation so the two never
       // fight over VRAM; it restarts automatically before the reply.
       comfyPauseLlm: true,
+      // Visualizer pane width (px), set by dragging the divider. 0 = the
+      // stylesheet default.
+      vizWidth: 0,
       // Install panel updates without asking (git pull for dev installs,
       // panelPackageUrl download for package installs). Store builds
       // without a panelPackageUrl are unaffected — they only show the
@@ -132,8 +135,10 @@
       }
     }
     // Old default upgrade: 8192 ctx overflowed on long tool rounds (field
-    // 400s); anyone still on the old default moves to the new one.
+    // 400s); anyone still on the old default moves to the new one. Same
+    // for the old 4-round budget.
     if (merged.ctxSize === 8192) merged.ctxSize = 16384;
+    if (merged.maxRounds === 4) merged.maxRounds = 6;
     return merged;
   }
 

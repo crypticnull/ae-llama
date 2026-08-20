@@ -95,9 +95,10 @@
       args: "{comp?: string, layers?: [name|index], property: 'opacity'|'rotation'|'scale'|'position_x'|'position_y', from?: number, to?: number, step?: number (equidistant), bezier?: [x1,y1,x2,y2], order?: 'in'|'stack'|'reverse'}" },
     { name: "apply_keyframe_ease", mutating: true,
       desc: "Apply a bezier as TEMPORAL easing between keyframes on one " +
-            "property (converts to AE speed/influence ease). keyIndex " +
-            "eases pair k..k+1; omit for all pairs.",
-      args: "{comp?: string, layer: name|index, property: transform name or 'effect.<Effect>.<Param>', bezier: [x1,y1,x2,y2], keyIndex?: int, allPairs?: bool}" },
+            "property across MANY layers in ONE call (converts to AE " +
+            "speed/influence ease). keyIndex eases pair k..k+1; omit for " +
+            "all pairs.",
+      args: "{comp?: string, layers?: [name|index] | layer?: name|index (omit = selection), property: path, bezier: [x1,y1,x2,y2], keyIndex?: int, allPairs?: bool}" },
     { name: "grid_layout", mutating: true,
       desc: "Arrange layers into a grid rigged to a control null: its " +
             "'Grid X Spacing'/'Grid Y Spacing'/'Grid Columns' sliders " +
@@ -231,12 +232,23 @@
             "dedicated tool fits. atTime creates a keyframe at that time.",
       args: "{comp?: string, layer?: name|index, property: path (see get_property), value: number|[..]|string|bool, atTime?: seconds}" },
     { name: "set_keyframes", mutating: true,
-      desc: "Batch-set keyframes on any property in ONE call; follow with " +
-            "apply_keyframe_ease for easing.",
-      args: "{comp?: string, layer?: name|index, property: path, keys: [{time: s, value: any}, …] (max 100)}" },
+      desc: "Set the SAME keyframes on MANY layers in ONE call. " +
+            "relativeTo: 'inPoint' offsets every key by each layer's own " +
+            "start, so staggered layers keep their offsets. Follow with " +
+            "one apply_keyframe_ease for easing. NEVER loop this per " +
+            "layer.",
+      args: "{comp?: string, layers?: [name|index] | layer?: name|index (omit = selection), property: path, keys: [{time: s, value: any}, …] (max 100), relativeTo?: 'inPoint'}" },
     { name: "remove_keyframes", mutating: true,
-      desc: "Remove keyframes from a property — specific times or all.",
-      args: "{comp?: string, layer?: name|index, property: path, times?: [s, …] (omit = remove ALL)}" },
+      desc: "Remove keyframes from a property on many layers at once — " +
+            "specific times or all.",
+      args: "{comp?: string, layers?: [name|index] | layer?: name|index (omit = selection), property: path, times?: [s, …] (omit = remove ALL)}" },
+    { name: "for_each_layer", mutating: true,
+      desc: "Run ANY layer tool once per target layer in ONE call (max " +
+            "200 layers) — the batch executor for anything without its " +
+            "own layers arg: {tool: 'apply_effect', args: {effect: " +
+            "'Gaussian Blur'}} blurs every target. Reports succeeded " +
+            "count + failures.",
+      args: "{comp?: string, layers?: [name|index] (omit = selection, else the comp's only layer), tool: string, args: {…the tool's args, minus comp/layer…}}" },
     { name: "set_track_matte", mutating: true,
       desc: "Use one layer as another's track matte (alpha or luma, " +
             "optionally inverted), or remove it with mode 'none'. No " +
@@ -384,6 +396,14 @@
       "- Emit AT MOST 8 commands per reply and keep them compact — output",
       "  space is limited and an oversized reply gets cut off. More work?",
       "  Stop after 8 and continue after TOOL RESULTS.",
+      "- BATCH, NEVER LOOP: when many layers need the same change, one",
+      "  call handles ALL of them — set_keyframes/apply_keyframe_ease/",
+      "  remove_keyframes take {layers} (or the selection) directly, with",
+      "  relativeTo: 'inPoint' keeping staggered offsets; anything else",
+      "  goes through for_each_layer {tool, args}. 'Animate 100 squares:",
+      "  stagger + scale + rotate + ease' is FIVE calls total",
+      "  (stagger_layers, 2x set_keyframes, 2x apply_keyframe_ease) —",
+      "  never 300. Per-layer looping runs out of tool rounds.",
       "- 'distribute/space layers equidistantly / every X px' =",
       "  distribute_property {property: position_x, step: X} — ONE call,",
       "  never a chain of set_transform/duplicate calls.",

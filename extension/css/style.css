@@ -232,6 +232,37 @@ input:focus, select:focus, textarea:focus { outline: 1px solid #2d6ca2; }
   gap: 8px;
 }
 #visualizer.hidden { display: none; }
+
+/* draggable divider between chat and visualizer */
+#split-handle {
+  flex: 0 0 5px;
+  cursor: col-resize;
+  background: #1a1a1a;
+  border-left: 1px solid #111;
+}
+#split-handle:hover, #split-handle.dragging { background: #3d6fa8; }
+#split-handle.hidden { display: none; }
+
+/* ---------- AE-style scrollbars ---------- */
+::-webkit-scrollbar { width: 14px; height: 14px; }
+::-webkit-scrollbar-track { background: #232323; }
+::-webkit-scrollbar-thumb {
+  background: #4d4d4d;
+  border-radius: 7px;
+  border: 3px solid #232323;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #646464;
+  border: 3px solid #232323;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:active {
+  background: #7a7a7a;
+  border: 3px solid #232323;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-corner { background: #232323; }
 .viz-title { font-size: 12px; color: #aaa; }
 #viz-canvas {
   background: #161616;
