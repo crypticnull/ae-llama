@@ -68,6 +68,9 @@
       // Stop the chat LLM during image/video generation so the two never
       // fight over VRAM; it restarts automatically before the reply.
       comfyPauseLlm: true,
+      // Visualizer pane width (px), set by dragging the divider. 0 = the
+      // stylesheet default.
+      vizWidth: 0,
       // Install panel updates without asking (git pull for dev installs,
       // panelPackageUrl download for package installs). Store builds
       // without a panelPackageUrl are unaffected — they only show the

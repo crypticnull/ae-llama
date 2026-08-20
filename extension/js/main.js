@@ -865,8 +865,38 @@
     $("btn-visualizer").addEventListener("click", function () {
       var v = $("visualizer");
       var nowHidden = v.classList.toggle("hidden");
+      $("split-handle").classList.toggle("hidden", nowHidden);
       if (!nowHidden) global.Viz.onShow();
     });
+
+    // -- draggable chat/visualizer divider (width persists)
+    (function () {
+      var viz = $("visualizer");
+      var handle = $("split-handle");
+      var savedW = global.Settings.get().vizWidth;
+      if (savedW > 0) viz.style.flex = "0 0 " + savedW + "px";
+      var drag = null;
+      handle.addEventListener("mousedown", function (e) {
+        drag = { x: e.clientX, w: viz.offsetWidth || 260 };
+        handle.classList.add("dragging");
+        e.preventDefault();
+      });
+      global.addEventListener("mousemove", function (e) {
+        if (!drag) return;
+        var w = Math.max(180, Math.min(
+          Math.round(global.innerWidth * 0.7),
+          drag.w + (drag.x - e.clientX)));
+        viz.style.flex = "0 0 " + w + "px";
+      });
+      global.addEventListener("mouseup", function () {
+        if (!drag) return;
+        drag = null;
+        handle.classList.remove("dragging");
+        try {
+          global.Settings.set({ vizWidth: viz.offsetWidth });
+        } catch (e) {}
+      });
+    })();
 
     // -- drawers
     els.settingsBtn.addEventListener("click", function () {
