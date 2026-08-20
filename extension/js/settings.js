@@ -50,7 +50,7 @@
       modelPath:  "",          // currently selected .gguf (absolute)
       customModels: [],        // absolute paths added via Browse…
       port: 8737,
-      ctxSize: 8192,
+      ctxSize: 16384,
       gpuLayers: 99,
       temperature: 0.7,
       maxRounds: 4,
@@ -131,6 +131,9 @@
         merged[k] = val;
       }
     }
+    // Old default upgrade: 8192 ctx overflowed on long tool rounds (field
+    // 400s); anyone still on the old default moves to the new one.
+    if (merged.ctxSize === 8192) merged.ctxSize = 16384;
     return merged;
   }
 

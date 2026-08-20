@@ -46,13 +46,18 @@ function Layer(name, comp, pos) {
   this.name = name;
   this.comp = comp;
   this.selected = false;
+  this.threeDLayer = false;      // the real 3D switch
   this.index = ++LAYER_SEQ;      // reassigned by comp
+  // FAITHFUL TO REAL AE: the scripting API pads a 2D layer's Position to
+  // THREE components ([x, y, 0]) — value.length is NOT a 3D test. This
+  // padding is exactly what broke every grid rig in the field.
+  const p = pos || [0, 0];
   this._transform = {
-    "ADBE Position": new Prop(pos || [0, 0]),
-    "ADBE Scale": new Prop([100, 100]),
+    "ADBE Position": new Prop(p.length > 2 ? p : [p[0], p[1], 0]),
+    "ADBE Scale": new Prop([100, 100, 100]),
     "ADBE Rotate Z": new Prop(0),
     "ADBE Opacity": new Prop(100),
-    "ADBE Anchor Point": new Prop([0, 0])
+    "ADBE Anchor Point": new Prop([0, 0, 0])
   };
   this._effects = new EffectParade();
 }
@@ -219,14 +224,20 @@ assert(r3.ok && r3.data.rows === 1 && r3.data.columns === 3,
 assert(comp._layers.some(l => l.name === "ROW CTRL"),
        "custom-named control null created");
 
-// 5. 3D position keeps z
+// 5. 2D layers must NEVER get value[2] (their expression value is 2D even
+// though scripting reports [x, y, 0]); real 3D layers keep z.
+assert(!/value\[2\]/.test(e1),
+       "2D layer expression has no value[2] despite the padded API value");
 const l3d = new Layer("Cube", comp, [10, 20, 30]);
+l3d.threeDLayer = true;
 comp._layers.push(l3d);
 comp._reindex();
 const r4 = call("grid_layout", { layers: ["Tile 1", "Cube"], columns: 2 });
 assert(r4.ok, "3D layer grid succeeds");
 assert(/value\[2\]/.test(l3d._transform["ADBE Position"].expression),
        "3D layer expression preserves z via value[2]");
+assert(!/value\[2\]/.test(tiles[0]._transform["ADBE Position"].expression),
+       "2D layer in the same grid still gets no value[2]");
 
 // 6. selection empty -> "all layers" fallback grids every content layer
 // (nulls like the two control layers are excluded automatically)

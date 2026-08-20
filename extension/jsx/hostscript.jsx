@@ -99,16 +99,23 @@ function AELL_resolveComp(name) {
   }
   // The model batches its commands BEFORE seeing results, so when
   // create_comp auto-renamed ("X" existed -> made "X 2"), the rest of the
-  // batch still says "X" — and would land in the OLD comp. Redirect
-  // same-name references to the just-created comp for a short window.
-  var alias = $.global.AELL_compAlias;
-  if (alias && alias.requested === name &&
-      new Date().getTime() < alias.until) {
-    name = alias.actual;
+  // batch still says "X" — and would land in the OLD comp. Aliases are
+  // scoped to the USER REQUEST, not a timer: the panel clears them when
+  // the next chat message starts (AELL_newRequest), so they survive
+  // arbitrarily slow batches and never leak into a later request.
+  var aliases = $.global.AELL_compAliases;
+  var wanted = (aliases && aliases[name]) ? aliases[name] : name;
+  var i, it;
+  for (i = 1; i <= proj.numItems; i++) {
+    it = proj.item(i);
+    if (it instanceof CompItem && it.name === wanted) return it;
   }
-  for (var i = 1; i <= proj.numItems; i++) {
-    var it = proj.item(i);
-    if (it instanceof CompItem && it.name === name) return it;
+  if (wanted !== name) {
+    // Aliased target gone (deleted/renamed) — fall back to the literal.
+    for (i = 1; i <= proj.numItems; i++) {
+      it = proj.item(i);
+      if (it instanceof CompItem && it.name === name) return it;
+    }
   }
   throw new Error("Comp not found: " + name);
 }
@@ -581,13 +588,14 @@ AELL_TOOLS.create_comp = function (args) {
   var dur = args.duration > 0 ? args.duration : 10;
   var fps = args.frameRate > 0 ? args.frameRate : 30;
   var name = AELL_uniqueItemName(String(args.name));
+  if (!$.global.AELL_compAliases) $.global.AELL_compAliases = {};
   if (name !== String(args.name)) {
-    // Redirect batched same-reply references to the renamed comp (see
-    // AELL_resolveComp) — two minutes covers any command batch.
-    $.global.AELL_compAlias = { requested: String(args.name), actual: name,
-                                until: new Date().getTime() + 120000 };
+    // Redirect this request's same-name references to the renamed comp
+    // (see AELL_resolveComp). One entry per requested name — several
+    // comps created in one batch each get their own redirect.
+    $.global.AELL_compAliases[String(args.name)] = name;
   } else {
-    $.global.AELL_compAlias = null;
+    delete $.global.AELL_compAliases[String(args.name)];
   }
   var comp = app.project.items.addComp(name, w, h, 1, dur, fps);
   if (AELLJSON.isArray(args.bgColor) && args.bgColor.length >= 3) {
@@ -953,6 +961,17 @@ AELL_TOOLS.link_property = function (args) {
   else if (fx.matchName === "ADBE Color Control") ctrlDims = 4;
   var v = prop.value;
   var targetDims = AELLJSON.isArray(v) ? v.length : 1;
+  // Spatial/scale values are PADDED to 3 components by the scripting API
+  // on 2D layers, but their EXPRESSION dimension is 2 — a 3-element
+  // result there is rejected ("must be of dimension 2").
+  try {
+    if (targetDims > 2 && !layer.threeDLayer &&
+        (prop.matchName === "ADBE Position" ||
+         prop.matchName === "ADBE Anchor Point" ||
+         prop.matchName === "ADBE Scale")) {
+      targetDims = 2;
+    }
+  } catch (eDim) {}
 
   var scale = typeof args.scale === "number" ? args.scale : 1;
   var offset = typeof args.offset === "number" ? args.offset : 0;
@@ -1088,7 +1107,12 @@ AELL_TOOLS.grid_layout = function (args) {
     var row = Math.floor(i / cols);
     var posProp = layer.property("ADBE Transform Group")
                        .property("ADBE Position");
-    var is3d = AELLJSON.isArray(posProp.value) && posProp.value.length > 2;
+    // 3D-ness comes from the layer SWITCH — the scripting API pads a 2D
+    // layer's position to [x, y, 0], but the EXPRESSION value is 2D
+    // there, so value[2] would be an out-of-range subscript (the bug
+    // that killed every grid rig in the field).
+    var is3d = false;
+    try { is3d = !!layer.threeDLayer; } catch (e3d) {}
     // The layer computes its own row/col from the "Grid Columns" slider,
     // so dragging it re-flows the whole grid live. Vars hold plain
     // NUMBERS only; every layer/effect lookup stays inline-chained (the
@@ -1621,6 +1645,13 @@ AELL_TOOLS.apply_keyframe_ease = function (args) {
   } catch (e) {}
   var sample = prop.value;
   var dims = AELLJSON.isArray(sample) ? (isSpatial ? 1 : sample.length) : 1;
+  // 2D layers report padded 3-component Scale via scripting; the ease
+  // array must match the EXPRESSION dimension (2) there.
+  try {
+    if (dims > 2 && prop.matchName === "ADBE Scale" && !layer.threeDLayer) {
+      dims = 2;
+    }
+  } catch (eD) {}
 
   function clampInf(v) { return Math.max(0.1, Math.min(100, v)); }
 
@@ -2721,3 +2752,9 @@ function AELL_call(toolName, argsJson) {
 }
 
 $.global.AELL_call = AELL_call;
+
+/* Called by the panel when a NEW user request starts — comp-name aliases
+ * are scoped to one request, deterministically, with no timers. */
+$.global.AELL_newRequest = function () {
+  $.global.AELL_compAliases = {};
+};

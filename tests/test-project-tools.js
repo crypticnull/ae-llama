@@ -190,4 +190,13 @@ assert(aliased.ok && aliased.data.name === "Squares 2",
        "new comp (got " + (aliased.ok ? aliased.data.name : aliased.error) +
        ")");
 
+// aliases are scoped to ONE user request — the panel clears them when the
+// next request starts, so old comps stay addressable by their real name.
+$.global.AELL_newRequest();
+const literal = call("set_comp_setting", { comp: "Squares", duration: 7 });
+assert(literal.ok && literal.data.name === "Squares",
+       "new request clears the alias — literal name hits the old comp " +
+       "again (got " + (literal.ok ? literal.data.name : literal.error) +
+       ")");
+
 console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");
