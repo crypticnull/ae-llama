@@ -315,6 +315,12 @@
     busy = true;
     cancelRequested = false;
     var parseRetried = false;   // one compact-retry per send on truncation
+    // Comp-name aliases from create_comp renames live for exactly one
+    // request — clear them as the next one begins (no timers).
+    try {
+      global.AEBridge.evalScript(
+        "if ($.global.AELL_newRequest) $.global.AELL_newRequest();");
+    } catch (eA) {}
     setSendMode(true);
     els.clearChatBtn.disabled = true;   // clearing mid-round corrupts history
     var thinking = appendMsg("info", "Thinking…");
