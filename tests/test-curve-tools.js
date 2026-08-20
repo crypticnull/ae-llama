@@ -15,7 +15,14 @@ function Prop(value) {
   this._eases = {};
 }
 Object.defineProperty(Prop.prototype, "value", { get() { return this._value; } });
-Prop.prototype.setValue = function (v) { this._value = v; };
+Prop.prototype.setValue = function (v) {
+  // Faithful to AE: setValue on a keyframed property throws.
+  if (this.numKeys > 0) {
+    throw new Error("Cannot set a value on a property with keyframes; " +
+                    "use setValueAtTime or setValueAtKey instead.");
+  }
+  this._value = v;
+};
 Prop.prototype.keyTime = function (i) { return this._keyTimes[i - 1]; };
 Prop.prototype.keyValue = function (i) { return this._keyValues[i - 1]; };
 Prop.prototype.setInterpolationTypeAtKey = function () {};
