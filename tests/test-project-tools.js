@@ -199,4 +199,11 @@ assert(literal.ok && literal.data.name === "Squares",
        "again (got " + (literal.ok ? literal.data.name : literal.error) +
        ")");
 
+// a manually-renamed comp self-heals: the not-found error lists the real
+// comps so the model retries with a live name.
+const gone = call("set_comp_setting", { comp: "OldName", duration: 3 });
+assert(!gone.ok && /Comps in this project:.*Squares 2/.test(gone.error),
+       "comp-not-found error lists the project's real comps: " +
+       gone.error.slice(0, 90));
+
 console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");

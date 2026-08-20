@@ -283,6 +283,23 @@ r = call("remove_keyframes", { property: "opacity" });
 assert(r.ok && r.data.layers === 2 && r.data.removed === 4,
        "batch remove clears keys on the whole selection");
 
+// 10b. a selection that is ONLY a control null refuses batch animation
+// (the field failure: GRID CTRL selected while inspecting sliders got
+// scale/rotation keyframes meant for the squares)
+CTRL.nullLayer = true;
+comp._layers.forEach(l => { l.selected = false; });
+CTRL.selected = true;
+r = call("set_keyframes", { property: "opacity",
+  keys: [{ time: 0, value: 0 }, { time: 1, value: 100 }] });
+assert(!r.ok && /control null/i.test(r.error) && /CTRL/.test(r.error),
+       "null-only selection refused with guidance: " +
+       (r.error || "").slice(0, 80));
+r = call("set_keyframes", { layer: "CTRL", property: "opacity",
+  keys: [{ time: 0, value: 0 }, { time: 1, value: 100 }] });
+assert(r.ok && r.data.keysSet === 2,
+       "explicitly naming the null still animates it");
+call("remove_keyframes", { layer: "CTRL", property: "opacity" });
+
 // 11. a path landing on a single-value control effect auto-descends to
 // its value ("Effects/Grid X Spacing" means the slider, not the group)
 r = call("get_property", { layer: "A", property: "effects/Grid X Spacing" });
