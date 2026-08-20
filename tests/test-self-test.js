@@ -32,6 +32,7 @@ assert(names.size === steps.length, "step names are unique");
 
 // canned happy-path results per tool
 let createCount = 0;
+let textStyle = null;
 function cannedOk(tool, args) {
   switch (tool) {
     case "create_comp":
@@ -76,6 +77,23 @@ function cannedOk(tool, args) {
       return { scaleFactor: 0.5, layersScaled: 3 };
     case "add_solid":
       return { name: (args && args.name) || "ST Square" };
+    case "add_text_layer":
+      textStyle = { fontSize: args && args.fontSize,
+                    font: "StubFont-Regular",
+                    tracking: args && args.tracking,
+                    leading: args && args.leading };
+      // AE names a new text layer after its own text.
+      return { index: 1, name: (args && args.text) || "Text",
+               style: textStyle };
+    case "set_text_style":
+      if (!textStyle) textStyle = {};
+      if (args && args.fontSize !== undefined) textStyle.fontSize = args.fontSize;
+      if (args && args.tracking !== undefined) textStyle.tracking = args.tracking;
+      if (args && args.font !== undefined) textStyle.font = args.font;
+      if (args && args.leading !== undefined) {
+        textStyle.leading = args.leading === "auto" ? "auto" : args.leading;
+      }
+      return { style: textStyle };
     case "add_camera":
       return { index: 1, name: (args && args.name) || "Camera" };
     default: return { done: true };

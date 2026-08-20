@@ -670,19 +670,86 @@ AELL_TOOLS.create_comp = function (args) {
  * Handles: text, fontSize, font, fillColor, tracking, leading (switches
  * autoLeading off), justification. Returns a summary of the result.
  */
+/*
+ * Fonts are addressed by PostScript name, and AE will happily accept one
+ * that is not installed: the TextDocument stores the bogus name verbatim
+ * and the layer renders in a substituted face, so the tool would report a
+ * success that never happened. The ONLY reliable tell is isSubstitute on
+ * the FontObject — getFontsByPostScriptName echoes whatever name it was
+ * given, so comparing names proves nothing. Verified in AE 2026.
+ *
+ * Returns null when the font is real, or a grounded error string listing
+ * what IS installed, so the model can correct itself.
+ */
+function AELL_fontProblem(want) {
+  var fonts = null;
+  try { fonts = app.fonts; } catch (e0) { return null; }
+  if (!fonts || typeof fonts.getFontsByPostScriptName !== "function") {
+    return null;   // older AE: no way to check, so do not block the write
+  }
+  var fo = null;
+  try {
+    var found = fonts.getFontsByPostScriptName(want);
+    if (found && found.length) { fo = found[0]; }
+  } catch (e1) {}
+  if (fo) {
+    try {
+      if (fo.isSubstitute === false) { return null; }
+    } catch (e2) {}
+  }
+
+  // Grounded: name what actually exists, preferring near matches.
+  var all = null;
+  try { all = fonts.allFonts; } catch (e3) {}
+  var near = [], sample = [], total = 0, i, ps;
+  var low = String(want).toLowerCase();
+  if (all) {
+    for (i = 0; i < all.length; i++) {
+      ps = null;
+      // allFonts is an array of ARRAYS; the FontObject is one level in.
+      try { ps = String(all[i][0].postScriptName); } catch (e4) {}
+      if (!ps) { continue; }
+      total++;
+      if (near.length < 12 && ps.toLowerCase().indexOf(low) !== -1) {
+        near.push(ps);
+      }
+      if (sample.length < 8) { sample.push(ps); }
+    }
+  }
+  var msg = "Font '" + want + "' is not installed — AE would silently " +
+            "substitute it and report success. Fonts are addressed by " +
+            "PostScript name (Arial is 'ArialMT').";
+  if (near.length) {
+    msg += " Installed and matching: " + near.join(", ") + ".";
+  } else if (sample.length) {
+    msg += " Nothing installed matches that. " + total +
+           " fonts available, for example: " + sample.join(", ") + ".";
+  }
+  return msg;
+}
+
 function AELL_applyTextStyle(layer, args) {
   var textProp = layer.property("ADBE Text Properties")
                       .property("ADBE Text Document");
   var doc = textProp.value;
   if (typeof args.text === "string" && args.text !== "") doc.text = args.text;
   if (args.fontSize > 0) doc.fontSize = args.fontSize;
-  if (typeof args.font === "string" && args.font !== "") doc.font = args.font;
+  if (typeof args.font === "string" && args.font !== "") {
+    var fontErr = AELL_fontProblem(args.font);
+    if (fontErr) throw new Error(fontErr);
+    doc.font = args.font;
+  }
   if (AELLJSON.isArray(args.fillColor) && args.fillColor.length >= 3) {
     doc.fillColor = [args.fillColor[0], args.fillColor[1], args.fillColor[2]];
     doc.applyFill = true;
   }
   if (typeof args.tracking === "number") doc.tracking = args.tracking;
-  if (typeof args.leading === "number") {
+  // Without an "auto" spelling there is no way BACK to auto leading once a
+  // number has been set: AE clamps leading 0 to ~0.01 and leaves
+  // autoLeading false, so the line spacing collapses instead of resetting.
+  if (args.leading === "auto") {
+    doc.autoLeading = true;
+  } else if (typeof args.leading === "number") {
     doc.autoLeading = false;
     doc.leading = args.leading;
   }

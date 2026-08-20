@@ -259,3 +259,33 @@ fix. Start from item 1 of `docs/WORKPLAN.md`.
   the morning's code, including the center_anchor_point bug that breaks
   on any animated layer. Merging to main is NOT shipping; the feed is
   version-gated. Bump when the fixes should reach a real panel.
+
+## 2026-08-20 14:07 — item 2: text (add_text_layer / set_text_style)
+
+- Changed: `extension/jsx/hostscript.jsx` — validate fonts before
+  writing them (new `AELL_fontProblem`), and accept `leading: "auto"`.
+  `extension/js/tools.js` docs. 3 text steps in
+  `extension/js/selftest.js`. New `tests/test-text-style.js`.
+- Harness: 39/39 real AE (was 36). Stubbed suite 14/14.
+- Notes: real bug — an UNINSTALLED font was silently accepted. AE stores
+  the bogus PostScript name verbatim, renders a substituted face, and
+  the tool returned ok=true, so the model believed "use Futura" worked.
+  The obvious check does NOT work: getFontsByPostScriptName ECHOES
+  whatever name it is handed, so comparing names proves nothing. The
+  only reliable tell is `isSubstitute` on the FontObject — false for a
+  real font, true for a made-up one. Also note `app.fonts.allFonts` is
+  an array of ARRAYS (FontObject is one level in), and a FontObject
+  cannot be string-concatenated at all ("invalid numeric result").
+  Refusals are grounded: asking for "Arial" now answers "not installed
+  ... Installed and matching: ArialMT" — the PostScript-vs-family-name
+  confusion is exactly what the small model will hit.
+  Second, smaller gap: once leading was a number there was no way back
+  to auto. AE clamps leading 0 to ~0.01 and leaves autoLeading false, so
+  line spacing collapsed instead of resetting. `leading: "auto"` now
+  works and the summary reports "auto".
+  The refusal cannot live in the real-AE suite: its runner treats
+  ok=false as a step FAILURE, so negative cases have no home there. That
+  is why the font work is covered by a stub test instead — it fails on
+  7 assertions against the pre-fix host. If negative coverage matters in
+  the harness, the runner needs an expectFail flag; flagging rather than
+  changing the runner unilaterally.
