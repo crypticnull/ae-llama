@@ -153,3 +153,26 @@ fix. Start from item 1 of `docs/WORKPLAN.md`.
   by grid_layout and confirm the WARNING appears and the rig really does
   need re-running. Confirm keyframed Position/Scale survive (that path
   goes through AELL_mapPropValues and is stub-proven only).
+
+## 2026-08-20 (remote) — grounded refusals for animated/driven properties
+
+- Changed: `extension/jsx/hostscript.jsx` — new `AELL_writeValue` helper,
+  used by `set_transform`, `set_effect_param`, `set_property` and
+  `distribute_property`. Cases added to `tests/test-curve-tools.js`.
+- Harness: NOT run from here. Stubbed suite 13/13, ES3 clean.
+- Notes: swept every `setValue` call site after noticing that the whole
+  day's bugs were ONE bug — something fails or is ignored and reports
+  success. AE refuses `setValue` on a KEYFRAMED property (raw throw) and
+  silently ignores it on an EXPRESSION-DRIVEN one (false success). Four
+  core setters hit one or both. They now return the keyframe count and
+  name `{atTime: …}` as the way out, or warn that an expression is
+  overriding the write. `distribute_property` additionally no longer
+  ABORTS on the first unwritable layer — it applies the rest and reports
+  which were skipped and why, instead of leaving a partial spread that
+  claims full coverage.
+- FOR THE LOCAL SESSION: worth a real-AE spot check that AE's refusal
+  really is `numKeys > 0` and not something narrower (e.g. whether
+  setValue on a keyed property throws or silently sets the value at the
+  current time). Everything here assumes it throws. If it does NOT
+  throw, these guards are still correct behaviour but the reasoning in
+  the comments needs amending.

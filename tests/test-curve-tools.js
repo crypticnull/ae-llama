@@ -258,4 +258,46 @@ r = call("scale_comp", { width: 1920, height: 1080, mode: "fill" });
 assert(r.ok && near(r.data.scaleFactor, 0.5, 1e-3),
        "fill mode picks the max ratio (0.5)");
 
+// 9-11. Animated / driven properties. AE REFUSES setValue on a keyframed
+// property and silently IGNORES it on an expression-driven one. Both
+// used to surface as a raw AE throw or a false success; the tools must
+// now say which it is, in words the model can act on.
+const anim = comp.layer("L1");
+anim._transform["ADBE Position"].numKeys = 2;
+anim._transform["ADBE Position"]._keyTimes = [0, 1];
+anim._transform["ADBE Position"]._keyValues = [[0, 0], [50, 50]];
+
+r = call("set_transform", { layer: "L1", property: "position",
+                            value: [10, 10] });
+assert(!r.ok, "set_transform on an animated property refuses");
+assert(/animated/i.test(r.error || "") && /2 keyframes/.test(r.error || "") &&
+       /atTime/.test(r.error || ""),
+       "…and the error names the count AND the way out (got: " +
+       (r.error || "") + ")");
+
+const driven = comp.layer("L2");
+driven._transform["ADBE Opacity"].expressionEnabled = true;
+r = call("set_transform", { layer: "L2", property: "opacity", value: 25 });
+assert(r.ok && /expression/i.test((r.data && r.data.warning) || ""),
+       "driven property: write succeeds but warns it is overridden (got: " +
+       ((r.data && r.data.warning) || "") + ")");
+
+// One un-writable layer must not abort the spread for the others.
+r = call("distribute_property", {
+  bezier: [0.25, 0.25, 0.75, 0.75], property: "position_x",
+  layers: ["L1", "L3", "L4"], from: 0, to: 100, order: "stack"
+});
+assert(r.ok, "distribute continues past an unwritable layer (" +
+       (r.error || "") + ")");
+assert(Array.isArray(r.data.skipped) && r.data.skipped.length === 1 &&
+       /L1/.test(r.data.skipped[0]),
+       "…names the skipped layer (got " +
+       JSON.stringify(r.data.skipped) + ")");
+assert(r.data.applied.length === 2,
+       "…and still applied the other two (got " +
+       r.data.applied.length + ")");
+assert(/1 of 3/.test(r.data.note || ""),
+       "…and the note counts what was left out (got: " +
+       (r.data.note || "") + ")");
+
 console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");
