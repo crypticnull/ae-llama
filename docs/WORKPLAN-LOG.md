@@ -247,3 +247,15 @@ fix. Start from item 1 of `docs/WORKPLAN.md`.
   is no add_light tool at all, so covering lights means a new tool.
   Flagging rather than building it: a new tool is the remote session's
   call, and the same aim-not-scale rule is already proven for cameras.
+
+## 2026-08-20 (remote) — 0.9.0 released
+
+- Changed: version bumped in all four places (manifest x2, version.js,
+  update.json) plus release notes.
+- Notes: everything merged today sat in `main` at 0.8.0, and the panel's
+  update gate is `compareVersions(feed.panelVersion, VERSION) > 0` —
+  equal versions offer NO update, and the dev-install git pull only runs
+  after an update is detected. So the installed panel was still running
+  the morning's code, including the center_anchor_point bug that breaks
+  on any animated layer. Merging to main is NOT shipping; the feed is
+  version-gated. Bump when the fixes should reach a real panel.
