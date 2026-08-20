@@ -128,3 +128,28 @@ fix. Start from item 1 of `docs/WORKPLAN.md`.
   layer does not visually jump at ANY key time (not just the current
   one). Then the same on a 3D layer and on a text layer, where
   `sourceRectAtTime` moves with the content.
+
+## 2026-08-20 (remote) — scale_comp: cameras, driven transforms, honest counts
+
+- Changed: `extension/jsx/hostscript.jsx` `scale_comp`; new
+  `tests/test-scale-comp.js` (16 assertions, incl. a camera stub).
+- Harness: NOT run from here. Stubbed suite 13/13.
+- Notes: three faults, all invisible to the old plain-2D-layer coverage.
+  (1) Cameras and lights AIM at a Point of Interest held in COMP space
+  (matchName "ADBE Anchor Point" on those layer types). It was never
+  re-centred, so resizing a comp silently re-framed the shot — the
+  camera kept aiming where things used to be. Now re-centred like
+  Position. (2) An expression-driven transform ACCEPTS the write and
+  ignores it, so rigged layers were counted as "scaled" when they had
+  not moved. Since grid_layout rigs Position with expressions, this hit
+  a headline feature. Driven layers are now named in the result with a
+  WARNING. (3) A layer that genuinely failed (locked, refused write) was
+  folded into the "inherited" count, reading as though its parent had
+  handled it. Failures are now listed separately with their reasons.
+- FOR THE LOCAL SESSION (item 2): verify in real AE. Build a comp with a
+  two-node camera aimed at an off-centre object, resize with scale_comp,
+  and confirm the framing is IDENTICAL before and after — that is the
+  one that cannot be proven by stub. Then run scale_comp on a comp built
+  by grid_layout and confirm the WARNING appears and the rig really does
+  need re-running. Confirm keyframed Position/Scale survive (that path
+  goes through AELL_mapPropValues and is stub-proven only).

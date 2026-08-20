@@ -1887,37 +1887,84 @@ AELL_TOOLS.scale_comp = function (args) {
   }
   comp.width = nw;
   comp.height = nh;
+
+  function AELL_recentre(v) {
+    var out = [(v[0] - ow / 2) * s + nw / 2,
+               (v[1] - oh / 2) * s + nh / 2];
+    if (v.length > 2) out.push(v[2] * s);
+    return out;
+  }
+  function AELL_driven(prop) {
+    try { return !!prop.expressionEnabled; } catch (eD) { return false; }
+  }
+
   var scaled = 0, inherited = 0, i;
+  var skipped = [], drivenBy = [];
   for (i = 1; i <= comp.numLayers; i++) {
     var L = comp.layer(i);
     if (L.parent) { inherited++; continue; }
     try {
-      AELL_mapPropValues(AELL_resolveProperty(L, "position"), function (v) {
-        var out = [(v[0] - ow / 2) * s + nw / 2,
-                   (v[1] - oh / 2) * s + nh / 2];
-        if (v.length > 2) out.push(v[2] * s);
-        return out;
-      });
+      var posProp = AELL_resolveProperty(L, "position");
+      if (AELL_driven(posProp)) drivenBy.push(L.name);
+      AELL_mapPropValues(posProp, AELL_recentre);
+
       var sc = null;
       try { sc = AELL_resolveProperty(L, "scale"); } catch (e1) {}
       if (sc) {
+        if (AELL_driven(sc)) drivenBy.push(L.name);
         AELL_mapPropValues(sc, function (v) {
           var out = [];
           for (var d = 0; d < v.length; d++) out.push(v[d] * s);
           return out;
         });
       }
+
+      // Cameras and lights AIM at a Point of Interest held in comp space
+      // (matchName "ADBE Anchor Point" on those layer types). Left alone
+      // it keeps pointing where things used to be, so the shot re-frames
+      // itself the moment the comp is resized. Re-centre it like Position.
+      var aimed = false;
+      try {
+        aimed = (typeof CameraLayer !== "undefined" && L instanceof CameraLayer) ||
+                (typeof LightLayer !== "undefined" && L instanceof LightLayer);
+      } catch (eA) {}
+      if (aimed) {
+        try {
+          var poi = L.property("ADBE Transform Group")
+                     .property("ADBE Anchor Point");
+          if (poi) AELL_mapPropValues(poi, AELL_recentre);
+        } catch (eP) {}
+      }
+
       try {
         if (L.zoom) AELL_mapPropValues(L.zoom, function (z) { return z * s; });
       } catch (e2) {}
       scaled++;
-    } catch (e3) { inherited++; }
+    } catch (e3) {
+      // Do NOT fold failures into the inherited count — a locked layer or
+      // a refused write would read as "handled by its parent" and the
+      // result would claim a success that never happened.
+      skipped.push(L.name + ": " +
+        (e3 && e3.message ? e3.message : String(e3)));
+    }
   }
-  return AELL_okay({ comp: comp.name, width: nw, height: nh,
+
+  var out = { comp: comp.name, width: nw, height: nh,
     scaleFactor: Math.round(s * 10000) / 10000,
     layersScaled: scaled, layersInherited: inherited,
     note: "Content scaled uniformly and re-centered " +
-          "(like the native Scale Composition script)" });
+          "(like the native Scale Composition script)" };
+  if (skipped.length) {
+    out.layersSkipped = skipped;
+    out.note += ". " + skipped.length + " layer(s) could NOT be scaled";
+  }
+  if (drivenBy.length) {
+    out.expressionDriven = drivenBy;
+    out.note += ". WARNING: expression-driven transforms on " +
+      drivenBy.join(", ") + " override these writes — those layers will " +
+      "not move, so re-check any rig (grid_layout etc.) after resizing";
+  }
+  return AELL_okay(out);
 };
 
 AELL_TOOLS.import_file = function (args) {
