@@ -795,9 +795,15 @@ AELL_TOOLS.set_transform = function (args) {
     }
   }
 
-  prop.setValue(value);
+  var drivenWarn;
+  try {
+    drivenWarn = AELL_writeValue(prop, value, propName);
+  } catch (eW) {
+    return AELL_err(eW.message);
+  }
 
   var result = { layer: layer.name, property: propName, value: value };
+  if (drivenWarn) result.warning = drivenWarn;
 
   // Unit sanity: AE scale is PERCENT. A model that thinks in fractions
   // sends 2 meaning "200%" and shrinks the layer to 2%. Warn loudly in the
@@ -1335,9 +1341,16 @@ AELL_TOOLS.set_effect_param = function (args) {
   if (!fx) return AELL_err("Effect not found on layer: " + args.effect);
   var p = fx.property(args.param);
   if (!p) return AELL_err("Parameter not found: " + args.param);
-  p.setValue(args.value);
-  return AELL_okay({ layer: layer.name, effect: fx.name, param: p.name,
-                     value: args.value });
+  var warn;
+  try {
+    warn = AELL_writeValue(p, args.value, args.effect + "/" + p.name);
+  } catch (eP) {
+    return AELL_err(eP.message);
+  }
+  var out = { layer: layer.name, effect: fx.name, param: p.name,
+              value: args.value };
+  if (warn) out.warning = warn;
+  return AELL_okay(out);
 };
 
 /* First free name of the form "base", "base 2", "base 3", … in a comp. */
@@ -1691,7 +1704,7 @@ AELL_TOOLS.distribute_property = function (args) {
     }
   }
   var n = layers.length;
-  var applied = [];
+  var applied = [], skipped = [], warnings = [];
   for (var i = 0; i < n; i++) {
     var v;
     if (useStep) {
@@ -1701,24 +1714,41 @@ AELL_TOOLS.distribute_property = function (args) {
       v = args.from + y * (args.to - args.from);
     }
     var prop = AELL_resolveProperty(layers[i], spec.path);
+    var target;
     if (spec.kind === "scalar") {
-      prop.setValue(v);
+      target = v;
     } else if (spec.kind === "uniform") {
       var cur = prop.value;
-      var arr = [v, v];
-      if (cur.length > 2) arr.push(cur[2]);
-      prop.setValue(arr);
+      target = [v, v];
+      if (cur.length > 2) target.push(cur[2]);
     } else {   // component
       var pos = prop.value;
-      var out = [];
-      for (var d = 0; d < pos.length; d++) out.push(pos[d]);
-      out[spec.axis] = v;
-      prop.setValue(out);
+      target = [];
+      for (var d = 0; d < pos.length; d++) target.push(pos[d]);
+      target[spec.axis] = v;
     }
-    applied.push({ layer: layers[i].name,
-                   value: Math.round(v * 100) / 100 });
+    // One bad layer must not abort the rest: a keyframed or driven
+    // property is reported and skipped, so the caller learns WHICH
+    // layers were left out rather than getting a partial spread that
+    // claims to have covered everything.
+    try {
+      var w = AELL_writeValue(prop, target, layers[i].name + "/" +
+                              String(args.property));
+      if (w) warnings.push(w);
+      applied.push({ layer: layers[i].name,
+                     value: Math.round(v * 100) / 100 });
+    } catch (eD) {
+      skipped.push(layers[i].name + ": " +
+        (eD && eD.message ? eD.message : String(eD)));
+    }
   }
-  return AELL_okay({ property: args.property, layers: n, applied: applied });
+  var res = { property: args.property, layers: n, applied: applied };
+  if (skipped.length) {
+    res.skipped = skipped;
+    res.note = skipped.length + " of " + n + " layer(s) were NOT changed";
+  }
+  if (warnings.length) res.warnings = warnings;
+  return AELL_okay(res);
 };
 
 /* Ease every requested key pair on one property. Returns pair count. */
@@ -1846,6 +1876,33 @@ AELL_TOOLS.set_comp_setting = function (args) {
   return AELL_okay({ name: comp.name, width: comp.width, height: comp.height,
                      duration: comp.duration, frameRate: comp.frameRate });
 };
+
+/*
+ * Write a plain value to a property, turning AE's two silent refusals
+ * into something the model can act on:
+ *   - a KEYFRAMED property rejects setValue outright (raw AE throw),
+ *   - an EXPRESSION-DRIVEN one accepts it and then ignores it, which is
+ *     worse, because the tool reports success and nothing moves.
+ * Returns a warning string (or "") so callers can surface the second case.
+ */
+function AELL_writeValue(prop, value, label) {
+  var keys = 0;
+  try { keys = prop.numKeys; } catch (eK) {}
+  if (keys > 0) {
+    throw new Error("'" + label + "' is animated (" + keys +
+      " keyframes), so a single value cannot be written to it. Pass " +
+      "{atTime: <seconds>} to set a keyframe at a time instead, or " +
+      "delete the existing keyframes first.");
+  }
+  prop.setValue(value);
+  var driven = false;
+  try { driven = !!prop.expressionEnabled; } catch (eE) {}
+  return driven
+    ? "'" + label + "' has an expression, which overrides this value — " +
+      "the change was accepted but will NOT be visible until the " +
+      "expression is removed or edited"
+    : "";
+}
 
 /* Apply fn to a property's value — at every keyframe when it has keys. */
 function AELL_mapPropValues(prop, fn) {
@@ -2739,6 +2796,14 @@ AELL_TOOLS.set_property = function (args) {
       prop.setValue(args.value);
     }
   } catch (e) {
+    var nkey = 0;
+    try { nkey = prop.numKeys || 0; } catch (eN) {}
+    if (nkey > 0 && typeof args.atTime !== "number") {
+      return AELL_err("'" + args.property + "' is animated (" + nkey +
+        " keyframes), so a single value cannot be written to it. Pass " +
+        "{atTime: <seconds>} to set a keyframe instead, or delete the " +
+        "keyframes first.");
+    }
     return AELL_err("AE rejected the value for '" + args.property + "': " +
       (e.message || e) + ". Current value: " +
       AELLJSON.stringify(AELL_sampleValue(prop)));
