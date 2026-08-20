@@ -154,7 +154,19 @@ assert(comp4._layers.some(l => l.name === "bg"),
 comp4._layers.forEach(l => { l.selected = false; });
 const r6 = call("split_layer_into_chunks", { chunkSeconds: 2 });
 assert(!r6.ok && /No layer selected/.test(r6.error),
-       "no selection + omitted layer -> 'No layer selected' error");
+       "no selection + omitted layer in a multi-layer comp -> clear error");
+
+// …but a ONE-layer comp is unambiguous: omitted layer uses that layer
+const compOne = new Comp("Solo", 6);
+Object.setPrototypeOf(compOne, Object.create(CompItem.prototype,
+  Object.getOwnPropertyDescriptors(Comp.prototype)));
+compOne._layers.push(new Layer("only", compOne, 0, 6, 0));
+project.activeItem = compOne;
+const rOne2 = call("duplicate_layer", { count: 2 });
+assert(rOne2.ok && rOne2.data.duplicatedFrom === "only" &&
+       compOne._layers.length === 3,
+       "single-layer comp: omitted layer resolves without selection");
+project.activeItem = comp4;
 
 // omitted layer with several selected -> error names them
 comp4.layer("bg").selected = true;

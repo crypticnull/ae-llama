@@ -167,24 +167,29 @@ assert(ctrl._effects.property("Grid X Spacing")._params[0].value ===
        Math.round(1920 / 4), "default X spacing = width/(cols+1)");
 
 // 2. expressions: centered offsets, correct slider refs, bystander untouched
+const X = 'thisComp\\.layer\\("GRID CTRL"\\)\\.effect\\("Grid X Spacing"\\)\\(1\\)';
+const Y = 'thisComp\\.layer\\("GRID CTRL"\\)\\.effect\\("Grid Y Spacing"\\)\\(1\\)';
 const e1 = tiles[0]._transform["ADBE Position"].expression;
-assert(/\(-1\) \* sx/.test(e1) && /\(-0\.5\) \* sy/.test(e1),
+assert(new RegExp("\\(-1\\) \\* " + X).test(e1) &&
+       new RegExp("\\(-0\\.5\\) \\* " + Y).test(e1),
        "tile 1 gets centered offsets (-1, -0.5)");
 const e4 = tiles[3]._transform["ADBE Position"].expression;
-assert(/\(-1\) \* sx/.test(e4) && /\(0\.5\) \* sy/.test(e4),
+assert(new RegExp("\\(-1\\) \\* " + X).test(e4) &&
+       new RegExp("\\(0\\.5\\) \\* " + Y).test(e4),
        "tile 4 wraps to row 2 col 0 (-1, 0.5)");
 const e5 = tiles[4]._transform["ADBE Position"].expression;
-assert(/\(0\) \* sx/.test(e5) && /\(0\.5\) \* sy/.test(e5),
+assert(new RegExp("\\(0\\) \\* " + X).test(e5) &&
+       new RegExp("\\(0\\.5\\) \\* " + Y).test(e5),
        "tile 5 sits at row 2 col 1 (0, 0.5)");
 assert(/effect\("Grid X Spacing"\)\(1\)/.test(e1) &&
        /thisComp\.layer\("GRID CTRL"\)/.test(e1),
        "expression references the null's sliders");
-// The JS expression engine returns Property objects from these lookups;
-// without .value, o[0]/sx come back undefined and AE disables the rig.
-assert(/transform\.position\.value/.test(e1) &&
-       /effect\("Grid X Spacing"\)\(1\)\.value/.test(e1) &&
-       /effect\("Grid Y Spacing"\)\(1\)\.value/.test(e1),
-       "stored references resolve with .value (JS-engine safe)");
+// The rig must use ONLY the classic inline chained form — no vars, no
+// stored references — so it evaluates in BOTH expression engines.
+assert(e1.indexOf("var ") === -1 && e1.indexOf(".value") === -1 &&
+       /transform\.position\[0\]/.test(e1) &&
+       /transform\.position\[1\]/.test(e1),
+       "pickwhip-classic inline expression (no vars, no stored refs)");
 assert(bystander._transform["ADBE Position"].expression === "",
        "unselected layer untouched");
 

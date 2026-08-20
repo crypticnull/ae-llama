@@ -136,6 +136,8 @@ function AELL_layerOrSelection(comp, ref) {
   var sel = comp.selectedLayers;
   if (sel.length === 1) return sel[0];
   if (sel.length === 0) {
+    // A one-layer comp is unambiguous — use that layer.
+    if (comp.numLayers === 1) return comp.layer(1);
     throw new Error("No layer selected in '" + comp.name + "' — select " +
                     "one in AE or pass {layer: name|index}");
   }
@@ -224,6 +226,8 @@ var AELL_TOOLS = {};
 AELL_TOOLS.get_project_info = function (args) {
   var proj = app.project;
   if (!proj) return AELL_err("No project open");
+  var engine = "";
+  try { engine = String(proj.expressionEngine || ""); } catch (eE) {}
   var items = [];
   for (var i = 1; i <= proj.numItems; i++) {
     var it = proj.item(i);
@@ -254,6 +258,7 @@ AELL_TOOLS.get_project_info = function (args) {
   }
   return AELL_okay({
     projectFile: proj.file ? proj.file.fsName : null,
+    expressionEngine: engine,
     numItems: proj.numItems,
     items: items,
     activeComp: active
@@ -547,19 +552,37 @@ AELL_TOOLS.get_comp_details = function (args) {
   });
 };
 
+/* First free project-item name — duplicate comp names make every later
+ * name-based comp reference ambiguous (it silently hits the OLDEST one). */
+function AELL_uniqueItemName(base) {
+  var taken = {};
+  for (var i = 1; i <= app.project.numItems; i++) {
+    try { taken[app.project.item(i).name] = true; } catch (e) {}
+  }
+  if (!taken[base]) return base;
+  var k = 2;
+  while (taken[base + " " + k]) k++;
+  return base + " " + k;
+}
+
 AELL_TOOLS.create_comp = function (args) {
   if (!args.name) return AELL_err("'name' is required");
   var w = Math.max(4, Math.min(30000, Math.round(args.width || 1920)));
   var h = Math.max(4, Math.min(30000, Math.round(args.height || 1080)));
   var dur = args.duration > 0 ? args.duration : 10;
   var fps = args.frameRate > 0 ? args.frameRate : 30;
-  var comp = app.project.items.addComp(args.name, w, h, 1, dur, fps);
+  var name = AELL_uniqueItemName(String(args.name));
+  var comp = app.project.items.addComp(name, w, h, 1, dur, fps);
   if (AELLJSON.isArray(args.bgColor) && args.bgColor.length >= 3) {
     comp.bgColor = [args.bgColor[0], args.bgColor[1], args.bgColor[2]];
   }
   comp.openInViewer();
   return AELL_okay({ name: comp.name, id: comp.id, width: w, height: h,
-                     duration: dur, frameRate: fps });
+    duration: dur, frameRate: fps,
+    note: name !== String(args.name)
+      ? "A comp named '" + args.name + "' already existed — this one is '" +
+        name + "'. Use THIS name in every following command."
+      : "" });
 };
 
 /*
@@ -922,27 +945,25 @@ AELL_TOOLS.link_property = function (args) {
   if (scale !== 1) arith += " * " + scale;
   if (offset !== 0) arith += " + " + offset;
 
-  // .value everywhere a control reference is stored or embedded: the JS
-  // expression engine does not auto-resolve Property objects inside vars
-  // or array literals (subscripts/elements come back undefined).
+  // Var-free inline references only — the classic chained form is the
+  // one shape that evaluates identically in both expression engines.
   var expr;
   if (ctrlDims === 1 && targetDims === 1) {
-    expr = src + ".value" + arith + ";";
+    expr = src + arith + ";";
   } else if (ctrlDims === 1 && targetDims > 1) {
     // Broadcast a scalar control across every target component.
     var comps = [];
-    for (var i = 0; i < targetDims; i++) comps.push("c");
-    expr = "var c = " + src + ".value" + arith + ";\n[" +
-           comps.join(", ") + "];";
+    for (var i = 0; i < targetDims; i++) comps.push(src + arith);
+    expr = "[" + comps.join(", ") + "]";
   } else if (ctrlDims === targetDims) {
     if (arith === "") {
-      expr = src + ".value;";
+      expr = src + ";";
     } else {
       var parts = [];
       for (var j = 0; j < targetDims; j++) {
-        parts.push("c[" + j + "]" + arith);
+        parts.push(src + "[" + j + "]" + arith);
       }
-      expr = "var c = " + src + ".value;\n[" + parts.join(", ") + "];";
+      expr = "[" + parts.join(", ") + "]";
     }
   } else {
     return AELL_err("Dimension mismatch: control '" + fx.name + "' has " +
@@ -1051,21 +1072,26 @@ AELL_TOOLS.grid_layout = function (args) {
     var posProp = layer.property("ADBE Transform Group")
                        .property("ADBE Position");
     var is3d = AELLJSON.isArray(posProp.value) && posProp.value.length > 2;
-    // .value on every stored reference: AE's JavaScript expression engine
-    // returns Property objects from transform/effect lookups, and
-    // subscripting one (o[0]) yields undefined ("out of range array
-    // subscript"). .value resolves them in both engines.
+    // Maximally-classic inline form — no vars, no stored references, the
+    // exact chained pattern the pickwhip has generated for 20 years. It
+    // evaluates identically in the legacy and JavaScript engines.
+    var ref = 'thisComp.layer("' + escCtrl + '")';
     var expr =
-      'var c = thisComp.layer("' + escCtrl + '");\n' +
-      'var o = c.transform.position.value;\n' +
-      'var sx = c.effect("Grid X Spacing")(1).value;\n' +
-      'var sy = c.effect("Grid Y Spacing")(1).value;\n' +
-      '[o[0] + (' + cOff + ') * sx, o[1] + (' + rOff + ') * sy' +
-      (is3d ? ', value[2]' : '') + '];';
+      '[' + ref + '.transform.position[0] + (' + cOff + ') * ' +
+      ref + '.effect("Grid X Spacing")(1), ' +
+      ref + '.transform.position[1] + (' + rOff + ') * ' +
+      ref + '.effect("Grid Y Spacing")(1)' +
+      (is3d ? ', value[2]' : '') + ']';
     var err = AELL_setExpr(posProp, expr);
     if (err) {
+      // Full diagnostics — if AE still rejects this, the error must show
+      // exactly what was evaluated and under which engine.
+      var engine = "";
+      try { engine = String(app.project.expressionEngine || ""); }
+      catch (eE) {}
       return AELL_err("Grid expression rejected on '" + layer.name +
-                      "': " + err);
+        "': " + err + (engine ? " [engine: " + engine + "]" : "") +
+        " [expression was: " + expr + "]");
     }
     placed.push({ layer: layer.name, row: row, col: col });
   }
@@ -1096,10 +1122,8 @@ AELL_TOOLS.apply_expression_preset = function (args) {
       throw new Error("Control not found: '" + c.effect + "' on layer '" +
                       String(c.layer) + "'. Use add_control first.");
     }
-    // .value so the reference resolves inside function arguments too
-    // (the JS expression engine does not coerce Property objects there).
     return 'thisComp.layer("' + AELL_escapeExprName(l.name) +
-           '").effect("' + AELL_escapeExprName(fx.name) + '")(1).value';
+           '").effect("' + AELL_escapeExprName(fx.name) + '")(1)';
   }
 
   var preset = String(args.preset || "").toLowerCase();

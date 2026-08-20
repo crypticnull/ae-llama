@@ -61,7 +61,13 @@ const project = {
       f.parentFolder = root;
       return f;
     },
-    addComp() { throw new Error("not needed"); }
+    addComp(name, w, h, ar, dur, fps) {
+      const c = new CompItem(name);
+      c.width = w; c.height = h; c.duration = dur; c.frameRate = fps;
+      c.openInViewer = () => {};
+      c.parentFolder = root;
+      return c;
+    }
   },
   activeItem: null,
   file: null
@@ -164,5 +170,15 @@ assert(!badParent.ok && /Existing folders:.*_COMPS/.test(badParent.error),
 const badMove = call("move_to_folder", { items: "_RENDERS", folder: "Imaginary" });
 assert(!badMove.ok && /Existing folders:/.test(badMove.error),
        "failed move target lists real folders");
+
+// 10. create_comp never silently reuses a taken name — the field failure
+// where a same-named second comp made every later command hit the OLD one.
+const c1 = call("create_comp", { name: "Squares", width: 1920, height: 1080 });
+assert(c1.ok && c1.data.name === "Squares", "first comp keeps its name");
+const c2 = call("create_comp", { name: "Squares", width: 1920, height: 1080 });
+assert(c2.ok && c2.data.name === "Squares 2",
+       "colliding comp name auto-numbers (got " + c2.data.name + ")");
+assert(/use THIS name/i.test(c2.data.note),
+       "collision note tells the model which name to use");
 
 console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");
