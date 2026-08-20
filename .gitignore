@@ -12,3 +12,6 @@ tools/ZXPSignCmd.exe
 node_modules/
 Thumbs.db
 .DS_Store
+
+# unattended local-agent run logs
+logs/

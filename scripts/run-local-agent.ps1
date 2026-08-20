@@ -1,0 +1,201 @@
+<#
+.SYNOPSIS
+  Drive an UNATTENDED Claude Code session on the After Effects machine
+  through docs/WORKPLAN.md, one item per iteration.
+
+  A normal Claude Code session is turn-based: it answers your prompt,
+  finishes, and waits for input. It will not work through a backlog on
+  its own. This script supplies the loop -- each pass starts a fresh
+  headless session (claude -p), does ONE workplan item, verifies it,
+  commits, pushes, and exits. The loop then pulls and starts the next.
+
+  Because every pass is a fresh session with no memory of the last one,
+  progress is tracked in docs/WORKPLAN-LOG.md (append-only). Each pass
+  reads the log first so it picks up where the previous pass stopped
+  instead of redoing item 1 forever.
+
+.EXAMPLE
+  .\scripts\run-local-agent.ps1
+  .\scripts\run-local-agent.ps1 -Iterations 40 -PauseSec 15
+  .\scripts\run-local-agent.ps1 -UntilHour 7   # stop at 7am
+
+.NOTES
+  Unattended means no one is there to answer permission prompts, so the
+  session runs with permissions pre-granted (-SkipPermissions, default
+  on). That is appropriate here: your own machine, your own repo, a
+  branch this project already treats as disposable. Pass
+  -SkipPermissions:$false to run with prompts and babysit it instead.
+
+  Logs land in logs\local-agent-<timestamp>.log next to the repo. Paste
+  a failing one into the remote chat session and it can diagnose.
+#>
+[CmdletBinding()]
+param(
+    [int]$Iterations = 20,
+    [int]$PauseSec = 20,
+    [int]$UntilHour = -1,
+    [string]$RepoRoot = '',
+    [string]$Branch = 'claude/ae-plugin-llama-cpp-f13g3x',
+    [string]$ClaudePath = '',
+    [switch]$SkipPermissions = $true
+)
+
+# NOT 'Stop': git and the CLI both write ordinary progress to stderr, and
+# under `2>&1` with -ErrorAction Stop PowerShell 5.1 turns those into
+# terminating NativeCommandError exceptions. That would fail every pull
+# and silently skip every pass -- exactly the do-nothing failure this
+# script exists to prevent. Exit codes are checked explicitly instead.
+$ErrorActionPreference = 'Continue'
+
+if (-not $RepoRoot) { $RepoRoot = Split-Path -Parent $PSScriptRoot }
+$RepoRoot = (Resolve-Path $RepoRoot).Path
+Set-Location $RepoRoot
+
+# --- locate the CLI -------------------------------------------------
+if (-not $ClaudePath) {
+    $cmd = Get-Command claude -ErrorAction SilentlyContinue
+    if ($cmd) { $ClaudePath = $cmd.Source }
+}
+if (-not $ClaudePath) {
+    $candidates = @(
+        (Join-Path $env:USERPROFILE '.local\bin\claude.exe'),
+        (Join-Path $env:USERPROFILE '.local\bin\claude.cmd'),
+        (Join-Path $env:USERPROFILE '.local\bin\claude'),
+        (Join-Path $env:APPDATA 'npm\claude.cmd')
+    )
+    foreach ($c in $candidates) {
+        if (Test-Path $c) { $ClaudePath = $c; break }
+    }
+}
+if (-not $ClaudePath -or -not (Test-Path $ClaudePath)) {
+    Write-Host 'Claude Code CLI not found. Install it, or pass -ClaudePath.'
+    Write-Host 'Typical location: %USERPROFILE%\.local\bin\claude.exe'
+    exit 2
+}
+
+$logDir = Join-Path $RepoRoot 'logs'
+if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir | Out-Null }
+$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$logFile = Join-Path $logDir ("local-agent-" + $stamp + ".log")
+
+function Write-Log([string]$msg) {
+    $line = '[' + (Get-Date -Format 'HH:mm:ss') + '] ' + $msg
+    Write-Host $line
+    Add-Content -Path $logFile -Value $line -Encoding ASCII
+}
+
+# --- the per-iteration brief ----------------------------------------
+# Single-quoted here-string: nothing interpolates, so the prompt reaches
+# the CLI exactly as written.
+$prompt = @'
+You are the local agent on the machine with real After Effects. No human
+is watching this session -- do not ask questions, make the call yourself
+and write down what you assumed.
+
+1. Read CLAUDE.md, then docs/WORKPLAN.md.
+2. Read docs/WORKPLAN-LOG.md (create it if it does not exist). It is the
+   record of what earlier passes already finished. Do NOT redo finished
+   work.
+3. Run the harness once to see where things stand:
+   powershell -ExecutionPolicy Bypass -File scripts/run-ae-selftest.ps1
+   If it is red, fixing it IS this pass's item -- stop reading the
+   workplan and fix that.
+4. Otherwise pick the SINGLE highest-priority unfinished workplan item.
+5. Do it. Fix at the host-tool root (extension/jsx/hostscript.jsx or the
+   panel JS), never by loosening the test. Then back-fill the stubbed
+   Node test in tests/ so the same bug class is caught without AE.
+6. Verify: node tests/test-<name>.js for everything you touched, then
+   the harness again. Both must pass before you commit.
+7. Append a dated entry to docs/WORKPLAN-LOG.md with: the item, what you
+   changed, the harness result (passed/total), and anything you hit that
+   is blocked or needs a human eye.
+8. Commit and push to the development branch. Small, clear message.
+
+Hard limits for this session:
+- Do exactly ONE item, then stop. The loop will start you again.
+- Never bump versions, never touch update.json or the manifest, never
+  merge to main, never open or merge a PR. Releases belong to the remote
+  session.
+- If the harness cannot run at all (AE closed, scripting file access
+  disabled), write that into docs/WORKPLAN-LOG.md, commit that, and stop.
+  Do not spend the pass guessing.
+'@
+
+$claudeArgs = @('-p', $prompt)
+if ($SkipPermissions) { $claudeArgs += '--dangerously-skip-permissions' }
+
+Write-Log ('repo   : ' + $RepoRoot)
+Write-Log ('claude : ' + $ClaudePath)
+Write-Log ('branch : ' + $Branch)
+Write-Log ('log    : ' + $logFile)
+Write-Log ('plan   : ' + $Iterations + ' iterations, ' + $PauseSec + 's pause')
+
+for ($i = 1; $i -le $Iterations; $i++) {
+
+    if ($UntilHour -ge 0 -and (Get-Date).Hour -eq $UntilHour) {
+        Write-Log ('Reached stop hour ' + $UntilHour + '. Done.')
+        break
+    }
+
+    Write-Log ('===== pass ' + $i + ' of ' + $Iterations + ' =====')
+
+    $dirty = & git status --porcelain
+    if ($dirty) {
+        Write-Log 'Working tree is dirty; the previous pass left changes behind.'
+        foreach ($d in $dirty) { Write-Log ('  ' + [string]$d) }
+        Write-Log 'Commit or discard them, then rerun. Stopping.'
+        break
+    }
+
+    # Pull first: the remote session force-resets this branch onto main
+    # after each merge, so the local clone goes stale regularly.
+    $pulled = $false
+    for ($try = 1; $try -le 4; $try++) {
+        try {
+            & git fetch origin $Branch 2>&1 | Out-Null
+            & git checkout $Branch 2>&1 | Out-Null
+            & git pull --rebase origin $Branch 2>&1 | Out-Null
+            if ($LASTEXITCODE -eq 0) { $pulled = $true; break }
+        } catch {
+            Write-Log ('pull attempt ' + $try + ' failed: ' + $_.Exception.Message)
+        }
+        Start-Sleep -Seconds ([math]::Pow(2, $try))
+    }
+    if (-not $pulled) {
+        Write-Log 'Could not sync the branch after 4 tries. Skipping this pass.'
+        Start-Sleep -Seconds $PauseSec
+        continue
+    }
+
+    $before = [string](& git rev-parse HEAD)
+    $before = $before.Trim()
+
+    try {
+        & $ClaudePath @claudeArgs 2>&1 | ForEach-Object {
+            $line = [string]$_
+            Add-Content -Path $logFile -Value $line -Encoding ASCII
+            Write-Host $line
+        }
+    } catch {
+        Write-Log ('Session error: ' + $_.Exception.Message)
+    }
+
+    $after = [string](& git rev-parse HEAD)
+    $after = $after.Trim()
+    if ($before -eq $after -or $after.Length -lt 8) {
+        Write-Log 'Pass produced no commit (nothing done, or it stopped early).'
+    } else {
+        Write-Log ('Pass committed ' + $after.Substring(0, 8))
+    }
+
+    Start-Sleep -Seconds $PauseSec
+}
+
+Write-Log 'Loop finished.'
+Write-Log ('Full log: ' + $logFile)
+Write-Log 'Recent work:'
+& git log --oneline -15 | ForEach-Object {
+    Add-Content -Path $logFile -Value ([string]$_) -Encoding ASCII
+    Write-Host ([string]$_)
+}
+exit 0

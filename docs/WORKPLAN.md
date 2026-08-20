@@ -6,6 +6,14 @@ bottom; commit small, tested fixes to the dev branch
 and releases stay with the remote session — flag them instead of
 building them.
 
+**Before picking anything, read `docs/WORKPLAN-LOG.md`** — it records
+what earlier passes already finished. Unattended passes are fresh
+sessions with no memory of each other, so without the log every pass
+would restart at item 1. Append your entry before you stop.
+
+Unattended runs are driven by `scripts/run-local-agent.ps1` (pull -> one
+item -> commit -> repeat). One item per pass, then stop.
+
 ## 1. Make the harness green (always first)
 
 Run `scripts/run-ae-selftest.ps1`. Fix any failure at its root (host
