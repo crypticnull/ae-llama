@@ -2496,8 +2496,18 @@ AELL_TOOLS.add_camera = function (args) {
   if (AELLJSON.isArray(args.position) && args.position.length >= 3) {
     xform.property("ADBE Position").setValue(args.position);
   }
-  if (AELLJSON.isArray(args.pointOfInterest) &&
-      args.pointOfInterest.length >= 3) {
+  var wantsPoi = AELLJSON.isArray(args.pointOfInterest) &&
+                 args.pointOfInterest.length >= 3;
+  if (args.oneNode === true) {
+    if (wantsPoi) {
+      return AELL_err("A one-node camera has no Point of Interest to aim " +
+        "at. Drop 'pointOfInterest', or drop 'oneNode' for a two-node " +
+        "camera that aims at one.");
+    }
+    // Must happen BEFORE any Point of Interest write: a one-node camera
+    // HIDES that property, and writing a hidden property throws.
+    cam.autoOrient = AutoOrientType.NO_AUTO_ORIENT;
+  } else if (wantsPoi) {
     xform.property("ADBE Anchor Point").setValue(args.pointOfInterest);
   }
   if (args.zoom > 0) {

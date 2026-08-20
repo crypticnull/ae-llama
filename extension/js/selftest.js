@@ -10,6 +10,8 @@
   "use strict";
 
   var COMP = "AELL Self-Test";
+  // Cameras get their own comp: scale_comp resizes the whole thing.
+  var CAMCOMP = "AELL Self-Test Cam";
   var running = false;
 
   /**
@@ -274,6 +276,115 @@
           return Math.abs(d.scaleFactor - 0.5) < 0.01 ||
                  "factor " + d.scaleFactor;
         } },
+
+      // ---- Cameras (WORKPLAN item 2b) ----------------------------------
+      // In their OWN scratch comp: scale_comp resizes the whole comp, and
+      // a camera must not disturb the 2D steps above. Values are chosen so
+      // every expectation is exact rather than relative — an 800x600 comp
+      // halved is 400x300, so a zoom of 1000 must become 500 and a Point
+      // of Interest at the old centre [400,300] must become [200,150].
+      { name: "camera scratch comp",
+        tool: "create_comp",
+        args: { name: CAMCOMP, width: 800, height: 600, duration: 4,
+                frameRate: 30 },
+        check: function (d, ctx) {
+          ctx.camComp = d.name;
+          return typeof d.id === "number" || !!d.id || "no comp id";
+        } },
+
+      { name: "add a two-node camera (aims at a Point of Interest)",
+        tool: "add_camera",
+        args: function (ctx) {
+          return { comp: ctx.camComp, name: "ST Cam Aim", zoom: 1000,
+                   position: [400, 300, -800],
+                   pointOfInterest: [400, 300, 0] };
+        },
+        check: function (d) { return d.name === "ST Cam Aim" || d.name; } },
+
+      { name: "add a one-node camera (no Point of Interest to aim)",
+        tool: "add_camera",
+        args: function (ctx) {
+          return { comp: ctx.camComp, name: "ST Cam One", zoom: 1000,
+                   position: [400, 300, -800], oneNode: true };
+        },
+        check: function (d) { return d.name === "ST Cam One" || d.name; } },
+
+      { name: "a 2D layer rides along with the cameras",
+        tool: "add_solid",
+        args: function (ctx) {
+          return { comp: ctx.camComp, name: "ST Cam Solid",
+                   color: [1, 1, 1], width: 100, height: 100 };
+        },
+        check: function (d) { return d.name === "ST Cam Solid" || d.name; } },
+
+      // THE assertion that would have caught the camera regression: the
+      // tool reported its own failure honestly in layersSkipped and
+      // nothing was reading it. A camera's Scale resolves but is hidden,
+      // and writing it aborted the layer half-done.
+      { name: "scale_comp with cameras skips nothing",
+        tool: "scale_comp",
+        args: function (ctx) { return { comp: ctx.camComp, factor: 0.5 }; },
+        check: function (d) {
+          if (d.layersSkipped && d.layersSkipped.length) {
+            return "layersSkipped: " + JSON.stringify(d.layersSkipped);
+          }
+          if (Math.abs(d.scaleFactor - 0.5) > 0.01) {
+            return "factor " + d.scaleFactor;
+          }
+          return d.layersScaled === 3 ||
+                 "layersScaled " + d.layersScaled + " (expected 3)";
+        } },
+
+      { name: "two-node camera zoom halves",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.camComp, layer: "ST Cam Aim",
+                   property: "Zoom" };
+        },
+        check: function (d) {
+          return Math.abs(d.value - 500) < 0.6 || "zoom " + d.value;
+        } },
+
+      { name: "two-node camera keeps its aim (POI re-centred)",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.camComp, layer: "ST Cam Aim",
+                   property: "Point of Interest" };
+        },
+        check: function (d) {
+          var v = d.value || [];
+          return (Math.abs(v[0] - 200) < 0.6 && Math.abs(v[1] - 150) < 0.6) ||
+                 "POI " + JSON.stringify(d.value);
+        } },
+
+      { name: "one-node camera zoom halves too",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.camComp, layer: "ST Cam One",
+                   property: "Zoom" };
+        },
+        check: function (d) {
+          return Math.abs(d.value - 500) < 0.6 || "zoom " + d.value;
+        } },
+
+      // A one-node camera has no aim point, so leaving it alone is
+      // correct. Re-centring it would mean writing a hidden property.
+      { name: "one-node camera's aim left alone",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.camComp, layer: "ST Cam One",
+                   property: "Point of Interest" };
+        },
+        check: function (d) {
+          var v = d.value || [];
+          return (Math.abs(v[0] - 400) < 0.6 && Math.abs(v[1] - 300) < 0.6) ||
+                 "POI moved to " + JSON.stringify(d.value);
+        } },
+
+      { name: "cleanup: delete the camera comp",
+        tool: "delete_item",
+        args: function (ctx) { return { item: ctx.camComp }; },
+        check: function () { return true; } },
 
       { name: "cleanup: delete the scratch comp",
         tool: "delete_item",

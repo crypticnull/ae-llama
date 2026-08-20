@@ -205,8 +205,9 @@
       desc: "Move layers into a new nested comp (precompose).",
       args: "{comp?: string, layers: [name|index, ...], name: string, moveAttributes?: bool = true}" },
     { name: "add_camera", mutating: true,
-      desc: "Add a camera. Only 3D layers (set_layer_3d) are affected by it.",
-      args: "{comp?: string, name?: string, position?: [x,y,z], pointOfInterest?: [x,y,z], zoom?: px}" },
+      desc: "Add a camera. Only 3D layers (set_layer_3d) are affected by it. " +
+            "oneNode:true makes a free camera with no Point of Interest.",
+      args: "{comp?: string, name?: string, position?: [x,y,z], pointOfInterest?: [x,y,z], zoom?: px, oneNode?: bool}" },
     { name: "add_marker", mutating: true,
       desc: "Add a marker to the comp (omit 'layer') or to a layer.",
       args: "{comp?: string, layer?: name|index, time: seconds, comment?: string, duration?: seconds}" },
