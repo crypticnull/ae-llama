@@ -96,27 +96,42 @@ public class AellWin {
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowTextW(IntPtr h, StringBuilder s, int n);
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr h, out uint id);
     [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr h);
+    [DllImport("user32.dll")] private static extern bool IsWindowEnabled(IntPtr h);
 
     private static StringBuilder found;
     private static int target;
+    private static IntPtr mainWindow;
 
-    public static string FindDialog(int processId) {
+    // A DISABLED main window is the authoritative signal that AE is stuck
+    // behind something modal -- true whatever class the popup happens to
+    // be. Keying off the dialog class alone would miss AE's own
+    // DroverLord-classed windows, so the class is used only to decide
+    // which popups are worth reading text from.
+    public static string FindDialog(int processId, IntPtr main) {
+        if (main == IntPtr.Zero) { return ""; }
+        if (IsWindowEnabled(main)) { return ""; }
         found = new StringBuilder();
         target = processId;
+        mainWindow = main;
         EnumWindows(new EnumProc(OnTop), IntPtr.Zero);
+        if (found.Length == 0) {
+            found.Append("  (main window is disabled but no popup text " +
+                         "could be read)\r\n");
+        }
         return found.ToString();
     }
     private static bool OnTop(IntPtr h, IntPtr lp) {
         uint wid;
         GetWindowThreadProcessId(h, out wid);
         if ((int)wid != target) { return true; }
+        if (h == mainWindow) { return true; }
         if (!IsWindowVisible(h)) { return true; }
         StringBuilder cn = new StringBuilder(64);
         GetClassNameW(h, cn, 64);
-        if (cn.ToString() != "#32770") { return true; }
+        string cls = cn.ToString();
         StringBuilder t = new StringBuilder(512);
         GetWindowTextW(h, t, 512);
-        found.Append("  dialog: " + t.ToString() + "\r\n");
+        found.Append("  [" + cls + "] " + t.ToString().Trim() + "\r\n");
         EnumChildWindows(h, new EnumProc(OnChild), IntPtr.Zero);
         return true;
     }
@@ -129,20 +144,47 @@ public class AellWin {
     }
 }
 '@
-$canProbe = $true
-try { Add-Type -TypeDefinition $win32 } catch { $canProbe = $false }
 
+# The probe must never fail SILENTLY. A diagnostic that degrades into
+# "no dialog found" is indistinguishable from a healthy run, which is
+# precisely the class of bug it exists to expose -- so every failure
+# here is announced rather than swallowed.
+$canProbe = $true
+if (-not ([System.Management.Automation.PSTypeName]'AellWin').Type) {
+  try {
+    Add-Type -TypeDefinition $win32
+  } catch {
+    $canProbe = $false
+    Write-Host ('WARNING: could not compile the dialog probe (' +
+      $_.Exception.Message + '). A modal-blocked AE will time out as ' +
+      'exit 3 instead of reporting exit 4.')
+  }
+}
+
+$probeWarned = $false
 function Get-BlockingDialog {
   if (-not $canProbe) { return '' }
   $procs = @()
   try {
-    $procs = @(Get-Process AfterFX -ErrorAction SilentlyContinue |
-      Select-Object -ExpandProperty Id)
-  } catch { return '' }
-  foreach ($procId in $procs) {
-    $text = ''
-    try { $text = [AellWin]::FindDialog($procId) } catch { $text = '' }
-    if ($text) { return $text }
+    $procs = @(Get-Process AfterFX -ErrorAction SilentlyContinue)
+  } catch {
+    return ''
+  }
+  foreach ($proc in $procs) {
+    try { $proc.Refresh() } catch { }
+    $handle = [IntPtr]::Zero
+    try { $handle = $proc.MainWindowHandle } catch { continue }
+    if ($handle -eq [IntPtr]::Zero) { continue }
+    try {
+      $text = [AellWin]::FindDialog($proc.Id, $handle)
+      if ($text) { return $text }
+    } catch {
+      if (-not $script:probeWarned) {
+        $script:probeWarned = $true
+        Write-Host ('WARNING: dialog probe threw (' +
+          $_.Exception.Message + '); cannot detect a modal-blocked AE.')
+      }
+    }
   }
   return ''
 }
