@@ -34,6 +34,12 @@ Prop.prototype.setValue = function (v) {
     throw new Error("Cannot set a value on a property with keyframes.");
   }
   if (this.locked) { throw new Error("Layer is locked."); }
+  if (this.hidden) {
+    // Real AE 2026 wording. A hidden property still RESOLVES and still
+    // reports elided=false / enabled=true, so only the write reveals it.
+    throw new Error('After Effects error: Can not "set value" with this ' +
+      'property, because the property or a parent property is hidden.');
+  }
   this._value = v;
 };
 Prop.prototype.keyTime = function (i) { return this._keyTimes[i - 1]; };
@@ -46,6 +52,8 @@ function AVLayer() {}
 function CameraLayer() {} function LightLayer() {}
 const ParagraphJustification = {};
 const KeyframeInterpolationType = { BEZIER: "bezier" };
+const AutoOrientType = { CAMERA_OR_POINT_OF_INTEREST: 4214,
+                         NO_AUTO_ORIENT: 4212 };
 function KeyframeEase(s, i) { this.speed = s; this.influence = i; }
 
 function Layer(name, comp) {
@@ -81,11 +89,23 @@ function Cam(name, comp) {
   this._transform["ADBE Position"] = new Prop([1920, 1080, -1000]);
   this._transform["ADBE Anchor Point"] = new Prop([1920, 1080, 0]); // POI
   this.zoom = new Prop(1000);
+  // A camera HAS a Scale that resolves, but it is hidden and writing it
+  // throws — that write used to abort the whole layer after Position had
+  // already been changed, leaving the comp half scaled.
+  this._transform["ADBE Scale"].hidden = true;
+  this.setAutoOrient(AutoOrientType.CAMERA_OR_POINT_OF_INTEREST);
 }
 Cam.prototype = Object.create(Layer.prototype);
 Cam.prototype.constructor = Cam;
 Object.setPrototypeOf(Cam.prototype, CameraLayer.prototype);
 Cam.prototype.property = Layer.prototype.property;
+// One-node cameras (NO_AUTO_ORIENT) hide the Point of Interest: there is
+// nothing to aim, and setValue throws.
+Cam.prototype.setAutoOrient = function (mode) {
+  this.autoOrient = mode;
+  this._transform["ADBE Anchor Point"].hidden =
+    mode !== AutoOrientType.CAMERA_OR_POINT_OF_INTEREST;
+};
 
 function Comp(name, w, h) {
   this.name = name; this._layers = []; this.time = 0;
@@ -133,13 +153,17 @@ mid._transform["ADBE Position"]._value = [1920, 1080, 0];  // old centre
 const corner = new Layer("corner", comp);
 corner._transform["ADBE Position"]._value = [0, 0, 0];
 const cam = new Cam("Camera 1", comp);
+// A one-node camera: no aim point, and a hidden Scale that throws. This
+// combination silently half-scaled the comp in real AE 2026.
+const cam1 = new Cam("Camera One-Node", comp);
+cam1.setAutoOrient(AutoOrientType.NO_AUTO_ORIENT);
 const rigged = new Layer("rigged", comp);
 rigged._transform["ADBE Position"].expressionEnabled = true;
 const child = new Layer("child", comp);
 child.parent = mid;
 const locked = new Layer("locked", comp);
 locked._transform["ADBE Position"].locked = true;
-comp._layers.push(mid, corner, cam, rigged, child, locked);
+comp._layers.push(mid, corner, cam, cam1, rigged, child, locked);
 
 // 3840x2160 -> 1920x1080 is exactly half.
 const r = call("scale_comp", { width: 1920, height: 1080 });
@@ -172,6 +196,27 @@ assert(near(T(cam)["ADBE Anchor Point"].value[0], 960) &&
        near(T(cam)["ADBE Anchor Point"].value[1], 540),
        "camera Point of Interest re-centred, so the shot keeps its aim " +
        "(got " + T(cam)["ADBE Anchor Point"].value + ")");
+
+// A camera's Scale resolves but is hidden. Writing it threw and aborted
+// the layer AFTER Position was written, so the comp came out half scaled
+// with the camera reported as skipped and zoom/aim never applied.
+assert(near(T(cam)["ADBE Scale"].value[0], 100),
+       "camera Scale left alone (got " + T(cam)["ADBE Scale"].value + ")");
+const skippedNames = (d.layersSkipped || []).join(" ");
+assert(skippedNames.indexOf("Camera") === -1,
+       "no camera reported as skipped (got " + (skippedNames || "none") + ")");
+
+// A one-node camera still scales its zoom, but has no Point of Interest
+// to re-centre -- skipping that is correct, not a failure.
+assert(near(cam1.zoom.value, 500),
+       "one-node camera zoom still scales (got " + cam1.zoom.value + ")");
+assert(near(T(cam1)["ADBE Anchor Point"].value[0], 1920) &&
+       near(T(cam1)["ADBE Anchor Point"].value[1], 1080),
+       "one-node camera Point of Interest left untouched (got " +
+       T(cam1)["ADBE Anchor Point"].value + ")");
+assert(near(T(cam1)["ADBE Position"].value[2], -500),
+       "one-node camera still scales past the hidden Scale (got " +
+       T(cam1)["ADBE Position"].value + ")");
 
 // Parented children inherit through the parent; they must NOT be touched
 // twice or the child doubles the transform.

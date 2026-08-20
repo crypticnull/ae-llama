@@ -176,3 +176,30 @@ fix. Start from item 1 of `docs/WORKPLAN.md`.
   current time). Everything here assumes it throws. If it does NOT
   throw, these guards are still correct behaviour but the reasoning in
   the comments needs amending.
+
+## 2026-08-20 10:29 — item 2: scale_comp with cameras (verified in real AE)
+
+- Changed: `extension/jsx/hostscript.jsx` scale_comp — skip Scale on
+  cameras/lights, and only re-centre Point of Interest when the layer
+  actually aims at it. `tests/test-scale-comp.js` — stub now models
+  hidden properties and autoOrient, plus a one-node camera case.
+- Harness: 26/26 real AE. Stubbed suite 13/13.
+- Notes: PR #28 ("keep the camera's aim") did NOT work in real AE. A
+  camera HAS a Scale that resolves but is hidden; writing it throws, and
+  that throw aborted the layer AFTER Position had been written — so any
+  comp with a camera came out half scaled, zoom and aim untouched, and
+  the camera reported in layersSkipped. The honest skip-reporting from
+  #28 is what made this findable.
+  Hard-won AE facts, both cost real time here:
+  (1) resolvability is NOT settability, and the flags LIE — a hidden
+  Scale still reports elided=false and enabled=true, so layer type is
+  the only reliable test;
+  (2) `addCamera` yields autoOrient=4214 (aims at POI, settable), while
+  a one-node camera is 4212 and its POI throws.
+  The old stub gave a FALSE GREEN on the camera assertions because its
+  camera had a plain settable Scale. It now reproduces the real failure
+  with AE's own message, and fails against the pre-fix host.
+  Not done: no selftest.js step for cameras. The scratch comp's
+  scale_comp step resizes the whole comp, so adding a camera there risks
+  destabilising the other 25 steps — stub coverage is the safer home
+  unless the remote session wants a dedicated camera scratch comp.

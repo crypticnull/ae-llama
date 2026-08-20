@@ -1965,8 +1965,24 @@ AELL_TOOLS.scale_comp = function (args) {
       if (AELL_driven(posProp)) drivenBy.push(L.name);
       AELL_mapPropValues(posProp, AELL_recentre);
 
+      // Cameras and lights AIM rather than scale. AE still RESOLVES a
+      // hidden Scale on them, and writing it throws ("the property or a
+      // parent property is hidden") — which used to abort this layer
+      // AFTER Position had already been written, leaving the comp half
+      // scaled and the camera's zoom and aim untouched. Resolvability is
+      // not settability, and the property flags lie about it: a hidden
+      // Scale still reports elided=false and enabled=true, so the layer
+      // type is the only reliable test. Verified in real AE 2026.
+      var aimed = false;
+      try {
+        aimed = (typeof CameraLayer !== "undefined" && L instanceof CameraLayer) ||
+                (typeof LightLayer !== "undefined" && L instanceof LightLayer);
+      } catch (eA) {}
+
       var sc = null;
-      try { sc = AELL_resolveProperty(L, "scale"); } catch (e1) {}
+      if (!aimed) {
+        try { sc = AELL_resolveProperty(L, "scale"); } catch (e1) {}
+      }
       if (sc) {
         if (AELL_driven(sc)) drivenBy.push(L.name);
         AELL_mapPropValues(sc, function (v) {
@@ -1980,22 +1996,33 @@ AELL_TOOLS.scale_comp = function (args) {
       // (matchName "ADBE Anchor Point" on those layer types). Left alone
       // it keeps pointing where things used to be, so the shot re-frames
       // itself the moment the comp is resized. Re-centre it like Position.
-      var aimed = false;
-      try {
-        aimed = (typeof CameraLayer !== "undefined" && L instanceof CameraLayer) ||
-                (typeof LightLayer !== "undefined" && L instanceof LightLayer);
-      } catch (eA) {}
       if (aimed) {
+        // The Point of Interest is only writable when the layer actually
+        // aims at it. On a one-node (NO_AUTO_ORIENT) camera it is hidden
+        // and setValue throws, so test the orientation — the property
+        // reports enabled=true either way. A one-node camera has no aim
+        // point to re-centre, so skipping it is correct, not a failure.
+        var aims = false;
         try {
+          aims = typeof AutoOrientType !== "undefined" &&
+                 L.autoOrient === AutoOrientType.CAMERA_OR_POINT_OF_INTEREST;
+        } catch (eO) {}
+        if (aims) {
           var poi = L.property("ADBE Transform Group")
                      .property("ADBE Anchor Point");
           if (poi) AELL_mapPropValues(poi, AELL_recentre);
-        } catch (eP) {}
+        }
       }
 
-      try {
-        if (L.zoom) AELL_mapPropValues(L.zoom, function (z) { return z * s; });
-      } catch (e2) {}
+      // Zoom is in pixels, so it has to track the resize or the framing
+      // changes. Reading it is guarded (non-cameras have none); the WRITE
+      // is not, so a real failure lands in layersSkipped instead of
+      // vanishing and reporting a success that did not happen.
+      var zoomProp = null;
+      try { zoomProp = L.zoom; } catch (e2) { zoomProp = null; }
+      if (zoomProp) {
+        AELL_mapPropValues(zoomProp, function (z) { return z * s; });
+      }
       scaled++;
     } catch (e3) {
       // Do NOT fold failures into the inherited count — a locked layer or
