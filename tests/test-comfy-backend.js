@@ -78,4 +78,29 @@ assert(done && !done.err && done.res.alreadyInstalled &&
        done.res.root === root,
        "existing install short-circuits without downloading");
 
+// 5. external models folder maps into the backend via extra_model_paths
+eval(fs.readFileSync(path.join(__dirname, "..", "extension", "js",
+                                "comfy.js"), "utf8"));
+const Comfy = window.Comfy;
+const modelsDir = path.join(tmpRoot, "big-models");
+window.Settings.get = () => ({ comfyModelsDir: modelsDir });
+const yamlPath = Comfy._applyExtraModelPaths({ root });
+assert(yamlPath && fs.existsSync(yamlPath) &&
+       yamlPath === path.join(root, "ComfyUI", "extra_model_paths.yaml"),
+       "extra_model_paths.yaml written inside the vendor install");
+const yaml = fs.readFileSync(yamlPath, "utf8");
+assert(yaml.includes("base_path: " + modelsDir.replace(/\\/g, "/")) &&
+       /checkpoints: checkpoints/.test(yaml) &&
+       /diffusion_models: diffusion_models/.test(yaml),
+       "yaml maps the external base path and model subfolders");
+assert(fs.existsSync(path.join(modelsDir, "checkpoints")) &&
+       fs.existsSync(path.join(modelsDir, "loras")),
+       "standard model subfolders created in the external location");
+
+// clearing the setting removes the mapping
+window.Settings.get = () => ({ comfyModelsDir: "" });
+assert(Comfy._applyExtraModelPaths({ root }) === null &&
+       !fs.existsSync(yamlPath),
+       "blank setting removes a previously written mapping");
+
 console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");

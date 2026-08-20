@@ -705,7 +705,9 @@
     els.setComfyDir.value = s.comfyDir;
     els.setComfyWorkflows.value = s.comfyWorkflowsDir;
     els.setComfyOut.value = s.comfyOutDir;
+    els.setComfyModels.value = s.comfyModelsDir || "";
     els.setComfyTimeout.value = s.comfyTimeoutSec;
+    els.setComfyPauseLlm.checked = s.comfyPauseLlm !== false;
     els.setAutoUpdate.checked = !!s.autoInstallUpdates;
   }
 
@@ -725,7 +727,9 @@
       comfyDir: els.setComfyDir.value,
       comfyWorkflowsDir: els.setComfyWorkflows.value,
       comfyOutDir: els.setComfyOut.value,
+      comfyModelsDir: els.setComfyModels.value,
       comfyTimeoutSec: parseInt(els.setComfyTimeout.value, 10) || 600,
+      comfyPauseLlm: !!els.setComfyPauseLlm.checked,
       autoInstallUpdates: !!els.setAutoUpdate.checked
     });
   }
@@ -760,7 +764,9 @@
       setComfyDir: $("set-comfy-dir"),
       setComfyWorkflows: $("set-comfy-workflows"),
       setComfyOut: $("set-comfy-out"),
+      setComfyModels: $("set-comfy-models"),
       setComfyTimeout: $("set-comfy-timeout"),
+      setComfyPauseLlm: $("set-comfy-pause-llm"),
       setAutoUpdate: $("set-auto-update"),
       starterRow: $("starter-row"),
       starterSelect: $("starter-select"),
@@ -932,6 +938,10 @@
     });
     $("btn-browse-comfy-out").addEventListener("click", function () {
       browseIntoField(els.setComfyOut, "Choose generated files folder", true);
+    });
+    $("btn-browse-comfy-models").addEventListener("click", function () {
+      browseIntoField(els.setComfyModels,
+        "Choose a folder for generation models (they get big)", true);
     });
     // -- one-click chat copy (transcript + version/model/GPU header)
     $("btn-copy-chat").addEventListener("click", function () {

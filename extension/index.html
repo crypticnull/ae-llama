@@ -136,11 +136,25 @@
           </div>
         </label>
 
+        <label>Models folder (optional &mdash; generation models get big)
+          <div class="pathfield">
+            <input id="set-comfy-models" type="text" spellcheck="false"
+                   placeholder="(default: inside the hidden backend)"/>
+            <button id="btn-browse-comfy-models">&hellip;</button>
+          </div>
+        </label>
+
         <div class="grid2">
           <label>Generation timeout (s)
             <input id="set-comfy-timeout" type="number" min="30" step="30"/>
           </label>
         </div>
+
+        <label class="check">
+          <input id="set-comfy-pause-llm" type="checkbox"/>
+          <span>Pause chat model during generation (frees VRAM,
+            auto-resumes)</span>
+        </label>
 
         <div class="drawer-actions">
           <button id="btn-comfy-install"
