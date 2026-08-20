@@ -662,6 +662,171 @@
       });
   }
 
+  // --------------------------------------------- hidden ComfyUI backend
+
+  function comfyVendorDir() {
+    return path.join(global.Settings.dataRoot(), "vendor", "comfy");
+  }
+
+  /**
+   * Locate a portable ComfyUI install under vendor/comfy: a folder holding
+   * ComfyUI/main.py plus the embedded python. Returns {root, python,
+   * mainPy} or null.
+   */
+  function findComfyInstall() {
+    ensureNode();
+    var base = comfyVendorDir();
+    var candidates = [base];
+    try {
+      var entries = fs.readdirSync(base);
+      for (var i = 0; i < entries.length; i++) {
+        candidates.push(path.join(base, entries[i]));
+      }
+    } catch (e) {}
+    for (var j = 0; j < candidates.length; j++) {
+      var root = candidates[j];
+      var mainPy = path.join(root, "ComfyUI", "main.py");
+      var python = path.join(root, "python_embeded", "python.exe");
+      try {
+        if (fs.existsSync(mainPy) && fs.existsSync(python)) {
+          return { root: root, python: python, mainPy: mainPy };
+        }
+      } catch (e2) {}
+    }
+    return null;
+  }
+
+  /** Pick the portable release asset for this machine (pure, testable). */
+  function pickComfyAsset(assets, hasNvidia) {
+    if (!assets || !assets.length) return null;
+    function find(re) {
+      for (var i = 0; i < assets.length; i++) {
+        if (re.test(String(assets[i].name || ""))) return assets[i];
+      }
+      return null;
+    }
+    if (hasNvidia) {
+      return find(/windows.*portable.*nvidia.*\.7z$/i) ||
+             find(/portable.*nvidia.*\.7z$/i) ||
+             find(/portable.*\.7z$/i);
+    }
+    return find(/windows.*portable.*cpu.*\.7z$/i) ||
+           find(/portable.*cpu.*\.7z$/i) ||
+           find(/portable.*\.7z$/i);
+  }
+
+  /** Extract a .7z via Windows' bundled bsdtar (libarchive reads 7z). */
+  function extract7z(archivePath, destDir, cb) {
+    ensureNode();
+    try {
+      if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
+    } catch (e) { cb(e); return; }
+    child_process.execFile("tar", ["-xf", archivePath, "-C", destDir],
+      { timeout: 1800000 },
+      function (err) {
+        cb(err ? new Error("Could not extract the ComfyUI package (" +
+          err.message + "). Windows 10+ tar.exe reads .7z; if this " +
+          "persists, extract the archive manually into " + destDir)
+          : null);
+      });
+  }
+
+  function comfyCancelErr() {
+    var e = new Error("Cancelled");
+    e.cancelled = true;
+    return e;
+  }
+
+  var comfyBusy = false;
+
+  /**
+   * Download + install the official portable ComfyUI build into
+   * vendor/comfy so image generation can run as an invisible local
+   * backend. Returns a controller with cancel(); onStatus gets step text,
+   * onProgress gets (receivedBytes, totalBytes).
+   */
+  function bootstrapComfy(onStatus, onProgress, cb) {
+    ensureNode();
+    var ctrl = {
+      cancelled: false,
+      _dl: null,
+      cancel: function () {
+        ctrl.cancelled = true;
+        try { if (ctrl._dl) ctrl._dl.cancel(); } catch (e) {}
+      }
+    };
+    function status(t) { if (onStatus) onStatus(t); }
+    function finish(err, res) {
+      comfyBusy = false;
+      cb(err, res);
+    }
+    if (comfyBusy) {
+      cb(new Error("A backend install is already running"));
+      return ctrl;
+    }
+    comfyBusy = true;
+    ensureDataDirs();
+    var existing = findComfyInstall();
+    if (existing) {
+      finish(null, { root: existing.root, alreadyInstalled: true });
+      return ctrl;
+    }
+    status("Checking your GPU…");
+    detectGpu(function (gpu) {
+      if (ctrl.cancelled) { finish(comfyCancelErr()); return; }
+      status("Finding the latest ComfyUI portable build…");
+      fetchJson("https://api.github.com/repos/comfyanonymous/ComfyUI/" +
+                "releases/latest", 20000, function (err, rel) {
+        if (ctrl.cancelled) { finish(comfyCancelErr()); return; }
+        if (err || !rel || !rel.assets) {
+          finish(new Error("Could not read the ComfyUI release list" +
+                           (err ? ": " + err.message : "")));
+          return;
+        }
+        var asset = pickComfyAsset(rel.assets, gpu.hasNvidia);
+        if (!asset) {
+          finish(new Error("No portable ComfyUI package found in release " +
+                           (rel.tag_name || "?")));
+          return;
+        }
+        var sizeGB = asset.size
+          ? Math.round(asset.size / 1e8) / 10 : null;
+        status("Downloading " + asset.name +
+               (sizeGB ? " (~" + sizeGB + " GB)…" : "…"));
+        try {
+          if (!fs.existsSync(comfyVendorDir())) {
+            fs.mkdirSync(comfyVendorDir(), { recursive: true });
+          }
+        } catch (eM) {}
+        var tmp = path.join(comfyVendorDir(),
+                            "_dl-" + new Date().getTime() + ".7z");
+        ctrl._dl = downloadToFile(asset.browser_download_url, tmp,
+          onProgress, function (dErr) {
+            ctrl._dl = null;
+            if (dErr) {
+              try { fs.unlinkSync(tmp); } catch (eU) {}
+              finish(dErr);
+              return;
+            }
+            status("Extracting (this can take a few minutes)…");
+            extract7z(tmp, comfyVendorDir(), function (xErr) {
+              try { fs.unlinkSync(tmp); } catch (eU2) {}
+              if (xErr) { finish(xErr); return; }
+              var inst = findComfyInstall();
+              if (!inst) {
+                finish(new Error("Extracted, but no ComfyUI install was " +
+                                 "found under " + comfyVendorDir()));
+                return;
+              }
+              status("Hidden ComfyUI backend installed.");
+              finish(null, { root: inst.root });
+            });
+          });
+      });
+    });
+    return ctrl;
+  }
+
   global.Setup = {
     ensureDataDirs: ensureDataDirs,
     detectGpu: detectGpu,
@@ -672,7 +837,10 @@
     checkForUpdates: checkForUpdates,
     detectInstallKind: detectInstallKind,
     installUpdate: installUpdate,
-    isBusy: function () { return bootstrapBusy; }
+    findComfyInstall: findComfyInstall,
+    pickComfyAsset: pickComfyAsset,
+    bootstrapComfy: bootstrapComfy,
+    isBusy: function () { return bootstrapBusy || comfyBusy; }
   };
 
 })(window);

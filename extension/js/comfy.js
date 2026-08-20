@@ -560,10 +560,19 @@
     requestJson(base, "GET", "/queue", null, 5000,
       function (err, statusCode, json) {
         if (err || statusCode !== 200 || !json) {
+          var hasHidden = false;
+          try {
+            hasHidden = !!(global.Setup && global.Setup.findComfyInstall &&
+                           global.Setup.findComfyInstall());
+          } catch (eH) {}
           cb(null, { online: false, url: comfyUrl, target: base.label,
-                     hint: "Start ComfyUI (Launch button in settings, or " +
-                           "manually) and check the URL (tried " +
-                           base.label + ")." });
+                     hiddenBackendInstalled: hasHidden,
+                     hint: hasHidden
+                       ? "Hidden backend installed — it boots " +
+                         "automatically on the next generation request."
+                       : "Start ComfyUI (Launch button in settings, or " +
+                         "manually), or install the hidden backend in " +
+                         "Settings → ComfyUI (tried " + base.label + ")." });
           return;
         }
         var running = json.queue_running instanceof Array
@@ -637,13 +646,175 @@
                  "manually — the panel only needs the URL."));
   }
 
+  // ------------------------------------------- hidden managed backend
+  // The panel talks to ComfyUI purely over HTTP, so the backend can run
+  // completely invisibly: spawn the vendor portable build hidden on the
+  // configured localhost port, health-poll it up, and reap it like the
+  // llama-server (PID persisted across panel sessions).
+
+  var COMFY_PID_KEY = "aell-comfy-pid";
+  var managedProc = null;
+  var startWaiters = null;   // non-null while a boot is in flight
+
+  function rememberPid(pid) {
+    try { global.localStorage.setItem(COMFY_PID_KEY, String(pid)); }
+    catch (e) {}
+  }
+  function forgetPid() {
+    try { global.localStorage.removeItem(COMFY_PID_KEY); } catch (e) {}
+  }
+
+  /** Kill a hidden backend left over from a previous panel session. */
+  function reapOrphan(done) {
+    ensureNode();
+    var pid = null;
+    try { pid = parseInt(global.localStorage.getItem(COMFY_PID_KEY), 10); }
+    catch (e) {}
+    if (!pid) { if (done) done(false); return; }
+    // PIDs recycle — only kill if the process really is our backend
+    // (its command line references ComfyUI's main.py).
+    child_process.execFile("powershell.exe",
+      ["-NoProfile", "-NonInteractive", "-Command",
+       "(Get-CimInstance Win32_Process -Filter 'ProcessId=" + pid +
+       "').CommandLine"],
+      { timeout: 15000 },
+      function (err, stdout) {
+        var isOurs = !err && /ComfyUI/i.test(String(stdout || ""));
+        if (!isOurs) { forgetPid(); if (done) done(false); return; }
+        child_process.execFile("taskkill",
+          ["/PID", String(pid), "/T", "/F"], function () {
+            forgetPid();
+            if (done) done(true);
+          });
+      });
+  }
+
+  function isUp(base, cb) {
+    requestJson(base, "GET", "/system_stats", null, 4000,
+      function (err, statusCode) { cb(!err && statusCode === 200); });
+  }
+
+  /**
+   * Make sure a ComfyUI answers at the configured URL. An already-running
+   * instance (the user's own) is used as-is; otherwise the hidden vendor
+   * install is booted invisibly on that port and health-polled up.
+   */
+  function ensureRunning(comfyUrl, onStatus, cb) {
+    ensureNode();
+    var base = parseBase(comfyUrl);
+    function say(t) { if (onStatus) onStatus(t); }
+    isUp(base, function (up) {
+      if (up) { cb(null, { started: false }); return; }
+      if (base.host !== "127.0.0.1" && base.host !== "localhost") {
+        cb(new Error("ComfyUI at " + base.label + " is not responding, " +
+          "and a remote instance cannot be auto-started. Start it there, " +
+          "or point the URL at 127.0.0.1 to use the hidden backend."));
+        return;
+      }
+      var install = global.Setup && global.Setup.findComfyInstall
+        ? global.Setup.findComfyInstall() : null;
+      if (!install) {
+        cb(new Error("ComfyUI is not running and the hidden backend is " +
+          "not installed. Install it in Settings → ComfyUI → 'Install " +
+          "hidden backend', or launch your own ComfyUI."));
+        return;
+      }
+      if (startWaiters) { startWaiters.push(cb); return; }
+      startWaiters = [cb];
+      say("Starting the hidden ComfyUI backend…");
+      var errTail = "";
+      var proc;
+      try {
+        proc = child_process.spawn(install.python,
+          ["-s", install.mainPy, "--windows-standalone-build",
+           "--port", String(base.port), "--listen", "127.0.0.1",
+           "--disable-auto-launch"],
+          { cwd: install.root, windowsHide: true });
+      } catch (eS) {
+        var early = startWaiters;
+        startWaiters = null;
+        for (var w = 0; w < early.length; w++) early[w](eS);
+        return;
+      }
+      managedProc = proc;
+      rememberPid(proc.pid);
+      function tail(d) {
+        errTail = (errTail + d.toString()).slice(-600);
+      }
+      proc.stdout.on("data", tail);
+      proc.stderr.on("data", tail);
+      var settledBoot = false;
+      function finishBoot(err) {
+        if (settledBoot) return;
+        settledBoot = true;
+        var ws = startWaiters || [];
+        startWaiters = null;
+        for (var i = 0; i < ws.length; i++) {
+          ws[i](err, err ? null : { started: true });
+        }
+      }
+      proc.on("error", function (e) {
+        managedProc = null;
+        forgetPid();
+        finishBoot(new Error("Backend failed to start: " + e.message));
+      });
+      proc.on("exit", function (code) {
+        managedProc = null;
+        forgetPid();
+        finishBoot(new Error("Backend exited during startup (code " +
+          code + ")" + (errTail ? " — " + errTail : "")));
+      });
+      // First boot can take a while (model scans, torch warm-up).
+      var deadline = new Date().getTime() + 240000;
+      (function poll() {
+        if (settledBoot) return;
+        isUp(base, function (nowUp) {
+          if (settledBoot) return;
+          if (nowUp) {
+            say("Hidden ComfyUI backend is up.");
+            finishBoot(null);
+            return;
+          }
+          if (new Date().getTime() > deadline) {
+            finishBoot(new Error("Backend did not come up within 4 " +
+              "minutes" + (errTail ? " — " + errTail : "")));
+            try { proc.kill(); } catch (eK) {}
+            return;
+          }
+          global.setTimeout(poll, 2500);
+        });
+      })();
+    });
+  }
+
+  /** Shut the hidden backend down (panel close frees its VRAM). */
+  function stopManaged() {
+    ensureNode();
+    var pid = managedProc ? managedProc.pid : null;
+    if (!pid) {
+      try { pid = parseInt(global.localStorage.getItem(COMFY_PID_KEY), 10); }
+      catch (e) {}
+    }
+    if (pid) {
+      try {
+        child_process.execFile("taskkill",
+          ["/PID", String(pid), "/T", "/F"], function () {});
+      } catch (e2) {}
+    }
+    managedProc = null;
+    forgetPid();
+  }
+
   global.Comfy = {
     listWorkflows: listWorkflows,
     loadWorkflow: loadWorkflow,
     injectParams: injectParams,
     generate: generate,
     status: status,
-    launch: launch
+    launch: launch,
+    ensureRunning: ensureRunning,
+    stopManaged: stopManaged,
+    reapOrphan: reapOrphan
   };
 
 })(window);

@@ -739,9 +739,10 @@
     // never-filled (empty) fields over the real settings.
     settingsToForm();
 
-    // A llama-server from a previous session may have survived panel
-    // teardown (CEP doesn't reliably fire unload) — reap it now.
+    // A llama-server or hidden ComfyUI from a previous session may have
+    // survived panel teardown (CEP doesn't reliably fire unload) — reap.
     try { global.Llama.reapOrphan(); } catch (e) {}
+    try { global.Comfy.reapOrphan(); } catch (eC) {}
 
     // Persistent data folders (survive extension updates) + seeding.
     try { global.Setup.ensureDataDirs(); } catch (e) {}
@@ -880,6 +881,26 @@
     $("btn-browse-comfy-out").addEventListener("click", function () {
       browseIntoField(els.setComfyOut, "Choose generated files folder", true);
     });
+    $("btn-comfy-install").addEventListener("click", function () {
+      var ctrl = global.Setup.bootstrapComfy(
+        function (t) { appendMsg("info", t); },
+        paintProgress,
+        function (err, res) {
+          hideProgress();
+          if (err) {
+            appendMsg(err.cancelled ? "info" : "error",
+              err.cancelled ? "Backend install cancelled."
+                            : "Backend install failed: " + err.message);
+            return;
+          }
+          appendMsg("info", res.alreadyInstalled
+            ? "Hidden ComfyUI backend is already installed (" +
+              res.root + ")."
+            : "Hidden ComfyUI backend installed — image generation now " +
+              "runs invisibly and boots itself on the first request.");
+        });
+      if (ctrl) showProgress("ComfyUI backend", function () { ctrl.cancel(); });
+    });
     $("btn-comfy-launch").addEventListener("click", function () {
       formToSettings();
       global.Comfy.launch(global.Settings.get().comfyDir, function (err, msg) {
@@ -921,9 +942,10 @@
       appendMsg("info", "Conversation cleared.");
     });
 
-    // -- shut the server down with the panel
+    // -- shut the server + hidden backend down with the panel
     global.addEventListener("unload", function () {
       try { global.Llama.stop(); } catch (e) {}
+      try { global.Comfy.stopManaged(); } catch (e2) {}
     });
 
     // -- advanced settings reveal
