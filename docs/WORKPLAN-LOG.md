@@ -220,3 +220,30 @@ fix. Start from item 1 of `docs/WORKPLAN.md`.
   word, and #28's unreachable branch), each time costing a local pass to
   debug. Item 2b is a spec instead — build and verify it in one pass
   where AE is.
+
+## 2026-08-20 10:56 — item 2b: cameras in the real-AE suite (built + verified)
+
+- Changed: `extension/js/selftest.js` — 10 camera steps in their OWN
+  scratch comp (`AELL Self-Test Cam`, created and deleted inside the
+  group). `extension/jsx/hostscript.jsx` — add_camera gained
+  `oneNode`. `extension/js/tools.js` — documented it.
+  `tests/test-self-test.js` — canned camera responses.
+- Harness: 36/36 real AE (was 26). Stubbed suite 13/13.
+- Notes: PROVEN to catch the regression, not just to pass. Ran the new
+  suite in real AE against the pre-fix host (f1db027): 32/36, failing
+  exactly the four camera steps, with `layersSkipped` naming AE's own
+  "property or a parent property is hidden" for BOTH cameras. That is
+  the assertion item 2b asked for.
+  Needed a host change to be buildable at all: there was NO way to make
+  a one-node camera through the tool layer, so add_camera now takes
+  `oneNode: true` (sets autoOrient NO_AUTO_ORIENT). It must be set
+  BEFORE any Point of Interest write, because a one-node camera hides
+  that property and the write throws — passing both `oneNode` and
+  `pointOfInterest` is now a grounded error instead.
+  Expectations are absolute, not relative: an 800x600 comp halved makes
+  zoom 1000 -> 500 and POI [400,300] -> [200,150], so the steps cannot
+  pass vacuously by comparing a value to itself.
+  NOT done: the light. The spec said "if cheap" and it is not — there
+  is no add_light tool at all, so covering lights means a new tool.
+  Flagging rather than building it: a new tool is the remote session's
+  call, and the same aim-not-scale rule is already proven for cameras.

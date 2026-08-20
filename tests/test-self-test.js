@@ -36,8 +36,11 @@ function cannedOk(tool, args) {
   switch (tool) {
     case "create_comp":
       createCount++;
-      return { name: createCount === 1 ? "AELL Self-Test"
-                                       : "AELL Self-Test 2",
+      // 1st = the scratch comp, 2nd = the deliberate name collision that
+      // must auto-number, 3rd+ = whatever was asked for (the camera comp).
+      if (createCount === 1) return { name: "AELL Self-Test", id: 1 };
+      if (createCount === 2) return { name: "AELL Self-Test 2", id: 2 };
+      return { name: (args && args.name) || "AELL Self-Test 3",
                id: createCount };
     case "duplicate_layer": return { created: 8, totalLayersInComp: 9 };
     case "grid_layout":
@@ -48,6 +51,12 @@ function cannedOk(tool, args) {
       // components ([x, y, 0]) even though the expression engine sees
       // 2 — model that faithfully, and give the two grid squares
       // different cells so the "distinct cells" step is real.
+      if (args && args.property === "Zoom") { return { value: 500 }; }
+      if (args && args.property === "Point of Interest") {
+        return args.layer === "ST Cam One"
+          ? { value: [400, 300, 0] }    // no aim point; left alone
+          : { value: [200, 150, 0] };   // re-centred with the comp
+      }
       if (args && args.property === "Position") {
         return args.layer === "ST Square 2"
           ? { value: [640, 180, 0], expression: "// grid rig" }
@@ -61,8 +70,14 @@ function cannedOk(tool, args) {
     case "add_shape_content": return { params: "End" };
     case "set_track_matte": return { mode: "alpha" };
     case "set_layer_parent": return { parented: "ST Square 5" };
-    case "scale_comp": return { scaleFactor: 0.5 };
-    case "add_solid": return { name: "ST Square" };
+    case "scale_comp":
+      // layersSkipped absent = nothing refused the write. That is the
+      // assertion the camera regression would have tripped.
+      return { scaleFactor: 0.5, layersScaled: 3 };
+    case "add_solid":
+      return { name: (args && args.name) || "ST Square" };
+    case "add_camera":
+      return { index: 1, name: (args && args.name) || "Camera" };
     default: return { done: true };
   }
 }
