@@ -117,7 +117,15 @@ function AELL_resolveComp(name) {
       if (it instanceof CompItem && it.name === name) return it;
     }
   }
-  throw new Error("Comp not found: " + name);
+  // Grounded: the user may have renamed comps since the chat referenced
+  // them — list what actually exists so the retry uses a real name.
+  var compNames = [];
+  for (i = 1; i <= proj.numItems && compNames.length < 15; i++) {
+    it = proj.item(i);
+    if (it instanceof CompItem) compNames.push(it.name);
+  }
+  throw new Error("Comp not found: " + name + ". Comps in this project: " +
+                  (compNames.join(", ") || "(none)"));
 }
 
 function AELL_resolveLayer(comp, ref) {
@@ -188,6 +196,24 @@ function AELL_layersOrSelection(comp, args) {
   if (out.length === 0) {
     throw new Error("No target layers in '" + comp.name + "' — select " +
                     "layers in AE or pass {layer} / {layers: […]}");
+  }
+  // A selection that is ONLY control nulls is almost never the intended
+  // animation target (the user was probably just inspecting sliders) —
+  // refuse rather than silently keyframing the rig. Explicit layer args
+  // above bypass this.
+  var allNulls = true;
+  for (i = 0; i < out.length; i++) {
+    var isN = false;
+    try { isN = !!out[i].nullLayer; } catch (eN) {}
+    if (!isN) { allNulls = false; break; }
+  }
+  if (allNulls) {
+    var nn = [];
+    for (i = 0; i < out.length; i++) nn.push(out[i].name);
+    throw new Error("Only control null(s) selected (" + nn.join(", ") +
+      ") — pass {layers: [...]} with the CONTENT layers you mean, or " +
+      "{layer: \"" + nn[0] + "\"} explicitly if the null really is the " +
+      "target");
   }
   return out;
 }
