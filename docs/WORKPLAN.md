@@ -44,6 +44,28 @@ CLAUDE.md). Where behavior is wrong, fix + extend selftest.js:
 - for_each_layer with apply_effect across 50+ layers: timing +
   stability (watch for evalScript payload limits).
 
+## 2b. Cameras in the real-AE suite (build AND verify in one pass)
+
+The 26-step harness never touches cameras, which is why #28 shipped a
+camera fix that could not reach its own branch. The stub now encodes the
+two facts learned (hidden Scale is resolvable but not settable; POI is
+writable only when autoOrient is CAMERA_OR_POINT_OF_INTEREST), so CI
+catches a code regression — but nothing catches AE itself behaving
+differently, or the same surprise on another layer type.
+
+Build this here rather than remotely: it needs a dedicated scratch comp,
+and blind AE code has been wrong twice today. Suggested shape —
+
+- Its OWN scratch comp, created and deleted inside the step group, so a
+  camera cannot disturb the 2D steps in the main one.
+- Both camera types: `addCamera` (autoOrient 4214) and a one-node
+  camera (4212). Assert scale_comp halves zoom on both, re-centres POI
+  on the aimed one, and leaves the one-node camera's aim alone.
+- Assert `layersSkipped` is EMPTY. That is the assertion that would
+  have caught #28 — the tool reported its own failure honestly and
+  nobody was reading it.
+- A light as well, if cheap: same aim-not-scale rule, no zoom.
+
 ## 3. Extend selftest.js coverage
 
 Every verified behavior from (2) becomes a permanent step in

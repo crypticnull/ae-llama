@@ -203,3 +203,20 @@ fix. Start from item 1 of `docs/WORKPLAN.md`.
   scale_comp step resizes the whole comp, so adding a camera there risks
   destabilising the other 25 steps — stub coverage is the safer home
   unless the remote session wants a dedicated camera scratch comp.
+
+## 2026-08-20 (remote) — #30 merged; camera harness gap handed back
+
+- Changed: `docs/WORKPLAN.md` — new item 2b specifying camera coverage
+  for the real-AE suite.
+- Harness: NOT run from here. Nothing else touched.
+- Notes: #30 verified and merged (4316dfc). The finding was correct and
+  the fix is right: #28's camera branch was unreachable because a
+  camera's hidden Scale threw first, and its stub could not express
+  that. Confirmed here independently by running the new test against the
+  pre-fix host — four assertions fail with AE's real error text,
+  including two that #28 itself had asserted and got wrong.
+  The harness camera gap is NOT being built remotely on purpose. Blind
+  AE code from this session was wrong twice today (the ES3 reserved
+  word, and #28's unreachable branch), each time costing a local pass to
+  debug. Item 2b is a spec instead — build and verify it in one pass
+  where AE is.
