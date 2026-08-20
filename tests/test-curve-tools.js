@@ -39,7 +39,8 @@ function Layer(name, comp, inP) {
   this.inPoint = inP; this.outPoint = inP + 1; this.startTime = 0;
   this._transform = {
     "ADBE Position": new Prop([100, 100]),
-    "ADBE Scale": new Prop([100, 100]),
+    // faithful to AE: 2D scale is PADDED to 3 components via scripting
+    "ADBE Scale": new Prop([100, 100, 100]),
     "ADBE Rotate Z": new Prop(0),
     "ADBE Opacity": new Prop(100),
     "ADBE Anchor Point": new Prop([0, 0])
@@ -149,6 +150,32 @@ assert(e1 && near(e1.outE[0].influence, 42, 0.5) && near(e1.outE[0].speed, 0),
        "outgoing ease: influence 42, speed 0 (ease-in-out)");
 assert(e2 && near(e2.inE[0].influence, 42, 0.5) && near(e2.inE[0].speed, 0),
        "incoming ease: influence 42, speed 0");
+
+// 5b. scale ease arrays must follow the PADDED scripting dims (3) — the
+// field failure was "Value array does not have 3 elements"
+const sprop = comp.layer("L2")._transform["ADBE Scale"];
+sprop.numKeys = 2;
+sprop._keyTimes = [0, 1];
+sprop._keyValues = [[100, 100, 100], [150, 150, 100]];
+r = call("apply_keyframe_ease", { layer: "L2", property: "scale",
+                                  bezier: [0.42, 0, 0.58, 1] });
+assert(r.ok && r.data.easedPairs === 1,
+       "scale ease applies on a 2D layer: " + (r.error || ""));
+assert(sprop._eases[1].outE.length === 3,
+       "ease arrays carry 3 elements for padded scale (got " +
+       sprop._eases[1].outE.length + ")");
+
+// 5c. one apply_keyframe_ease call eases MANY layers
+const o4 = comp.layer("L4")._transform["ADBE Opacity"];
+const o5 = comp.layer("L5")._transform["ADBE Opacity"];
+[o4, o5].forEach(p => {
+  p.numKeys = 2; p._keyTimes = [0, 1]; p._keyValues = [0, 100];
+});
+r = call("apply_keyframe_ease", { layers: ["L4", "L5"],
+  property: "opacity", bezier: [0.42, 0, 0.58, 1] });
+assert(r.ok && r.data.layers === 2 && r.data.easedPairs === 2,
+       "one call eases both layers (got " +
+       (r.ok ? r.data.easedPairs : r.error) + ")");
 
 // 6. guards
 comp._layers.forEach(l => { l.selected = false; });

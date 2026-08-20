@@ -51,6 +51,7 @@ function Layer(name, comp) {
   this.comp = comp;
   this.selected = false;
   this.parent = null;
+  this.inPoint = 0;
   this._root = new PGroup("(layer)", "(layer)");
   const t = new PGroup("Transform", "ADBE Transform Group");
   t.add(new Prop("Position", "ADBE Position", [100, 100]));
@@ -254,5 +255,28 @@ B.selected = true;
 r = call("get_property", { property: "opacity" });
 assert(r.ok && r.data.layer === "B",
        "omitted layer resolves to the selection");
+
+// 10. batch keyframes: ONE call, many layers, per-layer inPoint offsets
+A.inPoint = 0;
+B.inPoint = 0.5;
+r = call("set_keyframes", { layers: ["A", "B"], property: "opacity",
+  keys: [{ time: 0, value: 0 }, { time: 1, value: 100 }],
+  relativeTo: "inPoint" });
+assert(r.ok && r.data.layers === 2 && r.data.keysSet === 4,
+       "one set_keyframes call animates both layers: " + (r.error || ""));
+const aOp = A.property("Transform").property("Opacity");
+const bOp = B.property("Transform").property("Opacity");
+assert(aOp.keyTime(1) === 0 && aOp.keyTime(2) === 1,
+       "layer A keys land at its own start (0, 1)");
+assert(bOp.keyTime(1) === 0.5 && bOp.keyTime(2) === 1.5,
+       "layer B keys ride its inPoint (0.5, 1.5) — stagger preserved");
+
+// selection default targets the whole multi-selection
+comp._layers.forEach(l => { l.selected = false; });
+A.selected = true;
+B.selected = true;
+r = call("remove_keyframes", { property: "opacity" });
+assert(r.ok && r.data.layers === 2 && r.data.removed === 4,
+       "batch remove clears keys on the whole selection");
 
 console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");

@@ -299,6 +299,10 @@ assert(new Set(names9).size === 12,
        "every copy gets a unique name (got " + names9.join(", ") + ")");
 assert(names9.includes("Circle 2") && names9.includes("Circle 12"),
        "copies auto-number Circle 2..Circle 12");
+assert(names9[0] === "Circle" && names9[1] === "Circle 2" &&
+       names9[11] === "Circle 12",
+       "ORIGINAL stays on top; copies stack below in order (got " +
+       names9.slice(0, 3).join("|") + "…)");
 
 // explicit name that collides still auto-numbers
 const r17 = call("duplicate_layer", { layer: "Circle", name: "Circle" });
