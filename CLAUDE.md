@@ -18,6 +18,18 @@ session periodically force-resets this branch onto `main` after merges
 (with lease — it will not clobber unseen pushes, but pull before you
 start). Never push tags (branch-scoped credentials reject them).
 
+## Working the backlog
+
+`docs/WORKPLAN.md` is the queue; `docs/WORKPLAN-LOG.md` is what has
+already been done. Read the log FIRST — an unattended pass is a fresh
+session with no memory of the previous one, and the log is the only
+thing carrying state across passes. Append an entry before you stop,
+even when the pass accomplished nothing (say why).
+
+For long unattended runs the human starts `scripts/run-local-agent.ps1`,
+which loops: pull -> one headless pass -> commit -> repeat. A plain
+interactive session does NOT self-start; it answers one prompt and waits.
+
 ## Verify changes
 
 1. **Stubbed suite (fast, no AE):** `node tests/test-<name>.js` for each
