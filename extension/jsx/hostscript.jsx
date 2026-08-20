@@ -97,6 +97,15 @@ function AELL_resolveComp(name) {
     if (item && item instanceof CompItem) return item;
     throw new Error("No active comp — open one or pass {comp: \"name\"}");
   }
+  // The model batches its commands BEFORE seeing results, so when
+  // create_comp auto-renamed ("X" existed -> made "X 2"), the rest of the
+  // batch still says "X" — and would land in the OLD comp. Redirect
+  // same-name references to the just-created comp for a short window.
+  var alias = $.global.AELL_compAlias;
+  if (alias && alias.requested === name &&
+      new Date().getTime() < alias.until) {
+    name = alias.actual;
+  }
   for (var i = 1; i <= proj.numItems; i++) {
     var it = proj.item(i);
     if (it instanceof CompItem && it.name === name) return it;
@@ -572,6 +581,14 @@ AELL_TOOLS.create_comp = function (args) {
   var dur = args.duration > 0 ? args.duration : 10;
   var fps = args.frameRate > 0 ? args.frameRate : 30;
   var name = AELL_uniqueItemName(String(args.name));
+  if (name !== String(args.name)) {
+    // Redirect batched same-reply references to the renamed comp (see
+    // AELL_resolveComp) — two minutes covers any command batch.
+    $.global.AELL_compAlias = { requested: String(args.name), actual: name,
+                                until: new Date().getTime() + 120000 };
+  } else {
+    $.global.AELL_compAlias = null;
+  }
   var comp = app.project.items.addComp(name, w, h, 1, dur, fps);
   if (AELLJSON.isArray(args.bgColor) && args.bgColor.length >= 3) {
     comp.bgColor = [args.bgColor[0], args.bgColor[1], args.bgColor[2]];
@@ -1228,8 +1245,8 @@ AELL_TOOLS.duplicate_layer = function (args) {
     names.push(nm);
   }
   return AELL_okay({ created: count, duplicatedFrom: layer.name,
-    names: (names.length > 10 ? names.slice(0, 10) : names).join(", ") +
-           (names.length > 10 ? ", …" : ""),
+    names: (names.length > 12 ? names.slice(0, 12) : names).join(", ") +
+           (names.length > 12 ? ", …" : ""),
     totalLayersInComp: comp.numLayers,
     note: autoNumbered
       ? "Copies auto-numbered to keep layer names unique"
