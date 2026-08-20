@@ -79,6 +79,13 @@ html, body {
   margin: 4px 0 8px 0;
 }
 
+#comfy-settings.hidden { display: none; }
+#comfy-settings {
+  border-left: 2px solid #3a3a3a;
+  padding-left: 8px;
+  margin: 4px 0 8px 0;
+}
+
 .fineprint { color: #888; font-size: 11px; margin-bottom: 6px; }
 
 /* ---------- download progress ---------- */
