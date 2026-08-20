@@ -695,6 +695,50 @@
   }
 
   /**
+   * Point the hidden backend at the user's external models folder (they
+   * get big) via ComfyUI's own extra_model_paths.yaml mechanism. The yaml
+   * lives inside OUR vendor install, so it is safe to (re)write on every
+   * boot; blank setting = the backend's built-in models folder only.
+   */
+  var COMFY_MODEL_SUBS = ["checkpoints", "diffusion_models", "text_encoders",
+    "clip", "clip_vision", "vae", "loras", "controlnet", "upscale_models",
+    "embeddings"];
+  function applyExtraModelPaths(install) {
+    ensureNode();
+    var dir = "";
+    try {
+      dir = String((global.Settings.get() || {}).comfyModelsDir || "");
+    } catch (e) {}
+    var yamlPath = path.join(install.root, "ComfyUI",
+                             "extra_model_paths.yaml");
+    if (!dir) {
+      // Setting cleared — remove a previously written mapping.
+      try { if (fs.existsSync(yamlPath)) fs.unlinkSync(yamlPath); }
+      catch (eU) {}
+      return null;
+    }
+    try {
+      var i;
+      for (i = 0; i < COMFY_MODEL_SUBS.length; i++) {
+        var d = path.join(dir, COMFY_MODEL_SUBS[i]);
+        if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
+      }
+      var lines = [
+        "# Managed by AE Llama — external models folder (panel setting)",
+        "aellama:",
+        "  base_path: " + dir.replace(/\\/g, "/")
+      ];
+      for (i = 0; i < COMFY_MODEL_SUBS.length; i++) {
+        lines.push("  " + COMFY_MODEL_SUBS[i] + ": " + COMFY_MODEL_SUBS[i]);
+      }
+      fs.writeFileSync(yamlPath, lines.join("\n") + "\n");
+      return yamlPath;
+    } catch (e2) {
+      return null;
+    }
+  }
+
+  /**
    * Make sure a ComfyUI answers at the configured URL. An already-running
    * instance (the user's own) is used as-is; otherwise the hidden vendor
    * install is booted invisibly on that port and health-polled up.
@@ -721,6 +765,7 @@
       }
       if (startWaiters) { startWaiters.push(cb); return; }
       startWaiters = [cb];
+      applyExtraModelPaths(install);
       say("Starting the hidden ComfyUI backend…");
       var errTail = "";
       var proc;
@@ -814,7 +859,8 @@
     launch: launch,
     ensureRunning: ensureRunning,
     stopManaged: stopManaged,
-    reapOrphan: reapOrphan
+    reapOrphan: reapOrphan,
+    _applyExtraModelPaths: applyExtraModelPaths   // exposed for tests
   };
 
 })(window);
