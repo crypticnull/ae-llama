@@ -162,34 +162,39 @@ assert(r.data.control === "GRID CTRL", "control null created");
 
 const ctrl = comp.layer("GRID CTRL");
 assert(ctrl._effects.property("Grid X Spacing") &&
-       ctrl._effects.property("Grid Y Spacing"), "both spacing sliders exist");
+       ctrl._effects.property("Grid Y Spacing") &&
+       ctrl._effects.property("Grid Columns"),
+       "spacing + columns sliders exist");
 assert(ctrl._effects.property("Grid X Spacing")._params[0].value ===
        Math.round(1920 / 4), "default X spacing = width/(cols+1)");
+assert(ctrl._effects.property("Grid Columns")._params[0].value === 3,
+       "columns slider initialized to the layout's column count");
 
-// 2. expressions: centered offsets, correct slider refs, bystander untouched
-const X = 'thisComp\\.layer\\("GRID CTRL"\\)\\.effect\\("Grid X Spacing"\\)\\(1\\)';
-const Y = 'thisComp\\.layer\\("GRID CTRL"\\)\\.effect\\("Grid Y Spacing"\\)\\(1\\)';
+// 2. expressions: per-layer order baked in, columns driven by the slider,
+// bystander untouched
 const e1 = tiles[0]._transform["ADBE Position"].expression;
-assert(new RegExp("\\(-1\\) \\* " + X).test(e1) &&
-       new RegExp("\\(-0\\.5\\) \\* " + Y).test(e1),
-       "tile 1 gets centered offsets (-1, -0.5)");
+assert(/var col = 0 % cols/.test(e1) && /Math\.floor\(0 \/ cols\)/.test(e1),
+       "tile 1 bakes order index 0");
 const e4 = tiles[3]._transform["ADBE Position"].expression;
-assert(new RegExp("\\(-1\\) \\* " + X).test(e4) &&
-       new RegExp("\\(0\\.5\\) \\* " + Y).test(e4),
-       "tile 4 wraps to row 2 col 0 (-1, 0.5)");
+assert(/var col = 3 % cols/.test(e4),
+       "tile 4 bakes order index 3");
 const e5 = tiles[4]._transform["ADBE Position"].expression;
-assert(new RegExp("\\(0\\) \\* " + X).test(e5) &&
-       new RegExp("\\(0\\.5\\) \\* " + Y).test(e5),
-       "tile 5 sits at row 2 col 1 (0, 0.5)");
+assert(/var col = 4 % cols/.test(e5),
+       "tile 5 bakes order index 4");
+assert(/Math\.ceil\(5 \/ cols\)/.test(e1) && /Math\.min\(5,/.test(e1),
+       "total layer count (5) baked for row math and the columns clamp");
 assert(/effect\("Grid X Spacing"\)\(1\)/.test(e1) &&
+       /effect\("Grid Y Spacing"\)\(1\)/.test(e1) &&
+       /effect\("Grid Columns"\)\(1\)/.test(e1) &&
        /thisComp\.layer\("GRID CTRL"\)/.test(e1),
-       "expression references the null's sliders");
-// The rig must use ONLY the classic inline chained form — no vars, no
-// stored references — so it evaluates in BOTH expression engines.
-assert(e1.indexOf("var ") === -1 && e1.indexOf(".value") === -1 &&
+       "expression references all three sliders on the null");
+// Vars may hold plain numbers only; every layer/effect lookup must stay
+// inline-chained (pickwhip-classic) and never use .value.
+assert(e1.indexOf(".value") === -1 &&
        /transform\.position\[0\]/.test(e1) &&
-       /transform\.position\[1\]/.test(e1),
-       "pickwhip-classic inline expression (no vars, no stored refs)");
+       /transform\.position\[1\]/.test(e1) &&
+       !/var \w+ = thisComp/.test(e1),
+       "lookups inline-chained; vars carry numbers only");
 assert(bystander._transform["ADBE Position"].expression === "",
        "unselected layer untouched");
 
@@ -198,7 +203,11 @@ tiles.forEach(t => { t.selected = true; });
 ctrl.selected = true;   // user sloppily selects the ctrl too
 const r2 = call("grid_layout", {});
 assert(r2.ok && r2.data.control === "GRID CTRL", "re-run reuses the rig");
-assert(ctrl._effects.numProperties === 2, "no duplicate sliders after re-run");
+assert(ctrl._effects.numProperties === 3, "no duplicate sliders after re-run");
+const r2b = call("grid_layout", { columns: 5 });
+assert(r2b.ok &&
+       ctrl._effects.property("Grid Columns")._params[0].value === 5,
+       "explicit columns on re-run updates the Columns slider");
 assert(!r2.data.placed.some(p => p.layer === "GRID CTRL"),
        "control null never grids itself");
 

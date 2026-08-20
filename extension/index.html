@@ -58,14 +58,15 @@
         <button id="btn-update-engine">Reinstall / update engine</button>
       </div>
 
-      <h3>Settings</h3>
+      <h3>Models</h3>
+      <p class="fineprint">Curated GGUF models sized to your GPU; the best
+        fit for your VRAM is preselected. Downloads go to the models folder.</p>
+      <div class="pathfield">
+        <select id="set-model-select"></select>
+        <button id="btn-get-model-settings">Download</button>
+      </div>
 
-      <label>Models folder
-        <div class="pathfield">
-          <input id="set-models-dir" type="text" spellcheck="false"/>
-          <button id="btn-browse-models-dir">&hellip;</button>
-        </div>
-      </label>
+      <h3>Settings</h3>
 
       <label class="check">
         <input id="set-dryrun" type="checkbox"/>
@@ -77,6 +78,13 @@
       </div>
 
       <div id="advanced-settings" class="hidden">
+        <label>Models folder
+          <div class="pathfield">
+            <input id="set-models-dir" type="text" spellcheck="false"/>
+            <button id="btn-browse-models-dir">&hellip;</button>
+          </div>
+        </label>
+
         <label>llama-server.exe
           <div class="pathfield">
             <input id="set-server-path" type="text" spellcheck="false"/>
@@ -167,14 +175,6 @@
 
       <div class="drawer-actions">
         <button id="btn-settings-close">Close</button>
-      </div>
-
-      <h3>Models</h3>
-      <p class="fineprint">Curated GGUF models sized to your GPU; the best
-        fit for your VRAM is preselected. Downloads go to the models folder.</p>
-      <div class="pathfield">
-        <select id="set-model-select"></select>
-        <button id="btn-get-model-settings">Download</button>
       </div>
 
     </section>

@@ -97,6 +97,15 @@ function AELL_resolveComp(name) {
     if (item && item instanceof CompItem) return item;
     throw new Error("No active comp — open one or pass {comp: \"name\"}");
   }
+  // The model batches its commands BEFORE seeing results, so when
+  // create_comp auto-renamed ("X" existed -> made "X 2"), the rest of the
+  // batch still says "X" — and would land in the OLD comp. Redirect
+  // same-name references to the just-created comp for a short window.
+  var alias = $.global.AELL_compAlias;
+  if (alias && alias.requested === name &&
+      new Date().getTime() < alias.until) {
+    name = alias.actual;
+  }
   for (var i = 1; i <= proj.numItems; i++) {
     var it = proj.item(i);
     if (it instanceof CompItem && it.name === name) return it;
@@ -572,6 +581,14 @@ AELL_TOOLS.create_comp = function (args) {
   var dur = args.duration > 0 ? args.duration : 10;
   var fps = args.frameRate > 0 ? args.frameRate : 30;
   var name = AELL_uniqueItemName(String(args.name));
+  if (name !== String(args.name)) {
+    // Redirect batched same-reply references to the renamed comp (see
+    // AELL_resolveComp) — two minutes covers any command batch.
+    $.global.AELL_compAlias = { requested: String(args.name), actual: name,
+                                until: new Date().getTime() + 120000 };
+  } else {
+    $.global.AELL_compAlias = null;
+  }
   var comp = app.project.items.addComp(name, w, h, 1, dur, fps);
   if (AELLJSON.isArray(args.bgColor) && args.bgColor.length >= 3) {
     comp.bgColor = [args.bgColor[0], args.bgColor[1], args.bgColor[2]];
@@ -1044,11 +1061,13 @@ AELL_TOOLS.grid_layout = function (args) {
         .setValue([comp.width / 2, comp.height / 2]);
   }
   var effects = ctrl.property("ADBE Effect Parade");
-  function ensureSlider(name, value) {
+  function ensureSlider(name, value, forceSet) {
     var fx = effects.property(name);
     if (!fx) {
       fx = effects.addProperty("ADBE Slider Control");
       fx.name = name;
+      fx.property(1).setValue(value);
+    } else if (forceSet) {
       fx.property(1).setValue(value);
     }
     return fx;
@@ -1057,8 +1076,9 @@ AELL_TOOLS.grid_layout = function (args) {
     : Math.round(comp.width / (cols + 1));
   var defY = args.spacingY > 0 ? args.spacingY
     : Math.round(comp.height / (rows + 1));
-  ensureSlider("Grid X Spacing", defX);
-  ensureSlider("Grid Y Spacing", defY);
+  ensureSlider("Grid X Spacing", defX, args.spacingX > 0);
+  ensureSlider("Grid Y Spacing", defY, args.spacingY > 0);
+  ensureSlider("Grid Columns", cols, args.columns > 0);
 
   var escCtrl = AELL_escapeExprName(ctrl.name);
   var placed = [];
@@ -1066,20 +1086,23 @@ AELL_TOOLS.grid_layout = function (args) {
     var layer = layers[i];
     var col = i % cols;
     var row = Math.floor(i / cols);
-    // Offsets are centered so the grid stays symmetric around the null.
-    var cOff = col - (cols - 1) / 2;
-    var rOff = row - (rows - 1) / 2;
     var posProp = layer.property("ADBE Transform Group")
                        .property("ADBE Position");
     var is3d = AELLJSON.isArray(posProp.value) && posProp.value.length > 2;
-    // Maximally-classic inline form — no vars, no stored references, the
-    // exact chained pattern the pickwhip has generated for 20 years. It
-    // evaluates identically in the legacy and JavaScript engines.
+    // The layer computes its own row/col from the "Grid Columns" slider,
+    // so dragging it re-flows the whole grid live. Vars hold plain
+    // NUMBERS only; every layer/effect lookup stays inline-chained (the
+    // pickwhip-classic form that evaluates in both expression engines).
     var ref = 'thisComp.layer("' + escCtrl + '")';
     var expr =
-      '[' + ref + '.transform.position[0] + (' + cOff + ') * ' +
+      'var cols = Math.max(1, Math.min(' + n + ', Math.round(' + ref +
+        '.effect("Grid Columns")(1))));\n' +
+      'var col = ' + i + ' % cols;\n' +
+      'var row = Math.floor(' + i + ' / cols);\n' +
+      'var rows = Math.ceil(' + n + ' / cols);\n' +
+      '[' + ref + '.transform.position[0] + (col - (cols - 1) / 2) * ' +
       ref + '.effect("Grid X Spacing")(1), ' +
-      ref + '.transform.position[1] + (' + rOff + ') * ' +
+      ref + '.transform.position[1] + (row - (rows - 1) / 2) * ' +
       ref + '.effect("Grid Y Spacing")(1)' +
       (is3d ? ', value[2]' : '') + ']';
     var err = AELL_setExpr(posProp, expr);
@@ -1097,10 +1120,10 @@ AELL_TOOLS.grid_layout = function (args) {
   }
   return AELL_okay({
     control: ctrl.name, columns: cols, rows: rows,
-    sliders: ["Grid X Spacing", "Grid Y Spacing"],
+    sliders: ["Grid X Spacing", "Grid Y Spacing", "Grid Columns"],
     initialSpacing: [defX, defY], placed: placed,
     note: "Move '" + ctrl.name + "' to move the whole grid; its sliders " +
-          "control X/Y spacing live"
+          "control X/Y spacing AND column count live"
   });
 };
 
@@ -1228,8 +1251,8 @@ AELL_TOOLS.duplicate_layer = function (args) {
     names.push(nm);
   }
   return AELL_okay({ created: count, duplicatedFrom: layer.name,
-    names: (names.length > 10 ? names.slice(0, 10) : names).join(", ") +
-           (names.length > 10 ? ", …" : ""),
+    names: (names.length > 12 ? names.slice(0, 12) : names).join(", ") +
+           (names.length > 12 ? ", …" : ""),
     totalLayersInComp: comp.numLayers,
     note: autoNumbered
       ? "Copies auto-numbered to keep layer names unique"

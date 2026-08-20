@@ -99,13 +99,14 @@
             "eases pair k..k+1; omit for all pairs.",
       args: "{comp?: string, layer: name|index, property: transform name or 'effect.<Effect>.<Param>', bezier: [x1,y1,x2,y2], keyIndex?: int, allPairs?: bool}" },
     { name: "grid_layout", mutating: true,
-      desc: "Arrange layers into a grid rigged to a control null: the " +
-            "grid centers on the null's position and its 'Grid X Spacing'/" +
-            "'Grid Y Spacing' sliders drive spacing live (all expressions " +
-            "generated host-side). Creates its OWN control null — never " +
-            "add_null first. Omit 'layers' to use the selection; with " +
-            "nothing selected it grids ALL content layers in the comp " +
-            "(nulls/cameras/lights excluded). Re-running re-flows the rig.",
+      desc: "Arrange layers into a grid rigged to a control null: its " +
+            "'Grid X Spacing'/'Grid Y Spacing'/'Grid Columns' sliders " +
+            "drive spacing AND column count live, and the grid centers " +
+            "on the null's position (all expressions generated " +
+            "host-side). Creates its OWN control null — never add_null " +
+            "first. Omit 'layers' to use the selection; with nothing " +
+            "selected it grids ALL content layers in the comp (nulls/" +
+            "cameras/lights excluded). Re-running re-flows the rig.",
       args: "{comp?: string, layers?: [name|index] (omit = user's selection), columns?: int (default ~square; 1 = column, n = row), spacingX?: px, spacingY?: px, controlLayer?: string = 'GRID CTRL'}" },
     { name: "apply_expression_preset", mutating: true,
       desc: "Apply a known-good expression. Presets: wiggle (frequency/" +
@@ -336,7 +337,9 @@
       "  precompose, always pass comp: \"<name>\" explicitly, and take the",
       "  name from the tool RESULT — create_comp auto-numbers when the",
       "  name is already taken ('Comp 2'), so the result name is the",
-      "  only correct one.",
+      "  only correct one. Commands in the SAME reply as create_comp that",
+      "  use the requested name are auto-redirected to the new comp; from",
+      "  the NEXT reply on, use the result name.",
       "- To cut a layer into timed pieces ('split into chunks', 'stagger",
       "  segments'), use split_layer_into_chunks — ONE call. Never emulate",
       "  it with duplicate_comp or repeated retiming of the same layer.",

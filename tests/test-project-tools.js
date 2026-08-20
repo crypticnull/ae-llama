@@ -181,4 +181,13 @@ assert(c2.ok && c2.data.name === "Squares 2",
 assert(/use THIS name/i.test(c2.data.note),
        "collision note tells the model which name to use");
 
+// batched same-reply references to the requested name must hit the NEW
+// comp, not the old one (the model writes its whole batch before seeing
+// the rename result).
+const aliased = call("set_comp_setting", { comp: "Squares", duration: 5 });
+assert(aliased.ok && aliased.data.name === "Squares 2",
+       "same-name reference right after an auto-rename redirects to the " +
+       "new comp (got " + (aliased.ok ? aliased.data.name : aliased.error) +
+       ")");
+
 console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");
