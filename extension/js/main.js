@@ -25,6 +25,57 @@
       (global.AELL.CHANNEL ? "-" + global.AELL.CHANNEL : "");
   }
 
+  var gpuInfo = null;   // cached at init for the copy-chat header
+
+  /** Copy text to the clipboard (CEF supports execCommand on a textarea). */
+  function copyToClipboard(text) {
+    var ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.left = "-9999px";
+    document.body.appendChild(ta);
+    ta.select();
+    var ok = false;
+    try { ok = document.execCommand("copy"); } catch (e) {}
+    document.body.removeChild(ta);
+    return ok;
+  }
+
+  /** Whole chat + environment header as a shareable text block. */
+  function chatTranscript() {
+    var env = global.AEBridge.getHostEnvironment();
+    var s = global.Settings.get();
+    var lines = [
+      "AE Llama " + displayVersion() +
+        (env && env.appVersion ? " — After Effects " + env.appVersion : ""),
+      "Model: " + (global.Llama.getCurrentModel()
+        ? basename(global.Llama.getCurrentModel())
+        : basename(els.modelSelect.value || "(none)")) +
+        " (port " + s.port + ", ctx " + s.ctxSize + ")",
+      "GPU: " + (gpuInfo
+        ? (gpuInfo.hasNvidia
+            ? (gpuInfo.name || "NVIDIA") +
+              (gpuInfo.vramGB ? ", " + gpuInfo.vramGB + " GB" : "") +
+              (gpuInfo.cudaVersion ? ", CUDA " + gpuInfo.cudaVersion : "")
+            : "no NVIDIA GPU detected")
+        : "(not probed)"),
+      "----"
+    ];
+    var msgs = els.chat.children;
+    for (var i = 0; i < msgs.length; i++) {
+      var m = msgs[i];
+      if (!m.className || m.className.indexOf("msg") === -1) continue;
+      var kind = (m.className.match(/msg\s+(\S+)/) || [])[1] || "msg";
+      var label = "";
+      var lab = m.querySelector ? m.querySelector(".msg-label") : null;
+      if (lab) label = lab.textContent + "\n";
+      var text = m.textContent || "";
+      if (lab) text = text.slice(lab.textContent.length);
+      lines.push("[" + kind + "] " + (label ? label : "") + text);
+    }
+    return lines.join("\n");
+  }
+
   function appendMsg(kind, text, label) {
     var div = document.createElement("div");
     div.className = "msg " + kind;
@@ -332,12 +383,13 @@
             if (/unparseable/i.test(err.message) && !parseRetried) {
               parseRetried = true;
               history.push({ role: "user", content:
-                "SYSTEM: Your previous response was truncated before it " +
-                "completed and was DISCARDED — no commands ran. Re-issue " +
-                "the plan as valid JSON with AT MOST 8 compact commands " +
-                "(use batch options like duplicate_layer count or " +
-                "distribute_property step instead of repeating similar " +
-                "commands); leave the rest for the next round." });
+                "SYSTEM: Only your LAST response was truncated and " +
+                "discarded — nothing from it ran. Everything acknowledged " +
+                "in earlier TOOL RESULTS already happened: do NOT repeat " +
+                "those commands (no re-creating comps or layers). Continue " +
+                "from where the results left off, as valid JSON with AT " +
+                "MOST 8 compact commands (use batch options like " +
+                "duplicate_layer count or distribute_property step)." });
               appendMsg("info", "Reply was cut off — asking the model to " +
                         "retry compactly…");
               runRound(system, round);
@@ -881,6 +933,21 @@
     $("btn-browse-comfy-out").addEventListener("click", function () {
       browseIntoField(els.setComfyOut, "Choose generated files folder", true);
     });
+    // -- one-click chat copy (transcript + version/model/GPU header)
+    $("btn-copy-chat").addEventListener("click", function () {
+      var text = chatTranscript();
+      var count = (text.match(/^\[/gm) || []).length;
+      appendMsg("info", copyToClipboard(text)
+        ? "Chat copied to clipboard (" + count + " messages, with " +
+          "version/model/GPU info)."
+        : "Could not copy to the clipboard.");
+    });
+
+    // Probe the GPU once so the copy header has real hardware info.
+    try {
+      global.Setup.detectGpu(function (g) { gpuInfo = g; });
+    } catch (eG) {}
+
     $("btn-comfy-install").addEventListener("click", function () {
       var ctrl = global.Setup.bootstrapComfy(
         function (t) { appendMsg("info", t); },

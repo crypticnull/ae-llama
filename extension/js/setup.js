@@ -76,23 +76,25 @@
         var m = String(stdout).match(/CUDA Version:\s*([\d.]+)/);
         if (m) cuda = m[1];
         child_process.execFile("nvidia-smi",
-          ["--query-gpu=compute_cap,memory.total",
+          ["--query-gpu=name,compute_cap,memory.total",
            "--format=csv,noheader,nounits"],
           { timeout: 15000 },
           function (err2, stdout2) {
+            var name = null;
             var cc = null;
             var vramGB = null;
             if (!err2) {
               var parts = String(stdout2).split(/\r?\n/)[0].split(",");
-              if (parts[0] && /^\d+(\.\d+)?$/.test(parts[0].trim())) {
-                cc = parseFloat(parts[0].trim());
+              if (parts[0] && parts[0].trim()) name = parts[0].trim();
+              if (parts[1] && /^\d+(\.\d+)?$/.test(parts[1].trim())) {
+                cc = parseFloat(parts[1].trim());
               }
-              if (parts[1] && /^\d+$/.test(parts[1].trim())) {
-                vramGB = Math.round(parseInt(parts[1].trim(), 10) / 1024);
+              if (parts[2] && /^\d+$/.test(parts[2].trim())) {
+                vramGB = Math.round(parseInt(parts[2].trim(), 10) / 1024);
               }
             }
-            cb({ hasNvidia: true, cudaVersion: cuda, computeCap: cc,
-                 vramGB: vramGB });
+            cb({ hasNvidia: true, name: name, cudaVersion: cuda,
+                 computeCap: cc, vramGB: vramGB });
           });
       });
   }
