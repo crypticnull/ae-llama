@@ -277,6 +277,52 @@
                  "factor " + d.scaleFactor;
         } },
 
+      // ---- Text (WORKPLAN item 2) --------------------------------------
+      // font/tracking/leading are the AE-version-sensitive paths. Added
+      // late so the text layer cannot disturb the 9-square steps above.
+      { name: "add text layer (fontSize/tracking/leading)",
+        tool: "add_text_layer",
+        args: function (ctx) {
+          return { comp: ctx.comp, text: "ST Text", fontSize: 48,
+                   tracking: 20, leading: 60, justification: "center",
+                   position: [100, 100] };
+        },
+        check: function (d, ctx) {
+          ctx.textLayer = d.name;
+          var s = d.style || {};
+          if (s.fontSize !== 48) return "fontSize " + s.fontSize;
+          if (s.tracking !== 20) return "tracking " + s.tracking;
+          if (s.leading !== 60) return "leading " + s.leading;
+          return true;
+        } },
+
+      // Restyling writes one TextDocument back wholesale, so a partial
+      // update must not quietly drop the fields it was not given.
+      { name: "restyle a subset keeps the other text fields",
+        tool: "set_text_style",
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: ctx.textLayer, fontSize: 24 };
+        },
+        check: function (d) {
+          var s = d.style || {};
+          if (s.fontSize !== 24) return "fontSize " + s.fontSize;
+          if (s.tracking !== 20) return "tracking lost: " + s.tracking;
+          if (s.leading !== 60) return "leading lost: " + s.leading;
+          return true;
+        } },
+
+      // AE clamps leading 0 to ~0.01 and leaves autoLeading false, so
+      // without an explicit "auto" there is no way back.
+      { name: "leading can go back to auto",
+        tool: "set_text_style",
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: ctx.textLayer, leading: "auto" };
+        },
+        check: function (d) {
+          var s = d.style || {};
+          return s.leading === "auto" || "leading " + s.leading;
+        } },
+
       // ---- Cameras (WORKPLAN item 2b) ----------------------------------
       // In their OWN scratch comp: scale_comp resizes the whole comp, and
       // a camera must not disturb the 2D steps above. Values are chosen so
