@@ -78,3 +78,24 @@ fix. Start from item 1 of `docs/WORKPLAN.md`.
   machine. To test it deliberately: put `var final = 1;` in
   `scripts/ae-selftest.jsx`, run the harness, expect exit 4 with the
   dialog text rather than a 4-minute timeout.
+
+## 2026-08-20 (remote) — harden the dialog probe
+
+- Changed: `scripts/run-ae-selftest.ps1`. Three faults in the probe I
+  shipped an hour ago, all found by asking what a green run actually
+  exercises. (1) `Add-Type` and `FindDialog` failures were swallowed
+  into `''`, making a BROKEN probe indistinguishable from "no dialog" —
+  the same silent-degradation shape as the bug this all started with.
+  Both now print a WARNING. (2) The probe keyed off window class
+  `#32770`; AE also raises its own DroverLord-classed windows, which it
+  would have missed. It now treats a DISABLED main window as the
+  authoritative modal signal and uses class only to gather text.
+  (3) `Add-Type` is guarded against re-entry via `PSTypeName`.
+- Harness: NOT run from here. Stubbed suite 11/11, file pure ASCII.
+- Notes: a green 26/26 run DOES execute `Get-BlockingDialog` at least
+  once (the wait loop calls it before re-testing for results), so it
+  proves the probe compiles and returns empty without throwing. It does
+  NOT exercise the enumeration, the child-text walk, or exit 4 — that
+  needs a real modal. Deliberate test: put `var final = 1;` in
+  `scripts/ae-selftest.jsx`, run the harness, expect exit 4 naming the
+  dialog within seconds instead of a 240s timeout, then revert.
