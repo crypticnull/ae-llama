@@ -6,12 +6,13 @@ video generation. Windows 11 + AE 2024+ (field-tested on AE 2026).
 
 ## Two agents, two roles
 
-- **Remote session** (claude.ai/code): builds features, ships releases,
-  manages PRs/merges into `main`, publishes the auto-update feed via CI.
+- **Remote session** (claude.ai/code): builds features, owns minor/major
+  version bumps and the merges into `main`, reviews what the local
+  session pushes.
 - **Local session** (this machine, has real After Effects): its superpower
   is RUNNING the panel's tool suite inside real AE and reporting/fixing
-  what the stubs can't see. If both are active, coordinate through the
-  human: local verifies + commits small fixes; remote ships releases.
+  what the stubs can't see. It ships its own verified fixes — patch bump,
+  push, done — without waiting for the remote session or the human.
 
 Development branch: `claude/ae-plugin-llama-cpp-f13g3x`. The remote
 session periodically force-resets this branch onto `main` after merges
@@ -36,7 +37,7 @@ interactive session does NOT self-start; it answers one prompt and waits.
    file, or all of them — CI runs exactly this on every push.
 2. **REAL AE self-test (the one that matters):**
    `powershell -ExecutionPolicy Bypass -File scripts/run-ae-selftest.ps1`
-   Drives AfterFX.exe through the panel's 26-step suite in a scratch comp
+   Drives AfterFX.exe through the panel's 39-step suite in a scratch comp
    (grid rig expressions, padded-dims eases, batch keys, masks, shape
    contents, effects, mattes, parenting) and prints PASS/FAIL. Exit 0 =
    green. Needs AE's "Allow Scripts to Write Files and Access Network"
@@ -66,13 +67,26 @@ interactive session does NOT self-start; it answers one prompt and waits.
 - Every failed lookup must list what actually exists (grounded errors) —
   it is how the small local model self-corrects.
 
-## Release ritual (remote session usually does this)
+## Shipping (BUMP OR IT DOES NOT SHIP)
 
-Bump ALL of: `extension/CSXS/manifest.xml` (ExtensionBundleVersion AND
-Extension Version), `extension/js/version.js` VERSION, `update.json`
-panelVersion — `scripts/package-zxp.ps1` fails the build on mismatch.
-Push -> CI builds the signed ZXP, stages the `feed` branch, syncs the
-public updates repo -> installed panels auto-update and reload in place.
+CI runs on every push to `main` AND `claude/**`, and the feed-publish
+step has no branch condition — so **a push to the dev branch already
+ships**. Merging to `main` is bookkeeping; it gates nothing.
+
+The one real gate is the version. The panel updates only when
+`compareVersions(feed.panelVersion, VERSION) > 0`, so an unbumped push
+reaches the repo and never reaches a panel. Do not treat "merged" as
+"shipped" — that mistake left a whole day of fixes sitting in `main`
+while the installed panel ran the old code.
+
+    node scripts/bump-version.js patch     # one command, all four files
+
+**The local session bumps PATCH itself** whenever it pushes a fix it has
+verified in real AE. That is the whole point: a fix you proved works
+should reach the panel without waiting on anyone. The remote session
+owns MINOR/MAJOR (feature sets, anything needing release notes) and the
+merges into `main`, which can be batched whenever.
+
 Model identity strings must never appear in committed artifacts.
 
 ## Layout

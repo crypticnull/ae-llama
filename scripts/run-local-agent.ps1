@@ -113,9 +113,11 @@ and write down what you assumed.
 
 Hard limits for this session:
 - Do exactly ONE item, then stop. The loop will start you again.
-- Never bump versions, never touch update.json or the manifest, never
-  merge to main, never open or merge a PR. Releases belong to the remote
-  session.
+- When you push a fix you VERIFIED in real AE, bump the patch version
+  first: node scripts/bump-version.js patch. Without it CI publishes a
+  feed the panel ignores, so the fix never reaches a real panel.
+- Do not bump minor/major, do not merge to main, do not open or merge a
+  PR. Those belong to the remote session.
 - If the harness cannot run at all (AE closed, scripting file access
   disabled), write that into docs/WORKPLAN-LOG.md, commit that, and stop.
   Do not spend the pass guessing.
