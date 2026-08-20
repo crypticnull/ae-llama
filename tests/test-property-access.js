@@ -63,6 +63,10 @@ function Layer(name, comp) {
   const blur = new PGroup("Gaussian Blur", "ADBE Gaussian Blur 2");
   blur.add(new Prop("Blurriness", "ADBE Gaussian Blur 2-0001", 0));
   fx.add(blur);
+  // a renamed Slider Control, like the grid rig's spacing controls
+  const slider = new PGroup("Grid X Spacing", "ADBE Slider Control");
+  slider.add(new Prop("Slider", "ADBE Slider Control-0001", 10));
+  fx.add(slider);
   this._root.add(t);
   this._root.add(fx);
 }
@@ -278,5 +282,19 @@ B.selected = true;
 r = call("remove_keyframes", { property: "opacity" });
 assert(r.ok && r.data.layers === 2 && r.data.removed === 4,
        "batch remove clears keys on the whole selection");
+
+// 11. a path landing on a single-value control effect auto-descends to
+// its value ("Effects/Grid X Spacing" means the slider, not the group)
+r = call("get_property", { layer: "A", property: "effects/Grid X Spacing" });
+assert(r.ok && r.data.value === 10,
+       "control-effect path reads the slider value: " + (r.error || ""));
+r = call("set_property", { layer: "A", property: "Effects/Grid X Spacing",
+                           value: 42 });
+assert(r.ok && A.property("Effects").property("Grid X Spacing")
+         .property("Slider").value === 42,
+       "control-effect path writes the slider value");
+r = call("get_property", { layer: "A", property: "transform" });
+assert(!r.ok && /GROUP/.test(r.error),
+       "multi-property groups still refuse with the list_properties hint");
 
 console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");

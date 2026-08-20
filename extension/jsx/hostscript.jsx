@@ -2467,16 +2467,41 @@ function AELL_resolvePropPath(layer, pathStr) {
   return node;
 }
 
+/*
+ * When a path lands on a GROUP holding exactly one value property — a
+ * Slider/Point/Checkbox/Color control effect referenced by its display
+ * name ("Effects/Grid X Spacing") — descend to that value. Multi-param
+ * groups stay groups.
+ */
+function AELL_descendToLeaf(prop) {
+  if (AELL_isLeafProp(prop)) return prop;
+  var n = 0;
+  try { n = prop.numProperties || 0; } catch (e) { return prop; }
+  var leaf = null;
+  var leaves = 0;
+  for (var i = 1; i <= n; i++) {
+    var c = null;
+    try { c = prop.property(i); } catch (e2) { continue; }
+    if (c && AELL_isLeafProp(c)) {
+      leaves++;
+      leaf = c;
+    }
+  }
+  return leaves === 1 ? leaf : prop;
+}
+
 /* Accept friendly specs (position, effect.X.Y) AND '/'-joined paths. */
 function AELL_anyProperty(layer, spec) {
   var s = String(spec || "");
   if (s === "") throw new Error("Missing 'property'");
-  if (s.indexOf("/") !== -1) return AELL_resolvePropPath(layer, s);
+  if (s.indexOf("/") !== -1) {
+    return AELL_descendToLeaf(AELL_resolvePropPath(layer, s));
+  }
   try {
     return AELL_resolveProperty(layer, s);
   } catch (friendlyErr) {
     try {
-      return AELL_resolvePropPath(layer, s);
+      return AELL_descendToLeaf(AELL_resolvePropPath(layer, s));
     } catch (pathErr) {
       throw (s.indexOf(".") !== -1) ? friendlyErr : pathErr;
     }
