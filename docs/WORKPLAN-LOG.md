@@ -99,3 +99,32 @@ fix. Start from item 1 of `docs/WORKPLAN.md`.
   needs a real modal. Deliberate test: put `var final = 1;` in
   `scripts/ae-selftest.jsx`, run the harness, expect exit 4 naming the
   dialog within seconds instead of a 240s timeout, then revert.
+
+## 2026-08-20 (remote) — center_anchor_point: real bug + the stub that hid it
+
+- Changed: `extension/jsx/hostscript.jsx` `center_anchor_point`, and new
+  `tests/test-anchor-point.js` (18 assertions). Also made
+  `tests/test-curve-tools.js`'s `Prop.setValue` throw on keyframed
+  properties, matching AE.
+- Harness: NOT run from here. Stubbed suite 12/12.
+- Notes: the tool wrote Position with `setValue()`, which real AE REFUSES
+  on a keyframed property — so it failed on any animated layer, the
+  normal case for this panel. It now offsets EVERY Position key by the
+  compensation delta. An animated Anchor Point now returns a grounded
+  error (there is no single value to centre) instead of AE's raw throw,
+  and an expression-driven Position gets a WARNING in the note because
+  the write is accepted but never visible.
+  It had ZERO stubbed coverage — that is why it survived. The new stub
+  models two things the older ones did not: `setValue` throws when
+  `numKeys > 0`, and 2D Position/Anchor are PADDED to 3 components (the
+  older stub padded only Scale, so `value.length > 2` was false there
+  and true in AE — the exact infidelity behind the original grid bug).
+  Parenting needs no special case: Position is already in the parent's
+  space and the delta is carried there by the layer's own scale and
+  rotation. That is reasoned, not observed — worth confirming.
+- FOR THE LOCAL SESSION (item 2, next): verify in real AE, then promote
+  to `selftest.js`. Build a layer with Position keys, rotate it, scale
+  it, parent it to a null, run `center_anchor_point`, and confirm the
+  layer does not visually jump at ANY key time (not just the current
+  one). Then the same on a 3D layer and on a text layer, where
+  `sourceRectAtTime` moves with the content.

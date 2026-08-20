@@ -831,7 +831,19 @@ AELL_TOOLS.center_anchor_point = function (args) {
   var posProp = transform.property("ADBE Position");
   var oldAp = apProp.value;
   var newAp = [rect.left + rect.width / 2, rect.top + rect.height / 2];
-  if (oldAp.length > 2) newAp.push(oldAp[2]);   // keep z on 3D layers
+  // NB: the scripting API pads 2D values to 3 components, so this fires
+  // for 2D layers too and simply carries the existing 0 through — which
+  // is what setValue wants back. It is NOT a 3D test.
+  if (oldAp.length > 2) newAp.push(oldAp[2]);
+
+  // An animated anchor cannot be "centered" — there is no single value to
+  // write, and setValue would throw AE's raw error. Say so instead.
+  if (apProp.numKeys > 0) {
+    return AELL_err("Anchor Point is animated on " + layer.name + " (" +
+      apProp.numKeys + " keyframes), so there is no single anchor to " +
+      "center. Delete the Anchor Point keyframes first (select the " +
+      "property, press Delete), then run this again.");
+  }
 
   var preserve = args.preservePosition !== false;   // default true
   var note = "";
@@ -839,7 +851,9 @@ AELL_TOOLS.center_anchor_point = function (args) {
   if (preserve && !layer.threeDLayer) {
     // Shifting the anchor moves the layer by the same amount in layer
     // space; offset position by that delta run through scale+rotation so
-    // the layer stays visually in place.
+    // the layer stays visually in place. Parenting needs no special case:
+    // Position is already expressed in the parent's space, and the delta
+    // is carried there by this layer's own scale and rotation.
     var scl = transform.property("ADBE Scale").value;
     var rot = transform.property("ADBE Rotate Z").value;
     var dx = (newAp[0] - oldAp[0]) * (scl[0] / 100);
@@ -847,13 +861,37 @@ AELL_TOOLS.center_anchor_point = function (args) {
     var rad = rot * Math.PI / 180;
     var dpx = dx * Math.cos(rad) - dy * Math.sin(rad);
     var dpy = dx * Math.sin(rad) + dy * Math.cos(rad);
-    var pos = posProp.value;
-    var newPos = [pos[0] + dpx, pos[1] + dpy];
-    if (pos.length > 2) newPos.push(pos[2]);
     apProp.setValue(newAp);
-    posProp.setValue(newPos);
-    note = "anchor centered on content; position compensated so the " +
-           "layer did not move";
+
+    if (posProp.numKeys > 0) {
+      // Animated position: setValue would throw. Offset EVERY key by the
+      // same delta so the whole animation shifts with the anchor rather
+      // than the layer jumping at one time and not the others.
+      for (var k = 1; k <= posProp.numKeys; k++) {
+        var kv = posProp.keyValue(k);
+        var nk = [kv[0] + dpx, kv[1] + dpy];
+        for (var d = 2; d < kv.length; d++) nk.push(kv[d]);
+        posProp.setValueAtKey(k, nk);
+      }
+      note = "anchor centered on content; all " + posProp.numKeys +
+             " Position keyframes offset so the layer did not move";
+    } else {
+      var pos = posProp.value;
+      var newPos = [pos[0] + dpx, pos[1] + dpy];
+      if (pos.length > 2) newPos.push(pos[2]);
+      posProp.setValue(newPos);
+      note = "anchor centered on content; position compensated so the " +
+             "layer did not move";
+    }
+
+    // A driven Position accepts the write but never shows it — report
+    // that rather than claiming a compensation the viewer cannot see.
+    var driven = false;
+    try { driven = !!posProp.expressionEnabled; } catch (eX) {}
+    if (driven) {
+      note += " (WARNING: Position has an expression, which overrides the " +
+              "compensation — the layer WILL appear to jump)";
+    }
   } else {
     apProp.setValue(newAp);
     note = layer.threeDLayer
