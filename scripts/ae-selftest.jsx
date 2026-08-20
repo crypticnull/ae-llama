@@ -49,16 +49,16 @@
       cb(AELLJSON.parse(raw));
     }
 
-    var final = null;
+    var finalRes = null;
     SelfTest.run({
       callHostTool: callHostTool,
       onLine: function () {},
-      onDone: function (res) { final = res; }
+      onDone: function (res) { finalRes = res; }
     });
     // Shimmed setTimeout is synchronous, so the run has finished here.
-    if (final) {
-      writeOut({ passed: final.passed, total: final.total,
-                 text: final.text });
+    if (finalRes) {
+      writeOut({ passed: finalRes.passed, total: finalRes.total,
+                 text: finalRes.text });
     } else {
       writeOut({ passed: 0, total: 0,
                  text: "Self-test never completed (runner error)" });
