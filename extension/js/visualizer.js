@@ -133,7 +133,7 @@
   }
 
   function refreshPreviewCount() {
-    deps.callHostTool("get_comp_details", {}, function (r) {
+    deps.callHostTool("get_comp_details", { limit: 0 }, function (r) {
       if (r.ok && r.data && r.data.layers) {
         var sel = 0;
         for (var i = 0; i < r.data.layers.length; i++) {
@@ -195,7 +195,7 @@
         deps.callHostTool("apply_keyframe_ease", args2, done);
       } else {
         // blank layer = the single selected layer
-        deps.callHostTool("get_comp_details", {}, function (r) {
+        deps.callHostTool("get_comp_details", { limit: 0 }, function (r) {
           var sel = [];
           if (r.ok && r.data && r.data.layers) {
             for (var i = 0; i < r.data.layers.length; i++) {

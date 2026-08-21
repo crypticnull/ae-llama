@@ -2,9 +2,14 @@
  * tools.js — the allowlisted bridge between the model and After Effects.
  *
  * The model never emits raw ExtendScript. It emits JSON commands
- * ({tool, args}) chosen from TOOL_DEFS; executeCommands() forwards each to
- * AELL_call() in jsx/hostscript.jsx, which implements the tools with undo
- * groups. Anything not in this list is rejected panel-side.
+ * ({tool, args}) chosen from TOOL_DEFS; executeCommands() forwards them to
+ * jsx/hostscript.jsx, which implements the tools with undo groups. Anything
+ * not in this list is rejected panel-side.
+ *
+ * Consecutive host tools go out as ONE AELL_callBatch, so a chat command
+ * that takes five tool calls is a single Ctrl+Z rather than five. It has to
+ * be one call: an undo group does not survive the end of the script
+ * execution that opened it.
  */
 (function (global) {
   "use strict";
@@ -12,11 +17,18 @@
   // Keep names/args in sync with the dispatch table in jsx/hostscript.jsx.
   var TOOL_DEFS = [
     { name: "get_project_info", mutating: false,
-      desc: "List project items (comps/footage/folders) and the active comp.",
-      args: "{}" },
+      desc: "List project items (comps/footage/folders) and the active " +
+            "comp. Long lists are capped (comps and folders first) and the " +
+            "result says so in 'note' — raise limit to see more.",
+      args: "{limit?: int (default 40, 0 = every item)}" },
     { name: "get_comp_details", mutating: false,
-      desc: "Layers of a comp with index, name, type, timing, effects.",
-      args: "{comp?: string}  // omit for the active comp" },
+      desc: "Layers of a comp with index, name, type, timing, effects. A " +
+            "long comp is capped to a window: SELECTED layers are always " +
+            "included, and 'note' says how many layers exist and how to " +
+            "page through them.",
+      args: "{comp?: string, start?: int (1-based, default 1), " +
+            "limit?: int (default 40, 0 = every layer)}  " +
+            "// omit comp for the active comp" },
     { name: "create_folder", mutating: true,
       desc: "Create a project-panel folder. Same name in different parents " +
             "is fine; existence is checked per-parent.",
@@ -42,8 +54,13 @@
       desc: "Create a composition and open it.",
       args: "{name: string, width: int, height: int, duration: seconds, frameRate: number, bgColor?: [r,g,b] 0..1}" },
     { name: "add_text_layer", mutating: true,
-      desc: "Add a text layer to a comp.",
-      args: "{comp?: string, text: string, fontSize?: px, fillColor?: [r,g,b] 0..1, position?: [x,y], font?: string (PostScript name), tracking?: number, leading?: px|'auto', justification?: 'left'|'center'|'right'}" },
+      desc: "Add a text layer to a comp. The new layer starts from a " +
+            "KNOWN baseline (white, 72px, tracking 0, auto leading, left, " +
+            "no faux/stroke, a plain installed sans) instead of whatever " +
+            "AE's Character panel was last set to; anything you pass " +
+            "overrides it. Pass inheritStyle:true to keep the user's " +
+            "Character panel style instead.",
+      args: "{comp?: string, text: string, fontSize?: px, fillColor?: [r,g,b] 0..1, position?: [x,y], font?: string (PostScript name), tracking?: number, leading?: px|'auto', justification?: 'left'|'center'|'right', inheritStyle?: bool}" },
     { name: "set_text_style", mutating: true,
       desc: "Restyle an existing text layer (any subset of fields). " +
             "An uninstalled font is refused, listing what IS installed.",
@@ -61,8 +78,10 @@
     { name: "center_anchor_point", mutating: true,
       desc: "Center a layer's anchor point on its visible content " +
             "(sourceRect math done host-side; position compensated so the " +
-            "layer does not jump). ALWAYS use this instead of guessing " +
-            "anchor coordinates.",
+            "layer does not jump, at every Position keyframe). ALWAYS use " +
+            "this instead of guessing anchor coordinates. If Scale or " +
+            "Rotation are animated too, the note says where the " +
+            "compensation is exact.",
       args: "{comp?: string, layer: name|index, preservePosition?: bool = true}" },
     { name: "add_keyframe", mutating: true,
       desc: "Add a keyframe on a layer property at a time (seconds).",
@@ -80,20 +99,29 @@
             "optional value = control*scale + offset).",
       args: "{comp?: string, layer: name|index, property: transform name or 'effect.<Effect>.<Param>', controlLayer: name|index, controlEffect: string (control name), scale?: number, offset?: number}" },
     { name: "stagger_layers", mutating: true,
-      desc: "Distribute layer START TIMES along a cubic-bezier easing " +
-            "curve: layer i (of n) starts at startAt + bezierY(i/(n-1)) * " +
-            "spread. Uses the user's selected layers when 'layers' omitted. " +
-            "Omit spread/startAt to fill the comp's WORK AREA; omit bezier " +
-            "for linear (ease-out = [0,0,0.58,1], ease-in = [0.42,0,1,1]).",
-      args: "{comp?: string, layers?: [name|index], bezier?: [x1,y1,x2,y2] (default linear), spread?: seconds (default: work area), startAt?: s, order?: 'in'|'stack'|'reverse'|'ascending'|'descending'}" },
+      desc: "Distribute layer START TIMES. Gap mode (use this for 'X " +
+            "frames/seconds apart'): stepFrames or step is the gap " +
+            "BETWEEN consecutive layers — '4 frames apart' = " +
+            "{stepFrames: 4}. Curve mode: 'spread' is the TOTAL span of " +
+            "the whole stagger, not the per-layer gap, and layer i (of n) " +
+            "starts at startAt + bezierY(i/(n-1)) * spread. Pass spread " +
+            "OR step, never both. Uses the user's selected layers when " +
+            "'layers' omitted. Omit all of them to fill the comp's WORK " +
+            "AREA; omit bezier for linear (ease-out = [0,0,0.58,1], " +
+            "ease-in = [0.42,0,1,1]). A 'layers' list is used IN THE " +
+            "ORDER GIVEN unless 'order' asks for a sort.",
+      args: "{comp?: string, layers?: [name|index] (used in the order given), stepFrames?: frames BETWEEN consecutive layers, step?: seconds BETWEEN consecutive layers, spread?: seconds TOTAL for the whole stagger (default: work area), bezier?: [x1,y1,x2,y2] (curve mode only, default linear), startAt?: s, order?: 'in'|'stack'|'reverse'|'ascending'|'descending' (re-sorts the list)}" },
     { name: "distribute_property", mutating: true,
       desc: "Distribute a property VALUE across layers. Curve mode: layer " +
             "i gets from + bezierY(i/(n-1)) * (to-from). Equidistant " +
             "mode: pass step and layer i gets from + i*step (from " +
             "defaults to the first layer's current value; step is " +
             "center-to-center, so 100px shapes with a 20px gap = step " +
-            "120). Use step for 'space them every X px / equidistant'.",
-      args: "{comp?: string, layers?: [name|index], property: 'opacity'|'rotation'|'scale'|'position_x'|'position_y', from?: number, to?: number, step?: number (equidistant), bezier?: [x1,y1,x2,y2], order?: 'in'|'stack'|'reverse'}" },
+            "120). Use step for 'space them every X px / equidistant'. " +
+            "A 'layers' list is applied IN THE ORDER GIVEN — layer i of " +
+            "the list gets slot i — so name them in the sequence you " +
+            "want; pass 'order' only to sort them instead.",
+      args: "{comp?: string, layers?: [name|index] (applied in the order given), property: 'opacity'|'rotation'|'scale'|'position_x'|'position_y', from?: number, to?: number, step?: number (equidistant), bezier?: [x1,y1,x2,y2], order?: 'in'|'stack'|'reverse' (re-sorts the list)}" },
     { name: "apply_keyframe_ease", mutating: true,
       desc: "Apply a bezier as TEMPORAL easing between keyframes on one " +
             "property across MANY layers in ONE call (converts to AE " +
@@ -149,14 +177,20 @@
             "stack ascending by default (later chunks HIGHER in the " +
             "stack — bars staircase upward; 'descending' puts chunk 1 on " +
             "top) and end up SELECTED, so follow-up commands can target " +
-            "them by selection.",
+            "them by selection. Cuts always land on whole comp FRAMES, " +
+            "and a piece too short to hold a frame is refused rather " +
+            "than created invisible.",
       args: "{comp?: string, layer?: name|index (omit = selected layer), chunks?: exact piece count, chunkSeconds?: s, offsetPerChunk?: s (extra gaps only), order?: 'ascending'|'descending' (stack order, default ascending)}" },
     { name: "reorder_layers", mutating: true,
       desc: "Restack layers WITHOUT changing their timing. 'ascending' " +
             "(default) = later start times sit higher in the stack (bars " +
             "staircase upward); 'descending' = earliest on top. Targets " +
             "the selection when 'layers' omitted, else every layer in the " +
-            "comp. Use for 'change/sort the layer order'.",
+            "comp. Use for 'change/sort the layer order'. by:'name' sorts " +
+            "numbers inside names numerically ('X 2' before 'X 10'). " +
+            "Layers with equal keys keep the stack order they had. The " +
+            "targets end up CONTIGUOUS, which can push untargeted layers " +
+            "aside — the result reports how many.",
       args: "{comp?: string, layers?: [name|index] (omit = selection, else all), by?: 'startTime'|'inPoint'|'name' (default startTime), order?: 'ascending'|'descending'}" },
     { name: "delete_layer", mutating: true,
       desc: "Delete a layer from a comp.",
@@ -171,8 +205,12 @@
             "like the native 'Scale Composition' script. Uniform factor " +
             "(no distortion): when the aspect changes, mode 'fit' " +
             "letterboxes (default) and 'fill' crops. Parented layers " +
-            "follow their parents automatically. Use this for any 'make " +
-            "the comp WxH' / 'scale the comp' request.",
+            "follow their parents automatically (a parented CAMERA still " +
+            "gets its zoom rescaled — zoom is not inherited). Keyframed " +
+            "transforms come along whole: values, motion-path handles " +
+            "and ease speeds all scale, so animation keeps its shape. " +
+            "Use this for any 'make the comp WxH' / 'scale the comp' " +
+            "request.",
       args: "{comp?: string, width?: px, height?: px (omit one to keep aspect), factor?: number (e.g. 0.5 = half), mode?: 'fit'|'fill'}" },
     { name: "import_file", mutating: true,
       desc: "Import a footage/image/video file into the project.",
@@ -189,9 +227,14 @@
       args: "{comp?: string, layer?: name|index (omit = selected), mask?: name|1-based index, mode?: add|subtract|intersect|lighten|darken|difference|none, feather?: px|[x,y], expansion?: px, opacity?: %, inverted?: bool, name?: string}" },
     { name: "set_mask_path", mutating: true,
       desc: "Replace or ANIMATE a mask's path. Points are LAYER-space " +
-            "[[x,y],…]; curves via inTangents/outTangents (offsets from " +
-            "each vertex). atTime keyframes one shape; keys animates " +
-            "several in one call.",
+            "[[x,y],…]; curves via inTangents/outTangents (one tangent " +
+            "per vertex, as offsets from it). atTime keyframes one " +
+            "shape; keys animates several in one call. EVERY key of one " +
+            "mask must have the SAME number of points — AE cannot " +
+            "interpolate paths with different counts, so pad a simpler " +
+            "shape by repeating a vertex. Key times are moved onto whole " +
+            "comp frames. Use atTime/keys on a path that already has " +
+            "keyframes; a bare vertices list only sets a STATIC path.",
       args: "{comp?: string, layer?: name|index, mask?: name|index, vertices?: [[x,y],…], inTangents?: [[x,y],…], outTangents?: [[x,y],…], closed?: bool (default true), atTime?: s, keys?: [{time: s, vertices, inTangents?, outTangents?}, …]}" },
     { name: "add_shape_content", mutating: true,
       desc: "Add content INSIDE a shape layer: kinds group, rectangle, " +
@@ -245,12 +288,20 @@
             "specific times or all.",
       args: "{comp?: string, layers?: [name|index] | layer?: name|index (omit = selection), property: path, times?: [s, …] (omit = remove ALL)}" },
     { name: "for_each_layer", mutating: true,
-      desc: "Run ANY layer tool once per target layer in ONE call (max " +
+      desc: "Run a PER-LAYER tool once per target layer in ONE call (max " +
             "200 layers) — the batch executor for anything without its " +
             "own layers arg: {tool: 'apply_effect', args: {effect: " +
             "'Gaussian Blur'}} blurs every target. Reports succeeded " +
-            "count + failures.",
-      args: "{comp?: string, layers?: [name|index] (omit = selection, else the comp's only layer), tool: string, args: {…the tool's args, minus comp/layer…}}" },
+            "count + failures. 'tool' must be a tool that takes a single " +
+            "{layer} (apply_effect, set_transform, set_property, " +
+            "set_effect_param, add_mask, duplicate_layer, delete_layer, …); " +
+            "tools with their own {layers} list (set_keyframes, " +
+            "grid_layout, distribute_property, stagger_layers, " +
+            "apply_keyframe_ease, reorder_layers, precompose) are called " +
+            "ONCE directly, and comp/project tools (create_comp, " +
+            "add_solid, add_null, scale_comp) are refused — they have no " +
+            "layer to run on.",
+      args: "{comp?: string, layers?: [name|index] (omit = selection, else the comp's only layer), tool: string (a per-layer tool), args: {…the tool's args, minus comp/layer…}}" },
     { name: "set_track_matte", mutating: true,
       desc: "Use one layer as another's track matte (alpha or luma, " +
             "optionally inverted), or remove it with mode 'none'. No " +
@@ -424,6 +475,14 @@
       "- 'distribute/space layers equidistantly / every X px' =",
       "  distribute_property {property: position_x, step: X} — ONE call,",
       "  never a chain of set_transform/duplicate calls.",
+      "- 'stagger them X frames apart' = stagger_layers {stepFrames: X}.",
+      "  stagger_layers 'spread' is the TOTAL span of the whole stagger,",
+      "  NOT the gap between layers — for a per-layer gap use step /",
+      "  stepFrames, or the nine layers land half a frame apart.",
+      "- add_text_layer already starts new text from a clean baseline",
+      "  (white, 72px, tracking 0, auto leading, a plain sans) — do NOT",
+      "  follow it with set_text_style just to undo AE's Character",
+      "  panel. Only pass the fields the user actually asked for.",
       "",
       "Universal property access (reach ANY parameter in AE):",
       "- Unknown parameter, effect setting, mask or text property? NEVER",
@@ -454,10 +513,13 @@
       "  repeaters/trim_paths inside it via {group}. Set initial values",
       "  with params; animate them with set_keyframes on",
       "  'contents/<Group>/<Item>/<Param>' paths.",
+      "- Mask path keys must all carry the SAME point count (repeat a",
+      "  vertex to pad); AE cannot tween paths of different counts.",
       "- 'animate the mask / wipe it on' = set_mask_path {keys: […]} or",
       "  add trim_paths and keyframe its End — never hand-write",
       "  expressions for plain keyframe animation.",
-      "- Curve requests: 'stagger with an ease' = stagger_layers;",
+      "- Curve requests: 'stagger with an ease' = stagger_layers with",
+      "  spread + bezier (step mode is evenly spaced, no curve);",
       "  'ramp opacity/scale across these layers' = distribute_property;",
       "  'ease between the keyframes' = apply_keyframe_ease. All take the",
       "  same CSS-style bezier [x1,y1,x2,y2].",
@@ -672,18 +734,22 @@
     }
   };
 
+  /** JSON, as an ExtendScript string literal holding that JSON. */
+  function jsxJsonLiteral(value) {
+    // U+2028/U+2029 are legal raw inside modern JSON.stringify output but
+    // are line terminators to ExtendScript (ES3) — they'd kill the eval.
+    return JSON.stringify(JSON.stringify(value))
+      .replace(/\u2028/g, "\\u2028")
+      .replace(/\u2029/g, "\\u2029");
+  }
+
   /** Call one host tool. cb(resultObject) — never throws. */
   function callHostTool(tool, args, cb) {
     if (!isKnownTool(tool)) {
       cb({ ok: false, error: "Unknown tool: " + tool });
       return;
     }
-    var argsLiteral = JSON.stringify(JSON.stringify(args || {}));
-    // U+2028/U+2029 are legal raw inside modern JSON.stringify output but
-    // are line terminators to ExtendScript (ES3) — they'd kill the eval.
-    argsLiteral = argsLiteral
-      .replace(/\u2028/g, "\\u2028")
-      .replace(/\u2029/g, "\\u2029");
+    var argsLiteral = jsxJsonLiteral(args || {});
     var script = 'AELL_call("' + tool + '", ' + argsLiteral + ')';
     global.AEBridge.evalScript(script, function (result, isError) {
       if (isError) {
@@ -702,12 +768,129 @@
     });
   }
 
+  // ---------------------------------------------------- project state
+  //
+  // The state block that opens every system prompt. Two rules, both paid
+  // for in the field (measured in AE 2026: a 200-layer comp in a 206-item
+  // project serialized to 49 KB against a 6 KB budget):
+  //
+  //  1. Nothing here is byte-sliced. A `slice(0, 6000)` cut the JSON in
+  //     the middle of an object, so the model read a mangled fragment.
+  //     Rows are dropped WHOLE and the count of what went missing is
+  //     handed to the model instead.
+  //  2. The project list can never starve the comp. `project` used to be
+  //     serialized first, so 206 items ate the entire budget and the
+  //     activeComp — the layers, and which of them the user had SELECTED
+  //     — never reached the model at all. activeComp is written FIRST and
+  //     trimmed LAST.
+
+  var STATE_BUDGET = 6000;
+
+  /** Drop whole rows until the state fits; report what was dropped. */
+  function budgetState(state) {
+    function size() { return JSON.stringify(state).length; }
+    var comp = state.activeComp;
+    var proj = state.project;
+
+    // Project items go first: the comp the user is looking at matters
+    // more than the rest of the project panel. Footage is dropped before
+    // comps and folders, and the ACTIVE comp is never dropped — those are
+    // the names the model has to quote back as arguments.
+    function droppableItem(list, activeName) {
+      var i;
+      for (i = list.length - 1; i >= 0; i--) {
+        if (list[i].type === "footage") return i;
+      }
+      for (i = list.length - 1; i >= 0; i--) {
+        if (list[i].name !== activeName) return i;
+      }
+      return -1;
+    }
+    while (size() > STATE_BUDGET && proj && proj.items && proj.items.length) {
+      var drop = droppableItem(proj.items, proj.activeComp);
+      if (drop < 0) break;         // only the active comp left — keep it
+      proj.items.splice(drop, 1);
+      proj.itemsShown = proj.items.length;
+      proj.note = "Showing " + proj.items.length + " of " + proj.numItems +
+        " items (comps and folders first) — call get_project_info with " +
+        "limit:0 for the whole project.";
+    }
+    // Then unselected layers, from the bottom of the window up.
+    while (size() > STATE_BUDGET && comp && comp.layers &&
+           comp.layers.length) {
+      var i = comp.layers.length - 1;
+      while (i >= 0 && comp.layers[i].selected) i--;
+      if (i < 0) break;              // only selected layers left — keep them
+      comp.layers.splice(i, 1);
+      comp.layersShown = comp.layers.length;
+      comp.note = "Showing " + comp.layers.length + " of " + comp.numLayers +
+        " layers (selected layers always included) — call get_comp_details " +
+        "with start/limit to page through the rest.";
+    }
+    return JSON.stringify(state);
+  }
+
+  /**
+   * Build the state block. cb(jsonString) — always a STRING, and always
+   * valid JSON unless the host itself was unreachable.
+   */
+  function fetchProjectState(cb) {
+    callHostTool("get_project_info", { limit: 40 }, function (info) {
+      if (!info.ok) { cb("(project state unavailable)"); return; }
+      callHostTool("get_comp_details", { limit: 40 }, function (comp) {
+        // activeComp FIRST: whatever else is lost downstream, the comp
+        // the user is actually looking at survives.
+        var state = {};
+        if (comp.ok) state.activeComp = comp.data;
+        state.project = info.data;
+        cb(budgetState(state));
+      });
+    });
+  }
+
+  /** Call a run of host tools in ONE undo group. cb(resultsArray). */
+  function callHostBatch(cmds, cb) {
+    var payload = cmds.map(function (c) {
+      return { tool: c.tool, args: c.args || {} };
+    });
+    var argsLiteral = jsxJsonLiteral(payload);
+    global.AEBridge.evalScript(
+      "AELL_callBatch(" + argsLiteral + ")",
+      function (result, isError) {
+        function allFailed(err) {
+          cb(cmds.map(function () { return { ok: false, error: err }; }));
+        }
+        if (isError) {
+          allFailed("ExtendScript error (see AE) running a batch of " +
+                    cmds.length + " tools");
+          return;
+        }
+        var obj = null;
+        try { obj = JSON.parse(result); } catch (e) {}
+        var rows = obj && obj.data ? obj.data.results : null;
+        if (!obj || !obj.ok || !rows || rows.length !== cmds.length) {
+          allFailed("Bad host batch response: " +
+                    String(result).slice(0, 200));
+          return;
+        }
+        cb(rows);
+      });
+  }
+
   var MAX_COMMANDS_PER_ROUND = 20;
 
   /**
-   * Execute a command list sequentially.
+   * Execute a command list in order.
+   *
+   * Consecutive AE-host tools are sent as ONE batched call so the whole
+   * chat command collapses into a single Ctrl+Z. That has to happen in one
+   * evalScript: an undo group does not survive the end of the script
+   * execution that opened it, so per-tool calls can only ever be per-tool
+   * undo steps. Panel-side tools, malformed commands and dry-run stubs are
+   * still handled one at a time, and each of them ends the current run.
+   *
    * onEach(index, command, result) fires per command; done(results) at end.
-   * opts: {dryRun?: bool, shouldStop?: fn -> bool (checked between commands)}
+   * opts: {dryRun?: bool, shouldStop?: fn -> bool (checked between runs)}
    */
   function executeCommands(commands, opts, onEach, done) {
     opts = opts || {};
@@ -716,6 +899,23 @@
     if (commands.length > MAX_COMMANDS_PER_ROUND) {
       commands = commands.slice(0, MAX_COMMANDS_PER_ROUND);
     }
+
+    // A command can join a batched host run only if it goes to the host
+    // unconditionally — anything the panel answers itself would lose its
+    // turn order if it were folded into the host call.
+    function batchable(cmd) {
+      return cmd && typeof cmd.tool === "string" && isKnownTool(cmd.tool) &&
+        !Object.prototype.hasOwnProperty.call(PANEL_TOOLS, cmd.tool) &&
+        !(dryRun && MUTATING[cmd.tool]);
+    }
+
+    function deliver(startIndex, rows) {
+      for (var k = 0; k < rows.length; k++) {
+        results.push(rows[k]);
+        if (onEach) onEach(startIndex + k, commands[startIndex + k], rows[k]);
+      }
+    }
+
     function step(i) {
       if (i >= commands.length) { done(results); return; }
       if (opts.shouldStop && opts.shouldStop()) {
@@ -725,6 +925,21 @@
         return;
       }
       var cmd = commands[i] || {};
+
+      if (batchable(cmd)) {
+        var end = i + 1;
+        while (end < commands.length && batchable(commands[end])) end++;
+        var run = commands.slice(i, end);
+        var settledBatch = false;
+        callHostBatch(run, function (rows) {
+          if (settledBatch) return;
+          settledBatch = true;
+          deliver(i, rows);
+          step(end);
+        });
+        return;
+      }
+
       // A buggy tool must not be able to double-invoke the continuation —
       // that would fork the remaining command list and the chat round.
       var settled = false;
@@ -779,7 +994,9 @@
     TOOL_DEFS: TOOL_DEFS,
     RESPONSE_SCHEMA: RESPONSE_SCHEMA,
     buildSystemPrompt: buildSystemPrompt,
+    fetchProjectState: fetchProjectState,
     callHostTool: callHostTool,
+    callHostBatch: callHostBatch,
     executeCommands: executeCommands,
     setProgressSink: function (fn) { progressSink = fn; }
   };

@@ -75,9 +75,34 @@ themselves inside the scratch comp.
 
 ## 4. Field-quality passes
 
-- Run the panel like a user: the 8-step chat checklist in the README
-  era (grid, batch animation, masks, mattes, equidistant distribution,
-  parenting). File exact failing transcripts in commits or notes.
+- Run the panel like a user: `node scripts/chat-probe.js` drives the
+  whole product path headless (real settings -> real llama-server ->
+  real tools.js -> real AE) through an 8-step checklist and writes a
+  transcript to `logs/`. DONE 2026-08-21 (7/8, one real bug fixed).
+  Re-run it after any change to tools.js, the system prompt, or a
+  batch tool — it is the only thing that tests the MODEL's half.
+  Open follow-ups it filed, each its own pass:
+  - ~~`stagger_layers` `spread` is a TOTAL, but users say "4 frames
+    apart"~~ DONE 2026-08-21: the tool takes `step` (seconds) and
+    `stepFrames`, refuses spread+step together, and flags a spread
+    that works out to under a frame per layer. Probe re-run: the model
+    now sends `stepFrames: 4`.
+  - ~~`add_text_layer` inherits AE's last-used character panel style~~
+    DONE 2026-08-21: it does normalize. A new layer starts from a
+    documented baseline (white, 72px, tracking 0, auto leading, left,
+    no faux/stroke, a verified-installed plain sans) and the caller's
+    args override it; `inheritStyle: true` keeps AE's Character panel.
+    `set_text_style` still never normalizes — it edits a layer the
+    user owns. AE 2026 makes allCaps/smallCaps/superscript/subscript
+    READ-ONLY, so an inherited one is reported instead of swallowed.
+  - the checklist never touches ComfyUI, undo across a mixed round, or
+    a second chat turn that refers back ("make them blue instead").
+  - a round that fails PART WAY leaves its debris behind: when
+    `duplicate_layer` errored before `add_solid` had a layer to copy,
+    the model retried the whole round and the comp ended with TEN red
+    squares, nine spread and one orphan parked at the centre. The tools
+    each behaved correctly (grounded error, successful retry); what is
+    missing is any notion of rolling a failed round back.
 - Undo hygiene: each chat command should be one Ctrl+Z step (undo
   groups) — verify for the batch tools.
 - Performance: 200-layer comps — measure grid_layout and batch
@@ -90,4 +115,6 @@ themselves inside the scratch comp.
   workflow + model picks).
 - Phase D animation utilities and Phase E roto/tracking hybrids
   (docs/NATIVE_COVERAGE_PLAN.md) — verify them when they land.
-- Releases, version bumps, PRs into main, the update feed.
+- Minor/major version bumps, PRs into main, release notes. PATCH bumps
+  are YOURS: `node scripts/bump-version.js patch` before pushing a fix
+  you verified in real AE, or it never reaches a panel (see CLAUDE.md).

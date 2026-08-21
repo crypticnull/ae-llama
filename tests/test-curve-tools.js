@@ -14,13 +14,31 @@ function Prop(value) {
   this._keyValues = [];
   this._eases = {};
 }
-Object.defineProperty(Prop.prototype, "value", { get() { return this._value; } });
+// Faithful to AE: `.value` on an EXPRESSION-DRIVEN property is the
+// expression's EVALUATED result, not the value underneath it. The stub
+// used to hand back whatever was last written, which made an ignored
+// write indistinguishable from a real one — and that is precisely the
+// bug the field found (a grid_layout rig drove Position, distribute_property
+// wrote nine x values AE accepted and discarded, and the tool reported
+// them as applied). `_exprValue` is what the expression computes; set it
+// to model a rig that ignores `value`, leave it undefined to model an
+// expression that passes writes through (`value + wiggle(2, 30)`).
+Object.defineProperty(Prop.prototype, "value", {
+  get() {
+    if (this.expressionEnabled && typeof this._exprValue !== "undefined") {
+      return this._exprValue;
+    }
+    return this._value;
+  }
+});
 Prop.prototype.setValue = function (v) {
   // Faithful to AE: setValue on a keyframed property throws.
   if (this.numKeys > 0) {
     throw new Error("Cannot set a value on a property with keyframes; " +
                     "use setValueAtTime or setValueAtKey instead.");
   }
+  // Also faithful: AE ACCEPTS the write on a driven property. It just
+  // never shows it.
   this._value = v;
 };
 Prop.prototype.keyTime = function (i) { return this._keyTimes[i - 1]; };
@@ -64,7 +82,13 @@ Layer.prototype.property = function (name) {
   return null;
 };
 
-function Comp(name) { this.name = name; this._layers = []; this.time = 0; }
+function Comp(name) {
+  this.name = name; this._layers = []; this.time = 0;
+  // Real comps have a frame grid, and stagger_layers measures its own
+  // spacing against it — a stub without one cannot see a stagger that
+  // lands every layer on the same frame.
+  this.frameRate = 30; this.frameDuration = 1 / 30;
+}
 Comp.prototype.layer = function (ref) {
   const l = typeof ref === "number" ? this._layers[ref - 1]
     : this._layers.find(x => x.name === ref);
@@ -208,6 +232,77 @@ assert(near(comp.layer("L1").startTime, 2) &&
        near(comp.layer("L2").startTime, 12),
        "layers span work area 2..12 with the default linear curve");
 
+// 7a. stagger GAP mode. Field bug: "stagger them 4 frames apart" reached
+// the tool as spread 0.133 across nine layers — spread is the TOTAL span,
+// so that is half a frame each and every layer lands on the same frame —
+// and the tool reported nine placements without a word. Frames are the
+// unit designers speak in, so the tool takes them.
+comp._layers.forEach(l => { l.selected = false; l.startTime = 0; });
+r = call("stagger_layers",
+         { layers: ["L1", "L2", "L3", "L4", "L5"], stepFrames: 4,
+           startAt: 0 });
+starts = ["L1", "L2", "L3", "L4", "L5"].map(nm => comp.layer(nm).startTime);
+assert(r.ok && [0, 4, 8, 12, 16].every((f, i) =>
+         near(starts[i], f / 30, 1e-6)),
+       "stepFrames: 4 puts consecutive layers 4 frames apart (got " +
+       starts.map(v => (v * 30).toFixed(2) + "f") + ")");
+assert(r.ok && near(r.data.step, 0.133) && r.data.stepFrames === 4 &&
+       near(r.data.spread, 0.533),
+       "gap mode reports step, stepFrames and the TOTAL it works out to (" +
+       JSON.stringify(r.ok ? [r.data.step, r.data.stepFrames, r.data.spread]
+                           : r.error) + ")");
+
+// step in seconds is the same door; a quoted number must not be dropped.
+r = call("stagger_layers",
+         { layers: ["L1", "L2", "L3"], step: "0.5", startAt: 1 });
+assert(r.ok && near(comp.layer("L2").startTime, 1.5) &&
+       near(comp.layer("L3").startTime, 2),
+       "step accepts a quoted number and spaces layers by it (got " +
+       ["L1", "L2", "L3"].map(nm => comp.layer(nm).startTime) + ")");
+
+// The two units mean different things, so asking for both is a refusal
+// that says which is which — not a silent pick.
+r = call("stagger_layers",
+         { layers: ["L1", "L2", "L3"], step: 0.5, spread: 4 });
+assert(!r.ok && /TOTAL span/.test(r.error) && /BETWEEN/.test(r.error),
+       "spread + step together is refused with both meanings spelled out: " +
+       (r.error || "(accepted!)"));
+r = call("stagger_layers",
+         { layers: ["L1", "L2"], step: 0.5, stepFrames: 4 });
+assert(!r.ok && /not both/.test(r.error),
+       "step + stepFrames together is refused: " + (r.error || "(accepted!)"));
+
+// The original bug, verbatim: spread that works out to under a frame per
+// layer. The placement is honored (the caller may mean it) but the answer
+// has to name the unit confusion and the argument that fixes it.
+r = call("stagger_layers",
+         { layers: ["L1", "L2", "L3", "L4", "L5"], spread: 0.133,
+           startAt: 0 });
+assert(r.ok && /TOTAL/.test(r.data.note || "") &&
+       /step: 0\.133/.test(r.data.note || ""),
+       "a sub-frame spread says spread is the TOTAL and names step: " +
+       (r.ok ? (r.data.note || "(no note)") : r.error));
+assert(r.ok && near(r.data.perLayer, 0.033) &&
+       near(r.data.perLayerFrames, 1, 0.01),
+       "curve mode reports the per-layer gap in seconds AND frames (" +
+       (r.ok ? r.data.perLayer + "s / " + r.data.perLayerFrames + "f"
+             : r.error) + ")");
+// ...and a spread that is comfortably over a frame per layer says nothing.
+r = call("stagger_layers",
+         { layers: ["L1", "L2", "L3", "L4", "L5"], spread: 4, startAt: 0 });
+assert(r.ok && !r.data.note,
+       "a sane spread gets no scolding (note: " +
+       (r.ok ? r.data.note : r.error) + ")");
+
+// A bezier in gap mode is not silently obeyed or silently dropped.
+r = call("stagger_layers",
+         { layers: ["L1", "L2", "L3"], stepFrames: 6, startAt: 0,
+           bezier: [0, 0, 0.58, 1] });
+assert(r.ok && near(comp.layer("L2").startTime, 6 / 30) &&
+       /bezier was not used/.test(r.data.note || ""),
+       "gap mode stays evenly spaced and says the bezier went unused: " +
+       (r.ok ? (r.data.note || "(no note)") : r.error));
+
 // 7b. equidistant step mode: "space them every 120px" in one call
 comp.layer("L1")._transform["ADBE Position"].setValue([200, 540]);
 r = call("distribute_property", {
@@ -277,9 +372,25 @@ assert(/animated/i.test(r.error || "") && /2 keyframes/.test(r.error || "") &&
 
 const driven = comp.layer("L2");
 driven._transform["ADBE Opacity"].expressionEnabled = true;
+driven._transform["ADBE Opacity"]._exprValue = 100;   // rig ignores `value`
 r = call("set_transform", { layer: "L2", property: "opacity", value: 25 });
 assert(r.ok && /expression/i.test((r.data && r.data.warning) || ""),
        "driven property: write succeeds but warns it is overridden (got: " +
+       ((r.data && r.data.warning) || "") + ")");
+assert(r.data.applied === false,
+       "…and says applied:false, so a summary reader cannot read it as done");
+assert(/100/.test(r.data.warning) && /25/.test(r.data.warning),
+       "…and quotes what the comp really shows vs what was asked (got: " +
+       r.data.warning + ")");
+
+// The other half of the same coin: an expression that CONSUMES the value
+// (`value + wiggle(…)`) really does move when you write to it, so warning
+// about it would be a false alarm. Only the read-back can tell them apart.
+const passthru = comp.layer("L3");
+passthru._transform["ADBE Opacity"].expressionEnabled = true;
+r = call("set_transform", { layer: "L3", property: "opacity", value: 25 });
+assert(r.ok && !(r.data && r.data.warning),
+       "a pass-through expression is NOT warned about (got: " +
        ((r.data && r.data.warning) || "") + ")");
 
 // One un-writable layer must not abort the spread for the others.
@@ -299,5 +410,125 @@ assert(r.data.applied.length === 2,
 assert(/1 of 3/.test(r.data.note || ""),
        "…and the note counts what was left out (got: " +
        (r.data.note || "") + ")");
+
+// 11b. The field case, from a real chat transcript: "add nine squares in a
+// 3x3 grid" (grid_layout rigs Position to an expression), then "spread them
+// equally across the width". AE accepted all nine writes and showed none of
+// them, and the tool answered with nine `applied` rows of values that were
+// not in the comp — the summary a model (or a user skimming) reads first.
+// A driven-and-ignored layer belongs with the ones that did not move.
+const rigged = ["L3", "L4", "L5"];
+for (const n of rigged) {
+  const p = comp.layer(n)._transform["ADBE Position"];
+  p.expressionEnabled = true;
+  p._exprValue = [940, 500];      // what the grid rig computes, always
+}
+r = call("distribute_property", {
+  property: "position_x", layers: rigged, from: 200, to: 1720, step: 180,
+  order: "stack"
+});
+assert(r.ok, "distribute over a rigged grid still answers (" +
+       (r.error || "") + ")");
+assert(r.data.applied.length === 0,
+       "…and claims NOTHING was applied, because nothing moved (got " +
+       JSON.stringify(r.data.applied) + ")");
+assert(Array.isArray(r.data.overriddenByExpression) &&
+       r.data.overriddenByExpression.length === 3,
+       "…it lists the three layers the expression overrode (got " +
+       JSON.stringify(r.data.overriddenByExpression) + ")");
+assert(/3 of 3/.test(r.data.note || "") &&
+       /expression/i.test(r.data.note || "") &&
+       /set_expression/.test(r.data.note || ""),
+       "…and the note counts them and names the way out (got: " +
+       (r.data.note || "") + ")");
+// The honest answer also has to FIT: the panel caps each tool result at
+// 1200 chars, and the version that failed in the field spent 1600 of them
+// on nine repeated warning sentences, so the truth was what got cut.
+assert(JSON.stringify(r.data).length < 1200,
+       "…and the whole result still fits the panel's 1200-char cap (got " +
+       JSON.stringify(r.data).length + ")");
+for (const n of rigged) {
+  const p = comp.layer(n)._transform["ADBE Position"];
+  p.expressionEnabled = false;
+  delete p._exprValue;
+}
+
+// 12. An explicit 'layers' list is an ORDER, not a set. The tool used to
+// re-sort it by inPoint, so a grid whose layers all sit at inPoint 0 got
+// its values handed out in whatever order the sort felt like. Measured in
+// AE 2026 on five solids all at inPoint 0: the SAME call produced
+// P2,P3,P4,P5,P1 once and P4,P3,P2,P1,P5 with the list reversed - neither
+// the caller's order nor the stack's, and not repeatable.
+//
+// Node's Array.sort is STABLE, so that scramble cannot reproduce by
+// running the code. This shim makes the host's sort behave the way
+// ExtendScript's actually does - a legal permutation before sorting,
+// which disturbs TIED keys only.
+function withUnstableSort(fn) {
+  const real = Array.prototype.sort;
+  Array.prototype.sort = function (cmp) {
+    this.reverse();
+    return real.call(this, cmp);
+  };
+  try { return fn(); } finally { Array.prototype.sort = real; }
+}
+
+const flat = [];
+for (let i = 0; i < 5; i++) {
+  const f = new Layer("F" + (i + 1), comp, 0);   // every inPoint tied at 0
+  f.selected = false;
+  comp._layers.push(f);
+  flat.push(f);
+}
+const fx = () => ["F1", "F2", "F3", "F4", "F5"].map(n =>
+  comp.layer(n)._transform["ADBE Position"].value[0]);
+
+r = withUnstableSort(() => call("distribute_property", {
+  property: "position_x", from: 100, step: 100,
+  layers: ["F1", "F2", "F3", "F4", "F5"]
+}));
+assert(r.ok && [100, 200, 300, 400, 500].every((v, i) => near(fx()[i], v)),
+       "step mode honors the caller's layer order when inPoints all tie " +
+       "(got " + fx() + ")");
+
+r = withUnstableSort(() => call("distribute_property", {
+  property: "position_x", from: 100, step: 100,
+  layers: ["F5", "F4", "F3", "F2", "F1"]
+}));
+assert(r.ok && [500, 400, 300, 200, 100].every((v, i) => near(fx()[i], v)),
+       "...and reversing the list reverses the spread (got " + fx() + ")");
+assert(r.data.applied.map(a => a.layer).join("|") === "F5|F4|F3|F2|F1",
+       "...and 'applied' reports the order the values actually went out " +
+       "in (got " + r.data.applied.map(a => a.layer).join("|") + ")");
+
+// An explicit 'order' still overrides the list order - that is what it is for.
+r = withUnstableSort(() => call("distribute_property", {
+  property: "position_x", from: 100, step: 100, order: "stack",
+  layers: ["F5", "F4", "F3", "F2", "F1"]
+}));
+assert(r.ok && [100, 200, 300, 400, 500].every((v, i) => near(fx()[i], v)),
+       "order:'stack' re-sorts a reversed list back to stack order (got " +
+       fx() + ")");
+
+// Same rule for stagger_layers: the list is the sequence.
+r = withUnstableSort(() => call("stagger_layers", {
+  layers: ["F5", "F4", "F3", "F2", "F1"], spread: 4, startAt: 0
+}));
+const fst = ["F1", "F2", "F3", "F4", "F5"].map(n => comp.layer(n).startTime);
+assert(r.ok && [4, 3, 2, 1, 0].every((v, i) => near(fst[i], v)),
+       "stagger_layers honors the caller's layer order too (got " +
+       fst.map(v => v.toFixed(1)) + ")");
+
+// Selection-based targeting has no caller order, so it still sorts - and
+// must do it without leaning on a stable sort.
+flat.forEach((f, i) => { f.selected = true; f.inPoint = 4 - i; });
+comp._layers.forEach(l => { if (flat.indexOf(l) === -1) l.selected = false; });
+r = withUnstableSort(() => call("distribute_property", {
+  property: "rotation", from: 0, step: 10
+}));
+const rots = ["F1", "F2", "F3", "F4", "F5"].map(n =>
+  comp.layer(n)._transform["ADBE Rotate Z"].value);
+assert(r.ok && [40, 30, 20, 10, 0].every((v, i) => near(rots[i], v)),
+       "selection default still sorts by inPoint (got " + rots + ")");
 
 console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");

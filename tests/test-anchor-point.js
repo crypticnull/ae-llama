@@ -41,6 +41,22 @@ Prop.prototype.setValue = function (v) {
   this._value = v;
 };
 Prop.prototype.keyTime = function (i) { return this._keyTimes[i - 1]; };
+// AE reads an animated property through valueAtTime(t, preExpression).
+// Held outside the key range, linearly interpolated between keys -- the
+// in-between shape is an approximation, but AT a key time it returns that
+// key's value exactly, which is all the assertions below rely on.
+Prop.prototype.valueAtTime = function (t, preExpression) {
+  if (this.numKeys === 0) return this._value;
+  const ts = this._keyTimes, vs = this._keyValues;
+  if (t <= ts[0]) return vs[0];
+  if (t >= ts[this.numKeys - 1]) return vs[this.numKeys - 1];
+  let i = 0;
+  while (i < this.numKeys - 2 && ts[i + 1] < t) i++;
+  const f = (t - ts[i]) / (ts[i + 1] - ts[i]);
+  const a = vs[i], b = vs[i + 1];
+  if (typeof a === "number") return a + (b - a) * f;
+  return a.map((av, j) => av + (b[j] - av) * f);
+};
 Prop.prototype.keyValue = function (i) { return this._keyValues[i - 1]; };
 Prop.prototype.setValueAtKey = function (i, v) { this._keyValues[i - 1] = v; };
 Prop.prototype.setValueAtTime = function (t, v) {
@@ -235,7 +251,84 @@ assert(r.ok && near(T(L)["ADBE Position"].value[0], 100) &&
        "3D layer: position untouched and the note says why (got: " +
        ((r.data && r.data.note) || "") + ")");
 
-// 10. The stub itself must be faithful, or every assertion above is
+// 11. THE SECOND BUG, found in real AE. Scale and Rotation can be
+//     animated TOO, which makes the compensation delta time-dependent.
+//     The old code took ONE delta at the current time and applied it to
+//     every Position key, so the layer sat still at that time and drifted
+//     everywhere else (measured at up to 37px in AE 2026 via toComp).
+//     Scale 100% -> 200% doubles the delta at the second key.
+L = fresh("animScale");
+let posK = T(L)["ADBE Position"];
+posK.numKeys = 2;
+posK._keyTimes = [0, 1];
+posK._keyValues = [[0, 0, 0], [100, 100, 0]];
+let sclK = T(L)["ADBE Scale"];
+sclK.numKeys = 2;
+sclK._keyTimes = [0, 1];
+sclK._keyValues = [[100, 100, 100], [200, 200, 100]];
+r = call("center_anchor_point", { layer: "animScale" });
+assert(r.ok, "animated scale: succeeds (" + (r.error || "") + ")");
+assert(near(posK._keyValues[0][0], 50) && near(posK._keyValues[0][1], 50),
+       "animated scale: key at t=0 uses scale 100% -> [50,50] (got " +
+       posK._keyValues[0] + ")");
+assert(near(posK._keyValues[1][0], 200) && near(posK._keyValues[1][1], 200),
+       "animated scale: key at t=1 uses scale 200% -> [200,200], NOT the " +
+       "t=0 delta (got " + posK._keyValues[1] + ")");
+
+// 12. Same for an animated Rotation: 0 -> 90 degrees turns the (+50,+50)
+//     layer-space shift into (-50,+50) at the second key only.
+L = fresh("animRot");
+posK = T(L)["ADBE Position"];
+posK.numKeys = 2;
+posK._keyTimes = [0, 1];
+posK._keyValues = [[0, 0, 0], [100, 100, 0]];
+const rotK = T(L)["ADBE Rotate Z"];
+rotK.numKeys = 2;
+rotK._keyTimes = [0, 1];
+rotK._keyValues = [0, 90];
+r = call("center_anchor_point", { layer: "animRot" });
+assert(r.ok && near(posK._keyValues[0][0], 50) &&
+       near(posK._keyValues[0][1], 50),
+       "animated rotation: key at t=0 unrotated -> [50,50] (got " +
+       posK._keyValues[0] + ")");
+assert(near(posK._keyValues[1][0], 50) && near(posK._keyValues[1][1], 150),
+       "animated rotation: key at t=1 rotated 90deg -> [50,150] (got " +
+       posK._keyValues[1] + ")");
+assert(/exact at the Position keyframes/.test((r.data && r.data.note) || ""),
+       "animated rig: note admits the in-between drift it cannot remove " +
+       "(got: " + ((r.data && r.data.note) || "") + ")");
+
+// 13. Animated rig but a STATIC Position: no single value can hold the
+//     layer still, so the note must warn instead of claiming it did.
+L = fresh("rigNoPosKeys");
+const sclR = T(L)["ADBE Scale"];
+sclR.numKeys = 2;
+sclR._keyTimes = [0, 1];
+sclR._keyValues = [[100, 100, 100], [200, 200, 100]];
+r = call("center_anchor_point", { layer: "rigNoPosKeys" });
+assert(r.ok && /WARNING/.test((r.data && r.data.note) || "") &&
+       /drifts/.test((r.data && r.data.note) || ""),
+       "animated rig + static position: warns it holds at one time only " +
+       "(got: " + ((r.data && r.data.note) || "") + ")");
+
+// 14. A rig can also be an EXPRESSION, which has no keyframes at all --
+//     the same time-dependence, invisible to a numKeys check.
+L = fresh("drivenScale");
+T(L)["ADBE Scale"].expressionEnabled = true;
+r = call("center_anchor_point", { layer: "drivenScale" });
+assert(r.ok && /WARNING/.test((r.data && r.data.note) || ""),
+       "expression-driven scale counts as animated too (got: " +
+       ((r.data && r.data.note) || "") + ")");
+
+// 15. Stub fidelity for the new path: valueAtTime must return each key's
+//     own value, or cases 11-12 would pass for the wrong reason.
+const vp = new Prop(0);
+vp.numKeys = 2; vp._keyTimes = [0, 1]; vp._keyValues = [10, 20];
+assert(vp.valueAtTime(0, false) === 10 && vp.valueAtTime(1, false) === 20 &&
+       near(vp.valueAtTime(0.5, false), 15),
+       "stub fidelity: valueAtTime is exact at keys and interpolates between");
+
+// 16. The stub itself must be faithful, or every assertion above is
 //     theatre: prove setValue really does throw on a keyed property.
 let threw = false;
 const probe = new Prop([0, 0, 0]);

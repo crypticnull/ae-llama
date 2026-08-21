@@ -24,6 +24,18 @@ function Prop(value) {
   this.numKeys = 0;
   this._keyTimes = [];
   this._keyValues = [];
+  // Everything a keyframe carries BESIDES its value. setValueAtKey moves
+  // the value and leaves all of this behind, still in the old comp's
+  // units -- which is exactly how a curved path survived a resize with
+  // full-size handles.
+  this._inTan = [];
+  this._outTan = [];
+  this._autoBez = [];
+  this._inEase = [];
+  this._outEase = [];
+  this._inType = [];
+  this._outType = [];
+  this.isSpatial = false;
   this.locked = false;
 }
 Object.defineProperty(Prop.prototype, "value", {
@@ -44,17 +56,102 @@ Prop.prototype.setValue = function (v) {
 };
 Prop.prototype.keyTime = function (i) { return this._keyTimes[i - 1]; };
 Prop.prototype.keyValue = function (i) { return this._keyValues[i - 1]; };
+// setValueAtKey writes ONLY the value: tangents, eases and interpolation
+// types are left exactly as they were. Verified in real AE 2026.
 Prop.prototype.setValueAtKey = function (i, v) { this._keyValues[i - 1] = v; };
+
+/* Add a keyframe with everything it carries. Defaults match AE's: a
+ * spatial key comes out auto-bezier, a temporal one linear with no ease. */
+Prop.prototype.addKey = function (time, value, opts) {
+  const o = opts || {};
+  const n = this.numKeys;
+  this._keyTimes[n] = time;
+  this._keyValues[n] = value;
+  this._inTan[n] = o.inTan || [0, 0, 0];
+  this._outTan[n] = o.outTan || [0, 0, 0];
+  this._autoBez[n] = o.autoBez !== false;
+  const dims = this.isSpatial ? 1
+    : (Array.isArray(value) ? value.length : 1);
+  // A side nobody has eased reports speed 0 AND influence 0 -- the value
+  // its own constructor rejects. Built directly, not via KeyframeEase,
+  // exactly as AE reports it.
+  const mk = (sp, infl) => {
+    const arr = [];
+    for (let d = 0; d < dims; d++) {
+      arr.push({ speed: sp, influence: sp ? (infl || 33) : 0 });
+    }
+    return arr;
+  };
+  this._inEase[n] = mk(o.inSpeed || 0, o.inInfluence);
+  this._outEase[n] = mk(o.outSpeed || 0, o.outInfluence);
+  this._inType[n] = o.inType || KeyframeInterpolationType.LINEAR;
+  this._outType[n] = o.outType || KeyframeInterpolationType.LINEAR;
+  this.numKeys = n + 1;
+  return this;
+};
+Prop.prototype.keySpatialAutoBezier = function (i) {
+  return this._autoBez[i - 1];
+};
+Prop.prototype.keyInSpatialTangent = function (i) { return this._inTan[i - 1]; };
+Prop.prototype.keyOutSpatialTangent = function (i) { return this._outTan[i - 1]; };
+Prop.prototype.setSpatialTangentsAtKey = function (i, tin, tout) {
+  if (!this.isSpatial) {
+    throw new Error("After Effects error: property is not spatial.");
+  }
+  this._inTan[i - 1] = tin;
+  this._outTan[i - 1] = tout;
+  // Handing AE explicit handles switches auto-bezier OFF.
+  this._autoBez[i - 1] = false;
+};
+Prop.prototype.keyInTemporalEase = function (i) { return this._inEase[i - 1]; };
+Prop.prototype.keyOutTemporalEase = function (i) { return this._outEase[i - 1]; };
+Prop.prototype.setTemporalEaseAtKey = function (i, ein, eout) {
+  // The padded-dims rule, with AE's own refusal: 1 ease for a SPATIAL
+  // property, one per PADDED scripting component for everything else --
+  // so Scale on a 2D layer demands 3, not 2.
+  const v = this._keyValues[i - 1];
+  const need = this.isSpatial ? 1 : (Array.isArray(v) ? v.length : 1);
+  if (ein.length !== need || eout.length !== need) {
+    throw new Error("After Effects error: Unable to call " +
+      "“setTemporalEaseAtKey” because of parameter 2. " +
+      "Value array does not have " + need + " elements.");
+  }
+  this._inEase[i - 1] = ein;
+  this._outEase[i - 1] = eout;
+  // Real AE 2026: writing an ease flips BOTH sides of the key to bezier,
+  // even a HOLD one. Anything that touches ease must put the types back.
+  this._inType[i - 1] = KeyframeInterpolationType.BEZIER;
+  this._outType[i - 1] = KeyframeInterpolationType.BEZIER;
+};
+Prop.prototype.keyInInterpolationType = function (i) { return this._inType[i - 1]; };
+Prop.prototype.keyOutInterpolationType = function (i) { return this._outType[i - 1]; };
+Prop.prototype.setInterpolationTypeAtKey = function (i, tin, tout) {
+  this._inType[i - 1] = tin;
+  this._outType[i - 1] = tout;
+};
 
 function CompItem() {} function FolderItem() {} function FootageItem() {}
 function TextLayer() {} function ShapeLayer() {} function SolidSource() {}
 function AVLayer() {}
 function CameraLayer() {} function LightLayer() {}
 const ParagraphJustification = {};
-const KeyframeInterpolationType = { BEZIER: "bezier" };
+const KeyframeInterpolationType = { BEZIER: "bezier", LINEAR: "linear",
+                                   HOLD: "hold" };
 const AutoOrientType = { CAMERA_OR_POINT_OF_INTEREST: 4214,
                          NO_AUTO_ORIENT: 4212 };
-function KeyframeEase(s, i) { this.speed = s; this.influence = i; }
+// AE's constructor REFUSES an influence outside 0.1..100 -- including
+// the 0 it hands back on the untouched side of a keyframe. Rebuilding an
+// ease from what AE just reported therefore throws, which is how eased
+// motion survived a resize at the OLD comp's speed.
+function KeyframeEase(s, i) {
+  if (!(i >= 0.1 && i <= 100)) {
+    throw new Error("After Effects error: Unable to call " +
+      "“Constructor” because of parameter 2. Value " + i +
+      " out of range 0.1 to 100.");
+  }
+  this.speed = s;
+  this.influence = i;
+}
 
 function Layer(name, comp) {
   this.name = name;
@@ -163,7 +260,61 @@ const child = new Layer("child", comp);
 child.parent = mid;
 const locked = new Layer("locked", comp);
 locked._transform["ADBE Position"].locked = true;
-comp._layers.push(mid, corner, cam, cam1, rigged, child, locked);
+
+// A user-shaped motion path: three Position keys, explicit (non-auto)
+// spatial handles on the middle one, and an ease with a real speed. Every
+// KEY VALUE scales correctly even without the fix -- the damage is
+// entirely BETWEEN the keys, which is why keyValue() assertions alone
+// missed it. Real AE 2026, 800x600 halved: 37px off course mid-key.
+const curved = new Layer("curved", comp);
+const cp = curved._transform["ADBE Position"];
+cp.isSpatial = true;
+// The ease shape apply_keyframe_ease actually leaves behind: only the
+// sides FACING the eased pair carry a speed, so key 1's in-side and
+// key 3's out-side read back as influence 0 -- the value AE's own
+// KeyframeEase constructor refuses.
+cp.addKey(0, [0, 0, 0], { outSpeed: 600, outInfluence: 30,
+                          outType: KeyframeInterpolationType.BEZIER })
+  .addKey(1, [1920, 2160, 0], { autoBez: false, inTan: [-400, 0, 0],
+                                outTan: [400, 0, 0],
+                                inSpeed: 600, inInfluence: 30,
+                                outSpeed: 600, outInfluence: 30,
+                                inType: KeyframeInterpolationType.BEZIER,
+                                outType: KeyframeInterpolationType.BEZIER })
+  .addKey(2, [3840, 0, 0], { inSpeed: 600, inInfluence: 30,
+                             inType: KeyframeInterpolationType.BEZIER });
+// Auto-bezier handles are AE's to recompute from the scaled values --
+// touching them would only switch auto off.
+cp._autoBez[0] = true;
+
+// HOLD and LINEAR sides must survive: writing an ease flips them to
+// bezier in real AE, which would turn stepped animation into a slide.
+const held = new Layer("held", comp);
+const hp = held._transform["ADBE Position"];
+hp.isSpatial = true;
+hp.addKey(0, [200, 200, 0], { inType: KeyframeInterpolationType.LINEAR,
+                              outType: KeyframeInterpolationType.HOLD })
+  .addKey(1, [1000, 1000, 0], { inType: KeyframeInterpolationType.HOLD,
+                                outType: KeyframeInterpolationType.LINEAR });
+
+// Keyed SCALE: not spatial, so its ease array must be PADDED to 3 even
+// though the layer is 2D. A wrong length is refused by AE outright, and
+// the layer would land in layersSkipped.
+const grown = new Layer("grown", comp);
+const gs = grown._transform["ADBE Scale"];
+gs.addKey(0, [100, 100, 100], { inSpeed: 40, outSpeed: 40,
+                                inType: KeyframeInterpolationType.BEZIER,
+                                outType: KeyframeInterpolationType.BEZIER })
+  .addKey(1, [200, 200, 100]);
+
+// A camera parented to a null -- the standard rig. Zoom lives in Camera
+// Options, so NOTHING about it is inherited: it kept its old pixel zoom
+// and silently re-framed the shot.
+const camKid = new Cam("Camera Rigged", comp);
+camKid.parent = mid;
+
+comp._layers.push(mid, corner, cam, cam1, rigged, child, locked,
+                  curved, held, grown, camKid);
 
 // 3840x2160 -> 1920x1080 is exactly half.
 const r = call("scale_comp", { width: 1920, height: 1080 });
@@ -242,6 +393,72 @@ assert(Array.isArray(d.layersSkipped) &&
 assert(/could NOT be scaled/.test(d.note || ""),
        "note says some layers could not be scaled");
 
+// ---- keyframed content: the interpolation has to scale too -----------
+// Values at the keys were always right; the path BETWEEN them was not.
+assert(near(cp.keyValue(1)[0], 0) && near(cp.keyValue(3)[0], 1920),
+       "keyed Position values scale (got " + cp.keyValue(3) + ")");
+assert(near(cp.keyInSpatialTangent(2)[0], -200) &&
+       near(cp.keyOutSpatialTangent(2)[0], 200),
+       "spatial tangents scale with the path, so a curve keeps its shape " +
+       "(got " + cp.keyInSpatialTangent(2) + " / " +
+       cp.keyOutSpatialTangent(2) + ")");
+assert(cp.keySpatialAutoBezier(2) === false,
+       "an explicitly shaped key stays explicitly shaped");
+assert(cp.keySpatialAutoBezier(1) === true &&
+       near(cp.keyInSpatialTangent(1)[0], 0),
+       "an AUTO-bezier key is left for AE to recompute, not switched off");
+assert(near(cp.keyOutTemporalEase(1)[0].speed, 300),
+       "an eased key whose OTHER side reads influence 0 still rescales " +
+       "-- rebuilding that side is what AE refuses (got " +
+       cp.keyOutTemporalEase(1)[0].speed + ")");
+assert(cp.keyInTemporalEase(1)[0].influence === 0 &&
+       cp.keyInTemporalEase(1)[0].speed === 0,
+       "the un-eased side is passed through untouched, not invented " +
+       "(got speed " + cp.keyInTemporalEase(1)[0].speed + " influence " +
+       cp.keyInTemporalEase(1)[0].influence + ")");
+assert(d.keyframeEasingNotScaled === undefined,
+       "no easing left behind (got " +
+       JSON.stringify(d.keyframeEasingNotScaled) + ")");
+assert(near(cp.keyOutTemporalEase(2)[0].speed, 300),
+       "temporal ease SPEED scales (units/second, so it overshoots " +
+       "otherwise) -- got " + cp.keyOutTemporalEase(2)[0].speed);
+assert(near(cp.keyOutTemporalEase(2)[0].influence, 30),
+       "ease influence is a percentage and must NOT scale (got " +
+       cp.keyOutTemporalEase(2)[0].influence + ")");
+
+assert(hp.keyOutInterpolationType(1) === KeyframeInterpolationType.HOLD &&
+       hp.keyInInterpolationType(1) === KeyframeInterpolationType.LINEAR &&
+       hp.keyInInterpolationType(2) === KeyframeInterpolationType.HOLD,
+       "HOLD and LINEAR keys keep their interpolation types (got " +
+       hp.keyInInterpolationType(1) + "/" + hp.keyOutInterpolationType(1) +
+       " " + hp.keyInInterpolationType(2) + ")");
+assert(near(hp.keyValue(1)[0], 100) && near(hp.keyValue(2)[0], 500),
+       "held layer's key values still scale (got " + hp.keyValue(2) + ")");
+
+assert(near(gs.keyValue(2)[0], 100) && near(gs.keyValue(1)[0], 50),
+       "keyed Scale values scale (got " + gs.keyValue(2) + ")");
+assert(near(gs.keyOutTemporalEase(1)[0].speed, 20) &&
+       gs.keyInTemporalEase(1).length === 3,
+       "keyed Scale ease scales with the PADDED 3 dims a 2D layer needs " +
+       "(got " + gs.keyInTemporalEase(1).length + " x " +
+       gs.keyOutTemporalEase(1)[0].speed + ")");
+assert(d.layersSkipped === undefined ||
+       d.layersSkipped.join(" ").indexOf("grown") === -1,
+       "keyed Scale layer not skipped over an ease-dimension refusal");
+
+// ---- a camera parented to a null -------------------------------------
+assert(near(camKid.zoom.value, 500),
+       "a PARENTED camera still rescales its zoom -- zoom is not a " +
+       "transform, so a parent inherits nothing of it (got " +
+       camKid.zoom.value + ")");
+assert(Array.isArray(d.parentedCamerasRezoomed) &&
+       d.parentedCamerasRezoomed.indexOf("Camera Rigged") !== -1,
+       "parented camera reported separately, not claimed as scaled (got " +
+       JSON.stringify(d.parentedCamerasRezoomed) + ")");
+assert(near(T(camKid)["ADBE Position"].value[2], -1000),
+       "parented camera's TRANSFORM is still left to its parent (got " +
+       T(camKid)["ADBE Position"].value + ")");
+
 // Stub fidelity: the guards above are only meaningful if the stub really
 // refuses these writes.
 let threw = false;
@@ -249,6 +466,29 @@ const p = new Prop([0, 0, 0]);
 p.locked = true;
 try { p.setValue([1, 1, 1]); } catch (e) { threw = true; }
 assert(threw, "stub fidelity: a locked property refuses setValue");
+
+let easeThrew = false;
+const sp = new Prop([100, 100, 100]);
+sp.addKey(0, [100, 100, 100]);
+try { sp.setTemporalEaseAtKey(1, [new KeyframeEase(0, 33)],
+                                 [new KeyframeEase(0, 33)]); }
+catch (e) { easeThrew = true; }
+assert(easeThrew,
+       "stub fidelity: a short ease array is refused, as AE refuses it");
+let inflThrew = false;
+try { new KeyframeEase(0, 0); } catch (e) { inflThrew = true; }
+assert(inflThrew,
+       "stub fidelity: KeyframeEase refuses influence 0, the value AE " +
+       "reports for an un-eased keyframe side");
+const fp = new Prop([0, 0, 0]);
+fp.isSpatial = true;
+fp.addKey(0, [0, 0, 0], { inType: KeyframeInterpolationType.HOLD,
+                          outType: KeyframeInterpolationType.HOLD });
+fp.setTemporalEaseAtKey(1, [new KeyframeEase(0, 33)],
+                           [new KeyframeEase(0, 33)]);
+assert(fp.keyOutInterpolationType(1) === KeyframeInterpolationType.BEZIER,
+       "stub fidelity: writing an ease flips a HOLD key to bezier, as AE " +
+       "does -- the reason the fix restores the types");
 
 if (process.exitCode) console.error("\nTESTS FAILED");
 else console.log("\nALL TESTS PASSED");

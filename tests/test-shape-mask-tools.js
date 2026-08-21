@@ -31,12 +31,64 @@ function Prop(name, matchName, value) {
 Object.defineProperty(Prop.prototype, "value", {
   get() { return this._value; }
 });
-Prop.prototype.setValue = function (v) { this._value = v; };
+Prop.prototype.setValue = function (v) {
+  if (this._keys.length) {
+    // AE refuses a static write on top of keyframes; the host is expected
+    // to say so itself rather than let this surface as a raw AE message.
+    throw new Error("Cannot set a value on a property with keyframes");
+  }
+  this._value = v;
+};
+// Warnings AE queues and shows AFTER the script returns. Real AE puts up a
+// MODAL for these and DISABLES its main window, so every later tool call is
+// swallowed while the process still reports as healthy -- one bad mask call
+// ends a panel session. A test that leaves anything here has driven AE into
+// that state, so the suite treats a non-empty list as a failure.
+const AE_MODALS = [];
 Prop.prototype.setValueAtTime = function (t, v) {
+  // "Preserve Constant Vertex and Feather Count" (General preferences, ON
+  // by default): a Shape written with a different point count than the keys
+  // already on this property is NOT rejected. AE keeps the mismatch, stops
+  // interpolating, and queues the modal above. Measured in AE 2026.
+  if (v && Array.isArray(v.vertices) && this._keys.length &&
+      Array.isArray(this._keys[0].value && this._keys[0].value.vertices) &&
+      this._keys[0].value.vertices.length !== v.vertices.length) {
+    AE_MODALS.push("After Effects warning: deleting points or feathers " +
+      "from an animated mask path deletes them from all keyframes for " +
+      "that shape unless you turn off the Preserve Constant Vertex and " +
+      "Feather Count option in the General Preferences dialog box.");
+  }
   const hit = this._keys.find(k => Math.abs(k.time - t) < 1e-9);
   if (hit) { hit.value = v; return; }
   this._keys.push({ time: t, value: v });
   this._keys.sort((a, b) => a.time - b.time);
+};
+// Reading the shape BETWEEN keys is the only way to tell an animation from
+// a pop -- numKeys reads 2 either way, which is exactly how the mismatched
+// -count bug shipped.
+Prop.prototype.valueAtTime = function (t) {
+  const ks = this._keys;
+  if (!ks.length) return this._value;
+  if (t <= ks[0].time) return ks[0].value;
+  if (t >= ks[ks.length - 1].time) return ks[ks.length - 1].value;
+  let i = 0;
+  while (i < ks.length - 1 && ks[i + 1].time <= t) i++;
+  const a = ks[i].value, b = ks[i + 1].value;
+  const u = (t - ks[i].time) / (ks[i + 1].time - ks[i].time);
+  if (a && Array.isArray(a.vertices)) {
+    // Different point counts do not interpolate: AE holds and then pops to
+    // the later shape (measured -- every sampled frame after a 3-point key
+    // already read the 5-point shape).
+    if (a.vertices.length !== b.vertices.length) return b;
+    const out = new Shape();
+    out.closed = a.closed;
+    out.vertices = a.vertices.map((v, j) =>
+      [v[0] + (b.vertices[j][0] - v[0]) * u,
+       v[1] + (b.vertices[j][1] - v[1]) * u]);
+    return out;
+  }
+  if (typeof a === "number") return a + (b - a) * u;
+  return a;
 };
 Object.defineProperty(Prop.prototype, "numKeys", {
   get() { return this._keys.length; }
@@ -135,6 +187,11 @@ function Comp(name) {
   this.width = 1920;
   this.height = 1080;
   this.duration = 10;
+  // A comp with no frame rate is why off-grid keyframe times were
+  // invisible to CI: AE stores whatever fraction of a second it is handed,
+  // and the shape asked for is then never on a rendered frame.
+  this.frameRate = 30;
+  this.frameDuration = 1 / 30;
 }
 Comp.prototype.layer = function (ref) {
   const l = typeof ref === "number" ? this._layers[ref - 1]
@@ -218,6 +275,118 @@ assert(r.ok && r.data.keysSet === 2 &&
 assert(mask.property("Mask Path").keyValue(2).vertices[1][0] === 300,
        "keyframed shapes carry their own vertices");
 
+// 1b. the mask has to ANIMATE, not just carry keyframes
+const mpath = mask.property("Mask Path");
+assert(mpath.valueAtTime(0.5).vertices[1][0] === 200,
+       "mask path interpolates between keys (x=200 halfway from 100 to 300)");
+assert(r.data.points === 3 && JSON.stringify(r.data.keyTimes) === "[0,1]" &&
+       JSON.stringify(r.data.keyFrames) === "[0,30]",
+       "result names the point count and where the keys landed");
+
+// keys off the frame grid land on frames, and say that they moved
+const off = new Layer("Off Grid", comp, false);
+comp._layers.push(off);
+call("add_mask", { layer: "Off Grid", shape: "rectangle" });
+r = call("set_mask_path", { layer: "Off Grid", keys: [
+  { time: 0.34, vertices: [[0, 0], [100, 0], [100, 100]] },
+  { time: 0.71, vertices: [[0, 0], [200, 0], [200, 200]] }
+] });
+const offPath = off.property("Masks").property(1).property("Mask Path");
+assert(r.ok && r.data.snappedToFrames === 2 &&
+       JSON.stringify(r.data.keyFrames) === "[10,21]",
+       "off-grid key times snap to whole frames and are reported: " +
+       (r.error || JSON.stringify(r.data.keyFrames)));
+assert(Math.abs(offPath.keyTime(2) - 21 / 30) < 1e-9 &&
+       offPath.valueAtTime(21 / 30).vertices[1][0] === 200,
+       "the shape asked for is now ON a rendered frame (frame 21 = 200px)");
+
+// mismatched point counts: refused, nothing written, no AE modal queued
+const mixL = new Layer("Mixed", comp, false);
+comp._layers.push(mixL);
+call("add_mask", { layer: "Mixed", shape: "rectangle" });
+r = call("set_mask_path", { layer: "Mixed", keys: [
+  { time: 0, vertices: [[0, 0], [100, 0], [100, 100]] },
+  { time: 1, vertices: [[0, 0], [50, 0], [100, 0], [100, 50], [100, 100]] }
+] });
+const mixPath = mixL.property("Masks").property(1).property("Mask Path");
+assert(!r.ok && /same number of points/.test(r.error) &&
+       /keys\[1\] has 5 but keys\[0\] has 3/.test(r.error),
+       "mixed point counts refused, naming both counts: " + r.error);
+assert(/POP/.test(r.error) && /modal/.test(r.error) &&
+       /repeat a vertex/.test(r.error),
+       "the refusal explains the pop, the modal, and the way out");
+assert(mixPath.numKeys === 0,
+       "a refused batch writes NOTHING (numKeys " + mixPath.numKeys + ")");
+assert(AE_MODALS.length === 0,
+       "no AE modal was queued: " + AE_MODALS.join(" | "));
+
+// the stub really can catch this: driving AE the old way DOES queue one
+mixPath.setValueAtTime(0, { vertices: [[0, 0], [1, 0], [1, 1]] });
+mixPath.setValueAtTime(1, { vertices: [[0, 0], [1, 0], [1, 1], [0, 1]] });
+assert(AE_MODALS.length === 1 && /Preserve Constant Vertex/.test(AE_MODALS[0]),
+       "stub fidelity: an unguarded mismatched write queues AE's modal");
+assert(mixPath.valueAtTime(0.5).vertices.length === 4,
+       "stub fidelity: mismatched keys hold and POP, they do not tween");
+while (mixPath.numKeys) mixPath.removeKey(1);
+AE_MODALS.length = 0;
+
+// adding a mismatched key to an already-animated path is the same trap
+r = call("set_mask_path", { layer: "Footage", mask: "Cutout", atTime: 2,
+  vertices: [[0, 0], [10, 0], [10, 10], [0, 10]] });
+assert(!r.ok && /this shape has 4 but the existing keys have 3/.test(r.error) &&
+       /remove_keyframes/.test(r.error),
+       "atTime against existing keys refused, and points at the way out: " +
+       r.error);
+assert(mpath.numKeys === 2 && AE_MODALS.length === 0,
+       "the existing animation is untouched by the refusal");
+
+// a bad key in the MIDDLE must not leave the first one written
+r = call("set_mask_path", { layer: "Mixed", keys: [
+  { time: 0, vertices: [[0, 0], [100, 0], [100, 100]] },
+  { time: 0.5, vertices: [[0, 0], [100, 0]] },
+  { time: 1, vertices: [[0, 0], [200, 0], [200, 200]] }
+] });
+assert(!r.ok && /keys\[1\]: 'vertices'/.test(r.error) &&
+       mixPath.numKeys === 0,
+       "validation happens before any write: " + r.error);
+
+// two times that snap onto the same frame would silently overwrite
+r = call("set_mask_path", { layer: "Mixed", keys: [
+  { time: 0, vertices: [[0, 0], [100, 0], [100, 100]] },
+  { time: 0.5, vertices: [[0, 0], [150, 0], [150, 150]] },
+  { time: 0.51, vertices: [[0, 0], [200, 0], [200, 200]] }
+] });
+assert(!r.ok && /both land on the same frame/.test(r.error) &&
+       /frame 15/.test(r.error) && mixPath.numKeys === 0,
+       "colliding key times refused instead of one key vanishing: " + r.error);
+
+// one tangent per point, or AE gets a corrupt path
+r = call("set_mask_path", { layer: "Mixed", keys: [
+  { time: 0, vertices: [[0, 0], [100, 0], [100, 100]],
+    inTangents: [[-10, 0], [0, -10]] },
+  { time: 1, vertices: [[0, 0], [200, 0], [200, 200]] }
+] });
+assert(!r.ok && /'inTangents' has 2 entries but 'vertices' has 3/
+         .test(r.error) && mixPath.numKeys === 0,
+       "short tangent list refused: " + r.error);
+
+// keys that all hold the same shape are not an animation
+r = call("set_mask_path", { layer: "Mixed", keys: [
+  { time: 0, vertices: [[0, 0], [100, 0], [100, 100]] },
+  { time: 1, vertices: [[0, 0], [100, 0], [100, 100]] }
+] });
+assert(r.ok && r.data.stillFrame === true &&
+       /will not move/.test(r.data.note),
+       "identical keys reported as a still, not as an animation");
+
+// a static path on top of keyframes: named, not an AE exception
+r = call("set_mask_path", { layer: "Mixed",
+  vertices: [[0, 0], [50, 0], [50, 50]] });
+assert(!r.ok && /already animated \(2 keyframes\)/.test(r.error) &&
+       /Pass 'atTime'/.test(r.error),
+       "static write over an animated path refused in the tool's own words: " +
+       r.error);
+
 // grounded errors
 r = call("set_mask", { layer: "Footage", mask: "Nope", feather: 1 });
 assert(!r.ok && /Masks here: Cutout/.test(r.error),
@@ -286,5 +455,9 @@ r = call("set_property", { layer: "Shapes",
 assert(r.ok && badge.property("Contents").property("Trim Paths 1")
          .property("End").value === 50,
        "universal set_property reaches shape contents by path");
+
+assert(AE_MODALS.length === 0,
+       "no tool call left After Effects behind a modal dialog: " +
+       AE_MODALS.join(" | "));
 
 console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");

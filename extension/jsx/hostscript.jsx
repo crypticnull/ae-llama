@@ -294,12 +294,45 @@ function AELL_effectNames(layer) {
 
 var AELL_TOOLS = {};
 
+/*
+ * Model-facing list caps.
+ *
+ * These two tools feed the panel's SYSTEM PROMPT, whose whole budget is
+ * ~6 KB. Measured in AE 2026 on a 200-layer comp in a 206-item project:
+ * get_project_info was 27 KB and get_comp_details 30 KB, so the combined
+ * state was 49 KB and the panel's byte-slice kept only the head of the
+ * project's item list — the model saw ZERO layers and never learned which
+ * layer the user had SELECTED, in a prompt that tells it to look for
+ * exactly that. An uncapped list did not degrade gracefully; it pushed the
+ * comp out of the prompt entirely.
+ *
+ * So the lists are bounded HERE, where the omission can be described
+ * honestly, instead of being cut mid-object downstream. limit: 0 (used by
+ * panel-internal callers like the timeline visualizer) still returns
+ * everything.
+ */
+var AELL_LIST_LIMIT = 40;
+
+/* -1 = "no limit"; anything else is a positive row count. */
+function AELL_listLimit(raw) {
+  if (typeof raw === "undefined" || raw === null || raw === "") {
+    return AELL_LIST_LIMIT;
+  }
+  if (raw === "all" || raw === 0 || raw === "0") return -1;
+  var n = Math.round(Number(raw));
+  if (!(n > 0)) return AELL_LIST_LIMIT;
+  return n;
+}
+
 AELL_TOOLS.get_project_info = function (args) {
   var proj = app.project;
   if (!proj) return AELL_err("No project open");
   var engine = "";
   try { engine = String(proj.expressionEngine || ""); } catch (eE) {}
+  var limit = AELL_listLimit(args.limit);
   var items = [];
+  var footageDropped = 0;
+  var namedDropped = 0;
   for (var i = 1; i <= proj.numItems; i++) {
     var it = proj.item(i);
     var entry = { name: it.name, id: it.id };
@@ -327,13 +360,63 @@ AELL_TOOLS.get_project_info = function (args) {
   if (proj.activeItem && proj.activeItem instanceof CompItem) {
     active = proj.activeItem.name;
   }
-  return AELL_okay({
+
+  // Clip to the cap. Comps and folders are what the model must be able to
+  // NAME (every comp/folder argument is a name), so footage is dropped
+  // first — a project full of solids must never hide the comps.
+  var total = items.length;
+  if (limit >= 0 && total > limit) {
+    var kept = [];
+    var j;
+    // The ACTIVE comp goes in first, whatever else is competing for the
+    // slots: it is the one name the model needs in every single request.
+    for (j = 0; j < items.length; j++) {
+      if (active !== null && items[j].type === "comp" &&
+          items[j].name === active) { kept.push(items[j]); break; }
+    }
+    for (j = 0; j < items.length && kept.length < limit; j++) {
+      if (items[j].type !== "footage" && items[j].name !== active) {
+        kept.push(items[j]);
+      }
+    }
+    for (j = 0; j < items.length && kept.length < limit; j++) {
+      if (items[j].type === "footage") kept.push(items[j]);
+    }
+    // Back into project order, so indexes still read as a project panel.
+    var order = {};
+    for (j = 0; j < items.length; j++) order[items[j].id] = j;
+    kept.sort(function (a, b) { return order[a.id] - order[b.id]; });
+    for (j = 0; j < items.length; j++) {
+      var still = false;
+      for (var k = 0; k < kept.length; k++) {
+        if (kept[k] === items[j]) { still = true; break; }
+      }
+      if (still) continue;
+      if (items[j].type === "footage") footageDropped++;
+      else namedDropped++;
+    }
+    items = kept;
+  }
+
+  var out = {
     projectFile: proj.file ? proj.file.fsName : null,
     expressionEngine: engine,
     numItems: proj.numItems,
+    itemsShown: items.length,
     items: items,
     activeComp: active
-  });
+  };
+  if (footageDropped || namedDropped) {
+    out.note = "Showing " + items.length + " of " + total + " items " +
+      "(comps and folders first). " +
+      (footageDropped ? footageDropped + " footage item" +
+        (footageDropped === 1 ? "" : "s") : "") +
+      (footageDropped && namedDropped ? " and " : "") +
+      (namedDropped ? namedDropped + " comp/folder item" +
+        (namedDropped === 1 ? "" : "s") : "") +
+      " not listed — ask again with limit:0 for the whole project.";
+  }
+  return AELL_okay(out);
 };
 
 // -------------------------------------------------- project panel management
@@ -596,9 +679,39 @@ AELL_TOOLS.organize_project = function (args) {
 
 AELL_TOOLS.get_comp_details = function (args) {
   var comp = AELL_resolveComp(args.comp);
+  var total = comp.numLayers;
+  var limit = AELL_listLimit(args.limit);
+  var start = args.start > 0 ? Math.round(args.start) : 1;
+  if (start > total) start = total > 0 ? total : 1;
+  var last = limit < 0 ? total : Math.min(total, start + limit - 1);
+
+  // Two passes so the SELECTED layers always survive the cap even when
+  // they sit outside the window: the system prompt tells the model to read
+  // `selected: true` to resolve "these layers", so a cap that hides the
+  // selection is worse than no answer at all.
+  var i, layer, sel;
+  var wanted = {};      // index -> true
+  var kept = 0;
+  var selectedTotal = 0;
+  for (i = 1; i <= total; i++) {
+    sel = false;
+    try { sel = !!comp.layer(i).selected; } catch (eS) {}
+    if (!sel) continue;
+    selectedTotal++;
+    if (limit < 0 || kept < limit) { wanted[i] = true; kept++; }
+  }
+  for (i = start; i <= last; i++) {
+    if (wanted[i]) continue;
+    if (limit >= 0 && kept >= limit) break;
+    wanted[i] = true;
+    kept++;
+  }
+
   var layers = [];
-  for (var i = 1; i <= comp.numLayers; i++) {
-    var layer = comp.layer(i);
+  var selectedOutside = 0;
+  for (i = 1; i <= total; i++) {
+    if (!wanted[i]) continue;
+    layer = comp.layer(i);
     var entry = {
       index: i,
       name: layer.name,
@@ -609,18 +722,38 @@ AELL_TOOLS.get_comp_details = function (args) {
       startTime: layer.startTime,
       effects: AELL_effectNames(layer)
     };
-    if (layer.selected) entry.selected = true;
+    if (layer.selected) {
+      entry.selected = true;
+      if (i < start || i > last) selectedOutside++;
+    }
     layers.push(entry);
   }
-  return AELL_okay({
+
+  var out = {
     name: comp.name,
     width: comp.width,
     height: comp.height,
     duration: comp.duration,
     frameRate: comp.frameRate,
-    numLayers: comp.numLayers,
+    numLayers: total,
+    layersShown: layers.length,
     layers: layers
-  });
+  };
+  if (layers.length < total) {
+    var next = last + 1;
+    out.note = "Showing " + layers.length + " of " + total +
+      " layers (indexes " + start + "-" + last + ")" +
+      (selectedOutside ? ", plus " + selectedOutside +
+        " selected layer" + (selectedOutside === 1 ? "" : "s") +
+        " from outside that range" : "") + ". " +
+      (selectedTotal ? selectedTotal + " layer" +
+        (selectedTotal === 1 ? " is" : "s are") + " selected. " : "") +
+      (next <= total
+        ? "Ask again with start:" + next + " for the next " +
+          (limit < 0 ? "layers" : "" + limit) + ", or limit:0 for all."
+        : "Ask again with limit:0 for all.");
+  }
+  return AELL_okay(out);
 };
 
 /* First free project-item name — duplicate comp names make every later
@@ -728,10 +861,89 @@ function AELL_fontProblem(want) {
   return msg;
 }
 
-function AELL_applyTextStyle(layer, args) {
+// A layer made by comp.layers.addText() inherits AE's CHARACTER PANEL
+// state -- whatever the user last typed with, which scripting can neither
+// read as "the default" nor reset. Measured in real AE 2026: asking for a
+// plain text layer produced PowerCentra-Book at 66px, tracking 251,
+// autoLeading off at 92, and superscript ON (the glyphs really do render
+// at ~58% and raised). So add_text_layer starts every NEW layer from a
+// known baseline and lets the args override it; set_text_style edits a
+// layer the user already owns and must never normalize.
+var AELL_TEXT_BASELINE = [
+  ["tracking", 0], ["fauxBold", false], ["fauxItalic", false],
+  ["baselineShift", 0], ["tsume", 0],
+  ["horizontalScale", 1], ["verticalScale", 1],
+  ["applyStroke", false], ["applyFill", true]
+];
+// AE 2026 makes these READ-ONLY on a TextDocument ("Unable to set ... It
+// is a readOnly attribute"), so an inherited one cannot be cleared from
+// script at all. Reported instead of silently shipped.
+var AELL_TEXT_STUCK = ["allCaps", "smallCaps", "superscript", "subscript"];
+// Verified installed before use: getFontsByPostScriptName ECHOES whatever
+// it is handed, so only isSubstitute===false proves a font is real.
+var AELL_TEXT_FONTS = ["ArialMT", "SegoeUI", "Verdana",
+                       "TimesNewRomanPSMT", "CourierNewPSMT"];
+var AELL_TEXT_SIZE = 72;
+var AELL_TEXT_FONT_CACHE;   // undefined = not looked up yet, null = none
+
+function AELL_defaultFont() {
+  if (AELL_TEXT_FONT_CACHE !== undefined) { return AELL_TEXT_FONT_CACHE; }
+  AELL_TEXT_FONT_CACHE = null;
+  for (var i = 0; i < AELL_TEXT_FONTS.length; i++) {
+    if (!AELL_fontProblem(AELL_TEXT_FONTS[i])) {
+      AELL_TEXT_FONT_CACHE = AELL_TEXT_FONTS[i];
+      break;
+    }
+  }
+  return AELL_TEXT_FONT_CACHE;
+}
+
+// Mutates doc in place; fills out.stuck (inherited and unclearable) and
+// out.skipped (a baseline field this AE would not take).
+function AELL_normalizeTextDoc(doc, out) {
+  var i, k, v;
+  out.stuck = [];
+  out.skipped = [];
+  for (i = 0; i < AELL_TEXT_BASELINE.length; i++) {
+    k = AELL_TEXT_BASELINE[i][0];
+    v = AELL_TEXT_BASELINE[i][1];
+    try {
+      if (doc[k] !== v) { doc[k] = v; }
+    } catch (e1) { out.skipped.push(k); }
+  }
+  try { doc.autoLeading = true; } catch (e2) { out.skipped.push("leading"); }
+  try { doc.fillColor = [1, 1, 1]; } catch (e3) { out.skipped.push("fillColor"); }
+  try { doc.fontSize = AELL_TEXT_SIZE; } catch (e4) { out.skipped.push("fontSize"); }
+  try {
+    doc.justification = ParagraphJustification.LEFT_JUSTIFY;
+  } catch (e5) { out.skipped.push("justification"); }
+  var font = AELL_defaultFont();
+  if (font) {
+    try { doc.font = font; } catch (e6) { out.skipped.push("font"); }
+  }
+  for (i = 0; i < AELL_TEXT_STUCK.length; i++) {
+    k = AELL_TEXT_STUCK[i];
+    try { if (doc[k] === true) { out.stuck.push(k); } } catch (e7) {}
+  }
+  return out;
+}
+
+function AELL_stuckStyleWarning(stuck) {
+  if (!stuck || !stuck.length) { return null; }
+  return "This layer inherited " + stuck.join(" + ") + " from After " +
+         "Effects' Character panel, and AE makes " + stuck.join("/") +
+         " read-only to scripting — the tool cannot clear it. The text " +
+         "will keep rendering that way until it is switched off in the " +
+         "Character panel by hand.";
+}
+
+function AELL_applyTextStyle(layer, args, reset) {
   var textProp = layer.property("ADBE Text Properties")
                       .property("ADBE Text Document");
   var doc = textProp.value;
+  // Baseline FIRST, args second, one setValue for both: the args are the
+  // caller's explicit wishes and must win over the inherited defaults.
+  if (reset) { AELL_normalizeTextDoc(doc, reset); }
   if (typeof args.text === "string" && args.text !== "") doc.text = args.text;
   if (args.fontSize > 0) doc.fontSize = args.fontSize;
   if (typeof args.font === "string" && args.font !== "") {
@@ -766,6 +978,12 @@ function AELL_applyTextStyle(layer, args) {
   var summary = { fontSize: out.fontSize, font: out.font };
   try { summary.tracking = out.tracking; } catch (e1) {}
   try {
+    if (out.applyFill) {
+      summary.fillColor = [AELL_r3(out.fillColor[0]), AELL_r3(out.fillColor[1]),
+                           AELL_r3(out.fillColor[2])];
+    }
+  } catch (e3) {}
+  try {
     summary.leading = out.autoLeading ? "auto" : out.leading;
   } catch (e2) {}
   return summary;
@@ -779,6 +997,9 @@ AELL_TOOLS.add_text_layer = function (args) {
   var layer = AELL_keepSelection(comp, function () {
     return comp.layers.addText(args.text);
   });
+  // inheritStyle is the way back to AE's own behaviour for a user who
+  // has set the Character panel up deliberately.
+  var reset = args.inheritStyle ? null : {};
   var style = AELL_applyTextStyle(layer, {
     fontSize: args.fontSize,
     font: args.font,
@@ -786,12 +1007,23 @@ AELL_TOOLS.add_text_layer = function (args) {
     tracking: args.tracking,
     leading: args.leading,
     justification: args.justification
-  });
+  }, reset);
   if (AELLJSON.isArray(args.position) && args.position.length >= 2) {
     layer.property("ADBE Transform Group").property("ADBE Position")
          .setValue(args.position);
   }
-  return AELL_okay({ index: layer.index, name: layer.name, style: style });
+  var result = { index: layer.index, name: layer.name, style: style };
+  if (reset) {
+    result.styleReset = true;
+    var stuckWarn = AELL_stuckStyleWarning(reset.stuck);
+    if (stuckWarn) { result.warning = stuckWarn; }
+    if (reset.skipped && reset.skipped.length) {
+      result.notReset = reset.skipped;
+    }
+  } else {
+    result.inheritedStyle = true;
+  }
+  return AELL_okay(result);
 };
 
 AELL_TOOLS.set_text_style = function (args) {
@@ -870,7 +1102,7 @@ AELL_TOOLS.set_transform = function (args) {
   }
 
   var result = { layer: layer.name, property: propName, value: value };
-  if (drivenWarn) result.warning = drivenWarn;
+  if (drivenWarn) { result.applied = false; result.warning = drivenWarn; }
 
   // Unit sanity: AE scale is PERCENT. A model that thinks in fractions
   // sends 2 meaning "200%" and shrinks the layer to 2%. Warn loudly in the
@@ -890,6 +1122,34 @@ AELL_TOOLS.set_transform = function (args) {
   }
   return AELL_okay(result);
 };
+
+/* True when a property's value varies over time (keyframes or a rig). */
+function AELL_isAnimated(prop) {
+  try {
+    if (prop.numKeys > 0) return true;
+  } catch (eK) {}
+  try {
+    if (prop.expressionEnabled) return true;
+  } catch (eE) {}
+  return false;
+}
+
+/*
+ * The Position offset that cancels an anchor shift of [dax, day] at time
+ * t: the shift happens in LAYER space, so it reaches Position through
+ * this layer's own Scale and Rotation at that moment. Both are read with
+ * valueAtTime(t, false) so keyframed and expression-driven rigs give the
+ * value AE actually renders.
+ */
+function AELL_anchorDelta(sclProp, rotProp, dax, day, t) {
+  var s = sclProp.valueAtTime(t, false);
+  var r = rotProp.valueAtTime(t, false);
+  var dx = dax * (s[0] / 100);
+  var dy = day * (s[1] / 100);
+  var rad = r * Math.PI / 180;
+  return [dx * Math.cos(rad) - dy * Math.sin(rad),
+          dx * Math.sin(rad) + dy * Math.cos(rad)];
+}
 
 AELL_TOOLS.center_anchor_point = function (args) {
   var comp = AELL_resolveComp(args.comp);
@@ -927,34 +1187,53 @@ AELL_TOOLS.center_anchor_point = function (args) {
     // the layer stays visually in place. Parenting needs no special case:
     // Position is already expressed in the parent's space, and the delta
     // is carried there by this layer's own scale and rotation.
-    var scl = transform.property("ADBE Scale").value;
-    var rot = transform.property("ADBE Rotate Z").value;
-    var dx = (newAp[0] - oldAp[0]) * (scl[0] / 100);
-    var dy = (newAp[1] - oldAp[1]) * (scl[1] / 100);
-    var rad = rot * Math.PI / 180;
-    var dpx = dx * Math.cos(rad) - dy * Math.sin(rad);
-    var dpy = dx * Math.sin(rad) + dy * Math.cos(rad);
+    //
+    // Scale and Rotation can THEMSELVES be animated, which makes the
+    // delta time-dependent — verified in real AE: one delta taken at the
+    // current time and applied to every Position key left the layer
+    // drifting up to 37px at the other keys. So it is recomputed at each
+    // key's own time.
+    var sclProp = transform.property("ADBE Scale");
+    var rotProp = transform.property("ADBE Rotate Z");
+    var dax = newAp[0] - oldAp[0];
+    var day = newAp[1] - oldAp[1];
+    var movingRig = AELL_isAnimated(sclProp) || AELL_isAnimated(rotProp);
     apProp.setValue(newAp);
 
     if (posProp.numKeys > 0) {
-      // Animated position: setValue would throw. Offset EVERY key by the
-      // same delta so the whole animation shifts with the anchor rather
-      // than the layer jumping at one time and not the others.
+      // Animated position: setValue would throw. Offset EVERY key so the
+      // whole animation shifts with the anchor rather than the layer
+      // jumping at one time and not the others.
       for (var k = 1; k <= posProp.numKeys; k++) {
         var kv = posProp.keyValue(k);
-        var nk = [kv[0] + dpx, kv[1] + dpy];
+        var dk = AELL_anchorDelta(sclProp, rotProp, dax, day,
+                                  posProp.keyTime(k));
+        var nk = [kv[0] + dk[0], kv[1] + dk[1]];
         for (var d = 2; d < kv.length; d++) nk.push(kv[d]);
         posProp.setValueAtKey(k, nk);
       }
       note = "anchor centered on content; all " + posProp.numKeys +
              " Position keyframes offset so the layer did not move";
+      if (movingRig) {
+        note += " (NOTE: Scale/Rotation are animated too, so the offset " +
+                "is exact at the Position keyframes and approximate " +
+                "between them — add Position keys where Scale/Rotation " +
+                "have theirs if the in-between drift matters)";
+      }
     } else {
+      var dp = AELL_anchorDelta(sclProp, rotProp, dax, day, comp.time);
       var pos = posProp.value;
-      var newPos = [pos[0] + dpx, pos[1] + dpy];
+      var newPos = [pos[0] + dp[0], pos[1] + dp[1]];
       if (pos.length > 2) newPos.push(pos[2]);
       posProp.setValue(newPos);
       note = "anchor centered on content; position compensated so the " +
              "layer did not move";
+      if (movingRig) {
+        note += " (WARNING: Scale/Rotation are animated but Position is " +
+                "not, so a single Position value cannot hold the layer " +
+                "still — it is correct at " + comp.time + "s and drifts " +
+                "elsewhere)";
+      }
     }
 
     // A driven Position accepts the write but never shows it — report
@@ -1416,7 +1695,7 @@ AELL_TOOLS.set_effect_param = function (args) {
   }
   var out = { layer: layer.name, effect: fx.name, param: p.name,
               value: args.value };
-  if (warn) out.warning = warn;
+  if (warn) { out.applied = false; out.warning = warn; }
   return AELL_okay(out);
 };
 
@@ -1473,6 +1752,9 @@ AELL_TOOLS.duplicate_layer = function (args) {
  * host-side math in a single call. Chunk i keeps the original startTime, so
  * pieces play back seamlessly end-to-end without overlap; offsetPerChunk
  * additionally slides chunk i by i*offset seconds for spaced staggering.
+ * Cuts land on whole COMP frames: AE accepts a sub-frame in/out pair and
+ * then renders no frames at all for it, so unsnapped boundaries produce
+ * pieces of arbitrary frame lengths and, when short enough, invisible ones.
  */
 AELL_TOOLS.split_layer_into_chunks = function (args) {
   var comp = AELL_resolveComp(args.comp);
@@ -1484,6 +1766,12 @@ AELL_TOOLS.split_layer_into_chunks = function (args) {
     return AELL_err("Layer '" + layer.name + "' has no duration — " +
                     "nothing to split");
   }
+  // A cut is only real if the piece it makes contains a frame. AE accepts
+  // sub-frame inPoint/outPoint without complaint (measured: an in/out pair
+  // between two frames renders NOTHING), so the frame grid is the unit
+  // this tool has to work in.
+  var fd = (comp.frameDuration > 0) ? Number(comp.frameDuration) : 0;
+  var fps = fd ? Math.round(1 / fd * 100) / 100 : 0;
   var n, chunk;
   if (args.chunks > 0) {
     // Exact piece count: the host does the division, not the model.
@@ -1493,12 +1781,27 @@ AELL_TOOLS.split_layer_into_chunks = function (args) {
       return AELL_err("'chunks' is capped at 60 (asked for " + n + ")");
     }
     chunk = span / n;
+    if (fd && chunk < fd) {
+      return AELL_err("Comp '" + comp.name + "' runs at " + fps + " fps (" +
+        (Math.round(fd * 10000) / 10000) + "s per frame), so " + n +
+        " chunks of a " + (Math.round(span * 100) / 100) + "s span would be " +
+        (Math.round(chunk * 10000) / 10000) + "s each — shorter than one " +
+        "frame, and a piece that holds no frame renders nothing at all. At " +
+        "most " + Math.floor(span / fd) + " chunks fit; ask for that many " +
+        "or fewer.");
+    }
   } else {
     chunk = args.chunkSeconds > 0 ? Number(args.chunkSeconds) : 5;
     if (span <= chunk) {
       return AELL_err("Layer '" + layer.name + "' is only " +
         (Math.round(span * 100) / 100) + "s from inPoint to outPoint — " +
         "nothing to split at " + chunk + "s chunks");
+    }
+    if (fd && chunk < fd) {
+      return AELL_err("chunkSeconds " + chunk + " is shorter than one frame " +
+        "of comp '" + comp.name + "' (" + (Math.round(fd * 10000) / 10000) +
+        "s at " + fps + " fps) — a piece that holds no frame renders nothing " +
+        "at all. Use at least " + (Math.round(fd * 10000) / 10000) + ".");
     }
     n = Math.ceil(span / chunk - 0.000001);
     if (n > 60) {
@@ -1509,19 +1812,48 @@ AELL_TOOLS.split_layer_into_chunks = function (args) {
   var offset = typeof args.offsetPerChunk === "number"
     ? args.offsetPerChunk : 0;
 
+  // Cut ON frames. Unsnapped boundaries still tile without gaps, but they
+  // land mid-frame, so the pieces come out arbitrary lengths in frames and
+  // the edit cannot be reproduced or nudged by hand. The layer's own first
+  // in and last out are kept verbatim — those are the user's, not ours.
+  var i, bounds = [inP];
+  for (i = 1; i < n; i++) {
+    var b = inP + i * chunk;
+    bounds.push(fd ? Math.round(b / fd) * fd : b);
+  }
+  bounds.push(outP);
+  if (fd) {
+    // Snapping (and a short final remainder) can still collapse a piece to
+    // less than a frame. Drop those cut points instead of shipping layers
+    // that render nothing.
+    var kept = [bounds[0]];
+    for (i = 1; i < bounds.length - 1; i++) {
+      if (bounds[i] - kept[kept.length - 1] >= fd - 1e-9) kept.push(bounds[i]);
+    }
+    while (kept.length > 1 && outP - kept[kept.length - 1] < fd - 1e-9) {
+      kept.pop();
+    }
+    kept.push(outP);
+    bounds = kept;
+  }
+  var dropped = n - (bounds.length - 1);
+  n = bounds.length - 1;
+  if (n < 2) {
+    return AELL_err("Layer '" + layer.name + "' is only " +
+      Math.round(span / fd) + " frame(s) long at " + fps + " fps — there is " +
+      "no place to cut it that leaves two pieces with frames in them");
+  }
+
   // Duplicate FIRST (each copy inherits the full span), then trim each
   // copy to its own window. The original becomes chunk 1.
   var pieces = [layer];
-  var i;
   for (i = 1; i < n; i++) pieces.push(layer.duplicate());
 
   var baseName = layer.name;
   for (i = 0; i < n; i++) {
-    var s = inP + i * chunk;
-    var e = i === n - 1 ? outP : inP + (i + 1) * chunk;
     var piece = pieces[i];
-    piece.inPoint = s;
-    piece.outPoint = e;
+    piece.inPoint = bounds[i];
+    piece.outPoint = bounds[i + 1];
     if (offset !== 0) piece.startTime = piece.startTime + offset * i;
     piece.name = baseName + " chunk " + (i + 1);
   }
@@ -1548,14 +1880,19 @@ AELL_TOOLS.split_layer_into_chunks = function (args) {
   var made = [];
   for (i = 0; i < n && (n <= 8 || i < 3); i++) {
     made.push({ layer: pieces[i].name, index: pieces[i].index,
-                inPoint: Math.round(pieces[i].inPoint * 100) / 100,
-                outPoint: Math.round(pieces[i].outPoint * 100) / 100 });
+                inPoint: Math.round(pieces[i].inPoint * 10000) / 10000,
+                outPoint: Math.round(pieces[i].outPoint * 10000) / 10000 });
   }
   var note = offset === 0
     ? "Chunks play seamlessly end-to-end on separate layers (no overlap)"
     : "Each chunk additionally slid by " + offset + "s per index";
   note += "; stacked " + (descending ? "descending" : "ascending") +
           " and now SELECTED";
+  if (fd) note += "; cut on whole frames at " + fps + " fps";
+  if (dropped > 0) {
+    note += "; " + dropped + " cut point(s) dropped because the piece would " +
+            "have held no frame";
+  }
   if (n > 8) {
     note += "; listing 3 of " + n + " pieces (all named '" + baseName +
             " chunk <i>')";
@@ -1592,6 +1929,23 @@ function AELL_bezierY(x1, y1, x2, y2, x) {
   return 3 * w * w * u * y1 + 3 * w * u * u * y2 + u * u * u;
 }
 
+/* Round to 3 decimals -- seconds reported to the model stay readable. */
+function AELL_r3(v) { return Math.round(v * 1000) / 1000; }
+
+/*
+ * A number from an arg that may arrive quoted. Small models write
+ * {"step": "0.5"} often enough that a strict typeof check dropped the
+ * argument silently, which is the one failure mode this codebase refuses
+ * to have. Returns null when there is no usable number.
+ */
+function AELL_numArg(v) {
+  if (typeof v === "number") return isNaN(v) ? null : v;
+  if (typeof v === "string" && v !== "" && !isNaN(Number(v))) {
+    return Number(v);
+  }
+  return null;
+}
+
 function AELL_bezierArgs(args) {
   var b = args.bezier;
   if (b === null || typeof b === "undefined") return [0, 0, 1, 1]; // linear
@@ -1602,11 +1956,58 @@ function AELL_bezierArgs(args) {
           Math.max(0, Math.min(1, Number(b[2]))), Number(b[3])];
 }
 
+/*
+ * ExtendScript's Array.sort is NOT stable, so equal keys come back in an
+ * arbitrary order that is not even repeatable between calls (measured in
+ * AE 2026: five layers all at inPoint 0 sorted to P2,P3,P4,P5,P1 on one
+ * call and P4,P3,P2,P1,P5 on the next). Decorate with the original slot
+ * so ties keep the order they arrived in.
+ */
+function AELL_stableSort(arr, cmp) {
+  var deco = [];
+  var i;
+  for (i = 0; i < arr.length; i++) deco.push({ v: arr[i], i: i });
+  deco.sort(function (a, b) {
+    var c = cmp(a.v, b.v);
+    return c !== 0 ? c : (a.i - b.i);
+  });
+  for (i = 0; i < deco.length; i++) arr[i] = deco[i].v;
+  return arr;
+}
+
+/*
+ * Compare layer names the way a human reads them: digit runs count as
+ * numbers, everything else as text. AE layer names are numbered far more
+ * often than they are alphabetic -- split_layer_into_chunks alone emits
+ * "X 1".."X 30" -- and a plain string compare buries 10..30 between 1
+ * and 2.
+ */
+function AELL_nameCompare(sa, sb) {
+  var ra = String(sa).toLowerCase().match(/[0-9]+|[^0-9]+/g) || [];
+  var rb = String(sb).toLowerCase().match(/[0-9]+|[^0-9]+/g) || [];
+  var n = Math.min(ra.length, rb.length);
+  for (var i = 0; i < n; i++) {
+    var x = ra[i], y = rb[i];
+    if (/^[0-9]/.test(x) && /^[0-9]/.test(y)) {
+      var dx = parseFloat(x), dy = parseFloat(y);
+      if (dx !== dy) return dx < dy ? -1 : 1;
+    } else if (x !== y) {
+      return x < y ? -1 : 1;
+    }
+  }
+  if (ra.length !== rb.length) return ra.length < rb.length ? -1 : 1;
+  // Case-insensitive tie: fall back to the raw strings so the order is
+  // total and repeatable rather than left to the sort.
+  var a0 = String(sa), b0 = String(sb);
+  return a0 < b0 ? -1 : (a0 > b0 ? 1 : 0);
+}
+
 /* Resolve target layers: explicit list, else the user's selection. */
 function AELL_targetLayers(comp, args) {
   var layers = [];
   var i;
-  if (AELLJSON.isArray(args.layers) && args.layers.length > 0) {
+  var explicit = AELLJSON.isArray(args.layers) && args.layers.length > 0;
+  if (explicit) {
     for (i = 0; i < args.layers.length; i++) {
       layers.push(AELL_resolveLayer(comp, args.layers[i]));
     }
@@ -1618,17 +2019,25 @@ function AELL_targetLayers(comp, args) {
     throw new Error("Need at least 2 layers (got " + layers.length +
                     ") — select them in AE or pass {layers: [...]}");
   }
-  var order = String(args.order || "in");
+  // An EXPLICIT list is ALREADY an order: the caller named the layers in
+  // the sequence they want the values handed out in. Re-sorting it
+  // silently reassigns them, and when the sort key ties — every layer
+  // at inPoint 0, which is the normal state of a grid — the result is
+  // arbitrary. Sort a named list only when 'order' asks for it.
+  var wanted = (typeof args.order === "string" && args.order !== "")
+    ? args.order : (explicit ? "" : "in");
+  if (wanted === "") return layers;
+  var order = String(wanted);
   // User-facing aliases: 'ascending' assigns the earliest slot to the
   // BOTTOM layer (bars staircase upward); 'descending' to the top layer.
   if (/^asc/i.test(order)) order = "reverse";
   else if (/^desc/i.test(order)) order = "stack";
   if (order === "stack") {
-    layers.sort(function (a, b) { return a.index - b.index; });
+    AELL_stableSort(layers, function (a, b) { return a.index - b.index; });
   } else if (order === "reverse") {
-    layers.sort(function (a, b) { return b.index - a.index; });
+    AELL_stableSort(layers, function (a, b) { return b.index - a.index; });
   } else {   // "in": by current inPoint — natural for chunked sequences
-    layers.sort(function (a, b) { return a.inPoint - b.inPoint; });
+    AELL_stableSort(layers, function (a, b) { return a.inPoint - b.inPoint; });
   }
   return layers;
 }
@@ -1662,17 +2071,35 @@ AELL_TOOLS.reorder_layers = function (args) {
   var by = String(args.by || "startTime");
   function keyOf(L) {
     if (by === "inPoint") return L.inPoint;
-    if (by === "name") return L.name;
     return L.startTime;
   }
-  var sorted = layers.slice(0);
-  sorted.sort(function (a, b) {
-    var ka = keyOf(a), kb = keyOf(b);
-    return ka < kb ? -1 : (ka > kb ? 1 : 0);
-  });
   var descending = /^desc/i.test(String(args.order || ""));
+  var sorted = layers.slice(0);
+  AELL_stableSort(sorted, function (a, b) {
+    var c;
+    if (by === "name") {
+      c = AELL_nameCompare(a.name, b.name);
+    } else {
+      var ka = keyOf(a), kb = keyOf(b);
+      c = ka < kb ? -1 : (ka > kb ? 1 : 0);
+    }
+    if (c !== 0) return c;
+    // Equal keys must not shuffle the stack. 'sorted' is bottom-first for
+    // ascending (it gets reversed below) and top-first for descending, so
+    // the tie-break flips with it to leave tied layers exactly where they
+    // already sit instead of at the sort's whim.
+    return descending ? (a.index - b.index) : (b.index - a.index);
+  });
   // Top-first sequence: ascending puts the LATEST key on top.
   var topFirst = descending ? sorted : sorted.slice(0).reverse();
+  // Snapshot every slot first: pulling a SUBSET together shoves whatever
+  // sat between its members out of the way, and a caller who only named
+  // three layers deserves to be told the other two moved.
+  var all = [], wasAt = [];
+  for (i = 1; i <= comp.numLayers; i++) {
+    all.push(comp.layer(i));
+    wasAt.push(i);
+  }
   // Anchor the cluster where its topmost member currently sits.
   var top = layers[0];
   for (i = 1; i < layers.length; i++) {
@@ -1683,34 +2110,98 @@ AELL_TOOLS.reorder_layers = function (args) {
     topFirst[i].moveAfter(topFirst[i - 1]);
   }
   var stacked = [];
-  for (i = 0; i < topFirst.length && i < 5; i++) stacked.push(topFirst[i].name);
-  return AELL_okay({ layers: layers.length, by: by,
+  for (i = 0; i < topFirst.length && i < 12; i++) stacked.push(topFirst[i].name);
+  // Read the landing slots back from AE instead of trusting the moves.
+  var firstIdx = topFirst[0].index;
+  var lastIdx = topFirst[topFirst.length - 1].index;
+  var displaced = 0, m, isTarget;
+  for (i = 0; i < all.length; i++) {
+    if (all[i].index === wasAt[i]) continue;
+    isTarget = false;
+    for (m = 0; m < layers.length; m++) {
+      if (layers[m] === all[i]) { isTarget = true; break; }
+    }
+    if (!isTarget) displaced++;
+  }
+  var res = { layers: layers.length, by: by,
     order: descending ? "descending" : "ascending",
-    topToBottom: stacked.join(" | ") + (topFirst.length > 5 ? " | …" : ""),
-    note: "Stacking changed only — start times untouched" });
+    topToBottom: stacked.join(" | ") + (topFirst.length > 12 ? " | …" : ""),
+    slots: firstIdx + ".." + lastIdx,
+    note: "Stacking changed only — start times untouched" };
+  if (lastIdx - firstIdx + 1 !== topFirst.length) {
+    res.warning = "Reordered layers did NOT land in one contiguous block " +
+      "(slots " + firstIdx + ".." + lastIdx + " for " + topFirst.length +
+      " layers) — read the comp back with get_comp_details";
+  }
+  if (displaced > 0) {
+    res.displaced = displaced;
+    res.note = "Stacking changed only — start times untouched; " +
+      displaced + " layer(s) nobody asked about were pushed aside to make " +
+      "the reordered ones contiguous";
+  }
+  return AELL_okay(res);
 };
 
 AELL_TOOLS.stagger_layers = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var bez = AELL_bezierArgs(args);
   var layers = AELL_targetLayers(comp, args);
-  // No spread declared -> fill the comp's WORK AREA (fall back to the
-  // full comp duration), so bare requests need no numbers at all.
-  var spread = args.spread > 0 ? Number(args.spread) : null;
+  var n = layers.length;
+  var fd = 0;
+  try { fd = Number(comp.frameDuration) || 0; } catch (eFD) { fd = 0; }
+
+  // TWO units, because the field proved one was not enough. 'spread' is
+  // the TOTAL span of the stagger; 'step'/'stepFrames' is the gap BETWEEN
+  // consecutive layers. Measured through the chat probe: "stagger them 4
+  // frames apart" arrived as spread 0.133 on nine layers -- 0.0166s each,
+  // half a frame, every layer effectively on the same frame -- and this
+  // tool reported nine cheerful placements. Designers speak in gaps, so
+  // the gap is now sayable, the two units are mutually exclusive, and a
+  // spread that works out to under a frame per layer says so out loud.
+  var spread = AELL_numArg(args.spread);
+  if (spread !== null && !(spread > 0)) spread = null;
+  var step = AELL_numArg(args.step);
+  var stepFrames = AELL_numArg(args.stepFrames);
+  var notes = [];
+
+  if (step !== null && stepFrames !== null) {
+    return AELL_err("Pass 'step' (seconds between consecutive layers) or " +
+      "'stepFrames' (frames between consecutive layers), not both");
+  }
+  if (stepFrames !== null) {
+    if (!fd) {
+      return AELL_err("'stepFrames' needs the comp's frame duration, and " +
+        "'" + comp.name + "' did not report one -- pass 'step' in seconds");
+    }
+    step = stepFrames * fd;
+  }
+  if (step !== null && spread !== null) {
+    return AELL_err("'spread' is the TOTAL span and 'step' is the gap " +
+      "BETWEEN consecutive layers -- pass one, not both. For these " + n +
+      " layers, spread " + AELL_r3(step * (n - 1)) + " == step " +
+      AELL_r3(step) + ".");
+  }
+  var stepMode = (step !== null);
+
+  // No unit at all -> fill the comp's WORK AREA (fall back to the full
+  // comp duration), so bare requests need no numbers.
   var usedWorkArea = false;
-  if (spread === null) {
+  if (!stepMode && spread === null) {
     if (comp.workAreaDuration > 0) {
       spread = Number(comp.workAreaDuration);
       usedWorkArea = true;
     } else if (comp.duration > 0) {
       spread = Number(comp.duration);
     } else {
-      return AELL_err("'spread' (seconds) is required");
+      return AELL_err("'spread' (TOTAL seconds) or 'step' (seconds " +
+        "between consecutive layers) is required");
     }
   }
+
+  var startAt = AELL_numArg(args.startAt);
   var base;
-  if (typeof args.startAt === "number") {
-    base = args.startAt;
+  if (startAt !== null) {
+    base = startAt;
   } else if (usedWorkArea) {
     base = Number(comp.workAreaStart) || 0;
   } else {
@@ -1719,17 +2210,56 @@ AELL_TOOLS.stagger_layers = function (args) {
       if (layers[j].startTime < base) base = layers[j].startTime;
     }
   }
-  var n = layers.length;
+
   var placed = [];
   for (var i = 0; i < n; i++) {
-    var t = i / (n - 1);
-    var y = AELL_bezierY(bez[0], bez[1], bez[2], bez[3], t);
-    layers[i].startTime = base + y * spread;
+    var t;
+    if (stepMode) {
+      t = base + i * step;
+    } else {
+      var y = AELL_bezierY(bez[0], bez[1], bez[2], bez[3], i / (n - 1));
+      t = base + y * spread;
+    }
+    layers[i].startTime = t;
     placed.push({ layer: layers[i].name,
-                  startTime: Math.round(layers[i].startTime * 1000) / 1000 });
+                  startTime: AELL_r3(layers[i].startTime) });
   }
-  return AELL_okay({ layers: n, spread: spread, startAt: base,
-                     bezier: bez, placed: placed });
+
+  var total = stepMode ? step * (n - 1) : spread;
+  var gap = total / (n - 1);
+  var res = { layers: n, spread: AELL_r3(total), startAt: AELL_r3(base),
+              bezier: bez, placed: placed };
+  if (stepMode) {
+    res.step = AELL_r3(step);
+    if (fd) res.stepFrames = Math.round((step / fd) * 100) / 100;
+    var custom = AELLJSON.isArray(args.bezier) &&
+      !(bez[0] === 0 && bez[1] === 0 && bez[2] === 1 && bez[3] === 1);
+    if (custom) {
+      notes.push("'step' spaces the layers EVENLY, so the bezier was not " +
+        "used -- pass 'spread' instead to stagger along a curve");
+    }
+    if (step === 0) {
+      notes.push("step 0 -- every layer starts at " + AELL_r3(base) + "s");
+    } else if (fd && Math.abs(step) < fd) {
+      notes.push("step " + AELL_r3(step) + "s is under ONE frame (" +
+        AELL_r3(fd) + "s at " + comp.frameRate + " fps), so the layers " +
+        "all land on the same frame");
+    }
+  } else {
+    res.perLayer = AELL_r3(gap);
+    if (fd) res.perLayerFrames = Math.round((gap / fd) * 100) / 100;
+    if (fd && Math.abs(gap) < fd) {
+      notes.push("'spread' is the TOTAL span, so " + n + " layers across " +
+        AELL_r3(total) + "s land " + AELL_r3(gap / fd) +
+        " frame(s) apart -- under one frame, i.e. all on the same frame. " +
+        "If you meant " + AELL_r3(total) + "s BETWEEN layers, pass step: " +
+        AELL_r3(total) + " (or stepFrames: " +
+        (Math.round((total / fd) * 100) / 100) + ") instead of spread.");
+    }
+  }
+  if (usedWorkArea) res.usedWorkArea = true;
+  if (notes.length) res.note = notes.join(". ");
+  return AELL_okay(res);
 };
 
 var AELL_DIST_PROPS = {
@@ -1771,7 +2301,7 @@ AELL_TOOLS.distribute_property = function (args) {
     }
   }
   var n = layers.length;
-  var applied = [], skipped = [], warnings = [];
+  var applied = [], skipped = [], overridden = [], overriddenWhy = "";
   for (var i = 0; i < n; i++) {
     var v;
     if (useStep) {
@@ -1798,23 +2328,42 @@ AELL_TOOLS.distribute_property = function (args) {
     // property is reported and skipped, so the caller learns WHICH
     // layers were left out rather than getting a partial spread that
     // claims to have covered everything.
+    //
+    // A layer whose write was swallowed by an expression is NOT applied,
+    // however happily AE accepted the setValue. Measured in the field: a
+    // 3x3 grid_layout rig drives Position, this tool then reported nine
+    // `applied` rows of x values the comp never showed, and the honest
+    // half of the answer sat in a `warnings` array long enough to be cut
+    // by the panel's per-result cap. Names only here — nine full
+    // sentences is exactly what got truncated.
     try {
       var w = AELL_writeValue(prop, target, layers[i].name + "/" +
                               String(args.property));
-      if (w) warnings.push(w);
-      applied.push({ layer: layers[i].name,
-                     value: Math.round(v * 100) / 100 });
+      if (w) {
+        overridden.push(layers[i].name);
+        if (!overriddenWhy) overriddenWhy = w;
+      } else {
+        applied.push({ layer: layers[i].name,
+                       value: Math.round(v * 100) / 100 });
+      }
     } catch (eD) {
       skipped.push(layers[i].name + ": " +
         (eD && eD.message ? eD.message : String(eD)));
     }
   }
   var res = { property: args.property, layers: n, applied: applied };
+  var notes = [];
   if (skipped.length) {
     res.skipped = skipped;
-    res.note = skipped.length + " of " + n + " layer(s) were NOT changed";
+    notes.push(skipped.length + " of " + n + " layer(s) were NOT changed");
   }
-  if (warnings.length) res.warnings = warnings;
+  if (overridden.length) {
+    res.overriddenByExpression = overridden;
+    notes.push(overridden.length + " of " + n + " layer(s) did NOT move " +
+      "because an expression drives " + String(args.property) + " on them: " +
+      overriddenWhy);
+  }
+  if (notes.length) res.note = notes.join(". ");
   return AELL_okay(res);
 };
 
@@ -1944,6 +2493,41 @@ AELL_TOOLS.set_comp_setting = function (args) {
                      duration: comp.duration, frameRate: comp.frameRate });
 };
 
+/* Compare a written value with what AE read back. Tolerant of the
+ * scripting API's padding: writing [x, y] to a 2D Position reads back as
+ * [x, y, 0], which is the SAME value, not a failed write. */
+function AELL_sameValue(a, b) {
+  var TOL = 0.01;
+  var i;
+  if (AELLJSON.isArray(a) || AELLJSON.isArray(b)) {
+    if (!AELLJSON.isArray(a) || !AELLJSON.isArray(b)) return false;
+    var n = Math.min(a.length, b.length);
+    if (!n) return a.length === b.length;
+    for (i = 0; i < n; i++) {
+      if (Math.abs(Number(a[i]) - Number(b[i])) > TOL) return false;
+    }
+    return true;
+  }
+  if (typeof a === "number" && typeof b === "number") {
+    return Math.abs(a - b) <= TOL;
+  }
+  return String(a) === String(b);
+}
+
+/* A property value the model can read back to us as an argument. */
+function AELL_showValue(v) {
+  var i, parts;
+  if (AELLJSON.isArray(v)) {
+    parts = [];
+    for (i = 0; i < v.length; i++) {
+      parts.push(Math.round(Number(v[i]) * 100) / 100);
+    }
+    return "[" + parts.join(", ") + "]";
+  }
+  if (typeof v === "number") return String(Math.round(v * 100) / 100);
+  return String(v);
+}
+
 /*
  * Write a plain value to a property, turning AE's two silent refusals
  * into something the model can act on:
@@ -1951,6 +2535,13 @@ AELL_TOOLS.set_comp_setting = function (args) {
  *   - an EXPRESSION-DRIVEN one accepts it and then ignores it, which is
  *     worse, because the tool reports success and nothing moves.
  * Returns a warning string (or "") so callers can surface the second case.
+ *
+ * "Driven" is NOT the same as "overridden", which is why this reads the
+ * property back instead of trusting expressionEnabled: an expression can
+ * CONSUME the written value (`value + wiggle(2, 30)` moves when you write
+ * to it) or IGNORE it (a rig that computes the property from scratch, the
+ * shape grid_layout builds). Only AE knows which, and on a driven property
+ * `.value` is the EVALUATED result — so ask it, and quote the answer.
  */
 function AELL_writeValue(prop, value, label) {
   var keys = 0;
@@ -1962,13 +2553,24 @@ function AELL_writeValue(prop, value, label) {
       "delete the existing keyframes first.");
   }
   prop.setValue(value);
+  return AELL_overrideWarning(prop, value, label);
+}
+
+/* Did a write that AE ACCEPTED actually change what the comp shows?
+ * Returns "" when it did (including when there is no expression at all),
+ * else a warning naming the value that is really there. */
+function AELL_overrideWarning(prop, value, label) {
   var driven = false;
   try { driven = !!prop.expressionEnabled; } catch (eE) {}
-  return driven
-    ? "'" + label + "' has an expression, which overrides this value — " +
-      "the change was accepted but will NOT be visible until the " +
-      "expression is removed or edited"
-    : "";
+  if (!driven) return "";
+  var actual = null, read = false;
+  try { actual = prop.value; read = true; } catch (eV) {}
+  if (read && AELL_sameValue(actual, value)) return "";   // passed through
+  return "'" + label + "' is driven by an expression that ignores written " +
+    "values" +
+    (read ? " — the comp still shows " + AELL_showValue(actual) + ", not " +
+            AELL_showValue(value) : "") +
+    ". Clear it first (set_expression with expression: \"\").";
 }
 
 /* Apply fn to a property's value — at every keyframe when it has keys. */
@@ -1980,6 +2582,108 @@ function AELL_mapPropValues(prop, fn) {
   } else {
     prop.setValue(fn(prop.value));
   }
+}
+
+/*
+ * Scale a keyframed property's INTERPOLATION by the same factor as its
+ * values. setValueAtKey moves the keys and leaves two things behind, both
+ * still measured in the OLD comp's units:
+ *   - spatial tangents, the pixel handles of the motion path, so a curved
+ *     path keeps full-size handles and bulges off course between keys;
+ *   - temporal ease SPEED, which is units/second, so eases overshoot.
+ * Measured in real AE 2026 on an 800x600 comp halved: a 3-key curved path
+ * was 37px off course mid-key and a 600px/s ease 33px off, while every
+ * key value was exactly right — the failure is invisible if you only
+ * check keyValue().
+ */
+function AELL_scaleKeyInterp(prop, s, label, problems) {
+  var n = 0;
+  try { n = prop.numKeys; } catch (eN) { return; }
+  if (!n) return;
+  var spatial = false;
+  try { spatial = !!prop.isSpatial; } catch (eS) {}
+  var touched = false;
+
+  function scaleVec(v) {
+    var out = [];
+    for (var d = 0; d < v.length; d++) out.push(v[d] * s);
+    return out;
+  }
+  function scaleEase(arr) {
+    var out = [];
+    for (var d = 0; d < arr.length; d++) {
+      // A zero-speed side has nothing to scale — and AE REFUSES to
+      // rebuild it: the untouched side of a key reads back influence 0,
+      // while the KeyframeEase constructor rejects anything under 0.1
+      // ("Value 0 out of range 0.1 to 100"). Hand the original object
+      // straight back instead. This is why easing applied by
+      // apply_keyframe_ease (which only writes the FACING sides of a
+      // pair) used to survive a resize unscaled: the very first ease
+      // rebuilt threw, and the whole key was abandoned.
+      if (!arr[d].speed) { out.push(arr[d]); continue; }
+      out.push(new KeyframeEase(arr[d].speed * s,
+        Math.max(0.1, Math.min(100, arr[d].influence))));
+      touched = true;
+    }
+    return out;
+  }
+
+  for (var k = 1; k <= n; k++) {
+    // AUTO-bezier handles are recomputed by AE from the (already scaled)
+    // neighbouring values, so they are correct for free — and writing
+    // them would only switch auto off. Only user-shaped handles go stale.
+    if (spatial) {
+      var auto = true;
+      try { auto = !!prop.keySpatialAutoBezier(k); } catch (eA) {}
+      if (!auto) {
+        try {
+          prop.setSpatialTangentsAtKey(k,
+            scaleVec(prop.keyInSpatialTangent(k)),
+            scaleVec(prop.keyOutSpatialTangent(k)));
+        } catch (eT) {}
+      }
+    }
+    // Ease only matters on a bezier side, and writing it can flip a
+    // LINEAR or HOLD side to bezier — so capture the types and put them
+    // back. The ease ARRAY LENGTH is whatever AE handed us, which is the
+    // padded scripting dimensionality it demands back (3 for Scale on a
+    // 2D layer, 1 for a spatial property).
+    try {
+      var ti = prop.keyInInterpolationType(k);
+      var to = prop.keyOutInterpolationType(k);
+      if (ti === KeyframeInterpolationType.BEZIER ||
+          to === KeyframeInterpolationType.BEZIER) {
+        touched = false;
+        var newIn = scaleEase(prop.keyInTemporalEase(k));
+        var newOut = scaleEase(prop.keyOutTemporalEase(k));
+        // Nothing to change means nothing to write — and writing would
+        // flip the key's interpolation types for no reason.
+        if (touched) {
+          prop.setTemporalEaseAtKey(k, newIn, newOut);
+          if (prop.keyInInterpolationType(k) !== ti ||
+              prop.keyOutInterpolationType(k) !== to) {
+            prop.setInterpolationTypeAtKey(k, ti, to);
+          }
+        }
+      }
+    } catch (eE) {
+      // Do NOT swallow this. An ease left at the old comp's speed still
+      // renders — wrongly — so a silent catch reports a clean resize
+      // over motion that now overshoots. That silence is exactly what
+      // hid the constructor refusal above.
+      if (problems) {
+        problems.push((label || "a property") + " key " + k + ": " +
+          (eE && eE.message ? eE.message : String(eE)));
+      }
+    }
+  }
+}
+
+/* Map a property's values AND rescale the interpolation that carries
+ * them — the pair scale_comp always wants together. */
+function AELL_scalePropValues(prop, fn, s, label, problems) {
+  AELL_mapPropValues(prop, fn);
+  AELL_scaleKeyInterp(prop, s, label, problems);
 }
 
 /*
@@ -2022,15 +2726,39 @@ AELL_TOOLS.scale_comp = function (args) {
     try { return !!prop.expressionEnabled; } catch (eD) { return false; }
   }
 
+  function AELL_scaleZoom(z) { return z * s; }
+  /* Zoom lives in Camera Options, not the Transform group, so NOTHING
+   * about it is inherited through a parent — a camera parented to a null
+   * (the standard rig) kept its old pixel zoom and silently re-framed the
+   * shot. Verified in real AE 2026: zoom stayed 1000 in a halved comp. */
+  function AELL_rezoom(L) {
+    var z = null;
+    try { z = L.zoom; } catch (eZ) { z = null; }
+    if (!z) return false;
+    AELL_scalePropValues(z, AELL_scaleZoom, s,
+                         L.name + " Zoom", easeProblems);
+    return true;
+  }
+
   var scaled = 0, inherited = 0, i;
-  var skipped = [], drivenBy = [];
+  var skipped = [], drivenBy = [], rezoomed = [], easeProblems = [];
   for (i = 1; i <= comp.numLayers; i++) {
     var L = comp.layer(i);
-    if (L.parent) { inherited++; continue; }
+    if (L.parent) {
+      inherited++;
+      try {
+        if (AELL_rezoom(L)) rezoomed.push(L.name);
+      } catch (eP) {
+        skipped.push(L.name + " (zoom): " +
+          (eP && eP.message ? eP.message : String(eP)));
+      }
+      continue;
+    }
     try {
       var posProp = AELL_resolveProperty(L, "position");
       if (AELL_driven(posProp)) drivenBy.push(L.name);
-      AELL_mapPropValues(posProp, AELL_recentre);
+      AELL_scalePropValues(posProp, AELL_recentre, s,
+                           L.name + " Position", easeProblems);
 
       // Cameras and lights AIM rather than scale. AE still RESOLVES a
       // hidden Scale on them, and writing it throws ("the property or a
@@ -2052,11 +2780,11 @@ AELL_TOOLS.scale_comp = function (args) {
       }
       if (sc) {
         if (AELL_driven(sc)) drivenBy.push(L.name);
-        AELL_mapPropValues(sc, function (v) {
+        AELL_scalePropValues(sc, function (v) {
           var out = [];
           for (var d = 0; d < v.length; d++) out.push(v[d] * s);
           return out;
-        });
+        }, s, L.name + " Scale", easeProblems);
       }
 
       // Cameras and lights AIM at a Point of Interest held in comp space
@@ -2077,19 +2805,20 @@ AELL_TOOLS.scale_comp = function (args) {
         if (aims) {
           var poi = L.property("ADBE Transform Group")
                      .property("ADBE Anchor Point");
-          if (poi) AELL_mapPropValues(poi, AELL_recentre);
+          if (poi) {
+            AELL_scalePropValues(poi, AELL_recentre, s,
+                                 L.name + " Point of Interest",
+                                 easeProblems);
+          }
         }
       }
 
       // Zoom is in pixels, so it has to track the resize or the framing
       // changes. Reading it is guarded (non-cameras have none); the WRITE
-      // is not, so a real failure lands in layersSkipped instead of
-      // vanishing and reporting a success that did not happen.
-      var zoomProp = null;
-      try { zoomProp = L.zoom; } catch (e2) { zoomProp = null; }
-      if (zoomProp) {
-        AELL_mapPropValues(zoomProp, function (z) { return z * s; });
-      }
+      // is not — this call sits inside the layer's try, so a real failure
+      // lands in layersSkipped instead of vanishing and reporting a
+      // success that did not happen.
+      AELL_rezoom(L);
       scaled++;
     } catch (e3) {
       // Do NOT fold failures into the inherited count — a locked layer or
@@ -2105,6 +2834,21 @@ AELL_TOOLS.scale_comp = function (args) {
     layersScaled: scaled, layersInherited: inherited,
     note: "Content scaled uniformly and re-centered " +
           "(like the native Scale Composition script)" };
+  if (easeProblems.length) {
+    // Values scaled, easing did not: the motion renders wrong even
+    // though every keyframe sits in the right place. Say so.
+    out.keyframeEasingNotScaled = easeProblems;
+    out.note += ". WARNING: keyframe easing could not be rescaled on " +
+      easeProblems.length + " property/properties, so their motion will " +
+      "over- or undershoot: " + easeProblems.join("; ");
+  }
+  if (rezoomed.length) {
+    // Reported separately: their TRANSFORM really was inherited, only the
+    // zoom needed a write, and claiming they were "scaled" would be a lie.
+    out.parentedCamerasRezoomed = rezoomed;
+    out.note += ". Zoom rescaled on parented camera(s) " +
+      rezoomed.join(", ") + " (zoom is not inherited from a parent)";
+  }
   if (skipped.length) {
     out.layersSkipped = skipped;
     out.note += ". " + skipped.length + " layer(s) could NOT be scaled";
@@ -2317,6 +3061,49 @@ AELL_TOOLS.set_mask = function (args) {
                      changed: changed.join(", ") });
 };
 
+/*
+ * How many points the mask path is ALREADY animated with, or 0 when it
+ * has no keyframes. Every key on one path has to agree -- see
+ * AELL_maskPointMix for why that is not pedantry.
+ */
+function AELL_maskKeyPoints(pathProp) {
+  var n = 0;
+  try { n = pathProp.numKeys || 0; } catch (e) { return 0; }
+  if (n < 1) return 0;
+  try { return pathProp.keyValue(1).vertices.length; } catch (e2) { return 0; }
+}
+
+/*
+ * The grounded refusal for keys that disagree on point count. Measured in
+ * AE 2026, setValueAtTime with a different vertex count on an ALREADY
+ * KEYED mask path does two bad things at once:
+ * (1) "Preserve Constant Vertex and Feather Count" (General preferences,
+ *     ON by default) forces the new count onto every existing key, so the
+ *     path stops interpolating -- it holds key 1 and then POPS. numKeys
+ *     still read 2 and the tool still reported "Mask path animated".
+ * (2) AE queues a modal warning that appears AFTER the script returns and
+ *     DISABLES AE's main window, so every later tool call is swallowed
+ *     while AE still reports as healthy. A chat panel cannot click that
+ *     dialog, so one bad mask call ends the session.
+ * Refusing costs the caller nothing: a repeated vertex pads a simpler
+ * path invisibly.
+ */
+function AELL_maskPointMix(maskName, where, got, want, wantFrom) {
+  return "Mask path keys must all have the same number of points: " +
+    where + " has " + got + " but " + wantFrom +
+    (wantFrom === "the existing keys" ? " have " : " has ") + want + ". " +
+    "After Effects cannot interpolate between paths with different point " +
+    "counts -- with 'Preserve Constant Vertex and Feather Count' on (the " +
+    "default) it forces one count onto every key, so mask '" + maskName +
+    "' would POP instead of animating, and AE raises a modal warning that " +
+    "blocks the whole application until someone clicks it. Give every key " +
+    want + " points (repeat a vertex to pad a simpler shape -- a doubled " +
+    "point is legal and invisible)" +
+    (wantFrom === "the existing keys"
+      ? ", or clear the existing keys first with remove_keyframes."
+      : ".");
+}
+
 AELL_TOOLS.set_mask_path = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var layer = AELL_layerOrSelection(comp, args.layer);
@@ -2324,38 +3111,150 @@ AELL_TOOLS.set_mask_path = function (args) {
   try { mask = AELL_findMask(layer, args.mask); }
   catch (e) { return AELL_err(e.message); }
   var pathProp = mask.property("ADBE Mask Shape");
-  function buildShape(spec, closedDefault) {
+  function buildShape(spec, closedDefault, where) {
     if (!AELLJSON.isArray(spec.vertices) || spec.vertices.length < 3) {
-      throw new Error("'vertices' ([[x,y],…] in LAYER space, >= 3 points) " +
-                      "is required");
+      throw new Error(where + "'vertices' ([[x,y],…] in LAYER space, " +
+                      ">= 3 points) is required");
     }
-    var s = new Shape();
+    var n = spec.vertices.length, s = new Shape();
     s.closed = typeof spec.closed === "boolean" ? spec.closed : closedDefault;
     s.vertices = spec.vertices;
-    if (AELLJSON.isArray(spec.inTangents)) s.inTangents = spec.inTangents;
-    if (AELLJSON.isArray(spec.outTangents)) s.outTangents = spec.outTangents;
+    // AE wants one tangent per point; a short list corrupts the path
+    // quietly, so name the side that is wrong instead of passing it on.
+    if (AELLJSON.isArray(spec.inTangents)) {
+      if (spec.inTangents.length !== n) {
+        throw new Error(where + "'inTangents' has " + spec.inTangents.length +
+          " entries but 'vertices' has " + n + " -- AE needs exactly one " +
+          "tangent per point");
+      }
+      s.inTangents = spec.inTangents;
+    }
+    if (AELLJSON.isArray(spec.outTangents)) {
+      if (spec.outTangents.length !== n) {
+        throw new Error(where + "'outTangents' has " +
+          spec.outTangents.length + " entries but 'vertices' has " + n +
+          " -- AE needs exactly one tangent per point");
+      }
+      s.outTangents = spec.outTangents;
+    }
     return s;
   }
+  // Keyframe times belong ON the frame grid. AE stores whatever fraction
+  // it is handed -- measured, 0.34s in a 30fps comp lands on frame 10.2 --
+  // and then no rendered frame ever shows the shape that was asked for:
+  // frame 21 of a 0.71s key came back 197.3 wide instead of 200.
+  var fd = 0;
+  try { fd = Number(comp.frameDuration) || 0; } catch (eF) { fd = 0; }
+  var fps = fd ? Math.round(1 / fd * 100) / 100 : 0;
+  function snap(t) { return fd ? Math.round(t / fd) * fd : t; }
+  function r4(v) { return Math.round(v * 10000) / 10000; }
+  var animatedWith = AELL_maskKeyPoints(pathProp);
   var closedDefault = args.closed !== false;
   try {
     if (AELLJSON.isArray(args.keys) && args.keys.length > 0) {
       if (args.keys.length > 50) return AELL_err("'keys' capped at 50");
-      for (var i = 0; i < args.keys.length; i++) {
-        var k = args.keys[i] || {};
+      // Build and check EVERY key before writing ANY of them. A path left
+      // half-written is worse than one refused: the caller cannot tell
+      // which keys landed, and the partial state is what pops.
+      var shapes = [], times = [], snapped = 0, i, j, k;
+      for (i = 0; i < args.keys.length; i++) {
+        k = args.keys[i] || {};
         if (typeof k.time !== "number") {
           return AELL_err("keys[" + i + "] needs {time (seconds), vertices}");
         }
-        pathProp.setValueAtTime(k.time, buildShape(k, closedDefault));
+        try { shapes.push(buildShape(k, closedDefault, "keys[" + i + "]: ")); }
+        catch (eB) { return AELL_err(eB.message); }
+        var st = snap(Number(k.time));
+        if (Math.abs(st - Number(k.time)) > 1e-9) snapped++;
+        times.push(st);
       }
-      return AELL_okay({ layer: layer.name, mask: mask.name,
-        keysSet: args.keys.length, numKeys: pathProp.numKeys,
-        note: "Mask path animated" });
+      var want = animatedWith || shapes[0].vertices.length;
+      var wantFrom = animatedWith ? "the existing keys" : "keys[0]";
+      for (i = 0; i < shapes.length; i++) {
+        if (shapes[i].vertices.length !== want) {
+          return AELL_err(AELL_maskPointMix(mask.name, "keys[" + i + "]",
+            shapes[i].vertices.length, want, wantFrom));
+        }
+      }
+      // Snapping can drop two nearby requests onto the same frame, where
+      // the second silently overwrites the first: keysSet said 3, numKeys
+      // said 2, and nothing named the key that vanished.
+      var tol = fd ? fd * 0.5 : 1e-9;
+      for (i = 0; i < times.length; i++) {
+        for (j = i + 1; j < times.length; j++) {
+          if (Math.abs(times[i] - times[j]) < tol) {
+            return AELL_err("keys[" + i + "] (" + args.keys[i].time +
+              "s) and keys[" + j + "] (" + args.keys[j].time + "s) both " +
+              "land on the same frame of comp '" + comp.name + "'" +
+              (fd ? " (frame " + Math.round(times[i] / fd) + " at " + fps +
+                    " fps, one frame is " + r4(fd) + "s)" : "") +
+              " -- the later one would silently overwrite the earlier. " +
+              "Put them on different frames.");
+          }
+        }
+      }
+      var frames = [], keyTimes = [];
+      for (i = 0; i < shapes.length; i++) {
+        pathProp.setValueAtTime(times[i], shapes[i]);
+        frames.push(fd ? Math.round(times[i] / fd) : r4(times[i]));
+        keyTimes.push(r4(times[i]));
+      }
+      var res = { layer: layer.name, mask: mask.name,
+        keysSet: shapes.length, numKeys: pathProp.numKeys, points: want,
+        keyTimes: keyTimes, note: "Mask path animated" };
+      if (fd) res.keyFrames = frames;
+      if (snapped) {
+        res.snappedToFrames = snapped;
+        res.note = "Mask path animated; " + snapped + " key time(s) moved " +
+          "to the nearest frame of a " + fps + " fps comp";
+      }
+      // Keys that all hold the same shape are legal, and they read as an
+      // animation in every count this tool reports. Say so instead.
+      var moves = false;
+      for (i = 1; i < shapes.length && !moves; i++) {
+        for (j = 0; j < want; j++) {
+          if (shapes[i].vertices[j][0] !== shapes[0].vertices[j][0] ||
+              shapes[i].vertices[j][1] !== shapes[0].vertices[j][1]) {
+            moves = true;
+            break;
+          }
+        }
+      }
+      if (!moves) {
+        res.stillFrame = true;
+        res.note = "Keys written, but every key holds the SAME points -- " +
+          "the mask will not move. Give the keys different vertices.";
+      }
+      return AELL_okay(res);
     }
-    var shape = buildShape(args, closedDefault);
+    var shape;
+    try { shape = buildShape(args, closedDefault, ""); }
+    catch (eS) { return AELL_err(eS.message); }
     if (typeof args.atTime === "number") {
-      pathProp.setValueAtTime(args.atTime, shape);
-      return AELL_okay({ layer: layer.name, mask: mask.name,
-        keyframed: true, time: args.atTime, numKeys: pathProp.numKeys });
+      if (animatedWith && shape.vertices.length !== animatedWith) {
+        return AELL_err(AELL_maskPointMix(mask.name, "this shape",
+          shape.vertices.length, animatedWith, "the existing keys"));
+      }
+      var at = snap(Number(args.atTime));
+      pathProp.setValueAtTime(at, shape);
+      var one = { layer: layer.name, mask: mask.name, keyframed: true,
+        time: r4(at), numKeys: pathProp.numKeys,
+        points: shape.vertices.length };
+      if (fd) one.frame = Math.round(at / fd);
+      if (Math.abs(at - Number(args.atTime)) > 1e-9) {
+        one.note = "atTime " + args.atTime + " moved to the nearest frame " +
+          "of a " + fps + " fps comp";
+      }
+      return AELL_okay(one);
+    }
+    // A static setValue on top of keyframes is refused by AE with a
+    // message that never mentions the mask; name the real situation.
+    if (animatedWith) {
+      return AELL_err("Mask '" + mask.name + "' on '" + layer.name +
+        "' is already animated (" + pathProp.numKeys + " keyframes) -- a " +
+        "static path cannot replace them. Pass 'atTime' to add one " +
+        "keyframe, 'keys' to rewrite the animation, or clear it first " +
+        "with remove_keyframes.");
     }
     pathProp.setValue(shape);
     return AELL_okay({ layer: layer.name, mask: mask.name,
@@ -2914,9 +3813,17 @@ AELL_TOOLS.set_property = function (args) {
   }
   var nk = 0;
   try { nk = prop.numKeys || 0; } catch (e2) {}
-  return AELL_okay({ layer: layer.name, property: String(args.property),
+  var out = { layer: layer.name, property: String(args.property),
     value: AELL_sampleRaw(args.value),
-    keyframed: typeof args.atTime === "number", numKeys: nk });
+    keyframed: typeof args.atTime === "number", numKeys: nk };
+  // AE accepts a write to an expression-driven property and then shows
+  // the expression's answer instead. Reporting that as a plain success is
+  // the same lie the other setters used to tell.
+  if (typeof args.atTime !== "number") {
+    var warn = AELL_overrideWarning(prop, args.value, String(args.property));
+    if (warn) { out.applied = false; out.warning = warn; }
+  }
+  return AELL_okay(out);
 };
 
 AELL_TOOLS.set_keyframes = function (args) {
@@ -3014,11 +3921,93 @@ AELL_TOOLS.remove_keyframes = function (args) {
 };
 
 /*
+ * Which tools for_each_layer is allowed to drive, and why the list is
+ * explicit rather than "anything in AELL_TOOLS".
+ *
+ * A tool qualifies only if it takes a SINGULAR {layer} target. Measured in
+ * AE 2026: for_each_layer {tool: "add_solid"} over two layers reported
+ * {ok: true, succeeded: 2} and made two identically named solids, and
+ * {tool: "create_comp"} over two layers reported success and left two junk
+ * comps in the project — the injected {layer} was simply ignored, so the
+ * call became "run this comp-level tool N times" while claiming to have
+ * done per-layer work. A small model that reads "run ANY layer tool" WILL
+ * pick one of these.
+ *
+ * The already-batched list is the mirror image: those tools take their own
+ * {layers} array, so driving them one layer at a time both discards the
+ * batch (grid_layout of a single layer, N times) and hides the real call.
+ *
+ * READ tools are refused for a different reason: for_each_layer reports
+ * counts, never per-layer values, so get_property over 60 layers would
+ * answer "succeeded: 60" and throw every value away.
+ *
+ * tests/test-for-each-layer.js re-derives all three lists from this file's
+ * source and fails if a tool is added without being classified here.
+ */
+var AELL_PER_LAYER_LIST = [
+  "add_control", "add_keyframe", "add_marker", "add_mask",
+  "add_shape_content", "apply_effect", "apply_expression_preset",
+  "center_anchor_point", "delete_layer", "duplicate_layer", "link_property",
+  "set_effect_param", "set_expression", "set_layer_3d", "set_layer_parent",
+  "set_layer_timing", "set_mask", "set_mask_path", "set_property",
+  "set_text_style", "set_track_matte", "set_transform",
+  "split_layer_into_chunks"
+];
+var AELL_PER_LAYER_READ_LIST = ["get_property", "list_properties"];
+var AELL_ALREADY_BATCHED_LIST = [
+  "apply_keyframe_ease", "distribute_property", "for_each_layer",
+  "grid_layout", "precompose", "remove_keyframes", "reorder_layers",
+  "set_keyframes", "stagger_layers"
+];
+
+function AELL_nameSet(list) {
+  var m = {};
+  for (var i = 0; i < list.length; i++) m[list[i]] = true;
+  return m;
+}
+var AELL_PER_LAYER = AELL_nameSet(AELL_PER_LAYER_LIST);
+var AELL_PER_LAYER_READ = AELL_nameSet(AELL_PER_LAYER_READ_LIST);
+var AELL_ALREADY_BATCHED = AELL_nameSet(AELL_ALREADY_BATCHED_LIST);
+
+/*
+ * Reject a tool name for for_each_layer, in the tool's own words, or
+ * return "" when it is drivable. Every refusal names what IS drivable —
+ * the small model's only way back to a working call.
+ */
+function AELL_whyNotPerLayer(toolName) {
+  if (AELL_PER_LAYER[toolName]) return "";
+  var drivable = "Drivable tools: " + AELL_PER_LAYER_LIST.join(", ") + ".";
+  if (AELL_ALREADY_BATCHED[toolName]) {
+    return "'" + toolName + "' already takes its own {layers} list — call " +
+      "it ONCE with every layer instead of once per layer. " + drivable;
+  }
+  if (AELL_PER_LAYER_READ[toolName]) {
+    return "'" + toolName + "' READS a value, and for_each_layer reports " +
+      "only counts — every value it returned would be discarded. Call it " +
+      "once per layer, or use get_comp_details / list_properties for an " +
+      "overview. " + drivable;
+  }
+  if (AELL_TOOLS[toolName]) {
+    return "'" + toolName + "' has no per-layer target, so running it once " +
+      "per layer would just repeat the same comp- or project-level action " +
+      "N times and report it as success. " + drivable;
+  }
+  return "Unknown tool: '" + toolName + "'. " + drivable;
+}
+
+/*
  * Run ANY layer tool once per target layer, host-side — the "script"
  * for batch requests: one model call, hundreds of layers, no per-layer
  * inference. The layer is injected by INDEX (names can repeat).
  */
 AELL_TOOLS.for_each_layer = function (args) {
+  // Validate the TOOL before the layers: a bad tool name is the mistake
+  // worth reporting, and resolving 200 layers first would bury it under a
+  // layer-not-found error about an unrelated argument.
+  var toolName = String(args.tool || "");
+  var why = AELL_whyNotPerLayer(toolName);
+  if (why) return AELL_err(why);
+  var tool = AELL_TOOLS[toolName];
   var comp = AELL_resolveComp(args.comp);
   var layers;
   try { layers = AELL_layersOrSelection(comp, args); }
@@ -3026,13 +4015,6 @@ AELL_TOOLS.for_each_layer = function (args) {
   if (layers.length > 200) {
     return AELL_err("Capped at 200 layers per call (got " + layers.length +
                     ")");
-  }
-  var toolName = String(args.tool || "");
-  var tool = AELL_TOOLS[toolName];
-  if (!tool || toolName === "for_each_layer") {
-    return AELL_err("'tool' must name a layer tool, e.g. set_transform, " +
-                    "apply_effect, set_property, set_keyframes, " +
-                    "center_anchor_point");
   }
   var failures = [];
   var okCount = 0;
@@ -3052,7 +4034,8 @@ AELL_TOOLS.for_each_layer = function (args) {
       failures.push(layers[i].name + ": " + (r ? r.error : "unknown error"));
       if (failures.length >= 5) {
         return AELL_err("Stopped after 5 failures (" + okCount +
-          " layers succeeded first). Failures: " + failures.join(" | "));
+          " layers succeeded first, and those changes are NOT undone). " +
+          "Failures: " + failures.join(" | "));
       }
     }
   }
@@ -3162,23 +4145,35 @@ var AELL_MUTATING = {
 
 // --------------------------------------------------------------- entry point
 
+/* Run one tool with NO undo group of its own. The caller owns the group,
+ * which is what lets a batch put many tools inside a single Ctrl+Z.
+ * Never throws: a tool that blows up comes back as a normal error result. */
+function AELL_runTool(toolName, args) {
+  try {
+    var tool = AELL_TOOLS[toolName];
+    if (!tool) return AELL_err("Unknown tool: " + toolName);
+    return tool(args);
+  } catch (e) {
+    return AELL_err(e && e.message ? e.message : String(e));
+  }
+}
+
 function AELL_call(toolName, argsJson) {
   var result;
   try {
-    var tool = AELL_TOOLS[toolName];
-    if (!tool) {
+    if (!AELL_TOOLS[toolName]) {
       result = AELL_err("Unknown tool: " + toolName);
     } else {
       var args = AELLJSON.parse(argsJson);
       if (AELL_MUTATING[toolName]) {
         app.beginUndoGroup("AE Llama: " + toolName);
         try {
-          result = tool(args);
+          result = AELL_runTool(toolName, args);
         } finally {
           app.endUndoGroup();
         }
       } else {
-        result = tool(args);
+        result = AELL_runTool(toolName, args);
       }
     }
   } catch (e) {
@@ -3192,6 +4187,61 @@ function AELL_call(toolName, argsJson) {
 }
 
 $.global.AELL_call = AELL_call;
+
+/* Run several tools inside ONE undo group, so a chat command that takes
+ * five tool calls costs the user ONE Ctrl+Z instead of five.
+ *
+ * This has to be one call because an undo group does NOT survive the end
+ * of the script execution that opened it (measured in AE 2026: open a
+ * group in one evalScript, change something in the next, and the first
+ * change is already in its own step). Bracketing the round with separate
+ * begin/end calls therefore cannot work -- the tools must run together.
+ *
+ * Takes '[{tool, args}, ...]', returns '{ok, results: [...]}' with one
+ * result per command, in order, whatever each one's outcome was. */
+function AELL_callBatch(commandsJson) {
+  var out;
+  try {
+    var cmds = AELLJSON.parse(commandsJson);
+    // A JSON string has a .length too, so ask what it really is.
+    if (Object.prototype.toString.call(cmds) !== "[object Array]") {
+      return '{"ok":false,"error":"AELL_callBatch wants [{tool, args}, ' +
+             '...]"}';
+    }
+    var results = [];
+    var mutates = false;
+    var first = "";
+    for (var i = 0; i < cmds.length; i++) {
+      var n = String((cmds[i] || {}).tool || "");
+      if (!first && n) first = n;
+      if (AELL_MUTATING[n]) mutates = true;
+    }
+    var run = function () {
+      for (var j = 0; j < cmds.length; j++) {
+        var c = cmds[j] || {};
+        results.push(AELL_runTool(String(c.tool || ""), c.args || {}));
+      }
+    };
+    if (mutates) {
+      var label = "AE Llama: " + (first || "batch");
+      if (cmds.length > 1) label += " +" + (cmds.length - 1) + " more";
+      app.beginUndoGroup(label);
+      try { run(); } finally { app.endUndoGroup(); }
+    } else {
+      run();
+    }
+    out = AELL_okay({ results: results });
+  } catch (e) {
+    out = AELL_err(e && e.message ? e.message : String(e));
+  }
+  try {
+    return AELLJSON.stringify(out);
+  } catch (e2) {
+    return '{"ok":false,"error":"Failed to serialize batch result"}';
+  }
+}
+
+$.global.AELL_callBatch = AELL_callBatch;
 
 /* Called by the panel when a NEW user request starts — comp-name aliases
  * are scoped to one request, deterministically, with no timers. */

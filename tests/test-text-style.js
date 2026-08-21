@@ -40,6 +40,23 @@ const fonts = {
 };
 
 // --- text document ----------------------------------------------------
+// AE 2026 makes these four READ-ONLY on a TextDocument, so a style
+// inherited from the Character panel cannot be cleared from script at
+// all. Modelled as throwing setters: a "fix" that just assigns them
+// would blow up in real AE and pass a stub that let the write through.
+const RO_FIELDS = ["allCaps", "smallCaps", "superscript", "subscript"];
+
+function defineReadOnly(doc, k) {
+  Object.defineProperty(doc, k, {
+    enumerable: false, configurable: true,
+    get() { return doc._ro[k]; },
+    set() {
+      throw new Error("After Effects error: Unable to set “" + k +
+                      "”. It is a readOnly attribute.");
+    }
+  });
+}
+
 function TextDocument() {
   this.text = "hello";
   this.fontSize = 36;
@@ -50,12 +67,53 @@ function TextDocument() {
   this.applyFill = false;
   this.fillColor = [0, 0, 0];
   this.justification = null;
+  this.applyStroke = false;
+  this.strokeWidth = 3;
+  this.fauxBold = false;
+  this.fauxItalic = false;
+  this.baselineShift = 0;
+  this.tsume = 0;
+  this.horizontalScale = 1;
+  this.verticalScale = 1;
+  this._ro = { allCaps: false, smallCaps: false,
+               superscript: false, subscript: false };
+  for (const k of RO_FIELDS) defineReadOnly(this, k);
 }
 TextDocument.prototype.clone = function () {
   const d = new TextDocument();
-  for (const k of Object.keys(this)) d[k] = this[k];
+  for (const k of Object.keys(this)) {
+    if (k === "_ro") continue;
+    d[k] = this[k];
+  }
+  d._ro = Object.assign({}, this._ro);
   return d;
 };
+
+// What comp.layers.addText() ACTUALLY hands back: not defaults, but
+// whatever the user last typed with. These numbers are the ones measured
+// in real AE 2026 on the dev machine -- a plain "add a text layer" came
+// back PowerCentra-Book 66px, tracking 251, auto leading off, and
+// superscript ON (the glyphs really do render at ~58% and raised).
+const CHARACTER_PANEL = {
+  font: "PowerCentra-Book", fontSize: 66, tracking: 251,
+  leading: 92, autoLeading: false,
+  applyFill: true, fillColor: [0.55, 0.1, 0.9],
+  applyStroke: true, strokeWidth: 3,
+  fauxBold: true, fauxItalic: false, baselineShift: 17, tsume: 0.2,
+  horizontalScale: 1.2, verticalScale: 0.8,
+  justification: 7415,
+  _roDirty: { superscript: true }
+};
+
+function dirtyDoc() {
+  const d = new TextDocument();
+  for (const k of Object.keys(CHARACTER_PANEL)) {
+    if (k === "_roDirty") continue;
+    d[k] = CHARACTER_PANEL[k];
+  }
+  Object.assign(d._ro, CHARACTER_PANEL._roDirty);
+  return d;
+}
 
 function TextProp(doc) { this._doc = doc; }
 Object.defineProperty(TextProp.prototype, "value", {
@@ -149,6 +207,8 @@ comp._layers.push(textLayer, solid);
 comp.layers = {
   addText(t) {
     const l = asKind(new Layer(t, comp, true), TextLayer);
+    // Fresh layers inherit the Character panel, NOT clean defaults.
+    l._textProp._doc = dirtyDoc();
     l.doc.text = t;
     comp._layers.push(l);
     return l;
@@ -226,5 +286,87 @@ assert(!badJust.ok && /left, center or right/.test(badJust.error || ""),
 const notText = call("set_text_style", { comp: "Text", layer: "NOTTEXT",
                                          fontSize: 20 });
 assert(!notText.ok, "a non-text layer is refused");
+
+// --- 7. a NEW text layer starts from a known baseline ----------------
+// comp.layers.addText() inherits AE's Character panel, so without this
+// a request for "white 120px" comes back tracking 251 in whatever face
+// the user last typed with -- and the tool reports it as a success.
+const fresh = call("add_text_layer", { comp: "Text", text: "Clean" });
+assert(fresh.ok, "add_text_layer succeeds (" + (fresh.error || "") + ")");
+const fd = comp.layer("Clean").doc;
+assert(fd.tracking === 0,
+       "inherited tracking 251 is reset to 0 (got " + fd.tracking + ")");
+assert(fd.fontSize === 72,
+       "inherited fontSize 66 becomes the documented 72 (got " +
+       fd.fontSize + ")");
+assert(fd.autoLeading === true,
+       "inherited leading 92 goes back to auto (autoLeading " +
+       fd.autoLeading + ")");
+assert(INSTALLED.indexOf(fd.font) !== -1 && fd.font !== "PowerCentra-Book",
+       "font falls back to a VERIFIED-installed plain face (got " +
+       fd.font + ")");
+assert(fd.applyFill === true && fd.fillColor.join() === "1,1,1",
+       "fill is white (got " + fd.fillColor.join() + ")");
+assert(fd.applyStroke === false, "inherited stroke is switched off");
+assert(fd.fauxBold === false && fd.baselineShift === 0,
+       "faux bold and baseline shift are cleared");
+assert(fd.tsume === 0 && fd.horizontalScale === 1 && fd.verticalScale === 1,
+       "tsume and horizontal/vertical scale are neutral");
+assert(fd.justification === ParagraphJustification.LEFT_JUSTIFY,
+       "justification defaults to left (got " + fd.justification + ")");
+assert(fresh.data.styleReset === true, "the result says the style was reset");
+assert(fresh.data.style.fillColor &&
+       fresh.data.style.fillColor.join() === "1,1,1",
+       "the summary reports the fill, so 'white' is visible in the answer");
+
+// --- 8. what AE will NOT let us clear must be SAID, not swallowed -----
+assert(/superscript/.test(fresh.data.warning || ""),
+       "the inherited read-only superscript is reported (warning: " +
+       fresh.data.warning + ")");
+assert(/Character panel/.test(fresh.data.warning || ""),
+       "the warning names the only place it CAN be fixed");
+assert(comp.layer("Clean").doc.superscript === true,
+       "and it is honest: superscript really is still on");
+
+// --- 9. explicit args still beat the baseline ------------------------
+const styled = call("add_text_layer", {
+  comp: "Text", text: "Styled", fontSize: 120, tracking: 5,
+  font: "Anton-Regular", fillColor: [1, 0, 0], leading: 90,
+  justification: "center" });
+assert(styled.ok, "styled add_text_layer succeeds (" + (styled.error || "") + ")");
+const sd = comp.layer("Styled").doc;
+assert(sd.fontSize === 120 && sd.tracking === 5 && sd.font === "Anton-Regular",
+       "caller's fontSize/tracking/font win over the baseline");
+assert(sd.autoLeading === false && sd.leading === 90,
+       "an explicit leading survives the reset to auto (got " +
+       sd.leading + "/" + sd.autoLeading + ")");
+assert(sd.fillColor.join() === "1,0,0",
+       "an explicit fill wins over white (got " + sd.fillColor.join() + ")");
+assert(sd.justification === ParagraphJustification.CENTER_JUSTIFY,
+       "an explicit justification wins over left");
+
+// --- 10. inheritStyle:true is the way back to AE's own behaviour -----
+const kept = call("add_text_layer", { comp: "Text", text: "Inherited",
+                                      inheritStyle: true });
+const kd = comp.layer("Inherited").doc;
+assert(kd.tracking === 251 && kd.fontSize === 66 &&
+       kd.font === "PowerCentra-Book",
+       "inheritStyle keeps the Character panel style (got " + kd.tracking +
+       "/" + kd.fontSize + "/" + kd.font + ")");
+assert(kept.data.inheritedStyle === true && !kept.data.styleReset,
+       "and the result says so");
+
+// --- 11. set_text_style is an EDIT and must NEVER normalize ----------
+// The user's own layer keeps every field the caller did not name --
+// including the ones add_text_layer would have reset.
+const edited = call("set_text_style", { comp: "Text", layer: "Inherited",
+                                        fontSize: 30 });
+const ed = comp.layer("Inherited").doc;
+assert(edited.ok && ed.fontSize === 30, "restyle applies fontSize");
+assert(ed.tracking === 251 && ed.font === "PowerCentra-Book" &&
+       ed.fauxBold === true && ed.baselineShift === 17,
+       "restyling does NOT reset the user's style (tracking " + ed.tracking +
+       ", font " + ed.font + ", fauxBold " + ed.fauxBold + ")");
+assert(!edited.data.styleReset, "and never claims to have reset it");
 
 console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");
