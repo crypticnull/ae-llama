@@ -891,6 +891,34 @@ AELL_TOOLS.set_transform = function (args) {
   return AELL_okay(result);
 };
 
+/* True when a property's value varies over time (keyframes or a rig). */
+function AELL_isAnimated(prop) {
+  try {
+    if (prop.numKeys > 0) return true;
+  } catch (eK) {}
+  try {
+    if (prop.expressionEnabled) return true;
+  } catch (eE) {}
+  return false;
+}
+
+/*
+ * The Position offset that cancels an anchor shift of [dax, day] at time
+ * t: the shift happens in LAYER space, so it reaches Position through
+ * this layer's own Scale and Rotation at that moment. Both are read with
+ * valueAtTime(t, false) so keyframed and expression-driven rigs give the
+ * value AE actually renders.
+ */
+function AELL_anchorDelta(sclProp, rotProp, dax, day, t) {
+  var s = sclProp.valueAtTime(t, false);
+  var r = rotProp.valueAtTime(t, false);
+  var dx = dax * (s[0] / 100);
+  var dy = day * (s[1] / 100);
+  var rad = r * Math.PI / 180;
+  return [dx * Math.cos(rad) - dy * Math.sin(rad),
+          dx * Math.sin(rad) + dy * Math.cos(rad)];
+}
+
 AELL_TOOLS.center_anchor_point = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var layer = AELL_resolveLayer(comp, args.layer);
@@ -927,34 +955,53 @@ AELL_TOOLS.center_anchor_point = function (args) {
     // the layer stays visually in place. Parenting needs no special case:
     // Position is already expressed in the parent's space, and the delta
     // is carried there by this layer's own scale and rotation.
-    var scl = transform.property("ADBE Scale").value;
-    var rot = transform.property("ADBE Rotate Z").value;
-    var dx = (newAp[0] - oldAp[0]) * (scl[0] / 100);
-    var dy = (newAp[1] - oldAp[1]) * (scl[1] / 100);
-    var rad = rot * Math.PI / 180;
-    var dpx = dx * Math.cos(rad) - dy * Math.sin(rad);
-    var dpy = dx * Math.sin(rad) + dy * Math.cos(rad);
+    //
+    // Scale and Rotation can THEMSELVES be animated, which makes the
+    // delta time-dependent — verified in real AE: one delta taken at the
+    // current time and applied to every Position key left the layer
+    // drifting up to 37px at the other keys. So it is recomputed at each
+    // key's own time.
+    var sclProp = transform.property("ADBE Scale");
+    var rotProp = transform.property("ADBE Rotate Z");
+    var dax = newAp[0] - oldAp[0];
+    var day = newAp[1] - oldAp[1];
+    var movingRig = AELL_isAnimated(sclProp) || AELL_isAnimated(rotProp);
     apProp.setValue(newAp);
 
     if (posProp.numKeys > 0) {
-      // Animated position: setValue would throw. Offset EVERY key by the
-      // same delta so the whole animation shifts with the anchor rather
-      // than the layer jumping at one time and not the others.
+      // Animated position: setValue would throw. Offset EVERY key so the
+      // whole animation shifts with the anchor rather than the layer
+      // jumping at one time and not the others.
       for (var k = 1; k <= posProp.numKeys; k++) {
         var kv = posProp.keyValue(k);
-        var nk = [kv[0] + dpx, kv[1] + dpy];
+        var dk = AELL_anchorDelta(sclProp, rotProp, dax, day,
+                                  posProp.keyTime(k));
+        var nk = [kv[0] + dk[0], kv[1] + dk[1]];
         for (var d = 2; d < kv.length; d++) nk.push(kv[d]);
         posProp.setValueAtKey(k, nk);
       }
       note = "anchor centered on content; all " + posProp.numKeys +
              " Position keyframes offset so the layer did not move";
+      if (movingRig) {
+        note += " (NOTE: Scale/Rotation are animated too, so the offset " +
+                "is exact at the Position keyframes and approximate " +
+                "between them — add Position keys where Scale/Rotation " +
+                "have theirs if the in-between drift matters)";
+      }
     } else {
+      var dp = AELL_anchorDelta(sclProp, rotProp, dax, day, comp.time);
       var pos = posProp.value;
-      var newPos = [pos[0] + dpx, pos[1] + dpy];
+      var newPos = [pos[0] + dp[0], pos[1] + dp[1]];
       if (pos.length > 2) newPos.push(pos[2]);
       posProp.setValue(newPos);
       note = "anchor centered on content; position compensated so the " +
              "layer did not move";
+      if (movingRig) {
+        note += " (WARNING: Scale/Rotation are animated but Position is " +
+                "not, so a single Position value cannot hold the layer " +
+                "still — it is correct at " + comp.time + "s and drifts " +
+                "elsewhere)";
+      }
     }
 
     // A driven Position accepts the write but never shows it — report

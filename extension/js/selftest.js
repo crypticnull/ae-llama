@@ -12,6 +12,9 @@
   var COMP = "AELL Self-Test";
   // Cameras get their own comp: scale_comp resizes the whole thing.
   var CAMCOMP = "AELL Self-Test Cam";
+  // So does the anchor-point rig: it needs its own parent chain and
+  // measuring nulls, which would disturb the grid steps above.
+  var APCOMP = "AELL Self-Test Anchor";
   var running = false;
 
   /**
@@ -426,6 +429,213 @@
           return (Math.abs(v[0] - 400) < 0.6 && Math.abs(v[1] - 300) < 0.6) ||
                  "POI moved to " + JSON.stringify(d.value);
         } },
+
+      // ---- center_anchor_point on a moving rig (WORKPLAN item 2) -------
+      // Measured the only way that proves "the layer did not move": a
+      // probe null whose Position expression is the TARGET's own
+      // toComp([0,0], t). That is the layer's origin in comp space, so it
+      // must read IDENTICALLY before and after the anchor is re-centred --
+      // through parenting, rotation and non-uniform scale alike.
+      //
+      // Real AE 2026 caught what the stub could not: the compensation
+      // delta was taken once at the current time and applied to every
+      // Position key, so a layer whose Scale/Rotation are ALSO animated
+      // drifted up to 37px at the other keys. Two probe times, one per
+      // Position key, is what makes that visible.
+      { name: "anchor scratch comp",
+        tool: "create_comp",
+        args: { name: APCOMP, width: 800, height: 600, duration: 5,
+                frameRate: 30 },
+        check: function (d, ctx) {
+          ctx.apComp = d.name;
+          return typeof d.id === "number" || !!d.id || "no comp id";
+        } },
+
+      { name: "anchor rig: parent null",
+        tool: "add_null",
+        args: function (ctx) {
+          return { comp: ctx.apComp, name: "ST AP Parent",
+                   position: [500, 300] };
+        },
+        check: function (d) { return d.name === "ST AP Parent" || d.name; } },
+
+      { name: "anchor rig: rotate the parent",
+        tool: "set_transform",
+        args: function (ctx) {
+          return { comp: ctx.apComp, layer: "ST AP Parent",
+                   property: "rotation", value: 30 };
+        },
+        check: function () { return true; } },
+
+      // Non-uniform, so a parent that distorts the child's frame is part
+      // of the test rather than a friendly special case.
+      { name: "anchor rig: scale the parent non-uniformly",
+        tool: "set_transform",
+        args: function (ctx) {
+          return { comp: ctx.apComp, layer: "ST AP Parent",
+                   property: "scale", value: [80, 120] };
+        },
+        check: function () { return true; } },
+
+      // Text, not a solid: a solid's anchor already sits at its centre,
+      // so centring it is a no-op and would prove nothing.
+      { name: "anchor rig: text layer (content bounds are off-centre)",
+        tool: "add_text_layer",
+        args: function (ctx) {
+          return { comp: ctx.apComp, text: "Anchor", fontSize: 48 };
+        },
+        check: function (d, ctx) {
+          ctx.apText = d.name;
+          return !!d.name || "no layer name";
+        } },
+
+      { name: "anchor rig: parent the text",
+        tool: "set_layer_parent",
+        args: function (ctx) {
+          return { comp: ctx.apComp, layer: ctx.apText,
+                   parent: "ST AP Parent" };
+        },
+        check: function () { return true; } },
+
+      { name: "anchor rig: animate Position",
+        tool: "set_keyframes",
+        args: function (ctx) {
+          return { comp: ctx.apComp, layer: ctx.apText, property: "Position",
+                   keys: [{ time: 0, value: [100, 100] },
+                          { time: 2, value: [300, 250] }] };
+        },
+        check: function (d) { return d.keysSet === 2 || "keys " + d.keysSet; } },
+
+      { name: "anchor rig: animate Rotation",
+        tool: "set_keyframes",
+        args: function (ctx) {
+          return { comp: ctx.apComp, layer: ctx.apText, property: "Rotation",
+                   keys: [{ time: 0, value: 0 }, { time: 2, value: 45 }] };
+        },
+        check: function (d) { return d.keysSet === 2 || "keys " + d.keysSet; } },
+
+      { name: "anchor rig: animate Scale",
+        tool: "set_keyframes",
+        args: function (ctx) {
+          return { comp: ctx.apComp, layer: ctx.apText, property: "Scale",
+                   keys: [{ time: 0, value: [100, 100] },
+                          { time: 2, value: [50, 150] }] };
+        },
+        check: function (d) { return d.keysSet === 2 || "keys " + d.keysSet; } },
+
+      { name: "anchor probe null (t=0)",
+        tool: "add_null",
+        args: function (ctx) {
+          return { comp: ctx.apComp, name: "ST AP Probe 0" };
+        },
+        check: function () { return true; } },
+
+      { name: "anchor probe reads the layer's origin in comp space (t=0)",
+        tool: "set_expression",
+        args: function (ctx) {
+          return { comp: ctx.apComp, layer: "ST AP Probe 0",
+                   property: "Position",
+                   expression: 'thisComp.layer("' + ctx.apText +
+                               '").toComp([0,0], 0)' };
+        },
+        check: function (d) {
+          return d.expressionEnabled === true || "expression not enabled";
+        } },
+
+      { name: "anchor probe null (t=2)",
+        tool: "add_null",
+        args: function (ctx) {
+          return { comp: ctx.apComp, name: "ST AP Probe 2" };
+        },
+        check: function () { return true; } },
+
+      { name: "anchor probe reads the layer's origin in comp space (t=2)",
+        tool: "set_expression",
+        args: function (ctx) {
+          return { comp: ctx.apComp, layer: "ST AP Probe 2",
+                   property: "Position",
+                   expression: 'thisComp.layer("' + ctx.apText +
+                               '").toComp([0,0], 2)' };
+        },
+        check: function (d) {
+          return d.expressionEnabled === true || "expression not enabled";
+        } },
+
+      { name: "record where the layer sits at t=0",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.apComp, layer: "ST AP Probe 0",
+                   property: "Position" };
+        },
+        check: function (d, ctx) {
+          ctx.apBefore0 = d.value;
+          return (d.value && isFinite(d.value[0])) ||
+                 "probe value " + JSON.stringify(d.value);
+        } },
+
+      { name: "record where the layer sits at t=2",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.apComp, layer: "ST AP Probe 2",
+                   property: "Position" };
+        },
+        check: function (d, ctx) {
+          ctx.apBefore2 = d.value;
+          return (d.value && isFinite(d.value[0])) ||
+                 "probe value " + JSON.stringify(d.value);
+        } },
+
+      { name: "center_anchor_point on the animated, parented layer",
+        tool: "center_anchor_point",
+        args: function (ctx) {
+          return { comp: ctx.apComp, layer: ctx.apText };
+        },
+        check: function (d) {
+          if (!/2 Position keyframes offset/.test(d.note || "")) {
+            return "note: " + d.note;
+          }
+          // Scale and Rotation animate here, so the tool must SAY the
+          // offset is only exact at the keys instead of overclaiming.
+          return /exact at the Position keyframes/.test(d.note || "") ||
+                 "note does not disclose the in-between drift: " + d.note;
+        } },
+
+      { name: "layer did not move at t=0 (first Position key)",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.apComp, layer: "ST AP Probe 0",
+                   property: "Position" };
+        },
+        check: function (d, ctx) {
+          var b = ctx.apBefore0 || [], a = d.value || [];
+          var dx = a[0] - b[0], dy = a[1] - b[1];
+          var drift = Math.sqrt(dx * dx + dy * dy);
+          return drift < 0.5 || "layer jumped " + drift.toFixed(2) +
+                 "px at t=0 (" + JSON.stringify(b) + " -> " +
+                 JSON.stringify(a) + ")";
+        } },
+
+      // THE regression assertion: this is the key the old code got wrong,
+      // because Scale and Rotation are different here than at t=0.
+      { name: "layer did not move at t=2 either (moving Scale/Rotation)",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.apComp, layer: "ST AP Probe 2",
+                   property: "Position" };
+        },
+        check: function (d, ctx) {
+          var b = ctx.apBefore2 || [], a = d.value || [];
+          var dx = a[0] - b[0], dy = a[1] - b[1];
+          var drift = Math.sqrt(dx * dx + dy * dy);
+          return drift < 0.5 || "layer jumped " + drift.toFixed(2) +
+                 "px at t=2 (" + JSON.stringify(b) + " -> " +
+                 JSON.stringify(a) + ")";
+        } },
+
+      { name: "cleanup: delete the anchor comp",
+        tool: "delete_item",
+        args: function (ctx) { return { item: ctx.apComp }; },
+        check: function () { return true; } },
 
       { name: "cleanup: delete the camera comp",
         tool: "delete_item",

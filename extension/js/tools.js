@@ -61,8 +61,10 @@
     { name: "center_anchor_point", mutating: true,
       desc: "Center a layer's anchor point on its visible content " +
             "(sourceRect math done host-side; position compensated so the " +
-            "layer does not jump). ALWAYS use this instead of guessing " +
-            "anchor coordinates.",
+            "layer does not jump, at every Position keyframe). ALWAYS use " +
+            "this instead of guessing anchor coordinates. If Scale or " +
+            "Rotation are animated too, the note says where the " +
+            "compensation is exact.",
       args: "{comp?: string, layer: name|index, preservePosition?: bool = true}" },
     { name: "add_keyframe", mutating: true,
       desc: "Add a keyframe on a layer property at a time (seconds).",

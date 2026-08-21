@@ -59,12 +59,34 @@ function cannedOk(tool, args) {
           : { value: [200, 150, 0] };   // re-centred with the comp
       }
       if (args && args.property === "Position") {
+        // The anchor probes measure the SAME layer origin before and
+        // after center_anchor_point, so a correct tool leaves these
+        // readings identical — hence one fixed value per probe.
+        if (args.layer === "ST AP Probe 0") return { value: [420.5, 311.25, 0] };
+        if (args.layer === "ST AP Probe 2") return { value: [588.75, 402.5, 0] };
         return args.layer === "ST Square 2"
           ? { value: [640, 180, 0], expression: "// grid rig" }
           : { value: [320, 180, 0], expression: "// grid rig" };
       }
       return { value: 3 };
-    case "set_keyframes": return { keysSet: 18 };
+    case "set_keyframes":
+      // 9 layers x 2 keys for the batch step; one layer x its own keys
+      // for the single-layer ones.
+      return { keysSet: (args && args.layer && args.keys)
+        ? args.keys.length : 18 };
+    case "add_null":
+      return { index: 1, name: (args && args.name) || "Null 1" };
+    case "set_expression":
+      return { expressionEnabled: true,
+               expression: args && args.expression };
+    case "center_anchor_point":
+      return { layer: (args && args.layer) || "Anchor",
+               oldAnchor: [0, 0, 0], newAnchor: [113.07, -35.33, 0],
+               note: "anchor centered on content; all 2 Position " +
+                     "keyframes offset so the layer did not move (NOTE: " +
+                     "Scale/Rotation are animated too, so the offset is " +
+                     "exact at the Position keyframes and approximate " +
+                     "between them)" };
     case "apply_keyframe_ease": return { easedPairs: 9 };
     case "stagger_layers": return { layers: 9 };
     case "set_mask_path": return { keysSet: 2 };

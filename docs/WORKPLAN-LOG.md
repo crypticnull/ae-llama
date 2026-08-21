@@ -305,3 +305,45 @@ fix. Start from item 1 of `docs/WORKPLAN.md`.
   `bump-version.js` is Node, not PowerShell, so it can be tested
   anywhere — both paths exercised here (refuses an equal version,
   rewrites and re-verifies all four declarations).
+
+## 2026-08-21 — item 2: center_anchor_point on rotated/scaled/parented
+
+- Changed: `extension/jsx/hostscript.jsx` — compensation delta is now
+  computed at EACH Position keyframe's own time (new `AELL_anchorDelta`,
+  `AELL_isAnimated`) instead of once at the current time.
+  `extension/js/selftest.js` — 19 steps in their OWN scratch comp
+  (`AELL Self-Test Anchor`). `tests/test-anchor-point.js` +5 assertions
+  and a `valueAtTime` stub; `tests/test-self-test.js` canned responses;
+  `extension/js/tools.js` doc. Bumped to 0.9.2.
+- Harness: 58/58 real AE (was 39). Stubbed suite 14/14.
+- Notes: real bug. Scale and Rotation can be ANIMATED THEMSELVES, which
+  makes the anchor->Position delta time-dependent. The old code took one
+  delta at `comp.time` and applied it to every Position key, so the layer
+  sat still at the current time and drifted everywhere else — measured
+  37.6px at t=2 on a text layer with keyed Position + Rotation + Scale
+  under a rotated, non-uniformly scaled parent. Now 0.0000 at both keys.
+  Measurement method worth reusing: a probe null whose Position
+  expression is `thisComp.layer("X").toComp([0,0], t)` reads the target's
+  own origin in comp space, so "did the layer move" becomes an exact
+  numeric comparison through parenting, rotation and scale — and
+  `toComp` takes a TIME argument, so one probe per time needs no
+  scrubbing (there is no tool to move the playhead). Read back with
+  `get_property` on the probe; AE evaluates the expression for it.
+  Proven to catch the regression, not just to pass: the pre-fix host
+  scores 56/58 in real AE, failing exactly the t=2 step (27.36px jump)
+  and the note step. The stub test fails 5 assertions pre-fix.
+  Confirmed the remote session's reasoning that PARENTING needs no
+  special case — with a static rig the drift is 0.0000 at every sampled
+  time, not just at keys, under a parent scaled [80,120] and rotated 30.
+  Residual, disclosed not fixed: when Scale/Rotation animate, the
+  compensation is exact AT the Position keys and off by up to ~10px
+  BETWEEN them, because the interpolated Position cannot follow a
+  rotating frame. Making it exact would mean adding Position keys at
+  every Scale/Rotation key — a change to the user's animation the tool
+  should not make silently, so the note says so instead. If the remote
+  session wants that, it belongs behind an explicit arg.
+  Not done from the remote session's list: the same check on a 3D layer.
+  `center_anchor_point` deliberately does not compensate 3D layers at
+  all (it says so in the note), so there is nothing to verify until
+  someone decides 3D compensation should exist — that is a feature call,
+  not a fix.
