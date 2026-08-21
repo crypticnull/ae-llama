@@ -14,13 +14,31 @@ function Prop(value) {
   this._keyValues = [];
   this._eases = {};
 }
-Object.defineProperty(Prop.prototype, "value", { get() { return this._value; } });
+// Faithful to AE: `.value` on an EXPRESSION-DRIVEN property is the
+// expression's EVALUATED result, not the value underneath it. The stub
+// used to hand back whatever was last written, which made an ignored
+// write indistinguishable from a real one — and that is precisely the
+// bug the field found (a grid_layout rig drove Position, distribute_property
+// wrote nine x values AE accepted and discarded, and the tool reported
+// them as applied). `_exprValue` is what the expression computes; set it
+// to model a rig that ignores `value`, leave it undefined to model an
+// expression that passes writes through (`value + wiggle(2, 30)`).
+Object.defineProperty(Prop.prototype, "value", {
+  get() {
+    if (this.expressionEnabled && typeof this._exprValue !== "undefined") {
+      return this._exprValue;
+    }
+    return this._value;
+  }
+});
 Prop.prototype.setValue = function (v) {
   // Faithful to AE: setValue on a keyframed property throws.
   if (this.numKeys > 0) {
     throw new Error("Cannot set a value on a property with keyframes; " +
                     "use setValueAtTime or setValueAtKey instead.");
   }
+  // Also faithful: AE ACCEPTS the write on a driven property. It just
+  // never shows it.
   this._value = v;
 };
 Prop.prototype.keyTime = function (i) { return this._keyTimes[i - 1]; };
@@ -277,9 +295,25 @@ assert(/animated/i.test(r.error || "") && /2 keyframes/.test(r.error || "") &&
 
 const driven = comp.layer("L2");
 driven._transform["ADBE Opacity"].expressionEnabled = true;
+driven._transform["ADBE Opacity"]._exprValue = 100;   // rig ignores `value`
 r = call("set_transform", { layer: "L2", property: "opacity", value: 25 });
 assert(r.ok && /expression/i.test((r.data && r.data.warning) || ""),
        "driven property: write succeeds but warns it is overridden (got: " +
+       ((r.data && r.data.warning) || "") + ")");
+assert(r.data.applied === false,
+       "…and says applied:false, so a summary reader cannot read it as done");
+assert(/100/.test(r.data.warning) && /25/.test(r.data.warning),
+       "…and quotes what the comp really shows vs what was asked (got: " +
+       r.data.warning + ")");
+
+// The other half of the same coin: an expression that CONSUMES the value
+// (`value + wiggle(…)`) really does move when you write to it, so warning
+// about it would be a false alarm. Only the read-back can tell them apart.
+const passthru = comp.layer("L3");
+passthru._transform["ADBE Opacity"].expressionEnabled = true;
+r = call("set_transform", { layer: "L3", property: "opacity", value: 25 });
+assert(r.ok && !(r.data && r.data.warning),
+       "a pass-through expression is NOT warned about (got: " +
        ((r.data && r.data.warning) || "") + ")");
 
 // One un-writable layer must not abort the spread for the others.
@@ -299,6 +333,48 @@ assert(r.data.applied.length === 2,
 assert(/1 of 3/.test(r.data.note || ""),
        "…and the note counts what was left out (got: " +
        (r.data.note || "") + ")");
+
+// 11b. The field case, from a real chat transcript: "add nine squares in a
+// 3x3 grid" (grid_layout rigs Position to an expression), then "spread them
+// equally across the width". AE accepted all nine writes and showed none of
+// them, and the tool answered with nine `applied` rows of values that were
+// not in the comp — the summary a model (or a user skimming) reads first.
+// A driven-and-ignored layer belongs with the ones that did not move.
+const rigged = ["L3", "L4", "L5"];
+for (const n of rigged) {
+  const p = comp.layer(n)._transform["ADBE Position"];
+  p.expressionEnabled = true;
+  p._exprValue = [940, 500];      // what the grid rig computes, always
+}
+r = call("distribute_property", {
+  property: "position_x", layers: rigged, from: 200, to: 1720, step: 180,
+  order: "stack"
+});
+assert(r.ok, "distribute over a rigged grid still answers (" +
+       (r.error || "") + ")");
+assert(r.data.applied.length === 0,
+       "…and claims NOTHING was applied, because nothing moved (got " +
+       JSON.stringify(r.data.applied) + ")");
+assert(Array.isArray(r.data.overriddenByExpression) &&
+       r.data.overriddenByExpression.length === 3,
+       "…it lists the three layers the expression overrode (got " +
+       JSON.stringify(r.data.overriddenByExpression) + ")");
+assert(/3 of 3/.test(r.data.note || "") &&
+       /expression/i.test(r.data.note || "") &&
+       /set_expression/.test(r.data.note || ""),
+       "…and the note counts them and names the way out (got: " +
+       (r.data.note || "") + ")");
+// The honest answer also has to FIT: the panel caps each tool result at
+// 1200 chars, and the version that failed in the field spent 1600 of them
+// on nine repeated warning sentences, so the truth was what got cut.
+assert(JSON.stringify(r.data).length < 1200,
+       "…and the whole result still fits the panel's 1200-char cap (got " +
+       JSON.stringify(r.data).length + ")");
+for (const n of rigged) {
+  const p = comp.layer(n)._transform["ADBE Position"];
+  p.expressionEnabled = false;
+  delete p._exprValue;
+}
 
 // 12. An explicit 'layers' list is an ORDER, not a set. The tool used to
 // re-sort it by inPoint, so a grid whose layers all sit at inPoint 0 got

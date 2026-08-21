@@ -75,9 +75,28 @@ themselves inside the scratch comp.
 
 ## 4. Field-quality passes
 
-- Run the panel like a user: the 8-step chat checklist in the README
-  era (grid, batch animation, masks, mattes, equidistant distribution,
-  parenting). File exact failing transcripts in commits or notes.
+- Run the panel like a user: `node scripts/chat-probe.js` drives the
+  whole product path headless (real settings -> real llama-server ->
+  real tools.js -> real AE) through an 8-step checklist and writes a
+  transcript to `logs/`. DONE 2026-08-21 (7/8, one real bug fixed).
+  Re-run it after any change to tools.js, the system prompt, or a
+  batch tool — it is the only thing that tests the MODEL's half.
+  Open follow-ups it filed, each its own pass:
+  - `stagger_layers` `spread` is a TOTAL, but users say "4 frames
+    apart" and the model dutifully sends `spread: 0.133` for nine
+    layers (0.5 frames each). Wants a per-layer `step`, or docs that
+    make the total unmissable.
+  - `add_text_layer` inherits AE's last-used character panel style —
+    a probe asking for 120px white got tracking 251 and
+    PowerCentra-Book. Decide whether the tool should normalize.
+  - the checklist never touches ComfyUI, undo across a mixed round, or
+    a second chat turn that refers back ("make them blue instead").
+  - a round that fails PART WAY leaves its debris behind: when
+    `duplicate_layer` errored before `add_solid` had a layer to copy,
+    the model retried the whole round and the comp ended with TEN red
+    squares, nine spread and one orphan parked at the centre. The tools
+    each behaved correctly (grounded error, successful retry); what is
+    missing is any notion of rolling a failed round back.
 - Undo hygiene: each chat command should be one Ctrl+Z step (undo
   groups) — verify for the batch tools.
 - Performance: 200-layer comps — measure grid_layout and batch

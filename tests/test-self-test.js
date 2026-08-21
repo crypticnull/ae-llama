@@ -109,6 +109,26 @@ let batchLayers = 0;
 let batchFx = {};
 let batchBlur = null;
 
+// Expression-driven properties, the way real AE behaves: a write is
+// ACCEPTED and then invisible, because `.value` is the expression's
+// answer. `driven[layer/prop]` is what the comp shows; "passthru" models
+// an expression that consumes the written value (`value + wiggle(…)`) and
+// so really does move. A stub that just remembered the last write would
+// let the tools claim a spread that is not in the comp — which is the bug
+// the field found.
+let driven = {};
+// The nine squares grid_layout rigs in the suite (it is called with a
+// column count, not a layer list).
+const SQUARES = ["ST Square"];
+for (let i = 2; i <= 9; i++) SQUARES.push("ST Square " + i);
+const drivenKey = (layer, prop) => layer + "/" + String(prop || "")
+  .replace(/^position_[xy]$/, "position").toLowerCase();
+function markDriven(layer, prop, shows) { driven[drivenKey(layer, prop)] = shows; }
+function drivenShows(layer, prop) {
+  const v = driven[drivenKey(layer, prop)];
+  return (typeof v === "undefined" || v === "passthru") ? null : v;
+}
+
 // The batch-call rig asks whether commands after a FAILING one still ran,
 // so the canned host has to know which layers exist in that comp -- a stub
 // that accepted any layer name would answer the question for free.
@@ -219,9 +239,27 @@ function cannedOk(tool, args) {
       const L = (args && args.layers) || [];
       const from = (args && typeof args.from === "number") ? args.from : 0;
       const step = (args && typeof args.step === "number") ? args.step : 0;
-      const applied = L.map((nm, i) => ({ layer: nm, value: from + i * step }));
+      const applied = [], overridden = [];
+      L.forEach((nm, i) => {
+        // A layer whose property is driven does not move, however happily
+        // AE accepted the write -- so it cannot be reported as applied.
+        if (drivenShows(nm, args && args.property) !== null) {
+          overridden.push(nm);
+          return;
+        }
+        applied.push({ layer: nm, value: from + i * step });
+      });
       for (const a of applied) ordX[a.layer] = a.value;
-      return { property: args && args.property, layers: L.length, applied };
+      const out = { property: args && args.property, layers: L.length,
+                    applied };
+      if (overridden.length) {
+        out.overriddenByExpression = overridden;
+        out.note = overridden.length + " of " + L.length + " layer(s) did " +
+          "NOT move because an expression drives " +
+          (args && args.property) + " on them: clear it first " +
+          "(set_expression with expression: \"\").";
+      }
+      return out;
     }
     case "reorder_layers": {
       const L = ((args && args.layers) || []).slice();
@@ -262,8 +300,17 @@ function cannedOk(tool, args) {
         ordStack.map((nm, i) => ({ index: i + 1, name: nm })), args);
     }
     case "grid_layout":
+      // The rig it builds DRIVES Position and ignores whatever value sits
+      // underneath — every later write to those layers is swallowed.
+      (((args && args.layers) || SQUARES)).forEach((nm, i) =>
+        markDriven(nm, "position", [320 + (i % 3) * 320, 180, 0]));
       return { sliders: ["Grid X Spacing", "Grid Y Spacing",
                          "Grid Columns"] };
+    case "link_property":
+      // Same shape: the linked property now reads from the slider.
+      markDriven(args && args.layer, args && args.property, 22.2);
+      return { layer: args && args.layer,
+               property: args && args.property };
     case "get_property":
       // The batch rig reads back the write that came AFTER a failing
       // command. Padded to three components, the way real AE answers.
@@ -329,9 +376,20 @@ function cannedOk(tool, args) {
         ? args.keys.length : 18 };
     case "add_null":
       return { index: 1, name: (args && args.name) || "Null 1" };
-    case "set_expression":
-      return { expressionEnabled: true,
-               expression: args && args.expression };
+    case "set_expression": {
+      const expr = (args && args.expression) || "";
+      if (expr === "") {
+        delete driven[drivenKey(args && args.layer, args && args.property)];
+        return { layer: args && args.layer, property: args && args.property,
+                 expression: "cleared" };
+      }
+      // An expression that reads the property's own value passes writes
+      // through; anything else computes the property from scratch and
+      // swallows them.
+      markDriven(args && args.layer, args && args.property,
+                 /\bvalue\b/.test(expr) ? "passthru" : 999);
+      return { expressionEnabled: true, expression: expr };
+    }
     case "center_anchor_point":
       return { layer: (args && args.layer) || "Anchor",
                oldAnchor: [0, 0, 0], newAnchor: [113.07, -35.33, 0],
@@ -430,7 +488,19 @@ function cannedOk(tool, args) {
         return { layer: args.layer, effect: args.effect };
       }
       return { done: true };
-    case "set_transform":
+    case "set_transform": {
+      const shows = drivenShows(args && args.layer, args && args.property);
+      if (shows !== null) {
+        // Accepted and invisible: the honest answer names the value that
+        // is really in the comp.
+        return { layer: args.layer, property: args.property,
+                 value: args.value, applied: false,
+                 warning: "'" + args.property + "' is driven by an " +
+                   "expression that ignores written values -- the comp " +
+                   "still shows " + JSON.stringify(shows) + ", not " +
+                   JSON.stringify(args.value) + ". Clear it first " +
+                   "(set_expression with expression: \"\")." };
+      }
       if (inBatComp(args)) {
         if (batSolids.indexOf(args.layer) === -1) {
           return { __err: "No layer '" + args.layer + "' in '" +
@@ -451,6 +521,7 @@ function cannedOk(tool, args) {
                  value: args.value };
       }
       return { done: true };
+    }
     case "add_text_layer":
       textStyle = { fontSize: args && args.fontSize,
                     font: "StubFont-Regular",

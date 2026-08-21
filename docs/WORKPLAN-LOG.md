@@ -948,3 +948,88 @@ fix. Start from item 1 of `docs/WORKPLAN.md`.
   of each probe; the loosened-cap harness run created nothing new). The
   AELL_LIST_LIMIT = 100000 experiment was a temp edit, restored from a
   backup copy and re-verified green before committing.
+
+## 2026-08-21 — item 4: run the panel like a user (the model's half)
+
+- Changed: new `scripts/chat-probe.js` — the product path with no panel:
+  the user's real `settings.json` -> `extension/js/settings.js` ->
+  `llama.js` (real llama-server, real JSON schema) -> `tools.js` (real
+  system prompt, real command fusion) -> REAL After Effects, driven by
+  eight canned sentences a motion designer would type. Each step ends
+  with a read-only ExtendScript verdict against the comp, and a markdown
+  transcript lands in `logs/`. `--bridge-check` proves the AE round trip
+  (0.3s) before a model is loaded; `--steps 2,7` re-runs a subset.
+  Fix it found, in `extension/jsx/hostscript.jsx`: `AELL_writeValue` now
+  READS THE PROPERTY BACK after a write AE accepted, and
+  `distribute_property` reports a layer the expression swallowed under
+  `overriddenByExpression`, never under `applied`. `set_property`,
+  `set_transform` and `set_effect_param` gained `applied: false` beside
+  their warning. Five new steps in `extension/js/selftest.js`; new
+  assertions plus a stub-fidelity fix in `tests/test-curve-tools.js` and
+  `tests/test-self-test.js`. Bumped 0.9.11.
+- Harness: 141/141 real AE (was 136/136). Stubbed suite 18/18 files.
+  Chat probe 7/8 before the fix, and the failing step is 3/3 after it.
+- Notes: the failing transcript, verbatim (steps 2 and 7 of the
+  checklist, Qwen2.5-32B, temp 0.7):
+      >> add nine red 200x200 square solids and arrange them in a 3 by 3
+         grid  ->  grid_layout {columns: 3}          (rigs Position)
+      >> spread the nine squares out equally across the width
+         -> distribute_property {property: "position_x", from: 200,
+            to: 1720, step: 180}
+         ok: {"applied":[{"layer":"Red Square","value":200}, …nine rows…]}
+      == FAIL — gaps uneven: [940,940,940,960,960,960,960,980,980,980]
+  Nothing moved. `grid_layout` had rigged Position to an expression, AE
+  ACCEPTS every setValue that follows and shows none of them, and the
+  tool answered with nine `applied` rows of x values that were not in
+  the comp. The honest half existed — a `warnings` array — but it sat
+  AFTER the applied rows and measured ~1600 chars against the panel's
+  1200-char per-result cap, so on a real comp the truth is what gets
+  cut. This is the same bug shape as every other one this week
+  (something is ignored and reports success), one layer up: the tool was
+  reporting its REQUEST as its RESULT.
+  The fix is to ask AE instead of guessing. `expressionEnabled` is not
+  the question — an expression can CONSUME the written value
+  (`value + wiggle(2, 30)` really does move) or IGNORE it (a rig that
+  computes from scratch). On a driven property `.value` is the EVALUATED
+  result, so the write is followed by a read and the two are compared;
+  only a real mismatch is reported, and the message quotes the value the
+  comp actually shows.
+  Proven in the field, not just in tests: re-running the same two
+  sentences, the model read "9 of 9 layer(s) did NOT move … clear it
+  first (set_expression with expression: \"\")", cleared all nine
+  expressions itself, re-ran the distribution and got
+  [200, 390, 580, 770, 960, 1150, 1340, 1530, 1720]. That is the
+  grounded-errors doctrine doing exactly what it is for — the honest
+  refusal was worth more than the write.
+  Proven to catch the regression, not just to pass: drop the read-back
+  and `tests/test-curve-tools.js` fails 2 assertions; report overridden
+  layers as applied and it fails 3 more. The stub had to be fixed first
+  — its `Prop.value` handed back the last written value even while
+  driven, which is precisely why CI was green through a bug the field
+  caught in one sentence. It now returns the expression's answer, with a
+  "passthru" mode for the `value`-consuming case.
+  One honest oddity, left as is: with the squares still rigged, the
+  CENTRE square reports as applied, because the rig happens to compute
+  the same x (960) the spread wanted. The comp really does show 960
+  there, so the report is true.
+  The full eight-step re-run after the fix scores 7/8, and the one red
+  step is the MODEL's doing, not a tool's: its first attempt called
+  duplicate_layer before add_solid had made anything to duplicate, and
+  after the (correctly grounded) error it retried the whole round — so
+  the comp ended with TEN red squares, nine spread evenly and one orphan
+  parked at the centre. Every tool behaved; nothing rolls a half-failed
+  round back. Filed under item 4 rather than fixed here.
+- FOR THE REMOTE SESSION, two things the probe measured and did NOT fix
+  (each wants its own pass; both are in `docs/WORKPLAN.md` item 4):
+  `stagger_layers` `spread` is a TOTAL, so "stagger them 4 frames apart"
+  became `spread: 0.133` across nine layers — 0.5 frames each, and the
+  tool reported it happily; and `add_text_layer` inherits AE's
+  last-used character style (a request for "white, 120px" came back with
+  tracking 251 and PowerCentra-Book).
+- Housekeeping: the probe sweeps its own comps and unused solids before
+  AND after each run. The "after" sweep is why: the first run's cleanup
+  passed `delete_item {name: …}` when the tool takes `{item: …}`, the
+  comp survived, and the next run's create_comp was auto-numbered to
+  "Probe Room 2" while the verdicts still read "Probe Room" — every
+  check silently inspecting the previous run's comp. Transcripts live in
+  `logs/`, which is gitignored, so the failing one is quoted above.

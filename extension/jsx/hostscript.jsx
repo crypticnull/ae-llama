@@ -1003,7 +1003,7 @@ AELL_TOOLS.set_transform = function (args) {
   }
 
   var result = { layer: layer.name, property: propName, value: value };
-  if (drivenWarn) result.warning = drivenWarn;
+  if (drivenWarn) { result.applied = false; result.warning = drivenWarn; }
 
   // Unit sanity: AE scale is PERCENT. A model that thinks in fractions
   // sends 2 meaning "200%" and shrinks the layer to 2%. Warn loudly in the
@@ -1596,7 +1596,7 @@ AELL_TOOLS.set_effect_param = function (args) {
   }
   var out = { layer: layer.name, effect: fx.name, param: p.name,
               value: args.value };
-  if (warn) out.warning = warn;
+  if (warn) { out.applied = false; out.warning = warn; }
   return AELL_okay(out);
 };
 
@@ -2107,7 +2107,7 @@ AELL_TOOLS.distribute_property = function (args) {
     }
   }
   var n = layers.length;
-  var applied = [], skipped = [], warnings = [];
+  var applied = [], skipped = [], overridden = [], overriddenWhy = "";
   for (var i = 0; i < n; i++) {
     var v;
     if (useStep) {
@@ -2134,23 +2134,42 @@ AELL_TOOLS.distribute_property = function (args) {
     // property is reported and skipped, so the caller learns WHICH
     // layers were left out rather than getting a partial spread that
     // claims to have covered everything.
+    //
+    // A layer whose write was swallowed by an expression is NOT applied,
+    // however happily AE accepted the setValue. Measured in the field: a
+    // 3x3 grid_layout rig drives Position, this tool then reported nine
+    // `applied` rows of x values the comp never showed, and the honest
+    // half of the answer sat in a `warnings` array long enough to be cut
+    // by the panel's per-result cap. Names only here — nine full
+    // sentences is exactly what got truncated.
     try {
       var w = AELL_writeValue(prop, target, layers[i].name + "/" +
                               String(args.property));
-      if (w) warnings.push(w);
-      applied.push({ layer: layers[i].name,
-                     value: Math.round(v * 100) / 100 });
+      if (w) {
+        overridden.push(layers[i].name);
+        if (!overriddenWhy) overriddenWhy = w;
+      } else {
+        applied.push({ layer: layers[i].name,
+                       value: Math.round(v * 100) / 100 });
+      }
     } catch (eD) {
       skipped.push(layers[i].name + ": " +
         (eD && eD.message ? eD.message : String(eD)));
     }
   }
   var res = { property: args.property, layers: n, applied: applied };
+  var notes = [];
   if (skipped.length) {
     res.skipped = skipped;
-    res.note = skipped.length + " of " + n + " layer(s) were NOT changed";
+    notes.push(skipped.length + " of " + n + " layer(s) were NOT changed");
   }
-  if (warnings.length) res.warnings = warnings;
+  if (overridden.length) {
+    res.overriddenByExpression = overridden;
+    notes.push(overridden.length + " of " + n + " layer(s) did NOT move " +
+      "because an expression drives " + String(args.property) + " on them: " +
+      overriddenWhy);
+  }
+  if (notes.length) res.note = notes.join(". ");
   return AELL_okay(res);
 };
 
@@ -2280,6 +2299,41 @@ AELL_TOOLS.set_comp_setting = function (args) {
                      duration: comp.duration, frameRate: comp.frameRate });
 };
 
+/* Compare a written value with what AE read back. Tolerant of the
+ * scripting API's padding: writing [x, y] to a 2D Position reads back as
+ * [x, y, 0], which is the SAME value, not a failed write. */
+function AELL_sameValue(a, b) {
+  var TOL = 0.01;
+  var i;
+  if (AELLJSON.isArray(a) || AELLJSON.isArray(b)) {
+    if (!AELLJSON.isArray(a) || !AELLJSON.isArray(b)) return false;
+    var n = Math.min(a.length, b.length);
+    if (!n) return a.length === b.length;
+    for (i = 0; i < n; i++) {
+      if (Math.abs(Number(a[i]) - Number(b[i])) > TOL) return false;
+    }
+    return true;
+  }
+  if (typeof a === "number" && typeof b === "number") {
+    return Math.abs(a - b) <= TOL;
+  }
+  return String(a) === String(b);
+}
+
+/* A property value the model can read back to us as an argument. */
+function AELL_showValue(v) {
+  var i, parts;
+  if (AELLJSON.isArray(v)) {
+    parts = [];
+    for (i = 0; i < v.length; i++) {
+      parts.push(Math.round(Number(v[i]) * 100) / 100);
+    }
+    return "[" + parts.join(", ") + "]";
+  }
+  if (typeof v === "number") return String(Math.round(v * 100) / 100);
+  return String(v);
+}
+
 /*
  * Write a plain value to a property, turning AE's two silent refusals
  * into something the model can act on:
@@ -2287,6 +2341,13 @@ AELL_TOOLS.set_comp_setting = function (args) {
  *   - an EXPRESSION-DRIVEN one accepts it and then ignores it, which is
  *     worse, because the tool reports success and nothing moves.
  * Returns a warning string (or "") so callers can surface the second case.
+ *
+ * "Driven" is NOT the same as "overridden", which is why this reads the
+ * property back instead of trusting expressionEnabled: an expression can
+ * CONSUME the written value (`value + wiggle(2, 30)` moves when you write
+ * to it) or IGNORE it (a rig that computes the property from scratch, the
+ * shape grid_layout builds). Only AE knows which, and on a driven property
+ * `.value` is the EVALUATED result — so ask it, and quote the answer.
  */
 function AELL_writeValue(prop, value, label) {
   var keys = 0;
@@ -2298,13 +2359,24 @@ function AELL_writeValue(prop, value, label) {
       "delete the existing keyframes first.");
   }
   prop.setValue(value);
+  return AELL_overrideWarning(prop, value, label);
+}
+
+/* Did a write that AE ACCEPTED actually change what the comp shows?
+ * Returns "" when it did (including when there is no expression at all),
+ * else a warning naming the value that is really there. */
+function AELL_overrideWarning(prop, value, label) {
   var driven = false;
   try { driven = !!prop.expressionEnabled; } catch (eE) {}
-  return driven
-    ? "'" + label + "' has an expression, which overrides this value — " +
-      "the change was accepted but will NOT be visible until the " +
-      "expression is removed or edited"
-    : "";
+  if (!driven) return "";
+  var actual = null, read = false;
+  try { actual = prop.value; read = true; } catch (eV) {}
+  if (read && AELL_sameValue(actual, value)) return "";   // passed through
+  return "'" + label + "' is driven by an expression that ignores written " +
+    "values" +
+    (read ? " — the comp still shows " + AELL_showValue(actual) + ", not " +
+            AELL_showValue(value) : "") +
+    ". Clear it first (set_expression with expression: \"\").";
 }
 
 /* Apply fn to a property's value — at every keyframe when it has keys. */
@@ -3547,9 +3619,17 @@ AELL_TOOLS.set_property = function (args) {
   }
   var nk = 0;
   try { nk = prop.numKeys || 0; } catch (e2) {}
-  return AELL_okay({ layer: layer.name, property: String(args.property),
+  var out = { layer: layer.name, property: String(args.property),
     value: AELL_sampleRaw(args.value),
-    keyframed: typeof args.atTime === "number", numKeys: nk });
+    keyframed: typeof args.atTime === "number", numKeys: nk };
+  // AE accepts a write to an expression-driven property and then shows
+  // the expression's answer instead. Reporting that as a plain success is
+  // the same lie the other setters used to tell.
+  if (typeof args.atTime !== "number") {
+    var warn = AELL_overrideWarning(prop, args.value, String(args.property));
+    if (warn) { out.applied = false; out.warning = warn; }
+  }
+  return AELL_okay(out);
 };
 
 AELL_TOOLS.set_keyframes = function (args) {

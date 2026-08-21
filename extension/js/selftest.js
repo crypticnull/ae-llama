@@ -166,6 +166,35 @@
         },
         check: function () { return true; } },
 
+      // From a real chat transcript (scripts/chat-probe.js): "make a 3x3
+      // grid of squares", then "spread them equally across the width".
+      // grid_layout rigs Position to an expression, AE ACCEPTS every
+      // setValue that follows and shows none of them, and the tool used to
+      // answer with nine `applied` rows of values that were not in the
+      // comp. The layers are still rigged at this point in the suite, so
+      // this is the field state exactly.
+      { name: "distribute over the grid rig applies NOTHING (and says so)",
+        tool: "distribute_property",
+        args: function (ctx) {
+          return { comp: ctx.comp, layers: squares, property: "position_x",
+                   from: 200, to: 1720, step: 180 };
+        },
+        check: function (d) {
+          if (d.applied && d.applied.length) {
+            return "claimed " + d.applied.length + " layer(s) applied " +
+                   "while an expression drives Position";
+          }
+          if (!d.overriddenByExpression ||
+              d.overriddenByExpression.length !== squares.length) {
+            return "overriddenByExpression: " +
+                   JSON.stringify(d.overriddenByExpression);
+          }
+          if (!/set_expression/.test(d.note || "")) {
+            return "note does not name the way out: " + (d.note || "");
+          }
+          return true;
+        } },
+
       { name: "batch scale keys on 9 layers (relativeTo inPoint)",
         tool: "set_keyframes",
         args: function (ctx) {
@@ -290,6 +319,62 @@
                    controlEffect: "Grid X Spacing", scale: 0.1 };
         },
         check: function () { return true; } },
+
+      // The two halves of "driven": link_property just rigged ST Square 6's
+      // opacity to a slider, so a write to it is swallowed…
+      { name: "write to a linked property reports applied:false",
+        tool: "set_transform",
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: "ST Square 6",
+                   property: "opacity", value: 42 };
+        },
+        check: function (d) {
+          if (d.applied !== false) {
+            return "reported applied " + JSON.stringify(d.applied);
+          }
+          if (!/not 42/.test(d.warning || "")) {
+            return "warning does not quote the real value: " +
+                   (d.warning || "");
+          }
+          return true;
+        } },
+
+      // …while an expression that CONSUMES `value` really does move, and
+      // warning about it would be a false alarm. Only reading the property
+      // back tells the two apart, which is why the check is a read and not
+      // an expressionEnabled flag.
+      { name: "pass-through expression (value) on ST Square 7 opacity",
+        tool: "set_expression",
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: "ST Square 7",
+                   property: "opacity", expression: "value" };
+        },
+        check: function (d) {
+          return d.expressionEnabled === true || "expression not enabled";
+        } },
+
+      { name: "…a write through it is NOT flagged as overridden",
+        tool: "set_transform",
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: "ST Square 7",
+                   property: "opacity", value: 42 };
+        },
+        check: function (d) {
+          if (d.applied === false) {
+            return "false alarm: " + (d.warning || "");
+          }
+          return !d.warning || "unexpected warning: " + d.warning;
+        } },
+
+      { name: "…and clearing it leaves the written value behind",
+        tool: "set_expression",
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: "ST Square 7",
+                   property: "opacity", expression: "" };
+        },
+        check: function (d) {
+          return d.expression === "cleared" || "expression: " + d.expression;
+        } },
 
       { name: "reorder layers (stacking only)",
         tool: "reorder_layers",
