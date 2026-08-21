@@ -34,6 +34,11 @@ assert(names.size === steps.length, "step names are unique");
 let createCount = 0;
 let camProbeReads = 0;
 let textStyle = null;
+// The ordering steps read back what the previous step wrote, so the canned
+// host has to REMEMBER instead of answering with a constant — otherwise
+// "did slot i go to layer i" is a question the stub answers for free.
+let ordX = {};
+let ordStack = [];
 function cannedOk(tool, args) {
   switch (tool) {
     case "create_comp":
@@ -44,7 +49,41 @@ function cannedOk(tool, args) {
       if (createCount === 2) return { name: "AELL Self-Test 2", id: 2 };
       return { name: (args && args.name) || "AELL Self-Test 3",
                id: createCount };
-    case "duplicate_layer": return { created: 8, totalLayersInComp: 9 };
+    case "duplicate_layer": {
+      const n = (args && args.count) || 8;
+      return { created: n, totalLayersInComp: n + 1 };
+    }
+    case "distribute_property": {
+      const L = (args && args.layers) || [];
+      const from = (args && typeof args.from === "number") ? args.from : 0;
+      const step = (args && typeof args.step === "number") ? args.step : 0;
+      const applied = L.map((nm, i) => ({ layer: nm, value: from + i * step }));
+      for (const a of applied) ordX[a.layer] = a.value;
+      return { property: args && args.property, layers: L.length, applied };
+    }
+    case "reorder_layers": {
+      const L = ((args && args.layers) || []).slice();
+      if (args && args.by === "name") {
+        // Faithful to the fix: the trailing number sorts as a NUMBER, so
+        // "ST Ord 2" comes before "ST Ord 10". A stub that string-sorted
+        // here would let a string-sorting host pass.
+        L.sort((a, b) => {
+          const na = parseInt((/(\d+)\s*$/.exec(a) || [0, "1"])[1], 10);
+          const nb = parseInt((/(\d+)\s*$/.exec(b) || [0, "1"])[1], 10);
+          return na - nb;
+        });
+      }
+      if (!(args && /^desc/i.test(args.order || ""))) L.reverse();
+      ordStack = L;
+      return { layers: L.length, by: (args && args.by) || "startTime",
+               order: (args && /^desc/i.test(args.order || ""))
+                 ? "descending" : "ascending",
+               topToBottom: L.join(" | "), slots: "1.." + L.length,
+               note: "Stacking changed only" };
+    }
+    case "get_comp_details":
+      return { name: args && args.comp, numLayers: ordStack.length,
+               layers: ordStack.map((nm, i) => ({ index: i + 1, name: nm })) };
     case "grid_layout":
       return { sliders: ["Grid X Spacing", "Grid Y Spacing",
                          "Grid Columns"] };
@@ -53,6 +92,9 @@ function cannedOk(tool, args) {
       // components ([x, y, 0]) even though the expression engine sees
       // 2 — model that faithfully, and give the two grid squares
       // different cells so the "distinct cells" step is real.
+      if (args && /^ST Ord/.test((args && args.layer) || "")) {
+        return { value: [ordX[args.layer], 300, 0] };
+      }
       if (args && args.property === "Zoom") { return { value: 500 }; }
       if (args && args.property === "Point of Interest") {
         return args.layer === "ST Cam One"
@@ -191,6 +233,8 @@ SelfTest.run({
     // still completes (cleanup included)
     createCount = 0;
     camProbeReads = 0;
+    ordX = {};
+    ordStack = [];
     SelfTest.run({
       callHostTool(tool, args, cb) {
         if (tool === "grid_layout") {

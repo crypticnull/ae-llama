@@ -455,3 +455,67 @@ fix. Start from item 1 of `docs/WORKPLAN.md`.
   asked for was not the number it got. Same shape as the writes
   `AELL_writeValue` already guards. Cheap fix, but it is a different
   tool from this item.
+
+## 2026-08-21 — item 2: distribute_property step mode + reorder_layers
+
+- Changed: `extension/jsx/hostscript.jsx` — new `AELL_stableSort` and
+  `AELL_nameCompare`; `AELL_targetLayers` now treats an EXPLICIT `layers`
+  list as an order and only sorts it when `order` is passed; every sort
+  in `AELL_targetLayers` and `reorder_layers` is stable with a
+  deterministic tie-break; `reorder_layers` sorts names naturally and
+  reports the slots it landed in plus how many untargeted layers it
+  pushed aside. `extension/js/selftest.js` — 11 steps in their OWN
+  scratch comp (`AELL Self-Test Order`). `tests/test-curve-tools.js` +6
+  assertions, `tests/test-layer-chunks.js` +8, both behind a shim that
+  makes Node's sort unstable; `tests/test-self-test.js` canned
+  responses; `extension/js/tools.js` docs for all three tools. Bumped to
+  0.9.5.
+- Harness: 91/91 real AE (was 80). Stubbed suite 14/14.
+- Notes: real bug, and the one the stubs could never have found by
+  running, because Node's `Array.sort` is STABLE and ExtendScript's is
+  not. `AELL_targetLayers` re-sorted the caller's list by `inPoint` —
+  and every layer in a fresh grid sits at inPoint 0, so the key tied on
+  all of them. Measured on five solids in AE 2026: `distribute_property
+  {layers: [P1..P5], property: position_x, from: 100, step: 100}`
+  handed the slots out as P2,P3,P4,P5,P1, and the SAME call with the
+  list reversed gave P4,P3,P2,P1,P5 — neither the caller's order nor
+  the stack's, and not repeatable. "Space these six every 100px" was a
+  shuffle that reported success. Note the existing stub tests all
+  passed `order: "stack"` explicitly; whoever wrote them had already
+  worked around the default without naming it.
+  Second real bug, same probe: `reorder_layers {by: "name"}` compared
+  names as strings, so 12 layers sorted to ST Ord, ST Ord 10, ST Ord
+  11, ST Ord 12, ST Ord 2, … — and AE layer names are numbered far more
+  often than alphabetic (`split_layer_into_chunks` alone emits "X 1"..
+  "X 30"). Digit runs now compare as numbers.
+  Third, milder: with tied keys `reorder_layers` restacked layers that
+  had no reason to move (six solids all at startTime 0 came back with
+  one yanked to the top). Ties now keep the stack they had, which means
+  the tie-break direction has to FLIP with ascending/descending, since
+  `sorted` is bottom-first for one and top-first for the other.
+  Proven to catch the regression, not just to pass: the pre-fix host
+  scores 84/91 in real AE, failing exactly the 7 new ordering steps
+  ("slot 0 went to ST Ord 2, not ST Ord"; "ST Ord 12 sits at x=1100,
+  not 1200"; "stacked ST Ord | ST Ord 10 | ST Ord 11 | ST Ord 12 | ST
+  Ord 2 | …"), and fails 10 stub assertions.
+  Stub fidelity, the interesting part: this bug class is INVISIBLE to
+  Node, whose sort is stable, so a stub that just runs the code proves
+  nothing. `withUnstableSort()` in both test files swaps
+  `Array.prototype.sort` for one that permutes before sorting — a
+  legal unstable sort, which disturbs tied keys ONLY. Correct code is
+  unaffected; code that leans on stability fails. Worth reusing for any
+  future ordering work.
+  Also verified, not changed: reordering a SUBSET pulls its members
+  contiguous and shoves whatever sat between them out of the way
+  (measured: reordering s2/s4/s6 of six layers displaced s3 and s5).
+  That is the tool's documented cluster behaviour and the right call,
+  but it was silent — the result now carries `displaced` and says so in
+  the note.
+- FOR THE REMOTE SESSION: `AELL_targetLayers`'s default for a SELECTION
+  (no explicit list) is still `inPoint`, and `comp.selectedLayers` has
+  no meaningful order of its own, so "select nine squares and space
+  them every 100px" still resolves through a key that ties on all of
+  them. It is now deterministic (stable sort keeps AE's selection
+  order) but it is not necessarily the order the user has in mind.
+  Making the selection default `stack` would be a behaviour change to a
+  shipped tool — flagging it rather than deciding it here.

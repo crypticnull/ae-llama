@@ -86,16 +86,21 @@
             "curve: layer i (of n) starts at startAt + bezierY(i/(n-1)) * " +
             "spread. Uses the user's selected layers when 'layers' omitted. " +
             "Omit spread/startAt to fill the comp's WORK AREA; omit bezier " +
-            "for linear (ease-out = [0,0,0.58,1], ease-in = [0.42,0,1,1]).",
-      args: "{comp?: string, layers?: [name|index], bezier?: [x1,y1,x2,y2] (default linear), spread?: seconds (default: work area), startAt?: s, order?: 'in'|'stack'|'reverse'|'ascending'|'descending'}" },
+            "for linear (ease-out = [0,0,0.58,1], ease-in = [0.42,0,1,1]). " +
+            "A 'layers' list is used IN THE ORDER GIVEN unless 'order' " +
+            "asks for a sort.",
+      args: "{comp?: string, layers?: [name|index] (used in the order given), bezier?: [x1,y1,x2,y2] (default linear), spread?: seconds (default: work area), startAt?: s, order?: 'in'|'stack'|'reverse'|'ascending'|'descending' (re-sorts the list)}" },
     { name: "distribute_property", mutating: true,
       desc: "Distribute a property VALUE across layers. Curve mode: layer " +
             "i gets from + bezierY(i/(n-1)) * (to-from). Equidistant " +
             "mode: pass step and layer i gets from + i*step (from " +
             "defaults to the first layer's current value; step is " +
             "center-to-center, so 100px shapes with a 20px gap = step " +
-            "120). Use step for 'space them every X px / equidistant'.",
-      args: "{comp?: string, layers?: [name|index], property: 'opacity'|'rotation'|'scale'|'position_x'|'position_y', from?: number, to?: number, step?: number (equidistant), bezier?: [x1,y1,x2,y2], order?: 'in'|'stack'|'reverse'}" },
+            "120). Use step for 'space them every X px / equidistant'. " +
+            "A 'layers' list is applied IN THE ORDER GIVEN — layer i of " +
+            "the list gets slot i — so name them in the sequence you " +
+            "want; pass 'order' only to sort them instead.",
+      args: "{comp?: string, layers?: [name|index] (applied in the order given), property: 'opacity'|'rotation'|'scale'|'position_x'|'position_y', from?: number, to?: number, step?: number (equidistant), bezier?: [x1,y1,x2,y2], order?: 'in'|'stack'|'reverse' (re-sorts the list)}" },
     { name: "apply_keyframe_ease", mutating: true,
       desc: "Apply a bezier as TEMPORAL easing between keyframes on one " +
             "property across MANY layers in ONE call (converts to AE " +
@@ -160,7 +165,11 @@
             "(default) = later start times sit higher in the stack (bars " +
             "staircase upward); 'descending' = earliest on top. Targets " +
             "the selection when 'layers' omitted, else every layer in the " +
-            "comp. Use for 'change/sort the layer order'.",
+            "comp. Use for 'change/sort the layer order'. by:'name' sorts " +
+            "numbers inside names numerically ('X 2' before 'X 10'). " +
+            "Layers with equal keys keep the stack order they had. The " +
+            "targets end up CONTIGUOUS, which can push untargeted layers " +
+            "aside — the result reports how many.",
       args: "{comp?: string, layers?: [name|index] (omit = selection, else all), by?: 'startTime'|'inPoint'|'name' (default startTime), order?: 'ascending'|'descending'}" },
     { name: "delete_layer", mutating: true,
       desc: "Delete a layer from a comp.",

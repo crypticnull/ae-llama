@@ -18,6 +18,9 @@
   // And so does the chunk rig: it needs its own frame rate and a clip
   // trimmed deliberately off the frame grid.
   var CHCOMP = "AELL Self-Test Chunks";
+  // And the ordering rig: it wants a dozen numbered layers all sitting at
+  // inPoint 0, which is exactly the tie the sort used to scramble.
+  var ORCOMP = "AELL Self-Test Order";
   var running = false;
 
   /**
@@ -28,6 +31,9 @@
   function buildSteps() {
     var squares = ["ST Square"];
     for (var i = 2; i <= 9; i++) squares.push("ST Square " + i);
+    var ords = ["ST Ord"];
+    for (var o = 2; o <= 12; o++) ords.push("ST Ord " + o);
+    var ordsRev = ords.slice(0).reverse();
     return [
       { name: "create scratch comp",
         tool: "create_comp",
@@ -942,6 +948,157 @@
           }
           return Math.round(f1 - f0) >= 1 || "chunk 3 holds no frame";
         } },
+
+      // ---- Ordering (WORKPLAN item 2) ---------------------------------
+      // Two facts measured in AE 2026, both invisible until you look at
+      // WHICH layer got WHICH value. (1) ExtendScript's Array.sort is
+      // unstable, so layers with equal sort keys came out in an order
+      // that was not repeatable between two identical calls. (2) Every
+      // layer in a fresh grid sits at inPoint 0, so the key that
+      // distribute_property sorted by tied on every single one. Together
+      // that turned "space these six every 100px" into a shuffle.
+      // Their own comp: a dozen extra layers would drown the grid steps.
+      { name: "order scratch comp",
+        tool: "create_comp",
+        args: { name: ORCOMP, width: 1600, height: 600, duration: 5,
+                frameRate: 25 },
+        check: function (d, ctx) {
+          ctx.orComp = d.name;
+          return typeof d.id === "number" || !!d.id || "no comp id";
+        } },
+
+      { name: "a layer to number up",
+        tool: "add_solid",
+        args: function (ctx) {
+          return { comp: ctx.orComp, name: "ST Ord", color: [0.9, 0.4, 0.1],
+                   width: 60, height: 60 };
+        },
+        check: function (d) { return d.name === "ST Ord" || d.name; } },
+
+      // AE's own auto-numbering makes the names: ST Ord, ST Ord 2 ..
+      // ST Ord 12 — the double-digit tail is what a string sort mangles.
+      { name: "duplicate to 12 numbered layers, all at inPoint 0",
+        tool: "duplicate_layer",
+        args: function (ctx) {
+          return { comp: ctx.orComp, layer: "ST Ord", count: 11 };
+        },
+        check: function (d) {
+          return d.totalLayersInComp === 12 ||
+                 "comp holds " + d.totalLayersInComp + " layers";
+        } },
+
+      { name: "step mode hands out slots in the LISTED order",
+        tool: "distribute_property",
+        args: function (ctx) {
+          return { comp: ctx.orComp, layers: ords, property: "position_x",
+                   from: 100, step: 100 };
+        },
+        check: function (d) {
+          var a = d.applied || [];
+          if (a.length !== 12) return "applied to " + a.length + " layers";
+          for (var i = 0; i < 12; i++) {
+            if (a[i].layer !== ords[i]) {
+              return "slot " + i + " went to " + a[i].layer + ", not " +
+                     ords[i] + " (order: " +
+                     a[0].layer + ".." + a[11].layer + ")";
+            }
+            if (Math.abs(a[i].value - (100 + i * 100)) > 0.01) {
+              return a[i].layer + " got " + a[i].value;
+            }
+          }
+          return true;
+        } },
+
+      // The report above is what the tool BELIEVES. Read one end out of
+      // AE so a report that lies cannot pass.
+      { name: "read-back: first listed layer took the first slot",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.orComp, layer: "ST Ord", property: "position" };
+        },
+        check: function (d) {
+          return Math.abs(d.value[0] - 100) < 0.01 ||
+                 "ST Ord sits at x=" + d.value[0] + ", not 100";
+        } },
+
+      { name: "read-back: last listed layer took the last slot",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.orComp, layer: "ST Ord 12",
+                   property: "position" };
+        },
+        check: function (d) {
+          return Math.abs(d.value[0] - 1200) < 0.01 ||
+                 "ST Ord 12 sits at x=" + d.value[0] + ", not 1200";
+        } },
+
+      { name: "reversing the list reverses the spread",
+        tool: "distribute_property",
+        args: function (ctx) {
+          return { comp: ctx.orComp, layers: ordsRev, property: "position_x",
+                   from: 100, step: 100 };
+        },
+        check: function (d) {
+          var a = d.applied || [];
+          for (var i = 0; i < 12; i++) {
+            if (a[i] && a[i].layer !== ordsRev[i]) {
+              return "slot " + i + " went to " + a[i].layer + ", not " +
+                     ordsRev[i];
+            }
+          }
+          return true;
+        } },
+
+      { name: "read-back: the reversal actually landed in AE",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.orComp, layer: "ST Ord", property: "position" };
+        },
+        check: function (d) {
+          return Math.abs(d.value[0] - 1200) < 0.01 ||
+                 "ST Ord sits at x=" + d.value[0] + ", not 1200";
+        } },
+
+      { name: "reorder by name reads the numbers as numbers",
+        tool: "reorder_layers",
+        args: function (ctx) {
+          return { comp: ctx.orComp, layers: ords, by: "name",
+                   order: "descending" };
+        },
+        check: function (d) {
+          var want = ords.join(" | ");
+          if (d.topToBottom !== want) {
+            return "stacked " + d.topToBottom;
+          }
+          if (d.slots !== "1..12") return "landed in slots " + d.slots;
+          if (d.displaced) {
+            return d.displaced + " untargeted layer(s) moved in a comp " +
+                   "where every layer was a target";
+          }
+          return true;
+        } },
+
+      // Same trick again: ask AE what the stack IS, not what the tool
+      // says it did.
+      { name: "read-back: the comp's real stack matches the report",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.orComp }; },
+        check: function (d) {
+          var L = d.layers || [];
+          if (L.length !== 12) return "comp holds " + L.length + " layers";
+          for (var i = 0; i < 12; i++) {
+            if (L[i].name !== ords[i]) {
+              return "slot " + (i + 1) + " holds " + L[i].name + ", not " +
+                     ords[i];
+            }
+          }
+          return true;
+        } },
+
+      { name: "cleanup: delete the order comp",
+        tool: "delete_item",
+        args: function (ctx) { return { item: ctx.orComp }; },
+        check: function () { return true; } },
 
       { name: "cleanup: delete the chunk comp",
         tool: "delete_item",

@@ -300,4 +300,82 @@ assert(/1 of 3/.test(r.data.note || ""),
        "…and the note counts what was left out (got: " +
        (r.data.note || "") + ")");
 
+// 12. An explicit 'layers' list is an ORDER, not a set. The tool used to
+// re-sort it by inPoint, so a grid whose layers all sit at inPoint 0 got
+// its values handed out in whatever order the sort felt like. Measured in
+// AE 2026 on five solids all at inPoint 0: the SAME call produced
+// P2,P3,P4,P5,P1 once and P4,P3,P2,P1,P5 with the list reversed - neither
+// the caller's order nor the stack's, and not repeatable.
+//
+// Node's Array.sort is STABLE, so that scramble cannot reproduce by
+// running the code. This shim makes the host's sort behave the way
+// ExtendScript's actually does - a legal permutation before sorting,
+// which disturbs TIED keys only.
+function withUnstableSort(fn) {
+  const real = Array.prototype.sort;
+  Array.prototype.sort = function (cmp) {
+    this.reverse();
+    return real.call(this, cmp);
+  };
+  try { return fn(); } finally { Array.prototype.sort = real; }
+}
+
+const flat = [];
+for (let i = 0; i < 5; i++) {
+  const f = new Layer("F" + (i + 1), comp, 0);   // every inPoint tied at 0
+  f.selected = false;
+  comp._layers.push(f);
+  flat.push(f);
+}
+const fx = () => ["F1", "F2", "F3", "F4", "F5"].map(n =>
+  comp.layer(n)._transform["ADBE Position"].value[0]);
+
+r = withUnstableSort(() => call("distribute_property", {
+  property: "position_x", from: 100, step: 100,
+  layers: ["F1", "F2", "F3", "F4", "F5"]
+}));
+assert(r.ok && [100, 200, 300, 400, 500].every((v, i) => near(fx()[i], v)),
+       "step mode honors the caller's layer order when inPoints all tie " +
+       "(got " + fx() + ")");
+
+r = withUnstableSort(() => call("distribute_property", {
+  property: "position_x", from: 100, step: 100,
+  layers: ["F5", "F4", "F3", "F2", "F1"]
+}));
+assert(r.ok && [500, 400, 300, 200, 100].every((v, i) => near(fx()[i], v)),
+       "...and reversing the list reverses the spread (got " + fx() + ")");
+assert(r.data.applied.map(a => a.layer).join("|") === "F5|F4|F3|F2|F1",
+       "...and 'applied' reports the order the values actually went out " +
+       "in (got " + r.data.applied.map(a => a.layer).join("|") + ")");
+
+// An explicit 'order' still overrides the list order - that is what it is for.
+r = withUnstableSort(() => call("distribute_property", {
+  property: "position_x", from: 100, step: 100, order: "stack",
+  layers: ["F5", "F4", "F3", "F2", "F1"]
+}));
+assert(r.ok && [100, 200, 300, 400, 500].every((v, i) => near(fx()[i], v)),
+       "order:'stack' re-sorts a reversed list back to stack order (got " +
+       fx() + ")");
+
+// Same rule for stagger_layers: the list is the sequence.
+r = withUnstableSort(() => call("stagger_layers", {
+  layers: ["F5", "F4", "F3", "F2", "F1"], spread: 4, startAt: 0
+}));
+const fst = ["F1", "F2", "F3", "F4", "F5"].map(n => comp.layer(n).startTime);
+assert(r.ok && [4, 3, 2, 1, 0].every((v, i) => near(fst[i], v)),
+       "stagger_layers honors the caller's layer order too (got " +
+       fst.map(v => v.toFixed(1)) + ")");
+
+// Selection-based targeting has no caller order, so it still sorts - and
+// must do it without leaning on a stable sort.
+flat.forEach((f, i) => { f.selected = true; f.inPoint = 4 - i; });
+comp._layers.forEach(l => { if (flat.indexOf(l) === -1) l.selected = false; });
+r = withUnstableSort(() => call("distribute_property", {
+  property: "rotation", from: 0, step: 10
+}));
+const rots = ["F1", "F2", "F3", "F4", "F5"].map(n =>
+  comp.layer(n)._transform["ADBE Rotate Z"].value);
+assert(r.ok && [40, 30, 20, 10, 0].every((v, i) => near(rots[i], v)),
+       "selection default still sorts by inPoint (got " + rots + ")");
+
 console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");

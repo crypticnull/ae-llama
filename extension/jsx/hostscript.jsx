@@ -1707,11 +1707,58 @@ function AELL_bezierArgs(args) {
           Math.max(0, Math.min(1, Number(b[2]))), Number(b[3])];
 }
 
+/*
+ * ExtendScript's Array.sort is NOT stable, so equal keys come back in an
+ * arbitrary order that is not even repeatable between calls (measured in
+ * AE 2026: five layers all at inPoint 0 sorted to P2,P3,P4,P5,P1 on one
+ * call and P4,P3,P2,P1,P5 on the next). Decorate with the original slot
+ * so ties keep the order they arrived in.
+ */
+function AELL_stableSort(arr, cmp) {
+  var deco = [];
+  var i;
+  for (i = 0; i < arr.length; i++) deco.push({ v: arr[i], i: i });
+  deco.sort(function (a, b) {
+    var c = cmp(a.v, b.v);
+    return c !== 0 ? c : (a.i - b.i);
+  });
+  for (i = 0; i < deco.length; i++) arr[i] = deco[i].v;
+  return arr;
+}
+
+/*
+ * Compare layer names the way a human reads them: digit runs count as
+ * numbers, everything else as text. AE layer names are numbered far more
+ * often than they are alphabetic -- split_layer_into_chunks alone emits
+ * "X 1".."X 30" -- and a plain string compare buries 10..30 between 1
+ * and 2.
+ */
+function AELL_nameCompare(sa, sb) {
+  var ra = String(sa).toLowerCase().match(/[0-9]+|[^0-9]+/g) || [];
+  var rb = String(sb).toLowerCase().match(/[0-9]+|[^0-9]+/g) || [];
+  var n = Math.min(ra.length, rb.length);
+  for (var i = 0; i < n; i++) {
+    var x = ra[i], y = rb[i];
+    if (/^[0-9]/.test(x) && /^[0-9]/.test(y)) {
+      var dx = parseFloat(x), dy = parseFloat(y);
+      if (dx !== dy) return dx < dy ? -1 : 1;
+    } else if (x !== y) {
+      return x < y ? -1 : 1;
+    }
+  }
+  if (ra.length !== rb.length) return ra.length < rb.length ? -1 : 1;
+  // Case-insensitive tie: fall back to the raw strings so the order is
+  // total and repeatable rather than left to the sort.
+  var a0 = String(sa), b0 = String(sb);
+  return a0 < b0 ? -1 : (a0 > b0 ? 1 : 0);
+}
+
 /* Resolve target layers: explicit list, else the user's selection. */
 function AELL_targetLayers(comp, args) {
   var layers = [];
   var i;
-  if (AELLJSON.isArray(args.layers) && args.layers.length > 0) {
+  var explicit = AELLJSON.isArray(args.layers) && args.layers.length > 0;
+  if (explicit) {
     for (i = 0; i < args.layers.length; i++) {
       layers.push(AELL_resolveLayer(comp, args.layers[i]));
     }
@@ -1723,17 +1770,25 @@ function AELL_targetLayers(comp, args) {
     throw new Error("Need at least 2 layers (got " + layers.length +
                     ") — select them in AE or pass {layers: [...]}");
   }
-  var order = String(args.order || "in");
+  // An EXPLICIT list is ALREADY an order: the caller named the layers in
+  // the sequence they want the values handed out in. Re-sorting it
+  // silently reassigns them, and when the sort key ties — every layer
+  // at inPoint 0, which is the normal state of a grid — the result is
+  // arbitrary. Sort a named list only when 'order' asks for it.
+  var wanted = (typeof args.order === "string" && args.order !== "")
+    ? args.order : (explicit ? "" : "in");
+  if (wanted === "") return layers;
+  var order = String(wanted);
   // User-facing aliases: 'ascending' assigns the earliest slot to the
   // BOTTOM layer (bars staircase upward); 'descending' to the top layer.
   if (/^asc/i.test(order)) order = "reverse";
   else if (/^desc/i.test(order)) order = "stack";
   if (order === "stack") {
-    layers.sort(function (a, b) { return a.index - b.index; });
+    AELL_stableSort(layers, function (a, b) { return a.index - b.index; });
   } else if (order === "reverse") {
-    layers.sort(function (a, b) { return b.index - a.index; });
+    AELL_stableSort(layers, function (a, b) { return b.index - a.index; });
   } else {   // "in": by current inPoint — natural for chunked sequences
-    layers.sort(function (a, b) { return a.inPoint - b.inPoint; });
+    AELL_stableSort(layers, function (a, b) { return a.inPoint - b.inPoint; });
   }
   return layers;
 }
@@ -1767,17 +1822,35 @@ AELL_TOOLS.reorder_layers = function (args) {
   var by = String(args.by || "startTime");
   function keyOf(L) {
     if (by === "inPoint") return L.inPoint;
-    if (by === "name") return L.name;
     return L.startTime;
   }
-  var sorted = layers.slice(0);
-  sorted.sort(function (a, b) {
-    var ka = keyOf(a), kb = keyOf(b);
-    return ka < kb ? -1 : (ka > kb ? 1 : 0);
-  });
   var descending = /^desc/i.test(String(args.order || ""));
+  var sorted = layers.slice(0);
+  AELL_stableSort(sorted, function (a, b) {
+    var c;
+    if (by === "name") {
+      c = AELL_nameCompare(a.name, b.name);
+    } else {
+      var ka = keyOf(a), kb = keyOf(b);
+      c = ka < kb ? -1 : (ka > kb ? 1 : 0);
+    }
+    if (c !== 0) return c;
+    // Equal keys must not shuffle the stack. 'sorted' is bottom-first for
+    // ascending (it gets reversed below) and top-first for descending, so
+    // the tie-break flips with it to leave tied layers exactly where they
+    // already sit instead of at the sort's whim.
+    return descending ? (a.index - b.index) : (b.index - a.index);
+  });
   // Top-first sequence: ascending puts the LATEST key on top.
   var topFirst = descending ? sorted : sorted.slice(0).reverse();
+  // Snapshot every slot first: pulling a SUBSET together shoves whatever
+  // sat between its members out of the way, and a caller who only named
+  // three layers deserves to be told the other two moved.
+  var all = [], wasAt = [];
+  for (i = 1; i <= comp.numLayers; i++) {
+    all.push(comp.layer(i));
+    wasAt.push(i);
+  }
   // Anchor the cluster where its topmost member currently sits.
   var top = layers[0];
   for (i = 1; i < layers.length; i++) {
@@ -1788,11 +1861,36 @@ AELL_TOOLS.reorder_layers = function (args) {
     topFirst[i].moveAfter(topFirst[i - 1]);
   }
   var stacked = [];
-  for (i = 0; i < topFirst.length && i < 5; i++) stacked.push(topFirst[i].name);
-  return AELL_okay({ layers: layers.length, by: by,
+  for (i = 0; i < topFirst.length && i < 12; i++) stacked.push(topFirst[i].name);
+  // Read the landing slots back from AE instead of trusting the moves.
+  var firstIdx = topFirst[0].index;
+  var lastIdx = topFirst[topFirst.length - 1].index;
+  var displaced = 0, m, isTarget;
+  for (i = 0; i < all.length; i++) {
+    if (all[i].index === wasAt[i]) continue;
+    isTarget = false;
+    for (m = 0; m < layers.length; m++) {
+      if (layers[m] === all[i]) { isTarget = true; break; }
+    }
+    if (!isTarget) displaced++;
+  }
+  var res = { layers: layers.length, by: by,
     order: descending ? "descending" : "ascending",
-    topToBottom: stacked.join(" | ") + (topFirst.length > 5 ? " | …" : ""),
-    note: "Stacking changed only — start times untouched" });
+    topToBottom: stacked.join(" | ") + (topFirst.length > 12 ? " | …" : ""),
+    slots: firstIdx + ".." + lastIdx,
+    note: "Stacking changed only — start times untouched" };
+  if (lastIdx - firstIdx + 1 !== topFirst.length) {
+    res.warning = "Reordered layers did NOT land in one contiguous block " +
+      "(slots " + firstIdx + ".." + lastIdx + " for " + topFirst.length +
+      " layers) — read the comp back with get_comp_details";
+  }
+  if (displaced > 0) {
+    res.displaced = displaced;
+    res.note = "Stacking changed only — start times untouched; " +
+      displaced + " layer(s) nobody asked about were pushed aside to make " +
+      "the reordered ones contiguous";
+  }
+  return AELL_okay(res);
 };
 
 AELL_TOOLS.stagger_layers = function (args) {

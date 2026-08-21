@@ -319,6 +319,77 @@ const r15 = call("reorder_layers", { layers: ["early"] });
 assert(!r15.ok && /at least 2/.test(r15.error),
        "reorder with fewer than 2 targets refused");
 
+// ---- Sorting that does not depend on a stable sort (real-AE finding) ----
+// ExtendScript's Array.sort is UNSTABLE: six layers all at startTime 0
+// came back with one of them yanked to the top for no reason. Node's sort
+// IS stable, so the bug cannot reproduce by running the code -- this shim
+// makes the host's sort behave the way AE's actually does (a legal
+// permutation before sorting, which only ever disturbs TIED keys).
+function withUnstableSort(fn) {
+  const real = Array.prototype.sort;
+  Array.prototype.sort = function (cmp) {
+    this.reverse();
+    return real.call(this, cmp);
+  };
+  try { return fn(); } finally { Array.prototype.sort = real; }
+}
+
+const comp8b = new Comp("Tied", 20);
+Object.setPrototypeOf(comp8b, Object.create(CompItem.prototype,
+  Object.getOwnPropertyDescriptors(Comp.prototype)));
+["T1", "T2", "T3", "T4"].forEach(n =>
+  comp8b._layers.push(new Layer(n, comp8b, 0, 5, 0)));   // every start tied
+project.activeItem = comp8b;
+const before8b = comp8b._layers.map(l => l.name).join("|");
+const r15a = withUnstableSort(() => call("reorder_layers", {}));
+assert(r15a.ok && comp8b._layers.map(l => l.name).join("|") === before8b,
+       "tied startTimes keep the stack they had, ascending (got " +
+       comp8b._layers.map(l => l.name).join("|") + ")");
+const r15b = withUnstableSort(() =>
+  call("reorder_layers", { order: "descending" }));
+assert(r15b.ok && comp8b._layers.map(l => l.name).join("|") === before8b,
+       "tied startTimes keep the stack they had, descending (got " +
+       comp8b._layers.map(l => l.name).join("|") + ")");
+
+// by:'name' must read the numbers in names as numbers. Layer names in AE
+// are numbered far more often than alphabetic (split_layer_into_chunks
+// emits "X 1".."X 30"), and a string compare buries 10..30 between 1 and 2.
+const comp8c = new Comp("Names", 20);
+Object.setPrototypeOf(comp8c, Object.create(CompItem.prototype,
+  Object.getOwnPropertyDescriptors(Comp.prototype)));
+["N 2", "N 10", "N 1", "N 21"].forEach(n =>
+  comp8c._layers.push(new Layer(n, comp8c, 0, 5, 0)));
+project.activeItem = comp8c;
+const r15c = call("reorder_layers", { by: "name", order: "descending" });
+assert(r15c.ok && comp8c._layers.map(l => l.name).join("|") ===
+       "N 1|N 2|N 10|N 21",
+       "by:'name' sorts N 2 before N 10, not after (got " +
+       comp8c._layers.map(l => l.name).join("|") + ")");
+assert(r15c.data.topToBottom === "N 1 | N 2 | N 10 | N 21",
+       "…and topToBottom reports the same order (got " +
+       r15c.data.topToBottom + ")");
+assert(r15c.data.slots === "1..4",
+       "…and reports the slots it actually landed in (got " +
+       r15c.data.slots + ")");
+
+// Reordering a SUBSET pulls it contiguous, which shoves untargeted layers
+// out of the way. That is not wrong, but it must be reported, not silent.
+const comp8d = new Comp("Subset", 20);
+Object.setPrototypeOf(comp8d, Object.create(CompItem.prototype,
+  Object.getOwnPropertyDescriptors(Comp.prototype)));
+[["s1", 1], ["s2", 2], ["s3", 3], ["s4", 4], ["s5", 5], ["s6", 6]]
+  .forEach(([n, st]) => comp8d._layers.push(new Layer(n, comp8d, 0, 8, st)));
+project.activeItem = comp8d;
+const r15d = call("reorder_layers", { layers: ["s2", "s4", "s6"] });
+assert(r15d.ok && r15d.data.displaced === 2,
+       "subset reorder reports the 2 untargeted layers it pushed aside " +
+       "(got " + r15d.data.displaced + ")");
+assert(/pushed aside/.test(r15d.data.note || ""),
+       "…and says so in the note (got: " + (r15d.data.note || "") + ")");
+assert(r15d.data.topToBottom === "s6 | s4 | s2",
+       "…and the targets land contiguous, latest on top (got " +
+       r15d.data.topToBottom + ")");
+
 // duplicate_layer count: the "12 circles" field case in ONE call
 const comp9 = new Comp("Dups", 10);
 Object.setPrototypeOf(comp9, Object.create(CompItem.prototype,
