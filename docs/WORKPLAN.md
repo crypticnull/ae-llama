@@ -115,4 +115,6 @@ themselves inside the scratch comp.
   workflow + model picks).
 - Phase D animation utilities and Phase E roto/tracking hybrids
   (docs/NATIVE_COVERAGE_PLAN.md) — verify them when they land.
-- Releases, version bumps, PRs into main, the update feed.
+- Minor/major version bumps, PRs into main, release notes. PATCH bumps
+  are YOURS: `node scripts/bump-version.js patch` before pushing a fix
+  you verified in real AE, or it never reaches a panel (see CLAUDE.md).
