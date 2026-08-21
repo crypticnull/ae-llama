@@ -24,47 +24,26 @@ field truth -> fix -> stub faithfulness.
 ## 2. Real-AE verification debt (things stubs cannot prove)
 
 Verify each by scripting AE directly (temp .jsx + AELL_call, see
-CLAUDE.md). Where behavior is wrong, fix + extend selftest.js:
+CLAUDE.md). Where behavior is wrong, fix + extend selftest.js.
 
-- Grid rig under BOTH expression engines: flip Project Settings >
-  Expressions between JavaScript and Legacy ExtendScript and re-run the
-  harness. Generated expressions must evaluate in both.
-- center_anchor_point on rotated + scaled + parented layers (the
-  compensation math is only stub-proven).
-- scale_comp on comps containing cameras (zoom scaling), parented
-  chains, and keyframed position/scale (setValueAtKey path).
-- Text: add_text_layer + set_text_style (font/tracking/leading paths
-  are AE-version sensitive), then add a selftest step for text.
+DONE — do not re-verify (see WORKPLAN-LOG.md): grid rig under both
+expression engines, center_anchor_point on rotated/scaled/parented and
+animated layers, scale_comp with cameras/keyframes, text styling and
+font validation, cameras in the suite (old item 2b).
+
+Still open:
+
 - split_layer_into_chunks on real FOOTAGE (trimmed in/out points), not
   just solids; verify seamless playback and stack order.
 - distribute_property step mode on real layers; reorder_layers actual
-  stack order after (read back with list via get_comp_details).
+  stack order after (read back via get_comp_details).
 - set_mask_path keyframes: scrub and confirm the mask actually
-  animates (Shape keyframe values at time, not just numKeys).
+  ANIMATES (Shape value at time, not just numKeys).
 - for_each_layer with apply_effect across 50+ layers: timing +
-  stability (watch for evalScript payload limits).
-
-## 2b. Cameras in the real-AE suite (build AND verify in one pass)
-
-The 26-step harness never touches cameras, which is why #28 shipped a
-camera fix that could not reach its own branch. The stub now encodes the
-two facts learned (hidden Scale is resolvable but not settable; POI is
-writable only when autoOrient is CAMERA_OR_POINT_OF_INTEREST), so CI
-catches a code regression — but nothing catches AE itself behaving
-differently, or the same surprise on another layer type.
-
-Build this here rather than remotely: it needs a dedicated scratch comp,
-and blind AE code has been wrong twice today. Suggested shape —
-
-- Its OWN scratch comp, created and deleted inside the step group, so a
-  camera cannot disturb the 2D steps in the main one.
-- Both camera types: `addCamera` (autoOrient 4214) and a one-node
-  camera (4212). Assert scale_comp halves zoom on both, re-centres POI
-  on the aimed one, and leaves the one-node camera's aim alone.
-- Assert `layersSkipped` is EMPTY. That is the assertion that would
-  have caught #28 — the tool reported its own failure honestly and
-  nobody was reading it.
-- A light as well, if cheap: same aim-not-scale rule, no zoom.
+  stability, and the same at 200 layers for grid_layout and batch keys.
+  Note anything over ~5s.
+- add_light: no such tool exists, so lights are wholly uncovered. Same
+  aim-not-scale rule cameras needed. Build the tool AND its coverage.
 
 ## 3. Extend selftest.js coverage
 
@@ -103,8 +82,15 @@ themselves inside the scratch comp.
     squares, nine spread and one orphan parked at the centre. The tools
     each behaved correctly (grounded error, successful retry); what is
     missing is any notion of rolling a failed round back.
-- Undo hygiene: each chat command should be one Ctrl+Z step (undo
-  groups) — verify for the batch tools.
+- ~~Undo hygiene: one Ctrl+Z per chat command~~ DONE 2026-08-21 via
+  AELL_callBatch.
+- ROLLBACK for a round that fails part way — the biggest open gap. When
+  duplicate_layer errored before add_solid had a layer to copy, the
+  model retried the whole round and the comp ended with ten squares
+  instead of nine. Every tool behaved correctly; there is simply no
+  notion of undoing a partial round. Now that a round is one undo group,
+  this is tractable. Design it before building it, and say what happens
+  to the user's OWN work if a rollback overshoots.
 - Performance: 200-layer comps — measure grid_layout and batch
   keyframe wall time; note anything over ~5s so the remote session can
   optimize.
