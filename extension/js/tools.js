@@ -54,8 +54,13 @@
       desc: "Create a composition and open it.",
       args: "{name: string, width: int, height: int, duration: seconds, frameRate: number, bgColor?: [r,g,b] 0..1}" },
     { name: "add_text_layer", mutating: true,
-      desc: "Add a text layer to a comp.",
-      args: "{comp?: string, text: string, fontSize?: px, fillColor?: [r,g,b] 0..1, position?: [x,y], font?: string (PostScript name), tracking?: number, leading?: px|'auto', justification?: 'left'|'center'|'right'}" },
+      desc: "Add a text layer to a comp. The new layer starts from a " +
+            "KNOWN baseline (white, 72px, tracking 0, auto leading, left, " +
+            "no faux/stroke, a plain installed sans) instead of whatever " +
+            "AE's Character panel was last set to; anything you pass " +
+            "overrides it. Pass inheritStyle:true to keep the user's " +
+            "Character panel style instead.",
+      args: "{comp?: string, text: string, fontSize?: px, fillColor?: [r,g,b] 0..1, position?: [x,y], font?: string (PostScript name), tracking?: number, leading?: px|'auto', justification?: 'left'|'center'|'right', inheritStyle?: bool}" },
     { name: "set_text_style", mutating: true,
       desc: "Restyle an existing text layer (any subset of fields). " +
             "An uninstalled font is refused, listing what IS installed.",
@@ -474,6 +479,10 @@
       "  stagger_layers 'spread' is the TOTAL span of the whole stagger,",
       "  NOT the gap between layers — for a per-layer gap use step /",
       "  stepFrames, or the nine layers land half a frame apart.",
+      "- add_text_layer already starts new text from a clean baseline",
+      "  (white, 72px, tracking 0, auto leading, a plain sans) — do NOT",
+      "  follow it with set_text_style just to undo AE's Character",
+      "  panel. Only pass the fields the user actually asked for.",
       "",
       "Universal property access (reach ANY parameter in AE):",
       "- Unknown parameter, effect setting, mask or text property? NEVER",

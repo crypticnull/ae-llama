@@ -1094,3 +1094,83 @@ fix. Start from item 1 of `docs/WORKPLAN.md`.
   add_text_layer inheriting AE's last-used character style, no rollback
   for a round that fails part way, and the untouched ComfyUI/second-turn
   parts of the checklist.
+
+## 2026-08-21 - item 4 follow-up: add_text_layer inherits AE's character panel
+
+- Decision made (the item asked me to decide): YES, normalize -- but only
+  when CREATING. `add_text_layer` now starts every new layer from a
+  documented baseline (white, 72px, tracking 0, auto leading, left, no
+  faux bold/italic, no stroke, baselineShift/tsume 0, h/v scale 1, and a
+  VERIFIED-installed plain sans) and applies the caller's args on top, so
+  anything asked for still wins. `inheritStyle: true` is the way back to
+  AE's own behaviour for someone who set the Character panel up on
+  purpose. `set_text_style` deliberately does NOT normalize: it edits a
+  layer the user already owns, and resetting fields they never mentioned
+  would destroy their work.
+- Changed: `extension/jsx/hostscript.jsx` -- `AELL_TEXT_BASELINE`,
+  `AELL_TEXT_STUCK`, `AELL_TEXT_FONTS`, `AELL_defaultFont` (cached,
+  isSubstitute-verified via the existing `AELL_fontProblem`),
+  `AELL_normalizeTextDoc`, `AELL_stuckStyleWarning`;
+  `AELL_applyTextStyle` takes an optional `reset` so baseline and args
+  land in ONE setValue; the style summary now reports `fillColor` too, so
+  "white" is visible in the answer instead of assumed. Results carry
+  `styleReset: true` (or `inheritedStyle: true`). `extension/js/tools.js`
+  tool doc + one system-prompt line telling the model NOT to chase
+  add_text_layer with a corrective set_text_style. Four new steps in
+  `extension/js/selftest.js` (baseline, explicit-args-win, and two
+  delete_layer cleanups). `tests/test-text-style.js` +25 assertions.
+- Harness: 149/149 real AE (was 145/145). Stubbed suite 18/18 files.
+  Bumped 0.9.13.
+- What real AE actually said, since none of this was guessable:
+  a plain `add_text_layer` on this machine returned PowerCentra-Book at
+  66px, tracking 251, autoLeading OFF at 92, fill [0.06,0.18,0.28] --
+  and superscript ON. It is the same shape as every other bug this week:
+  something inherited, nothing said. After the fix the same call returns
+  ArialMT 72 tracking 0 auto white, and asking for 120px white gives
+  ArialMT 120 white.
+- THE TRAP, measured not assumed: allCaps, smallCaps, superscript and
+  subscript are READ-ONLY on a TextDocument in AE 2026 ("Unable to set
+  <name>. It is a readOnly attribute."). So an inherited superscript
+  CANNOT be cleared from script at all -- and it is not a lying getter:
+  "HXhx" at fontSize 100 in Arial measured h=41.7 top=-75 via
+  sourceRectAtTime, i.e. ~58% size and raised, which is real superscript
+  rendering. The tool therefore REPORTS it and names the Character panel
+  as the only place it can be fixed, rather than shipping tiny raised
+  text that looks like the panel is broken.
+  Two shortcuts that do not work, so nobody re-tries them:
+  `textProp.setValue(new TextDocument("A"))` does NOT reset the style --
+  every field came back identical, so there is no cheap "give me
+  defaults" call; and `app.fonts.getDefaultFontForCTScript` exists but
+  `getCTScriptForString` wants 2 parameters and the script id is an
+  unsigned int, not a "kCTScriptRoman" string, so the default-font API
+  was not usable here. Hence the candidate list (ArialMT, SegoeUI,
+  Verdana, TimesNewRomanPSMT, CourierNewPSMT), each checked with
+  isSubstitute===false before use; if none resolve the inherited font is
+  kept rather than a bogus name written.
+  Also: scripting setValue does NOT feed the Character panel back. A
+  third addText after normalizing the second still inherited the dirty
+  style -- which is good news (the tool cannot disturb what the user's
+  next manual text layer looks like) but means a stub cannot dirty the
+  panel from script, so the harness steps assert the CONTRACT (tracking
+  0, auto leading, 72px, a font reported) rather than "inheritance
+  happened". On this machine they are a genuine before/after anyway.
+- Proven to catch the regression, not just to pass. Against
+  `tests/test-text-style.js`: drop normalization entirely -> 13
+  assertions fail; "fix" it by assigning the read-only fields (the
+  obvious wrong fix, which THROWS in real AE) -> add_text_layer fails
+  outright and 10 more fall over; normalize on `set_text_style` too ->
+  3 assertions fail, including the one guarding a partial restyle. The
+  stub had to grow real teeth first: its TextDocument now has throwing
+  setters for the four read-only fields, and `comp.layers.addText()`
+  hands back the measured Character-panel state instead of clean
+  defaults.
+- Assumptions worth a second opinion: 72px as the default size is a
+  choice, not a measurement (AE has no readable default); and the font
+  candidate list is Windows-centric. Both are one-line edits if the
+  remote session disagrees.
+- Nothing blocked. Still open under item 4 for later passes: no rollback
+  for a chat round that fails part way, and the untouched ComfyUI /
+  second-turn / mixed-undo parts of the probe checklist. Worth
+  considering separately: `set_text_style` has no `reset: true`, so a
+  layer the USER made by hand still cannot be cleaned up by asking --
+  deliberately left out of this pass to keep editing non-destructive.

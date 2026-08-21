@@ -87,9 +87,14 @@ themselves inside the scratch comp.
     `stepFrames`, refuses spread+step together, and flags a spread
     that works out to under a frame per layer. Probe re-run: the model
     now sends `stepFrames: 4`.
-  - `add_text_layer` inherits AE's last-used character panel style —
-    a probe asking for 120px white got tracking 251 and
-    PowerCentra-Book. Decide whether the tool should normalize.
+  - ~~`add_text_layer` inherits AE's last-used character panel style~~
+    DONE 2026-08-21: it does normalize. A new layer starts from a
+    documented baseline (white, 72px, tracking 0, auto leading, left,
+    no faux/stroke, a verified-installed plain sans) and the caller's
+    args override it; `inheritStyle: true` keeps AE's Character panel.
+    `set_text_style` still never normalizes — it edits a layer the
+    user owns. AE 2026 makes allCaps/smallCaps/superscript/subscript
+    READ-ONLY, so an inherited one is reported instead of swallowed.
   - the checklist never touches ComfyUI, undo across a mixed round, or
     a second chat turn that refers back ("make them blue instead").
   - a round that fails PART WAY leaves its debris behind: when

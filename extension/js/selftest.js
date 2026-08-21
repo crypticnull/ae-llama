@@ -525,6 +525,70 @@
           return s.leading === "auto" || "leading " + s.leading;
         } },
 
+      // A layer made by comp.layers.addText() inherits AE's CHARACTER
+      // PANEL -- whatever the user last typed with, which scripting can
+      // neither read as "the default" nor reset. On the dev machine a
+      // plain "add a text layer" really did come back PowerCentra-Book
+      // 66px with tracking 251 and auto leading off, and the tool
+      // reported that as a success. These steps assert the CONTRACT (a
+      // new layer starts from a known baseline), so they hold on a
+      // machine whose Character panel happens to be clean too.
+      { name: "a new text layer ignores AE's last-used character style",
+        tool: "add_text_layer",
+        args: function (ctx) {
+          return { comp: ctx.comp, text: "ST Baseline",
+                   position: [100, 200] };
+        },
+        check: function (d, ctx) {
+          ctx.baseTextLayer = d.name;
+          var s = d.style || {};
+          if (d.styleReset !== true) return "styleReset " + d.styleReset;
+          if (s.tracking !== 0) return "tracking " + s.tracking;
+          if (s.leading !== "auto") return "leading " + s.leading;
+          if (s.fontSize !== 72) return "fontSize " + s.fontSize;
+          if (!s.font) return "no font reported";
+          var f = s.fillColor || [];
+          if (f.join(",") !== "1,1,1") return "fillColor " + f.join(",");
+          return true;
+        } },
+
+      // ...but the caller's own wishes must still win over that baseline.
+      { name: "explicit style beats the baseline",
+        tool: "add_text_layer",
+        args: function (ctx) {
+          return { comp: ctx.comp, text: "ST Override", fontSize: 40,
+                   tracking: 12, leading: 55, fillColor: [1, 0, 0],
+                   position: [100, 300] };
+        },
+        check: function (d, ctx) {
+          ctx.overTextLayer = d.name;
+          var s = d.style || {};
+          if (s.fontSize !== 40) return "fontSize " + s.fontSize;
+          if (s.tracking !== 12) return "tracking " + s.tracking;
+          if (s.leading !== 55) return "leading " + s.leading;
+          var f = s.fillColor || [];
+          if (f.join(",") !== "1,0,0") return "fillColor " + f.join(",");
+          return true;
+        } },
+
+      { name: "clean up the baseline text layer",
+        tool: "delete_layer",
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: ctx.baseTextLayer };
+        },
+        check: function (d, ctx) {
+          return d.removed === ctx.baseTextLayer || "removed " + d.removed;
+        } },
+
+      { name: "clean up the override text layer",
+        tool: "delete_layer",
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: ctx.overTextLayer };
+        },
+        check: function (d, ctx) {
+          return d.removed === ctx.overTextLayer || "removed " + d.removed;
+        } },
+
       // ---- Cameras (WORKPLAN item 2b) ----------------------------------
       // In their OWN scratch comp: scale_comp resizes the whole comp, and
       // a camera must not disturb the 2D steps above. Values are chosen so

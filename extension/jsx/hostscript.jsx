@@ -861,10 +861,89 @@ function AELL_fontProblem(want) {
   return msg;
 }
 
-function AELL_applyTextStyle(layer, args) {
+// A layer made by comp.layers.addText() inherits AE's CHARACTER PANEL
+// state -- whatever the user last typed with, which scripting can neither
+// read as "the default" nor reset. Measured in real AE 2026: asking for a
+// plain text layer produced PowerCentra-Book at 66px, tracking 251,
+// autoLeading off at 92, and superscript ON (the glyphs really do render
+// at ~58% and raised). So add_text_layer starts every NEW layer from a
+// known baseline and lets the args override it; set_text_style edits a
+// layer the user already owns and must never normalize.
+var AELL_TEXT_BASELINE = [
+  ["tracking", 0], ["fauxBold", false], ["fauxItalic", false],
+  ["baselineShift", 0], ["tsume", 0],
+  ["horizontalScale", 1], ["verticalScale", 1],
+  ["applyStroke", false], ["applyFill", true]
+];
+// AE 2026 makes these READ-ONLY on a TextDocument ("Unable to set ... It
+// is a readOnly attribute"), so an inherited one cannot be cleared from
+// script at all. Reported instead of silently shipped.
+var AELL_TEXT_STUCK = ["allCaps", "smallCaps", "superscript", "subscript"];
+// Verified installed before use: getFontsByPostScriptName ECHOES whatever
+// it is handed, so only isSubstitute===false proves a font is real.
+var AELL_TEXT_FONTS = ["ArialMT", "SegoeUI", "Verdana",
+                       "TimesNewRomanPSMT", "CourierNewPSMT"];
+var AELL_TEXT_SIZE = 72;
+var AELL_TEXT_FONT_CACHE;   // undefined = not looked up yet, null = none
+
+function AELL_defaultFont() {
+  if (AELL_TEXT_FONT_CACHE !== undefined) { return AELL_TEXT_FONT_CACHE; }
+  AELL_TEXT_FONT_CACHE = null;
+  for (var i = 0; i < AELL_TEXT_FONTS.length; i++) {
+    if (!AELL_fontProblem(AELL_TEXT_FONTS[i])) {
+      AELL_TEXT_FONT_CACHE = AELL_TEXT_FONTS[i];
+      break;
+    }
+  }
+  return AELL_TEXT_FONT_CACHE;
+}
+
+// Mutates doc in place; fills out.stuck (inherited and unclearable) and
+// out.skipped (a baseline field this AE would not take).
+function AELL_normalizeTextDoc(doc, out) {
+  var i, k, v;
+  out.stuck = [];
+  out.skipped = [];
+  for (i = 0; i < AELL_TEXT_BASELINE.length; i++) {
+    k = AELL_TEXT_BASELINE[i][0];
+    v = AELL_TEXT_BASELINE[i][1];
+    try {
+      if (doc[k] !== v) { doc[k] = v; }
+    } catch (e1) { out.skipped.push(k); }
+  }
+  try { doc.autoLeading = true; } catch (e2) { out.skipped.push("leading"); }
+  try { doc.fillColor = [1, 1, 1]; } catch (e3) { out.skipped.push("fillColor"); }
+  try { doc.fontSize = AELL_TEXT_SIZE; } catch (e4) { out.skipped.push("fontSize"); }
+  try {
+    doc.justification = ParagraphJustification.LEFT_JUSTIFY;
+  } catch (e5) { out.skipped.push("justification"); }
+  var font = AELL_defaultFont();
+  if (font) {
+    try { doc.font = font; } catch (e6) { out.skipped.push("font"); }
+  }
+  for (i = 0; i < AELL_TEXT_STUCK.length; i++) {
+    k = AELL_TEXT_STUCK[i];
+    try { if (doc[k] === true) { out.stuck.push(k); } } catch (e7) {}
+  }
+  return out;
+}
+
+function AELL_stuckStyleWarning(stuck) {
+  if (!stuck || !stuck.length) { return null; }
+  return "This layer inherited " + stuck.join(" + ") + " from After " +
+         "Effects' Character panel, and AE makes " + stuck.join("/") +
+         " read-only to scripting — the tool cannot clear it. The text " +
+         "will keep rendering that way until it is switched off in the " +
+         "Character panel by hand.";
+}
+
+function AELL_applyTextStyle(layer, args, reset) {
   var textProp = layer.property("ADBE Text Properties")
                       .property("ADBE Text Document");
   var doc = textProp.value;
+  // Baseline FIRST, args second, one setValue for both: the args are the
+  // caller's explicit wishes and must win over the inherited defaults.
+  if (reset) { AELL_normalizeTextDoc(doc, reset); }
   if (typeof args.text === "string" && args.text !== "") doc.text = args.text;
   if (args.fontSize > 0) doc.fontSize = args.fontSize;
   if (typeof args.font === "string" && args.font !== "") {
@@ -899,6 +978,12 @@ function AELL_applyTextStyle(layer, args) {
   var summary = { fontSize: out.fontSize, font: out.font };
   try { summary.tracking = out.tracking; } catch (e1) {}
   try {
+    if (out.applyFill) {
+      summary.fillColor = [AELL_r3(out.fillColor[0]), AELL_r3(out.fillColor[1]),
+                           AELL_r3(out.fillColor[2])];
+    }
+  } catch (e3) {}
+  try {
     summary.leading = out.autoLeading ? "auto" : out.leading;
   } catch (e2) {}
   return summary;
@@ -912,6 +997,9 @@ AELL_TOOLS.add_text_layer = function (args) {
   var layer = AELL_keepSelection(comp, function () {
     return comp.layers.addText(args.text);
   });
+  // inheritStyle is the way back to AE's own behaviour for a user who
+  // has set the Character panel up deliberately.
+  var reset = args.inheritStyle ? null : {};
   var style = AELL_applyTextStyle(layer, {
     fontSize: args.fontSize,
     font: args.font,
@@ -919,12 +1007,23 @@ AELL_TOOLS.add_text_layer = function (args) {
     tracking: args.tracking,
     leading: args.leading,
     justification: args.justification
-  });
+  }, reset);
   if (AELLJSON.isArray(args.position) && args.position.length >= 2) {
     layer.property("ADBE Transform Group").property("ADBE Position")
          .setValue(args.position);
   }
-  return AELL_okay({ index: layer.index, name: layer.name, style: style });
+  var result = { index: layer.index, name: layer.name, style: style };
+  if (reset) {
+    result.styleReset = true;
+    var stuckWarn = AELL_stuckStyleWarning(reset.stuck);
+    if (stuckWarn) { result.warning = stuckWarn; }
+    if (reset.skipped && reset.skipped.length) {
+      result.notReset = reset.skipped;
+    }
+  } else {
+    result.inheritedStyle = true;
+  }
+  return AELL_okay(result);
 };
 
 AELL_TOOLS.set_text_style = function (args) {

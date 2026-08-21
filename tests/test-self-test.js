@@ -580,14 +580,30 @@ function cannedOk(tool, args) {
       }
       return { done: true };
     }
-    case "add_text_layer":
-      textStyle = { fontSize: args && args.fontSize,
-                    font: "StubFont-Regular",
-                    tracking: args && args.tracking,
-                    leading: args && args.leading };
+    case "add_text_layer": {
+      // comp.layers.addText() inherits AE's Character panel, so the host
+      // resets a NEW layer to a documented baseline and lets the args
+      // override it. The canned host models that contract; without it the
+      // baseline steps would pass on a stub that never normalizes.
+      const inherit = !!(args && args.inheritStyle);
+      textStyle = inherit
+        ? { fontSize: 66, font: "PowerCentra-Book", tracking: 251,
+            leading: 92, fillColor: [0.55, 0.1, 0.9] }
+        : { fontSize: 72, font: "StubFont-Regular", tracking: 0,
+            leading: "auto", fillColor: [1, 1, 1] };
+      if (args && args.fontSize !== undefined) textStyle.fontSize = args.fontSize;
+      if (args && args.font !== undefined) textStyle.font = args.font;
+      if (args && args.tracking !== undefined) textStyle.tracking = args.tracking;
+      if (args && args.leading !== undefined) textStyle.leading = args.leading;
+      if (args && args.fillColor !== undefined) textStyle.fillColor = args.fillColor;
       // AE names a new text layer after its own text.
-      return { index: 1, name: (args && args.text) || "Text",
-               style: textStyle };
+      const made = { index: 1, name: (args && args.text) || "Text",
+                     style: textStyle };
+      if (inherit) made.inheritedStyle = true; else made.styleReset = true;
+      return made;
+    }
+    case "delete_layer":
+      return { removed: args && args.layer };
     case "set_text_style":
       if (!textStyle) textStyle = {};
       if (args && args.fontSize !== undefined) textStyle.fontSize = args.fontSize;
