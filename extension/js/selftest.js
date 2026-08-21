@@ -24,6 +24,9 @@
   // And the mask-animation rig: it needs its own frame rate (25) so that
   // "did the key land on a frame" is a question with a known answer.
   var MKCOMP = "AELL Self-Test Mask";
+  // And the batch rig: 60 layers of its own, so a for_each_layer run
+  // that misfires cannot touch the comps the other groups measure.
+  var BTCOMP = "AELL Self-Test Batch";
   var running = false;
 
   /**
@@ -42,6 +45,9 @@
     var ords = ["ST Ord"];
     for (var o = 2; o <= 12; o++) ords.push("ST Ord " + o);
     var ordsRev = ords.slice(0).reverse();
+    // duplicate_layer names copies "ST Batch 2".."ST Batch 60".
+    var batchNames = ["ST Batch"];
+    for (var b = 2; b <= 60; b++) batchNames.push("ST Batch " + b);
     return [
       { name: "create scratch comp",
         tool: "create_comp",
@@ -1342,6 +1348,167 @@
           return (/already animated/.test(e) && /atTime/.test(e)) ||
                  "message was: " + e;
         } },
+
+      // --- the batch executor, at the scale it is actually used at.
+      // for_each_layer used to run ANY tool name, so {tool: "create_comp"}
+      // over N layers reported {succeeded: N} and left N junk comps in the
+      // project. These steps drive it at 60 layers and then try to get it
+      // to lie again.
+      { name: "batch: create the batch comp",
+        tool: "create_comp",
+        args: { name: BTCOMP, width: 640, height: 360, duration: 4,
+                frameRate: 30 },
+        check: function (d, ctx) { ctx.btComp = d.name; return true; } },
+
+      { name: "batch: seed one solid",
+        tool: "add_solid",
+        args: function (ctx) {
+          return { comp: ctx.btComp, name: "ST Batch", width: 60,
+                   height: 60, color: [0.2, 0.6, 1] };
+        },
+        check: function () { return true; } },
+
+      { name: "batch: grow it to 60 layers",
+        tool: "duplicate_layer",
+        args: function (ctx) {
+          return { comp: ctx.btComp, layer: "ST Batch", count: 59 };
+        },
+        check: function (d) {
+          return d.totalLayersInComp === 60 ||
+                 "comp holds " + d.totalLayersInComp + " layers, not 60";
+        } },
+
+      { name: "batch: apply_effect across 60 layers in ONE call",
+        tool: "for_each_layer",
+        args: function (ctx) {
+          return { comp: ctx.btComp, layers: batchNames, tool: "apply_effect",
+                   args: { effect: "Gaussian Blur" } };
+        },
+        check: function (d) {
+          if (d.succeeded !== 60) {
+            return "succeeded " + d.succeeded + " of 60. " + d.failures;
+          }
+          return true;
+        } },
+
+      { name: "batch: every one of the 60 really carries the blur",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.btComp }; },
+        check: function (d) {
+          if (d.numLayers !== 60) return "numLayers " + d.numLayers + ", not 60";
+          var without = [];
+          for (var i = 0; i < d.layers.length; i++) {
+            var fx = d.layers[i].effects || [];
+            var has = false;
+            for (var k = 0; k < fx.length; k++) {
+              if (String(fx[k]).indexOf("Gaussian Blur") !== -1) has = true;
+            }
+            if (!has) without.push(d.layers[i].name);
+          }
+          return without.length === 0 ||
+                 without.length + " layers have no blur: " +
+                 without.slice(0, 5).join(", ");
+        } },
+
+      { name: "batch: set_effect_param reaches all 60",
+        tool: "for_each_layer",
+        args: function (ctx) {
+          return { comp: ctx.btComp, layers: batchNames,
+                   tool: "set_effect_param",
+                   args: { effect: "Gaussian Blur", param: "Blurriness",
+                           value: 12 } };
+        },
+        check: function (d) {
+          return d.succeeded === 60 ||
+                 "succeeded " + d.succeeded + " of 60. " + d.failures;
+        } },
+
+      { name: "batch: the LAST layer really took the value",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.btComp, layer: "ST Batch 60",
+                   property: "effects/Gaussian Blur/Blurriness" };
+        },
+        check: function (d) {
+          return Math.abs(Number(d.value) - 12) < 1e-6 ||
+                 "Blurriness reads " + d.value + ", not 12";
+        } },
+
+      { name: "batch: note the project size",
+        tool: "get_project_info",
+        args: {},
+        check: function (d, ctx) { ctx.btItems = d.numItems; return true; } },
+
+      { name: "batch: a comp-level tool is REFUSED (create_comp)",
+        tool: "for_each_layer",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.btComp, layers: ["ST Batch", "ST Batch 2"],
+                   tool: "create_comp",
+                   args: { name: "ST Batch Junk", width: 100, height: 100,
+                           duration: 1, frameRate: 30 } };
+        },
+        check: function (e) {
+          if (!/no per-layer target/.test(e)) return "message was: " + e;
+          if (!/Drivable tools/.test(e)) return "nothing listed as valid: " + e;
+          return true;
+        } },
+
+      { name: "batch: and NO junk comps were created",
+        tool: "get_project_info",
+        args: {},
+        check: function (d, ctx) {
+          return d.numItems === ctx.btItems ||
+                 "project grew from " + ctx.btItems + " to " + d.numItems +
+                 " items — the refused tool ran anyway";
+        } },
+
+      { name: "batch: add_solid is REFUSED, not run 60 times",
+        tool: "for_each_layer",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.btComp, layers: batchNames, tool: "add_solid",
+                   args: { name: "ST Batch Spawn", width: 20, height: 20 } };
+        },
+        check: function (e) {
+          return /no per-layer target/.test(e) || "message was: " + e;
+        } },
+
+      { name: "batch: and the comp still holds exactly 60 layers",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.btComp }; },
+        check: function (d) {
+          return d.numLayers === 60 ||
+                 "comp holds " + d.numLayers + " layers, not 60";
+        } },
+
+      { name: "batch: an already-batched tool is REFUSED (grid_layout)",
+        tool: "for_each_layer",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.btComp, layers: batchNames, tool: "grid_layout",
+                   args: { columns: 6 } };
+        },
+        check: function (e) {
+          return (/already takes its own/.test(e) && /ONCE/.test(e)) ||
+                 "message was: " + e;
+        } },
+
+      { name: "batch: a READ tool is REFUSED (its values would be lost)",
+        tool: "for_each_layer",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.btComp, layers: batchNames, tool: "get_property",
+                   args: { property: "transform/Position" } };
+        },
+        check: function (e) {
+          return /discarded/.test(e) || "message was: " + e;
+        } },
+
+      { name: "cleanup: delete the batch comp",
+        tool: "delete_item",
+        args: function (ctx) { return { item: ctx.btComp }; },
+        check: function () { return true; } },
 
       { name: "cleanup: delete the mask comp",
         tool: "delete_item",

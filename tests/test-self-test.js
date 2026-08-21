@@ -42,6 +42,30 @@ let ordStack = [];
 // The mask rig reads back what it just wrote (numKeys after a refusal),
 // so the canned host has to remember how many keys each mask carries.
 let maskKeys = {};
+// The batch rig checks that for_each_layer really touched all 60 layers
+// and that the tools it must refuse changed nothing, so the canned host
+// tracks which layers carry the blur, what value it holds, and whether a
+// refused comp-level tool leaked new project items.
+let batchLayers = 0;
+let batchFx = {};
+let batchBlur = null;
+
+// for_each_layer's whole job is deciding which tools it may drive. Rather
+// than paraphrasing that rule here — which would let the suite expect a
+// refusal for a tool the host happily drives — read the host's own three
+// lists straight out of hostscript.jsx.
+const hostSrc = fs.readFileSync(path.join(__dirname, "..", "extension",
+                                          "jsx", "hostscript.jsx"), "utf8");
+function hostList(name) {
+  const m = new RegExp("var\\s+" + name + "\\s*=\\s*\\[([\\s\\S]*?)\\];")
+    .exec(hostSrc);
+  if (!m) throw new Error("hostscript.jsx no longer defines " + name);
+  return (m[1].match(/"([A-Za-z0-9_]+)"/g) || [])
+    .map(s => s.replace(/"/g, ""));
+}
+const PER_LAYER_TOOLS = hostList("AELL_PER_LAYER_LIST");
+const READ_TOOLS = hostList("AELL_PER_LAYER_READ_LIST");
+const BATCHED_TOOLS = hostList("AELL_ALREADY_BATCHED_LIST");
 function cannedOk(tool, args) {
   switch (tool) {
     case "create_comp":
@@ -54,8 +78,52 @@ function cannedOk(tool, args) {
                id: createCount };
     case "duplicate_layer": {
       const n = (args && args.count) || 8;
+      if (args && args.layer === "ST Batch") batchLayers = n + 1;
       return { created: n, totalLayersInComp: n + 1 };
     }
+    case "for_each_layer": {
+      const t = (args && args.tool) || "";
+      const drivable = "Drivable tools: " + PER_LAYER_TOOLS.join(", ") + ".";
+      if (BATCHED_TOOLS.indexOf(t) !== -1) {
+        return { __err: "'" + t + "' already takes its own {layers} list " +
+          "— call it ONCE with every layer instead of once per layer. " +
+          drivable };
+      }
+      if (READ_TOOLS.indexOf(t) !== -1) {
+        return { __err: "'" + t + "' READS a value, and for_each_layer " +
+          "reports only counts — every value it returned would be " +
+          "discarded. " + drivable };
+      }
+      if (PER_LAYER_TOOLS.indexOf(t) === -1) {
+        // Refused, so it never runs and the project never grows. In REAL
+        // AE the "and NO junk comps were created" step is a measurement;
+        // here it checks that a refusal really is inert.
+        return { __err: "'" + t + "' has no per-layer target, so running " +
+          "it once per layer would just repeat the same comp- or " +
+          "project-level action N times and report it as success. " +
+          drivable };
+      }
+      const L = ((args && args.layers) || []).slice();
+      const sub = (args && args.args) || {};
+      if (t === "apply_effect") {
+        L.forEach(nm => { batchFx[nm] = sub.effect; });
+        return { tool: t, layers: L.length, succeeded: L.length,
+                 failures: "" };
+      }
+      if (t === "set_effect_param") {
+        // Only layers that really carry the effect can take the param —
+        // that is what makes "reaches all 60" mean anything.
+        const hit = L.filter(nm => batchFx[nm] === sub.effect);
+        if (hit.length) batchBlur = sub.value;
+        return { tool: t, layers: L.length, succeeded: hit.length,
+                 failures: hit.length === L.length ? ""
+                   : (L.length - hit.length) + " layers lack " + sub.effect };
+      }
+      return { tool: t, layers: L.length, succeeded: L.length,
+               failures: "" };
+    }
+    case "get_project_info":
+      return { numItems: 7, items: [], activeComp: "AELL Self-Test" };
     case "distribute_property": {
       const L = (args && args.layers) || [];
       const from = (args && typeof args.from === "number") ? args.from : 0;
@@ -84,9 +152,19 @@ function cannedOk(tool, args) {
                topToBottom: L.join(" | "), slots: "1.." + L.length,
                note: "Stacking changed only" };
     }
-    case "get_comp_details":
+    case "get_comp_details": {
+      if (args && /Batch/.test(args.comp || "")) {
+        const ls = [];
+        for (let i = 1; i <= batchLayers; i++) {
+          const nm = i === 1 ? "ST Batch" : "ST Batch " + i;
+          ls.push({ index: i, name: nm,
+                    effects: batchFx[nm] ? [batchFx[nm]] : [] });
+        }
+        return { name: args.comp, numLayers: batchLayers, layers: ls };
+      }
       return { name: args && args.comp, numLayers: ordStack.length,
                layers: ordStack.map((nm, i) => ({ index: i + 1, name: nm })) };
+    }
     case "grid_layout":
       return { sliders: ["Grid X Spacing", "Grid Y Spacing",
                          "Grid Columns"] };
@@ -97,6 +175,10 @@ function cannedOk(tool, args) {
       // different cells so the "distinct cells" step is real.
       if (args && /^ST Ord/.test((args && args.layer) || "")) {
         return { value: [ordX[args.layer], 300, 0] };
+      }
+      // Read back what for_each_layer wrote through set_effect_param.
+      if (args && /Blurriness/.test(args.property || "")) {
+        return { value: batchBlur };
       }
       if (args && args.property === "Zoom") { return { value: 500 }; }
       if (args && args.property === "Point of Interest") {
@@ -297,7 +379,8 @@ SelfTest.run({
   onLine() {},
   onDone(res) {
     assert(res.passed === res.total,
-           "happy path: " + res.passed + "/" + res.total + " passed");
+           "happy path: " + res.passed + "/" + res.total + " passed" +
+           (res.passed === res.total ? "" : " -- " + res.text));
     assert(calls[calls.length - 1] === "delete_item",
            "cleanup delete_item runs last");
     assert(/Self-test: \d+\/\d+ passed/.test(res.text),
@@ -310,6 +393,7 @@ SelfTest.run({
     ordX = {};
     ordStack = [];
     maskKeys = {};
+    batchLayers = 0; batchFx = {}; batchBlur = null;
     SelfTest.run({
       callHostTool(tool, args, cb) {
         if (tool === "grid_layout") {
@@ -339,6 +423,7 @@ SelfTest.run({
         ordX = {};
         ordStack = [];
         maskKeys = {};
+        batchLayers = 0; batchFx = {}; batchBlur = null;
         SelfTest.run({
           callHostTool(tool, args, cb) {
             // Never refuse anything -- the old permissive host.

@@ -267,12 +267,20 @@
             "specific times or all.",
       args: "{comp?: string, layers?: [name|index] | layer?: name|index (omit = selection), property: path, times?: [s, …] (omit = remove ALL)}" },
     { name: "for_each_layer", mutating: true,
-      desc: "Run ANY layer tool once per target layer in ONE call (max " +
+      desc: "Run a PER-LAYER tool once per target layer in ONE call (max " +
             "200 layers) — the batch executor for anything without its " +
             "own layers arg: {tool: 'apply_effect', args: {effect: " +
             "'Gaussian Blur'}} blurs every target. Reports succeeded " +
-            "count + failures.",
-      args: "{comp?: string, layers?: [name|index] (omit = selection, else the comp's only layer), tool: string, args: {…the tool's args, minus comp/layer…}}" },
+            "count + failures. 'tool' must be a tool that takes a single " +
+            "{layer} (apply_effect, set_transform, set_property, " +
+            "set_effect_param, add_mask, duplicate_layer, delete_layer, …); " +
+            "tools with their own {layers} list (set_keyframes, " +
+            "grid_layout, distribute_property, stagger_layers, " +
+            "apply_keyframe_ease, reorder_layers, precompose) are called " +
+            "ONCE directly, and comp/project tools (create_comp, " +
+            "add_solid, add_null, scale_comp) are refused — they have no " +
+            "layer to run on.",
+      args: "{comp?: string, layers?: [name|index] (omit = selection, else the comp's only layer), tool: string (a per-layer tool), args: {…the tool's args, minus comp/layer…}}" },
     { name: "set_track_matte", mutating: true,
       desc: "Use one layer as another's track matte (alpha or luma, " +
             "optionally inverted), or remove it with mode 'none'. No " +

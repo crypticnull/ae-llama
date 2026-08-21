@@ -686,3 +686,85 @@ fix. Start from item 1 of `docs/WORKPLAN.md`.
   down with its launcher. Do NOT reach for `Stop-Process` on AE: a hard
   kill is what makes the NEXT launch open the startup recovery dialog,
   which was bug 3's whole scenario.
+
+## 2026-08-21 — item 2 (last bullet): for_each_layer at 50+ layers
+
+- Changed: `extension/jsx/hostscript.jsx` — `for_each_layer` now validates
+  the TOOL before the layers, against three explicit lists
+  (`AELL_PER_LAYER_LIST` / `AELL_PER_LAYER_READ_LIST` /
+  `AELL_ALREADY_BATCHED_LIST`) via `AELL_whyNotPerLayer`, and every
+  refusal names what IS drivable. The 5-failure abort now says the
+  earlier layers were already changed. `extension/js/tools.js` — the doc
+  says which tools qualify and which are called once instead.
+  `extension/js/selftest.js` — 15 steps in their own comp
+  (`AELL Self-Test Batch`, 60 layers). New `tests/test-for-each-layer.js`
+  (33 assertions). `tests/test-self-test.js` — canned batch host that
+  reads the host's own three lists out of hostscript.jsx. Bumped to 0.9.8.
+- Harness: 124/124 real AE (was 109). Stubbed suite 16/16 files.
+- Notes: TIMING is a non-issue and that is worth writing down so nobody
+  optimizes it again — 60 solids, `for_each_layer {tool: "apply_effect"}`
+  in AE 2026: 89 ms, all 60 layers verified to carry the effect. Input
+  payload for a 60-name call is 562 chars, the result is 83; the
+  evalScript limits the workplan worried about are three orders of
+  magnitude away. Also measured and NOT broken: the injected
+  `layers[i].index` is a LIVE read, so tools that reshuffle the stack
+  mid-loop still hit the right layer — `duplicate_layer` over A1/A3/A5 of
+  six duplicated exactly those three, and `delete_layer` over B2/B4/B6
+  deleted exactly those three.
+  The real bug is that `for_each_layer` would run ANY name in
+  `AELL_TOOLS`, not just layer tools. Measured pre-fix in AE 2026:
+  `{tool: "add_solid"}` over two layers returned
+  `{ok: true, succeeded: 2}` and made two solids BOTH named "spawned",
+  and `{tool: "create_comp"}` over two layers returned
+  `{ok: true, succeeded: 2}` and left two junk comps in the project. The
+  injected `{layer}` was simply ignored, so the call silently became "run
+  this comp-level tool N times" while reporting per-layer success — at
+  the 60-layer scale this tool exists for, that is 60 junk comps and a
+  green result. The tool's own error string already promised "'tool' must
+  name a layer tool"; nothing enforced it.
+  Two smaller ones on the same gate. Tools with their own `{layers}` list
+  (grid_layout, set_keyframes, distribute_property, …) were run once per
+  layer with `sub.layers` deleted, so a 60-layer grid_layout became 60
+  single-layer grid_layouts reported as success. And READ tools were
+  accepted although `for_each_layer` returns only counts:
+  `{tool: "get_property"}` over 60 layers answered "succeeded: 60" and
+  discarded all 60 values, which for a model asking a question is worse
+  than a refusal. Both are refused in the tool's own words now.
+  Proven to catch the regression, not just to pass: with the old
+  permissive check restored, the pre-fix host scores 118/124 in real AE,
+  failing exactly the 6 new refusal steps — including the two that
+  measure the DAMAGE rather than the message ("project grew from 159 to
+  161 items — the refused tool ran anyway", "comp holds 120 layers, not
+  60"). The stub suite fails 7 assertions on the same host.
+  Stub fidelity: `tests/test-for-each-layer.js` does not hard-code the
+  three lists. It re-derives them by scanning hostscript.jsx for each
+  `AELL_TOOLS.<name>` body and classifying it by what it reads
+  (`args.layer` / `AELL_layerOrSelection` = per-layer; `args.layers` /
+  `AELL_layersOrSelection` / `AELL_targetLayers` = already batched;
+  neither = not a layer tool), then asserts the shipped tables agree —
+  so a NEW tool added later cannot quietly fall through unclassified, and
+  a typo in a table shows up as a ghost name. `tests/test-self-test.js`
+  reads the same three lists out of the host rather than paraphrasing
+  them, so a suite step that expects a refusal for a tool the host
+  actually drives fails there too.
+- FOR THE REMOTE SESSION, two things deliberately not built here:
+  (1) There is still no BATCH READ. `for_each_layer` now refuses
+  get_property honestly, but "what is the position of these 60 layers"
+  has no one-call answer short of get_comp_details, which does not carry
+  property values. A `get_property {layers: [...]}` returning one row per
+  layer is the obvious shape; it is a new tool surface, not a fix.
+  (2) `for_each_layer` is one undo group but is NOT atomic — the 5-failure
+  abort returns ok:false with 55 layers already changed. It now SAYS so,
+  which is the honest minimum, but a real two-phase version (validate the
+  sub-call against every layer, then write) would be better and is a
+  design call.
+- Housekeeping for whoever runs the next pass: the live AE scratch project
+  is up to ~206 items, mostly solid footage accumulated by every selftest
+  run plus this pass's probes (probe comps removed; the loosened-host run
+  deliberately created junk comps and those are gone too). The harness is
+  green at that size and create_comp auto-numbers on collision, so it
+  breaks nothing — but nothing prunes it either, and no pass has ever
+  reset the project. If it ever needs doing, do it with
+  `app.project.close(CloseOptions.DO_NOT_SAVE_CHANGES)` + `app.newProject()`
+  from a `-r` script, never `Stop-Process` (see the 2026-08-21 harness
+  entry: a hard kill is what brings up the startup recovery dialog).

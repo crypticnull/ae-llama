@@ -3514,11 +3514,93 @@ AELL_TOOLS.remove_keyframes = function (args) {
 };
 
 /*
+ * Which tools for_each_layer is allowed to drive, and why the list is
+ * explicit rather than "anything in AELL_TOOLS".
+ *
+ * A tool qualifies only if it takes a SINGULAR {layer} target. Measured in
+ * AE 2026: for_each_layer {tool: "add_solid"} over two layers reported
+ * {ok: true, succeeded: 2} and made two identically named solids, and
+ * {tool: "create_comp"} over two layers reported success and left two junk
+ * comps in the project — the injected {layer} was simply ignored, so the
+ * call became "run this comp-level tool N times" while claiming to have
+ * done per-layer work. A small model that reads "run ANY layer tool" WILL
+ * pick one of these.
+ *
+ * The already-batched list is the mirror image: those tools take their own
+ * {layers} array, so driving them one layer at a time both discards the
+ * batch (grid_layout of a single layer, N times) and hides the real call.
+ *
+ * READ tools are refused for a different reason: for_each_layer reports
+ * counts, never per-layer values, so get_property over 60 layers would
+ * answer "succeeded: 60" and throw every value away.
+ *
+ * tests/test-for-each-layer.js re-derives all three lists from this file's
+ * source and fails if a tool is added without being classified here.
+ */
+var AELL_PER_LAYER_LIST = [
+  "add_control", "add_keyframe", "add_marker", "add_mask",
+  "add_shape_content", "apply_effect", "apply_expression_preset",
+  "center_anchor_point", "delete_layer", "duplicate_layer", "link_property",
+  "set_effect_param", "set_expression", "set_layer_3d", "set_layer_parent",
+  "set_layer_timing", "set_mask", "set_mask_path", "set_property",
+  "set_text_style", "set_track_matte", "set_transform",
+  "split_layer_into_chunks"
+];
+var AELL_PER_LAYER_READ_LIST = ["get_property", "list_properties"];
+var AELL_ALREADY_BATCHED_LIST = [
+  "apply_keyframe_ease", "distribute_property", "for_each_layer",
+  "grid_layout", "precompose", "remove_keyframes", "reorder_layers",
+  "set_keyframes", "stagger_layers"
+];
+
+function AELL_nameSet(list) {
+  var m = {};
+  for (var i = 0; i < list.length; i++) m[list[i]] = true;
+  return m;
+}
+var AELL_PER_LAYER = AELL_nameSet(AELL_PER_LAYER_LIST);
+var AELL_PER_LAYER_READ = AELL_nameSet(AELL_PER_LAYER_READ_LIST);
+var AELL_ALREADY_BATCHED = AELL_nameSet(AELL_ALREADY_BATCHED_LIST);
+
+/*
+ * Reject a tool name for for_each_layer, in the tool's own words, or
+ * return "" when it is drivable. Every refusal names what IS drivable —
+ * the small model's only way back to a working call.
+ */
+function AELL_whyNotPerLayer(toolName) {
+  if (AELL_PER_LAYER[toolName]) return "";
+  var drivable = "Drivable tools: " + AELL_PER_LAYER_LIST.join(", ") + ".";
+  if (AELL_ALREADY_BATCHED[toolName]) {
+    return "'" + toolName + "' already takes its own {layers} list — call " +
+      "it ONCE with every layer instead of once per layer. " + drivable;
+  }
+  if (AELL_PER_LAYER_READ[toolName]) {
+    return "'" + toolName + "' READS a value, and for_each_layer reports " +
+      "only counts — every value it returned would be discarded. Call it " +
+      "once per layer, or use get_comp_details / list_properties for an " +
+      "overview. " + drivable;
+  }
+  if (AELL_TOOLS[toolName]) {
+    return "'" + toolName + "' has no per-layer target, so running it once " +
+      "per layer would just repeat the same comp- or project-level action " +
+      "N times and report it as success. " + drivable;
+  }
+  return "Unknown tool: '" + toolName + "'. " + drivable;
+}
+
+/*
  * Run ANY layer tool once per target layer, host-side — the "script"
  * for batch requests: one model call, hundreds of layers, no per-layer
  * inference. The layer is injected by INDEX (names can repeat).
  */
 AELL_TOOLS.for_each_layer = function (args) {
+  // Validate the TOOL before the layers: a bad tool name is the mistake
+  // worth reporting, and resolving 200 layers first would bury it under a
+  // layer-not-found error about an unrelated argument.
+  var toolName = String(args.tool || "");
+  var why = AELL_whyNotPerLayer(toolName);
+  if (why) return AELL_err(why);
+  var tool = AELL_TOOLS[toolName];
   var comp = AELL_resolveComp(args.comp);
   var layers;
   try { layers = AELL_layersOrSelection(comp, args); }
@@ -3526,13 +3608,6 @@ AELL_TOOLS.for_each_layer = function (args) {
   if (layers.length > 200) {
     return AELL_err("Capped at 200 layers per call (got " + layers.length +
                     ")");
-  }
-  var toolName = String(args.tool || "");
-  var tool = AELL_TOOLS[toolName];
-  if (!tool || toolName === "for_each_layer") {
-    return AELL_err("'tool' must name a layer tool, e.g. set_transform, " +
-                    "apply_effect, set_property, set_keyframes, " +
-                    "center_anchor_point");
   }
   var failures = [];
   var okCount = 0;
@@ -3552,7 +3627,8 @@ AELL_TOOLS.for_each_layer = function (args) {
       failures.push(layers[i].name + ": " + (r ? r.error : "unknown error"));
       if (failures.length >= 5) {
         return AELL_err("Stopped after 5 failures (" + okCount +
-          " layers succeeded first). Failures: " + failures.join(" | "));
+          " layers succeeded first, and those changes are NOT undone). " +
+          "Failures: " + failures.join(" | "));
       }
     }
   }
