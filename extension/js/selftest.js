@@ -15,6 +15,9 @@
   // So does the anchor-point rig: it needs its own parent chain and
   // measuring nulls, which would disturb the grid steps above.
   var APCOMP = "AELL Self-Test Anchor";
+  // And so does the chunk rig: it needs its own frame rate and a clip
+  // trimmed deliberately off the frame grid.
+  var CHCOMP = "AELL Self-Test Chunks";
   var running = false;
 
   /**
@@ -834,6 +837,116 @@
                  "px at t=2 (" + JSON.stringify(b) + " -> " +
                  JSON.stringify(a) + ")";
         } },
+
+      // Cutting a clip is a TIMELINE edit and the timeline is a frame
+      // grid. Measured in AE 2026: in/out points are NOT snapped for you,
+      // and a piece whose in and out fall between the same two frames
+      // renders nothing at all while the tool still reports it. So this
+      // comp is trimmed deliberately OFF the grid (1.35s = frame 40.5 at
+      // 30 fps) and split into a count that does not divide evenly —
+      // 5.2s / 7 is 22.29 frames, so every interior cut has to be moved.
+      { name: "chunk scratch comp",
+        tool: "create_comp",
+        args: { name: CHCOMP, width: 320, height: 240, duration: 8,
+                frameRate: 30 },
+        check: function (d, ctx) {
+          ctx.chComp = d.name;
+          return typeof d.id === "number" || !!d.id || "no comp id";
+        } },
+
+      { name: "add a clip to cut up",
+        tool: "add_solid",
+        args: function (ctx) {
+          return { comp: ctx.chComp, name: "ST Clip", color: [0.2, 0.6, 1],
+                   width: 200, height: 120 };
+        },
+        check: function (d) { return d.name === "ST Clip" || d.name; } },
+
+      { name: "trim the clip OFF the frame grid (1.35s..6.55s)",
+        tool: "set_layer_timing",
+        args: function (ctx) {
+          return { comp: ctx.chComp, layer: "ST Clip",
+                   inPoint: 1.35, outPoint: 6.55 };
+        },
+        check: function (d, ctx) {
+          ctx.clipIn = d.inPoint;
+          ctx.clipOut = d.outPoint;
+          return (Math.abs(d.inPoint - 1.35) < 0.001 &&
+                  Math.abs(d.outPoint - 6.55) < 0.001) ||
+                 "trim came back " + d.inPoint + ".." + d.outPoint;
+        } },
+
+      { name: "split into 7: frame-aligned cuts, no gaps, ends kept",
+        tool: "split_layer_into_chunks",
+        args: function (ctx) {
+          return { comp: ctx.chComp, layer: "ST Clip", chunks: 7 };
+        },
+        check: function (d, ctx) {
+          if (d.chunks !== 7) return "made " + d.chunks + " chunks";
+          var p = d.pieces || [];
+          if (p.length !== 7) return "reported " + p.length + " pieces";
+          var i, b = [p[0].inPoint];
+          for (i = 0; i < 7; i++) {
+            if (Math.abs(p[i].inPoint - b[b.length - 1]) > 1e-6) {
+              return "gap or overlap before chunk " + (i + 1);
+            }
+            b.push(p[i].outPoint);
+          }
+          // Interior cuts only: the first in and last out are the user's
+          // own trim and must survive verbatim, off-grid or not.
+          for (i = 1; i < b.length - 1; i++) {
+            var f = b[i] * 30;
+            if (Math.abs(f - Math.round(f)) > 0.02) {
+              return "cut " + i + " lands mid-frame at " + f.toFixed(2) +
+                     " frames";
+            }
+          }
+          if (Math.abs(b[0] - ctx.clipIn) > 0.001 ||
+              Math.abs(b[7] - ctx.clipOut) > 0.001) {
+            return "the clip's own trim moved: " + b[0] + ".." + b[7];
+          }
+          var lens = [], lo = 1e9, hi = -1e9;
+          for (i = 0; i < 7; i++) {
+            var n = Math.round((b[i + 1] - b[i]) * 30);
+            lens.push(n);
+            if (n < lo) lo = n;
+            if (n > hi) hi = n;
+          }
+          if (lo < 1) return "a chunk holds no frame (" + lens + ")";
+          if (hi - lo > 1) {
+            return "chunk lengths vary by more than one frame (" + lens + ")";
+          }
+          if (p[0].index !== 7 || p[6].index !== 1) {
+            return "stack order wrong: chunk 1 at index " + p[0].index +
+                   ", chunk 7 at index " + p[6].index;
+          }
+          if (String(d.note).indexOf("cut on whole frames") < 0) {
+            return "note does not report frame alignment: " + d.note;
+          }
+          return true;
+        } },
+
+      // THE regression assertion: the reported values are rounded, so read
+      // an untouched chunk straight back out of AE.
+      { name: "exact read-back: chunk 3 starts and ends on a frame",
+        tool: "set_layer_timing",
+        args: function (ctx) {
+          return { comp: ctx.chComp, layer: "ST Clip chunk 3" };
+        },
+        check: function (d) {
+          var f0 = d.inPoint * 30, f1 = d.outPoint * 30;
+          if (Math.abs(f0 - Math.round(f0)) > 0.02 ||
+              Math.abs(f1 - Math.round(f1)) > 0.02) {
+            return "chunk 3 spans " + f0.toFixed(3) + ".." + f1.toFixed(3) +
+                   " frames (" + d.inPoint + ".." + d.outPoint + ")";
+          }
+          return Math.round(f1 - f0) >= 1 || "chunk 3 holds no frame";
+        } },
+
+      { name: "cleanup: delete the chunk comp",
+        tool: "delete_item",
+        args: function (ctx) { return { item: ctx.chComp }; },
+        check: function () { return true; } },
 
       { name: "cleanup: delete the anchor comp",
         tool: "delete_item",

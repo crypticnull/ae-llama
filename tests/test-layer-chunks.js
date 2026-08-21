@@ -5,14 +5,33 @@
 const fs = require("fs");
 const path = require("path");
 
-function Layer(name, comp, inP, outP, start) {
+// srcDuration models a real FOOTAGE source: measured in AE 2026, writing an
+// inPoint before the source starts or an outPoint past its end does NOT
+// throw — AE silently CLAMPS it (startTime 1, 10s source: inPoint = 0.2
+// came back 1, outPoint = 13 came back 11). A solid has no such limit.
+function Layer(name, comp, inP, outP, start, srcDuration) {
   this.name = name; this.comp = comp;
-  this.inPoint = inP; this.outPoint = outP; this.startTime = start;
+  this.startTime = start;
+  this.srcDuration = srcDuration || 0;
+  this._in = inP; this._out = outP;
   this.selected = false;
 }
+Object.defineProperty(Layer.prototype, "inPoint", {
+  get() { return this._in; },
+  set(v) { this._in = this._clamp(v); }
+});
+Object.defineProperty(Layer.prototype, "outPoint", {
+  get() { return this._out; },
+  set(v) { this._out = this._clamp(v); }
+});
+Layer.prototype._clamp = function (v) {
+  if (!this.srcDuration) return v;
+  return Math.min(Math.max(v, this.startTime),
+                  this.startTime + this.srcDuration);
+};
 Layer.prototype.duplicate = function () {
   const d = new Layer(this.name, this.comp, this.inPoint, this.outPoint,
-                      this.startTime);
+                      this.startTime, this.srcDuration);
   this.comp._layers.splice(this.comp._layers.indexOf(this), 0, d);
   this.comp._reindex();
   return d;
@@ -32,9 +51,14 @@ Layer.prototype.moveBefore = function (other) {
   arr.splice(arr.indexOf(other), 0, this);
 };
 
-function Comp(name, dur) {
+// Every real comp has a frame rate, and AE quantizes nothing for you: a
+// sub-frame inPoint/outPoint pair is accepted and then renders NO frames.
+// The old stub had no frame grid at all, so mid-frame cuts were invisible.
+function Comp(name, dur, fps) {
   this.name = name; this.duration = dur; this.time = 0;
   this.width = 3840; this.height = 2860;
+  this.frameRate = fps || 30;
+  this.frameDuration = 1 / this.frameRate;
   this._layers = [];
 }
 Comp.prototype._reindex = function () {};
@@ -57,10 +81,11 @@ function TextLayer() {} function ShapeLayer() {} function CameraLayer() {}
 function LightLayer() {} function AVLayer() {} function SolidSource() {}
 const ParagraphJustification = {};
 
-const comp = new Comp("Car Wash", 35.9359359359359);
+const comp = new Comp("Car Wash", 35.9359359359359, 29.97);
 Object.setPrototypeOf(comp, Object.create(CompItem.prototype,
   Object.getOwnPropertyDescriptors(Comp.prototype)));
-const seq = new Layer("Car Wash[0000-1076].png", comp, 0, 35.9359359359359, 0);
+const seq = new Layer("Car Wash[0000-1076].png", comp, 0,
+                      35.9359359359359, 0, 35.9359359359359);
 comp._layers.push(seq);
 
 const project = { rootFolder: { name: "(root)" }, numItems: 0,
@@ -194,10 +219,11 @@ assert(r9.ok && r9.data.duplicatedFrom === "bg" &&
        "duplicate_layer defaults to the selected layer");
 
 // exact piece count: "5 equal chunks" -> {chunks: 5}, host does the math
-const comp5 = new Comp("Car Wash 3", 35.9359359359359);
+const comp5 = new Comp("Car Wash 3", 35.9359359359359, 29.97);
 Object.setPrototypeOf(comp5, Object.create(CompItem.prototype,
   Object.getOwnPropertyDescriptors(Comp.prototype)));
-const seq5 = new Layer("seq", comp5, 0, 35.9359359359359, 0);
+const seq5 = new Layer("seq", comp5, 0, 35.9359359359359, 0,
+                       35.9359359359359);
 seq5.selected = true;
 comp5._layers.push(seq5);
 project.activeItem = comp5;
@@ -208,11 +234,21 @@ assert(r10.ok && r10.data.chunks === 5,
 assert(comp5._layers.length === 5, "comp holds exactly 5 layers");
 const w5 = comp5._layers.map(l => [l.inPoint, l.outPoint])
   .sort((a, b) => a[0] - b[0]);
-let equal5 = true;
-for (const [s, e] of w5) {
-  if (Math.abs((e - s) - 35.9359359359359 / 5) > 1e-9) equal5 = false;
-}
-assert(equal5, "all 5 pieces are exactly span/5 long");
+// Frame-aligned, not arithmetically equal: 35.9359s / 5 is 215.4 frames, so
+// AE-correct pieces are 215 and 216 frames, never 215.4. A cut landing
+// mid-frame gives a piece an arbitrary frame count — or, if it is short
+// enough, none at all.
+const fd5 = comp5.frameDuration;
+const onGrid5 = w5.every(([s, e]) =>
+  Math.abs(s) < 1e-9 || Math.abs(s / fd5 - Math.round(s / fd5)) < 1e-6);
+assert(onGrid5, "every cut lands on a whole comp frame (in-points at " +
+       w5.map(x => (x[0] / fd5).toFixed(3)).join(", ") + " frames)");
+const lens5 = w5.map(([s, e]) => Math.round((e - s) / fd5));
+assert(Math.max.apply(null, lens5) - Math.min.apply(null, lens5) <= 1,
+       "5 pieces are within one frame of each other (" + lens5 + " frames)");
+assert(lens5.reduce((a, b) => a + b, 0) ===
+         Math.round(35.9359359359359 / fd5),
+       "the 5 pieces add up to the layer's whole frame count");
 assert(Math.abs(w5[0][0]) < 1e-9 &&
        Math.abs(w5[4][1] - 35.9359359359359) < 1e-9,
        "5 equal pieces cover the full span");
@@ -311,5 +347,93 @@ assert(r17.ok && r17.data.names === "Circle 13" &&
        "explicit colliding name auto-numbers with a note");
 const r18 = call("duplicate_layer", { layer: "Circle", count: 101 });
 assert(!r18.ok && /capped at 100/.test(r18.error), "count > 100 refused");
+
+// --- the frame grid: cuts AE can actually render -------------------------
+// Measured in AE 2026: a layer whose inPoint and outPoint both fall between
+// the same two frames is accepted without complaint and renders NOTHING.
+// Splitting a 0.5s span into 30 pieces at 25 fps left 17 of the 30 layers
+// invisible while the tool reported 30 seamless chunks.
+const compF = new Comp("Frames", 12, 30);
+Object.setPrototypeOf(compF, Object.create(CompItem.prototype,
+  Object.getOwnPropertyDescriptors(Comp.prototype)));
+compF._layers.push(new Layer("clipF", compF, 1, 1.5, 0, 12));
+project.activeItem = compF;
+const rF = call("split_layer_into_chunks", { layer: "clipF", chunks: 30 });
+assert(!rF.ok, "sub-frame chunks refused instead of made invisible");
+assert(/shorter than one frame/.test(rF.error || "") &&
+       /30 fps/.test(rF.error || "") &&
+       /at most 15 chunks/i.test(rF.error || ""),
+       "refusal is grounded: names the fps and how many chunks DO fit (" +
+       rF.error + ")");
+const rF2 = call("split_layer_into_chunks",
+                 { layer: "clipF", chunkSeconds: 0.01 });
+assert(!rF2.ok && /shorter than one frame/.test(rF2.error || ""),
+       "sub-frame chunkSeconds refused too");
+
+// a legal split of an OFF-GRID span keeps the user's own in/out verbatim
+// and still puts every interior cut on a frame
+const compG = new Comp("Grid", 12, 30);
+Object.setPrototypeOf(compG, Object.create(CompItem.prototype,
+  Object.getOwnPropertyDescriptors(Comp.prototype)));
+compG._layers.push(new Layer("clipG", compG, 1.35, 6.55, 0, 12));
+project.activeItem = compG;
+const rG = call("split_layer_into_chunks", { layer: "clipG", chunks: 7 });
+assert(rG.ok && rG.data.chunks === 7, "7 chunks of an off-grid span: " +
+       (rG.error || ""));
+const wG = compG._layers.map(l => [l.inPoint, l.outPoint])
+  .sort((a, b) => a[0] - b[0]);
+assert(Math.abs(wG[0][0] - 1.35) < 1e-9 && Math.abs(wG[6][1] - 6.55) < 1e-9,
+       "the layer's OWN first in and last out are kept verbatim, off-grid " +
+       "or not (got " + wG[0][0] + " / " + wG[6][1] + ")");
+const fdG = compG.frameDuration;
+let interiorOnGrid = true;
+for (let i = 1; i < wG.length; i++) {
+  const b = wG[i][0];
+  if (Math.abs(b / fdG - Math.round(b / fdG)) > 1e-6) interiorOnGrid = false;
+  if (Math.abs(wG[i - 1][1] - b) > 1e-9) interiorOnGrid = false;
+}
+assert(interiorOnGrid,
+       "interior cuts are frame-aligned AND still tile (in-points at " +
+       wG.map(x => (x[0] / fdG).toFixed(2)).join(", ") + " frames)");
+assert(wG.every(([s, e]) => Math.round((e - s) / fdG) >= 1),
+       "every piece holds at least one frame");
+assert(/cut on whole frames at 30 fps/.test(rG.data.note),
+       "note says the cuts are frame-aligned: " + rG.data.note);
+
+// a final remainder too short to hold a frame is folded away, not shipped
+// as an empty layer — and the result says so instead of claiming 5 pieces
+const compH = new Comp("Remainder", 12, 30);
+Object.setPrototypeOf(compH, Object.create(CompItem.prototype,
+  Object.getOwnPropertyDescriptors(Comp.prototype)));
+compH._layers.push(new Layer("clipH", compH, 0, 10, 0, 12));
+project.activeItem = compH;
+const rH = call("split_layer_into_chunks",
+                { layer: "clipH", chunkSeconds: 2.4995 });
+assert(rH.ok && rH.data.chunks === 4,
+       "a sub-frame final remainder is folded into the piece before it " +
+       "(got " + (rH.ok ? rH.data.chunks : rH.error) + ")");
+assert(compH._layers.length === 4, "no empty layer is left behind");
+assert(/cut point\(s\) dropped/.test(rH.data.note),
+       "the dropped cut is reported, not swallowed: " + rH.data.note);
+
+// split never writes outside the source range, so AE's silent clamp on a
+// footage layer's in/out points can never quietly reshape the pieces
+const compS = new Comp("Src", 20, 30);
+Object.setPrototypeOf(compS, Object.create(CompItem.prototype,
+  Object.getOwnPropertyDescriptors(Comp.prototype)));
+compS._layers.push(new Layer("shot", compS, 2, 7, 1, 10));  // 10s src @ t=1
+project.activeItem = compS;
+const rS = call("split_layer_into_chunks", { layer: "shot", chunks: 3 });
+assert(rS.ok, "footage-backed split succeeds: " + (rS.error || ""));
+assert(compS._layers.every(l => l.inPoint >= 1 - 1e-9 &&
+                                l.outPoint <= 11 + 1e-9),
+       "every piece stays inside the source range (no clamp was hit)");
+const wS = compS._layers.map(l => [l.inPoint, l.outPoint])
+  .sort((a, b) => a[0] - b[0]);
+assert(Math.abs(wS[0][0] - 2) < 1e-9 && Math.abs(wS[2][1] - 7) < 1e-9,
+       "trimmed footage keeps its trim: pieces cover exactly 2s..7s");
+assert(compS._layers.every(l => l.startTime === 1),
+       "startTime untouched, so each piece shows the same source frames it " +
+       "did before the split");
 
 console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");

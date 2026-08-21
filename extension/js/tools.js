@@ -151,7 +151,9 @@
             "stack ascending by default (later chunks HIGHER in the " +
             "stack — bars staircase upward; 'descending' puts chunk 1 on " +
             "top) and end up SELECTED, so follow-up commands can target " +
-            "them by selection.",
+            "them by selection. Cuts always land on whole comp FRAMES, " +
+            "and a piece too short to hold a frame is refused rather " +
+            "than created invisible.",
       args: "{comp?: string, layer?: name|index (omit = selected layer), chunks?: exact piece count, chunkSeconds?: s, offsetPerChunk?: s (extra gaps only), order?: 'ascending'|'descending' (stack order, default ascending)}" },
     { name: "reorder_layers", mutating: true,
       desc: "Restack layers WITHOUT changing their timing. 'ascending' " +

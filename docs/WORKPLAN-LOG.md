@@ -393,3 +393,65 @@ fix. Start from item 1 of `docs/WORKPLAN.md`.
   shadow diffusion) are not scaled, same as the native script. There is
   still no add_light tool, so this cannot be covered in the harness
   either — flagging rather than building a tool.
+
+## 2026-08-21 — item 2: split_layer_into_chunks on real footage
+
+- Changed: `extension/jsx/hostscript.jsx` — cuts now land on whole COMP
+  frames, sub-frame chunk lengths are refused with a grounded error, and
+  a final remainder too short to hold a frame is folded away and
+  reported (`dropped`) instead of shipped as an empty layer. Reported
+  in/out went 2 -> 4 decimals so a frame time survives the rounding.
+  `extension/js/selftest.js` — 6 steps in their OWN scratch comp
+  (`AELL Self-Test Chunks`). `tests/test-layer-chunks.js` +16
+  assertions, and the stub gained the two things it was missing.
+  `extension/js/tools.js` doc. Bumped to 0.9.4.
+- Harness: 80/80 real AE (was 74). Stubbed suite 14/14.
+- Notes: real bug, and the honest version of "verify seamless playback"
+  turned out to be about FRAMES, not seconds. AE does not snap in/out
+  points for you — asking for 3.66667s stores 2.83570963541667-style
+  values on its own fine internal time base, nowhere near the frame
+  grid. Two consequences, both measured against a real 10s 24fps mp4
+  (made with ffmpeg, imported, trimmed to 2s..7s in a 25fps comp):
+  (1) every cut landed mid-frame, so the pieces came out arbitrary frame
+  lengths and the edit could not be reproduced by hand;
+  (2) worse, splitting a 0.5s span into 30 pieces left 17 of the 30
+  layers rendering NOTHING — a piece whose in and out fall between the
+  same two frames is accepted silently and never appears — while the
+  tool reported "30 chunks, seamless". Same bug class as the rest of
+  this week: it fails and says it worked.
+  What was NOT broken, now measured rather than assumed: frame-level
+  tiling was already gap-free and overlap-free (checked `activeAtTime`
+  at every frame of the span); `startTime` survives on every duplicate,
+  so each piece shows the source frames it did before the cut; a
+  time-STRETCHED footage layer keeps its stretch through duplicate and
+  trim (note the property is `layer.stretch` — `timeStretch` silently
+  reads `undefined`, which cost a probe run); `offsetPerChunk` moves
+  in/out along with startTime as intended.
+  Proven to catch the regression, not just to pass: the pre-fix host
+  scores 78/80 in real AE, failing exactly the two new frame steps
+  ("cut 1 lands mid-frame at 62.70 frames", "chunk 3 spans
+  85.071..107.357 frames"), and fails 10 stub assertions.
+  Stub fidelity: the stubbed comps had NO frame rate at all, which is
+  precisely why mid-frame cuts were invisible to CI. `Comp` now carries
+  `frameRate`/`frameDuration` and `Layer` carries a footage
+  `srcDuration` with AE's real clamping (measured: startTime 1 with a
+  10s source, `inPoint = 0.2` comes back 1 and `outPoint = 13` comes
+  back 11 — no throw, no warning).
+- FOR THE REMOTE SESSION, two things this pass deliberately did not
+  build:
+  (1) There is NO way to put an imported footage item into a comp
+  through the tool layer. `import_file` lands it in the project and
+  nothing can place it — there is no `add_footage_layer`, and
+  `comp.layers.add` is never called for footage anywhere in
+  hostscript.jsx. That is a real hole in a panel that generates media
+  with ComfyUI, and it is also why the permanent harness step above
+  uses a trimmed SOLID: real footage cannot be built inside the suite
+  without a new tool. Footage itself was verified by hand this pass
+  (the mp4 above); a new tool is a feature call, so it is flagged, not
+  built.
+  (2) `set_layer_timing` reports ok=true after AE has silently clamped
+  the write to the source range. It does return the actual values, so
+  the truth is in the result, but nothing tells the model the number it
+  asked for was not the number it got. Same shape as the writes
+  `AELL_writeValue` already guards. Cheap fix, but it is a different
+  tool from this item.

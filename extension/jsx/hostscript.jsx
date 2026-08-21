@@ -1520,6 +1520,9 @@ AELL_TOOLS.duplicate_layer = function (args) {
  * host-side math in a single call. Chunk i keeps the original startTime, so
  * pieces play back seamlessly end-to-end without overlap; offsetPerChunk
  * additionally slides chunk i by i*offset seconds for spaced staggering.
+ * Cuts land on whole COMP frames: AE accepts a sub-frame in/out pair and
+ * then renders no frames at all for it, so unsnapped boundaries produce
+ * pieces of arbitrary frame lengths and, when short enough, invisible ones.
  */
 AELL_TOOLS.split_layer_into_chunks = function (args) {
   var comp = AELL_resolveComp(args.comp);
@@ -1531,6 +1534,12 @@ AELL_TOOLS.split_layer_into_chunks = function (args) {
     return AELL_err("Layer '" + layer.name + "' has no duration — " +
                     "nothing to split");
   }
+  // A cut is only real if the piece it makes contains a frame. AE accepts
+  // sub-frame inPoint/outPoint without complaint (measured: an in/out pair
+  // between two frames renders NOTHING), so the frame grid is the unit
+  // this tool has to work in.
+  var fd = (comp.frameDuration > 0) ? Number(comp.frameDuration) : 0;
+  var fps = fd ? Math.round(1 / fd * 100) / 100 : 0;
   var n, chunk;
   if (args.chunks > 0) {
     // Exact piece count: the host does the division, not the model.
@@ -1540,12 +1549,27 @@ AELL_TOOLS.split_layer_into_chunks = function (args) {
       return AELL_err("'chunks' is capped at 60 (asked for " + n + ")");
     }
     chunk = span / n;
+    if (fd && chunk < fd) {
+      return AELL_err("Comp '" + comp.name + "' runs at " + fps + " fps (" +
+        (Math.round(fd * 10000) / 10000) + "s per frame), so " + n +
+        " chunks of a " + (Math.round(span * 100) / 100) + "s span would be " +
+        (Math.round(chunk * 10000) / 10000) + "s each — shorter than one " +
+        "frame, and a piece that holds no frame renders nothing at all. At " +
+        "most " + Math.floor(span / fd) + " chunks fit; ask for that many " +
+        "or fewer.");
+    }
   } else {
     chunk = args.chunkSeconds > 0 ? Number(args.chunkSeconds) : 5;
     if (span <= chunk) {
       return AELL_err("Layer '" + layer.name + "' is only " +
         (Math.round(span * 100) / 100) + "s from inPoint to outPoint — " +
         "nothing to split at " + chunk + "s chunks");
+    }
+    if (fd && chunk < fd) {
+      return AELL_err("chunkSeconds " + chunk + " is shorter than one frame " +
+        "of comp '" + comp.name + "' (" + (Math.round(fd * 10000) / 10000) +
+        "s at " + fps + " fps) — a piece that holds no frame renders nothing " +
+        "at all. Use at least " + (Math.round(fd * 10000) / 10000) + ".");
     }
     n = Math.ceil(span / chunk - 0.000001);
     if (n > 60) {
@@ -1556,19 +1580,48 @@ AELL_TOOLS.split_layer_into_chunks = function (args) {
   var offset = typeof args.offsetPerChunk === "number"
     ? args.offsetPerChunk : 0;
 
+  // Cut ON frames. Unsnapped boundaries still tile without gaps, but they
+  // land mid-frame, so the pieces come out arbitrary lengths in frames and
+  // the edit cannot be reproduced or nudged by hand. The layer's own first
+  // in and last out are kept verbatim — those are the user's, not ours.
+  var i, bounds = [inP];
+  for (i = 1; i < n; i++) {
+    var b = inP + i * chunk;
+    bounds.push(fd ? Math.round(b / fd) * fd : b);
+  }
+  bounds.push(outP);
+  if (fd) {
+    // Snapping (and a short final remainder) can still collapse a piece to
+    // less than a frame. Drop those cut points instead of shipping layers
+    // that render nothing.
+    var kept = [bounds[0]];
+    for (i = 1; i < bounds.length - 1; i++) {
+      if (bounds[i] - kept[kept.length - 1] >= fd - 1e-9) kept.push(bounds[i]);
+    }
+    while (kept.length > 1 && outP - kept[kept.length - 1] < fd - 1e-9) {
+      kept.pop();
+    }
+    kept.push(outP);
+    bounds = kept;
+  }
+  var dropped = n - (bounds.length - 1);
+  n = bounds.length - 1;
+  if (n < 2) {
+    return AELL_err("Layer '" + layer.name + "' is only " +
+      Math.round(span / fd) + " frame(s) long at " + fps + " fps — there is " +
+      "no place to cut it that leaves two pieces with frames in them");
+  }
+
   // Duplicate FIRST (each copy inherits the full span), then trim each
   // copy to its own window. The original becomes chunk 1.
   var pieces = [layer];
-  var i;
   for (i = 1; i < n; i++) pieces.push(layer.duplicate());
 
   var baseName = layer.name;
   for (i = 0; i < n; i++) {
-    var s = inP + i * chunk;
-    var e = i === n - 1 ? outP : inP + (i + 1) * chunk;
     var piece = pieces[i];
-    piece.inPoint = s;
-    piece.outPoint = e;
+    piece.inPoint = bounds[i];
+    piece.outPoint = bounds[i + 1];
     if (offset !== 0) piece.startTime = piece.startTime + offset * i;
     piece.name = baseName + " chunk " + (i + 1);
   }
@@ -1595,14 +1648,19 @@ AELL_TOOLS.split_layer_into_chunks = function (args) {
   var made = [];
   for (i = 0; i < n && (n <= 8 || i < 3); i++) {
     made.push({ layer: pieces[i].name, index: pieces[i].index,
-                inPoint: Math.round(pieces[i].inPoint * 100) / 100,
-                outPoint: Math.round(pieces[i].outPoint * 100) / 100 });
+                inPoint: Math.round(pieces[i].inPoint * 10000) / 10000,
+                outPoint: Math.round(pieces[i].outPoint * 10000) / 10000 });
   }
   var note = offset === 0
     ? "Chunks play seamlessly end-to-end on separate layers (no overlap)"
     : "Each chunk additionally slid by " + offset + "s per index";
   note += "; stacked " + (descending ? "descending" : "ascending") +
           " and now SELECTED";
+  if (fd) note += "; cut on whole frames at " + fps + " fps";
+  if (dropped > 0) {
+    note += "; " + dropped + " cut point(s) dropped because the piece would " +
+            "have held no frame";
+  }
   if (n > 8) {
     note += "; listing 3 of " + n + " pieces (all named '" + baseName +
             " chunk <i>')";

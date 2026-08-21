@@ -139,6 +139,32 @@ function cannedOk(tool, args) {
       return { style: textStyle };
     case "add_camera":
       return { index: 1, name: (args && args.name) || "Camera" };
+    case "set_layer_timing":
+      // Writing the trim echoes it back; calling it with no timing args is
+      // a pure READ, which is how the suite gets AE's unrounded in/out.
+      if (args && typeof args.inPoint === "number") {
+        return { layer: args.layer, inPoint: args.inPoint,
+                 outPoint: args.outPoint, startTime: 0 };
+      }
+      return { layer: args && args.layer, inPoint: 85 / 30,
+               outPoint: 107 / 30, startTime: 0 };
+    case "split_layer_into_chunks": {
+      // A 1.35s..6.55s clip at 30 fps cut into 7: the ends stay verbatim
+      // (frames 40.5 and 196.5) and every interior cut is moved onto a
+      // whole frame. Reported in/out are rounded to 4 decimals, as the
+      // host does.
+      const fr = [40.5, 63, 85, 107, 130, 152, 174, 196.5];
+      const pieces = [];
+      for (let i = 0; i < 7; i++) {
+        pieces.push({ layer: "ST Clip chunk " + (i + 1), index: 7 - i,
+                      inPoint: Math.round(fr[i] / 30 * 10000) / 10000,
+                      outPoint: Math.round(fr[i + 1] / 30 * 10000) / 10000 });
+      }
+      return { chunks: 7, chunkSeconds: 0.743, pieces: pieces,
+               note: "Chunks play seamlessly end-to-end on separate " +
+                     "layers (no overlap); stacked ascending and now " +
+                     "SELECTED; cut on whole frames at 30 fps" };
+    }
     default: return { done: true };
   }
 }
