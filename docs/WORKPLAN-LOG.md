@@ -605,3 +605,84 @@ fix. Start from item 1 of `docs/WORKPLAN.md`.
   unreachable through this tool. If that is wanted it belongs behind an
   explicit arg, and it should still refuse when it would raise the modal
   — an intentional pop is not worth a frozen application.
+
+## 2026-08-21 — item 1: the harness itself (cold-start false alarms)
+
+- Changed: `scripts/run-ae-selftest.ps1` — AE is launched with
+  `Start-Process` instead of the call operator; the window probe FINDS
+  AE's application window by class instead of trusting
+  `MainWindowHandle`; the wait loop decides through the new
+  `scripts/lib/ae-dialog-triage.ps1` (verdicts clear / running / startup
+  / unreadable / blocked, each with its own patience); exit 3 now says
+  which kind of nothing happened, and exit 4 names the likely cause of a
+  wordless popup. New `tests/test-selftest-runner.js` (31 assertions,
+  drives the triage functions themselves plus a compile check on the
+  probe's C#). Bumped to 0.9.7.
+- Harness: 109/109 real AE, exit 0, from a COLD start in 9s. Stubbed
+  suite 15/15.
+- Notes: the suite was never broken this pass — the thing that reports on
+  it was, and only when After Effects was not already running. That is
+  exactly the unattended case, so every one of these bugs was invisible
+  to a human who runs the harness with AE open.
+  Bug 1, the false alarm. AE disables its main window for as long as a
+  `-r` script runs and puts up its own progress window. The runner read
+  "main window disabled" as "AE is stuck on a modal", so a cold run
+  printed "After Effects is BLOCKED on a modal dialog" and exited 4 —
+  with the dialog it named being `Executing Script
+  aell-selftest-run.jsx...`, i.e. proof the suite was running fine. The
+  results file, 109/109, landed one second later. Measured cold-launch
+  timeline: nothing for ~6s, two untitled popups at 3-5s, application
+  window at 7s, progress window 9-10s, results at 11s.
+  Bug 2, and worse: `& $AfterFXPath -r $wrapper | Out-Null`. When AE is
+  already up, `-r` hands the script to that instance and the launcher
+  exits immediately — which is why this looked fine for months. Cold,
+  the process PowerShell started IS After Effects, it holds stdout open
+  for its whole life (GPU warnings, asio logs), and the pipeline waits
+  for it. Measured: results file written at 24s, harness still blocked
+  ten minutes later, never reaching its own wait loop. An unattended
+  loop would hang there indefinitely, not fail.
+  Bug 3, found while fixing 1 and 2 and the nastiest of the three: the
+  probe could not see the ONE state where AE can never run a script.
+  Before AE opens its application window there is no main window, so
+  Windows hands out whatever popup is up as `MainWindowHandle` — and
+  that popup is ENABLED, so "is the main window disabled?" answered no.
+  After AE is killed or crashes it reopens behind a recovery prompt that
+  blocks startup, and the harness reported that as the
+  scripting-file-access preference, 240s later. The probe now locates
+  `AE_CApplication*` itself and says "After Effects has not opened its
+  main window yet".
+  Why patience, not just filtering: an untitled popup is genuinely
+  ambiguous. The same 381x237 wordless window shows up for one poll as
+  the progress dialog tears down AND sits there forever when AE is
+  wedged — AE draws its own dialogs, so Win32 reads no text out of
+  either. So a verdict has to survive consecutive polls before it stops
+  the run (blocked 3, unreadable 8), and "startup" never stops it at
+  all, because a healthy cold launch looks stuck for its first 5s.
+  Proven to catch the regression, not just to pass: with the pre-fix
+  rules restored, 9 of the new assertions fail, including the recorded
+  cold-start timeline and every startup case. Re-breaking the C#
+  constant fails the compile assertion with AE's own "Newline in
+  constant".
+  Stub fidelity: the decision lives in a dot-sourced .ps1 so the Node
+  test drives the REAL functions rather than a paraphrase, and every
+  sample fed to them is verbatim probe output captured from AE 2026 on
+  this machine — the progress window, the wordless teardown popup, the
+  startup popups, and the mask warning from the 2026-08-21 entry. The
+  test skips loudly on non-Windows (CI is windows-latest, where it runs).
+- FOR THE REMOTE SESSION / the human, one thing measured and NOT fixed:
+  every cold harness run ends with AE wedged behind its own "Save
+  changes to 'Untitled Project.aep'?" prompt (screenshotted with
+  PrintWindow to read it, since Win32 gets no text out of AE's
+  dialogs). The suite never asks AE to quit, so the close request comes
+  from the environment — AE is a child of the PowerShell that launched
+  it, and when that exits AE is asked to close while the scratch project
+  is dirty. Consequence for the loop: pass N leaves AE blocked, pass N+1
+  meets a wordless popup and now exits 4 after ~16s with the right
+  explanation instead of hanging, but it still loses the pass. Nothing
+  scripted can clear it — no `-r` script runs while it is up. Two ways
+  out, both a call for someone else: have the loop answer the prompt
+  (Cancel is safe; WM_CLOSE to the `#32770` does it, verified twice
+  here), or have the harness leave AE running rather than being torn
+  down with its launcher. Do NOT reach for `Stop-Process` on AE: a hard
+  kill is what makes the NEXT launch open the startup recovery dialog,
+  which was bug 3's whole scenario.
