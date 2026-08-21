@@ -366,6 +366,128 @@
         },
         check: function (d) { return d.name === "ST Cam Solid" || d.name; } },
 
+      // ---- keyframed + parented content (WORKPLAN item 2) -------------
+      // scale_comp maps every keyframe VALUE, which is the easy half. The
+      // half that broke is everything else a keyframe carries: the ease
+      // SPEED is units/second and the spatial handles are pixels, both
+      // still in the old comp's scale afterwards. Key values stay exactly
+      // right while the motion BETWEEN them goes wrong, so this is
+      // measured with a probe null reading valueAtTime, not keyValue.
+      { name: "keyed layer for the resize",
+        tool: "add_solid",
+        args: function (ctx) {
+          return { comp: ctx.camComp, name: "ST Cam Ease",
+                   color: [0, 1, 0], width: 100, height: 100 };
+        },
+        check: function (d) { return d.name === "ST Cam Ease" || d.name; } },
+
+      { name: "animate its Position across the comp",
+        tool: "set_keyframes",
+        args: function (ctx) {
+          return { comp: ctx.camComp, layer: "ST Cam Ease",
+                   property: "Position",
+                   keys: [{ time: 0, value: [100, 300] },
+                          { time: 2, value: [700, 300] }] };
+        },
+        check: function (d) { return d.keysSet === 2 || "keys " + d.keysSet; } },
+
+      // A bezier with a non-zero y1/y2 gives the keys a real SPEED (600
+      // px/s here) rather than the 0 an ease-in-out would store — a speed
+      // of zero would scale correctly by doing nothing.
+      { name: "ease it, so the keys carry a real speed",
+        tool: "apply_keyframe_ease",
+        args: function (ctx) {
+          return { comp: ctx.camComp, layer: "ST Cam Ease",
+                   property: "Position", bezier: [0.3, 0.6, 0.7, 0.4] };
+        },
+        check: function (d) {
+          return d.easedPairs === 1 || "easedPairs " + d.easedPairs;
+        } },
+
+      // Scale is NOT spatial, so AE demands one ease per PADDED scripting
+      // component — 3 even on this 2D layer. Read-and-rewrite gets that
+      // right for free; building the array by hand would not, and AE
+      // refuses the wrong length outright.
+      { name: "animate its Scale too (padded ease dims)",
+        tool: "set_keyframes",
+        args: function (ctx) {
+          return { comp: ctx.camComp, layer: "ST Cam Ease",
+                   property: "Scale",
+                   keys: [{ time: 0, value: [100, 100] },
+                          { time: 2, value: [200, 50] }] };
+        },
+        check: function (d) { return d.keysSet === 2 || "keys " + d.keysSet; } },
+
+      { name: "ease the Scale keys as well",
+        tool: "apply_keyframe_ease",
+        args: function (ctx) {
+          return { comp: ctx.camComp, layer: "ST Cam Ease",
+                   property: "Scale", bezier: [0.3, 0.6, 0.7, 0.4] };
+        },
+        check: function (d) {
+          return d.easedPairs === 1 || "easedPairs " + d.easedPairs;
+        } },
+
+      { name: "probe null for the mid-keyframe position",
+        tool: "add_null",
+        args: function (ctx) {
+          return { comp: ctx.camComp, name: "ST Cam Probe" };
+        },
+        check: function () { return true; } },
+
+      // Reads the eased layer BETWEEN its two keys. Key values alone
+      // cannot see this failure; the whole point is the in-between.
+      { name: "probe reads the eased layer at t=0.5",
+        tool: "set_expression",
+        args: function (ctx) {
+          return { comp: ctx.camComp, layer: "ST Cam Probe",
+                   property: "Position",
+                   expression: 'thisComp.layer("ST Cam Ease")' +
+                               '.position.valueAtTime(0.5)' };
+        },
+        check: function (d) {
+          return d.expressionEnabled === true || "expression not enabled";
+        } },
+
+      { name: "record the mid-keyframe position before the resize",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.camComp, layer: "ST Cam Probe",
+                   property: "Position" };
+        },
+        check: function (d, ctx) {
+          ctx.camEaseBefore = d.value;
+          // An eased curve must not sit at the linear midpoint, or the
+          // ease is doing nothing and the check below proves nothing.
+          return (d.value && Math.abs(d.value[0] - 400) > 20) ||
+                 "no ease in the motion: " + JSON.stringify(d.value);
+        } },
+
+      { name: "null to parent a camera to (the standard rig)",
+        tool: "add_null",
+        args: function (ctx) {
+          return { comp: ctx.camComp, name: "ST Cam Rig",
+                   position: [400, 300] };
+        },
+        check: function () { return true; } },
+
+      { name: "add a camera and parent it to the null",
+        tool: "add_camera",
+        args: function (ctx) {
+          return { comp: ctx.camComp, name: "ST Cam Kid", zoom: 1000,
+                   position: [400, 300, -800],
+                   pointOfInterest: [400, 300, 0] };
+        },
+        check: function (d) { return d.name === "ST Cam Kid" || d.name; } },
+
+      { name: "parent it",
+        tool: "set_layer_parent",
+        args: function (ctx) {
+          return { comp: ctx.camComp, layer: "ST Cam Kid",
+                   parent: "ST Cam Rig" };
+        },
+        check: function () { return true; } },
+
       // THE assertion that would have caught the camera regression: the
       // tool reported its own failure honestly in layersSkipped and
       // nothing was reading it. A camera's Scale resolves but is hidden,
@@ -380,8 +502,18 @@
           if (Math.abs(d.scaleFactor - 0.5) > 0.01) {
             return "factor " + d.scaleFactor;
           }
-          return d.layersScaled === 3 ||
-                 "layersScaled " + d.layersScaled + " (expected 3)";
+          // Zoom lives in Camera Options, so a PARENTED camera inherits
+          // none of it and must still be re-zoomed — reported apart from
+          // layersScaled because its transform really was inherited.
+          var rez = d.parentedCamerasRezoomed || [];
+          if (rez.join(",") !== "ST Cam Kid") {
+            return "parentedCamerasRezoomed " + JSON.stringify(rez);
+          }
+          if (d.layersInherited !== 1) {
+            return "layersInherited " + d.layersInherited + " (expected 1)";
+          }
+          return d.layersScaled === 6 ||
+                 "layersScaled " + d.layersScaled + " (expected 6)";
         } },
 
       { name: "two-node camera zoom halves",
@@ -428,6 +560,77 @@
           var v = d.value || [];
           return (Math.abs(v[0] - 400) < 0.6 && Math.abs(v[1] - 300) < 0.6) ||
                  "POI moved to " + JSON.stringify(d.value);
+        } },
+
+      // An 800x600 comp halved centres on itself, so every comp-space
+      // point must land at exactly half its old value.
+      { name: "eased motion keeps its shape through the resize",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.camComp, layer: "ST Cam Probe",
+                   property: "Position" };
+        },
+        check: function (d, ctx) {
+          var b = ctx.camEaseBefore || [0, 0];
+          var v = d.value || [];
+          var dx = v[0] - b[0] / 2, dy = v[1] - b[1] / 2;
+          var off = Math.sqrt(dx * dx + dy * dy);
+          return off < 0.5 ||
+                 "mid-keyframe position is " + off.toFixed(2) + "px off " +
+                 "course (ease speed is units/second and did not scale): " +
+                 JSON.stringify(v) + " vs half of " + JSON.stringify(b);
+        } },
+
+      { name: "its Position keyframe values halve",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.camComp, layer: "ST Cam Ease",
+                   property: "Position" };
+        },
+        check: function (d) {
+          var k = d.keys || [];
+          if (k.length !== 2) return "keys " + k.length;
+          return (Math.abs(k[0].value[0] - 50) < 0.6 &&
+                  Math.abs(k[1].value[0] - 350) < 0.6) ||
+                 "keys " + JSON.stringify(k);
+        } },
+
+      { name: "its Scale keyframe values halve (padded ease dims accepted)",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.camComp, layer: "ST Cam Ease",
+                   property: "Scale" };
+        },
+        check: function (d) {
+          var k = d.keys || [];
+          if (k.length !== 2) return "keys " + k.length;
+          return (Math.abs(k[0].value[0] - 50) < 0.6 &&
+                  Math.abs(k[1].value[0] - 100) < 0.6 &&
+                  Math.abs(k[1].value[1] - 25) < 0.6) ||
+                 "keys " + JSON.stringify(k);
+        } },
+
+      { name: "a parented camera still re-zooms",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.camComp, layer: "ST Cam Kid",
+                   property: "Zoom" };
+        },
+        check: function (d) {
+          return Math.abs(d.value - 500) < 0.6 ||
+                 "zoom " + d.value + " — a parent inherits nothing of it";
+        } },
+
+      { name: "the parented camera's transform is left to its parent",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.camComp, layer: "ST Cam Kid",
+                   property: "Position" };
+        },
+        check: function (d) {
+          var v = d.value || [];
+          return (Math.abs(v[0] - 400) < 0.6 && Math.abs(v[2] + 800) < 0.6) ||
+                 "position " + JSON.stringify(v) + " (double-transformed)";
         } },
 
       // ---- center_anchor_point on a moving rig (WORKPLAN item 2) -------

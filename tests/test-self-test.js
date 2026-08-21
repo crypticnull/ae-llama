@@ -32,6 +32,7 @@ assert(names.size === steps.length, "step names are unique");
 
 // canned happy-path results per tool
 let createCount = 0;
+let camProbeReads = 0;
 let textStyle = null;
 function cannedOk(tool, args) {
   switch (tool) {
@@ -58,7 +59,24 @@ function cannedOk(tool, args) {
           ? { value: [400, 300, 0] }    // no aim point; left alone
           : { value: [200, 150, 0] };   // re-centred with the comp
       }
+      if (args && args.property === "Scale") {
+        // Halved with the comp: [100,100] -> [50,50], [200,50] -> [100,25].
+        return { keys: [{ time: 0, value: [50, 50, 100] },
+                        { time: 2, value: [100, 25, 100] }] };
+      }
       if (args && args.property === "Position") {
+        // The eased-motion probe reads the SAME point before and after
+        // the resize, so a correct scale_comp halves it exactly.
+        if (args.layer === "ST Cam Probe") {
+          camProbeReads++;
+          return camProbeReads === 1 ? { value: [520, 300, 0] }
+                                     : { value: [260, 150, 0] };
+        }
+        if (args.layer === "ST Cam Ease") {
+          return { keys: [{ time: 0, value: [50, 150, 0] },
+                          { time: 2, value: [350, 150, 0] }] };
+        }
+        if (args.layer === "ST Cam Kid") return { value: [400, 300, -800] };
         // The anchor probes measure the SAME layer origin before and
         // after center_anchor_point, so a correct tool leaves these
         // readings identical — hence one fixed value per probe.
@@ -87,7 +105,9 @@ function cannedOk(tool, args) {
                      "Scale/Rotation are animated too, so the offset is " +
                      "exact at the Position keyframes and approximate " +
                      "between them)" };
-    case "apply_keyframe_ease": return { easedPairs: 9 };
+    case "apply_keyframe_ease":
+      // The camera-comp steps ease ONE pair; the batch step eases nine.
+      return { easedPairs: (args && args.layer) ? 1 : 9 };
     case "stagger_layers": return { layers: 9 };
     case "set_mask_path": return { keysSet: 2 };
     case "add_shape_content": return { params: "End" };
@@ -96,7 +116,8 @@ function cannedOk(tool, args) {
     case "scale_comp":
       // layersSkipped absent = nothing refused the write. That is the
       // assertion the camera regression would have tripped.
-      return { scaleFactor: 0.5, layersScaled: 3 };
+      return { scaleFactor: 0.5, layersScaled: 6, layersInherited: 1,
+               parentedCamerasRezoomed: ["ST Cam Kid"] };
     case "add_solid":
       return { name: (args && args.name) || "ST Square" };
     case "add_text_layer":
@@ -143,6 +164,7 @@ SelfTest.run({
     // 3. failure path: a failing tool surfaces in the report and the run
     // still completes (cleanup included)
     createCount = 0;
+    camProbeReads = 0;
     SelfTest.run({
       callHostTool(tool, args, cb) {
         if (tool === "grid_layout") {

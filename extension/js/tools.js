@@ -173,8 +173,12 @@
             "like the native 'Scale Composition' script. Uniform factor " +
             "(no distortion): when the aspect changes, mode 'fit' " +
             "letterboxes (default) and 'fill' crops. Parented layers " +
-            "follow their parents automatically. Use this for any 'make " +
-            "the comp WxH' / 'scale the comp' request.",
+            "follow their parents automatically (a parented CAMERA still " +
+            "gets its zoom rescaled — zoom is not inherited). Keyframed " +
+            "transforms come along whole: values, motion-path handles " +
+            "and ease speeds all scale, so animation keeps its shape. " +
+            "Use this for any 'make the comp WxH' / 'scale the comp' " +
+            "request.",
       args: "{comp?: string, width?: px, height?: px (omit one to keep aspect), factor?: number (e.g. 0.5 = half), mode?: 'fit'|'fill'}" },
     { name: "import_file", mutating: true,
       desc: "Import a footage/image/video file into the project.",

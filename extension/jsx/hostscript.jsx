@@ -2030,6 +2030,108 @@ function AELL_mapPropValues(prop, fn) {
 }
 
 /*
+ * Scale a keyframed property's INTERPOLATION by the same factor as its
+ * values. setValueAtKey moves the keys and leaves two things behind, both
+ * still measured in the OLD comp's units:
+ *   - spatial tangents, the pixel handles of the motion path, so a curved
+ *     path keeps full-size handles and bulges off course between keys;
+ *   - temporal ease SPEED, which is units/second, so eases overshoot.
+ * Measured in real AE 2026 on an 800x600 comp halved: a 3-key curved path
+ * was 37px off course mid-key and a 600px/s ease 33px off, while every
+ * key value was exactly right — the failure is invisible if you only
+ * check keyValue().
+ */
+function AELL_scaleKeyInterp(prop, s, label, problems) {
+  var n = 0;
+  try { n = prop.numKeys; } catch (eN) { return; }
+  if (!n) return;
+  var spatial = false;
+  try { spatial = !!prop.isSpatial; } catch (eS) {}
+  var touched = false;
+
+  function scaleVec(v) {
+    var out = [];
+    for (var d = 0; d < v.length; d++) out.push(v[d] * s);
+    return out;
+  }
+  function scaleEase(arr) {
+    var out = [];
+    for (var d = 0; d < arr.length; d++) {
+      // A zero-speed side has nothing to scale — and AE REFUSES to
+      // rebuild it: the untouched side of a key reads back influence 0,
+      // while the KeyframeEase constructor rejects anything under 0.1
+      // ("Value 0 out of range 0.1 to 100"). Hand the original object
+      // straight back instead. This is why easing applied by
+      // apply_keyframe_ease (which only writes the FACING sides of a
+      // pair) used to survive a resize unscaled: the very first ease
+      // rebuilt threw, and the whole key was abandoned.
+      if (!arr[d].speed) { out.push(arr[d]); continue; }
+      out.push(new KeyframeEase(arr[d].speed * s,
+        Math.max(0.1, Math.min(100, arr[d].influence))));
+      touched = true;
+    }
+    return out;
+  }
+
+  for (var k = 1; k <= n; k++) {
+    // AUTO-bezier handles are recomputed by AE from the (already scaled)
+    // neighbouring values, so they are correct for free — and writing
+    // them would only switch auto off. Only user-shaped handles go stale.
+    if (spatial) {
+      var auto = true;
+      try { auto = !!prop.keySpatialAutoBezier(k); } catch (eA) {}
+      if (!auto) {
+        try {
+          prop.setSpatialTangentsAtKey(k,
+            scaleVec(prop.keyInSpatialTangent(k)),
+            scaleVec(prop.keyOutSpatialTangent(k)));
+        } catch (eT) {}
+      }
+    }
+    // Ease only matters on a bezier side, and writing it can flip a
+    // LINEAR or HOLD side to bezier — so capture the types and put them
+    // back. The ease ARRAY LENGTH is whatever AE handed us, which is the
+    // padded scripting dimensionality it demands back (3 for Scale on a
+    // 2D layer, 1 for a spatial property).
+    try {
+      var ti = prop.keyInInterpolationType(k);
+      var to = prop.keyOutInterpolationType(k);
+      if (ti === KeyframeInterpolationType.BEZIER ||
+          to === KeyframeInterpolationType.BEZIER) {
+        touched = false;
+        var newIn = scaleEase(prop.keyInTemporalEase(k));
+        var newOut = scaleEase(prop.keyOutTemporalEase(k));
+        // Nothing to change means nothing to write — and writing would
+        // flip the key's interpolation types for no reason.
+        if (touched) {
+          prop.setTemporalEaseAtKey(k, newIn, newOut);
+          if (prop.keyInInterpolationType(k) !== ti ||
+              prop.keyOutInterpolationType(k) !== to) {
+            prop.setInterpolationTypeAtKey(k, ti, to);
+          }
+        }
+      }
+    } catch (eE) {
+      // Do NOT swallow this. An ease left at the old comp's speed still
+      // renders — wrongly — so a silent catch reports a clean resize
+      // over motion that now overshoots. That silence is exactly what
+      // hid the constructor refusal above.
+      if (problems) {
+        problems.push((label || "a property") + " key " + k + ": " +
+          (eE && eE.message ? eE.message : String(eE)));
+      }
+    }
+  }
+}
+
+/* Map a property's values AND rescale the interpolation that carries
+ * them — the pair scale_comp always wants together. */
+function AELL_scalePropValues(prop, fn, s, label, problems) {
+  AELL_mapPropValues(prop, fn);
+  AELL_scaleKeyInterp(prop, s, label, problems);
+}
+
+/*
  * Resize a comp AND scale its content to match, centered — the behavior
  * of the native "Scale Composition" script. Uniform factor so nothing
  * distorts; when the target aspect differs, 'fit' letterboxes and 'fill'
@@ -2069,15 +2171,39 @@ AELL_TOOLS.scale_comp = function (args) {
     try { return !!prop.expressionEnabled; } catch (eD) { return false; }
   }
 
+  function AELL_scaleZoom(z) { return z * s; }
+  /* Zoom lives in Camera Options, not the Transform group, so NOTHING
+   * about it is inherited through a parent — a camera parented to a null
+   * (the standard rig) kept its old pixel zoom and silently re-framed the
+   * shot. Verified in real AE 2026: zoom stayed 1000 in a halved comp. */
+  function AELL_rezoom(L) {
+    var z = null;
+    try { z = L.zoom; } catch (eZ) { z = null; }
+    if (!z) return false;
+    AELL_scalePropValues(z, AELL_scaleZoom, s,
+                         L.name + " Zoom", easeProblems);
+    return true;
+  }
+
   var scaled = 0, inherited = 0, i;
-  var skipped = [], drivenBy = [];
+  var skipped = [], drivenBy = [], rezoomed = [], easeProblems = [];
   for (i = 1; i <= comp.numLayers; i++) {
     var L = comp.layer(i);
-    if (L.parent) { inherited++; continue; }
+    if (L.parent) {
+      inherited++;
+      try {
+        if (AELL_rezoom(L)) rezoomed.push(L.name);
+      } catch (eP) {
+        skipped.push(L.name + " (zoom): " +
+          (eP && eP.message ? eP.message : String(eP)));
+      }
+      continue;
+    }
     try {
       var posProp = AELL_resolveProperty(L, "position");
       if (AELL_driven(posProp)) drivenBy.push(L.name);
-      AELL_mapPropValues(posProp, AELL_recentre);
+      AELL_scalePropValues(posProp, AELL_recentre, s,
+                           L.name + " Position", easeProblems);
 
       // Cameras and lights AIM rather than scale. AE still RESOLVES a
       // hidden Scale on them, and writing it throws ("the property or a
@@ -2099,11 +2225,11 @@ AELL_TOOLS.scale_comp = function (args) {
       }
       if (sc) {
         if (AELL_driven(sc)) drivenBy.push(L.name);
-        AELL_mapPropValues(sc, function (v) {
+        AELL_scalePropValues(sc, function (v) {
           var out = [];
           for (var d = 0; d < v.length; d++) out.push(v[d] * s);
           return out;
-        });
+        }, s, L.name + " Scale", easeProblems);
       }
 
       // Cameras and lights AIM at a Point of Interest held in comp space
@@ -2124,19 +2250,20 @@ AELL_TOOLS.scale_comp = function (args) {
         if (aims) {
           var poi = L.property("ADBE Transform Group")
                      .property("ADBE Anchor Point");
-          if (poi) AELL_mapPropValues(poi, AELL_recentre);
+          if (poi) {
+            AELL_scalePropValues(poi, AELL_recentre, s,
+                                 L.name + " Point of Interest",
+                                 easeProblems);
+          }
         }
       }
 
       // Zoom is in pixels, so it has to track the resize or the framing
       // changes. Reading it is guarded (non-cameras have none); the WRITE
-      // is not, so a real failure lands in layersSkipped instead of
-      // vanishing and reporting a success that did not happen.
-      var zoomProp = null;
-      try { zoomProp = L.zoom; } catch (e2) { zoomProp = null; }
-      if (zoomProp) {
-        AELL_mapPropValues(zoomProp, function (z) { return z * s; });
-      }
+      // is not — this call sits inside the layer's try, so a real failure
+      // lands in layersSkipped instead of vanishing and reporting a
+      // success that did not happen.
+      AELL_rezoom(L);
       scaled++;
     } catch (e3) {
       // Do NOT fold failures into the inherited count — a locked layer or
@@ -2152,6 +2279,21 @@ AELL_TOOLS.scale_comp = function (args) {
     layersScaled: scaled, layersInherited: inherited,
     note: "Content scaled uniformly and re-centered " +
           "(like the native Scale Composition script)" };
+  if (easeProblems.length) {
+    // Values scaled, easing did not: the motion renders wrong even
+    // though every keyframe sits in the right place. Say so.
+    out.keyframeEasingNotScaled = easeProblems;
+    out.note += ". WARNING: keyframe easing could not be rescaled on " +
+      easeProblems.length + " property/properties, so their motion will " +
+      "over- or undershoot: " + easeProblems.join("; ");
+  }
+  if (rezoomed.length) {
+    // Reported separately: their TRANSFORM really was inherited, only the
+    // zoom needed a write, and claiming they were "scaled" would be a lie.
+    out.parentedCamerasRezoomed = rezoomed;
+    out.note += ". Zoom rescaled on parented camera(s) " +
+      rezoomed.join(", ") + " (zoom is not inherited from a parent)";
+  }
   if (skipped.length) {
     out.layersSkipped = skipped;
     out.note += ". " + skipped.length + " layer(s) could NOT be scaled";

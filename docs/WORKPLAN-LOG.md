@@ -347,3 +347,49 @@ fix. Start from item 1 of `docs/WORKPLAN.md`.
   all (it says so in the note), so there is nothing to verify until
   someone decides 3D compensation should exist — that is a feature call,
   not a fix.
+
+## 2026-08-21 — item 2: scale_comp on keyframes and parented chains
+
+- Changed: `extension/jsx/hostscript.jsx` — new `AELL_scaleKeyInterp` /
+  `AELL_scalePropValues`; scale_comp now scales spatial tangents and
+  temporal ease speeds alongside key values, re-zooms PARENTED cameras
+  (new `parentedCamerasRezoomed`), and reports easing it could not
+  rescale (`keyframeEasingNotScaled`) instead of swallowing it.
+  `extension/js/selftest.js` — 16 steps in the existing camera scratch
+  comp. `tests/test-scale-comp.js` +17 assertions and a keyframe-aware
+  stub; `tests/test-self-test.js` canned responses; `tools.js` doc.
+  Bumped to 0.9.3.
+- Harness: 74/74 real AE (was 58). Stubbed suite 14/14.
+- Notes: three real bugs, none of which touch a key VALUE — which is why
+  every existing assertion passed over them. Measured in an 800x600 comp
+  halved: (1) spatial tangents stayed full-size, so a curved motion path
+  ran 37.3px off course between keys; (2) ease speed is units/second and
+  did not scale, 33px off; (3) a camera parented to a null kept zoom
+  1000, silently re-framing the shot — zoom lives in Camera Options, so
+  parenting inherits none of it. Verified with a probe null whose
+  expression is `<target>.position.valueAtTime(t)`: get_property reads
+  the evaluated result, so "did the motion keep its shape" is an exact
+  number without scrubbing (there is no tool to move the playhead).
+  The first fix was WRONG and the harness is what caught it — my probe
+  had set eases by hand with influence 33 on every side, so it passed,
+  while apply_keyframe_ease eases only the FACING sides of a pair and
+  the far sides read back influence 0. `new KeyframeEase(speed, 0)`
+  THROWS ("Value 0 out of range 0.1 to 100"), so rebuilding an ease from
+  what AE just reported aborted the whole key. Zero-speed sides are now
+  passed through as the original objects. Two more AE facts, both now in
+  the stub: `setTemporalEaseAtKey` flips BOTH sides of a key to BEZIER
+  even a HOLD one (so the types are captured and restored), and it
+  refuses an ease array of the wrong length — 3 for Scale on a 2D layer,
+  1 for a spatial property. Auto-bezier keys are deliberately left
+  alone: AE recomputes those handles from the scaled values, and writing
+  them would only switch auto off.
+  Proven to catch the regression, not just to pass: the pre-fix host
+  scores 71/74 in real AE (parentedCamerasRezoomed empty, 35.9px off
+  course, zoom 1000) and fails 6 stub assertions.
+  Parented non-camera layers verified correct as-is: a child under a
+  parent rotated 20 and scaled [80,120] tracked to 0.0000 at five
+  sampled times, so the "children inherit" shortcut is sound.
+  NOT done, disclosed: a LIGHT's pixel-valued options (falloff distance,
+  shadow diffusion) are not scaled, same as the native script. There is
+  still no add_light tool, so this cannot be covered in the harness
+  either — flagging rather than building a tool.
