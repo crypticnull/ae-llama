@@ -1,5 +1,5 @@
 {
-  "panelVersion": "0.9.9",
+  "panelVersion": "0.9.10",
   "panelUrl": "https://aescripts.com/",
   "panelPackageUrl": "",
   "notes": "Fixes for animated layers. center_anchor_point works on layers with Position keyframes instead of failing. scale_comp keeps a camera's aim and no longer half-scales comps containing one. Setting an animated or expression-driven property now explains what to do instead of throwing. Real-AE self-test grew to 36 steps.",

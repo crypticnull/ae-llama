@@ -17,11 +17,18 @@
   // Keep names/args in sync with the dispatch table in jsx/hostscript.jsx.
   var TOOL_DEFS = [
     { name: "get_project_info", mutating: false,
-      desc: "List project items (comps/footage/folders) and the active comp.",
-      args: "{}" },
+      desc: "List project items (comps/footage/folders) and the active " +
+            "comp. Long lists are capped (comps and folders first) and the " +
+            "result says so in 'note' — raise limit to see more.",
+      args: "{limit?: int (default 40, 0 = every item)}" },
     { name: "get_comp_details", mutating: false,
-      desc: "Layers of a comp with index, name, type, timing, effects.",
-      args: "{comp?: string}  // omit for the active comp" },
+      desc: "Layers of a comp with index, name, type, timing, effects. A " +
+            "long comp is capped to a window: SELECTED layers are always " +
+            "included, and 'note' says how many layers exist and how to " +
+            "page through them.",
+      args: "{comp?: string, start?: int (1-based, default 1), " +
+            "limit?: int (default 40, 0 = every layer)}  " +
+            "// omit comp for the active comp" },
     { name: "create_folder", mutating: true,
       desc: "Create a project-panel folder. Same name in different parents " +
             "is fine; existence is checked per-parent.",
@@ -743,6 +750,86 @@
     });
   }
 
+  // ---------------------------------------------------- project state
+  //
+  // The state block that opens every system prompt. Two rules, both paid
+  // for in the field (measured in AE 2026: a 200-layer comp in a 206-item
+  // project serialized to 49 KB against a 6 KB budget):
+  //
+  //  1. Nothing here is byte-sliced. A `slice(0, 6000)` cut the JSON in
+  //     the middle of an object, so the model read a mangled fragment.
+  //     Rows are dropped WHOLE and the count of what went missing is
+  //     handed to the model instead.
+  //  2. The project list can never starve the comp. `project` used to be
+  //     serialized first, so 206 items ate the entire budget and the
+  //     activeComp — the layers, and which of them the user had SELECTED
+  //     — never reached the model at all. activeComp is written FIRST and
+  //     trimmed LAST.
+
+  var STATE_BUDGET = 6000;
+
+  /** Drop whole rows until the state fits; report what was dropped. */
+  function budgetState(state) {
+    function size() { return JSON.stringify(state).length; }
+    var comp = state.activeComp;
+    var proj = state.project;
+
+    // Project items go first: the comp the user is looking at matters
+    // more than the rest of the project panel. Footage is dropped before
+    // comps and folders, and the ACTIVE comp is never dropped — those are
+    // the names the model has to quote back as arguments.
+    function droppableItem(list, activeName) {
+      var i;
+      for (i = list.length - 1; i >= 0; i--) {
+        if (list[i].type === "footage") return i;
+      }
+      for (i = list.length - 1; i >= 0; i--) {
+        if (list[i].name !== activeName) return i;
+      }
+      return -1;
+    }
+    while (size() > STATE_BUDGET && proj && proj.items && proj.items.length) {
+      var drop = droppableItem(proj.items, proj.activeComp);
+      if (drop < 0) break;         // only the active comp left — keep it
+      proj.items.splice(drop, 1);
+      proj.itemsShown = proj.items.length;
+      proj.note = "Showing " + proj.items.length + " of " + proj.numItems +
+        " items (comps and folders first) — call get_project_info with " +
+        "limit:0 for the whole project.";
+    }
+    // Then unselected layers, from the bottom of the window up.
+    while (size() > STATE_BUDGET && comp && comp.layers &&
+           comp.layers.length) {
+      var i = comp.layers.length - 1;
+      while (i >= 0 && comp.layers[i].selected) i--;
+      if (i < 0) break;              // only selected layers left — keep them
+      comp.layers.splice(i, 1);
+      comp.layersShown = comp.layers.length;
+      comp.note = "Showing " + comp.layers.length + " of " + comp.numLayers +
+        " layers (selected layers always included) — call get_comp_details " +
+        "with start/limit to page through the rest.";
+    }
+    return JSON.stringify(state);
+  }
+
+  /**
+   * Build the state block. cb(jsonString) — always a STRING, and always
+   * valid JSON unless the host itself was unreachable.
+   */
+  function fetchProjectState(cb) {
+    callHostTool("get_project_info", { limit: 40 }, function (info) {
+      if (!info.ok) { cb("(project state unavailable)"); return; }
+      callHostTool("get_comp_details", { limit: 40 }, function (comp) {
+        // activeComp FIRST: whatever else is lost downstream, the comp
+        // the user is actually looking at survives.
+        var state = {};
+        if (comp.ok) state.activeComp = comp.data;
+        state.project = info.data;
+        cb(budgetState(state));
+      });
+    });
+  }
+
   /** Call a run of host tools in ONE undo group. cb(resultsArray). */
   function callHostBatch(cmds, cb) {
     var payload = cmds.map(function (c) {
@@ -889,6 +976,7 @@
     TOOL_DEFS: TOOL_DEFS,
     RESPONSE_SCHEMA: RESPONSE_SCHEMA,
     buildSystemPrompt: buildSystemPrompt,
+    fetchProjectState: fetchProjectState,
     callHostTool: callHostTool,
     callHostBatch: callHostBatch,
     executeCommands: executeCommands,

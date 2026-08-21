@@ -257,18 +257,10 @@
 
   // ------------------------------------------------------------ chat loop
 
+  // Lives in tools.js so the budgeting rules can be tested without a
+  // panel — see Tools.fetchProjectState.
   function fetchProjectState(cb) {
-    global.Tools.callHostTool("get_project_info", {}, function (info) {
-      if (!info.ok) { cb("(project state unavailable)"); return; }
-      global.Tools.callHostTool("get_comp_details", {}, function (comp) {
-        var state = { project: info.data };
-        if (comp.ok) state.activeComp = comp.data;
-        var json = JSON.stringify(state);
-        // Guard the prompt against giant projects.
-        if (json.length > 6000) json = json.slice(0, 6000) + "…(truncated)";
-        cb(json);
-      });
-    });
+    global.Tools.fetchProjectState(cb);
   }
 
   var currentChat = null;     // in-flight streaming request handle

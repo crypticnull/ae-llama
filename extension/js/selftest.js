@@ -1394,11 +1394,18 @@
           return true;
         } },
 
+      // limit:0 on purpose: get_comp_details caps its layer list for the
+      // MODEL, and a step that enumerates all 60 has to opt out of that
+      // cap — otherwise it would go on passing while checking 40.
       { name: "batch: every one of the 60 really carries the blur",
         tool: "get_comp_details",
-        args: function (ctx) { return { comp: ctx.btComp }; },
+        args: function (ctx) { return { comp: ctx.btComp, limit: 0 }; },
         check: function (d) {
           if (d.numLayers !== 60) return "numLayers " + d.numLayers + ", not 60";
+          if (d.layers.length !== 60) {
+            return "only " + d.layers.length + " layer rows came back — " +
+                   "this step checks all 60";
+          }
           var without = [];
           for (var i = 0; i < d.layers.length; i++) {
             var fx = d.layers[i].effects || [];
@@ -1435,6 +1442,98 @@
         check: function (d) {
           return Math.abs(Number(d.value) - 12) < 1e-6 ||
                  "Blurriness reads " + d.value + ", not 12";
+        } },
+
+      // ---- what the MODEL is told about a big comp -----------------
+      // A 200-layer comp serialized to 30 KB against a 6 KB prompt
+      // budget, so the panel's byte-slice dropped the comp out of the
+      // system prompt entirely — the model saw no layers and never
+      // learned which one the user had selected. The list is capped
+      // here now, where the omission can be described.
+
+      { name: "big comp: the layer list is capped for the model",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.btComp }; },
+        check: function (d) {
+          if (d.numLayers !== 60) return "numLayers " + d.numLayers + ", not 60";
+          if (d.layers.length > 41) {
+            return "sent " + d.layers.length + " layer rows uncapped";
+          }
+          if (d.layersShown !== d.layers.length) {
+            return "layersShown says " + d.layersShown + ", sent " +
+                   d.layers.length;
+          }
+          return true;
+        } },
+
+      { name: "big comp: and the cap stays inside the prompt budget",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.btComp }; },
+        check: function (d) {
+          var bytes = JSON.stringify(d).length;
+          return bytes < 6000 ||
+                 "a capped comp still serializes to " + bytes + " bytes";
+        } },
+
+      { name: "big comp: the omission is stated, with the true total",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.btComp }; },
+        check: function (d) {
+          var note = String(d.note || "");
+          if (!note) return "no note — the model is not told anything is missing";
+          if (note.indexOf("of 60 layers") === -1) {
+            return "note does not name the real total: " + note;
+          }
+          if (note.indexOf("start:") === -1 || note.indexOf("limit:0") === -1) {
+            return "note does not say how to get the rest: " + note;
+          }
+          return true;
+        } },
+
+      { name: "big comp: start/limit really pages through the stack",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.btComp, start: 51, limit: 5 }; },
+        check: function (d) {
+          var L = d.layers || [];
+          if (L.length !== 5) return "asked for 5 rows, got " + L.length;
+          if (L[0].index !== 51) return "page starts at index " + L[0].index;
+          if (L[4].index !== 55) return "page ends at index " + L[4].index;
+          return true;
+        } },
+
+      { name: "big comp: limit:0 still hands back every layer",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.btComp, limit: 0 }; },
+        check: function (d) {
+          if (d.layers.length !== 60) {
+            return "limit:0 returned " + d.layers.length + " of 60";
+          }
+          return !d.note || "an uncapped result should carry no note: " + d.note;
+        } },
+
+      { name: "big project: the item list is capped but keeps the comps",
+        tool: "get_project_info",
+        args: {},
+        check: function (d, ctx) {
+          if (d.items.length > 40) {
+            return "sent " + d.items.length + " item rows uncapped";
+          }
+          if (d.itemsShown !== d.items.length) {
+            return "itemsShown says " + d.itemsShown + ", sent " +
+                   d.items.length;
+          }
+          // The scratch comps must survive: every comp argument the model
+          // writes is a NAME it read out of this list.
+          var seen = {}, i;
+          for (i = 0; i < d.items.length; i++) seen[d.items[i].name] = true;
+          if (!seen[ctx.btComp]) {
+            return "the comp under test (" + ctx.btComp + ") was dropped " +
+                   "from a " + d.numItems + "-item project";
+          }
+          if (d.items.length < d.numItems && !d.note) {
+            return "items were dropped with no note saying so";
+          }
+          return true;
         } },
 
       { name: "batch: note the project size",

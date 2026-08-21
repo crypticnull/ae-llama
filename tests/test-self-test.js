@@ -43,8 +43,54 @@ assert(unknown.length === 0,
 const names = new Set(steps.map(s => s.name));
 assert(names.size === steps.length, "step names are unique");
 
+const hostSrc = fs.readFileSync(path.join(__dirname, "..", "extension",
+                                          "jsx", "hostscript.jsx"), "utf8");
+
+// get_comp_details / get_project_info cap their model-facing lists, and a
+// stub that answered with the full list would let a suite step "pass"
+// while checking rows real AE never sent. The cap number itself is read
+// out of hostscript.jsx rather than copied, so the two cannot drift.
+const LIST_LIMIT = Number(
+  (/var AELL_LIST_LIMIT = (\d+);/.exec(hostSrc) || [])[1]);
+assert(LIST_LIMIT > 0, "hostscript publishes a list cap (" + LIST_LIMIT + ")");
+
+function listLimit(raw) {
+  if (raw === undefined || raw === null || raw === "") return LIST_LIMIT;
+  if (raw === 0 || raw === "0" || raw === "all") return -1;
+  const n = Math.round(Number(raw));
+  return n > 0 ? n : LIST_LIMIT;
+}
+
+/** Window a full layer list the way the host does. */
+function capLayers(compName, all, args) {
+  const total = all.length;
+  const limit = listLimit(args && args.limit);
+  let start = (args && args.start > 0) ? Math.round(args.start) : 1;
+  if (start > total) start = total > 0 ? total : 1;
+  const last = limit < 0 ? total : Math.min(total, start + limit - 1);
+  const wanted = [];
+  for (const l of all) {                       // selected layers win slots
+    if (l.selected && (limit < 0 || wanted.length < limit)) wanted.push(l);
+  }
+  for (let i = start; i <= last; i++) {
+    if (limit >= 0 && wanted.length >= limit) break;
+    const l = all[i - 1];
+    if (l && wanted.indexOf(l) < 0) wanted.push(l);
+  }
+  wanted.sort((a, b) => a.index - b.index);
+  const out = { name: compName, numLayers: total,
+                layersShown: wanted.length, layers: wanted };
+  if (wanted.length < total) {
+    out.note = "Showing " + wanted.length + " of " + total +
+      " layers (indexes " + start + "-" + last + "). Ask again with start:" +
+      (last + 1) + " for the next " + limit + ", or limit:0 for all.";
+  }
+  return out;
+}
+
 // canned happy-path results per tool
 let createCount = 0;
+const createdComps = [];
 let camProbeReads = 0;
 let textStyle = null;
 // The ordering steps read back what the previous step wrote, so the canned
@@ -75,8 +121,6 @@ const inBatComp = a => !!(a && /Undo/.test(a.comp || ""));
 // than paraphrasing that rule here — which would let the suite expect a
 // refusal for a tool the host happily drives — read the host's own three
 // lists straight out of hostscript.jsx.
-const hostSrc = fs.readFileSync(path.join(__dirname, "..", "extension",
-                                          "jsx", "hostscript.jsx"), "utf8");
 function hostList(name) {
   const m = new RegExp("var\\s+" + name + "\\s*=\\s*\\[([\\s\\S]*?)\\];")
     .exec(hostSrc);
@@ -91,6 +135,12 @@ function cannedOk(tool, args) {
   switch (tool) {
     case "create_comp":
       createCount++;
+      // Remember every comp, so get_project_info can answer with the
+      // project this run actually built instead of a hard-coded list that
+      // would drift the moment a step creates a differently-named comp.
+      createdComps.push(createCount === 1 ? "AELL Self-Test"
+        : createCount === 2 ? "AELL Self-Test 2"
+        : ((args && args.name) || "AELL Self-Test 3"));
       // 1st = the scratch comp, 2nd = the deliberate name collision that
       // must auto-number, 3rd+ = whatever was asked for (the camera comp).
       if (createCount === 1) return { name: "AELL Self-Test", id: 1 };
@@ -143,8 +193,28 @@ function cannedOk(tool, args) {
       return { tool: t, layers: L.length, succeeded: L.length,
                failures: "" };
     }
-    case "get_project_info":
-      return { numItems: 7, items: [], activeComp: "AELL Self-Test" };
+    case "get_project_info": {
+      // A scratch project the size of the real one: a few comps drowning
+      // in accumulated solid footage. Comps come first out of the cap.
+      const items = createdComps.map((nm, i) => ({ name: nm, id: i + 1,
+                                                   type: "comp" }));
+      for (let i = 1; i <= 400; i++) {
+        items.push({ name: "Blue Solid " + i, id: 100 + i, type: "footage" });
+      }
+      const limit = listLimit(args && args.limit);
+      const total = items.length;
+      let shown = items;
+      if (limit >= 0 && total > limit) shown = items.slice(0, limit);
+      const out = { numItems: total, itemsShown: shown.length,
+                    items: shown,
+                    activeComp: createdComps[createdComps.length - 1] || null };
+      if (shown.length < total) {
+        out.note = "Showing " + shown.length + " of " + total +
+          " items (comps and folders first). " + (total - shown.length) +
+          " footage items not listed — ask again with limit:0.";
+      }
+      return out;
+    }
     case "distribute_property": {
       const L = (args && args.layers) || [];
       const from = (args && typeof args.from === "number") ? args.from : 0;
@@ -175,10 +245,9 @@ function cannedOk(tool, args) {
     }
     case "get_comp_details": {
       if (inBatComp(args)) {
-        return { name: args.comp, numLayers: batSolids.length,
-                 layers: batSolids.map((nm, i) => ({
-                   index: i + 1, name: nm,
-                   effects: batSolidFx[nm] ? [batSolidFx[nm]] : [] })) };
+        return capLayers(args.comp, batSolids.map((nm, i) => ({
+          index: i + 1, name: nm,
+          effects: batSolidFx[nm] ? [batSolidFx[nm]] : [] })), args);
       }
       if (args && /Batch/.test(args.comp || "")) {
         const ls = [];
@@ -187,10 +256,10 @@ function cannedOk(tool, args) {
           ls.push({ index: i, name: nm,
                     effects: batchFx[nm] ? [batchFx[nm]] : [] });
         }
-        return { name: args.comp, numLayers: batchLayers, layers: ls };
+        return capLayers(args.comp, ls, args);
       }
-      return { name: args && args.comp, numLayers: ordStack.length,
-               layers: ordStack.map((nm, i) => ({ index: i + 1, name: nm })) };
+      return capLayers(args && args.comp,
+        ordStack.map((nm, i) => ({ index: i + 1, name: nm })), args);
     }
     case "grid_layout":
       return { sliders: ["Grid X Spacing", "Grid Y Spacing",

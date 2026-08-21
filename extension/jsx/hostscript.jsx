@@ -294,12 +294,45 @@ function AELL_effectNames(layer) {
 
 var AELL_TOOLS = {};
 
+/*
+ * Model-facing list caps.
+ *
+ * These two tools feed the panel's SYSTEM PROMPT, whose whole budget is
+ * ~6 KB. Measured in AE 2026 on a 200-layer comp in a 206-item project:
+ * get_project_info was 27 KB and get_comp_details 30 KB, so the combined
+ * state was 49 KB and the panel's byte-slice kept only the head of the
+ * project's item list — the model saw ZERO layers and never learned which
+ * layer the user had SELECTED, in a prompt that tells it to look for
+ * exactly that. An uncapped list did not degrade gracefully; it pushed the
+ * comp out of the prompt entirely.
+ *
+ * So the lists are bounded HERE, where the omission can be described
+ * honestly, instead of being cut mid-object downstream. limit: 0 (used by
+ * panel-internal callers like the timeline visualizer) still returns
+ * everything.
+ */
+var AELL_LIST_LIMIT = 40;
+
+/* -1 = "no limit"; anything else is a positive row count. */
+function AELL_listLimit(raw) {
+  if (typeof raw === "undefined" || raw === null || raw === "") {
+    return AELL_LIST_LIMIT;
+  }
+  if (raw === "all" || raw === 0 || raw === "0") return -1;
+  var n = Math.round(Number(raw));
+  if (!(n > 0)) return AELL_LIST_LIMIT;
+  return n;
+}
+
 AELL_TOOLS.get_project_info = function (args) {
   var proj = app.project;
   if (!proj) return AELL_err("No project open");
   var engine = "";
   try { engine = String(proj.expressionEngine || ""); } catch (eE) {}
+  var limit = AELL_listLimit(args.limit);
   var items = [];
+  var footageDropped = 0;
+  var namedDropped = 0;
   for (var i = 1; i <= proj.numItems; i++) {
     var it = proj.item(i);
     var entry = { name: it.name, id: it.id };
@@ -327,13 +360,63 @@ AELL_TOOLS.get_project_info = function (args) {
   if (proj.activeItem && proj.activeItem instanceof CompItem) {
     active = proj.activeItem.name;
   }
-  return AELL_okay({
+
+  // Clip to the cap. Comps and folders are what the model must be able to
+  // NAME (every comp/folder argument is a name), so footage is dropped
+  // first — a project full of solids must never hide the comps.
+  var total = items.length;
+  if (limit >= 0 && total > limit) {
+    var kept = [];
+    var j;
+    // The ACTIVE comp goes in first, whatever else is competing for the
+    // slots: it is the one name the model needs in every single request.
+    for (j = 0; j < items.length; j++) {
+      if (active !== null && items[j].type === "comp" &&
+          items[j].name === active) { kept.push(items[j]); break; }
+    }
+    for (j = 0; j < items.length && kept.length < limit; j++) {
+      if (items[j].type !== "footage" && items[j].name !== active) {
+        kept.push(items[j]);
+      }
+    }
+    for (j = 0; j < items.length && kept.length < limit; j++) {
+      if (items[j].type === "footage") kept.push(items[j]);
+    }
+    // Back into project order, so indexes still read as a project panel.
+    var order = {};
+    for (j = 0; j < items.length; j++) order[items[j].id] = j;
+    kept.sort(function (a, b) { return order[a.id] - order[b.id]; });
+    for (j = 0; j < items.length; j++) {
+      var still = false;
+      for (var k = 0; k < kept.length; k++) {
+        if (kept[k] === items[j]) { still = true; break; }
+      }
+      if (still) continue;
+      if (items[j].type === "footage") footageDropped++;
+      else namedDropped++;
+    }
+    items = kept;
+  }
+
+  var out = {
     projectFile: proj.file ? proj.file.fsName : null,
     expressionEngine: engine,
     numItems: proj.numItems,
+    itemsShown: items.length,
     items: items,
     activeComp: active
-  });
+  };
+  if (footageDropped || namedDropped) {
+    out.note = "Showing " + items.length + " of " + total + " items " +
+      "(comps and folders first). " +
+      (footageDropped ? footageDropped + " footage item" +
+        (footageDropped === 1 ? "" : "s") : "") +
+      (footageDropped && namedDropped ? " and " : "") +
+      (namedDropped ? namedDropped + " comp/folder item" +
+        (namedDropped === 1 ? "" : "s") : "") +
+      " not listed — ask again with limit:0 for the whole project.";
+  }
+  return AELL_okay(out);
 };
 
 // -------------------------------------------------- project panel management
@@ -596,9 +679,39 @@ AELL_TOOLS.organize_project = function (args) {
 
 AELL_TOOLS.get_comp_details = function (args) {
   var comp = AELL_resolveComp(args.comp);
+  var total = comp.numLayers;
+  var limit = AELL_listLimit(args.limit);
+  var start = args.start > 0 ? Math.round(args.start) : 1;
+  if (start > total) start = total > 0 ? total : 1;
+  var last = limit < 0 ? total : Math.min(total, start + limit - 1);
+
+  // Two passes so the SELECTED layers always survive the cap even when
+  // they sit outside the window: the system prompt tells the model to read
+  // `selected: true` to resolve "these layers", so a cap that hides the
+  // selection is worse than no answer at all.
+  var i, layer, sel;
+  var wanted = {};      // index -> true
+  var kept = 0;
+  var selectedTotal = 0;
+  for (i = 1; i <= total; i++) {
+    sel = false;
+    try { sel = !!comp.layer(i).selected; } catch (eS) {}
+    if (!sel) continue;
+    selectedTotal++;
+    if (limit < 0 || kept < limit) { wanted[i] = true; kept++; }
+  }
+  for (i = start; i <= last; i++) {
+    if (wanted[i]) continue;
+    if (limit >= 0 && kept >= limit) break;
+    wanted[i] = true;
+    kept++;
+  }
+
   var layers = [];
-  for (var i = 1; i <= comp.numLayers; i++) {
-    var layer = comp.layer(i);
+  var selectedOutside = 0;
+  for (i = 1; i <= total; i++) {
+    if (!wanted[i]) continue;
+    layer = comp.layer(i);
     var entry = {
       index: i,
       name: layer.name,
@@ -609,18 +722,38 @@ AELL_TOOLS.get_comp_details = function (args) {
       startTime: layer.startTime,
       effects: AELL_effectNames(layer)
     };
-    if (layer.selected) entry.selected = true;
+    if (layer.selected) {
+      entry.selected = true;
+      if (i < start || i > last) selectedOutside++;
+    }
     layers.push(entry);
   }
-  return AELL_okay({
+
+  var out = {
     name: comp.name,
     width: comp.width,
     height: comp.height,
     duration: comp.duration,
     frameRate: comp.frameRate,
-    numLayers: comp.numLayers,
+    numLayers: total,
+    layersShown: layers.length,
     layers: layers
-  });
+  };
+  if (layers.length < total) {
+    var next = last + 1;
+    out.note = "Showing " + layers.length + " of " + total +
+      " layers (indexes " + start + "-" + last + ")" +
+      (selectedOutside ? ", plus " + selectedOutside +
+        " selected layer" + (selectedOutside === 1 ? "" : "s") +
+        " from outside that range" : "") + ". " +
+      (selectedTotal ? selectedTotal + " layer" +
+        (selectedTotal === 1 ? " is" : "s are") + " selected. " : "") +
+      (next <= total
+        ? "Ask again with start:" + next + " for the next " +
+          (limit < 0 ? "layers" : "" + limit) + ", or limit:0 for all."
+        : "Ask again with limit:0 for all.");
+  }
+  return AELL_okay(out);
 };
 
 /* First free project-item name — duplicate comp names make every later

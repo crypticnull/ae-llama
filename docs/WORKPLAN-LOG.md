@@ -857,3 +857,94 @@ fix. Start from item 1 of `docs/WORKPLAN.md`.
   "AELL Self-Test Undo" comp is deleted by its cleanup step). The
   ungrouped-`grid_layout` experiment restored `AELL_MUTATING.grid_layout`
   in the same run — it was a runtime `delete`, never a file edit.
+
+## 2026-08-21 — item 4: performance at 200 layers (and what it found)
+
+- Changed: `extension/jsx/hostscript.jsx` — `get_comp_details` and
+  `get_project_info` now cap their model-facing lists (`AELL_LIST_LIMIT`
+  = 40) instead of dumping the whole comp/project. New args on
+  get_comp_details: `start` (1-based) and `limit` (0 = every layer);
+  `limit` on get_project_info. Results carry `layersShown`/`itemsShown`
+  and, when clipped, a grounded `note` naming the true total and how to
+  page. SELECTED layers are always included even from outside the window,
+  the ACTIVE comp is never dropped from the item list, and footage is
+  dropped before comps/folders.
+  `extension/js/tools.js` — `fetchProjectState` moved here from main.js
+  (so the budgeting is testable without a panel) and rewritten: it drops
+  WHOLE ROWS until the state fits 6000 bytes instead of byte-slicing, and
+  writes `activeComp` FIRST so the project list can never starve it.
+  `extension/js/main.js` — delegates to it. `extension/js/visualizer.js`
+  — both of its get_comp_details calls pass `limit: 0` (it counts the
+  user's selection and needs every layer). Tool docs updated.
+  New `tests/test-context-budget.js` (44 assertions).
+  `tests/test-self-test.js` — canned host now windows its layer list and
+  answers get_project_info with a real 403-item project. Bumped 0.9.10.
+- Harness: 136/136 real AE (was 130). Stubbed suite 18/18 files.
+- Notes: the workplan bullet asked for wall time, and wall time is FINE —
+  nothing is anywhere near the ~5s flag. Measured on 200 solids in AE
+  2026: grid_layout 323-558 ms, set_keyframes (200 layers x 3 keys, 600
+  keys) 180-908 ms, stagger_layers 46-76 ms, distribute_property 63-87 ms,
+  for_each_layer apply_effect 441-889 ms, apply_keyframe_ease 247-296 ms,
+  reorder_layers 361-366 ms, building the 200 solids itself 333-374 ms.
+  Ranges are two runs; the spread is run-to-run noise, not load.
+  What the same probe found is the real bug, and it is not about time —
+  it is about what the MODEL is told. On a 200-layer comp in a 206-item
+  project the state block the panel puts in every system prompt measured
+  49198 bytes (get_project_info 27082, get_comp_details 22128) against a
+  6000-byte guard implemented as `json.slice(0, 6000)`. Because `project`
+  was serialized first, 206 project items ate the entire budget and the
+  probe measured what reached the model:
+      layer entries visible to model: 0 of 200
+      selected layer visible: false
+  Not truncated — ABSENT. The system prompt tells the model in so many
+  words to read `selected: true` out of the comp details to resolve "the
+  selected layers", and on any real-sized project there were no comp
+  details at all. A byte slice also cuts mid-object, so the fragment that
+  did arrive was unparseable JSON. This is invisible to every existing
+  test because the scratch comps are small: the suite's biggest comp is
+  60 layers, and 60 layers fit.
+  Fixed at both ends deliberately, because either alone still loses: the
+  host bounds its own lists where the omission can be DESCRIBED (a
+  grounded note, the way every other refusal in this codebase works), and
+  the panel drops whole rows in priority order rather than cutting bytes.
+  Priorities are the ones a failure would punish: selected layers, then
+  the active comp, then other comps/folders, then footage — every one of
+  those is a name the model has to quote back as an argument, whereas
+  footage is what a project accumulates. The live scratch project is 426
+  items, 425 of them accumulated solids: exactly the shape that used to
+  push the comp out.
+  Proven to catch the regression, not just to pass: set AELL_LIST_LIMIT
+  to 100000 and real AE scores 132/136, failing exactly the four new cap
+  steps — including "a capped comp still serializes to 7967 bytes", which
+  is the field measurement in miniature on a 60-layer comp. The same
+  loosened host fails 9 assertions in tests/test-context-budget.js and
+  fails tests/test-self-test.js outright.
+  Coverage trap found on the way, and worth knowing: capping the list
+  silently WEAKENED an existing step. "batch: every one of the 60 really
+  carries the blur" iterates `d.layers`, so with a 40-row cap it would
+  have gone on passing while checking 40 of 60. It passes `limit: 0` now
+  and asserts it really received 60 rows. Any future step that enumerates
+  a whole comp has to do the same.
+  Stub fidelity: `tests/test-self-test.js` does not hard-code the cap —
+  it reads `AELL_LIST_LIMIT` out of hostscript.jsx and windows its canned
+  layer list the same way, and its get_project_info now answers with the
+  comps this run actually created rather than a constant, so a step that
+  looks for a comp by name is really being asked something.
+  Perf footnote: the capped get_comp_details is FASTER on the 200-layer
+  comp (8 ms vs 35 ms) despite the extra pass that scans every layer's
+  `selected` flag — building 40 rows beats building 201.
+- FOR THE REMOTE SESSION, one thing measured and NOT fixed here: the
+  WRITE tools echo one row per layer (grid_layout `placed`,
+  distribute_property `applied`, stagger_layers `placed`), which is
+  6271-6952 bytes at 200 layers against `compactToolResults`' 1200-byte
+  per-result cap — so the model reads a summary followed by ~30 rows cut
+  mid-object. It is much less harmful than the state bug (those results
+  lead with their summary fields, which survive) and capping them touches
+  six tools plus their assertions, so it wants a deliberate pass rather
+  than a ride-along. The honest shape is probably the same one used here:
+  a bounded echo plus a count.
+- Housekeeping: probes ran against the live scratch project and cleaned
+  up after themselves (the "AELL Perf Probe" comp is removed at the end
+  of each probe; the loosened-cap harness run created nothing new). The
+  AELL_LIST_LIMIT = 100000 experiment was a temp edit, restored from a
+  backup copy and re-verified green before committing.
