@@ -101,6 +101,10 @@ let ordStack = [];
 // The mask rig reads back what it just wrote (numKeys after a refusal),
 // so the canned host has to remember how many keys each mask carries.
 let maskKeys = {};
+// stagger_layers is read back through get_comp_details ("did the layers
+// really land 4 frames apart"), so the canned host has to remember where
+// it put them rather than answering with a constant list.
+let stagStart = {};
 // The batch rig checks that for_each_layer really touched all 60 layers
 // and that the tools it must refuse changed nothing, so the canned host
 // tracks which layers carry the blur, what value it holds, and whether a
@@ -296,6 +300,11 @@ function cannedOk(tool, args) {
         }
         return capLayers(args.comp, ls, args);
       }
+      if (args && /Self-Test$/.test(args.comp || "") &&
+          typeof stagStart[SQUARES[0]] === "number") {
+        return capLayers(args.comp, SQUARES.map((nm, i) => ({
+          index: i + 1, name: nm, startTime: stagStart[nm] })), args);
+      }
       return capLayers(args && args.comp,
         ordStack.map((nm, i) => ({ index: i + 1, name: nm })), args);
     }
@@ -401,7 +410,56 @@ function cannedOk(tool, args) {
     case "apply_keyframe_ease":
       // The camera-comp steps ease ONE pair; the batch step eases nine.
       return { easedPairs: (args && args.layer) ? 1 : 9 };
-    case "stagger_layers": return { layers: 9 };
+    case "stagger_layers": {
+      // Two units that mean different things: 'spread' is the TOTAL span
+      // of the stagger, 'step'/'stepFrames' the gap BETWEEN consecutive
+      // layers. A stub that accepted both would answer the suite's
+      // refusal step for free, and one that never reported the per-layer
+      // gap would let a host go back to reporting a request as a result.
+      const fd = 1 / 30;                 // the scratch comp runs at 30 fps
+      const r3 = v => Math.round(v * 1000) / 1000;
+      const hasStep = !!(args && typeof args.step === "number");
+      const hasFrames = !!(args && typeof args.stepFrames === "number");
+      const hasSpread = !!(args && args.spread > 0);
+      if (hasStep && hasFrames) {
+        return { __err: "Pass 'step' (seconds between consecutive layers) " +
+          "or 'stepFrames' (frames between consecutive layers), not both" };
+      }
+      if ((hasStep || hasFrames) && hasSpread) {
+        return { __err: "'spread' is the TOTAL span and 'step' is the gap " +
+          "BETWEEN consecutive layers -- pass one, not both." };
+      }
+      const names = (args && args.layers) || SQUARES;
+      const n = names.length;
+      const base = (args && typeof args.startAt === "number")
+        ? args.startAt : 0;
+      const out = { layers: n, startAt: base };
+      const gap = (hasStep || hasFrames)
+        ? (hasFrames ? args.stepFrames * fd : args.step)
+        : ((hasSpread ? args.spread : 2) / (n - 1));
+      const placed = [];
+      names.forEach((nm, i) => {
+        stagStart[nm] = base + i * gap;
+        placed.push({ layer: nm, startTime: r3(base + i * gap) });
+      });
+      out.placed = placed;
+      out.spread = r3(gap * (n - 1));
+      if (hasStep || hasFrames) {
+        out.step = r3(gap);
+        out.stepFrames = Math.round((gap / fd) * 100) / 100;
+      } else {
+        out.perLayer = r3(gap);
+        out.perLayerFrames = Math.round((gap / fd) * 100) / 100;
+        if (Math.abs(gap) < fd) {
+          out.note = "'spread' is the TOTAL span, so " + n + " layers " +
+            "across " + r3(out.spread) + "s land " + r3(gap / fd) +
+            " frame(s) apart -- under one frame. If you meant " +
+            r3(out.spread) + "s BETWEEN layers, pass step: " +
+            r3(out.spread) + " instead of spread.";
+        }
+      }
+      return out;
+    }
     case "add_mask":
       return { layer: args && args.layer,
                mask: (args && args.name) || "Mask 1",

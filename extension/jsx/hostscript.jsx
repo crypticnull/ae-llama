@@ -1830,6 +1830,23 @@ function AELL_bezierY(x1, y1, x2, y2, x) {
   return 3 * w * w * u * y1 + 3 * w * u * u * y2 + u * u * u;
 }
 
+/* Round to 3 decimals -- seconds reported to the model stay readable. */
+function AELL_r3(v) { return Math.round(v * 1000) / 1000; }
+
+/*
+ * A number from an arg that may arrive quoted. Small models write
+ * {"step": "0.5"} often enough that a strict typeof check dropped the
+ * argument silently, which is the one failure mode this codebase refuses
+ * to have. Returns null when there is no usable number.
+ */
+function AELL_numArg(v) {
+  if (typeof v === "number") return isNaN(v) ? null : v;
+  if (typeof v === "string" && v !== "" && !isNaN(Number(v))) {
+    return Number(v);
+  }
+  return null;
+}
+
 function AELL_bezierArgs(args) {
   var b = args.bezier;
   if (b === null || typeof b === "undefined") return [0, 0, 1, 1]; // linear
@@ -2030,23 +2047,62 @@ AELL_TOOLS.stagger_layers = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var bez = AELL_bezierArgs(args);
   var layers = AELL_targetLayers(comp, args);
-  // No spread declared -> fill the comp's WORK AREA (fall back to the
-  // full comp duration), so bare requests need no numbers at all.
-  var spread = args.spread > 0 ? Number(args.spread) : null;
+  var n = layers.length;
+  var fd = 0;
+  try { fd = Number(comp.frameDuration) || 0; } catch (eFD) { fd = 0; }
+
+  // TWO units, because the field proved one was not enough. 'spread' is
+  // the TOTAL span of the stagger; 'step'/'stepFrames' is the gap BETWEEN
+  // consecutive layers. Measured through the chat probe: "stagger them 4
+  // frames apart" arrived as spread 0.133 on nine layers -- 0.0166s each,
+  // half a frame, every layer effectively on the same frame -- and this
+  // tool reported nine cheerful placements. Designers speak in gaps, so
+  // the gap is now sayable, the two units are mutually exclusive, and a
+  // spread that works out to under a frame per layer says so out loud.
+  var spread = AELL_numArg(args.spread);
+  if (spread !== null && !(spread > 0)) spread = null;
+  var step = AELL_numArg(args.step);
+  var stepFrames = AELL_numArg(args.stepFrames);
+  var notes = [];
+
+  if (step !== null && stepFrames !== null) {
+    return AELL_err("Pass 'step' (seconds between consecutive layers) or " +
+      "'stepFrames' (frames between consecutive layers), not both");
+  }
+  if (stepFrames !== null) {
+    if (!fd) {
+      return AELL_err("'stepFrames' needs the comp's frame duration, and " +
+        "'" + comp.name + "' did not report one -- pass 'step' in seconds");
+    }
+    step = stepFrames * fd;
+  }
+  if (step !== null && spread !== null) {
+    return AELL_err("'spread' is the TOTAL span and 'step' is the gap " +
+      "BETWEEN consecutive layers -- pass one, not both. For these " + n +
+      " layers, spread " + AELL_r3(step * (n - 1)) + " == step " +
+      AELL_r3(step) + ".");
+  }
+  var stepMode = (step !== null);
+
+  // No unit at all -> fill the comp's WORK AREA (fall back to the full
+  // comp duration), so bare requests need no numbers.
   var usedWorkArea = false;
-  if (spread === null) {
+  if (!stepMode && spread === null) {
     if (comp.workAreaDuration > 0) {
       spread = Number(comp.workAreaDuration);
       usedWorkArea = true;
     } else if (comp.duration > 0) {
       spread = Number(comp.duration);
     } else {
-      return AELL_err("'spread' (seconds) is required");
+      return AELL_err("'spread' (TOTAL seconds) or 'step' (seconds " +
+        "between consecutive layers) is required");
     }
   }
+
+  var startAt = AELL_numArg(args.startAt);
   var base;
-  if (typeof args.startAt === "number") {
-    base = args.startAt;
+  if (startAt !== null) {
+    base = startAt;
   } else if (usedWorkArea) {
     base = Number(comp.workAreaStart) || 0;
   } else {
@@ -2055,17 +2111,56 @@ AELL_TOOLS.stagger_layers = function (args) {
       if (layers[j].startTime < base) base = layers[j].startTime;
     }
   }
-  var n = layers.length;
+
   var placed = [];
   for (var i = 0; i < n; i++) {
-    var t = i / (n - 1);
-    var y = AELL_bezierY(bez[0], bez[1], bez[2], bez[3], t);
-    layers[i].startTime = base + y * spread;
+    var t;
+    if (stepMode) {
+      t = base + i * step;
+    } else {
+      var y = AELL_bezierY(bez[0], bez[1], bez[2], bez[3], i / (n - 1));
+      t = base + y * spread;
+    }
+    layers[i].startTime = t;
     placed.push({ layer: layers[i].name,
-                  startTime: Math.round(layers[i].startTime * 1000) / 1000 });
+                  startTime: AELL_r3(layers[i].startTime) });
   }
-  return AELL_okay({ layers: n, spread: spread, startAt: base,
-                     bezier: bez, placed: placed });
+
+  var total = stepMode ? step * (n - 1) : spread;
+  var gap = total / (n - 1);
+  var res = { layers: n, spread: AELL_r3(total), startAt: AELL_r3(base),
+              bezier: bez, placed: placed };
+  if (stepMode) {
+    res.step = AELL_r3(step);
+    if (fd) res.stepFrames = Math.round((step / fd) * 100) / 100;
+    var custom = AELLJSON.isArray(args.bezier) &&
+      !(bez[0] === 0 && bez[1] === 0 && bez[2] === 1 && bez[3] === 1);
+    if (custom) {
+      notes.push("'step' spaces the layers EVENLY, so the bezier was not " +
+        "used -- pass 'spread' instead to stagger along a curve");
+    }
+    if (step === 0) {
+      notes.push("step 0 -- every layer starts at " + AELL_r3(base) + "s");
+    } else if (fd && Math.abs(step) < fd) {
+      notes.push("step " + AELL_r3(step) + "s is under ONE frame (" +
+        AELL_r3(fd) + "s at " + comp.frameRate + " fps), so the layers " +
+        "all land on the same frame");
+    }
+  } else {
+    res.perLayer = AELL_r3(gap);
+    if (fd) res.perLayerFrames = Math.round((gap / fd) * 100) / 100;
+    if (fd && Math.abs(gap) < fd) {
+      notes.push("'spread' is the TOTAL span, so " + n + " layers across " +
+        AELL_r3(total) + "s land " + AELL_r3(gap / fd) +
+        " frame(s) apart -- under one frame, i.e. all on the same frame. " +
+        "If you meant " + AELL_r3(total) + "s BETWEEN layers, pass step: " +
+        AELL_r3(total) + " (or stepFrames: " +
+        (Math.round((total / fd) * 100) / 100) + ") instead of spread.");
+    }
+  }
+  if (usedWorkArea) res.usedWorkArea = true;
+  if (notes.length) res.note = notes.join(". ");
+  return AELL_okay(res);
 };
 
 var AELL_DIST_PROPS = {

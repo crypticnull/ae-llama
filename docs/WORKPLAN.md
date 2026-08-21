@@ -82,10 +82,11 @@ themselves inside the scratch comp.
   Re-run it after any change to tools.js, the system prompt, or a
   batch tool — it is the only thing that tests the MODEL's half.
   Open follow-ups it filed, each its own pass:
-  - `stagger_layers` `spread` is a TOTAL, but users say "4 frames
-    apart" and the model dutifully sends `spread: 0.133` for nine
-    layers (0.5 frames each). Wants a per-layer `step`, or docs that
-    make the total unmissable.
+  - ~~`stagger_layers` `spread` is a TOTAL, but users say "4 frames
+    apart"~~ DONE 2026-08-21: the tool takes `step` (seconds) and
+    `stepFrames`, refuses spread+step together, and flags a spread
+    that works out to under a frame per layer. Probe re-run: the model
+    now sends `stepFrames: 4`.
   - `add_text_layer` inherits AE's last-used character panel style —
     a probe asking for 120px white got tracking 251 and
     PowerCentra-Book. Decide whether the tool should normalize.

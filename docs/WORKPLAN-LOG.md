@@ -1033,3 +1033,64 @@ fix. Start from item 1 of `docs/WORKPLAN.md`.
   "Probe Room 2" while the verdicts still read "Probe Room" — every
   check silently inspecting the previous run's comp. Transcripts live in
   `logs/`, which is gitignored, so the failing one is quoted above.
+
+## 2026-08-21 — item 4 follow-up: stagger_layers spread is a TOTAL
+
+- Changed: `extension/jsx/hostscript.jsx` — `stagger_layers` grew a GAP
+  mode beside its curve mode: `step` (seconds between consecutive
+  layers) and `stepFrames` (frames), which is the unit designers
+  actually speak. `spread` still means the TOTAL span, and asking for
+  both is now a refusal that spells out which is which (and does the
+  arithmetic: "for these 9 layers, spread 1.067 == step 0.133"). Curve
+  mode reports `perLayer`/`perLayerFrames`, and a spread that works out
+  to UNDER ONE FRAME per layer says so and names the argument that fixes
+  it. Gap mode reports `step`/`stepFrames`/total `spread`, says when a
+  bezier went unused, and flags step 0 or a sub-frame step. New helpers
+  `AELL_r3` and `AELL_numArg` (a quoted "0.5" is a number a small model
+  really does send; the strict typeof check dropped it silently).
+  `extension/js/tools.js` — tool doc rewritten gap-first, plus two
+  system-prompt lines ("stagger them X frames apart" = {stepFrames: X};
+  spread is the whole stagger, not the gap). `extension/index.html` —
+  visualizer's Spread field is labelled TOTAL. Four new steps in
+  `extension/js/selftest.js`, incl. a get_comp_details read-back proving
+  REAL AE holds the 4-frame gaps. `tests/test-curve-tools.js` +9
+  assertions and a frame grid on the stub comp; `tests/test-self-test.js`
+  canned host models both units and the refusal, and remembers where it
+  put the layers so the read-back step is really being asked something.
+  `scripts/chat-probe.js` step 3 verdict tightened. Bumped 0.9.12.
+- Harness: 145/145 real AE (was 141/141). Stubbed suite 18/18 files.
+  Chat probe steps 1-3: 3/3.
+- Notes: the field re-run is the proof this item wanted. Same sentence
+  as the failing probe ("Fade all nine squares in ... and stagger them 4
+  frames apart"), and the model's FIRST call was
+  `stagger_layers {stepFrames: 4, spread: 1, startAt: 0}` — it reached
+  for the new argument but belt-and-braced the old one. The refusal
+  caught it, the model dropped `spread` in the next round, and the comp
+  came out at 0, 0.133, 0.267 ... 1.067: exactly 4 frames apart, with
+  set_keyframes {relativeTo: "inPoint"} keeping the fades on the
+  staggered starts. Before this pass the same sentence produced
+  `spread: 0.133` — 0.0166s per layer, half a frame, every square
+  effectively on the same frame — reported as nine cheerful placements.
+  Assumption made, worth a second opinion: sending both units is a
+  REFUSAL rather than a "step wins" precedence. It costs one extra round
+  when the model hedges (as it did here), but a silent precedence rule
+  is how the original bug felt from the user's side — something was
+  ignored and the answer said success. The grounded error also teaches;
+  precedence cannot.
+  The probe's old verdict for that step only asked whether the start
+  times were DISTINCT, which the half-frame stagger satisfied — so the
+  step was green on the run that filed the bug. It now measures the gaps
+  against the comp's frame duration and accepts either staggered layer
+  starts or staggered first keys (the model may legitimately do it
+  either way), and prints the measured gaps in frames when it fails.
+  Proven to catch the regression, not just to pass: make the host ignore
+  step/stepFrames (the old tool) and `tests/test-curve-tools.js` fails 6
+  assertions; keep gap mode but drop the sub-frame warning and it fails
+  1. The sub-frame warning is invisible to `tests/test-self-test.js` by
+  construction — that suite stubs the host rather than running it, so
+  the warning's only stub-side catcher is test-curve-tools.js and its
+  only field catcher is the new selftest step.
+  Nothing blocked. Still open under item 4 for later passes:
+  add_text_layer inheriting AE's last-used character style, no rollback
+  for a round that fails part way, and the untouched ComfyUI/second-turn
+  parts of the checklist.

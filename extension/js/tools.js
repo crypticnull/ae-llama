@@ -94,14 +94,18 @@
             "optional value = control*scale + offset).",
       args: "{comp?: string, layer: name|index, property: transform name or 'effect.<Effect>.<Param>', controlLayer: name|index, controlEffect: string (control name), scale?: number, offset?: number}" },
     { name: "stagger_layers", mutating: true,
-      desc: "Distribute layer START TIMES along a cubic-bezier easing " +
-            "curve: layer i (of n) starts at startAt + bezierY(i/(n-1)) * " +
-            "spread. Uses the user's selected layers when 'layers' omitted. " +
-            "Omit spread/startAt to fill the comp's WORK AREA; omit bezier " +
-            "for linear (ease-out = [0,0,0.58,1], ease-in = [0.42,0,1,1]). " +
-            "A 'layers' list is used IN THE ORDER GIVEN unless 'order' " +
-            "asks for a sort.",
-      args: "{comp?: string, layers?: [name|index] (used in the order given), bezier?: [x1,y1,x2,y2] (default linear), spread?: seconds (default: work area), startAt?: s, order?: 'in'|'stack'|'reverse'|'ascending'|'descending' (re-sorts the list)}" },
+      desc: "Distribute layer START TIMES. Gap mode (use this for 'X " +
+            "frames/seconds apart'): stepFrames or step is the gap " +
+            "BETWEEN consecutive layers — '4 frames apart' = " +
+            "{stepFrames: 4}. Curve mode: 'spread' is the TOTAL span of " +
+            "the whole stagger, not the per-layer gap, and layer i (of n) " +
+            "starts at startAt + bezierY(i/(n-1)) * spread. Pass spread " +
+            "OR step, never both. Uses the user's selected layers when " +
+            "'layers' omitted. Omit all of them to fill the comp's WORK " +
+            "AREA; omit bezier for linear (ease-out = [0,0,0.58,1], " +
+            "ease-in = [0.42,0,1,1]). A 'layers' list is used IN THE " +
+            "ORDER GIVEN unless 'order' asks for a sort.",
+      args: "{comp?: string, layers?: [name|index] (used in the order given), stepFrames?: frames BETWEEN consecutive layers, step?: seconds BETWEEN consecutive layers, spread?: seconds TOTAL for the whole stagger (default: work area), bezier?: [x1,y1,x2,y2] (curve mode only, default linear), startAt?: s, order?: 'in'|'stack'|'reverse'|'ascending'|'descending' (re-sorts the list)}" },
     { name: "distribute_property", mutating: true,
       desc: "Distribute a property VALUE across layers. Curve mode: layer " +
             "i gets from + bezierY(i/(n-1)) * (to-from). Equidistant " +
@@ -466,6 +470,10 @@
       "- 'distribute/space layers equidistantly / every X px' =",
       "  distribute_property {property: position_x, step: X} — ONE call,",
       "  never a chain of set_transform/duplicate calls.",
+      "- 'stagger them X frames apart' = stagger_layers {stepFrames: X}.",
+      "  stagger_layers 'spread' is the TOTAL span of the whole stagger,",
+      "  NOT the gap between layers — for a per-layer gap use step /",
+      "  stepFrames, or the nine layers land half a frame apart.",
       "",
       "Universal property access (reach ANY parameter in AE):",
       "- Unknown parameter, effect setting, mask or text property? NEVER",
@@ -501,7 +509,8 @@
       "- 'animate the mask / wipe it on' = set_mask_path {keys: […]} or",
       "  add trim_paths and keyframe its End — never hand-write",
       "  expressions for plain keyframe animation.",
-      "- Curve requests: 'stagger with an ease' = stagger_layers;",
+      "- Curve requests: 'stagger with an ease' = stagger_layers with",
+      "  spread + bezier (step mode is evenly spaced, no curve);",
       "  'ramp opacity/scale across these layers' = distribute_property;",
       "  'ease between the keyframes' = apply_keyframe_ease. All take the",
       "  same CSS-style bezier [x1,y1,x2,y2].",

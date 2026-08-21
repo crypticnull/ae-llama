@@ -219,6 +219,94 @@
           return d.easedPairs === 9 || "easedPairs " + d.easedPairs;
         } },
 
+      // The unit trap, measured in the field: "stagger them 4 frames
+      // apart" reached stagger_layers as spread 0.133 (the TOTAL) across
+      // nine layers -- half a frame each -- and the tool reported nine
+      // placements without a murmur. Frames are what designers say, so
+      // the gap is now its own argument, and REAL AE has to agree that
+      // the layers landed where the tool claims.
+      { name: "stagger 9 layers 4 frames apart (gap, not total)",
+        tool: "stagger_layers",
+        args: function (ctx) {
+          return { comp: ctx.comp, layers: squares, stepFrames: 4,
+                   startAt: 0 };
+        },
+        check: function (d) {
+          var fd = 1 / 30;
+          if (d.stepFrames !== 4) return "stepFrames " + d.stepFrames;
+          if (Math.abs(d.step - 4 * fd) > 0.002) return "step " + d.step;
+          if (Math.abs(d.spread - 32 * fd) > 0.01) {
+            return "total spread " + d.spread + " (8 gaps of 4 frames)";
+          }
+          if (!d.placed || d.placed.length !== 9) {
+            return "placed " + (d.placed ? d.placed.length : d.placed);
+          }
+          for (var i = 1; i < d.placed.length; i++) {
+            var gap = d.placed[i].startTime - d.placed[i - 1].startTime;
+            if (Math.abs(gap - 4 * fd) > 0.002) {
+              return "gap " + (i + 1) + " is " + gap + "s, not 4 frames";
+            }
+          }
+          return true;
+        } },
+
+      { name: "…and the comp really shows those 4-frame gaps",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.comp, limit: 0 }; },
+        check: function (d) {
+          // limit: 0 on purpose — a capped list would check 40 of the
+          // comp and call it nine.
+          if (d.layersShown !== d.numLayers) {
+            return "capped list: " + d.layersShown + " of " + d.numLayers;
+          }
+          var at = {};
+          for (var i = 0; i < d.layers.length; i++) {
+            at[d.layers[i].name] = d.layers[i].startTime;
+          }
+          for (var s = 0; s < squares.length; s++) {
+            var want = s * 4 / 30;
+            if (typeof at[squares[s]] !== "number") {
+              return "no row for " + squares[s];
+            }
+            if (Math.abs(at[squares[s]] - want) > 0.002) {
+              return squares[s] + " starts at " + at[squares[s]] +
+                     "s, wanted " + want + "s";
+            }
+          }
+          return true;
+        } },
+
+      { name: "stagger refuses 'spread' AND 'step' together",
+        tool: "stagger_layers",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.comp, layers: squares, spread: 2, step: 0.2 };
+        },
+        check: function (err) {
+          return (/TOTAL/.test(err) && /BETWEEN/.test(err)) ||
+                 "error does not spell out which unit is which: " + err;
+        } },
+
+      { name: "a sub-frame spread is honored but NAMED",
+        tool: "stagger_layers",
+        args: function (ctx) {
+          return { comp: ctx.comp, layers: squares, spread: 0.133,
+                   startAt: 0 };
+        },
+        check: function (d) {
+          if (!(d.perLayerFrames < 1)) {
+            return "perLayerFrames " + d.perLayerFrames;
+          }
+          if (!/TOTAL/.test(d.note || "")) {
+            return "note does not say spread is the total: " + (d.note || "");
+          }
+          if (!/step: 0\.133/.test(d.note || "")) {
+            return "note does not name the argument that fixes it: " +
+                   (d.note || "");
+          }
+          return true;
+        } },
+
       { name: "stagger 9 layers across a curve",
         tool: "stagger_layers",
         args: function (ctx) {

@@ -82,7 +82,13 @@ Layer.prototype.property = function (name) {
   return null;
 };
 
-function Comp(name) { this.name = name; this._layers = []; this.time = 0; }
+function Comp(name) {
+  this.name = name; this._layers = []; this.time = 0;
+  // Real comps have a frame grid, and stagger_layers measures its own
+  // spacing against it — a stub without one cannot see a stagger that
+  // lands every layer on the same frame.
+  this.frameRate = 30; this.frameDuration = 1 / 30;
+}
 Comp.prototype.layer = function (ref) {
   const l = typeof ref === "number" ? this._layers[ref - 1]
     : this._layers.find(x => x.name === ref);
@@ -225,6 +231,77 @@ assert(r.ok && near(r.data.spread, 10) && near(r.data.startAt, 2),
 assert(near(comp.layer("L1").startTime, 2) &&
        near(comp.layer("L2").startTime, 12),
        "layers span work area 2..12 with the default linear curve");
+
+// 7a. stagger GAP mode. Field bug: "stagger them 4 frames apart" reached
+// the tool as spread 0.133 across nine layers — spread is the TOTAL span,
+// so that is half a frame each and every layer lands on the same frame —
+// and the tool reported nine placements without a word. Frames are the
+// unit designers speak in, so the tool takes them.
+comp._layers.forEach(l => { l.selected = false; l.startTime = 0; });
+r = call("stagger_layers",
+         { layers: ["L1", "L2", "L3", "L4", "L5"], stepFrames: 4,
+           startAt: 0 });
+starts = ["L1", "L2", "L3", "L4", "L5"].map(nm => comp.layer(nm).startTime);
+assert(r.ok && [0, 4, 8, 12, 16].every((f, i) =>
+         near(starts[i], f / 30, 1e-6)),
+       "stepFrames: 4 puts consecutive layers 4 frames apart (got " +
+       starts.map(v => (v * 30).toFixed(2) + "f") + ")");
+assert(r.ok && near(r.data.step, 0.133) && r.data.stepFrames === 4 &&
+       near(r.data.spread, 0.533),
+       "gap mode reports step, stepFrames and the TOTAL it works out to (" +
+       JSON.stringify(r.ok ? [r.data.step, r.data.stepFrames, r.data.spread]
+                           : r.error) + ")");
+
+// step in seconds is the same door; a quoted number must not be dropped.
+r = call("stagger_layers",
+         { layers: ["L1", "L2", "L3"], step: "0.5", startAt: 1 });
+assert(r.ok && near(comp.layer("L2").startTime, 1.5) &&
+       near(comp.layer("L3").startTime, 2),
+       "step accepts a quoted number and spaces layers by it (got " +
+       ["L1", "L2", "L3"].map(nm => comp.layer(nm).startTime) + ")");
+
+// The two units mean different things, so asking for both is a refusal
+// that says which is which — not a silent pick.
+r = call("stagger_layers",
+         { layers: ["L1", "L2", "L3"], step: 0.5, spread: 4 });
+assert(!r.ok && /TOTAL span/.test(r.error) && /BETWEEN/.test(r.error),
+       "spread + step together is refused with both meanings spelled out: " +
+       (r.error || "(accepted!)"));
+r = call("stagger_layers",
+         { layers: ["L1", "L2"], step: 0.5, stepFrames: 4 });
+assert(!r.ok && /not both/.test(r.error),
+       "step + stepFrames together is refused: " + (r.error || "(accepted!)"));
+
+// The original bug, verbatim: spread that works out to under a frame per
+// layer. The placement is honored (the caller may mean it) but the answer
+// has to name the unit confusion and the argument that fixes it.
+r = call("stagger_layers",
+         { layers: ["L1", "L2", "L3", "L4", "L5"], spread: 0.133,
+           startAt: 0 });
+assert(r.ok && /TOTAL/.test(r.data.note || "") &&
+       /step: 0\.133/.test(r.data.note || ""),
+       "a sub-frame spread says spread is the TOTAL and names step: " +
+       (r.ok ? (r.data.note || "(no note)") : r.error));
+assert(r.ok && near(r.data.perLayer, 0.033) &&
+       near(r.data.perLayerFrames, 1, 0.01),
+       "curve mode reports the per-layer gap in seconds AND frames (" +
+       (r.ok ? r.data.perLayer + "s / " + r.data.perLayerFrames + "f"
+             : r.error) + ")");
+// ...and a spread that is comfortably over a frame per layer says nothing.
+r = call("stagger_layers",
+         { layers: ["L1", "L2", "L3", "L4", "L5"], spread: 4, startAt: 0 });
+assert(r.ok && !r.data.note,
+       "a sane spread gets no scolding (note: " +
+       (r.ok ? r.data.note : r.error) + ")");
+
+// A bezier in gap mode is not silently obeyed or silently dropped.
+r = call("stagger_layers",
+         { layers: ["L1", "L2", "L3"], stepFrames: 6, startAt: 0,
+           bezier: [0, 0, 0.58, 1] });
+assert(r.ok && near(comp.layer("L2").startTime, 6 / 30) &&
+       /bezier was not used/.test(r.data.note || ""),
+       "gap mode stays evenly spaced and says the bezier went unused: " +
+       (r.ok ? (r.data.note || "(no note)") : r.error));
 
 // 7b. equidistant step mode: "space them every 120px" in one call
 comp.layer("L1")._transform["ADBE Position"].setValue([200, 540]);

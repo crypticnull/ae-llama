@@ -326,9 +326,12 @@ const READ_COMP = FIND_COMP +
   "  var row = { index: i, name: L.name, parent: L.parent ? L.parent.name" +
   "    : null, matte: 0, masks: 0, text: null, effects: 0," +
   "    opacityKeys: 0, opacityKeyTimes: [], position: null," +
+  "    startTime: 0, inPoint: 0," +
   "    scale: null, rotation: null, isText: false, isShape: false," +
   "    isNull: false, isSolid: false };" +
   "  try { row.matte = L.trackMatteType; } catch (e1) {}" +
+  "  try { row.startTime = L.startTime; row.inPoint = L.inPoint;" +
+  "  } catch (e1b) {}" +
   "  try { row.isNull = !!L.nullLayer; } catch (e2) {}" +
   "  try { row.isText = (L instanceof TextLayer); } catch (e3) {}" +
   "  try { row.isShape = (L instanceof ShapeLayer); } catch (e4) {}" +
@@ -442,10 +445,32 @@ const STEPS = [
         return "only " + animated.length + " of " + sq.length +
                " squares have opacity keyframes";
       }
-      const starts = distinct(animated.map(l => l.opacityKeyTimes[0]), 0.005);
-      if (starts.length < 2) {
-        return "every square starts at the same time (" + starts[0] +
-               "s) — nothing was staggered";
+      // "4 frames apart" is a GAP, and the whole point of the step is
+      // whether that survives the trip through the model. It used to
+      // arrive as stagger_layers {spread: 0.133} — the TOTAL — which is
+      // half a frame per layer, and the old check (are the starts merely
+      // distinct?) called that a pass.
+      const fd = 1 / (state.frameRate || 30);
+      const want = 4 * fd;
+      function gapsOf(times) {
+        const t = times.slice().sort((a, b) => a - b);
+        const g = [];
+        for (let i = 1; i < t.length; i++) g.push(t[i] - t[i - 1]);
+        return g;
+      }
+      const byStart = gapsOf(sq.map(l => l.startTime));
+      const byKey = gapsOf(animated.map(l => l.opacityKeyTimes[0]));
+      const even = g => g.length >= 8 &&
+        g.every(v => Math.abs(v - want) <= fd * 0.75);
+      if (!even(byStart) && !even(byKey)) {
+        const fr = g => g.map(v => (v / fd).toFixed(2) + "f").join(", ");
+        if (distinct(sq.map(l => l.startTime), 0.005).length < 2 &&
+            distinct(animated.map(l => l.opacityKeyTimes[0]),
+                     0.005).length < 2) {
+          return "nothing was staggered at all";
+        }
+        return "gaps are not 4 frames — layer starts [" + fr(byStart) +
+               "], first opacity keys [" + fr(byKey) + "]";
       }
       return null;
     }
