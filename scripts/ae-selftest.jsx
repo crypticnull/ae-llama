@@ -57,9 +57,17 @@
     $.evalFile(new File(repo + "/extension/jsx/hostscript.jsx"));
 
     // Shims so the panel's selftest.js runs unmodified: a window with a
-    // synchronous setTimeout, and a JSON built from AELLJSON.
+    // setTimeout, and a JSON built from AELLJSON.
+    //
+    // The shim QUEUES rather than calling straight through. selftest.js
+    // ends each step with setTimeout(step), so a shim that ran fn() on the
+    // spot nested every step inside the one before it -- and ExtendScript's
+    // stack is small enough that the suite killed itself with "Stack
+    // overrun" the moment it passed ~100 steps. Draining the queue from
+    // the top level keeps the depth flat however long the suite gets.
+    var pending = [];
     $.global.window = {
-      setTimeout: function (fn) { fn(); }
+      setTimeout: function (fn) { pending.push(fn); }
     };
     if (typeof $.global.JSON === "undefined") {
       $.global.JSON = AELLJSON;
@@ -78,7 +86,15 @@
       onLine: function () {},
       onDone: function (res) { finalRes = res; }
     });
-    // Shimmed setTimeout is synchronous, so the run has finished here.
+    // Drain what the shim queued. The cap is a runaway guard only: one
+    // entry is queued per step, so it can never be reached by a suite
+    // that terminates.
+    var guard = 0;
+    while (pending.length > 0 && guard < 100000) {
+      guard++;
+      var next = pending.shift();
+      next();
+    }
     if (finalRes) {
       writeOut(finalRes.passed, finalRes.total, finalRes.text);
     } else {

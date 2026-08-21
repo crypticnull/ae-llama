@@ -21,12 +21,20 @@
   // And the ordering rig: it wants a dozen numbered layers all sitting at
   // inPoint 0, which is exactly the tie the sort used to scramble.
   var ORCOMP = "AELL Self-Test Order";
+  // And the mask-animation rig: it needs its own frame rate (25) so that
+  // "did the key land on a frame" is a question with a known answer.
+  var MKCOMP = "AELL Self-Test Mask";
   var running = false;
 
   /**
    * Each step: {name, tool, args: object | function(ctx), check(data, ctx)}.
    * check returns true (pass) or a string (failure detail); throwing also
    * fails the step. ctx carries values captured by earlier steps.
+   *
+   * A step may also set {expectError: true}, which INVERTS the step: the
+   * tool must refuse, and check() is handed the error string instead of
+   * the data. Grounded refusals are half of this panel's design and the
+   * suite could not reach any of them before.
    */
   function buildSteps() {
     var squares = ["ST Square"];
@@ -1095,6 +1103,251 @@
           return true;
         } },
 
+      // ---- mask path animation ------------------------------------
+      // The suite used to prove a mask was animated by counting keyframes,
+      // which is exactly the number that stays right when the animation is
+      // broken. Two real bugs measured in AE 2026 hid behind numKeys == 2:
+      // (1) keys whose point counts disagree do not interpolate at all --
+      //     AE holds key 1 and POPS, and queues a modal warning that
+      //     appears after the script returns and disables AE's main
+      //     window, swallowing every later tool call in silence;
+      // (2) key times were stored exactly as asked, so a time off the
+      //     frame grid put the requested shape on no rendered frame.
+      // Its own comp, at 25 fps, so "which frame" has one right answer.
+      { name: "mask scratch comp",
+        tool: "create_comp",
+        args: { name: MKCOMP, width: 400, height: 400, duration: 4,
+                frameRate: 25 },
+        check: function (d, ctx) {
+          ctx.mkComp = d.name;
+          return typeof d.id === "number" || !!d.id || "no comp id";
+        } },
+
+      { name: "a layer to mask",
+        tool: "add_solid",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, name: "ST Mask", color: [1, 1, 1],
+                   width: 200, height: 200 };
+        },
+        check: function (d) { return d.name === "ST Mask" || d.name; } },
+
+      { name: "3-point custom mask",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Mask", name: "ST Path",
+                   shape: "custom",
+                   vertices: [[0, 0], [100, 0], [100, 100]] };
+        },
+        check: function (d) {
+          return d.mask === "ST Path" || "mask named " + d.mask;
+        } },
+
+      { name: "animate the mask path (keys on whole frames)",
+        tool: "set_mask_path",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Mask", mask: "ST Path",
+                   keys: [
+                     { time: 0, vertices: [[0, 0], [100, 0], [100, 100]] },
+                     { time: 1, vertices: [[0, 0], [200, 0], [200, 200]] }
+                   ] };
+        },
+        check: function (d) {
+          if (d.keysSet !== 2 || d.numKeys !== 2) {
+            return "keysSet " + d.keysSet + " numKeys " + d.numKeys;
+          }
+          if (d.points !== 3) return "points " + d.points;
+          var f = (d.keyFrames || []).join(",");
+          if (f !== "0,25") return "keys landed on frames " + f;
+          if (d.snappedToFrames) return "nothing should have needed snapping";
+          return true;
+        } },
+
+      { name: "mask probe null",
+        tool: "add_null",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, name: "ST Mask Probe" };
+        },
+        check: function () { return true; } },
+
+      // maskPath.points(t) is the only way to read the SHAPE between two
+      // keys -- there is no tool that moves the playhead, and keyValue
+      // only ever returns the keys themselves.
+      { name: "probe reads the mask path BETWEEN its keys",
+        tool: "set_expression",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Mask Probe",
+                   property: "Position",
+                   expression: 'thisComp.layer("ST Mask")' +
+                               '.mask("ST Path").maskPath.points(0.5)[1]' };
+        },
+        check: function (d) {
+          return d.expressionEnabled === true || "expression not enabled";
+        } },
+
+      { name: "the mask really MOVES at t=0.5 (tween, not a pop)",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Mask Probe",
+                   property: "Position" };
+        },
+        check: function (d) {
+          var x = (d.value || [])[0];
+          if (typeof x !== "number") return "no probe value";
+          // Halfway between vertex 1 at x=100 and x=200. A held or popped
+          // path reads one END of that, never the middle.
+          if (Math.abs(x - 150) > 0.5) {
+            return "vertex 1 sits at x=" + Math.round(x * 100) / 100 +
+                   " halfway through, not 150" +
+                   (Math.abs(x - 100) < 0.5 || Math.abs(x - 200) < 0.5
+                     ? " (that is a key value: the path is holding, " +
+                       "not interpolating)" : "");
+          }
+          return true;
+        } },
+
+      { name: "a second layer for off-grid key times",
+        tool: "add_solid",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, name: "ST Mask Off", color: [1, 0, 0],
+                   width: 200, height: 200 };
+        },
+        check: function () { return true; } },
+
+      { name: "3-point mask on the off-grid layer",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Mask Off",
+                   name: "ST Off Path", shape: "custom",
+                   vertices: [[0, 0], [100, 0], [100, 100]] };
+        },
+        check: function () { return true; } },
+
+      // 0.33s and 0.71s in a 25 fps comp are frames 8.25 and 17.75. Left
+      // alone, AE stores them there and the shapes asked for are on no
+      // frame anyone can render.
+      { name: "off-grid key times move onto whole frames",
+        tool: "set_mask_path",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Mask Off",
+                   mask: "ST Off Path", keys: [
+                     { time: 0.33, vertices: [[0, 0], [100, 0], [100, 100]] },
+                     { time: 0.71, vertices: [[0, 0], [1000, 0], [1000, 100]] }
+                   ] };
+        },
+        check: function (d) {
+          if (d.snappedToFrames !== 2) {
+            return "snappedToFrames " + d.snappedToFrames;
+          }
+          var f = (d.keyFrames || []).join(",");
+          if (f !== "8,18") return "keys landed on frames " + f;
+          var t = (d.keyTimes || []).join(",");
+          if (t !== "0.32,0.72") return "key times " + t;
+          return true;
+        } },
+
+      { name: "off-grid probe null",
+        tool: "add_null",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, name: "ST Off Probe" };
+        },
+        check: function () { return true; } },
+
+      { name: "off-grid probe reads frame 10 (t=0.4)",
+        tool: "set_expression",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Off Probe",
+                   property: "Position",
+                   expression: 'thisComp.layer("ST Mask Off")' +
+                               '.mask("ST Off Path").maskPath.points(0.4)[1]' };
+        },
+        check: function (d) {
+          return d.expressionEnabled === true || "expression not enabled";
+        } },
+
+      { name: "frame 10 shows the shape the frame grid implies",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Off Probe",
+                   property: "Position" };
+        },
+        check: function (d) {
+          var x = (d.value || [])[0];
+          if (typeof x !== "number") return "no probe value";
+          // Keys on frames 8 and 18 put frame 10 one fifth along:
+          // 100 + 900 * 0.2 = 280. Unsnapped keys (0.33..0.71) put the
+          // same frame at 265.8 -- a shape that is 14px wrong and lands
+          // on no frame at all.
+          if (Math.abs(x - 280) > 1) {
+            return "vertex 1 sits at x=" + Math.round(x * 100) / 100 +
+                   " on frame 10, not 280 (keys are off the frame grid)";
+          }
+          return true;
+        } },
+
+      // The refusals. Each of these used to be accepted, and the first one
+      // used to leave AE behind a modal dialog -- if it regresses, this
+      // suite does not merely fail, it stops responding at all.
+      { name: "keys with different point counts are REFUSED",
+        tool: "set_mask_path",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Mask", mask: "ST Path",
+                   keys: [
+                     { time: 2, vertices: [[0, 0], [100, 0], [100, 100]] },
+                     { time: 3, vertices: [[0, 0], [50, 0], [100, 0],
+                                           [100, 50], [100, 100]] }
+                   ] };
+        },
+        check: function (e) {
+          if (!/same number of points/.test(e)) return "message was: " + e;
+          if (!/POP/.test(e)) return "no mention of the pop: " + e;
+          if (!/repeat a vertex/.test(e)) return "no way out offered: " + e;
+          return true;
+        } },
+
+      { name: "the refused batch left the animation alone",
+        tool: "set_mask_path",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Mask", mask: "ST Path",
+                   atTime: 2, vertices: [[0, 0], [300, 0], [300, 300]] };
+        },
+        check: function (d) {
+          if (d.numKeys !== 3) return "numKeys " + d.numKeys + ", not 3";
+          if (d.frame !== 50) return "landed on frame " + d.frame;
+          return true;
+        } },
+
+      { name: "two key times on the same frame are REFUSED",
+        tool: "set_mask_path",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Mask Off",
+                   mask: "ST Off Path", keys: [
+                     { time: 0.51, vertices: [[0, 0], [10, 0], [10, 10]] },
+                     { time: 0.53, vertices: [[0, 0], [20, 0], [20, 20]] }
+                   ] };
+        },
+        check: function (e) {
+          return /both land on the same frame/.test(e) || "message was: " + e;
+        } },
+
+      { name: "a static path over an animated mask is REFUSED",
+        tool: "set_mask_path",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Mask", mask: "ST Path",
+                   vertices: [[0, 0], [10, 0], [10, 10]] };
+        },
+        check: function (e) {
+          return (/already animated/.test(e) && /atTime/.test(e)) ||
+                 "message was: " + e;
+        } },
+
+      { name: "cleanup: delete the mask comp",
+        tool: "delete_item",
+        args: function (ctx) { return { item: ctx.mkComp }; },
+        check: function () { return true; } },
+
       { name: "cleanup: delete the order comp",
         tool: "delete_item",
         args: function (ctx) { return { item: ctx.orComp }; },
@@ -1168,21 +1421,32 @@
         return;
       }
       deps.callHostTool(s.tool, args, function (r) {
-        if (!r || !r.ok) {
-          results.push({ name: s.name, ok: false,
-                         detail: r ? r.error : "no result" });
-          deps.onLine("FAIL — " + s.name);
+        var verdict = null, hardFail = null;
+        if (s.expectError) {
+          // Inverted step: the refusal IS the behaviour under test, and
+          // its wording is what the model has to act on, so check() reads
+          // the message rather than the data.
+          if (!r) hardFail = "no result";
+          else if (r.ok) hardFail = "expected a refusal, but the tool " +
+                                    "accepted the call";
+          else {
+            try { verdict = s.check(String(r.error || ""), ctx); }
+            catch (eE) { verdict = "check error: " + eE.message; }
+          }
+        } else if (!r || !r.ok) {
+          hardFail = r ? r.error : "no result";
         } else {
-          var verdict;
           try { verdict = s.check(r.data || {}, ctx); }
           catch (eC) { verdict = "check error: " + eC.message; }
-          if (verdict === true) {
-            results.push({ name: s.name, ok: true });
-          } else {
-            results.push({ name: s.name, ok: false,
-                           detail: String(verdict) });
-            deps.onLine("FAIL — " + s.name + " (" + verdict + ")");
-          }
+        }
+        if (hardFail !== null) {
+          results.push({ name: s.name, ok: false, detail: hardFail });
+          deps.onLine("FAIL — " + s.name);
+        } else if (verdict === true) {
+          results.push({ name: s.name, ok: true });
+        } else {
+          results.push({ name: s.name, ok: false, detail: String(verdict) });
+          deps.onLine("FAIL — " + s.name + " (" + verdict + ")");
         }
         // Yield between steps so the panel stays responsive.
         global.setTimeout(step, 30);

@@ -206,9 +206,14 @@
       args: "{comp?: string, layer?: name|index (omit = selected), mask?: name|1-based index, mode?: add|subtract|intersect|lighten|darken|difference|none, feather?: px|[x,y], expansion?: px, opacity?: %, inverted?: bool, name?: string}" },
     { name: "set_mask_path", mutating: true,
       desc: "Replace or ANIMATE a mask's path. Points are LAYER-space " +
-            "[[x,y],…]; curves via inTangents/outTangents (offsets from " +
-            "each vertex). atTime keyframes one shape; keys animates " +
-            "several in one call.",
+            "[[x,y],…]; curves via inTangents/outTangents (one tangent " +
+            "per vertex, as offsets from it). atTime keyframes one " +
+            "shape; keys animates several in one call. EVERY key of one " +
+            "mask must have the SAME number of points — AE cannot " +
+            "interpolate paths with different counts, so pad a simpler " +
+            "shape by repeating a vertex. Key times are moved onto whole " +
+            "comp frames. Use atTime/keys on a path that already has " +
+            "keyframes; a bare vertices list only sets a STATIC path.",
       args: "{comp?: string, layer?: name|index, mask?: name|index, vertices?: [[x,y],…], inTangents?: [[x,y],…], outTangents?: [[x,y],…], closed?: bool (default true), atTime?: s, keys?: [{time: s, vertices, inTangents?, outTangents?}, …]}" },
     { name: "add_shape_content", mutating: true,
       desc: "Add content INSIDE a shape layer: kinds group, rectangle, " +
@@ -471,6 +476,8 @@
       "  repeaters/trim_paths inside it via {group}. Set initial values",
       "  with params; animate them with set_keyframes on",
       "  'contents/<Group>/<Item>/<Param>' paths.",
+      "- Mask path keys must all carry the SAME point count (repeat a",
+      "  vertex to pad); AE cannot tween paths of different counts.",
       "- 'animate the mask / wipe it on' = set_mask_path {keys: […]} or",
       "  add trim_paths and keyframe its End — never hand-write",
       "  expressions for plain keyframe animation.",

@@ -39,6 +39,9 @@ let textStyle = null;
 // "did slot i go to layer i" is a question the stub answers for free.
 let ordX = {};
 let ordStack = [];
+// The mask rig reads back what it just wrote (numKeys after a refusal),
+// so the canned host has to remember how many keys each mask carries.
+let maskKeys = {};
 function cannedOk(tool, args) {
   switch (tool) {
     case "create_comp":
@@ -107,6 +110,12 @@ function cannedOk(tool, args) {
                         { time: 2, value: [100, 25, 100] }] };
       }
       if (args && args.property === "Position") {
+        // The mask probes read maskPath.points(t) BETWEEN two keys: 150
+        // is halfway from 100 to 200, and 280 is frame 10 of keys that
+        // sit on frames 8 and 18. Both are values a held or popped path
+        // can never produce.
+        if (args.layer === "ST Mask Probe") return { value: [150, 0, 0] };
+        if (args.layer === "ST Off Probe") return { value: [280, 0, 0] };
         // The eased-motion probe reads the SAME point before and after
         // the resize, so a correct scale_comp halves it exactly.
         if (args.layer === "ST Cam Probe") {
@@ -151,7 +160,71 @@ function cannedOk(tool, args) {
       // The camera-comp steps ease ONE pair; the batch step eases nine.
       return { easedPairs: (args && args.layer) ? 1 : 9 };
     case "stagger_layers": return { layers: 9 };
-    case "set_mask_path": return { keysSet: 2 };
+    case "add_mask":
+      return { layer: args && args.layer,
+               mask: (args && args.name) || "Mask 1",
+               shape: (args && args.shape) || "rectangle" };
+    case "set_mask_path": {
+      // Faithful to the host's rules, not to its happy path: keys that
+      // disagree on point count and key times that collide on a frame
+      // must be REFUSED here too, or a host that accepted them again
+      // would sail through this suite.
+      const fd = 1 / 25;            // the mask scratch comp runs at 25 fps
+      const id = ((args && args.layer) || "") + "/" + ((args && args.mask) || "");
+      const keys = (args && args.keys) || [];
+      if (keys.length) {
+        const counts = keys.map(k => (k.vertices || []).length);
+        if (counts.some(c => c !== counts[0])) {
+          const odd = counts.findIndex(c => c !== counts[0]);
+          return { __err: "Mask path keys must all have the same number " +
+            "of points: keys[" + odd + "] has " + counts[odd] + " but " +
+            "keys[0] has " + counts[0] + ". After Effects cannot " +
+            "interpolate between paths with different point counts, so " +
+            "the mask would POP instead of animating, and AE raises a " +
+            "modal warning that blocks the whole application. Give every " +
+            "key " + counts[0] + " points (repeat a vertex to pad a " +
+            "simpler shape)." };
+        }
+        const times = keys.map(k => Math.round(k.time / fd) * fd);
+        const frames = times.map(t => Math.round(t / fd));
+        for (let i = 0; i < frames.length; i++) {
+          for (let j = i + 1; j < frames.length; j++) {
+            if (frames[i] === frames[j]) {
+              return { __err: "keys[" + i + "] (" + keys[i].time + "s) and " +
+                "keys[" + j + "] (" + keys[j].time + "s) both land on the " +
+                "same frame -- the later one would silently overwrite the " +
+                "earlier. Put them on different frames." };
+            }
+          }
+        }
+        let snapped = 0;
+        keys.forEach((k, i) => {
+          if (Math.abs(times[i] - k.time) > 1e-9) snapped++;
+        });
+        maskKeys[id] = keys.length;
+        const out = { keysSet: keys.length, numKeys: keys.length,
+          points: counts[0], keyFrames: frames,
+          keyTimes: times.map(t => Math.round(t * 10000) / 10000),
+          note: "Mask path animated" };
+        if (snapped) out.snappedToFrames = snapped;
+        return out;
+      }
+      if (args && typeof args.atTime === "number") {
+        maskKeys[id] = (maskKeys[id] || 0) + 1;
+        const at = Math.round(args.atTime / fd) * fd;
+        return { keyframed: true, numKeys: maskKeys[id],
+                 time: Math.round(at * 10000) / 10000,
+                 frame: Math.round(at / fd),
+                 points: ((args && args.vertices) || []).length };
+      }
+      if (maskKeys[id]) {
+        return { __err: "Mask '" + (args && args.mask) + "' is already " +
+          "animated (" + maskKeys[id] + " keyframes) -- pass 'atTime' to " +
+          "add a keyframe, 'keys' to rewrite the animation, or clear it " +
+          "first with remove_keyframes." };
+      }
+      return { points: ((args && args.vertices) || []).length };
+    }
     case "add_shape_content": return { params: "End" };
     case "set_track_matte": return { mode: "alpha" };
     case "set_layer_parent": return { parented: "ST Square 5" };
@@ -218,7 +291,8 @@ SelfTest.run({
     calls.push(tool);
     assert(args && typeof args === "object",
            "args object for " + tool);
-    cb({ ok: true, data: cannedOk(tool, args) });
+    const d = cannedOk(tool, args);
+    cb(d && d.__err ? { ok: false, error: d.__err } : { ok: true, data: d });
   },
   onLine() {},
   onDone(res) {
@@ -235,13 +309,16 @@ SelfTest.run({
     camProbeReads = 0;
     ordX = {};
     ordStack = [];
+    maskKeys = {};
     SelfTest.run({
       callHostTool(tool, args, cb) {
         if (tool === "grid_layout") {
           cb({ ok: false, error: "boom" });
           return;
         }
-        cb({ ok: true, data: cannedOk(tool, args) });
+        const d2 = cannedOk(tool, args);
+        cb(d2 && d2.__err ? { ok: false, error: d2.__err }
+                          : { ok: true, data: d2 });
       },
       onLine() {},
       onDone(res2) {
@@ -250,9 +327,91 @@ SelfTest.run({
                res2.total + ")");
         assert(/FAIL grid rig/.test(res2.text) && /boom/.test(res2.text),
                "report names the failed step with its error");
-        console.log(process.exitCode
-          ? "\nTESTS FAILED" : "\nALL TESTS PASSED");
+
+        // 4. the inverted steps must really be inverted: a host that
+        // ACCEPTS a call the suite expects to be refused has to fail, or
+        // every grounded-refusal step is decorative.
+        const inverted = steps.filter(st => st.expectError);
+        assert(inverted.length >= 3,
+               "suite carries " + inverted.length + " refusal steps");
+        createCount = 0;
+        camProbeReads = 0;
+        ordX = {};
+        ordStack = [];
+        maskKeys = {};
+        SelfTest.run({
+          callHostTool(tool, args, cb) {
+            // Never refuse anything -- the old permissive host.
+            const d3 = cannedOk(tool, args);
+            cb({ ok: true, data: d3 && d3.__err ? { keysSet: 2 } : d3 });
+          },
+          onLine() {},
+          onDone(res3) {
+            assert(res3.passed <= res3.total - inverted.length,
+                   "a permissive host fails every refusal step (" +
+                   res3.passed + "/" + res3.total + ", " +
+                   inverted.length + " refusals)");
+            assert(/expected a refusal/.test(res3.text),
+                   "the report says the tool accepted what it must refuse");
+            checkFlatStack();
+          }
+        });
       }
     });
   }
 });
+
+// 5. the CLI runner drives this SAME suite with a shimmed setTimeout, and
+// ExtendScript's stack is small. selftest.js ends every step with
+// setTimeout(step), so a shim that called straight through nested each
+// step inside the last one and the suite killed itself with "Stack
+// overrun" once it outgrew ~100 steps -- a failure that looks nothing
+// like a failing step. scripts/ae-selftest.jsx queues instead and drains
+// from the top level; this proves the queue is flat AND that the
+// measurement can actually see the difference.
+function checkFlatStack() {
+  const src = fs.readFileSync(path.join(__dirname, "..", "scripts",
+                                        "ae-selftest.jsx"), "utf8");
+  assert(!/setTimeout:\s*function\s*\(fn\)\s*\{\s*fn\(\)/.test(src),
+         "the CLI runner's setTimeout does not call straight through");
+  assert(/pending\.push\(fn\)/.test(src) &&
+         /while \(pending\.length > 0/.test(src),
+         "the CLI runner queues each step and drains it from the top level");
+
+  // Model both shims against the real step list: the queue must stay at
+  // depth 1 whatever the suite length, the pass-through must not.
+  const steps2 = SelfTest._buildSteps();
+  let recursive = 0, flat = 0, depth = 0;
+  const recurse = fn => { depth++; if (depth > recursive) recursive = depth;
+                          fn(); depth--; };
+  const pending = [];
+  const queueUp = fn => { pending.push(fn); };
+  (function model(shim, drain) {
+    let i = 0;
+    const step = () => { if (i++ < steps2.length) shim(step); };
+    step();
+    if (drain) {
+      let d = 0;
+      while (pending.length) {
+        d++;
+        if (d > flat) flat = d;
+        const fn = pending.shift();
+        fn();
+        d--;
+      }
+    }
+  })(queueUp, true);
+  (function () {
+    depth = 0;
+    let i = 0;
+    const step = () => { if (i++ < steps2.length) recurse(step); };
+    step();
+  })();
+  assert(flat === 1,
+         "queued steps stay one frame deep (" + flat + ")");
+  assert(recursive >= steps2.length - 1,
+         "pass-through nests one frame PER STEP (" + recursive + " for " +
+         steps2.length + " steps) — that is the stack ExtendScript ran out " +
+         "of");
+  console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");
+}

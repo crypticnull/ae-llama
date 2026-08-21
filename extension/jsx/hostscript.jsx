@@ -2662,6 +2662,49 @@ AELL_TOOLS.set_mask = function (args) {
                      changed: changed.join(", ") });
 };
 
+/*
+ * How many points the mask path is ALREADY animated with, or 0 when it
+ * has no keyframes. Every key on one path has to agree -- see
+ * AELL_maskPointMix for why that is not pedantry.
+ */
+function AELL_maskKeyPoints(pathProp) {
+  var n = 0;
+  try { n = pathProp.numKeys || 0; } catch (e) { return 0; }
+  if (n < 1) return 0;
+  try { return pathProp.keyValue(1).vertices.length; } catch (e2) { return 0; }
+}
+
+/*
+ * The grounded refusal for keys that disagree on point count. Measured in
+ * AE 2026, setValueAtTime with a different vertex count on an ALREADY
+ * KEYED mask path does two bad things at once:
+ * (1) "Preserve Constant Vertex and Feather Count" (General preferences,
+ *     ON by default) forces the new count onto every existing key, so the
+ *     path stops interpolating -- it holds key 1 and then POPS. numKeys
+ *     still read 2 and the tool still reported "Mask path animated".
+ * (2) AE queues a modal warning that appears AFTER the script returns and
+ *     DISABLES AE's main window, so every later tool call is swallowed
+ *     while AE still reports as healthy. A chat panel cannot click that
+ *     dialog, so one bad mask call ends the session.
+ * Refusing costs the caller nothing: a repeated vertex pads a simpler
+ * path invisibly.
+ */
+function AELL_maskPointMix(maskName, where, got, want, wantFrom) {
+  return "Mask path keys must all have the same number of points: " +
+    where + " has " + got + " but " + wantFrom +
+    (wantFrom === "the existing keys" ? " have " : " has ") + want + ". " +
+    "After Effects cannot interpolate between paths with different point " +
+    "counts -- with 'Preserve Constant Vertex and Feather Count' on (the " +
+    "default) it forces one count onto every key, so mask '" + maskName +
+    "' would POP instead of animating, and AE raises a modal warning that " +
+    "blocks the whole application until someone clicks it. Give every key " +
+    want + " points (repeat a vertex to pad a simpler shape -- a doubled " +
+    "point is legal and invisible)" +
+    (wantFrom === "the existing keys"
+      ? ", or clear the existing keys first with remove_keyframes."
+      : ".");
+}
+
 AELL_TOOLS.set_mask_path = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var layer = AELL_layerOrSelection(comp, args.layer);
@@ -2669,38 +2712,150 @@ AELL_TOOLS.set_mask_path = function (args) {
   try { mask = AELL_findMask(layer, args.mask); }
   catch (e) { return AELL_err(e.message); }
   var pathProp = mask.property("ADBE Mask Shape");
-  function buildShape(spec, closedDefault) {
+  function buildShape(spec, closedDefault, where) {
     if (!AELLJSON.isArray(spec.vertices) || spec.vertices.length < 3) {
-      throw new Error("'vertices' ([[x,y],…] in LAYER space, >= 3 points) " +
-                      "is required");
+      throw new Error(where + "'vertices' ([[x,y],…] in LAYER space, " +
+                      ">= 3 points) is required");
     }
-    var s = new Shape();
+    var n = spec.vertices.length, s = new Shape();
     s.closed = typeof spec.closed === "boolean" ? spec.closed : closedDefault;
     s.vertices = spec.vertices;
-    if (AELLJSON.isArray(spec.inTangents)) s.inTangents = spec.inTangents;
-    if (AELLJSON.isArray(spec.outTangents)) s.outTangents = spec.outTangents;
+    // AE wants one tangent per point; a short list corrupts the path
+    // quietly, so name the side that is wrong instead of passing it on.
+    if (AELLJSON.isArray(spec.inTangents)) {
+      if (spec.inTangents.length !== n) {
+        throw new Error(where + "'inTangents' has " + spec.inTangents.length +
+          " entries but 'vertices' has " + n + " -- AE needs exactly one " +
+          "tangent per point");
+      }
+      s.inTangents = spec.inTangents;
+    }
+    if (AELLJSON.isArray(spec.outTangents)) {
+      if (spec.outTangents.length !== n) {
+        throw new Error(where + "'outTangents' has " +
+          spec.outTangents.length + " entries but 'vertices' has " + n +
+          " -- AE needs exactly one tangent per point");
+      }
+      s.outTangents = spec.outTangents;
+    }
     return s;
   }
+  // Keyframe times belong ON the frame grid. AE stores whatever fraction
+  // it is handed -- measured, 0.34s in a 30fps comp lands on frame 10.2 --
+  // and then no rendered frame ever shows the shape that was asked for:
+  // frame 21 of a 0.71s key came back 197.3 wide instead of 200.
+  var fd = 0;
+  try { fd = Number(comp.frameDuration) || 0; } catch (eF) { fd = 0; }
+  var fps = fd ? Math.round(1 / fd * 100) / 100 : 0;
+  function snap(t) { return fd ? Math.round(t / fd) * fd : t; }
+  function r4(v) { return Math.round(v * 10000) / 10000; }
+  var animatedWith = AELL_maskKeyPoints(pathProp);
   var closedDefault = args.closed !== false;
   try {
     if (AELLJSON.isArray(args.keys) && args.keys.length > 0) {
       if (args.keys.length > 50) return AELL_err("'keys' capped at 50");
-      for (var i = 0; i < args.keys.length; i++) {
-        var k = args.keys[i] || {};
+      // Build and check EVERY key before writing ANY of them. A path left
+      // half-written is worse than one refused: the caller cannot tell
+      // which keys landed, and the partial state is what pops.
+      var shapes = [], times = [], snapped = 0, i, j, k;
+      for (i = 0; i < args.keys.length; i++) {
+        k = args.keys[i] || {};
         if (typeof k.time !== "number") {
           return AELL_err("keys[" + i + "] needs {time (seconds), vertices}");
         }
-        pathProp.setValueAtTime(k.time, buildShape(k, closedDefault));
+        try { shapes.push(buildShape(k, closedDefault, "keys[" + i + "]: ")); }
+        catch (eB) { return AELL_err(eB.message); }
+        var st = snap(Number(k.time));
+        if (Math.abs(st - Number(k.time)) > 1e-9) snapped++;
+        times.push(st);
       }
-      return AELL_okay({ layer: layer.name, mask: mask.name,
-        keysSet: args.keys.length, numKeys: pathProp.numKeys,
-        note: "Mask path animated" });
+      var want = animatedWith || shapes[0].vertices.length;
+      var wantFrom = animatedWith ? "the existing keys" : "keys[0]";
+      for (i = 0; i < shapes.length; i++) {
+        if (shapes[i].vertices.length !== want) {
+          return AELL_err(AELL_maskPointMix(mask.name, "keys[" + i + "]",
+            shapes[i].vertices.length, want, wantFrom));
+        }
+      }
+      // Snapping can drop two nearby requests onto the same frame, where
+      // the second silently overwrites the first: keysSet said 3, numKeys
+      // said 2, and nothing named the key that vanished.
+      var tol = fd ? fd * 0.5 : 1e-9;
+      for (i = 0; i < times.length; i++) {
+        for (j = i + 1; j < times.length; j++) {
+          if (Math.abs(times[i] - times[j]) < tol) {
+            return AELL_err("keys[" + i + "] (" + args.keys[i].time +
+              "s) and keys[" + j + "] (" + args.keys[j].time + "s) both " +
+              "land on the same frame of comp '" + comp.name + "'" +
+              (fd ? " (frame " + Math.round(times[i] / fd) + " at " + fps +
+                    " fps, one frame is " + r4(fd) + "s)" : "") +
+              " -- the later one would silently overwrite the earlier. " +
+              "Put them on different frames.");
+          }
+        }
+      }
+      var frames = [], keyTimes = [];
+      for (i = 0; i < shapes.length; i++) {
+        pathProp.setValueAtTime(times[i], shapes[i]);
+        frames.push(fd ? Math.round(times[i] / fd) : r4(times[i]));
+        keyTimes.push(r4(times[i]));
+      }
+      var res = { layer: layer.name, mask: mask.name,
+        keysSet: shapes.length, numKeys: pathProp.numKeys, points: want,
+        keyTimes: keyTimes, note: "Mask path animated" };
+      if (fd) res.keyFrames = frames;
+      if (snapped) {
+        res.snappedToFrames = snapped;
+        res.note = "Mask path animated; " + snapped + " key time(s) moved " +
+          "to the nearest frame of a " + fps + " fps comp";
+      }
+      // Keys that all hold the same shape are legal, and they read as an
+      // animation in every count this tool reports. Say so instead.
+      var moves = false;
+      for (i = 1; i < shapes.length && !moves; i++) {
+        for (j = 0; j < want; j++) {
+          if (shapes[i].vertices[j][0] !== shapes[0].vertices[j][0] ||
+              shapes[i].vertices[j][1] !== shapes[0].vertices[j][1]) {
+            moves = true;
+            break;
+          }
+        }
+      }
+      if (!moves) {
+        res.stillFrame = true;
+        res.note = "Keys written, but every key holds the SAME points -- " +
+          "the mask will not move. Give the keys different vertices.";
+      }
+      return AELL_okay(res);
     }
-    var shape = buildShape(args, closedDefault);
+    var shape;
+    try { shape = buildShape(args, closedDefault, ""); }
+    catch (eS) { return AELL_err(eS.message); }
     if (typeof args.atTime === "number") {
-      pathProp.setValueAtTime(args.atTime, shape);
-      return AELL_okay({ layer: layer.name, mask: mask.name,
-        keyframed: true, time: args.atTime, numKeys: pathProp.numKeys });
+      if (animatedWith && shape.vertices.length !== animatedWith) {
+        return AELL_err(AELL_maskPointMix(mask.name, "this shape",
+          shape.vertices.length, animatedWith, "the existing keys"));
+      }
+      var at = snap(Number(args.atTime));
+      pathProp.setValueAtTime(at, shape);
+      var one = { layer: layer.name, mask: mask.name, keyframed: true,
+        time: r4(at), numKeys: pathProp.numKeys,
+        points: shape.vertices.length };
+      if (fd) one.frame = Math.round(at / fd);
+      if (Math.abs(at - Number(args.atTime)) > 1e-9) {
+        one.note = "atTime " + args.atTime + " moved to the nearest frame " +
+          "of a " + fps + " fps comp";
+      }
+      return AELL_okay(one);
+    }
+    // A static setValue on top of keyframes is refused by AE with a
+    // message that never mentions the mask; name the real situation.
+    if (animatedWith) {
+      return AELL_err("Mask '" + mask.name + "' on '" + layer.name +
+        "' is already animated (" + pathProp.numKeys + " keyframes) -- a " +
+        "static path cannot replace them. Pass 'atTime' to add one " +
+        "keyframe, 'keys' to rewrite the animation, or clear it first " +
+        "with remove_keyframes.");
     }
     pathProp.setValue(shape);
     return AELL_okay({ layer: layer.name, mask: mask.name,

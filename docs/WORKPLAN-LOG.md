@@ -519,3 +519,89 @@ fix. Start from item 1 of `docs/WORKPLAN.md`.
   order) but it is not necessarily the order the user has in mind.
   Making the selection default `stack` would be a behaviour change to a
   shipped tool — flagging it rather than deciding it here.
+
+## 2026-08-21 — item 2: set_mask_path keyframes (does the mask ANIMATE?)
+
+- Changed: `extension/jsx/hostscript.jsx` — `set_mask_path` now refuses
+  keys whose point counts disagree (new `AELL_maskKeyPoints` /
+  `AELL_maskPointMix`), validates the WHOLE batch before writing any key,
+  snaps key times onto whole comp frames, refuses two keys that land on
+  the same frame, refuses a static path over an animated mask in its own
+  words, checks tangent lists are one-per-vertex, and reports `points`,
+  `keyTimes`, `keyFrames`, `snappedToFrames` and `stillFrame`.
+  `scripts/ae-selftest.jsx` — the setTimeout shim QUEUES and drains from
+  the top level instead of calling straight through.
+  `extension/js/selftest.js` — new `expectError` step kind (the suite
+  could not reach a single grounded refusal before) plus 17 steps in
+  their own 25 fps comp (`AELL Self-Test Mask`).
+  `tests/test-shape-mask-tools.js` +16 assertions and a stub that models
+  AE's constant-vertex-count behaviour; `tests/test-self-test.js` canned
+  mask host, an inverted-step check, and the flat-stack proof;
+  `extension/js/tools.js` doc. Bumped to 0.9.6.
+- Harness: 109/109 real AE (was 91). Stubbed suite 14/14.
+- Notes: the worst bug found so far, and it is not really a mask bug.
+  Feeding `set_mask_path` two keys with DIFFERENT point counts made AE
+  queue a modal warning ("deleting points or feathers from an animated
+  mask path deletes them from all keyframes… Preserve Constant Vertex and
+  Feather Count") that appears AFTER the script returns and DISABLES AE's
+  main window. Every later `AfterFX.exe -r` is then swallowed in silence
+  while the process still reports Responding=True — which is exactly what
+  happened to this pass: three probe runs and a one-line file-write test
+  all "succeeded" with exit 0 and produced nothing. A chat panel cannot
+  click that dialog, so one bad mask call ends the session. The dialog is
+  the same failure mode the 2026-08-20 09:41 entry warned about for
+  compile errors; the difference is that a TOOL can now cause it.
+  It also does not animate. Measured in a 30 fps comp: a 3-point key at
+  t=0 and a 5-point key at t=1 read back as the 5-point shape at every
+  sampled frame after the first — AE holds and POPS, it does not tween,
+  while numKeys read 2 and the tool returned "Mask path animated". The
+  old selftest step checked `keysSet === 2`, which is true either way.
+  Second real bug, same shape as the chunk fix: key times were stored
+  exactly as asked. 0.34s and 0.71s in a 30 fps comp landed on frames
+  10.2 and 21.3, and frame 21 then read 197.3px instead of the 200 that
+  was asked for — the requested shape is on no renderable frame at all.
+  Times now snap to the nearest frame, and two requests that collide on
+  one frame are refused instead of one key silently vanishing (keysSet
+  said 3, numKeys said 2, and nothing named the key that was lost).
+  Third: the write loop was not atomic. A bad key in the middle left the
+  earlier ones on the property, so a refusal still changed the animation.
+  Measured pre-fix: the mismatch step left numKeys at 4 instead of 3.
+  How "does it animate" is measured at all: there is no tool that moves
+  the playhead and `keyValue` only returns the keys themselves, so the
+  suite hangs a probe null on
+  `thisComp.layer("X").mask("Y").maskPath.points(t)[1]` and reads its
+  Position — the mask shape at an arbitrary time, as an exact number.
+  Proven to catch the regression, not just to pass: the pre-fix host
+  scores 102/109 in real AE, failing exactly the 7 new mask steps
+  ("expected a refusal, but the tool accepted the call"; "vertex 1 sits
+  at x=265.81 on frame 10, not 280"; "numKeys 4, not 3"; and AE's own
+  raw "Can not call setValue() on a property with keyframes"). The stub
+  suite fails 10 assertions.
+  Stub fidelity: the stubbed comp had no frame rate (again), the stubbed
+  Prop had no `valueAtTime` at all — so "does it interpolate" was a
+  question CI could not even ask — and `setValue` never threw on a keyed
+  property. All three are modelled now, including a module-level
+  `AE_MODALS` list: any stubbed call that would have raised AE's modal
+  pushes onto it, and the suite fails if anything is left there. That is
+  the assertion that maps a CI failure onto "you just froze After
+  Effects".
+  One thing I could not pin down and am not claiming: AE raised the modal
+  the FIRST time a mismatched write happened in a session, but the
+  pre-fix harness run later did the same thing without blocking. It looks
+  session-deduplicated. The refusal does not depend on how often it
+  fires, but do not read "no dialog this time" as "it is safe".
+- Also fixed, because it stopped the suite dead: adding these steps took
+  the suite past ~100 and the CLI runner died with "Stack overrun". Its
+  setTimeout shim ran `fn()` on the spot, and `selftest.js` ends each
+  step with `setTimeout(step)`, so every step nested inside the previous
+  one — a suite-length limit nobody knew was there, presenting as a
+  crash rather than a failing step. The shim now queues and a top-level
+  loop drains it, so depth is flat at any length.
+  `tests/test-self-test.js` proves both halves: the queue stays one frame
+  deep, and the old pass-through nests once per step (109 for 109).
+- FOR THE REMOTE SESSION, one thing this pass deliberately did not build:
+  refusing mismatched point counts is the honest call, but it does mean a
+  deliberate POP (a hard cut between two different shapes) is now
+  unreachable through this tool. If that is wanted it belongs behind an
+  explicit arg, and it should still refuse when it would raise the modal
+  — an intentional pop is not worth a frozen application.
