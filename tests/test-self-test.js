@@ -20,10 +20,23 @@ const toolsSrc = fs.readFileSync(path.join(__dirname, "..", "extension",
                                             "js", "tools.js"), "utf8");
 const steps = SelfTest._buildSteps();
 assert(steps.length >= 20, "suite has " + steps.length + " steps (>= 20)");
+function documented(name) {
+  return toolsSrc.includes('name: "' + name + '"');
+}
+// A {batch: [...]} step has no single .tool -- it names one per command,
+// and a deliberately bogus one is part of what it measures.
+function stepTools(s) {
+  if (!s.batch) return [s.tool];
+  const cmds = typeof s.batch === "function" ? s.batch({ unComp: "C" })
+                                             : s.batch;
+  return cmds.map(c => c.tool).filter(t => t !== "not_a_real_tool");
+}
 let unknown = [];
 for (const s of steps) {
-  if (!toolsSrc.includes('name: "' + s.tool + '"')) unknown.push(s.tool);
+  for (const t of stepTools(s)) if (!documented(t)) unknown.push(t);
 }
+assert(steps.filter(s => s.batch).length >= 2,
+       "the suite exercises the multi-tool batch call");
 assert(unknown.length === 0,
        "every step targets a documented tool" +
        (unknown.length ? " (unknown: " + unknown.join(", ") + ")" : ""));
@@ -49,6 +62,14 @@ let maskKeys = {};
 let batchLayers = 0;
 let batchFx = {};
 let batchBlur = null;
+
+// The batch-call rig asks whether commands after a FAILING one still ran,
+// so the canned host has to know which layers exist in that comp -- a stub
+// that accepted any layer name would answer the question for free.
+let batSolids = [];
+let batSolidFx = {};
+let batSolidPos = {};
+const inBatComp = a => !!(a && /Undo/.test(a.comp || ""));
 
 // for_each_layer's whole job is deciding which tools it may drive. Rather
 // than paraphrasing that rule here — which would let the suite expect a
@@ -153,6 +174,12 @@ function cannedOk(tool, args) {
                note: "Stacking changed only" };
     }
     case "get_comp_details": {
+      if (inBatComp(args)) {
+        return { name: args.comp, numLayers: batSolids.length,
+                 layers: batSolids.map((nm, i) => ({
+                   index: i + 1, name: nm,
+                   effects: batSolidFx[nm] ? [batSolidFx[nm]] : [] })) };
+      }
       if (args && /Batch/.test(args.comp || "")) {
         const ls = [];
         for (let i = 1; i <= batchLayers; i++) {
@@ -169,6 +196,12 @@ function cannedOk(tool, args) {
       return { sliders: ["Grid X Spacing", "Grid Y Spacing",
                          "Grid Columns"] };
     case "get_property":
+      // The batch rig reads back the write that came AFTER a failing
+      // command. Padded to three components, the way real AE answers.
+      if (inBatComp(args) && batSolidPos[args.layer]) {
+        const bp = batSolidPos[args.layer];
+        return { value: [bp[0], bp[1], 0] };
+      }
       // Position on a 2D layer: the scripting API pads the value to 3
       // components ([x, y, 0]) even though the expression engine sees
       // 2 — model that faithfully, and give the two grid squares
@@ -316,7 +349,39 @@ function cannedOk(tool, args) {
       return { scaleFactor: 0.5, layersScaled: 6, layersInherited: 1,
                parentedCamerasRezoomed: ["ST Cam Kid"] };
     case "add_solid":
+      if (inBatComp(args)) batSolids.push(args.name);
       return { name: (args && args.name) || "ST Square" };
+    case "apply_effect":
+      if (inBatComp(args)) {
+        if (batSolids.indexOf(args.layer) === -1) {
+          return { __err: "No layer '" + args.layer + "' in '" +
+            args.comp + "' -- it holds: " + batSolids.join(", ") };
+        }
+        batSolidFx[args.layer] = args.effect;
+        return { layer: args.layer, effect: args.effect };
+      }
+      return { done: true };
+    case "set_transform":
+      if (inBatComp(args)) {
+        if (batSolids.indexOf(args.layer) === -1) {
+          return { __err: "No layer '" + args.layer + "' in '" +
+            args.comp + "' -- it holds: " + batSolids.join(", ") };
+        }
+        // AE takes {property, value} here, NOT {position: [...]}. The stub
+        // used to accept either, so a malformed step passed CI and only
+        // failed in real AE -- which is exactly what happened.
+        const OK = ["position", "scale", "rotation", "opacity",
+                    "anchorPoint"];
+        if (OK.indexOf(args.property) === -1) {
+          return { __err: "'property' must be one of: " + OK.join(", ") };
+        }
+        if (args.property === "position") {
+          batSolidPos[args.layer] = args.value;
+        }
+        return { layer: args.layer, property: args.property,
+                 value: args.value };
+      }
+      return { done: true };
     case "add_text_layer":
       textStyle = { fontSize: args && args.fontSize,
                     font: "StubFont-Regular",
@@ -366,6 +431,21 @@ function cannedOk(tool, args) {
   }
 }
 
+function cannedResult(tool, args) {
+  if (!documented(tool)) return { ok: false, error: "Unknown tool: " + tool };
+  const d = cannedOk(tool, args);
+  return d && d.__err ? { ok: false, error: d.__err } : { ok: true, data: d };
+}
+
+// Many tools in ONE host call. Faithful to AELL_callBatch on two points
+// the suite measures: one row per command, in order, and a failing row
+// does NOT stop the commands behind it.
+const batchCalls = [];
+function cannedBatch(cmds, cb) {
+  batchCalls.push(cmds.length);
+  cb(cmds.map(c => cannedResult(c.tool, c.args || {})));
+}
+
 // 2. happy path: all steps pass, cleanup (delete_item) runs last
 const calls = [];
 SelfTest.run({
@@ -373,9 +453,9 @@ SelfTest.run({
     calls.push(tool);
     assert(args && typeof args === "object",
            "args object for " + tool);
-    const d = cannedOk(tool, args);
-    cb(d && d.__err ? { ok: false, error: d.__err } : { ok: true, data: d });
+    cb(cannedResult(tool, args));
   },
+  callHostBatch: cannedBatch,
   onLine() {},
   onDone(res) {
     assert(res.passed === res.total,
@@ -394,15 +474,14 @@ SelfTest.run({
     ordStack = [];
     maskKeys = {};
     batchLayers = 0; batchFx = {}; batchBlur = null;
+    batSolids = []; batSolidFx = {}; batSolidPos = {};
     SelfTest.run({
       callHostTool(tool, args, cb) {
         if (tool === "grid_layout") {
           cb({ ok: false, error: "boom" });
           return;
         }
-        const d2 = cannedOk(tool, args);
-        cb(d2 && d2.__err ? { ok: false, error: d2.__err }
-                          : { ok: true, data: d2 });
+        cb(cannedResult(tool, args));
       },
       onLine() {},
       onDone(res2) {
@@ -424,6 +503,7 @@ SelfTest.run({
         ordStack = [];
         maskKeys = {};
         batchLayers = 0; batchFx = {}; batchBlur = null;
+        batSolids = []; batSolidFx = {}; batSolidPos = {};
         SelfTest.run({
           callHostTool(tool, args, cb) {
             // Never refuse anything -- the old permissive host.

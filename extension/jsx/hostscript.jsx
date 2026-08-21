@@ -3738,23 +3738,35 @@ var AELL_MUTATING = {
 
 // --------------------------------------------------------------- entry point
 
+/* Run one tool with NO undo group of its own. The caller owns the group,
+ * which is what lets a batch put many tools inside a single Ctrl+Z.
+ * Never throws: a tool that blows up comes back as a normal error result. */
+function AELL_runTool(toolName, args) {
+  try {
+    var tool = AELL_TOOLS[toolName];
+    if (!tool) return AELL_err("Unknown tool: " + toolName);
+    return tool(args);
+  } catch (e) {
+    return AELL_err(e && e.message ? e.message : String(e));
+  }
+}
+
 function AELL_call(toolName, argsJson) {
   var result;
   try {
-    var tool = AELL_TOOLS[toolName];
-    if (!tool) {
+    if (!AELL_TOOLS[toolName]) {
       result = AELL_err("Unknown tool: " + toolName);
     } else {
       var args = AELLJSON.parse(argsJson);
       if (AELL_MUTATING[toolName]) {
         app.beginUndoGroup("AE Llama: " + toolName);
         try {
-          result = tool(args);
+          result = AELL_runTool(toolName, args);
         } finally {
           app.endUndoGroup();
         }
       } else {
-        result = tool(args);
+        result = AELL_runTool(toolName, args);
       }
     }
   } catch (e) {
@@ -3768,6 +3780,61 @@ function AELL_call(toolName, argsJson) {
 }
 
 $.global.AELL_call = AELL_call;
+
+/* Run several tools inside ONE undo group, so a chat command that takes
+ * five tool calls costs the user ONE Ctrl+Z instead of five.
+ *
+ * This has to be one call because an undo group does NOT survive the end
+ * of the script execution that opened it (measured in AE 2026: open a
+ * group in one evalScript, change something in the next, and the first
+ * change is already in its own step). Bracketing the round with separate
+ * begin/end calls therefore cannot work -- the tools must run together.
+ *
+ * Takes '[{tool, args}, ...]', returns '{ok, results: [...]}' with one
+ * result per command, in order, whatever each one's outcome was. */
+function AELL_callBatch(commandsJson) {
+  var out;
+  try {
+    var cmds = AELLJSON.parse(commandsJson);
+    // A JSON string has a .length too, so ask what it really is.
+    if (Object.prototype.toString.call(cmds) !== "[object Array]") {
+      return '{"ok":false,"error":"AELL_callBatch wants [{tool, args}, ' +
+             '...]"}';
+    }
+    var results = [];
+    var mutates = false;
+    var first = "";
+    for (var i = 0; i < cmds.length; i++) {
+      var n = String((cmds[i] || {}).tool || "");
+      if (!first && n) first = n;
+      if (AELL_MUTATING[n]) mutates = true;
+    }
+    var run = function () {
+      for (var j = 0; j < cmds.length; j++) {
+        var c = cmds[j] || {};
+        results.push(AELL_runTool(String(c.tool || ""), c.args || {}));
+      }
+    };
+    if (mutates) {
+      var label = "AE Llama: " + (first || "batch");
+      if (cmds.length > 1) label += " +" + (cmds.length - 1) + " more";
+      app.beginUndoGroup(label);
+      try { run(); } finally { app.endUndoGroup(); }
+    } else {
+      run();
+    }
+    out = AELL_okay({ results: results });
+  } catch (e) {
+    out = AELL_err(e && e.message ? e.message : String(e));
+  }
+  try {
+    return AELLJSON.stringify(out);
+  } catch (e2) {
+    return '{"ok":false,"error":"Failed to serialize batch result"}';
+  }
+}
+
+$.global.AELL_callBatch = AELL_callBatch;
 
 /* Called by the panel when a NEW user request starts — comp-name aliases
  * are scoped to one request, deterministically, with no timers. */

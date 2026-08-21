@@ -768,3 +768,92 @@ fix. Start from item 1 of `docs/WORKPLAN.md`.
   `app.project.close(CloseOptions.DO_NOT_SAVE_CHANGES)` + `app.newProject()`
   from a `-r` script, never `Stop-Process` (see the 2026-08-21 harness
   entry: a hard kill is what brings up the startup recovery dialog).
+
+## 2026-08-21 — item 4: undo hygiene (one chat command, one Ctrl+Z)
+
+- Changed: `extension/jsx/hostscript.jsx` — factored `AELL_runTool` out of
+  `AELL_call` (run a tool with NO undo group of its own) and added
+  `$.global.AELL_callBatch(commandsJson)`, which runs `[{tool, args}, ...]`
+  inside ONE undo group and returns one result row per command. It is not
+  in `AELL_TOOLS`, so the model can never call it.
+  `extension/js/tools.js` — `executeCommands` now fuses CONSECUTIVE host
+  commands into a single `AELL_callBatch`; panel-side tools (comfy_*),
+  unknown names, malformed commands and dry-run stubs each end the current
+  run and are still handled one at a time. New `callHostBatch`, and the
+  two U+2028/U+2029 escapers collapsed into one `jsxJsonLiteral`.
+  `extension/js/selftest.js` — steps may now be `{batch: [...]}`;
+  `extension/js/main.js` + `scripts/ae-selftest.jsx` pass `callHostBatch`
+  (it is optional — a runner without it falls back to one call per command,
+  so order and per-command outcomes are still checked).
+  New `tests/test-undo-groups.js` (56 assertions). Bumped to 0.9.9.
+- Harness: 130/130 real AE (was 124). Stubbed suite 17/17 files.
+- Notes: the workplan bullet as written — "verify for the batch tools" —
+  came back GREEN, and measuring it is what found the real bug next door.
+  Probe: run the tool, snapshot the comp, `app.executeCommand(16)` once,
+  compare. All thirteen that ran reverted in exactly ONE step:
+  grid_layout(6), set_keyframes(6 layers), stagger_layers(6),
+  distribute_property(6), for_each_layer apply_effect(6),
+  duplicate_layer(3), reorder_layers, scale_comp(0.5),
+  split_layer_into_chunks, set_track_matte, precompose(2), add_mask,
+  center_anchor_point. So no single tool was ever the problem.
+  Three AE facts measured on the way, in the order they killed my theories.
+  (1) `AELL_MUTATING` is complete — 48 entries, 5 read tools, no ghosts —
+  so the "a tool missing from the hand-maintained list costs many undos"
+  theory had nothing to hang on. (2) Worse for it: with `grid_layout`
+  DELETED from `AELL_MUTATING` at runtime, the call still cost exactly ONE
+  Ctrl+Z. AE implicitly groups a whole script execution, so the explicit
+  group only supplies the Edit-menu LABEL. Anyone tempted to "fix" undo by
+  auditing that table should read this paragraph first.
+  (3) The one that decided the design: an undo group does NOT survive the
+  end of the script execution that opened it. Two `-r` runs, group opened
+  and P1 moved in the first, P2 moved and `endUndoGroup()` called in the
+  second: one undo brought back P2 only, P1 stayed put. So bracketing a
+  chat round with separate begin/end evalScripts — the obvious fix, and the
+  one I would have shipped blind — cannot work. Tools that must share a
+  Ctrl+Z have to run in ONE call.
+  Which is the actual bug: `executeCommands` ran up to 20 commands as 20
+  separate `evalScript`s, so "make a 4x4 grid of squares and fade them in"
+  cost the user one Ctrl+Z per tool call, each labelled with a tool name
+  they never typed. Now it is one, labelled "AE Llama: add_solid +4 more".
+  Deliberate trade, written down because it is a real loss: `shouldStop`
+  (user cancel) is now checked between RUNS, not between every command. A
+  fused run of host tools is uninterruptible. It is worth it — the slow
+  part of a round is the model, not the tools (60 layers of apply_effect
+  is 89 ms, from the for_each_layer pass), and cancelling between two 5 ms
+  writes buys nothing while a half-applied round costs the user their undo.
+  Proven to catch the regression, not just to pass: restore the per-command
+  path (`batchable` returns false) and 8 assertions fail, starting with
+  "five host commands cost ONE evalScript (got 5)"; drop the group from
+  `AELL_callBatch` and 4 fail, including "FOUR tools cost ONE undo group
+  (got 0)". Both re-verified after the file was made to fail softly rather
+  than throw.
+  Stub fidelity, and the one that earned its keep: the first harness run
+  came back 128/130 because `set_transform` takes `{property, value}`, not
+  `{position: [...]}` — but `tests/test-self-test.js` had accepted my
+  malformed step, because its canned host read `args.position` and asked
+  nothing. The stub was more permissive than AE, which is the exact failure
+  mode these files exist to prevent. It now rejects any `property` outside
+  AE's own list; put the bad step back and CI drops to 128/130 too.
+  `tests/test-undo-groups.js` also cross-checks the two hand-maintained
+  "this tool mutates" tables (hostscript's `AELL_MUTATING` and tools.js's
+  `mutating:` flags) against each other and against `AELL_TOOLS`, so a tool
+  added to one and not the other is caught — that drift costs an undo
+  label on the host side and a wrong dry-run decision on the panel side.
+  Found and fixed while writing the test: my own `AELL_callBatch` guard was
+  `typeof cmds.length !== "number"`, which a JSON *string* passes — so
+  `AELL_callBatch('"not an array"')` ran twelve one-character "commands"
+  and returned ok. It asks `Object.prototype.toString` now.
+- FOR THE REMOTE SESSION, one thing measured and NOT built: a chat round
+  that MIXES host tools with a `comfy_generate` still costs one Ctrl+Z per
+  run, because a panel-side tool has to break the fusion — it is async and
+  imports its result into AE itself. Two runs of host tools around one
+  generation is three undo steps. Fixing that means giving panel tools a
+  way to join a host undo group across an await, which the measurement
+  above says is impossible in the current shape; it needs a design, not a
+  patch.
+- Housekeeping: the probe scripts were deliberate `-r` runs against the
+  live scratch project and cleaned up after themselves (comps named
+  "AELL Undo Probe*" are removed by the probes; the harness's own
+  "AELL Self-Test Undo" comp is deleted by its cleanup step). The
+  ungrouped-`grid_layout` experiment restored `AELL_MUTATING.grid_layout`
+  in the same run — it was a runtime `delete`, never a file edit.

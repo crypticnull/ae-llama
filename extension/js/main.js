@@ -984,6 +984,7 @@
       els.settingsDrawer.classList.add("hidden");
       global.SelfTest.run({
         callHostTool: global.Tools.callHostTool,
+        callHostBatch: global.Tools.callHostBatch,
         onLine: function (t) { appendMsg("info", t); },
         onDone: function (res) {
           appendMsg(res.passed === res.total ? "info" : "error", res.text);

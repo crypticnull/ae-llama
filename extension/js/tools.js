@@ -2,9 +2,14 @@
  * tools.js — the allowlisted bridge between the model and After Effects.
  *
  * The model never emits raw ExtendScript. It emits JSON commands
- * ({tool, args}) chosen from TOOL_DEFS; executeCommands() forwards each to
- * AELL_call() in jsx/hostscript.jsx, which implements the tools with undo
- * groups. Anything not in this list is rejected panel-side.
+ * ({tool, args}) chosen from TOOL_DEFS; executeCommands() forwards them to
+ * jsx/hostscript.jsx, which implements the tools with undo groups. Anything
+ * not in this list is rejected panel-side.
+ *
+ * Consecutive host tools go out as ONE AELL_callBatch, so a chat command
+ * that takes five tool calls is a single Ctrl+Z rather than five. It has to
+ * be one call: an undo group does not survive the end of the script
+ * execution that opened it.
  */
 (function (global) {
   "use strict";
@@ -704,18 +709,22 @@
     }
   };
 
+  /** JSON, as an ExtendScript string literal holding that JSON. */
+  function jsxJsonLiteral(value) {
+    // U+2028/U+2029 are legal raw inside modern JSON.stringify output but
+    // are line terminators to ExtendScript (ES3) — they'd kill the eval.
+    return JSON.stringify(JSON.stringify(value))
+      .replace(/\u2028/g, "\\u2028")
+      .replace(/\u2029/g, "\\u2029");
+  }
+
   /** Call one host tool. cb(resultObject) — never throws. */
   function callHostTool(tool, args, cb) {
     if (!isKnownTool(tool)) {
       cb({ ok: false, error: "Unknown tool: " + tool });
       return;
     }
-    var argsLiteral = JSON.stringify(JSON.stringify(args || {}));
-    // U+2028/U+2029 are legal raw inside modern JSON.stringify output but
-    // are line terminators to ExtendScript (ES3) — they'd kill the eval.
-    argsLiteral = argsLiteral
-      .replace(/\u2028/g, "\\u2028")
-      .replace(/\u2029/g, "\\u2029");
+    var argsLiteral = jsxJsonLiteral(args || {});
     var script = 'AELL_call("' + tool + '", ' + argsLiteral + ')';
     global.AEBridge.evalScript(script, function (result, isError) {
       if (isError) {
@@ -734,12 +743,49 @@
     });
   }
 
+  /** Call a run of host tools in ONE undo group. cb(resultsArray). */
+  function callHostBatch(cmds, cb) {
+    var payload = cmds.map(function (c) {
+      return { tool: c.tool, args: c.args || {} };
+    });
+    var argsLiteral = jsxJsonLiteral(payload);
+    global.AEBridge.evalScript(
+      "AELL_callBatch(" + argsLiteral + ")",
+      function (result, isError) {
+        function allFailed(err) {
+          cb(cmds.map(function () { return { ok: false, error: err }; }));
+        }
+        if (isError) {
+          allFailed("ExtendScript error (see AE) running a batch of " +
+                    cmds.length + " tools");
+          return;
+        }
+        var obj = null;
+        try { obj = JSON.parse(result); } catch (e) {}
+        var rows = obj && obj.data ? obj.data.results : null;
+        if (!obj || !obj.ok || !rows || rows.length !== cmds.length) {
+          allFailed("Bad host batch response: " +
+                    String(result).slice(0, 200));
+          return;
+        }
+        cb(rows);
+      });
+  }
+
   var MAX_COMMANDS_PER_ROUND = 20;
 
   /**
-   * Execute a command list sequentially.
+   * Execute a command list in order.
+   *
+   * Consecutive AE-host tools are sent as ONE batched call so the whole
+   * chat command collapses into a single Ctrl+Z. That has to happen in one
+   * evalScript: an undo group does not survive the end of the script
+   * execution that opened it, so per-tool calls can only ever be per-tool
+   * undo steps. Panel-side tools, malformed commands and dry-run stubs are
+   * still handled one at a time, and each of them ends the current run.
+   *
    * onEach(index, command, result) fires per command; done(results) at end.
-   * opts: {dryRun?: bool, shouldStop?: fn -> bool (checked between commands)}
+   * opts: {dryRun?: bool, shouldStop?: fn -> bool (checked between runs)}
    */
   function executeCommands(commands, opts, onEach, done) {
     opts = opts || {};
@@ -748,6 +794,23 @@
     if (commands.length > MAX_COMMANDS_PER_ROUND) {
       commands = commands.slice(0, MAX_COMMANDS_PER_ROUND);
     }
+
+    // A command can join a batched host run only if it goes to the host
+    // unconditionally — anything the panel answers itself would lose its
+    // turn order if it were folded into the host call.
+    function batchable(cmd) {
+      return cmd && typeof cmd.tool === "string" && isKnownTool(cmd.tool) &&
+        !Object.prototype.hasOwnProperty.call(PANEL_TOOLS, cmd.tool) &&
+        !(dryRun && MUTATING[cmd.tool]);
+    }
+
+    function deliver(startIndex, rows) {
+      for (var k = 0; k < rows.length; k++) {
+        results.push(rows[k]);
+        if (onEach) onEach(startIndex + k, commands[startIndex + k], rows[k]);
+      }
+    }
+
     function step(i) {
       if (i >= commands.length) { done(results); return; }
       if (opts.shouldStop && opts.shouldStop()) {
@@ -757,6 +820,21 @@
         return;
       }
       var cmd = commands[i] || {};
+
+      if (batchable(cmd)) {
+        var end = i + 1;
+        while (end < commands.length && batchable(commands[end])) end++;
+        var run = commands.slice(i, end);
+        var settledBatch = false;
+        callHostBatch(run, function (rows) {
+          if (settledBatch) return;
+          settledBatch = true;
+          deliver(i, rows);
+          step(end);
+        });
+        return;
+      }
+
       // A buggy tool must not be able to double-invoke the continuation —
       // that would fork the remaining command list and the chat round.
       var settled = false;
@@ -812,6 +890,7 @@
     RESPONSE_SCHEMA: RESPONSE_SCHEMA,
     buildSystemPrompt: buildSystemPrompt,
     callHostTool: callHostTool,
+    callHostBatch: callHostBatch,
     executeCommands: executeCommands,
     setProgressSink: function (fn) { progressSink = fn; }
   };

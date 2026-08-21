@@ -27,6 +27,9 @@
   // And the batch rig: 60 layers of its own, so a for_each_layer run
   // that misfires cannot touch the comps the other groups measure.
   var BTCOMP = "AELL Self-Test Batch";
+  // And the batch-CALL rig (many tools in one host call, one Ctrl+Z): a
+  // batch that misfires must not be able to reach the comps above.
+  var UNCOMP = "AELL Self-Test Undo";
   var running = false;
 
   /**
@@ -1505,6 +1508,106 @@
           return /discarded/.test(e) || "message was: " + e;
         } },
 
+      // ---- one host call, many tools: what makes a chat command ONE
+      // Ctrl+Z. An undo group does not survive the end of the script
+      // execution that opened it (measured in AE 2026), so the panel fuses
+      // a round's consecutive tools into a single AELL_callBatch instead of
+      // bracketing them. These steps prove the batch entry point really
+      // runs them, in order, with each command's own outcome. Its own comp,
+      // so a batch that misfires cannot touch the groups above.
+      { name: "create the batch-call comp",
+        tool: "create_comp",
+        args: { name: UNCOMP, width: 320, height: 240, duration: 4,
+                frameRate: 30 },
+        check: function (d, ctx) { ctx.unComp = d.name; return true; } },
+
+      { name: "one call runs three tools in order",
+        batch: function (ctx) {
+          return [
+            { tool: "add_solid",
+              args: { comp: ctx.unComp, name: "ST Bat A", color: [1, 0, 0],
+                      width: 40, height: 40 } },
+            { tool: "add_solid",
+              args: { comp: ctx.unComp, name: "ST Bat B", color: [0, 1, 0],
+                      width: 40, height: 40 } },
+            { tool: "apply_effect",
+              args: { comp: ctx.unComp, layer: "ST Bat A",
+                      effect: "Gaussian Blur" } }
+          ];
+        },
+        check: function (rows) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + i + " failed: " + rows[i].error;
+          }
+          return rows[0].data.name === "ST Bat A" &&
+                 rows[1].data.name === "ST Bat B" ||
+                 "rows came back out of order: " + rows[0].data.name + ", " +
+                 rows[1].data.name;
+        } },
+
+      { name: "the batched tools really landed in AE",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.unComp }; },
+        check: function (d) {
+          var names = [], withFx = [];
+          for (var i = 0; i < d.layers.length; i++) {
+            names.push(d.layers[i].name);
+            if (d.layers[i].effects && d.layers[i].effects.length) {
+              withFx.push(d.layers[i].name);
+            }
+          }
+          if (names.join(",").indexOf("ST Bat A") === -1 ||
+              names.join(",").indexOf("ST Bat B") === -1) {
+            return "expected both solids, comp holds " + names.join(", ");
+          }
+          return withFx.join(",") === "ST Bat A" ||
+                 "expected the effect on ST Bat A only, got " +
+                 (withFx.join(", ") || "none");
+        } },
+
+      { name: "a failing command does not abort the rest of the batch",
+        batch: function (ctx) {
+          return [
+            { tool: "set_transform",
+              args: { comp: ctx.unComp, layer: "ST Bat A",
+                      property: "position", value: [100, 100] } },
+            { tool: "apply_effect",
+              args: { comp: ctx.unComp, layer: "ST No Such Layer",
+                      effect: "Gaussian Blur" } },
+            { tool: "not_a_real_tool", args: {} },
+            { tool: "set_transform",
+              args: { comp: ctx.unComp, layer: "ST Bat B",
+                      property: "position", value: [200, 200] } }
+          ];
+        },
+        check: function (rows) {
+          if (!rows[0].ok) return "first command failed: " + rows[0].error;
+          if (rows[1].ok) return "a missing layer was accepted";
+          if (rows[2].ok) return "an unknown tool name was accepted";
+          if (!/Unknown tool/.test(String(rows[2].error))) {
+            return "unknown tool not named: " + rows[2].error;
+          }
+          return rows[3].ok ||
+                 "the command AFTER the failures never ran: " + rows[3].error;
+        } },
+
+      { name: "the write after the failed command is really in the comp",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.unComp, layer: "ST Bat B",
+                   property: "transform/Position" };
+        },
+        check: function (d) {
+          var v = d.value || [];
+          return (v[0] === 200 && v[1] === 200) ||
+                 "position is " + JSON.stringify(v) + ", expected [200, 200]";
+        } },
+
+      { name: "cleanup: delete the batch-call comp",
+        tool: "delete_item",
+        args: function (ctx) { return { item: ctx.unComp }; },
+        check: function () { return true; } },
+
       { name: "cleanup: delete the batch comp",
         tool: "delete_item",
         args: function (ctx) { return { item: ctx.btComp }; },
@@ -1543,9 +1646,16 @@
   }
 
   /**
-   * Run the suite. deps: {callHostTool, onLine(text), onDone(summary)}.
+   * Run the suite. deps: {callHostTool, callHostBatch?, onLine(text),
+   * onDone(summary)}.
    * Sequential; a step failure is recorded and the run continues (cleanup
    * still happens last).
+   *
+   * callHostBatch(commands, cb) sends several tools in ONE host call, which
+   * is how a whole chat command becomes a single Ctrl+Z. It is optional: a
+   * runner that does not provide it falls back to one call per command, so
+   * the ORDER and per-command outcomes are still checked — only the shared
+   * undo group is not.
    */
   function run(deps) {
     if (running) {
@@ -1575,9 +1685,61 @@
       deps.onDone({ passed: passed, total: results.length, text: summary });
     }
 
+    // Record one step's verdict and move on. `verdict` is true or a
+    // failure detail; `hardFail` short-circuits check() entirely.
+    function settle(s, verdict, hardFail) {
+      if (hardFail !== null && typeof hardFail !== "undefined") {
+        results.push({ name: s.name, ok: false, detail: hardFail });
+        deps.onLine("FAIL — " + s.name);
+      } else if (verdict === true) {
+        results.push({ name: s.name, ok: true });
+      } else {
+        results.push({ name: s.name, ok: false, detail: String(verdict) });
+        deps.onLine("FAIL — " + s.name + " (" + verdict + ")");
+      }
+      // Yield between steps so the panel stays responsive.
+      global.setTimeout(step, 30);
+    }
+
+    // A {batch: [...]} step hands check() the raw result ROWS: a batch is
+    // about what each command did, so a failing row is data, not a stop.
+    function runBatch(s, cmds) {
+      function done(rows) {
+        var verdict = null, hardFail = null;
+        if (!rows || rows.length !== cmds.length) {
+          hardFail = "expected " + cmds.length + " result rows, got " +
+                     (rows ? rows.length : "none");
+        } else {
+          try { verdict = s.check(rows, ctx); }
+          catch (eB) { verdict = "check error: " + eB.message; }
+        }
+        settle(s, verdict, hardFail);
+      }
+      if (deps.callHostBatch) { deps.callHostBatch(cmds, done); return; }
+      var rows = [];
+      (function one(i) {
+        if (i >= cmds.length) { done(rows); return; }
+        deps.callHostTool(cmds[i].tool, cmds[i].args || {}, function (r) {
+          rows.push(r || { ok: false, error: "no result" });
+          one(i + 1);
+        });
+      })(0);
+    }
+
     function step() {
       if (idx >= steps.length) { finish(); return; }
       var s = steps[idx++];
+      if (s.batch) {
+        var cmds;
+        try {
+          cmds = typeof s.batch === "function" ? s.batch(ctx) : s.batch;
+        } catch (eBA) {
+          settle(s, "batch error: " + eBA.message, null);
+          return;
+        }
+        runBatch(s, cmds);
+        return;
+      }
       var args;
       try {
         args = typeof s.args === "function" ? s.args(ctx) : s.args;
@@ -1606,17 +1768,7 @@
           try { verdict = s.check(r.data || {}, ctx); }
           catch (eC) { verdict = "check error: " + eC.message; }
         }
-        if (hardFail !== null) {
-          results.push({ name: s.name, ok: false, detail: hardFail });
-          deps.onLine("FAIL — " + s.name);
-        } else if (verdict === true) {
-          results.push({ name: s.name, ok: true });
-        } else {
-          results.push({ name: s.name, ok: false, detail: String(verdict) });
-          deps.onLine("FAIL — " + s.name + " (" + verdict + ")");
-        }
-        // Yield between steps so the panel stays responsive.
-        global.setTimeout(step, 30);
+        settle(s, verdict, hardFail);
       });
     }
 
