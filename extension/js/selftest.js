@@ -1939,6 +1939,144 @@
                  "position is " + JSON.stringify(v) + ", expected [200, 200]";
         } },
 
+      // ---- rolling back a round that failed PART WAY.
+      //
+      // The field bug: duplicate_layer errored because add_solid had not
+      // made the source layer yet, add_solid succeeded anyway, and the
+      // model — seeing a failed round — redid the whole thing, leaving
+      // TEN squares where nine were asked for. Every tool had behaved
+      // correctly; nothing undid the half that landed.
+      //
+      // Measured in AE 2026 before this shipped (WORKPLAN-LOG 2026-08-25):
+      // an EMPTY undo group registers nothing, so one Undo would reach
+      // the user's own previous edit — which is why the batch writes a
+      // net-zero sentinel first. The Undo is issued inside the same
+      // script execution that made the changes, exactly once, and a
+      // fingerprint mismatch is answered with a single Redo rather than
+      // a second Undo.
+      { name: "create the rollback comp",
+        tool: "create_comp",
+        args: { name: "ST Rollback", width: 320, height: 240, duration: 4,
+                frameRate: 30 },
+        check: function (d, ctx) { ctx.rbComp = d.name; return true; } },
+
+      { name: "an armed round that fails part way is rolled back",
+        batchOpts: { rollback: true },
+        batch: function (ctx) {
+          return [
+            { tool: "duplicate_layer",
+              args: { comp: ctx.rbComp, layer: "ST No Source", count: 3 } },
+            { tool: "add_solid",
+              args: { comp: ctx.rbComp, name: "ST RB Orphan",
+                      color: [1, 0, 0], width: 40, height: 40 } }
+          ];
+        },
+        check: function (rows) {
+          if (rows[1].ok) {
+            return "the command that succeeded is still reported ok, so " +
+                   "the model would build on a layer that no longer exists";
+          }
+          if (!rows[0].rolledBack || !rows[1].rolledBack) {
+            return "rows not marked rolledBack: " +
+                   JSON.stringify(rows[0]).slice(0, 140);
+          }
+          return /ROLLED BACK/.test(String(rows[0].error)) ||
+                 "no explanation for the model: " + rows[0].error;
+        } },
+
+      { name: "and the comp is empty again — no orphan left behind",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.rbComp }; },
+        check: function (d) {
+          if (!d.layers.length) return true;
+          var names = [];
+          for (var i = 0; i < d.layers.length; i++) names.push(d.layers[i].name);
+          return "expected an empty comp, it holds " + names.join(", ");
+        } },
+
+      { name: "the SAME round unarmed leaves its debris (what changed)",
+        batch: function (ctx) {
+          return [
+            { tool: "duplicate_layer",
+              args: { comp: ctx.rbComp, layer: "ST No Source", count: 3 } },
+            { tool: "add_solid",
+              args: { comp: ctx.rbComp, name: "ST RB Orphan",
+                      color: [1, 0, 0], width: 40, height: 40 } }
+          ];
+        },
+        check: function (rows) {
+          if (rows[0].ok) return "duplicate_layer should have failed";
+          if (rows[0].rolledBack) return "an unarmed round was rolled back";
+          return rows[1].ok ||
+                 "add_solid should still have run: " + rows[1].error;
+        } },
+
+      { name: "so the orphan IS there when nothing rolls it back",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.rbComp }; },
+        check: function (d) {
+          return (d.layers.length === 1 &&
+                  d.layers[0].name === "ST RB Orphan") ||
+                 "expected the one orphan, comp holds " + d.layers.length +
+                 " layer(s)";
+        } },
+
+      { name: "an armed round where everything works is left alone",
+        batchOpts: { rollback: true },
+        batch: function (ctx) {
+          return [
+            { tool: "add_solid",
+              args: { comp: ctx.rbComp, name: "ST RB Keep A",
+                      color: [0, 1, 0], width: 40, height: 40 } },
+            { tool: "add_solid",
+              args: { comp: ctx.rbComp, name: "ST RB Keep B",
+                      color: [0, 0, 1], width: 40, height: 40 } }
+          ];
+        },
+        check: function (rows) {
+          if (!rows[0].ok || !rows[1].ok) {
+            return "a plain round failed: " + (rows[0].error || rows[1].error);
+          }
+          return (!rows[0].rolledBack && !rows[1].rolledBack) ||
+                 "a fully successful round was rolled back";
+        } },
+
+      { name: "a failing READ does not throw the round's real work away",
+        batchOpts: { rollback: true },
+        batch: function (ctx) {
+          return [
+            { tool: "add_solid",
+              args: { comp: ctx.rbComp, name: "ST RB Survivor",
+                      color: [1, 1, 0], width: 40, height: 40 } },
+            { tool: "get_property",
+              args: { comp: ctx.rbComp, layer: "ST No Such Layer",
+                      property: "transform/Position" } }
+          ];
+        },
+        check: function (rows) {
+          if (!rows[0].ok) return "add_solid failed: " + rows[0].error;
+          if (rows[0].rolledBack) {
+            return "a bad lookup threw away real work — read-only " +
+                   "failures must not trigger a rollback";
+          }
+          return !rows[1].ok || "the missing layer was accepted";
+        } },
+
+      { name: "and the survivor is really still in the comp",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.rbComp }; },
+        check: function (d) {
+          var names = [];
+          for (var i = 0; i < d.layers.length; i++) names.push(d.layers[i].name);
+          return names.join(",").indexOf("ST RB Survivor") !== -1 ||
+                 "survivor missing, comp holds " + (names.join(", ") || "nothing");
+        } },
+
+      { name: "cleanup: delete the rollback comp",
+        tool: "delete_item",
+        args: function (ctx) { return { item: ctx.rbComp }; },
+        check: function () { return true; } },
+
       { name: "cleanup: delete the batch-call comp",
         tool: "delete_item",
         args: function (ctx) { return { item: ctx.unComp }; },
@@ -2051,7 +2189,12 @@
         }
         settle(s, verdict, hardFail);
       }
-      if (deps.callHostBatch) { deps.callHostBatch(cmds, done); return; }
+      if (deps.callHostBatch) {
+        // s.batchOpts arms the host's partial-round rollback for this
+        // step. Both runners take (cmds, opts, cb).
+        deps.callHostBatch(cmds, s.batchOpts || {}, done);
+        return;
+      }
       var rows = [];
       (function one(i) {
         if (i >= cmds.length) { done(rows); return; }

@@ -209,7 +209,10 @@ window.AEBridge = {
     const batch = script.match(/^AELL_callBatch\((.*)\)$/);
     const single = script.match(/^AELL_call\("([^"]+)", (.*)\)$/);
     if (batch) {
-      const cmds = JSON.parse(JSON.parse(batch[1]));
+      // Two arguments now: the command array, then the options that arm
+      // the host's partial-round rollback. Both are JSON string literals.
+      const args = new Function("return [" + batch[1] + "]")();
+      const cmds = JSON.parse(args[0]);
       out = JSON.stringify({ ok: true, data: {
         results: cmds.map(c => ({ ok: true, data: { echo: c.tool } })) } });
     } else if (single) {
@@ -262,9 +265,16 @@ const H = t => ({ tool: t, args: {} });
   assert(!/[\u2028\u2029]/.test(literal),
          "no raw U+2028/U+2029 in the batch literal (ES3 line terminators)");
   let decoded = null;
-  try { decoded = JSON.parse(JSON.parse(literal)); } catch (e) {}
+  let optsArg = null;
+  try {
+    const args = new Function("return [" + literal + "]")();
+    decoded = JSON.parse(args[0]);
+    optsArg = args.length > 1 ? JSON.parse(args[1]) : null;
+  } catch (e) {}
   assert(decoded && decoded.length === 5,
-         "the literal is a JSON string holding the command array");
+         "the first literal is a JSON string holding the command array");
+  assert(optsArg && typeof optsArg.rollback === "boolean",
+         "and a second one carries the rollback flag the host needs");
 
   // -- a panel-side tool splits the run, order preserved
   scripts.length = 0;

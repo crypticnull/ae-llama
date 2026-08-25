@@ -94,3 +94,15 @@ pattern as the existing suite (`tests/test-*.js`), shipped through the
 auto-update feed as alpha versions. Field failures pasted into the dev chat
 become tests, grounded errors, and prompt rules — the loop that built
 everything so far.
+
+## Phase F — feature track (queued for the overnight loop)
+
+Lives as WORKPLAN.md items 5.x/6.x so the unattended loop can execute it
+probe-first: text animators, shape repeaters, the .ffx preset library,
+precompose/markers, render queue, project hygiene, audio-to-keyframes,
+the frame round-trip that image/video generation will stand on, .mogrt
+export, whisper.cpp captions, ffmpeg post-renders. Phase D's animation
+utilities are largely absorbed by 5.1–5.7; generation wiring itself
+stays with the remote session until the Krea workflow + model picks
+exist. New tools ride minor releases (next: 0.10.0), cut remotely after
+review.

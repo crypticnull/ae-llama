@@ -307,6 +307,10 @@
     busy = true;
     cancelRequested = false;
     var parseRetried = false;   // one compact-retry per send on truncation
+    // ONE rollback per user request, across all its rounds. See
+    // executeCommands: a second one turns a deterministic failure into
+    // undo/retry/undo until maxRounds.
+    var rollbackBudget = 1;
     // Comp-name aliases from create_comp renames live for exactly one
     // request — clear them as the next one begins (no timers).
     try {
@@ -405,11 +409,29 @@
 
           if (commands.length === 0 || cancelRequested) { finish(); return; }
 
+          // A rolled-back round rewrites every one of its results, so
+          // reporting them one by one would bury the user in identical
+          // red lines. Say it once, as what actually happened.
+          var rollbackAnnounced = false;
+
           global.Tools.executeCommands(
             commands,
             { dryRun: s.dryRun,
+              allowRollback: rollbackBudget > 0,
               shouldStop: function () { return cancelRequested; } },
             function (i, cmd, result) {
+              if (result.rolledBack) {
+                if (!rollbackAnnounced) {
+                  rollbackAnnounced = true;
+                  rollbackBudget--;
+                  appendMsg("error",
+                    "This round failed part way, so all of it was undone — " +
+                    "the project is back to how it was before. " +
+                    String(result.error || result.note || "").slice(0, 300),
+                    "round rolled back");
+                }
+                return;
+              }
               var head = cmd.tool + " " + JSON.stringify(cmd.args || {});
               var body = result.ok
                 ? (result.dryRun ? "would run" : "ok") +

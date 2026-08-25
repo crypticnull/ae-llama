@@ -373,6 +373,12 @@
       "- When the request is complete (or purely conversational), return",
       '  "commands": [] and summarize the outcome in "reply".',
       "- Look at TOOL RESULTS before continuing; fix errors they report.",
+      "- A result marked \"ROLLED BACK\" means the WHOLE round was undone",
+      "  because one of its commands failed: nothing from it exists, not",
+      "  even the commands that reported ok. Read the current state again",
+      "  if unsure, then redo the round with the failure fixed — do not",
+      "  skip the parts that 'already worked', and do not build on any",
+      "  layer or comp that round created.",
       "- Times are in seconds. Colors are [r,g,b] floats 0..1.",
       "- Positions are pixel coordinates [x,y] from the comp's top-left.",
       "- UNITS: scale and opacity are PERCENT (100 = normal size, 200 =",
@@ -848,14 +854,25 @@
     });
   }
 
-  /** Call a run of host tools in ONE undo group. cb(resultsArray). */
-  function callHostBatch(cmds, cb) {
+  /**
+   * Call a run of host tools in ONE undo group. cb(resultsArray).
+   *
+   * opts.rollback asks the host to undo the whole run if it fails part
+   * way (see AELL_maybeRollback). The decision has to be made host-side,
+   * inside the same script execution that opened the undo group — the
+   * panel can never safely issue an Undo of its own, because by the time
+   * it could, the user may have edited on top of the stack.
+   */
+  function callHostBatch(cmds, opts, cb) {
+    if (typeof opts === "function") { cb = opts; opts = {}; }
+    opts = opts || {};
     var payload = cmds.map(function (c) {
       return { tool: c.tool, args: c.args || {} };
     });
     var argsLiteral = jsxJsonLiteral(payload);
+    var optsLiteral = jsxJsonLiteral({ rollback: !!opts.rollback });
     global.AEBridge.evalScript(
-      "AELL_callBatch(" + argsLiteral + ")",
+      "AELL_callBatch(" + argsLiteral + ", " + optsLiteral + ")",
       function (result, isError) {
         function allFailed(err) {
           cb(cmds.map(function () { return { ok: false, error: err }; }));
@@ -890,11 +907,18 @@
    * still handled one at a time, and each of them ends the current run.
    *
    * onEach(index, command, result) fires per command; done(results) at end.
-   * opts: {dryRun?: bool, shouldStop?: fn -> bool (checked between runs)}
+   * opts: {dryRun?: bool, shouldStop?: fn -> bool (checked between runs),
+   *        allowRollback?: bool}
+   *
+   * allowRollback arms the host's partial-round rollback for this run. It
+   * disarms itself after one rollback — the caller owns the budget across
+   * rounds (main.js: one per user request).
    */
   function executeCommands(commands, opts, onEach, done) {
     opts = opts || {};
     var dryRun = !!opts.dryRun;
+    // A dry run mutates nothing, so there is never anything to roll back.
+    var rollbackArmed = !!opts.allowRollback && !dryRun;
     var results = [];
     if (commands.length > MAX_COMMANDS_PER_ROUND) {
       commands = commands.slice(0, MAX_COMMANDS_PER_ROUND);
@@ -931,9 +955,17 @@
         while (end < commands.length && batchable(commands[end])) end++;
         var run = commands.slice(i, end);
         var settledBatch = false;
-        callHostBatch(run, function (rows) {
+        callHostBatch(run, { rollback: rollbackArmed }, function (rows) {
           if (settledBatch) return;
           settledBatch = true;
+          // One rollback per user request. A second one would livelock a
+          // deterministic failure: undo, identical retry, undo again,
+          // until maxRounds, with nothing built and nothing learned. The
+          // debris from a second failure is the lesser evil — the model
+          // can at least repair it.
+          for (var q = 0; q < rows.length; q++) {
+            if (rows[q] && rows[q].rolledBack) { rollbackArmed = false; break; }
+          }
           deliver(i, rows);
           step(end);
         });

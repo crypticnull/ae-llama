@@ -137,6 +137,10 @@ function drivenShows(layer, prop) {
 // so the canned host has to know which layers exist in that comp -- a stub
 // that accepted any layer name would answer the question for free.
 let batSolids = [];
+// The rollback comp: the canned host has to model the UNDO too, or a
+// step could "pass" while the debris it is checking for never existed.
+let rbLayers = [];
+const inRbComp = (a) => a && /Rollback/.test(a.comp || "");
 let batSolidFx = {};
 let batSolidPos = {};
 const inBatComp = a => !!(a && /Undo/.test(a.comp || ""));
@@ -172,6 +176,12 @@ function cannedOk(tool, args) {
       return { name: (args && args.name) || "AELL Self-Test 3",
                id: createCount };
     case "duplicate_layer": {
+      if (inRbComp(args) && rbLayers.indexOf(args.layer) === -1) {
+        // The grounded error that started the field bug: nothing to copy
+        // because add_solid had not run yet.
+        return { __err: "No layer '" + args.layer + "' in '" + args.comp +
+          "' -- it holds: " + (rbLayers.join(", ") || "nothing") };
+      }
       const n = (args && args.count) || 8;
       if (args && args.layer === "ST Batch") batchLayers = n + 1;
       return { created: n, totalLayersInComp: n + 1 };
@@ -286,6 +296,10 @@ function cannedOk(tool, args) {
                note: "Stacking changed only" };
     }
     case "get_comp_details": {
+      if (inRbComp(args)) {
+        return capLayers(args.comp, rbLayers.map((nm, i) => ({
+          index: i + 1, name: nm, effects: [] })), args);
+      }
       if (inBatComp(args)) {
         return capLayers(args.comp, batSolids.map((nm, i) => ({
           index: i + 1, name: nm,
@@ -321,6 +335,10 @@ function cannedOk(tool, args) {
       return { layer: args && args.layer,
                property: args && args.property };
     case "get_property":
+      if (inRbComp(args) && rbLayers.indexOf(args.layer) === -1) {
+        return { __err: "No layer '" + args.layer + "' in '" + args.comp +
+          "' -- it holds: " + (rbLayers.join(", ") || "nothing") };
+      }
       // The batch rig reads back the write that came AFTER a failing
       // command. Padded to three components, the way real AE answers.
       if (inBatComp(args) && batSolidPos[args.layer]) {
@@ -535,6 +553,7 @@ function cannedOk(tool, args) {
                parentedCamerasRezoomed: ["ST Cam Kid"] };
     case "add_solid":
       if (inBatComp(args)) batSolids.push(args.name);
+      if (inRbComp(args)) rbLayers.push(args.name);
       return { name: (args && args.name) || "ST Square" };
     case "apply_effect":
       if (inBatComp(args)) {
@@ -651,13 +670,53 @@ function cannedResult(tool, args) {
   return d && d.__err ? { ok: false, error: d.__err } : { ok: true, data: d };
 }
 
-// Many tools in ONE host call. Faithful to AELL_callBatch on two points
-// the suite measures: one row per command, in order, and a failing row
-// does NOT stop the commands behind it.
+// Which tools mutate, read out of hostscript.jsx rather than copied, so
+// the canned host cannot drift from the real rollback trigger.
+const MUTATING_NAMES = (function () {
+  const m = /var AELL_MUTATING = \{([\s\S]*?)\};/.exec(hostSrc);
+  if (!m) throw new Error("hostscript.jsx no longer defines AELL_MUTATING");
+  return new Set((m[1].match(/([A-Za-z0-9_]+)\s*:\s*true/g) || [])
+    .map(s => s.split(":")[0].trim()));
+})();
+assert(MUTATING_NAMES.has("add_solid") && !MUTATING_NAMES.has("get_property"),
+       "the mutating list parses out of hostscript (" +
+       MUTATING_NAMES.size + " tools)");
+
+// Many tools in ONE host call. Faithful to AELL_callBatch on three points
+// the suite measures: one row per command, in order; a failing row does
+// NOT stop the commands behind it; and an ARMED round that both succeeded
+// and failed at mutating comes back rolled back, every row rewritten.
 const batchCalls = [];
-function cannedBatch(cmds, cb) {
+function cannedBatch(cmds, opts, cb) {
+  if (typeof opts === "function") { cb = opts; opts = {}; }
+  opts = opts || {};
   batchCalls.push(cmds.length);
-  cb(cmds.map(c => cannedResult(c.tool, c.args || {})));
+  // Snapshot what an Undo would restore, so a rolled-back round really
+  // does put the canned comp back rather than only SAYING it did.
+  const rbBefore = rbLayers.slice();
+  const rows = cmds.map(c => cannedResult(c.tool, c.args || {}));
+  let okMut = 0, badMut = 0, firstError = "";
+  cmds.forEach((c, i) => {
+    if (!MUTATING_NAMES.has(c.tool)) return;
+    if (rows[i].ok) { okMut++; return; }
+    badMut++;
+    if (!firstError) firstError = c.tool + ": " + rows[i].error;
+  });
+  if (opts.rollback && okMut && badMut) {
+    rbLayers = rbBefore;
+    const note = "ROLLED BACK: a command in this round failed (" +
+      firstError + ") after others had already changed the project.";
+    cmds.forEach((c, i) => {
+      if (MUTATING_NAMES.has(c.tool)) {
+        rows[i] = { ok: false, rolledBack: true,
+                    error: (rows[i].ok ? "" : rows[i].error + " — ") +
+                           (i === 0 ? note : "Rolled back with the round.") };
+      } else {
+        rows[i].rolledBack = true;
+      }
+    });
+  }
+  cb(rows);
 }
 
 // 2. happy path: all steps pass, cleanup (delete_item) runs last
@@ -688,7 +747,7 @@ SelfTest.run({
     ordStack = [];
     maskKeys = {};
     batchLayers = 0; batchFx = {}; batchBlur = null;
-    batSolids = []; batSolidFx = {}; batSolidPos = {};
+    batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = [];
     SelfTest.run({
       callHostTool(tool, args, cb) {
         if (tool === "grid_layout") {
@@ -697,6 +756,7 @@ SelfTest.run({
         }
         cb(cannedResult(tool, args));
       },
+      callHostBatch: cannedBatch,
       onLine() {},
       onDone(res2) {
         assert(res2.passed === res2.total - 1,
@@ -717,7 +777,7 @@ SelfTest.run({
         ordStack = [];
         maskKeys = {};
         batchLayers = 0; batchFx = {}; batchBlur = null;
-        batSolids = []; batSolidFx = {}; batSolidPos = {};
+        batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = [];
         SelfTest.run({
           callHostTool(tool, args, cb) {
             // Never refuse anything -- the old permissive host.

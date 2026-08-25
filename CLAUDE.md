@@ -97,3 +97,7 @@ Model identity strings must never appear in committed artifacts.
 - `tests/` — stubbed-AE regression suites (stubs model REAL AE quirks —
   keep them faithful, e.g. padded value arrays)
 - `docs/NATIVE_COVERAGE_PLAN.md` — the tool-coverage roadmap
+- `docs/CAPABILITIES.md` — the whole product in one place; tool table is
+  GENERATED (`node scripts/capability-report.js`, CI-enforced fresh).
+  Check it before building any tool; update the curated half when you
+  ship anything user-visible.
