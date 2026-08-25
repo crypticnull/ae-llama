@@ -21,7 +21,7 @@ tool, not the test), then update the stubbed Node test in `tests/` so
 the same bug class is caught WITHOUT AE — that is the whole loop:
 field truth -> fix -> stub faithfulness.
 
-## FAST-TRACK: comp-rename audit tools (real deadline — take before items 2+)
+## FAST-TRACK: comp-rename audit tools — DONE 2026-08-25 (0.9.15)
 
 The owner has a real work assignment: bring an old roofing-presentation
 project's comp names onto the org convention. The panel cannot do it

@@ -140,6 +140,10 @@ let batSolids = [];
 // The rollback comp: the canned host has to model the UNDO too, or a
 // step could "pass" while the debris it is checking for never existed.
 let rbLayers = [];
+// The comp-rename rig, and the rename the canned host remembers making.
+const RN = { host: "ST RN Host 2021", util: "ST RN Util 2019",
+             linked: "ST RN Linked 2020", plain: "ST RN Plain 2019" };
+let rnRenamedTo = null;
 const inRbComp = (a) => a && /Rollback/.test(a.comp || "");
 let batSolidFx = {};
 let batSolidPos = {};
@@ -321,6 +325,63 @@ function cannedOk(tool, args) {
       }
       return capLayers(args && args.comp,
         ordStack.map((nm, i) => ({ index: i + 1, name: nm })), args);
+    }
+    case "precompose":
+      return { precomp: (args && args.name) || "Pre-comp 1", id: 900,
+               layersMoved: ((args && args.layers) || []).length };
+    // The comp-rename rig: one plain comp, one nested (a utility), one
+    // named by an expression. The canned host has to remember the rename
+    // it performed, or the idempotency step would be asking nothing.
+    case "audit_comp_usage": {
+      const plainNow = rnRenamedTo || RN.plain;
+      const mk = (name, over) => Object.assign(
+        { name, id: 0, numLayers: 0, usedIn: [], usedInCount: 0,
+          inRenderQueue: false, expressionRefs: [], expressionRefCount: 0,
+          looksLikeUtility: false }, over || {});
+      const comps = [
+        mk(RN.host, { numLayers: 2 }),
+        mk(RN.util, { usedIn: [RN.host], usedInCount: 1,
+                      looksLikeUtility: true }),
+        mk(RN.linked, { expressionRefCount: 1, expressionRefs: [{
+          kind: "comp()", inComp: RN.host, layer: "ST RN Expr",
+          property: "Opacity",
+          excerpt: 'comp("' + RN.linked + '").duration * 0 + 100' }] }),
+        mk(plainNow)
+      ];
+      return { comps, compsFound: comps.length,
+               scanned: { expressionsFound: 1, scanMs: 1 } };
+    }
+    case "rename_comps": {
+      const dry = !(args && args.dryRun === false);
+      const plainNow = rnRenamedTo || RN.plain;
+      const already = /^REV\d\d_/.test(plainNow);
+      const plan = [
+        { comp: plainNow,
+          newName: already ? null : "REV19_" + plainNow,
+          action: already ? "skip" : "rename",
+          reason: already ? "Already carries the prefix — nothing to do"
+                          : "Not referenced by any expression" },
+        { comp: RN.util, newName: null, action: "skip",
+          reason: "Looks like a utility comp — it is nested in " + RN.host +
+            " and is not in the render queue. Skipped by default; pass " +
+            "includeUtility:true to rename it anyway." },
+        { comp: RN.linked, newName: null, action: "skip",
+          reason: "An expression names this comp as a string (comp()). " +
+            "AE does NOT rewrite those on rename." }
+      ];
+      const willRename = plan.filter(p => p.action === "rename").length;
+      const out = { dryRun: dry, rule: (args && args.rule) || "rev-prefix",
+        plan, compsConsidered: plan.length, willRename,
+        skipped: plan.length - willRename };
+      if (dry) { out.note = "PREVIEW ONLY — nothing was renamed."; return out; }
+      const renamed = [];
+      if (willRename) {
+        renamed.push(plainNow + " -> REV19_" + plainNow);
+        rnRenamedTo = "REV19_" + plainNow;
+      }
+      out.renamed = renamed;
+      out.renamedCount = renamed.length;
+      return out;
     }
     case "grid_layout":
       // The rig it builds DRIVES Position and ignores whatever value sits
@@ -747,7 +808,7 @@ SelfTest.run({
     ordStack = [];
     maskKeys = {};
     batchLayers = 0; batchFx = {}; batchBlur = null;
-    batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = [];
+    batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null;
     SelfTest.run({
       callHostTool(tool, args, cb) {
         if (tool === "grid_layout") {
@@ -777,7 +838,7 @@ SelfTest.run({
         ordStack = [];
         maskKeys = {};
         batchLayers = 0; batchFx = {}; batchBlur = null;
-        batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = [];
+        batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null;
         SelfTest.run({
           callHostTool(tool, args, cb) {
             // Never refuse anything -- the old permissive host.

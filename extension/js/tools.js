@@ -43,6 +43,24 @@
       desc: "Delete a project item. Deleting a folder removes its contents. " +
             "Use a path when names repeat.",
       args: "{item: name|id|path 'A/B/Item'}" },
+    { name: "audit_comp_usage",
+      desc: "Facts about how comps are used, before renaming anything: " +
+            "which comps each one is nested in, whether it is in the " +
+            "render queue, and every expression that names it as a " +
+            "string. Read-only. Omit 'comp' to audit the whole project.",
+      args: "{comp?: string}" },
+    { name: "rename_comps", mutating: true,
+      desc: "Rename MANY comps in one call, on the org convention " +
+            "(REVyy_ from a year in the old name, else REV_NO-YEAR_). " +
+            "dryRun is TRUE by default and returns the preview table — " +
+            "show it to the user, then call again with dryRun:false. " +
+            "Comps named by an expression are ALWAYS skipped (renaming " +
+            "them silently breaks the expression). Comps nested in " +
+            "others but not render-queued are skipped unless " +
+            "includeUtility:true. Running it twice changes nothing.",
+      args: "{rule?: 'rev-prefix'|'map', renames?: {old: new} (rule 'map' " +
+            "only), comps?: [string] (default every comp), dryRun?: bool " +
+            "(default TRUE), includeUtility?: bool}" },
     { name: "duplicate_comp", mutating: true,
       desc: "Duplicate a composition.",
       args: "{comp: string, name?: string}" },
@@ -529,6 +547,18 @@
       "  'ramp opacity/scale across these layers' = distribute_property;",
       "  'ease between the keyframes' = apply_keyframe_ease. All take the",
       "  same CSS-style bezier [x1,y1,x2,y2].",
+      "",
+      "Renaming MANY comps (a naming convention / cleanup job):",
+      "- Use rename_comps ONCE for the whole job. Never rename_item in a",
+      "  loop, and never work out the new names yourself — the tool",
+      "  applies the convention and gets the year rules right.",
+      "- It answers with a PREVIEW first (dryRun defaults to true). Put",
+      "  the plan and every skip reason in your reply and STOP there.",
+      "  Call it again with dryRun:false only after the user says go.",
+      "- audit_comp_usage answers 'what would this break?' on its own.",
+      "  Renaming a comp that an expression names as a string BREAKS that",
+      "  expression, so rename_comps always skips those; do not try to",
+      "  work around it with rename_item.",
       "",
       "Project panel management:",
       "- create_folder / move_to_folder / rename_item / delete_item /",
