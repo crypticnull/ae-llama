@@ -21,6 +21,58 @@ tool, not the test), then update the stubbed Node test in `tests/` so
 the same bug class is caught WITHOUT AE — that is the whole loop:
 field truth -> fix -> stub faithfulness.
 
+## FAST-TRACK: comp-rename audit tools (real deadline — take before items 2+)
+
+The owner has a real work assignment: bring an old roofing-presentation
+project's comp names onto the org convention. The panel cannot do it
+safely today, and the missing pieces are two tools. Probe-first as
+always; this outranks the feature track because a human deadline hangs
+on it.
+
+**Probe pass** (facts before code):
+- `item.usedIn` — does it return what training says (array of comps
+  containing this comp as a layer)? Cost on a large project?
+- Project-wide expression scan — walk every comp/layer/property,
+  collect `prop.expression`; wall time on a big real project.
+- THE assumption behind rule 3: does renaming a comp actually BREAK
+  `comp("Old Name")` string references in AE 2026, or does modern AE
+  rewrite them? Build a two-comp rig, rename, check expressionError.
+  If AE rewrites, the skip rule relaxes and the log says so.
+
+**Build pass** — two tools:
+- `audit_comp_usage`: per comp — usedIn list, render-queue membership,
+  and every comp whose NAME appears inside any expression string
+  project-wide. Facts only, no judgments.
+- `rename_comps`: takes the FULL rename map in one call (sidesteps the
+  8-commands-per-reply cap), `dryRun: true` is the DEFAULT and returns
+  the preview table; `dryRun: false` executes in one undo group.
+
+**Naming rules (owner-confirmed):**
+- Year present in the OLD NAME -> prefix `REVyy_` (two-digit: 2026 ->
+  `REV26_`), prepended, old name kept: `REV19_Roof_Shingle_2019_v2`.
+- Year detection is CONSERVATIVE: 4-digit 19xx/20xx only. A bare "26"
+  or "v26" is a version number, not a year.
+- No year -> prefix `REV_NO-YEAR_`, old name verbatim.
+- Already `REV\d\d_` or `REV_NO-YEAR_` prefixed -> skip (idempotent;
+  running it twice must change nothing).
+- Two DIFFERENT years in one name -> no guess; flagged in the preview
+  for the human.
+- Expression-referenced comps (per audit) -> HARD skip with reason.
+- Likely-utility comps (nested in others, never render-queued) ->
+  marked in the preview and skipped BY DEFAULT, human can override —
+  the audit supplies facts, the human owns the judgment.
+
+**Suite/stub:** stub the project walk (usedIn, expressions, queue) and
+assert: year extraction table incl. the v26 trap, idempotency, hard
+skip on expression reference, preview-before-execute. Selftest: a
+3-comp scratch rig (one nested, one expression-linked, one plain) —
+audit facts correct, dry run correct, execute renames ONLY the plain
+one.
+
+Patch-bump when verified: it fixes no shipped behavior but the owner
+needs it ON the panel — call it the exception that ships as a patch,
+noted here so nobody relitigates it.
+
 ## 2. Real-AE verification debt (things stubs cannot prove)
 
 Verify each by scripting AE directly (temp .jsx + AELL_call, see
