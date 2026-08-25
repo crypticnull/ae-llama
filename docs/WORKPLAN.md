@@ -221,6 +221,10 @@ lossless render via 5.5 piped through ffmpeg, temp files cleaned. After
 
 - ComfyUI model catalog / bundled installer, and wiring generation into
   5.8's round-trip (blocked on the user's Krea workflow + model picks).
+- The VRAM-tier architecture (docs/COMFY_TIERS_PLAN.md): remote builds
+  P1–P3. Its P4 — real-GPU measurement of every catalog entry and the
+  handoff, each tier simulated via vramOverrideGB — will be queued HERE
+  once P1–P3 land. Do not start it early; the hooks will not exist.
 - Phase E roto/tracking hybrids. (Phase D animation utilities are now
   largely items 5.1–5.7 above — do not double-build them.)
 - The rollback DESIGN in item 4 may be built only after the remote

@@ -144,6 +144,10 @@ Queued (see WORKPLAN for owners/order):
 - Image/video generation is not yet seamless: no frame-aware img2img,
   no mask-driven inpainting, no depth/parallax, no upscale/interpolate;
   blocked on the curated ComfyUI stack + Krea workflow.
+- Generation is not hardware-tier aware: no shared VRAM budget between
+  llama-server and ComfyUI, the pause-for-VRAM handoff sleeps 1.5s and
+  hopes instead of verifying release, and a 6 GB card has no honest
+  story. Architecture: docs/COMFY_TIERS_PLAN.md (phased, P1–P5).
 - Chat probe never exercises ComfyUI, multi-turn references ("make them
   blue instead"), or undo across a mixed round.
 
