@@ -156,6 +156,11 @@ let rbLayers = [];
 const RN = { host: "ST RN Host 2021", util: "ST RN Util 2019",
              linked: "ST RN Linked 2020", plain: "ST RN Plain 2019" };
 let rnRenamedTo = null;
+// set_solid_color rig: three layers sharing one solid, one text layer,
+// and whichever layers have since been given their own solid.
+const scShared = ["ST SC Square", "ST SC Square 2", "ST SC Square 3"];
+const scText = ["ST SC Words"];
+let scUnique = [];
 const inRbComp = (a) => a && /Rollback/.test(a.comp || "");
 let batSolidFx = {};
 let batSolidPos = {};
@@ -287,26 +292,45 @@ function cannedOk(tool, args) {
       const L = (args && args.layers) || [];
       const from = (args && typeof args.from === "number") ? args.from : 0;
       const step = (args && typeof args.step === "number") ? args.step : 0;
-      const applied = [], overridden = [];
+      const applied = [], overridden = [], cleared = [];
       L.forEach((nm, i) => {
         // A layer whose property is driven does not move, however happily
         // AE accepted the write -- so it cannot be reported as applied.
+        // Unless the caller passed clearExpressions: then exactly the
+        // swallowing rig is removed and the value lands (the real host
+        // writes first and clears only when the write was eaten).
         if (drivenShows(nm, args && args.property) !== null) {
-          overridden.push(nm);
-          return;
+          if (args && args.clearExpressions === true) {
+            delete driven[drivenKey(nm, args && args.property)];
+            cleared.push(nm);
+          } else {
+            overridden.push(nm);
+            return;
+          }
         }
         applied.push({ layer: nm, value: from + i * step });
       });
       for (const a of applied) ordX[a.layer] = a.value;
       const out = { property: args && args.property, layers: L.length,
                     applied };
+      const notes = [];
       if (overridden.length) {
         out.overriddenByExpression = overridden;
-        out.note = overridden.length + " of " + L.length + " layer(s) did " +
+        notes.push(overridden.length + " of " + L.length + " layer(s) did " +
           "NOT move because an expression drives " +
           (args && args.property) + " on them: clear it first " +
-          "(set_expression with expression: \"\").";
+          "(set_expression with expression: \"\"). If the user explicitly " +
+          "asked for these values, re-call with clearExpressions: true " +
+          "to remove those expressions and apply them");
       }
+      if (cleared.length) {
+        out.expressionsCleared = cleared;
+        notes.push("clearExpressions removed the expression driving " +
+          (args && args.property) + " on " + cleared.length +
+          " layer(s) so the values could land — tell the user their rig " +
+          "on those layers is gone");
+      }
+      if (notes.length) out.note = notes.join(". ");
       return out;
     }
     case "reorder_layers": {
@@ -330,6 +354,11 @@ function cannedOk(tool, args) {
                note: "Stacking changed only" };
     }
     case "get_comp_details": {
+      if (args && /Solid Room/.test(args.comp || "")) {
+        return capLayers(args.comp,
+          scShared.concat(scText).map((nm, i) => ({
+            index: i + 1, name: nm, effects: [] })), args);
+      }
       if (inRbComp(args)) {
         return capLayers(args.comp, rbLayers.map((nm, i) => ({
           index: i + 1, name: nm, effects: [] })), args);
@@ -355,6 +384,46 @@ function cannedOk(tool, args) {
       }
       return capLayers(args && args.comp,
         ordStack.map((nm, i) => ({ index: i + 1, name: nm })), args);
+    }
+    // set_solid_color's whole point is the SHARED source, so the canned
+    // host tracks who shares what rather than answering yes to anything.
+    case "set_solid_color": {
+      const named = (args && args.layers) ||
+                    (args && args.layer ? [args.layer] : []);
+      if (!args || !args.color) {
+        return { __err: "'color' is required: [r, g, b] floats 0..1" };
+      }
+      const bad = named.filter(n => scText.indexOf(n) !== -1);
+      if (bad.length) {
+        return { __err: "set_solid_color only works on SOLID layers. Not " +
+          "solids: " + bad.join(", ") + ". A shape layer's colour is in " +
+          "its contents (use set_property), and a text layer's is " +
+          "fillColor (use set_text_style)." };
+      }
+      const sharers = scShared.filter(n => scUnique.indexOf(n) === -1);
+      const collateral = named.some(n => sharers.indexOf(n) !== -1)
+        ? sharers.filter(n => named.indexOf(n) === -1) : [];
+      if (collateral.length && typeof args.makeUnique === "undefined") {
+        return { __err: "That solid is SHARED. Recolouring it would also " +
+          "change " + collateral.length + " layer(s) nobody asked about: " +
+          collateral.join(", ") + ". Say which you want: makeUnique:true " +
+          "gives the layer(s) you named their OWN solid, makeUnique:false " +
+          "recolours all of them on purpose." };
+      }
+      if (args.makeUnique === true) {
+        named.forEach(n => { if (scUnique.indexOf(n) === -1) scUnique.push(n); });
+        return { comp: args.comp, layers: named, color: args.color,
+                 solidsTouched: named.length,
+                 madeUnique: named.map(n => n + " -> " + n + " solid"),
+                 note: "Each layer got its OWN solid, so nothing else " +
+                       "changed. That adds " + named.length +
+                       " item(s) to the project panel." };
+      }
+      const out = { comp: args.comp, layers: named, color: args.color,
+                    solidsTouched: 1,
+                    note: "Nothing else uses that solid." };
+      if (collateral.length) out.alsoChanged = collateral;
+      return out;
     }
     case "precompose": {
       // The new comp is a real project item — the cleanup deletes it.
@@ -852,7 +921,7 @@ SelfTest.run({
     ordStack = [];
     maskKeys = {};
     batchLayers = 0; batchFx = {}; batchBlur = null;
-    batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null;
+    batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = [];
     SelfTest.run({
       callHostTool(tool, args, cb) {
         if (tool === "grid_layout") {
@@ -882,7 +951,7 @@ SelfTest.run({
         ordStack = [];
         maskKeys = {};
         batchLayers = 0; batchFx = {}; batchBlur = null;
-        batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null;
+        batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = [];
         SelfTest.run({
           callHostTool(tool, args, cb) {
             // Never refuse anything -- the old permissive host.

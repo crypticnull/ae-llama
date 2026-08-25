@@ -120,7 +120,7 @@ Pure filesystem reading — no AE, no generation runs, do NOT launch
 ComfyUI. This unblocks tier-plan P5 (catalog file lists + sizes) and
 the register-existing matcher. Commit the inventory; no version bump.
 
-## 2d. Small local passes queued by the probe findings
+## 2d. Small local passes queued by the probe findings — 4 of 5 DONE 2026-08-25
 
 - ~~Locate the H3 base weight~~ FOUND by the owner (2026-08-25):
   `AppData\Local\Comfy-Desktop\ComfyUI-Shared\models\diffusion_models\`
@@ -151,6 +151,14 @@ the register-existing matcher. Commit the inventory; no version bump.
   with sizes in the tier plan. The owner wants text/image-to-video
   FIRST; the bundled r2v workflow is deferred until 5.8 lands (it needs
   image+audio inputs the panel cannot feed yet).
+- **clearExpressions in real AE** (remote-built 2026-08-25, unshipped):
+  the step-7 policy question is settled — distribute_property takes
+  `clearExpressions: true` (clears ONLY expressions that swallowed the
+  write, on an explicit re-call; see the log entry). Local pass: run the
+  187-step suite (4 new steps in the order comp), re-run chat-probe
+  step 7 — expected shape is now refuse-then-recall-with-flag, and the
+  existing even-gaps verdict measures exactly that end state — then
+  patch bump together with whatever else is verified.
 - **set_solid_color, probe first**: no tool can change a solid's color
   (probe step 9's real blocker — the model tried four approaches; none
   exist). The color lives on the SOLID SOURCE, so changing it changes

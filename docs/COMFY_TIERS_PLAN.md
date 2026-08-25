@@ -121,8 +121,59 @@ an entry field (`requiresAda: bool`), not a separate tier.
   install's own models dir, and ComfyUI-Shared. The register-existing
   matcher scans all three (plus custom_nodes ckpts dirs and any
   extra_model_paths.yaml roots). The locate found TWO files matching
-  minimax_h3_ref2va_pruned_int8_convrot* — the 2d pass records their
-  exact names and sizes.
+  minimax_h3_ref2va_pruned_int8_convrot* — recorded in full below.
+- **MiniMax H3 files, pinned (WORKPLAN 2d, 2026-08-25).** Listed from
+  `huggingface.co/api/models/Comfy-Org/MiniMax-H3/tree/main`, which the
+  remote session cannot reach. 30 files. Sizes are binary MB.
+
+  Two transformer families, five precisions each. **`fl2va` is the
+  t2v/i2v one** — frame + language to video/audio, and it covers t2v
+  with no image — so it, not `ref2va`, is the first catalog entry.
+
+  | precision | fl2va (t2v/i2v) | ref2va | MB |
+  | --- | --- | --- | ---: |
+  | bf16 | `minimax_h3_fl2va_bf16` | `minimax_h3_ref2va_bf16` | 63210 |
+  | pruned bf16 | `minimax_h3_fl2va_pruned_bf16` | `minimax_h3_ref2va_pruned_bf16` | 38362 |
+  | int8 convrot | `minimax_h3_fl2va_int8_convrot` | `minimax_h3_ref2va_int8_convrot` | 32462 |
+  | **pruned int8 convrot** | `minimax_h3_fl2va_pruned_int8_convrot` | `minimax_h3_ref2va_pruned_int8_convrot` | 19999 |
+  | pruned fp8 scaled | `minimax_h3_fl2va_pruned_fp8_scaled` | `minimax_h3_ref2va_pruned_fp8_scaled` | 19987 |
+
+  The owner has BOTH families at **pruned int8 convrot**. The two
+  smallest are within 12 MB of each other, so the real choice between
+  them is architecture, not size: fp8_scaled wants Ada or newer,
+  int8_convrot is the broader-compatibility option.
+
+  **Text encoders — this is the nvfp4 answer.** The bundled/local one is
+  Blackwell-only; the other two are the fallbacks a non-50-series tier
+  needs:
+
+  | file | MB | note |
+  | --- | ---: | --- |
+  | `qwen3vl_32b_minimax_h3_nvfp4_awq` | 14960 | Blackwell ONLY — what the owner has |
+  | `qwen3vl_32b_minimax_h3_int8_convrot` | 25884 | the non-nvfp4 fallback; +11 GB |
+  | `qwen3vl_32b_minimax_h3_bf16` | 49120 | full precision |
+
+  Note the cost: dropping nvfp4 nearly doubles the encoder. A non-
+  Blackwell H3 tier is ~26 GB encoder + ~20 GB transformer before VAEs,
+  which is the number that decides whether H3 can exist below the top
+  tier at all.
+
+  | VAE | MB |
+  | --- | ---: |
+  | `vae/minimax_h3_video_vae_fp16` | 4967 |
+  | `vae/minimax_h3_audio_vae_fp32` | 577 |
+
+  Turbo LoRAs in the repo (1866 MB each):
+  `minimax_h3_fl2v_turbo_4step_v1.0_768p_comfyui_bf16`,
+  `minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16`,
+  `minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16`. The owner's local
+  turbo LoRAs are DIFFERENT files (592-744 MB, `minimax_h3_turbo_4step_*`)
+  from another source — do not treat the local ones as these.
+
+  Also in the repo: 10 style embeddings of ~1 MB each
+  (`minimaxh3_bullet_time`, `minimaxh3_four_seasons`, …). Cheap enough
+  to bundle wholesale if the catalog ever wants presets.
+
 - **LTX-small at T2 — CONFIRMED experimental.** 6 GB cards get an
   experimental short-video entry, flagged as such, exclusive handoff
   mandatory. If P4's simulated-T2 run shows it cannot finish a clip
@@ -263,12 +314,16 @@ shipped:
    must check for an existing provider before cloning a pack, and the
    workflow manifest pins WHICH pack each node is expected from.
 
-**MiniMax H3 status on the owner's machine: HALF-PROVISIONED.** Turbo
-LoRAs and the video VAE are present; the base/transformer weight is NOT
-on disk anywhere. Until the base weight is downloaded from
-https://huggingface.co/MiniMaxAI/MiniMax-H3 , H3 cannot run or be
-measured even on the 5090. Wan 2.2 is fully provisioned in three
-precisions and is therefore the video model P4 measures FIRST.
+**MiniMax H3 status on the owner's machine: FULLY PROVISIONED.**
+Corrected 2026-08-25 — the earlier "half-provisioned, base weight
+missing" reading was a wrong-root artefact. Present in
+`ComfyUI-Shared`: both transformers
+(`minimax_h3_fl2va_pruned_int8_convrot` and
+`minimax_h3_ref2va_pruned_int8_convrot`, 19999 MB each), the nvfp4
+encoder (14960 MB), the video VAE fp16 (4967 MB) and the audio VAE
+fp32 (577 MB); the turbo LoRAs and an int8 video VAE are in the
+Documents root. Nothing needs downloading to measure H3 on the 5090.
+Wan 2.2 is equally complete, so P4 can measure both.
 
 ## Phases and owners
 

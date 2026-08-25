@@ -473,5 +473,31 @@ assert(/rollbackBudget/.test(probeSrc) && /rollbackBudget/.test(mainSrc),
 assert(/rolledBack/.test(probeSrc),
        "and reports a rolled-back round instead of printing it as N errors");
 
+// The general form, so the NEXT helper main.js grows is caught too. It
+// has happened twice: allowRollback, then fitHistory — each time the
+// probe went on reporting passes while testing a product the panel no
+// longer was.
+const PANEL_ONLY = {
+  setProgressSink: "a UI sink; the probe prints to stdout instead",
+  callHostBatch: "main.js only hands it to SelfTest, not to its round loop"
+};
+const used = src => new Set(
+  (src.match(/Tools\.[a-zA-Z]+/g) || []).map(m => m.split(".")[1]));
+const mainUses = used(mainSrc);
+const probeUses = used(probeSrc);
+const missing = [...mainUses].filter(
+  n => !probeUses.has(n) && !PANEL_ONLY[n]);
+assert(missing.length === 0,
+       "the probe uses every Tools helper main.js's chat path does" +
+       (missing.length ? " (missing: " + missing.join(", ") + " — either " +
+        "mirror it in chat-probe.js or add it to PANEL_ONLY with a " +
+        "reason)" : ""));
+for (const n of Object.keys(PANEL_ONLY)) {
+  assert(mainUses.has(n),
+         "PANEL_ONLY still describes something main.js uses: " + n);
+}
+assert(/forceTinyContext/.test(probeSrc) && /forceTinyContext/.test(mainSrc),
+       "and mirrors the reactive hard-trim retry on a context 400");
+
 console.log(failed ? "\n" + failed + " assertion(s) failed"
                    : "\nall chat-probe verdict tests passed");
