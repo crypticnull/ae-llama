@@ -82,8 +82,10 @@
 
     // Many tools in ONE host call -- the path that makes a whole chat
     // command a single Ctrl+Z.
-    function callHostBatch(cmds, cb) {
-      var raw = $.global.AELL_callBatch(AELLJSON.stringify(cmds));
+    function callHostBatch(cmds, opts, cb) {
+      if (typeof opts === "function") { cb = opts; opts = {}; }
+      var raw = $.global.AELL_callBatch(AELLJSON.stringify(cmds),
+                                        AELLJSON.stringify(opts || {}));
       var obj = AELLJSON.parse(raw);
       cb(obj && obj.ok && obj.data ? obj.data.results : null);
     }

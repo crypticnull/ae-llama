@@ -1,0 +1,540 @@
+// Regression test: rolling back a chat round that fails PART WAY.
+//
+// The bug, field-observed: "make nine red squares and spread them out"
+// produced TEN. duplicate_layer errored because add_solid had not made
+// the source layer yet; add_solid then succeeded anyway; the model saw a
+// failed round and redid the whole thing, building nine more on top of
+// the orphan. Every tool behaved correctly — there was simply no notion
+// of undoing a partial round.
+//
+// The facts this file encodes, all MEASURED in AE 2026 before the code
+// was written (see WORKPLAN-LOG 2026-08-25):
+//
+//  1. An EMPTY undo group registers NOTHING. One Undo then reaches
+//     straight past it into the user's own previous edit. This is the
+//     overshoot hazard, and it is why the sentinel exists — the stub
+//     below models it exactly, so a rollback that forgets the sentinel
+//     is caught here rather than in someone's project.
+//  2. A net-zero comment write (set, then put back) DOES register a
+//     group, leaving the project byte-identical.
+//  3. Exactly ONE Undo is ever issued, inside the same script execution
+//     that made the changes. If the fingerprint says it did not land on
+//     the pre-round state, a single Redo puts it back — never a second
+//     Undo.
+//
+// The scenario tools here stand in for add_solid/duplicate_layer rather
+// than driving the real ones: the subject is the rollback dispatcher,
+// and stubbing all of AE would test the stub instead.
+"use strict";
+const fs = require("fs");
+const path = require("path");
+
+const ROOT = path.join(__dirname, "..");
+const HOST = path.join(ROOT, "extension", "jsx", "hostscript.jsx");
+const TOOLS = path.join(ROOT, "extension", "js", "tools.js");
+const hostSrc = fs.readFileSync(HOST, "utf8");
+const toolsSrc = fs.readFileSync(TOOLS, "utf8");
+
+let checks = 0;
+function assert(cond, msg) {
+  checks++;
+  if (!cond) { console.error("FAIL:", msg); process.exitCode = 1; }
+  else console.log("ok  -", msg);
+}
+
+// ------------------------------------------------------------ stubbed AE
+//
+// An undo STACK, not just a depth counter: mutations record how to
+// reverse themselves, endUndoGroup pushes the frame, and executeCommand
+// pops it. Empty frames are dropped on the floor, which is the AE
+// behaviour the whole design turns on.
+
+const undo = {
+  open: null, depth: 0, stack: [], redo: [],
+  opened: [], unbalanced: 0, undos: 0, redos: 0
+};
+function record(op) {
+  if (undo.open) { undo.open.ops.push(op); return; }
+  // A change made outside any group is its own undo step in AE.
+  undo.stack.push({ name: "(ungrouped)", ops: [op] });
+  undo.redo.length = 0;
+}
+function resetUndo() {
+  undo.open = null; undo.depth = 0;
+  undo.stack.length = 0; undo.redo.length = 0; undo.opened.length = 0;
+  undo.unbalanced = 0; undo.undos = 0; undo.redos = 0;
+}
+
+function Layer(name, comp) {
+  this.name = name;
+  this.comp = comp;
+  this.enabled = true;
+  this.parent = null;
+  this.inPoint = 0; this.outPoint = 10; this.startTime = 0;
+  this._pos = [320, 180, 0];
+}
+Layer.prototype.property = function (p) {
+  const self = this;
+  if (p === "ADBE Transform Group") {
+    return {
+      property(n) {
+        if (n === "ADBE Position") return { value: self._pos, numKeys: 0 };
+        if (n === "ADBE Scale") return { value: [100, 100, 100], numKeys: 0 };
+        if (n === "ADBE Rotate Z") return { value: 0, numKeys: 0 };
+        if (n === "ADBE Opacity") return { value: 100, numKeys: 0 };
+        throw new Error("no property " + n);
+      }
+    };
+  }
+  if (p === "ADBE Effect Parade") return { numProperties: 0 };
+  if (p === "ADBE Mask Parade") return { numProperties: 0 };
+  throw new Error("no property " + p);
+};
+
+function CompItem() {} function FolderItem() {} function FootageItem() {}
+function TextLayer() {} function ShapeLayer() {} function CameraLayer() {}
+function LightLayer() {} function AVLayer() {} function SolidSource() {}
+const ParagraphJustification = {};
+
+function Comp(name) {
+  this.name = name;
+  this.width = 640; this.height = 360;
+  this.duration = 10; this.frameRate = 30;
+  this._comment = "";
+  this._layers = [];
+  this.parentFolder = null;
+}
+Object.defineProperty(Comp.prototype, "numLayers", {
+  get() { return this._layers.length; }
+});
+// The sentinel's target. AE records a comment write as a real, undoable
+// change — and writing the SAME value back is a second one, so a
+// set-and-restore pair leaves a non-empty group and an unchanged project.
+Object.defineProperty(Comp.prototype, "comment", {
+  get() { return this._comment; },
+  set(v) {
+    const self = this, old = this._comment, next = String(v);
+    if (old === next) return;          // no change, nothing to record
+    this._comment = next;
+    record({ undo() { self._comment = old; },
+             redo() { self._comment = next; } });
+  }
+});
+Comp.prototype.layer = function (i) { return this._layers[i - 1]; };
+
+function makeComp(name) {
+  const c = new Comp(name);
+  Object.setPrototypeOf(c, Object.create(CompItem.prototype,
+    Object.getOwnPropertyDescriptors(Comp.prototype)));
+  return c;
+}
+
+let folderAddThrows = false;
+const project = {
+  _items: [],
+  get numItems() { return this._items.length; },
+  item(i) { return this._items[i - 1]; },
+  renderQueue: { numItems: 0 },
+  rootFolder: { name: "(root)" },
+  items: {
+    addComp(name) {
+      const c = makeComp(name);
+      project._items.push(c);
+      record({ undo() {
+                 const k = project._items.indexOf(c);
+                 if (k >= 0) project._items.splice(k, 1);
+               },
+               redo() { project._items.push(c); } });
+      return c;
+    },
+    addFolder(name) {
+      if (folderAddThrows) throw new Error("no folders here");
+      const f = { name, remove() {
+        const k = project._items.indexOf(f);
+        if (k >= 0) project._items.splice(k, 1);
+        record({ undo() { project._items.push(f); },
+                 redo() {
+                   const j = project._items.indexOf(f);
+                   if (j >= 0) project._items.splice(j, 1);
+                 } });
+      } };
+      Object.setPrototypeOf(f, FolderItem.prototype);
+      project._items.push(f);
+      record({ undo() {
+                 const k = project._items.indexOf(f);
+                 if (k >= 0) project._items.splice(k, 1);
+               },
+               redo() { project._items.push(f); } });
+      return f;
+    }
+  }
+};
+
+const app = {
+  project,
+  beginUndoGroup(name) {
+    undo.depth++;
+    undo.opened.push(name);
+    if (undo.depth === 1) undo.open = { name, ops: [] };
+  },
+  endUndoGroup() {
+    if (undo.depth === 0) { undo.unbalanced++; return; }
+    undo.depth--;
+    if (undo.depth > 0) return;
+    // MEASURED: an empty group is not pushed at all.
+    if (undo.open.ops.length) {
+      undo.stack.push(undo.open);
+      undo.redo.length = 0;
+    }
+    undo.open = null;
+  },
+  executeCommand(id) {
+    if (id === 16) {
+      undo.undos++;
+      const g = undo.stack.pop();
+      if (!g) return;
+      for (let i = g.ops.length - 1; i >= 0; i--) g.ops[i].undo();
+      undo.redo.push(g);
+    } else if (id === 17) {
+      undo.redos++;
+      const g = undo.redo.pop();
+      if (!g) return;
+      for (let i = 0; i < g.ops.length; i++) g.ops[i].redo();
+      undo.stack.push(g);
+    }
+  }
+};
+
+const $ = { global: {} };
+
+const host = eval(hostSrc + ";\n({ AELL_TOOLS: AELL_TOOLS, " +
+  "AELL_MUTATING: AELL_MUTATING, AELL_okay: AELL_okay, AELL_err: AELL_err, " +
+  "AELL_errPartial: AELL_errPartial, AELL_fingerprint: AELL_fingerprint, " +
+  "AELL_sentinel: AELL_sentinel })");
+const { AELL_TOOLS, AELL_MUTATING, AELL_okay, AELL_err, AELL_errPartial,
+        AELL_fingerprint, AELL_sentinel } = host;
+
+// ------------------------------------------------------- scenario tools
+
+const comp = project.items.addComp("Rollback scratch");
+function squares() {
+  return comp._layers.filter(l => /^Square/.test(l.name));
+}
+function addLayer(name) {
+  const L = new Layer(name, comp);
+  comp._layers.push(L);
+  record({ undo() {
+             const k = comp._layers.indexOf(L);
+             if (k >= 0) comp._layers.splice(k, 1);
+           },
+           redo() { comp._layers.push(L); } });
+  return L;
+}
+
+// stands in for add_solid
+AELL_TOOLS.__square = function (a) {
+  const L = addLayer(String(a.name || ("Square " + (squares().length + 1))));
+  return AELL_okay({ name: L.name });
+};
+// stands in for duplicate_layer — grounded error when there is no source,
+// which is exactly how the field bug started
+AELL_TOOLS.__dup = function (a) {
+  const src = squares()[0];
+  if (!src) {
+    return AELL_err("No layer to duplicate. Layers here: " +
+      (comp._layers.map(l => l.name).join(", ") || "(none)"));
+  }
+  const n = Math.max(1, Number(a.count) || 1);
+  for (let i = 0; i < n; i++) addLayer("Square " + (squares().length + 1));
+  return AELL_okay({ made: n });
+};
+// stands in for for_each_layer giving up after changing things
+AELL_TOOLS.__partial = function () {
+  addLayer("Half done");
+  return AELL_errPartial("Stopped after 5 failures (1 layer was already " +
+                         "changed before that).");
+};
+// mutates nothing, just fails
+AELL_TOOLS.__failMut = function () { return AELL_err("mutating tool failed"); };
+// changes something the undo system cannot reverse (a torn write)
+AELL_TOOLS.__ghost = function () {
+  const L = new Layer("Ghost", comp);
+  comp._layers.push(L);          // deliberately NOT recorded
+  return AELL_okay({ name: "Ghost" });
+};
+AELL_TOOLS.__read = function () { return AELL_okay({ read: true }); };
+AELL_TOOLS.__readFail = function () { return AELL_err("bad lookup"); };
+
+AELL_MUTATING.__square = true;
+AELL_MUTATING.__dup = true;
+AELL_MUTATING.__partial = true;
+AELL_MUTATING.__failMut = true;
+AELL_MUTATING.__ghost = true;
+
+const batch = (cmds, opts) => JSON.parse($.global.AELL_callBatch(
+  JSON.stringify(cmds), opts === undefined ? undefined : JSON.stringify(opts)));
+
+function reset() {
+  comp._layers.length = 0;
+  comp._comment = "";
+  folderAddThrows = false;
+  resetUndo();
+}
+
+const ROLL = { rollback: true };
+
+// ------------------------------------------ 0. the stub is faithful first
+
+reset();
+app.beginUndoGroup("empty");
+app.endUndoGroup();
+assert(undo.stack.length === 0,
+       "STUB FIDELITY: an empty undo group registers nothing (AE 2026)");
+
+reset();
+addLayer("User's own work");
+app.beginUndoGroup("empty");
+app.endUndoGroup();
+app.executeCommand(16);
+assert(comp._layers.length === 0,
+       "STUB FIDELITY: so one Undo after an empty group eats the " +
+       "PREVIOUS edit — the overshoot this design exists to prevent");
+
+reset();
+const before0 = AELL_fingerprint();
+app.beginUndoGroup("sentinel only");
+const armed0 = AELL_sentinel();
+app.endUndoGroup();
+assert(armed0 === true, "the sentinel reports that it fired");
+assert(AELL_fingerprint() === before0,
+       "and leaves the project byte-identical (net-zero comment write)");
+assert(undo.stack.length === 1,
+       "but DOES register an undo group, so an Undo cannot reach past it");
+
+reset();
+addLayer("User's own work");
+undo.stack.length = 0;            // pretend that edit is older history
+addLayer("Older still");
+app.beginUndoGroup("sentinel only");
+AELL_sentinel();
+app.endUndoGroup();
+app.executeCommand(16);
+assert(comp._layers.length === 2,
+       "with the sentinel, one Undo consumes OUR group and the user's " +
+       "previous edit survives");
+
+// --------------------------------------- 1. the ten-squares bug, exactly
+
+reset();
+const r1 = batch([{ tool: "__dup", args: { count: 8 } },
+                  { tool: "__square", args: {} }], ROLL);
+assert(r1.ok, "the batch itself still returns ok (per-command results)");
+assert(r1.data.rollback && r1.data.rollback.rolledBack === true,
+       "a round where one mutating command failed and another succeeded " +
+       "is ROLLED BACK");
+assert(squares().length === 0,
+       "the orphan square is gone — comp is empty again (got " +
+       squares().length + ")");
+assert(undo.undos === 1, "exactly ONE Undo was issued (got " + undo.undos + ")");
+assert(undo.redos === 0, "and no Redo");
+assert(r1.data.results.length === 2, "one result per command, still");
+assert(r1.data.results.every(x => x.rolledBack === true),
+       "every result is marked rolledBack");
+assert(r1.data.results.every(x => x.ok === false),
+       "including the one that had succeeded — it no longer exists");
+assert(/ROLLED BACK/.test(r1.data.results[0].error),
+       "the first result carries the full explanation");
+assert(/No layer to duplicate/.test(r1.data.results[0].error),
+       "with the original grounded error kept: " +
+       r1.data.results[0].error.slice(0, 60));
+assert(r1.data.results[1].error.length < r1.data.results[0].error.length,
+       "later results get the SHORT note (context budget)");
+
+// The retry the model would make — from a clean comp, it lands on nine.
+const r1b = batch([{ tool: "__square", args: {} },
+                   { tool: "__dup", args: { count: 8 } }], ROLL);
+assert(r1b.ok && !r1b.data.rollback,
+       "the retry round succeeds and is not rolled back");
+assert(squares().length === 9,
+       "NINE squares, not ten — the field bug is fixed (got " +
+       squares().length + ")");
+
+// And the proof it is the rollback doing it: same two rounds, unarmed.
+reset();
+batch([{ tool: "__dup", args: { count: 8 } }, { tool: "__square", args: {} }]);
+batch([{ tool: "__square", args: {} }, { tool: "__dup", args: { count: 8 } }]);
+assert(squares().length === 10,
+       "WITHOUT rollback the same two rounds still make ten (got " +
+       squares().length + ") — this test can fail, not just pass");
+
+// ------------------------------------------- 2. when NOT to roll back
+
+reset();
+const r2 = batch([{ tool: "__square", args: {} },
+                  { tool: "__square", args: {} }], ROLL);
+assert(!r2.data.rollback && squares().length === 2,
+       "a round where everything succeeded is left alone");
+assert(undo.undos === 0, "and no Undo is issued at all");
+
+reset();
+const r3 = batch([{ tool: "__failMut", args: {} },
+                  { tool: "__dup", args: {} }], ROLL);
+assert(!r3.data.rollback,
+       "a round where every mutating command FAILED has nothing to undo");
+assert(undo.undos === 0, "so no Undo is issued");
+assert(!r3.data.results[0].rolledBack,
+       "and the grounded errors reach the model untouched");
+
+reset();
+const r4 = batch([{ tool: "__square", args: {} },
+                  { tool: "__readFail", args: {} }], ROLL);
+assert(!r4.data.rollback,
+       "a failing READ-ONLY tool does not trigger a rollback (approved " +
+       "call: a bad lookup leaves no debris)");
+assert(squares().length === 1, "the real work stands");
+assert(undo.undos === 0, "no Undo issued");
+
+reset();
+const r5 = batch([{ tool: "__dup", args: {} },
+                  { tool: "__square", args: {} }]);
+assert(!r5.data.rollback && squares().length === 1,
+       "no rollback at all unless the caller asks for it");
+assert(undo.undos === 0, "and no Undo when unarmed");
+
+reset();
+const r6 = batch([{ tool: "__read", args: {} },
+                  { tool: "__readFail", args: {} }], ROLL);
+assert(!r6.data.rollback && undo.opened.length === 0,
+       "a read-only batch opens no undo group and costs no fingerprint");
+
+// ----------------------------- 3. a tool that failed AFTER changing things
+
+reset();
+const r7 = batch([{ tool: "__partial", args: {} }], ROLL);
+assert(r7.data.rollback && r7.data.rollback.rolledBack === true,
+       "a single tool that gave up PART WAY rolls its own round back");
+assert(comp._layers.length === 0,
+       "the half-applied work is gone (got " + comp._layers.length + ")");
+assert(undo.undos === 1, "one Undo");
+
+// ------------------------------- 4. the safety nets: sentinel and Redo
+
+reset();
+comp._layers.length = 0;
+project._items.length = 0;        // no comp to write a comment on
+folderAddThrows = true;           // and no folder to add either
+const r8 = batch([{ tool: "__failMut", args: {} },
+                  { tool: "__square", args: {} }], ROLL);
+assert(!r8.data.rollback.rolledBack,
+       "with no sentinel available the rollback DISARMS itself");
+assert(undo.undos === 0,
+       "and issues no Undo at all — never on a guess (got " +
+       undo.undos + ")");
+assert(/could not be rolled back safely/.test(r8.data.rollback.why),
+       "saying so: " + r8.data.rollback.why.slice(0, 50));
+project._items.push(comp);
+folderAddThrows = false;
+
+reset();
+const r9 = batch([{ tool: "__ghost", args: {} },
+                  { tool: "__square", args: {} },
+                  { tool: "__failMut", args: {} }], ROLL);
+assert(!r9.data.rollback.rolledBack,
+       "when the Undo does not land on the pre-round state, the round is " +
+       "reported as NOT rolled back");
+assert(undo.undos === 1 && undo.redos === 1,
+       "one Undo, then ONE Redo to put it back — never a second Undo " +
+       "(undos " + undo.undos + ", redos " + undo.redos + ")");
+assert(comp._layers.length === 2,
+       "and the work is left exactly where it was — the torn Ghost plus " +
+       "the square that succeeded (got " + comp._layers.length + ")");
+assert(/abandoned/.test(r9.data.rollback.why),
+       "with an honest explanation: " + r9.data.rollback.why.slice(0, 50));
+
+// --------------------------------------- 5. create_comp aliases go back
+
+reset();
+$.global.AELL_compAliases = { "Main": "Main 2" };
+const aliasSnapshot = JSON.stringify($.global.AELL_compAliases);
+AELL_TOOLS.__aliasComp = function () {
+  $.global.AELL_compAliases["Hero"] = "Hero 2";
+  addLayer("comp stand-in");
+  return AELL_okay({ name: "Hero 2" });
+};
+AELL_MUTATING.__aliasComp = true;
+const r10 = batch([{ tool: "__aliasComp", args: {} },
+                   { tool: "__failMut", args: {} }], ROLL);
+assert(r10.data.rollback.rolledBack, "the aliasing round is rolled back");
+assert(JSON.stringify($.global.AELL_compAliases) === aliasSnapshot,
+       "and the comp-name alias it added is dropped with it — otherwise " +
+       "the next round resolves a name to a comp that no longer exists");
+
+// ------------------------------------------------ 6. the panel's budget
+
+const setTimeoutRef = setTimeout;
+const window = {
+  console, JSON, Math, Date, setTimeout: setTimeoutRef,
+  Settings: { get() { return {}; } },
+  Llama: { isRunning() { return true; } },
+  Comfy: {}
+};
+
+// Bridge that answers like a host which rolls back every partial round.
+const seen = [];
+window.AEBridge = {
+  evalScript(script, cb) {
+    const m = String(script).match(/^AELL_callBatch\((.*)\)$/);
+    let optsIn = {};
+    let cmds = [];
+    if (m) {
+      // Two JSON-string literals: the commands, then the options.
+      const parts = new Function("return [" + m[1] + "]")();
+      cmds = JSON.parse(parts[0]);
+      if (parts.length > 1) optsIn = JSON.parse(parts[1]);
+    }
+    seen.push({ rollback: !!optsIn.rollback, n: cmds.length });
+    // Every round here fails part way, so an ARMED host rolls it back.
+    const rows = cmds.map(() => optsIn.rollback
+      ? { ok: false, rolledBack: true, error: "ROLLED BACK: ..." }
+      : { ok: false, error: "plain failure" });
+    if (cb) setTimeoutRef(() => cb(JSON.stringify(
+      { ok: true, data: { results: rows } }), false), 0);
+  }
+};
+
+new Function("window", toolsSrc)(window);
+const Tools = window.Tools;
+
+function run(commands, opts) {
+  return new Promise(resolve => {
+    Tools.executeCommands(commands, opts || {}, null, resolve);
+  });
+}
+const H = t => ({ tool: t, args: {} });
+
+(async function () {
+  seen.length = 0;
+  await run([H("add_solid"), H("comfy_status"), H("add_mask"),
+             H("apply_effect")], { allowRollback: true });
+  assert(seen.length === 2,
+         "a panel tool splits this round into two host batches (got " +
+         seen.length + ")");
+  assert(seen[0].rollback === true,
+         "the first batch is armed for rollback");
+  assert(seen[1].rollback === false,
+         "the SECOND is not — one rollback per request, or a " +
+         "deterministic failure would loop undo/retry/undo forever");
+
+  seen.length = 0;
+  await run([H("add_solid")], { allowRollback: false });
+  assert(seen[0].rollback === false,
+         "a caller with no budget left never arms it");
+
+  seen.length = 0;
+  await run([H("add_solid"), H("get_comp_details")],
+            { allowRollback: true, dryRun: true });
+  assert(seen.every(s => s.rollback === false),
+         "a dry run mutates nothing, so it is never armed");
+
+  console.log("\n" + checks + " checks");
+})();

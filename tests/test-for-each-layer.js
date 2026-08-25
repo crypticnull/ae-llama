@@ -287,8 +287,13 @@ const rFail = call("for_each_layer",
                    { layers: names, tool: "__fail", args: {} });
 assert(!rFail.ok, "a failing tool fails the batch");
 assert(calls === 5, "it stops after 5 failures, not 60 (ran " + calls + ")");
-assert(/NOT undone/.test(rFail.error || ""),
-       "and warns that earlier layers were already changed: " + rFail.error);
+assert(/were already changed/.test(rFail.error || ""),
+       "and says earlier layers were already changed: " + rFail.error);
+// It gave up PART WAY, so it is a partial failure, not a plain one: the
+// round rollback counts `mutated` as both a success and a failure, which
+// is what lets a lone for_each_layer undo its own half-applied work.
+assert(rFail.mutated === true,
+       "and is flagged as having mutated before failing (rollback trigger)");
 delete AELL_TOOLS.__fail;
 delete AELL_PER_LAYER.__fail;
 

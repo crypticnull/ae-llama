@@ -97,7 +97,7 @@ Still open:
 - add_light: no such tool exists, so lights are wholly uncovered. Same
   aim-not-scale rule cameras needed. Build the tool AND its coverage.
 
-## 2c. Inventory the owner's real ComfyUI install (no AE needed, one pass)
+## 2c. Inventory the owner's real ComfyUI install — DONE 2026-08-25
 
 The remote session cannot see this machine's disk. Scan
 `C:\Users\mr\Documents\ComfyUI` and write
@@ -159,13 +159,18 @@ themselves inside the scratch comp.
     missing is any notion of rolling a failed round back.
 - ~~Undo hygiene: one Ctrl+Z per chat command~~ DONE 2026-08-21 via
   AELL_callBatch.
-- ROLLBACK for a round that fails part way — the biggest open gap. When
-  duplicate_layer errored before add_solid had a layer to copy, the
-  model retried the whole round and the comp ended with ten squares
-  instead of nine. Every tool behaved correctly; there is simply no
-  notion of undoing a partial round. Now that a round is one undo group,
-  this is tractable. Design it before building it, and say what happens
-  to the user's OWN work if a rollback overshoots.
+- ~~ROLLBACK for a round that fails part way~~ DONE 2026-08-25 (0.9.14).
+  A round where one mutating command failed and another succeeded is
+  undone whole, so the model's retry starts from the real state: the
+  nine-squares sentence now yields nine, not ten. One Undo, issued
+  inside the same AELL_callBatch execution that made the changes (AE
+  blocks its UI throughout, so nothing of the user's can be on top of
+  the undo stack), armed only when a net-zero sentinel proves the group
+  is not empty, and verified by a before/after fingerprint — a mismatch
+  gets ONE Redo and an honest "not rolled back", never a second Undo.
+  Budget: one rollback per user request. A failing READ-ONLY tool does
+  not trigger it. Four AE measurements gated the design; they and the
+  answer to "what if it overshoots" are in WORKPLAN-LOG 2026-08-25.
 - Performance: 200-layer comps — measure grid_layout and batch
   keyframe wall time; note anything over ~5s so the remote session can
   optimize.

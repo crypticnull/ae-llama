@@ -85,6 +85,15 @@ var AELLJSON = (function () {
 function AELL_err(msg) { return { ok: false, error: String(msg) }; }
 function AELL_okay(data) { return { ok: true, data: data }; }
 
+/* A failure that ALREADY CHANGED THINGS before giving up. The batch
+ * tools (for_each_layer and friends) can get halfway through 200 layers
+ * and stop; to the round rollback that counts as both a success and a
+ * failure, so such a round is undone even when this is the only command
+ * in it. Plain AELL_err would leave the half-applied work behind. */
+function AELL_errPartial(msg) {
+  return { ok: false, error: String(msg), mutated: true };
+}
+
 function AELL_resolveComp(name) {
   var proj = app.project;
   if (!proj) throw new Error("No project open");
@@ -4033,9 +4042,12 @@ AELL_TOOLS.for_each_layer = function (args) {
     } else {
       failures.push(layers[i].name + ": " + (r ? r.error : "unknown error"));
       if (failures.length >= 5) {
-        return AELL_err("Stopped after 5 failures (" + okCount +
-          " layers succeeded first, and those changes are NOT undone). " +
-          "Failures: " + failures.join(" | "));
+        // Partial, not plain, failure: okCount layers were already
+        // changed. If the round is rollback-armed those go with it; if
+        // it is not, they stay. Either way the caller is told which.
+        return AELL_errPartial("Stopped after 5 failures (" + okCount +
+          " layers were already changed before that). Failures: " +
+          failures.join(" | "));
       }
     }
   }
@@ -4188,6 +4200,218 @@ function AELL_call(toolName, argsJson) {
 
 $.global.AELL_call = AELL_call;
 
+// ------------------------------------------------------- round rollback
+/*
+ * A round that fails PART WAY used to leave its successes behind. The
+ * model, seeing a failed round, would redo the whole thing -- which is
+ * how "make nine squares" ended up making ten: duplicate_layer errored
+ * before add_solid had a layer to copy, add_solid succeeded anyway, and
+ * the retry built nine more on top of the orphan.
+ *
+ * Now that a round is ONE undo group (AELL_callBatch), the fix is one
+ * Undo. The whole safety argument rests on issuing it HERE, inside the
+ * same script execution that made the changes: AE blocks its UI for the
+ * duration, so nothing of the user's can land on top of the undo stack
+ * between endUndoGroup() and the Undo. Exactly one Undo is ever issued.
+ *
+ * Measured in AE 2026 before any of this was written:
+ *  - an EMPTY undo group registers NOTHING, and one Undo then reaches
+ *    straight past it into the user's own last edit. That is why the
+ *    sentinel below is load-bearing rather than belt-and-braces.
+ *  - a net-zero comment write DOES register a group (so does an
+ *    addFolder+remove), leaving the project byte-identical.
+ *  - import_file, add_to_render_queue and delete_item all reverse
+ *    cleanly with a single Undo, so none of them need excluding.
+ *  - undoing a create_comp while that comp is frontmost opens no
+ *    dialog, leaves activeItem null rather than dangling, and leaves
+ *    the viewer alive.
+ *  - two full 200-layer fingerprints cost 37 ms, so the verification
+ *    below can afford full fidelity over the whole project.
+ */
+
+/* One layer's contribution to the fingerprint. Everything is wrapped:
+ * cameras, lights and shape layers each lack some of these, and a
+ * missing property must produce a STABLE absence, not an exception. */
+function AELL_layerSig(L, idx) {
+  var t = idx + "|" + L.name + "|" + (L.enabled ? 1 : 0);
+  try {
+    var tr = L.property("ADBE Transform Group");
+    t += "|p" + tr.property("ADBE Position").value.join(",");
+    t += "|s" + tr.property("ADBE Scale").value.join(",");
+    t += "|r" + tr.property("ADBE Rotate Z").value;
+    t += "|o" + tr.property("ADBE Opacity").value;
+    t += "|k" + tr.property("ADBE Opacity").numKeys;
+  } catch (e1) {}
+  try { t += "|e" + L.property("ADBE Effect Parade").numProperties; }
+  catch (e2) {}
+  try { t += "|m" + L.property("ADBE Mask Parade").numProperties; }
+  catch (e3) {}
+  try { t += "|f" + (L.parent ? L.parent.index : "-"); } catch (e4) {}
+  try { t += "|t" + L.trackMatteType; } catch (e5) {}
+  try { t += "|i" + L.inPoint + "," + L.outPoint + "," + L.startTime; }
+  catch (e6) {}
+  try {
+    if (L instanceof TextLayer) {
+      t += "|x" + L.property("Source Text").value.text;
+    }
+  } catch (e7) {}
+  return t;
+}
+
+/* A compact string that changes whenever anything a tool could have
+ * touched changes. Used ONLY to verify that a rollback landed exactly
+ * where it started -- never to decide WHAT to undo. It has to be
+ * deterministic or every rollback would report itself as overshooting;
+ * measured byte-stable across back-to-back runs on 200 layers. */
+var AELL_SIG_LAYER_BUDGET = 4000;
+
+function AELL_fingerprint() {
+  var p = app.project;
+  if (!p) return "no project";
+  var parts = ["n" + p.numItems];
+  try { parts.push("rq" + p.renderQueue.numItems); } catch (eQ) {}
+  var budget = AELL_SIG_LAYER_BUDGET;
+  for (var i = 1; i <= p.numItems; i++) {
+    var it = p.item(i);
+    var kind = (it instanceof CompItem) ? "c"
+             : ((it instanceof FolderItem) ? "f" : "x");
+    var t = i + ":" + it.name + ":" + kind;
+    try { t += "/" + it.comment; } catch (e0) {}
+    try {
+      if (it.parentFolder) t += "/in:" + it.parentFolder.name;
+    } catch (e1) {}
+    if (it instanceof CompItem) {
+      t += "/" + it.width + "x" + it.height + "/" + it.duration +
+           "/" + it.frameRate + "/" + it.numLayers;
+      for (var j = 1; j <= it.numLayers; j++) {
+        if (budget <= 0) { t += "\n (truncated)"; break; }
+        budget--;
+        try { t += "\n " + AELL_layerSig(it.layer(j), j); }
+        catch (e2) { t += "\n " + j + "|(unreadable)"; }
+      }
+    }
+    parts.push(t);
+  }
+  return parts.join("\n");
+}
+
+/* Make the undo group non-empty on purpose.
+ *
+ * Without this, a batch whose mutating tools all happened to change
+ * nothing (a for_each_layer matching zero layers, a set_transform to the
+ * value already there) would close an EMPTY group -- and the one Undo
+ * would eat the user's previous edit instead. Net-zero by construction:
+ * the comment is written and put straight back.
+ *
+ * Returns true only if a sentinel op actually happened. False disarms
+ * the rollback entirely; nothing is ever undone on a guess. */
+function AELL_sentinel() {
+  var p = app.project;
+  var i, it, old;
+  for (i = 1; i <= p.numItems; i++) {
+    it = p.item(i);
+    if (!(it instanceof CompItem)) continue;
+    try {
+      old = it.comment;
+      it.comment = old + " ";
+      it.comment = old;
+      return true;
+    } catch (e) {}
+  }
+  // No comp to write to (so create_comp is the only mutation possible);
+  // an item added and removed inside the group registers just as well.
+  try {
+    var f = p.items.addFolder("AE Llama rollback marker");
+    f.remove();
+    return true;
+  } catch (e2) {}
+  return false;
+}
+
+/*
+ * Did this batch leave debris, and if so, undo it.
+ *
+ * Trigger: at least one MUTATING command succeeded AND at least one
+ * failed -- in any order. Order does not matter because the debris is
+ * whatever survives a round the model considers failed, and its
+ * instinct is to redo the round whole. A failing READ-ONLY tool does
+ * not trigger it: a bad lookup leaves nothing behind, and throwing away
+ * real work over it would be worse than the disease.
+ *
+ * Returns null when there is nothing to decide, else a summary. On a
+ * rollback the per-command results are rewritten in place, because a
+ * result that says "ok" for something that no longer exists is the one
+ * thing guaranteed to send the model down the wrong path.
+ */
+function AELL_maybeRollback(cmds, results, armed, before, aliasesBefore) {
+  var okMut = 0, badMut = 0, firstError = "", i, name, r;
+  for (i = 0; i < cmds.length; i++) {
+    name = String((cmds[i] || {}).tool || "");
+    if (!AELL_MUTATING[name]) continue;
+    r = results[i] || {};
+    if (r.ok) { okMut++; continue; }
+    badMut++;
+    if (!firstError) firstError = name + ": " + (r.error || "failed");
+    // A tool that failed AFTER changing things (for_each_layer giving up
+    // partway) is both halves of the trigger by itself.
+    if (r.mutated) okMut++;
+  }
+  if (!okMut || !badMut) return null;
+
+  if (!armed) {
+    return { rolledBack: false, failed: firstError,
+      why: "This round could not be rolled back safely, so the changes " +
+           "that DID succeed are still there." };
+  }
+
+  app.executeCommand(16);            // Edit > Undo -- exactly once, ever
+  var after = AELL_fingerprint();
+  if (after !== before) {
+    // We did not land where we started. Put it back and say so; a second
+    // Undo is exactly the overshoot this design exists to prevent.
+    app.executeCommand(17);          // Edit > Redo
+    return { rolledBack: false, failed: firstError,
+      why: "Rollback was attempted and abandoned -- the undo did not " +
+           "land on the pre-round state, so it was redone. The changes " +
+           "that succeeded are still there." };
+  }
+
+  // Undoing a create_comp leaves its rename alias pointing at a comp
+  // that no longer exists; put the alias table back too.
+  $.global.AELL_compAliases = aliasesBefore || {};
+
+  var note = "ROLLED BACK: a command in this round failed (" + firstError +
+    ") after others had already changed the project, so the WHOLE round " +
+    "was undone. Nothing from it was applied — the project is exactly as " +
+    "it was before the round. Do NOT assume any layer, comp or keyframe " +
+    "from this round exists. Re-plan from the current state.";
+
+  // The full explanation goes on the FIRST result only. Repeating 300
+  // characters twenty times would eat the panel's whole tool-result
+  // budget (compactToolResults caps the lot at 6000) and push the very
+  // sentence the model needs out of its context.
+  var brief = "Rolled back with the rest of this round — not applied.";
+  var told = false;
+  for (i = 0; i < results.length; i++) {
+    r = results[i] || {};
+    name = String((cmds[i] || {}).tool || "");
+    var say = told ? brief : note;
+    if (AELL_MUTATING[name]) {
+      results[i] = { ok: false, rolledBack: true,
+        error: (r.ok ? "" : String(r.error || "") + " — ") + say };
+      told = true;
+    } else {
+      // A read still happened, and the state it described is the state
+      // we just returned to, so its data survives with a warning on it.
+      r.rolledBack = true;
+      r.note = say;
+      results[i] = r;
+      told = true;
+    }
+  }
+  return { rolledBack: true, failed: firstError, commands: cmds.length };
+}
+
 /* Run several tools inside ONE undo group, so a chat command that takes
  * five tool calls costs the user ONE Ctrl+Z instead of five.
  *
@@ -4196,10 +4420,13 @@ $.global.AELL_call = AELL_call;
  * group in one evalScript, change something in the next, and the first
  * change is already in its own step). Bracketing the round with separate
  * begin/end calls therefore cannot work -- the tools must run together.
+ * The same fact is what makes the rollback above safe.
  *
- * Takes '[{tool, args}, ...]', returns '{ok, results: [...]}' with one
- * result per command, in order, whatever each one's outcome was. */
-function AELL_callBatch(commandsJson) {
+ * Takes '[{tool, args}, ...]' and an optional '{"rollback": true}',
+ * returns '{ok, results: [...]}' with one result per command, in order,
+ * whatever each one's outcome was, plus 'rollback' when a partial round
+ * was undone. */
+function AELL_callBatch(commandsJson, optsJson) {
   var out;
   try {
     var cmds = AELLJSON.parse(commandsJson);
@@ -4207,6 +4434,10 @@ function AELL_callBatch(commandsJson) {
     if (Object.prototype.toString.call(cmds) !== "[object Array]") {
       return '{"ok":false,"error":"AELL_callBatch wants [{tool, args}, ' +
              '...]"}';
+    }
+    var opts = {};
+    if (typeof optsJson === "string" && optsJson !== "") {
+      try { opts = AELLJSON.parse(optsJson) || {}; } catch (eO) { opts = {}; }
     }
     var results = [];
     var mutates = false;
@@ -4216,7 +4447,23 @@ function AELL_callBatch(commandsJson) {
       if (!first && n) first = n;
       if (AELL_MUTATING[n]) mutates = true;
     }
+    // Nothing that mutates means nothing to roll back, and the
+    // fingerprint is pure cost — do not pay it.
+    var arming = !!opts.rollback && mutates;
+    var before = arming ? AELL_fingerprint() : "";
+    var aliasesBefore = null;
+    if (arming) {
+      aliasesBefore = {};
+      var al = $.global.AELL_compAliases || {};
+      for (var key in al) {
+        if (Object.prototype.hasOwnProperty.call(al, key)) {
+          aliasesBefore[key] = al[key];
+        }
+      }
+    }
+    var sentinelOk = false;
     var run = function () {
+      if (arming) sentinelOk = AELL_sentinel();
       for (var j = 0; j < cmds.length; j++) {
         var c = cmds[j] || {};
         results.push(AELL_runTool(String(c.tool || ""), c.args || {}));
@@ -4230,7 +4477,13 @@ function AELL_callBatch(commandsJson) {
     } else {
       run();
     }
-    out = AELL_okay({ results: results });
+    var data = { results: results };
+    if (arming) {
+      var verdict = AELL_maybeRollback(cmds, results, sentinelOk, before,
+                                       aliasesBefore);
+      if (verdict) data.rollback = verdict;
+    }
+    out = AELL_okay(data);
   } catch (e) {
     out = AELL_err(e && e.message ? e.message : String(e));
   }

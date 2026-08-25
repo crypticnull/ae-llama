@@ -1295,3 +1295,84 @@ frontmost.** Clean, no dialog, no dead viewer:
   design detail these measurements settled beyond a yes/no is that the
   fingerprint can be full-fidelity and whole-project-scoped, which is
   simpler than the scoped fallback the proposal hedged with.
+
+## 2026-08-25 — item 4 (ROLLBACK): built, after all four measurements came back clean
+
+- Changed:
+  - `extension/jsx/hostscript.jsx` — `AELL_errPartial` (a failure that
+    already mutated), `AELL_layerSig` + `AELL_fingerprint`,
+    `AELL_sentinel`, `AELL_maybeRollback`, and `AELL_callBatch` now takes
+    an optional second arg `'{"rollback":true}'`. `for_each_layer`'s
+    five-failure abort returns `AELL_errPartial`, so a lone batch tool
+    that gave up part way undoes its own half-applied work — its error
+    text no longer has to apologise that the changes are NOT undone.
+  - `extension/js/tools.js` — `callHostBatch(cmds, opts, cb)` (old
+    two-arg form still works), `executeCommands` takes `allowRollback`
+    and disarms after one rollback, one system-prompt rule telling the
+    model what a ROLLED BACK result means.
+  - `extension/js/main.js` — one rollback budget per user request; a
+    rolled-back round prints ONE chat line instead of N identical red
+    ones.
+  - `extension/js/selftest.js` + `scripts/ae-selftest.jsx` — 9 new steps
+    and `batchOpts` threading.
+  - `tests/test-round-rollback.js` (new, 48 checks), plus updates to
+    `test-undo-groups.js` (two-arg batch literal), `test-for-each-layer.js`
+    (the `mutated` flag) and `test-self-test.js` (canned host now models
+    the rollback AND the undo).
+- Harness: **158/158 real AE** (was 149/149). Stubbed suite: 19 files,
+  all green except the pre-existing `test-capability-doc.js` CRLF issue
+  below. Bumped 0.9.14.
+- How it works, in one paragraph: the batch takes a fingerprint, opens
+  its undo group, writes a net-zero sentinel, runs every command, and
+  closes the group. If at least one MUTATING command succeeded and at
+  least one failed — in any order — it issues exactly ONE `executeCommand(16)`
+  and re-fingerprints. Match means rolled back: every result is
+  rewritten so nothing still claims "ok", the comp-name aliases are
+  restored, and the first result carries the full explanation (the rest
+  get a short note, or 300 characters x 20 commands would eat the
+  panel's whole 6000-char tool-result budget). Mismatch means ONE
+  `executeCommand(17)` and an honest "not rolled back".
+- What happens to the user's OWN work if it overshoots — the question
+  the workplan asked. It cannot, and here is why rather than a promise:
+  the Undo is issued in the SAME script execution that made the changes,
+  and AE blocks its UI for the whole of an ExtendScript run, so no user
+  edit can land on the stack in between. The only way our group is not
+  on top is if it were EMPTY — measured, that registers nothing and one
+  Undo reaches the previous edit — which is exactly what the sentinel
+  prevents. If the sentinel cannot fire (no comp, no folder), the
+  rollback DISARMS and the debris stays; nothing is ever undone on a
+  guess. And the fingerprint is the third net: land anywhere other than
+  the pre-round state and it Redoes once and reports failure. One Undo,
+  one Redo, never more.
+- Ordering matters and I got it wrong at first: the trigger is NOT
+  "a failure after a success". In the field bug duplicate_layer failed
+  FIRST and add_solid succeeded after it. The debris is whatever
+  survives a round the model considers failed, so the trigger is
+  any-success AND any-failure, in either order.
+- Proven to catch the regression, not just to pass. `test-round-rollback.js`
+  runs the actual field scenario through a stub whose undo stack really
+  reverses mutations: armed, the two rounds leave NINE squares; unarmed,
+  the same two rounds still leave TEN, asserted in the same file. The
+  stub also asserts its own fidelity first — that an empty group
+  registers nothing and that one Undo after one eats the previous edit —
+  so a future change that drops the sentinel fails here rather than in
+  someone's project. Real AE carries the same pair: one step rolls a
+  partial round back and reads the comp back empty, the next runs the
+  IDENTICAL round unarmed and reads the orphan back.
+- Assumptions worth a second opinion:
+  - One rollback per REQUEST, then the debris stands. The alternative
+    (always roll back) is easier to explain but livelocks a
+    deterministic failure into undo/retry/undo until maxRounds.
+  - A failing read-only tool does not trigger it, so a round where
+    add_solid succeeds and get_comp_details fails can still leave an
+    orphan if the model retries. Rarer, and less bad than discarding
+    good work over a bad lookup — but it is a real hole.
+  - The fingerprint caps at 4000 layers across the project and then
+    truncates. Above that a rollback could verify against a truncated
+    signature; nothing on this machine comes close.
+- BLOCKED/for the remote session: `tests/test-capability-doc.js` fails
+  on THIS machine before any of my changes (confirmed by stashing them):
+  the checked-out `docs/CAPABILITIES.md` has CRLF endings and
+  `capability-report.js --check` compares against its own LF output, so
+  it reports STALE on a clean tree. Green in CI (Linux), red for every
+  local pass. Worth normalizing the comparison rather than the file.
