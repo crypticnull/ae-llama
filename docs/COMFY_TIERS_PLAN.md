@@ -78,10 +78,30 @@ Each tier row in code also carries: `headroomGB` (default 1),
 `copy` (the honest one-line UI description), and per-kind resolution
 ceilings the workflow templates read. Pre-Ada cards (GTX 10/16, RTX 20)
 lack fp8 compute, so their catalog entries prefer GGUF quantizations —
-an entry field (`requiresAda: bool`), not a separate tier. Video
-entries stay placeholders until the owner's picks land (Krea workflow
-JSON, Wan variant, and whether "MiniMax H3" means local weights or an
-API — ask before cataloguing it).
+an entry field (`requiresAda: bool`), not a separate tier.
+
+**Video stack (owner-confirmed 2026-08-22):**
+
+- **Wan** — open weights on HuggingFace, catalogued like the chat
+  models: the 1.3B variant for T3/T4 (short clips), the 14B for T5+
+  (GGUF quants below that), ComfyUI-repackaged builds where they exist.
+  Exact repo/file URLs pinned during P5.
+- **MiniMax H3 — LOCAL WEIGHTS, confirmed.** The owner already has them
+  downloaded. Two consequences: (1) it is catalogable — P5 needs the
+  exact HuggingFace repo/file list so other users download it the same
+  way chat models download today; (2) the owner's existing copy should
+  be REGISTERED, not re-downloaded — the alternate models folder +
+  extra_model_paths.yaml mechanism already does exactly this. P4
+  measures its real VRAM on the 5090 before it gets tier assignments;
+  until then it carries no tier claims at all (its requirements are
+  unknown to us, not merely provisional).
+
+**T2 floor decision (resolved by arithmetic, 2026-08-22):** SD 1.5 is
+the 6 GB default. SDXL on 6 GB cannot fit and falls back to sequential
+offloading — a mode change, not a slowdown: ~5–10x slower (minutes per
+image vs ~20 s), where on 8 GB+ it fits and costs only ~2–3x. A default
+that takes minutes per image reads as broken; SDXL stays available on
+T2 as an opt-in flagged "~2–4 min/image on this card".
 
 ## The arbiter (state machine, `comfy.js` + `llama.js`)
 
@@ -131,10 +151,23 @@ made and shown at setup, keyed to the same tier as the chat pick.
 
 `update.json` grows a `comfyCatalog` next to `modelCatalog`: entries
 `{name, kind: image|video, urls, sizeMB, minVramGB, measured,
-exclusiveBelowGB, ceilings, workflowTemplate}`. Feed-driven like the
-llama catalog, so catalog corrections ship without a panel release. The
-owner's Krea workflow JSON becomes a workflow template referencing a
-catalog entry — the template mechanism already exists
+exclusiveBelowGB, requiresAda, ceilings, workflowTemplate}`. Feed-driven
+like the llama catalog, so catalog corrections ship without a panel
+release. **Downloads work exactly like chat models today**: HuggingFace
+URLs through the existing downloader (progress, cancel, resume), into
+the models dir or the user's alternate folder. Entries may need
+multiple files (a video model is diffusion weights + text encoder +
+VAE) — the `urls` list plus per-file sizes exists for that, and the
+downloader's progress line shows file N of M.
+
+**Register-existing path:** a user who already holds weights (the owner
+holds MiniMax H3 now) points the panel at them instead of
+re-downloading — the alternate models folder + extra_model_paths.yaml
+mechanism already built. The catalog entry matches by filename+size and
+flips to "installed" without a download.
+
+The owner's Krea workflow JSON becomes a workflow template referencing
+a catalog entry — the template mechanism already exists
 (`comfy_list_workflows`).
 
 ## Phases and owners
@@ -152,8 +185,13 @@ catalog entry — the template mechanism already exists
   5090 can impersonate EVERY tier via `vramOverrideGB` (a 6 GB budget
   enforced on a 32 GB card), so the whole ladder T1–T7 is testable on
   the one real machine. What it cannot simulate: pre-Ada quirks (no
-  fp8 compute) and genuinely-out-of-memory driver behavior — note
-  those as tested-by-arithmetic-only. Measurements flip
+  fp8 compute), genuinely-out-of-memory driver behavior, and WALL-CLOCK
+  on small cards — the override caps the budget, not the 5090's
+  compute, so offload PATHS get exercised while offload TIMINGS stay
+  training-quoted until a real low-tier card reports. UI copy quoting
+  times must say "typically" and cite the card class, not promise.
+  Also here: measure MiniMax H3's real VRAM from the owner's local
+  weights — it enters the catalog with measured numbers or not at all. Measurements flip
   `measured: false → true` in the catalog. Queued into WORKPLAN only
   after P1–P3 land.
 - **P5 (blocked on the owner):** Krea workflow JSON, video model picks,
@@ -163,11 +201,11 @@ catalog entry — the template mechanism already exists
 
 ## Open questions for the owner
 
-1. Is "SD 1.5-class images, no video" an acceptable floor story for
-   6 GB (T2), or should SDXL-with-offloading be its default despite the
-   wait?
-2. Video floor: fine that below 8 GB there is none?
-3. "MiniMax H3" — local weights you have, or an API? Changes whether it
-   can be catalogued at all.
-4. The Krea workflow JSON + model picks (long-standing task #21) gate
-   P5 only — P1–P4 proceed without them.
+1. ~~T2 default~~ RESOLVED: SD 1.5 default at 6 GB, SDXL opt-in
+   flagged with its real wait (see the T2 floor decision above).
+2. Video floor: still open — fine that below 8 GB there is none?
+3. ~~MiniMax H3~~ RESOLVED: local weights, owner holds them. P5 needs
+   the exact HuggingFace repo/file list (or the local filenames+sizes
+   to derive it); P4 measures VRAM before any tier claim.
+4. The Krea workflow JSON (long-standing task #21) gates P5 only —
+   P1–P4 proceed without it.
