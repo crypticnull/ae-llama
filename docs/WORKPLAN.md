@@ -118,6 +118,11 @@ learned the hard way:
   pass.
 - A probe that DISPROVES the sketch below is a success: log it, adjust
   or strike the item, stop the pass.
+- BEFORE building any tool, check docs/CAPABILITIES.md — 5.4 nearly
+  built three duplicates of tools that already existed. After a BUILD
+  pass, `node scripts/capability-report.js` regenerates the inventory
+  (tests/test-capability-doc.js fails CI if you forget). Its computed
+  coverage-gap lists are also the ready-made queue for item 3.
 
 ### 5.1 Text animators
 Probe: the property tree under "ADBE Text Animators" — add an animator,
@@ -142,21 +147,22 @@ Documents\Adobe\After Effects*\User Presets. Build: `list_presets`
 (cached, filterable) + `apply_preset` with the font-style grounded error
 (near-matches by name). Hundreds of behaviors for the price of two tools.
 
-### 5.4 Precompose + markers
-Probe: `layers.precompose(indices, name, true)` (1-based indices, what
-gets selected after) and marker writes on both layers and the comp
-(MarkerValue with comment/duration). Build: `precompose` {layers, name,
-moveAttributes} and `add_markers` {target, markers:[{time, comment}]}.
-Small, safe, constantly used.
+### 5.4 Precompose + markers — the tools ALREADY EXIST; verify + cover
+docs/CAPABILITIES.md's computed gaps caught this item about to build
+duplicates: `precompose` and `add_marker` are in TOOL_DEFS today, with
+zero stub tests and zero suite steps. So this item is (a) probe their
+real behavior (precompose selection side effects, marker duration
+handling), (b) fix what's wrong, (c) stub test + suite steps. Do NOT
+build new tools here.
 
 ### 5.5 Render queue (unlocks 5.8, 6.1, 6.2 — do before them)
-Probe: render a comp headless — renderQueue.items.add + outputModule
-file/template (enumerate available templates and log them; they are
-version-sensitive), renderQueue.render() from a -r session, AND the
-aerender.exe alternative. Decide which is stable unattended and log why.
-Build: `queue_render` {comp, path, template?} with grounded template
-errors. Also probe single-frame paths here: saveFrameToPng if it exists,
-else a one-frame render — needed by 5.8.
+`add_to_render_queue` ALREADY EXISTS (uncovered — same trap as 5.4).
+Probe what it does today, then extend rather than duplicate: actually
+RENDERING headless — renderQueue.render() from a -r session vs the
+aerender.exe alternative (decide which is stable unattended, log why),
+output-module templates (enumerate + log; version-sensitive), grounded
+template errors. Also probe single-frame paths here: saveFrameToPng if
+it exists, else a one-frame render — needed by 5.8.
 
 ### 5.6 Project hygiene
 Probe: removeUnusedFootage(), consolidateFootage(), reduceProject()
