@@ -292,26 +292,45 @@ function cannedOk(tool, args) {
       const L = (args && args.layers) || [];
       const from = (args && typeof args.from === "number") ? args.from : 0;
       const step = (args && typeof args.step === "number") ? args.step : 0;
-      const applied = [], overridden = [];
+      const applied = [], overridden = [], cleared = [];
       L.forEach((nm, i) => {
         // A layer whose property is driven does not move, however happily
         // AE accepted the write -- so it cannot be reported as applied.
+        // Unless the caller passed clearExpressions: then exactly the
+        // swallowing rig is removed and the value lands (the real host
+        // writes first and clears only when the write was eaten).
         if (drivenShows(nm, args && args.property) !== null) {
-          overridden.push(nm);
-          return;
+          if (args && args.clearExpressions === true) {
+            delete driven[drivenKey(nm, args && args.property)];
+            cleared.push(nm);
+          } else {
+            overridden.push(nm);
+            return;
+          }
         }
         applied.push({ layer: nm, value: from + i * step });
       });
       for (const a of applied) ordX[a.layer] = a.value;
       const out = { property: args && args.property, layers: L.length,
                     applied };
+      const notes = [];
       if (overridden.length) {
         out.overriddenByExpression = overridden;
-        out.note = overridden.length + " of " + L.length + " layer(s) did " +
+        notes.push(overridden.length + " of " + L.length + " layer(s) did " +
           "NOT move because an expression drives " +
           (args && args.property) + " on them: clear it first " +
-          "(set_expression with expression: \"\").";
+          "(set_expression with expression: \"\"). If the user explicitly " +
+          "asked for these values, re-call with clearExpressions: true " +
+          "to remove those expressions and apply them");
       }
+      if (cleared.length) {
+        out.expressionsCleared = cleared;
+        notes.push("clearExpressions removed the expression driving " +
+          (args && args.property) + " on " + cleared.length +
+          " layer(s) so the values could land — tell the user their rig " +
+          "on those layers is gone");
+      }
+      if (notes.length) out.note = notes.join(". ");
       return out;
     }
     case "reorder_layers": {

@@ -189,7 +189,7 @@
             return "overriddenByExpression: " +
                    JSON.stringify(d.overriddenByExpression);
           }
-          if (!/set_expression/.test(d.note || "")) {
+          if (!/clearExpressions/.test(d.note || "")) {
             return "note does not name the way out: " + (d.note || "");
           }
           return true;
@@ -1311,6 +1311,81 @@
         check: function (d) {
           return Math.abs(d.value[0] - 1200) < 0.01 ||
                  "ST Ord sits at x=" + d.value[0] + ", not 1200";
+        } },
+
+      // ---- clearExpressions: the user's explicit ask outranks a rig ----
+      // Decided deliberately (WORKPLAN-LOG, the chat-probe step-7
+      // question): without the flag a driven layer is reported and NOT
+      // moved; with it, exactly the expressions that swallowed the write
+      // are removed and the values land. The escalation is a re-call the
+      // model makes on purpose, never a temperature accident.
+      { name: "rig one ordered layer (expression swallows writes)",
+        tool: "set_expression",
+        args: function (ctx) {
+          return { comp: ctx.orComp, layer: "ST Ord 5",
+                   property: "position", expression: "[600, 300]" };
+        },
+        check: function (d) {
+          return d.expressionEnabled === true || "expression not enabled";
+        } },
+
+      { name: "distribute refuses to fight the rig — and names the flag",
+        tool: "distribute_property",
+        args: function (ctx) {
+          return { comp: ctx.orComp, layers: ords, property: "position_x",
+                   from: 100, step: 100 };
+        },
+        check: function (d) {
+          if (!d.applied || d.applied.length !== 11) {
+            return "applied " + (d.applied ? d.applied.length : 0) +
+                   " of the 11 un-rigged layers";
+          }
+          if (!d.overriddenByExpression ||
+              d.overriddenByExpression.join(",") !== "ST Ord 5") {
+            return "overriddenByExpression: " +
+                   JSON.stringify(d.overriddenByExpression);
+          }
+          if (!/clearExpressions/.test(d.note || "")) {
+            return "note does not name the way out: " + (d.note || "");
+          }
+          return true;
+        } },
+
+      { name: "clearExpressions removes the rig and lands the value",
+        tool: "distribute_property",
+        args: function (ctx) {
+          return { comp: ctx.orComp, layers: ords, property: "position_x",
+                   from: 100, step: 100, clearExpressions: true };
+        },
+        check: function (d) {
+          if (!d.applied || d.applied.length !== 12) {
+            return "applied " + (d.applied ? d.applied.length : 0) +
+                   " of 12 layers";
+          }
+          if (!d.expressionsCleared ||
+              d.expressionsCleared.join(",") !== "ST Ord 5") {
+            return "expressionsCleared: " +
+                   JSON.stringify(d.expressionsCleared);
+          }
+          if (d.overriddenByExpression) {
+            return "still overridden: " +
+                   JSON.stringify(d.overriddenByExpression);
+          }
+          return true;
+        } },
+
+      // Ask AE, not the report: the expression is gone and the slot
+      // value is what the comp really shows (ords[4] -> 100 + 4*100).
+      { name: "read-back: the rig is gone and x=500 is real",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.orComp, layer: "ST Ord 5",
+                   property: "position" };
+        },
+        check: function (d) {
+          if (d.expression) return "expression still on: " + d.expression;
+          return Math.abs(d.value[0] - 500) < 0.01 ||
+                 "ST Ord 5 sits at x=" + d.value[0] + ", not 500";
         } },
 
       { name: "reorder by name reads the numbers as numbers",

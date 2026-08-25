@@ -148,8 +148,12 @@
             "120). Use step for 'space them every X px / equidistant'. " +
             "A 'layers' list is applied IN THE ORDER GIVEN — layer i of " +
             "the list gets slot i — so name them in the sequence you " +
-            "want; pass 'order' only to sort them instead.",
-      args: "{comp?: string, layers?: [name|index] (applied in the order given), property: 'opacity'|'rotation'|'scale'|'position_x'|'position_y', from?: number, to?: number, step?: number (equidistant), bezier?: [x1,y1,x2,y2], order?: 'in'|'stack'|'reverse' (re-sorts the list)}" },
+            "want; pass 'order' only to sort them instead. Layers whose " +
+            "property is driven by an expression (a grid_layout rig, a " +
+            "link) are reported in overriddenByExpression and do NOT " +
+            "move; clearExpressions: true removes exactly those " +
+            "expressions so the values land.",
+      args: "{comp?: string, layers?: [name|index] (applied in the order given), property: 'opacity'|'rotation'|'scale'|'position_x'|'position_y', from?: number, to?: number, step?: number (equidistant), bezier?: [x1,y1,x2,y2], order?: 'in'|'stack'|'reverse' (re-sorts the list), clearExpressions?: true (ONLY on a re-call after overriddenByExpression, when the user explicitly asked for these values)}" },
     { name: "apply_keyframe_ease", mutating: true,
       desc: "Apply a bezier as TEMPORAL easing between keyframes on one " +
             "property across MANY layers in ONE call (converts to AE " +
@@ -510,6 +514,12 @@
       "- 'distribute/space layers equidistantly / every X px' =",
       "  distribute_property {property: position_x, step: X} — ONE call,",
       "  never a chain of set_transform/duplicate calls.",
+      "- If distribute_property reports overriddenByExpression (a rig like",
+      "  grid_layout drives the property), the user's explicit request",
+      "  WINS: re-call it ONCE with clearExpressions: true, then tell the",
+      "  user which layers had their expressions removed. Never pass",
+      "  clearExpressions on a first call, and never use it when the user",
+      "  asked to keep the rig.",
       "- 'stagger them X frames apart' = stagger_layers {stepFrames: X}.",
       "  stagger_layers 'spread' is the TOTAL span of the whole stagger,",
       "  NOT the gap between layers — for a per-layer gap use step /",

@@ -6,14 +6,30 @@ const path = require("path");
 
 function Prop(value) {
   this._value = value;
+  this.canSetExpression = true;
   this.expression = "";
   this.expressionError = "";
-  this.canSetExpression = true;
   this.numKeys = 0;
   this._keyTimes = [];
   this._keyValues = [];
   this._eases = {};
 }
+// Faithful to AE: assigning `.expression` is what enables/disables the
+// expression — writing "" turns the rig OFF (the property shows its
+// underlying value again), writing text turns it on. The stub used to
+// keep `expression` as an inert string field, which would let host code
+// "clear" a rig without changing what the property returns.
+Object.defineProperty(Prop.prototype, "expression", {
+  get() { return this._expr || ""; },
+  set(s) {
+    if (!this.canSetExpression) {
+      throw new Error("This property cannot be set by expression.");
+    }
+    this._expr = String(s);
+    this.expressionEnabled = this._expr !== "";
+    if (!this.expressionEnabled) delete this._exprValue;
+  }
+});
 // Faithful to AE: `.value` on an EXPRESSION-DRIVEN property is the
 // expression's EVALUATED result, not the value underneath it. The stub
 // used to hand back whatever was last written, which made an ignored
@@ -438,20 +454,71 @@ assert(Array.isArray(r.data.overriddenByExpression) &&
        JSON.stringify(r.data.overriddenByExpression) + ")");
 assert(/3 of 3/.test(r.data.note || "") &&
        /expression/i.test(r.data.note || "") &&
-       /set_expression/.test(r.data.note || ""),
-       "…and the note counts them and names the way out (got: " +
-       (r.data.note || "") + ")");
+       /clearExpressions/.test(r.data.note || ""),
+       "…and the note counts them and names the deterministic way out " +
+       "(got: " + (r.data.note || "") + ")");
 // The honest answer also has to FIT: the panel caps each tool result at
 // 1200 chars, and the version that failed in the field spent 1600 of them
 // on nine repeated warning sentences, so the truth was what got cut.
 assert(JSON.stringify(r.data).length < 1200,
        "…and the whole result still fits the panel's 1200-char cap (got " +
        JSON.stringify(r.data).length + ")");
+
+// 11c. The other half of the contract: WITHOUT the flag nothing was
+// touched — the escalation is a deliberate re-call, never a side effect.
+for (const n of rigged) {
+  assert(comp.layer(n)._transform["ADBE Position"].expressionEnabled === true,
+         n + "'s rig must survive a call that did not ask to clear it");
+}
+
+// 11d. The user said "spread them across the width" and MEANT it — the
+// explicit request outranks the panel's own rig. The re-call with
+// clearExpressions: true removes exactly the expressions that swallowed
+// the write, applies the values for real, and says which rigs are gone.
+r = call("distribute_property", {
+  property: "position_x", layers: rigged, from: 200, to: 1720, step: 180,
+  order: "stack", clearExpressions: true
+});
+assert(r.ok, "clearExpressions re-call answers (" + (r.error || "") + ")");
+assert(r.data.applied.length === 3 && !r.data.overriddenByExpression,
+       "…all three layers move once the rigs are cleared (got " +
+       JSON.stringify(r.data) + ")");
+assert(Array.isArray(r.data.expressionsCleared) &&
+       r.data.expressionsCleared.slice().sort().join(",") ===
+       rigged.slice().sort().join(","),
+       "…and expressionsCleared names exactly the rigged layers (got " +
+       JSON.stringify(r.data.expressionsCleared) + ")");
+assert(/tell the user/i.test(r.data.note || ""),
+       "…and the note tells the model to report the removed rigs (got: " +
+       (r.data.note || "") + ")");
 for (const n of rigged) {
   const p = comp.layer(n)._transform["ADBE Position"];
-  p.expressionEnabled = false;
-  delete p._exprValue;
+  assert(p.expressionEnabled === false && p.expression === "",
+         n + "'s rig is really gone after clearExpressions");
 }
+// The values must be IN the comp, not just in the report: match each
+// applied row back to the layer's actual x.
+for (const row of r.data.applied) {
+  const p = comp.layer(row.layer)._transform["ADBE Position"];
+  assert(Math.abs(p.value[0] - row.value) < 0.01,
+         row.layer + " reports x=" + row.value + " but the comp shows " +
+         p.value[0]);
+}
+
+// 11e. A PASS-THROUGH expression (`value + …`) never swallowed anything,
+// so clearExpressions must leave it alone — surgical, not a purge.
+const keeper = comp.layer("L3")._transform["ADBE Position"];
+keeper.expression = "value + [0, 0]";     // enabled, passes writes through
+r = call("distribute_property", {
+  property: "position_x", layers: rigged, from: 200, step: 180,
+  clearExpressions: true
+});
+assert(r.ok && r.data.applied.length === 3 && !r.data.expressionsCleared,
+       "a pass-through expression is not cleared (got " +
+       JSON.stringify(r.data) + ")");
+assert(keeper.expressionEnabled === true,
+       "L3's pass-through expression survived clearExpressions");
+keeper.expression = "";
 
 // 12. An explicit 'layers' list is an ORDER, not a set. The tool used to
 // re-sort it by inPoint, so a grid whose layers all sit at inPoint 0 got

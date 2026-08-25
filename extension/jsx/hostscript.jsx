@@ -2840,6 +2840,7 @@ AELL_TOOLS.distribute_property = function (args) {
   }
   var n = layers.length;
   var applied = [], skipped = [], overridden = [], overriddenWhy = "";
+  var cleared = [];
   for (var i = 0; i < n; i++) {
     var v;
     if (useStep) {
@@ -2877,6 +2878,18 @@ AELL_TOOLS.distribute_property = function (args) {
     try {
       var w = AELL_writeValue(prop, target, layers[i].name + "/" +
                               String(args.property));
+      // The sanctioned override: the user explicitly asked for these
+      // values, so a rig that swallows them loses. Surgical on purpose —
+      // only an expression that DEMONSTRABLY ate the write is removed
+      // (a pass-through like `value + wiggle(2,30)` never trips `w`, so
+      // it survives). Without the flag the layer is reported, not moved:
+      // the escalation is a deliberate re-call, never temperature.
+      if (w && args.clearExpressions === true) {
+        prop.expression = "";
+        prop.setValue(target);
+        cleared.push(layers[i].name);
+        w = "";
+      }
       if (w) {
         overridden.push(layers[i].name);
         if (!overriddenWhy) overriddenWhy = w;
@@ -2899,7 +2912,16 @@ AELL_TOOLS.distribute_property = function (args) {
     res.overriddenByExpression = overridden;
     notes.push(overridden.length + " of " + n + " layer(s) did NOT move " +
       "because an expression drives " + String(args.property) + " on them: " +
-      overriddenWhy);
+      overriddenWhy + " If the user explicitly asked for these values, " +
+      "re-call with clearExpressions: true to remove those expressions " +
+      "and apply them");
+  }
+  if (cleared.length) {
+    res.expressionsCleared = cleared;
+    notes.push("clearExpressions removed the expression driving " +
+      String(args.property) + " on " + cleared.length +
+      " layer(s) so the values could land — tell the user their rig on " +
+      "those layers is gone");
   }
   if (notes.length) res.note = notes.join(". ");
   return AELL_okay(res);

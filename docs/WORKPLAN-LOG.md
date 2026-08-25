@@ -1708,3 +1708,47 @@ earlier) blocks a later positional request, should the model clear it
 uninvited? Today's "refuse and explain" is arguably the safer answer and
 today's verdict calls it a failure. Worth deciding deliberately rather
 than letting temperature decide per run.
+
+## 2026-08-25 (remote) — step-7 settled: clearExpressions, decided not rolled
+
+The 2d pass's closing question — when the panel's OWN grid rig blocks a
+later positional request, should the model clear it uninvited? — is now
+answered by the owner's standing principle ("explicit user requests
+always win over guardrails; hard limits close doors"), and the answer is
+moved from temperature to arithmetic:
+
+- `distribute_property` takes `clearExpressions: true`. Surgical by
+  construction: the tool writes FIRST and clears only an expression that
+  demonstrably swallowed the write — a pass-through (`value + wiggle`)
+  is never touched, a keyframed property still refuses before any clear
+  happens. Cleared layers land in `expressionsCleared` and the note
+  tells the model to say which rigs are gone.
+- Without the flag, behavior is unchanged (report, don't move) — except
+  the note now names the deterministic way out: "If the user explicitly
+  asked for these values, re-call with clearExpressions: true".
+- Prompt rule added: overriddenByExpression + an explicit user ask =
+  re-call ONCE with the flag, then tell the user what was removed. Never
+  on a first call; never when the user asked to keep the rig.
+- So BOTH of the probe's observed behaviors survive as halves of one
+  deterministic round-trip: first call refuses and explains (the safe
+  answer), the re-call honors the user (the obedient one). No verdict
+  change needed in chat-probe: step 7's even-gaps check already measures
+  the end state, which is now reachable on purpose instead of by mood.
+
+Stub side, all green (24 files): test-curve-tools.js grew cases 11c-11e
+(no-flag call must not touch the rigs; flagged re-call clears exactly
+the three swallowers and the values are IN the stubbed comp; a
+pass-through expression survives the flag), and its Prop stub now models
+AE's real `.expression` semantics — assigning "" is what turns the rig
+off. selftest.js grew 4 steps in the order scratch comp (rig ST Ord 5,
+refuse + name the flag, clear + land x=500, read back from AE that the
+expression is gone) — suite is 187 steps; the canned host in
+test-self-test.js models the clear against its driven map. The old grid
+step's note check now requires /clearExpressions/. Capability doc
+regenerated.
+
+NOT verified in real AE (remote session — no AE here). Queued in 2d for
+the local session: run the 187-step suite, re-run chat-probe step 7,
+patch bump when green. This is a product-behavior decision the owner has
+not explicitly ruled on — the mechanics are cheap to flip (delete the
+prompt rule bullet + the flag branch) if they want refuse-only back.
