@@ -97,10 +97,49 @@ assert(fs.existsSync(path.join(modelsDir, "checkpoints")) &&
        fs.existsSync(path.join(modelsDir, "loras")),
        "standard model subfolders created in the external location");
 
+// 5b. extra roots: veterans have models spread across drives. A bare
+// path maps the standard subfolders; "kind=path" maps ONE kind with the
+// folder itself as that kind's root. User folders are read, never
+// restructured — no subfolders are created in them.
+const extraRoot = path.join(tmpRoot, "user-stash");
+fs.mkdirSync(extraRoot, { recursive: true });
+window.Settings.get = () => ({
+  comfyModelsDir: modelsDir,
+  comfyModelRoots: [extraRoot, "checkpoints=" + path.join(tmpRoot, "ck"),
+                    "   ", ""]
+});
+assert(Comfy._applyExtraModelPaths({ root }) === yamlPath,
+       "extra roots write into the same yaml");
+const yaml2 = fs.readFileSync(yamlPath, "utf8");
+assert(yaml2.includes("aellama_extra_0:") &&
+       yaml2.includes("base_path: " + extraRoot.replace(/\\/g, "/")),
+       "a bare extra root becomes its own yaml section");
+assert(yaml2.includes("aellama_extra_1:") &&
+       /checkpoints: \./.test(yaml2),
+       "a kind=path root maps the folder AS that kind (checkpoints: .)");
+assert(!yaml2.includes("aellama_extra_2:"),
+       "blank lines in the setting are ignored");
+assert(fs.readdirSync(extraRoot).length === 0,
+       "the user's own folder was not restructured");
+
+// A drive letter is a path, not a kind: "D:\..." must not be split at
+// the colon-free '=' rule's expense.
+window.Settings.get = () => ({
+  comfyModelsDir: "", comfyModelRoots: ["D:\\SD\\everything"]
+});
+assert(/base_path: D:\/SD\/everything/.test(
+         fs.readFileSync(Comfy._applyExtraModelPaths({ root }), "utf8")),
+       "a windows drive path is one root, not a kind=path split");
+
 // clearing the setting removes the mapping
-window.Settings.get = () => ({ comfyModelsDir: "" });
+window.Settings.get = () => ({ comfyModelsDir: "", comfyModelRoots: [] });
 assert(Comfy._applyExtraModelPaths({ root }) === null &&
        !fs.existsSync(yamlPath),
-       "blank setting removes a previously written mapping");
+       "blank settings remove a previously written mapping");
+
+// 5c. freeVram is exported — the VRAM arbiter's gen->chat half asks
+// ComfyUI to unload its cached models before the chat model returns.
+assert(typeof Comfy.freeVram === "function",
+       "Comfy.freeVram exists for the arbiter's resume path");
 
 console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");

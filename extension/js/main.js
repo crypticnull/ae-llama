@@ -824,10 +824,32 @@
     els.setComfyWorkflows.value = s.comfyWorkflowsDir;
     els.setComfyOut.value = s.comfyOutDir;
     els.setComfyModels.value = s.comfyModelsDir || "";
+    els.setComfyModelRoots.value =
+      (s.comfyModelRoots || []).join("\n");
     els.setComfyTimeout.value = s.comfyTimeoutSec;
-    els.setComfyPauseLlm.checked = s.comfyPauseLlm !== false;
+    els.setComfyPauseLlm.value =
+      s.comfyPauseLlm === "always" || s.comfyPauseLlm === "never"
+        ? s.comfyPauseLlm : "auto";
+    els.setVramOverride.value = s.vramOverrideGB || 0;
     renderEnhanceToggles(s);
+    renderTierLine();
     els.setAutoUpdate.checked = !!s.autoInstallUpdates;
+  }
+
+  /**
+   * The combined, tier-derived hardware line in the ComfyUI section:
+   * what this card is, which tier it lands in, and the chat +
+   * generation picks that follow from it. Re-rendered whenever the GPU
+   * probe or the settings change.
+   */
+  function renderTierLine() {
+    if (!els.tierLine) return;
+    try {
+      var rec = global.Setup.recommendSetup(updateManifest, gpuInfo);
+      els.tierLine.textContent = rec.copy;
+    } catch (e) {
+      els.tierLine.textContent = "";
+    }
   }
 
   function formToSettings() {
@@ -847,11 +869,17 @@
       comfyWorkflowsDir: els.setComfyWorkflows.value,
       comfyOutDir: els.setComfyOut.value,
       comfyModelsDir: els.setComfyModels.value,
+      comfyModelRoots: els.setComfyModelRoots.value
+        .split(/\r?\n/)
+        .map(function (l) { return l.replace(/^\s+|\s+$/g, ""); })
+        .filter(function (l) { return !!l; }),
       comfyTimeoutSec: parseInt(els.setComfyTimeout.value, 10) || 600,
-      comfyPauseLlm: !!els.setComfyPauseLlm.checked,
+      comfyPauseLlm: els.setComfyPauseLlm.value || "auto",
+      vramOverrideGB: parseInt(els.setVramOverride.value, 10) || 0,
       comfyEnhance: collectEnhanceToggles(),
       autoInstallUpdates: !!els.setAutoUpdate.checked
     });
+    renderTierLine();
   }
 
   // ------------------------------------------------------------------ init
@@ -885,8 +913,11 @@
       setComfyWorkflows: $("set-comfy-workflows"),
       setComfyOut: $("set-comfy-out"),
       setComfyModels: $("set-comfy-models"),
+      setComfyModelRoots: $("set-comfy-model-roots"),
       setComfyTimeout: $("set-comfy-timeout"),
       setComfyPauseLlm: $("set-comfy-pause-llm"),
+      setVramOverride: $("set-vram-override"),
+      tierLine: $("tier-line"),
       comfyEnhanceList: $("comfy-enhance-list"),
       setAutoUpdate: $("set-auto-update"),
       starterRow: $("starter-row"),
@@ -1117,9 +1148,15 @@
         : "Could not copy to the clipboard.");
     });
 
-    // Probe the GPU once so the copy header has real hardware info.
+    // Probe the GPU once so the copy header has real hardware info —
+    // and hand the result to the VRAM arbiter, which decides per
+    // generation whether chat and the job can share the card.
     try {
-      global.Setup.detectGpu(function (g) { gpuInfo = g; });
+      global.Setup.detectGpu(function (g) {
+        gpuInfo = g;
+        global.Tools.setGpuInfo(g);
+        renderTierLine();
+      });
     } catch (eG) {}
 
     $("btn-comfy-install").addEventListener("click", function () {
@@ -1220,7 +1257,9 @@
     populateModelCatalog();                       // sensible list immediately
     global.Setup.detectGpu(function (g) {         // then VRAM-aware refresh
       gpuInfo = g;
+      global.Tools.setGpuInfo(g);
       populateModelCatalog();
+      renderTierLine();
     });
     $("btn-check-updates").addEventListener("click", function () {
       checkForUpdates(true);

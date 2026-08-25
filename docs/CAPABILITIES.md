@@ -108,8 +108,11 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
   resizable split, AE-style scrollbars.
 - Settings: model catalog with VRAM-tiered auto-recommendation, download
   progress + cancel, context/rounds tuning, Advanced + ComfyUI submenus,
-  alternate models folder, one-click real-AE self-test with copyable
-  report.
+  alternate models folder plus extra model roots (one per line,
+  per-kind `checkpoints=D:\...` supported), tri-state "pause chat
+  during generation" (auto/always/never), a VRAM override for
+  impersonating any tier, the combined hardware-tier line, one-click
+  real-AE self-test with copyable report.
 - Branding: llama topbar icon, "Ask the llama to do something in After
   Effects" placeholder, Alpha channel label.
 
@@ -118,9 +121,15 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 - Local llama.cpp: llama-server spawned hidden, health-checked, PID
   tracked and reaped; VRAM-aware engine + model download on first run.
 - Hidden ComfyUI backend: portable install bootstrap, spawn/reap
-  lifecycle, external model dirs via extra_model_paths.yaml, optional
-  LLM pause during generation. (Generation tools exist; the curated
-  image/video model stack is still to come.)
+  lifecycle, external model dirs via extra_model_paths.yaml (multiple
+  roots, per-kind mappings), and a VRAM arbiter (tiers.js): one
+  detection → one T0–T7 tier → chat AND generation recommendations
+  derive from it, and each generation is decided by arithmetic over
+  the models REALLY loaded — concurrent, exclusive handoff (verified
+  release both directions: nvidia-smi polling + ComfyUI /free), or a
+  grounded refusal under pause="never". One pause covers a whole
+  round. (The curated model stack ships with the feed's comfyCatalog;
+  built-in entries are PROVISIONAL until P4 measures them.)
 - Auto-update: push → CI builds signed ZXP → feed branch → public repo →
   panels update and reload in place. Version-gated: the panel takes an
   update only when the feed is strictly newer (see CLAUDE.md
@@ -137,8 +146,6 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 
 Queued (see WORKPLAN for owners/order):
 
-- No rollback for a chat round that fails part way (item 4 — design
-  first).
 - Lights: no `add_light`, wholly uncovered (item 2).
 - Feature track not yet built: text animators, repeaters, preset
   library, precompose/markers, render queue, project hygiene,
@@ -150,10 +157,13 @@ Queued (see WORKPLAN for owners/order):
   dependency manifest; video repos are pinned (Wan 2.2, MiniMax H3);
   remaining blockers are the tier build (P1-P3) and the local install
   scan (WORKPLAN 2c).
-- Generation is not hardware-tier aware: no shared VRAM budget between
-  llama-server and ComfyUI, the pause-for-VRAM handoff sleeps 1.5s and
-  hopes instead of verifying release, and a 6 GB card has no honest
-  story. Architecture: docs/COMFY_TIERS_PLAN.md (phased, P1–P5).
+- The tier build's REMOTE half (P1–P3) is in: tiers.js, the arbiter
+  with verified release, the combined recommendation, comfyCatalog.
+  Still open: every VRAM figure and catalog URL is PROVISIONAL until
+  P4 measures on real hardware (nvidia-smi deltas, handoff both
+  directions, OOM recovery, `/free` support probe); the bundled
+  node-pack installer and final video file pins are P5.
+  Architecture: docs/COMFY_TIERS_PLAN.md.
 - Chat probe never exercises ComfyUI, multi-turn references ("make them
   blue instead"), or undo across a mixed round.
 

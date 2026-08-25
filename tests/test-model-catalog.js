@@ -11,6 +11,7 @@ const window = {
 };
 
 eval(fs.readFileSync(path.join(__dirname, "..", "extension", "js", "version.js"), "utf8"));
+eval(fs.readFileSync(path.join(__dirname, "..", "extension", "js", "tiers.js"), "utf8"));
 eval(fs.readFileSync(path.join(__dirname, "..", "extension", "js", "setup.js"), "utf8"));
 
 const cat = window.AELL.MODEL_CATALOG;
@@ -48,5 +49,36 @@ assert(window.Setup.recommendModel([], {}) === null, "empty catalog -> null");
 const overridden = window.Setup.modelCatalog({ modelCatalog: [{ name: "X.gguf", sizeMB: 1, minVramGB: 1 }] });
 assert(overridden.length === 1 && overridden[0].name === "X.gguf",
        "manifest modelCatalog overrides built-in list");
+
+// vramOverrideGB flows through Setup.recommendModel via live settings:
+// a 32 GB card impersonating 6 GB gets the 6 GB pick.
+window.Settings.get = () => ({ vramOverrideGB: 6 });
+assert(rec({ hasNvidia: true, vramGB: 32 }).indexOf("3B") > 0,
+       "vramOverrideGB 6 makes a 32GB card recommend the 6GB model");
+window.Settings.get = () => ({});
+
+// The generation catalog rides the same feed mechanism.
+assert(window.Setup.comfyCatalog(null).length > 0 &&
+       window.Setup.comfyCatalog(null) === window.AELL.COMFY_CATALOG,
+       "built-in comfyCatalog serves when the manifest has none");
+const cOver = window.Setup.comfyCatalog({ comfyCatalog: [
+  { name: "y", kind: "image", minVramGB: 4, sizeMB: 1 }] });
+assert(cOver.length === 1 && cOver[0].name === "y",
+       "manifest comfyCatalog overrides the built-in list");
+
+// The combined first-run recommendation: one tier, both picks, honest copy.
+const combo = window.Setup.recommendSetup(null,
+  { hasNvidia: true, name: "RTX 4060", vramGB: 8, computeCap: 8.9 });
+assert(combo.tier.id === "T3" && combo.chat &&
+       combo.chat.name.indexOf("7B") > 0 &&
+       combo.gen.image && combo.gen.image.name === "sdxl" &&
+       combo.gen.video && combo.gen.video.name === "wan22-5b",
+       "recommendSetup(8GB): T3, 7B chat, SDXL images, Wan video (got " +
+       JSON.stringify({ t: combo.tier.id,
+                        c: combo.chat && combo.chat.name,
+                        i: combo.gen.image && combo.gen.image.name,
+                        v: combo.gen.video && combo.gen.video.name }) + ")");
+assert(/RTX 4060/.test(combo.copy) && /pauses chat/i.test(combo.copy),
+       "…and its copy names the card and says generation pauses chat");
 
 console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");

@@ -211,12 +211,39 @@ function loadPanelFile(rel) {
   new Function("window", src)(window);
 }
 loadPanelFile("settings.js");
+loadPanelFile("tiers.js");
 loadPanelFile("llama.js");
 loadPanelFile("tools.js");
 
 const Settings = window.Settings;
 const Llama = window.Llama;
 const Tools = window.Tools;
+
+// Mirror main.js: hand the GPU probe's result to the VRAM arbiter so
+// its inputs are as real here as in the panel. The probe machine's
+// nvidia-smi answers exactly like the panel's would; when it is absent
+// the arbiter sees what a no-GPU user's panel sees.
+try {
+  const cpx = require("child_process");
+  cpx.execFile("nvidia-smi",
+    ["--query-gpu=name,compute_cap,memory.total",
+     "--format=csv,noheader,nounits"],
+    { timeout: 15000 },
+    function (gErr, gOut) {
+      if (gErr) { Tools.setGpuInfo({ hasNvidia: false, vramGB: null }); return; }
+      const parts = String(gOut).split(/\r?\n/)[0].split(",");
+      Tools.setGpuInfo({
+        hasNvidia: true,
+        name: (parts[0] || "").trim() || null,
+        computeCap: /^\d+(\.\d+)?$/.test((parts[1] || "").trim())
+          ? parseFloat(parts[1].trim()) : null,
+        vramGB: /^\d+$/.test((parts[2] || "").trim())
+          ? Math.round(parseInt(parts[2].trim(), 10) / 1024) : null
+      });
+    });
+} catch (eGpu) {
+  Tools.setGpuInfo({ hasNvidia: false, vramGB: null });
+}
 
 // ------------------------------------------------------------ transcript
 

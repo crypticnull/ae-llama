@@ -111,6 +111,10 @@
           <label>Max tool rounds
             <input id="set-rounds" type="number" min="1" max="8"/>
           </label>
+          <label title="Testing: enforce this VRAM budget instead of the measured one, so any hardware tier's behavior can be exercised on this card. 0 = use the real number.">
+            VRAM override (GB, 0&nbsp;=&nbsp;off)
+            <input id="set-vram-override" type="number" min="0" max="256"/>
+          </label>
         </div>
       </div>
 
@@ -155,17 +159,28 @@
           </div>
         </label>
 
+        <label>Extra model folders (optional &mdash; one per line; already
+          have models elsewhere? Point at them. Per-kind:
+          <code>checkpoints=D:\SD\ckpts</code>)
+          <textarea id="set-comfy-model-roots" rows="2" spellcheck="false"
+                    placeholder="(none)"></textarea>
+        </label>
+
         <div class="grid2">
           <label>Generation timeout (s)
             <input id="set-comfy-timeout" type="number" min="30" step="30"/>
           </label>
+          <label>Pause chat during generation
+            <select id="set-comfy-pause-llm">
+              <option value="auto">auto &mdash; this card decides</option>
+              <option value="always">always</option>
+              <option value="never">never (refuse what cannot fit)</option>
+            </select>
+          </label>
         </div>
 
-        <label class="check">
-          <input id="set-comfy-pause-llm" type="checkbox"/>
-          <span>Pause chat model during generation (frees VRAM,
-            auto-resumes)</span>
-        </label>
+        <div id="tier-line" class="tier-line"><!-- filled by main.js:
+          the combined hardware-tier line (chat + generation picks) --></div>
         <div class="enhance-block">
           <span class="enhance-title">Prompt enhancement (per workflow)</span>
           <div id="comfy-enhance-list">
@@ -293,6 +308,7 @@
   <script src="js/libs/cep-bridge.js"></script>
   <script src="js/version.js"></script>
   <script src="js/settings.js"></script>
+  <script src="js/tiers.js"></script>
   <script src="js/llama.js"></script>
   <script src="js/comfy.js"></script>
   <script src="js/setup.js"></script>

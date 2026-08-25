@@ -716,37 +716,91 @@
     "embeddings"];
   function applyExtraModelPaths(install) {
     ensureNode();
-    var dir = "";
-    try {
-      dir = String((global.Settings.get() || {}).comfyModelsDir || "");
-    } catch (e) {}
+    var s = null;
+    try { s = global.Settings.get() || {}; } catch (e) { s = {}; }
+    var dir = String(s.comfyModelsDir || "");
+    // ComfyUI veterans have models spread across drives — extra roots,
+    // one per line in settings, each either a whole models tree or a
+    // per-kind folder written as "kind=path" (e.g.
+    // "checkpoints=D:\\SD\\ckpts").
+    var roots = s.comfyModelRoots instanceof Array ? s.comfyModelRoots : [];
     var yamlPath = path.join(install.root, "ComfyUI",
                              "extra_model_paths.yaml");
-    if (!dir) {
+    if (!dir && !roots.length) {
       // Setting cleared — remove a previously written mapping.
       try { if (fs.existsSync(yamlPath)) fs.unlinkSync(yamlPath); }
       catch (eU) {}
       return null;
     }
     try {
-      var i;
-      for (i = 0; i < COMFY_MODEL_SUBS.length; i++) {
-        var d = path.join(dir, COMFY_MODEL_SUBS[i]);
-        if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
-      }
+      var i, k;
       var lines = [
-        "# Managed by AE Llama — external models folder (panel setting)",
-        "aellama:",
-        "  base_path: " + dir.replace(/\\/g, "/")
+        "# Managed by AE Llama — external model folders (panel settings)"
       ];
-      for (i = 0; i < COMFY_MODEL_SUBS.length; i++) {
-        lines.push("  " + COMFY_MODEL_SUBS[i] + ": " + COMFY_MODEL_SUBS[i]);
+      if (dir) {
+        // The primary folder is ours to manage: create the layout so
+        // downloads have somewhere to land.
+        for (i = 0; i < COMFY_MODEL_SUBS.length; i++) {
+          var d = path.join(dir, COMFY_MODEL_SUBS[i]);
+          if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
+        }
+        lines.push("aellama:");
+        lines.push("  base_path: " + dir.replace(/\\/g, "/"));
+        for (i = 0; i < COMFY_MODEL_SUBS.length; i++) {
+          lines.push("  " + COMFY_MODEL_SUBS[i] + ": " +
+                     COMFY_MODEL_SUBS[i]);
+        }
+      }
+      // Extra roots are the USER's folders — read from, never restructured.
+      var n = 0;
+      for (i = 0; i < roots.length; i++) {
+        var raw = String(roots[i] || "").replace(/^\s+|\s+$/g, "");
+        if (!raw) continue;
+        // "kind=path" maps ONE kind; a drive letter ("D:\...") is not a
+        // kind, so only [a-z_]+ before the first '=' counts.
+        var m = raw.match(/^([a-z_]+)=(.+)$/);
+        var kind = m ? m[1] : null;
+        var root = (m ? m[2] : raw).replace(/^\s+|\s+$/g, "");
+        if (!root) continue;
+        lines.push("aellama_extra_" + n + ":");
+        lines.push("  base_path: " + root.replace(/\\/g, "/"));
+        if (kind) {
+          lines.push("  " + kind + ": .");
+        } else {
+          for (k = 0; k < COMFY_MODEL_SUBS.length; k++) {
+            lines.push("  " + COMFY_MODEL_SUBS[k] + ": " +
+                       COMFY_MODEL_SUBS[k]);
+          }
+        }
+        n++;
       }
       fs.writeFileSync(yamlPath, lines.join("\n") + "\n");
       return yamlPath;
     } catch (e2) {
       return null;
     }
+  }
+
+  /**
+   * Ask ComfyUI to drop its cached models and free VRAM. After a
+   * generation the models stay resident, and on exclusive tiers that
+   * cache is exactly what blocks the chat model from coming back — the
+   * arbiter calls this before restarting llama. Best effort: /free
+   * exists in current builds, but an older backend answering 404 must
+   * not break the resume, so cb(err|null) and the caller continues
+   * either way.
+   */
+  function freeVram(comfyUrl, cb) {
+    ensureNode();
+    var base = parseBase(comfyUrl);
+    requestJson(base, "POST", "/free",
+      { unload_models: true, free_memory: true }, 10000,
+      function (err, statusCode) {
+        if (err) { cb(err); return; }
+        cb(statusCode >= 200 && statusCode < 300
+          ? null
+          : new Error("ComfyUI /free answered HTTP " + statusCode));
+      });
   }
 
   /**
@@ -869,6 +923,7 @@
     generate: generate,
     status: status,
     launch: launch,
+    freeVram: freeVram,
     ensureRunning: ensureRunning,
     stopManaged: stopManaged,
     reapOrphan: reapOrphan,

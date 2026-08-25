@@ -65,9 +65,21 @@
       // video models are tens of GB, so users can point them at a big
       // drive. Blank = the backend's own models folder.
       comfyModelsDir: "",
-      // Stop the chat LLM during image/video generation so the two never
-      // fight over VRAM; it restarts automatically before the reply.
-      comfyPauseLlm: true,
+      // Additional model roots for users whose collections span drives.
+      // Each entry is an absolute folder path, optionally per-kind as
+      // "kind=path" (e.g. "checkpoints=D:\\SD\\ckpts"). All of them are
+      // written into extra_model_paths.yaml alongside comfyModelsDir.
+      comfyModelRoots: [],
+      // Pause the chat LLM during image/video generation:
+      //   auto   — tier arithmetic decides per job (default)
+      //   always — every generation pauses chat
+      //   never  — never pause; a job that cannot fit is refused with
+      //            the honest numbers instead of OOMing the card.
+      // Pre-tri-state booleans migrate in load(): true→auto, false→never.
+      comfyPauseLlm: "auto",
+      // Impersonate a card: enforce this VRAM budget (GB) instead of the
+      // measured one, so any tier is testable on any machine. 0 = off.
+      vramOverrideGB: 0,
       // Per-workflow prompt enhancement: {workflowName: bool}. A name
       // that is absent means ON — enhancement is the default, opting
       // OUT is the choice a user records.
@@ -143,6 +155,11 @@
     // for the old 4-round budget.
     if (merged.ctxSize === 8192) merged.ctxSize = 16384;
     if (merged.maxRounds === 4) merged.maxRounds = 6;
+    // comfyPauseLlm grew from a boolean to auto|always|never. true maps
+    // to auto (the old behavior WAS pause-by-default, and auto still
+    // pauses whenever the fit is unprovable); false keeps its meaning.
+    if (merged.comfyPauseLlm === true) merged.comfyPauseLlm = "auto";
+    if (merged.comfyPauseLlm === false) merged.comfyPauseLlm = "never";
     return merged;
   }
 
