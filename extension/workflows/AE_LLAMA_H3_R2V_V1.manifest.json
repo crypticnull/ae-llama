@@ -1,0 +1,22 @@
+{
+  "workflow": "AE_LLAMA_H3_R2V_V1",
+  "kind": "video",
+  "notes": "Owner's MiniMax H3 reference-to-video+audio workflow (r2v: image reference + audio in, video out). The workflow embeds its own HuggingFace download URLs -- the canonical repo is Comfy-Org/MiniMax-H3 (ComfyUI-repackaged), NOT the raw MiniMaxAI repo. Ollama prompt-enhancer branch stays bypassed forever; the panel's own model enhances and injects via the manual path, as with Krea.",
+  "models": [
+    { "file": "minimax_h3_ref2va_pruned_int8_convrot.safetensors", "role": "diffusion", "dir": "unet-or-diffusion_models", "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors", "sizeMB": null, "minVramGB": null, "measured": false },
+    { "file": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors", "role": "text_encoder", "dir": "text_encoders", "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors", "requiresBlackwell": true, "note": "nvfp4 quantization runs ONLY on Blackwell (RTX 50-series). Other tiers need a different encoder precision from the same repo -- pin during P5.", "measured": false },
+    { "file": "minimax_h3_video_vae_fp16.safetensors", "role": "vae", "dir": "vae", "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_video_vae_fp16.safetensors", "measured": false },
+    { "file": "minimax_h3_audio_vae_fp32.safetensors", "role": "audio_vae", "dir": "vae", "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_audio_vae_fp32.safetensors", "measured": false },
+    { "file": "MiniMax_H3/MysticXXX_MMH3-V1.safetensors", "role": "style-lora", "dir": "loras", "optional": true, "measured": false }
+  ],
+  "customNodes": [
+    { "pack": "ComfyUI-VideoHelperSuite", "nodes": ["VHS_LoadVideo"] },
+    { "pack": "rgthree-comfy", "nodes": ["Power Lora Loader"] },
+    { "pack": "UNKNOWN -- local scan must attribute the rest (Ollama pack is bypassed, not needed)", "nodes": [] }
+  ],
+  "panelIntegration": {
+    "promptInjection": "manual path, enhancer group stays mode-4",
+    "inputs": "reference image + audio file -- the frame round-trip (5.8) and an audio-file picker feed these",
+    "outputSizeCeilingFrom": "tier ceilings"
+  }
+}

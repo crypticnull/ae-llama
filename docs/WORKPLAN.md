@@ -120,6 +120,32 @@ Pure filesystem reading — no AE, no generation runs, do NOT launch
 ComfyUI. This unblocks tier-plan P5 (catalog file lists + sizes) and
 the register-existing matcher. Commit the inventory; no version bump.
 
+## 2d. Small local passes queued by the probe findings
+
+- **Locate the H3 base weight** (5 min): run
+  `Get-ChildItem "C:\Users\mr\Documents\ComfyUI","C:\Users\mr\AppData\Local\Comfy-Desktop" -Recurse -Filter "minimax_h3_ref2va*"`
+  (fall back to OneDrive\Documents, then all fixed drives). Record the
+  real path + size in docs/COMFY_LOCAL_INVENTORY.md. It resolves for
+  ComfyUI but is not under the Documents models root — the working
+  theory is the CODE root's own models dir; whatever the answer, the
+  register-existing matcher's root list follows from it.
+- **Verify the history trim** (probe steps 9–10): the remote session
+  bounded what the model is sent (Tools.fitHistory + a hard-trim retry
+  on context 400s). Re-run the full chat probe — steps 9 and 10 died on
+  context overflow before; they should now complete, with the "context
+  trimmed" notice appearing once. Green -> patch bump, this fix plus
+  the set_property->for_each_layer redirect ship together.
+- **set_solid_color, probe first**: no tool can change a solid's color
+  (probe step 9's real blocker — the model tried four approaches; none
+  exist). The color lives on the SOLID SOURCE, so changing it changes
+  EVERY layer sharing that source — duplicate_layer and
+  split_layer_into_chunks share sources, so this trap is the panel's
+  normal case, not an edge. Probe: is solidSource.color writable; what
+  does AE do when the source is shared; can a layer be given its OWN
+  copy first (the Solid Settings "New" checkbox, from script). Build:
+  set_solid_color {layer(s), color, makeUnique?: bool} with the shared-
+  source consequence stated in the result either way.
+
 ## 3. Extend selftest.js coverage
 
 Every verified behavior from (2) becomes a permanent step in

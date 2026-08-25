@@ -25,6 +25,11 @@
  * Writes a markdown transcript to logs/ and exits 0 only if every step
  * met its verdict. Needs After Effects running with "Allow Scripts to
  * Write Files and Access Network" enabled.
+ *
+ * It DOES press Ctrl+Z in the open project — the last step measures what
+ * one typed sentence costs in undo steps. It never presses it more times
+ * than the probe's own tool runs, so it cannot reach past its own work
+ * into the user's, but run it on a scratch project all the same.
  */
 "use strict";
 
@@ -172,6 +177,7 @@ function aeRead(expr, cb) {
 // -------------------------------------------------------- the panel, in Node
 
 const storage = {};
+let probeRuns = 0;
 const window = {
   console: console,
   setTimeout: setTimeout,
@@ -188,6 +194,10 @@ const window = {
     nodeRequire: require,
     getExtensionPath() { return EXT; },
     evalScript(script, cb) {
+      // Every tool run the probe sends AE, fused batch or single call.
+      // The undo step below will not press Ctrl+Z more times than this,
+      // so it can never reach past the probe into the user's own edits.
+      if (/AELL_call(Batch)?\s*\(/.test(script)) probeRuns++;
       aeEval(script, function (text, isError) {
         if (cb) cb(text, isError);
       });
@@ -243,7 +253,14 @@ function sendMessage(text, done) {
   const s = Settings.get();
   say("user", text);
   history.push({ role: "user", content: text });
-  const round = { rounds: 0, commands: 0, failures: [] };
+  const round = { rounds: 0, commands: 0, toolRounds: 0, failures: [],
+                  rolledBack: 0 };
+  // In step with main.js: ONE rollback per typed sentence, across all of
+  // its rounds. Without this the probe could never exercise the model's
+  // half of a rollback — the host only arms it when the caller asks, so
+  // an unarmed probe proves nothing about what the model does with a
+  // ROLLED BACK result.
+  let rollbackBudget = 1;
 
   aeEval("if ($.global.AELL_newRequest) $.global.AELL_newRequest();",
     function () {
@@ -273,10 +290,26 @@ function sendMessage(text, done) {
         if (reply) say("assistant", reply + "  [" + secs + "s]");
         if (commands.length === 0) { done(round); return; }
         round.commands += commands.length;
+        // A round that calls tools costs at least one AE script execution,
+        // and AE groups a script execution into one undo step. So this is
+        // the ceiling the undo step below holds the product to.
+        round.toolRounds++;
 
-        Tools.executeCommands(commands, { dryRun: false },
+        Tools.executeCommands(commands,
+          { dryRun: false, allowRollback: rollbackBudget > 0 },
           function (i, cmd, result) {
             const head = cmd.tool + " " + JSON.stringify(cmd.args || {});
+            if (result.rolledBack) {
+              // Say it ONCE, the way the panel does, and spend the budget.
+              if (!round.rolledBack) {
+                say("info", "ROUND ROLLED BACK — nothing from it was " +
+                    "applied: " + String(result.error || result.note || "")
+                      .slice(0, 200));
+                rollbackBudget--;
+              }
+              round.rolledBack++;
+              return;
+            }
             const body = result.ok
               ? "ok" + (result.data
                   ? ": " + JSON.stringify(result.data).slice(0, 400) : "")
@@ -326,7 +359,8 @@ const READ_COMP = FIND_COMP +
   "  var row = { index: i, name: L.name, parent: L.parent ? L.parent.name" +
   "    : null, matte: 0, masks: 0, text: null, effects: 0," +
   "    opacityKeys: 0, opacityKeyTimes: [], position: null," +
-  "    startTime: 0, inPoint: 0," +
+  "    startTime: 0, inPoint: 0, solidColor: null," +
+  "    effectNames: [], effectColors: []," +
   "    scale: null, rotation: null, isText: false, isShape: false," +
   "    isNull: false, isSolid: false };" +
   "  try { row.matte = L.trackMatteType; } catch (e1) {}" +
@@ -337,6 +371,26 @@ const READ_COMP = FIND_COMP +
   "  try { row.isShape = (L instanceof ShapeLayer); } catch (e4) {}" +
   "  try { row.isSolid = (L.source && L.source.mainSource &&" +
   "    (L.source.mainSource instanceof SolidSource)); } catch (e5) {}" +
+  "  try { if (row.isSolid) row.solidColor =" +
+  "    L.source.mainSource.color.slice(0); } catch (e5b) {}" +
+  // Effect NAMES and every colour any effect holds: "make them blue" has
+  // no set-the-solid's-colour tool behind it, so a Fill/Tint effect is a
+  // legitimate way for the model to answer and the verdict has to see it.
+  "  try {" +
+  "    var fx = L.property('ADBE Effect Parade');" +
+  "    for (var f = 1; f <= fx.numProperties; f++) {" +
+  "      var E = fx.property(f);" +
+  "      row.effectNames.push(E.name);" +
+  "      for (var q = 1; q <= E.numProperties; q++) {" +
+  "        try {" +
+  "          var P = E.property(q);" +
+  "          if (P.propertyValueType === PropertyValueType.COLOR) {" +
+  "            row.effectColors.push(P.value.slice(0, 3));" +
+  "          }" +
+  "        } catch (eq) {}" +
+  "      }" +
+  "    }" +
+  "  } catch (e5c) {}" +
   "  try { if (row.isText) row.text =" +
   "    L.property('Source Text').value.text; } catch (e6) {}" +
   "  try { row.masks = L.property('ADBE Mask Parade').numProperties;" +
@@ -382,6 +436,74 @@ const SWEEP =
   "  catch (e) {}" +
   "}" +
   "return { removed: killed };";
+
+/* One compact string that changes whenever anything the user would SEE in
+ * the probe comp changes. Used to answer "did one Ctrl+Z put it back?" —
+ * comparing the whole READ_COMP JSON would work too, but this runs inside
+ * AE between undos, where a short string is cheap to build and to diff. */
+const SIG_FN =
+  "function sig() {" +
+  FIND_COMP +
+  "  if (!c) return 'no comp';" +
+  "  var s = [c.name, c.numLayers, c.width, c.height, c.duration," +
+  "    c.frameRate].join('/');" +
+  "  for (var j = 1; j <= c.numLayers; j++) {" +
+  "    var L = c.layer(j), t = j + ':' + L.name;" +
+  "    try { t += '|p' + L.property('ADBE Transform Group')" +
+  "      .property('ADBE Position').value.join(',');" +
+  "      t += '|s' + L.property('ADBE Transform Group')" +
+  "      .property('ADBE Scale').value.join(',');" +
+  "      t += '|r' + L.property('ADBE Transform Group')" +
+  "      .property('ADBE Rotate Z').value;" +
+  "      t += '|k' + L.property('ADBE Transform Group')" +
+  "      .property('ADBE Opacity').numKeys;" +
+  "    } catch (a) {}" +
+  "    try { t += '|e' + L.property('ADBE Effect Parade').numProperties;" +
+  "    } catch (b) {}" +
+  "    try { t += '|m' + L.property('ADBE Mask Parade').numProperties;" +
+  "    } catch (d) {}" +
+  "    try { t += '|f' + L.parent.name; } catch (e) { t += '|f-'; }" +
+  "    try { t += '|t' + L.trackMatteType; } catch (f) {}" +
+  "    try { t += '|i' + L.inPoint + ',' + L.outPoint + ',' + L.startTime;" +
+  "    } catch (g) {}" +
+  "    try { if (L instanceof TextLayer) t += '|x' +" +
+  "      L.property('Source Text').value.text; } catch (h) {}" +
+  "    try { if (L.source && L.source.mainSource &&" +
+  "      (L.source.mainSource instanceof SolidSource)) {" +
+  "      t += '|c' + L.source.mainSource.color.join(','); } } catch (k) {}" +
+  "    s += '\\n' + t;" +
+  "  }" +
+  "  return s;" +
+  "}";
+
+/*
+ * "One chat command should be one Ctrl+Z" — measured end to end, through
+ * the model, rather than by calling a tool directly (which the self-test
+ * already does). Undo is pressed one step at a time and the comp compared
+ * to how it looked before the sentence was typed.
+ *
+ * `cap` is NEVER a fixed 8: the probe runs against the user's live open
+ * project, so it must not be able to undo past its OWN work and start
+ * eating their edits. main() passes the number of tool runs the probe has
+ * made since it started.
+ */
+function undoProbe(beforeSig, cap) {
+  return SIG_FN +
+    "var before = " + JSON.stringify(beforeSig) + ";" +
+    "var cap = " + Math.max(0, cap | 0) + ";" +
+    "var now = sig();" +
+    "if (now === before) return { changed: false, undos: 0, cap: cap };" +
+    "var hit = -1, tried = 0, k;" +
+    "for (k = 1; k <= cap; k++) {" +
+    "  app.executeCommand(16);" +  // 16 = Edit > Undo
+    "  tried++;" +
+    "  now = sig();" +
+    "  if (now === before) { hit = k; break; }" +
+    "}" +
+    "return { changed: true, undos: hit, tried: tried, cap: cap," +
+    "  sample: String(now).slice(0, 400)," +
+    "  beforeSample: String(before).slice(0, 400) };";
+}
 
 /* The nine squares — NOT grid_layout's "GRID CTRL" rig layer, which is a
  * solid too and parks itself in the middle of the comp (it showed up as a
@@ -556,6 +678,120 @@ const STEPS = [
       }
       return null;
     }
+  },
+  {
+    // The one thing a chat panel does that a tool suite cannot: the
+    // sentence is meaningless on its own. "them" is only the nine squares
+    // because of the PREVIOUS turn (the only plural in it — "the null" is
+    // singular), and "instead" only means anything if the model knows
+    // they are currently red. Nothing here names a layer.
+    title: "a second turn that refers back",
+    say: "Make them blue instead.",
+    check(state, ctx) {
+      const sq = squares(state);
+      const was = ctx.before ? squares(ctx.before) : [];
+      if (was.length && sq.length !== was.length) {
+        return "there were " + was.length + " squares before the sentence " +
+               "and " + sq.length + " after — recolouring should not add " +
+               "or remove layers";
+      }
+      if (sq.length < 9) return "only " + sq.length + " squares in the comp";
+      const blue = c => c && c.length >= 3 &&
+        c[2] > 0.35 && c[2] > c[0] + 0.15 && c[2] > c[1] + 0.15;
+      const isBlue = l => blue(l.solidColor) ||
+        (l.effectColors || []).some(blue);
+      const done = sq.filter(isBlue);
+      if (done.length < sq.length) {
+        const stuck = sq.filter(l => !isBlue(l))
+          .map(l => l.name + "=" + (l.solidColor
+            ? l.solidColor.map(v => v.toFixed(2)).join("/") : "?") +
+            (l.effectNames.length ? " fx[" + l.effectNames.join(",") + "]"
+              : ""))
+          .slice(0, 4).join(", ");
+        return done.length + " of " + sq.length + " squares are blue; " +
+               "still not blue: " + stuck;
+      }
+      // Blue, but at what cost: a recolour that quietly threw away the
+      // parenting from the previous turn is not what the user asked for.
+      const lost = was.filter(b => b.parent &&
+        !state.layers.some(a => a.name === b.name && a.parent === b.parent));
+      if (lost.length) {
+        return "they are blue but " + lost.length + " square(s) lost the " +
+               "parent they had before (" + lost[0].name + " was parented " +
+               "to " + lost[0].parent + ")";
+      }
+      return null;
+    }
+  },
+  {
+    // One typed sentence, several tools, ONE Ctrl+Z. The self-test proves
+    // the host groups a batch; only this proves it survives the whole
+    // product path, where a model may answer in more than one round and
+    // each round is its own AE script execution — which the user pays for
+    // one Ctrl+Z at a time.
+    title: "one Ctrl+Z for one chat command",
+    say: "Add a white 120 by 120 solid called Dot in the middle of Probe " +
+         "Room, put a drop shadow on it, and fade it in over the first " +
+         "half second.",
+    undo: true,
+    check(state, ctx) {
+      const u = ctx.undo;
+      if (!u) return "the undo measurement did not run";
+      if (u.error) return "could not measure undo: " + u.error;
+      if (!u.changed) return "the command changed nothing, so there was " +
+                             "nothing to undo";
+      if (u.undos < 0) {
+        return "the comp never got back to how it started — " + u.tried +
+               " undo(s) of a possible " + u.cap + " and it still differs";
+      }
+      if (u.undos > ctx.toolRounds) {
+        return "one sentence cost " + u.undos + " Ctrl+Z but only ran " +
+               ctx.toolRounds + " tool round(s) — a run leaked its " +
+               "undo group";
+      }
+      return null;
+    }
+  },
+  {
+    // The MODEL's half of the round rollback, which nothing else can
+    // reach: the host is only armed when the caller asks, and the panel
+    // only tells the model "ROLLED BACK" in a result it has to act on.
+    //
+    // The sentence is built to fail PART WAY on purpose. "Beta" can be
+    // made; the drop shadow names a layer that does not exist, so that
+    // command fails — one mutating success, one mutating failure, which
+    // is exactly the trigger. The round is undone whole, Beta included.
+    //
+    // What is under test is what the model does NEXT. Getting this wrong
+    // has two distinct failure modes and the verdict separates them:
+    //   - it carries on as if Beta existed, or redoes the round on top of
+    //     debris -> more than one Beta (the ten-squares bug);
+    //   - it treats the rollback as "the request failed" and stops ->
+    //     NO Beta at all, and the user is left with nothing when the
+    //     achievable half was achievable.
+    title: "the model re-plans after a round is rolled back",
+    say: "Add a 100 by 100 orange solid called Beta to Probe Room, and " +
+         "put a drop shadow on the layer called Ghost.",
+    check(state, ctx) {
+      const betas = state.layers.filter(l => /^Beta/i.test(l.name));
+      if (betas.length > 1) {
+        return "the comp ended with " + betas.length + " layers called " +
+               "Beta (" + betas.map(l => l.name).join(", ") + ") — the " +
+               "model built on top of a round that had been undone";
+      }
+      if (betas.length === 0) {
+        return "no Beta at all" + (ctx.rolledBack
+          ? " — the round was rolled back and the model never redid the " +
+            "half that WAS achievable, so the user got nothing"
+          : " — the model never made the solid it was asked for");
+      }
+      // A Ghost conjured just to make the shadow stick is not an answer.
+      if (state.layers.some(l => /^Ghost/i.test(l.name))) {
+        return "the model invented a layer called Ghost rather than " +
+               "reporting that it does not exist";
+      }
+      return null;
+    }
   }
 ];
 
@@ -680,18 +916,62 @@ function main() {
     const step = STEPS[idx];
     const mark = transcript.length;
     console.log("\n=== step " + (idx + 1) + ": " + step.title + " ===");
-    sendMessage(step.say, function (round) {
-      aeRead(READ_COMP, function (state, readErr) {
-        let verdict = null;
-        if (readErr) verdict = "could not read the comp: " + readErr.message;
-        else verdict = step.check(state) || null;
-        if (verdict) say("verdict", "FAIL — " + verdict);
-        else say("verdict", "pass (" + round.rounds + " round(s), " +
-                 round.commands + " command(s))");
-        rows.push({ index: idx, title: step.title, verdict: verdict,
-                    lines: transcript.slice(mark) });
-        next(k + 1);
+    // How the comp looked BEFORE the sentence: a step that refers back to
+    // an earlier turn is judged on what changed, not on absolutes.
+    aeRead(READ_COMP, function (before) {
+      aeRead(SIG_FN + " return sig();", function (sigBefore) {
+        const runsBefore = probeRuns;
+        sendMessage(step.say, function (round) {
+          aeRead(READ_COMP, function (state, readErr) {
+            const ctx = { before: before && before.found ? before : null,
+                          rounds: round.rounds,
+                          toolRounds: round.toolRounds,
+                          rolledBack: round.rolledBack, undo: null };
+            if (!step.undo) { judge(state, readErr, ctx); return; }
+            measureUndo(sigBefore, runsBefore, function (u) {
+              ctx.undo = u;
+              if (u && u.changed && u.undos >= 0) {
+                say("info", "one sentence, " + u.undos + " Ctrl+Z (" +
+                    round.toolRounds + " tool round(s)) — comp restored");
+              } else if (u && !u.changed) {
+                say("info", "nothing changed, so nothing to undo");
+              } else if (u) {
+                say("info", "not restored after " + u.tried + " undo(s) " +
+                    "(cap " + u.cap + ")");
+              }
+              judge(state, readErr, ctx);
+            });
+          });
+        });
+
+        function judge(state, readErr, ctx) {
+          let verdict = null;
+          if (readErr) verdict = "could not read the comp: " + readErr.message;
+          else verdict = step.check(state, ctx) || null;
+          if (verdict) say("verdict", "FAIL — " + verdict);
+          else say("verdict", "pass (" + summary(ctx) + ")");
+          rows.push({ index: idx, title: step.title, verdict: verdict,
+                      lines: transcript.slice(mark) });
+          next(k + 1);
+        }
+        function summary(ctx) {
+          return ctx.rounds + " round(s)" +
+                 (ctx.undo ? ", " + ctx.undo.undos + " Ctrl+Z" : "");
+        }
       });
+    });
+  }
+
+  /** Press Undo until the comp matches `sigBefore`, never past our own work. */
+  function measureUndo(sigBefore, runsBefore, cb) {
+    if (typeof sigBefore !== "string" || !sigBefore) {
+      cb({ error: "no signature to compare against" });
+      return;
+    }
+    const cap = Math.max(0, probeRuns - runsBefore);
+    if (!cap) { cb({ changed: false, undos: 0, cap: 0 }); return; }
+    aeRead(undoProbe(sigBefore, cap), function (res, err) {
+      cb(err ? { error: err.message } : res);
     });
   }
 
@@ -719,4 +999,14 @@ function main() {
   }
 }
 
-main();
+/*
+ * Required rather than run: hand the verdicts to tests/test-chat-probe.js
+ * so the CHECKS themselves are regression-tested against synthetic comp
+ * states, with no AE and no model. Nothing above this line runs on
+ * require — main() is the only thing that talks to AE.
+ */
+if (require.main === module) {
+  main();
+} else {
+  module.exports = { STEPS, squares, undoProbe, SIG_FN, READ_COMP };
+}

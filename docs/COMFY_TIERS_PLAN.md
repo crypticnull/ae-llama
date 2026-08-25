@@ -87,10 +87,20 @@ an entry field (`requiresAda: bool`), not a separate tier.
   (2.2 ships a 5B TI2V and A14B MoE variants) — P5 pins exact
   repos/files per tier from the collection; P4 measures. Downloaded
   like chat models via the existing downloader.
-- **MiniMax H3** — https://huggingface.co/MiniMaxAI/MiniMax-H3 , LOCAL
-  WEIGHTS, owner already holds them. Other users download from that
-  repo; the owner's copy gets REGISTERED via model roots (below), never
-  re-downloaded. Enters the catalog with measured VRAM or not at all.
+- **MiniMax H3** — canonical download repo is
+  **Comfy-Org/MiniMax-H3** (ComfyUI-repackaged; the owner's r2v workflow
+  embeds its exact file URLs — see
+  extension/workflows/AE_LLAMA_H3_R2V_V1.manifest.json). It is
+  reference-to-video+AUDIO: a diffusion weight, a 32B text encoder, and
+  BOTH a video and an audio VAE. The bundled encoder is nvfp4 —
+  **Blackwell-only** (RTX 50-series); other tiers need a different
+  precision from the same repo, pinned in P5. So catalog entries need
+  per-ARCHITECTURE variants (requiresAda, requiresBlackwell), not just
+  VRAM floors. Enters the catalog with measured VRAM or not at all.
+  NOTE the base weight was absent from the Documents models root the
+  scan covered, yet the workflow runs — the Desktop app resolves models
+  from the CODE root's models dir too, so the register-existing matcher
+  must scan BOTH roots (local task queued to confirm where it lives).
 - **LTX-small at T2 — CONFIRMED experimental.** 6 GB cards get an
   experimental short-video entry, flagged as such, exclusive handoff
   mandatory. If P4's simulated-T2 run shows it cannot finish a clip

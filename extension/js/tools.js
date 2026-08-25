@@ -393,10 +393,11 @@
       "- Look at TOOL RESULTS before continuing; fix errors they report.",
       "- A result marked \"ROLLED BACK\" means the WHOLE round was undone",
       "  because one of its commands failed: nothing from it exists, not",
-      "  even the commands that reported ok. Read the current state again",
-      "  if unsure, then redo the round with the failure fixed — do not",
-      "  skip the parts that 'already worked', and do not build on any",
-      "  layer or comp that round created.",
+      "  even the commands that reported ok. Your NEXT reply must do two",
+      "  things — resend the commands that CAN succeed (without the one",
+      "  that failed), and say plainly in 'reply' what you could not do.",
+      "  Never report a rolled-back command as created/added/applied, and",
+      "  never stop just because one part is impossible: do the rest.",
       "- Times are in seconds. Colors are [r,g,b] floats 0..1.",
       "- Positions are pixel coordinates [x,y] from the comp's top-left.",
       "- UNITS: scale and opacity are PERCENT (100 = normal size, 200 =",
@@ -1052,8 +1053,51 @@
     callHostTool(tool, args, cb);
   }
 
+  /**
+   * Fit the chat history into a character budget by dropping the OLDEST
+   * entries first. The transcript the user sees is untouched — this only
+   * bounds what the MODEL is sent.
+   *
+   * Without it a long chat died with a raw llama-server HTTP 400
+   * ("request exceeds the available context size") on every later
+   * message, and the panel was dead until cleared — field-observed at
+   * 16755 tokens against a 16384 window.
+   *
+   * Rules, in order:
+   *  - under budget -> unchanged, dropped: 0;
+   *  - drop whole entries from the front until under budget, but never
+   *    the last four — the current exchange must survive even when it
+   *    alone busts the budget (the model then gets a too-big prompt and
+   *    the caller's retry path deals with the 400);
+   *  - after dropping, keep dropping until the first entry is a USER
+   *    turn: chat templates expect user-first after the system message,
+   *    and an orphaned assistant turn reads as the model talking to
+   *    itself.
+   */
+  function fitHistory(history, budgetChars) {
+    var size = 0, i;
+    for (i = 0; i < history.length; i++) {
+      size += (history[i].content || "").length + 16;
+    }
+    if (size <= budgetChars) return { entries: history, dropped: 0 };
+    var entries = history.slice();
+    var dropped = 0;
+    while (entries.length > 4 && size > budgetChars) {
+      size -= (entries[0].content || "").length + 16;
+      entries.shift();
+      dropped++;
+    }
+    while (entries.length > 1 && entries[0].role !== "user") {
+      size -= (entries[0].content || "").length + 16;
+      entries.shift();
+      dropped++;
+    }
+    return { entries: entries, dropped: dropped };
+  }
+
   global.Tools = {
     TOOL_DEFS: TOOL_DEFS,
+    fitHistory: fitHistory,
     RESPONSE_SCHEMA: RESPONSE_SCHEMA,
     buildSystemPrompt: buildSystemPrompt,
     fetchProjectState: fetchProjectState,

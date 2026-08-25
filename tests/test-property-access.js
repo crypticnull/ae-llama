@@ -314,4 +314,13 @@ r = call("get_property", { layer: "A", property: "transform" });
 assert(!r.ok && /GROUP/.test(r.error),
        "multi-property groups still refuse with the list_properties hint");
 
+// set_property with a layers ARRAY is a batch ask — redirect, don't
+// silently set one layer and claim success (field-observed: the model
+// reached for this form twice in one probe run).
+r = call("set_property", { layers: ["A", "B"], property: "Opacity",
+                           value: 50 });
+assert(!r.ok, "set_property refuses a layers array");
+assert(/for_each_layer/.test(r.error || ""),
+       "and the refusal names the tool that DOES batches: " + r.error);
+
 console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");

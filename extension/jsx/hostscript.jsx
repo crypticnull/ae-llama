@@ -4158,6 +4158,14 @@ AELL_TOOLS.get_property = function (args) {
 };
 
 AELL_TOOLS.set_property = function (args) {
+  // The model reaches for {layers: [...]} here when it wants a batch —
+  // observed twice in one probe run. Redirect it to the tool that does
+  // that, instead of silently setting ONE layer and reporting success.
+  if (AELLJSON.isArray(args.layers)) {
+    return AELL_err("set_property works on ONE layer. For many, wrap it: " +
+      "for_each_layer {layers: [...], tool: 'set_property', args: " +
+      "{property: '" + String(args.property || "...") + "', value: ...}}");
+  }
   var comp = AELL_resolveComp(args.comp);
   var layer = AELL_layerOrSelection(comp, args.layer);
   var prop = AELL_anyProperty(layer, args.property);
@@ -4753,11 +4761,22 @@ function AELL_maybeRollback(cmds, results, armed, before, aliasesBefore) {
   // that no longer exists; put the alias table back too.
   $.global.AELL_compAliases = aliasesBefore || {};
 
+  // Wording measured against the model, not guessed. The first version
+  // said "nothing was applied — re-plan from the current state", and the
+  // model answered a rolled-back round with "Created the 'Beta' solid
+  // layer successfully" and stopped: it reported work that had just been
+  // undone, and never redid the half that COULD have succeeded. So the
+  // note now says the two things it has to do, in the order it has to do
+  // them, and forbids the claim outright.
   var note = "ROLLED BACK: a command in this round failed (" + firstError +
     ") after others had already changed the project, so the WHOLE round " +
-    "was undone. Nothing from it was applied — the project is exactly as " +
-    "it was before the round. Do NOT assume any layer, comp or keyframe " +
-    "from this round exists. Re-plan from the current state.";
+    "was undone. Nothing from it exists — not even the commands that " +
+    "reported ok. NEXT TURN, DO BOTH: (1) send the commands that CAN " +
+    "succeed again, leaving out the one that failed; (2) in your reply, " +
+    "tell the user plainly what you could NOT do and why. NEVER say " +
+    "anything from this round was created, added or applied — it was " +
+    "undone. If the failure is something only the user can fix, still " +
+    "redo the rest first.";
 
   // The full explanation goes on the FIRST result only. Repeating 300
   // characters twenty times would eat the panel's whole tool-result
