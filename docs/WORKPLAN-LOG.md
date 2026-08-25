@@ -1485,3 +1485,84 @@ frontmost.** Clean, no dialog, no dead viewer:
   pass AND eyeball the project panel afterwards — the 45-item
   accumulation should be gone, and nothing that is not ST-prefixed may
   have been touched. Then patch-bump.
+## 2026-08-25 — chat probe: reconciled, re-run, and it caught the rollback lying
+
+- Changed: `scripts/chat-probe.js` (committed the previous session's
+  uncommitted work, then armed rollback and added step 11),
+  `tests/test-chat-probe.js` (new verdict pins + an anti-drift check),
+  `extension/jsx/hostscript.jsx` and `extension/js/tools.js` (the
+  rolled-back wording — the actual fix). Bumped 0.9.16.
+- Harness: stubbed suite 22 files green. Chat probe steps 1,11: 2/2
+  after the fix (1/2 before it).
+
+**First: the probe was never testing the rollback at all.** It mirrors
+main.js's round loop by hand, and main.js gained `allowRollback` while
+the probe did not — so the host was never armed and the model never saw
+a ROLLED BACK result. The probe reported passes the whole time. There is
+now an anti-drift assertion in `tests/test-chat-probe.js` that reads
+both files and fails if an executeCommands option exists in one and not
+the other; that is the only way this class of drift is catchable,
+because a probe that tests a different product still goes green.
+
+**Then, armed, it caught the rollback doing something worse than the bug
+it was built to fix.** New step 11 asks for one achievable thing and one
+impossible one: "Add a 100 by 100 orange solid called Beta to Probe
+Room, and put a drop shadow on the layer called Ghost." add_solid
+succeeds, apply_effect fails, the round is correctly rolled back — and
+the model then said:
+
+    "The layer 'Ghost' was not found ... Created the 'Beta' solid layer
+     successfully."
+
+Beta did not exist. It had just been undone. So the user got NOTHING and
+was told they got something — a silent lie, where the original
+ten-squares bug at least left visible debris. The rollback was correct;
+what the model did with it was not.
+
+**Fix: the note's wording, measured rather than guessed.** The first
+version said "nothing was applied — re-plan from the current state",
+which the model read as "the request failed, report it". It now names
+the two actions in order — resend the commands that CAN succeed without
+the one that failed, then say plainly what you could not do — and
+forbids the claim outright ("NEVER say anything from this round was
+created, added or applied"). Same prompt rule in tools.js. Re-run on the
+identical sentence: round 1 rolls back, round 2 resends add_solid alone,
+the reply says the shadow was impossible and why, and the comp ends with
+exactly one Beta. That is the designed behaviour, proven through the
+model rather than argued.
+
+Step 11's verdict separates the two failure modes on purpose: more than
+one Beta is the ten-squares bug (built on top of an undone round); ZERO
+Betas is this bug (gave up on the achievable half). Both fail, with
+different messages. Pinned in the stub suite four ways, including a
+model that invents a Ghost layer to make the error go away.
+
+**Two OTHER findings from the full 10-step run, neither fixed, both
+real:**
+
+1. **The panel has no history trimming, and a long chat dies.** Steps 9
+   and 10 both failed with a raw `llama-server HTTP 400: request (16755
+   tokens) exceeds the available context size (16384)`. `main.js` builds
+   `[system].concat(history)` with no bound; `compactToolResults` caps
+   each round's results but everything accumulates forever. In the panel
+   this surfaces as "Model error: llama-server HTTP 400: {...}" on every
+   subsequent message — the chat is simply dead until cleared. Verbose
+   grounded errors accelerate it: one round here repeated a 300-char
+   "path not found" error nine times. Needs a decision (drop oldest
+   turns / summarise / raise ctx and warn), which is why it is logged
+   rather than guessed at.
+2. **There is no way to change a solid's colour.** Step 9 ("Make them
+   blue instead") failed because the model tried four approaches and
+   none exist: `set_transform {property:"fillColor"}`,
+   `set_property {layers:[...]}` (no batch form — it takes ONE `layer`),
+   and `set_property "contents/Solid Color/Color"` twice (solids have no
+   contents; that is a shape layer). A solid's colour lives in
+   `layer.source.mainSource.color` and no tool exposes it. Either add
+   one, or make the grounded error redirect to an effect-based answer.
+   Related: `set_property`'s "No layer selected" error should say the
+   tool takes a single layer and point at `for_each_layer`, since the
+   model reached for `layers:[...]` twice in a row.
+
+- Note: step 9's verdict already accepts a Fill/Tint effect as a valid
+  answer, so it is not the verdict being strict — the model genuinely
+  could not do it.

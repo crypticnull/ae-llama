@@ -416,5 +416,62 @@ assert(STEPS.filter(s => typeof s.say !== "string" ||
                          typeof s.check !== "function").length === 0,
        "every step still has a sentence and a verdict");
 
+// ------------------------ 3. "the model re-plans after a rolled-back round"
+
+const replan = stepByTitle("the model re-plans after a round is rolled back");
+{
+  uid = 0;
+  const ok = comp([square({ name: "Beta", solidColor: [1, 0.5, 0] })]);
+  assert(replan.check(ok, { rolledBack: 1 }) === null,
+         "exactly one Beta after a rollback is the right answer");
+}
+{
+  uid = 0;
+  const debris = comp([square({ name: "Beta" }), square({ name: "Beta 2" })]);
+  const v = replan.check(debris, { rolledBack: 1 });
+  assert(v && /2 layers called Beta/.test(v),
+         "two Betas is the ten-squares bug and fails: " + v);
+}
+{
+  const nothing = comp([]);
+  const v = replan.check(nothing, { rolledBack: 1 });
+  assert(v && /never redid the half that WAS achievable/.test(v),
+         "rolling back and then giving up fails too — the user got " +
+         "nothing: " + v);
+  const v2 = replan.check(nothing, { rolledBack: 0 });
+  assert(v2 && /never made the solid/.test(v2),
+         "and says something different when no rollback was involved");
+}
+{
+  uid = 0;
+  const conjured = comp([square({ name: "Beta" }), square({ name: "Ghost" })]);
+  const v = replan.check(conjured, { rolledBack: 1 });
+  assert(v && /invented a layer called Ghost/.test(v),
+         "inventing the missing layer to make the error go away fails: " + v);
+}
+
+// ---- anti-drift: the probe's round loop mirrors main.js's, by hand.
+//
+// This is the one thing in the probe that cannot be caught by running
+// it: an option main.js passes and the probe does not simply makes the
+// probe test a DIFFERENT product, quietly. It happened — the rollback
+// shipped armed in the panel and unarmed in the probe, so the model's
+// half of it went untested while the probe still reported passes.
+const fs2 = require("fs");
+const path2 = require("path");
+const probeSrc = fs2.readFileSync(
+  path2.join(__dirname, "..", "scripts", "chat-probe.js"), "utf8");
+const mainSrc = fs2.readFileSync(
+  path2.join(__dirname, "..", "extension", "js", "main.js"), "utf8");
+
+for (const opt of ["dryRun", "allowRollback"]) {
+  assert(new RegExp(opt + "\\s*:").test(probeSrc),
+         "the probe passes executeCommands its '" + opt + "' option");
+}
+assert(/rollbackBudget/.test(probeSrc) && /rollbackBudget/.test(mainSrc),
+       "and carries the same one-rollback-per-sentence budget main.js has");
+assert(/rolledBack/.test(probeSrc),
+       "and reports a rolled-back round instead of printing it as N errors");
+
 console.log(failed ? "\n" + failed + " assertion(s) failed"
                    : "\nall chat-probe verdict tests passed");

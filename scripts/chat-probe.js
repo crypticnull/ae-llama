@@ -253,7 +253,14 @@ function sendMessage(text, done) {
   const s = Settings.get();
   say("user", text);
   history.push({ role: "user", content: text });
-  const round = { rounds: 0, commands: 0, toolRounds: 0, failures: [] };
+  const round = { rounds: 0, commands: 0, toolRounds: 0, failures: [],
+                  rolledBack: 0 };
+  // In step with main.js: ONE rollback per typed sentence, across all of
+  // its rounds. Without this the probe could never exercise the model's
+  // half of a rollback — the host only arms it when the caller asks, so
+  // an unarmed probe proves nothing about what the model does with a
+  // ROLLED BACK result.
+  let rollbackBudget = 1;
 
   aeEval("if ($.global.AELL_newRequest) $.global.AELL_newRequest();",
     function () {
@@ -288,9 +295,21 @@ function sendMessage(text, done) {
         // the ceiling the undo step below holds the product to.
         round.toolRounds++;
 
-        Tools.executeCommands(commands, { dryRun: false },
+        Tools.executeCommands(commands,
+          { dryRun: false, allowRollback: rollbackBudget > 0 },
           function (i, cmd, result) {
             const head = cmd.tool + " " + JSON.stringify(cmd.args || {});
+            if (result.rolledBack) {
+              // Say it ONCE, the way the panel does, and spend the budget.
+              if (!round.rolledBack) {
+                say("info", "ROUND ROLLED BACK — nothing from it was " +
+                    "applied: " + String(result.error || result.note || "")
+                      .slice(0, 200));
+                rollbackBudget--;
+              }
+              round.rolledBack++;
+              return;
+            }
             const body = result.ok
               ? "ok" + (result.data
                   ? ": " + JSON.stringify(result.data).slice(0, 400) : "")
@@ -732,6 +751,47 @@ const STEPS = [
       }
       return null;
     }
+  },
+  {
+    // The MODEL's half of the round rollback, which nothing else can
+    // reach: the host is only armed when the caller asks, and the panel
+    // only tells the model "ROLLED BACK" in a result it has to act on.
+    //
+    // The sentence is built to fail PART WAY on purpose. "Beta" can be
+    // made; the drop shadow names a layer that does not exist, so that
+    // command fails — one mutating success, one mutating failure, which
+    // is exactly the trigger. The round is undone whole, Beta included.
+    //
+    // What is under test is what the model does NEXT. Getting this wrong
+    // has two distinct failure modes and the verdict separates them:
+    //   - it carries on as if Beta existed, or redoes the round on top of
+    //     debris -> more than one Beta (the ten-squares bug);
+    //   - it treats the rollback as "the request failed" and stops ->
+    //     NO Beta at all, and the user is left with nothing when the
+    //     achievable half was achievable.
+    title: "the model re-plans after a round is rolled back",
+    say: "Add a 100 by 100 orange solid called Beta to Probe Room, and " +
+         "put a drop shadow on the layer called Ghost.",
+    check(state, ctx) {
+      const betas = state.layers.filter(l => /^Beta/i.test(l.name));
+      if (betas.length > 1) {
+        return "the comp ended with " + betas.length + " layers called " +
+               "Beta (" + betas.map(l => l.name).join(", ") + ") — the " +
+               "model built on top of a round that had been undone";
+      }
+      if (betas.length === 0) {
+        return "no Beta at all" + (ctx.rolledBack
+          ? " — the round was rolled back and the model never redid the " +
+            "half that WAS achievable, so the user got nothing"
+          : " — the model never made the solid it was asked for");
+      }
+      // A Ghost conjured just to make the shadow stick is not an answer.
+      if (state.layers.some(l => /^Ghost/i.test(l.name))) {
+        return "the model invented a layer called Ghost rather than " +
+               "reporting that it does not exist";
+      }
+      return null;
+    }
   }
 ];
 
@@ -865,7 +925,8 @@ function main() {
           aeRead(READ_COMP, function (state, readErr) {
             const ctx = { before: before && before.found ? before : null,
                           rounds: round.rounds,
-                          toolRounds: round.toolRounds, undo: null };
+                          toolRounds: round.toolRounds,
+                          rolledBack: round.rolledBack, undo: null };
             if (!step.undo) { judge(state, readErr, ctx); return; }
             measureUndo(sigBefore, runsBefore, function (u) {
               ctx.undo = u;
