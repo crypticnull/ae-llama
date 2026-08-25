@@ -132,6 +132,10 @@ Write-Log ('branch : ' + $Branch)
 Write-Log ('log    : ' + $logFile)
 Write-Log ('plan   : ' + $Iterations + ' iterations, ' + $PauseSec + 's pause')
 
+# Consecutive waits spent on a usage limit (see the check below). Reset
+# whenever a pass actually lands a commit.
+$limitWaits = 0
+
 for ($i = 1; $i -le $Iterations; $i++) {
 
     if ($UntilHour -ge 0 -and (Get-Date).Hour -eq $UntilHour) {
@@ -172,9 +176,14 @@ for ($i = 1; $i -le $Iterations; $i++) {
     $before = [string](& git rev-parse HEAD)
     $before = $before.Trim()
 
+    # Keep the pass's output in memory too: a pass that hit the USAGE
+    # LIMIT exits fast with a message instead of doing work, and only
+    # the text tells that apart from a genuinely idle pass.
+    $passLines = New-Object System.Collections.Generic.List[string]
     try {
         & $ClaudePath @claudeArgs 2>&1 | ForEach-Object {
             $line = [string]$_
+            $passLines.Add($line)
             Add-Content -Path $logFile -Value $line -Encoding ASCII
             Write-Host $line
         }
@@ -185,9 +194,28 @@ for ($i = 1; $i -le $Iterations; $i++) {
     $after = [string](& git rev-parse HEAD)
     $after = $after.Trim()
     if ($before -eq $after -or $after.Length -lt 8) {
+        # Headless passes do NOT wait out a usage limit the way the
+        # interactive CLI does ("continuing automatically at ...") --
+        # they exit immediately. Without this check an overnight loop
+        # that hit the 5-hour limit would burn every remaining
+        # iteration in minutes and be long dead when the window reset.
+        $passText = ($passLines -join ' ')
+        if ($passText -match '(usage|session|rate).{0,3}limit|limit (reached|will reset)|hit your') {
+            $limitWaits++
+            if ($limitWaits -gt 21) {
+                Write-Log 'Usage limit still in force after ~7 hours of waiting. Stopping.'
+                break
+            }
+            Write-Log ('Usage limit hit -- waiting 20 minutes, then retrying. ' +
+                       '(wait ' + $limitWaits + ', iteration not consumed)')
+            Start-Sleep -Seconds 1200
+            $i--
+            continue
+        }
         Write-Log 'Pass produced no commit (nothing done, or it stopped early).'
     } else {
         Write-Log ('Pass committed ' + $after.Substring(0, 8))
+        $limitWaits = 0
     }
 
     Start-Sleep -Seconds $PauseSec
