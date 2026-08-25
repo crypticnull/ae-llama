@@ -1566,3 +1566,15 @@ real:**
 - Note: step 9's verdict already accepts a Fill/Tint effect as a valid
   answer, so it is not the verdict being strict — the model genuinely
   could not do it.
+
+## 2026-08-25 (remote) — history trim built; H3 r2v workflow bundled
+
+- Changed: Tools.fitHistory + main.js wiring (proactive trim, one-time
+  notice, hard-trim retry on context 400) — tests/test-history-trim.js
+  pins the rules including the field numbers. set_property {layers:[..]}
+  now redirects to for_each_layer. H3 r2v workflow + manifest bundled;
+  canonical repo is Comfy-Org/MiniMax-H3 per its embedded URLs; the
+  nvfp4 encoder is Blackwell-only -> catalog needs per-arch variants.
+- Harness: NOT run from here. Stubbed suite 22/22. NO bump — the trim
+  changes every chat request, so it ships after the probe re-run
+  (WORKPLAN 2d) proves steps 9–10 complete.
