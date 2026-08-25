@@ -202,6 +202,42 @@ The owner's Krea workflow JSON becomes a workflow template referencing
 a catalog entry — the template mechanism already exists
 (`comfy_list_workflows`).
 
+## What the real install taught us (docs/COMFY_LOCAL_INVENTORY.md, 2026-08-25)
+
+The local scan of the owner's machine — a Comfy DESKTOP install with
+256 weight files / 1011 GB — invalidated five assumptions before they
+shipped:
+
+1. **Code and data live in different roots.** The Documents folder holds
+   models/custom_nodes; the running code lives under
+   AppData\Local\Comfy-Desktop. The bootstrap must detect Desktop
+   installs (`.comfyui-desktop-*` marker) and treat the two roots
+   separately — deriving one from the other is wrong on real machines.
+2. **Version gates compare COMPONENT-WISE, never lexically.** The real
+   install is 0.32.0; lexically that is LESS than the required 0.3.76.
+   Reuse the panel's own `compareVersions`. And read the version from
+   the running instance's log or the active install — this machine has
+   two STALE version files (0.22.2, 0.20.1) that would gate wrongly.
+3. **The register-existing matcher stays EXACT-name.** The owner's disk
+   holds `krea2Dmergev3_int8ConvrotV3` within 1 MB of the real Krea
+   file — fuzzy matching would register the wrong model. Exact filename,
+   size as confirmation only.
+4. **Model files live outside models/ too.** depth_anything_v2_vitl.pth
+   sits under custom_nodes/comfyui_controlnet_aux/ckpts — a matcher
+   scoped to models/ re-downloads 1.3 GB the user already has. Scan
+   node-pack ckpts dirs as secondary roots.
+5. **Node packs COLLIDE.** DepthAnythingV2Preprocessor is defined by two
+   installed packs; which binds depends on load order. The installer
+   must check for an existing provider before cloning a pack, and the
+   workflow manifest pins WHICH pack each node is expected from.
+
+**MiniMax H3 status on the owner's machine: HALF-PROVISIONED.** Turbo
+LoRAs and the video VAE are present; the base/transformer weight is NOT
+on disk anywhere. Until the base weight is downloaded from
+https://huggingface.co/MiniMaxAI/MiniMax-H3 , H3 cannot run or be
+measured even on the 5090. Wan 2.2 is fully provisioned in three
+precisions and is therefore the video model P4 measures FIRST.
+
 ## Phases and owners
 
 - **P1 (remote):** `tiers.js` single source + stub tests; refactor

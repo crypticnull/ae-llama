@@ -145,7 +145,12 @@ function main() {
   }
   const updated = doc.slice(0, b) + block + doc.slice(e + END.length);
   if (check) {
-    if (updated !== doc) {
+    // Compare CONTENT, not bytes: on Windows, git autocrlf checks the
+    // doc out with CRLF while this script generates LF, so a byte
+    // comparison failed every local run while CI stayed green — a check
+    // that cries wolf on one platform trains people to ignore it.
+    const norm = (t) => t.replace(/\r\n/g, "\n");
+    if (norm(updated) !== norm(doc)) {
       console.error("docs/CAPABILITIES.md is STALE: the tool inventory no " +
                     "longer matches the code. Run: " +
                     "node scripts/capability-report.js  (then commit it)");
