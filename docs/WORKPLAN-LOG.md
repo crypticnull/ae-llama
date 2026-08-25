@@ -1595,3 +1595,14 @@ real:**
   model, not a load/unload — the Ollama branch it replaces loaded a
   separate 27B per generation. r2v deferred per owner; t2v/i2v files
   pinned by 2d; owner asked to export a t2v/i2v H3 workflow.
+
+## 2026-08-25 (remote) — H3 i2v bundled, procedurally parameterized
+
+- The owner's i2v workflow lands as AE_LLAMA_H3_I2V_V1. Per their
+  direction, the enhancer node's contents are BROKEN OUT: the manifest
+  holds the template (system turn), the user idea is the per-run user
+  turn (planEnhancement already separates these), and duration is an
+  injection parameter (seconds -> node 136; the graph does the frame
+  math). fl2va covers t2v AND i2v — r2v superseded. Sanitized like the
+  others; enhance tests pass. Adaptation + one real generation queued
+  as the local 2d pass.
