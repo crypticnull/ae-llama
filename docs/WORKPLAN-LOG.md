@@ -1463,3 +1463,25 @@ frontmost.** Clean, no dialog, no dead viewer:
   "ST Bat A | ST Bat A | ST Batch | ST Batch | …"). Harmless to the
   suite, untidy for anyone whose project it runs in. Worth a cleanup
   step that removes unused solids the suite created.
+
+## 2026-08-25 (remote) — the suite now cleans up its solid sources
+
+- Changed: `extension/js/selftest.js` — three new final steps: list every
+  footage item in the suite's own "ST " namespace, delete them by ID
+  (names duplicate after runs, ids do not), then a verification READ
+  asserting nothing ST-prefixed remains in the project at all. Only the
+  suite's namespace is touched — a user's own solids are never candidates.
+  `tests/test-self-test.js` — the canned host now models what the check
+  depends on: delete_item really removes items from later listings (by
+  name or id, grounded error when missing), precompose adds its comp,
+  rename_comps renames the underlying item. It is seeded with the
+  observed leftovers (ST Bat A twice, etc.) so the cleanup path runs
+  against the field bug, not an already-clean project.
+- Harness: NOT run from here (chat-probe holds the machine). Stubbed
+  suite 21/21. NO version bump — this changes suite behavior in the
+  user's open project, so it ships after the local session watches one
+  real run delete the right things and nothing else.
+- FOR THE LOCAL SESSION: next harness run, confirm the final three steps
+  pass AND eyeball the project panel afterwards — the 45-item
+  accumulation should be gone, and nothing that is not ST-prefixed may
+  have been touched. Then patch-bump.

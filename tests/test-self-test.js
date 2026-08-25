@@ -91,6 +91,18 @@ function capLayers(compName, all, args) {
 // canned happy-path results per tool
 let createCount = 0;
 const createdComps = [];
+// Solid SOURCES, mutable: deleting a comp does not delete these (the
+// field bug), and the suite's new cleanup deletes them by id. Seeded
+// with the accumulation observed in the real scratch project — a few of
+// the suite's own ST-named leftovers drowning in generic solids.
+const solidSources = [];
+for (let i = 1; i <= 400; i++) {
+  solidSources.push({ name: "Blue Solid " + i, id: 100 + i,
+                      type: "footage" });
+}
+["ST Bat A", "ST Bat A", "ST Batch", "ST RB Orphan"].forEach((nm, i) => {
+  solidSources.push({ name: nm, id: 900 + i, type: "footage" });
+});
 let camProbeReads = 0;
 let textStyle = null;
 // The ordering steps read back what the previous step wrote, so the canned
@@ -231,14 +243,32 @@ function cannedOk(tool, args) {
       return { tool: t, layers: L.length, succeeded: L.length,
                failures: "" };
     }
+    case "delete_item": {
+      // Faithful on the point the cleanup measures: deleting works by
+      // name OR id, a deleted item leaves every later listing, and a
+      // missing target is a grounded error, not a silent ok.
+      const key = args && args.item;
+      const ci = createdComps.indexOf(String(key));
+      if (ci !== -1) { createdComps.splice(ci, 1); return { deleted: key }; }
+      for (let i = 0; i < solidSources.length; i++) {
+        if (solidSources[i].id === key ||
+            solidSources[i].name === String(key)) {
+          const nm = solidSources[i].name;
+          solidSources.splice(i, 1);
+          return { deleted: nm };
+        }
+      }
+      return { __err: "Project item not found: " + key };
+    }
     case "get_project_info": {
       // A scratch project the size of the real one: a few comps drowning
       // in accumulated solid footage. Comps come first out of the cap.
+      // Reads the LIVE solidSources list, so a delete_item really removes
+      // an item from later listings — the fidelity the cleanup steps
+      // depend on.
       const items = createdComps.map((nm, i) => ({ name: nm, id: i + 1,
                                                    type: "comp" }));
-      for (let i = 1; i <= 400; i++) {
-        items.push({ name: "Blue Solid " + i, id: 100 + i, type: "footage" });
-      }
+      for (const so of solidSources) items.push(Object.assign({}, so));
       const limit = listLimit(args && args.limit);
       const total = items.length;
       let shown = items;
@@ -326,9 +356,13 @@ function cannedOk(tool, args) {
       return capLayers(args && args.comp,
         ordStack.map((nm, i) => ({ index: i + 1, name: nm })), args);
     }
-    case "precompose":
-      return { precomp: (args && args.name) || "Pre-comp 1", id: 900,
+    case "precompose": {
+      // The new comp is a real project item — the cleanup deletes it.
+      const nm = (args && args.name) || "Pre-comp 1";
+      createdComps.push(nm);
+      return { precomp: nm, id: 900,
                layersMoved: ((args && args.layers) || []).length };
+    }
     // The comp-rename rig: one plain comp, one nested (a utility), one
     // named by an expression. The canned host has to remember the rename
     // it performed, or the idempotency step would be asking nothing.
@@ -378,6 +412,10 @@ function cannedOk(tool, args) {
       if (willRename) {
         renamed.push(plainNow + " -> REV19_" + plainNow);
         rnRenamedTo = "REV19_" + plainNow;
+        // The rename is visible to every later listing and delete — the
+        // project item itself changed name, exactly as in AE.
+        const at = createdComps.indexOf(plainNow);
+        if (at !== -1) createdComps[at] = rnRenamedTo;
       }
       out.renamed = renamed;
       out.renamedCount = renamed.length;
@@ -795,8 +833,14 @@ SelfTest.run({
     assert(res.passed === res.total,
            "happy path: " + res.passed + "/" + res.total + " passed" +
            (res.passed === res.total ? "" : " -- " + res.text));
-    assert(calls[calls.length - 1] === "delete_item",
-           "cleanup delete_item runs last");
+    // The suite used to END on a delete; now it ends on a verification
+    // READ that proves nothing of the suite's remains. The deletes come
+    // right before it.
+    assert(calls[calls.length - 1] === "get_project_info",
+           "the final call verifies the project is clean (got " +
+           calls[calls.length - 1] + ")");
+    assert(calls.lastIndexOf("delete_item") > calls.length - 30,
+           "the delete cleanup runs at the end, just before verification");
     assert(/Self-test: \d+\/\d+ passed/.test(res.text),
            "report carries the summary line");
 

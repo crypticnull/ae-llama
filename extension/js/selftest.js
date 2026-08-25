@@ -2300,7 +2300,67 @@
       { name: "cleanup: delete the scratch comp",
         tool: "delete_item",
         args: function (ctx) { return { item: ctx.comp }; },
-        check: function () { return true; } }
+        check: function () { return true; } },
+
+      // Deleting a comp does NOT delete the solid SOURCES its layers
+      // used — they stay in the project panel, so every suite run left
+      // its solids behind and a scratch project accumulated dozens of
+      // duplicates (field-observed: 45 items, visibly doubling). Find
+      // every leftover footage item in the suite's own namespace and
+      // queue its deletion for the step below. Names outside "ST " are
+      // never touched — that prefix is the suite's, nothing else's.
+      { name: "cleanup: find the solid sources the suite left behind",
+        tool: "get_project_info",
+        args: { limit: 0 },
+        check: function (d, ctx) {
+          ctx.leftoverIds = [];
+          for (var i = 0; i < d.items.length; i++) {
+            var it = d.items[i];
+            if (it.type === "footage" && it.name.indexOf("ST ") === 0) {
+              ctx.leftoverIds.push(it.id);
+            }
+          }
+          return true;
+        } },
+
+      { name: "cleanup: delete them (by id — names duplicate)",
+        batch: function (ctx) {
+          var ids = ctx.leftoverIds || [];
+          var cmds = [];
+          for (var i = 0; i < ids.length; i++) {
+            cmds.push({ tool: "delete_item",
+                        args: { item: ids[i] } });
+          }
+          // An empty batch is refused by the host; a no-op read keeps
+          // the step well-formed on an already-clean project.
+          if (!cmds.length) {
+            cmds.push({ tool: "get_project_info", args: { limit: 1 } });
+          }
+          return cmds;
+        },
+        check: function (rows, ctx) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) {
+              return "leftover " + (i + 1) + " of " + rows.length +
+                     " not deleted: " + rows[i].error;
+            }
+          }
+          return true;
+        } },
+
+      { name: "cleanup: nothing of the suite's remains in the project",
+        tool: "get_project_info",
+        args: { limit: 0 },
+        check: function (d) {
+          var stale = [];
+          for (var i = 0; i < d.items.length; i++) {
+            if (d.items[i].name.indexOf("ST ") === 0) {
+              stale.push(d.items[i].name);
+            }
+          }
+          return stale.length === 0 ||
+                 "the suite left items behind: " + stale.join(", ");
+        } }
     ];
   }
 
