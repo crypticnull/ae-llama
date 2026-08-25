@@ -122,13 +122,13 @@ the register-existing matcher. Commit the inventory; no version bump.
 
 ## 2d. Small local passes queued by the probe findings
 
-- **Locate the H3 base weight** (5 min): run
-  `Get-ChildItem "C:\Users\mr\Documents\ComfyUI","C:\Users\mr\AppData\Local\Comfy-Desktop" -Recurse -Filter "minimax_h3_ref2va*"`
-  (fall back to OneDrive\Documents, then all fixed drives). Record the
-  real path + size in docs/COMFY_LOCAL_INVENTORY.md. It resolves for
-  ComfyUI but is not under the Documents models root — the working
-  theory is the CODE root's own models dir; whatever the answer, the
-  register-existing matcher's root list follows from it.
+- ~~Locate the H3 base weight~~ FOUND by the owner (2026-08-25):
+  `AppData\Local\Comfy-Desktop\ComfyUI-Shared\models\diffusion_models\`
+  — a THIRD root, the Desktop app's shared auto-download store. Remaining
+  5-min task: list that whole ComfyUI-Shared\models tree (two files
+  matched the H3 filter — record exact names + sizes) and append it to
+  docs/COMFY_LOCAL_INVENTORY.md; the register matcher's root list is
+  now Documents + code install + ComfyUI-Shared + node ckpts dirs.
 - **Verify the history trim** (probe steps 9–10): the remote session
   bounded what the model is sent (Tools.fitHistory + a hard-trim retry
   on context 400s). Re-run the full chat probe — steps 9 and 10 died on

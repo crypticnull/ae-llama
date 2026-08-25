@@ -113,10 +113,16 @@ an entry field (`requiresAda: bool`), not a separate tier.
   the ComfyUI settings; absent = on; falls back to the raw prompt on any
   failure. Bundled workflows are SANITIZED: leftover typed prompts
   replaced with neutral placeholders, enforced by test.
-  NOTE the base weight was absent from the Documents models root the
-  scan covered, yet the workflow runs — the Desktop app resolves models
-  from the CODE root's models dir too, so the register-existing matcher
-  must scan BOTH roots (local task queued to confirm where it lives).
+  LOCATED (owner, 2026-08-25): the base weight lives in a THIRD root —
+  `AppData\Local\Comfy-Desktop\ComfyUI-Shared\models\diffusion_models\`
+  — the Desktop app's SHARED model store, where its auto-downloader
+  puts weights fetched from workflow-embedded URLs. So a Desktop
+  install has three model roots: the Documents data folder, the code
+  install's own models dir, and ComfyUI-Shared. The register-existing
+  matcher scans all three (plus custom_nodes ckpts dirs and any
+  extra_model_paths.yaml roots). The locate found TWO files matching
+  minimax_h3_ref2va_pruned_int8_convrot* — the 2d pass records their
+  exact names and sizes.
 - **LTX-small at T2 — CONFIRMED experimental.** 6 GB cards get an
   experimental short-video entry, flagged as such, exclusive handoff
   mandatory. If P4's simulated-T2 run shows it cannot finish a clip
