@@ -135,6 +135,12 @@ the register-existing matcher. Commit the inventory; no version bump.
   context overflow before; they should now complete, with the "context
   trimmed" notice appearing once. Green -> patch bump, this fix plus
   the set_property->for_each_layer redirect ship together.
+- **Pin H3 t2v/i2v files** (HF is proxy-blocked from the remote
+  session): list https://huggingface.co/api/models/Comfy-Org/MiniMax-H3/tree/main?recursive=true
+  and record the t2v/i2v diffusion weights + non-nvfp4 encoder variants
+  with sizes in the tier plan. The owner wants text/image-to-video
+  FIRST; the bundled r2v workflow is deferred until 5.8 lands (it needs
+  image+audio inputs the panel cannot feed yet).
 - **set_solid_color, probe first**: no tool can change a solid's color
   (probe step 9's real blocker — the model tried four approaches; none
   exist). The color lives on the SOLID SOURCE, so changing it changes

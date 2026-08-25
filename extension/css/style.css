@@ -321,3 +321,9 @@ input:focus, select:focus, textarea:focus { outline: 1px solid #2d6ca2; }
 }
 #chat-input { flex: 1 1 auto; resize: none; }
 #composer-buttons { display: flex; flex-direction: column; gap: 4px; }
+
+/* Per-workflow prompt-enhancement toggles (ComfyUI settings section) */
+.enhance-block { margin: 8px 0; }
+.enhance-title { display: block; color: #bbb; margin-bottom: 4px; }
+.enhance-hint { color: #777; font-size: 11px; }
+#comfy-enhance-list .check { margin: 2px 0 2px 12px; }

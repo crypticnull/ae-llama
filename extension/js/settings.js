@@ -68,6 +68,10 @@
       // Stop the chat LLM during image/video generation so the two never
       // fight over VRAM; it restarts automatically before the reply.
       comfyPauseLlm: true,
+      // Per-workflow prompt enhancement: {workflowName: bool}. A name
+      // that is absent means ON — enhancement is the default, opting
+      // OUT is the choice a user records.
+      comfyEnhance: {},
       // Visualizer pane width (px), set by dragging the divider. 0 = the
       // stylesheet default.
       vizWidth: 0,

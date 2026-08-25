@@ -97,6 +97,22 @@ an entry field (`requiresAda: bool`), not a separate tier.
   precision from the same repo, pinned in P5. So catalog entries need
   per-ARCHITECTURE variants (requiresAda, requiresBlackwell), not just
   VRAM floors. Enters the catalog with measured VRAM or not at all.
+  **Owner decision 2026-08-25: text/image-to-video FIRST.** The bundled
+  r2v workflow stays in the repo but is deferred — it needs a reference
+  image and an audio file, inputs the panel cannot feed until the frame
+  round-trip (5.8) and an audio picker exist. The catalog's first H3
+  entries are the t2v/i2v variants (files pinned by WORKPLAN 2d), and
+  the owner is asked to export their t2v/i2v H3 workflow the way they
+  did the r2v one, so its enhancer instruction and node set come from a
+  graph that is known to work.
+  **Per-workflow prompt enhancement is BUILT (panel-side):** the chat
+  model — already resident when comfy_generate fires — rewrites the
+  rough idea into the workflow's own prompt format (the manifest carries
+  the instruction lifted from the workflow's Ollama branch, which stays
+  bypassed). One completion, not a model load. Toggle per workflow in
+  the ComfyUI settings; absent = on; falls back to the raw prompt on any
+  failure. Bundled workflows are SANITIZED: leftover typed prompts
+  replaced with neutral placeholders, enforced by test.
   NOTE the base weight was absent from the Documents models root the
   scan covered, yet the workflow runs — the Desktop app resolves models
   from the CODE root's models dir too, so the register-existing matcher
