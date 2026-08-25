@@ -1174,3 +1174,124 @@ fix. Start from item 1 of `docs/WORKPLAN.md`.
   considering separately: `set_text_style` has no `reset: true`, so a
   layer the USER made by hand still cannot be cleaned up by asking --
   deliberately left out of this pass to keep editing non-destructive.
+
+## 2026-08-25 — item 2c: inventory the owner's real ComfyUI install
+
+- Changed: `docs/COMFY_LOCAL_INVENTORY.md` (new, 608 lines). Filesystem
+  read only — ComfyUI was never launched. 256 weight files / 1011.3 GB
+  tabulated by kind-folder, all 70 custom node packs attributed to a
+  repo from `.git/config` or `pyproject.toml`.
+- Harness: not run (docs only, no code touched). No version bump.
+- Notes, in rough order of how much they change the remote session's
+  plan:
+  - Code and data are in DIFFERENT roots. `Documents\ComfyUI` holds
+    models/custom_nodes/user but has no `comfy/` package; the code that
+    actually runs is
+    `AppData\Local\Comfy-Desktop\ComfyUI-Installs\ComfyUI\ComfyUI`.
+    An installer that derives one root from the other is wrong here.
+  - Version is **0.32.0** (from the running instance's own startup log,
+    2026-08-25). The manifest asks for `>=0.3.76`, and lexically
+    `"0.32.0" < "0.3.76"` — the gate MUST compare component-wise. Two
+    other version sources on this disk disagree and are both stale: the
+    Programs bundle says 0.22.2, May logs say 0.20.1. There is no git
+    checkout, so no tag to read.
+  - All five Krea manifest models resolve by EXACT filename, so the
+    register-existing matcher does not need fuzzy matching — and must
+    not use it: `krea2Dmergev3_int8ConvrotV3.safetensors` is within
+    1 MB of the real `krea2_turbo_int8_convrot.safetensors` and is a
+    different model. Six more Krea-named neighbours are listed.
+  - `depth_anything_v2_vitl.pth` lives in
+    `custom_nodes/comfyui_controlnet_aux/ckpts/`, NOT under `models/`.
+    A have-I-got-it check scoped to `models/` re-downloads 1.3 GB that
+    is already on disk.
+  - Every manifest UNKNOWN node is attributed: Krea2Control* ->
+    `comfyui-krea2-controlnet` (facok), ArcaneBloomFX -> `crt-nodes`,
+    `easy cleanGpuUsed` -> `comfyui-easy-use`,
+    DepthAnythingV2Preprocessor -> `comfyui_controlnet_aux` AND
+    `comfyui-art-venture`. That last one is defined TWICE, so the
+    depth-control branch binds to whichever pack loads last — pin it
+    before that branch ever ships un-bypassed.
+  - MiniMax H3 is half provisioned: turbo LoRAs (3) and the video VAE
+    are here, the base/transformer weight is nowhere on disk. That tier
+    is BLOCKED — needs a decision from the owner (was H3 being run
+    against ComfyUI's built-in API nodes?).
+  - Wan 2.2 is complete in three precisions (fp16 / fp8 / Q8 GGUF) plus
+    14 LoRAs, so a Wan tier needs no downloads at all.
+  - There is no `extra_model_paths.yaml`; Desktop uses
+    `AppData\Roaming\ComfyUI\extra_models_config.yaml`, which declares
+    one model root and a SECOND custom-node root inside the Programs
+    bundle. Nothing lives on another drive.
+  - Hardware for the tier ceilings: RTX 5090, 32607 MB VRAM, 62852 MB
+    RAM, torch 2.10.0+cu130.
+
+## 2026-08-25 — item 4 (ROLLBACK): four field measurements before building
+
+Design was approved on both open calls (one rollback per request;
+read-only failures do not trigger it). This pass measured the four
+things the design said must be true in real AE first. **All four came
+back clean**, so the mechanism is viable as designed.
+
+- Changed: nothing in the product. Probe lived in the scratchpad; the
+  open project was left exactly as found (empty — the two leftover
+  items the probe made, a Solids folder and its solid, were removed).
+- Harness: not run (no product code changed this step).
+- AE 26.3x87.
+
+**M1 — does a net-zero sentinel create an undo entry?** YES, and the
+control proves it is needed:
+
+  - comment set + restore inside one group: registered. One Undo ate the
+    sentinel group and the change BEFORE it survived intact.
+  - addFolder + remove inside one group: also registered, no stray
+    folder left behind.
+  - **an EMPTY group registers NOTHING** — one Undo reached straight
+    past it and reverted the previous change. This is the overshoot
+    hazard, confirmed by measurement rather than assumed. The sentinel
+    is therefore load-bearing, not belt-and-braces: without it, a batch
+    whose mutating tools all no-op would eat the user's last edit.
+  - Going with the comment sentinel (cheaper than an item add/remove,
+    and it cannot disturb the project panel's selection).
+
+**M2 — does ONE Undo cleanly reverse the project-level tools?** YES for
+all three; none of them need excluding from a rollback-eligible batch:
+
+  - `import_file`: numItems 0 -> 1 -> 0.
+  - `add_to_render_queue`: renderQueue 0 -> 1 -> 0. (Worth recording —
+    render-queue edits being undoable was the one I most expected to
+    fail.)
+  - `delete_item`: comp present -> gone -> back.
+
+**M3 — fingerprint cost on a 200-layer comp:**
+
+  - full fingerprint (position/scale/rotation/opacity keys/effects/
+    masks/parent/timing per layer): **20 ms**, 11013 chars; second run
+    17 ms and byte-identical, so it is deterministic — a fingerprint
+    that drifted would false-positive on every rollback.
+  - coarse variant (names + counts only): 1 ms, 3007 chars.
+  - the real per-round tax is two full fingerprints = **37 ms**. That is
+    5x under the 200 ms budget the design set, so the fingerprint does
+    NOT need scoping to comps named in the batch — take it whole.
+  - building the 200 solids took 1075 ms; one Undo of that whole build
+    took **73 ms**. Undo is cheap; the rollback's cost is the
+    fingerprint, and even that is negligible.
+
+**M4 — undo a batch containing create_comp while that comp is
+frontmost.** Clean, no dialog, no dead viewer:
+
+  - `create_comp` calls `openInViewer()`, so the undone comp really was
+    the one in the front viewer (`activeItem` = `AELL_M4_front`).
+  - No modal: the script ran straight through the Undo and wrote its
+    results. A dialog would have blocked ExtendScript and produced no
+    file at all, which is what the runner watches for.
+  - After the Undo: comp gone, item count back to its starting value,
+    `app.project.activeItem` is **null** rather than a dangling
+    reference (reading it does not throw).
+  - The viewer is alive, not dead: `app.activeViewer` still resolves,
+    `.maximized` reads, and `.setActive()` succeeds.
+  - AE still works afterwards — a second create_comp + add_solid round
+    ran normally and opened in the viewer.
+
+- Notes: nothing blocked; building next per the approved design. The one
+  design detail these measurements settled beyond a yes/no is that the
+  fingerprint can be full-fidelity and whole-project-scoped, which is
+  simpler than the scoped fallback the proposal hedged with.
