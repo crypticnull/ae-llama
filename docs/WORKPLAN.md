@@ -45,6 +45,29 @@ Still open:
 - add_light: no such tool exists, so lights are wholly uncovered. Same
   aim-not-scale rule cameras needed. Build the tool AND its coverage.
 
+## 2c. Inventory the owner's real ComfyUI install (no AE needed, one pass)
+
+The remote session cannot see this machine's disk. Scan
+`C:\Users\mr\Documents\ComfyUI` and write
+`docs/COMFY_LOCAL_INVENTORY.md` with:
+
+- Every model file under `models/` (all subdirs): relative path, size
+  in MB, and which kind-folder it lives in. Flag the files the Krea
+  manifest needs (`extension/workflows/AE_LLAMA_KREA2_V1.manifest.json`)
+  and the MiniMax H3 / Wan 2.2 weights specifically.
+- Every folder under `custom_nodes/`: name + (from its git config or
+  pyproject) the repo it came from. This must ATTRIBUTE the manifest's
+  UNKNOWN nodes: Krea2Control*, DepthAnythingV2Preprocessor,
+  ArcaneBloomFX, easy cleanGpuUsed.
+- The ComfyUI version (its own version file / git tag) — the bundled
+  installer must match or exceed 0.3.76 (subgraphs).
+- Any extra_model_paths.yaml already present (models may live on other
+  drives — list those roots too).
+
+Pure filesystem reading — no AE, no generation runs, do NOT launch
+ComfyUI. This unblocks tier-plan P5 (catalog file lists + sizes) and
+the register-existing matcher. Commit the inventory; no version bump.
+
 ## 3. Extend selftest.js coverage
 
 Every verified behavior from (2) becomes a permanent step in

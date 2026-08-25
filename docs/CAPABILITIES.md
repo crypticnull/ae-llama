@@ -142,8 +142,11 @@ Queued (see WORKPLAN for owners/order):
   audio-to-keyframes, frame round-trip, .mogrt export, whisper
   captions, ffmpeg exports (items 5–6).
 - Image/video generation is not yet seamless: no frame-aware img2img,
-  no mask-driven inpainting, no depth/parallax, no upscale/interpolate;
-  blocked on the curated ComfyUI stack + Krea workflow.
+  no mask-driven inpainting, no depth/parallax, no upscale/interpolate.
+  The Krea 2 workflow is now IN the repo (extension/workflows/) with a
+  dependency manifest; video repos are pinned (Wan 2.2, MiniMax H3);
+  remaining blockers are the tier build (P1-P3) and the local install
+  scan (WORKPLAN 2c).
 - Generation is not hardware-tier aware: no shared VRAM budget between
   llama-server and ComfyUI, the pause-for-VRAM handoff sleeps 1.5s and
   hopes instead of verifying release, and a 6 GB card has no honest

@@ -1,0 +1,25 @@
+{
+  "workflow": "AE_LLAMA_KREA2_V1",
+  "kind": "image",
+  "notes": "Owner's Krea 2 text-to-image workflow with a two-pass latent upscale. Multi-mode: depth-control and img2img branches ship BYPASSED (mode 4) and are toggled via rgthree Fast Groups Bypasser. The Ollama prompt-enhancer branch stays bypassed in the panel template FOREVER: the panel's own chat model does prompt enhancement and feeds the manual-prompt path through the Any Switch (enhancer=any_01, manual=any_02 -- do not reorder, see the workflow's own README note).",
+  "models": [
+    { "file": "krea2_turbo_int8_convrot.safetensors", "role": "diffusion", "dir": "checkpoints-or-diffusion_models", "sizeMB": null, "minVramGB": null, "measured": false },
+    { "file": "qwen3vl_4b_fp8_scaled.safetensors", "role": "text_encoder", "dir": "text_encoders", "sizeMB": null, "minVramGB": null, "measured": false },
+    { "file": "qwen_image_vae.safetensors", "role": "vae", "dir": "vae", "sizeMB": null, "minVramGB": null, "measured": false },
+    { "file": "depth-control-lora.safetensors", "role": "control-lora", "dir": "loras", "optional": true, "branch": "depth-control", "measured": false },
+    { "file": "depth_anything_v2_vitl.pth", "role": "preprocessor", "dir": "controlnet-aux", "optional": true, "branch": "depth-control", "measured": false }
+  ],
+  "customNodes": [
+    { "pack": "rgthree-comfy", "nodes": ["Any Switch", "Image Comparer", "Fast Groups Bypasser", "Label"] },
+    { "pack": "cg-use-everywhere", "nodes": ["Anything Everywhere"] },
+    { "pack": "comfyui_essentials", "nodes": ["ImageCASharpening+"] },
+    { "pack": "LoganBooker/SesquiLSR", "nodes": ["SesquiLatentUpscale"] },
+    { "pack": "UNKNOWN -- local scan must identify", "nodes": ["Krea2ControlImageEncode", "Krea2ControlApply", "Krea2ControlLoRALoader", "DepthAnythingV2Preprocessor", "ArcaneBloomFX", "easy cleanGpuUsed", "OllamaGenerateV2 (bypassed, not needed)"] }
+  ],
+  "requiresComfy": ">=0.3.76 (uses subgraph nodes)",
+  "panelIntegration": {
+    "promptInjection": "manual-prompt path via Any Switch any_02",
+    "resolutionCeilingFrom": "tier ceilings (COMFY_TIERS_PLAN)",
+    "saveNode": "SaveImage 474 -- panel must override its hardcoded output path"
+  }
+}

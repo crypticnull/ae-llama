@@ -80,21 +80,53 @@ ceilings the workflow templates read. Pre-Ada cards (GTX 10/16, RTX 20)
 lack fp8 compute, so their catalog entries prefer GGUF quantizations —
 an entry field (`requiresAda: bool`), not a separate tier.
 
-**Video stack (owner-confirmed 2026-08-22):**
+**Video stack (owner-confirmed, repos pinned 2026-08-22):**
 
-- **Wan** — open weights on HuggingFace, catalogued like the chat
-  models: the 1.3B variant for T3/T4 (short clips), the 14B for T5+
-  (GGUF quants below that), ComfyUI-repackaged builds where they exist.
-  Exact repo/file URLs pinned during P5.
-- **MiniMax H3 — LOCAL WEIGHTS, confirmed.** The owner already has them
-  downloaded. Two consequences: (1) it is catalogable — P5 needs the
-  exact HuggingFace repo/file list so other users download it the same
-  way chat models download today; (2) the owner's existing copy should
-  be REGISTERED, not re-downloaded — the alternate models folder +
-  extra_model_paths.yaml mechanism already does exactly this. P4
-  measures its real VRAM on the 5090 before it gets tier assignments;
-  until then it carries no tier claims at all (its requirements are
-  unknown to us, not merely provisional).
+- **Wan 2.2** — https://huggingface.co/collections/Wan-AI/wan22 .
+  Note this is Wan 2.2, whose variants differ from 2.1's 1.3B/14B split
+  (2.2 ships a 5B TI2V and A14B MoE variants) — P5 pins exact
+  repos/files per tier from the collection; P4 measures. Downloaded
+  like chat models via the existing downloader.
+- **MiniMax H3** — https://huggingface.co/MiniMaxAI/MiniMax-H3 , LOCAL
+  WEIGHTS, owner already holds them. Other users download from that
+  repo; the owner's copy gets REGISTERED via model roots (below), never
+  re-downloaded. Enters the catalog with measured VRAM or not at all.
+- **LTX-small at T2 — CONFIRMED experimental.** 6 GB cards get an
+  experimental short-video entry, flagged as such, exclusive handoff
+  mandatory. If P4's simulated-T2 run shows it cannot finish a clip
+  inside a sane wall-clock, it ships OFF by default with a settings
+  toggle rather than being cut.
+
+**Krea 2 — workflow IN HAND** (`extension/workflows/AE_LLAMA_KREA2_V1.json`
++ `.manifest.json`). What it taught us, from the graph itself:
+
+- The stack is Krea2 turbo int8 + a Qwen3-VL 4B fp8 TEXT ENCODER + a
+  Qwen image VAE, plus an optional depth-control branch (control LoRA +
+  DepthAnythingV2). Multi-file catalog entries were the right call.
+- **Workflows have CUSTOM NODE dependencies, not just model files** —
+  this one needs rgthree-comfy, cg-use-everywhere, comfyui_essentials,
+  SesquiLSR, and a set the local scan must attribute (the Krea2Control
+  nodes, DepthAnythingV2Preprocessor, ArcaneBloomFX). The bundled
+  installer therefore needs a node-pack install step (git clone into
+  custom_nodes or ComfyUI-Manager headless), and `comfyCatalog`
+  workflow templates declare `customNodes` alongside `models`.
+- **The prompt-enhancer branch runs on Ollama — the panel bypasses it
+  permanently.** The panel HAS a language model; it does the prompt
+  enhancement itself and injects into the workflow's documented
+  manual-prompt path (Any Switch input any_02). No Ollama dependency
+  ships, and the enhancer group stays mode-4.
+- The workflow uses ComfyUI subgraphs → bundled ComfyUI must be
+  >= 0.3.76.
+- The SaveImage node hardcodes the owner's output path — template
+  injection must override the save path per generation.
+
+**Model locations for users who already have models (P3):** one
+alternate folder is not enough — ComfyUI veterans have models spread
+across drives. `comfyModelsDir` becomes `comfyModelRoots: []` (multiple
+roots, each optionally per-kind: checkpoints/text_encoders/vae/loras/
+diffusion_models/…), all written into extra_model_paths.yaml, all
+scanned by the register-existing matcher. First-run setup asks "already
+have ComfyUI models? point me at them".
 
 **T2 floor decision (resolved by arithmetic, 2026-08-22):** SD 1.5 is
 the 6 GB default. SDXL on 6 GB cannot fit and falls back to sequential
@@ -203,9 +235,13 @@ a catalog entry — the template mechanism already exists
 
 1. ~~T2 default~~ RESOLVED: SD 1.5 default at 6 GB, SDXL opt-in
    flagged with its real wait (see the T2 floor decision above).
-2. Video floor: still open — fine that below 8 GB there is none?
+2. ~~Video floor~~ RESOLVED: LTX-small experimental at T2 (see video
+   stack above).
 3. ~~MiniMax H3~~ RESOLVED: local weights, owner holds them. P5 needs
    the exact HuggingFace repo/file list (or the local filenames+sizes
    to derive it); P4 measures VRAM before any tier claim.
-4. The Krea workflow JSON (long-standing task #21) gates P5 only —
-   P1–P4 proceed without it.
+4. ~~Krea workflow JSON~~ RESOLVED: in the repo with a dependency
+   manifest. Remaining P5 inputs come from the LOCAL SCAN of the
+   owner's real install (WORKPLAN item 2c): file sizes, which pack owns
+   each unattributed custom node, and the Wan 2.2 / MiniMax H3 file
+   lists as actually downloaded.
