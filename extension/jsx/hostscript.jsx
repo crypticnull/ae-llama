@@ -1426,6 +1426,167 @@ AELL_TOOLS.add_solid = function (args) {
   return AELL_okay({ index: layer.index, name: layer.name });
 };
 
+/*
+ * Change a SOLID's colour.
+ *
+ * The colour does not live on the layer — it lives on the solid SOURCE,
+ * and duplicate_layer and split_layer_into_chunks both hand out layers
+ * that SHARE one source. Measured in AE 2026: duplicate a solid twice
+ * and all three layers report the same source id; one write to
+ * mainSource.color turns all three. So the shared case is this panel's
+ * normal case, not an edge, and a tool that just wrote the colour would
+ * recolour layers nobody mentioned and report success.
+ *
+ * Hence: work out who else shares the source, and never surprise the
+ * caller. If every sharer was asked for, write once and say so. If only
+ * some were, refuse and name the collateral — unless the caller has said
+ * which way they want it (makeUnique true to isolate, false to accept
+ * the spread).
+ *
+ * Isolating is possible but not obvious: app.project.items.addSolid does
+ * NOT exist. The only way to mint a SolidSource from script is to add a
+ * throwaway solid LAYER, take its .source, and remove the layer — the
+ * source survives. replaceSource(fresh, false) then keeps keyframes,
+ * effects, masks, transform, the layer's hand-set NAME and its in/out
+ * points; all measured, none of it assumed.
+ */
+function AELL_clamp01(v) {
+  var n = Number(v);
+  if (!(n >= 0)) return 0;
+  return n > 1 ? 1 : n;
+}
+
+function AELL_solidSourceOf(layer) {
+  try {
+    if (layer.source && layer.source.mainSource &&
+        (layer.source.mainSource instanceof SolidSource)) {
+      return layer.source;
+    }
+  } catch (e) {}
+  return null;
+}
+
+/* Every layer in the comp whose source is this one. */
+function AELL_sharersOf(comp, source) {
+  var out = [], i;
+  for (i = 1; i <= comp.numLayers; i++) {
+    var L = comp.layer(i);
+    if (AELL_solidSourceOf(L) === source) out.push(L);
+  }
+  return out;
+}
+
+/* Mint a solid source nothing else uses, matching an existing one. */
+function AELL_freshSolidSource(comp, like, color) {
+  var name = AELL_uniqueItemName(like.name);
+  var tmp = comp.layers.addSolid(color, name, like.width, like.height,
+                                 like.pixelAspect, comp.duration);
+  var source = tmp.source;
+  tmp.remove();
+  return source;
+}
+
+AELL_TOOLS.set_solid_color = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  if (!AELLJSON.isArray(args.color) || args.color.length < 3) {
+    return AELL_err("'color' is required: [r, g, b] floats 0..1");
+  }
+  var color = [AELL_clamp01(args.color[0]), AELL_clamp01(args.color[1]),
+               AELL_clamp01(args.color[2])];
+
+  var targets;
+  try { targets = AELL_layersOrSelection(comp, args); }
+  catch (eL) { return AELL_err(eL.message); }
+
+  // Every target must actually BE a solid, and say what it is if not.
+  var notSolid = [], i, j;
+  for (i = 0; i < targets.length; i++) {
+    if (!AELL_solidSourceOf(targets[i])) {
+      notSolid.push(targets[i].name + " (" + AELL_layerType(targets[i]) + ")");
+    }
+  }
+  if (notSolid.length) {
+    return AELL_err("set_solid_color only works on SOLID layers. Not " +
+      "solids: " + notSolid.join(", ") + ". A shape layer's colour is in " +
+      "its contents (use set_property), and a text layer's is fillColor " +
+      "(use set_text_style).");
+  }
+
+  // Group the targets by the source they share.
+  var sources = [], groups = [];
+  for (i = 0; i < targets.length; i++) {
+    var src = AELL_solidSourceOf(targets[i]);
+    var at = -1;
+    for (j = 0; j < sources.length; j++) if (sources[j] === src) at = j;
+    if (at < 0) { sources.push(src); groups.push([targets[i]]); }
+    else { groups[at].push(targets[i]); }
+  }
+
+  // Who would change WITHOUT being asked for?
+  var collateral = [];
+  for (i = 0; i < sources.length; i++) {
+    var sharers = AELL_sharersOf(comp, sources[i]);
+    for (j = 0; j < sharers.length; j++) {
+      var wanted = false, k;
+      for (k = 0; k < targets.length; k++) {
+        if (targets[k] === sharers[j]) wanted = true;
+      }
+      if (!wanted) collateral.push(sharers[j].name);
+    }
+  }
+
+  var makeUnique = args.makeUnique === true;
+  if (collateral.length && typeof args.makeUnique === "undefined") {
+    return AELL_err("That solid is SHARED. Recolouring it would also " +
+      "change " + collateral.length + " layer(s) nobody asked about: " +
+      collateral.join(", ") + " (duplicate_layer and " +
+      "split_layer_into_chunks share one solid between the layers they " +
+      "make). Say which you want: makeUnique:true gives the layer(s) " +
+      "you named their OWN solid and leaves the others alone, " +
+      "makeUnique:false recolours all of them on purpose.");
+  }
+
+  var changed = [], madeUnique = [];
+  for (i = 0; i < groups.length; i++) {
+    if (makeUnique) {
+      for (j = 0; j < groups[i].length; j++) {
+        var layer = groups[i][j];
+        // Measured in AE 2026, the hard way: a layer that was never
+        // renamed BY HAND displays its source's name, so replaceSource
+        // silently renames it — the self-test ended up with two layers
+        // both called "ST SC Square 2". A layer with a hand-set name
+        // keeps it. Write the old name back either way, so recolouring
+        // never renames anything.
+        var keptName = layer.name;
+        var fresh = AELL_freshSolidSource(comp, sources[i], color);
+        layer.replaceSource(fresh, false);
+        if (layer.name !== keptName) layer.name = keptName;
+        madeUnique.push(keptName + " -> " + fresh.name);
+        changed.push(keptName);
+      }
+    } else {
+      sources[i].mainSource.color = color;
+      for (j = 0; j < groups[i].length; j++) changed.push(groups[i][j].name);
+    }
+  }
+
+  var data = { comp: comp.name, layers: changed, color: color,
+               solidsTouched: makeUnique ? madeUnique.length : sources.length };
+  if (makeUnique) {
+    data.madeUnique = madeUnique;
+    data.note = "Each layer got its OWN solid, so nothing else changed. " +
+      "That adds " + madeUnique.length + " item(s) to the project panel.";
+  } else if (collateral.length) {
+    data.alsoChanged = collateral;
+    data.note = "These layers share the solid, so they changed too: " +
+      collateral.join(", ") + ".";
+  } else {
+    data.note = "Nothing else uses " +
+      (sources.length === 1 ? "that solid" : "those solids") + ".";
+  }
+  return AELL_okay(data);
+};
+
 AELL_TOOLS.set_transform = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var layer = AELL_resolveLayer(comp, args.layer);
@@ -4342,7 +4503,7 @@ var AELL_PER_LAYER_READ_LIST = ["get_property", "list_properties"];
 var AELL_ALREADY_BATCHED_LIST = [
   "apply_keyframe_ease", "distribute_property", "for_each_layer",
   "grid_layout", "precompose", "remove_keyframes", "reorder_layers",
-  "set_keyframes", "stagger_layers"
+  "set_keyframes", "set_solid_color", "stagger_layers"
 ];
 
 function AELL_nameSet(list) {
@@ -4533,7 +4694,8 @@ var AELL_MUTATING = {
   // is here even though its DEFAULT dry run changes nothing: the group it
   // opens is then empty, and an empty group registers no undo step at all
   // (measured), so a preview still costs the user nothing.
-  rename_comps: true
+  rename_comps: true,
+  set_solid_color: true
 };
 
 // --------------------------------------------------------------- entry point

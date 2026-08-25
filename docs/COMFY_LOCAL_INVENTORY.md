@@ -10,29 +10,39 @@ install" should be checked against what is actually here.
 
 ## Findings that change the plan
 
-1. **Code and data live in DIFFERENT roots.** `C:\Users\mr\Documents\ComfyUI`
+1. **There are THREE model roots, not one.** `C:\Users\mr\Documents\ComfyUI\models`,
+   the Comfy-Desktop code install, and
+   `C:\Users\mr\AppData\Local\Comfy-Desktop\ComfyUI-Shared\models` — the
+   Desktop app's shared auto-download store, which holds 244.2 GB
+   including every MiniMax H3 weight. ComfyUI resolves each model kind
+   across the shared root FIRST, then Documents. A scan of one root
+   answers wrongly: this document originally declared the H3 tier
+   blocked for exactly that reason, and it was not.
+2. **Code and data live in DIFFERENT roots.** `C:\Users\mr\Documents\ComfyUI`
    is the data/base folder (models, custom_nodes, user, input, output) —
    it has no `comfy/` package in it. The code ComfyUI actually runs is
    at `C:\Users\mr\AppData\Local\Comfy-Desktop\ComfyUI-Installs\ComfyUI\ComfyUI`.
    An installer that derives one root from the other will be wrong on
    this machine.
-2. **Version 0.32.0, and the comparison is a trap.** The manifest wants
+3. **Version 0.32.0, and the comparison is a trap.** The manifest wants
    `>=0.3.76`. Lexically `"0.32.0" < "0.3.76"`; numerically it is far
    newer. The gate must compare component-wise — the same bug class the
    panel's own `compareVersions` exists to avoid.
-3. **All five Krea manifest models are present**, and the exact filename
+4. **All five Krea manifest models are present**, and the exact filename
    `krea2_turbo_int8_convrot.safetensors` does resolve. The
    register-existing matcher can be exact-name for this workflow.
-4. **Every UNKNOWN custom node in the manifest is accounted for** — see
+5. **Every UNKNOWN custom node in the manifest is accounted for** — see
    the attribution table. One of them (`DepthAnythingV2Preprocessor`)
    ships in TWO installed packs, so which one registers depends on load
    order.
-5. **MiniMax H3 is only half provisioned.** The turbo LoRAs and the
-   video VAE are here; there is no H3 base/transformer weight anywhere
-   under `models/`. An H3 tier cannot run on this machine as it stands.
-6. **Wan 2.2 is fully provisioned** (I2V fp16, fp8 and Q8 GGUF, plus the
+6. **MiniMax H3 IS fully provisioned — CORRECTED 2026-08-25.** The
+   first pass of this document said the base weight was missing and the
+   tier was blocked. That was wrong: it only scanned the Documents root.
+   Both H3 transformers, the 32B encoder and both VAEs live in the
+   shared root. Nothing needs downloading.
+7. **Wan 2.2 is fully provisioned** (I2V fp16, fp8 and Q8 GGUF, plus the
    lightning/lightx2v 4-step LoRAs and umt5 encoders).
-7. Total weights on disk: **256 files, 1011.3 GB**. Any catalog that
+8. Total weights on disk: **320 files, 1255.5 GB** across the two model roots. Any catalog that
    offers to download what is "missing" needs to check first — most of
    it is already here, sometimes under names that do not match upstream.
 
@@ -77,10 +87,38 @@ desktop_extensions:
   custom_nodes: C:\Users\mr\AppData\Local\Programs\ComfyUI\resources\ComfyUI\custom_nodes
 ```
 
-So there is exactly one model root (`Documents\ComfyUI\models`) — no
-models on other drives — and a SECOND custom-node root inside the
-Programs bundle. A scan that only walks `Documents\ComfyUI\custom_nodes`
-will miss whatever the desktop ships there.
+That file declares ONE model root and a second custom-node root inside
+the Programs bundle. It does not tell the whole story: the Desktop app
+also resolves models out of its shared auto-download store
+(`ComfyUI-Shared`, below) without declaring it here. The authority on
+what is actually live is the running instance's startup log, which
+prints the resolved roots per model kind:
+
+```
+[LoRA-Manager] Found checkpoint roots:
+ - C:/Users/mr/AppData/Local/Comfy-Desktop/ComfyUI-Shared/models/checkpoints
+ - C:/Users/mr/AppData/Local/Comfy-Desktop/ComfyUI-Shared/models/diffusion_models
+ - C:/Users/mr/AppData/Local/Comfy-Desktop/ComfyUI-Shared/models/unet
+ - C:/Users/mr/Documents/ComfyUI/models/checkpoints
+ - C:/Users/mr/Documents/ComfyUI/models/diffusion_models
+ - C:/Users/mr/Documents/ComfyUI/models/unet
+```
+
+**Shared root FIRST, Documents second** — so a file present in both is
+served from the shared copy. Nothing lives on another drive.
+
+A scan that only walks `Documents\ComfyUI\custom_nodes` will also miss
+whatever the desktop ships in the Programs bundle.
+
+**The register matcher's root list**, in resolution order:
+
+1. `C:\Users\mr\AppData\Local\Comfy-Desktop\ComfyUI-Shared\models`
+2. `C:\Users\mr\Documents\ComfyUI\models`
+3. per-node checkpoint dirs, e.g.
+   `Documents\ComfyUI\custom_nodes\comfyui_controlnet_aux\ckpts`
+4. the code install
+   (`AppData\Local\Comfy-Desktop\ComfyUI-Installs\ComfyUI\ComfyUI`) for
+   version only — it holds no user models
 
 There is also a vestigial `Documents\ComfyUI\ComfyUI\custom_nodes`
 holding `ComfyUI-VideoHelperSuite` and `DazzleNodes`, plus
@@ -116,28 +154,38 @@ confuse a fuzzy matcher — all distinct files:
 `krea2Dmergev3_int8ConvrotV3` is within 1 MB of the manifest's file but
 is NOT it. Match on exact name, not on substring.
 
-## MiniMax H3
+## MiniMax H3 — provisioned (corrected)
 
-Nodes are installed, weights are partial.
+Every piece is on disk. The base weights are in the SHARED root, which
+the first pass of this document did not scan; the LoRAs and one VAE
+variant are in the Documents root. Both are live, so ComfyUI sees all
+of it.
 
-| piece | present | path | MB |
+| piece | file | root | MB |
 | --- | --- | --- | ---: |
-| Base / transformer | **NO** | — | — |
-| Video VAE | yes | `models/vae/minimax_h3_video_vae_int8_convrot.safetensors` | 3025 |
-| Turbo 4-step LoRA (pruned) | yes | `models/loras/MiniMax_H3/minimax_h3_turbo_4step_comfyui_pruned.safetensors` | 592 |
-| Turbo 4-step LoRA (ckpt850) | yes | `models/loras/MiniMax_H3/minimax_h3_turbo_4step_ckpt850.safetensors` | 744 |
-| Turbo 4-step LoRA (ema) | yes | `models/loras/MiniMax_H3/minimax_h3_turbo_4step_ema_ckpt850.safetensors` | 744 |
-| Style LoRAs | yes | `H3_Mis_Insrt_v07` (296), `HMNSFW_AIO_V2` (296), `h3_musubi_v4-000040` (284), `MysticXXX_MMH3-V1` (569) | |
+| Transformer, frame+language to video/audio | `diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors` | shared | 19999 |
+| Transformer, reference to video/audio | `diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors` | shared | 19999 |
+| Text encoder (nvfp4 AWQ) | `text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors` | shared | 14960 |
+| Video VAE (fp16) | `vae/minimax_h3_video_vae_fp16.safetensors` | shared | 4967 |
+| Audio VAE (fp32) | `vae/minimax_h3_audio_vae_fp32.safetensors` | shared | 577 |
+| Video VAE (int8 convrot) | `vae/minimax_h3_video_vae_int8_convrot.safetensors` | Documents | 3025 |
+| Turbo 4-step LoRA (pruned) | `loras/MiniMax_H3/minimax_h3_turbo_4step_comfyui_pruned.safetensors` | Documents | 592 |
+| Turbo 4-step LoRA (ckpt850) | `loras/MiniMax_H3/minimax_h3_turbo_4step_ckpt850.safetensors` | Documents | 744 |
+| Turbo 4-step LoRA (ema) | `loras/MiniMax_H3/minimax_h3_turbo_4step_ema_ckpt850.safetensors` | Documents | 744 |
+| Style LoRAs (4) | `loras/MiniMax_H3/` — `H3_Mis_Insrt_v07` (296), `HMNSFW_AIO_V2` (296), `h3_musubi_v4-000040` (284), `MysticXXX_MMH3-V1` (569) | Documents | |
+
+`fl2va` is the weight the i2v workflow targets, and it covers t2v (no
+image) as well — so it, not `ref2va`, is the first target.
+
+The encoder on this machine is the **nvfp4 AWQ** variant. That is fine
+here (RTX 5090 is Blackwell) but it is NOT a safe default for a bundled
+installer — a non-nvfp4 variant is needed for anyone else, which is why
+the tier plan pins the alternatives separately.
 
 Three H3 node packs are installed: `ComfyUI-Spectrum-MiniMax-H3`,
-`ComfyUI-MiniMaxH3-FirstBlockCache`, and `h3_dance_studio` (the owner's
-own repo). The only other MiniMax references on disk are ComfyUI's
-built-in **API** nodes (`MinimaxHailuoVideoNode` and friends in
-`comfyui_embedded_docs`), which are cloud calls, not local weights.
-
-**So an H3 tier is blocked on the base weight.** Worth asking the owner
-whether H3 was being run against the API nodes, or whether the base
-model lives somewhere off this machine.
+`ComfyUI-MiniMaxH3-FirstBlockCache`, and `h3_dance_studio` (the
+owner's own repo). ComfyUI's built-in `MinimaxHailuoVideoNode` and
+friends are cloud API nodes, unrelated to any of this.
 
 ## Wan 2.2
 
@@ -607,3 +655,84 @@ under 1 MB are omitted; HuggingFace snapshot trees under `LLM/`,
 | `qwen_image_vae.safetensors` | 242 |
 | `taeltx2_3.safetensors` | 22 |
 | `wan_2.1_vae.safetensors` | 242 |
+
+## The shared root — `AppData\Local\Comfy-Desktop\ComfyUI-Shared`
+
+The Desktop app's auto-download store, and the root the first pass of
+this document missed. 64 files, **244.2 GB**, of which 177.4 GB is
+`diffusion_models`. It is resolved BEFORE the Documents root.
+
+Weights only (>1 MB); `.metadata.json` sidecars and the HuggingFace
+cache tree under `LLM/` are omitted.
+
+### `<shared>/models/LLM`
+
+| file | MB |
+| --- | ---: |
+| `Qwen-VL/Qwen3-VL-4B-Instruct-FP8/model-00001-of-00002.safetensors` | 5118 |
+| `Qwen-VL/Qwen3-VL-4B-Instruct-FP8/model-00002-of-00002.safetensors` | 624 |
+
+### `<shared>/models/background_removal`
+
+| file | MB |
+| --- | ---: |
+| `birefnet.safetensors` | 424 |
+
+### `<shared>/models/checkpoints`
+
+| file | MB |
+| --- | ---: |
+| `hunyuan3d-dit-v2-mv_fp16.safetensors` | 4700 |
+| `sam3.1_multiplex_fp16.safetensors` | 1665 |
+| `sd_xl_base_1.0.safetensors` | 6617 |
+| `sd_xl_refiner_1.0.safetensors` | 5795 |
+
+### `<shared>/models/clip_vision`
+
+| file | MB |
+| --- | ---: |
+| `clip_vision_h.safetensors` | 1206 |
+
+### `<shared>/models/diffusion_models`
+
+| file | MB |
+| --- | ---: |
+| `boogu_image_edit_int8_convrot.safetensors` | 10844 |
+| `flux1-dev-kontext_fp8_scaled.safetensors` | 11353 |
+| `minimax_h3_fl2va_pruned_int8_convrot.safetensors` | 19999 |
+| `minimax_h3_ref2va_pruned_int8_convrot.safetensors` | 19999 |
+| `qwen_image_edit_2511_bf16.safetensors` | 38968 |
+| `qwen_image_edit_2511_int8_convrot.safetensors` | 19549 |
+| `wan2.1_14B_SCAIL_2_fp16.safetensors` | 31275 |
+| `wan2.2_bernini_r_high_noise_fp8_scaled.safetensors` | 14853 |
+| `wan2.2_bernini_r_low_noise_fp8_scaled.safetensors` | 14853 |
+
+### `<shared>/models/loras`
+
+| file | MB |
+| --- | ---: |
+| `QWEN_EDIT_ACTION_V1.safetensors` | 281 |
+| `Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors` | 810 |
+| `lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors` | 704 |
+| `lightx2v_T2V_14B_cfg_step_distill_v2_lora_rank64_bf16.safetensors` | 601 |
+| `qwen-image-edit-2511-multiple-angles-lora.safetensors` | 281 |
+| `wan2.1_SCAIL_2_DPO_lora_bf16.safetensors` | 1170 |
+| `wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors` | 1170 |
+| `wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors` | 1170 |
+
+### `<shared>/models/text_encoders`
+
+| file | MB |
+| --- | ---: |
+| `clip_l.safetensors` | 235 |
+| `qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors` | 14960 |
+| `qwen3vl_8b_fp8_scaled.safetensors` | 10098 |
+| `t5xxl_fp8_e4m3fn_scaled.safetensors` | 4918 |
+
+### `<shared>/models/vae`
+
+| file | MB |
+| --- | ---: |
+| `Wan2_1_VAE_bf16.safetensors` | 242 |
+| `minimax_h3_audio_vae_fp32.safetensors` | 577 |
+| `minimax_h3_video_vae_fp16.safetensors` | 4967 |

@@ -1606,3 +1606,105 @@ real:**
   math). fl2va covers t2v AND i2v — r2v superseded. Sanitized like the
   others; enhance tests pass. Adaptation + one real generation queued
   as the local 2d pass.
+
+## 2026-08-25 — item 2d: shared root, history trim, H3 pins, set_solid_color
+
+Four of the five 2d bullets done. Bumped 0.9.17.
+
+**1. The ComfyUI-Shared root — and a correction to my own inventory.**
+`AppData\Local\Comfy-Desktop\ComfyUI-Shared\models` holds 64 files /
+244.2 GB, listed in full in `docs/COMFY_LOCAL_INVENTORY.md`. It is
+resolved BEFORE the Documents root (proved from the startup log's
+per-kind root list, which is the only place the resolution order is
+visible — `extra_models_config.yaml` does not mention this root at all).
+So: **MiniMax H3 is FULLY provisioned, not blocked.** My first inventory
+declared the tier dead because it scanned one root. Both transformers
+(19999 MB each), the nvfp4 encoder (14960), the video VAE fp16 (4967)
+and the audio VAE fp32 (577) are all here. The doc's findings list and
+H3 section are corrected in place rather than appended to, because a
+wrong headline that survives in a document is worse than no document.
+The register matcher's root list is written out in resolution order.
+
+**2. The history trim is VERIFIED — but the probe could not test it
+until it was fixed.** Same drift as last time: main.js grew
+`Tools.fitHistory`, chat-probe.js mirrors the round loop BY HAND and did
+not. Running it as-is would have reproduced the old HTTP 400 and
+"proved" the fix did not work. The probe now carries both halves (the
+proactive budget and the reactive `forceTinyContext` retry), and
+`tests/test-chat-probe.js` now asserts the GENERAL rule — every
+`Tools.*` helper main.js's chat path uses must appear in the probe, with
+a two-entry PANEL_ONLY allowlist that itself has to stay true. Twice is
+a pattern; the third time is now a test failure.
+
+Full probe re-run: **10/11, and steps 9 and 10 complete for the first
+time.** "context trimmed — N earlier message(s) dropped" appears from
+step 4 onward and no HTTP 400 anywhere. Step 10 measured one Ctrl+Z for
+one sentence. Step 11 (rollback re-plan) passed again in a long-context
+run, which is the version that matters.
+
+**3. H3 files pinned** into `docs/COMFY_TIERS_PLAN.md` from the HF API
+(30 files). Two transformer families x five precisions; `fl2va` is the
+t2v/i2v one and covers t2v with no image. The nvfp4 question the plan
+asked has a number now: dropping nvfp4 for the int8_convrot encoder
+costs **+11 GB** (14960 -> 25884), so a non-Blackwell H3 tier is ~26 GB
+encoder + ~20 GB transformer before VAEs. Also recorded: the owner's
+local turbo LoRAs (592-744 MB) are NOT the repo's (1866 MB) — different
+files from a different source, do not treat them as interchangeable.
+
+**4. set_solid_color — probed, built, and it closes the probe's oldest
+open failure.** Step 9 ("Make them blue instead") had failed since the
+first probe run because no tool could recolour a solid. It passes now.
+
+Measured before building, and the measurements shaped the tool:
+  - `layer.source.mainSource.color` IS writable.
+  - `duplicate_layer` gives three layers ONE source id; one write turns
+    all three. `split_layer_into_chunks` likewise (3 chunks, 1 source).
+    So the shared case is the normal case, and a tool that just wrote
+    the colour would recolour layers nobody named and report success.
+  - `app.project.items.addSolid` does NOT exist. The only way to mint a
+    SolidSource is to add a throwaway solid LAYER, take its `.source`
+    and remove the layer; the source survives.
+  - `replaceSource(fresh, false)` keeps keyframes, effects, masks,
+    transform and in/out points.
+  - THE TRAP, found by the self-test rather than by reasoning: a layer
+    that was never renamed BY HAND displays its SOURCE's name, so
+    replaceSource silently renamed it and the suite ended up with two
+    layers both called "ST SC Square 2". The tool now writes the old
+    name back. The stub models auto-vs-hand-set names so this cannot
+    regress without AE.
+
+Shape: `set_solid_color {layer|layers, color, makeUnique?}`. If every
+layer sharing the solid was asked for, it writes once. If only SOME
+were, it REFUSES and names the collateral — unless the caller says which
+way they want it. That refusal is the whole tool; the write is trivial.
+
+**5. NOT DONE — the H3 i2v workflow (parts 1-3).** Only part 4 (node
+attribution) is finished, written into
+`AE_LLAMA_H3_I2V_V1.manifest.json`: `ResolutionSelector` and
+`MiniMaxH3SigmaShift` are **comfy-core** nodes in 0.32.0
+(`comfy_extras/nodes_resolution.py`, `comfy_extras/nodes_minimax_h3.py`)
+and need no pack; `ComfyMathExpression` ships inside
+ComfyUI-MiniMaxH3-FirstBlockCache, not a separate comfymath pack (the
+manifest was wrong); `RTXVideoSuperResolution` is
+`comfyui_nvidia_rtx_nodes` and is marked optional/bypassable. TWO
+collisions recorded: `PlaySound` is defined by both
+comfyui-custom-scripts and ComfyUI-KJNodes, and `ResolutionSelector` by
+both comfy-core and ComfyUI-UtilsCollection.
+Parts 1-3 (template adaptation, comfy.js injectParams wiring, one real
+generation) are untouched: a real H3 generation is a ~20 GB model load
+that would fight llama-server for the 32 GB card, and it wants its own
+pass with nothing else running. Next session's item.
+
+**Open, and NOT caused by anything here: probe step 7 is flaky.**
+"Spread the nine squares out equally" fails when the model answers the
+grid rig's grounded `overriddenByExpression` error by STOPPING and
+telling the user to clear the expressions, and passes when it clears
+them itself and retries. Both happened today with identical code. I
+isolated it: it fails with FRESH context too (`--steps 1,2,7`, no
+trimming active), so this is model variance at temp 0.7, not a
+consequence of the trim. The real question underneath is a product
+decision, not a bug: when the panel's OWN grid rig (created two turns
+earlier) blocks a later positional request, should the model clear it
+uninvited? Today's "refuse and explain" is arguably the safer answer and
+today's verdict calls it a failure. Worth deciding deliberately rather
+than letting temperature decide per run.

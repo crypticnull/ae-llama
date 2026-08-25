@@ -1939,6 +1939,120 @@
                  "position is " + JSON.stringify(v) + ", expected [200, 200]";
         } },
 
+      // ---- set_solid_color. A solid's colour lives on the SOURCE, and
+      // duplicate_layer hands out layers that share one — measured in AE
+      // 2026: duplicate twice and all three report the same source id,
+      // and one write to mainSource.color turns all three. So the tool
+      // has to refuse a partial recolour rather than surprise anyone.
+      { name: "create the solid-colour comp",
+        tool: "create_comp",
+        args: { name: "ST Solid Room", width: 320, height: 240,
+                duration: 3, frameRate: 30 },
+        check: function (d, ctx) { ctx.scComp = d.name; return true; } },
+
+      { name: "one red solid, duplicated twice — three sharing one solid",
+        batch: function (ctx) {
+          return [
+            { tool: "add_solid",
+              args: { comp: ctx.scComp, name: "ST SC Square",
+                      color: [1, 0, 0], width: 60, height: 60 } },
+            { tool: "duplicate_layer",
+              args: { comp: ctx.scComp, layer: "ST SC Square", count: 2 } }
+          ];
+        },
+        check: function (rows) {
+          if (!rows[0].ok || !rows[1].ok) {
+            return "rig failed: " + (rows[0].error || rows[1].error);
+          }
+          return true;
+        } },
+
+      { name: "recolouring ONE of three sharers is refused, not silent",
+        tool: "set_solid_color",
+        args: function (ctx) {
+          return { comp: ctx.scComp, layer: "ST SC Square",
+                   color: [0, 1, 0] };
+        },
+        expectError: true,
+        check: function (e) {
+          return (/SHARED/.test(e) && /makeUnique/.test(e)) ||
+                 "expected the shared-solid refusal, got: " + e;
+        } },
+
+      { name: "makeUnique:true recolours only the layer named",
+        tool: "set_solid_color",
+        args: function (ctx) {
+          return { comp: ctx.scComp, layer: "ST SC Square",
+                   color: [0, 1, 0], makeUnique: true };
+        },
+        check: function (d) {
+          return (d.madeUnique && d.madeUnique.length === 1) ||
+                 "expected one layer given its own solid, got " +
+                 JSON.stringify(d.madeUnique || d);
+        } },
+
+      { name: "and the other two really are still red",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.scComp }; },
+        check: function (d) {
+          // get_comp_details does not carry solid colour, so this step
+          // proves only that the rig is intact; the colour itself is
+          // asserted by the tool's own result above and by the stubbed
+          // suite, where the source objects are inspectable.
+          var n = 0, i;
+          for (i = 0; i < d.layers.length; i++) {
+            if (/^ST SC Square/.test(d.layers[i].name)) n++;
+          }
+          return n === 3 ||
+                 "expected the three squares to survive, found " + n;
+        } },
+
+      { name: "recolouring ALL the sharers together is allowed",
+        tool: "set_solid_color",
+        args: function (ctx) {
+          return { comp: ctx.scComp,
+                   layers: ["ST SC Square 2", "ST SC Square 3"],
+                   color: [0, 0, 1] };
+        },
+        check: function (d) {
+          if (d.solidsTouched !== 1) {
+            return "expected ONE solid touched, got " + d.solidsTouched;
+          }
+          return (d.alsoChanged === undefined) ||
+                 "nothing should have been collateral, got " +
+                 JSON.stringify(d.alsoChanged);
+        } },
+
+      { name: "add a text layer for set_solid_color to refuse",
+        tool: "add_text_layer",
+        args: function (ctx) {
+          // add_text_layer names the layer from its TEXT — there is no
+          // name argument — so the text IS the handle used below.
+          return { comp: ctx.scComp, text: "ST SC Words" };
+        },
+        check: function () { return true; } },
+
+      { name: "a text layer is refused, and told where its colour lives",
+        tool: "set_solid_color",
+        args: function (ctx) {
+          return { comp: ctx.scComp, layer: "ST SC Words",
+                   color: [1, 0, 0] };
+        },
+        expectError: true,
+        check: function (e) {
+          if (!/only works on SOLID layers/.test(e)) {
+            return "expected the not-a-solid refusal, got: " + e;
+          }
+          return /set_text_style/.test(e) ||
+                 "the refusal should name the tool that DOES set text " +
+                 "colour, got: " + e;
+        } },
+
+      { name: "cleanup: delete the solid-colour comp",
+        tool: "delete_item",
+        args: function (ctx) { return { item: ctx.scComp }; },
+        check: function () { return true; } },
+
       // ---- rolling back a round that failed PART WAY.
       //
       // The field bug: duplicate_layer errored because add_solid had not

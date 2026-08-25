@@ -120,7 +120,7 @@ Pure filesystem reading — no AE, no generation runs, do NOT launch
 ComfyUI. This unblocks tier-plan P5 (catalog file lists + sizes) and
 the register-existing matcher. Commit the inventory; no version bump.
 
-## 2d. Small local passes queued by the probe findings
+## 2d. Small local passes queued by the probe findings — 4 of 5 DONE 2026-08-25
 
 - ~~Locate the H3 base weight~~ FOUND by the owner (2026-08-25):
   `AppData\Local\Comfy-Desktop\ComfyUI-Shared\models\diffusion_models\`

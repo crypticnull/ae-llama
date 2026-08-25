@@ -43,6 +43,16 @@
       desc: "Delete a project item. Deleting a folder removes its contents. " +
             "Use a path when names repeat.",
       args: "{item: name|id|path 'A/B/Item'}" },
+    { name: "set_solid_color", mutating: true,
+      desc: "Change a SOLID layer's colour (this is the ONLY way — a " +
+            "solid's colour is not a property you can set_property). " +
+            "Takes many layers in one call. The colour lives on the " +
+            "shared solid SOURCE, so duplicated or split layers all " +
+            "change together; if that would hit layers you did not name " +
+            "the tool refuses and tells you, and makeUnique:true gives " +
+            "the named layers their own solid instead.",
+      args: "{comp?: string, layer?: name|index, layers?: [name|index], " +
+            "color: [r,g,b], makeUnique?: bool}" },
     { name: "audit_comp_usage",
       desc: "Facts about how comps are used, before renaming anything: " +
             "which comps each one is nested in, whether it is in the " +

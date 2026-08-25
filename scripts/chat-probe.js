@@ -272,13 +272,47 @@ function sendMessage(text, done) {
 
   function runRound(system, n) {
     round.rounds = n + 1;
-    const messages = [{ role: "system", content: system }].concat(history);
+    // In step with main.js: bound what the model is sent, or a long chat
+    // dies on a raw HTTP 400. The probe found that bug by being the only
+    // thing that holds a ten-turn conversation, so it has to carry the
+    // fix too — otherwise it would keep reporting a failure the panel no
+    // longer has.
+    let histBudget = Math.max(4000, (s.ctxSize - 3600) * 3 - system.length);
+    if (round.forceTinyContext) histBudget = 1;
+    const fitted = Tools.fitHistory(history, histBudget);
+    let sys = system;
+    if (fitted.dropped > 0) {
+      sys += "\n\n(NOTE: " + fitted.dropped + " earlier message(s) " +
+        "were trimmed from your context to fit the model's window. " +
+        "The transcript the user sees is complete — if they refer to " +
+        "something you cannot see, say so and ask, do not guess.)";
+      if (!round.trimNoticeShown) {
+        round.trimNoticeShown = true;
+        say("info", "context trimmed — " + fitted.dropped +
+            " earlier message(s) dropped from what the model is sent");
+      }
+      round.trimmed = (round.trimmed || 0) + fitted.dropped;
+    }
+    const messages = [{ role: "system", content: sys }]
+      .concat(fitted.entries);
     const t0 = Date.now();
     Llama.chat({ port: s.port, temperature: s.temperature }, messages,
       Tools.RESPONSE_SCHEMA, null,
       function (err, obj, raw) {
         const secs = ((Date.now() - t0) / 1000).toFixed(1);
         if (err) {
+          // The reactive half of the same fix: a context 400 that slipped
+          // past the estimate gets ONE retry with only the current
+          // exchange.
+          if (/context|exceed|too (?:long|large|many)/i.test(err.message) &&
+              !round.forceTinyContext) {
+            round.forceTinyContext = true;
+            round.hardTrimmed = true;
+            say("info", "request outgrew the context window — retrying " +
+                "with older turns trimmed");
+            runRound(system, n);
+            return;
+          }
           say("error", "Model error after " + secs + "s: " + err.message);
           round.failures.push("model: " + err.message);
           done(round);
