@@ -1053,8 +1053,51 @@
     callHostTool(tool, args, cb);
   }
 
+  /**
+   * Fit the chat history into a character budget by dropping the OLDEST
+   * entries first. The transcript the user sees is untouched — this only
+   * bounds what the MODEL is sent.
+   *
+   * Without it a long chat died with a raw llama-server HTTP 400
+   * ("request exceeds the available context size") on every later
+   * message, and the panel was dead until cleared — field-observed at
+   * 16755 tokens against a 16384 window.
+   *
+   * Rules, in order:
+   *  - under budget -> unchanged, dropped: 0;
+   *  - drop whole entries from the front until under budget, but never
+   *    the last four — the current exchange must survive even when it
+   *    alone busts the budget (the model then gets a too-big prompt and
+   *    the caller's retry path deals with the 400);
+   *  - after dropping, keep dropping until the first entry is a USER
+   *    turn: chat templates expect user-first after the system message,
+   *    and an orphaned assistant turn reads as the model talking to
+   *    itself.
+   */
+  function fitHistory(history, budgetChars) {
+    var size = 0, i;
+    for (i = 0; i < history.length; i++) {
+      size += (history[i].content || "").length + 16;
+    }
+    if (size <= budgetChars) return { entries: history, dropped: 0 };
+    var entries = history.slice();
+    var dropped = 0;
+    while (entries.length > 4 && size > budgetChars) {
+      size -= (entries[0].content || "").length + 16;
+      entries.shift();
+      dropped++;
+    }
+    while (entries.length > 1 && entries[0].role !== "user") {
+      size -= (entries[0].content || "").length + 16;
+      entries.shift();
+      dropped++;
+    }
+    return { entries: entries, dropped: dropped };
+  }
+
   global.Tools = {
     TOOL_DEFS: TOOL_DEFS,
+    fitHistory: fitHistory,
     RESPONSE_SCHEMA: RESPONSE_SCHEMA,
     buildSystemPrompt: buildSystemPrompt,
     fetchProjectState: fetchProjectState,

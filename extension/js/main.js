@@ -9,7 +9,10 @@
   var $ = function (id) { return document.getElementById(id); };
 
   var els = {};
-  var busy = false;          // a chat round-trip is in flight
+  var busy = false;
+  // One-time notice when history first outgrows the model's window;
+  // reset only by clearing the chat, not per message.
+  var trimNoticeShown = false;          // a chat round-trip is in flight
   var history = [];          // [{role, content}] — excludes system prompt
   var updateManifest = null; // cached update.json from the update channel
 
@@ -357,7 +360,34 @@
 
     function runRound(system, round) {
       if (cancelRequested) { finish(); return; }
-      var messages = [{ role: "system", content: system }].concat(history);
+      // Bound what the model is SENT — the visible transcript keeps
+      // everything. ~3 chars/token is deliberately conservative for the
+      // JSON-heavy turns this chat produces; 3072 is the reply budget
+      // (llama.js max_tokens) plus headroom for the template overhead.
+      var histBudget = Math.max(
+        4000, (s.ctxSize - 3600) * 3 - system.length);
+      if (round.forceTinyContext) {
+        // The reactive path: a context 400 got through anyway (one huge
+        // entry, or the estimate lost). Keep only the current exchange.
+        histBudget = 1;
+      }
+      var fitted = global.Tools.fitHistory(history, histBudget);
+      var sys = system;
+      if (fitted.dropped > 0) {
+        sys += "\n\n(NOTE: " + fitted.dropped + " earlier message(s) " +
+          "were trimmed from your context to fit the model's window. " +
+          "The transcript the user sees is complete — if they refer to " +
+          "something you cannot see, say so and ask, do not guess.)";
+        if (!trimNoticeShown) {
+          trimNoticeShown = true;
+          appendMsg("info", "This chat is getting long — older turns are " +
+            "now trimmed from the model's context (your transcript is " +
+            "unaffected). Clearing the chat starts the model fresh.",
+            "context trimmed");
+        }
+      }
+      var messages = [{ role: "system", content: sys }]
+        .concat(fitted.entries);
       currentChat = global.Llama.chat(
         { port: s.port, temperature: s.temperature },
         messages,
@@ -394,6 +424,19 @@
                 "duplicate_layer count or distribute_property step)." });
               appendMsg("info", "Reply was cut off — asking the model to " +
                         "retry compactly…");
+              runRound(system, round);
+              return;
+            }
+            // A context overflow that slipped past the proactive trim
+            // (one oversized entry, or the chars-per-token estimate
+            // lost). One retry with only the current exchange — the
+            // grounded message, not llama-server's raw HTTP 400, is
+            // what the user sees if that fails too.
+            if (/context|exceed|too (?:long|large|many)/i.test(
+                  err.message) && !round.forceTinyContext) {
+              round.forceTinyContext = true;
+              appendMsg("info", "The request outgrew the model's " +
+                "context window — retrying with older turns trimmed.");
               runRound(system, round);
               return;
             }
@@ -1078,6 +1121,7 @@
     });
     els.clearChatBtn.addEventListener("click", function () {
       history = [];
+      trimNoticeShown = false;   // a fresh chat earns a fresh warning
       els.chat.innerHTML = "";
       appendMsg("info", "Conversation cleared.");
     });

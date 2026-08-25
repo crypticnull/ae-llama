@@ -4158,6 +4158,14 @@ AELL_TOOLS.get_property = function (args) {
 };
 
 AELL_TOOLS.set_property = function (args) {
+  // The model reaches for {layers: [...]} here when it wants a batch —
+  // observed twice in one probe run. Redirect it to the tool that does
+  // that, instead of silently setting ONE layer and reporting success.
+  if (AELLJSON.isArray(args.layers)) {
+    return AELL_err("set_property works on ONE layer. For many, wrap it: " +
+      "for_each_layer {layers: [...], tool: 'set_property', args: " +
+      "{property: '" + String(args.property || "...") + "', value: ...}}");
+  }
   var comp = AELL_resolveComp(args.comp);
   var layer = AELL_layerOrSelection(comp, args.layer);
   var prop = AELL_anyProperty(layer, args.property);
