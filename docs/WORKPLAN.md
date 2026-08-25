@@ -95,12 +95,130 @@ themselves inside the scratch comp.
   keyframe wall time; note anything over ~5s so the remote session can
   optimize.
 
+## 5. Feature track — probe, build, lock in (NO version bumps here)
+
+New capabilities, queued AFTER items 1–4. Rules for every 5.x/6.x item,
+learned the hard way:
+
+- **Three passes max per feature, one per loop pass.** (a) PROBE: temp
+  .jsx against real AE, write the verified facts (exact matchNames,
+  return shapes, what throws) to WORKPLAN-LOG.md. Every API name below
+  is from training and UNVERIFIED — the probe is the point. (b) BUILD:
+  the tool(s) in hostscript.jsx + docs in tools.js (undocumented tools
+  are unreachable by the model) + a stubbed test whose stub encodes what
+  the probe measured. (c) LOCK IN: positive-path selftest.js steps, with
+  cleanup, in their own scratch comp where side effects are possible.
+- **NO version bump on feature passes.** Patch bumps are for fixes to
+  shipped behavior. New tools ride the next MINOR (0.10.0), which the
+  remote session cuts after reviewing the batch. Push without bumping —
+  the feed publishing an equal version is correct here.
+- If a pass ends with AE stuck on a modal (harness exit 4), dismiss it
+  with the Win32 method already documented in the log, record exactly
+  what raised it, and log the pass. Never leave AE blocked for the next
+  pass.
+- A probe that DISPROVES the sketch below is a success: log it, adjust
+  or strike the item, stop the pass.
+
+### 5.1 Text animators
+Probe: the property tree under "ADBE Text Animators" — add an animator,
+an "ADBE Text Selectors" range selector, and animator properties
+(position/opacity/rotation/scale at least); verify Start/End/Offset
+percent paths and per-character-3D requirements. Build:
+`add_text_animator` (generic, grounded errors listing available animator
+properties) — macros like "typewriter"/"cascade" belong in the PROMPT as
+recipes, not as separate tools. Highest value per line of code here.
+
+### 5.2 Shape repeaters
+Probe: "ADBE Vector Filter - Repeater" under a shape group — copies,
+offset, and the repeater transform block. Build: `add_repeater` {layer,
+copies, position/rotation/scale/anchor offsets}. Verify the radial-burst
+recipe (rotation 360/copies) renders as expected.
+
+### 5.3 Animation preset library
+Probe: `layer.applyPreset(File)` on a stock .ffx — does it need the
+layer selected, what does it do to selection (AELL_keepSelection?), and
+enumerate what ships: Support Files\Presets\**\*.ffx + the user's
+Documents\Adobe\After Effects*\User Presets. Build: `list_presets`
+(cached, filterable) + `apply_preset` with the font-style grounded error
+(near-matches by name). Hundreds of behaviors for the price of two tools.
+
+### 5.4 Precompose + markers
+Probe: `layers.precompose(indices, name, true)` (1-based indices, what
+gets selected after) and marker writes on both layers and the comp
+(MarkerValue with comment/duration). Build: `precompose` {layers, name,
+moveAttributes} and `add_markers` {target, markers:[{time, comment}]}.
+Small, safe, constantly used.
+
+### 5.5 Render queue (unlocks 5.8, 6.1, 6.2 — do before them)
+Probe: render a comp headless — renderQueue.items.add + outputModule
+file/template (enumerate available templates and log them; they are
+version-sensitive), renderQueue.render() from a -r session, AND the
+aerender.exe alternative. Decide which is stable unattended and log why.
+Build: `queue_render` {comp, path, template?} with grounded template
+errors. Also probe single-frame paths here: saveFrameToPng if it exists,
+else a one-frame render — needed by 5.8.
+
+### 5.6 Project hygiene
+Probe: removeUnusedFootage(), consolidateFootage(), reduceProject()
+return values. Build: `clean_project` {action} — reduceProject DELETES,
+so it requires an explicit comp argument and reports counts; everything
+in one undo group. Refuse vague asks with a grounded list of actions.
+
+### 5.7 Audio to keyframes
+Probe: `app.findMenuCommandId("Convert Audio to Keyframes")` — does the
+id exist, what selection/active-comp state it needs, exact name of the
+created null and its slider paths. Build: `audio_to_keyframes` {layer}
+returning the null + slider path ready for link_property. Grounded error
+lists audio-capable layers. This plus link_property = beat-driven
+anything.
+
+### 5.8 Frame round-trip (the local foundation for image/video gen)
+Build on 5.5's probe: `snapshot_frame` {comp, time, path} writes a PNG
+of the comp at a time; `import_as_layer` {path, comp, fit} imports a
+file and places it as a layer scaled fit/fill/center to the comp. Verify
+the full loop: snapshot -> import -> pixel dimensions match the comp.
+Generation wiring stays remote — this is the comp<->file bridge it will
+stand on.
+
+### 5.9 .mogrt export (LAST item of any night — dialog risk)
+Probe with everything pre-cleaned (project saved, text using a font
+verified via isSubstitute===false): set
+comp.motionGraphicsTemplateName, property.canAddToMotionGraphicsTemplate,
+addToMotionGraphicsTemplateAs, then
+exportAsMotionGraphicsTemplate(true, path). Log which steps raise
+dialogs and whether they are dismissable. Build ONLY if the probe shows
+a clean headless path: `expose_property` {layer, property, label} +
+`export_mogrt` {comp, path}. If it cannot run headless, log that and
+leave it panel-interactive-only for the remote session to design.
+
+## 6. Binary track (multi-night; same lifecycle pattern as llama-server)
+
+### 6.1 Local captions via whisper.cpp
+Pass A: acquire — download a prebuilt whisper.cpp Windows binary +
+ggml-base.en model the way get-llama.ps1 does llama-server; verify it
+runs on a WAV. Pass B: verification harness with NO human audio —
+synthesize a spoken WAV locally (PowerShell System.Speech TTS, e.g.
+"the quick brown fox"), transcribe, assert the transcript contains the
+phrase; make that a stub-level test that skips cleanly when the binary
+is absent (CI has no binary). Pass C: AE wiring — render a comp/layer's
+audio to WAV via 5.5, transcribe with timestamps, build styled text
+layers (5.1/text tools) or markers from the segments:
+`transcribe_to_captions` {comp|layer}. Do NOT start C before 5.5 lands.
+
+### 6.2 ffmpeg post-renders
+Pass A: acquire a static ffmpeg build the same way; verify with ffprobe.
+Pass B: `export_gif` / `export_social` {comp, path, size, fps} =
+lossless render via 5.5 piped through ffmpeg, temp files cleaned. After
+5.5 only.
+
 ## Out of scope for the local session (remote builds these)
 
-- ComfyUI model catalog / bundled installer (needs the user's Krea
-  workflow + model picks).
-- Phase D animation utilities and Phase E roto/tracking hybrids
-  (docs/NATIVE_COVERAGE_PLAN.md) — verify them when they land.
+- ComfyUI model catalog / bundled installer, and wiring generation into
+  5.8's round-trip (blocked on the user's Krea workflow + model picks).
+- Phase E roto/tracking hybrids. (Phase D animation utilities are now
+  largely items 5.1–5.7 above — do not double-build them.)
+- The rollback DESIGN in item 4 may be built only after the remote
+  session reviews the proposal.
 - Minor/major version bumps, PRs into main, release notes. PATCH bumps
   are YOURS: `node scripts/bump-version.js patch` before pushing a fix
   you verified in real AE, or it never reaches a panel (see CLAUDE.md).
