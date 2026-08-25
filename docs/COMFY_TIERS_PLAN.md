@@ -43,21 +43,45 @@ button.
 
 ## The tier table (single source of truth → `extension/js/tiers.js`)
 
-| Tier | VRAM | Chat default | Gen policy | Image ceiling (PROVISIONAL) | Video (PROVISIONAL) |
-|---|---|---|---|---|---|
-| T0 | none/CPU/<4 GB | Llama 3.2 3B (CPU) | exclusive, experimental | SD 1.5 @ 512, slow, flagged experimental | none |
-| T1 | 4–7 GB | Llama 3.2 3B (2.1 GB) | **exclusive** (mandatory) | SD 1.5 @ 768; SDXL @ 1024 with fp8/offload, flagged | none (LTX-small experimental) |
-| T2 | 8–11 GB | Qwen 7B (4.7 GB) | exclusive | SDXL comfortable; Flux Schnell GGUF q4 | Wan 1.3B short clips |
-| T3 | 12–15 GB | Qwen 7B | exclusive for big models, concurrent for SD 1.5 | Flux/Krea dev fp8 @ 1024 | Wan 1.3B comfortable |
-| T4 | 16–23 GB | Qwen 14B (9 GB) | exclusive; concurrent with 7B chat | Flux/Krea dev | Wan 14B GGUF q4, marginal |
-| T5 | 24 GB+ | Qwen 14B/32B | concurrent available | Krea full precision | Wan 14B; the full user-picked stack |
+Anchored to NVIDIA's actual product stack — the VRAM levels below are
+the ones NVIDIA ships, so every real card lands cleanly in a tier.
+Support floor: Pascal (GTX 10-series) — the practical ComfyUI minimum;
+anything older (or no NVIDIA GPU) is T0/CPU, present but flagged
+experimental.
+
+**Detection keys off MEASURED VRAM (nvidia-smi), never the card name.**
+The same product name ships with different VRAM (4060 Ti: 8 or 16 GB;
+RTX 2060: 6 or 12 GB; laptop chips carry less than their desktop
+namesakes — a laptop 4090 is 16 GB). The product examples below are for
+design and marketing copy ("runs on a GTX 1660"); at runtime only the
+measured number exists.
+
+| Tier | VRAM | Example cards (not exhaustive) | Chat default | Gen policy | Image ceiling (PROVISIONAL) | Video (PROVISIONAL) |
+|---|---|---|---|---|---|---|
+| T0 | <4 GB / none / pre-Pascal | GTX 960, no-GPU | Llama 3B (CPU) | exclusive, experimental | SD 1.5 @ 512 CPU/offload, flagged slow | none |
+| T1 | 4–5 GB | GTX 1650, 1050 Ti, laptop 3050 | Llama 3B (2.1 GB) | **exclusive** (mandatory) | SD 1.5 @ 512–768 | none |
+| T2 | 6–7 GB | GTX 1060 6GB, 1660/Ti/Super, RTX 2060, 3050 6GB, laptop 4050 | Llama 3B | **exclusive** (mandatory) | SD 1.5 @ 768; SDXL @ 1024 via offload, flagged | none (LTX-small experimental) |
+| T3 | 8–11 GB | GTX 1070/1080/1080 Ti, RTX 2070/2080/Ti, 3060 Ti, 3070, 4060, 4060 Ti 8GB, 5060, 3080 10GB, laptop 4060/4070 | Qwen 7B (4.7 GB) | exclusive | SDXL comfortable; Flux Schnell GGUF q4 (pre-Ada cards: GGUF only, no fp8 compute) | Wan 1.3B short clips |
+| T4 | 12–15 GB | RTX 2060 12GB, 3060 12GB, 3080 12GB/Ti, 4070/Super/Ti, 5070, laptop 4080/5070 | Qwen 7B | exclusive for big models; concurrent SD 1.5 | Flux/Krea dev fp8 @ 1024 | Wan 1.3B comfortable |
+| T5 | 16–23 GB | 4060 Ti 16GB, 4070 Ti Super, 4080/Super, 5060 Ti 16GB, 5070 Ti, 5080, laptop 4090/5080 | Qwen 14B (9 GB) | exclusive; concurrent with 7B chat | Flux/Krea dev | Wan 14B GGUF q4, marginal |
+| T6 | 24–31 GB | RTX 3090/Ti, 4090, Titan RTX, laptop 5090 | Qwen 14B | concurrent (14B + SDXL/Flux fp8) | Krea full | Wan 14B |
+| T7 | 32 GB+ | RTX 5090 | Qwen 14B or 32B | concurrent by arithmetic | Krea full precision, larger batches | Wan 14B comfortable; the full user-picked stack |
+
+Boundaries sit ON product VRAM levels (4/6/8/12/16/24/32), so no real
+card straddles one. Borderline behavior inside a tier is not hardcoded
+anyway: the arbiter's arithmetic decides concurrency from the ACTUAL
+configured models — e.g. even a 32 GB 5090 running the 20 GB Qwen 32B
+chat model still needs the exclusive handoff for a 13 GB Flux
+generation, and the arithmetic discovers that without a special case.
 
 Each tier row in code also carries: `headroomGB` (default 1),
 `copy` (the honest one-line UI description), and per-kind resolution
-ceilings the workflow templates read. Video entries stay placeholders
-until the owner's picks land (Krea workflow JSON, Wan variant, and
-whether "MiniMax H3" means local weights or an API — ask before
-cataloguing it).
+ceilings the workflow templates read. Pre-Ada cards (GTX 10/16, RTX 20)
+lack fp8 compute, so their catalog entries prefer GGUF quantizations —
+an entry field (`requiresAda: bool`), not a separate tier. Video
+entries stay placeholders until the owner's picks land (Krea workflow
+JSON, Wan variant, and whether "MiniMax H3" means local weights or an
+API — ask before cataloguing it).
 
 ## The arbiter (state machine, `comfy.js` + `llama.js`)
 
@@ -122,10 +146,14 @@ catalog entry — the template mechanism already exists
   VRAM release replacing the 1.5 s sleep.
 - **P3 (remote):** combined first-run recommendation UI; `comfyCatalog`
   manifest plumbing with PROVISIONAL entries.
-- **P4 (local, the machine with the real GPU):** measure every catalog
-  entry's true VRAM (nvidia-smi deltas), verify the exclusive handoff
-  actually releases memory both directions, OOM recovery, lazy restart —
-  each tier simulated via `vramOverrideGB`. Measurements flip
+- **P4 (local, the 32 GB 5090):** measure every catalog entry's true
+  VRAM (nvidia-smi deltas), verify the exclusive handoff actually
+  releases memory both directions, OOM recovery, lazy restart. The
+  5090 can impersonate EVERY tier via `vramOverrideGB` (a 6 GB budget
+  enforced on a 32 GB card), so the whole ladder T1–T7 is testable on
+  the one real machine. What it cannot simulate: pre-Ada quirks (no
+  fp8 compute) and genuinely-out-of-memory driver behavior — note
+  those as tested-by-arithmetic-only. Measurements flip
   `measured: false → true` in the catalog. Queued into WORKPLAN only
   after P1–P3 land.
 - **P5 (blocked on the owner):** Krea workflow JSON, video model picks,
@@ -136,7 +164,7 @@ catalog entry — the template mechanism already exists
 ## Open questions for the owner
 
 1. Is "SD 1.5-class images, no video" an acceptable floor story for
-   6 GB, or should SDXL-with-offloading be the T1 default despite the
+   6 GB (T2), or should SDXL-with-offloading be its default despite the
    wait?
 2. Video floor: fine that below 8 GB there is none?
 3. "MiniMax H3" — local weights you have, or an API? Changes whether it
