@@ -135,6 +135,16 @@ the register-existing matcher. Commit the inventory; no version bump.
   context overflow before; they should now complete, with the "context
   trimmed" notice appearing once. Green -> patch bump, this fix plus
   the set_property->for_each_layer redirect ship together.
+- **H3 i2v workflow RECEIVED** (AE_LLAMA_H3_I2V_V1 + manifest): the
+  fl2va weight covers BOTH t2v (no image) and i2v, superseding r2v as
+  the first H3 target. Local pass, in order: (1) template adaptation —
+  drop the Ollama nodes 169/170 and link 313 so the injected prompt
+  widget on node 138 takes effect (spec in the manifest's `procedural`
+  block; duration injects as SECONDS into node 136, the graph converts
+  to the 17k+5 frame grid); (2) wire those injection points into
+  comfy.js injectParams; (3) ONE real generation end-to-end through the
+  panel to verify, with RTXVideoSuperResolution made bypassable (it is
+  NVIDIA-app dependent); (4) attribute the manifest's UNKNOWN nodes.
 - **Pin H3 t2v/i2v files** (HF is proxy-blocked from the remote
   session): list https://huggingface.co/api/models/Comfy-Org/MiniMax-H3/tree/main?recursive=true
   and record the t2v/i2v diffusion weights + non-nvfp4 encoder variants
