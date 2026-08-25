@@ -347,14 +347,52 @@ Pass B: `export_gif` / `export_social` {comp, path, size, fps} =
 lossless render via 5.5 piped through ffmpeg, temp files cleaned. After
 5.5 only.
 
+## 7. Tier P4 — real-GPU measurement (local; P1–P3 landed 2026-08-25)
+
+The remote half of docs/COMFY_TIERS_PLAN.md is in: tiers.js (T0–T7 +
+planHandoff), the VRAM arbiter in tools.js (pause once per round,
+verified release via Setup.queryVramUsedMB polling, ComfyUI /free
+before the chat model returns, grounded refusal under pause "never"),
+comfyPauseLlm tri-state, vramOverrideGB, comfyModelRoots, the combined
+recommendSetup line, and COMFY_CATALOG (all PROVISIONAL). Stub suites:
+test-tiers, test-vram-arbiter, test-settings-migrate, extended
+test-model-catalog / test-comfy-backend. NONE of it has touched a real
+GPU. This item is that touch, one pass per bullet, smallest first:
+
+- **Handoff smoke on the 5090, no override**: one comfy_generate with
+  chat loaded on a T7 budget should run CONCURRENT (watch the panel
+  status lines — no pause). Then set vramOverrideGB 8 and repeat: it
+  must pause, generate, /free, and warm chat back up. nvidia-smi in a
+  second terminal is the witness: total used must actually DROP at the
+  handoff and again after /free. Log the real numbers.
+- **Probe /free support**: the tier plan's open question — does the
+  bundled portable build's API answer POST /free {unload_models:true}?
+  Record HTTP status + observed VRAM delta in the log; if unsupported,
+  the fallback (restart the managed process) becomes a build item.
+- **pause "never" refusal in the field**: override 8 GB, pause never,
+  ask for a generation → the model must relay the grounded refusal
+  (numbers + the setting), not hallucinate success. This is a chat-probe
+  style check, worth a probe step if it holds.
+- **Measure the catalog**: for each downloadable entry that fits the
+  card (sd15, sdxl, wan22-5b, minimax-h3): real VRAM delta during a
+  generation (nvidia-smi peak − idle), wall clock, and whether the
+  fixed sizes in version.js COMFY_CATALOG are honest. Flip
+  measured:false → true with the number IN the entry, patch bump.
+  Correct any dead download URL the same way (they are
+  training-quoted; HF was unreachable from the remote session).
+- **Tier impersonation ladder**: vramOverrideGB 4/6/8/12/16/24 — each
+  budget must produce the matching tier line in settings, the matching
+  catalog picks, and a handoff (or refusal) consistent with
+  planHandoff. The 5090 exercises every PATH; timings on small cards
+  stay training-quoted and must keep saying "typically".
+- **OOM recovery**: force one real OOM (override 6, generate something
+  known too big with pause never overridden off — or drive ComfyUI
+  directly) and verify the chat model comes back afterward regardless.
+
 ## Out of scope for the local session (remote builds these)
 
-- ComfyUI model catalog / bundled installer, and wiring generation into
-  5.8's round-trip (blocked on the user's Krea workflow + model picks).
-- The VRAM-tier architecture (docs/COMFY_TIERS_PLAN.md): remote builds
-  P1–P3. Its P4 — real-GPU measurement of every catalog entry and the
-  handoff, each tier simulated via vramOverrideGB — will be queued HERE
-  once P1–P3 land. Do not start it early; the hooks will not exist.
+- ComfyUI bundled node-pack installer and wiring generation into
+  5.8's round-trip; tier-plan P5 (final video file pins per tier).
 - Phase E roto/tracking hybrids. (Phase D animation utilities are now
   largely items 5.1–5.7 above — do not double-build them.)
 - The rollback DESIGN in item 4 may be built only after the remote

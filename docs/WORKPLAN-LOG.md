@@ -1752,3 +1752,59 @@ the local session: run the 187-step suite, re-run chat-probe step 7,
 patch bump when green. This is a product-behavior decision the owner has
 not explicitly ruled on — the mechanics are cheap to flip (delete the
 prompt rule bullet + the flag branch) if they want refuse-only back.
+
+## 2026-08-25 (remote) — tier P1–P3: one detection, one tier, both engines
+
+The VRAM-tier architecture's remote half is built (docs/COMFY_TIERS_
+PLAN.md updated in place; WORKPLAN gained item 7 = P4 for the local
+session). The shape, briefly:
+
+- **tiers.js** is the single source: T0–T7 anchored on NVIDIA's shipped
+  VRAM levels, resolved from MEASURED VRAM (never the card name), with
+  vramOverrideGB beating the measurement so a 32 GB card can BE a 6 GB
+  card for testing. Architecture gates ride catalog entries
+  (requiresAda, requiresBlackwell — nvfp4 is Blackwell-only), and an
+  unknown architecture fails a gate: recommending a model that cannot
+  execute is worse than a smaller one. Setup.recommendModel now
+  delegates here (semantics pinned unchanged by test-model-catalog).
+- **The arbiter** replaced the pause-per-generation + 1.5 s hope-sleep
+  in comfy_generate. planHandoff is pure arithmetic over what is REALLY
+  loaded (chat .gguf stat size + overhead, manifest's non-optional
+  weight sum) — concurrent when it provably fits, exclusive handoff
+  when it does not or cannot be proven, a grounded refusal (with the
+  numbers) under pause mode "never" BEFORE anything is churned. One
+  pause covers a whole round: two generations in one commands array
+  cost one stop, one /free, one warm-up — measured by the new
+  test-vram-arbiter against a scripted nvidia-smi. Release is verified
+  by polling until the reading drops, both directions.
+- **comfyCatalog**: version.js grew COMFY_CATALOG (sd15, sdxl with its
+  honest slowBelowGB 8, krea2, experimental ltx-small at 6 GB,
+  wan22-5b, MiniMax H3 in nvfp4-Blackwell and int8 variants with the
+  exact Comfy-Org URLs the workflow manifests already pinned). ALL
+  PROVISIONAL: measured:false everywhere, URLs training-quoted where no
+  manifest pinned them, feed-overridable without a panel release.
+  recommendSetup produces the combined line ("RTX 4060, 8 GB (T3):
+  Qwen 7B for chat + SDXL for images + Wan 2.2 5B for video.
+  Generation pauses chat on this card.") — rendered in the ComfyUI
+  settings section, re-rendered on GPU probe and settings save.
+- **Settings**: comfyPauseLlm true→"auto"/false→"never" migration,
+  vramOverrideGB, comfyModelRoots (one per line, kind=path per-kind,
+  written as extra sections into extra_model_paths.yaml; the user's own
+  folders are read, never restructured — and a drive letter is not a
+  kind). New/extended suites: test-tiers, test-vram-arbiter,
+  test-settings-migrate, test-model-catalog, test-comfy-backend — 27
+  files, all green.
+
+Decisions taken that P4 must respect: T2's default image is SD 1.5
+with SDXL demoted by slowBelowGB (the resolved T2 floor decision now
+lives in recommendGen, not in prose); "lazy restart" landed as
+resume-once-per-round, NOT as skip-the-reply — the model needs to be up
+to phrase its answer, and ending the round panel-side after a
+generation is an owner decision nobody has made.
+
+NOT verified on real hardware — deliberately. Every number in the
+catalog says measured:false and the WORKPLAN item 7 bullets are the
+measurement pass (handoff smoke, /free support probe, refusal in the
+field, catalog deltas, the override ladder, OOM recovery). No version
+bump here: this ships to a panel only after the local session verifies
+the handoff on the 5090 and bumps.

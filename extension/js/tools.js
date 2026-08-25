@@ -653,6 +653,150 @@
   // Progress sink so long generations can narrate into the chat UI.
   var progressSink = null;
 
+  // ------------------------------------------------------ VRAM arbiter
+  //
+  // Chat (llama-server) and generation (ComfyUI) share one card. The
+  // tier decides a policy, but the gate is arithmetic at request time
+  // over what is REALLY loaded (the model file on disk, the manifest's
+  // weights) — see docs/COMFY_TIERS_PLAN.md. One pause covers every
+  // generation in a round; the resume happens ONCE, after the last
+  // command and before the model formulates its reply, so five
+  // variations in one round cost one handoff, not five.
+
+  var gpuCache = null;   // main.js (and the probe) push detectGpu's result
+
+  function setGpuInfo(g) { gpuCache = g; }
+
+  /** What the running chat model really holds, from its file on disk. */
+  function chatLoadedMBNow() {
+    var running = false;
+    try { running = global.Llama.getState() === "running"; } catch (e) {}
+    if (!running) return { running: false, mb: null };
+    try {
+      var p = global.Llama.getCurrentModel();
+      var bytes = global.AEBridge.nodeRequire("fs").statSync(p).size;
+      // Weights plus KV cache and runtime overhead — llama-server's
+      // footprint runs roughly file size + 1-2 GB at 16k context.
+      return { running: true, mb: Math.round(bytes / 1048576) + 1536 };
+    } catch (e2) {
+      return { running: true, mb: null };   // unprovable, not "zero"
+    }
+  }
+
+  /** The generation's weight bill from its workflow manifest, if known. */
+  function genNeedMBFor(manifest) {
+    if (!manifest || !(manifest.models instanceof Array)) return null;
+    var sum = 0, known = false;
+    for (var i = 0; i < manifest.models.length; i++) {
+      var m = manifest.models[i];
+      if (m && !m.optional && typeof m.sizeMB === "number" && m.sizeMB > 0) {
+        sum += m.sizeMB;
+        known = true;
+      }
+    }
+    return known ? sum : null;
+  }
+
+  /**
+   * Poll nvidia-smi until total used VRAM drops by ~half the released
+   * model (or a 10 s timeout — proceed either way, loudly). A fixed
+   * sleep after kill was hope, not verification: the old process
+   * releases its allocation asynchronously.
+   */
+  function waitForVramDrop(baselineMB, expectDropMB, sink, done) {
+    if (typeof baselineMB !== "number") {
+      // nvidia-smi unavailable — the old fixed grace period is all we have.
+      global.setTimeout(done, 1500);
+      return;
+    }
+    var target = Math.max(512,
+      typeof expectDropMB === "number" ? Math.round(expectDropMB / 2) : 512);
+    var waited = 0;
+    var STEP = 500;
+    var LIMIT = 10000;
+    (function poll() {
+      global.Setup.queryVramUsedMB(function (err, usedMB) {
+        if (!err && baselineMB - usedMB >= target) { done(); return; }
+        waited += STEP;
+        if (err || waited >= LIMIT) {
+          if (sink && waited >= LIMIT) {
+            sink("VRAM did not visibly release within 10 s — proceeding " +
+                 "anyway.");
+          }
+          done();
+          return;
+        }
+        global.setTimeout(poll, STEP);
+      });
+    })();
+  }
+
+  var VramArbiter = {
+    paused: false,
+    _opts: null,
+
+    /**
+     * Decide and, when the arithmetic says so, perform the chat→gen
+     * handoff with verified release. cb(refusalResult|null) — a refusal
+     * is a grounded {ok:false} the caller returns as the tool result,
+     * BEFORE any VRAM churn.
+     */
+    ensureFor: function (s, manifest, sink, cb) {
+      if (VramArbiter.paused) { cb(null); return; }   // this round already paid
+      var chat = chatLoadedMBNow();
+      var eff = global.Tiers.effectiveVram(gpuCache, s);
+      var tier = global.Tiers.tierFor(eff.vramGB);
+      var decision = global.Tiers.planHandoff({
+        vramGB: eff.vramGB,
+        headroomGB: tier.headroomGB,
+        chatRunning: chat.running,
+        chatLoadedMB: chat.mb,
+        genNeedMB: genNeedMBFor(manifest),
+        pauseMode: s.comfyPauseLlm,
+        mandatory: tier.mandatory
+      });
+      if (decision.mode === "refuse") {
+        cb({ ok: false, error: decision.reason });
+        return;
+      }
+      if (decision.mode === "concurrent") { cb(null); return; }
+      if (sink) {
+        sink("Pausing the chat model to free VRAM for generation — " +
+             decision.reason + "…");
+      }
+      VramArbiter.paused = true;
+      VramArbiter._opts = { serverPath: s.serverPath,
+        modelPath: s.modelPath, port: s.port, ctxSize: s.ctxSize,
+        gpuLayers: s.gpuLayers };
+      global.Setup.queryVramUsedMB(function (qErr, baseMB) {
+        global.Llama.stop();
+        waitForVramDrop(qErr ? null : baseMB, chat.mb, sink,
+                        function () { cb(null); });
+      });
+    },
+
+    /**
+     * The gen→chat half, run once per round after the last command:
+     * ask ComfyUI to drop its cached models (they otherwise sit in VRAM
+     * and block the chat model from coming back on exclusive tiers),
+     * verify the release, then warm the chat model back up.
+     */
+    resumeIfPaused: function (s, sink, cb) {
+      if (!VramArbiter.paused) { cb(); return; }
+      VramArbiter.paused = false;
+      var opts = VramArbiter._opts;
+      VramArbiter._opts = null;
+      global.Setup.queryVramUsedMB(function (qErr, baseMB) {
+        global.Comfy.freeVram(s.comfyUrl, function () {
+          waitForVramDrop(qErr ? null : baseMB, null, sink, function () {
+            if (sink) sink("Warming the chat model back up…");
+            global.Llama.start(opts, function () { cb(); });
+          });
+        });
+      });
+    }
+  };
+
   var PANEL_TOOLS = {
 
     comfy_status: function (args, cb) {
@@ -707,29 +851,18 @@
         chosen = found;
       }
 
-      // Generation models and the chat LLM fight over VRAM — optionally
-      // stop llama-server for the render and restart it before replying
-      // (the next chat round needs it back). Transparent to the model.
-      var pausedForVram = false;
-      function resumeLlm(done) {
-        if (!pausedForVram) { done(); return; }
-        pausedForVram = false;
-        if (progressSink) progressSink("Restarting the chat model…");
-        global.Llama.start({
-          serverPath: s.serverPath,
-          modelPath: s.modelPath,
-          port: s.port,
-          ctxSize: s.ctxSize,
-          gpuLayers: s.gpuLayers
-        }, function () { done(); });
-      }
+      // Generation models and the chat LLM fight over VRAM. The module
+      // arbiter above decides per job (tier arithmetic over what is
+      // really loaded) and owns the pause; the resume happens once at
+      // the end of the round, so several generations in one round pay
+      // for one handoff. Transparent to the model.
       var enhancedPrompt = null;
       function finish(result) {
         if (result && result.ok && result.data && enhancedPrompt !== null) {
           result.data.promptUsed = enhancedPrompt;
           result.data.enhanced = true;
         }
-        resumeLlm(function () { cb(result); });
+        cb(result);
       }
       function begin() {
       // Boot the hidden backend first if nothing answers at the URL —
@@ -781,24 +914,18 @@
       });
       }
       // Enhancement runs FIRST, while the chat model is still loaded —
-      // pausing for VRAM comes after, and happens regardless.
-      var plan = planEnhancement(s, args.workflow, args.prompt,
-        global.Comfy.readManifest ? global.Comfy.readManifest(chosen.file)
-                                  : null);
+      // the VRAM decision comes after, and a refusal (pause mode
+      // 'never' on a job that cannot fit) comes back as a grounded
+      // error before anything is churned.
+      var manifest = global.Comfy.readManifest
+        ? global.Comfy.readManifest(chosen.file) : null;
+      var plan = planEnhancement(s, args.workflow, args.prompt, manifest);
       var enhanceDone = function () {
-      if (s.comfyPauseLlm !== false &&
-          global.Llama.getState() === "running") {
-        pausedForVram = true;
-        if (progressSink) {
-          progressSink("Pausing the chat model to free VRAM for " +
-                       "generation…");
-        }
-        global.Llama.stop();
-        // Give the old process a beat to release its VRAM.
-        global.setTimeout(begin, 1500);
-      } else {
-        begin();
-      }
+        VramArbiter.ensureFor(s, manifest, progressSink,
+          function (refusal) {
+            if (refusal) { cb(refusal); return; }
+            begin();
+          });
       };
       if (plan.enabled && global.Llama.getState() === "running") {
         if (progressSink) progressSink("Refining the prompt…");
@@ -996,6 +1123,14 @@
    */
   function executeCommands(commands, opts, onEach, done) {
     opts = opts || {};
+    // If a generation paused the chat model this round, warm it back up
+    // BEFORE handing the results on — the very next thing the caller
+    // does with them is ask the model for its reply.
+    var doneInner = done;
+    done = function (results) {
+      VramArbiter.resumeIfPaused(global.Settings.get(), progressSink,
+        function () { doneInner(results); });
+    };
     var dryRun = !!opts.dryRun;
     // A dry run mutates nothing, so there is never anything to roll back.
     var rollbackArmed = !!opts.allowRollback && !dryRun;
@@ -1198,7 +1333,10 @@
     callHostTool: callHostTool,
     callHostBatch: callHostBatch,
     executeCommands: executeCommands,
-    setProgressSink: function (fn) { progressSink = fn; }
+    setGpuInfo: setGpuInfo,
+    setProgressSink: function (fn) { progressSink = fn; },
+    _vramArbiter: VramArbiter,        // exposed for tests
+    _genNeedMBFor: genNeedMBFor       // exposed for tests
   };
 
 })(window);

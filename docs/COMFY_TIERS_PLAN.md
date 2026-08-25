@@ -327,13 +327,39 @@ Wan 2.2 is equally complete, so P4 can measure both.
 
 ## Phases and owners
 
-- **P1 (remote):** `tiers.js` single source + stub tests; refactor
-  `recommendModel` onto it behavior-preserving; add `vramOverrideGB`.
-- **P2 (remote):** the arbiter + stub tests (fake processes, fake
-  clock, simulated OOM); `comfyPauseLlm` tri-state migration; verified
-  VRAM release replacing the 1.5 s sleep.
-- **P3 (remote):** combined first-run recommendation UI; `comfyCatalog`
-  manifest plumbing with PROVISIONAL entries.
+- **P1 (remote): DONE 2026-08-25.** `extension/js/tiers.js` — the
+  T0–T7 table, effectiveVram/resolveTier (vramOverrideGB wins over
+  measured), archOf (pre-ada/ada/blackwell off compute cap; unknown is
+  conservative), entryFits, recommendChat (Setup.recommendModel now
+  delegates, semantics pinned by test-model-catalog), recommendGen
+  (experimental AND slow-on-THIS-card entries are demoted, so 6 GB
+  defaults to SD 1.5 while SDXL stays opt-in). tests/test-tiers.js.
+- **P2 (remote): DONE 2026-08-25.** The arbiter lives in tools.js
+  (VramArbiter) + Setup.queryVramUsedMB + Comfy.freeVram. One pause
+  covers a whole round (N generations = 1 handoff — the per-call
+  restart was the thrash the plan feared); release is POLLED via
+  nvidia-smi until the reading drops (10 s cap, loud timeout, 1.5 s
+  fallback only when nvidia-smi is absent); the gen→chat half calls
+  /free {unload_models:true} before warming chat back up. planHandoff
+  is pure arithmetic over the REAL numbers: the chat .gguf's stat size
+  (+~1.5 GB overhead) and the workflow manifest's non-optional
+  weights; unknowns are unprovable and unprovable pauses. Pause mode
+  "never" refuses un-fittable jobs with the numbers BEFORE any churn.
+  comfyPauseLlm migrated true→auto / false→never (test-settings-
+  migrate). "Lazy restart" resolved differently than sketched: the
+  model must formulate its reply right after the tool returns, so
+  restart-before-reply is load-bearing; the lazy win was moving resume
+  from per-generation to per-round. A panel-side canned reply (skip
+  the model entirely after generation) would save one more reload on
+  exclusive tiers — owner call, not taken silently.
+  tests/test-vram-arbiter.js. NOT yet run against a real GPU — P4.
+- **P3 (remote): DONE 2026-08-25.** AELL.COMFY_CATALOG (version.js,
+  all PROVISIONAL, feed-overridable via update.json comfyCatalog),
+  Setup.comfyCatalog + Setup.recommendSetup, the combined tier line in
+  the ComfyUI settings section, pause tri-state select, VRAM override
+  field, comfyModelRoots (multi-root + per-kind extra_model_paths
+  sections; user folders never restructured). The chat probe now feeds
+  the arbiter real GPU info like main.js does.
 - **P4 (local, the 32 GB 5090):** measure every catalog entry's true
   VRAM (nvidia-smi deltas), verify the exclusive handoff actually
   releases memory both directions, OOM recovery, lazy restart. The

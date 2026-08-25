@@ -100,35 +100,41 @@
   }
 
   /**
-   * Pick the best catalog model for this machine: the largest entry whose
-   * VRAM floor the GPU clears; the cpuDefault entry when there's no NVIDIA
-   * GPU (or VRAM is unknown); the smallest entry as a last resort.
+   * Current total VRAM in use (all processes), in MB. The arbiter polls
+   * this to VERIFY a handoff actually released memory — a fixed sleep
+   * after kill is hope, not verification. cb(err, usedMB).
+   */
+  function queryVramUsedMB(cb) {
+    ensureNode();
+    child_process.execFile("nvidia-smi",
+      ["--query-gpu=memory.used", "--format=csv,noheader,nounits"],
+      { timeout: 10000 },
+      function (err, stdout) {
+        if (err) { cb(err); return; }
+        var line = String(stdout || "").split(/\r?\n/)[0].trim();
+        if (!/^\d+$/.test(line)) {
+          cb(new Error("nvidia-smi returned no memory figure"));
+          return;
+        }
+        cb(null, parseInt(line, 10));
+      });
+  }
+
+  /**
+   * Pick the best catalog model for this machine. The logic lives in
+   * tiers.js (the single tier source both catalogs derive from); this
+   * export keeps the historical call shape and feeds it the live
+   * settings so vramOverrideGB is honored everywhere at once.
    */
   function recommendModel(catalog, gpu) {
-    if (!catalog || catalog.length === 0) return null;
-    var best = null;
-    var i;
-    function smallest() {
-      var s = catalog[0];
-      for (var j = 1; j < catalog.length; j++) {
-        if (catalog[j].sizeMB < s.sizeMB) s = catalog[j];
-      }
-      return s;
-    }
-    var vram = gpu && typeof gpu.vramGB === "number" ? gpu.vramGB : null;
-    if (gpu && gpu.hasNvidia && vram) {
-      for (i = 0; i < catalog.length; i++) {
-        if (vram >= catalog[i].minVramGB &&
-            (!best || catalog[i].sizeMB > best.sizeMB)) {
-          best = catalog[i];
-        }
-      }
-      return best || smallest();   // tiny GPU: lightest model, not CPU pick
-    }
-    for (i = 0; i < catalog.length; i++) {
-      if (catalog[i].cpuDefault) best = catalog[i];
-    }
-    return best || smallest();
+    return global.Tiers.recommendChat(catalog, gpu, currentSettings());
+  }
+
+  function currentSettings() {
+    try {
+      return (global.Settings && global.Settings.get())
+        || {};
+    } catch (e) { return {}; }
   }
 
   // --------------------------------------------------------------- http(s)
@@ -473,6 +479,38 @@
       return manifest.modelCatalog;
     }
     return global.AELL.MODEL_CATALOG;
+  }
+
+  /**
+   * The live GENERATION catalog: hosted override, else the built-in
+   * list. Feed-driven exactly like the chat catalog, so corrections
+   * (URLs, measured VRAM figures) ship without a panel release.
+   */
+  function comfyCatalog(manifest) {
+    if (manifest && manifest.comfyCatalog instanceof Array &&
+        manifest.comfyCatalog.length > 0) {
+      return manifest.comfyCatalog;
+    }
+    return global.AELL.COMFY_CATALOG || [];
+  }
+
+  /**
+   * The combined, tier-derived first-run recommendation: one detection,
+   * one tier, chat AND generation picks from it, plus the honest
+   * one-line copy. Pure over its inputs (gpu from detectGpu, manifest
+   * from checkForUpdates) so it is stub-testable.
+   */
+  function recommendSetup(manifest, gpu) {
+    var s = currentSettings();
+    var chat = global.Tiers.recommendChat(modelCatalog(manifest), gpu, s);
+    var gen = global.Tiers.recommendGen(comfyCatalog(manifest), gpu, s);
+    var res = global.Tiers.resolveTier(gpu, s);
+    return {
+      tier: res.tier, vramGB: res.vramGB, overridden: res.overridden,
+      arch: res.arch, chat: chat, gen: gen,
+      copy: global.Tiers.describeSetup({ gpu: gpu, settings: s,
+                                         chat: chat, gen: gen })
+    };
   }
 
   /**
@@ -832,10 +870,13 @@
   global.Setup = {
     ensureDataDirs: ensureDataDirs,
     detectGpu: detectGpu,
+    queryVramUsedMB: queryVramUsedMB,
     bootstrapEngine: bootstrapEngine,
     downloadModel: downloadModel,
     modelCatalog: modelCatalog,
+    comfyCatalog: comfyCatalog,
     recommendModel: recommendModel,
+    recommendSetup: recommendSetup,
     checkForUpdates: checkForUpdates,
     detectInstallKind: detectInstallKind,
     installUpdate: installUpdate,
