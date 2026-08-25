@@ -310,7 +310,7 @@
         }
       },
       "widgets_values": [
-        "dickbutt"
+        "a red vintage bicycle leaning on a brick wall"
       ],
       "color": "#222",
       "bgcolor": "#000",
@@ -372,7 +372,7 @@
         }
       },
       "widgets_values": [
-        "a cat with a hat"
+        "a lighthouse on a cliff at golden hour"
       ],
       "color": "#222",
       "bgcolor": "#000",
@@ -1135,7 +1135,7 @@
       "mode": 0,
       "inputs": [],
       "outputs": [],
-      "title": "READ ME  ·  how the toggle works",
+      "title": "READ ME  \u00b7  how the toggle works",
       "properties": {
         "Node name for S&R": "Note",
         "ue_properties": {
@@ -1145,7 +1145,7 @@
         }
       },
       "widgets_values": [
-        "PROMPT ENHANCER TOGGLE\n\nENHANCER ON  (default)\n  Ollama rewrites the rough idea in node 495 (widget 2) into a\n  Krea 2 prompt. This box is ignored.\n\nENHANCER OFF — manual prompt\n  Bypass the PROMPT ENHANCER group. Easiest way: use the\n  Fast Groups Bypasser (node 490) and untick \"PROMPT ENHANCER\".\n  Or select nodes 494 / 495 / 496 and hit Ctrl+B.\n\n  With the enhancer bypassed its STRING output goes null, and\n  Any Switch falls through to the MANUAL PROMPT box. Whatever\n  you type there goes to the encoders verbatim — no reformatting.\n\nThe PreviewAny node still shows the prompt that was ACTUALLY used,\neither way. If it ever shows the wrong one, you've bypassed the\nswitch instead of the enhancer.\n\nWHY A SWITCH AND NOT JUST A BYPASS\n  Bypassing node 495 on its own leaves the CLIPTextEncode text\n  inputs with nothing connected and the graph errors. OllamaGenerate\n  has no STRING input for a bypass to pass through. The switch is\n  what makes the toggle safe.\n\nORDER MATTERS\n  Any Switch takes the FIRST non-null input. Enhancer is any_01,\n  manual is any_02 — so the enhancer wins whenever it's active.\n  Don't reorder them.\n"
+        "PROMPT ENHANCER TOGGLE\n\nENHANCER ON  (default)\n  Ollama rewrites the rough idea in node 495 (widget 2) into a\n  Krea 2 prompt. This box is ignored.\n\nENHANCER OFF \u2014 manual prompt\n  Bypass the PROMPT ENHANCER group. Easiest way: use the\n  Fast Groups Bypasser (node 490) and untick \"PROMPT ENHANCER\".\n  Or select nodes 494 / 495 / 496 and hit Ctrl+B.\n\n  With the enhancer bypassed its STRING output goes null, and\n  Any Switch falls through to the MANUAL PROMPT box. Whatever\n  you type there goes to the encoders verbatim \u2014 no reformatting.\n\nThe PreviewAny node still shows the prompt that was ACTUALLY used,\neither way. If it ever shows the wrong one, you've bypassed the\nswitch instead of the enhancer.\n\nWHY A SWITCH AND NOT JUST A BYPASS\n  Bypassing node 495 on its own leaves the CLIPTextEncode text\n  inputs with nothing connected and the graph errors. OllamaGenerate\n  has no STRING input for a bypass to pass through. The switch is\n  what makes the toggle safe.\n\nORDER MATTERS\n  Any Switch takes the FIRST non-null input. Enhancer is any_01,\n  manual is any_02 \u2014 so the enhancer wins whenever it's active.\n  Don't reorder them.\n"
       ],
       "color": "#432",
       "bgcolor": "#653"
@@ -1209,7 +1209,7 @@
           ]
         }
       ],
-      "title": "Any Switch  ·  01 = enhancer, 02 = manual",
+      "title": "Any Switch  \u00b7  01 = enhancer, 02 = manual",
       "properties": {
         "Node name for S&R": "Any Switch (rgthree)",
         "cnr_id": "rgthree-comfy",
@@ -2149,7 +2149,7 @@
           ]
         }
       ],
-      "title": "MANUAL PROMPT  ·  used when the enhancer is bypassed",
+      "title": "MANUAL PROMPT  \u00b7  used when the enhancer is bypassed",
       "properties": {
         "Node name for S&R": "PrimitiveStringMultiline",
         "ue_properties": {
@@ -2159,7 +2159,7 @@
         }
       },
       "widgets_values": [
-        "a beautful middle class home in a nice neighborhood surrounded by a clean green lawn and apple trees. "
+        "a calm placeholder prompt - the panel injects the real one"
       ],
       "color": "#432",
       "bgcolor": "#653"
@@ -2318,7 +2318,7 @@
           "links": null
         }
       ],
-      "title": "Ollama V2 — Krea2 Rewriter",
+      "title": "Ollama V2 \u2014 Krea2 Rewriter",
       "properties": {
         "Node name for S&R": "OllamaGenerateV2",
         "ue_properties": {
@@ -2328,7 +2328,7 @@
         }
       },
       "widgets_values": [
-        "You rewrite a rough image idea into a Krea 2 prompt. Output ONLY the finished prompt. No preamble, no explanation, no markdown fences, no negative prompt.\n\nHOW KREA 2 READS A PROMPT:\nIts text encoder is a vision-language model that reads flowing sentences, not keyword lists. Write as if describing a finished photograph to someone over the phone. Prose, spatial relationships and possessives intact.\n\nHARD RULES — never violate these:\n- Output prose sentences. No comma-separated tag lists, no \"masterpiece, best quality, 8k, highly detailed\" — the encoder ignores that and it costs you conditioning space.\n- Never use (word:1.3) weighting. Scaling one term distorts the whole sentence rather than lifting that element. If something must dominate, put it first in the prompt, restate it once in different words, or name it more precisely.\n- Every trigger word listed under ACTIVE LORA TRIGGERS must appear verbatim, exactly once, early in the prompt.\n- Ignore any line beginning with # in ACTIVE LORA TRIGGERS. Those are disabled, not active.\n- Never write a negative prompt or a list of things to avoid. Guidance is disabled in this workflow, so negatives do nothing. Express exclusions positively: not \"no clutter\" but \"a bare concrete floor and an empty wall behind her.\"\n- Lead with the subject. First clause names who or what the image is of.\n- Do not invent a specific identity that was not given.\n- 60-130 words. Detail density matters more than length; every sentence must add visual information.\n- do not use words to describe wetness, moisture or liquid unless explicity used in the user prompt\n\nORDER — roughly this sequence, as connected prose rather than labelled fields:\n1. Subject and what they are doing\n2. Appearance, wardrobe, materials worn or held\n3. Environment and what is behind and around them\n4. Light: its source, direction, hardness, colour\n5. Camera: shot size, angle, lens character, depth of field\n6. Medium and grade: film stock, rendering style, colour treatment, grain\n\nWRITE WELL — these decide whether the output is worth generating:\n- Prefer the concrete noun to the adjective. \"Rain beads on the shoulder of her coat\" beats \"atmospheric wet scene.\"\n- Name materials and textures: wet cobblestone, brushed steel, damp wool, chipped enamel, cracked vinyl, worn leather. Surfaces are how the model knows what light to make.\n- Use precise colour vocabulary instead of emphasis: oxblood, slate, ochre, bone, gunmetal, sodium orange.\n- Say what the light is doing, not what mood it makes: a hard edge thrown across brick, a practical lamp blowing out one side of frame, light falling through slats onto the floor.\n- Name a real lens behaviour when it helps: shallow depth of field with the background dissolved, wide angle with slight barrel distortion at the edges, compressed telephoto flattening the background.\n- Give the frame one specific detail nothing else has — a loose thread catching light, condensation on a glass, a chipped nail. One, not three.\n- Anchor spatial relationships: behind her, to the left of frame, resting against, half out of frame.\n- If the idea implies a genre, name the medium concretely: 35mm portrait film with visible grain, risograph print with misregistered ink, Technicolor three-strip, flat digital documentary capture.\n- Never describe intent, emotion or story. A tightened grip and weight on the back foot do the work that \"she looks nervous\" cannot.\n\nACTIVE LORA TRIGGERS: \n# low poly N64 from OOT style\n# cryptik_vess\n# a worm's eye view of \n\nASPECT: portrait\n\nUSER IDEA:",
+        "You rewrite a rough image idea into a Krea 2 prompt. Output ONLY the finished prompt. No preamble, no explanation, no markdown fences, no negative prompt.\n\nHOW KREA 2 READS A PROMPT:\nIts text encoder is a vision-language model that reads flowing sentences, not keyword lists. Write as if describing a finished photograph to someone over the phone. Prose, spatial relationships and possessives intact.\n\nHARD RULES \u2014 never violate these:\n- Output prose sentences. No comma-separated tag lists, no \"masterpiece, best quality, 8k, highly detailed\" \u2014 the encoder ignores that and it costs you conditioning space.\n- Never use (word:1.3) weighting. Scaling one term distorts the whole sentence rather than lifting that element. If something must dominate, put it first in the prompt, restate it once in different words, or name it more precisely.\n- Every trigger word listed under ACTIVE LORA TRIGGERS must appear verbatim, exactly once, early in the prompt.\n- Ignore any line beginning with # in ACTIVE LORA TRIGGERS. Those are disabled, not active.\n- Never write a negative prompt or a list of things to avoid. Guidance is disabled in this workflow, so negatives do nothing. Express exclusions positively: not \"no clutter\" but \"a bare concrete floor and an empty wall behind her.\"\n- Lead with the subject. First clause names who or what the image is of.\n- Do not invent a specific identity that was not given.\n- 60-130 words. Detail density matters more than length; every sentence must add visual information.\n- do not use words to describe wetness, moisture or liquid unless explicity used in the user prompt\n\nORDER \u2014 roughly this sequence, as connected prose rather than labelled fields:\n1. Subject and what they are doing\n2. Appearance, wardrobe, materials worn or held\n3. Environment and what is behind and around them\n4. Light: its source, direction, hardness, colour\n5. Camera: shot size, angle, lens character, depth of field\n6. Medium and grade: film stock, rendering style, colour treatment, grain\n\nWRITE WELL \u2014 these decide whether the output is worth generating:\n- Prefer the concrete noun to the adjective. \"Rain beads on the shoulder of her coat\" beats \"atmospheric wet scene.\"\n- Name materials and textures: wet cobblestone, brushed steel, damp wool, chipped enamel, cracked vinyl, worn leather. Surfaces are how the model knows what light to make.\n- Use precise colour vocabulary instead of emphasis: oxblood, slate, ochre, bone, gunmetal, sodium orange.\n- Say what the light is doing, not what mood it makes: a hard edge thrown across brick, a practical lamp blowing out one side of frame, light falling through slats onto the floor.\n- Name a real lens behaviour when it helps: shallow depth of field with the background dissolved, wide angle with slight barrel distortion at the edges, compressed telephoto flattening the background.\n- Give the frame one specific detail nothing else has \u2014 a loose thread catching light, condensation on a glass, a chipped nail. One, not three.\n- Anchor spatial relationships: behind her, to the left of frame, resting against, half out of frame.\n- If the idea implies a genre, name the medium concretely: 35mm portrait film with visible grain, risograph print with misregistered ink, Technicolor three-strip, flat digital documentary capture.\n- Never describe intent, emotion or story. A tightened grip and weight on the back foot do the work that \"she looks nervous\" cannot.\n\nACTIVE LORA TRIGGERS: \n# low poly N64 from OOT style\n# cryptik_vess\n# a worm's eye view of \n\nASPECT: portrait\n\nUSER IDEA:",
         "",
         false,
         false,

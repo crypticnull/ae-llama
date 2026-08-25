@@ -703,7 +703,12 @@
           gpuLayers: s.gpuLayers
         }, function () { done(); });
       }
+      var enhancedPrompt = null;
       function finish(result) {
+        if (result && result.ok && result.data && enhancedPrompt !== null) {
+          result.data.promptUsed = enhancedPrompt;
+          result.data.enhanced = true;
+        }
         resumeLlm(function () { cb(result); });
       }
       function begin() {
@@ -719,7 +724,7 @@
         outDir: s.comfyOutDir,
         timeoutSec: s.comfyTimeoutSec,
         params: {
-          prompt: args.prompt,
+          prompt: enhancedPrompt !== null ? enhancedPrompt : args.prompt,
           negative: args.negative,
           width: args.width,
           height: args.height,
@@ -755,6 +760,12 @@
       });
       });
       }
+      // Enhancement runs FIRST, while the chat model is still loaded —
+      // pausing for VRAM comes after, and happens regardless.
+      var plan = planEnhancement(s, args.workflow, args.prompt,
+        global.Comfy.readManifest ? global.Comfy.readManifest(chosen.file)
+                                  : null);
+      var enhanceDone = function () {
       if (s.comfyPauseLlm !== false &&
           global.Llama.getState() === "running") {
         pausedForVram = true;
@@ -767,6 +778,24 @@
         global.setTimeout(begin, 1500);
       } else {
         begin();
+      }
+      };
+      if (plan.enabled && global.Llama.getState() === "running") {
+        if (progressSink) progressSink("Refining the prompt…");
+        global.Llama.chat({ port: s.port, temperature: 0.6 },
+          plan.messages, plan.schema, function () {},
+          function (err, parsed) {
+            // cb(err, parsedObject, rawText) — the schema constrains the
+            // shape, so parsed.prompt is there whenever err is not.
+            if (!err && parsed && parsed.prompt) {
+              enhancedPrompt = String(parsed.prompt);
+            }
+            // Any failure falls back to the user's own words — a raw
+            // prompt generates; a dead round does not.
+            enhanceDone();
+          });
+      } else {
+        enhanceDone();
       }
     }
   };
@@ -1054,6 +1083,50 @@
   }
 
   /**
+   * Decide whether and how to enhance a generation prompt, as data.
+   *
+   * Pure on purpose: the async wiring in comfy_generate stays thin, and
+   * THIS — the decision and the messages — is what the stub test pins.
+   *
+   * Enhancement rewrites the user's rough idea into the workflow's own
+   * prompt format using the CHAT model, which is already resident when
+   * comfy_generate fires (it just emitted the tool call). That is why
+   * this costs one completion, not a model load: the Ollama enhancer
+   * branch inside the owner's workflows loaded a separate 27B model per
+   * generation, and stays bypassed forever.
+   *
+   * Per-workflow setting comfyEnhance: {name: bool}; ABSENT means ON.
+   * No manifest instruction -> a generic one, so user-added workflows
+   * still get sensible enhancement until they ship a manifest.
+   */
+  var ENHANCE_SCHEMA = {
+    type: "object",
+    properties: { prompt: { type: "string" } },
+    required: ["prompt"]
+  };
+
+  function planEnhancement(settings, workflowName, rawPrompt, manifest) {
+    var map = (settings && settings.comfyEnhance) || {};
+    if (map[workflowName] === false) {
+      return { enabled: false, why: "off for this workflow" };
+    }
+    var instruction = (manifest && manifest.enhancerInstruction) ||
+      ("You rewrite a rough idea into a rich, specific generation " +
+       "prompt for an image/video model. Keep every concrete detail " +
+       "the user gave; add camera, light and composition only where " +
+       "they left gaps. Output ONLY the finished prompt.");
+    return {
+      enabled: true,
+      schema: ENHANCE_SCHEMA,
+      messages: [
+        { role: "system", content: instruction +
+          "\n\nAnswer as JSON: {\"prompt\": \"<the finished prompt>\"}" },
+        { role: "user", content: String(rawPrompt || "") }
+      ]
+    };
+  }
+
+  /**
    * Fit the chat history into a character budget by dropping the OLDEST
    * entries first. The transcript the user sees is untouched — this only
    * bounds what the MODEL is sent.
@@ -1098,6 +1171,7 @@
   global.Tools = {
     TOOL_DEFS: TOOL_DEFS,
     fitHistory: fitHistory,
+    planEnhancement: planEnhancement,
     RESPONSE_SCHEMA: RESPONSE_SCHEMA,
     buildSystemPrompt: buildSystemPrompt,
     fetchProjectState: fetchProjectState,

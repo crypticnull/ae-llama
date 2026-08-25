@@ -166,6 +166,14 @@
           <span>Pause chat model during generation (frees VRAM,
             auto-resumes)</span>
         </label>
+        <div class="enhance-block">
+          <span class="enhance-title">Prompt enhancement (per workflow)</span>
+          <div id="comfy-enhance-list">
+            <!-- one checkbox per workflow, filled by main.js: the chat
+                 model rewrites the rough idea into that workflow's own
+                 prompt format before generating -->
+          </div>
+        </div>
 
         <div class="drawer-actions">
           <button id="btn-comfy-install"

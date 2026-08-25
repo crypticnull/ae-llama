@@ -1578,3 +1578,20 @@ real:**
 - Harness: NOT run from here. Stubbed suite 22/22. NO bump — the trim
   changes every chat request, so it ships after the probe re-run
   (WORKPLAN 2d) proves steps 9–10 complete.
+
+## 2026-08-25 (remote) — per-workflow prompt enhancement + t2v/i2v first
+
+- Changed: planEnhancement (tools.js, pure + stub-tested) wired into
+  comfy_generate BEFORE the VRAM pause; Comfy.readManifest; comfyEnhance
+  per-workflow setting (absent = ON, only opt-outs stored); toggle list
+  in the ComfyUI settings section; manifests now carry the enhancer
+  instructions lifted from the workflows' own Ollama branches (3545 and
+  7728 chars); bundled workflows sanitized of leftover typed prompts,
+  enforced by tests/test-prompt-enhance.js.
+- Harness: NOT run from here. Stubbed suite 23/23. NO bump — the
+  generation path changed; local verifies the enhance round + toggle UI
+  before it ships (fold into the 2d probe re-run pass).
+- Notes: enhancement costs ONE completion on the already-loaded chat
+  model, not a load/unload — the Ollama branch it replaces loaded a
+  separate 27B per generation. r2v deferred per owner; t2v/i2v files
+  pinned by 2d; owner asked to export a t2v/i2v H3 workflow.

@@ -112,6 +112,17 @@
   // ------------------------------------------------------------- workflows
 
   /** List *.json workflow templates in dir (non-recursive). */
+  /* The optional sidecar next to a workflow: <name>.manifest.json.
+   * Carries the enhancer instruction and dependency lists for bundled
+   * workflows; a user-added workflow without one simply returns null. */
+  function readManifest(workflowFile) {
+    ensureNode();
+    try {
+      var mf = String(workflowFile).replace(/\.json$/i, ".manifest.json");
+      return JSON.parse(fs.readFileSync(mf, "utf8"));
+    } catch (e) { return null; }
+  }
+
   function listWorkflows(dir) {
     ensureNode();
     var out = [];
@@ -852,6 +863,7 @@
 
   global.Comfy = {
     listWorkflows: listWorkflows,
+    readManifest: readManifest,
     loadWorkflow: loadWorkflow,
     injectParams: injectParams,
     generate: generate,

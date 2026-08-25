@@ -9,6 +9,61 @@
   var $ = function (id) { return document.getElementById(id); };
 
   var els = {};
+  /*
+   * One line + checkbox per workflow in the ComfyUI section: "enhance
+   * prompts with the chat model" per workflow. Checked (the default)
+   * means the rough idea is rewritten into that workflow's own prompt
+   * format before generating — one extra completion on the ALREADY
+   * LOADED chat model, not a model load; the Ollama enhancer inside the
+   * bundled workflows loaded its own 27B per run and stays bypassed.
+   * Only opt-OUTs are stored, so new workflows default to on.
+   */
+  function renderEnhanceToggles(s) {
+    if (!els.comfyEnhanceList) return;
+    els.comfyEnhanceList.innerHTML = "";
+    var flows = [];
+    try {
+      flows = global.Comfy.listWorkflows(s.comfyWorkflowsDir) || [];
+    } catch (e) {}
+    if (!flows.length) {
+      var none = document.createElement("div");
+      none.className = "enhance-hint";
+      none.textContent = "No workflows found yet — they appear here " +
+        "once the generation backend is set up.";
+      els.comfyEnhanceList.appendChild(none);
+      return;
+    }
+    var map = s.comfyEnhance || {};
+    for (var i = 0; i < flows.length; i++) {
+      var label = document.createElement("label");
+      label.className = "check";
+      var box = document.createElement("input");
+      box.type = "checkbox";
+      box.checked = map[flows[i].name] !== false;
+      box.setAttribute("data-workflow", flows[i].name);
+      var span = document.createElement("span");
+      span.textContent = flows[i].name;
+      label.appendChild(box);
+      label.appendChild(span);
+      els.comfyEnhanceList.appendChild(label);
+    }
+  }
+
+  function collectEnhanceToggles() {
+    var map = {};
+    if (!els.comfyEnhanceList) return map;
+    var boxes = els.comfyEnhanceList.querySelectorAll(
+      "input[data-workflow]");
+    for (var i = 0; i < boxes.length; i++) {
+      // Store only the opt-OUTs: absent = on, so a newly added workflow
+      // starts enhanced without a settings migration.
+      if (!boxes[i].checked) {
+        map[boxes[i].getAttribute("data-workflow")] = false;
+      }
+    }
+    return map;
+  }
+
   var busy = false;
   // One-time notice when history first outgrows the model's window;
   // reset only by clearing the chat, not per message.
@@ -771,6 +826,7 @@
     els.setComfyModels.value = s.comfyModelsDir || "";
     els.setComfyTimeout.value = s.comfyTimeoutSec;
     els.setComfyPauseLlm.checked = s.comfyPauseLlm !== false;
+    renderEnhanceToggles(s);
     els.setAutoUpdate.checked = !!s.autoInstallUpdates;
   }
 
@@ -793,6 +849,7 @@
       comfyModelsDir: els.setComfyModels.value,
       comfyTimeoutSec: parseInt(els.setComfyTimeout.value, 10) || 600,
       comfyPauseLlm: !!els.setComfyPauseLlm.checked,
+      comfyEnhance: collectEnhanceToggles(),
       autoInstallUpdates: !!els.setAutoUpdate.checked
     });
   }
@@ -830,6 +887,7 @@
       setComfyModels: $("set-comfy-models"),
       setComfyTimeout: $("set-comfy-timeout"),
       setComfyPauseLlm: $("set-comfy-pause-llm"),
+      comfyEnhanceList: $("comfy-enhance-list"),
       setAutoUpdate: $("set-auto-update"),
       starterRow: $("starter-row"),
       starterSelect: $("starter-select"),
