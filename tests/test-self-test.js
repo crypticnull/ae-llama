@@ -91,6 +91,18 @@ function capLayers(compName, all, args) {
 // canned happy-path results per tool
 let createCount = 0;
 const createdComps = [];
+// Solid SOURCES, mutable: deleting a comp does not delete these (the
+// field bug), and the suite's new cleanup deletes them by id. Seeded
+// with the accumulation observed in the real scratch project — a few of
+// the suite's own ST-named leftovers drowning in generic solids.
+const solidSources = [];
+for (let i = 1; i <= 400; i++) {
+  solidSources.push({ name: "Blue Solid " + i, id: 100 + i,
+                      type: "footage" });
+}
+["ST Bat A", "ST Bat A", "ST Batch", "ST RB Orphan"].forEach((nm, i) => {
+  solidSources.push({ name: nm, id: 900 + i, type: "footage" });
+});
 let camProbeReads = 0;
 let textStyle = null;
 // The ordering steps read back what the previous step wrote, so the canned
@@ -140,6 +152,10 @@ let batSolids = [];
 // The rollback comp: the canned host has to model the UNDO too, or a
 // step could "pass" while the debris it is checking for never existed.
 let rbLayers = [];
+// The comp-rename rig, and the rename the canned host remembers making.
+const RN = { host: "ST RN Host 2021", util: "ST RN Util 2019",
+             linked: "ST RN Linked 2020", plain: "ST RN Plain 2019" };
+let rnRenamedTo = null;
 const inRbComp = (a) => a && /Rollback/.test(a.comp || "");
 let batSolidFx = {};
 let batSolidPos = {};
@@ -227,14 +243,32 @@ function cannedOk(tool, args) {
       return { tool: t, layers: L.length, succeeded: L.length,
                failures: "" };
     }
+    case "delete_item": {
+      // Faithful on the point the cleanup measures: deleting works by
+      // name OR id, a deleted item leaves every later listing, and a
+      // missing target is a grounded error, not a silent ok.
+      const key = args && args.item;
+      const ci = createdComps.indexOf(String(key));
+      if (ci !== -1) { createdComps.splice(ci, 1); return { deleted: key }; }
+      for (let i = 0; i < solidSources.length; i++) {
+        if (solidSources[i].id === key ||
+            solidSources[i].name === String(key)) {
+          const nm = solidSources[i].name;
+          solidSources.splice(i, 1);
+          return { deleted: nm };
+        }
+      }
+      return { __err: "Project item not found: " + key };
+    }
     case "get_project_info": {
       // A scratch project the size of the real one: a few comps drowning
       // in accumulated solid footage. Comps come first out of the cap.
+      // Reads the LIVE solidSources list, so a delete_item really removes
+      // an item from later listings — the fidelity the cleanup steps
+      // depend on.
       const items = createdComps.map((nm, i) => ({ name: nm, id: i + 1,
                                                    type: "comp" }));
-      for (let i = 1; i <= 400; i++) {
-        items.push({ name: "Blue Solid " + i, id: 100 + i, type: "footage" });
-      }
+      for (const so of solidSources) items.push(Object.assign({}, so));
       const limit = listLimit(args && args.limit);
       const total = items.length;
       let shown = items;
@@ -321,6 +355,71 @@ function cannedOk(tool, args) {
       }
       return capLayers(args && args.comp,
         ordStack.map((nm, i) => ({ index: i + 1, name: nm })), args);
+    }
+    case "precompose": {
+      // The new comp is a real project item — the cleanup deletes it.
+      const nm = (args && args.name) || "Pre-comp 1";
+      createdComps.push(nm);
+      return { precomp: nm, id: 900,
+               layersMoved: ((args && args.layers) || []).length };
+    }
+    // The comp-rename rig: one plain comp, one nested (a utility), one
+    // named by an expression. The canned host has to remember the rename
+    // it performed, or the idempotency step would be asking nothing.
+    case "audit_comp_usage": {
+      const plainNow = rnRenamedTo || RN.plain;
+      const mk = (name, over) => Object.assign(
+        { name, id: 0, numLayers: 0, usedIn: [], usedInCount: 0,
+          inRenderQueue: false, expressionRefs: [], expressionRefCount: 0,
+          looksLikeUtility: false }, over || {});
+      const comps = [
+        mk(RN.host, { numLayers: 2 }),
+        mk(RN.util, { usedIn: [RN.host], usedInCount: 1,
+                      looksLikeUtility: true }),
+        mk(RN.linked, { expressionRefCount: 1, expressionRefs: [{
+          kind: "comp()", inComp: RN.host, layer: "ST RN Expr",
+          property: "Opacity",
+          excerpt: 'comp("' + RN.linked + '").duration * 0 + 100' }] }),
+        mk(plainNow)
+      ];
+      return { comps, compsFound: comps.length,
+               scanned: { expressionsFound: 1, scanMs: 1 } };
+    }
+    case "rename_comps": {
+      const dry = !(args && args.dryRun === false);
+      const plainNow = rnRenamedTo || RN.plain;
+      const already = /^REV\d\d_/.test(plainNow);
+      const plan = [
+        { comp: plainNow,
+          newName: already ? null : "REV19_" + plainNow,
+          action: already ? "skip" : "rename",
+          reason: already ? "Already carries the prefix — nothing to do"
+                          : "Not referenced by any expression" },
+        { comp: RN.util, newName: null, action: "skip",
+          reason: "Looks like a utility comp — it is nested in " + RN.host +
+            " and is not in the render queue. Skipped by default; pass " +
+            "includeUtility:true to rename it anyway." },
+        { comp: RN.linked, newName: null, action: "skip",
+          reason: "An expression names this comp as a string (comp()). " +
+            "AE does NOT rewrite those on rename." }
+      ];
+      const willRename = plan.filter(p => p.action === "rename").length;
+      const out = { dryRun: dry, rule: (args && args.rule) || "rev-prefix",
+        plan, compsConsidered: plan.length, willRename,
+        skipped: plan.length - willRename };
+      if (dry) { out.note = "PREVIEW ONLY — nothing was renamed."; return out; }
+      const renamed = [];
+      if (willRename) {
+        renamed.push(plainNow + " -> REV19_" + plainNow);
+        rnRenamedTo = "REV19_" + plainNow;
+        // The rename is visible to every later listing and delete — the
+        // project item itself changed name, exactly as in AE.
+        const at = createdComps.indexOf(plainNow);
+        if (at !== -1) createdComps[at] = rnRenamedTo;
+      }
+      out.renamed = renamed;
+      out.renamedCount = renamed.length;
+      return out;
     }
     case "grid_layout":
       // The rig it builds DRIVES Position and ignores whatever value sits
@@ -734,8 +833,14 @@ SelfTest.run({
     assert(res.passed === res.total,
            "happy path: " + res.passed + "/" + res.total + " passed" +
            (res.passed === res.total ? "" : " -- " + res.text));
-    assert(calls[calls.length - 1] === "delete_item",
-           "cleanup delete_item runs last");
+    // The suite used to END on a delete; now it ends on a verification
+    // READ that proves nothing of the suite's remains. The deletes come
+    // right before it.
+    assert(calls[calls.length - 1] === "get_project_info",
+           "the final call verifies the project is clean (got " +
+           calls[calls.length - 1] + ")");
+    assert(calls.lastIndexOf("delete_item") > calls.length - 30,
+           "the delete cleanup runs at the end, just before verification");
     assert(/Self-test: \d+\/\d+ passed/.test(res.text),
            "report carries the summary line");
 
@@ -747,7 +852,7 @@ SelfTest.run({
     ordStack = [];
     maskKeys = {};
     batchLayers = 0; batchFx = {}; batchBlur = null;
-    batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = [];
+    batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null;
     SelfTest.run({
       callHostTool(tool, args, cb) {
         if (tool === "grid_layout") {
@@ -777,7 +882,7 @@ SelfTest.run({
         ordStack = [];
         maskKeys = {};
         batchLayers = 0; batchFx = {}; batchBlur = null;
-        batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = [];
+        batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null;
         SelfTest.run({
           callHostTool(tool, args, cb) {
             // Never refuse anything -- the old permissive host.

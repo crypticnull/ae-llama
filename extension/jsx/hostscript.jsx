@@ -624,6 +624,374 @@ AELL_TOOLS.rename_item = function (args) {
   return AELL_okay({ oldName: old, name: it.name });
 };
 
+// ------------------------------------------- comp rename audit + renamer
+/*
+ * Bringing a project's comp names onto a naming convention is a job the
+ * panel could not do safely, because renaming a comp can BREAK it.
+ *
+ * Measured in AE 2026 before this was written (WORKPLAN-LOG 2026-08-25):
+ *
+ *  - AE does NOT rewrite comp("Old Name") strings when a comp is
+ *    renamed. The expression breaks and AE DISABLES it.
+ *  - The trap: after the break, prop.value still returns the same
+ *    number. Only prop.expressionError reveals it. Anything checking
+ *    values would report a clean rename over a broken project.
+ *  - Renaming BACK re-resolves it, so the damage is recoverable — but
+ *    only if somebody notices, which is the whole problem.
+ *  - item.usedIn lists DIRECT parents only (not transitive), collapses
+ *    a comp used twice in one parent to one entry, and still counts a
+ *    DISABLED layer.
+ *  - A comp used as a LAYER is an object reference: it survives a
+ *    rename untouched. Only the string forms are at risk.
+ *  - Cost: the expression walk is the expensive half — ~133 ms for 100
+ *    layers, ~1.28 s for 1000, linear. usedIn over 1173 items: 3 ms.
+ */
+
+/* Every property carrying an expression, project-wide. One walk, reused
+ * by both tools, because it is the part that costs. */
+function AELL_walkExpressions(group, hits, compName, layerName) {
+  for (var i = 1; i <= group.numProperties; i++) {
+    var p = group.property(i);
+    var expr = "";
+    try { if (p.canSetExpression) expr = p.expression; } catch (eE) {}
+    if (expr) {
+      hits.push({ comp: compName, layer: layerName, property: p.name,
+                  expression: String(expr) });
+    }
+    var deeper = 0;
+    try { deeper = p.numProperties || 0; } catch (eG) {}
+    if (deeper > 0) {
+      try { AELL_walkExpressions(p, hits, compName, layerName); }
+      catch (eR) {}
+    }
+  }
+}
+
+function AELL_expressionIndex() {
+  var proj = app.project, hits = [], i, j;
+  for (i = 1; i <= proj.numItems; i++) {
+    var it = proj.item(i);
+    if (!(it instanceof CompItem)) continue;
+    for (j = 1; j <= it.numLayers; j++) {
+      var L = it.layer(j);
+      try { AELL_walkExpressions(L, hits, it.name, L.name); } catch (eL) {}
+    }
+  }
+  return hits;
+}
+
+/* Which comps a single expression string names.
+ *
+ * Two kinds, and the difference matters to the human reading a preview:
+ *   "comp()"  — comp("Name"), the form measured to break on rename.
+ *   "quoted"  — the name appears as some other quoted string, e.g.
+ *               var n = "Name"; comp(n). Also breaks, just less legibly.
+ * Matching only QUOTED occurrences is what keeps a comp called "BG" from
+ * matching the word "background" in an unrelated expression. */
+function AELL_expressionNames(expr, name) {
+  var out = null;
+  var q = ['"', "'"];
+  var i, needle, at;
+  for (i = 0; i < q.length; i++) {
+    needle = "comp(" + q[i] + name + q[i] + ")";
+    if (String(expr).indexOf(needle) !== -1) return "comp()";
+  }
+  for (i = 0; i < q.length; i++) {
+    needle = q[i] + name + q[i];
+    at = String(expr).indexOf(needle);
+    if (at !== -1) out = "quoted";
+  }
+  return out;
+}
+
+var AELL_RENAME_EXCERPT = 90;
+
+/* Facts about every comp, with no judgment attached. */
+AELL_TOOLS.audit_comp_usage = function (args) {
+  var proj = app.project;
+  if (!proj) return AELL_err("No project open");
+  var only = "";
+  if (typeof args.comp !== "undefined" && args.comp !== null &&
+      args.comp !== "") {
+    // Resolve through the same path every other tool uses: aliases are
+    // honoured, and a bad name throws the grounded "comps in this
+    // project are …" error rather than a silent empty list.
+    only = AELL_resolveComp(args.comp).name;
+  }
+  var t0 = 0;
+  try { t0 = $.hiresTimer; } catch (eT) {}
+
+  var exprs = AELL_expressionIndex();
+
+  // Render-queue membership, by identity — a queue item follows its comp
+  // through a rename, so the name is never the thing to compare.
+  var queued = [], qi;
+  try {
+    for (qi = 1; qi <= proj.renderQueue.numItems; qi++) {
+      queued.push(proj.renderQueue.item(qi).comp);
+    }
+  } catch (eQ) {}
+  function inQueue(c) {
+    for (var k = 0; k < queued.length; k++) if (queued[k] === c) return true;
+    return false;
+  }
+
+  var comps = [], i, j;
+  for (i = 1; i <= proj.numItems; i++) {
+    var it = proj.item(i);
+    if (!(it instanceof CompItem)) continue;
+    if (only && it.name !== only) continue;
+
+    var uses = [];
+    try {
+      var u = it.usedIn;
+      for (j = 0; j < u.length; j++) uses.push(u[j].name);
+    } catch (eU) {}
+
+    var refs = [], refCount = 0;
+    for (j = 0; j < exprs.length; j++) {
+      var kind = AELL_expressionNames(exprs[j].expression, it.name);
+      if (!kind) continue;
+      refCount++;
+      if (refs.length < 5) {
+        refs.push({ kind: kind, inComp: exprs[j].comp,
+                    layer: exprs[j].layer, property: exprs[j].property,
+                    excerpt: exprs[j].expression.slice(0,
+                              AELL_RENAME_EXCERPT) });
+      }
+    }
+
+    var rq = inQueue(it);
+    comps.push({ name: it.name, id: it.id, numLayers: it.numLayers,
+      usedIn: uses, usedInCount: uses.length, inRenderQueue: rq,
+      expressionRefs: refs, expressionRefCount: refCount,
+      // A comp that lives inside others and is never rendered on its own
+      // LOOKS like a utility. That is a fact about its position, not a
+      // verdict — the human decides.
+      looksLikeUtility: (uses.length > 0 && !rq) });
+  }
+
+  var ms = 0;
+  try { ms = Math.round($.hiresTimer / 1000); } catch (eT2) {}
+  var out = { comps: comps, compsFound: comps.length,
+    scanned: { expressionsFound: exprs.length, scanMs: ms } };
+  if (!only && comps.length > AELL_LIST_LIMIT) {
+    out.comps = comps.slice(0, AELL_LIST_LIMIT);
+    out.note = "Showing " + AELL_LIST_LIMIT + " of " + comps.length +
+      " comps. rename_comps sees them ALL — this cap is only on what is " +
+      "printed back to you.";
+  }
+  return AELL_okay(out);
+};
+
+/* The owner-confirmed convention, applied deterministically.
+ *
+ * Year detection is CONSERVATIVE on purpose: 4-digit 19xx/20xx only, and
+ * never when digits touch it on either side. "v26" is a version, and
+ * "20190412" is a datestamp, not the year 2019 — neither becomes a
+ * prefix. Returns {prefix} or {flag} for a name no rule can decide. */
+function AELL_revPrefix(name) {
+  var s = String(name);
+  if (/^REV\d\d_/.test(s) || s.indexOf("REV_NO-YEAR_") === 0) {
+    return { already: true };
+  }
+  var years = [], i, ch, before, after;
+  for (i = 0; i + 4 <= s.length; i++) {
+    var four = s.substring(i, i + 4);
+    if (!/^(19|20)\d\d$/.test(four)) continue;
+    before = i > 0 ? s.charAt(i - 1) : "";
+    after = (i + 4) < s.length ? s.charAt(i + 4) : "";
+    if (/[0-9]/.test(before) || /[0-9]/.test(after)) continue;
+    var seen = false;
+    for (var k = 0; k < years.length; k++) if (years[k] === four) seen = true;
+    if (!seen) years.push(four);
+  }
+  if (years.length > 1) {
+    return { flag: "Two different years in the name (" +
+      years.join(", ") + ") — no guess made, rename this one by hand" };
+  }
+  if (years.length === 1) {
+    return { prefix: "REV" + years[0].substring(2, 4) + "_" };
+  }
+  return { prefix: "REV_NO-YEAR_" };
+}
+
+AELL_TOOLS.rename_comps = function (args) {
+  var proj = app.project;
+  if (!proj) return AELL_err("No project open");
+  var rule = String(args.rule || "rev-prefix");
+  if (rule !== "rev-prefix" && rule !== "map") {
+    return AELL_err("'rule' must be 'rev-prefix' (derive names from the " +
+      "convention) or 'map' (you supply every new name in 'renames')");
+  }
+  var map = args.renames || null;
+  if (rule === "map" && (!map || typeof map !== "object")) {
+    return AELL_err("rule 'map' needs 'renames': {\"Old Name\": " +
+                    "\"New Name\", ...}");
+  }
+  // dryRun DEFAULTS TO TRUE. Renaming is the one thing here that can
+  // break a project, so it never happens without being asked for twice.
+  var dryRun = (args.dryRun === false) ? false : true;
+  var includeUtility = (args.includeUtility === true);
+
+  var wanted = null, i, j;
+  if (AELLJSON.isArray(args.comps) && args.comps.length) {
+    wanted = {};
+    for (i = 0; i < args.comps.length; i++) wanted[String(args.comps[i])] = true;
+  }
+
+  var audit = AELL_TOOLS.audit_comp_usage({});
+  if (!audit.ok) return audit;
+  // audit_comp_usage caps what it PRINTS; re-run the scan unbounded here.
+  var exprs = AELL_expressionIndex();
+
+  var all = [], taken = {};
+  for (i = 1; i <= proj.numItems; i++) {
+    var it = proj.item(i);
+    taken[it.name] = true;
+    if (it instanceof CompItem) all.push(it);
+  }
+
+  var plan = [], willRename = 0;
+  for (i = 0; i < all.length; i++) {
+    var c = all[i];
+    if (wanted && !wanted[c.name]) continue;
+
+    var row = { comp: c.name, newName: null, action: "skip", reason: "" };
+
+    // 1. expression references — the HARD skip, measured to break.
+    var refs = [], refKind = "";
+    for (j = 0; j < exprs.length; j++) {
+      var kind = AELL_expressionNames(exprs[j].expression, c.name);
+      if (!kind) continue;
+      if (!refKind) refKind = kind;
+      if (refs.length < 3) {
+        refs.push(exprs[j].comp + " / " + exprs[j].layer + " / " +
+                  exprs[j].property);
+      }
+    }
+    if (refs.length) {
+      row.reason = "An expression names this comp as a string (" + refKind +
+        ") in " + refs.join(", ") + ". AE does NOT rewrite those on " +
+        "rename — the expression breaks and is disabled, and the layer's " +
+        "value keeps reading normally, so nobody notices. Rename it by " +
+        "hand and fix the expression in the same pass.";
+      row.expressionRefs = refs;
+      plan.push(row);
+      continue;
+    }
+
+    // 2. what the convention says this comp should be called
+    var newName;
+    if (rule === "map") {
+      if (!Object.prototype.hasOwnProperty.call(map, c.name)) continue;
+      newName = String(map[c.name]);
+      if (!newName) {
+        row.reason = "Empty new name in 'renames'";
+        plan.push(row);
+        continue;
+      }
+    } else {
+      var verdict = AELL_revPrefix(c.name);
+      if (verdict.already) {
+        row.reason = "Already carries the prefix — nothing to do";
+        plan.push(row);
+        continue;
+      }
+      if (verdict.flag) {
+        row.reason = verdict.flag;
+        plan.push(row);
+        continue;
+      }
+      newName = verdict.prefix + c.name;
+    }
+    row.newName = newName;
+
+    if (newName === c.name) {
+      row.reason = "New name is the same as the old one";
+      plan.push(row);
+      continue;
+    }
+
+    // 3. utility comps: skipped by default, the human can say otherwise
+    var uses = [];
+    try {
+      var u = c.usedIn;
+      for (j = 0; j < u.length; j++) uses.push(u[j].name);
+    } catch (eU2) {}
+    var rq = false;
+    try {
+      for (j = 1; j <= proj.renderQueue.numItems; j++) {
+        if (proj.renderQueue.item(j).comp === c) { rq = true; break; }
+      }
+    } catch (eQ2) {}
+    if (uses.length && !rq && !includeUtility) {
+      row.reason = "Looks like a utility comp — it is nested in " +
+        uses.join(", ") + " and is not in the render queue. Skipped by " +
+        "default; pass includeUtility:true to rename it anyway.";
+      row.usedIn = uses;
+      plan.push(row);
+      continue;
+    }
+
+    // 4. name collisions
+    if (taken[newName]) {
+      row.reason = "A project item is already called '" + newName + "'";
+      plan.push(row);
+      continue;
+    }
+
+    row.action = "rename";
+    row.reason = uses.length
+      ? "Nested in " + uses.join(", ") + ", and renaming it is safe: a " +
+        "comp used as a LAYER is an object reference, not a name."
+      : "Not referenced by any expression";
+    taken[newName] = true;
+    willRename++;
+    plan.push(row);
+  }
+
+  var out = { dryRun: dryRun, rule: rule, plan: plan,
+    compsConsidered: plan.length, willRename: willRename,
+    skipped: plan.length - willRename };
+
+  if (dryRun) {
+    out.note = "PREVIEW ONLY — nothing was renamed. Show this table to " +
+      "the user and let them confirm, then call again with " +
+      "dryRun:false to apply exactly this plan.";
+    return AELL_okay(out);
+  }
+
+  var renamed = [], failed = [];
+  for (i = 0; i < plan.length; i++) {
+    if (plan[i].action !== "rename") continue;
+    var target = null;
+    for (j = 1; j <= proj.numItems; j++) {
+      var cand = proj.item(j);
+      if ((cand instanceof CompItem) && cand.name === plan[i].comp) {
+        target = cand;
+        break;
+      }
+    }
+    if (!target) {
+      failed.push(plan[i].comp + ": vanished between preview and apply");
+      continue;
+    }
+    try {
+      target.name = plan[i].newName;
+      renamed.push(plan[i].comp + " -> " + plan[i].newName);
+    } catch (eR2) {
+      failed.push(plan[i].comp + ": " + eR2.message);
+    }
+  }
+  out.renamed = renamed;
+  out.renamedCount = renamed.length;
+  if (failed.length) out.failed = failed;
+  out.note = renamed.length + " comp(s) renamed in ONE undo group — a " +
+    "single Ctrl+Z puts every one of them back.";
+  return AELL_okay(out);
+};
+
 AELL_TOOLS.delete_item = function (args) {
   var it = AELL_findItem(args.item);
   if (!it) return AELL_err("Project item not found: " + args.item);
@@ -4152,7 +4520,12 @@ var AELL_MUTATING = {
   set_property: true, set_keyframes: true, remove_keyframes: true,
   set_track_matte: true,
   set_mask: true, set_mask_path: true, add_shape_content: true,
-  for_each_layer: true
+  for_each_layer: true,
+  // audit_comp_usage is READ-only and deliberately absent. rename_comps
+  // is here even though its DEFAULT dry run changes nothing: the group it
+  // opens is then empty, and an empty group registers no undo step at all
+  // (measured), so a preview still costs the user nothing.
+  rename_comps: true
 };
 
 // --------------------------------------------------------------- entry point

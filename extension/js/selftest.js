@@ -2077,6 +2077,191 @@
         args: function (ctx) { return { item: ctx.rbComp }; },
         check: function () { return true; } },
 
+      // ---- comp-rename audit + bulk rename. A three-comp rig: one
+      // plain, one nested (a utility), one named by an expression.
+      //
+      // Measured in AE 2026 before these tools were written: AE does NOT
+      // rewrite comp("Old Name") when a comp is renamed — the expression
+      // breaks and is DISABLED — and the trap is that prop.value keeps
+      // reading normally afterwards, so only expressionError reveals it.
+      // Hence the hard skip, and hence a preview before anything moves.
+      { name: "create the rename host comp",
+        tool: "create_comp",
+        args: { name: "ST RN Host 2021", width: 320, height: 240,
+                duration: 4, frameRate: 30 },
+        check: function (d, ctx) { ctx.rnHost = d.name; return true; } },
+
+      { name: "create the plain and linked rename comps",
+        batch: function () {
+          return [
+            { tool: "create_comp",
+              args: { name: "ST RN Plain 2019", width: 320, height: 240,
+                      duration: 4, frameRate: 30 } },
+            { tool: "create_comp",
+              args: { name: "ST RN Linked 2020", width: 320, height: 240,
+                      duration: 4, frameRate: 30 } }
+          ];
+        },
+        check: function (rows, ctx) {
+          if (!rows[0].ok || !rows[1].ok) {
+            return "could not build the rig: " +
+                   (rows[0].error || rows[1].error);
+          }
+          ctx.rnPlain = rows[0].data.name;
+          ctx.rnLinked = rows[1].data.name;
+          return true;
+        } },
+
+      { name: "nest a comp inside the host, so it reads as a utility",
+        batch: function (ctx) {
+          return [
+            { tool: "add_solid",
+              args: { comp: ctx.rnHost, name: "ST RN Inner",
+                      color: [1, 0, 0], width: 40, height: 40 } },
+            { tool: "precompose",
+              args: { comp: ctx.rnHost, layers: ["ST RN Inner"],
+                      name: "ST RN Util 2019" } },
+            { tool: "add_solid",
+              args: { comp: ctx.rnHost, name: "ST RN Expr",
+                      color: [0, 1, 0], width: 40, height: 40 } },
+            { tool: "set_expression",
+              args: { comp: ctx.rnHost, layer: "ST RN Expr",
+                      property: "transform/Opacity",
+                      expression: 'comp("ST RN Linked 2020").duration ' +
+                                  '* 0 + 100' } }
+          ];
+        },
+        check: function (rows, ctx) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + i + " failed: " + rows[i].error;
+          }
+          ctx.rnUtil = rows[1].data.precomp;
+          return true;
+        } },
+
+      { name: "audit_comp_usage reports the nesting and the expression",
+        tool: "audit_comp_usage",
+        args: {},
+        check: function (d, ctx) {
+          var by = {}, i;
+          for (i = 0; i < d.comps.length; i++) by[d.comps[i].name] = d.comps[i];
+          var util = by[ctx.rnUtil], linked = by[ctx.rnLinked],
+              plain = by[ctx.rnPlain];
+          if (!util || !linked || !plain) {
+            return "the audit did not report the rig comps";
+          }
+          if (util.usedIn.join(",").indexOf(ctx.rnHost) === -1) {
+            return "the nested comp does not name its parent: " +
+                   util.usedIn.join(", ");
+          }
+          if (!util.looksLikeUtility) return "the nested comp is not marked";
+          if (linked.expressionRefCount < 1) {
+            return "the expression reference was not found";
+          }
+          if (linked.expressionRefs[0].kind !== "comp()") {
+            return "wrong reference kind: " + linked.expressionRefs[0].kind;
+          }
+          return plain.expressionRefCount === 0 ||
+                 "the plain comp was wrongly reported as referenced";
+        } },
+
+      { name: "the rename preview plans one and skips two, changing nothing",
+        tool: "rename_comps",
+        args: function (ctx) {
+          return { comps: [ctx.rnPlain, ctx.rnUtil, ctx.rnLinked] };
+        },
+        check: function (d, ctx) {
+          if (d.dryRun !== true) return "dryRun did not default to true";
+          var by = {}, i;
+          for (i = 0; i < d.plan.length; i++) by[d.plan[i].comp] = d.plan[i];
+          if (!by[ctx.rnPlain]) {
+            return "the plain comp is missing from the plan entirely";
+          }
+          if (by[ctx.rnPlain].action !== "rename") {
+            // Nearly always a leftover REV19_ comp from an aborted run
+            // colliding with the name this step wants. Say so, rather
+            // than leaving the next person to guess.
+            return "the plain comp was not planned for rename — " +
+                   by[ctx.rnPlain].reason;
+          }
+          if (by[ctx.rnPlain].newName !== "REV19_" + ctx.rnPlain) {
+            return "wrong new name: " + by[ctx.rnPlain].newName;
+          }
+          if (by[ctx.rnLinked].action !== "skip") {
+            return "the expression-referenced comp was not skipped";
+          }
+          if (by[ctx.rnUtil].action !== "skip") {
+            return "the utility comp was not skipped";
+          }
+          return d.willRename === 1 ||
+                 "expected exactly one rename, got " + d.willRename;
+        } },
+
+      { name: "and the preview really did not rename anything",
+        tool: "get_project_info",
+        args: { limit: 0 },
+        check: function (d, ctx) {
+          var names = [], i;
+          for (i = 0; i < d.items.length; i++) names.push(d.items[i].name);
+          return names.join(",").indexOf("REV19_ST RN Plain") === -1 ||
+                 "the dry run renamed a comp";
+        } },
+
+      { name: "executing renames ONLY the plain comp",
+        tool: "rename_comps",
+        args: function (ctx) {
+          return { comps: [ctx.rnPlain, ctx.rnUtil, ctx.rnLinked],
+                   dryRun: false };
+        },
+        check: function (d, ctx) {
+          if (d.renamedCount !== 1) {
+            return "expected 1 rename, got " + d.renamedCount + ": " +
+                   (d.renamed || []).join(", ");
+          }
+          ctx.rnPlainNew = "REV19_" + ctx.rnPlain;
+          return d.renamed[0].indexOf(ctx.rnPlainNew) !== -1 ||
+                 "renamed the wrong comp: " + d.renamed[0];
+        } },
+
+      { name: "the linked comp still answers to its ORIGINAL name",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.rnLinked }; },
+        check: function (d, ctx) {
+          return d.name === ctx.rnLinked ||
+                 "the expression-referenced comp was renamed to " + d.name;
+        } },
+
+      { name: "running it again renames nothing (idempotent)",
+        tool: "rename_comps",
+        args: function (ctx) {
+          return { comps: [ctx.rnPlainNew, ctx.rnUtil, ctx.rnLinked],
+                   dryRun: false };
+        },
+        check: function (d) {
+          return d.renamedCount === 0 ||
+                 "a second run renamed " + d.renamedCount + " comp(s)";
+        } },
+
+      { name: "cleanup: delete the renamed plain comp",
+        tool: "delete_item",
+        args: function (ctx) { return { item: ctx.rnPlainNew }; },
+        check: function () { return true; } },
+
+      { name: "cleanup: delete the rename host comp",
+        tool: "delete_item",
+        args: function (ctx) { return { item: ctx.rnHost }; },
+        check: function () { return true; } },
+
+      { name: "cleanup: delete the nested utility comp",
+        tool: "delete_item",
+        args: function (ctx) { return { item: ctx.rnUtil }; },
+        check: function () { return true; } },
+
+      { name: "cleanup: delete the linked comp",
+        tool: "delete_item",
+        args: function (ctx) { return { item: ctx.rnLinked }; },
+        check: function () { return true; } },
+
       { name: "cleanup: delete the batch-call comp",
         tool: "delete_item",
         args: function (ctx) { return { item: ctx.unComp }; },
@@ -2115,7 +2300,67 @@
       { name: "cleanup: delete the scratch comp",
         tool: "delete_item",
         args: function (ctx) { return { item: ctx.comp }; },
-        check: function () { return true; } }
+        check: function () { return true; } },
+
+      // Deleting a comp does NOT delete the solid SOURCES its layers
+      // used — they stay in the project panel, so every suite run left
+      // its solids behind and a scratch project accumulated dozens of
+      // duplicates (field-observed: 45 items, visibly doubling). Find
+      // every leftover footage item in the suite's own namespace and
+      // queue its deletion for the step below. Names outside "ST " are
+      // never touched — that prefix is the suite's, nothing else's.
+      { name: "cleanup: find the solid sources the suite left behind",
+        tool: "get_project_info",
+        args: { limit: 0 },
+        check: function (d, ctx) {
+          ctx.leftoverIds = [];
+          for (var i = 0; i < d.items.length; i++) {
+            var it = d.items[i];
+            if (it.type === "footage" && it.name.indexOf("ST ") === 0) {
+              ctx.leftoverIds.push(it.id);
+            }
+          }
+          return true;
+        } },
+
+      { name: "cleanup: delete them (by id — names duplicate)",
+        batch: function (ctx) {
+          var ids = ctx.leftoverIds || [];
+          var cmds = [];
+          for (var i = 0; i < ids.length; i++) {
+            cmds.push({ tool: "delete_item",
+                        args: { item: ids[i] } });
+          }
+          // An empty batch is refused by the host; a no-op read keeps
+          // the step well-formed on an already-clean project.
+          if (!cmds.length) {
+            cmds.push({ tool: "get_project_info", args: { limit: 1 } });
+          }
+          return cmds;
+        },
+        check: function (rows, ctx) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) {
+              return "leftover " + (i + 1) + " of " + rows.length +
+                     " not deleted: " + rows[i].error;
+            }
+          }
+          return true;
+        } },
+
+      { name: "cleanup: nothing of the suite's remains in the project",
+        tool: "get_project_info",
+        args: { limit: 0 },
+        check: function (d) {
+          var stale = [];
+          for (var i = 0; i < d.items.length; i++) {
+            if (d.items[i].name.indexOf("ST ") === 0) {
+              stale.push(d.items[i].name);
+            }
+          }
+          return stale.length === 0 ||
+                 "the suite left items behind: " + stale.join(", ");
+        } }
     ];
   }
 

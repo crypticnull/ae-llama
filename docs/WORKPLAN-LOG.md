@@ -1376,3 +1376,112 @@ frontmost.** Clean, no dialog, no dead viewer:
   `capability-report.js --check` compares against its own LF output, so
   it reports STALE on a clean tree. Green in CI (Linux), red for every
   local pass. Worth normalizing the comparison rather than the file.
+
+## 2026-08-25 — FAST-TRACK: comp-rename audit tools (probe, then build)
+
+- Changed: `extension/jsx/hostscript.jsx` (`AELL_walkExpressions`,
+  `AELL_expressionIndex`, `AELL_expressionNames`, `AELL_revPrefix`, and
+  the two tools `audit_comp_usage` + `rename_comps`);
+  `extension/js/tools.js` (both tool docs, plus a prompt block on
+  renaming many comps); `extension/js/selftest.js` (12 steps on a
+  3-comp rig); `scripts/ae-selftest.jsx` (per-call progress trace, see
+  below); `tests/test-comp-rename.js` (new, 60 checks) and
+  `tests/test-self-test.js` (canned host models the rig).
+- Harness: **171/171 real AE** (was 158/158). Stubbed suite 21 files,
+  all green. Bumped 0.9.15 — the patch-bump exception this item
+  pre-authorised.
+
+**Probe first. All four questions answered, and one of them mattered:**
+
+- **AE does NOT rewrite `comp("Old Name")` when a comp is renamed.**
+  Measured: the string is untouched, and `expressionError` becomes
+  "Expression disabled … comp named 'PR_Target' is missing or does not
+  exist." So rule 3 stands exactly as written and the skip is HARD.
+- **THE TRAP, and the reason this tool exists:** after the break,
+  `prop.value` still returns the same number (100 before, 100 after).
+  Nothing about reading the property reveals the damage; only
+  `expressionError` does. A rename tool that checked values would
+  report a clean sweep over a project it had quietly broken.
+- Renaming BACK re-resolves it (`errorAfterRestore` empty), so the
+  damage is recoverable — but only if somebody notices, which is
+  exactly what nobody does.
+- A comp used as a LAYER is an object reference: it survives a rename
+  untouched, and the layer's `source.name` follows. Only string forms
+  are at risk, which is why nesting is a soft skip and expressions a
+  hard one.
+- `item.usedIn` returns DIRECT parents only — NOT transitive (leaf used
+  in mid, mid used in top: leaf.usedIn is [mid]). A comp used twice in
+  one parent collapses to one entry, and a DISABLED layer still counts.
+- Render-queue items follow their comp through a rename, so membership
+  is answered by identity, never by name.
+- Cost: the expression walk is the expensive half — 133 ms for 100
+  layers, 1276 ms for 1000, linear, and byte-stable across runs.
+  `usedIn` over 1173 items: 3 ms. So the audit is affordable, but a
+  very large real project will take seconds; the tool reports its own
+  `scanMs` so nobody has to guess.
+
+**Design calls made (worth a second opinion):**
+
+- `rename_comps` DERIVES the new names itself (`rule: "rev-prefix"`,
+  the default) rather than taking a map from the model. The rules are
+  precise and owner-confirmed, and year detection across 100 names is
+  exactly what a small local model gets wrong. `rule: "map"` is still
+  there for full manual control.
+- Expression matching only counts QUOTED occurrences of the name —
+  `comp("BG")` and `"BG"` match, the word "background" does not.
+  Matching bare substrings would have made a comp called "BG"
+  unrenameable for spurious reasons.
+- `dryRun` defaults to TRUE and the system prompt tells the model to
+  report the preview and STOP. Renaming is the one thing here that can
+  break a project, so it never happens without being asked twice.
+
+**Two things that cost time, recorded so they do not cost it again:**
+
+1. **My PROBE nested undo groups** — an outer `beginUndoGroup` around
+   inner `beginUndoGroup`/`endUndoGroup` pairs. AE does not nest them,
+   and it surfaced on a LATER script run as a modal: "After Effects
+   warning: Undo group mismatch, will attempt to fix." That modal
+   blocked the harness completely (exit 4, no results file). Nothing
+   shipped has this bug — `AELL_call`, `AELL_callBatch` and
+   `for_each_layer` never nest — but never nest them in a probe either.
+2. **The harness could not say WHICH step blocked it.** 171 steps, one
+   modal, no results file, no clue. `scripts/ae-selftest.jsx` now
+   writes a breadcrumb per host call to `<results>.progress`, flushed
+   immediately; the last line is the culprit. Confirmed working: 171
+   lines, and the rename block reads
+   `batch[add_solid,precompose,add_solid,set_expression]` ->
+   `audit_comp_usage` -> `rename_comps` x3.
+
+- Also: an aborted run left `REV19_ST RN Plain 2019` behind, which then
+  collided with the name the next run wanted and failed four steps with
+  "the plain comp was not planned for rename". The check now prints the
+  plan's own reason, so that failure explains itself next time.
+- FOR THE REMOTE SESSION — pre-existing, not from this item: the
+  self-test leaves its SOLID FOOTAGE items in the project panel on
+  every run. It deletes the comps but not the solid sources, so the
+  scratch project accumulates duplicates (45 items, visibly doubling:
+  "ST Bat A | ST Bat A | ST Batch | ST Batch | …"). Harmless to the
+  suite, untidy for anyone whose project it runs in. Worth a cleanup
+  step that removes unused solids the suite created.
+
+## 2026-08-25 (remote) — the suite now cleans up its solid sources
+
+- Changed: `extension/js/selftest.js` — three new final steps: list every
+  footage item in the suite's own "ST " namespace, delete them by ID
+  (names duplicate after runs, ids do not), then a verification READ
+  asserting nothing ST-prefixed remains in the project at all. Only the
+  suite's namespace is touched — a user's own solids are never candidates.
+  `tests/test-self-test.js` — the canned host now models what the check
+  depends on: delete_item really removes items from later listings (by
+  name or id, grounded error when missing), precompose adds its comp,
+  rename_comps renames the underlying item. It is seeded with the
+  observed leftovers (ST Bat A twice, etc.) so the cleanup path runs
+  against the field bug, not an already-clean project.
+- Harness: NOT run from here (chat-probe holds the machine). Stubbed
+  suite 21/21. NO version bump — this changes suite behavior in the
+  user's open project, so it ships after the local session watches one
+  real run delete the right things and nothing else.
+- FOR THE LOCAL SESSION: next harness run, confirm the final three steps
+  pass AND eyeball the project panel afterwards — the 45-item
+  accumulation should be gone, and nothing that is not ST-prefixed may
+  have been touched. Then patch-bump.

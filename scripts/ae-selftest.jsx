@@ -75,7 +75,30 @@
     $.evalFile(new File(repo + "/extension/js/selftest.js"));
     var SelfTest = $.global.window.SelfTest;
 
+    /* A breadcrumb per host call, flushed to disk immediately.
+     *
+     * When AE opens a modal mid-suite (an expression warning, an undo
+     * group mismatch) the script STOPS, no results file is ever written,
+     * and the harness can only report "blocked on a dialog" with no idea
+     * which of 170 steps caused it. The last line in this file is that
+     * step. Cheap: one small write per tool call. */
+    var traceFile = outPath + ".progress";
+    var traceN = 0;
+    function trace(what) {
+      traceN++;
+      try {
+        var f = new File(traceFile);
+        f.encoding = "UTF-8";
+        f.open("a");
+        f.writeln(traceN + " " + what);
+        f.close();
+      } catch (e) {}
+    }
+    try { var old = new File(traceFile); if (old.exists) old.remove(); }
+    catch (eT) {}
+
     function callHostTool(tool, args, cb) {
+      trace(tool);
       var raw = $.global.AELL_call(tool, AELLJSON.stringify(args || {}));
       cb(AELLJSON.parse(raw));
     }
@@ -84,6 +107,10 @@
     // command a single Ctrl+Z.
     function callHostBatch(cmds, opts, cb) {
       if (typeof opts === "function") { cb = opts; opts = {}; }
+      var label = [], ci;
+      for (ci = 0; ci < cmds.length; ci++) label.push(cmds[ci].tool);
+      trace("batch[" + label.join(",") + "]" +
+            ((opts && opts.rollback) ? " rollback" : ""));
       var raw = $.global.AELL_callBatch(AELLJSON.stringify(cmds),
                                         AELLJSON.stringify(opts || {}));
       var obj = AELLJSON.parse(raw);
