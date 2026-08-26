@@ -37,8 +37,8 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `comfy_list_workflows` | List available ComfyUI generation workflow templates by name | no | panel | — | — |
 | `comfy_status` | Check the local ComfyUI instance (online? queue depth?) | no | panel | — | — |
 | `create_comp` | Create a composition and open it | yes | host | 1 | 17 |
-| `create_folder` | Create a project-panel folder | yes | host | 1 | — |
-| `delete_item` | Delete a project item | yes | host | 1 | 17 |
+| `create_folder` | Create a project-panel folder | yes | host | 1 | 6 |
+| `delete_item` | Delete a project item | yes | host | 1 | 18 |
 | `delete_layer` | Delete a layer from a comp | yes | host | — | 2 |
 | `distribute_property` | Distribute a property VALUE across layers | yes | host | 1 | 5 |
 | `duplicate_comp` | Duplicate a composition | yes | host | — | — |
@@ -80,7 +80,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 **Coverage gaps (computed):**
 
 - Host tools with NO stubbed test: `add_camera`, `add_control`, `add_keyframe`, `add_marker`, `add_shape_layer`, `add_solid`, `add_to_render_queue`, `apply_effect`, `apply_expression_preset`, `delete_layer`, `duplicate_comp`, `import_file`, `link_property`, `organize_project`, `precompose`, `set_effect_param`, `set_expression`, `set_layer_3d`, `set_layer_timing`
-- Host tools never exercised by the self-test suite: `add_control`, `add_keyframe`, `add_marker`, `add_to_render_queue`, `apply_expression_preset`, `create_folder`, `duplicate_comp`, `import_file`, `list_effects`, `list_properties`, `move_to_folder`, `organize_project`, `remove_keyframes`, `rename_item`, `set_comp_setting`, `set_layer_3d`
+- Host tools never exercised by the self-test suite: `add_control`, `add_keyframe`, `add_marker`, `add_to_render_queue`, `apply_expression_preset`, `duplicate_comp`, `import_file`, `list_effects`, `list_properties`, `move_to_folder`, `organize_project`, `remove_keyframes`, `rename_item`, `set_comp_setting`, `set_layer_3d`
 
 <!-- END GENERATED TOOL INVENTORY -->
 
