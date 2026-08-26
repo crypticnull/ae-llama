@@ -1808,3 +1808,77 @@ measurement pass (handoff smoke, /free support probe, refusal in the
 field, catalog deltas, the override ladder, OOM recovery). No version
 bump here: this ships to a panel only after the local session verifies
 the handoff on the 5090 and bumps.
+
+## 2026-08-26 (local) — item 1: the harness answers the dialog it inherits
+
+**The pass opened red.** `run-ae-selftest.ps1` exited 4 on a wordless
+381x237 `#32770` before running a single step. PrintWindow read it:
+"After Effects / Save changes to 'Untitled ...'". That is exactly the
+blocker filed on 2026-08-21 as "a call for someone else", with both ways
+out already written down and neither taken. It has been quietly costing
+the unattended loop one whole pass every time AE is left dirty. So this
+pass took the first of them.
+
+**Changed** (dev-only files -- nothing under `extension/` moved, so
+**no version bump**: the panel ships `extension/` alone, and bumping for
+a harness fix would publish a feed identical to the installed build):
+
+- `scripts/lib/ae-dialog-triage.ps1` -- new `Get-AellStaleDialogPlan`.
+  The prompt is drawn by AE, so Win32 reads no text out of it and it can
+  never be identified by what it SAYS; this decides from the situation.
+  Four rails, and each one is a case in the test: only the `unreadable`
+  verdict (a popup with WORDS is a human's question and is never
+  touched), never while a script is executing (the progress window's
+  teardown flicker is wordless too and leaves on its own), never during
+  startup (with no application window up the wordless thing is AE's
+  crash-recovery prompt, a different question), and only when a `#32770`
+  was actually found -- the probe's own "no popup text could be read"
+  note has no window behind it to answer.
+- `scripts/run-ae-selftest.ps1` -- the probe's `Add-Type` and
+  `Get-BlockingDialog` moved ABOVE the launch, then
+  `Clear-AellStaleDialog` runs, then AE starts. Ordering is the safety
+  rail and the test asserts it: before the launch, any dialog on screen
+  is provably not ours. `AellWin.CloseWordlessDialogs` repeats the rail
+  in Win32 rather than trusting its caller -- top-level `#32770` of AE's
+  own process, empty title, no child text that is not an `OS_*`
+  container -- and POSTS WM_CLOSE so a wedged dialog cannot wedge the
+  harness. Two rounds, 2s apart, then it gives up and lets the wait loop
+  report it as before. `-NoDismissStale` opts out. The exit-4 message no
+  longer claims nothing can be scripted around it.
+- `tests/test-selftest-runner.js` -- seven `Get-AellStaleDialogPlan`
+  cases over the same captured-from-AE probe samples the file already
+  carried, plus runner assertions that the answer happens before the
+  launch, that the wait loop still judges this run's own popups after
+  it, and that no `Stop-Process` ever creeps in (a hard kill is what
+  raises the startup recovery dialog next launch).
+
+**Harness: 187/187, exit 0** -- four times. Twice from a wedged AE with
+the new path announcing "answered 1 dialog(s) / cleared." first. Stubbed
+suite 28/28.
+
+**One thing measured that does NOT match the assumption, recorded
+because it will mislead the next pass otherwise.** To test recovery I
+re-created the prompt by posting WM_CLOSE to AE's application window.
+It produces the same signature (wordless 381x237 `#32770`, main window
+disabled) and the new code answers it correctly -- but that synthetic
+one does NOT block `-r`: with `-NoDismissStale` the suite still ran
+187/187 with the dialog up, and the dialog was still up afterwards. The
+one that opened this pass DID block, for the full 8-poll patience.
+So the save prompt has two states, and only the one raised when AE is
+being torn down with its launcher (session-end, not a plain close
+request) actually swallows scripts. What is proven: the dismissal fires
+on a real AE save prompt and clears it. The inescapable variant was
+cleared by this exact WM_CLOSE too -- by hand, at the top of this pass,
+before the code existed, which is what unblocked the first green run.
+I could not re-create it on demand without a hard kill, which is
+forbidden here for the reason bug 3 documented.
+
+**Still open, unchanged:** the second way out (have the harness leave AE
+running rather than being torn down with its launcher) would stop the
+prompt being raised at all. Recovery is cheaper and is now in; the
+prevention is still a design call for the remote session.
+
+**Next pass** should take the 2d bullet that is now unblocked: the
+clearExpressions suite steps are IN the 187 and green in real AE, so
+what remains there is re-running chat-probe step 7 and patch-bumping
+that work.

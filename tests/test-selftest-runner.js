@@ -226,6 +226,50 @@ const modalAtStartup = stopIndex(
 assert(modalAtStartup.at === 4,
   "a readable modal during startup is still reported once it persists");
 
+// --- 2b. which popups the harness may ANSWER by itself ----------------
+// Every cold run leaves AE dirty, so when the launcher exits AE asks to
+// save; that prompt then swallows the NEXT pass's -r script entirely.
+// The harness now answers a LEFTOVER one before it launches, and the
+// whole safety of that lives in this decision: a popup with words on it
+// is a question for a human, and must never be closed from here.
+const STALE_CASES = [
+  // The save-changes prompt: AE fully up, running nothing, one wordless
+  // #32770. Verbatim probe output from the 2026-08-26 pass, where it had
+  // survived from the previous run and cost that run its first harness
+  // attempt (exit 4, zero steps executed).
+  ["teardown", TEARDOWN, true],
+  // Words on screen = a human's question. Never answered from here.
+  ["modal", MODAL, false],
+  // Wordless, but a script is executing -- this is our own progress
+  // window tearing down, and it leaves on its own.
+  ["progress-plus-teardown", PROGRESS + TEARDOWN, false],
+  ["progress", PROGRESS, false],
+  // No application window yet: the wordless thing is AE's crash-recovery
+  // prompt, a different question whose answer is not ours to give.
+  ["startup", STARTUP, false],
+  // Unreadable, but the probe found no window at all to post to.
+  ["note", UNREADABLE_NOTE, false],
+  ["empty", "", false]
+];
+
+let staleBody = "";
+STALE_CASES.forEach(function (c) {
+  staleBody += "$p = Get-AellStaleDialogPlan -ProbeText " + psString(c[1]) +
+    " -ScriptName 'aell-selftest-run.jsx'\n" +
+    "Write-Host ('" + c[0] + "|' + $p.Dismiss + '|' + $p.Reason)\n";
+});
+const plans = {};
+runPs(staleBody).split(/\r?\n/).forEach(function (line) {
+  const p = line.split("|");
+  if (p.length >= 3) plans[p[0]] = { d: p[1] === "True", why: p[2] };
+});
+STALE_CASES.forEach(function (c) {
+  const got = plans[c[0]];
+  assert(got && got.d === c[2], c[0] + " is " +
+    (c[2] ? "answered automatically" : "left alone") +
+    (got ? " (reason: " + got.why + ")" : " (no output)"));
+});
+
 // --- 3. the runner actually decides through this ---------------------
 const runner = fs.readFileSync(RUNNER, "utf8");
 assert(/\.\s*\(Join-Path \$PSScriptRoot "lib\\ae-dialog-triage\.ps1"\)/
@@ -284,6 +328,31 @@ assert(/Start-Process -FilePath \$AfterFXPath/.test(runner),
   "AE is launched with Start-Process, which does not wait on AE's stdout");
 assert(!/Start-Process[\s\S]{0,120}-Wait/.test(runner),
   "the launch does not -Wait for After Effects to exit");
+
+// The stale-dialog answer is only safe BEFORE the launch: after it, a
+// wordless popup may be our own progress window tearing down, and the
+// wait loop is what is allowed to judge those. Ordering is the rail.
+const clearAt = runner.indexOf("Clear-AellStaleDialog }");
+const launchAt = runner.indexOf("Start-Process -FilePath $AfterFXPath");
+assert(clearAt !== -1 && launchAt !== -1 && clearAt < launchAt,
+  "a leftover dialog is answered BEFORE After Effects is launched");
+assert(runner.indexOf("Update-AellWaitState") > launchAt,
+  "the wait loop still runs after the launch, judging this run's popups");
+assert(/Get-AellStaleDialogPlan/.test(runner),
+  "the runner decides what to answer through Get-AellStaleDialogPlan");
+assert(/NoDismissStale/.test(runner),
+  "a human can opt out of the automatic answer (-NoDismissStale)");
+// The Win32 side must repeat the rail rather than trust its caller: it
+// posts only to a wordless top-level #32770 of AE's own process.
+assert(/ClassOf\(h\) != "#32770"/.test(runner),
+  "only a #32770 is ever closed, never AE's application window");
+assert(/hasWords/.test(runner) && /StartsWith\("OS_"\)/.test(runner),
+  "a dialog with readable child text is never closed");
+assert(/PostMessageW\(h, 0x0010/.test(runner),
+  "WM_CLOSE is POSTED, so a wedged dialog cannot wedge the harness");
+assert(!/Stop-Process/.test(runner),
+  "AE is never killed - a hard kill is what raises the startup " +
+  "recovery dialog next launch");
 
 // Windows PowerShell 5.1, BOM-less ASCII, per CLAUDE.md.
 [LIB, RUNNER].forEach(function (f) {

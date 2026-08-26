@@ -17,7 +17,11 @@
 param(
   [string]$AfterFXPath = "",
   [string]$RepoRoot = "",
-  [int]$TimeoutSec = 240
+  [int]$TimeoutSec = 240,
+  # Leave a pre-existing wordless dialog alone instead of answering it
+  # (see Clear-AellStaleDialog below). For a human who wants to look at
+  # whatever AE is showing before anything touches it.
+  [switch]$NoDismissStale
 )
 
 $ErrorActionPreference = "Stop"
@@ -78,19 +82,6 @@ $wrapperName = Split-Path $wrapper -Leaf
 $wrapperTemplate.Replace("__REPO__", $repoFs).Replace("__OUT__", $outFs) |
   Set-Content -Path $wrapper -Encoding ASCII
 
-# Start-Process, NOT `& $exe ... | Out-Null`. When AE is already running,
-# `-r` hands the script to that instance and the launcher exits at once,
-# so the call operator looked fine for months. On a COLD machine there is
-# no instance to hand to: the process PowerShell just started IS After
-# Effects, it holds its stdout open (GPU warnings, asio logs) for as long
-# as AE lives, and the pipeline waits for it. Measured: the suite wrote
-# its 109/109 results file in 24s and the harness was still blocked ten
-# minutes later, never reaching the wait loop below. That is the exact
-# case an unattended pass runs in.
-Write-Host ("Running self-test via " + $AfterFXPath)
-Start-Process -FilePath $AfterFXPath -ArgumentList @("-r", $wrapper) |
-  Out-Null
-
 # A compile error inside the runner produces NO results file, because the
 # try/catch meant to report it never executes either -- symptom identical
 # to "scripting file access is disabled". AE compounds it by DISABLING
@@ -110,11 +101,14 @@ public class AellWin {
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr h, out uint id);
     [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr h);
     [DllImport("user32.dll")] private static extern bool IsWindowEnabled(IntPtr h);
+    [DllImport("user32.dll")] private static extern bool PostMessageW(IntPtr h, uint msg, IntPtr w, IntPtr l);
 
     private static StringBuilder found;
     private static int target;
     private static IntPtr appWindow;
     private static int popups;
+    private static int closed;
+    private static bool hasWords;
 
     // A DISABLED main window is the authoritative signal that AE is stuck
     // behind something modal -- true whatever class the popup happens to
@@ -195,6 +189,46 @@ public class AellWin {
         EnumChildWindows(h, new EnumProc(OnChild), IntPtr.Zero);
         return true;
     }
+    // Answer a WORDLESS dialog. WHEN this may be called at all is
+    // Get-AellStaleDialogPlan's decision, not this method's -- but the
+    // safety rail is repeated here in code, because a Win32 call that
+    // closes windows must not depend on its caller being careful: only a
+    // top-level #32770 of this process, with no title of its own and no
+    // child carrying readable text (AE's containers report their class
+    // as their text, hence the OS_ prefix check), is ever touched.
+    //
+    // WM_CLOSE on AE's "Save changes to ...?" prompt is Cancel: it calls
+    // off the quit and changes nothing else. Posted rather than sent, so
+    // a dialog whose thread is wedged cannot wedge the harness too.
+    public static int CloseWordlessDialogs(int processId) {
+        target = processId;
+        closed = 0;
+        EnumWindows(new EnumProc(OnClose), IntPtr.Zero);
+        return closed;
+    }
+    private static bool OnClose(IntPtr h, IntPtr lp) {
+        uint wid;
+        GetWindowThreadProcessId(h, out wid);
+        if ((int)wid != target) { return true; }
+        if (!IsWindowVisible(h)) { return true; }
+        if (ClassOf(h) != "#32770") { return true; }
+        StringBuilder t = new StringBuilder(512);
+        GetWindowTextW(h, t, 512);
+        if (t.ToString().Trim().Length > 0) { return true; }
+        hasWords = false;
+        EnumChildWindows(h, new EnumProc(OnWordCheck), IntPtr.Zero);
+        if (hasWords) { return true; }
+        PostMessageW(h, 0x0010, IntPtr.Zero, IntPtr.Zero);
+        closed++;
+        return true;
+    }
+    private static bool OnWordCheck(IntPtr h, IntPtr lp) {
+        StringBuilder t = new StringBuilder(1024);
+        GetWindowTextW(h, t, 1024);
+        string s = t.ToString().Trim();
+        if (s.Length > 0 && !s.StartsWith("OS_")) { hasWords = true; return false; }
+        return true;
+    }
     private static bool OnChild(IntPtr h, IntPtr lp) {
         StringBuilder t = new StringBuilder(1024);
         GetWindowTextW(h, t, 1024);
@@ -250,6 +284,64 @@ function Get-BlockingDialog {
   return ''
 }
 
+# The dialog that costs an unattended pass its whole run is not one this
+# run raised -- it is the save-changes prompt the PREVIOUS run left up.
+# The suite always leaves AE dirty (scratch comps), so when the cold-run
+# launcher exits and AE is asked to close, AE asks whether to save; that
+# prompt then swallows every -r script the NEXT pass sends while AE still
+# reports as healthy. Both ways out were filed for a human in
+# WORKPLAN-LOG 2026-08-21 and neither was taken, so the loop kept paying
+# one lost pass each time. This takes the first of them: answer it.
+#
+# Narrow by construction -- Get-AellStaleDialogPlan refuses unless AE is
+# fully started, running nothing, and showing a popup with no words on
+# it, and CloseWordlessDialogs re-checks that in Win32 before posting
+# anything. A dialog a human should read has words, and words are exactly
+# what stops this. Runs BEFORE the launch, so a dialog it sees cannot be
+# ours; and it never runs on the wait loop's findings, where a wordless
+# popup may still be our own progress window tearing down.
+function Clear-AellStaleDialog {
+  $announced = $false
+  for ($round = 1; $round -le 2; $round++) {
+    $plan = Get-AellStaleDialogPlan -ProbeText (Get-BlockingDialog) `
+      -ScriptName $wrapperName
+    if (-not $plan.Dismiss) {
+      if ($announced) { Write-Host "  cleared." }
+      return
+    }
+    if (-not $announced) {
+      $announced = $true
+      Write-Host ("A dialog was already blocking After Effects before " +
+        "this run started (" + $plan.Reason + ").")
+      Write-Host ("Answering it with Cancel -- on this machine that is " +
+        "the save-changes prompt a previous run left behind, and " +
+        "Cancel only calls off the quit.")
+    }
+    $n = 0
+    foreach ($proc in @(Get-Process AfterFX -ErrorAction SilentlyContinue)) {
+      try { $n = $n + [AellWin]::CloseWordlessDialogs($proc.Id) } catch { }
+    }
+    Write-Host ("  answered " + $n + " dialog(s)")
+    Start-Sleep -Seconds 2
+  }
+  Write-Host ("  it did not clear -- running anyway, and the wait loop " +
+    "below will report it.")
+}
+if ($canProbe -and -not $NoDismissStale) { Clear-AellStaleDialog }
+
+# Start-Process, NOT `& $exe ... | Out-Null`. When AE is already running,
+# `-r` hands the script to that instance and the launcher exits at once,
+# so the call operator looked fine for months. On a COLD machine there is
+# no instance to hand to: the process PowerShell just started IS After
+# Effects, it holds its stdout open (GPU warnings, asio logs) for as long
+# as AE lives, and the pipeline waits for it. Measured: the suite wrote
+# its 109/109 results file in 24s and the harness was still blocked ten
+# minutes later, never reaching the wait loop below. That is the exact
+# case an unattended pass runs in.
+Write-Host ("Running self-test via " + $AfterFXPath)
+Start-Process -FilePath $AfterFXPath -ArgumentList @("-r", $wrapper) |
+  Out-Null
+
 # AE disables its main window for as long as the -r script runs, so the
 # probe fires on every healthy run too -- what it finds has to be read,
 # not just counted. Get-AellDialogVerdict separates AE's own progress
@@ -289,8 +381,11 @@ if ($blocking -and -not (Test-Path $out)) {
     Write-Host 'machine is usually AE asking to save changes to the'
     Write-Host 'scratch project a previous run left behind. Answering it'
     Write-Host 'is the only way through -- Cancel is safe, it just calls'
-    Write-Host 'off the quit -- and nothing can be scripted around it,'
-    Write-Host 'because no -r script runs while it is up.'
+    Write-Host 'off the quit -- and no -r script runs while it is up.'
+    Write-Host 'A LEFTOVER one is answered automatically before the'
+    Write-Host 'launch (pass -NoDismissStale to leave it alone), so'
+    Write-Host 'seeing it here means it came up DURING this run, or came'
+    Write-Host 'back after being answered. Dismiss it by hand and re-run.'
   }
   exit 4
 }
