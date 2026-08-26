@@ -4046,6 +4046,218 @@ AELL_TOOLS.add_camera = function (args) {
                      note: "Layers must be 3D (set_layer_3d) to be seen by a camera" });
 };
 
+/*
+ * Lights. Every rule below was MEASURED against AE 2026 (probe,
+ * WORKPLAN-LOG 2026-08-26), because a light lies about itself:
+ *
+ *  - `canSetValue` is FALSE for every Light Options property and every
+ *    light transform property, INCLUDING the ones that write fine, and
+ *    `elided` is false everywhere. Neither can gate anything. The
+ *    per-type table below is the only truth.
+ *  - The Light Options group carries all 14 properties on EVERY type —
+ *    it never shrinks — so walking it tells you nothing about what the
+ *    type actually accepts.
+ *  - Writing one the type hides throws AE's "property or a parent
+ *    property is hidden", the same wall the cameras hit.
+ *  - AE 2026 has FIVE types: ENVIRONMENT (4416) joined the four from
+ *    training, hence the typeof guard on older builds.
+ *  - `addLight` requires BOTH arguments; a one-arg call throws.
+ *  - A new light defaults to SPOT, and its Falloff defaults to none.
+ */
+var AELL_LIGHT_KINDS = ["parallel", "spot", "point", "ambient", "environment"];
+
+var AELL_FALLOFF = { none: 1, smooth: 2, inversesquareclamped: 3 };
+/* Echo the spelling the tool DOCS use, not the lowercased key — the
+ * model copies whatever a refusal shows it back into the next call. */
+var AELL_FALLOFF_NAME = { none: "none", smooth: "smooth",
+                          inversesquareclamped: "inverseSquareClamped" };
+
+/* arg -> the types that ACCEPT it. Order is the WRITE order: Falloff
+ * must land before Radius/Falloff Distance, which it gates. */
+var AELL_LIGHT_OPTS = [
+  { arg: "intensity",       mn: "ADBE Light Intensity",
+    on: "parallel spot point ambient environment", kind: "number" },
+  { arg: "color",           mn: "ADBE Light Color",
+    on: "parallel spot point ambient environment", kind: "color" },
+  { arg: "coneAngle",       mn: "ADBE Light Cone Angle",
+    on: "spot", kind: "number" },
+  { arg: "coneFeather",     mn: "ADBE Light Cone Feather 2",
+    on: "spot", kind: "number" },
+  { arg: "falloff",         mn: "ADBE Light Falloff Type",
+    on: "parallel spot point", kind: "falloff" },
+  { arg: "radius",          mn: "ADBE Light Falloff Start",
+    on: "parallel spot point", kind: "number",
+    needsFalloff: "smooth inverseSquareClamped" },
+  { arg: "falloffDistance", mn: "ADBE Light Falloff Distance",
+    on: "parallel spot point", kind: "number",
+    needsFalloff: "smooth" },
+  { arg: "castsShadows",    mn: "ADBE Casts Shadows",
+    on: "parallel spot point", kind: "bool" },
+  { arg: "shadowDarkness",  mn: "ADBE Light Shadow Darkness",
+    on: "parallel spot point", kind: "number" },
+  { arg: "shadowDiffusion", mn: "ADBE Light Shadow Diffusion",
+    on: "spot point", kind: "number" }
+];
+
+/* Transform properties a light type will let you write (measured).
+ * ambient and environment accept NONE of them — not even Position. */
+var AELL_LIGHT_XFORM = {
+  position:        { mn: "ADBE Position",     on: "parallel spot point" },
+  pointOfInterest: { mn: "ADBE Anchor Point", on: "parallel spot" }
+};
+
+/* "a spot" but "an ambient" — these strings are what the model reads. */
+function AELL_lightArticle(kind) {
+  return (kind === "ambient" || kind === "environment") ? "An " : "A ";
+}
+
+/* Space-separated membership, so "point" never matches "pointOfInterest". */
+function AELL_lightAccepts(list, kind) {
+  return (" " + list + " ").indexOf(" " + kind + " ") >= 0;
+}
+
+/* Which types DO take this arg — so a refusal names the way forward. */
+function AELL_lightTypesFor(list) {
+  return list.split(" ").join(", ");
+}
+
+/* What THIS type accepts, for the same reason. */
+function AELL_lightArgsFor(kind) {
+  var out = [], i, k;
+  for (i = 0; i < AELL_LIGHT_OPTS.length; i++) {
+    if (AELL_lightAccepts(AELL_LIGHT_OPTS[i].on, kind)) {
+      out.push(AELL_LIGHT_OPTS[i].arg);
+    }
+  }
+  for (k in AELL_LIGHT_XFORM) {
+    if (AELL_LIGHT_XFORM.hasOwnProperty(k) &&
+        AELL_lightAccepts(AELL_LIGHT_XFORM[k].on, kind)) out.push(k);
+  }
+  return out.join(", ") || "(nothing but name)";
+}
+
+function AELL_lightGiven(args, name) {
+  return args[name] !== null && typeof args[name] !== "undefined" &&
+         args[name] !== "";
+}
+
+AELL_TOOLS.add_light = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  var i, o, xk;
+
+  var kind = AELL_lightGiven(args, "type")
+    ? String(args.type).toLowerCase() : "spot";
+  if (!AELL_lightAccepts(AELL_LIGHT_KINDS.join(" "), kind)) {
+    return AELL_err("No light type '" + args.type + "'. AE has: " +
+      AELL_LIGHT_KINDS.join(", ") + ".");
+  }
+  if (kind === "environment" &&
+      (typeof LightType === "undefined" ||
+       typeof LightType.ENVIRONMENT === "undefined")) {
+    return AELL_err("This After Effects (" + app.version + ") has no " +
+      "environment light. Available: parallel, spot, point, ambient.");
+  }
+
+  /* Validate EVERYTHING before creating the layer — a refusal must not
+   * leave a half-configured light behind for the user to clean up. */
+  var falloff = AELL_lightGiven(args, "falloff")
+    ? String(args.falloff).toLowerCase() : "none";
+  if (AELL_lightGiven(args, "falloff") &&
+      !AELL_FALLOFF.hasOwnProperty(falloff)) {
+    return AELL_err("No falloff '" + args.falloff + "'. AE has: none, " +
+      "smooth, inverseSquareClamped.");
+  }
+  for (i = 0; i < AELL_LIGHT_OPTS.length; i++) {
+    o = AELL_LIGHT_OPTS[i];
+    if (!AELL_lightGiven(args, o.arg)) continue;
+    if (!AELL_lightAccepts(o.on, kind)) {
+      return AELL_err(AELL_lightArticle(kind) + kind + " light has no " + o.arg + " — AE " +
+        "hides it. Types that take it: " + AELL_lightTypesFor(o.on) +
+        ". This light accepts: " + AELL_lightArgsFor(kind) + ".");
+    }
+    if (o.needsFalloff &&
+        !AELL_lightAccepts(o.needsFalloff.toLowerCase(), falloff)) {
+      return AELL_err("'" + o.arg + "' only exists while Falloff is " +
+        AELL_lightTypesFor(o.needsFalloff) + "; this light's falloff is '" +
+        AELL_FALLOFF_NAME[falloff] + "'. Pass falloff: \"" +
+        o.needsFalloff.split(" ")[0] + "\" too.");
+    }
+  }
+  for (xk in AELL_LIGHT_XFORM) {
+    if (!AELL_LIGHT_XFORM.hasOwnProperty(xk)) continue;
+    if (!AELL_lightGiven(args, xk)) continue;
+    if (!AELL_lightAccepts(AELL_LIGHT_XFORM[xk].on, kind)) {
+      return AELL_err(AELL_lightArticle(kind) + kind + " light has no " + xk + " — AE hides " +
+        "it (it lights the whole scene from nowhere). Types that take it: " +
+        AELL_lightTypesFor(AELL_LIGHT_XFORM[xk].on) + ".");
+    }
+    if (!AELLJSON.isArray(args[xk]) || args[xk].length < 3) {
+      return AELL_err("'" + xk + "' must be [x, y, z] — lights are 3D.");
+    }
+  }
+  if (args.oneNode === true && AELL_lightGiven(args, "pointOfInterest")) {
+    return AELL_err("A one-node light has no Point of Interest to aim " +
+      "at. Drop 'pointOfInterest', or drop 'oneNode' to aim it.");
+  }
+
+  var center = (AELLJSON.isArray(args.position) && args.position.length >= 2)
+    ? [args.position[0], args.position[1]]
+    : [comp.width / 2, comp.height / 2];
+  var lit = AELL_keepSelection(comp, function () {
+    // addLight REQUIRES both arguments; a one-arg call throws.
+    return comp.layers.addLight(args.name ? String(args.name) : "Light",
+                                center);
+  });
+  lit.lightType = LightType[kind.toUpperCase()];
+
+  // Before any Point of Interest write: NO_AUTO_ORIENT hides the POI on
+  // a light exactly as it does on a camera, and the write would throw.
+  if (args.oneNode === true) lit.autoOrient = AutoOrientType.NO_AUTO_ORIENT;
+
+  var xform = lit.property("ADBE Transform Group");
+  var applied = [], refused = [];
+  if (AELL_lightGiven(args, "position")) {
+    xform.property("ADBE Position").setValue(
+      [args.position[0], args.position[1], args.position[2]]);
+    applied.push("position");
+  }
+  if (AELL_lightGiven(args, "pointOfInterest")) {
+    xform.property("ADBE Anchor Point").setValue(
+      [args.pointOfInterest[0], args.pointOfInterest[1],
+       args.pointOfInterest[2]]);
+    applied.push("pointOfInterest");
+  }
+
+  var opts = lit.property("ADBE Light Options Group");
+  for (i = 0; i < AELL_LIGHT_OPTS.length; i++) {
+    o = AELL_LIGHT_OPTS[i];
+    if (!AELL_lightGiven(args, o.arg)) continue;
+    var v = args[o.arg];
+    if (o.kind === "bool") v = v ? 1 : 0;
+    else if (o.kind === "falloff") v = AELL_FALLOFF[falloff];
+    else if (o.kind === "color") {
+      if (!AELLJSON.isArray(v) || v.length < 3) {
+        refused.push(o.arg + " (needs [r, g, b], each 0-1)");
+        continue;
+      }
+      v = [v[0], v[1], v[2]];
+    }
+    try {
+      opts.property(o.mn).setValue(v);
+      applied.push(o.arg);
+    } catch (e) {
+      // The table said this type takes it, so a throw here is news.
+      refused.push(o.arg + " (" + (e.message || e) + ")");
+    }
+  }
+
+  return AELL_okay({ index: lit.index, name: lit.name, type: kind,
+    applied: applied.join(", ") || "(defaults only)",
+    refused: refused.join("; "),
+    note: "Only 3D layers (set_layer_3d) with Material Options > " +
+          "Accepts Lights are lit by this" });
+};
+
 AELL_TOOLS.add_marker = function (args) {
   var comp = AELL_resolveComp(args.comp);
   if (typeof args.time !== "number") {
@@ -4700,7 +4912,8 @@ var AELL_MUTATING = {
   apply_effect: true, set_effect_param: true, set_layer_timing: true,
   delete_layer: true, set_comp_setting: true, import_file: true,
   add_to_render_queue: true, add_shape_layer: true, add_mask: true,
-  precompose: true, add_camera: true, add_marker: true,
+  precompose: true, add_camera: true, add_light: true,
+  add_marker: true,
   set_layer_3d: true, set_layer_parent: true,
   add_null: true, add_control: true, link_property: true,
   apply_expression_preset: true, set_text_style: true,

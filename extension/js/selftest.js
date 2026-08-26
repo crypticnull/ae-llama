@@ -30,6 +30,9 @@
   // And the batch-CALL rig (many tools in one host call, one Ctrl+Z): a
   // batch that misfires must not be able to reach the comps above.
   var UNCOMP = "AELL Self-Test Undo";
+  // And the light rig: lights are riggers like cameras, so they get
+  // their own comp rather than joining the ones being measured.
+  var LTCOMP = "AELL Self-Test Light";
   var running = false;
 
   /**
@@ -2264,6 +2267,247 @@
       { name: "cleanup: delete the rollback comp",
         tool: "delete_item",
         args: function (ctx) { return { item: ctx.rbComp }; },
+        check: function () { return true; } },
+
+      // ---- Lights (WORKPLAN item 2, last bullet) ---------------------
+      // Their own scratch comp, like the cameras: a light is a rigger,
+      // and the grid/scale steps above must not have to know about it.
+      //
+      // What makes lights worth a suite group is that they LIE. Measured
+      // in AE 2026 (WORKPLAN-LOG 2026-08-26): `canSetValue` is false on
+      // every light property INCLUDING the ones that write fine, `elided`
+      // is false everywhere, and the Light Options group hands out all 14
+      // properties whatever the type is. So nothing about a light can be
+      // discovered by inspection — only by attempting the write. These
+      // steps are the standing proof that the table in add_light still
+      // matches the AE on this machine.
+      { name: "light scratch comp",
+        tool: "create_comp",
+        args: { name: LTCOMP, width: 800, height: 600, duration: 4,
+                frameRate: 30 },
+        check: function (d, ctx) {
+          ctx.ltComp = d.name;
+          return typeof d.id === "number" || !!d.id || "no comp id";
+        } },
+
+      { name: "a spot light takes every option AE gives it",
+        tool: "add_light",
+        args: function (ctx) {
+          return { comp: ctx.ltComp, name: "ST Light Spot", type: "spot",
+                   position: [100, 200, -300], pointOfInterest: [400, 300, 0],
+                   intensity: 80, color: [1, 0.5, 0],
+                   coneAngle: 60, coneFeather: 25,
+                   falloff: "smooth", radius: 111, falloffDistance: 222,
+                   castsShadows: true, shadowDarkness: 70,
+                   shadowDiffusion: 12 };
+        },
+        check: function (d) {
+          if (d.refused) return "refused: " + d.refused;
+          if (d.type !== "spot") return "type " + d.type;
+          // Every one of the twelve must be reported applied, or the
+          // per-type table has drifted from this AE.
+          var want = ["position", "pointOfInterest", "intensity", "color",
+                      "coneAngle", "coneFeather", "falloff", "radius",
+                      "falloffDistance", "castsShadows", "shadowDarkness",
+                      "shadowDiffusion"];
+          for (var i = 0; i < want.length; i++) {
+            if ((d.applied || "").indexOf(want[i]) === -1) {
+              return "not applied: " + want[i] + " (got " + d.applied + ")";
+            }
+          }
+          return true;
+        } },
+
+      { name: "spot-only cone angle really landed",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.ltComp, layer: "ST Light Spot",
+                   property: "Cone Angle" };
+        },
+        check: function (d) {
+          return Math.abs(d.value - 60) < 0.01 || "cone angle " + d.value;
+        } },
+
+      // Radius and Falloff Distance do NOT resolve by bare name: AE's
+      // layer-level name shortcut covers Cone Angle and Intensity but not
+      // these two (measured). The group path is what works, so the suite
+      // uses it — and pins that it still does.
+      { name: "falloff was written BEFORE radius (it gates it)",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.ltComp, layer: "ST Light Spot",
+                   property: "light/Radius" };
+        },
+        check: function (d) {
+          return Math.abs(d.value - 111) < 0.01 ||
+                 "radius " + d.value + " — Falloff must be set first or " +
+                 "AE hides Radius entirely";
+        } },
+
+      { name: "falloff distance landed too (smooth keeps it)",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.ltComp, layer: "ST Light Spot",
+                   property: "light/Falloff Distance" };
+        },
+        check: function (d) {
+          return Math.abs(d.value - 222) < 0.01 || "distance " + d.value;
+        } },
+
+      { name: "castsShadows became AE's 1, not a raw boolean",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.ltComp, layer: "ST Light Spot",
+                   property: "Casts Shadows" };
+        },
+        check: function (d) { return d.value === 1 || "value " + d.value; } },
+
+      { name: "Point of Interest is the Anchor Point on a light",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.ltComp, layer: "ST Light Spot",
+                   property: "Point of Interest" };
+        },
+        check: function (d) {
+          var v = d.value || [];
+          return (Math.abs(v[0] - 400) < 0.6 && Math.abs(v[1] - 300) < 0.6) ||
+                 "POI " + JSON.stringify(v);
+        } },
+
+      { name: "a point light has no cone angle, and the refusal says who does",
+        tool: "add_light",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.ltComp, type: "point", coneAngle: 45 };
+        },
+        check: function (err) {
+          if (err.indexOf("spot") === -1) return "does not name spot: " + err;
+          // A grounded refusal has to leave the model somewhere to go.
+          return err.indexOf("shadowDiffusion") !== -1 ||
+                 "does not list what a point light accepts: " + err;
+        } },
+
+      { name: "an ambient light has no position at all",
+        tool: "add_light",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.ltComp, type: "ambient", position: [1, 2, 3] };
+        },
+        check: function (err) {
+          return err.indexOf("parallel, spot, point") !== -1 ||
+                 "refusal does not say which types are positionable: " + err;
+        } },
+
+      { name: "radius without falloff is refused with the fix",
+        tool: "add_light",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.ltComp, type: "spot", radius: 300 };
+        },
+        check: function (err) {
+          return err.indexOf("smooth") !== -1 || "no way forward: " + err;
+        } },
+
+      // The refusals above must not have littered the comp with the
+      // half-built lights they declined to finish.
+      { name: "three refusals created no light layers",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.ltComp }; },
+        check: function (d) {
+          var layers = d.layers || [];
+          var lights = 0, i;
+          for (i = 0; i < layers.length; i++) {
+            if (layers[i].type === "light") lights++;
+          }
+          return lights === 1 ||
+                 lights + " lights, expected 1 (validate-before-create)";
+        } },
+
+      { name: "ambient still takes intensity and colour",
+        tool: "add_light",
+        args: function (ctx) {
+          return { comp: ctx.ltComp, name: "ST Light Amb", type: "ambient",
+                   intensity: 30, color: [0, 0, 1] };
+        },
+        check: function (d) {
+          return d.applied === "intensity, color" ||
+                 "applied '" + d.applied + "'";
+        } },
+
+      { name: "and that intensity is readable back off the ambient light",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.ltComp, layer: "ST Light Amb",
+                   property: "Intensity" };
+        },
+        check: function (d) {
+          return Math.abs(d.value - 30) < 0.01 || "intensity " + d.value;
+        } },
+
+      // Same rule cameras needed: NO_AUTO_ORIENT hides the Point of
+      // Interest, so it has to be set before any POI write or the write
+      // throws. Asking for both is a refusal rather than a silent choice.
+      { name: "one-node light plus a Point of Interest is refused",
+        tool: "add_light",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.ltComp, type: "spot", oneNode: true,
+                   pointOfInterest: [1, 2, 3] };
+        },
+        check: function (err) {
+          return err.indexOf("oneNode") !== -1 ||
+                 err.indexOf("one-node") !== -1 || "unexpected: " + err;
+        } },
+
+      { name: "a one-node light builds, and Position still lands after it",
+        tool: "add_light",
+        args: function (ctx) {
+          return { comp: ctx.ltComp, name: "ST Light Free", type: "spot",
+                   oneNode: true, position: [5, 6, 7], coneAngle: 33 };
+        },
+        check: function (d) {
+          return (d.applied || "").indexOf("position") !== -1 ||
+                 "applied '" + d.applied + "'";
+        } },
+
+      { name: "...and Position really reads back",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.ltComp, layer: "ST Light Free",
+                   property: "Position" };
+        },
+        check: function (d) {
+          var v = d.value || [];
+          return (Math.abs(v[0] - 5) < 0.01 && Math.abs(v[2] - 7) < 0.01) ||
+                 "position " + JSON.stringify(v);
+        } },
+
+      // AE 2026 has a FIFTH light type that predates none of the four in
+      // training. If a future AE drops it, this step is where we find out.
+      { name: "environment is a real light type in this AE",
+        tool: "add_light",
+        args: function (ctx) {
+          return { comp: ctx.ltComp, name: "ST Light Env",
+                   type: "environment", intensity: 50 };
+        },
+        check: function (d) {
+          return d.type === "environment" || "type " + d.type;
+        } },
+
+      { name: "an unknown light type lists the real ones",
+        tool: "add_light",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.ltComp, type: "spotlight" };
+        },
+        check: function (err) {
+          return err.indexOf("parallel, spot, point, ambient") !== -1 ||
+                 "ungrounded: " + err;
+        } },
+
+      { name: "cleanup: delete the light comp",
+        tool: "delete_item",
+        args: function (ctx) { return { item: ctx.ltComp }; },
         check: function () { return true; } },
 
       // ---- comp-rename audit + bulk rename. A three-comp rig: one

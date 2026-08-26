@@ -83,19 +83,36 @@ expression engines, center_anchor_point on rotated/scaled/parented and
 animated layers, scale_comp with cameras/keyframes, text styling and
 font validation, cameras in the suite (old item 2b).
 
-Still open:
+ALL FIVE remaining bullets are now DONE. The four below were finished
+2026-08-21 and the text simply never got struck, which cost a later
+pass a re-read of the log to work out what was left — so they are
+struck now:
 
-- split_layer_into_chunks on real FOOTAGE (trimmed in/out points), not
-  just solids; verify seamless playback and stack order.
-- distribute_property step mode on real layers; reorder_layers actual
-  stack order after (read back via get_comp_details).
-- set_mask_path keyframes: scrub and confirm the mask actually
-  ANIMATES (Shape value at time, not just numKeys).
-- for_each_layer with apply_effect across 50+ layers: timing +
-  stability, and the same at 200 layers for grid_layout and batch keys.
-  Note anything over ~5s.
-- add_light: no such tool exists, so lights are wholly uncovered. Same
-  aim-not-scale rule cameras needed. Build the tool AND its coverage.
+- ~~split_layer_into_chunks on real FOOTAGE~~ DONE 2026-08-21.
+- ~~distribute_property step mode; reorder_layers stack order~~ DONE
+  2026-08-21 (found three real bugs; see the log).
+- ~~set_mask_path keyframes actually ANIMATE~~ DONE 2026-08-21.
+- ~~for_each_layer across 50+ layers, and 200-layer timings~~ DONE
+  2026-08-21 (timings in the log; nothing over ~1s).
+- ~~add_light~~ DONE 2026-08-26. Built, documented, stub-tested and
+  covered by 19 real-AE suite steps (harness 187 -> 206). All five AE
+  2026 types incl. ENVIRONMENT, per-type grounded refusals from a
+  matrix measured in the field, validate-before-create. NOT bumped:
+  a new tool rides the next MINOR, which is the remote session's.
+
+Item 2 is CLOSED. The next pass should start at 2d (H3 i2v workflow,
+parts 1-3) or item 3/4, not here.
+
+Two things this item surfaced that are NOT done, each worth its own
+small pass rather than being smuggled in:
+
+- `scale_comp` still does not scale a LIGHT's pixel-valued options
+  (falloff distance, shadow diffusion), same as AE's own native
+  script. Now that lights are creatable this is finally testable.
+- `get_property` cannot reach `Radius` or `Falloff Distance` by bare
+  name (AE's layer-level name shortcut does not cover them); the
+  group path `light/Radius` works and the suite uses it. A deep-search
+  fallback in the path resolver would remove the trap for the model.
 
 ## 2c. Inventory the owner's real ComfyUI install — DONE 2026-08-25
 

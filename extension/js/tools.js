@@ -285,6 +285,19 @@
       desc: "Add a camera. Only 3D layers (set_layer_3d) are affected by it. " +
             "oneNode:true makes a free camera with no Point of Interest.",
       args: "{comp?: string, name?: string, position?: [x,y,z], pointOfInterest?: [x,y,z], zoom?: px, oneNode?: bool}" },
+    { name: "add_light", mutating: true,
+      desc: "Add a light. Only 3D layers (set_layer_3d) with Accepts " +
+            "Lights on are lit by it. Each type hides most options: " +
+            "spot takes everything; parallel has no cone/shadowDiffusion; " +
+            "point has no cone and no pointOfInterest; ambient and " +
+            "environment take only intensity and color — not even a " +
+            "position. radius/falloffDistance need falloff set too. " +
+            "oneNode:true makes a free light with no Point of Interest.",
+      args: "{comp?: string, name?: string, type?: parallel|spot|point|ambient|environment (default spot), " +
+            "position?: [x,y,z], pointOfInterest?: [x,y,z], oneNode?: bool, " +
+            "intensity?: %, color?: [r,g,b] 0-1, coneAngle?: deg, coneFeather?: %, " +
+            "falloff?: none|smooth|inverseSquareClamped, radius?: px, falloffDistance?: px, " +
+            "castsShadows?: bool, shadowDarkness?: %, shadowDiffusion?: px}" },
     { name: "add_marker", mutating: true,
       desc: "Add a marker to the comp (omit 'layer') or to a layer.",
       args: "{comp?: string, layer?: name|index, time: seconds, comment?: string, duration?: seconds}" },

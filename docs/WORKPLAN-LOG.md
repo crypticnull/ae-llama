@@ -1972,3 +1972,107 @@ names.
   suite cleans up its solid sources (2026-08-25 remote entry) but not its
   nulls. Harmless to the tests, and it is debris in whatever project the
   suite is run against. Worth one small pass.
+
+## 2026-08-26 (local) — item 2 (LAST bullet): add_light, and what lights lie about
+
+Harness **206/206** (twice), up from 187 — 19 new steps. Stubbed suite
+29/29 (new `tests/test-light.js`, 52 checks). **No version bump**, on
+purpose: see the bottom of this entry.
+
+**The pass opened green (187/187)**, so it took a workplan item. Item 2's
+text listed five open bullets, but grepping this log showed four of them
+were finished on 2026-08-21 and simply never struck. The only genuinely
+open one was `add_light`, flagged twice (2026-08-20 and -21) as "a new
+tool is the remote session's call" and never picked up. Item 2's own
+wording says *Build the tool AND its coverage*, so this pass built it.
+WORKPLAN.md now has all five struck, so no future pass re-reads the log
+to work out what is left.
+
+**Probe first, and it was worth it — nearly every training-quoted fact
+about lights is wrong or useless.** Four probe scripts against AE 2026:
+
+- `canSetValue` is **false on every light property**, including the ones
+  that write perfectly well, and `elided` is false everywhere too. The
+  obvious implementation — gate on `canSetValue`, skip what you cannot
+  set — would have refused *every option on every light*. The only
+  truth is attempting the write.
+- The Light Options group carries **all 14 properties on every type**;
+  it never shrinks. Enumerating it tells you nothing about the type.
+- So hiddenness is per-TYPE and invisible. Measured matrix, which is now
+  the table in the tool AND in both stubs:
+
+  | option | parallel | spot | point | ambient | environment |
+  |---|---|---|---|---|---|
+  | intensity, color | yes | yes | yes | yes | yes |
+  | coneAngle, coneFeather | — | yes | — | — | — |
+  | falloff, radius, falloffDistance | yes | yes | yes | — | — |
+  | castsShadows, shadowDarkness | yes | yes | yes | — | — |
+  | shadowDiffusion | — | yes | yes | — | — |
+  | Position | yes | yes | yes | — | — |
+  | Point of Interest | yes | yes | — | — | — |
+
+  An **ambient or environment light accepts NO transform property at
+  all** — not even Position. Background Visible/Opacity/Blur are hidden
+  on all five (environment-panel UI only).
+- **Falloff gates its own two.** Radius exists only while Falloff is
+  smooth(2) or inverseSquareClamped(3); Falloff Distance only while it
+  is smooth(2). Falloff type 4 does not exist. So Falloff must be
+  written FIRST — the tool's option list is in write order for this
+  reason, and a suite step reads Radius back to prove the order held.
+- **AE 2026 has FIVE light types.** `LightType.ENVIRONMENT` (4416)
+  joined the four training knows. Guarded with a typeof so an older AE
+  gets a grounded refusal naming the four it does have.
+- `addLight` **requires both arguments**; a one-arg call throws.
+- A new light defaults to **SPOT**, and its Falloff defaults to none.
+- `NO_AUTO_ORIENT` hides the Point of Interest on a light exactly as on
+  a camera, so `oneNode` has the same set-it-first ordering rule, and
+  `oneNode` + `pointOfInterest` together is a grounded refusal.
+
+**Built:** `add_light` in hostscript (+ AELL_MUTATING, + tools.js docs —
+an undocumented tool is unreachable by the model). It **validates every
+argument BEFORE creating the layer**, so a refusal never leaves a
+half-configured light for the user to clean up. Verified in real AE: six
+refusals in a row left the comp holding exactly the two lights that had
+succeeded. Every refusal names both the types that DO take the option
+and the full list this type accepts.
+
+**Real AE corrected the stub once, which is the whole point of this
+loop.** The first stub assumed `addLight(name, center)` puts `center`
+into Position. It does not: `center` lands in the **Point of Interest**,
+and Position gets AE's own default — a fresh light in an 800x600 comp
+read POI [400,300,0] and Position [0,0,-555.556]. The stub now models
+the measured split and the test pins both halves.
+
+**Coverage:** `tests/test-light.js` (52 checks) whose stub reproduces
+the lies — it reports `canSetValue` false while still accepting legal
+writes, hands out all 14 options whatever the type, and throws AE's real
+"property or a parent property is hidden" message otherwise. 19 suite
+steps in their own scratch comp (lights are riggers like cameras). The
+five refusal steps have teeth: `test-self-test.js`'s permissive-host run
+fails all 15 refusal steps, 5 of them the new ones.
+
+**Two findings NOT fixed here, both queued in WORKPLAN item 2:**
+
+- `get_property` cannot reach `Radius` or `Falloff Distance` by bare
+  name — AE's layer-level name shortcut covers `Cone Angle`, `Intensity`,
+  `Shadow Darkness` and `Casts Shadows` but not those two, and the
+  refusal only offers `list_properties`. The group path `light/Radius`
+  works and the suite uses it. A deep-search fallback in the path
+  resolver would remove the trap; that is a change to a shipped tool and
+  belongs in its own pass.
+- `scale_comp` still does not scale a light's pixel-valued options
+  (falloff distance, shadow diffusion), matching AE's own native script.
+  Disclosed in the 2026-08-21 entry as untestable; now that lights are
+  creatable, it finally is.
+
+Also unchanged from the last entry and still worth a small pass: **AE's
+project accumulates leftover `Null NN` FootageItems** from suite runs.
+
+**Why NO version bump.** CLAUDE.md tells the local session to patch-bump
+a *fix verified in real AE*. This is not a fix to shipped behaviour, it
+is a new tool, and WORKPLAN's build rules say new tools ride the next
+MINOR that the remote session cuts after reviewing the batch — the
+comp-rename FAST-TRACK had to call itself "the exception that ships as a
+patch" precisely because that is not the default. Pushing at an equal
+version is the correct outcome here. Flagging it plainly so the remote
+session knows `add_light` is sitting in the branch waiting for 0.10.0.

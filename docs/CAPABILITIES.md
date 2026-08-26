@@ -12,13 +12,14 @@ feature they describe. Use this to look at the product whole and ask
 
 _Regenerate with `node scripts/capability-report.js` — CI fails if this section is stale._
 
-**59 tools** (51 mutating, 8 read-only; 56 host-side, 3 panel-side).
+**60 tools** (52 mutating, 8 read-only; 57 host-side, 3 panel-side).
 
 | Tool | Does | Writes | Side | Stub tests | Suite steps |
 |---|---|---|---|---|---|
 | `add_camera` | Add a camera | yes | host | — | 3 |
 | `add_control` | Add a named expression control (Slider/Angle/Checkbox/Color/Point Control effect) to a layer — usually a null | yes | host | — | — |
 | `add_keyframe` | Add a keyframe on a layer property at a time (seconds) | yes | host | — | — |
+| `add_light` | Add a light | yes | host | 1 | 9 |
 | `add_marker` | Add a marker to the comp (omit 'layer') or to a layer | yes | host | — | — |
 | `add_mask` | Add a mask to a layer | yes | host | 1 | 3 |
 | `add_null` | Add a null layer (use as a controller or parent) | yes | host | 1 | 7 |
@@ -35,17 +36,17 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `comfy_generate` | Generate an image/video with local ComfyUI and import it into the AE project | yes | panel | — | — |
 | `comfy_list_workflows` | List available ComfyUI generation workflow templates by name | no | panel | — | — |
 | `comfy_status` | Check the local ComfyUI instance (online? queue depth?) | no | panel | — | — |
-| `create_comp` | Create a composition and open it | yes | host | 1 | 16 |
+| `create_comp` | Create a composition and open it | yes | host | 1 | 17 |
 | `create_folder` | Create a project-panel folder | yes | host | 1 | — |
-| `delete_item` | Delete a project item | yes | host | 1 | 16 |
+| `delete_item` | Delete a project item | yes | host | 1 | 17 |
 | `delete_layer` | Delete a layer from a comp | yes | host | — | 2 |
 | `distribute_property` | Distribute a property VALUE across layers | yes | host | 1 | 5 |
 | `duplicate_comp` | Duplicate a composition | yes | host | — | — |
 | `duplicate_layer` | Duplicate a LAYER inside its comp (use duplicate_comp only for whole compositions) | yes | host | 1 | 6 |
 | `for_each_layer` | Run a PER-LAYER tool once per target layer in ONE call (max 200 layers) — the batch executor for anything without its own layers arg: {tool: 'apply_effect', args: {effect: 'Gaussian Blur'}} blurs every target | yes | host | 1 | 6 |
-| `get_comp_details` | Layers of a comp with index, name, type, timing, effects | no | host | 1 | 15 |
+| `get_comp_details` | Layers of a comp with index, name, type, timing, effects | no | host | 1 | 16 |
 | `get_project_info` | List project items (comps/footage/folders) and the active comp | no | host | 2 | 7 |
-| `get_property` | Read ANY property by path: value, keyframes, expression | no | host | 1 | 27 |
+| `get_property` | Read ANY property by path: value, keyframes, expression | no | host | 1 | 34 |
 | `grid_layout` | Arrange layers into a grid rigged to a control null: its 'Grid X Spacing'/'Grid Y Spacing'/'Grid Columns' sliders drive spacing AND column count live, and the grid centers on the null's position (all expressions generated host-side) | yes | host | 1 | 2 |
 | `import_file` | Import a footage/image/video file into the project | yes | host | — | — |
 | `link_property` | Drive a layer property from a control | yes | host | — | 1 |
@@ -146,7 +147,12 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 
 Queued (see WORKPLAN for owners/order):
 
-- Lights: no `add_light`, wholly uncovered (item 2).
+- Lights: `add_light` SHIPPED (item 2, 2026-08-26) — all five AE 2026
+  types, per-type grounded refusals from a matrix measured in the field,
+  stub suite + 9 real-AE steps. Still uncovered: light KEYFRAMES (no
+  suite step animates an intensity or a cone angle), and `scale_comp`
+  still does not scale a light's pixel-valued options (falloff distance,
+  shadow diffusion) — same as AE's own native script.
 - Feature track not yet built: text animators, repeaters, preset
   library, precompose/markers, render queue, project hygiene,
   audio-to-keyframes, frame round-trip, .mogrt export, whisper
