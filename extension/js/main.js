@@ -634,16 +634,28 @@
   function installPanelUpdate(quiet) {
     if (panelUpdateBusy) return;
     panelUpdateBusy = true;
-    global.Setup.installUpdate(updateManifest, setupStatus,
+    // The launch-time auto check is silent until it has an OUTCOME. It
+    // used to announce "Dev install detected — git pull in …" and then
+    // say nothing when the repo was already current — a permanently
+    // dangling status line, twice on some launches (field, 2026-08-26).
+    // Progress narration is for the user-initiated button path only.
+    global.Setup.installUpdate(updateManifest, quiet ? null : setupStatus,
       function (err, res) {
         panelUpdateBusy = false;
         setupLine = null;
         if (err) {
-          appendMsg("error", "Panel update failed: " + err.message);
+          if (quiet) {
+            // A failed background pull (offline, mid-rebase repo) is
+            // non-actionable at launch — one calm line, never red.
+            appendMsg("info", "Panel self-update skipped: " +
+              String(err.message || err).slice(0, 120));
+          } else {
+            appendMsg("error", "Panel update failed: " + err.message);
+          }
           return;
         }
         if (res.kind === "git" && !res.changed) {
-          // Nothing new: stay silent on the launch-time auto check.
+          // Nothing new: the quiet path stays wholly silent.
           if (!quiet) appendMsg("info", "Repo already up to date.");
           return;
         }
