@@ -300,8 +300,11 @@ function cannedOk(tool, args) {
         // names are reported — same contract as the real host.
         const skippedExc = [];
         if (args.except) {
+          // Bare names and full paths both match, like the real host.
           const exc = (Array.isArray(args.except) ? args.except
-                        : [args.except]).map(String);
+                        : [args.except])
+            .map(x => String(x).indexOf(base + "/") === 0
+              ? String(x).slice(base.length + 1) : String(x));
           const kidNames = kids.map(p => p.slice(base.length + 1));
           const miss = exc.filter(x => kidNames.indexOf(x) === -1);
           if (miss.length) {

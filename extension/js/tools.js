@@ -37,7 +37,7 @@
             "and the result lists every path created, so use it for any " +
             "'inside each subfolder of X' request instead of guessing " +
             "folder names.",
-      args: "{name: string, parent?: folder name, id, path, or 'root' (default: root), eachChildOf?: folder name|id|path ('inside each subfolder of X' — one call, ignore parent), except?: [subfolder names to SKIP] (with eachChildOf; exact names — a name that matches nothing refuses)}" },
+      args: "{name: string, parent?: folder name, id, path, or 'root' (default: root), eachChildOf?: folder name|id|path ('inside each subfolder of X' — one call, ignore parent), except?: [subfolders to SKIP] (with eachChildOf; bare names or full paths both work — an entry matching nothing refuses)}" },
     { name: "move_to_folder", mutating: true,
       desc: "Move project items into a folder (batch).",
       args: "{items: name|id|path|[..], folder: name, id, path 'A/B', or 'root'}" },

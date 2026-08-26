@@ -2721,11 +2721,13 @@
         } },
 
       // The field sentence had an exclusion ("except for in _North") —
-      // the flag honors it and REPORTS it.
+      // the flag honors it and REPORTS it. The except entry here is the
+      // FULL PATH on purpose: the field's first run spelled it that way
+      // and burned a correction round before paths were accepted.
       { name: "eachChildOf fans out with receipts, honoring except",
         tool: "create_folder",
         args: { name: "_ARCHIVE", eachChildOf: "ST FanParent",
-                except: ["ST FanKid C"] },
+                except: ["ST FanParent/ST FanKid C"] },
         check: function (d) {
           if (d.subfolders !== 2) return "saw " + d.subfolders +
             " subfolders after the exception, not 2";

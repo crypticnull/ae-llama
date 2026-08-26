@@ -2396,3 +2396,48 @@ and now this are all waiting on the remote session's 0.10.0.
 **Still open for part 3:** the actual end-to-end generation. It is a
 ~20 GB model load that wants the card to itself, so it needs a pass with
 llama-server down and nothing else running.
+
+## 2026-08-26 (remote) — the field day: eachChildOf, the signature trap, and machine state changes
+
+A full day of field failures on the owner's REAL work project, ending
+with the panel verified working at 0.9.20. What the next session must
+know:
+
+**MACHINE STATE CHANGED (owner's AE machine):**
+- PlayerDebugMode = "1" (string) is now set in HKCU CSXS.10/.11/.12.
+  CEP loads unsigned extensions. This was the root cause of the day's
+  delivery failures: the install was a SIGNED ZXP-extracted copy, every
+  hand copy broke its signature, and CEP silently restored/served its
+  cached signed 0.9.18 on each panel load — three "updates" in a row
+  looked applied on disk and never reached the running panel.
+- The install (%APPDATA%\Adobe\CEP\extensions\com.cptk.aellama) is now
+  an UNSIGNED plain copy of the repo's extension/ at 3b0c99b + META-INF
+  stripped. RECOMMENDED end state: run scripts/install.ps1 once to
+  junction the install onto the repo so drift is impossible — the owner
+  has not done this yet.
+- GitHub Actions was DOWN for this repo most of the afternoon (runs
+  stuck "queued" for hours, one in an uncancellable limbo). The feed
+  still says 0.9.18. When CI recovers it will catch up on the next
+  push; the panel at 0.9.20 will correctly ignore the equal/older feed.
+
+**Product changes (remote-built, stub-green, NOT yet real-AE verified):**
+- create_folder eachChildOf (0.9.19): one call creates a folder inside
+  every REAL direct subfolder — built after the model, acting from the
+  trimmed project summary, hit 2 of 10 targets and claimed success.
+- except (0.9.20): exclusions ride the same call; unknown names refuse
+  (the exclusion is a promise). Field-verified by the owner: 10
+  subfolders, 7 created, 3 recognized existing, exclusion honored.
+- Post-field polish (unshipped, this entry's commit): except accepts
+  FULL PATHS as well as bare names (the model's first spelling);
+  skippedAsExcepted now serializes before alreadyExisted so the
+  exclusion receipt survives the panel's display cap; and mid-round
+  tool refusals render MUTED ("adjusting — …", .msg.retry) instead of
+  red ERROR — the owner's direction: a self-corrected round must not
+  look like the plugin breaking. Real failures stay loud via the
+  model's reply, the rollback notice, and the round cap.
+- The selftest's except step now uses the path spelling, so the next
+  real-AE run verifies the tolerance. Suite is 214 steps.
+
+**For tonight's pass:** verify this batch in real AE (fan-out steps
+included), bump patch, and note the panel updates by plain file copy
+now (or the junction, if the owner ran install.ps1).

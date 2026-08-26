@@ -292,6 +292,31 @@ assert(fanS.ok && fanS.data.createdCount === 2 &&
        excNorth.children.length === 0,
        "except as a bare string behaves like a one-item list");
 
+// the FULL PATH is an equally reasonable spelling — the field's first
+// 0.9.20 run wrote except:["_COMPS/_ARCHIVE"] and burned a correction
+// round on it. Both spellings match now, mixed freely.
+const fanP = call("create_folder",
+  { name: "_PATHY", eachChildOf: "_EXC",
+    except: ["_EXC/_North", "Alpha"] });
+assert(fanP.ok && fanP.data.createdCount === 1 &&
+       fanP.data.skippedAsExcepted.slice().sort().join(",") ===
+       "Alpha,_North",
+       "path and bare-name except entries mix in one list (got " +
+       JSON.stringify(fanP.data) + ")");
+assert(excNorth.children.length === 0 &&
+       !excA.children.some(c => c.name === "_PATHY"),
+       "…and both excluded folders were really spared");
+
+// the exclusion receipt must survive the panel's display cap: it rides
+// BEFORE the (longer) alreadyExisted list in the result.
+{
+  const keys = Object.keys(call("create_folder",
+    { name: "_ARCHIVE", eachChildOf: "_EXC", except: ["_North"] }).data);
+  assert(keys.indexOf("skippedAsExcepted") < keys.indexOf("alreadyExisted"),
+         "skippedAsExcepted serializes before alreadyExisted (got " +
+         keys.join(",") + ")");
+}
+
 // a guessed name refuses BEFORE creating anything, naming the real ones.
 const fanBad = call("create_folder",
   { name: "_NOPE", eachChildOf: "_EXC", except: ["North"] });

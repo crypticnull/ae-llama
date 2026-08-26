@@ -584,13 +584,23 @@ AELL_TOOLS.create_folder = function (args) {
     var skipped = [];
     if (typeof args.except !== "undefined" && args.except !== null) {
       var exc = AELLJSON.isArray(args.except) ? args.except : [args.except];
+      // A bare name and a full path are both reasonable spellings —
+      // measured in the field (2026-08-26): the model wrote
+      // "_COMPS/_ARCHIVE" where "_ARCHIVE" was wanted and burned a
+      // correction round on it. Both match now; a spelling that matches
+      // NEITHER still refuses, because guessing would betray exactly
+      // the folder the user asked to spare.
+      function excMatches(entry, k) {
+        var s2 = String(entry);
+        return k.name === s2 || AELL_folderPath(k) === s2;
+      }
       var kidNames = [];
       for (c = 0; c < kids.length; c++) kidNames.push(kids[c].name);
       var misses = [];
       for (c = 0; c < exc.length; c++) {
         var found = false;
-        for (var e2 = 0; e2 < kidNames.length; e2++) {
-          if (kidNames[e2] === String(exc[c])) { found = true; break; }
+        for (var e2 = 0; e2 < kids.length; e2++) {
+          if (excMatches(exc[c], kids[e2])) { found = true; break; }
         }
         if (!found) misses.push(String(exc[c]));
       }
@@ -604,7 +614,7 @@ AELL_TOOLS.create_folder = function (args) {
       for (c = 0; c < kids.length; c++) {
         var out = false;
         for (var e3 = 0; e3 < exc.length; e3++) {
-          if (kids[c].name === String(exc[e3])) { out = true; break; }
+          if (excMatches(exc[e3], kids[c])) { out = true; break; }
         }
         if (out) skipped.push(kids[c].name);
         else keep.push(kids[c]);
@@ -643,11 +653,14 @@ AELL_TOOLS.create_folder = function (args) {
                 createdCount: made.length,
                 created: made.slice(0, 15) };
     if (made.length > 15) res.createdMore = made.length - 15;
+    // The exclusion receipt rides BEFORE the existed list: the panel
+    // caps each result's display, and the user's "did it skip _North?"
+    // must survive the cut (measured: it was the field's first casualty).
+    if (skipped.length) res.skippedAsExcepted = skipped;
     if (had.length) {
       res.alreadyExistedCount = had.length;
       res.alreadyExisted = had.slice(0, 15);
     }
-    if (skipped.length) res.skippedAsExcepted = skipped;
     return AELL_okay(res);
   }
 
