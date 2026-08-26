@@ -543,6 +543,73 @@ function AELL_resolveFolderRef(ref) {
 AELL_TOOLS.create_folder = function (args) {
   if (!args.name) return AELL_err("'name' is required");
   var proj = app.project;
+
+  // Fan-out form: ONE call creates `name` inside EVERY direct subfolder
+  // of the named folder. The host walks the real subfolders itself, so
+  // the model cannot act from a trimmed project summary — measured in
+  // the field (2026-08-26): asked for _ARCHIVE in each of 10 subfolders,
+  // the model saw only the summary, hit 2 wrong-ish targets and claimed
+  // the whole job done. This form makes that claim true by construction
+  // or impossible to make.
+  if (typeof args.eachChildOf !== "undefined" && args.eachChildOf !== null) {
+    var box = AELL_isRootRef(args.eachChildOf)
+      ? proj.rootFolder : AELL_resolveFolderRef(args.eachChildOf);
+    if (!box) {
+      return AELL_err("Folder not found: " + args.eachChildOf +
+        ". Existing folders: " + AELL_listFolderPaths(20) +
+        ". Use one of those (or a path/id), or 'root' for the project root.");
+    }
+    var kids = [];
+    var c, kid;
+    for (c = 1; c <= box.numItems; c++) {
+      kid = box.item(c);
+      if (kid instanceof FolderItem) kids.push(kid);
+    }
+    if (kids.length === 0) {
+      var names = [];
+      for (c = 1; c <= box.numItems && names.length < 10; c++) {
+        names.push(box.item(c).name);
+      }
+      return AELL_err("'" + (AELL_folderPath(box) || box.name) +
+        "' has no subfolders to create '" + String(args.name) +
+        "' in. It holds: " +
+        (names.length ? names.join(", ") : "(nothing)") +
+        (box.numItems > 10 ? ", +" + (box.numItems - 10) + " more" : ""));
+    }
+    var made = [], had = [];
+    for (c = 0; c < kids.length; c++) {
+      var ch = kids[c];
+      var hit = null;
+      for (var m = 1; m <= ch.numItems; m++) {
+        var g = ch.item(m);
+        if (g instanceof FolderItem && g.name === String(args.name)) {
+          hit = g;
+          break;
+        }
+      }
+      if (hit) {
+        had.push(AELL_folderPath(hit));
+        continue;
+      }
+      var nf = proj.items.addFolder(String(args.name));
+      nf.parentFolder = ch;
+      made.push(AELL_folderPath(nf));
+    }
+    // Whole paths are the receipts, but they must FIT the panel's
+    // per-result cap — cap the lists, never the counts.
+    var res = { name: String(args.name),
+                parent: AELL_folderPath(box) || "(root)",
+                subfolders: kids.length,
+                createdCount: made.length,
+                created: made.slice(0, 15) };
+    if (made.length > 15) res.createdMore = made.length - 15;
+    if (had.length) {
+      res.alreadyExistedCount = had.length;
+      res.alreadyExisted = had.slice(0, 15);
+    }
+    return AELL_okay(res);
+  }
+
   var parent = proj.rootFolder;
   if (!AELL_isRootRef(args.parent)) {
     var p = AELL_resolveFolderRef(args.parent);

@@ -206,4 +206,61 @@ assert(!gone.ok && /Comps in this project:.*Squares 2/.test(gone.error),
        "comp-not-found error lists the project's real comps: " +
        gone.error.slice(0, 90));
 
+// 11. eachChildOf — the field failure of 2026-08-26, replayed. Asked for
+// _ARCHIVE inside each of 10 subfolders of a work project, the model
+// acted from the TRIMMED project summary, hit 2 wrong-ish targets and
+// claimed the whole job done. This form makes the host walk the real
+// subfolders in one call, so the receipts are real or the claim is
+// impossible.
+const field = folder("_FIELD");
+const north = folder("North", field);
+const south = folder("South", field);
+const chicago = folder("Chicago", field);
+folder("_ARCHIVE", chicago);              // one child already archived
+const fieldComp = new CompItem("Field Comp");
+fieldComp.parentFolder = field;           // a comp is NOT a subfolder
+
+const fan = call("create_folder", { name: "_ARCHIVE", eachChildOf: "_FIELD" });
+assert(fan.ok, "eachChildOf fan-out answers (" + (fan.error || "") + ")");
+assert(fan.data.subfolders === 3 && fan.data.createdCount === 2,
+       "3 real subfolders seen, 2 created (Chicago already had one): " +
+       JSON.stringify(fan.data));
+assert(JSON.stringify((fan.data.created || []).sort()) ===
+       JSON.stringify(["_FIELD/North/_ARCHIVE", "_FIELD/South/_ARCHIVE"]),
+       "created lists the exact real paths — the receipts (got " +
+       JSON.stringify(fan.data.created) + ")");
+assert(fan.data.alreadyExistedCount === 1 &&
+       fan.data.alreadyExisted[0] === "_FIELD/Chicago/_ARCHIVE",
+       "the pre-existing one is reported as existing, not created");
+assert(north.children.some(c => c.name === "_ARCHIVE") &&
+       south.children.some(c => c.name === "_ARCHIVE"),
+       "…and the folders are really in the stubbed project");
+assert(!field.children.some(c => c.name === "_ARCHIVE"),
+       "NOTHING was created directly inside _FIELD itself — the exact " +
+       "wrong level the field failure produced");
+assert(fieldComp.numLayers === 0 && !fieldComp.children,
+       "the comp child was skipped, not treated as a folder");
+
+// idempotent: run it again, nothing new, everything reported existing.
+const fan2 = call("create_folder", { name: "_ARCHIVE", eachChildOf: "_FIELD" });
+assert(fan2.ok && fan2.data.createdCount === 0 &&
+       fan2.data.alreadyExistedCount === 3,
+       "second run creates nothing and says so (got " +
+       JSON.stringify(fan2.data) + ")");
+
+// a folder with no subfolders refuses with its real contents.
+const leaf = folder("_LEAF");
+const leafComp = new CompItem("Leaf Comp");
+leafComp.parentFolder = leaf;
+const noKids = call("create_folder", { name: "X", eachChildOf: "_LEAF" });
+assert(!noKids.ok && /no subfolders/.test(noKids.error) &&
+       /Leaf Comp/.test(noKids.error),
+       "no-subfolders refusal names what the folder really holds: " +
+       noKids.error.slice(0, 120));
+
+// a bad reference stays grounded.
+const badEach = call("create_folder", { name: "X", eachChildOf: "Nope" });
+assert(!badEach.ok && /Existing folders:/.test(badEach.error),
+       "unknown eachChildOf lists the folders that really exist");
+
 console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");

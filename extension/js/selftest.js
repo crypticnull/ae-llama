@@ -2675,6 +2675,76 @@
                  "a second run renamed " + d.renamedCount + " comp(s)";
         } },
 
+      // ---- create_folder eachChildOf (field failure 2026-08-26) -------
+      // "Add an _ARCHIVE subfolder within each subfolder within _COMPS":
+      // the model acted from the trimmed project summary, hit 2 of 10
+      // targets and claimed success. The fan-out form walks the REAL
+      // subfolders host-side in one call and returns the created paths
+      // as receipts.
+      { name: "folder rig: fan-out parent",
+        tool: "create_folder",
+        args: { name: "ST FanParent" },
+        check: function (d) {
+          return !!d.id || "no folder id in " + JSON.stringify(d);
+        } },
+
+      { name: "folder rig: first subfolder",
+        tool: "create_folder",
+        args: { name: "ST FanKid A", parent: "ST FanParent" },
+        check: function (d) {
+          return d.path === "ST FanParent/ST FanKid A" ||
+                 "path was " + d.path;
+        } },
+
+      { name: "folder rig: second subfolder",
+        tool: "create_folder",
+        args: { name: "ST FanKid B", parent: "ST FanParent" },
+        check: function (d) {
+          return d.path === "ST FanParent/ST FanKid B" ||
+                 "path was " + d.path;
+        } },
+
+      { name: "folder rig: one child is already archived",
+        tool: "create_folder",
+        args: { name: "_ARCHIVE", parent: "ST FanParent/ST FanKid B" },
+        check: function (d) {
+          return d.path === "ST FanParent/ST FanKid B/_ARCHIVE" ||
+                 "path was " + d.path;
+        } },
+
+      { name: "eachChildOf fans out with real-path receipts",
+        tool: "create_folder",
+        args: { name: "_ARCHIVE", eachChildOf: "ST FanParent" },
+        check: function (d) {
+          if (d.subfolders !== 2) return "saw " + d.subfolders +
+            " subfolders, not 2";
+          if (d.createdCount !== 1 ||
+              !d.created || d.created.length !== 1 ||
+              d.created[0] !== "ST FanParent/ST FanKid A/_ARCHIVE") {
+            return "created: " + JSON.stringify(d.created);
+          }
+          if (d.alreadyExistedCount !== 1) {
+            return "pre-existing archive not reported: " +
+                   JSON.stringify(d);
+          }
+          return true;
+        } },
+
+      // Ask AE, not the report: re-running re-walks the live project, so
+      // createdCount 0 / existed 2 proves the folders are really there.
+      { name: "read-back: the fan-out really landed (idempotent re-run)",
+        tool: "create_folder",
+        args: { name: "_ARCHIVE", eachChildOf: "ST FanParent" },
+        check: function (d) {
+          return (d.createdCount === 0 && d.alreadyExistedCount === 2) ||
+                 "re-run says " + JSON.stringify(d);
+        } },
+
+      { name: "cleanup: delete the fan-out rig",
+        tool: "delete_item",
+        args: { item: "ST FanParent" },
+        check: function () { return true; } },
+
       { name: "cleanup: delete the renamed plain comp",
         tool: "delete_item",
         args: function (ctx) { return { item: ctx.rnPlainNew }; },

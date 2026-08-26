@@ -31,8 +31,13 @@
             "// omit comp for the active comp" },
     { name: "create_folder", mutating: true,
       desc: "Create a project-panel folder. Same name in different parents " +
-            "is fine; existence is checked per-parent.",
-      args: "{name: string, parent?: folder name, id, path, or 'root' (default: root)}" },
+            "is fine; existence is checked per-parent. eachChildOf makes " +
+            "ONE call create the folder inside EVERY direct subfolder of " +
+            "the named folder — the host reads the real subfolders itself " +
+            "and the result lists every path created, so use it for any " +
+            "'inside each subfolder of X' request instead of guessing " +
+            "folder names.",
+      args: "{name: string, parent?: folder name, id, path, or 'root' (default: root), eachChildOf?: folder name|id|path ('inside each subfolder of X' — one call, ignore parent)}" },
     { name: "move_to_folder", mutating: true,
       desc: "Move project items into a folder (batch).",
       args: "{items: name|id|path|[..], folder: name, id, path 'A/B', or 'root'}" },
@@ -611,9 +616,12 @@
       "  copy placeholder names from these instructions. If a lookup",
       "  fails, the error lists the folders that really exist — pick from",
       "  those or ask the user; do not invent a fallback.",
-      "- Batch requests ('a subfolder inside every folder within X'):",
-      "  inspect, filter folders whose parent is X, then emit one",
-      "  create_folder per real path, all in ONE commands array.",
+      "- 'add a folder inside each/every subfolder of X' = create_folder",
+      "  {name, eachChildOf: 'X'} — ONE call. The host finds the real",
+      "  subfolders itself; never list them from the PROJECT STATE (it is",
+      "  trimmed on big projects) and never emit one call per folder.",
+      "  The result's created/createdCount are the receipts — report",
+      "  THOSE numbers, nothing else.",
       "- NEVER claim an action you did not emit commands for in this same",
       "  response. If no available tool can do it, say so plainly and",
       "  return commands: [].",

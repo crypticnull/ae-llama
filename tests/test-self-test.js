@@ -91,6 +91,7 @@ function capLayers(compName, all, args) {
 // canned happy-path results per tool
 let createCount = 0;
 const createdComps = [];
+const folders = {};        // path -> true (the create_folder rig)
 // Solid SOURCES, mutable: deleting a comp does not delete these (the
 // field bug), and the suite's new cleanup deletes them by id. Seeded
 // with the accumulation observed in the real scratch project — a few of
@@ -276,6 +277,52 @@ function cannedOk(tool, args) {
       return { tool: t, layers: L.length, succeeded: L.length,
                failures: "" };
     }
+    case "create_folder": {
+      // Folders live as a path->true map. Faithful on what the fan-out
+      // steps measure: eachChildOf walks the REAL direct children, an
+      // existing same-named folder is reported not re-created, and the
+      // created paths come back as receipts.
+      const nm = String((args && args.name) || "");
+      if (args && args.eachChildOf) {
+        const base = String(args.eachChildOf);
+        if (!folders[base]) {
+          return { __err: "Folder not found: " + base +
+                   ". Existing folders: " + Object.keys(folders).join(", ") };
+        }
+        const kids = Object.keys(folders).filter(p =>
+          p.indexOf(base + "/") === 0 &&
+          p.slice(base.length + 1).indexOf("/") === -1);
+        if (!kids.length) {
+          return { __err: "'" + base + "' has no subfolders to create '" +
+                   nm + "' in. It holds: (nothing)" };
+        }
+        const created = [], had = [];
+        for (const k of kids) {
+          const p = k + "/" + nm;
+          if (folders[p]) had.push(p);
+          else { folders[p] = true; created.push(p); }
+        }
+        const out = { name: nm, parent: base, subfolders: kids.length,
+                      createdCount: created.length, created };
+        if (had.length) {
+          out.alreadyExistedCount = had.length;
+          out.alreadyExisted = had;
+        }
+        return out;
+      }
+      const parent = args && args.parent ? String(args.parent) : "";
+      if (parent && !folders[parent]) {
+        return { __err: "Parent folder not found: " + parent +
+                 ". Existing folders: " + Object.keys(folders).join(", ") };
+      }
+      const path = parent ? parent + "/" + nm : nm;
+      if (folders[path]) {
+        return { name: nm, id: 900, path,
+                 note: "Folder already existed in this parent" };
+      }
+      folders[path] = true;
+      return { name: nm, id: 900 + Object.keys(folders).length, path };
+    }
     case "delete_item": {
       // Faithful on the point the cleanup measures: deleting works by
       // name OR id, a deleted item leaves every later listing, and a
@@ -290,6 +337,15 @@ function cannedOk(tool, args) {
           solidSources.splice(i, 1);
           return { deleted: nm };
         }
+      }
+      // A folder delete cascades to everything under its path.
+      if (folders[String(key)]) {
+        for (const p of Object.keys(folders)) {
+          if (p === String(key) || p.indexOf(String(key) + "/") === 0) {
+            delete folders[p];
+          }
+        }
+        return { deleted: key };
       }
       return { __err: "Project item not found: " + key };
     }
