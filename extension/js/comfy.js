@@ -129,6 +129,9 @@
     var entries;
     try { entries = fs.readdirSync(dir); } catch (e) { return out; }
     for (var i = 0; i < entries.length; i++) {
+      // A sidecar is not a workflow. Listing it would offer the model a
+      // "<name>.manifest" template that loadWorkflow can only reject.
+      if (/\.manifest\.json$/i.test(entries[i])) continue;
       if (/\.json$/i.test(entries[i])) {
         out.push({
           name: entries[i].replace(/\.json$/i, ""),

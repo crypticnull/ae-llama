@@ -2076,3 +2076,149 @@ comp-rename FAST-TRACK had to call itself "the exception that ships as a
 patch" precisely because that is not the default. Pushing at an equal
 version is the correct outcome here. Flagging it plainly so the remote
 session knows `add_light` is sitting in the branch waiting for 0.10.0.
+
+## 2026-08-26 (local) — item 2d: the H3 i2v template, and why NO bundled workflow could ever have run
+
+Harness **206/206** before and after (unchanged — this pass never touched
+AE-side code). Stubbed suite **30/30**, one new file
+(`tests/test-workflow-adapt.js`, 47 checks). **No version bump**; reasons
+at the bottom.
+
+The pass opened green, so it took the top unfinished workplan item: 2d,
+the H3 i2v workflow, part 1 (template adaptation). The manifest's ask was
+narrow — "drop nodes 169/170 + link 313 so the injected prompt widget on
+node 138 takes effect". Doing only that would have shipped a file the
+panel still cannot open, because of what the first ten minutes turned up.
+
+**The finding that reframed the item: none of the three bundled workflows
+is loadable, and never was.** `extension/workflows/` holds UI-format
+("Export"/"Save") graphs — `nodes` + `links`. `comfy.js loadWorkflow()`
+opens with an explicit check for exactly that shape and throws
+"is a UI-format export … use 'Export (API)'". There is no converter
+anywhere in the repo. On top of that, `extension/workflows/` is not the
+seed directory: `setup.js ensureDataDirs()` copies
+`extension/comfy-workflows/` into the user's data root, and that folder
+held only a README and a toy txt2img example. So the H3 and Krea
+templates were unreachable by the panel by two independent mechanisms.
+
+**Why a converter and not a hand re-export.** The UI format stores widget
+values POSITIONALLY (`widgets_values: ["a", 1, 2]`) and names only the
+widgets that happen to be linked. Recovering the names needs each class's
+ordered input list, which lives in ComfyUI's `INPUT_TYPES`. A re-export
+by hand also cannot make the edit the manifest actually needs, and
+nothing would stop the template and the manifest drifting apart later.
+
+**Probe: ComfyUI imported in-process, no server, no port, no GPU.**
+`scripts/harvest-comfy-node-defs.py` sets `sys.argv`, calls
+`comfy.options.enable_args_parsing()`, constructs a `PromptServer` (custom
+packs expect the instance) and awaits `nodes.init_extra_nodes()`. That
+resolved all 31 classes the H3 i2v graph uses — including the pack-defined
+ones — out of 3487 registered, on **ComfyUI 0.32.0**. Only `MarkdownNote`
+is absent, correctly: it is frontend-only.
+
+**Five measured facts, every one of which silently corrupts a template if
+guessed wrong:**
+
+- `control_after_generate` (RandomNoise's "randomize") is a frontend-only
+  widget that OCCUPIES A POSITION. Skip it and every later widget on that
+  node reads its neighbour's value.
+- A V3 **dynamic combo** consumes its own position, then the SELECTED
+  option's inputs expand INLINE as dotted keys. `SaveVideo` nests one
+  inside another: `codec: "h264"` plus `codec.encoding: "auto"`.
+  `RTXVideoSuperResolution` is `resize_type` + `resize_type.width` +
+  `resize_type.height`, and `quality` sits AFTER that run.
+- A V3 **autogrow group** is sockets only and consumes NO positions. The
+  frame-grid maths node wires as `values.a` / `values.b` — the dotted
+  names come from `finalize_prefix()` in `comfy_api/latest/_io.py`.
+- **Bypass (mode 4) is not "delete"**: consumers rewire through it to the
+  same-typed input. The bypassed turbo-LoRA loader means node 163's model
+  comes from 153, not from 161.
+- `json.dump(..., sort_keys=True)` in the harvester **destroyed the whole
+  point** — declaration order IS the payload. Caught immediately because
+  the converter then read `resize_type` as `1920`. The comment at the
+  dump site now says never to do it.
+
+**Built:**
+
+- `scripts/harvest-comfy-node-defs.py` -> `scripts/comfy-node-defs.json`
+  (31 classes, provenance recorded), so the converter, its test and CI
+  need no ComfyUI install.
+- `scripts/adapt-workflow.js` — UI->API conversion with all of the above,
+  driven by a `panelAdaptation` block in the manifest sidecar
+  (`dropNodes: [169, 170]` + the reason). Dropping a node that FED a
+  widget input is the mechanism, not a side effect: the widget gets its
+  own value back, which is precisely what makes injection work.
+  Grounded refusals for an unknown class (lists what it knows), an
+  unknown dynamic-combo key (lists the real options), too few stored
+  widget values, a required socket orphaned by an adaptation, a
+  `dropNodes` id the workflow lacks, and an already-API input.
+- `extension/comfy-workflows/AE_LLAMA_H3_I2V_V1.json` + its manifest —
+  seeded, so `setup.js` copies both to the user's data root.
+- `comfy.js listWorkflows()` now skips `*.manifest.json`. Seeding a
+  sidecar without this offers the model a phantom `<name>.manifest`
+  template that `loadWorkflow` could only reject. Same trap for any user
+  who adds a sidecar to their own workflow, which `readManifest`'s own
+  comment invites them to do.
+
+**Verification, and it is the strong kind.** The adapted graph was run
+through ComfyUI 0.32.0's OWN `execution.validate_prompt()` in-process —
+no generation, no models loaded. First run: `valid: false`, and the only
+four errors were `value_not_in_list` on model FILENAMES. Zero structural,
+naming or type errors: every input name, every dynamic-combo expansion,
+every autogrow key and the bypass rewire were accepted by the real
+validator. The four filenames turned out to be a probe artefact — see
+below — and with the shared model root mounted the second run returned
+**`valid: true`, `good_outputs: ["92", "159", "160"]`, no node errors.**
+
+**Three findings for whoever takes parts 2 and 3:**
+
+1. **The Desktop app's shared model root is NOT discoverable from
+   `AppData\Roaming\ComfyUI\extra_models_config.yaml`** — that file lists
+   only the Documents base path. Yet the running install mounts
+   `AppData\Local\Comfy-Desktop\ComfyUI-Shared\models` (its own log
+   proves it), and every H3 weight the manifest names lives THERE:
+   `minimax_h3_fl2va_pruned_int8_convrot.safetensors` (20.0 GB),
+   `minimax_h3_ref2va_...` (20.0 GB), `minimax_h3_video_vae_fp16`
+   (4.9 GB), `minimax_h3_audio_vae_fp32` (0.56 GB) and
+   `qwen3vl_32b_minimax_h3_nvfp4_awq` (14.6 GB). The tier plan's
+   register-existing matcher must carry that root explicitly; it cannot
+   be derived from the yaml.
+2. **`injectParams` cannot reach the H3 prompt.** It only writes text into
+   `CLIPTextEncode*` nodes, and H3 carries its prompt on
+   `MiniMaxH3ImageToVideo` (node 138). Seed injection works; prompt does
+   not. That is part 2 — wire the manifest's `procedural` block (prompt
+   138, durationSeconds 136 in SECONDS, resolution 167, firstFrame 114)
+   into `injectParams`. The new test PINS the current miss as a KNOWN GAP
+   so part 2 has a failing expectation to flip.
+3. **`LoadImage` (114) still points at `2026-08-08_CRPTK-KREA2__00036_.png`**,
+   a file only the owner's machine has. Any other user's first queue
+   fails validation on it. Part 2 must inject or detach it — the manifest
+   already says "omit for t2v", and the fl2va weight does t2v with no
+   image.
+
+**Not done, deliberately, and each is its own pass:** the KREA2 template
+contains a SUBGRAPH ("Initial Loader"), stored as a definition plus a
+node whose `type` is a UUID. The converter refuses it with the route that
+does work named in the message — queue it once and pull the executed
+prompt from `/history`, which comes back flattened (the owner already has
+`get-api-workflow.ps1` doing exactly this). H3 r2v is unconverted. And
+part 3 (one real generation through the panel, RTXVideoSuperResolution
+made bypassable) is untouched — it needs part 2 first, or the model's
+prompt never reaches the graph.
+
+**One piece of debris, found and cleaned:** importing ComfyUI from the
+repo root made an installed pack write `scripts/web/extensions/dzNodes/*`
+into this repository. Deleted; the harvester now resolves its arguments to
+absolute paths and `chdir`s into the ComfyUI tree before importing
+anything, so a pack that writes relative assets lands in ComfyUI's own
+directory.
+
+**Why NO version bump.** This is feature-track work: a new bundled
+artefact plus two build-time scripts. WORKPLAN item 5's rule is that new
+capability rides the next MINOR the remote session cuts, and the
+`listWorkflows` sidecar fix only matters because THIS commit is the first
+to seed a sidecar — it is part of the feature, not a repair to something
+users are running. Same call, same reasoning, as `add_light` yesterday.
+Pushing at an equal version is the correct outcome. Flagging plainly:
+`add_light` AND the H3 i2v template are both now sitting in the branch
+waiting for 0.10.0.

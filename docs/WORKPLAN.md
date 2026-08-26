@@ -157,14 +157,33 @@ the register-existing matcher. Commit the inventory; no version bump.
   the set_property->for_each_layer redirect ship together.
 - **H3 i2v workflow RECEIVED** (AE_LLAMA_H3_I2V_V1 + manifest): the
   fl2va weight covers BOTH t2v (no image) and i2v, superseding r2v as
-  the first H3 target. Local pass, in order: (1) template adaptation —
-  drop the Ollama nodes 169/170 and link 313 so the injected prompt
-  widget on node 138 takes effect (spec in the manifest's `procedural`
-  block; duration injects as SECONDS into node 136, the graph converts
-  to the 17k+5 frame grid); (2) wire those injection points into
-  comfy.js injectParams; (3) ONE real generation end-to-end through the
-  panel to verify, with RTXVideoSuperResolution made bypassable (it is
-  NVIDIA-app dependent); (4) attribute the manifest's UNKNOWN nodes.
+  the first H3 target. Local pass, in order:
+  - ~~(1) template adaptation~~ DONE 2026-08-26. It was bigger than the
+    manifest thought: EVERY bundled workflow is UI-format and
+    `loadWorkflow` refuses UI-format, and `extension/workflows/` is not
+    the seed dir either. So the pass built the conversion instead —
+    `scripts/harvest-comfy-node-defs.py` (+ the checked-in defs) and
+    `scripts/adapt-workflow.js`, handling positional widget decoding,
+    control_after_generate, V3 dynamic combos, autogrow groups and
+    bypass rewiring. Output is seeded at
+    `extension/comfy-workflows/AE_LLAMA_H3_I2V_V1.json` and passes
+    ComfyUI 0.32.0's own `validate_prompt` (`valid: true`). See the log.
+  - **(2) wire the manifest `procedural` injection points into comfy.js
+    injectParams** — NEXT. It only writes text into `CLIPTextEncode*`
+    nodes today, so the H3 prompt (on node 138) is never set; a KNOWN
+    GAP assertion in `tests/test-workflow-adapt.js` is waiting to be
+    flipped. Same pass must handle node 114's `LoadImage`, which still
+    points at a PNG only the owner's machine has: inject the caller's
+    image or detach it for t2v.
+  - (3) ONE real generation end-to-end through the panel to verify,
+    with RTXVideoSuperResolution made bypassable (it is NVIDIA-app
+    dependent). Needs (2) first or the prompt never reaches the graph.
+  - (4) attribute the manifest's UNKNOWN nodes.
+  - Also surfaced, its own small pass: the KREA2 template contains a
+    SUBGRAPH the converter refuses to flatten. Route that works — queue
+    it once in ComfyUI and pull the executed prompt from `/history`
+    (the owner's `get-api-workflow.ps1` already does this). H3 r2v is
+    still unconverted too.
 - **Pin H3 t2v/i2v files** (HF is proxy-blocked from the remote
   session): list https://huggingface.co/api/models/Comfy-Org/MiniMax-H3/tree/main?recursive=true
   and record the t2v/i2v diffusion weights + non-nvfp4 encoder variants
