@@ -109,6 +109,75 @@
     req.end();
   }
 
+  /**
+   * Upload a local file into ComfyUI's input folder so a LoadImage node can
+   * name it. LoadImage takes a FILENAME inside ComfyUI's own input dir, never
+   * a path, so an AE-side render can only reach the graph this way.
+   * cb(err, nameForLoadImage)
+   */
+  function uploadImage(base, filePath, cb) {
+    ensureNode();
+    var data;
+    try {
+      data = fs.readFileSync(filePath);
+    } catch (e) {
+      cb(new Error("Cannot read image '" + filePath + "' — " + e.message));
+      return;
+    }
+    // A quote, backslash or newline in the name would break the multipart
+    // header apart; ComfyUI stores whatever name we send, so sanitise here.
+    var name = String(path.basename(filePath)).replace(/["\\\r\n]/g, "_");
+    var boundary = "----aellama" + Math.floor(Math.random() * 1e12);
+    var CRLF = "\r\n";
+    var head = NodeBuffer.from(
+      "--" + boundary + CRLF +
+      'Content-Disposition: form-data; name="image"; filename="' +
+      name + '"' + CRLF +
+      "Content-Type: application/octet-stream" + CRLF + CRLF, "utf8");
+    var tail = NodeBuffer.from(
+      CRLF + "--" + boundary + CRLF +
+      'Content-Disposition: form-data; name="overwrite"' + CRLF + CRLF +
+      "true" + CRLF +
+      "--" + boundary + "--" + CRLF, "utf8");
+    var payload = NodeBuffer.concat([head, data, tail]);
+    var mod = base.isHttps ? https : http;
+    var req = mod.request({
+      host: base.host, port: base.port, path: "/upload/image", method: "POST",
+      headers: {
+        "Content-Type": "multipart/form-data; boundary=" + boundary,
+        "Content-Length": payload.length
+      }
+    }, function (res) {
+      var chunks = [];
+      res.on("data", function (c) { chunks.push(c); });
+      res.on("end", function () {
+        var text = NodeBuffer.concat(chunks).toString("utf8");
+        if (res.statusCode !== 200) {
+          cb(new Error("ComfyUI rejected the image upload (HTTP " +
+                       res.statusCode + "): " + text.slice(0, 200)));
+          return;
+        }
+        var json = null;
+        try { json = JSON.parse(text); } catch (e2) {}
+        if (!json || !json.name) {
+          cb(new Error("ComfyUI's upload reply carried no filename: " +
+                       text.slice(0, 200)));
+          return;
+        }
+        cb(null, (json.subfolder ? json.subfolder + "/" : "") + json.name);
+      });
+    });
+    req.on("error", function (err) {
+      cb(new Error("ComfyUI unreachable at " + base.label + " — " +
+                   err.message));
+    });
+    req.setTimeout(120000, function () {
+      req.destroy(new Error("Image upload timed out"));
+    });
+    req.write(payload);
+    req.end();
+  }
+
   // ------------------------------------------------------------- workflows
 
   /** List *.json workflow templates in dir (non-recursive). */
@@ -268,12 +337,164 @@
     return null;
   }
 
+  // ------------------------------------- manifest-driven injection points
+
+  /* The generic walk above only understands CLIPTextEncode-shaped graphs.
+   * MiniMax H3 carries its prompt on the sampler node itself, its duration
+   * on a seconds primitive feeding a frame-grid expression, and its size as
+   * MEGAPIXELS on a ResolutionSelector — so without help the render would
+   * silently use the template's placeholder text at the template's size.
+   * The workflow's sidecar manifest names those nodes in a `procedural`
+   * block; everything below is driven by it and does nothing without one. */
+
+  /** True for an API-format link value, i.e. ["<upstreamId>", slot]. */
+  function isLink(v) { return v instanceof Array; }
+
+  /**
+   * Resolve a procedural entry to the input KEY it addresses.
+   * `input` (a name) is authoritative. `widget: N` is the fallback for
+   * hand-written manifests: widgets keep their authored order in the API
+   * export, so N counts literal (unlinked) inputs from the front.
+   */
+  function proceduralKey(node, entry, label) {
+    var keys = [];
+    for (var k in node.inputs) {
+      if (node.inputs.hasOwnProperty(k) && !isLink(node.inputs[k])) keys.push(k);
+    }
+    if (entry && typeof entry.input === "string") {
+      if (!node.inputs.hasOwnProperty(entry.input)) {
+        throw new Error("Manifest procedural." + label + " names input '" +
+          entry.input + "', which node " + entry.nodeId + " (" +
+          node.class_type + ") does not have. It has: " +
+          keys.join(", ") + ".");
+      }
+      return entry.input;
+    }
+    var idx = (entry && typeof entry.widget === "number") ? entry.widget : 0;
+    if (idx >= keys.length) {
+      throw new Error("Manifest procedural." + label + " asks for widget " +
+        idx + " of node " + entry.nodeId + " (" + node.class_type +
+        "), which has " + keys.length + " settable input(s): " +
+        (keys.join(", ") || "none") + ".");
+    }
+    return keys[idx];
+  }
+
+  /** Write a value keeping the widget's authored type (".98" stays a string). */
+  function writeWidget(node, key, value) {
+    node.inputs[key] = (typeof node.inputs[key] === "string")
+      ? String(value) : value;
+  }
+
+  function proceduralNode(graph, entry, label) {
+    if (!entry || entry.nodeId === undefined || entry.nodeId === null) return null;
+    var node = graph[String(entry.nodeId)];
+    if (!node || !node.inputs) {
+      throw new Error("Manifest procedural." + label + " points at node " +
+        entry.nodeId + ", which is not in this workflow. Re-export the " +
+        "template or fix the manifest.");
+    }
+    return node;
+  }
+
+  function injectProcedural(graph, params, procedural, applied) {
+    var p = procedural;
+
+    if (p.prompt && typeof params.prompt === "string" && params.prompt !== "") {
+      var pn = proceduralNode(graph, p.prompt, "prompt");
+      var pk = proceduralKey(pn, p.prompt, "prompt");
+      writeWidget(pn, pk, params.prompt);
+      applied.push("prompt -> node " + p.prompt.nodeId + "." + pk +
+                   " (manifest)");
+    }
+
+    // Seconds, never frames: this graph converts to the model's 17k+5 frame
+    // grid itself. Writing a frame count into the seconds widget would ask
+    // for a two-minute render and look like it worked.
+    if (p.durationSeconds) {
+      if (params.durationSeconds > 0) {
+        var dn = proceduralNode(graph, p.durationSeconds, "durationSeconds");
+        var dk = proceduralKey(dn, p.durationSeconds, "durationSeconds");
+        writeWidget(dn, dk, Number(params.durationSeconds));
+        applied.push("durationSeconds=" + Number(params.durationSeconds) +
+                     " -> node " + p.durationSeconds.nodeId + "." + dk +
+                     " (manifest)");
+      } else if (params.frames > 0) {
+        throw new Error("This template's length is set in SECONDS, not " +
+          "frames — its graph converts seconds to the model's own frame " +
+          "grid. Re-call with durationSeconds (e.g. durationSeconds: 5) " +
+          "instead of frames: " + Math.round(params.frames) + ".");
+      }
+    } else if (params.durationSeconds > 0) {
+      applied.push("durationSeconds ignored (this template has no seconds " +
+                   "input; use frames)");
+    }
+
+    // ResolutionSelector takes MEGAPIXELS plus its own aspect_ratio combo,
+    // so width/height can only set the total area. Say so rather than let
+    // the caller believe it got the exact pixel dimensions it asked for.
+    if (p.resolution && params.width > 0 && params.height > 0) {
+      var rn = proceduralNode(graph, p.resolution, "resolution");
+      var rk = proceduralKey(rn, p.resolution, "resolution");
+      var mp = (params.width * params.height) / 1e6;
+      var capped = "";
+      if (p.resolution.maxMegapixels > 0 && mp > p.resolution.maxMegapixels) {
+        mp = p.resolution.maxMegapixels;
+        capped = ", capped at this model's trained maximum";
+      }
+      mp = Math.round(mp * 100) / 100;
+      writeWidget(rn, rk, mp);
+      applied.push("width x height -> " + mp + " megapixels on node " +
+        p.resolution.nodeId + "." + rk + " (this template derives pixel " +
+        "dimensions from megapixels + its own aspect ratio" + capped + ")");
+    }
+
+    // The reference image. With one, the caller's uploaded filename goes in;
+    // without one, the whole LoadImage is detached and the graph runs as
+    // text-to-video — the template's baked-in filename exists on nobody
+    // else's machine, so leaving it would fail validation for every user.
+    if (p.firstFrame) {
+      var fid = String(p.firstFrame.nodeId);
+      var fn = proceduralNode(graph, p.firstFrame, "firstFrame");
+      if (typeof params.imageName === "string" && params.imageName !== "") {
+        var fk = proceduralKey(fn, p.firstFrame, "firstFrame");
+        writeWidget(fn, fk, params.imageName);
+        applied.push("image -> node " + fid + "." + fk + " (manifest)");
+      } else if (p.firstFrame.detachable) {
+        var dropped = [];
+        for (var cid in graph) {
+          if (!graph.hasOwnProperty(cid)) continue;
+          var c = graph[cid];
+          if (!c || !c.inputs) continue;
+          for (var ck in c.inputs) {
+            if (!c.inputs.hasOwnProperty(ck)) continue;
+            if (isLink(c.inputs[ck]) && String(c.inputs[ck][0]) === fid) {
+              delete c.inputs[ck];
+              dropped.push(cid + "." + ck);
+            }
+          }
+        }
+        delete graph[fid];
+        applied.push("no image: detached the reference frame (node " + fid +
+                     (dropped.length ? " -> " + dropped.join(", ") : "") +
+                     ") and ran text-to-video");
+      } else {
+        applied.push("no image given, and this template's reference frame " +
+                     "is not marked detachable — node " + fid +
+                     " keeps its authored file");
+      }
+    }
+  }
+
   /**
    * Graft params onto the graph. Returns a list of what was changed so the
    * LLM (and user) can see how the template was used.
-   * params: {prompt, negative, width, height, seed, frames}
+   * params: {prompt, negative, width, height, seed, frames, durationSeconds,
+   *          imageName}
+   * manifest: the workflow's sidecar, if any — its `procedural` block names
+   * the nodes the generic introspection below cannot find.
    */
-  function injectParams(graph, params) {
+  function injectParams(graph, params, manifest) {
     var applied = [];
     var cls = classifyEncoders(graph);
     var k, node;
@@ -347,6 +568,11 @@
         }
       }
     }
+
+    // Last, so an explicit manifest target always wins over a guess.
+    if (manifest && manifest.procedural) {
+      injectProcedural(graph, params, manifest.procedural, applied);
+    }
     return applied;
   }
 
@@ -405,19 +631,39 @@
   function generate(opts, onProgress, cb) {
     ensureNode();
     var base = parseBase(opts.comfyUrl);
+    var params = opts.params || {};
+    var manifest = opts.manifest !== undefined
+      ? opts.manifest : readManifest(opts.workflowFile);
+
     var graph, applied;
-    try {
-      graph = loadWorkflow(opts.workflowFile);
-      applied = injectParams(graph, opts.params || {});
-    } catch (e) {
-      cb(e);
+
+    // A reference image has to exist inside ComfyUI's input folder before the
+    // graph can name it, so the upload happens before any grafting.
+    if (typeof params.image === "string" && params.image !== "") {
+      uploadImage(base, params.image, function (upErr, name) {
+        if (upErr) { cb(upErr); return; }
+        params.imageName = name;
+        start();
+      });
       return;
     }
+    start();
 
+    function start() {
+      try {
+        graph = loadWorkflow(opts.workflowFile);
+        applied = injectParams(graph, params, manifest);
+      } catch (e) {
+        cb(e);
+        return;
+      }
+      queueIt();
+    }
+
+    function queueIt() {
     // A prompt that lands nowhere means the render would use the template's
     // baked-in text — fail fast instead of burning GPU minutes on it.
-    if (opts.params && typeof opts.params.prompt === "string" &&
-        opts.params.prompt !== "") {
+    if (typeof params.prompt === "string" && params.prompt !== "") {
       var landed = false;
       for (var ai = 0; ai < applied.length; ai++) {
         if (applied[ai].indexOf("prompt -> ") === 0) { landed = true; break; }
@@ -565,6 +811,7 @@
             });
         }, POLL_MS);
       });
+    }
   }
 
   // ---------------------------------------------------------------- status
@@ -923,6 +1170,7 @@
     readManifest: readManifest,
     loadWorkflow: loadWorkflow,
     injectParams: injectParams,
+    uploadImage: uploadImage,
     generate: generate,
     status: status,
     launch: launch,

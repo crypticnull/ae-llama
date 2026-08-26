@@ -2222,3 +2222,91 @@ users are running. Same call, same reasoning, as `add_light` yesterday.
 Pushing at an equal version is the correct outcome. Flagging plainly:
 `add_light` AND the H3 i2v template are both now sitting in the branch
 waiting for 0.10.0.
+
+## 2026-08-26 (local) — item 2d: the H3 prompt finally reaches the graph (part 2)
+
+Harness **206/206** before and after (this pass touched no AE-side code).
+Stubbed suite **31/31**, one new file (`tests/test-comfy-inject.js`, 33
+checks). **No version bump**; reasons at the bottom.
+
+Opened green, so the top unfinished item was 2d part 2: wire the manifest's
+`procedural` injection points into `injectParams`, and deal with node 114's
+`LoadImage` still naming a PNG only the owner's machine has.
+
+**What was actually wrong.** `injectParams` finds a prompt by walking
+conditioning links to `CLIPTextEncode*` nodes. H3 has none — the prompt is a
+widget on `MiniMaxH3ImageToVideo` itself. The generic walk also cannot see
+that this graph's length is authored in SECONDS (node 136, converted to the
+model's 17k+5 frame grid by the expression at 135) or that its size is
+MEGAPIXELS on a `ResolutionSelector` that owns the aspect ratio. So the
+sidecar's `procedural` block is the only thing that knows, and until now
+nothing read it: `grep procedural extension/js/*.js` came back empty.
+
+**Built, all in `comfy.js`:**
+
+- `injectParams(graph, params, manifest)` — third argument, and the
+  procedural pass runs LAST so an explicit manifest target always beats a
+  guess. With no manifest the function behaves exactly as before (pinned by
+  a test).
+- Entries resolve to an input by NAME (`input: "prompt"`, authoritative) or
+  by `widget: N` counting literal — i.e. unlinked — inputs from the front,
+  which is the fallback a hand-written manifest gets. Both refuse with
+  grounded errors: a node id the workflow lacks, an input name the node does
+  not have (listing the ones it does), a widget index past the end (listing
+  the count and the names).
+- `writeWidget` preserves the authored TYPE. Node 167's megapixels widget
+  holds the STRING `".98"`, not a number; writing a float back would change
+  the widget's type under a node that declared it text.
+- **Seconds vs frames is a refusal, not a conversion.** A `frames` param
+  against a template with a `procedural.durationSeconds` throws and names
+  `durationSeconds` instead. 120 written into a seconds widget asks for a
+  two-minute render and looks like it worked — the exact failure the panel's
+  grounded-error rule exists for. `durationSeconds` against a template that
+  has no seconds input is REPORTED in `applied`, not silently dropped.
+- Width x height become megapixels (area only), capped at the manifest's new
+  `maxMegapixels` (1.03 = H3's native 768x1344). The `applied` line says out
+  loud that pixel dimensions come from the template's own aspect ratio, so
+  nobody reads "1024x576" back as a promise.
+- `uploadImage(base, filePath, cb)` — multipart POST to `/upload/image`.
+  LoadImage names a file inside ComfyUI's own input dir and never a path, so
+  this is the only way an AE-side render can reach a graph. `generate()`
+  uploads BEFORE grafting and injects the returned name.
+- **With no image the reference frame is DETACHED**: the LoadImage node is
+  deleted along with every input linked to it. `first_frame` is an OPTIONAL
+  input on `MiniMaxH3ImageToVideo` (measured, `scripts/comfy-node-defs.json`),
+  so the fl2va weight then runs text-to-video. This is not politeness — the
+  authored filename exists on one machine, so every other user's first queue
+  would have failed validation. A manifest that does not mark its reference
+  frame `detachable` keeps it, and says why.
+- `comfy_generate` gained `durationSeconds` and `image` (tools.js docs +
+  system prompt, or the model cannot reach them), and now passes the manifest
+  it already reads down into `generate`.
+
+**Verification — ComfyUI's own validator, not ours.** Both injected graphs
+were run through `execution.validate_prompt()` in-process on ComfyUI 0.32.0
+(no server, no models, `--cpu`): t2v (LoadImage deleted, `first_frame`
+removed, 0.92 MP, 6 s) and i2v (uploaded filename injected, 5 s) both return
+**`valid: True`, `good_outputs: ['159', '92', '160']`, no node errors**. The
+Desktop app's shared model root has to be mounted by hand for this — nothing
+in `extra_models_config.yaml` names it, as the last pass found.
+
+**Stub faithfulness.** `tests/test-comfy-inject.js` reproduces the two shapes
+that bite: the megapixels widget as a string, and `first_frame` as a link to
+a one-machine file. The upload half runs against a real local `http.Server`
+that parses the multipart body and echoes the bytes back — the test file's
+contents deliberately contain a CRLF and a `--`, the two things a hand-rolled
+multipart body gets wrong. The KNOWN GAP assertion in
+`tests/test-workflow-adapt.js` is flipped: it now asserts the generic walk
+still cannot place the prompt AND that the sidecar makes it land.
+
+**Left for part 3** (one real generation end to end, needs a GPU run):
+`RTXVideoSuperResolution` is still not bypassable, which part 3 must fix
+before it can run on a machine without the NVIDIA app. Part 4 (attributing
+the manifest's UNKNOWN nodes) is untouched.
+
+**Why NO version bump.** Nothing users are running is repaired here: the
+`procedural` block, the H3 template it drives, and the two new
+`comfy_generate` arguments are all unshipped feature-track work, and
+WORKPLAN item 5 puts new capability on the next MINOR the remote session
+cuts. Third pass in a row at an equal version, deliberately. Waiting in the
+branch for 0.10.0: `add_light`, the H3 i2v template, and now this.

@@ -168,16 +168,20 @@ the register-existing matcher. Commit the inventory; no version bump.
     bypass rewiring. Output is seeded at
     `extension/comfy-workflows/AE_LLAMA_H3_I2V_V1.json` and passes
     ComfyUI 0.32.0's own `validate_prompt` (`valid: true`). See the log.
-  - **(2) wire the manifest `procedural` injection points into comfy.js
-    injectParams** — NEXT. It only writes text into `CLIPTextEncode*`
-    nodes today, so the H3 prompt (on node 138) is never set; a KNOWN
-    GAP assertion in `tests/test-workflow-adapt.js` is waiting to be
-    flipped. Same pass must handle node 114's `LoadImage`, which still
-    points at a PNG only the owner's machine has: inject the caller's
-    image or detach it for t2v.
-  - (3) ONE real generation end-to-end through the panel to verify,
-    with RTXVideoSuperResolution made bypassable (it is NVIDIA-app
-    dependent). Needs (2) first or the prompt never reaches the graph.
+  - ~~(2) wire the manifest `procedural` injection points into comfy.js
+    injectParams~~ DONE 2026-08-26. injectParams takes the manifest as a
+    third argument and honours `procedural` (prompt, durationSeconds,
+    resolution, firstFrame) with grounded refusals; `comfy_generate`
+    gained `durationSeconds` (a `frames` arg on a seconds template is
+    REFUSED, not converted) and `image` (uploaded to ComfyUI's input dir
+    via the new `Comfy.uploadImage`). With no image the reference
+    LoadImage is DETACHED and the graph runs t2v, so the template no
+    longer names a one-machine PNG. Both paths return `valid: True` from
+    ComfyUI 0.32.0's own validate_prompt. See the log.
+  - **(3) ONE real generation end-to-end through the panel to verify** —
+    NEXT. RTXVideoSuperResolution must be made bypassable in the same
+    pass (it is NVIDIA-app dependent, so the template cannot run on a
+    machine without it).
   - (4) attribute the manifest's UNKNOWN nodes.
   - Also surfaced, its own small pass: the KREA2 template contains a
     SUBGRAPH the converter refuses to flatten. Route that works — queue

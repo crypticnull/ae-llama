@@ -172,10 +172,16 @@ Queued (see WORKPLAN for owners/order):
   `scripts/comfy-node-defs.json`. H3 i2v is converted, seeded in
   `extension/comfy-workflows/`, and passes ComfyUI 0.32.0's own
   `validate_prompt`. KREA2 uses a SUBGRAPH the converter refuses to
-  flatten; H3 r2v is unconverted. Also still open for H3 i2v:
-  `injectParams` cannot reach a prompt that lives on the sampler node
-  rather than a `CLIPTextEncode` (manifest `procedural` wiring), and its
-  `LoadImage` still points at a file only the owner's machine has.
+  flatten; H3 r2v is unconverted. `injectParams` now honours a sidecar
+  manifest's `procedural` block, so a prompt living on the sampler node
+  (H3) rather than a `CLIPTextEncode` does land; `comfy_generate` gained
+  `durationSeconds` (templates whose length is authored in seconds
+  refuse a `frames` argument instead of mis-writing it) and `image`,
+  which uploads a local file to ComfyUI's input folder — with no image
+  the reference `LoadImage` is detached and the graph runs as
+  text-to-video, so the template no longer names a file only the owner's
+  machine has. Still open for H3 i2v: no real generation has been run
+  end to end, and `RTXVideoSuperResolution` is not yet bypassable.
 - The tier build's REMOTE half (P1–P3) is in: tiers.js, the arbiter
   with verified release, the combined recommendation, comfyCatalog.
   Still open: every VRAM figure and catalog URL is PROVISIONAL until

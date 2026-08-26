@@ -378,11 +378,19 @@ assert(loaded["133"].inputs.noise_seed === 7,
        "injectParams still finds the seed in the adapted graph");
 assert(applied.join(" ").indexOf("seed") !== -1,
        "and reports what it changed");
-// Documented gap, owned by part 2 of the item: H3 carries its prompt on
-// MiniMaxH3ImageToVideo, not a CLIPTextEncode, so the generic walk cannot
-// place it. Pinned here so part 2 has a failing expectation to flip.
+// Without the manifest the generic walk still cannot see it: H3 carries its
+// prompt on MiniMaxH3ImageToVideo, not a CLIPTextEncode. That is exactly why
+// the sidecar's procedural block exists.
 assert(loaded["138"].inputs.prompt !== "a red balloon",
-       "KNOWN GAP: injectParams does not yet reach the H3 prompt node " +
-       "(manifest procedural wiring is part 2 of WORKPLAN item 2d)");
+       "the generic walk alone does not reach the H3 prompt node");
+
+const withManifest = Comfy.loadWorkflow(apiFile);
+const applied2 = Comfy.injectParams(withManifest,
+                                    { prompt: "a red balloon", seed: 7 },
+                                    Comfy.readManifest(apiFile));
+assert(withManifest["138"].inputs.prompt === "a red balloon",
+       "with the sidecar, procedural.prompt lands on node 138");
+assert(applied2.join(" ").indexOf("prompt -> node 138") !== -1,
+       "and the applied list names the node it went to");
 
 process.exit(failures ? 1 : 0);

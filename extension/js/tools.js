@@ -372,7 +372,7 @@
             "the AE project. Blocks until finished (may take minutes). If " +
             "the hidden backend is installed it BOOTS AUTOMATICALLY — " +
             "never tell the user to start ComfyUI first.",
-      args: "{workflow: string (name from comfy_list_workflows), prompt: string, negative?: string, width?: int, height?: int, seed?: int, frames?: int (video workflows), import?: bool = true}" }
+      args: "{workflow: string (name from comfy_list_workflows), prompt: string, negative?: string, width?: int, height?: int, seed?: int, frames?: int (video workflows), durationSeconds?: number (video templates whose length is set in seconds — the error tells you which), image?: string (absolute path to a reference/first-frame image), import?: bool = true}" }
   ];
 
   var TOOL_NAMES = [];
@@ -642,6 +642,10 @@
       "  Pick a template via comfy_list_workflows. Match width/height to",
       "  the target comp when it makes sense. Generation can take",
       "  minutes — do not repeat a request that already succeeded.",
+      "  Some video templates set length in SECONDS (durationSeconds),",
+      "  not frames; if one refuses your 'frames' it says so — re-call",
+      "  with durationSeconds. Pass image: <absolute path> to give a",
+      "  video template a first frame; omit it for text-to-video.",
       "",
       "Available tools:"
     ];
@@ -893,13 +897,16 @@
         workflowFile: chosen.file,
         outDir: s.comfyOutDir,
         timeoutSec: s.comfyTimeoutSec,
+        manifest: manifest,
         params: {
           prompt: enhancedPrompt !== null ? enhancedPrompt : args.prompt,
           negative: args.negative,
           width: args.width,
           height: args.height,
           seed: args.seed,
-          frames: args.frames
+          frames: args.frames,
+          durationSeconds: args.durationSeconds,
+          image: args.image
         }
       }, function (elapsed) {
         if (progressSink) {
