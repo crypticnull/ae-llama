@@ -37,7 +37,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `comfy_list_workflows` | List available ComfyUI generation workflow templates by name | no | panel | — | — |
 | `comfy_status` | Check the local ComfyUI instance (online? queue depth?) | no | panel | — | — |
 | `create_comp` | Create a composition and open it | yes | host | 1 | 17 |
-| `create_folder` | Create a project-panel folder | yes | host | 1 | 6 |
+| `create_folder` | Create a project-panel folder | yes | host | 1 | 7 |
 | `delete_item` | Delete a project item | yes | host | 1 | 18 |
 | `delete_layer` | Delete a layer from a comp | yes | host | — | 2 |
 | `distribute_property` | Distribute a property VALUE across layers | yes | host | 1 | 5 |

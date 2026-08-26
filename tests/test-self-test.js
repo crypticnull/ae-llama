@@ -289,12 +289,33 @@ function cannedOk(tool, args) {
           return { __err: "Folder not found: " + base +
                    ". Existing folders: " + Object.keys(folders).join(", ") };
         }
-        const kids = Object.keys(folders).filter(p =>
+        let kids = Object.keys(folders).filter(p =>
           p.indexOf(base + "/") === 0 &&
           p.slice(base.length + 1).indexOf("/") === -1);
         if (!kids.length) {
           return { __err: "'" + base + "' has no subfolders to create '" +
                    nm + "' in. It holds: (nothing)" };
+        }
+        // The exclusion is a promise: unknown names refuse, honored
+        // names are reported — same contract as the real host.
+        const skippedExc = [];
+        if (args.except) {
+          const exc = (Array.isArray(args.except) ? args.except
+                        : [args.except]).map(String);
+          const kidNames = kids.map(p => p.slice(base.length + 1));
+          const miss = exc.filter(x => kidNames.indexOf(x) === -1);
+          if (miss.length) {
+            return { __err: "'except' name(s) not among the subfolders " +
+                     "of '" + base + "': " + miss.join(", ") +
+                     ". Its subfolders: " + kidNames.join(", ") +
+                     ". Fix the except list and re-call — nothing was " +
+                     "created." };
+          }
+          kids = kids.filter(p => {
+            const n = p.slice(base.length + 1);
+            if (exc.indexOf(n) !== -1) { skippedExc.push(n); return false; }
+            return true;
+          });
         }
         const created = [], had = [];
         for (const k of kids) {
@@ -308,6 +329,7 @@ function cannedOk(tool, args) {
           out.alreadyExistedCount = had.length;
           out.alreadyExisted = had;
         }
+        if (skippedExc.length) out.skippedAsExcepted = skippedExc;
         return out;
       }
       const parent = args && args.parent ? String(args.parent) : "";

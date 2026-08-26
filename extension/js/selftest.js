@@ -2704,6 +2704,14 @@
                  "path was " + d.path;
         } },
 
+      { name: "folder rig: third subfolder (to be excepted)",
+        tool: "create_folder",
+        args: { name: "ST FanKid C", parent: "ST FanParent" },
+        check: function (d) {
+          return d.path === "ST FanParent/ST FanKid C" ||
+                 "path was " + d.path;
+        } },
+
       { name: "folder rig: one child is already archived",
         tool: "create_folder",
         args: { name: "_ARCHIVE", parent: "ST FanParent/ST FanKid B" },
@@ -2712,12 +2720,15 @@
                  "path was " + d.path;
         } },
 
-      { name: "eachChildOf fans out with real-path receipts",
+      // The field sentence had an exclusion ("except for in _North") —
+      // the flag honors it and REPORTS it.
+      { name: "eachChildOf fans out with receipts, honoring except",
         tool: "create_folder",
-        args: { name: "_ARCHIVE", eachChildOf: "ST FanParent" },
+        args: { name: "_ARCHIVE", eachChildOf: "ST FanParent",
+                except: ["ST FanKid C"] },
         check: function (d) {
           if (d.subfolders !== 2) return "saw " + d.subfolders +
-            " subfolders, not 2";
+            " subfolders after the exception, not 2";
           if (d.createdCount !== 1 ||
               !d.created || d.created.length !== 1 ||
               d.created[0] !== "ST FanParent/ST FanKid A/_ARCHIVE") {
@@ -2727,16 +2738,30 @@
             return "pre-existing archive not reported: " +
                    JSON.stringify(d);
           }
+          if (!d.skippedAsExcepted ||
+              d.skippedAsExcepted.join(",") !== "ST FanKid C") {
+            return "except not reported: " +
+                   JSON.stringify(d.skippedAsExcepted);
+          }
           return true;
         } },
 
-      // Ask AE, not the report: re-running re-walks the live project, so
-      // createdCount 0 / existed 2 proves the folders are really there.
-      { name: "read-back: the fan-out really landed (idempotent re-run)",
+      // Ask AE, not the report: re-running WITHOUT the exception walks
+      // the live project again — kid C getting its archive only NOW
+      // proves the except really spared it, and existed=2 proves the
+      // first fan-out really landed.
+      { name: "read-back: the exception was honored and the fan landed",
         tool: "create_folder",
         args: { name: "_ARCHIVE", eachChildOf: "ST FanParent" },
         check: function (d) {
-          return (d.createdCount === 0 && d.alreadyExistedCount === 2) ||
+          if (d.subfolders !== 3) return "saw " + d.subfolders +
+            " subfolders, not 3";
+          if (d.createdCount !== 1 || !d.created ||
+              d.created[0] !== "ST FanParent/ST FanKid C/_ARCHIVE") {
+            return "kid C's archive should be created only NOW (got " +
+                   JSON.stringify(d.created) + ")";
+          }
+          return (d.alreadyExistedCount === 2) ||
                  "re-run says " + JSON.stringify(d);
         } },
 

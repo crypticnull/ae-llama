@@ -576,6 +576,46 @@ AELL_TOOLS.create_folder = function (args) {
         (names.length ? names.join(", ") : "(nothing)") +
         (box.numItems > 10 ? ", +" + (box.numItems - 10) + " more" : ""));
     }
+    // "except for X": the exclusion is a PROMISE, so an except name that
+    // matches no real subfolder refuses outright — silently creating in
+    // a folder the user asked to spare (because the model guessed
+    // "North" for "_North") would betray exactly the request the flag
+    // exists to honor.
+    var skipped = [];
+    if (typeof args.except !== "undefined" && args.except !== null) {
+      var exc = AELLJSON.isArray(args.except) ? args.except : [args.except];
+      var kidNames = [];
+      for (c = 0; c < kids.length; c++) kidNames.push(kids[c].name);
+      var misses = [];
+      for (c = 0; c < exc.length; c++) {
+        var found = false;
+        for (var e2 = 0; e2 < kidNames.length; e2++) {
+          if (kidNames[e2] === String(exc[c])) { found = true; break; }
+        }
+        if (!found) misses.push(String(exc[c]));
+      }
+      if (misses.length) {
+        return AELL_err("'except' name(s) not among the subfolders of '" +
+          (AELL_folderPath(box) || box.name) + "': " + misses.join(", ") +
+          ". Its subfolders: " + kidNames.join(", ") +
+          ". Fix the except list and re-call — nothing was created.");
+      }
+      var keep = [];
+      for (c = 0; c < kids.length; c++) {
+        var out = false;
+        for (var e3 = 0; e3 < exc.length; e3++) {
+          if (kids[c].name === String(exc[e3])) { out = true; break; }
+        }
+        if (out) skipped.push(kids[c].name);
+        else keep.push(kids[c]);
+      }
+      kids = keep;
+      if (kids.length === 0) {
+        return AELL_err("every subfolder of '" +
+          (AELL_folderPath(box) || box.name) + "' is in the except " +
+          "list (" + skipped.join(", ") + ") — nothing to create.");
+      }
+    }
     var made = [], had = [];
     for (c = 0; c < kids.length; c++) {
       var ch = kids[c];
@@ -607,6 +647,7 @@ AELL_TOOLS.create_folder = function (args) {
       res.alreadyExistedCount = had.length;
       res.alreadyExisted = had.slice(0, 15);
     }
+    if (skipped.length) res.skippedAsExcepted = skipped;
     return AELL_okay(res);
   }
 

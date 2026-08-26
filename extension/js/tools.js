@@ -37,7 +37,7 @@
             "and the result lists every path created, so use it for any " +
             "'inside each subfolder of X' request instead of guessing " +
             "folder names.",
-      args: "{name: string, parent?: folder name, id, path, or 'root' (default: root), eachChildOf?: folder name|id|path ('inside each subfolder of X' — one call, ignore parent)}" },
+      args: "{name: string, parent?: folder name, id, path, or 'root' (default: root), eachChildOf?: folder name|id|path ('inside each subfolder of X' — one call, ignore parent), except?: [subfolder names to SKIP] (with eachChildOf; exact names — a name that matches nothing refuses)}" },
     { name: "move_to_folder", mutating: true,
       desc: "Move project items into a folder (batch).",
       args: "{items: name|id|path|[..], folder: name, id, path 'A/B', or 'root'}" },
@@ -620,7 +620,9 @@
       "  {name, eachChildOf: 'X'} — ONE call. The host finds the real",
       "  subfolders itself; never list them from the PROJECT STATE (it is",
       "  trimmed on big projects) and never emit one call per folder.",
-      "  The result's created/createdCount are the receipts — report",
+      "  'except (for) Y' rides the SAME call: except: ['Y'] — copy the",
+      "  user's folder names exactly (underscores included). The result's",
+      "  created/createdCount/skippedAsExcepted are the receipts — report",
       "  THOSE numbers, nothing else.",
       "- NEVER claim an action you did not emit commands for in this same",
       "  response. If no available tool can do it, say so plainly and",

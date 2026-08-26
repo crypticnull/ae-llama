@@ -263,4 +263,50 @@ const badEach = call("create_folder", { name: "X", eachChildOf: "Nope" });
 assert(!badEach.ok && /Existing folders:/.test(badEach.error),
        "unknown eachChildOf lists the folders that really exist");
 
+// 12. "except for _North" — the second field sentence of 2026-08-26.
+// The exclusion is a promise: excluded children are untouched and
+// REPORTED, and an except name that matches no real subfolder refuses
+// (silently creating in "_North" because the model wrote "North" would
+// betray exactly the folder the user asked to spare).
+const exc = folder("_EXC");
+const excA = folder("Alpha", exc);
+const excNorth = folder("_North", exc);
+const excB = folder("Beta", exc);
+const fanX = call("create_folder",
+  { name: "_ARCHIVE", eachChildOf: "_EXC", except: ["_North"] });
+assert(fanX.ok && fanX.data.createdCount === 2 &&
+       JSON.stringify(fanX.data.skippedAsExcepted) ===
+       JSON.stringify(["_North"]),
+       "except skips exactly _North and says so (got " +
+       JSON.stringify(fanX.data) + ")");
+assert(excNorth.children.length === 0,
+       "_North was really left untouched");
+assert(excA.children.some(c => c.name === "_ARCHIVE") &&
+       excB.children.some(c => c.name === "_ARCHIVE"),
+       "…while Alpha and Beta got their archives");
+
+// a lone string works like a one-item list — models write both.
+const fanS = call("create_folder",
+  { name: "_KEEP", eachChildOf: "_EXC", except: "_North" });
+assert(fanS.ok && fanS.data.createdCount === 2 &&
+       excNorth.children.length === 0,
+       "except as a bare string behaves like a one-item list");
+
+// a guessed name refuses BEFORE creating anything, naming the real ones.
+const fanBad = call("create_folder",
+  { name: "_NOPE", eachChildOf: "_EXC", except: ["North"] });
+assert(!fanBad.ok && /North/.test(fanBad.error) &&
+       /_North/.test(fanBad.error) && /nothing was created/.test(fanBad.error),
+       "a non-matching except name refuses and lists the real " +
+       "subfolders: " + fanBad.error.slice(0, 130));
+assert(!excA.children.some(c => c.name === "_NOPE"),
+       "…and truly nothing was created on the refusal");
+
+// excluding everything is an error, not a silent no-op.
+const fanAll = call("create_folder",
+  { name: "_X", eachChildOf: "_EXC",
+    except: ["Alpha", "_North", "Beta"] });
+assert(!fanAll.ok && /every subfolder/.test(fanAll.error),
+       "excluding every subfolder refuses with the reason");
+
 console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");
