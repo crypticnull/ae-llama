@@ -120,7 +120,9 @@ Pure filesystem reading — no AE, no generation runs, do NOT launch
 ComfyUI. This unblocks tier-plan P5 (catalog file lists + sizes) and
 the register-existing matcher. Commit the inventory; no version bump.
 
-## 2d. Small local passes queued by the probe findings — 4 of 5 DONE 2026-08-25
+## 2d. Small local passes queued by the probe findings — 5 of 6 DONE
+(2026-08-25 and -26). The ONLY one left is the H3 i2v workflow, parts
+1-3; everything else below is struck.
 
 - ~~Locate the H3 base weight~~ FOUND by the owner (2026-08-25):
   `AppData\Local\Comfy-Desktop\ComfyUI-Shared\models\diffusion_models\`
@@ -129,7 +131,8 @@ the register-existing matcher. Commit the inventory; no version bump.
   matched the H3 filter — record exact names + sizes) and append it to
   docs/COMFY_LOCAL_INVENTORY.md; the register matcher's root list is
   now Documents + code install + ComfyUI-Shared + node ckpts dirs.
-- **Verify the history trim** (probe steps 9–10): the remote session
+- ~~**Verify the history trim**~~ DONE 2026-08-25 (0.9.17), re-confirmed
+  2026-08-26. Original text: (probe steps 9–10) the remote session
   bounded what the model is sent (Tools.fitHistory + a hard-trim retry
   on context 400s). Re-run the full chat probe — steps 9 and 10 died on
   context overflow before; they should now complete, with the "context
@@ -151,7 +154,15 @@ the register-existing matcher. Commit the inventory; no version bump.
   with sizes in the tier plan. The owner wants text/image-to-video
   FIRST; the bundled r2v workflow is deferred until 5.8 lands (it needs
   image+audio inputs the panel cannot feed yet).
-- **clearExpressions in real AE** (remote-built 2026-08-25, unshipped):
+- ~~**clearExpressions in real AE**~~ DONE 2026-08-26 (0.9.18). Verified
+  in the field: refuse-then-recall-with-flag is what the model does, and
+  the nine squares land on even gaps. Two defects found on the way and
+  fixed at their roots — hostscript now publishes `$.global.AELLJSON`
+  (chat-probe's verdict reads had been failing silently AND wedging AE on
+  a modal), and the overriddenByExpression note now asks for the SAME
+  layers list on the re-call, because handing back only the blocked ones
+  re-spaces those and strands the layers that already landed. See the
+  log entry. Original text:
   the step-7 policy question is settled — distribute_property takes
   `clearExpressions: true` (clears ONLY expressions that swallowed the
   write, on an explicit re-call; see the log entry). Local pass: run the
@@ -159,7 +170,8 @@ the register-existing matcher. Commit the inventory; no version bump.
   step 7 — expected shape is now refuse-then-recall-with-flag, and the
   existing even-gaps verdict measures exactly that end state — then
   patch bump together with whatever else is verified.
-- **set_solid_color, probe first**: no tool can change a solid's color
+- ~~**set_solid_color**~~ DONE 2026-08-25 (0.9.17) — built, and it
+  closed chat-probe step 9. Original text: no tool can change a solid's color
   (probe step 9's real blocker — the model tried four approaches; none
   exist). The color lives on the SOLID SOURCE, so changing it changes
   EVERY layer sharing that source — duplicate_layer and

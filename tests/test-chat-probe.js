@@ -499,5 +499,141 @@ for (const n of Object.keys(PANEL_ONLY)) {
 assert(/forceTinyContext/.test(probeSrc) && /forceTinyContext/.test(mainSrc),
        "and mirrors the reactive hard-trim retry on a context 400");
 
+
+// ---------------------------------------- 4. the bridge wrapper AE runs
+//
+// Measured in real AE on 2026-08-26, and it had broken every verdict the
+// probe read: ExtendScript keeps a loaded file's top-level `var` in the
+// scope it was evaluated in, so hostscript's AELLJSON was NOT on $.global
+// while AELL_call (assigned explicitly) was. The wrapper skipped
+// re-loading the host whenever AELL_call was already there — and then the
+// bare AELLJSON in every read expression was an undefined identifier,
+// which AE answers with a MODAL that blocks every script after it. Tool
+// calls kept working (AELL_call closes over AELLJSON lexically), so the
+// probe reported "ok" rounds and unreadable comps at the same time.
+//
+// $.global is the whole contract for anything outside hostscript, so the
+// two halves are pinned here: hostscript publishes what it is named by,
+// and the wrapper survives a host that does not.
+
+const { bridgeWrapper } = probe;
+const hostSrc = fs2.readFileSync(
+  path2.join(__dirname, "..", "extension", "jsx", "hostscript.jsx"), "utf8");
+
+const published = new Set(
+  (hostSrc.match(/\$\.global\.(AELL[A-Za-z_]*)\s*=/g) || [])
+    .map(m => m.replace(/\$\.global\./, "").replace(/\s*=.*/, "")));
+
+assert(published.has("AELLJSON"),
+       "hostscript publishes $.global.AELLJSON (a top-level var of the " +
+       "file is invisible to the NEXT -r script)");
+
+// The general rule, so the next name sent into AE is caught too: anything
+// the panel or the probe writes into an ExtendScript STRING has to be on
+// $.global. Comments naming an internal helper are not a promise; a
+// string literal is.
+function namedInScripts(src) {
+  const names = new Set();
+  const STRING_LITERAL = new RegExp(
+    '"(?:[^"\\\\]|\\\\.)*"' + "|'(?:[^'\\\\]|\\\\.)*'", "g");
+  const strings = src.match(STRING_LITERAL) || [];
+  for (const s of strings) {
+    for (const m of s.match(/(\$\.global\.)?AELL[A-Za-z_]*/g) || []) {
+      if (!/^\$\.global\./.test(m)) names.add(m);
+    }
+  }
+  return names;
+}
+const hostCallers = {
+  "chat-probe.js": probeSrc,
+  "main.js": mainSrc,
+  "tools.js": fs2.readFileSync(
+    path2.join(__dirname, "..", "extension", "js", "tools.js"), "utf8")
+};
+for (const file of Object.keys(hostCallers)) {
+  for (const name of namedInScripts(hostCallers[file])) {
+    assert(published.has(name),
+           file + " names " + name + " in ExtendScript, and hostscript " +
+           "publishes it on $.global");
+  }
+}
+
+// --- run the wrapper against a stubbed AE ---------------------------
+//
+// $.global IS the global object in ExtendScript — that is exactly why a
+// published name resolves bare in a later script — so the stub uses
+// Node's globalThis for it and the wrapper's `eval` resolves the same way
+// AE's does.
+
+function runWrapper(opts) {
+  const world = { files: {}, loads: 0 };
+  function StubFile(p) { this.p = p; this.encoding = ""; }
+  StubFile.prototype.open = function () { world.files[this.p] = ""; return true; };
+  StubFile.prototype.write = function (s) { world.files[this.p] += s; };
+  StubFile.prototype.close = function () {};
+  const $ = {
+    global: globalThis,
+    evalFile(f) { world.loads++; opts.load(); }
+  };
+  delete globalThis.AELL_call;
+  delete globalThis.AELLJSON;
+  opts.preload();
+  const text = bridgeWrapper(opts.script, "OUT.json", "host.jsx",
+                             !!opts.force);
+  try {
+    // eslint-disable-next-line no-new-func
+    new Function("$", "File", text)($, StubFile);
+  } catch (e) { world.threw = e; }
+  world.out = world.files["OUT.json"];
+  delete globalThis.AELL_call;
+  delete globalThis.AELLJSON;
+  return world;
+}
+
+const goodHost = function () {
+  globalThis.AELL_call = function () { return "{}"; };
+  globalThis.AELLJSON = { stringify: JSON.stringify };
+};
+// hostscript as it was BEFORE this fix: the tools arrive, the serializer
+// does not.
+const oldHost = function () {
+  globalThis.AELL_call = function () { return "{}"; };
+};
+
+{
+  const w = runWrapper({ preload: oldHost, load: goodHost,
+                         script: "AELLJSON.stringify({found: true})" });
+  assert(w.loads === 1,
+         "a running AE that has AELL_call but no AELLJSON gets the host " +
+         "RE-LOADED rather than trusted");
+  assert(w.out === '{"found":true}',
+         "and the read then answers for real (got: " + w.out + ")");
+  assert(!w.threw, "with no undefined-identifier error to raise a modal");
+}
+{
+  const w = runWrapper({ preload: goodHost, load: goodHost,
+                         script: "AELLJSON.stringify({found: true})" });
+  assert(w.loads === 0,
+         "a host that is fully published is not re-loaded every call");
+  assert(w.out === '{"found":true}', "and still answers");
+}
+{
+  // The safety net: if the host on disk were ever to stop publishing the
+  // serializer again, the probe must say so instead of evaluating a bare
+  // AELLJSON — in AE that is not an exception, it is a modal dialog that
+  // blocks every script until a human clears it.
+  const w = runWrapper({ preload: oldHost, load: oldHost,
+                         script: "AELLJSON.stringify({found: true})" });
+  assert(!w.threw, "an unpublished serializer never reaches the eval");
+  const parsed = JSON.parse(w.out);
+  assert(parsed.ok === false && /AELLJSON is missing/.test(parsed.error),
+         "it hands back a grounded refusal instead (got: " + w.out + ")");
+}
+{
+  const w = runWrapper({ preload: oldHost, load: goodHost, force: true,
+                         script: "AELLJSON.stringify({n: 1})" });
+  assert(w.loads === 1, "the first call of a run always loads the host");
+}
+
 console.log(failed ? "\n" + failed + " assertion(s) failed"
                    : "\nall chat-probe verdict tests passed");

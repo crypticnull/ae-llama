@@ -1882,3 +1882,93 @@ prevention is still a design call for the remote session.
 clearExpressions suite steps are IN the 187 and green in real AE, so
 what remains there is re-running chat-probe step 7 and patch-bumping
 that work.
+
+## 2026-08-26 (local) — item 2d: clearExpressions in the field, and the bridge bug underneath it
+
+Bumped **0.9.18**. Harness 187/187 (three times), stubbed suite 28/28,
+chat-probe 7/7 on steps 1-7 and 10/11 on the full run.
+
+**The pass opened green** (187/187) so it took the bullet the last entry
+queued: verify the remote-built `clearExpressions` in real AE and ship
+it. Re-running `chat-probe --steps 1,2,7` did not get as far as an
+opinion about clearExpressions — step 1 failed with "no comp called Probe
+Room exists" one second after `create_comp` had answered `ok` with an id,
+and step 2 crashed on `state.layers` being undefined.
+
+**Root cause, measured, and it was never about clearExpressions.**
+`$.evalFile` run from inside a function leaves the file's top-level
+`var`s in THAT function's scope, not on `$.global`. hostscript assigns
+`$.global.AELL_call` explicitly, so the tools survive into the next `-r`
+script; `AELLJSON` was a top-level `var` and did not. chat-probe's bridge
+skipped re-loading the host whenever `$.global.AELL_call` was already a
+function — so every read after the first evaluated a bare `AELLJSON`
+that did not exist there. Proven in AE with four temp scripts:
+
+  - a later `-r` script sees `$.global.AELL_call` = function, bare
+    `AELL_call` = function, and `typeof AELLJSON` = **undefined**;
+  - assigning `$.global.X` in one script does make bare `X` resolve in
+    the next, so `$.global` IS the contract;
+  - and an undefined identifier in a `-r` script is not an exception you
+    can catch — AE raises a **modal**, which then blocks every script
+    after it. That is a wordless `#32770`, i.e. the same wedge the
+    2026-08-26 harness entry taught the runner to answer.
+
+So the failure mode was: tool calls kept working (AELL_call closes over
+AELLJSON lexically), verdict reads silently returned wrapper errors, and
+AE got wedged on the way. A probe that reports rounds as `ok` while it
+cannot read the comp is worse than one that fails.
+
+**Fixed at the root, not in the probe's expectations:**
+- `extension/jsx/hostscript.jsx` — `$.global.AELLJSON = AELLJSON;`
+  published next to the other exports, with the measurement written
+  above it. Anything outside the file (probe, a temp `.jsx` per
+  CLAUDE.md's documented pattern) now gets the serializer the same way
+  it gets the tools.
+- `scripts/chat-probe.js` — the wrapper is a pure `bridgeWrapper()` now
+  (so a test can run it), it re-loads the host unless BOTH names are
+  present, and if the load still leaves no serializer it writes a
+  grounded refusal instead of evaluating — a refusal costs a failed
+  step, a ReferenceError costs the whole session.
+- `tests/test-chat-probe.js` — section 4: hostscript must publish
+  `AELLJSON`; the general rule that every `AELL*` name any caller puts
+  in an ExtendScript STRING (probe, main.js, tools.js) is published on
+  `$.global`; and the wrapper RUN against a stub whose `$.global` is
+  Node's own globalThis — which is exactly what makes AE's published
+  names resolve bare. Three cases: stale host gets re-loaded, complete
+  host is not re-loaded every call, host that does not publish gets the
+  refusal and never reaches the eval.
+
+**Then the actual item, and it passed — twice, and failed once, which
+was the useful run.** `--steps 1,2,7`: 3/3, with the exact designed
+round-trip — first call refuses with `overriddenByExpression`, model
+re-calls with `clearExpressions: true`, nine squares land on even 190px
+gaps, reply names the rigs it removed. Full 11-step run: 10/11, every
+read healthy, and step 7 FAILED there with 217px gaps.
+
+**That failure was a real defect in the tool's own wording, not model
+variance.** The re-call the model sent listed only the EIGHT layers the
+note had named as overridden — dropping "Red Square 5", the one layer
+that had already landed. `from`/`to` is divided across the layers you
+send, so the eight re-spaced themselves across the full width and the
+ninth stayed stranded at 960. Every tool call in that round succeeded.
+The note invited it: it named eight layers and said "re-call with
+clearExpressions: true", and the obvious reading of that is "retry those
+eight". Fixed where the sentence is built (hostscript) plus both places
+that teach it (tools.js tool doc + prompt rule): the note now asks for
+"the SAME 9 layer(s) as this call" and says what re-calling with only
+the 8 would do. `tests/test-curve-tools.js` case 11f builds the field
+shape exactly (nine fresh layers, eight rigged, one free) and pins both
+halves of the sentence; the result still fits the 1200-char cap (655).
+Re-ran steps 1-7 afterwards: **7/7**, and the re-call carried all nine
+names.
+
+**For the next pass / not done here:**
+- The full probe's other ten steps passed, so nothing else is owed there.
+  One run is not proof that the wording ends step-7 variance — the note
+  now makes the right move explicit and the stub pins it, but the model
+  half is still a 32B at temp 0.7.
+- **AE's project accumulates null sources.** Reading the project mid-pass
+  found 65 leftover `Null NN` FootageItems from earlier suite runs; the
+  suite cleans up its solid sources (2026-08-25 remote entry) but not its
+  nulls. Harmless to the tests, and it is debris in whatever project the
+  suite is run against. Worth one small pass.

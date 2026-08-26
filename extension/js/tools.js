@@ -152,7 +152,8 @@
             "property is driven by an expression (a grid_layout rig, a " +
             "link) are reported in overriddenByExpression and do NOT " +
             "move; clearExpressions: true removes exactly those " +
-            "expressions so the values land.",
+            "expressions so the values land — re-send the FULL layers " +
+            "list on that re-call, not only the overridden ones.",
       args: "{comp?: string, layers?: [name|index] (applied in the order given), property: 'opacity'|'rotation'|'scale'|'position_x'|'position_y', from?: number, to?: number, step?: number (equidistant), bezier?: [x1,y1,x2,y2], order?: 'in'|'stack'|'reverse' (re-sorts the list), clearExpressions?: true (ONLY on a re-call after overriddenByExpression, when the user explicitly asked for these values)}" },
     { name: "apply_keyframe_ease", mutating: true,
       desc: "Apply a bezier as TEMPORAL easing between keyframes on one " +
@@ -516,7 +517,10 @@
       "  never a chain of set_transform/duplicate calls.",
       "- If distribute_property reports overriddenByExpression (a rig like",
       "  grid_layout drives the property), the user's explicit request",
-      "  WINS: re-call it ONCE with clearExpressions: true, then tell the",
+      "  WINS: re-call it ONCE with clearExpressions: true and the SAME",
+      "  layers list as the first call — NOT just the ones it named as",
+      "  overridden, or the spacing is divided across those few and the",
+      "  layers that already landed are stranded mid-row. Then tell the",
       "  user which layers had their expressions removed. Never pass",
       "  clearExpressions on a first call, and never use it when the user",
       "  asked to keep the rig.",

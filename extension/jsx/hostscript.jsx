@@ -2913,8 +2913,10 @@ AELL_TOOLS.distribute_property = function (args) {
     notes.push(overridden.length + " of " + n + " layer(s) did NOT move " +
       "because an expression drives " + String(args.property) + " on them: " +
       overriddenWhy + " If the user explicitly asked for these values, " +
-      "re-call with clearExpressions: true to remove those expressions " +
-      "and apply them");
+      "re-call with clearExpressions: true AND the SAME " + n +
+      " layer(s) as this call — from/to is divided across the layers you " +
+      "send, so re-calling with only the " + overridden.length +
+      " listed here re-spaces those and strands the rest");
   }
   if (cleared.length) {
     res.expressionsCleared = cleared;
@@ -5077,3 +5079,14 @@ $.global.AELL_callBatch = AELL_callBatch;
 $.global.AELL_newRequest = function () {
   $.global.AELL_compAliases = {};
 };
+
+/* AELLJSON is a top-level `var` of THIS file, and ExtendScript keeps such
+ * a var in the scope the file was evaluated in — NOT on $.global. So a
+ * later `-r` script that finds $.global.AELL_call already defined (this
+ * file was loaded once, by the panel or by an earlier script) and skips
+ * re-loading it can still call the tools, and yet a bare `AELLJSON` in
+ * that script is a ReferenceError — which AE raises as a modal dialog
+ * that blocks every following script. Measured 2026-08-26; it is what
+ * silently broke chat-probe's verdict reads. $.global IS the contract for
+ * external callers, so publish the serializer on it too. */
+$.global.AELLJSON = AELLJSON;

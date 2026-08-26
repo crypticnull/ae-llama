@@ -95,6 +95,53 @@ let bridgeSeq = 0;
 let hostLoaded = false;
 
 /**
+ * The ExtendScript AE is actually handed: load the host if needed, run the
+ * expression, write the answer where Node can read it. Pure text, so
+ * tests/test-chat-probe.js can run it against a stubbed $ / File.
+ */
+function bridgeWrapper(script, outPath, hostPath, force) {
+  return [
+    "(function () {",
+    "  var out = " + jsxString(outPath.replace(/\\/g, "/")) + ";",
+    "  function w(s) {",
+    "    try {",
+    "      var f = new File(out); f.encoding = \"UTF-8\";",
+    "      f.open(\"w\"); f.write(s); f.close();",
+    "    } catch (e) {}",
+    "  }",
+    "  try {",
+    // Both names, not just AELL_call. A -r script inherits $.global from
+    // whatever loaded hostscript before it (the panel, the harness, this
+    // probe's own first call), and the two names do NOT arrive together:
+    // AELL_call is published explicitly, AELLJSON only became a global on
+    // 2026-08-26. Skipping the load with a stale host present left the
+    // reads below evaluating a bare AELLJSON that did not exist — and AE
+    // answers an undefined identifier with a MODAL, so it wedged the app
+    // rather than failing. Reloading is cheap; guessing is not.
+    "    if (" + (force ? "true" : "false") +
+      " || typeof $.global.AELL_call !== \"function\"" +
+      " || !$.global.AELLJSON) {",
+    "      $.evalFile(new File(" +
+      jsxString(hostPath.replace(/\\/g, "/")) + "));",
+    "    }",
+    // Grounded refusal beats a ReferenceError: if the load did not give us
+    // the serializer, say so in the answer instead of evaluating anyway.
+    "    if (!$.global.AELLJSON) {",
+    "      w('{\"ok\":false,\"error\":\"probe wrapper: hostscript loaded" +
+      " but $.global.AELLJSON is missing\"}');",
+    "      return;",
+    "    }",
+    "    var res = eval(" + jsxString(script) + ");",
+    "    w(typeof res === \"undefined\" ? \"\" : String(res));",
+    "  } catch (e) {",
+    "    w('{\"ok\":false,\"error\":\"probe wrapper: ' +",
+    "      String(e).replace(/[\\\\\"\\r\\n]/g, \" \") + '\"}');",
+    "  }",
+    "})();"
+  ].join("\n");
+}
+
+/**
  * Run one ExtendScript expression in the running AE and hand back what it
  * evaluated to. `eval` is used deliberately: the panel sends expressions
  * (AELL_call(...)) but also plain statements (AELL_newRequest()), and eval
@@ -111,29 +158,7 @@ function aeEval(script, cb, timeoutMs) {
   const force = !hostLoaded;
   hostLoaded = true;
 
-  const wrapper = [
-    "(function () {",
-    "  var out = " + jsxString(outPath.replace(/\\/g, "/")) + ";",
-    "  function w(s) {",
-    "    try {",
-    "      var f = new File(out); f.encoding = \"UTF-8\";",
-    "      f.open(\"w\"); f.write(s); f.close();",
-    "    } catch (e) {}",
-    "  }",
-    "  try {",
-    "    if (" + (force ? "true" : "false") +
-      " || typeof $.global.AELL_call !== \"function\") {",
-    "      $.evalFile(new File(" +
-      jsxString(HOSTSCRIPT.replace(/\\/g, "/")) + "));",
-    "    }",
-    "    var res = eval(" + jsxString(script) + ");",
-    "    w(typeof res === \"undefined\" ? \"\" : String(res));",
-    "  } catch (e) {",
-    "    w('{\"ok\":false,\"error\":\"probe wrapper: ' +",
-    "      String(e).replace(/[\\\\\"\\r\\n]/g, \" \") + '\"}');",
-    "  }",
-    "})();"
-  ].join("\n");
+  const wrapper = bridgeWrapper(script, outPath, HOSTSCRIPT, force);
   fs.writeFileSync(wrapperPath, wrapper, "ascii");
 
   // Start-Process semantics: on a cold machine THIS process is AE and it
@@ -1069,5 +1094,6 @@ function main() {
 if (require.main === module) {
   main();
 } else {
-  module.exports = { STEPS, squares, undoProbe, SIG_FN, READ_COMP };
+  module.exports = { STEPS, squares, undoProbe, SIG_FN, READ_COMP,
+                     bridgeWrapper };
 }

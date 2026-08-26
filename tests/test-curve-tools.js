@@ -520,6 +520,51 @@ assert(keeper.expressionEnabled === true,
        "L3's pass-through expression survived clearExpressions");
 keeper.expression = "";
 
+// 11f. The note has to say WHICH layers to re-send, because the obvious
+// reading of "these 8 did not move" is "retry those 8" — and that is
+// exactly what the model did in the field on 2026-08-26. Nine squares on
+// a grid rig: one was not driven and landed at 960, the other eight were
+// reported as overridden, the model re-called with only those eight, and
+// from/to 200..1720 was then divided across EIGHT — 217px gaps with the
+// ninth square stranded at 960. Every tool call in that round succeeded.
+// So the fix is the wording of the way out, and this pins it.
+{
+  // Nine FRESH layers: the L1..L5 the other cases share carry keyframes
+  // by now, and a keyframed layer lands in `skipped`, not in the
+  // overridden list this case is about.
+  const all = [];
+  for (let i = 0; i < 9; i++) {
+    const nm = "N" + (i + 1);
+    comp._layers.push(new Layer(nm, comp, comp._layers.length));
+    all.push(nm);
+  }
+  const eight = all.slice(0, 8);
+  for (const n of eight) {
+    const p = comp.layer(n)._transform["ADBE Position"];
+    p.expressionEnabled = true;
+    p._exprValue = [940, 500];
+  }
+  const rr = call("distribute_property", {
+    property: "position_x", layers: all, from: 200, to: 1720
+  });
+  assert(rr.ok, "the nine-square shape answers (" + (rr.error || "") + ")");
+  assert(rr.data.overriddenByExpression.length === 8 &&
+         rr.data.applied.length === 1,
+         "…eight blocked, one landed (got " + JSON.stringify(rr.data.applied) +
+         ")");
+  const note = rr.data.note || "";
+  assert(/SAME 9 layer\(s\)/.test(note),
+         "…and the note asks for the SAME 9 layers on the re-call, not " +
+         "the 8 it just named (got: " + note + ")");
+  assert(/strands the rest/.test(note),
+         "…and says what re-calling with only those 8 would do (got: " +
+         note + ")");
+  assert(JSON.stringify(rr.data).length < 1200,
+         "…while still fitting the panel's 1200-char cap (got " +
+         JSON.stringify(rr.data).length + ")");
+  comp._layers.length = 5;          // hand the comp back as it was found
+}
+
 // 12. An explicit 'layers' list is an ORDER, not a set. The tool used to
 // re-sort it by inPoint, so a grid whose layers all sit at inPoint 0 got
 // its values handed out in whatever order the sort felt like. Measured in
