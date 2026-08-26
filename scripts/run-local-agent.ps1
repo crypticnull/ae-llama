@@ -113,6 +113,11 @@ and write down what you assumed.
 
 Hard limits for this session:
 - Do exactly ONE item, then stop. The loop will start you again.
+- One failed attempt per item per night: if the log shows an item was
+  already attempted tonight and blocked, do NOT retry it -- pick the
+  next unfinished item instead. A blocked item is a log entry and a
+  commit, never a stopped pass and never a second attempt: the human
+  is asleep, and the night is for the items that CAN move.
 - When you push a fix you VERIFIED in real AE, bump the patch version
   first: node scripts/bump-version.js patch. Without it CI publishes a
   feed the panel ignores, so the fix never reaches a real panel.
@@ -147,10 +152,21 @@ for ($i = 1; $i -le $Iterations; $i++) {
 
     $dirty = & git status --porcelain
     if ($dirty) {
-        Write-Log 'Working tree is dirty; the previous pass left changes behind.'
+        # A pass that died mid-edit leaves a dirty tree. Stopping the
+        # whole loop here protected the work but killed the night --
+        # unattended, salvage the changes to a stash (nothing is lost,
+        # the morning review can inspect or pop it) and keep going.
+        Write-Log 'Working tree is dirty; a previous pass left changes behind.'
         foreach ($d in $dirty) { Write-Log ('  ' + [string]$d) }
-        Write-Log 'Commit or discard them, then rerun. Stopping.'
-        break
+        $stamp2 = Get-Date -Format 'yyyyMMdd-HHmmss'
+        & git stash push -u -m ('loop-salvage-' + $stamp2) 2>&1 | Out-Null
+        $still = & git status --porcelain
+        if ($still) {
+            Write-Log 'Stash could not clean the tree. Stopping to protect it.'
+            break
+        }
+        Write-Log ('Salvaged to stash "loop-salvage-' + $stamp2 +
+                   '" -- review it in the morning. Continuing.')
     }
 
     # Pull first: the remote session force-resets this branch onto main
