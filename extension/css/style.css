@@ -297,6 +297,11 @@ input:focus, select:focus, textarea:focus { outline: 1px solid #2d6ca2; }
 .msg.tool      { align-self: flex-start; background: #24322a; color: #a9c8b1;
                  font-family: Consolas, monospace; font-size: 11px; }
 .msg.error     { align-self: flex-start; background: #442626; color: #e0b1b1; }
+/* A mid-round tool refusal the model handles itself — visible for the
+   curious (and in copy-chat diagnostics), but calm: no red for
+   something the panel corrects on its own. */
+.msg.retry     { align-self: flex-start; background: #2c2a24; color: #9a917c;
+                 opacity: 0.85; }
 .msg.info      { align-self: center; background: transparent; color: #888;
                  font-style: italic; }
 

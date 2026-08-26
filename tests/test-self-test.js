@@ -91,6 +91,7 @@ function capLayers(compName, all, args) {
 // canned happy-path results per tool
 let createCount = 0;
 const createdComps = [];
+const folders = {};        // path -> true (the create_folder rig)
 // Solid SOURCES, mutable: deleting a comp does not delete these (the
 // field bug), and the suite's new cleanup deletes them by id. Seeded
 // with the accumulation observed in the real scratch project — a few of
@@ -165,6 +166,34 @@ const inRbComp = (a) => a && /Rollback/.test(a.comp || "");
 let batSolidFx = {};
 let batSolidPos = {};
 const inBatComp = a => !!(a && /Undo/.test(a.comp || ""));
+
+// Lights. The canned host has to enforce the SAME per-type hiding real
+// AE does, or the refusal steps would pass against anything. The table
+// is the one measured in AE 2026 (WORKPLAN-LOG 2026-08-26): every light
+// property reports canSetValue false, the options group never shrinks,
+// and what a type accepts is discoverable only by attempting the write.
+const LIGHT_ON = {
+  position:        "parallel spot point",
+  pointOfInterest: "parallel spot",
+  intensity:       "parallel spot point ambient environment",
+  color:           "parallel spot point ambient environment",
+  coneAngle:       "spot",
+  coneFeather:     "spot",
+  falloff:         "parallel spot point",
+  radius:          "parallel spot point",
+  falloffDistance: "parallel spot point",
+  castsShadows:    "parallel spot point",
+  shadowDarkness:  "parallel spot point",
+  shadowDiffusion: "spot point"
+};
+// Write order: Falloff gates Radius and Falloff Distance, so it is first.
+const LIGHT_ORDER = ["position", "pointOfInterest", "intensity", "color",
+  "coneAngle", "coneFeather", "falloff", "radius", "falloffDistance",
+  "castsShadows", "shadowDarkness", "shadowDiffusion"];
+const LIGHT_KINDS = ["parallel", "spot", "point", "ambient", "environment"];
+const lightAcc = (list, kind) =>
+  (" " + list + " ").indexOf(" " + kind + " ") >= 0;
+let lights = {};
 
 // for_each_layer's whole job is deciding which tools it may drive. Rather
 // than paraphrasing that rule here — which would let the suite expect a
@@ -248,6 +277,77 @@ function cannedOk(tool, args) {
       return { tool: t, layers: L.length, succeeded: L.length,
                failures: "" };
     }
+    case "create_folder": {
+      // Folders live as a path->true map. Faithful on what the fan-out
+      // steps measure: eachChildOf walks the REAL direct children, an
+      // existing same-named folder is reported not re-created, and the
+      // created paths come back as receipts.
+      const nm = String((args && args.name) || "");
+      if (args && args.eachChildOf) {
+        const base = String(args.eachChildOf);
+        if (!folders[base]) {
+          return { __err: "Folder not found: " + base +
+                   ". Existing folders: " + Object.keys(folders).join(", ") };
+        }
+        let kids = Object.keys(folders).filter(p =>
+          p.indexOf(base + "/") === 0 &&
+          p.slice(base.length + 1).indexOf("/") === -1);
+        if (!kids.length) {
+          return { __err: "'" + base + "' has no subfolders to create '" +
+                   nm + "' in. It holds: (nothing)" };
+        }
+        // The exclusion is a promise: unknown names refuse, honored
+        // names are reported — same contract as the real host.
+        const skippedExc = [];
+        if (args.except) {
+          // Bare names and full paths both match, like the real host.
+          const exc = (Array.isArray(args.except) ? args.except
+                        : [args.except])
+            .map(x => String(x).indexOf(base + "/") === 0
+              ? String(x).slice(base.length + 1) : String(x));
+          const kidNames = kids.map(p => p.slice(base.length + 1));
+          const miss = exc.filter(x => kidNames.indexOf(x) === -1);
+          if (miss.length) {
+            return { __err: "'except' name(s) not among the subfolders " +
+                     "of '" + base + "': " + miss.join(", ") +
+                     ". Its subfolders: " + kidNames.join(", ") +
+                     ". Fix the except list and re-call — nothing was " +
+                     "created." };
+          }
+          kids = kids.filter(p => {
+            const n = p.slice(base.length + 1);
+            if (exc.indexOf(n) !== -1) { skippedExc.push(n); return false; }
+            return true;
+          });
+        }
+        const created = [], had = [];
+        for (const k of kids) {
+          const p = k + "/" + nm;
+          if (folders[p]) had.push(p);
+          else { folders[p] = true; created.push(p); }
+        }
+        const out = { name: nm, parent: base, subfolders: kids.length,
+                      createdCount: created.length, created };
+        if (had.length) {
+          out.alreadyExistedCount = had.length;
+          out.alreadyExisted = had;
+        }
+        if (skippedExc.length) out.skippedAsExcepted = skippedExc;
+        return out;
+      }
+      const parent = args && args.parent ? String(args.parent) : "";
+      if (parent && !folders[parent]) {
+        return { __err: "Parent folder not found: " + parent +
+                 ". Existing folders: " + Object.keys(folders).join(", ") };
+      }
+      const path = parent ? parent + "/" + nm : nm;
+      if (folders[path]) {
+        return { name: nm, id: 900, path,
+                 note: "Folder already existed in this parent" };
+      }
+      folders[path] = true;
+      return { name: nm, id: 900 + Object.keys(folders).length, path };
+    }
     case "delete_item": {
       // Faithful on the point the cleanup measures: deleting works by
       // name OR id, a deleted item leaves every later listing, and a
@@ -262,6 +362,15 @@ function cannedOk(tool, args) {
           solidSources.splice(i, 1);
           return { deleted: nm };
         }
+      }
+      // A folder delete cascades to everything under its path.
+      if (folders[String(key)]) {
+        for (const p of Object.keys(folders)) {
+          if (p === String(key) || p.indexOf(String(key) + "/") === 0) {
+            delete folders[p];
+          }
+        }
+        return { deleted: key };
       }
       return { __err: "Project item not found: " + key };
     }
@@ -354,6 +463,10 @@ function cannedOk(tool, args) {
                note: "Stacking changed only" };
     }
     case "get_comp_details": {
+      if (args && /Self-Test Light/.test(args.comp || "")) {
+        return capLayers(args.comp, Object.keys(lights).map((nm, i) => ({
+          index: i + 1, name: nm, type: "light", effects: [] })), args);
+      }
       if (args && /Solid Room/.test(args.comp || "")) {
         return capLayers(args.comp,
           scShared.concat(scText).map((nm, i) => ({
@@ -503,6 +616,28 @@ function cannedOk(tool, args) {
       return { layer: args && args.layer,
                property: args && args.property };
     case "get_property":
+      // Lights answer from what add_light actually applied, so a read
+      // can never confirm a write the canned host never made.
+      if (args && lights[args.layer]) {
+        const la = lights[args.layer];
+        const P = args.property;
+        const pad3 = (v) => [v[0], v[1], v.length > 2 ? v[2] : 0];
+        if (P === "Cone Angle") return { value: la.coneAngle };
+        if (P === "Intensity") return { value: la.intensity };
+        if (P === "light/Radius") return { value: la.radius };
+        if (P === "light/Falloff Distance") {
+          return { value: la.falloffDistance };
+        }
+        if (P === "Casts Shadows") {
+          return { value: la.castsShadows ? 1 : 0 };
+        }
+        if (P === "Point of Interest") {
+          return { value: pad3(la.pointOfInterest || [0, 0]) };
+        }
+        if (P === "Position") return { value: pad3(la.position || [0, 0]) };
+        return { __err: "Path segment '" + P + "' not found under " +
+          "layer '" + args.layer + "'" };
+      }
       if (inRbComp(args) && rbLayers.indexOf(args.layer) === -1) {
         return { __err: "No layer '" + args.layer + "' in '" + args.comp +
           "' -- it holds: " + (rbLayers.join(", ") || "nothing") };
@@ -800,6 +935,49 @@ function cannedOk(tool, args) {
         textStyle.leading = args.leading === "auto" ? "auto" : args.leading;
       }
       return { style: textStyle };
+    case "add_light": {
+      const has = (k) => args && args[k] !== undefined &&
+                         args[k] !== null && args[k] !== "";
+      const kind = has("type") ? String(args.type).toLowerCase() : "spot";
+      if (!lightAcc(LIGHT_KINDS.join(" "), kind)) {
+        return { __err: "No light type '" + args.type + "'. AE has: " +
+          LIGHT_KINDS.join(", ") + "." };
+      }
+      const fall = has("falloff")
+        ? String(args.falloff).toLowerCase() : "none";
+      for (const k of LIGHT_ORDER) {
+        if (!has(k)) continue;
+        if (!lightAcc(LIGHT_ON[k], kind)) {
+          const mine = LIGHT_ORDER.filter(x => lightAcc(LIGHT_ON[x], kind));
+          return { __err: (/^[ae]/.test(kind) ? "An " : "A ") + kind +
+            " light has no " + k + " \u2014 AE hides it. Types that " +
+            "take it: " + LIGHT_ON[k].split(" ").join(", ") +
+            ". This light accepts: " + mine.join(", ") + "." };
+        }
+      }
+      if (has("radius") && fall !== "smooth" &&
+          fall !== "inversesquareclamped") {
+        return { __err: "'radius' only exists while Falloff is smooth, " +
+          "inverseSquareClamped; this light's falloff is '" + fall +
+          "'. Pass falloff: \"smooth\" too." };
+      }
+      if (has("falloffDistance") && fall !== "smooth") {
+        return { __err: "'falloffDistance' only exists while Falloff " +
+          "is smooth; this light's falloff is '" + fall +
+          "'. Pass falloff: \"smooth\" too." };
+      }
+      if (args && args.oneNode === true && has("pointOfInterest")) {
+        return { __err: "A one-node light has no Point of Interest to " +
+          "aim at. Drop 'pointOfInterest', or drop 'oneNode' to aim it." };
+      }
+      const nm = (args && args.name) || "Light";
+      lights[nm] = args || {};
+      const applied = LIGHT_ORDER.filter(has);
+      return { index: Object.keys(lights).length, name: nm, type: kind,
+        applied: applied.join(", ") || "(defaults only)", refused: "",
+        note: "Only 3D layers (set_layer_3d) with Material Options > " +
+              "Accepts Lights are lit by this" };
+    }
     case "add_camera":
       return { index: 1, name: (args && args.name) || "Camera" };
     case "set_layer_timing":
@@ -921,7 +1099,7 @@ SelfTest.run({
     ordStack = [];
     maskKeys = {};
     batchLayers = 0; batchFx = {}; batchBlur = null;
-    batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = [];
+    batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {};
     SelfTest.run({
       callHostTool(tool, args, cb) {
         if (tool === "grid_layout") {
@@ -951,7 +1129,7 @@ SelfTest.run({
         ordStack = [];
         maskKeys = {};
         batchLayers = 0; batchFx = {}; batchBlur = null;
-        batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = [];
+        batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {};
         SelfTest.run({
           callHostTool(tool, args, cb) {
             // Never refuse anything -- the old permissive host.

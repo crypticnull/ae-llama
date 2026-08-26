@@ -83,19 +83,36 @@ expression engines, center_anchor_point on rotated/scaled/parented and
 animated layers, scale_comp with cameras/keyframes, text styling and
 font validation, cameras in the suite (old item 2b).
 
-Still open:
+ALL FIVE remaining bullets are now DONE. The four below were finished
+2026-08-21 and the text simply never got struck, which cost a later
+pass a re-read of the log to work out what was left — so they are
+struck now:
 
-- split_layer_into_chunks on real FOOTAGE (trimmed in/out points), not
-  just solids; verify seamless playback and stack order.
-- distribute_property step mode on real layers; reorder_layers actual
-  stack order after (read back via get_comp_details).
-- set_mask_path keyframes: scrub and confirm the mask actually
-  ANIMATES (Shape value at time, not just numKeys).
-- for_each_layer with apply_effect across 50+ layers: timing +
-  stability, and the same at 200 layers for grid_layout and batch keys.
-  Note anything over ~5s.
-- add_light: no such tool exists, so lights are wholly uncovered. Same
-  aim-not-scale rule cameras needed. Build the tool AND its coverage.
+- ~~split_layer_into_chunks on real FOOTAGE~~ DONE 2026-08-21.
+- ~~distribute_property step mode; reorder_layers stack order~~ DONE
+  2026-08-21 (found three real bugs; see the log).
+- ~~set_mask_path keyframes actually ANIMATE~~ DONE 2026-08-21.
+- ~~for_each_layer across 50+ layers, and 200-layer timings~~ DONE
+  2026-08-21 (timings in the log; nothing over ~1s).
+- ~~add_light~~ DONE 2026-08-26. Built, documented, stub-tested and
+  covered by 19 real-AE suite steps (harness 187 -> 206). All five AE
+  2026 types incl. ENVIRONMENT, per-type grounded refusals from a
+  matrix measured in the field, validate-before-create. NOT bumped:
+  a new tool rides the next MINOR, which is the remote session's.
+
+Item 2 is CLOSED. The next pass should start at 2d (H3 i2v workflow,
+parts 1-3) or item 3/4, not here.
+
+Two things this item surfaced that are NOT done, each worth its own
+small pass rather than being smuggled in:
+
+- `scale_comp` still does not scale a LIGHT's pixel-valued options
+  (falloff distance, shadow diffusion), same as AE's own native
+  script. Now that lights are creatable this is finally testable.
+- `get_property` cannot reach `Radius` or `Falloff Distance` by bare
+  name (AE's layer-level name shortcut does not cover them); the
+  group path `light/Radius` works and the suite uses it. A deep-search
+  fallback in the path resolver would remove the trap for the model.
 
 ## 2c. Inventory the owner's real ComfyUI install — DONE 2026-08-25
 
@@ -120,7 +137,9 @@ Pure filesystem reading — no AE, no generation runs, do NOT launch
 ComfyUI. This unblocks tier-plan P5 (catalog file lists + sizes) and
 the register-existing matcher. Commit the inventory; no version bump.
 
-## 2d. Small local passes queued by the probe findings — 4 of 5 DONE 2026-08-25
+## 2d. Small local passes queued by the probe findings — 5 of 6 DONE
+(2026-08-25 and -26). The ONLY one left is the H3 i2v workflow, parts
+1-3; everything else below is struck.
 
 - ~~Locate the H3 base weight~~ FOUND by the owner (2026-08-25):
   `AppData\Local\Comfy-Desktop\ComfyUI-Shared\models\diffusion_models\`
@@ -129,7 +148,8 @@ the register-existing matcher. Commit the inventory; no version bump.
   matched the H3 filter — record exact names + sizes) and append it to
   docs/COMFY_LOCAL_INVENTORY.md; the register matcher's root list is
   now Documents + code install + ComfyUI-Shared + node ckpts dirs.
-- **Verify the history trim** (probe steps 9–10): the remote session
+- ~~**Verify the history trim**~~ DONE 2026-08-25 (0.9.17), re-confirmed
+  2026-08-26. Original text: (probe steps 9–10) the remote session
   bounded what the model is sent (Tools.fitHistory + a hard-trim retry
   on context 400s). Re-run the full chat probe — steps 9 and 10 died on
   context overflow before; they should now complete, with the "context
@@ -137,21 +157,52 @@ the register-existing matcher. Commit the inventory; no version bump.
   the set_property->for_each_layer redirect ship together.
 - **H3 i2v workflow RECEIVED** (AE_LLAMA_H3_I2V_V1 + manifest): the
   fl2va weight covers BOTH t2v (no image) and i2v, superseding r2v as
-  the first H3 target. Local pass, in order: (1) template adaptation —
-  drop the Ollama nodes 169/170 and link 313 so the injected prompt
-  widget on node 138 takes effect (spec in the manifest's `procedural`
-  block; duration injects as SECONDS into node 136, the graph converts
-  to the 17k+5 frame grid); (2) wire those injection points into
-  comfy.js injectParams; (3) ONE real generation end-to-end through the
-  panel to verify, with RTXVideoSuperResolution made bypassable (it is
-  NVIDIA-app dependent); (4) attribute the manifest's UNKNOWN nodes.
+  the first H3 target. Local pass, in order:
+  - ~~(1) template adaptation~~ DONE 2026-08-26. It was bigger than the
+    manifest thought: EVERY bundled workflow is UI-format and
+    `loadWorkflow` refuses UI-format, and `extension/workflows/` is not
+    the seed dir either. So the pass built the conversion instead —
+    `scripts/harvest-comfy-node-defs.py` (+ the checked-in defs) and
+    `scripts/adapt-workflow.js`, handling positional widget decoding,
+    control_after_generate, V3 dynamic combos, autogrow groups and
+    bypass rewiring. Output is seeded at
+    `extension/comfy-workflows/AE_LLAMA_H3_I2V_V1.json` and passes
+    ComfyUI 0.32.0's own `validate_prompt` (`valid: true`). See the log.
+  - ~~(2) wire the manifest `procedural` injection points into comfy.js
+    injectParams~~ DONE 2026-08-26. injectParams takes the manifest as a
+    third argument and honours `procedural` (prompt, durationSeconds,
+    resolution, firstFrame) with grounded refusals; `comfy_generate`
+    gained `durationSeconds` (a `frames` arg on a seconds template is
+    REFUSED, not converted) and `image` (uploaded to ComfyUI's input dir
+    via the new `Comfy.uploadImage`). With no image the reference
+    LoadImage is DETACHED and the graph runs t2v, so the template no
+    longer names a one-machine PNG. Both paths return `valid: True` from
+    ComfyUI 0.32.0's own validate_prompt. See the log.
+  - **(3) ONE real generation end-to-end through the panel to verify** —
+    NEXT. RTXVideoSuperResolution must be made bypassable in the same
+    pass (it is NVIDIA-app dependent, so the template cannot run on a
+    machine without it).
+  - (4) attribute the manifest's UNKNOWN nodes.
+  - Also surfaced, its own small pass: the KREA2 template contains a
+    SUBGRAPH the converter refuses to flatten. Route that works — queue
+    it once in ComfyUI and pull the executed prompt from `/history`
+    (the owner's `get-api-workflow.ps1` already does this). H3 r2v is
+    still unconverted too.
 - **Pin H3 t2v/i2v files** (HF is proxy-blocked from the remote
   session): list https://huggingface.co/api/models/Comfy-Org/MiniMax-H3/tree/main?recursive=true
   and record the t2v/i2v diffusion weights + non-nvfp4 encoder variants
   with sizes in the tier plan. The owner wants text/image-to-video
   FIRST; the bundled r2v workflow is deferred until 5.8 lands (it needs
   image+audio inputs the panel cannot feed yet).
-- **clearExpressions in real AE** (remote-built 2026-08-25, unshipped):
+- ~~**clearExpressions in real AE**~~ DONE 2026-08-26 (0.9.18). Verified
+  in the field: refuse-then-recall-with-flag is what the model does, and
+  the nine squares land on even gaps. Two defects found on the way and
+  fixed at their roots — hostscript now publishes `$.global.AELLJSON`
+  (chat-probe's verdict reads had been failing silently AND wedging AE on
+  a modal), and the overriddenByExpression note now asks for the SAME
+  layers list on the re-call, because handing back only the blocked ones
+  re-spaces those and strands the layers that already landed. See the
+  log entry. Original text:
   the step-7 policy question is settled — distribute_property takes
   `clearExpressions: true` (clears ONLY expressions that swallowed the
   write, on an explicit re-call; see the log entry). Local pass: run the
@@ -159,7 +210,8 @@ the register-existing matcher. Commit the inventory; no version bump.
   step 7 — expected shape is now refuse-then-recall-with-flag, and the
   existing even-gaps verdict measures exactly that end state — then
   patch bump together with whatever else is verified.
-- **set_solid_color, probe first**: no tool can change a solid's color
+- ~~**set_solid_color**~~ DONE 2026-08-25 (0.9.17) — built, and it
+  closed chat-probe step 9. Original text: no tool can change a solid's color
   (probe step 9's real blocker — the model tried four approaches; none
   exist). The color lives on the SOLID SOURCE, so changing it changes
   EVERY layer sharing that source — duplicate_layer and

@@ -31,8 +31,13 @@
             "// omit comp for the active comp" },
     { name: "create_folder", mutating: true,
       desc: "Create a project-panel folder. Same name in different parents " +
-            "is fine; existence is checked per-parent.",
-      args: "{name: string, parent?: folder name, id, path, or 'root' (default: root)}" },
+            "is fine; existence is checked per-parent. eachChildOf makes " +
+            "ONE call create the folder inside EVERY direct subfolder of " +
+            "the named folder — the host reads the real subfolders itself " +
+            "and the result lists every path created, so use it for any " +
+            "'inside each subfolder of X' request instead of guessing " +
+            "folder names.",
+      args: "{name: string, parent?: folder name, id, path, or 'root' (default: root), eachChildOf?: folder name|id|path ('inside each subfolder of X' — one call, ignore parent), except?: [subfolders to SKIP] (with eachChildOf; bare names or full paths both work — an entry matching nothing refuses)}" },
     { name: "move_to_folder", mutating: true,
       desc: "Move project items into a folder (batch).",
       args: "{items: name|id|path|[..], folder: name, id, path 'A/B', or 'root'}" },
@@ -152,7 +157,8 @@
             "property is driven by an expression (a grid_layout rig, a " +
             "link) are reported in overriddenByExpression and do NOT " +
             "move; clearExpressions: true removes exactly those " +
-            "expressions so the values land.",
+            "expressions so the values land — re-send the FULL layers " +
+            "list on that re-call, not only the overridden ones.",
       args: "{comp?: string, layers?: [name|index] (applied in the order given), property: 'opacity'|'rotation'|'scale'|'position_x'|'position_y', from?: number, to?: number, step?: number (equidistant), bezier?: [x1,y1,x2,y2], order?: 'in'|'stack'|'reverse' (re-sorts the list), clearExpressions?: true (ONLY on a re-call after overriddenByExpression, when the user explicitly asked for these values)}" },
     { name: "apply_keyframe_ease", mutating: true,
       desc: "Apply a bezier as TEMPORAL easing between keyframes on one " +
@@ -284,6 +290,19 @@
       desc: "Add a camera. Only 3D layers (set_layer_3d) are affected by it. " +
             "oneNode:true makes a free camera with no Point of Interest.",
       args: "{comp?: string, name?: string, position?: [x,y,z], pointOfInterest?: [x,y,z], zoom?: px, oneNode?: bool}" },
+    { name: "add_light", mutating: true,
+      desc: "Add a light. Only 3D layers (set_layer_3d) with Accepts " +
+            "Lights on are lit by it. Each type hides most options: " +
+            "spot takes everything; parallel has no cone/shadowDiffusion; " +
+            "point has no cone and no pointOfInterest; ambient and " +
+            "environment take only intensity and color — not even a " +
+            "position. radius/falloffDistance need falloff set too. " +
+            "oneNode:true makes a free light with no Point of Interest.",
+      args: "{comp?: string, name?: string, type?: parallel|spot|point|ambient|environment (default spot), " +
+            "position?: [x,y,z], pointOfInterest?: [x,y,z], oneNode?: bool, " +
+            "intensity?: %, color?: [r,g,b] 0-1, coneAngle?: deg, coneFeather?: %, " +
+            "falloff?: none|smooth|inverseSquareClamped, radius?: px, falloffDistance?: px, " +
+            "castsShadows?: bool, shadowDarkness?: %, shadowDiffusion?: px}" },
     { name: "add_marker", mutating: true,
       desc: "Add a marker to the comp (omit 'layer') or to a layer.",
       args: "{comp?: string, layer?: name|index, time: seconds, comment?: string, duration?: seconds}" },
@@ -358,7 +377,7 @@
             "the AE project. Blocks until finished (may take minutes). If " +
             "the hidden backend is installed it BOOTS AUTOMATICALLY — " +
             "never tell the user to start ComfyUI first.",
-      args: "{workflow: string (name from comfy_list_workflows), prompt: string, negative?: string, width?: int, height?: int, seed?: int, frames?: int (video workflows), import?: bool = true}" }
+      args: "{workflow: string (name from comfy_list_workflows), prompt: string, negative?: string, width?: int, height?: int, seed?: int, frames?: int (video workflows), durationSeconds?: number (video templates whose length is set in seconds — the error tells you which), image?: string (absolute path to a reference/first-frame image), import?: bool = true}" }
   ];
 
   var TOOL_NAMES = [];
@@ -516,7 +535,10 @@
       "  never a chain of set_transform/duplicate calls.",
       "- If distribute_property reports overriddenByExpression (a rig like",
       "  grid_layout drives the property), the user's explicit request",
-      "  WINS: re-call it ONCE with clearExpressions: true, then tell the",
+      "  WINS: re-call it ONCE with clearExpressions: true and the SAME",
+      "  layers list as the first call — NOT just the ones it named as",
+      "  overridden, or the spacing is divided across those few and the",
+      "  layers that already landed are stranded mid-row. Then tell the",
       "  user which layers had their expressions removed. Never pass",
       "  clearExpressions on a first call, and never use it when the user",
       "  asked to keep the rig.",
@@ -594,9 +616,14 @@
       "  copy placeholder names from these instructions. If a lookup",
       "  fails, the error lists the folders that really exist — pick from",
       "  those or ask the user; do not invent a fallback.",
-      "- Batch requests ('a subfolder inside every folder within X'):",
-      "  inspect, filter folders whose parent is X, then emit one",
-      "  create_folder per real path, all in ONE commands array.",
+      "- 'add a folder inside each/every subfolder of X' = create_folder",
+      "  {name, eachChildOf: 'X'} — ONE call. The host finds the real",
+      "  subfolders itself; never list them from the PROJECT STATE (it is",
+      "  trimmed on big projects) and never emit one call per folder.",
+      "  'except (for) Y' rides the SAME call: except: ['Y'] — copy the",
+      "  user's folder names exactly (underscores included). The result's",
+      "  created/createdCount/skippedAsExcepted are the receipts — report",
+      "  THOSE numbers, nothing else.",
       "- NEVER claim an action you did not emit commands for in this same",
       "  response. If no available tool can do it, say so plainly and",
       "  return commands: [].",
@@ -625,6 +652,10 @@
       "  Pick a template via comfy_list_workflows. Match width/height to",
       "  the target comp when it makes sense. Generation can take",
       "  minutes — do not repeat a request that already succeeded.",
+      "  Some video templates set length in SECONDS (durationSeconds),",
+      "  not frames; if one refuses your 'frames' it says so — re-call",
+      "  with durationSeconds. Pass image: <absolute path> to give a",
+      "  video template a first frame; omit it for text-to-video.",
       "",
       "Available tools:"
     ];
@@ -876,13 +907,16 @@
         workflowFile: chosen.file,
         outDir: s.comfyOutDir,
         timeoutSec: s.comfyTimeoutSec,
+        manifest: manifest,
         params: {
           prompt: enhancedPrompt !== null ? enhancedPrompt : args.prompt,
           negative: args.negative,
           width: args.width,
           height: args.height,
           seed: args.seed,
-          frames: args.frames
+          frames: args.frames,
+          durationSeconds: args.durationSeconds,
+          image: args.image
         }
       }, function (elapsed) {
         if (progressSink) {

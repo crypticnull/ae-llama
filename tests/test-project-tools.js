@@ -206,4 +206,132 @@ assert(!gone.ok && /Comps in this project:.*Squares 2/.test(gone.error),
        "comp-not-found error lists the project's real comps: " +
        gone.error.slice(0, 90));
 
+// 11. eachChildOf — the field failure of 2026-08-26, replayed. Asked for
+// _ARCHIVE inside each of 10 subfolders of a work project, the model
+// acted from the TRIMMED project summary, hit 2 wrong-ish targets and
+// claimed the whole job done. This form makes the host walk the real
+// subfolders in one call, so the receipts are real or the claim is
+// impossible.
+const field = folder("_FIELD");
+const north = folder("North", field);
+const south = folder("South", field);
+const chicago = folder("Chicago", field);
+folder("_ARCHIVE", chicago);              // one child already archived
+const fieldComp = new CompItem("Field Comp");
+fieldComp.parentFolder = field;           // a comp is NOT a subfolder
+
+const fan = call("create_folder", { name: "_ARCHIVE", eachChildOf: "_FIELD" });
+assert(fan.ok, "eachChildOf fan-out answers (" + (fan.error || "") + ")");
+assert(fan.data.subfolders === 3 && fan.data.createdCount === 2,
+       "3 real subfolders seen, 2 created (Chicago already had one): " +
+       JSON.stringify(fan.data));
+assert(JSON.stringify((fan.data.created || []).sort()) ===
+       JSON.stringify(["_FIELD/North/_ARCHIVE", "_FIELD/South/_ARCHIVE"]),
+       "created lists the exact real paths — the receipts (got " +
+       JSON.stringify(fan.data.created) + ")");
+assert(fan.data.alreadyExistedCount === 1 &&
+       fan.data.alreadyExisted[0] === "_FIELD/Chicago/_ARCHIVE",
+       "the pre-existing one is reported as existing, not created");
+assert(north.children.some(c => c.name === "_ARCHIVE") &&
+       south.children.some(c => c.name === "_ARCHIVE"),
+       "…and the folders are really in the stubbed project");
+assert(!field.children.some(c => c.name === "_ARCHIVE"),
+       "NOTHING was created directly inside _FIELD itself — the exact " +
+       "wrong level the field failure produced");
+assert(fieldComp.numLayers === 0 && !fieldComp.children,
+       "the comp child was skipped, not treated as a folder");
+
+// idempotent: run it again, nothing new, everything reported existing.
+const fan2 = call("create_folder", { name: "_ARCHIVE", eachChildOf: "_FIELD" });
+assert(fan2.ok && fan2.data.createdCount === 0 &&
+       fan2.data.alreadyExistedCount === 3,
+       "second run creates nothing and says so (got " +
+       JSON.stringify(fan2.data) + ")");
+
+// a folder with no subfolders refuses with its real contents.
+const leaf = folder("_LEAF");
+const leafComp = new CompItem("Leaf Comp");
+leafComp.parentFolder = leaf;
+const noKids = call("create_folder", { name: "X", eachChildOf: "_LEAF" });
+assert(!noKids.ok && /no subfolders/.test(noKids.error) &&
+       /Leaf Comp/.test(noKids.error),
+       "no-subfolders refusal names what the folder really holds: " +
+       noKids.error.slice(0, 120));
+
+// a bad reference stays grounded.
+const badEach = call("create_folder", { name: "X", eachChildOf: "Nope" });
+assert(!badEach.ok && /Existing folders:/.test(badEach.error),
+       "unknown eachChildOf lists the folders that really exist");
+
+// 12. "except for _North" — the second field sentence of 2026-08-26.
+// The exclusion is a promise: excluded children are untouched and
+// REPORTED, and an except name that matches no real subfolder refuses
+// (silently creating in "_North" because the model wrote "North" would
+// betray exactly the folder the user asked to spare).
+const exc = folder("_EXC");
+const excA = folder("Alpha", exc);
+const excNorth = folder("_North", exc);
+const excB = folder("Beta", exc);
+const fanX = call("create_folder",
+  { name: "_ARCHIVE", eachChildOf: "_EXC", except: ["_North"] });
+assert(fanX.ok && fanX.data.createdCount === 2 &&
+       JSON.stringify(fanX.data.skippedAsExcepted) ===
+       JSON.stringify(["_North"]),
+       "except skips exactly _North and says so (got " +
+       JSON.stringify(fanX.data) + ")");
+assert(excNorth.children.length === 0,
+       "_North was really left untouched");
+assert(excA.children.some(c => c.name === "_ARCHIVE") &&
+       excB.children.some(c => c.name === "_ARCHIVE"),
+       "…while Alpha and Beta got their archives");
+
+// a lone string works like a one-item list — models write both.
+const fanS = call("create_folder",
+  { name: "_KEEP", eachChildOf: "_EXC", except: "_North" });
+assert(fanS.ok && fanS.data.createdCount === 2 &&
+       excNorth.children.length === 0,
+       "except as a bare string behaves like a one-item list");
+
+// the FULL PATH is an equally reasonable spelling — the field's first
+// 0.9.20 run wrote except:["_COMPS/_ARCHIVE"] and burned a correction
+// round on it. Both spellings match now, mixed freely.
+const fanP = call("create_folder",
+  { name: "_PATHY", eachChildOf: "_EXC",
+    except: ["_EXC/_North", "Alpha"] });
+assert(fanP.ok && fanP.data.createdCount === 1 &&
+       fanP.data.skippedAsExcepted.slice().sort().join(",") ===
+       "Alpha,_North",
+       "path and bare-name except entries mix in one list (got " +
+       JSON.stringify(fanP.data) + ")");
+assert(excNorth.children.length === 0 &&
+       !excA.children.some(c => c.name === "_PATHY"),
+       "…and both excluded folders were really spared");
+
+// the exclusion receipt must survive the panel's display cap: it rides
+// BEFORE the (longer) alreadyExisted list in the result.
+{
+  const keys = Object.keys(call("create_folder",
+    { name: "_ARCHIVE", eachChildOf: "_EXC", except: ["_North"] }).data);
+  assert(keys.indexOf("skippedAsExcepted") < keys.indexOf("alreadyExisted"),
+         "skippedAsExcepted serializes before alreadyExisted (got " +
+         keys.join(",") + ")");
+}
+
+// a guessed name refuses BEFORE creating anything, naming the real ones.
+const fanBad = call("create_folder",
+  { name: "_NOPE", eachChildOf: "_EXC", except: ["North"] });
+assert(!fanBad.ok && /North/.test(fanBad.error) &&
+       /_North/.test(fanBad.error) && /nothing was created/.test(fanBad.error),
+       "a non-matching except name refuses and lists the real " +
+       "subfolders: " + fanBad.error.slice(0, 130));
+assert(!excA.children.some(c => c.name === "_NOPE"),
+       "…and truly nothing was created on the refusal");
+
+// excluding everything is an error, not a silent no-op.
+const fanAll = call("create_folder",
+  { name: "_X", eachChildOf: "_EXC",
+    except: ["Alpha", "_North", "Beta"] });
+assert(!fanAll.ok && /every subfolder/.test(fanAll.error),
+       "excluding every subfolder refuses with the reason");
+
 console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");

@@ -543,6 +543,127 @@ function AELL_resolveFolderRef(ref) {
 AELL_TOOLS.create_folder = function (args) {
   if (!args.name) return AELL_err("'name' is required");
   var proj = app.project;
+
+  // Fan-out form: ONE call creates `name` inside EVERY direct subfolder
+  // of the named folder. The host walks the real subfolders itself, so
+  // the model cannot act from a trimmed project summary — measured in
+  // the field (2026-08-26): asked for _ARCHIVE in each of 10 subfolders,
+  // the model saw only the summary, hit 2 wrong-ish targets and claimed
+  // the whole job done. This form makes that claim true by construction
+  // or impossible to make.
+  if (typeof args.eachChildOf !== "undefined" && args.eachChildOf !== null) {
+    var box = AELL_isRootRef(args.eachChildOf)
+      ? proj.rootFolder : AELL_resolveFolderRef(args.eachChildOf);
+    if (!box) {
+      return AELL_err("Folder not found: " + args.eachChildOf +
+        ". Existing folders: " + AELL_listFolderPaths(20) +
+        ". Use one of those (or a path/id), or 'root' for the project root.");
+    }
+    var kids = [];
+    var c, kid;
+    for (c = 1; c <= box.numItems; c++) {
+      kid = box.item(c);
+      if (kid instanceof FolderItem) kids.push(kid);
+    }
+    if (kids.length === 0) {
+      var names = [];
+      for (c = 1; c <= box.numItems && names.length < 10; c++) {
+        names.push(box.item(c).name);
+      }
+      return AELL_err("'" + (AELL_folderPath(box) || box.name) +
+        "' has no subfolders to create '" + String(args.name) +
+        "' in. It holds: " +
+        (names.length ? names.join(", ") : "(nothing)") +
+        (box.numItems > 10 ? ", +" + (box.numItems - 10) + " more" : ""));
+    }
+    // "except for X": the exclusion is a PROMISE, so an except name that
+    // matches no real subfolder refuses outright — silently creating in
+    // a folder the user asked to spare (because the model guessed
+    // "North" for "_North") would betray exactly the request the flag
+    // exists to honor.
+    var skipped = [];
+    if (typeof args.except !== "undefined" && args.except !== null) {
+      var exc = AELLJSON.isArray(args.except) ? args.except : [args.except];
+      // A bare name and a full path are both reasonable spellings —
+      // measured in the field (2026-08-26): the model wrote
+      // "_COMPS/_ARCHIVE" where "_ARCHIVE" was wanted and burned a
+      // correction round on it. Both match now; a spelling that matches
+      // NEITHER still refuses, because guessing would betray exactly
+      // the folder the user asked to spare.
+      function excMatches(entry, k) {
+        var s2 = String(entry);
+        return k.name === s2 || AELL_folderPath(k) === s2;
+      }
+      var kidNames = [];
+      for (c = 0; c < kids.length; c++) kidNames.push(kids[c].name);
+      var misses = [];
+      for (c = 0; c < exc.length; c++) {
+        var found = false;
+        for (var e2 = 0; e2 < kids.length; e2++) {
+          if (excMatches(exc[c], kids[e2])) { found = true; break; }
+        }
+        if (!found) misses.push(String(exc[c]));
+      }
+      if (misses.length) {
+        return AELL_err("'except' name(s) not among the subfolders of '" +
+          (AELL_folderPath(box) || box.name) + "': " + misses.join(", ") +
+          ". Its subfolders: " + kidNames.join(", ") +
+          ". Fix the except list and re-call — nothing was created.");
+      }
+      var keep = [];
+      for (c = 0; c < kids.length; c++) {
+        var out = false;
+        for (var e3 = 0; e3 < exc.length; e3++) {
+          if (excMatches(exc[e3], kids[c])) { out = true; break; }
+        }
+        if (out) skipped.push(kids[c].name);
+        else keep.push(kids[c]);
+      }
+      kids = keep;
+      if (kids.length === 0) {
+        return AELL_err("every subfolder of '" +
+          (AELL_folderPath(box) || box.name) + "' is in the except " +
+          "list (" + skipped.join(", ") + ") — nothing to create.");
+      }
+    }
+    var made = [], had = [];
+    for (c = 0; c < kids.length; c++) {
+      var ch = kids[c];
+      var hit = null;
+      for (var m = 1; m <= ch.numItems; m++) {
+        var g = ch.item(m);
+        if (g instanceof FolderItem && g.name === String(args.name)) {
+          hit = g;
+          break;
+        }
+      }
+      if (hit) {
+        had.push(AELL_folderPath(hit));
+        continue;
+      }
+      var nf = proj.items.addFolder(String(args.name));
+      nf.parentFolder = ch;
+      made.push(AELL_folderPath(nf));
+    }
+    // Whole paths are the receipts, but they must FIT the panel's
+    // per-result cap — cap the lists, never the counts.
+    var res = { name: String(args.name),
+                parent: AELL_folderPath(box) || "(root)",
+                subfolders: kids.length,
+                createdCount: made.length,
+                created: made.slice(0, 15) };
+    if (made.length > 15) res.createdMore = made.length - 15;
+    // The exclusion receipt rides BEFORE the existed list: the panel
+    // caps each result's display, and the user's "did it skip _North?"
+    // must survive the cut (measured: it was the field's first casualty).
+    if (skipped.length) res.skippedAsExcepted = skipped;
+    if (had.length) {
+      res.alreadyExistedCount = had.length;
+      res.alreadyExisted = had.slice(0, 15);
+    }
+    return AELL_okay(res);
+  }
+
   var parent = proj.rootFolder;
   if (!AELL_isRootRef(args.parent)) {
     var p = AELL_resolveFolderRef(args.parent);
@@ -2913,8 +3034,10 @@ AELL_TOOLS.distribute_property = function (args) {
     notes.push(overridden.length + " of " + n + " layer(s) did NOT move " +
       "because an expression drives " + String(args.property) + " on them: " +
       overriddenWhy + " If the user explicitly asked for these values, " +
-      "re-call with clearExpressions: true to remove those expressions " +
-      "and apply them");
+      "re-call with clearExpressions: true AND the SAME " + n +
+      " layer(s) as this call — from/to is divided across the layers you " +
+      "send, so re-calling with only the " + overridden.length +
+      " listed here re-spaces those and strands the rest");
   }
   if (cleared.length) {
     res.expressionsCleared = cleared;
@@ -4044,6 +4167,218 @@ AELL_TOOLS.add_camera = function (args) {
                      note: "Layers must be 3D (set_layer_3d) to be seen by a camera" });
 };
 
+/*
+ * Lights. Every rule below was MEASURED against AE 2026 (probe,
+ * WORKPLAN-LOG 2026-08-26), because a light lies about itself:
+ *
+ *  - `canSetValue` is FALSE for every Light Options property and every
+ *    light transform property, INCLUDING the ones that write fine, and
+ *    `elided` is false everywhere. Neither can gate anything. The
+ *    per-type table below is the only truth.
+ *  - The Light Options group carries all 14 properties on EVERY type —
+ *    it never shrinks — so walking it tells you nothing about what the
+ *    type actually accepts.
+ *  - Writing one the type hides throws AE's "property or a parent
+ *    property is hidden", the same wall the cameras hit.
+ *  - AE 2026 has FIVE types: ENVIRONMENT (4416) joined the four from
+ *    training, hence the typeof guard on older builds.
+ *  - `addLight` requires BOTH arguments; a one-arg call throws.
+ *  - A new light defaults to SPOT, and its Falloff defaults to none.
+ */
+var AELL_LIGHT_KINDS = ["parallel", "spot", "point", "ambient", "environment"];
+
+var AELL_FALLOFF = { none: 1, smooth: 2, inversesquareclamped: 3 };
+/* Echo the spelling the tool DOCS use, not the lowercased key — the
+ * model copies whatever a refusal shows it back into the next call. */
+var AELL_FALLOFF_NAME = { none: "none", smooth: "smooth",
+                          inversesquareclamped: "inverseSquareClamped" };
+
+/* arg -> the types that ACCEPT it. Order is the WRITE order: Falloff
+ * must land before Radius/Falloff Distance, which it gates. */
+var AELL_LIGHT_OPTS = [
+  { arg: "intensity",       mn: "ADBE Light Intensity",
+    on: "parallel spot point ambient environment", kind: "number" },
+  { arg: "color",           mn: "ADBE Light Color",
+    on: "parallel spot point ambient environment", kind: "color" },
+  { arg: "coneAngle",       mn: "ADBE Light Cone Angle",
+    on: "spot", kind: "number" },
+  { arg: "coneFeather",     mn: "ADBE Light Cone Feather 2",
+    on: "spot", kind: "number" },
+  { arg: "falloff",         mn: "ADBE Light Falloff Type",
+    on: "parallel spot point", kind: "falloff" },
+  { arg: "radius",          mn: "ADBE Light Falloff Start",
+    on: "parallel spot point", kind: "number",
+    needsFalloff: "smooth inverseSquareClamped" },
+  { arg: "falloffDistance", mn: "ADBE Light Falloff Distance",
+    on: "parallel spot point", kind: "number",
+    needsFalloff: "smooth" },
+  { arg: "castsShadows",    mn: "ADBE Casts Shadows",
+    on: "parallel spot point", kind: "bool" },
+  { arg: "shadowDarkness",  mn: "ADBE Light Shadow Darkness",
+    on: "parallel spot point", kind: "number" },
+  { arg: "shadowDiffusion", mn: "ADBE Light Shadow Diffusion",
+    on: "spot point", kind: "number" }
+];
+
+/* Transform properties a light type will let you write (measured).
+ * ambient and environment accept NONE of them — not even Position. */
+var AELL_LIGHT_XFORM = {
+  position:        { mn: "ADBE Position",     on: "parallel spot point" },
+  pointOfInterest: { mn: "ADBE Anchor Point", on: "parallel spot" }
+};
+
+/* "a spot" but "an ambient" — these strings are what the model reads. */
+function AELL_lightArticle(kind) {
+  return (kind === "ambient" || kind === "environment") ? "An " : "A ";
+}
+
+/* Space-separated membership, so "point" never matches "pointOfInterest". */
+function AELL_lightAccepts(list, kind) {
+  return (" " + list + " ").indexOf(" " + kind + " ") >= 0;
+}
+
+/* Which types DO take this arg — so a refusal names the way forward. */
+function AELL_lightTypesFor(list) {
+  return list.split(" ").join(", ");
+}
+
+/* What THIS type accepts, for the same reason. */
+function AELL_lightArgsFor(kind) {
+  var out = [], i, k;
+  for (i = 0; i < AELL_LIGHT_OPTS.length; i++) {
+    if (AELL_lightAccepts(AELL_LIGHT_OPTS[i].on, kind)) {
+      out.push(AELL_LIGHT_OPTS[i].arg);
+    }
+  }
+  for (k in AELL_LIGHT_XFORM) {
+    if (AELL_LIGHT_XFORM.hasOwnProperty(k) &&
+        AELL_lightAccepts(AELL_LIGHT_XFORM[k].on, kind)) out.push(k);
+  }
+  return out.join(", ") || "(nothing but name)";
+}
+
+function AELL_lightGiven(args, name) {
+  return args[name] !== null && typeof args[name] !== "undefined" &&
+         args[name] !== "";
+}
+
+AELL_TOOLS.add_light = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  var i, o, xk;
+
+  var kind = AELL_lightGiven(args, "type")
+    ? String(args.type).toLowerCase() : "spot";
+  if (!AELL_lightAccepts(AELL_LIGHT_KINDS.join(" "), kind)) {
+    return AELL_err("No light type '" + args.type + "'. AE has: " +
+      AELL_LIGHT_KINDS.join(", ") + ".");
+  }
+  if (kind === "environment" &&
+      (typeof LightType === "undefined" ||
+       typeof LightType.ENVIRONMENT === "undefined")) {
+    return AELL_err("This After Effects (" + app.version + ") has no " +
+      "environment light. Available: parallel, spot, point, ambient.");
+  }
+
+  /* Validate EVERYTHING before creating the layer — a refusal must not
+   * leave a half-configured light behind for the user to clean up. */
+  var falloff = AELL_lightGiven(args, "falloff")
+    ? String(args.falloff).toLowerCase() : "none";
+  if (AELL_lightGiven(args, "falloff") &&
+      !AELL_FALLOFF.hasOwnProperty(falloff)) {
+    return AELL_err("No falloff '" + args.falloff + "'. AE has: none, " +
+      "smooth, inverseSquareClamped.");
+  }
+  for (i = 0; i < AELL_LIGHT_OPTS.length; i++) {
+    o = AELL_LIGHT_OPTS[i];
+    if (!AELL_lightGiven(args, o.arg)) continue;
+    if (!AELL_lightAccepts(o.on, kind)) {
+      return AELL_err(AELL_lightArticle(kind) + kind + " light has no " + o.arg + " — AE " +
+        "hides it. Types that take it: " + AELL_lightTypesFor(o.on) +
+        ". This light accepts: " + AELL_lightArgsFor(kind) + ".");
+    }
+    if (o.needsFalloff &&
+        !AELL_lightAccepts(o.needsFalloff.toLowerCase(), falloff)) {
+      return AELL_err("'" + o.arg + "' only exists while Falloff is " +
+        AELL_lightTypesFor(o.needsFalloff) + "; this light's falloff is '" +
+        AELL_FALLOFF_NAME[falloff] + "'. Pass falloff: \"" +
+        o.needsFalloff.split(" ")[0] + "\" too.");
+    }
+  }
+  for (xk in AELL_LIGHT_XFORM) {
+    if (!AELL_LIGHT_XFORM.hasOwnProperty(xk)) continue;
+    if (!AELL_lightGiven(args, xk)) continue;
+    if (!AELL_lightAccepts(AELL_LIGHT_XFORM[xk].on, kind)) {
+      return AELL_err(AELL_lightArticle(kind) + kind + " light has no " + xk + " — AE hides " +
+        "it (it lights the whole scene from nowhere). Types that take it: " +
+        AELL_lightTypesFor(AELL_LIGHT_XFORM[xk].on) + ".");
+    }
+    if (!AELLJSON.isArray(args[xk]) || args[xk].length < 3) {
+      return AELL_err("'" + xk + "' must be [x, y, z] — lights are 3D.");
+    }
+  }
+  if (args.oneNode === true && AELL_lightGiven(args, "pointOfInterest")) {
+    return AELL_err("A one-node light has no Point of Interest to aim " +
+      "at. Drop 'pointOfInterest', or drop 'oneNode' to aim it.");
+  }
+
+  var center = (AELLJSON.isArray(args.position) && args.position.length >= 2)
+    ? [args.position[0], args.position[1]]
+    : [comp.width / 2, comp.height / 2];
+  var lit = AELL_keepSelection(comp, function () {
+    // addLight REQUIRES both arguments; a one-arg call throws.
+    return comp.layers.addLight(args.name ? String(args.name) : "Light",
+                                center);
+  });
+  lit.lightType = LightType[kind.toUpperCase()];
+
+  // Before any Point of Interest write: NO_AUTO_ORIENT hides the POI on
+  // a light exactly as it does on a camera, and the write would throw.
+  if (args.oneNode === true) lit.autoOrient = AutoOrientType.NO_AUTO_ORIENT;
+
+  var xform = lit.property("ADBE Transform Group");
+  var applied = [], refused = [];
+  if (AELL_lightGiven(args, "position")) {
+    xform.property("ADBE Position").setValue(
+      [args.position[0], args.position[1], args.position[2]]);
+    applied.push("position");
+  }
+  if (AELL_lightGiven(args, "pointOfInterest")) {
+    xform.property("ADBE Anchor Point").setValue(
+      [args.pointOfInterest[0], args.pointOfInterest[1],
+       args.pointOfInterest[2]]);
+    applied.push("pointOfInterest");
+  }
+
+  var opts = lit.property("ADBE Light Options Group");
+  for (i = 0; i < AELL_LIGHT_OPTS.length; i++) {
+    o = AELL_LIGHT_OPTS[i];
+    if (!AELL_lightGiven(args, o.arg)) continue;
+    var v = args[o.arg];
+    if (o.kind === "bool") v = v ? 1 : 0;
+    else if (o.kind === "falloff") v = AELL_FALLOFF[falloff];
+    else if (o.kind === "color") {
+      if (!AELLJSON.isArray(v) || v.length < 3) {
+        refused.push(o.arg + " (needs [r, g, b], each 0-1)");
+        continue;
+      }
+      v = [v[0], v[1], v[2]];
+    }
+    try {
+      opts.property(o.mn).setValue(v);
+      applied.push(o.arg);
+    } catch (e) {
+      // The table said this type takes it, so a throw here is news.
+      refused.push(o.arg + " (" + (e.message || e) + ")");
+    }
+  }
+
+  return AELL_okay({ index: lit.index, name: lit.name, type: kind,
+    applied: applied.join(", ") || "(defaults only)",
+    refused: refused.join("; "),
+    note: "Only 3D layers (set_layer_3d) with Material Options > " +
+          "Accepts Lights are lit by this" });
+};
+
 AELL_TOOLS.add_marker = function (args) {
   var comp = AELL_resolveComp(args.comp);
   if (typeof args.time !== "number") {
@@ -4698,7 +5033,8 @@ var AELL_MUTATING = {
   apply_effect: true, set_effect_param: true, set_layer_timing: true,
   delete_layer: true, set_comp_setting: true, import_file: true,
   add_to_render_queue: true, add_shape_layer: true, add_mask: true,
-  precompose: true, add_camera: true, add_marker: true,
+  precompose: true, add_camera: true, add_light: true,
+  add_marker: true,
   set_layer_3d: true, set_layer_parent: true,
   add_null: true, add_control: true, link_property: true,
   apply_expression_preset: true, set_text_style: true,
@@ -5077,3 +5413,14 @@ $.global.AELL_callBatch = AELL_callBatch;
 $.global.AELL_newRequest = function () {
   $.global.AELL_compAliases = {};
 };
+
+/* AELLJSON is a top-level `var` of THIS file, and ExtendScript keeps such
+ * a var in the scope the file was evaluated in — NOT on $.global. So a
+ * later `-r` script that finds $.global.AELL_call already defined (this
+ * file was loaded once, by the panel or by an earlier script) and skips
+ * re-loading it can still call the tools, and yet a bare `AELLJSON` in
+ * that script is a ReferenceError — which AE raises as a modal dialog
+ * that blocks every following script. Measured 2026-08-26; it is what
+ * silently broke chat-probe's verdict reads. $.global IS the contract for
+ * external callers, so publish the serializer on it too. */
+$.global.AELLJSON = AELLJSON;

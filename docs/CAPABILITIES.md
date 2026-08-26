@@ -12,13 +12,14 @@ feature they describe. Use this to look at the product whole and ask
 
 _Regenerate with `node scripts/capability-report.js` — CI fails if this section is stale._
 
-**59 tools** (51 mutating, 8 read-only; 56 host-side, 3 panel-side).
+**60 tools** (52 mutating, 8 read-only; 57 host-side, 3 panel-side).
 
 | Tool | Does | Writes | Side | Stub tests | Suite steps |
 |---|---|---|---|---|---|
 | `add_camera` | Add a camera | yes | host | — | 3 |
 | `add_control` | Add a named expression control (Slider/Angle/Checkbox/Color/Point Control effect) to a layer — usually a null | yes | host | — | — |
 | `add_keyframe` | Add a keyframe on a layer property at a time (seconds) | yes | host | — | — |
+| `add_light` | Add a light | yes | host | 1 | 9 |
 | `add_marker` | Add a marker to the comp (omit 'layer') or to a layer | yes | host | — | — |
 | `add_mask` | Add a mask to a layer | yes | host | 1 | 3 |
 | `add_null` | Add a null layer (use as a controller or parent) | yes | host | 1 | 7 |
@@ -35,17 +36,17 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `comfy_generate` | Generate an image/video with local ComfyUI and import it into the AE project | yes | panel | — | — |
 | `comfy_list_workflows` | List available ComfyUI generation workflow templates by name | no | panel | — | — |
 | `comfy_status` | Check the local ComfyUI instance (online? queue depth?) | no | panel | — | — |
-| `create_comp` | Create a composition and open it | yes | host | 1 | 16 |
-| `create_folder` | Create a project-panel folder | yes | host | 1 | — |
-| `delete_item` | Delete a project item | yes | host | 1 | 16 |
+| `create_comp` | Create a composition and open it | yes | host | 1 | 17 |
+| `create_folder` | Create a project-panel folder | yes | host | 1 | 7 |
+| `delete_item` | Delete a project item | yes | host | 1 | 18 |
 | `delete_layer` | Delete a layer from a comp | yes | host | — | 2 |
 | `distribute_property` | Distribute a property VALUE across layers | yes | host | 1 | 5 |
 | `duplicate_comp` | Duplicate a composition | yes | host | — | — |
 | `duplicate_layer` | Duplicate a LAYER inside its comp (use duplicate_comp only for whole compositions) | yes | host | 1 | 6 |
 | `for_each_layer` | Run a PER-LAYER tool once per target layer in ONE call (max 200 layers) — the batch executor for anything without its own layers arg: {tool: 'apply_effect', args: {effect: 'Gaussian Blur'}} blurs every target | yes | host | 1 | 6 |
-| `get_comp_details` | Layers of a comp with index, name, type, timing, effects | no | host | 1 | 15 |
+| `get_comp_details` | Layers of a comp with index, name, type, timing, effects | no | host | 1 | 16 |
 | `get_project_info` | List project items (comps/footage/folders) and the active comp | no | host | 2 | 7 |
-| `get_property` | Read ANY property by path: value, keyframes, expression | no | host | 1 | 27 |
+| `get_property` | Read ANY property by path: value, keyframes, expression | no | host | 1 | 34 |
 | `grid_layout` | Arrange layers into a grid rigged to a control null: its 'Grid X Spacing'/'Grid Y Spacing'/'Grid Columns' sliders drive spacing AND column count live, and the grid centers on the null's position (all expressions generated host-side) | yes | host | 1 | 2 |
 | `import_file` | Import a footage/image/video file into the project | yes | host | — | — |
 | `link_property` | Drive a layer property from a control | yes | host | — | 1 |
@@ -79,7 +80,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 **Coverage gaps (computed):**
 
 - Host tools with NO stubbed test: `add_camera`, `add_control`, `add_keyframe`, `add_marker`, `add_shape_layer`, `add_solid`, `add_to_render_queue`, `apply_effect`, `apply_expression_preset`, `delete_layer`, `duplicate_comp`, `import_file`, `link_property`, `organize_project`, `precompose`, `set_effect_param`, `set_expression`, `set_layer_3d`, `set_layer_timing`
-- Host tools never exercised by the self-test suite: `add_control`, `add_keyframe`, `add_marker`, `add_to_render_queue`, `apply_expression_preset`, `create_folder`, `duplicate_comp`, `import_file`, `list_effects`, `list_properties`, `move_to_folder`, `organize_project`, `remove_keyframes`, `rename_item`, `set_comp_setting`, `set_layer_3d`
+- Host tools never exercised by the self-test suite: `add_control`, `add_keyframe`, `add_marker`, `add_to_render_queue`, `apply_expression_preset`, `duplicate_comp`, `import_file`, `list_effects`, `list_properties`, `move_to_folder`, `organize_project`, `remove_keyframes`, `rename_item`, `set_comp_setting`, `set_layer_3d`
 
 <!-- END GENERATED TOOL INVENTORY -->
 
@@ -146,7 +147,12 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 
 Queued (see WORKPLAN for owners/order):
 
-- Lights: no `add_light`, wholly uncovered (item 2).
+- Lights: `add_light` SHIPPED (item 2, 2026-08-26) — all five AE 2026
+  types, per-type grounded refusals from a matrix measured in the field,
+  stub suite + 9 real-AE steps. Still uncovered: light KEYFRAMES (no
+  suite step animates an intensity or a cone angle), and `scale_comp`
+  still does not scale a light's pixel-valued options (falloff distance,
+  shadow diffusion) — same as AE's own native script.
 - Feature track not yet built: text animators, repeaters, preset
   library, precompose/markers, render queue, project hygiene,
   audio-to-keyframes, frame round-trip, .mogrt export, whisper
@@ -157,6 +163,25 @@ Queued (see WORKPLAN for owners/order):
   dependency manifest; video repos are pinned (Wan 2.2, MiniMax H3);
   remaining blockers are the tier build (P1-P3) and the local install
   scan (WORKPLAN 2c).
+- Bundled ComfyUI templates: only ONE of the three is panel-runnable so
+  far. `extension/workflows/` holds UI-format ("Export") graphs, which
+  `comfy.js loadWorkflow` refuses outright — the panel can only queue
+  API-format graphs. `scripts/adapt-workflow.js` converts them (bypass
+  rewiring, V3 dynamic combos, autogrow groups, positional widget
+  decoding) against definitions harvested from a real ComfyUI into
+  `scripts/comfy-node-defs.json`. H3 i2v is converted, seeded in
+  `extension/comfy-workflows/`, and passes ComfyUI 0.32.0's own
+  `validate_prompt`. KREA2 uses a SUBGRAPH the converter refuses to
+  flatten; H3 r2v is unconverted. `injectParams` now honours a sidecar
+  manifest's `procedural` block, so a prompt living on the sampler node
+  (H3) rather than a `CLIPTextEncode` does land; `comfy_generate` gained
+  `durationSeconds` (templates whose length is authored in seconds
+  refuse a `frames` argument instead of mis-writing it) and `image`,
+  which uploads a local file to ComfyUI's input folder — with no image
+  the reference `LoadImage` is detached and the graph runs as
+  text-to-video, so the template no longer names a file only the owner's
+  machine has. Still open for H3 i2v: no real generation has been run
+  end to end, and `RTXVideoSuperResolution` is not yet bypassable.
 - The tier build's REMOTE half (P1–P3) is in: tiers.js, the arbiter
   with verified release, the combined recommendation, comfyCatalog.
   Still open: every VRAM figure and catalog URL is PROVISIONAL until

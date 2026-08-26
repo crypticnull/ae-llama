@@ -13,23 +13,39 @@
     "durationSeconds": {
       "nodeId": 136,
       "widget": 0,
-      "note": "seconds in; the graph's ComfyMathExpression (node 135) converts to the model's 17k+5 frame grid at 24fps - inject seconds, never frames"
+      "input": "value",
+      "note": "seconds in; the graph's ComfyMathExpression (node 135) converts to the model's 17k+5 frame grid at 24fps - inject seconds, never frames. injectParams REFUSES a 'frames' param on this template rather than write a frame count into a seconds widget."
     },
     "prompt": {
       "nodeId": 138,
       "widget": 0,
-      "note": "PANEL ADAPTATION REQUIRED before first use: node 138's prompt input is LINKED from Ollama node 170 (link 313); the panel template must drop nodes 169/170 + link 313 so the injected widget value takes effect. Local session verifies with one real generation."
+      "input": "prompt",
+      "note": "the adapted API template (panelAdaptation above) dropped the Ollama pair, so this widget owns its own value again and injectParams writes straight to it. H3 carries the prompt on the sampler node, not a CLIPTextEncode, which is why the generic walk cannot find it."
     },
     "firstFrame": {
       "nodeId": 114,
-      "note": "LoadImage - i2v reference; omit for t2v"
+      "input": "image",
+      "detachable": true,
+      "note": "LoadImage - i2v reference. With no image the panel DELETES this node and every input linked to it: first_frame is an OPTIONAL input on MiniMaxH3ImageToVideo (measured from ComfyUI 0.32.0 INPUT_TYPES, see scripts/comfy-node-defs.json), so the fl2va weight then runs text-to-video. Detaching is not optional politeness - the authored filename exists only on the owner's machine and would fail validation for every other user."
     },
     "resolution": {
       "nodeId": 167,
       "widget": 0,
-      "note": "megapixels float driving ResolutionSelector; H3 native cap 768x1344, multiples of 32"
+      "input": "Number",
+      "maxMegapixels": 1.03,
+      "note": "megapixels float driving ResolutionSelector (node 115), which owns the aspect_ratio combo - so width x height can only set the AREA, and injectParams says so in its applied list. Cap is H3's native 768x1344 = 1.03 MP."
     }
   },
+  "optionalNodes": [
+    {
+      "nodeId": 168,
+      "class": "RTXVideoSuperResolution",
+      "passthrough": "images",
+      "when": "missing",
+      "reason": "ships in comfyui_nvidia_rtx_nodes and needs the NVIDIA app video SDK, so it registers on some machines and not others; the graph must still run where it does not",
+      "keptNote": "it rescales the finished frames to a FIXED 1920x1080, so the saved file is 1080p whatever megapixel figure was injected above"
+    }
+  ],
   "models": [
     {
       "file": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",

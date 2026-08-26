@@ -1808,3 +1808,636 @@ measurement pass (handoff smoke, /free support probe, refusal in the
 field, catalog deltas, the override ladder, OOM recovery). No version
 bump here: this ships to a panel only after the local session verifies
 the handoff on the 5090 and bumps.
+
+## 2026-08-26 (local) — item 1: the harness answers the dialog it inherits
+
+**The pass opened red.** `run-ae-selftest.ps1` exited 4 on a wordless
+381x237 `#32770` before running a single step. PrintWindow read it:
+"After Effects / Save changes to 'Untitled ...'". That is exactly the
+blocker filed on 2026-08-21 as "a call for someone else", with both ways
+out already written down and neither taken. It has been quietly costing
+the unattended loop one whole pass every time AE is left dirty. So this
+pass took the first of them.
+
+**Changed** (dev-only files -- nothing under `extension/` moved, so
+**no version bump**: the panel ships `extension/` alone, and bumping for
+a harness fix would publish a feed identical to the installed build):
+
+- `scripts/lib/ae-dialog-triage.ps1` -- new `Get-AellStaleDialogPlan`.
+  The prompt is drawn by AE, so Win32 reads no text out of it and it can
+  never be identified by what it SAYS; this decides from the situation.
+  Four rails, and each one is a case in the test: only the `unreadable`
+  verdict (a popup with WORDS is a human's question and is never
+  touched), never while a script is executing (the progress window's
+  teardown flicker is wordless too and leaves on its own), never during
+  startup (with no application window up the wordless thing is AE's
+  crash-recovery prompt, a different question), and only when a `#32770`
+  was actually found -- the probe's own "no popup text could be read"
+  note has no window behind it to answer.
+- `scripts/run-ae-selftest.ps1` -- the probe's `Add-Type` and
+  `Get-BlockingDialog` moved ABOVE the launch, then
+  `Clear-AellStaleDialog` runs, then AE starts. Ordering is the safety
+  rail and the test asserts it: before the launch, any dialog on screen
+  is provably not ours. `AellWin.CloseWordlessDialogs` repeats the rail
+  in Win32 rather than trusting its caller -- top-level `#32770` of AE's
+  own process, empty title, no child text that is not an `OS_*`
+  container -- and POSTS WM_CLOSE so a wedged dialog cannot wedge the
+  harness. Two rounds, 2s apart, then it gives up and lets the wait loop
+  report it as before. `-NoDismissStale` opts out. The exit-4 message no
+  longer claims nothing can be scripted around it.
+- `tests/test-selftest-runner.js` -- seven `Get-AellStaleDialogPlan`
+  cases over the same captured-from-AE probe samples the file already
+  carried, plus runner assertions that the answer happens before the
+  launch, that the wait loop still judges this run's own popups after
+  it, and that no `Stop-Process` ever creeps in (a hard kill is what
+  raises the startup recovery dialog next launch).
+
+**Harness: 187/187, exit 0** -- four times. Twice from a wedged AE with
+the new path announcing "answered 1 dialog(s) / cleared." first. Stubbed
+suite 28/28.
+
+**One thing measured that does NOT match the assumption, recorded
+because it will mislead the next pass otherwise.** To test recovery I
+re-created the prompt by posting WM_CLOSE to AE's application window.
+It produces the same signature (wordless 381x237 `#32770`, main window
+disabled) and the new code answers it correctly -- but that synthetic
+one does NOT block `-r`: with `-NoDismissStale` the suite still ran
+187/187 with the dialog up, and the dialog was still up afterwards. The
+one that opened this pass DID block, for the full 8-poll patience.
+So the save prompt has two states, and only the one raised when AE is
+being torn down with its launcher (session-end, not a plain close
+request) actually swallows scripts. What is proven: the dismissal fires
+on a real AE save prompt and clears it. The inescapable variant was
+cleared by this exact WM_CLOSE too -- by hand, at the top of this pass,
+before the code existed, which is what unblocked the first green run.
+I could not re-create it on demand without a hard kill, which is
+forbidden here for the reason bug 3 documented.
+
+**Still open, unchanged:** the second way out (have the harness leave AE
+running rather than being torn down with its launcher) would stop the
+prompt being raised at all. Recovery is cheaper and is now in; the
+prevention is still a design call for the remote session.
+
+**Next pass** should take the 2d bullet that is now unblocked: the
+clearExpressions suite steps are IN the 187 and green in real AE, so
+what remains there is re-running chat-probe step 7 and patch-bumping
+that work.
+
+## 2026-08-26 (local) — item 2d: clearExpressions in the field, and the bridge bug underneath it
+
+Bumped **0.9.18**. Harness 187/187 (three times), stubbed suite 28/28,
+chat-probe 7/7 on steps 1-7 and 10/11 on the full run.
+
+**The pass opened green** (187/187) so it took the bullet the last entry
+queued: verify the remote-built `clearExpressions` in real AE and ship
+it. Re-running `chat-probe --steps 1,2,7` did not get as far as an
+opinion about clearExpressions — step 1 failed with "no comp called Probe
+Room exists" one second after `create_comp` had answered `ok` with an id,
+and step 2 crashed on `state.layers` being undefined.
+
+**Root cause, measured, and it was never about clearExpressions.**
+`$.evalFile` run from inside a function leaves the file's top-level
+`var`s in THAT function's scope, not on `$.global`. hostscript assigns
+`$.global.AELL_call` explicitly, so the tools survive into the next `-r`
+script; `AELLJSON` was a top-level `var` and did not. chat-probe's bridge
+skipped re-loading the host whenever `$.global.AELL_call` was already a
+function — so every read after the first evaluated a bare `AELLJSON`
+that did not exist there. Proven in AE with four temp scripts:
+
+  - a later `-r` script sees `$.global.AELL_call` = function, bare
+    `AELL_call` = function, and `typeof AELLJSON` = **undefined**;
+  - assigning `$.global.X` in one script does make bare `X` resolve in
+    the next, so `$.global` IS the contract;
+  - and an undefined identifier in a `-r` script is not an exception you
+    can catch — AE raises a **modal**, which then blocks every script
+    after it. That is a wordless `#32770`, i.e. the same wedge the
+    2026-08-26 harness entry taught the runner to answer.
+
+So the failure mode was: tool calls kept working (AELL_call closes over
+AELLJSON lexically), verdict reads silently returned wrapper errors, and
+AE got wedged on the way. A probe that reports rounds as `ok` while it
+cannot read the comp is worse than one that fails.
+
+**Fixed at the root, not in the probe's expectations:**
+- `extension/jsx/hostscript.jsx` — `$.global.AELLJSON = AELLJSON;`
+  published next to the other exports, with the measurement written
+  above it. Anything outside the file (probe, a temp `.jsx` per
+  CLAUDE.md's documented pattern) now gets the serializer the same way
+  it gets the tools.
+- `scripts/chat-probe.js` — the wrapper is a pure `bridgeWrapper()` now
+  (so a test can run it), it re-loads the host unless BOTH names are
+  present, and if the load still leaves no serializer it writes a
+  grounded refusal instead of evaluating — a refusal costs a failed
+  step, a ReferenceError costs the whole session.
+- `tests/test-chat-probe.js` — section 4: hostscript must publish
+  `AELLJSON`; the general rule that every `AELL*` name any caller puts
+  in an ExtendScript STRING (probe, main.js, tools.js) is published on
+  `$.global`; and the wrapper RUN against a stub whose `$.global` is
+  Node's own globalThis — which is exactly what makes AE's published
+  names resolve bare. Three cases: stale host gets re-loaded, complete
+  host is not re-loaded every call, host that does not publish gets the
+  refusal and never reaches the eval.
+
+**Then the actual item, and it passed — twice, and failed once, which
+was the useful run.** `--steps 1,2,7`: 3/3, with the exact designed
+round-trip — first call refuses with `overriddenByExpression`, model
+re-calls with `clearExpressions: true`, nine squares land on even 190px
+gaps, reply names the rigs it removed. Full 11-step run: 10/11, every
+read healthy, and step 7 FAILED there with 217px gaps.
+
+**That failure was a real defect in the tool's own wording, not model
+variance.** The re-call the model sent listed only the EIGHT layers the
+note had named as overridden — dropping "Red Square 5", the one layer
+that had already landed. `from`/`to` is divided across the layers you
+send, so the eight re-spaced themselves across the full width and the
+ninth stayed stranded at 960. Every tool call in that round succeeded.
+The note invited it: it named eight layers and said "re-call with
+clearExpressions: true", and the obvious reading of that is "retry those
+eight". Fixed where the sentence is built (hostscript) plus both places
+that teach it (tools.js tool doc + prompt rule): the note now asks for
+"the SAME 9 layer(s) as this call" and says what re-calling with only
+the 8 would do. `tests/test-curve-tools.js` case 11f builds the field
+shape exactly (nine fresh layers, eight rigged, one free) and pins both
+halves of the sentence; the result still fits the 1200-char cap (655).
+Re-ran steps 1-7 afterwards: **7/7**, and the re-call carried all nine
+names.
+
+**For the next pass / not done here:**
+- The full probe's other ten steps passed, so nothing else is owed there.
+  One run is not proof that the wording ends step-7 variance — the note
+  now makes the right move explicit and the stub pins it, but the model
+  half is still a 32B at temp 0.7.
+- **AE's project accumulates null sources.** Reading the project mid-pass
+  found 65 leftover `Null NN` FootageItems from earlier suite runs; the
+  suite cleans up its solid sources (2026-08-25 remote entry) but not its
+  nulls. Harmless to the tests, and it is debris in whatever project the
+  suite is run against. Worth one small pass.
+
+## 2026-08-26 (local) — item 2 (LAST bullet): add_light, and what lights lie about
+
+Harness **206/206** (twice), up from 187 — 19 new steps. Stubbed suite
+29/29 (new `tests/test-light.js`, 52 checks). **No version bump**, on
+purpose: see the bottom of this entry.
+
+**The pass opened green (187/187)**, so it took a workplan item. Item 2's
+text listed five open bullets, but grepping this log showed four of them
+were finished on 2026-08-21 and simply never struck. The only genuinely
+open one was `add_light`, flagged twice (2026-08-20 and -21) as "a new
+tool is the remote session's call" and never picked up. Item 2's own
+wording says *Build the tool AND its coverage*, so this pass built it.
+WORKPLAN.md now has all five struck, so no future pass re-reads the log
+to work out what is left.
+
+**Probe first, and it was worth it — nearly every training-quoted fact
+about lights is wrong or useless.** Four probe scripts against AE 2026:
+
+- `canSetValue` is **false on every light property**, including the ones
+  that write perfectly well, and `elided` is false everywhere too. The
+  obvious implementation — gate on `canSetValue`, skip what you cannot
+  set — would have refused *every option on every light*. The only
+  truth is attempting the write.
+- The Light Options group carries **all 14 properties on every type**;
+  it never shrinks. Enumerating it tells you nothing about the type.
+- So hiddenness is per-TYPE and invisible. Measured matrix, which is now
+  the table in the tool AND in both stubs:
+
+  | option | parallel | spot | point | ambient | environment |
+  |---|---|---|---|---|---|
+  | intensity, color | yes | yes | yes | yes | yes |
+  | coneAngle, coneFeather | — | yes | — | — | — |
+  | falloff, radius, falloffDistance | yes | yes | yes | — | — |
+  | castsShadows, shadowDarkness | yes | yes | yes | — | — |
+  | shadowDiffusion | — | yes | yes | — | — |
+  | Position | yes | yes | yes | — | — |
+  | Point of Interest | yes | yes | — | — | — |
+
+  An **ambient or environment light accepts NO transform property at
+  all** — not even Position. Background Visible/Opacity/Blur are hidden
+  on all five (environment-panel UI only).
+- **Falloff gates its own two.** Radius exists only while Falloff is
+  smooth(2) or inverseSquareClamped(3); Falloff Distance only while it
+  is smooth(2). Falloff type 4 does not exist. So Falloff must be
+  written FIRST — the tool's option list is in write order for this
+  reason, and a suite step reads Radius back to prove the order held.
+- **AE 2026 has FIVE light types.** `LightType.ENVIRONMENT` (4416)
+  joined the four training knows. Guarded with a typeof so an older AE
+  gets a grounded refusal naming the four it does have.
+- `addLight` **requires both arguments**; a one-arg call throws.
+- A new light defaults to **SPOT**, and its Falloff defaults to none.
+- `NO_AUTO_ORIENT` hides the Point of Interest on a light exactly as on
+  a camera, so `oneNode` has the same set-it-first ordering rule, and
+  `oneNode` + `pointOfInterest` together is a grounded refusal.
+
+**Built:** `add_light` in hostscript (+ AELL_MUTATING, + tools.js docs —
+an undocumented tool is unreachable by the model). It **validates every
+argument BEFORE creating the layer**, so a refusal never leaves a
+half-configured light for the user to clean up. Verified in real AE: six
+refusals in a row left the comp holding exactly the two lights that had
+succeeded. Every refusal names both the types that DO take the option
+and the full list this type accepts.
+
+**Real AE corrected the stub once, which is the whole point of this
+loop.** The first stub assumed `addLight(name, center)` puts `center`
+into Position. It does not: `center` lands in the **Point of Interest**,
+and Position gets AE's own default — a fresh light in an 800x600 comp
+read POI [400,300,0] and Position [0,0,-555.556]. The stub now models
+the measured split and the test pins both halves.
+
+**Coverage:** `tests/test-light.js` (52 checks) whose stub reproduces
+the lies — it reports `canSetValue` false while still accepting legal
+writes, hands out all 14 options whatever the type, and throws AE's real
+"property or a parent property is hidden" message otherwise. 19 suite
+steps in their own scratch comp (lights are riggers like cameras). The
+five refusal steps have teeth: `test-self-test.js`'s permissive-host run
+fails all 15 refusal steps, 5 of them the new ones.
+
+**Two findings NOT fixed here, both queued in WORKPLAN item 2:**
+
+- `get_property` cannot reach `Radius` or `Falloff Distance` by bare
+  name — AE's layer-level name shortcut covers `Cone Angle`, `Intensity`,
+  `Shadow Darkness` and `Casts Shadows` but not those two, and the
+  refusal only offers `list_properties`. The group path `light/Radius`
+  works and the suite uses it. A deep-search fallback in the path
+  resolver would remove the trap; that is a change to a shipped tool and
+  belongs in its own pass.
+- `scale_comp` still does not scale a light's pixel-valued options
+  (falloff distance, shadow diffusion), matching AE's own native script.
+  Disclosed in the 2026-08-21 entry as untestable; now that lights are
+  creatable, it finally is.
+
+Also unchanged from the last entry and still worth a small pass: **AE's
+project accumulates leftover `Null NN` FootageItems** from suite runs.
+
+**Why NO version bump.** CLAUDE.md tells the local session to patch-bump
+a *fix verified in real AE*. This is not a fix to shipped behaviour, it
+is a new tool, and WORKPLAN's build rules say new tools ride the next
+MINOR that the remote session cuts after reviewing the batch — the
+comp-rename FAST-TRACK had to call itself "the exception that ships as a
+patch" precisely because that is not the default. Pushing at an equal
+version is the correct outcome here. Flagging it plainly so the remote
+session knows `add_light` is sitting in the branch waiting for 0.10.0.
+
+## 2026-08-26 (local) — item 2d: the H3 i2v template, and why NO bundled workflow could ever have run
+
+Harness **206/206** before and after (unchanged — this pass never touched
+AE-side code). Stubbed suite **30/30**, one new file
+(`tests/test-workflow-adapt.js`, 47 checks). **No version bump**; reasons
+at the bottom.
+
+The pass opened green, so it took the top unfinished workplan item: 2d,
+the H3 i2v workflow, part 1 (template adaptation). The manifest's ask was
+narrow — "drop nodes 169/170 + link 313 so the injected prompt widget on
+node 138 takes effect". Doing only that would have shipped a file the
+panel still cannot open, because of what the first ten minutes turned up.
+
+**The finding that reframed the item: none of the three bundled workflows
+is loadable, and never was.** `extension/workflows/` holds UI-format
+("Export"/"Save") graphs — `nodes` + `links`. `comfy.js loadWorkflow()`
+opens with an explicit check for exactly that shape and throws
+"is a UI-format export … use 'Export (API)'". There is no converter
+anywhere in the repo. On top of that, `extension/workflows/` is not the
+seed directory: `setup.js ensureDataDirs()` copies
+`extension/comfy-workflows/` into the user's data root, and that folder
+held only a README and a toy txt2img example. So the H3 and Krea
+templates were unreachable by the panel by two independent mechanisms.
+
+**Why a converter and not a hand re-export.** The UI format stores widget
+values POSITIONALLY (`widgets_values: ["a", 1, 2]`) and names only the
+widgets that happen to be linked. Recovering the names needs each class's
+ordered input list, which lives in ComfyUI's `INPUT_TYPES`. A re-export
+by hand also cannot make the edit the manifest actually needs, and
+nothing would stop the template and the manifest drifting apart later.
+
+**Probe: ComfyUI imported in-process, no server, no port, no GPU.**
+`scripts/harvest-comfy-node-defs.py` sets `sys.argv`, calls
+`comfy.options.enable_args_parsing()`, constructs a `PromptServer` (custom
+packs expect the instance) and awaits `nodes.init_extra_nodes()`. That
+resolved all 31 classes the H3 i2v graph uses — including the pack-defined
+ones — out of 3487 registered, on **ComfyUI 0.32.0**. Only `MarkdownNote`
+is absent, correctly: it is frontend-only.
+
+**Five measured facts, every one of which silently corrupts a template if
+guessed wrong:**
+
+- `control_after_generate` (RandomNoise's "randomize") is a frontend-only
+  widget that OCCUPIES A POSITION. Skip it and every later widget on that
+  node reads its neighbour's value.
+- A V3 **dynamic combo** consumes its own position, then the SELECTED
+  option's inputs expand INLINE as dotted keys. `SaveVideo` nests one
+  inside another: `codec: "h264"` plus `codec.encoding: "auto"`.
+  `RTXVideoSuperResolution` is `resize_type` + `resize_type.width` +
+  `resize_type.height`, and `quality` sits AFTER that run.
+- A V3 **autogrow group** is sockets only and consumes NO positions. The
+  frame-grid maths node wires as `values.a` / `values.b` — the dotted
+  names come from `finalize_prefix()` in `comfy_api/latest/_io.py`.
+- **Bypass (mode 4) is not "delete"**: consumers rewire through it to the
+  same-typed input. The bypassed turbo-LoRA loader means node 163's model
+  comes from 153, not from 161.
+- `json.dump(..., sort_keys=True)` in the harvester **destroyed the whole
+  point** — declaration order IS the payload. Caught immediately because
+  the converter then read `resize_type` as `1920`. The comment at the
+  dump site now says never to do it.
+
+**Built:**
+
+- `scripts/harvest-comfy-node-defs.py` -> `scripts/comfy-node-defs.json`
+  (31 classes, provenance recorded), so the converter, its test and CI
+  need no ComfyUI install.
+- `scripts/adapt-workflow.js` — UI->API conversion with all of the above,
+  driven by a `panelAdaptation` block in the manifest sidecar
+  (`dropNodes: [169, 170]` + the reason). Dropping a node that FED a
+  widget input is the mechanism, not a side effect: the widget gets its
+  own value back, which is precisely what makes injection work.
+  Grounded refusals for an unknown class (lists what it knows), an
+  unknown dynamic-combo key (lists the real options), too few stored
+  widget values, a required socket orphaned by an adaptation, a
+  `dropNodes` id the workflow lacks, and an already-API input.
+- `extension/comfy-workflows/AE_LLAMA_H3_I2V_V1.json` + its manifest —
+  seeded, so `setup.js` copies both to the user's data root.
+- `comfy.js listWorkflows()` now skips `*.manifest.json`. Seeding a
+  sidecar without this offers the model a phantom `<name>.manifest`
+  template that `loadWorkflow` could only reject. Same trap for any user
+  who adds a sidecar to their own workflow, which `readManifest`'s own
+  comment invites them to do.
+
+**Verification, and it is the strong kind.** The adapted graph was run
+through ComfyUI 0.32.0's OWN `execution.validate_prompt()` in-process —
+no generation, no models loaded. First run: `valid: false`, and the only
+four errors were `value_not_in_list` on model FILENAMES. Zero structural,
+naming or type errors: every input name, every dynamic-combo expansion,
+every autogrow key and the bypass rewire were accepted by the real
+validator. The four filenames turned out to be a probe artefact — see
+below — and with the shared model root mounted the second run returned
+**`valid: true`, `good_outputs: ["92", "159", "160"]`, no node errors.**
+
+**Three findings for whoever takes parts 2 and 3:**
+
+1. **The Desktop app's shared model root is NOT discoverable from
+   `AppData\Roaming\ComfyUI\extra_models_config.yaml`** — that file lists
+   only the Documents base path. Yet the running install mounts
+   `AppData\Local\Comfy-Desktop\ComfyUI-Shared\models` (its own log
+   proves it), and every H3 weight the manifest names lives THERE:
+   `minimax_h3_fl2va_pruned_int8_convrot.safetensors` (20.0 GB),
+   `minimax_h3_ref2va_...` (20.0 GB), `minimax_h3_video_vae_fp16`
+   (4.9 GB), `minimax_h3_audio_vae_fp32` (0.56 GB) and
+   `qwen3vl_32b_minimax_h3_nvfp4_awq` (14.6 GB). The tier plan's
+   register-existing matcher must carry that root explicitly; it cannot
+   be derived from the yaml.
+2. **`injectParams` cannot reach the H3 prompt.** It only writes text into
+   `CLIPTextEncode*` nodes, and H3 carries its prompt on
+   `MiniMaxH3ImageToVideo` (node 138). Seed injection works; prompt does
+   not. That is part 2 — wire the manifest's `procedural` block (prompt
+   138, durationSeconds 136 in SECONDS, resolution 167, firstFrame 114)
+   into `injectParams`. The new test PINS the current miss as a KNOWN GAP
+   so part 2 has a failing expectation to flip.
+3. **`LoadImage` (114) still points at `2026-08-08_CRPTK-KREA2__00036_.png`**,
+   a file only the owner's machine has. Any other user's first queue
+   fails validation on it. Part 2 must inject or detach it — the manifest
+   already says "omit for t2v", and the fl2va weight does t2v with no
+   image.
+
+**Not done, deliberately, and each is its own pass:** the KREA2 template
+contains a SUBGRAPH ("Initial Loader"), stored as a definition plus a
+node whose `type` is a UUID. The converter refuses it with the route that
+does work named in the message — queue it once and pull the executed
+prompt from `/history`, which comes back flattened (the owner already has
+`get-api-workflow.ps1` doing exactly this). H3 r2v is unconverted. And
+part 3 (one real generation through the panel, RTXVideoSuperResolution
+made bypassable) is untouched — it needs part 2 first, or the model's
+prompt never reaches the graph.
+
+**One piece of debris, found and cleaned:** importing ComfyUI from the
+repo root made an installed pack write `scripts/web/extensions/dzNodes/*`
+into this repository. Deleted; the harvester now resolves its arguments to
+absolute paths and `chdir`s into the ComfyUI tree before importing
+anything, so a pack that writes relative assets lands in ComfyUI's own
+directory.
+
+**Why NO version bump.** This is feature-track work: a new bundled
+artefact plus two build-time scripts. WORKPLAN item 5's rule is that new
+capability rides the next MINOR the remote session cuts, and the
+`listWorkflows` sidecar fix only matters because THIS commit is the first
+to seed a sidecar — it is part of the feature, not a repair to something
+users are running. Same call, same reasoning, as `add_light` yesterday.
+Pushing at an equal version is the correct outcome. Flagging plainly:
+`add_light` AND the H3 i2v template are both now sitting in the branch
+waiting for 0.10.0.
+
+## 2026-08-26 (local) — item 2d: the H3 prompt finally reaches the graph (part 2)
+
+Harness **206/206** before and after (this pass touched no AE-side code).
+Stubbed suite **31/31**, one new file (`tests/test-comfy-inject.js`, 33
+checks). **No version bump**; reasons at the bottom.
+
+Opened green, so the top unfinished item was 2d part 2: wire the manifest's
+`procedural` injection points into `injectParams`, and deal with node 114's
+`LoadImage` still naming a PNG only the owner's machine has.
+
+**What was actually wrong.** `injectParams` finds a prompt by walking
+conditioning links to `CLIPTextEncode*` nodes. H3 has none — the prompt is a
+widget on `MiniMaxH3ImageToVideo` itself. The generic walk also cannot see
+that this graph's length is authored in SECONDS (node 136, converted to the
+model's 17k+5 frame grid by the expression at 135) or that its size is
+MEGAPIXELS on a `ResolutionSelector` that owns the aspect ratio. So the
+sidecar's `procedural` block is the only thing that knows, and until now
+nothing read it: `grep procedural extension/js/*.js` came back empty.
+
+**Built, all in `comfy.js`:**
+
+- `injectParams(graph, params, manifest)` — third argument, and the
+  procedural pass runs LAST so an explicit manifest target always beats a
+  guess. With no manifest the function behaves exactly as before (pinned by
+  a test).
+- Entries resolve to an input by NAME (`input: "prompt"`, authoritative) or
+  by `widget: N` counting literal — i.e. unlinked — inputs from the front,
+  which is the fallback a hand-written manifest gets. Both refuse with
+  grounded errors: a node id the workflow lacks, an input name the node does
+  not have (listing the ones it does), a widget index past the end (listing
+  the count and the names).
+- `writeWidget` preserves the authored TYPE. Node 167's megapixels widget
+  holds the STRING `".98"`, not a number; writing a float back would change
+  the widget's type under a node that declared it text.
+- **Seconds vs frames is a refusal, not a conversion.** A `frames` param
+  against a template with a `procedural.durationSeconds` throws and names
+  `durationSeconds` instead. 120 written into a seconds widget asks for a
+  two-minute render and looks like it worked — the exact failure the panel's
+  grounded-error rule exists for. `durationSeconds` against a template that
+  has no seconds input is REPORTED in `applied`, not silently dropped.
+- Width x height become megapixels (area only), capped at the manifest's new
+  `maxMegapixels` (1.03 = H3's native 768x1344). The `applied` line says out
+  loud that pixel dimensions come from the template's own aspect ratio, so
+  nobody reads "1024x576" back as a promise.
+- `uploadImage(base, filePath, cb)` — multipart POST to `/upload/image`.
+  LoadImage names a file inside ComfyUI's own input dir and never a path, so
+  this is the only way an AE-side render can reach a graph. `generate()`
+  uploads BEFORE grafting and injects the returned name.
+- **With no image the reference frame is DETACHED**: the LoadImage node is
+  deleted along with every input linked to it. `first_frame` is an OPTIONAL
+  input on `MiniMaxH3ImageToVideo` (measured, `scripts/comfy-node-defs.json`),
+  so the fl2va weight then runs text-to-video. This is not politeness — the
+  authored filename exists on one machine, so every other user's first queue
+  would have failed validation. A manifest that does not mark its reference
+  frame `detachable` keeps it, and says why.
+- `comfy_generate` gained `durationSeconds` and `image` (tools.js docs +
+  system prompt, or the model cannot reach them), and now passes the manifest
+  it already reads down into `generate`.
+
+**Verification — ComfyUI's own validator, not ours.** Both injected graphs
+were run through `execution.validate_prompt()` in-process on ComfyUI 0.32.0
+(no server, no models, `--cpu`): t2v (LoadImage deleted, `first_frame`
+removed, 0.92 MP, 6 s) and i2v (uploaded filename injected, 5 s) both return
+**`valid: True`, `good_outputs: ['159', '92', '160']`, no node errors**. The
+Desktop app's shared model root has to be mounted by hand for this — nothing
+in `extra_models_config.yaml` names it, as the last pass found.
+
+**Stub faithfulness.** `tests/test-comfy-inject.js` reproduces the two shapes
+that bite: the megapixels widget as a string, and `first_frame` as a link to
+a one-machine file. The upload half runs against a real local `http.Server`
+that parses the multipart body and echoes the bytes back — the test file's
+contents deliberately contain a CRLF and a `--`, the two things a hand-rolled
+multipart body gets wrong. The KNOWN GAP assertion in
+`tests/test-workflow-adapt.js` is flipped: it now asserts the generic walk
+still cannot place the prompt AND that the sidecar makes it land.
+
+**Left for part 3** (one real generation end to end, needs a GPU run):
+`RTXVideoSuperResolution` is still not bypassable, which part 3 must fix
+before it can run on a machine without the NVIDIA app. Part 4 (attributing
+the manifest's UNKNOWN nodes) is untouched.
+
+**Why NO version bump.** Nothing users are running is repaired here: the
+`procedural` block, the H3 template it drives, and the two new
+`comfy_generate` arguments are all unshipped feature-track work, and
+WORKPLAN item 5 puts new capability on the next MINOR the remote session
+cuts. Third pass in a row at an equal version, deliberately. Waiting in the
+branch for 0.10.0: `add_light`, the H3 i2v template, and now this.
+
+## 2026-08-26 — WORKPLAN 2d part 3a: the NVIDIA upscaler is now optional
+
+Finishing the pass that was interrupted mid-flight. The uncommitted work
+was sound but had no tests and had never been verified; this pass read
+it, verified the claim it rests on, backed it with coverage, and shipped
+it. **No version bump**; reasons at the bottom.
+
+**The problem.** The H3 i2v template ends in `RTXVideoSuperResolution`
+(node 168), which ships in `comfyui_nvidia_rtx_nodes` and needs the
+NVIDIA app's video SDK. It registers on some machines and not others, so
+a template that hard-requires it fails validation everywhere the SDK is
+absent — including, eventually, a customer's machine. Pass 5 flagged it
+and stopped there.
+
+**Changed** (`extension/js/comfy.js`, ~144 lines, plus 10 in the
+sidecar):
+- `classInstalled(base, class, cb)` — asks the LIVE server whether a node
+  class is registered.
+- `bypassNode(graph, id, passthrough)` — deletes a node and rewires its
+  consumers to whatever fed the declared pass-through input. ComfyUI's
+  own mode-4 semantics, except the socket is DECLARED by the manifest
+  rather than inferred: an API-format graph carries no type information
+  to infer from.
+- `resolveOptionalNodes(...)` — honours a manifest `optionalNodes` block,
+  running after grafting and before queueing, because it is the only
+  step that can tell what exists on THIS machine.
+- The manifest declares node 168 optional, passing through `images`.
+
+**The fact it rests on, read out of the installed ComfyUI rather than
+assumed** (`server.py`, `get_object_info_node`):
+
+    out = {}
+    if (node_class is not None) and (node_class in nodes.NODE_CLASS_MAPPINGS):
+        out[node_class] = node_info(node_class)
+    return web.json_response(out)
+
+`GET /object_info/<class>` answers **200 with `{}`** for a class ComfyUI
+has never heard of — it does NOT 404. A presence check that trusted the
+status code would report every class installed and never bypass
+anything. `classInstalled` tests for the key. The new test's fake server
+reproduces that byte for byte, so "simplifying" it into a status check
+fails the suite.
+
+**Verified with ComfyUI's own validator, not our stubs.** Both graphs as
+the PANEL actually queues them — `injectParams` has already detached the
+one-machine reference frame — through `execution.validate_prompt()`
+in-process on 0.32.0:
+
+    kept      valid: True  good_outputs: ['159', '160', '92']  134.images: ['168', 0]
+    bypassed  valid: True  good_outputs: ['159', '160', '92']  134.images: ['160', 0]
+
+Same outputs either way; with 168 gone `CreateVideo` reads straight from
+160. Getting that harness honest took three corrections worth recording:
+custom_nodes live in the DATA root not next to the code (without that
+every custom node reads as missing); several packs touch
+`PromptServer.instance` at import, so one must be constructed first; and
+the RAW template does NOT validate — node 114's `LoadImage` names a PNG
+that exists on one machine, which is exactly what `injectParams` already
+detaches. Validating the raw template would have "found" a bug that the
+panel never ships.
+
+**Coverage:** new `tests/test-comfy-optional-nodes.js`, 32 checks, run
+against a fake ComfyUI that mimics the real `/object_info` contract, and
+against the REAL shipped template and sidecar rather than a hand-made
+stub. It pins: the 200-with-`{}` trap; rewiring 134 to 160 and no input
+anywhere still pointing at 168; refusals when the manifest names no
+pass-through, names one that does not exist, or names one holding a
+literal (nothing to rewire to); `when: "always"`; a sidecar naming the
+wrong class for an id being FATAL rather than deleting whatever node
+inherited that id; an already-absent node being noted not fatal; and an
+unreachable server being a grounded error rather than a silent "assume
+missing" — bypassing on a network blip would quietly change what the
+user renders.
+
+**Harness:** real AE **206/206**. Stubbed suite 32/32 files.
+
+**Why NO version bump.** Nothing users are running is repaired: the H3
+template is not reachable from a shipped panel yet, and `optionalNodes`
+only does anything for a manifest that declares it. Same call as the
+last three passes — `add_light`, the H3 template, the prompt injection
+and now this are all waiting on the remote session's 0.10.0.
+
+**Still open for part 3:** the actual end-to-end generation. It is a
+~20 GB model load that wants the card to itself, so it needs a pass with
+llama-server down and nothing else running.
+
+## 2026-08-26 (remote) — the field day: eachChildOf, the signature trap, and machine state changes
+
+A full day of field failures on the owner's REAL work project, ending
+with the panel verified working at 0.9.20. What the next session must
+know:
+
+**MACHINE STATE CHANGED (owner's AE machine):**
+- PlayerDebugMode = "1" (string) is now set in HKCU CSXS.10/.11/.12.
+  CEP loads unsigned extensions. This was the root cause of the day's
+  delivery failures: the install was a SIGNED ZXP-extracted copy, every
+  hand copy broke its signature, and CEP silently restored/served its
+  cached signed 0.9.18 on each panel load — three "updates" in a row
+  looked applied on disk and never reached the running panel.
+- The install (%APPDATA%\Adobe\CEP\extensions\com.cptk.aellama) is now
+  an UNSIGNED plain copy of the repo's extension/ at 3b0c99b + META-INF
+  stripped. RECOMMENDED end state: run scripts/install.ps1 once to
+  junction the install onto the repo so drift is impossible — the owner
+  has not done this yet.
+- GitHub Actions was DOWN for this repo most of the afternoon (runs
+  stuck "queued" for hours, one in an uncancellable limbo). The feed
+  still says 0.9.18. When CI recovers it will catch up on the next
+  push; the panel at 0.9.20 will correctly ignore the equal/older feed.
+
+**Product changes (remote-built, stub-green, NOT yet real-AE verified):**
+- create_folder eachChildOf (0.9.19): one call creates a folder inside
+  every REAL direct subfolder — built after the model, acting from the
+  trimmed project summary, hit 2 of 10 targets and claimed success.
+- except (0.9.20): exclusions ride the same call; unknown names refuse
+  (the exclusion is a promise). Field-verified by the owner: 10
+  subfolders, 7 created, 3 recognized existing, exclusion honored.
+- Post-field polish (unshipped, this entry's commit): except accepts
+  FULL PATHS as well as bare names (the model's first spelling);
+  skippedAsExcepted now serializes before alreadyExisted so the
+  exclusion receipt survives the panel's display cap; and mid-round
+  tool refusals render MUTED ("adjusting — …", .msg.retry) instead of
+  red ERROR — the owner's direction: a self-corrected round must not
+  look like the plugin breaking. Real failures stay loud via the
+  model's reply, the rollback notice, and the round cap.
+- The selftest's except step now uses the path spelling, so the next
+  real-AE run verifies the tolerance. Suite is 214 steps.
+
+**For tonight's pass:** verify this batch in real AE (fan-out steps
+included), bump patch, and note the panel updates by plain file copy
+now (or the junction, if the owner ran install.ps1).

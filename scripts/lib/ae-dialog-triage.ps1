@@ -164,3 +164,50 @@ function Update-AellWaitState {
   }
   return $State
 }
+
+# Before the harness launches anything, After Effects may ALREADY be
+# sitting behind the save-changes prompt a PREVIOUS run left. Every cold
+# run ends with AE dirty (the suite leaves its scratch comps behind), so
+# whatever asks a dirty AE to close raises "Save changes to 'Untitled
+# Project.aep'?" -- and no -r script runs while that is up. Pass N leaves
+# it, pass N+1 exits 4 without executing a single step. Measured twice on
+# this machine, and it cost the 2026-08-26 pass its first harness run.
+#
+# AE draws that prompt itself, so Win32 reads no text out of it: it
+# cannot be identified by what it SAYS. This decides from the SITUATION
+# instead, and the rule is deliberately narrow, because WM_CLOSE on the
+# wrong window would answer a question a human should have seen:
+#   - only the `unreadable` verdict; a popup WITH WORDS is never touched
+#   - never while a script is executing -- the progress window's teardown
+#     flicker is wordless too, and that one leaves on its own
+#   - never during startup: with no application window up, the wordless
+#     thing is AE's crash-recovery prompt, a different question whose
+#     answer is not ours to give
+#   - and only when a #32770 was actually FOUND. The probe's own "no
+#     popup text could be read" note has no window behind it to answer.
+function Get-AellStaleDialogPlan {
+  param(
+    [string]$ProbeText = "",
+    [string]$ScriptName = ""
+  )
+
+  $triage = Get-AellDialogVerdict -ProbeText $ProbeText -ScriptName $ScriptName
+  $dismiss = $false
+  if ($triage.Verdict -ne "unreadable") {
+    $reason = "verdict is '" + $triage.Verdict + "', not 'unreadable'"
+  } elseif ($triage.SawProgress) {
+    $reason = "After Effects is executing a script"
+  } elseif ($triage.SawStartup) {
+    $reason = "After Effects has not opened its main window yet"
+  } elseif ($ProbeText -notmatch '\[#32770\]') {
+    $reason = "no dialog window was found to answer"
+  } else {
+    $dismiss = $true
+    $reason = "a wordless dialog is blocking a fully started After Effects"
+  }
+
+  return New-Object PSObject -Property @{
+    Dismiss = $dismiss
+    Reason = $reason
+  }
+}
