@@ -2310,3 +2310,89 @@ the manifest's UNKNOWN nodes) is untouched.
 WORKPLAN item 5 puts new capability on the next MINOR the remote session
 cuts. Third pass in a row at an equal version, deliberately. Waiting in the
 branch for 0.10.0: `add_light`, the H3 i2v template, and now this.
+
+## 2026-08-26 — WORKPLAN 2d part 3a: the NVIDIA upscaler is now optional
+
+Finishing the pass that was interrupted mid-flight. The uncommitted work
+was sound but had no tests and had never been verified; this pass read
+it, verified the claim it rests on, backed it with coverage, and shipped
+it. **No version bump**; reasons at the bottom.
+
+**The problem.** The H3 i2v template ends in `RTXVideoSuperResolution`
+(node 168), which ships in `comfyui_nvidia_rtx_nodes` and needs the
+NVIDIA app's video SDK. It registers on some machines and not others, so
+a template that hard-requires it fails validation everywhere the SDK is
+absent — including, eventually, a customer's machine. Pass 5 flagged it
+and stopped there.
+
+**Changed** (`extension/js/comfy.js`, ~144 lines, plus 10 in the
+sidecar):
+- `classInstalled(base, class, cb)` — asks the LIVE server whether a node
+  class is registered.
+- `bypassNode(graph, id, passthrough)` — deletes a node and rewires its
+  consumers to whatever fed the declared pass-through input. ComfyUI's
+  own mode-4 semantics, except the socket is DECLARED by the manifest
+  rather than inferred: an API-format graph carries no type information
+  to infer from.
+- `resolveOptionalNodes(...)` — honours a manifest `optionalNodes` block,
+  running after grafting and before queueing, because it is the only
+  step that can tell what exists on THIS machine.
+- The manifest declares node 168 optional, passing through `images`.
+
+**The fact it rests on, read out of the installed ComfyUI rather than
+assumed** (`server.py`, `get_object_info_node`):
+
+    out = {}
+    if (node_class is not None) and (node_class in nodes.NODE_CLASS_MAPPINGS):
+        out[node_class] = node_info(node_class)
+    return web.json_response(out)
+
+`GET /object_info/<class>` answers **200 with `{}`** for a class ComfyUI
+has never heard of — it does NOT 404. A presence check that trusted the
+status code would report every class installed and never bypass
+anything. `classInstalled` tests for the key. The new test's fake server
+reproduces that byte for byte, so "simplifying" it into a status check
+fails the suite.
+
+**Verified with ComfyUI's own validator, not our stubs.** Both graphs as
+the PANEL actually queues them — `injectParams` has already detached the
+one-machine reference frame — through `execution.validate_prompt()`
+in-process on 0.32.0:
+
+    kept      valid: True  good_outputs: ['159', '160', '92']  134.images: ['168', 0]
+    bypassed  valid: True  good_outputs: ['159', '160', '92']  134.images: ['160', 0]
+
+Same outputs either way; with 168 gone `CreateVideo` reads straight from
+160. Getting that harness honest took three corrections worth recording:
+custom_nodes live in the DATA root not next to the code (without that
+every custom node reads as missing); several packs touch
+`PromptServer.instance` at import, so one must be constructed first; and
+the RAW template does NOT validate — node 114's `LoadImage` names a PNG
+that exists on one machine, which is exactly what `injectParams` already
+detaches. Validating the raw template would have "found" a bug that the
+panel never ships.
+
+**Coverage:** new `tests/test-comfy-optional-nodes.js`, 32 checks, run
+against a fake ComfyUI that mimics the real `/object_info` contract, and
+against the REAL shipped template and sidecar rather than a hand-made
+stub. It pins: the 200-with-`{}` trap; rewiring 134 to 160 and no input
+anywhere still pointing at 168; refusals when the manifest names no
+pass-through, names one that does not exist, or names one holding a
+literal (nothing to rewire to); `when: "always"`; a sidecar naming the
+wrong class for an id being FATAL rather than deleting whatever node
+inherited that id; an already-absent node being noted not fatal; and an
+unreachable server being a grounded error rather than a silent "assume
+missing" — bypassing on a network blip would quietly change what the
+user renders.
+
+**Harness:** real AE **206/206**. Stubbed suite 32/32 files.
+
+**Why NO version bump.** Nothing users are running is repaired: the H3
+template is not reachable from a shipped panel yet, and `optionalNodes`
+only does anything for a manifest that declares it. Same call as the
+last three passes — `add_light`, the H3 template, the prompt injection
+and now this are all waiting on the remote session's 0.10.0.
+
+**Still open for part 3:** the actual end-to-end generation. It is a
+~20 GB model load that wants the card to itself, so it needs a pass with
+llama-server down and nothing else running.

@@ -36,6 +36,16 @@
       "note": "megapixels float driving ResolutionSelector (node 115), which owns the aspect_ratio combo - so width x height can only set the AREA, and injectParams says so in its applied list. Cap is H3's native 768x1344 = 1.03 MP."
     }
   },
+  "optionalNodes": [
+    {
+      "nodeId": 168,
+      "class": "RTXVideoSuperResolution",
+      "passthrough": "images",
+      "when": "missing",
+      "reason": "ships in comfyui_nvidia_rtx_nodes and needs the NVIDIA app video SDK, so it registers on some machines and not others; the graph must still run where it does not",
+      "keptNote": "it rescales the finished frames to a FIXED 1920x1080, so the saved file is 1080p whatever megapixel figure was injected above"
+    }
+  ],
   "models": [
     {
       "file": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",

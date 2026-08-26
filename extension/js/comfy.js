@@ -576,6 +576,139 @@
     return applied;
   }
 
+
+  // ------------------------------------------------------- optional nodes
+
+  /**
+   * Is a node class registered on the running server?
+   *
+   * GET /object_info/<class> answers **200 with an empty object** for a class
+   * ComfyUI has never heard of (server.py get_object_info_node) — it does not
+   * 404. Testing the status code alone would report every class installed.
+   */
+  function classInstalled(base, className, cb) {
+    requestJson(base, "GET", "/object_info/" + encodeURIComponent(className),
+      null, 10000, function (err, statusCode, json) {
+        if (err) {
+          cb(new Error("ComfyUI unreachable at " + base.label + " — " +
+                       err.message));
+          return;
+        }
+        if (statusCode !== 200 || !json) {
+          cb(new Error("ComfyUI could not be asked about node class " +
+                       className + " (HTTP " + statusCode + ")"));
+          return;
+        }
+        cb(null, Object.prototype.hasOwnProperty.call(json, className));
+      });
+  }
+
+  /**
+   * Drop node `id` and rewire its consumers to whatever fed its `passthrough`
+   * input — ComfyUI's own mode-4 bypass semantics, except the pass-through
+   * socket is DECLARED by the manifest rather than inferred from types: an
+   * API-format graph carries no type information to infer from.
+   * Returns {rewired: [...]}. Throws grounded errors; never guesses.
+   */
+  function bypassNode(graph, id, passthrough) {
+    var nid = String(id);
+    var node = graph[nid];
+    if (!node) return null;
+    var inputs = node.inputs || {};
+    var names = [];
+    for (var n in inputs) { if (inputs.hasOwnProperty(n)) names.push(n); }
+    if (!passthrough) {
+      throw new Error("Cannot bypass node " + nid + " (" + node.class_type +
+        "): the manifest does not say which input passes through. Add " +
+        "\"passthrough\" naming one of: " + names.join(", "));
+    }
+    if (!inputs.hasOwnProperty(passthrough)) {
+      throw new Error("Cannot bypass node " + nid + " (" + node.class_type +
+        "): it has no input named \"" + passthrough + "\". It has: " +
+        (names.length ? names.join(", ") : "(none)"));
+    }
+    var source = inputs[passthrough];
+    if (!isLink(source)) {
+      // A literal cannot be handed to a downstream socket that wants a link,
+      // so there is nothing to rewire TO. Say that instead of quietly
+      // deleting the consumers' inputs and letting validation fail later.
+      throw new Error("Cannot bypass node " + nid + " (" + node.class_type +
+        "): its \"" + passthrough + "\" input is a literal value (" +
+        JSON.stringify(source) + "), not a link from another node, so " +
+        "consumers have nothing to rewire to.");
+    }
+    var rewired = [];
+    for (var cid in graph) {
+      if (!graph.hasOwnProperty(cid)) continue;
+      var c = graph[cid];
+      if (!c || !c.inputs || cid === nid) continue;
+      for (var ck in c.inputs) {
+        if (!c.inputs.hasOwnProperty(ck)) continue;
+        if (isLink(c.inputs[ck]) && String(c.inputs[ck][0]) === nid) {
+          c.inputs[ck] = [String(source[0]), source[1]];
+          rewired.push(cid + "." + ck + " -> " + source[0] + ":" + source[1]);
+        }
+      }
+    }
+    delete graph[nid];
+    return { rewired: rewired };
+  }
+
+  /**
+   * Honour the manifest's `optionalNodes` block: a node the template can run
+   * without, because the pack that defines it is not on every machine.
+   * Each entry: {nodeId, class, passthrough, when?: "missing"|"always",
+   *              reason?, keptNote?}.
+   * The default ("missing") asks the LIVE server, so the same template runs
+   * on a machine with the pack and on one without it.
+   * cb(err) — errors are grounded and fatal; this runs before any GPU time.
+   */
+  function resolveOptionalNodes(base, graph, manifest, applied, cb) {
+    var list = manifest && manifest.optionalNodes;
+    if (!(list instanceof Array) || list.length === 0) { cb(null); return; }
+    var i = 0;
+    (function next() {
+      if (i >= list.length) { cb(null); return; }
+      var entry = list[i++] || {};
+      var nid = String(entry.nodeId);
+      var node = graph[nid];
+      if (!node) {
+        // Another injection step already removed it (a detached reference
+        // frame, say). Not an error, but not silent either.
+        applied.push("optional node " + nid + " was already absent");
+        next();
+        return;
+      }
+      var cls = entry["class"] || node.class_type;
+      if (entry["class"] && node.class_type !== entry["class"]) {
+        // The sidecar and the template have drifted apart. Bypassing by id
+        // alone here would delete whatever node inherited that id.
+        cb(new Error("Manifest optionalNodes names node " + nid + " as " +
+          entry["class"] + ", but this workflow's node " + nid + " is a " +
+          node.class_type + ". Regenerate the API template from the " +
+          "manifest's panelAdaptation, or fix the sidecar."));
+        return;
+      }
+      function doBypass(why) {
+        var r;
+        try { r = bypassNode(graph, nid, entry.passthrough); }
+        catch (e) { cb(e); return; }
+        applied.push("bypassed optional node " + nid + " (" + cls + "): " +
+          why + (entry.reason ? " — " + entry.reason : "") +
+          (r && r.rewired.length ? "; rewired " + r.rewired.join(", ") : ""));
+        next();
+      }
+      if (entry.when === "always") { doBypass("manifest says always"); return; }
+      classInstalled(base, cls, function (err, present) {
+        if (err) { cb(err); return; }
+        if (!present) { doBypass("not installed on this ComfyUI"); return; }
+        applied.push("optional node " + nid + " (" + cls + ") is installed, " +
+          "keeping it" + (entry.keptNote ? " — " + entry.keptNote : ""));
+        next();
+      });
+    })();
+  }
+
   // -------------------------------------------------------- error details
 
   /** Flatten ComfyUI's node_errors bag into a readable, capped string. */
@@ -657,7 +790,13 @@
         cb(e);
         return;
       }
-      queueIt();
+      // Optional nodes are resolved against the LIVE server, so this has to
+      // happen after grafting and before queueing — it is the only step that
+      // can tell whether a pack the template names exists on THIS machine.
+      resolveOptionalNodes(base, graph, manifest, applied, function (oErr) {
+        if (oErr) { cb(oErr); return; }
+        queueIt();
+      });
     }
 
     function queueIt() {
@@ -1178,6 +1317,9 @@
     ensureRunning: ensureRunning,
     stopManaged: stopManaged,
     reapOrphan: reapOrphan,
+    bypassNode: bypassNode,
+    classInstalled: classInstalled,
+    resolveOptionalNodes: resolveOptionalNodes,
     _applyExtraModelPaths: applyExtraModelPaths   // exposed for tests
   };
 
