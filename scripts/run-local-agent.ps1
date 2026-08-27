@@ -37,8 +37,47 @@ param(
     [string]$RepoRoot = '',
     [string]$Branch = 'claude/ae-plugin-llama-cpp-f13g3x',
     [string]$ClaudePath = '',
-    [switch]$SkipPermissions = $true
+    [switch]$SkipPermissions = $true,
+    [switch]$Detached
 )
+
+# --- detach: the loop must be nobody's child -------------------------
+# Two nights died because the loop was launched from inside a Claude
+# Code session and was killed with it. Do not rely on the human picking
+# the right window: unless this IS the detached run, relaunch through
+# WMI -- Win32_Process.Create parents the child to the WMI host, outside
+# any process tree or job object that could take it down -- and return
+# immediately. Closing the launching window, the CLI session ending, or
+# its usage limit firing can no longer touch the loop.
+if (-not $Detached) {
+    $fwd = '-WindowStyle Hidden -ExecutionPolicy Bypass -File "' +
+           $PSCommandPath + '" -Detached'
+    $fwd = $fwd + ' -Iterations ' + $Iterations
+    $fwd = $fwd + ' -PauseSec ' + $PauseSec
+    $fwd = $fwd + ' -UntilHour ' + $UntilHour
+    if ($RepoRoot)   { $fwd = $fwd + ' -RepoRoot "' + $RepoRoot + '"' }
+    if ($Branch)     { $fwd = $fwd + ' -Branch "' + $Branch + '"' }
+    if ($ClaudePath) { $fwd = $fwd + ' -ClaudePath "' + $ClaudePath + '"' }
+    if (-not $SkipPermissions) { $fwd = $fwd + ' -SkipPermissions:$false' }
+    $spawn = $null
+    try {
+        $spawn = Invoke-CimMethod -ClassName Win32_Process `
+            -MethodName Create `
+            -Arguments @{ CommandLine = ('powershell.exe ' + $fwd) }
+    } catch {
+        Write-Host ('WMI detach failed: ' + $_.Exception.Message)
+    }
+    if ($spawn -and $spawn.ReturnValue -eq 0) {
+        Write-Host ('Loop DETACHED as PID ' + $spawn.ProcessId +
+                    ' -- closing this window or session cannot stop it.')
+        Write-Host 'Live log: newest logs\local-agent-*.log in the repo.'
+        Write-Host ('To stop it early: Stop-Process -Id ' + $spawn.ProcessId +
+                    '  (PID also saved to logs\local-agent.pid)')
+        exit 0
+    }
+    Write-Host 'Detach unavailable -- running ATTACHED in this window.'
+    Write-Host 'Do not close this window while the loop runs.'
+}
 
 # NOT 'Stop': git and the CLI both write ordinary progress to stderr, and
 # under `2>&1` with -ErrorAction Stop PowerShell 5.1 turns those into
@@ -77,6 +116,8 @@ $logDir = Join-Path $RepoRoot 'logs'
 if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir | Out-Null }
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $logFile = Join-Path $logDir ("local-agent-" + $stamp + ".log")
+# The detached run is windowless -- the pid file is how it gets stopped.
+Set-Content -Path (Join-Path $logDir 'local-agent.pid') -Value $PID -Encoding ASCII
 
 function Write-Log([string]$msg) {
     $line = '[' + (Get-Date -Format 'HH:mm:ss') + '] ' + $msg
