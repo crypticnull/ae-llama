@@ -577,6 +577,126 @@
   }
 
 
+  // -------------------------------------------------- filename tokens
+  //
+  // ComfyUI advertises %date:yyyy-MM-dd% and %Node title.widget% inside
+  // filename_prefix (SaveVideo's own tooltip says so), but NOTHING on the
+  // server expands them: the FRONTEND rewrites the text in
+  // applyTextReplacements() before it posts the prompt, and the server saves
+  // whatever string it is handed. A panel that posts API-format graphs IS the
+  // frontend, so it has to do this itself.
+  //
+  // Measured, not assumed: the bundled H3 template's SaveVideo prefix is
+  // "video/MiniMax_H3/%date:yyyy_MM_dd%/…". Posted verbatim, ComfyUI 0.32.0
+  // answered
+  //
+  //   [WinError 267] The directory name is invalid:
+  //   'C:\…\output\video\MiniMax_H3\%date:yyyy_MM_dd%'
+  //
+  // — the unexpanded token still holds a COLON, which Windows will not accept
+  // in a path, so the whole render died at the last node after the GPU work
+  // was already paid for. The same template run from ComfyUI's own UI on this
+  // machine wrote output/video/MiniMax_H3/2026_08_03/, which is the proof the
+  // expansion happens client-side.
+  //
+  // The port below is deliberately literal — same token regex, same date
+  // grammar, same illegal-character scrub, same "leave it alone" fallback for
+  // anything unresolvable (frontend settingStore bundle, ComfyUI frontend
+  // 1.48.7). A prompt reading "brightness 50% to 100%" is left untouched by
+  // exactly the rule that leaves it untouched in the browser.
+
+  var DATE_GETTERS = {
+    d: function (t) { return t.getDate(); },
+    M: function (t) { return t.getMonth() + 1; },
+    h: function (t) { return t.getHours(); },
+    m: function (t) { return t.getMinutes(); },
+    s: function (t) { return t.getSeconds(); }
+  };
+  var DATE_TOKEN_RE = /dd?|MM?|hh?|mm?|ss?|yyy?y?/g;
+
+  function padLeft(text, width) {
+    var s = String(text);
+    while (s.length < width) s = "0" + s;
+    return s;
+  }
+
+  /** The frontend's formatDate: "yyyy_MM_dd" + a Date -> "2026_08_27". */
+  function formatDateToken(fmt, when) {
+    return String(fmt).replace(DATE_TOKEN_RE, function (m) {
+      if (m === "yy") return String(when.getFullYear()).substring(2);
+      if (m === "yyyy") return String(when.getFullYear());
+      var get = DATE_GETTERS[m.charAt(0)];
+      if (!get) return m;                       // "yyy" and friends: verbatim
+      return padLeft(get(when), m.length);
+    });
+  }
+
+  /**
+   * The name a %Title.widget% reference matches. The browser matches the
+   * node's "Node name for S&R" property first and its title second; an
+   * API-format graph has neither, so class_type (what S&R defaults to) is
+   * tried first and the adapter-preserved _meta.title second.
+   */
+  function nodeRefNames(node) {
+    var names = [];
+    if (node && node.class_type) names.push(String(node.class_type));
+    if (node && node._meta && node._meta.title) {
+      names.push(String(node._meta.title));
+    }
+    return names;
+  }
+
+  function expandTokensIn(graph, text, when) {
+    return String(text).replace(/%([^%]+)%/g, function (whole, inner) {
+      var parts = inner.split(".");
+      if (parts.length !== 2) {
+        if (parts[0].indexOf("date:") === 0) {
+          return formatDateToken(parts[0].substring(5), when);
+        }
+        return whole;                    // not a token we know: hands off
+      }
+      for (var id in graph) {
+        if (!graph.hasOwnProperty(id)) continue;
+        var names = nodeRefNames(graph[id]);
+        var hit = false;
+        for (var n = 0; n < names.length; n++) {
+          if (names[n] === parts[0]) { hit = true; break; }
+        }
+        if (!hit) continue;
+        var v = graph[id].inputs ? graph[id].inputs[parts[1]] : undefined;
+        if (v === undefined || isLink(v)) continue;   // linked: no literal
+        // Same scrub the browser applies before the value reaches a path.
+        return String(v).replace(/[\/?<>\\:*|"\x00-\x1f\x7f]/g, "_");
+      }
+      return whole;                      // unresolvable: leave it visible
+    });
+  }
+
+  /**
+   * Expand filename tokens across every literal string input in the graph.
+   * Returns a list of "node.input: before -> after" notes (empty when the
+   * template used no tokens, which is the common case).
+   */
+  function expandFilenameTokens(graph, when) {
+    var changes = [];
+    when = when || new Date();
+    for (var id in graph) {
+      if (!graph.hasOwnProperty(id)) continue;
+      var node = graph[id];
+      if (!node || !node.inputs) continue;
+      for (var key in node.inputs) {
+        if (!node.inputs.hasOwnProperty(key)) continue;
+        var val = node.inputs[key];
+        if (typeof val !== "string" || val.indexOf("%") === -1) continue;
+        var next = expandTokensIn(graph, val, when);
+        if (next === val) continue;
+        node.inputs[key] = next;
+        changes.push(id + "." + key + ": " + val + " -> " + next);
+      }
+    }
+    return changes;
+  }
+
   // ------------------------------------------------------- optional nodes
 
   /**
@@ -800,6 +920,14 @@
     }
 
     function queueIt() {
+    // Last thing before the POST, exactly where the browser does it: a
+    // %date:…% left in a filename_prefix kills the render at its final node,
+    // after every GPU second has already been spent.
+    var expanded = expandFilenameTokens(graph, new Date());
+    for (var ei = 0; ei < expanded.length; ei++) {
+      applied.push("filename token expanded — " + expanded[ei]);
+    }
+
     // A prompt that lands nowhere means the render would use the template's
     // baked-in text — fail fast instead of burning GPU minutes on it.
     if (typeof params.prompt === "string" && params.prompt !== "") {
@@ -1318,6 +1446,7 @@
     stopManaged: stopManaged,
     reapOrphan: reapOrphan,
     bypassNode: bypassNode,
+    expandFilenameTokens: expandFilenameTokens,
     classInstalled: classInstalled,
     resolveOptionalNodes: resolveOptionalNodes,
     _applyExtraModelPaths: applyExtraModelPaths   // exposed for tests

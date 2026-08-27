@@ -139,7 +139,9 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
   AE quirks — padded arrays, setValue-on-keyframes, hidden properties,
   font substitution); 39-step real-AE self-test shared by the panel
   button and `scripts/run-ae-selftest.ps1`; `scripts/chat-probe.js`
-  drives the real model end-to-end; ES3/ASCII static scanners;
+  drives the real model end-to-end and `scripts/comfy-probe.js` drives
+  one real generation end-to-end (real ComfyUI, real GPU, real AE
+  import); ES3/ASCII static scanners;
   unattended overnight loop (`scripts/run-local-agent.ps1`) working
   `docs/WORKPLAN.md` with `docs/WORKPLAN-LOG.md` as cross-pass memory.
 

@@ -137,9 +137,11 @@ Pure filesystem reading — no AE, no generation runs, do NOT launch
 ComfyUI. This unblocks tier-plan P5 (catalog file lists + sizes) and
 the register-existing matcher. Commit the inventory; no version bump.
 
-## 2d. Small local passes queued by the probe findings — 5 of 6 DONE
-(2026-08-25 and -26). The ONLY one left is the H3 i2v workflow, parts
-1-3; everything else below is struck.
+## 2d. Small local passes queued by the probe findings — the H3 i2v
+workflow is DONE through part 3 (2026-08-25, -26, -27). What is LEFT in
+this section: part 4 (attribute the manifest's UNKNOWN nodes), the KREA2
+subgraph conversion, and the HF t2v/i2v file pins. Everything else below
+is struck.
 
 - ~~Locate the H3 base weight~~ FOUND by the owner (2026-08-25):
   `AppData\Local\Comfy-Desktop\ComfyUI-Shared\models\diffusion_models\`
@@ -178,10 +180,14 @@ the register-existing matcher. Commit the inventory; no version bump.
     LoadImage is DETACHED and the graph runs t2v, so the template no
     longer names a one-machine PNG. Both paths return `valid: True` from
     ComfyUI 0.32.0's own validate_prompt. See the log.
-  - **(3) ONE real generation end-to-end through the panel to verify** —
-    NEXT. RTXVideoSuperResolution must be made bypassable in the same
-    pass (it is NVIDIA-app dependent, so the template cannot run on a
-    machine without it).
+  - ~~(3) ONE real generation end-to-end through the panel to verify~~
+    DONE 2026-08-27 (0.9.21). It ran: prompt -> ComfyUI -> mp4 -> AE, 12s,
+    VRAM peak 28.4 GB. Built `scripts/comfy-probe.js` (the ComfyUI half of
+    chat-probe) and it immediately found what three validate_prompt passes
+    could not: ComfyUI's `%date:...%` filename tokens are expanded by the
+    FRONTEND, never the server, so the panel's own posted graph died at
+    SaveVideo on a colon Windows will not accept. Fixed in comfy.js and
+    covered by tests/test-comfy-filename-tokens.js. See the log.
   - (4) attribute the manifest's UNKNOWN nodes.
   - Also surfaced, its own small pass: the KREA2 template contains a
     SUBGRAPH the converter refuses to flatten. Route that works — queue

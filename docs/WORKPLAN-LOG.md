@@ -2441,3 +2441,116 @@ know:
 **For tonight's pass:** verify this batch in real AE (fan-out steps
 included), bump patch, and note the panel updates by plain file copy
 now (or the junction, if the owner ran install.ps1).
+
+## 2026-08-27 (local) — item 2d part 3: the first real generation, end to end
+
+The item was "ONE real generation end-to-end through the panel to verify".
+It ran, and it found the bug that every previous pass was structurally
+unable to see: three passes had validated the H3 template against
+ComfyUI's own `validate_prompt`, which says a graph is well-formed and
+nothing whatsoever about whether it RENDERS.
+
+**New: `scripts/comfy-probe.js`** — the ComfyUI half of what chat-probe
+does for AE. Canned prompt -> the user's real settings -> real tools.js
+`comfy_generate` (enhancement, VRAM arbiter, import) -> real comfy.js
+(graft -> optional nodes -> queue -> poll -> download) -> a REAL local
+ComfyUI on the 5090 -> real After Effects via `AfterFX.exe -r`
+(`import_file`) -> verdicts read back out of the project, then the
+imported item is deleted again with the panel's own `delete_item`.
+Defaults are the smallest thing the template can render (0.2s, which the
+graph's own `max(5, …)` floor turns into 5 frames, and 0.15 MP): this is
+a plumbing test, not a quality test.
+
+**The bug it found, first run:**
+
+    [WinError 267] The directory name is invalid:
+    'C:\...\output\video\MiniMax_H3\%date:yyyy_MM_dd%'
+
+Every frame sampled, then the render died at the LAST node. The template's
+`SaveVideo.filename_prefix` is `video/MiniMax_H3/%date:yyyy_MM_dd%/…`, and
+**nothing on the ComfyUI server expands those tokens.** The FRONTEND
+rewrites the text (`applyTextReplacements`, frontend 1.48.7) before it
+posts; the server saves whatever string it is handed. SaveVideo's own
+tooltip advertises the feature, which is exactly why it reads as
+server-side and is not. On Windows the unexpanded token is not merely
+ugly — it holds a COLON, which no path may contain, so the failure is
+total rather than cosmetic.
+
+Field proof it is client-side work, not a guess: the owner's own UI runs
+of this same template wrote `output/video/MiniMax_H3/2026_08_03/`,
+`…/2026_08_04/`, and so on. Same prefix, expanded, because a browser was
+in the loop. The panel posts API-format graphs, so the panel IS the
+frontend.
+
+**Fixed at the root** (`extension/js/comfy.js`, ~115 lines):
+`expandFilenameTokens(graph, when)` runs over every literal string input
+immediately before the POST — the same point in the sequence the browser
+does it — and is a deliberately literal port of the frontend's own
+function: token regex `/%([^%]+)%/g`, date grammar
+`dd?|MM?|hh?|mm?|ss?|yyy?y?` zero-padded to each token's own length,
+`%Node.widget%` references scrubbed of `[/?<>\:*|"]`, and — the part that
+makes it safe — ANY token it cannot resolve is returned verbatim. That
+last rule is what keeps a prompt reading "brightness 50% to 100%"
+untouched. Each expansion is reported in `applied`, so the user and the
+model both see what the filename became.
+
+Two things the API format cannot carry, and how the port handles them:
+the browser matches a `%Name.widget%` reference against the node's
+"Node name for S&R" property first and its title second. An API graph has
+neither, so `class_type` (what S&R defaults to) is tried first and the
+adapter-preserved `_meta.title` second. A LINKED input has no literal to
+substitute, so the token stays visible rather than being invented.
+
+**The verified run** (seed 777, nothing cached — the seed-12345 re-run
+came back in 3s off ComfyUI's execution cache, which is why it is not the
+number quoted here):
+
+- generation 12 s wall clock, 5 frames, prompt->file->AE with no hand steps
+- **VRAM peak 28 379 MB, idle 3 195 MB** on the RTX 5090 — ~25 GB for H3
+  at 5 frames / 0.15 MP. First honest number for item 7's catalog work.
+- output 1920x1080 mp4, 103 342 bytes, `ftyp` box present
+- AE read it back as 1920x1080, 0.20833 s @ 24 fps (= 5/24 exactly), with
+  both video and audio streams
+- 1080p regardless of the 0.15 MP asked for, exactly as the manifest's
+  `keptNote` says: `RTXVideoSuperResolution` is installed on this machine,
+  so it was KEPT and rescales to a fixed 1920x1080
+
+**Coverage:** new `tests/test-comfy-filename-tokens.js`, 28 checks against
+the REAL shipped template. It pins the whole date grammar (including
+`yyy`, which is NOT a token and must stay verbatim, and the padded/unpadded
+pairs), idempotency, the percent-riddled prompt, links never being
+rewritten, both reference spellings, the illegal-character scrub, and the
+unresolvable cases. Crucially it also queues the real template at a fake
+ComfyUI and asserts on the POSTED body — the function existing proves
+nothing if `generate()` ever stops calling it — including the flat
+assertion that no colon reaches the server.
+
+**Harness:** real AE **214/214**. Stubbed suite **33/33 files**.
+
+**Bumped 0.9.21** (patch). This is a fix to SHIPPED behavior, not new
+capability: `comfy_generate` and `comfy.js` are in the installed panel,
+the template is already seeded into the owner's data folder, and any
+template whose prefix carries a date token — which is ComfyUI's own
+default idiom — could not save a file at all. Verified in real AE, so it
+ships tonight rather than waiting for 0.10.0.
+
+**Two things for a human / the remote session, neither touched here:**
+
+1. **Seeding is copy-if-absent** (`setup.js ensureDataDirs`: "never
+   overwrite edits"). The owner's `%APPDATA%\AE-Llama\comfy-workflows`
+   still holds the 2026-08-26 10:33 copies, which PREDATE the
+   `optionalNodes` block. So the RTX-bypass fix cannot reach any install
+   that already seeded, and neither will the next template correction.
+   Blind overwrite is wrong (it would eat user edits); this wants a
+   version- or checksum-aware seed, which is a design call, not a
+   one-line patch. Today's fix is unaffected — it lives in panel code.
+2. **The owner's `comfyUrl` says `http://127.0.0.1:8000`; ComfyUI is
+   actually on 8188** (the running instance was started with our own
+   `--extra-model-paths-config`, port 8188). The probe was pointed at
+   8188 with `--url`. Left alone deliberately: with 8000 unanswered the
+   panel would try to BOOT a second backend, and starting a second
+   ComfyUI unattended next to a live one is not a thing to do while the
+   owner is asleep. One setting to change, ten seconds, human's call.
+
+Still open in 2d: part 4 (attribute the manifest's UNKNOWN nodes), the
+KREA2 subgraph conversion, and the HF file pins.
