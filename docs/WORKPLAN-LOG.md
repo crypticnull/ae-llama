@@ -2554,3 +2554,122 @@ ships tonight rather than waiting for 0.10.0.
 
 Still open in 2d: part 4 (attribute the manifest's UNKNOWN nodes), the
 KREA2 subgraph conversion, and the HF file pins.
+
+## 2026-08-27 (local, second pass) — item 2d part 4: ask the loader, not grep
+
+The item read "attribute the manifest's UNKNOWN nodes", which sounds like
+filling in two placeholder strings. It was not. The placeholders were the
+*honest* entries — they said UNKNOWN. The damage was in the manifest that
+claimed to be finished.
+
+**What was actually wrong.** `AE_LLAMA_H3_I2V_V1.manifest.json` carried
+`"nodeAttributionScannedOn": "2026-08-25"` and named four packs. The
+template the panel SHIPS (`extension/comfy-workflows/…`) loads classes from
+seven, and two of them appeared nowhere in the repo:
+
+- `ComfyUI-sol-attn` — `MiniMaxH3ScheduledSolAttentionPatch`
+- `ComfyLiterals` — `Float`
+
+On a machine without those two the graph does not load at all, and nothing
+told anyone which packs to install. Three more entries were positively
+wrong: `ComfyMathExpression` was credited to ComfyUI-MiniMaxH3-FirstBlockCache
+when the loader reports `comfy_extras.nodes_math` (core), the pack was
+recorded as owning a class it does not, and `PlaySound` was listed under a
+class name no installed pack registers — the real class is
+`PlaySound|pysssss`. `Power Lora Loader` was listed for the shipped template,
+which does not contain it, and under the wrong name besides (`Power Lora
+Loader (rgthree)`).
+
+**Why the 2026-08-25 scan produced that.** It grepped pack sources for class
+names. Grep cannot tell a definition from a mention, and it cannot see which
+of two candidates actually won registration. Every one of the three
+"COLLISION" warnings it filed is false:
+
+- `DepthAnythingV2Preprocessor` is not defined twice. `comfyui-art-venture`
+  is installed and loads 78 classes, but line 34 of its
+  `modules/controlnet/preprocessor.py` only *references* the name as a
+  lookup into someone else's mapping.
+- `ResolutionSelector` does not collide with `ComfyUI-UtilsCollection`;
+  that pack registers `ResolutionSelectorExtended`.
+- `PlaySound` does not collide with KJNodes; the two classes are
+  `PlaySound|pysssss` and `PlaySoundKJ`.
+
+**The method that replaces it.** A running ComfyUI answers `/object_info`
+with a `python_module` per registered class — the loader's own record of
+where each class came from, `nodes`/`comfy_extras.*` for core and
+`custom_nodes.<folder>` for a pack. The folder then resolves to a repo URL
+from that pack's `.git/config` or `pyproject.toml`. That is not a heuristic;
+it is the answer.
+
+**New: `scripts/attribute-workflow-nodes.js`.** Enumerates the classes a
+workflow needs (both the authored UI format and the adapted API format),
+attributes each from `/object_info` (or a saved dump via `--object-info`),
+resolves repos off disk, and with `--write` splices the result into the
+manifest next to it. Three things it does deliberately:
+
+- **It recurses into subgraphs.** KREA2's `UNETLoader`, `VAELoader` and
+  `CLIPLoader` exist ONLY inside the "Initial Loader" subgraph; a top-level
+  walk sees a bare UUID node type and misses three dependencies.
+- **It merges rather than overwrites.** An existing entry for the same pack
+  keeps its `note`, its `optional` flag and its repo; only the `nodes` list
+  is replaced by what was measured. Curated prose survives a rescan.
+- **It splices raw text, not a JSON round-trip.** A round-trip would reflow
+  every manifest and un-escape the `—` sequences in the enhancer
+  instructions, turning a three-line change into an unreviewable diff. It
+  also matches the file's own line endings, which a first attempt did not.
+
+Anything absent from `/object_info` and not in a known-virtual list exits 2
+as UNRESOLVED — because "the server never heard of this class" is correct
+for an annotation node and a broken install for anything else.
+
+**All three manifests are now attributed, zero UNKNOWN**, with a scan date
+and the method recorded in each. Frontend-only nodes get their own block:
+`Note`/`MarkdownNote`, and rgthree's `Label (rgthree)` and `Fast Groups
+Bypasser (rgthree)`, which are canvas-only and provably absent from the
+server — worth writing down, because their absence otherwise reads as a
+missing rgthree install.
+
+**Coverage: `tests/test-workflow-manifests.js`, 51 checks, no ComfyUI
+needed.** It requires the same enumerator the tool uses, so the check cannot
+drift from what wrote the file, and it asserts per workflow: no UNKNOWN
+placeholder; every class the graph uses is declared exactly once; nothing
+declared that the graph does not use (the stale `Power Lora Loader` case);
+every non-core pack carries a repo URL; `optionalNodes` points only at
+classes that are in the graph AND attributed; and a scan date exists. Plus
+named checks pinning each of the five corrections. Reverted against the old
+manifest it fails 6 checks and names both missing packs — verified, not
+assumed.
+
+This bug class is invisible to a validator: `validate_prompt` passed three
+times on this exact template, because it ran on the one machine where every
+pack happens to be installed.
+
+**Harness: real AE 214/214** (before and after — nothing AE-side changed).
+Stubbed suite **34/34 files**.
+
+**NO version bump.** No panel code reads `customNodes` (`grep` over
+`extension/js/` confirms: only `procedural`, `optionalNodes` and
+`panelAdaptation` are consumed), the seeded manifest is copy-if-absent so
+the owner's data folder keeps its 08-26 copy regardless, and nothing users
+run behaves differently. Metadata pass — same call as `add_light` and the
+template work, all waiting on the remote session's 0.10.0.
+
+**What this hands the next pass, all logged in WORKPLAN.md, none done here:**
+
+1. **The shipped H3 i2v template needs six custom packs and declares one of
+   them bypassable.** ComfyUI-sol-attn, ComfyLiterals, comfyui-kjnodes,
+   ComfyUI-MiniMaxH3-FirstBlockCache, comfyui-easy-use and
+   comfyui-custom-scripts are all hard requirements today; only
+   RTXVideoSuperResolution has an `optionalNodes` rule. So the template runs
+   on the owner's machine and probably nowhere else. `PlaySound|pysssss` and
+   `easy cleanGpuUsed` look incidental and are the obvious first candidates
+   for `optionalNodes`, but deciding that per pack is a BUILD pass with a
+   real generation behind it, not a scan — deliberately not smuggled in here.
+2. **`adapt-workflow.js` FRONTEND_ONLY is short two entries** for KREA2:
+   `Label (rgthree)` and `Fast Groups Bypasser (rgthree)`. Left alone
+   because the KREA2 conversion is its own queued item and its chosen route
+   is pulling the executed prompt from `/history`, which sidesteps the
+   adapter entirely. Recorded so that pass does not rediscover it.
+3. The owner's `comfyUrl` still says port 8000 while ComfyUI runs on 8188
+   (unchanged from the previous pass — still a human's ten-second call, and
+   still not something to change unattended next to a live backend).

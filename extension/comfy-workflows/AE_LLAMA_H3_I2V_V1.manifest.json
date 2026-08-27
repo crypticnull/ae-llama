@@ -86,27 +86,19 @@
   ],
   "customNodes": [
     {
-      "pack": "ComfyUI-KJNodes",
-      "repo": "https://github.com/kijai/ComfyUI-KJNodes",
+      "pack": "ComfyLiterals",
+      "repo": "https://github.com/M1kep/ComfyLiterals",
       "nodes": [
-        "ModelPreviewOverrideKJ"
+        "Float"
       ]
     },
     {
-      "pack": "ComfyUI-MiniMaxH3-FirstBlockCache",
-      "repo": "https://github.com/duckyshell/ComfyUI-MiniMaxH3-FirstBlockCache",
+      "pack": "comfyui-custom-scripts",
+      "repo": "https://github.com/pythongosssss/ComfyUI-Custom-Scripts",
       "nodes": [
-        "ApplyMiniMaxH3FirstBlockCache",
-        "ComfyMathExpression"
+        "PlaySound|pysssss"
       ],
-      "note": "ComfyMathExpression ships in THIS pack, not in a separate comfymath pack (local scan 2026-08-25)."
-    },
-    {
-      "pack": "rgthree-comfy",
-      "repo": "https://github.com/rgthree/rgthree-comfy",
-      "nodes": [
-        "Power Lora Loader"
-      ]
+      "note": "CORRECTION to the 2026-08-25 scan: there is no collision. This pack registers PlaySound|pysssss and ComfyUI-KJNodes registers PlaySoundKJ - different class names, both resolved at once on the scan machine. Measured 2026-08-27 from /object_info."
     },
     {
       "pack": "comfyui-easy-use",
@@ -116,12 +108,27 @@
       ]
     },
     {
-      "pack": "comfyui-custom-scripts",
-      "repo": "https://github.com/pythongosssss/ComfyUI-Custom-Scripts",
+      "pack": "comfyui-kjnodes",
+      "repo": "https://github.com/kijai/ComfyUI-KJNodes",
       "nodes": [
-        "PlaySound"
+        "MiniMaxH3MemoryEfficientSageAttentionPatch",
+        "ModelPreviewOverrideKJ"
+      ]
+    },
+    {
+      "pack": "ComfyUI-MiniMaxH3-FirstBlockCache",
+      "repo": "https://github.com/duckyshell/ComfyUI-MiniMaxH3-FirstBlockCache",
+      "nodes": [
+        "ApplyMiniMaxH3FirstBlockCache"
       ],
-      "note": "COLLISION: ComfyUI-KJNodes also defines PlaySound; whichever loads last wins. Pin if it matters."
+      "note": "CORRECTION to the 2026-08-25 scan: only ApplyMiniMaxH3FirstBlockCache comes from this pack. ComfyMathExpression does NOT - the running loader reports it as comfy_extras.nodes_math, i.e. CORE in ComfyUI 0.32.0. Measured 2026-08-27 from /object_info."
+    },
+    {
+      "pack": "ComfyUI-sol-attn",
+      "repo": "https://github.com/Saganaki22/ComfyUI-sol-attn",
+      "nodes": [
+        "MiniMaxH3ScheduledSolAttentionPatch"
+      ]
     },
     {
       "pack": "comfyui_nvidia_rtx_nodes",
@@ -135,12 +142,28 @@
     {
       "pack": "(comfy-core)",
       "nodes": [
+        "BasicGuider",
+        "BasicScheduler",
+        "CLIPLoader",
+        "ComfyMathExpression",
+        "CreateVideo",
+        "KSamplerSelect",
+        "LoadImage",
+        "MiniMaxH3ImageToVideo",
+        "MiniMaxH3SigmaShift",
+        "PrimitiveFloat",
+        "RandomNoise",
         "ResolutionSelector",
-        "MiniMaxH3SigmaShift"
+        "SamplerCustomAdvanced",
+        "SaveVideo",
+        "UNETLoader",
+        "VAEDecode",
+        "VAEDecodeAudio",
+        "VAELoader"
       ],
-      "note": "Both are CORE nodes in ComfyUI 0.32.0: comfy_extras/nodes_resolution.py and comfy_extras/nodes_minimax_h3.py. No pack needed. COLLISION: ComfyUI-UtilsCollection also defines ResolutionSelector."
+      "note": "Every class listed here resolves to nodes.py or comfy_extras/* in ComfyUI 0.32.0 - no pack needed. The MiniMaxH3* and ResolutionSelector classes in particular are core, not custom, which is easy to get backwards. CORRECTION to the 2026-08-25 scan: there is no ResolutionSelector collision either - ComfyUI-UtilsCollection registers ResolutionSelectorExtended, a different class name."
     }
   ],
   "enhancerInstruction": "You rewrite a rough video idea into MiniMax H3 image-to-video (I2VA) prompt format. Output ONLY the finished prompt. No preamble, no explanation, no markdown fences.\n\nREQUIRED STRUCTURE, exactly this order:\n\nFor the target video, at 0.00 seconds into the target video, <Picture 1> (from [Shot 1]) is fully referenced.\n\nintegrated_multimodal_description: [Shot 1] ...\n[Shot 2] At MM:SS.mmm, ...\n[Shot 3] At MM:SS.mmm, ...\n\noverall_soundscape: ...\n\nnon_diegetic_music: ...\n\nRULES\n- Shot 1 opens with a style declaration (e.g. \"Live-action, cinematic,\") then anchors to the reference image: state that the subject shown in <Picture 1> keeps their face, hair, clothing and surroundings, then describe the action forward.\n- [Shot 1] has no timestamp. Later shots use \"At MM:SS.mmm,\" with millisecond precision.\n- Camera motion in natural prose with type, amplitude and speed: \"The camera pushes in with small amplitude at slow speed as...\" Never stack camera labels.\n- Describe ONLY what is visible or audible. No thoughts, intentions, emotions, backstory or meaning. Convert interiority into observable cues: widened eyes, tightened jaw, a sharp intake of breath.\n- Do not contradict the reference image: identity, clothing, colours, key objects and spatial relationships stay consistent.\n- Speakers get stable IDs (S1), (S2), or (S1,S2) together. Dialogue goes in <d>[English] exact words</d> with the user's words preserved verbatim. Omit entirely if there is no dialogue.\n- On-screen text goes in double quotes, verbatim, untranslated.\n- overall_soundscape: 1-4 sentences, one paragraph. Ambience, physical action sounds, non-verbal human sounds. Never repeat dialogue or diegetic music. \"N/A\" only if silence is requested.\n- non_diegetic_music: 1-3 sentences on instrumentation, tempo, rhythm and dynamic change. No mood adjectives, no explaining emotional effect. \"N/A\" if none.\n- Target 250-400 words total. Default to 3 shots spread across the clip duration unless the idea implies otherwise.",
-  "nodeAttributionScannedOn": "2026-08-25 (local machine, ComfyUI 0.32.0)"
+  "nodeAttributionScannedOn": "2026-08-27 (local machine, ComfyUI 0.32.0, from the running server /object_info via scripts/attribute-workflow-nodes.js)"
 }

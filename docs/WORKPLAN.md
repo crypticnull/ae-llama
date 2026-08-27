@@ -188,12 +188,31 @@ is struck.
     FRONTEND, never the server, so the panel's own posted graph died at
     SaveVideo on a colon Windows will not accept. Fixed in comfy.js and
     covered by tests/test-comfy-filename-tokens.js. See the log.
-  - (4) attribute the manifest's UNKNOWN nodes.
+  - ~~(4) attribute the manifest's UNKNOWN nodes~~ DONE 2026-08-27. Done
+    for ALL THREE bundled workflows, from the running loader's own
+    `/object_info` rather than by grepping pack sources. It found more
+    than a placeholder: the i2v manifest that already said "attribution
+    scanned" was missing two packs the SHIPPED template loads
+    (ComfyUI-sol-attn, ComfyLiterals) and named three classes wrongly.
+    `scripts/attribute-workflow-nodes.js` regenerates it;
+    `tests/test-workflow-manifests.js` fails CI if a manifest and its
+    graph ever disagree again. See the log.
+  - **NEW, from part 4:** the shipped H3 i2v template hard-requires SIX
+    custom packs and only RTXVideoSuperResolution is declared bypassable.
+    On any machine but the owner's, the graph will not load. Decide per
+    pack what is genuinely load-bearing and what can join `optionalNodes`
+    (PlaySound|pysssss and easy cleanGpuUsed look purely incidental), then
+    measure the bypassed graph. That is a build pass, not a scan.
   - Also surfaced, its own small pass: the KREA2 template contains a
     SUBGRAPH the converter refuses to flatten. Route that works — queue
     it once in ComfyUI and pull the executed prompt from `/history`
     (the owner's `get-api-workflow.ps1` already does this). H3 r2v is
-    still unconverted too.
+    still unconverted too. Two facts for that pass, measured 2026-08-27:
+    the subgraph is "Initial Loader" and holds only UNETLoader/VAELoader/
+    CLIPLoader (all core), and `adapt-workflow.js` FRONTEND_ONLY knows
+    about Note/MarkdownNote but not rgthree's `Label (rgthree)` or
+    `Fast Groups Bypasser (rgthree)`, which KREA2 uses and which are
+    provably absent from the server.
 - **Pin H3 t2v/i2v files** (HF is proxy-blocked from the remote
   session): list https://huggingface.co/api/models/Comfy-Org/MiniMax-H3/tree/main?recursive=true
   and record the t2v/i2v diffusion weights + non-nvfp4 encoder variants
