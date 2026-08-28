@@ -101,7 +101,8 @@ for (let i = 1; i <= 400; i++) {
   solidSources.push({ name: "Blue Solid " + i, id: 100 + i,
                       type: "footage" });
 }
-["ST Bat A", "ST Bat A", "ST Batch", "ST RB Orphan"].forEach((nm, i) => {
+["ST Bat A", "ST Bat A", "ST Batch", "ST RB Orphan",
+ "ST Cov Box"].forEach((nm, i) => {
   solidSources.push({ name: nm, id: 900 + i, type: "footage" });
 });
 let camProbeReads = 0;
@@ -125,6 +126,104 @@ let stagStart = {};
 let batchLayers = 0;
 let batchFx = {};
 let batchBlur = null;
+
+// ---- the coverage rig: a miniature property model for the tools no
+// other step in the suite calls. Faithful to what the probe measured in
+// AE 2026 (WORKPLAN-LOG 2026-08-28) on the four points its steps turn on:
+//   - a one-leaf control group resolves to its VALUE property, so the
+//     matchName that comes back is "ADBE Slider Control-0001", never the
+//     group's;
+//   - the Transform tree is IDENTICAL for a 2D and a 3D layer (Z Position,
+//     Orientation and both extra rotations are there either way), so
+//     nothing about 3D-ness can be inferred from the tree;
+//   - turning 3D back off ZEROES the Z component, silently;
+//   - a layer root really does ship two groups both named "Geometry
+//     Options", which is why every entry carries a matchName.
+const cvControls = {};   // "layer/name" -> {type, match, value}
+const cvKeys = {};       // "layer/prop"  -> [{time, value}]
+const cvExpr = {};       // "layer/prop"  -> expression
+const cvThreeD = {};     // layer -> bool
+const cvAnchor = {};     // layer -> [x, y, z]
+const cvProp = (p) => String(p || "").toLowerCase()
+  .replace(/^transform\//, "").replace(/\s+/g, "");
+const cvKeyList = (layer, prop) => {
+  const k = layer + "/" + cvProp(prop);
+  if (!cvKeys[k]) cvKeys[k] = [];
+  return cvKeys[k];
+};
+const inCvComp = (a) => !!(a && /Cover/.test(a.comp || ""));
+
+// The control table and the preset list are READ OUT of hostscript.jsx,
+// not paraphrased: a stub carrying its own copy would answer the two
+// grounded-refusal steps for free the day the host's list changed.
+const CONTROL_TYPES = (function () {
+  const m = /var AELL_CONTROL_TYPES = \{([\s\S]*?)\n\};/.exec(hostSrc);
+  if (!m) throw new Error("hostscript.jsx no longer defines " +
+                          "AELL_CONTROL_TYPES");
+  const out = {};
+  const re = /(\w+):\s*\{\s*match:\s*"([^"]+)"/g;
+  let g;
+  while ((g = re.exec(m[1]))) out[g[1]] = g[2];
+  return out;
+})();
+const EXPR_PRESETS = (function () {
+  const m = /Available: "\s*\+\s*"([a-z_, ]+)"/.exec(hostSrc);
+  if (!m) throw new Error("hostscript.jsx no longer lists the expression " +
+                          "presets in its refusal");
+  return m[1].split(",").map(s => s.trim());
+})();
+
+// The Transform tree and the layer root, exactly as AE 2026 handed them
+// over for a solid layer. Hard-coded because the POINT of the steps that
+// read them is that these lists do not vary with threeDLayer.
+// AE renames ADBE Rotate Z with the 3D switch and nothing else moves.
+const cvName = (n, mn, layer) =>
+  (mn === "ADBE Rotate Z" && cvThreeD[layer]) ? "Z Rotation" : n;
+const CV_TRANSFORM = [
+  ["Anchor Point", "ADBE Anchor Point"], ["Position", "ADBE Position"],
+  ["X Position", "ADBE Position_0"], ["Y Position", "ADBE Position_1"],
+  ["Z Position", "ADBE Position_2"], ["Scale", "ADBE Scale"],
+  ["Orientation", "ADBE Orientation"], ["X Rotation", "ADBE Rotate X"],
+  ["Y Rotation", "ADBE Rotate Y"], ["Rotation", "ADBE Rotate Z"],
+  ["Opacity", "ADBE Opacity"],
+  ["Appears in Reflections", "ADBE Envir Appear in Reflect"]
+];
+const CV_ROOT = [
+  ["Marker", "ADBE Marker", "prop"],
+  ["Time Remap", "ADBE Time Remapping", "prop"],
+  ["Motion Trackers", "ADBE MTrackers", "group"],
+  ["Masks", "ADBE Mask Parade", "group"],
+  ["Effects", "ADBE Effect Parade", "group"],
+  ["Transform", "ADBE Transform Group", "group"],
+  ["Layer Styles", "ADBE Layer Styles", "group"],
+  ["Geometry Options", "ADBE Plane Options Group", "group"],
+  ["Geometry Options", "ADBE Extrsn Options Group", "group"],
+  ["Material Options", "ADBE Material Options Group", "group"],
+  ["Audio", "ADBE Audio Group", "group"],
+  ["Data", "ADBE Data Group", "group"],
+  ["Essential Properties", "ADBE Layer Overrides", "group"],
+  ["Sets", "ADBE Layer Sets", "group"],
+  ["Replace Source", "ADBE Source Options Group", "group"]
+];
+// The installed-effect catalog list_effects pages through. Two of the
+// five match "blur" by CATEGORY alone, which is what makes the suite's
+// "name OR category" step mean something.
+const CV_EFFECTS = [
+  { name: "CC Cross Blur", matchName: "CS CrossBlur",
+    category: "Blur & Sharpen" },
+  { name: "CC Force Motion Blur", matchName: "CC Force Motion Blur",
+    category: "Time" },
+  { name: "Fast Box Blur", matchName: "ADBE Box Blur2",
+    category: "Blur & Sharpen" },
+  { name: "Sharpen", matchName: "ADBE Sharpen", category: "Blur & Sharpen" },
+  { name: "Directional Blur", matchName: "ADBE Motion Blur",
+    category: "Blur & Sharpen" },
+  { name: "Glow", matchName: "ADBE Glo2", category: "Stylize" }
+];
+// Comps carry their settings, so set_comp_setting/duplicate_comp/
+// move_to_folder can be read back through get_project_info instead of
+// being taken at their word.
+const compProps = {};
 
 // Expression-driven properties, the way real AE behaves: a write is
 // ACCEPTED and then invisible, because `.value` is the expression's
@@ -219,6 +318,11 @@ function cannedOk(tool, args) {
       createdComps.push(createCount === 1 ? "AELL Self-Test"
         : createCount === 2 ? "AELL Self-Test 2"
         : ((args && args.name) || "AELL Self-Test 3"));
+      compProps[createdComps[createdComps.length - 1]] = {
+        width: (args && args.width) || 1280,
+        height: (args && args.height) || 720,
+        duration: (args && args.duration) || 8,
+        frameRate: (args && args.frameRate) || 30 };
       // 1st = the scratch comp, 2nd = the deliberate name collision that
       // must auto-number, 3rd+ = whatever was asked for (the camera comp).
       if (createCount === 1) return { name: "AELL Self-Test", id: 1 };
@@ -380,8 +484,8 @@ function cannedOk(tool, args) {
       // Reads the LIVE solidSources list, so a delete_item really removes
       // an item from later listings — the fidelity the cleanup steps
       // depend on.
-      const items = createdComps.map((nm, i) => ({ name: nm, id: i + 1,
-                                                   type: "comp" }));
+      const items = createdComps.map((nm, i) => Object.assign(
+        { name: nm, id: i + 1, type: "comp" }, compProps[nm] || {}));
       for (const so of solidSources) items.push(Object.assign({}, so));
       const limit = listLimit(args && args.limit);
       const total = items.length;
@@ -615,7 +719,58 @@ function cannedOk(tool, args) {
       markDriven(args && args.layer, args && args.property, 22.2);
       return { layer: args && args.layer,
                property: args && args.property };
-    case "get_property":
+    case "get_property": {
+      // A keyframed property answers with its key list and the value at
+      // the comp's current time (0) — the shape real AE returns, and what
+      // the light-animation and remove_keyframes steps read back. This
+      // comes FIRST so that keyframing a light option really does change
+      // what a read of it says.
+      const kk = args ? cvKeys[args.layer + "/" + cvProp(args.property)]
+                      : null;
+      if (kk && kk.length) {
+        return { value: kk[0].value, numKeys: kk.length,
+                 keys: kk.map(k => ({ time: k.time, value: k.value })) };
+      }
+      if (inCvComp(args)) {
+        const P = String(args.property || "");
+        const ctl = cvControls[args.layer + "/" +
+                               P.replace(/^effects\//i, "")];
+        if (ctl) {
+          // "effects/<name>" lands on the control GROUP and descends to
+          // its single value property, so the matchName is the value's.
+          return { value: ctl.value, matchName: ctl.match + "-0001",
+                   numKeys: 0 };
+        }
+        const np = cvProp(P);
+        if (np === "anchorpoint") {
+          return { value: (cvAnchor[args.layer] || [0, 0, 0]).slice(),
+                   numKeys: 0 };
+        }
+        // The rotation-name asymmetry, measured in AE 2026: a 3D layer
+        // answers to BOTH "Rotation" and "Z Rotation", a 2D layer only to
+        // "Rotation". So the refusal only ever happens one way round.
+        if (/^transform\/z rotation$/i.test(P) && !cvThreeD[args.layer]) {
+          return { __err: "Path segment 'Z Rotation' not found under " +
+            "'transform'. Children here: " +
+            CV_TRANSFORM.map(([n, mn]) => cvName(n, mn, args.layer))
+              .join(", ") +
+            ". Use list_properties to inspect the real tree." };
+        }
+        if (np === "rotation" || np === "zrotation") {
+          // Both names, and the friendly alias, are one property.
+          return { value: 0, matchName: "ADBE Rotate Z", numKeys: 0 };
+        }
+        if (np === "position") {
+          // A driven Position reads back EVALUATED: a live wiggle is
+          // off-centre, and a comp centre of [320, 240] is what an
+          // expression AE had disabled would leave behind.
+          const ex = cvExpr[args.layer + "/" + np];
+          return ex ? { value: [324.77, 240.28, 0], expression: ex,
+                        numKeys: 0 }
+                    : { value: [320, 240, 0], numKeys: 0 };
+        }
+        return { value: 0, numKeys: 0 };
+      }
       // Lights answer from what add_light actually applied, so a read
       // can never confirm a write the canned host never made.
       if (args && lights[args.layer]) {
@@ -699,6 +854,7 @@ function cannedOk(tool, args) {
           : { value: [320, 180, 0], expression: "// grid rig" };
       }
       return { value: 3 };
+    }
     case "set_keyframes":
       // 9 layers x 2 keys for the batch step; one layer x its own keys
       // for the single-layer ones.
@@ -900,6 +1056,15 @@ function cannedOk(tool, args) {
         return { layer: args.layer, property: args.property,
                  value: args.value };
       }
+      if (inCvComp(args) && args.property === "anchorPoint") {
+        // Z only exists to be written while the layer is 3D. A 2D layer
+        // takes the x/y and drops the third component on the floor.
+        const v = args.value || [];
+        cvAnchor[args.layer] = [v[0] || 0, v[1] || 0,
+                                cvThreeD[args.layer] ? (v[2] || 0) : 0];
+        return { layer: args.layer, property: args.property,
+                 value: cvAnchor[args.layer].slice() };
+      }
       return { done: true };
     }
     case "add_text_layer": {
@@ -1005,6 +1170,203 @@ function cannedOk(tool, args) {
                note: "Chunks play seamlessly end-to-end on separate " +
                      "layers (no overlap); stacked ascending and now " +
                      "SELECTED; cut on whole frames at 30 fps" };
+    }
+    // ---- the coverage rig's tools.
+    case "add_control": {
+      const kinds = Object.keys(CONTROL_TYPES);
+      const t = String((args && args.type) || "slider").toLowerCase();
+      if (!CONTROL_TYPES[t]) {
+        return { __err: "'type' must be " +
+                 kinds.slice(0, -1).join(", ") + " or " +
+                 kinds[kinds.length - 1] };
+      }
+      if (!args || !args.name) {
+        return { __err: "'name' is required (e.g. 'Speed')" };
+      }
+      cvControls[args.layer + "/" + args.name] =
+        { type: t, match: CONTROL_TYPES[t], value: args.value };
+      return { layer: args.layer, control: String(args.name), type: t,
+               hint: "Link with link_property {controlLayer: \"" +
+                     args.layer + "\", controlEffect: \"" + args.name +
+                     "\"}" };
+    }
+    case "add_keyframe": {
+      if (!args || typeof args.time !== "number") {
+        return { __err: "'time' (seconds) required" };
+      }
+      const ks = cvKeyList(args.layer, args.property);
+      const hit = ks.find(k => Math.abs(k.time - args.time) < 1e-9);
+      if (hit) hit.value = args.value;
+      else {
+        ks.push({ time: args.time, value: args.value });
+        ks.sort((a, b) => a.time - b.time);
+      }
+      return { layer: args.layer, property: args.property, time: args.time,
+               numKeys: ks.length };
+    }
+    case "remove_keyframes": {
+      const P = String((args && args.property) || "");
+      // A group has no keys of its own; the host says so rather than
+      // walking into it.
+      if (/^(transform|effects|masks|contents|text|light)$/i.test(P)) {
+        return { __err: "'" + P + "' is a GROUP" };
+      }
+      const ks = cvKeyList(args.layer, P);
+      let removed = 0;
+      if (Array.isArray(args.times) && args.times.length) {
+        // Nearest key within 50 ms, the host's own tolerance — a time
+        // that matches nothing removes nothing.
+        for (const t of args.times) {
+          let best = -1, bestD = 1e9;
+          ks.forEach((k, i) => {
+            const d = Math.abs(k.time - Number(t));
+            if (d < bestD) { bestD = d; best = i; }
+          });
+          if (best >= 0 && bestD < 0.05) { ks.splice(best, 1); removed++; }
+        }
+      } else {
+        removed = ks.length;
+        ks.length = 0;
+      }
+      return { layers: 1, property: P, removed, remaining: ks.length };
+    }
+    case "apply_expression_preset": {
+      const p = String((args && args.preset) || "").toLowerCase();
+      if (EXPR_PRESETS.indexOf(p) === -1) {
+        return { __err: "Unknown preset '" + (args && args.preset) +
+                 "'. Available: " + EXPR_PRESETS.join(", ") };
+      }
+      const np = cvProp(args && args.property);
+      const isArrayTarget = np === "position" || np === "scale" ||
+                            np === "anchorpoint";
+      if (p === "time_linear" && isArrayTarget) {
+        return { __err: "time_linear works on scalar properties " +
+          "(rotation, opacity, slider). For position drift, keyframe it " +
+          "or rig a slider with link_property." };
+      }
+      const ref = (c) => {
+        if (!cvControls[c.layer + "/" + c.effect]) return null;
+        return 'thisComp.layer("' + c.layer + '").effect("' + c.effect +
+               '")(1)';
+      };
+      let expr;
+      if (p === "wiggle") {
+        let f = 2, a = 20;
+        if (args.freqControl) {
+          f = ref(args.freqControl);
+          if (!f) {
+            return { __err: "Control not found: '" + args.freqControl.effect +
+              "' on layer '" + args.freqControl.layer + "'. Use " +
+              "add_control first." };
+          }
+        } else if (typeof args.frequency === "number") f = args.frequency;
+        if (args.ampControl) {
+          a = ref(args.ampControl);
+          if (!a) {
+            return { __err: "Control not found: '" + args.ampControl.effect +
+              "' on layer '" + args.ampControl.layer + "'. Use " +
+              "add_control first." };
+          }
+        } else if (typeof args.amplitude === "number") a = args.amplitude;
+        expr = "wiggle(" + f + ", " + a + ");";
+      } else if (p === "time_linear") {
+        expr = "value + time * (" +
+               (typeof args.rate === "number" ? args.rate : 100) + ");";
+      } else {
+        expr = 'loopOut("' + p.replace(/^loop_/, "") + '");';
+      }
+      cvExpr[args.layer + "/" + np] = expr;
+      return { layer: args.layer, property: args.property, preset: p,
+               expression: expr };
+    }
+    case "set_layer_3d": {
+      const L = (args && args.layer) || "";
+      cvThreeD[L] = !!(args && args.enabled);
+      // Going back to 2D discards the Z. AE says nothing about it, so
+      // neither does this.
+      if (!cvThreeD[L] && cvAnchor[L]) cvAnchor[L][2] = 0;
+      return { layer: L, threeD: cvThreeD[L] };
+    }
+    case "list_properties": {
+      const P = String((args && args.path) || "");
+      if (/\/(position|scale|rotation|opacity|anchor point)$/i.test(P)) {
+        return { __err: "'" + P + "' is a PROPERTY, not a group — use " +
+                 "get_property for its value" };
+      }
+      const rows = /^transform$/i.test(P)
+        ? CV_TRANSFORM.map(([n, mn]) => ({ path: "transform/" + cvName(n, mn,
+            args && args.layer), matchName: mn, kind: "prop" }))
+        : CV_ROOT.map(([n, mn, kind]) => ({ path: n, matchName: mn, kind }));
+      return { layer: args && args.layer, root: P || "(layer)",
+               count: rows.length, properties: rows, note: "" };
+    }
+    case "list_effects": {
+      const f = String((args && args.filter) || "").toLowerCase();
+      const off = (args && args.offset > 0) ? Math.round(args.offset) : 0;
+      const hits = CV_EFFECTS.filter(e => !f ||
+        (e.name + " " + e.category).toLowerCase().indexOf(f) !== -1);
+      const page = hits.slice(off, off + 40);
+      return { total: hits.length, offset: off, listed: page.length,
+               effects: page,
+               note: hits.length > off + page.length
+                 ? "More matches — pass {offset: " + (off + page.length) +
+                   "} or a narrower {filter}" : "" };
+    }
+    case "set_comp_setting": {
+      const nm = (args && args.comp) || createdComps[createdComps.length - 1];
+      const c = compProps[nm] || (compProps[nm] = {});
+      if (args.width > 0) c.width = Math.round(args.width);
+      if (args.height > 0) c.height = Math.round(args.height);
+      if (args.duration > 0) c.duration = args.duration;
+      if (args.frameRate > 0) c.frameRate = args.frameRate;
+      return { name: nm, width: c.width, height: c.height,
+               duration: c.duration, frameRate: c.frameRate };
+    }
+    case "duplicate_comp": {
+      const src = (args && args.comp) || "";
+      if (createdComps.indexOf(src) === -1) {
+        return { __err: "Comp not found: " + src +
+                 ". Existing comps: " + createdComps.join(", ") };
+      }
+      const nm = (args && args.name) || (src + " 2");
+      createdComps.push(nm);
+      // A duplicate carries the ORIGINAL's settings, not the defaults.
+      compProps[nm] = Object.assign({}, compProps[src]);
+      return { name: nm, id: 5000 + createdComps.length,
+               duplicatedFrom: src };
+    }
+    case "rename_item": {
+      const key = String((args && args.item) || "");
+      if (!args || !args.name) return { __err: "'name' is required" };
+      const i = createdComps.indexOf(key);
+      if (i === -1) return { __err: "Project item not found: " + key };
+      createdComps[i] = String(args.name);
+      compProps[args.name] = compProps[key] || {};
+      delete compProps[key];
+      return { oldName: key, name: String(args.name) };
+    }
+    case "move_to_folder": {
+      const dest = String((args && args.folder) || "");
+      if (!folders[dest]) {
+        return { __err: "Folder not found: " + dest +
+                 ". Existing folders: " + Object.keys(folders).join(", ") +
+                 ". Use one of those, or create_folder first." };
+      }
+      const refs = Array.isArray(args.items) ? args.items : [args.items];
+      const moved = [], missing = [];
+      for (const r of refs) {
+        const nm = String(r);
+        if (createdComps.indexOf(nm) === -1) { missing.push(nm); continue; }
+        (compProps[nm] || (compProps[nm] = {})).folder = dest;
+        moved.push(nm);
+      }
+      if (!moved.length) {
+        return { __err: "Nothing was moved" +
+          (missing.length ? " — items not found: " + missing.join(", ") : "") };
+      }
+      const out = { folder: dest, moved };
+      if (missing.length) out.notFound = missing;
+      return out;
     }
     default: return { done: true };
   }

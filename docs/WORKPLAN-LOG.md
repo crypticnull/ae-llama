@@ -3071,3 +3071,132 @@ the remote session disagrees it folds into 0.10.0 at no cost.
    inputs the panel cannot feed).
 
 **Item 2d is now CLOSED.** The next pass starts at item 3, 4 or 5.
+
+## 2026-08-28 (local, fourth pass) — item 3: the suite grows 46 steps, and AE renames a property
+
+Item 2d closed on the previous pass, so this one started at **item 3,
+extend selftest.js coverage**. The harness was green first (214/214), so
+the pass was the item and not a repair.
+
+`docs/CAPABILITIES.md` computes the queue for item 3, and it named 15
+host tools the suite had never once called. The suite now runs **260
+steps, all passing in real AE 2026**, and that list is down to four.
+
+### Probe first, and it paid twice
+
+Nothing here was written from training. A temp `.jsx` drove 40 calls
+through `AELL_call` in real AE and dumped the raw JSON, and the steps
+were written against that. Two of the measurements were surprises:
+
+**A 2D layer already advertises the entire 3D transform set.** Its
+Transform group hands out Anchor Point, Position, X/Y/**Z** Position,
+Scale, **Orientation**, **X Rotation**, **Y Rotation**, Rotation,
+Opacity and Appears in Reflections — twelve properties, the same twelve
+a 3D layer has. So nothing about 3D-ness is discoverable from the
+property tree, which is the field evidence behind CLAUDE.md's rule that
+3D-ness comes from `layer.threeDLayer` and never from a value's length.
+
+**A layer root ships two groups both called "Geometry Options"**
+(`ADBE Plane Options Group` and `ADBE Extrsn Options Group`). Display
+names are not unique, which is exactly why every `list_properties` entry
+carries a matchName. There is a step for that now.
+
+### The thing the suite caught that the probe had missed
+
+The first version of the 3D step asserted the two trees were *identical*.
+Real AE failed it: **AE renames `ADBE Rotate Z` from "Rotation" to "Z
+Rotation" when the layer becomes 3D.** The data had been in the probe
+output all along, in the tenth of twelve entries, and the assertion was
+written off the visible prefix — the harness is what caught it. That is
+the loop working; a step that had passed by luck would have been worse.
+
+A second probe then measured the direction the rename runs in, because
+guessing had already cost one round:
+
+- 2D layer: `transform/Rotation` resolves, `transform/Z Rotation` refuses.
+- 3D layer: **both** resolve, both to `ADBE Rotate Z`.
+
+So AE keeps the old name working after the switch, but a 2D layer has
+never heard of the new one. A path written while the layer was 2D
+survives becoming 3D; one written while it was 3D does **not** survive
+the switch back. The friendly alias (`rotation` -> matchName) never
+moves, so the panel's own convenience form is safe either way. Three
+steps pin all of it, including the grounded refusal listing the real
+children on the way back to 2D. No tool change: the refusal is already
+correct and self-correcting.
+
+### What is now covered
+
+- **Light keyframes**, the gap `add_light` shipped with (CAPABILITIES
+  named it). Intensity animates through its bare name, Cone Angle only
+  through `light/Cone Angle` — the same split the static light steps
+  found. Then `remove_keyframes` takes one key off by time and clears the
+  rest.
+- **A coverage rig** (`AELL Self-Test Cover`, its own comp because it
+  resizes and re-times itself): `add_control` (slider + point, both read
+  back through `effects/<name>`, which descends to the VALUE property so
+  the matchName that comes back is `ADBE Slider Control-0001`), its two
+  refusals, `apply_expression_preset` wiring wiggle to that control in
+  the inline chained pickwhip form plus both its refusals,
+  `add_keyframe` x3 with its no-time refusal, `remove_keyframes` by time
+  / by group refusal / cleared, `set_layer_3d` both ways,
+  `list_properties` on a group, a leaf and the colliding layer root,
+  `list_effects` filtering by name OR category and paging exactly by
+  offset, `set_comp_setting` read back through `get_project_info`, and
+  `duplicate_comp` -> `rename_item` -> `move_to_folder` with a grounded
+  refusal at each end.
+
+### Stubs, so the same bugs are caught without AE
+
+Both halves of the loop got the measurements, not a paraphrase:
+
+- `tests/test-self-test.js`'s canned host learned eleven tools. It reads
+  `AELL_CONTROL_TYPES` and the preset list **out of hostscript.jsx**
+  rather than carrying a copy, so the day the host's list changes the
+  refusal steps cannot pass for free. It models the keyframe store, the
+  50 ms nearest-key tolerance, the 2D/3D rename, and comps that remember
+  their settings so `set_comp_setting`/`duplicate_comp`/`move_to_folder`
+  are read back instead of taken at their word. 260/260 canned.
+- `tests/test-property-access.js` gained the tools themselves against the
+  real hostscript: `addProperty` now returns a control GROUP whose single
+  child is the value, `threeDLayer` is a setter that renames Rotate Z and
+  keeps the old name as an alias (the measured asymmetry), and `Comp`
+  duplicates. Its new assertions cover add_control, the two presets'
+  refusals, the keyframe tolerance both ways, and the rename in both
+  directions.
+
+### One real bug, in the measuring tool
+
+`scripts/capability-report.js` matched tool names with `[a-z_]+`, so
+**`set_layer_3d` could never be credited with coverage** — the digit
+ended the match. It had been sitting in the "never exercised" list while
+nothing could ever remove it. Fixed to `[a-z0-9_]+` in both the stub and
+the suite counters; it is the only tool with a digit in its name today.
+
+### Left for a human or a later pass
+
+1. **`set_layer_3d` loses the Z in silence.** Turning a 3D layer back to
+   2D zeroes the Z of Position and Anchor Point and the tool reports a
+   bare `{threeD: false}`. That is AE's behaviour, and a suite step now
+   pins it — but this project's rule is that nothing disappears quietly.
+   Filed under item 4 with the shape of the fix (report what was
+   discarded; do not refuse, do not restore). Deliberately NOT built
+   here: this pass's item was coverage, and the loop allows one item.
+2. **`organize_project` can never have a suite step.** It files every
+   loose item at the project ROOT, and the suite runs inside the user's
+   own open project. It needs a `dryRun` argument before it is testable
+   at all — a design call, noted in WORKPLAN item 3 and CAPABILITIES.
+3. The three other uncovered tools are owned by feature items that will
+   cover them as they land (5.4 markers/precompose, 5.5 render queue,
+   5.8 import).
+
+### Bumped to 0.9.24 — the assumption, stated
+
+Item 5's "no bump on feature passes" covers new TOOLS; no tool was added
+here. But `extension/js/selftest.js` ships, and the panel's Settings ->
+"Run self-test" button is the user-visible half of it: without a bump the
+46 new steps reach the repo and never reach a panel. Same reasoning as
+0.9.23. If the remote session disagrees it folds into 0.10.0 at no cost.
+
+**Harness: 260/260 PASSED.** Stubbed suite: all green, capability doc
+regenerated. Nothing blocked.

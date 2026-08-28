@@ -16,8 +16,27 @@ Object.defineProperty(PGroup.prototype, "numProperties", {
 });
 PGroup.prototype.property = function (ref) {
   if (typeof ref === "number") return this._children[ref - 1] || null;
-  return this._children.find(c => c.name === ref || c.matchName === ref) ||
-         null;
+  return this._children.find(c => c.name === ref || c.matchName === ref ||
+    (c._aliases || []).indexOf(ref) !== -1) || null;
+};
+// What addProperty("ADBE Slider Control") really hands back: a GROUP whose
+// single child is the value, matchName'd "<class>-0001". add_control writes
+// through property(1), and "effects/<name>" reads back the CHILD's
+// matchName — a stub returning a bare property would hide both.
+const CONTROL_LEAF = {
+  "ADBE Slider Control": ["Slider", 0],
+  "ADBE Angle Control": ["Angle", 0],
+  "ADBE Checkbox Control": ["Checkbox", 0],
+  "ADBE Color Control": ["Color", [0, 0, 0, 1]],
+  "ADBE Point Control": ["Point", [0, 0]]
+};
+PGroup.prototype.addProperty = function (matchName) {
+  const spec = CONTROL_LEAF[matchName];
+  if (!spec) throw new Error("Cannot add property " + matchName);
+  const g = new PGroup(spec[0] + " Control", matchName);
+  g.add(new Prop(spec[0], matchName + "-0001", spec[1]));
+  this.add(g);
+  return g;
 };
 
 function Prop(name, matchName, value) {
@@ -59,6 +78,15 @@ function Layer(name, comp) {
   t.add(new Prop("Rotation", "ADBE Rotate Z", 0));
   t.add(new Prop("Opacity", "ADBE Opacity", 100));
   t.add(new Prop("Anchor Point", "ADBE Anchor Point", [0, 0]));
+  // Measured in AE 2026 (WORKPLAN-LOG 2026-08-28): a 2D layer's Transform
+  // group already carries Z Position, Orientation and both extra
+  // rotations. The tree holds the same twelve properties whatever
+  // threeDLayer says, so nothing may infer 3D-ness from it.
+  t.add(new Prop("Z Position", "ADBE Position_2", 0));
+  t.add(new Prop("Orientation", "ADBE Orientation", [0, 0, 0]));
+  t.add(new Prop("X Rotation", "ADBE Rotate X", 0));
+  t.add(new Prop("Y Rotation", "ADBE Rotate Y", 0));
+  this._3d = false;
   const fx = new PGroup("Effects", "ADBE Effect Parade");
   const blur = new PGroup("Gaussian Blur", "ADBE Gaussian Blur 2");
   blur.add(new Prop("Blurriness", "ADBE Gaussian Blur 2-0001", 0));
@@ -74,6 +102,23 @@ Object.defineProperty(Layer.prototype, "numProperties", {
   get() { return this._root._children.length; }
 });
 Layer.prototype.property = function (ref) { return this._root.property(ref); };
+// The one thing the 3D switch really changes about the tree: AE RENAMES
+// ADBE Rotate Z from "Rotation" to "Z Rotation". Measured in AE 2026
+// (WORKPLAN-LOG 2026-08-28), including the asymmetry: a 3D layer still
+// answers to the OLD name, but a 2D layer has never heard of the new one.
+// So a path written while the layer was 2D survives the switch and one
+// written while it was 3D does not survive the switch back.
+Object.defineProperty(Layer.prototype, "threeDLayer", {
+  get() { return this._3d; },
+  set(v) {
+    this._3d = !!v;
+    const t = this._root.property("ADBE Transform Group");
+    const rz = t && t.property("ADBE Rotate Z");
+    if (!rz) return;
+    rz.name = this._3d ? "Z Rotation" : "Rotation";
+    rz._aliases = this._3d ? ["Rotation"] : [];
+  }
+});
 Object.defineProperty(Layer.prototype, "index", {
   get() { return this.comp._layers.indexOf(this) + 1; }
 });
@@ -90,8 +135,10 @@ Layer.prototype.removeTrackMatte = function () {
   this._matteType = null;
 };
 
+let compIds = 0;
 function Comp(name) {
   this.name = name;
+  this.id = ++compIds;
   this._layers = [];
   this.time = 0;
   this.width = 1920;
@@ -119,6 +166,14 @@ Object.defineProperty(Comp.prototype, "numLayers", {
 Object.defineProperty(Comp.prototype, "selectedLayers", {
   get() { return this._layers.filter(l => l.selected); }
 });
+// AE names the copy itself; duplicate_comp only renames it afterwards.
+Comp.prototype.duplicate = function () {
+  const c = new Comp(this.name + " 2");
+  c.width = this.width;
+  c.height = this.height;
+  c.duration = this.duration;
+  return c;
+};
 
 function CompItem() {} function FolderItem() {} function FootageItem() {}
 function TextLayer() {} function ShapeLayer() {} function CameraLayer() {}
@@ -322,5 +377,135 @@ r = call("set_property", { layers: ["A", "B"], property: "Opacity",
 assert(!r.ok, "set_property refuses a layers array");
 assert(/for_each_layer/.test(r.error || ""),
        "and the refusal names the tool that DOES batches: " + r.error);
+
+// 12. rigging: add_control, the presets that ride it, keyframes by hand,
+// and set_layer_3d. All four shipped with no stubbed test at all until
+// the suite grew real-AE steps for them (WORKPLAN item 3, 2026-08-28).
+r = call("add_control", { layer: "A", type: "slider", name: "Amp",
+                          value: 40 });
+assert(r.ok && r.data.control === "Amp" && /link_property/.test(r.data.hint),
+       "add_control names the control and hands over the link call: " +
+       (r.error || ""));
+r = call("get_property", { layer: "A", property: "effects/Amp" });
+assert(r.ok && r.data.value === 40 &&
+       r.data.matchName === "ADBE Slider Control-0001",
+       "the control reads back through its VALUE property: " +
+       (r.error || r.data.matchName));
+r = call("add_control", { layer: "A", type: "point", name: "Where",
+                          value: [10, 20] });
+assert(r.ok, "a point control takes a two-component value: " + (r.error || ""));
+r = call("get_property", { layer: "A", property: "effects/Where" });
+assert(r.ok && JSON.stringify(r.data.value) === "[10,20]",
+       "and reads back as [10, 20]");
+r = call("add_control", { layer: "A", type: "spinner", name: "Nope" });
+assert(!r.ok && /slider, angle, checkbox, color or point/.test(r.error),
+       "an unknown control type lists the real ones: " + r.error);
+r = call("add_control", { layer: "A", type: "slider" });
+assert(!r.ok && /'name' is required/.test(r.error),
+       "a control with no name is refused");
+
+// The generated expression must be the inline chained pickwhip form —
+// a stored Property reference breaks the moment a layer is renamed.
+r = call("apply_expression_preset", { layer: "A", property: "position",
+  preset: "wiggle", frequency: 3,
+  ampControl: { layer: "A", effect: "Amp" } });
+assert(r.ok && r.data.expression ===
+         'wiggle(3, thisComp.layer("A").effect("Amp")(1));',
+       "wiggle is driven by the control, inline: " +
+       (r.error || r.data.expression));
+assert(A.property("Transform").property("Position").expression ===
+       r.data.expression, "and AE really carries it");
+r = call("apply_expression_preset", { layer: "A", property: "rotation",
+  preset: "wiggle", ampControl: { layer: "A", effect: "Absent" } });
+assert(!r.ok && /add_control first/.test(r.error),
+       "a control that is not there sends you to add_control: " + r.error);
+r = call("apply_expression_preset", { layer: "A", property: "rotation",
+                                      preset: "bounce" });
+assert(!r.ok &&
+       /wiggle, loop_cycle, loop_pingpong, loop_offset, time_linear/
+         .test(r.error),
+       "an unknown preset lists the five that exist: " + r.error);
+r = call("apply_expression_preset", { layer: "A", property: "position",
+                                      preset: "time_linear" });
+assert(!r.ok && /link_property/.test(r.error),
+       "time_linear refuses an ARRAY property with a route out: " + r.error);
+call("set_expression", { layer: "A", property: "position", expression: "" });
+
+// add_keyframe / remove_keyframes: the 50 ms nearest-key tolerance is the
+// whole contract of removing BY TIME, and nothing tested it.
+r = call("add_keyframe", { layer: "B", property: "rotation", value: 45 });
+assert(!r.ok && /'time'/.test(r.error),
+       "add_keyframe without a time is refused: " + r.error);
+[0, 1, 2].forEach((t, i) => {
+  r = call("add_keyframe", { layer: "B", property: "rotation", time: t,
+                             value: t * 90 });
+  assert(r.ok && r.data.numKeys === i + 1,
+         "add_keyframe " + (i + 1) + " counts its keys: " + (r.error || ""));
+});
+r = call("remove_keyframes", { layer: "B", property: "rotation",
+                               times: [1.02] });
+assert(r.ok && r.data.removed === 1 && r.data.remaining === 2,
+       "a time within 50 ms takes the key it meant: " +
+       (r.error || r.data.removed));
+r = call("remove_keyframes", { layer: "B", property: "rotation",
+                               times: [1.5] });
+assert(r.ok && r.data.removed === 0 && r.data.remaining === 2,
+       "a time that matches nothing removes nothing (no nearest-wins)");
+const bRot = B.property("Transform").property("Rotation");
+assert(bRot.keyTime(1) === 0 && bRot.keyTime(2) === 2,
+       "the OUTER keys are the two that survived");
+r = call("remove_keyframes", { layer: "B", property: "rotation" });
+assert(r.ok && r.data.removed === 2 && r.data.remaining === 0,
+       "and no times at all clears the property");
+
+// set_layer_3d, and the trap underneath it: the property tree is the same
+// either way, so threeDLayer is the ONLY answer to "is this layer 3D".
+const tree2d = call("list_properties", { layer: "A", path: "transform" });
+assert(tree2d.ok &&
+       tree2d.data.properties.some(p => /Z Position/.test(p.path)),
+       "a 2D layer already advertises Z Position");
+r = call("set_layer_3d", { layer: "A", enabled: true });
+assert(r.ok && r.data.threeD === true && A.threeDLayer === true,
+       "set_layer_3d turns the layer 3D: " + (r.error || ""));
+const tree3d = call("list_properties", { layer: "A", path: "transform" });
+assert(JSON.stringify(tree3d.data.properties.map(p => p.matchName)) ===
+       JSON.stringify(tree2d.data.properties.map(p => p.matchName)),
+       "the 3D tree holds the same properties, matchName for matchName");
+const renamed = tree3d.data.properties
+  .map((p, i) => [tree2d.data.properties[i].path, p.path])
+  .filter(([was, now]) => was !== now);
+assert(renamed.length === 1 &&
+       renamed[0].join(" -> ") ===
+         "transform/Rotation -> transform/Z Rotation",
+       "exactly one display name moves: Rotation -> Z Rotation (" +
+       renamed.map(x => x.join(" -> ")).join(", ") + ")");
+// The consequence, and the direction it runs in: a 3D layer answers to
+// BOTH names, so a path written while the layer was 2D keeps working.
+r = call("get_property", { layer: "A", property: "transform/Z Rotation" });
+assert(r.ok && r.data.matchName === "ADBE Rotate Z",
+       "the new display name resolves on a 3D layer: " + (r.error || ""));
+r = call("get_property", { layer: "A", property: "transform/Rotation" });
+assert(r.ok && r.data.matchName === "ADBE Rotate Z",
+       "and so does the old one — AE keeps it: " + (r.error || ""));
+r = call("get_property", { layer: "A", property: "rotation" });
+assert(r.ok && r.data.matchName === "ADBE Rotate Z",
+       "the friendly alias lands on ADBE Rotate Z: " + (r.error || ""));
+r = call("set_layer_3d", { layer: "A", enabled: false });
+assert(r.ok && r.data.threeD === false && A.threeDLayer === false,
+       "and back off again");
+// The other direction is where it bites: "Z Rotation" is not a name a 2D
+// layer has ever had, so a path written while it was 3D now refuses --
+// grounded, listing what the tree really holds.
+r = call("get_property", { layer: "A", property: "transform/Z Rotation" });
+assert(!r.ok && /Rotation/.test(r.error),
+       "back in 2D the 3D-era name is refused with the real children: " +
+       (r.error || "(it resolved!)"));
+
+// duplicate_comp: AE names the copy, the tool renames it and says where
+// it came from.
+r = call("duplicate_comp", { name: "Props Copy" });
+assert(r.ok && r.data.name === "Props Copy" &&
+       r.data.duplicatedFrom === "Props" && typeof r.data.id === "number",
+       "duplicate_comp reports the copy and its source: " + (r.error || ""));
 
 console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");

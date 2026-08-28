@@ -33,6 +33,9 @@
   // And the light rig: lights are riggers like cameras, so they get
   // their own comp rather than joining the ones being measured.
   var LTCOMP = "AELL Self-Test Light";
+  // And the coverage rig: the tools nothing else in the suite ever calls.
+  // It resizes and re-times its own comp, so it cannot share one.
+  var CVCOMP = "AELL Self-Test Cover";
   var running = false;
 
   /**
@@ -2505,9 +2508,671 @@
                  "ungrounded: " + err;
         } },
 
+      // Light KEYFRAMES. docs/CAPABILITIES.md named this as the gap left
+      // by add_light: every step above writes a STATIC option, so nothing
+      // proved a light option can be animated at all. Measured here first
+      // (2026-08-28): Intensity animates through its bare name, Cone Angle
+      // only through the group path "light/Cone Angle" — the same split the
+      // static steps above found, now pinned for keyframes too.
+      { name: "a light's intensity takes keyframes",
+        batch: function (ctx) {
+          return [
+            { tool: "add_keyframe",
+              args: { comp: ctx.ltComp, layer: "ST Light Spot",
+                      property: "Intensity", time: 0, value: 80 } },
+            { tool: "add_keyframe",
+              args: { comp: ctx.ltComp, layer: "ST Light Spot",
+                      property: "Intensity", time: 2, value: 15 } }
+          ];
+        },
+        check: function (rows) {
+          if (!rows[0].ok) return "first key refused: " + rows[0].error;
+          if (!rows[1].ok) return "second key refused: " + rows[1].error;
+          return rows[1].data.numKeys === 2 ||
+                 "numKeys " + rows[1].data.numKeys;
+        } },
+
+      { name: "the intensity keys really hold both values",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.ltComp, layer: "ST Light Spot",
+                   property: "Intensity" };
+        },
+        check: function (d) {
+          var k = d.keys || [];
+          if (d.numKeys !== 2) return "numKeys " + d.numKeys;
+          return (Math.abs(k[0].value - 80) < 0.01 &&
+                  Math.abs(k[1].value - 15) < 0.01) ||
+                 "keys " + JSON.stringify(k);
+        } },
+
+      { name: "a spot's cone angle animates too (group path)",
+        batch: function (ctx) {
+          return [
+            { tool: "add_keyframe",
+              args: { comp: ctx.ltComp, layer: "ST Light Spot",
+                      property: "light/Cone Angle", time: 0, value: 60 } },
+            { tool: "add_keyframe",
+              args: { comp: ctx.ltComp, layer: "ST Light Spot",
+                      property: "light/Cone Angle", time: 1, value: 20 } }
+          ];
+        },
+        check: function (rows) {
+          if (!rows[0].ok) return "first key refused: " + rows[0].error;
+          return (rows[1].ok && rows[1].data.numKeys === 2) ||
+                 "second key: " + (rows[1].error || rows[1].data.numKeys);
+        } },
+
+      { name: "remove_keyframes takes ONE key off by time",
+        tool: "remove_keyframes",
+        args: function (ctx) {
+          return { comp: ctx.ltComp, layer: "ST Light Spot",
+                   property: "light/Cone Angle", times: [1] };
+        },
+        check: function (d) {
+          if (d.removed !== 1) return "removed " + d.removed;
+          return d.remaining === 1 || "remaining " + d.remaining;
+        } },
+
+      { name: "...and with no times at all it clears the property",
+        tool: "remove_keyframes",
+        args: function (ctx) {
+          return { comp: ctx.ltComp, layer: "ST Light Spot",
+                   property: "Intensity" };
+        },
+        check: function (d) {
+          return (d.removed === 2 && d.remaining === 0) ||
+                 "removed " + d.removed + ", remaining " + d.remaining;
+        } },
+
       { name: "cleanup: delete the light comp",
         tool: "delete_item",
         args: function (ctx) { return { item: ctx.ltComp }; },
+        check: function () { return true; } },
+
+      // ---- coverage rig. docs/CAPABILITIES.md computes which tools the
+      // suite has never once called, and this group exists to shorten that
+      // list: add_control, add_keyframe, remove_keyframes, set_layer_3d,
+      // apply_expression_preset, list_properties, list_effects,
+      // set_comp_setting, duplicate_comp, rename_item and move_to_folder
+      // all shipped with real-AE steps behind them for the first time here.
+      // Every expectation below was measured first (WORKPLAN-LOG
+      // 2026-08-28), never assumed.
+      //
+      // Two tools stay deliberately uncovered and it is not an oversight:
+      // organize_project files every LOOSE item at the project root, and
+      // add_to_render_queue writes to the user's render queue — the suite
+      // runs inside whatever project the user has open, so neither can be
+      // exercised without reaching outside the scratch comps.
+      { name: "coverage scratch comp",
+        tool: "create_comp",
+        args: { name: CVCOMP, width: 640, height: 480, duration: 5,
+                frameRate: 25 },
+        check: function (d, ctx) {
+          ctx.cvComp = d.name;
+          return typeof d.id === "number" || !!d.id || "no comp id";
+        } },
+
+      { name: "coverage rig: one solid to hang the rest on",
+        tool: "add_solid",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, name: "ST Cov Box",
+                   color: [0.2, 0.4, 1], width: 100, height: 100 };
+        },
+        check: function (d) {
+          return d.name === "ST Cov Box" || "named " + d.name;
+        } },
+
+      { name: "add_control puts a named slider on the layer",
+        tool: "add_control",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box", type: "slider",
+                   name: "ST Cov Amp", value: 40 };
+        },
+        check: function (d) {
+          if (d.control !== "ST Cov Amp") return "control " + d.control;
+          // The hint is the whole point of the tool: it hands the model the
+          // exact link_property call to make next.
+          return (d.hint || "").indexOf("link_property") !== -1 ||
+                 "no link hint: " + d.hint;
+        } },
+
+      { name: "the slider's initial value really landed",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box",
+                   property: "effects/ST Cov Amp" };
+        },
+        check: function (d) {
+          // A one-leaf control group resolves to its value property, so
+          // "effects/<name>" reads the slider itself, not the group.
+          if (String(d.matchName).indexOf("ADBE Slider Control") !== 0) {
+            return "resolved to " + d.matchName;
+          }
+          return Math.abs(d.value - 40) < 0.01 || "value " + d.value;
+        } },
+
+      { name: "a point control takes a two-component value",
+        tool: "add_control",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box", type: "point",
+                   name: "ST Cov Pt", value: [10, 20] };
+        },
+        check: function (d) { return d.type === "point" || "type " + d.type; } },
+
+      { name: "...and it reads back as [10, 20]",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box",
+                   property: "effects/ST Cov Pt" };
+        },
+        check: function (d) {
+          var v = d.value || [];
+          return (Math.abs(v[0] - 10) < 0.01 && Math.abs(v[1] - 20) < 0.01) ||
+                 "value " + JSON.stringify(v);
+        } },
+
+      { name: "an unknown control type lists the real ones",
+        tool: "add_control",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box", type: "spinner",
+                   name: "ST Cov Bad" };
+        },
+        check: function (err) {
+          return err.indexOf("slider, angle, checkbox, color or point") !== -1 ||
+                 "ungrounded: " + err;
+        } },
+
+      { name: "a control with no name is refused, with an example",
+        tool: "add_control",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box", type: "slider" };
+        },
+        check: function (err) {
+          return err.indexOf("'name' is required") !== -1 || "err: " + err;
+        } },
+
+      { name: "apply_expression_preset wires wiggle to that slider",
+        tool: "apply_expression_preset",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box",
+                   property: "position", preset: "wiggle", frequency: 3,
+                   ampControl: { layer: "ST Cov Box", effect: "ST Cov Amp" } };
+        },
+        check: function (d) {
+          var e = String(d.expression || "");
+          if (e.indexOf("wiggle(3,") !== 0) return "expression " + e;
+          // The inline chained pickwhip form is the only one the panel
+          // generates — a stored Property ref would break on rename.
+          return e.indexOf('effect("ST Cov Amp")(1)') !== -1 ||
+                 "amplitude is not driven by the control: " + e;
+        } },
+
+      { name: "AE really accepted it — the position is wiggling",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box",
+                   property: "transform/Position" };
+        },
+        check: function (d) {
+          if (!d.expression) return "no expression on the property";
+          var v = d.value || [];
+          // The comp is 640x480, so an untouched centre reads [320, 240].
+          // A live wiggle moves it; a DISABLED expression would not.
+          return (Math.abs(v[0] - 320) > 0.001 ||
+                  Math.abs(v[1] - 240) > 0.001) ||
+                 "value is still dead centre: " + JSON.stringify(v);
+        } },
+
+      { name: "time_linear refuses an ARRAY property and says what to do",
+        tool: "apply_expression_preset",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box",
+                   property: "position", preset: "time_linear" };
+        },
+        check: function (err) {
+          return err.indexOf("link_property") !== -1 ||
+                 "no route out of the refusal: " + err;
+        } },
+
+      { name: "an unknown preset lists the five that exist",
+        tool: "apply_expression_preset",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box",
+                   property: "rotation", preset: "bounce" };
+        },
+        check: function (err) {
+          return err.indexOf("wiggle, loop_cycle, loop_pingpong, " +
+                             "loop_offset, time_linear") !== -1 ||
+                 "ungrounded: " + err;
+        } },
+
+      { name: "add_keyframe stacks three keys and counts them",
+        batch: function (ctx) {
+          return [
+            { tool: "add_keyframe",
+              args: { comp: ctx.cvComp, layer: "ST Cov Box",
+                      property: "rotation", time: 0, value: 0 } },
+            { tool: "add_keyframe",
+              args: { comp: ctx.cvComp, layer: "ST Cov Box",
+                      property: "rotation", time: 1, value: 90 } },
+            { tool: "add_keyframe",
+              args: { comp: ctx.cvComp, layer: "ST Cov Box",
+                      property: "rotation", time: 2, value: 180 } }
+          ];
+        },
+        check: function (rows) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "key " + i + " refused: " + rows[i].error;
+            if (rows[i].data.numKeys !== i + 1) {
+              return "key " + i + " reported numKeys " + rows[i].data.numKeys;
+            }
+          }
+          return true;
+        } },
+
+      { name: "add_keyframe without a time is refused",
+        tool: "add_keyframe",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box",
+                   property: "rotation", value: 45 };
+        },
+        check: function (err) {
+          return err.indexOf("'time'") !== -1 || "err: " + err;
+        } },
+
+      { name: "remove_keyframes drops the MIDDLE key by time",
+        tool: "remove_keyframes",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box",
+                   property: "rotation", times: [1] };
+        },
+        check: function (d) {
+          return (d.removed === 1 && d.remaining === 2) ||
+                 "removed " + d.removed + ", remaining " + d.remaining;
+        } },
+
+      { name: "and the two that survived are the OUTER ones",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box",
+                   property: "rotation" };
+        },
+        check: function (d) {
+          var k = d.keys || [];
+          if (d.numKeys !== 2) return "numKeys " + d.numKeys;
+          return (Math.abs(k[0].time - 0) < 0.001 &&
+                  Math.abs(k[1].time - 2) < 0.001) ||
+                 "surviving keys at " + JSON.stringify(k);
+        } },
+
+      { name: "a GROUP is refused by remove_keyframes",
+        tool: "remove_keyframes",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box",
+                   property: "transform" };
+        },
+        check: function (err) {
+          return err.indexOf("GROUP") !== -1 || "err: " + err;
+        } },
+
+      { name: "remove_keyframes with no times clears what is left",
+        tool: "remove_keyframes",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box",
+                   property: "rotation" };
+        },
+        check: function (d) {
+          return (d.removed === 2 && d.remaining === 0) ||
+                 "removed " + d.removed + ", remaining " + d.remaining;
+        } },
+
+      // set_layer_3d, and the two AE facts underneath it. Measured
+      // 2026-08-28: the Transform group hands out the SAME children for a
+      // 2D and a 3D layer — Z Position included — so nothing in the
+      // property tree can tell you whether a layer is 3D. Only
+      // threeDLayer can, which is exactly why the panel never infers
+      // 3D-ness from value.length.
+      { name: "list_properties: a 2D layer already advertises Z Position",
+        tool: "list_properties",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box", path: "transform",
+                   depth: 1 };
+        },
+        check: function (d, ctx) {
+          var paths = [], matches = [];
+          for (var i = 0; i < d.properties.length; i++) {
+            paths.push(d.properties[i].path);
+            matches.push(d.properties[i].matchName);
+          }
+          ctx.cv2dTransform = paths.join("|");
+          ctx.cv2dMatches = matches.join("|");
+          if (paths.join("|").indexOf("transform/Z Position") === -1) {
+            return "no Z Position on the 2D layer: " + paths.join(", ");
+          }
+          // matchName is what the model needs when display names collide.
+          for (i = 0; i < d.properties.length; i++) {
+            if (d.properties[i].path === "transform/Position") {
+              return d.properties[i].matchName === "ADBE Position" ||
+                     "Position matchName " + d.properties[i].matchName;
+            }
+          }
+          return "no Position entry at all";
+        } },
+
+      { name: "set_layer_3d turns the layer 3D",
+        tool: "set_layer_3d",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box", enabled: true };
+        },
+        check: function (d) {
+          return d.threeD === true || "threeD " + d.threeD;
+        } },
+
+      // ...and the sting: the tree holds the same twelve properties with
+      // the same matchNames, but AE RENAMES one of them. "Rotation" on a
+      // 2D layer is "Z Rotation" on a 3D one — same ADBE Rotate Z. So a
+      // display-name path stored before the layer went 3D stops resolving,
+      // while the matchName and the friendly alias never move. Measured
+      // 2026-08-28, after this step first went in asserting (wrongly) that
+      // the two trees were identical and real AE said otherwise.
+      { name: "...same properties, same matchNames, ONE renamed",
+        tool: "list_properties",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box", path: "transform",
+                   depth: 1 };
+        },
+        check: function (d, ctx) {
+          var paths = [], matches = [];
+          for (var i = 0; i < d.properties.length; i++) {
+            paths.push(d.properties[i].path);
+            matches.push(d.properties[i].matchName);
+          }
+          if (matches.join("|") !== ctx.cv2dMatches) {
+            return "the 3D tree holds DIFFERENT properties, not just " +
+                   "different names: " + matches.join(", ");
+          }
+          var was = ctx.cv2dTransform.split("|");
+          var moved = [];
+          for (i = 0; i < paths.length; i++) {
+            if (paths[i] !== was[i]) moved.push(was[i] + " -> " + paths[i]);
+          }
+          return moved.join(", ") ===
+                 "transform/Rotation -> transform/Z Rotation" ||
+                 "expected only Rotation to be renamed, got: " +
+                 (moved.join(", ") || "no renames at all");
+        } },
+
+      // And the asymmetry, measured rather than assumed: a 3D layer
+      // answers to BOTH names — AE keeps the old one working — while a 2D
+      // layer has never heard of "Z Rotation". So a path written while the
+      // layer was 2D survives the switch; one written while it was 3D does
+      // not survive the switch back. The step below the 3D-off proves the
+      // second half.
+      { name: "a 3D layer answers to BOTH rotation names",
+        batch: function (ctx) {
+          return [
+            { tool: "get_property",
+              args: { comp: ctx.cvComp, layer: "ST Cov Box",
+                      property: "transform/Z Rotation" } },
+            { tool: "get_property",
+              args: { comp: ctx.cvComp, layer: "ST Cov Box",
+                      property: "transform/Rotation" } }
+          ];
+        },
+        check: function (rows) {
+          if (!rows[0].ok) return "the NEW name is refused: " + rows[0].error;
+          if (!rows[1].ok) return "the OLD name stopped working: " +
+                                  rows[1].error;
+          return (rows[0].data.matchName === "ADBE Rotate Z" &&
+                  rows[1].data.matchName === "ADBE Rotate Z") ||
+                 "they are not the same property: " +
+                 rows[0].data.matchName + " / " + rows[1].data.matchName;
+        } },
+
+      { name: "...but the friendly alias never moves",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box",
+                   property: "rotation" };
+        },
+        check: function (d) {
+          return d.matchName === "ADBE Rotate Z" ||
+                 "resolved to " + d.matchName;
+        } },
+
+      { name: "Z really writes once the layer is 3D",
+        tool: "set_transform",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box",
+                   property: "anchorPoint", value: [10, 20, -150] };
+        },
+        check: function (d) {
+          var v = d.value || [];
+          return Math.abs(v[2] + 150) < 0.01 ||
+                 "z did not take: " + JSON.stringify(v);
+        } },
+
+      // Pinning a LOSS, deliberately: AE zeroes Z when a layer goes back to
+      // 2D and says nothing. The step exists so that if AE (or the tool)
+      // ever starts preserving it, the suite notices.
+      { name: "turning 3D off SILENTLY discards the Z (AE, not us)",
+        batch: function (ctx) {
+          return [
+            { tool: "set_layer_3d",
+              args: { comp: ctx.cvComp, layer: "ST Cov Box",
+                      enabled: false } },
+            { tool: "get_property",
+              args: { comp: ctx.cvComp, layer: "ST Cov Box",
+                      property: "transform/Anchor Point" } }
+          ];
+        },
+        check: function (rows) {
+          if (!rows[0].ok) return "set_layer_3d failed: " + rows[0].error;
+          if (rows[0].data.threeD !== false) return "still 3D";
+          if (!rows[1].ok) return "read-back failed: " + rows[1].error;
+          var v = rows[1].data.value || [];
+          return Math.abs(v[2]) < 0.01 ||
+                 "AE kept the Z this time: " + JSON.stringify(v);
+        } },
+
+      { name: "back in 2D, the 3D-era name is gone (the asymmetry)",
+        tool: "get_property",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box",
+                   property: "transform/Z Rotation" };
+        },
+        check: function (err) {
+          return err.indexOf("Rotation") !== -1 ||
+                 "the refusal does not list what is there now: " + err;
+        } },
+
+      { name: "list_properties on a LEAF sends you to get_property",
+        tool: "list_properties",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box",
+                   path: "transform/Position" };
+        },
+        check: function (err) {
+          return err.indexOf("get_property") !== -1 || "err: " + err;
+        } },
+
+      // A layer root lists TWO groups both called "Geometry Options"
+      // (ADBE Plane Options Group and ADBE Extrsn Options Group) —
+      // measured on this AE. Display-name paths are therefore not unique,
+      // which is the whole reason every entry carries a matchName.
+      { name: "the layer root's display names really do collide",
+        tool: "list_properties",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box", depth: 1 };
+        },
+        check: function (d) {
+          var seen = {}, dupe = null, matches = {};
+          for (var i = 0; i < d.properties.length; i++) {
+            var p = d.properties[i];
+            if (seen[p.path]) {
+              dupe = p.path;
+              if (matches[p.path] === p.matchName) {
+                return "two entries with the SAME path AND matchName: " +
+                       p.path + " / " + p.matchName;
+              }
+            }
+            seen[p.path] = true;
+            matches[p.path] = p.matchName;
+          }
+          return !!dupe ||
+                 "no colliding display names — if AE stopped shipping two " +
+                 "Geometry Options groups this step can go";
+        } },
+
+      { name: "list_effects filters by name OR category",
+        tool: "list_effects",
+        args: { filter: "blur" },
+        check: function (d, ctx) {
+          if (!d.total) return "no effects matched 'blur'";
+          for (var i = 0; i < d.effects.length; i++) {
+            var e = d.effects[i];
+            var hay = (e.name + " " + e.category).toLowerCase();
+            if (hay.indexOf("blur") === -1) {
+              return "non-matching hit: " + e.name + " / " + e.category;
+            }
+            if (!e.matchName) return "hit with no matchName: " + e.name;
+          }
+          ctx.cvFx = d.effects;
+          return true;
+        } },
+
+      { name: "...and {offset} pages through them exactly",
+        tool: "list_effects",
+        args: { filter: "blur", offset: 3 },
+        check: function (d, ctx) {
+          if (ctx.cvFx.length < 5) return true;   // too few to page
+          return d.effects[0].matchName === ctx.cvFx[3].matchName ||
+                 "offset 3 started at " + d.effects[0].name +
+                 ", expected " + ctx.cvFx[3].name;
+        } },
+
+      { name: "set_comp_setting resizes and re-times the comp",
+        tool: "set_comp_setting",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, width: 800, height: 600, duration: 6,
+                   frameRate: 24, bgColor: [1, 0, 0] };
+        },
+        check: function (d) {
+          if (d.width !== 800 || d.height !== 600) {
+            return "size " + d.width + "x" + d.height;
+          }
+          if (Math.abs(d.frameRate - 24) > 0.001) return "fps " + d.frameRate;
+          return Math.abs(d.duration - 6) < 0.001 ||
+                 "duration " + d.duration;
+        } },
+
+      { name: "and the project agrees the comp really changed",
+        tool: "get_project_info",
+        args: { limit: 0 },
+        check: function (d, ctx) {
+          for (var i = 0; i < d.items.length; i++) {
+            if (d.items[i].name !== ctx.cvComp) continue;
+            var it = d.items[i];
+            return (it.width === 800 && it.height === 600 &&
+                    Math.abs(it.frameRate - 24) < 0.001) ||
+                   "project reports " + it.width + "x" + it.height + " @ " +
+                   it.frameRate;
+          }
+          return "the coverage comp is not in the project listing";
+        } },
+
+      { name: "duplicate_comp copies it, settings and all",
+        tool: "duplicate_comp",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, name: "ST Cov Copy" };
+        },
+        check: function (d, ctx) {
+          ctx.cvCopy = d.name;
+          if (d.name !== "ST Cov Copy") return "named " + d.name;
+          return d.duplicatedFrom === ctx.cvComp ||
+                 "duplicatedFrom " + d.duplicatedFrom;
+        } },
+
+      { name: "rename_item reports the name it replaced",
+        tool: "rename_item",
+        args: function (ctx) { return { item: ctx.cvCopy, name: "ST Cov Kept" }; },
+        check: function (d, ctx) {
+          if (d.oldName !== ctx.cvCopy) return "oldName " + d.oldName;
+          ctx.cvCopy = d.name;
+          return d.name === "ST Cov Kept" || "name " + d.name;
+        } },
+
+      { name: "renaming something that does not exist is refused",
+        tool: "rename_item",
+        expectError: true,
+        args: { item: "ST No Such Item At All", name: "ST Whatever" },
+        check: function (err) {
+          return err.indexOf("not found") !== -1 || "err: " + err;
+        } },
+
+      { name: "move_to_folder files the copy away",
+        batch: function (ctx) {
+          return [
+            { tool: "create_folder", args: { name: "ST Cov Folder" } },
+            { tool: "move_to_folder",
+              args: { items: [ctx.cvCopy], folder: "ST Cov Folder" } }
+          ];
+        },
+        check: function (rows, ctx) {
+          if (!rows[0].ok) return "folder: " + rows[0].error;
+          if (!rows[1].ok) return "move: " + rows[1].error;
+          return rows[1].data.moved.join(",") === ctx.cvCopy ||
+                 "moved " + rows[1].data.moved.join(", ");
+        } },
+
+      { name: "and the project shows it inside that folder",
+        tool: "get_project_info",
+        args: { limit: 0 },
+        check: function (d, ctx) {
+          for (var i = 0; i < d.items.length; i++) {
+            if (d.items[i].name !== ctx.cvCopy) continue;
+            return d.items[i].folder === "ST Cov Folder" ||
+                   "folder is " + (d.items[i].folder || "(root)");
+          }
+          return "the copy is not in the project listing";
+        } },
+
+      { name: "a missing folder is refused with the folders that exist",
+        tool: "move_to_folder",
+        expectError: true,
+        args: function (ctx) {
+          return { items: [ctx.cvCopy], folder: "ST No Such Folder" };
+        },
+        check: function (err) {
+          if (err.indexOf("ST Cov Folder") === -1) {
+            return "does not list the real folders: " + err;
+          }
+          return err.indexOf("create_folder") !== -1 ||
+                 "no route out of the refusal: " + err;
+        } },
+
+      { name: "cleanup: delete the coverage copy",
+        tool: "delete_item",
+        args: function (ctx) { return { item: ctx.cvCopy }; },
+        check: function () { return true; } },
+
+      { name: "cleanup: delete the coverage folder",
+        tool: "delete_item",
+        args: { item: "ST Cov Folder" },
+        check: function () { return true; } },
+
+      { name: "cleanup: delete the coverage comp",
+        tool: "delete_item",
+        args: function (ctx) { return { item: ctx.cvComp }; },
         check: function () { return true; } },
 
       // ---- comp-rename audit + bulk rename. A three-comp rig: one

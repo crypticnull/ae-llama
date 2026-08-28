@@ -280,12 +280,30 @@ at item 3, 4 or 5.**
   set_solid_color {layer(s), color, makeUnique?: bool} with the shared-
   source consequence stated in the result either way.
 
-## 3. Extend selftest.js coverage
+## 3. Extend selftest.js coverage — FIRST SWEEP DONE 2026-08-28 (0.9.24)
 
 Every verified behavior from (2) becomes a permanent step in
 `extension/js/selftest.js` (both the panel button and the harness pick
 it up automatically). Keep results compact; steps must clean up after
 themselves inside the scratch comp.
+
+The sweep against the computed gap list in `docs/CAPABILITIES.md` ran on
+2026-08-28: 214 steps -> 260. Light keyframes closed the gap that shipped
+with `add_light`, and a coverage rig gave `add_control`, `add_keyframe`,
+`remove_keyframes`, `set_layer_3d`, `apply_expression_preset`,
+`list_properties`, `list_effects`, `set_comp_setting`, `duplicate_comp`,
+`rename_item` and `move_to_folder` their first real-AE steps.
+
+FOUR tools are still uncovered and each is deliberate, not pending:
+
+- `add_marker`, `precompose` — item 5.4 owns them (probe first).
+- `add_to_render_queue` — item 5.5; it writes to the user's render queue.
+- `import_file` — item 5.8; it needs a file on disk.
+- `organize_project` — **cannot be suite-tested at all.** It files every
+  LOOSE item at the project ROOT, and the suite runs inside whatever
+  project the user has open. Any step for it would reorganize the user's
+  project. If it is ever to be covered it needs a `dryRun` argument
+  first; that is a design call for the remote session.
 
 ## 4. Field-quality passes
 
@@ -334,6 +352,15 @@ themselves inside the scratch comp.
 - Performance: 200-layer comps — measure grid_layout and batch
   keyframe wall time; note anything over ~5s so the remote session can
   optimize.
+- **`set_layer_3d` loses the Z in silence.** Measured 2026-08-28: turning
+  a 3D layer back to 2D zeroes the Z component of Position and Anchor
+  Point (and the 3D-only rotations go with it), and the tool reports a
+  plain `{threeD: false}`. A suite step pins the loss. This project's
+  rule is that nothing disappears quietly, so the tool should report what
+  the switch discarded — the same shape as `scale_comp`'s
+  `layersSkipped`. Small: read the 3D-only values before the write,
+  compare, and name the non-zero ones in the result. Do NOT refuse and do
+  NOT restore them — the user asked for 2D.
 
 ## 5. Feature track — probe, build, lock in (NO version bumps here)
 
