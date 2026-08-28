@@ -1,8 +1,8 @@
 {
-  "panelVersion": "0.9.25",
+  "panelVersion": "0.9.26",
   "panelUrl": "https://aescripts.com/",
-  "panelPackageUrl": "https://raw.githubusercontent.com/crypticnull/ae-llama-updates/main/AE-Llama.zxp?v=0.9.25",
-  "notes": "AE Llama 0.9.25",
+  "panelPackageUrl": "https://raw.githubusercontent.com/crypticnull/ae-llama-updates/main/AE-Llama.zxp?v=0.9.26",
+  "notes": "AE Llama 0.9.26",
   "llamaTag": "latest",
   "modelCatalog": [
     {
