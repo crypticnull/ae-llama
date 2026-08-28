@@ -4401,11 +4401,112 @@ AELL_TOOLS.add_marker = function (args) {
   return AELL_okay({ marker: where, time: args.time });
 };
 
+/* What a 3D -> 2D switch throws away. Measured in AE 2026 (probe in
+ * WORKPLAN-LOG 2026-08-28): Position Z and Anchor Point Z are zeroed,
+ * Scale Z snaps back to 100, and Orientation / X Rotation / Y Rotation
+ * are cleared. Z Rotation survives (it is just renamed back to
+ * "Rotation"). Keyframes survive too, but their doomed components are
+ * flattened with them, and turning 3D back ON does NOT restore any of
+ * it. Rows are [matchName, label, zOnly, valueAEKeeps]; zOnly true means
+ * only the third component dies, false means the whole value does. */
+var AELL_3D_ONLY = [
+  ["ADBE Position",     "Position",     true,    0],
+  ["ADBE Anchor Point", "Anchor Point", true,    0],
+  ["ADBE Scale",        "Scale",        true,  100],
+  ["ADBE Orientation",  "Orientation",  false,   0],
+  ["ADBE Rotate X",     "X Rotation",   false,   0],
+  ["ADBE Rotate Y",     "Y Rotation",   false,   0]
+];
+
+/* One property's share of that loss, described, or "" when it has
+ * nothing to lose. Keyframed properties are inspected key by key: a
+ * layer whose Z is 0 at the current time but 500 at the next keyframe
+ * loses just as much, and reading only the static value would miss it. */
+function AELL_3dLossFor(prop, label, zOnly, keep) {
+  function doomed(val) {
+    var arr = (typeof val === "number") ? [val] : val;
+    var hit = [], i;
+    if (zOnly) {
+      if (arr.length > 2 && arr[2] !== keep) {
+        hit.push(Math.round(arr[2] * 100) / 100);
+      }
+    } else {
+      for (i = 0; i < arr.length; i++) {
+        if (arr[i] !== keep) hit.push(Math.round(arr[i] * 100) / 100);
+      }
+    }
+    return hit;
+  }
+  var name = label + (zOnly ? " Z" : "");
+  var hit, i, j;
+  // Keyframes come FIRST even when an expression is also on the property.
+  // The expression only decides what renders; the keyframe values are the
+  // stored data AE flattens, and they are the concrete thing to name. Read
+  // the other way round, a wiggle on Position reports its own noise as the
+  // loss and never mentions the 500 sitting on the next key.
+  if (prop.numKeys > 0) {
+    var keys = 0, worst = null;
+    for (i = 1; i <= prop.numKeys; i++) {
+      hit = doomed(prop.keyValue(i));
+      if (!hit.length) continue;
+      keys++;
+      for (j = 0; j < hit.length; j++) {
+        if (worst === null || Math.abs(hit[j]) > Math.abs(worst)) {
+          worst = hit[j];
+        }
+      }
+    }
+    if (!keys) return "";
+    return name + " on " + keys + " of " + prop.numKeys +
+           " keyframes (largest " + worst + ")";
+  }
+  if (prop.expressionEnabled) {
+    // The expression itself survives the switch; the third dimension it
+    // was writing into does not, so what it evaluates to today is the
+    // only honest number available for the loss.
+    hit = doomed(prop.value);
+    if (!hit.length) return "";
+    return name + " (expression-driven, currently " + hit.join(",") + ")";
+  }
+  hit = doomed(prop.value);
+  if (!hit.length) return "";
+  return name + " " + hit.join(",");
+}
+
+function AELL_3dOnlyLoss(layer) {
+  var lost = [], i, row, prop, desc, group;
+  try { group = layer.property("ADBE Transform Group"); } catch (eG) { return lost; }
+  if (!group) return lost;
+  for (i = 0; i < AELL_3D_ONLY.length; i++) {
+    row = AELL_3D_ONLY[i];
+    prop = null;
+    try { prop = group.property(row[0]); } catch (eP) { prop = null; }
+    if (!prop) continue;
+    desc = "";
+    try { desc = AELL_3dLossFor(prop, row[1], row[2], row[3]); }
+    catch (eD) { desc = ""; }
+    if (desc) lost.push(desc);
+  }
+  return lost;
+}
+
 AELL_TOOLS.set_layer_3d = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var layer = AELL_resolveLayer(comp, args.layer);
-  layer.threeDLayer = !!args.enabled;
-  return AELL_okay({ layer: layer.name, threeD: layer.threeDLayer });
+  var want = !!args.enabled;
+  // Read BEFORE the write: afterwards the values are already gone, and
+  // AE reports nothing about having taken them. The user asked for 2D,
+  // so this neither refuses nor restores -- it only refuses to let the
+  // loss happen in silence.
+  var lost = (layer.threeDLayer && !want) ? AELL_3dOnlyLoss(layer) : [];
+  layer.threeDLayer = want;
+  var out = { layer: layer.name, threeD: layer.threeDLayer };
+  if (lost.length) {
+    out.discarded = lost;
+    out.note = "Going 2D cleared these 3D-only values and turning 3D " +
+      "back on does NOT restore them: " + lost.join("; ");
+  }
+  return AELL_okay(out);
 };
 
 AELL_TOOLS.set_layer_parent = function (args) {

@@ -18,7 +18,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 |---|---|---|---|---|---|
 | `add_camera` | Add a camera | yes | host | — | 3 |
 | `add_control` | Add a named expression control (Slider/Angle/Checkbox/Color/Point Control effect) to a layer — usually a null | yes | host | 1 | 4 |
-| `add_keyframe` | Add a keyframe on a layer property at a time (seconds) | yes | host | 1 | 8 |
+| `add_keyframe` | Add a keyframe on a layer property at a time (seconds) | yes | host | 1 | 10 |
 | `add_light` | Add a light | yes | host | 1 | 9 |
 | `add_marker` | Add a marker to the comp (omit 'layer') or to a layer | yes | host | — | — |
 | `add_mask` | Add a mask to a layer | yes | host | 1 | 3 |
@@ -64,12 +64,12 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `set_effect_param` | Set a parameter on an effect already applied to a layer | yes | host | — | 1 |
 | `set_expression` | LAST RESORT: set a raw expression (or clear with '') | yes | host | 1 | 9 |
 | `set_keyframes` | Set the SAME keyframes on MANY layers in ONE call | yes | host | 1 | 6 |
-| `set_layer_3d` | Enable/disable a layer's 3D switch | yes | host | 1 | 2 |
+| `set_layer_3d` | Enable/disable a layer's 3D switch | yes | host | 1 | 3 |
 | `set_layer_parent` | Parent layers to another layer (omit/null parent to unparent) | yes | host | 1 | 3 |
 | `set_layer_timing` | Set layer inPoint/outPoint/startTime (seconds) | yes | host | — | 2 |
 | `set_mask` | Edit an EXISTING mask: mode, feather, expansion, opacity, inverted, rename | yes | host | 1 | 1 |
 | `set_mask_path` | Replace or ANIMATE a mask's path | yes | host | 1 | 7 |
-| `set_property` | Set ANY property by path — the universal fallback when no dedicated tool fits | yes | host | 2 | 2 |
+| `set_property` | Set ANY property by path — the universal fallback when no dedicated tool fits | yes | host | 2 | 3 |
 | `set_solid_color` | Change a SOLID layer's colour (this is the ONLY way — a solid's colour is not a property you can set_property) | yes | host | 1 | 4 |
 | `set_text_style` | Restyle an existing text layer (any subset of fields) | yes | host | 1 | 2 |
 | `set_track_matte` | Use one layer as another's track matte (alpha or luma, optionally inverted), or remove it with mode 'none' | yes | host | 1 | 1 |
@@ -162,9 +162,12 @@ Queued (see WORKPLAN for owners/order):
   `organize_project` cannot be suite-tested at all, because it files
   every LOOSE item at the project root and the suite runs inside
   whatever project the user has open.
-- `set_layer_3d` turning a layer back to 2D discards its Z silently (AE's
-  behaviour, pinned by a suite step). A warning naming what was lost is
-  queued under WORKPLAN item 4.
+- `set_layer_3d` turning a layer back to 2D still destroys the 3D-only
+  values — AE zeroes Position/Anchor Point Z, resets Scale Z to 100 and
+  clears Orientation and X/Y Rotation, keyframes included, and turning 3D
+  back on does not restore them. Since 0.9.25 the tool no longer lets
+  that happen in silence: it names what it took in `discarded`. It still
+  does not refuse and does not restore — the user asked for 2D.
 - Feature track not yet built: text animators, repeaters, preset
   library, precompose/markers, render queue, project hygiene,
   audio-to-keyframes, frame round-trip, .mogrt export, whisper

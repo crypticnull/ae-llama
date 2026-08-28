@@ -144,6 +144,17 @@ const cvKeys = {};       // "layer/prop"  -> [{time, value}]
 const cvExpr = {};       // "layer/prop"  -> expression
 const cvThreeD = {};     // layer -> bool
 const cvAnchor = {};     // layer -> [x, y, z]
+const cvXRot = {};       // layer -> deg (3D-only, cleared by going 2D)
+// Every run of the suite starts on a FRESH scratch comp in real AE, so
+// the canned rig has to be wiped between runs here too. Not cosmetic:
+// the Position keyframes the discard-report steps leave behind made the
+// NEXT run's expression read answer with a key list instead.
+const resetCoverRig = () => {
+  const stores = [cvControls, cvKeys, cvExpr, cvThreeD, cvAnchor, cvXRot];
+  for (const store of stores) {
+    for (const k of Object.keys(store)) delete store[k];
+  }
+};
 const cvProp = (p) => String(p || "").toLowerCase()
   .replace(/^transform\//, "").replace(/\s+/g, "");
 const cvKeyList = (layer, prop) => {
@@ -1279,13 +1290,50 @@ function cannedOk(tool, args) {
       return { layer: args.layer, property: args.property, preset: p,
                expression: expr };
     }
+    case "set_property": {
+      // Only what the coverage rig asks of it: a 3D-only rotation, so the
+      // discard report below has something real to find.
+      if (cvProp(args && args.property) === "xrotation") {
+        cvXRot[args.layer] = args.value;
+      }
+      return { layer: args && args.layer, property: args && args.property,
+               value: args && args.value };
+    }
     case "set_layer_3d": {
       const L = (args && args.layer) || "";
-      cvThreeD[L] = !!(args && args.enabled);
-      // Going back to 2D discards the Z. AE says nothing about it, so
-      // neither does this.
-      if (!cvThreeD[L] && cvAnchor[L]) cvAnchor[L][2] = 0;
-      return { layer: L, threeD: cvThreeD[L] };
+      const want = !!(args && args.enabled);
+      // Going back to 2D discards the Z of Position and Anchor Point,
+      // resets Scale Z to 100 and clears Orientation and X/Y Rotation --
+      // keyframes included -- and never restores them. AE says nothing;
+      // the host reads the doomed values BEFORE the write and names them.
+      const lost = [];
+      const pk = cvKeys[L + "/position"] || [];
+      if (cvThreeD[L] && !want) {
+        let hits = 0, worst = null;
+        for (const k of pk) {
+          const z = Array.isArray(k.value) ? k.value[2] : undefined;
+          if (typeof z !== "number" || z === 0) continue;
+          hits++;
+          if (worst === null || Math.abs(z) > Math.abs(worst)) worst = z;
+        }
+        if (hits) {
+          lost.push("Position Z on " + hits + " of " + pk.length +
+                    " keyframes (largest " + worst + ")");
+        }
+        if (cvAnchor[L] && cvAnchor[L][2]) {
+          lost.push("Anchor Point Z " + cvAnchor[L][2]);
+        }
+        if (cvXRot[L]) lost.push("X Rotation " + cvXRot[L]);
+      }
+      cvThreeD[L] = want;
+      if (!want) {
+        if (cvAnchor[L]) cvAnchor[L][2] = 0;
+        cvXRot[L] = 0;
+        for (const k of pk) if (Array.isArray(k.value)) k.value[2] = 0;
+      }
+      const out = { layer: L, threeD: cvThreeD[L] };
+      if (lost.length) out.discarded = lost;
+      return out;
     }
     case "list_properties": {
       const P = String((args && args.path) || "");
@@ -1461,7 +1509,7 @@ SelfTest.run({
     ordStack = [];
     maskKeys = {};
     batchLayers = 0; batchFx = {}; batchBlur = null;
-    batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {};
+    batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig();
     SelfTest.run({
       callHostTool(tool, args, cb) {
         if (tool === "grid_layout") {
@@ -1491,7 +1539,7 @@ SelfTest.run({
         ordStack = [];
         maskKeys = {};
         batchLayers = 0; batchFx = {}; batchBlur = null;
-        batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {};
+        batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig();
         SelfTest.run({
           callHostTool(tool, args, cb) {
             // Never refuse anything -- the old permissive host.

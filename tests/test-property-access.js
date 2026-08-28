@@ -51,6 +51,9 @@ function Prop(name, matchName, value) {
 Object.defineProperty(Prop.prototype, "value", {
   get() { return this._value; }
 });
+Object.defineProperty(Prop.prototype, "expressionEnabled", {
+  get() { return this.expression !== ""; }
+});
 Prop.prototype.setValue = function (v) { this._value = v; };
 Prop.prototype.setValueAtTime = function (t, v) {
   const hit = this._keys.find(k => Math.abs(k.time - t) < 1e-9);
@@ -73,11 +76,14 @@ function Layer(name, comp) {
   this.inPoint = 0;
   this._root = new PGroup("(layer)", "(layer)");
   const t = new PGroup("Transform", "ADBE Transform Group");
-  t.add(new Prop("Position", "ADBE Position", [100, 100]));
-  t.add(new Prop("Scale", "ADBE Scale", [100, 100]));
+  // Padded to three components even on a 2D layer: that is what the
+  // SCRIPTING API hands back (the EXPRESSION engine sees two), and the
+  // stub says so because half the 3D-only bugs live in that third slot.
+  t.add(new Prop("Position", "ADBE Position", [100, 100, 0]));
+  t.add(new Prop("Scale", "ADBE Scale", [100, 100, 100]));
   t.add(new Prop("Rotation", "ADBE Rotate Z", 0));
   t.add(new Prop("Opacity", "ADBE Opacity", 100));
-  t.add(new Prop("Anchor Point", "ADBE Anchor Point", [0, 0]));
+  t.add(new Prop("Anchor Point", "ADBE Anchor Point", [0, 0, 0]));
   // Measured in AE 2026 (WORKPLAN-LOG 2026-08-28): a 2D layer's Transform
   // group already carries Z Position, Orientation and both extra
   // rotations. The tree holds the same twelve properties whatever
@@ -117,6 +123,32 @@ Object.defineProperty(Layer.prototype, "threeDLayer", {
     if (!rz) return;
     rz.name = this._3d ? "Z Rotation" : "Rotation";
     rz._aliases = this._3d ? ["Rotation"] : [];
+    if (this._3d) return;
+    // Going back to 2D is DESTRUCTIVE, and AE reports none of it: the Z
+    // of Position and Anchor Point is zeroed, Scale Z snaps back to 100
+    // and Orientation / X Rotation / Y Rotation are cleared -- keyframe
+    // values included -- and turning 3D on again does not restore them.
+    // Measured in AE 2026 (WORKPLAN-LOG 2026-08-28); Z Rotation is the
+    // one that survives.
+    const flatten = (mn, zOnly, keep) => {
+      const p = t.property(mn);
+      if (!p) return;
+      const hit = (v) => {
+        if (typeof v === "number") return zOnly ? v : keep;
+        const out = v.slice();
+        if (zOnly) { if (out.length > 2) out[2] = keep; }
+        else { for (let i = 0; i < out.length; i++) out[i] = keep; }
+        return out;
+      };
+      p._value = hit(p._value);
+      for (const k of p._keys) k.value = hit(k.value);
+    };
+    flatten("ADBE Position", true, 0);
+    flatten("ADBE Anchor Point", true, 0);
+    flatten("ADBE Scale", true, 100);
+    flatten("ADBE Orientation", false, 0);
+    flatten("ADBE Rotate X", false, 0);
+    flatten("ADBE Rotate Y", false, 0);
   }
 });
 Object.defineProperty(Layer.prototype, "index", {
@@ -227,7 +259,7 @@ assert(paths.includes("Transform/Position") &&
        "tree includes Transform/Position and Effects/Gaussian Blur");
 const posEntry = r.data.properties.find(p => p.path === "Transform/Position");
 assert(posEntry.kind === "prop" && posEntry.matchName === "ADBE Position" &&
-       JSON.stringify(posEntry.value) === "[100,100]",
+       JSON.stringify(posEntry.value) === "[100,100,0]",
        "Position entry carries kind/matchName/value");
 
 // 2. narrowing by path + grounded error on a bad segment
@@ -490,9 +522,70 @@ assert(r.ok && r.data.matchName === "ADBE Rotate Z",
 r = call("get_property", { layer: "A", property: "rotation" });
 assert(r.ok && r.data.matchName === "ADBE Rotate Z",
        "the friendly alias lands on ADBE Rotate Z: " + (r.error || ""));
+// Turning 3D back off throws values away and AE says nothing about it.
+// The tool reads them BEFORE the write and names what it is losing: a
+// static Z, a Z that only exists on a KEYFRAME (a layer sitting at Z 0
+// right now can still animate to 500), and the 3D-only rotations. It
+// does not refuse and does not restore -- the user asked for 2D.
+const aT = A.property("ADBE Transform Group");
+aT.property("ADBE Anchor Point").setValue([10, 20, -150]);
+aT.property("ADBE Orientation").setValue([0, 0, 33]);
+aT.property("ADBE Rotate X").setValue(44);
+aT.property("ADBE Position").setValueAtTime(0, [100, 100, 0]);
+aT.property("ADBE Position").setValueAtTime(1, [100, 100, 500]);
+// ...with an expression on Position too, which is the ordering trap real
+// AE caught: a rigged layer evaluates to wiggle noise, so an
+// expression-before-keyframes read reports that noise as the loss and
+// never mentions the 500 waiting on the next key.
+aT.property("ADBE Position").expression = "wiggle(2, 20)";
 r = call("set_layer_3d", { layer: "A", enabled: false });
+aT.property("ADBE Position").expression = "";
 assert(r.ok && r.data.threeD === false && A.threeDLayer === false,
        "and back off again");
+assert(r.data.discarded &&
+       r.data.discarded.join("; ") ===
+         "Position Z on 1 of 2 keyframes (largest 500); " +
+         "Anchor Point Z -150; Orientation 33; X Rotation 44",
+       "the switch names every 3D-only value it discarded: " +
+       ((r.data.discarded || ["(nothing)"]).join("; ")));
+assert(aT.property("ADBE Anchor Point").value[2] === 0 &&
+       aT.property("ADBE Position").keyValue(2)[2] === 0 &&
+       aT.property("ADBE Rotate X").value === 0,
+       "and the loss is real, keyframes included");
+r = call("set_layer_3d", { layer: "A", enabled: true });
+assert(r.ok && !r.data.discarded,
+       "turning 3D back ON discards nothing (and restores nothing)");
+assert(aT.property("ADBE Anchor Point").value[2] === 0,
+       "the Z really is gone for good, not stashed by AE");
+r = call("set_layer_3d", { layer: "A", enabled: false });
+assert(r.ok && !r.data.discarded,
+       "a switch with nothing left to lose reports no loss: " +
+       ((r.data.discarded || []).join("; ")));
+// Scale is the odd one: AE resets its Z to 100, not to 0, so 100 is
+// what "nothing lost" looks like there.
+A.threeDLayer = true;
+aT.property("ADBE Scale").setValue([50, 60, 70]);
+r = call("set_layer_3d", { layer: "A", enabled: false });
+assert(r.ok && r.data.discarded &&
+       r.data.discarded.join("; ") === "Scale Z 70",
+       "Scale Z counts as lost against 100, not 0: " +
+       ((r.data.discarded || ["(nothing)"]).join("; ")));
+assert(aT.property("ADBE Scale").value[2] === 100,
+       "and AE parks Scale Z back at 100");
+// An expression-driven Z is a loss too -- the expression survives the
+// switch, the third dimension it was writing into does not.
+A.threeDLayer = true;
+aT.property("ADBE Position").removeKey(2);
+aT.property("ADBE Position").removeKey(1);
+aT.property("ADBE Position").setValue([100, 100, 250]);
+aT.property("ADBE Position").expression = "value";
+r = call("set_layer_3d", { layer: "A", enabled: false });
+aT.property("ADBE Position").expression = "";
+assert(r.ok && r.data.discarded &&
+       r.data.discarded[0] ===
+         "Position Z (expression-driven, currently 250)",
+       "an expression-driven Z is reported as one: " +
+       ((r.data.discarded || ["(nothing)"]).join("; ")));
 // The other direction is where it bites: "Z Rotation" is not a name a 2D
 // layer has ever had, so a path written while it was 3D now refuses --
 // grounded, listing what the tree really holds.

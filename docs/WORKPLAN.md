@@ -352,6 +352,17 @@ FOUR tools are still uncovered and each is deliberate, not pending:
 - Performance: 200-layer comps — measure grid_layout and batch
   keyframe wall time; note anything over ~5s so the remote session can
   optimize.
+- ~~**`set_layer_3d` loses the Z in silence.**~~ DONE 2026-08-28 (0.9.25).
+  A second probe measured the FULL loss (Scale Z resets to 100 rather
+  than zeroing, Orientation and X/Y Rotation clear, keyframe values are
+  flattened in place, and turning 3D back on restores nothing), and the
+  tool now reads those values before the write and returns them in
+  `discarded`. It still does not refuse and does not restore. Three suite
+  steps and the stubbed tests cover it, including the ordering trap real
+  AE caught: keyframes are read BEFORE an expression, or a wiggled
+  Position reports its own noise instead of the Z on the next key.
+  Original text below.
+
 - **`set_layer_3d` loses the Z in silence.** Measured 2026-08-28: turning
   a 3D layer back to 2D zeroes the Z component of Position and Anchor
   Point (and the 3D-only rotations go with it), and the tool reports a

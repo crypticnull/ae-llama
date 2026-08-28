@@ -3200,3 +3200,84 @@ here. But `extension/js/selftest.js` ships, and the panel's Settings ->
 
 **Harness: 260/260 PASSED.** Stubbed suite: all green, capability doc
 regenerated. Nothing blocked.
+
+## 2026-08-28 (local, fifth pass) — item 4: the 3D switch stops taking things quietly (0.9.25)
+
+Harness was green on arrival (260/260), so the pass took the one item 4
+bullet that was still open and specified: **`set_layer_3d` loses the Z in
+silence.**
+
+### The probe, because the workplan's sketch was only half the loss
+
+A temp `.jsx` set every 3D-only value on a real layer, flipped it to 2D
+and read everything back. The workplan said "Z of Position and Anchor
+Point, and the 3D-only rotations go with it". Two of the five answers
+were not what that implies:
+
+- **Scale Z resets to 100, not to 0.** So "did this die?" is a different
+  question per property, and a report that tested everything against zero
+  would silently ignore a Scale Z of 70 and wrongly announce a loss for a
+  Scale Z of 0.
+- **Keyframes survive the switch, but their doomed components are
+  flattened in place.** A layer sitting at Z 0 right now can still
+  animate to 500 on its next key, and it loses exactly as much. Reading
+  only the static value calls that lossless.
+
+Also measured, and all of it confirms the existing steps rather than
+changing them: Z Rotation survives (renamed back to "Rotation"),
+Orientation / X Rotation / Y Rotation clear to 0, Material Options exists
+on a 2D layer too (17 children either way, so nothing to report there),
+and turning 3D back ON restores **nothing** — the values are gone, not
+stashed.
+
+### The fix
+
+`AELL_3D_ONLY` is the measured table — `[matchName, label, zOnly,
+valueAEKeeps]` — and `set_layer_3d` walks it BEFORE the write, because
+afterwards there is nothing left to read. What it finds comes back as
+`discarded`, the same shape as `scale_comp`'s `layersSkipped`, plus a
+note saying the switch back does not undo it. It does **not** refuse and
+does **not** restore: the user asked for 2D. A 2D layer switched to 2D
+again reports nothing, and so does every 2D -> 3D call.
+
+### The ordering trap, caught by the harness and not by the probe
+
+The first version read `expressionEnabled` before `numKeys`. Real AE
+failed the new step: `ST Cov Box` still carries the coverage rig's wiggle
+on Position, so the report named the wiggle's own noise —
+`Position Z (expression-driven, currently -27.26)` — and never mentioned
+the 500 sitting on the next keyframe. Keyframes are now read first: the
+expression decides what renders, the keyframe values are the stored data
+AE flattens, and those are the concrete thing to name. The
+expression wording survives for the no-keyframes case, where it is the
+only honest number available.
+
+### Covered without AE, at both levels
+
+- **`tests/test-property-access.js`** (real hostscript, stubbed AE): the
+  stub's Transform values are now PADDED to three components like the
+  real scripting API, its `threeDLayer` setter performs the measured
+  flatten (values and keyframes, Scale against 100), and `Prop` grew a
+  real `expressionEnabled`. New assertions cover the four-way report,
+  keyframes-beat-expression, Scale Z counted against 100, the
+  expression-only wording, "turning 3D back on restores nothing", and two
+  no-op switches that must claim no loss.
+- **`tests/test-self-test.js`**: the canned host models the discard
+  report and a `set_property` for X Rotation. It also needed
+  `resetCoverRig()` — the suite gets a FRESH scratch comp on every real
+  run, but the canned stores persisted between the three in-process runs,
+  and the Position keyframes left by the new steps made the NEXT run's
+  expression read answer with a key list. That was stub state leaking,
+  not a product bug, but it would have hidden real ones.
+
+### Bumped to 0.9.25
+
+A fix to shipped behaviour of an existing tool, verified in real AE —
+exactly the patch case. `tools.js` documents the destruction and the
+`discarded` field so the model can warn before it flips the switch, and
+the CAPABILITIES gap entry is now a description of the behaviour instead
+of a queued warning.
+
+**Harness: 262/262 PASSED** (260 -> 262: three steps added, one silent
+-loss step rewritten into a receipt check). Stubbed suite: all green,
+capability doc regenerated. Nothing blocked.

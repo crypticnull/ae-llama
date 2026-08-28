@@ -2959,10 +2959,46 @@
                  "z did not take: " + JSON.stringify(v);
         } },
 
-      // Pinning a LOSS, deliberately: AE zeroes Z when a layer goes back to
-      // 2D and says nothing. The step exists so that if AE (or the tool)
-      // ever starts preserving it, the suite notices.
-      { name: "turning 3D off SILENTLY discards the Z (AE, not us)",
+      // The 3D switch is destructive on the way back, so the next two
+      // steps arm every kind of value it takes and then read the receipt.
+      // Anchor Point Z is already -150 from the step above; this adds a
+      // 3D-only rotation and a KEYFRAMED Z, because a layer whose Z is 0
+      // at the current time but 500 at the next keyframe loses just as
+      // much, and a tool that only looked at the static value would call
+      // that lossless. Position here also still carries the rig's wiggle
+      // expression, which is the case that broke the first version of
+      // this: read expression-before-keyframes, the report named the
+      // wiggle's own noise and never mentioned the 500.
+      { name: "arm the 3D-only values the switch will take",
+        batch: function (ctx) {
+          return [
+            { tool: "set_property",
+              args: { comp: ctx.cvComp, layer: "ST Cov Box",
+                      property: "transform/X Rotation", value: 44 } },
+            { tool: "add_keyframe",
+              args: { comp: ctx.cvComp, layer: "ST Cov Box",
+                      property: "transform/Position", time: 0,
+                      value: [100, 100, 0] } },
+            { tool: "add_keyframe",
+              args: { comp: ctx.cvComp, layer: "ST Cov Box",
+                      property: "transform/Position", time: 1,
+                      value: [100, 100, 500] } }
+          ];
+        },
+        check: function (rows) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "step " + i + ": " + rows[i].error;
+          }
+          return true;
+        } },
+
+      // Pinning a LOSS and its receipt. AE zeroes Position/Anchor Point Z,
+      // resets Scale Z to 100 and clears Orientation and X/Y Rotation on
+      // the way to 2D, keyframes included, and turning 3D back on does NOT
+      // bring them back (measured 2026-08-28). The loss is AE's and the
+      // user asked for it, so the tool neither refuses nor restores — but
+      // nothing in this project disappears quietly, so it reports.
+      { name: "turning 3D off reports the Z it discarded",
         batch: function (ctx) {
           return [
             { tool: "set_layer_3d",
@@ -2976,10 +3012,29 @@
         check: function (rows) {
           if (!rows[0].ok) return "set_layer_3d failed: " + rows[0].error;
           if (rows[0].data.threeD !== false) return "still 3D";
+          var lost = rows[0].data.discarded;
+          if (!lost || !lost.length) return "the loss went unreported";
+          var text = lost.join("; ");
+          if (text !== "Position Z on 1 of 2 keyframes (largest 500); " +
+                       "Anchor Point Z -150; X Rotation 44") {
+            return "unexpected discard report: " + text;
+          }
           if (!rows[1].ok) return "read-back failed: " + rows[1].error;
+          // ...and the loss is real, not just reported.
           var v = rows[1].data.value || [];
           return Math.abs(v[2]) < 0.01 ||
                  "AE kept the Z this time: " + JSON.stringify(v);
+        } },
+
+      { name: "...and a layer that was already 2D discards nothing",
+        tool: "set_layer_3d",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box", enabled: false };
+        },
+        check: function (d) {
+          if (d.threeD !== false) return "threeD " + d.threeD;
+          return !d.discarded ||
+                 "a no-op switch claimed a loss: " + d.discarded.join("; ");
         } },
 
       { name: "back in 2D, the 3D-era name is gone (the asymmetry)",

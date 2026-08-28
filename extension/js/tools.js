@@ -307,7 +307,11 @@
       desc: "Add a marker to the comp (omit 'layer') or to a layer.",
       args: "{comp?: string, layer?: name|index, time: seconds, comment?: string, duration?: seconds}" },
     { name: "set_layer_3d", mutating: true,
-      desc: "Enable/disable a layer's 3D switch.",
+      desc: "Enable/disable a layer's 3D switch. Turning 3D OFF is " +
+            "destructive: AE zeroes Position/Anchor Point Z, resets " +
+            "Scale Z to 100 and clears Orientation and X/Y Rotation " +
+            "(keyframes included), and turning 3D back on does not " +
+            "restore them. Whatever was lost comes back in `discarded`.",
       args: "{comp?: string, layer: name|index, enabled: bool}" },
     { name: "set_layer_parent", mutating: true,
       desc: "Parent layers to another layer (omit/null parent to " +
