@@ -456,11 +456,31 @@ learned the hard way:
   (tests/test-capability-doc.js fails CI if you forget). Its computed
   coverage-gap lists are also the ready-made queue for item 3.
 
-### 5.1 Text animators
-Probe: the property tree under "ADBE Text Animators" — add an animator,
-an "ADBE Text Selectors" range selector, and animator properties
-(position/opacity/rotation/scale at least); verify Start/End/Offset
-percent paths and per-character-3D requirements. Build:
+### 5.1 Text animators — DONE 2026-08-28
+Probed, built and covered in one pass. `add_text_animator` adds the
+animator, activates every property named and configures the selector
+(range/wiggly/expression/none), then reports the exact paths so the
+EXISTING set_keyframes drives the selector — measured first, which is why
+no keyframing was built into the tool. Eight AE facts made the design,
+all in the log: an animator ships with all 103 properties present and
+HIDDEN (addProperty un-hides), `canSetExpression` is the only flag that
+tells added from dormant, adding a sibling animator invalidates every
+reference into the earlier ones, AE lets two animators share a name and
+answers a lookup with the first, percent selectors run -100..100, both
+the percent and index triples exist at once and a name lookup always
+finds percent, per-character 3D is a LAYER switch that drags threeDLayer
+on and never gives it back, and "ADBE Text Rotation" IS the Z rotation.
+The dormant-slot discovery also fixed shipped behavior: set_property /
+set_keyframes / get_property / list_properties no longer leak AE's raw
+"property or a parent property is hidden" for the hundred slots the
+0.9.27 deep search can reach. 63 stub checks, 24 suite steps, harness
+307 -> 331. Macros ("typewriter"/"cascade") stay PROMPT recipes as
+planned; no version bump (feature track).
+
+Original text: Probe: the property tree under "ADBE Text Animators" — add
+an animator, an "ADBE Text Selectors" range selector, and animator
+properties (position/opacity/rotation/scale at least); verify
+Start/End/Offset percent paths and per-character-3D requirements. Build:
 `add_text_animator` (generic, grounded errors listing available animator
 properties) — macros like "typewriter"/"cascade" belong in the PROMPT as
 recipes, not as separate tools. Highest value per line of code here.

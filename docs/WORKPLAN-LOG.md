@@ -3910,3 +3910,148 @@ tools manage their own undo groups and bracket only RAW AE calls.
   come back as "[object]". Fine for now; if markers ever become something
   the model reasons about rather than places, that is a new tool and the
   remote session's call.
+
+## 2026-08-28 (local, tenth pass) - item 5.1: text animators, and the hundred properties that were always there
+
+Harness green on arrival (307/307), so the pass took the highest item
+that could still move. Items 1-4 are closed (item 4's two survivors are a
+remote design call and an already-struck bullet), so: **5.1, text
+animators - the highest-value item on the feature track.** Probed, built
+and covered in one pass, because the probe answered every open question
+in seven runs and nothing it found forced a redesign.
+
+### What AE actually does (eight measurements, none of them assumed)
+
+**The animator tree is not empty and never was.**
+`animator.property("ADBE Text Animator Properties").numProperties` is
+**103 on a brand-new animator** - the whole 3D-text Front/Bevel/Side/Back
+material set (four blocks of sixteen), eight nameless
+`ADBE Text VF Axis N` variable-font slots, and the twenty-nine ordinary
+animator properties. `addProperty` does not CREATE one; it un-hides it.
+Calling it twice is not an error and the count never moves. So counting
+proves nothing, and enumerating the group hands back a hundred things
+nobody asked for.
+
+**Only one flag knows which were added.** `enabled` (true), `elided`
+(false) and `active` (true) read IDENTICALLY for a dormant slot and an
+added one - the same lie Layer Styles told the 0.9.27 pass.
+`canSetExpression` is the one that differs: false while hidden, true once
+added. Everything downstream in this entry rests on that single boolean.
+
+**A hidden slot answers reads and refuses writes.** `prop.value` works
+and returns a number the render never uses; `setValue` /
+`setValueAtTime` / `expression =` all throw AE's "Can not "set value"
+with this property, because the property or a parent property is
+hidden." `remove()` puts a property back to hidden and KEEPS its value -
+set 33, remove, re-add, and 33 is still there.
+
+**Adding a sibling animator invalidates every reference into the earlier
+ones.** Held `a1`, its Properties group and its selector all threw
+"Object is invalid" after a second `anims.addProperty`. The Animators
+group itself, the Text group and the layer stay valid, and re-fetching
+`anims.property(1)` gives a working object again - so it is the
+REFERENCE that dies, not the property. Adding a selector or a property
+does not invalidate anything.
+
+**AE lets two animators share a name**, and `anims.property("Twin")`
+answers with the FIRST - the later one is unreachable by name. Setting a
+name to "" is silently ignored. Same trap precompose lost in 0.9.30, and
+`duplicate_comp` still has (filed 2026-08-28, still open).
+
+**A range selector carries BOTH triples at once**: Percent Start/End/
+Offset and Index Start/End/Offset, with the same three display names.
+`sel.property("Start")` returns the PERCENT one even when Units is set to
+index (2). Percent values run **-100..100** - 101 throws with the range
+in the message; index values take -5 and 3 alike. Advanced measured:
+Units 1-2, Based On 1-4, Mode 1-6, Shape 1-6, Smoothness 0-100, Ease
+High/Low -100..100, Amount -100..100.
+
+**Per-character 3D is a LAYER switch with a tail.** `threeDPerChar = true`
+also turns `threeDLayer` true, and setting it back to false leaves the
+layer 3D. On a non-text layer it throws a properly grounded AE error.
+X/Y Rotation exist and are addable WITHOUT it - they simply never
+render - which is exactly the silent no-op this project does not ship.
+
+**"ADBE Text Rotation" IS the Z rotation.** `ADBE Text Rotation Z` is
+refused by `canAddProperty` in both modes. Two more name/matchName
+disagreements worth writing down: "Tracking Type" is
+`ADBE Text Track Type` (not `...Tracking Type`), and the property AE
+calls "Character Value" is `ADBE Text Character Replace`.
+
+### What got built
+
+`add_text_animator {layer, name?, properties: {...}, selector?}` - one
+call, because an animator without properties and a selector is not
+anything a user asked for. It validates the WHOLE request before touching
+the layer (an unknown property, a bad enum, a percent outside -100..100
+and start/end on a wiggly selector are all refused with nothing built),
+then adds the animator, re-reaches it BY INDEX (the reference trap),
+auto-numbers a name AE would have stranded and says so, activates each
+property before writing it, and configures the selector - Units FIRST,
+since it decides which triple start/end/offset mean.
+
+It does NOT keyframe. The probe found the existing tools already reach
+into animators and selectors by slash path, so `set_keyframes` on
+`.../Selectors/Range Selector 1/Offset` was already the right answer; the
+result therefore carries the exact paths and an `animateHint` naming that
+call. A typewriter is opacity 0 + units index + keyframed Start, and it
+is a PROMPT recipe as the workplan wanted, not a second tool.
+
+`perCharacter3D` comes back whenever xRotation/yRotation (or a Z in
+position/anchorPoint, or a Scale Z off 100) forced the switch on, naming
+the layer that just became 3D and saying AE does not undo that.
+
+### The shipped bug the probe fell over
+
+`set_property {property: "Skew"}` on any text layer with an animator was
+answering with AE's raw "the property or a parent property is hidden" -
+because 0.9.27's deep search reaches the hundred dormant slots and
+happily lands on one. `get_property "Blur"` was worse: it returned a
+value and a resolvedPath, with nothing to say the render ignores it. Now:
+the deep search ranks dormant matches LAST and refuses when they are all
+there is, naming the path and the tool that activates it; set_property
+and set_keyframes refuse an explicit path into a hidden slot the same
+way; get_property still READS one (inspection is legitimate) but carries
+an `inactive` sentence; and list_properties marks those rows
+`inactive: true`.
+
+### Covered without AE, and in AE
+
+- `tests/test-text-animator.js` (NEW): 63 checks over a stub that
+  reproduces all eight measurements - including the reference
+  invalidation, modelled as a generation stamp so that a held reference
+  dies while a re-fetch by index still works, which is what AE does.
+- 24 suite steps in `extension/js/selftest.js` on their own comp
+  (per-character 3D turns the whole layer 3D and never gives it back, so
+  the rig cannot share one). `tests/test-self-test.js`'s canned host grew
+  a faithful `add_text_animator` plus the dormant-slot behaviour of
+  get/set/list, for the usual reason: a host that just said "ok" would
+  let a silent tool pass its own steps.
+- docs/CAPABILITIES.md regenerated; the curated half says what shipped.
+
+**Harness: 331/331 PASSED** (307 -> 331), every new step green on its
+first real-AE run. Stubbed suite: 38 files green.
+
+**No version bump** - feature track, per the workplan's own rule. The
+dormant-slot fix to set_property/get_property rides along with it into
+the next minor; it is worth noting that a fix travelled on a
+no-bump pass, so if the remote session wants it on panels sooner, that
+is a patch bump it can cut.
+
+### For the next pass
+
+- **AE blocks on an unreadable modal when a `-r` script throws
+  UNCAUGHT.** The first probe here died on the reference trap with no
+  try/catch around it, and every later launch was swallowed - AE's own
+  error dialog is a wordless `#32770` whose text Win32 cannot read, and
+  `AfterFX.exe -r` after that does nothing at all, silently. A posted
+  WM_CLOSE cleared it. Every probe script since flushes its JSON after
+  EVERY step and wraps the body in one try/catch that records the throw,
+  which turns "no output at all" into a named line. Do that from the
+  start; it cost this pass two blind runs to work out.
+- `duplicate_comp` still takes a name without uniquing (filed by the
+  0.9.30 pass, still open) - the same one-line shape precompose and now
+  add_text_animator both use.
+- There is still no way to read whether a text layer has per-character 3D
+  on; the suite proves it by asking a second animator for a 3D-only
+  property and checking it does NOT report turning the switch on again.

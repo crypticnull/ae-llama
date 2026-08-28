@@ -39,6 +39,9 @@
   // And the precompose rig: precompose CREATES project items, so it must
   // not be able to nest a comp another group is still measuring.
   var PCCOMP = "AELL Self-Test Precomp";
+  // And the text-animator rig: per-character 3D turns the whole LAYER 3D
+  // and never gives it back, so it may not share a comp being measured.
+  var TXCOMP = "AELL Self-Test Text";
   var running = false;
 
   /**
@@ -3909,6 +3912,373 @@
           }
           return true;
         } },
+
+      // ---- text animators (WORKPLAN 5.1). add_text_animator is new, and
+      // every assertion below comes from the probe in WORKPLAN-LOG
+      // 2026-08-28: an animator ships with all 103 properties already
+      // present and hidden, canSetExpression is the only flag that knows
+      // which were added, adding a second animator invalidates every
+      // reference into the first, AE lets two animators share a name, and
+      // per-character 3D drags the layer's own 3D switch on with it.
+      //
+      // Its own comp for exactly that last reason.
+      { name: "text-animator rig comp",
+        tool: "create_comp",
+        args: { name: TXCOMP, width: 640, height: 480, duration: 6,
+                frameRate: 30 },
+        check: function (d, ctx) { ctx.txComp = d.name; return true; } },
+
+      { name: "text-animator rig: a text layer and a solid",
+        batch: function (ctx) {
+          return [
+            { tool: "add_text_layer", args: { comp: ctx.txComp,
+                text: "ANIMATE ME", fontSize: 48 } },
+            { tool: "add_solid", args: { comp: ctx.txComp,
+                name: "ST Anim Solid", color: [0.3, 0.3, 0.3],
+                width: 80, height: 80 } }
+          ];
+        },
+        check: function (rows, ctx) {
+          if (!rows[0].ok) return "text layer: " + rows[0].error;
+          if (!rows[1].ok) return "solid: " + rows[1].error;
+          ctx.txLayer = rows[0].data.name;
+          return true;
+        } },
+
+      { name: "add_text_animator refuses a non-text layer",
+        tool: "add_text_animator",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.txComp, layer: "ST Anim Solid",
+                   properties: { opacity: 0 } };
+        },
+        check: function (err, ctx) {
+          if (/After Effects error/.test(err)) return "leaks AE's throw: " + err;
+          return (/TEXT layers/.test(err) && err.indexOf(ctx.txLayer) >= 0) ||
+                 "does not name the text layer to use instead: " + err;
+        } },
+
+      { name: "add_text_animator refuses a property AE does not have",
+        tool: "add_text_animator",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.txComp, layer: ctx.txLayer,
+                   properties: { wobble: 5 } };
+        },
+        check: function (err) {
+          return (/No animator property named wobble/.test(err) &&
+                  /opacity/.test(err)) ||
+                 "does not list the real properties: " + err;
+        } },
+
+      // Percent Start/End/Offset are -100..100 in AE (101 throws). The
+      // refusal has to come BEFORE an animator is built, or the user is
+      // left cleaning one up.
+      { name: "add_text_animator refuses a percent outside -100..100",
+        tool: "add_text_animator",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.txComp, layer: ctx.txLayer,
+                   properties: { opacity: 0 }, selector: { end: 400 } };
+        },
+        check: function (err) {
+          return (/PERCENT/.test(err) && /index/.test(err)) ||
+                 "does not explain percent vs index: " + err;
+        } },
+
+      { name: "no animator was built by the refusals",
+        tool: "list_properties",
+        args: function (ctx) {
+          return { comp: ctx.txComp, layer: ctx.txLayer,
+                   path: "Text/Animators" };
+        },
+        check: function (d) {
+          return d.count === 0 ||
+                 "Text/Animators has " + d.count + " children, expected 0";
+        } },
+
+      { name: "add_text_animator builds animator, properties and selector",
+        tool: "add_text_animator",
+        args: function (ctx) {
+          return { comp: ctx.txComp, layer: ctx.txLayer,
+                   properties: { opacity: 0, position: [0, -80] },
+                   selector: { start: 0, end: 40, offset: -10,
+                               shape: "rampUp", easeHigh: 50 } };
+        },
+        check: function (d, ctx) {
+          ctx.txAnim = d.animator;
+          ctx.txSelPath = d.selector && d.selector.path;
+          if (d.animator !== "Animator 1") {
+            return "animator named " + d.animator;
+          }
+          if (d.problems) return "problems: " + d.problems.join("; ");
+          if (!d.properties || d.properties.length !== 2) {
+            return "properties: " + JSON.stringify(d.properties);
+          }
+          if (!ctx.txSelPath ||
+              ctx.txSelPath.indexOf("Range Selector 1") < 0) {
+            return "selector path " + ctx.txSelPath;
+          }
+          return /set_keyframes/.test(d.animateHint || "") ||
+                 "no hint about keyframing the selector";
+        } },
+
+      // The property must be ADDED, not merely written to: AE keeps a
+      // value on a hidden property and never renders it.
+      { name: "the animator property reads back active",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.txComp, layer: ctx.txLayer,
+                   property: "Text/Animators/" + ctx.txAnim +
+                             "/Properties/Opacity" };
+        },
+        check: function (d) {
+          if (d.inactive) return "reported inactive: " + d.inactive;
+          return d.value === 0 || "opacity is " + d.value + ", expected 0";
+        } },
+
+      { name: "a 2-number position was padded to the 3 AE keeps",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.txComp, layer: ctx.txLayer,
+                   property: "Text/Animators/" + ctx.txAnim +
+                             "/Properties/Position" };
+        },
+        check: function (d) {
+          return String(d.value) === "0,-80,0" ||
+                 "position " + JSON.stringify(d.value);
+        } },
+
+      // The other hundred slots are still there and still hidden, and the
+      // panel now says so instead of handing back a value AE ignores.
+      { name: "an unadded animator property reads back flagged inactive",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.txComp, layer: ctx.txLayer,
+                   property: "Text/Animators/" + ctx.txAnim +
+                             "/Properties/Skew" };
+        },
+        check: function (d) {
+          return /never applied/.test(d.inactive || "") ||
+                 "not flagged: " + JSON.stringify(d);
+        } },
+
+      { name: "set_property refuses a bare name that is only a hidden slot",
+        tool: "set_property",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.txComp, layer: ctx.txLayer,
+                   property: "Skew", value: 20 };
+        },
+        check: function (err) {
+          if (/property or a parent property is hidden/.test(err)) {
+            return "leaks AE's raw hidden error: " + err;
+          }
+          return /add_text_animator/.test(err) ||
+                 "does not name the tool that activates it: " + err;
+        } },
+
+      { name: "set_keyframes refuses a hidden slot before writing key 1",
+        tool: "set_keyframes",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.txComp, layer: ctx.txLayer,
+                   property: "Text/Animators/" + ctx.txAnim +
+                             "/Properties/Skew",
+                   keys: [{ time: 0, value: 0 }, { time: 1, value: 30 }] };
+        },
+        check: function (err) {
+          return /has not been added/.test(err) || "wrong refusal: " + err;
+        } },
+
+      // The half a static animator is missing: the selector has to MOVE.
+      { name: "the selector Offset takes keyframes (the typewriter half)",
+        tool: "set_keyframes",
+        args: function (ctx) {
+          return { comp: ctx.txComp, layer: ctx.txLayer,
+                   property: ctx.txSelPath + "/Offset",
+                   keys: [{ time: 0, value: -100 }, { time: 2, value: 100 }] };
+        },
+        check: function (d) {
+          return d.numKeys === 2 || "numKeys " + d.numKeys;
+        } },
+
+      { name: "and they read back off the selector's own path",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.txComp, layer: ctx.txLayer,
+                   property: ctx.txSelPath + "/Offset" };
+        },
+        check: function (d) {
+          if (d.numKeys !== 2) return "numKeys " + d.numKeys;
+          return (d.keys[0].value === -100 && d.keys[1].value === 100) ||
+                 "keys " + JSON.stringify(d.keys);
+        } },
+
+      // A SECOND animator on the same layer is the reference trap: AE
+      // invalidates everything held into animator 1 at this moment.
+      { name: "a second animator on the same layer survives the trap",
+        tool: "add_text_animator",
+        args: function (ctx) {
+          return { comp: ctx.txComp, layer: ctx.txLayer, name: "ST Cascade",
+                   properties: { rotation: 20 },
+                   selector: { units: "index", start: 0, end: 3 } };
+        },
+        check: function (d, ctx) {
+          ctx.txAnim2 = d.animator;
+          if (d.animator !== "ST Cascade") return "named " + d.animator;
+          if (d.problems) return "problems: " + d.problems.join("; ");
+          return (d.selector && d.selector.settings &&
+                  d.selector.settings.units === "index") ||
+                 "units not reported: " + JSON.stringify(d.selector);
+        } },
+
+      // Units 'index' means the INDEX triple. AE keeps both, and a lookup
+      // by the display name "End" finds the PERCENT one either way.
+      { name: "units 'index' wrote the index triple, not the percent one",
+        batch: function (ctx) {
+          var base = "Text/Animators/" + ctx.txAnim2 +
+                     "/Selectors/Range Selector 1";
+          return [
+            { tool: "get_property", args: { comp: ctx.txComp,
+                layer: ctx.txLayer, property: base + "/End" } },
+            { tool: "list_properties", args: { comp: ctx.txComp,
+                layer: ctx.txLayer, path: base } }
+          ];
+        },
+        check: function (rows) {
+          if (!rows[0].ok) return "get: " + rows[0].error;
+          if (!rows[1].ok) return "list: " + rows[1].error;
+          if (rows[0].data.matchName !== "ADBE Text Percent End") {
+            return "name lookup found " + rows[0].data.matchName;
+          }
+          if (rows[0].data.value !== 100) {
+            return "percent End was written: " + rows[0].data.value;
+          }
+          var props = rows[1].data.properties, i, idx = null;
+          for (i = 0; i < props.length; i++) {
+            if (props[i].matchName === "ADBE Text Index End") {
+              idx = props[i].value;
+            }
+          }
+          return idx === 3 || "index End is " + idx + ", expected 3";
+        } },
+
+      { name: "the first animator kept what it was given",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.txComp, layer: ctx.txLayer,
+                   property: "Text/Animators/" + ctx.txAnim +
+                             "/Properties/Opacity" };
+        },
+        check: function (d) {
+          return d.value === 0 || "opacity is " + d.value;
+        } },
+
+      // AE lets a second animator take the same name and then answers a
+      // name lookup with the FIRST, stranding this one.
+      { name: "a repeated animator name is auto-numbered and reported",
+        tool: "add_text_animator",
+        args: function (ctx) {
+          return { comp: ctx.txComp, layer: ctx.txLayer, name: "ST Cascade",
+                   properties: { skew: 15 }, selector: { type: "none" } };
+        },
+        check: function (d) {
+          if (d.animator === "ST Cascade") {
+            return "took the name AE would strand it under";
+          }
+          return (/already an animator/.test(d.nameTaken || "") &&
+                  /every character/.test(String(d.selector))) ||
+                 "nameTaken: " + d.nameTaken + " selector: " +
+                 JSON.stringify(d.selector);
+        } },
+
+      // Per-character 3D is a LAYER switch: yRotation is addable without
+      // it and renders nothing, so the tool turns it on and says so.
+      { name: "yRotation turns per-character 3D on and reports it",
+        tool: "add_text_animator",
+        args: function (ctx) {
+          return { comp: ctx.txComp, layer: ctx.txLayer,
+                   properties: { yRotation: 90 }, selector: { type: "none" } };
+        },
+        check: function (d) {
+          if (!d.perCharacter3D) return "said nothing about per-character 3D";
+          return /3D layer/.test(d.perCharacter3D) ||
+                 "does not mention the layer becoming 3D: " + d.perCharacter3D;
+        } },
+
+      // ...and the switch really took in AE: a second 3D-only property on
+      // the same layer has nothing left to turn on.
+      { name: "the per-character 3D switch stayed on for the next animator",
+        tool: "add_text_animator",
+        args: function (ctx) {
+          return { comp: ctx.txComp, layer: ctx.txLayer,
+                   properties: { xRotation: 45 }, selector: { type: "none" } };
+        },
+        check: function (d) {
+          return !d.perCharacter3D ||
+                 "reported turning it on twice: " + d.perCharacter3D;
+        } },
+
+      { name: "a wiggly selector takes its own parameters",
+        tool: "add_text_animator",
+        args: function (ctx) {
+          return { comp: ctx.txComp, layer: ctx.txLayer,
+                   properties: { position: [0, 10] },
+                   selector: { type: "wiggly", wigglesPerSecond: 4,
+                               correlation: 20, maxAmount: 60,
+                               mode: "intersect" } };
+        },
+        check: function (d, ctx) {
+          ctx.txWiggly = d.selector && d.selector.path;
+          if (d.problems) return "problems: " + d.problems.join("; ");
+          return (d.selector && d.selector.type === "wiggly" &&
+                  d.selector.settings.wigglesPerSecond === 4) ||
+                 "selector: " + JSON.stringify(d.selector);
+        } },
+
+      { name: "the wiggly parameters really landed in AE",
+        tool: "list_properties",
+        args: function (ctx) {
+          return { comp: ctx.txComp, layer: ctx.txLayer, path: ctx.txWiggly };
+        },
+        check: function (d) {
+          var freq = null, corr = null, i;
+          for (i = 0; i < d.properties.length; i++) {
+            if (d.properties[i].matchName === "ADBE Text Temporal Freq") {
+              freq = d.properties[i].value;
+            }
+            if (d.properties[i].matchName ===
+                "ADBE Text Character Correlation") {
+              corr = d.properties[i].value;
+            }
+          }
+          return (freq === 4 && corr === 20) ||
+                 "wiggles/second " + freq + ", correlation " + corr;
+        } },
+
+      // AE's own range refusal, reported rather than swallowed.
+      { name: "a value AE rejects comes back with the range",
+        tool: "add_text_animator",
+        args: function (ctx) {
+          return { comp: ctx.txComp, layer: ctx.txLayer,
+                   properties: { opacity: 900 }, selector: { type: "none" } };
+        },
+        check: function (d) {
+          if (!d.problems || d.problems.length !== 1) {
+            return "problems: " + JSON.stringify(d.problems);
+          }
+          if (d.properties.length !== 0) {
+            return "claimed it applied: " + JSON.stringify(d.properties);
+          }
+          return /0 to 100/.test(d.problems[0]) ||
+                 "no range in: " + d.problems[0];
+        } },
+
+      { name: "cleanup: delete the text-animator rig comp",
+        tool: "delete_item",
+        args: function (ctx) { return { item: ctx.txComp }; },
+        check: function () { return true; } },
 
       // ---- comp-rename audit + bulk rename. A three-comp rig: one
       // plain, one nested (a utility), one named by an expression.

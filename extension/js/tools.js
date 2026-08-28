@@ -98,6 +98,28 @@
       desc: "Restyle an existing text layer (any subset of fields). " +
             "An uninstalled font is refused, listing what IS installed.",
       args: "{comp?: string, layer: name|index, text?: string, fontSize?: px, font?: string (PostScript name, e.g. ArialMT), fillColor?: [r,g,b] 0..1, tracking?: number, leading?: px|'auto', justification?: 'left'|'center'|'right'}" },
+    { name: "add_text_animator", mutating: true,
+      desc: "Animate a text layer PER CHARACTER (typewriter, cascade, " +
+            "wiggle) — an animator holds the properties, a selector " +
+            "picks which characters get them. One call adds the " +
+            "animator, activates every property named and configures " +
+            "the selector; the result gives the exact paths, so " +
+            "set_keyframes on the selector's Offset/Start/End is what " +
+            "makes it move (a typewriter is opacity 0 + units 'index' + " +
+            "keyframed Start). Percent selectors run -100..100; " +
+            "'rotation' IS the Z rotation, and xRotation/yRotation turn " +
+            "per-character 3D on (which also makes the layer 3D — the " +
+            "result says so).",
+      args: "{comp?: string, layer?: name|index (text layer; omit = selected), name?: string, " +
+            "properties: {opacity|position|scale|anchorPoint|rotation|xRotation|yRotation|skew|skewAxis|" +
+            "fillColor|fillOpacity|fillHue|fillSaturation|fillBrightness|strokeColor|strokeOpacity|strokeWidth|" +
+            "strokeHue|strokeSaturation|strokeBrightness|tracking|trackingType|lineAnchor|lineSpacing|" +
+            "characterOffset|characterValue|characterRange|characterAlignment|blur: value, …}, " +
+            "selector?: {type?: range|wiggly|expression|none (default range), units?: percent|index, " +
+            "start?, end?, offset?, basedOn?: characters|charactersExcludingSpaces|words|lines, " +
+            "mode?: add|subtract|intersect|min|max|difference, shape?: square|rampUp|rampDown|triangle|round|smooth, " +
+            "smoothness?, easeHigh?, easeLow?, amount?, randomizeOrder?, randomSeed?, " +
+            "maxAmount?, minAmount?, wigglesPerSecond?, correlation?, temporalPhase?, spatialPhase?, lockDimensions?}}" },
     { name: "add_solid", mutating: true,
       desc: "Add a solid layer.",
       args: "{comp?: string, name: string, color: [r,g,b] 0..1, width?: int, height?: int}" },

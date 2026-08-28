@@ -1534,6 +1534,455 @@ AELL_TOOLS.set_text_style = function (args) {
   return AELL_okay({ layer: layer.name, style: style });
 };
 
+/*
+ * TEXT ANIMATORS
+ *
+ * Measured in AE 2026 (probe, 2026-08-28) — the tree is not what the
+ * scripting guide suggests:
+ *
+ *  - An animator's "Properties" group is NOT empty. It ships with all
+ *    103 possible animator properties already present (the whole 3D-text
+ *    Front/Bevel/Side/Back material set and eight nameless variable-font
+ *    axes among them). addProperty does not CREATE one, it un-hides it.
+ *  - enabled, elided and active read true/false/true for every one of
+ *    the 103 whether or not it was ever added, so none of them tells an
+ *    active property from a dormant one. `canSetExpression` DOES: false
+ *    while dormant, true once added. That is the only flag that knows.
+ *  - Writing to a dormant one throws AE's raw "the property or a parent
+ *    property is hidden", which is why the deep search now refuses those
+ *    by name and says which tool activates them.
+ *  - Adding a SIBLING animator invalidates every reference already held
+ *    into earlier animators (a1.name then throws "Object is invalid").
+ *    Adding a selector or a property does not. So this tool re-fetches
+ *    by index rather than holding what it made.
+ *  - AE lets two animators share a name and returns the FIRST for a name
+ *    lookup, so the later one is unreachable — same trap precompose had.
+ *  - Per-character 3D is a LAYER switch (threeDPerChar), and turning it
+ *    on also turns the layer 3D; turning it off again leaves the layer
+ *    3D. X/Y Rotation and a Z in Position/Anchor Point need it.
+ *  - "ADBE Text Rotation" IS the Z rotation; "ADBE Text Rotation Z" does
+ *    not exist in either mode. Percent Start/End/Offset run -100..100,
+ *    not 0..100.
+ */
+var AELL_ANIM_PROPS = [
+  { arg: "anchorPoint", m: "ADBE Text Anchor Point 3D", dims: 3, perChar: "z" },
+  { arg: "position", m: "ADBE Text Position 3D", dims: 3, perChar: "z" },
+  { arg: "scale", m: "ADBE Text Scale 3D", dims: 3, perChar: "z100" },
+  { arg: "skew", m: "ADBE Text Skew" },
+  { arg: "skewAxis", m: "ADBE Text Skew Axis" },
+  { arg: "rotation", m: "ADBE Text Rotation" },
+  { arg: "xRotation", m: "ADBE Text Rotation X", perChar: "always" },
+  { arg: "yRotation", m: "ADBE Text Rotation Y", perChar: "always" },
+  { arg: "opacity", m: "ADBE Text Opacity" },
+  { arg: "fillColor", m: "ADBE Text Fill Color", color: true },
+  { arg: "fillOpacity", m: "ADBE Text Fill Opacity" },
+  { arg: "fillHue", m: "ADBE Text Fill Hue" },
+  { arg: "fillSaturation", m: "ADBE Text Fill Saturation" },
+  { arg: "fillBrightness", m: "ADBE Text Fill Brightness" },
+  { arg: "strokeColor", m: "ADBE Text Stroke Color", color: true },
+  { arg: "strokeOpacity", m: "ADBE Text Stroke Opacity" },
+  { arg: "strokeWidth", m: "ADBE Text Stroke Width" },
+  { arg: "strokeHue", m: "ADBE Text Stroke Hue" },
+  { arg: "strokeSaturation", m: "ADBE Text Stroke Saturation" },
+  { arg: "strokeBrightness", m: "ADBE Text Stroke Brightness" },
+  { arg: "tracking", m: "ADBE Text Tracking Amount" },
+  { arg: "trackingType", m: "ADBE Text Track Type" },
+  { arg: "lineAnchor", m: "ADBE Text Line Anchor" },
+  { arg: "lineSpacing", m: "ADBE Text Line Spacing", dims: 2 },
+  { arg: "characterOffset", m: "ADBE Text Character Offset" },
+  { arg: "characterValue", m: "ADBE Text Character Replace" },
+  { arg: "characterRange", m: "ADBE Text Character Range" },
+  { arg: "characterAlignment", m: "ADBE Text Character Change Type" },
+  { arg: "blur", m: "ADBE Text Blur", dims: 2 }
+];
+
+var AELL_ANIM_SEL_ENUMS = {
+  units:      { m: "ADBE Text Range Units",     of: ["percent", "index"] },
+  basedOn:    { m: "ADBE Text Range Type2",
+                of: ["characters", "charactersExcludingSpaces", "words", "lines"] },
+  mode:       { m: "ADBE Text Selector Mode",
+                of: ["add", "subtract", "intersect", "min", "max", "difference"] },
+  shape:      { m: "ADBE Text Range Shape",
+                of: ["square", "rampUp", "rampDown", "triangle", "round", "smooth"] }
+};
+/* Plain numeric selector settings: arg -> matchName. */
+var AELL_ANIM_SEL_NUMS = {
+  smoothness:     "ADBE Text Selector Smoothness",
+  easeHigh:       "ADBE Text Levels Max Ease",
+  easeLow:        "ADBE Text Levels Min Ease",
+  amount:         "ADBE Text Selector Max Amount",
+  randomizeOrder: "ADBE Text Randomize Order",
+  randomSeed:     "ADBE Text Random Seed"
+};
+var AELL_ANIM_WIGGLY_NUMS = {
+  maxAmount:         "ADBE Text Wiggly Max Amount",
+  minAmount:         "ADBE Text Wiggly Min Amount",
+  wigglesPerSecond:  "ADBE Text Temporal Freq",
+  correlation:       "ADBE Text Character Correlation",
+  temporalPhase:     "ADBE Text Temporal Phase",
+  spatialPhase:      "ADBE Text Spatial Phase",
+  lockDimensions:    "ADBE Text Wiggly Lock Dim",
+  randomSeed:        "ADBE Text Wiggly Random Seed"
+};
+
+function AELL_animPropFor(name) {
+  var want = String(name).toLowerCase().replace(/[\s_-]/g, "");
+  for (var i = 0; i < AELL_ANIM_PROPS.length; i++) {
+    var p = AELL_ANIM_PROPS[i];
+    if (p.arg.toLowerCase() === want) return p;
+    if (p.m.toLowerCase() === String(name).toLowerCase()) return p;
+  }
+  return null;
+}
+
+function AELL_animPropNames() {
+  var out = [];
+  for (var i = 0; i < AELL_ANIM_PROPS.length; i++) out.push(AELL_ANIM_PROPS[i].arg);
+  return out.join(", ");
+}
+
+/* An animator property AE has not been asked to add yet. The only honest
+   test measured in the field: canSetExpression is false while hidden. */
+function AELL_animDormant(prop) {
+  try { return prop.canSetExpression === false; } catch (e) { return false; }
+}
+
+/* The same question asked of a property reached by an explicit path,
+   where nothing has told us we are inside an animator. canSetExpression
+   is false on plenty of ordinary read-only properties (a selector's
+   Units, for one), so the parent group has to agree. */
+function AELL_animPropDormant(prop) {
+  if (!AELL_animDormant(prop)) return false;
+  var g = null;
+  try { g = prop.propertyGroup(1); } catch (e) { return false; }
+  try { return !!g && String(g.matchName) === "ADBE Text Animator Properties"; }
+  catch (e2) { return false; }
+}
+
+/* One sentence, used by every tool that lands on a dormant slot. */
+function AELL_animDormantMsg(layer, spec, verb) {
+  return "'" + spec + "' is a text-animator property that has not been " +
+    "added to its animator, so AE keeps it hidden and " + verb +
+    " it does nothing. add_text_animator {layer: \"" + layer.name +
+    "\", properties: {…}} adds and sets one in a single call.";
+}
+
+/* AE happily gives two animators the same name and then answers a name
+   lookup with the first one, stranding the second — so number it. */
+function AELL_uniqueAnimatorName(anims, base) {
+  var taken = {};
+  for (var i = 1; i <= anims.numProperties; i++) {
+    try { taken[anims.property(i).name] = true; } catch (e) {}
+  }
+  if (!taken[base]) return base;
+  var k = 2;
+  while (taken[base + " " + k]) k++;
+  return base + " " + k;
+}
+
+function AELL_animEnumValue(key, given) {
+  var spec = AELL_ANIM_SEL_ENUMS[key];
+  var want = String(given).toLowerCase().replace(/[\s_-]/g, "");
+  for (var i = 0; i < spec.of.length; i++) {
+    if (spec.of[i].toLowerCase() === want) return i + 1;
+  }
+  var n = AELL_numArg(given);
+  if (n !== null && n >= 1 && n <= spec.of.length) return Math.round(n);
+  return null;
+}
+
+/* Which per-character-3D-only properties a request touches. Measured:
+   X/Y Rotation always need it; a Z in Position/Anchor Point and a Scale
+   Z other than 100 do too. Anything else animates flat characters. */
+function AELL_animNeeds3D(spec, value) {
+  if (spec.perChar === "always") return true;
+  if (!AELLJSON.isArray(value) || value.length < 3) return false;
+  var z = AELL_numArg(value[2]);
+  if (z === null) return false;
+  if (spec.perChar === "z") return z !== 0;
+  if (spec.perChar === "z100") return z !== 100;
+  return false;
+}
+
+function AELL_animSetValue(prop, spec, value, label, problems) {
+  var v = value;
+  if (spec.color) {
+    if (!AELLJSON.isArray(v) || v.length < 3) {
+      problems.push("'" + label + "' must be [r, g, b] floats 0..1");
+      return null;
+    }
+    v = [AELL_clamp01(v[0]), AELL_clamp01(v[1]), AELL_clamp01(v[2]),
+         v.length > 3 ? AELL_clamp01(v[3]) : 1];
+  } else if (spec.dims) {
+    if (!AELLJSON.isArray(v)) {
+      var one = AELL_numArg(v);
+      if (one === null) {
+        problems.push("'" + label + "' must be an array of " + spec.dims +
+                      " numbers");
+        return null;
+      }
+      v = spec.dims === 2 ? [one, one] : [one, one, one];
+    }
+  } else {
+    var n = AELL_numArg(v);
+    if (n === null) {
+      problems.push("'" + label + "' must be a number (got " +
+                    AELLJSON.stringify(v) + ")");
+      return null;
+    }
+    v = n;
+  }
+  try {
+    prop.setValue(v);
+  } catch (e) {
+    var range = "";
+    try {
+      if (prop.hasMin || prop.hasMax) {
+        range = " Range: " + (prop.hasMin ? prop.minValue : "-inf") + " to " +
+                (prop.hasMax ? prop.maxValue : "+inf") + ".";
+      }
+    } catch (e2) {}
+    problems.push("AE rejected '" + label + "': " + (e.message || e) + range);
+    return null;
+  }
+  var read;
+  try { read = prop.value; } catch (e3) { read = v; }
+  return AELL_sampleRaw(read);
+}
+
+AELL_TOOLS.add_text_animator = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  var layer = AELL_layerOrSelection(comp, args.layer);
+  var i, key;
+
+  if (!(layer instanceof TextLayer)) {
+    var texts = [];
+    for (i = 1; i <= comp.numLayers; i++) {
+      if (comp.layer(i) instanceof TextLayer) texts.push(comp.layer(i).name);
+    }
+    return AELL_err("'" + layer.name + "' is a " + AELL_layerType(layer) +
+      " layer — text animators only exist on TEXT layers." +
+      (texts.length ? " Text layers here: " + texts.join(", ") + "."
+                    : " This comp has no text layers (add_text_layer)."));
+  }
+
+  var props = args.properties;
+  if (props && AELLJSON.isArray(props)) {
+    return AELL_err("'properties' is an object of name: value, not a list " +
+      "— e.g. {opacity: 0, position: [0, -80]}. Available: " +
+      AELL_animPropNames() + ".");
+  }
+  if (!props || typeof props !== "object") {
+    return AELL_err("'properties' is required: an object of what the " +
+      "animator animates, e.g. {opacity: 0} or {position: [0, -80], " +
+      "rotation: 20}. Available: " + AELL_animPropNames() + ".");
+  }
+  /* Validate the whole request before touching the layer — a refusal
+     must not leave a half-built animator behind. */
+  var wanted = [], unknown = [], needs3D = [];
+  for (key in props) {
+    if (!props.hasOwnProperty(key)) continue;
+    var spec = AELL_animPropFor(key);
+    if (!spec) { unknown.push(key); continue; }
+    wanted.push({ spec: spec, arg: key, value: props[key] });
+    if (AELL_animNeeds3D(spec, props[key])) needs3D.push(key);
+  }
+  if (unknown.length) {
+    return AELL_err("No animator property named " + unknown.join(", ") +
+      ". AE's animator properties: " + AELL_animPropNames() +
+      ". (Rotation IS the Z rotation; xRotation/yRotation need " +
+      "per-character 3D, which this tool turns on for you.)");
+  }
+  if (!wanted.length) {
+    return AELL_err("'properties' was empty. Name at least one: " +
+      AELL_animPropNames() + ".");
+  }
+
+  var sel = args.selector;
+  if (sel === null || typeof sel === "undefined") sel = {};
+  if (typeof sel !== "object" || AELLJSON.isArray(sel)) {
+    return AELL_err("'selector' must be an object, e.g. " +
+      "{start: 0, end: 50} or {type: \"wiggly\"} or {type: \"none\"}.");
+  }
+  var selType = sel.type ? String(sel.type).toLowerCase() : "range";
+  var SEL_KINDS = { range: "ADBE Text Selector",
+                    wiggly: "ADBE Text Wiggly Selector",
+                    expression: "ADBE Text Expressible Selector" };
+  if (selType !== "none" && !SEL_KINDS.hasOwnProperty(selType)) {
+    return AELL_err("No selector type '" + sel.type + "'. AE has: range " +
+      "(the usual one), wiggly, expression — or \"none\" to leave the " +
+      "animator applying to every character.");
+  }
+  var enums = {};
+  for (key in AELL_ANIM_SEL_ENUMS) {
+    if (!AELL_ANIM_SEL_ENUMS.hasOwnProperty(key)) continue;
+    if (typeof sel[key] === "undefined" || sel[key] === null) continue;
+    var ev = AELL_animEnumValue(key, sel[key]);
+    if (ev === null) {
+      return AELL_err("No " + key + " '" + sel[key] + "' — AE has: " +
+        AELL_ANIM_SEL_ENUMS[key].of.join(", ") + ".");
+    }
+    enums[key] = ev;
+  }
+  var indexUnits = enums.units === 2;
+  /* Percent Start/End/Offset are -100..100 in AE (measured; 101 throws).
+     Catch it here, before an animator exists to be cleaned up. */
+  var ENDS = ["start", "end", "offset"];
+  for (i = 0; i < ENDS.length; i++) {
+    key = ENDS[i];
+    if (typeof sel[key] === "undefined" || sel[key] === null) continue;
+    var endNum = AELL_numArg(sel[key]);
+    if (endNum === null) {
+      return AELL_err("selector '" + key + "' must be a number (got " +
+        AELLJSON.stringify(sel[key]) + ").");
+    }
+    if (!indexUnits && (endNum < -100 || endNum > 100)) {
+      return AELL_err("selector '" + key + "' is a PERCENT here (" +
+        endNum + " is outside -100..100). For a character count pass " +
+        "units: \"index\" too.");
+    }
+    if (selType !== "range") {
+      return AELL_err("'" + key + "' belongs to a RANGE selector; a " +
+        selType + " selector has no start/end/offset. Drop type, or " +
+        "drop '" + key + "'.");
+    }
+  }
+
+  var made = AELL_keepSelection(comp, function () {
+    var anims = layer.property("ADBE Text Properties")
+                     .property("ADBE Text Animators");
+    var wantName = (typeof args.name === "string" && args.name !== "")
+      ? args.name : "Animator " + (anims.numProperties + 1);
+    var finalName = AELL_uniqueAnimatorName(anims, wantName);
+    anims.addProperty("ADBE Text Animator");
+    /* Adding an animator invalidates every reference held into the
+       earlier ones, so everything below re-reaches through the index. */
+    var idx = anims.numProperties;
+    anims.property(idx).name = finalName;
+    return { index: idx, name: finalName,
+             renamed: finalName !== wantName ? wantName : null };
+  });
+
+  var anims = layer.property("ADBE Text Properties")
+                   .property("ADBE Text Animators");
+  var animPath = "Text/Animators/" + made.name;
+  var out = { layer: layer.name, animator: made.name, path: animPath };
+  if (made.renamed) {
+    out.nameTaken = "'" + made.renamed + "' was already an animator on " +
+      "this layer, so AE would have answered a lookup with the OTHER one";
+  }
+
+  /* Per-character 3D first: it is a LAYER switch, and X/Y Rotation is
+     dormant-but-addable without it, so the write would land somewhere
+     the render never reads. */
+  if (needs3D.length && layer.threeDPerChar !== true) {
+    var was3D = layer.threeDLayer;
+    layer.threeDPerChar = true;
+    out.perCharacter3D = "per-character 3D turned ON — " +
+      needs3D.join(", ") + " only affects characters with it" +
+      (was3D ? "" : "; AE made '" + layer.name + "' a 3D layer to do it, " +
+       "and turning per-character 3D off again does not undo that");
+  }
+
+  var problems = [];
+  var applied = [];
+  var pg = anims.property(made.index).property("ADBE Text Animator Properties");
+  for (i = 0; i < wanted.length; i++) {
+    var w = wanted[i];
+    var prop;
+    try { prop = pg.property(w.spec.m); } catch (eP) { prop = null; }
+    if (!prop) { problems.push("AE has no '" + w.arg + "' on this animator"); continue; }
+    if (AELL_animDormant(prop)) pg.addProperty(w.spec.m);
+    prop = pg.property(w.spec.m);
+    var got = AELL_animSetValue(prop, w.spec, w.value, w.arg, problems);
+    if (got === null) continue;
+    applied.push({ property: prop.name, value: got,
+                   path: animPath + "/Properties/" + prop.name });
+  }
+  out.properties = applied;
+
+  if (selType !== "none") {
+    var sels = anims.property(made.index).property("ADBE Text Selectors");
+    sels.addProperty(SEL_KINDS[selType]);
+    var s = sels.property(sels.numProperties);
+    var selPath = animPath + "/Selectors/" + s.name;
+    var settings = {};
+    if (selType === "range") {
+      var adv = s.property("ADBE Text Range Advanced");
+      /* Units must go in FIRST: it decides whether Start/End/Offset mean
+         the percent triple or the index one, and AE keeps both. */
+      if (typeof enums.units !== "undefined") {
+        adv.property("ADBE Text Range Units").setValue(enums.units);
+        settings.units = indexUnits ? "index" : "percent";
+      }
+      for (key in AELL_ANIM_SEL_ENUMS) {
+        if (!AELL_ANIM_SEL_ENUMS.hasOwnProperty(key) || key === "units") continue;
+        if (typeof enums[key] === "undefined") continue;
+        adv.property(AELL_ANIM_SEL_ENUMS[key].m).setValue(enums[key]);
+        settings[key] = AELL_ANIM_SEL_ENUMS[key].of[enums[key] - 1];
+      }
+      var ends = { start: ["ADBE Text Percent Start", "ADBE Text Index Start"],
+                   end: ["ADBE Text Percent End", "ADBE Text Index End"],
+                   offset: ["ADBE Text Percent Offset", "ADBE Text Index Offset"] };
+      for (key in ends) {
+        if (!ends.hasOwnProperty(key)) continue;
+        if (typeof sel[key] === "undefined" || sel[key] === null) continue;
+        var num = AELL_numArg(sel[key]);
+        if (num === null) {
+          problems.push("selector '" + key + "' must be a number");
+          continue;
+        }
+        var target = s.property(ends[key][indexUnits ? 1 : 0]);
+        try {
+          target.setValue(num);
+          settings[key] = num;
+        } catch (eS) {
+          problems.push("AE rejected selector '" + key + "': " +
+            (eS.message || eS) + (indexUnits ? "" :
+            " Percent selectors run -100 to 100."));
+        }
+      }
+      for (key in AELL_ANIM_SEL_NUMS) {
+        if (!AELL_ANIM_SEL_NUMS.hasOwnProperty(key)) continue;
+        if (typeof sel[key] === "undefined" || sel[key] === null) continue;
+        var nv = AELL_numArg(sel[key]);
+        if (nv === null) { problems.push("selector '" + key + "' must be a number"); continue; }
+        try { adv.property(AELL_ANIM_SEL_NUMS[key]).setValue(nv); settings[key] = nv; }
+        catch (eN2) { problems.push("AE rejected selector '" + key + "': " + (eN2.message || eN2)); }
+      }
+    } else if (selType === "wiggly") {
+      for (key in AELL_ANIM_WIGGLY_NUMS) {
+        if (!AELL_ANIM_WIGGLY_NUMS.hasOwnProperty(key)) continue;
+        if (typeof sel[key] === "undefined" || sel[key] === null) continue;
+        var wv = AELL_numArg(sel[key]);
+        if (wv === null) { problems.push("selector '" + key + "' must be a number"); continue; }
+        try { s.property(AELL_ANIM_WIGGLY_NUMS[key]).setValue(wv); settings[key] = wv; }
+        catch (eW) { problems.push("AE rejected selector '" + key + "': " + (eW.message || eW)); }
+      }
+      if (typeof enums.mode !== "undefined") {
+        s.property("ADBE Text Selector Mode").setValue(enums.mode);
+        settings.mode = AELL_ANIM_SEL_ENUMS.mode.of[enums.mode - 1];
+      }
+      if (typeof enums.basedOn !== "undefined") {
+        s.property("ADBE Text Range Type2").setValue(enums.basedOn);
+        settings.basedOn = AELL_ANIM_SEL_ENUMS.basedOn.of[enums.basedOn - 1];
+      }
+    }
+    out.selector = { name: s.name, type: selType, path: selPath };
+    out.selector.settings = settings;
+    if (selType === "range") {
+      out.animateHint = "set_keyframes {layer: \"" + layer.name +
+        "\", property: \"" + selPath + "/Offset\", keys: [...]} slides the " +
+        "selection across the text";
+    }
+  } else {
+    out.selector = "none — the animator applies to every character";
+  }
+
+  if (problems.length) out.problems = problems;
+  return AELL_okay(out);
+};
+
 AELL_TOOLS.add_solid = function (args) {
   var comp = AELL_resolveComp(args.comp);
   if (!args.name) return AELL_err("'name' is required");
@@ -5150,12 +5599,13 @@ function AELL_deepFindProp(layer, target) {
   var near = [];
   var visited = 0;
 
-  function scan(node, path, depth, rank) {
+  function scan(node, path, depth, rank, inAnim) {
     var nm = AELL_propName(node);
     var mn = "";
     try { mn = String(node.matchName || ""); } catch (e) {}
     if (nm.toLowerCase() === lc || mn.toLowerCase() === lc) {
-      matches.push({ prop: node, path: path, rank: rank, depth: depth });
+      matches.push({ prop: node, path: path, rank: rank, depth: depth,
+                     dormant: inAnim && AELL_animDormant(node) });
     } else if (near.length < 8 && nm !== "" &&
                nm.toLowerCase().indexOf(lc) !== -1) {
       near.push(path);
@@ -5163,13 +5613,17 @@ function AELL_deepFindProp(layer, target) {
     if (depth >= AELL_SEARCH_MAX_DEPTH) return;
     var n = 0;
     try { n = node.numProperties || 0; } catch (e2) { return; }
+    // Every text animator carries all 103 possible animator properties,
+    // dormant until added, so a name found in here may be one nobody
+    // asked for (see AELL_TOOLS.add_text_animator).
+    var deeper = inAnim || mn === "ADBE Text Animator Properties";
     for (var i = 1; i <= n; i++) {
       if (visited >= AELL_SEARCH_MAX_NODES) return;
       visited++;
       var c = null;
       try { c = node.property(i); } catch (e3) { continue; }
       if (!c) continue;
-      scan(c, path + "/" + AELL_propName(c), depth + 1, rank);
+      scan(c, path + "/" + AELL_propName(c), depth + 1, rank, deeper);
     }
   }
 
@@ -5185,9 +5639,10 @@ function AELL_deepFindProp(layer, target) {
       if (typeof known === "number") rank = known;
     } catch (e5) {}
     visited++;
-    scan(root, AELL_propName(root), 1, rank);
+    scan(root, AELL_propName(root), 1, rank, false);
   }
   matches.sort(function (a, b) {
+    if (!a.dormant !== !b.dormant) return a.dormant ? 1 : -1;
     if (a.rank !== b.rank) return a.rank - b.rank;
     return a.depth - b.depth;
   });
@@ -5214,7 +5669,22 @@ function AELL_deepResolve(layer, spec, orig) {
     if (nearTxt !== "") tail += " Names containing it: " + nearTxt + ".";
     throw new Error(orig.message + tail);
   }
-  if (m.length > 1 && m[1].rank === m[0].rank && m[1].depth === m[0].depth) {
+  /* Only dormant animator slots answered to the name. Writing to one
+     throws AE's raw "the property or a parent property is hidden" and
+     READING one hands back a value the render never uses, so neither is
+     a real answer — say which tool makes it real instead. */
+  if (m[0].dormant) {
+    var slots = [];
+    for (i = 0; i < m.length && slots.length < 3; i++) slots.push(m[i].path);
+    throw new Error("'" + spec + "' on '" + layer.name + "' exists only as " +
+      "an INACTIVE text-animator property (" + slots.join(", ") +
+      "). AE hides those until an animator is asked for them, and a value " +
+      "written there is ignored. add_text_animator {layer: \"" + layer.name +
+      "\", properties: {" + spec.toLowerCase() + ": …}} activates it; " +
+      "set_property then reaches it by its full path.");
+  }
+  if (m.length > 1 && m[1].rank === m[0].rank && m[1].depth === m[0].depth &&
+      !m[1].dormant) {
     var paths = [];
     for (i = 0; i < m.length && i < 6; i++) paths.push(m[i].path);
     throw new Error("'" + spec + "' is ambiguous on '" + layer.name +
@@ -5359,6 +5829,10 @@ AELL_TOOLS.list_properties = function (args) {
           if (child.numKeys > 0) entry.numKeys = child.numKeys;
         } catch (e3) {}
         try { if (child.expression) entry.hasExpression = true; } catch (e4) {}
+        // A text animator ships with all 103 possible properties present
+        // but hidden. Their values read back fine and are never applied,
+        // so an unmarked row here would be a lie.
+        if (AELL_animPropDormant(child)) entry.inactive = true;
       }
       entries.push(entry);
       if (!leaf && d > 1) walk(child, p, d - 1);
@@ -5395,6 +5869,12 @@ AELL_TOOLS.get_property = function (args) {
   }
   var data = { layer: layer.name, property: String(args.property),
                matchName: prop.matchName, value: AELL_sampleValue(prop) };
+  if (AELL_animPropDormant(prop)) {
+    data.inactive = "this animator property has not been added, so AE " +
+      "keeps it hidden and the value below is never applied — " +
+      "add_text_animator {layer: \"" + layer.name + "\", properties: {…}} " +
+      "activates it";
+  }
   var nk = 0;
   try { nk = prop.numKeys || 0; } catch (e) {}
   data.numKeys = nk;
@@ -5436,6 +5916,9 @@ AELL_TOOLS.set_property = function (args) {
   }
   if (typeof args.value === "undefined") {
     return AELL_err("'value' is required");
+  }
+  if (AELL_animPropDormant(prop)) {
+    return AELL_err(AELL_animDormantMsg(layer, String(args.property), "writing to"));
   }
   try {
     if (typeof args.atTime === "number") {
@@ -5502,6 +5985,10 @@ AELL_TOOLS.set_keyframes = function (args) {
     if (!AELL_isLeafProp(prop)) {
       return AELL_err("'" + args.property + "' is a GROUP — keyframes go " +
                       "on a property inside it");
+    }
+    if (AELL_animPropDormant(prop)) {
+      return AELL_err(AELL_animDormantMsg(layer, String(args.property),
+                                          "keyframing"));
     }
     var base = relative ? layer.inPoint : 0;
     for (var i = 0; i < args.keys.length; i++) {
@@ -5592,7 +6079,8 @@ AELL_TOOLS.remove_keyframes = function (args) {
  */
 var AELL_PER_LAYER_LIST = [
   "add_control", "add_keyframe", "add_marker", "add_mask",
-  "add_shape_content", "apply_effect", "apply_expression_preset",
+  "add_shape_content", "add_text_animator", "apply_effect",
+  "apply_expression_preset",
   "center_anchor_point", "delete_layer", "duplicate_layer", "link_property",
   "set_effect_param", "set_expression", "set_layer_3d", "set_layer_parent",
   "set_layer_timing", "set_mask", "set_mask_path", "set_property",
@@ -5772,6 +6260,7 @@ AELL_TOOLS.list_effects = function (args) {
 // Tools that modify the project get wrapped in an undo group.
 var AELL_MUTATING = {
   create_comp: true, add_text_layer: true, add_solid: true,
+  add_text_animator: true,
   set_transform: true, add_keyframe: true, set_expression: true,
   apply_effect: true, set_effect_param: true, set_layer_timing: true,
   delete_layer: true, set_comp_setting: true, import_file: true,

@@ -369,6 +369,78 @@ const lightAcc = (list, kind) =>
   (" " + list + " ").indexOf(" " + kind + " ") >= 0;
 let lights = {};
 
+// ---- text animators (WORKPLAN 5.1). A canned host that just answered
+// "ok" would let a silent add_text_animator pass its own suite steps, so
+// this one reproduces the contract the real tool has to hold up: an
+// animator carries every property already, hidden until added; a hidden
+// one refuses writes and is flagged on reads; a repeated animator name is
+// auto-numbered because AE would strand it; per-character 3D is a LAYER
+// switch that comes on once; and AE's range refusal is reported, not
+// swallowed.
+const TXCOMP_NAME = "AELL Self-Test Text";
+const TX_SLOTS = {
+  opacity: ["Opacity", 100, 0, 100],
+  position: ["Position", [0, 0, 0]],
+  scale: ["Scale", [100, 100, 100]],
+  rotation: ["Rotation", 0],
+  xrotation: ["X Rotation", 0],
+  yrotation: ["Y Rotation", 0],
+  skew: ["Skew", 0],
+  tracking: ["Tracking Amount", 0],
+  fillcolor: ["Fill Color", [1, 0, 0, 1]]
+};
+const TX_3D_ONLY = { xrotation: 1, yrotation: 1 };
+const txAnims = [];              // [{name, props: {Name: value}, sel}]
+let txPerChar = false;
+const inTx = (a) => !!a && a.comp === TXCOMP_NAME;
+function resetTxRig() { txAnims.length = 0; txPerChar = false; }
+function txFind(name) {
+  return txAnims.filter(a => a.name === name)[0] || null;
+}
+// "Text/Animators/<anim>/Properties/<Name>" and the selector twin.
+function txParse(path) {
+  const m = /^Text\/Animators\/([^/]+)\/(Properties|Selectors)\/(.+)$/
+    .exec(String(path || ""));
+  if (!m) return null;
+  return { anim: txFind(m[1]), kind: m[2], rest: m[3] };
+}
+
+
+// A hidden slot answers a READ (with a flag) and refuses every WRITE --
+// the asymmetry the panel now has to reproduce, or the suite would pass
+// on a host that quietly wrote to a property AE never renders.
+const TX_DORMANT = "this animator property has not been added, so AE " +
+  "keeps it hidden and the value below is never applied — " +
+  "add_text_animator activates it";
+function txSelRows(rec) {
+  return (rec && rec.sel && rec.sel.rows) || {};
+}
+function txReadProp(path) {
+  const t = txParse(path);
+  if (!t || !t.anim) return null;
+  if (t.kind === "Properties") {
+    const active = Object.prototype.hasOwnProperty.call(t.anim.props, t.rest);
+    const out = { property: path,
+                  value: active ? t.anim.props[t.rest] : 0, numKeys: 0 };
+    if (!active) out.inactive = TX_DORMANT;
+    return out;
+  }
+  const leaf = t.rest.split("/")[1] || "";
+  const rows = txSelRows(t.anim);
+  // FACT: a lookup by the display name always finds the PERCENT twin,
+  // whatever Units says -- so that is what a read has to answer with.
+  const mn = "ADBE Text Percent " + leaf;
+  const out = { property: path, matchName: mn,
+                value: rows[mn] === undefined ? 0 : rows[mn], numKeys: 0 };
+  const keys = t.anim.sel && t.anim.sel.keys;
+  if (keys && leaf === "Offset") {
+    out.numKeys = keys.length;
+    out.keys = keys.slice();
+    out.value = keys[0].value;
+  }
+  return out;
+}
+
 // for_each_layer's whole job is deciding which tools it may drive. Rather
 // than paraphrasing that rule here — which would let the suite expect a
 // refusal for a tool the host happily drives — read the host's own three
@@ -934,6 +1006,10 @@ function cannedOk(tool, args) {
       return { layer: args && args.layer,
                property: args && args.property };
     case "get_property": {
+      if (inTx(args)) {
+        const tx = txReadProp(args && args.property);
+        if (tx) return tx;
+      }
       // Markers read back through get_property as a key list — the only
       // route the panel has to them, and how the suite proves a layer
       // marker sits at the COMP time it was given.
@@ -1134,11 +1210,27 @@ function cannedOk(tool, args) {
       }
       return { value: 3 };
     }
-    case "set_keyframes":
+    case "set_keyframes": {
+      if (inTx(args)) {
+        const t = txParse(args && args.property);
+        if (t && t.anim && t.kind === "Properties" &&
+            !Object.prototype.hasOwnProperty.call(t.anim.props, t.rest)) {
+          return { __err: "'" + args.property + "' is a text-animator " +
+            "property that has not been added, so AE keeps it hidden and " +
+            "keyframing it does nothing. add_text_animator adds and sets " +
+            "one in a single call." };
+        }
+        if (t && t.anim && t.kind === "Selectors") {
+          t.anim.sel.keys = args.keys.slice();
+          return { layers: 1, property: args.property,
+                   keysSet: args.keys.length, numKeys: args.keys.length };
+        }
+      }
       // 9 layers x 2 keys for the batch step; one layer x its own keys
       // for the single-layer ones.
       return { keysSet: (args && args.layer && args.keys)
         ? args.keys.length : 18 };
+    }
     case "add_null":
       return { index: 1, name: (args && args.name) || "Null 1" };
     case "set_expression": {
@@ -1400,6 +1492,120 @@ function cannedOk(tool, args) {
       }
       return { done: true };
     }
+    case "add_text_animator": {
+      const a = args || {};
+      if (a.layer === "ST Anim Solid") {
+        return { __err: "'ST Anim Solid' is a solid layer — text " +
+          "animators only exist on TEXT layers. Text layers here: " +
+          "ANIMATE ME." };
+      }
+      const wanted = [], unknown = [], needs3D = [];
+      const props = a.properties || {};
+      Object.keys(props).forEach(k => {
+        const slot = TX_SLOTS[String(k).toLowerCase()];
+        if (!slot) { unknown.push(k); return; }
+        wanted.push({ key: String(k).toLowerCase(), slot: slot,
+                      value: props[k] });
+        if (TX_3D_ONLY[String(k).toLowerCase()]) needs3D.push(k);
+      });
+      if (unknown.length) {
+        return { __err: "No animator property named " + unknown.join(", ") +
+          ". AE's animator properties: anchorPoint, position, scale, skew, " +
+          "skewAxis, rotation, xRotation, yRotation, opacity, fillColor, " +
+          "tracking, blur." };
+      }
+      const sel = a.selector || {};
+      const selType = sel.type ? String(sel.type).toLowerCase() : "range";
+      const idxUnits = String(sel.units || "") === "index";
+      const ends = ["start", "end", "offset"];
+      for (let i = 0; i < ends.length; i++) {
+        const v = sel[ends[i]];
+        if (v === undefined || v === null) continue;
+        if (!idxUnits && (v < -100 || v > 100)) {
+          return { __err: "selector '" + ends[i] + "' is a PERCENT here (" +
+            v + " is outside -100..100). For a character count pass " +
+            'units: "index" too.' };
+        }
+      }
+      // AE would let the name repeat and then answer a lookup with the
+      // FIRST one, so the tool numbers it and says so.
+      const asked = a.name || ("Animator " + (txAnims.length + 1));
+      let finalName = asked, n = 2;
+      while (txFind(finalName)) finalName = asked + " " + (n++);
+      const rec = { name: finalName, props: {}, sel: null };
+      txAnims.push(rec);
+      const out = { layer: a.layer, animator: finalName,
+                    path: "Text/Animators/" + finalName };
+      if (finalName !== asked) {
+        out.nameTaken = "'" + asked + "' was already an animator on this " +
+          "layer, so AE would have answered a lookup with the OTHER one";
+      }
+      if (needs3D.length && !txPerChar) {
+        txPerChar = true;
+        out.perCharacter3D = "per-character 3D turned ON — " +
+          needs3D.join(", ") + " only affects characters with it; AE made '" +
+          a.layer + "' a 3D layer to do it";
+      }
+      const problems = [], applied = [];
+      wanted.forEach(w => {
+        let v = w.value;
+        if (Array.isArray(v) && Array.isArray(w.slot[1])) {
+          v = v.slice();
+          while (v.length < w.slot[1].length) v.push(0);
+        }
+        if (typeof v === "string" && !isNaN(Number(v))) v = Number(v);
+        const lo = w.slot[2], hi = w.slot[3];
+        if (typeof lo === "number" && (v < lo || v > hi)) {
+          problems.push("AE rejected '" + w.key + "': After Effects error: " +
+            "Value " + v + " out of range. Range: " + lo + " to " + hi + ".");
+          return;
+        }
+        rec.props[w.slot[0]] = v;
+        applied.push({ property: w.slot[0], value: v,
+                       path: "Text/Animators/" + finalName + "/Properties/" +
+                             w.slot[0] });
+      });
+      out.properties = applied;
+      if (selType === "none") {
+        out.selector = "none — the animator applies to every character";
+      } else if (selType === "wiggly") {
+        rec.sel = { name: "Wiggly Selector 1", type: "wiggly",
+                    rows: { "ADBE Text Temporal Freq": sel.wigglesPerSecond,
+                            "ADBE Text Character Correlation": sel.correlation,
+                            "ADBE Text Wiggly Max Amount": sel.maxAmount } };
+        out.selector = { name: rec.sel.name, type: "wiggly",
+          path: "Text/Animators/" + finalName + "/Selectors/Wiggly Selector 1",
+          settings: { wigglesPerSecond: sel.wigglesPerSecond,
+                      correlation: sel.correlation, maxAmount: sel.maxAmount,
+                      mode: sel.mode } };
+      } else {
+        const rows = { "ADBE Text Percent Start": 0,
+                       "ADBE Text Percent End": 100,
+                       "ADBE Text Percent Offset": 0,
+                       "ADBE Text Index Start": 0, "ADBE Text Index End": 0,
+                       "ADBE Text Index Offset": 0 };
+        const settings = {};
+        if (idxUnits) settings.units = "index";
+        ends.forEach(k => {
+          if (sel[k] === undefined || sel[k] === null) return;
+          rows["ADBE Text " + (idxUnits ? "Index" : "Percent") + " " +
+               k.charAt(0).toUpperCase() + k.slice(1)] = sel[k];
+          settings[k] = sel[k];
+        });
+        if (sel.shape) settings.shape = sel.shape;
+        if (sel.easeHigh !== undefined) settings.easeHigh = sel.easeHigh;
+        rec.sel = { name: "Range Selector 1", type: "range", rows: rows,
+                    keys: null };
+        out.selector = { name: "Range Selector 1", type: "range",
+          path: "Text/Animators/" + finalName + "/Selectors/Range Selector 1",
+          settings: settings };
+        out.animateHint = 'set_keyframes {layer: "' + a.layer +
+          '", property: "' + out.selector.path + '/Offset", keys: [...]} ' +
+          "slides the selection across the text";
+      }
+      if (problems.length) out.problems = problems;
+      return out;
+    }
     case "add_text_layer": {
       // comp.layers.addText() inherits AE's Character panel, so the host
       // resets a NEW layer to a documented baseline and lets the args
@@ -1628,6 +1834,32 @@ function cannedOk(tool, args) {
                expression: expr };
     }
     case "set_property": {
+      if (inTx(args)) {
+        const spec = String((args && args.property) || "");
+        const t = txParse(spec);
+        if (t && t.anim && t.kind === "Properties" &&
+            !Object.prototype.hasOwnProperty.call(t.anim.props, t.rest)) {
+          return { __err: "'" + spec + "' is a text-animator property " +
+            "that has not been added, so AE keeps it hidden and writing " +
+            "to it does nothing. add_text_animator {layer: \"" +
+            args.layer + "\", properties: {…}} adds and sets one in a " +
+            "single call." };
+        }
+        // A BARE name that only a hidden slot answers to: the deep search
+        // finds it, and refuses rather than leaking AE's own error.
+        if (!t && txAnims.length && !/\//.test(spec)) {
+          const hit = txAnims.filter(an =>
+            Object.prototype.hasOwnProperty.call(an.props, spec))[0];
+          if (!hit) {
+            return { __err: "'" + spec + "' on '" + args.layer + "' exists " +
+              "only as an INACTIVE text-animator property " +
+              "(Text/Animators/" + txAnims[0].name + "/Properties/" + spec +
+              "). AE hides those until an animator is asked for them, and " +
+              "a value written there is ignored. add_text_animator " +
+              "activates it." };
+          }
+        }
+      }
       // Only what the coverage rig asks of it: a 3D-only rotation, so the
       // discard report below has something real to find.
       if (cvProp(args && args.property) === "xrotation") {
@@ -1691,6 +1923,23 @@ function cannedOk(tool, args) {
     }
     case "list_properties": {
       const P = String((args && args.path) || "");
+      if (inTx(args)) {
+        if (P === "Text/Animators") {
+          return { layer: args.layer, root: P, count: txAnims.length,
+                   properties: txAnims.map(an => ({ path: P + "/" + an.name,
+                     matchName: "ADBE Text Animator", kind: "group" })),
+                   note: "" };
+        }
+        const t = txParse(P);
+        if (t && t.anim && t.kind === "Selectors") {
+          const rows = Object.keys(txSelRows(t.anim)).map(mn => ({
+            path: P + "/" + mn, matchName: mn, kind: "prop",
+            value: txSelRows(t.anim)[mn] === undefined
+              ? 0 : txSelRows(t.anim)[mn] }));
+          return { layer: args.layer, root: P, count: rows.length,
+                   properties: rows, note: "" };
+        }
+      }
       if (/\/(position|scale|rotation|opacity|anchor point)$/i.test(P)) {
         return { __err: "'" + P + "' is a PROPERTY, not a group — use " +
                  "get_property for its value" };
@@ -1863,7 +2112,7 @@ SelfTest.run({
     ordStack = [];
     maskKeys = {};
     batchLayers = 0; batchFx = {}; batchBlur = null;
-    batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig();
+    batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig();
     SelfTest.run({
       callHostTool(tool, args, cb) {
         if (tool === "grid_layout") {
@@ -1893,7 +2142,7 @@ SelfTest.run({
         ordStack = [];
         maskKeys = {};
         batchLayers = 0; batchFx = {}; batchBlur = null;
-        batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig();
+        batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig();
         SelfTest.run({
           callHostTool(tool, args, cb) {
             // Never refuse anything -- the old permissive host.
