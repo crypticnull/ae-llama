@@ -3478,3 +3478,134 @@ default, which is what it should have done anyway. Nothing blocked.
 its TEXT, not the `name` argument (probe 1 asked for "Txt" and got "Hi",
 then died on `null is not an object` two steps later). Resolve a text
 layer with `instanceof TextLayer`, or pass the text as the name.
+
+## 2026-08-28 (local, eighth pass) - item 4: the checklist finally asks for a picture (0.9.28)
+
+Harness green on arrival (289/289), so the pass took item 4's last
+unstruck bullet: **the chat probe never touched ComfyUI.** The other two
+halves of that bullet (undo across a mixed round, a second turn that
+refers back) have been steps 9-11 since 2026-08-25; only the generator
+was missing.
+
+### What was built
+
+Two steps, and the plumbing a PANEL-side verdict needs:
+
+- **Step 12 "the image generator answers when asked"** - one round, no
+  GPU. It fails if the model answers about ComfyUI without asking it
+  anything, if every comfy_* call errors, if the backend is offline, if
+  the workflow list is empty, or if the reply tells the user to launch
+  ComfyUI by hand (the tool doc promises it boots itself).
+- **Step 13 "generate a picture and bring it in"** - the only thing in
+  the project that runs a real generation THROUGH THE MODEL.
+  comfy-probe.js drives the same backend directly; what it cannot say is
+  whether a sentence a user would type ever reaches it.
+- Verdicts can now read `ctx.tools` and `ctx.replies`, because a
+  panel-side tool leaves NOTHING in the comp to read back. `READ_COMP`
+  grew every file-backed footage item in the project (id, path, dims)
+  and each layer's `sourceFile`, so "the render reached the project" is
+  measured in AE and not taken from the tool's own word for it.
+- The generation cleanup removes what the probe imported BY ITEM ID,
+  never by folder: the output dir is the panel's, and the user's own
+  generations live there too. The rendered file is left on disk and
+  named in the transcript.
+
+### Three defects, all found on the first run, all fixed at the root
+
+1. **The probe never loaded comfy.js or setup.js.** tools.js dispatches
+   every comfy_* tool through `global.Comfy` and every VRAM handoff
+   through `global.Setup`, so a generation would have thrown a
+   ReferenceError inside the dispatcher rather than answering. Fixed,
+   and generalised into an anti-drift test: for every `global.X` tools.js
+   reaches for, the probe must load X's panel file. The probe also now
+   calls `Setup.ensureDataDirs()` the way main.js does on every panel
+   load - see defect 3's twin below.
+2. **A dead comfyUrl told the user to install a backend they already had
+   running.** The setting said 127.0.0.1:8000; a ComfyUI was answering on
+   8188 the whole time; the panel said "install the hidden backend in
+   Settings", and the model relayed that dead end. `Comfy.status` and
+   `Comfy.ensureRunning` now probe the two well-known local ports AFTER
+   the configured URL fails and name what they find: "Nothing is
+   listening at 127.0.0.1:8000, but a ComfyUI IS answering at
+   127.0.0.1:8188. Set the ComfyUI URL in Settings to
+   http://127.0.0.1:8188". It REPORTS and never reroutes - rendering on a
+   ComfyUI the user did not configure would swap the model set under
+   them. Localhost only, and only after the configured URL has failed
+   (pinned: a URL that answers is never followed by a port scan).
+3. **The panel offered `example-txt2img` as a real workflow.** It is the
+   FORMAT example this project ships; its checkpoint is the literal
+   `CHANGE-ME.safetensors`. Asked for a picture, the model picked the one
+   whose name says txt2img and ComfyUI threw it out on validation.
+   `Comfy.listWorkflows` now flags any template still holding the
+   placeholder; comfy_list_workflows does not offer it, comfy_generate
+   never defaults to it, and naming it outright is refused with what it
+   IS plus the templates that would work - a grounded refusal instead of
+   a validator dump paid for with a round trip.
+
+### The field run, after the fixes
+
+Step 12 pass. Step 13 pass, and worth reading in full: the model invented
+a workflow called `simple_image`, took the grounded "Available:
+AE_LLAMA_H3_I2V_V1, AE_LLAMA_KREA2_V1" error, re-planned onto KREA2, and
+rendered `2026-08-28_CRPTK-KREA2__00003_.png` at 3072x1728 in ~35 s,
+imported into the project. The arbiter paused the 32B chat model for the
+generation and warmed it back up afterwards, unprompted.
+
+### Covered without AE
+
+- `tests/test-comfy-workflow-choice.js` (NEW): the placeholder rule, from
+  the flag through both tools, including the empty-except-the-example dir
+  and the proof that nothing is queued at ComfyUI for a refusal.
+- `tests/test-comfy-backend.js`: six async cases over a stubbed http for
+  the discovery fix - found, not found, live URL never scanned, 8188
+  before 8189, the generation path, and a dead REMOTE url.
+- `tests/test-chat-probe.js`: every stage of both new verdicts with the
+  near-miss that skips it (ok:true and no files, a zero-byte render, a
+  file on disk that never reached the project, AE's fsName casing vs
+  Node's path), plus the module anti-drift check above.
+- One test-quality fix on the way: the "anything named in an ExtendScript
+  string must be on $.global" check parsed string literals with a regex,
+  so ONE apostrophe in a prose comment ("ComfyUI's validator") re-paired
+  every quote after it and it started reading code as string contents. It
+  strips comments with a real scanner now. The failure it produced was a
+  comment, not a promise - exactly what its own header says it must
+  ignore.
+
+### NEEDS A HUMAN EYE
+
+- **MACHINE STATE CHANGED (owner's AE machine):** `comfyUrl` in
+  `%APPDATA%\AE-Llama\settings.json` was `http://127.0.0.1:8000`, where
+  nothing listens; the owner's ComfyUI answers on 8188. I changed it to
+  `http://127.0.0.1:8188` so the generation path could be verified end to
+  end, and kept the previous file as `settings.json.bak-20260828`. If
+  8000 was deliberate, change it back in Settings - the panel will now
+  TELL you where the running one is instead of sending you to install a
+  backend.
+- **The seeded workflow dir was three versions stale.** KREA2 shipped in
+  0.9.23 and was still absent from this machine at 0.9.27, because
+  `ensureDataDirs` only copies files the data dir does not already have.
+  The probe seeds now (it calls ensureDataDirs like the panel), but an
+  installed panel that has already seeded will never receive an UPDATED
+  template. Filed under item 4; the fix needs a version-stamped or
+  hash-compared seed and is a design call.
+- **The model said "imported it into 'Probe Room'" when the file only
+  reached the project.** No tool places a footage item into a comp -
+  import_file takes a path and nothing else - which is workplan 5.8. The
+  step reports that gap as an info line rather than failing on it, and
+  the transcript shows the model overstating what it did.
+- **A round that mixes a failed PANEL tool with a successful host tool is
+  not rolled back.** comfy_generate failed, add_solid succeeded in the
+  same round, and a stray "White Plate" solid survived: the host's
+  rollback only spans the batched HOST run, and the panel-side failure
+  never enters it. Not touched tonight - the rollback design belongs to
+  the remote session.
+
+**Harness: 289/289 PASSED** (unchanged - this pass added no suite steps;
+its subject is the probe, which is not part of the AE suite). Stubbed
+suite: 35 files green, capability doc regenerated (its stale "260-step"
+line now reads 289). Chat probe steps 1, 12, 13: 3/3.
+
+**One trap for the next pass:** the chat probe's steps are a
+CONVERSATION, and steps 12-13 assume "Probe Room" exists - run them as
+`--steps 1,12,13`, never alone, or every verdict reads a comp that is not
+there.

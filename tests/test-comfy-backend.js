@@ -142,4 +142,170 @@ assert(Comfy._applyExtraModelPaths({ root }) === null &&
 assert(typeof Comfy.freeVram === "function",
        "Comfy.freeVram exists for the arbiter's resume path");
 
-console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");
+// 6. a dead comfyUrl while a ComfyUI IS running on this machine.
+//
+// Measured on the owner's machine 2026-08-28 through chat-probe: the
+// setting said 127.0.0.1:8000, ComfyUI was answering on 8188, and the
+// panel told the user to install a hidden backend they did not need —
+// then the model relayed that dead end to them. The rule this project
+// works to is that a failed lookup names what actually exists, so the
+// refusal now names the ComfyUI it can see. It must still never REROUTE:
+// rendering on a ComfyUI the user did not configure would swap the model
+// set under them without saying so.
+
+/** Minimal http stub: `listening` holds the "host:port" that answer. */
+function makeHttp(listening, seen) {
+  return {
+    request(opts, onRes) {
+      let errCb = null;
+      const req = {
+        on(ev, fn) { if (ev === "error") errCb = fn; return req; },
+        setTimeout() { return req; },
+        write() {},
+        end() {
+          setImmediate(function () {
+            const key = opts.host + ":" + opts.port;
+            if (seen) seen.push(key + opts.path);
+            if (listening.indexOf(key) === -1) {
+              if (errCb) errCb(new Error("connect ECONNREFUSED " + key));
+              return;
+            }
+            const h = {};
+            const res = { statusCode: 200, resume() {},
+              on(ev, fn) { h[ev] = fn; return res; } };
+            onRes(res);
+            setImmediate(function () {
+              if (h.data) h.data(Buffer.from(JSON.stringify(
+                { queue_running: [], queue_pending: [] })));
+              if (h.end) h.end();
+            });
+          });
+        }
+      };
+      return req;
+    }
+  };
+}
+
+const comfySrc = fs.readFileSync(path.join(__dirname, "..", "extension",
+                                           "js", "comfy.js"), "utf8");
+function comfyWith(listening, seen, hiddenInstalled) {
+  const httpStub = makeHttp(listening, seen);
+  const win = {
+    AEBridge: {
+      nodeRequire: n => (n === "http" || n === "https") ? httpStub
+                                                        : require(n),
+      getExtensionPath: () => tmpRoot
+    },
+    Settings: { dataRoot: () => tmpRoot, get: () => ({}) },
+    Setup: { findComfyInstall: () => (hiddenInstalled ? { root: "x" }
+                                                      : null) },
+    localStorage: { getItem() { return null; }, setItem() {},
+                    removeItem() {} },
+    setTimeout, clearTimeout
+  };
+  new Function("window", comfySrc)(win);
+  return win.Comfy;
+}
+
+const pending = [];
+function step(fn) { pending.push(fn); }
+function runSteps(i) {
+  if (i >= pending.length) {
+    console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");
+    return;
+  }
+  pending[i](function () { runSteps(i + 1); });
+}
+
+step(function (next) {
+  const seen = [];
+  const C = comfyWith(["127.0.0.1:8188"], seen, false);
+  C.status("http://127.0.0.1:8000", function (err, st) {
+    assert(st && st.online === false,
+           "a dead configured URL is still reported offline");
+    assert(st.foundAt === "http://127.0.0.1:8188",
+           "and the running ComfyUI on this machine is named: " + st.foundAt);
+    assert(/Set the ComfyUI URL in Settings to http:\/\/127\.0\.0\.1:8188/
+             .test(st.hint) && /8000/.test(st.hint),
+           "the hint says which setting to change, and from what: " + st.hint);
+    assert(!/hidden backend/i.test(st.hint),
+           "and stops advising an install the user does not need");
+    assert(seen[0] === "127.0.0.1:8000/queue",
+           "the configured URL is tried FIRST, before any scan");
+    next();
+  });
+});
+
+step(function (next) {
+  // The scan is a last resort, not a habit: a URL that answers is never
+  // followed by a port scan of the user's machine.
+  const seen = [];
+  const C = comfyWith(["127.0.0.1:8000"], seen, false);
+  C.status("http://127.0.0.1:8000", function (err, st) {
+    assert(st && st.online === true, "a live configured URL is online");
+    assert(seen.length === 1,
+           "and nothing else on the machine was probed (" +
+           seen.join(", ") + ")");
+    next();
+  });
+});
+
+step(function (next) {
+  const C = comfyWith([], null, true);
+  C.status("http://127.0.0.1:8000", function (err, st) {
+    assert(st.foundAt === null && /boots automatically/.test(st.hint),
+           "with nothing listening anywhere the old hint is unchanged: " +
+           st.hint);
+    next();
+  });
+});
+
+step(function (next) {
+  // ensureRunning is the path a GENERATION takes, and it was the one that
+  // told the user to install a backend they already had running.
+  const C = comfyWith(["127.0.0.1:8188"], null, false);
+  C.ensureRunning("http://127.0.0.1:8000", null, function (err) {
+    assert(err && /answering at 127\.0\.0\.1:8188/.test(err.message),
+           "a generation refusal names the ComfyUI it can see: " +
+           (err && err.message));
+    assert(!/not installed/.test(err.message),
+           "instead of the hidden-backend dead end");
+    next();
+  });
+});
+
+step(function (next) {
+  // A remote URL that is down: the local instance is still worth naming,
+  // and the remote-cannot-be-started refusal only stands when there is
+  // nothing here either.
+  const C = comfyWith(["127.0.0.1:8188"], null, false);
+  C.ensureRunning("http://192.168.1.5:8188", null, function (err) {
+    assert(err && /127\.0\.0\.1:8188/.test(err.message),
+           "a dead remote URL points at the local instance: " +
+           (err && err.message));
+    const C2 = comfyWith([], null, false);
+    C2.ensureRunning("http://192.168.1.5:8188", null, function (err2) {
+      assert(err2 && /cannot be auto-started/.test(err2.message),
+             "and with nothing local it keeps the remote refusal");
+      next();
+    });
+  });
+});
+
+step(function (next) {
+  // Order matters: 8188 is ComfyUI's own default and the hidden backend's
+  // port, so it is offered before the alternate.
+  const seen = [];
+  const C = comfyWith(["127.0.0.1:8189"], seen, false);
+  C.status("http://127.0.0.1:8000", function (err, st) {
+    assert(st.foundAt === "http://127.0.0.1:8189",
+           "the alternate port is found too");
+    assert(seen.join(" ").indexOf("127.0.0.1:8188") <
+           seen.join(" ").indexOf("127.0.0.1:8189"),
+           "but 8188 is asked first");
+    next();
+  });
+});
+
+runSteps(0);

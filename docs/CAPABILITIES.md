@@ -137,7 +137,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
   "Shipping").
 - Verification: stubbed Node suite in CI on every push (stubs model real
   AE quirks — padded arrays, setValue-on-keyframes, hidden properties,
-  font substitution); 260-step real-AE self-test shared by the panel
+  font substitution); 289-step real-AE self-test shared by the panel
   button and `scripts/run-ae-selftest.ps1`; `scripts/chat-probe.js`
   drives the real model end-to-end and `scripts/comfy-probe.js` drives
   one real generation end-to-end (real ComfyUI, real GPU, real AE

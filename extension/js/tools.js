@@ -855,12 +855,21 @@
     comfy_list_workflows: function (args, cb) {
       var s = global.Settings.get();
       var list = global.Comfy.listWorkflows(s.comfyWorkflowsDir);
-      var names = [];
-      for (var i = 0; i < list.length; i++) names.push(list[i].name);
+      var names = [], examples = [];
+      for (var i = 0; i < list.length; i++) {
+        if (list[i].example) examples.push(list[i].name);
+        else names.push(list[i].name);
+      }
       if (names.length === 0) {
-        cb({ ok: false, error: "No workflow templates in " +
-             s.comfyWorkflowsDir + ". Export API-format workflows from " +
-             "ComfyUI into that folder." });
+        cb({ ok: false, error: "No runnable workflow templates in " +
+             s.comfyWorkflowsDir + "." +
+             (examples.length
+               ? " " + examples.join(", ") + " " +
+                 (examples.length > 1 ? "are format examples" :
+                                        "is a format example") +
+                 " with a placeholder checkpoint and cannot render."
+               : "") +
+             " Export API-format workflows from ComfyUI into that folder." });
         return;
       }
       cb({ ok: true, data: { workflows: names } });
@@ -872,24 +881,45 @@
         cb({ ok: false, error: "'prompt' is required" });
         return;
       }
-      var list = global.Comfy.listWorkflows(s.comfyWorkflowsDir);
+      var all = global.Comfy.listWorkflows(s.comfyWorkflowsDir);
+      // A template holding the shipped placeholder renders nothing, so it
+      // is never the default and never silently chosen. Naming one is
+      // answered with what it is, not with ComfyUI's validator dump.
+      var list = [], runnable = [];
+      for (var r = 0; r < all.length; r++) {
+        if (!all[r].example) list.push(all[r]);
+        runnable.push(all[r].name);
+      }
       if (list.length === 0) {
-        cb({ ok: false, error: "No workflow templates in " +
-             s.comfyWorkflowsDir });
+        cb({ ok: false, error: "No runnable workflow templates in " +
+             s.comfyWorkflowsDir + (all.length
+               ? " (" + runnable.join(", ") + " " +
+                 (all.length > 1 ? "are format examples" :
+                                   "is a format example") +
+                 " with a placeholder checkpoint)" : "") });
         return;
       }
+      var names = [];
+      for (var j = 0; j < list.length; j++) names.push(list[j].name);
       var chosen = list[0];
       if (args.workflow) {
-        var found = null;
-        for (var i = 0; i < list.length; i++) {
-          if (list[i].name.toLowerCase() === String(args.workflow).toLowerCase()) {
-            found = list[i];
+        var found = null, placeholder = null;
+        for (var i = 0; i < all.length; i++) {
+          if (all[i].name.toLowerCase() ===
+              String(args.workflow).toLowerCase()) {
+            if (all[i].example) placeholder = all[i];
+            else found = all[i];
             break;
           }
         }
+        if (placeholder) {
+          cb({ ok: false, error: "'" + placeholder.name + "' is a format " +
+               "example, not a usable workflow — its checkpoint is still " +
+               "the placeholder CHANGE-ME.safetensors, so ComfyUI rejects " +
+               "it. Use one of: " + names.join(", ") });
+          return;
+        }
         if (!found) {
-          var names = [];
-          for (var j = 0; j < list.length; j++) names.push(list[j].name);
           cb({ ok: false, error: "Unknown workflow '" + args.workflow +
                "'. Available: " + names.join(", ") });
           return;

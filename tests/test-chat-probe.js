@@ -450,6 +450,186 @@ const replan = stepByTitle("the model re-plans after a round is rolled back");
          "inventing the missing layer to make the error go away fails: " + v);
 }
 
+// -------------------------------------- 2b. the two ComfyUI steps
+//
+// These are the first verdicts in the probe that judge a PANEL-side tool,
+// so they read ctx.tools instead of the comp — and that is exactly where
+// a lazy check would wave a failure through, because comfy_generate can
+// come back ok:true having written nothing a user could see. Every
+// stage between "the model called the tool" and "a real file is in the
+// project" is pinned below with the near-miss that skips it.
+
+const ready = stepByTitle("the image generator answers when asked");
+
+{
+  const v = ready.check(comp([]), { tools: [], replies: ["Yes, all set!"] });
+  assert(v && /never|without calling/.test(v),
+         "answering ABOUT ComfyUI without asking it anything fails: " + v);
+}
+{
+  const v = ready.check(comp([]), {
+    tools: [{ tool: "get_project_info", ok: true }], replies: [] });
+  assert(v && /get_project_info/.test(v),
+         "and the failure names what it ran instead: " + v);
+}
+{
+  const ctx = { tools: [{ tool: "comfy_status", ok: true,
+    data: { online: false, url: "http://127.0.0.1:8188",
+            hint: "Start ComfyUI" } }], replies: [] };
+  const v = ready.check(comp([]), ctx);
+  assert(v && /not answering/.test(v),
+         "an offline backend fails even though the tool call succeeded: " + v);
+}
+{
+  const ctx = { tools: [{ tool: "comfy_list_workflows", ok: true,
+    data: { workflows: [] } }], replies: [] };
+  assert(/came back empty/.test(ready.check(comp([]), ctx) || ""),
+         "an empty workflow list fails");
+}
+{
+  // The tool doc promises the hidden backend boots itself, so this reply
+  // is the product breaking a promise no comp state can show.
+  const ctx = { tools: [{ tool: "comfy_status", ok: true,
+    data: { online: true, running: 0, pending: 0 } }],
+    replies: ["Please launch ComfyUI first, then ask me again."] };
+  const v = ready.check(comp([]), ctx);
+  assert(v && /start ComfyUI by hand/.test(v),
+         "telling the user to launch it by hand fails: " + v);
+}
+{
+  // The other half of that check, and the reason it is not a bare
+  // /(start|launch|run).*comfy/: the true answers contain those words
+  // too, and a step that fails on them fails every night.
+  const online = { tool: "comfy_status", ok: true,
+    data: { online: true, running: 0, pending: 0 } };
+  assert(ready.check(comp([]), { tools: [online],
+    replies: ["ComfyUI is running with nothing queued."] }) === null,
+    "\"ComfyUI is running\" is not an instruction to run it");
+  assert(ready.check(comp([]), { tools: [online],
+    replies: ["You never have to launch ComfyUI — it boots itself."] })
+      === null,
+    "and neither is saying the user does NOT have to launch it");
+}
+{
+  const ctx = { tools: [
+    { tool: "comfy_status", ok: true,
+      data: { online: true, running: 0, pending: 0 } },
+    { tool: "comfy_list_workflows", ok: true,
+      data: { workflows: ["AE_LLAMA_KREA2_V1"] } }],
+    replies: ["The generator is online and can make images."] };
+  assert(ready.check(comp([]), ctx) === null,
+         "online + a workflow list + no hand-holding is a pass");
+}
+
+const picture = stepByTitle("generate a picture and bring it in");
+
+// A real file the verdict can stat, and one that only claims to exist.
+const os2 = require("os");
+const fsC = require("fs");
+const pathC = require("path");
+const realPng = pathC.join(os2.tmpdir(),
+  "aell-probe-test-" + process.pid + ".png");
+fsC.writeFileSync(realPng, Buffer.alloc(4096, 7));
+const ghostPng = realPng.replace(/\.png$/, "-missing.png");
+const emptyPng = realPng.replace(/\.png$/, "-empty.png");
+fsC.writeFileSync(emptyPng, Buffer.alloc(0));
+
+function withFootage(layers, footage) {
+  const c = comp(layers);
+  c.footage = footage || [];
+  return c;
+}
+function genOk(files) {
+  return { tool: "comfy_generate", ok: true,
+           data: { files: files, imported: files.map((f, i) =>
+             ({ name: pathC.basename(f), id: 100 + i })) } };
+}
+
+{
+  const v = picture.check(withFootage([], []), {
+    tools: [{ tool: "add_solid", ok: true }], replies: [] });
+  assert(v && /never called comfy_generate/.test(v),
+         "drawing an apple with a solid instead of generating one " +
+         "fails: " + v);
+}
+{
+  const v = picture.check(withFootage([], []), {
+    tools: [{ tool: "comfy_generate", ok: false,
+              error: "Unknown workflow 'apple'" }] });
+  assert(v && /Unknown workflow/.test(v),
+         "a failed generation reports the generator's own error: " + v);
+}
+{
+  const v = picture.check(withFootage([], []), {
+    tools: [{ tool: "comfy_generate", ok: true, data: { files: [] } }] });
+  assert(v && /named no output file/.test(v),
+         "ok:true with no files is not a picture: " + v);
+}
+{
+  // The failure that actually happened once, in a different disguise:
+  // SaveVideo "succeeded" and left a file Windows would not open.
+  const v = picture.check(withFootage([], []), {
+    tools: [genOk([emptyPng])] });
+  assert(v && /none of them is a real file/.test(v),
+         "a zero-byte output fails: " + v);
+  const v2 = picture.check(withFootage([], []), {
+    tools: [genOk([ghostPng])] });
+  assert(v2 && /none of them is a real file/.test(v2),
+         "and so does a file that was never written");
+}
+{
+  const v = picture.check(withFootage([], [
+    { id: 9, name: "something-else.png", path: "C:\\other\\x.png",
+      width: 512, height: 512, duration: 0 }]), { tools: [genOk([realPng])] });
+  assert(v && /never got imported/.test(v),
+         "generated but not in the project fails, and counts what IS " +
+         "there: " + v);
+}
+{
+  // AE hands back fsName (backslashes, its own casing); ComfyUI's
+  // downloader hands back what Node built. Same file, different string.
+  const aeStyle = realPng.replace(/\//g, "\\").toUpperCase();
+  const state = withFootage([], [{ id: 100, name: "apple.png",
+    path: aeStyle, width: 1232, height: 1232, duration: 0 }]);
+  assert(picture.check(state, { tools: [genOk([realPng])] }) === null,
+         "in the project under a differently-cased path is a pass");
+}
+{
+  // The comp half is REPORTED, not failed — no tool places footage in a
+  // comp yet (workplan 5.8). Pinned so that stays a deliberate choice.
+  const state = withFootage(
+    [{ index: 1, name: "apple.png", parent: null, isSolid: false,
+       isNull: false, isText: false, isShape: false, effectNames: [],
+       effectColors: [], sourceFile: realPng }],
+    [{ id: 100, name: "apple.png", path: realPng, width: 1232,
+       height: 1232, duration: 0 }]);
+  assert(picture.check(state, { tools: [genOk([realPng])] }) === null,
+         "and so is the same thing WITH a layer using it");
+}
+try { fsC.unlinkSync(realPng); } catch (e) {}
+try { fsC.unlinkSync(emptyPng); } catch (e) {}
+
+// ---- the generation cleanup only ever takes back what it imported
+
+const { sweepImports, rememberGenerated, generated } = probe;
+{
+  rememberGenerated("comfy_generate", { ok: true, data: {
+    files: ["C:\\gen\\a.png", "C:\\gen\\a.png"],
+    imported: [{ name: "a.png", id: 42 }, { name: "a.png", id: 42 }] } });
+  rememberGenerated("comfy_generate", { ok: false, data: {
+    files: ["C:\\gen\\never.png"], imported: [{ name: "n", id: 7 }] } });
+  rememberGenerated("add_solid", { ok: true, data: { files: ["C:\\x.png"] } });
+  assert(generated.itemIds.join(",") === "42",
+         "only a SUCCESSFUL comfy_generate's imports are remembered, once");
+  assert(generated.files.join(",") === "C:\\gen\\a.png",
+         "same for the files it wrote");
+  const jsx = sweepImports(generated.itemIds);
+  assert(/\[42\]/.test(jsx) && /it\.id === ids\[j\]/.test(jsx),
+         "and the cleanup matches by item id, never by folder");
+  assert(!/comfyOutDir|generated\\\\/.test(jsx),
+         "so a user's own generations in the same folder are never touched");
+}
+
 // ---- anti-drift: the probe's round loop mirrors main.js's, by hand.
 //
 // This is the one thing in the probe that cannot be caught by running
@@ -478,7 +658,6 @@ assert(/rolledBack/.test(probeSrc),
 // probe went on reporting passes while testing a product the panel no
 // longer was.
 const PANEL_ONLY = {
-  setProgressSink: "a UI sink; the probe prints to stdout instead",
   callHostBatch: "main.js only hands it to SelfTest, not to its round loop"
 };
 const used = src => new Set(
@@ -498,6 +677,32 @@ for (const n of Object.keys(PANEL_ONLY)) {
 }
 assert(/forceTinyContext/.test(probeSrc) && /forceTinyContext/.test(mainSrc),
        "and mirrors the reactive hard-trim retry on a context 400");
+
+// The same drift, one level down: tools.js dispatches through panel
+// MODULES, and a module the probe never loaded is not a grounded error,
+// it is a ReferenceError thrown inside the dispatcher. That is what
+// comfy_generate would have hit — the probe loaded settings/tiers/llama/
+// tools and nothing else, so every ComfyUI tool was unreachable and no
+// verdict could ever have said so.
+const toolsSrc = fs2.readFileSync(
+  path2.join(__dirname, "..", "extension", "js", "tools.js"), "utf8");
+const MODULE_FILE = {
+  Comfy: "comfy.js", Setup: "setup.js", Llama: "llama.js",
+  Settings: "settings.js", Tiers: "tiers.js", Tools: "tools.js"
+};
+const needed = new Set(
+  (toolsSrc.match(/global\.([A-Z][A-Za-z]+)/g) || [])
+    .map(m => m.split(".")[1])
+    // AEBridge is the probe's own shim, not a panel file.
+    .filter(n => n !== "AEBridge"));
+for (const mod of [...needed].sort()) {
+  const file = MODULE_FILE[mod];
+  assert(!!file, "tools.js's global." + mod + " maps to a panel file " +
+         "(add it to MODULE_FILE if a new module appeared)");
+  if (!file) continue;
+  assert(probeSrc.indexOf('loadPanelFile("' + file + '")') !== -1,
+         "the probe loads " + file + ", which tools.js dispatches through");
+}
 
 
 // ---------------------------------------- 4. the bridge wrapper AE runs
@@ -532,11 +737,43 @@ assert(published.has("AELLJSON"),
 // the panel or the probe writes into an ExtendScript STRING has to be on
 // $.global. Comments naming an internal helper are not a promise; a
 // string literal is.
+/* Comments out, strings kept. A regex alone cannot do this: one
+ * apostrophe in a prose comment ("ComfyUI's validator") re-pairs every
+ * quote after it, and the scan then reads ordinary CODE as string
+ * contents — which is how a comment mentioning AELL_maybeRollback once
+ * failed this check. Walking the source is the only honest way. */
+function stripComments(src) {
+  let out = "", i = 0;
+  while (i < src.length) {
+    const c = src[i], d = src[i + 1];
+    if (c === "/" && d === "/") {
+      while (i < src.length && src[i] !== "\n") i++;
+    } else if (c === "/" && d === "*") {
+      i += 2;
+      while (i < src.length && !(src[i] === "*" && src[i + 1] === "/")) i++;
+      i += 2;
+    } else if (c === '"' || c === "'" || c === "`") {
+      out += c;
+      i++;
+      while (i < src.length && src[i] !== c) {
+        if (src[i] === "\\") { out += src[i]; i++; }
+        if (i < src.length) { out += src[i]; i++; }
+      }
+      out += c;
+      i++;
+    } else {
+      out += c;
+      i++;
+    }
+  }
+  return out;
+}
+
 function namedInScripts(src) {
   const names = new Set();
   const STRING_LITERAL = new RegExp(
     '"(?:[^"\\\\]|\\\\.)*"' + "|'(?:[^'\\\\]|\\\\.)*'", "g");
-  const strings = src.match(STRING_LITERAL) || [];
+  const strings = stripComments(src).match(STRING_LITERAL) || [];
   for (const s of strings) {
     for (const m of s.match(/(\$\.global\.)?AELL[A-Za-z_]*/g) || []) {
       if (!/^\$\.global\./.test(m)) names.add(m);

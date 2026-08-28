@@ -202,9 +202,22 @@
       // "<name>.manifest" template that loadWorkflow can only reject.
       if (/\.manifest\.json$/i.test(entries[i])) continue;
       if (/\.json$/i.test(entries[i])) {
+        var file = path.join(dir, entries[i]);
+        // A template that still holds this project's own placeholder
+        // cannot render anything — example-txt2img ships with
+        // ckpt_name "CHANGE-ME.safetensors". Offering it next to the
+        // real ones is how the model ends up choosing it: it is the one
+        // whose NAME says txt2img, so a request for a picture lands on
+        // it and dies inside ComfyUI's validator (measured through
+        // chat-probe, 2026-08-28). Flagged here; the tools decide.
+        var isExample = false;
+        try {
+          isExample = fs.readFileSync(file, "utf8").indexOf("CHANGE-ME") !== -1;
+        } catch (eR) {}
         out.push({
           name: entries[i].replace(/\.json$/i, ""),
-          file: path.join(dir, entries[i])
+          file: file,
+          example: isExample
         });
       }
     }
@@ -1302,14 +1315,23 @@
             hasHidden = !!(global.Setup && global.Setup.findComfyInstall &&
                            global.Setup.findComfyInstall());
           } catch (eH) {}
-          cb(null, { online: false, url: comfyUrl, target: base.label,
-                     hiddenBackendInstalled: hasHidden,
-                     hint: hasHidden
-                       ? "Hidden backend installed — it boots " +
-                         "automatically on the next generation request."
-                       : "Start ComfyUI (Launch button in settings, or " +
-                         "manually), or install the hidden backend in " +
-                         "Settings → ComfyUI (tried " + base.label + ")." });
+          // A ComfyUI on this machine at another port outranks both
+          // canned hints: it is the one thing the user can act on in one
+          // setting change.
+          findLocalComfy(base, function (found) {
+            cb(null, { online: false, url: comfyUrl, target: base.label,
+                       hiddenBackendInstalled: hasHidden,
+                       foundAt: found ? found.url : null,
+                       hint: found
+                         ? elsewhereHint(base, found)
+                         : (hasHidden
+                             ? "Hidden backend installed — it boots " +
+                               "automatically on the next generation request."
+                             : "Start ComfyUI (Launch button in settings, " +
+                               "or manually), or install the hidden backend " +
+                               "in Settings → ComfyUI (tried " + base.label +
+                               ").") });
+          });
           return;
         }
         var running = json.queue_running instanceof Array
@@ -1431,6 +1453,49 @@
       function (err, statusCode) { cb(!err && statusCode === 200); });
   }
 
+  /*
+   * The panel's URL setting is dead — is a ComfyUI running on this machine
+   * anyway? Measured on the owner's machine 2026-08-28: comfyUrl said
+   * 8000, a ComfyUI was answering on 8188, and the panel told them to
+   * install a hidden backend they did not need. That is the ungrounded
+   * error this project does not ship: a failed lookup names what actually
+   * exists.
+   *
+   * Deliberately narrow. Localhost only (scanning a remote host's ports is
+   * not the panel's business), the two well-known ComfyUI ports only, and
+   * only AFTER the configured URL has already failed. It REPORTS what it
+   * finds and never reroutes: silently rendering on a different ComfyUI
+   * than the user configured would swap the model set under them.
+   */
+  var LOCAL_COMFY_PORTS = [8188, 8189];
+
+  function findLocalComfy(base, cb) {
+    var localBase = base.host === "127.0.0.1" || base.host === "localhost";
+    var ports = [];
+    for (var i = 0; i < LOCAL_COMFY_PORTS.length; i++) {
+      if (!localBase || LOCAL_COMFY_PORTS[i] !== base.port) {
+        ports.push(LOCAL_COMFY_PORTS[i]);
+      }
+    }
+    (function next(k) {
+      if (k >= ports.length) { cb(null); return; }
+      var probe = { isHttps: false, host: "127.0.0.1", port: ports[k],
+                    label: "127.0.0.1:" + ports[k],
+                    url: "http://127.0.0.1:" + ports[k] };
+      isUp(probe, function (up) {
+        if (up) { cb(probe); return; }
+        next(k + 1);
+      });
+    })(0);
+  }
+
+  /** The sentence a user can act on, once findLocalComfy has an answer. */
+  function elsewhereHint(base, found) {
+    return "Nothing is listening at " + base.label + ", but a ComfyUI IS " +
+      "answering at " + found.label + ". Set the ComfyUI URL in Settings " +
+      "to " + found.url + " — the panel will not switch to it on its own.";
+  }
+
   /**
    * Point the hidden backend at the user's external models folder (they
    * get big) via ComfyUI's own extra_model_paths.yaml mechanism. The yaml
@@ -1540,6 +1605,13 @@
     function say(t) { if (onStatus) onStatus(t); }
     isUp(base, function (up) {
       if (up) { cb(null, { started: false }); return; }
+      // Before refusing, look: a running ComfyUI at another local port
+      // makes both refusals below wrong advice.
+      findLocalComfy(base, function (found) {
+      if (found) {
+        cb(new Error(elsewhereHint(base, found)));
+        return;
+      }
       if (base.host !== "127.0.0.1" && base.host !== "localhost") {
         cb(new Error("ComfyUI at " + base.label + " is not responding, " +
           "and a remote instance cannot be auto-started. Start it there, " +
@@ -1620,6 +1692,7 @@
           global.setTimeout(poll, 2500);
         });
       })();
+      });   // findLocalComfy
     });
   }
 

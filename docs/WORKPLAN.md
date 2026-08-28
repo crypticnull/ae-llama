@@ -342,8 +342,17 @@ FOUR tools are still uncovered and each is deliberate, not pending:
     `set_text_style` still never normalizes — it edits a layer the
     user owns. AE 2026 makes allCaps/smallCaps/superscript/subscript
     READ-ONLY, so an inherited one is reported instead of swallowed.
-  - the checklist never touches ComfyUI, undo across a mixed round, or
-    a second chat turn that refers back ("make them blue instead").
+  - ~~the checklist never touches ComfyUI, undo across a mixed round, or
+    a second chat turn that refers back ("make them blue instead").~~
+    DONE. The undo and second-turn halves landed 2026-08-25 as steps
+    9-11; the ComfyUI half landed 2026-08-28 (0.9.28) as steps 12-13 —
+    "is the picture generator ready" and a real generation through the
+    model into AE, judged on ctx.tools (a panel-side tool leaves nothing
+    in the comp to read back). It found three defects on its first run,
+    all fixed at the root: the probe never loaded comfy.js/setup.js at
+    all, a dead comfyUrl told the user to install a backend they already
+    had running on another port, and the shipped `example-txt2img`
+    placeholder was offered to the model as a real workflow. See the log.
   - a round that fails PART WAY leaves its debris behind: when
     `duplicate_layer` errored before `add_solid` had a layer to copy,
     the model retried the whole round and the comp ended with TEN red
@@ -366,7 +375,25 @@ FOUR tools are still uncovered and each is deliberate, not pending:
   answer to "what if it overshoots" are in WORKPLAN-LOG 2026-08-25.
 - Performance: 200-layer comps — measure grid_layout and batch
   keyframe wall time; note anything over ~5s so the remote session can
-  optimize.
+  optimize. (Largely answered 2026-08-21: nothing over ~1s. Left here
+  for the batch-keyframe half.)
+- **NEW, filed by the ComfyUI probe steps 2026-08-28, each its own small
+  pass:**
+  - **A generation that fails does not get retried.** ComfyUI rejected
+    the workflow the model chose; the model had four rounds left, said
+    "let's try a different approach or workflow", and stopped. The
+    grounded error now names the workflows that WOULD work (0.9.28), so
+    re-run step 13 before designing anything — this may already be
+    fixed. If not, it is a prompt rule ("a rejected workflow is not a
+    rejected request"), not a tool.
+  - **A bundled workflow template never reaches an existing install
+    once it has been seeded.** `Setup.ensureDataDirs` copies only files
+    the data dir does NOT have ("never overwrite edits"), so the KREA2
+    template that shipped in 0.9.23 was still absent from this machine
+    on 0.9.27 — the panel offered two workflows where the repo has
+    three. A fix needs a version-stamped or hash-compared seed that can
+    still tell a user's edit from a stale copy; that is a design call
+    for the remote session.
 - ~~**`set_layer_3d` loses the Z in silence.**~~ DONE 2026-08-28 (0.9.25).
   A second probe measured the FULL loss (Scale Z resets to 100 rather
   than zeroing, Orientation and X/Y Rotation clear, keyframe values are
