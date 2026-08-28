@@ -44,7 +44,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `duplicate_comp` | Duplicate a composition | yes | host | 1 | 1 |
 | `duplicate_layer` | Duplicate a LAYER inside its comp (use duplicate_comp only for whole compositions) | yes | host | 1 | 6 |
 | `for_each_layer` | Run a PER-LAYER tool once per target layer in ONE call (max 200 layers) — the batch executor for anything without its own layers arg: {tool: 'apply_effect', args: {effect: 'Gaussian Blur'}} blurs every target | yes | host | 1 | 6 |
-| `get_comp_details` | Layers of a comp with index, name, type, timing, effects | no | host | 1 | 16 |
+| `get_comp_details` | Layers of a comp with index, name, type, timing, effects | no | host | 2 | 16 |
 | `get_project_info` | List project items (comps/footage/folders) and the active comp | no | host | 2 | 9 |
 | `get_property` | Read ANY property by path: value, keyframes, expression | no | host | 1 | 68 |
 | `grid_layout` | Arrange layers into a grid rigged to a control null: its 'Grid X Spacing'/'Grid Y Spacing'/'Grid Columns' sliders drive spacing AND column count live, and the grid centers on the null's position (all expressions generated host-side) | yes | host | 1 | 2 |

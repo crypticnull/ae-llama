@@ -335,17 +335,12 @@ function rememberGenerated(tool, result) {
   }
 }
 
+// The panel's own budgeter, not a copy of it. The probe exists to run
+// the product path for real, and a second implementation here would be
+// a second thing to get wrong - which it was: this held a duplicate of
+// the byte-slicer for as long as main.js did.
 function compactToolResults(results) {
-  const parts = [];
-  for (const r of results) {
-    let s;
-    try { s = JSON.stringify(r); } catch (e) { s = String(r); }
-    if (s.length > 1200) s = s.slice(0, 1200) + " …(truncated)";
-    parts.push(s);
-  }
-  let out = "[" + parts.join(",\n") + "]";
-  if (out.length > 6000) out = out.slice(0, 6000) + " …(truncated)";
-  return out;
+  return Tools.compactToolResults(results);
 }
 
 function sendMessage(text, done) {

@@ -373,10 +373,19 @@ FOUR tools are still uncovered and each is deliberate, not pending:
   Budget: one rollback per user request. A failing READ-ONLY tool does
   not trigger it. Four AE measurements gated the design; they and the
   answer to "what if it overshoots" are in WORKPLAN-LOG 2026-08-25.
-- Performance: 200-layer comps — measure grid_layout and batch
-  keyframe wall time; note anything over ~5s so the remote session can
-  optimize. (Largely answered 2026-08-21: nothing over ~1s. Left here
-  for the batch-keyframe half.)
+- ~~Performance: 200-layer comps — measure grid_layout and batch
+  keyframe wall time~~ DONE 2026-08-28 (0.9.29). The batch-keyframe half
+  is measured and fine: at 200 layers set_keyframes (600 keys) 167 ms,
+  apply_keyframe_ease 291 ms, remove_keyframes 517 ms, grid_layout
+  872 ms, stagger_layers 53 ms, distribute_property 69 ms, scale_comp
+  352 ms, for_each_layer apply_effect 313 ms. Nothing near the ~5s flag,
+  as in 2026-08-21. What the same probe found is the follow-up this
+  bullet had been carrying since then, and it is now fixed: **eleven
+  tools serialize past the panel's per-result cap and every one of them
+  reached the model as JSON cut mid-object.** compactToolResults now
+  drops WHOLE ROWS with a count, the way budgetState already did for the
+  state block, and the per-result cap is a fair share of the round's
+  6000 rather than a fixed 1200. See the log.
 - **NEW, filed by the ComfyUI probe steps 2026-08-28, each its own small
   pass:**
   - **A generation that fails does not get retried.** ComfyUI rejected

@@ -3609,3 +3609,152 @@ line now reads 289). Chat probe steps 1, 12, 13: 3/3.
 CONVERSATION, and steps 12-13 assume "Probe Room" exists - run them as
 `--steps 1,12,13`, never alone, or every verdict reads a comp that is not
 there.
+
+## 2026-08-28 (local, eighth pass) - item 4: the tool results the model reads were cut mid-object (0.9.29)
+
+Harness green on arrival (289/289), so the pass took item 4's last
+unstruck bullet: **performance at 200 layers, the batch-keyframe half.**
+The wall times were fine, as they were on 2026-08-21. The follow-up that
+bullet had been carrying since then was not.
+
+### The measurement the bullet asked for
+
+200 solids, AE 2026, one run each: set_keyframes (600 keys) 167 ms,
+apply_keyframe_ease 291 ms, remove_keyframes 517 ms, grid_layout 872 ms,
+stagger_layers 53 ms, distribute_property 69 ms, reorder_layers 59 ms,
+scale_comp 352 ms, for_each_layer apply_effect 313 ms, set_layer_parent
+35 ms, duplicate_layer x100 128 ms, building the 200 solids 704 ms.
+Nothing within an order of magnitude of the ~5s flag. That half is
+closed and the bullet is struck.
+
+### What the same probe found, which is the real subject of this entry
+
+The 2026-08-21 pass filed one thing FOR THE REMOTE SESSION and it was
+never picked up: the write tools echo a row per layer against
+`compactToolResults`' 1200-byte per-result cap. Re-measured, it is not
+three tools and it is not mainly about echoes. **Eleven** of the tools
+the model leans on hardest serialize past that cap, and `slice(0, 1200)`
+handed EVERY one of them to the model as JSON cut mid-object - no closing
+brace, and no count of what went missing:
+
+    get_comp_details     7305   (already row-capped at 40 by the HOST)
+    stagger_layers       7262
+    grid_layout          7258
+    distribute_property  6529
+    list_properties      5648
+    scale_comp           3577
+    list_effects         3514
+    get_project_info     3207   (already row-capped at 40 by the HOST)
+    distribute_property  2286   (the overriddenByExpression path)
+    set_layer_parent     1589
+    audit_comp_usage     1442
+    rename_comps         1339
+
+The two entries marked HOST are the ones worth sitting with. The
+2026-08-21 pass bounded exactly those two tools host-side so the model
+would stop drowning - and the host's 40-row cap and the panel's
+1200-byte cap were never reconciled with each other, so forty rows the
+host went to the trouble of selecting (SELECTED layers first, the active
+comp never dropped) arrived as six and a fragment. The system prompt
+tells the model to read `selected: true` out of get_comp_details to
+resolve "these layers"; on any comp past ~10 layers, calling that tool
+returned something it could not parse.
+
+### The fix, at the panel, and why not at the host
+
+`compactToolResults` moved from a closure inside main.js's chat path into
+tools.js (the same move `fetchProjectState` made on 2026-08-21, for the
+same reason - it is now testable without a panel) and follows the rule
+`budgetState` already followed: NOTHING IS BYTE-SLICED.
+
+- Oversized results are shrunk STRUCTURALLY - whole rows off the END of
+  whichever array currently costs the most, because these lists are
+  ordered and the head is the informative part. What is sent is always
+  parseable JSON.
+- Every shortened list reports itself: `truncated: "placed: 159 of 200
+  shown (dropped to fit the model's context, NOT by the tool - narrow
+  the request or page for the rest)"`. The wording is deliberate; a bare
+  count reads like a tool that half-worked.
+- The per-result cap is a FAIR SHARE of the round's 6000, not a fixed
+  1200. Results that come in under their share donate what they did not
+  use, repeatedly, so one big read is not punished for the company it
+  keeps: a get_comp_details sharing a round with two 90-byte
+  acknowledgements now gets ~5900 bytes instead of 1200.
+- No arrays to drop from (one enormous error string) shortens the
+  longest STRING instead, which still leaves valid JSON. The byte-slice
+  survives only as an unreachable last resort.
+- The caller's objects are never mutated - the shrink runs on a copy, so
+  the transcript the USER sees keeps every row.
+
+Deliberately NOT fixed by capping the tools themselves: bounding each
+tool to fit 1200 bytes would have cut get_comp_details to about six
+layers, and the host cap is where the model's real needs are known (it
+keeps selected layers). The defect was the byte slice, so the byte slice
+is what changed. One generic fix also covers the eleventh tool and the
+twelfth, which per-tool caps never would.
+
+### Two things found on the way
+
+- **The note is what put the result back over the cap.** The first cut
+  wrote `truncated` after the drop loop finished, so the annotated result
+  was over budget again and the final slice cut it mid-object - the exact
+  bug, reintroduced by the fix for it. The note is written and measured
+  INSIDE the loop now, and the test asserts parseability, not row counts.
+- **chat-probe.js held its own copy of the byte-slicer.** The probe is
+  the only thing that tests the model's half, and it would have gone on
+  measuring the old behavior. tests/test-chat-probe.js's anti-drift check
+  ("the probe uses every Tools helper main.js's chat path does") caught
+  it within a minute of the export existing. The probe delegates now.
+
+### Verified in real AE, twice
+
+- `logs/probe-echo3.jsx` captured the ten results above VERBATIM from a
+  real 200-layer comp and fed them through the real tools.js in Node:
+  all ten unparseable under the old cap, all ten valid now, and all ten
+  together in one round come to 5760 bytes of valid JSON.
+- `node scripts/chat-probe.js --steps 1,2,3` - real settings, real
+  llama-server, real tools.js, real AE - 3/3 steps met their verdict, so
+  the live product path still works with the new budgeter in it.
+- Harness: **289/289 PASSED** (unchanged; this is panel-side, and the AE
+  suite does not run the panel's chat path). Stubbed suite: 36 files
+  green, capability doc regenerated.
+
+### Covered without AE
+
+`tests/test-tool-result-budget.js` (NEW, 49 assertions), sibling of
+test-context-budget.js and carrying the field byte counts in its header.
+It asserts the bug ITSELF - that the old 1200-byte slice of a real
+grid_layout result does not parse - so the assertion fails if anyone
+"fixes" it back. Plus: valid JSON for every shape, the head of the list
+surviving, the count being reported, the caller's object untouched, fair
+sharing (and that a solo result never does worse than a shared one), the
+total holding at 1/2/3/8/20 oversized results in one round, two long
+lists in one result, a result with no arrays at all, and the real
+hostscript's 40-row get_comp_details run through the budgeter end to end.
+The anti-drift half asserts main.js no longer contains either slice.
+
+### Bumped to 0.9.29 - the assumption, stated
+
+This fixes shipped behavior verified against real AE bytes, so it is a
+patch bump by the standing local rule. The judgment call worth naming:
+the 2026-08-21 log handed this to the remote session ("wants a deliberate
+pass rather than a ride-along"). It sat for a week while every affected
+tool kept handing the model fragments, and the workplan bullet it lived
+under is a local one. I took it as that deliberate pass rather than
+leaving it for another week. Nothing about the ROLLBACK design was
+touched - that is still remote's.
+
+### Left for a human or a later pass
+
+- **The 6000-byte round budget is unchanged and unmeasured.** It is
+  inherited from the old code, and it is now the only limit doing any
+  work. Whether 6000 is right for a 32B model with a large context is a
+  question nobody has asked in the field; if it is raised, the fair-share
+  split is already the mechanism.
+- **`for_each_layer` stops after 5 failures and says so, but the failure
+  text is unbounded** (530 bytes for 5 short ones). It fits today because
+  the count is capped, not because the text is.
+- The next pass starts at item 5 (feature track, probe first) - item 4
+  now has nothing local left. Its two remaining bullets are both design
+  calls already filed for the remote session: the version-stamped
+  workflow seed, and rollback across a mixed panel/host round.

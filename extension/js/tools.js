@@ -1122,6 +1122,184 @@
     return JSON.stringify(state);
   }
 
+  // ------------------------------------------------- tool-result budget
+  //
+  // Every tool result the model reads passes through here. The rule is
+  // the one budgetState already follows, for the same reason and paid for
+  // by the same kind of field measurement: NOTHING IS BYTE-SLICED.
+  //
+  // Measured in AE 2026 on a 200-layer comp (WORKPLAN item 4): eleven of
+  // the tools the model leans on hardest serialize past the old 1200-byte
+  // per-result cap — grid_layout 7258, get_comp_details 7305 (already
+  // row-capped at 40 by the host), stagger_layers 7262, distribute_property
+  // 6529, list_properties 5648, scale_comp 3577, list_effects 3514,
+  // get_project_info 3207, set_layer_parent 1589, audit_comp_usage 1442,
+  // rename_comps 1339 — and `slice(0, 1200)` handed every one of them to
+  // the model as JSON cut mid-object, with no count of what went missing.
+  //
+  // Two things changed:
+  //  1. Oversized results are shrunk STRUCTURALLY — whole rows off the
+  //     END of their longest array (lists here are ordered, so the head
+  //     is the informative part), each shrunk array reporting "12 of 200"
+  //     in a `truncated` field. The output is always parseable JSON.
+  //  2. The per-result cap is a FAIR SHARE of the round's budget, not a
+  //     fixed 1200. A round whose other results are 90-byte
+  //     acknowledgements lets the one get_comp_details use nearly the
+  //     whole 6000 — under the old fixed cap it got 1200 bytes, which is
+  //     six layer rows out of the forty the host went to the trouble of
+  //     selecting.
+
+  var RESULTS_BUDGET = 6000;
+  var RESULT_FLOOR = 120;      // enough for the shell + the note
+
+  function jsonLen(v) {
+    try { return JSON.stringify(v).length; } catch (e) { return 0; }
+  }
+
+  /** Every array worth dropping rows from, result-object first. */
+  function shrinkableArrays(obj, depth, out) {
+    if (!obj || typeof obj !== "object" || depth > 3) return out;
+    for (var k in obj) {
+      if (!Object.prototype.hasOwnProperty.call(obj, k)) continue;
+      var v = obj[k];
+      if (v && typeof v === "object") {
+        if (Object.prototype.toString.call(v) === "[object Array]") {
+          if (v.length) out.push({ owner: obj, key: k, arr: v, full: v.length });
+        } else {
+          shrinkableArrays(v, depth + 1, out);
+        }
+      }
+    }
+    return out;
+  }
+
+  /** The longest string value in the result, for the no-arrays case. */
+  function longestString(obj, depth, best) {
+    if (!obj || typeof obj !== "object" || depth > 3) return best;
+    for (var k in obj) {
+      if (!Object.prototype.hasOwnProperty.call(obj, k)) continue;
+      var v = obj[k];
+      if (typeof v === "string") {
+        if (!best || v.length > best.len) best = { owner: obj, key: k, len: v.length };
+      } else if (v && typeof v === "object") {
+        best = longestString(v, depth + 1, best);
+      }
+    }
+    return best;
+  }
+
+  /**
+   * Shrink ONE result to `cap` bytes without ever cutting mid-object.
+   * Returns the JSON string. Mutates a deep copy, never the caller's
+   * object — the transcript the user sees keeps everything.
+   */
+  function fitResult(result, cap) {
+    var s = jsonLen(result) ? JSON.stringify(result) : String(result);
+    if (s.length <= cap) return s;
+
+    var copy;
+    try { copy = JSON.parse(s); } catch (e) { return s.slice(0, cap) + " …(truncated)"; }
+
+    var arrays = shrinkableArrays(copy, 0, []);
+    var touched = [];
+
+    // The note has to be written BEFORE the size is checked, or it is the
+    // thing that puts the result back over the cap — which is how the
+    // first cut of this shrinker still produced unparseable JSON.
+    function annotate() {
+      var owners = [], t, q, idx;
+      for (t = 0; t < touched.length; t++) {
+        idx = -1;
+        for (q = 0; q < owners.length; q++) {
+          if (owners[q].owner === touched[t].owner) idx = q;
+        }
+        if (idx < 0) { owners.push({ owner: touched[t].owner, lines: [] });
+                       idx = owners.length - 1; }
+        owners[idx].lines.push(touched[t].key + ": " + touched[t].arr.length +
+                               " of " + touched[t].full + " shown");
+      }
+      for (q = 0; q < owners.length; q++) {
+        owners[q].owner.truncated = owners[q].lines.join("; ") +
+          " (dropped to fit the model's context, NOT by the tool — " +
+          "narrow the request or page for the rest)";
+      }
+    }
+
+    while (JSON.stringify(copy).length > cap) {
+      // Always take from whichever array is currently costing the most,
+      // and take from its END: these lists are ordered, so the head is
+      // the informative part.
+      var big = null;
+      for (var i = 0; i < arrays.length; i++) {
+        if (!arrays[i].arr.length) continue;
+        var w = jsonLen(arrays[i].arr);
+        if (!big || w > big.w) big = { a: arrays[i], w: w };
+      }
+      if (!big) break;
+      big.a.arr.pop();
+      var seen = false;
+      for (var u = 0; u < touched.length; u++) if (touched[u] === big.a) seen = true;
+      if (!seen) touched.push(big.a);
+      annotate();
+    }
+    var out = JSON.stringify(copy);
+    if (out.length > cap) {
+      // No arrays left to drop: shorten the longest STRING instead, which
+      // still leaves valid JSON.
+      var ls = longestString(copy, 0, null);
+      if (ls) {
+        var keep = Math.max(40, ls.len - (out.length - cap) - 20);
+        ls.owner[ls.key] = String(ls.owner[ls.key]).slice(0, keep) + " …";
+        out = JSON.stringify(copy);
+      }
+    }
+    return out.length > cap ? out.slice(0, cap) + " …(truncated)" : out;
+  }
+
+  /**
+   * Bound a whole round of tool results. Each result gets an equal share
+   * of the budget; results that come in under their share donate what
+   * they did not use to the ones that need it (repeated until nothing
+   * more can be given away), so one big read is not punished for the
+   * company it keeps.
+   */
+  function compactToolResults(results) {
+    var n = results.length;
+    if (!n) return "[]";
+    var sizes = [], i;
+    for (i = 0; i < n; i++) sizes.push(fitResult(results[i], Infinity).length);
+
+    // The budget covers what is SENT, so the brackets and the ",\n"
+    // between results come out of it before anyone gets a share.
+    var pool = Math.max(n * 40, RESULTS_BUDGET - 2 - (n - 1) * 2);
+    var caps = [], settled = [], unsettled = n;
+    for (i = 0; i < n; i++) { caps.push(0); settled.push(false); }
+    var moved = true;
+    while (moved && unsettled > 0) {
+      moved = false;
+      var share = Math.floor(pool / unsettled);
+      for (i = 0; i < n; i++) {
+        if (settled[i] || sizes[i] > share) continue;
+        caps[i] = sizes[i];
+        settled[i] = true;
+        pool -= sizes[i];
+        unsettled--;
+        moved = true;
+      }
+    }
+    if (unsettled > 0) {
+      var each = Math.floor(pool / unsettled);
+      // A floor, but only while it still fits the round — the total is
+      // the harder promise of the two.
+      if (n * RESULT_FLOOR <= RESULTS_BUDGET) each = Math.max(RESULT_FLOOR, each);
+      for (i = 0; i < n; i++) if (!settled[i]) caps[i] = each;
+    }
+
+    var parts = [];
+    for (i = 0; i < n; i++) parts.push(fitResult(results[i], caps[i]));
+    return "[" + parts.join(",\n") + "]";
+  }
+
   /**
    * Build the state block. cb(jsonString) — always a STRING, and always
    * valid JSON unless the host itself was unreachable.
@@ -1409,6 +1587,7 @@
     RESPONSE_SCHEMA: RESPONSE_SCHEMA,
     buildSystemPrompt: buildSystemPrompt,
     fetchProjectState: fetchProjectState,
+    compactToolResults: compactToolResults,
     callHostTool: callHostTool,
     callHostBatch: callHostBatch,
     executeCommands: executeCommands,
