@@ -308,8 +308,13 @@
             "gradient_stroke, repeater, trim_paths, merge_paths, " +
             "offset_paths, rounded_corners, pucker_bloat, twist, zigzag. " +
             "params sets the new item's values by name ({Size: [200,200], " +
-            "Color: [1,0,0], Copies: 5, End: 50}). Animate afterwards via " +
-            "set_keyframes on 'contents/…' paths.",
+            "Color: [1,0,0], Copies: 5, End: 50}). ORDER MATTERS: a " +
+            "repeater/trim/offset/twist/zigzag acts on the content ABOVE " +
+            "it and new content is appended BELOW, so add the shape " +
+            "FIRST and the filter after it. Animate afterwards via " +
+            "set_keyframes on 'contents/<Group>/<Item>/<Param>' paths; a " +
+            "repeater's offsets are one deeper " +
+            "('…/Repeater 1/Transform/Position').",
       args: "{comp?: string, layer?: name|index (shape layer; omit = selected), kind: string, group?: name (add inside this group), name?: string, params?: {ParamName: value, …}}" },
     { name: "precompose", mutating: true,
       desc: "Move layers into a new nested comp (precompose). The result " +
@@ -628,6 +633,15 @@
       "  repeaters/trim_paths inside it via {group}. Set initial values",
       "  with params; animate them with set_keyframes on",
       "  'contents/<Group>/<Item>/<Param>' paths.",
+      "- Shape content is a STACK: a repeater, trim_paths, offset_paths,",
+      "  twist or zigzag changes the items ABOVE it, and each new item is",
+      "  added BELOW the last, so add the path/shape FIRST and the",
+      "  filter after it — the other way round it renders nothing.",
+      "- 'multiply it / a row / a ring of them' = one shape plus a",
+      "  repeater: {kind: 'repeater', params: {Copies: 6, Position:",
+      "  [200,0]}}. A ring is Position [0,0] with Rotation 360/Copies and",
+      "  the shape drawn off-centre; animate Copies or",
+      "  '…/Repeater 1/Transform/Rotation' with set_keyframes.",
       "- Mask path keys must all carry the SAME point count (repeat a",
       "  vertex to pad); AE cannot tween paths of different counts.",
       "- 'animate the mask / wipe it on' = set_mask_path {keys: […]} or",

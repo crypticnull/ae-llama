@@ -23,8 +23,8 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `add_marker` | Add a marker to the comp (omit 'layer') or to a layer | yes | host | 1 | 8 |
 | `add_mask` | Add a mask to a layer | yes | host | 1 | 3 |
 | `add_null` | Add a null layer (use as a controller or parent) | yes | host | 1 | 7 |
-| `add_shape_content` | Add content INSIDE a shape layer: kinds group, rectangle, ellipse, star, polygon, path, fill, stroke, gradient_fill, gradient_stroke, repeater, trim_paths, merge_paths, offset_paths, rounded_corners, pucker_bloat, twist, zigzag | yes | host | 1 | 1 |
-| `add_shape_layer` | Add a shape layer (rectangle, ellipse, polygon, or star) | yes | host | — | 1 |
+| `add_shape_content` | Add content INSIDE a shape layer: kinds group, rectangle, ellipse, star, polygon, path, fill, stroke, gradient_fill, gradient_stroke, repeater, trim_paths, merge_paths, offset_paths, rounded_corners, pucker_bloat, twist, zigzag | yes | host | 1 | 8 |
+| `add_shape_layer` | Add a shape layer (rectangle, ellipse, polygon, or star) | yes | host | — | 2 |
 | `add_solid` | Add a solid layer | yes | host | — | 25 |
 | `add_text_animator` | Animate a text layer PER CHARACTER (typewriter, cascade, wiggle) — an animator holds the properties, a selector picks which characters get them | yes | host | 1 | 10 |
 | `add_text_layer` | Add a text layer to a comp | yes | host | 1 | 6 |
@@ -33,21 +33,21 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `apply_expression_preset` | Apply a known-good expression | yes | host | 1 | 3 |
 | `apply_keyframe_ease` | Apply a bezier as TEMPORAL easing between keyframes on one property across MANY layers in ONE call (converts to AE speed/influence ease) | yes | host | 1 | 3 |
 | `audit_comp_usage` | Facts about how comps are used, before renaming anything: which comps each one is nested in, whether it is in the render queue, and every expression that names it as a string | no | host | 1 | 1 |
-| `center_anchor_point` | Center a layer's anchor point on its visible content (sourceRect math done host-side; position compensated so the layer does not jump, at every Position keyframe) | yes | host | 1 | 1 |
+| `center_anchor_point` | Center a layer's anchor point on its visible content (sourceRect math done host-side; position compensated so the layer does not jump, at every Position keyframe) | yes | host | 1 | 2 |
 | `comfy_generate` | Generate an image/video with local ComfyUI and import it into the AE project | yes | panel | — | — |
 | `comfy_list_workflows` | List available ComfyUI generation workflow templates by name | no | panel | — | — |
 | `comfy_status` | Check the local ComfyUI instance (online? queue depth?) | no | panel | — | — |
 | `create_comp` | Create a composition and open it | yes | host | 1 | 20 |
 | `create_folder` | Create a project-panel folder | yes | host | 1 | 8 |
 | `delete_item` | Delete a project item | yes | host | 1 | 26 |
-| `delete_layer` | Delete a layer from a comp | yes | host | — | 2 |
+| `delete_layer` | Delete a layer from a comp | yes | host | — | 3 |
 | `distribute_property` | Distribute a property VALUE across layers | yes | host | 1 | 5 |
 | `duplicate_comp` | Duplicate a composition | yes | host | 1 | 1 |
 | `duplicate_layer` | Duplicate a LAYER inside its comp (use duplicate_comp only for whole compositions) | yes | host | 1 | 6 |
 | `for_each_layer` | Run a PER-LAYER tool once per target layer in ONE call (max 200 layers) — the batch executor for anything without its own layers arg: {tool: 'apply_effect', args: {effect: 'Gaussian Blur'}} blurs every target | yes | host | 1 | 6 |
 | `get_comp_details` | Layers of a comp with index, name, type, timing, effects | no | host | 2 | 19 |
 | `get_project_info` | List project items (comps/footage/folders) and the active comp | no | host | 2 | 9 |
-| `get_property` | Read ANY property by path: value, keyframes, expression | no | host | 2 | 75 |
+| `get_property` | Read ANY property by path: value, keyframes, expression | no | host | 3 | 79 |
 | `grid_layout` | Arrange layers into a grid rigged to a control null: its 'Grid X Spacing'/'Grid Y Spacing'/'Grid Columns' sliders drive spacing AND column count live, and the grid centers on the null's position (all expressions generated host-side) | yes | host | 1 | 2 |
 | `import_file` | Import a footage/image/video file into the project | yes | host | — | — |
 | `link_property` | Drive a layer property from a control | yes | host | — | 1 |
@@ -64,13 +64,13 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `set_comp_setting` | Change a comp setting (duration, frame rate, bg color) | yes | host | 1 | 1 |
 | `set_effect_param` | Set a parameter on an effect already applied to a layer | yes | host | — | 1 |
 | `set_expression` | LAST RESORT: set a raw expression (or clear with '') | yes | host | 1 | 10 |
-| `set_keyframes` | Set the SAME keyframes on MANY layers in ONE call | yes | host | 2 | 8 |
+| `set_keyframes` | Set the SAME keyframes on MANY layers in ONE call | yes | host | 2 | 9 |
 | `set_layer_3d` | Enable/disable a layer's 3D switch | yes | host | 1 | 3 |
 | `set_layer_parent` | Parent layers to another layer (omit/null parent to unparent) | yes | host | 1 | 5 |
 | `set_layer_timing` | Set layer inPoint/outPoint/startTime (seconds) | yes | host | — | 3 |
 | `set_mask` | Edit an EXISTING mask: mode, feather, expansion, opacity, inverted, rename | yes | host | 1 | 1 |
 | `set_mask_path` | Replace or ANIMATE a mask's path | yes | host | 1 | 7 |
-| `set_property` | Set ANY property by path — the universal fallback when no dedicated tool fits | yes | host | 3 | 6 |
+| `set_property` | Set ANY property by path — the universal fallback when no dedicated tool fits | yes | host | 3 | 9 |
 | `set_solid_color` | Change a SOLID layer's colour (this is the ONLY way — a solid's colour is not a property you can set_property) | yes | host | 1 | 4 |
 | `set_text_style` | Restyle an existing text layer (any subset of fields) | yes | host | 1 | 2 |
 | `set_track_matte` | Use one layer as another's track matte (alpha or luma, optionally inverted), or remove it with mode 'none' | yes | host | 1 | 1 |
@@ -203,7 +203,17 @@ Queued (see WORKPLAN for owners/order):
   the panel now flags a hidden one on a read and refuses a write to it
   instead of leaking AE's own "the property or a parent property is
   hidden".
-- Feature track not yet built: repeaters, preset library, render queue,
+- Shape repeaters were never missing, only unreachable. Since 0.9.31 a
+  `contents/<Group>/<Item>/<Param>` path resolves: a shape group hides
+  its items in a nested "Contents" group AE's timeline never draws, so
+  every path this panel documented -- its own returned notes and the
+  system prompt's trim-paths recipe included -- was one segment short and
+  failed. The short form now hops that segment (a real child of the same
+  name still wins), and `add_shape_content` warns when a repeater, trim,
+  offset, twist or zigzag lands with no shape ABOVE it: those act on
+  what is above them and new content is always appended below, so the
+  order they were added in is the whole story.
+- Feature track not yet built: preset library, render queue,
   project hygiene, audio-to-keyframes, frame round-trip, .mogrt export,
   whisper captions, ffmpeg exports (items 5-6).
 - Image/video generation is not yet seamless: no frame-aware img2img,

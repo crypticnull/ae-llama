@@ -455,6 +455,165 @@ function hostList(name) {
 const PER_LAYER_TOOLS = hostList("AELL_PER_LAYER_LIST");
 const READ_TOOLS = hostList("AELL_PER_LAYER_READ_LIST");
 const BATCHED_TOOLS = hostList("AELL_ALREADY_BATCHED_LIST");
+// ---- shape contents: a STACK whose filters act on what is ABOVE them,
+// under groups that hide their items one hop down (WORKPLAN 5.2, all
+// measured in AE 2026). A canned host that only said "ok" would let a
+// repeater that renders nothing, and a documented path that resolves to
+// nothing, both pass their own suite steps -- which is how both shipped.
+const SHAPE_FILTERS = { repeater: 1, trim_paths: 1, merge_paths: 1,
+  offset_paths: 1, rounded_corners: 1, pucker_bloat: 1, twist: 1,
+  zigzag: 1 };
+const SHAPE_ITEM_NAME = { repeater: "Repeater 1", trim_paths: "Trim Paths 1",
+  rectangle: "Rectangle Path 1", ellipse: "Ellipse Path 1",
+  star: "Polystar Path 1", polygon: "Polystar Path 1", fill: "Fill 1",
+  stroke: "Stroke 1" };
+// Where each param sits INSIDE its item: "" is a direct child, and a
+// repeater's six offsets are one level down in Transform.
+const SHAPE_PARAMS = {
+  repeater: { Copies: "", Offset: "", Composite: "",
+              "Anchor Point": "Transform", Position: "Transform",
+              Scale: "Transform", Rotation: "Transform",
+              "Start Opacity": "Transform", "End Opacity": "Transform" },
+  rectangle: { Size: "", Position: "", Roundness: "" },
+  ellipse: { Size: "", Position: "" },
+  star: { Type: "", Points: "", "Outer Radius": "" },
+  polygon: { Type: "", Points: "", "Outer Radius": "" },
+  fill: { Color: "", Opacity: "" },
+  stroke: { Color: "", "Stroke Width": "" },
+  trim_paths: { Start: "", End: "", Offset: "" }
+};
+const SHAPE_RANGE = { Copies: [0, null], Composite: [1, 2],
+                      "Start Opacity": [0, 100], "End Opacity": [0, 100] };
+const SHAPE_DEFAULTS = { repeater: { Copies: 1, Offset: 0, Composite: 1,
+    "Transform/Anchor Point": [0, 0], "Transform/Position": [0, 0],
+    "Transform/Scale": [100, 100], "Transform/Rotation": 0,
+    "Transform/Start Opacity": 100, "Transform/End Opacity": 100 },
+  rectangle: { Size: [100, 100], Position: [0, 0], Roundness: 0 },
+  trim_paths: { Start: 0, End: 100, Offset: 0 },
+  fill: { Color: [1, 1, 1, 1], Opacity: 100 } };
+let shapeLayers = {};            // layer -> { groups: [], root: [] }
+function resetShapeRig() { shapeLayers = {}; }
+function shapeMakesGeometry(it) {
+  return it.kind === "group" || /^(rectangle|ellipse|star|polygon)$/
+    .test(it.kind);
+}
+function shapeNewItem(kind, name) {
+  const it = { kind: kind, name: name || SHAPE_ITEM_NAME[kind] || kind,
+               vals: {}, items: [] };
+  const d = SHAPE_DEFAULTS[kind] || {};
+  Object.keys(d).forEach(k => { it.vals[k] = d[k]; });
+  // A group carries its own Transform BESIDE the Contents its items live
+  // in -- the pair that makes "contents/G/Transform" ambiguous.
+  if (kind === "group") it.vals["Transform/Rotation"] = 0;
+  return it;
+}
+function shapeAddItem(layer, container, kind, name) {
+  const it = shapeNewItem(kind, name);
+  container.push(it);
+  return it;
+}
+function shapeLayerOf(name) { return shapeLayers[name] || null; }
+function shapeSeedLayer(name) {
+  // add_shape_layer draws its rectangle inside a group, exactly as AE does.
+  const L = { items: [] };
+  const g = shapeAddItem(name, L.items, "group", "Rectangle 1");
+  const r = shapeAddItem(name, g.items, "rectangle");
+  r.vals.Size = [10, 10];
+  shapeLayers[name] = L;
+  return L;
+}
+function shapeFindGroup(L, name) {
+  return L.items.filter(i => i.kind === "group" && i.name === name)[0] || null;
+}
+/* Resolve a 'contents/...' path the way the host now does: a direct child
+   first, then the hop into a group's hidden Contents. */
+function shapeResolve(L, layerName, path) {
+  const segs = String(path).split("/").filter(s => s !== "");
+  if (!segs.length || segs[0].toLowerCase() !== "contents") return null;
+  let list = L.items, node = null, walked = ["contents"];
+  for (let i = 1; i < segs.length; i++) {
+    const seg = segs[i];
+    if (node && node.kind === "group" && seg === "Contents") continue;
+    if (node) {
+      const inner = node.kind === "group" ? node.items : null;
+      // a param, possibly under the item's own Transform block
+      const map = SHAPE_PARAMS[node.kind] || {};
+      const rest = segs.slice(i).join("/");
+      if (node.kind !== "group" || seg === "Transform") {
+        const key = Object.prototype.hasOwnProperty.call(node.vals, rest)
+          ? rest : null;
+        if (key) return { item: node, key: key };
+        if (Object.prototype.hasOwnProperty.call(map, seg) &&
+            i === segs.length - 1) {
+          return { item: node, key: (map[seg] ? map[seg] + "/" : "") + seg };
+        }
+      }
+      if (!inner) {
+        return { __err: "Path segment '" + seg + "' not found under '" +
+          walked.join("/") + "'. Children here: " +
+          Object.keys(node.vals).join(", ") +
+          ". Use list_properties to inspect the real tree." };
+      }
+      const hit = inner.filter(c => c.name === seg)[0];
+      if (!hit) {
+        return { __err: "Path segment '" + seg + "' not found under '" +
+          walked.join("/") + "'. Children here: Blend Mode, Contents, " +
+          "Transform — and inside Contents: " +
+          inner.map(c => c.name).join(", ") +
+          ". Use list_properties to inspect the real tree." };
+      }
+      node = hit; walked.push(seg); continue;
+    }
+    const top = list.filter(c => c.name === seg)[0];
+    if (!top) {
+      return { __err: "Path segment '" + seg + "' not found under '" +
+        walked.join("/") + "'. Children here: " +
+        list.map(c => c.name).join(", ") +
+        ". Use list_properties to inspect the real tree." };
+    }
+    node = top; walked.push(seg);
+  }
+  return { __err: "'" + path + "' is a GROUP — set one of its properties " +
+    "instead" };
+}
+/* Rendered bounds, which is the only thing that says a repeater repeated:
+   geometry in a group, widened by any repeater BELOW it. */
+function shapeBounds(L) {
+  let minX = null, maxX = null, minY = null, maxY = null;
+  function eat(x0, x1, y0, y1) {
+    minX = minX === null ? x0 : Math.min(minX, x0);
+    maxX = maxX === null ? x1 : Math.max(maxX, x1);
+    minY = minY === null ? y0 : Math.min(minY, y0);
+    maxY = maxY === null ? y1 : Math.max(maxY, y1);
+  }
+  L.items.forEach(g => {
+    if (g.kind !== "group") return;
+    let gx0 = null, gx1 = 0, gy0 = 0, gy1 = 0;
+    g.items.forEach(it => {
+      if (/^(rectangle|ellipse)$/.test(it.kind)) {
+        const s = it.vals.Size || [100, 100];
+        const p = it.vals.Position || [0, 0];
+        const x0 = p[0] - s[0] / 2, x1 = p[0] + s[0] / 2;
+        const y0 = p[1] - s[1] / 2, y1 = p[1] + s[1] / 2;
+        if (gx0 === null) { gx0 = x0; gx1 = x1; gy0 = y0; gy1 = y1; }
+        else { gx0 = Math.min(gx0, x0); gx1 = Math.max(gx1, x1);
+               gy0 = Math.min(gy0, y0); gy1 = Math.max(gy1, y1); }
+      } else if (it.kind === "repeater" && gx0 !== null) {
+        // A repeater acts on what is above it: nothing above, nothing to
+        // widen -- the silent no-op this suite exists to catch.
+        const n = Math.max(1, Math.floor(it.vals.Copies || 1));
+        const off = it.vals["Transform/Position"] || [0, 0];
+        const dx = off[0] * (n - 1), dy = off[1] * (n - 1);
+        gx0 = Math.min(gx0, gx0 + dx); gx1 = Math.max(gx1, gx1 + dx);
+        gy0 = Math.min(gy0, gy0 + dy); gy1 = Math.max(gy1, gy1 + dy);
+      }
+    });
+    if (gx0 !== null) eat(gx0, gx1, gy0, gy1);
+  });
+  if (minX === null) return null;
+  return [minX, maxX, minY, maxY];
+}
+
 function cannedOk(tool, args) {
   switch (tool) {
     case "create_comp":
@@ -1006,6 +1165,17 @@ function cannedOk(tool, args) {
       return { layer: args && args.layer,
                property: args && args.property };
     case "get_property": {
+      const SLg = shapeLayerOf(args && args.layer);
+      if (SLg && /^contents\//i.test(String((args && args.property) || ""))) {
+        const hit = shapeResolve(SLg, args.layer, args.property);
+        if (hit && hit.__err) return hit;
+        if (hit) {
+          const keys = hit.item.keys && hit.item.keys[hit.key];
+          return { layer: args.layer, property: args.property,
+                   value: hit.item.vals[hit.key],
+                   numKeys: keys ? keys.length : 0 };
+        }
+      }
       if (inTx(args)) {
         const tx = txReadProp(args && args.property);
         if (tx) return tx;
@@ -1211,6 +1381,18 @@ function cannedOk(tool, args) {
       return { value: 3 };
     }
     case "set_keyframes": {
+      const SLk = shapeLayerOf(args && args.layer);
+      if (SLk && /^contents\//i.test(String((args && args.property) || ""))) {
+        const hit = shapeResolve(SLk, args.layer, args.property);
+        if (hit && hit.__err) return hit;
+        if (hit) {
+          hit.item.keys = hit.item.keys || {};
+          hit.item.keys[hit.key] = (args.keys || []).slice();
+          return { layers: 1, property: args.property,
+                   keysSet: (args.keys || []).length,
+                   numKeys: (args.keys || []).length };
+        }
+      }
       if (inTx(args)) {
         const t = txParse(args && args.property);
         if (t && t.anim && t.kind === "Properties" &&
@@ -1248,7 +1430,17 @@ function cannedOk(tool, args) {
       if (inPcComp(args) && args.layer) pcExpr[args.layer] = expr;
       return { expressionEnabled: true, expression: expr };
     }
-    case "center_anchor_point":
+    case "center_anchor_point": {
+      // On a shape layer built above, the anchor is the CENTRE OF THE
+      // RENDERED BOUNDS -- the suite's only proof that a repeater made
+      // more than one copy.
+      const SL = shapeLayerOf(args && args.layer);
+      const b = SL ? shapeBounds(SL) : null;
+      if (b) {
+        return { layer: args.layer, oldAnchor: [0, 0, 0],
+                 newAnchor: [(b[0] + b[1]) / 2, (b[2] + b[3]) / 2, 0],
+                 note: "anchor centered on content" };
+      }
       return { layer: (args && args.layer) || "Anchor",
                oldAnchor: [0, 0, 0], newAnchor: [113.07, -35.33, 0],
                note: "anchor centered on content; all 2 Position " +
@@ -1256,6 +1448,7 @@ function cannedOk(tool, args) {
                      "Scale/Rotation are animated too, so the offset is " +
                      "exact at the Position keyframes and approximate " +
                      "between them)" };
+    }
     case "apply_keyframe_ease":
       // The camera-comp steps ease ONE pair; the batch step eases nine.
       return { easedPairs: (args && args.layer) ? 1 : 9 };
@@ -1374,7 +1567,81 @@ function cannedOk(tool, args) {
       }
       return { points: ((args && args.vertices) || []).length };
     }
-    case "add_shape_content": return { params: "End" };
+    case "add_shape_layer": {
+      const nm = (args && args.name) || "Shape Layer 1";
+      shapeSeedLayer(nm);
+      return { index: 1, name: nm,
+               shape: (args && args.shape) || "rectangle" };
+    }
+    case "add_shape_content": {
+      const L = shapeLayerOf(args && args.layer);
+      if (!L) return { params: "End" };
+      const kind = String((args && args.kind) || "");
+      let container = L.items, into = "(layer root)";
+      if (args && args.group) {
+        const g = shapeFindGroup(L, args.group);
+        if (!g) {
+          return { __err: "Group not found: " + args.group + ". Groups " +
+            "here: " + L.items.filter(i => i.kind === "group")
+              .map(i => i.name).join(", ") };
+        }
+        container = g.items; into = g.name;
+      }
+      const item = shapeNewItem(kind, kind === "group"
+        ? (args.name || "Group 1") : (args.name || null));
+      const applied = [];
+      const map = SHAPE_PARAMS[kind] || {};
+      const params = (args && args.params) || {};
+      for (const k of Object.keys(params)) {
+        if (!Object.prototype.hasOwnProperty.call(map, k)) {
+          return { __err: "Param '" + k + "' not found on the new " + kind +
+            " ('" + item.name + "' WAS added). Its params: " +
+            Object.keys(map).join(", ") };
+        }
+        const range = SHAPE_RANGE[k];
+        if (range && typeof params[k] === "number") {
+          if (params[k] < range[0]) {
+            return { __err: "AE rejected param '" + k + "': After Effects " +
+              "error: Unable to call “setValue” because of " +
+              "parameter 1. Value " + params[k] + " is less-than-" +
+              range[0] + "." };
+          }
+          if (range[1] !== null && params[k] > range[1]) {
+            return { __err: "AE rejected param '" + k + "': After Effects " +
+              "error: Unable to call “setValue” because of " +
+              "parameter 1. Value " + params[k] + " out of range " +
+              range[0] + " to " + range[1] + "." };
+          }
+        }
+        item.vals[(map[k] ? map[k] + "/" : "") + k] = params[k];
+        applied.push(k);
+      }
+      container.push(item);
+      const base = "contents/" +
+        (into === "(layer root)" ? "" : into + "/") + item.name + "/";
+      const out = { layer: args.layer, added: item.name, container: into,
+        params: applied.join(", "),
+        note: "Animatable via set_keyframes on '" + base + "<param>' " +
+          "paths" + (kind === "repeater"
+            ? " — the offsets are one level down, e.g. '" + base +
+              "Transform/Position'" : "") };
+      if (SHAPE_FILTERS[kind] === 1) {
+        const idx = container.indexOf(item);
+        let above = 0;
+        for (let i = 0; i < idx; i++) {
+          if (shapeMakesGeometry(container[i])) above++;
+        }
+        if (!above) {
+          out.warning = "'" + item.name + "' WAS added to " + into +
+            ", but nothing above it there draws a shape, so it changes " +
+            "nothing. A " + kind + " acts on the content ABOVE it in the " +
+            "list, and new content is always appended BELOW — so adding " +
+            "the rectangle now will NOT fix this. Put the shape in " +
+            "first, then the " + kind + ".";
+        }
+      }
+      return out;
+    }
     case "set_track_matte": return { mode: "alpha" };
     case "set_layer_parent":
       if (args && args.layer) parentedLayers[args.layer] = args.parent;
@@ -1834,6 +2101,16 @@ function cannedOk(tool, args) {
                expression: expr };
     }
     case "set_property": {
+      const SL = shapeLayerOf(args && args.layer);
+      if (SL && /^contents\//i.test(String((args && args.property) || ""))) {
+        const hit = shapeResolve(SL, args.layer, args.property);
+        if (hit && hit.__err) return hit;
+        if (hit) {
+          hit.item.vals[hit.key] = args.value;
+          return { layer: args.layer, property: args.property,
+                   value: args.value, keyframed: false, numKeys: 0 };
+        }
+      }
       if (inTx(args)) {
         const spec = String((args && args.property) || "");
         const t = txParse(spec);
@@ -2112,7 +2389,7 @@ SelfTest.run({
     ordStack = [];
     maskKeys = {};
     batchLayers = 0; batchFx = {}; batchBlur = null;
-    batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig();
+    batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig(); resetShapeRig();
     SelfTest.run({
       callHostTool(tool, args, cb) {
         if (tool === "grid_layout") {
@@ -2142,7 +2419,7 @@ SelfTest.run({
         ordStack = [];
         maskKeys = {};
         batchLayers = 0; batchFx = {}; batchBlur = null;
-        batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig();
+        batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig(); resetShapeRig();
         SelfTest.run({
           callHostTool(tool, args, cb) {
             // Never refuse anything -- the old permissive host.

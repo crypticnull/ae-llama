@@ -4055,3 +4055,132 @@ is a patch bump it can cut.
 - There is still no way to read whether a text layer has per-character 3D
   on; the suite proves it by asking a second animator for a 3D-only
   property and checking it does NOT report turning the switch on again.
+
+## 2026-08-28 (local, eleventh pass) - item 5.2: repeaters were never missing, the path to them was (0.9.31)
+
+Harness green on arrival (331/331), so the pass took the highest
+unfinished item: **5.2, shape repeaters**. As with 5.4, the workplan's
+sketch (`add_repeater`) would have been a duplicate - `add_shape_content
+{kind: "repeater"}` has shipped all along - so the pass probed what
+exists. The probe DISPROVED the ordering worry it started from and found
+a worse bug underneath it, which is what shipped.
+
+### What AE actually does (twelve measurements, one probe run)
+
+**Shape content is a stack, and the stack runs the other way from the
+guess.** `addProperty` APPENDS: a repeater added after the rectangle
+lands at index 3 - and it repeats. Measured on `sourceRectAtTime`: a
+100x100 rect with Copies 3 at Position [200,0] renders 500px wide. The
+SAME repeater moved to index 1 renders 100px, i.e. one copy. So a filter
+acts on the content ABOVE it, new content is always appended BELOW, and
+the shipped append order was right all along. `moveTo(1)` works and
+INVALIDATES the held reference ("Object is invalid") - the same trap text
+animators had.
+
+**A repeater on a group with no shapes is a silent no-op**, and so is one
+on an empty shape layer (`canAddProperty` true, bounds 0x0). Adding the
+shape afterwards does NOT rescue it: that shape lands below the repeater.
+
+**A repeater carries four rows plus a Transform block of six:** Copies
+(min 0, NO max, 1.5 accepted, -1 throws "is less-than-0"), Offset,
+Composite - whose matchName is `ADBE Vector Repeater Order`, not
+anything with "Composite" in it - with range 1..2, and Transform with
+Anchor Point / Position / Scale / Rotation / Start Opacity / End Opacity
+(`ADBE Vector Repeater Opacity 1` and `2`).
+
+**A repeater at the LAYER ROOT works too** and repeats the groups above
+it (2 copies at [0,200] -> 300px tall).
+
+**And the one that mattered: a shape GROUP does not hold its items.**
+They live in a nested group AE calls "Contents"
+(`ADBE Vectors Group`), and AE's timeline never draws that row -
+expanding "G1" shows the rectangle, the fill and the repeater directly.
+So `contents/G1/Repeater 1/Copies` resolved to NOTHING; the real path
+carries a second "Contents" nobody can guess from the UI. Verified in the
+probe: both `set_keyframes` calls came back "Path segment 'Repeater 1'
+not found under 'contents/G1'. Children here: Blend Mode, Contents,
+Transform, Material Options."
+
+### The shipped lie that found
+
+The short path is not a form somebody might invent - it is the form this
+panel HANDS OUT:
+
+- `add_shape_content`'s own returned note said "Animatable via
+  set_keyframes on 'contents/G2/Repeater 1/<param>' paths".
+- the system prompt's wipe-on recipe says "add trim_paths and keyframe
+  its End" over `'contents/<Group>/<Item>/<Param>'`.
+- the tool's doc string said the same.
+
+All three named a path that could not resolve, so every "animate the
+repeater / wipe the stroke on" request failed on the panel's own
+instructions. Only a BARE name got through, by the 0.9.27 deep search,
+and only when the name was unique on the layer.
+
+### The fix, at the resolver
+
+`AELL_childProp` does one child lookup with the hop AE's UI implies: a
+direct child first, then - only on an `ADBE Vector Group` and only after
+a miss - inside its Contents. Used by both `AELL_resolvePropPath` and
+`AELL_deepPath`, so every property tool gets it at once. A real child
+called "Transform" still wins over the repeater's one hop away (checked
+both ways in AE: the group's rotation went to 30, the repeater's stayed
+15). The long form still works. A missing segment under a group now
+lists the items the TIMELINE shows ("Blend Mode, Contents, Transform -
+and inside Contents: Rectangle Path 1, ..."), because the four scripting
+rows help nobody who is looking at a rectangle.
+
+`add_shape_content` also warns when a repeater/trim/merge/offset/
+rounded-corners/pucker/twist/zigzag lands with no geometry above it,
+saying the rule AND that adding the shape now will not fix it. A fill
+does not count as geometry. Its note now points a repeater's offsets at
+`.../Transform/Position`, and tools.js carries the ordering rule and a
+ring recipe (Copies + Rotation 360/Copies) as a PROMPT recipe, not a
+second tool.
+
+### Covered without AE, and in AE
+
+- `tests/test-shape-mask-tools.js`: the stub's group grew its real four
+  rows and the repeater its real defaults, ranges and Transform block;
+  new checks cover the short path, the deeper one, the shadowing rule,
+  the warning (and its absence on the good order), AE's two ranges, the
+  grounded error, and - the one that would have caught this in the first
+  place - that the path quoted in the tool's OWN note resolves.
+- 14 suite steps in `extension/js/selftest.js`, in the main scratch comp.
+  The render proof is `center_anchor_point`: it measures
+  `sourceRectAtTime`, so a 100px square repeated 3x at +200 has to hand
+  back a centre at x=200. One copy answers 0. `tests/test-self-test.js`'s
+  canned host grew a real shape-content model (stack order, the Contents
+  hop, ranges, and bounds) for the usual reason: a host that said "ok"
+  would let both bugs pass their own steps.
+- docs/CAPABILITIES.md regenerated and its curated half updated.
+
+**Harness: 345/345 PASSED** (331 -> 345). Stubbed suite: 38 files green.
+
+**Bumped to 0.9.31** - unlike 5.1 this pass added no tool: it is a fix to
+shipped behaviour (three property tools and a documented recipe), so the
+feature track's no-bump rule does not cover it and a panel should get it.
+
+### The modal, and what is known about it
+
+Between the probe and the first verification run AE came up blocked on
+the wordless `#32770` (an `OS_EditTextContainer` child, no readable
+text - the same one the last two passes met). Its cause is NOT
+established: both compiled files were checked in AE afterwards and load
+clean, and the breadcrumb file showed the suite had run all 345 steps.
+Dismissed with the documented posted WM_CLOSE; the blocked script then
+completed 345/345 by itself, and the next two runs were green from a cold
+start. Worth noting for the next pass: `run-ae-selftest.ps1`'s pre-launch
+dismissal did NOT fire for it, twice, because the "Executing Script"
+window was up and the stale-dialog plan refuses while AE is running
+something. A dialog raised mid-run therefore still costs a manual step.
+
+### For the next pass
+
+- `duplicate_comp` still takes a name without uniquing (filed by the
+  0.9.30 pass, still open).
+- There is still no tool that reports a layer's rendered bounds;
+  `center_anchor_point` is the only route to `sourceRectAtTime`, and it
+  MUTATES the anchor to tell you. A read-only `get_bounds` would make
+  render assertions cheap for every future shape/text step.
+- Item 5.3 (animation preset library) is next on the feature track.

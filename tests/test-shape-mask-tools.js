@@ -9,7 +9,20 @@ function PGroup(name, matchName) {
   this.matchName = matchName || name;
   this._children = [];
 }
-PGroup.prototype.add = function (c) { this._children.push(c); return c; };
+PGroup.prototype.add = function (c) {
+  c._parent = this;
+  this._children.push(c);
+  return c;
+};
+// Where an item sits in its parent's list. Shape contents are a STACK --
+// a repeater/trim/offset acts on what is ABOVE it and addProperty always
+// appends BELOW -- so the index is the only thing that says whether a
+// filter does anything at all.
+function propertyIndexGetter() {
+  return this._parent ? this._parent._children.indexOf(this) + 1 : 0;
+}
+Object.defineProperty(PGroup.prototype, "propertyIndex",
+                      { get: propertyIndexGetter });
 Object.defineProperty(PGroup.prototype, "numProperties", {
   get() { return this._children.length; }
 });
@@ -19,7 +32,7 @@ PGroup.prototype.property = function (ref) {
          null;
 };
 
-function Prop(name, matchName, value) {
+function Prop(name, matchName, value, min, max) {
   this.name = name;
   this.matchName = matchName || name;
   this._value = value;
@@ -27,11 +40,29 @@ function Prop(name, matchName, value) {
   this.expressionError = "";
   this.canSetExpression = true;
   this._keys = [];
+  this.hasMin = typeof min === "number";
+  this.hasMax = typeof max === "number";
+  if (this.hasMin) this.minValue = min;
+  if (this.hasMax) this.maxValue = max;
 }
+Object.defineProperty(Prop.prototype, "propertyIndex",
+                      { get: propertyIndexGetter });
 Object.defineProperty(Prop.prototype, "value", {
   get() { return this._value; }
 });
 Prop.prototype.setValue = function (v) {
+  // AE's own out-of-range wording, measured on a repeater in AE 2026:
+  // Copies -1 and Composite 3 both come back naming the range.
+  if (typeof v === "number" && this.hasMin && v < this.minValue) {
+    throw new Error("After Effects error: Unable to call “setValue” " +
+      "because of parameter 1. Value " + v + " is less-than-" +
+      this.minValue + ".");
+  }
+  if (typeof v === "number" && this.hasMax && v > this.maxValue) {
+    throw new Error("After Effects error: Unable to call “setValue” " +
+      "because of parameter 1. Value " + v + " out of range " +
+      this.minValue + " to " + this.maxValue + ".");
+  }
   if (this._keys.length) {
     // AE refuses a static write on top of keyframes; the host is expected
     // to say so itself rather than let this surface as a raw AE message.
@@ -110,9 +141,20 @@ const REGISTRY = {
     g.add(new Prop("Mask Expansion", "ADBE Mask Offset", 0));
     return g;
   },
+  // A shape group's four real rows, measured in AE 2026. The items the
+  // timeline shows under the group are NOT its children: they hang off
+  // the nested "Contents" group, and its own "Transform" sits beside it.
+  // Both halves matter -- the path everybody writes has to reach into
+  // Contents, and a genuine "Transform" child has to keep winning.
   "ADBE Vector Group"() {
     const g = new PGroup("Group 1", "ADBE Vector Group");
+    g.add(new Prop("Blend Mode", "ADBE Vector Blend Mode", 1));
     g.add(new PGroup("Contents", "ADBE Vectors Group"));
+    const t = new PGroup("Transform", "ADBE Vector Transform Group");
+    t.add(new Prop("Anchor Point", "ADBE Vector Anchor", [0, 0]));
+    t.add(new Prop("Position", "ADBE Vector Position", [0, 0]));
+    t.add(new Prop("Rotation", "ADBE Vector Rotation", 0));
+    g.add(t);
     return g;
   },
   "ADBE Vector Shape - Rect"() {
@@ -142,12 +184,31 @@ const REGISTRY = {
     g.add(new Prop("Offset", "ADBE Vector Trim Offset", 0));
     return g;
   },
+  // Measured in AE 2026: Copies defaults to 1 with a floor of 0 and no
+  // ceiling (1.5 is accepted), Composite's matchName is "...Repeater
+  // Order" and its range is 1..2, and the six offsets live one level down
+  // in the Transform block.
   "ADBE Vector Filter - Repeater"() {
     const g = new PGroup("Repeater 1", "ADBE Vector Filter - Repeater");
-    g.add(new Prop("Copies", "ADBE Vector Repeater Copies", 3));
+    g.add(new Prop("Copies", "ADBE Vector Repeater Copies", 1, 0));
+    g.add(new Prop("Offset", "ADBE Vector Repeater Offset", 0));
+    g.add(new Prop("Composite", "ADBE Vector Repeater Order", 1, 1, 2));
     const t = new PGroup("Transform", "ADBE Vector Repeater Transform");
-    t.add(new Prop("Position", "ADBE Vector Repeater Position", [100, 0]));
+    t.add(new Prop("Anchor Point", "ADBE Vector Repeater Anchor", [0, 0]));
+    t.add(new Prop("Position", "ADBE Vector Repeater Position", [0, 0]));
+    t.add(new Prop("Scale", "ADBE Vector Repeater Scale", [100, 100]));
+    t.add(new Prop("Rotation", "ADBE Vector Repeater Rotation", 0));
+    t.add(new Prop("Start Opacity",
+                   "ADBE Vector Repeater Opacity 1", 100, 0, 100));
+    t.add(new Prop("End Opacity",
+                   "ADBE Vector Repeater Opacity 2", 100, 0, 100));
     g.add(t);
+    return g;
+  },
+  "ADBE Vector Graphic - Stroke"() {
+    const g = new PGroup("Stroke 1", "ADBE Vector Graphic - Stroke");
+    g.add(new Prop("Color", "ADBE Vector Stroke Color", [1, 1, 1, 1]));
+    g.add(new Prop("Stroke Width", "ADBE Vector Stroke Width", 2));
     return g;
   }
 };
@@ -455,6 +516,101 @@ r = call("set_property", { layer: "Shapes",
 assert(r.ok && badge.property("Contents").property("Trim Paths 1")
          .property("End").value === 50,
        "universal set_property reaches shape contents by path");
+
+// 5. THE path everybody actually writes.
+// AE's timeline draws no "Contents" row under a group, so every path in
+// this project's docs, in its system prompt's trim-paths recipe and in
+// add_shape_content's own returned note left that segment out -- and
+// every one of them failed. The short form has to resolve.
+r = call("set_property", { layer: "Shapes",
+  property: "contents/Badge/Trim Paths 1/End", value: 25 });
+assert(r.ok && badge.property("Contents").property("Trim Paths 1")
+         .property("End").value === 25,
+       "the path AE's UI implies -- no second 'Contents' -- resolves: " +
+       (r.error || ""));
+r = call("set_property", { layer: "Shapes",
+  property: "contents/Badge/Repeater 1/Transform/Rotation", value: 60 });
+assert(r.ok && badge.property("Contents").property("Repeater 1")
+         .property("Transform").property("Rotation").value === 60,
+       "and keeps working one level deeper, into the repeater's offsets: " +
+       (r.error || ""));
+
+// A real child called "Transform" is the GROUP's own, never the one a
+// hop away inside Contents.
+r = call("set_property", { layer: "Shapes",
+  property: "contents/Badge/Transform/Rotation", value: 15 });
+assert(r.ok && badge.property("Transform").property("Rotation").value === 15 &&
+       badge.property("Contents").property("Repeater 1")
+         .property("Transform").property("Rotation").value === 60,
+       "a direct child still shadows the same name inside Contents");
+
+// The note the tool hands back must be a path that WORKS -- handing the
+// model a broken one is how this stayed hidden.
+r = call("add_shape_content", { layer: "Shapes", kind: "group",
+                                name: "Ring" });
+r = call("add_shape_content", { layer: "Shapes", kind: "star",
+                                group: "Ring" });
+r = call("add_shape_content", { layer: "Shapes", kind: "repeater",
+  group: "Ring", params: { Copies: 6, Rotation: 60 } });
+assert(r.ok && !r.warning, "repeater added under a star: " + (r.error || ""));
+const noted = /'([^']*)<param>'/.exec(r.data.note);
+assert(noted, "the result quotes an animatable path: " + r.data.note);
+const probe = call("get_property", { layer: "Shapes",
+                                     property: noted[1] + "Copies" });
+assert(probe.ok && probe.data.value === 6,
+       "the path in the tool's own note resolves: " + noted[1] + "Copies " +
+       (probe.error || ""));
+const noted2 = /'([^']*Transform\/Position)'/.exec(r.data.note);
+assert(noted2 && call("get_property", { layer: "Shapes",
+         property: noted2[1] }).ok,
+       "and so does the Transform path it points a repeater's offsets at");
+
+// 6. shape contents are a STACK: a filter changes what is ABOVE it, and
+// every new item lands BELOW -- so a repeater added to an empty group is
+// a no-op that adding the shape afterwards does NOT rescue.
+call("add_shape_content", { layer: "Shapes", kind: "group", name: "Late" });
+r = call("add_shape_content", { layer: "Shapes", kind: "repeater",
+                                group: "Late", params: { Copies: 4 } });
+assert(r.ok && r.data.warning, "a repeater with nothing above it warns: " +
+       JSON.stringify(r.data));
+assert(/WAS added/.test(r.data.warning) &&
+       /ABOVE it/.test(r.data.warning) &&
+       /will NOT fix this/.test(r.data.warning),
+       "the warning says it landed, what the rule is, and that adding " +
+       "the shape now does not help: " + r.data.warning);
+r = call("add_shape_content", { layer: "Shapes", kind: "rectangle",
+                                group: "Late" });
+assert(r.ok && !r.data.warning, "a plain shape never warns");
+r = call("add_shape_content", { layer: "Shapes", kind: "trim_paths",
+                                group: "Late" });
+assert(r.ok && !r.data.warning,
+       "with geometry above it, a filter is silent");
+// A fill is not geometry: it colours a path and draws nothing by itself.
+call("add_shape_content", { layer: "Shapes", kind: "group", name: "Painty" });
+call("add_shape_content", { layer: "Shapes", kind: "fill", group: "Painty" });
+r = call("add_shape_content", { layer: "Shapes", kind: "trim_paths",
+                                group: "Painty" });
+assert(r.ok && r.data.warning,
+       "a fill alone does not count as something to filter");
+
+// 7. AE's own ranges, surfaced instead of swallowed
+r = call("add_shape_content", { layer: "Shapes", kind: "repeater",
+  group: "Late", params: { Copies: -1 } });
+assert(!r.ok && /Copies/.test(r.error) && /less-than-0/.test(r.error),
+       "a negative Copies is refused in AE's words: " + r.error);
+r = call("add_shape_content", { layer: "Shapes", kind: "repeater",
+  group: "Late", params: { Composite: 3 } });
+assert(!r.ok && /range 1 to 2/.test(r.error),
+       "Composite outside 1..2 is refused with the range: " + r.error);
+
+// 8. a missing segment names what the TIMELINE shows, not the four rows
+// scripting sees -- "Blend Mode, Contents, Transform" helps nobody who is
+// looking at a rectangle.
+r = call("set_property", { layer: "Shapes",
+  property: "contents/Badge/Nope/End", value: 1 });
+assert(!r.ok && /inside Contents:/.test(r.error) &&
+       /Rectangle Path 1/.test(r.error),
+       "a bad segment under a group lists the items inside it: " + r.error);
 
 assert(AE_MODALS.length === 0,
        "no tool call left After Effects behind a modal dialog: " +

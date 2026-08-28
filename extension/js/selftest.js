@@ -4280,6 +4280,217 @@
         args: function (ctx) { return { item: ctx.txComp }; },
         check: function () { return true; } },
 
+      // ---- shape repeaters and the path AE's UI implies (WORKPLAN 5.2).
+      //
+      // Measured in AE 2026 (probe in WORKPLAN-LOG 2026-08-28): shape
+      // content is a stack whose filters act on what is ABOVE them, and
+      // addProperty always appends BELOW — so a repeater added after the
+      // rectangle repeats it (bounds 100 -> 500 px) and the same repeater
+      // moved to index 1 renders one copy. And a shape GROUP hides its
+      // items in a nested "Contents" group the timeline never draws, so
+      // the path this panel's own docs handed the model,
+      // contents/<Group>/<Item>/<Param>, resolved to nothing at all.
+      //
+      // These run in the main scratch comp: shape content creates no
+      // project items, and the layer dies with the comp.
+      { name: "a shape layer to repeat",
+        tool: "add_shape_layer",
+        args: function (ctx) {
+          return { comp: ctx.comp, name: "ST Rep", shape: "rectangle",
+                   size: [10, 10] };
+        },
+        check: function (d, ctx) { ctx.repLayer = d.name || "ST Rep";
+                                   return true; } },
+
+      { name: "an empty group, then a repeater with nothing above it",
+        batch: function (ctx) {
+          return [
+            { tool: "add_shape_content", args: { comp: ctx.comp,
+                layer: ctx.repLayer, kind: "group", name: "ST Ring" } },
+            { tool: "add_shape_content", args: { comp: ctx.comp,
+                layer: ctx.repLayer, kind: "repeater", group: "ST Ring",
+                params: { Copies: 3 } } }
+          ];
+        },
+        check: function (rows) {
+          if (!rows[0].ok) return "group: " + rows[0].error;
+          if (!rows[1].ok) return "repeater: " + rows[1].error;
+          var w = rows[1].data.warning || "";
+          if (!w) return "a repeater over an empty group did not warn";
+          return (/ABOVE it/.test(w) && /will NOT fix this/.test(w)) ||
+                 "the warning does not give the rule: " + w;
+        } },
+
+      // A repeater added UNDER a shape is the working order, and gets no
+      // warning — a warning on the good case would train the model to
+      // ignore them.
+      { name: "a second group, shape first: no warning",
+        batch: function (ctx) {
+          return [
+            { tool: "add_shape_content", args: { comp: ctx.comp,
+                layer: ctx.repLayer, kind: "group", name: "ST Row" } },
+            { tool: "add_shape_content", args: { comp: ctx.comp,
+                layer: ctx.repLayer, kind: "rectangle", group: "ST Row",
+                params: { Size: [100, 100], Position: [0, 0] } } },
+            { tool: "add_shape_content", args: { comp: ctx.comp,
+                layer: ctx.repLayer, kind: "fill", group: "ST Row",
+                params: { Color: [1, 0, 0, 1] } } },
+            { tool: "add_shape_content", args: { comp: ctx.comp,
+                layer: ctx.repLayer, kind: "repeater", group: "ST Row",
+                params: { Copies: 3, Position: [200, 0] } } }
+          ];
+        },
+        check: function (rows, ctx) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + (i + 1) + ": " + rows[i].error;
+          }
+          if (rows[3].data.warning) {
+            return "warned about a correctly ordered repeater: " +
+                   rows[3].data.warning;
+          }
+          ctx.repNote = rows[3].data.note || "";
+          return true;
+        } },
+
+      // The proof that it RENDERS, not merely that AE took the values:
+      // center_anchor_point measures sourceRectAtTime, so a 100px square
+      // repeated three times at +200 has to hand back a center at x=200
+      // (bounds -50..450). One copy would answer 0.
+      { name: "the repeater actually repeats (measured bounds, not values)",
+        tool: "center_anchor_point",
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: ctx.repLayer };
+        },
+        check: function (d) {
+          var ap = d.newAnchor || [];
+          if (!ap.length) return "no anchor in result: " + JSON.stringify(d);
+          return Math.abs(ap[0] - 200) < 1 ||
+                 "content centre x=" + ap[0] + ", expected 200 — the " +
+                 "repeater rendered one copy";
+        } },
+
+      // The bug this item really found: every path the panel documented
+      // left out the "Contents" hop, so this call used to fail.
+      { name: "the path AE's UI implies reaches the repeater",
+        tool: "set_property",
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: ctx.repLayer,
+                   property: "contents/ST Row/Repeater 1/Copies",
+                   value: 4 };
+        },
+        check: function (d) {
+          return d.value === 4 || "value " + JSON.stringify(d.value);
+        } },
+
+      { name: "…and one level deeper, into the repeater's offsets",
+        tool: "set_property",
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: ctx.repLayer,
+                   property: "contents/ST Row/Repeater 1/Transform/Rotation",
+                   value: 15 };
+        },
+        check: function (d) {
+          return d.value === 15 || "value " + JSON.stringify(d.value);
+        } },
+
+      { name: "the long form AE's scripting API wants still works",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: ctx.repLayer,
+                   property: "contents/ST Row/Contents/Repeater 1/Copies" };
+        },
+        check: function (d) {
+          return d.value === 4 || "value " + JSON.stringify(d.value);
+        } },
+
+      // A direct child named "Transform" is the GROUP's own transform,
+      // never the repeater's one hop away.
+      { name: "a real child shadows the same name inside Contents",
+        tool: "set_property",
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: ctx.repLayer,
+                   property: "contents/ST Row/Transform/Rotation",
+                   value: 30 };
+        },
+        check: function (d, ctx) {
+          if (d.value !== 30) return "value " + JSON.stringify(d.value);
+          return (d.resolvedPath || "").indexOf("Repeater") === -1 ||
+                 "landed in the repeater: " + d.resolvedPath;
+        } },
+
+      { name: "the group's rotation left the repeater's alone",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: ctx.repLayer,
+                   property: "contents/ST Row/Repeater 1/Transform/Rotation" };
+        },
+        check: function (d) {
+          return d.value === 15 || "repeater rotation is now " + d.value;
+        } },
+
+      // The tool's own note has to be a path that works: handing the
+      // model a broken one is exactly how this shipped unnoticed.
+      { name: "the path in add_shape_content's note resolves",
+        tool: "get_property",
+        args: function (ctx) {
+          var m = /'([^']*)<param>'/.exec(ctx.repNote || "");
+          ctx.repNoted = m ? m[1] : "";
+          return { comp: ctx.comp, layer: ctx.repLayer,
+                   property: (m ? m[1] : "contents/ST Row/Repeater 1/") +
+                             "Copies" };
+        },
+        check: function (d, ctx) {
+          if (!ctx.repNoted) return "the note quoted no path";
+          return d.value === 4 || "value " + JSON.stringify(d.value);
+        } },
+
+      // set_keyframes is the documented way to animate one, and it takes
+      // the same short path.
+      { name: "set_keyframes animates a repeater by that path",
+        tool: "set_keyframes",
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: ctx.repLayer,
+                   property: "contents/ST Row/Repeater 1/Transform/Position",
+                   keys: [{ time: 0, value: [0, 0] },
+                          { time: 1, value: [200, 0] }] };
+        },
+        check: function (d) {
+          return d.numKeys === 2 || "numKeys " + d.numKeys;
+        } },
+
+      // AE's ranges, surfaced rather than swallowed: Copies floors at 0,
+      // Composite is 1..2 ("ADBE Vector Repeater Order").
+      { name: "a negative Copies is refused with AE's own range",
+        tool: "add_shape_content",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: ctx.repLayer, kind: "repeater",
+                   group: "ST Row", params: { Copies: -1 } };
+        },
+        check: function (err) {
+          return (/Copies/.test(err) && /less-than-0/.test(err)) ||
+                 "does not name the parameter and the floor: " + err;
+        } },
+
+      { name: "a missing segment lists what the TIMELINE shows",
+        tool: "get_property",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: ctx.repLayer,
+                   property: "contents/ST Row/Nope/Copies" };
+        },
+        check: function (err) {
+          return (/inside Contents:/.test(err) && /Repeater 1/.test(err)) ||
+                 "lists only the four scripting rows: " + err;
+        } },
+
+      { name: "cleanup: delete the repeater layer",
+        tool: "delete_layer",
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: ctx.repLayer };
+        },
+        check: function () { return true; } },
+
       // ---- comp-rename audit + bulk rename. A three-comp rig: one
       // plain, one nested (a utility), one named by an expression.
       //

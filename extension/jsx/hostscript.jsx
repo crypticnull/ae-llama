@@ -4535,6 +4535,28 @@ var AELL_SHAPE_KINDS = {
   zigzag:           "ADBE Vector Filter - Zigzag"
 };
 
+/*
+ * The shape-content kinds that CHANGE other content instead of drawing.
+ * Measured in AE 2026 (probe in WORKPLAN-LOG 2026-08-28): one of these
+ * acts on the items ABOVE it in its group's list, and addProperty always
+ * appends BELOW — so a repeater added after the rectangle repeats it
+ * (bounds 100 -> 500 px with 3 copies at +200), and the same repeater
+ * moved to index 1 renders a single copy. A filter with no geometry
+ * above it is a silent no-op, and adding the shape afterwards does not
+ * rescue it, because that shape lands below the filter too.
+ */
+var AELL_SHAPE_FILTERS = {
+  repeater: 1, trim_paths: 1, merge_paths: 1, offset_paths: 1,
+  rounded_corners: 1, pucker_bloat: 1, twist: 1, zigzag: 1
+};
+
+/* Does this content item put geometry on the canvas? A fill or a stroke
+   colours a path; on its own it draws nothing, so it does not count. */
+function AELL_makesGeometry(mn) {
+  var s = String(mn || "");
+  return s === "ADBE Vector Group" || s.indexOf("ADBE Vector Shape - ") === 0;
+}
+
 /* Find a shape group by name anywhere in the contents tree. */
 function AELL_findShapeGroup(node, name, depth) {
   var n = 0;
@@ -4676,11 +4698,33 @@ AELL_TOOLS.add_shape_content = function (args) {
       applied.push(key);
     }
   }
-  return AELL_okay({ layer: layer.name, added: item.name,
+  var base = "contents/" +
+    (into === "(layer root)" ? "" : into + "/") + item.name + "/";
+  var out = { layer: layer.name, added: item.name,
     matchName: matchName, container: into, params: applied.join(", "),
-    note: "Animatable via set_keyframes on 'contents/" +
-          (into === "(layer root)" ? "" : into + "/") + item.name +
-          "/<param>' paths" });
+    note: "Animatable via set_keyframes on '" + base + "<param>' paths" +
+      (kindKey === "repeater"
+        ? " — the offsets are one level down, e.g. '" + base +
+          "Transform/Position'"
+        : "") };
+  if (AELL_SHAPE_FILTERS[kindKey] === 1) {
+    var above = 0, myIdx = 0;
+    try { myIdx = item.propertyIndex; } catch (eI) { myIdx = 0; }
+    for (var si = 1; si < myIdx; si++) {
+      var sib = null;
+      try { sib = container.property(si); } catch (eS2) { continue; }
+      if (sib && AELL_makesGeometry(sib.matchName)) above++;
+    }
+    if (above === 0) {
+      out.warning = "'" + item.name + "' WAS added to " + into + ", but " +
+        "nothing above it there draws a shape, so it changes nothing. A " +
+        kindKey + " acts on the content ABOVE it in the list, and new " +
+        "content is always appended BELOW — so adding the rectangle now " +
+        "will NOT fix this. Put the shape in first, then the " + kindKey +
+        ", or target a group that already has one.";
+    }
+  }
+  return AELL_okay(out);
 };
 
 function AELL_layerNamesOf(layers) {
@@ -5479,6 +5523,55 @@ function AELL_childNames(node, cap) {
 }
 
 /*
+ * The hop AE's timeline does not draw.
+ *
+ * A shape GROUP ("ADBE Vector Group") does not hold its rectangle, fill
+ * and repeater directly: they live in a nested group AE calls "Contents"
+ * (matchName "ADBE Vectors Group"). The timeline never shows that row —
+ * expanding "G1" lists the items themselves — so the path anybody writes
+ * from what they SEE, contents/G1/Repeater 1/Copies, resolved to nothing.
+ * Measured in AE 2026: layer.property("Contents").property("G1")
+ * .property("Repeater 1") is null, and the real path carries a SECOND
+ * "Contents" segment. This project's own docs, its system prompt's
+ * trim-paths recipe and add_shape_content's returned note all told the
+ * model the short form, so every "animate the repeater / wipe the stroke
+ * on" request failed on a path the panel itself had handed over.
+ *
+ * The hop only fires after a direct lookup misses, and only on a shape
+ * group, so a real child named "Transform" still wins over the one inside.
+ */
+function AELL_shapeInner(node) {
+  var mn = "";
+  try { mn = String(node.matchName || ""); } catch (e) { return null; }
+  if (mn !== "ADBE Vector Group") return null;
+  var inner = null;
+  try { inner = node.property("ADBE Vectors Group"); } catch (e2) { return null; }
+  return (inner && inner !== node) ? inner : null;
+}
+
+/* One child lookup by display name or matchName, hop included. Returns
+   null when there is no such child; `hopped` says the Contents step was
+   taken, so error paths and reported paths stay literally true. */
+var AELL_childHopped = false;
+function AELL_childProp(node, lookup, seg) {
+  AELL_childHopped = false;
+  var child = null;
+  try { child = node.property(lookup); } catch (e) { child = null; }
+  if (!child && seg && seg !== lookup) {
+    try { child = node.property(seg); } catch (e2) { child = null; }
+  }
+  if (child) return child;
+  var inner = AELL_shapeInner(node);
+  if (!inner) return null;
+  try { child = inner.property(lookup); } catch (e3) { child = null; }
+  if (!child && seg && seg !== lookup) {
+    try { child = inner.property(seg); } catch (e4) { child = null; }
+  }
+  if (child) AELL_childHopped = true;
+  return child || null;
+}
+
+/*
  * Walk a '/'-separated path of display or match names from a layer down
  * to any property or group. A failed segment throws a grounded error
  * listing the real children at that level.
@@ -5492,23 +5585,35 @@ function AELL_resolvePropPath(layer, pathStr) {
     if (seg === "") continue;
     var lookup = (walked.length === 0 && AELL_ROOT_ALIASES[seg])
       ? AELL_ROOT_ALIASES[seg] : seg;
-    var child = null;
-    try { child = node.property(lookup); } catch (e) { child = null; }
-    if (!child && lookup !== seg) {
-      try { child = node.property(seg); } catch (e2) { child = null; }
-    }
+    var child = AELL_childProp(node, lookup, seg);
     if (!child) {
       var at = walked.length ? "'" + walked.join("/") + "'"
                              : "layer '" + layer.name + "'";
       throw new Error("Path segment '" + seg + "' not found under " + at +
-        ". Children here: " +
-        (AELL_childNames(node, 30).join(", ") || "(none)") +
+        ". Children here: " + AELL_childList(node) +
         ". Use list_properties to inspect the real tree.");
     }
+    if (AELL_childHopped) walked.push("Contents");
     node = child;
     walked.push(seg);
   }
   return node;
+}
+
+/* Children for a grounded error. A shape group's own four rows are not
+   what the user is looking at, so the items inside Contents are listed
+   too — those are the names the timeline shows. */
+function AELL_childList(node) {
+  var names = AELL_childNames(node, 30);
+  var inner = AELL_shapeInner(node);
+  if (inner) {
+    var kids = AELL_childNames(inner, 20);
+    if (kids.length) {
+      return (names.join(", ") || "(none)") + " — and inside Contents: " +
+             kids.join(", ");
+    }
+  }
+  return names.join(", ") || "(none)";
 }
 
 /*
@@ -5719,9 +5824,9 @@ function AELL_deepPath(layer, spec) {
     var path = head[h].path;
     var ok = true;
     for (var k = 1; k < segs.length; k++) {
-      var c = null;
-      try { c = node.property(segs[k]); } catch (e) { c = null; }
+      var c = AELL_childProp(node, segs[k], segs[k]);
       if (!c) { ok = false; break; }
+      if (AELL_childHopped) path = path + "/Contents";
       node = c;
       path = path + "/" + AELL_propName(c);
     }

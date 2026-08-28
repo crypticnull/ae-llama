@@ -485,7 +485,22 @@ Start/End/Offset percent paths and per-character-3D requirements. Build:
 properties) — macros like "typewriter"/"cascade" belong in the PROMPT as
 recipes, not as separate tools. Highest value per line of code here.
 
-### 5.2 Shape repeaters
+### 5.2 Shape repeaters — DONE 2026-08-28 (0.9.31)
+No `add_repeater` was built: `add_shape_content {kind: "repeater"}` had
+shipped all along and the probe proved it works end to end. What did not
+work was reaching it. A shape GROUP hides its items in a nested
+"Contents" group AE's timeline never draws, so
+`contents/<Group>/<Item>/<Param>` — the path this panel's own tool notes,
+tool docs and system-prompt trim-paths recipe all handed the model —
+resolved to nothing, and every "animate the repeater / wipe it on"
+request failed on the panel's own instructions. The resolver now hops
+that segment (a real child of the same name still wins), and
+add_shape_content warns when a filter lands with no shape ABOVE it —
+measured: a repeater appended after the rect renders 500px wide, the same
+one moved to index 1 renders 100px. Copies floors at 0 with no max,
+Composite is `ADBE Vector Repeater Order` 1..2. Ring/burst stays a PROMPT
+recipe. Harness 331 -> 345. Original text below.
+
 Probe: "ADBE Vector Filter - Repeater" under a shape group — copies,
 offset, and the repeater transform block. Build: `add_repeater` {layer,
 copies, position/rotation/scale/anchor offsets}. Verify the radial-burst
