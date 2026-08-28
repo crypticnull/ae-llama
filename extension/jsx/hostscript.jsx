@@ -4234,20 +4234,200 @@ AELL_TOOLS.add_shape_content = function (args) {
           "/<param>' paths" });
 };
 
+function AELL_layerNamesOf(layers) {
+  var n = [], i;
+  for (i = 0; i < layers.length; i++) {
+    try { n.push(layers[i].name); } catch (e) {}
+  }
+  return n.join(", ");
+}
+
+/* A layer's identity across a precompose. Layer.id is stable and unique
+ * project-wide; object identity is the fallback for a build that does not
+ * publish it. Never the INDEX: precompose renumbers the stack. */
+function AELL_layerKey(layer) {
+  try { if (typeof layer.id === "number") return "id" + layer.id; }
+  catch (e) {}
+  return null;
+}
+
+/* Which of `names` a single expression string quotes. AE addresses a
+ * layer by a quoted name (layer("X"), thisComp.layer('X')), so a quoted
+ * occurrence is the signal — matching bare text would flag a comment. */
+function AELL_exprNamesLayer(expr, names) {
+  var s = String(expr), q = ['"', "'"], i, j;
+  for (i = 0; i < names.length; i++) {
+    for (j = 0; j < q.length; j++) {
+      if (s.indexOf(q[j] + names[i] + q[j]) !== -1) return names[i];
+    }
+  }
+  return null;
+}
+
+/*
+ * precompose. Four things AE does QUIETLY here, all measured in AE 2026
+ * (probe in WORKPLAN-LOG 2026-08-28) and all reported rather than fixed
+ * behind the user's back:
+ *
+ *  - A moved layer whose PARENT stayed behind loses the parent outright.
+ *    (The reverse — a layer left behind whose parent moved in — is
+ *    re-pointed by AE at the new precomp, and a parent/child pair moved
+ *    together keeps its link, so only this one direction loses anything.)
+ *  - With moveAttributes TRUE, an expression on a layer left behind that
+ *    names a moved layer is NOT rewritten and NOT flagged: expressionError
+ *    stays empty while the reference dangles. With moveAttributes FALSE
+ *    AE does rewrite it (to the new precomp layer), so the scan only runs
+ *    for the true case.
+ *  - AE lets a SECOND item take the requested name. Two comps with one
+ *    name make the later one unreachable by name, so this auto-numbers
+ *    and redirects the rest of the request exactly as create_comp does.
+ *  - Precomposing selects the new layer and drops the user's selection.
+ */
 AELL_TOOLS.precompose = function (args) {
   var comp = AELL_resolveComp(args.comp);
   if (!args.name) return AELL_err("'name' is required");
   if (!AELLJSON.isArray(args.layers) || args.layers.length === 0) {
     return AELL_err("'layers' (array of names or 1-based indices) is required");
   }
-  var indices = [];
-  for (var i = 0; i < args.layers.length; i++) {
-    indices.push(AELL_resolveLayer(comp, args.layers[i]).index);
+  var i, j;
+  var layers = [], indices = [], seen = {}, dupes = [];
+  for (i = 0; i < args.layers.length; i++) {
+    var L = AELL_resolveLayer(comp, args.layers[i]);
+    // A repeated reference used to inflate layersMoved: AE tolerates
+    // [2, 2] and moves ONE layer, and the tool reported two.
+    if (seen[L.index]) {
+      if (!seen["dupe" + L.index]) { seen["dupe" + L.index] = true;
+                                     dupes.push(L.name); }
+      continue;
+    }
+    seen[L.index] = true;
+    layers.push(L);
+    indices.push(L.index);
   }
   var move = args.moveAttributes !== false;
-  var pre = comp.layers.precompose(indices, String(args.name), move);
-  return AELL_okay({ precomp: pre.name, id: pre.id,
-                     layersMoved: indices.length });
+  if (!move && indices.length > 1) {
+    return AELL_err("moveAttributes:false only works on ONE layer — AE " +
+      "refuses it for " + indices.length + " (" + AELL_layerNamesOf(layers) +
+      "). Leaving attributes behind means the new comp takes that single " +
+      "layer's own size, which is undefined for several. Drop " +
+      "moveAttributes to move them all in together.");
+  }
+
+  // Everything worth reporting has to be read BEFORE the move: afterwards
+  // the moved layers belong to another comp and the survivors have
+  // already been rewired.
+  var movedNames = [], movedKeys = {}, parentsLost = [];
+  for (i = 0; i < layers.length; i++) {
+    movedNames.push(layers[i].name);
+    var k = AELL_layerKey(layers[i]);
+    if (k) movedKeys[k] = true;
+  }
+  for (i = 0; i < layers.length; i++) {
+    var par = null;
+    try { par = layers[i].parent; } catch (eP) {}
+    if (!par) continue;
+    var parIn = false;
+    for (j = 0; j < layers.length; j++) {
+      if (layers[j] === par) { parIn = true; break; }
+    }
+    if (!parIn) {
+      parentsLost.push(layers[i].name + " (was parented to " + par.name + ")");
+    }
+  }
+  // Keys and NAMES only, never the layer objects: precompose DESTROYS the
+  // layers it moves (AE builds fresh ones inside the precomp), so a
+  // reference held across the call throws "Object is invalid" the moment
+  // it is read — which is what the first cut of this restore did whenever
+  // the whole selection went in.
+  var prevKeys = [], prevNames = [], haveKeys = false;
+  try {
+    var sel = comp.selectedLayers;
+    for (i = 0; i < sel.length; i++) {
+      var sk = AELL_layerKey(sel[i]);
+      if (sk) haveKeys = true;
+      prevKeys.push(sk);
+      prevNames.push(sel[i].name);
+    }
+  } catch (eS) {}
+
+  var name = AELL_uniqueItemName(String(args.name));
+  if (!$.global.AELL_compAliases) $.global.AELL_compAliases = {};
+  if (name !== String(args.name)) {
+    $.global.AELL_compAliases[String(args.name)] = name;
+  } else {
+    delete $.global.AELL_compAliases[String(args.name)];
+  }
+  var pre = comp.layers.precompose(indices, name, move);
+
+  // Put the user's selection back, minus whatever went into the precomp
+  // (those objects are valid but now live in ANOTHER comp — selecting
+  // them there is worse than not restoring at all).
+  var restored = [];
+  for (j = 1; j <= comp.numLayers; j++) {
+    var cand = comp.layer(j);
+    var ck = AELL_layerKey(cand);
+    for (i = 0; i < prevKeys.length; i++) {
+      // Names are the fallback for a build with no Layer.id, and only
+      // then: two layers may share a name, ids never do.
+      var same = haveKeys ? (ck && ck === prevKeys[i])
+                          : (cand.name === prevNames[i]);
+      if (same) { restored.push(cand); break; }
+    }
+  }
+  if (restored.length) {
+    try {
+      for (i = 1; i <= comp.numLayers; i++) comp.layer(i).selected = false;
+      for (i = 0; i < restored.length; i++) restored[i].selected = true;
+    } catch (eR) {}
+  }
+
+  // Expressions left behind that still name a layer that moved.
+  var atRisk = [];
+  if (move) {
+    for (i = 1; i <= comp.numLayers && atRisk.length < 8; i++) {
+      var survivor = comp.layer(i);
+      var hits = [];
+      try { AELL_walkExpressions(survivor, hits, comp.name, survivor.name); }
+      catch (eW) {}
+      for (j = 0; j < hits.length && atRisk.length < 8; j++) {
+        var named = AELL_exprNamesLayer(hits[j].expression, movedNames);
+        if (named) {
+          atRisk.push(survivor.name + " > " + hits[j].property +
+                      " names '" + named + "'");
+        }
+      }
+    }
+  }
+
+  var out = { precomp: pre.name, id: pre.id, layersMoved: indices.length,
+              layers: movedNames.join(", "),
+              selectionKept: restored.length
+                ? AELL_layerNamesOf(restored)
+                : "(none survived — AE's new '" + pre.name +
+                  "' layer is selected)" };
+  if (dupes.length) {
+    out.duplicatesIgnored = dupes.join(", ") +
+      " — named more than once; each layer moves once.";
+  }
+  if (parentsLost.length) {
+    out.parentsBroken = parentsLost.join("; ") +
+      ". AE drops a parent that stayed behind; re-parent inside '" +
+      pre.name + "' or precompose the parent too.";
+  }
+  if (atRisk.length) {
+    out.expressionsAtRisk = atRisk.join("; ") +
+      ". Those layers are no longer in '" + comp.name +
+      "' and AE does NOT report the broken reference.";
+  }
+  if (!move) {
+    out.note = "moveAttributes:false — '" + pre.name + "' is the SIZE OF " +
+      "THE LAYER (" + pre.width + "x" + pre.height + "), not of '" +
+      comp.name + "', and the transform stayed outside.";
+  } else if (name !== String(args.name)) {
+    out.note = "An item named '" + args.name + "' already existed — this " +
+      "precomp is '" + name + "'. Use THIS name in every following command.";
+  }
+  return AELL_okay(out);
 };
 
 AELL_TOOLS.add_camera = function (args) {
@@ -4573,26 +4753,80 @@ AELL_TOOLS.add_light = function (args) {
           "Accepts Lights are lit by this" });
 };
 
+/*
+ * add_marker. Measured in AE 2026 (probe in WORKPLAN-LOG 2026-08-28):
+ *
+ *  - A marker written at a time that already HAS one REPLACES it, comment
+ *    and duration and all, and setValueAtTime reports nothing. That is a
+ *    silent loss, so the old comment comes back in `replaced`.
+ *  - Marker times are COMPOSITION time on a layer too: a marker keeps its
+ *    place in the comp view, and moving the layer's startTime carries it
+ *    (keyTime read 3, then 5 after startTime went to 2). No conversion.
+ *  - AE accepts a marker anywhere on the number line — negative, or past
+ *    the end of the comp — where the user can never see it. Allowed, but
+ *    named.
+ *  - Times are NOT snapped to frames: 1.2345 stored as 1.23449707, and a
+ *    marker 0.0001s from another is a SECOND marker on the same frame.
+ */
 AELL_TOOLS.add_marker = function (args) {
   var comp = AELL_resolveComp(args.comp);
-  if (typeof args.time !== "number") {
-    return AELL_err("'time' (seconds) is required");
+  var time = AELL_numArg(args.time);
+  if (time === null) {
+    return AELL_err("'time' (seconds, composition time) is required" +
+      (typeof args.time === "undefined" ? "" :
+       " — got " + AELL_showValue(args.time)));
+  }
+  var dur = 0;
+  if (args.duration !== null && typeof args.duration !== "undefined" &&
+      args.duration !== "") {
+    dur = AELL_numArg(args.duration);
+    if (dur === null || dur < 0) {
+      return AELL_err("'duration' must be a number of seconds >= 0 — got " +
+        AELL_showValue(args.duration) + ". Omit it for a plain marker.");
+    }
   }
   var mv = new MarkerValue(typeof args.comment === "string" ? args.comment : "");
-  if (args.duration > 0) mv.duration = args.duration;
-  var target;
-  var where;
+  if (dur > 0) mv.duration = dur;
+  var target, where, layer = null;
   if (args.layer !== null && typeof args.layer !== "undefined" &&
       args.layer !== "") {
-    var layer = AELL_resolveLayer(comp, args.layer);
+    layer = AELL_resolveLayer(comp, args.layer);
     target = layer.property("ADBE Marker");
     where = "layer " + layer.name;
   } else {
     target = comp.markerProperty;
     where = "comp " + comp.name;
   }
-  target.setValueAtTime(args.time, mv);
-  return AELL_okay({ marker: where, time: args.time });
+
+  // What is about to be overwritten. AE matches on an EXACT time, so the
+  // window is far tighter than a frame (0.0001s apart made two markers).
+  var i, before = target.numKeys, doomed = null;
+  for (i = 1; i <= before; i++) {
+    if (Math.abs(target.keyTime(i) - time) < 1e-6) {
+      try { doomed = target.keyValue(i); } catch (eK) {}
+      break;
+    }
+  }
+  target.setValueAtTime(time, mv);
+
+  var out = { marker: where, time: time,
+              comment: mv.comment, duration: dur,
+              markers: target.numKeys };
+  if (doomed && target.numKeys === before) {
+    out.replaced = "A marker already at " + time + "s was overwritten: " +
+      (doomed.comment ? "'" + doomed.comment + "'" : "(no comment)") +
+      (doomed.duration > 0 ? ", duration " + doomed.duration + "s" : "") +
+      ". AE keeps one marker per exact time.";
+  }
+  if (time < 0 || time > comp.duration) {
+    out.note = "Outside '" + comp.name + "' (0 to " + comp.duration +
+      "s) — the marker exists but is off the visible timeline.";
+  } else if (layer && (time < layer.inPoint || time > layer.outPoint)) {
+    out.note = "Outside " + layer.name + "'s own span (" + layer.inPoint +
+      " to " + layer.outPoint + "s) — the marker rides the layer and is " +
+      "not visible where the layer is not.";
+  }
+  return AELL_okay(out);
 };
 
 /* What a 3D -> 2D switch throws away. Measured in AE 2026 (probe in

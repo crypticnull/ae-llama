@@ -311,7 +311,8 @@ with `add_light`, and a coverage rig gave `add_control`, `add_keyframe`,
 
 FOUR tools are still uncovered and each is deliberate, not pending:
 
-- `add_marker`, `precompose` — item 5.4 owns them (probe first).
+- ~~`add_marker`, `precompose`~~ COVERED 2026-08-28 (0.9.30) by item
+  5.4 — 18 steps, after a probe found five silent losses in them.
 - `add_to_render_queue` — item 5.5; it writes to the user's render queue.
 - `import_file` — item 5.8; it needs a file on disk.
 - `organize_project` — **cannot be suite-tested at all.** It files every
@@ -388,13 +389,15 @@ FOUR tools are still uncovered and each is deliberate, not pending:
   6000 rather than a fixed 1200. See the log.
 - **NEW, filed by the ComfyUI probe steps 2026-08-28, each its own small
   pass:**
-  - **A generation that fails does not get retried.** ComfyUI rejected
-    the workflow the model chose; the model had four rounds left, said
-    "let's try a different approach or workflow", and stopped. The
-    grounded error now names the workflows that WOULD work (0.9.28), so
-    re-run step 13 before designing anything — this may already be
-    fixed. If not, it is a prompt rule ("a rejected workflow is not a
-    rejected request"), not a tool.
+  - ~~**A generation that fails does not get retried.**~~ ALREADY FIXED,
+    and the evidence is in the entry that filed it: 0.9.28's own field
+    run has the model invent `simple_image`, take the grounded
+    "Available: AE_LLAMA_H3_I2V_V1, AE_LLAMA_KREA2_V1" error, re-plan
+    onto KREA2 and render. A rejected workflow is no longer a rejected
+    request, so no prompt rule is needed. Struck 2026-08-28 without
+    spending a pass on it. Original text: ComfyUI rejected the workflow
+    the model chose; the model had four rounds left, said "let's try a
+    different approach or workflow", and stopped.
   - **A bundled workflow template never reaches an existing install
     once it has been seeded.** `Setup.ensureDataDirs` copies only files
     the data dir does NOT have ("never overwrite edits"), so the KREA2
@@ -476,7 +479,21 @@ Documents\Adobe\After Effects*\User Presets. Build: `list_presets`
 (cached, filterable) + `apply_preset` with the font-style grounded error
 (near-matches by name). Hundreds of behaviors for the price of two tools.
 
-### 5.4 Precompose + markers — the tools ALREADY EXIST; verify + cover
+### 5.4 Precompose + markers — DONE 2026-08-28 (0.9.30)
+Probed, fixed and covered. Five silent losses were measured and are now
+reported instead: precompose counted a REPEATED layer reference twice,
+dropped a moved layer's parent when the parent stayed behind, left an
+expression on a layer behind it pointing at a layer that is no longer
+there (AE rewrites those only when moveAttributes is FALSE, and
+expressionError stays EMPTY either way), let a SECOND project item take
+the requested name — which makes the later one unreachable by name — and
+threw away the user's selection. add_marker silently REPLACED any marker
+already at that time, refused a quoted `time` the project's own rule says
+to accept, and swallowed an unusable `duration`. Marker times turned out
+to be COMPOSITION time on a layer as well, so nothing had to be
+converted. 56 stub checks in `tests/test-precompose-markers.js`, 18 suite
+steps, harness 289 -> 307. See the log. Original text below.
+
 docs/CAPABILITIES.md's computed gaps caught this item about to build
 duplicates: `precompose` and `add_marker` are in TOOL_DEFS today, with
 zero stub tests and zero suite steps. So this item is (a) probe their

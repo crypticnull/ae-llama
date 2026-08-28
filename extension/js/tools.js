@@ -290,7 +290,14 @@
             "set_keyframes on 'contents/…' paths.",
       args: "{comp?: string, layer?: name|index (shape layer; omit = selected), kind: string, group?: name (add inside this group), name?: string, params?: {ParamName: value, …}}" },
     { name: "precompose", mutating: true,
-      desc: "Move layers into a new nested comp (precompose).",
+      desc: "Move layers into a new nested comp (precompose). The result " +
+            "names the precomp AE actually made (auto-numbered if the " +
+            "name was taken), what it broke — a moved layer's parent that " +
+            "stayed behind is DROPPED, and an expression left behind that " +
+            "names a moved layer dangles without AE reporting it — and " +
+            "the selection it put back. moveAttributes:false leaves the " +
+            "transform outside and sizes the new comp to that ONE layer; " +
+            "AE refuses it for more than one layer.",
       args: "{comp?: string, layers: [name|index, ...], name: string, moveAttributes?: bool = true}" },
     { name: "add_camera", mutating: true,
       desc: "Add a camera. Only 3D layers (set_layer_3d) are affected by it. " +
@@ -310,7 +317,11 @@
             "falloff?: none|smooth|inverseSquareClamped, radius?: px, falloffDistance?: px, " +
             "castsShadows?: bool, shadowDarkness?: %, shadowDiffusion?: px}" },
     { name: "add_marker", mutating: true,
-      desc: "Add a marker to the comp (omit 'layer') or to a layer.",
+      desc: "Add a marker to the comp (omit 'layer') or to a layer. " +
+            "'time' is COMPOSITION time either way. AE keeps one marker " +
+            "per exact time, so writing over one REPLACES it — the result " +
+            "says what it overwrote. A time outside the comp (or outside " +
+            "the layer's own span) is allowed and flagged.",
       args: "{comp?: string, layer?: name|index, time: seconds, comment?: string, duration?: seconds}" },
     { name: "set_layer_3d", mutating: true,
       desc: "Enable/disable a layer's 3D switch. Turning 3D OFF is " +

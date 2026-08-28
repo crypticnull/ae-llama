@@ -92,6 +92,33 @@ function capLayers(compName, all, args) {
 let createCount = 0;
 const createdComps = [];
 const folders = {};        // path -> true (the create_folder rig)
+// The precompose + marker rig (WORKPLAN 5.4). The canned host has to
+// REMEMBER the parent links, expressions, trims and selection it was
+// handed, or "precompose reported the parent it broke" would be a
+// sentence the stub wrote for itself.
+const pcNested = {};       // precomp name -> layers moved into it
+const pcParent = {};       // layer -> parent layer
+const pcExpr = {};         // layer -> its opacity expression
+const pcTiming = {};       // layer -> {inPoint, outPoint}
+const markers = {};        // "comp|layer" -> [{time, comment, duration}]
+let pcSelection = [];      // layers selected in the precompose rig comp
+const pcLayers = [];       // solids added to the precompose rig comp
+// The request-scoped redirect create_comp registers and precompose now
+// registers too: within one request, the name that was ASKED for still
+// reaches the comp AE actually made.
+const pcAlias = {};        // requested name -> the name it really got
+// The suite is run three times over in this file (happy path, one broken
+// tool, permissive host), so every rig has to be resettable — a run that
+// inherited the last one's precomps would auto-number a name that should
+// have been free and fail a step for the wrong reason.
+function resetPcRig() {
+  [pcNested, pcParent, pcExpr, pcTiming, markers, pcAlias].forEach((m) => {
+    Object.keys(m).forEach((k) => { delete m[k]; });
+  });
+  pcSelection = [];
+  pcLayers.length = 0;
+}
+function inPcComp(a) { return !!(a && /Self-Test Precomp/.test(a.comp || "")); }
 // Solid SOURCES, mutable: deleting a comp does not delete these (the
 // field bug), and the suite's new cleanup deletes them by id. Seeded
 // with the accumulation observed in the real scratch project — a few of
@@ -615,6 +642,17 @@ function cannedOk(tool, args) {
                note: "Stacking changed only" };
     }
     case "get_comp_details": {
+      // A precomp answers with what precompose moved into it, and with
+      // the size that call really produced (moveAttributes:false takes
+      // the LAYER's size, not the comp's).
+      if (args && (pcNested[args.comp] || pcAlias[args.comp])) {
+        const want = pcAlias[args.comp] || args.comp;
+        const d = capLayers(want, pcNested[want].map((nm, i) => ({
+          index: i + 1, name: nm, effects: [] })), args);
+        const p = compProps[want] || {};
+        d.width = p.width; d.height = p.height;
+        return d;
+      }
       if (args && /Self-Test Light/.test(args.comp || "")) {
         // Filtered by comp: the camera comp holds lights too, and
         // counting those here made a refusal step look like a leak.
@@ -695,11 +733,135 @@ function cannedOk(tool, args) {
       return out;
     }
     case "precompose": {
-      // The new comp is a real project item — the cleanup deletes it.
-      const nm = (args && args.name) || "Pre-comp 1";
+      // The precompose rig (WORKPLAN 5.4). Faithful to the four things
+      // real AE does quietly, because the suite steps exist to prove the
+      // tool reports every one of them — a canned host that just said
+      // "ok" would let a silent precompose pass.
+      const asked = (args && args.layers) || [];
+      const move = !(args && args.moveAttributes === false);
+      const uniq = [];
+      const dupes = [];
+      asked.forEach((L) => {
+        if (uniq.indexOf(L) === -1) uniq.push(L);
+        else if (dupes.indexOf(L) === -1) dupes.push(L);
+      });
+      if (!move && uniq.length > 1) {
+        return { __err: "moveAttributes:false only works on ONE layer — " +
+          "AE refuses it for " + uniq.length + " (" + uniq.join(", ") +
+          "). Leaving attributes behind means the new comp takes that " +
+          "single layer's own size, which is undefined for several. Drop " +
+          "moveAttributes to move them all in together." };
+      }
+      // AE never uniquifies; the tool does, the way create_comp does.
+      let nm = (args && args.name) || "Pre-comp 1";
+      let renamed = false;
+      if (createdComps.indexOf(nm) !== -1) {
+        let k = 2;
+        while (createdComps.indexOf(nm + " " + k) !== -1) k++;
+        nm = nm + " " + k;
+        renamed = true;
+      }
       createdComps.push(nm);
-      return { precomp: nm, id: 900,
-               layersMoved: ((args && args.layers) || []).length };
+      if (renamed) pcAlias[String(args.name)] = nm;
+      else delete pcAlias[String(args && args.name)];
+      pcNested[nm] = uniq.slice(0);
+      compProps[nm] = move
+        ? { width: 640, height: 480, duration: 10, frameRate: 24 }
+        : { width: 100, height: 100, duration: 10, frameRate: 24 };
+      // The selection: AE selects the new layer, the tool puts back
+      // whatever the user had that SURVIVED.
+      const kept = pcSelection.filter(n => uniq.indexOf(n) === -1);
+      const out = { precomp: nm, id: 900 + createdComps.length,
+                    layersMoved: uniq.length,
+                    layers: uniq.join(", "),
+                    selectionKept: kept.length ? kept.join(", ")
+                      : "(none survived — AE's new '" + nm +
+                        "' layer is selected)" };
+      pcSelection = kept.length ? kept : [nm];
+      if (dupes.length) {
+        out.duplicatesIgnored = dupes.join(", ") +
+          " — named more than once; each layer moves once.";
+      }
+      const lost = uniq.filter(n => pcParent[n] && uniq.indexOf(pcParent[n]) === -1);
+      if (lost.length) {
+        out.parentsBroken = lost.map(n => n + " (was parented to " +
+          pcParent[n] + ")").join("; ") + ". AE drops a parent that " +
+          "stayed behind; re-parent inside '" + nm + "' or precompose " +
+          "the parent too.";
+      }
+      if (move) {
+        const risky = Object.keys(pcExpr)
+          .filter(n => uniq.indexOf(n) === -1 &&
+                       uniq.some(m => pcExpr[n].indexOf('"' + m + '"') !== -1));
+        if (risky.length) {
+          out.expressionsAtRisk = risky.map(n => n + " > Opacity names '" +
+            uniq.filter(m => pcExpr[n].indexOf('"' + m + '"') !== -1)[0] +
+            "'").join("; ") + ". Those layers are no longer in '" +
+            (args && args.comp) + "' and AE does NOT report the broken " +
+            "reference.";
+        }
+      }
+      if (!move) {
+        out.note = "moveAttributes:false — '" + nm + "' is the SIZE OF " +
+          "THE LAYER (100x100), not of '" + (args && args.comp) +
+          "', and the transform stayed outside.";
+      } else if (renamed) {
+        out.note = "An item named '" + (args && args.name) +
+          "' already existed — this precomp is '" + nm +
+          "'. Use THIS name in every following command.";
+      }
+      return out;
+    }
+    case "add_marker": {
+      const t = typeof args.time === "number" ? args.time
+        : (typeof args.time === "string" && args.time !== "" &&
+           !isNaN(Number(args.time))) ? Number(args.time) : null;
+      if (t === null) {
+        return { __err: "'time' (seconds, composition time) is required" +
+          (typeof args.time === "undefined" ? "" : " — got " + args.time) };
+      }
+      let dur = 0;
+      if (args.duration !== null && typeof args.duration !== "undefined" &&
+          args.duration !== "") {
+        dur = (typeof args.duration === "number") ? args.duration
+          : (typeof args.duration === "string" && !isNaN(Number(args.duration)))
+            ? Number(args.duration) : null;
+        if (dur === null || dur < 0) {
+          return { __err: "'duration' must be a number of seconds >= 0 — " +
+            "got " + args.duration + ". Omit it for a plain marker." };
+        }
+      }
+      const key = (args.comp || "") + "|" + (args.layer || "(comp)");
+      const list = markers[key] || (markers[key] = []);
+      const at = list.filter(m => m.time === t)[0];
+      const out = { marker: args.layer ? "layer " + args.layer
+                                       : "comp " + args.comp,
+                    time: t, comment: args.comment || "", duration: dur };
+      if (at) {
+        out.replaced = "A marker already at " + t + "s was overwritten: " +
+          (at.comment ? "'" + at.comment + "'" : "(no comment)") +
+          (at.duration > 0 ? ", duration " + at.duration + "s" : "") +
+          ". AE keeps one marker per exact time.";
+        at.comment = args.comment || "";
+        at.duration = dur;
+      } else {
+        list.push({ time: t, comment: args.comment || "", duration: dur });
+        list.sort((a, b) => a.time - b.time);
+      }
+      out.markers = list.length;
+      const cd = compProps[args.comp] || { duration: 10 };
+      if (t < 0 || t > cd.duration) {
+        out.note = "Outside '" + args.comp + "' (0 to " + cd.duration +
+          "s) — the marker exists but is off the visible timeline.";
+      } else if (args.layer && pcTiming[args.layer] &&
+                 (t < pcTiming[args.layer].inPoint ||
+                  t > pcTiming[args.layer].outPoint)) {
+        out.note = "Outside " + args.layer + "'s own span (" +
+          pcTiming[args.layer].inPoint + " to " +
+          pcTiming[args.layer].outPoint + "s) — the marker rides the " +
+          "layer and is not visible where the layer is not.";
+      }
+      return out;
     }
     // The comp-rename rig: one plain comp, one nested (a utility), one
     // named by an expression. The canned host has to remember the rename
@@ -772,6 +934,16 @@ function cannedOk(tool, args) {
       return { layer: args && args.layer,
                property: args && args.property };
     case "get_property": {
+      // Markers read back through get_property as a key list — the only
+      // route the panel has to them, and how the suite proves a layer
+      // marker sits at the COMP time it was given.
+      if (args && /^marker$/i.test(String(args.property || ""))) {
+        const ms = markers[(args.comp || "") + "|" +
+                           (args.layer || "(comp)")] || [];
+        return { property: "Marker", matchName: "ADBE Marker",
+                 value: "[object]", numKeys: ms.length,
+                 keys: ms.map(m => ({ time: m.time, value: "[object]" })) };
+      }
       // A keyframed property answers with its key list and the value at
       // the comp's current time (0) — the shape real AE returns, and what
       // the light-animation and remove_keyframes steps read back. This
@@ -981,6 +1153,7 @@ function cannedOk(tool, args) {
       // swallows them.
       markDriven(args && args.layer, args && args.property,
                  /\bvalue\b/.test(expr) ? "passthru" : 999);
+      if (inPcComp(args) && args.layer) pcExpr[args.layer] = expr;
       return { expressionEnabled: true, expression: expr };
     }
     case "center_anchor_point":
@@ -1113,6 +1286,7 @@ function cannedOk(tool, args) {
     case "set_track_matte": return { mode: "alpha" };
     case "set_layer_parent":
       if (args && args.layer) parentedLayers[args.layer] = args.parent;
+      if (inPcComp(args) && args.layer) pcParent[args.layer] = args.parent;
       return { parented: "ST Square 5" };
     case "scale_comp": {
       // The resize MUTATES the canned lights, so a later read can only
@@ -1160,6 +1334,7 @@ function cannedOk(tool, args) {
     case "add_solid":
       if (inBatComp(args)) batSolids.push(args.name);
       if (inRbComp(args)) rbLayers.push(args.name);
+      if (inPcComp(args)) pcLayers.push(args.name);
       return { name: (args && args.name) || "ST Square" };
     case "apply_effect":
       if (inCvComp(args)) {
@@ -1314,6 +1489,10 @@ function cannedOk(tool, args) {
       // Writing the trim echoes it back; calling it with no timing args is
       // a pure READ, which is how the suite gets AE's unrounded in/out.
       if (args && typeof args.inPoint === "number") {
+        if (inPcComp(args)) {
+          pcTiming[args.layer] = { inPoint: args.inPoint,
+                                   outPoint: args.outPoint };
+        }
         return { layer: args.layer, inPoint: args.inPoint,
                  outPoint: args.outPoint, startTime: 0 };
       }
@@ -1684,7 +1863,7 @@ SelfTest.run({
     ordStack = [];
     maskKeys = {};
     batchLayers = 0; batchFx = {}; batchBlur = null;
-    batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig();
+    batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig();
     SelfTest.run({
       callHostTool(tool, args, cb) {
         if (tool === "grid_layout") {
@@ -1714,7 +1893,7 @@ SelfTest.run({
         ordStack = [];
         maskKeys = {};
         batchLayers = 0; batchFx = {}; batchBlur = null;
-        batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig();
+        batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig();
         SelfTest.run({
           callHostTool(tool, args, cb) {
             // Never refuse anything -- the old permissive host.

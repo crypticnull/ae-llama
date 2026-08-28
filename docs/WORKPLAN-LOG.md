@@ -3758,3 +3758,155 @@ touched - that is still remote's.
   now has nothing local left. Its two remaining bullets are both design
   calls already filed for the remote session: the version-stamped
   workflow seed, and rollback across a mixed panel/host round.
+
+## 2026-08-28 (local, ninth pass) - item 5.4: precompose and add_marker stop taking things quietly (0.9.30)
+
+Harness green on arrival (289/289), so the pass took the highest item
+that could still move. Item 4's two remaining bullets could not: the
+seeded-workflow-staleness one is explicitly a design call for the remote
+session, and "a generation that fails does not get retried" is answered
+by the entry that filed it - 0.9.28's own field run has the model invent
+`simple_image`, take the grounded error, re-plan onto KREA2 and render.
+Struck it with that citation rather than spending a pass re-running it.
+So: **5.4, precompose + markers - the tools ALREADY EXIST; verify and
+cover.**
+
+### Three probes, and what AE actually does
+
+Nothing below was assumed. Probe 1 measured the two tools cold, probe 2
+chased the questions probe 1 opened, probe 3 verified every fix.
+
+**precompose**
+
+- `precompose(indices, name, false)` THROWS for more than one layer:
+  "Can not set moveAllAttributes to false when calling precompose with
+  more than one layer." The tool leaked that verbatim.
+- AE tolerates a REPEATED index. `[2, 2]` moves ONE layer; the tool
+  reported `layersMoved: 2`, which was simply untrue.
+- It DESTROYS the layers it moves. A reference held across the call
+  throws "Object is invalid" on the next read - AE builds fresh layers
+  inside the precomp rather than moving the objects. This is measured,
+  not inferred: the first cut of the selection restore held the old
+  objects and died on exactly that, in the field, on five cases.
+- Parenting loses something in ONE direction only. A moved layer whose
+  parent stayed behind has its parent set to null, silently. The reverse
+  (a layer left behind whose parent moved IN) is re-pointed by AE at the
+  new precomp layer, and a parent/child pair moved together keeps its
+  link. So only the first case needed reporting; the other two would
+  have been noise.
+- **The one that surprised me:** with moveAllAttributes TRUE, an
+  expression on a layer left behind that names a moved layer is NOT
+  rewritten and NOT flagged. `thisComp.layer("INSIDE").transform.opacity`
+  still says "INSIDE" after INSIDE has gone into the precomp, and
+  `expressionError` reads EMPTY. With moveAllAttributes FALSE, AE DOES
+  rewrite it, to the new precomp layer. Exactly backwards from what you
+  would guess, and the true case is the default.
+- AE lets a SECOND project item take the requested name. Two comps named
+  "PRE8" both existed after one call, and `AELL_resolveComp` returns the
+  first match - so the comp the tool had just made was unreachable by the
+  name it reported. The system prompt already tells the model to "take
+  the name from the tool RESULT" after precompose; the tool was the one
+  not holding up its end.
+- It selects the new precomp layer and deselects everything else.
+- moveAttributes:false sizes the new comp to that ONE LAYER's source
+  (200x100), not to the comp (640x480), and leaves the transform outside.
+- The new precomp layer lands at the topmost moved layer's slot, and
+  in/out points and startTime survive inside the precomp. Both correct;
+  nothing to do.
+
+**add_marker**
+
+- A marker written at a time that already has one REPLACES it - comment,
+  duration and all - and `setValueAtTime` says nothing. `numKeys` stays
+  put. Same for comp and layer markers.
+- Marker times are COMPOSITION time on a layer too. Measured directly:
+  keyTime read 3, then 5 after the layer's startTime moved to 2. So
+  there was nothing to convert - the tool was already right, and the doc
+  simply never said which time space it meant.
+- Times are NOT snapped to frames. 1.2345 stored as 1.23449707, and a
+  marker 0.0001s from another is a SECOND marker on the same frame.
+- AE accepts a marker at -1s, or at 99s in a 10s comp, with no complaint.
+- `{"duration": -3}` was silently ignored (the `args.duration > 0`
+  guard), and `{"time": "4"}` was refused outright - against this
+  codebase's own rule, written into `AELL_numArg`, that a small model's
+  quoted number is accepted rather than dropped.
+- `MarkerValue` in AE 2026 carries comment, chapter, url, frameTarget,
+  cuePointName, duration, label, protectedRegion. Markers read back
+  through `get_property`/`list_properties` as "[object]" with a key
+  count - enough to prove a marker landed, not enough to read it. Left
+  alone: a marker reader is a NEW tool and 5.4 says do not build one.
+
+### What changed
+
+Every one of those silences now comes back in the result, in the shape
+`scale_comp` and `set_layer_3d` already use - `duplicatesIgnored`,
+`parentsBroken`, `expressionsAtRisk`, `selectionKept`, `replaced` - and
+the two refusals are grounded:
+
+- precompose refuses `moveAttributes:false` for several layers in the
+  panel's own words, naming the layers and the way out.
+- It de-duplicates the layer list and counts LAYERS, not references.
+- It restores the user's selection minus whatever went in, matching on
+  `Layer.id` captured BEFORE the call. When nothing survived it leaves
+  AE's new layer selected and says so rather than pretending.
+- It auto-numbers a taken name through `AELL_uniqueItemName` and
+  registers the same request-scoped `AELL_compAliases` redirect
+  create_comp does, so the rest of the batch still reaches the comp.
+- The expression scan runs only for moveAttributes TRUE (FALSE is the
+  case AE fixes itself), walks only the layers left behind, and caps at
+  eight. Cost is the known expression-walk rate, ~133 ms per 100 layers.
+- add_marker takes a quoted `time` and `duration`, refuses a duration
+  that is not a number >= 0 quoting what arrived, names the marker it
+  overwrote, and flags a marker placed outside the comp - or outside the
+  layer's own span, where it rides the layer into invisibility.
+
+### Covered without AE, and in AE
+
+- `tests/test-precompose-markers.js` (NEW): 56 checks over a stub whose
+  precompose reproduces all eight measured quirks, including the
+  "Object is invalid" throw - which is what makes the held-reference bug
+  fail in Node instead of only in After Effects.
+- 18 suite steps in `extension/js/selftest.js` on their own rig comp
+  (precompose CREATES project items, so it cannot share one), including
+  both halves of the selection report: the first precompose has nothing
+  to keep, and its new layer is then the selection the second one has to
+  put back. `tests/test-self-test.js`'s canned host grew a faithful
+  precompose and add_marker for the same reason - a host that just said
+  "ok" would let a silent precompose pass its own steps.
+- docs/CAPABILITIES.md regenerated; both tools leave the uncovered list.
+
+**Harness: 307/307 PASSED** (289 -> 307). Stubbed suite: 37 files green.
+
+### The trap this pass cost an hour to, written down so the next one does not
+
+**A probe must NOT wrap `AELL_call` in its own `app.beginUndoGroup`.**
+AELL_call opens and closes its own undo groups; nesting the probe's group
+around it leaves AE's group counter unbalanced for the rest of the
+SESSION. Nothing goes wrong until something issues an Undo - and the
+suite's rollback step does exactly that, so the next three harness runs
+died at breadcrumb 171 behind an "After Effects warning: Undo group..."
+modal whose text Win32 cannot read (AE draws it in an
+OS_EditTextContainer that reports no string, so the harness could only
+call it "unreadable"). The harness's own pre-launch dismissal did not
+help: this dialog is raised DURING the run, not left over from the last
+one. Dismissed with a posted WM_CLOSE, and the very next run was green.
+All three probe scripts in this pass did it; future ones should let the
+tools manage their own undo groups and bracket only RAW AE calls.
+
+### NEEDS A HUMAN EYE
+
+- **The AE project on this machine has 260 items and no comps** - 234
+  "Null N" footage items, a dozen "AELL Probe *" folders from earlier
+  passes, five generated mp4s and a handful of stray solids. The suite
+  cleans up its own "ST " namespace and nothing else, correctly. Nobody
+  has ever cleaned up the rest; it is only cosmetic, but it makes the
+  Project panel useless to look at while working.
+- **`duplicate_comp` has the same name bug precompose just lost**: it
+  does `dup.name = args.name` with no uniquing and no alias, so two comps
+  can end up sharing a name and the second is unreachable by name. Same
+  one-line shape as the fix above. Not touched - it is outside 5.4, and
+  filing it beats smuggling it.
+- **There is still no way to READ a marker's comment or duration.** Both
+  come back as "[object]". Fine for now; if markers ever become something
+  the model reasons about rather than places, that is a new tool and the
+  remote session's call.

@@ -36,6 +36,9 @@
   // And the coverage rig: the tools nothing else in the suite ever calls.
   // It resizes and re-times its own comp, so it cannot share one.
   var CVCOMP = "AELL Self-Test Cover";
+  // And the precompose rig: precompose CREATES project items, so it must
+  // not be able to nest a comp another group is still measuring.
+  var PCCOMP = "AELL Self-Test Precomp";
   var running = false;
 
   /**
@@ -3619,6 +3622,293 @@
         tool: "delete_item",
         args: function (ctx) { return { item: ctx.cvComp }; },
         check: function () { return true; } },
+
+      // ---- precompose + markers (WORKPLAN 5.4). Both tools shipped with
+      // no coverage at all. Everything asserted below was measured in AE
+      // 2026 first (WORKPLAN-LOG 2026-08-28) — the four things precompose
+      // used to do silently, and the one add_marker did.
+      //
+      // Its own comp: precompose CREATES project items, and a rig that
+      // shared a comp with the groups above would leave nested comps
+      // inside something another step still measures.
+      { name: "precompose rig comp",
+        tool: "create_comp",
+        args: { name: PCCOMP, width: 640, height: 480, duration: 10,
+                frameRate: 24 },
+        check: function (d, ctx) { ctx.pcComp = d.name; return true; } },
+
+      { name: "precompose rig: four solids and a parent link",
+        batch: function (ctx) {
+          return [
+            { tool: "add_solid", args: { comp: ctx.pcComp, name: "ST Pre Stay",
+                color: [0.2, 0.2, 0.2], width: 100, height: 100 } },
+            { tool: "add_solid", args: { comp: ctx.pcComp, name: "ST Pre Par",
+                color: [0.4, 0.4, 0.4], width: 100, height: 100 } },
+            { tool: "add_solid", args: { comp: ctx.pcComp, name: "ST Pre Kid",
+                color: [0.6, 0.6, 0.6], width: 100, height: 100 } },
+            { tool: "add_solid", args: { comp: ctx.pcComp, name: "ST Pre Watch",
+                color: [0.8, 0.8, 0.8], width: 100, height: 100 } },
+            { tool: "set_layer_parent", args: { comp: ctx.pcComp,
+                layer: "ST Pre Kid", parent: "ST Pre Par" } },
+            { tool: "set_expression", args: { comp: ctx.pcComp,
+                layer: "ST Pre Watch", property: "opacity",
+                expression: 'thisComp.layer("ST Pre Kid").transform.opacity' } }
+          ];
+        },
+        check: function (rows) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "rig row " + (i + 1) + ": " + rows[i].error;
+          }
+          return true;
+        } },
+
+      // AE refuses moveAllAttributes:false for more than one layer. The
+      // tool has to say so itself — the raw AE throw is not something the
+      // model can act on.
+      { name: "precompose refuses moveAttributes:false for two layers",
+        tool: "precompose",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.pcComp, layers: ["ST Pre Stay", "ST Pre Watch"],
+                   name: "ST Pre Never", moveAttributes: false };
+        },
+        check: function (err) {
+          if (/After Effects error/.test(err)) {
+            return "leaks AE's raw throw: " + err;
+          }
+          return (/ST Pre Stay/.test(err) && /ST Pre Watch/.test(err)) ||
+                 "does not name the layers: " + err;
+        } },
+
+      // Three of the four silences in one call: a repeated reference
+      // counts once, the parent that stayed behind is named, and the
+      // expression left behind that now dangles is named. Nothing was
+      // selected before (add_solid restores the selection it found, and
+      // the rig comp started empty), so this is also the "nothing
+      // survived" half of the selection report.
+      { name: "precompose reports the parent and expression it broke",
+        tool: "precompose",
+        args: function (ctx) {
+          return { comp: ctx.pcComp,
+                   layers: ["ST Pre Kid", "ST Pre Kid"],
+                   name: "ST Pre Nest" };
+        },
+        check: function (d, ctx) {
+          ctx.pcNest = d.precomp;
+          if (d.layersMoved !== 1) {
+            return "a repeated reference was counted twice: layersMoved " +
+                   d.layersMoved;
+          }
+          if (!/ST Pre Kid/.test(d.duplicatesIgnored || "")) {
+            return "the repeat is not reported: " +
+                   (d.duplicatesIgnored || "(nothing)");
+          }
+          if (!/ST Pre Par/.test(d.parentsBroken || "")) {
+            return "the dropped parent is not reported: " +
+                   (d.parentsBroken || "(nothing)");
+          }
+          if (!/ST Pre Watch/.test(d.expressionsAtRisk || "")) {
+            return "the dangling expression is not reported: " +
+                   (d.expressionsAtRisk || "(nothing)");
+          }
+          return /none survived/.test(d.selectionKept || "") ||
+                 "nothing was selected to keep, but the result claims " +
+                 d.selectionKept;
+        } },
+
+      { name: "...and the layer really did move into the new comp",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.pcNest }; },
+        check: function (d) {
+          if (d.numLayers !== 1) return "precomp holds " + d.numLayers;
+          return d.layers[0].name === "ST Pre Kid" ||
+                 "it holds " + d.layers[0].name;
+        } },
+
+      // AE never uniquifies an item name, and two comps sharing one make
+      // the later unreachable by name. precompose auto-numbers instead,
+      // and registers the same request-scoped alias create_comp does.
+      //
+      // This is also the OTHER half of the selection report: precompose
+      // above left AE's new layer selected, that layer survives this call,
+      // and so it has to come back selected.
+      { name: "a precomp name already taken is auto-numbered",
+        tool: "precompose",
+        args: function (ctx) {
+          return { comp: ctx.pcComp, layers: ["ST Pre Par"],
+                   name: ctx.pcNest };
+        },
+        check: function (d, ctx) {
+          ctx.pcNest2 = d.precomp;
+          if (d.precomp === ctx.pcNest) {
+            return "took the name that was already used: " + d.precomp;
+          }
+          if (d.selectionKept !== ctx.pcNest) {
+            return "the selection that survived was not put back: " +
+                   d.selectionKept + " (expected " + ctx.pcNest + ")";
+          }
+          return /already existed/.test(d.note || "") ||
+                 "no note about the rename: " + (d.note || "(none)");
+        } },
+
+      { name: "...and the old name still reaches the new comp",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.pcNest }; },
+        check: function (d, ctx) {
+          // Within one request the alias wins, exactly as after
+          // create_comp: the batch that asked for the name gets the comp
+          // it actually made.
+          return d.name === ctx.pcNest2 ||
+                 "resolved to '" + d.name + "', not '" + ctx.pcNest2 + "'";
+        } },
+
+      // moveAttributes:false sizes the new comp to the LAYER, not the comp.
+      { name: "moveAttributes:false takes the layer's own size",
+        tool: "precompose",
+        args: function (ctx) {
+          return { comp: ctx.pcComp, layers: ["ST Pre Watch"],
+                   name: "ST Pre Solo", moveAttributes: false };
+        },
+        check: function (d, ctx) {
+          ctx.pcSolo = d.precomp;
+          return /SIZE OF THE LAYER \(100x100\)/.test(d.note || "") ||
+                 "no size note, or the wrong size: " + (d.note || "(none)");
+        } },
+
+      { name: "...and the new comp really is 100x100",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.pcSolo }; },
+        check: function (d) {
+          return (d.width === 100 && d.height === 100) ||
+                 d.width + "x" + d.height;
+        } },
+
+      // ---- markers.
+      { name: "add_marker puts one on the comp",
+        tool: "add_marker",
+        args: function (ctx) {
+          return { comp: ctx.pcComp, time: 1, comment: "ST first",
+                   duration: 2 };
+        },
+        check: function (d) {
+          return (d.comment === "ST first" && d.duration === 2 &&
+                  d.markers === 1) || JSON.stringify(d);
+        } },
+
+      // AE keeps ONE marker per exact time, so this destroys the first.
+      { name: "...a second at the same time names what it destroyed",
+        tool: "add_marker",
+        args: function (ctx) {
+          return { comp: ctx.pcComp, time: 1, comment: "ST second" };
+        },
+        check: function (d) {
+          if (d.markers !== 1) return "AE kept " + d.markers + " markers";
+          return /ST first/.test(d.replaced || "") ||
+                 "the overwritten marker is not reported: " +
+                 (d.replaced || "(nothing)");
+        } },
+
+      { name: "...and one on empty time reports no loss",
+        tool: "add_marker",
+        args: function (ctx) {
+          return { comp: ctx.pcComp, time: 3, comment: "ST third" };
+        },
+        check: function (d) {
+          return (!d.replaced && d.markers === 2) ||
+                 "replaced=" + d.replaced + " markers=" + d.markers;
+        } },
+
+      // A small model writes {"time": "4"} often enough to matter.
+      { name: "a quoted time is accepted, not dropped",
+        tool: "add_marker",
+        args: function (ctx) {
+          return { comp: ctx.pcComp, time: "4", comment: "ST quoted" };
+        },
+        check: function (d) {
+          return d.time === 4 || "time came back as " +
+                 d.time + " (" + typeof d.time + ")";
+        } },
+
+      { name: "a duration that is not a duration is refused",
+        tool: "add_marker",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.pcComp, time: 5, duration: -3 };
+        },
+        check: function (err) {
+          return (/-3/.test(err) && /duration/.test(err)) ||
+                 "not grounded in what came in: " + err;
+        } },
+
+      // AE will happily put a marker where nobody can ever see it.
+      { name: "a marker past the end of the comp is flagged",
+        tool: "add_marker",
+        args: function (ctx) {
+          return { comp: ctx.pcComp, time: 99, comment: "ST far" };
+        },
+        check: function (d) {
+          return /off the visible timeline/.test(d.note || "") ||
+                 "no note: " + (d.note || "(none)");
+        } },
+
+      { name: "a layer marker outside the layer's span is flagged",
+        batch: function (ctx) {
+          return [
+            { tool: "set_layer_timing", args: { comp: ctx.pcComp,
+                layer: "ST Pre Stay", inPoint: 3, outPoint: 8 } },
+            { tool: "add_marker", args: { comp: ctx.pcComp,
+                layer: "ST Pre Stay", time: 1, comment: "ST early" } },
+            { tool: "add_marker", args: { comp: ctx.pcComp,
+                layer: "ST Pre Stay", time: 5, comment: "ST inside" } }
+          ];
+        },
+        check: function (rows) {
+          if (!rows[0].ok) return "set_layer_timing failed: " + rows[0].error;
+          if (!rows[1].ok || !rows[2].ok) {
+            return "add_marker failed: " +
+                   (rows[1].error || rows[2].error);
+          }
+          if (!/own span/.test(rows[1].data.note || "")) {
+            return "the early marker is not flagged: " +
+                   (rows[1].data.note || "(nothing)");
+          }
+          return !rows[2].data.note ||
+                 "the marker INSIDE the span was flagged too: " +
+                 rows[2].data.note;
+        } },
+
+      // Marker times are COMPOSITION time on a layer as well: the marker
+      // rides the layer when its startTime moves, so what came back as
+      // "time 5" is still where the user asked for it.
+      { name: "a layer marker reads back at the comp time it was given",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.pcComp, layer: "ST Pre Stay",
+                   property: "Marker" };
+        },
+        check: function (d) {
+          if (d.numKeys !== 2) return "expected 2 markers, got " + d.numKeys;
+          var times = [];
+          for (var i = 0; i < d.keys.length; i++) times.push(d.keys[i].time);
+          return times.join(",") === "1,5" ||
+                 "marker times " + times.join(",") + ", expected 1,5";
+        } },
+
+      { name: "cleanup: delete the precompose rig comps",
+        batch: function (ctx) {
+          return [
+            { tool: "delete_item", args: { item: ctx.pcSolo } },
+            { tool: "delete_item", args: { item: ctx.pcNest2 } },
+            { tool: "delete_item", args: { item: ctx.pcNest } },
+            { tool: "delete_item", args: { item: ctx.pcComp } }
+          ];
+        },
+        check: function (rows) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + (i + 1) + ": " + rows[i].error;
+          }
+          return true;
+        } },
 
       // ---- comp-rename audit + bulk rename. A three-comp rig: one
       // plain, one nested (a utility), one named by an expression.
