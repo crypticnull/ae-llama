@@ -12,7 +12,7 @@ feature they describe. Use this to look at the product whole and ask
 
 _Regenerate with `node scripts/capability-report.js` — CI fails if this section is stale._
 
-**65 tools** (55 mutating, 10 read-only; 62 host-side, 3 panel-side).
+**66 tools** (56 mutating, 10 read-only; 63 host-side, 3 panel-side).
 
 | Tool | Does | Writes | Side | Stub tests | Suite steps |
 |---|---|---|---|---|---|
@@ -25,7 +25,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `add_null` | Add a null layer (use as a controller or parent) | yes | host | 1 | 7 |
 | `add_shape_content` | Add content INSIDE a shape layer: kinds group, rectangle, ellipse, star, polygon, path, fill, stroke, gradient_fill, gradient_stroke, repeater, trim_paths, merge_paths, offset_paths, rounded_corners, pucker_bloat, twist, zigzag | yes | host | 1 | 8 |
 | `add_shape_layer` | Add a shape layer (rectangle, ellipse, polygon, or star) | yes | host | — | 2 |
-| `add_solid` | Add a solid layer | yes | host | — | 28 |
+| `add_solid` | Add a solid layer | yes | host | — | 30 |
 | `add_text_animator` | Animate a text layer PER CHARACTER (typewriter, cascade, wiggle) — an animator holds the properties, a selector picks which characters get them | yes | host | 1 | 10 |
 | `add_text_layer` | Add a text layer to a comp | yes | host | 1 | 7 |
 | `add_to_render_queue` | Add a comp to the render queue WITHOUT rendering it | yes | host | 1 | 3 |
@@ -35,19 +35,20 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `apply_preset` | Apply an installed .ffx animation preset to layer(s) | yes | host | 1 | 5 |
 | `audit_comp_usage` | Facts about how comps are used, before renaming anything: which comps each one is nested in, whether it is in the render queue, and every expression that names it as a string | no | host | 1 | 1 |
 | `center_anchor_point` | Center a layer's anchor point on its visible content (sourceRect math done host-side; position compensated so the layer does not jump, at every Position keyframe) | yes | host | 1 | 2 |
+| `clean_project` | Delete project clutter | yes | host | 1 | 8 |
 | `comfy_generate` | Generate an image/video with local ComfyUI and import it into the AE project | yes | panel | — | — |
 | `comfy_list_workflows` | List available ComfyUI generation workflow templates by name | no | panel | — | — |
 | `comfy_status` | Check the local ComfyUI instance (online? queue depth?) | no | panel | — | — |
-| `create_comp` | Create a composition and open it | yes | host | 1 | 21 |
+| `create_comp` | Create a composition and open it | yes | host | 1 | 23 |
 | `create_folder` | Create a project-panel folder | yes | host | 1 | 8 |
-| `delete_item` | Delete a project item | yes | host | 1 | 27 |
-| `delete_layer` | Delete a layer from a comp | yes | host | — | 8 |
+| `delete_item` | Delete a project item | yes | host | 1 | 29 |
+| `delete_layer` | Delete a layer from a comp | yes | host | — | 9 |
 | `distribute_property` | Distribute a property VALUE across layers | yes | host | 1 | 5 |
 | `duplicate_comp` | Duplicate a composition | yes | host | 1 | 1 |
 | `duplicate_layer` | Duplicate a LAYER inside its comp (use duplicate_comp only for whole compositions) | yes | host | 1 | 6 |
 | `for_each_layer` | Run a PER-LAYER tool once per target layer in ONE call (max 200 layers) — the batch executor for anything without its own layers arg: {tool: 'apply_effect', args: {effect: 'Gaussian Blur'}} blurs every target | yes | host | 1 | 6 |
 | `get_comp_details` | Layers of a comp with index, name, type, timing, effects | no | host | 2 | 21 |
-| `get_project_info` | List project items (comps/footage/folders) and the active comp | no | host | 2 | 9 |
+| `get_project_info` | List project items (comps/footage/folders) and the active comp | no | host | 2 | 11 |
 | `get_property` | Read ANY property by path: value, keyframes, expression | no | host | 3 | 79 |
 | `grid_layout` | Arrange layers into a grid rigged to a control null: its 'Grid X Spacing'/'Grid Y Spacing'/'Grid Columns' sliders drive spacing AND column count live, and the grid centers on the null's position (all expressions generated host-side) | yes | host | 1 | 2 |
 | `import_file` | Import a footage/image/video file into the project | yes | host | — | — |
@@ -67,7 +68,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `scale_comp` | Resize a comp AND scale its content to match, re-centered — like the native 'Scale Composition' script | yes | host | 2 | 2 |
 | `set_comp_setting` | Change a comp setting (duration, frame rate, bg color) | yes | host | 1 | 1 |
 | `set_effect_param` | Set a parameter on an effect already applied to a layer | yes | host | — | 1 |
-| `set_expression` | LAST RESORT: set a raw expression (or clear with '') | yes | host | 1 | 10 |
+| `set_expression` | LAST RESORT: set a raw expression (or clear with '') | yes | host | 1 | 11 |
 | `set_keyframes` | Set the SAME keyframes on MANY layers in ONE call | yes | host | 2 | 9 |
 | `set_layer_3d` | Enable/disable a layer's 3D switch | yes | host | 1 | 3 |
 | `set_layer_parent` | Parent layers to another layer (omit/null parent to unparent) | yes | host | 1 | 5 |
@@ -261,9 +262,25 @@ Queued (see WORKPLAN for owners/order):
   It also warns when the same comp is queued twice (AE allows it, and
   both copies then render), refuses an output folder that does not
   exist, and reports an extension AE overrode.
-- Feature track not yet built: project hygiene, audio-to-keyframes,
-  frame round-trip, .mogrt export, whisper captions, ffmpeg exports
-  (items 5.6-6).
+- Project hygiene arrived 2026-08-28: `clean_project` runs exactly one
+  of AE's three cleanup calls, and every one of them takes more than it
+  says. `removeUnusedFootage()` also deletes EMPTY FOLDERS, recursively,
+  and counts them in the total it returns; `reduceProject()` deletes a
+  comp that only an EXPRESSION names -- leaving `expressionError` empty,
+  so the break is invisible -- and silently drops the render-queue items
+  of every comp it removes; and it ACCEPTS a footage item in its keep
+  array and then deletes every comp in the project, which the tool
+  refuses outright. So `dryRun` defaults to TRUE and the preview NAMES
+  what would go (paths, not a count), calls out the folders, queue items
+  and expressions the user never asked about, and on execute diffs what
+  AE actually removed against what was promised. All measured on
+  throwaway projects in AE 2026; unlike a render, these are ordinary
+  edits that one Ctrl+Z undoes whole. The suite covers previews and
+  refusals ONLY -- executing any of them inside the user's open project
+  would delete the user's own items -- so the execute paths live in
+  `tests/test-project-hygiene.js` against a stub that models each hazard.
+- Feature track not yet built: audio-to-keyframes, frame round-trip,
+  .mogrt export, whisper captions, ffmpeg exports (items 5.7-6).
 - Image/video generation is not yet seamless: no frame-aware img2img,
   no mask-driven inpainting, no depth/parallax, no upscale/interpolate.
   The Krea 2 workflow now ships adapted and runnable

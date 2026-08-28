@@ -904,6 +904,75 @@ function cannedOk(tool, args) {
       }
       return { __err: "Project item not found: " + key };
     }
+    case "clean_project": {
+      // Modelled to REFUSE the way the real tool does: a canned host that
+      // answered {ok} would let all six refusal steps pass while the tool
+      // happily deleted the user's project.
+      const act = String((args && args.action) || "")
+        .toLowerCase().replace(/[\s\-]+/g, "_");
+      const known = { remove_unused_footage: 1, remove_unused: 1, unused: 1,
+                      consolidate_footage: 1, consolidate: 1,
+                      reduce_project: 1, reduce: 1 };
+      const menu = "remove_unused_footage | consolidate_footage | " +
+                   "reduce_project";
+      if (!act) return { __err: "clean_project needs an 'action'. " + menu };
+      if (!known[act]) {
+        return { __err: "Unknown action '" + args.action + "'. " + menu };
+      }
+      const action = /reduce/.test(act) ? "reduce_project"
+                   : /consolidate/.test(act) ? "consolidate_footage"
+                   : "remove_unused_footage";
+      const dryRun = !(args && args.dryRun === false);
+      const orphans = solidSources
+        .filter((so) => String(so.name).indexOf("ST HYG Orphan") === 0)
+        .map((so) => "Solids/" + so.name);
+      if (action === "reduce_project") {
+        let keep = (args && args.keepComps) || null;
+        if (typeof keep === "string") keep = [keep];
+        if (!keep || !keep.length) {
+          return { __err: "reduce_project deletes every comp, footage " +
+            "item and folder that the comps you keep do not need, so it " +
+            "will not guess which ones matter. Name them in keepComps. " +
+            "Comps in this project: " + createdComps.join(", ") };
+        }
+        for (const nm of keep) {
+          if (createdComps.indexOf(String(nm)) !== -1) continue;
+          if (solidSources.some((so) => so.name === String(nm))) {
+            return { __err: "'" + nm + "' is a footage, not a comp. AE " +
+              "accepts a non-comp here and then deletes EVERY comp in " +
+              "the project, so it is refused. Name comps only." };
+          }
+          return { __err: "Comp not found: " + nm +
+            ". Comps in this project: " + createdComps.join(", ") };
+        }
+        const doomedComps = createdComps.filter((c) => keep.indexOf(c) === -1);
+        const out = { action, dryRun, keepComps: keep,
+          willRemove: doomedComps.length + orphans.length,
+          items: doomedComps.concat(orphans),
+          compsRemoved: doomedComps.length };
+        if (doomedComps.indexOf("ST HYG Drop") !== -1) {
+          out.expressionBreaks = ["ST HYG Drop is named (comp()) by an " +
+            "expression on ST HYG Keep / ST HYG Used / Opacity"];
+          out.expressionNote = "AE does NOT report these: the expression " +
+            "stays on the layer and expressionError reads empty.";
+        }
+        out.note = dryRun ? "PREVIEW ONLY — nothing was deleted."
+                          : "deleted in ONE undo group (Ctrl+Z)";
+        return out;
+      }
+      const items = action === "remove_unused_footage" ? orphans : [];
+      const out = { action, dryRun, willRemove: items.length, items,
+        note: items.length === 0 && dryRun
+          ? "PREVIEW ONLY — nothing to do: this action would remove nothing."
+          : (dryRun ? "PREVIEW ONLY — nothing was deleted."
+                    : "deleted in ONE undo group (Ctrl+Z)") };
+      if (!dryRun) {
+        out.removedCount = items.length;
+        out.itemsRemoved = items.length;
+        out.removed = items;
+      }
+      return out;
+    }
     case "get_project_info": {
       // A scratch project the size of the real one: a few comps drowning
       // in accumulated solid footage. Comps come first out of the cap.
@@ -1822,6 +1891,12 @@ function cannedOk(tool, args) {
       return out;
     }
     case "add_solid":
+      // The hygiene steps ask get_project_info whether a PREVIEW deleted
+      // the orphaned solid, so its source has to really exist here.
+      if (args && String(args.name || "").indexOf("ST HYG") === 0) {
+        solidSources.push({ name: args.name, id: 950 + solidSources.length,
+                            type: "footage" });
+      }
       if (inBatComp(args)) batSolids.push(args.name);
       if (inRbComp(args)) rbLayers.push(args.name);
       if (inPcComp(args)) pcLayers.push(args.name);

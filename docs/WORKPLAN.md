@@ -609,11 +609,31 @@ output-module templates (enumerate + log; version-sensitive), grounded
 template errors. Also probe single-frame paths here: saveFrameToPng if
 it exists, else a one-frame render — needed by 5.8.
 
-### 5.6 Project hygiene
-Probe: removeUnusedFootage(), consolidateFootage(), reduceProject()
-return values. Build: `clean_project` {action} — reduceProject DELETES,
-so it requires an explicit comp argument and reports counts; everything
-in one undo group. Refuse vague asks with a grounded list of actions.
+### 5.6 Project hygiene — DONE 2026-08-28
+Probed, built and covered in one pass. `clean_project {action, keepComps,
+dryRun}` runs exactly one of AE's three cleanup calls, previewing by
+default. Five probes; the facts that shaped it are all losses AE does not
+mention: `removeUnusedFootage()` also deletes EMPTY FOLDERS (recursively,
+and it counts them in its return value), `reduceProject()` deletes a comp
+that only an EXPRESSION names and leaves `expressionError` EMPTY, it
+silently drops the render-queue items of the comps it removes, and it
+ACCEPTS a footage item in the keep array and then deletes every comp in
+the project (refused here). Also measured: footage used only by an UNUSED
+comp is kept, `reduceProject([])` throws "Array is empty", and — unlike a
+render — all three are ordinary edits that close an undo group cleanly
+and are undone whole by one Ctrl+Z. So the preview NAMES what would go
+and the execute path diffs AE's actual removals against that promise (the
+two agreed exactly on every rig, in real AE and in the stub). 48 stub
+checks in `tests/test-project-hygiene.js`, 13 suite steps, harness
+372 -> 385. The suite covers PREVIEWS and REFUSALS only: every action is
+project-wide, so executing one inside the user's open project would
+delete the user's own items. No version bump (feature track).
+
+Original text: Probe: removeUnusedFootage(), consolidateFootage(),
+reduceProject() return values. Build: `clean_project` {action} —
+reduceProject DELETES, so it requires an explicit comp argument and
+reports counts; everything in one undo group. Refuse vague asks with a
+grounded list of actions.
 
 ### 5.7 Audio to keyframes
 Probe: `app.findMenuCommandId("Convert Audio to Keyframes")` — does the

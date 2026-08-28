@@ -83,6 +83,23 @@
       desc: "File loose root-level items into Comps/Footage/Solids/Audio/" +
             "Images folders. Leaves existing folder structure alone.",
       args: "{}" },
+    { name: "clean_project", mutating: true,
+      desc: "Delete project clutter. ONE action per call: " +
+            "'remove_unused_footage' (footage no comp uses — and every " +
+            "folder that ends up empty, which AE throws in whether you " +
+            "asked or not), 'consolidate_footage' (merge footage items " +
+            "pointing at the same file; layers follow), or " +
+            "'reduce_project' (delete EVERYTHING the comps in keepComps " +
+            "do not need). dryRun is TRUE by default and returns the " +
+            "list of what would go — show the user, especially the parts " +
+            "they did not ask about, then call again with dryRun:false. " +
+            "reduce_project refuses to run without keepComps, and refuses " +
+            "a keepComps entry that is not a comp (AE would delete every " +
+            "comp in the project). It also names the render-queue items " +
+            "and the expressions that would break silently.",
+      args: "{action: 'remove_unused_footage'|'consolidate_footage'|" +
+            "'reduce_project', keepComps?: [string] (reduce_project " +
+            "only, REQUIRED), dryRun?: bool (default TRUE)}" },
     { name: "create_comp", mutating: true,
       desc: "Create a composition and open it.",
       args: "{name: string, width: int, height: int, duration: seconds, frameRate: number, bgColor?: [r,g,b] 0..1}" },
@@ -706,12 +723,20 @@
       "",
       "Project panel management:",
       "- create_folder / move_to_folder / rename_item / delete_item /",
-      "  duplicate_comp / organize_project manage the project panel. Items",
+      "  duplicate_comp / organize_project / clean_project manage the",
+      "  project panel. Items",
       "  are referenced by name or id; folders also by PATH written as",
       "  ParentName/ChildName, or 'root' for the project root.",
       "  get_project_info shows each item's parent folder and each",
       "  folder's path. Same-named folders under different parents are",
       "  normal — use paths when names repeat.",
+      "- 'clean up / tidy / shrink the project' = clean_project with ONE",
+      "  action. It answers with a PREVIEW (dryRun defaults to true): list",
+      "  what would be deleted in your reply, call out anything the user",
+      "  did not ask for (empty folders, render-queue items, expressions",
+      "  that would break), and STOP. Only after they say go, call it",
+      "  again with dryRun:false. reduce_project needs keepComps — ask",
+      "  which comps matter, never guess.",
       "- Use ONLY folder and item names that appear in CURRENT PROJECT",
       "  STATE or a get_project_info result. NEVER guess a name and never",
       "  copy placeholder names from these instructions. If a lookup",

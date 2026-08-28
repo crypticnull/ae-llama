@@ -1175,6 +1175,393 @@ AELL_TOOLS.organize_project = function (args) {
           "folder structure was left alone" });
 };
 
+// ------------------------------------------------- project hygiene (5.6)
+//
+// AE's three cleanup calls all delete, all report only a NUMBER, and two
+// of them take things nobody asked about. Measured in AE 2026 (26.3x87),
+// each fact below cost a probe:
+//
+//  - removeUnusedFootage() also deletes EMPTY FOLDERS, recursively, and
+//    counts them in its return value. A project with three empty folders
+//    and no footage answers "3".
+//  - it KEEPS footage that is used only by a comp that is itself unused.
+//  - consolidateFootage() merges footage items pointing at the same file
+//    and repoints the layers using them; nothing in a comp changes.
+//  - reduceProject(comps) deletes every item not reachable from the comps
+//    you name -- including a comp that is referenced ONLY by an
+//    expression, whose expressionError stays EMPTY afterwards, and
+//    including render-queue items for the comps it removes.
+//  - reduceProject accepts a FOOTAGE item in the keep array and then
+//    deletes every comp in the project. It is refused here.
+//  - reduceProject([]) throws "Array is empty"; with no argument at all
+//    it throws "requires 1 parameter".
+//  - all three are ordinary undoable edits: one Ctrl+Z put a 10-item
+//    project back after a reduceProject, and the next undo group opened
+//    and closed cleanly (unlike render_comp, which cannot be grouped).
+//
+// So the tool previews FIRST (dryRun defaults to true), names what would
+// go rather than counting it, and on execute compares what AE actually
+// removed against what the preview promised.
+
+var AELL_HYG_LIST = 40;
+
+var AELL_HYG_ACTIONS = [
+  "remove_unused_footage — deletes footage no comp uses, plus every " +
+    "folder that ends up empty",
+  "consolidate_footage — merges footage items that point at the same " +
+    "file, repointing the layers that use them",
+  "reduce_project — deletes EVERYTHING not needed by the comps you name " +
+    "in keepComps (comps, footage, folders and their render-queue items)"
+];
+
+function AELL_hygKind(it) {
+  if (it instanceof CompItem) return "comp";
+  if (it instanceof FolderItem) return "folder";
+  return "footage";
+}
+
+/* "Solids/red" — enough for a human to find the item in the panel. */
+function AELL_hygLabel(it) {
+  var path = "";
+  try {
+    if (it.parentFolder && it.parentFolder !== app.project.rootFolder) {
+      path = AELL_folderPath(it.parentFolder) + "/";
+    }
+  } catch (eP) {}
+  return path + it.name;
+}
+
+/* Every item alive right now, keyed by id, so an execute can diff. */
+function AELL_hygSnapshot() {
+  var proj = app.project, map = {};
+  for (var i = 1; i <= proj.numItems; i++) {
+    var it = proj.item(i);
+    map[it.id] = { label: AELL_hygLabel(it), kind: AELL_hygKind(it) };
+  }
+  return map;
+}
+
+/* Cap a name list the way the rest of the panel does: head, plus a count
+ * of what is not shown. Never a silent truncation. */
+function AELL_hygCap(list, out, key) {
+  if (list.length <= AELL_HYG_LIST) { out[key] = list; return; }
+  out[key] = list.slice(0, AELL_HYG_LIST);
+  out[key + "NotShown"] = list.length - AELL_HYG_LIST;
+}
+
+/* Grow a doomed set by every folder whose whole content is doomed --
+ * iterated, because emptying a child empties its parent (measured: an
+ * empty folder inside an empty folder took both). */
+function AELL_hygSweepFolders(doomed) {
+  var proj = app.project, changed = true, folders = [];
+  var i, j;
+  for (i = 1; i <= proj.numItems; i++) {
+    if (proj.item(i) instanceof FolderItem) folders.push(proj.item(i));
+  }
+  while (changed) {
+    changed = false;
+    for (i = 0; i < folders.length; i++) {
+      var f = folders[i];
+      if (doomed[f.id]) continue;
+      var allGone = true;
+      for (j = 1; j <= f.numItems; j++) {
+        if (!doomed[f.item(j).id]) { allGone = false; break; }
+      }
+      if (allGone) { doomed[f.id] = true; changed = true; }
+    }
+  }
+  return doomed;
+}
+
+/* What removeUnusedFootage() would take. */
+function AELL_hygUnusedPlan() {
+  var proj = app.project, doomed = {}, i;
+  for (i = 1; i <= proj.numItems; i++) {
+    var it = proj.item(i);
+    if (!(it instanceof FootageItem)) continue;
+    var used = 1;
+    try { used = it.usedIn.length; } catch (eU) { used = 1; }
+    if (used === 0) doomed[it.id] = true;
+  }
+  return AELL_hygSweepFolders(doomed);
+}
+
+/* What consolidateFootage() would merge: footage items sharing a file
+ * path. AE keeps one per group; the rest go. */
+function AELL_hygDuplicatePlan() {
+  var proj = app.project, byFile = {}, order = [], i;
+  for (i = 1; i <= proj.numItems; i++) {
+    var it = proj.item(i);
+    if (!(it instanceof FootageItem)) continue;
+    var f = null;
+    try { f = it.mainSource.file; } catch (eF) {}
+    if (!f) continue;                       // solids and placeholders
+    var key = String(f.fsName);
+    if (!byFile[key]) { byFile[key] = []; order.push(key); }
+    byFile[key].push(it);
+  }
+  var doomed = {}, groups = [];
+  for (i = 0; i < order.length; i++) {
+    var g = byFile[order[i]];
+    if (g.length < 2) continue;
+    var labels = [];
+    for (var j = 0; j < g.length; j++) {
+      labels.push(AELL_hygLabel(g[j]));
+      if (j > 0) doomed[g[j].id] = true;    // AE keeps one of them
+    }
+    groups.push({ file: order[i], copies: g.length, items: labels });
+  }
+  return { doomed: doomed, groups: groups };
+}
+
+/* What reduceProject(keep) would leave alone: the comps named, whatever
+ * their layers pull in (transitively), and the folders those live in.
+ * Verified against AE on a two-level nesting rig. */
+function AELL_hygReducePlan(keepComps) {
+  var proj = app.project, keep = {}, stack = [], i, j;
+  for (i = 0; i < keepComps.length; i++) stack.push(keepComps[i]);
+  while (stack.length) {
+    var it = stack.pop();
+    if (!it || keep[it.id]) continue;
+    keep[it.id] = true;
+    if (it instanceof CompItem) {
+      for (j = 1; j <= it.numLayers; j++) {
+        var src = null;
+        try { src = it.layer(j).source; } catch (eS) {}
+        if (src && !keep[src.id]) stack.push(src);
+      }
+    }
+  }
+  // Folders survive when something inside them survives.
+  var kept = [];
+  for (i = 1; i <= proj.numItems; i++) {
+    if (keep[proj.item(i).id]) kept.push(proj.item(i));
+  }
+  for (i = 0; i < kept.length; i++) {
+    var f = kept[i].parentFolder;
+    while (f && f !== proj.rootFolder) { keep[f.id] = true; f = f.parentFolder; }
+  }
+  var doomed = {};
+  for (i = 1; i <= proj.numItems; i++) {
+    var item = proj.item(i);
+    if (!keep[item.id]) doomed[item.id] = true;
+  }
+  return doomed;
+}
+
+/* Render-queue items pointing at a comp that is about to go. AE drops
+ * them with no dialog and no mention (measured), so they are named. */
+function AELL_hygQueueLosses(doomed) {
+  var lost = [];
+  try {
+    var rq = app.project.renderQueue;
+    for (var i = 1; i <= rq.numItems; i++) {
+      var c = null;
+      try { c = rq.item(i).comp; } catch (eC) { continue; }
+      if (c && doomed[c.id]) lost.push(c.name);
+    }
+  } catch (eQ) {}
+  return lost;
+}
+
+/* Doomed comps whose NAME appears in an expression that SURVIVES. AE
+ * leaves such an expression in place with an EMPTY expressionError -- the
+ * silent break this project refuses to ship. */
+function AELL_hygExpressionRefs(doomed) {
+  var proj = app.project, warn = [], i, j;
+  var names = [];
+  for (i = 1; i <= proj.numItems; i++) {
+    var it = proj.item(i);
+    if (doomed[it.id] && (it instanceof CompItem)) names.push(it);
+  }
+  if (!names.length) return warn;
+  var exprs = AELL_expressionIndex();
+  for (i = 0; i < names.length; i++) {
+    for (j = 0; j < exprs.length; j++) {
+      var host = exprs[j];
+      var kind = AELL_expressionNames(host.expression, names[i].name);
+      if (!kind) continue;
+      warn.push(names[i].name + " is named (" + kind + ") by an " +
+        "expression on " + host.comp + " / " + host.layer + " / " +
+        host.property);
+      break;
+    }
+  }
+  return warn;
+}
+
+function AELL_hygNames(doomed, kinds) {
+  var proj = app.project, out = [];
+  for (var i = 1; i <= proj.numItems; i++) {
+    var it = proj.item(i);
+    if (!doomed[it.id]) continue;
+    if (kinds && !kinds[AELL_hygKind(it)]) continue;
+    out.push(AELL_hygLabel(it));
+  }
+  return out;
+}
+
+/*
+ * clean_project {action, keepComps?, dryRun?}
+ *
+ * dryRun DEFAULTS TO TRUE: every action here deletes project items, and
+ * two of them take things the user never mentioned (empty folders,
+ * render-queue entries), so nothing happens until it has been shown once.
+ */
+AELL_TOOLS.clean_project = function (args) {
+  var proj = app.project;
+  if (!proj) return AELL_err("No project open");
+  args = args || {};
+
+  var raw = String(args.action || "").toLowerCase();
+  raw = raw.replace(/[\s\-]+/g, "_");
+  var alias = {
+    remove_unused_footage: "remove_unused_footage",
+    removeunusedfootage: "remove_unused_footage",
+    remove_unused: "remove_unused_footage",
+    unused: "remove_unused_footage",
+    unused_footage: "remove_unused_footage",
+    consolidate_footage: "consolidate_footage",
+    consolidatefootage: "consolidate_footage",
+    consolidate: "consolidate_footage",
+    duplicates: "consolidate_footage",
+    reduce_project: "reduce_project",
+    reduceproject: "reduce_project",
+    reduce: "reduce_project"
+  };
+  var action = alias[raw] || "";
+  if (!action) {
+    return AELL_err((raw ? "Unknown action '" + args.action + "'. " :
+      "clean_project needs an 'action'. ") +
+      "Pick exactly one, and say which one you are about to run before " +
+      "you run it: " + AELL_HYG_ACTIONS.join(" | "));
+  }
+
+  var dryRun = (args.dryRun === false) ? false : true;
+  var doomed = {}, out = { action: action, dryRun: dryRun }, i;
+  var dupPlan = null, keepComps = [];
+
+  if (action === "reduce_project") {
+    var want = args.keepComps;
+    if (!AELLJSON.isArray(want)) {
+      if (typeof want === "string" && want) want = [want];
+      else if (AELLJSON.isArray(args.comps)) want = args.comps;
+      else if (typeof args.comp === "string" && args.comp) want = [args.comp];
+      else want = null;
+    }
+    if (!want || !want.length) {
+      var have = [], shown = 0;
+      for (i = 1; i <= proj.numItems && shown < 20; i++) {
+        if (proj.item(i) instanceof CompItem) { have.push(proj.item(i).name); shown++; }
+      }
+      return AELL_err("reduce_project deletes every comp, footage item " +
+        "and folder that the comps you keep do not need, so it will not " +
+        "guess which ones matter. Name them in keepComps. Comps in this " +
+        "project: " + (have.join(", ") || "(none)"));
+    }
+    for (i = 0; i < want.length; i++) {
+      var nm = String(want[i]);
+      var found = null;
+      try { found = AELL_resolveComp(nm); }
+      catch (eC) {
+        var other = AELL_findItem(nm);
+        if (other) {
+          return AELL_err("'" + nm + "' is a " + AELL_hygKind(other) +
+            ", not a comp. AE accepts a non-comp here and then deletes " +
+            "EVERY comp in the project, so it is refused. Name comps only.");
+        }
+        return AELL_err(eC.message ? eC.message : String(eC));
+      }
+      keepComps.push(found);
+    }
+    doomed = AELL_hygReducePlan(keepComps);
+    var keepNames = [];
+    for (i = 0; i < keepComps.length; i++) keepNames.push(keepComps[i].name);
+    out.keepComps = keepNames;
+  } else if (action === "remove_unused_footage") {
+    doomed = AELL_hygUnusedPlan();
+  } else {
+    dupPlan = AELL_hygDuplicatePlan();
+    doomed = dupPlan.doomed;
+    if (dupPlan.groups.length) AELL_hygCap(dupPlan.groups, out, "duplicateGroups");
+  }
+
+  var doomedList = AELL_hygNames(doomed, null);
+  var folders = AELL_hygNames(doomed, { folder: true });
+  var comps = AELL_hygNames(doomed, { comp: true });
+  out.willRemove = doomedList.length;
+  AELL_hygCap(doomedList, out, "items");
+  if (folders.length) {
+    out.foldersIncluded = folders.length;
+    out.foldersNote = "Folders left empty by this go too, and AE counts " +
+      "them in its own total: " + folders.slice(0, 10).join(", ") +
+      (folders.length > 10 ? ", ..." : "");
+  }
+  if (comps.length) out.compsRemoved = comps.length;
+
+  var queueLoss = AELL_hygQueueLosses(doomed);
+  if (queueLoss.length) {
+    out.renderQueueLost = queueLoss;
+    out.renderQueueNote = "Their render-queue items disappear with them, " +
+      "with no dialog and no warning from AE.";
+  }
+  var exprWarn = AELL_hygExpressionRefs(doomed);
+  if (exprWarn.length) {
+    AELL_hygCap(exprWarn, out, "expressionBreaks");
+    out.expressionNote = "AE does NOT report these: the expression stays " +
+      "on the layer and expressionError reads empty, so the break is " +
+      "silent. Fix or keep those comps first.";
+  }
+
+  if (dryRun) {
+    out.note = out.willRemove === 0
+      ? "PREVIEW ONLY — nothing to do: this action would remove nothing."
+      : "PREVIEW ONLY — nothing was deleted. Show the user what would go " +
+        "(especially anything above they did not ask about), then call " +
+        "again with dryRun:false to do it.";
+    return AELL_okay(out);
+  }
+
+  var before = AELL_hygSnapshot();
+  var removed = 0;
+  try {
+    if (action === "remove_unused_footage") removed = proj.removeUnusedFootage();
+    else if (action === "consolidate_footage") removed = proj.consolidateFootage();
+    else removed = proj.reduceProject(keepComps);
+  } catch (eX) {
+    return AELL_err("AE refused " + action + ": " +
+                    (eX.message ? eX.message : String(eX)));
+  }
+
+  // What AE ACTUALLY took, by id, versus what the preview promised. A
+  // difference is not an error -- it is the part worth reporting.
+  var after = AELL_hygSnapshot(), gone = [], id;
+  for (id in before) {
+    if (!before.hasOwnProperty(id)) continue;
+    if (!after[id]) gone.push({ id: id, label: before[id].label });
+  }
+  var unexpected = [], survived = [];
+  for (i = 0; i < gone.length; i++) {
+    if (!doomed[gone[i].id]) unexpected.push(gone[i].label);
+  }
+  for (id in before) {
+    if (!before.hasOwnProperty(id)) continue;
+    if (doomed[id] && after[id]) survived.push(before[id].label);
+  }
+  var goneLabels = [];
+  for (i = 0; i < gone.length; i++) goneLabels.push(gone[i].label);
+
+  out.removedCount = removed;
+  out.itemsRemoved = gone.length;
+  AELL_hygCap(goneLabels, out, "removed");
+  if (unexpected.length) AELL_hygCap(unexpected, out, "removedUnexpectedly");
+  if (survived.length) AELL_hygCap(survived, out, "predictedButKept");
+  out.itemsLeft = proj.numItems;
+  out.note = gone.length + " item(s) deleted in ONE undo group — a single " +
+    "Ctrl+Z puts them all back (verified in AE).";
+  return AELL_okay(out);
+};
+
 AELL_TOOLS.get_comp_details = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var total = comp.numLayers;
@@ -7116,6 +7503,11 @@ var AELL_MUTATING = {
   center_anchor_point: true,
   create_folder: true, move_to_folder: true, rename_item: true,
   delete_item: true, duplicate_comp: true, organize_project: true,
+  // clean_project's dry run (the default) changes nothing, and an empty
+  // undo group registers no step -- same reasoning as rename_comps.
+  // Measured: reduceProject inside a group closes cleanly and ONE Ctrl+Z
+  // restores the whole project, so unlike render_comp it belongs here.
+  clean_project: true,
   grid_layout: true, duplicate_layer: true, split_layer_into_chunks: true,
   stagger_layers: true, distribute_property: true, apply_keyframe_ease: true,
   scale_comp: true, reorder_layers: true,

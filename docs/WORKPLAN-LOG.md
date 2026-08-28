@@ -4564,3 +4564,131 @@ behaviour on a feature pass without bumping.
 - Also: `CloseWordlessDialogs` sometimes needs running TWICE (AE queues a
   second dialog behind the first). If it reports "closed 1" and AE still
   does not answer a ping, run it again before declaring AE blocked.
+
+## 2026-08-28 (local, fourteenth pass) - item 5.6: three cleanup calls that take more than they say
+
+Harness green on arrival (372/372), so the pass took the next unfinished
+feature item: **5.6, project hygiene**. Five probes, then build and cover
+in the same pass. No version bump: a new tool rides the next MINOR.
+
+### Isolation first, because these calls delete the project
+
+Every API in this item is project-WIDE and destructive, and the suite (and
+any probe) runs inside whatever project the user has open. So probe 2
+opened with `app.project.save(<temp .aep>)`, then
+`app.project.close(CloseOptions.DO_NOT_SAVE_CHANGES)` + `app.newProject()`,
+and every measurement after that happened in a throwaway project. That
+close/new pair is the useful discovery for later passes: it discards a
+dirty project with NO save prompt, which is the modal that would otherwise
+wedge an unattended AE.
+
+What was open turned out to be an unsaved scratch project holding 442
+leftover items from earlier passes (`AELL Probe *`, `Null 1..39`, dead
+`.mp4` placeholders). It is saved and kept in two places rather than
+discarded: `%TEMP%\aell-restore.aep` and, durably,
+`X:\_CLAUDE\26_08_19_AE_Llama\aell-project-snapshot-2026-08-28.aep`. AE is
+now sitting on an empty project, which is the better starting state for
+the next pass; nothing was thrown away.
+
+### What AE actually does (AE 2026, 26.3x87)
+
+Each of these is a loss the API does not mention, and each one shaped the
+tool:
+
+- **`removeUnusedFootage()` also deletes EMPTY FOLDERS, recursively, and
+  counts them in the number it returns.** A project with three empty
+  folders and no footage at all answers "3". Emptying a child empties its
+  parent and both go; a folder holding only unused footage goes with its
+  contents; a folder holding a comp stays. So "removed 3 footage items"
+  would have been a lie in the most ordinary case there is.
+- It KEEPS footage used only by a comp that is itself unused (measured
+  twice, deliberately - it is the obvious wrong guess).
+- **`reduceProject(comps)` deletes a comp that only an EXPRESSION names,
+  and `expressionError` stays EMPTY afterwards.** Exactly the silent break
+  the comp-rename item was built around, now in a second tool.
+- **It silently drops the render-queue items of every comp it removes** -
+  no dialog, and the RenderQueueItem object goes invalid.
+- **It ACCEPTS a footage item in the keep array and then deletes every
+  comp in the project.** Measured: 10 items in, one footage item named,
+  one item left. That is one plausible model mistake away from erasing a
+  user's work, so the tool refuses a non-comp keep entry by name.
+- `reduceProject([])` throws "Array is empty"; with no argument at all,
+  "the call requires 1 parameter". Neither raises a dialog.
+- `consolidateFootage()` merges footage items sharing a file and repoints
+  the layers that used the copies - three imports became one and both
+  comps still rendered their layer.
+- **Undo: unlike a render, all three are ordinary grouped edits.**
+  `reduceProject` inside `beginUndoGroup`/`endUndoGroup` closed cleanly,
+  ONE `executeCommand(16)` restored all 10 items *and* the render-queue
+  item, and a canary group opened and closed afterwards with no "Undo
+  group mismatch". So `clean_project` goes in `AELL_MUTATING` normally.
+- Timing is a non-issue: a full `usedIn` walk over 321 items took 2 ms and
+  removing 300 unused items took 66 ms.
+
+### Built
+
+`clean_project {action, keepComps?, dryRun?}` - one action per call,
+`dryRun` DEFAULTS TO TRUE (same reasoning as `rename_comps`: the two
+actions that delete take things nobody asked about, so nothing happens
+until it has been shown once).
+
+The preview NAMES what would go, with folder paths, rather than counting
+it: the unused footage, the folders AE throws in unasked (with a note
+saying why they are in the list), the render-queue items that would
+vanish, and the expressions that would break silently. On execute it does
+not trust its own preview either - it snapshots the project by item id,
+calls AE, diffs, and reports `removedUnexpectedly` / `predictedButKept` if
+reality and the promise ever disagree. On every rig, in real AE and in the
+stub, they agreed exactly and neither field appeared.
+
+Refusals, all grounded: no action or an invented one lists the three real
+ones with their consequences; `reduce_project` without `keepComps` refuses
+and lists the comps that exist; a keep entry that is a footage item is
+refused with what it actually is and why AE cannot be trusted with it; an
+unknown comp name comes back through the existing grounded comp lookup.
+`"remove unused footage"`, `"consolidate"` and `"reduce"` are accepted as
+action spellings, and a single comp name may be a plain string.
+
+### Covered without AE, and in AE
+
+- `tests/test-project-hygiene.js` (new, 48 checks) stubs the project model
+  with all four hazards - the empty-folder sweep, the footage-inside-an-
+  unused-comp keep, the expression-only comp, and the keep-array footage
+  that wipes every comp. Three checks drive the RAW stub API first, so a
+  stub that quietly stopped modelling a hazard cannot let the tool pass on
+  a technicality. Four of my own expectations failed against it and were
+  wrong (label paths and a count), not the code.
+- 13 suite steps, **previews and refusals ONLY**. This is a deliberate
+  limit, not an omission: every action is project-wide, and the suite runs
+  inside the user's open project, so an execute step would delete the
+  user's own footage, folders or comps. The two load-bearing steps re-read
+  the project after each preview and fail if anything vanished - a
+  "preview" that quietly deleted something is the failure this group
+  exists to catch. The execute paths were verified in real AE by probe 5,
+  which drove the shipped tool through `AELL_call` in throwaway projects:
+  preview, execute, diff, and one Ctrl+Z putting all 8 items and the
+  render-queue entry back.
+- `tests/test-self-test.js`'s canned host learned `clean_project` with its
+  refusals intact (a host answering "ok" would let all six refusal steps
+  pass), and `add_solid` now registers a real solid source so the
+  "did the preview delete it" steps have something to look for.
+- docs/CAPABILITIES.md regenerated, curated half updated.
+
+**Harness: 385/385 PASSED** (372 -> 385), green on two consecutive runs
+with AE clear afterwards. Stubbed suite: 41 files green.
+
+### For the next pass
+
+- Item 5.7 (audio to keyframes) is next on the feature track; 5.8 is
+  unblocked and cheap (`saveFrameToPng` measured in the 5.5 pass).
+- No modals this pass, and no dialogs from any hygiene call - the one
+  wedge risk (a save prompt from `newProject` on a dirty project) is
+  avoided by `close(DO_NOT_SAVE_CHANGES)` first, which is worth reusing.
+- Still open from earlier passes: `duplicate_comp` takes a name without
+  uniquing; no read-only `get_bounds`; and the harness dialog triage still
+  cannot tell three different wordless #32770s apart (filed 2026-08-28,
+  wants a deliberate design).
+- Worth a human eye, small: `organize_project` is still the one tool that
+  cannot be suite-tested at all. `clean_project` shows the shape of the
+  fix - a `dryRun` preview that names what would move - so if the remote
+  session wants that gap closed, the pattern now exists to copy.

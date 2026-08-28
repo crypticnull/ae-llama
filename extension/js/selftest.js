@@ -5181,6 +5181,224 @@
                  "a second run renamed " + d.renamedCount + " comp(s)";
         } },
 
+      // ---- project hygiene (clean_project). PREVIEWS ONLY, deliberately.
+      //
+      // The suite runs inside whatever project the user has open, and
+      // every action here is project-WIDE: executing remove_unused_footage
+      // would delete their unused footage (and, measured, their empty
+      // folders), and reduce_project would delete everything their kept
+      // comps do not need. So the suite proves the preview is honest and
+      // proves the refusals fire; the EXECUTE paths are covered against a
+      // stubbed project in tests/test-project-hygiene.js and were verified
+      // in real AE on throwaway projects during the 5.6 pass.
+      //
+      // The load-bearing steps are the two that re-read the project after
+      // a preview: a "preview" that quietly deleted something is the one
+      // failure this group exists to catch.
+      { name: "hygiene rig: two comps",
+        batch: function () {
+          return [
+            { tool: "create_comp",
+              args: { name: "ST HYG Keep", width: 160, height: 120,
+                      duration: 1, frameRate: 24 } },
+            { tool: "create_comp",
+              args: { name: "ST HYG Drop", width: 160, height: 120,
+                      duration: 1, frameRate: 24 } }
+          ];
+        },
+        check: function (rows, ctx) {
+          if (!rows[0].ok || !rows[1].ok) {
+            return "rig: " + (rows[0].error || rows[1].error);
+          }
+          ctx.hygKeep = rows[0].data.name;
+          ctx.hygDrop = rows[1].data.name;
+          return true;
+        } },
+
+      // An UNUSED footage item, made the way a user makes one by accident:
+      // add a solid, delete the layer. The solid SOURCE stays in the
+      // project panel with nothing pointing at it.
+      { name: "hygiene rig: a solid source nobody uses, and one that is used",
+        batch: function (ctx) {
+          return [
+            { tool: "add_solid",
+              args: { comp: ctx.hygKeep, name: "ST HYG Orphan",
+                      color: [1, 0, 0], width: 40, height: 40 } },
+            { tool: "delete_layer",
+              args: { comp: ctx.hygKeep, layer: "ST HYG Orphan" } },
+            { tool: "add_solid",
+              args: { comp: ctx.hygKeep, name: "ST HYG Used",
+                      color: [0, 1, 0], width: 40, height: 40 } },
+            { tool: "set_expression",
+              args: { comp: ctx.hygKeep, layer: "ST HYG Used",
+                      property: "transform/Opacity",
+                      expression: 'comp("ST HYG Drop").duration * 0 + 100' } }
+          ];
+        },
+        check: function (rows) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + i + ": " + rows[i].error;
+          }
+          return true;
+        } },
+
+      { name: "clean_project with no action lists the three there are",
+        tool: "clean_project",
+        args: {},
+        expectError: true,
+        check: function (err) {
+          return (/remove_unused_footage/.test(err) &&
+                  /consolidate_footage/.test(err) &&
+                  /reduce_project/.test(err)) ||
+                 "refusal did not list the actions: " + err;
+        } },
+
+      { name: "an invented action is named back, not guessed at",
+        tool: "clean_project",
+        args: { action: "vacuum" },
+        expectError: true,
+        check: function (err) {
+          return /Unknown action 'vacuum'/.test(err) ||
+                 "error was: " + err;
+        } },
+
+      { name: "reduce_project will not guess which comps matter",
+        tool: "clean_project",
+        args: { action: "reduce_project" },
+        expectError: true,
+        check: function (err, ctx) {
+          if (!/keepComps/.test(err)) return "no keepComps hint: " + err;
+          return err.indexOf(ctx.hygKeep) !== -1 ||
+                 "the refusal did not list real comps: " + err;
+        } },
+
+      // AE accepts a non-comp here and then deletes EVERY comp in the
+      // project (measured on a throwaway project, 2026-08-28). This step
+      // is the guard on that.
+      { name: "reduce_project refuses a keepComps entry that is not a comp",
+        tool: "clean_project",
+        args: { action: "reduce_project", keepComps: ["ST HYG Orphan"] },
+        expectError: true,
+        check: function (err) {
+          return /not a comp/.test(err) || "error was: " + err;
+        } },
+
+      { name: "reduce_project grounds an unknown comp name",
+        tool: "clean_project",
+        args: { action: "reduce_project", keepComps: ["ST HYG Nope"] },
+        expectError: true,
+        check: function (err, ctx) {
+          return (/Comp not found/.test(err) &&
+                  err.indexOf(ctx.hygKeep) !== -1) ||
+                 "error was: " + err;
+        } },
+
+      { name: "remove_unused_footage previews the orphan solid",
+        tool: "clean_project",
+        args: { action: "remove unused footage" },
+        check: function (d, ctx) {
+          if (d.dryRun !== true) return "dryRun was " + d.dryRun;
+          if (!(d.willRemove >= 1)) {
+            return "the orphaned solid was not found (willRemove " +
+                   d.willRemove + ")";
+          }
+          // The list is capped; only demand the name when nothing was cut.
+          if (d.itemsNotShown) { ctx.hygCapped = true; return true; }
+          for (var i = 0; i < d.items.length; i++) {
+            if (String(d.items[i]).indexOf("ST HYG Orphan") !== -1) return true;
+          }
+          return "orphan not named in " + d.items.join(", ");
+        } },
+
+      { name: "and that preview deleted NOTHING",
+        tool: "get_project_info",
+        args: { limit: 0 },
+        check: function (d, ctx) {
+          var sawOrphan = false, sawKeep = false, sawDrop = false;
+          for (var i = 0; i < d.items.length; i++) {
+            var n = d.items[i].name;
+            if (n === "ST HYG Orphan") sawOrphan = true;
+            if (n === ctx.hygKeep) sawKeep = true;
+            if (n === ctx.hygDrop) sawDrop = true;
+          }
+          if (!sawOrphan) return "the preview DELETED the orphan solid";
+          return (sawKeep && sawDrop) ||
+                 "the preview deleted a rig comp (keep " + sawKeep +
+                 ", drop " + sawDrop + ")";
+        } },
+
+      { name: "reduce_project preview names the comp AND the silent break",
+        tool: "clean_project",
+        args: function (ctx) {
+          return { action: "reduce_project", keepComps: [ctx.hygKeep] };
+        },
+        check: function (d, ctx) {
+          if (d.dryRun !== true) return "dryRun was " + d.dryRun;
+          if (!d.keepComps || d.keepComps[0] !== ctx.hygKeep) {
+            return "keepComps not echoed: " + JSON.stringify(d.keepComps);
+          }
+          if (!(d.willRemove >= 1)) return "nothing would be removed";
+          var breaks = d.expressionBreaks || [];
+          var named = false, i;
+          for (i = 0; i < breaks.length; i++) {
+            if (String(breaks[i]).indexOf(ctx.hygDrop) !== -1) named = true;
+          }
+          // expressionBreaks is capped too; a project full of expressions
+          // can push ours off the end, and that is not this step failing.
+          if (!named && !d.expressionBreaksNotShown) {
+            return "the expression naming " + ctx.hygDrop +
+                   " was not reported: " + JSON.stringify(breaks);
+          }
+          if (!d.itemsNotShown) {
+            for (i = 0; i < d.items.length; i++) {
+              if (String(d.items[i]).indexOf(ctx.hygDrop) !== -1) return true;
+            }
+            return ctx.hygDrop + " not named in " + d.items.join(", ");
+          }
+          return true;
+        } },
+
+      { name: "and THAT preview deleted nothing either",
+        tool: "get_project_info",
+        args: { limit: 0 },
+        check: function (d, ctx) {
+          var sawKeep = false, sawDrop = false;
+          for (var i = 0; i < d.items.length; i++) {
+            if (d.items[i].name === ctx.hygKeep) sawKeep = true;
+            if (d.items[i].name === ctx.hygDrop) sawDrop = true;
+          }
+          return (sawKeep && sawDrop) ||
+                 "reduce_project's PREVIEW deleted a comp (keep " +
+                 sawKeep + ", drop " + sawDrop + ")";
+        } },
+
+      { name: "consolidate_footage previews without touching anything",
+        tool: "clean_project",
+        args: { action: "consolidate" },
+        check: function (d) {
+          if (d.action !== "consolidate_footage") {
+            return "action came back as " + d.action;
+          }
+          if (d.dryRun !== true) return "dryRun was " + d.dryRun;
+          if (typeof d.willRemove !== "number") {
+            return "no count: " + JSON.stringify(d);
+          }
+          return /PREVIEW ONLY/.test(d.note || "") ||
+                 "note did not say it was a preview: " + d.note;
+        } },
+
+      { name: "cleanup: delete the hygiene rig comps",
+        batch: function (ctx) {
+          return [
+            { tool: "delete_item", args: { item: ctx.hygKeep } },
+            { tool: "delete_item", args: { item: ctx.hygDrop } }
+          ];
+        },
+        check: function (rows) {
+          return (rows[0].ok && rows[1].ok) ||
+                 "cleanup: " + (rows[0].error || rows[1].error);
+        } },
+
       // ---- create_folder eachChildOf (field failure 2026-08-26) -------
       // "Add an _ARCHIVE subfolder within each subfolder within _COMPS":
       // the model acted from the trimmed project summary, hit 2 of 10

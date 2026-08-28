@@ -1,0 +1,462 @@
+// Regression test: clean_project against a stubbed AE project model.
+//
+// The stub models what AE 2026 was MEASURED to do (probes 2-4 of the
+// 5.6 pass, see WORKPLAN-LOG 2026-08-28), not what the docs say:
+//
+//  - removeUnusedFootage() also deletes empty folders, recursively, and
+//    counts them in its return value;
+//  - it keeps footage used only by a comp that is itself unused;
+//  - consolidateFootage() merges footage sharing a file and repoints the
+//    layers that used the copies;
+//  - reduceProject() deletes comps referenced only by an expression and
+//    leaves expressionError EMPTY, and silently drops the render-queue
+//    items of the comps it removes;
+//  - reduceProject() ACCEPTS a footage item in the keep array and then
+//    deletes every comp in the project;
+//  - reduceProject([]) throws "Array is empty".
+//
+// Several checks drive the RAW stub API first, so a stub that quietly
+// stopped modelling a hazard cannot let the tool pass on a technicality.
+"use strict";
+const fs = require("fs");
+const path = require("path");
+
+let NEXT_ID = 1;
+let ALL_ITEMS = [];
+
+function Item(name) {
+  this.name = name;
+  this.id = NEXT_ID++;
+  this._parent = null;
+  ALL_ITEMS.push(this);
+}
+Object.defineProperty(Item.prototype, "parentFolder", {
+  get() { return this._parent; },
+  set(f) {
+    if (this._parent) {
+      const i = this._parent.children.indexOf(this);
+      if (i >= 0) this._parent.children.splice(i, 1);
+    }
+    this._parent = f;
+    if (f) f.children.push(this);
+  }
+});
+Item.prototype.remove = function () {
+  const i = ALL_ITEMS.indexOf(this);
+  if (i >= 0) ALL_ITEMS.splice(i, 1);
+  if (this._parent) {
+    const j = this._parent.children.indexOf(this);
+    if (j >= 0) this._parent.children.splice(j, 1);
+  }
+};
+
+function FolderItem(name) { Item.call(this, name); this.children = []; }
+FolderItem.prototype = Object.create(Item.prototype);
+Object.defineProperty(FolderItem.prototype, "numItems", {
+  get() { return this.children.length; }
+});
+FolderItem.prototype.item = function (i) { return this.children[i - 1]; };
+
+function Property(name, expression) {
+  this.name = name;
+  this.canSetExpression = true;
+  this.expression = expression || "";
+  this.expressionError = "";
+  this.numProperties = 0;
+}
+Property.prototype.property = function () { return null; };
+
+function Layer(name, source, expr) {
+  this.name = name;
+  this.source = source || null;
+  this._props = expr ? [new Property("Position", expr)] : [];
+  this.numProperties = this._props.length;
+}
+Layer.prototype.property = function (i) {
+  if (typeof i === "number") return this._props[i - 1];
+  for (const p of this._props) if (p.name === i) return p;
+  return null;
+};
+
+function CompItem(name) {
+  Item.call(this, name);
+  this.layers = [];
+}
+CompItem.prototype = Object.create(Item.prototype);
+Object.defineProperty(CompItem.prototype, "numLayers", {
+  get() { return this.layers.length; }
+});
+CompItem.prototype.layer = function (i) { return this.layers[i - 1]; };
+CompItem.prototype.addLayer = function (name, source, expr) {
+  const L = new Layer(name, source, expr);
+  this.layers.push(L);
+  return L;
+};
+
+function SolidSource() {}
+function FileSource(file) { this.file = { fsName: file }; }
+function FootageItem(name, file) {
+  Item.call(this, name);
+  this.mainSource = file ? new FileSource(file) : new SolidSource();
+}
+FootageItem.prototype = Object.create(Item.prototype);
+Object.defineProperty(FootageItem.prototype, "usedIn", {
+  get() {
+    const out = [];
+    for (const it of ALL_ITEMS) {
+      if (!(it instanceof CompItem)) continue;
+      if (it.layers.some(L => L.source === this)) out.push(it);
+    }
+    return out;
+  }
+});
+function TextLayer() {} function ShapeLayer() {} function CameraLayer() {}
+function LightLayer() {} function AVLayer() {}
+const ParagraphJustification = {};
+
+let root = new FolderItem("(root)");
+ALL_ITEMS.length = 0;
+
+const renderQueue = {
+  queued: [],
+  get numItems() { return this.queued.length; },
+  item(i) { return this.queued[i - 1]; },
+  items: { add(comp) { const it = { comp }; renderQueue.queued.push(it); return it; } }
+};
+
+// --- the three AE calls, modelled from the field measurements ---------
+function sweepEmptyFolders() {
+  let removed = 0, changed = true;
+  while (changed) {
+    changed = false;
+    for (const it of ALL_ITEMS.slice()) {
+      if (it instanceof FolderItem && it.children.length === 0) {
+        it.remove(); removed++; changed = true;
+      }
+    }
+  }
+  return removed;
+}
+
+const project = {
+  rootFolder: root,
+  get numItems() { return ALL_ITEMS.length; },
+  item(i) { return ALL_ITEMS[i - 1]; },
+  renderQueue,
+  items: {
+    addFolder(name) { const f = new FolderItem(name); f.parentFolder = root; return f; },
+    addComp(name) { const c = new CompItem(name); c.parentFolder = root; return c; }
+  },
+  activeItem: null,
+  file: null,
+
+  removeUnusedFootage() {
+    let n = 0;
+    for (const it of ALL_ITEMS.slice()) {
+      if (it instanceof FootageItem && it.usedIn.length === 0) { it.remove(); n++; }
+    }
+    return n + sweepEmptyFolders();          // folders count too (measured)
+  },
+
+  consolidateFootage() {
+    const byFile = new Map();
+    for (const it of ALL_ITEMS) {
+      if (!(it instanceof FootageItem)) continue;
+      const f = it.mainSource && it.mainSource.file;
+      if (!f) continue;
+      if (!byFile.has(f.fsName)) byFile.set(f.fsName, []);
+      byFile.get(f.fsName).push(it);
+    }
+    let n = 0;
+    for (const group of byFile.values()) {
+      if (group.length < 2) continue;
+      const keeper = group[0];
+      for (const dup of group.slice(1)) {
+        for (const it of ALL_ITEMS) {
+          if (!(it instanceof CompItem)) continue;
+          for (const L of it.layers) if (L.source === dup) L.source = keeper;
+        }
+        dup.remove(); n++;
+      }
+    }
+    return n;
+  },
+
+  reduceProject(keep) {
+    if (arguments.length === 0) {
+      throw new Error("After Effects error: Unable to call \u201creduceProject\u201d " +
+                      "because the call requires 1 parameter.");
+    }
+    if (!keep || !keep.length) throw new Error("After Effects error: Array is empty.");
+    const kept = new Set(), stack = keep.slice();
+    while (stack.length) {
+      const it = stack.pop();
+      if (!it || kept.has(it)) continue;
+      kept.add(it);
+      if (it instanceof CompItem) {
+        for (const L of it.layers) if (L.source) stack.push(L.source);
+      }
+    }
+    for (const it of Array.from(kept)) {
+      let f = it.parentFolder;
+      while (f && f !== root) { kept.add(f); f = f.parentFolder; }
+    }
+    let n = 0;
+    for (const it of ALL_ITEMS.slice()) {
+      if (kept.has(it)) continue;
+      if (it instanceof CompItem) {
+        // AE drops the comp's render-queue items with no dialog at all.
+        renderQueue.queued = renderQueue.queued.filter(q => q.comp !== it);
+      }
+      it.remove(); n++;
+    }
+    return n;
+  }
+};
+
+const app = {
+  project,
+  beginUndoGroup() {}, endUndoGroup() {},
+  beginSuppressDialogs() {}, endSuppressDialogs() {}
+};
+const $ = { global: {} };
+
+eval(fs.readFileSync(path.join(__dirname, "..", "extension", "jsx",
+                               "hostscript.jsx"), "utf8"));
+
+function call(tool, args) {
+  return JSON.parse($.global.AELL_call(tool, JSON.stringify(args)));
+}
+let failures = 0;
+function assert(cond, msg) {
+  if (!cond) { console.error("FAIL:", msg); failures++; process.exitCode = 1; }
+  else console.log("ok  -", msg);
+}
+function reset() {
+  ALL_ITEMS = [];
+  root = new FolderItem("(root)");
+  ALL_ITEMS.length = 0;
+  project.rootFolder = root;
+  renderQueue.queued = [];
+}
+function names(list) { return (list || []).slice().sort().join(","); }
+
+// ---------------------------------------------------------------- rig A
+// KEEP uses a solid, a PNG and a nested comp. Unused: a duplicate PNG, a
+// placeholder-ish solid nobody uses, and two nested EMPTY folders.
+function rigA() {
+  reset();
+  const keep = project.items.addComp("KEEP");
+  const nested = project.items.addComp("NESTED");
+  const solids = project.items.addFolder("Solids");
+  const keepSolid = new FootageItem("keepSolid"); keepSolid.parentFolder = solids;
+  const orphan = new FootageItem("orphanSolid"); orphan.parentFolder = solids;
+  const png = new FootageItem("hygA.png", "C:/tmp/hygA.png");
+  const dup = new FootageItem("hygA.png", "C:/tmp/hygA.png");
+  const box = project.items.addFolder("EmptyBox");
+  const inner = project.items.addFolder("InnerBox"); inner.parentFolder = box;
+  keep.addLayer("keepSolid", keepSolid);
+  keep.addLayer("hygA.png", png);
+  keep.addLayer("NESTED", nested);
+  return { keep, nested, png, dup, orphan, box, inner, solids };
+}
+
+// 1. Preview does not touch anything, and names what would go.
+let r = rigA();
+const before = project.numItems;
+let res = call("clean_project", { action: "remove_unused_footage" });
+assert(res.ok, "preview succeeds");
+assert(res.data.dryRun === true, "dryRun defaults to TRUE");
+assert(project.numItems === before, "preview deleted nothing (" +
+       project.numItems + " items still there)");
+assert(names(res.data.items) === "EmptyBox,EmptyBox/InnerBox," +
+       "Solids/orphanSolid,hygA.png",
+       "preview names the unused footage AND both empty folders: " +
+       names(res.data.items));
+assert(res.data.foldersIncluded === 2,
+       "preview counts the folders AE throws in unasked");
+assert(/Folders left empty/.test(res.data.foldersNote || ""),
+       "preview says WHY folders are in the list");
+
+// 2. Execute matches the preview exactly.
+res = call("clean_project", { action: "remove_unused_footage", dryRun: false });
+assert(res.ok, "execute succeeds");
+assert(res.data.removedCount === 4, "AE's own count includes the folders: " +
+       res.data.removedCount);
+assert(names(res.data.removed) === names(res.data.items),
+       "what was removed == what the preview promised");
+assert(!res.data.removedUnexpectedly, "nothing removed that was not predicted");
+assert(!res.data.predictedButKept, "nothing predicted that survived");
+assert(project.numItems === 5, "five items left: " + project.numItems);
+
+// 3. Footage used ONLY by an unused comp is NOT unused (measured).
+reset();
+const lonely = project.items.addComp("LONELY");
+const inUnused = new FootageItem("insideUnused");
+lonely.addLayer("insideUnused", inUnused);
+assert(project.removeUnusedFootage() === 0,
+       "raw API: footage inside an unused comp survives (stub is faithful)");
+rigA();
+res = call("clean_project", { action: "remove_unused_footage" });
+assert(res.data.items.indexOf("Solids/keepSolid") === -1,
+       "preview never lists footage a comp uses");
+
+// 4. Recursive empty-folder sweep: emptying a child empties its parent.
+reset();
+const outer = project.items.addFolder("Outer");
+const mid = project.items.addFolder("Mid"); mid.parentFolder = outer;
+const ph = new FootageItem("phA"); ph.parentFolder = mid;
+project.items.addComp("HOLDER");
+res = call("clean_project", { action: "remove_unused_footage" });
+assert(names(res.data.items) === "Outer,Outer/Mid,Outer/Mid/phA",
+       "one unused item takes both folders above it: " + names(res.data.items));
+res = call("clean_project", { action: "remove_unused_footage", dryRun: false });
+assert(res.data.removedCount === 3 && !res.data.removedUnexpectedly,
+       "and AE agrees with the preview");
+
+// 5. consolidate_footage: preview groups by file, execute repoints layers.
+reset();
+const c1 = project.items.addComp("C1");
+const c2 = project.items.addComp("C2");
+const a1 = new FootageItem("hygA.png", "C:/tmp/hygA.png");
+const a2 = new FootageItem("hygA.png", "C:/tmp/hygA.png");
+const a3 = new FootageItem("hygA.png", "C:/tmp/hygA.png");
+const solo = new FootageItem("other.png", "C:/tmp/other.png");
+c1.addLayer("copy1", a1);
+c2.addLayer("copy2", a2);
+c2.addLayer("solo", solo);
+res = call("clean_project", { action: "consolidate" });
+assert(res.ok && res.data.action === "consolidate_footage",
+       "'consolidate' is accepted as the action name");
+assert(res.data.duplicateGroups && res.data.duplicateGroups.length === 1 &&
+       res.data.duplicateGroups[0].copies === 3,
+       "the three copies are reported as ONE group");
+assert(res.data.willRemove === 2, "two of the three would go");
+res = call("clean_project", { action: "consolidate_footage", dryRun: false });
+assert(res.data.removedCount === 2 && !res.data.removedUnexpectedly,
+       "execute removes exactly two");
+assert(c1.layer(1).source === c2.layer(1).source,
+       "both comps now point at the same surviving footage item");
+assert(ALL_ITEMS.indexOf(solo) !== -1, "the un-duplicated file is untouched");
+
+// ---------------------------------------------------------------- rig B
+// MAIN keeps a solid; OTHER is reached only by an expression; DEAD is in
+// the render queue and reached by nothing.
+function rigB() {
+  reset();
+  const main = project.items.addComp("MAIN");
+  const other = project.items.addComp("OTHER");
+  const dead = project.items.addComp("DEAD");
+  const solids = project.items.addFolder("Solids");
+  const junk = project.items.addFolder("_JUNK");
+  dead.parentFolder = junk;
+  const mainSolid = new FootageItem("mainSolid"); mainSolid.parentFolder = solids;
+  const otherSolid = new FootageItem("otherSolid"); otherSolid.parentFolder = solids;
+  other.addLayer("otherSolid", otherSolid);
+  main.addLayer("mainSolid", mainSolid,
+                'comp("OTHER").layer("otherSolid").transform.position');
+  renderQueue.items.add(dead);
+  return { main, other, dead, junk, solids };
+}
+
+// 6. reduce_project will not guess, and says what it could keep.
+rigB();
+res = call("clean_project", { action: "reduce_project" });
+assert(!res.ok, "reduce_project without keepComps is refused");
+assert(/DEAD.*MAIN.*OTHER|MAIN/.test(res.error) && /keepComps/.test(res.error),
+       "the refusal lists the comps that exist: " + res.error);
+assert(project.numItems > 0, "and nothing was deleted");
+
+// 7. The hazard: AE accepts a non-comp and then deletes every comp.
+const rawCount = (() => {
+  rigB();
+  const footage = ALL_ITEMS.find(x => x.name === "otherSolid");
+  project.reduceProject([footage]);
+  return ALL_ITEMS.filter(x => x instanceof CompItem).length;
+})();
+assert(rawCount === 0,
+       "raw API: a footage item in the keep array wipes every comp (hazard is real)");
+rigB();
+res = call("clean_project",
+           { action: "reduce_project", keepComps: ["otherSolid"], dryRun: false });
+assert(!res.ok && /not a comp/.test(res.error),
+       "the tool refuses a non-comp keepComps entry: " + res.error);
+assert(ALL_ITEMS.filter(x => x instanceof CompItem).length === 3,
+       "all three comps survive the refusal");
+
+// 8. Unknown / missing action is refused with the real menu.
+res = call("clean_project", {});
+assert(!res.ok && /remove_unused_footage/.test(res.error) &&
+       /consolidate_footage/.test(res.error) && /reduce_project/.test(res.error),
+       "a missing action lists all three actions");
+res = call("clean_project", { action: "vacuum" });
+assert(!res.ok && /Unknown action 'vacuum'/.test(res.error),
+       "an invented action is named back and refused");
+
+// 9. reduce_project preview: the two silent losses are stated up front.
+rigB();
+res = call("clean_project", { action: "reduce_project", keepComps: ["MAIN"] });
+assert(res.ok && res.data.dryRun === true, "reduce_project previews by default");
+assert(names(res.data.items) === "OTHER,Solids/otherSolid,_JUNK,_JUNK/DEAD",
+       "preview names the comps by their folder path, the solid and the " +
+       "emptied folder: " + names(res.data.items));
+assert(names(res.data.renderQueueLost) === "DEAD",
+       "the render-queue item that would vanish is named");
+assert(res.data.expressionBreaks && res.data.expressionBreaks.length === 1 &&
+       /OTHER is named/.test(res.data.expressionBreaks[0]),
+       "the expression that would break silently is named");
+assert(/expressionError reads empty/.test(res.data.expressionNote || ""),
+       "and the preview says AE will not report it");
+assert(project.numItems === 7 && renderQueue.numItems === 1,
+       "preview changed nothing at all");
+
+// 10. Execute: AE's result is diffed against the promise.
+res = call("clean_project",
+           { action: "reduce_project", keepComps: ["MAIN"], dryRun: false });
+assert(res.ok && res.data.removedCount === 4, "four items removed");
+assert(names(res.data.removed) === "OTHER,Solids/otherSolid,_JUNK,_JUNK/DEAD",
+       "and they are the four the preview named");
+assert(!res.data.removedUnexpectedly && !res.data.predictedButKept,
+       "preview and reality agree exactly");
+assert(renderQueue.numItems === 0, "the render-queue item went with DEAD");
+assert(/Ctrl\+Z/.test(res.data.note), "the result says one Ctrl+Z undoes it");
+
+// 11. keepComps naming a comp that does not exist is grounded.
+rigB();
+res = call("clean_project", { action: "reduce_project", keepComps: ["Nope"] });
+assert(!res.ok && /Comp not found: Nope/.test(res.error) &&
+       /MAIN/.test(res.error), "a bad comp name lists the real ones");
+
+// 12. A keepComps string (not an array) is accepted rather than refused.
+rigB();
+res = call("clean_project", { action: "reduce_project", keepComps: "MAIN" });
+assert(res.ok && res.data.keepComps.length === 1,
+       "a single comp name as a plain string works");
+
+// 13. Nothing to do says so, and never claims work it did not do.
+reset();
+project.items.addComp("ONLY");
+res = call("clean_project", { action: "remove_unused_footage" });
+assert(res.ok && res.data.willRemove === 0 &&
+       /nothing to do/i.test(res.data.note), "an already-clean project: " +
+       res.data.note);
+res = call("clean_project", { action: "consolidate_footage", dryRun: false });
+assert(res.ok && res.data.removedCount === 0 && res.data.itemsRemoved === 0,
+       "executing on a clean project removes nothing");
+
+// 14. The tool is registered as mutating, so it gets an undo group.
+//     (reduceProject inside one was measured to close cleanly and to be
+//     undone whole by a single Ctrl+Z -- unlike render_comp.)
+const src = fs.readFileSync(path.join(__dirname, "..", "extension", "jsx",
+                                      "hostscript.jsx"), "utf8");
+assert(/clean_project:\s*true/.test(src.split("AELL_MUTATING")[1] || ""),
+       "clean_project is in AELL_MUTATING");
+const defs = fs.readFileSync(path.join(__dirname, "..", "extension", "js",
+                                       "tools.js"), "utf8");
+assert(/name:\s*"clean_project",\s*mutating:\s*true/.test(defs),
+       "clean_project is documented to the model as mutating");
+assert(/dryRun is TRUE by default/.test(
+         defs.split('name: "clean_project"')[1].slice(0, 1500)),
+       "the tool doc tells the model the preview comes first");
+
+console.log(failures ? "\nFAILURES: " + failures : "\nAll project-hygiene checks passed");
