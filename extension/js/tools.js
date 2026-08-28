@@ -416,6 +416,21 @@
             "category), filtered and paged. Check here before apply_effect " +
             "when unsure of a name.",
       args: "{filter?: substring of name/category, offset?: int}" },
+    { name: "list_presets", mutating: false,
+      desc: "Enumerate the ANIMATION PRESETS (.ffx) installed in this AE — " +
+            "AE ships ~679 (Behaviors, Text, Backgrounds, Transitions, " +
+            "Image, Shapes…) plus the user's own. Search before applying.",
+      args: "{filter?: substring of \"Category/Name\", category?: string, source?: \"app\"|\"user\", offset?: int, limit?: int, refresh?: bool}" },
+    { name: "apply_preset", mutating: true,
+      desc: "Apply an installed .ffx animation preset to layer(s). One " +
+            "preset can add several effects, expressions and keyframes at " +
+            "once — the fastest route to a finished look. Match the " +
+            "preset's CATEGORY to the layer: a Text preset on a non-text " +
+            "layer lands at best partially (its sliders, never the " +
+            "animation) and cameras/lights take nothing at all. The tool " +
+            "reports a partial or empty landing rather than claiming " +
+            "success. Use list_presets to get the exact name.",
+      args: "{preset: string (name or \"Category/Name\" from list_presets), layer?: string|int, layers?: [string|int], comp?: string}" },
     { name: "add_to_render_queue", mutating: true,
       desc: "Add a comp to the render queue.",
       args: "{comp?: string, outputPath?: string (absolute)}" },
@@ -619,6 +634,11 @@
       "- Unsure an effect exists or of its exact name? list_effects",
       "  {filter} searches everything installed; apply_effect accepts the",
       "  returned name or matchName.",
+      "- A whole LOOK in one call: list_presets {filter} then apply_preset",
+      "  — AE ships ~679 .ffx presets (Behaviors/Wiggle - position,",
+      "  Text/Animate In/*, Backgrounds, Transitions). Match the preset's",
+      "  CATEGORY to the layer: a Text preset does nothing on a solid,",
+      "  and cameras/lights take no effect presets at all.",
       "- set_track_matte mattes one layer with another (alpha/luma,",
       "  inverted variants, 'none' removes). set_layer_parent parents",
       "  (selection default, visual position preserved).",

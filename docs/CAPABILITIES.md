@@ -12,11 +12,11 @@ feature they describe. Use this to look at the product whole and ask
 
 _Regenerate with `node scripts/capability-report.js` — CI fails if this section is stale._
 
-**61 tools** (53 mutating, 8 read-only; 58 host-side, 3 panel-side).
+**63 tools** (54 mutating, 9 read-only; 60 host-side, 3 panel-side).
 
 | Tool | Does | Writes | Side | Stub tests | Suite steps |
 |---|---|---|---|---|---|
-| `add_camera` | Add a camera | yes | host | — | 3 |
+| `add_camera` | Add a camera | yes | host | — | 4 |
 | `add_control` | Add a named expression control (Slider/Angle/Checkbox/Color/Point Control effect) to a layer — usually a null | yes | host | 1 | 4 |
 | `add_keyframe` | Add a keyframe on a layer property at a time (seconds) | yes | host | 1 | 10 |
 | `add_light` | Add a light | yes | host | 1 | 13 |
@@ -25,13 +25,14 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `add_null` | Add a null layer (use as a controller or parent) | yes | host | 1 | 7 |
 | `add_shape_content` | Add content INSIDE a shape layer: kinds group, rectangle, ellipse, star, polygon, path, fill, stroke, gradient_fill, gradient_stroke, repeater, trim_paths, merge_paths, offset_paths, rounded_corners, pucker_bloat, twist, zigzag | yes | host | 1 | 8 |
 | `add_shape_layer` | Add a shape layer (rectangle, ellipse, polygon, or star) | yes | host | — | 2 |
-| `add_solid` | Add a solid layer | yes | host | — | 25 |
+| `add_solid` | Add a solid layer | yes | host | — | 26 |
 | `add_text_animator` | Animate a text layer PER CHARACTER (typewriter, cascade, wiggle) — an animator holds the properties, a selector picks which characters get them | yes | host | 1 | 10 |
-| `add_text_layer` | Add a text layer to a comp | yes | host | 1 | 6 |
+| `add_text_layer` | Add a text layer to a comp | yes | host | 1 | 7 |
 | `add_to_render_queue` | Add a comp to the render queue | yes | host | — | — |
 | `apply_effect` | Apply an effect to a layer | yes | host | — | 6 |
 | `apply_expression_preset` | Apply a known-good expression | yes | host | 1 | 3 |
 | `apply_keyframe_ease` | Apply a bezier as TEMPORAL easing between keyframes on one property across MANY layers in ONE call (converts to AE speed/influence ease) | yes | host | 1 | 3 |
+| `apply_preset` | Apply an installed .ffx animation preset to layer(s) | yes | host | 1 | 5 |
 | `audit_comp_usage` | Facts about how comps are used, before renaming anything: which comps each one is nested in, whether it is in the render queue, and every expression that names it as a string | no | host | 1 | 1 |
 | `center_anchor_point` | Center a layer's anchor point on its visible content (sourceRect math done host-side; position compensated so the layer does not jump, at every Position keyframe) | yes | host | 1 | 2 |
 | `comfy_generate` | Generate an image/video with local ComfyUI and import it into the AE project | yes | panel | — | — |
@@ -40,19 +41,20 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `create_comp` | Create a composition and open it | yes | host | 1 | 20 |
 | `create_folder` | Create a project-panel folder | yes | host | 1 | 8 |
 | `delete_item` | Delete a project item | yes | host | 1 | 26 |
-| `delete_layer` | Delete a layer from a comp | yes | host | — | 3 |
+| `delete_layer` | Delete a layer from a comp | yes | host | — | 7 |
 | `distribute_property` | Distribute a property VALUE across layers | yes | host | 1 | 5 |
 | `duplicate_comp` | Duplicate a composition | yes | host | 1 | 1 |
 | `duplicate_layer` | Duplicate a LAYER inside its comp (use duplicate_comp only for whole compositions) | yes | host | 1 | 6 |
 | `for_each_layer` | Run a PER-LAYER tool once per target layer in ONE call (max 200 layers) — the batch executor for anything without its own layers arg: {tool: 'apply_effect', args: {effect: 'Gaussian Blur'}} blurs every target | yes | host | 1 | 6 |
-| `get_comp_details` | Layers of a comp with index, name, type, timing, effects | no | host | 2 | 19 |
+| `get_comp_details` | Layers of a comp with index, name, type, timing, effects | no | host | 2 | 21 |
 | `get_project_info` | List project items (comps/footage/folders) and the active comp | no | host | 2 | 9 |
 | `get_property` | Read ANY property by path: value, keyframes, expression | no | host | 3 | 79 |
 | `grid_layout` | Arrange layers into a grid rigged to a control null: its 'Grid X Spacing'/'Grid Y Spacing'/'Grid Columns' sliders drive spacing AND column count live, and the grid centers on the null's position (all expressions generated host-side) | yes | host | 1 | 2 |
 | `import_file` | Import a footage/image/video file into the project | yes | host | — | — |
 | `link_property` | Drive a layer property from a control | yes | host | — | 1 |
 | `list_effects` | Enumerate effects INSTALLED in this AE (name, matchName, category), filtered and paged | no | host | 1 | 2 |
-| `list_properties` | DISCOVER a layer's real property tree — names, paths, types, current values | no | host | 2 | 7 |
+| `list_presets` | Enumerate the ANIMATION PRESETS (.ffx) installed in this AE — AE ships ~679 (Behaviors, Text, Backgrounds, Transitions, Image, Shapes…) plus the user's own | no | host | 1 | 3 |
+| `list_properties` | DISCOVER a layer's real property tree — names, paths, types, current values | no | host | 2 | 9 |
 | `move_to_folder` | Move project items into a folder (batch) | yes | host | 1 | 2 |
 | `organize_project` | File loose root-level items into Comps/Footage/Solids/Audio/Images folders | yes | host | — | — |
 | `precompose` | Move layers into a new nested comp (precompose) | yes | host | 1 | 5 |
@@ -75,7 +77,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `set_text_style` | Restyle an existing text layer (any subset of fields) | yes | host | 1 | 2 |
 | `set_track_matte` | Use one layer as another's track matte (alpha or luma, optionally inverted), or remove it with mode 'none' | yes | host | 1 | 1 |
 | `set_transform` | Set a transform property | yes | host | 1 | 7 |
-| `split_layer_into_chunks` | Cut a layer into chunks, each on its own layer trimmed to its own window — ONE call does the whole edit | yes | host | 1 | 1 |
+| `split_layer_into_chunks` | Cut a layer into chunks, each on its own layer trimmed to its own window — ONE call does the whole edit | yes | host | 1 | 2 |
 | `stagger_layers` | Distribute layer START TIMES | yes | host | 1 | 4 |
 
 **Coverage gaps (computed):**
@@ -213,7 +215,18 @@ Queued (see WORKPLAN for owners/order):
   offset, twist or zigzag lands with no shape ABOVE it: those act on
   what is above them and new content is always appended below, so the
   order they were added in is the whole story.
-- Feature track not yet built: preset library, render queue,
+- AE's own animation presets are now reachable: `list_presets` searches
+  the ~679 .ffx files AE ships (Behaviors, Text, Backgrounds,
+  Transitions, Shapes) plus the user's own, and `apply_preset` applies
+  one. The API needed three field measurements to be usable at all --
+  `applyPreset` acts on the comp's SELECTION rather than on the layer it
+  is called on (two layers selected, one call, BOTH changed), with an
+  empty selection it invents a comp-sized solid and applies the preset
+  there instead, and a preset built for another layer type does nothing
+  whatsoever without throwing. The tool selects only its target and puts
+  the user's selection back, and a preset that changed nothing is
+  reported as a refusal naming the layer type, never as success.
+- Feature track not yet built: render queue,
   project hygiene, audio-to-keyframes, frame round-trip, .mogrt export,
   whisper captions, ffmpeg exports (items 5-6).
 - Image/video generation is not yet seamless: no frame-aware img2img,

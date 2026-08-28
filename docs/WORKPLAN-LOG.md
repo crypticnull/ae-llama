@@ -4184,3 +4184,124 @@ something. A dialog raised mid-run therefore still costs a manual step.
   MUTATES the anchor to tell you. A read-only `get_bounds` would make
   render assertions cheap for every future shape/text step.
 - Item 5.3 (animation preset library) is next on the feature track.
+
+## 2026-08-28 (local, twelfth pass) - item 5.3: a preset does not go where you call it
+
+Harness green on arrival (345/345), so the pass took the next unfinished
+feature item: **5.3, the animation preset library**. CAPABILITIES.md
+confirmed there were no duplicates to nearly build this time - nothing in
+the panel had ever touched a .ffx. Four probe runs against real AE 2026
+measured the API, and the first one disproved the item's own premise.
+
+### What AE actually does (four probe runs)
+
+**`layer.applyPreset(file)` does not apply to `layer`. It applies to the
+comp's SELECTION.** With two layers selected, one call put the preset on
+BOTH - the receiver had no special status at all. And with NOTHING
+selected it does not fall back to the receiver either: AE invents a
+comp-sized solid ("Solid 6", width = comp width), applies the preset
+THERE, selects it, and leaves the layer alone. So the naive call is not a
+no-op that a user would notice; it is litter in their comp with the
+preset on it.
+
+**Everything else the item worried about turned out not to matter.**
+Whether the comp is open in a viewer: no difference (measured both ways,
+byte-identical results). Whether a PROPERTY is selected: no difference.
+`comp.time` is untouched. A locked layer still takes the preset - AE does
+not refuse it. One preset can add ten effects (Backgrounds/Anime Radial)
+or none at all.
+
+**"A preset for the wrong layer type does nothing" is only half true**,
+and this is what cost the pass a suite iteration. `Text/Animate In/Fade
+Up Characters` on a solid changes NOTHING - no effect, no key, no
+expression, no throw. But `Text/Animate In/Alternating Characters In` on
+the same solid installs its SIX expression-control sliders and two
+keyframes and stops there (census 2), where the same preset on a text
+layer builds the whole animator (census 15). So a Text preset on a
+non-text layer lands partially when it carries controls and not at all
+when it does not, and which one AE lists first differs by install.
+Cameras and lights are the only guaranteed no-op: they have no Effect
+Parade and took nothing from either kind of preset.
+
+Smaller measured facts, all of which the code depends on:
+
+- A bad path THROWS ("Path is not valid") - but only once there is a
+  selection to apply to; with an empty selection AE never validates it.
+- `File.name` is URI-ENCODED ("Bungee%20In.ffx"). `displayName` is not.
+  A listing built from `.name` would ship "%20" to the model.
+- The user's presets are under `Documents/Adobe/After Effects*/User
+  Presets`, and Documents may be REDIRECTED - it is OneDrive on this
+  machine, so a built `%USERPROFILE%\Documents` path finds nothing. Only
+  `Folder.myDocuments` gets there. This machine has both an "After
+  Effects" and an "After Effects 2026" folder, so the root list is every
+  `After Effects*` sibling that has a `User Presets` child.
+- 679 .ffx files walked recursively in 117 ms. Cheap, but cached anyway.
+- Applying the same preset twice is idempotent for the ones measured
+  (the effect keeps its name, AE does not stack a second copy).
+
+### Built
+
+`list_presets` indexes both roots (679 app + the user's), filterable by
+`filter` / `category` / `source`, paged like `list_effects`, with
+`refresh` to re-walk. A filter that matches nothing is answered with the
+installed count and the category list, never an empty array.
+
+`apply_preset {preset, layer|layers}` resolves the name in four tiers
+(exact Category/Name, exact name, substring of either) - ambiguity is
+REFUSED with the full paths to choose from rather than guessed, and a
+miss lists the closest installed names. Then, per layer, it takes a
+census of every effect, expression and keyframe on the layer, selects
+ONLY that layer inside `AELL_keepSelection`, applies, and takes the
+census again. That census is the whole point: AE reports nothing either
+way, so it is the only way to tell a preset that worked from one that
+silently did nothing. A layer that gained nothing is reported as skipped;
+if NO layer gained anything the call is a grounded refusal naming the
+layer, its type and the rule. A Text preset that lands on a non-text
+layer now comes back with `partialOnNonText` and a note saying the
+animation half needs a text layer - the case that would otherwise read
+as a clean success and confuse a user who saw six sliders and no
+animation.
+
+### Covered without AE, and in AE
+
+- `tests/test-presets.js` (new, 63 checks) stubs the FILE SYSTEM as well
+  as the AE model, including the OneDrive-redirected Documents root and
+  the URI-encoded `.name`. Its `applyPreset` reproduces all three
+  measured behaviours - selection contamination, the invented solid, the
+  silent and partial no-ops - and three checks drive it RAW first to
+  prove the stub can still catch each bug.
+- 13 suite steps in `extension/js/selftest.js`. The rig needed a
+  multi-layer selection, which no tool exposes directly:
+  `split_layer_into_chunks` is the one tool that deliberately leaves its
+  pieces selected, so the rig splits a solid in two and applies to one
+  piece. The bystander must come back with zero effect rows, the comp
+  must have the same layer count as before, and the selection must be
+  the same two layers afterwards. No preset NAME is hard-coded anywhere:
+  every step takes its name from `list_presets`, because AE's library
+  differs by install and locale.
+- `tests/test-self-test.js`'s canned host grew a preset library, the
+  split's leftover selection, and per-layer effect state, for the usual
+  reason: a host that answered "ok" would let both bugs pass their own
+  steps.
+- The suite step for the Text-preset-on-a-solid case checks the
+  INVARIANT rather than the outcome, since either is legitimate: if the
+  tool says it applied, the layer really has those effects; if it
+  refuses, the layer really has none. The guaranteed refusal path is
+  exercised on a camera instead.
+- docs/CAPABILITIES.md regenerated, curated half updated.
+
+**Harness: 358/358 PASSED** (345 -> 358). Stubbed suite: 39 files green.
+
+**Not bumped.** Two NEW tools, which the feature track says ride the next
+MINOR for the remote session to cut. Nothing shipped changed behaviour.
+
+### For the next pass
+
+- Item 5.5 (render queue) is next on the feature track, and 5.8, 6.1 and
+  6.2 are all waiting behind it.
+- Still open from earlier passes: `duplicate_comp` takes a name without
+  uniquing, and there is still no read-only `get_bounds` -
+  `center_anchor_point` remains the only route to `sourceRectAtTime` and
+  it MUTATES the anchor to tell you.
+- No modal this time: four probe runs and three harness runs, all from a
+  warm AE, none blocked.

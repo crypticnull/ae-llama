@@ -119,6 +119,67 @@ function resetPcRig() {
   pcLayers.length = 0;
 }
 function inPcComp(a) { return !!(a && /Self-Test Precomp/.test(a.comp || "")); }
+
+// The animation-preset rig (WORKPLAN 5.3). AE's applyPreset acts on the
+// comp's SELECTION rather than on the layer it is called on, and a preset
+// built for another layer type changes NOTHING without throwing, so a
+// canned host that answered "ok" would let both bugs pass their own steps.
+// This one carries a small library, the split's leftover selection, and
+// the effects each layer actually ends up with.
+const PRESET_LIB = [
+  { name: "Wiggle - position", category: "Behaviors", source: "app",
+    effects: 2, keys: 1 },
+  { name: "Drift Over Time", category: "Behaviors", source: "app",
+    effects: 1, keys: 1 },
+  { name: "Alternating Characters In", category: "Text/Animate In",
+    source: "app", effects: 6, keys: 2, needs: "text", controls: true },
+  { name: "Fade Up Characters", category: "Text/Animate In", source: "app",
+    effects: 0, keys: 2, needs: "text" },
+  { name: "Drop In By Character", category: "Text/Animate In",
+    source: "app", effects: 0, keys: 2, needs: "text" },
+  { name: "My Look", category: "", source: "user", effects: 1, keys: 0 }
+];
+const PRESET_CATS = ["Behaviors", "Text", "(root)"];
+let preFx = {};            // layer -> effects a preset put there
+let preSelection = [];     // what split_layer_into_chunks left selected
+let preLayers = [];        // the rig's layers, in the main scratch comp
+function resetPresetRig() { preFx = {}; preSelection = []; preLayers = []; }
+function presetPath(p) { return (p.category ? p.category + "/" : "") + p.name; }
+function presetMatch(want) {
+  const norm = String(want || "").split("\\").join("/")
+    .replace(/\.ffx$/i, "").trim().toLowerCase();
+  if (!norm) return { near: [] };
+  const tiers = [[], [], [], []];
+  PRESET_LIB.forEach((p) => {
+    const full = presetPath(p).toLowerCase(), nm = p.name.toLowerCase();
+    if (full === norm) tiers[0].push(p);
+    else if (nm === norm) tiers[1].push(p);
+    else if (full.indexOf(norm) !== -1) tiers[2].push(p);
+    else if (nm.indexOf(norm) !== -1) tiers[3].push(p);
+  });
+  for (const t of tiers) {
+    if (t.length === 1) return { hit: t[0] };
+    if (t.length > 1) return { choices: t };
+  }
+  return { near: [] };
+}
+// Measured in AE 2026, and not the simple rule it looks like: a camera
+// (or light) has no Effect Parade and takes NOTHING from any preset, while
+// a Text preset on a SOLID lands PARTIALLY when it carries expression
+// controls ("Alternating Characters In": six sliders and two keys, against
+// census 15 on a real text layer) and not at all when it does not
+// ("Center Spiral In"). The canned library holds one of each.
+function presetLayerType(nm) {
+  if (/PreCam/.test(String(nm || ""))) return "camera";
+  if (/PreText/.test(String(nm || ""))) return "text";
+  return "solid";
+}
+function presetFits(p, layer) {
+  const t = presetLayerType(layer);
+  if (t === "camera") return false;
+  if (p.needs !== "text" || t === "text") return true;
+  return !!p.controls;      // a Text preset with controls lands partially
+}
 // Solid SOURCES, mutable: deleting a comp does not delete these (the
 // field bug), and the suite's new cleanup deletes them by id. Seeded
 // with the accumulation observed in the real scratch project — a few of
@@ -873,6 +934,17 @@ function cannedOk(tool, args) {
                note: "Stacking changed only" };
     }
     case "get_comp_details": {
+      // The preset rig lives in the MAIN scratch comp, and its two split
+      // pieces are SELECTED — the state applyPreset misreads in real AE.
+      // It answers before the other rigs so the selection is never lost.
+      if (preLayers.length && args && /Self-Test$/.test(args.comp || "")) {
+        const preRows = ordStack.map((nm, i) => ({ index: i + 1, name: nm }));
+        preLayers.forEach((nm) => {
+          preRows.push({ index: preRows.length + 1, name: nm,
+                         selected: preSelection.indexOf(nm) !== -1 });
+        });
+        return capLayers(args.comp, preRows, args);
+      }
       // A precomp answers with what precompose moved into it, and with
       // the size that call really produced (moveAttributes:false takes
       // the LAYER's size, not the comp's).
@@ -1892,10 +1964,15 @@ function cannedOk(tool, args) {
       // AE names a new text layer after its own text.
       const made = { index: 1, name: (args && args.text) || "Text",
                      style: textStyle };
+      if (/^ST PreText/.test(made.name)) preLayers.push(made.name);
       if (inherit) made.inheritedStyle = true; else made.styleReset = true;
       return made;
     }
     case "delete_layer":
+      if (args && preLayers.indexOf(args.layer) !== -1) {
+        preLayers = preLayers.filter((nm) => nm !== args.layer);
+        preSelection = preSelection.filter((nm) => nm !== args.layer);
+      }
       return { removed: args && args.layer };
     case "set_text_style":
       if (!textStyle) textStyle = {};
@@ -1957,6 +2034,9 @@ function cannedOk(tool, args) {
               "Accepts Lights are lit by this" };
     }
     case "add_camera":
+      if (args && /^ST PreCam/.test(String(args.name || ""))) {
+        preLayers.push(args.name);
+      }
       return { index: 1, name: (args && args.name) || "Camera" };
     case "set_layer_timing":
       // Writing the trim echoes it back; calling it with no timing args is
@@ -1972,6 +2052,24 @@ function cannedOk(tool, args) {
       return { layer: args && args.layer, inPoint: 85 / 30,
                outPoint: 107 / 30, startTime: 0 };
     case "split_layer_into_chunks": {
+      // The preset rig needs the one real side effect this tool has: it
+      // DESELECTS everything and leaves its pieces selected, which is the
+      // only way a suite step can hand AE a multi-layer selection.
+      if (args && args.chunks && args.chunks !== 7) {
+        const n = Math.round(args.chunks);
+        const base = String(args.layer || "ST Pre");
+        const made = [];
+        for (let i = 0; i < n; i++) {
+          made.push({ layer: i === 0 ? base : base + " " + (i + 1),
+                      index: i + 1, inPoint: i, outPoint: i + 1 });
+        }
+        preSelection = made.map((x) => x.layer);
+        preLayers = preSelection.slice();
+        return { chunks: n, chunkSeconds: 1, pieces: made,
+                 note: "Chunks play seamlessly end-to-end on separate " +
+                       "layers (no overlap); stacked ascending and now " +
+                       "SELECTED" };
+      }
       // A 1.35s..6.55s clip at 30 fps cut into 7: the ends stay verbatim
       // (frames 40.5 and 196.5) and every interior cut is moved onto a
       // whole frame. Reported in/out are rounded to 4 decimals, as the
@@ -2200,6 +2298,17 @@ function cannedOk(tool, args) {
     }
     case "list_properties": {
       const P = String((args && args.path) || "");
+      if (/^effects$/i.test(P) && args &&
+          preLayers.indexOf(args.layer) !== -1) {
+        const n = preFx[args.layer] || 0;
+        const rows = [];
+        for (let i = 0; i < n; i++) {
+          rows.push({ path: "effects/FX " + (i + 1),
+                      matchName: "ADBE FX", kind: "group" });
+        }
+        return { layer: args.layer, root: "effects", count: n,
+                 properties: rows, note: "" };
+      }
       if (inTx(args)) {
         if (P === "Text/Animators") {
           return { layer: args.layer, root: P, count: txAnims.length,
@@ -2227,6 +2336,101 @@ function cannedOk(tool, args) {
         : CV_ROOT.map(([n, mn, kind]) => ({ path: n, matchName: mn, kind }));
       return { layer: args && args.layer, root: P || "(layer)",
                count: rows.length, properties: rows, note: "" };
+    }
+    case "list_presets": {
+      const f = String((args && args.filter) || "").toLowerCase();
+      const wc = String((args && args.category) || "")
+        .split("\\").join("/").toLowerCase();
+      const ws = String((args && args.source) || "").toLowerCase();
+      const lim = listLimit(args && args.limit);
+      const hits = PRESET_LIB.filter((p) => {
+        if (ws && p.source !== ws) return false;
+        if (wc && (p.category || "").toLowerCase().indexOf(wc) !== 0) {
+          return false;
+        }
+        return !f || presetPath(p).toLowerCase().indexOf(f) !== -1;
+      });
+      if (!hits.length) {
+        return { __err: "No preset matches '" + ((args && args.filter) ||
+          (args && args.category) || "that") + "'. " + PRESET_LIB.length +
+          " presets are installed. Categories: " + PRESET_CATS.join(", ") +
+          "." };
+      }
+      const page = lim < 0 ? hits : hits.slice(0, lim);
+      return { total: hits.length, offset: 0, listed: page.length,
+               installed: PRESET_LIB.length, categories: PRESET_CATS,
+               presets: page.map((p) => ({ name: p.name,
+                 category: p.category, source: p.source })),
+               note: "" };
+    }
+    // AE's measured contract, not "ok": the preset lands on the layer it
+    // was GIVEN (never on the rest of the selection), a preset built for
+    // another layer type changes nothing, and the refusal has to say so.
+    case "apply_preset": {
+      const targets = (args && args.layers) ||
+                      (args && args.layer ? [args.layer] : preSelection);
+      if (!args || !args.preset) {
+        return { __err: "'preset' is required — a preset name or " +
+                 "\"Category/Name\". Use list_presets to find one." };
+      }
+      const m = presetMatch(args.preset);
+      if (m.choices) {
+        return { __err: "'" + args.preset + "' matches " + m.choices.length +
+          " presets — pass one of these exactly: " +
+          m.choices.map(presetPath).join(", ") };
+      }
+      if (!m.hit) {
+        return { __err: "No preset named '" + args.preset + "'. " +
+          PRESET_LIB.length + " presets are installed; categories: " +
+          PRESET_CATS.join(", ") + ". Use list_presets {filter} to search." };
+      }
+      const applied = [], skipped = [];
+      targets.forEach((nm) => {
+        if (!presetFits(m.hit, nm)) {
+          skipped.push({ layer: nm, type: presetLayerType(nm),
+                         reason: "AE applied nothing" });
+          return;
+        }
+        const row = { layer: nm, type: presetLayerType(nm) };
+        if (m.hit.effects) {
+          preFx[nm] = (preFx[nm] || 0) + m.hit.effects;
+          row.effectsAdded = [];
+          for (let i = 0; i < m.hit.effects; i++) {
+            row.effectsAdded.push(m.hit.name + " fx " + (i + 1));
+          }
+        }
+        if (m.hit.keys) row.keysAndExpressionsAdded = m.hit.keys;
+        applied.push(row);
+      });
+      if (!applied.length) {
+        const types = [];
+        skipped.forEach((k) => {
+          if (types.indexOf(k.type) === -1) types.push(k.type);
+        });
+        return { __err: "Preset '" + presetPath(m.hit) + "' changed " +
+          "nothing on " + (skipped.length === 1
+            ? "layer '" + skipped[0].layer + "' (" + types.join(", ") + ")"
+            : skipped.length + " layers (" + types.join(", ") + ")") +
+          ". AE applies a preset built for another layer type as a SILENT " +
+          "no-op — a Text preset needs a TEXT layer, and cameras/lights " +
+          "take no effects at all." };
+      }
+      const out = { preset: m.hit.name, category: m.hit.category,
+                    source: m.hit.source, applied: applied };
+      const nonText = applied.filter(r => r.type !== "text")
+                             .map(r => r.layer);
+      if (/^Text($|\/)/i.test(m.hit.category || "") && nonText.length) {
+        out.partialOnNonText = nonText;
+        out.partialNote = "This is a Text preset. On a non-text layer only " +
+          "its expression CONTROLS can land — the animation itself lives " +
+          "in text animators, which only a TEXT layer has.";
+      }
+      if (skipped.length) {
+        out.skipped = skipped;
+        out.note = skipped.length + " layer(s) got nothing — the preset " +
+          "does not fit that layer type.";
+      }
+      return out;
     }
     case "list_effects": {
       const f = String((args && args.filter) || "").toLowerCase();
@@ -2389,7 +2593,7 @@ SelfTest.run({
     ordStack = [];
     maskKeys = {};
     batchLayers = 0; batchFx = {}; batchBlur = null;
-    batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig(); resetShapeRig();
+    batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetPresetRig();
     SelfTest.run({
       callHostTool(tool, args, cb) {
         if (tool === "grid_layout") {
@@ -2419,7 +2623,7 @@ SelfTest.run({
         ordStack = [];
         maskKeys = {};
         batchLayers = 0; batchFx = {}; batchBlur = null;
-        batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig(); resetShapeRig();
+        batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetPresetRig();
         SelfTest.run({
           callHostTool(tool, args, cb) {
             // Never refuse anything -- the old permissive host.

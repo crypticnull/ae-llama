@@ -506,6 +506,24 @@ offset, and the repeater transform block. Build: `add_repeater` {layer,
 copies, position/rotation/scale/anchor offsets}. Verify the radial-burst
 recipe (rotation 360/copies) renders as expected.
 
+### 5.3 Animation preset library - DONE 2026-08-28
+Probed, built and covered in one pass. `list_presets` indexes AE's 679
+shipped .ffx files plus the user's own (679 walked in 117 ms, cached per
+session); `apply_preset` applies one to layer(s). The probe answered the
+item's own question with a worse fact than it expected: **applyPreset
+acts on the comp's SELECTION, not on the layer it is called on** - two
+layers selected, one call, BOTH changed - and with an EMPTY selection it
+does not touch the receiver either, it invents a comp-sized solid and
+applies the preset there. So the tool selects exactly its target and puts
+the user's selection back. Six more measured facts made the design and
+are in the log; the one that cost a suite iteration is that "a preset for
+the wrong layer type does nothing" is only HALF true: a Text preset that
+carries expression controls installs its six sliders on a solid and none
+of the animation (census 2 vs 15 on a text layer), while one that carries
+none does nothing at all. That partial landing is now reported. 63 stub
+checks in `tests/test-presets.js`, 13 suite steps, harness 345 -> 358. No
+version bump (feature track). Original text below.
+
 ### 5.3 Animation preset library
 Probe: `layer.applyPreset(File)` on a stock .ffx — does it need the
 layer selected, what does it do to selection (AELL_keepSelection?), and

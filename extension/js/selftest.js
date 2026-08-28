@@ -4491,6 +4491,253 @@
         },
         check: function () { return true; } },
 
+      // ---- animation presets: list_presets / apply_preset (WORKPLAN 5.3).
+      //
+      // Measured in AE 2026 (three probes, WORKPLAN-LOG 2026-08-28):
+      // layer.applyPreset() applies to the comp's SELECTION, not to the
+      // layer it is called on — two layers selected, one call, BOTH
+      // changed — and with an EMPTY selection it invents a comp-sized
+      // solid, applies the preset there and leaves the target alone. Both
+      // halves are checked below against real AE, which is why the rig
+      // goes to the trouble of establishing a two-layer selection:
+      // split_layer_into_chunks is the one tool that leaves one behind.
+      //
+      // Nothing here hard-codes a preset name. AE's library differs by
+      // install and by locale, so every name comes from list_presets.
+      { name: "list_presets finds AE's shipped library",
+        tool: "list_presets",
+        args: { category: "Behaviors", limit: 0 },
+        check: function (d, ctx) {
+          if (!d.total) return "no Behaviors presets found";
+          if (d.installed < d.total) return "installed < matched";
+          var pick = null, i;
+          for (i = 0; i < d.presets.length; i++) {
+            if (/wiggle/i.test(d.presets[i].name)) { pick = d.presets[i]; break; }
+          }
+          if (!pick) pick = d.presets[0];
+          ctx.presetName = pick.category + "/" + pick.name;
+          if (pick.source !== "app") return "source " + pick.source;
+          return true;
+        } },
+
+      { name: "a filter that matches nothing is grounded in what exists",
+        tool: "list_presets",
+        expectError: true,
+        args: { filter: "zzz no such preset zzz" },
+        check: function (err) {
+          return (/presets are installed/.test(err) &&
+                  /Behaviors/.test(err)) ||
+                 "does not say what IS installed: " + err;
+        } },
+
+      { name: "a text preset name, taken from the library not from memory",
+        tool: "list_presets",
+        args: { category: "Text/Animate In", limit: 5 },
+        check: function (d, ctx) {
+          if (!d.total) return "no Text/Animate In presets";
+          ctx.textPreset = d.presets[0].category + "/" + d.presets[0].name;
+          return true;
+        } },
+
+      { name: "a solid, split into two pieces that stay SELECTED",
+        batch: function (ctx) {
+          return [
+            { tool: "add_solid", args: { comp: ctx.comp, name: "ST Pre",
+                color: [0, 0.4, 1], width: 80, height: 80 } },
+            { tool: "split_layer_into_chunks",
+              args: { comp: ctx.comp, layer: "ST Pre", chunks: 2 } }
+          ];
+        },
+        check: function (rows, ctx) {
+          if (!rows[0].ok) return "add_solid: " + rows[0].error;
+          if (!rows[1].ok) return "split: " + rows[1].error;
+          var p = rows[1].data.pieces || [];
+          if (p.length !== 2) return "got " + p.length + " pieces";
+          ctx.preA = p[0].layer;
+          ctx.preB = p[1].layer;
+          return true;
+        } },
+
+      { name: "both pieces really are selected (the rig AE needs)",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.comp, limit: 0 }; },
+        check: function (d, ctx) {
+          ctx.preLayerCount = d.numLayers;
+          var i, sel = 0;
+          for (i = 0; i < d.layers.length; i++) {
+            if (d.layers[i].selected) sel++;
+          }
+          return sel === 2 || "expected 2 selected layers, found " + sel;
+        } },
+
+      { name: "apply_preset touches ONLY the layer it was given",
+        tool: "apply_preset",
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: ctx.preA,
+                   preset: ctx.presetName };
+        },
+        check: function (d, ctx) {
+          if (d.applied.length !== 1) {
+            return "applied to " + d.applied.length + " layers";
+          }
+          if (d.applied[0].layer !== ctx.preA) {
+            return "landed on " + d.applied[0].layer;
+          }
+          if (!d.applied[0].effectsAdded &&
+              !d.applied[0].keysAndExpressionsAdded) {
+            return "reported success with nothing added";
+          }
+          if (d.layersAdded) return "invented " + d.layersAdded + " layer(s)";
+          return true;
+        } },
+
+      // The measured failure this whole design exists for: the OTHER
+      // selected layer must be untouched.
+      { name: "the other SELECTED layer got nothing",
+        tool: "list_properties",
+        args: function (ctx) {
+          // depth 1: the effect ROWS, not their parameters — the default
+          // depth of 2 counts every slider inside them (6 effects = 18
+          // rows) and would compare two different things.
+          return { comp: ctx.comp, layer: ctx.preB, path: "effects",
+                   depth: 1 };
+        },
+        check: function (d) {
+          return d.count === 0 ||
+                 "the bystander picked up " + d.count + " effect row(s)";
+        } },
+
+      { name: "…and no layer was invented, and the selection came back",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.comp, limit: 0 }; },
+        check: function (d, ctx) {
+          if (d.numLayers !== ctx.preLayerCount) {
+            return "layer count " + ctx.preLayerCount + " -> " + d.numLayers;
+          }
+          var i, sel = 0;
+          for (i = 0; i < d.layers.length; i++) {
+            if (d.layers[i].selected) sel++;
+          }
+          return sel === 2 || "selection is now " + sel + " layer(s)";
+        } },
+
+      // A Text preset on a NON-text layer has two real outcomes, both
+      // measured: one that carries expression controls installs those and
+      // none of the animation ("Alternating Characters In" on a solid:
+      // six sliders, census 2, against census 15 on a text layer), and one
+      // that does not ("Center Spiral In") changes nothing whatsoever.
+      // Which one AE ships first differs by install, so the step checks
+      // the INVARIANT instead of the outcome: whatever the tool says
+      // happened is what the layer really has.
+      { name: "a Text preset on a solid tells the truth either way",
+        batch: function (ctx) {
+          return [
+            { tool: "apply_preset", args: { comp: ctx.comp, layer: ctx.preB,
+                preset: ctx.textPreset } },
+            { tool: "list_properties", args: { comp: ctx.comp,
+                layer: ctx.preB, path: "effects", depth: 1 } }
+          ];
+        },
+        check: function (rows, ctx) {
+          if (!rows[1].ok) return "list_properties: " + rows[1].error;
+          var count = rows[1].data.count;
+          if (!rows[0].ok) {
+            var err = rows[0].error;
+            if (count !== 0) {
+              return "refused, but the layer gained " + count + " effect(s)";
+            }
+            return (err.indexOf(ctx.preB) !== -1 && /silent/i.test(err) &&
+                    /TEXT layer/.test(err)) ||
+                   "the refusal does not name the layer and the rule: " + err;
+          }
+          var d = rows[0].data, a = d.applied[0];
+          if (!a || a.layer !== ctx.preB) return "landed elsewhere";
+          if (!count && !a.keysAndExpressionsAdded) {
+            return "claimed success with nothing on the layer";
+          }
+          if (a.effectsAdded && a.effectsAdded.length !== count) {
+            return "reported " + a.effectsAdded.length + " effects, the " +
+                   "layer has " + count;
+          }
+          return (d.partialOnNonText && /text animators/i.test(d.partialNote ||
+                  "")) ||
+                 "a Text preset landed on a solid with no partial-landing " +
+                 "note";
+        } },
+
+      // Cameras and lights have no Effect Parade at all and took NOTHING
+      // from either kind of preset — the one guaranteed no-op, and so the
+      // one place the refusal path can be exercised on any install.
+      { name: "a camera takes no preset, and is told so",
+        batch: function (ctx) {
+          return [
+            { tool: "add_camera", args: { comp: ctx.comp,
+                name: "ST PreCam" } },
+            { tool: "apply_preset", args: { comp: ctx.comp,
+                layer: "ST PreCam", preset: ctx.presetName } },
+            { tool: "delete_layer", args: { comp: ctx.comp,
+                layer: "ST PreCam" } }
+          ];
+        },
+        check: function (rows) {
+          if (!rows[0].ok) return "add_camera: " + rows[0].error;
+          if (rows[1].ok) return "a camera accepted a preset";
+          var err = rows[1].error;
+          if (!/ST PreCam/.test(err) || !/camera/.test(err)) {
+            return "the refusal does not name the layer and its type: " + err;
+          }
+          if (!/silent/i.test(err)) return "does not explain AE's silence: " +
+            err;
+          return rows[2].ok || "cleanup: " + rows[2].error;
+        } },
+
+      { name: "the same preset on a TEXT layer applies",
+        batch: function (ctx) {
+          return [
+            { tool: "add_text_layer", args: { comp: ctx.comp,
+                text: "ST PreText" } },
+            { tool: "apply_preset", args: { comp: ctx.comp,
+                layer: "ST PreText", preset: ctx.textPreset } }
+          ];
+        },
+        check: function (rows) {
+          if (!rows[0].ok) return "add_text_layer: " + rows[0].error;
+          if (!rows[1].ok) return "apply_preset: " + rows[1].error;
+          var a = rows[1].data.applied[0];
+          if (a.type !== "text") return "type " + a.type;
+          return (a.keysAndExpressionsAdded > 0 || !!a.effectsAdded) ||
+                 "applied nothing to a layer it fits";
+        } },
+
+      { name: "an invented preset name is refused with a way back",
+        tool: "apply_preset",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: ctx.preA,
+                   preset: "Sparkle Burst Deluxe" };
+        },
+        check: function (err) {
+          return (/list_presets/.test(err) &&
+                  !/After Effects error/.test(err)) ||
+                 "leaks AE's own wording or offers no way back: " + err;
+        } },
+
+      { name: "cleanup: delete the preset rig",
+        batch: function (ctx) {
+          return [
+            { tool: "delete_layer", args: { comp: ctx.comp, layer: ctx.preA } },
+            { tool: "delete_layer", args: { comp: ctx.comp, layer: ctx.preB } },
+            { tool: "delete_layer",
+              args: { comp: ctx.comp, layer: "ST PreText" } }
+          ];
+        },
+        check: function (rows) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + i + ": " + rows[i].error;
+          }
+          return true;
+        } },
+
       // ---- comp-rename audit + bulk rename. A three-comp rig: one
       // plain, one nested (a utility), one named by an expression.
       //

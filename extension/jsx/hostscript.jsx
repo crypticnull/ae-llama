@@ -6194,9 +6194,9 @@ var AELL_PER_LAYER_LIST = [
 ];
 var AELL_PER_LAYER_READ_LIST = ["get_property", "list_properties"];
 var AELL_ALREADY_BATCHED_LIST = [
-  "apply_keyframe_ease", "distribute_property", "for_each_layer",
-  "grid_layout", "precompose", "remove_keyframes", "reorder_layers",
-  "set_keyframes", "set_solid_color", "stagger_layers"
+  "apply_keyframe_ease", "apply_preset", "distribute_property",
+  "for_each_layer", "grid_layout", "precompose", "remove_keyframes",
+  "reorder_layers", "set_keyframes", "set_solid_color", "stagger_layers"
 ];
 
 function AELL_nameSet(list) {
@@ -6362,6 +6362,372 @@ AELL_TOOLS.list_effects = function (args) {
       : "" });
 };
 
+/* ------------------------------------------------------- animation presets
+ *
+ * AE ships 679 .ffx files (measured, AE 2026) — behaviors, text animations,
+ * effect stacks, backgrounds. `layer.applyPreset(File)` reaches all of them,
+ * but only if it is called the way AE means it, and every one of the rules
+ * below was measured in the field because the API documents none of them:
+ *
+ * - applyPreset applies to the comp's SELECTION, not to the receiver. With
+ *   two layers selected, ONE call put the preset on BOTH. So the tool
+ *   selects exactly its target and restores the user's selection after.
+ * - With NOTHING selected it does not apply to the receiver either: AE
+ *   invents a comp-sized solid ("Solid 6"), applies the preset THERE and
+ *   leaves the layer alone. A naive call is therefore not a no-op — it is
+ *   litter.
+ * - Whether the comp is open in a viewer makes no difference (measured
+ *   both ways, identical), and comp.time is untouched.
+ * - A preset built for another layer type is a SILENT no-op: a Text preset
+ *   on a solid added no effect, no keyframe, no expression and threw
+ *   nothing. Only a before/after census can tell that apart from success,
+ *   which is why one runs here.
+ * - A bad path DOES throw ("Path is not valid"), so file errors are real.
+ * - One preset can add many effects (Backgrounds/Anime Radial: 10) and a
+ *   text preset can add ZERO effects and only keyframes — so "did it
+ *   work" counts effects AND expressions AND keys.
+ * - A locked layer still takes a preset (AE does not refuse), so the
+ *   result says so rather than pretending the lock held.
+ * - Cameras have no Effect Parade and took nothing at all.
+ * - File.name is URI-ENCODED ("Bungee%20In.ffx"); displayName is not.
+ * - The user's presets live under a "User Presets" folder inside any
+ *   Documents/Adobe/"After Effects…" folder, and Documents may itself be
+ *   redirected (it is OneDrive on the machine this was measured on),
+ *   so the path comes from Folder.myDocuments, never from a built string.
+ */
+
+var AELL_PRESET_CACHE = null;
+
+function AELL_presetRoots() {
+  var roots = [];
+  var i;
+  try {
+    var appRoot = new Folder(Folder.startup.fsName + "/Presets");
+    if (appRoot.exists) roots.push({ source: "app", folder: appRoot });
+  } catch (e1) {}
+  try {
+    var adobe = new Folder(Folder.myDocuments.fsName + "/Adobe");
+    if (adobe.exists) {
+      var kids = adobe.getFiles();
+      for (i = 0; i < kids.length; i++) {
+        if (!(kids[i] instanceof Folder)) continue;
+        if (!/^After Effects/i.test(String(kids[i].displayName))) continue;
+        var up = new Folder(kids[i].fsName + "/User Presets");
+        if (up.exists) roots.push({ source: "user", folder: up });
+      }
+    }
+  } catch (e2) {}
+  return roots;
+}
+
+/* 679 files walked in 117 ms (measured), but the model asks repeatedly —
+ * so it is walked once per session unless {refresh: true}. */
+function AELL_presetIndex(refresh) {
+  if (AELL_PRESET_CACHE && !refresh) return AELL_PRESET_CACHE;
+  var list = [];
+  var roots = AELL_presetRoots();
+
+  function walk(folder, source, category, depth) {
+    if (depth > 10 || list.length > 5000) return;
+    var kids;
+    try { kids = folder.getFiles(); } catch (eW) { return; }
+    if (!kids) return;
+    for (var i = 0; i < kids.length; i++) {
+      var k = kids[i];
+      var dn = String(k.displayName);
+      if (k instanceof Folder) {
+        walk(k, source, category ? category + "/" + dn : dn, depth + 1);
+      } else if (/\.ffx$/i.test(dn)) {
+        list.push({
+          name: dn.replace(/\.ffx$/i, ""),
+          category: category,
+          source: source,
+          file: k
+        });
+      }
+    }
+  }
+  for (var r = 0; r < roots.length; r++) {
+    walk(roots[r].folder, roots[r].source, "", 0);
+  }
+  AELL_PRESET_CACHE = list;
+  return list;
+}
+
+function AELL_presetCategories(list) {
+  var seen = {}, out = [];
+  for (var i = 0; i < list.length; i++) {
+    var c = list[i].category || "(root)";
+    var top = c.split("/")[0];
+    if (!seen[top]) { seen[top] = true; out.push(top); }
+  }
+  return out;
+}
+
+function AELL_presetPath(p) {
+  return (p.category ? p.category + "/" : "") + p.name;
+}
+
+/* Match a model-supplied name against the index. Returns
+ * {hit} | {choices} (ambiguous) | {near} (nothing matched). */
+function AELL_presetMatch(list, want) {
+  var raw = String(want == null ? "" : want);
+  var norm = raw.replace(/\\/g, "/").replace(/\.ffx$/i, "");
+  norm = norm.replace(/^\s+|\s+$/g, "").toLowerCase();
+  if (norm === "") return { near: [] };
+
+  var i, p, full, nm;
+  var fullExact = [], nameExact = [], fullSub = [], nameSub = [];
+  for (i = 0; i < list.length; i++) {
+    p = list[i];
+    full = AELL_presetPath(p).toLowerCase();
+    nm = p.name.toLowerCase();
+    if (full === norm) fullExact.push(p);
+    else if (nm === norm) nameExact.push(p);
+    else if (full.indexOf(norm) !== -1) fullSub.push(p);
+    else if (nm.indexOf(norm) !== -1) nameSub.push(p);
+  }
+  var tiers = [fullExact, nameExact, fullSub, nameSub];
+  for (i = 0; i < tiers.length; i++) {
+    if (tiers[i].length === 1) return { hit: tiers[i][0] };
+    if (tiers[i].length > 1) return { choices: tiers[i] };
+  }
+  // Nothing contained the whole string — offer whatever shares a word.
+  var words = norm.split(/[^a-z0-9]+/), near = [], seen = {};
+  for (i = 0; i < list.length && near.length < 10; i++) {
+    full = AELL_presetPath(list[i]).toLowerCase();
+    for (var w = 0; w < words.length; w++) {
+      if (words[w].length < 3) continue;
+      if (full.indexOf(words[w]) !== -1 && !seen[full]) {
+        seen[full] = true;
+        near.push(AELL_presetPath(list[i]));
+        break;
+      }
+    }
+  }
+  return { near: near };
+}
+
+AELL_TOOLS.list_presets = function (args) {
+  var list = AELL_presetIndex(!!args.refresh);
+  if (!list.length) {
+    return AELL_err("No .ffx presets found. Looked in AE's own " +
+      "Presets folder (" + Folder.startup.fsName + "\\Presets) and " +
+      "Documents\\Adobe\\After Effects*\\User Presets.");
+  }
+  var cats = AELL_presetCategories(list);
+  var filter = args.filter ? String(args.filter).toLowerCase() : "";
+  var wantCat = args.category
+    ? String(args.category).replace(/\\/g, "/").toLowerCase() : "";
+  var wantSrc = args.source ? String(args.source).toLowerCase() : "";
+  var offset = args.offset > 0 ? Math.round(args.offset) : 0;
+  var limit = AELL_listLimit(args.limit);
+  if (limit < 0) limit = list.length;
+
+  var hits = [], total = 0;
+  for (var i = 0; i < list.length; i++) {
+    var p = list[i];
+    var full = AELL_presetPath(p);
+    if (wantSrc && p.source !== wantSrc) continue;
+    if (wantCat && (p.category || "").toLowerCase().indexOf(wantCat) !== 0) {
+      continue;
+    }
+    if (filter && full.toLowerCase().indexOf(filter) === -1) continue;
+    total++;
+    if (total > offset && hits.length < limit) {
+      hits.push({ name: p.name, category: p.category, source: p.source });
+    }
+  }
+  if (total === 0) {
+    return AELL_err("No preset matches " +
+      (filter ? "'" + args.filter + "'" : "that") +
+      (wantCat ? " in category '" + args.category + "'" : "") +
+      ". " + list.length + " presets are installed. Categories: " +
+      cats.join(", ") + ".");
+  }
+  return AELL_okay({
+    total: total, offset: offset, listed: hits.length,
+    installed: list.length,
+    categories: cats,
+    presets: hits,
+    note: total > offset + hits.length
+      ? "More matches — pass {offset: " + (offset + hits.length) +
+        "} or a narrower {filter}"
+      : "Apply one with apply_preset {layer, preset: \"" +
+        (hits.length ? AELL_presetPath(
+          { category: hits[0].category, name: hits[0].name }) : "") + "\"}"
+  });
+};
+
+/* Every expression and keyframe on a layer, counted. The only way to tell
+ * a preset that did nothing from one that worked (AE reports neither). */
+function AELL_presetCensus(layer) {
+  var n = 0;
+  function rec(group, depth) {
+    if (depth > 6) return;
+    var count = 0;
+    try { count = group.numProperties; } catch (e0) { return; }
+    for (var i = 1; i <= count; i++) {
+      var p = null;
+      try { p = group.property(i); } catch (e1) { continue; }
+      if (!p) continue;
+      try {
+        if (p.propertyType === PropertyType.PROPERTY) {
+          if (p.expression) n++;
+          n += p.numKeys;
+        } else {
+          rec(p, depth + 1);
+        }
+      } catch (e2) {}
+    }
+  }
+  rec(layer, 0);
+  return n;
+}
+
+AELL_TOOLS.apply_preset = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  if (args.preset === null || typeof args.preset === "undefined" ||
+      args.preset === "") {
+    return AELL_err("'preset' is required — a preset name or " +
+                    "\"Category/Name\". Use list_presets to find one.");
+  }
+  var list = AELL_presetIndex(false);
+  if (!list.length) {
+    return AELL_err("No .ffx presets are installed on this machine.");
+  }
+  var m = AELL_presetMatch(list, args.preset);
+  if (m.choices) {
+    var names = [];
+    for (var c = 0; c < m.choices.length && c < 12; c++) {
+      names.push(AELL_presetPath(m.choices[c]));
+    }
+    return AELL_err("'" + args.preset + "' matches " + m.choices.length +
+      " presets — pass one of these exactly: " + names.join(", ") +
+      (m.choices.length > 12 ? ", …" : ""));
+  }
+  if (!m.hit) {
+    var cats = AELL_presetCategories(list);
+    return AELL_err("No preset named '" + args.preset + "'. " +
+      (m.near && m.near.length
+        ? "Closest installed: " + m.near.join(", ") + "."
+        : list.length + " presets are installed; categories: " +
+          cats.join(", ") + ".") +
+      " Use list_presets {filter} to search.");
+  }
+  var chosen = m.hit;
+  if (!chosen.file.exists) {
+    return AELL_err("Preset file has gone missing since it was indexed: " +
+      chosen.file.fsName + ". Call list_presets {refresh: true}.");
+  }
+
+  var layers = AELL_layersOrSelection(comp, args);
+  var results = [], skipped = [], locked = [], i, j;
+  var layersBefore = comp.numLayers;
+
+  for (i = 0; i < layers.length; i++) {
+    var layer = layers[i];
+    var fxBefore = AELL_effectNames(layer);
+    var censusBefore = AELL_presetCensus(layer);
+    var isLocked = false;
+    try { isLocked = !!layer.locked; } catch (eL) {}
+
+    try {
+      AELL_keepSelection(comp, function () {
+        for (var k = 1; k <= comp.numLayers; k++) {
+          comp.layer(k).selected = false;
+        }
+        layer.selected = true;
+        layer.applyPreset(chosen.file);
+        return null;
+      });
+    } catch (eA) {
+      return AELL_err("AE refused the preset file '" +
+        AELL_presetPath(chosen) + "': " +
+        (eA && eA.message ? eA.message : String(eA)));
+    }
+
+    var fxAfter = AELL_effectNames(layer);
+    var censusAfter = AELL_presetCensus(layer);
+    var added = [];
+    var had = {};
+    for (j = 0; j < fxBefore.length; j++) had[fxBefore[j]] = true;
+    for (j = 0; j < fxAfter.length; j++) {
+      if (!had[fxAfter[j]] && added.length < 12) added.push(fxAfter[j]);
+    }
+    var animAdded = censusAfter - censusBefore;
+    var changed = added.length > 0 || animAdded !== 0 ||
+                  fxAfter.length !== fxBefore.length;
+    if (changed) {
+      var row = { layer: layer.name, type: AELL_layerType(layer) };
+      if (added.length) row.effectsAdded = added;
+      if (animAdded > 0) row.keysAndExpressionsAdded = animAdded;
+      results.push(row);
+      if (isLocked) locked.push(layer.name);
+    } else {
+      skipped.push({ layer: layer.name, type: AELL_layerType(layer),
+                     reason: "AE applied nothing" });
+    }
+  }
+
+  if (results.length === 0) {
+    var types = [];
+    var seenT = {};
+    for (i = 0; i < skipped.length; i++) {
+      if (!seenT[skipped[i].type]) {
+        seenT[skipped[i].type] = true;
+        types.push(skipped[i].type);
+      }
+    }
+    return AELL_err("Preset '" + AELL_presetPath(chosen) + "' changed " +
+      "nothing on " + (skipped.length === 1
+        ? "layer '" + skipped[0].layer + "' (" + types.join(", ") + ")"
+        : skipped.length + " layers (" + types.join(", ") + ")") +
+      ". AE applies a preset built for another layer type as a SILENT " +
+      "no-op — a Text preset needs a TEXT layer, and cameras/lights take " +
+      "no effects at all. Pick a preset from a category that fits, or a " +
+      "different layer.");
+  }
+
+  var out = { preset: chosen.name, category: chosen.category,
+              source: chosen.source, applied: results };
+  // A Text preset on a non-text layer is not simply refused-or-applied.
+  // Measured in AE 2026: "Alternating Characters In" on a SOLID installs
+  // its six expression-control sliders and two keyframes and stops there
+  // (census 2), where the same preset on a TEXT layer builds the whole
+  // animator (census 15) — while "Center Spiral In", which carries no
+  // controls, does nothing at all. So a partial landing is real, and
+  // reporting it as a plain success would be the quiet lie this project
+  // does not ship.
+  if (/^Text($|\/)/i.test(String(chosen.category || ""))) {
+    var nonText = [];
+    for (i = 0; i < results.length; i++) {
+      if (results[i].type !== "text") nonText.push(results[i].layer);
+    }
+    if (nonText.length) {
+      out.partialOnNonText = nonText;
+      out.partialNote = "This is a Text preset. On a non-text layer only " +
+        "its expression CONTROLS can land — the animation itself lives in " +
+        "text animators, which only a TEXT layer has. Apply it to a text " +
+        "layer for the effect the preset is named after.";
+    }
+  }
+  if (skipped.length) {
+    out.skipped = skipped;
+    out.note = skipped.length + " layer(s) got nothing — the preset does " +
+      "not fit that layer type.";
+  }
+  if (locked.length) {
+    out.lockedButApplied = locked;
+    out.lockNote = "AE does NOT block a preset on a locked layer " +
+      "(measured) — those layers were changed.";
+  }
+  if (comp.numLayers !== layersBefore) {
+    out.layersAdded = comp.numLayers - layersBefore;
+  }
+  return AELL_okay(out);
+};
+
 // Tools that modify the project get wrapped in an undo group.
 var AELL_MUTATING = {
   create_comp: true, add_text_layer: true, add_solid: true,
@@ -6390,7 +6756,8 @@ var AELL_MUTATING = {
   // opens is then empty, and an empty group registers no undo step at all
   // (measured), so a preview still costs the user nothing.
   rename_comps: true,
-  set_solid_color: true
+  set_solid_color: true,
+  apply_preset: true
 };
 
 // --------------------------------------------------------------- entry point
