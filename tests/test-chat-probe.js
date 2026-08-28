@@ -23,6 +23,21 @@
 //     against the user's live project.
 "use strict";
 
+// The probe mirrors main.js at load: it seeds the bundled workflow
+// templates into the data root. On a machine with neither APPDATA nor
+// USERPROFILE (Linux CI, the remote session) settings.js's fallback
+// chain lands on the EXTENSION path, so the seed appeared INSIDE the
+// repo as extension/AE-Llama — working-tree pollution a packager run
+// from the same checkout would ship. Give the fallback a disposable
+// root before the probe loads.
+if (!process.env.APPDATA && !process.env.USERPROFILE) {
+  const osX = require("os");
+  const fsX = require("fs");
+  const pathX = require("path");
+  process.env.APPDATA =
+    fsX.mkdtempSync(pathX.join(osX.tmpdir(), "aell-data-"));
+}
+
 const probe = require("../scripts/chat-probe.js");
 const { STEPS, squares, undoProbe, SIG_FN, READ_COMP } = probe;
 
