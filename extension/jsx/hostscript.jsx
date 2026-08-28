@@ -3423,21 +3423,103 @@ AELL_TOOLS.scale_comp = function (args) {
     return true;
   }
 
+  /* A light's pixel-valued options (Radius, Falloff Distance, Shadow
+   * Diffusion) are the same trap as camera Zoom, one layer type over:
+   * outside the Transform group, so a parent never passes the resize
+   * down, and left alone a halved comp keeps a 300px falloff radius
+   * lighting a 500px comp. AE's own Scale Composition script leaves them
+   * behind; this one scales them and says which. Only the options the
+   * light's TYPE and FALLOFF actually put in play are touched — writing
+   * a hidden one throws. A zero (Shadow Diffusion's default) scales to
+   * zero, so it is left alone rather than reported as work done.
+   */
+  function AELL_relight(L) {
+    var kind = AELL_lightKindOf(L);
+    if (!kind) return null;
+    var opts = null;
+    try { opts = L.property("ADBE Light Options Group"); } catch (eG) {}
+    if (!opts) return null;
+    var falloffs = AELL_lightFalloffs(opts);
+    var done = [], i, o, prop, n;
+    for (i = 0; i < AELL_LIGHT_PIXEL_OPTS.length; i++) {
+      o = AELL_LIGHT_PIXEL_OPTS[i];
+      if (!AELL_lightAccepts(o.on, kind)) continue;
+      if (o.falloff && !AELL_falloffInPlay(o.falloff, falloffs)) continue;
+      prop = null;
+      try { prop = opts.property(o.mn); } catch (eO) {}
+      if (!prop) continue;
+      if (AELL_driven(prop)) {
+        // An expression on a light option swallows the write exactly as
+        // one on Position does, but it is not a transform and saying
+        // "this layer will not move" about it would be wrong.
+        lightProblems.push(L.name + " " + o.label + " (" + kind +
+          " light): expression-driven, so the resize cannot change it");
+        continue;
+      }
+      try {
+        n = prop.numKeys;
+        if (!n && !prop.value) continue;
+      } catch (eN) { continue; }
+      try {
+        AELL_scalePropValues(prop, function (v) { return v * s; }, s,
+                             L.name + " " + o.label, easeProblems);
+        done.push(o.label);
+      } catch (eW) {
+        // The table said this one is in play, so a refusal is news — an
+        // unscaled pixel option re-lights the shot silently. The one way
+        // it happens: Falloff Type is itself KEYFRAMED, and AE hides
+        // Radius / Falloff Distance whenever the falloff UNDER THE
+        // PLAYHEAD is one that does not use them (measured: keys saying
+        // smooth later do not open the gate now).
+        lightProblems.push(L.name + " " + o.label + " (" + kind +
+          " light): " + (eW && eW.message ? eW.message : String(eW)) +
+          (falloffs.keyed
+            ? " Falloff is keyframed and the one under the playhead hides" +
+              " this option; move the playhead to a time that uses it and" +
+              " re-run."
+            : ""));
+      }
+    }
+    return { kind: kind, scaled: done };
+  }
+
   var scaled = 0, inherited = 0, i;
   var skipped = [], drivenBy = [], rezoomed = [], easeProblems = [];
+  var relit = [], nothingToScale = [], lightProblems = [];
+
+  /* One place to run AELL_relight and record what it touched, so the
+   * parented and unparented paths cannot drift apart — light options are
+   * NOT inherited, so both paths owe a light the same write. */
+  function AELL_noteRelit(L) {
+    var r = AELL_relight(L);
+    if (r && r.scaled.length) {
+      relit.push(L.name + " (" + r.scaled.join(", ") + ")");
+    }
+  }
   for (i = 1; i <= comp.numLayers; i++) {
     var L = comp.layer(i);
     if (L.parent) {
       inherited++;
       try {
         if (AELL_rezoom(L)) rezoomed.push(L.name);
+        AELL_noteRelit(L);
       } catch (eP) {
-        skipped.push(L.name + " (zoom): " +
+        skipped.push(L.name + " (zoom/light options): " +
           (eP && eP.message ? eP.message : String(eP)));
       }
       continue;
     }
     try {
+      // An ambient or environment light has no position, no aim and no
+      // pixel option — AE hides all of it. Writing Position anyway threw
+      // "the property or a parent property is hidden", and the layer was
+      // then reported as one that could NOT be scaled, which reads as a
+      // failure over a light where there was never anything to do.
+      var lightKind = AELL_lightKindOf(L);
+      if (lightKind && !AELL_lightHasGeometry(lightKind)) {
+        nothingToScale.push(L.name + " (" + lightKind + " light)");
+        continue;
+      }
       var posProp = AELL_resolveProperty(L, "position");
       if (AELL_driven(posProp)) drivenBy.push(L.name);
       AELL_scalePropValues(posProp, AELL_recentre, s,
@@ -3485,6 +3567,17 @@ AELL_TOOLS.scale_comp = function (args) {
           aims = typeof AutoOrientType !== "undefined" &&
                  L.autoOrient === AutoOrientType.CAMERA_OR_POINT_OF_INTEREST;
         } catch (eO) {}
+        // autoOrient lies on a LIGHT: measured in real AE 2026, a point,
+        // ambient or environment light reports 4214
+        // (CAMERA_OR_POINT_OF_INTEREST) exactly like a two-node spot, and
+        // then refuses the Point of Interest write because AE hides it.
+        // Only parallel and spot lights actually aim. Unguarded, an
+        // unparented point light threw here AFTER its Position had been
+        // written and was reported as a layer that could not be scaled.
+        if (aims && lightKind &&
+            !AELL_lightAccepts(AELL_LIGHT_XFORM.pointOfInterest.on, lightKind)) {
+          aims = false;
+        }
         if (aims) {
           var poi = L.property("ADBE Transform Group")
                      .property("ADBE Anchor Point");
@@ -3502,6 +3595,7 @@ AELL_TOOLS.scale_comp = function (args) {
       // lands in layersSkipped instead of vanishing and reporting a
       // success that did not happen.
       AELL_rezoom(L);
+      AELL_noteRelit(L);
       scaled++;
     } catch (e3) {
       // Do NOT fold failures into the inherited count — a locked layer or
@@ -3524,6 +3618,28 @@ AELL_TOOLS.scale_comp = function (args) {
     out.note += ". WARNING: keyframe easing could not be rescaled on " +
       easeProblems.length + " property/properties, so their motion will " +
       "over- or undershoot: " + easeProblems.join("; ");
+  }
+  if (relit.length) {
+    // Reported on their own: a light's Transform may well have been
+    // inherited or absent, and only its pixel options needed a write.
+    out.lightOptionsRescaled = relit;
+    out.note += ". Pixel-valued light options rescaled on " +
+      relit.join(", ") + " (nothing in Light Options is inherited from " +
+      "a parent, and AE's own Scale Composition script leaves them behind)";
+  }
+  if (lightProblems.length) {
+    // A pixel option AE refused to rescale keeps the OLD comp's
+    // distance, so the light renders differently at the new size.
+    out.lightOptionsNotScaled = lightProblems;
+    out.note += ". WARNING: " + lightProblems.length + " light option(s) " +
+      "kept the old comp's pixel value: " + lightProblems.join("; ");
+  }
+  if (nothingToScale.length) {
+    // NOT a failure and NOT a success: AE hides everything scalable on
+    // these, so naming them stops the count from looking short.
+    out.layersWithNothingToScale = nothingToScale;
+    out.note += ". Nothing to scale on " + nothingToScale.join(", ") +
+      " (AE hides position, aim and every pixel option on these types)";
   }
   if (rezoomed.length) {
     // Reported separately: their TRANSFORM really was inherited, only the
@@ -4226,6 +4342,84 @@ var AELL_LIGHT_XFORM = {
   position:        { mn: "ADBE Position",     on: "parallel spot point" },
   pointOfInterest: { mn: "ADBE Anchor Point", on: "parallel spot" }
 };
+
+/* The Light Options that are measured in PIXELS, and the gate each one
+ * sits behind. They are what a comp resize owes a light, and they live
+ * OUTSIDE the Transform group — so, exactly like camera Zoom, no parent
+ * ever passes a resize down to them.
+ *
+ * Measured in real AE 2026 (probes 5-7, WORKPLAN-LOG 2026-08-28):
+ *   Radius            parallel/spot/point, while Falloff is smooth or
+ *                     inverseSquareClamped
+ *   Falloff Distance  parallel/spot/point, while Falloff is smooth ONLY
+ *   Shadow Diffusion  spot/point, any falloff, shadows on or off
+ * Writing one AE currently hides throws "the property or a parent
+ * property is hidden", and the flags lie about it — a hidden Radius
+ * still reports elided=false and enabled=true — so the light TYPE plus
+ * the falloff VALUE is the only reliable test, the same lesson cameras
+ * taught about their hidden Scale.
+ *
+ * Everything else in the group is a percentage, an angle or a colour,
+ * and a resize must NOT touch those. Falloff is stored as a number:
+ * 1 none, 2 smooth, 3 inverseSquareClamped. */
+var AELL_LIGHT_PIXEL_OPTS = [
+  { mn: "ADBE Light Falloff Start",    label: "Radius",
+    on: "parallel spot point", falloff: "2 3" },
+  { mn: "ADBE Light Falloff Distance", label: "Falloff Distance",
+    on: "parallel spot point", falloff: "2" },
+  { mn: "ADBE Light Shadow Diffusion", label: "Shadow Diffusion",
+    on: "spot point",          falloff: "" }
+];
+
+/* The kind name this file speaks, read back off a real layer. */
+function AELL_lightKindOf(L) {
+  var t;
+  if (typeof LightType === "undefined") return "";
+  try { t = L.lightType; } catch (eT) { return ""; }
+  if (t === LightType.PARALLEL) return "parallel";
+  if (t === LightType.SPOT) return "spot";
+  if (t === LightType.POINT) return "point";
+  if (t === LightType.AMBIENT) return "ambient";
+  if (typeof LightType.ENVIRONMENT !== "undefined" &&
+      t === LightType.ENVIRONMENT) return "environment";
+  return "";
+}
+
+/* Ambient and environment lights light the whole scene from nowhere: AE
+ * hides their Position, their aim and every pixel option, so a resize has
+ * literally nothing to scale on them. Writing anyway is what used to make
+ * scale_comp report an ambient light as a FAILURE. */
+function AELL_lightHasGeometry(kind) {
+  return AELL_lightAccepts(AELL_LIGHT_XFORM.position.on, kind);
+}
+
+/* Every falloff value IN PLAY on this light. Falloff Type is itself
+ * keyframeable (measured), so a light can be smooth for part of its life;
+ * when it is keyed, the keys are the answer, not the value under the
+ * playhead. */
+function AELL_lightFalloffs(opts) {
+  var out = { values: [], keyed: false }, p = null, n = 0, k;
+  try { p = opts.property("ADBE Light Falloff Type"); } catch (eP) { return out; }
+  if (!p) return out;
+  try { n = p.numKeys; } catch (eN) { n = 0; }
+  if (n) {
+    out.keyed = true;
+    for (k = 1; k <= n; k++) {
+      try { out.values.push(String(p.keyValue(k))); } catch (eK) {}
+    }
+    return out;
+  }
+  try { out.values.push(String(p.value)); } catch (eV) {}
+  return out;
+}
+
+/* Does any falloff this light actually uses open the gate? */
+function AELL_falloffInPlay(gate, falloffs) {
+  for (var i = 0; i < falloffs.values.length; i++) {
+    if (AELL_lightAccepts(gate, falloffs.values[i])) return true;
+  }
+  return false;
+}
 
 /* "a spot" but "an ambient" — these strings are what the model reads. */
 function AELL_lightArticle(kind) {

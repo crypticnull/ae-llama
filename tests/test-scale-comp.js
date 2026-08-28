@@ -204,6 +204,78 @@ Cam.prototype.setAutoOrient = function (mode) {
     mode !== AutoOrientType.CAMERA_OR_POINT_OF_INTEREST;
 };
 
+// A LIGHT. What matters here is HIDDEN-ness: AE hides every option a
+// light's type and falloff do not put in play, a hidden property still
+// resolves and still reports elided=false / enabled=true, and only the
+// WRITE reveals it. Every rule below was measured in real AE 2026
+// (probes 5-9, WORKPLAN-LOG 2026-08-28):
+//   Radius            parallel/spot/point, Falloff smooth(2) or
+//                     inverseSquareClamped(3)
+//   Falloff Distance  parallel/spot/point, Falloff smooth(2) ONLY
+//   Shadow Diffusion  spot/point, any falloff, shadows on or off
+//   Position          hidden on ambient/environment
+//   Point of Interest hidden on point/ambient/environment -- and those
+//                     lights STILL report autoOrient 4214, exactly like
+//                     a two-node spot, so the flag cannot be trusted.
+//   Falloff Type is itself keyframeable, and the gate follows the value
+//   UNDER THE PLAYHEAD -- a later key saying "smooth" does not open it.
+const LightType = { PARALLEL: 4411, SPOT: 4412, POINT: 4413,
+                    AMBIENT: 4414, ENVIRONMENT: 4416 };
+
+function Light(name, comp, kind, falloff) {
+  Layer.call(this, name, comp);
+  this.threeDLayer = true;
+  this.kind = kind;
+  this.lightType = LightType[kind.toUpperCase()];
+  this._transform["ADBE Position"] = new Prop([400, 300, -500]);
+  this._transform["ADBE Anchor Point"] = new Prop([400, 300, 0]);
+  // Measured: EVERY light type reports this, aiming or not.
+  this.autoOrient = AutoOrientType.CAMERA_OR_POINT_OF_INTEREST;
+  this._transform["ADBE Scale"].hidden = true;      // as on a camera
+  const noGeom = kind === "ambient" || kind === "environment";
+  this._transform["ADBE Position"].hidden = noGeom;
+  this._transform["ADBE Anchor Point"].hidden = noGeom || kind === "point";
+
+  const o = {
+    "ADBE Light Intensity": new Prop(100),
+    "ADBE Light Cone Angle": new Prop(90),
+    "ADBE Light Cone Feather 2": new Prop(50),
+    "ADBE Light Falloff Type": new Prop(falloff || 1),
+    "ADBE Light Falloff Start": new Prop(300),
+    "ADBE Light Falloff Distance": new Prop(400),
+    "ADBE Light Shadow Darkness": new Prop(100),
+    "ADBE Light Shadow Diffusion": new Prop(60)
+  };
+  this._opts = o;
+  const self = this;
+  const ft = o["ADBE Light Falloff Type"];
+  // The falloff AE is showing right now: with keys, the value under the
+  // playhead (key 1 here), otherwise the static value.
+  const nowFalloff = () => (ft.numKeys ? ft._keyValues[0] : ft._value);
+  const gate = (types, falloffs) => ({
+    get() {
+      if (types.indexOf(self.kind) === -1) return true;
+      return falloffs ? falloffs.indexOf(nowFalloff()) === -1 : false;
+    }
+  });
+  Object.defineProperty(o["ADBE Light Falloff Start"], "hidden",
+    gate(["parallel", "spot", "point"], [2, 3]));
+  Object.defineProperty(o["ADBE Light Falloff Distance"], "hidden",
+    gate(["parallel", "spot", "point"], [2]));
+  Object.defineProperty(o["ADBE Light Shadow Diffusion"], "hidden",
+    gate(["spot", "point"], null));
+}
+Light.prototype = Object.create(Layer.prototype);
+Light.prototype.constructor = Light;
+Object.setPrototypeOf(Light.prototype, LightLayer.prototype);
+Light.prototype.property = function (name) {
+  if (name === "ADBE Light Options Group") {
+    const o = this._opts;
+    return { property(n) { return o[n] || null; } };
+  }
+  return Layer.prototype.property.call(this, name);
+};
+
 function Comp(name, w, h) {
   this.name = name; this._layers = []; this.time = 0;
   this.width = w; this.height = h;
@@ -313,8 +385,63 @@ gs.addKey(0, [100, 100, 100], { inSpeed: 40, outSpeed: 40,
 const camKid = new Cam("Camera Rigged", comp);
 camKid.parent = mid;
 
+// ---- lights: pixel options live OUTSIDE Transform ---------------------
+// Radius, Falloff Distance and Shadow Diffusion are all measured in
+// PIXELS, and a resize used to leave every one of them behind -- so a
+// halved comp kept a 300px falloff radius, exactly the camera-zoom trap
+// one layer type over. AE's own Scale Composition script leaves them too.
+const spot = new Light("Spot", comp, "spot", 2);          // smooth
+spot._opts["ADBE Light Falloff Start"]._value = 300;
+spot._opts["ADBE Light Falloff Distance"]._value = 400;
+spot._opts["ADBE Light Shadow Diffusion"]._value = 60;
+// inverseSquareClamped uses Radius but NOT Falloff Distance: the second
+// is hidden, so scaling it would throw and it must be left alone.
+const pointLight = new Light("Point", comp, "point", 3);
+pointLight._opts["ADBE Light Falloff Start"]._value = 200;
+pointLight._opts["ADBE Light Falloff Distance"]._value = 500;
+pointLight._opts["ADBE Light Shadow Diffusion"]._value = 80;
+// A parallel light has Radius and Falloff Distance but NO shadow
+// diffusion, and its default diffusion of 0 would scale to 0 anyway.
+const parLight = new Light("Par", comp, "parallel", 2);
+parLight._opts["ADBE Light Falloff Start"]._value = 250;
+parLight._opts["ADBE Light Falloff Distance"]._value = 350;
+parLight._opts["ADBE Light Shadow Diffusion"]._value = 0;
+// Falloff 'none' hides both distances; only the shadow blur is in play.
+const plainLight = new Light("Plain", comp, "spot", 1);
+plainLight._opts["ADBE Light Shadow Diffusion"]._value = 20;
+// An ambient light has no position, no aim and no pixel option. Writing
+// Position anyway threw, and the light was then reported as a layer that
+// could NOT be scaled -- a failure over a light with nothing to do.
+const ambLight = new Light("Amb", comp, "ambient", 1);
+// A light parented to a null: its TRANSFORM is inherited, its light
+// options are not -- the same asymmetry as a parented camera's zoom.
+const litKid = new Light("Lit Rigged", comp, "spot", 2);
+litKid.parent = mid;
+litKid._opts["ADBE Light Falloff Start"]._value = 600;
+// A KEYFRAMED Radius: the keys are pixels too.
+const keyedLight = new Light("Keyed", comp, "spot", 2);
+const kr = keyedLight._opts["ADBE Light Falloff Start"];
+kr.addKey(0, 300).addKey(1, 600);
+// Falloff Type keyframed none -> smooth. AE hides Radius while the
+// playhead sits on the 'none' key, so the write is REFUSED even though
+// the light really does use a radius later. That is a value left at the
+// old comp's scale, and it has to be reported, not swallowed.
+const keyedFalloff = new Light("Keyed Falloff", comp, "spot", 1);
+keyedFalloff._opts["ADBE Light Falloff Type"].addKey(0, 1).addKey(2, 2);
+// A spot whose only in-play option is ZERO: 0 scales to 0, so there is
+// nothing to write and nothing to claim.
+const zeroLight = new Light("Zero", comp, "spot", 1);
+zeroLight._opts["ADBE Light Shadow Diffusion"]._value = 0;
+// An expression on a light option swallows the write like one on
+// Position does.
+const drivenLight = new Light("Driven", comp, "spot", 2);
+drivenLight._opts["ADBE Light Shadow Diffusion"].expressionEnabled = true;
+
 comp._layers.push(mid, corner, cam, cam1, rigged, child, locked,
-                  curved, held, grown, camKid);
+                  curved, held, grown, camKid,
+                  spot, pointLight, parLight, plainLight, ambLight,
+                  litKid, keyedLight, keyedFalloff, zeroLight,
+                  drivenLight);
 
 // 3840x2160 -> 1920x1080 is exactly half.
 const r = call("scale_comp", { width: 1920, height: 1080 });
@@ -459,6 +586,112 @@ assert(near(T(camKid)["ADBE Position"].value[2], -1000),
        "parented camera's TRANSFORM is still left to its parent (got " +
        T(camKid)["ADBE Position"].value + ")");
 
+// ---- lights ----------------------------------------------------------
+const O = (l, n) => l._opts[n].value;
+assert(near(O(spot, "ADBE Light Falloff Start"), 150) &&
+       near(O(spot, "ADBE Light Falloff Distance"), 200) &&
+       near(O(spot, "ADBE Light Shadow Diffusion"), 30),
+       "a spot light's pixel options all halve (got radius " +
+       O(spot, "ADBE Light Falloff Start") + " / distance " +
+       O(spot, "ADBE Light Falloff Distance") + " / diffusion " +
+       O(spot, "ADBE Light Shadow Diffusion") + ")");
+assert(near(O(spot, "ADBE Light Cone Angle"), 90) &&
+       near(O(spot, "ADBE Light Cone Feather 2"), 50) &&
+       near(O(spot, "ADBE Light Intensity"), 100),
+       "angles and percentages are NOT scaled (got cone " +
+       O(spot, "ADBE Light Cone Angle") + " / feather " +
+       O(spot, "ADBE Light Cone Feather 2") + " / intensity " +
+       O(spot, "ADBE Light Intensity") + ")");
+assert(near(O(pointLight, "ADBE Light Falloff Start"), 100) &&
+       near(O(pointLight, "ADBE Light Falloff Distance"), 500),
+       "inverseSquareClamped scales Radius and leaves the HIDDEN Falloff " +
+       "Distance alone (got " +
+       O(pointLight, "ADBE Light Falloff Start") + " / " +
+       O(pointLight, "ADBE Light Falloff Distance") + ")");
+assert(near(O(parLight, "ADBE Light Falloff Start"), 125) &&
+       near(O(parLight, "ADBE Light Falloff Distance"), 175),
+       "a parallel light scales both distances (got " +
+       O(parLight, "ADBE Light Falloff Start") + " / " +
+       O(parLight, "ADBE Light Falloff Distance") + ")");
+assert(near(O(plainLight, "ADBE Light Falloff Start"), 300) &&
+       near(O(plainLight, "ADBE Light Shadow Diffusion"), 10),
+       "falloff 'none' hides the distances, so only the shadow blur " +
+       "scales (got radius " + O(plainLight, "ADBE Light Falloff Start") +
+       " / diffusion " + O(plainLight, "ADBE Light Shadow Diffusion") + ")");
+const relit = (d.lightOptionsRescaled || []).join(" | ");
+assert(/Spot \(Radius, Falloff Distance, Shadow Diffusion\)/.test(relit),
+       "the result names each option it rescaled (got " + relit + ")");
+assert(relit.indexOf("Par (Radius, Falloff Distance)") !== -1,
+       "a parallel light's hidden Shadow Diffusion is not claimed (got " +
+       relit + ")");
+assert(relit.indexOf("Zero") === -1 &&
+       (d.lightOptionsNotScaled || []).join(" ").indexOf("Zero") === -1,
+       "a light whose only in-play option is 0 is claimed neither as " +
+       "rescaled nor as refused -- 0 scales to 0 (got " + relit + ")");
+
+// Ambient: nothing to scale is not the same as a failure.
+assert((d.layersSkipped || []).join(" ").indexOf("Amb") === -1,
+       "an ambient light is NOT reported as a failed layer (got " +
+       JSON.stringify(d.layersSkipped) + ")");
+assert(Array.isArray(d.layersWithNothingToScale) &&
+       d.layersWithNothingToScale.join(" ").indexOf("Amb") !== -1,
+       "an ambient light is named as having nothing to scale (got " +
+       JSON.stringify(d.layersWithNothingToScale) + ")");
+assert(near(T(ambLight)["ADBE Position"].value[0], 400),
+       "an ambient light's hidden Position is left alone (got " +
+       T(ambLight)["ADBE Position"].value + ")");
+
+// A POINT light reports autoOrient 4214 like a two-node spot and then
+// refuses the Point of Interest write. Trusting the flag threw AFTER
+// Position had been written and lost the layer to layersSkipped.
+assert(near(T(pointLight)["ADBE Position"].value[2], -250),
+       "a point light still scales its Position (got " +
+       T(pointLight)["ADBE Position"].value + ")");
+assert(near(T(pointLight)["ADBE Anchor Point"].value[0], 400),
+       "a point light's HIDDEN Point of Interest is left alone (got " +
+       T(pointLight)["ADBE Anchor Point"].value + ")");
+assert((d.layersSkipped || []).join(" ").indexOf("Point") === -1,
+       "a point light is not reported as skipped (got " +
+       JSON.stringify(d.layersSkipped) + ")");
+assert(near(T(spot)["ADBE Anchor Point"].value[0], 200),
+       "a SPOT light does aim, so its Point of Interest is re-centred " +
+       "(got " + T(spot)["ADBE Anchor Point"].value + ")");
+
+// Parented: transform inherited, light options are not.
+assert(near(O(litKid, "ADBE Light Falloff Start"), 300),
+       "a PARENTED light still rescales its pixel options -- nothing in " +
+       "Light Options is inherited (got " +
+       O(litKid, "ADBE Light Falloff Start") + ")");
+assert(near(T(litKid)["ADBE Position"].value[2], -500),
+       "a parented light's TRANSFORM is still left to its parent (got " +
+       T(litKid)["ADBE Position"].value + ")");
+assert(relit.indexOf("Lit Rigged") !== -1,
+       "the parented light is named too, not counted as scaled (got " +
+       relit + ")");
+
+// Keyframed pixels are pixels.
+assert(near(kr.keyValue(1), 150) && near(kr.keyValue(2), 300),
+       "a keyframed Radius scales at every key (got " + kr.keyValue(1) +
+       " / " + kr.keyValue(2) + ")");
+
+// Refusals are named, never swallowed.
+const lp = (d.lightOptionsNotScaled || []).join(" | ");
+assert(/Keyed Falloff Radius/.test(lp) && /playhead/.test(lp),
+       "a keyframed Falloff hides Radius under the playhead, and the " +
+       "refusal is reported with the way out (got " + lp + ")");
+assert(near(O(keyedFalloff, "ADBE Light Falloff Start"), 300),
+       "and the refused value really did keep the old comp's pixels " +
+       "(got " + O(keyedFalloff, "ADBE Light Falloff Start") + ")");
+assert(/Driven Shadow Diffusion/.test(lp) && /expression-driven/.test(lp),
+       "an expression-driven light option is reported as such, not as a " +
+       "moved transform (got " + lp + ")");
+assert(near(O(drivenLight, "ADBE Light Shadow Diffusion"), 60),
+       "the expression-driven option is not written (got " +
+       O(drivenLight, "ADBE Light Shadow Diffusion") + ")");
+assert(/WARNING/.test(d.note || "") &&
+       /kept the old comp's pixel value/.test(d.note || ""),
+       "the note says some light options kept the old size");
+
 // Stub fidelity: the guards above are only meaningful if the stub really
 // refuses these writes.
 let threw = false;
@@ -466,6 +699,28 @@ const p = new Prop([0, 0, 0]);
 p.locked = true;
 try { p.setValue([1, 1, 1]); } catch (e) { threw = true; }
 assert(threw, "stub fidelity: a locked property refuses setValue");
+
+let ambThrew = false;
+try {
+  T(ambLight)["ADBE Position"].setValue([1, 1, 1]);
+} catch (e) { ambThrew = true; }
+assert(ambThrew,
+       "stub fidelity: an ambient light refuses the Position write, the " +
+       "throw that used to be reported as a failed layer");
+let poiThrew = false;
+try {
+  T(pointLight)["ADBE Anchor Point"].setValue([1, 1, 1]);
+} catch (e) { poiThrew = true; }
+assert(poiThrew && pointLight.autoOrient ===
+         AutoOrientType.CAMERA_OR_POINT_OF_INTEREST,
+       "stub fidelity: a point light claims autoOrient 4214 and STILL " +
+       "refuses its Point of Interest -- the flag cannot be trusted");
+let radThrew = false;
+try {
+  plainLight._opts["ADBE Light Falloff Start"].setValue(1);
+} catch (e) { radThrew = true; }
+assert(radThrew,
+       "stub fidelity: falloff 'none' hides Radius, so the write throws");
 
 let easeThrew = false;
 const sp = new Prop([100, 100, 100]);

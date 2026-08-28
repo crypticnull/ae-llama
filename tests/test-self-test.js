@@ -141,6 +141,8 @@ let batchBlur = null;
 //     Options", which is why every entry carries a matchName.
 const cvControls = {};   // "layer/name" -> {type, match, value}
 const cvKeys = {};       // "layer/prop"  -> [{time, value}]
+const parentedLayers = {}; // layer -> parent, so the resize can tell a
+                           // child's inherited transform from its own
 const cvExpr = {};       // "layer/prop"  -> expression
 const cvThreeD = {};     // layer -> bool
 const cvAnchor = {};     // layer -> [x, y, z]
@@ -579,7 +581,11 @@ function cannedOk(tool, args) {
     }
     case "get_comp_details": {
       if (args && /Self-Test Light/.test(args.comp || "")) {
-        return capLayers(args.comp, Object.keys(lights).map((nm, i) => ({
+        // Filtered by comp: the camera comp holds lights too, and
+        // counting those here made a refusal step look like a leak.
+        const mine = Object.keys(lights)
+          .filter((nm) => lights[nm].comp === args.comp);
+        return capLayers(args.comp, mine.map((nm, i) => ({
           index: i + 1, name: nm, type: "light", effects: [] })), args);
       }
       if (args && /Solid Room/.test(args.comp || "")) {
@@ -794,6 +800,10 @@ function cannedOk(tool, args) {
         if (P === "light/Falloff Distance") {
           return { value: la.falloffDistance };
         }
+        if (P === "light/Shadow Diffusion") {
+          return { value: la.shadowDiffusion };
+        }
+        if (P === "light/Cone Angle") return { value: la.coneAngle };
         if (P === "Casts Shadows") {
           return { value: la.castsShadows ? 1 : 0 };
         }
@@ -1015,12 +1025,52 @@ function cannedOk(tool, args) {
     }
     case "add_shape_content": return { params: "End" };
     case "set_track_matte": return { mode: "alpha" };
-    case "set_layer_parent": return { parented: "ST Square 5" };
-    case "scale_comp":
+    case "set_layer_parent":
+      if (args && args.layer) parentedLayers[args.layer] = args.parent;
+      return { parented: "ST Square 5" };
+    case "scale_comp": {
+      // The resize MUTATES the canned lights, so a later read can only
+      // confirm a write that actually happened. Which options are in
+      // play is the measured type + falloff table: Radius needs smooth
+      // or inverseSquareClamped, Falloff Distance needs smooth, Shadow
+      // Diffusion is spot/point only, and an ambient light has nothing
+      // at all -- not even a writable Position.
+      const relit = [], nothing = [];
+      for (const nm of Object.keys(lights)) {
+        const la = lights[nm];
+        if (la.comp !== (args && args.comp)) continue;
+        const kind = la.type ? String(la.type).toLowerCase() : "spot";
+        const fall = la.falloff ? String(la.falloff).toLowerCase() : "none";
+        if (kind === "ambient" || kind === "environment") {
+          nothing.push(nm + " (" + kind + " light)");
+          continue;
+        }
+        const half = (k) => {
+          if (typeof la[k] === "number" && la[k]) { la[k] /= 2; return true; }
+          return false;
+        };
+        const did = [];
+        if ((fall === "smooth" || fall === "inversesquareclamped") &&
+            half("radius")) did.push("Radius");
+        if (fall === "smooth" && half("falloffDistance")) {
+          did.push("Falloff Distance");
+        }
+        if ((kind === "spot" || kind === "point") &&
+            half("shadowDiffusion")) did.push("Shadow Diffusion");
+        if (did.length) relit.push(nm + " (" + did.join(", ") + ")");
+        // A parented light inherits its TRANSFORM and nothing else.
+        if (!parentedLayers[nm] && la.position) {
+          la.position = la.position.map((n) => n / 2);
+        }
+      }
       // layersSkipped absent = nothing refused the write. That is the
       // assertion the camera regression would have tripped.
-      return { scaleFactor: 0.5, layersScaled: 6, layersInherited: 1,
-               parentedCamerasRezoomed: ["ST Cam Kid"] };
+      const out = { scaleFactor: 0.5, layersScaled: 8, layersInherited: 2,
+                    parentedCamerasRezoomed: ["ST Cam Kid"] };
+      if (relit.length) out.lightOptionsRescaled = relit;
+      if (nothing.length) out.layersWithNothingToScale = nothing;
+      return out;
+    }
     case "add_solid":
       if (inBatComp(args)) batSolids.push(args.name);
       if (inRbComp(args)) rbLayers.push(args.name);
@@ -1147,7 +1197,14 @@ function cannedOk(tool, args) {
           "aim at. Drop 'pointOfInterest', or drop 'oneNode' to aim it." };
       }
       const nm = (args && args.name) || "Light";
-      lights[nm] = args || {};
+      // A light AE just made carries DEFAULTS for everything the caller
+      // left out, and a read has to answer with them -- measured in real
+      // AE 2026: radius 500, falloff distance 500, diffusion 0, cone 90,
+      // intensity 100. Without them the resize step that must leave a
+      // HIDDEN Falloff Distance alone had nothing to leave alone.
+      lights[nm] = Object.assign(
+        { radius: 500, falloffDistance: 500, shadowDiffusion: 0,
+          coneAngle: 90, intensity: 100 }, args || {});
       const applied = LIGHT_ORDER.filter(has);
       return { index: Object.keys(lights).length, name: nm, type: kind,
         applied: applied.join(", ") || "(defaults only)", refused: "",

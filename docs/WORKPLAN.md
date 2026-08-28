@@ -106,9 +106,15 @@ parts 1-3) or item 3/4, not here.
 Two things this item surfaced that are NOT done, each worth its own
 small pass rather than being smuggled in:
 
-- `scale_comp` still does not scale a LIGHT's pixel-valued options
-  (falloff distance, shadow diffusion), same as AE's own native
-  script. Now that lights are creatable this is finally testable.
+- ~~`scale_comp` still does not scale a LIGHT's pixel-valued options
+  (falloff distance, shadow diffusion)~~ DONE 2026-08-28 (0.9.26).
+  Radius, Falloff Distance and Shadow Diffusion now scale with the comp,
+  keyframes included, parented or not, gated by the type+falloff matrix
+  measured in the field; angles and percentages are left alone. The probe
+  also found two AE lies the tool was believing — an ambient light was
+  reported as a FAILED layer because AE hides its Position, and a point
+  light reports autoOrient 4214 like a two-node spot and then refuses its
+  Point of Interest. Harness 262 -> 277.
 - `get_property` cannot reach `Radius` or `Falloff Distance` by bare
   name (AE's layer-level name shortcut does not cover them); the
   group path `light/Radius` works and the suite uses it. A deep-search

@@ -3281,3 +3281,101 @@ of a queued warning.
 **Harness: 262/262 PASSED** (260 -> 262: three steps added, one silent
 -loss step rewritten into a receipt check). Stubbed suite: all green,
 capability doc regenerated. Nothing blocked.
+
+## 2026-08-28 (local, sixth pass) — item 2 follow-up: a resized comp owes its lights pixels (0.9.26)
+
+Harness was green on arrival (262/262), so the pass took the older of the
+two follow-ups item 2 left behind and never struck: **`scale_comp` does
+not scale a LIGHT's pixel-valued options.**
+
+### The probe, which cost four rounds and found more than the item asked
+
+Probes 5-9 (`logs/probe-light5..9.jsx`). What came back:
+
+- **The gate is type + falloff, and only a WRITE reveals it.** Every
+  Light Options property is PRESENT on every light type — an ambient
+  light happily reports `radius=500` — and a hidden one still says
+  `elided=false, enabled=true`. Measured writability:
+  Radius on parallel/spot/point while Falloff is smooth(2) or
+  inverseSquareClamped(3); Falloff Distance on the same three but
+  smooth ONLY; Shadow Diffusion on spot/point, any falloff, shadows on or
+  off. Everything else there is a percent, an angle or a colour.
+- **Falloff Type is itself keyframeable**, and the gate follows the value
+  UNDER THE PLAYHEAD: with keys none@0 -> smooth@2s and the playhead at
+  0, writing Radius throws even though the light really does use a radius
+  later. So a keyed falloff can leave a genuinely-live pixel value at the
+  old comp's scale, and that has to be REPORTED, not swallowed.
+- **Light Options are not inherited from a parent.** Same asymmetry as
+  camera Zoom: the parented light's transform comes from its parent and
+  its 300px falloff radius does not.
+- **What the tool did before:** nothing. A halved 1000x1000 comp left
+  Spot at radius 300 / distance 400 / diffusion 60, keys included.
+
+Two AE lies the probe caught that the item never mentioned:
+
+- **An ambient light was reported as a FAILURE.** AE hides its Position,
+  so the unconditional write threw and the light landed in
+  `layersSkipped` — "1 layer(s) could NOT be scaled" over a light where
+  there was never anything to do.
+- **A point light reports `autoOrient` 4214** (CAMERA_OR_POINT_OF_
+  INTEREST), exactly like a two-node spot, and then refuses the Point of
+  Interest write. The existing code trusted that flag. An unparented
+  point light would therefore throw AFTER its Position had been written
+  and be reported as unscalable — latent, because both earlier probes
+  happened to parent their point light and take the other branch.
+
+### The fix
+
+`AELL_LIGHT_PIXEL_OPTS` is the measured table, and `AELL_relight` runs on
+BOTH loop branches (parented and not), exactly where `AELL_rezoom`
+already does. It touches only what the light's type and falloff put in
+play, skips a static zero (0 scales to 0 — no write, no claim), and
+reports:
+
+- `lightOptionsRescaled` — per light, which options moved;
+- `lightOptionsNotScaled` — a refusal with its reason, including the
+  playhead advice when Falloff is keyed, and expression-driven options
+  named as such rather than folded into the transform warning;
+- `layersWithNothingToScale` — ambient/environment lights, so the counts
+  do not look short and a no-op stops reading as a failure.
+
+The Point of Interest write is now gated on the light TYPE as well as
+autoOrient, since the flag lies.
+
+Verified in real AE (probe 8): a 1000x1000 comp halved took Spot to
+150/200/30 and its keys 300/600 to 150/300, Point's Radius to 100 while
+its HIDDEN Falloff Distance stayed 500, the falloff-none spot moved only
+its shadow blur, the parented light was rescaled anyway, cone angle /
+feather / intensity did not move, and scaling back by 2 restored every
+original number.
+
+### Covered without AE
+
+- **`tests/test-scale-comp.js`**: a `Light` stub whose hidden-ness is a
+  live getter over the measured matrix (including the falloff under the
+  playhead), nine lights covering every branch, and stub-fidelity checks
+  that the ambient Position, the point light's POI and a falloff-none
+  Radius really do refuse writes.
+- **`tests/test-self-test.js`**: the canned host now MUTATES its lights
+  in `scale_comp` (so a read can only confirm a write that happened),
+  carries AE's real defaults for options the caller omitted, tracks
+  parenting, and filters `get_comp_details` lights by comp — without that
+  last one the camera comp's lights leaked into a refusal step that
+  counts them.
+
+### Bumped to 0.9.26
+
+A fix to shipped behaviour of an existing tool, verified in real AE.
+`tools.js` documents the rescale and both new result fields; the
+CAPABILITIES gap entry is now a description instead of a queue item.
+
+**Harness: 277/277 PASSED** (262 -> 277: four lights added to the camera
+comp plus ten assertions, one existing step taught the new counts).
+Nothing blocked.
+
+**One trap for the next pass, cheap to relearn the hard way:** in a probe
+`.jsx`, `"text " + prop.value` on a 3-vector throws *"invalid numeric
+result (divide by zero?)"* — the implicit Array coercion, not AE state.
+Wrap it in `String()` or index it. Two probe rounds died on that, and the
+first left AE sitting on a modal that swallowed the next `-r` launch
+silently.

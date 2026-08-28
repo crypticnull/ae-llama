@@ -244,7 +244,13 @@
             "(no distortion): when the aspect changes, mode 'fit' " +
             "letterboxes (default) and 'fill' crops. Parented layers " +
             "follow their parents automatically (a parented CAMERA still " +
-            "gets its zoom rescaled — zoom is not inherited). Keyframed " +
+            "gets its zoom rescaled — zoom is not inherited). A LIGHT's " +
+            "pixel options (Radius, Falloff Distance, Shadow Diffusion) " +
+            "are rescaled too, parented or not, and come back in " +
+            "'lightOptionsRescaled'; ambient and environment lights have " +
+            "nothing scalable and are listed in " +
+            "'layersWithNothingToScale' rather than counted as " +
+            "failures. Keyframed " +
             "transforms come along whole: values, motion-path handles " +
             "and ease speeds all scale, so animation keeps its shape. " +
             "Use this for any 'make the comp WxH' / 'scale the comp' " +

@@ -757,6 +757,62 @@
         },
         check: function () { return true; } },
 
+      // ---- lights in the same resize (WORKPLAN item 2 follow-up) ------
+      // A light's pixel options live in Light Options, OUTSIDE the
+      // Transform group — the camera-zoom trap one layer type over. A
+      // halved comp used to keep a 300px falloff radius, and an ambient
+      // light (whose Position AE hides) was reported as a layer that
+      // could NOT be scaled. Values are exact: 800x600 halved, so 300 ->
+      // 150, 400 -> 200, 60 -> 30.
+      { name: "add a spot light with pixel options",
+        tool: "add_light",
+        args: function (ctx) {
+          return { comp: ctx.camComp, name: "ST Lit Spot", type: "spot",
+                   falloff: "smooth", radius: 300, falloffDistance: 400,
+                   shadowDiffusion: 60, coneAngle: 90,
+                   position: [400, 300, -500],
+                   pointOfInterest: [400, 300, 0] };
+        },
+        check: function (d) { return d.name === "ST Lit Spot" || d.name; } },
+
+      // inverseSquareClamped uses Radius but HIDES Falloff Distance, and
+      // a point light reports autoOrient 4214 like a two-node spot while
+      // refusing its Point of Interest — trusting that flag threw after
+      // Position had already been written.
+      { name: "add a point light (hidden distance, lying autoOrient)",
+        tool: "add_light",
+        args: function (ctx) {
+          return { comp: ctx.camComp, name: "ST Lit Point", type: "point",
+                   falloff: "inverseSquareClamped", radius: 200,
+                   shadowDiffusion: 80, position: [200, 150, -300] };
+        },
+        check: function (d) { return d.name === "ST Lit Point" || d.name; } },
+
+      { name: "add an ambient light (nothing at all to scale)",
+        tool: "add_light",
+        args: function (ctx) {
+          return { comp: ctx.camComp, name: "ST Lit Amb", type: "ambient" };
+        },
+        check: function (d) { return d.name === "ST Lit Amb" || d.name; } },
+
+      { name: "add a light to parent to the null",
+        tool: "add_light",
+        args: function (ctx) {
+          return { comp: ctx.camComp, name: "ST Lit Kid", type: "spot",
+                   falloff: "smooth", radius: 600,
+                   position: [400, 300, -500],
+                   pointOfInterest: [400, 300, 0] };
+        },
+        check: function (d) { return d.name === "ST Lit Kid" || d.name; } },
+
+      { name: "parent the light",
+        tool: "set_layer_parent",
+        args: function (ctx) {
+          return { comp: ctx.camComp, layer: "ST Lit Kid",
+                   parent: "ST Cam Rig" };
+        },
+        check: function () { return true; } },
+
       // THE assertion that would have caught the camera regression: the
       // tool reported its own failure honestly in layersSkipped and
       // nothing was reading it. A camera's Scale resolves but is hidden,
@@ -778,11 +834,135 @@
           if (rez.join(",") !== "ST Cam Kid") {
             return "parentedCamerasRezoomed " + JSON.stringify(rez);
           }
-          if (d.layersInherited !== 1) {
-            return "layersInherited " + d.layersInherited + " (expected 1)";
+          if (d.layersInherited !== 2) {
+            return "layersInherited " + d.layersInherited + " (expected 2)";
           }
-          return d.layersScaled === 6 ||
-                 "layersScaled " + d.layersScaled + " (expected 6)";
+          // The ambient light is in NEITHER count: AE hides everything
+          // scalable on it, so there was never anything to do.
+          var none = d.layersWithNothingToScale || [];
+          if (none.join(",").indexOf("ST Lit Amb") === -1) {
+            return "layersWithNothingToScale " + JSON.stringify(none);
+          }
+          return d.layersScaled === 8 ||
+                 "layersScaled " + d.layersScaled + " (expected 8)";
+        } },
+
+      // A light's pixel options are pixels: they halve with the comp, and
+      // the angles and percentages beside them must not move.
+      { name: "spot light Radius halves",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.camComp, layer: "ST Lit Spot",
+                   property: "light/Radius" };
+        },
+        check: function (d) {
+          return Math.abs(d.value - 150) < 0.6 || "radius " + d.value;
+        } },
+
+      { name: "spot light Falloff Distance halves",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.camComp, layer: "ST Lit Spot",
+                   property: "light/Falloff Distance" };
+        },
+        check: function (d) {
+          return Math.abs(d.value - 200) < 0.6 || "distance " + d.value;
+        } },
+
+      { name: "spot light Shadow Diffusion halves",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.camComp, layer: "ST Lit Spot",
+                   property: "light/Shadow Diffusion" };
+        },
+        check: function (d) {
+          return Math.abs(d.value - 30) < 0.6 || "diffusion " + d.value;
+        } },
+
+      { name: "but the Cone Angle (degrees) does NOT scale",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.camComp, layer: "ST Lit Spot",
+                   property: "light/Cone Angle" };
+        },
+        check: function (d) {
+          return Math.abs(d.value - 90) < 0.6 ||
+                 "cone angle " + d.value + " — an angle is not a pixel";
+        } },
+
+      { name: "point light Radius halves",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.camComp, layer: "ST Lit Point",
+                   property: "light/Radius" };
+        },
+        check: function (d) {
+          return Math.abs(d.value - 100) < 0.6 || "radius " + d.value;
+        } },
+
+      // Under inverseSquareClamped this one is HIDDEN, so writing it
+      // throws and leaving it is correct — it renders nothing.
+      { name: "its hidden Falloff Distance is left alone",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.camComp, layer: "ST Lit Point",
+                   property: "light/Falloff Distance" };
+        },
+        check: function (d) {
+          return Math.abs(d.value - 500) < 0.6 ||
+                 "falloff distance " + d.value + " (should be untouched)";
+        } },
+
+      { name: "the point light's Position still halved",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.camComp, layer: "ST Lit Point",
+                   property: "Position" };
+        },
+        check: function (d) {
+          var v = d.value || [];
+          return (Math.abs(v[0] - 100) < 0.6 && Math.abs(v[1] - 75) < 0.6 &&
+                  Math.abs(v[2] + 150) < 0.6) ||
+                 "position " + JSON.stringify(v);
+        } },
+
+      // Light Options are not inherited from a parent any more than a
+      // camera's zoom is.
+      { name: "a PARENTED light still rescales its Radius",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.camComp, layer: "ST Lit Kid",
+                   property: "light/Radius" };
+        },
+        check: function (d) {
+          return Math.abs(d.value - 300) < 0.6 ||
+                 "radius " + d.value + " — a parent inherits none of it";
+        } },
+
+      { name: "the parented light's transform is left to its parent",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.camComp, layer: "ST Lit Kid",
+                   property: "Position" };
+        },
+        check: function (d) {
+          var v = d.value || [];
+          return (Math.abs(v[0] - 400) < 0.6 && Math.abs(v[1] - 300) < 0.6) ||
+                 "position " + JSON.stringify(v) + " (double-scaled?)";
+        } },
+
+      { name: "the ambient light's hidden Position was not touched",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.camComp, layer: "ST Lit Amb",
+                   property: "Position" };
+        },
+        check: function (d, ctx) {
+          var v = d.value || [];
+          ctx.ambPos = v;
+          return (Math.abs(v[0] - 0) < 0.6 && Math.abs(v[1] - 0) < 0.6) ||
+                 "position " + JSON.stringify(v) + " — AE hides it, so " +
+                 "nothing should have written it";
         } },
 
       { name: "two-node camera zoom halves",
