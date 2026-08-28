@@ -775,10 +775,104 @@
   }
 
   /**
+   * Coerce a literal widget value on the way into a substitute node's input.
+   * ComfyLiterals' Float carries ".98" in a STRING widget; core PrimitiveFloat
+   * wants a FLOAT, and validation rejects the string. Nothing is coerced
+   * unless the manifest asks (`as`), and a link is never coerced at all — its
+   * type is whatever its source emits, which this side cannot see.
+   */
+  function coerceInput(value, as, nid, from) {
+    if (!as) return value;
+    if (isLink(value)) {
+      throw new Error("Cannot coerce node " + nid + " input \"" + from +
+        "\" to " + as + ": it is a link from node " + value[0] + ", and a " +
+        "link carries whatever type its source emits.");
+    }
+    if (as === "number" || as === "int") {
+      var num = (typeof value === "number") ? value : parseFloat(String(value));
+      if (!isFinite(num)) {
+        throw new Error("Cannot coerce node " + nid + " input \"" + from +
+          "\" to a number: its value is " + JSON.stringify(value) + ".");
+      }
+      return (as === "int") ? Math.round(num) : num;
+    }
+    if (as === "string") return String(value);
+    if (as === "boolean") {
+      return (value === true || value === 1 || value === "true");
+    }
+    throw new Error("Manifest substitute for node " + nid + " asks to coerce " +
+      "\"" + from + "\" to unknown type \"" + as + "\". Known: number, int, " +
+      "string, boolean.");
+  }
+
+  /**
+   * Replace node `id` in place with a different class — the fallback for a
+   * value SOURCE, which cannot be bypassed at all: a node whose only inputs
+   * are literals has nothing for its consumers to be rewired TO. Consumers
+   * keep pointing at the same id and the same socket, so only the class and
+   * the input names change.
+   * spec: {class, inputs: {<newName>: "<oldName>" | {from, as} | {const}}}.
+   * Inputs the map does not name are DROPPED: a substitute class has its own
+   * signature, and inheriting stray keys fails validation at the server.
+   * Returns {carried: [...], dropped: [...]}. Throws grounded errors.
+   */
+  function substituteNode(graph, id, spec) {
+    var nid = String(id);
+    var node = graph[nid];
+    if (!node) return null;
+    var old = node.inputs || {};
+    var names = [];
+    for (var n in old) { if (old.hasOwnProperty(n)) names.push(n); }
+    if (!spec || typeof spec["class"] !== "string" || spec["class"] === "") {
+      throw new Error("Cannot substitute node " + nid + " (" + node.class_type +
+        "): the manifest's substitute block names no replacement class.");
+    }
+    var map = spec.inputs || {};
+    var next = {};
+    var carried = [];
+    var taken = {};
+    for (var k in map) {
+      if (!map.hasOwnProperty(k)) continue;
+      var rule = map[k];
+      if (rule && typeof rule === "object" && !(rule instanceof Array) &&
+          rule.hasOwnProperty("const")) {
+        next[k] = rule["const"];
+        carried.push(k + " = " + JSON.stringify(rule["const"]));
+        continue;
+      }
+      var from = (typeof rule === "string") ? rule : (rule ? rule.from : null);
+      if (typeof from !== "string" || from === "") {
+        throw new Error("Cannot substitute node " + nid + " (" +
+          node.class_type + ") with " + spec["class"] + ": the rule for " +
+          "input \"" + k + "\" names neither a source input (\"from\") nor a " +
+          "literal (\"const\").");
+      }
+      if (!old.hasOwnProperty(from)) {
+        throw new Error("Cannot substitute node " + nid + " (" +
+          node.class_type + ") with " + spec["class"] + ": it has no input " +
+          "named \"" + from + "\" to carry into \"" + k + "\". It has: " +
+          (names.length ? names.join(", ") : "(none)"));
+      }
+      next[k] = coerceInput(old[from], (rule && rule.as) || null, nid, from);
+      taken[from] = true;
+      carried.push(k + " <- " + from);
+    }
+    var dropped = [];
+    for (var d = 0; d < names.length; d++) {
+      if (!taken[names[d]]) dropped.push(names[d]);
+    }
+    node.class_type = spec["class"];
+    node.inputs = next;
+    if (node._meta && node._meta.title) { node._meta.title = spec["class"]; }
+    return { carried: carried, dropped: dropped };
+  }
+
+  /**
    * Honour the manifest's `optionalNodes` block: a node the template can run
    * without, because the pack that defines it is not on every machine.
-   * Each entry: {nodeId, class, passthrough, when?: "missing"|"always",
-   *              reason?, keptNote?}.
+   * Each entry: {nodeId, class, when?: "missing"|"always", reason?, keptNote?}
+   * plus EITHER `passthrough` (drop the node, rewire consumers to that input)
+   * OR `substitute` (swap the class for one the loader ships) — never both.
    * The default ("missing") asks the LIVE server, so the same template runs
    * on a machine with the pack and on one without it.
    * cb(err) — errors are grounded and fatal; this runs before any GPU time.
@@ -809,7 +903,15 @@
           "manifest's panelAdaptation, or fix the sidecar."));
         return;
       }
-      function doBypass(why) {
+      if (entry.substitute && entry.passthrough) {
+        cb(new Error("Manifest optionalNodes entry for node " + nid + " (" +
+          cls + ") sets both \"passthrough\" and \"substitute\". They are " +
+          "different answers to the same question — drop the node, or swap " +
+          "its class. Pick one."));
+        return;
+      }
+      function doDrop(why) {
+        if (entry.substitute) { doSubstitute(why); return; }
         var r;
         try { r = bypassNode(graph, nid, entry.passthrough); }
         catch (e) { cb(e); return; }
@@ -818,10 +920,36 @@
           (r && r.rewired.length ? "; rewired " + r.rewired.join(", ") : ""));
         next();
       }
-      if (entry.when === "always") { doBypass("manifest says always"); return; }
+      function doSubstitute(why) {
+        var sub = entry.substitute;
+        var subClass = sub ? sub["class"] : null;
+        // The replacement must itself be installed, or the graph has traded
+        // one missing class for another and only says so after the POST.
+        classInstalled(base, String(subClass), function (sErr, subPresent) {
+          if (sErr) { cb(sErr); return; }
+          if (!subPresent) {
+            cb(new Error("Node " + nid + " (" + cls + ") is not available on " +
+              "this ComfyUI, and neither is the manifest's substitute for " +
+              "it (" + subClass + "). Install the pack that provides " + cls +
+              " — the manifest's customNodes block names it — or correct the " +
+              "substitute."));
+            return;
+          }
+          var r;
+          try { r = substituteNode(graph, nid, sub); }
+          catch (e) { cb(e); return; }
+          applied.push("substituted optional node " + nid + " (" + cls +
+            " -> " + subClass + "): " + why +
+            (entry.reason ? " — " + entry.reason : "") +
+            (r && r.carried.length ? "; carried " + r.carried.join(", ") : "") +
+            (r && r.dropped.length ? "; dropped " + r.dropped.join(", ") : ""));
+          next();
+        });
+      }
+      if (entry.when === "always") { doDrop("manifest says always"); return; }
       classInstalled(base, cls, function (err, present) {
         if (err) { cb(err); return; }
-        if (!present) { doBypass("not installed on this ComfyUI"); return; }
+        if (!present) { doDrop("not installed on this ComfyUI"); return; }
         applied.push("optional node " + nid + " (" + cls + ") is installed, " +
           "keeping it" + (entry.keptNote ? " — " + entry.keptNote : ""));
         next();
@@ -1446,6 +1574,7 @@
     stopManaged: stopManaged,
     reapOrphan: reapOrphan,
     bypassNode: bypassNode,
+    substituteNode: substituteNode,
     expandFilenameTokens: expandFilenameTokens,
     classInstalled: classInstalled,
     resolveOptionalNodes: resolveOptionalNodes,

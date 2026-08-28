@@ -21,6 +21,9 @@
  *   node scripts/comfy-probe.js --duration 0.2 --width 512 --height 288
  *   node scripts/comfy-probe.js --image C:\ref.png    # i2v instead of t2v
  *   node scripts/comfy-probe.js --no-ae               # generation only
+ *   node scripts/comfy-probe.js --bare                # as if NO custom
+ *                                                     # node pack were
+ *                                                     # installed
  *   node scripts/comfy-probe.js --keep                # leave the AE import
  *
  * Defaults are deliberately the SMALLEST thing the template can render
@@ -60,6 +63,7 @@ const OPT = {
   timeout: parseInt(argValue("--timeout", "1800"), 10),
   image: argValue("--image", null),
   noAe: argv.indexOf("--no-ae") !== -1,
+  bare: argv.indexOf("--bare") !== -1,
   keep: argv.indexOf("--keep") !== -1,
   afterFX: argValue("--afterfx", null)
 };
@@ -217,6 +221,40 @@ loadPanelFile("tools.js");
 const Settings = window.Settings;
 const Comfy = window.Comfy;
 const Tools = window.Tools;
+
+/* --bare: render as if NO custom node pack were installed.
+ *
+ * The bundled H3 template loads classes from seven packs. On the machine it
+ * was authored on every one of them resolves, so validate_prompt is happy and
+ * a probe run proves nothing about anybody else's machine. The only honest
+ * way to measure the fallback is to force every optionalNodes rule ON and
+ * render the graph that a bare ComfyUI would get. The classes stay installed
+ * here, so this measures the FALLBACK GRAPH, not a broken install — which is
+ * the point: the graph is what has to still work.
+ *
+ * The forcing happens on the manifest, not in comfy.js: `generate` honours an
+ * opts.manifest handed to it, so the probe overrides the sidecar and the panel
+ * code under test stays exactly the code that ships. */
+if (OPT.bare) {
+  const realGenerate = Comfy.generate;
+  Comfy.generate = function (opts, onProgress, cb) {
+    const m = Comfy.readManifest(opts.workflowFile);
+    if (!m || !(m.optionalNodes || []).length) {
+      cb(new Error("--bare: " + opts.workflowFile + " has no optionalNodes " +
+                   "to force. Nothing to measure."));
+      return;
+    }
+    const forced = JSON.parse(JSON.stringify(m));
+    forced.optionalNodes.forEach(function (o) { o.when = "always"; });
+    const names = forced.optionalNodes.map((o) => o["class"]).join(", ");
+    say("info", "--bare: forcing " + forced.optionalNodes.length +
+                " optional node(s) — " + names);
+    const o2 = {};
+    for (const k in opts) o2[k] = opts[k];
+    o2.manifest = forced;
+    return realGenerate.call(Comfy, o2, onProgress, cb);
+  };
+}
 
 /* The probe reads the user's REAL settings and overrides only what it must:
  * the workflow dir (so the REPO's shipped template is what gets tested, not

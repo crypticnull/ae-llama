@@ -138,8 +138,8 @@ ComfyUI. This unblocks tier-plan P5 (catalog file lists + sizes) and
 the register-existing matcher. Commit the inventory; no version bump.
 
 ## 2d. Small local passes queued by the probe findings — the H3 i2v
-workflow is DONE through part 3 (2026-08-25, -26, -27). What is LEFT in
-this section: part 4 (attribute the manifest's UNKNOWN nodes), the KREA2
+workflow is DONE through part 4 AND the portability pass that part 4
+filed (2026-08-25 through -28). What is LEFT in this section: the KREA2
 subgraph conversion, and the HF t2v/i2v file pins. Everything else below
 is struck.
 
@@ -197,12 +197,18 @@ is struck.
     `scripts/attribute-workflow-nodes.js` regenerates it;
     `tests/test-workflow-manifests.js` fails CI if a manifest and its
     graph ever disagree again. See the log.
-  - **NEW, from part 4:** the shipped H3 i2v template hard-requires SIX
-    custom packs and only RTXVideoSuperResolution is declared bypassable.
-    On any machine but the owner's, the graph will not load. Decide per
-    pack what is genuinely load-bearing and what can join `optionalNodes`
-    (PlaySound|pysssss and easy cleanGpuUsed look purely incidental), then
-    measure the bypassed graph. That is a build pass, not a scan.
+  - ~~**NEW, from part 4:** the shipped H3 i2v template hard-requires SIX
+    custom packs and only RTXVideoSuperResolution is declared bypassable~~
+    DONE 2026-08-28 (0.9.22). All seven undeclared classes are removable:
+    four MODEL patches bypass through `model` and collapse the chain to
+    `148 -> 163 -> 139`, two are incidental, and ComfyLiterals' `Float`
+    could not be bypassed at all (a literal source has nothing to rewire
+    to), so `optionalNodes` gained `substitute` and it becomes core
+    `PrimitiveFloat`. Measured on a freed GPU: bare 18s / 31349 MB vs
+    authored 20s / 31285 MB, and the bare graph imported into real AE at
+    544x288 with audio. `comfy-probe.js --bare` renders the fallback
+    graph on demand; test-workflow-manifests now FAILS any shipped
+    template with a non-core class that has no removal rule. See the log.
   - Also surfaced, its own small pass: the KREA2 template contains a
     SUBGRAPH the converter refuses to flatten. Route that works — queue
     it once in ComfyUI and pull the executed prompt from `/history`

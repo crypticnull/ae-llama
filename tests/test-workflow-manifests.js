@@ -155,7 +155,52 @@ PAIRS.forEach(function ([rel, kind]) {
   assert(/^\d{4}-\d{2}-\d{2}/.test(String(manifest.nodeAttributionScannedOn || "")),
          name + ": records when the attribution was scanned");
 
-  void kind;
+  // 9. PORTABILITY, and only for the templates the panel actually POSTS.
+  //    Attribution answered "which packs does this need"; the answer for the
+  //    shipped H3 template was SEVEN, six of them hard-required — so it ran
+  //    on the machine it was authored on and nowhere else, and nothing in
+  //    this file said so. A shipped template must be loadable on a bare
+  //    ComfyUI: every non-core class needs a rule for removing it.
+  //    Authored-only templates are exempt until they are adapted; that
+  //    conversion is where the rules get written.
+  if (kind === "shipped") {
+    const coreNodes = new Set((core && core.nodes) || []);
+    const optional = manifest.optionalNodes || [];
+    const ruledFor = new Map(optional.map((o) => [o["class"], o]));
+    const hard = used.filter((c) => !coreNodes.has(c) && !ruledFor.has(c) &&
+                                    !virtual.some((v) => v.type === c));
+    assert(hard.length === 0,
+           name + ": every non-core class can be removed on a machine " +
+           "without its pack" +
+           (hard.length ? " — HARD-REQUIRED: " + hard.join(", ") : ""));
+
+    optional.forEach(function (o) {
+      const hasRule = !!o.passthrough || !!o.substitute;
+      assert(hasRule,
+             name + ": optionalNodes " + o["class"] + " says HOW to remove " +
+             "it (passthrough or substitute)");
+      assert(!(o.passthrough && o.substitute),
+             name + ": optionalNodes " + o["class"] + " picks ONE of " +
+             "passthrough / substitute");
+      if (o.substitute) {
+        // A substitute pointing at another custom class would trade one
+        // missing pack for another.
+        assert(coreNodes.has(o.substitute["class"]),
+               name + ": " + o["class"] + " is substituted by a CORE class " +
+               "(" + o.substitute["class"] + ")");
+      }
+    });
+
+    // A pack every one of whose classes is removable is an optional pack.
+    // Saying so in the entry is what an installer would read.
+    entries.filter((e) => e.pack !== "(comfy-core)").forEach(function (e) {
+      const allRuled = (e.nodes || []).every((n) => ruledFor.has(n));
+      if (!allRuled) return;
+      assert(e.optional === true,
+             name + ": pack " + e.pack + " contributes only removable " +
+             "classes, so it is marked optional");
+    });
+  }
 });
 
 // ---------------------------------------------- the specific corrections

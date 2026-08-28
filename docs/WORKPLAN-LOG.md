@@ -2673,3 +2673,153 @@ template work, all waiting on the remote session's 0.10.0.
 3. The owner's `comfyUrl` still says port 8000 while ComfyUI runs on 8188
    (unchanged from the previous pass — still a human's ten-second call, and
    still not something to change unattended next to a live backend).
+
+## 2026-08-28 (local) — item 2d: the six packs, and the node that could not be bypassed
+
+The item, filed by the 2026-08-27 attribution pass: the shipped H3 i2v
+template hard-requires SIX custom packs and declares one node bypassable, so
+it loads on the owner's machine and probably nowhere else. Decide per pack
+what is load-bearing, then measure the bypassed graph.
+
+**The decision, per node, from /object_info signatures rather than from the
+node names.** All seven undeclared classes turned out to be removable, but
+not all in the same way, and the split is the interesting part.
+
+Four are MODEL patches in one chain — `148 UNETLoader -> 153
+ModelPreviewOverrideKJ -> 163 MiniMaxH3SigmaShift (core) -> 164
+ApplyMiniMaxH3FirstBlockCache -> 165
+MiniMaxH3MemoryEfficientSageAttentionPatch -> 162
+MiniMaxH3ScheduledSolAttentionPatch -> 139 BasicGuider`. Each takes MODEL on
+input `model` and returns MODEL at socket 0, so each is a
+`passthrough: "model"` bypass, and because `bypassNode` rescans every
+consumer each time, four separate bypasses collapse the chain to
+`148 -> 163 -> 139` in any order. What each one COSTS to lose is written into
+its entry, because it is not the same cost: the preview override is a browser
+convenience the panel never looks at; FirstBlockCache and sol-attn are
+speed-for-fidelity trades by their own documentation; the kjnodes
+SageAttention patch is the one that genuinely matters on a small card, since
+bypassing it raises attention VRAM. That last one is marked as the pack to
+install first, rather than pretending all four are equivalent.
+
+Two are incidental: `159 PlaySound|pysssss` is terminal (nothing consumes its
+output, so dropping it removes a chime) and `160 easy cleanGpuUsed` is a
+`*`-typed pass-through sitting between VAEDecode and the upscaler.
+
+**The seventh needed new machinery.** `167 Float` (ComfyLiterals) is the
+megapixel source. It CANNOT be bypassed and never could be: its only input is
+the literal `".98"`, so `ResolutionSelector.megapixels` would have nothing to
+be rewired to — `bypassNode` already refuses exactly this and says why. The
+answer is not a bypass but a swap: core `PrimitiveFloat` has the identical
+`FLOAT` output and is already used TWICE in this same graph (nodes 136, 150).
+
+So `optionalNodes` entries now take EITHER `passthrough` OR a new
+`substitute: {class, inputs: {...}}` — never both; setting both is a grounded
+refusal, because they are two different answers to the same question and
+picking one silently would render something nobody chose. Three things the
+substitution had to get right:
+
+- **Coercion.** ComfyLiterals declares `Number` as a **STRING** widget;
+  `PrimitiveFloat` wants a FLOAT. Both signatures measured from the running
+  loader. Hence `{from: "Number", as: "number"}` — and a value that will not
+  coerce is refused here rather than POSTed as `NaN`. A LINK is never coerced
+  at all: its type is whatever its source emits, which this side cannot see.
+- **Order.** Injection runs BEFORE optional nodes resolve, so a megapixel
+  figure the panel wrote into `Number` has to survive the swap. It does — the
+  same `from` rule carries it. Covered by a test that injects 0.15 and reads
+  0.15 back out of `value`.
+- **The substitute must itself exist.** If the replacement class is also
+  missing, that is a grounded error naming BOTH classes, raised before the
+  queue POST — otherwise the user pays for the round trip to learn it.
+
+Unmapped inputs are DROPPED, not inherited: a substitute class has its own
+signature and a stray key fails validation at the server.
+
+**Measured, on a GPU freed with POST /free before each run so the two are
+comparable:**
+
+| graph | wall | VRAM peak | output |
+|---|---|---|---|
+| as authored, all 7 packs | 20s | 31285 MB (idle 1653) | 102002 B, 1920x1080 |
+| BARE, every pack forced off | 18s | 31349 MB (idle 1525) | 19699 B, 544x288 |
+
+Then the bare graph end to end through the panel path into real AE: **PASS**,
+imported as 544x288, 0.208s @ 24fps, video AND audio, then cleaned up. That
+is the claim the item wanted and it now has a run behind it: with ZERO custom
+node packs the shipped template renders and lands in AE.
+
+Two honest caveats on those numbers. (1) At the probe's smallest size — 5
+frames, 0.15 MP — the four optimizer patches have nothing to bite on; the
+peak is set by ~20 GB of weights, not by attention, which is why bare is not
+measurably hungrier or slower. Their value shows at real clip lengths, which
+this probe deliberately does not render. Do NOT read this table as "the
+patches do nothing". (2) Earlier runs in this pass measured 52s, 182s and
+190s for the same work; all three were taken with the GPU already sitting at
+~31 GB and are VRAM-pressure artifacts, not graph differences. Free before
+timing, or the numbers are noise.
+
+**The output size difference is the whole visible consequence** and was
+already written in the manifest's keptNote: RTXVideoSuperResolution rescales
+to a FIXED 1920x1080 regardless of the injected megapixels, so a machine
+without the NVIDIA SDK gets the graph's own resolution. Now measured rather
+than asserted.
+
+**New: `comfy-probe.js --bare`** — force every `optionalNodes` rule on and
+render the fallback graph. It works on the MANIFEST (`generate` already
+honours an `opts.manifest`), so the panel code under test stays exactly the
+code that ships. The classes remain installed, which is the point: this
+measures the FALLBACK GRAPH, not a broken install.
+
+**Coverage.** `tests/test-comfy-optional-nodes.js` grew from the one RTX node
+to the whole block (its index-based assertions now look entries up by class,
+so adding an entry cannot silently retarget them). The bare-machine scenario
+asserts what a POST would otherwise be the first to discover: every
+custom-pack class gone, the four-deep model chain collapsed to
+`148 -> 163 -> 139`, the image path collapsed past cleanGpuUsed AND the
+upscaler straight to VAEDecode, node 167 now core `PrimitiveFloat` carrying
+`0.98`, and **no dangling link anywhere**. Plus nine `substituteNode` unit
+checks and the two new grounded refusals.
+
+`tests/test-workflow-manifests.js` gained the invariant that is the actual
+bug class: for every SHIPPED template, every non-core class must carry a rule
+for removing it, each rule must say HOW, and a substitute must point at a
+CORE class. Authored-but-unadapted templates are exempt — the conversion is
+where their rules get written. **Reverted to the 2026-08-27 manifest it fails
+and names all seven**: ApplyMiniMaxH3FirstBlockCache, easy cleanGpuUsed,
+Float, MiniMaxH3MemoryEfficientSageAttentionPatch,
+MiniMaxH3ScheduledSolAttentionPatch, ModelPreviewOverrideKJ,
+PlaySound|pysssss. Verified, not assumed.
+
+**Harness: real AE 214/214. Stubbed suite 34/34 files.**
+
+**Bumped 0.9.22** (patch). This is a fix to SHIPPED behavior, not new
+capability: the template and `comfy.js` are both in the panel, and on any
+machine but the owner's the template could not LOAD — the failure was total,
+not degraded. Verified in real AE and real ComfyUI, so it ships tonight.
+
+**Three things for a human / the remote session:**
+
+1. **A leftover AE dialog cost this pass twenty minutes and would cost a user
+   a render.** Two comfy-probe runs reported `FAIL AE imported it —
+   ExtendScript error (see AE)`, on the AUTHORED graph as well as the bare
+   one, so it was not the change under test. `import_file` called directly
+   then answered nothing at all. The harness diagnosed it: "a dialog was
+   already blocking After Effects before this run started… the save-changes
+   prompt a previous run left behind", answered it with Cancel, and passed
+   214/214. The repeated `AfterFX.exe -r` launches in this pass are what
+   raised it. Worth noting that comfy-probe reports a blocked AE as a tool
+   error, which reads like a code defect; the harness's dialog check is the
+   thing that tells the truth, and comfy-probe does not have it.
+2. **`PlaySound|pysssss` is bypassed only when the pack is MISSING**, so the
+   owner's ComfyUI still beeps when a panel-driven render finishes. Making
+   that unconditional is a product decision (the panel has its own UI and a
+   chime from a hidden backend is confusing), not a portability one, so it
+   was left as the template author wrote it. One line if the answer is yes.
+3. Unchanged from the last two passes: seeding is copy-if-absent, so the
+   owner's `%APPDATA%\AE-Llama\comfy-workflows` still holds the 2026-08-26
+   manifest and will NOT pick up any of this. A version- or checksum-aware
+   seed is the fix and it is a design call. **This pass raises the stakes on
+   it**: the portability work only reaches a machine that has never seeded.
+   Also still open: the owner's `comfyUrl` says port 8000 while ComfyUI runs
+   on 8188 (the probe was pointed at 8188 with `--url`).
+
+Still open in 2d: the KREA2 subgraph conversion and the HF t2v/i2v file pins.
