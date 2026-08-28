@@ -331,11 +331,16 @@
             "('effects/Gaussian Blur', 'masks', 'text') and depth.",
       args: "{comp?: string, layer?: name|index (omit = selected layer), path?: string, depth?: 1-3 (default 2)}" },
     { name: "get_property", mutating: false,
-      desc: "Read ANY property by path: value, keyframes, expression.",
-      args: "{comp?: string, layer?: name|index, property: friendly name | 'effect.X.Y' | 'group/child/…' path}" },
+      desc: "Read ANY property by path: value, keyframes, expression. A " +
+            "BARE property name works too ('Radius', 'Blurriness') — " +
+            "unknown names are searched down the layer's tree and the " +
+            "result reports where it landed in `resolvedPath`. Two " +
+            "properties with the same name are refused, listing both.",
+      args: "{comp?: string, layer?: name|index, property: friendly name | bare name | 'effect.X.Y' | 'group/child/…' path}" },
     { name: "set_property", mutating: true,
       desc: "Set ANY property by path — the universal fallback when no " +
-            "dedicated tool fits. atTime creates a keyframe at that time.",
+            "dedicated tool fits. Takes the same bare names get_property " +
+            "does. atTime creates a keyframe at that time.",
       args: "{comp?: string, layer?: name|index, property: path (see get_property), value: number|[..]|string|bool, atTime?: seconds}" },
     { name: "set_keyframes", mutating: true,
       desc: "Set the SAME keyframes on MANY layers in ONE call. " +

@@ -3379,3 +3379,102 @@ result (divide by zero?)"* — the implicit Array coercion, not AE state.
 Wrap it in `String()` or index it. Two probe rounds died on that, and the
 first left AE sitting on a modal that swallowed the next `-r` launch
 silently.
+## 2026-08-28 (local, seventh pass) - item 2 follow-up: a bare property name finds its own way down (0.9.27)
+
+Harness green on arrival (277/277), so the pass took the LAST unstruck
+follow-up item 2 left behind: **`get_property` could not reach a light's
+`Radius` or `Falloff Distance` by bare name.**
+
+### The probe, which found the gap is much wider than lights
+
+Probes 1-3 (`logs/probe-path{1,2,3}.jsx`). What came back:
+
+- **AE's layer-level name shortcut is a fixed list with an arbitrary
+  edge.** Measured name by name on a spot light: Intensity, Color, Cone
+  Angle, Cone Feather, Casts Shadows, Shadow Darkness and Shadow
+  Diffusion all resolve from the layer; `Falloff`, `Radius` and `Falloff
+  Distance` return NULL - and all fourteen live in the SAME group. The
+  three it misses are exactly the options AE added with falloff. A
+  camera answers every one of its options (Zoom, Focus Distance,
+  Aperture, Blur Level, Depth of Field, Iris Shape). A solid answers
+  Accepts Lights and Casts Shadows but NOT its own effect's
+  `Blurriness`. A shape layer answers `Contents` but not `Group 1`,
+  `Rectangle Path 1` or `Size`. So this was never a light bug: any
+  nested parameter is unreachable by name, which is most of them.
+- **Layer Styles are the trap under any naive search.** EVERY layer
+  carries all eleven whether or not one was ever applied, and each
+  reports `enabled=false, active=false, canSetEnabled=false,
+  elided=false` either way - there is no flag separating an applied
+  style from a latent one. On a plain solid that is ten extra
+  "Opacity"s, seven "Color"s and seven "Size"s at depth 3, while a
+  shape's real `Size` sits at depth 5. Shallowest-wins would have
+  answered from a style nobody added.
+- **The walk is free.** Depth-5 over the heaviest layer: 219 nodes in
+  6-11 ms; 50 deep-searched `get_property` calls measured 179 ms total
+  (3.6 ms each). No caching or opt-in flag was warranted.
+
+### The fix
+
+`AELL_deepFindProp` walks the layer's tree to depth 5 and ranks matches
+by ROOT first (Transform 1, Light/Camera Options 2, Material/Geometry 3,
+Text 4, Effects 5, Contents 6, Masks 7, Audio/Time Remap 8, anything
+unknown 50, **Layer Styles 99**) and only then by depth. It matches
+display name OR matchName, case-insensitively. It runs only after the
+friendly name and the '/'-path both fail, so nothing that resolved
+before resolves differently now.
+
+- **A tie is refused, never guessed**: two matches of equal rank AND
+  equal depth come back as a grounded refusal naming both real paths.
+  Verified in the field with two Gaussian Blurs on one layer (AE names
+  the second "Gaussian Blur 2"), read AND write.
+- **The result names what it hunted for**: `resolvedPath` on
+  `get_property`/`set_property`, plus `alsoMatched` (up to 3) for the
+  lower-ranked namesakes, so the model learns the addressable path
+  instead of leaning on the search forever. A name that resolved the
+  ordinary way reports neither - the field only appears when a hunt
+  really happened.
+- **The path form got the same treatment**: a '/'-path whose FIRST
+  segment the layer cannot see ("Gaussian Blur/Blurriness",
+  "ST Cov Pt/Point") deep-finds the head and walks the rest from there.
+- **A miss stays grounded**: the old "children here" error survives and
+  grows a line saying the whole tree was searched too, plus the real
+  names that CONTAIN what was asked for ("Diffusion" -> "Light
+  Options/Shadow Diffusion").
+- One subtlety the suite caught: a bare control name lands on the
+  control GROUP and `descendToLeaf` then hands back the value inside it,
+  so `AELL_descendReported` appends the leaf - otherwise `resolvedPath`
+  would have handed the model a path that reads back as a GROUP refusal.
+
+### Covered without AE
+
+- **`tests/test-property-access.js`**: the stub Layer now models AE's
+  measured shortcut table name for name (it is the difference between
+  testing the search and testing nothing), plus a light with all 14
+  Light Options, a shape whose `Size` is five levels down, and the
+  eleven latent Layer Styles. Fourteen new assertions incl. stub-fidelity
+  checks that Radius/Blurriness/Size really do refuse the layer-level
+  lookup and that an unapplied style is indistinguishable from an
+  applied one.
+- **`tests/test-self-test.js`**: the canned host learned the same line
+  (`LIGHT_DEEP_ONLY`), stacks effects so a second Gaussian Blur really
+  is ambiguous, MUTATES the light when a write comes through the search,
+  and carries AE 2026's real Gaussian Blur default.
+
+### Bumped to 0.9.27
+
+A fix to shipped behaviour of two existing tools, verified in real AE.
+`tools.js` tells the model bare names work and that ties are refused;
+the CAPABILITIES gap entry became a description, and the curated half
+gained a section on finding a property when the name is all you have.
+
+**Harness: 289/289 PASSED** (277 -> 289: six light steps, seven coverage
+steps). The real AE run also earned its keep - it failed the first
+attempt on `...and an ambiguous WRITE changes nothing`, because a freshly
+applied Gaussian Blur in AE 2026 comes up at **Blurriness 25, not 0**.
+The step now reads both params before and after instead of assuming a
+default, which is what it should have done anyway. Nothing blocked.
+
+**One trap for the next pass:** `add_text_layer` names the layer after
+its TEXT, not the `name` argument (probe 1 asked for "Txt" and got "Hi",
+then died on `null is not an object` two steps later). Resolve a text
+layer with `instanceof TextLayer`, or pass the text as the name.

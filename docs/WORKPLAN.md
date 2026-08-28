@@ -115,10 +115,19 @@ small pass rather than being smuggled in:
   reported as a FAILED layer because AE hides its Position, and a point
   light reports autoOrient 4214 like a two-node spot and then refuses its
   Point of Interest. Harness 262 -> 277.
-- `get_property` cannot reach `Radius` or `Falloff Distance` by bare
-  name (AE's layer-level name shortcut does not cover them); the
-  group path `light/Radius` works and the suite uses it. A deep-search
-  fallback in the path resolver would remove the trap for the model.
+- ~~`get_property` cannot reach `Radius` or `Falloff Distance` by bare
+  name~~ DONE 2026-08-28 (0.9.27). The probe found the gap was never
+  about lights: AE's layer-level shortcut is a fixed list with an
+  arbitrary edge (a light answers Intensity and Cone Angle but not
+  Radius; a solid answers Opacity but not its own effect's Blurriness; a
+  shape layer answers Contents but not Size), so any bare name AE refuses
+  is now searched down the real tree, roots in a measured order with
+  Layer Styles LAST - AE ships all eleven on every layer whether or not
+  one was applied, and they would otherwise outrank the property the user
+  meant. Ties are refused with both real paths; the result names the path
+  it found. Harness 277 -> 289.
+
+**Item 2 has nothing left. The next pass starts at item 3, 4 or 5.**
 
 ## 2c. Inventory the owner's real ComfyUI install — DONE 2026-08-25
 

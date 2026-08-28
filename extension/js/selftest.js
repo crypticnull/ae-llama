@@ -2511,10 +2511,14 @@
           return Math.abs(d.value - 60) < 0.01 || "cone angle " + d.value;
         } },
 
-      // Radius and Falloff Distance do NOT resolve by bare name: AE's
-      // layer-level name shortcut covers Cone Angle and Intensity but not
-      // these two (measured). The group path is what works, so the suite
-      // uses it — and pins that it still does.
+      // AE's own layer-level name shortcut does NOT cover Radius or
+      // Falloff Distance, though it covers Cone Angle, Intensity, Color,
+      // Cone Feather, Casts Shadows, Shadow Darkness and Shadow Diffusion
+      // in the very same group (measured name by name, 2026-08-28: the
+      // three it misses are exactly the ones AE added with falloff). The
+      // group path always worked and these steps pin that it still does;
+      // the bare name works too now, through the deep search, and its own
+      // steps are further down.
       { name: "falloff was written BEFORE radius (it gates it)",
         tool: "get_property",
         args: function (ctx) {
@@ -2763,6 +2767,98 @@
         check: function (d) {
           return (d.removed === 2 && d.remaining === 0) ||
                  "removed " + d.removed + ", remaining " + d.remaining;
+        } },
+
+      // ---- the deep search (WORKPLAN item 2 follow-up) ---------------
+      // A light is where the gap was found: "Radius" and "Falloff
+      // Distance" are the two options AE's layer-level shortcut cannot
+      // see, so before the search the model's only way in was a group
+      // path it had no reason to guess. These steps prove the bare name
+      // now lands, that the result NAMES the path it had to hunt for
+      // (that is how the model learns the real path), and that a name
+      // which is nowhere still comes back grounded.
+      { name: "a bare 'Radius' reaches what AE's shortcut hides",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.ltComp, layer: "ST Light Spot",
+                   property: "Radius" };
+        },
+        check: function (d) {
+          if (Math.abs(d.value - 111) > 0.01) return "radius " + d.value;
+          if (d.matchName !== "ADBE Light Falloff Start") {
+            return "landed on " + d.matchName;
+          }
+          return d.resolvedPath === "Light Options/Radius" ||
+                 "the hunt is not reported: " + d.resolvedPath;
+        } },
+
+      { name: "a matchName is a name too",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.ltComp, layer: "ST Light Spot",
+                   property: "ADBE Light Falloff Distance" };
+        },
+        check: function (d) {
+          return Math.abs(d.value - 222) < 0.01 || "distance " + d.value;
+        } },
+
+      { name: "and the bare name WRITES, not just reads",
+        batch: function (ctx) {
+          return [
+            { tool: "set_property",
+              args: { comp: ctx.ltComp, layer: "ST Light Spot",
+                      property: "Falloff Distance", value: 333 } },
+            { tool: "get_property",
+              args: { comp: ctx.ltComp, layer: "ST Light Spot",
+                      property: "light/Falloff Distance" } }
+          ];
+        },
+        check: function (rows) {
+          if (!rows[0].ok) return "the write was refused: " + rows[0].error;
+          if (rows[0].data.resolvedPath !== "Light Options/Falloff Distance") {
+            return "wrote without saying where: " + rows[0].data.resolvedPath;
+          }
+          if (!rows[1].ok) return "read back refused: " + rows[1].error;
+          return Math.abs(rows[1].data.value - 333) < 0.01 ||
+                 "the group path still reads " + rows[1].data.value;
+        } },
+
+      { name: "a documented group path claims no hunt",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.ltComp, layer: "ST Light Spot",
+                   property: "light/Radius" };
+        },
+        check: function (d) {
+          return typeof d.resolvedPath === "undefined" ||
+                 "reported a search it never had to run: " + d.resolvedPath;
+        } },
+
+      { name: "a name that is nowhere still comes back grounded",
+        tool: "get_property",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.ltComp, layer: "ST Light Spot",
+                   property: "Blurriness" };
+        },
+        check: function (err) {
+          if (!/Children here/.test(err)) {
+            return "lost the children list: " + err;
+          }
+          return /searched the whole tree/.test(err) ||
+                 "does not say the tree was searched: " + err;
+        } },
+
+      { name: "...and a near miss names the real neighbours",
+        tool: "get_property",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.ltComp, layer: "ST Light Spot",
+                   property: "Diffusion" };
+        },
+        check: function (err) {
+          return /Shadow Diffusion/.test(err) ||
+                 "no near-name hint: " + err;
         } },
 
       { name: "cleanup: delete the light comp",
@@ -3266,6 +3362,120 @@
           return !!dupe ||
                  "no colliding display names — if AE stopped shipping two " +
                  "Geometry Options groups this step can go";
+        } },
+
+      // The other half of the deep search: rank, and the refusal to pick.
+      // A bare name is searched root by root in a MEASURED order, because
+      // AE hands every layer all eleven Layer Styles whether or not one
+      // was ever applied — ten latent "Opacity"s and seven "Color"s sit
+      // at depth 3 on a plain solid, shallower than a shape's real Size
+      // at depth 5. Shallowest-wins would answer from a style nobody
+      // added, so Layer Styles is searched LAST and Transform first.
+      { name: "'Opacity' still means the Transform one, not a layer style",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box",
+                   property: "Opacity" };
+        },
+        check: function (d) {
+          return d.matchName === "ADBE Opacity" ||
+                 "resolved to " + d.matchName;
+        } },
+
+      { name: "an effect param resolves by its bare name",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box",
+                   property: "ST Cov Amp" };
+        },
+        check: function (d) {
+          if (Math.abs(d.value - 40) > 0.01) return "value " + d.value;
+          return d.resolvedPath === "Effects/ST Cov Amp/Slider" ||
+                 "resolved to " + d.resolvedPath;
+        } },
+
+      { name: "a path that STARTS at the effect resolves too",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box",
+                   property: "ST Cov Pt/Point" };
+        },
+        check: function (d) {
+          var v = d.value || [];
+          return (Math.abs(v[0] - 10) < 0.01 && Math.abs(v[1] - 20) < 0.01) ||
+                 "value " + JSON.stringify(v);
+        } },
+
+      { name: "two of the same effect, and the second is named ' 2'",
+        batch: function (ctx) {
+          return [
+            { tool: "apply_effect",
+              args: { comp: ctx.cvComp, layer: "ST Cov Box",
+                      effect: "Gaussian Blur" } },
+            { tool: "apply_effect",
+              args: { comp: ctx.cvComp, layer: "ST Cov Box",
+                      effect: "Gaussian Blur" } }
+          ];
+        },
+        check: function (rows) {
+          if (!rows[0].ok) return "first blur refused: " + rows[0].error;
+          if (!rows[1].ok) return "second blur refused: " + rows[1].error;
+          return rows[1].data.effect === "Gaussian Blur 2" ||
+                 "AE named the copy " + rows[1].data.effect;
+        } },
+
+      { name: "a tie is refused with both real paths, never guessed",
+        tool: "get_property",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box",
+                   property: "Blurriness" };
+        },
+        check: function (err) {
+          if (!/ambiguous/.test(err)) return "it picked one: " + err;
+          return (/Gaussian Blur\/Blurriness/.test(err) &&
+                  /Gaussian Blur 2\/Blurriness/.test(err)) ||
+                 "the refusal does not name both: " + err;
+        } },
+
+      // Read both BEFORE and after rather than assuming a default: a
+      // freshly applied Gaussian Blur in AE 2026 comes up at Blurriness
+      // 25, not 0, and a step that asserted 0 would have failed for a
+      // reason that has nothing to do with the refusal it is testing.
+      { name: "...and an ambiguous WRITE changes nothing",
+        batch: function (ctx) {
+          var one = { comp: ctx.cvComp, layer: "ST Cov Box",
+                      property: "Effects/Gaussian Blur/Blurriness" };
+          var two = { comp: ctx.cvComp, layer: "ST Cov Box",
+                      property: "Effects/Gaussian Blur 2/Blurriness" };
+          return [
+            { tool: "get_property", args: one },
+            { tool: "get_property", args: two },
+            { tool: "set_property",
+              args: { comp: ctx.cvComp, layer: "ST Cov Box",
+                      property: "Blurriness", value: 12 } },
+            { tool: "get_property", args: one },
+            { tool: "get_property", args: two }
+          ];
+        },
+        check: function (rows) {
+          for (var i = 0; i < rows.length; i++) {
+            if (i === 2) continue;
+            if (!rows[i].ok) return "read " + i + " refused: " + rows[i].error;
+          }
+          if (rows[2].ok) return "the ambiguous write went through";
+          if (!/ambiguous/.test(rows[2].error)) {
+            return "refused for another reason: " + rows[2].error;
+          }
+          if (rows[0].data.value === 12 || rows[1].data.value === 12) {
+            return "one of them was already 12 — the step cannot tell a " +
+                   "refusal from a write";
+          }
+          return (rows[3].data.value === rows[0].data.value &&
+                  rows[4].data.value === rows[1].data.value) ||
+                 "a refused write still moved something: " +
+                 rows[0].data.value + "->" + rows[3].data.value + " / " +
+                 rows[1].data.value + "->" + rows[4].data.value;
         } },
 
       { name: "list_effects filters by name OR category",

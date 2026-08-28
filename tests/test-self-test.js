@@ -147,12 +147,35 @@ const cvExpr = {};       // "layer/prop"  -> expression
 const cvThreeD = {};     // layer -> bool
 const cvAnchor = {};     // layer -> [x, y, z]
 const cvXRot = {};       // layer -> deg (3D-only, cleared by going 2D)
+const cvFx = {};         // layer -> [effect display names, in AE's order]
+// AE's layer-level name shortcut, measured name by name in AE 2026: a
+// light answers Intensity, Color, Cone Angle, Cone Feather, Casts
+// Shadows, Shadow Darkness and Shadow Diffusion but NOT Falloff, Radius
+// or Falloff Distance -- the three options that arrived with falloff,
+// living in the very same group. Everything the shortcut misses is what
+// the deep search exists for, and the canned host has to draw that line
+// in the same place or the suite's search steps prove nothing.
+const LIGHT_DEEP_ONLY = {
+  "Radius": ["radius", "ADBE Light Falloff Start"],
+  "Falloff Distance": ["falloffDistance", "ADBE Light Falloff Distance"],
+  "ADBE Light Falloff Start": ["radius", "ADBE Light Falloff Start"],
+  "ADBE Light Falloff Distance": ["falloffDistance",
+                                  "ADBE Light Falloff Distance"],
+  "ADBE Light Shadow Diffusion": ["shadowDiffusion",
+                                  "ADBE Light Shadow Diffusion"]
+};
+const LIGHT_DEEP_PATH = {
+  "radius": "Light Options/Radius",
+  "falloffDistance": "Light Options/Falloff Distance",
+  "shadowDiffusion": "Light Options/Shadow Diffusion"
+};
 // Every run of the suite starts on a FRESH scratch comp in real AE, so
 // the canned rig has to be wiped between runs here too. Not cosmetic:
 // the Position keyframes the discard-report steps leave behind made the
 // NEXT run's expression read answer with a key list instead.
 const resetCoverRig = () => {
-  const stores = [cvControls, cvKeys, cvExpr, cvThreeD, cvAnchor, cvXRot];
+  const stores = [cvControls, cvKeys, cvExpr, cvThreeD, cvAnchor, cvXRot,
+                  cvFx];
   for (const store of stores) {
     for (const k of Object.keys(store)) delete store[k];
   }
@@ -165,6 +188,18 @@ const cvKeyList = (layer, prop) => {
   return cvKeys[k];
 };
 const inCvComp = (a) => !!(a && /Cover/.test(a.comp || ""));
+// Two effects of one class on one layer: AE names the second "<name> 2",
+// and both hand out a param called "Blurriness" at the same depth under
+// the same root. Equal standing is never guessed between.
+const cvAmbiguous = (layer, prop) => {
+  if (String(prop).toLowerCase() !== "blurriness") return null;
+  const fx = (cvFx[layer] || []).filter(n => /^Gaussian Blur/.test(n));
+  if (fx.length < 2) return null;
+  const paths = fx.slice().reverse().map(n => "Effects/" + n + "/Blurriness");
+  return "'" + prop + "' is ambiguous on '" + layer + "': " + fx.length +
+    " properties share that name - " + paths.join(", ") +
+    ". Pass the full path (list_properties shows the tree).";
+};
 
 // The control table and the preset list are READ OUT of hostscript.jsx,
 // not paraphrased: a stub carrying its own copy would answer the two
@@ -750,13 +785,45 @@ function cannedOk(tool, args) {
       }
       if (inCvComp(args)) {
         const P = String(args.property || "");
+        // Two effects of the same class carry the same param name at the
+        // same depth under the same root: nothing separates them, so the
+        // search must refuse rather than pick.
+        const tie = cvAmbiguous(args.layer, P);
+        if (tie) return { __err: tie };
+        // A full path still reads the one it names.
+        // Measured in AE 2026: a freshly applied Gaussian Blur comes up
+        // at Blurriness 25, not 0.
+        const full = /^effects\/(Gaussian Blur 2?)\/Blurriness$/i.exec(P);
+        if (full) return { value: 25, matchName: "ADBE Gaussian Blur 2-0001" };
+        // Transform beats the eleven latent Layer Styles: AE ships them
+        // all on every layer, so "Opacity" would otherwise have ten
+        // shallower answers than the one the user means.
+        if (P === "Opacity") {
+          return { value: 100, matchName: "ADBE Opacity", numKeys: 0 };
+        }
         const ctl = cvControls[args.layer + "/" +
                                P.replace(/^effects\//i, "")];
         if (ctl) {
           // "effects/<name>" lands on the control GROUP and descends to
           // its single value property, so the matchName is the value's.
-          return { value: ctl.value, matchName: ctl.match + "-0001",
-                   numKeys: 0 };
+          const out = { value: ctl.value, matchName: ctl.match + "-0001",
+                        numKeys: 0 };
+          // Reached by its BARE name, the search says where it landed --
+          // that is how the model learns the path for next time. Through
+          // "effects/<name>" it says nothing: no hunt happened.
+          if (!/^effects\//i.test(P)) {
+            out.resolvedPath = "Effects/" + P + "/" + ctl.leaf;
+          }
+          return out;
+        }
+        // A path whose HEAD the layer cannot see either: "<control>/<leaf>".
+        const seg = P.split("/");
+        const head = seg.length === 2 ? cvControls[args.layer + "/" + seg[0]]
+                                      : null;
+        if (head && seg[1].toLowerCase() === head.leaf.toLowerCase()) {
+          return { value: head.value, matchName: head.match + "-0001",
+                   numKeys: 0,
+                   resolvedPath: "Effects/" + seg[0] + "/" + head.leaf };
         }
         const np = cvProp(P);
         if (np === "anchorpoint") {
@@ -794,6 +861,25 @@ function cannedOk(tool, args) {
         const la = lights[args.layer];
         const P = args.property;
         const pad3 = (v) => [v[0], v[1], v.length > 2 ? v[2] : 0];
+        const deep = LIGHT_DEEP_ONLY[P];
+        if (deep) {
+          return { value: la[deep[0]], matchName: deep[1],
+                   numKeys: 0, resolvedPath: LIGHT_DEEP_PATH[deep[0]] };
+        }
+        if (P === "Blurriness" || P === "Diffusion") {
+          // The grounded error survives the search and grows a line
+          // saying the whole tree was walked too -- plus, for a near
+          // miss, the real names that contain what was asked for.
+          let err = "Path segment '" + P + "' not found under layer '" +
+            args.layer + "'. Children here: Marker, Transform, " +
+            "Light Options. Use list_properties to inspect the real " +
+            "tree. No property named '" + P + "' exists anywhere on '" +
+            args.layer + "' either (searched the whole tree to depth 5).";
+          if (P === "Diffusion") {
+            err += " Names containing it: Light Options/Shadow Diffusion.";
+          }
+          return { __err: err };
+        }
         if (P === "Cone Angle") return { value: la.coneAngle };
         if (P === "Intensity") return { value: la.intensity };
         if (P === "light/Radius") return { value: la.radius };
@@ -1076,6 +1162,17 @@ function cannedOk(tool, args) {
       if (inRbComp(args)) rbLayers.push(args.name);
       return { name: (args && args.name) || "ST Square" };
     case "apply_effect":
+      if (inCvComp(args)) {
+        const have = cvFx[args.layer] || (cvFx[args.layer] = []);
+        // AE's own duplicate-name rule: the second copy becomes "<name> 2".
+        const dupes = have.filter(n => n === args.effect ||
+                                       n.indexOf(args.effect + " ") === 0);
+        const named = dupes.length ? args.effect + " " + (dupes.length + 1)
+                                   : args.effect;
+        have.push(named);
+        return { layer: args.layer, effect: named,
+                 matchName: "ADBE Gaussian Blur 2" };
+      }
       if (inBatComp(args)) {
         if (batSolids.indexOf(args.layer) === -1) {
           return { __err: "No layer '" + args.layer + "' in '" +
@@ -1251,8 +1348,12 @@ function cannedOk(tool, args) {
       if (!args || !args.name) {
         return { __err: "'name' is required (e.g. 'Speed')" };
       }
+      // The display name of the group's single value property, which is
+      // what the deep search appends when it descends into a control:
+      // AE names it after the control type ("Slider", "Point", ...).
       cvControls[args.layer + "/" + args.name] =
-        { type: t, match: CONTROL_TYPES[t], value: args.value };
+        { type: t, match: CONTROL_TYPES[t], value: args.value,
+          leaf: t.charAt(0).toUpperCase() + t.slice(1) };
       return { layer: args.layer, control: String(args.name), type: t,
                hint: "Link with link_property {controlLayer: \"" +
                      args.layer + "\", controlEffect: \"" + args.name +
@@ -1352,6 +1453,23 @@ function cannedOk(tool, args) {
       // discard report below has something real to find.
       if (cvProp(args && args.property) === "xrotation") {
         cvXRot[args.layer] = args.value;
+      }
+      if (inCvComp(args)) {
+        const tie = cvAmbiguous(args.layer, args.property);
+        // A refusal that still wrote would be the worst of both: the
+        // canned host returns the error INSTEAD of touching anything.
+        if (tie) return { __err: tie };
+      }
+      // Written through the deep search, a light option really moves --
+      // a read afterwards can only confirm a write that happened.
+      if (args && lights[args.layer]) {
+        const deep = LIGHT_DEEP_ONLY[String(args.property)];
+        if (deep) {
+          lights[args.layer][deep[0]] = args.value;
+          return { layer: args.layer, property: args.property,
+                   value: args.value, keyframed: false, numKeys: 0,
+                   resolvedPath: LIGHT_DEEP_PATH[deep[0]] };
+        }
       }
       return { layer: args && args.layer, property: args && args.property,
                value: args && args.value };

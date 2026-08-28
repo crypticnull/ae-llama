@@ -68,9 +68,63 @@ Prop.prototype.keyTime = function (i) { return this._keys[i - 1].time; };
 Prop.prototype.keyValue = function (i) { return this._keys[i - 1].value; };
 Prop.prototype.removeKey = function (i) { this._keys.splice(i - 1, 1); };
 
-function Layer(name, comp) {
+// Measured in AE 2026: EVERY layer carries all eleven Layer Styles
+// whether or not one was ever applied, and each reports enabled=false,
+// active=false, canSetEnabled=false, elided=false either way -- there is
+// no flag separating an applied style from a latent one. On a plain solid
+// that is ten extra "Opacity" properties and seven extra "Color"s, which
+// is exactly what a naive name search would trip over.
+const LAYER_STYLES = [
+  ["Blending Options", "ADBE Blend Options Group", []],
+  ["Drop Shadow", "dropShadow/enabled", ["Color", "Opacity", "Size"]],
+  ["Inner Shadow", "innerShadow/enabled", ["Color", "Opacity", "Size"]],
+  ["Outer Glow", "outerGlow/enabled", ["Color", "Opacity", "Size"]],
+  ["Inner Glow", "innerGlow/enabled", ["Color", "Opacity", "Size"]],
+  ["Bevel and Emboss", "bevelEmboss/enabled", ["Size"]],
+  ["Satin", "chromeFX/enabled", ["Color", "Opacity", "Size"]],
+  ["Color Overlay", "solidFill/enabled", ["Color", "Opacity"]],
+  ["Gradient Overlay", "gradientFill/enabled", ["Opacity", "Scale"]],
+  ["Pattern Overlay", "patternFill/enabled", ["Opacity", "Scale"]],
+  ["Stroke", "frameFX/enabled", ["Color", "Opacity", "Size", "Position"]]
+];
+function layerStylesGroup() {
+  const g = new PGroup("Layer Styles", "ADBE Layer Styles");
+  for (const [nm, mn, kids] of LAYER_STYLES) {
+    const st = new PGroup(nm, mn);
+    st.enabled = false;
+    st.active = false;
+    st.canSetEnabled = false;
+    st.elided = false;
+    for (const k of kids) st.add(new Prop(k, mn + "/" + k, 0));
+    g.add(st);
+  }
+  return g;
+}
+
+// The fourteen Light Options AE gives EVERY light, in AE 2026 order and
+// with the matchNames the field probe read back -- "Radius" really is
+// "ADBE Light Falloff Start".
+const LIGHT_OPTS = [
+  ["Source", "ADBE Light Env Atom"],
+  ["Background Visible", "ADBE Light Backgd Visible"],
+  ["Background Opacity", "ADBE Light Backgd Opacity"],
+  ["Background Blur", "ADBE Light Backgd Blur"],
+  ["Intensity", "ADBE Light Intensity"],
+  ["Color", "ADBE Light Color"],
+  ["Cone Angle", "ADBE Light Cone Angle"],
+  ["Cone Feather", "ADBE Light Cone Feather 2"],
+  ["Falloff", "ADBE Light Falloff Type"],
+  ["Radius", "ADBE Light Falloff Start"],
+  ["Falloff Distance", "ADBE Light Falloff Distance"],
+  ["Casts Shadows", "ADBE Casts Shadows"],
+  ["Shadow Darkness", "ADBE Light Shadow Darkness"],
+  ["Shadow Diffusion", "ADBE Light Shadow Diffusion"]
+];
+
+function Layer(name, comp, kind) {
   this.name = name;
   this.comp = comp;
+  this.kind = kind || "solid";
   this.selected = false;
   this.parent = null;
   this.inPoint = 0;
@@ -102,12 +156,69 @@ function Layer(name, comp) {
   slider.add(new Prop("Slider", "ADBE Slider Control-0001", 10));
   fx.add(slider);
   this._root.add(t);
+  if (this.kind === "light") {
+    // A light has no Effects, no Contents and no Layer Styles: the field
+    // probe walked one to depth 3 and found 29 nodes total.
+    this._root._children.length = 0;
+    this._root.add(t);
+    const lo = new PGroup("Light Options", "ADBE Light Options Group");
+    for (const [nm, mn] of LIGHT_OPTS) {
+      lo.add(new Prop(nm, mn, nm === "Radius" ? 300
+        : nm === "Falloff Distance" ? 400
+        : nm === "Shadow Diffusion" ? 60 : 100));
+    }
+    this._root.add(lo);
+    return;
+  }
   this._root.add(fx);
+  if (this.kind === "shape") {
+    // Contents/Group 1/Contents/Rectangle Path 1/Size -- the real depth
+    // AE puts a rectangle's Size at, five levels down and BELOW the
+    // depth the Layer Styles copies of "Size" sit at.
+    const contents = new PGroup("Contents", "ADBE Root Vectors Group");
+    const grp = new PGroup("Group 1", "ADBE Vector Group");
+    const inner = new PGroup("Contents", "ADBE Vectors Group");
+    const rect = new PGroup("Rectangle Path 1", "ADBE Vector Shape - Rect");
+    rect.add(new Prop("Size", "ADBE Vector Rect Size", [200, 100]));
+    inner.add(rect);
+    grp.add(inner);
+    contents.add(grp);
+    this._root.add(contents);
+  }
+  this._root.add(layerStylesGroup());
 }
+
+// AE's layer-level name shortcut is a FIXED list, not a search, and the
+// line it draws is arbitrary. Measured name by name in AE 2026: a light
+// answers Intensity, Color, Cone Angle, Cone Feather, Casts Shadows,
+// Shadow Darkness AND Shadow Diffusion -- but NOT Falloff, Radius or
+// Falloff Distance, the three options AE added with falloff, which live
+// in the very same group. A camera answers every one of its options. A
+// solid answers Accepts Lights and Casts Shadows but NOT its own effect's
+// Blurriness, and a shape layer answers Contents but not Group 1,
+// Rectangle Path 1 or Size. That split is the whole reason the deep
+// search exists, so the stub reproduces it name for name instead of
+// resolving everything.
+const AE_LAYER_SHORTCUT = ["Position", "Scale", "Rotation", "Opacity",
+  "Anchor Point", "Z Position", "Orientation", "X Rotation", "Y Rotation",
+  "Zoom", "Focus Distance", "Aperture", "Blur Level", "Depth of Field",
+  "Iris Shape", "Intensity", "Color", "Cone Angle", "Cone Feather",
+  "Casts Shadows", "Shadow Darkness", "Shadow Diffusion", "Accepts Lights",
+  "Source Text", "Marker", "Time Remap"];
 Object.defineProperty(Layer.prototype, "numProperties", {
   get() { return this._root._children.length; }
 });
-Layer.prototype.property = function (ref) { return this._root.property(ref); };
+Layer.prototype.property = function (ref) {
+  const direct = this._root.property(ref);
+  if (direct) return direct;
+  if (typeof ref !== "string" ||
+      AE_LAYER_SHORTCUT.indexOf(ref) === -1) return null;
+  for (const g of this._root._children) {
+    const hit = g.property(ref);
+    if (hit) return hit;
+  }
+  return null;
+};
 // The one thing the 3D switch really changes about the tree: AE RENAMES
 // ADBE Rotate Z from "Rotation" to "Z Rotation". Measured in AE 2026
 // (WORKPLAN-LOG 2026-08-28), including the asymmetry: a 3D layer still
@@ -600,5 +711,130 @@ r = call("duplicate_comp", { name: "Props Copy" });
 assert(r.ok && r.data.name === "Props Copy" &&
        r.data.duplicatedFrom === "Props" && typeof r.data.id === "number",
        "duplicate_comp reports the copy and its source: " + (r.error || ""));
+
+// ---------------------------------------------------------------- deep
+// search: a bare name AE's layer-level shortcut cannot see (WORKPLAN
+// item 2 follow-up -- get_property could not reach a light's Radius).
+const LIT = new Layer("Key", comp, "light");
+const SHP = new Layer("Box", comp, "shape");
+comp._layers.push(LIT, SHP);
+
+// Stub fidelity first: if these ever start resolving on their own, the
+// tests below stop testing the search and start testing nothing.
+assert(LIT.property("Radius") === null &&
+       LIT.property("Falloff Distance") === null,
+       "stub fidelity: AE's layer shortcut does NOT reach a light's " +
+       "Radius or Falloff Distance");
+assert(LIT.property("Intensity") && LIT.property("Color") &&
+       LIT.property("Cone Angle") && LIT.property("Shadow Diffusion") &&
+       LIT.property("Intensity").matchName === "ADBE Light Intensity",
+       "stub fidelity: it DOES reach Intensity, Color, Cone Angle and " +
+       "Shadow Diffusion -- same group, arbitrary line");
+assert(LIT.property("Falloff") === null,
+       "stub fidelity: the three unreachable ones are exactly the " +
+       "falloff-era additions");
+assert(A.property("Blurriness") === null && SHP.property("Size") === null,
+       "stub fidelity: nor an effect param, nor a shape's Size");
+const style1 = A.property("ADBE Layer Styles").property("Drop Shadow");
+assert(style1 && style1.enabled === false && style1.active === false &&
+       style1.canSetEnabled === false && style1.elided === false,
+       "stub fidelity: an unapplied layer style is indistinguishable " +
+       "from an applied one");
+
+r = call("get_property", { layer: "Key", property: "Radius" });
+assert(r.ok && r.data.value === 300 &&
+       r.data.matchName === "ADBE Light Falloff Start",
+       "a bare 'Radius' now reaches the light option: " + (r.error || ""));
+assert(r.ok && r.data.resolvedPath === "Light Options/Radius",
+       "and the result NAMES the path it had to hunt for: " +
+       (r.data ? r.data.resolvedPath : r.error));
+r = call("get_property", { layer: "Key", property: "Falloff Distance" });
+assert(r.ok && r.data.value === 400, "'Falloff Distance' too");
+r = call("get_property", { layer: "Key",
+                           property: "ADBE Light Shadow Diffusion" });
+assert(r.ok && r.data.value === 60,
+       "a bare matchName resolves the same way: " + (r.error || ""));
+
+// The group path still works and still reports NO resolvedPath -- the
+// field only appears when the search actually did the finding.
+r = call("get_property", { layer: "Key", property: "light/Radius" });
+assert(r.ok && r.data.value === 300 &&
+       typeof r.data.resolvedPath === "undefined",
+       "the documented group path is untouched and claims no hunt");
+r = call("get_property", { layer: "A", property: "opacity" });
+assert(r.ok && typeof r.data.resolvedPath === "undefined",
+       "nor does a friendly name");
+
+// Rank, not depth: "Size" exists at depth 3 under seven Layer Styles
+// nobody applied and at depth 5 under Contents. The shallow ones must
+// lose.
+r = call("get_property", { layer: "Box", property: "Size" });
+assert(r.ok && r.data.resolvedPath ===
+         "Contents/Group 1/Contents/Rectangle Path 1/Size",
+       "a shape's Size beats seven Layer Styles copies of the name: " +
+       (r.ok ? r.data.resolvedPath : r.error));
+assert(r.ok && r.data.alsoMatched && r.data.alsoMatched.length === 3 &&
+       /Layer Styles/.test(r.data.alsoMatched[0]),
+       "and the losers are named, not swallowed: " +
+       JSON.stringify(r.data && r.data.alsoMatched));
+// Transform wins over Layer Styles for the same reason, via the shortcut
+// AE itself provides -- no search, no report.
+r = call("get_property", { layer: "Box", property: "Opacity" });
+assert(r.ok && r.data.value === 100 &&
+       typeof r.data.resolvedPath === "undefined",
+       "'Opacity' still means the Transform one");
+
+// An effect param by bare name, and by a path whose HEAD the layer
+// cannot see either.
+r = call("get_property", { layer: "A", property: "Blurriness" });
+assert(r.ok && r.data.resolvedPath === "Effects/Gaussian Blur/Blurriness",
+       "a bare effect param resolves: " +
+       (r.ok ? r.data.resolvedPath : r.error));
+r = call("get_property", { layer: "A",
+                           property: "Gaussian Blur/Blurriness" });
+assert(r.ok && r.data.resolvedPath === "Effects/Gaussian Blur/Blurriness",
+       "so does a path starting at the effect: " +
+       (r.ok ? r.data.resolvedPath : r.error));
+
+// Writing through the search, and the write really landing.
+r = call("set_property", { layer: "Key", property: "Radius", value: 150 });
+assert(r.ok && r.data.resolvedPath === "Light Options/Radius" &&
+       LIT.property("ADBE Light Options Group")
+          .property("ADBE Light Falloff Start").value === 150,
+       "set_property writes through the search and says where: " +
+       (r.error || ""));
+
+// A tie is never guessed between. Two effects with a same-named param sit
+// at equal rank and equal depth: that is a refusal listing both.
+const fxA = A.property("ADBE Effect Parade");
+const g1 = new PGroup("Tint", "ADBE Tint");
+g1.add(new Prop("Amount", "ADBE Tint-0001", 0));
+const g2 = new PGroup("Fill", "ADBE Fill");
+g2.add(new Prop("Amount", "ADBE Fill-0001", 0));
+fxA.add(g1); fxA.add(g2);
+r = call("get_property", { layer: "A", property: "Amount" });
+assert(!r.ok && /ambiguous/.test(r.error) &&
+       /Effects\/Tint\/Amount/.test(r.error) &&
+       /Effects\/Fill\/Amount/.test(r.error),
+       "an equal tie is refused with both real paths: " +
+       (r.error || "(it picked one!)"));
+r = call("set_property", { layer: "A", property: "Amount", value: 5 });
+assert(!r.ok && /ambiguous/.test(r.error) &&
+       g1.property("Amount").value === 0 && g2.property("Amount").value === 0,
+       "and a WRITE to an ambiguous name changes nothing");
+
+// Nothing found: the old grounded error survives and grows the search.
+r = call("get_property", { layer: "Key", property: "Blurriness" });
+assert(!r.ok && /searched the whole tree/.test(r.error) &&
+       /Children here/.test(r.error),
+       "a name that is nowhere keeps the grounded error and adds the " +
+       "search: " + (r.error || ""));
+r = call("get_property", { layer: "Key", property: "Falloff" });
+assert(r.ok && r.data.matchName === "ADBE Light Falloff Type",
+       "an exact name still beats the longer ones containing it");
+r = call("get_property", { layer: "Key", property: "Diffusion" });
+assert(!r.ok && /Names containing it/.test(r.error) &&
+       /Shadow Diffusion/.test(r.error),
+       "a near miss names the real neighbours: " + (r.error || ""));
 
 console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");

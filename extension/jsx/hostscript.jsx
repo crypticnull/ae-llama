@@ -4851,12 +4851,209 @@ function AELL_descendToLeaf(prop) {
   return leaves === 1 ? leaf : prop;
 }
 
+/*
+ * Bare-name deep search - the last resort before "not found".
+ *
+ * AE's layer-level name shortcut reaches SOME nested streams and not
+ * others, and nothing in the API says which. Measured in AE 2026: a light
+ * answers layer.property("Intensity") and returns NULL for "Radius" and
+ * "Falloff Distance"; a camera answers "Zoom" and "Focus Distance"; a
+ * solid returns NULL for its own effect's "Blurriness"; a shape layer
+ * returns NULL for "Size". The model cannot know which side of that line
+ * a name falls on, so a bare name AE refuses is searched down the real
+ * tree here instead of coming back as an error.
+ *
+ * Two measured facts shape the search:
+ *
+ *  - EVERY layer carries all eleven Layer Styles whether or not one has
+ *    been applied, and every style reports enabled=false, active=false,
+ *    elided=false either way - there is no flag separating a style the
+ *    user added from one they did not. A shallowest-wins search for
+ *    "Size" or "Color" therefore lands in a style nobody asked for (ten
+ *    "Opacity" matches live under Layer Styles on a plain solid). So the
+ *    roots are RANKED, and Layer Styles is searched LAST.
+ *  - A depth-5 walk of the heaviest layer measured 219 nodes in 6-11 ms,
+ *    so running the search on every miss costs nothing worth guarding.
+ */
+var AELL_SEARCH_ROOT_RANK = {
+  "ADBE Transform Group":        1,
+  "ADBE Light Options Group":    2,
+  "ADBE Camera Options Group":   2,
+  "ADBE Material Options Group": 3,
+  "ADBE Extrsn Options Group":   3,
+  "ADBE Text Properties":        4,
+  "ADBE Effect Parade":          5,
+  "ADBE Root Vectors Group":     6,
+  "ADBE Mask Parade":            7,
+  "ADBE Audio Group":            8,
+  "ADBE Time Remapping":         8,
+  "ADBE Layer Styles":          99
+};
+var AELL_SEARCH_OTHER_RANK = 50;
+var AELL_SEARCH_MAX_DEPTH = 5;
+var AELL_SEARCH_MAX_NODES = 1500;
+
+/* Where the last AELL_anyProperty call actually landed, when it took the
+   deep search to get there: {path, alsoAt}. Null when the spec resolved
+   the ordinary way, so a tool only ever reports a path it had to hunt. */
+var AELL_lastResolve = null;
+
+function AELL_propName(node) {
+  var nm = "";
+  try { nm = String(node.name || ""); } catch (e) {}
+  return nm;
+}
+
+function AELL_nearList(list) {
+  var out = [];
+  for (var i = 0; i < list.length && i < 5; i++) out.push(list[i]);
+  return out.join(", ");
+}
+
+function AELL_deepFindProp(layer, target) {
+  var lc = String(target).toLowerCase();
+  var matches = [];
+  var near = [];
+  var visited = 0;
+
+  function scan(node, path, depth, rank) {
+    var nm = AELL_propName(node);
+    var mn = "";
+    try { mn = String(node.matchName || ""); } catch (e) {}
+    if (nm.toLowerCase() === lc || mn.toLowerCase() === lc) {
+      matches.push({ prop: node, path: path, rank: rank, depth: depth });
+    } else if (near.length < 8 && nm !== "" &&
+               nm.toLowerCase().indexOf(lc) !== -1) {
+      near.push(path);
+    }
+    if (depth >= AELL_SEARCH_MAX_DEPTH) return;
+    var n = 0;
+    try { n = node.numProperties || 0; } catch (e2) { return; }
+    for (var i = 1; i <= n; i++) {
+      if (visited >= AELL_SEARCH_MAX_NODES) return;
+      visited++;
+      var c = null;
+      try { c = node.property(i); } catch (e3) { continue; }
+      if (!c) continue;
+      scan(c, path + "/" + AELL_propName(c), depth + 1, rank);
+    }
+  }
+
+  var nRoots = 0;
+  try { nRoots = layer.numProperties || 0; } catch (e) { nRoots = 0; }
+  for (var r = 1; r <= nRoots; r++) {
+    var root = null;
+    try { root = layer.property(r); } catch (e4) { continue; }
+    if (!root) continue;
+    var rank = AELL_SEARCH_OTHER_RANK;
+    try {
+      var known = AELL_SEARCH_ROOT_RANK[String(root.matchName)];
+      if (typeof known === "number") rank = known;
+    } catch (e5) {}
+    visited++;
+    scan(root, AELL_propName(root), 1, rank);
+  }
+  matches.sort(function (a, b) {
+    if (a.rank !== b.rank) return a.rank - b.rank;
+    return a.depth - b.depth;
+  });
+  return { matches: matches, near: near };
+}
+
+/*
+ * Resolve a bare name by deep search. Returns null when nothing matched
+ * and no original error was supplied; with one, that grounded error grows
+ * a line saying the whole tree was searched too. Two matches of EQUAL
+ * standing are never guessed between - that is a refusal with both real
+ * paths in it.
+ */
+function AELL_deepResolve(layer, spec, orig) {
+  var found = AELL_deepFindProp(layer, spec);
+  var m = found.matches;
+  var i;
+  if (m.length === 0) {
+    if (!orig) return null;
+    var tail = " No property named '" + spec + "' exists anywhere on '" +
+      layer.name + "' either (searched the whole tree to depth " +
+      AELL_SEARCH_MAX_DEPTH + ").";
+    var nearTxt = AELL_nearList(found.near);
+    if (nearTxt !== "") tail += " Names containing it: " + nearTxt + ".";
+    throw new Error(orig.message + tail);
+  }
+  if (m.length > 1 && m[1].rank === m[0].rank && m[1].depth === m[0].depth) {
+    var paths = [];
+    for (i = 0; i < m.length && i < 6; i++) paths.push(m[i].path);
+    throw new Error("'" + spec + "' is ambiguous on '" + layer.name +
+      "': " + m.length + " properties share that name - " +
+      paths.join(", ") + (m.length > 6 ? ", ..." : "") +
+      ". Pass the full path (list_properties shows the tree).");
+  }
+  var also = [];
+  for (i = 1; i < m.length && also.length < 3; i++) also.push(m[i].path);
+  AELL_lastResolve = { path: m[0].path, alsoAt: also };
+  return m[0].prop;
+}
+
+/*
+ * A '/'-path whose FIRST segment AE cannot see from the layer - the same
+ * blind spot one level up: "Gaussian Blur/Blurriness" or
+ * "Rectangle Path 1/Size". Deep-find the head, then walk the rest from
+ * each candidate and take the first that completes.
+ */
+function AELL_deepPath(layer, spec) {
+  var raw = String(spec).split("/");
+  var segs = [];
+  var i;
+  for (i = 0; i < raw.length; i++) {
+    var t = raw[i].replace(/^\s+|\s+$/g, "");
+    if (t !== "") segs.push(t);
+  }
+  if (segs.length < 2) return null;
+  var head = AELL_deepFindProp(layer, segs[0]).matches;
+  for (var h = 0; h < head.length && h < 8; h++) {
+    var node = head[h].prop;
+    var path = head[h].path;
+    var ok = true;
+    for (var k = 1; k < segs.length; k++) {
+      var c = null;
+      try { c = node.property(segs[k]); } catch (e) { c = null; }
+      if (!c) { ok = false; break; }
+      node = c;
+      path = path + "/" + AELL_propName(c);
+    }
+    if (ok) {
+      AELL_lastResolve = { path: path, alsoAt: [] };
+      return node;
+    }
+  }
+  return null;
+}
+
+/* descendToLeaf, but the hunted path grows the leaf it descended to: a
+   bare "My Slider" names the control GROUP, and the value the caller gets
+   back lives one step below it. Reporting the group would hand the model
+   a path that reads back as a GROUP refusal. */
+function AELL_descendReported(prop) {
+  var leaf = AELL_descendToLeaf(prop);
+  if (AELL_lastResolve && leaf !== prop) {
+    AELL_lastResolve.path = AELL_lastResolve.path + "/" + AELL_propName(leaf);
+  }
+  return leaf;
+}
+
 /* Accept friendly specs (position, effect.X.Y) AND '/'-joined paths. */
 function AELL_anyProperty(layer, spec) {
+  AELL_lastResolve = null;
   var s = String(spec || "");
   if (s === "") throw new Error("Missing 'property'");
   if (s.indexOf("/") !== -1) {
-    return AELL_descendToLeaf(AELL_resolvePropPath(layer, s));
+    try {
+      return AELL_descendToLeaf(AELL_resolvePropPath(layer, s));
+    } catch (slashErr) {
+      var deep = AELL_deepPath(layer, s);
+      if (deep) return AELL_descendReported(deep);
+      throw slashErr;
+    }
   }
   try {
     return AELL_resolveProperty(layer, s);
@@ -4864,7 +5061,8 @@ function AELL_anyProperty(layer, spec) {
     try {
       return AELL_descendToLeaf(AELL_resolvePropPath(layer, s));
     } catch (pathErr) {
-      throw (s.indexOf(".") !== -1) ? friendlyErr : pathErr;
+      var orig = (s.indexOf(".") !== -1) ? friendlyErr : pathErr;
+      return AELL_descendReported(AELL_deepResolve(layer, s, orig));
     }
   }
 }
@@ -4940,10 +5138,23 @@ AELL_TOOLS.list_properties = function (args) {
       : "" });
 };
 
+/* Name the path a deep search had to hunt for, plus anything else that
+   answered to the same name, so the model can address it directly next
+   time instead of relying on the search again. */
+function AELL_noteResolved(out) {
+  if (!AELL_lastResolve) return out;
+  out.resolvedPath = AELL_lastResolve.path;
+  if (AELL_lastResolve.alsoAt.length > 0) {
+    out.alsoMatched = AELL_lastResolve.alsoAt;
+  }
+  return out;
+}
+
 AELL_TOOLS.get_property = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var layer = AELL_layerOrSelection(comp, args.layer);
   var prop = AELL_anyProperty(layer, args.property);
+  var resolved = AELL_lastResolve;
   if (!AELL_isLeafProp(prop)) {
     return AELL_err("'" + args.property + "' is a GROUP — use " +
       "list_properties {path: \"" + args.property + "\"} to see inside");
@@ -4967,7 +5178,8 @@ AELL_TOOLS.get_property = function (args) {
       data.expression = String(prop.expression).slice(0, 200);
     }
   } catch (e2) {}
-  return AELL_okay(data);
+  AELL_lastResolve = resolved;
+  return AELL_okay(AELL_noteResolved(data));
 };
 
 AELL_TOOLS.set_property = function (args) {
@@ -4982,6 +5194,7 @@ AELL_TOOLS.set_property = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var layer = AELL_layerOrSelection(comp, args.layer);
   var prop = AELL_anyProperty(layer, args.property);
+  var resolved = AELL_lastResolve;
   if (!AELL_isLeafProp(prop)) {
     return AELL_err("'" + args.property + "' is a GROUP — set one of its " +
       "properties instead (list_properties {path: \"" + args.property +
@@ -5021,7 +5234,8 @@ AELL_TOOLS.set_property = function (args) {
     var warn = AELL_overrideWarning(prop, args.value, String(args.property));
     if (warn) { out.applied = false; out.warning = warn; }
   }
-  return AELL_okay(out);
+  AELL_lastResolve = resolved;
+  return AELL_okay(AELL_noteResolved(out));
 };
 
 AELL_TOOLS.set_keyframes = function (args) {
