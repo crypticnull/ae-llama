@@ -4692,3 +4692,36 @@ with AE clear afterwards. Stubbed suite: 41 files green.
   cannot be suite-tested at all. `clean_project` shows the shape of the
   fix - a `dryRun` preview that names what would move - so if the remote
   session wants that gap closed, the pattern now exists to copy.
+
+## 2026-08-28 (remote) — 0.10.0 cut, and three design calls answered
+
+The first full unattended night (15 passes, 0.9.21-0.9.31, suite
+214->385) was reviewed commit-by-commit and merged to main as PR #48;
+the stubbed suite was re-run independently before the merge (41 files
+green). One piece of tree pollution found in review, fixed at the root:
+requiring chat-probe in tests seeded workflow templates INSIDE the repo
+on machines without APPDATA (settings.js's extension-path fallback) —
+test-chat-probe now hands the fallback a throwaway root.
+
+**0.10.0 is cut.** The feature-track batch rides it: add_text_animator
+(+ the dormant-slot fix), list_presets/apply_preset, render_comp/
+list_render_templates (+ AELL_NO_UNDO_GROUP), clean_project, the
+portable workflow templates, and the tier/arbiter work. CI now reads
+release-notes.txt into the feed's notes field so the update banner says
+what a release IS instead of just its number.
+
+**Design calls the passes filed, now answered in WORKPLAN item 4:**
+- Version-aware template seeding: hash-history file
+  (.hash-history.json, append-only, CI-checked like the capability
+  doc); present+known-hash = stale shipped copy -> overwrite,
+  present+unknown = user edit -> never touch. Local builds it.
+- organize_project gets clean_project's dry-run shape. Local builds it.
+- Dialog triage learns to READ (WM_GETTEXT then on-screen screenshot to
+  logs\dialogs\), still auto-answers, marks UNRECOGNIZED DIALOG loudly.
+  Its own pass, harness run twice after.
+- The mixed-round rollback (failed PANEL tool + succeeded host tools in
+  one round) stays REMOTE — it needs the round/undo design, not a local
+  pass.
+
+Queue for tonight, in order: the three specs above, then 5.7-5.9
+(mogrt last), 6.1-6.2, item 7 (tier P4).

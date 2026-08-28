@@ -387,6 +387,27 @@ FOUR tools are still uncovered and each is deliberate, not pending:
   drops WHOLE ROWS with a count, the way budgetState already did for the
   state block, and the per-result cap is a fair share of the round's
   6000 rather than a fixed 1200. See the log.
+- **organize_project gets clean_project's dry-run shape** (design
+  decided 2026-08-28; one small pass): `dryRun` defaulting to true, the
+  preview naming each move (item -> destination folder) with capped
+  lists and full counts, execute reporting moved/skipped the same way.
+  Then the suite finally gets organize_project steps — previews and
+  refusals only, like clean_project's. Patch bump when verified.
+
+- **Harness dialog triage learns to READ before it answers** (design
+  decided 2026-08-28; its OWN pass, and run the full harness twice
+  back-to-back afterwards — this changes the machinery every unattended
+  run depends on): before CloseWordlessDialogs answers a `#32770`,
+  (1) collect WM_GETTEXT from every child control and log it;
+  (2) if that yields nothing, move the window on-screen and save a
+  screenshot to `logs\dialogs\<timestamp>.png` (measured readable on
+  2026-08-28);
+  (3) auto-answer as today either way — unattended must proceed — but
+  when the harvested text matches nothing known-benign (the
+  save-changes prompt, empty), mark the pass log UNRECOGNIZED DIALOG
+  with the PNG path so the morning review sees it. Never a new refusal
+  path: the change is evidence, not behaviour.
+
 - **NEW, filed by the ComfyUI probe steps 2026-08-28, each its own small
   pass:**
   - ~~**A generation that fails does not get retried.**~~ ALREADY FIXED,
@@ -399,13 +420,25 @@ FOUR tools are still uncovered and each is deliberate, not pending:
     the model chose; the model had four rounds left, said "let's try a
     different approach or workflow", and stopped.
   - **A bundled workflow template never reaches an existing install
-    once it has been seeded.** `Setup.ensureDataDirs` copies only files
-    the data dir does NOT have ("never overwrite edits"), so the KREA2
-    template that shipped in 0.9.23 was still absent from this machine
-    on 0.9.27 — the panel offered two workflows where the repo has
-    three. A fix needs a version-stamped or hash-compared seed that can
-    still tell a user's edit from a stale copy; that is a design call
-    for the remote session.
+    once it has been seeded.** DESIGN DECIDED by the remote session
+    2026-08-28 — build it locally, one pass:
+    (1) `scripts/workflow-hash-history.js` maintains
+    `extension/comfy-workflows/.hash-history.json`: for every bundled
+    template/manifest, an APPEND-ONLY list of the sha1 of every version
+    ever shipped. Run mode appends the current files' hashes if new;
+    `--check` mode fails when a bundled file's current hash is missing
+    (CI-enforce it next to capability-report). Seed the history by
+    hashing every version of each file in `git log` so EXISTING stale
+    installs are covered.
+    (2) `ensureDataDirs` seeding rule per file: absent -> copy. Present
+    and its hash appears in the history -> it is an UNEDITED shipped
+    copy (possibly stale) -> overwrite with the current bundle. Present
+    and hash unknown -> the USER edited it -> never touch it.
+    (3) Stub tests: fresh seed, stale-unedited overwrite, user-edited
+    preserved, history --check catches an unrecorded bundle change.
+    No version bump gate: bump patch once verified (it fixes shipped
+    behaviour — this machine still lacks templates shipped 5 versions
+    ago).
 - ~~**`set_layer_3d` loses the Z in silence.**~~ DONE 2026-08-28 (0.9.25).
   A second probe measured the FULL loss (Scale Z resets to 100 rather
   than zeroing, Orientation and X/Y Rotation clear, keyframe values are

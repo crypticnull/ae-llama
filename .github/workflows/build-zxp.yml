@@ -125,7 +125,14 @@ jobs:
           $feed = Get-Content -Raw update.json | ConvertFrom-Json
           $feed.panelVersion = $ver
           $feed.panelPackageUrl = "https://raw.githubusercontent.com/crypticnull/ae-llama-updates/main/AE-Llama.zxp?v=$ver"
-          $feed.notes = "AE Llama $ver"
+          # Real release notes ride in release-notes.txt at the repo root
+          # (the update banner shows them to every panel); without one the
+          # version string is the note, as before.
+          $notes = "AE Llama $ver"
+          if (Test-Path release-notes.txt) {
+            $notes = (Get-Content -Raw release-notes.txt).Trim()
+          }
+          $feed.notes = $notes
           $feed | ConvertTo-Json -Depth 8 | Set-Content ../feedwt/update.json -Encoding UTF8
           Push-Location ../feedwt
           git add -A
