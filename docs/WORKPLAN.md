@@ -139,8 +139,10 @@ the register-existing matcher. Commit the inventory; no version bump.
 
 ## 2d. Small local passes queued by the probe findings — the H3 i2v
 workflow is DONE through part 4 AND the portability pass that part 4
-filed (2026-08-25 through -28). What is LEFT in this section: the KREA2
-subgraph conversion, and the HF t2v/i2v file pins. Everything else below
+filed (2026-08-25 through -28). What is LEFT in this section: ONE item —
+seeding KREA2 (removal rules + procedural block + one real generation).
+The converter that was blocking it landed 2026-08-28, and the HF file
+pins turned out to have been done on 2026-08-25. Everything else below
 is struck.
 
 - ~~Locate the H3 base weight~~ FOUND by the owner (2026-08-25):
@@ -209,8 +211,16 @@ is struck.
     544x288 with audio. `comfy-probe.js --bare` renders the fallback
     graph on demand; test-workflow-manifests now FAILS any shipped
     template with a non-core class that has no removal rule. See the log.
-  - Also surfaced, its own small pass: the KREA2 template contains a
-    SUBGRAPH the converter refuses to flatten. Route that works — queue
+  - ~~Also surfaced, its own small pass: the KREA2 template contains a
+    SUBGRAPH the converter refuses to flatten~~ CONVERTER DONE
+    2026-08-28. It did not need the /history route after all:
+    `adapt-workflow.js` now flattens subgraphs inline as
+    `<instance>:<inner>` (ComfyUI's own id scheme), drops rgthree's two
+    frontend-only nodes, and — the part nobody had noticed — emulates
+    cg-use-everywhere's `Anything Everywhere`, which draws NO wire and
+    carries MODEL/CLIP/VAE/LATENT to nine sockets in this graph. The
+    converted KREA2 returns `valid: True` from ComfyUI 0.32.0's own
+    `validate_prompt`. See the log. Original text: Route that works — queue
     it once in ComfyUI and pull the executed prompt from `/history`
     (the owner's `get-api-workflow.ps1` already does this). H3 r2v is
     still unconverted too. Two facts for that pass, measured 2026-08-27:
@@ -219,12 +229,26 @@ is struck.
     about Note/MarkdownNote but not rgthree's `Label (rgthree)` or
     `Fast Groups Bypasser (rgthree)`, which KREA2 uses and which are
     provably absent from the server.
-- **Pin H3 t2v/i2v files** (HF is proxy-blocked from the remote
-  session): list https://huggingface.co/api/models/Comfy-Org/MiniMax-H3/tree/main?recursive=true
-  and record the t2v/i2v diffusion weights + non-nvfp4 encoder variants
-  with sizes in the tier plan. The owner wants text/image-to-video
-  FIRST; the bundled r2v workflow is deferred until 5.8 lands (it needs
-  image+audio inputs the panel cannot feed yet).
+  - **KREA2, what is LEFT before it can ship** (its own pass, and it is
+    a real one): the converted graph is NOT seeded, because a shipped
+    template owes a removal rule per non-core class
+    (`tests/test-workflow-manifests.js` enforces it) and KREA2 keeps
+    five live ones — `Any Switch (rgthree)`, `Power Lora Loader
+    (rgthree)`, `Image Comparer (rgthree)`, `SesquiLatentUpscale`,
+    `easy cleanGpuUsed`. Plus a `procedural` block
+    (prompt/resolution/seed node ids) and ONE real generation end to end
+    through the panel, the way 0.9.21 did for H3. Regenerate the API
+    graph with `node scripts/adapt-workflow.js
+    extension/workflows/AE_LLAMA_KREA2_V1.json --out
+    extension/comfy-workflows/AE_LLAMA_KREA2_V1.json`.
+  - H3 r2v is still unconverted — deferred until 5.8 lands, since it
+    needs image+audio inputs the panel cannot feed yet.
+- ~~**Pin H3 t2v/i2v files**~~ DONE 2026-08-25, in the log entry "item
+  2d: shared root, history trim, H3 pins, set_solid_color" — all 30
+  files are recorded in `docs/COMFY_TIERS_PLAN.md`. Re-listed from the
+  HF API on 2026-08-28: unchanged, nothing new in the repo. The text
+  simply never got struck, which is the second time that has cost a
+  pass a re-read of the log.
 - ~~**clearExpressions in real AE**~~ DONE 2026-08-26 (0.9.18). Verified
   in the field: refuse-then-recall-with-flag is what the model does, and
   the nine squares land on even gaps. Two defects found on the way and

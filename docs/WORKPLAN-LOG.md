@@ -2823,3 +2823,109 @@ not degraded. Verified in real AE and real ComfyUI, so it ships tonight.
    on 8188 (the probe was pointed at 8188 with `--url`).
 
 Still open in 2d: the KREA2 subgraph conversion and the HF t2v/i2v file pins.
+
+## 2026-08-28 (local, second pass) — item 2d: the subgraph, and the wire that was never drawn
+
+The item: KREA2 is the last bundled template the converter cannot touch,
+because it contains a subgraph. The workplan's sanctioned route was "queue it
+once in ComfyUI and pull the executed prompt from `/history`". That route was
+checked first and is NOT available unattended: `/history` holds 13 entries,
+all of them this month's H3 runs, and queueing KREA2 for real needs a human at
+the browser (or a full Krea generation this pass has no budget for). So the
+converter learned to do it instead — and on the way found something the
+/history route would have hidden.
+
+**Three things stood between KREA2 and an API graph. The third was invisible.**
+
+1. **The subgraph.** `adapt-workflow.js` now expands instances inline, giving
+   inner nodes the id `<instance>:<inner>` — the same scheme ComfyUI's own
+   expansion produces, so an adapted template can be diffed against a
+   `/history` prompt id for id. One measured fact drove the design: the
+   instance carries the promoted COMBO widgets (`inputs: []`, three
+   `widgets_values` in definition-input order) while the inner loaders keep
+   their OWN stale copies of those values. The instance's copy is the one the
+   user edits, so it wins; trusting the inner value would have loaded whatever
+   the author had selected before promoting the widget. Promoted inputs that
+   are CONNECTED in the parent cross the boundary as links instead, and
+   nesting recurses (`60:80:50`).
+
+2. **Two rgthree nodes the backend has never heard of.** `Label (rgthree)` and
+   `Fast Groups Bypasser (rgthree)` join Note/MarkdownNote in `FRONTEND_ONLY`,
+   and this is measured rather than assumed: the harvester loads every
+   installed pack and reports exactly those four as absent from
+   `NODE_CLASS_MAPPINGS`. The Bypasser looks load-bearing and is not — what it
+   toggles is each node's `mode`, and the export already carries the modes it
+   left behind.
+
+3. **`Anything Everywhere` — the one nobody had listed.** cg-use-everywhere
+   draws NO wire: it broadcasts each of its inputs to every unconnected socket
+   of the same type, and the FRONTEND applies that as it builds the API
+   prompt. In KREA2 it carries MODEL, CLIP, VAE and LATENT to **nine** sockets.
+   Convert without it and the graph is missing nine links the author is looking
+   straight at — and it fails at the server, not here. The converter now
+   applies the broadcast itself, only to sockets the node actually DRAWS (an
+   optional input the frontend never rendered has no virtual link either), and
+   refuses everything it cannot reproduce faithfully: the regex/group/colour
+   variants (`Anything Everywhere?` and friends), any `ue_properties`
+   restriction on the plain node, two inputs broadcasting the same type, and an
+   untyped `*` broadcast. Every refusal names the /history route as the way out.
+
+**Verified, in this order:**
+
+- The H3 i2v template still converts **byte for byte** into the shipped API
+  file (the graph has no subgraph and no broadcaster, so it takes none of the
+  new paths). That is a test assertion, not an eyeball.
+- Defs re-harvested from the real install: 31 -> 52 classes, and a diff proves
+  the original 31 are **unchanged, in the same order** — order IS the payload
+  here. `--classes-from` now also walks subgraph definitions, or the classes
+  inside one would never be harvested.
+- The converted KREA2 through ComfyUI 0.32.0's own
+  `execution.validate_prompt()`: **`valid: True`**, good outputs
+  474/475/478/479/482/497, no node errors — first try, every model filename
+  resolved, every UE-filled link accepted.
+- 34/34 stubbed test files. `tests/test-workflow-adapt.js` grew from 50 to 82
+  checks: the subgraph block (promoted-widget override, connected promotion,
+  nesting, three refusals), the use-everywhere block (fills, does NOT fill a
+  widget slot or a connected socket, four refusals), and a section that
+  converts the REAL checked-in KREA2 and asserts what only a real graph can
+  show — `439:436` carrying `krea2_turbo_int8_convrot.safetensors`, both
+  VAEDecodes reaching the loader ONLY through the broadcast, MODEL/CLIP coming
+  from the LoRA loader in the middle rather than the subgraph behind it.
+- **Harness: real AE 214/214.** Untouched by this pass, run before and after.
+
+**New: `scripts/validate-api-workflow.py`.** Every workflow pass since
+2026-08-26 has hand-written this and thrown it away. It reuses the harvester's
+`boot()`, so both agree on how ComfyUI is started, and it answers the one
+question a converter cannot answer about itself.
+
+**NOT bumped, and not shipped.** Nothing under `extension/` changed: this is
+scripts and tests. The converted KREA2 graph is deliberately NOT seeded,
+because `tests/test-workflow-manifests.js` rightly demands a removal rule per
+non-core class before a template ships, and KREA2 keeps five live ones (`Any
+Switch (rgthree)`, `Power Lora Loader (rgthree)`, `Image Comparer (rgthree)`,
+`SesquiLatentUpscale`, `easy cleanGpuUsed`). Writing those rules honestly cost
+the 0.9.22 pass a whole night for seven nodes; doing them badly here to claim
+the item would ship a template that dies on anybody else's machine — exactly
+the bug 0.9.22 fixed. That work, plus a `procedural` block and one real
+generation, is now the single remaining 2d item in WORKPLAN.md, with the
+regeneration command written next to it.
+
+**Three notes for the next pass / a human:**
+
+1. **The HF file pins (2d's other open bullet) were already done on
+   2026-08-25** — 30 files in `docs/COMFY_TIERS_PLAN.md`; the tree was
+   re-listed today and is unchanged. Only the workplan text was never struck.
+   That is twice now that an unstruck line has cost a pass a re-read of the
+   log; both are struck now.
+2. **A silent-loss class the converter still has**: rgthree's `Power Lora
+   Loader` stores its loras in `widgets_values` as objects the harvested
+   `INPUT_TYPES` does not declare, so they are dropped with a "trailing widget
+   value(s) ignored" note. In KREA2 they are empty (`{}`), so nothing is lost
+   today — but a template that actually used them would convert quietly wrong.
+   Worth a rule before any template with configured loras ships.
+3. KREA2's author left the whole Ollama enhancer chain, the Krea2Control
+   chain and the depth/bloom extras BYPASSED, so the live graph is the plain
+   t2i path and the `Any Switch` falls through to the manual prompt input.
+   That is convenient for the panel (it enhances with its own chat model) and
+   the conversion preserves it; the shipping pass should keep it that way
+   rather than un-bypassing anything.

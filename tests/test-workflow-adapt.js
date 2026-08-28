@@ -16,7 +16,11 @@
 //   - bypass (mode 4) is not "drop it": consumers rewire through it to the
 //     same-typed input;
 //   - dropping a node that FED a widget input hands the widget its own value
-//     back, which is the entire reason the H3 template needed adapting.
+//     back, which is the entire reason the H3 template needed adapting;
+//   - a SUBGRAPH's promoted widget lives on the instance, and the inner node
+//     keeps a stale copy of it (KREA2, 2026-08-28);
+//   - cg-use-everywhere's "Anything Everywhere" draws no wire at all, so the
+//     links it stands in for are invisible in the export.
 "use strict";
 
 const fs = require("fs");
@@ -264,17 +268,205 @@ g = {
 throws(() => adapt(g, STUB_DEFS, null), "widget values but the workflow stores",
        "too few stored widget values fails instead of writing undefined");
 
-throws(() => adapt({ nodes: [], links: [],
-                     definitions: { subgraphs: [{ name: "Initial Loader" }] } },
-                   STUB_DEFS, null),
-       "does not flatten them",
-       "a workflow with subgraphs is refused with the /history route named");
-
 throws(() => adapt({ "1": { class_type: "X" } }, STUB_DEFS, null),
        "not a UI-format workflow",
        "an already-API graph is refused rather than half-converted");
 
-// ------------------------------- 7. the shipped H3 i2v template, for real
+// ------------------------------------------------------- 7. subgraphs
+//
+// Measured on the KREA2 template (2026-08-28): its "Initial Loader" subgraph
+// holds three loaders whose file-name widgets are PROMOTED to the instance.
+// The instance's copy is the live one and the inner nodes keep a stale copy,
+// so a flattener that trusted the inner value would load whatever the author
+// last had selected before promoting the widget.
+
+function subLoaderDef(extra) {
+  const def = {
+    id: "SUB", name: "Loaders",
+    inputNode: { id: -10 }, outputNode: { id: -20 },
+    inputs: [{ name: "name", type: "COMBO" }],
+    outputs: [{ name: "MODEL", type: "MODEL" }],
+    widgets: [],
+    nodes: [{ id: 50, type: "ModelSource", mode: 0,
+              widgets_values: ["stale.safetensors"],
+              inputs: [{ name: "name", type: "COMBO",
+                         widget: { name: "name" }, link: 900 }],
+              outputs: [{ name: "MODEL", type: "MODEL", links: [901] }] }],
+    links: [
+      { id: 900, origin_id: -10, origin_slot: 0,
+        target_id: 50, target_slot: 0, type: "COMBO" },
+      { id: 901, origin_id: 50, origin_slot: 0,
+        target_id: -20, target_slot: 0, type: "MODEL" }
+    ]
+  };
+  Object.keys(extra || {}).forEach((k) => { def[k] = extra[k]; });
+  return def;
+}
+
+function subgraphGraph(instance, defExtra) {
+  const inst = {
+    id: 60, type: "SUB", mode: 0, widgets_values: ["live.safetensors"],
+    inputs: [], outputs: [{ name: "MODEL", type: "MODEL", links: [70] }]
+  };
+  Object.keys(instance || {}).forEach((k) => { inst[k] = instance[k]; });
+  return {
+    definitions: { subgraphs: [subLoaderDef(defExtra)] },
+    nodes: [
+      inst,
+      { id: 61, type: "Consumer", mode: 0, widgets_values: ["p"],
+        inputs: [{ name: "model", type: "MODEL", link: 70 },
+                 { name: "prompt", type: "STRING",
+                   widget: { name: "prompt" }, link: null }],
+        outputs: [] }
+    ],
+    links: [link(70, 60, 0, 61, 0, "MODEL")]
+  };
+}
+
+r = adapt(subgraphGraph(), STUB_DEFS, null);
+assert(r.api["60:50"] && r.api["60:50"].class_type === "ModelSource",
+       "a subgraph's inner node is emitted as <instance>:<inner>, the same " +
+       "id ComfyUI's own expansion produces");
+assert(!("60" in r.api),
+       "the instance node itself never reaches the API graph - /prompt has " +
+       "never heard of a subgraph UUID");
+assert(r.api["60:50"].inputs.name === "live.safetensors",
+       "the INSTANCE's promoted widget value wins over the inner node's " +
+       "stale copy of it");
+assert(r.api["61"].inputs.model[0] === "60:50",
+       "a consumer outside the subgraph is wired to the inner producer");
+assert(r.expandedSubgraphs.length === 1 &&
+       r.expandedSubgraphs[0].indexOf("Loaders") !== -1,
+       "the expansion is reported by name, not done silently");
+assert(r.rewired.join(" ").indexOf("promoted subgraph widget") !== -1,
+       "and the value override is reported too");
+
+// A promoted input can also be CONNECTED in the parent, in which case it is a
+// signal, not a value.
+let sg = subgraphGraph({
+  inputs: [{ name: "name", type: "COMBO", link: 71 }],
+  widgets_values: []
+});
+sg.nodes.push({ id: 62, type: "TextSource", mode: 0, widgets_values: ["x"],
+                inputs: [], outputs: [{ name: "STRING", type: "STRING",
+                                        links: [71] }] });
+sg.links.push(link(71, 62, 0, 60, 0, "COMBO"));
+r = adapt(sg, STUB_DEFS, null);
+assert(Array.isArray(r.api["60:50"].inputs.name) &&
+       r.api["60:50"].inputs.name[0] === "62",
+       "a promoted input the parent CONNECTED crosses the boundary as a link");
+
+// Nested: a subgraph inside a subgraph.
+sg = subgraphGraph();
+sg.definitions.subgraphs.push({
+  id: "OUTER", name: "Outer",
+  inputNode: { id: -10 }, outputNode: { id: -20 },
+  inputs: [], outputs: [{ name: "MODEL", type: "MODEL" }], widgets: [],
+  nodes: [{ id: 80, type: "SUB", mode: 0,
+            widgets_values: ["inner.safetensors"], inputs: [],
+            outputs: [{ name: "MODEL", type: "MODEL", links: [910] }] }],
+  links: [{ id: 910, origin_id: 80, origin_slot: 0,
+            target_id: -20, target_slot: 0, type: "MODEL" }]
+});
+sg.nodes[0].type = "OUTER";
+sg.nodes[0].widgets_values = [];
+r = adapt(sg, STUB_DEFS, null);
+assert(r.api["60:80:50"] &&
+       r.api["60:80:50"].inputs.name === "inner.safetensors",
+       "nested subgraphs expand recursively, id by id");
+assert(r.api["61"].inputs.model[0] === "60:80:50",
+       "and the outside consumer reaches all the way in");
+
+throws(() => adapt(subgraphGraph({ mode: 4 }), STUB_DEFS, null),
+       "muted or bypassed",
+       "a bypassed subgraph instance is refused, not guessed at");
+throws(() => adapt(subgraphGraph(null, { widgets: [{ name: "seed" }] }),
+                   STUB_DEFS, null),
+       "promotes 1 widget(s)",
+       "a promoted widget that is not also an input is refused (unmeasured " +
+       "shape), with the /history route named");
+throws(() => adapt(subgraphGraph({ widgets_values: [] }), STUB_DEFS, null),
+       "neither a connection nor a stored widget value",
+       "an input with no value and no wire is refused rather than sent as " +
+       "undefined");
+
+// ------------------------------------------ 8. cg-use-everywhere broadcasts
+
+function ueProps(extra) {
+  const p = { group_restricted: 0, color_restricted: 0, title_regex: null,
+              input_regex: null, group_regex: null, send_to_any: 0,
+              string_to_combo: 0 };
+  Object.keys(extra || {}).forEach((k) => { p[k] = extra[k]; });
+  return { ue_properties: p };
+}
+
+function ueGraph(opts) {
+  opts = opts || {};
+  return {
+    nodes: [
+      { id: 90, type: "ModelSource", mode: 0, widgets_values: ["m"],
+        inputs: [], outputs: [{ name: "MODEL", type: "MODEL", links: [100] }] },
+      { id: 91, type: opts.type || "Anything Everywhere", mode: 0,
+        widgets_values: [], properties: ueProps(opts.props),
+        inputs: opts.inputs || [
+          { name: "anything", type: "MODEL", link: 100 },
+          { name: "anything2", type: "*", link: null }
+        ],
+        outputs: [] },
+      { id: 92, type: "Consumer", mode: 0, widgets_values: ["p"],
+        inputs: [{ name: "model", type: "MODEL", link: null },
+                 { name: "prompt", type: "STRING",
+                   widget: { name: "prompt" }, link: null },
+                 { name: "extra", type: "IMAGE", link: null }],
+        outputs: [] }
+    ],
+    links: [link(100, 90, 0, 91, 0, "MODEL")]
+  };
+}
+
+r = adapt(ueGraph(), STUB_DEFS, null);
+assert(r.api["92"].inputs.model[0] === "90",
+       "an unconnected socket is filled from the broadcaster's source - the " +
+       "frontend draws no wire for this, so a converter that ignores it " +
+       "ships a graph missing links the author is looking at");
+assert(!("91" in r.api),
+       "the broadcaster is frontend wiring and never reaches the API graph");
+assert(r.api["92"].inputs.prompt === "p",
+       "a WIDGET slot is never filled by the broadcast");
+assert(!("extra" in r.api["92"].inputs),
+       "a socket whose type nobody broadcasts is left alone");
+assert(r.rewired.join(" ").indexOf("wired by Anything Everywhere") !== -1,
+       "the virtual wiring is reported, not silent");
+
+sg = ueGraph();
+sg.nodes.push({ id: 93, type: "ModelSource", mode: 0, widgets_values: ["m2"],
+                inputs: [], outputs: [{ name: "MODEL", type: "MODEL",
+                                        links: [101] }] });
+sg.nodes[2].inputs[0].link = 101;
+sg.links.push(link(101, 93, 0, 92, 0, "MODEL"));
+r = adapt(sg, STUB_DEFS, null);
+assert(r.api["92"].inputs.model[0] === "93",
+       "a socket that IS connected keeps its own wire");
+
+throws(() => adapt(ueGraph({ props: { group_restricted: 1 } }),
+                   STUB_DEFS, null),
+       "restricts its broadcast",
+       "a group/colour-restricted broadcast is refused, naming the property");
+throws(() => adapt(ueGraph({ type: "Anything Everywhere?" }), STUB_DEFS, null),
+       "regex/group/colour rules",
+       "the regex-targeted variants are refused with the /history route");
+throws(() => adapt(ueGraph({ inputs: [
+         { name: "a", type: "MODEL", link: 100 },
+         { name: "b", type: "MODEL", link: 100 }] }), STUB_DEFS, null),
+       "two use-everywhere inputs",
+       "two broadcasts of one type are refused - which socket gets which is " +
+       "not decidable from the export");
+throws(() => adapt(ueGraph({ inputs: [
+         { name: "a", type: "*", link: 100 }] }), STUB_DEFS, null),
+       "untyped (*) input",
+       "an untyped broadcast is refused rather than wired everywhere");
+
+// ------------------------------- 9. the shipped H3 i2v template, for real
 
 const REPO = path.join(__dirname, "..");
 const uiFile = path.join(REPO, "extension", "workflows",
@@ -392,5 +584,51 @@ assert(withManifest["138"].inputs.prompt === "a red balloon",
        "with the sidecar, procedural.prompt lands on node 138");
 assert(applied2.join(" ").indexOf("prompt -> node 138") !== -1,
        "and the applied list names the node it went to");
+
+// ------------------- 10. the AUTHORED KREA2 template, subgraph and all
+//
+// Not shipped yet -- its manifest still owes a removal rule per custom-pack
+// class, and it has never rendered a frame through the panel. What is proved
+// here is the conversion itself, which is what the subgraph and use-everywhere
+// work above was for. The graph this produces was run through ComfyUI 0.32.0's
+// own execution.validate_prompt() on the AE machine on 2026-08-28:
+// valid: True, good outputs 474/475/478/479/482/497, no node errors.
+
+const kreaUi = JSON.parse(fs.readFileSync(
+  path.join(REPO, "extension", "workflows", "AE_LLAMA_KREA2_V1.json"), "utf8"));
+const krea = adapt(kreaUi, defs, null);
+
+assert(krea.expandedSubgraphs.length === 1 &&
+       krea.expandedSubgraphs[0].indexOf("Initial Loader") !== -1,
+       "KREA2's one subgraph is expanded by name");
+assert(krea.api["439:436"] &&
+       krea.api["439:436"].class_type === "UNETLoader" &&
+       krea.api["439:436"].inputs.unet_name ===
+         "krea2_turbo_int8_convrot.safetensors",
+       "the Initial Loader's UNETLoader arrives with the instance's file name");
+assert(krea.api["439:438"].class_type === "VAELoader" &&
+       krea.api["439:437"].class_type === "CLIPLoader",
+       "and so do the VAE and CLIP loaders beside it");
+assert(krea.api["415"].inputs.vae[0] === "439:438" &&
+       krea.api["416"].inputs.vae[0] === "439:438",
+       "both VAEDecodes get their VAE ONLY through the broadcast - there is " +
+       "no drawn wire between them and the loader");
+assert(krea.api["264"].inputs.model[0] === "604" &&
+       krea.api["267"].inputs.clip[0] === "604",
+       "MODEL and CLIP broadcast from the LoRA loader the author put in the " +
+       "middle, not from the subgraph behind it");
+
+const kreaClasses = Object.keys(krea.api).map((k) => krea.api[k].class_type);
+["Anything Everywhere", "Label (rgthree)", "Fast Groups Bypasser (rgthree)",
+ "Note"].forEach((cls) => {
+  assert(kreaClasses.indexOf(cls) === -1,
+         "no '" + cls + "' in the API graph - the backend has never heard " +
+         "of it");
+});
+assert(kreaClasses.indexOf("OllamaGenerateV2") === -1 &&
+       !("any_01" in krea.api["601"].inputs) &&
+       Array.isArray(krea.api["601"].inputs.any_02),
+       "the author left the Ollama enhancer bypassed, so the switch falls " +
+       "through to the manual prompt input");
 
 process.exit(failures ? 1 : 0);

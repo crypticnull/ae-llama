@@ -15,3 +15,9 @@ Thumbs.db
 
 # unattended local-agent run logs
 logs/
+
+# debris from running the ComfyUI-importing scripts (harvest-comfy-node-defs.py,
+# validate-api-workflow.py): a custom-node pack writes its web assets relative
+# to the script directory at import time, and Python leaves its cache there too
+scripts/web/
+scripts/__pycache__/
