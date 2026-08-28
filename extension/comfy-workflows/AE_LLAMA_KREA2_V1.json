@@ -1,0 +1,414 @@
+{
+ "260": {
+  "inputs": {
+   "conditioning": [
+    "267",
+    0
+   ]
+  },
+  "class_type": "ConditioningZeroOut",
+  "_meta": {
+   "title": "Negative (Zeroed)"
+  }
+ },
+ "261": {
+  "inputs": {
+   "noise_seed": 760525665124761
+  },
+  "class_type": "RandomNoise",
+  "_meta": {
+   "title": "RandomNoise"
+  }
+ },
+ "262": {
+  "inputs": {
+   "sampler_name": "euler"
+  },
+  "class_type": "KSamplerSelect",
+  "_meta": {
+   "title": "KSamplerSelect"
+  }
+ },
+ "264": {
+  "inputs": {
+   "conditioning": [
+    "267",
+    0
+   ],
+   "model": [
+    "604",
+    0
+   ]
+  },
+  "class_type": "BasicGuider",
+  "_meta": {
+   "title": "BasicGuider"
+  }
+ },
+ "265": {
+  "inputs": {
+   "scheduler": "simple",
+   "steps": 7,
+   "denoise": 0.25,
+   "model": [
+    "604",
+    0
+   ]
+  },
+  "class_type": "BasicScheduler",
+  "_meta": {
+   "title": "BasicScheduler"
+  }
+ },
+ "267": {
+  "inputs": {
+   "text": [
+    "601",
+    0
+   ],
+   "clip": [
+    "604",
+    1
+   ]
+  },
+  "class_type": "CLIPTextEncode",
+  "_meta": {
+   "title": "Positive"
+  }
+ },
+ "272": {
+  "inputs": {
+   "conditioning": [
+    "280",
+    0
+   ]
+  },
+  "class_type": "ConditioningZeroOut",
+  "_meta": {
+   "title": "Negative (Zeroed)"
+  }
+ },
+ "274": {
+  "inputs": {
+   "conditioning": [
+    "280",
+    0
+   ],
+   "model": [
+    "604",
+    0
+   ]
+  },
+  "class_type": "BasicGuider",
+  "_meta": {
+   "title": "BasicGuider"
+  }
+ },
+ "277": {
+  "inputs": {
+   "scheduler": "simple",
+   "steps": 4,
+   "denoise": 1,
+   "model": [
+    "604",
+    0
+   ]
+  },
+  "class_type": "BasicScheduler",
+  "_meta": {
+   "title": "BasicScheduler"
+  }
+ },
+ "278": {
+  "inputs": {
+   "sampler_name": "res_2s"
+  },
+  "class_type": "KSamplerSelect",
+  "_meta": {
+   "title": "KSamplerSelect"
+  }
+ },
+ "279": {
+  "inputs": {
+   "noise": [
+    "444",
+    0
+   ],
+   "guider": [
+    "274",
+    0
+   ],
+   "sampler": [
+    "278",
+    0
+   ],
+   "sigmas": [
+    "277",
+    0
+   ],
+   "latent_image": [
+    "500",
+    0
+   ]
+  },
+  "class_type": "SamplerCustomAdvanced",
+  "_meta": {
+   "title": "SamplerCustomAdvanced"
+  }
+ },
+ "280": {
+  "inputs": {
+   "text": [
+    "601",
+    0
+   ],
+   "clip": [
+    "604",
+    1
+   ]
+  },
+  "class_type": "CLIPTextEncode",
+  "_meta": {
+   "title": "Positive"
+  }
+ },
+ "415": {
+  "inputs": {
+   "samples": [
+    "279",
+    0
+   ],
+   "vae": [
+    "439:438",
+    0
+   ]
+  },
+  "class_type": "VAEDecode",
+  "_meta": {
+   "title": "VAEDecode"
+  }
+ },
+ "416": {
+  "inputs": {
+   "samples": [
+    "450",
+    0
+   ],
+   "vae": [
+    "439:438",
+    0
+   ]
+  },
+  "class_type": "VAEDecode",
+  "_meta": {
+   "title": "VAEDecode"
+  }
+ },
+ "444": {
+  "inputs": {
+   "noise_seed": 760525665124761
+  },
+  "class_type": "RandomNoise",
+  "_meta": {
+   "title": "RandomNoise"
+  }
+ },
+ "450": {
+  "inputs": {
+   "noise": [
+    "261",
+    0
+   ],
+   "guider": [
+    "264",
+    0
+   ],
+   "sampler": [
+    "262",
+    0
+   ],
+   "sigmas": [
+    "265",
+    0
+   ],
+   "latent_image": [
+    "476",
+    0
+   ]
+  },
+  "class_type": "SamplerCustomAdvanced",
+  "_meta": {
+   "title": "SamplerCustomAdvanced"
+  }
+ },
+ "474": {
+  "inputs": {
+   "filename_prefix": "_KREA2/%date:yyyy-MM-dd%/%date:yyyy-MM-dd%_CRPTK-KREA2_",
+   "images": [
+    "482",
+    0
+   ]
+  },
+  "class_type": "SaveImage",
+  "_meta": {
+   "title": "SaveImage"
+  }
+ },
+ "475": {
+  "inputs": {
+   "image_a": [
+    "415",
+    0
+   ],
+   "image_b": [
+    "482",
+    0
+   ]
+  },
+  "class_type": "Image Comparer (rgthree)",
+  "_meta": {
+   "title": "Image Comparer (rgthree)"
+  }
+ },
+ "476": {
+  "inputs": {
+   "model_format": "Wan 2.1",
+   "scale": 1.6,
+   "half_precision": false,
+   "latent": [
+    "279",
+    0
+   ]
+  },
+  "class_type": "SesquiLatentUpscale",
+  "_meta": {
+   "title": "SesquiLatentUpscale"
+  }
+ },
+ "478": {
+  "inputs": {
+   "images": [
+    "415",
+    0
+   ]
+  },
+  "class_type": "PreviewImage",
+  "_meta": {
+   "title": "PreviewImage"
+  }
+ },
+ "479": {
+  "inputs": {
+   "images": [
+    "416",
+    0
+   ]
+  },
+  "class_type": "PreviewImage",
+  "_meta": {
+   "title": "PreviewImage"
+  }
+ },
+ "482": {
+  "inputs": {
+   "anything": [
+    "416",
+    0
+   ]
+  },
+  "class_type": "easy cleanGpuUsed",
+  "_meta": {
+   "title": "easy cleanGpuUsed"
+  }
+ },
+ "497": {
+  "inputs": {
+   "source": [
+    "601",
+    0
+   ]
+  },
+  "class_type": "PreviewAny",
+  "_meta": {
+   "title": "PreviewAny"
+  }
+ },
+ "500": {
+  "inputs": {
+   "width": 1920,
+   "height": 1080,
+   "batch_size": 1
+  },
+  "class_type": "EmptyLatentImage",
+  "_meta": {
+   "title": "EmptyLatentImage"
+  }
+ },
+ "600": {
+  "inputs": {
+   "value": "a calm placeholder prompt - the panel injects the real one"
+  },
+  "class_type": "PrimitiveStringMultiline",
+  "_meta": {
+   "title": "MANUAL PROMPT  ·  used when the enhancer is bypassed"
+  }
+ },
+ "601": {
+  "inputs": {
+   "any_02": [
+    "600",
+    0
+   ]
+  },
+  "class_type": "Any Switch (rgthree)",
+  "_meta": {
+   "title": "Any Switch  ·  01 = enhancer, 02 = manual"
+  }
+ },
+ "604": {
+  "inputs": {
+   "model": [
+    "439:436",
+    0
+   ],
+   "clip": [
+    "439:437",
+    0
+   ]
+  },
+  "class_type": "Power Lora Loader (rgthree)",
+  "_meta": {
+   "title": "Power Lora Loader (rgthree)"
+  }
+ },
+ "439:436": {
+  "inputs": {
+   "unet_name": "krea2_turbo_int8_convrot.safetensors",
+   "weight_dtype": "default"
+  },
+  "class_type": "UNETLoader",
+  "_meta": {
+   "title": "UNETLoader"
+  }
+ },
+ "439:438": {
+  "inputs": {
+   "vae_name": "qwen_image_vae.safetensors"
+  },
+  "class_type": "VAELoader",
+  "_meta": {
+   "title": "VAELoader"
+  }
+ },
+ "439:437": {
+  "inputs": {
+   "clip_name": "qwen3vl_4b_fp8_scaled.safetensors",
+   "type": "krea2",
+   "device": "default"
+  },
+  "class_type": "CLIPLoader",
+  "_meta": {
+   "title": "CLIPLoader"
+  }
+ }
+}

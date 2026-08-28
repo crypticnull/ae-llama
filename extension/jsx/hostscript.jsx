@@ -1175,6 +1175,393 @@ AELL_TOOLS.organize_project = function (args) {
           "folder structure was left alone" });
 };
 
+// ------------------------------------------------- project hygiene (5.6)
+//
+// AE's three cleanup calls all delete, all report only a NUMBER, and two
+// of them take things nobody asked about. Measured in AE 2026 (26.3x87),
+// each fact below cost a probe:
+//
+//  - removeUnusedFootage() also deletes EMPTY FOLDERS, recursively, and
+//    counts them in its return value. A project with three empty folders
+//    and no footage answers "3".
+//  - it KEEPS footage that is used only by a comp that is itself unused.
+//  - consolidateFootage() merges footage items pointing at the same file
+//    and repoints the layers using them; nothing in a comp changes.
+//  - reduceProject(comps) deletes every item not reachable from the comps
+//    you name -- including a comp that is referenced ONLY by an
+//    expression, whose expressionError stays EMPTY afterwards, and
+//    including render-queue items for the comps it removes.
+//  - reduceProject accepts a FOOTAGE item in the keep array and then
+//    deletes every comp in the project. It is refused here.
+//  - reduceProject([]) throws "Array is empty"; with no argument at all
+//    it throws "requires 1 parameter".
+//  - all three are ordinary undoable edits: one Ctrl+Z put a 10-item
+//    project back after a reduceProject, and the next undo group opened
+//    and closed cleanly (unlike render_comp, which cannot be grouped).
+//
+// So the tool previews FIRST (dryRun defaults to true), names what would
+// go rather than counting it, and on execute compares what AE actually
+// removed against what the preview promised.
+
+var AELL_HYG_LIST = 40;
+
+var AELL_HYG_ACTIONS = [
+  "remove_unused_footage — deletes footage no comp uses, plus every " +
+    "folder that ends up empty",
+  "consolidate_footage — merges footage items that point at the same " +
+    "file, repointing the layers that use them",
+  "reduce_project — deletes EVERYTHING not needed by the comps you name " +
+    "in keepComps (comps, footage, folders and their render-queue items)"
+];
+
+function AELL_hygKind(it) {
+  if (it instanceof CompItem) return "comp";
+  if (it instanceof FolderItem) return "folder";
+  return "footage";
+}
+
+/* "Solids/red" — enough for a human to find the item in the panel. */
+function AELL_hygLabel(it) {
+  var path = "";
+  try {
+    if (it.parentFolder && it.parentFolder !== app.project.rootFolder) {
+      path = AELL_folderPath(it.parentFolder) + "/";
+    }
+  } catch (eP) {}
+  return path + it.name;
+}
+
+/* Every item alive right now, keyed by id, so an execute can diff. */
+function AELL_hygSnapshot() {
+  var proj = app.project, map = {};
+  for (var i = 1; i <= proj.numItems; i++) {
+    var it = proj.item(i);
+    map[it.id] = { label: AELL_hygLabel(it), kind: AELL_hygKind(it) };
+  }
+  return map;
+}
+
+/* Cap a name list the way the rest of the panel does: head, plus a count
+ * of what is not shown. Never a silent truncation. */
+function AELL_hygCap(list, out, key) {
+  if (list.length <= AELL_HYG_LIST) { out[key] = list; return; }
+  out[key] = list.slice(0, AELL_HYG_LIST);
+  out[key + "NotShown"] = list.length - AELL_HYG_LIST;
+}
+
+/* Grow a doomed set by every folder whose whole content is doomed --
+ * iterated, because emptying a child empties its parent (measured: an
+ * empty folder inside an empty folder took both). */
+function AELL_hygSweepFolders(doomed) {
+  var proj = app.project, changed = true, folders = [];
+  var i, j;
+  for (i = 1; i <= proj.numItems; i++) {
+    if (proj.item(i) instanceof FolderItem) folders.push(proj.item(i));
+  }
+  while (changed) {
+    changed = false;
+    for (i = 0; i < folders.length; i++) {
+      var f = folders[i];
+      if (doomed[f.id]) continue;
+      var allGone = true;
+      for (j = 1; j <= f.numItems; j++) {
+        if (!doomed[f.item(j).id]) { allGone = false; break; }
+      }
+      if (allGone) { doomed[f.id] = true; changed = true; }
+    }
+  }
+  return doomed;
+}
+
+/* What removeUnusedFootage() would take. */
+function AELL_hygUnusedPlan() {
+  var proj = app.project, doomed = {}, i;
+  for (i = 1; i <= proj.numItems; i++) {
+    var it = proj.item(i);
+    if (!(it instanceof FootageItem)) continue;
+    var used = 1;
+    try { used = it.usedIn.length; } catch (eU) { used = 1; }
+    if (used === 0) doomed[it.id] = true;
+  }
+  return AELL_hygSweepFolders(doomed);
+}
+
+/* What consolidateFootage() would merge: footage items sharing a file
+ * path. AE keeps one per group; the rest go. */
+function AELL_hygDuplicatePlan() {
+  var proj = app.project, byFile = {}, order = [], i;
+  for (i = 1; i <= proj.numItems; i++) {
+    var it = proj.item(i);
+    if (!(it instanceof FootageItem)) continue;
+    var f = null;
+    try { f = it.mainSource.file; } catch (eF) {}
+    if (!f) continue;                       // solids and placeholders
+    var key = String(f.fsName);
+    if (!byFile[key]) { byFile[key] = []; order.push(key); }
+    byFile[key].push(it);
+  }
+  var doomed = {}, groups = [];
+  for (i = 0; i < order.length; i++) {
+    var g = byFile[order[i]];
+    if (g.length < 2) continue;
+    var labels = [];
+    for (var j = 0; j < g.length; j++) {
+      labels.push(AELL_hygLabel(g[j]));
+      if (j > 0) doomed[g[j].id] = true;    // AE keeps one of them
+    }
+    groups.push({ file: order[i], copies: g.length, items: labels });
+  }
+  return { doomed: doomed, groups: groups };
+}
+
+/* What reduceProject(keep) would leave alone: the comps named, whatever
+ * their layers pull in (transitively), and the folders those live in.
+ * Verified against AE on a two-level nesting rig. */
+function AELL_hygReducePlan(keepComps) {
+  var proj = app.project, keep = {}, stack = [], i, j;
+  for (i = 0; i < keepComps.length; i++) stack.push(keepComps[i]);
+  while (stack.length) {
+    var it = stack.pop();
+    if (!it || keep[it.id]) continue;
+    keep[it.id] = true;
+    if (it instanceof CompItem) {
+      for (j = 1; j <= it.numLayers; j++) {
+        var src = null;
+        try { src = it.layer(j).source; } catch (eS) {}
+        if (src && !keep[src.id]) stack.push(src);
+      }
+    }
+  }
+  // Folders survive when something inside them survives.
+  var kept = [];
+  for (i = 1; i <= proj.numItems; i++) {
+    if (keep[proj.item(i).id]) kept.push(proj.item(i));
+  }
+  for (i = 0; i < kept.length; i++) {
+    var f = kept[i].parentFolder;
+    while (f && f !== proj.rootFolder) { keep[f.id] = true; f = f.parentFolder; }
+  }
+  var doomed = {};
+  for (i = 1; i <= proj.numItems; i++) {
+    var item = proj.item(i);
+    if (!keep[item.id]) doomed[item.id] = true;
+  }
+  return doomed;
+}
+
+/* Render-queue items pointing at a comp that is about to go. AE drops
+ * them with no dialog and no mention (measured), so they are named. */
+function AELL_hygQueueLosses(doomed) {
+  var lost = [];
+  try {
+    var rq = app.project.renderQueue;
+    for (var i = 1; i <= rq.numItems; i++) {
+      var c = null;
+      try { c = rq.item(i).comp; } catch (eC) { continue; }
+      if (c && doomed[c.id]) lost.push(c.name);
+    }
+  } catch (eQ) {}
+  return lost;
+}
+
+/* Doomed comps whose NAME appears in an expression that SURVIVES. AE
+ * leaves such an expression in place with an EMPTY expressionError -- the
+ * silent break this project refuses to ship. */
+function AELL_hygExpressionRefs(doomed) {
+  var proj = app.project, warn = [], i, j;
+  var names = [];
+  for (i = 1; i <= proj.numItems; i++) {
+    var it = proj.item(i);
+    if (doomed[it.id] && (it instanceof CompItem)) names.push(it);
+  }
+  if (!names.length) return warn;
+  var exprs = AELL_expressionIndex();
+  for (i = 0; i < names.length; i++) {
+    for (j = 0; j < exprs.length; j++) {
+      var host = exprs[j];
+      var kind = AELL_expressionNames(host.expression, names[i].name);
+      if (!kind) continue;
+      warn.push(names[i].name + " is named (" + kind + ") by an " +
+        "expression on " + host.comp + " / " + host.layer + " / " +
+        host.property);
+      break;
+    }
+  }
+  return warn;
+}
+
+function AELL_hygNames(doomed, kinds) {
+  var proj = app.project, out = [];
+  for (var i = 1; i <= proj.numItems; i++) {
+    var it = proj.item(i);
+    if (!doomed[it.id]) continue;
+    if (kinds && !kinds[AELL_hygKind(it)]) continue;
+    out.push(AELL_hygLabel(it));
+  }
+  return out;
+}
+
+/*
+ * clean_project {action, keepComps?, dryRun?}
+ *
+ * dryRun DEFAULTS TO TRUE: every action here deletes project items, and
+ * two of them take things the user never mentioned (empty folders,
+ * render-queue entries), so nothing happens until it has been shown once.
+ */
+AELL_TOOLS.clean_project = function (args) {
+  var proj = app.project;
+  if (!proj) return AELL_err("No project open");
+  args = args || {};
+
+  var raw = String(args.action || "").toLowerCase();
+  raw = raw.replace(/[\s\-]+/g, "_");
+  var alias = {
+    remove_unused_footage: "remove_unused_footage",
+    removeunusedfootage: "remove_unused_footage",
+    remove_unused: "remove_unused_footage",
+    unused: "remove_unused_footage",
+    unused_footage: "remove_unused_footage",
+    consolidate_footage: "consolidate_footage",
+    consolidatefootage: "consolidate_footage",
+    consolidate: "consolidate_footage",
+    duplicates: "consolidate_footage",
+    reduce_project: "reduce_project",
+    reduceproject: "reduce_project",
+    reduce: "reduce_project"
+  };
+  var action = alias[raw] || "";
+  if (!action) {
+    return AELL_err((raw ? "Unknown action '" + args.action + "'. " :
+      "clean_project needs an 'action'. ") +
+      "Pick exactly one, and say which one you are about to run before " +
+      "you run it: " + AELL_HYG_ACTIONS.join(" | "));
+  }
+
+  var dryRun = (args.dryRun === false) ? false : true;
+  var doomed = {}, out = { action: action, dryRun: dryRun }, i;
+  var dupPlan = null, keepComps = [];
+
+  if (action === "reduce_project") {
+    var want = args.keepComps;
+    if (!AELLJSON.isArray(want)) {
+      if (typeof want === "string" && want) want = [want];
+      else if (AELLJSON.isArray(args.comps)) want = args.comps;
+      else if (typeof args.comp === "string" && args.comp) want = [args.comp];
+      else want = null;
+    }
+    if (!want || !want.length) {
+      var have = [], shown = 0;
+      for (i = 1; i <= proj.numItems && shown < 20; i++) {
+        if (proj.item(i) instanceof CompItem) { have.push(proj.item(i).name); shown++; }
+      }
+      return AELL_err("reduce_project deletes every comp, footage item " +
+        "and folder that the comps you keep do not need, so it will not " +
+        "guess which ones matter. Name them in keepComps. Comps in this " +
+        "project: " + (have.join(", ") || "(none)"));
+    }
+    for (i = 0; i < want.length; i++) {
+      var nm = String(want[i]);
+      var found = null;
+      try { found = AELL_resolveComp(nm); }
+      catch (eC) {
+        var other = AELL_findItem(nm);
+        if (other) {
+          return AELL_err("'" + nm + "' is a " + AELL_hygKind(other) +
+            ", not a comp. AE accepts a non-comp here and then deletes " +
+            "EVERY comp in the project, so it is refused. Name comps only.");
+        }
+        return AELL_err(eC.message ? eC.message : String(eC));
+      }
+      keepComps.push(found);
+    }
+    doomed = AELL_hygReducePlan(keepComps);
+    var keepNames = [];
+    for (i = 0; i < keepComps.length; i++) keepNames.push(keepComps[i].name);
+    out.keepComps = keepNames;
+  } else if (action === "remove_unused_footage") {
+    doomed = AELL_hygUnusedPlan();
+  } else {
+    dupPlan = AELL_hygDuplicatePlan();
+    doomed = dupPlan.doomed;
+    if (dupPlan.groups.length) AELL_hygCap(dupPlan.groups, out, "duplicateGroups");
+  }
+
+  var doomedList = AELL_hygNames(doomed, null);
+  var folders = AELL_hygNames(doomed, { folder: true });
+  var comps = AELL_hygNames(doomed, { comp: true });
+  out.willRemove = doomedList.length;
+  AELL_hygCap(doomedList, out, "items");
+  if (folders.length) {
+    out.foldersIncluded = folders.length;
+    out.foldersNote = "Folders left empty by this go too, and AE counts " +
+      "them in its own total: " + folders.slice(0, 10).join(", ") +
+      (folders.length > 10 ? ", ..." : "");
+  }
+  if (comps.length) out.compsRemoved = comps.length;
+
+  var queueLoss = AELL_hygQueueLosses(doomed);
+  if (queueLoss.length) {
+    out.renderQueueLost = queueLoss;
+    out.renderQueueNote = "Their render-queue items disappear with them, " +
+      "with no dialog and no warning from AE.";
+  }
+  var exprWarn = AELL_hygExpressionRefs(doomed);
+  if (exprWarn.length) {
+    AELL_hygCap(exprWarn, out, "expressionBreaks");
+    out.expressionNote = "AE does NOT report these: the expression stays " +
+      "on the layer and expressionError reads empty, so the break is " +
+      "silent. Fix or keep those comps first.";
+  }
+
+  if (dryRun) {
+    out.note = out.willRemove === 0
+      ? "PREVIEW ONLY — nothing to do: this action would remove nothing."
+      : "PREVIEW ONLY — nothing was deleted. Show the user what would go " +
+        "(especially anything above they did not ask about), then call " +
+        "again with dryRun:false to do it.";
+    return AELL_okay(out);
+  }
+
+  var before = AELL_hygSnapshot();
+  var removed = 0;
+  try {
+    if (action === "remove_unused_footage") removed = proj.removeUnusedFootage();
+    else if (action === "consolidate_footage") removed = proj.consolidateFootage();
+    else removed = proj.reduceProject(keepComps);
+  } catch (eX) {
+    return AELL_err("AE refused " + action + ": " +
+                    (eX.message ? eX.message : String(eX)));
+  }
+
+  // What AE ACTUALLY took, by id, versus what the preview promised. A
+  // difference is not an error -- it is the part worth reporting.
+  var after = AELL_hygSnapshot(), gone = [], id;
+  for (id in before) {
+    if (!before.hasOwnProperty(id)) continue;
+    if (!after[id]) gone.push({ id: id, label: before[id].label });
+  }
+  var unexpected = [], survived = [];
+  for (i = 0; i < gone.length; i++) {
+    if (!doomed[gone[i].id]) unexpected.push(gone[i].label);
+  }
+  for (id in before) {
+    if (!before.hasOwnProperty(id)) continue;
+    if (doomed[id] && after[id]) survived.push(before[id].label);
+  }
+  var goneLabels = [];
+  for (i = 0; i < gone.length; i++) goneLabels.push(gone[i].label);
+
+  out.removedCount = removed;
+  out.itemsRemoved = gone.length;
+  AELL_hygCap(goneLabels, out, "removed");
+  if (unexpected.length) AELL_hygCap(unexpected, out, "removedUnexpectedly");
+  if (survived.length) AELL_hygCap(survived, out, "predictedButKept");
+  out.itemsLeft = proj.numItems;
+  out.note = gone.length + " item(s) deleted in ONE undo group — a single " +
+    "Ctrl+Z puts them all back (verified in AE).";
+  return AELL_okay(out);
+};
+
 AELL_TOOLS.get_comp_details = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var total = comp.numLayers;
@@ -1532,6 +1919,455 @@ AELL_TOOLS.set_text_style = function (args) {
   }
   var style = AELL_applyTextStyle(layer, args);
   return AELL_okay({ layer: layer.name, style: style });
+};
+
+/*
+ * TEXT ANIMATORS
+ *
+ * Measured in AE 2026 (probe, 2026-08-28) — the tree is not what the
+ * scripting guide suggests:
+ *
+ *  - An animator's "Properties" group is NOT empty. It ships with all
+ *    103 possible animator properties already present (the whole 3D-text
+ *    Front/Bevel/Side/Back material set and eight nameless variable-font
+ *    axes among them). addProperty does not CREATE one, it un-hides it.
+ *  - enabled, elided and active read true/false/true for every one of
+ *    the 103 whether or not it was ever added, so none of them tells an
+ *    active property from a dormant one. `canSetExpression` DOES: false
+ *    while dormant, true once added. That is the only flag that knows.
+ *  - Writing to a dormant one throws AE's raw "the property or a parent
+ *    property is hidden", which is why the deep search now refuses those
+ *    by name and says which tool activates them.
+ *  - Adding a SIBLING animator invalidates every reference already held
+ *    into earlier animators (a1.name then throws "Object is invalid").
+ *    Adding a selector or a property does not. So this tool re-fetches
+ *    by index rather than holding what it made.
+ *  - AE lets two animators share a name and returns the FIRST for a name
+ *    lookup, so the later one is unreachable — same trap precompose had.
+ *  - Per-character 3D is a LAYER switch (threeDPerChar), and turning it
+ *    on also turns the layer 3D; turning it off again leaves the layer
+ *    3D. X/Y Rotation and a Z in Position/Anchor Point need it.
+ *  - "ADBE Text Rotation" IS the Z rotation; "ADBE Text Rotation Z" does
+ *    not exist in either mode. Percent Start/End/Offset run -100..100,
+ *    not 0..100.
+ */
+var AELL_ANIM_PROPS = [
+  { arg: "anchorPoint", m: "ADBE Text Anchor Point 3D", dims: 3, perChar: "z" },
+  { arg: "position", m: "ADBE Text Position 3D", dims: 3, perChar: "z" },
+  { arg: "scale", m: "ADBE Text Scale 3D", dims: 3, perChar: "z100" },
+  { arg: "skew", m: "ADBE Text Skew" },
+  { arg: "skewAxis", m: "ADBE Text Skew Axis" },
+  { arg: "rotation", m: "ADBE Text Rotation" },
+  { arg: "xRotation", m: "ADBE Text Rotation X", perChar: "always" },
+  { arg: "yRotation", m: "ADBE Text Rotation Y", perChar: "always" },
+  { arg: "opacity", m: "ADBE Text Opacity" },
+  { arg: "fillColor", m: "ADBE Text Fill Color", color: true },
+  { arg: "fillOpacity", m: "ADBE Text Fill Opacity" },
+  { arg: "fillHue", m: "ADBE Text Fill Hue" },
+  { arg: "fillSaturation", m: "ADBE Text Fill Saturation" },
+  { arg: "fillBrightness", m: "ADBE Text Fill Brightness" },
+  { arg: "strokeColor", m: "ADBE Text Stroke Color", color: true },
+  { arg: "strokeOpacity", m: "ADBE Text Stroke Opacity" },
+  { arg: "strokeWidth", m: "ADBE Text Stroke Width" },
+  { arg: "strokeHue", m: "ADBE Text Stroke Hue" },
+  { arg: "strokeSaturation", m: "ADBE Text Stroke Saturation" },
+  { arg: "strokeBrightness", m: "ADBE Text Stroke Brightness" },
+  { arg: "tracking", m: "ADBE Text Tracking Amount" },
+  { arg: "trackingType", m: "ADBE Text Track Type" },
+  { arg: "lineAnchor", m: "ADBE Text Line Anchor" },
+  { arg: "lineSpacing", m: "ADBE Text Line Spacing", dims: 2 },
+  { arg: "characterOffset", m: "ADBE Text Character Offset" },
+  { arg: "characterValue", m: "ADBE Text Character Replace" },
+  { arg: "characterRange", m: "ADBE Text Character Range" },
+  { arg: "characterAlignment", m: "ADBE Text Character Change Type" },
+  { arg: "blur", m: "ADBE Text Blur", dims: 2 }
+];
+
+var AELL_ANIM_SEL_ENUMS = {
+  units:      { m: "ADBE Text Range Units",     of: ["percent", "index"] },
+  basedOn:    { m: "ADBE Text Range Type2",
+                of: ["characters", "charactersExcludingSpaces", "words", "lines"] },
+  mode:       { m: "ADBE Text Selector Mode",
+                of: ["add", "subtract", "intersect", "min", "max", "difference"] },
+  shape:      { m: "ADBE Text Range Shape",
+                of: ["square", "rampUp", "rampDown", "triangle", "round", "smooth"] }
+};
+/* Plain numeric selector settings: arg -> matchName. */
+var AELL_ANIM_SEL_NUMS = {
+  smoothness:     "ADBE Text Selector Smoothness",
+  easeHigh:       "ADBE Text Levels Max Ease",
+  easeLow:        "ADBE Text Levels Min Ease",
+  amount:         "ADBE Text Selector Max Amount",
+  randomizeOrder: "ADBE Text Randomize Order",
+  randomSeed:     "ADBE Text Random Seed"
+};
+var AELL_ANIM_WIGGLY_NUMS = {
+  maxAmount:         "ADBE Text Wiggly Max Amount",
+  minAmount:         "ADBE Text Wiggly Min Amount",
+  wigglesPerSecond:  "ADBE Text Temporal Freq",
+  correlation:       "ADBE Text Character Correlation",
+  temporalPhase:     "ADBE Text Temporal Phase",
+  spatialPhase:      "ADBE Text Spatial Phase",
+  lockDimensions:    "ADBE Text Wiggly Lock Dim",
+  randomSeed:        "ADBE Text Wiggly Random Seed"
+};
+
+function AELL_animPropFor(name) {
+  var want = String(name).toLowerCase().replace(/[\s_-]/g, "");
+  for (var i = 0; i < AELL_ANIM_PROPS.length; i++) {
+    var p = AELL_ANIM_PROPS[i];
+    if (p.arg.toLowerCase() === want) return p;
+    if (p.m.toLowerCase() === String(name).toLowerCase()) return p;
+  }
+  return null;
+}
+
+function AELL_animPropNames() {
+  var out = [];
+  for (var i = 0; i < AELL_ANIM_PROPS.length; i++) out.push(AELL_ANIM_PROPS[i].arg);
+  return out.join(", ");
+}
+
+/* An animator property AE has not been asked to add yet. The only honest
+   test measured in the field: canSetExpression is false while hidden. */
+function AELL_animDormant(prop) {
+  try { return prop.canSetExpression === false; } catch (e) { return false; }
+}
+
+/* The same question asked of a property reached by an explicit path,
+   where nothing has told us we are inside an animator. canSetExpression
+   is false on plenty of ordinary read-only properties (a selector's
+   Units, for one), so the parent group has to agree. */
+function AELL_animPropDormant(prop) {
+  if (!AELL_animDormant(prop)) return false;
+  var g = null;
+  try { g = prop.propertyGroup(1); } catch (e) { return false; }
+  try { return !!g && String(g.matchName) === "ADBE Text Animator Properties"; }
+  catch (e2) { return false; }
+}
+
+/* One sentence, used by every tool that lands on a dormant slot. */
+function AELL_animDormantMsg(layer, spec, verb) {
+  return "'" + spec + "' is a text-animator property that has not been " +
+    "added to its animator, so AE keeps it hidden and " + verb +
+    " it does nothing. add_text_animator {layer: \"" + layer.name +
+    "\", properties: {…}} adds and sets one in a single call.";
+}
+
+/* AE happily gives two animators the same name and then answers a name
+   lookup with the first one, stranding the second — so number it. */
+function AELL_uniqueAnimatorName(anims, base) {
+  var taken = {};
+  for (var i = 1; i <= anims.numProperties; i++) {
+    try { taken[anims.property(i).name] = true; } catch (e) {}
+  }
+  if (!taken[base]) return base;
+  var k = 2;
+  while (taken[base + " " + k]) k++;
+  return base + " " + k;
+}
+
+function AELL_animEnumValue(key, given) {
+  var spec = AELL_ANIM_SEL_ENUMS[key];
+  var want = String(given).toLowerCase().replace(/[\s_-]/g, "");
+  for (var i = 0; i < spec.of.length; i++) {
+    if (spec.of[i].toLowerCase() === want) return i + 1;
+  }
+  var n = AELL_numArg(given);
+  if (n !== null && n >= 1 && n <= spec.of.length) return Math.round(n);
+  return null;
+}
+
+/* Which per-character-3D-only properties a request touches. Measured:
+   X/Y Rotation always need it; a Z in Position/Anchor Point and a Scale
+   Z other than 100 do too. Anything else animates flat characters. */
+function AELL_animNeeds3D(spec, value) {
+  if (spec.perChar === "always") return true;
+  if (!AELLJSON.isArray(value) || value.length < 3) return false;
+  var z = AELL_numArg(value[2]);
+  if (z === null) return false;
+  if (spec.perChar === "z") return z !== 0;
+  if (spec.perChar === "z100") return z !== 100;
+  return false;
+}
+
+function AELL_animSetValue(prop, spec, value, label, problems) {
+  var v = value;
+  if (spec.color) {
+    if (!AELLJSON.isArray(v) || v.length < 3) {
+      problems.push("'" + label + "' must be [r, g, b] floats 0..1");
+      return null;
+    }
+    v = [AELL_clamp01(v[0]), AELL_clamp01(v[1]), AELL_clamp01(v[2]),
+         v.length > 3 ? AELL_clamp01(v[3]) : 1];
+  } else if (spec.dims) {
+    if (!AELLJSON.isArray(v)) {
+      var one = AELL_numArg(v);
+      if (one === null) {
+        problems.push("'" + label + "' must be an array of " + spec.dims +
+                      " numbers");
+        return null;
+      }
+      v = spec.dims === 2 ? [one, one] : [one, one, one];
+    }
+  } else {
+    var n = AELL_numArg(v);
+    if (n === null) {
+      problems.push("'" + label + "' must be a number (got " +
+                    AELLJSON.stringify(v) + ")");
+      return null;
+    }
+    v = n;
+  }
+  try {
+    prop.setValue(v);
+  } catch (e) {
+    var range = "";
+    try {
+      if (prop.hasMin || prop.hasMax) {
+        range = " Range: " + (prop.hasMin ? prop.minValue : "-inf") + " to " +
+                (prop.hasMax ? prop.maxValue : "+inf") + ".";
+      }
+    } catch (e2) {}
+    problems.push("AE rejected '" + label + "': " + (e.message || e) + range);
+    return null;
+  }
+  var read;
+  try { read = prop.value; } catch (e3) { read = v; }
+  return AELL_sampleRaw(read);
+}
+
+AELL_TOOLS.add_text_animator = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  var layer = AELL_layerOrSelection(comp, args.layer);
+  var i, key;
+
+  if (!(layer instanceof TextLayer)) {
+    var texts = [];
+    for (i = 1; i <= comp.numLayers; i++) {
+      if (comp.layer(i) instanceof TextLayer) texts.push(comp.layer(i).name);
+    }
+    return AELL_err("'" + layer.name + "' is a " + AELL_layerType(layer) +
+      " layer — text animators only exist on TEXT layers." +
+      (texts.length ? " Text layers here: " + texts.join(", ") + "."
+                    : " This comp has no text layers (add_text_layer)."));
+  }
+
+  var props = args.properties;
+  if (props && AELLJSON.isArray(props)) {
+    return AELL_err("'properties' is an object of name: value, not a list " +
+      "— e.g. {opacity: 0, position: [0, -80]}. Available: " +
+      AELL_animPropNames() + ".");
+  }
+  if (!props || typeof props !== "object") {
+    return AELL_err("'properties' is required: an object of what the " +
+      "animator animates, e.g. {opacity: 0} or {position: [0, -80], " +
+      "rotation: 20}. Available: " + AELL_animPropNames() + ".");
+  }
+  /* Validate the whole request before touching the layer — a refusal
+     must not leave a half-built animator behind. */
+  var wanted = [], unknown = [], needs3D = [];
+  for (key in props) {
+    if (!props.hasOwnProperty(key)) continue;
+    var spec = AELL_animPropFor(key);
+    if (!spec) { unknown.push(key); continue; }
+    wanted.push({ spec: spec, arg: key, value: props[key] });
+    if (AELL_animNeeds3D(spec, props[key])) needs3D.push(key);
+  }
+  if (unknown.length) {
+    return AELL_err("No animator property named " + unknown.join(", ") +
+      ". AE's animator properties: " + AELL_animPropNames() +
+      ". (Rotation IS the Z rotation; xRotation/yRotation need " +
+      "per-character 3D, which this tool turns on for you.)");
+  }
+  if (!wanted.length) {
+    return AELL_err("'properties' was empty. Name at least one: " +
+      AELL_animPropNames() + ".");
+  }
+
+  var sel = args.selector;
+  if (sel === null || typeof sel === "undefined") sel = {};
+  if (typeof sel !== "object" || AELLJSON.isArray(sel)) {
+    return AELL_err("'selector' must be an object, e.g. " +
+      "{start: 0, end: 50} or {type: \"wiggly\"} or {type: \"none\"}.");
+  }
+  var selType = sel.type ? String(sel.type).toLowerCase() : "range";
+  var SEL_KINDS = { range: "ADBE Text Selector",
+                    wiggly: "ADBE Text Wiggly Selector",
+                    expression: "ADBE Text Expressible Selector" };
+  if (selType !== "none" && !SEL_KINDS.hasOwnProperty(selType)) {
+    return AELL_err("No selector type '" + sel.type + "'. AE has: range " +
+      "(the usual one), wiggly, expression — or \"none\" to leave the " +
+      "animator applying to every character.");
+  }
+  var enums = {};
+  for (key in AELL_ANIM_SEL_ENUMS) {
+    if (!AELL_ANIM_SEL_ENUMS.hasOwnProperty(key)) continue;
+    if (typeof sel[key] === "undefined" || sel[key] === null) continue;
+    var ev = AELL_animEnumValue(key, sel[key]);
+    if (ev === null) {
+      return AELL_err("No " + key + " '" + sel[key] + "' — AE has: " +
+        AELL_ANIM_SEL_ENUMS[key].of.join(", ") + ".");
+    }
+    enums[key] = ev;
+  }
+  var indexUnits = enums.units === 2;
+  /* Percent Start/End/Offset are -100..100 in AE (measured; 101 throws).
+     Catch it here, before an animator exists to be cleaned up. */
+  var ENDS = ["start", "end", "offset"];
+  for (i = 0; i < ENDS.length; i++) {
+    key = ENDS[i];
+    if (typeof sel[key] === "undefined" || sel[key] === null) continue;
+    var endNum = AELL_numArg(sel[key]);
+    if (endNum === null) {
+      return AELL_err("selector '" + key + "' must be a number (got " +
+        AELLJSON.stringify(sel[key]) + ").");
+    }
+    if (!indexUnits && (endNum < -100 || endNum > 100)) {
+      return AELL_err("selector '" + key + "' is a PERCENT here (" +
+        endNum + " is outside -100..100). For a character count pass " +
+        "units: \"index\" too.");
+    }
+    if (selType !== "range") {
+      return AELL_err("'" + key + "' belongs to a RANGE selector; a " +
+        selType + " selector has no start/end/offset. Drop type, or " +
+        "drop '" + key + "'.");
+    }
+  }
+
+  var made = AELL_keepSelection(comp, function () {
+    var anims = layer.property("ADBE Text Properties")
+                     .property("ADBE Text Animators");
+    var wantName = (typeof args.name === "string" && args.name !== "")
+      ? args.name : "Animator " + (anims.numProperties + 1);
+    var finalName = AELL_uniqueAnimatorName(anims, wantName);
+    anims.addProperty("ADBE Text Animator");
+    /* Adding an animator invalidates every reference held into the
+       earlier ones, so everything below re-reaches through the index. */
+    var idx = anims.numProperties;
+    anims.property(idx).name = finalName;
+    return { index: idx, name: finalName,
+             renamed: finalName !== wantName ? wantName : null };
+  });
+
+  var anims = layer.property("ADBE Text Properties")
+                   .property("ADBE Text Animators");
+  var animPath = "Text/Animators/" + made.name;
+  var out = { layer: layer.name, animator: made.name, path: animPath };
+  if (made.renamed) {
+    out.nameTaken = "'" + made.renamed + "' was already an animator on " +
+      "this layer, so AE would have answered a lookup with the OTHER one";
+  }
+
+  /* Per-character 3D first: it is a LAYER switch, and X/Y Rotation is
+     dormant-but-addable without it, so the write would land somewhere
+     the render never reads. */
+  if (needs3D.length && layer.threeDPerChar !== true) {
+    var was3D = layer.threeDLayer;
+    layer.threeDPerChar = true;
+    out.perCharacter3D = "per-character 3D turned ON — " +
+      needs3D.join(", ") + " only affects characters with it" +
+      (was3D ? "" : "; AE made '" + layer.name + "' a 3D layer to do it, " +
+       "and turning per-character 3D off again does not undo that");
+  }
+
+  var problems = [];
+  var applied = [];
+  var pg = anims.property(made.index).property("ADBE Text Animator Properties");
+  for (i = 0; i < wanted.length; i++) {
+    var w = wanted[i];
+    var prop;
+    try { prop = pg.property(w.spec.m); } catch (eP) { prop = null; }
+    if (!prop) { problems.push("AE has no '" + w.arg + "' on this animator"); continue; }
+    if (AELL_animDormant(prop)) pg.addProperty(w.spec.m);
+    prop = pg.property(w.spec.m);
+    var got = AELL_animSetValue(prop, w.spec, w.value, w.arg, problems);
+    if (got === null) continue;
+    applied.push({ property: prop.name, value: got,
+                   path: animPath + "/Properties/" + prop.name });
+  }
+  out.properties = applied;
+
+  if (selType !== "none") {
+    var sels = anims.property(made.index).property("ADBE Text Selectors");
+    sels.addProperty(SEL_KINDS[selType]);
+    var s = sels.property(sels.numProperties);
+    var selPath = animPath + "/Selectors/" + s.name;
+    var settings = {};
+    if (selType === "range") {
+      var adv = s.property("ADBE Text Range Advanced");
+      /* Units must go in FIRST: it decides whether Start/End/Offset mean
+         the percent triple or the index one, and AE keeps both. */
+      if (typeof enums.units !== "undefined") {
+        adv.property("ADBE Text Range Units").setValue(enums.units);
+        settings.units = indexUnits ? "index" : "percent";
+      }
+      for (key in AELL_ANIM_SEL_ENUMS) {
+        if (!AELL_ANIM_SEL_ENUMS.hasOwnProperty(key) || key === "units") continue;
+        if (typeof enums[key] === "undefined") continue;
+        adv.property(AELL_ANIM_SEL_ENUMS[key].m).setValue(enums[key]);
+        settings[key] = AELL_ANIM_SEL_ENUMS[key].of[enums[key] - 1];
+      }
+      var ends = { start: ["ADBE Text Percent Start", "ADBE Text Index Start"],
+                   end: ["ADBE Text Percent End", "ADBE Text Index End"],
+                   offset: ["ADBE Text Percent Offset", "ADBE Text Index Offset"] };
+      for (key in ends) {
+        if (!ends.hasOwnProperty(key)) continue;
+        if (typeof sel[key] === "undefined" || sel[key] === null) continue;
+        var num = AELL_numArg(sel[key]);
+        if (num === null) {
+          problems.push("selector '" + key + "' must be a number");
+          continue;
+        }
+        var target = s.property(ends[key][indexUnits ? 1 : 0]);
+        try {
+          target.setValue(num);
+          settings[key] = num;
+        } catch (eS) {
+          problems.push("AE rejected selector '" + key + "': " +
+            (eS.message || eS) + (indexUnits ? "" :
+            " Percent selectors run -100 to 100."));
+        }
+      }
+      for (key in AELL_ANIM_SEL_NUMS) {
+        if (!AELL_ANIM_SEL_NUMS.hasOwnProperty(key)) continue;
+        if (typeof sel[key] === "undefined" || sel[key] === null) continue;
+        var nv = AELL_numArg(sel[key]);
+        if (nv === null) { problems.push("selector '" + key + "' must be a number"); continue; }
+        try { adv.property(AELL_ANIM_SEL_NUMS[key]).setValue(nv); settings[key] = nv; }
+        catch (eN2) { problems.push("AE rejected selector '" + key + "': " + (eN2.message || eN2)); }
+      }
+    } else if (selType === "wiggly") {
+      for (key in AELL_ANIM_WIGGLY_NUMS) {
+        if (!AELL_ANIM_WIGGLY_NUMS.hasOwnProperty(key)) continue;
+        if (typeof sel[key] === "undefined" || sel[key] === null) continue;
+        var wv = AELL_numArg(sel[key]);
+        if (wv === null) { problems.push("selector '" + key + "' must be a number"); continue; }
+        try { s.property(AELL_ANIM_WIGGLY_NUMS[key]).setValue(wv); settings[key] = wv; }
+        catch (eW) { problems.push("AE rejected selector '" + key + "': " + (eW.message || eW)); }
+      }
+      if (typeof enums.mode !== "undefined") {
+        s.property("ADBE Text Selector Mode").setValue(enums.mode);
+        settings.mode = AELL_ANIM_SEL_ENUMS.mode.of[enums.mode - 1];
+      }
+      if (typeof enums.basedOn !== "undefined") {
+        s.property("ADBE Text Range Type2").setValue(enums.basedOn);
+        settings.basedOn = AELL_ANIM_SEL_ENUMS.basedOn.of[enums.basedOn - 1];
+      }
+    }
+    out.selector = { name: s.name, type: selType, path: selPath };
+    out.selector.settings = settings;
+    if (selType === "range") {
+      out.animateHint = "set_keyframes {layer: \"" + layer.name +
+        "\", property: \"" + selPath + "/Offset\", keys: [...]} slides the " +
+        "selection across the text";
+    }
+  } else {
+    out.selector = "none — the animator applies to every character";
+  }
+
+  if (problems.length) out.problems = problems;
+  return AELL_okay(out);
 };
 
 AELL_TOOLS.add_solid = function (args) {
@@ -3423,21 +4259,103 @@ AELL_TOOLS.scale_comp = function (args) {
     return true;
   }
 
+  /* A light's pixel-valued options (Radius, Falloff Distance, Shadow
+   * Diffusion) are the same trap as camera Zoom, one layer type over:
+   * outside the Transform group, so a parent never passes the resize
+   * down, and left alone a halved comp keeps a 300px falloff radius
+   * lighting a 500px comp. AE's own Scale Composition script leaves them
+   * behind; this one scales them and says which. Only the options the
+   * light's TYPE and FALLOFF actually put in play are touched — writing
+   * a hidden one throws. A zero (Shadow Diffusion's default) scales to
+   * zero, so it is left alone rather than reported as work done.
+   */
+  function AELL_relight(L) {
+    var kind = AELL_lightKindOf(L);
+    if (!kind) return null;
+    var opts = null;
+    try { opts = L.property("ADBE Light Options Group"); } catch (eG) {}
+    if (!opts) return null;
+    var falloffs = AELL_lightFalloffs(opts);
+    var done = [], i, o, prop, n;
+    for (i = 0; i < AELL_LIGHT_PIXEL_OPTS.length; i++) {
+      o = AELL_LIGHT_PIXEL_OPTS[i];
+      if (!AELL_lightAccepts(o.on, kind)) continue;
+      if (o.falloff && !AELL_falloffInPlay(o.falloff, falloffs)) continue;
+      prop = null;
+      try { prop = opts.property(o.mn); } catch (eO) {}
+      if (!prop) continue;
+      if (AELL_driven(prop)) {
+        // An expression on a light option swallows the write exactly as
+        // one on Position does, but it is not a transform and saying
+        // "this layer will not move" about it would be wrong.
+        lightProblems.push(L.name + " " + o.label + " (" + kind +
+          " light): expression-driven, so the resize cannot change it");
+        continue;
+      }
+      try {
+        n = prop.numKeys;
+        if (!n && !prop.value) continue;
+      } catch (eN) { continue; }
+      try {
+        AELL_scalePropValues(prop, function (v) { return v * s; }, s,
+                             L.name + " " + o.label, easeProblems);
+        done.push(o.label);
+      } catch (eW) {
+        // The table said this one is in play, so a refusal is news — an
+        // unscaled pixel option re-lights the shot silently. The one way
+        // it happens: Falloff Type is itself KEYFRAMED, and AE hides
+        // Radius / Falloff Distance whenever the falloff UNDER THE
+        // PLAYHEAD is one that does not use them (measured: keys saying
+        // smooth later do not open the gate now).
+        lightProblems.push(L.name + " " + o.label + " (" + kind +
+          " light): " + (eW && eW.message ? eW.message : String(eW)) +
+          (falloffs.keyed
+            ? " Falloff is keyframed and the one under the playhead hides" +
+              " this option; move the playhead to a time that uses it and" +
+              " re-run."
+            : ""));
+      }
+    }
+    return { kind: kind, scaled: done };
+  }
+
   var scaled = 0, inherited = 0, i;
   var skipped = [], drivenBy = [], rezoomed = [], easeProblems = [];
+  var relit = [], nothingToScale = [], lightProblems = [];
+
+  /* One place to run AELL_relight and record what it touched, so the
+   * parented and unparented paths cannot drift apart — light options are
+   * NOT inherited, so both paths owe a light the same write. */
+  function AELL_noteRelit(L) {
+    var r = AELL_relight(L);
+    if (r && r.scaled.length) {
+      relit.push(L.name + " (" + r.scaled.join(", ") + ")");
+    }
+  }
   for (i = 1; i <= comp.numLayers; i++) {
     var L = comp.layer(i);
     if (L.parent) {
       inherited++;
       try {
         if (AELL_rezoom(L)) rezoomed.push(L.name);
+        AELL_noteRelit(L);
       } catch (eP) {
-        skipped.push(L.name + " (zoom): " +
+        skipped.push(L.name + " (zoom/light options): " +
           (eP && eP.message ? eP.message : String(eP)));
       }
       continue;
     }
     try {
+      // An ambient or environment light has no position, no aim and no
+      // pixel option — AE hides all of it. Writing Position anyway threw
+      // "the property or a parent property is hidden", and the layer was
+      // then reported as one that could NOT be scaled, which reads as a
+      // failure over a light where there was never anything to do.
+      var lightKind = AELL_lightKindOf(L);
+      if (lightKind && !AELL_lightHasGeometry(lightKind)) {
+        nothingToScale.push(L.name + " (" + lightKind + " light)");
+        continue;
+      }
       var posProp = AELL_resolveProperty(L, "position");
       if (AELL_driven(posProp)) drivenBy.push(L.name);
       AELL_scalePropValues(posProp, AELL_recentre, s,
@@ -3485,6 +4403,17 @@ AELL_TOOLS.scale_comp = function (args) {
           aims = typeof AutoOrientType !== "undefined" &&
                  L.autoOrient === AutoOrientType.CAMERA_OR_POINT_OF_INTEREST;
         } catch (eO) {}
+        // autoOrient lies on a LIGHT: measured in real AE 2026, a point,
+        // ambient or environment light reports 4214
+        // (CAMERA_OR_POINT_OF_INTEREST) exactly like a two-node spot, and
+        // then refuses the Point of Interest write because AE hides it.
+        // Only parallel and spot lights actually aim. Unguarded, an
+        // unparented point light threw here AFTER its Position had been
+        // written and was reported as a layer that could not be scaled.
+        if (aims && lightKind &&
+            !AELL_lightAccepts(AELL_LIGHT_XFORM.pointOfInterest.on, lightKind)) {
+          aims = false;
+        }
         if (aims) {
           var poi = L.property("ADBE Transform Group")
                      .property("ADBE Anchor Point");
@@ -3502,6 +4431,7 @@ AELL_TOOLS.scale_comp = function (args) {
       // lands in layersSkipped instead of vanishing and reporting a
       // success that did not happen.
       AELL_rezoom(L);
+      AELL_noteRelit(L);
       scaled++;
     } catch (e3) {
       // Do NOT fold failures into the inherited count — a locked layer or
@@ -3524,6 +4454,28 @@ AELL_TOOLS.scale_comp = function (args) {
     out.note += ". WARNING: keyframe easing could not be rescaled on " +
       easeProblems.length + " property/properties, so their motion will " +
       "over- or undershoot: " + easeProblems.join("; ");
+  }
+  if (relit.length) {
+    // Reported on their own: a light's Transform may well have been
+    // inherited or absent, and only its pixel options needed a write.
+    out.lightOptionsRescaled = relit;
+    out.note += ". Pixel-valued light options rescaled on " +
+      relit.join(", ") + " (nothing in Light Options is inherited from " +
+      "a parent, and AE's own Scale Composition script leaves them behind)";
+  }
+  if (lightProblems.length) {
+    // A pixel option AE refused to rescale keeps the OLD comp's
+    // distance, so the light renders differently at the new size.
+    out.lightOptionsNotScaled = lightProblems;
+    out.note += ". WARNING: " + lightProblems.length + " light option(s) " +
+      "kept the old comp's pixel value: " + lightProblems.join("; ");
+  }
+  if (nothingToScale.length) {
+    // NOT a failure and NOT a success: AE hides everything scalable on
+    // these, so naming them stops the count from looking short.
+    out.layersWithNothingToScale = nothingToScale;
+    out.note += ". Nothing to scale on " + nothingToScale.join(", ") +
+      " (AE hides position, aim and every pixel option on these types)";
   }
   if (rezoomed.length) {
     // Reported separately: their TRANSFORM really was inherited, only the
@@ -3970,6 +4922,28 @@ var AELL_SHAPE_KINDS = {
   zigzag:           "ADBE Vector Filter - Zigzag"
 };
 
+/*
+ * The shape-content kinds that CHANGE other content instead of drawing.
+ * Measured in AE 2026 (probe in WORKPLAN-LOG 2026-08-28): one of these
+ * acts on the items ABOVE it in its group's list, and addProperty always
+ * appends BELOW — so a repeater added after the rectangle repeats it
+ * (bounds 100 -> 500 px with 3 copies at +200), and the same repeater
+ * moved to index 1 renders a single copy. A filter with no geometry
+ * above it is a silent no-op, and adding the shape afterwards does not
+ * rescue it, because that shape lands below the filter too.
+ */
+var AELL_SHAPE_FILTERS = {
+  repeater: 1, trim_paths: 1, merge_paths: 1, offset_paths: 1,
+  rounded_corners: 1, pucker_bloat: 1, twist: 1, zigzag: 1
+};
+
+/* Does this content item put geometry on the canvas? A fill or a stroke
+   colours a path; on its own it draws nothing, so it does not count. */
+function AELL_makesGeometry(mn) {
+  var s = String(mn || "");
+  return s === "ADBE Vector Group" || s.indexOf("ADBE Vector Shape - ") === 0;
+}
+
 /* Find a shape group by name anywhere in the contents tree. */
 function AELL_findShapeGroup(node, name, depth) {
   var n = 0;
@@ -4111,27 +5085,229 @@ AELL_TOOLS.add_shape_content = function (args) {
       applied.push(key);
     }
   }
-  return AELL_okay({ layer: layer.name, added: item.name,
+  var base = "contents/" +
+    (into === "(layer root)" ? "" : into + "/") + item.name + "/";
+  var out = { layer: layer.name, added: item.name,
     matchName: matchName, container: into, params: applied.join(", "),
-    note: "Animatable via set_keyframes on 'contents/" +
-          (into === "(layer root)" ? "" : into + "/") + item.name +
-          "/<param>' paths" });
+    note: "Animatable via set_keyframes on '" + base + "<param>' paths" +
+      (kindKey === "repeater"
+        ? " — the offsets are one level down, e.g. '" + base +
+          "Transform/Position'"
+        : "") };
+  if (AELL_SHAPE_FILTERS[kindKey] === 1) {
+    var above = 0, myIdx = 0;
+    try { myIdx = item.propertyIndex; } catch (eI) { myIdx = 0; }
+    for (var si = 1; si < myIdx; si++) {
+      var sib = null;
+      try { sib = container.property(si); } catch (eS2) { continue; }
+      if (sib && AELL_makesGeometry(sib.matchName)) above++;
+    }
+    if (above === 0) {
+      out.warning = "'" + item.name + "' WAS added to " + into + ", but " +
+        "nothing above it there draws a shape, so it changes nothing. A " +
+        kindKey + " acts on the content ABOVE it in the list, and new " +
+        "content is always appended BELOW — so adding the rectangle now " +
+        "will NOT fix this. Put the shape in first, then the " + kindKey +
+        ", or target a group that already has one.";
+    }
+  }
+  return AELL_okay(out);
 };
 
+function AELL_layerNamesOf(layers) {
+  var n = [], i;
+  for (i = 0; i < layers.length; i++) {
+    try { n.push(layers[i].name); } catch (e) {}
+  }
+  return n.join(", ");
+}
+
+/* A layer's identity across a precompose. Layer.id is stable and unique
+ * project-wide; object identity is the fallback for a build that does not
+ * publish it. Never the INDEX: precompose renumbers the stack. */
+function AELL_layerKey(layer) {
+  try { if (typeof layer.id === "number") return "id" + layer.id; }
+  catch (e) {}
+  return null;
+}
+
+/* Which of `names` a single expression string quotes. AE addresses a
+ * layer by a quoted name (layer("X"), thisComp.layer('X')), so a quoted
+ * occurrence is the signal — matching bare text would flag a comment. */
+function AELL_exprNamesLayer(expr, names) {
+  var s = String(expr), q = ['"', "'"], i, j;
+  for (i = 0; i < names.length; i++) {
+    for (j = 0; j < q.length; j++) {
+      if (s.indexOf(q[j] + names[i] + q[j]) !== -1) return names[i];
+    }
+  }
+  return null;
+}
+
+/*
+ * precompose. Four things AE does QUIETLY here, all measured in AE 2026
+ * (probe in WORKPLAN-LOG 2026-08-28) and all reported rather than fixed
+ * behind the user's back:
+ *
+ *  - A moved layer whose PARENT stayed behind loses the parent outright.
+ *    (The reverse — a layer left behind whose parent moved in — is
+ *    re-pointed by AE at the new precomp, and a parent/child pair moved
+ *    together keeps its link, so only this one direction loses anything.)
+ *  - With moveAttributes TRUE, an expression on a layer left behind that
+ *    names a moved layer is NOT rewritten and NOT flagged: expressionError
+ *    stays empty while the reference dangles. With moveAttributes FALSE
+ *    AE does rewrite it (to the new precomp layer), so the scan only runs
+ *    for the true case.
+ *  - AE lets a SECOND item take the requested name. Two comps with one
+ *    name make the later one unreachable by name, so this auto-numbers
+ *    and redirects the rest of the request exactly as create_comp does.
+ *  - Precomposing selects the new layer and drops the user's selection.
+ */
 AELL_TOOLS.precompose = function (args) {
   var comp = AELL_resolveComp(args.comp);
   if (!args.name) return AELL_err("'name' is required");
   if (!AELLJSON.isArray(args.layers) || args.layers.length === 0) {
     return AELL_err("'layers' (array of names or 1-based indices) is required");
   }
-  var indices = [];
-  for (var i = 0; i < args.layers.length; i++) {
-    indices.push(AELL_resolveLayer(comp, args.layers[i]).index);
+  var i, j;
+  var layers = [], indices = [], seen = {}, dupes = [];
+  for (i = 0; i < args.layers.length; i++) {
+    var L = AELL_resolveLayer(comp, args.layers[i]);
+    // A repeated reference used to inflate layersMoved: AE tolerates
+    // [2, 2] and moves ONE layer, and the tool reported two.
+    if (seen[L.index]) {
+      if (!seen["dupe" + L.index]) { seen["dupe" + L.index] = true;
+                                     dupes.push(L.name); }
+      continue;
+    }
+    seen[L.index] = true;
+    layers.push(L);
+    indices.push(L.index);
   }
   var move = args.moveAttributes !== false;
-  var pre = comp.layers.precompose(indices, String(args.name), move);
-  return AELL_okay({ precomp: pre.name, id: pre.id,
-                     layersMoved: indices.length });
+  if (!move && indices.length > 1) {
+    return AELL_err("moveAttributes:false only works on ONE layer — AE " +
+      "refuses it for " + indices.length + " (" + AELL_layerNamesOf(layers) +
+      "). Leaving attributes behind means the new comp takes that single " +
+      "layer's own size, which is undefined for several. Drop " +
+      "moveAttributes to move them all in together.");
+  }
+
+  // Everything worth reporting has to be read BEFORE the move: afterwards
+  // the moved layers belong to another comp and the survivors have
+  // already been rewired.
+  var movedNames = [], movedKeys = {}, parentsLost = [];
+  for (i = 0; i < layers.length; i++) {
+    movedNames.push(layers[i].name);
+    var k = AELL_layerKey(layers[i]);
+    if (k) movedKeys[k] = true;
+  }
+  for (i = 0; i < layers.length; i++) {
+    var par = null;
+    try { par = layers[i].parent; } catch (eP) {}
+    if (!par) continue;
+    var parIn = false;
+    for (j = 0; j < layers.length; j++) {
+      if (layers[j] === par) { parIn = true; break; }
+    }
+    if (!parIn) {
+      parentsLost.push(layers[i].name + " (was parented to " + par.name + ")");
+    }
+  }
+  // Keys and NAMES only, never the layer objects: precompose DESTROYS the
+  // layers it moves (AE builds fresh ones inside the precomp), so a
+  // reference held across the call throws "Object is invalid" the moment
+  // it is read — which is what the first cut of this restore did whenever
+  // the whole selection went in.
+  var prevKeys = [], prevNames = [], haveKeys = false;
+  try {
+    var sel = comp.selectedLayers;
+    for (i = 0; i < sel.length; i++) {
+      var sk = AELL_layerKey(sel[i]);
+      if (sk) haveKeys = true;
+      prevKeys.push(sk);
+      prevNames.push(sel[i].name);
+    }
+  } catch (eS) {}
+
+  var name = AELL_uniqueItemName(String(args.name));
+  if (!$.global.AELL_compAliases) $.global.AELL_compAliases = {};
+  if (name !== String(args.name)) {
+    $.global.AELL_compAliases[String(args.name)] = name;
+  } else {
+    delete $.global.AELL_compAliases[String(args.name)];
+  }
+  var pre = comp.layers.precompose(indices, name, move);
+
+  // Put the user's selection back, minus whatever went into the precomp
+  // (those objects are valid but now live in ANOTHER comp — selecting
+  // them there is worse than not restoring at all).
+  var restored = [];
+  for (j = 1; j <= comp.numLayers; j++) {
+    var cand = comp.layer(j);
+    var ck = AELL_layerKey(cand);
+    for (i = 0; i < prevKeys.length; i++) {
+      // Names are the fallback for a build with no Layer.id, and only
+      // then: two layers may share a name, ids never do.
+      var same = haveKeys ? (ck && ck === prevKeys[i])
+                          : (cand.name === prevNames[i]);
+      if (same) { restored.push(cand); break; }
+    }
+  }
+  if (restored.length) {
+    try {
+      for (i = 1; i <= comp.numLayers; i++) comp.layer(i).selected = false;
+      for (i = 0; i < restored.length; i++) restored[i].selected = true;
+    } catch (eR) {}
+  }
+
+  // Expressions left behind that still name a layer that moved.
+  var atRisk = [];
+  if (move) {
+    for (i = 1; i <= comp.numLayers && atRisk.length < 8; i++) {
+      var survivor = comp.layer(i);
+      var hits = [];
+      try { AELL_walkExpressions(survivor, hits, comp.name, survivor.name); }
+      catch (eW) {}
+      for (j = 0; j < hits.length && atRisk.length < 8; j++) {
+        var named = AELL_exprNamesLayer(hits[j].expression, movedNames);
+        if (named) {
+          atRisk.push(survivor.name + " > " + hits[j].property +
+                      " names '" + named + "'");
+        }
+      }
+    }
+  }
+
+  var out = { precomp: pre.name, id: pre.id, layersMoved: indices.length,
+              layers: movedNames.join(", "),
+              selectionKept: restored.length
+                ? AELL_layerNamesOf(restored)
+                : "(none survived — AE's new '" + pre.name +
+                  "' layer is selected)" };
+  if (dupes.length) {
+    out.duplicatesIgnored = dupes.join(", ") +
+      " — named more than once; each layer moves once.";
+  }
+  if (parentsLost.length) {
+    out.parentsBroken = parentsLost.join("; ") +
+      ". AE drops a parent that stayed behind; re-parent inside '" +
+      pre.name + "' or precompose the parent too.";
+  }
+  if (atRisk.length) {
+    out.expressionsAtRisk = atRisk.join("; ") +
+      ". Those layers are no longer in '" + comp.name +
+      "' and AE does NOT report the broken reference.";
+  }
+  if (!move) {
+    out.note = "moveAttributes:false — '" + pre.name + "' is the SIZE OF " +
+      "THE LAYER (" + pre.width + "x" + pre.height + "), not of '" +
+      comp.name + "', and the transform stayed outside.";
+  } else if (name !== String(args.name)) {
+    out.note = "An item named '" + args.name + "' already existed — this " +
+      "precomp is '" + name + "'. Use THIS name in every following command.";
+  }
+  return AELL_okay(out);
 };
 
 AELL_TOOLS.add_camera = function (args) {
@@ -4226,6 +5402,84 @@ var AELL_LIGHT_XFORM = {
   position:        { mn: "ADBE Position",     on: "parallel spot point" },
   pointOfInterest: { mn: "ADBE Anchor Point", on: "parallel spot" }
 };
+
+/* The Light Options that are measured in PIXELS, and the gate each one
+ * sits behind. They are what a comp resize owes a light, and they live
+ * OUTSIDE the Transform group — so, exactly like camera Zoom, no parent
+ * ever passes a resize down to them.
+ *
+ * Measured in real AE 2026 (probes 5-7, WORKPLAN-LOG 2026-08-28):
+ *   Radius            parallel/spot/point, while Falloff is smooth or
+ *                     inverseSquareClamped
+ *   Falloff Distance  parallel/spot/point, while Falloff is smooth ONLY
+ *   Shadow Diffusion  spot/point, any falloff, shadows on or off
+ * Writing one AE currently hides throws "the property or a parent
+ * property is hidden", and the flags lie about it — a hidden Radius
+ * still reports elided=false and enabled=true — so the light TYPE plus
+ * the falloff VALUE is the only reliable test, the same lesson cameras
+ * taught about their hidden Scale.
+ *
+ * Everything else in the group is a percentage, an angle or a colour,
+ * and a resize must NOT touch those. Falloff is stored as a number:
+ * 1 none, 2 smooth, 3 inverseSquareClamped. */
+var AELL_LIGHT_PIXEL_OPTS = [
+  { mn: "ADBE Light Falloff Start",    label: "Radius",
+    on: "parallel spot point", falloff: "2 3" },
+  { mn: "ADBE Light Falloff Distance", label: "Falloff Distance",
+    on: "parallel spot point", falloff: "2" },
+  { mn: "ADBE Light Shadow Diffusion", label: "Shadow Diffusion",
+    on: "spot point",          falloff: "" }
+];
+
+/* The kind name this file speaks, read back off a real layer. */
+function AELL_lightKindOf(L) {
+  var t;
+  if (typeof LightType === "undefined") return "";
+  try { t = L.lightType; } catch (eT) { return ""; }
+  if (t === LightType.PARALLEL) return "parallel";
+  if (t === LightType.SPOT) return "spot";
+  if (t === LightType.POINT) return "point";
+  if (t === LightType.AMBIENT) return "ambient";
+  if (typeof LightType.ENVIRONMENT !== "undefined" &&
+      t === LightType.ENVIRONMENT) return "environment";
+  return "";
+}
+
+/* Ambient and environment lights light the whole scene from nowhere: AE
+ * hides their Position, their aim and every pixel option, so a resize has
+ * literally nothing to scale on them. Writing anyway is what used to make
+ * scale_comp report an ambient light as a FAILURE. */
+function AELL_lightHasGeometry(kind) {
+  return AELL_lightAccepts(AELL_LIGHT_XFORM.position.on, kind);
+}
+
+/* Every falloff value IN PLAY on this light. Falloff Type is itself
+ * keyframeable (measured), so a light can be smooth for part of its life;
+ * when it is keyed, the keys are the answer, not the value under the
+ * playhead. */
+function AELL_lightFalloffs(opts) {
+  var out = { values: [], keyed: false }, p = null, n = 0, k;
+  try { p = opts.property("ADBE Light Falloff Type"); } catch (eP) { return out; }
+  if (!p) return out;
+  try { n = p.numKeys; } catch (eN) { n = 0; }
+  if (n) {
+    out.keyed = true;
+    for (k = 1; k <= n; k++) {
+      try { out.values.push(String(p.keyValue(k))); } catch (eK) {}
+    }
+    return out;
+  }
+  try { out.values.push(String(p.value)); } catch (eV) {}
+  return out;
+}
+
+/* Does any falloff this light actually uses open the gate? */
+function AELL_falloffInPlay(gate, falloffs) {
+  for (var i = 0; i < falloffs.values.length; i++) {
+    if (AELL_lightAccepts(gate, falloffs.values[i])) return true;
+  }
+  return false;
+}
 
 /* "a spot" but "an ambient" — these strings are what the model reads. */
 function AELL_lightArticle(kind) {
@@ -4379,33 +5633,188 @@ AELL_TOOLS.add_light = function (args) {
           "Accepts Lights are lit by this" });
 };
 
+/*
+ * add_marker. Measured in AE 2026 (probe in WORKPLAN-LOG 2026-08-28):
+ *
+ *  - A marker written at a time that already HAS one REPLACES it, comment
+ *    and duration and all, and setValueAtTime reports nothing. That is a
+ *    silent loss, so the old comment comes back in `replaced`.
+ *  - Marker times are COMPOSITION time on a layer too: a marker keeps its
+ *    place in the comp view, and moving the layer's startTime carries it
+ *    (keyTime read 3, then 5 after startTime went to 2). No conversion.
+ *  - AE accepts a marker anywhere on the number line — negative, or past
+ *    the end of the comp — where the user can never see it. Allowed, but
+ *    named.
+ *  - Times are NOT snapped to frames: 1.2345 stored as 1.23449707, and a
+ *    marker 0.0001s from another is a SECOND marker on the same frame.
+ */
 AELL_TOOLS.add_marker = function (args) {
   var comp = AELL_resolveComp(args.comp);
-  if (typeof args.time !== "number") {
-    return AELL_err("'time' (seconds) is required");
+  var time = AELL_numArg(args.time);
+  if (time === null) {
+    return AELL_err("'time' (seconds, composition time) is required" +
+      (typeof args.time === "undefined" ? "" :
+       " — got " + AELL_showValue(args.time)));
+  }
+  var dur = 0;
+  if (args.duration !== null && typeof args.duration !== "undefined" &&
+      args.duration !== "") {
+    dur = AELL_numArg(args.duration);
+    if (dur === null || dur < 0) {
+      return AELL_err("'duration' must be a number of seconds >= 0 — got " +
+        AELL_showValue(args.duration) + ". Omit it for a plain marker.");
+    }
   }
   var mv = new MarkerValue(typeof args.comment === "string" ? args.comment : "");
-  if (args.duration > 0) mv.duration = args.duration;
-  var target;
-  var where;
+  if (dur > 0) mv.duration = dur;
+  var target, where, layer = null;
   if (args.layer !== null && typeof args.layer !== "undefined" &&
       args.layer !== "") {
-    var layer = AELL_resolveLayer(comp, args.layer);
+    layer = AELL_resolveLayer(comp, args.layer);
     target = layer.property("ADBE Marker");
     where = "layer " + layer.name;
   } else {
     target = comp.markerProperty;
     where = "comp " + comp.name;
   }
-  target.setValueAtTime(args.time, mv);
-  return AELL_okay({ marker: where, time: args.time });
+
+  // What is about to be overwritten. AE matches on an EXACT time, so the
+  // window is far tighter than a frame (0.0001s apart made two markers).
+  var i, before = target.numKeys, doomed = null;
+  for (i = 1; i <= before; i++) {
+    if (Math.abs(target.keyTime(i) - time) < 1e-6) {
+      try { doomed = target.keyValue(i); } catch (eK) {}
+      break;
+    }
+  }
+  target.setValueAtTime(time, mv);
+
+  var out = { marker: where, time: time,
+              comment: mv.comment, duration: dur,
+              markers: target.numKeys };
+  if (doomed && target.numKeys === before) {
+    out.replaced = "A marker already at " + time + "s was overwritten: " +
+      (doomed.comment ? "'" + doomed.comment + "'" : "(no comment)") +
+      (doomed.duration > 0 ? ", duration " + doomed.duration + "s" : "") +
+      ". AE keeps one marker per exact time.";
+  }
+  if (time < 0 || time > comp.duration) {
+    out.note = "Outside '" + comp.name + "' (0 to " + comp.duration +
+      "s) — the marker exists but is off the visible timeline.";
+  } else if (layer && (time < layer.inPoint || time > layer.outPoint)) {
+    out.note = "Outside " + layer.name + "'s own span (" + layer.inPoint +
+      " to " + layer.outPoint + "s) — the marker rides the layer and is " +
+      "not visible where the layer is not.";
+  }
+  return AELL_okay(out);
 };
+
+/* What a 3D -> 2D switch throws away. Measured in AE 2026 (probe in
+ * WORKPLAN-LOG 2026-08-28): Position Z and Anchor Point Z are zeroed,
+ * Scale Z snaps back to 100, and Orientation / X Rotation / Y Rotation
+ * are cleared. Z Rotation survives (it is just renamed back to
+ * "Rotation"). Keyframes survive too, but their doomed components are
+ * flattened with them, and turning 3D back ON does NOT restore any of
+ * it. Rows are [matchName, label, zOnly, valueAEKeeps]; zOnly true means
+ * only the third component dies, false means the whole value does. */
+var AELL_3D_ONLY = [
+  ["ADBE Position",     "Position",     true,    0],
+  ["ADBE Anchor Point", "Anchor Point", true,    0],
+  ["ADBE Scale",        "Scale",        true,  100],
+  ["ADBE Orientation",  "Orientation",  false,   0],
+  ["ADBE Rotate X",     "X Rotation",   false,   0],
+  ["ADBE Rotate Y",     "Y Rotation",   false,   0]
+];
+
+/* One property's share of that loss, described, or "" when it has
+ * nothing to lose. Keyframed properties are inspected key by key: a
+ * layer whose Z is 0 at the current time but 500 at the next keyframe
+ * loses just as much, and reading only the static value would miss it. */
+function AELL_3dLossFor(prop, label, zOnly, keep) {
+  function doomed(val) {
+    var arr = (typeof val === "number") ? [val] : val;
+    var hit = [], i;
+    if (zOnly) {
+      if (arr.length > 2 && arr[2] !== keep) {
+        hit.push(Math.round(arr[2] * 100) / 100);
+      }
+    } else {
+      for (i = 0; i < arr.length; i++) {
+        if (arr[i] !== keep) hit.push(Math.round(arr[i] * 100) / 100);
+      }
+    }
+    return hit;
+  }
+  var name = label + (zOnly ? " Z" : "");
+  var hit, i, j;
+  // Keyframes come FIRST even when an expression is also on the property.
+  // The expression only decides what renders; the keyframe values are the
+  // stored data AE flattens, and they are the concrete thing to name. Read
+  // the other way round, a wiggle on Position reports its own noise as the
+  // loss and never mentions the 500 sitting on the next key.
+  if (prop.numKeys > 0) {
+    var keys = 0, worst = null;
+    for (i = 1; i <= prop.numKeys; i++) {
+      hit = doomed(prop.keyValue(i));
+      if (!hit.length) continue;
+      keys++;
+      for (j = 0; j < hit.length; j++) {
+        if (worst === null || Math.abs(hit[j]) > Math.abs(worst)) {
+          worst = hit[j];
+        }
+      }
+    }
+    if (!keys) return "";
+    return name + " on " + keys + " of " + prop.numKeys +
+           " keyframes (largest " + worst + ")";
+  }
+  if (prop.expressionEnabled) {
+    // The expression itself survives the switch; the third dimension it
+    // was writing into does not, so what it evaluates to today is the
+    // only honest number available for the loss.
+    hit = doomed(prop.value);
+    if (!hit.length) return "";
+    return name + " (expression-driven, currently " + hit.join(",") + ")";
+  }
+  hit = doomed(prop.value);
+  if (!hit.length) return "";
+  return name + " " + hit.join(",");
+}
+
+function AELL_3dOnlyLoss(layer) {
+  var lost = [], i, row, prop, desc, group;
+  try { group = layer.property("ADBE Transform Group"); } catch (eG) { return lost; }
+  if (!group) return lost;
+  for (i = 0; i < AELL_3D_ONLY.length; i++) {
+    row = AELL_3D_ONLY[i];
+    prop = null;
+    try { prop = group.property(row[0]); } catch (eP) { prop = null; }
+    if (!prop) continue;
+    desc = "";
+    try { desc = AELL_3dLossFor(prop, row[1], row[2], row[3]); }
+    catch (eD) { desc = ""; }
+    if (desc) lost.push(desc);
+  }
+  return lost;
+}
 
 AELL_TOOLS.set_layer_3d = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var layer = AELL_resolveLayer(comp, args.layer);
-  layer.threeDLayer = !!args.enabled;
-  return AELL_okay({ layer: layer.name, threeD: layer.threeDLayer });
+  var want = !!args.enabled;
+  // Read BEFORE the write: afterwards the values are already gone, and
+  // AE reports nothing about having taken them. The user asked for 2D,
+  // so this neither refuses nor restores -- it only refuses to let the
+  // loss happen in silence.
+  var lost = (layer.threeDLayer && !want) ? AELL_3dOnlyLoss(layer) : [];
+  layer.threeDLayer = want;
+  var out = { layer: layer.name, threeD: layer.threeDLayer };
+  if (lost.length) {
+    out.discarded = lost;
+    out.note = "Going 2D cleared these 3D-only values and turning 3D " +
+      "back on does NOT restore them: " + lost.join("; ");
+  }
+  return AELL_okay(out);
 };
 
 AELL_TOOLS.set_layer_parent = function (args) {
@@ -4456,14 +5865,365 @@ AELL_TOOLS.set_layer_parent = function (args) {
     note: jump ? "Visual positions preserved" : "" });
 };
 
+/* ---------------------------------------------------- render queue
+ *
+ * Measured in AE 2026 (26.3x87) before any of this was written, because
+ * every line below turns on one of these:
+ *
+ *  - renderQueue.render() DOES run headless from a `-r` session: a
+ *    one-frame Lossless AVI came back in 181 ms with status DONE. So
+ *    aerender.exe is not needed and is in fact the WRONG tool here --
+ *    it launches a second AE against a SAVED .aep, and this panel drives
+ *    the user's live, usually-unsaved project.
+ *  - render() renders the WHOLE QUEUE, not the item you just added. Two
+ *    fresh items, one call, both DONE. So everything already queued is
+ *    quarantined with `render = false` and put back afterwards; a
+ *    quarantined item stays QUEUED (3015) and writes nothing.
+ *  - An output path that ALREADY EXISTS raises a MODAL. Unattended that
+ *    is fatal: it wedged AE for this pass and swallowed every later -r
+ *    script while the process still looked healthy.
+ *    app.beginSuppressDialogs() suppresses it and genuinely OVERWRITES
+ *    (64840 -> 698880 bytes when the second render was 12 frames, so it
+ *    is not a silent skip). Suppression is therefore only ever entered
+ *    with the overwrite already decided ABOVE it, never as a way to find
+ *    out what AE would have asked.
+ *  - A missing output DIRECTORY throws instead ("Directory does not
+ *    exist: ..."), so it is pre-checked rather than caught.
+ *  - The output module ALWAYS forces its own file extension, and it does
+ *    it on the `file` SETTER rather than at render time: a path ending
+ *    .mp4 set under "Lossless" reads straight back as .avi, an .avi set
+ *    under H.264 reads back as .mp4, and a path with no extension is
+ *    given one. So the template is applied FIRST, the file set after,
+ *    and the path REPORTED is the one AE settled on -- never the one
+ *    that was asked for.
+ *  - A fresh output module inherits the LAST RENDER'S settings AND
+ *    FOLDER. On this machine an untouched item pointed at
+ *    Documents\ComfyUI\output\video\... -- nothing to do with the
+ *    project. An outputPath-less queue add is therefore not neutral, and
+ *    add_to_render_queue now says where AE would put it.
+ *  - status is readOnly; a DONE item cannot be re-queued.
+ *  - A bogus template name throws a message that does NOT list the valid
+ *    ones, hence the grounded errors below.
+ */
+
+var AELL_RQ_STATUS = {
+  3012: "WILL_CONTINUE", 3013: "NEEDS_OUTPUT", 3014: "UNQUEUED",
+  3015: "QUEUED", 3016: "RENDERING", 3017: "USER_STOPPED",
+  3018: "ERR_STOPPED", 3019: "DONE"
+};
+
+/* The extension of a path, or "" when it has none. A path with no dot at
+ * all must not read as "the whole path is the extension", or a perfectly
+ * good "render to X" reports that AE changed its mind about it. */
+function AELL_extOf(p) {
+  var s = String(p);
+  var slash = Math.max(s.lastIndexOf("/"), s.lastIndexOf("\\"));
+  var dot = s.lastIndexOf(".");
+  if (dot <= slash + 1) return "";
+  return s.slice(dot + 1).toLowerCase();
+}
+
+function AELL_rqStatusName(code) {
+  var n = AELL_RQ_STATUS[code];
+  return n ? n : ("status " + code);
+}
+
+/* AE only exposes template lists through a LIVE queue item, so reading
+ * them costs an add + remove. Net-zero on the queue, but cached for the
+ * session anyway -- the lists cannot change while AE runs. */
+var AELL_rqTemplateCache = null;
+
+function AELL_rqTemplates() {
+  if (AELL_rqTemplateCache) return AELL_rqTemplateCache;
+  var proj = app.project;
+  if (!proj) throw new Error("No project open");
+  var comp = null, i;
+  for (i = 1; i <= proj.numItems; i++) {
+    if (proj.item(i) instanceof CompItem) { comp = proj.item(i); break; }
+  }
+  if (!comp) {
+    throw new Error("The project has no comp, and AE only lists render " +
+      "templates through a render-queue item. Create a comp first.");
+  }
+  var item = proj.renderQueue.items.add(comp);
+  var out = { renderSettings: [], outputModules: [] };
+  try {
+    out.renderSettings = item.templates.slice(0);
+    out.outputModules = item.outputModule(1).templates.slice(0);
+  } finally {
+    try { item.remove(); } catch (eR) {}
+  }
+  AELL_rqTemplateCache = out;
+  return out;
+}
+
+/* Case-insensitive exact match, so the model's "lossless" finds
+ * "Lossless" instead of taking AE's unhelpful throw. */
+function AELL_rqPickTemplate(list, want, label) {
+  var i, w = String(want);
+  for (i = 0; i < list.length; i++) {
+    if (list[i] === w) return list[i];
+  }
+  var lw = w.toLowerCase();
+  for (i = 0; i < list.length; i++) {
+    if (String(list[i]).toLowerCase() === lw) return list[i];
+  }
+  throw new Error("No " + label + " template named '" + w +
+    "'. Installed: " + list.join(", ") + ".");
+}
+
+AELL_TOOLS.list_render_templates = function (args) {
+  var t = AELL_rqTemplates();
+  // render_comp demands an absolute path in a folder that exists, and
+  // "somewhere to put it" is otherwise a thing the model can only guess
+  // at -- so hand it one real writable folder rather than let it invent
+  // C:\output and take the refusal.
+  var temp = "";
+  try { temp = Folder.temp.fsName; } catch (eT) {}
+  return AELL_okay({
+    renderSettings: t.renderSettings,
+    outputModules: t.outputModules,
+    tempFolder: temp,
+    note: "Pass one of outputModules as {template} and one of " +
+      "renderSettings as {renderSettings} to render_comp. Names " +
+      "starting with '_HIDDEN' are AE internals -- do not offer them. " +
+      "render_comp needs an ABSOLUTE output path; ask the user where " +
+      "the file should go, and use tempFolder only for throwaways."
+  });
+};
+
+/* The output path is the one argument a render cannot guess, and every
+ * way it can be wrong ends in either a wedged AE or bytes in a folder
+ * nobody meant. So it is checked to destruction before anything is
+ * queued. */
+function AELL_rqCheckOutput(raw, overwrite) {
+  if (raw === null || typeof raw === "undefined" || raw === "") {
+    throw new Error("'output' is required - an ABSOLUTE file path to " +
+      "render to, e.g. \"C:/renders/shot.avi\".");
+  }
+  var path = String(raw);
+  if (!/^[a-zA-Z]:[\\\/]/.test(path) && path.indexOf("\\\\") !== 0) {
+    throw new Error("'output' must be an ABSOLUTE path (got \"" + path +
+      "\"). AE resolves a relative path against its own working " +
+      "directory, not the project.");
+  }
+  var file = new File(path);
+  var dir = file.parent;
+  if (!dir || !dir.exists) {
+    // Name the deepest folder that DOES exist: "create the missing one"
+    // is only actionable if you know which one is missing.
+    var probe = dir, missing = dir ? dir.fsName : "(none)", nearest = "";
+    var guard = 0;
+    while (probe && guard < 40) {
+      if (probe.exists) { nearest = probe.fsName; break; }
+      probe = probe.parent;
+      guard++;
+    }
+    throw new Error("Output folder does not exist: " + missing +
+      ". Deepest folder that does exist: " +
+      (nearest || "(none - check the drive letter)") +
+      ". Create the folder, or render somewhere that exists.");
+  }
+  if (file.exists && !overwrite) {
+    throw new Error("Output file already exists: " + file.fsName + " (" +
+      file.length + " bytes). Pass {overwrite: true} to replace it, or " +
+      "choose another path. (Rendering onto an existing file without " +
+      "this raises a modal dialog that blocks After Effects.)");
+  }
+  return file;
+}
+
+/* A render is only believable if the bytes are there afterwards, and AE
+ * does not make that easy: a file it has just written reports
+ * exists === false to a brand-new File object for a moment (measured on
+ * saveFrameToPng, ~300 ms). Polling rather than one look is the
+ * difference between reporting a good render and calling it a failure. */
+function AELL_rqSettle(file, tries) {
+  var n = tries > 0 ? tries : 10;
+  for (var i = 0; i < n; i++) {
+    var f = new File(file.fsName);
+    if (f.exists) return f.length;
+    $.sleep(100);
+  }
+  return -1;
+}
+
+AELL_TOOLS.render_comp = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  var proj = app.project;
+  var overwrite = args.overwrite === true || args.overwrite === "true";
+  var file = AELL_rqCheckOutput(args.output, overwrite);
+
+  var tmpl = AELL_rqTemplates();
+  var wantOM = null, wantRS = null;
+  if (args.template) {
+    wantOM = AELL_rqPickTemplate(tmpl.outputModules, args.template,
+                                 "output-module");
+  }
+  if (args.renderSettings) {
+    wantRS = AELL_rqPickTemplate(tmpl.renderSettings, args.renderSettings,
+                                 "render-settings");
+  }
+
+  // Hold back everything the USER already queued. render() takes the
+  // whole queue, so without this a "render this comp" turns into
+  // "render everything in the project".
+  var held = [], i, it;
+  for (i = 1; i <= proj.renderQueue.numItems; i++) {
+    it = proj.renderQueue.item(i);
+    if (it.status === RQItemStatus.QUEUED) {
+      held.push(it);
+      it.render = false;
+    }
+  }
+
+  var mine = proj.renderQueue.items.add(comp);
+  var result = null, thrown = null, started = new Date().getTime();
+  try {
+    if (wantRS) mine.applyTemplate(wantRS);
+    // Template BEFORE file: applyTemplate rewrites the extension.
+    if (wantOM) mine.outputModule(1).applyTemplate(wantOM);
+    mine.outputModule(1).file = file;
+
+    if (typeof args.startTime !== "undefined" && args.startTime !== null &&
+        args.startTime !== "") {
+      mine.timeSpanStart = Number(args.startTime);
+    }
+    if (typeof args.durationSeconds !== "undefined" &&
+        args.durationSeconds !== null && args.durationSeconds !== "") {
+      mine.timeSpanDuration = Number(args.durationSeconds);
+    } else if (typeof args.frames !== "undefined" && args.frames !== null &&
+               args.frames !== "") {
+      mine.timeSpanDuration = Number(args.frames) / comp.frameRate;
+    }
+
+    var spanStart = mine.timeSpanStart, spanDur = mine.timeSpanDuration;
+    var finalPath = mine.outputModule(1).file.fsName;
+    var omName = mine.outputModule(1).name;
+
+    // Suppression is entered ONLY here, with overwrite already decided
+    // above. Its single job is to stop the overwrite modal from wedging
+    // AE -- never to make AE silently answer a question we did not ask.
+    app.beginSuppressDialogs();
+    try {
+      proj.renderQueue.render();
+    } finally {
+      app.endSuppressDialogs(false);
+    }
+
+    var status = mine.status;
+    var bytes = (status === RQItemStatus.DONE)
+      ? AELL_rqSettle(new File(finalPath), 10) : -1;
+
+    result = {
+      comp: comp.name,
+      output: finalPath,
+      status: AELL_rqStatusName(status),
+      bytes: bytes,
+      seconds: Math.round((new Date().getTime() - started) / 100) / 10,
+      outputModule: omName,
+      renderSettings: wantRS || "(AE default)",
+      timeSpan: "start " + spanStart + "s, " +
+        Math.round(spanDur * comp.frameRate) + " frame(s) at " +
+        comp.frameRate + " fps"
+    };
+    if (status !== RQItemStatus.DONE) {
+      result.warning = "AE finished with " + AELL_rqStatusName(status) +
+        " - nothing was written. Check the output path and the comp.";
+    } else if (bytes === 0) {
+      result.warning = "The render reported DONE but the file is empty.";
+    } else if (bytes < 0) {
+      result.warning = "The render reported DONE but no file appeared at " +
+        finalPath + ".";
+    }
+    // An extension AE did not honour is how a "why is my mp4 an avi"
+    // support question starts; say it now rather than let the user find
+    // a file that will not open.
+    var askedExt = AELL_extOf(String(args.output));
+    var gotExt = AELL_extOf(finalPath);
+    if (askedExt && askedExt !== gotExt) {
+      result.note = "The '" + omName + "' output module writes ." + gotExt +
+        ", so the file is \"" + finalPath + "\", not ." + askedExt + ".";
+    }
+    if (held.length) {
+      result.heldBack = held.length + " render-queue item(s) the user had " +
+        "already queued were held back and left QUEUED.";
+    }
+  } catch (e) {
+    thrown = e;
+  }
+
+  // Put the queue back the way it was, whatever happened. Our own item
+  // is litter: its status is readOnly, so a DONE one cannot even be
+  // re-run from the UI.
+  try { mine.remove(); } catch (eM) {}
+  for (i = 0; i < held.length; i++) {
+    try { held[i].render = true; } catch (eH) {}
+  }
+  if (thrown) {
+    return AELL_err("Render failed: " + (thrown.message || thrown));
+  }
+  return AELL_okay(result);
+};
+
 AELL_TOOLS.add_to_render_queue = function (args) {
   var comp = AELL_resolveComp(args.comp);
-  var rqItem = app.project.renderQueue.items.add(comp);
-  if (typeof args.outputPath === "string" && args.outputPath !== "") {
-    rqItem.outputModule(1).file = new File(args.outputPath);
+  var proj = app.project;
+  // A comp can sit in the queue twice; AE says nothing. Worth a word,
+  // because the duplicate renders too.
+  var already = 0, i;
+  for (i = 1; i <= proj.renderQueue.numItems; i++) {
+    if (proj.renderQueue.item(i).comp === comp) already++;
   }
-  return AELL_okay({ comp: comp.name,
-                     queuePosition: app.project.renderQueue.numItems });
+  var wantPath = (typeof args.outputPath === "string" &&
+                  args.outputPath !== "") ? String(args.outputPath) : "";
+  if (wantPath) {
+    // Same pre-check as render_comp, minus the overwrite rule: nothing
+    // renders yet, so an existing file is not a modal risk here.
+    var f = new File(wantPath);
+    var dir = f.parent;
+    if (!dir || !dir.exists) {
+      return AELL_err("Output folder does not exist: " +
+        (dir ? dir.fsName : wantPath) + ". Create it, or queue without " +
+        "an outputPath and set the destination in AE.");
+    }
+  }
+  var rqItem = proj.renderQueue.items.add(comp);
+  if (wantPath) rqItem.outputModule(1).file = new File(wantPath);
+
+  var out = { comp: comp.name,
+              queuePosition: proj.renderQueue.numItems,
+              status: AELL_rqStatusName(rqItem.status) };
+  var landing = "";
+  try { landing = rqItem.outputModule(1).file.fsName; } catch (eF) {}
+  out.output = landing;
+  if (wantPath) {
+    // The output module forces its own extension on the setter, so the
+    // path handed in is not necessarily the path AE kept. Saying so here
+    // costs a line; not saying it costs the user a hunt for a file that
+    // is not where they asked for it.
+    var askedExt = AELL_extOf(wantPath);
+    var gotExt = AELL_extOf(landing);
+    if (askedExt && askedExt !== gotExt) {
+      out.note = "The current output module writes ." + gotExt +
+        ", so AE changed the destination to \"" + landing + "\". Use " +
+        "list_render_templates and render_comp {template} to pick a " +
+        "format on purpose.";
+    }
+  }
+  if (!wantPath) {
+    // Measured: a fresh output module inherits the LAST RENDER'S folder,
+    // which on a real machine is somewhere else entirely. Silence here
+    // is how bytes end up in a stranger's folder.
+    out.note = "No outputPath given, so AE reused the last render's " +
+      "settings and folder - this will write to \"" + landing +
+      "\". Pass {outputPath} to choose.";
+  }
+  if (already) {
+    out.warning = comp.name + " was already in the render queue " +
+      already + " time(s); this adds another, and both would render.";
+  }
+  return AELL_okay(out);
 };
 
 // ------------------------------------------- universal property access
@@ -4501,6 +6261,55 @@ function AELL_childNames(node, cap) {
 }
 
 /*
+ * The hop AE's timeline does not draw.
+ *
+ * A shape GROUP ("ADBE Vector Group") does not hold its rectangle, fill
+ * and repeater directly: they live in a nested group AE calls "Contents"
+ * (matchName "ADBE Vectors Group"). The timeline never shows that row —
+ * expanding "G1" lists the items themselves — so the path anybody writes
+ * from what they SEE, contents/G1/Repeater 1/Copies, resolved to nothing.
+ * Measured in AE 2026: layer.property("Contents").property("G1")
+ * .property("Repeater 1") is null, and the real path carries a SECOND
+ * "Contents" segment. This project's own docs, its system prompt's
+ * trim-paths recipe and add_shape_content's returned note all told the
+ * model the short form, so every "animate the repeater / wipe the stroke
+ * on" request failed on a path the panel itself had handed over.
+ *
+ * The hop only fires after a direct lookup misses, and only on a shape
+ * group, so a real child named "Transform" still wins over the one inside.
+ */
+function AELL_shapeInner(node) {
+  var mn = "";
+  try { mn = String(node.matchName || ""); } catch (e) { return null; }
+  if (mn !== "ADBE Vector Group") return null;
+  var inner = null;
+  try { inner = node.property("ADBE Vectors Group"); } catch (e2) { return null; }
+  return (inner && inner !== node) ? inner : null;
+}
+
+/* One child lookup by display name or matchName, hop included. Returns
+   null when there is no such child; `hopped` says the Contents step was
+   taken, so error paths and reported paths stay literally true. */
+var AELL_childHopped = false;
+function AELL_childProp(node, lookup, seg) {
+  AELL_childHopped = false;
+  var child = null;
+  try { child = node.property(lookup); } catch (e) { child = null; }
+  if (!child && seg && seg !== lookup) {
+    try { child = node.property(seg); } catch (e2) { child = null; }
+  }
+  if (child) return child;
+  var inner = AELL_shapeInner(node);
+  if (!inner) return null;
+  try { child = inner.property(lookup); } catch (e3) { child = null; }
+  if (!child && seg && seg !== lookup) {
+    try { child = inner.property(seg); } catch (e4) { child = null; }
+  }
+  if (child) AELL_childHopped = true;
+  return child || null;
+}
+
+/*
  * Walk a '/'-separated path of display or match names from a layer down
  * to any property or group. A failed segment throws a grounded error
  * listing the real children at that level.
@@ -4514,23 +6323,35 @@ function AELL_resolvePropPath(layer, pathStr) {
     if (seg === "") continue;
     var lookup = (walked.length === 0 && AELL_ROOT_ALIASES[seg])
       ? AELL_ROOT_ALIASES[seg] : seg;
-    var child = null;
-    try { child = node.property(lookup); } catch (e) { child = null; }
-    if (!child && lookup !== seg) {
-      try { child = node.property(seg); } catch (e2) { child = null; }
-    }
+    var child = AELL_childProp(node, lookup, seg);
     if (!child) {
       var at = walked.length ? "'" + walked.join("/") + "'"
                              : "layer '" + layer.name + "'";
       throw new Error("Path segment '" + seg + "' not found under " + at +
-        ". Children here: " +
-        (AELL_childNames(node, 30).join(", ") || "(none)") +
+        ". Children here: " + AELL_childList(node) +
         ". Use list_properties to inspect the real tree.");
     }
+    if (AELL_childHopped) walked.push("Contents");
     node = child;
     walked.push(seg);
   }
   return node;
+}
+
+/* Children for a grounded error. A shape group's own four rows are not
+   what the user is looking at, so the items inside Contents are listed
+   too — those are the names the timeline shows. */
+function AELL_childList(node) {
+  var names = AELL_childNames(node, 30);
+  var inner = AELL_shapeInner(node);
+  if (inner) {
+    var kids = AELL_childNames(inner, 20);
+    if (kids.length) {
+      return (names.join(", ") || "(none)") + " — and inside Contents: " +
+             kids.join(", ");
+    }
+  }
+  return names.join(", ") || "(none)";
 }
 
 /*
@@ -4556,12 +6377,230 @@ function AELL_descendToLeaf(prop) {
   return leaves === 1 ? leaf : prop;
 }
 
+/*
+ * Bare-name deep search - the last resort before "not found".
+ *
+ * AE's layer-level name shortcut reaches SOME nested streams and not
+ * others, and nothing in the API says which. Measured in AE 2026: a light
+ * answers layer.property("Intensity") and returns NULL for "Radius" and
+ * "Falloff Distance"; a camera answers "Zoom" and "Focus Distance"; a
+ * solid returns NULL for its own effect's "Blurriness"; a shape layer
+ * returns NULL for "Size". The model cannot know which side of that line
+ * a name falls on, so a bare name AE refuses is searched down the real
+ * tree here instead of coming back as an error.
+ *
+ * Two measured facts shape the search:
+ *
+ *  - EVERY layer carries all eleven Layer Styles whether or not one has
+ *    been applied, and every style reports enabled=false, active=false,
+ *    elided=false either way - there is no flag separating a style the
+ *    user added from one they did not. A shallowest-wins search for
+ *    "Size" or "Color" therefore lands in a style nobody asked for (ten
+ *    "Opacity" matches live under Layer Styles on a plain solid). So the
+ *    roots are RANKED, and Layer Styles is searched LAST.
+ *  - A depth-5 walk of the heaviest layer measured 219 nodes in 6-11 ms,
+ *    so running the search on every miss costs nothing worth guarding.
+ */
+var AELL_SEARCH_ROOT_RANK = {
+  "ADBE Transform Group":        1,
+  "ADBE Light Options Group":    2,
+  "ADBE Camera Options Group":   2,
+  "ADBE Material Options Group": 3,
+  "ADBE Extrsn Options Group":   3,
+  "ADBE Text Properties":        4,
+  "ADBE Effect Parade":          5,
+  "ADBE Root Vectors Group":     6,
+  "ADBE Mask Parade":            7,
+  "ADBE Audio Group":            8,
+  "ADBE Time Remapping":         8,
+  "ADBE Layer Styles":          99
+};
+var AELL_SEARCH_OTHER_RANK = 50;
+var AELL_SEARCH_MAX_DEPTH = 5;
+var AELL_SEARCH_MAX_NODES = 1500;
+
+/* Where the last AELL_anyProperty call actually landed, when it took the
+   deep search to get there: {path, alsoAt}. Null when the spec resolved
+   the ordinary way, so a tool only ever reports a path it had to hunt. */
+var AELL_lastResolve = null;
+
+function AELL_propName(node) {
+  var nm = "";
+  try { nm = String(node.name || ""); } catch (e) {}
+  return nm;
+}
+
+function AELL_nearList(list) {
+  var out = [];
+  for (var i = 0; i < list.length && i < 5; i++) out.push(list[i]);
+  return out.join(", ");
+}
+
+function AELL_deepFindProp(layer, target) {
+  var lc = String(target).toLowerCase();
+  var matches = [];
+  var near = [];
+  var visited = 0;
+
+  function scan(node, path, depth, rank, inAnim) {
+    var nm = AELL_propName(node);
+    var mn = "";
+    try { mn = String(node.matchName || ""); } catch (e) {}
+    if (nm.toLowerCase() === lc || mn.toLowerCase() === lc) {
+      matches.push({ prop: node, path: path, rank: rank, depth: depth,
+                     dormant: inAnim && AELL_animDormant(node) });
+    } else if (near.length < 8 && nm !== "" &&
+               nm.toLowerCase().indexOf(lc) !== -1) {
+      near.push(path);
+    }
+    if (depth >= AELL_SEARCH_MAX_DEPTH) return;
+    var n = 0;
+    try { n = node.numProperties || 0; } catch (e2) { return; }
+    // Every text animator carries all 103 possible animator properties,
+    // dormant until added, so a name found in here may be one nobody
+    // asked for (see AELL_TOOLS.add_text_animator).
+    var deeper = inAnim || mn === "ADBE Text Animator Properties";
+    for (var i = 1; i <= n; i++) {
+      if (visited >= AELL_SEARCH_MAX_NODES) return;
+      visited++;
+      var c = null;
+      try { c = node.property(i); } catch (e3) { continue; }
+      if (!c) continue;
+      scan(c, path + "/" + AELL_propName(c), depth + 1, rank, deeper);
+    }
+  }
+
+  var nRoots = 0;
+  try { nRoots = layer.numProperties || 0; } catch (e) { nRoots = 0; }
+  for (var r = 1; r <= nRoots; r++) {
+    var root = null;
+    try { root = layer.property(r); } catch (e4) { continue; }
+    if (!root) continue;
+    var rank = AELL_SEARCH_OTHER_RANK;
+    try {
+      var known = AELL_SEARCH_ROOT_RANK[String(root.matchName)];
+      if (typeof known === "number") rank = known;
+    } catch (e5) {}
+    visited++;
+    scan(root, AELL_propName(root), 1, rank, false);
+  }
+  matches.sort(function (a, b) {
+    if (!a.dormant !== !b.dormant) return a.dormant ? 1 : -1;
+    if (a.rank !== b.rank) return a.rank - b.rank;
+    return a.depth - b.depth;
+  });
+  return { matches: matches, near: near };
+}
+
+/*
+ * Resolve a bare name by deep search. Returns null when nothing matched
+ * and no original error was supplied; with one, that grounded error grows
+ * a line saying the whole tree was searched too. Two matches of EQUAL
+ * standing are never guessed between - that is a refusal with both real
+ * paths in it.
+ */
+function AELL_deepResolve(layer, spec, orig) {
+  var found = AELL_deepFindProp(layer, spec);
+  var m = found.matches;
+  var i;
+  if (m.length === 0) {
+    if (!orig) return null;
+    var tail = " No property named '" + spec + "' exists anywhere on '" +
+      layer.name + "' either (searched the whole tree to depth " +
+      AELL_SEARCH_MAX_DEPTH + ").";
+    var nearTxt = AELL_nearList(found.near);
+    if (nearTxt !== "") tail += " Names containing it: " + nearTxt + ".";
+    throw new Error(orig.message + tail);
+  }
+  /* Only dormant animator slots answered to the name. Writing to one
+     throws AE's raw "the property or a parent property is hidden" and
+     READING one hands back a value the render never uses, so neither is
+     a real answer — say which tool makes it real instead. */
+  if (m[0].dormant) {
+    var slots = [];
+    for (i = 0; i < m.length && slots.length < 3; i++) slots.push(m[i].path);
+    throw new Error("'" + spec + "' on '" + layer.name + "' exists only as " +
+      "an INACTIVE text-animator property (" + slots.join(", ") +
+      "). AE hides those until an animator is asked for them, and a value " +
+      "written there is ignored. add_text_animator {layer: \"" + layer.name +
+      "\", properties: {" + spec.toLowerCase() + ": …}} activates it; " +
+      "set_property then reaches it by its full path.");
+  }
+  if (m.length > 1 && m[1].rank === m[0].rank && m[1].depth === m[0].depth &&
+      !m[1].dormant) {
+    var paths = [];
+    for (i = 0; i < m.length && i < 6; i++) paths.push(m[i].path);
+    throw new Error("'" + spec + "' is ambiguous on '" + layer.name +
+      "': " + m.length + " properties share that name - " +
+      paths.join(", ") + (m.length > 6 ? ", ..." : "") +
+      ". Pass the full path (list_properties shows the tree).");
+  }
+  var also = [];
+  for (i = 1; i < m.length && also.length < 3; i++) also.push(m[i].path);
+  AELL_lastResolve = { path: m[0].path, alsoAt: also };
+  return m[0].prop;
+}
+
+/*
+ * A '/'-path whose FIRST segment AE cannot see from the layer - the same
+ * blind spot one level up: "Gaussian Blur/Blurriness" or
+ * "Rectangle Path 1/Size". Deep-find the head, then walk the rest from
+ * each candidate and take the first that completes.
+ */
+function AELL_deepPath(layer, spec) {
+  var raw = String(spec).split("/");
+  var segs = [];
+  var i;
+  for (i = 0; i < raw.length; i++) {
+    var t = raw[i].replace(/^\s+|\s+$/g, "");
+    if (t !== "") segs.push(t);
+  }
+  if (segs.length < 2) return null;
+  var head = AELL_deepFindProp(layer, segs[0]).matches;
+  for (var h = 0; h < head.length && h < 8; h++) {
+    var node = head[h].prop;
+    var path = head[h].path;
+    var ok = true;
+    for (var k = 1; k < segs.length; k++) {
+      var c = AELL_childProp(node, segs[k], segs[k]);
+      if (!c) { ok = false; break; }
+      if (AELL_childHopped) path = path + "/Contents";
+      node = c;
+      path = path + "/" + AELL_propName(c);
+    }
+    if (ok) {
+      AELL_lastResolve = { path: path, alsoAt: [] };
+      return node;
+    }
+  }
+  return null;
+}
+
+/* descendToLeaf, but the hunted path grows the leaf it descended to: a
+   bare "My Slider" names the control GROUP, and the value the caller gets
+   back lives one step below it. Reporting the group would hand the model
+   a path that reads back as a GROUP refusal. */
+function AELL_descendReported(prop) {
+  var leaf = AELL_descendToLeaf(prop);
+  if (AELL_lastResolve && leaf !== prop) {
+    AELL_lastResolve.path = AELL_lastResolve.path + "/" + AELL_propName(leaf);
+  }
+  return leaf;
+}
+
 /* Accept friendly specs (position, effect.X.Y) AND '/'-joined paths. */
 function AELL_anyProperty(layer, spec) {
+  AELL_lastResolve = null;
   var s = String(spec || "");
   if (s === "") throw new Error("Missing 'property'");
   if (s.indexOf("/") !== -1) {
-    return AELL_descendToLeaf(AELL_resolvePropPath(layer, s));
+    try {
+      return AELL_descendToLeaf(AELL_resolvePropPath(layer, s));
+    } catch (slashErr) {
+      var deep = AELL_deepPath(layer, s);
+      if (deep) return AELL_descendReported(deep);
+      throw slashErr;
+    }
   }
   try {
     return AELL_resolveProperty(layer, s);
@@ -4569,7 +6608,8 @@ function AELL_anyProperty(layer, spec) {
     try {
       return AELL_descendToLeaf(AELL_resolvePropPath(layer, s));
     } catch (pathErr) {
-      throw (s.indexOf(".") !== -1) ? friendlyErr : pathErr;
+      var orig = (s.indexOf(".") !== -1) ? friendlyErr : pathErr;
+      return AELL_descendReported(AELL_deepResolve(layer, s, orig));
     }
   }
 }
@@ -4632,6 +6672,10 @@ AELL_TOOLS.list_properties = function (args) {
           if (child.numKeys > 0) entry.numKeys = child.numKeys;
         } catch (e3) {}
         try { if (child.expression) entry.hasExpression = true; } catch (e4) {}
+        // A text animator ships with all 103 possible properties present
+        // but hidden. Their values read back fine and are never applied,
+        // so an unmarked row here would be a lie.
+        if (AELL_animPropDormant(child)) entry.inactive = true;
       }
       entries.push(entry);
       if (!leaf && d > 1) walk(child, p, d - 1);
@@ -4645,16 +6689,35 @@ AELL_TOOLS.list_properties = function (args) {
       : "" });
 };
 
+/* Name the path a deep search had to hunt for, plus anything else that
+   answered to the same name, so the model can address it directly next
+   time instead of relying on the search again. */
+function AELL_noteResolved(out) {
+  if (!AELL_lastResolve) return out;
+  out.resolvedPath = AELL_lastResolve.path;
+  if (AELL_lastResolve.alsoAt.length > 0) {
+    out.alsoMatched = AELL_lastResolve.alsoAt;
+  }
+  return out;
+}
+
 AELL_TOOLS.get_property = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var layer = AELL_layerOrSelection(comp, args.layer);
   var prop = AELL_anyProperty(layer, args.property);
+  var resolved = AELL_lastResolve;
   if (!AELL_isLeafProp(prop)) {
     return AELL_err("'" + args.property + "' is a GROUP — use " +
       "list_properties {path: \"" + args.property + "\"} to see inside");
   }
   var data = { layer: layer.name, property: String(args.property),
                matchName: prop.matchName, value: AELL_sampleValue(prop) };
+  if (AELL_animPropDormant(prop)) {
+    data.inactive = "this animator property has not been added, so AE " +
+      "keeps it hidden and the value below is never applied — " +
+      "add_text_animator {layer: \"" + layer.name + "\", properties: {…}} " +
+      "activates it";
+  }
   var nk = 0;
   try { nk = prop.numKeys || 0; } catch (e) {}
   data.numKeys = nk;
@@ -4672,7 +6735,8 @@ AELL_TOOLS.get_property = function (args) {
       data.expression = String(prop.expression).slice(0, 200);
     }
   } catch (e2) {}
-  return AELL_okay(data);
+  AELL_lastResolve = resolved;
+  return AELL_okay(AELL_noteResolved(data));
 };
 
 AELL_TOOLS.set_property = function (args) {
@@ -4687,6 +6751,7 @@ AELL_TOOLS.set_property = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var layer = AELL_layerOrSelection(comp, args.layer);
   var prop = AELL_anyProperty(layer, args.property);
+  var resolved = AELL_lastResolve;
   if (!AELL_isLeafProp(prop)) {
     return AELL_err("'" + args.property + "' is a GROUP — set one of its " +
       "properties instead (list_properties {path: \"" + args.property +
@@ -4694,6 +6759,9 @@ AELL_TOOLS.set_property = function (args) {
   }
   if (typeof args.value === "undefined") {
     return AELL_err("'value' is required");
+  }
+  if (AELL_animPropDormant(prop)) {
+    return AELL_err(AELL_animDormantMsg(layer, String(args.property), "writing to"));
   }
   try {
     if (typeof args.atTime === "number") {
@@ -4726,7 +6794,8 @@ AELL_TOOLS.set_property = function (args) {
     var warn = AELL_overrideWarning(prop, args.value, String(args.property));
     if (warn) { out.applied = false; out.warning = warn; }
   }
-  return AELL_okay(out);
+  AELL_lastResolve = resolved;
+  return AELL_okay(AELL_noteResolved(out));
 };
 
 AELL_TOOLS.set_keyframes = function (args) {
@@ -4759,6 +6828,10 @@ AELL_TOOLS.set_keyframes = function (args) {
     if (!AELL_isLeafProp(prop)) {
       return AELL_err("'" + args.property + "' is a GROUP — keyframes go " +
                       "on a property inside it");
+    }
+    if (AELL_animPropDormant(prop)) {
+      return AELL_err(AELL_animDormantMsg(layer, String(args.property),
+                                          "keyframing"));
     }
     var base = relative ? layer.inPoint : 0;
     for (var i = 0; i < args.keys.length; i++) {
@@ -4849,7 +6922,8 @@ AELL_TOOLS.remove_keyframes = function (args) {
  */
 var AELL_PER_LAYER_LIST = [
   "add_control", "add_keyframe", "add_marker", "add_mask",
-  "add_shape_content", "apply_effect", "apply_expression_preset",
+  "add_shape_content", "add_text_animator", "apply_effect",
+  "apply_expression_preset",
   "center_anchor_point", "delete_layer", "duplicate_layer", "link_property",
   "set_effect_param", "set_expression", "set_layer_3d", "set_layer_parent",
   "set_layer_timing", "set_mask", "set_mask_path", "set_property",
@@ -4858,9 +6932,9 @@ var AELL_PER_LAYER_LIST = [
 ];
 var AELL_PER_LAYER_READ_LIST = ["get_property", "list_properties"];
 var AELL_ALREADY_BATCHED_LIST = [
-  "apply_keyframe_ease", "distribute_property", "for_each_layer",
-  "grid_layout", "precompose", "remove_keyframes", "reorder_layers",
-  "set_keyframes", "set_solid_color", "stagger_layers"
+  "apply_keyframe_ease", "apply_preset", "distribute_property",
+  "for_each_layer", "grid_layout", "precompose", "remove_keyframes",
+  "reorder_layers", "set_keyframes", "set_solid_color", "stagger_layers"
 ];
 
 function AELL_nameSet(list) {
@@ -5026,13 +7100,401 @@ AELL_TOOLS.list_effects = function (args) {
       : "" });
 };
 
+/* ------------------------------------------------------- animation presets
+ *
+ * AE ships 679 .ffx files (measured, AE 2026) — behaviors, text animations,
+ * effect stacks, backgrounds. `layer.applyPreset(File)` reaches all of them,
+ * but only if it is called the way AE means it, and every one of the rules
+ * below was measured in the field because the API documents none of them:
+ *
+ * - applyPreset applies to the comp's SELECTION, not to the receiver. With
+ *   two layers selected, ONE call put the preset on BOTH. So the tool
+ *   selects exactly its target and restores the user's selection after.
+ * - With NOTHING selected it does not apply to the receiver either: AE
+ *   invents a comp-sized solid ("Solid 6"), applies the preset THERE and
+ *   leaves the layer alone. A naive call is therefore not a no-op — it is
+ *   litter.
+ * - Whether the comp is open in a viewer makes no difference (measured
+ *   both ways, identical), and comp.time is untouched.
+ * - A preset built for another layer type is a SILENT no-op: a Text preset
+ *   on a solid added no effect, no keyframe, no expression and threw
+ *   nothing. Only a before/after census can tell that apart from success,
+ *   which is why one runs here.
+ * - A bad path DOES throw ("Path is not valid"), so file errors are real.
+ * - One preset can add many effects (Backgrounds/Anime Radial: 10) and a
+ *   text preset can add ZERO effects and only keyframes — so "did it
+ *   work" counts effects AND expressions AND keys.
+ * - A locked layer still takes a preset (AE does not refuse), so the
+ *   result says so rather than pretending the lock held.
+ * - Cameras have no Effect Parade and took nothing at all.
+ * - File.name is URI-ENCODED ("Bungee%20In.ffx"); displayName is not.
+ * - The user's presets live under a "User Presets" folder inside any
+ *   Documents/Adobe/"After Effects…" folder, and Documents may itself be
+ *   redirected (it is OneDrive on the machine this was measured on),
+ *   so the path comes from Folder.myDocuments, never from a built string.
+ */
+
+var AELL_PRESET_CACHE = null;
+
+function AELL_presetRoots() {
+  var roots = [];
+  var i;
+  try {
+    var appRoot = new Folder(Folder.startup.fsName + "/Presets");
+    if (appRoot.exists) roots.push({ source: "app", folder: appRoot });
+  } catch (e1) {}
+  try {
+    var adobe = new Folder(Folder.myDocuments.fsName + "/Adobe");
+    if (adobe.exists) {
+      var kids = adobe.getFiles();
+      for (i = 0; i < kids.length; i++) {
+        if (!(kids[i] instanceof Folder)) continue;
+        if (!/^After Effects/i.test(String(kids[i].displayName))) continue;
+        var up = new Folder(kids[i].fsName + "/User Presets");
+        if (up.exists) roots.push({ source: "user", folder: up });
+      }
+    }
+  } catch (e2) {}
+  return roots;
+}
+
+/* 679 files walked in 117 ms (measured), but the model asks repeatedly —
+ * so it is walked once per session unless {refresh: true}. */
+function AELL_presetIndex(refresh) {
+  if (AELL_PRESET_CACHE && !refresh) return AELL_PRESET_CACHE;
+  var list = [];
+  var roots = AELL_presetRoots();
+
+  function walk(folder, source, category, depth) {
+    if (depth > 10 || list.length > 5000) return;
+    var kids;
+    try { kids = folder.getFiles(); } catch (eW) { return; }
+    if (!kids) return;
+    for (var i = 0; i < kids.length; i++) {
+      var k = kids[i];
+      var dn = String(k.displayName);
+      if (k instanceof Folder) {
+        walk(k, source, category ? category + "/" + dn : dn, depth + 1);
+      } else if (/\.ffx$/i.test(dn)) {
+        list.push({
+          name: dn.replace(/\.ffx$/i, ""),
+          category: category,
+          source: source,
+          file: k
+        });
+      }
+    }
+  }
+  for (var r = 0; r < roots.length; r++) {
+    walk(roots[r].folder, roots[r].source, "", 0);
+  }
+  AELL_PRESET_CACHE = list;
+  return list;
+}
+
+function AELL_presetCategories(list) {
+  var seen = {}, out = [];
+  for (var i = 0; i < list.length; i++) {
+    var c = list[i].category || "(root)";
+    var top = c.split("/")[0];
+    if (!seen[top]) { seen[top] = true; out.push(top); }
+  }
+  return out;
+}
+
+function AELL_presetPath(p) {
+  return (p.category ? p.category + "/" : "") + p.name;
+}
+
+/* Match a model-supplied name against the index. Returns
+ * {hit} | {choices} (ambiguous) | {near} (nothing matched). */
+function AELL_presetMatch(list, want) {
+  var raw = String(want == null ? "" : want);
+  var norm = raw.replace(/\\/g, "/").replace(/\.ffx$/i, "");
+  norm = norm.replace(/^\s+|\s+$/g, "").toLowerCase();
+  if (norm === "") return { near: [] };
+
+  var i, p, full, nm;
+  var fullExact = [], nameExact = [], fullSub = [], nameSub = [];
+  for (i = 0; i < list.length; i++) {
+    p = list[i];
+    full = AELL_presetPath(p).toLowerCase();
+    nm = p.name.toLowerCase();
+    if (full === norm) fullExact.push(p);
+    else if (nm === norm) nameExact.push(p);
+    else if (full.indexOf(norm) !== -1) fullSub.push(p);
+    else if (nm.indexOf(norm) !== -1) nameSub.push(p);
+  }
+  var tiers = [fullExact, nameExact, fullSub, nameSub];
+  for (i = 0; i < tiers.length; i++) {
+    if (tiers[i].length === 1) return { hit: tiers[i][0] };
+    if (tiers[i].length > 1) return { choices: tiers[i] };
+  }
+  // Nothing contained the whole string — offer whatever shares a word.
+  var words = norm.split(/[^a-z0-9]+/), near = [], seen = {};
+  for (i = 0; i < list.length && near.length < 10; i++) {
+    full = AELL_presetPath(list[i]).toLowerCase();
+    for (var w = 0; w < words.length; w++) {
+      if (words[w].length < 3) continue;
+      if (full.indexOf(words[w]) !== -1 && !seen[full]) {
+        seen[full] = true;
+        near.push(AELL_presetPath(list[i]));
+        break;
+      }
+    }
+  }
+  return { near: near };
+}
+
+AELL_TOOLS.list_presets = function (args) {
+  var list = AELL_presetIndex(!!args.refresh);
+  if (!list.length) {
+    return AELL_err("No .ffx presets found. Looked in AE's own " +
+      "Presets folder (" + Folder.startup.fsName + "\\Presets) and " +
+      "Documents\\Adobe\\After Effects*\\User Presets.");
+  }
+  var cats = AELL_presetCategories(list);
+  var filter = args.filter ? String(args.filter).toLowerCase() : "";
+  var wantCat = args.category
+    ? String(args.category).replace(/\\/g, "/").toLowerCase() : "";
+  var wantSrc = args.source ? String(args.source).toLowerCase() : "";
+  var offset = args.offset > 0 ? Math.round(args.offset) : 0;
+  var limit = AELL_listLimit(args.limit);
+  if (limit < 0) limit = list.length;
+
+  var hits = [], total = 0;
+  for (var i = 0; i < list.length; i++) {
+    var p = list[i];
+    var full = AELL_presetPath(p);
+    if (wantSrc && p.source !== wantSrc) continue;
+    if (wantCat && (p.category || "").toLowerCase().indexOf(wantCat) !== 0) {
+      continue;
+    }
+    if (filter && full.toLowerCase().indexOf(filter) === -1) continue;
+    total++;
+    if (total > offset && hits.length < limit) {
+      hits.push({ name: p.name, category: p.category, source: p.source });
+    }
+  }
+  if (total === 0) {
+    return AELL_err("No preset matches " +
+      (filter ? "'" + args.filter + "'" : "that") +
+      (wantCat ? " in category '" + args.category + "'" : "") +
+      ". " + list.length + " presets are installed. Categories: " +
+      cats.join(", ") + ".");
+  }
+  return AELL_okay({
+    total: total, offset: offset, listed: hits.length,
+    installed: list.length,
+    categories: cats,
+    presets: hits,
+    note: total > offset + hits.length
+      ? "More matches — pass {offset: " + (offset + hits.length) +
+        "} or a narrower {filter}"
+      : "Apply one with apply_preset {layer, preset: \"" +
+        (hits.length ? AELL_presetPath(
+          { category: hits[0].category, name: hits[0].name }) : "") + "\"}"
+  });
+};
+
+/* Every expression and keyframe on a layer, counted. The only way to tell
+ * a preset that did nothing from one that worked (AE reports neither). */
+function AELL_presetCensus(layer) {
+  var n = 0;
+  function rec(group, depth) {
+    if (depth > 6) return;
+    var count = 0;
+    try { count = group.numProperties; } catch (e0) { return; }
+    for (var i = 1; i <= count; i++) {
+      var p = null;
+      try { p = group.property(i); } catch (e1) { continue; }
+      if (!p) continue;
+      try {
+        if (p.propertyType === PropertyType.PROPERTY) {
+          if (p.expression) n++;
+          n += p.numKeys;
+        } else {
+          rec(p, depth + 1);
+        }
+      } catch (e2) {}
+    }
+  }
+  rec(layer, 0);
+  return n;
+}
+
+AELL_TOOLS.apply_preset = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  if (args.preset === null || typeof args.preset === "undefined" ||
+      args.preset === "") {
+    return AELL_err("'preset' is required — a preset name or " +
+                    "\"Category/Name\". Use list_presets to find one.");
+  }
+  var list = AELL_presetIndex(false);
+  if (!list.length) {
+    return AELL_err("No .ffx presets are installed on this machine.");
+  }
+  var m = AELL_presetMatch(list, args.preset);
+  if (m.choices) {
+    var names = [];
+    for (var c = 0; c < m.choices.length && c < 12; c++) {
+      names.push(AELL_presetPath(m.choices[c]));
+    }
+    return AELL_err("'" + args.preset + "' matches " + m.choices.length +
+      " presets — pass one of these exactly: " + names.join(", ") +
+      (m.choices.length > 12 ? ", …" : ""));
+  }
+  if (!m.hit) {
+    var cats = AELL_presetCategories(list);
+    return AELL_err("No preset named '" + args.preset + "'. " +
+      (m.near && m.near.length
+        ? "Closest installed: " + m.near.join(", ") + "."
+        : list.length + " presets are installed; categories: " +
+          cats.join(", ") + ".") +
+      " Use list_presets {filter} to search.");
+  }
+  var chosen = m.hit;
+  if (!chosen.file.exists) {
+    return AELL_err("Preset file has gone missing since it was indexed: " +
+      chosen.file.fsName + ". Call list_presets {refresh: true}.");
+  }
+
+  var layers = AELL_layersOrSelection(comp, args);
+  var results = [], skipped = [], locked = [], i, j;
+  var layersBefore = comp.numLayers;
+
+  for (i = 0; i < layers.length; i++) {
+    var layer = layers[i];
+    var fxBefore = AELL_effectNames(layer);
+    var censusBefore = AELL_presetCensus(layer);
+    var isLocked = false;
+    try { isLocked = !!layer.locked; } catch (eL) {}
+
+    try {
+      AELL_keepSelection(comp, function () {
+        for (var k = 1; k <= comp.numLayers; k++) {
+          comp.layer(k).selected = false;
+        }
+        layer.selected = true;
+        layer.applyPreset(chosen.file);
+        return null;
+      });
+    } catch (eA) {
+      return AELL_err("AE refused the preset file '" +
+        AELL_presetPath(chosen) + "': " +
+        (eA && eA.message ? eA.message : String(eA)));
+    }
+
+    var fxAfter = AELL_effectNames(layer);
+    var censusAfter = AELL_presetCensus(layer);
+    var added = [];
+    var had = {};
+    for (j = 0; j < fxBefore.length; j++) had[fxBefore[j]] = true;
+    for (j = 0; j < fxAfter.length; j++) {
+      if (!had[fxAfter[j]] && added.length < 12) added.push(fxAfter[j]);
+    }
+    var animAdded = censusAfter - censusBefore;
+    var changed = added.length > 0 || animAdded !== 0 ||
+                  fxAfter.length !== fxBefore.length;
+    if (changed) {
+      var row = { layer: layer.name, type: AELL_layerType(layer) };
+      if (added.length) row.effectsAdded = added;
+      if (animAdded > 0) row.keysAndExpressionsAdded = animAdded;
+      results.push(row);
+      if (isLocked) locked.push(layer.name);
+    } else {
+      skipped.push({ layer: layer.name, type: AELL_layerType(layer),
+                     reason: "AE applied nothing" });
+    }
+  }
+
+  if (results.length === 0) {
+    var types = [];
+    var seenT = {};
+    for (i = 0; i < skipped.length; i++) {
+      if (!seenT[skipped[i].type]) {
+        seenT[skipped[i].type] = true;
+        types.push(skipped[i].type);
+      }
+    }
+    return AELL_err("Preset '" + AELL_presetPath(chosen) + "' changed " +
+      "nothing on " + (skipped.length === 1
+        ? "layer '" + skipped[0].layer + "' (" + types.join(", ") + ")"
+        : skipped.length + " layers (" + types.join(", ") + ")") +
+      ". AE applies a preset built for another layer type as a SILENT " +
+      "no-op — a Text preset needs a TEXT layer, and cameras/lights take " +
+      "no effects at all. Pick a preset from a category that fits, or a " +
+      "different layer.");
+  }
+
+  var out = { preset: chosen.name, category: chosen.category,
+              source: chosen.source, applied: results };
+  // A Text preset on a non-text layer is not simply refused-or-applied.
+  // Measured in AE 2026: "Alternating Characters In" on a SOLID installs
+  // its six expression-control sliders and two keyframes and stops there
+  // (census 2), where the same preset on a TEXT layer builds the whole
+  // animator (census 15) — while "Center Spiral In", which carries no
+  // controls, does nothing at all. So a partial landing is real, and
+  // reporting it as a plain success would be the quiet lie this project
+  // does not ship.
+  if (/^Text($|\/)/i.test(String(chosen.category || ""))) {
+    var nonText = [];
+    for (i = 0; i < results.length; i++) {
+      if (results[i].type !== "text") nonText.push(results[i].layer);
+    }
+    if (nonText.length) {
+      out.partialOnNonText = nonText;
+      out.partialNote = "This is a Text preset. On a non-text layer only " +
+        "its expression CONTROLS can land — the animation itself lives in " +
+        "text animators, which only a TEXT layer has. Apply it to a text " +
+        "layer for the effect the preset is named after.";
+    }
+  }
+  if (skipped.length) {
+    out.skipped = skipped;
+    out.note = skipped.length + " layer(s) got nothing — the preset does " +
+      "not fit that layer type.";
+  }
+  if (locked.length) {
+    out.lockedButApplied = locked;
+    out.lockNote = "AE does NOT block a preset on a locked layer " +
+      "(measured) — those layers were changed.";
+  }
+  if (comp.numLayers !== layersBefore) {
+    out.layersAdded = comp.numLayers - layersBefore;
+  }
+  return AELL_okay(out);
+};
+
 // Tools that modify the project get wrapped in an undo group.
 var AELL_MUTATING = {
   create_comp: true, add_text_layer: true, add_solid: true,
+  add_text_animator: true,
   set_transform: true, add_keyframe: true, set_expression: true,
   apply_effect: true, set_effect_param: true, set_layer_timing: true,
   delete_layer: true, set_comp_setting: true, import_file: true,
   add_to_render_queue: true, add_shape_layer: true, add_mask: true,
+  // render_comp and list_render_templates are deliberately ABSENT, and
+  // render_comp's absence is load-bearing rather than tidy.
+  //
+  // This map opens an undo group around the tool, and AE CANNOT RENDER
+  // INSIDE ONE. Measured the hard way: with render_comp registered here
+  // the suite rendered fine and then AE put up "After Effects warning:
+  // Undo group mismatch" -- a modal, which wedges an unattended AE and
+  // swallows every -r script after it while the process still reports as
+  // healthy. AE's renderer closes the script's group out from under it,
+  // so the count goes wrong and the warning surfaces later, at some
+  // innocent endUndoGroup further down the run. Nothing here needs
+  // undoing anyway: render_comp removes its own queue item and restores
+  // every flag it touched, and the FILE it writes is not undoable.
+  //
+  // Dry-run protection is NOT lost by this: that comes from
+  // `mutating: true` on the tools.js TOOL_DEFS entry, which is a
+  // separate map, so a dry run still refuses to burn a real render.
+  //
+  // list_render_templates is absent for its own reason: it is a READ the
+  // model needs during a dry run, and listing it here would also let a
+  // successful read arm AELL_maybeRollback.
   precompose: true, add_camera: true, add_light: true,
   add_marker: true,
   set_layer_3d: true, set_layer_parent: true,
@@ -5041,6 +7503,11 @@ var AELL_MUTATING = {
   center_anchor_point: true,
   create_folder: true, move_to_folder: true, rename_item: true,
   delete_item: true, duplicate_comp: true, organize_project: true,
+  // clean_project's dry run (the default) changes nothing, and an empty
+  // undo group registers no step -- same reasoning as rename_comps.
+  // Measured: reduceProject inside a group closes cleanly and ONE Ctrl+Z
+  // restores the whole project, so unlike render_comp it belongs here.
+  clean_project: true,
   grid_layout: true, duplicate_layer: true, split_layer_into_chunks: true,
   stagger_layers: true, distribute_property: true, apply_keyframe_ease: true,
   scale_comp: true, reorder_layers: true,
@@ -5053,8 +7520,18 @@ var AELL_MUTATING = {
   // opens is then empty, and an empty group registers no undo step at all
   // (measured), so a preview still costs the user nothing.
   rename_comps: true,
-  set_solid_color: true
+  set_solid_color: true,
+  apply_preset: true
 };
+
+/* Tools that must NOT run inside an undo group, whatever else is in the
+ * round with them. Keeping render_comp out of AELL_MUTATING is only half
+ * the job: a BATCH opens one group if ANY command in it mutates, so
+ * "add a solid and render it" would put the render straight back inside
+ * one and earn the modal again. The batch runner steps out of the group
+ * for these and steps back in, so the caller's endUndoGroup still
+ * balances. */
+var AELL_NO_UNDO_GROUP = { render_comp: true };
 
 // --------------------------------------------------------------- entry point
 
@@ -5374,6 +7851,21 @@ function AELL_callBatch(commandsJson, optsJson) {
       }
     }
     var sentinelOk = false;
+    // AE cannot render inside an undo group: its renderer closes the
+    // script's group out from under it and AE raises a modal "Undo group
+    // mismatch" at some later endUndoGroup, which wedges an unattended
+    // run. Closing the group around just the render and reopening it was
+    // tried first and AE rejected that too -- so a round containing one
+    // of these simply does not open a group at all. The cost is that the
+    // OTHER mutations in such a round are not folded into one Ctrl+Z;
+    // the alternative is a modal, so it is not a close call.
+    var noGroup = false;
+    for (var g = 0; g < cmds.length; g++) {
+      if (AELL_NO_UNDO_GROUP[String((cmds[g] || {}).tool || "")]) {
+        noGroup = true;
+        break;
+      }
+    }
     var run = function () {
       if (arming) sentinelOk = AELL_sentinel();
       for (var j = 0; j < cmds.length; j++) {
@@ -5381,7 +7873,7 @@ function AELL_callBatch(commandsJson, optsJson) {
         results.push(AELL_runTool(String(c.tool || ""), c.args || {}));
       }
     };
-    if (mutates) {
+    if (mutates && !noGroup) {
       var label = "AE Llama: " + (first || "batch");
       if (cmds.length > 1) label += " +" + (cmds.length - 1) + " more";
       app.beginUndoGroup(label);

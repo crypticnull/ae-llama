@@ -238,11 +238,32 @@ function loadPanelFile(rel) {
 loadPanelFile("settings.js");
 loadPanelFile("tiers.js");
 loadPanelFile("llama.js");
+// setup.js and comfy.js are not optional extras: tools.js reaches for
+// global.Comfy in every comfy_* tool and for global.Setup.queryVramUsedMB
+// on every chat->gen handoff. Without them a generation step does not
+// fail with a grounded error, it throws ReferenceError inside the
+// dispatcher — which is what the probe found the first time it asked for
+// a picture.
+loadPanelFile("setup.js");
+loadPanelFile("comfy.js");
 loadPanelFile("tools.js");
 
 const Settings = window.Settings;
 const Llama = window.Llama;
 const Tools = window.Tools;
+const Comfy = window.Comfy;
+
+// The panel shows the arbiter's pause/resume and ComfyUI's progress in
+// its status line; here they belong in the transcript, or a step that
+// spends two minutes looks like a hang.
+Tools.setProgressSink(function (msg) { say("info", String(msg)); });
+
+// main.js does this on every panel load, and it is the only thing that
+// seeds bundled workflow templates into the user's data dir. Skipping it
+// meant the probe asked the model to generate from whatever templates an
+// old install happened to have — this machine was missing KREA2, shipped
+// three versions ago, because no panel had started since.
+try { window.Setup.ensureDataDirs(); } catch (eDirs) {}
 
 // Mirror main.js: hand the GPU probe's result to the VRAM arbiter so
 // its inputs are as real here as in the panel. The probe machine's
@@ -288,25 +309,49 @@ function say(kind, text, label) {
 
 const history = [];
 
-function compactToolResults(results) {
-  const parts = [];
-  for (const r of results) {
-    let s;
-    try { s = JSON.stringify(r); } catch (e) { s = String(r); }
-    if (s.length > 1200) s = s.slice(0, 1200) + " …(truncated)";
-    parts.push(s);
+/* What a generation left behind, so the cleanup can take it back out.
+ * IDs only, never "everything under the output folder": the probe runs
+ * against the user's live project, and a previous generation of THEIRS
+ * living in the same folder is not the probe's to delete. */
+const generated = { itemIds: [], files: [] };
+
+function rememberGenerated(tool, result) {
+  if (tool !== "comfy_generate" || !result || !result.ok || !result.data) {
+    return;
   }
-  let out = "[" + parts.join(",\n") + "]";
-  if (out.length > 6000) out = out.slice(0, 6000) + " …(truncated)";
-  return out;
+  const files = result.data.files instanceof Array ? result.data.files : [];
+  for (const f of files) {
+    if (typeof f === "string" && generated.files.indexOf(f) === -1) {
+      generated.files.push(f);
+    }
+  }
+  const imported = result.data.imported instanceof Array
+    ? result.data.imported : [];
+  for (const it of imported) {
+    if (it && typeof it.id === "number" &&
+        generated.itemIds.indexOf(it.id) === -1) {
+      generated.itemIds.push(it.id);
+    }
+  }
+}
+
+// The panel's own budgeter, not a copy of it. The probe exists to run
+// the product path for real, and a second implementation here would be
+// a second thing to get wrong - which it was: this held a duplicate of
+// the byte-slicer for as long as main.js did.
+function compactToolResults(results) {
+  return Tools.compactToolResults(results);
 }
 
 function sendMessage(text, done) {
   const s = Settings.get();
   say("user", text);
   history.push({ role: "user", content: text });
+  // tools/replies are what a verdict about a PANEL-side tool has to judge:
+  // comfy_generate leaves nothing in the comp to read back, so "did the
+  // model reach for the generator, and what came back" only exists here.
   const round = { rounds: 0, commands: 0, toolRounds: 0, failures: [],
-                  rolledBack: 0 };
+                  rolledBack: 0, tools: [], replies: [] };
   // In step with main.js: ONE rollback per typed sentence, across all of
   // its rounds. Without this the probe could never exercise the model's
   // half of a rollback — the host only arms it when the caller asks, so
@@ -373,7 +418,10 @@ function sendMessage(text, done) {
         history.push({ role: "assistant", content: raw });
         const reply = typeof obj.reply === "string" ? obj.reply : "";
         const commands = obj.commands instanceof Array ? obj.commands : [];
-        if (reply) say("assistant", reply + "  [" + secs + "s]");
+        if (reply) {
+          round.replies.push(reply);
+          say("assistant", reply + "  [" + secs + "s]");
+        }
         if (commands.length === 0) { done(round); return; }
         round.commands += commands.length;
         // A round that calls tools costs at least one AE script execution,
@@ -396,6 +444,10 @@ function sendMessage(text, done) {
               round.rolledBack++;
               return;
             }
+            round.tools.push({ tool: cmd.tool, args: cmd.args || {},
+                               ok: !!result.ok, data: result.data || null,
+                               error: result.error || null });
+            rememberGenerated(cmd.tool, result);
             const body = result.ok
               ? "ok" + (result.data
                   ? ": " + JSON.stringify(result.data).slice(0, 400) : "")
@@ -448,7 +500,7 @@ const READ_COMP = FIND_COMP +
   "    startTime: 0, inPoint: 0, solidColor: null," +
   "    effectNames: [], effectColors: []," +
   "    scale: null, rotation: null, isText: false, isShape: false," +
-  "    isNull: false, isSolid: false };" +
+  "    isNull: false, isSolid: false, sourceFile: null };" +
   "  try { row.matte = L.trackMatteType; } catch (e1) {}" +
   "  try { row.startTime = L.startTime; row.inPoint = L.inPoint;" +
   "  } catch (e1b) {}" +
@@ -459,6 +511,13 @@ const READ_COMP = FIND_COMP +
   "    (L.source.mainSource instanceof SolidSource)); } catch (e5) {}" +
   "  try { if (row.isSolid) row.solidColor =" +
   "    L.source.mainSource.color.slice(0); } catch (e5b) {}" +
+  // Where a layer's pixels come from ON DISK. "Put the picture you just
+  // made in the comp" can only be judged by the file behind the layer —
+  // the name AE gives an imported item is the file name and proves
+  // nothing about which file it is.
+  "  try { if (L.source && L.source.mainSource &&" +
+  "    (L.source.mainSource instanceof FileSource)) {" +
+  "    row.sourceFile = L.source.mainSource.file.fsName; } } catch (e5d) {}" +
   // Effect NAMES and every colour any effect holds: "make them blue" has
   // no set-the-solid's-colour tool behind it, so a Fill/Tint effect is a
   // legitimate way for the model to answer and the verdict has to see it.
@@ -499,6 +558,22 @@ const READ_COMP = FIND_COMP +
   "  } catch (e12) {}" +
   "  out.layers.push(row);" +
   "}" +
+  // Every file-backed footage item in the PROJECT. comfy_generate imports
+  // what it rendered and stops there (import_file has no comp argument),
+  // so a step that asked for a picture is judged partly outside the comp.
+  "out.footage = [];" +
+  "for (i = 1; i <= app.project.numItems && out.footage.length < 300; i++) {" +
+  "  var F = app.project.item(i);" +
+  "  if (!(F instanceof FootageItem)) continue;" +
+  "  var fp = null;" +
+  "  try { if (F.mainSource instanceof FileSource) {" +
+  "    fp = F.mainSource.file.fsName; } } catch (ef) {}" +
+  "  if (!fp) continue;" +
+  "  out.footage.push({ id: F.id, name: F.name, path: fp," +
+  "    width: F.width, height: F.height, duration: F.duration," +
+  "    usedIn: (function () { try { return F.usedIn.length; }" +
+  "      catch (eu) { return -1; } })() });" +
+  "}" +
   "return out;";
 
 /* Remove every comp this probe made, plus the solid footage it left
@@ -522,6 +597,23 @@ const SWEEP =
   "  catch (e) {}" +
   "}" +
   "return { removed: killed };";
+
+/* Take back out exactly what a generation step imported, by item id.
+ * Never by folder: the probe's output directory is the panel's, and the
+ * user's own generations live there too. */
+function sweepImports(ids) {
+  return "var ids = " + JSON.stringify(ids || []) + ", killed = 0, i, j;" +
+    "for (i = app.project.numItems; i >= 1; i--) {" +
+    "  var it = app.project.item(i);" +
+    "  for (j = 0; j < ids.length; j++) {" +
+    "    if (it.id === ids[j]) {" +
+    "      try { it.remove(); killed++; } catch (e) {}" +
+    "      break;" +
+    "    }" +
+    "  }" +
+    "}" +
+    "return { removed: killed };";
+}
 
 /* One compact string that changes whenever anything the user would SEE in
  * the probe comp changes. Used to answer "did one Ctrl+Z put it back?" —
@@ -598,6 +690,22 @@ function squares(state) {
   return state.layers.filter(l =>
     l.isSolid && !l.isNull && !/CTRL|^Rig\b/i.test(l.name));
 }
+/* Windows paths from two sources: AE hands back `fsName` (backslashes,
+ * whatever case the user typed the folder in) and ComfyUI's downloader
+ * hands back what Node built. Compare them as the same file. */
+function samePath(a, b) {
+  if (typeof a !== "string" || typeof b !== "string") return false;
+  const norm = p => p.replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase();
+  return norm(a) === norm(b);
+}
+
+/* A file the generator claims it wrote, believed only when it is on disk
+ * with pixels in it. `size` guards the case that actually happened once:
+ * SaveVideo wrote a zero-byte file when its filename token failed. */
+function realFile(p) {
+  try { return fs.statSync(p).size > 1024; } catch (e) { return false; }
+}
+
 function distinct(values, tol) {
   const out = [];
   for (const v of values) {
@@ -878,6 +986,125 @@ const STEPS = [
       }
       return null;
     }
+  },
+  {
+    // The cheap half of the ComfyUI gap: is the backend REACHABLE through
+    // the product path, and does the model ask instead of guessing? This
+    // costs one round and no GPU, so when the generation step below fails
+    // there is already an answer to "was it even plugged in".
+    //
+    // The failure this pins is not hypothetical: nothing loaded comfy.js
+    // into the probe until now, so every comfy_* tool would have thrown
+    // inside the dispatcher rather than answering.
+    title: "the image generator answers when asked",
+    say: "Is the picture generator ready to go, and what can it make?",
+    check(state, ctx) {
+      const calls = (ctx.tools || []).filter(t => /^comfy_/.test(t.tool));
+      if (!calls.length) {
+        return "the model answered about ComfyUI without calling " +
+               "comfy_status or comfy_list_workflows — it " +
+               (ctx.tools && ctx.tools.length
+                 ? "ran " + ctx.tools.map(t => t.tool).join(", ") + " instead"
+                 : "ran no tools at all");
+      }
+      const broke = calls.filter(t => !t.ok);
+      if (broke.length === calls.length) {
+        return "every ComfyUI call failed — " + broke[0].tool + ": " +
+               broke[0].error;
+      }
+      const st = calls.filter(t => t.tool === "comfy_status" && t.ok)[0];
+      if (st && st.data && st.data.online === false) {
+        return "ComfyUI is not answering at " + st.data.url + " (" +
+               (st.data.hint || "no hint") + ")";
+      }
+      const wf = calls.filter(t => t.tool === "comfy_list_workflows" &&
+                                   t.ok)[0];
+      if (wf && wf.data && (wf.data.workflows || []).length === 0) {
+        return "the workflow list came back empty";
+      }
+      // The tool doc promises the backend boots itself. A reply that
+      // sends the user to launch it by hand is the product breaking that
+      // promise, whatever the tools returned.
+      // Narrow on purpose: "ComfyUI is running" must not read as an
+      // instruction to run it, and saying the user does NOT have to start
+      // it is the promise being KEPT, not broken.
+      const said = (ctx.replies || []).join(" ");
+      const tells = /\b(?:start|launch|open)\b[^.]{0,30}\bcomfy/i;
+      const excused = new RegExp(
+        "\\b(?:no need to|don'?t (?:need|have) to|do not (?:need|have) to|" +
+        "never (?:need|have) to|without(?: having to)?)\\s+" +
+        "(?:start|launch|open)\\b", "i");
+      if (tells.test(said) && !excused.test(said)) {
+        return "the reply tells the user to start ComfyUI by hand: \"" +
+               said.slice(0, 160) + "\"";
+      }
+      return null;
+    }
+  },
+  {
+    // The expensive half, and the only thing in the project that runs a
+    // real generation THROUGH THE MODEL: prompt -> workflow choice ->
+    // ComfyUI -> file on disk -> AE. comfy-probe.js drives the same
+    // backend directly; what it cannot say is whether a sentence a user
+    // would type ever reaches it.
+    //
+    // Deliberately phrased the way a user asks, comp included, even
+    // though no tool can place footage into a comp today (import_file
+    // takes a path and nothing else). The verdict holds the product to
+    // what it HAS — generated, on disk, in the project — and the comp
+    // half is reported as a gap rather than failed every night, because
+    // it is workplan 5.8 and unbuilt, not broken.
+    title: "generate a picture and bring it in",
+    say: "Make me a picture of a single red apple on a white plate and " +
+         "put it in Probe Room.",
+    check(state, ctx) {
+      const gen = (ctx.tools || []).filter(t => t.tool === "comfy_generate");
+      if (!gen.length) {
+        const tried = (ctx.tools || []).map(t => t.tool);
+        return "the model never called comfy_generate" +
+               (tried.length ? " — it ran " + tried.join(", ") + " instead"
+                             : " and ran no tools at all");
+      }
+      const ok = gen.filter(t => t.ok);
+      if (!ok.length) {
+        return "comfy_generate failed " + gen.length + " time(s), last " +
+               "error: " + gen[gen.length - 1].error;
+      }
+      const files = [];
+      for (const t of ok) {
+        for (const f of (t.data && t.data.files) || []) files.push(f);
+      }
+      if (!files.length) {
+        return "comfy_generate reported success but named no output file";
+      }
+      const good = files.filter(realFile);
+      if (!good.length) {
+        return "the generator claimed " + files.length + " output file(s) " +
+               "and none of them is a real file on disk: " +
+               files.slice(0, 2).join(", ");
+      }
+      const footage = state.footage || [];
+      const inProject = footage.filter(f => good.some(g => samePath(g, f.path)));
+      if (!inProject.length) {
+        return "generated " + good[0] + " but nothing in the project " +
+               "points at it — the render never got imported" +
+               (footage.length ? " (" + footage.length + " file item(s) in " +
+                 "the project, none matching)" : "");
+      }
+      const item = inProject[0];
+      say("info", "generated " + item.width + "x" + item.height +
+          (item.duration ? " / " + item.duration.toFixed(2) + "s" : "") +
+          " -> " + item.name);
+      // Reported, not failed: workplan 5.8 owns the missing tool.
+      const placed = state.layers.some(l =>
+        good.some(g => samePath(g, l.sourceFile)));
+      if (!placed) {
+        say("info", "GAP: the user asked for it IN the comp and it only " +
+            "reached the project — no tool places a footage item into a " +
+            "comp (import_file takes a path and nothing else)");
+      }
+      return null;
+    }
   }
 ];
 
@@ -1012,7 +1239,8 @@ function main() {
             const ctx = { before: before && before.found ? before : null,
                           rounds: round.rounds,
                           toolRounds: round.toolRounds,
-                          rolledBack: round.rolledBack, undo: null };
+                          rolledBack: round.rolledBack, undo: null,
+                          tools: round.tools, replies: round.replies };
             if (!step.undo) { judge(state, readErr, ctx); return; }
             measureUndo(sigBefore, runsBefore, function (u) {
               ctx.undo = u;
@@ -1078,9 +1306,20 @@ function main() {
     };
     if (OPT.keep) { done(); return; }
     aeRead(SWEEP, function (res) {
-      console.log("cleanup: removed " + ((res && res.removed) || 0) +
-                  " project item(s)");
-      done();
+      let removed = (res && res.removed) || 0;
+      const finishCleanup = function () {
+        console.log("cleanup: removed " + removed + " project item(s)");
+        if (generated.files.length) {
+          console.log("generated file(s) LEFT on disk as evidence:\n  " +
+                      generated.files.join("\n  "));
+        }
+        done();
+      };
+      if (!generated.itemIds.length) { finishCleanup(); return; }
+      aeRead(sweepImports(generated.itemIds), function (res2) {
+        removed += (res2 && res2.removed) || 0;
+        finishCleanup();
+      });
     });
   }
 }
@@ -1095,5 +1334,6 @@ if (require.main === module) {
   main();
 } else {
   module.exports = { STEPS, squares, undoProbe, SIG_FN, READ_COMP,
-                     bridgeWrapper };
+                     bridgeWrapper, sweepImports, samePath, rememberGenerated,
+                     generated };
 }

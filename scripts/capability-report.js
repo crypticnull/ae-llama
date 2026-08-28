@@ -51,7 +51,7 @@ function stubCoverage() {
   for (const f of fs.readdirSync(dir)) {
     if (!/^test-.*\.js$/.test(f)) continue;
     const src = read(path.join(dir, f));
-    for (const m of src.matchAll(/call\(\s*["']([a-z_]+)["']/g)) {
+    for (const m of src.matchAll(/call\(\s*["']([a-z0-9_]+)["']/g)) {
       (map[m[1]] = map[m[1]] || []).push(f);
     }
   }
@@ -62,7 +62,7 @@ function stubCoverage() {
 function suiteCoverage() {
   const src = read(path.join(ROOT, "extension", "js", "selftest.js"));
   const counts = {}; // tool name -> step count
-  for (const m of src.matchAll(/tool:\s*["']([a-z_]+)["']/g)) {
+  for (const m of src.matchAll(/tool:\s*["']([a-z0-9_]+)["']/g)) {
     counts[m[1]] = (counts[m[1]] || 0) + 1;
   }
   return counts;

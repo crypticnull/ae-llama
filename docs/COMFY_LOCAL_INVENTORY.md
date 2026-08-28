@@ -225,14 +225,31 @@ disabled. Repo taken from `.git/config` where present, else from
 | `Krea2ControlImageEncode` | `comfyui-krea2-controlnet` | https://github.com/facok/comfyui-krea2-controlnet |
 | `Krea2ControlApply` | `comfyui-krea2-controlnet` | (same) |
 | `Krea2ControlLoRALoader` | `comfyui-krea2-controlnet` | (same) |
-| `DepthAnythingV2Preprocessor` | `comfyui_controlnet_aux` **and** `comfyui-art-venture` | https://github.com/Fannovel16/comfyui_controlnet_aux / https://github.com/sipherxyz/comfyui-art-venture |
+| `DepthAnythingV2Preprocessor` | `comfyui_controlnet_aux` | https://github.com/Fannovel16/comfyui_controlnet_aux |
 | `ArcaneBloomFX` | `crt-nodes` | https://github.com/PGCRT/CRT-Nodes |
 | `easy cleanGpuUsed` | `comfyui-easy-use` | https://github.com/yolain/ComfyUI-Easy-Use |
 | `OllamaGenerateV2` (bypassed) | `comfyui-ollama` | https://github.com/stavsap/comfyui-ollama |
 
-`DepthAnythingV2Preprocessor` being defined twice is a real risk: the
-depth-control branch will silently bind to whichever pack loads last.
-If that branch ever ships un-bypassed, pin it.
+**CORRECTED 2026-08-27.** This table was built by grepping pack sources
+for class names, and grep cannot tell a definition from a mention. Three
+of its warnings did not survive being asked of the running loader
+(`/object_info`, which reports a `python_module` per registered class):
+
+- `DepthAnythingV2Preprocessor` is NOT defined twice. `comfyui-art-venture`
+  is installed and loads 78 classes, but it only *references* the name as a
+  lookup into someone else's mapping (`modules/controlnet/preprocessor.py`
+  line 34). One definition, one pack, no load-order risk.
+- `ResolutionSelector` does not collide with `ComfyUI-UtilsCollection`
+  either. That pack registers `ResolutionSelectorExtended` — a different
+  class name. `ResolutionSelector` is core (`comfy_extras.nodes_resolution`).
+- `PlaySound` does not collide with KJNodes. The classes are
+  `PlaySound|pysssss` and `PlaySoundKJ`, both loaded at once.
+
+The lesson is the method, not the three entries: attribution belongs to the
+loader, which knows what it registered, and never to a text search. The
+manifests now carry per-workflow attribution generated that way — see
+`scripts/attribute-workflow-nodes.js`, and `tests/test-workflow-manifests.js`
+for the offline invariant that keeps them honest.
 
 The manifest's four KNOWN packs are all present and confirmed:
 `rgthree-comfy`, `cg-use-everywhere`, `comfyui_essentials`, and

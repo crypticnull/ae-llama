@@ -33,6 +33,20 @@
   // And the light rig: lights are riggers like cameras, so they get
   // their own comp rather than joining the ones being measured.
   var LTCOMP = "AELL Self-Test Light";
+  // And the coverage rig: the tools nothing else in the suite ever calls.
+  // It resizes and re-times its own comp, so it cannot share one.
+  var CVCOMP = "AELL Self-Test Cover";
+  // And the precompose rig: precompose CREATES project items, so it must
+  // not be able to nest a comp another group is still measuring.
+  var PCCOMP = "AELL Self-Test Precomp";
+  // And the text-animator rig: per-character 3D turns the whole LAYER 3D
+  // and never gives it back, so it may not share a comp being measured.
+  var TXCOMP = "AELL Self-Test Text";
+  // And the render rig: it is the only group that writes FILES and that
+  // puts items in the user's render queue, so it gets a comp of its own
+  // and takes it away again. Small on purpose — 160x120 for one frame
+  // renders in about 180 ms, measured.
+  var RQCOMP = "AELL Self-Test Render";
   var running = false;
 
   /**
@@ -754,6 +768,62 @@
         },
         check: function () { return true; } },
 
+      // ---- lights in the same resize (WORKPLAN item 2 follow-up) ------
+      // A light's pixel options live in Light Options, OUTSIDE the
+      // Transform group — the camera-zoom trap one layer type over. A
+      // halved comp used to keep a 300px falloff radius, and an ambient
+      // light (whose Position AE hides) was reported as a layer that
+      // could NOT be scaled. Values are exact: 800x600 halved, so 300 ->
+      // 150, 400 -> 200, 60 -> 30.
+      { name: "add a spot light with pixel options",
+        tool: "add_light",
+        args: function (ctx) {
+          return { comp: ctx.camComp, name: "ST Lit Spot", type: "spot",
+                   falloff: "smooth", radius: 300, falloffDistance: 400,
+                   shadowDiffusion: 60, coneAngle: 90,
+                   position: [400, 300, -500],
+                   pointOfInterest: [400, 300, 0] };
+        },
+        check: function (d) { return d.name === "ST Lit Spot" || d.name; } },
+
+      // inverseSquareClamped uses Radius but HIDES Falloff Distance, and
+      // a point light reports autoOrient 4214 like a two-node spot while
+      // refusing its Point of Interest — trusting that flag threw after
+      // Position had already been written.
+      { name: "add a point light (hidden distance, lying autoOrient)",
+        tool: "add_light",
+        args: function (ctx) {
+          return { comp: ctx.camComp, name: "ST Lit Point", type: "point",
+                   falloff: "inverseSquareClamped", radius: 200,
+                   shadowDiffusion: 80, position: [200, 150, -300] };
+        },
+        check: function (d) { return d.name === "ST Lit Point" || d.name; } },
+
+      { name: "add an ambient light (nothing at all to scale)",
+        tool: "add_light",
+        args: function (ctx) {
+          return { comp: ctx.camComp, name: "ST Lit Amb", type: "ambient" };
+        },
+        check: function (d) { return d.name === "ST Lit Amb" || d.name; } },
+
+      { name: "add a light to parent to the null",
+        tool: "add_light",
+        args: function (ctx) {
+          return { comp: ctx.camComp, name: "ST Lit Kid", type: "spot",
+                   falloff: "smooth", radius: 600,
+                   position: [400, 300, -500],
+                   pointOfInterest: [400, 300, 0] };
+        },
+        check: function (d) { return d.name === "ST Lit Kid" || d.name; } },
+
+      { name: "parent the light",
+        tool: "set_layer_parent",
+        args: function (ctx) {
+          return { comp: ctx.camComp, layer: "ST Lit Kid",
+                   parent: "ST Cam Rig" };
+        },
+        check: function () { return true; } },
+
       // THE assertion that would have caught the camera regression: the
       // tool reported its own failure honestly in layersSkipped and
       // nothing was reading it. A camera's Scale resolves but is hidden,
@@ -775,11 +845,135 @@
           if (rez.join(",") !== "ST Cam Kid") {
             return "parentedCamerasRezoomed " + JSON.stringify(rez);
           }
-          if (d.layersInherited !== 1) {
-            return "layersInherited " + d.layersInherited + " (expected 1)";
+          if (d.layersInherited !== 2) {
+            return "layersInherited " + d.layersInherited + " (expected 2)";
           }
-          return d.layersScaled === 6 ||
-                 "layersScaled " + d.layersScaled + " (expected 6)";
+          // The ambient light is in NEITHER count: AE hides everything
+          // scalable on it, so there was never anything to do.
+          var none = d.layersWithNothingToScale || [];
+          if (none.join(",").indexOf("ST Lit Amb") === -1) {
+            return "layersWithNothingToScale " + JSON.stringify(none);
+          }
+          return d.layersScaled === 8 ||
+                 "layersScaled " + d.layersScaled + " (expected 8)";
+        } },
+
+      // A light's pixel options are pixels: they halve with the comp, and
+      // the angles and percentages beside them must not move.
+      { name: "spot light Radius halves",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.camComp, layer: "ST Lit Spot",
+                   property: "light/Radius" };
+        },
+        check: function (d) {
+          return Math.abs(d.value - 150) < 0.6 || "radius " + d.value;
+        } },
+
+      { name: "spot light Falloff Distance halves",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.camComp, layer: "ST Lit Spot",
+                   property: "light/Falloff Distance" };
+        },
+        check: function (d) {
+          return Math.abs(d.value - 200) < 0.6 || "distance " + d.value;
+        } },
+
+      { name: "spot light Shadow Diffusion halves",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.camComp, layer: "ST Lit Spot",
+                   property: "light/Shadow Diffusion" };
+        },
+        check: function (d) {
+          return Math.abs(d.value - 30) < 0.6 || "diffusion " + d.value;
+        } },
+
+      { name: "but the Cone Angle (degrees) does NOT scale",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.camComp, layer: "ST Lit Spot",
+                   property: "light/Cone Angle" };
+        },
+        check: function (d) {
+          return Math.abs(d.value - 90) < 0.6 ||
+                 "cone angle " + d.value + " — an angle is not a pixel";
+        } },
+
+      { name: "point light Radius halves",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.camComp, layer: "ST Lit Point",
+                   property: "light/Radius" };
+        },
+        check: function (d) {
+          return Math.abs(d.value - 100) < 0.6 || "radius " + d.value;
+        } },
+
+      // Under inverseSquareClamped this one is HIDDEN, so writing it
+      // throws and leaving it is correct — it renders nothing.
+      { name: "its hidden Falloff Distance is left alone",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.camComp, layer: "ST Lit Point",
+                   property: "light/Falloff Distance" };
+        },
+        check: function (d) {
+          return Math.abs(d.value - 500) < 0.6 ||
+                 "falloff distance " + d.value + " (should be untouched)";
+        } },
+
+      { name: "the point light's Position still halved",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.camComp, layer: "ST Lit Point",
+                   property: "Position" };
+        },
+        check: function (d) {
+          var v = d.value || [];
+          return (Math.abs(v[0] - 100) < 0.6 && Math.abs(v[1] - 75) < 0.6 &&
+                  Math.abs(v[2] + 150) < 0.6) ||
+                 "position " + JSON.stringify(v);
+        } },
+
+      // Light Options are not inherited from a parent any more than a
+      // camera's zoom is.
+      { name: "a PARENTED light still rescales its Radius",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.camComp, layer: "ST Lit Kid",
+                   property: "light/Radius" };
+        },
+        check: function (d) {
+          return Math.abs(d.value - 300) < 0.6 ||
+                 "radius " + d.value + " — a parent inherits none of it";
+        } },
+
+      { name: "the parented light's transform is left to its parent",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.camComp, layer: "ST Lit Kid",
+                   property: "Position" };
+        },
+        check: function (d) {
+          var v = d.value || [];
+          return (Math.abs(v[0] - 400) < 0.6 && Math.abs(v[1] - 300) < 0.6) ||
+                 "position " + JSON.stringify(v) + " (double-scaled?)";
+        } },
+
+      { name: "the ambient light's hidden Position was not touched",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.camComp, layer: "ST Lit Amb",
+                   property: "Position" };
+        },
+        check: function (d, ctx) {
+          var v = d.value || [];
+          ctx.ambPos = v;
+          return (Math.abs(v[0] - 0) < 0.6 && Math.abs(v[1] - 0) < 0.6) ||
+                 "position " + JSON.stringify(v) + " — AE hides it, so " +
+                 "nothing should have written it";
         } },
 
       { name: "two-node camera zoom halves",
@@ -2328,10 +2522,14 @@
           return Math.abs(d.value - 60) < 0.01 || "cone angle " + d.value;
         } },
 
-      // Radius and Falloff Distance do NOT resolve by bare name: AE's
-      // layer-level name shortcut covers Cone Angle and Intensity but not
-      // these two (measured). The group path is what works, so the suite
-      // uses it — and pins that it still does.
+      // AE's own layer-level name shortcut does NOT cover Radius or
+      // Falloff Distance, though it covers Cone Angle, Intensity, Color,
+      // Cone Feather, Casts Shadows, Shadow Darkness and Shadow Diffusion
+      // in the very same group (measured name by name, 2026-08-28: the
+      // three it misses are exactly the ones AE added with falloff). The
+      // group path always worked and these steps pin that it still does;
+      // the bare name works too now, through the deep search, and its own
+      // steps are further down.
       { name: "falloff was written BEFORE radius (it gates it)",
         tool: "get_property",
         args: function (ctx) {
@@ -2505,10 +2703,2318 @@
                  "ungrounded: " + err;
         } },
 
+      // Light KEYFRAMES. docs/CAPABILITIES.md named this as the gap left
+      // by add_light: every step above writes a STATIC option, so nothing
+      // proved a light option can be animated at all. Measured here first
+      // (2026-08-28): Intensity animates through its bare name, Cone Angle
+      // only through the group path "light/Cone Angle" — the same split the
+      // static steps above found, now pinned for keyframes too.
+      { name: "a light's intensity takes keyframes",
+        batch: function (ctx) {
+          return [
+            { tool: "add_keyframe",
+              args: { comp: ctx.ltComp, layer: "ST Light Spot",
+                      property: "Intensity", time: 0, value: 80 } },
+            { tool: "add_keyframe",
+              args: { comp: ctx.ltComp, layer: "ST Light Spot",
+                      property: "Intensity", time: 2, value: 15 } }
+          ];
+        },
+        check: function (rows) {
+          if (!rows[0].ok) return "first key refused: " + rows[0].error;
+          if (!rows[1].ok) return "second key refused: " + rows[1].error;
+          return rows[1].data.numKeys === 2 ||
+                 "numKeys " + rows[1].data.numKeys;
+        } },
+
+      { name: "the intensity keys really hold both values",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.ltComp, layer: "ST Light Spot",
+                   property: "Intensity" };
+        },
+        check: function (d) {
+          var k = d.keys || [];
+          if (d.numKeys !== 2) return "numKeys " + d.numKeys;
+          return (Math.abs(k[0].value - 80) < 0.01 &&
+                  Math.abs(k[1].value - 15) < 0.01) ||
+                 "keys " + JSON.stringify(k);
+        } },
+
+      { name: "a spot's cone angle animates too (group path)",
+        batch: function (ctx) {
+          return [
+            { tool: "add_keyframe",
+              args: { comp: ctx.ltComp, layer: "ST Light Spot",
+                      property: "light/Cone Angle", time: 0, value: 60 } },
+            { tool: "add_keyframe",
+              args: { comp: ctx.ltComp, layer: "ST Light Spot",
+                      property: "light/Cone Angle", time: 1, value: 20 } }
+          ];
+        },
+        check: function (rows) {
+          if (!rows[0].ok) return "first key refused: " + rows[0].error;
+          return (rows[1].ok && rows[1].data.numKeys === 2) ||
+                 "second key: " + (rows[1].error || rows[1].data.numKeys);
+        } },
+
+      { name: "remove_keyframes takes ONE key off by time",
+        tool: "remove_keyframes",
+        args: function (ctx) {
+          return { comp: ctx.ltComp, layer: "ST Light Spot",
+                   property: "light/Cone Angle", times: [1] };
+        },
+        check: function (d) {
+          if (d.removed !== 1) return "removed " + d.removed;
+          return d.remaining === 1 || "remaining " + d.remaining;
+        } },
+
+      { name: "...and with no times at all it clears the property",
+        tool: "remove_keyframes",
+        args: function (ctx) {
+          return { comp: ctx.ltComp, layer: "ST Light Spot",
+                   property: "Intensity" };
+        },
+        check: function (d) {
+          return (d.removed === 2 && d.remaining === 0) ||
+                 "removed " + d.removed + ", remaining " + d.remaining;
+        } },
+
+      // ---- the deep search (WORKPLAN item 2 follow-up) ---------------
+      // A light is where the gap was found: "Radius" and "Falloff
+      // Distance" are the two options AE's layer-level shortcut cannot
+      // see, so before the search the model's only way in was a group
+      // path it had no reason to guess. These steps prove the bare name
+      // now lands, that the result NAMES the path it had to hunt for
+      // (that is how the model learns the real path), and that a name
+      // which is nowhere still comes back grounded.
+      { name: "a bare 'Radius' reaches what AE's shortcut hides",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.ltComp, layer: "ST Light Spot",
+                   property: "Radius" };
+        },
+        check: function (d) {
+          if (Math.abs(d.value - 111) > 0.01) return "radius " + d.value;
+          if (d.matchName !== "ADBE Light Falloff Start") {
+            return "landed on " + d.matchName;
+          }
+          return d.resolvedPath === "Light Options/Radius" ||
+                 "the hunt is not reported: " + d.resolvedPath;
+        } },
+
+      { name: "a matchName is a name too",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.ltComp, layer: "ST Light Spot",
+                   property: "ADBE Light Falloff Distance" };
+        },
+        check: function (d) {
+          return Math.abs(d.value - 222) < 0.01 || "distance " + d.value;
+        } },
+
+      { name: "and the bare name WRITES, not just reads",
+        batch: function (ctx) {
+          return [
+            { tool: "set_property",
+              args: { comp: ctx.ltComp, layer: "ST Light Spot",
+                      property: "Falloff Distance", value: 333 } },
+            { tool: "get_property",
+              args: { comp: ctx.ltComp, layer: "ST Light Spot",
+                      property: "light/Falloff Distance" } }
+          ];
+        },
+        check: function (rows) {
+          if (!rows[0].ok) return "the write was refused: " + rows[0].error;
+          if (rows[0].data.resolvedPath !== "Light Options/Falloff Distance") {
+            return "wrote without saying where: " + rows[0].data.resolvedPath;
+          }
+          if (!rows[1].ok) return "read back refused: " + rows[1].error;
+          return Math.abs(rows[1].data.value - 333) < 0.01 ||
+                 "the group path still reads " + rows[1].data.value;
+        } },
+
+      { name: "a documented group path claims no hunt",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.ltComp, layer: "ST Light Spot",
+                   property: "light/Radius" };
+        },
+        check: function (d) {
+          return typeof d.resolvedPath === "undefined" ||
+                 "reported a search it never had to run: " + d.resolvedPath;
+        } },
+
+      { name: "a name that is nowhere still comes back grounded",
+        tool: "get_property",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.ltComp, layer: "ST Light Spot",
+                   property: "Blurriness" };
+        },
+        check: function (err) {
+          if (!/Children here/.test(err)) {
+            return "lost the children list: " + err;
+          }
+          return /searched the whole tree/.test(err) ||
+                 "does not say the tree was searched: " + err;
+        } },
+
+      { name: "...and a near miss names the real neighbours",
+        tool: "get_property",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.ltComp, layer: "ST Light Spot",
+                   property: "Diffusion" };
+        },
+        check: function (err) {
+          return /Shadow Diffusion/.test(err) ||
+                 "no near-name hint: " + err;
+        } },
+
       { name: "cleanup: delete the light comp",
         tool: "delete_item",
         args: function (ctx) { return { item: ctx.ltComp }; },
         check: function () { return true; } },
+
+      // ---- coverage rig. docs/CAPABILITIES.md computes which tools the
+      // suite has never once called, and this group exists to shorten that
+      // list: add_control, add_keyframe, remove_keyframes, set_layer_3d,
+      // apply_expression_preset, list_properties, list_effects,
+      // set_comp_setting, duplicate_comp, rename_item and move_to_folder
+      // all shipped with real-AE steps behind them for the first time here.
+      // Every expectation below was measured first (WORKPLAN-LOG
+      // 2026-08-28), never assumed.
+      //
+      // Two tools stay deliberately uncovered and it is not an oversight:
+      // organize_project files every LOOSE item at the project root, and
+      // add_to_render_queue writes to the user's render queue — the suite
+      // runs inside whatever project the user has open, so neither can be
+      // exercised without reaching outside the scratch comps.
+      { name: "coverage scratch comp",
+        tool: "create_comp",
+        args: { name: CVCOMP, width: 640, height: 480, duration: 5,
+                frameRate: 25 },
+        check: function (d, ctx) {
+          ctx.cvComp = d.name;
+          return typeof d.id === "number" || !!d.id || "no comp id";
+        } },
+
+      { name: "coverage rig: one solid to hang the rest on",
+        tool: "add_solid",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, name: "ST Cov Box",
+                   color: [0.2, 0.4, 1], width: 100, height: 100 };
+        },
+        check: function (d) {
+          return d.name === "ST Cov Box" || "named " + d.name;
+        } },
+
+      { name: "add_control puts a named slider on the layer",
+        tool: "add_control",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box", type: "slider",
+                   name: "ST Cov Amp", value: 40 };
+        },
+        check: function (d) {
+          if (d.control !== "ST Cov Amp") return "control " + d.control;
+          // The hint is the whole point of the tool: it hands the model the
+          // exact link_property call to make next.
+          return (d.hint || "").indexOf("link_property") !== -1 ||
+                 "no link hint: " + d.hint;
+        } },
+
+      { name: "the slider's initial value really landed",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box",
+                   property: "effects/ST Cov Amp" };
+        },
+        check: function (d) {
+          // A one-leaf control group resolves to its value property, so
+          // "effects/<name>" reads the slider itself, not the group.
+          if (String(d.matchName).indexOf("ADBE Slider Control") !== 0) {
+            return "resolved to " + d.matchName;
+          }
+          return Math.abs(d.value - 40) < 0.01 || "value " + d.value;
+        } },
+
+      { name: "a point control takes a two-component value",
+        tool: "add_control",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box", type: "point",
+                   name: "ST Cov Pt", value: [10, 20] };
+        },
+        check: function (d) { return d.type === "point" || "type " + d.type; } },
+
+      { name: "...and it reads back as [10, 20]",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box",
+                   property: "effects/ST Cov Pt" };
+        },
+        check: function (d) {
+          var v = d.value || [];
+          return (Math.abs(v[0] - 10) < 0.01 && Math.abs(v[1] - 20) < 0.01) ||
+                 "value " + JSON.stringify(v);
+        } },
+
+      { name: "an unknown control type lists the real ones",
+        tool: "add_control",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box", type: "spinner",
+                   name: "ST Cov Bad" };
+        },
+        check: function (err) {
+          return err.indexOf("slider, angle, checkbox, color or point") !== -1 ||
+                 "ungrounded: " + err;
+        } },
+
+      { name: "a control with no name is refused, with an example",
+        tool: "add_control",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box", type: "slider" };
+        },
+        check: function (err) {
+          return err.indexOf("'name' is required") !== -1 || "err: " + err;
+        } },
+
+      { name: "apply_expression_preset wires wiggle to that slider",
+        tool: "apply_expression_preset",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box",
+                   property: "position", preset: "wiggle", frequency: 3,
+                   ampControl: { layer: "ST Cov Box", effect: "ST Cov Amp" } };
+        },
+        check: function (d) {
+          var e = String(d.expression || "");
+          if (e.indexOf("wiggle(3,") !== 0) return "expression " + e;
+          // The inline chained pickwhip form is the only one the panel
+          // generates — a stored Property ref would break on rename.
+          return e.indexOf('effect("ST Cov Amp")(1)') !== -1 ||
+                 "amplitude is not driven by the control: " + e;
+        } },
+
+      { name: "AE really accepted it — the position is wiggling",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box",
+                   property: "transform/Position" };
+        },
+        check: function (d) {
+          if (!d.expression) return "no expression on the property";
+          var v = d.value || [];
+          // The comp is 640x480, so an untouched centre reads [320, 240].
+          // A live wiggle moves it; a DISABLED expression would not.
+          return (Math.abs(v[0] - 320) > 0.001 ||
+                  Math.abs(v[1] - 240) > 0.001) ||
+                 "value is still dead centre: " + JSON.stringify(v);
+        } },
+
+      { name: "time_linear refuses an ARRAY property and says what to do",
+        tool: "apply_expression_preset",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box",
+                   property: "position", preset: "time_linear" };
+        },
+        check: function (err) {
+          return err.indexOf("link_property") !== -1 ||
+                 "no route out of the refusal: " + err;
+        } },
+
+      { name: "an unknown preset lists the five that exist",
+        tool: "apply_expression_preset",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box",
+                   property: "rotation", preset: "bounce" };
+        },
+        check: function (err) {
+          return err.indexOf("wiggle, loop_cycle, loop_pingpong, " +
+                             "loop_offset, time_linear") !== -1 ||
+                 "ungrounded: " + err;
+        } },
+
+      { name: "add_keyframe stacks three keys and counts them",
+        batch: function (ctx) {
+          return [
+            { tool: "add_keyframe",
+              args: { comp: ctx.cvComp, layer: "ST Cov Box",
+                      property: "rotation", time: 0, value: 0 } },
+            { tool: "add_keyframe",
+              args: { comp: ctx.cvComp, layer: "ST Cov Box",
+                      property: "rotation", time: 1, value: 90 } },
+            { tool: "add_keyframe",
+              args: { comp: ctx.cvComp, layer: "ST Cov Box",
+                      property: "rotation", time: 2, value: 180 } }
+          ];
+        },
+        check: function (rows) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "key " + i + " refused: " + rows[i].error;
+            if (rows[i].data.numKeys !== i + 1) {
+              return "key " + i + " reported numKeys " + rows[i].data.numKeys;
+            }
+          }
+          return true;
+        } },
+
+      { name: "add_keyframe without a time is refused",
+        tool: "add_keyframe",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box",
+                   property: "rotation", value: 45 };
+        },
+        check: function (err) {
+          return err.indexOf("'time'") !== -1 || "err: " + err;
+        } },
+
+      { name: "remove_keyframes drops the MIDDLE key by time",
+        tool: "remove_keyframes",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box",
+                   property: "rotation", times: [1] };
+        },
+        check: function (d) {
+          return (d.removed === 1 && d.remaining === 2) ||
+                 "removed " + d.removed + ", remaining " + d.remaining;
+        } },
+
+      { name: "and the two that survived are the OUTER ones",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box",
+                   property: "rotation" };
+        },
+        check: function (d) {
+          var k = d.keys || [];
+          if (d.numKeys !== 2) return "numKeys " + d.numKeys;
+          return (Math.abs(k[0].time - 0) < 0.001 &&
+                  Math.abs(k[1].time - 2) < 0.001) ||
+                 "surviving keys at " + JSON.stringify(k);
+        } },
+
+      { name: "a GROUP is refused by remove_keyframes",
+        tool: "remove_keyframes",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box",
+                   property: "transform" };
+        },
+        check: function (err) {
+          return err.indexOf("GROUP") !== -1 || "err: " + err;
+        } },
+
+      { name: "remove_keyframes with no times clears what is left",
+        tool: "remove_keyframes",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box",
+                   property: "rotation" };
+        },
+        check: function (d) {
+          return (d.removed === 2 && d.remaining === 0) ||
+                 "removed " + d.removed + ", remaining " + d.remaining;
+        } },
+
+      // set_layer_3d, and the two AE facts underneath it. Measured
+      // 2026-08-28: the Transform group hands out the SAME children for a
+      // 2D and a 3D layer — Z Position included — so nothing in the
+      // property tree can tell you whether a layer is 3D. Only
+      // threeDLayer can, which is exactly why the panel never infers
+      // 3D-ness from value.length.
+      { name: "list_properties: a 2D layer already advertises Z Position",
+        tool: "list_properties",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box", path: "transform",
+                   depth: 1 };
+        },
+        check: function (d, ctx) {
+          var paths = [], matches = [];
+          for (var i = 0; i < d.properties.length; i++) {
+            paths.push(d.properties[i].path);
+            matches.push(d.properties[i].matchName);
+          }
+          ctx.cv2dTransform = paths.join("|");
+          ctx.cv2dMatches = matches.join("|");
+          if (paths.join("|").indexOf("transform/Z Position") === -1) {
+            return "no Z Position on the 2D layer: " + paths.join(", ");
+          }
+          // matchName is what the model needs when display names collide.
+          for (i = 0; i < d.properties.length; i++) {
+            if (d.properties[i].path === "transform/Position") {
+              return d.properties[i].matchName === "ADBE Position" ||
+                     "Position matchName " + d.properties[i].matchName;
+            }
+          }
+          return "no Position entry at all";
+        } },
+
+      { name: "set_layer_3d turns the layer 3D",
+        tool: "set_layer_3d",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box", enabled: true };
+        },
+        check: function (d) {
+          return d.threeD === true || "threeD " + d.threeD;
+        } },
+
+      // ...and the sting: the tree holds the same twelve properties with
+      // the same matchNames, but AE RENAMES one of them. "Rotation" on a
+      // 2D layer is "Z Rotation" on a 3D one — same ADBE Rotate Z. So a
+      // display-name path stored before the layer went 3D stops resolving,
+      // while the matchName and the friendly alias never move. Measured
+      // 2026-08-28, after this step first went in asserting (wrongly) that
+      // the two trees were identical and real AE said otherwise.
+      { name: "...same properties, same matchNames, ONE renamed",
+        tool: "list_properties",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box", path: "transform",
+                   depth: 1 };
+        },
+        check: function (d, ctx) {
+          var paths = [], matches = [];
+          for (var i = 0; i < d.properties.length; i++) {
+            paths.push(d.properties[i].path);
+            matches.push(d.properties[i].matchName);
+          }
+          if (matches.join("|") !== ctx.cv2dMatches) {
+            return "the 3D tree holds DIFFERENT properties, not just " +
+                   "different names: " + matches.join(", ");
+          }
+          var was = ctx.cv2dTransform.split("|");
+          var moved = [];
+          for (i = 0; i < paths.length; i++) {
+            if (paths[i] !== was[i]) moved.push(was[i] + " -> " + paths[i]);
+          }
+          return moved.join(", ") ===
+                 "transform/Rotation -> transform/Z Rotation" ||
+                 "expected only Rotation to be renamed, got: " +
+                 (moved.join(", ") || "no renames at all");
+        } },
+
+      // And the asymmetry, measured rather than assumed: a 3D layer
+      // answers to BOTH names — AE keeps the old one working — while a 2D
+      // layer has never heard of "Z Rotation". So a path written while the
+      // layer was 2D survives the switch; one written while it was 3D does
+      // not survive the switch back. The step below the 3D-off proves the
+      // second half.
+      { name: "a 3D layer answers to BOTH rotation names",
+        batch: function (ctx) {
+          return [
+            { tool: "get_property",
+              args: { comp: ctx.cvComp, layer: "ST Cov Box",
+                      property: "transform/Z Rotation" } },
+            { tool: "get_property",
+              args: { comp: ctx.cvComp, layer: "ST Cov Box",
+                      property: "transform/Rotation" } }
+          ];
+        },
+        check: function (rows) {
+          if (!rows[0].ok) return "the NEW name is refused: " + rows[0].error;
+          if (!rows[1].ok) return "the OLD name stopped working: " +
+                                  rows[1].error;
+          return (rows[0].data.matchName === "ADBE Rotate Z" &&
+                  rows[1].data.matchName === "ADBE Rotate Z") ||
+                 "they are not the same property: " +
+                 rows[0].data.matchName + " / " + rows[1].data.matchName;
+        } },
+
+      { name: "...but the friendly alias never moves",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box",
+                   property: "rotation" };
+        },
+        check: function (d) {
+          return d.matchName === "ADBE Rotate Z" ||
+                 "resolved to " + d.matchName;
+        } },
+
+      { name: "Z really writes once the layer is 3D",
+        tool: "set_transform",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box",
+                   property: "anchorPoint", value: [10, 20, -150] };
+        },
+        check: function (d) {
+          var v = d.value || [];
+          return Math.abs(v[2] + 150) < 0.01 ||
+                 "z did not take: " + JSON.stringify(v);
+        } },
+
+      // The 3D switch is destructive on the way back, so the next two
+      // steps arm every kind of value it takes and then read the receipt.
+      // Anchor Point Z is already -150 from the step above; this adds a
+      // 3D-only rotation and a KEYFRAMED Z, because a layer whose Z is 0
+      // at the current time but 500 at the next keyframe loses just as
+      // much, and a tool that only looked at the static value would call
+      // that lossless. Position here also still carries the rig's wiggle
+      // expression, which is the case that broke the first version of
+      // this: read expression-before-keyframes, the report named the
+      // wiggle's own noise and never mentioned the 500.
+      { name: "arm the 3D-only values the switch will take",
+        batch: function (ctx) {
+          return [
+            { tool: "set_property",
+              args: { comp: ctx.cvComp, layer: "ST Cov Box",
+                      property: "transform/X Rotation", value: 44 } },
+            { tool: "add_keyframe",
+              args: { comp: ctx.cvComp, layer: "ST Cov Box",
+                      property: "transform/Position", time: 0,
+                      value: [100, 100, 0] } },
+            { tool: "add_keyframe",
+              args: { comp: ctx.cvComp, layer: "ST Cov Box",
+                      property: "transform/Position", time: 1,
+                      value: [100, 100, 500] } }
+          ];
+        },
+        check: function (rows) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "step " + i + ": " + rows[i].error;
+          }
+          return true;
+        } },
+
+      // Pinning a LOSS and its receipt. AE zeroes Position/Anchor Point Z,
+      // resets Scale Z to 100 and clears Orientation and X/Y Rotation on
+      // the way to 2D, keyframes included, and turning 3D back on does NOT
+      // bring them back (measured 2026-08-28). The loss is AE's and the
+      // user asked for it, so the tool neither refuses nor restores — but
+      // nothing in this project disappears quietly, so it reports.
+      { name: "turning 3D off reports the Z it discarded",
+        batch: function (ctx) {
+          return [
+            { tool: "set_layer_3d",
+              args: { comp: ctx.cvComp, layer: "ST Cov Box",
+                      enabled: false } },
+            { tool: "get_property",
+              args: { comp: ctx.cvComp, layer: "ST Cov Box",
+                      property: "transform/Anchor Point" } }
+          ];
+        },
+        check: function (rows) {
+          if (!rows[0].ok) return "set_layer_3d failed: " + rows[0].error;
+          if (rows[0].data.threeD !== false) return "still 3D";
+          var lost = rows[0].data.discarded;
+          if (!lost || !lost.length) return "the loss went unreported";
+          var text = lost.join("; ");
+          if (text !== "Position Z on 1 of 2 keyframes (largest 500); " +
+                       "Anchor Point Z -150; X Rotation 44") {
+            return "unexpected discard report: " + text;
+          }
+          if (!rows[1].ok) return "read-back failed: " + rows[1].error;
+          // ...and the loss is real, not just reported.
+          var v = rows[1].data.value || [];
+          return Math.abs(v[2]) < 0.01 ||
+                 "AE kept the Z this time: " + JSON.stringify(v);
+        } },
+
+      { name: "...and a layer that was already 2D discards nothing",
+        tool: "set_layer_3d",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box", enabled: false };
+        },
+        check: function (d) {
+          if (d.threeD !== false) return "threeD " + d.threeD;
+          return !d.discarded ||
+                 "a no-op switch claimed a loss: " + d.discarded.join("; ");
+        } },
+
+      { name: "back in 2D, the 3D-era name is gone (the asymmetry)",
+        tool: "get_property",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box",
+                   property: "transform/Z Rotation" };
+        },
+        check: function (err) {
+          return err.indexOf("Rotation") !== -1 ||
+                 "the refusal does not list what is there now: " + err;
+        } },
+
+      { name: "list_properties on a LEAF sends you to get_property",
+        tool: "list_properties",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box",
+                   path: "transform/Position" };
+        },
+        check: function (err) {
+          return err.indexOf("get_property") !== -1 || "err: " + err;
+        } },
+
+      // A layer root lists TWO groups both called "Geometry Options"
+      // (ADBE Plane Options Group and ADBE Extrsn Options Group) —
+      // measured on this AE. Display-name paths are therefore not unique,
+      // which is the whole reason every entry carries a matchName.
+      { name: "the layer root's display names really do collide",
+        tool: "list_properties",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box", depth: 1 };
+        },
+        check: function (d) {
+          var seen = {}, dupe = null, matches = {};
+          for (var i = 0; i < d.properties.length; i++) {
+            var p = d.properties[i];
+            if (seen[p.path]) {
+              dupe = p.path;
+              if (matches[p.path] === p.matchName) {
+                return "two entries with the SAME path AND matchName: " +
+                       p.path + " / " + p.matchName;
+              }
+            }
+            seen[p.path] = true;
+            matches[p.path] = p.matchName;
+          }
+          return !!dupe ||
+                 "no colliding display names — if AE stopped shipping two " +
+                 "Geometry Options groups this step can go";
+        } },
+
+      // The other half of the deep search: rank, and the refusal to pick.
+      // A bare name is searched root by root in a MEASURED order, because
+      // AE hands every layer all eleven Layer Styles whether or not one
+      // was ever applied — ten latent "Opacity"s and seven "Color"s sit
+      // at depth 3 on a plain solid, shallower than a shape's real Size
+      // at depth 5. Shallowest-wins would answer from a style nobody
+      // added, so Layer Styles is searched LAST and Transform first.
+      { name: "'Opacity' still means the Transform one, not a layer style",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box",
+                   property: "Opacity" };
+        },
+        check: function (d) {
+          return d.matchName === "ADBE Opacity" ||
+                 "resolved to " + d.matchName;
+        } },
+
+      { name: "an effect param resolves by its bare name",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box",
+                   property: "ST Cov Amp" };
+        },
+        check: function (d) {
+          if (Math.abs(d.value - 40) > 0.01) return "value " + d.value;
+          return d.resolvedPath === "Effects/ST Cov Amp/Slider" ||
+                 "resolved to " + d.resolvedPath;
+        } },
+
+      { name: "a path that STARTS at the effect resolves too",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box",
+                   property: "ST Cov Pt/Point" };
+        },
+        check: function (d) {
+          var v = d.value || [];
+          return (Math.abs(v[0] - 10) < 0.01 && Math.abs(v[1] - 20) < 0.01) ||
+                 "value " + JSON.stringify(v);
+        } },
+
+      { name: "two of the same effect, and the second is named ' 2'",
+        batch: function (ctx) {
+          return [
+            { tool: "apply_effect",
+              args: { comp: ctx.cvComp, layer: "ST Cov Box",
+                      effect: "Gaussian Blur" } },
+            { tool: "apply_effect",
+              args: { comp: ctx.cvComp, layer: "ST Cov Box",
+                      effect: "Gaussian Blur" } }
+          ];
+        },
+        check: function (rows) {
+          if (!rows[0].ok) return "first blur refused: " + rows[0].error;
+          if (!rows[1].ok) return "second blur refused: " + rows[1].error;
+          return rows[1].data.effect === "Gaussian Blur 2" ||
+                 "AE named the copy " + rows[1].data.effect;
+        } },
+
+      { name: "a tie is refused with both real paths, never guessed",
+        tool: "get_property",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box",
+                   property: "Blurriness" };
+        },
+        check: function (err) {
+          if (!/ambiguous/.test(err)) return "it picked one: " + err;
+          return (/Gaussian Blur\/Blurriness/.test(err) &&
+                  /Gaussian Blur 2\/Blurriness/.test(err)) ||
+                 "the refusal does not name both: " + err;
+        } },
+
+      // Read both BEFORE and after rather than assuming a default: a
+      // freshly applied Gaussian Blur in AE 2026 comes up at Blurriness
+      // 25, not 0, and a step that asserted 0 would have failed for a
+      // reason that has nothing to do with the refusal it is testing.
+      { name: "...and an ambiguous WRITE changes nothing",
+        batch: function (ctx) {
+          var one = { comp: ctx.cvComp, layer: "ST Cov Box",
+                      property: "Effects/Gaussian Blur/Blurriness" };
+          var two = { comp: ctx.cvComp, layer: "ST Cov Box",
+                      property: "Effects/Gaussian Blur 2/Blurriness" };
+          return [
+            { tool: "get_property", args: one },
+            { tool: "get_property", args: two },
+            { tool: "set_property",
+              args: { comp: ctx.cvComp, layer: "ST Cov Box",
+                      property: "Blurriness", value: 12 } },
+            { tool: "get_property", args: one },
+            { tool: "get_property", args: two }
+          ];
+        },
+        check: function (rows) {
+          for (var i = 0; i < rows.length; i++) {
+            if (i === 2) continue;
+            if (!rows[i].ok) return "read " + i + " refused: " + rows[i].error;
+          }
+          if (rows[2].ok) return "the ambiguous write went through";
+          if (!/ambiguous/.test(rows[2].error)) {
+            return "refused for another reason: " + rows[2].error;
+          }
+          if (rows[0].data.value === 12 || rows[1].data.value === 12) {
+            return "one of them was already 12 — the step cannot tell a " +
+                   "refusal from a write";
+          }
+          return (rows[3].data.value === rows[0].data.value &&
+                  rows[4].data.value === rows[1].data.value) ||
+                 "a refused write still moved something: " +
+                 rows[0].data.value + "->" + rows[3].data.value + " / " +
+                 rows[1].data.value + "->" + rows[4].data.value;
+        } },
+
+      { name: "list_effects filters by name OR category",
+        tool: "list_effects",
+        args: { filter: "blur" },
+        check: function (d, ctx) {
+          if (!d.total) return "no effects matched 'blur'";
+          for (var i = 0; i < d.effects.length; i++) {
+            var e = d.effects[i];
+            var hay = (e.name + " " + e.category).toLowerCase();
+            if (hay.indexOf("blur") === -1) {
+              return "non-matching hit: " + e.name + " / " + e.category;
+            }
+            if (!e.matchName) return "hit with no matchName: " + e.name;
+          }
+          ctx.cvFx = d.effects;
+          return true;
+        } },
+
+      { name: "...and {offset} pages through them exactly",
+        tool: "list_effects",
+        args: { filter: "blur", offset: 3 },
+        check: function (d, ctx) {
+          if (ctx.cvFx.length < 5) return true;   // too few to page
+          return d.effects[0].matchName === ctx.cvFx[3].matchName ||
+                 "offset 3 started at " + d.effects[0].name +
+                 ", expected " + ctx.cvFx[3].name;
+        } },
+
+      { name: "set_comp_setting resizes and re-times the comp",
+        tool: "set_comp_setting",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, width: 800, height: 600, duration: 6,
+                   frameRate: 24, bgColor: [1, 0, 0] };
+        },
+        check: function (d) {
+          if (d.width !== 800 || d.height !== 600) {
+            return "size " + d.width + "x" + d.height;
+          }
+          if (Math.abs(d.frameRate - 24) > 0.001) return "fps " + d.frameRate;
+          return Math.abs(d.duration - 6) < 0.001 ||
+                 "duration " + d.duration;
+        } },
+
+      { name: "and the project agrees the comp really changed",
+        tool: "get_project_info",
+        args: { limit: 0 },
+        check: function (d, ctx) {
+          for (var i = 0; i < d.items.length; i++) {
+            if (d.items[i].name !== ctx.cvComp) continue;
+            var it = d.items[i];
+            return (it.width === 800 && it.height === 600 &&
+                    Math.abs(it.frameRate - 24) < 0.001) ||
+                   "project reports " + it.width + "x" + it.height + " @ " +
+                   it.frameRate;
+          }
+          return "the coverage comp is not in the project listing";
+        } },
+
+      { name: "duplicate_comp copies it, settings and all",
+        tool: "duplicate_comp",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, name: "ST Cov Copy" };
+        },
+        check: function (d, ctx) {
+          ctx.cvCopy = d.name;
+          if (d.name !== "ST Cov Copy") return "named " + d.name;
+          return d.duplicatedFrom === ctx.cvComp ||
+                 "duplicatedFrom " + d.duplicatedFrom;
+        } },
+
+      { name: "rename_item reports the name it replaced",
+        tool: "rename_item",
+        args: function (ctx) { return { item: ctx.cvCopy, name: "ST Cov Kept" }; },
+        check: function (d, ctx) {
+          if (d.oldName !== ctx.cvCopy) return "oldName " + d.oldName;
+          ctx.cvCopy = d.name;
+          return d.name === "ST Cov Kept" || "name " + d.name;
+        } },
+
+      { name: "renaming something that does not exist is refused",
+        tool: "rename_item",
+        expectError: true,
+        args: { item: "ST No Such Item At All", name: "ST Whatever" },
+        check: function (err) {
+          return err.indexOf("not found") !== -1 || "err: " + err;
+        } },
+
+      { name: "move_to_folder files the copy away",
+        batch: function (ctx) {
+          return [
+            { tool: "create_folder", args: { name: "ST Cov Folder" } },
+            { tool: "move_to_folder",
+              args: { items: [ctx.cvCopy], folder: "ST Cov Folder" } }
+          ];
+        },
+        check: function (rows, ctx) {
+          if (!rows[0].ok) return "folder: " + rows[0].error;
+          if (!rows[1].ok) return "move: " + rows[1].error;
+          return rows[1].data.moved.join(",") === ctx.cvCopy ||
+                 "moved " + rows[1].data.moved.join(", ");
+        } },
+
+      { name: "and the project shows it inside that folder",
+        tool: "get_project_info",
+        args: { limit: 0 },
+        check: function (d, ctx) {
+          for (var i = 0; i < d.items.length; i++) {
+            if (d.items[i].name !== ctx.cvCopy) continue;
+            return d.items[i].folder === "ST Cov Folder" ||
+                   "folder is " + (d.items[i].folder || "(root)");
+          }
+          return "the copy is not in the project listing";
+        } },
+
+      { name: "a missing folder is refused with the folders that exist",
+        tool: "move_to_folder",
+        expectError: true,
+        args: function (ctx) {
+          return { items: [ctx.cvCopy], folder: "ST No Such Folder" };
+        },
+        check: function (err) {
+          if (err.indexOf("ST Cov Folder") === -1) {
+            return "does not list the real folders: " + err;
+          }
+          return err.indexOf("create_folder") !== -1 ||
+                 "no route out of the refusal: " + err;
+        } },
+
+      { name: "cleanup: delete the coverage copy",
+        tool: "delete_item",
+        args: function (ctx) { return { item: ctx.cvCopy }; },
+        check: function () { return true; } },
+
+      { name: "cleanup: delete the coverage folder",
+        tool: "delete_item",
+        args: { item: "ST Cov Folder" },
+        check: function () { return true; } },
+
+      { name: "cleanup: delete the coverage comp",
+        tool: "delete_item",
+        args: function (ctx) { return { item: ctx.cvComp }; },
+        check: function () { return true; } },
+
+      // ---- precompose + markers (WORKPLAN 5.4). Both tools shipped with
+      // no coverage at all. Everything asserted below was measured in AE
+      // 2026 first (WORKPLAN-LOG 2026-08-28) — the four things precompose
+      // used to do silently, and the one add_marker did.
+      //
+      // Its own comp: precompose CREATES project items, and a rig that
+      // shared a comp with the groups above would leave nested comps
+      // inside something another step still measures.
+      { name: "precompose rig comp",
+        tool: "create_comp",
+        args: { name: PCCOMP, width: 640, height: 480, duration: 10,
+                frameRate: 24 },
+        check: function (d, ctx) { ctx.pcComp = d.name; return true; } },
+
+      { name: "precompose rig: four solids and a parent link",
+        batch: function (ctx) {
+          return [
+            { tool: "add_solid", args: { comp: ctx.pcComp, name: "ST Pre Stay",
+                color: [0.2, 0.2, 0.2], width: 100, height: 100 } },
+            { tool: "add_solid", args: { comp: ctx.pcComp, name: "ST Pre Par",
+                color: [0.4, 0.4, 0.4], width: 100, height: 100 } },
+            { tool: "add_solid", args: { comp: ctx.pcComp, name: "ST Pre Kid",
+                color: [0.6, 0.6, 0.6], width: 100, height: 100 } },
+            { tool: "add_solid", args: { comp: ctx.pcComp, name: "ST Pre Watch",
+                color: [0.8, 0.8, 0.8], width: 100, height: 100 } },
+            { tool: "set_layer_parent", args: { comp: ctx.pcComp,
+                layer: "ST Pre Kid", parent: "ST Pre Par" } },
+            { tool: "set_expression", args: { comp: ctx.pcComp,
+                layer: "ST Pre Watch", property: "opacity",
+                expression: 'thisComp.layer("ST Pre Kid").transform.opacity' } }
+          ];
+        },
+        check: function (rows) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "rig row " + (i + 1) + ": " + rows[i].error;
+          }
+          return true;
+        } },
+
+      // AE refuses moveAllAttributes:false for more than one layer. The
+      // tool has to say so itself — the raw AE throw is not something the
+      // model can act on.
+      { name: "precompose refuses moveAttributes:false for two layers",
+        tool: "precompose",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.pcComp, layers: ["ST Pre Stay", "ST Pre Watch"],
+                   name: "ST Pre Never", moveAttributes: false };
+        },
+        check: function (err) {
+          if (/After Effects error/.test(err)) {
+            return "leaks AE's raw throw: " + err;
+          }
+          return (/ST Pre Stay/.test(err) && /ST Pre Watch/.test(err)) ||
+                 "does not name the layers: " + err;
+        } },
+
+      // Three of the four silences in one call: a repeated reference
+      // counts once, the parent that stayed behind is named, and the
+      // expression left behind that now dangles is named. Nothing was
+      // selected before (add_solid restores the selection it found, and
+      // the rig comp started empty), so this is also the "nothing
+      // survived" half of the selection report.
+      { name: "precompose reports the parent and expression it broke",
+        tool: "precompose",
+        args: function (ctx) {
+          return { comp: ctx.pcComp,
+                   layers: ["ST Pre Kid", "ST Pre Kid"],
+                   name: "ST Pre Nest" };
+        },
+        check: function (d, ctx) {
+          ctx.pcNest = d.precomp;
+          if (d.layersMoved !== 1) {
+            return "a repeated reference was counted twice: layersMoved " +
+                   d.layersMoved;
+          }
+          if (!/ST Pre Kid/.test(d.duplicatesIgnored || "")) {
+            return "the repeat is not reported: " +
+                   (d.duplicatesIgnored || "(nothing)");
+          }
+          if (!/ST Pre Par/.test(d.parentsBroken || "")) {
+            return "the dropped parent is not reported: " +
+                   (d.parentsBroken || "(nothing)");
+          }
+          if (!/ST Pre Watch/.test(d.expressionsAtRisk || "")) {
+            return "the dangling expression is not reported: " +
+                   (d.expressionsAtRisk || "(nothing)");
+          }
+          return /none survived/.test(d.selectionKept || "") ||
+                 "nothing was selected to keep, but the result claims " +
+                 d.selectionKept;
+        } },
+
+      { name: "...and the layer really did move into the new comp",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.pcNest }; },
+        check: function (d) {
+          if (d.numLayers !== 1) return "precomp holds " + d.numLayers;
+          return d.layers[0].name === "ST Pre Kid" ||
+                 "it holds " + d.layers[0].name;
+        } },
+
+      // AE never uniquifies an item name, and two comps sharing one make
+      // the later unreachable by name. precompose auto-numbers instead,
+      // and registers the same request-scoped alias create_comp does.
+      //
+      // This is also the OTHER half of the selection report: precompose
+      // above left AE's new layer selected, that layer survives this call,
+      // and so it has to come back selected.
+      { name: "a precomp name already taken is auto-numbered",
+        tool: "precompose",
+        args: function (ctx) {
+          return { comp: ctx.pcComp, layers: ["ST Pre Par"],
+                   name: ctx.pcNest };
+        },
+        check: function (d, ctx) {
+          ctx.pcNest2 = d.precomp;
+          if (d.precomp === ctx.pcNest) {
+            return "took the name that was already used: " + d.precomp;
+          }
+          if (d.selectionKept !== ctx.pcNest) {
+            return "the selection that survived was not put back: " +
+                   d.selectionKept + " (expected " + ctx.pcNest + ")";
+          }
+          return /already existed/.test(d.note || "") ||
+                 "no note about the rename: " + (d.note || "(none)");
+        } },
+
+      { name: "...and the old name still reaches the new comp",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.pcNest }; },
+        check: function (d, ctx) {
+          // Within one request the alias wins, exactly as after
+          // create_comp: the batch that asked for the name gets the comp
+          // it actually made.
+          return d.name === ctx.pcNest2 ||
+                 "resolved to '" + d.name + "', not '" + ctx.pcNest2 + "'";
+        } },
+
+      // moveAttributes:false sizes the new comp to the LAYER, not the comp.
+      { name: "moveAttributes:false takes the layer's own size",
+        tool: "precompose",
+        args: function (ctx) {
+          return { comp: ctx.pcComp, layers: ["ST Pre Watch"],
+                   name: "ST Pre Solo", moveAttributes: false };
+        },
+        check: function (d, ctx) {
+          ctx.pcSolo = d.precomp;
+          return /SIZE OF THE LAYER \(100x100\)/.test(d.note || "") ||
+                 "no size note, or the wrong size: " + (d.note || "(none)");
+        } },
+
+      { name: "...and the new comp really is 100x100",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.pcSolo }; },
+        check: function (d) {
+          return (d.width === 100 && d.height === 100) ||
+                 d.width + "x" + d.height;
+        } },
+
+      // ---- markers.
+      { name: "add_marker puts one on the comp",
+        tool: "add_marker",
+        args: function (ctx) {
+          return { comp: ctx.pcComp, time: 1, comment: "ST first",
+                   duration: 2 };
+        },
+        check: function (d) {
+          return (d.comment === "ST first" && d.duration === 2 &&
+                  d.markers === 1) || JSON.stringify(d);
+        } },
+
+      // AE keeps ONE marker per exact time, so this destroys the first.
+      { name: "...a second at the same time names what it destroyed",
+        tool: "add_marker",
+        args: function (ctx) {
+          return { comp: ctx.pcComp, time: 1, comment: "ST second" };
+        },
+        check: function (d) {
+          if (d.markers !== 1) return "AE kept " + d.markers + " markers";
+          return /ST first/.test(d.replaced || "") ||
+                 "the overwritten marker is not reported: " +
+                 (d.replaced || "(nothing)");
+        } },
+
+      { name: "...and one on empty time reports no loss",
+        tool: "add_marker",
+        args: function (ctx) {
+          return { comp: ctx.pcComp, time: 3, comment: "ST third" };
+        },
+        check: function (d) {
+          return (!d.replaced && d.markers === 2) ||
+                 "replaced=" + d.replaced + " markers=" + d.markers;
+        } },
+
+      // A small model writes {"time": "4"} often enough to matter.
+      { name: "a quoted time is accepted, not dropped",
+        tool: "add_marker",
+        args: function (ctx) {
+          return { comp: ctx.pcComp, time: "4", comment: "ST quoted" };
+        },
+        check: function (d) {
+          return d.time === 4 || "time came back as " +
+                 d.time + " (" + typeof d.time + ")";
+        } },
+
+      { name: "a duration that is not a duration is refused",
+        tool: "add_marker",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.pcComp, time: 5, duration: -3 };
+        },
+        check: function (err) {
+          return (/-3/.test(err) && /duration/.test(err)) ||
+                 "not grounded in what came in: " + err;
+        } },
+
+      // AE will happily put a marker where nobody can ever see it.
+      { name: "a marker past the end of the comp is flagged",
+        tool: "add_marker",
+        args: function (ctx) {
+          return { comp: ctx.pcComp, time: 99, comment: "ST far" };
+        },
+        check: function (d) {
+          return /off the visible timeline/.test(d.note || "") ||
+                 "no note: " + (d.note || "(none)");
+        } },
+
+      { name: "a layer marker outside the layer's span is flagged",
+        batch: function (ctx) {
+          return [
+            { tool: "set_layer_timing", args: { comp: ctx.pcComp,
+                layer: "ST Pre Stay", inPoint: 3, outPoint: 8 } },
+            { tool: "add_marker", args: { comp: ctx.pcComp,
+                layer: "ST Pre Stay", time: 1, comment: "ST early" } },
+            { tool: "add_marker", args: { comp: ctx.pcComp,
+                layer: "ST Pre Stay", time: 5, comment: "ST inside" } }
+          ];
+        },
+        check: function (rows) {
+          if (!rows[0].ok) return "set_layer_timing failed: " + rows[0].error;
+          if (!rows[1].ok || !rows[2].ok) {
+            return "add_marker failed: " +
+                   (rows[1].error || rows[2].error);
+          }
+          if (!/own span/.test(rows[1].data.note || "")) {
+            return "the early marker is not flagged: " +
+                   (rows[1].data.note || "(nothing)");
+          }
+          return !rows[2].data.note ||
+                 "the marker INSIDE the span was flagged too: " +
+                 rows[2].data.note;
+        } },
+
+      // Marker times are COMPOSITION time on a layer as well: the marker
+      // rides the layer when its startTime moves, so what came back as
+      // "time 5" is still where the user asked for it.
+      { name: "a layer marker reads back at the comp time it was given",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.pcComp, layer: "ST Pre Stay",
+                   property: "Marker" };
+        },
+        check: function (d) {
+          if (d.numKeys !== 2) return "expected 2 markers, got " + d.numKeys;
+          var times = [];
+          for (var i = 0; i < d.keys.length; i++) times.push(d.keys[i].time);
+          return times.join(",") === "1,5" ||
+                 "marker times " + times.join(",") + ", expected 1,5";
+        } },
+
+      { name: "cleanup: delete the precompose rig comps",
+        batch: function (ctx) {
+          return [
+            { tool: "delete_item", args: { item: ctx.pcSolo } },
+            { tool: "delete_item", args: { item: ctx.pcNest2 } },
+            { tool: "delete_item", args: { item: ctx.pcNest } },
+            { tool: "delete_item", args: { item: ctx.pcComp } }
+          ];
+        },
+        check: function (rows) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + (i + 1) + ": " + rows[i].error;
+          }
+          return true;
+        } },
+
+      // ---- text animators (WORKPLAN 5.1). add_text_animator is new, and
+      // every assertion below comes from the probe in WORKPLAN-LOG
+      // 2026-08-28: an animator ships with all 103 properties already
+      // present and hidden, canSetExpression is the only flag that knows
+      // which were added, adding a second animator invalidates every
+      // reference into the first, AE lets two animators share a name, and
+      // per-character 3D drags the layer's own 3D switch on with it.
+      //
+      // Its own comp for exactly that last reason.
+      { name: "text-animator rig comp",
+        tool: "create_comp",
+        args: { name: TXCOMP, width: 640, height: 480, duration: 6,
+                frameRate: 30 },
+        check: function (d, ctx) { ctx.txComp = d.name; return true; } },
+
+      { name: "text-animator rig: a text layer and a solid",
+        batch: function (ctx) {
+          return [
+            { tool: "add_text_layer", args: { comp: ctx.txComp,
+                text: "ANIMATE ME", fontSize: 48 } },
+            { tool: "add_solid", args: { comp: ctx.txComp,
+                name: "ST Anim Solid", color: [0.3, 0.3, 0.3],
+                width: 80, height: 80 } }
+          ];
+        },
+        check: function (rows, ctx) {
+          if (!rows[0].ok) return "text layer: " + rows[0].error;
+          if (!rows[1].ok) return "solid: " + rows[1].error;
+          ctx.txLayer = rows[0].data.name;
+          return true;
+        } },
+
+      { name: "add_text_animator refuses a non-text layer",
+        tool: "add_text_animator",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.txComp, layer: "ST Anim Solid",
+                   properties: { opacity: 0 } };
+        },
+        check: function (err, ctx) {
+          if (/After Effects error/.test(err)) return "leaks AE's throw: " + err;
+          return (/TEXT layers/.test(err) && err.indexOf(ctx.txLayer) >= 0) ||
+                 "does not name the text layer to use instead: " + err;
+        } },
+
+      { name: "add_text_animator refuses a property AE does not have",
+        tool: "add_text_animator",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.txComp, layer: ctx.txLayer,
+                   properties: { wobble: 5 } };
+        },
+        check: function (err) {
+          return (/No animator property named wobble/.test(err) &&
+                  /opacity/.test(err)) ||
+                 "does not list the real properties: " + err;
+        } },
+
+      // Percent Start/End/Offset are -100..100 in AE (101 throws). The
+      // refusal has to come BEFORE an animator is built, or the user is
+      // left cleaning one up.
+      { name: "add_text_animator refuses a percent outside -100..100",
+        tool: "add_text_animator",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.txComp, layer: ctx.txLayer,
+                   properties: { opacity: 0 }, selector: { end: 400 } };
+        },
+        check: function (err) {
+          return (/PERCENT/.test(err) && /index/.test(err)) ||
+                 "does not explain percent vs index: " + err;
+        } },
+
+      { name: "no animator was built by the refusals",
+        tool: "list_properties",
+        args: function (ctx) {
+          return { comp: ctx.txComp, layer: ctx.txLayer,
+                   path: "Text/Animators" };
+        },
+        check: function (d) {
+          return d.count === 0 ||
+                 "Text/Animators has " + d.count + " children, expected 0";
+        } },
+
+      { name: "add_text_animator builds animator, properties and selector",
+        tool: "add_text_animator",
+        args: function (ctx) {
+          return { comp: ctx.txComp, layer: ctx.txLayer,
+                   properties: { opacity: 0, position: [0, -80] },
+                   selector: { start: 0, end: 40, offset: -10,
+                               shape: "rampUp", easeHigh: 50 } };
+        },
+        check: function (d, ctx) {
+          ctx.txAnim = d.animator;
+          ctx.txSelPath = d.selector && d.selector.path;
+          if (d.animator !== "Animator 1") {
+            return "animator named " + d.animator;
+          }
+          if (d.problems) return "problems: " + d.problems.join("; ");
+          if (!d.properties || d.properties.length !== 2) {
+            return "properties: " + JSON.stringify(d.properties);
+          }
+          if (!ctx.txSelPath ||
+              ctx.txSelPath.indexOf("Range Selector 1") < 0) {
+            return "selector path " + ctx.txSelPath;
+          }
+          return /set_keyframes/.test(d.animateHint || "") ||
+                 "no hint about keyframing the selector";
+        } },
+
+      // The property must be ADDED, not merely written to: AE keeps a
+      // value on a hidden property and never renders it.
+      { name: "the animator property reads back active",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.txComp, layer: ctx.txLayer,
+                   property: "Text/Animators/" + ctx.txAnim +
+                             "/Properties/Opacity" };
+        },
+        check: function (d) {
+          if (d.inactive) return "reported inactive: " + d.inactive;
+          return d.value === 0 || "opacity is " + d.value + ", expected 0";
+        } },
+
+      { name: "a 2-number position was padded to the 3 AE keeps",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.txComp, layer: ctx.txLayer,
+                   property: "Text/Animators/" + ctx.txAnim +
+                             "/Properties/Position" };
+        },
+        check: function (d) {
+          return String(d.value) === "0,-80,0" ||
+                 "position " + JSON.stringify(d.value);
+        } },
+
+      // The other hundred slots are still there and still hidden, and the
+      // panel now says so instead of handing back a value AE ignores.
+      { name: "an unadded animator property reads back flagged inactive",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.txComp, layer: ctx.txLayer,
+                   property: "Text/Animators/" + ctx.txAnim +
+                             "/Properties/Skew" };
+        },
+        check: function (d) {
+          return /never applied/.test(d.inactive || "") ||
+                 "not flagged: " + JSON.stringify(d);
+        } },
+
+      { name: "set_property refuses a bare name that is only a hidden slot",
+        tool: "set_property",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.txComp, layer: ctx.txLayer,
+                   property: "Skew", value: 20 };
+        },
+        check: function (err) {
+          if (/property or a parent property is hidden/.test(err)) {
+            return "leaks AE's raw hidden error: " + err;
+          }
+          return /add_text_animator/.test(err) ||
+                 "does not name the tool that activates it: " + err;
+        } },
+
+      { name: "set_keyframes refuses a hidden slot before writing key 1",
+        tool: "set_keyframes",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.txComp, layer: ctx.txLayer,
+                   property: "Text/Animators/" + ctx.txAnim +
+                             "/Properties/Skew",
+                   keys: [{ time: 0, value: 0 }, { time: 1, value: 30 }] };
+        },
+        check: function (err) {
+          return /has not been added/.test(err) || "wrong refusal: " + err;
+        } },
+
+      // The half a static animator is missing: the selector has to MOVE.
+      { name: "the selector Offset takes keyframes (the typewriter half)",
+        tool: "set_keyframes",
+        args: function (ctx) {
+          return { comp: ctx.txComp, layer: ctx.txLayer,
+                   property: ctx.txSelPath + "/Offset",
+                   keys: [{ time: 0, value: -100 }, { time: 2, value: 100 }] };
+        },
+        check: function (d) {
+          return d.numKeys === 2 || "numKeys " + d.numKeys;
+        } },
+
+      { name: "and they read back off the selector's own path",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.txComp, layer: ctx.txLayer,
+                   property: ctx.txSelPath + "/Offset" };
+        },
+        check: function (d) {
+          if (d.numKeys !== 2) return "numKeys " + d.numKeys;
+          return (d.keys[0].value === -100 && d.keys[1].value === 100) ||
+                 "keys " + JSON.stringify(d.keys);
+        } },
+
+      // A SECOND animator on the same layer is the reference trap: AE
+      // invalidates everything held into animator 1 at this moment.
+      { name: "a second animator on the same layer survives the trap",
+        tool: "add_text_animator",
+        args: function (ctx) {
+          return { comp: ctx.txComp, layer: ctx.txLayer, name: "ST Cascade",
+                   properties: { rotation: 20 },
+                   selector: { units: "index", start: 0, end: 3 } };
+        },
+        check: function (d, ctx) {
+          ctx.txAnim2 = d.animator;
+          if (d.animator !== "ST Cascade") return "named " + d.animator;
+          if (d.problems) return "problems: " + d.problems.join("; ");
+          return (d.selector && d.selector.settings &&
+                  d.selector.settings.units === "index") ||
+                 "units not reported: " + JSON.stringify(d.selector);
+        } },
+
+      // Units 'index' means the INDEX triple. AE keeps both, and a lookup
+      // by the display name "End" finds the PERCENT one either way.
+      { name: "units 'index' wrote the index triple, not the percent one",
+        batch: function (ctx) {
+          var base = "Text/Animators/" + ctx.txAnim2 +
+                     "/Selectors/Range Selector 1";
+          return [
+            { tool: "get_property", args: { comp: ctx.txComp,
+                layer: ctx.txLayer, property: base + "/End" } },
+            { tool: "list_properties", args: { comp: ctx.txComp,
+                layer: ctx.txLayer, path: base } }
+          ];
+        },
+        check: function (rows) {
+          if (!rows[0].ok) return "get: " + rows[0].error;
+          if (!rows[1].ok) return "list: " + rows[1].error;
+          if (rows[0].data.matchName !== "ADBE Text Percent End") {
+            return "name lookup found " + rows[0].data.matchName;
+          }
+          if (rows[0].data.value !== 100) {
+            return "percent End was written: " + rows[0].data.value;
+          }
+          var props = rows[1].data.properties, i, idx = null;
+          for (i = 0; i < props.length; i++) {
+            if (props[i].matchName === "ADBE Text Index End") {
+              idx = props[i].value;
+            }
+          }
+          return idx === 3 || "index End is " + idx + ", expected 3";
+        } },
+
+      { name: "the first animator kept what it was given",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.txComp, layer: ctx.txLayer,
+                   property: "Text/Animators/" + ctx.txAnim +
+                             "/Properties/Opacity" };
+        },
+        check: function (d) {
+          return d.value === 0 || "opacity is " + d.value;
+        } },
+
+      // AE lets a second animator take the same name and then answers a
+      // name lookup with the FIRST, stranding this one.
+      { name: "a repeated animator name is auto-numbered and reported",
+        tool: "add_text_animator",
+        args: function (ctx) {
+          return { comp: ctx.txComp, layer: ctx.txLayer, name: "ST Cascade",
+                   properties: { skew: 15 }, selector: { type: "none" } };
+        },
+        check: function (d) {
+          if (d.animator === "ST Cascade") {
+            return "took the name AE would strand it under";
+          }
+          return (/already an animator/.test(d.nameTaken || "") &&
+                  /every character/.test(String(d.selector))) ||
+                 "nameTaken: " + d.nameTaken + " selector: " +
+                 JSON.stringify(d.selector);
+        } },
+
+      // Per-character 3D is a LAYER switch: yRotation is addable without
+      // it and renders nothing, so the tool turns it on and says so.
+      { name: "yRotation turns per-character 3D on and reports it",
+        tool: "add_text_animator",
+        args: function (ctx) {
+          return { comp: ctx.txComp, layer: ctx.txLayer,
+                   properties: { yRotation: 90 }, selector: { type: "none" } };
+        },
+        check: function (d) {
+          if (!d.perCharacter3D) return "said nothing about per-character 3D";
+          return /3D layer/.test(d.perCharacter3D) ||
+                 "does not mention the layer becoming 3D: " + d.perCharacter3D;
+        } },
+
+      // ...and the switch really took in AE: a second 3D-only property on
+      // the same layer has nothing left to turn on.
+      { name: "the per-character 3D switch stayed on for the next animator",
+        tool: "add_text_animator",
+        args: function (ctx) {
+          return { comp: ctx.txComp, layer: ctx.txLayer,
+                   properties: { xRotation: 45 }, selector: { type: "none" } };
+        },
+        check: function (d) {
+          return !d.perCharacter3D ||
+                 "reported turning it on twice: " + d.perCharacter3D;
+        } },
+
+      { name: "a wiggly selector takes its own parameters",
+        tool: "add_text_animator",
+        args: function (ctx) {
+          return { comp: ctx.txComp, layer: ctx.txLayer,
+                   properties: { position: [0, 10] },
+                   selector: { type: "wiggly", wigglesPerSecond: 4,
+                               correlation: 20, maxAmount: 60,
+                               mode: "intersect" } };
+        },
+        check: function (d, ctx) {
+          ctx.txWiggly = d.selector && d.selector.path;
+          if (d.problems) return "problems: " + d.problems.join("; ");
+          return (d.selector && d.selector.type === "wiggly" &&
+                  d.selector.settings.wigglesPerSecond === 4) ||
+                 "selector: " + JSON.stringify(d.selector);
+        } },
+
+      { name: "the wiggly parameters really landed in AE",
+        tool: "list_properties",
+        args: function (ctx) {
+          return { comp: ctx.txComp, layer: ctx.txLayer, path: ctx.txWiggly };
+        },
+        check: function (d) {
+          var freq = null, corr = null, i;
+          for (i = 0; i < d.properties.length; i++) {
+            if (d.properties[i].matchName === "ADBE Text Temporal Freq") {
+              freq = d.properties[i].value;
+            }
+            if (d.properties[i].matchName ===
+                "ADBE Text Character Correlation") {
+              corr = d.properties[i].value;
+            }
+          }
+          return (freq === 4 && corr === 20) ||
+                 "wiggles/second " + freq + ", correlation " + corr;
+        } },
+
+      // AE's own range refusal, reported rather than swallowed.
+      { name: "a value AE rejects comes back with the range",
+        tool: "add_text_animator",
+        args: function (ctx) {
+          return { comp: ctx.txComp, layer: ctx.txLayer,
+                   properties: { opacity: 900 }, selector: { type: "none" } };
+        },
+        check: function (d) {
+          if (!d.problems || d.problems.length !== 1) {
+            return "problems: " + JSON.stringify(d.problems);
+          }
+          if (d.properties.length !== 0) {
+            return "claimed it applied: " + JSON.stringify(d.properties);
+          }
+          return /0 to 100/.test(d.problems[0]) ||
+                 "no range in: " + d.problems[0];
+        } },
+
+      { name: "cleanup: delete the text-animator rig comp",
+        tool: "delete_item",
+        args: function (ctx) { return { item: ctx.txComp }; },
+        check: function () { return true; } },
+
+      // ---- shape repeaters and the path AE's UI implies (WORKPLAN 5.2).
+      //
+      // Measured in AE 2026 (probe in WORKPLAN-LOG 2026-08-28): shape
+      // content is a stack whose filters act on what is ABOVE them, and
+      // addProperty always appends BELOW — so a repeater added after the
+      // rectangle repeats it (bounds 100 -> 500 px) and the same repeater
+      // moved to index 1 renders one copy. And a shape GROUP hides its
+      // items in a nested "Contents" group the timeline never draws, so
+      // the path this panel's own docs handed the model,
+      // contents/<Group>/<Item>/<Param>, resolved to nothing at all.
+      //
+      // These run in the main scratch comp: shape content creates no
+      // project items, and the layer dies with the comp.
+      { name: "a shape layer to repeat",
+        tool: "add_shape_layer",
+        args: function (ctx) {
+          return { comp: ctx.comp, name: "ST Rep", shape: "rectangle",
+                   size: [10, 10] };
+        },
+        check: function (d, ctx) { ctx.repLayer = d.name || "ST Rep";
+                                   return true; } },
+
+      { name: "an empty group, then a repeater with nothing above it",
+        batch: function (ctx) {
+          return [
+            { tool: "add_shape_content", args: { comp: ctx.comp,
+                layer: ctx.repLayer, kind: "group", name: "ST Ring" } },
+            { tool: "add_shape_content", args: { comp: ctx.comp,
+                layer: ctx.repLayer, kind: "repeater", group: "ST Ring",
+                params: { Copies: 3 } } }
+          ];
+        },
+        check: function (rows) {
+          if (!rows[0].ok) return "group: " + rows[0].error;
+          if (!rows[1].ok) return "repeater: " + rows[1].error;
+          var w = rows[1].data.warning || "";
+          if (!w) return "a repeater over an empty group did not warn";
+          return (/ABOVE it/.test(w) && /will NOT fix this/.test(w)) ||
+                 "the warning does not give the rule: " + w;
+        } },
+
+      // A repeater added UNDER a shape is the working order, and gets no
+      // warning — a warning on the good case would train the model to
+      // ignore them.
+      { name: "a second group, shape first: no warning",
+        batch: function (ctx) {
+          return [
+            { tool: "add_shape_content", args: { comp: ctx.comp,
+                layer: ctx.repLayer, kind: "group", name: "ST Row" } },
+            { tool: "add_shape_content", args: { comp: ctx.comp,
+                layer: ctx.repLayer, kind: "rectangle", group: "ST Row",
+                params: { Size: [100, 100], Position: [0, 0] } } },
+            { tool: "add_shape_content", args: { comp: ctx.comp,
+                layer: ctx.repLayer, kind: "fill", group: "ST Row",
+                params: { Color: [1, 0, 0, 1] } } },
+            { tool: "add_shape_content", args: { comp: ctx.comp,
+                layer: ctx.repLayer, kind: "repeater", group: "ST Row",
+                params: { Copies: 3, Position: [200, 0] } } }
+          ];
+        },
+        check: function (rows, ctx) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + (i + 1) + ": " + rows[i].error;
+          }
+          if (rows[3].data.warning) {
+            return "warned about a correctly ordered repeater: " +
+                   rows[3].data.warning;
+          }
+          ctx.repNote = rows[3].data.note || "";
+          return true;
+        } },
+
+      // The proof that it RENDERS, not merely that AE took the values:
+      // center_anchor_point measures sourceRectAtTime, so a 100px square
+      // repeated three times at +200 has to hand back a center at x=200
+      // (bounds -50..450). One copy would answer 0.
+      { name: "the repeater actually repeats (measured bounds, not values)",
+        tool: "center_anchor_point",
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: ctx.repLayer };
+        },
+        check: function (d) {
+          var ap = d.newAnchor || [];
+          if (!ap.length) return "no anchor in result: " + JSON.stringify(d);
+          return Math.abs(ap[0] - 200) < 1 ||
+                 "content centre x=" + ap[0] + ", expected 200 — the " +
+                 "repeater rendered one copy";
+        } },
+
+      // The bug this item really found: every path the panel documented
+      // left out the "Contents" hop, so this call used to fail.
+      { name: "the path AE's UI implies reaches the repeater",
+        tool: "set_property",
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: ctx.repLayer,
+                   property: "contents/ST Row/Repeater 1/Copies",
+                   value: 4 };
+        },
+        check: function (d) {
+          return d.value === 4 || "value " + JSON.stringify(d.value);
+        } },
+
+      { name: "…and one level deeper, into the repeater's offsets",
+        tool: "set_property",
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: ctx.repLayer,
+                   property: "contents/ST Row/Repeater 1/Transform/Rotation",
+                   value: 15 };
+        },
+        check: function (d) {
+          return d.value === 15 || "value " + JSON.stringify(d.value);
+        } },
+
+      { name: "the long form AE's scripting API wants still works",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: ctx.repLayer,
+                   property: "contents/ST Row/Contents/Repeater 1/Copies" };
+        },
+        check: function (d) {
+          return d.value === 4 || "value " + JSON.stringify(d.value);
+        } },
+
+      // A direct child named "Transform" is the GROUP's own transform,
+      // never the repeater's one hop away.
+      { name: "a real child shadows the same name inside Contents",
+        tool: "set_property",
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: ctx.repLayer,
+                   property: "contents/ST Row/Transform/Rotation",
+                   value: 30 };
+        },
+        check: function (d, ctx) {
+          if (d.value !== 30) return "value " + JSON.stringify(d.value);
+          return (d.resolvedPath || "").indexOf("Repeater") === -1 ||
+                 "landed in the repeater: " + d.resolvedPath;
+        } },
+
+      { name: "the group's rotation left the repeater's alone",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: ctx.repLayer,
+                   property: "contents/ST Row/Repeater 1/Transform/Rotation" };
+        },
+        check: function (d) {
+          return d.value === 15 || "repeater rotation is now " + d.value;
+        } },
+
+      // The tool's own note has to be a path that works: handing the
+      // model a broken one is exactly how this shipped unnoticed.
+      { name: "the path in add_shape_content's note resolves",
+        tool: "get_property",
+        args: function (ctx) {
+          var m = /'([^']*)<param>'/.exec(ctx.repNote || "");
+          ctx.repNoted = m ? m[1] : "";
+          return { comp: ctx.comp, layer: ctx.repLayer,
+                   property: (m ? m[1] : "contents/ST Row/Repeater 1/") +
+                             "Copies" };
+        },
+        check: function (d, ctx) {
+          if (!ctx.repNoted) return "the note quoted no path";
+          return d.value === 4 || "value " + JSON.stringify(d.value);
+        } },
+
+      // set_keyframes is the documented way to animate one, and it takes
+      // the same short path.
+      { name: "set_keyframes animates a repeater by that path",
+        tool: "set_keyframes",
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: ctx.repLayer,
+                   property: "contents/ST Row/Repeater 1/Transform/Position",
+                   keys: [{ time: 0, value: [0, 0] },
+                          { time: 1, value: [200, 0] }] };
+        },
+        check: function (d) {
+          return d.numKeys === 2 || "numKeys " + d.numKeys;
+        } },
+
+      // AE's ranges, surfaced rather than swallowed: Copies floors at 0,
+      // Composite is 1..2 ("ADBE Vector Repeater Order").
+      { name: "a negative Copies is refused with AE's own range",
+        tool: "add_shape_content",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: ctx.repLayer, kind: "repeater",
+                   group: "ST Row", params: { Copies: -1 } };
+        },
+        check: function (err) {
+          return (/Copies/.test(err) && /less-than-0/.test(err)) ||
+                 "does not name the parameter and the floor: " + err;
+        } },
+
+      { name: "a missing segment lists what the TIMELINE shows",
+        tool: "get_property",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: ctx.repLayer,
+                   property: "contents/ST Row/Nope/Copies" };
+        },
+        check: function (err) {
+          return (/inside Contents:/.test(err) && /Repeater 1/.test(err)) ||
+                 "lists only the four scripting rows: " + err;
+        } },
+
+      { name: "cleanup: delete the repeater layer",
+        tool: "delete_layer",
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: ctx.repLayer };
+        },
+        check: function () { return true; } },
+
+      // ---- animation presets: list_presets / apply_preset (WORKPLAN 5.3).
+      //
+      // Measured in AE 2026 (three probes, WORKPLAN-LOG 2026-08-28):
+      // layer.applyPreset() applies to the comp's SELECTION, not to the
+      // layer it is called on — two layers selected, one call, BOTH
+      // changed — and with an EMPTY selection it invents a comp-sized
+      // solid, applies the preset there and leaves the target alone. Both
+      // halves are checked below against real AE, which is why the rig
+      // goes to the trouble of establishing a two-layer selection:
+      // split_layer_into_chunks is the one tool that leaves one behind.
+      //
+      // Nothing here hard-codes a preset name. AE's library differs by
+      // install and by locale, so every name comes from list_presets.
+      { name: "list_presets finds AE's shipped library",
+        tool: "list_presets",
+        args: { category: "Behaviors", limit: 0 },
+        check: function (d, ctx) {
+          if (!d.total) return "no Behaviors presets found";
+          if (d.installed < d.total) return "installed < matched";
+          var pick = null, i;
+          for (i = 0; i < d.presets.length; i++) {
+            if (/wiggle/i.test(d.presets[i].name)) { pick = d.presets[i]; break; }
+          }
+          if (!pick) pick = d.presets[0];
+          ctx.presetName = pick.category + "/" + pick.name;
+          if (pick.source !== "app") return "source " + pick.source;
+          return true;
+        } },
+
+      { name: "a filter that matches nothing is grounded in what exists",
+        tool: "list_presets",
+        expectError: true,
+        args: { filter: "zzz no such preset zzz" },
+        check: function (err) {
+          return (/presets are installed/.test(err) &&
+                  /Behaviors/.test(err)) ||
+                 "does not say what IS installed: " + err;
+        } },
+
+      { name: "a text preset name, taken from the library not from memory",
+        tool: "list_presets",
+        args: { category: "Text/Animate In", limit: 5 },
+        check: function (d, ctx) {
+          if (!d.total) return "no Text/Animate In presets";
+          ctx.textPreset = d.presets[0].category + "/" + d.presets[0].name;
+          return true;
+        } },
+
+      { name: "a solid, split into two pieces that stay SELECTED",
+        batch: function (ctx) {
+          return [
+            { tool: "add_solid", args: { comp: ctx.comp, name: "ST Pre",
+                color: [0, 0.4, 1], width: 80, height: 80 } },
+            { tool: "split_layer_into_chunks",
+              args: { comp: ctx.comp, layer: "ST Pre", chunks: 2 } }
+          ];
+        },
+        check: function (rows, ctx) {
+          if (!rows[0].ok) return "add_solid: " + rows[0].error;
+          if (!rows[1].ok) return "split: " + rows[1].error;
+          var p = rows[1].data.pieces || [];
+          if (p.length !== 2) return "got " + p.length + " pieces";
+          ctx.preA = p[0].layer;
+          ctx.preB = p[1].layer;
+          return true;
+        } },
+
+      { name: "both pieces really are selected (the rig AE needs)",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.comp, limit: 0 }; },
+        check: function (d, ctx) {
+          ctx.preLayerCount = d.numLayers;
+          var i, sel = 0;
+          for (i = 0; i < d.layers.length; i++) {
+            if (d.layers[i].selected) sel++;
+          }
+          return sel === 2 || "expected 2 selected layers, found " + sel;
+        } },
+
+      { name: "apply_preset touches ONLY the layer it was given",
+        tool: "apply_preset",
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: ctx.preA,
+                   preset: ctx.presetName };
+        },
+        check: function (d, ctx) {
+          if (d.applied.length !== 1) {
+            return "applied to " + d.applied.length + " layers";
+          }
+          if (d.applied[0].layer !== ctx.preA) {
+            return "landed on " + d.applied[0].layer;
+          }
+          if (!d.applied[0].effectsAdded &&
+              !d.applied[0].keysAndExpressionsAdded) {
+            return "reported success with nothing added";
+          }
+          if (d.layersAdded) return "invented " + d.layersAdded + " layer(s)";
+          return true;
+        } },
+
+      // The measured failure this whole design exists for: the OTHER
+      // selected layer must be untouched.
+      { name: "the other SELECTED layer got nothing",
+        tool: "list_properties",
+        args: function (ctx) {
+          // depth 1: the effect ROWS, not their parameters — the default
+          // depth of 2 counts every slider inside them (6 effects = 18
+          // rows) and would compare two different things.
+          return { comp: ctx.comp, layer: ctx.preB, path: "effects",
+                   depth: 1 };
+        },
+        check: function (d) {
+          return d.count === 0 ||
+                 "the bystander picked up " + d.count + " effect row(s)";
+        } },
+
+      { name: "…and no layer was invented, and the selection came back",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.comp, limit: 0 }; },
+        check: function (d, ctx) {
+          if (d.numLayers !== ctx.preLayerCount) {
+            return "layer count " + ctx.preLayerCount + " -> " + d.numLayers;
+          }
+          var i, sel = 0;
+          for (i = 0; i < d.layers.length; i++) {
+            if (d.layers[i].selected) sel++;
+          }
+          return sel === 2 || "selection is now " + sel + " layer(s)";
+        } },
+
+      // A Text preset on a NON-text layer has two real outcomes, both
+      // measured: one that carries expression controls installs those and
+      // none of the animation ("Alternating Characters In" on a solid:
+      // six sliders, census 2, against census 15 on a text layer), and one
+      // that does not ("Center Spiral In") changes nothing whatsoever.
+      // Which one AE ships first differs by install, so the step checks
+      // the INVARIANT instead of the outcome: whatever the tool says
+      // happened is what the layer really has.
+      { name: "a Text preset on a solid tells the truth either way",
+        batch: function (ctx) {
+          return [
+            { tool: "apply_preset", args: { comp: ctx.comp, layer: ctx.preB,
+                preset: ctx.textPreset } },
+            { tool: "list_properties", args: { comp: ctx.comp,
+                layer: ctx.preB, path: "effects", depth: 1 } }
+          ];
+        },
+        check: function (rows, ctx) {
+          if (!rows[1].ok) return "list_properties: " + rows[1].error;
+          var count = rows[1].data.count;
+          if (!rows[0].ok) {
+            var err = rows[0].error;
+            if (count !== 0) {
+              return "refused, but the layer gained " + count + " effect(s)";
+            }
+            return (err.indexOf(ctx.preB) !== -1 && /silent/i.test(err) &&
+                    /TEXT layer/.test(err)) ||
+                   "the refusal does not name the layer and the rule: " + err;
+          }
+          var d = rows[0].data, a = d.applied[0];
+          if (!a || a.layer !== ctx.preB) return "landed elsewhere";
+          if (!count && !a.keysAndExpressionsAdded) {
+            return "claimed success with nothing on the layer";
+          }
+          if (a.effectsAdded && a.effectsAdded.length !== count) {
+            return "reported " + a.effectsAdded.length + " effects, the " +
+                   "layer has " + count;
+          }
+          return (d.partialOnNonText && /text animators/i.test(d.partialNote ||
+                  "")) ||
+                 "a Text preset landed on a solid with no partial-landing " +
+                 "note";
+        } },
+
+      // Cameras and lights have no Effect Parade at all and took NOTHING
+      // from either kind of preset — the one guaranteed no-op, and so the
+      // one place the refusal path can be exercised on any install.
+      { name: "a camera takes no preset, and is told so",
+        batch: function (ctx) {
+          return [
+            { tool: "add_camera", args: { comp: ctx.comp,
+                name: "ST PreCam" } },
+            { tool: "apply_preset", args: { comp: ctx.comp,
+                layer: "ST PreCam", preset: ctx.presetName } },
+            { tool: "delete_layer", args: { comp: ctx.comp,
+                layer: "ST PreCam" } }
+          ];
+        },
+        check: function (rows) {
+          if (!rows[0].ok) return "add_camera: " + rows[0].error;
+          if (rows[1].ok) return "a camera accepted a preset";
+          var err = rows[1].error;
+          if (!/ST PreCam/.test(err) || !/camera/.test(err)) {
+            return "the refusal does not name the layer and its type: " + err;
+          }
+          if (!/silent/i.test(err)) return "does not explain AE's silence: " +
+            err;
+          return rows[2].ok || "cleanup: " + rows[2].error;
+        } },
+
+      { name: "the same preset on a TEXT layer applies",
+        batch: function (ctx) {
+          return [
+            { tool: "add_text_layer", args: { comp: ctx.comp,
+                text: "ST PreText" } },
+            { tool: "apply_preset", args: { comp: ctx.comp,
+                layer: "ST PreText", preset: ctx.textPreset } }
+          ];
+        },
+        check: function (rows) {
+          if (!rows[0].ok) return "add_text_layer: " + rows[0].error;
+          if (!rows[1].ok) return "apply_preset: " + rows[1].error;
+          var a = rows[1].data.applied[0];
+          if (a.type !== "text") return "type " + a.type;
+          return (a.keysAndExpressionsAdded > 0 || !!a.effectsAdded) ||
+                 "applied nothing to a layer it fits";
+        } },
+
+      { name: "an invented preset name is refused with a way back",
+        tool: "apply_preset",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: ctx.preA,
+                   preset: "Sparkle Burst Deluxe" };
+        },
+        check: function (err) {
+          return (/list_presets/.test(err) &&
+                  !/After Effects error/.test(err)) ||
+                 "leaks AE's own wording or offers no way back: " + err;
+        } },
+
+      { name: "cleanup: delete the preset rig",
+        batch: function (ctx) {
+          return [
+            { tool: "delete_layer", args: { comp: ctx.comp, layer: ctx.preA } },
+            { tool: "delete_layer", args: { comp: ctx.comp, layer: ctx.preB } },
+            { tool: "delete_layer",
+              args: { comp: ctx.comp, layer: "ST PreText" } }
+          ];
+        },
+        check: function (rows) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + i + ": " + rows[i].error;
+          }
+          return true;
+        } },
+
+      // ---- render queue: list_render_templates / render_comp /
+      // add_to_render_queue (WORKPLAN 5.5).
+      //
+      // Measured in AE 2026 across seven probes (WORKPLAN-LOG
+      // 2026-08-28). Three of those facts are what these steps exist to
+      // hold down, because each one is invisible until it bites:
+      //
+      //  - renderQueue.render() renders the WHOLE QUEUE, so a foreign
+      //    item is queued below and must come back untouched.
+      //  - rendering onto a file that ALREADY EXISTS raises a MODAL that
+      //    wedges After Effects outright -- it ate a probe run of this
+      //    very pass and then swallowed every later -r script while the
+      //    process still looked healthy. The refusal step below is the
+      //    one that keeps the harness alive.
+      //  - the output module forces its OWN extension onto whatever path
+      //    it is handed, so the path asked for is not the path written.
+      //
+      // Everything renders one frame of a 160x120 comp into Folder.temp
+      // (~180 ms measured), so the suite pays almost nothing for it. No
+      // template name is hard-coded: installed templates differ per
+      // machine, so they come from list_render_templates.
+      { name: "create the render rig, small enough to render for free",
+        batch: function () {
+          return [
+            { tool: "create_comp",
+              args: { name: RQCOMP, width: 160, height: 120,
+                      duration: 1, frameRate: 24 } },
+            { tool: "add_solid",
+              args: { comp: RQCOMP, name: "ST RQ Fill",
+                      color: [0, 0.6, 0.9], width: 160, height: 120 } }
+          ];
+        },
+        check: function (rows, ctx) {
+          if (!rows[0].ok) return "create_comp: " + rows[0].error;
+          if (!rows[1].ok) return "add_solid: " + rows[1].error;
+          ctx.rqComp = rows[0].data.name;
+          return true;
+        } },
+
+      { name: "list_render_templates names this machine's templates",
+        tool: "list_render_templates",
+        args: {},
+        check: function (d, ctx) {
+          if (!d.outputModules || !d.outputModules.length) {
+            return "no output-module templates";
+          }
+          if (!d.renderSettings || !d.renderSettings.length) {
+            return "no render-settings templates";
+          }
+          if (!d.tempFolder) return "no tempFolder to render into";
+          ctx.rqTemp = d.tempFolder.replace(/\\/g, "/").replace(/\/$/, "");
+          // Prefer a still-image module: it is the cheapest thing AE can
+          // write, and every install has at least one video one to fall
+          // back on. Never an internal _HIDDEN entry.
+          var i, n, pick = "";
+          for (i = 0; i < d.outputModules.length; i++) {
+            n = d.outputModules[i];
+            if (/^_HIDDEN/.test(n)) continue;
+            if (/^Lossless$/i.test(n)) { pick = n; break; }
+            if (!pick) pick = n;
+          }
+          if (!pick) return "every template was _HIDDEN";
+          ctx.rqTemplate = pick;
+          ctx.rqOut = ctx.rqTemp + "/AELL_ST_render";
+          for (i = 0; i < d.renderSettings.length; i++) {
+            if (/^Draft Settings$/i.test(d.renderSettings[i])) {
+              ctx.rqSettings = d.renderSettings[i];
+            }
+          }
+          return true;
+        } },
+
+      { name: "an invented template is refused with the real list",
+        tool: "render_comp",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.rqComp, output: ctx.rqTemp + "/AELL_ST_never.avi",
+                   template: "ProRes Ultra Deluxe" };
+        },
+        check: function (err, ctx) {
+          if (/After Effects error/.test(err)) {
+            return "leaks AE's own throw, which names no alternatives: " +
+                   err;
+          }
+          return err.indexOf(ctx.rqTemplate) >= 0 ||
+                 "does not list what IS installed: " + err;
+        } },
+
+      { name: "a relative output path is refused before anything is queued",
+        tool: "render_comp",
+        expectError: true,
+        args: function (ctx) { return { comp: ctx.rqComp,
+                                        output: "renders/rel.avi" }; },
+        check: function (err) {
+          return /ABSOLUTE/i.test(err) ||
+                 "does not say the path must be absolute: " + err;
+        } },
+
+      { name: "an output folder that does not exist names the nearest one",
+        tool: "render_comp",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.rqComp,
+                   output: ctx.rqTemp + "/AELL_ST_no_such_dir/x.avi",
+                   template: ctx.rqTemplate };
+        },
+        check: function (err, ctx) {
+          if (!/does not exist/i.test(err)) return "not a folder error: " + err;
+          // The actionable half: which folder DOES exist to create it in.
+          var tail = ctx.rqTemp.replace(/^.*\//, "");
+          return err.indexOf(tail) >= 0 ||
+                 "does not name the deepest existing folder: " + err;
+        } },
+
+      { name: "render_comp writes one real frame to disk",
+        tool: "render_comp",
+        args: function (ctx) {
+          return { comp: ctx.rqComp, output: ctx.rqOut,
+                   template: ctx.rqTemplate, frames: 1, overwrite: true };
+        },
+        check: function (d, ctx) {
+          if (d.status !== "DONE") return "status " + d.status +
+            (d.warning ? " — " + d.warning : "");
+          if (!(d.bytes > 0)) {
+            return "reported DONE but " + d.bytes + " bytes — AE hides a " +
+                   "just-written file for a moment, so this is what a " +
+                   "single unpolled look would report";
+          }
+          if (!d.output) return "no output path reported";
+          // The extension is AE's choice, not ours: record what it
+          // actually settled on so the next steps aim at the same file.
+          ctx.rqWrote = d.output.replace(/\\/g, "/");
+          ctx.rqBytes = d.bytes;
+          return /1 frame/.test(d.timeSpan) ||
+                 "did not report one frame: " + d.timeSpan;
+        } },
+
+      // THE step. Without the refusal, this call reaches real AE, AE puts
+      // up an overwrite dialog, and the harness dies at exit 4 with every
+      // later pass swallowed behind it.
+      { name: "rendering onto an existing file is REFUSED, not attempted",
+        tool: "render_comp",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.rqComp, output: ctx.rqWrote,
+                   template: ctx.rqTemplate, frames: 1 };
+        },
+        check: function (err) {
+          if (!/already exists/i.test(err)) {
+            return "not an existence refusal: " + err;
+          }
+          if (!/overwrite/i.test(err)) return "no way forward offered: " + err;
+          return /modal|dialog/i.test(err) ||
+                 "does not say why it matters (a modal wedges AE): " + err;
+        } },
+
+      { name: "overwrite:true really replaces the file, and does not skip",
+        tool: "render_comp",
+        args: function (ctx) {
+          return { comp: ctx.rqComp, output: ctx.rqWrote,
+                   template: ctx.rqTemplate, frames: 6, overwrite: true };
+        },
+        check: function (d, ctx) {
+          if (d.status !== "DONE") return "status " + d.status;
+          if (!(d.bytes > 0)) return "no bytes: " + d.bytes;
+          // Six frames instead of one: if AE had quietly declined to
+          // overwrite, the size would be unchanged. This is the only way
+          // to tell a real overwrite from a silent no-op.
+          return d.bytes > ctx.rqBytes ||
+                 "the file did not grow (" + ctx.rqBytes + " -> " +
+                 d.bytes + "), so the render was silently skipped";
+        } },
+
+      { name: "the queue is left exactly as it was found",
+        tool: "add_to_render_queue",
+        args: function (ctx) { return { comp: ctx.rqComp }; },
+        check: function (d, ctx) {
+          // render_comp removes its own item, so this add must be the
+          // FIRST entry for this comp — a warning here would mean it left
+          // litter behind.
+          if (d.warning) return "render_comp left its own items queued: " +
+            d.warning;
+          if (!d.output) return "no destination reported";
+          if (!/last render/i.test(d.note || "")) {
+            return "an outputPath-less add did not say where AE would " +
+                   "write: " + (d.note || "(silent)");
+          }
+          ctx.rqQueued = true;
+          return true;
+        } },
+
+      { name: "a second add of the same comp is called out",
+        tool: "add_to_render_queue",
+        args: function (ctx) { return { comp: ctx.rqComp }; },
+        check: function (d) {
+          return /already in the render queue/i.test(d.warning || "") ||
+                 "AE allows the duplicate silently and so did we: " +
+                 (d.warning || "(silent)");
+        } },
+
+      // Two of OUR items are now sitting in the queue. A render that took
+      // the whole queue would consume them; render_comp must hold them
+      // back and hand them straight back.
+      { name: "queued items are held back, not swept into the render",
+        tool: "render_comp",
+        args: function (ctx) {
+          return { comp: ctx.rqComp, output: ctx.rqWrote,
+                   template: ctx.rqTemplate, frames: 1, overwrite: true };
+        },
+        check: function (d) {
+          if (d.status !== "DONE") return "status " + d.status;
+          if (!/held back/i.test(d.heldBack || "")) {
+            return "did not report holding the queued items back: " +
+                   (d.heldBack || "(silent)");
+          }
+          return /2 /.test(d.heldBack) ||
+                 "expected both queued items held: " + d.heldBack;
+        } },
+
+      { name: "and they are still queued afterwards, flags intact",
+        tool: "add_to_render_queue",
+        args: function (ctx) { return { comp: ctx.rqComp }; },
+        check: function (d) {
+          // Still two -> neither was rendered away nor removed. AE does
+          // not reset render=false by itself, so this also proves the
+          // flags were restored.
+          return /queue 2 time/i.test(d.warning || "") ||
+                 "the held-back items did not survive intact: " +
+                 (d.warning || "(silent)");
+        } },
+
+      // AE CANNOT RENDER INSIDE AN UNDO GROUP. Registering render_comp as
+      // mutating did exactly that, and AE answered with a modal "After
+      // Effects warning: Undo group mismatch" that wedged the harness --
+      // its renderer closes the script's group out from under it, so the
+      // count goes wrong and the warning lands at some innocent
+      // endUndoGroup much later in the run. A batch opens ONE group if
+      // any command in it mutates, so this step is the one that proves
+      // the render still steps outside it.
+      { name: "a render batched with a mutation stays out of the undo group",
+        batch: function (ctx) {
+          return [
+            { tool: "add_solid", args: { comp: ctx.rqComp, name: "ST RQ Grp",
+                color: [1, 0.5, 0], width: 40, height: 40 } },
+            { tool: "render_comp",
+              args: { comp: ctx.rqComp, output: ctx.rqWrote,
+                      template: ctx.rqTemplate, frames: 1,
+                      overwrite: true } },
+            { tool: "delete_layer", args: { comp: ctx.rqComp,
+                layer: "ST RQ Grp" } }
+          ];
+        },
+        check: function (rows) {
+          if (!rows[0].ok) return "add_solid: " + rows[0].error;
+          if (!rows[1].ok) return "render_comp: " + rows[1].error;
+          if (rows[1].data.status !== "DONE") {
+            return "status " + rows[1].data.status;
+          }
+          return rows[2].ok || "cleanup: " + rows[2].error;
+        } },
+
+      { name: "cleanup: drop the render rig and its queue items",
+        batch: function (ctx) {
+          return [
+            { tool: "delete_item", args: { item: ctx.rqComp } }
+          ];
+        },
+        check: function (rows) {
+          // Measured: removing a comp that sits in the render queue drops
+          // its queue items too, silently and with no dialog.
+          return rows[0].ok || "cleanup: " + rows[0].error;
+        } },
 
       // ---- comp-rename audit + bulk rename. A three-comp rig: one
       // plain, one nested (a utility), one named by an expression.
@@ -2673,6 +5179,224 @@
         check: function (d) {
           return d.renamedCount === 0 ||
                  "a second run renamed " + d.renamedCount + " comp(s)";
+        } },
+
+      // ---- project hygiene (clean_project). PREVIEWS ONLY, deliberately.
+      //
+      // The suite runs inside whatever project the user has open, and
+      // every action here is project-WIDE: executing remove_unused_footage
+      // would delete their unused footage (and, measured, their empty
+      // folders), and reduce_project would delete everything their kept
+      // comps do not need. So the suite proves the preview is honest and
+      // proves the refusals fire; the EXECUTE paths are covered against a
+      // stubbed project in tests/test-project-hygiene.js and were verified
+      // in real AE on throwaway projects during the 5.6 pass.
+      //
+      // The load-bearing steps are the two that re-read the project after
+      // a preview: a "preview" that quietly deleted something is the one
+      // failure this group exists to catch.
+      { name: "hygiene rig: two comps",
+        batch: function () {
+          return [
+            { tool: "create_comp",
+              args: { name: "ST HYG Keep", width: 160, height: 120,
+                      duration: 1, frameRate: 24 } },
+            { tool: "create_comp",
+              args: { name: "ST HYG Drop", width: 160, height: 120,
+                      duration: 1, frameRate: 24 } }
+          ];
+        },
+        check: function (rows, ctx) {
+          if (!rows[0].ok || !rows[1].ok) {
+            return "rig: " + (rows[0].error || rows[1].error);
+          }
+          ctx.hygKeep = rows[0].data.name;
+          ctx.hygDrop = rows[1].data.name;
+          return true;
+        } },
+
+      // An UNUSED footage item, made the way a user makes one by accident:
+      // add a solid, delete the layer. The solid SOURCE stays in the
+      // project panel with nothing pointing at it.
+      { name: "hygiene rig: a solid source nobody uses, and one that is used",
+        batch: function (ctx) {
+          return [
+            { tool: "add_solid",
+              args: { comp: ctx.hygKeep, name: "ST HYG Orphan",
+                      color: [1, 0, 0], width: 40, height: 40 } },
+            { tool: "delete_layer",
+              args: { comp: ctx.hygKeep, layer: "ST HYG Orphan" } },
+            { tool: "add_solid",
+              args: { comp: ctx.hygKeep, name: "ST HYG Used",
+                      color: [0, 1, 0], width: 40, height: 40 } },
+            { tool: "set_expression",
+              args: { comp: ctx.hygKeep, layer: "ST HYG Used",
+                      property: "transform/Opacity",
+                      expression: 'comp("ST HYG Drop").duration * 0 + 100' } }
+          ];
+        },
+        check: function (rows) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + i + ": " + rows[i].error;
+          }
+          return true;
+        } },
+
+      { name: "clean_project with no action lists the three there are",
+        tool: "clean_project",
+        args: {},
+        expectError: true,
+        check: function (err) {
+          return (/remove_unused_footage/.test(err) &&
+                  /consolidate_footage/.test(err) &&
+                  /reduce_project/.test(err)) ||
+                 "refusal did not list the actions: " + err;
+        } },
+
+      { name: "an invented action is named back, not guessed at",
+        tool: "clean_project",
+        args: { action: "vacuum" },
+        expectError: true,
+        check: function (err) {
+          return /Unknown action 'vacuum'/.test(err) ||
+                 "error was: " + err;
+        } },
+
+      { name: "reduce_project will not guess which comps matter",
+        tool: "clean_project",
+        args: { action: "reduce_project" },
+        expectError: true,
+        check: function (err, ctx) {
+          if (!/keepComps/.test(err)) return "no keepComps hint: " + err;
+          return err.indexOf(ctx.hygKeep) !== -1 ||
+                 "the refusal did not list real comps: " + err;
+        } },
+
+      // AE accepts a non-comp here and then deletes EVERY comp in the
+      // project (measured on a throwaway project, 2026-08-28). This step
+      // is the guard on that.
+      { name: "reduce_project refuses a keepComps entry that is not a comp",
+        tool: "clean_project",
+        args: { action: "reduce_project", keepComps: ["ST HYG Orphan"] },
+        expectError: true,
+        check: function (err) {
+          return /not a comp/.test(err) || "error was: " + err;
+        } },
+
+      { name: "reduce_project grounds an unknown comp name",
+        tool: "clean_project",
+        args: { action: "reduce_project", keepComps: ["ST HYG Nope"] },
+        expectError: true,
+        check: function (err, ctx) {
+          return (/Comp not found/.test(err) &&
+                  err.indexOf(ctx.hygKeep) !== -1) ||
+                 "error was: " + err;
+        } },
+
+      { name: "remove_unused_footage previews the orphan solid",
+        tool: "clean_project",
+        args: { action: "remove unused footage" },
+        check: function (d, ctx) {
+          if (d.dryRun !== true) return "dryRun was " + d.dryRun;
+          if (!(d.willRemove >= 1)) {
+            return "the orphaned solid was not found (willRemove " +
+                   d.willRemove + ")";
+          }
+          // The list is capped; only demand the name when nothing was cut.
+          if (d.itemsNotShown) { ctx.hygCapped = true; return true; }
+          for (var i = 0; i < d.items.length; i++) {
+            if (String(d.items[i]).indexOf("ST HYG Orphan") !== -1) return true;
+          }
+          return "orphan not named in " + d.items.join(", ");
+        } },
+
+      { name: "and that preview deleted NOTHING",
+        tool: "get_project_info",
+        args: { limit: 0 },
+        check: function (d, ctx) {
+          var sawOrphan = false, sawKeep = false, sawDrop = false;
+          for (var i = 0; i < d.items.length; i++) {
+            var n = d.items[i].name;
+            if (n === "ST HYG Orphan") sawOrphan = true;
+            if (n === ctx.hygKeep) sawKeep = true;
+            if (n === ctx.hygDrop) sawDrop = true;
+          }
+          if (!sawOrphan) return "the preview DELETED the orphan solid";
+          return (sawKeep && sawDrop) ||
+                 "the preview deleted a rig comp (keep " + sawKeep +
+                 ", drop " + sawDrop + ")";
+        } },
+
+      { name: "reduce_project preview names the comp AND the silent break",
+        tool: "clean_project",
+        args: function (ctx) {
+          return { action: "reduce_project", keepComps: [ctx.hygKeep] };
+        },
+        check: function (d, ctx) {
+          if (d.dryRun !== true) return "dryRun was " + d.dryRun;
+          if (!d.keepComps || d.keepComps[0] !== ctx.hygKeep) {
+            return "keepComps not echoed: " + JSON.stringify(d.keepComps);
+          }
+          if (!(d.willRemove >= 1)) return "nothing would be removed";
+          var breaks = d.expressionBreaks || [];
+          var named = false, i;
+          for (i = 0; i < breaks.length; i++) {
+            if (String(breaks[i]).indexOf(ctx.hygDrop) !== -1) named = true;
+          }
+          // expressionBreaks is capped too; a project full of expressions
+          // can push ours off the end, and that is not this step failing.
+          if (!named && !d.expressionBreaksNotShown) {
+            return "the expression naming " + ctx.hygDrop +
+                   " was not reported: " + JSON.stringify(breaks);
+          }
+          if (!d.itemsNotShown) {
+            for (i = 0; i < d.items.length; i++) {
+              if (String(d.items[i]).indexOf(ctx.hygDrop) !== -1) return true;
+            }
+            return ctx.hygDrop + " not named in " + d.items.join(", ");
+          }
+          return true;
+        } },
+
+      { name: "and THAT preview deleted nothing either",
+        tool: "get_project_info",
+        args: { limit: 0 },
+        check: function (d, ctx) {
+          var sawKeep = false, sawDrop = false;
+          for (var i = 0; i < d.items.length; i++) {
+            if (d.items[i].name === ctx.hygKeep) sawKeep = true;
+            if (d.items[i].name === ctx.hygDrop) sawDrop = true;
+          }
+          return (sawKeep && sawDrop) ||
+                 "reduce_project's PREVIEW deleted a comp (keep " +
+                 sawKeep + ", drop " + sawDrop + ")";
+        } },
+
+      { name: "consolidate_footage previews without touching anything",
+        tool: "clean_project",
+        args: { action: "consolidate" },
+        check: function (d) {
+          if (d.action !== "consolidate_footage") {
+            return "action came back as " + d.action;
+          }
+          if (d.dryRun !== true) return "dryRun was " + d.dryRun;
+          if (typeof d.willRemove !== "number") {
+            return "no count: " + JSON.stringify(d);
+          }
+          return /PREVIEW ONLY/.test(d.note || "") ||
+                 "note did not say it was a preview: " + d.note;
+        } },
+
+      { name: "cleanup: delete the hygiene rig comps",
+        batch: function (ctx) {
+          return [
+            { tool: "delete_item", args: { item: ctx.hygKeep } },
+            { tool: "delete_item", args: { item: ctx.hygDrop } }
+          ];
+        },
+        check: function (rows) {
+          return (rows[0].ok && rows[1].ok) ||
+                 "cleanup: " + (rows[0].error || rows[1].error);
         } },
 
       // ---- create_folder eachChildOf (field failure 2026-08-26) -------

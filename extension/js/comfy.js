@@ -202,9 +202,22 @@
       // "<name>.manifest" template that loadWorkflow can only reject.
       if (/\.manifest\.json$/i.test(entries[i])) continue;
       if (/\.json$/i.test(entries[i])) {
+        var file = path.join(dir, entries[i]);
+        // A template that still holds this project's own placeholder
+        // cannot render anything — example-txt2img ships with
+        // ckpt_name "CHANGE-ME.safetensors". Offering it next to the
+        // real ones is how the model ends up choosing it: it is the one
+        // whose NAME says txt2img, so a request for a picture lands on
+        // it and dies inside ComfyUI's validator (measured through
+        // chat-probe, 2026-08-28). Flagged here; the tools decide.
+        var isExample = false;
+        try {
+          isExample = fs.readFileSync(file, "utf8").indexOf("CHANGE-ME") !== -1;
+        } catch (eR) {}
         out.push({
           name: entries[i].replace(/\.json$/i, ""),
-          file: path.join(dir, entries[i])
+          file: file,
+          example: isExample
         });
       }
     }
@@ -577,6 +590,126 @@
   }
 
 
+  // -------------------------------------------------- filename tokens
+  //
+  // ComfyUI advertises %date:yyyy-MM-dd% and %Node title.widget% inside
+  // filename_prefix (SaveVideo's own tooltip says so), but NOTHING on the
+  // server expands them: the FRONTEND rewrites the text in
+  // applyTextReplacements() before it posts the prompt, and the server saves
+  // whatever string it is handed. A panel that posts API-format graphs IS the
+  // frontend, so it has to do this itself.
+  //
+  // Measured, not assumed: the bundled H3 template's SaveVideo prefix is
+  // "video/MiniMax_H3/%date:yyyy_MM_dd%/…". Posted verbatim, ComfyUI 0.32.0
+  // answered
+  //
+  //   [WinError 267] The directory name is invalid:
+  //   'C:\…\output\video\MiniMax_H3\%date:yyyy_MM_dd%'
+  //
+  // — the unexpanded token still holds a COLON, which Windows will not accept
+  // in a path, so the whole render died at the last node after the GPU work
+  // was already paid for. The same template run from ComfyUI's own UI on this
+  // machine wrote output/video/MiniMax_H3/2026_08_03/, which is the proof the
+  // expansion happens client-side.
+  //
+  // The port below is deliberately literal — same token regex, same date
+  // grammar, same illegal-character scrub, same "leave it alone" fallback for
+  // anything unresolvable (frontend settingStore bundle, ComfyUI frontend
+  // 1.48.7). A prompt reading "brightness 50% to 100%" is left untouched by
+  // exactly the rule that leaves it untouched in the browser.
+
+  var DATE_GETTERS = {
+    d: function (t) { return t.getDate(); },
+    M: function (t) { return t.getMonth() + 1; },
+    h: function (t) { return t.getHours(); },
+    m: function (t) { return t.getMinutes(); },
+    s: function (t) { return t.getSeconds(); }
+  };
+  var DATE_TOKEN_RE = /dd?|MM?|hh?|mm?|ss?|yyy?y?/g;
+
+  function padLeft(text, width) {
+    var s = String(text);
+    while (s.length < width) s = "0" + s;
+    return s;
+  }
+
+  /** The frontend's formatDate: "yyyy_MM_dd" + a Date -> "2026_08_27". */
+  function formatDateToken(fmt, when) {
+    return String(fmt).replace(DATE_TOKEN_RE, function (m) {
+      if (m === "yy") return String(when.getFullYear()).substring(2);
+      if (m === "yyyy") return String(when.getFullYear());
+      var get = DATE_GETTERS[m.charAt(0)];
+      if (!get) return m;                       // "yyy" and friends: verbatim
+      return padLeft(get(when), m.length);
+    });
+  }
+
+  /**
+   * The name a %Title.widget% reference matches. The browser matches the
+   * node's "Node name for S&R" property first and its title second; an
+   * API-format graph has neither, so class_type (what S&R defaults to) is
+   * tried first and the adapter-preserved _meta.title second.
+   */
+  function nodeRefNames(node) {
+    var names = [];
+    if (node && node.class_type) names.push(String(node.class_type));
+    if (node && node._meta && node._meta.title) {
+      names.push(String(node._meta.title));
+    }
+    return names;
+  }
+
+  function expandTokensIn(graph, text, when) {
+    return String(text).replace(/%([^%]+)%/g, function (whole, inner) {
+      var parts = inner.split(".");
+      if (parts.length !== 2) {
+        if (parts[0].indexOf("date:") === 0) {
+          return formatDateToken(parts[0].substring(5), when);
+        }
+        return whole;                    // not a token we know: hands off
+      }
+      for (var id in graph) {
+        if (!graph.hasOwnProperty(id)) continue;
+        var names = nodeRefNames(graph[id]);
+        var hit = false;
+        for (var n = 0; n < names.length; n++) {
+          if (names[n] === parts[0]) { hit = true; break; }
+        }
+        if (!hit) continue;
+        var v = graph[id].inputs ? graph[id].inputs[parts[1]] : undefined;
+        if (v === undefined || isLink(v)) continue;   // linked: no literal
+        // Same scrub the browser applies before the value reaches a path.
+        return String(v).replace(/[\/?<>\\:*|"\x00-\x1f\x7f]/g, "_");
+      }
+      return whole;                      // unresolvable: leave it visible
+    });
+  }
+
+  /**
+   * Expand filename tokens across every literal string input in the graph.
+   * Returns a list of "node.input: before -> after" notes (empty when the
+   * template used no tokens, which is the common case).
+   */
+  function expandFilenameTokens(graph, when) {
+    var changes = [];
+    when = when || new Date();
+    for (var id in graph) {
+      if (!graph.hasOwnProperty(id)) continue;
+      var node = graph[id];
+      if (!node || !node.inputs) continue;
+      for (var key in node.inputs) {
+        if (!node.inputs.hasOwnProperty(key)) continue;
+        var val = node.inputs[key];
+        if (typeof val !== "string" || val.indexOf("%") === -1) continue;
+        var next = expandTokensIn(graph, val, when);
+        if (next === val) continue;
+        node.inputs[key] = next;
+        changes.push(id + "." + key + ": " + val + " -> " + next);
+      }
+    }
+    return changes;
+  }
+
   // ------------------------------------------------------- optional nodes
 
   /**
@@ -608,7 +741,18 @@
    * input — ComfyUI's own mode-4 bypass semantics, except the pass-through
    * socket is DECLARED by the manifest rather than inferred from types: an
    * API-format graph carries no type information to infer from.
-   * Returns {rewired: [...]}. Throws grounded errors; never guesses.
+   *
+   * `passthrough` is an input NAME for the ordinary single-output node, or a
+   * MAP of output slot -> input name for a node that emits more than one
+   * type. rgthree's Power Lora Loader (KREA2 node 604) emits MODEL on slot 0
+   * and CLIP on slot 1, fed by two different inputs; collapsing both onto one
+   * source would hand every CLIPTextEncode in the graph a MODEL, and the
+   * server would report the type error at a node the user never touched. So
+   * the string form answers slot 0 ONLY, and says so the moment a consumer
+   * reads any other slot.
+   *
+   * Returns {rewired: [...]}. Throws grounded errors; never guesses, and
+   * mutates nothing until every source has been resolved.
    */
   function bypassNode(graph, id, passthrough) {
     var nid = String(id);
@@ -617,48 +761,212 @@
     var inputs = node.inputs || {};
     var names = [];
     for (var n in inputs) { if (inputs.hasOwnProperty(n)) names.push(n); }
-    if (!passthrough) {
-      throw new Error("Cannot bypass node " + nid + " (" + node.class_type +
-        "): the manifest does not say which input passes through. Add " +
-        "\"passthrough\" naming one of: " + names.join(", "));
-    }
-    if (!inputs.hasOwnProperty(passthrough)) {
-      throw new Error("Cannot bypass node " + nid + " (" + node.class_type +
-        "): it has no input named \"" + passthrough + "\". It has: " +
-        (names.length ? names.join(", ") : "(none)"));
-    }
-    var source = inputs[passthrough];
-    if (!isLink(source)) {
-      // A literal cannot be handed to a downstream socket that wants a link,
-      // so there is nothing to rewire TO. Say that instead of quietly
-      // deleting the consumers' inputs and letting validation fail later.
-      throw new Error("Cannot bypass node " + nid + " (" + node.class_type +
-        "): its \"" + passthrough + "\" input is a literal value (" +
-        JSON.stringify(source) + "), not a link from another node, so " +
-        "consumers have nothing to rewire to.");
-    }
-    var rewired = [];
+
+    // Every socket that reads this node, and WHICH output slot it reads.
+    var readers = [];
+    var slotUsed = {};
     for (var cid in graph) {
       if (!graph.hasOwnProperty(cid)) continue;
       var c = graph[cid];
       if (!c || !c.inputs || cid === nid) continue;
       for (var ck in c.inputs) {
         if (!c.inputs.hasOwnProperty(ck)) continue;
-        if (isLink(c.inputs[ck]) && String(c.inputs[ck][0]) === nid) {
-          c.inputs[ck] = [String(source[0]), source[1]];
-          rewired.push(cid + "." + ck + " -> " + source[0] + ":" + source[1]);
+        var v = c.inputs[ck];
+        if (isLink(v) && String(v[0]) === nid) {
+          var slot = Number(v[1]) || 0;
+          readers.push({ cid: cid, key: ck, slot: slot });
+          slotUsed[slot] = true;
         }
       }
+    }
+    var used = [];
+    for (var su in slotUsed) {
+      if (slotUsed.hasOwnProperty(su)) used.push(Number(su));
+    }
+    used.sort(function (a, b) { return a - b; });
+
+    var isMap = !!passthrough && typeof passthrough === "object" &&
+                !(passthrough instanceof Array);
+    if (!passthrough || (typeof passthrough !== "string" && !isMap)) {
+      throw new Error("Cannot bypass node " + nid + " (" + node.class_type +
+        "): the manifest does not say which input passes through. Add " +
+        "\"passthrough\" naming one of: " + names.join(", ") +
+        (used.length > 1
+          ? " — or, since consumers read output slots " + used.join(" and ") +
+            ", a map of slot to input, e.g. {\"" + used[0] + "\": \"" +
+            (names[0] || "…") + "\"}."
+          : ""));
+    }
+
+    // slot -> the link that feeds it, all resolved BEFORE anything changes.
+    var sourceOf = {};
+    function resolve(slot, name) {
+      if (!inputs.hasOwnProperty(name)) {
+        throw new Error("Cannot bypass node " + nid + " (" + node.class_type +
+          "): it has no input named \"" + name + "\". It has: " +
+          (names.length ? names.join(", ") : "(none)"));
+      }
+      var src = inputs[name];
+      // A literal cannot be handed to a downstream socket that wants a link,
+      // so there is nothing to rewire TO. Say that instead of quietly
+      // deleting the consumers' inputs and letting validation fail later.
+      // A slot NOTHING reads needs no source at all — a terminal node is
+      // removable whatever its inputs hold.
+      if (!isLink(src)) {
+        if (!slotUsed[slot]) return;
+        throw new Error("Cannot bypass node " + nid + " (" + node.class_type +
+          "): its \"" + name + "\" input is a literal value (" +
+          JSON.stringify(src) + "), not a link from another node, so " +
+          "consumers have nothing to rewire to.");
+      }
+      sourceOf[slot] = src;
+    }
+
+    if (isMap) {
+      var mapped = [];
+      for (var mk in passthrough) {
+        if (!passthrough.hasOwnProperty(mk)) continue;
+        mapped.push(Number(mk));
+        resolve(Number(mk), passthrough[mk]);
+      }
+      for (var ui = 0; ui < used.length; ui++) {
+        if (!sourceOf.hasOwnProperty(used[ui])) {
+          throw new Error("Cannot bypass node " + nid + " (" +
+            node.class_type + "): consumers read its output slot " +
+            used[ui] + ", which the manifest's passthrough map does not " +
+            "cover. It maps slot(s): " +
+            (mapped.length ? mapped.join(", ") : "(none)") + ".");
+        }
+      }
+    } else {
+      resolve(0, passthrough);
+      var wrong = [];
+      for (var ri = 0; ri < readers.length; ri++) {
+        if (readers[ri].slot !== 0) {
+          wrong.push(readers[ri].cid + "." + readers[ri].key + " reads slot " +
+                     readers[ri].slot);
+        }
+      }
+      if (wrong.length) {
+        throw new Error("Cannot bypass node " + nid + " (" + node.class_type +
+          "): \"" + passthrough + "\" answers output slot 0, but " +
+          wrong.join(", ") + ". This node emits more than one type, so one " +
+          "input cannot stand in for all of them — give the manifest a " +
+          "passthrough MAP of slot to input, e.g. {\"0\": \"" + passthrough +
+          "\", \"" + used[used.length - 1] + "\": \"…\"}.");
+      }
+    }
+
+    var rewired = [];
+    for (var i = 0; i < readers.length; i++) {
+      var r = readers[i];
+      var src2 = sourceOf[r.slot];
+      graph[r.cid].inputs[r.key] = [String(src2[0]), src2[1]];
+      rewired.push(r.cid + "." + r.key + " -> " + src2[0] + ":" + src2[1]);
     }
     delete graph[nid];
     return { rewired: rewired };
   }
 
   /**
+   * Coerce a literal widget value on the way into a substitute node's input.
+   * ComfyLiterals' Float carries ".98" in a STRING widget; core PrimitiveFloat
+   * wants a FLOAT, and validation rejects the string. Nothing is coerced
+   * unless the manifest asks (`as`), and a link is never coerced at all — its
+   * type is whatever its source emits, which this side cannot see.
+   */
+  function coerceInput(value, as, nid, from) {
+    if (!as) return value;
+    if (isLink(value)) {
+      throw new Error("Cannot coerce node " + nid + " input \"" + from +
+        "\" to " + as + ": it is a link from node " + value[0] + ", and a " +
+        "link carries whatever type its source emits.");
+    }
+    if (as === "number" || as === "int") {
+      var num = (typeof value === "number") ? value : parseFloat(String(value));
+      if (!isFinite(num)) {
+        throw new Error("Cannot coerce node " + nid + " input \"" + from +
+          "\" to a number: its value is " + JSON.stringify(value) + ".");
+      }
+      return (as === "int") ? Math.round(num) : num;
+    }
+    if (as === "string") return String(value);
+    if (as === "boolean") {
+      return (value === true || value === 1 || value === "true");
+    }
+    throw new Error("Manifest substitute for node " + nid + " asks to coerce " +
+      "\"" + from + "\" to unknown type \"" + as + "\". Known: number, int, " +
+      "string, boolean.");
+  }
+
+  /**
+   * Replace node `id` in place with a different class — the fallback for a
+   * value SOURCE, which cannot be bypassed at all: a node whose only inputs
+   * are literals has nothing for its consumers to be rewired TO. Consumers
+   * keep pointing at the same id and the same socket, so only the class and
+   * the input names change.
+   * spec: {class, inputs: {<newName>: "<oldName>" | {from, as} | {const}}}.
+   * Inputs the map does not name are DROPPED: a substitute class has its own
+   * signature, and inheriting stray keys fails validation at the server.
+   * Returns {carried: [...], dropped: [...]}. Throws grounded errors.
+   */
+  function substituteNode(graph, id, spec) {
+    var nid = String(id);
+    var node = graph[nid];
+    if (!node) return null;
+    var old = node.inputs || {};
+    var names = [];
+    for (var n in old) { if (old.hasOwnProperty(n)) names.push(n); }
+    if (!spec || typeof spec["class"] !== "string" || spec["class"] === "") {
+      throw new Error("Cannot substitute node " + nid + " (" + node.class_type +
+        "): the manifest's substitute block names no replacement class.");
+    }
+    var map = spec.inputs || {};
+    var next = {};
+    var carried = [];
+    var taken = {};
+    for (var k in map) {
+      if (!map.hasOwnProperty(k)) continue;
+      var rule = map[k];
+      if (rule && typeof rule === "object" && !(rule instanceof Array) &&
+          rule.hasOwnProperty("const")) {
+        next[k] = rule["const"];
+        carried.push(k + " = " + JSON.stringify(rule["const"]));
+        continue;
+      }
+      var from = (typeof rule === "string") ? rule : (rule ? rule.from : null);
+      if (typeof from !== "string" || from === "") {
+        throw new Error("Cannot substitute node " + nid + " (" +
+          node.class_type + ") with " + spec["class"] + ": the rule for " +
+          "input \"" + k + "\" names neither a source input (\"from\") nor a " +
+          "literal (\"const\").");
+      }
+      if (!old.hasOwnProperty(from)) {
+        throw new Error("Cannot substitute node " + nid + " (" +
+          node.class_type + ") with " + spec["class"] + ": it has no input " +
+          "named \"" + from + "\" to carry into \"" + k + "\". It has: " +
+          (names.length ? names.join(", ") : "(none)"));
+      }
+      next[k] = coerceInput(old[from], (rule && rule.as) || null, nid, from);
+      taken[from] = true;
+      carried.push(k + " <- " + from);
+    }
+    var dropped = [];
+    for (var d = 0; d < names.length; d++) {
+      if (!taken[names[d]]) dropped.push(names[d]);
+    }
+    node.class_type = spec["class"];
+    node.inputs = next;
+    if (node._meta && node._meta.title) { node._meta.title = spec["class"]; }
+    return { carried: carried, dropped: dropped };
+  }
+
+  /**
    * Honour the manifest's `optionalNodes` block: a node the template can run
    * without, because the pack that defines it is not on every machine.
-   * Each entry: {nodeId, class, passthrough, when?: "missing"|"always",
-   *              reason?, keptNote?}.
+   * Each entry: {nodeId, class, when?: "missing"|"always", reason?, keptNote?}
+   * plus EITHER `passthrough` (drop the node, rewire consumers to that input)
+   * OR `substitute` (swap the class for one the loader ships) — never both.
    * The default ("missing") asks the LIVE server, so the same template runs
    * on a machine with the pack and on one without it.
    * cb(err) — errors are grounded and fatal; this runs before any GPU time.
@@ -689,7 +997,15 @@
           "manifest's panelAdaptation, or fix the sidecar."));
         return;
       }
-      function doBypass(why) {
+      if (entry.substitute && entry.passthrough) {
+        cb(new Error("Manifest optionalNodes entry for node " + nid + " (" +
+          cls + ") sets both \"passthrough\" and \"substitute\". They are " +
+          "different answers to the same question — drop the node, or swap " +
+          "its class. Pick one."));
+        return;
+      }
+      function doDrop(why) {
+        if (entry.substitute) { doSubstitute(why); return; }
         var r;
         try { r = bypassNode(graph, nid, entry.passthrough); }
         catch (e) { cb(e); return; }
@@ -698,10 +1014,36 @@
           (r && r.rewired.length ? "; rewired " + r.rewired.join(", ") : ""));
         next();
       }
-      if (entry.when === "always") { doBypass("manifest says always"); return; }
+      function doSubstitute(why) {
+        var sub = entry.substitute;
+        var subClass = sub ? sub["class"] : null;
+        // The replacement must itself be installed, or the graph has traded
+        // one missing class for another and only says so after the POST.
+        classInstalled(base, String(subClass), function (sErr, subPresent) {
+          if (sErr) { cb(sErr); return; }
+          if (!subPresent) {
+            cb(new Error("Node " + nid + " (" + cls + ") is not available on " +
+              "this ComfyUI, and neither is the manifest's substitute for " +
+              "it (" + subClass + "). Install the pack that provides " + cls +
+              " — the manifest's customNodes block names it — or correct the " +
+              "substitute."));
+            return;
+          }
+          var r;
+          try { r = substituteNode(graph, nid, sub); }
+          catch (e) { cb(e); return; }
+          applied.push("substituted optional node " + nid + " (" + cls +
+            " -> " + subClass + "): " + why +
+            (entry.reason ? " — " + entry.reason : "") +
+            (r && r.carried.length ? "; carried " + r.carried.join(", ") : "") +
+            (r && r.dropped.length ? "; dropped " + r.dropped.join(", ") : ""));
+          next();
+        });
+      }
+      if (entry.when === "always") { doDrop("manifest says always"); return; }
       classInstalled(base, cls, function (err, present) {
         if (err) { cb(err); return; }
-        if (!present) { doBypass("not installed on this ComfyUI"); return; }
+        if (!present) { doDrop("not installed on this ComfyUI"); return; }
         applied.push("optional node " + nid + " (" + cls + ") is installed, " +
           "keeping it" + (entry.keptNote ? " — " + entry.keptNote : ""));
         next();
@@ -800,6 +1142,14 @@
     }
 
     function queueIt() {
+    // Last thing before the POST, exactly where the browser does it: a
+    // %date:…% left in a filename_prefix kills the render at its final node,
+    // after every GPU second has already been spent.
+    var expanded = expandFilenameTokens(graph, new Date());
+    for (var ei = 0; ei < expanded.length; ei++) {
+      applied.push("filename token expanded — " + expanded[ei]);
+    }
+
     // A prompt that lands nowhere means the render would use the template's
     // baked-in text — fail fast instead of burning GPU minutes on it.
     if (typeof params.prompt === "string" && params.prompt !== "") {
@@ -965,14 +1315,23 @@
             hasHidden = !!(global.Setup && global.Setup.findComfyInstall &&
                            global.Setup.findComfyInstall());
           } catch (eH) {}
-          cb(null, { online: false, url: comfyUrl, target: base.label,
-                     hiddenBackendInstalled: hasHidden,
-                     hint: hasHidden
-                       ? "Hidden backend installed — it boots " +
-                         "automatically on the next generation request."
-                       : "Start ComfyUI (Launch button in settings, or " +
-                         "manually), or install the hidden backend in " +
-                         "Settings → ComfyUI (tried " + base.label + ")." });
+          // A ComfyUI on this machine at another port outranks both
+          // canned hints: it is the one thing the user can act on in one
+          // setting change.
+          findLocalComfy(base, function (found) {
+            cb(null, { online: false, url: comfyUrl, target: base.label,
+                       hiddenBackendInstalled: hasHidden,
+                       foundAt: found ? found.url : null,
+                       hint: found
+                         ? elsewhereHint(base, found)
+                         : (hasHidden
+                             ? "Hidden backend installed — it boots " +
+                               "automatically on the next generation request."
+                             : "Start ComfyUI (Launch button in settings, " +
+                               "or manually), or install the hidden backend " +
+                               "in Settings → ComfyUI (tried " + base.label +
+                               ").") });
+          });
           return;
         }
         var running = json.queue_running instanceof Array
@@ -1094,6 +1453,49 @@
       function (err, statusCode) { cb(!err && statusCode === 200); });
   }
 
+  /*
+   * The panel's URL setting is dead — is a ComfyUI running on this machine
+   * anyway? Measured on the owner's machine 2026-08-28: comfyUrl said
+   * 8000, a ComfyUI was answering on 8188, and the panel told them to
+   * install a hidden backend they did not need. That is the ungrounded
+   * error this project does not ship: a failed lookup names what actually
+   * exists.
+   *
+   * Deliberately narrow. Localhost only (scanning a remote host's ports is
+   * not the panel's business), the two well-known ComfyUI ports only, and
+   * only AFTER the configured URL has already failed. It REPORTS what it
+   * finds and never reroutes: silently rendering on a different ComfyUI
+   * than the user configured would swap the model set under them.
+   */
+  var LOCAL_COMFY_PORTS = [8188, 8189];
+
+  function findLocalComfy(base, cb) {
+    var localBase = base.host === "127.0.0.1" || base.host === "localhost";
+    var ports = [];
+    for (var i = 0; i < LOCAL_COMFY_PORTS.length; i++) {
+      if (!localBase || LOCAL_COMFY_PORTS[i] !== base.port) {
+        ports.push(LOCAL_COMFY_PORTS[i]);
+      }
+    }
+    (function next(k) {
+      if (k >= ports.length) { cb(null); return; }
+      var probe = { isHttps: false, host: "127.0.0.1", port: ports[k],
+                    label: "127.0.0.1:" + ports[k],
+                    url: "http://127.0.0.1:" + ports[k] };
+      isUp(probe, function (up) {
+        if (up) { cb(probe); return; }
+        next(k + 1);
+      });
+    })(0);
+  }
+
+  /** The sentence a user can act on, once findLocalComfy has an answer. */
+  function elsewhereHint(base, found) {
+    return "Nothing is listening at " + base.label + ", but a ComfyUI IS " +
+      "answering at " + found.label + ". Set the ComfyUI URL in Settings " +
+      "to " + found.url + " — the panel will not switch to it on its own.";
+  }
+
   /**
    * Point the hidden backend at the user's external models folder (they
    * get big) via ComfyUI's own extra_model_paths.yaml mechanism. The yaml
@@ -1203,6 +1605,13 @@
     function say(t) { if (onStatus) onStatus(t); }
     isUp(base, function (up) {
       if (up) { cb(null, { started: false }); return; }
+      // Before refusing, look: a running ComfyUI at another local port
+      // makes both refusals below wrong advice.
+      findLocalComfy(base, function (found) {
+      if (found) {
+        cb(new Error(elsewhereHint(base, found)));
+        return;
+      }
       if (base.host !== "127.0.0.1" && base.host !== "localhost") {
         cb(new Error("ComfyUI at " + base.label + " is not responding, " +
           "and a remote instance cannot be auto-started. Start it there, " +
@@ -1283,6 +1692,7 @@
           global.setTimeout(poll, 2500);
         });
       })();
+      });   // findLocalComfy
     });
   }
 
@@ -1318,6 +1728,8 @@
     stopManaged: stopManaged,
     reapOrphan: reapOrphan,
     bypassNode: bypassNode,
+    substituteNode: substituteNode,
+    expandFilenameTokens: expandFilenameTokens,
     classInstalled: classInstalled,
     resolveOptionalNodes: resolveOptionalNodes,
     _applyExtraModelPaths: applyExtraModelPaths   // exposed for tests

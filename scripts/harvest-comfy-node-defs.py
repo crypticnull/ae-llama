@@ -47,14 +47,36 @@ def parse_args():
     return p.parse_args()
 
 
+def graph_node_types(graph):
+    """Every node type in a UI graph, INCLUDING the ones inside subgraph
+    definitions. A subgraph instance's own "type" is the definition's UUID --
+    not a class, so it is skipped; the classes that matter are the nodes the
+    definition holds, and the converter flattens them into the parent graph."""
+    defined = set()
+    for sub in (graph.get("definitions", {}) or {}).get("subgraphs", []):
+        if sub.get("id"):
+            defined.add(sub["id"])
+    types = []
+
+    def walk(nodes):
+        for node in nodes or []:
+            t = node.get("type")
+            if t and t not in types:
+                types.append(t)
+
+    walk(graph.get("nodes", []))
+    for sub in (graph.get("definitions", {}) or {}).get("subgraphs", []):
+        walk(sub.get("nodes", []))
+    return [t for t in types if t not in defined]
+
+
 def wanted_classes(a):
     names = []
     for f in a.classes_from:
         with open(f, "r", encoding="utf-8") as fh:
             graph = json.load(fh)
-        for node in graph.get("nodes", []):
-            t = node.get("type")
-            if t and t not in names:
+        for t in graph_node_types(graph):
+            if t not in names:
                 names.append(t)
     for t in a.classes.split("|"):
         if t and t not in names:

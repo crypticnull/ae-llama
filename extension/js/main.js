@@ -397,20 +397,12 @@
       }
     }
 
-    // A verbose tool result must never blow the model's context window —
-    // cap each result and the combined feedback before it enters history.
+    // A verbose tool result must never blow the model's context window.
+    // The budgeting lives in tools.js so it can be tested without a
+    // panel - and so it can never go back to byte-slicing, which used
+    // to hand the model JSON cut mid-object.
     function compactToolResults(results) {
-      var parts = [];
-      for (var i = 0; i < results.length; i++) {
-        var s;
-        try { s = JSON.stringify(results[i]); }
-        catch (e) { s = String(results[i]); }
-        if (s.length > 1200) s = s.slice(0, 1200) + " …(truncated)";
-        parts.push(s);
-      }
-      var out = "[" + parts.join(",\n") + "]";
-      if (out.length > 6000) out = out.slice(0, 6000) + " …(truncated)";
-      return out;
+      return global.Tools.compactToolResults(results);
     }
 
     function runRound(system, round) {

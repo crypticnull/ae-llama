@@ -217,6 +217,87 @@ Comfy.injectParams(g, { prompt: "" }, h3Manifest());
 assert(g["138"].inputs.prompt === "(neutral example)",
        "an empty prompt leaves the template's text alone");
 
+// ------------------------------------------- the OTHER shipped template
+//
+// KREA2 needs almost none of this machinery, and saying so is the point: its
+// size is real pixels on an EmptyLatentImage and its seeds are plain
+// noise_seed numbers, both of which the generic walk already finds. Only the
+// PROMPT needs the manifest, and for a reason the H3 template never had -
+// the two CLIPTextEncodes' `text` inputs are LINKS to an rgthree Any Switch,
+// and setEncoderText only follows a link to a node with exactly ONE string
+// input. The switch has none, so the generic walk gives up silently and the
+// render would have used the template's placeholder text.
+
+{
+  const kWf = path.join(REPO, "extension", "comfy-workflows",
+                        "AE_LLAMA_KREA2_V1.json");
+  const kMf = JSON.parse(fs.readFileSync(
+    kWf.replace(/\.json$/, ".manifest.json"), "utf8"));
+  const kGraph = () => JSON.parse(fs.readFileSync(kWf, "utf8"));
+
+  {
+    // What the generic walk alone would manage: nothing.
+    const g = kGraph();
+    const applied = Comfy.injectParams(g, { prompt: "a lighthouse" }, null);
+    assert(g["600"].inputs.value.indexOf("lighthouse") === -1 &&
+           !Array.isArray(g["267"].inputs.text) === false,
+           "without the manifest the prompt lands NOWHERE - the encoders' " +
+           "text inputs are links to a node with no string of its own");
+    assert(!applied.some((a) => a.indexOf("prompt -> ") === 0),
+           "and injectParams says so by not claiming it: " +
+           applied.join(" | "));
+  }
+
+  {
+    const g = kGraph();
+    const applied = Comfy.injectParams(g, {
+      prompt: "a red enamel toy car", width: 768, height: 768, seed: 4242
+    }, kMf);
+    assert(g["600"].inputs.value === "a red enamel toy car",
+           "with it, the prompt lands on the manual-prompt primitive (600)");
+    assert(applied.some((a) => a.indexOf("prompt -> ") === 0),
+           "which is what the pre-POST 'did the prompt land' check reads");
+    assert(g["500"].inputs.width === 768 && g["500"].inputs.height === 768,
+           "size goes to EmptyLatentImage in REAL PIXELS - no megapixel " +
+           "indirection, so no procedural.resolution entry");
+    assert(g["261"].inputs.noise_seed === 4242 &&
+           g["444"].inputs.noise_seed === 4242,
+           "and one seed pins BOTH passes' RandomNoise, which the graph " +
+           "authored equal");
+    assert(!kMf.procedural.resolution && !kMf.procedural.seed,
+           "the manifest deliberately declares neither - a procedural entry " +
+           "here would write the same numbers twice");
+  }
+
+  {
+    // Seconds belong to H3, not here. An image template must say so rather
+    // than quietly ignore the argument.
+    const g = kGraph();
+    const applied = Comfy.injectParams(g, { durationSeconds: 5 }, kMf);
+    assert(applied.some((a) => a.indexOf("durationSeconds ignored") === 0),
+           "durationSeconds on an image template is reported ignored: " +
+           applied.join(" | "));
+  }
+
+  {
+    // The absolute output path was the shipped bug: ComfyUI joins a prefix
+    // onto ITS OWN output dir and refuses anything landing outside, so
+    // "C:\Users\mr\..." renders on one machine and dies at the last node
+    // everywhere else.
+    const g = kGraph();
+    const prefix = g["474"].inputs.filename_prefix;
+    assert(!/^[A-Za-z]:/.test(prefix) && prefix.indexOf("\\") === -1,
+           "the shipped SaveImage prefix is RELATIVE, with no drive letter " +
+           "and no Windows separator (" + prefix + ")");
+    const changes = Comfy.expandFilenameTokens(g, new Date(2026, 7, 28));
+    assert(g["474"].inputs.filename_prefix ===
+             "_KREA2/2026-08-28/2026-08-28_CRPTK-KREA2_",
+           "and its %date% tokens still expand panel-side (" +
+           g["474"].inputs.filename_prefix + ")");
+    assert(changes.length === 1, "reported once: " + changes.join(", "));
+  }
+}
+
 // ------------------------------------------------------------ the upload
 
 let receivedHex = null;

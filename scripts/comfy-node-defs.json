@@ -3,7 +3,10 @@
  "comfyui_version": "0.32.0",
  "class_count": 3487,
  "missing": [
-  "MarkdownNote"
+  "MarkdownNote",
+  "Label (rgthree)",
+  "Note",
+  "Fast Groups Bypasser (rgthree)"
  ],
  "defs": {
   "GetImageSize": {
@@ -1398,6 +1401,984 @@
       "BOOLEAN",
       {
        "default": true
+      }
+     ]
+    }
+   },
+   "output_node": false
+  },
+  "ConditioningZeroOut": {
+   "input_types": {
+    "required": {
+     "conditioning": [
+      "CONDITIONING"
+     ]
+    }
+   },
+   "output_node": false
+  },
+  "CLIPTextEncode": {
+   "input_types": {
+    "required": {
+     "text": [
+      "STRING",
+      {
+       "multiline": true,
+       "dynamicPrompts": true,
+       "tooltip": "The text to be encoded."
+      }
+     ],
+     "clip": [
+      "CLIP",
+      {
+       "tooltip": "The CLIP model used for encoding the text."
+      }
+     ]
+    }
+   },
+   "output_node": false
+  },
+  "DepthAnythingV2Preprocessor": {
+   "input_types": {
+    "required": {
+     "image": [
+      "IMAGE"
+     ]
+    },
+    "optional": {
+     "ckpt_name": [
+      [
+       "depth_anything_v2_vitg.pth",
+       "depth_anything_v2_vitl.pth",
+       "depth_anything_v2_vitb.pth",
+       "depth_anything_v2_vits.pth"
+      ],
+      {
+       "default": "depth_anything_v2_vitl.pth"
+      }
+     ],
+     "resolution": [
+      "INT",
+      {
+       "default": 512,
+       "min": 64,
+       "max": 16384,
+       "step": 64
+      }
+     ]
+    }
+   },
+   "output_node": false
+  },
+  "PreviewImage": {
+   "input_types": {
+    "required": {
+     "images": [
+      "IMAGE"
+     ]
+    },
+    "hidden": {
+     "prompt": "PROMPT",
+     "extra_pnginfo": "EXTRA_PNGINFO"
+    }
+   },
+   "output_node": true
+  },
+  "ArcaneBloomFX": {
+   "input_types": {
+    "required": {
+     "image": [
+      "IMAGE"
+     ],
+     "intensity": [
+      "FLOAT",
+      {
+       "default": 2.0,
+       "min": 0.0,
+       "max": 4.0,
+       "step": 0.01,
+       "display": "slider"
+      }
+     ],
+     "threshold": [
+      "FLOAT",
+      {
+       "default": 0.65,
+       "min": 0.0,
+       "max": 1.0,
+       "step": 0.01,
+       "display": "slider"
+      }
+     ],
+     "smoothing": [
+      "FLOAT",
+      {
+       "default": 0.3,
+       "min": 0.0,
+       "max": 1.0,
+       "step": 0.01,
+       "display": "slider"
+      }
+     ],
+     "radius_multiplier": [
+      "FLOAT",
+      {
+       "default": 1.0,
+       "min": 0.1,
+       "max": 5.0,
+       "step": 0.1,
+       "display": "slider"
+      }
+     ],
+     "saturation": [
+      "FLOAT",
+      {
+       "default": 1.0,
+       "min": 0.0,
+       "max": 2.0,
+       "step": 0.01,
+       "display": "slider"
+      }
+     ],
+     "exposure": [
+      "FLOAT",
+      {
+       "default": 1.0,
+       "min": 0.1,
+       "max": 4.0,
+       "step": 0.01,
+       "display": "slider"
+      }
+     ]
+    }
+   },
+   "output_node": false
+  },
+  "Krea2ControlImageEncode": {
+   "input_types": {
+    "required": {
+     "control_image": [
+      "IMAGE"
+     ],
+     "vae": [
+      "VAE"
+     ],
+     "resize": [
+      [
+       "keep_control_image_size",
+       "match_latent_size"
+      ],
+      {
+       "default": "match_latent_size"
+      }
+     ],
+     "upscale_method": [
+      [
+       "lanczos",
+       "bicubic",
+       "bilinear",
+       "area",
+       "nearest-exact"
+      ],
+      {
+       "default": "lanczos"
+      }
+     ],
+     "crop": [
+      [
+       "center",
+       "disabled"
+      ],
+      {
+       "default": "center"
+      }
+     ],
+     "channel_mode": [
+      [
+       "rgb",
+       "grayscale"
+      ],
+      {
+       "default": "rgb"
+      }
+     ],
+     "normalize": [
+      [
+       "none",
+       "per_image_minmax"
+      ],
+      {
+       "default": "none"
+      }
+     ],
+     "invert": [
+      "BOOLEAN",
+      {
+       "default": false
+      }
+     ],
+     "batch_mode": [
+      [
+       "independent_images",
+       "video_frames"
+      ],
+      {
+       "default": "independent_images"
+      }
+     ]
+    },
+    "optional": {
+     "latent": [
+      "LATENT"
+     ]
+    }
+   },
+   "output_node": false
+  },
+  "Krea2ControlApply": {
+   "input_types": {
+    "required": {
+     "model": [
+      "MODEL"
+     ],
+     "control_latent": [
+      "LATENT"
+     ]
+    }
+   },
+   "output_node": false
+  },
+  "Krea2ControlLoRALoader": {
+   "input_types": {
+    "required": {
+     "model": [
+      "MODEL"
+     ],
+     "lora_name": [
+      [
+       "AnimaMythD4rkL1nes.safetensors",
+       "Flux_2-Turbo-LoRA_comfyui.safetensors",
+       "Krea\\(Krea 2) Vision Vanguard 25 V2026.1.safetensors",
+       "Krea\\Anatomy-Reveal-KREA2.safetensors",
+       "Krea\\BeMyHero_-_EmmaX_epoch_9.safetensors",
+       "Krea\\CRYPTIK_AMARIS_V1.safetensors",
+       "Krea\\CRYPTIK_AMARIS_V1_000002500.safetensors",
+       "Krea\\CRYPTIK_AMARIS_V1_000002750.safetensors",
+       "Krea\\CRYPTIK_JULIA_V1.safetensors",
+       "Krea\\CRYPTIK_JULIA_V1_000002500.safetensors",
+       "Krea\\CRYPTIK_JULIA_V1_000002750.safetensors",
+       "Krea\\CRYPTIK_KATJA_V1.safetensors",
+       "Krea\\CRYPTIK_SAPPHIRE_V2_000003000.safetensors",
+       "Krea\\CRYPTIK_SARIA_KREA2_V1_000002250.safetensors",
+       "Krea\\CRYPTIK_SARIA_KREA2_V1_000003000.safetensors",
+       "Krea\\CRYPTIK_SYNTHIA_V1.safetensors",
+       "Krea\\CRYPTIK_SYNTHIA_V1_000002500.safetensors",
+       "Krea\\CRYPTIK_SYNTHIA_V1_000002750.safetensors",
+       "Krea\\CRYPTIK_VALENTA_V1.safetensors",
+       "Krea\\CRYPTIK_VESNA_V3.safetensors",
+       "Krea\\CRYPTIK_VESNA_V3_000002500.safetensors",
+       "Krea\\CRYPTIK_VESNA_V3_000002750.safetensors",
+       "Krea\\CRYPTIK_VESNA_V7.safetensors",
+       "Krea\\CRYPTIK_VESS_KREA2_V1_2250.safetensors",
+       "Krea\\CRYPTIK_VESS_KREA2_V1_2500.safetensors",
+       "Krea\\CRYPTIK_VESS_KREA2_V1_2750.safetensors",
+       "Krea\\CRYPTIK_VESS_KREA2_V1_3000.safetensors",
+       "Krea\\CharacterDesign-KREA2_v1.safetensors",
+       "Krea\\FaceDownAssUpKrea.safetensors",
+       "Krea\\FrankFrazetta_Krea2.safetensors",
+       "Krea\\Grimm_s_Fantasy_-_Krea2_epoch_10.safetensors",
+       "Krea\\Grimm_s_realistic_painting_Krea2_epoch_10.safetensors",
+       "Krea\\Krea2MythP0rtr4itStyle.safetensors",
+       "Krea\\Krea2Weight_v3.safetensors",
+       "Krea\\Krea2_Aberrant.safetensors",
+       "Krea\\Krea2_HMNSFW_AIO.safetensors",
+       "Krea\\Krea2_NSFW_V4.1_pre.safetensors",
+       "Krea\\Krea_2_Innie_Rank_8_000003000.safetensors",
+       "Krea\\Neoprene_Dress_V1-Krea2.safetensors",
+       "Krea\\OOTN64_Krea2.safetensors",
+       "Krea\\PornMaster_Detail_Slider_Krea2_V1_000000225.safetensors",
+       "Krea\\Purple_Dreams_Kr2.safetensors",
+       "Krea\\RLY-KREA2-thighgap-v1-trigger-thighgap.safetensors",
+       "Krea\\RLY-thot_shot-KREA2-adeline-v1-trigger-rlyadeline.safetensors",
+       "Krea\\RLY-thot_shot-KREA2-alessia-v1-trigger-rlyalessia.safetensors",
+       "Krea\\RLY-thot_shot-KREA2-amelia-v1-trigger-rlyamelia.safetensors",
+       "Krea\\RLY-thot_shot-KREA2-annika-v1-trigger-rlyannika.safetensors",
+       "Krea\\RLY-thot_shot-KREA2-aspen-v11-trigger-rlyaspen.safetensors",
+       "Krea\\RLY-thot_shot-KREA2-bristol-v1-trigger-rlybristol.safetensors",
+       "Krea\\RLY-thot_shot-KREA2-chloe-v1-trigger-rlychloe.safetensors",
+       "Krea\\RLY-thot_shot-KREA2-christine-v1-trigger-rlychristine.safetensors",
+       "Krea\\RLY-thot_shot-KREA2-emersyn-v1-trigger-rlyemersyn.safetensors",
+       "Krea\\RLY-thot_shot-KREA2-fallon-v1-trigger-rlyfallon.safetensors",
+       "Krea\\RLY-thot_shot-KREA2-farrah-v1-trigger-rlyfarrah.safetensors",
+       "Krea\\RLY-thot_shot-KREA2-genoveva-v1-trigger-rlygenoveva.safetensors",
+       "Krea\\RLY-thot_shot-KREA2-helena-v1-trigger-rlyhelena.safetensors",
+       "Krea\\RLY-thot_shot-KREA2-helga-v1-trigger-rlyhelga.safetensors",
+       "Krea\\RLY-thot_shot-KREA2-irena-v1.safetensors",
+       "Krea\\RLY-thot_shot-KREA2-jada-v1-trigger-rlyjada.safetensors",
+       "Krea\\RLY-thot_shot-KREA2-jada-v11-trigger-rlyjada.safetensors",
+       "Krea\\RLY-thot_shot-KREA2-jessi-v1-trigger-rlyjessi.safetensors",
+       "Krea\\RLY-thot_shot-KREA2-leona-v1-trigger-rlyleona.safetensors",
+       "Krea\\RLY-thot_shot-KREA2-rayven-v1-trigger-rlyrayven.safetensors",
+       "Krea\\RLY-thot_shot-KREA2-rowan-v1-trigger-rlyrowan.safetensors",
+       "Krea\\RLY-thot_shot-KREA2-shiloh-v1-trigger-rlyshiloh.safetensors",
+       "Krea\\RLY-thot_shot-KREA2-skye-v1-trigger-rlyskye.safetensors",
+       "Krea\\RLY-thot_shot-KREA2-solana-v1-trigger-rlysolana.safetensors",
+       "Krea\\RLY-thot_shot-KREA2-soleil-v1-rlysoleil.safetensors",
+       "Krea\\RLY-thot_shot-KREA2-taryn-v1-trigger-rlytaryn.safetensors",
+       "Krea\\RLY-thot_shot-KREA2-xara-v1-trigger-rlyxara.safetensors",
+       "Krea\\RLY-thot_shot-ZiB-ZiT-gabbie-v1-trigger-rlygabbie.safetensors",
+       "Krea\\RLY-thot_shot-ZiB-ZiT-genoveva-v10-trigger-rlygenoveva.safetensors",
+       "Krea\\RLY-thot_shot-ZiB-ZiT-luna-v1-trigger-rlyluna.safetensors",
+       "Krea\\RLY-thot_shot-ZiB-ZiT-marley-v11-trigger-rlymarley.safetensors",
+       "Krea\\RLY-thot_shot-ZiB-ZiT-soleil-v11-trigger-rlysoleil.safetensors",
+       "Krea\\Sticker_KREA2_V1.safetensors",
+       "Krea\\YFG-Fwshn-Krea2_1.8k-v2.safetensors",
+       "Krea\\emma_krea.safetensors",
+       "Krea\\ethnicity_krea2_loraholic.safetensors",
+       "Krea\\fantasy_origin_epoch_10.safetensors",
+       "Krea\\krea2_Enhancer.safetensors",
+       "Krea\\krea2_better_pussy.safetensors",
+       "Krea\\krea2_identity_edit_v1_2.safetensors",
+       "Krea\\krea2_papercraft_v1.safetensors",
+       "Krea\\krea2_puckering_lips_v1_000002400.safetensors",
+       "Krea\\lenovo_krea2.safetensors",
+       "Krea\\lipbite_krea2_r1_3000.safetensors",
+       "Krea\\pawg_krea2.safetensors",
+       "Krea\\real_3d_krea2_loraholic.safetensors",
+       "Krea\\realism_engine_krea2_v2.safetensors",
+       "Krea\\realism_engine_krea2_v3.1.safetensors",
+       "Krea\\seed_cryptik_amaris_v1.safetensors",
+       "Krea\\seed_cryptik_julia_v1.safetensors",
+       "Krea\\seed_cryptik_katja.safetensors",
+       "Krea\\seed_cryptik_synthia_v1.safetensors",
+       "Krea\\seed_cryptik_valenta_v1.safetensors",
+       "Krea\\seed_cryptik_vesna_v3.safetensors",
+       "Krea\\seed_cryptik_vesna_v4.safetensors",
+       "Krea\\seed_cryptik_vesna_v5.safetensors",
+       "Krea\\seed_cryptik_vesna_v6.safetensors",
+       "Krea\\snofs_krea_v1.safetensors",
+       "MiniMax_H3\\H3_Mis_Insrt_v07.safetensors",
+       "MiniMax_H3\\HMNSFW_AIO_V2.safetensors",
+       "MiniMax_H3\\MysticXXX_MMH3-V1.safetensors",
+       "MiniMax_H3\\h3_musubi_v4-000040.safetensors",
+       "MiniMax_H3\\minimax_h3_turbo_4step_ckpt850.safetensors",
+       "MiniMax_H3\\minimax_h3_turbo_4step_comfyui_pruned.safetensors",
+       "MiniMax_H3\\minimax_h3_turbo_4step_ema_ckpt850.safetensors",
+       "Qwen-Image-Edit-2509-Lightning-4steps-V1.0-bf16.safetensors",
+       "SDXL\\8.0-sprite pixel art style by skormino.safetensors",
+       "V3_flux_klein.safetensors",
+       "ZiT\\Mystic-XXX-ZIT-V7.safetensors",
+       "ZiT\\NSFW_master_ZIT_000017532.safetensors",
+       "ZiT\\PornMaster_NSFW_ZIT_V1.safetensors",
+       "ZiT\\ZiTMythG0thicL1nes.safetensors",
+       "ZiT\\cadence_zimage_turbo_lora_v1.safetensors",
+       "ZiT\\carly_zimage_turbo_lora_v1.safetensors",
+       "ZiT\\pixel_art_style_z_image_turbo.safetensors",
+       "ZiT\\zit_sda_v1.safetensors",
+       "depth-control-lora.safetensors",
+       "dgz.safetensors",
+       "ltx\\DR34ML4Y_LTXXX_V2.safetensors",
+       "ltx\\LTX2.3-22B_IC-LoRA-Cameraman_v2_14000.safetensors",
+       "ltx\\LTX2.3_Crisp_Enhance.safetensors",
+       "ltx\\LTX2.3_Physics_V2_000002000.safetensors",
+       "ltx\\LTX2.3_reasoning_Sulphur-2_I2V_V4.safetensors",
+       "ltx\\Ltx2.3-Licon-VBVR-I2V-96000-R32.safetensors",
+       "ltx\\SexGod_FingeringDildo_LTX23_v1.safetensors",
+       "ltx\\SexGod_LTX23_DoggyStyle_v2_5.safetensors",
+       "ltx\\bounceV2_5_LTX23_I2V.comfy.safetensors",
+       "ltx\\ltx-2-19b-distilled-lora-384.safetensors",
+       "ltx\\ltx-2-19b-ic-lora-detailer.safetensors",
+       "ltx\\ltx-2-19b-lora-camera-control-dolly-left.safetensors",
+       "ltx\\ltx-2.3-22b-distilled-lora-1.1_fro90_ceil72_condsafe.safetensors",
+       "ltx\\ltx-2.3-22b-distilled-lora-384-1.1.safetensors",
+       "ltx\\ltx-2.3-22b-distilled-lora-384.safetensors",
+       "ltx\\ltx-2.3-22b-distilled-lora-dynamic_fro09_avg_rank_105_bf16.safetensors",
+       "ltx\\realisdance_ltx2.3_ic-lora_step_02000.safetensors",
+       "seed_cryptik_vesna_v7.safetensors",
+       "wan\\SVI_v2_PRO_Wan2.2-I2V-A14B_HIGH_lora_rank_128_fp16.safetensors",
+       "wan\\SVI_v2_PRO_Wan2.2-I2V-A14B_LOW_lora_rank_128_fp16.safetensors",
+       "wan\\Wan2.2-Lightning_I2V-A14B-4steps-lora_HIGH_fp16.safetensors",
+       "wan\\Wan2.2-Lightning_I2V-A14B-4steps-lora_LOW_fp16.safetensors",
+       "wan\\Wan2.2-T2V-A14B-4steps-lora-250928-low_noise_model.safetensors",
+       "wan\\stock_photography_wan22_LOW_v1.safetensors",
+       "wan\\wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors",
+       "wan\\wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors",
+       "wan\\wan2.2_t2v_lightx2v_4steps_lora_v1.1_high_noise.safetensors",
+       "wan\\wan2.2_t2v_lightx2v_4steps_lora_v1.1_low_noise.safetensors",
+       "wan\\wan22.r3v3rs3_c0wg1rl-14b-High-i2v_e70.safetensors",
+       "wan\\wan22.r3v3rs3_c0wg1rl-14b-High-t2v_e120.safetensors",
+       "wan\\wan22.r3v3rs3_c0wg1rl-14b-Low-i2v_e70.safetensors",
+       "wan\\wan22.r3v3rs3_c0wg1rl-14b-Low-t2v_e120.safetensors"
+      ]
+     ],
+     "strength": [
+      "FLOAT",
+      {
+       "default": 1.0,
+       "min": -100.0,
+       "max": 100.0,
+       "step": 0.01
+      }
+     ]
+    }
+   },
+   "output_node": false
+  },
+  "VAEEncode": {
+   "input_types": {
+    "required": {
+     "pixels": [
+      "IMAGE"
+     ],
+     "vae": [
+      "VAE"
+     ]
+    }
+   },
+   "output_node": false
+  },
+  "OllamaOptionsV2": {
+   "input_types": {
+    "required": {
+     "enable_mirostat": [
+      "BOOLEAN",
+      {
+       "default": false
+      }
+     ],
+     "mirostat": [
+      "INT",
+      {
+       "default": 0,
+       "min": 0,
+       "max": 2,
+       "step": 1,
+       "tooltip": "Whether to use Mirostat sampling. Mirostat is an algorithm that actively maintains the quality of generated text within a desired range during text generation. (0 = disabled, 1 = Mirostat 1, 2 = Mirostat 2.0)"
+      }
+     ],
+     "enable_mirostat_eta": [
+      "BOOLEAN",
+      {
+       "default": false
+      }
+     ],
+     "mirostat_eta": [
+      "FLOAT",
+      {
+       "default": 0.1,
+       "min": 0,
+       "step": 0.1,
+       "tooltip": "Mirostat's learning rate parameter influences how quickly the algorithm responds to feedback from the generated text."
+      }
+     ],
+     "enable_mirostat_tau": [
+      "BOOLEAN",
+      {
+       "default": false
+      }
+     ],
+     "mirostat_tau": [
+      "FLOAT",
+      {
+       "default": 5.0,
+       "min": 0,
+       "step": 0.1,
+       "tooltip": "Mirostat's target entropy parameter controls the balance between coherence and diversity in the generated text."
+      }
+     ],
+     "enable_num_ctx": [
+      "BOOLEAN",
+      {
+       "default": false
+      }
+     ],
+     "num_ctx": [
+      "INT",
+      {
+       "default": 2048,
+       "min": 0,
+       "max": 2147483648,
+       "step": 1,
+       "tooltip": "Sets the size of the context window used to generate the next token."
+      }
+     ],
+     "enable_repeat_last_n": [
+      "BOOLEAN",
+      {
+       "default": false
+      }
+     ],
+     "repeat_last_n": [
+      "INT",
+      {
+       "default": 64,
+       "min": -1,
+       "max": 64,
+       "step": 1,
+       "tooltip": "Sets how far back for the model to look back to prevent repetition. (0 = disabled, -1 = num_ctx)"
+      }
+     ],
+     "enable_repeat_penalty": [
+      "BOOLEAN",
+      {
+       "default": false
+      }
+     ],
+     "repeat_penalty": [
+      "FLOAT",
+      {
+       "default": 1.1,
+       "min": 0,
+       "max": 2,
+       "step": 0.05,
+       "tooltip": "Sets how strongly to penalize repetitions. A higher value (e.g., 1.5) will penalize repetitions more strongly, while a lower value (e.g., 0.9) will be more lenient."
+      }
+     ],
+     "enable_temperature": [
+      "BOOLEAN",
+      {
+       "default": false
+      }
+     ],
+     "temperature": [
+      "FLOAT",
+      {
+       "default": 0.8,
+       "min": -10,
+       "max": 10,
+       "step": 0.05,
+       "tooltip": "Increasing the temperature will make the model answer more creatively."
+      }
+     ],
+     "enable_seed": [
+      "BOOLEAN",
+      {
+       "default": false
+      }
+     ],
+     "seed": [
+      "INT",
+      {
+       "default": 449980368,
+       "min": 0,
+       "max": 2147483648,
+       "step": 1,
+       "tooltip": "Sets the random number seed to use for generation. Setting this to a specific number will make the model generate the same text for the same prompt."
+      }
+     ],
+     "enable_stop": [
+      "BOOLEAN",
+      {
+       "default": false
+      }
+     ],
+     "stop": [
+      "STRING",
+      {
+       "default": "",
+       "multiline": false,
+       "tooltip": "When this pattern is encountered the LLM will stop generating text and return."
+      }
+     ],
+     "enable_tfs_z": [
+      "BOOLEAN",
+      {
+       "default": false
+      }
+     ],
+     "tfs_z": [
+      "FLOAT",
+      {
+       "default": 1,
+       "min": 1,
+       "max": 1000,
+       "step": 0.05
+      }
+     ],
+     "enable_num_predict": [
+      "BOOLEAN",
+      {
+       "default": false
+      }
+     ],
+     "num_predict": [
+      "INT",
+      {
+       "default": -1,
+       "min": -2,
+       "max": 2048,
+       "step": 1,
+       "tooltip": "Maximum number of tokens to predict when generating text. The default -1 means infinite generation."
+      }
+     ],
+     "enable_top_k": [
+      "BOOLEAN",
+      {
+       "default": false
+      }
+     ],
+     "top_k": [
+      "INT",
+      {
+       "default": 40,
+       "min": 0,
+       "max": 100,
+       "step": 1,
+       "tooltip": "Reduces the probability of generating nonsense. A higher value (e.g. 100) will give more diverse answers, while a lower value (e.g. 10) will be more conservative."
+      }
+     ],
+     "enable_top_p": [
+      "BOOLEAN",
+      {
+       "default": false
+      }
+     ],
+     "top_p": [
+      "FLOAT",
+      {
+       "default": 0.9,
+       "min": 0,
+       "max": 1,
+       "step": 0.05,
+       "tooltip": "Works together with top-k. A higher value (e.g., 0.95) will lead to more diverse text, while a lower value (e.g., 0.5) will generate more focused and conservative text."
+      }
+     ],
+     "enable_min_p": [
+      "BOOLEAN",
+      {
+       "default": false
+      }
+     ],
+     "min_p": [
+      "FLOAT",
+      {
+       "default": 0.0,
+       "min": 0,
+       "max": 1,
+       "step": 0.05,
+       "tooltip": "Alternative to the top_p, and aims to ensure a balance of quality and variety. The parameter p represents the minimum probability for a token to be considered, relative to the probability of the most likely token. For example, with p=0.05 and the most likely token having a probability of 0.9, logits with a value less than 0.045 are filtered out."
+      }
+     ],
+     "debug": [
+      "BOOLEAN",
+      {
+       "default": false,
+       "tooltip": "For debugging purposes of the custom nodes, no effect on ollama api."
+      }
+     ]
+    }
+   },
+   "output_node": false
+  },
+  "Any Switch (rgthree)": {
+   "input_types": {
+    "required": {},
+    "optional": {}
+   },
+   "output_node": false
+  },
+  "Anything Everywhere": {
+   "input_types": {
+    "required": {},
+    "optional": {
+     "anything": [
+      "*",
+      {}
+     ]
+    }
+   },
+   "output_node": false
+  },
+  "PreviewAny": {
+   "input_types": {
+    "required": {
+     "source": [
+      "*",
+      {}
+     ]
+    }
+   },
+   "output_node": true
+  },
+  "OllamaConnectivityV2": {
+   "input_types": {
+    "required": {
+     "url": [
+      "STRING",
+      {
+       "multiline": false,
+       "default": "http://127.0.0.1:11434",
+       "tooltip": "The URL of the Ollama server. Default value points to a local instance with ollama's default port configuration."
+      }
+     ],
+     "model": [
+      [],
+      {
+       "tooltip": "Select a model for inference. This is a list of available models on the Ollama server. If you don't see any, make sure the Ollama server is running on the url and there are models installed."
+      }
+     ],
+     "keep_alive": [
+      "INT",
+      {
+       "default": 5,
+       "min": -1,
+       "max": 120,
+       "step": 1,
+       "tooltip": "Configures how long ollama keeps the model loaded in memory after inference. -1 = keep alive indefinitely, 0 = unload model immediately after inference"
+      }
+     ],
+     "keep_alive_unit": [
+      [
+       "minutes",
+       "hours"
+      ]
+     ]
+    }
+   },
+   "output_node": false
+  },
+  "ImageAddNoise": {
+   "input_types": {
+    "required": {
+     "image": [
+      "IMAGE",
+      {}
+     ],
+     "seed": [
+      "INT",
+      {
+       "tooltip": "The random seed used for creating the noise.",
+       "default": 0,
+       "min": 0,
+       "max": 18446744073709551615,
+       "control_after_generate": true
+      }
+     ],
+     "strength": [
+      "FLOAT",
+      {
+       "default": 0.5,
+       "min": 0.0,
+       "max": 1.0,
+       "step": 0.01
+      }
+     ]
+    }
+   },
+   "output_node": false
+  },
+  "SaveImage": {
+   "input_types": {
+    "required": {
+     "images": [
+      "IMAGE",
+      {
+       "tooltip": "The images to save."
+      }
+     ],
+     "filename_prefix": [
+      "STRING",
+      {
+       "default": "ComfyUI",
+       "tooltip": "The prefix for the file to save. This may include formatting information such as %date:yyyy-MM-dd% or %Empty Latent Image.width% to include values from nodes."
+      }
+     ]
+    },
+    "hidden": {
+     "prompt": "PROMPT",
+     "extra_pnginfo": "EXTRA_PNGINFO"
+    }
+   },
+   "output_node": true
+  },
+  "SesquiLatentUpscale": {
+   "input_types": {
+    "required": {
+     "latent": [
+      "LATENT"
+     ],
+     "model_format": [
+      [
+       "SDXL",
+       "Flux",
+       "Flux2",
+       "Ideogram 4",
+       "Wan 2.1"
+      ],
+      {
+       "default": "SDXL",
+       "tooltip": "VAE latent configuration:\n\u2022 SDXL (not compatible with SD 1.5)\n\u2022 Flux (Flux, Z-Image Turbo, Lumina)\n\u2022 Flux2 (Flux2, Flux2 Klein: BN-packed latent)\n\u2022 Ideogram 4 (Flux2: shift/scale-packed latent)\n\u2022 Wan 2.1 (Wan 2.x, Krea 2, Anima, Qwen Image)"
+      }
+     ],
+     "scale": [
+      "FLOAT",
+      {
+       "default": 1.5,
+       "min": 1.0,
+       "max": 2.0,
+       "step": 0.05
+      }
+     ],
+     "half_precision": [
+      "BOOLEAN",
+      {
+       "default": true
+      }
+     ]
+    }
+   },
+   "output_node": false
+  },
+  "Image Comparer (rgthree)": {
+   "input_types": {
+    "required": {},
+    "optional": {
+     "image_a": [
+      "IMAGE"
+     ],
+     "image_b": [
+      "IMAGE"
+     ]
+    },
+    "hidden": {
+     "prompt": "PROMPT",
+     "extra_pnginfo": "EXTRA_PNGINFO"
+    }
+   },
+   "output_node": true
+  },
+  "EmptyLatentImage": {
+   "input_types": {
+    "required": {
+     "width": [
+      "INT",
+      {
+       "default": 512,
+       "min": 16,
+       "max": 16384,
+       "step": 8,
+       "tooltip": "The width of the latent images in pixels."
+      }
+     ],
+     "height": [
+      "INT",
+      {
+       "default": 512,
+       "min": 16,
+       "max": 16384,
+       "step": 8,
+       "tooltip": "The height of the latent images in pixels."
+      }
+     ],
+     "batch_size": [
+      "INT",
+      {
+       "default": 1,
+       "min": 1,
+       "max": 4096,
+       "tooltip": "The number of latent images in the batch."
+      }
+     ]
+    }
+   },
+   "output_node": false
+  },
+  "ImageCASharpening+": {
+   "input_types": {
+    "required": {
+     "image": [
+      "IMAGE"
+     ],
+     "amount": [
+      "FLOAT",
+      {
+       "default": 0.8,
+       "min": 0,
+       "max": 1,
+       "step": 0.05
+      }
+     ]
+    }
+   },
+   "output_node": false
+  },
+  "OllamaGenerateV2": {
+   "input_types": {
+    "required": {
+     "system": [
+      "STRING",
+      {
+       "multiline": true,
+       "default": "You are an AI artist.",
+       "tooltip": "System prompt - use this to set the role and general behavior of the model."
+      }
+     ],
+     "prompt": [
+      "STRING",
+      {
+       "multiline": true,
+       "default": "What is art?",
+       "tooltip": "User prompt - a question or task you want the model to answer or perform. For vision tasks, you can refer to the input image as 'this image', 'photo' etc. like 'Describe this image in detail'"
+      }
+     ],
+     "think": [
+      "BOOLEAN",
+      {
+       "default": false,
+       "tooltip": "If enabled, the model will do a thinking process before answering. This can result in more accurate results. The thinking is then available as a separate output for debugging or understanding how the model arrived at its answer. Some models don't support this feature and the generation will fail."
+      }
+     ],
+     "keep_context": [
+      "BOOLEAN",
+      {
+       "default": false,
+       "tooltip": "If enabled, the model will keep the context of the conversation and use it for the next generation. This is useful for multi-turn conversations or tasks that require context."
+      }
+     ],
+     "format": [
+      [
+       "text",
+       "json"
+      ],
+      {
+       "tooltip": "Output format of the response. 'text' will return a plain text response, while 'json' will return a structured response in JSON format. This is useful when the model is part of a larger pipeline and you need additional processing on the response. In this case I recommend showing the model example outputs in the system prompt. Some models are not trained to perform well in structured output."
+      }
+     ]
+    },
+    "optional": {
+     "connectivity": [
+      "OLLAMA_CONNECTIVITY",
+      {
+       "forceInput": false,
+       "tooltip": "Set an ollama provider for the generation. If this input is empty, the 'meta' input must be set."
+      }
+     ],
+     "options": [
+      "OLLAMA_OPTIONS",
+      {
+       "forceInput": false,
+       "tooltip": "Connect an Ollama Options node for advanced inference configuration."
+      }
+     ],
+     "images": [
+      "IMAGE",
+      {
+       "forceInput": false,
+       "tooltip": "Provide an image or a batch of images for vision tasks. Make sure that the selected model supports vision, otherwise it may hallucinate the response."
+      }
+     ],
+     "context": [
+      "OLLAMA_CONTEXT",
+      {
+       "forceInput": false,
+       "tooltip": "Optionally set an existing model context, useful for multi-turn conversations, follow-up questions."
+      }
+     ],
+     "meta": [
+      "OLLAMA_META",
+      {
+       "forceInput": false,
+       "tooltip": "Use this input to chain multiple 'Ollama Generate' nodes. In this case the connectivity and options inputs are passed along."
       }
      ]
     }

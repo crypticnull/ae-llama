@@ -106,13 +106,28 @@ parts 1-3) or item 3/4, not here.
 Two things this item surfaced that are NOT done, each worth its own
 small pass rather than being smuggled in:
 
-- `scale_comp` still does not scale a LIGHT's pixel-valued options
-  (falloff distance, shadow diffusion), same as AE's own native
-  script. Now that lights are creatable this is finally testable.
-- `get_property` cannot reach `Radius` or `Falloff Distance` by bare
-  name (AE's layer-level name shortcut does not cover them); the
-  group path `light/Radius` works and the suite uses it. A deep-search
-  fallback in the path resolver would remove the trap for the model.
+- ~~`scale_comp` still does not scale a LIGHT's pixel-valued options
+  (falloff distance, shadow diffusion)~~ DONE 2026-08-28 (0.9.26).
+  Radius, Falloff Distance and Shadow Diffusion now scale with the comp,
+  keyframes included, parented or not, gated by the type+falloff matrix
+  measured in the field; angles and percentages are left alone. The probe
+  also found two AE lies the tool was believing — an ambient light was
+  reported as a FAILED layer because AE hides its Position, and a point
+  light reports autoOrient 4214 like a two-node spot and then refuses its
+  Point of Interest. Harness 262 -> 277.
+- ~~`get_property` cannot reach `Radius` or `Falloff Distance` by bare
+  name~~ DONE 2026-08-28 (0.9.27). The probe found the gap was never
+  about lights: AE's layer-level shortcut is a fixed list with an
+  arbitrary edge (a light answers Intensity and Cone Angle but not
+  Radius; a solid answers Opacity but not its own effect's Blurriness; a
+  shape layer answers Contents but not Size), so any bare name AE refuses
+  is now searched down the real tree, roots in a measured order with
+  Layer Styles LAST - AE ships all eleven on every layer whether or not
+  one was applied, and they would otherwise outrank the property the user
+  meant. Ties are refused with both real paths; the result names the path
+  it found. Harness 277 -> 289.
+
+**Item 2 has nothing left. The next pass starts at item 3, 4 or 5.**
 
 ## 2c. Inventory the owner's real ComfyUI install — DONE 2026-08-25
 
@@ -137,9 +152,14 @@ Pure filesystem reading — no AE, no generation runs, do NOT launch
 ComfyUI. This unblocks tier-plan P5 (catalog file lists + sizes) and
 the register-existing matcher. Commit the inventory; no version bump.
 
-## 2d. Small local passes queued by the probe findings — 5 of 6 DONE
-(2026-08-25 and -26). The ONLY one left is the H3 i2v workflow, parts
-1-3; everything else below is struck.
+## 2d. Small local passes queued by the probe findings — CLOSED
+2026-08-28 (0.9.23). Everything in this section is done: the H3 i2v
+workflow through part 4, the portability pass part 4 filed, and — last —
+KREA2, which now ships adapted, seeded, rule-complete and rendered end to
+end through the panel into AE (17s authored / 10s bare, both 1232x1232).
+Nothing below needs doing; the text is kept because the reasoning in it
+is what the next template will be built against. **The next pass starts
+at item 3, 4 or 5.**
 
 - ~~Locate the H3 base weight~~ FOUND by the owner (2026-08-25):
   `AppData\Local\Comfy-Desktop\ComfyUI-Shared\models\diffusion_models\`
@@ -178,22 +198,75 @@ the register-existing matcher. Commit the inventory; no version bump.
     LoadImage is DETACHED and the graph runs t2v, so the template no
     longer names a one-machine PNG. Both paths return `valid: True` from
     ComfyUI 0.32.0's own validate_prompt. See the log.
-  - **(3) ONE real generation end-to-end through the panel to verify** —
-    NEXT. RTXVideoSuperResolution must be made bypassable in the same
-    pass (it is NVIDIA-app dependent, so the template cannot run on a
-    machine without it).
-  - (4) attribute the manifest's UNKNOWN nodes.
-  - Also surfaced, its own small pass: the KREA2 template contains a
-    SUBGRAPH the converter refuses to flatten. Route that works — queue
+  - ~~(3) ONE real generation end-to-end through the panel to verify~~
+    DONE 2026-08-27 (0.9.21). It ran: prompt -> ComfyUI -> mp4 -> AE, 12s,
+    VRAM peak 28.4 GB. Built `scripts/comfy-probe.js` (the ComfyUI half of
+    chat-probe) and it immediately found what three validate_prompt passes
+    could not: ComfyUI's `%date:...%` filename tokens are expanded by the
+    FRONTEND, never the server, so the panel's own posted graph died at
+    SaveVideo on a colon Windows will not accept. Fixed in comfy.js and
+    covered by tests/test-comfy-filename-tokens.js. See the log.
+  - ~~(4) attribute the manifest's UNKNOWN nodes~~ DONE 2026-08-27. Done
+    for ALL THREE bundled workflows, from the running loader's own
+    `/object_info` rather than by grepping pack sources. It found more
+    than a placeholder: the i2v manifest that already said "attribution
+    scanned" was missing two packs the SHIPPED template loads
+    (ComfyUI-sol-attn, ComfyLiterals) and named three classes wrongly.
+    `scripts/attribute-workflow-nodes.js` regenerates it;
+    `tests/test-workflow-manifests.js` fails CI if a manifest and its
+    graph ever disagree again. See the log.
+  - ~~**NEW, from part 4:** the shipped H3 i2v template hard-requires SIX
+    custom packs and only RTXVideoSuperResolution is declared bypassable~~
+    DONE 2026-08-28 (0.9.22). All seven undeclared classes are removable:
+    four MODEL patches bypass through `model` and collapse the chain to
+    `148 -> 163 -> 139`, two are incidental, and ComfyLiterals' `Float`
+    could not be bypassed at all (a literal source has nothing to rewire
+    to), so `optionalNodes` gained `substitute` and it becomes core
+    `PrimitiveFloat`. Measured on a freed GPU: bare 18s / 31349 MB vs
+    authored 20s / 31285 MB, and the bare graph imported into real AE at
+    544x288 with audio. `comfy-probe.js --bare` renders the fallback
+    graph on demand; test-workflow-manifests now FAILS any shipped
+    template with a non-core class that has no removal rule. See the log.
+  - ~~Also surfaced, its own small pass: the KREA2 template contains a
+    SUBGRAPH the converter refuses to flatten~~ CONVERTER DONE
+    2026-08-28. It did not need the /history route after all:
+    `adapt-workflow.js` now flattens subgraphs inline as
+    `<instance>:<inner>` (ComfyUI's own id scheme), drops rgthree's two
+    frontend-only nodes, and — the part nobody had noticed — emulates
+    cg-use-everywhere's `Anything Everywhere`, which draws NO wire and
+    carries MODEL/CLIP/VAE/LATENT to nine sockets in this graph. The
+    converted KREA2 returns `valid: True` from ComfyUI 0.32.0's own
+    `validate_prompt`. See the log. Original text: Route that works — queue
     it once in ComfyUI and pull the executed prompt from `/history`
     (the owner's `get-api-workflow.ps1` already does this). H3 r2v is
-    still unconverted too.
-- **Pin H3 t2v/i2v files** (HF is proxy-blocked from the remote
-  session): list https://huggingface.co/api/models/Comfy-Org/MiniMax-H3/tree/main?recursive=true
-  and record the t2v/i2v diffusion weights + non-nvfp4 encoder variants
-  with sizes in the tier plan. The owner wants text/image-to-video
-  FIRST; the bundled r2v workflow is deferred until 5.8 lands (it needs
-  image+audio inputs the panel cannot feed yet).
+    still unconverted too. Two facts for that pass, measured 2026-08-27:
+    the subgraph is "Initial Loader" and holds only UNETLoader/VAELoader/
+    CLIPLoader (all core), and `adapt-workflow.js` FRONTEND_ONLY knows
+    about Note/MarkdownNote but not rgthree's `Label (rgthree)` or
+    `Fast Groups Bypasser (rgthree)`, which KREA2 uses and which are
+    provably absent from the server.
+  - ~~**KREA2, what is LEFT before it can ship**~~ DONE 2026-08-28
+    (0.9.23). All five rules written and measured, `procedural` block
+    written (prompt only — resolution and seed are already covered by
+    injectParams' generic walk, and the manifest says so), and TWO real
+    generations run: the authored graph and the `--bare` one, both
+    landing 1232x1232 in real AE. Three things the pass found that the
+    item did not anticipate: `Power Lora Loader` emits MODEL **and**
+    CLIP, so `passthrough` had to grow a per-output-slot map or the text
+    encoders would have been handed a MODEL; `SesquiLatentUpscale` had
+    to be SUBSTITUTED (core `LatentUpscaleBy`) rather than bypassed,
+    since dropping it silently shrinks the output 1.6x; and the
+    authored SaveImage prefix was an ABSOLUTE one-machine path that
+    ComfyUI refuses anywhere else, now corrected through the new
+    `panelAdaptation.setInputs`. See the log.
+  - H3 r2v is still unconverted — deferred until 5.8 lands, since it
+    needs image+audio inputs the panel cannot feed yet.
+- ~~**Pin H3 t2v/i2v files**~~ DONE 2026-08-25, in the log entry "item
+  2d: shared root, history trim, H3 pins, set_solid_color" — all 30
+  files are recorded in `docs/COMFY_TIERS_PLAN.md`. Re-listed from the
+  HF API on 2026-08-28: unchanged, nothing new in the repo. The text
+  simply never got struck, which is the second time that has cost a
+  pass a re-read of the log.
 - ~~**clearExpressions in real AE**~~ DONE 2026-08-26 (0.9.18). Verified
   in the field: refuse-then-recall-with-flag is what the model does, and
   the nine squares land on even gaps. Two defects found on the way and
@@ -222,12 +295,31 @@ the register-existing matcher. Commit the inventory; no version bump.
   set_solid_color {layer(s), color, makeUnique?: bool} with the shared-
   source consequence stated in the result either way.
 
-## 3. Extend selftest.js coverage
+## 3. Extend selftest.js coverage — FIRST SWEEP DONE 2026-08-28 (0.9.24)
 
 Every verified behavior from (2) becomes a permanent step in
 `extension/js/selftest.js` (both the panel button and the harness pick
 it up automatically). Keep results compact; steps must clean up after
 themselves inside the scratch comp.
+
+The sweep against the computed gap list in `docs/CAPABILITIES.md` ran on
+2026-08-28: 214 steps -> 260. Light keyframes closed the gap that shipped
+with `add_light`, and a coverage rig gave `add_control`, `add_keyframe`,
+`remove_keyframes`, `set_layer_3d`, `apply_expression_preset`,
+`list_properties`, `list_effects`, `set_comp_setting`, `duplicate_comp`,
+`rename_item` and `move_to_folder` their first real-AE steps.
+
+FOUR tools are still uncovered and each is deliberate, not pending:
+
+- ~~`add_marker`, `precompose`~~ COVERED 2026-08-28 (0.9.30) by item
+  5.4 — 18 steps, after a probe found five silent losses in them.
+- `add_to_render_queue` — item 5.5; it writes to the user's render queue.
+- `import_file` — item 5.8; it needs a file on disk.
+- `organize_project` — **cannot be suite-tested at all.** It files every
+  LOOSE item at the project ROOT, and the suite runs inside whatever
+  project the user has open. Any step for it would reorganize the user's
+  project. If it is ever to be covered it needs a `dryRun` argument
+  first; that is a design call for the remote session.
 
 ## 4. Field-quality passes
 
@@ -251,8 +343,17 @@ themselves inside the scratch comp.
     `set_text_style` still never normalizes — it edits a layer the
     user owns. AE 2026 makes allCaps/smallCaps/superscript/subscript
     READ-ONLY, so an inherited one is reported instead of swallowed.
-  - the checklist never touches ComfyUI, undo across a mixed round, or
-    a second chat turn that refers back ("make them blue instead").
+  - ~~the checklist never touches ComfyUI, undo across a mixed round, or
+    a second chat turn that refers back ("make them blue instead").~~
+    DONE. The undo and second-turn halves landed 2026-08-25 as steps
+    9-11; the ComfyUI half landed 2026-08-28 (0.9.28) as steps 12-13 —
+    "is the picture generator ready" and a real generation through the
+    model into AE, judged on ctx.tools (a panel-side tool leaves nothing
+    in the comp to read back). It found three defects on its first run,
+    all fixed at the root: the probe never loaded comfy.js/setup.js at
+    all, a dead comfyUrl told the user to install a backend they already
+    had running on another port, and the shipped `example-txt2img`
+    placeholder was offered to the model as a real workflow. See the log.
   - a round that fails PART WAY leaves its debris behind: when
     `duplicate_layer` errored before `add_solid` had a layer to copy,
     the model retried the whole round and the comp ended with TEN red
@@ -273,9 +374,58 @@ themselves inside the scratch comp.
   Budget: one rollback per user request. A failing READ-ONLY tool does
   not trigger it. Four AE measurements gated the design; they and the
   answer to "what if it overshoots" are in WORKPLAN-LOG 2026-08-25.
-- Performance: 200-layer comps — measure grid_layout and batch
-  keyframe wall time; note anything over ~5s so the remote session can
-  optimize.
+- ~~Performance: 200-layer comps — measure grid_layout and batch
+  keyframe wall time~~ DONE 2026-08-28 (0.9.29). The batch-keyframe half
+  is measured and fine: at 200 layers set_keyframes (600 keys) 167 ms,
+  apply_keyframe_ease 291 ms, remove_keyframes 517 ms, grid_layout
+  872 ms, stagger_layers 53 ms, distribute_property 69 ms, scale_comp
+  352 ms, for_each_layer apply_effect 313 ms. Nothing near the ~5s flag,
+  as in 2026-08-21. What the same probe found is the follow-up this
+  bullet had been carrying since then, and it is now fixed: **eleven
+  tools serialize past the panel's per-result cap and every one of them
+  reached the model as JSON cut mid-object.** compactToolResults now
+  drops WHOLE ROWS with a count, the way budgetState already did for the
+  state block, and the per-result cap is a fair share of the round's
+  6000 rather than a fixed 1200. See the log.
+- **NEW, filed by the ComfyUI probe steps 2026-08-28, each its own small
+  pass:**
+  - ~~**A generation that fails does not get retried.**~~ ALREADY FIXED,
+    and the evidence is in the entry that filed it: 0.9.28's own field
+    run has the model invent `simple_image`, take the grounded
+    "Available: AE_LLAMA_H3_I2V_V1, AE_LLAMA_KREA2_V1" error, re-plan
+    onto KREA2 and render. A rejected workflow is no longer a rejected
+    request, so no prompt rule is needed. Struck 2026-08-28 without
+    spending a pass on it. Original text: ComfyUI rejected the workflow
+    the model chose; the model had four rounds left, said "let's try a
+    different approach or workflow", and stopped.
+  - **A bundled workflow template never reaches an existing install
+    once it has been seeded.** `Setup.ensureDataDirs` copies only files
+    the data dir does NOT have ("never overwrite edits"), so the KREA2
+    template that shipped in 0.9.23 was still absent from this machine
+    on 0.9.27 — the panel offered two workflows where the repo has
+    three. A fix needs a version-stamped or hash-compared seed that can
+    still tell a user's edit from a stale copy; that is a design call
+    for the remote session.
+- ~~**`set_layer_3d` loses the Z in silence.**~~ DONE 2026-08-28 (0.9.25).
+  A second probe measured the FULL loss (Scale Z resets to 100 rather
+  than zeroing, Orientation and X/Y Rotation clear, keyframe values are
+  flattened in place, and turning 3D back on restores nothing), and the
+  tool now reads those values before the write and returns them in
+  `discarded`. It still does not refuse and does not restore. Three suite
+  steps and the stubbed tests cover it, including the ordering trap real
+  AE caught: keyframes are read BEFORE an expression, or a wiggled
+  Position reports its own noise instead of the Z on the next key.
+  Original text below.
+
+- **`set_layer_3d` loses the Z in silence.** Measured 2026-08-28: turning
+  a 3D layer back to 2D zeroes the Z component of Position and Anchor
+  Point (and the 3D-only rotations go with it), and the tool reports a
+  plain `{threeD: false}`. A suite step pins the loss. This project's
+  rule is that nothing disappears quietly, so the tool should report what
+  the switch discarded — the same shape as `scale_comp`'s
+  `layersSkipped`. Small: read the 3D-only values before the write,
+  compare, and name the non-zero ones in the result. Do NOT refuse and do
+  NOT restore them — the user asked for 2D.
 
 ## 5. Feature track — probe, build, lock in (NO version bumps here)
 
@@ -306,20 +456,73 @@ learned the hard way:
   (tests/test-capability-doc.js fails CI if you forget). Its computed
   coverage-gap lists are also the ready-made queue for item 3.
 
-### 5.1 Text animators
-Probe: the property tree under "ADBE Text Animators" — add an animator,
-an "ADBE Text Selectors" range selector, and animator properties
-(position/opacity/rotation/scale at least); verify Start/End/Offset
-percent paths and per-character-3D requirements. Build:
+### 5.1 Text animators — DONE 2026-08-28
+Probed, built and covered in one pass. `add_text_animator` adds the
+animator, activates every property named and configures the selector
+(range/wiggly/expression/none), then reports the exact paths so the
+EXISTING set_keyframes drives the selector — measured first, which is why
+no keyframing was built into the tool. Eight AE facts made the design,
+all in the log: an animator ships with all 103 properties present and
+HIDDEN (addProperty un-hides), `canSetExpression` is the only flag that
+tells added from dormant, adding a sibling animator invalidates every
+reference into the earlier ones, AE lets two animators share a name and
+answers a lookup with the first, percent selectors run -100..100, both
+the percent and index triples exist at once and a name lookup always
+finds percent, per-character 3D is a LAYER switch that drags threeDLayer
+on and never gives it back, and "ADBE Text Rotation" IS the Z rotation.
+The dormant-slot discovery also fixed shipped behavior: set_property /
+set_keyframes / get_property / list_properties no longer leak AE's raw
+"property or a parent property is hidden" for the hundred slots the
+0.9.27 deep search can reach. 63 stub checks, 24 suite steps, harness
+307 -> 331. Macros ("typewriter"/"cascade") stay PROMPT recipes as
+planned; no version bump (feature track).
+
+Original text: Probe: the property tree under "ADBE Text Animators" — add
+an animator, an "ADBE Text Selectors" range selector, and animator
+properties (position/opacity/rotation/scale at least); verify
+Start/End/Offset percent paths and per-character-3D requirements. Build:
 `add_text_animator` (generic, grounded errors listing available animator
 properties) — macros like "typewriter"/"cascade" belong in the PROMPT as
 recipes, not as separate tools. Highest value per line of code here.
 
-### 5.2 Shape repeaters
+### 5.2 Shape repeaters — DONE 2026-08-28 (0.9.31)
+No `add_repeater` was built: `add_shape_content {kind: "repeater"}` had
+shipped all along and the probe proved it works end to end. What did not
+work was reaching it. A shape GROUP hides its items in a nested
+"Contents" group AE's timeline never draws, so
+`contents/<Group>/<Item>/<Param>` — the path this panel's own tool notes,
+tool docs and system-prompt trim-paths recipe all handed the model —
+resolved to nothing, and every "animate the repeater / wipe it on"
+request failed on the panel's own instructions. The resolver now hops
+that segment (a real child of the same name still wins), and
+add_shape_content warns when a filter lands with no shape ABOVE it —
+measured: a repeater appended after the rect renders 500px wide, the same
+one moved to index 1 renders 100px. Copies floors at 0 with no max,
+Composite is `ADBE Vector Repeater Order` 1..2. Ring/burst stays a PROMPT
+recipe. Harness 331 -> 345. Original text below.
+
 Probe: "ADBE Vector Filter - Repeater" under a shape group — copies,
 offset, and the repeater transform block. Build: `add_repeater` {layer,
 copies, position/rotation/scale/anchor offsets}. Verify the radial-burst
 recipe (rotation 360/copies) renders as expected.
+
+### 5.3 Animation preset library - DONE 2026-08-28
+Probed, built and covered in one pass. `list_presets` indexes AE's 679
+shipped .ffx files plus the user's own (679 walked in 117 ms, cached per
+session); `apply_preset` applies one to layer(s). The probe answered the
+item's own question with a worse fact than it expected: **applyPreset
+acts on the comp's SELECTION, not on the layer it is called on** - two
+layers selected, one call, BOTH changed - and with an EMPTY selection it
+does not touch the receiver either, it invents a comp-sized solid and
+applies the preset there. So the tool selects exactly its target and puts
+the user's selection back. Six more measured facts made the design and
+are in the log; the one that cost a suite iteration is that "a preset for
+the wrong layer type does nothing" is only HALF true: a Text preset that
+carries expression controls installs its six sliders on a solid and none
+of the animation (census 2 vs 15 on a text layer), while one that carries
+none does nothing at all. That partial landing is now reported. 63 stub
+checks in `tests/test-presets.js`, 13 suite steps, harness 345 -> 358. No
+version bump (feature track). Original text below.
 
 ### 5.3 Animation preset library
 Probe: `layer.applyPreset(File)` on a stock .ffx — does it need the
@@ -329,7 +532,21 @@ Documents\Adobe\After Effects*\User Presets. Build: `list_presets`
 (cached, filterable) + `apply_preset` with the font-style grounded error
 (near-matches by name). Hundreds of behaviors for the price of two tools.
 
-### 5.4 Precompose + markers — the tools ALREADY EXIST; verify + cover
+### 5.4 Precompose + markers — DONE 2026-08-28 (0.9.30)
+Probed, fixed and covered. Five silent losses were measured and are now
+reported instead: precompose counted a REPEATED layer reference twice,
+dropped a moved layer's parent when the parent stayed behind, left an
+expression on a layer behind it pointing at a layer that is no longer
+there (AE rewrites those only when moveAttributes is FALSE, and
+expressionError stays EMPTY either way), let a SECOND project item take
+the requested name — which makes the later one unreachable by name — and
+threw away the user's selection. add_marker silently REPLACED any marker
+already at that time, refused a quoted `time` the project's own rule says
+to accept, and swallowed an unusable `duration`. Marker times turned out
+to be COMPOSITION time on a layer as well, so nothing had to be
+converted. 56 stub checks in `tests/test-precompose-markers.js`, 18 suite
+steps, harness 289 -> 307. See the log. Original text below.
+
 docs/CAPABILITIES.md's computed gaps caught this item about to build
 duplicates: `precompose` and `add_marker` are in TOOL_DEFS today, with
 zero stub tests and zero suite steps. So this item is (a) probe their
@@ -337,7 +554,53 @@ real behavior (precompose selection side effects, marker duration
 handling), (b) fix what's wrong, (c) stub test + suite steps. Do NOT
 build new tools here.
 
-### 5.5 Render queue (unlocks 5.8, 6.1, 6.2 — do before them)
+### 5.5 Render queue — DONE 2026-08-28
+Probed, built and covered in one pass. `render_comp` renders a comp to a
+file and waits; `list_render_templates` names this machine's templates
+(and hands back a real writable folder, because "where do I put it" was
+otherwise a guess). `add_to_render_queue` was fixed rather than
+duplicated.
+
+**The aerender question is settled: renderQueue.render() DOES work
+headless from a `-r` session** — one frame in 181 ms, status DONE. So
+aerender.exe is not used, and it would be the wrong tool anyway: it
+launches a second AE against a SAVED .aep, while this panel drives a
+live, usually-unsaved project.
+
+Seven probes; three findings drove the whole design. (1) `render()`
+renders the WHOLE QUEUE, not the item you added — so the user's queued
+items are held back with `render = false` and put back. (2) An output
+path that ALREADY EXISTS raises a MODAL, which wedged AE mid-probe and
+then swallowed every later -r script while the process still looked
+healthy; it is refused unless `{overwrite: true}`, and only then
+rendered under `beginSuppressDialogs` (measured to genuinely overwrite,
+64840 -> 698880 bytes, not silently skip). (3) The output module forces
+its OWN extension on the `file` SETTER, both directions, so the path
+reported is the one AE settled on. Also: a missing output directory
+THROWS rather than prompting, `status` is readOnly, deleting a queued
+comp silently drops its queue item (no dialog), and a fresh output
+module inherits the LAST RENDER'S folder — which on the probe machine
+was a ComfyUI directory unrelated to the project, so an outputPath-less
+add now says where the bytes would land.
+
+For 5.8: **`comp.saveFrameToPng(time, File)` EXISTS and works** — 407
+bytes for 160x120, honours resolutionFactor, no viewer needed, comp.time
+untouched, overwrites with no dialog. Its three silent failures are
+measured and waiting to be handled: a bad folder is a SILENT no-op, an
+out-of-range time CLAMPS and writes a blank frame, and a String path
+throws (it demands a File). It also writes LAZILY — `File.exists` reads
+false for ~300 ms afterwards, so output must be polled, not glanced at.
+
+**AE cannot render inside an undo group.** Registering render_comp as
+mutating earned a modal "Undo group mismatch" that wedges an unattended
+AE, so it is exempt via the new `AELL_NO_UNDO_GROUP`, and a batch
+containing one opens no group at all (closing and reopening the group
+around just the render was tried first; AE rejects that too).
+
+82 stub checks in `tests/test-render-queue.js`, 14 suite steps, harness
+358 -> 372, green on three CONSECUTIVE runs. No version bump (feature
+track). Original text below.
+
 `add_to_render_queue` ALREADY EXISTS (uncovered — same trap as 5.4).
 Probe what it does today, then extend rather than duplicate: actually
 RENDERING headless — renderQueue.render() from a -r session vs the
@@ -346,11 +609,31 @@ output-module templates (enumerate + log; version-sensitive), grounded
 template errors. Also probe single-frame paths here: saveFrameToPng if
 it exists, else a one-frame render — needed by 5.8.
 
-### 5.6 Project hygiene
-Probe: removeUnusedFootage(), consolidateFootage(), reduceProject()
-return values. Build: `clean_project` {action} — reduceProject DELETES,
-so it requires an explicit comp argument and reports counts; everything
-in one undo group. Refuse vague asks with a grounded list of actions.
+### 5.6 Project hygiene — DONE 2026-08-28
+Probed, built and covered in one pass. `clean_project {action, keepComps,
+dryRun}` runs exactly one of AE's three cleanup calls, previewing by
+default. Five probes; the facts that shaped it are all losses AE does not
+mention: `removeUnusedFootage()` also deletes EMPTY FOLDERS (recursively,
+and it counts them in its return value), `reduceProject()` deletes a comp
+that only an EXPRESSION names and leaves `expressionError` EMPTY, it
+silently drops the render-queue items of the comps it removes, and it
+ACCEPTS a footage item in the keep array and then deletes every comp in
+the project (refused here). Also measured: footage used only by an UNUSED
+comp is kept, `reduceProject([])` throws "Array is empty", and — unlike a
+render — all three are ordinary edits that close an undo group cleanly
+and are undone whole by one Ctrl+Z. So the preview NAMES what would go
+and the execute path diffs AE's actual removals against that promise (the
+two agreed exactly on every rig, in real AE and in the stub). 48 stub
+checks in `tests/test-project-hygiene.js`, 13 suite steps, harness
+372 -> 385. The suite covers PREVIEWS and REFUSALS only: every action is
+project-wide, so executing one inside the user's open project would
+delete the user's own items. No version bump (feature track).
+
+Original text: Probe: removeUnusedFootage(), consolidateFootage(),
+reduceProject() return values. Build: `clean_project` {action} —
+reduceProject DELETES, so it requires an explicit comp argument and
+reports counts; everything in one undo group. Refuse vague asks with a
+grounded list of actions.
 
 ### 5.7 Audio to keyframes
 Probe: `app.findMenuCommandId("Convert Audio to Keyframes")` — does the

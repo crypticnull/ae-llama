@@ -83,6 +83,23 @@
       desc: "File loose root-level items into Comps/Footage/Solids/Audio/" +
             "Images folders. Leaves existing folder structure alone.",
       args: "{}" },
+    { name: "clean_project", mutating: true,
+      desc: "Delete project clutter. ONE action per call: " +
+            "'remove_unused_footage' (footage no comp uses — and every " +
+            "folder that ends up empty, which AE throws in whether you " +
+            "asked or not), 'consolidate_footage' (merge footage items " +
+            "pointing at the same file; layers follow), or " +
+            "'reduce_project' (delete EVERYTHING the comps in keepComps " +
+            "do not need). dryRun is TRUE by default and returns the " +
+            "list of what would go — show the user, especially the parts " +
+            "they did not ask about, then call again with dryRun:false. " +
+            "reduce_project refuses to run without keepComps, and refuses " +
+            "a keepComps entry that is not a comp (AE would delete every " +
+            "comp in the project). It also names the render-queue items " +
+            "and the expressions that would break silently.",
+      args: "{action: 'remove_unused_footage'|'consolidate_footage'|" +
+            "'reduce_project', keepComps?: [string] (reduce_project " +
+            "only, REQUIRED), dryRun?: bool (default TRUE)}" },
     { name: "create_comp", mutating: true,
       desc: "Create a composition and open it.",
       args: "{name: string, width: int, height: int, duration: seconds, frameRate: number, bgColor?: [r,g,b] 0..1}" },
@@ -98,6 +115,28 @@
       desc: "Restyle an existing text layer (any subset of fields). " +
             "An uninstalled font is refused, listing what IS installed.",
       args: "{comp?: string, layer: name|index, text?: string, fontSize?: px, font?: string (PostScript name, e.g. ArialMT), fillColor?: [r,g,b] 0..1, tracking?: number, leading?: px|'auto', justification?: 'left'|'center'|'right'}" },
+    { name: "add_text_animator", mutating: true,
+      desc: "Animate a text layer PER CHARACTER (typewriter, cascade, " +
+            "wiggle) — an animator holds the properties, a selector " +
+            "picks which characters get them. One call adds the " +
+            "animator, activates every property named and configures " +
+            "the selector; the result gives the exact paths, so " +
+            "set_keyframes on the selector's Offset/Start/End is what " +
+            "makes it move (a typewriter is opacity 0 + units 'index' + " +
+            "keyframed Start). Percent selectors run -100..100; " +
+            "'rotation' IS the Z rotation, and xRotation/yRotation turn " +
+            "per-character 3D on (which also makes the layer 3D — the " +
+            "result says so).",
+      args: "{comp?: string, layer?: name|index (text layer; omit = selected), name?: string, " +
+            "properties: {opacity|position|scale|anchorPoint|rotation|xRotation|yRotation|skew|skewAxis|" +
+            "fillColor|fillOpacity|fillHue|fillSaturation|fillBrightness|strokeColor|strokeOpacity|strokeWidth|" +
+            "strokeHue|strokeSaturation|strokeBrightness|tracking|trackingType|lineAnchor|lineSpacing|" +
+            "characterOffset|characterValue|characterRange|characterAlignment|blur: value, …}, " +
+            "selector?: {type?: range|wiggly|expression|none (default range), units?: percent|index, " +
+            "start?, end?, offset?, basedOn?: characters|charactersExcludingSpaces|words|lines, " +
+            "mode?: add|subtract|intersect|min|max|difference, shape?: square|rampUp|rampDown|triangle|round|smooth, " +
+            "smoothness?, easeHigh?, easeLow?, amount?, randomizeOrder?, randomSeed?, " +
+            "maxAmount?, minAmount?, wigglesPerSecond?, correlation?, temporalPhase?, spatialPhase?, lockDimensions?}}" },
     { name: "add_solid", mutating: true,
       desc: "Add a solid layer.",
       args: "{comp?: string, name: string, color: [r,g,b] 0..1, width?: int, height?: int}" },
@@ -244,7 +283,13 @@
             "(no distortion): when the aspect changes, mode 'fit' " +
             "letterboxes (default) and 'fill' crops. Parented layers " +
             "follow their parents automatically (a parented CAMERA still " +
-            "gets its zoom rescaled — zoom is not inherited). Keyframed " +
+            "gets its zoom rescaled — zoom is not inherited). A LIGHT's " +
+            "pixel options (Radius, Falloff Distance, Shadow Diffusion) " +
+            "are rescaled too, parented or not, and come back in " +
+            "'lightOptionsRescaled'; ambient and environment lights have " +
+            "nothing scalable and are listed in " +
+            "'layersWithNothingToScale' rather than counted as " +
+            "failures. Keyframed " +
             "transforms come along whole: values, motion-path handles " +
             "and ease speeds all scale, so animation keeps its shape. " +
             "Use this for any 'make the comp WxH' / 'scale the comp' " +
@@ -280,11 +325,23 @@
             "gradient_stroke, repeater, trim_paths, merge_paths, " +
             "offset_paths, rounded_corners, pucker_bloat, twist, zigzag. " +
             "params sets the new item's values by name ({Size: [200,200], " +
-            "Color: [1,0,0], Copies: 5, End: 50}). Animate afterwards via " +
-            "set_keyframes on 'contents/…' paths.",
+            "Color: [1,0,0], Copies: 5, End: 50}). ORDER MATTERS: a " +
+            "repeater/trim/offset/twist/zigzag acts on the content ABOVE " +
+            "it and new content is appended BELOW, so add the shape " +
+            "FIRST and the filter after it. Animate afterwards via " +
+            "set_keyframes on 'contents/<Group>/<Item>/<Param>' paths; a " +
+            "repeater's offsets are one deeper " +
+            "('…/Repeater 1/Transform/Position').",
       args: "{comp?: string, layer?: name|index (shape layer; omit = selected), kind: string, group?: name (add inside this group), name?: string, params?: {ParamName: value, …}}" },
     { name: "precompose", mutating: true,
-      desc: "Move layers into a new nested comp (precompose).",
+      desc: "Move layers into a new nested comp (precompose). The result " +
+            "names the precomp AE actually made (auto-numbered if the " +
+            "name was taken), what it broke — a moved layer's parent that " +
+            "stayed behind is DROPPED, and an expression left behind that " +
+            "names a moved layer dangles without AE reporting it — and " +
+            "the selection it put back. moveAttributes:false leaves the " +
+            "transform outside and sizes the new comp to that ONE layer; " +
+            "AE refuses it for more than one layer.",
       args: "{comp?: string, layers: [name|index, ...], name: string, moveAttributes?: bool = true}" },
     { name: "add_camera", mutating: true,
       desc: "Add a camera. Only 3D layers (set_layer_3d) are affected by it. " +
@@ -304,10 +361,18 @@
             "falloff?: none|smooth|inverseSquareClamped, radius?: px, falloffDistance?: px, " +
             "castsShadows?: bool, shadowDarkness?: %, shadowDiffusion?: px}" },
     { name: "add_marker", mutating: true,
-      desc: "Add a marker to the comp (omit 'layer') or to a layer.",
+      desc: "Add a marker to the comp (omit 'layer') or to a layer. " +
+            "'time' is COMPOSITION time either way. AE keeps one marker " +
+            "per exact time, so writing over one REPLACES it — the result " +
+            "says what it overwrote. A time outside the comp (or outside " +
+            "the layer's own span) is allowed and flagged.",
       args: "{comp?: string, layer?: name|index, time: seconds, comment?: string, duration?: seconds}" },
     { name: "set_layer_3d", mutating: true,
-      desc: "Enable/disable a layer's 3D switch.",
+      desc: "Enable/disable a layer's 3D switch. Turning 3D OFF is " +
+            "destructive: AE zeroes Position/Anchor Point Z, resets " +
+            "Scale Z to 100 and clears Orientation and X/Y Rotation " +
+            "(keyframes included), and turning 3D back on does not " +
+            "restore them. Whatever was lost comes back in `discarded`.",
       args: "{comp?: string, layer: name|index, enabled: bool}" },
     { name: "set_layer_parent", mutating: true,
       desc: "Parent layers to another layer (omit/null parent to " +
@@ -321,11 +386,16 @@
             "('effects/Gaussian Blur', 'masks', 'text') and depth.",
       args: "{comp?: string, layer?: name|index (omit = selected layer), path?: string, depth?: 1-3 (default 2)}" },
     { name: "get_property", mutating: false,
-      desc: "Read ANY property by path: value, keyframes, expression.",
-      args: "{comp?: string, layer?: name|index, property: friendly name | 'effect.X.Y' | 'group/child/…' path}" },
+      desc: "Read ANY property by path: value, keyframes, expression. A " +
+            "BARE property name works too ('Radius', 'Blurriness') — " +
+            "unknown names are searched down the layer's tree and the " +
+            "result reports where it landed in `resolvedPath`. Two " +
+            "properties with the same name are refused, listing both.",
+      args: "{comp?: string, layer?: name|index, property: friendly name | bare name | 'effect.X.Y' | 'group/child/…' path}" },
     { name: "set_property", mutating: true,
       desc: "Set ANY property by path — the universal fallback when no " +
-            "dedicated tool fits. atTime creates a keyframe at that time.",
+            "dedicated tool fits. Takes the same bare names get_property " +
+            "does. atTime creates a keyframe at that time.",
       args: "{comp?: string, layer?: name|index, property: path (see get_property), value: number|[..]|string|bool, atTime?: seconds}" },
     { name: "set_keyframes", mutating: true,
       desc: "Set the SAME keyframes on MANY layers in ONE call. " +
@@ -363,9 +433,43 @@
             "category), filtered and paged. Check here before apply_effect " +
             "when unsure of a name.",
       args: "{filter?: substring of name/category, offset?: int}" },
+    { name: "list_presets", mutating: false,
+      desc: "Enumerate the ANIMATION PRESETS (.ffx) installed in this AE — " +
+            "AE ships ~679 (Behaviors, Text, Backgrounds, Transitions, " +
+            "Image, Shapes…) plus the user's own. Search before applying.",
+      args: "{filter?: substring of \"Category/Name\", category?: string, source?: \"app\"|\"user\", offset?: int, limit?: int, refresh?: bool}" },
+    { name: "apply_preset", mutating: true,
+      desc: "Apply an installed .ffx animation preset to layer(s). One " +
+            "preset can add several effects, expressions and keyframes at " +
+            "once — the fastest route to a finished look. Match the " +
+            "preset's CATEGORY to the layer: a Text preset on a non-text " +
+            "layer lands at best partially (its sliders, never the " +
+            "animation) and cameras/lights take nothing at all. The tool " +
+            "reports a partial or empty landing rather than claiming " +
+            "success. Use list_presets to get the exact name.",
+      args: "{preset: string (name or \"Category/Name\" from list_presets), layer?: string|int, layers?: [string|int], comp?: string}" },
     { name: "add_to_render_queue", mutating: true,
-      desc: "Add a comp to the render queue.",
+      desc: "Add a comp to the render queue WITHOUT rendering it. With " +
+            "no outputPath AE reuses the last render's folder, which is " +
+            "usually nothing to do with this project — the result says " +
+            "where it would land, so pass that on to the user.",
       args: "{comp?: string, outputPath?: string (absolute)}" },
+    { name: "render_comp", mutating: true,
+      desc: "Actually RENDER a comp to a file. " +
+            "Blocks until AE finishes (minutes for anything long). " +
+            "Refuses if the output file already exists unless " +
+            "{overwrite: true}, and refuses if its folder does not " +
+            "exist. Anything the user already had in the render queue " +
+            "is held back, not rendered. Use list_render_templates for " +
+            "valid template names — the output module forces its own " +
+            "file extension, so the result says where the bytes really " +
+            "went.",
+      args: "{comp?: string, output: string (ABSOLUTE file path), template?: string (output module, e.g. \"Lossless\" or \"H.264 - Match Render Settings - 15 Mbps\"), renderSettings?: string (e.g. \"Best Settings\"), startTime?: number (seconds), durationSeconds?: number, frames?: int (instead of durationSeconds), overwrite?: bool = false}" },
+    { name: "list_render_templates", mutating: false,
+      desc: "List this machine's render-settings and output-module " +
+            "template names for render_comp. Installed templates differ " +
+            "per machine — never guess a name, list them.",
+      args: "{}" },
     { name: "comfy_status", mutating: false,
       desc: "Check the local ComfyUI instance (online? queue depth?).",
       args: "{}" },
@@ -566,6 +670,11 @@
       "- Unsure an effect exists or of its exact name? list_effects",
       "  {filter} searches everything installed; apply_effect accepts the",
       "  returned name or matchName.",
+      "- A whole LOOK in one call: list_presets {filter} then apply_preset",
+      "  — AE ships ~679 .ffx presets (Behaviors/Wiggle - position,",
+      "  Text/Animate In/*, Backgrounds, Transitions). Match the preset's",
+      "  CATEGORY to the layer: a Text preset does nothing on a solid,",
+      "  and cameras/lights take no effect presets at all.",
       "- set_track_matte mattes one layer with another (alpha/luma,",
       "  inverted variants, 'none' removes). set_layer_parent parents",
       "  (selection default, visual position preserved).",
@@ -580,6 +689,15 @@
       "  repeaters/trim_paths inside it via {group}. Set initial values",
       "  with params; animate them with set_keyframes on",
       "  'contents/<Group>/<Item>/<Param>' paths.",
+      "- Shape content is a STACK: a repeater, trim_paths, offset_paths,",
+      "  twist or zigzag changes the items ABOVE it, and each new item is",
+      "  added BELOW the last, so add the path/shape FIRST and the",
+      "  filter after it — the other way round it renders nothing.",
+      "- 'multiply it / a row / a ring of them' = one shape plus a",
+      "  repeater: {kind: 'repeater', params: {Copies: 6, Position:",
+      "  [200,0]}}. A ring is Position [0,0] with Rotation 360/Copies and",
+      "  the shape drawn off-centre; animate Copies or",
+      "  '…/Repeater 1/Transform/Rotation' with set_keyframes.",
       "- Mask path keys must all carry the SAME point count (repeat a",
       "  vertex to pad); AE cannot tween paths of different counts.",
       "- 'animate the mask / wipe it on' = set_mask_path {keys: […]} or",
@@ -605,12 +723,20 @@
       "",
       "Project panel management:",
       "- create_folder / move_to_folder / rename_item / delete_item /",
-      "  duplicate_comp / organize_project manage the project panel. Items",
+      "  duplicate_comp / organize_project / clean_project manage the",
+      "  project panel. Items",
       "  are referenced by name or id; folders also by PATH written as",
       "  ParentName/ChildName, or 'root' for the project root.",
       "  get_project_info shows each item's parent folder and each",
       "  folder's path. Same-named folders under different parents are",
       "  normal — use paths when names repeat.",
+      "- 'clean up / tidy / shrink the project' = clean_project with ONE",
+      "  action. It answers with a PREVIEW (dryRun defaults to true): list",
+      "  what would be deleted in your reply, call out anything the user",
+      "  did not ask for (empty folders, render-queue items, expressions",
+      "  that would break), and STOP. Only after they say go, call it",
+      "  again with dryRun:false. reduce_project needs keepComps — ask",
+      "  which comps matter, never guess.",
       "- Use ONLY folder and item names that appear in CURRENT PROJECT",
       "  STATE or a get_project_info result. NEVER guess a name and never",
       "  copy placeholder names from these instructions. If a lookup",
@@ -840,12 +966,21 @@
     comfy_list_workflows: function (args, cb) {
       var s = global.Settings.get();
       var list = global.Comfy.listWorkflows(s.comfyWorkflowsDir);
-      var names = [];
-      for (var i = 0; i < list.length; i++) names.push(list[i].name);
+      var names = [], examples = [];
+      for (var i = 0; i < list.length; i++) {
+        if (list[i].example) examples.push(list[i].name);
+        else names.push(list[i].name);
+      }
       if (names.length === 0) {
-        cb({ ok: false, error: "No workflow templates in " +
-             s.comfyWorkflowsDir + ". Export API-format workflows from " +
-             "ComfyUI into that folder." });
+        cb({ ok: false, error: "No runnable workflow templates in " +
+             s.comfyWorkflowsDir + "." +
+             (examples.length
+               ? " " + examples.join(", ") + " " +
+                 (examples.length > 1 ? "are format examples" :
+                                        "is a format example") +
+                 " with a placeholder checkpoint and cannot render."
+               : "") +
+             " Export API-format workflows from ComfyUI into that folder." });
         return;
       }
       cb({ ok: true, data: { workflows: names } });
@@ -857,24 +992,45 @@
         cb({ ok: false, error: "'prompt' is required" });
         return;
       }
-      var list = global.Comfy.listWorkflows(s.comfyWorkflowsDir);
+      var all = global.Comfy.listWorkflows(s.comfyWorkflowsDir);
+      // A template holding the shipped placeholder renders nothing, so it
+      // is never the default and never silently chosen. Naming one is
+      // answered with what it is, not with ComfyUI's validator dump.
+      var list = [], runnable = [];
+      for (var r = 0; r < all.length; r++) {
+        if (!all[r].example) list.push(all[r]);
+        runnable.push(all[r].name);
+      }
       if (list.length === 0) {
-        cb({ ok: false, error: "No workflow templates in " +
-             s.comfyWorkflowsDir });
+        cb({ ok: false, error: "No runnable workflow templates in " +
+             s.comfyWorkflowsDir + (all.length
+               ? " (" + runnable.join(", ") + " " +
+                 (all.length > 1 ? "are format examples" :
+                                   "is a format example") +
+                 " with a placeholder checkpoint)" : "") });
         return;
       }
+      var names = [];
+      for (var j = 0; j < list.length; j++) names.push(list[j].name);
       var chosen = list[0];
       if (args.workflow) {
-        var found = null;
-        for (var i = 0; i < list.length; i++) {
-          if (list[i].name.toLowerCase() === String(args.workflow).toLowerCase()) {
-            found = list[i];
+        var found = null, placeholder = null;
+        for (var i = 0; i < all.length; i++) {
+          if (all[i].name.toLowerCase() ===
+              String(args.workflow).toLowerCase()) {
+            if (all[i].example) placeholder = all[i];
+            else found = all[i];
             break;
           }
         }
+        if (placeholder) {
+          cb({ ok: false, error: "'" + placeholder.name + "' is a format " +
+               "example, not a usable workflow — its checkpoint is still " +
+               "the placeholder CHANGE-ME.safetensors, so ComfyUI rejects " +
+               "it. Use one of: " + names.join(", ") });
+          return;
+        }
         if (!found) {
-          var names = [];
-          for (var j = 0; j < list.length; j++) names.push(list[j].name);
           cb({ ok: false, error: "Unknown workflow '" + args.workflow +
                "'. Available: " + names.join(", ") });
           return;
@@ -1075,6 +1231,184 @@
         "with start/limit to page through the rest.";
     }
     return JSON.stringify(state);
+  }
+
+  // ------------------------------------------------- tool-result budget
+  //
+  // Every tool result the model reads passes through here. The rule is
+  // the one budgetState already follows, for the same reason and paid for
+  // by the same kind of field measurement: NOTHING IS BYTE-SLICED.
+  //
+  // Measured in AE 2026 on a 200-layer comp (WORKPLAN item 4): eleven of
+  // the tools the model leans on hardest serialize past the old 1200-byte
+  // per-result cap — grid_layout 7258, get_comp_details 7305 (already
+  // row-capped at 40 by the host), stagger_layers 7262, distribute_property
+  // 6529, list_properties 5648, scale_comp 3577, list_effects 3514,
+  // get_project_info 3207, set_layer_parent 1589, audit_comp_usage 1442,
+  // rename_comps 1339 — and `slice(0, 1200)` handed every one of them to
+  // the model as JSON cut mid-object, with no count of what went missing.
+  //
+  // Two things changed:
+  //  1. Oversized results are shrunk STRUCTURALLY — whole rows off the
+  //     END of their longest array (lists here are ordered, so the head
+  //     is the informative part), each shrunk array reporting "12 of 200"
+  //     in a `truncated` field. The output is always parseable JSON.
+  //  2. The per-result cap is a FAIR SHARE of the round's budget, not a
+  //     fixed 1200. A round whose other results are 90-byte
+  //     acknowledgements lets the one get_comp_details use nearly the
+  //     whole 6000 — under the old fixed cap it got 1200 bytes, which is
+  //     six layer rows out of the forty the host went to the trouble of
+  //     selecting.
+
+  var RESULTS_BUDGET = 6000;
+  var RESULT_FLOOR = 120;      // enough for the shell + the note
+
+  function jsonLen(v) {
+    try { return JSON.stringify(v).length; } catch (e) { return 0; }
+  }
+
+  /** Every array worth dropping rows from, result-object first. */
+  function shrinkableArrays(obj, depth, out) {
+    if (!obj || typeof obj !== "object" || depth > 3) return out;
+    for (var k in obj) {
+      if (!Object.prototype.hasOwnProperty.call(obj, k)) continue;
+      var v = obj[k];
+      if (v && typeof v === "object") {
+        if (Object.prototype.toString.call(v) === "[object Array]") {
+          if (v.length) out.push({ owner: obj, key: k, arr: v, full: v.length });
+        } else {
+          shrinkableArrays(v, depth + 1, out);
+        }
+      }
+    }
+    return out;
+  }
+
+  /** The longest string value in the result, for the no-arrays case. */
+  function longestString(obj, depth, best) {
+    if (!obj || typeof obj !== "object" || depth > 3) return best;
+    for (var k in obj) {
+      if (!Object.prototype.hasOwnProperty.call(obj, k)) continue;
+      var v = obj[k];
+      if (typeof v === "string") {
+        if (!best || v.length > best.len) best = { owner: obj, key: k, len: v.length };
+      } else if (v && typeof v === "object") {
+        best = longestString(v, depth + 1, best);
+      }
+    }
+    return best;
+  }
+
+  /**
+   * Shrink ONE result to `cap` bytes without ever cutting mid-object.
+   * Returns the JSON string. Mutates a deep copy, never the caller's
+   * object — the transcript the user sees keeps everything.
+   */
+  function fitResult(result, cap) {
+    var s = jsonLen(result) ? JSON.stringify(result) : String(result);
+    if (s.length <= cap) return s;
+
+    var copy;
+    try { copy = JSON.parse(s); } catch (e) { return s.slice(0, cap) + " …(truncated)"; }
+
+    var arrays = shrinkableArrays(copy, 0, []);
+    var touched = [];
+
+    // The note has to be written BEFORE the size is checked, or it is the
+    // thing that puts the result back over the cap — which is how the
+    // first cut of this shrinker still produced unparseable JSON.
+    function annotate() {
+      var owners = [], t, q, idx;
+      for (t = 0; t < touched.length; t++) {
+        idx = -1;
+        for (q = 0; q < owners.length; q++) {
+          if (owners[q].owner === touched[t].owner) idx = q;
+        }
+        if (idx < 0) { owners.push({ owner: touched[t].owner, lines: [] });
+                       idx = owners.length - 1; }
+        owners[idx].lines.push(touched[t].key + ": " + touched[t].arr.length +
+                               " of " + touched[t].full + " shown");
+      }
+      for (q = 0; q < owners.length; q++) {
+        owners[q].owner.truncated = owners[q].lines.join("; ") +
+          " (dropped to fit the model's context, NOT by the tool — " +
+          "narrow the request or page for the rest)";
+      }
+    }
+
+    while (JSON.stringify(copy).length > cap) {
+      // Always take from whichever array is currently costing the most,
+      // and take from its END: these lists are ordered, so the head is
+      // the informative part.
+      var big = null;
+      for (var i = 0; i < arrays.length; i++) {
+        if (!arrays[i].arr.length) continue;
+        var w = jsonLen(arrays[i].arr);
+        if (!big || w > big.w) big = { a: arrays[i], w: w };
+      }
+      if (!big) break;
+      big.a.arr.pop();
+      var seen = false;
+      for (var u = 0; u < touched.length; u++) if (touched[u] === big.a) seen = true;
+      if (!seen) touched.push(big.a);
+      annotate();
+    }
+    var out = JSON.stringify(copy);
+    if (out.length > cap) {
+      // No arrays left to drop: shorten the longest STRING instead, which
+      // still leaves valid JSON.
+      var ls = longestString(copy, 0, null);
+      if (ls) {
+        var keep = Math.max(40, ls.len - (out.length - cap) - 20);
+        ls.owner[ls.key] = String(ls.owner[ls.key]).slice(0, keep) + " …";
+        out = JSON.stringify(copy);
+      }
+    }
+    return out.length > cap ? out.slice(0, cap) + " …(truncated)" : out;
+  }
+
+  /**
+   * Bound a whole round of tool results. Each result gets an equal share
+   * of the budget; results that come in under their share donate what
+   * they did not use to the ones that need it (repeated until nothing
+   * more can be given away), so one big read is not punished for the
+   * company it keeps.
+   */
+  function compactToolResults(results) {
+    var n = results.length;
+    if (!n) return "[]";
+    var sizes = [], i;
+    for (i = 0; i < n; i++) sizes.push(fitResult(results[i], Infinity).length);
+
+    // The budget covers what is SENT, so the brackets and the ",\n"
+    // between results come out of it before anyone gets a share.
+    var pool = Math.max(n * 40, RESULTS_BUDGET - 2 - (n - 1) * 2);
+    var caps = [], settled = [], unsettled = n;
+    for (i = 0; i < n; i++) { caps.push(0); settled.push(false); }
+    var moved = true;
+    while (moved && unsettled > 0) {
+      moved = false;
+      var share = Math.floor(pool / unsettled);
+      for (i = 0; i < n; i++) {
+        if (settled[i] || sizes[i] > share) continue;
+        caps[i] = sizes[i];
+        settled[i] = true;
+        pool -= sizes[i];
+        unsettled--;
+        moved = true;
+      }
+    }
+    if (unsettled > 0) {
+      var each = Math.floor(pool / unsettled);
+      // A floor, but only while it still fits the round — the total is
+      // the harder promise of the two.
+      if (n * RESULT_FLOOR <= RESULTS_BUDGET) each = Math.max(RESULT_FLOOR, each);
+      for (i = 0; i < n; i++) if (!settled[i]) caps[i] = each;
+    }
+
+    var parts = [];
+    for (i = 0; i < n; i++) parts.push(fitResult(results[i], caps[i]));
+    return "[" + parts.join(",\n") + "]";
   }
 
   /**
@@ -1364,6 +1698,7 @@
     RESPONSE_SCHEMA: RESPONSE_SCHEMA,
     buildSystemPrompt: buildSystemPrompt,
     fetchProjectState: fetchProjectState,
+    compactToolResults: compactToolResults,
     callHostTool: callHostTool,
     callHostBatch: callHostBatch,
     executeCommands: executeCommands,

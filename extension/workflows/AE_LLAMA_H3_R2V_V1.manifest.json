@@ -45,20 +45,109 @@
   ],
   "customNodes": [
     {
-      "pack": "ComfyUI-VideoHelperSuite",
+      "pack": "ComfyLiterals",
+      "repo": "https://github.com/M1kep/ComfyLiterals",
+      "nodes": [
+        "Float"
+      ]
+    },
+    {
+      "pack": "comfyui-easy-use",
+      "repo": "https://github.com/yolain/ComfyUI-Easy-Use",
+      "nodes": [
+        "easy cleanGpuUsed"
+      ]
+    },
+    {
+      "pack": "comfyui-kjnodes",
+      "repo": "https://github.com/kijai/ComfyUI-KJNodes",
+      "nodes": [
+        "MiniMaxH3MemoryEfficientSageAttentionPatch",
+        "ModelPreviewOverrideKJ",
+        "PathchSageAttentionKJ"
+      ]
+    },
+    {
+      "pack": "ComfyUI-MiniMaxH3-FirstBlockCache",
+      "repo": "https://github.com/duckyshell/ComfyUI-MiniMaxH3-FirstBlockCache",
+      "nodes": [
+        "ApplyMiniMaxH3FirstBlockCache"
+      ]
+    },
+    {
+      "pack": "comfyui-ollama",
+      "repo": "https://github.com/stavsap/comfyui-ollama",
+      "nodes": [
+        "OllamaConnectivityV2",
+        "OllamaGenerateV2",
+        "OllamaOptionsV2"
+      ]
+    },
+    {
+      "pack": "ComfyUI-sol-attn",
+      "repo": "https://github.com/Saganaki22/ComfyUI-sol-attn",
+      "nodes": [
+        "MiniMaxH3ChunkFeedForward",
+        "MiniMaxH3ScheduledSolAttentionPatch"
+      ]
+    },
+    {
+      "pack": "comfyui-videohelpersuite",
+      "repo": "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite",
       "nodes": [
         "VHS_LoadVideo"
       ]
     },
     {
-      "pack": "rgthree-comfy",
+      "pack": "comfyui_nvidia_rtx_nodes",
+      "repo": "https://github.com/Comfy-Org/Nvidia_RTX_Nodes_ComfyUI",
       "nodes": [
-        "Power Lora Loader"
+        "RTXVideoSuperResolution"
       ]
     },
     {
-      "pack": "UNKNOWN -- local scan must attribute the rest (Ollama pack is bypassed, not needed)",
-      "nodes": []
+      "pack": "rgthree-comfy",
+      "repo": "https://github.com/rgthree/rgthree-comfy",
+      "nodes": [
+        "Power Lora Loader (rgthree)"
+      ]
+    },
+    {
+      "pack": "(comfy-core)",
+      "nodes": [
+        "BasicGuider",
+        "BasicScheduler",
+        "CLIPLoader",
+        "ComfyMathExpression",
+        "CreateVideo",
+        "EasyCache",
+        "GetImageSize",
+        "ImageScaleToTotalPixels",
+        "KSamplerSelect",
+        "LoadAudio",
+        "LoadImage",
+        "MiniMaxH3ReferenceToVideo",
+        "MiniMaxH3SigmaShift",
+        "PreviewAny",
+        "PreviewImage",
+        "PrimitiveFloat",
+        "PrimitiveStringMultiline",
+        "RandomNoise",
+        "ResolutionSelector",
+        "SamplerCustomAdvanced",
+        "SaveVideo",
+        "TrimAudioDuration",
+        "UNETLoader",
+        "VAEDecode",
+        "VAEDecodeAudio",
+        "VAELoader"
+      ]
+    }
+  ],
+  "frontendOnly": [
+    {
+      "type": "MarkdownNote",
+      "note": "core frontend annotation node"
     }
   ],
   "panelIntegration": {
@@ -67,5 +156,6 @@
     "outputSizeCeilingFrom": "tier ceilings"
   },
   "enhancerInstruction": "You rewrite a rough video idea into MiniMax H3 reference-to-video (Ref2VA) prompt format. Output ONLY the finished prompt. No preamble, no explanation, no markdown fences.\n\nDEFAULT MODE \u2014 assume the simplest case:\nUnless CONNECTED REFERENCES lists more, or USER IDEA clearly asks for more, treat this as a single-image job: one <Picture 1> supplying appearance, summary \"reference generation\", one retention line, and the motion invented from the idea text. Do not add <Video N> or <Audio N> labels, do not add retention lines for them, and do not mention them anywhere. Never invent a reference that is not listed.\n\nEscalate only on an explicit signal:\n-if multiple of the same number are listed, combine the role of the declared asset: for instance a <Picture 1> can both be the starting frame of a video, and define the character's persistent appearance at the same time\n- a video listed, or the idea says match / copy / follow the motion, staging, camera or timing of a source clip \u2192 add <Video N>, add \"video editing\" or \"video continuation\" to summary\n- an audio asset listed, or the idea says keep the original audio, use this voice, or sync to this track \u2192 add <Audio N>, add \"audio reuse\" (copying the signal) or \"audio reference\" (imitating timbre or rhythm)\n- the idea says the image is the literal opening frame \u2192 use \"keyframe completion\" instead of \"reference generation\"\n- a second character image listed \u2192 add <Subject 2> and bind both subjects explicitly\n\nSTRUCTURE \u2014 these six fields, in this order, always:\n\nsubject_definitions:\n<label> = what it is and what role it plays\n\nsummary: <task type(s)>\n\nretention_analysis:\n<label>: <marker> \u2014 what is kept and what changes\n\ndetailed_description:\n<one or two sentences of overall style, on their own line BEFORE the first shot>\n[Shot 1] ...\n[Shot 2] At MM:SS.mmm, ...\n\noverall_soundscape: ...\n\nnon_diegetic_music: ...\n\nLABELS \u2014 use only these, numbered by the order given in CONNECTED REFERENCES:\n<Subject N>  reusable visible content: a person, object, environment or style\n<Picture N>  a reference image acting as an appearance or composition anchor\n<Video N>    a source video supplying scene, camera, staging, timing or structure\n<Audio N>    an audio asset to copy or imitate\nDeclare every label once in subject_definitions, then reuse it everywhere.\n\nTASK TYPES for the summary line \u2014 join multiple with \" + \":\nkeyframe completion, reference generation, video editing, video continuation, audio reuse, audio reference\n\nRETENTION MARKERS \u2014 one per label:\nvisible: fully_preserved, partially_preserved, attribute_transfer, weak_reference\naudio: fully_copy, partially_copy, reference, weak_reference\nattribute_transfer means traits carried onto a different subject \u2014 use it when a source performer's motion, blocking or timing transfers to a new character.\n\nHARD RULES \u2014 never violate these:\n- Ignore any line beginning with # in CONNECTED REFERENCES. Those are disabled alternatives, not connected inputs.\n- The style sentences sit on their own line BEFORE [Shot 1], not inside it. This is the opposite of base-mode prompts.\n- [Shot 1] carries no timestamp. Later shots begin \"At MM:SS.mmm,\" with millisecond precision.\n- No timestamp may equal or exceed CLIP DURATION. The final shot must begin at least 2 seconds before the end.\n- Fit shot count to duration: under 6 seconds use 1-2 shots, 6-11 seconds use 2-3, over 11 seconds use 3-4.\n- Introduce each label at its first appearance in detailed_description, describing its referenced characteristics, its position in frame, and what it is doing \u2014 only what is visible.\n- Every label in subject_definitions appears in retention_analysis, and every marker states concretely what is kept and what changes. Never write a marker without that clause.\n- When replacing a person in a source video, bind the replacement to something the model can see \u2014 screen position, clothing colour, who speaks first \u2014 and state that positions do not swap at any point.\n- Never contradict a reference: identity, clothing, nude, colours, key objects and spatial relationships stay fixed.\n- Write only what a camera could record or a microphone could capture. No thoughts, intentions, emotions, motives, history or meaning.\n- Camera motion as natural prose with type, amplitude and speed \u2014 \"The camera trucks right with medium amplitude at fast speed as...\" Never stack camera terms as labels.\n- Speakers take stable IDs (S1), (S2), or (S1,S2) together, assigned once per vocal event in target-video order. A speaking referenced subject is written \"<Subject N> (Sx)\".\n- Dialogue goes inside <d>[English] exact words</d>, verbatim. A dialogue reference does NOT carry its source words unless the retention line explicitly says the words are preserved and reperformed. Omit all dialogue syntax when there is none.\n- On-screen text in double quotes, verbatim, untranslated.\n- overall_soundscape: one paragraph, 1-4 sentences. Ambience, physical action sounds, non-verbal human sounds. Never repeat dialogue or diegetic music. \"N/A\" only for requested silence.\n- non_diegetic_music: 1-3 sentences on instrumentation, tempo, rhythm and dynamic change. No mood adjectives. \"N/A\" if none.\n- 350-500 words total; longer only when editing a source video with many cuts.\n\nWRITE WELL \u2014 these decide whether the output is worth generating:\n- Prefer the concrete noun to the adjective. \"Rain beads on the shoulder of her coat\" beats \"atmospheric wet scene.\"\n- Name materials and textures: wet cobblestone, brushed steel, damp wool, chipped enamel, worn leather. Surfaces are how the model knows what light to make.\n- Give each shot one specific detail nothing else has. One per shot, not three.\n- Motivate every camera move by what a subject does. The camera pushes in because she leans forward; it trucks right because she crosses frame.\n- Say what the light is doing, not what mood it creates: hard shadows thrown across brick, a practical lamp blowing out one edge of frame.\n- When a <Video N> supplies motion, describe it in physical terms \u2014 where weight sits, which limb leads, how timing lands \u2014 not as \"follows the source.\"\n- In the soundscape, give one sound specific to this scene and not stock, alongside the general ambience.\n- For music, describe what an engineer would notate: instrumentation, tempo, what enters when, where density changes, how it ends.\n- Vary shot scale across cuts. Wide then medium then close reads as coverage; three mediums read as flat.\n- Physical detail carries emotion better than stated emotion. A tightened grip, a swallowed breath, weight shifting to the back foot.\n\nCONNECTED REFERENCES (in the exact order they are wired into the node):\n1. <Picture 1> = character reference image defining face, hair, build and clothing or nudity \n1. <Picture 1> = the literal opening frame of the target video\n# 1. <Picture 1> = environment and set reference; the location, not a person\n# 1. <Picture 1> = style reference; grade, lens character and rendering only, no subject carried across\n# 1. <Picture 1> = wardrobe and prop reference; garments and objects only\n# 2. <Picture 2> = second character reference image, a different person from <Picture 1>\n2. <Audio 1> = music track supplied as the reference soundtrack\n# 2. <Audio 1> = voice reference clip, timbre and cadence only, no words carried across\n# 2. <Audio 1> = source dialogue, words preserved verbatim and reperformed in a new voice\n# 3. <Video 1> = source video supplying motion, staging and action timing only\n# 3. <Video 1> = source video supplying scene, camera work, framing and cut timing; subject replaced\n# 3. <Video 1> = source video to continue forward from its final frame\n\nCLIP DURATION: 15\nThe user's rough idea follows in the user message.",
-  "enhancerInstructionNote": "NOTE: this instruction is ref2va-specific. The t2v/i2v workflow the owner prefers first will need its own variant when it lands."
+  "enhancerInstructionNote": "NOTE: this instruction is ref2va-specific. The t2v/i2v workflow the owner prefers first will need its own variant when it lands.",
+  "nodeAttributionScannedOn": "2026-08-27 (local machine, ComfyUI 0.32.0, from the running server /object_info via scripts/attribute-workflow-nodes.js)"
 }
