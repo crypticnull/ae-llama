@@ -92,6 +92,58 @@ function capLayers(compName, all, args) {
 let createCount = 0;
 const createdComps = [];
 const folders = {};        // path -> true (the create_folder rig)
+// The render-queue rig (WORKPLAN 5.5). Measured in AE 2026: a render
+// takes the WHOLE queue, an existing output file raises a modal, and the
+// output module forces its own extension onto whatever path it is given.
+// The canned host models all three, because a host that answered "ok"
+// would let a tool that reintroduced any of them pass its own steps.
+const RQ_RS_TEMPLATES = ["Best Settings", "Current Settings",
+  "Draft Settings", "Multi-Machine Settings", "_HIDDEN X-Factor"];
+const RQ_OM_TEMPLATES = ["AIFF 48kHz", "Alpha Only",
+  "H.264 - Match Render Settings - 15 Mbps", "High Quality", "Lossless",
+  "Lossless with Alpha", "TIFF Sequence with Alpha", "_HIDDEN X-Factor 8"];
+const RQ_OM_EXT = {
+  "Lossless": "avi", "Lossless with Alpha": "avi", "High Quality": "avi",
+  "H.264 - Match Render Settings - 15 Mbps": "mp4",
+  "TIFF Sequence with Alpha": "tif", "AIFF 48kHz": "aif",
+  "Alpha Only": "avi", "_HIDDEN X-Factor 8": "avi"
+};
+const RQ_DEFAULT_OM = "H.264 - Match Render Settings - 15 Mbps";
+const RQ_INHERITED =
+  "C:\\Users\\probe\\Documents\\ComfyUI\\output\\video\\LAST";
+const RQ_FOLDERS = ["c:\\users\\probe\\appdata\\local\\temp",
+                    "c:\\users\\probe\\documents",
+                    RQ_INHERITED.toLowerCase()];
+const rqItems = [];        // what the user has queued
+const rqDisk = {};         // lowercased path -> bytes
+function rqNorm(p) { return String(p).split("/").join("\\"); }
+function rqDirOf(p) {
+  const n = rqNorm(p);
+  const i = n.lastIndexOf("\\");
+  return i <= 0 ? n : n.slice(0, i);
+}
+function rqFolderExists(d) {
+  return RQ_FOLDERS.indexOf(rqNorm(d).toLowerCase()) !== -1;
+}
+function rqNearestFolder(d) {
+  let cur = rqNorm(d);
+  while (cur.indexOf("\\") > 0) {
+    cur = cur.slice(0, cur.lastIndexOf("\\"));
+    if (rqFolderExists(cur)) return cur;
+  }
+  return "(none - check the drive letter)";
+}
+function rqExtOf(p) {
+  const s = rqNorm(p);
+  const slash = s.lastIndexOf("\\");
+  const dot = s.lastIndexOf(".");
+  return dot <= slash + 1 ? "" : s.slice(dot + 1).toLowerCase();
+}
+function rqForceExt(p, om) {
+  const s = rqNorm(p);
+  const ext = RQ_OM_EXT[om] || "avi";
+  return rqExtOf(s) ? s.replace(/\.[^.\\]*$/, "." + ext) : s + "." + ext;
+}
 // The precompose + marker rig (WORKPLAN 5.4). The canned host has to
 // REMEMBER the parent links, expressions, trims and selection it was
 // handed, or "precompose reported the parent it broke" would be a
@@ -144,6 +196,13 @@ let preFx = {};            // layer -> effects a preset put there
 let preSelection = [];     // what split_layer_into_chunks left selected
 let preLayers = [];        // the rig's layers, in the main scratch comp
 function resetPresetRig() { preFx = {}; preSelection = []; preLayers = []; }
+// The render rig writes to a virtual disk and to the user's queue, so it
+// has to be emptied between runs or the second run starts with the first
+// run's files already on disk and its items already queued.
+function resetRqRig() {
+  rqItems.length = 0;
+  for (const k of Object.keys(rqDisk)) delete rqDisk[k];
+}
 function presetPath(p) { return (p.category ? p.category + "/" : "") + p.name; }
 function presetMatch(want) {
   const norm = String(want || "").split("\\").join("/")
@@ -2500,6 +2559,128 @@ function cannedOk(tool, args) {
       if (missing.length) out.notFound = missing;
       return out;
     }
+    // ---- render queue (WORKPLAN 5.5).
+    //
+    // A host that just answered "ok" would let every one of these steps
+    // pass while the real tool wedged AE, so this canned host models the
+    // measured hazards rather than the happy path: the whole-queue
+    // render, the overwrite modal, and the output module forcing its own
+    // extension onto the path it is handed.
+    case "list_render_templates": {
+      return { renderSettings: RQ_RS_TEMPLATES.slice(),
+               outputModules: RQ_OM_TEMPLATES.slice(),
+               tempFolder: "C:\\Users\\probe\\AppData\\Local\\Temp",
+               note: "Pass one of outputModules as {template} and one of " +
+                 "renderSettings as {renderSettings} to render_comp. " +
+                 "Names starting with '_HIDDEN' are AE internals -- do " +
+                 "not offer them. render_comp needs an ABSOLUTE output " +
+                 "path." };
+    }
+    case "add_to_render_queue": {
+      const comp = String((args && args.comp) || "");
+      const already = rqItems.filter(it => it.comp === comp).length;
+      let path = (args && args.outputPath) ? String(args.outputPath) : "";
+      if (path && !rqFolderExists(rqDirOf(path))) {
+        return { __err: "Output folder does not exist: " + rqDirOf(path) +
+          ". Create it, or queue without an outputPath and set the " +
+          "destination in AE." };
+      }
+      const asked = path;
+      // No outputPath -> AE reuses the last render's folder, which has
+      // nothing to do with this project.
+      path = rqForceExt(path || (RQ_INHERITED + "\\" + comp + ".mp4"),
+                        RQ_DEFAULT_OM);
+      rqItems.push({ comp, file: path, render: true, status: "QUEUED" });
+      const out = { comp, queuePosition: rqItems.length, status: "QUEUED",
+                    output: path };
+      if (!asked) {
+        out.note = "No outputPath given, so AE reused the last render's " +
+          "settings and folder - this will write to \"" + path +
+          "\". Pass {outputPath} to choose.";
+      } else if (rqExtOf(asked) && rqExtOf(asked) !== rqExtOf(path)) {
+        out.note = "The current output module writes ." + rqExtOf(path) +
+          ", so AE changed the destination to \"" + path + "\".";
+      }
+      if (already) {
+        out.warning = comp + " was already in the render queue " + already +
+          " time(s); this adds another, and both would render.";
+      }
+      return out;
+    }
+    case "render_comp": {
+      const comp = String((args && args.comp) || "");
+      const raw = (args && args.output) ? String(args.output) : "";
+      if (!raw) {
+        return { __err: "'output' is required - an ABSOLUTE file path to " +
+          "render to, e.g. \"C:/renders/shot.avi\"." };
+      }
+      if (!/^[a-zA-Z]:[\\/]/.test(raw) && raw.indexOf("\\\\") !== 0) {
+        return { __err: "'output' must be an ABSOLUTE path (got \"" + raw +
+          "\"). AE resolves a relative path against its own working " +
+          "directory, not the project." };
+      }
+      const dir = rqDirOf(raw);
+      if (!rqFolderExists(dir)) {
+        return { __err: "Output folder does not exist: " + dir +
+          ". Deepest folder that does exist: " + rqNearestFolder(dir) +
+          ". Create the folder, or render somewhere that exists." };
+      }
+      let om = RQ_DEFAULT_OM;
+      if (args && args.template) {
+        om = RQ_OM_TEMPLATES.filter(
+          n => n.toLowerCase() === String(args.template).toLowerCase())[0];
+        if (!om) {
+          return { __err: "No output-module template named '" +
+            args.template + "'. Installed: " +
+            RQ_OM_TEMPLATES.join(", ") + "." };
+        }
+      }
+      let rs = "";
+      if (args && args.renderSettings) {
+        rs = RQ_RS_TEMPLATES.filter(
+          n => n.toLowerCase() ===
+               String(args.renderSettings).toLowerCase())[0];
+        if (!rs) {
+          return { __err: "No render-settings template named '" +
+            args.renderSettings + "'. Installed: " +
+            RQ_RS_TEMPLATES.join(", ") + "." };
+        }
+      }
+      const path = rqForceExt(raw, om);
+      const overwrite = args && (args.overwrite === true ||
+                                 args.overwrite === "true");
+      if (rqDisk[path.toLowerCase()] !== undefined && !overwrite) {
+        return { __err: "Output file already exists: " + path + " (" +
+          rqDisk[path.toLowerCase()] + " bytes). Pass {overwrite: true} " +
+          "to replace it, or choose another path. (Rendering onto an " +
+          "existing file without this raises a modal dialog that blocks " +
+          "After Effects.)" };
+      }
+      // The whole-queue hazard: everything already queued is held back,
+      // and its flag put back afterwards. A tool that forgot would render
+      // the user's items, and the count below would be wrong.
+      const held = rqItems.filter(it => it.status === "QUEUED");
+      const frames = (args && args.frames) ? Number(args.frames)
+        : ((args && args.durationSeconds)
+            ? Math.round(Number(args.durationSeconds) * 24) : 24);
+      rqDisk[path.toLowerCase()] = 64840 * Math.max(1, frames);
+      const out = { comp, output: path, status: "DONE",
+                    bytes: rqDisk[path.toLowerCase()],
+                    seconds: 0.2, outputModule: om,
+                    renderSettings: rs || "(AE default)",
+                    timeSpan: "start 0s, " + Math.max(1, frames) +
+                      " frame(s) at 24 fps" };
+      if (rqExtOf(raw) && rqExtOf(raw) !== rqExtOf(path)) {
+        out.note = "The '" + om + "' output module writes ." +
+          rqExtOf(path) + ", so the file is \"" + path + "\", not ." +
+          rqExtOf(raw) + ".";
+      }
+      if (held.length) {
+        out.heldBack = held.length + " render-queue item(s) the user had " +
+          "already queued were held back and left QUEUED.";
+      }
+      return out;
+    }
     default: return { done: true };
   }
 }
@@ -2593,7 +2774,7 @@ SelfTest.run({
     ordStack = [];
     maskKeys = {};
     batchLayers = 0; batchFx = {}; batchBlur = null;
-    batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetPresetRig();
+    batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetPresetRig(); resetRqRig();
     SelfTest.run({
       callHostTool(tool, args, cb) {
         if (tool === "grid_layout") {
@@ -2623,7 +2804,7 @@ SelfTest.run({
         ordStack = [];
         maskKeys = {};
         batchLayers = 0; batchFx = {}; batchBlur = null;
-        batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetPresetRig();
+        batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetPresetRig(); resetRqRig();
         SelfTest.run({
           callHostTool(tool, args, cb) {
             // Never refuse anything -- the old permissive host.

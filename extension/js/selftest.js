@@ -42,6 +42,11 @@
   // And the text-animator rig: per-character 3D turns the whole LAYER 3D
   // and never gives it back, so it may not share a comp being measured.
   var TXCOMP = "AELL Self-Test Text";
+  // And the render rig: it is the only group that writes FILES and that
+  // puts items in the user's render queue, so it gets a comp of its own
+  // and takes it away again. Small on purpose — 160x120 for one frame
+  // renders in about 180 ms, measured.
+  var RQCOMP = "AELL Self-Test Render";
   var running = false;
 
   /**
@@ -4736,6 +4741,279 @@
             if (!rows[i].ok) return "row " + i + ": " + rows[i].error;
           }
           return true;
+        } },
+
+      // ---- render queue: list_render_templates / render_comp /
+      // add_to_render_queue (WORKPLAN 5.5).
+      //
+      // Measured in AE 2026 across seven probes (WORKPLAN-LOG
+      // 2026-08-28). Three of those facts are what these steps exist to
+      // hold down, because each one is invisible until it bites:
+      //
+      //  - renderQueue.render() renders the WHOLE QUEUE, so a foreign
+      //    item is queued below and must come back untouched.
+      //  - rendering onto a file that ALREADY EXISTS raises a MODAL that
+      //    wedges After Effects outright -- it ate a probe run of this
+      //    very pass and then swallowed every later -r script while the
+      //    process still looked healthy. The refusal step below is the
+      //    one that keeps the harness alive.
+      //  - the output module forces its OWN extension onto whatever path
+      //    it is handed, so the path asked for is not the path written.
+      //
+      // Everything renders one frame of a 160x120 comp into Folder.temp
+      // (~180 ms measured), so the suite pays almost nothing for it. No
+      // template name is hard-coded: installed templates differ per
+      // machine, so they come from list_render_templates.
+      { name: "create the render rig, small enough to render for free",
+        batch: function () {
+          return [
+            { tool: "create_comp",
+              args: { name: RQCOMP, width: 160, height: 120,
+                      duration: 1, frameRate: 24 } },
+            { tool: "add_solid",
+              args: { comp: RQCOMP, name: "ST RQ Fill",
+                      color: [0, 0.6, 0.9], width: 160, height: 120 } }
+          ];
+        },
+        check: function (rows, ctx) {
+          if (!rows[0].ok) return "create_comp: " + rows[0].error;
+          if (!rows[1].ok) return "add_solid: " + rows[1].error;
+          ctx.rqComp = rows[0].data.name;
+          return true;
+        } },
+
+      { name: "list_render_templates names this machine's templates",
+        tool: "list_render_templates",
+        args: {},
+        check: function (d, ctx) {
+          if (!d.outputModules || !d.outputModules.length) {
+            return "no output-module templates";
+          }
+          if (!d.renderSettings || !d.renderSettings.length) {
+            return "no render-settings templates";
+          }
+          if (!d.tempFolder) return "no tempFolder to render into";
+          ctx.rqTemp = d.tempFolder.replace(/\\/g, "/").replace(/\/$/, "");
+          // Prefer a still-image module: it is the cheapest thing AE can
+          // write, and every install has at least one video one to fall
+          // back on. Never an internal _HIDDEN entry.
+          var i, n, pick = "";
+          for (i = 0; i < d.outputModules.length; i++) {
+            n = d.outputModules[i];
+            if (/^_HIDDEN/.test(n)) continue;
+            if (/^Lossless$/i.test(n)) { pick = n; break; }
+            if (!pick) pick = n;
+          }
+          if (!pick) return "every template was _HIDDEN";
+          ctx.rqTemplate = pick;
+          ctx.rqOut = ctx.rqTemp + "/AELL_ST_render";
+          for (i = 0; i < d.renderSettings.length; i++) {
+            if (/^Draft Settings$/i.test(d.renderSettings[i])) {
+              ctx.rqSettings = d.renderSettings[i];
+            }
+          }
+          return true;
+        } },
+
+      { name: "an invented template is refused with the real list",
+        tool: "render_comp",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.rqComp, output: ctx.rqTemp + "/AELL_ST_never.avi",
+                   template: "ProRes Ultra Deluxe" };
+        },
+        check: function (err, ctx) {
+          if (/After Effects error/.test(err)) {
+            return "leaks AE's own throw, which names no alternatives: " +
+                   err;
+          }
+          return err.indexOf(ctx.rqTemplate) >= 0 ||
+                 "does not list what IS installed: " + err;
+        } },
+
+      { name: "a relative output path is refused before anything is queued",
+        tool: "render_comp",
+        expectError: true,
+        args: function (ctx) { return { comp: ctx.rqComp,
+                                        output: "renders/rel.avi" }; },
+        check: function (err) {
+          return /ABSOLUTE/i.test(err) ||
+                 "does not say the path must be absolute: " + err;
+        } },
+
+      { name: "an output folder that does not exist names the nearest one",
+        tool: "render_comp",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.rqComp,
+                   output: ctx.rqTemp + "/AELL_ST_no_such_dir/x.avi",
+                   template: ctx.rqTemplate };
+        },
+        check: function (err, ctx) {
+          if (!/does not exist/i.test(err)) return "not a folder error: " + err;
+          // The actionable half: which folder DOES exist to create it in.
+          var tail = ctx.rqTemp.replace(/^.*\//, "");
+          return err.indexOf(tail) >= 0 ||
+                 "does not name the deepest existing folder: " + err;
+        } },
+
+      { name: "render_comp writes one real frame to disk",
+        tool: "render_comp",
+        args: function (ctx) {
+          return { comp: ctx.rqComp, output: ctx.rqOut,
+                   template: ctx.rqTemplate, frames: 1, overwrite: true };
+        },
+        check: function (d, ctx) {
+          if (d.status !== "DONE") return "status " + d.status +
+            (d.warning ? " — " + d.warning : "");
+          if (!(d.bytes > 0)) {
+            return "reported DONE but " + d.bytes + " bytes — AE hides a " +
+                   "just-written file for a moment, so this is what a " +
+                   "single unpolled look would report";
+          }
+          if (!d.output) return "no output path reported";
+          // The extension is AE's choice, not ours: record what it
+          // actually settled on so the next steps aim at the same file.
+          ctx.rqWrote = d.output.replace(/\\/g, "/");
+          ctx.rqBytes = d.bytes;
+          return /1 frame/.test(d.timeSpan) ||
+                 "did not report one frame: " + d.timeSpan;
+        } },
+
+      // THE step. Without the refusal, this call reaches real AE, AE puts
+      // up an overwrite dialog, and the harness dies at exit 4 with every
+      // later pass swallowed behind it.
+      { name: "rendering onto an existing file is REFUSED, not attempted",
+        tool: "render_comp",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.rqComp, output: ctx.rqWrote,
+                   template: ctx.rqTemplate, frames: 1 };
+        },
+        check: function (err) {
+          if (!/already exists/i.test(err)) {
+            return "not an existence refusal: " + err;
+          }
+          if (!/overwrite/i.test(err)) return "no way forward offered: " + err;
+          return /modal|dialog/i.test(err) ||
+                 "does not say why it matters (a modal wedges AE): " + err;
+        } },
+
+      { name: "overwrite:true really replaces the file, and does not skip",
+        tool: "render_comp",
+        args: function (ctx) {
+          return { comp: ctx.rqComp, output: ctx.rqWrote,
+                   template: ctx.rqTemplate, frames: 6, overwrite: true };
+        },
+        check: function (d, ctx) {
+          if (d.status !== "DONE") return "status " + d.status;
+          if (!(d.bytes > 0)) return "no bytes: " + d.bytes;
+          // Six frames instead of one: if AE had quietly declined to
+          // overwrite, the size would be unchanged. This is the only way
+          // to tell a real overwrite from a silent no-op.
+          return d.bytes > ctx.rqBytes ||
+                 "the file did not grow (" + ctx.rqBytes + " -> " +
+                 d.bytes + "), so the render was silently skipped";
+        } },
+
+      { name: "the queue is left exactly as it was found",
+        tool: "add_to_render_queue",
+        args: function (ctx) { return { comp: ctx.rqComp }; },
+        check: function (d, ctx) {
+          // render_comp removes its own item, so this add must be the
+          // FIRST entry for this comp — a warning here would mean it left
+          // litter behind.
+          if (d.warning) return "render_comp left its own items queued: " +
+            d.warning;
+          if (!d.output) return "no destination reported";
+          if (!/last render/i.test(d.note || "")) {
+            return "an outputPath-less add did not say where AE would " +
+                   "write: " + (d.note || "(silent)");
+          }
+          ctx.rqQueued = true;
+          return true;
+        } },
+
+      { name: "a second add of the same comp is called out",
+        tool: "add_to_render_queue",
+        args: function (ctx) { return { comp: ctx.rqComp }; },
+        check: function (d) {
+          return /already in the render queue/i.test(d.warning || "") ||
+                 "AE allows the duplicate silently and so did we: " +
+                 (d.warning || "(silent)");
+        } },
+
+      // Two of OUR items are now sitting in the queue. A render that took
+      // the whole queue would consume them; render_comp must hold them
+      // back and hand them straight back.
+      { name: "queued items are held back, not swept into the render",
+        tool: "render_comp",
+        args: function (ctx) {
+          return { comp: ctx.rqComp, output: ctx.rqWrote,
+                   template: ctx.rqTemplate, frames: 1, overwrite: true };
+        },
+        check: function (d) {
+          if (d.status !== "DONE") return "status " + d.status;
+          if (!/held back/i.test(d.heldBack || "")) {
+            return "did not report holding the queued items back: " +
+                   (d.heldBack || "(silent)");
+          }
+          return /2 /.test(d.heldBack) ||
+                 "expected both queued items held: " + d.heldBack;
+        } },
+
+      { name: "and they are still queued afterwards, flags intact",
+        tool: "add_to_render_queue",
+        args: function (ctx) { return { comp: ctx.rqComp }; },
+        check: function (d) {
+          // Still two -> neither was rendered away nor removed. AE does
+          // not reset render=false by itself, so this also proves the
+          // flags were restored.
+          return /queue 2 time/i.test(d.warning || "") ||
+                 "the held-back items did not survive intact: " +
+                 (d.warning || "(silent)");
+        } },
+
+      // AE CANNOT RENDER INSIDE AN UNDO GROUP. Registering render_comp as
+      // mutating did exactly that, and AE answered with a modal "After
+      // Effects warning: Undo group mismatch" that wedged the harness --
+      // its renderer closes the script's group out from under it, so the
+      // count goes wrong and the warning lands at some innocent
+      // endUndoGroup much later in the run. A batch opens ONE group if
+      // any command in it mutates, so this step is the one that proves
+      // the render still steps outside it.
+      { name: "a render batched with a mutation stays out of the undo group",
+        batch: function (ctx) {
+          return [
+            { tool: "add_solid", args: { comp: ctx.rqComp, name: "ST RQ Grp",
+                color: [1, 0.5, 0], width: 40, height: 40 } },
+            { tool: "render_comp",
+              args: { comp: ctx.rqComp, output: ctx.rqWrote,
+                      template: ctx.rqTemplate, frames: 1,
+                      overwrite: true } },
+            { tool: "delete_layer", args: { comp: ctx.rqComp,
+                layer: "ST RQ Grp" } }
+          ];
+        },
+        check: function (rows) {
+          if (!rows[0].ok) return "add_solid: " + rows[0].error;
+          if (!rows[1].ok) return "render_comp: " + rows[1].error;
+          if (rows[1].data.status !== "DONE") {
+            return "status " + rows[1].data.status;
+          }
+          return rows[2].ok || "cleanup: " + rows[2].error;
+        } },
+
+      { name: "cleanup: drop the render rig and its queue items",
+        batch: function (ctx) {
+          return [
+            { tool: "delete_item", args: { item: ctx.rqComp } }
+          ];
+        },
+        check: function (rows) {
+          // Measured: removing a comp that sits in the render queue drops
+          // its queue items too, silently and with no dialog.
+          return rows[0].ok || "cleanup: " + rows[0].error;
         } },
 
       // ---- comp-rename audit + bulk rename. A three-comp rig: one

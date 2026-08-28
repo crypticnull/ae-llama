@@ -4305,3 +4305,262 @@ MINOR for the remote session to cut. Nothing shipped changed behaviour.
   it MUTATES the anchor to tell you.
 - No modal this time: four probe runs and three harness runs, all from a
   warm AE, none blocked.
+
+## 2026-08-28 (local, thirteenth pass) - item 5.5: the panel can render, and the dialog that eats a night
+
+Harness green on arrival (358/358), so the pass took the next unfinished
+feature item: **5.5, the render queue**. It was the right one to take -
+5.8, 6.1 and 6.2 all queue behind it. CAPABILITIES.md confirmed the
+shape of the work: `add_to_render_queue` already existed with zero stub
+tests and zero suite steps, exactly the 5.4 trap, so the job was probe,
+extend, cover - not build a duplicate.
+
+Seven probe runs against real AE 2026 (26.3x87). One of them wedged AE,
+which turned out to be the single most valuable result of the pass.
+
+### The question the item asked: renderQueue.render() or aerender.exe?
+
+**Settled: `renderQueue.render()` works headless from a `-r` session.**
+One frame of a 160x120 comp to a Lossless AVI came back in 181 ms with
+status DONE (3019) and 64840 real bytes on disk. No progress dialog
+survived the call, no interaction.
+
+So aerender.exe is not used, and the probe also shows it would be the
+WRONG tool here rather than merely a redundant one: aerender launches a
+second After Effects against a SAVED .aep file, and this panel drives
+the user's live, usually-unsaved project. Anything aerender rendered
+would be the last save, not what the user is looking at. Logged as a
+decision, not a preference.
+
+### The one that cost AE (and would have cost a whole night)
+
+**Rendering to an output path that ALREADY EXISTS raises a MODAL.**
+Probe 2 hit it on its last step. AE put up a 489x255 dialog that never
+painted (its own thread was wedged behind it), reported no window text
+at all - only `OS_ViewContainer`/`OS_EditTextContainer` children, which
+is what the harness's triage calls "unreadable" - and from that moment
+every `-r` script I sent was swallowed while the process still looked
+healthy in Task Manager. That is precisely the failure mode
+WORKPLAN-LOG has been describing since 2026-08-21, met head on.
+
+Cleared it with the repo's own `CloseWordlessDialogs` (WM_CLOSE on a
+titleless #32770 with no readable child text). It took TWO passes of that
+to clear - AE had a second one queued behind the first - and the probe
+script then ran to completion on its own, which is how the trigger got
+confirmed rather than guessed: the cancelled item came back QUEUED
+(3015) with the file untouched.
+
+**`app.beginSuppressDialogs()` suppresses it, and genuinely overwrites.**
+That needed proving, because a suppressed dialog answering "no" would be
+a silent no-op - the exact bug class this project cares about, and
+invisible if you re-render the same frame and compare bytes. So probe 5
+rendered 1 frame, then 12 frames to the same path: 64840 -> 698880. It
+overwrites.
+
+The tool therefore never uses suppression to find out what AE would have
+asked. `overwrite` is decided ABOVE it, in code, against a real
+`File.exists` check; suppression only stops the modal from wedging AE
+once the answer is already known.
+
+### The rest of what AE actually does
+
+- **`render()` renders the WHOLE QUEUE.** Two fresh items, one call,
+  both DONE. So "render this comp" would have rendered everything the
+  user had queued. `render = false` quarantines an item (it stays QUEUED
+  and writes nothing) and the flag does NOT reset itself, so it has to be
+  put back by hand. Both measured, both now done.
+- **The output module forces its OWN extension, on the `file` SETTER.**
+  Measured both directions: `.mp4` set under "Lossless" reads straight
+  back as `.avi`, `.avi` set under H.264 reads back as `.mp4`, and a path
+  with no extension is given one. So the path asked for is not the path
+  written, and the only honest thing to report is what `om.file` says
+  afterwards. This one cost a test iteration: I had asserted the
+  behaviour before measuring it, the stub disagreed, and the stub was
+  right to - probe 6 exists solely because I caught myself asserting an
+  unmeasured fact.
+- **A fresh output module inherits the LAST RENDER'S settings AND
+  FOLDER.** An untouched item on this machine pointed at
+  `Documents\ComfyUI\output\video\MiniMax_H3\2026_08_13\<comp>.mp4` -
+  nothing to do with the project. An outputPath-less queue add was never
+  neutral; it was bytes into a stranger's folder, silently.
+- A missing output DIRECTORY throws ("Directory does not exist: ...")
+  rather than prompting - so it can be pre-checked, and is.
+- `status` is readOnly; a DONE item cannot be re-queued.
+- A bogus template name throws a message that does NOT list the valid
+  ones. This machine has 6 render-settings and 19 output-module
+  templates, several of them `_HIDDEN` internals.
+- **Deleting a comp that sits in the render queue silently drops its
+  queue item, with no dialog** - probed specifically before writing the
+  suite cleanup, because getting that wrong wedges the harness.
+- `om.getSettings()` throws in AE 2026 ("Object of type Object found
+  where a Number, Array, or Property is needed") with or without a
+  `GetSettingsFormat` argument. `rqItem.getSettings()` works fine. Not
+  needed by anything here, but recorded so the next pass does not chase
+  it.
+
+### For item 5.8, which this one was supposed to unlock
+
+**`comp.saveFrameToPng(time, File)` EXISTS and works.** 407 bytes for a
+160x120 frame, no viewer needed, `comp.time` untouched, overwrites
+without a dialog, and `resolutionFactor` IS honoured (half res: 227
+bytes). Three silent failures measured and waiting to be handled when
+5.8 builds on it:
+
+- a folder that does not exist is a SILENT no-op - no throw, no file;
+- an out-of-range time (99s in a 1s comp, or negative) CLAMPS and writes
+  a BLANK frame rather than refusing (154 bytes vs 407);
+- a String path throws; it demands a real File object.
+
+And one that shaped code in THIS pass: **it writes LAZILY.**
+`File.exists` reads false for ~300 ms after the call while the bytes are
+already landing - reproduced on two consecutive saves, and the reason
+five files this pass first reported as missing and were on disk all
+along. Anything that verifies its own output must poll, not glance.
+`AELL_rqSettle` does. (Render output does NOT have this latency - it
+read back immediately - so the stub models the two differently rather
+than pretending they match.)
+
+### Built
+
+`render_comp {comp, output, template, renderSettings, startTime,
+durationSeconds|frames, overwrite}` renders and waits. It validates the
+output to destruction before anything is queued (absolute path; folder
+must exist, and the refusal names the DEEPEST folder that does, because
+"create the missing one" is only actionable if you know which one it is;
+existing file refused unless `overwrite`, and the refusal says WHY -
+that the alternative wedges AE). Templates are matched
+case-insensitively and a miss lists what is installed, which AE's own
+throw does not. Then it quarantines the user's queue, renders under
+suppression, restores every flag it touched and removes its own item -
+in a `try/catch` that puts the queue back whatever happened, because a
+half-restored queue is worse than not touching it. It reports the path
+AE settled on, the bytes, the frames, and how many items it held back.
+
+`list_render_templates` names both template lists (AE only exposes them
+through a LIVE queue item, so it costs a net-zero add+remove, cached per
+session) plus `tempFolder`, because render_comp demands an absolute path
+and "where do I put it" was otherwise the model's guess.
+
+`add_to_render_queue` was fixed, not replaced: it now reports where AE
+would actually write, warns when the same comp is queued twice (AE allows
+it silently and both copies render), refuses a folder that does not
+exist, reports an extension AE overrode, and gives status by name.
+
+### The bug this pass shipped, and then caught in real AE
+
+Worth writing down in full, because it is the most expensive failure
+mode this project has and I walked straight into it.
+
+**AE CANNOT RENDER INSIDE AN UNDO GROUP.** I had registered `render_comp`
+in `AELL_MUTATING` for what looked like two good reasons - one net-zero
+undo step for its queue add/remove, and dry-run protection. The suite
+then went 371/371 green, twice. And AE put up **"After Effects warning:
+Undo group mismatch"** - a modal, wedging AE for every later -r script
+while the process still reported as healthy. AE's renderer closes the
+script's undo group out from under it, so the count goes wrong and the
+warning surfaces LATER, at some innocent `endUndoGroup` further down the
+run. That delay is why the suite could pass and still poison the session.
+
+The fix took two attempts, and the first one was wrong:
+
+1. Take `render_comp` out of `AELL_MUTATING`. Dry-run protection is NOT
+   lost by this - that comes from `mutating: true` on the tools.js
+   TOOL_DEFS entry, which is a SEPARATE map. The two mean different
+   things and this is the first time that mattered.
+2. That still leaves a batch: `AELL_callBatch` opens ONE group if ANY
+   command mutates, so "add a solid and render it" puts the render right
+   back inside one. First attempt closed the group around just the render
+   and reopened it - **AE rejected that too**, same modal, measured. So a
+   round containing a no-undo-group tool now opens no group at all. The
+   cost is that the other mutations in such a round are not folded into
+   one Ctrl+Z; the alternative is a modal, so it is not a close call.
+
+Verified by three CONSECUTIVE harness runs (372/372 each) with AE clear
+afterwards - back-to-back was the condition that exposed it, since the
+second run is the first one whose output file already exists.
+
+`tests/test-undo-groups.js` had an anti-drift invariant that every tool
+documented as mutating must appear in `AELL_MUTATING`. Rather than loosen
+it, the rule now says what is actually true: a mutating tool gets a group
+UNLESS it is listed in the new `AELL_NO_UNDO_GROUP`, that list may only
+contain real tools that ARE otherwise mutating, and nothing may be in
+both. The exemption cannot be added silently.
+
+### An hour lost to my own probe scripts (read this before writing one)
+
+Four dialogs I chased as AE bugs were compile errors in MY probe files.
+Writing a probe via a bash heredoc **mangles backslashes**: 
+`.replace(/\\/g, "/")` reached disk as `.replace(/\/g, "/")`, an
+unterminated regex, so the script never compiled, never ran, and AE
+answered with a modal reading "Unable to execute script at line 7". From
+the outside that is indistinguishable from AE being wedged by the tool
+under test.
+
+Two things that would have saved the time, for the next pass:
+- **Write probe .jsx files with the Write tool, not a shell heredoc.**
+- A dialog that will not paint is one whose thread is wedged; a dialog
+  that DOES paint can be read. Move it on-screen
+  (`MoveWindow` to 100,100), wait ~3 s, screenshot, crop. Every dialog
+  this pass was readable that way, and reading the first one would have
+  ended the hunt immediately. The window-class probe alone cannot tell
+  "Undo group mismatch" from "Unable to execute script" from an
+  overwrite prompt - they are all a wordless `#32770` with two
+  `OS_ViewContainer` and one `OS_EditTextContainer`.
+
+### Covered without AE, and in AE
+
+- `tests/test-render-queue.js` (new, 82 checks) stubs the file system and
+  the render queue, modelling the whole-queue render, the overwrite
+  modal (as a distinctive throw - a test cannot model "hangs forever"),
+  the extension forcing, the inherited stale folder and the write
+  latency. Eight checks drive the RAW API first, so a stub that quietly
+  stopped modelling a hazard cannot let the fix pass on a technicality.
+  Two of my own assertions failed against it and were WRONG rather than
+  the code - that is the stub earning its keep on the day it was written.
+- 14 suite steps in `extension/js/selftest.js`, in their own comp
+  (160x120, one frame, ~180 ms a render, deleted afterwards). No template
+  name is hard-coded - they come from `list_render_templates`, because
+  installed templates differ per machine. The load-bearing step is the
+  one asserting that rendering onto an existing file is REFUSED: if that
+  ever regresses, the modal takes the harness and every pass behind it.
+  Overwrite is proved by rendering 6 frames over 1 and requiring the file
+  to GROW, since equal bytes cannot tell an overwrite from a skip.
+- `tests/test-self-test.js`'s canned host grew a render queue and a
+  virtual disk with the same three hazards, for the usual reason: a host
+  that answered "ok" would let all 13 steps pass while the real tool
+  wedged AE.
+- docs/CAPABILITIES.md regenerated, curated half updated.
+
+**Harness: 372/372 PASSED** (358 -> 372), and green on three CONSECUTIVE
+runs with AE clear afterwards. Stubbed suite: 40 files green.
+
+**Not bumped.** Two NEW tools, which the feature track says ride the next
+MINOR for the remote session to cut. The `add_to_render_queue`
+improvements are bundled with them and change no behaviour anyone was
+relying on - same precedent as pass 5.1, which also fixed shipped
+behaviour on a feature pass without bumping.
+
+### For the next pass
+
+- Item 5.6 (project hygiene) is next on the feature track. 5.8 is now
+  unblocked and cheap - `saveFrameToPng` is proven and its three silent
+  failures are measured above, so that pass is mostly `import_as_layer`.
+- Still open from earlier passes: `duplicate_comp` takes a name without
+  uniquing, and there is still no read-only `get_bounds` -
+  `center_anchor_point` remains the only route to `sourceRectAtTime` and
+  it MUTATES the anchor to tell you.
+- **Several modals this pass, all self-inflicted and all cleared** (see
+  the two sections above). One thing genuinely worth a human eye: the
+  harness triage cannot DISTINGUISH these. "Undo group mismatch",
+  "Unable to execute script at line N" and an overwrite prompt are all a
+  wordless #32770 with two OS_ViewContainer and one
+  OS_EditTextContainer, so all three read as "unreadable" and all three
+  get answered by `CloseWordlessDialogs` - which is right for the stale
+  save prompt it was built for and hides a real error otherwise. Teaching
+  the triage to SCREENSHOT and OCR a popup that paints, or simply to save
+  the bitmap next to the log, would have turned an hour of this pass into
+  a minute. Filed, not built: it changes the harness every unattended run
+  depends on, so it wants a deliberate design rather than a tired patch.
+- Also: `CloseWordlessDialogs` sometimes needs running TWICE (AE queues a
+  second dialog behind the first). If it reports "closed 1" and AE still
+  does not answer a ping, run it again before declaring AE blocked.

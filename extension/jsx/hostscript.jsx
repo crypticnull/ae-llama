@@ -5478,14 +5478,365 @@ AELL_TOOLS.set_layer_parent = function (args) {
     note: jump ? "Visual positions preserved" : "" });
 };
 
+/* ---------------------------------------------------- render queue
+ *
+ * Measured in AE 2026 (26.3x87) before any of this was written, because
+ * every line below turns on one of these:
+ *
+ *  - renderQueue.render() DOES run headless from a `-r` session: a
+ *    one-frame Lossless AVI came back in 181 ms with status DONE. So
+ *    aerender.exe is not needed and is in fact the WRONG tool here --
+ *    it launches a second AE against a SAVED .aep, and this panel drives
+ *    the user's live, usually-unsaved project.
+ *  - render() renders the WHOLE QUEUE, not the item you just added. Two
+ *    fresh items, one call, both DONE. So everything already queued is
+ *    quarantined with `render = false` and put back afterwards; a
+ *    quarantined item stays QUEUED (3015) and writes nothing.
+ *  - An output path that ALREADY EXISTS raises a MODAL. Unattended that
+ *    is fatal: it wedged AE for this pass and swallowed every later -r
+ *    script while the process still looked healthy.
+ *    app.beginSuppressDialogs() suppresses it and genuinely OVERWRITES
+ *    (64840 -> 698880 bytes when the second render was 12 frames, so it
+ *    is not a silent skip). Suppression is therefore only ever entered
+ *    with the overwrite already decided ABOVE it, never as a way to find
+ *    out what AE would have asked.
+ *  - A missing output DIRECTORY throws instead ("Directory does not
+ *    exist: ..."), so it is pre-checked rather than caught.
+ *  - The output module ALWAYS forces its own file extension, and it does
+ *    it on the `file` SETTER rather than at render time: a path ending
+ *    .mp4 set under "Lossless" reads straight back as .avi, an .avi set
+ *    under H.264 reads back as .mp4, and a path with no extension is
+ *    given one. So the template is applied FIRST, the file set after,
+ *    and the path REPORTED is the one AE settled on -- never the one
+ *    that was asked for.
+ *  - A fresh output module inherits the LAST RENDER'S settings AND
+ *    FOLDER. On this machine an untouched item pointed at
+ *    Documents\ComfyUI\output\video\... -- nothing to do with the
+ *    project. An outputPath-less queue add is therefore not neutral, and
+ *    add_to_render_queue now says where AE would put it.
+ *  - status is readOnly; a DONE item cannot be re-queued.
+ *  - A bogus template name throws a message that does NOT list the valid
+ *    ones, hence the grounded errors below.
+ */
+
+var AELL_RQ_STATUS = {
+  3012: "WILL_CONTINUE", 3013: "NEEDS_OUTPUT", 3014: "UNQUEUED",
+  3015: "QUEUED", 3016: "RENDERING", 3017: "USER_STOPPED",
+  3018: "ERR_STOPPED", 3019: "DONE"
+};
+
+/* The extension of a path, or "" when it has none. A path with no dot at
+ * all must not read as "the whole path is the extension", or a perfectly
+ * good "render to X" reports that AE changed its mind about it. */
+function AELL_extOf(p) {
+  var s = String(p);
+  var slash = Math.max(s.lastIndexOf("/"), s.lastIndexOf("\\"));
+  var dot = s.lastIndexOf(".");
+  if (dot <= slash + 1) return "";
+  return s.slice(dot + 1).toLowerCase();
+}
+
+function AELL_rqStatusName(code) {
+  var n = AELL_RQ_STATUS[code];
+  return n ? n : ("status " + code);
+}
+
+/* AE only exposes template lists through a LIVE queue item, so reading
+ * them costs an add + remove. Net-zero on the queue, but cached for the
+ * session anyway -- the lists cannot change while AE runs. */
+var AELL_rqTemplateCache = null;
+
+function AELL_rqTemplates() {
+  if (AELL_rqTemplateCache) return AELL_rqTemplateCache;
+  var proj = app.project;
+  if (!proj) throw new Error("No project open");
+  var comp = null, i;
+  for (i = 1; i <= proj.numItems; i++) {
+    if (proj.item(i) instanceof CompItem) { comp = proj.item(i); break; }
+  }
+  if (!comp) {
+    throw new Error("The project has no comp, and AE only lists render " +
+      "templates through a render-queue item. Create a comp first.");
+  }
+  var item = proj.renderQueue.items.add(comp);
+  var out = { renderSettings: [], outputModules: [] };
+  try {
+    out.renderSettings = item.templates.slice(0);
+    out.outputModules = item.outputModule(1).templates.slice(0);
+  } finally {
+    try { item.remove(); } catch (eR) {}
+  }
+  AELL_rqTemplateCache = out;
+  return out;
+}
+
+/* Case-insensitive exact match, so the model's "lossless" finds
+ * "Lossless" instead of taking AE's unhelpful throw. */
+function AELL_rqPickTemplate(list, want, label) {
+  var i, w = String(want);
+  for (i = 0; i < list.length; i++) {
+    if (list[i] === w) return list[i];
+  }
+  var lw = w.toLowerCase();
+  for (i = 0; i < list.length; i++) {
+    if (String(list[i]).toLowerCase() === lw) return list[i];
+  }
+  throw new Error("No " + label + " template named '" + w +
+    "'. Installed: " + list.join(", ") + ".");
+}
+
+AELL_TOOLS.list_render_templates = function (args) {
+  var t = AELL_rqTemplates();
+  // render_comp demands an absolute path in a folder that exists, and
+  // "somewhere to put it" is otherwise a thing the model can only guess
+  // at -- so hand it one real writable folder rather than let it invent
+  // C:\output and take the refusal.
+  var temp = "";
+  try { temp = Folder.temp.fsName; } catch (eT) {}
+  return AELL_okay({
+    renderSettings: t.renderSettings,
+    outputModules: t.outputModules,
+    tempFolder: temp,
+    note: "Pass one of outputModules as {template} and one of " +
+      "renderSettings as {renderSettings} to render_comp. Names " +
+      "starting with '_HIDDEN' are AE internals -- do not offer them. " +
+      "render_comp needs an ABSOLUTE output path; ask the user where " +
+      "the file should go, and use tempFolder only for throwaways."
+  });
+};
+
+/* The output path is the one argument a render cannot guess, and every
+ * way it can be wrong ends in either a wedged AE or bytes in a folder
+ * nobody meant. So it is checked to destruction before anything is
+ * queued. */
+function AELL_rqCheckOutput(raw, overwrite) {
+  if (raw === null || typeof raw === "undefined" || raw === "") {
+    throw new Error("'output' is required - an ABSOLUTE file path to " +
+      "render to, e.g. \"C:/renders/shot.avi\".");
+  }
+  var path = String(raw);
+  if (!/^[a-zA-Z]:[\\\/]/.test(path) && path.indexOf("\\\\") !== 0) {
+    throw new Error("'output' must be an ABSOLUTE path (got \"" + path +
+      "\"). AE resolves a relative path against its own working " +
+      "directory, not the project.");
+  }
+  var file = new File(path);
+  var dir = file.parent;
+  if (!dir || !dir.exists) {
+    // Name the deepest folder that DOES exist: "create the missing one"
+    // is only actionable if you know which one is missing.
+    var probe = dir, missing = dir ? dir.fsName : "(none)", nearest = "";
+    var guard = 0;
+    while (probe && guard < 40) {
+      if (probe.exists) { nearest = probe.fsName; break; }
+      probe = probe.parent;
+      guard++;
+    }
+    throw new Error("Output folder does not exist: " + missing +
+      ". Deepest folder that does exist: " +
+      (nearest || "(none - check the drive letter)") +
+      ". Create the folder, or render somewhere that exists.");
+  }
+  if (file.exists && !overwrite) {
+    throw new Error("Output file already exists: " + file.fsName + " (" +
+      file.length + " bytes). Pass {overwrite: true} to replace it, or " +
+      "choose another path. (Rendering onto an existing file without " +
+      "this raises a modal dialog that blocks After Effects.)");
+  }
+  return file;
+}
+
+/* A render is only believable if the bytes are there afterwards, and AE
+ * does not make that easy: a file it has just written reports
+ * exists === false to a brand-new File object for a moment (measured on
+ * saveFrameToPng, ~300 ms). Polling rather than one look is the
+ * difference between reporting a good render and calling it a failure. */
+function AELL_rqSettle(file, tries) {
+  var n = tries > 0 ? tries : 10;
+  for (var i = 0; i < n; i++) {
+    var f = new File(file.fsName);
+    if (f.exists) return f.length;
+    $.sleep(100);
+  }
+  return -1;
+}
+
+AELL_TOOLS.render_comp = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  var proj = app.project;
+  var overwrite = args.overwrite === true || args.overwrite === "true";
+  var file = AELL_rqCheckOutput(args.output, overwrite);
+
+  var tmpl = AELL_rqTemplates();
+  var wantOM = null, wantRS = null;
+  if (args.template) {
+    wantOM = AELL_rqPickTemplate(tmpl.outputModules, args.template,
+                                 "output-module");
+  }
+  if (args.renderSettings) {
+    wantRS = AELL_rqPickTemplate(tmpl.renderSettings, args.renderSettings,
+                                 "render-settings");
+  }
+
+  // Hold back everything the USER already queued. render() takes the
+  // whole queue, so without this a "render this comp" turns into
+  // "render everything in the project".
+  var held = [], i, it;
+  for (i = 1; i <= proj.renderQueue.numItems; i++) {
+    it = proj.renderQueue.item(i);
+    if (it.status === RQItemStatus.QUEUED) {
+      held.push(it);
+      it.render = false;
+    }
+  }
+
+  var mine = proj.renderQueue.items.add(comp);
+  var result = null, thrown = null, started = new Date().getTime();
+  try {
+    if (wantRS) mine.applyTemplate(wantRS);
+    // Template BEFORE file: applyTemplate rewrites the extension.
+    if (wantOM) mine.outputModule(1).applyTemplate(wantOM);
+    mine.outputModule(1).file = file;
+
+    if (typeof args.startTime !== "undefined" && args.startTime !== null &&
+        args.startTime !== "") {
+      mine.timeSpanStart = Number(args.startTime);
+    }
+    if (typeof args.durationSeconds !== "undefined" &&
+        args.durationSeconds !== null && args.durationSeconds !== "") {
+      mine.timeSpanDuration = Number(args.durationSeconds);
+    } else if (typeof args.frames !== "undefined" && args.frames !== null &&
+               args.frames !== "") {
+      mine.timeSpanDuration = Number(args.frames) / comp.frameRate;
+    }
+
+    var spanStart = mine.timeSpanStart, spanDur = mine.timeSpanDuration;
+    var finalPath = mine.outputModule(1).file.fsName;
+    var omName = mine.outputModule(1).name;
+
+    // Suppression is entered ONLY here, with overwrite already decided
+    // above. Its single job is to stop the overwrite modal from wedging
+    // AE -- never to make AE silently answer a question we did not ask.
+    app.beginSuppressDialogs();
+    try {
+      proj.renderQueue.render();
+    } finally {
+      app.endSuppressDialogs(false);
+    }
+
+    var status = mine.status;
+    var bytes = (status === RQItemStatus.DONE)
+      ? AELL_rqSettle(new File(finalPath), 10) : -1;
+
+    result = {
+      comp: comp.name,
+      output: finalPath,
+      status: AELL_rqStatusName(status),
+      bytes: bytes,
+      seconds: Math.round((new Date().getTime() - started) / 100) / 10,
+      outputModule: omName,
+      renderSettings: wantRS || "(AE default)",
+      timeSpan: "start " + spanStart + "s, " +
+        Math.round(spanDur * comp.frameRate) + " frame(s) at " +
+        comp.frameRate + " fps"
+    };
+    if (status !== RQItemStatus.DONE) {
+      result.warning = "AE finished with " + AELL_rqStatusName(status) +
+        " - nothing was written. Check the output path and the comp.";
+    } else if (bytes === 0) {
+      result.warning = "The render reported DONE but the file is empty.";
+    } else if (bytes < 0) {
+      result.warning = "The render reported DONE but no file appeared at " +
+        finalPath + ".";
+    }
+    // An extension AE did not honour is how a "why is my mp4 an avi"
+    // support question starts; say it now rather than let the user find
+    // a file that will not open.
+    var askedExt = AELL_extOf(String(args.output));
+    var gotExt = AELL_extOf(finalPath);
+    if (askedExt && askedExt !== gotExt) {
+      result.note = "The '" + omName + "' output module writes ." + gotExt +
+        ", so the file is \"" + finalPath + "\", not ." + askedExt + ".";
+    }
+    if (held.length) {
+      result.heldBack = held.length + " render-queue item(s) the user had " +
+        "already queued were held back and left QUEUED.";
+    }
+  } catch (e) {
+    thrown = e;
+  }
+
+  // Put the queue back the way it was, whatever happened. Our own item
+  // is litter: its status is readOnly, so a DONE one cannot even be
+  // re-run from the UI.
+  try { mine.remove(); } catch (eM) {}
+  for (i = 0; i < held.length; i++) {
+    try { held[i].render = true; } catch (eH) {}
+  }
+  if (thrown) {
+    return AELL_err("Render failed: " + (thrown.message || thrown));
+  }
+  return AELL_okay(result);
+};
+
 AELL_TOOLS.add_to_render_queue = function (args) {
   var comp = AELL_resolveComp(args.comp);
-  var rqItem = app.project.renderQueue.items.add(comp);
-  if (typeof args.outputPath === "string" && args.outputPath !== "") {
-    rqItem.outputModule(1).file = new File(args.outputPath);
+  var proj = app.project;
+  // A comp can sit in the queue twice; AE says nothing. Worth a word,
+  // because the duplicate renders too.
+  var already = 0, i;
+  for (i = 1; i <= proj.renderQueue.numItems; i++) {
+    if (proj.renderQueue.item(i).comp === comp) already++;
   }
-  return AELL_okay({ comp: comp.name,
-                     queuePosition: app.project.renderQueue.numItems });
+  var wantPath = (typeof args.outputPath === "string" &&
+                  args.outputPath !== "") ? String(args.outputPath) : "";
+  if (wantPath) {
+    // Same pre-check as render_comp, minus the overwrite rule: nothing
+    // renders yet, so an existing file is not a modal risk here.
+    var f = new File(wantPath);
+    var dir = f.parent;
+    if (!dir || !dir.exists) {
+      return AELL_err("Output folder does not exist: " +
+        (dir ? dir.fsName : wantPath) + ". Create it, or queue without " +
+        "an outputPath and set the destination in AE.");
+    }
+  }
+  var rqItem = proj.renderQueue.items.add(comp);
+  if (wantPath) rqItem.outputModule(1).file = new File(wantPath);
+
+  var out = { comp: comp.name,
+              queuePosition: proj.renderQueue.numItems,
+              status: AELL_rqStatusName(rqItem.status) };
+  var landing = "";
+  try { landing = rqItem.outputModule(1).file.fsName; } catch (eF) {}
+  out.output = landing;
+  if (wantPath) {
+    // The output module forces its own extension on the setter, so the
+    // path handed in is not necessarily the path AE kept. Saying so here
+    // costs a line; not saying it costs the user a hunt for a file that
+    // is not where they asked for it.
+    var askedExt = AELL_extOf(wantPath);
+    var gotExt = AELL_extOf(landing);
+    if (askedExt && askedExt !== gotExt) {
+      out.note = "The current output module writes ." + gotExt +
+        ", so AE changed the destination to \"" + landing + "\". Use " +
+        "list_render_templates and render_comp {template} to pick a " +
+        "format on purpose.";
+    }
+  }
+  if (!wantPath) {
+    // Measured: a fresh output module inherits the LAST RENDER'S folder,
+    // which on a real machine is somewhere else entirely. Silence here
+    // is how bytes end up in a stranger's folder.
+    out.note = "No outputPath given, so AE reused the last render's " +
+      "settings and folder - this will write to \"" + landing +
+      "\". Pass {outputPath} to choose.";
+  }
+  if (already) {
+    out.warning = comp.name + " was already in the render queue " +
+      already + " time(s); this adds another, and both would render.";
+  }
+  return AELL_okay(out);
 };
 
 // ------------------------------------------- universal property access
@@ -6736,6 +7087,27 @@ var AELL_MUTATING = {
   apply_effect: true, set_effect_param: true, set_layer_timing: true,
   delete_layer: true, set_comp_setting: true, import_file: true,
   add_to_render_queue: true, add_shape_layer: true, add_mask: true,
+  // render_comp and list_render_templates are deliberately ABSENT, and
+  // render_comp's absence is load-bearing rather than tidy.
+  //
+  // This map opens an undo group around the tool, and AE CANNOT RENDER
+  // INSIDE ONE. Measured the hard way: with render_comp registered here
+  // the suite rendered fine and then AE put up "After Effects warning:
+  // Undo group mismatch" -- a modal, which wedges an unattended AE and
+  // swallows every -r script after it while the process still reports as
+  // healthy. AE's renderer closes the script's group out from under it,
+  // so the count goes wrong and the warning surfaces later, at some
+  // innocent endUndoGroup further down the run. Nothing here needs
+  // undoing anyway: render_comp removes its own queue item and restores
+  // every flag it touched, and the FILE it writes is not undoable.
+  //
+  // Dry-run protection is NOT lost by this: that comes from
+  // `mutating: true` on the tools.js TOOL_DEFS entry, which is a
+  // separate map, so a dry run still refuses to burn a real render.
+  //
+  // list_render_templates is absent for its own reason: it is a READ the
+  // model needs during a dry run, and listing it here would also let a
+  // successful read arm AELL_maybeRollback.
   precompose: true, add_camera: true, add_light: true,
   add_marker: true,
   set_layer_3d: true, set_layer_parent: true,
@@ -6759,6 +7131,15 @@ var AELL_MUTATING = {
   set_solid_color: true,
   apply_preset: true
 };
+
+/* Tools that must NOT run inside an undo group, whatever else is in the
+ * round with them. Keeping render_comp out of AELL_MUTATING is only half
+ * the job: a BATCH opens one group if ANY command in it mutates, so
+ * "add a solid and render it" would put the render straight back inside
+ * one and earn the modal again. The batch runner steps out of the group
+ * for these and steps back in, so the caller's endUndoGroup still
+ * balances. */
+var AELL_NO_UNDO_GROUP = { render_comp: true };
 
 // --------------------------------------------------------------- entry point
 
@@ -7078,6 +7459,21 @@ function AELL_callBatch(commandsJson, optsJson) {
       }
     }
     var sentinelOk = false;
+    // AE cannot render inside an undo group: its renderer closes the
+    // script's group out from under it and AE raises a modal "Undo group
+    // mismatch" at some later endUndoGroup, which wedges an unattended
+    // run. Closing the group around just the render and reopening it was
+    // tried first and AE rejected that too -- so a round containing one
+    // of these simply does not open a group at all. The cost is that the
+    // OTHER mutations in such a round are not folded into one Ctrl+Z;
+    // the alternative is a modal, so it is not a close call.
+    var noGroup = false;
+    for (var g = 0; g < cmds.length; g++) {
+      if (AELL_NO_UNDO_GROUP[String((cmds[g] || {}).tool || "")]) {
+        noGroup = true;
+        break;
+      }
+    }
     var run = function () {
       if (arming) sentinelOk = AELL_sentinel();
       for (var j = 0; j < cmds.length; j++) {
@@ -7085,7 +7481,7 @@ function AELL_callBatch(commandsJson, optsJson) {
         results.push(AELL_runTool(String(c.tool || ""), c.args || {}));
       }
     };
-    if (mutates) {
+    if (mutates && !noGroup) {
       var label = "AE Llama: " + (first || "batch");
       if (cmds.length > 1) label += " +" + (cmds.length - 1) + " more";
       app.beginUndoGroup(label);

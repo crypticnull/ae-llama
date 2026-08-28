@@ -12,7 +12,7 @@ feature they describe. Use this to look at the product whole and ask
 
 _Regenerate with `node scripts/capability-report.js` — CI fails if this section is stale._
 
-**63 tools** (54 mutating, 9 read-only; 60 host-side, 3 panel-side).
+**65 tools** (55 mutating, 10 read-only; 62 host-side, 3 panel-side).
 
 | Tool | Does | Writes | Side | Stub tests | Suite steps |
 |---|---|---|---|---|---|
@@ -25,10 +25,10 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `add_null` | Add a null layer (use as a controller or parent) | yes | host | 1 | 7 |
 | `add_shape_content` | Add content INSIDE a shape layer: kinds group, rectangle, ellipse, star, polygon, path, fill, stroke, gradient_fill, gradient_stroke, repeater, trim_paths, merge_paths, offset_paths, rounded_corners, pucker_bloat, twist, zigzag | yes | host | 1 | 8 |
 | `add_shape_layer` | Add a shape layer (rectangle, ellipse, polygon, or star) | yes | host | — | 2 |
-| `add_solid` | Add a solid layer | yes | host | — | 26 |
+| `add_solid` | Add a solid layer | yes | host | — | 28 |
 | `add_text_animator` | Animate a text layer PER CHARACTER (typewriter, cascade, wiggle) — an animator holds the properties, a selector picks which characters get them | yes | host | 1 | 10 |
 | `add_text_layer` | Add a text layer to a comp | yes | host | 1 | 7 |
-| `add_to_render_queue` | Add a comp to the render queue | yes | host | — | — |
+| `add_to_render_queue` | Add a comp to the render queue WITHOUT rendering it | yes | host | 1 | 3 |
 | `apply_effect` | Apply an effect to a layer | yes | host | — | 6 |
 | `apply_expression_preset` | Apply a known-good expression | yes | host | 1 | 3 |
 | `apply_keyframe_ease` | Apply a bezier as TEMPORAL easing between keyframes on one property across MANY layers in ONE call (converts to AE speed/influence ease) | yes | host | 1 | 3 |
@@ -38,10 +38,10 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `comfy_generate` | Generate an image/video with local ComfyUI and import it into the AE project | yes | panel | — | — |
 | `comfy_list_workflows` | List available ComfyUI generation workflow templates by name | no | panel | — | — |
 | `comfy_status` | Check the local ComfyUI instance (online? queue depth?) | no | panel | — | — |
-| `create_comp` | Create a composition and open it | yes | host | 1 | 20 |
+| `create_comp` | Create a composition and open it | yes | host | 1 | 21 |
 | `create_folder` | Create a project-panel folder | yes | host | 1 | 8 |
-| `delete_item` | Delete a project item | yes | host | 1 | 26 |
-| `delete_layer` | Delete a layer from a comp | yes | host | — | 7 |
+| `delete_item` | Delete a project item | yes | host | 1 | 27 |
+| `delete_layer` | Delete a layer from a comp | yes | host | — | 8 |
 | `distribute_property` | Distribute a property VALUE across layers | yes | host | 1 | 5 |
 | `duplicate_comp` | Duplicate a composition | yes | host | 1 | 1 |
 | `duplicate_layer` | Duplicate a LAYER inside its comp (use duplicate_comp only for whole compositions) | yes | host | 1 | 6 |
@@ -55,12 +55,14 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `list_effects` | Enumerate effects INSTALLED in this AE (name, matchName, category), filtered and paged | no | host | 1 | 2 |
 | `list_presets` | Enumerate the ANIMATION PRESETS (.ffx) installed in this AE — AE ships ~679 (Behaviors, Text, Backgrounds, Transitions, Image, Shapes…) plus the user's own | no | host | 1 | 3 |
 | `list_properties` | DISCOVER a layer's real property tree — names, paths, types, current values | no | host | 2 | 9 |
+| `list_render_templates` | List this machine's render-settings and output-module template names for render_comp | no | host | 1 | 1 |
 | `move_to_folder` | Move project items into a folder (batch) | yes | host | 1 | 2 |
 | `organize_project` | File loose root-level items into Comps/Footage/Solids/Audio/Images folders | yes | host | — | — |
 | `precompose` | Move layers into a new nested comp (precompose) | yes | host | 1 | 5 |
 | `remove_keyframes` | Remove keyframes from a property on many layers at once — specific times or all | yes | host | 1 | 5 |
 | `rename_comps` | Rename MANY comps in one call, on the org convention (REVyy_ from a year in the old name, else REV_NO-YEAR_) | yes | host | 1 | 3 |
 | `rename_item` | Rename any project item (comp, footage, folder) | yes | host | 1 | 2 |
+| `render_comp` | Actually RENDER a comp to a file | yes | host | 1 | 8 |
 | `reorder_layers` | Restack layers WITHOUT changing their timing | yes | host | 1 | 2 |
 | `scale_comp` | Resize a comp AND scale its content to match, re-centered — like the native 'Scale Composition' script | yes | host | 2 | 2 |
 | `set_comp_setting` | Change a comp setting (duration, frame rate, bg color) | yes | host | 1 | 1 |
@@ -82,8 +84,8 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 
 **Coverage gaps (computed):**
 
-- Host tools with NO stubbed test: `add_camera`, `add_shape_layer`, `add_solid`, `add_to_render_queue`, `apply_effect`, `delete_layer`, `import_file`, `link_property`, `organize_project`, `set_effect_param`, `set_layer_timing`
-- Host tools never exercised by the self-test suite: `add_to_render_queue`, `import_file`, `organize_project`
+- Host tools with NO stubbed test: `add_camera`, `add_shape_layer`, `add_solid`, `apply_effect`, `delete_layer`, `import_file`, `link_property`, `organize_project`, `set_effect_param`, `set_layer_timing`
+- Host tools never exercised by the self-test suite: `import_file`, `organize_project`
 
 <!-- END GENERATED TOOL INVENTORY -->
 
@@ -185,12 +187,11 @@ Queued (see WORKPLAN for owners/order):
   Shadow Diffusion but not those three (the ones that arrived with
   falloff), so any bare name AE refuses is now searched down the real
   tree.
-- Suite coverage: the computed gap above is down to four tools, and each
-  is deliberate rather than pending. `add_marker`/`precompose` belong to
-  WORKPLAN 5.4 and `add_to_render_queue`/`import_file` to 5.5/5.8;
-  `organize_project` cannot be suite-tested at all, because it files
-  every LOOSE item at the project root and the suite runs inside
-  whatever project the user has open.
+- Suite coverage: `add_marker`/`precompose` (5.4) and
+  `add_to_render_queue` (5.5) have since been covered; `import_file`
+  waits on 5.8. `organize_project` cannot be suite-tested at all,
+  because it files every LOOSE item at the project root and the suite
+  runs inside whatever project the user has open.
 - `set_layer_3d` turning a layer back to 2D still destroys the 3D-only
   values — AE zeroes Position/Anchor Point Z, resets Scale Z to 100 and
   clears Orientation and X/Y Rotation, keyframes included, and turning 3D
@@ -226,9 +227,43 @@ Queued (see WORKPLAN for owners/order):
   whatsoever without throwing. The tool selects only its target and puts
   the user's selection back, and a preset that changed nothing is
   reported as a refusal naming the layer type, never as success.
-- Feature track not yet built: render queue,
-  project hygiene, audio-to-keyframes, frame round-trip, .mogrt export,
-  whisper captions, ffmpeg exports (items 5-6).
+- The panel can RENDER since 2026-08-28: `render_comp` takes a comp to a
+  file and waits for it, and `list_render_templates` names the
+  output-module and render-settings templates this machine actually has
+  (they differ per install, so nothing guesses). Seven probes decided the
+  design. `renderQueue.render()` does work headless from a `-r` session —
+  one frame in 181 ms — so aerender.exe is not used and would in fact be
+  wrong: it launches a second AE against a SAVED .aep, while this panel
+  drives a live, usually-unsaved project. The three measured hazards are
+  handled rather than merely documented: `render()` renders the WHOLE
+  QUEUE, so anything the user already queued is held back and handed
+  straight back; an output path that ALREADY EXISTS raises a modal that
+  wedges After Effects outright, so it is refused unless
+  `{overwrite: true}` and only then rendered under
+  `beginSuppressDialogs`; and the output module forces its OWN file
+  extension onto whatever path it is handed (an .mp4 set under
+  "Lossless" reads back as .avi immediately), so the path REPORTED is the
+  one AE settled on, never the one that was asked for.
+- **After Effects cannot render inside an undo group.** Its renderer
+  closes the script's group out from under it and AE raises a modal
+  "Undo group mismatch" — later in the run, at some innocent
+  `endUndoGroup`, which is why a suite can pass and still poison the
+  session. So `render_comp` is exempt from the host's undo grouping via
+  `AELL_NO_UNDO_GROUP` while staying `mutating` in the tool docs (a dry
+  run must still refuse to burn a real render — the two maps mean
+  different things), and a round that contains a render opens no undo
+  group at all. Closing and reopening the group around just the render
+  was tried first; AE rejects that too.
+- `add_to_render_queue` stopped being silent in the same pass. With no
+  outputPath AE reuses the LAST RENDER'S settings and folder — on the
+  probe machine that was a ComfyUI output directory with nothing to do
+  with the project — so the result now says where the bytes would land.
+  It also warns when the same comp is queued twice (AE allows it, and
+  both copies then render), refuses an output folder that does not
+  exist, and reports an extension AE overrode.
+- Feature track not yet built: project hygiene, audio-to-keyframes,
+  frame round-trip, .mogrt export, whisper captions, ffmpeg exports
+  (items 5.6-6).
 - Image/video generation is not yet seamless: no frame-aware img2img,
   no mask-driven inpainting, no depth/parallax, no upscale/interpolate.
   The Krea 2 workflow now ships adapted and runnable

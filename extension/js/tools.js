@@ -432,8 +432,27 @@
             "success. Use list_presets to get the exact name.",
       args: "{preset: string (name or \"Category/Name\" from list_presets), layer?: string|int, layers?: [string|int], comp?: string}" },
     { name: "add_to_render_queue", mutating: true,
-      desc: "Add a comp to the render queue.",
+      desc: "Add a comp to the render queue WITHOUT rendering it. With " +
+            "no outputPath AE reuses the last render's folder, which is " +
+            "usually nothing to do with this project — the result says " +
+            "where it would land, so pass that on to the user.",
       args: "{comp?: string, outputPath?: string (absolute)}" },
+    { name: "render_comp", mutating: true,
+      desc: "Actually RENDER a comp to a file. " +
+            "Blocks until AE finishes (minutes for anything long). " +
+            "Refuses if the output file already exists unless " +
+            "{overwrite: true}, and refuses if its folder does not " +
+            "exist. Anything the user already had in the render queue " +
+            "is held back, not rendered. Use list_render_templates for " +
+            "valid template names — the output module forces its own " +
+            "file extension, so the result says where the bytes really " +
+            "went.",
+      args: "{comp?: string, output: string (ABSOLUTE file path), template?: string (output module, e.g. \"Lossless\" or \"H.264 - Match Render Settings - 15 Mbps\"), renderSettings?: string (e.g. \"Best Settings\"), startTime?: number (seconds), durationSeconds?: number, frames?: int (instead of durationSeconds), overwrite?: bool = false}" },
+    { name: "list_render_templates", mutating: false,
+      desc: "List this machine's render-settings and output-module " +
+            "template names for render_comp. Installed templates differ " +
+            "per machine — never guess a name, list them.",
+      args: "{}" },
     { name: "comfy_status", mutating: false,
       desc: "Check the local ComfyUI instance (online? queue depth?).",
       args: "{}" },

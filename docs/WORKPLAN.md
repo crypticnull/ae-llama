@@ -554,7 +554,53 @@ real behavior (precompose selection side effects, marker duration
 handling), (b) fix what's wrong, (c) stub test + suite steps. Do NOT
 build new tools here.
 
-### 5.5 Render queue (unlocks 5.8, 6.1, 6.2 — do before them)
+### 5.5 Render queue — DONE 2026-08-28
+Probed, built and covered in one pass. `render_comp` renders a comp to a
+file and waits; `list_render_templates` names this machine's templates
+(and hands back a real writable folder, because "where do I put it" was
+otherwise a guess). `add_to_render_queue` was fixed rather than
+duplicated.
+
+**The aerender question is settled: renderQueue.render() DOES work
+headless from a `-r` session** — one frame in 181 ms, status DONE. So
+aerender.exe is not used, and it would be the wrong tool anyway: it
+launches a second AE against a SAVED .aep, while this panel drives a
+live, usually-unsaved project.
+
+Seven probes; three findings drove the whole design. (1) `render()`
+renders the WHOLE QUEUE, not the item you added — so the user's queued
+items are held back with `render = false` and put back. (2) An output
+path that ALREADY EXISTS raises a MODAL, which wedged AE mid-probe and
+then swallowed every later -r script while the process still looked
+healthy; it is refused unless `{overwrite: true}`, and only then
+rendered under `beginSuppressDialogs` (measured to genuinely overwrite,
+64840 -> 698880 bytes, not silently skip). (3) The output module forces
+its OWN extension on the `file` SETTER, both directions, so the path
+reported is the one AE settled on. Also: a missing output directory
+THROWS rather than prompting, `status` is readOnly, deleting a queued
+comp silently drops its queue item (no dialog), and a fresh output
+module inherits the LAST RENDER'S folder — which on the probe machine
+was a ComfyUI directory unrelated to the project, so an outputPath-less
+add now says where the bytes would land.
+
+For 5.8: **`comp.saveFrameToPng(time, File)` EXISTS and works** — 407
+bytes for 160x120, honours resolutionFactor, no viewer needed, comp.time
+untouched, overwrites with no dialog. Its three silent failures are
+measured and waiting to be handled: a bad folder is a SILENT no-op, an
+out-of-range time CLAMPS and writes a blank frame, and a String path
+throws (it demands a File). It also writes LAZILY — `File.exists` reads
+false for ~300 ms afterwards, so output must be polled, not glanced at.
+
+**AE cannot render inside an undo group.** Registering render_comp as
+mutating earned a modal "Undo group mismatch" that wedges an unattended
+AE, so it is exempt via the new `AELL_NO_UNDO_GROUP`, and a batch
+containing one opens no group at all (closing and reopening the group
+around just the render was tried first; AE rejects that too).
+
+82 stub checks in `tests/test-render-queue.js`, 14 suite steps, harness
+358 -> 372, green on three CONSECUTIVE runs. No version bump (feature
+track). Original text below.
+
 `add_to_render_queue` ALREADY EXISTS (uncovered — same trap as 5.4).
 Probe what it does today, then extend rather than duplicate: actually
 RENDERING headless — renderQueue.render() from a -r session vs the

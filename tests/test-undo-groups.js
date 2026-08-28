@@ -69,8 +69,9 @@ const $ = { global: {} };
 // This file is "use strict", so eval() gets its OWN variable scope and
 // hostscript's `var` declarations do not leak out.
 const host = eval(hostSrc + ";\n({ AELL_TOOLS: AELL_TOOLS, " +
-  "AELL_MUTATING: AELL_MUTATING, AELL_okay: AELL_okay })");
-const { AELL_TOOLS, AELL_MUTATING, AELL_okay } = host;
+  "AELL_MUTATING: AELL_MUTATING, AELL_okay: AELL_okay, " +
+  "AELL_NO_UNDO_GROUP: AELL_NO_UNDO_GROUP })");
+const { AELL_TOOLS, AELL_MUTATING, AELL_okay, AELL_NO_UNDO_GROUP } = host;
 
 // Probe tools: the dispatcher is what carries the undo grouping, so drive
 // it with tools whose behaviour is known exactly rather than with real
@@ -383,12 +384,41 @@ const H = t => ({ tool: t, args: {} });
   // Panel-side tools (comfy_*) never reach the host, so only compare the
   // names both sides actually own.
   const shared = [...docAll].filter(n => hostTools.has(n));
+  // One documented exception, and it has to be an EXPLICIT one rather
+  // than a hole in the comparison: AE cannot render inside an undo group.
+  // Its renderer closes the script's group out from under it, and AE then
+  // raises a modal "Undo group mismatch" that wedges an unattended run.
+  // So render_comp is `mutating: true` in tools.js (a dry run must never
+  // burn a real render) and deliberately absent from AELL_MUTATING. The
+  // rule is therefore "mutating tools get a group UNLESS they are listed
+  // as must-not-be-grouped", and that list is checked, not assumed.
+  const noGroup = new Set(Object.keys(AELL_NO_UNDO_GROUP));
+  const strayNoGroup = [...noGroup].filter(n => !hostTools.has(n));
+  assert(strayNoGroup.length === 0,
+         "every name in AELL_NO_UNDO_GROUP is a real tool" +
+         (strayNoGroup.length ? " (stray: " + strayNoGroup.join(", ") + ")"
+                              : ""));
+  const pointlessNoGroup = [...noGroup].filter(n => !docMutating.has(n));
+  assert(pointlessNoGroup.length === 0,
+         "AELL_NO_UNDO_GROUP only exempts tools that are otherwise " +
+         "documented as mutating — exempting a read would mean nothing" +
+         (pointlessNoGroup.length
+           ? " (pointless: " + pointlessNoGroup.join(", ") + ")" : ""));
+  assert(noGroup.has("render_comp"),
+         "render_comp is the exemption this exists for");
+
   const missingHost = shared.filter(n => docMutating.has(n) &&
-                                         !hostMutating.has(n));
+                                         !hostMutating.has(n) &&
+                                         !noGroup.has(n));
   assert(missingHost.length === 0,
-         "every tool documented as mutating gets an undo group in the host" +
+         "every tool documented as mutating gets an undo group in the " +
+         "host, unless it is explicitly exempt" +
          (missingHost.length ? " (missing: " + missingHost.join(", ") + ")"
                              : ""));
+  const bothWays = [...noGroup].filter(n => hostMutating.has(n));
+  assert(bothWays.length === 0,
+         "and nothing is both exempt and wrapped" +
+         (bothWays.length ? " (both: " + bothWays.join(", ") + ")" : ""));
   const missingDoc = shared.filter(n => hostMutating.has(n) &&
                                         !docMutating.has(n));
   assert(missingDoc.length === 0,
