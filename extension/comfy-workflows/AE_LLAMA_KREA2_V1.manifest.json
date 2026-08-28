@@ -1,0 +1,166 @@
+{
+  "workflow": "AE_LLAMA_KREA2_V1",
+  "kind": "image",
+  "notes": "Owner's Krea 2 text-to-image workflow, adapted for the panel. The author left the Ollama enhancer, the depth-control branch and the img2img branch BYPASSED, so the live graph is the plain two-pass t2i path and the Any Switch falls through to the manual prompt input - which is exactly what the panel wants, because it enhances with its own chat model. The conversion preserves that; do not un-bypass anything here.",
+  "panelAdaptation": {
+    "setInputs": {
+      "474": {
+        "filename_prefix": "_KREA2/%date:yyyy-MM-dd%/%date:yyyy-MM-dd%_CRPTK-KREA2_"
+      }
+    },
+    "reason": "The authored SaveImage prefix is the ABSOLUTE path C:\\Users\\mr\\Documents\\ComfyUI\\output\\_KREA2\\... . ComfyUI joins a prefix onto ITS OWN output dir and then refuses anything landing outside it (folder_paths.get_save_image_path: \"Saving image outside the output folder is not allowed\"), so that path is correct on exactly one machine and kills the render at its LAST node everywhere else - after every GPU second is spent. The relative form keeps the author's foldering and works wherever ComfyUI's output dir happens to be.",
+    "apiTemplate": "extension/comfy-workflows/AE_LLAMA_KREA2_V1.json",
+    "regenerate": "node scripts/adapt-workflow.js extension/workflows/AE_LLAMA_KREA2_V1.json --out extension/comfy-workflows/AE_LLAMA_KREA2_V1.json",
+    "subgraph": "The authored file holds a subgraph (\"Initial Loader\": UNETLoader/VAELoader/CLIPLoader) and a cg-use-everywhere broadcaster that draws NO wire and carries MODEL/CLIP/VAE/LATENT to nine sockets. adapt-workflow.js expands the first as <instance>:<inner> (ComfyUI's own id scheme, hence node ids like 439:436) and emulates the second. Neither survives into this file, which is why cg-use-everywhere is not in customNodes below."
+  },
+  "procedural": {
+    "prompt": {
+      "nodeId": 600,
+      "widget": 0,
+      "input": "value",
+      "note": "PrimitiveStringMultiline, the MANUAL PROMPT source. Both CLIPTextEncodes read it through the Any Switch (any_02), so writing it once here reaches the whole graph. The generic CLIPTextEncode walk cannot do it: their `text` inputs are LINKS, and setEncoderText only follows a link to a node with exactly one string input - the Any Switch has none."
+    },
+    "resolutionNote": "NOT a procedural entry, deliberately. Size lands on EmptyLatentImage (node 500) through injectParams' generic width/height walk, in real pixels, with no megapixel indirection - unlike the H3 template. A procedural entry here would write the same numbers twice.",
+    "seedNote": "Also generic: both RandomNoise nodes (261 first pass, 444 second) carry a `noise_seed` number, so injectParams randomises or pins BOTH from one seed param. They were authored equal and stay equal.",
+    "negativeNote": "There is no negative prompt to inject. Guidance is disabled in this workflow and the negative conditioning is a ConditioningZeroOut of the positive (nodes 260, 272) - the enhancer instruction says so and tells the model to express exclusions positively instead."
+  },
+  "optionalNodesNote": "Every non-core class this graph uses is listed here, so the template loads on a bare ComfyUI 0.32.0 with the three weights and no custom packs at all. Decided per node 2026-08-28 against the running loader's own /object_info signatures. Each entry is a demotion, not a deletion: with the pack installed the node is KEPT, so the owner's machine renders exactly the graph that was authored.",
+  "optionalNodes": [
+    {
+      "nodeId": 601,
+      "class": "Any Switch (rgthree)",
+      "passthrough": "any_02",
+      "when": "missing",
+      "reason": "a first-non-null selector between the Ollama enhancer (any_01) and the manual prompt (any_02). The enhancer chain ships bypassed, so any_01 is not even connected in the adapted graph and the switch has exactly ONE live input - bypassing it hands the manual prompt string straight to both text encoders",
+      "keptNote": "kept: same single live input, one more hop. Do not reorder any_01/any_02 - the workflow's own README note pins the order"
+    },
+    {
+      "nodeId": 604,
+      "class": "Power Lora Loader (rgthree)",
+      "passthrough": {
+        "0": "model",
+        "1": "clip"
+      },
+      "when": "missing",
+      "reason": "a LoRA stack with NO loras configured in this template (its widgets_values hold empty objects), so it forwards MODEL and CLIP untouched",
+      "passthroughNote": "The map, not a plain input name, because this node has TWO outputs: slot 0 is MODEL from the UNETLoader and slot 1 is CLIP from the CLIPLoader. One passthrough for both would hand every CLIPTextEncode a MODEL, and the server would report the type error at a node the user never touched. Output names measured from /object_info 2026-08-28: [\"MODEL\", \"CLIP\"]",
+      "keptNote": "kept: the owner can enable loras on the node and the panel renders with them. NOTE a known silent-loss class - rgthree stores loras in widgets_values as objects the harvested INPUT_TYPES does not declare, so a template that actually configured some would convert with them dropped. Empty here, so nothing is lost today"
+    },
+    {
+      "nodeId": 476,
+      "class": "SesquiLatentUpscale",
+      "substitute": {
+        "class": "LatentUpscaleBy",
+        "inputs": {
+          "samples": "latent",
+          "scale_by": {
+            "from": "scale",
+            "as": "number"
+          },
+          "upscale_method": {
+            "const": "bislerp"
+          }
+        }
+      },
+      "when": "missing",
+      "reason": "the between-passes latent upscale (1.6x), and the one node here that must not simply be dropped: bypassing it would run the second pass at the FIRST pass's size and save an image 1.6x smaller than the graph promises, silently. Core LatentUpscaleBy has the same LATENT -> LATENT shape, so this is a swap",
+      "substituteNote": "Both signatures measured from /object_info on 2026-08-28. Sesqui declares latent/model_format/scale/half_precision and carries model_format \"Wan 2.1\" (its own tooltip lists Krea 2 under that entry); LatentUpscaleBy declares samples/upscale_method/scale_by and has no model-format notion, so those two widgets are dropped. bislerp is the one core method built for latent vectors rather than pixels. The result is a plainer upscale, not a smaller one",
+      "keptNote": "kept: the latent-format-aware upscale the author chose"
+    },
+    {
+      "nodeId": 475,
+      "class": "Image Comparer (rgthree)",
+      "passthrough": "image_a",
+      "when": "missing",
+      "reason": "an A/B slider for ComfyUI's own canvas. It is a terminal node - nothing in this graph reads its output - and the panel never opens that canvas, so dropping it removes a widget nobody in the panel path looks at",
+      "keptNote": "kept: it costs nothing extra, both images already exist for the SaveImage and the previews"
+    },
+    {
+      "nodeId": 482,
+      "class": "easy cleanGpuUsed",
+      "passthrough": "anything",
+      "when": "missing",
+      "reason": "a VRAM-cleanup pass-through between VAEDecode and SaveImage; it forwards the images untouched. ComfyUI frees its own models between prompts, and the panel's VRAM arbiter does the deliberate half (POST /free before chat reloads), so nothing depends on this node",
+      "keptNote": "kept: it empties the torch cache mid-graph, which trims the peak a little on the owner's machine"
+    }
+  ],
+  "models": [
+    {
+      "file": "krea2_turbo_int8_convrot.safetensors",
+      "role": "diffusion",
+      "dir": "diffusion_models",
+      "node": "439:436 (UNETLoader, inside the expanded 'Initial Loader' subgraph)",
+      "measured": false
+    },
+    {
+      "file": "qwen3vl_4b_fp8_scaled.safetensors",
+      "role": "text_encoder",
+      "dir": "text_encoders",
+      "node": "439:437 (CLIPLoader, type 'krea2')",
+      "measured": false
+    },
+    {
+      "file": "qwen_image_vae.safetensors",
+      "role": "vae",
+      "dir": "vae",
+      "node": "439:438 (VAELoader)",
+      "measured": false
+    }
+  ],
+  "customNodes": [
+    {
+      "pack": "comfyui-easy-use",
+      "repo": "https://github.com/yolain/ComfyUI-Easy-Use",
+      "nodes": [
+        "easy cleanGpuUsed"
+      ],
+      "optional": true,
+      "optionalReason": "its one class here (easy cleanGpuUsed) is bypassable - see optionalNodes"
+    },
+    {
+      "pack": "rgthree-comfy",
+      "repo": "https://github.com/rgthree/rgthree-comfy",
+      "nodes": [
+        "Any Switch (rgthree)",
+        "Image Comparer (rgthree)",
+        "Power Lora Loader (rgthree)"
+      ],
+      "optional": true,
+      "optionalReason": "every class it contributes here (Any Switch, Power Lora Loader, Image Comparer) is bypassable - see optionalNodes"
+    },
+    {
+      "pack": "SesquiLSR",
+      "repo": "https://github.com/LoganBooker/SesquiLSR",
+      "nodes": [
+        "SesquiLatentUpscale"
+      ],
+      "optional": true,
+      "optionalReason": "its one class here (SesquiLatentUpscale) is substituted by core LatentUpscaleBy when the pack is absent - see optionalNodes"
+    },
+    {
+      "pack": "(comfy-core)",
+      "nodes": [
+        "BasicGuider",
+        "BasicScheduler",
+        "CLIPLoader",
+        "CLIPTextEncode",
+        "ConditioningZeroOut",
+        "EmptyLatentImage",
+        "KSamplerSelect",
+        "LatentUpscaleBy",
+        "PreviewAny",
+        "PreviewImage",
+        "PrimitiveStringMultiline",
+        "RandomNoise",
+        "SamplerCustomAdvanced",
+        "SaveImage",
+        "UNETLoader",
+        "VAEDecode",
+        "VAELoader"
+      ],
+      "note": "Regenerated by scripts/attribute-workflow-nodes.js from the running loader. LatentUpscaleBy is in this list without being in the graph: it is what the SesquiLatentUpscale rule substitutes IN on a machine without SesquiLSR, which makes it a real dependency of the shipped template."
+    }
+  ],
+  "enhancerInstruction": "You rewrite a rough image idea into a Krea 2 prompt. Output ONLY the finished prompt. No preamble, no explanation, no markdown fences, no negative prompt.\n\nHOW KREA 2 READS A PROMPT:\nIts text encoder is a vision-language model that reads flowing sentences, not keyword lists. Write as if describing a finished photograph to someone over the phone. Prose, spatial relationships and possessives intact.\n\nHARD RULES — never violate these:\n- Output prose sentences. No comma-separated tag lists, no \"masterpiece, best quality, 8k, highly detailed\" — the encoder ignores that and it costs you conditioning space.\n- Never use (word:1.3) weighting. Scaling one term distorts the whole sentence rather than lifting that element. If something must dominate, put it first in the prompt, restate it once in different words, or name it more precisely.\n- Every trigger word listed under ACTIVE LORA TRIGGERS must appear verbatim, exactly once, early in the prompt.\n- Ignore any line beginning with # in ACTIVE LORA TRIGGERS. Those are disabled, not active.\n- Never write a negative prompt or a list of things to avoid. Guidance is disabled in this workflow, so negatives do nothing. Express exclusions positively: not \"no clutter\" but \"a bare concrete floor and an empty wall behind her.\"\n- Lead with the subject. First clause names who or what the image is of.\n- Do not invent a specific identity that was not given.\n- 60-130 words. Detail density matters more than length; every sentence must add visual information.\n- do not use words to describe wetness, moisture or liquid unless explicity used in the user prompt\n\nORDER — roughly this sequence, as connected prose rather than labelled fields:\n1. Subject and what they are doing\n2. Appearance, wardrobe, materials worn or held\n3. Environment and what is behind and around them\n4. Light: its source, direction, hardness, colour\n5. Camera: shot size, angle, lens character, depth of field\n6. Medium and grade: film stock, rendering style, colour treatment, grain\n\nWRITE WELL — these decide whether the output is worth generating:\n- Prefer the concrete noun to the adjective. \"Rain beads on the shoulder of her coat\" beats \"atmospheric wet scene.\"\n- Name materials and textures: wet cobblestone, brushed steel, damp wool, chipped enamel, cracked vinyl, worn leather. Surfaces are how the model knows what light to make.\n- Use precise colour vocabulary instead of emphasis: oxblood, slate, ochre, bone, gunmetal, sodium orange.\n- Say what the light is doing, not what mood it makes: a hard edge thrown across brick, a practical lamp blowing out one side of frame, light falling through slats onto the floor.\n- Name a real lens behaviour when it helps: shallow depth of field with the background dissolved, wide angle with slight barrel distortion at the edges, compressed telephoto flattening the background.\n- Give the frame one specific detail nothing else has — a loose thread catching light, condensation on a glass, a chipped nail. One, not three.\n- Anchor spatial relationships: behind her, to the left of frame, resting against, half out of frame.\n- If the idea implies a genre, name the medium concretely: 35mm portrait film with visible grain, risograph print with misregistered ink, Technicolor three-strip, flat digital documentary capture.\n- Never describe intent, emotion or story. A tightened grip and weight on the back foot do the work that \"she looks nervous\" cannot.\n\nACTIVE LORA TRIGGERS: \n# low poly N64 from OOT style\n# cryptik_vess\n# a worm's eye view of \n\nASPECT: portrait\n\nUSER IDEA:",
+  "nodeAttributionScannedOn": "2026-08-28 (local machine, ComfyUI 0.32.0, from the running server /object_info via scripts/attribute-workflow-nodes.js)"
+}

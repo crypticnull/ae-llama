@@ -60,6 +60,18 @@ const MANIFEST = path.join(REPO, "extension", "comfy-workflows",
 const template = () => JSON.parse(fs.readFileSync(TEMPLATE, "utf8"));
 const manifest = JSON.parse(fs.readFileSync(MANIFEST, "utf8"));
 
+// KREA2 is the second shipped template and the one that needed the rules to
+// grow: rgthree's Power Lora Loader emits MODEL on slot 0 and CLIP on slot 1
+// from two different inputs, so a single passthrough cannot answer for it.
+const K_TEMPLATE = path.join(REPO, "extension", "comfy-workflows",
+                             "AE_LLAMA_KREA2_V1.json");
+const K_MANIFEST = path.join(REPO, "extension", "comfy-workflows",
+                             "AE_LLAMA_KREA2_V1.manifest.json");
+const kTemplate = () => JSON.parse(fs.readFileSync(K_TEMPLATE, "utf8"));
+const kManifest = JSON.parse(fs.readFileSync(K_MANIFEST, "utf8"));
+const kByClass = (c) =>
+  (kManifest.optionalNodes || []).filter((o) => o["class"] === c)[0] || {};
+
 // ------------------------------------------------- the shipped template
 
 const OPTIONALS = manifest.optionalNodes || [];
@@ -158,6 +170,101 @@ assert(Array.isArray(g0["168"].inputs[entry.passthrough]),
   throws(() => Comfy.bypassNode(g, 168, "images"),
          "not a link from another node",
          "a literal passthrough -> refused with the reason");
+}
+
+// ------------------------------------------- bypassNode, per output SLOT
+//
+// A node with ONE output takes an input name and every consumer is rewired to
+// it. rgthree's Power Lora Loader has TWO — MODEL from the UNETLoader and
+// CLIP from the CLIPLoader — and KREA2 wires four MODEL consumers and two
+// CLIP consumers to it. Answering both with one input would hand every
+// CLIPTextEncode a MODEL, and the server would report the type error at a
+// node the user never touched.
+
+{
+  const g = kTemplate();
+  assert(g["604"] && g["604"].class_type === "Power Lora Loader (rgthree)",
+         "KREA2 node 604 is rgthree's Power Lora Loader");
+  const slots = new Set();
+  Object.keys(g).forEach((k) => Object.keys(g[k].inputs || {}).forEach((ik) => {
+    const v = g[k].inputs[ik];
+    if (Array.isArray(v) && String(v[0]) === "604") slots.add(v[1]);
+  }));
+  assert(slots.has(0) && slots.has(1),
+         "and consumers read BOTH of its output slots (" +
+         [...slots].join(", ") + ")");
+
+  const modelSrc = String(g["604"].inputs.model[0]);
+  const clipSrc = String(g["604"].inputs.clip[0]);
+  assert(modelSrc !== clipSrc,
+         "fed by two DIFFERENT nodes (" + modelSrc + " model, " + clipSrc +
+         " clip), which is what makes one passthrough impossible");
+
+  const rule = kByClass("Power Lora Loader (rgthree)").passthrough;
+  assert(rule && typeof rule === "object" && rule["0"] === "model" &&
+         rule["1"] === "clip",
+         "the manifest answers with a slot map: " + JSON.stringify(rule));
+
+  const r = Comfy.bypassNode(g, 604, rule);
+  assert(!g["604"], "bypassNode deletes it");
+  assert(String(g["264"].inputs.model[0]) === modelSrc &&
+         String(g["277"].inputs.model[0]) === modelSrc,
+         "MODEL consumers now read the UNETLoader (" +
+         JSON.stringify(g["264"].inputs.model) + ")");
+  assert(String(g["267"].inputs.clip[0]) === clipSrc &&
+         String(g["280"].inputs.clip[0]) === clipSrc,
+         "and CLIP consumers read the CLIPLoader (" +
+         JSON.stringify(g["267"].inputs.clip) + ") — NOT the UNETLoader");
+  assert(r.rewired.length === 6, "six sockets rewired: " + r.rewired.join(", "));
+}
+
+{
+  // THE regression this exists for: the old single-name form silently sent
+  // slot-1 consumers to the slot-0 source. It must refuse instead.
+  const g = kTemplate();
+  const msg = throws(() => Comfy.bypassNode(g, 604, "model"),
+    "output slot 0",
+    "a plain input name on a MULTI-output node -> refused");
+  assert(/reads slot 1/.test(msg),
+         "naming the consumer that reads the other slot [" + msg + "]");
+  assert(msg.indexOf("passthrough MAP") !== -1,
+         "and telling the manifest author what to write instead");
+  assert(!!g["604"], "the graph is left alone");
+}
+
+{
+  const g = kTemplate();
+  const msg = throws(() => Comfy.bypassNode(g, 604, { "0": "model" }),
+    "does not cover",
+    "a slot map that misses a slot consumers read -> refused");
+  assert(/slot 1/.test(msg), "naming the slot [" + msg + "]");
+  assert(!!g["604"], "and the graph is left alone");
+}
+
+{
+  const g = kTemplate();
+  throws(() => Comfy.bypassNode(g, 604, { "0": "model", "1": "nope" }),
+         "has no input named",
+         "a slot map naming an input that does not exist -> refused");
+  assert(!!g["604"] && Array.isArray(g["267"].inputs.clip) &&
+         String(g["267"].inputs.clip[0]) === "604",
+         "and nothing is rewired before every source resolves — a partial " +
+         "bypass would leave half the graph pointing at a deleted node");
+}
+
+{
+  // A TERMINAL node has no consumers, so no source is needed at all. Image
+  // Comparer is one: nothing in KREA2 reads its output.
+  const g = kTemplate();
+  const readers = Object.keys(g).filter((k) =>
+    Object.keys(g[k].inputs || {}).some((ik) =>
+      Array.isArray(g[k].inputs[ik]) && String(g[k].inputs[ik][0]) === "475"));
+  assert(readers.length === 0, "node 475 (Image Comparer) is terminal");
+  g["475"].inputs.image_a = "a-literal.png";
+  const r = Comfy.bypassNode(g, 475, "image_a");
+  assert(!g["475"] && r.rewired.length === 0,
+         "so it is removable even with a LITERAL passthrough — there is " +
+         "nothing to rewire to and nothing that needs one");
 }
 
 // ------------------------------------------------------ substituteNode
@@ -510,9 +617,81 @@ function unreachable() {
     Comfy.resolveOptionalNodes(base, g, manifest, [], (err2) => {
       assert(err2, "and it stops the run rather than guessing");
       assert(!!g["168"], "leaving the graph untouched");
-      console.log(failures ? "\n" + failures + " FAILED"
-                           : "\nall optional-node tests passed");
-      process.exitCode = failures ? 1 : 0;
+      kreaBare();
+    });
+  });
+}
+
+// The whole KREA2 template on a machine with none of its three packs. This
+// is the stub half of the real --bare render: five rules, two of them shapes
+// the H3 template never exercised (a slot map, and a substitute whose target
+// is nowhere in the graph).
+function kreaBare() {
+  const kCore = (kManifest.customNodes || [])
+    .filter((e) => e.pack === "(comfy-core)")
+    .reduce((acc, e) => acc.concat(e.nodes || []), []);
+  fakeComfy(kCore, (server, base) => {
+    const g = kTemplate();
+    const applied = [];
+    const modelSrc = String(g["604"].inputs.model[0]);
+    const clipSrc = String(g["604"].inputs.clip[0]);
+    const promptSrc = String(g["601"].inputs.any_02[0]);
+    Comfy.resolveOptionalNodes(base, g, kManifest, applied, (err) => {
+      assert(!err, "KREA2 resolves on a bare ComfyUI: " + (err && err.message));
+
+      const left = [...new Set(Object.keys(g).map((k) => g[k].class_type))]
+        .filter((c) => kCore.indexOf(c) === -1);
+      assert(left.length === 0,
+             "no custom-pack class survives" +
+             (left.length ? " - STILL THERE: " + left.join(", ") : ""));
+
+      assert(String(g["267"].inputs.text[0]) === promptSrc &&
+             String(g["280"].inputs.text[0]) === promptSrc,
+             "both text encoders read the manual-prompt primitive directly, " +
+             "the Any Switch having collapsed (" +
+             JSON.stringify(g["267"].inputs.text) + ")");
+      assert(String(g["264"].inputs.model[0]) === modelSrc &&
+             String(g["267"].inputs.clip[0]) === clipSrc &&
+             modelSrc !== clipSrc,
+             "MODEL and CLIP land on their OWN loaders across the lora " +
+             "loader's two output slots");
+
+      // The upscale is the one rule that had to be a substitution: dropping
+      // it would run the second pass at the first pass's size and save an
+      // image 1.6x smaller than the graph promises, silently.
+      assert(g["476"] && g["476"].class_type === "LatentUpscaleBy",
+             "SesquiLatentUpscale is SWAPPED for core LatentUpscaleBy, not " +
+             "bypassed (" + (g["476"] && g["476"].class_type) + ")");
+      assert(g["476"].inputs.scale_by === 1.6,
+             "carrying the authored 1.6x scale (" +
+             JSON.stringify(g["476"].inputs.scale_by) + ")");
+      assert(g["476"].inputs.upscale_method === "bislerp",
+             "with the const method the manifest names");
+      assert(!("model_format" in g["476"].inputs) &&
+             !("half_precision" in g["476"].inputs),
+             "and Sesqui's own widgets dropped - an inherited stray key " +
+             "fails validation at the server");
+      assert(String(g["450"].inputs.latent_image[0]) === "476",
+             "the second sampler still reads node 476, same id, same socket");
+
+      const dangling = [];
+      Object.keys(g).forEach((k) => {
+        Object.keys(g[k].inputs || {}).forEach((ik) => {
+          const v = g[k].inputs[ik];
+          if (Array.isArray(v) && !g[String(v[0])]) {
+            dangling.push(k + "." + ik + " -> " + v[0]);
+          }
+        });
+      });
+      assert(dangling.length === 0,
+             "no dangling link survives" +
+             (dangling.length ? " [" + dangling.join(", ") + "]" : ""));
+
+      server.close(() => {
+        console.log(failures ? "\n" + failures + " FAILED"
+                             : "\nall optional-node tests passed");
+        process.exitCode = failures ? 1 : 0;
+      });
     });
   });
 }

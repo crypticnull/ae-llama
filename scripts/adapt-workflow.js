@@ -34,9 +34,14 @@
  *     the unconnected sockets it was standing in for.
  *
  * The manifest sidecar may carry a panelAdaptation block:
- *   "panelAdaptation": { "dropNodes": [169, 170], "reason": "..." }
+ *   "panelAdaptation": { "dropNodes": [169, 170],
+ *                        "setInputs": { "474": { "filename_prefix": "..." } },
+ *                        "reason": "..." }
  * Dropping a node that FED a widget input is the point: the widget's own
  * value takes effect again, which is what lets the panel inject a prompt.
+ * setInputs overwrites literal widget values that are true only on the
+ * machine the workflow was authored on - an absolute output path being the
+ * one that actually shipped broken.
  *
  * Usage:
  *   node scripts/adapt-workflow.js <ui-workflow.json> [--out <api.json>]
@@ -640,6 +645,44 @@ function adapt(uiGraph, defs, manifest, warn) {
              "input '" + name + "' after adaptation - something it depended " +
              "on was dropped.");
       }
+    });
+  });
+
+  // panelAdaptation.setInputs: literal widget values the SHIPPED template
+  // must not inherit from the machine it was authored on. KREA2's SaveImage
+  // prefix is an ABSOLUTE C:\Users\mr\... path, and ComfyUI joins a prefix
+  // onto ITS OWN output dir before checking the result is inside it
+  // (folder_paths.get_save_image_path -> "Saving image outside the output
+  // folder is not allowed"). On the authoring machine those two paths agree;
+  // on every other machine the render dies at the last node with all of the
+  // GPU time already spent. Declared here, not hand-edited into the API file,
+  // so the correction survives the next regeneration.
+  var setInputs = adaptation.setInputs || {};
+  Object.keys(setInputs).forEach(function (id) {
+    var target = api[String(id)];
+    if (!target) {
+      fail("manifest panelAdaptation.setInputs names node " + id +
+           ", which is not in the adapted graph. It has: " +
+           Object.keys(api).join(", "));
+    }
+    var vals = setInputs[id] || {};
+    Object.keys(vals).forEach(function (name) {
+      if (!(name in target.inputs)) {
+        fail("manifest panelAdaptation.setInputs names input '" + name +
+             "' on node " + id + " (" + target.class_type + "), which has: " +
+             Object.keys(target.inputs).join(", "));
+      }
+      if (target.inputs[name] instanceof Array) {
+        fail("manifest panelAdaptation.setInputs would overwrite node " + id +
+             "." + name + ", which is a LINK from node " +
+             target.inputs[name][0] + " - not a widget value. Rewiring is " +
+             "the graph author's job, not the sidecar's.");
+      }
+      var before = target.inputs[name];
+      target.inputs[name] = vals[name];
+      rewired.push("node " + id + "." + name + ": set by manifest (" +
+                   JSON.stringify(before) + " -> " +
+                   JSON.stringify(vals[name]) + ")");
     });
   });
 

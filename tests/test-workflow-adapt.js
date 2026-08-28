@@ -631,4 +631,54 @@ assert(kreaClasses.indexOf("OllamaGenerateV2") === -1 &&
        "the author left the Ollama enhancer bypassed, so the switch falls " +
        "through to the manual prompt input");
 
+// ------------------- 11. panelAdaptation.setInputs: the one-machine value
+//
+// KREA2 was authored with an ABSOLUTE SaveImage prefix
+// (C:\Users\mr\Documents\ComfyUI\output\_KREA2\...). ComfyUI joins a prefix
+// onto ITS OWN output dir and then refuses anything landing outside it
+// (folder_paths.get_save_image_path), so that value renders on exactly one
+// machine and kills the render at its LAST node everywhere else - with the
+// GPU time already spent. The correction belongs in the sidecar, not hand-
+// edited into the API file, or the next regeneration silently undoes it.
+
+{
+  const authored = JSON.parse(fs.readFileSync(path.join(
+    REPO, "extension", "workflows", "AE_LLAMA_KREA2_V1.manifest.json"), "utf8"));
+  const before = kreaUi.nodes.filter((n) => n.id === 474)[0].widgets_values[0];
+  assert(/^[A-Za-z]:/.test(before),
+         "the AUTHORED template really does carry an absolute path (" +
+         before + ")");
+
+  const fixed = adapt(JSON.parse(JSON.stringify(kreaUi)), defs, authored);
+  const shippedKrea = JSON.parse(fs.readFileSync(path.join(
+    REPO, "extension", "comfy-workflows", "AE_LLAMA_KREA2_V1.json"), "utf8"));
+  assert(JSON.stringify(fixed.api) === JSON.stringify(shippedKrea),
+         "the checked-in KREA2 API template is exactly what the converter " +
+         "produces from the checked-in UI template and its sidecar (edit " +
+         "either and regenerate)");
+  const after = fixed.api["474"].inputs.filename_prefix;
+  assert(!/^[A-Za-z]:/.test(after) &&
+         after.indexOf(String.fromCharCode(92)) === -1,
+         "the sidecar's setInputs makes it relative (" + after + ")");
+  assert(after === authored.panelAdaptation.setInputs["474"].filename_prefix,
+         "with exactly the value the manifest declares");
+  assert(fixed.rewired.join(" ").indexOf("set by manifest") !== -1,
+         "and the change is reported, not silent");
+
+  throws(() => adapt(JSON.parse(JSON.stringify(kreaUi)), defs,
+                     { panelAdaptation: { setInputs: { "9999": { a: 1 } } } }),
+         "is not in the adapted graph",
+         "setInputs naming a node the graph does not have fails with a list");
+  throws(() => adapt(JSON.parse(JSON.stringify(kreaUi)), defs,
+                     { panelAdaptation: { setInputs: { "474": { nope: 1 } } } }),
+         "which has:",
+         "setInputs naming an input the class does not have fails, listing " +
+         "the ones it does");
+  throws(() => adapt(JSON.parse(JSON.stringify(kreaUi)), defs,
+                     { panelAdaptation: { setInputs: { "474": { images: 1 } } } }),
+         "which is a LINK",
+         "and it refuses to overwrite a LINK - rewiring is the graph " +
+         "author's job, not the sidecar's");
+}
+
 process.exit(failures ? 1 : 0);

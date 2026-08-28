@@ -153,6 +153,30 @@ function classesOf(file) {
   });
 }
 
+/*
+ * Every class the SHIPPED template can end up loading: the graph's own, plus
+ * any class an optionalNodes rule substitutes IN when a pack is missing.
+ * A substitute target is a real dependency that is nowhere in the graph --
+ * the one dependency walking nodes could never discover -- and the manifest
+ * has to declare it, or check 7 ("substituted by a CORE class") has nothing
+ * to check against.
+ */
+function classesFor(file) {
+  var classes = classesOf(file);
+  var seen = Object.create(null);
+  classes.forEach(function (c) { seen[c] = true; });
+  var mf;
+  try { mf = JSON.parse(fs.readFileSync(manifestPathFor(file), 'utf8')); }
+  catch (e) { return classes; }
+  (mf.optionalNodes || []).forEach(function (o) {
+    var sub = o && o.substitute && o.substitute['class'];
+    if (sub && !seen[sub]) { seen[sub] = true; classes.push(String(sub)); }
+  });
+  return classes.sort(function (a, b) {
+    return a.toLowerCase() < b.toLowerCase() ? -1 : 1;
+  });
+}
+
 /* ---- pack folder -> repo URL ----------------------------------------- */
 
 var repoCache = Object.create(null);
@@ -248,6 +272,7 @@ function mergeWithExisting(entries, existing) {
     else if (old && old.repo) out.repo = old.repo;
     out.nodes = e.nodes;
     if (old && old.optional) out.optional = old.optional;
+    if (old && old.optionalReason) out.optionalReason = old.optionalReason;
     if (old && old.note) out.note = old.note;
     return out;
   });
@@ -321,7 +346,7 @@ function main() {
   return load.then(function (objectInfo) {
     var anyUnresolved = false;
     opts.files.forEach(function (file) {
-      var result = attribute(classesOf(file), objectInfo, roots);
+      var result = attribute(classesFor(file), objectInfo, roots);
       report(file, result);
       if (result.unresolved.length) anyUnresolved = true;
 
@@ -370,6 +395,7 @@ function main() {
 module.exports = {
   KNOWN_VIRTUAL: KNOWN_VIRTUAL,
   classesOf: classesOf,
+  classesFor: classesFor,
   attribute: attribute,
   mergeWithExisting: mergeWithExisting,
   manifestPathFor: manifestPathFor,

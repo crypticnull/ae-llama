@@ -728,7 +728,18 @@
    * input — ComfyUI's own mode-4 bypass semantics, except the pass-through
    * socket is DECLARED by the manifest rather than inferred from types: an
    * API-format graph carries no type information to infer from.
-   * Returns {rewired: [...]}. Throws grounded errors; never guesses.
+   *
+   * `passthrough` is an input NAME for the ordinary single-output node, or a
+   * MAP of output slot -> input name for a node that emits more than one
+   * type. rgthree's Power Lora Loader (KREA2 node 604) emits MODEL on slot 0
+   * and CLIP on slot 1, fed by two different inputs; collapsing both onto one
+   * source would hand every CLIPTextEncode in the graph a MODEL, and the
+   * server would report the type error at a node the user never touched. So
+   * the string form answers slot 0 ONLY, and says so the moment a consumer
+   * reads any other slot.
+   *
+   * Returns {rewired: [...]}. Throws grounded errors; never guesses, and
+   * mutates nothing until every source has been resolved.
    */
   function bypassNode(graph, id, passthrough) {
     var nid = String(id);
@@ -737,38 +748,108 @@
     var inputs = node.inputs || {};
     var names = [];
     for (var n in inputs) { if (inputs.hasOwnProperty(n)) names.push(n); }
-    if (!passthrough) {
-      throw new Error("Cannot bypass node " + nid + " (" + node.class_type +
-        "): the manifest does not say which input passes through. Add " +
-        "\"passthrough\" naming one of: " + names.join(", "));
-    }
-    if (!inputs.hasOwnProperty(passthrough)) {
-      throw new Error("Cannot bypass node " + nid + " (" + node.class_type +
-        "): it has no input named \"" + passthrough + "\". It has: " +
-        (names.length ? names.join(", ") : "(none)"));
-    }
-    var source = inputs[passthrough];
-    if (!isLink(source)) {
-      // A literal cannot be handed to a downstream socket that wants a link,
-      // so there is nothing to rewire TO. Say that instead of quietly
-      // deleting the consumers' inputs and letting validation fail later.
-      throw new Error("Cannot bypass node " + nid + " (" + node.class_type +
-        "): its \"" + passthrough + "\" input is a literal value (" +
-        JSON.stringify(source) + "), not a link from another node, so " +
-        "consumers have nothing to rewire to.");
-    }
-    var rewired = [];
+
+    // Every socket that reads this node, and WHICH output slot it reads.
+    var readers = [];
+    var slotUsed = {};
     for (var cid in graph) {
       if (!graph.hasOwnProperty(cid)) continue;
       var c = graph[cid];
       if (!c || !c.inputs || cid === nid) continue;
       for (var ck in c.inputs) {
         if (!c.inputs.hasOwnProperty(ck)) continue;
-        if (isLink(c.inputs[ck]) && String(c.inputs[ck][0]) === nid) {
-          c.inputs[ck] = [String(source[0]), source[1]];
-          rewired.push(cid + "." + ck + " -> " + source[0] + ":" + source[1]);
+        var v = c.inputs[ck];
+        if (isLink(v) && String(v[0]) === nid) {
+          var slot = Number(v[1]) || 0;
+          readers.push({ cid: cid, key: ck, slot: slot });
+          slotUsed[slot] = true;
         }
       }
+    }
+    var used = [];
+    for (var su in slotUsed) {
+      if (slotUsed.hasOwnProperty(su)) used.push(Number(su));
+    }
+    used.sort(function (a, b) { return a - b; });
+
+    var isMap = !!passthrough && typeof passthrough === "object" &&
+                !(passthrough instanceof Array);
+    if (!passthrough || (typeof passthrough !== "string" && !isMap)) {
+      throw new Error("Cannot bypass node " + nid + " (" + node.class_type +
+        "): the manifest does not say which input passes through. Add " +
+        "\"passthrough\" naming one of: " + names.join(", ") +
+        (used.length > 1
+          ? " — or, since consumers read output slots " + used.join(" and ") +
+            ", a map of slot to input, e.g. {\"" + used[0] + "\": \"" +
+            (names[0] || "…") + "\"}."
+          : ""));
+    }
+
+    // slot -> the link that feeds it, all resolved BEFORE anything changes.
+    var sourceOf = {};
+    function resolve(slot, name) {
+      if (!inputs.hasOwnProperty(name)) {
+        throw new Error("Cannot bypass node " + nid + " (" + node.class_type +
+          "): it has no input named \"" + name + "\". It has: " +
+          (names.length ? names.join(", ") : "(none)"));
+      }
+      var src = inputs[name];
+      // A literal cannot be handed to a downstream socket that wants a link,
+      // so there is nothing to rewire TO. Say that instead of quietly
+      // deleting the consumers' inputs and letting validation fail later.
+      // A slot NOTHING reads needs no source at all — a terminal node is
+      // removable whatever its inputs hold.
+      if (!isLink(src)) {
+        if (!slotUsed[slot]) return;
+        throw new Error("Cannot bypass node " + nid + " (" + node.class_type +
+          "): its \"" + name + "\" input is a literal value (" +
+          JSON.stringify(src) + "), not a link from another node, so " +
+          "consumers have nothing to rewire to.");
+      }
+      sourceOf[slot] = src;
+    }
+
+    if (isMap) {
+      var mapped = [];
+      for (var mk in passthrough) {
+        if (!passthrough.hasOwnProperty(mk)) continue;
+        mapped.push(Number(mk));
+        resolve(Number(mk), passthrough[mk]);
+      }
+      for (var ui = 0; ui < used.length; ui++) {
+        if (!sourceOf.hasOwnProperty(used[ui])) {
+          throw new Error("Cannot bypass node " + nid + " (" +
+            node.class_type + "): consumers read its output slot " +
+            used[ui] + ", which the manifest's passthrough map does not " +
+            "cover. It maps slot(s): " +
+            (mapped.length ? mapped.join(", ") : "(none)") + ".");
+        }
+      }
+    } else {
+      resolve(0, passthrough);
+      var wrong = [];
+      for (var ri = 0; ri < readers.length; ri++) {
+        if (readers[ri].slot !== 0) {
+          wrong.push(readers[ri].cid + "." + readers[ri].key + " reads slot " +
+                     readers[ri].slot);
+        }
+      }
+      if (wrong.length) {
+        throw new Error("Cannot bypass node " + nid + " (" + node.class_type +
+          "): \"" + passthrough + "\" answers output slot 0, but " +
+          wrong.join(", ") + ". This node emits more than one type, so one " +
+          "input cannot stand in for all of them — give the manifest a " +
+          "passthrough MAP of slot to input, e.g. {\"0\": \"" + passthrough +
+          "\", \"" + used[used.length - 1] + "\": \"…\"}.");
+      }
+    }
+
+    var rewired = [];
+    for (var i = 0; i < readers.length; i++) {
+      var r = readers[i];
+      var src2 = sourceOf[r.slot];
+      graph[r.cid].inputs[r.key] = [String(src2[0]), src2[1]];
+      rewired.push(r.cid + "." + r.key + " -> " + src2[0] + ":" + src2[1]);
     }
     delete graph[nid];
     return { rewired: rewired };

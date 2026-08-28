@@ -19,6 +19,7 @@
  *   node scripts/comfy-probe.js                       # the default smoke
  *   node scripts/comfy-probe.js --url http://127.0.0.1:8188
  *   node scripts/comfy-probe.js --duration 0.2 --width 512 --height 288
+ *   node scripts/comfy-probe.js --workflow AE_LLAMA_KREA2_V1  *        --prompt "..." --width 768 --height 768   # an IMAGE template
  *   node scripts/comfy-probe.js --image C:\ref.png    # i2v instead of t2v
  *   node scripts/comfy-probe.js --no-ae               # generation only
  *   node scripts/comfy-probe.js --bare                # as if NO custom
@@ -60,6 +61,7 @@ const OPT = {
   width: parseInt(argValue("--width", "512"), 10),
   height: parseInt(argValue("--height", "288"), 10),
   seed: parseInt(argValue("--seed", "12345"), 10),
+  prompt: argValue("--prompt", null),
   timeout: parseInt(argValue("--timeout", "1800"), 10),
   image: argValue("--image", null),
   noAe: argv.indexOf("--no-ae") !== -1,
@@ -363,7 +365,10 @@ let genSeconds = 0;
 function stepGenerate(next) {
   const args = {
     workflow: OPT.workflow,
-    prompt: "Live-action, cinematic. A red toy car sits on a white table " +
+    // The default is H3-shaped (shots, soundscape). An image template wants
+    // prose about one frame instead, hence --prompt.
+    prompt: OPT.prompt ||
+            "Live-action, cinematic. A red toy car sits on a white table " +
             "in daylight. The camera pushes in with small amplitude at slow " +
             "speed. overall_soundscape: quiet room tone. " +
             "non_diegetic_music: N/A",
@@ -432,6 +437,8 @@ function stepFiles(next) {
   next();
 }
 
+const STILL_RE = /\.(png|jpe?g|webp|tiff?|bmp|exr)$/i;
+
 function stepImported(next) {
   if (OPT.noAe) { say("info", "--no-ae: skipping the AE half"); next(); return; }
   if (!genResult || !genResult.ok) {
@@ -463,13 +470,22 @@ function stepImported(next) {
         return;
       }
       say("info", "AE footage: " + JSON.stringify(info));
+      // A STILL has no duration to check: AE reports 0 for an image the way
+      // it reports a real length for a movie, so demanding duration > 0 of
+      // an image template would fail the probe on correct behaviour.
+      const stills = (genResult.data.files || [])
+        .filter((f) => STILL_RE.test(f)).length;
+      const isStill = stills > 0 &&
+                      stills === (genResult.data.files || []).length;
       verdict(!!(info && info.found && info.width > 0 && info.height > 0 &&
-                 info.duration > 0),
-              "the imported footage has real dimensions and duration",
+                 (isStill || info.duration > 0)),
+              "the imported footage has real dimensions" +
+                (isStill ? " (a still, so no duration)" : " and duration"),
               info && info.found
-                ? info.width + "x" + info.height + " " +
-                  (Math.round(info.duration * 1000) / 1000) + "s @ " +
-                  (Math.round(info.frameRate * 100) / 100) + "fps"
+                ? info.width + "x" + info.height +
+                  (isStill ? "" : " " +
+                    (Math.round(info.duration * 1000) / 1000) + "s @ " +
+                    (Math.round(info.frameRate * 100) / 100) + "fps")
                 : "no answer");
       if (OPT.keep) { say("info", "--keep: leaving the imported item"); next(); return; }
       Tools.callHostTool("delete_item", { item: info.name }, function (res) {

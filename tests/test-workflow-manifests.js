@@ -43,7 +43,8 @@ const PAIRS = [
   ["extension/workflows/AE_LLAMA_KREA2_V1.json", "authored"],
   ["extension/workflows/AE_LLAMA_H3_R2V_V1.json", "authored"],
   ["extension/workflows/AE_LLAMA_H3_I2V_V1.json", "authored"],
-  ["extension/comfy-workflows/AE_LLAMA_H3_I2V_V1.json", "shipped"]
+  ["extension/comfy-workflows/AE_LLAMA_H3_I2V_V1.json", "shipped"],
+  ["extension/comfy-workflows/AE_LLAMA_KREA2_V1.json", "shipped"]
 ];
 
 function read(rel) {
@@ -80,7 +81,11 @@ PAIRS.forEach(function ([rel, kind]) {
   try { manifest = read(mfRel); }
   catch (e) { assert(false, name + ": manifest reads (" + e.message + ")"); return; }
 
-  const used = attributor.classesOf(path.join(REPO, rel));
+  // classesFor, not classesOf: a class an optionalNodes rule SUBSTITUTES in
+  // is a real dependency of the shipped template and appears nowhere in the
+  // graph, so a walk of nodes alone would call it a stale declaration and
+  // demand its removal — leaving check 7 nothing to check against.
+  const used = attributor.classesFor(path.join(REPO, rel));
   const entries = manifest.customNodes || [];
   const virtual = manifest.frontendOnly || [];
 

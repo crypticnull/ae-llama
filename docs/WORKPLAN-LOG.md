@@ -2929,3 +2929,145 @@ regeneration command written next to it.
    That is convenient for the panel (it enhances with its own chat model) and
    the conversion preserves it; the shipping pass should keep it that way
    rather than un-bypassing anything.
+
+## 2026-08-28 (local, third pass) — item 2d, the LAST one: KREA2 ships (0.9.23)
+
+The item as WORKPLAN.md left it this morning: the converted KREA2 graph is not
+seeded, because a shipped template owes a removal rule per non-core class and
+KREA2 keeps five live ones, plus a `procedural` block and one real generation.
+All three are done, and a fourth thing turned up that would have killed the
+render on every machine but this one.
+
+**Harness: real AE 214/214, before and after. 34/34 stubbed test files.**
+
+### The rule that did not exist yet
+
+Four of the five were shapes the H3 template had already taught: a selector
+with one live input, a VRAM-cleanup pass-through, a terminal viewer node. The
+fifth was not.
+
+**`Power Lora Loader (rgthree)` emits TWO types.** Measured from /object_info:
+`output: ["MODEL", "CLIP"]`, fed by two different inputs (`model` from the
+UNETLoader, `clip` from the CLIPLoader), and KREA2 wires four MODEL consumers
+and two CLIP consumers to it. `bypassNode` rewired EVERY consumer to a single
+source regardless of the output slot it read — so the one honest-looking rule
+(`"passthrough": "model"`) would have handed both CLIPTextEncodes a MODEL, and
+the server would have reported the type error at a node the manifest author
+never touched.
+
+So `passthrough` now takes either an input NAME (single-output, the common
+case) or a MAP of output slot to input name:
+
+    "passthrough": { "0": "model", "1": "clip" }
+
+and the string form is no longer permissive — it answers slot 0 ONLY and
+refuses the moment a consumer reads any other slot, naming that consumer and
+showing the map to write instead. Checked against both shipped graphs first:
+every optional-node consumer in H3 reads slot 0, so nothing existing changes
+behaviour. Two smaller corrections rode along: nothing is mutated until every
+source resolves (a half-applied bypass used to leave consumers pointing at a
+deleted node), and a slot NOTHING reads no longer needs a link, which is what
+makes a terminal node with a literal input removable.
+
+### The one that had to be a substitution
+
+`SesquiLatentUpscale` sits between the two sampler passes at 1.6x. Bypassing it
+validates fine and is silently wrong: the second pass would run at the FIRST
+pass's size and save an image 1.6x smaller than the graph promises. Core
+`LatentUpscaleBy` has the identical LATENT -> LATENT shape, so it is a swap.
+Signatures measured, not assumed — Sesqui declares `latent/model_format/scale/
+half_precision`, LatentUpscaleBy declares `samples/upscale_method/scale_by`, so
+the rule carries `samples <- latent` and `scale_by <- scale`, supplies
+`upscale_method` as a const, and drops the two widgets the core class has no
+notion of. `bislerp` is the const, being the one core method built for latent
+vectors rather than pixels.
+
+That exposed a rule conflict worth writing down: `LatentUpscaleBy` has to be
+declared as a core dependency (check 7 demands a substitute resolve to a core
+class) while appearing nowhere in the graph (check 4 calls anything declared
+but absent a stale declaration). Both checks are right; the enumerator was
+wrong. `attribute-workflow-nodes.js` grew `classesFor()` = the graph's classes
+UNION every optionalNodes substitute target, and the test uses the same
+function, so the tool and the check still cannot drift.
+
+### The absolute path — the fourth thing, and the one that actually shipped broken
+
+KREA2's SaveImage prefix is `C:\Users\mr\Documents\ComfyUI\output\_KREA2\...`.
+ComfyUI joins a prefix onto ITS OWN output dir and then refuses anything
+landing outside it (`folder_paths.get_save_image_path` -> "Saving image outside
+the output folder is not allowed"). On this machine the two paths agree by
+coincidence; on anyone else's the render dies at the LAST node with every GPU
+second already spent. Same class as the `%date:%` colon that cost 0.9.21 a
+render, and equally invisible to `validate_prompt`.
+
+Fixed in the sidecar, not by hand: `panelAdaptation` gained `setInputs`, so
+the correction is declared where its reason lives and survives the next
+regeneration. It refuses a node that is not in the adapted graph, an input the
+class does not have, and — the one that matters — overwriting a LINK, because
+rewiring is the graph author's job and not the sidecar's.
+
+### Measured, in this order
+
+- Converted KREA2 through ComfyUI 0.32.0's own `validate_prompt`: **valid:
+  True**, good outputs 478/474/479/497/482/475.
+- The BARE graph (all five rules forced) through the same: **valid: True**.
+- **One real generation through the panel**, 768x768, ComfyUI 0.32.0 on the
+  5090: prompt -> graph -> PNG -> AE. 17s, VRAM peak 24872 MB, imported into
+  real AE at **1232x1232** (768 x 1.6, rounded to the latent grid — the proof
+  the upscale is live), then deleted again. Every applied line correct,
+  including `prompt -> node 600.value (manifest)` and the filename token
+  expanding to `_KREA2/2026-08-28/...`.
+- **The same generation with `--bare`**, i.e. as if none of the three packs
+  were installed: 10s, VRAM peak 20712 MB from a 2408 MB idle, **1232x1232
+  again** — which is the whole point of substituting the upscaler rather than
+  dropping it.
+
+### Two probe fixes the image template forced
+
+`comfy-probe.js` was written for video and asserted `duration > 0` on the
+imported footage. AE reports **duration 0 and frameRate 0 for a still**, so
+that verdict would have failed on correct behaviour. It now keys off the output
+file's extension and checks dimensions only for a still, saying so in the
+verdict line. It also gained `--prompt`, because the canned H3 prompt (shots,
+`overall_soundscape`, `non_diegetic_music`) is nonsense to an image model.
+
+### What the manifest says about the things it does NOT do
+
+The `procedural` block names exactly one node — the prompt, on node 600, the
+manual-prompt primitive. It has to: both CLIPTextEncodes' `text` inputs are
+LINKS to the rgthree Any Switch, and `setEncoderText` only follows a link to a
+node with exactly ONE string input. The switch has none, so the generic walk
+gives up **silently** and the render would have used the template's
+placeholder. Resolution and seed are deliberately NOT declared — size lands on
+`EmptyLatentImage` in real pixels and both `noise_seed` widgets take the one
+seed, all through the generic walk, and a procedural entry would write the same
+numbers twice. The manifest says so in `resolutionNote`/`seedNote`/
+`negativeNote` rather than leaving the next reader to wonder.
+
+### Bumped to 0.9.23 — the assumption, stated
+
+Item 5's rule is "no version bump on feature passes; new TOOLS ride the next
+minor". No tool was added here: `comfy_generate` already exists and a workflow
+template is data. Everything else in 2d bumped patch (0.9.21, 0.9.22), this
+pass changes `extension/`, and seeding is copy-if-absent PER FILE — so a new
+template does reach an existing install, but only if the panel updates at all,
+which needs the bump. Without it the work reaches no panel. Bumped patch; if
+the remote session disagrees it folds into 0.10.0 at no cost.
+
+### Left for a human or a later pass
+
+1. **Still open from the last two passes, and now load-bearing for this one**:
+   seeding is copy-if-absent, so `%APPDATA%\AE-Llama\comfy-workflows` picks up
+   the NEW KREA2 files (they are absent there) but keeps its stale 2026-08-26
+   H3 manifest. A version- or checksum-aware seed is the fix and it is a design
+   call.
+2. Also still open: the owner's `comfyUrl` setting says port 8000 while ComfyUI
+   runs on 8188. Every probe this month has been pointed with `--url`.
+3. The `Power Lora Loader` silent-loss class is unchanged — rgthree stores
+   loras in `widgets_values` as objects the harvested INPUT_TYPES does not
+   declare, so a template that actually configured some would convert with them
+   dropped. Empty in KREA2, so nothing is lost today; the keptNote records it.
+4. H3 r2v remains unconverted, deferred until 5.8 lands (it needs image+audio
+   inputs the panel cannot feed).
+
+**Item 2d is now CLOSED.** The next pass starts at item 3, 4 or 5.

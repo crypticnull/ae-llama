@@ -161,29 +161,40 @@ Queued (see WORKPLAN for owners/order):
   captions, ffmpeg exports (items 5–6).
 - Image/video generation is not yet seamless: no frame-aware img2img,
   no mask-driven inpainting, no depth/parallax, no upscale/interpolate.
-  The Krea 2 workflow is now IN the repo (extension/workflows/) with a
-  dependency manifest; video repos are pinned (Wan 2.2, MiniMax H3);
-  remaining blockers are the tier build (P1-P3) and the local install
-  scan (WORKPLAN 2c).
-- Bundled ComfyUI templates: only ONE of the three is panel-runnable so
-  far. `extension/workflows/` holds UI-format ("Export") graphs, which
-  `comfy.js loadWorkflow` refuses outright — the panel can only queue
-  API-format graphs. `scripts/adapt-workflow.js` converts them (bypass
-  rewiring, V3 dynamic combos, autogrow groups, positional widget
-  decoding) against definitions harvested from a real ComfyUI into
-  `scripts/comfy-node-defs.json`. H3 i2v is converted, seeded in
-  `extension/comfy-workflows/`, and passes ComfyUI 0.32.0's own
-  `validate_prompt`. KREA2 uses a SUBGRAPH the converter refuses to
-  flatten; H3 r2v is unconverted. `injectParams` now honours a sidecar
-  manifest's `procedural` block, so a prompt living on the sampler node
-  (H3) rather than a `CLIPTextEncode` does land; `comfy_generate` gained
-  `durationSeconds` (templates whose length is authored in seconds
-  refuse a `frames` argument instead of mis-writing it) and `image`,
-  which uploads a local file to ComfyUI's input folder — with no image
-  the reference `LoadImage` is detached and the graph runs as
-  text-to-video, so the template no longer names a file only the owner's
-  machine has. Still open for H3 i2v: no real generation has been run
-  end to end, and `RTXVideoSuperResolution` is not yet bypassable.
+  The Krea 2 workflow now ships adapted and runnable
+  (extension/comfy-workflows/) with a dependency manifest; video repos
+  are pinned (Wan 2.2, MiniMax H3); the remaining blocker is P4, which
+  is every VRAM figure and catalog URL measured on real hardware.
+- Bundled ComfyUI templates: TWO of the three are panel-runnable —
+  MiniMax H3 i2v/t2v (video) and Krea 2 (image). `extension/workflows/`
+  holds UI-format ("Export") graphs, which `comfy.js loadWorkflow`
+  refuses outright — the panel can only queue API-format graphs.
+  `scripts/adapt-workflow.js` converts them (bypass rewiring, V3 dynamic
+  combos, autogrow groups, positional widget decoding, subgraph
+  flattening, cg-use-everywhere broadcasts) against definitions
+  harvested from a real ComfyUI into `scripts/comfy-node-defs.json`;
+  both converted graphs pass ComfyUI 0.32.0's own `validate_prompt` and
+  both have been rendered end to end through the panel into AE. H3 r2v
+  is still unconverted (it needs image+audio inputs the panel cannot
+  feed yet). `injectParams` honours a sidecar manifest's `procedural`
+  block, so a prompt living on the sampler node (H3) or behind an
+  rgthree Any Switch (Krea 2) rather than on a plain `CLIPTextEncode`
+  does land; `comfy_generate` also takes `durationSeconds` (templates
+  whose length is authored in seconds refuse a `frames` argument instead
+  of mis-writing it) and `image`, which uploads a local file to
+  ComfyUI's input folder — with no image the reference `LoadImage` is
+  detached and the graph runs as text-to-video.
+- A shipped template must run on a bare ComfyUI, and the manifest is
+  what makes that true: every non-core node class carries an
+  `optionalNodes` rule — `passthrough` (drop it, rewire consumers to a
+  named input, or to one input PER OUTPUT SLOT for a node that emits
+  more than one type) or `substitute` (swap the class for a core one).
+  `tests/test-workflow-manifests.js` fails CI if a shipped template ever
+  gains a class with no rule, and both templates have been rendered with
+  every rule forced ON (`scripts/comfy-probe.js --bare`). Machine-
+  specific literals — an absolute output path, a reference image only
+  one disk has — are corrected in the sidecar's `panelAdaptation`, not
+  by hand, so the next regeneration keeps the fix.
 - The tier build's REMOTE half (P1–P3) is in: tiers.js, the arbiter
   with verified release, the combined recommendation, comfyCatalog.
   Still open: every VRAM figure and catalog URL is PROVISIONAL until

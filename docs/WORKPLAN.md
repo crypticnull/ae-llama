@@ -137,13 +137,14 @@ Pure filesystem reading — no AE, no generation runs, do NOT launch
 ComfyUI. This unblocks tier-plan P5 (catalog file lists + sizes) and
 the register-existing matcher. Commit the inventory; no version bump.
 
-## 2d. Small local passes queued by the probe findings — the H3 i2v
-workflow is DONE through part 4 AND the portability pass that part 4
-filed (2026-08-25 through -28). What is LEFT in this section: ONE item —
-seeding KREA2 (removal rules + procedural block + one real generation).
-The converter that was blocking it landed 2026-08-28, and the HF file
-pins turned out to have been done on 2026-08-25. Everything else below
-is struck.
+## 2d. Small local passes queued by the probe findings — CLOSED
+2026-08-28 (0.9.23). Everything in this section is done: the H3 i2v
+workflow through part 4, the portability pass part 4 filed, and — last —
+KREA2, which now ships adapted, seeded, rule-complete and rendered end to
+end through the panel into AE (17s authored / 10s bare, both 1232x1232).
+Nothing below needs doing; the text is kept because the reasoning in it
+is what the next template will be built against. **The next pass starts
+at item 3, 4 or 5.**
 
 - ~~Locate the H3 base weight~~ FOUND by the owner (2026-08-25):
   `AppData\Local\Comfy-Desktop\ComfyUI-Shared\models\diffusion_models\`
@@ -229,18 +230,20 @@ is struck.
     about Note/MarkdownNote but not rgthree's `Label (rgthree)` or
     `Fast Groups Bypasser (rgthree)`, which KREA2 uses and which are
     provably absent from the server.
-  - **KREA2, what is LEFT before it can ship** (its own pass, and it is
-    a real one): the converted graph is NOT seeded, because a shipped
-    template owes a removal rule per non-core class
-    (`tests/test-workflow-manifests.js` enforces it) and KREA2 keeps
-    five live ones — `Any Switch (rgthree)`, `Power Lora Loader
-    (rgthree)`, `Image Comparer (rgthree)`, `SesquiLatentUpscale`,
-    `easy cleanGpuUsed`. Plus a `procedural` block
-    (prompt/resolution/seed node ids) and ONE real generation end to end
-    through the panel, the way 0.9.21 did for H3. Regenerate the API
-    graph with `node scripts/adapt-workflow.js
-    extension/workflows/AE_LLAMA_KREA2_V1.json --out
-    extension/comfy-workflows/AE_LLAMA_KREA2_V1.json`.
+  - ~~**KREA2, what is LEFT before it can ship**~~ DONE 2026-08-28
+    (0.9.23). All five rules written and measured, `procedural` block
+    written (prompt only — resolution and seed are already covered by
+    injectParams' generic walk, and the manifest says so), and TWO real
+    generations run: the authored graph and the `--bare` one, both
+    landing 1232x1232 in real AE. Three things the pass found that the
+    item did not anticipate: `Power Lora Loader` emits MODEL **and**
+    CLIP, so `passthrough` had to grow a per-output-slot map or the text
+    encoders would have been handed a MODEL; `SesquiLatentUpscale` had
+    to be SUBSTITUTED (core `LatentUpscaleBy`) rather than bypassed,
+    since dropping it silently shrinks the output 1.6x; and the
+    authored SaveImage prefix was an ABSOLUTE one-machine path that
+    ComfyUI refuses anywhere else, now corrected through the new
+    `panelAdaptation.setInputs`. See the log.
   - H3 r2v is still unconverted — deferred until 5.8 lands, since it
     needs image+audio inputs the panel cannot feed yet.
 - ~~**Pin H3 t2v/i2v files**~~ DONE 2026-08-25, in the log entry "item
