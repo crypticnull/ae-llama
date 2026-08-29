@@ -6125,3 +6125,156 @@ disappears quietly, not that the tool second-guesses the ask.
 - Probe scratch under `logs/` (gitignored); the probe removed its own
   PPAR2 rig. AE left on the harness's own project, dirty, with no dialog
   open.
+
+## 2026-08-29 (local) - item 6.1 Pass A: whisper.cpp acquired, and the
+## release nobody was choosing
+
+**Item:** 6.1 Pass A - acquire a prebuilt whisper.cpp Windows binary plus
+the ggml-base.en model the way `get-llama.ps1` does llama-server, and
+verify it runs on a WAV.
+
+Picked because the harness was already green (498/498 before any change),
+items 2-5.8 are struck, and 5.9 (.mogrt) is gated by its own rule to the
+LAST item of a night - twelfth pass to defer it, and the first one to say
+so while actually moving the item behind it.
+
+### What shipped
+
+- `scripts/lib/whisper-assets.ps1` - WHICH file to take. Split out for
+  the same reason `ae-dialog-triage.ps1` is: the acquirer is PowerShell,
+  so the decision has to live somewhere a Node test can drive it without
+  a network or a 640 MB download.
+- `scripts/get-whisper.ps1` - the I/O half. `-Variant cpu|blas|cublas`,
+  `-Tag`, `-Model`, `-SkipModel`, `-SkipVerify`.
+- `tests/test-whisper-acquire.js` - 43 checks, no network.
+
+### Probe facts, and the four that break the obvious implementation
+
+1. **The newest tag is not the one with the files.** On 2026-08-29
+   `ggml-org/whisper.cpp`'s newest release is `v1.9.3` - a PRERELEASE
+   with ZERO assets, published six minutes AFTER `b4938`, which carries
+   all nine. `/releases/latest` happens to skip prereleases, but an
+   asset-less normal release would sail through it, so the choice walks
+   the release LIST and takes the first that actually has a build.
+2. **The archive is not flat and `main.exe` is a decoy.** Everything
+   sits under `Release\`, and `main.exe` is 27 KB - a deprecation shim.
+   The transcriber is `whisper-cli.exe` (479 KB). "Find main.exe" finds
+   the stub. The zip also ships `whisper-server.exe`, which is the same
+   HTTP-server shape as llama-server and may matter for Pass C.
+3. **The models are under `ggerganov`, not `ggml-org`.** llama.cpp moved
+   to the ggml-org org and the whisper REPO moved with it, so
+   `ggml-org/whisper.cpp` is the natural guess for the weights too.
+   Measured: it answers **HTTP 401**, not 404 - which reads like a token
+   problem and sends you looking in the wrong place entirely.
+   `ggerganov/whisper.cpp` answers 200, 147 964 211 bytes.
+4. **`Invoke-RestMethod` does not enumerate a JSON array.** It emits ONE
+   object that IS the array. So `@(Invoke-RestMethod .../releases)` is a
+   one-element array holding all 15 releases.
+
+### The bug (4), and why it looked green
+
+The first version of `get-whisper.ps1` wrote exactly that `@()`. Its
+`foreach` therefore ran ONCE with `$r` bound to the whole list, and
+PowerShell's property flattening turned `$r.assets` into every asset of
+every release pooled together. It found a real `whisper-bin-x64.zip` in
+that soup - from no particular release - downloaded it, extracted it,
+transcribed the WAV correctly and printed `Verify: PASS`.
+
+The only symptom was six characters in one log line: `Release:
+System.Object[]`. The walk that exists to skip the asset-less prerelease
+had never executed at all, and the version actually installed was
+whichever release's asset happened to sort first.
+
+Fixed with `Expand-AellReleaseList`, which flattens whatever shape it is
+handed and runs INSIDE the choice so nothing can reach the walk without
+it. It emits its result WITHOUT a leading comma on purpose: `return
+,$out` hands back a single object that IS the array, and the caller's own
+`@()` then re-wraps it into one element - the exact nesting being undone.
+That mistake was made and caught here too.
+
+Three more found by writing the test, each a silent wrong answer:
+
+- **`[version]` pads with -1, not 0.** `[version]'11.8'` compares LESS
+  than `[version]'11.8.0'`, so a driver reporting `11.8` REJECTED the
+  `whisper-cublas-11.8.0` build made for it and fell through to "no
+  compatible build". Both sides are now padded to three parts.
+  (`get-llama.ps1` pads to two and has the same latent trap; its assets
+  are `12.4`-shaped so it does not bite today. Flagged, not touched.)
+- **An empty JSON asset list yields `$null`, and `@($null)` has Count
+  1.** The grounded error printed `Looked at: v1.9.3 ()` instead of
+  saying the release had no assets.
+- **This machine's nvidia-smi says `CUDA UMD Version: 13.4`**, not
+  `CUDA Version:` (driver 616.56, RTX 5090). The regex every script here
+  greps with - `get-llama.ps1` included - matches NOTHING, and the caller
+  silently loses its driver ceiling. `Get-AellCudaVersionFromSmi` reads
+  both spellings; after the fix the cublas dry-run resolves 13.4 and
+  picks `whisper-cublas-12.4.0-bin-x64.zip` from `b4938`.
+
+### Decisions taken (no human awake to ask)
+
+- **Default variant is CPU.** base.en does 3 s of speech in ~820 ms on
+  this machine, and the CUDA build is a 640 MB download whose VRAM would
+  come out of the same budget the tier arbiter in `tools.js` rations
+  between the chat model and ComfyUI. `-Variant cublas` is there for
+  anyone who wants to spend it; Pass C can revisit if captions turn out
+  to be slow on long comps.
+- **`bin\` and `models\` are separate folders.** `get-llama.ps1` clears
+  its whole vendor folder because a llama.cpp build IS the download; here
+  an 8 MB binary update must not cost the 141 MB model. Re-running wipes
+  only `bin\`. Verified: two re-acquisitions, model untouched both times.
+- **The model downloads to `.part` and is renamed on completion**, so an
+  interrupted download cannot look acquired on the next run and fail at
+  load instead.
+- **Scope held to Pass A.** The verify step synthesizes its WAV with
+  System.Speech at 16 kHz mono 16-bit (whisper refuses anything else)
+  because Pass A has to run on *a* WAV and there is no sample in the zip.
+  Pass B still owns making that a skip-when-absent stub test; this is the
+  one-shot version of it, inside the acquirer.
+
+### Verification
+
+- `node tests/test-whisper-acquire.js`: 43 checks, all green. The
+  assertions are about the RELEASE an asset came from, not just about
+  finding an asset - a test that only checked "we picked
+  whisper-bin-x64.zip" passes on the broken version. The nested shape is
+  reproduced explicitly (`WRAPPED_COUNT=1`) and the chosen asset is
+  pinned BY SIZE, so a flattening regression that reorders the pool lands
+  on v1.9.2's asset and is caught. Release lists and the nvidia-smi
+  banner are captured verbatim from this machine.
+- Full stub sweep: all 51 test files exit 0. CI globs `tests/test-*.js`,
+  so the new suite is picked up with no workflow change.
+- Real end-to-end run, three times: acquire -> extract -> model ->
+  synthesize -> transcribe. Transcript exact, `Verify: PASS`, 818 ms and
+  829 ms. `Release: b4938` now prints a tag.
+- **Harness: 498/498 PASSED**, before and after. Nothing in `extension/`
+  was touched.
+- Capability doc still fresh (no new tools).
+
+### No version bump
+
+Deliberate. The panel ships `extension/` alone and this pass added only
+`scripts/` and `tests/` - there is no shipped behaviour for a feed to
+carry. Same call as the 2026-08-28 harness-dialog-triage pass.
+
+### Still open
+
+- **`get-llama.ps1` has two of the same latent traps**: it greps for
+  `CUDA Version:` (misses this machine's `CUDA UMD Version:`, so the
+  driver ceiling silently stops applying) and pads versions to two
+  parts. Neither bites today - the compute-cap rule still runs and its
+  asset names are `12.4`-shaped - so it was left alone rather than
+  widening a one-item pass. Small remote-session job, or the next local
+  pass that has nothing better.
+- 6.1 Pass B is now unblocked and is the natural next item on this track.
+  Pass C follows B; 5.5 landed, so nothing else blocks it.
+- 5.9 (.mogrt export) still deferred by its own LAST-item-of-the-night
+  rule. Twelfth pass. If the queue ahead of it keeps emptying, someone
+  should decide whether that rule means "last pass of a night" or "never".
+- `release-notes.txt` still reads "0.10.0" while the feed ships 0.10.8 -
+  eleventh pass to flag it; remote session's release cut.
+- `comfy_generate` still calls `import_file` rather than 5.8's
+  `import_as_layer` - small remote-session pass.
+- Machine state: AE left on the harness's own project, no dialog open.
+  `%APPDATA%\AE-Llama\vendor\whisper.cpp` now holds the CPU build and
+  ggml-base.en (149 MB total) - new, and not cleaned up, because Pass B
+  needs it.

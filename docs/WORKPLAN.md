@@ -794,9 +794,20 @@ leave it panel-interactive-only for the remote session to design.
 ## 6. Binary track (multi-night; same lifecycle pattern as llama-server)
 
 ### 6.1 Local captions via whisper.cpp
-Pass A: acquire — download a prebuilt whisper.cpp Windows binary +
-ggml-base.en model the way get-llama.ps1 does llama-server; verify it
-runs on a WAV. Pass B: verification harness with NO human audio —
+~~Pass A: acquire~~ DONE 2026-08-29. `scripts/get-whisper.ps1` +
+`scripts/lib/whisper-assets.ps1` (the choice, testable without a
+network) + `tests/test-whisper-acquire.js`. Acquires into
+`vendor\whisper.cpp\{bin,models}` — split so a binary update does not
+re-download the 141 MB model — and verifies by synthesizing a WAV and
+transcribing it: measured 818 ms for a 3 s clip, base.en, CPU. Facts the
+probe paid for, all now pinned by tests: the newest tag can be an
+asset-less prerelease; the archive nests under `Release\` and `main.exe`
+is a deprecation shim (`whisper-cli.exe` is the transcriber); the models
+are on HuggingFace under `ggerganov`, not `ggml-org` (which answers 401);
+`Invoke-RestMethod` hands a JSON array back as ONE object, so `@()`
+around it pools every release's assets together; and this machine's
+nvidia-smi says "CUDA **UMD** Version", which the usual regex misses.
+Pass B: verification harness with NO human audio —
 synthesize a spoken WAV locally (PowerShell System.Speech TTS, e.g.
 "the quick brown fox"), transcribe, assert the transcript contains the
 phrase; make that a stub-level test that skips cleanly when the binary
