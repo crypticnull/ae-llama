@@ -236,6 +236,17 @@ for ($i = 1; $i -le $Iterations; $i++) {
     # Keep the pass's output in memory too: a pass that hit the USAGE
     # LIMIT exits fast with a message instead of doing work, and only
     # the text tells that apart from a genuinely idle pass.
+    #
+    # And snapshot the claude processes alive BEFORE the pass: each pass
+    # leaks one lingering claude.exe (measured 2026-08-29 -- ten passes,
+    # ten zombies, and the loop died of the pile at pass 11). Any claude
+    # process born during the pass is the pass's leak and is reaped once
+    # the pass returns. Consequence, documented: do not run your own
+    # interactive claude session while the loop is working -- a session
+    # started mid-pass is indistinguishable from a leak.
+    $claudeBefore = @(Get-Process claude -ErrorAction SilentlyContinue |
+                      Select-Object -ExpandProperty Id)
+    Write-Log ('claude processes before pass: ' + $claudeBefore.Count)
     $passLines = New-Object System.Collections.Generic.List[string]
     try {
         & $ClaudePath @claudeArgs 2>&1 | ForEach-Object {
@@ -246,6 +257,17 @@ for ($i = 1; $i -le $Iterations; $i++) {
         }
     } catch {
         Write-Log ('Session error: ' + $_.Exception.Message)
+    }
+    foreach ($cp in @(Get-Process claude -ErrorAction SilentlyContinue)) {
+        if ($claudeBefore -notcontains $cp.Id) {
+            try {
+                Stop-Process -Id $cp.Id -Force -ErrorAction Stop
+                Write-Log ('Reaped lingering claude pid ' + $cp.Id)
+            } catch {
+                Write-Log ('Could not reap claude pid ' + $cp.Id + ': ' +
+                           $_.Exception.Message)
+            }
+        }
     }
 
     $after = [string](& git rev-parse HEAD)
