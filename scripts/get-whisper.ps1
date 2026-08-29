@@ -46,7 +46,9 @@ $ProgressPreference = 'SilentlyContinue'
 # Windows PowerShell 5 defaults to TLS 1.0/1.1, which GitHub rejects.
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-. (Join-Path $PSScriptRoot 'lib\whisper-assets.ps1')
+# whisper-verify.ps1 dot-sources whisper-assets.ps1 itself (the download
+# choice), so this one line brings in both.
+. (Join-Path $PSScriptRoot 'lib\whisper-verify.ps1')
 
 $root      = Join-Path $env:APPDATA 'AE-Llama\vendor\whisper.cpp'
 $binDir    = Join-Path $root 'bin'
@@ -191,39 +193,18 @@ if ($SkipModel) {
 if (-not $SkipVerify -and $modelPath) {
     Write-Host ''
     Write-Host 'Verifying: synthesizing a WAV and transcribing it...'
-    $phrase = 'the quick brown fox jumps over the lazy dog'
-    $wav = Join-Path ([IO.Path]::GetTempPath()) "ae-whisper-check-$PID.wav"
-    try {
-        Add-Type -AssemblyName System.Speech
-        # 16 kHz mono 16-bit is what whisper.cpp wants; the synthesizer's
-        # own default is not, and whisper refuses anything else.
-        $fmt = New-Object System.Speech.AudioFormat.SpeechAudioFormatInfo(
-            16000,
-            [System.Speech.AudioFormat.AudioBitsPerSample]::Sixteen,
-            [System.Speech.AudioFormat.AudioChannel]::Mono)
-        $tts = New-Object System.Speech.Synthesis.SpeechSynthesizer
-        try {
-            $tts.SetOutputToWaveFile($wav, $fmt)
-            $tts.Speak($phrase)
-        } finally {
-            $tts.SetOutputToNull()
-            $tts.Dispose()
-        }
-
-        $sw = [Diagnostics.Stopwatch]::StartNew()
-        $text = (& $cli.FullName -m $modelPath -f $wav -nt -np) | Out-String
-        $sw.Stop()
-        $flat = ($text -replace '[^a-zA-Z ]', ' ') -replace '\s+', ' '
-        $flat = $flat.Trim().ToLower()
-        Write-Host ("Transcript: [{0}] ({1} ms)" -f $flat, $sw.ElapsedMilliseconds)
-        if ($flat -like "*$phrase*") {
-            Write-Host 'Verify: PASS' -ForegroundColor Green
-        } else {
-            throw ("Verify FAILED: transcript does not contain the spoken " +
-                   "phrase.  spoken: $phrase  heard: $flat")
-        }
-    } finally {
-        Remove-Item -Force $wav -ErrorAction SilentlyContinue
+    # The round-trip lives in lib\whisper-verify.ps1 so this, the
+    # standalone scripts\verify-whisper.ps1 and the Node test all run the
+    # SAME check. It asserts the spoken phrase is in the transcript, not
+    # that a transcript came back: silence transcribes as " You".
+    $install = [pscustomobject]@{ Cli = $cli.FullName; Model = $modelPath }
+    $check = Invoke-AellWhisperCheck -Install $install `
+                                     -Phrase $script:AellWhisperPhrases[0]
+    Write-Host ("Transcript: [{0}] ({1} ms)" -f $check.Heard, $check.Ms)
+    if ($check.Pass) {
+        Write-Host 'Verify: PASS' -ForegroundColor Green
+    } else {
+        throw "Verify FAILED: $($check.Error)"
     }
 }
 

@@ -6278,3 +6278,134 @@ carry. Same call as the 2026-08-28 harness-dialog-triage pass.
   `%APPDATA%\AE-Llama\vendor\whisper.cpp` now holds the CPU build and
   ggml-base.en (149 MB total) - new, and not cleaned up, because Pass B
   needs it.
+
+## 2026-08-29 (local) - item 6.1 Pass B: the verification that would have
+## passed on silence
+
+**Item:** WORKPLAN 6.1 Pass B - a whisper.cpp verification harness with
+no human audio: speak a phrase with the OS synthesizer, transcribe it,
+assert the phrase came back, and make it a stub-level test that skips
+cleanly where there is no binary (CI has none).
+
+Harness green at 498/498 before the pass, so item 1 was satisfied and
+Pass B was the top unfinished item - Pass A landed earlier tonight and
+Pass C is explicitly blocked behind it.
+
+### What shipped
+
+- **`scripts/lib/whisper-verify.ps1`** - the round-trip, split out the
+  same way `whisper-assets.ps1` holds the download choice.
+  `Find-AellWhisperInstall`, `ConvertTo-AellWhisperText`,
+  `Test-AellPhraseHeard`, `New-AellSpokenWav`, `Invoke-AellWhisperCli`,
+  `Get-AellWhisperCliError`, `Invoke-AellWhisperCheck`,
+  `Invoke-AellWhisperVerify`.
+- **`scripts/verify-whisper.ps1`** - run it standalone. Exit 0 on pass
+  AND on "not installed" (prints SKIP), 1 on a failed phrase, 2 when
+  `-Require` turns a missing install into a failure.
+- **`get-whisper.ps1`'s verify step now calls the shared check** instead
+  of carrying its own copy. That was the point of splitting it: two
+  copies drift, and the one that ships is whichever the user ran.
+- **`tests/test-whisper-verify.js`** - 52 checks, 49 of which need no
+  install at all.
+
+### Five things the machine said that the obvious version gets wrong
+
+1. **Two seconds of digital silence transcribes as " You".** Not `''`,
+   not `[BLANK_AUDIO]` - a plain, confident word. Every "did it work?"
+   check that asserts the transcript is non-empty therefore PASSES on a
+   file with no speech in it, which is the exact failure a verification
+   harness exists to catch. The assertion has to be the SPOKEN PHRASE.
+   Pinned by `OUT_SILENCE` in the test.
+2. **Draining stdout before waiting on the process hangs forever.**
+   whisper-cli writes ~6 KB to stderr (backend banner, plus its whole
+   usage screen on any argument error) and NOTHING to stdout when it
+   fails. `StandardOutput.ReadToEnd()` blocks until the child exits; the
+   child blocks writing into a full stderr pipe; neither moves. Measured
+   as a five-minute wall-clock timeout with both processes alive - the
+   symptom is total silence, which reads like a slow model rather than a
+   bug in the caller. Both pipes are now read asynchronously with a hard
+   timeout on top. Regression-tested WITHOUT the binary by compiling a
+   stand-in console exe on the spot (`Add-Type -OutputAssembly`) that
+   writes 200 KB to stderr and exits 7; on the broken implementation that
+   case never returns.
+3. **base.en writes numbers as digits, and the synthesizer's "pack" is
+   heard as "hack".** The first phrase list included "pack my box with
+   five dozen liquor jugs" and it came back as "hack my box with 5 dozen
+   liquor jugs" - two independent failures in one line. A verification
+   phrase is a FIXTURE: one the model gets wrong tests nothing but
+   itself. All three defaults are now measured-exact, and the test
+   asserts no default phrase contains a number word.
+4. **44.1 kHz audio transcribes fine.** The note in the code this
+   replaced said whisper "refuses anything but 16 kHz mono 16-bit". It
+   does not - a 44 100 Hz mono WAV (header read back to confirm it really
+   was 44 100) transcribed correctly, exit 0. It resamples. Corrected in
+   place, and it matters for Pass C: comp audio out of the render queue
+   does not need converting first.
+5. **`-like "*$phrase*"` is a wildcard match, not a contains.** The code
+   being replaced compared that way. A phrase holding `*` matches almost
+   anything and reports PASS for audio nobody spoke; a phrase holding `[`
+   opens a character class and never matches. Now literal `.Contains()`
+   on normalized text, with both traps as test cases.
+
+### The negative control
+
+Every phrase check only ever asks the comparison to say YES, so a
+`Test-AellPhraseHeard` that returned `$true` unconditionally - or a
+normalizer that reduced both sides to `''` - would report a perfect score
+on a broken install. The runner now also asserts that phrase 2 is NOT
+heard in the recording of phrase 1. It reuses text already transcribed,
+so it costs nothing, and a harness that cannot fail proves nothing.
+
+### Verification
+
+- `node tests/test-whisper-verify.js`: 52 checks green with the install
+  present. Re-run with `APPDATA` pointed at an empty folder to model a CI
+  runner: 49 green, 3 skipped, exit 0 - the skip path is measured, not
+  assumed.
+- `node tests/test-whisper-acquire.js`: 3 assertions in it pointed at the
+  verify block that moved. Rewritten to assert the opposite and stronger
+  thing - that the acquirer dot-sources the shared library and carries NO
+  second copy of the synthesizer or the comparison. Green.
+- Full stub sweep: all 52 test files exit 0.
+- `scripts\verify-whisper.ps1`: 4/4 PASSED against the real install
+  (~680 ms per phrase, base.en, CPU). Skip and `-Require` paths exercised
+  against five fabricated trees - missing root, wrong exes, no model,
+  named model absent - each answering with a grounded reason that lists
+  what IS there.
+- `scripts\get-whisper.ps1` re-run end to end after the refactor:
+  re-downloaded the 8 MB build, kept the 141 MB model, `Verify: PASS` in
+  837 ms.
+- **Harness: 498/498 PASSED**, before and after. Nothing in `extension/`
+  was touched.
+
+### No version bump
+
+Deliberate, same call as Pass A and the 2026-08-28 harness-dialog pass:
+the panel ships `extension/` alone, and this pass added only `scripts/`
+and `tests/`. There is no shipped behaviour for a feed to carry.
+
+### Still open
+
+- **`get-llama.ps1` still has the two latent traps Pass A flagged**: it
+  greps for `CUDA Version:` (misses this machine's `CUDA UMD Version:`,
+  so the driver ceiling silently stops applying) and pads versions to two
+  parts. `Get-AellCudaVersionFromSmi` and `ConvertTo-AellPaddedVersion`
+  in `whisper-assets.ps1` are the fixes, already written and tested -
+  this is a small pass that points get-llama at them.
+- 6.1 Pass C (AE wiring: `transcribe_to_captions`) is now unblocked and
+  is the natural next item. 5.5 landed, so nothing else blocks it. Note
+  for whoever takes it: `Invoke-AellWhisperCli -Timestamps` already
+  exists and is unused, and comp audio at 48 kHz needs no conversion
+  (finding 4).
+- 5.9 (.mogrt export) still deferred by its own LAST-item-of-the-night
+  rule. Thirteenth pass. Someone should decide whether that rule means
+  "last pass of a night" or "never".
+- `release-notes.txt` still reads "0.10.0" while the feed ships 0.10.8 -
+  twelfth pass to flag it; remote session's release cut.
+- `comfy_generate` still calls `import_file` rather than 5.8's
+  `import_as_layer` - small remote-session pass.
+- Machine state: AE left on the harness's own project, no dialog open.
+  `%APPDATA%\AE-Llama\vendor\whisper.cpp` holds the CPU build and
+  ggml-base.en (149 MB), left in place because Pass C needs it. Temp
+  WAVs and the compiled stand-in exe are removed by the code that makes
+  them.

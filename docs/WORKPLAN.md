@@ -807,11 +807,23 @@ are on HuggingFace under `ggerganov`, not `ggml-org` (which answers 401);
 `Invoke-RestMethod` hands a JSON array back as ONE object, so `@()`
 around it pools every release's assets together; and this machine's
 nvidia-smi says "CUDA **UMD** Version", which the usual regex misses.
-Pass B: verification harness with NO human audio —
-synthesize a spoken WAV locally (PowerShell System.Speech TTS, e.g.
-"the quick brown fox"), transcribe, assert the transcript contains the
-phrase; make that a stub-level test that skips cleanly when the binary
-is absent (CI has no binary). Pass C: AE wiring — render a comp/layer's
+~~Pass B: verification harness~~ DONE 2026-08-29.
+`scripts/lib/whisper-verify.ps1` (the round-trip, one implementation for
+the acquirer, the standalone runner and the test),
+`scripts/verify-whisper.ps1` (SKIP + exit 0 with no install, `-Require`
+to make that a failure) and `tests/test-whisper-verify.js`, which runs
+49 of its 52 checks with NO install present (verified by pointing
+APPDATA at an empty folder). Field
+facts this paid for: 2 s of SILENCE transcribes as " You", so "a
+transcript came back" is not a check at all; whisper-cli writes nothing
+to stdout on failure and ~6 KB to stderr, so draining stdout before
+waiting on the process deadlocks (measured: a five-minute hang);
+base.en writes numbers as DIGITS and the synthesizer's "pack" comes back
+as "hack", so a verification phrase is a fixture that has to be
+measured; and 44.1 kHz audio transcribes fine - the old "whisper refuses
+anything but 16 kHz" note was wrong, which matters for Pass C's comp
+audio.
+Pass C: AE wiring — render a comp/layer's
 audio to WAV via 5.5, transcribe with timestamps, build styled text
 layers (5.1/text tools) or markers from the segments:
 `transcribe_to_captions` {comp|layer}. Do NOT start C before 5.5 lands.

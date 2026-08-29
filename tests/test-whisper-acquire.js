@@ -327,14 +327,19 @@ assert(/\$part = "\$modelPath\.part"/.test(script) &&
        /Move-Item -Force \$part \$modelPath/.test(script),
   "the model downloads to .part and is renamed only when complete");
 
-// whisper.cpp refuses anything but 16 kHz mono 16-bit PCM.
-assert(/SpeechAudioFormatInfo\([\s\S]{0,80}16000/.test(script),
-  "the verification WAV is synthesized at 16 kHz");
-assert(/AudioChannel\]::Mono/.test(script) &&
-       /AudioBitsPerSample\]::Sixteen/.test(script),
-  "the verification WAV is mono 16-bit");
-assert(/if \(\$flat -like "\*\$phrase\*"\)/.test(script),
-  "verification asserts the transcript CONTAINS the spoken phrase");
+// The verify step moved into scripts/lib/whisper-verify.ps1 on 6.1 Pass B
+// so the acquirer, scripts/verify-whisper.ps1 and tests/test-whisper-
+// verify.js all run the SAME round-trip. What this file still owes is
+// that the acquirer did not keep a private second copy of it: the two
+// would drift, and the one that ships is whichever the user happened to
+// run. (16 kHz mono, the phrase comparison and the silence trap are
+// asserted in tests/test-whisper-verify.js.)
+assert(/lib.whisper-verify\.ps1/.test(script),
+  "the acquirer dot-sources the shared verification library");
+assert(/Invoke-AellWhisperCheck/.test(script),
+  "and its verify step calls the shared round-trip");
+assert(!/SpeechAudioFormatInfo/.test(script) && !/-like "\*\$phrase\*"/.test(script),
+  "it carries no second copy of the synthesizer or the comparison");
 
 // Windows PowerShell 5.1, BOM-less ASCII, per CLAUDE.md.
 [LIB, SCRIPT].forEach(function (f) {
