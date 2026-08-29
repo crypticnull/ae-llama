@@ -2903,7 +2903,12 @@ AELL_TOOLS.center_anchor_point = function (args) {
     return AELL_err("Layer type has no measurable content bounds: " +
                     layer.name);
   }
-  var rect = layer.sourceRectAtTime(comp.time, false);
+  // sourceRectAtTime wants the layer's own SOURCE time, not comp time —
+  // see AELL_sourceTime. A slid or stretched layer used to be measured at
+  // the wrong frame here, which centred the anchor on content the viewer
+  // was not showing.
+  var rect = layer.sourceRectAtTime(AELL_sourceTime(layer, comp.time),
+                                    false);
   var transform = layer.property("ADBE Transform Group");
   var apProp = transform.property("ADBE Anchor Point");
   var posProp = transform.property("ADBE Position");
@@ -2997,6 +3002,215 @@ AELL_TOOLS.center_anchor_point = function (args) {
   }
   return AELL_okay({ layer: layer.name, oldAnchor: oldAp, newAnchor: newAp,
                      note: note });
+};
+
+/*
+ * The time to hand sourceRectAtTime for a given COMP time.
+ *
+ * MEASURED in AE 2026 (WORKPLAN-LOG 2026-08-29): a property's own times
+ * — keyTime, valueAtTime, setValueAtTime — are COMP times and slide with
+ * the layer (a key at 2s reports 3s once startTime is 1, and 4s once the
+ * layer is stretched to 200%). sourceRectAtTime's argument does NOT: it
+ * is the layer's own SOURCE time, unshifted by startTime and unscaled by
+ * stretch. Handing it comp.time therefore measures the wrong frame of an
+ * animated text or shape on any layer that has been slid or stretched —
+ * which is exactly what center_anchor_point used to do.
+ */
+function AELL_sourceTime(layer, compTime) {
+  var st = 0, stretch = 100;
+  try { st = Number(layer.startTime) || 0; } catch (eS) {}
+  try { stretch = Number(layer.stretch); } catch (eT) {}
+  if (!stretch || isNaN(stretch)) stretch = 100;
+  return (compTime - st) / (stretch / 100);
+}
+
+/*
+ * Apply ONE layer's own transform to a point that is already expressed
+ * relative to that layer's anchor point, at comp time t. Returns the
+ * point in the layer's PARENT space (comp space when unparented) —
+ * itself relative to the parent's anchor, which is why the recursion in
+ * AELL_compPoint never subtracts an anchor twice. Scale runs before
+ * rotation; verified against AE's own sourcePointToComp on a parented,
+ * scaled and rotated rig.
+ */
+function AELL_xform2d(layer, pt, t) {
+  var tr = layer.property("ADBE Transform Group");
+  var s = tr.property("ADBE Scale").valueAtTime(t, false);
+  var r = tr.property("ADBE Rotate Z").valueAtTime(t, false);
+  var p = tr.property("ADBE Position").valueAtTime(t, false);
+  var x = pt[0] * (s[0] / 100);
+  var y = pt[1] * (s[1] / 100);
+  var rad = Number(r) * Math.PI / 180;
+  return [x * Math.cos(rad) - y * Math.sin(rad) + Number(p[0]),
+          x * Math.sin(rad) + y * Math.cos(rad) + Number(p[1])];
+}
+
+/*
+ * A point in the layer's SOURCE space mapped to comp space at comp time
+ * t, through the whole parent chain. 2D only — the caller must have
+ * ruled out 3D first (AELL_threeDInChain); AE's own sourcePointToComp is
+ * no help there and is measured lying about it, see get_bounds.
+ */
+function AELL_compPoint(layer, srcPt, t) {
+  var anchor = layer.property("ADBE Transform Group")
+                    .property("ADBE Anchor Point").valueAtTime(t, false);
+  var pt = AELL_xform2d(layer, [srcPt[0] - Number(anchor[0]),
+                                srcPt[1] - Number(anchor[1])], t);
+  var up = null;
+  try { up = layer.parent; } catch (eP) { up = null; }
+  var guard = 0;
+  while (up && guard++ < 64) {
+    pt = AELL_xform2d(up, pt, t);
+    try { up = up.parent; } catch (eP2) { up = null; }
+  }
+  return pt;
+}
+
+/* Every 3D layer in this layer's chain, nearest first (empty = all 2D). */
+function AELL_threeDInChain(layer) {
+  var hits = [];
+  var l = layer, guard = 0;
+  while (l && guard++ < 64) {
+    var is3d = false;
+    try { is3d = !!l.threeDLayer; } catch (eD) {}
+    if (is3d) hits.push(l.name);
+    try { l = l.parent; } catch (eU) { l = null; }
+  }
+  return hits;
+}
+
+AELL_TOOLS.get_bounds = function (args) {
+  if (AELLJSON.isArray(args.layers)) {
+    return AELL_err("get_bounds reads ONE layer. Call it once per " +
+      "layer — for_each_layer reports only counts, so it would throw " +
+      "every measurement away.");
+  }
+  var comp = AELL_resolveComp(args.comp);
+  var layer = AELL_layerOrSelection(comp, args.layer);
+  var kind = AELL_layerType(layer);
+  if (typeof layer.sourceRectAtTime !== "function") {
+    return AELL_err("A " + kind + " layer ('" + layer.name + "') renders " +
+      "no pixels, so it has no bounds — AE gives sourceRectAtTime only to " +
+      "layers with content (text, shape, solid, footage, precomp, null). " +
+      "For a camera or light read its Position with get_property instead.");
+  }
+  var t = AELL_numArg(args.time);
+  if (t === null) {
+    if (typeof args.time !== "undefined" && args.time !== null) {
+      return AELL_err("'time' must be a number of seconds; got " +
+        AELLJSON.stringify(args.time));
+    }
+    t = comp.time;
+  }
+  var extents = !!args.extents;
+  var srcT = AELL_sourceTime(layer, t);
+  var rect;
+  try {
+    rect = layer.sourceRectAtTime(srcT, extents);
+  } catch (eR) {
+    return AELL_err("AE could not measure '" + layer.name + "' at " +
+      AELL_secs(t) + ": " + (eR.message || eR));
+  }
+  var w = AELL_r3(rect.width), h = AELL_r3(rect.height);
+  var out = {
+    layer: layer.name, layerType: kind, time: AELL_r3(t),
+    extents: extents,
+    source: { left: AELL_r3(rect.left), top: AELL_r3(rect.top),
+              right: AELL_r3(rect.left + rect.width),
+              bottom: AELL_r3(rect.top + rect.height),
+              width: w, height: h,
+              centerX: AELL_r3(rect.left + rect.width / 2),
+              centerY: AELL_r3(rect.top + rect.height / 2) },
+    compSize: [comp.width, comp.height]
+  };
+  if (AELL_r3(srcT) !== AELL_r3(t)) {
+    out.sourceTime = AELL_r3(srcT);
+    out.timeNote = "measured at source time " + AELL_secs(srcT) +
+      ", which is comp time " + AELL_secs(t) + " for this layer (it " +
+      "starts at " + AELL_secs(layer.startTime) + " and is stretched to " +
+      layer.stretch + "%)";
+  }
+  if (w === 0 && h === 0) {
+    out.empty = "this layer renders nothing at " + AELL_secs(t) +
+      (kind === "shape" ? " — the shape layer has no drawn content yet " +
+        "(add_shape_content adds some)"
+       : kind === "text" ? " — the text is empty at this time"
+       : " — check that the layer is on at this time");
+  }
+
+  // Comp space. AE's own sourcePointToComp is NOT usable here: measured
+  // 2026-08-29, it ignores a 3D layer's Z entirely, ignores the camera,
+  // and ignores a 3D PARENT's rotation, so for any 3D chain it answers
+  // with confident numbers that are not where the pixels land. The 2D
+  // math below was checked against it on 2D rigs and agrees exactly.
+  var threeD = AELL_threeDInChain(layer);
+  if (threeD.length) {
+    out.comp = null;
+    out.compBoxUnavailable = "'" + threeD[0] + "' is a 3D layer" +
+      (threeD.length > 1 ? " (as are " + threeD.slice(1).join(", ") + ")" :
+       "") + ", so where these pixels land in the frame depends on the " +
+      "camera. AE's own sourcePointToComp ignores Z, the camera and a 3D " +
+      "parent's rotation (measured), so no honest comp-space box can be " +
+      "reported. The source rect above is still exact.";
+    return AELL_okay(out);
+  }
+
+  var corners = [[rect.left, rect.top],
+                 [rect.left + rect.width, rect.top],
+                 [rect.left + rect.width, rect.top + rect.height],
+                 [rect.left, rect.top + rect.height]];
+  var mapped = [], i;
+  for (i = 0; i < corners.length; i++) {
+    mapped.push(AELL_compPoint(layer, corners[i], t));
+  }
+  var minX = mapped[0][0], maxX = mapped[0][0];
+  var minY = mapped[0][1], maxY = mapped[0][1];
+  for (i = 1; i < mapped.length; i++) {
+    if (mapped[i][0] < minX) minX = mapped[i][0];
+    if (mapped[i][0] > maxX) maxX = mapped[i][0];
+    if (mapped[i][1] < minY) minY = mapped[i][1];
+    if (mapped[i][1] > maxY) maxY = mapped[i][1];
+  }
+  out.comp = { left: AELL_r3(minX), top: AELL_r3(minY),
+               right: AELL_r3(maxX), bottom: AELL_r3(maxY),
+               width: AELL_r3(maxX - minX), height: AELL_r3(maxY - minY),
+               centerX: AELL_r3((minX + maxX) / 2),
+               centerY: AELL_r3((minY + maxY) / 2) };
+  var round = [];
+  for (i = 0; i < mapped.length; i++) {
+    round.push([AELL_r3(mapped[i][0]), AELL_r3(mapped[i][1])]);
+  }
+  out.corners = round;
+  // A rotated layer's axis-aligned box is bigger than its content; say so
+  // rather than letting a caller read comp.width as the layer's width.
+  var rotProp = layer.property("ADBE Transform Group")
+                     .property("ADBE Rotate Z");
+  var rot = Number(rotProp.valueAtTime(t, false)) % 360;
+  if (rot !== 0) {
+    out.rotated = rot;
+    out.rotatedNote = "the layer is rotated " + AELL_r3(rot) + " degrees, " +
+      "so comp.width/height describe the axis-aligned box AROUND it, not " +
+      "the layer's own size (source.width/height is that)";
+  }
+
+  var over = {};
+  if (minX < 0) over.left = AELL_r3(-minX);
+  if (minY < 0) over.top = AELL_r3(-minY);
+  if (maxX > comp.width) over.right = AELL_r3(maxX - comp.width);
+  if (maxY > comp.height) over.bottom = AELL_r3(maxY - comp.height);
+  var anyOver = false;
+  for (var side in over) { if (over.hasOwnProperty(side)) anyOver = true; }
+  if (!anyOver) {
+    out.inFrame = "fully";
+  } else if (maxX <= 0 || maxY <= 0 || minX >= comp.width ||
+             minY >= comp.height) {
+    out.inFrame = "outside";
+    out.outsideBy = over;
+  } else {
+    out.inFrame = "partly";
+    out.outsideBy = over;
+  }
+  return AELL_okay(out);
 };
 
 AELL_TOOLS.add_keyframe = function (args) {
@@ -8019,7 +8233,8 @@ var AELL_PER_LAYER_LIST = [
   "set_text_style", "set_track_matte", "set_transform",
   "split_layer_into_chunks"
 ];
-var AELL_PER_LAYER_READ_LIST = ["get_property", "list_properties"];
+var AELL_PER_LAYER_READ_LIST = ["get_bounds", "get_property",
+                                "list_properties"];
 var AELL_ALREADY_BATCHED_LIST = [
   "apply_keyframe_ease", "apply_preset", "distribute_property",
   "for_each_layer", "grid_layout", "precompose", "remove_keyframes",

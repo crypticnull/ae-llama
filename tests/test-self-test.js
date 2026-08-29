@@ -685,12 +685,15 @@ function shapeAddItem(layer, container, kind, name) {
   return it;
 }
 function shapeLayerOf(name) { return shapeLayers[name] || null; }
-function shapeSeedLayer(name) {
-  // add_shape_layer draws its rectangle inside a group, exactly as AE does.
+function shapeSeedLayer(name, size) {
+  // add_shape_layer draws its rectangle inside a group, exactly as AE does,
+  // at the size it was ASKED for -- a fixed 10x10 here would have let a
+  // step assert bounds the real tool never produces.
   const L = { items: [] };
   const g = shapeAddItem(name, L.items, "group", "Rectangle 1");
   const r = shapeAddItem(name, g.items, "rectangle");
-  r.vals.Size = [10, 10];
+  r.vals.Size = (Array.isArray(size) && size.length >= 2)
+    ? [size[0], size[1]] : [200, 200];
   shapeLayers[name] = L;
   return L;
 }
@@ -750,7 +753,16 @@ function shapeResolve(L, layerName, path) {
 }
 /* Rendered bounds, which is the only thing that says a repeater repeated:
    geometry in a group, widened by any repeater BELOW it. */
-function shapeBounds(L) {
+/* The value of an animated shape param at SOURCE time t: AE holds before
+   the first key and after the last, which is all the bounds steps read. */
+function shapeValAt(it, key, t) {
+  const keys = it.keys && it.keys[key];
+  if (!keys || !keys.length || typeof t !== "number") return it.vals[key];
+  let v = keys[0].value;
+  for (const k of keys) if (t >= k.time) v = k.value;
+  return v;
+}
+function shapeBounds(L, t, extents) {
   let minX = null, maxX = null, minY = null, maxY = null;
   function eat(x0, x1, y0, y1) {
     minX = minX === null ? x0 : Math.min(minX, x0);
@@ -761,9 +773,20 @@ function shapeBounds(L) {
   L.items.forEach(g => {
     if (g.kind !== "group") return;
     let gx0 = null, gx1 = 0, gy0 = 0, gy1 = 0;
+    // extents grows the box by the stroke's MITER ALLOWANCE, not by half
+    // its width: measured in AE 2026 twice, a 40px stroke adds 100 on
+    // every side -- half-width x (the default miter limit 4 + 1).
+    let pad = 0;
+    if (extents) {
+      g.items.forEach(it => {
+        if (it.kind === "stroke") {
+          pad = Math.max(pad, (Number(it.vals["Stroke Width"]) || 0) * 2.5);
+        }
+      });
+    }
     g.items.forEach(it => {
       if (/^(rectangle|ellipse)$/.test(it.kind)) {
-        const s = it.vals.Size || [100, 100];
+        const s = shapeValAt(it, "Size", t) || [100, 100];
         const p = it.vals.Position || [0, 0];
         const x0 = p[0] - s[0] / 2, x1 = p[0] + s[0] / 2;
         const y0 = p[1] - s[1] / 2, y1 = p[1] + s[1] / 2;
@@ -780,13 +803,260 @@ function shapeBounds(L) {
         gy0 = Math.min(gy0, gy0 + dy); gy1 = Math.max(gy1, gy1 + dy);
       }
     });
-    if (gx0 !== null) eat(gx0, gx1, gy0, gy1);
+    if (gx0 !== null) eat(gx0 - pad, gx1 + pad, gy0 - pad, gy1 + pad);
   });
   if (minX === null) return null;
   return [minX, maxX, minY, maxY];
 }
 
+
+// ---- the bounds rig, modelled from AE 2026 (probes, WORKPLAN-LOG
+// 2026-08-29) rather than from the tool ------------------------------
+// The three facts the get_bounds steps exist to pin, and which this
+// model therefore has to obey on AE's side of the fence:
+//   - sourceRectAtTime ignores the layer's transform entirely;
+//   - its time argument is the layer's OWN source time (unshifted by
+//     startTime, unscaled by stretch) while property times are comp
+//     times;
+//   - cameras and lights have no sourceRectAtTime at all.
+// A text layer's rect is the glyphs', measured from the BASELINE, so its
+// top is negative -- the numbers below are 48px readings, not round ones.
+const bnLayers = {};
+const inBnComp = (a) => !!(a && /Bounds/.test(a.comp || ""));
+const resetBoundsRig = () => {
+  for (const k of Object.keys(bnLayers)) delete bnLayers[k];
+};
+function bnAdd(name, kind, extra) {
+  const L = { kind: kind, pos: [0, 0], anchor: [0, 0], scale: [100, 100],
+              rot: 0, parent: null, startTime: 0, stretch: 100,
+              threeD: false, w: 100, h: 100, __name: name };
+  Object.assign(L, extra || {});
+  bnLayers[name] = L;
+  return L;
+}
+function bnRect(name, t, extents) {
+  const L = bnLayers[name];
+  if (!L) return { left: 0, top: 0, width: 100, height: 100 };
+  if (L.kind === "shape") {
+    const SL = shapeLayerOf(name);
+    const b = SL ? shapeBounds(SL, t, extents) : null;
+    if (!b) return { left: 0, top: 0, width: 0, height: 0 };
+    return { left: b[0], top: b[2], width: b[1] - b[0], height: b[3] - b[2] };
+  }
+  if (L.kind === "text") {
+    return { left: 2.53, top: -34.7, width: 148.34, height: 35.06 };
+  }
+  return { left: 0, top: 0, width: L.w, height: L.h };
+}
+/* One layer's own transform applied to a point already measured from its
+   anchor -- scale, then rotation, then position. */
+function bnXform(L, pt) {
+  const x = pt[0] * (L.scale[0] / 100), y = pt[1] * (L.scale[1] / 100);
+  const rad = L.rot * Math.PI / 180;
+  return [x * Math.cos(rad) - y * Math.sin(rad) + L.pos[0],
+          x * Math.sin(rad) + y * Math.cos(rad) + L.pos[1]];
+}
+function bnUnXform(L, pt) {          // the inverse, for a new parent link
+  const rad = -L.rot * Math.PI / 180;
+  const dx = pt[0] - L.pos[0], dy = pt[1] - L.pos[1];
+  const x = dx * Math.cos(rad) - dy * Math.sin(rad);
+  const y = dx * Math.sin(rad) + dy * Math.cos(rad);
+  return [x / (L.scale[0] / 100), y / (L.scale[1] / 100)];
+}
+function bnCompPoint(name, srcPt) {
+  const L = bnLayers[name];
+  let pt = bnXform(L, [srcPt[0] - L.anchor[0], srcPt[1] - L.anchor[1]]);
+  let up = L.parent ? bnLayers[L.parent] : null, guard = 0;
+  while (up && guard++ < 32) {
+    pt = bnXform(up, pt);
+    up = up.parent ? bnLayers[up.parent] : null;
+  }
+  return pt;
+}
+function bnThreeD(name) {
+  const hits = [];
+  let L = bnLayers[name], guard = 0;
+  while (L && guard++ < 32) {
+    if (L.threeD) hits.push(L.__name);
+    L = L.parent ? bnLayers[L.parent] : null;
+  }
+  return hits;
+}
+const bnR3 = (v) => Math.round(v * 1000) / 1000;
+const bnSecs = (t) => (Math.round(Number(t) * 1000) / 1000) + "s";
+function bnBounds(args, compW, compH) {
+  const name = args && args.layer;
+  const L = bnLayers[name];
+  if (Array.isArray(args && args.layers)) {
+    return { __err: "get_bounds reads ONE layer. Call it once per " +
+      "layer -- for_each_layer reports only counts, so it would throw " +
+      "every measurement away." };
+  }
+  if (!L) {
+    return { __err: "No layer '" + name + "' in '" + args.comp + "' -- " +
+      "it holds: " + Object.keys(bnLayers).join(", ") };
+  }
+  if (L.kind === "camera" || L.kind === "light") {
+    return { __err: "A " + L.kind + " layer ('" + name + "') renders no " +
+      "pixels, so it has no bounds -- AE gives sourceRectAtTime only to " +
+      "layers with content (text, shape, solid, footage, precomp, null). " +
+      "For a camera or light read its Position with get_property instead." };
+  }
+  let t = args && args.time;
+  if (typeof t === "string" && t !== "" && !isNaN(Number(t))) t = Number(t);
+  if (typeof t !== "number") {
+    if (typeof (args && args.time) !== "undefined" && args.time !== null) {
+      return { __err: "'time' must be a number of seconds; got " +
+        JSON.stringify(args.time) };
+    }
+    t = 0;
+  }
+  const extents = !!(args && args.extents);
+  const srcT = (t - L.startTime) / (L.stretch / 100);
+  const r = bnRect(name, srcT, extents);
+  const out = { layer: name, layerType: L.kind, time: bnR3(t),
+    extents: extents,
+    source: { left: bnR3(r.left), top: bnR3(r.top),
+              right: bnR3(r.left + r.width), bottom: bnR3(r.top + r.height),
+              width: bnR3(r.width), height: bnR3(r.height),
+              centerX: bnR3(r.left + r.width / 2),
+              centerY: bnR3(r.top + r.height / 2) },
+    compSize: [compW, compH] };
+  if (bnR3(srcT) !== bnR3(t)) {
+    out.sourceTime = bnR3(srcT);
+    out.timeNote = "measured at source time " + bnSecs(srcT) + ", which " +
+      "is comp time " + bnSecs(t) + " for this layer (it starts at " +
+      bnSecs(L.startTime) + " and is stretched to " + L.stretch + "%)";
+  }
+  if (out.source.width === 0 && out.source.height === 0) {
+    out.empty = "this layer renders nothing at " + bnSecs(t) +
+      (L.kind === "shape" ? " -- the shape layer has no drawn content yet"
+                          : " -- check that the layer is on at this time");
+  }
+  const threeD = bnThreeD(name);
+  if (threeD.length) {
+    out.comp = null;
+    out.compBoxUnavailable = "'" + threeD[0] + "' is a 3D layer, so where " +
+      "these pixels land in the frame depends on the camera. AE's own " +
+      "sourcePointToComp ignores Z, the camera and a 3D parent's rotation " +
+      "(measured), so no honest comp-space box can be reported.";
+    return out;
+  }
+  const pts = [[r.left, r.top], [r.left + r.width, r.top],
+               [r.left + r.width, r.top + r.height],
+               [r.left, r.top + r.height]].map(p => bnCompPoint(name, p));
+  const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+  const minX = Math.min.apply(null, xs), maxX = Math.max.apply(null, xs);
+  const minY = Math.min.apply(null, ys), maxY = Math.max.apply(null, ys);
+  out.comp = { left: bnR3(minX), top: bnR3(minY), right: bnR3(maxX),
+    bottom: bnR3(maxY), width: bnR3(maxX - minX), height: bnR3(maxY - minY),
+    centerX: bnR3((minX + maxX) / 2), centerY: bnR3((minY + maxY) / 2) };
+  out.corners = pts.map(p => [bnR3(p[0]), bnR3(p[1])]);
+  if (L.rot % 360 !== 0) {
+    out.rotated = L.rot % 360;
+    out.rotatedNote = "the layer is rotated " + bnR3(L.rot % 360) +
+      " degrees, so comp.width/height describe the axis-aligned box " +
+      "AROUND it, not the layer's own size (source.width/height is that)";
+  }
+  const over = {};
+  if (minX < 0) over.left = bnR3(-minX);
+  if (minY < 0) over.top = bnR3(-minY);
+  if (maxX > compW) over.right = bnR3(maxX - compW);
+  if (maxY > compH) over.bottom = bnR3(maxY - compH);
+  if (!Object.keys(over).length) {
+    out.inFrame = "fully";
+  } else if (maxX <= 0 || maxY <= 0 || minX >= compW || minY >= compH) {
+    out.inFrame = "outside";
+    out.outsideBy = over;
+  } else {
+    out.inFrame = "partly";
+    out.outsideBy = over;
+  }
+  return out;
+}
+/* AE's side of every bounds-rig call. Returns undefined for the tools the
+   generic canned host already models (the shape ones), so they fall
+   through instead of being modelled twice. */
+function bnCanned(tool, args) {
+  const name = args && args.layer;
+  switch (tool) {
+    case "add_solid":
+      bnAdd(args.name, "solid",
+            { w: args.width || 100, h: args.height || 100,
+              anchor: [(args.width || 100) / 2, (args.height || 100) / 2],
+              pos: [500, 400] });
+      return { name: args.name, index: 1 };
+    case "add_null":
+      bnAdd(args.name, "null", { pos: (args.position || [0, 0]).slice() });
+      return { name: args.name, index: 1 };
+    case "add_text_layer":
+      // AE names a text layer after its TEXT; the tool takes no 'name'.
+      bnAdd(args.text, "text", { pos: [500, 400] });
+      return { name: args.text, index: 1 };
+    case "add_camera":
+      bnAdd(args.name || "Camera", "camera", { threeD: true });
+      return { name: args.name || "Camera", index: 1 };
+    case "set_transform": {
+      const L = bnLayers[name];
+      if (!L) return undefined;
+      const v = args.value;
+      if (args.property === "position") L.pos = [v[0], v[1]];
+      else if (args.property === "anchorPoint") L.anchor = [v[0], v[1]];
+      else if (args.property === "scale") L.scale = [v[0], v[1]];
+      else if (args.property === "rotation") L.rot = Number(v);
+      return { layer: name, property: args.property, value: v };
+    }
+    case "set_layer_parent": {
+      const L = bnLayers[name];
+      if (!L) return undefined;
+      if (args.parent === null || typeof args.parent === "undefined") {
+        // Unparenting preserves the transform too: bake the comp-space
+        // position back down.
+        if (L.parent) L.pos = bnCompPoint(name, L.anchor);
+        L.parent = null;
+      } else {
+        // AE preserves the visual transform when a parent is picked, so
+        // the stored Position becomes PARENT-space.
+        const compPos = bnCompPoint(name, L.anchor);
+        L.parent = args.parent;
+        L.pos = bnUnXform(bnLayers[args.parent], compPos);
+      }
+      return { layer: name, parent: args.parent };
+    }
+    case "set_layer_timing": {
+      const L = bnLayers[name];
+      if (!L) return undefined;
+      if (typeof args.startTime === "number") L.startTime = args.startTime;
+      return { layer: name, startTime: L.startTime, inPoint: L.startTime,
+               outPoint: L.startTime + 6 };
+    }
+    case "set_layer_3d": {
+      const L = bnLayers[name];
+      if (!L) return undefined;
+      L.threeD = !!args.enabled;
+      return { layer: name, threeD: L.threeD };
+    }
+    case "get_property": {
+      const L = bnLayers[name];
+      if (!L) return undefined;
+      if (/anchor point$/i.test(String(args.property || ""))) {
+        return { layer: name, property: args.property,
+                 value: [L.anchor[0], L.anchor[1], 0], numKeys: 0 };
+      }
+      return undefined;
+    }
+    case "get_bounds":
+      return bnBounds(args, 1000, 800);
+    default:
+      return undefined;
+  }
+}
+
 function cannedOk(tool, args) {
+  if (inBnComp(args)) {
+    const bn = bnCanned(tool, args);
+    if (typeof bn !== "undefined") return bn;
+  }
   switch (tool) {
     case "create_comp":
       createCount++;
@@ -1931,7 +2201,10 @@ function cannedOk(tool, args) {
     }
     case "add_shape_layer": {
       const nm = (args && args.name) || "Shape Layer 1";
-      shapeSeedLayer(nm);
+      shapeSeedLayer(nm, args && args.size);
+      if (inBnComp(args)) {
+        bnAdd(nm, "shape", { pos: (args && args.position) || [0, 0] });
+      }
       return { index: 1, name: nm,
                shape: (args && args.shape) || "rectangle" };
     }
@@ -3456,7 +3729,7 @@ SelfTest.run({
     ordStack = [];
     maskKeys = {};
     batchLayers = 0; batchFx = {}; batchBlur = null;
-    batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetPresetRig(); resetRqRig(); resetAuRig(); resetFrRig();
+    batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetBoundsRig(); resetPresetRig(); resetRqRig(); resetAuRig(); resetFrRig();
     SelfTest.run({
       callHostTool(tool, args, cb) {
         if (tool === "grid_layout") {
@@ -3486,7 +3759,7 @@ SelfTest.run({
         ordStack = [];
         maskKeys = {};
         batchLayers = 0; batchFx = {}; batchBlur = null;
-        batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetPresetRig(); resetRqRig(); resetAuRig(); resetFrRig();
+        batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetBoundsRig(); resetPresetRig(); resetRqRig(); resetAuRig(); resetFrRig();
         SelfTest.run({
           callHostTool(tool, args, cb) {
             // Never refuse anything -- the old permissive host.

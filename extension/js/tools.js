@@ -167,6 +167,17 @@
             "Rotation are animated too, the note says where the " +
             "compensation is exact.",
       args: "{comp?: string, layer: name|index, preservePosition?: bool = true}" },
+    { name: "get_bounds", mutating: false,
+      desc: "MEASURE a layer's rendered content without touching it — how " +
+            "wide the text actually is, where the shape sits in the " +
+            "frame, whether anything overflows. Returns the source rect, " +
+            "the comp-space box and corners (parenting, scale and " +
+            "rotation included) and inFrame: fully|partly|outside. Use " +
+            "this before fitting, centering or aligning anything instead " +
+            "of assuming a size. extents:true adds a shape's stroke. A " +
+            "3D layer reports the source rect only (the camera decides " +
+            "the rest).",
+      args: "{comp?: string, layer?: name|index (omit = selected layer), time?: seconds (default current), extents?: bool}" },
     { name: "add_keyframe", mutating: true,
       desc: "Add a keyframe on a layer property at a time (seconds).",
       args: "{comp?: string, layer: name|index, property: transform name or 'effect.<EffectName>.<ParamName>', time: seconds, value: number|[..]}" },
@@ -594,6 +605,12 @@
       "- Anchor points are in LAYER space, not comp space. To center one,",
       "  call center_anchor_point — never set anchorPoint coordinates by",
       "  guesswork.",
+      "- NEVER assume how big a layer's content is. 'fit the title to the",
+      "  frame', 'put it under the logo', 'is it cut off?' all start with",
+      "  get_bounds {layer} — it reports the real rendered size, where it",
+      "  sits in the comp and whether it overflows. Text and shape layers",
+      "  are the ones that surprise you: their box is nothing like the",
+      "  comp size.",
       "- Your reply text is shown BEFORE your commands run. Phrase it as",
       "  intent ('Centering the anchor point…'), then after reading TOOL",
       "  RESULTS confirm what actually happened — including any 'warning'",

@@ -58,6 +58,10 @@
   // works in comps of its own and takes them away again.
   var FRCOMP = "AELL Self-Test Frame";
   var FRWIDE = "AELL Self-Test Frame Wide";
+  // And the bounds rig: it slides a layer in time, pushes one off the
+  // frame and turns another 3D, so it may not share a comp anything else
+  // is measuring.
+  var BNCOMP = "AELL Self-Test Bounds";
   var running = false;
 
   /**
@@ -6459,9 +6463,525 @@
                  "re-run says " + JSON.stringify(d);
         } },
 
+      // ---- get_bounds: measuring without touching ---------------------
+      // Its own comp because it moves a solid off the frame and turns it
+      // 3D, and because the source-time steps SLIDE a layer in time —
+      // none of which may reach a comp another group is measuring.
+      //
+      // What real AE taught this group (probes, WORKPLAN-LOG 2026-08-29):
+      // sourceRectAtTime ignores the transform, ignores masks and
+      // effects, needs BOTH arguments, and — the trap — takes the
+      // layer's own SOURCE time while every property time is comp time.
+      { name: "bounds scratch comp",
+        tool: "create_comp",
+        args: { name: BNCOMP, width: 1000, height: 800, duration: 6,
+                frameRate: 30 },
+        check: function (d, ctx) {
+          ctx.bnComp = d.name;
+          return typeof d.id === "number" || !!d.id || "no comp id";
+        } },
+
+      { name: "bounds rig: a 200x100 solid",
+        tool: "add_solid",
+        args: function (ctx) {
+          return { comp: ctx.bnComp, name: "ST BN Solid", color: [1, 0, 0],
+                   width: 200, height: 100 };
+        },
+        check: function (d) { return d.name === "ST BN Solid" || d.name; } },
+
+      { name: "bounds rig: anchor to the corner",
+        tool: "set_transform",
+        args: function (ctx) {
+          return { comp: ctx.bnComp, layer: "ST BN Solid",
+                   property: "anchorPoint", value: [0, 0] };
+        },
+        check: function () { return true; } },
+
+      { name: "bounds rig: park it at 500,400",
+        tool: "set_transform",
+        args: function (ctx) {
+          return { comp: ctx.bnComp, layer: "ST BN Solid",
+                   property: "position", value: [500, 400] };
+        },
+        check: function () { return true; } },
+
+      { name: "get_bounds measures the solid in source AND comp space",
+        tool: "get_bounds",
+        args: function (ctx) {
+          return { comp: ctx.bnComp, layer: "ST BN Solid" };
+        },
+        check: function (d) {
+          var s = d.source || {}, c = d.comp || {};
+          if (s.width !== 200 || s.height !== 100) {
+            return "source " + s.width + "x" + s.height + ", expected 200x100";
+          }
+          if (c.left !== 500 || c.top !== 400 || c.right !== 700 ||
+              c.bottom !== 500) {
+            return "comp box " + JSON.stringify(c);
+          }
+          if (d.inFrame !== "fully") return "inFrame " + d.inFrame;
+          if (d.outsideBy) return "reported overflow: " +
+                                  JSON.stringify(d.outsideBy);
+          if (!d.corners || d.corners.length !== 4 ||
+              d.corners[2][0] !== 700 || d.corners[2][1] !== 500) {
+            return "corners " + JSON.stringify(d.corners);
+          }
+          return (d.compSize[0] === 1000 && d.compSize[1] === 800) ||
+                 "compSize " + JSON.stringify(d.compSize);
+        } },
+
+      { name: "…and does not disturb the layer it measured",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.bnComp, layer: "ST BN Solid",
+                   property: "transform/Anchor Point" };
+        },
+        check: function (d) {
+          var v = d.value || [];
+          return (v[0] === 0 && v[1] === 0) ||
+                 "anchor moved to " + JSON.stringify(v) +
+                 " — get_bounds must be read-only";
+        } },
+
+      { name: "scale changes the COMP box and not the source rect",
+        batch: function (ctx) {
+          return [
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST BN Solid", property: "scale", value: [200, 50] } },
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST BN Solid" } }
+          ];
+        },
+        check: function (rows) {
+          if (!rows[0].ok) return rows[0].error;
+          if (!rows[1].ok) return rows[1].error;
+          var d = rows[1].data;
+          if (d.source.width !== 200 || d.source.height !== 100) {
+            return "the transform reached the SOURCE rect: " +
+                   JSON.stringify(d.source);
+          }
+          return (d.comp.width === 400 && d.comp.height === 50) ||
+                 "comp box " + d.comp.width + "x" + d.comp.height +
+                 ", expected 400x50";
+        } },
+
+      { name: "a rotated layer says its box is the one AROUND it",
+        batch: function (ctx) {
+          return [
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST BN Solid", property: "rotation", value: 90 } },
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST BN Solid" } }
+          ];
+        },
+        check: function (rows) {
+          if (!rows[1].ok) return rows[1].error;
+          var d = rows[1].data;
+          if (Math.abs(d.comp.width - 50) > 0.01 ||
+              Math.abs(d.comp.height - 400) > 0.01) {
+            return "rotated box " + d.comp.width + "x" + d.comp.height +
+                   ", expected 50x400";
+          }
+          if (d.rotated !== 90) return "rotated: " + d.rotated;
+          return /axis-aligned/.test(d.rotatedNote || "") ||
+                 "no rotatedNote: " + d.rotatedNote;
+        } },
+
+      { name: "bounds rig: back to square",
+        batch: function (ctx) {
+          return [
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST BN Solid", property: "rotation", value: 0 } },
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST BN Solid", property: "scale", value: [100, 100] } }
+          ];
+        },
+        check: function (rows) {
+          return (rows[0].ok && rows[1].ok) || "reset failed";
+        } },
+
+      { name: "bounds rig: a parent null at 300,200",
+        tool: "add_null",
+        args: function (ctx) {
+          return { comp: ctx.bnComp, name: "ST BN Null",
+                   position: [300, 200] };
+        },
+        check: function (d) { return d.name === "ST BN Null" || d.name; } },
+
+      { name: "bounds rig: parent the solid to it",
+        tool: "set_layer_parent",
+        args: function (ctx) {
+          return { comp: ctx.bnComp, layer: "ST BN Solid",
+                   parent: "ST BN Null" };
+        },
+        check: function () { return true; } },
+
+      // NB: this reads the box AFTER the link rather than asserting it is
+      // unmoved. Measured here in real AE 2026: set_layer_parent with its
+      // default keepPosition makes the layer JUMP by the parent's
+      // position (it calls setParentWithJump, the opposite of the note it
+      // returns). That is a set_layer_parent bug and has its own pass —
+      // what these two steps prove is that get_bounds follows the chain.
+      { name: "parenting: the box is measured through the chain",
+        tool: "get_bounds",
+        args: function (ctx) {
+          return { comp: ctx.bnComp, layer: "ST BN Solid" };
+        },
+        check: function (d, ctx) {
+          ctx.bnCentre = [d.comp.centerX, d.comp.centerY];
+          if (d.comp.width !== 200 || d.comp.height !== 100) {
+            return "a parented, untransformed layer changed size: " +
+                   d.comp.width + "x" + d.comp.height;
+          }
+          return d.inFrame === "fully" ||
+                 "inFrame " + d.inFrame + " at " + JSON.stringify(ctx.bnCentre);
+        } },
+
+      { name: "parenting: the PARENT's rotation moves the child's box",
+        batch: function (ctx) {
+          return [
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST BN Null", property: "rotation", value: 180 } },
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST BN Solid" } }
+          ];
+        },
+        check: function (rows, ctx) {
+          if (!rows[1].ok) return rows[1].error;
+          var d = rows[1].data;
+          // Rotating the parent 180 degrees mirrors the child through the
+          // parent's own position — the anchor is what a rotation turns
+          // about, and Position is where that anchor sits.
+          var wantX = 2 * 300 - ctx.bnCentre[0];
+          var wantY = 2 * 200 - ctx.bnCentre[1];
+          if (Math.abs(d.comp.centerX - wantX) > 0.01 ||
+              Math.abs(d.comp.centerY - wantY) > 0.01) {
+            return "centre " + d.comp.centerX + "," + d.comp.centerY +
+                   ", expected " + wantX + "," + wantY;
+          }
+          return !d.rotated ||
+                 "the CHILD is not rotated, but rotated=" + d.rotated;
+        } },
+
+      { name: "bounds rig: unparent and unrotate",
+        batch: function (ctx) {
+          return [
+            { tool: "set_layer_parent", args: { comp: ctx.bnComp,
+                layer: "ST BN Solid", parent: null } },
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST BN Null", property: "rotation", value: 0 } },
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST BN Solid", property: "position",
+                value: [500, 400] } },
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST BN Solid", property: "rotation", value: 0 } }
+          ];
+        },
+        check: function (rows) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + (i + 1) + ": " + rows[i].error;
+          }
+          return true;
+        } },
+
+      // add_text_layer takes no 'name': AE names a text layer after its
+      // own text, so the step uses whatever came back.
+      { name: "text is measured as CONTENT, not as the comp",
+        batch: function (ctx) {
+          return [
+            { tool: "add_text_layer", args: { comp: ctx.bnComp,
+                text: "ST BN Text", fontSize: 48 } },
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST BN Text" } }
+          ];
+        },
+        check: function (rows) {
+          if (!rows[0].ok) return rows[0].error;
+          if (!rows[1].ok) return rows[1].error;
+          var s = rows[1].data.source;
+          if (!(s.width > 10 && s.width < 900)) {
+            return "text width " + s.width + " — expected the drawn glyphs";
+          }
+          if (!(s.height > 10 && s.height < 200)) {
+            return "text height " + s.height;
+          }
+          // AE measures text from its BASELINE, so the box starts above
+          // the origin. A tool that reported 0 here would be guessing.
+          return s.top < 0 ||
+                 "text top " + s.top + " — expected a negative (above the " +
+                 "baseline) origin";
+        } },
+
+      { name: "bounds rig: a shape layer with a tiny default rect",
+        tool: "add_shape_layer",
+        args: function (ctx) {
+          return { comp: ctx.bnComp, name: "ST BN Shape", size: [2, 2],
+                   fillColor: [0, 0, 1], position: [500, 400] };
+        },
+        check: function (d) { return d.name === "ST BN Shape" || d.name; } },
+
+      { name: "bounds rig: a 100x100 stroked rectangle in its own group",
+        batch: function (ctx) {
+          return [
+            { tool: "add_shape_content", args: { comp: ctx.bnComp,
+                layer: "ST BN Shape", kind: "group", name: "ST BN Grp" } },
+            { tool: "add_shape_content", args: { comp: ctx.bnComp,
+                layer: "ST BN Shape", kind: "rectangle", group: "ST BN Grp",
+                params: { Size: [100, 100], Position: [0, 0] } } },
+            { tool: "add_shape_content", args: { comp: ctx.bnComp,
+                layer: "ST BN Shape", kind: "fill", group: "ST BN Grp",
+                params: { Color: [0, 1, 0, 1] } } },
+            { tool: "add_shape_content", args: { comp: ctx.bnComp,
+                layer: "ST BN Shape", kind: "stroke", group: "ST BN Grp" } }
+          ];
+        },
+        check: function (rows, ctx) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + (i + 1) + ": " + rows[i].error;
+          }
+          ctx.bnRect = rows[1].data.added;
+          ctx.bnStroke = rows[3].data.added;
+          return true;
+        } },
+
+      { name: "bounds rig: a 40px stroke on it",
+        tool: "set_property",
+        args: function (ctx) {
+          return { comp: ctx.bnComp, layer: "ST BN Shape",
+                   property: "contents/ST BN Grp/" + ctx.bnStroke +
+                             "/Stroke Width", value: 40 };
+        },
+        check: function (d) { return d.value === 40 || "value " + d.value; } },
+
+      { name: "extents:false measures the path, extents:true the stroke",
+        batch: function (ctx) {
+          return [
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST BN Shape" } },
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST BN Shape", extents: true } }
+          ];
+        },
+        check: function (rows) {
+          if (!rows[0].ok) return rows[0].error;
+          if (!rows[1].ok) return rows[1].error;
+          var plain = rows[0].data.source, ext = rows[1].data.source;
+          if (plain.width !== 100 || plain.height !== 100) {
+            return "path box " + plain.width + "x" + plain.height +
+                   ", expected 100x100";
+          }
+          if (ext.width !== 300 || ext.height !== 300) {
+            return "extents box " + ext.width + "x" + ext.height +
+                   ", expected 300x300 — AE reserves the MITER allowance " +
+                   "(half-width x (miter limit 4 + 1) = 100 a side for a " +
+                   "40px stroke), not half the stroke width";
+          }
+          return rows[0].data.extents === false &&
+                 rows[1].data.extents === true ||
+                 "the result did not report which mode it used";
+        } },
+
+      { name: "bounds rig: animate the rectangle's Size",
+        tool: "set_keyframes",
+        args: function (ctx) {
+          return { comp: ctx.bnComp, layer: "ST BN Shape",
+                   property: "contents/ST BN Grp/" + ctx.bnRect + "/Size",
+                   keys: [{ time: 0, value: [100, 100] },
+                          { time: 2, value: [600, 100] }] };
+        },
+        check: function (d) {
+          return d.easedPairs === undefined || true;
+        } },
+
+      { name: "bounds at a TIME reads that frame's content",
+        batch: function (ctx) {
+          return [
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST BN Shape", time: 0 } },
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST BN Shape", time: 2 } }
+          ];
+        },
+        check: function (rows) {
+          if (!rows[0].ok) return rows[0].error;
+          if (!rows[1].ok) return rows[1].error;
+          if (rows[0].data.source.width !== 100) {
+            return "t=0 width " + rows[0].data.source.width;
+          }
+          return rows[1].data.source.width === 600 ||
+                 "t=2 width " + rows[1].data.source.width + ", expected 600";
+        } },
+
+      { name: "bounds rig: slide the shape two seconds later",
+        tool: "set_layer_timing",
+        args: function (ctx) {
+          return { comp: ctx.bnComp, layer: "ST BN Shape", startTime: 2 };
+        },
+        check: function (d) {
+          return d.startTime === 2 || "startTime " + d.startTime;
+        } },
+
+      // THE trap: AE's property times are comp times and slid with the
+      // layer, but sourceRectAtTime takes the layer's own source time.
+      // Handing it comp time (as this panel used to) measures a frame the
+      // viewer is not showing.
+      { name: "a slid layer is measured at SOURCE time, not comp time",
+        batch: function (ctx) {
+          return [
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST BN Shape", time: 2 } },
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST BN Shape", time: 4 } }
+          ];
+        },
+        check: function (rows) {
+          if (!rows[0].ok) return rows[0].error;
+          if (!rows[1].ok) return rows[1].error;
+          var early = rows[0].data, late = rows[1].data;
+          if (early.source.width !== 100) {
+            return "comp 2s (source 0s) width " + early.source.width +
+                   ", expected 100 — comp time was passed straight through";
+          }
+          if (late.source.width !== 600) {
+            return "comp 4s (source 2s) width " + late.source.width;
+          }
+          if (early.sourceTime !== 0) {
+            return "sourceTime " + early.sourceTime + ", expected 0";
+          }
+          return /source time/.test(early.timeNote || "") ||
+                 "no timeNote explaining the two clocks";
+        } },
+
+      { name: "bounds rig: slide the shape back",
+        tool: "set_layer_timing",
+        args: function (ctx) {
+          return { comp: ctx.bnComp, layer: "ST BN Shape", startTime: 0 };
+        },
+        check: function () { return true; } },
+
+      { name: "a layer over the edge reports which side and by how much",
+        batch: function (ctx) {
+          return [
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST BN Solid", property: "position",
+                value: [-100, 400] } },
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST BN Solid" } },
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST BN Solid", property: "position",
+                value: [2000, 400] } },
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST BN Solid" } }
+          ];
+        },
+        check: function (rows) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + (i + 1) + ": " + rows[i].error;
+          }
+          var part = rows[1].data, gone = rows[3].data;
+          if (part.inFrame !== "partly") return "inFrame " + part.inFrame;
+          if (part.outsideBy.left !== 100) {
+            return "outsideBy " + JSON.stringify(part.outsideBy);
+          }
+          if (part.outsideBy.right || part.outsideBy.top ||
+              part.outsideBy.bottom) {
+            return "sides that are inside were reported: " +
+                   JSON.stringify(part.outsideBy);
+          }
+          if (gone.inFrame !== "outside") return "inFrame " + gone.inFrame;
+          return gone.outsideBy.right === 1200 ||
+                 "outsideBy " + JSON.stringify(gone.outsideBy);
+        } },
+
+      { name: "a 3D layer gets the source rect and an honest refusal",
+        batch: function (ctx) {
+          return [
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST BN Solid", property: "position",
+                value: [500, 400] } },
+            { tool: "set_layer_3d", args: { comp: ctx.bnComp,
+                layer: "ST BN Solid", enabled: true } },
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST BN Solid" } },
+            { tool: "set_layer_3d", args: { comp: ctx.bnComp,
+                layer: "ST BN Solid", enabled: false } }
+          ];
+        },
+        check: function (rows) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + (i + 1) + ": " + rows[i].error;
+          }
+          var d = rows[2].data;
+          if (d.source.width !== 200) {
+            return "3D source rect " + JSON.stringify(d.source);
+          }
+          if (d.comp !== null) {
+            return "a comp box was reported for a 3D layer: " +
+                   JSON.stringify(d.comp);
+          }
+          return (/ST BN Solid/.test(d.compBoxUnavailable || "") &&
+                  /camera/.test(d.compBoxUnavailable || "")) ||
+                 "compBoxUnavailable: " + d.compBoxUnavailable;
+        } },
+
+      { name: "bounds rig: a camera",
+        tool: "add_camera",
+        args: function (ctx) {
+          return { comp: ctx.bnComp, name: "ST BN Cam" };
+        },
+        check: function () { return true; } },
+
+      { name: "a camera has no bounds, and the refusal says what does",
+        tool: "get_bounds",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.bnComp, layer: "ST BN Cam" };
+        },
+        check: function (err) {
+          if (!/renders no pixels/.test(err)) return err;
+          return /text, shape, solid, footage, precomp, null/.test(err) ||
+                 "the refusal does not list what DOES have bounds: " + err;
+        } },
+
+      { name: "a layer that draws nothing says so instead of reporting 0",
+        batch: function (ctx) {
+          return [
+            { tool: "add_shape_layer", args: { comp: ctx.bnComp,
+                name: "ST BN Empty", size: [0, 0] } },
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST BN Empty" } }
+          ];
+        },
+        check: function (rows) {
+          if (!rows[0].ok) return rows[0].error;
+          if (!rows[1].ok) return rows[1].error;
+          var d = rows[1].data;
+          if (d.source.width !== 0 || d.source.height !== 0) {
+            return "an empty shape layer measured " +
+                   d.source.width + "x" + d.source.height;
+          }
+          return /renders nothing/.test(d.empty || "") ||
+                 "no 'empty' note: " + JSON.stringify(d);
+        } },
+
+      { name: "a {layers: [...]} batch is refused, not half-done",
+        tool: "get_bounds",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.bnComp, layers: ["ST BN Solid", "ST BN Text"] };
+        },
+        check: function (err) {
+          return (/ONE layer/.test(err) && /once per layer/.test(err)) || err;
+        } },
+
       { name: "cleanup: delete the fan-out rig",
         tool: "delete_item",
         args: { item: "ST FanParent" },
+        check: function () { return true; } },
+
+      { name: "cleanup: delete the bounds comp",
+        tool: "delete_item",
+        args: function (ctx) { return { item: ctx.bnComp }; },
         check: function () { return true; } },
 
       { name: "cleanup: delete the renamed plain comp",

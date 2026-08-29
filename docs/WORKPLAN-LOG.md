@@ -5620,3 +5620,125 @@ created a comp and then failed is not fully rolled back.
   seventh pass to flag it; it belongs to the remote session's release cut.
 - Probe scratch under `logs/` (gitignored). AE left on the harness's own
   project, dirty, with no dialog open.
+
+## 2026-08-29 (local) - get_bounds: the measurement that used to cost you
+## your anchor point
+
+Harness green on arrival (446/446), so the pass took the oldest unclaimed
+item in the log's own "still open" list - the read-only `get_bounds`
+filed by the 0.9.31 pass on 2026-08-28 and re-flagged in eight entries
+since. Until now the only route to a layer's rendered size was
+`center_anchor_point`, which MOVES the anchor to tell you, so no step and
+no chat request could ask "how wide is this text" without changing the
+comp.
+
+### What real AE measures, and what it lies about
+
+Three probes (`logs/probe-bounds{,2,3}.txt`, AE 2026 26.3x87):
+
+- `sourceRectAtTime` exists on every layer that draws pixels - solid,
+  text, shape, null (100x100), adjustment, precomp - and does NOT exist
+  at all on a camera or a light (`typeof` is undefined, so a call throws
+  AE's raw "Function is undefined"). It needs BOTH arguments; one throws.
+- It ignores the layer's own transform completely (position, scale,
+  rotation, anchor - the rect is unchanged), ignores MASKS, and ignores
+  even an expanding effect (a 200px drop shadow moves nothing).
+- **THE TRAP: its time argument is the layer's own SOURCE time.** Every
+  property time in AE scripting is COMP time and slides with the layer -
+  a key at 2s reads 3s once startTime is 1, and 4s once the layer is
+  stretched to 200% - but sourceRectAtTime's argument is unshifted by
+  startTime and unscaled by stretch. Two clocks, one function call.
+  `center_anchor_point` had been handing it `comp.time` since it shipped,
+  so on any slid or stretched layer it centred the anchor on a frame the
+  viewer was not showing. Fixed at the root with `AELL_sourceTime`, which
+  get_bounds uses too.
+- `extents: true` is a SHAPE thing: it grows the box by the stroke's
+  MITER ALLOWANCE, not by half its width - a 40px stroke adds 100 on
+  every side (half-width x (the default miter limit 4 + 1)), measured
+  twice on different rects. On TEXT, extents changed nothing at all, even
+  with a 20px stroke applied.
+- Text is measured from the BASELINE, so a text rect's `top` is
+  negative. An empty text layer and a shape layer with no drawn content
+  both measure 0x0.
+- **AE's own `sourcePointToComp` cannot be trusted once 3D is
+  involved.** It agrees with hand-rolled 2D math exactly on 2D rigs
+  (including through parenting, non-uniform scale and rotation - scale
+  before rotation), but it ignores a 3D layer's Z entirely (z=0 and
+  z=500 give the same answer), ignores the camera (moving it changes
+  nothing), and ignores a 3D PARENT's rotation. It also samples at the
+  comp's CURRENT time and takes no time argument. So the tool does the 2D
+  math itself and refuses to invent a comp-space box for a 3D chain.
+- Cost is nil: 200 rect reads 2 ms, 200 text extents reads 23 ms.
+
+### The tool
+
+`get_bounds {comp?, layer?, time?, extents?}` - read-only, no undo group,
+no selection change. It returns the source rect (left/top/right/bottom/
+width/height/centre), the comp-space box AND the four corners through the
+whole parent chain, `compSize`, and `inFrame: fully|partly|outside` with
+an `outsideBy` naming each side that overflows and by how many pixels. A
+rotated layer gets `rotated` + a note that comp.width is the axis-aligned
+box around it, not the layer's size. A slid or stretched layer gets
+`sourceTime` + a note naming both clocks. A 0x0 layer gets `empty`
+instead of a box of zeroes. A camera or light is refused with the list of
+what DOES have bounds. A 3D chain gets the exact source rect, `comp:
+null`, and `compBoxUnavailable` naming the 3D layer and why no honest
+number exists. `{layers: [...]}` is refused with the way to do it
+instead (it is classified read-only for for_each_layer, which would
+throw every measurement away).
+
+The system prompt gained the rule that pays for it: never assume how big
+a layer's content is - "fit the title", "put it under the logo", "is it
+cut off" all start with get_bounds.
+
+### Verification
+
+- `tests/test-get-bounds.js`, new: 51 checks, opening with a STUB
+  FIDELITY block - the stub keys its rect by SOURCE time, throws on a
+  one-argument call, and gives cameras no such method, so a tool that
+  went back to comp time cannot pass. `tests/test-anchor-point.js`'s
+  stub was made faithful the same way (it accepted any arguments and
+  ignored them).
+- `tests/test-self-test.js`'s canned host grew a bounds rig modelling
+  AE's side (transforms, the parent chain, source time, the miter
+  allowance), and its `shapeSeedLayer` now honours the size it is given
+  instead of always seeding 10x10.
+- Full stub sweep: 49 files, all green; capability doc regenerated.
+- **Harness: 446 -> 477/477 PASSED**, 31 new steps in a comp of their
+  own, including the source-time trap end to end (a shape whose Size is
+  keyframed, slid two seconds, measured at comp 2s and 4s), the miter
+  allowance, the frame test, the 3D refusal, the camera refusal and a
+  read-back proving the anchor did not move.
+- Bumped 0.10.4 -> 0.10.5: the pass fixes shipped behaviour
+  (center_anchor_point's timebase). The new TOOL still rides the remote
+  session's next minor.
+
+### What the new steps found in a SHIPPED tool - next pass's item
+
+**`set_layer_parent` moves the layer it parents.** The first version of
+the parenting step asserted the box was unchanged by the link, because
+`layer.parent = p` is AE's pick-whip and compensates (measured in probe
+2: the child's Position became -100,-100 by itself). Real AE failed the
+step: the box slid by exactly the null's position, [600,450] ->
+[900,650]. The tool has the two calls the wrong way round -
+`keepPosition !== false` selects `setParentWithJump`, which is AE's
+JUMPING form - while its result still says "Visual positions preserved".
+One line. It is NOT fixed here: four other rigs in the suite parent
+things and the change moves the ground under them, so it deserves its own
+pass rather than being smuggled into this one. The two bounds steps now
+measure the link's result instead of assuming it, and say so in a comment.
+
+### Still open
+
+- **`set_layer_parent`'s inverted keepPosition (above) - take this
+  first.**
+- Next on the feature track: 5.9 (.mogrt export), still flagged as a
+  LAST-item-of-the-night job for dialog risk.
+- `comfy_generate` still calls `import_file` rather than 5.8's
+  `import_as_layer` - a small remote-session pass.
+- `release-notes.txt` still reads "0.10.0" while the feed ships 0.10.5 -
+  eighth pass to flag it; it belongs to the remote session's release cut.
+- Rollback's reach over PROJECT ITEMS is still unmeasured (filed by the
+  duplicate_comp pass).
+- Probe scratch under `logs/` (gitignored). AE left on the harness's own
+  project, dirty, with no dialog open.
