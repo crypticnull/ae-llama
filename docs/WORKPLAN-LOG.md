@@ -5417,3 +5417,109 @@ first time every host tool has been touched in real After Effects.
   fifth pass to flag it; it belongs to the remote session's release cut.
 - Probe and patch scratch files under `logs/` (gitignored). AE left on
   the harness's own project, which is dirty - see the probe rule above.
+
+## 2026-08-29 (local) - the two comp settings nothing could reach, and the
+## frame they were quietly stealing
+
+Harness green on arrival (421/421), so the pass took the item the last
+two entries had each filed as "a small pass of its own": `set_comp_setting`
+could not reach the WORK AREA or the comp RESOLUTION, which left 5.7's
+`range: 'workArea'` and 5.8's `resolution` override proven by stubs alone.
+Both are now real-AE steps - and closing that gap turned up a shipped bug
+that had been moving the user's work area by a frame since 5.7 landed.
+
+### What AE does with a work-area write, measured
+
+`logs/probe-cs.txt`, then `probe-cs3.txt` for the part that mattered:
+
+- a write **SNAPS to the frame grid**, silently: on a 24 fps comp 0.333s
+  reads back as exactly 8 frames and 1.7s as 41;
+- an out-of-range write **THROWS**, it does not clamp ("Value 99 out of
+  range 0.04 to 4") - and AE's message arrives with mojibake curly quotes
+  through ExtendScript, so the tool refuses in its own words first;
+- the legal range for `workAreaDuration` is computed from the CURRENT
+  start, so widening from a late start throws ("out of range 0.04 to 1"
+  with the start at 3s) - duration-before-start is a trap;
+- a `workAreaStart` write keeps the DURATION and shortens it only when
+  that would run past the end of the comp (0..4s work area, start 3.9 ->
+  start 3.9167, duration 0.0833, end still 4);
+- **and the one that cost a bug: a start written EXACTLY onto the work
+  area's own current end comes back one frame EARLY and one frame LONG.**
+  [0..24] frames on a 3s/24fps comp, `workAreaStart = 1` -> [23..48].
+  From any other state the same write is exact ([0..24] with start 0.5 ->
+  [12..36]). Widening to the whole comp first makes every target exact,
+  which is what `AELL_setWorkArea` now does: widen, start, duration.
+- shortening `comp.duration` drags the work area in with it, silently;
+  layer outPoints survive it.
+
+Resolution is simpler and stricter: `[x, y]` whole numbers 1..99, both
+elements required, non-uniform pairs legal ([1, 3] is fine), and a bare
+number, a one-element array, a fraction, 0 and -1 each throw a different
+raw message. So 'full'/'half'/'third'/'quarter' are names the tool
+accepts and everything else is refused before AE is asked.
+
+### The bug the suite found the moment it could ask the question
+
+The new steps set a 1s-2s work area on the audio comp, convert inside it
+(25 keys), let the default widen to the whole comp (73 keys), and then
+ask AE what the work area is. It was **0.958s-2s**. `audio_to_keyframes`
+has restored the user's work area since 5.7 with the naive triple
+(`start = 0`, `duration = wasDur`, `start = wasStart`) - which is exactly
+the collision above, every time the start equals the duration. One frame
+earlier and one frame longer, silently, on every audio conversion over a
+partial work area. Both it and `set_comp_setting` now go through
+`AELL_setWorkArea`, and both stub suites reproduce the quirk: reverting
+the host to the naive order makes `tests/test-audio-keyframes.js` fail on
+"the user's work area is put back EXACTLY" (0.958333 / 1.041667) and
+`tests/test-comp-settings.js` fail on the same shape. That is the loop
+working end to end - field truth caught it, the stubs hold it.
+
+### Also shipped in this pass
+
+- `set_comp_setting` gained `workAreaStart` / `workAreaDuration` /
+  `workAreaEnd` / `workArea: 'comp'` and `resolution`, reports `bgColor`
+  and `changed`, speaks every snap and every quiet shortening (including
+  AE's own drag when the comp is re-timed), and refuses an empty call
+  with the whole menu of what it can set.
+- `get_comp_details` now reports `workArea` and `resolution`: a setting
+  the model can write has to be one it can read, or a narrowed work area
+  is indistinguishable from a short comp.
+- Three stub suites had comps without a `bgColor`, a work area or a
+  resolutionFactor - properties every real comp has from birth. Made
+  faithful rather than worked around in the host.
+
+### Verification
+
+- `tests/test-comp-settings.js`, new: 58 checks, opening with a STUB
+  FIDELITY block that drives the raw API so a stub that stopped modelling
+  the throws could not let the tool pass on a technicality.
+- Full stub sweep: 47 files, all green.
+- **Harness: 421 -> 437/437 PASSED** (and 436/437 on the run that found
+  the work-area bug, which is why the entry above exists).
+
+### Probe hazards, both paid for tonight
+
+- An uncaught throw in a `-r` probe leaves AE on a modal and every later
+  `-r` script is swallowed in silence - the same signature as the
+  save-changes prompt. Harvested via WM_GETTEXT, it read "Unable to
+  execute script at line NN. Object of type Error found where a Number,
+  Array, or Property is needed", and WM_CLOSE cleared it. Worth knowing:
+  **`e.toString()` on an AE-thrown error inside a probe's catch can
+  itself throw that**, so a probe's catch should say as little as
+  possible about the error object. Write every probe line to disk as it
+  is measured (open, writeln, close) - a buffered file closed at the end
+  loses everything a throw interrupts.
+- The harness's own dialog triage then answered a leftover of exactly
+  that kind on the next run, logged it as UNRECOGNISED with a screenshot,
+  and carried on. It works.
+
+### Still open
+
+- Next on the feature track: 5.9 (.mogrt export), still flagged as a
+  LAST-item-of-the-night job for dialog risk.
+- `duplicate_comp` still takes a name without uniquing; no read-only
+  `get_bounds`. Both still unclaimed.
+- `release-notes.txt` still reads "0.10.0" while the feed ships 0.10.3 -
+  sixth pass to flag it; it belongs to the remote session's release cut.
+- Probe scratch under `logs/` (gitignored). AE left on the harness's own
+  project, dirty, with no dialog open.

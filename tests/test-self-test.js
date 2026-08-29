@@ -62,6 +62,14 @@ function listLimit(raw) {
 }
 
 /** Window a full layer list the way the host does. */
+// "half [2, 2]" - the same shape the host reports.
+function compResolutionLabel(c) {
+  const rf = (c && c.rf) || [1, 1];
+  const NAMES = { 1: "full", 2: "half", 3: "third", 4: "quarter" };
+  const name = (rf[0] === rf[1] && NAMES[rf[0]]) ? NAMES[rf[0]] : "custom";
+  return name + " [" + rf[0] + ", " + rf[1] + "]";
+}
+
 function capLayers(compName, all, args) {
   const total = all.length;
   const limit = listLimit(args && args.limit);
@@ -78,8 +86,15 @@ function capLayers(compName, all, args) {
     if (l && wanted.indexOf(l) < 0) wanted.push(l);
   }
   wanted.sort((a, b) => a.index - b.index);
+  const cp = compProps[compName];
   const out = { name: compName, numLayers: total,
                 layersShown: wanted.length, layers: wanted };
+  if (cp) {
+    const secs = (t) => (Math.round(Number(t) * 1000) / 1000) + "s";
+    out.workArea = secs(cp.waStart || 0) +
+                   "-" + secs((cp.waStart || 0) + (cp.waDur || 0));
+    out.resolution = compResolutionLabel(cp);
+  }
   if (wanted.length < total) {
     out.note = "Showing " + wanted.length + " of " + total +
       " layers (indexes " + start + "-" + last + "). Ask again with start:" +
@@ -783,7 +798,9 @@ function cannedOk(tool, args) {
         width: (args && args.width) || 1280,
         height: (args && args.height) || 720,
         duration: (args && args.duration) || 8,
-        frameRate: (args && args.frameRate) || 30 };
+        frameRate: (args && args.frameRate) || 30,
+        // Every real comp carries these from the moment it exists.
+        waStart: 0, waDur: (args && args.duration) || 8, rf: [1, 1] };
       // 1st = the scratch comp, 2nd = the deliberate name collision that
       // must auto-number, 3rd+ = whatever was asked for (the camera comp).
       if (createCount === 1) return { name: "AELL Self-Test", id: 1 };
@@ -2739,12 +2756,143 @@ function cannedOk(tool, args) {
     case "set_comp_setting": {
       const nm = (args && args.comp) || createdComps[createdComps.length - 1];
       const c = compProps[nm] || (compProps[nm] = {});
-      if (args.width > 0) c.width = Math.round(args.width);
-      if (args.height > 0) c.height = Math.round(args.height);
-      if (args.duration > 0) c.duration = args.duration;
-      if (args.frameRate > 0) c.frameRate = args.frameRate;
-      return { name: nm, width: c.width, height: c.height,
-               duration: c.duration, frameRate: c.frameRate };
+      const notes = [];
+      const changed = [];
+      if (args.width > 0) {
+        c.width = Math.round(args.width); changed.push("width");
+      }
+      if (args.height > 0) {
+        c.height = Math.round(args.height); changed.push("height");
+      }
+      if (args.duration > 0) {
+        c.duration = args.duration;
+        changed.push("duration");
+        if (c.waStart + c.waDur > c.duration) {       // AE's silent drag
+          c.waDur = Math.max(0, c.duration - c.waStart);
+          notes.push("Re-timing the comp pulled the work area in with it.");
+        }
+      }
+      if (args.frameRate > 0) {
+        c.frameRate = args.frameRate; changed.push("frameRate");
+      }
+      if (Array.isArray(args.bgColor)) {
+        c.bg = args.bgColor.slice(0, 3); changed.push("bgColor");
+      }
+      const fd = 1 / (c.frameRate || 30);
+      const snap = (t) => Math.round(Number(t) / fd) * fd;
+      const secs = (t) => (Math.round(Number(t) * 1000) / 1000) + "s";
+      const num = (v) => (typeof v === "number" ? v
+        : (typeof v === "string" && v !== "" && !isNaN(Number(v)))
+            ? Number(v) : null);
+      const aS = num(args.workAreaStart), aD = num(args.workAreaDuration),
+            aE = num(args.workAreaEnd);
+      if (args.workArea !== undefined || aS !== null || aD !== null ||
+          aE !== null) {
+        let start, dur;
+        if (args.workArea !== undefined) {
+          if (String(args.workArea).toLowerCase() !== "comp") {
+            return { __err: "'workArea' takes 'comp' - reset the work area " +
+              "to the whole comp. Got '" + args.workArea + "'. For a " +
+              "sub-range pass workAreaStart with workAreaDuration or " +
+              "workAreaEnd, in seconds." };
+          }
+          start = 0; dur = c.duration;
+        } else {
+          if (aD !== null && aE !== null) {
+            return { __err: "Pass workAreaDuration OR workAreaEnd, not " +
+              "both - they say the same thing two ways." };
+          }
+          start = aS === null ? c.waStart : aS;
+          dur = aE !== null ? aE - start : (aD !== null ? aD : c.waDur);
+        }
+        const rawStart = start, rawDur = dur;
+        start = snap(start); dur = snap(dur);
+        let trimmed = 0;
+        if (aD === null && aE === null && args.workArea === undefined &&
+            start + dur > c.duration) {
+          trimmed = dur;
+          dur = snap(c.duration - start);
+        }
+        if (start < 0) {
+          return { __err: "A work area cannot start before 0 - got " +
+            secs(rawStart) + "." };
+        }
+        if (start > c.duration - fd + 0.0001) {
+          return { __err: "Comp '" + nm + "' is " + secs(c.duration) +
+            " long, so its last frame starts at " + secs(c.duration - fd) +
+            " - a work area cannot start at " + secs(rawStart) + "." };
+        }
+        if (dur <= 0 || dur < fd - 0.0001) {
+          return { __err: "A work area of " + secs(rawDur) + " holds no " +
+            "frame - the shortest one is " + secs(fd) + " (one frame)." };
+        }
+        if (start + dur > c.duration + 0.0001) {
+          return { __err: "A work area of " + secs(rawDur) + " starting at " +
+            secs(start) + " would end at " + secs(start + dur) + ", past " +
+            "the end of comp '" + nm + "' (" + secs(c.duration) + "). The " +
+            "longest that fits from there is " + secs(c.duration - start) +
+            "." };
+        }
+        c.waStart = start; c.waDur = dur;
+        changed.push("workArea");
+        if (Math.abs(start - rawStart) > 0.000001) {
+          notes.push("The work area start snapped to the frame grid: " +
+            secs(rawStart) + " -> " + secs(start) + " (frame " +
+            Math.round(start / fd) + ").");
+        }
+        if (!trimmed && Math.abs(dur - rawDur) > 0.000001) {
+          notes.push("The work area duration snapped to the frame grid.");
+        }
+        if (trimmed) {
+          notes.push("Moving the start left only " + secs(dur) +
+            " before the comp ends, so the work area is shorter than the " +
+            secs(trimmed) + " it was.");
+        }
+      }
+      if (args.resolution !== undefined) {
+        const NAMED = { full: 1, half: 2, third: 3, quarter: 4 };
+        let pair = null;
+        if (Array.isArray(args.resolution)) {
+          if (args.resolution.length !== 2) {
+            return { __err: "'resolution' as an array needs exactly two " +
+              "values, [horizontal, vertical]." };
+          }
+          pair = [Number(args.resolution[0]), Number(args.resolution[1])];
+        } else if (num(args.resolution) !== null) {
+          pair = [num(args.resolution), num(args.resolution)];
+        } else if (NAMED[String(args.resolution).toLowerCase()]) {
+          const n = NAMED[String(args.resolution).toLowerCase()];
+          pair = [n, n];
+        } else {
+          return { __err: "Unknown resolution '" + args.resolution +
+            "'. Named resolutions: 'full' (1), 'half' (2), 'third' (3), " +
+            "'quarter' (4) - or pass a whole-number downsample factor, or " +
+            "a [horizontal, vertical] pair." };
+        }
+        for (const v of pair) {
+          if (!(v >= 1) || !(v <= 99) || Math.floor(v) !== v) {
+            return { __err: "A resolution factor is a whole number from 1 " +
+              "(full, every pixel) to 99 - got " + v + "." };
+          }
+        }
+        c.rf = pair;
+        changed.push("resolution");
+      }
+      if (!changed.length) {
+        return { __err: "set_comp_setting was given nothing to change. It " +
+          "sets: duration, frameRate, width, height, bgColor, " +
+          "workAreaStart / workAreaDuration / workAreaEnd and resolution." };
+      }
+      const out = { name: nm, width: c.width, height: c.height,
+                    duration: c.duration, frameRate: c.frameRate,
+                    bgColor: c.bg || [0, 0, 0],
+                    workAreaStart: c.waStart, workAreaDuration: c.waDur,
+                    workArea: secs(c.waStart) + "-" +
+                              secs(c.waStart + c.waDur),
+                    resolution: compResolutionLabel(c),
+                    changed: changed.join(", ") };
+      if (notes.length) out.note = notes.join(" ");
+      return out;
     }
     case "duplicate_comp": {
       const src = (args && args.comp) || "";
@@ -2828,13 +2976,24 @@ function cannedOk(tool, args) {
         }
       }
       const heard = only ? 1 : audible.length;
+      // AE's converter reads the WORK AREA, not the comp: the default
+      // widens it and puts it back, range:'workArea' leaves it alone.
+      const acp = compProps[comp] ||
+        { duration: 3, frameRate: 24, waStart: 0, waDur: 3 };
+      const auPartial = acp.waStart > 0.0000001 ||
+                        acp.waDur < acp.duration - 0.0000001;
+      const auStart = (range === "workArea" && auPartial) ? acp.waStart : 0;
+      const auEnd = (range === "workArea" && auPartial)
+        ? acp.waStart + acp.waDur : acp.duration;
+      const auKeys = Math.round((auEnd - auStart) * acp.frameRate) + 1;
       const wanted = (args && args.name) ? String(args.name)
                                          : "Audio Amplitude";
       const name = auUnique(wanted);
       auNulls.push(name);
       const out = { layer: name, index: 1, controlLayer: name,
         controlEffects: ["Left Channel", "Right Channel", "Both Channels"],
-        keyframes: 73, rangeStart: 0, rangeEnd: 3, peak: auPeak(heard),
+        keyframes: auKeys, rangeStart: auStart, rangeEnd: auEnd,
+        peak: auPeak(heard),
         measured: only ? only.name : "whole comp mix",
         next: "Drive anything with link_property {layer: <target>, " +
               "property: <prop>, controlLayer: '" + name + "', " +
@@ -2842,6 +3001,16 @@ function cannedOk(tool, args) {
       if (name !== wanted) {
         out.nameTaken = "'" + wanted + "' was already a layer in this comp " +
           "- this one is '" + name + "'. Use THIS name from here on.";
+      }
+      if (auPartial && range === "comp") {
+        out.workArea = "The work area covered " + acp.waStart.toFixed(3) +
+          "s-" + (acp.waStart + acp.waDur).toFixed(3) + "s and AE only " +
+          "converts inside it, so it was widened to the whole comp and put " +
+          "back. Pass range: 'workArea' to keep AE's own behaviour.";
+      } else if (auPartial && range === "workArea") {
+        out.workArea = "Keyframes cover the WORK AREA only (" +
+          acp.waStart.toFixed(3) + "s-" +
+          (acp.waStart + acp.waDur).toFixed(3) + "s), as asked.";
       }
       if (only && audible.length > 1) {
         out.isolated = "AE's converter always reads the whole comp mix, so " +
@@ -3023,14 +3192,25 @@ function cannedOk(tool, args) {
           "nearest end and writes a BLANK frame, so it is refused here " +
           "instead." };
       }
+      const res = (args && args.resolution)
+        ? String(args.resolution).toLowerCase() : "full";
+      if (res !== "full" && res !== "comp") {
+        return { __err: "'resolution' must be 'full' (default - the comp's " +
+          "real pixel size) or 'comp' (whatever downsample the comp is set " +
+          "to). Got: " + args.resolution };
+      }
+      const srf = props.rf || [1, 1];
+      const shrunk = res === "comp" && (srf[0] !== 1 || srf[1] !== 1);
+      const pngW = shrunk ? Math.round(props.width / srf[0]) : props.width;
+      const pngH = shrunk ? Math.round(props.height / srf[1]) : props.height;
       let frame = Math.round(t * props.frameRate);
       const lastFrame = Math.round(props.duration * props.frameRate) - 1;
       if (frame > lastFrame) frame = lastFrame;
       rqDisk[png.toLowerCase()] = 644;
-      frPngs[png.toLowerCase()] = { width: props.width, height: props.height };
+      frPngs[png.toLowerCase()] = { width: pngW, height: pngH };
       const out = { comp: comp, path: png, time: frame / props.frameRate,
                     frame: frame, bytes: 644,
-                    width: props.width, height: props.height,
+                    width: pngW, height: pngH,
                     compSize: props.width + "x" + props.height,
                     next: "import_as_layer {path: \"" +
                       png.split("\\").join("/") +
@@ -3042,6 +3222,16 @@ function cannedOk(tool, args) {
       if (!gaveTime) {
         out.timeNote = "No 'time' given, so the comp's current time (" +
           out.time + "s, frame " + frame + ") was used.";
+      }
+      if (res === "full" && (srf[0] !== 1 || srf[1] !== 1)) {
+        out.resolutionNote = "'" + comp + "' was set to resolution 1/" +
+          srf[0] + " - it was snapshotted at FULL size and put back the " +
+          "way it was. Pass {resolution: \"comp\"} to keep the downsample.";
+      }
+      if (shrunk) {
+        out.warning = "The PNG is " + pngW + "x" + pngH + ", not the " +
+          "comp's " + props.width + "x" + props.height + " - the comp is " +
+          "downsampled and {resolution: \"comp\"} kept it.";
       }
       return out;
     }

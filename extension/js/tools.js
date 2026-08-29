@@ -291,10 +291,14 @@
       desc: "Delete a layer from a comp.",
       args: "{comp?: string, layer: name|index}" },
     { name: "set_comp_setting", mutating: true,
-      desc: "Change a comp setting (duration, frame rate, bg color). Its " +
+      desc: "Change a comp setting: duration, frame rate, bg color, the " +
+            "WORK AREA (workAreaStart with workAreaDuration or " +
+            "workAreaEnd, in seconds — or workArea: 'comp' to reset it to " +
+            "the whole comp) and preview resolution. Times snap to the " +
+            "frame grid and the result says when they did. Its " +
             "width/height change ONLY the canvas and leave layers stuck at " +
             "the top-left — to resize a comp, use scale_comp instead.",
-      args: "{comp?: string, duration?: s, frameRate?: number, width?: int, height?: int, bgColor?: [r,g,b] 0..1}" },
+      args: "{comp?: string, duration?: s, frameRate?: number, width?: int, height?: int, bgColor?: [r,g,b] 0..1, workArea?: 'comp', workAreaStart?: s, workAreaDuration?: s, workAreaEnd?: s, resolution?: 'full'|'half'|'third'|'quarter'|int|[h,v]}" },
     { name: "scale_comp", mutating: true,
       desc: "Resize a comp AND scale its content to match, re-centered — " +
             "like the native 'Scale Composition' script. Uniform factor " +

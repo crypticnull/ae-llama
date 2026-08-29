@@ -1744,6 +1744,13 @@ AELL_TOOLS.get_comp_details = function (args) {
     height: comp.height,
     duration: comp.duration,
     frameRate: comp.frameRate,
+    // A setting set_comp_setting can WRITE has to be readable, or the
+    // model cannot tell a narrowed work area from a short comp — and AE
+    // only renders, previews and converts audio inside the work area.
+    workArea: AELL_secs(comp.workAreaStart) + "-" +
+              AELL_secs(Number(comp.workAreaStart) +
+                        Number(comp.workAreaDuration)),
+    resolution: AELL_resolutionLabel(comp.resolutionFactor),
     numLayers: total,
     layersShown: layers.length,
     layers: layers
@@ -3229,8 +3236,7 @@ AELL_TOOLS.audio_to_keyframes = function (args) {
   try {
     for (i = 0; i < silenced.length; i++) silenced[i].audioEnabled = false;
     if (range === "comp" && partial) {
-      comp.workAreaStart = 0;
-      comp.workAreaDuration = comp.duration;
+      AELL_setWorkArea(comp, 0, comp.duration);
       widened = true;
     }
     before = AELL_layerIdSet(comp);
@@ -3256,11 +3262,10 @@ AELL_TOOLS.audio_to_keyframes = function (args) {
     try { silenced[i].audioEnabled = true; } catch (eR) {}
   }
   if (widened) {
-    try {
-      comp.workAreaStart = 0;
-      comp.workAreaDuration = wasDur;
-      comp.workAreaStart = wasStart;
-    } catch (eW) {}
+    // The naive order (duration, then start) moved the user's work area
+    // one frame every time the start landed on its own old end - see
+    // AELL_setWorkArea, and the self-test step that caught it.
+    try { AELL_setWorkArea(comp, wasStart, wasDur); } catch (eW) {}
   }
   if (failure) {
     return AELL_err("AE refused the audio conversion in '" + comp.name +
@@ -4385,17 +4390,260 @@ AELL_TOOLS.delete_layer = function (args) {
   return AELL_okay({ removed: name });
 };
 
+/*
+ * Named comp resolutions. AE stores resolution as an [x, y] pair of
+ * integer DOWNSAMPLE factors; measured in AE 2026: both elements are
+ * required, each must be a whole number 1..99, and a non-uniform pair
+ * ([1, 3]) is legal. A bare number, a one-element array, a fraction, 0
+ * and -1 each throw a different raw AE message, so the tool checks
+ * before it writes and says what IS accepted.
+ */
+var AELL_RESOLUTIONS = { full: 1, half: 2, third: 3, quarter: 4 };
+
+function AELL_resolutionNames() {
+  var k, out = [];
+  for (k in AELL_RESOLUTIONS) {
+    if (AELL_RESOLUTIONS.hasOwnProperty(k)) {
+      out.push("'" + k + "' (" + AELL_RESOLUTIONS[k] + ")");
+    }
+  }
+  return out.join(", ");
+}
+
+/* "half [2, 2]" — the name when there is one, the pair always. */
+function AELL_resolutionLabel(rf) {
+  var k, name = "custom";
+  for (k in AELL_RESOLUTIONS) {
+    if (AELL_RESOLUTIONS.hasOwnProperty(k) && rf[0] === rf[1] &&
+        AELL_RESOLUTIONS[k] === rf[0]) { name = k; break; }
+  }
+  return name + " [" + rf[0] + ", " + rf[1] + "]";
+}
+
+/* What the model sent -> AE's [x, y] pair. Returns null and fills
+ * bad.why with a grounded refusal when it cannot. */
+function AELL_resolutionPair(v, bad) {
+  var pair = null, i, n, name;
+  if (AELLJSON.isArray(v)) {
+    if (v.length !== 2) {
+      bad.why = "'resolution' as an array needs exactly two values, " +
+        "[horizontal, vertical] — got " + v.length + ". Named " +
+        "resolutions: " + AELL_resolutionNames() + ".";
+      return null;
+    }
+    pair = [AELL_numArg(v[0]), AELL_numArg(v[1])];
+  } else {
+    n = AELL_numArg(v);
+    if (n !== null) {
+      pair = [n, n];
+    } else {
+      name = (typeof v === "string") ? String(v).toLowerCase() : "";
+      if (AELL_RESOLUTIONS.hasOwnProperty(name)) {
+        pair = [AELL_RESOLUTIONS[name], AELL_RESOLUTIONS[name]];
+      } else {
+        bad.why = "Unknown resolution '" + v + "'. Named resolutions: " +
+          AELL_resolutionNames() + " — or pass a whole-number downsample " +
+          "factor, or a [horizontal, vertical] pair.";
+        return null;
+      }
+    }
+  }
+  for (i = 0; i < 2; i++) {
+    if (pair[i] === null || !(pair[i] >= 1) || !(pair[i] <= 99) ||
+        Math.floor(pair[i]) !== pair[i]) {
+      bad.why = "A resolution factor is a whole number from 1 (full, " +
+        "every pixel) to 99 — got " + AELL_showValue(v) + ". Named " +
+        "resolutions: " + AELL_resolutionNames() + ".";
+      return null;
+    }
+  }
+  return pair;
+}
+
+/* AE snaps a work-area write to the comp's frame grid, silently
+ * (measured on a 24 fps comp: 0.333s reads back as exactly 8 frames,
+ * 1.7s as 41). Rounding here is what lets the tool REPORT the snap. */
+function AELL_snapFrames(t, fd) {
+  if (!(fd > 0)) return Number(t);
+  return Math.round(Number(t) / fd) * fd;
+}
+
+function AELL_secs(t) { return (Math.round(Number(t) * 1000) / 1000) + "s"; }
+
+/*
+ * Land an EXACT work area, because the obvious two writes do not.
+ * Measured in AE 2026 (a 3s/24fps comp, work area frames [0..24]):
+ * writing workAreaStart = 1s — the frame the CURRENT work area ends on —
+ * gives [23..48], one frame early and one frame long, silently. From any
+ * other state the same write is exact ([0..24] -> start 0.5 -> [12..36]).
+ * A start write otherwise keeps the DURATION and only shortens it when
+ * that would run past the end of the comp.
+ *
+ * So: widen to the whole comp FIRST (from there no requested start can
+ * collide with the end), then the start, then the duration. Measured
+ * exact from every rig tried, including the collision above. This is not
+ * only set_comp_setting's problem: audio_to_keyframes restored the
+ * user's work area with the naive order and moved it a frame every time.
+ */
+function AELL_setWorkArea(comp, start, dur) {
+  comp.workAreaStart = 0;
+  comp.workAreaDuration = comp.duration;
+  if (start > 0) comp.workAreaStart = start;
+  comp.workAreaDuration = dur;
+}
+
 AELL_TOOLS.set_comp_setting = function (args) {
   var comp = AELL_resolveComp(args.comp);
-  if (args.duration > 0) comp.duration = args.duration;
-  if (args.frameRate > 0) comp.frameRate = args.frameRate;
-  if (args.width > 0) comp.width = Math.round(args.width);
-  if (args.height > 0) comp.height = Math.round(args.height);
+  var notes = [], changed = [];
+  var wasDur = Number(comp.duration);
+  var wasWaStart = Number(comp.workAreaStart);
+  var wasWaDur = Number(comp.workAreaDuration);
+  var bad, pair, rf;
+
+  if (args.duration > 0) { comp.duration = args.duration; changed.push("duration"); }
+  if (args.frameRate > 0) { comp.frameRate = args.frameRate; changed.push("frameRate"); }
+  if (args.width > 0) { comp.width = Math.round(args.width); changed.push("width"); }
+  if (args.height > 0) { comp.height = Math.round(args.height); changed.push("height"); }
   if (AELLJSON.isArray(args.bgColor) && args.bgColor.length >= 3) {
     comp.bgColor = [args.bgColor[0], args.bgColor[1], args.bgColor[2]];
+    changed.push("bgColor");
   }
-  return AELL_okay({ name: comp.name, width: comp.width, height: comp.height,
-                     duration: comp.duration, frameRate: comp.frameRate });
+  if ((args.width > 0 || args.height > 0) && comp.numLayers > 0) {
+    notes.push("Width/height moved the CANVAS only — the " + comp.numLayers +
+      " layer(s) stayed where they were. scale_comp resizes a comp AND " +
+      "its content.");
+  }
+
+  var fd = Number(comp.frameDuration) || 0;
+  var fps = fd ? (Math.round(1 / fd * 100) / 100) : 0;
+  var compDur = Number(comp.duration);
+
+  // Shortening a comp drags the work area in with it and says nothing
+  // (measured: a work area of 0-4s on a comp cut to 2s came back 0-2s).
+  if (Math.abs(compDur - wasDur) > 0.0001 &&
+      (Math.abs(Number(comp.workAreaStart) - wasWaStart) > 0.0001 ||
+       Math.abs(Number(comp.workAreaDuration) - wasWaDur) > 0.0001)) {
+    notes.push("Re-timing the comp pulled the work area in with it: " +
+      AELL_secs(wasWaStart) + "-" + AELL_secs(wasWaStart + wasWaDur) +
+      " is now " + AELL_secs(comp.workAreaStart) + "-" +
+      AELL_secs(Number(comp.workAreaStart) +
+                Number(comp.workAreaDuration)) + ".");
+  }
+
+  var aStart = AELL_numArg(args.workAreaStart);
+  var aDur = AELL_numArg(args.workAreaDuration);
+  var aEnd = AELL_numArg(args.workAreaEnd);
+  var wantWa = args.workArea !== null && typeof args.workArea !== "undefined";
+  if (wantWa || aStart !== null || aDur !== null || aEnd !== null) {
+    var curStart = Number(comp.workAreaStart);
+    var curDur = Number(comp.workAreaDuration);
+    var start, dur, word;
+    if (wantWa) {
+      word = String(args.workArea).toLowerCase();
+      if (word !== "comp" && word !== "whole" && word !== "all" &&
+          word !== "full") {
+        return AELL_err("'workArea' takes 'comp' — reset the work area to " +
+          "the whole comp. Got '" + args.workArea + "'. For a sub-range " +
+          "pass workAreaStart with workAreaDuration or workAreaEnd, in " +
+          "seconds.");
+      }
+      start = 0;
+      dur = compDur;
+    } else {
+      if (aDur !== null && aEnd !== null) {
+        return AELL_err("Pass workAreaDuration OR workAreaEnd, not both — " +
+          "they say the same thing two ways (from " +
+          AELL_secs(aStart === null ? curStart : aStart) + ", a duration " +
+          "of " + aDur + "s ends at " +
+          AELL_secs((aStart === null ? curStart : aStart) + aDur) + ", " +
+          "not " + AELL_secs(aEnd) + ").");
+      }
+      start = (aStart === null) ? curStart : aStart;
+      if (aEnd !== null) dur = aEnd - start;
+      else if (aDur !== null) dur = aDur;
+      else dur = curDur;
+    }
+
+    var rawStart = start, rawDur = dur;
+    start = AELL_snapFrames(start, fd);
+    dur = AELL_snapFrames(dur, fd);
+    // Moving only the start onto a late frame is AE's own quiet
+    // shortening; keep the behaviour, but say it out loud.
+    var trimmed = 0;
+    if (aDur === null && aEnd === null && !wantWa && start + dur > compDur) {
+      trimmed = dur;
+      dur = AELL_snapFrames(compDur - start, fd);
+    }
+    if (start < 0) {
+      return AELL_err("A work area cannot start before 0 — got " +
+        AELL_secs(rawStart) + ".");
+    }
+    if (fd > 0 && start > compDur - fd + 0.0001) {
+      return AELL_err("Comp '" + comp.name + "' is " + AELL_secs(compDur) +
+        " long at " + fps + " fps, so its last frame starts at " +
+        AELL_secs(compDur - fd) + " — a work area cannot start at " +
+        AELL_secs(rawStart) + ".");
+    }
+    if (dur <= 0 || (fd > 0 && dur < fd - 0.0001)) {
+      return AELL_err("A work area of " + AELL_secs(rawDur) + " holds no " +
+        "frame — at " + fps + " fps the shortest one is " + AELL_secs(fd) +
+        " (one frame). AE refuses a zero-length work area outright.");
+    }
+    if (start + dur > compDur + 0.0001) {
+      return AELL_err("A work area of " + AELL_secs(rawDur) + " starting " +
+        "at " + AELL_secs(start) + " would end at " +
+        AELL_secs(start + dur) + ", past the end of comp '" + comp.name +
+        "' (" + AELL_secs(compDur) + "). The longest that fits from there " +
+        "is " + AELL_secs(compDur - start) + ".");
+    }
+    AELL_setWorkArea(comp, start, dur);
+    changed.push("workArea");
+    if (fd > 0 && Math.abs(start - rawStart) > 0.000001) {
+      notes.push("The work area start snapped to the frame grid: " +
+        AELL_secs(rawStart) + " -> " + AELL_secs(start) + " (frame " +
+        Math.round(start / fd) + " at " + fps + " fps).");
+    }
+    if (fd > 0 && !trimmed && Math.abs(dur - rawDur) > 0.000001) {
+      notes.push("The work area duration snapped to the frame grid: " +
+        AELL_secs(rawDur) + " -> " + AELL_secs(dur) + ".");
+    }
+    if (trimmed) {
+      notes.push("Moving the start to " + AELL_secs(start) + " left only " +
+        AELL_secs(dur) + " before the comp ends, so the work area is " +
+        "shorter than the " + AELL_secs(trimmed) + " it was.");
+    }
+  }
+
+  if (args.resolution !== null && typeof args.resolution !== "undefined") {
+    bad = {};
+    pair = AELL_resolutionPair(args.resolution, bad);
+    if (!pair) return AELL_err(bad.why);
+    comp.resolutionFactor = pair;
+    changed.push("resolution");
+  }
+
+  if (!changed.length) {
+    return AELL_err("set_comp_setting was given nothing to change. It " +
+      "sets: duration (seconds), frameRate, width, height, bgColor " +
+      "[r, g, b] 0..1, workAreaStart with workAreaDuration or " +
+      "workAreaEnd (seconds, or workArea: 'comp' for the whole comp), " +
+      "and resolution (" + AELL_resolutionNames() + ", or a " +
+      "[horizontal, vertical] pair).");
+  }
+
+  rf = comp.resolutionFactor;
+  var out = { name: comp.name, width: comp.width, height: comp.height,
+              duration: comp.duration, frameRate: comp.frameRate,
+              bgColor: [comp.bgColor[0], comp.bgColor[1], comp.bgColor[2]],
+              workAreaStart: Number(comp.workAreaStart),
+              workAreaDuration: Number(comp.workAreaDuration),
+              workArea: AELL_secs(comp.workAreaStart) + "-" +
+                        AELL_secs(Number(comp.workAreaStart) +
+                                  Number(comp.workAreaDuration)),
+              resolution: AELL_resolutionLabel(rf),
+              changed: changed.join(", ") };
+  if (notes.length) out.note = notes.join(" ");
+  return AELL_okay(out);
 };
 
 /* Compare a written value with what AE read back. Tolerant of the

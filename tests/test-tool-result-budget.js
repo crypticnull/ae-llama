@@ -218,7 +218,15 @@ for (const n of [1, 2, 3, 8, 20]) {
   });
   function FolderItem(name) { Item.call(this, name); this.children = []; }
   FolderItem.prototype = Object.create(Item.prototype);
-  function CompItem(name) { Item.call(this, name); this.layers = []; }
+  function CompItem(name) {
+    Item.call(this, name);
+    this.layers = [];
+    // Every real comp carries these, and get_comp_details reports them.
+    this.width = 1920; this.height = 1080;
+    this.duration = 10; this.frameRate = 30;
+    this.workAreaStart = 0; this.workAreaDuration = 10;
+    this.resolutionFactor = [1, 1];
+  }
   CompItem.prototype = Object.create(Item.prototype);
   Object.defineProperty(CompItem.prototype, "numLayers", {
     get() { return this.layers.length; }

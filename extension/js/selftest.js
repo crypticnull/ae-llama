@@ -3557,6 +3557,58 @@
           return "the coverage comp is not in the project listing";
         } },
 
+      { name: "an off-grid work area snaps to a frame, and says so",
+        tool: "set_comp_setting",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, workAreaStart: 0.333,
+                   workAreaDuration: 1.7 };
+        },
+        check: function (d) {
+          // Measured in AE 2026: on a 24 fps comp 0.333s becomes frame 8
+          // (0.333333s) and 1.7s becomes 41 frames (1.708333s), silently.
+          if (Math.abs(d.workAreaStart - 8 / 24) > 0.0005 ||
+              Math.abs(d.workAreaDuration - 41 / 24) > 0.0005) {
+            return "AE holds " + d.workAreaStart + " / " + d.workAreaDuration;
+          }
+          return (d.note || "").indexOf("frame 8") !== -1 ||
+                 "the snap was not reported: " + d.note;
+        } },
+
+      { name: "a work area past the comp's end is refused, not clamped",
+        tool: "set_comp_setting",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.cvComp, workAreaStart: 4, workAreaDuration: 9 };
+        },
+        check: function (err) {
+          if (err.indexOf("past the end") === -1) {
+            return "not a range refusal: " + err;
+          }
+          return err.indexOf("2s") !== -1 ||
+                 "does not say what DOES fit from there: " + err;
+        } },
+
+      { name: "an invented resolution is refused with the real ones",
+        tool: "set_comp_setting",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.cvComp, resolution: "low" };
+        },
+        check: function (err) {
+          return (err.indexOf("'half'") !== -1 &&
+                  err.indexOf("'quarter'") !== -1) ||
+                 "does not name the real resolutions: " + err;
+        } },
+
+      { name: "and the comp is put back the way the suite found it",
+        tool: "set_comp_setting",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, workArea: "comp" };
+        },
+        check: function (d) {
+          return d.workArea === "0s-6s" || "work area reads " + d.workArea;
+        } },
+
       { name: "duplicate_comp copies it, settings and all",
         tool: "duplicate_comp",
         args: function (ctx) {
@@ -5214,6 +5266,92 @@
                  "the two-layer mix is not louder than one layer alone";
         } },
 
+      // ---- the WORK AREA. range:'workArea' shipped with 5.7 and had no
+      // real-AE step at all, because nothing in the tool set could SET a
+      // work area; set_comp_setting can now. The audio converter is its
+      // own witness here: AE converts INSIDE the work area only, so a key
+      // count that drops to the narrowed range and comes back is proof
+      // the setting really landed in AE and was really put back.
+      { name: "set_comp_setting puts a work area on the audio comp",
+        tool: "set_comp_setting",
+        args: function (ctx) {
+          return { comp: ctx.auComp, workAreaStart: 1, workAreaEnd: 2 };
+        },
+        check: function (d) {
+          if (d.workArea !== "1s-2s") return "work area reads " + d.workArea;
+          return Math.abs(d.workAreaDuration - 1) < 0.001 ||
+                 "duration " + d.workAreaDuration;
+        } },
+
+      { name: "and get_comp_details can READ the work area back",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.auComp, limit: 0 }; },
+        check: function (d) {
+          if (d.workArea !== "1s-2s") {
+            return "the comp reports " + d.workArea;
+          }
+          return d.resolution === "full [1, 1]" ||
+                 "resolution reads " + d.resolution;
+        } },
+
+      { name: "range:'workArea' converts inside it and nowhere else",
+        tool: "audio_to_keyframes",
+        args: function (ctx) {
+          return { comp: ctx.auComp, range: "workArea" };
+        },
+        check: function (d) {
+          if (d.keyframes !== 25) {
+            return "1s of a 24 fps comp is 25 keys, got " + d.keyframes;
+          }
+          if (Math.abs(d.rangeStart - 1) > 0.001 ||
+              Math.abs(d.rangeEnd - 2) > 0.001) {
+            return "the keys cover " + d.rangeStart + "-" + d.rangeEnd +
+                   ", not the work area";
+          }
+          return (d.workArea || "").indexOf("WORK AREA") !== -1 ||
+                 "the narrowed range was not reported: " + d.workArea;
+        } },
+
+      { name: "the default widens to the whole comp and says it did",
+        tool: "audio_to_keyframes",
+        args: function (ctx) { return { comp: ctx.auComp }; },
+        check: function (d) {
+          if (d.keyframes !== 73) {
+            return "the whole 3s comp is 73 keys, got " + d.keyframes;
+          }
+          return (d.workArea || "").indexOf("widened") !== -1 ||
+                 "the widening was silent: " + d.workArea;
+        } },
+
+      { name: "...and put the user's work area back afterwards",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.auComp, limit: 0 }; },
+        check: function (d) {
+          return d.workArea === "1s-2s" ||
+                 "the widened work area was left behind: " + d.workArea;
+        } },
+
+      { name: "workArea:'comp' resets it to the whole comp",
+        tool: "set_comp_setting",
+        args: function (ctx) { return { comp: ctx.auComp, workArea: "comp" }; },
+        check: function (d) {
+          return d.workArea === "0s-3s" || "work area reads " + d.workArea;
+        } },
+
+      { name: "and then range:'workArea' is the whole comp too",
+        tool: "audio_to_keyframes",
+        args: function (ctx) {
+          return { comp: ctx.auComp, range: "workArea" };
+        },
+        check: function (d) {
+          if (d.keyframes !== 73) {
+            return "the reset work area should convert 73 keys, got " +
+                   d.keyframes;
+          }
+          return !d.workArea ||
+                 "a full-width work area needs no note: " + d.workArea;
+        } },
+
       { name: "a layer with no audio is refused with the ones that have it",
         tool: "audio_to_keyframes",
         expectError: true,
@@ -5367,6 +5505,72 @@
           }
           return (d.pathNote || "").indexOf("PNG bytes") !== -1 ||
                  "the correction was silent: " + d.pathNote;
+        } },
+
+      // ---- the resolution override, which had no real-AE step either,
+      // for the same reason: nothing could set resolutionFactor. A comp
+      // left at Half writes a half-size frame and AE says nothing, so
+      // the default overrides it and REPORTS the override; only the
+      // PNG's own IHDR header can tell the difference.
+      { name: "set_comp_setting drops the frame comp to Half resolution",
+        tool: "set_comp_setting",
+        args: function (ctx) {
+          return { comp: ctx.frComp, resolution: "half" };
+        },
+        check: function (d) {
+          return d.resolution === "half [2, 2]" ||
+                 "resolution reads " + d.resolution;
+        } },
+
+      { name: "a snapshot overrides the downsample and says it did",
+        tool: "snapshot_frame",
+        args: function (ctx) {
+          return { comp: ctx.frComp, time: 1,
+                   path: ctx.frTemp + "/ST Frame Full.png",
+                   overwrite: true };
+        },
+        check: function (d) {
+          if (d.width !== 240 || d.height !== 180) {
+            return "the PNG is " + d.width + "x" + d.height +
+                   " — the comp's Half resolution was not overridden";
+          }
+          if (d.warning) return "unexpected warning: " + d.warning;
+          return (d.resolutionNote || "").indexOf("resolution 1/2") !== -1 ||
+                 "the override was silent: " + d.resolutionNote;
+        } },
+
+      { name: "and the comp is still at Half afterwards, not switched",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.frComp, limit: 0 }; },
+        check: function (d) {
+          return d.resolution === "half [2, 2]" ||
+                 "the snapshot left the comp at " + d.resolution;
+        } },
+
+      { name: "{resolution: 'comp'} keeps AE's downsample and warns",
+        tool: "snapshot_frame",
+        args: function (ctx) {
+          return { comp: ctx.frComp, time: 1, resolution: "comp",
+                   path: ctx.frTemp + "/ST Frame Half.png",
+                   overwrite: true };
+        },
+        check: function (d) {
+          if (d.width !== 120 || d.height !== 90) {
+            return "a Half-resolution comp should write 120x90, got " +
+                   d.width + "x" + d.height;
+          }
+          return (d.warning || "").indexOf("downsampled") !== -1 ||
+                 "the smaller frame was not flagged: " + d.warning;
+        } },
+
+      { name: "cleanup: the frame comp goes back to Full",
+        tool: "set_comp_setting",
+        args: function (ctx) {
+          return { comp: ctx.frComp, resolution: "full" };
+        },
+        check: function (d) {
+          return d.resolution === "full [1, 1]" ||
+                 "resolution reads " + d.resolution;
         } },
 
       // The round trip itself: the comp's own frame, back in the comp,

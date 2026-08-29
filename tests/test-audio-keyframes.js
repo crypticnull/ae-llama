@@ -130,12 +130,57 @@ function Comp(name, dur, fps) {
   this.name = name;
   this.width = 640; this.height = 480;
   this.duration = dur; this.frameRate = fps;
-  this.workAreaStart = 0;
-  this.workAreaDuration = dur;
+  this._waStart = 0;
+  this._waDur = dur;
   this._time = 0;
   this._layers = [];
   this.id = ++nextId;
 }
+Object.defineProperty(Comp.prototype, "frameDuration", {
+  get() { return 1 / this.frameRate; }
+});
+// AE 2026, measured: a workAreaStart write keeps the DURATION and
+// shortens it only when that would run past the end of the comp - EXCEPT
+// when the new start lands exactly on the work area's own current END,
+// where it comes back one frame EARLY and one frame LONG ([0..24] frames
+// with start=1s on a 24 fps comp gives [23..48], silently). That is the
+// quirk that had audio_to_keyframes moving the user's work area every
+// time it restored one.
+Object.defineProperty(Comp.prototype, "workAreaStart", {
+  get() { return this._waStart; },
+  set(v) {
+    const fd = this.frameDuration;
+    const hi = this.duration - fd;
+    if (!(Number(v) >= 0) || Number(v) > hi + 1e-9) {
+      throw new Error("After Effects error: Unable to set " +
+        "workAreaStart. Value " + v + " out of range 0 to " + hi + ".");
+    }
+    const s = Math.round(Number(v) / fd) * fd;
+    const end = this._waStart + this._waDur;
+    if (Math.abs(s - end) < fd / 2) {
+      this._waStart = s - fd;
+      this._waDur = this._waDur + fd;
+      return;
+    }
+    this._waStart = s;
+    if (this._waStart + this._waDur > this.duration) {
+      this._waDur = Math.round((this.duration - this._waStart) / fd) * fd;
+    }
+  }
+});
+Object.defineProperty(Comp.prototype, "workAreaDuration", {
+  get() { return this._waDur; },
+  set(v) {
+    const fd = this.frameDuration;
+    const hi = this.duration - this._waStart;
+    if (!(Number(v) >= fd - 1e-9) || Number(v) > hi + 1e-9) {
+      throw new Error("After Effects error: Unable to set " +
+        "workAreaDuration. Value " + v + " out of range " + fd + " to " +
+        hi + ".");
+    }
+    this._waDur = Math.round(Number(v) / fd) * fd;
+  }
+});
 Object.defineProperty(Comp.prototype, "numLayers", {
   get() { return this._layers.length; }
 });
@@ -449,8 +494,31 @@ let duoComp;
 {
   const c = makeComp("Trimmed", 4, 24);
   c._layers.push(new Layer("song.wav", c, t => (t % 0.5 < 0.08 ? 40 : 0)));
-  c.workAreaStart = 0.5;
+  // 1s-2s on purpose: restoring THIS one hits AE's collision quirk,
+  // because the naive order puts the work area at 0s-1s first and then
+  // asks for a start of 1s - exactly its own end. A work area the tool
+  // could put back by luck proves nothing.
+  c.workAreaStart = 1;
   c.workAreaDuration = 1;
+
+  {
+    // STUB FIDELITY: the quirk itself, driven through the raw API.
+    const probe = makeComp("Nudge", 3, 24);
+    probe.workAreaStart = 0;
+    probe.workAreaDuration = 1;
+    probe.workAreaStart = 1;
+    assert(Math.abs(probe.workAreaStart - 23 / 24) < 1e-9 &&
+           Math.abs(probe.workAreaDuration - 25 / 24) < 1e-9,
+           "STUB FIDELITY: a start written onto the work area's own end " +
+           "comes back a frame early and a frame long, as AE does");
+    probe.workAreaStart = 0;
+    probe.workAreaDuration = 3;
+    probe.workAreaStart = 1;
+    probe.workAreaDuration = 1;
+    assert(Math.abs(probe.workAreaStart - 1) < 1e-9 &&
+           Math.abs(probe.workAreaDuration - 1) < 1e-9,
+           "STUB FIDELITY: widening first makes the same target exact");
+  }
 
   const whole = call("audio_to_keyframes", { comp: "Trimmed" });
   assert(whole.ok, "the default covers the whole comp: " + (whole.error || ""));
@@ -458,16 +526,18 @@ let duoComp;
          "97 keys, not the work area's 25: " + whole.data.keyframes);
   assert(/widened to the whole comp/.test(whole.data.workArea || ""),
          "and it SAYS the work area was widened: " + whole.data.workArea);
-  assert(c.workAreaStart === 0.5 && c.workAreaDuration === 1,
-         "the user's work area is put back exactly");
+  assert(Math.abs(c.workAreaStart - 1) < 1e-9 &&
+         Math.abs(c.workAreaDuration - 1) < 1e-9,
+         "the user's work area is put back EXACTLY, not a frame off: " +
+         c.workAreaStart + " / " + c.workAreaDuration);
   c._layers = c._layers.filter(l => !l.nullLayer);
 
   const native = call("audio_to_keyframes",
                       { comp: "Trimmed", range: "workArea" });
   assert(native.ok && native.data.keyframes === 25,
          "range:'workArea' keeps AE's own behaviour: " + native.data.keyframes);
-  assert(Math.abs(native.data.rangeStart - 0.5) < 1e-6 &&
-         Math.abs(native.data.rangeEnd - 1.5) < 1e-6,
+  assert(Math.abs(native.data.rangeStart - 1) < 1e-6 &&
+         Math.abs(native.data.rangeEnd - 2) < 1e-6,
          "and reports the range it really covered");
   assert(/WORK AREA only/.test(native.data.workArea || ""),
          "which is stated in the result rather than left to be discovered");
