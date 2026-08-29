@@ -92,6 +92,8 @@ function capLayers(compName, all, args) {
 let createCount = 0;
 const createdComps = [];
 const folders = {};        // path -> true (the create_folder rig)
+const folderIds = {};      // id -> path; real AE resolves an item by id
+let nextFolderId = 5000;   // clear of the solid-source ids above
 // The render-queue rig (WORKPLAN 5.5). Measured in AE 2026: a render
 // takes the WHOLE queue, an existing output file raises a modal, and the
 // output module forces its own extension onto whatever path it is given.
@@ -854,7 +856,10 @@ function cannedOk(tool, args) {
         for (const k of kids) {
           const p = k + "/" + nm;
           if (folders[p]) had.push(p);
-          else { folders[p] = true; created.push(p); }
+          else {
+            const kid = ++nextFolderId;
+            folders[p] = kid; folderIds[kid] = p; created.push(p);
+          }
         }
         const out = { name: nm, parent: base, subfolders: kids.length,
                       createdCount: created.length, created };
@@ -872,11 +877,13 @@ function cannedOk(tool, args) {
       }
       const path = parent ? parent + "/" + nm : nm;
       if (folders[path]) {
-        return { name: nm, id: 900, path,
+        return { name: nm, id: folders[path], path,
                  note: "Folder already existed in this parent" };
       }
-      folders[path] = true;
-      return { name: nm, id: 900 + Object.keys(folders).length, path };
+      const fid = ++nextFolderId;
+      folders[path] = fid;
+      folderIds[fid] = path;
+      return { name: nm, id: fid, path };
     }
     case "delete_item": {
       // Faithful on the point the cleanup measures: deleting works by
@@ -893,14 +900,19 @@ function cannedOk(tool, args) {
           return { deleted: nm };
         }
       }
-      // A folder delete cascades to everything under its path.
-      if (folders[String(key)]) {
+      // A folder delete cascades to everything under its path, and works
+      // by PATH or by the id create_folder handed back (real AE resolves
+      // either -- a stub that only knew names would let a cleanup step
+      // "pass" while the suite deleted a same-named folder of the user's).
+      const fpath = folderIds[key] || (folders[String(key)] ? String(key) : null);
+      if (fpath) {
         for (const p of Object.keys(folders)) {
-          if (p === String(key) || p.indexOf(String(key) + "/") === 0) {
+          if (p === fpath || p.indexOf(fpath + "/") === 0) {
+            delete folderIds[folders[p]];
             delete folders[p];
           }
         }
-        return { deleted: key };
+        return { deleted: fpath };
       }
       return { __err: "Project item not found: " + key };
     }
@@ -973,6 +985,66 @@ function cannedOk(tool, args) {
       }
       return out;
     }
+    case "organize_project": {
+      // Modelled to PREVIEW, because a canned host that answered "ok"
+      // would let the preview steps pass while the real tool rearranged
+      // the user's project panel. It also models the rule the shipped
+      // tool got wrong until 2026-08-28: a destination folder is looked
+      // for at the ROOT, and a same-named folder nested somewhere else
+      // is reported, never filed into.
+      const DESTS = ["Comps", "Solids", "Audio", "Images", "Footage"];
+      const dryRun = !(args && args.dryRun === false);
+      const looseComps = createdComps.filter(
+        (nm) => !(compProps[nm] && compProps[nm].folder));
+      const looseFootage = solidSources.filter((so) => !so.folder);
+      const moves = looseComps.map((nm) => nm + " -> Comps")
+        .concat(looseFootage.map((so) => so.name + " -> Solids"));
+      const byFolder = {};
+      if (looseComps.length) byFolder.Comps = looseComps.length;
+      if (looseFootage.length) byFolder.Solids = looseFootage.length;
+      const toCreate = DESTS.filter(
+        (d2) => byFolder[d2] && !folders[d2]);
+      const elsewhere = Object.keys(folders).filter(
+        (p2) => p2.indexOf("/") !== -1 &&
+                byFolder[p2.slice(p2.lastIndexOf("/") + 1)]);
+      const out = { dryRun, willMove: moves.length, byFolder,
+                    alreadyFiled: createdComps.length - looseComps.length,
+                    rootFolders: Object.keys(folders)
+                      .filter((p2) => p2.indexOf("/") === -1).length };
+      const CAP = 40;
+      out.moves = moves.slice(0, CAP);
+      if (moves.length > CAP) out.movesNotShown = moves.length - CAP;
+      if (toCreate.length) {
+        out.foldersToCreate = toCreate;
+        out.foldersNote = "These folders do not exist at the project root " +
+          "yet and would be created there.";
+      }
+      if (elsewhere.length) {
+        out.sameNameElsewhere = elsewhere;
+        out.sameNameNote = "A folder with that name already exists deeper " +
+          "in the project. It is NOT used, so the project would end up " +
+          "with two folders of that name.";
+      }
+      if (dryRun) {
+        out.note = moves.length === 0
+          ? "PREVIEW ONLY — nothing to do: no loose items at the " +
+            "project root."
+          : "PREVIEW ONLY — nothing was moved.";
+        return out;                              // and it moves NOTHING
+      }
+      for (const nm of looseComps) {
+        (compProps[nm] || (compProps[nm] = {})).folder = "Comps";
+      }
+      for (const so of looseFootage) so.folder = "Solids";
+      for (const d2 of toCreate) {
+        const fid = ++nextFolderId;
+        folders[d2] = fid; folderIds[fid] = d2;
+      }
+      out.moved = moves.length;
+      out.foldersCreated = toCreate;
+      out.note = moves.length + " item(s) filed in ONE undo group (Ctrl+Z).";
+      return out;
+    }
     case "get_project_info": {
       // A scratch project the size of the real one: a few comps drowning
       // in accumulated solid footage. Comps come first out of the cap.
@@ -981,6 +1053,16 @@ function cannedOk(tool, args) {
       // depend on.
       const items = createdComps.map((nm, i) => Object.assign(
         { name: nm, id: i + 1, type: "comp" }, compProps[nm] || {}));
+      // Folders are items too, and they are what organize_project's
+      // preview steps count: a listing without them would let a preview
+      // that quietly created "Comps" at the root pass unnoticed.
+      for (const p2 of Object.keys(folders)) {
+        const cut = p2.lastIndexOf("/");
+        const entry = { name: cut === -1 ? p2 : p2.slice(cut + 1),
+                        id: folders[p2], type: "folder", path: p2 };
+        if (cut !== -1) entry.folder = p2.slice(0, cut).split("/").pop();
+        items.push(entry);
+      }
       for (const so of solidSources) items.push(Object.assign({}, so));
       const limit = listLimit(args && args.limit);
       const total = items.length;

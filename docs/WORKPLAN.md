@@ -315,11 +315,12 @@ FOUR tools are still uncovered and each is deliberate, not pending:
   5.4 — 18 steps, after a probe found five silent losses in them.
 - `add_to_render_queue` — item 5.5; it writes to the user's render queue.
 - `import_file` — item 5.8; it needs a file on disk.
-- `organize_project` — **cannot be suite-tested at all.** It files every
-  LOOSE item at the project ROOT, and the suite runs inside whatever
-  project the user has open. Any step for it would reorganize the user's
-  project. If it is ever to be covered it needs a `dryRun` argument
-  first; that is a design call for the remote session.
+- ~~`organize_project` — **cannot be suite-tested at all.**~~ COVERED
+  2026-08-28 (0.10.2) once it grew the `dryRun` argument this bullet
+  asked for: six steps, PREVIEWS only. The preview must count the suite's
+  own new comp, name the nested folder it refuses to file into, and leave
+  the project panel byte-for-byte alone — that last step is the one the
+  group exists for.
 
 ## 4. Field-quality passes
 
@@ -387,12 +388,16 @@ FOUR tools are still uncovered and each is deliberate, not pending:
   drops WHOLE ROWS with a count, the way budgetState already did for the
   state block, and the per-result cap is a fair share of the round's
   6000 rather than a fixed 1200. See the log.
-- **organize_project gets clean_project's dry-run shape** (design
-  decided 2026-08-28; one small pass): `dryRun` defaulting to true, the
-  preview naming each move (item -> destination folder) with capped
-  lists and full counts, execute reporting moved/skipped the same way.
-  Then the suite finally gets organize_project steps — previews and
-  refusals only, like clean_project's. Patch bump when verified.
+- ~~**organize_project gets clean_project's dry-run shape**~~ DONE
+  2026-08-28 (0.10.2). Built to the spec: `dryRun` defaults to true, the
+  preview names each move (item -> folder) with capped lists and full
+  counts, execute reports moved/notMoved after checking where each item
+  actually landed, and six suite steps cover the PREVIEW (an execute step
+  would file the user's own project). The probe that opened the pass
+  found a shipped bug the spec could not have known: the destination
+  folder was looked up by name ANYWHERE in the tree, so two root comps
+  were filed into a user's nested `PR Archive/Comps`. Destinations are
+  now root-only and a nested homonym is named in the result instead.
 
 - **Harness dialog triage learns to READ before it answers** (design
   decided 2026-08-28; its OWN pass, and run the full harness twice

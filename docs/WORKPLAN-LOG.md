@@ -4832,3 +4832,144 @@ bundle. This machine is no longer running a five-release-old manifest.
   and removed in the same pass; use a script file for Windows paths.
 - Still open from earlier passes: `duplicate_comp` takes a name without
   uniquing; no read-only `get_bounds`.
+
+## 2026-08-28 (local, sixteenth pass) - item 4: organize_project promised a folder it never used (0.10.2)
+
+Harness green on arrival (385/385), so the pass took the second of the
+remote session's three specs: **organize_project gets clean_project's
+dry-run shape**. Patch bump 0.10.1 -> 0.10.2: it changes shipped
+behaviour, including one thing that was quietly wrong.
+
+### What AE actually does (AE 2026, 26.3x87, one probe run)
+
+Every classification rule in this tool was measured before a line was
+written, in a throwaway project:
+
+- a comp created by script lands at the **project root**, so every comp
+  the panel makes is "loose" until this tool runs;
+- AE parks a solid's SOURCE in its own `Solids` folder the moment the
+  solid is created (`parentIsRoot=false`), so solids are almost never
+  loose and a `Solids: 0` count is the normal answer, not a miss;
+- **a SolidSource reports `isStill` TRUE**, so the solid test has to come
+  before the still test or every solid files as an image;
+- a PNG is `hasVideo` + `isStill`, an audio-only WAV is `hasAudio` with
+  `hasVideo` false, an MP4 is both with `isStill` false. The shipped
+  order was already right; now it is pinned by a test.
+
+### The shipped bug the probe fell over
+
+The rig had a folder called `Comps` NESTED inside `PR Archive` (the kind
+of thing a real project accumulates). The shipped tool resolved its
+destination with `AELL_findFolder`, which matches a folder name ANYWHERE
+in the project, and filed both root comps into **`PR Archive/Comps`** —
+somebody else's folder, chosen because it happened to share a name — while
+answering `{"organized":{"Comps":2,...}}` and "existing folder structure
+was left alone". Two sentences, both true-sounding, describing a move the
+user did not ask for.
+
+So destinations are now looked for **at the root only**. A same-named
+folder deeper in the tree is reported as `sameNameElsewhere` (by path)
+with a note saying the project will end up with two folders of that name
+— named, never used. This is a behaviour change beyond the dry-run spec,
+and it is deliberate: a preview cannot be honest while the destination it
+promises is picked by a tree-wide name search.
+
+### Built
+
+- `organize_project {dryRun?}`, `dryRun` defaulting to TRUE. The preview
+  names each move as `item -> folder`, counts them in `byFolder`, names
+  the folders it would CREATE, counts what is `alreadyFiled` and how many
+  `rootFolders` exist, and caps every list with a `...NotShown` count
+  (the shared `AELL_hygCap`, 40).
+- Execute does not trust its own preview: after each reparent it checks
+  where the item actually landed, reports `moved` for the ones that did
+  and `notMoved` (with where it still is) for any that did not.
+- `AELL_orgDest` / `AELL_orgRootFolder` / `AELL_orgHomonyms` carry the
+  measurements above as comments, so the next reader does not re-probe.
+- tools.js: the tool doc says the preview comes first and that a Solids
+  count of 0 is normal; the system prompt gained "'file / sort / organize
+  the project panel' = organize_project ... A preview is not an organized
+  project — never report one as done."
+
+### Verified in the field, and covered without AE
+
+- Real AE, throwaway project: the preview changed nothing (snapshot
+  identical), the execute matched the preview exactly (5 moves, 4 folders
+  created), the nested `PR Archive/Comps` stayed EMPTY, an already-filed
+  comp stayed put, the second preview was a clean no-op, and **one undo
+  put the whole panel back**.
+- `tests/test-organize-project.js` (new, 49 checks) stubs the project
+  model with the measured facts — including a SolidSource whose `isStill`
+  is true, checked through the RAW stub first so a stub that stopped
+  modelling the trap cannot let the tool pass on a technicality. It covers
+  fresh preview, execute, second-run no-op, the loose solid, the nested
+  homonym (the comp must land in a ROOT `Comps` and the nested one must
+  stay empty), reuse of an existing root folder, a move AE refuses
+  (reported, never counted as done), the 40-item cap, and an empty
+  project.
+- Six suite steps in `extension/js/selftest.js`, **previews only** — an
+  execute step would file every loose item in the user's own project. The
+  load-bearing one re-reads the project afterwards and fails if the item
+  count or the folder count moved at all, or if the rig comp acquired a
+  parent folder. `tests/test-self-test.js`'s canned host learned
+  `organize_project` (previewing, refusing the nested folder), started
+  listing FOLDERS in `get_project_info`, and now resolves a folder
+  `delete_item` by the id `create_folder` handed back, the way real AE
+  does — a host answering "ok" would let all six steps pass.
+- docs/CAPABILITIES.md regenerated (organize_project drops off BOTH
+  computed coverage-gap lists) and its curated half updated.
+
+**Harness: 391/391 PASSED** (385 -> 391). Stubbed suite: 44 files green.
+
+### For the next pass — dialog triage, and three facts it can have free
+
+The last of the remote's three specs is **the harness dialog triage that
+READS before it answers**, and this pass ran into its subject matter three
+times. What it cost, and what it is worth:
+
+1. **`GetWindowText` is why the dialogs look wordless.** The harness's
+   `OnWordCheck` calls `GetWindowTextW` on each child; for a control owned
+   by ANOTHER process that returns empty, so every AE alert reads as
+   "no readable text". `SendMessage(hwnd, WM_GETTEXT=0x000D, ...)` on the
+   same child returned the full sentence immediately, first try, no
+   screenshot needed: "Unable to execute script at line 35. After Effects
+   error: Unable to call "addComp" because the call requires 6
+   parameters." — my probe's own bug, identified in one call after two
+   blind re-runs had already failed. Build step (1) of the spec on
+   WM_GETTEXT, not GetWindowText.
+2. **`PostMessage(WM_CLOSE)` does NOT answer these alerts** — the dialog
+   was still there afterwards. Posting `WM_KEYDOWN`/`WM_KEYUP` with
+   VK_RETURN dismissed both alerts this pass hit; `WM_COMMAND IDOK` did
+   nothing either. Worth knowing before the triage pass changes how
+   answers are posted.
+3. **A wedged AE swallows the next `-r` script silently.** While that
+   alert was up, two `AfterFX.exe -r probe.jsx` launches did nothing at
+   all — no output file, no error, AE "Responding: True". A probe that
+   seems to produce nothing is a dialog until proven otherwise.
+
+Two probe rules for whoever writes the next one:
+- **Flush every line** (`open("a")` / `writeln` / `close` per line). The
+  first probe of this pass opened its output with `open("w")` and died at
+  line 35, leaving a ZERO-BYTE file and no clue.
+- **Never call `app.executeCommand(16)` (Undo) inside a `-r` script run.**
+  It raises "After Effects warning: Undo group mismatch, will attempt to
+  fix." — AE wraps a `-r` run in its own undo group. The undo itself still
+  worked (the panel came back on the first one), and the shipped rollback
+  is unaffected because it runs inside `AELL_callBatch`, but the warning
+  wedges an unattended run. Also: `app.findMenuCommandId("Undo")` returned
+  **2371**, not 16, and executing it did nothing — use 16.
+
+### Still open
+
+- Item 5.7 (audio to keyframes) is next on the feature track after the
+  dialog-triage pass; 5.8 is unblocked and cheap.
+- `duplicate_comp` takes a name without uniquing; no read-only
+  `get_bounds`. Both still unclaimed.
+- `release-notes.txt` still reads "0.10.0: ..." while the feed ships
+  0.10.2, so the update banner describes the last MINOR. The 0.10.1 pass
+  left it alone too; it belongs to the remote session's release cut, so
+  this is a flag, not a fix.
+- The project AE was holding when this pass started (25 leftover items,
+  unsaved) was saved before the probes isolated: a temp copy plus
+  `X:\_CLAUDE\26_08_19_AE_Llama\aell-project-snapshot-2026-08-28-organize.aep`.
+  AE was left on an empty project.

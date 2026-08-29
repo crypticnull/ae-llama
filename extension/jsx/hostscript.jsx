@@ -1135,44 +1135,168 @@ AELL_TOOLS.duplicate_comp = function (args) {
   return AELL_okay({ name: dup.name, id: dup.id, duplicatedFrom: comp.name });
 };
 
+// ------------------------------------------------ organize_project
+//
+// Filing the project panel is a project-WIDE move, so it takes
+// clean_project's shape: dryRun DEFAULTS TO TRUE and the preview NAMES
+// each move (item -> folder) instead of counting it. The list helpers it
+// borrows (AELL_hygLabel/Kind/Cap) live in the hygiene section below.
+//
+// Measured in AE 2026 (26.3x87), probe 2026-08-28:
+//  - a comp created by script lands at the ROOT, so every new comp is
+//    "loose" until this runs;
+//  - AE parks a solid's SOURCE in its own "Solids" folder the moment the
+//    solid is created, so solids are almost never loose and a Solids
+//    count of 0 is the normal answer, not a miss;
+//  - a SolidSource reports isStill TRUE, so the solid test must come
+//    first or every solid files as an image;
+//  - a still is hasVideo/isStill true, an audio-only file is hasAudio
+//    true + hasVideo false, a movie is both with isStill false;
+//  - and the bug this pass found: looking the destination up by name
+//    ANYWHERE in the tree filed two root comps into "PR Archive/Comps",
+//    a folder the user had made for something else. Destinations are
+//    now looked for at the ROOT only, and a same-named folder deeper in
+//    the tree is NAMED in the result rather than silently used.
+
+var AELL_ORG_DESTS = ["Comps", "Solids", "Audio", "Images", "Footage"];
+
+function AELL_orgDest(it) {
+  if (it instanceof CompItem) return "Comps";
+  if (it instanceof FootageItem) {
+    var src = null;
+    try { src = it.mainSource; } catch (eS) {}
+    if (src instanceof SolidSource) return "Solids";     // isStill lies here
+    if (it.hasAudio && !it.hasVideo) return "Audio";
+    if (src && src.isStill) return "Images";
+    return "Footage";
+  }
+  return null;
+}
+
+/* The destination folder AT THE ROOT. A folder of the same name nested
+ * somewhere else is somebody else's filing, not ours. */
+function AELL_orgRootFolder(name) {
+  var proj = app.project;
+  for (var i = 1; i <= proj.numItems; i++) {
+    var it = proj.item(i);
+    if (it instanceof FolderItem && it.name === String(name) &&
+        it.parentFolder === proj.rootFolder) return it;
+  }
+  return null;
+}
+
+/* Same name, deeper in the tree: reported so the user knows why a second
+ * folder of that name is about to appear at the root. */
+function AELL_orgHomonyms(name) {
+  var proj = app.project, out = [];
+  for (var i = 1; i <= proj.numItems; i++) {
+    var it = proj.item(i);
+    if (it instanceof FolderItem && it.name === String(name) &&
+        it.parentFolder !== proj.rootFolder) out.push(AELL_folderPath(it));
+  }
+  return out;
+}
+
 AELL_TOOLS.organize_project = function (args) {
   var proj = app.project;
   if (!proj) return AELL_err("No project open");
-  function ensureFolder(name) {
-    var f = AELL_findFolder(name);
-    if (!f) f = proj.items.addFolder(name);
-    return f;
-  }
+  args = args || {};
+  var dryRun = (args.dryRun === false) ? false : true;
+
   // Collect first: reparenting reorders proj.item() indices mid-loop.
-  var toMove = [];
-  var i, it;
+  var i, it, dest;
+  var plan = [], moves = [], skipped = [], counts = {};
+  var alreadyFiled = 0, rootFolders = 0;
   for (i = 1; i <= proj.numItems; i++) {
     it = proj.item(i);
-    if (it instanceof FolderItem) continue;
-    if (it.parentFolder !== proj.rootFolder) continue;  // respect existing org
-    toMove.push(it);
-  }
-  var counts = { Comps: 0, Solids: 0, Audio: 0, Images: 0, Footage: 0 };
-  for (i = 0; i < toMove.length; i++) {
-    it = toMove[i];
-    var dest = null;
-    if (it instanceof CompItem) {
-      dest = "Comps";
-    } else if (it instanceof FootageItem) {
-      var src = it.mainSource;
-      if (src instanceof SolidSource) dest = "Solids";
-      else if (it.hasAudio && !it.hasVideo) dest = "Audio";
-      else if (src && src.isStill) dest = "Images";
-      else dest = "Footage";
+    if (it instanceof FolderItem) {
+      if (it.parentFolder === proj.rootFolder) rootFolders++;
+      continue;                                  // folders are never moved
     }
-    if (dest) {
-      it.parentFolder = ensureFolder(dest);
-      counts[dest]++;
+    if (it.parentFolder !== proj.rootFolder) {   // respect existing org
+      alreadyFiled++;
+      continue;
+    }
+    dest = AELL_orgDest(it);
+    if (!dest) {
+      skipped.push(AELL_hygLabel(it) + " (nothing files a " +
+                   AELL_hygKind(it) + ")");
+      continue;
+    }
+    plan.push({ item: it, dest: dest });
+    moves.push(it.name + " -> " + dest);
+    counts[dest] = (counts[dest] || 0) + 1;
+  }
+
+  var out = { dryRun: dryRun, willMove: plan.length };
+  var toCreate = [], elsewhere = [], d, h, nested;
+  for (d = 0; d < AELL_ORG_DESTS.length; d++) {
+    if (!counts[AELL_ORG_DESTS[d]]) continue;
+    if (!AELL_orgRootFolder(AELL_ORG_DESTS[d])) toCreate.push(AELL_ORG_DESTS[d]);
+    nested = AELL_orgHomonyms(AELL_ORG_DESTS[d]);
+    for (h = 0; h < nested.length; h++) elsewhere.push(nested[h]);
+  }
+
+  out.byFolder = counts;
+  out.alreadyFiled = alreadyFiled;
+  out.rootFolders = rootFolders;
+  if (skipped.length) AELL_hygCap(skipped, out, "skipped");
+  if (dryRun) {
+    AELL_hygCap(moves, out, "moves");
+    if (toCreate.length) {
+      out.foldersToCreate = toCreate;
+      out.foldersNote = "These folders do not exist at the project root " +
+        "yet and would be created there.";
     }
   }
-  return AELL_okay({ organized: counts,
-    note: "Only loose items at the project root were filed; existing " +
-          "folder structure was left alone" });
+  if (elsewhere.length) {
+    AELL_hygCap(elsewhere, out, "sameNameElsewhere");
+    out.sameNameNote = "A folder with that name already exists deeper in " +
+      "the project. It is NOT used (filing root items into someone's " +
+      "nested folder is not organizing), so the project would end up " +
+      "with two folders of that name — say so before running this.";
+  }
+
+  if (dryRun) {
+    out.note = plan.length === 0
+      ? "PREVIEW ONLY — nothing to do: no loose items at the project root."
+      : "PREVIEW ONLY — nothing was moved. Show the user the moves above " +
+        "(and any folder that would be created), then call again with " +
+        "dryRun:false to do it.";
+    return AELL_okay(out);
+  }
+
+  var created = [], done = [], notMoved = [], cache = {}, folder;
+  for (i = 0; i < plan.length; i++) {
+    dest = plan[i].dest;
+    if (cache[dest]) {
+      folder = cache[dest];
+    } else {
+      folder = AELL_orgRootFolder(dest);
+      if (!folder) { folder = proj.items.addFolder(dest); created.push(dest); }
+      cache[dest] = folder;
+    }
+    try { plan[i].item.parentFolder = folder; } catch (eM) {}
+    // Verify rather than assume: the promise above was made before AE
+    // was asked, the same way clean_project diffs its own preview.
+    if (plan[i].item.parentFolder === folder) {
+      done.push(plan[i].item.name + " -> " + dest);
+    } else {
+      notMoved.push(plan[i].item.name + " (still in " +
+        (plan[i].item.parentFolder === proj.rootFolder ? "the project root" :
+         AELL_folderPath(plan[i].item.parentFolder)) + ")");
+    }
+  }
+
+  out.moved = done.length;
+  AELL_hygCap(done, out, "moves");
+  out.byFolder = counts;
+  if (created.length) out.foldersCreated = created;
+  if (notMoved.length) AELL_hygCap(notMoved, out, "notMoved");
+  out.note = done.length + " item(s) filed in ONE undo group — a single " +
+    "Ctrl+Z puts them back where they were. Folders already in the " +
+    "project were left exactly as they are.";
+  return AELL_okay(out);
 };
 
 // ------------------------------------------------- project hygiene (5.6)

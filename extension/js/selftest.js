@@ -5399,6 +5399,140 @@
                  "cleanup: " + (rows[0].error || rows[1].error);
         } },
 
+      // ---- organize_project. PREVIEWS ONLY, same reason as clean_project.
+      //
+      // It files EVERY loose item at the project root, and the suite runs
+      // inside whatever project the user has open, so an execute here
+      // would rearrange their project panel. What gets proved is the
+      // preview: it counts the suite's own new comp by name, it names the
+      // nested folder it refuses to file into, and it moves nothing and
+      // creates nothing. The execute path is covered against a stubbed
+      // project in tests/test-organize-project.js and was measured in
+      // real AE on a throwaway project (WORKPLAN-LOG 2026-08-28).
+      { name: "organize rig: the project as it stands before any preview",
+        tool: "get_project_info",
+        args: { limit: 0 },
+        check: function (d, ctx) {
+          var folders = 0, rootComps = false, i;
+          for (i = 0; i < d.items.length; i++) {
+            if (d.items[i].type !== "folder") continue;
+            folders++;
+            if (d.items[i].name === "Comps" && !d.items[i].folder) rootComps = true;
+          }
+          ctx.orgFolders = folders;
+          ctx.orgItems = d.numItems;
+          ctx.orgHasRootComps = rootComps;
+          return typeof d.numItems === "number" || "no numItems";
+        } },
+
+      { name: "organize_project previews instead of filing",
+        tool: "organize_project",
+        args: {},
+        check: function (d, ctx) {
+          if (d.dryRun !== true) return "dryRun was " + d.dryRun;
+          if (typeof d.willMove !== "number") {
+            return "no willMove: " + JSON.stringify(d);
+          }
+          if (!/PREVIEW ONLY/.test(d.note || "")) {
+            return "the note did not say it was a preview: " + d.note;
+          }
+          ctx.orgBefore = d.willMove;
+          return true;
+        } },
+
+      { name: "organize rig: a loose comp, and a NESTED folder called Comps",
+        batch: function () {
+          return [
+            { tool: "create_comp",
+              args: { name: "ST ORG Loose", width: 160, height: 120,
+                      duration: 1, frameRate: 24 } },
+            { tool: "create_folder", args: { name: "ST ORG Nest" } },
+            { tool: "create_folder",
+              args: { name: "Comps", parent: "ST ORG Nest" } }
+          ];
+        },
+        check: function (rows, ctx) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + i + ": " + rows[i].error;
+          }
+          ctx.orgComp = rows[0].data.name;
+          ctx.orgNest = rows[1].data.id;
+          return rows[2].data.path === "ST ORG Nest/Comps" ||
+                 "nested folder came back as " + rows[2].data.path;
+        } },
+
+      { name: "the preview counts the new comp and REFUSES the nested folder",
+        tool: "organize_project",
+        args: {},
+        check: function (d, ctx) {
+          if (d.willMove !== ctx.orgBefore + 1) {
+            return "willMove went " + ctx.orgBefore + " -> " + d.willMove +
+                   " after one new comp";
+          }
+          if (!d.byFolder || !(d.byFolder.Comps >= 1)) {
+            return "no Comps count: " + JSON.stringify(d.byFolder);
+          }
+          var named = false, i;
+          for (i = 0; i < (d.sameNameElsewhere || []).length; i++) {
+            if (d.sameNameElsewhere[i] === "ST ORG Nest/Comps") named = true;
+          }
+          if (!named && !d.sameNameElsewhereNotShown) {
+            return "the nested Comps folder was not named: " +
+                   JSON.stringify(d.sameNameElsewhere);
+          }
+          if (!ctx.orgHasRootComps) {
+            var willCreate = false;
+            for (i = 0; i < (d.foldersToCreate || []).length; i++) {
+              if (d.foldersToCreate[i] === "Comps") willCreate = true;
+            }
+            if (!willCreate) {
+              return "no root Comps folder exists, yet none would be " +
+                     "created: " + JSON.stringify(d.foldersToCreate);
+            }
+          }
+          // The moves list is capped; only demand the name when nothing
+          // was cut off the end.
+          if (d.movesNotShown) return true;
+          for (i = 0; i < d.moves.length; i++) {
+            if (d.moves[i] === ctx.orgComp + " -> Comps") return true;
+          }
+          return "the new comp is not named in " + d.moves.join(", ");
+        } },
+
+      { name: "and BOTH previews moved nothing and created no folder",
+        tool: "get_project_info",
+        args: { limit: 0 },
+        check: function (d, ctx) {
+          var folders = 0, seen = null, i;
+          for (i = 0; i < d.items.length; i++) {
+            if (d.items[i].type === "folder") folders++;
+            if (d.items[i].name === ctx.orgComp) seen = d.items[i];
+          }
+          if (!seen) return "the preview lost " + ctx.orgComp;
+          if (seen.folder) {
+            return "a PREVIEW filed the comp into '" + seen.folder + "'";
+          }
+          if (folders !== ctx.orgFolders + 2) {
+            return "folder count went " + ctx.orgFolders + " -> " + folders +
+                   " where only the rig's 2 were made";
+          }
+          return d.numItems === ctx.orgItems + 3 ||
+                 "item count went " + ctx.orgItems + " -> " + d.numItems +
+                 " where only the rig's 3 were made";
+        } },
+
+      { name: "cleanup: delete the organize rig",
+        batch: function (ctx) {
+          return [
+            { tool: "delete_item", args: { item: ctx.orgNest } },
+            { tool: "delete_item", args: { item: ctx.orgComp } }
+          ];
+        },
+        check: function (rows) {
+          return (rows[0].ok && rows[1].ok) ||
+                 "cleanup: " + (rows[0].error || rows[1].error);
+        } },
+
       // ---- create_folder eachChildOf (field failure 2026-08-26) -------
       // "Add an _ARCHIVE subfolder within each subfolder within _COMPS":
       // the model acted from the trimmed project summary, hit 2 of 10

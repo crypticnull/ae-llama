@@ -39,16 +39,16 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `comfy_generate` | Generate an image/video with local ComfyUI and import it into the AE project | yes | panel | — | — |
 | `comfy_list_workflows` | List available ComfyUI generation workflow templates by name | no | panel | — | — |
 | `comfy_status` | Check the local ComfyUI instance (online? queue depth?) | no | panel | — | — |
-| `create_comp` | Create a composition and open it | yes | host | 1 | 23 |
-| `create_folder` | Create a project-panel folder | yes | host | 1 | 8 |
-| `delete_item` | Delete a project item | yes | host | 1 | 29 |
+| `create_comp` | Create a composition and open it | yes | host | 1 | 24 |
+| `create_folder` | Create a project-panel folder | yes | host | 1 | 10 |
+| `delete_item` | Delete a project item | yes | host | 1 | 31 |
 | `delete_layer` | Delete a layer from a comp | yes | host | — | 9 |
 | `distribute_property` | Distribute a property VALUE across layers | yes | host | 1 | 5 |
 | `duplicate_comp` | Duplicate a composition | yes | host | 1 | 1 |
 | `duplicate_layer` | Duplicate a LAYER inside its comp (use duplicate_comp only for whole compositions) | yes | host | 1 | 6 |
 | `for_each_layer` | Run a PER-LAYER tool once per target layer in ONE call (max 200 layers) — the batch executor for anything without its own layers arg: {tool: 'apply_effect', args: {effect: 'Gaussian Blur'}} blurs every target | yes | host | 1 | 6 |
 | `get_comp_details` | Layers of a comp with index, name, type, timing, effects | no | host | 2 | 21 |
-| `get_project_info` | List project items (comps/footage/folders) and the active comp | no | host | 2 | 11 |
+| `get_project_info` | List project items (comps/footage/folders) and the active comp | no | host | 2 | 13 |
 | `get_property` | Read ANY property by path: value, keyframes, expression | no | host | 3 | 79 |
 | `grid_layout` | Arrange layers into a grid rigged to a control null: its 'Grid X Spacing'/'Grid Y Spacing'/'Grid Columns' sliders drive spacing AND column count live, and the grid centers on the null's position (all expressions generated host-side) | yes | host | 1 | 2 |
 | `import_file` | Import a footage/image/video file into the project | yes | host | — | — |
@@ -58,7 +58,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `list_properties` | DISCOVER a layer's real property tree — names, paths, types, current values | no | host | 2 | 9 |
 | `list_render_templates` | List this machine's render-settings and output-module template names for render_comp | no | host | 1 | 1 |
 | `move_to_folder` | Move project items into a folder (batch) | yes | host | 1 | 2 |
-| `organize_project` | File loose root-level items into Comps/Footage/Solids/Audio/Images folders | yes | host | — | — |
+| `organize_project` | File loose root-level items into Comps/Footage/Solids/Audio/Images folders at the project ROOT | yes | host | 1 | 2 |
 | `precompose` | Move layers into a new nested comp (precompose) | yes | host | 1 | 5 |
 | `remove_keyframes` | Remove keyframes from a property on many layers at once — specific times or all | yes | host | 1 | 5 |
 | `rename_comps` | Rename MANY comps in one call, on the org convention (REVyy_ from a year in the old name, else REV_NO-YEAR_) | yes | host | 1 | 3 |
@@ -85,8 +85,8 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 
 **Coverage gaps (computed):**
 
-- Host tools with NO stubbed test: `add_camera`, `add_shape_layer`, `add_solid`, `apply_effect`, `delete_layer`, `import_file`, `link_property`, `organize_project`, `set_effect_param`, `set_layer_timing`
-- Host tools never exercised by the self-test suite: `import_file`, `organize_project`
+- Host tools with NO stubbed test: `add_camera`, `add_shape_layer`, `add_solid`, `apply_effect`, `delete_layer`, `import_file`, `link_property`, `set_effect_param`, `set_layer_timing`
+- Host tools never exercised by the self-test suite: `import_file`
 
 <!-- END GENERATED TOOL INVENTORY -->
 
@@ -190,9 +190,12 @@ Queued (see WORKPLAN for owners/order):
   tree.
 - Suite coverage: `add_marker`/`precompose` (5.4) and
   `add_to_render_queue` (5.5) have since been covered; `import_file`
-  waits on 5.8. `organize_project` cannot be suite-tested at all,
-  because it files every LOOSE item at the project root and the suite
-  runs inside whatever project the user has open.
+  waits on 5.8. `organize_project` is covered as of 0.10.2, but by its
+  PREVIEW only: it files every LOOSE item at the project root and the
+  suite runs inside whatever project the user has open, so the suite
+  proves the preview counts and names correctly and moves nothing, and
+  the execute path is covered by `tests/test-organize-project.js` plus a
+  throwaway-project measurement in real AE.
 - `set_layer_3d` turning a layer back to 2D still destroys the 3D-only
   values — AE zeroes Position/Anchor Point Z, resets Scale Z to 100 and
   clears Orientation and X/Y Rotation, keyframes included, and turning 3D
