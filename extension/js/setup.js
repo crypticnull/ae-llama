@@ -16,6 +16,7 @@
   var path = null;
   var child_process = null;
   var NodeBuffer = null;
+  var crypto = null;
 
   function ensureNode() {
     if (http) return;
@@ -25,11 +26,51 @@
     path = global.AEBridge.nodeRequire("path");
     child_process = global.AEBridge.nodeRequire("child_process");
     NodeBuffer = global.AEBridge.nodeRequire("buffer").Buffer;
+    crypto = global.AEBridge.nodeRequire("crypto");
   }
 
   // ------------------------------------------------------------ data dirs
 
-  /** Create the persistent data tree and seed workflow templates. */
+  /**
+   * sha1 of a file's bytes with CRLF normalized to LF — the same identity
+   * scripts/workflow-hash-history.js records. Normalizing matters: git
+   * checks these templates out with the platform's line endings, so the
+   * installed copy of a template can be byte-different from the bundled
+   * one and still be the identical shipped version (measured on the dev
+   * machine 2026-08-28: the H3 i2v template differed in raw bytes and in
+   * nothing else).
+   */
+  function shippedHash(buf) {
+    var norm = NodeBuffer.from(buf).toString("latin1").replace(/\r\n/g, "\n");
+    return crypto.createHash("sha1").update(norm, "latin1").digest("hex");
+  }
+
+  /** The bundle's append-only hash record, or null when unreadable. */
+  function loadHashHistory(srcDir) {
+    try {
+      var p = path.join(srcDir, ".hash-history.json");
+      if (!fs.existsSync(p)) return null;
+      var j = JSON.parse(fs.readFileSync(p, "utf8"));
+      if (!j || !j.files || typeof j.files !== "object") return null;
+      return j.files;
+    } catch (e) { return null; }
+  }
+
+  /**
+   * Create the persistent data tree and seed workflow templates.
+   *
+   * Seeding used to be "copy anything missing, never touch anything
+   * present", which froze every install on the templates it first saw —
+   * this machine was still running the H3 manifest from five releases
+   * earlier. Overwriting unconditionally is not the fix either: users are
+   * invited to edit these templates. So the bundle ships a hash history of
+   * every version it ever published, and an installed file is refreshed
+   * only when its hash is one of ours (an unedited, stale shipped copy).
+   * An unknown hash is a human's work and is left alone. With no readable
+   * history the old never-overwrite behaviour stands.
+   *
+   * Returns a summary of what happened, for the tests and the log.
+   */
   function ensureDataDirs() {
     ensureNode();
     var root = global.Settings.dataRoot();
@@ -40,20 +81,41 @@
         if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
       } catch (e) {}
     }
-    // Seed bundled ComfyUI templates on first run (never overwrite edits).
+    var summary = { seeded: [], refreshed: [], preserved: [], current: [] };
     try {
       var src = path.join(global.AEBridge.getExtensionPath(), "comfy-workflows");
       var dst = path.join(root, "comfy-workflows");
-      if (fs.existsSync(src)) {
-        var entries = fs.readdirSync(src);
-        for (var j = 0; j < entries.length; j++) {
-          var to = path.join(dst, entries[j]);
-          if (!fs.existsSync(to)) {
-            fs.writeFileSync(to, fs.readFileSync(path.join(src, entries[j])));
-          }
+      if (!fs.existsSync(src)) return summary;
+      var history = loadHashHistory(src);
+      var entries = fs.readdirSync(src);
+      for (var j = 0; j < entries.length; j++) {
+        var name = entries[j];
+        // Dotfiles are bundle metadata (the history itself), not templates.
+        if (name.charAt(0) === ".") continue;
+        var from = path.join(src, name);
+        try { if (!fs.statSync(from).isFile()) continue; } catch (e2) { continue; }
+        var to = path.join(dst, name);
+        if (!fs.existsSync(to)) {
+          fs.writeFileSync(to, fs.readFileSync(from));
+          summary.seeded.push(name);
+          continue;
         }
+        if (!history) { summary.preserved.push(name); continue; }
+        var known = history[name];
+        if (!known || !known.length) { summary.preserved.push(name); continue; }
+        var have = shippedHash(fs.readFileSync(to));
+        var mine = shippedHash(fs.readFileSync(from));
+        if (have === mine) { summary.current.push(name); continue; }
+        var isOurs = false;
+        for (var k = 0; k < known.length; k++) {
+          if (known[k] === have) { isOurs = true; break; }
+        }
+        if (!isOurs) { summary.preserved.push(name); continue; }
+        fs.writeFileSync(to, fs.readFileSync(from));
+        summary.refreshed.push(name);
       }
     } catch (e) {}
+    return summary;
   }
 
   // -------------------------------------------------------- GPU detection

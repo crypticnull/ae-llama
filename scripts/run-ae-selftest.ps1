@@ -102,6 +102,12 @@ public class AellWin {
     [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr h);
     [DllImport("user32.dll")] private static extern bool IsWindowEnabled(IntPtr h);
     [DllImport("user32.dll")] private static extern bool PostMessageW(IntPtr h, uint msg, IntPtr w, IntPtr l);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern IntPtr SendMessageTimeoutW(IntPtr h, uint msg, IntPtr w, StringBuilder l, uint flags, uint timeout, out UIntPtr res);
+    [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr h, out RECT r);
+    [DllImport("user32.dll")] private static extern bool MoveWindow(IntPtr h, int x, int y, int w, int t, bool repaint);
+    [DllImport("user32.dll")] private static extern bool BringWindowToTop(IntPtr h);
+    [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr h);
+    public struct RECT { public int Left, Top, Right, Bottom; }
 
     private static StringBuilder found;
     private static int target;
@@ -109,6 +115,9 @@ public class AellWin {
     private static int popups;
     private static int closed;
     private static bool hasWords;
+    private static StringBuilder harvest;
+    private static int moved;
+    private static int screenL, screenT, screenR, screenB;
 
     // A DISABLED main window is the authoritative signal that AE is stuck
     // behind something modal -- true whatever class the popup happens to
@@ -229,6 +238,91 @@ public class AellWin {
         if (s.Length > 0 && !s.StartsWith("OS_")) { hasWords = true; return false; }
         return true;
     }
+    // --- reading a dialog, instead of guessing at it -----------------
+    // GetWindowTextW returns EMPTY for a control owned by ANOTHER
+    // process, which is why every AE dialog has always reached the
+    // triage as "no readable text" and cost blind re-runs to identify.
+    // WM_GETTEXT on the very same child returns the whole sentence
+    // (measured 2026-08-28 on AE 2026, first try: the save-changes
+    // prompt keeps its text in an `Edit` child whose GetWindowTextW is
+    // empty). This is EVIDENCE only -- what the runner answers is
+    // decided by Get-AellStaleDialogPlan exactly as before, because a
+    // dialog we can suddenly read must not become one we refuse to
+    // clear.
+    //
+    // SendMessageTimeout with ABORTIFHUNG, never SendMessage: this runs
+    // unattended, and a dialog whose thread is wedged must not wedge the
+    // harness with it. A control that does not answer is recorded as
+    // <no answer> rather than skipped, so a failed read cannot pass for
+    // a dialog with nothing to say.
+    public static string HarvestDialogText(int processId) {
+        target = processId;
+        harvest = new StringBuilder();
+        EnumWindows(new EnumProc(OnHarvestTop), IntPtr.Zero);
+        return harvest.ToString();
+    }
+    private static bool OnHarvestTop(IntPtr h, IntPtr lp) {
+        uint wid;
+        GetWindowThreadProcessId(h, out wid);
+        if ((int)wid != target) { return true; }
+        if (!IsWindowVisible(h)) { return true; }
+        if (ClassOf(h) != "#32770") { return true; }
+        StringBuilder t = new StringBuilder(512);
+        GetWindowTextW(h, t, 512);
+        string title = t.ToString().Trim();
+        if (title.Length > 0) { harvest.Append(title + NL); }
+        EnumChildWindows(h, new EnumProc(OnHarvestChild), IntPtr.Zero);
+        return true;
+    }
+    private static bool OnHarvestChild(IntPtr h, IntPtr lp) {
+        StringBuilder sb = new StringBuilder(1024);
+        UIntPtr res;
+        // SMTO_ABORTIFHUNG | SMTO_ERRORONEXIT, 400ms
+        IntPtr ok = SendMessageTimeoutW(h, 0x000D, (IntPtr)1024, sb,
+                                        0x0002 | 0x0020, 400, out res);
+        if (ok == IntPtr.Zero) { harvest.Append("<no answer>" + NL); return true; }
+        string s = sb.ToString().Trim();
+        if (s.Length > 0) { harvest.Append(s + NL); }
+        return true;
+    }
+    // Put a dialog where a screenshot will show ALL of it, and on top.
+    //
+    // AE draws its dialog frame OFFSET from the window rect Win32
+    // reports -- measured 2026-08-28: rect 60,60 with the visible dialog
+    // starting near 133,127. That cost two attempts. First a crop to the
+    // rect, which captured the desktop behind the dialog. Then "move it
+    // only if the rect leaves the screen", which left a dialog whose
+    // RECT fitted and whose PICTURE ran off the bottom-right corner --
+    // the error text was cut off mid-sentence in the evidence PNG.
+    //
+    // So every dialog is moved to the top-left, unconditionally, and
+    // staggered so two of them do not stack. This only ever runs when
+    // the harness is already taking evidence on a dialog it is about to
+    // answer, and a picture that is missing the words is not evidence.
+    public static int RaiseDialogs(int processId, int vx, int vy, int vw, int vh) {
+        target = processId;
+        screenL = vx; screenT = vy; screenR = vx + vw; screenB = vy + vh;
+        moved = 0;
+        EnumWindows(new EnumProc(OnRaise), IntPtr.Zero);
+        return moved;
+    }
+    private static bool OnRaise(IntPtr h, IntPtr lp) {
+        uint wid;
+        GetWindowThreadProcessId(h, out wid);
+        if ((int)wid != target) { return true; }
+        if (!IsWindowVisible(h)) { return true; }
+        if (ClassOf(h) != "#32770") { return true; }
+        RECT r;
+        if (GetWindowRect(h, out r)) {
+            MoveWindow(h, screenL + 20 + (moved * 60),
+                       screenT + 20 + (moved * 40),
+                       r.Right - r.Left, r.Bottom - r.Top, true);
+            moved++;
+        }
+        BringWindowToTop(h);
+        SetForegroundWindow(h);
+        return true;
+    }
     private static bool OnChild(IntPtr h, IntPtr lp) {
         StringBuilder t = new StringBuilder(1024);
         GetWindowTextW(h, t, 1024);
@@ -284,6 +378,103 @@ function Get-BlockingDialog {
   return ''
 }
 
+# --- evidence, gathered before anything is answered -------------------
+#
+# Same popups the probe above already found, read a different way. The
+# probe uses GetWindowText, which returns EMPTY for another process's
+# controls, so an AE dialog reaches the triage wordless; WM_GETTEXT on
+# the same controls returns the sentence. Kept apart from the verdict on
+# purpose (see ae-dialog-triage.ps1): the answer below is gated on the
+# `unreadable` verdict, and a dialog we can now READ must not become one
+# the harness refuses to clear.
+function Get-AellDialogHarvest {
+  if (-not $canProbe) { return '' }
+  $all = ''
+  foreach ($proc in @(Get-Process AfterFX -ErrorAction SilentlyContinue)) {
+    try { $all = $all + [AellWin]::HarvestDialogText($proc.Id) } catch { }
+  }
+  return $all
+}
+
+# A picture, for the dialogs words cannot describe. The WHOLE virtual
+# screen, never the dialog's rect: AE draws its frame offset from the
+# rect Win32 reports (measured 2026-08-28 -- rect 60,60, visible dialog
+# near 133,127), so both rect crops captured the desktop behind it. The
+# dialog is raised and given 1.2s to repaint first, also measured: a
+# capture taken immediately after a move caught the window that had not
+# redrawn yet.
+#
+# Best effort by construction. An unattended run must never fail because
+# it could not take a screenshot.
+function Save-AellDialogShot {
+  if (-not $canProbe) { return '' }
+  try {
+    Add-Type -AssemblyName System.Drawing
+    Add-Type -AssemblyName System.Windows.Forms
+    $vs = [System.Windows.Forms.SystemInformation]::VirtualScreen
+    foreach ($proc in @(Get-Process AfterFX -ErrorAction SilentlyContinue)) {
+      try {
+        [AellWin]::RaiseDialogs($proc.Id, $vs.X, $vs.Y, $vs.Width,
+          $vs.Height) | Out-Null
+      } catch { }
+    }
+    Start-Sleep -Milliseconds 1200
+    $dir = Join-Path $RepoRoot 'logs\dialogs'
+    if (-not (Test-Path $dir)) {
+      New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    }
+    $stamp = (Get-Date).ToString("yyyy-MM-dd'T'HH-mm-ss")
+    $png = Join-Path $dir ($stamp + '.png')
+    $bmp = New-Object System.Drawing.Bitmap($vs.Width, $vs.Height)
+    $g = [System.Drawing.Graphics]::FromImage($bmp)
+    $g.CopyFromScreen($vs.X, $vs.Y, 0, 0,
+      (New-Object System.Drawing.Size($vs.Width, $vs.Height)))
+    $g.Dispose()
+    $bmp.Save($png, [System.Drawing.Imaging.ImageFormat]::Png)
+    $bmp.Dispose()
+    return $png
+  } catch {
+    Write-Host ('  (no screenshot: ' + $_.Exception.Message + ')')
+    return ''
+  }
+}
+
+# Read the dialog, print what it says, and say so LOUDLY when it says
+# something this harness does not know. The run proceeds either way --
+# the change is evidence, not behaviour -- but 'UNRECOGNIZED DIALOG' in
+# a pass log is what makes the morning review look at the picture.
+function Write-AellDialogEvidence {
+  param([string]$Context = '')
+  $harvest = Get-AellDialogHarvest
+  $class = Get-AellHarvestClass -Harvest $harvest
+  $words = @(Get-AellHarvestWords -Harvest $harvest)
+  if ($words.Count -gt 0) {
+    Write-Host '  what it says (WM_GETTEXT):'
+    foreach ($w in $words) { Write-Host ('    ' + $w) }
+  } else {
+    Write-Host '  it says nothing Win32 can read, even with WM_GETTEXT.'
+  }
+  # The save-changes prompt is the one dialog this harness fully
+  # understands, and it turns up on most runs. Everything else gets its
+  # picture taken -- including the wordless one, which is exactly the
+  # case a screenshot exists for.
+  $png = ''
+  if ($class.Label -ne 'save-changes prompt') {
+    $png = Save-AellDialogShot
+    if ($png) { Write-Host ('  screenshot: ' + $png) }
+  }
+  if (-not $class.Known) {
+    Write-Host ''
+    Write-Host ('UNRECOGNIZED DIALOG ' + $Context)
+    Write-Host ('  text: ' + $class.Unknown)
+    if ($png) { Write-Host ('  picture: ' + $png) }
+    Write-Host '  Not the save-changes prompt, and not the wordless popup'
+    Write-Host '  the harness knows. It was handled the usual way so the'
+    Write-Host '  run could proceed -- a human should read the above.'
+  }
+  return $png
+}
+
 # The dialog that costs an unattended pass its whole run is not one this
 # run raised -- it is the save-changes prompt the PREVIOUS run left up.
 # The suite always leaves AE dirty (scratch comps), so when the cold-run
@@ -313,10 +504,20 @@ function Clear-AellStaleDialog {
       $announced = $true
       Write-Host ("A dialog was already blocking After Effects before " +
         "this run started (" + $plan.Reason + ").")
-      Write-Host ("Answering it with Cancel -- on this machine that is " +
-        "the save-changes prompt a previous run left behind, and " +
-        "Cancel only calls off the quit.")
     }
+    # READ it before answering it. The answer does not depend on what
+    # comes back -- unattended must proceed, and a wordless popup was
+    # always answered here -- but a run that closes a dialog nobody ever
+    # read is a run that can lose a whole night's evidence in one
+    # PostMessage.
+    Write-AellDialogEvidence -Context "answered before the launch" |
+      Out-Null
+    # Deliberately says what it DOES, not what it assumes it is talking
+    # to: the harvest above already named the dialog, and this line used
+    # to announce "the save-changes prompt" over the top of an error
+    # alert it had just read out loud.
+    Write-Host ("Answering it with WM_CLOSE, which on the save-changes " +
+      "prompt is Cancel and only calls off the quit.")
     $n = 0
     foreach ($proc in @(Get-Process AfterFX -ErrorAction SilentlyContinue)) {
       try { $n = $n + [AellWin]::CloseWordlessDialogs($proc.Id) } catch { }
@@ -364,22 +565,30 @@ if ($blocking -and -not (Test-Path $out)) {
   Write-Host 'After Effects is BLOCKED on a modal dialog:'
   Write-Host $blocking
   Write-Host '----'
+  # The probe text above is what GetWindowText could see, which for an AE
+  # dialog is usually nothing. Ask the controls directly before telling a
+  # human to go and look: the 2026-08-28 pass spent two blind re-runs on
+  # a dialog that named its own cause in one WM_GETTEXT call.
+  Write-AellDialogEvidence -Context 'blocking this run' | Out-Null
+  Write-Host '----'
   Write-Host 'This is not the scripting-file-access preference. Until the'
   Write-Host 'dialog is dismissed AE ignores every -r script while still'
   Write-Host 'reporting as healthy. Dismiss it, fix what it names, re-run.'
   Write-Host 'For ES3 reserved words specifically (the usual cause), run'
   Write-Host 'node tests/test-es3-syntax.js -- it catches them without AE.'
   if ($state.LastVerdict -eq 'unreadable') {
-    # AE draws its own dialogs, so Win32 can read nothing out of them.
+    # AE draws its own dialogs, so the window-text probe reads nothing
+    # out of them (the harvest above asks the controls instead).
     # Measured on this machine: a 381x237 popup with no readable text is
     # AE asking "Save changes to Untitled Project.aep?" -- raised when
     # something asks a dirty AE to close, which is how every self-test
     # run ends (the suite leaves scratch comps behind, so the project is
     # always dirty). It survives into the NEXT run and blocks it.
     Write-Host ''
-    Write-Host 'The popup above has no readable text, which on this'
-    Write-Host 'machine is usually AE asking to save changes to the'
-    Write-Host 'scratch project a previous run left behind. Answering it'
+    Write-Host 'GetWindowText read nothing off that popup, which on'
+    Write-Host 'this machine is usually AE asking to save changes to the'
+    Write-Host 'scratch project a previous run left behind (the harvest'
+    Write-Host 'above says so outright when a control answers). Answering it'
     Write-Host 'is the only way through -- Cancel is safe, it just calls'
     Write-Host 'off the quit -- and no -r script runs while it is up.'
     Write-Host 'A LEFTOVER one is answered automatically before the'

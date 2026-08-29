@@ -83,7 +83,11 @@ function runPs(body) {
   const script = ". '" + LIB.replace(/'/g, "''") + "'\n" + body;
   const file = path.join(
     process.env.TEMP || ".", "aell-triage-test-" + process.pid + ".ps1");
-  fs.writeFileSync(file, script, "ascii");
+  // UTF-8 with a BOM, not ASCII: AE's save-changes prompt carries
+  // CURLY quotes, and writing them as ASCII masked them into control
+  // characters -- the test would then prove the pattern matches garbage
+  // rather than what AE actually says.
+  fs.writeFileSync(file, "﻿" + script, "utf8");
   try {
     return execFileSync("powershell.exe", [
       "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", file
@@ -93,10 +97,28 @@ function runPs(body) {
   }
 }
 
-/** Quote a JS string as a PowerShell double-quoted literal. */
+/**
+ * Quote a JS string as a PowerShell expression.
+ *
+ * CURLY quotes get their own treatment, and they have to: PowerShell
+ * accepts U+201C/U+201D as string DELIMITERS, so pasting AE's real
+ * save-changes text into a double-quoted literal ends the string
+ * mid-sentence and the script does not parse at all. They are spliced
+ * back in with [char] instead, which is why the result is wrapped in
+ * parentheses -- it may be a concatenation, and it is used in argument
+ * position.
+ */
 function psString(s) {
-  return '"' + s.replace(/`/g, "``").replace(/\$/g, "`$")
-    .replace(/"/g, '`"').replace(/\r/g, "`r").replace(/\n/g, "`n") + '"';
+  const parts = s.split(/([“”])/).filter(function (p) {
+    return p.length > 0;
+  }).map(function (p) {
+    if (p === "“") { return "[char]0x201c"; }
+    if (p === "”") { return "[char]0x201d"; }
+    return '"' + p.replace(/`/g, "``").replace(/\$/g, "`$")
+      .replace(/"/g, '`"').replace(/\r/g, "`r").replace(/\n/g, "`n") + '"';
+  });
+  if (parts.length === 0) { return '("")'; }
+  return "(" + parts.join(" + ") + ")";
 }
 
 // --- 1. one probe sample at a time -----------------------------------
@@ -353,6 +375,132 @@ assert(/PostMessageW\(h, 0x0010/.test(runner),
 assert(!/Stop-Process/.test(runner),
   "AE is never killed - a hard kill is what raises the startup " +
   "recovery dialog next launch");
+
+// --- 4. what the harness READS off a dialog before it answers --------
+// For years nothing could read an After Effects dialog: GetWindowTextW
+// returns EMPTY for a control owned by another process, so every AE
+// alert arrived at the triage as "no readable text" and a human (or an
+// unattended pass) had to guess from context -- the 2026-08-28 pass burnt
+// two blind re-runs on a dialog that named its own cause the moment
+// WM_GETTEXT was tried. These are the harvests measured on AE 2026 with
+// SendMessageTimeout(WM_GETTEXT) on every child of the #32770.
+
+// The save-changes prompt, verbatim (2026-08-28): an empty title, three
+// DroverLord containers reporting their own class, and one `Edit` child
+// carrying the sentence. The curly quotes are AE's; this file is UTF-8
+// but the .ps1 that matches it is ASCII, so the pattern must reach
+// AROUND them.
+const HARVEST_SAVE =
+  "OS_ViewContainer\r\n" +
+  "OS_ViewContainer\r\n" +
+  "OS_EditTextContainer\r\n" +
+  "Save changes to \u201cUntitled Project.aep\u201d before closing?\r\n";
+// The wordless popup: AE's progress window tearing down, or any dialog
+// even WM_GETTEXT cannot reach. Benign because it is exactly what the
+// runner has always answered blind.
+const HARVEST_WORDLESS =
+  "OS_ViewContainer\r\n" +
+  "OS_ViewContainer\r\n";
+// A control that did not answer in time is RECORDED, not dropped -- a
+// failed read must not pass for a dialog with nothing to say -- but it
+// is not something the dialog said either.
+const HARVEST_NOANSWER = "OS_ViewContainer\r\n<no answer>\r\n";
+// The alert that cost the 2026-08-28 pass its probe, read in one call.
+const HARVEST_ERROR =
+  "OS_ViewContainer\r\n" +
+  "Unable to execute script at line 35. After Effects error: Unable to " +
+  "call \"addComp\" because the call requires 6 parameters.\r\n";
+
+const HARVEST_CASES = [
+  // name, harvest, known-benign?, label
+  ["save", HARVEST_SAVE, true, "save-changes prompt"],
+  ["wordless", HARVEST_WORDLESS, true, "wordless"],
+  ["noanswer", HARVEST_NOANSWER, true, "wordless"],
+  ["empty", "", true, "wordless"],
+  ["error", HARVEST_ERROR, false, "unrecognized"],
+  // Two popups at once: the save prompt standing next to an error alert
+  // must NOT launder it. Judged line by line, never on the joined text.
+  ["save-plus-error", HARVEST_SAVE + HARVEST_ERROR, false, "unrecognized"]
+];
+
+let harvestBody = "";
+HARVEST_CASES.forEach(function (c) {
+  harvestBody += "$c = Get-AellHarvestClass -Harvest " + psString(c[1]) +
+    "\nWrite-Host ('" + c[0] + "|' + $c.Known + '|' + $c.Label + '|' + " +
+    "$c.Unknown)\n";
+});
+const classes = {};
+runPs(harvestBody).split(/\r?\n/).forEach(function (line) {
+  const p = line.split("|");
+  if (p.length >= 4) classes[p[0]] = { known: p[1] === "True", label: p[2],
+    unknown: p.slice(3).join("|") };
+});
+HARVEST_CASES.forEach(function (c) {
+  const got = classes[c[0]];
+  assert(got && got.known === c[2] && got.label === c[3],
+    "harvest '" + c[0] + "' is " + (c[2] ? "known-benign" : "UNRECOGNIZED") +
+    " (" + c[3] + ")" + (got ? " - got " + got.label : " (no output)"));
+});
+assert(classes["error"] &&
+  classes["error"].unknown.indexOf("addComp") !== -1,
+  "an unrecognized dialog is reported with the words it actually said");
+assert(classes["save-plus-error"] &&
+  classes["save-plus-error"].unknown.indexOf("Save changes") === -1 &&
+  classes["save-plus-error"].unknown.indexOf("addComp") !== -1,
+  "only the line nobody recognised is named as unknown");
+
+// The noise filter: AE's containers report their CLASS as their text, so
+// they are not words a dialog said. If this stopped filtering, every
+// wordless popup would report as UNRECOGNIZED and the morning review
+// would learn to ignore the marker.
+const wordsOut = runPs([
+  "$w = @(Get-AellHarvestWords -Harvest " + psString(HARVEST_SAVE) + ")",
+  "Write-Host ('WORDS|' + $w.Count + '|' + ($w -join '~'))"
+].join("\n"));
+assert(/WORDS\|1\|Save changes to/.test(wordsOut),
+  "container children are not counted as something the dialog said");
+
+// The whole point of reading before answering: this must NOT become a
+// reason to refuse. The save-changes prompt is readable now, and it is
+// still the dialog the harness answers by itself -- the verdict that
+// gates that answer is deliberately not fed the harvest.
+assert(plans["teardown"] && plans["teardown"].d === true,
+  "reading a dialog did not make the harness refuse to clear it");
+const lib = fs.readFileSync(LIB, "utf8");
+assert(!/Get-AellHarvestClass|Get-AellHarvestWords/
+  .test(lib.split("function Get-AellDialogVerdict")[1]
+    .split("function Get-AellHarvestWords")[0]),
+  "the verdict is still decided from the situation, not from the harvest");
+
+// The runner side: read with WM_GETTEXT, and never with a call that can
+// block forever -- this runs unattended, and a wedged dialog must not
+// wedge the harness with it.
+assert(/SendMessageTimeoutW/.test(runner) && /0x000D/.test(runner),
+  "the harvest asks controls for their text with WM_GETTEXT");
+assert(!/private static extern IntPtr SendMessageW/.test(runner),
+  "the harvest cannot block on a wedged dialog (SendMessageTimeout only)");
+assert(/0x0002 \| 0x0020/.test(runner),
+  "the WM_GETTEXT send aborts if the dialog's thread is hung");
+assert(/<no answer>/.test(runner),
+  "a control that does not answer is recorded, not silently skipped");
+// Evidence is gathered BEFORE the PostMessage that answers the dialog:
+// afterwards there is nothing left to read.
+const evidenceAt = runner.indexOf("Write-AellDialogEvidence -Context \"answered");
+const answerAt = runner.indexOf("CloseWordlessDialogs($proc.Id)");
+assert(evidenceAt !== -1 && answerAt !== -1 && evidenceAt < answerAt,
+  "the dialog is read BEFORE it is answered");
+assert(/UNRECOGNIZED DIALOG/.test(runner),
+  "a dialog the harness does not know is marked in the pass log");
+// The screenshot is of the whole virtual screen. AE draws its dialog
+// frame offset from the rect Win32 reports (measured: rect 60,60, dialog
+// drawn near 133,127), so two rect crops captured the desktop behind it.
+assert(/CopyFromScreen\(\$vs\.X, \$vs\.Y/.test(runner),
+  "the screenshot captures the whole screen, not the dialog's rect");
+assert(/logs.dialogs/.test(runner),
+  "screenshots land in logs\\dialogs, which is gitignored");
+// A run must never fail because it could not take a picture.
+assert(/function Save-AellDialogShot[\s\S]{0,1400}\} catch \{/.test(runner),
+  "a failed screenshot cannot break the run");
 
 // Windows PowerShell 5.1, BOM-less ASCII, per CLAUDE.md.
 [LIB, RUNNER].forEach(function (f) {

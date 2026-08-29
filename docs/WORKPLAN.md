@@ -315,11 +315,12 @@ FOUR tools are still uncovered and each is deliberate, not pending:
   5.4 — 18 steps, after a probe found five silent losses in them.
 - `add_to_render_queue` — item 5.5; it writes to the user's render queue.
 - `import_file` — item 5.8; it needs a file on disk.
-- `organize_project` — **cannot be suite-tested at all.** It files every
-  LOOSE item at the project ROOT, and the suite runs inside whatever
-  project the user has open. Any step for it would reorganize the user's
-  project. If it is ever to be covered it needs a `dryRun` argument
-  first; that is a design call for the remote session.
+- ~~`organize_project` — **cannot be suite-tested at all.**~~ COVERED
+  2026-08-28 (0.10.2) once it grew the `dryRun` argument this bullet
+  asked for: six steps, PREVIEWS only. The preview must count the suite's
+  own new comp, name the nested folder it refuses to file into, and leave
+  the project panel byte-for-byte alone — that last step is the one the
+  group exists for.
 
 ## 4. Field-quality passes
 
@@ -387,17 +388,35 @@ FOUR tools are still uncovered and each is deliberate, not pending:
   drops WHOLE ROWS with a count, the way budgetState already did for the
   state block, and the per-result cap is a fair share of the round's
   6000 rather than a fixed 1200. See the log.
-- **organize_project gets clean_project's dry-run shape** (design
-  decided 2026-08-28; one small pass): `dryRun` defaulting to true, the
-  preview naming each move (item -> destination folder) with capped
-  lists and full counts, execute reporting moved/skipped the same way.
-  Then the suite finally gets organize_project steps — previews and
-  refusals only, like clean_project's. Patch bump when verified.
+- ~~**organize_project gets clean_project's dry-run shape**~~ DONE
+  2026-08-28 (0.10.2). Built to the spec: `dryRun` defaults to true, the
+  preview names each move (item -> folder) with capped lists and full
+  counts, execute reports moved/notMoved after checking where each item
+  actually landed, and six suite steps cover the PREVIEW (an execute step
+  would file the user's own project). The probe that opened the pass
+  found a shipped bug the spec could not have known: the destination
+  folder was looked up by name ANYWHERE in the tree, so two root comps
+  were filed into a user's nested `PR Archive/Comps`. Destinations are
+  now root-only and a nested homonym is named in the result instead.
 
-- **Harness dialog triage learns to READ before it answers** (design
-  decided 2026-08-28; its OWN pass, and run the full harness twice
-  back-to-back afterwards — this changes the machinery every unattended
-  run depends on): before CloseWordlessDialogs answers a `#32770`,
+- ~~**Harness dialog triage learns to READ before it answers**~~ DONE
+  2026-08-28. Built to the spec, with the one line the spec implied and
+  this pass had to make explicit: the harvest is EVIDENCE and is
+  deliberately NOT fed to `Get-AellDialogVerdict`. That verdict is what
+  gates the pre-launch answer, and it fires on `unreadable` — so making
+  the save-changes prompt readable would have flipped it to `blocked`
+  and stopped the harness answering the one dialog the mechanism exists
+  for. Same answer set as before, now with the words and a picture.
+  Measured: the text lives in an `Edit` child whose `GetWindowTextW` is
+  empty and whose `WM_GETTEXT` is the whole sentence, in CURLY quotes;
+  AE draws its dialog frame offset from the rect Win32 reports, so the
+  screenshot is of the whole virtual screen and the dialog is moved to
+  the corner and raised first. Verified in real AE on all three paths
+  (a deliberate addComp error alert → UNRECOGNIZED + readable PNG, the
+  save prompt → named, no PNG, no marker, and two clean back-to-back
+  runs), 391/391 each time. No version bump: the panel ships
+  `extension/` alone. Original spec:
+  before CloseWordlessDialogs answers a `#32770`,
   (1) collect WM_GETTEXT from every child control and log it;
   (2) if that yields nothing, move the window on-screen and save a
   screenshot to `logs\dialogs\<timestamp>.png` (measured readable on
@@ -419,9 +438,20 @@ FOUR tools are still uncovered and each is deliberate, not pending:
     spending a pass on it. Original text: ComfyUI rejected the workflow
     the model chose; the model had four rounds left, said "let's try a
     different approach or workflow", and stopped.
-  - **A bundled workflow template never reaches an existing install
-    once it has been seeded.** DESIGN DECIDED by the remote session
-    2026-08-28 — build it locally, one pass:
+  - ~~**A bundled workflow template never reaches an existing install
+    once it has been seeded.**~~ DONE 2026-08-28 (0.10.1). Built to the
+    spec below, with one thing the spec could not have known: hashes are
+    taken over CRLF-NORMALIZED bytes. Git checks these templates out with
+    the platform's line endings, so on this machine the installed H3
+    template and the bundled one differed in raw bytes and in nothing
+    else - a raw-byte hash would have called an identical file a user
+    edit. Verified in the field: seeding against the real
+    %APPDATA%\AE-Llama refreshed the one genuinely stale file (the H3
+    i2v manifest, five releases behind), reported the other five as
+    current, overwrote nothing, and the second run was a no-op. Also
+    measured: `git log -- path` lists one commit for the H3 template
+    where `--all --full-history` lists three, so the seeder walks the
+    full history. Original spec:
     (1) `scripts/workflow-hash-history.js` maintains
     `extension/comfy-workflows/.hash-history.json`: for every bundled
     template/manifest, an APPEND-ONLY list of the sha1 of every version
@@ -668,13 +698,31 @@ reduceProject DELETES, so it requires an explicit comp argument and
 reports counts; everything in one undo group. Refuse vague asks with a
 grounded list of actions.
 
-### 5.7 Audio to keyframes
-Probe: `app.findMenuCommandId("Convert Audio to Keyframes")` — does the
-id exist, what selection/active-comp state it needs, exact name of the
-created null and its slider paths. Build: `audio_to_keyframes` {layer}
-returning the null + slider path ready for link_property. Grounded error
-lists audio-capable layers. This plus link_property = beat-driven
-anything.
+### 5.7 Audio to keyframes — DONE 2026-08-28
+Probed, built and covered in one pass. The id exists (4218, and ONLY for
+the exact string "Convert Audio to Keyframes"), but the sketch's `{layer}`
+was disproven: the command ignores the selection and converts the whole
+comp MIX of whatever comp is ACTIVE. Per-layer isolation is built on the
+next measurement instead — a muted layer contributes an all-zero curve —
+so `audio_to_keyframes {comp?, layer?, name?, range?}` mutes the other
+audible layers for the conversion and un-mutes them again. Four more
+measurements shaped it: the command is bounded by the WORK AREA (0.5..1.5
+on a 4s/24fps comp gave 25 keys, not 97), it never uniques the null's
+name (two runs, two layers called "Audio Amplitude"), it leaves nothing
+selected, and with no audio-capable layer it creates nothing and says
+nothing at all — no throw, no dialog — which is why the tool refuses
+first and lists what IS in the comp. Suite coverage needed no audio file:
+Tone on a solid flips `layer.hasAudio` to true and the converter hears it
+(73 keys, peak 34.33 on 3s/24fps; two tones 36.02, which is what the
+isolate/un-mute steps read). 66 stub checks, 13 suite steps, harness
+391 -> 404. No version bump (feature track).
+
+Original text: Probe: `app.findMenuCommandId("Convert Audio to
+Keyframes")` — does the id exist, what selection/active-comp state it
+needs, exact name of the created null and its slider paths. Build:
+`audio_to_keyframes` {layer} returning the null + slider path ready for
+link_property. Grounded error lists audio-capable layers. This plus
+link_property = beat-driven anything.
 
 ### 5.8 Frame round-trip (the local foundation for image/video gen)
 Build on 5.5's probe: `snapshot_frame` {comp, time, path} writes a PNG

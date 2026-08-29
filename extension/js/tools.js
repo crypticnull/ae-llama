@@ -81,8 +81,14 @@
       args: "{comp: string, name?: string}" },
     { name: "organize_project", mutating: true,
       desc: "File loose root-level items into Comps/Footage/Solids/Audio/" +
-            "Images folders. Leaves existing folder structure alone.",
-      args: "{}" },
+            "Images folders at the project ROOT. Items already inside a " +
+            "folder are left alone, and so is every existing folder. " +
+            "dryRun is TRUE by default and returns the moves it would " +
+            "make (item -> folder) plus any folder it would create — " +
+            "show them, then call again with dryRun:false. AE files a " +
+            "solid's source into its own Solids folder already, so a " +
+            "Solids count of 0 is normal.",
+      args: "{dryRun?: bool (default TRUE)}" },
     { name: "clean_project", mutating: true,
       desc: "Delete project clutter. ONE action per call: " +
             "'remove_unused_footage' (footage no comp uses — and every " +
@@ -170,6 +176,18 @@
             "expression itself with correct syntax (dimension-aware; " +
             "optional value = control*scale + offset).",
       args: "{comp?: string, layer: name|index, property: transform name or 'effect.<Effect>.<Param>', controlLayer: name|index, controlEffect: string (control name), scale?: number, offset?: number}" },
+    { name: "audio_to_keyframes", mutating: true,
+      desc: "Convert audio amplitude to keyframes: adds a null carrying " +
+            "Left/Right/Both Channels sliders keyframed to the loudness, " +
+            "one key per frame. Use it for anything beat-driven — then " +
+            "link_property {controlLayer: <the null>, controlEffect: " +
+            "'Both Channels', scale: n} drives scale/opacity/position " +
+            "from the music. AE's own command reads the WHOLE comp mix " +
+            "and only inside the work area; this tool isolates 'layer' " +
+            "by muting the others for the conversion and covers the " +
+            "whole comp unless range says otherwise, and says so in the " +
+            "result.",
+      args: "{comp?: string, layer?: name|index (omit for the whole comp mix), name?: string (default 'Audio Amplitude'), range?: 'comp' (default) | 'workArea'}" },
     { name: "stagger_layers", mutating: true,
       desc: "Distribute layer START TIMES. Gap mode (use this for 'X " +
             "frames/seconds apart'): stepFrames or step is the gap " +
@@ -737,6 +755,11 @@
       "  that would break), and STOP. Only after they say go, call it",
       "  again with dryRun:false. reduce_project needs keepComps — ask",
       "  which comps matter, never guess.",
+      "- 'file / sort / organize the project panel' = organize_project,",
+      "  which PREVIEWS the same way (dryRun defaults to true): report the",
+      "  moves it lists and any folder it would create, then STOP until",
+      "  the user says go, and call again with dryRun:false. A preview is",
+      "  not an organized project — never report one as done.",
       "- Use ONLY folder and item names that appear in CURRENT PROJECT",
       "  STATE or a get_project_info result. NEVER guess a name and never",
       "  copy placeholder names from these instructions. If a lookup",

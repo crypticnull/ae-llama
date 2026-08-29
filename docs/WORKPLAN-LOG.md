@@ -4725,3 +4725,536 @@ what a release IS instead of just its number.
 
 Queue for tonight, in order: the three specs above, then 5.7-5.9
 (mogrt last), 6.1-6.2, item 7 (tier P4).
+
+## 2026-08-28 (local, fifteenth pass) - item 4: a shipped template that never reached a shipped panel
+
+Harness green on arrival (385/385), so the pass took the first of the
+three specs the remote session answered on 2026-08-28: **version-aware
+template seeding**. Patch bump (0.10.0 -> 0.10.1): this fixes shipped
+behaviour, and it is the kind of fix that has to reach a panel to mean
+anything.
+
+### The bug, measured on this machine before touching any code
+
+`ensureDataDirs` seeded bundled ComfyUI templates with "copy what is
+missing, touch nothing that is present", so an install froze on whatever
+it first saw. Comparing %APPDATA%\AE-Llama\comfy-workflows against the
+bundle: **AE_LLAMA_H3_I2V_V1.manifest.json was the version shipped on
+2026-08-26**, three releases and two content changes behind - missing the
+corrected node attribution and the removal rules that make the template
+run on a bare ComfyUI. Every push since had "shipped" it and none of them
+had delivered it.
+
+### The one thing the spec could not have known: line endings
+
+The same comparison said the TEMPLATE differed too. It did not. There is
+no `.gitattributes` here, so git checks these text files out with the
+platform's line endings, and the installed copy was CRLF where the bundle
+is LF - byte-different, version-identical. A raw-byte hash would have
+recorded hashes that no Windows install ever matches, called every
+untouched file a user edit, and re-frozen the exact bug this mechanism
+exists to end. So the identity used everywhere is **sha1 of the bytes
+with CRLF normalized to LF**, in the script and in setup.js both. It is
+the reason only ONE file on this machine turned out to be stale rather
+than three.
+
+Second measurement that changed the build: `git log -- <path>` lists ONE
+commit for the H3 template where `git log --all --full-history` lists
+three (history simplification, plus the panel ships from the dev branch
+as well as main). The three happened to hold identical bytes, so nothing
+was lost this time, but a version missing from the history is an install
+misread as user-edited forever - the seeder walks the full history.
+
+### Built
+
+- `scripts/workflow-hash-history.js` maintains
+  `extension/comfy-workflows/.hash-history.json`, append-only: 11
+  versions of 6 bundled files, seeded from git. `--check` fails when a
+  bundled file's current hash is unrecorded, `--from-git` walks history,
+  `--dir` points it at another bundle (the tests use it).
+- `ensureDataDirs` now decides per file: absent -> copy; hash IS in the
+  history -> unedited shipped copy, refresh it; hash unknown -> a human's
+  work, never touched. No readable history (an older ZXP, a build that
+  dropped the dotfile) -> the old never-overwrite rule stands, because a
+  bundle that lost its record must not start guessing. It returns a
+  summary {seeded, refreshed, preserved, current}, and main.js logs a
+  refresh rather than changing a workflow file in total silence.
+- The dotfile is bundle metadata: it is not seeded into the data root,
+  and the history does not record itself. Confirmed the ZXP packager
+  carries it (`Copy-Item -Recurse` does take dotfiles in subdirectories -
+  tested directly, since a dotfile silently missing from the ZXP would
+  degrade to the old behaviour with no symptom).
+
+### Verified in the field
+
+Ran the real `ensureDataDirs` against the real %APPDATA%\AE-Llama: it
+**refreshed AE_LLAMA_H3_I2V_V1.manifest.json**, reported the other five
+as current, preserved nothing (nothing was edited here), and the second
+run was a clean no-op. All six installed files now hash equal to the
+bundle. This machine is no longer running a five-release-old manifest.
+
+### Covered without AE
+
+- `tests/test-workflow-seeding.js` (new, 33 checks) drives the real
+  setup.js against throwaway bundles: fresh seed, stale-unedited refresh
+  from the FIRST and from a MIDDLE recorded version, user edit preserved
+  byte-for-byte, both CRLF cases (a CRLF copy of the current version is
+  "current", a CRLF copy of an old one is still refreshed), missing
+  history, unparseable history, a history that forgot one file, an absent
+  bundle, and the real shipped bundle (every file must read as current -
+  if any shipped file's own hash were missing, a real install of it would
+  read as an edit and never update again).
+- `tests/test-workflow-hash-history.js` (new, 16 checks) runs `--check`
+  against the shipped bundle the way test-capability-doc does, and proves
+  the CI failure it exists for: change a template without recording it
+  and --check fails naming that file and not the untouched one; record it
+  and the OLD hash survives (append-only - some install is still on it).
+- docs/CAPABILITIES.md curated half updated. Stubbed suite: **43 files
+  green** (41 -> 43). **Harness: 385/385 PASSED**, green before and after.
+
+### For the next pass
+
+- Two specs left from the remote's three: **organize_project's dry-run
+  shape**, then **the dialog triage that READS before it answers**. Then
+  5.7 (audio to keyframes), 5.8, 5.9 (mogrt last).
+- The harness found AE **already blocked by a wordless dialog on arrival**
+  for the second run of this pass and answered it with Cancel, as
+  designed. Nothing this pass did could raise one (no AE writes outside
+  the suite), so it was left over from the first run's teardown - which is
+  precisely the case the dialog-triage spec wants evidence for. Both runs
+  passed 385/385 and AE was clear afterwards.
+- Small, for whoever does the next template change: run
+  `node scripts/workflow-hash-history.js` after editing a bundled
+  template, or CI fails. That is deliberate.
+- Note for anyone driving Windows paths through the Bash tool here:
+  an inline `node -e "...'C:\Users\...'..."` had its backslashes eaten
+  and created a literal `C:\UsersmrAppDataRoamingAE-Llama` tree. Found
+  and removed in the same pass; use a script file for Windows paths.
+- Still open from earlier passes: `duplicate_comp` takes a name without
+  uniquing; no read-only `get_bounds`.
+
+## 2026-08-28 (local, sixteenth pass) - item 4: organize_project promised a folder it never used (0.10.2)
+
+Harness green on arrival (385/385), so the pass took the second of the
+remote session's three specs: **organize_project gets clean_project's
+dry-run shape**. Patch bump 0.10.1 -> 0.10.2: it changes shipped
+behaviour, including one thing that was quietly wrong.
+
+### What AE actually does (AE 2026, 26.3x87, one probe run)
+
+Every classification rule in this tool was measured before a line was
+written, in a throwaway project:
+
+- a comp created by script lands at the **project root**, so every comp
+  the panel makes is "loose" until this tool runs;
+- AE parks a solid's SOURCE in its own `Solids` folder the moment the
+  solid is created (`parentIsRoot=false`), so solids are almost never
+  loose and a `Solids: 0` count is the normal answer, not a miss;
+- **a SolidSource reports `isStill` TRUE**, so the solid test has to come
+  before the still test or every solid files as an image;
+- a PNG is `hasVideo` + `isStill`, an audio-only WAV is `hasAudio` with
+  `hasVideo` false, an MP4 is both with `isStill` false. The shipped
+  order was already right; now it is pinned by a test.
+
+### The shipped bug the probe fell over
+
+The rig had a folder called `Comps` NESTED inside `PR Archive` (the kind
+of thing a real project accumulates). The shipped tool resolved its
+destination with `AELL_findFolder`, which matches a folder name ANYWHERE
+in the project, and filed both root comps into **`PR Archive/Comps`** —
+somebody else's folder, chosen because it happened to share a name — while
+answering `{"organized":{"Comps":2,...}}` and "existing folder structure
+was left alone". Two sentences, both true-sounding, describing a move the
+user did not ask for.
+
+So destinations are now looked for **at the root only**. A same-named
+folder deeper in the tree is reported as `sameNameElsewhere` (by path)
+with a note saying the project will end up with two folders of that name
+— named, never used. This is a behaviour change beyond the dry-run spec,
+and it is deliberate: a preview cannot be honest while the destination it
+promises is picked by a tree-wide name search.
+
+### Built
+
+- `organize_project {dryRun?}`, `dryRun` defaulting to TRUE. The preview
+  names each move as `item -> folder`, counts them in `byFolder`, names
+  the folders it would CREATE, counts what is `alreadyFiled` and how many
+  `rootFolders` exist, and caps every list with a `...NotShown` count
+  (the shared `AELL_hygCap`, 40).
+- Execute does not trust its own preview: after each reparent it checks
+  where the item actually landed, reports `moved` for the ones that did
+  and `notMoved` (with where it still is) for any that did not.
+- `AELL_orgDest` / `AELL_orgRootFolder` / `AELL_orgHomonyms` carry the
+  measurements above as comments, so the next reader does not re-probe.
+- tools.js: the tool doc says the preview comes first and that a Solids
+  count of 0 is normal; the system prompt gained "'file / sort / organize
+  the project panel' = organize_project ... A preview is not an organized
+  project — never report one as done."
+
+### Verified in the field, and covered without AE
+
+- Real AE, throwaway project: the preview changed nothing (snapshot
+  identical), the execute matched the preview exactly (5 moves, 4 folders
+  created), the nested `PR Archive/Comps` stayed EMPTY, an already-filed
+  comp stayed put, the second preview was a clean no-op, and **one undo
+  put the whole panel back**.
+- `tests/test-organize-project.js` (new, 49 checks) stubs the project
+  model with the measured facts — including a SolidSource whose `isStill`
+  is true, checked through the RAW stub first so a stub that stopped
+  modelling the trap cannot let the tool pass on a technicality. It covers
+  fresh preview, execute, second-run no-op, the loose solid, the nested
+  homonym (the comp must land in a ROOT `Comps` and the nested one must
+  stay empty), reuse of an existing root folder, a move AE refuses
+  (reported, never counted as done), the 40-item cap, and an empty
+  project.
+- Six suite steps in `extension/js/selftest.js`, **previews only** — an
+  execute step would file every loose item in the user's own project. The
+  load-bearing one re-reads the project afterwards and fails if the item
+  count or the folder count moved at all, or if the rig comp acquired a
+  parent folder. `tests/test-self-test.js`'s canned host learned
+  `organize_project` (previewing, refusing the nested folder), started
+  listing FOLDERS in `get_project_info`, and now resolves a folder
+  `delete_item` by the id `create_folder` handed back, the way real AE
+  does — a host answering "ok" would let all six steps pass.
+- docs/CAPABILITIES.md regenerated (organize_project drops off BOTH
+  computed coverage-gap lists) and its curated half updated.
+
+**Harness: 391/391 PASSED** (385 -> 391). Stubbed suite: 44 files green.
+
+### For the next pass — dialog triage, and three facts it can have free
+
+The last of the remote's three specs is **the harness dialog triage that
+READS before it answers**, and this pass ran into its subject matter three
+times. What it cost, and what it is worth:
+
+1. **`GetWindowText` is why the dialogs look wordless.** The harness's
+   `OnWordCheck` calls `GetWindowTextW` on each child; for a control owned
+   by ANOTHER process that returns empty, so every AE alert reads as
+   "no readable text". `SendMessage(hwnd, WM_GETTEXT=0x000D, ...)` on the
+   same child returned the full sentence immediately, first try, no
+   screenshot needed: "Unable to execute script at line 35. After Effects
+   error: Unable to call "addComp" because the call requires 6
+   parameters." — my probe's own bug, identified in one call after two
+   blind re-runs had already failed. Build step (1) of the spec on
+   WM_GETTEXT, not GetWindowText.
+2. **`PostMessage(WM_CLOSE)` does NOT answer these alerts** — the dialog
+   was still there afterwards. Posting `WM_KEYDOWN`/`WM_KEYUP` with
+   VK_RETURN dismissed both alerts this pass hit; `WM_COMMAND IDOK` did
+   nothing either. Worth knowing before the triage pass changes how
+   answers are posted.
+3. **A wedged AE swallows the next `-r` script silently.** While that
+   alert was up, two `AfterFX.exe -r probe.jsx` launches did nothing at
+   all — no output file, no error, AE "Responding: True". A probe that
+   seems to produce nothing is a dialog until proven otherwise.
+
+Two probe rules for whoever writes the next one:
+- **Flush every line** (`open("a")` / `writeln` / `close` per line). The
+  first probe of this pass opened its output with `open("w")` and died at
+  line 35, leaving a ZERO-BYTE file and no clue.
+- **Never call `app.executeCommand(16)` (Undo) inside a `-r` script run.**
+  It raises "After Effects warning: Undo group mismatch, will attempt to
+  fix." — AE wraps a `-r` run in its own undo group. The undo itself still
+  worked (the panel came back on the first one), and the shipped rollback
+  is unaffected because it runs inside `AELL_callBatch`, but the warning
+  wedges an unattended run. Also: `app.findMenuCommandId("Undo")` returned
+  **2371**, not 16, and executing it did nothing — use 16.
+
+### Still open
+
+- Item 5.7 (audio to keyframes) is next on the feature track after the
+  dialog-triage pass; 5.8 is unblocked and cheap.
+- `duplicate_comp` takes a name without uniquing; no read-only
+  `get_bounds`. Both still unclaimed.
+- `release-notes.txt` still reads "0.10.0: ..." while the feed ships
+  0.10.2, so the update banner describes the last MINOR. The 0.10.1 pass
+  left it alone too; it belongs to the remote session's release cut, so
+  this is a flag, not a fix.
+- The project AE was holding when this pass started (25 leftover items,
+  unsaved) was saved before the probes isolated: a temp copy plus
+  `X:\_CLAUDE\26_08_19_AE_Llama\aell-project-snapshot-2026-08-28-organize.aep`.
+  AE was left on an empty project.
+
+## 2026-08-28 (local, seventeenth pass) - item 4: the harness reads the dialog before it answers it
+
+Harness green on arrival (391/391), so the pass took the LAST of the
+remote session's three specs: **harness dialog triage learns to READ
+before it answers**. No version bump, for the reason the 2026-08-26
+harness pass gave: the panel ships `extension/` alone, and this touches
+`scripts/` and `tests/` only. Bumping would publish a feed telling every
+installed panel to update to a build identical to the one it is running.
+
+### The thing that was never true
+
+For months every After Effects dialog reached the triage as "no readable
+text", and the whole machinery was built around that: verdicts decided
+from the SITUATION (is AE started, is a script executing, has the popup
+lasted), because nothing could read the words. `GetWindowTextW` returns
+EMPTY for a control owned by another process, which is the whole of it.
+
+`SendMessage(WM_GETTEXT)` on the very same child returns the sentence.
+Measured on the save-changes prompt, first try, no screenshot needed:
+
+    [#32770] title=''
+      DroverLord  GWT='OS_ViewContainer'     WMGT='OS_ViewContainer'
+      DroverLord  GWT='OS_ViewContainer'     WMGT='OS_ViewContainer'
+      DroverLord  GWT='OS_EditTextContainer' WMGT='OS_EditTextContainer'
+      Edit        GWT=''                     WMGT='Save changes to
+                                                   "Untitled Project.aep"
+                                                   before closing?'
+
+One `Edit` child holds the text, its `GetWindowTextW` is empty, and the
+quotes are CURLY. The buttons (Save / Don't Save / Cancel) are drawn by
+AE and have no windows at all.
+
+### What shipped, and the one line it must never cross
+
+- `HarvestDialogText` in the runner's C#: for every visible top-level
+  `#32770` of the AE process, the window title plus `WM_GETTEXT` from
+  every child. `SendMessageTimeoutW` with `SMTO_ABORTIFHUNG` and 400ms,
+  never `SendMessage` -- this runs unattended and a wedged dialog must
+  not wedge the harness with it. A control that does not answer is
+  recorded as `<no answer>`, so a failed read cannot pass for a dialog
+  with nothing to say.
+- `Get-AellHarvestClass` (triage lib) sorts a harvest into known-benign
+  (nothing readable, or the save-changes prompt) and everything else.
+  Judged LINE BY LINE, never on the joined text: two popups can be up at
+  once and "the save prompt is in there somewhere" must not launder an
+  error alert standing next to it. The pattern reaches AROUND the
+  project name (`Save changes to .* before closing`) because the real
+  text has curly quotes and the .ps1 is ASCII by rule.
+- The harvest is **evidence, not a verdict**, and this is the load-
+  bearing decision of the pass. `Get-AellStaleDialogPlan` answers a
+  leftover dialog only on the `unreadable` verdict. Feed it the harvest
+  and the save-changes prompt becomes readable, the verdict flips to
+  `blocked`, and the harness stops answering the ONE dialog the whole
+  mechanism exists for -- an unattended pass would be back to losing its
+  first run to a prompt the previous run left up. Reading a dialog must
+  not make the runner more timid than it was when it was blind, so the
+  answer set is exactly what it was: still gated on the situation, still
+  only a `#32770` that is wordless to `GetWindowText`, still
+  `PostMessage`. A stub test pins the separation (the verdict function
+  may not mention the harvest functions).
+- Screenshot to `logs\dialogs\<timestamp>.png` for everything except the
+  recognized save prompt -- the wordless case the spec asked for, plus
+  every unrecognized one, so the `UNRECOGNIZED DIALOG` marker always has
+  a picture to point at. `logs/` is gitignored.
+- `UNRECOGNIZED DIALOG <context>` printed with the text and the PNG
+  path, at both places a dialog is now read: before the pre-launch
+  answer, and in the exit-4 report. The run proceeds either way.
+
+### Three measurements that cost an attempt each
+
+1. **The dialog is not drawn where Win32 says it is.** `GetWindowRect`
+   returned 60,60 for a prompt whose visible frame started near 133,127.
+   A crop to the rect captured the desktop behind it -- twice. Fix: grab
+   the whole virtual screen.
+2. **"Move it only if the rect leaves the screen" is not enough**, for
+   the same reason. The error alert's RECT fitted, its PICTURE ran off
+   the bottom-right, and the first evidence PNG had the sentence cut off
+   mid-word. Every dialog is now moved to the top-left unconditionally
+   (staggered so two do not stack) before the capture. It only happens
+   when the harness is already taking evidence on a dialog it is about
+   to answer, and a picture missing the words is not evidence.
+3. **A moved window has not repainted yet.** A capture taken immediately
+   after `MoveWindow` caught the desktop; raise it (`BringWindowToTop` +
+   `SetForegroundWindow`) and wait 1.2s and it is perfectly readable.
+
+### Two bugs the stub test found, both real
+
+- `return ,$words` in the new word filter. The comma wraps an EMPTY
+  array in a one-element array, so a dialog with nothing to say came
+  back with Count 1 (its one "word" being an empty array), fell through
+  to the unknown loop, added nothing, and classified as the save-changes
+  prompt. Every wordless popup would have been reported as recognized.
+  Plain `return $words` plus `@()` at the call sites is right for none,
+  one and many.
+- The test's own `psString` could not carry AE's text: **PowerShell 5.1
+  accepts curly quotes as string DELIMITERS**, so pasting the real
+  sentence into a double-quoted literal ends the string mid-way and the
+  script does not parse. It now splices them in with `[char]0x201c` and
+  writes the temp .ps1 as UTF-8 with a BOM -- the old ASCII write masked
+  U+201C into a control character, and the test would have proved the
+  pattern matches garbage rather than what AE actually says.
+
+### Verified in the field
+
+Every path exercised against real AE 2026:
+
+- **Unrecognized dialog**: a deliberate `addComp("wedge")` (6 params
+  required) left AE's own error alert up. The harness read it in one
+  call -- "Unable to execute script at line 3. After Effects error:
+  Unable to call addComp because the call requires 6 parameters." --
+  saved a PNG showing the whole alert including the OK button, printed
+  `UNRECOGNIZED DIALOG answered before the launch`, answered it, and ran
+  391/391. Run twice: the first PNG was the one cut off at the screen
+  edge, which is how measurement (2) above was found.
+- **Recognized dialog**: the save prompt raised by posting WM_CLOSE to a
+  dirty AE. Named in the log, NO screenshot, NO marker, answered,
+  391/391.
+- **Clean runs**: the harness twice back-to-back as the spec requires.
+  391/391, exit 0, both times, with none of the new output on screen.
+- Stubbed suite: 44 files green, `tests/test-selftest-runner.js` grown
+  by 20 checks over the harvests captured from real AE.
+
+**Harness: 391/391 PASSED, twice.** No suite steps changed (this is
+harness machinery, not panel behaviour).
+
+### One earlier note corrected, and what is still open
+
+The organize_project entry above recorded that `PostMessage(WM_CLOSE)`
+does NOT answer AE's script-error alerts. On AE 2026 it does: the posted
+WM_CLOSE cleared the addComp alert on both runs of this pass ("answered
+1 dialog(s)" then "cleared", suite green immediately after). That note
+held for whatever alert the earlier pass was looking at; it is not a
+general rule, so a dialog that does not clear is still expected and
+still reported.
+
+- All three of the remote session's specs are now built (0.10.1 workflow
+  seeding, 0.10.2 organize_project preview, this one).
+- Next on the feature track: item 5.7 (audio to keyframes); 5.8 is
+  unblocked and cheap.
+- `duplicate_comp` takes a name without uniquing; no read-only
+  `get_bounds`. Both still unclaimed.
+- `release-notes.txt` still reads "0.10.0" while the feed ships 0.10.2.
+  Third pass to flag it; it belongs to the remote session's release cut.
+- Unattended runs write evidence PNGs to `logs\dialogs\`. Nothing prunes
+  them. They are ~100KB each and only written when a dialog is not the
+  save prompt, so this is a note rather than a problem.
+
+## 2026-08-28 (local, eighteenth pass) - item 5.7: audio to keyframes
+
+Harness green on arrival (391/391), so the pass took the next unfinished
+feature-track item. Probe, build and lock-in all landed; no version bump,
+because a NEW tool rides the remote session's next MINOR.
+
+### The sketch was half wrong, and the half that was wrong is the design
+
+The workplan asked for `audio_to_keyframes {layer}`. AE's command has no
+notion of a layer at all. Measured, in this order:
+
+- `app.findMenuCommandId("Convert Audio to Keyframes")` = **4218**.
+  "Convert Audio To Keyframes" (capital To) = 0. The same string with an
+  ellipsis = 0. The spelling is not a style choice.
+- It converts **the ACTIVE comp**. With another comp in the viewer it ran,
+  returned, and created nothing anywhere.
+- It **ignores the selection**. With only a silent solid selected it still
+  measured the whole comp mix - same peak, 56.53, as with nothing
+  selected.
+- A **muted layer contributes an all-zero curve**. That is the whole basis
+  of per-layer isolation, and it was measured both ways round on two
+  copies of one beat offset by 2s: mute B and the second half of the curve
+  is flat, mute A and the first half is.
+- It is **bounded by the work area**. Work area 0.5..1.5 on a 4s/24fps
+  comp gave 25 keys from 0.5 to 1.5, not 97 from 0 to 4.
+- It **never uniques the null's name**. Two runs, two layers both called
+  "Audio Amplitude" - and then every name-based reference after that
+  (link_property, any expression) silently takes whichever is higher.
+- With **no audio-capable layer it does nothing at all**: no layer, no
+  exception, no dialog. Silence is the only signal it gives.
+- The created layer: a null, `nullLayer` true, 100x100, spanning the COMP
+  (not the audio), three `ADBE Slider Control` effects in the order Left
+  Channel / Right Channel / Both Channels, each holding a "Slider"
+  (`ADBE Slider Control-0001`) with LINEAR keys, one per frame. It also
+  leaves a footage item named "Audio Amplitude" in the project, the way
+  every AE null does.
+- `layer.id` is a plain unique number and object identity holds, so
+  "which layer is new" is answerable without guessing at names.
+
+So the shipped tool is `audio_to_keyframes {comp?, layer?, name?, range?}`
+and is almost entirely the difference between that list and what a user
+means:
+
+- the target comp is opened in the viewer before the call;
+- `layer` isolates by muting every OTHER audible layer and un-muting it
+  again, in a restore block that runs whatever happened, so a throw cannot
+  hand the user a comp with a layer left muted (a stub test forces that
+  throw);
+- `range` defaults to `"comp"`: the work area is widened to the whole
+  comp, restored exactly, and the widening is REPORTED. `range:
+  "workArea"` keeps AE's own behaviour and says so. **Assumption written
+  down:** AE's native behaviour is work-area-bound, and I made the tool's
+  default differ from it. A user asking for beat-driven animation and
+  silently getting one second of keys is the worse surprise, and the
+  result names the range either way;
+- the null is renamed to the first free "Audio Amplitude N" and the
+  rename is reported;
+- refusals come BEFORE the call, because after it there is nothing to
+  read: no audio-capable layer (lists the layers that ARE there and names
+  `import_file`), every audio layer muted (names them), a named layer
+  with no audio (lists the ones with audio), and a bad `range` - which is
+  checked FIRST, ahead of the comp's state, so an argument typo is not
+  reported as "this comp has no audio";
+- `audioActive` is deliberately NOT used for any of that. It also asks
+  whether the layer is audible at the CURRENT time, so a music layer
+  starting at 2s reads false with the playhead at 0 and the tool would
+  refuse a perfectly good comp. `audioEnabled` is the mute switch and is
+  time-independent.
+
+### The suite needed audio and got it with no file on disk
+
+`import_file` is still uncovered because it needs a file, and the audio
+steps looked like they had the same blocker. They do not: applying **Tone
+(`ADBE Aud Tone`) to a plain solid flips `layer.hasAudio` to true** and
+the converter measures it - 73 keys, peak 34.33 on a 3s/24fps comp, two
+tone layers 36.02. That gap is what the lock-in steps read: mix, isolate
+(must be BELOW the two-layer mix), mix again (must be back UP to it),
+which is the only way the suite can prove the un-muting really happened.
+Thirteen steps in a comp of their own, including the three refusals and a
+`link_property` step that closes the loop the tool's own `next` promises.
+
+### Two bugs found before AE ever saw them, both real
+
+- The uniquing counted the layer AE had just made. `AELL_uniqueLayerName`
+  walks the comp, and the new null is already IN the comp when it runs, so
+  EVERY conversion would have come back "Audio Amplitude 2" with a
+  spurious `nameTaken` note. Fixed with `AELL_uniqueLayerNameExcept`,
+  which holds one layer out of the taken set.
+- `AELL_layerNamesOf` already returns a joined STRING; four call sites had
+  `.join(", ")` on it. That is a "join is not a function" in ES3, inside
+  the refusal path - the grounded errors would all have thrown.
+
+The canned host in `tests/test-self-test.js` was unfaithful in a way that
+mattered too: its `link_property` returned no `expression`, though the
+real tool always does. A suite step asserting on it passed against AE and
+failed against the stub. The canned host now writes the expression.
+
+### One dialog, and it was mine
+
+The first harness run after the change came back exit 4 on "After Effects
+warning: Undo group mismatch, will attempt to fix." Two clean facts
+separate the tool from the blame: replaying the ENTIRE thirteen-step
+group through AELL_call / AELL_callBatch in a `-r` script produced no
+warning at all, and the harness has been green 404/404 twice back-to-back
+since. What differed was the earlier PROBE: it wrapped its AELL_call
+rounds in its own `app.beginUndoGroup(...)` / `endUndoGroup()`, so the
+menu command ran two undo levels deep. **Probe rule for the next pass:
+never wrap AELL_call in your own undo group** - the tool opens one
+already, and a menu command inside the nested pair leaves the count wrong
+for whoever calls `endUndoGroup` next, which was the harness. Same family
+as the render_comp warning already in the log, and the same delayed,
+misleading signature.
+
+`audio_to_keyframes` IS registered in `AELL_MUTATING` (one Ctrl+Z undoes
+a round) and in `AELL_PER_LAYER_LIST` (for_each_layer may drive it: one
+amplitude null per audio layer is a coherent ask, and a silent layer just
+earns the grounded refusal). It is NOT exempted the way `render_comp` is;
+measured across six calls in one group with no warning.
+
+**Harness: 404/404 PASSED, twice** (391 -> 404). Stubbed suite: 45 files
+green, including the new `tests/test-audio-keyframes.js` (66 checks).
+
+### Still open
+
+- Next on the feature track: 5.8 (frame round-trip), which also unblocks
+  `import_file`'s suite coverage and H3 r2v.
+- No suite step covers the work-area path: nothing in the tool set can
+  SET a comp's work area, so `range` is proven by the stub only. A
+  `set_comp_setting` that reached workAreaStart/workAreaDuration would
+  close it, and is a small pass of its own.
+- `duplicate_comp` takes a name without uniquing; no read-only
+  `get_bounds`. Both still unclaimed. The uniquing bug above is the same
+  class as the first of those.
+- `release-notes.txt` still reads "0.10.0" while the feed ships 0.10.2.
+  Fourth pass to flag it; it belongs to the remote session's release cut.
+- Probe scratch files were written under `logs/` (gitignored) and AE was
+  left on an empty untitled project.

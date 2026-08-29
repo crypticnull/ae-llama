@@ -966,7 +966,16 @@
     try { global.Comfy.reapOrphan(); } catch (eC) {}
 
     // Persistent data folders (survive extension updates) + seeding.
-    try { global.Setup.ensureDataDirs(); } catch (e) {}
+    // A refresh means an unedited-but-stale bundled template was brought
+    // up to date; say so in the console rather than changing a user's
+    // workflow file in total silence.
+    try {
+      var seedSummary = global.Setup.ensureDataDirs();
+      if (seedSummary && seedSummary.refreshed && seedSummary.refreshed.length) {
+        console.log("AE Llama: updated stale bundled workflow file(s): " +
+                    seedSummary.refreshed.join(", "));
+      }
+    } catch (e) {}
 
     els.versionLine.textContent = "AE Llama " + displayVersion() +
       " — data folder: " + global.Settings.dataRoot();

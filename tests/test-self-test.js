@@ -92,6 +92,8 @@ function capLayers(compName, all, args) {
 let createCount = 0;
 const createdComps = [];
 const folders = {};        // path -> true (the create_folder rig)
+const folderIds = {};      // id -> path; real AE resolves an item by id
+let nextFolderId = 5000;   // clear of the solid-source ids above
 // The render-queue rig (WORKPLAN 5.5). Measured in AE 2026: a render
 // takes the WHOLE queue, an existing output file raises a modal, and the
 // output module forces its own extension onto whatever path it is given.
@@ -335,6 +337,24 @@ const cvKeyList = (layer, prop) => {
   return cvKeys[k];
 };
 const inCvComp = (a) => !!(a && /Cover/.test(a.comp || ""));
+
+// ---- the audio rig, modelled from AE 2026 rather than from the tool.
+// A solid is silent until Tone is applied; then the converter hears it.
+// One tone peaks at 34.33 on this rig, two at 36.02 — both measured, and
+// the gap is what the suite's isolate/un-mute steps read.
+const inAuComp = (a) => !!(a && /Self-Test Audio/.test(a.comp || ""));
+let auLayers = [];         // {name, audio: bool}
+let auNulls = [];          // the nulls the converter has left behind
+function resetAuRig() { auLayers = []; auNulls = []; }
+const auFind = (n) => auLayers.filter(l => l.name === String(n))[0];
+const auPeak = (n) => Math.round((34.33 + 1.69 * (n - 1)) * 100) / 100;
+const auUnique = (base) => {
+  const taken = auLayers.map(l => l.name).concat(auNulls);
+  if (taken.indexOf(base) === -1) return base;
+  let k = 2;
+  while (taken.indexOf(base + " " + k) !== -1) k++;
+  return base + " " + k;
+};
 // Two effects of one class on one layer: AE names the second "<name> 2",
 // and both hand out a param called "Blurriness" at the same depth under
 // the same root. Equal standing is never guessed between.
@@ -854,7 +874,10 @@ function cannedOk(tool, args) {
         for (const k of kids) {
           const p = k + "/" + nm;
           if (folders[p]) had.push(p);
-          else { folders[p] = true; created.push(p); }
+          else {
+            const kid = ++nextFolderId;
+            folders[p] = kid; folderIds[kid] = p; created.push(p);
+          }
         }
         const out = { name: nm, parent: base, subfolders: kids.length,
                       createdCount: created.length, created };
@@ -872,11 +895,13 @@ function cannedOk(tool, args) {
       }
       const path = parent ? parent + "/" + nm : nm;
       if (folders[path]) {
-        return { name: nm, id: 900, path,
+        return { name: nm, id: folders[path], path,
                  note: "Folder already existed in this parent" };
       }
-      folders[path] = true;
-      return { name: nm, id: 900 + Object.keys(folders).length, path };
+      const fid = ++nextFolderId;
+      folders[path] = fid;
+      folderIds[fid] = path;
+      return { name: nm, id: fid, path };
     }
     case "delete_item": {
       // Faithful on the point the cleanup measures: deleting works by
@@ -893,14 +918,19 @@ function cannedOk(tool, args) {
           return { deleted: nm };
         }
       }
-      // A folder delete cascades to everything under its path.
-      if (folders[String(key)]) {
+      // A folder delete cascades to everything under its path, and works
+      // by PATH or by the id create_folder handed back (real AE resolves
+      // either -- a stub that only knew names would let a cleanup step
+      // "pass" while the suite deleted a same-named folder of the user's).
+      const fpath = folderIds[key] || (folders[String(key)] ? String(key) : null);
+      if (fpath) {
         for (const p of Object.keys(folders)) {
-          if (p === String(key) || p.indexOf(String(key) + "/") === 0) {
+          if (p === fpath || p.indexOf(fpath + "/") === 0) {
+            delete folderIds[folders[p]];
             delete folders[p];
           }
         }
-        return { deleted: key };
+        return { deleted: fpath };
       }
       return { __err: "Project item not found: " + key };
     }
@@ -973,6 +1003,66 @@ function cannedOk(tool, args) {
       }
       return out;
     }
+    case "organize_project": {
+      // Modelled to PREVIEW, because a canned host that answered "ok"
+      // would let the preview steps pass while the real tool rearranged
+      // the user's project panel. It also models the rule the shipped
+      // tool got wrong until 2026-08-28: a destination folder is looked
+      // for at the ROOT, and a same-named folder nested somewhere else
+      // is reported, never filed into.
+      const DESTS = ["Comps", "Solids", "Audio", "Images", "Footage"];
+      const dryRun = !(args && args.dryRun === false);
+      const looseComps = createdComps.filter(
+        (nm) => !(compProps[nm] && compProps[nm].folder));
+      const looseFootage = solidSources.filter((so) => !so.folder);
+      const moves = looseComps.map((nm) => nm + " -> Comps")
+        .concat(looseFootage.map((so) => so.name + " -> Solids"));
+      const byFolder = {};
+      if (looseComps.length) byFolder.Comps = looseComps.length;
+      if (looseFootage.length) byFolder.Solids = looseFootage.length;
+      const toCreate = DESTS.filter(
+        (d2) => byFolder[d2] && !folders[d2]);
+      const elsewhere = Object.keys(folders).filter(
+        (p2) => p2.indexOf("/") !== -1 &&
+                byFolder[p2.slice(p2.lastIndexOf("/") + 1)]);
+      const out = { dryRun, willMove: moves.length, byFolder,
+                    alreadyFiled: createdComps.length - looseComps.length,
+                    rootFolders: Object.keys(folders)
+                      .filter((p2) => p2.indexOf("/") === -1).length };
+      const CAP = 40;
+      out.moves = moves.slice(0, CAP);
+      if (moves.length > CAP) out.movesNotShown = moves.length - CAP;
+      if (toCreate.length) {
+        out.foldersToCreate = toCreate;
+        out.foldersNote = "These folders do not exist at the project root " +
+          "yet and would be created there.";
+      }
+      if (elsewhere.length) {
+        out.sameNameElsewhere = elsewhere;
+        out.sameNameNote = "A folder with that name already exists deeper " +
+          "in the project. It is NOT used, so the project would end up " +
+          "with two folders of that name.";
+      }
+      if (dryRun) {
+        out.note = moves.length === 0
+          ? "PREVIEW ONLY — nothing to do: no loose items at the " +
+            "project root."
+          : "PREVIEW ONLY — nothing was moved.";
+        return out;                              // and it moves NOTHING
+      }
+      for (const nm of looseComps) {
+        (compProps[nm] || (compProps[nm] = {})).folder = "Comps";
+      }
+      for (const so of looseFootage) so.folder = "Solids";
+      for (const d2 of toCreate) {
+        const fid = ++nextFolderId;
+        folders[d2] = fid; folderIds[fid] = d2;
+      }
+      out.moved = moves.length;
+      out.foldersCreated = toCreate;
+      out.note = moves.length + " item(s) filed in ONE undo group (Ctrl+Z).";
+      return out;
+    }
     case "get_project_info": {
       // A scratch project the size of the real one: a few comps drowning
       // in accumulated solid footage. Comps come first out of the cap.
@@ -981,6 +1071,16 @@ function cannedOk(tool, args) {
       // depend on.
       const items = createdComps.map((nm, i) => Object.assign(
         { name: nm, id: i + 1, type: "comp" }, compProps[nm] || {}));
+      // Folders are items too, and they are what organize_project's
+      // preview steps count: a listing without them would let a preview
+      // that quietly created "Comps" at the root pass unnoticed.
+      for (const p2 of Object.keys(folders)) {
+        const cut = p2.lastIndexOf("/");
+        const entry = { name: cut === -1 ? p2 : p2.slice(cut + 1),
+                        id: folders[p2], type: "folder", path: p2 };
+        if (cut !== -1) entry.folder = p2.slice(0, cut).split("/").pop();
+        items.push(entry);
+      }
       for (const so of solidSources) items.push(Object.assign({}, so));
       const limit = listLimit(args && args.limit);
       const total = items.length;
@@ -1359,11 +1459,23 @@ function cannedOk(tool, args) {
         markDriven(nm, "position", [320 + (i % 3) * 320, 180, 0]));
       return { sliders: ["Grid X Spacing", "Grid Y Spacing",
                          "Grid Columns"] };
-    case "link_property":
+    case "link_property": {
       // Same shape: the linked property now reads from the slider.
       markDriven(args && args.layer, args && args.property, 22.2);
-      return { layer: args && args.layer,
-               property: args && args.property };
+      const out = { layer: args && args.layer,
+                    property: args && args.property };
+      // The real tool WRITES the expression and reports it — a canned
+      // host that omitted it let a step assert on a field that is
+      // always there in AE and never here.
+      const cl = args && args.controlLayer, ce = args && args.controlEffect;
+      if (cl && ce) {
+        const sc = args && typeof args.scale === "number" ? args.scale : 1;
+        out.linkedTo = cl + " > " + ce;
+        out.expression = 'thisComp.layer("' + cl + '").effect("' + ce +
+                         '")(1)' + (sc !== 1 ? " * " + sc : "") + ";";
+      }
+      return out;
+    }
     case "get_property": {
       const SLg = shapeLayerOf(args && args.layer);
       if (SLg && /^contents\//i.test(String((args && args.property) || ""))) {
@@ -1900,8 +2012,23 @@ function cannedOk(tool, args) {
       if (inBatComp(args)) batSolids.push(args.name);
       if (inRbComp(args)) rbLayers.push(args.name);
       if (inPcComp(args)) pcLayers.push(args.name);
+      // A fresh solid is SILENT — hasAudio is false until Tone lands.
+      if (inAuComp(args)) auLayers.push({ name: args.name, audio: false });
       return { name: (args && args.name) || "ST Square" };
     case "apply_effect":
+      if (inAuComp(args)) {
+        if (String(args.effect) !== "Tone") {
+          return { __err: "Effect not available: " + args.effect };
+        }
+        const host = auFind(args.layer);
+        if (!host) return { __err: "Layer not found: " + args.layer };
+        host.audio = true;      // measured: layer.hasAudio flips to true
+        return { layer: args.layer, effect: "Tone",
+                 matchName: "ADBE Aud Tone",
+                 params: ["Waveform options", "Frequency 1", "Frequency 2",
+                          "Frequency 3", "Frequency 4", "Frequency 5",
+                          "Level", "Compositing Options"] };
+      }
       if (inCvComp(args)) {
         const have = cvFx[args.layer] || (cvFx[args.layer] = []);
         // AE's own duplicate-name rule: the second copy becomes "<name> 2".
@@ -2641,6 +2768,57 @@ function cannedOk(tool, args) {
     // measured hazards rather than the happy path: the whole-queue
     // render, the overwrite modal, and the output module forcing its own
     // extension onto the path it is handed.
+    // AE's converter is silent on failure and blind to the selection, so
+    // this models the TOOL's contract around it: refuse before calling,
+    // isolate by muting, unique the null's name, say what it measured.
+    case "audio_to_keyframes": {
+      const comp = String((args && args.comp) || "");
+      const range = String((args && args.range) || "comp");
+      if (range !== "comp" && range !== "workArea") {
+        return { __err: "'range' must be 'comp' (whole comp, the default) " +
+          "or 'workArea' (AE's own behaviour - work area only)." };
+      }
+      const audible = auLayers.filter(l => l.audio);
+      if (!auLayers.some(l => l.audio)) {
+        return { __err: "No layer in '" + comp + "' has audio, and AE's " +
+          "converter would silently do nothing. Layers here: " +
+          auLayers.map(l => l.name).concat(auNulls).join(", ") +
+          ". Import an audio or video file with import_file and add it to " +
+          "the comp first." };
+      }
+      let only = null;
+      if (args && args.layer) {
+        only = auFind(args.layer);
+        if (!only || !only.audio) {
+          return { __err: "'" + args.layer + "' has no audio track. Layers " +
+            "with audio in '" + comp + "': " +
+            audible.map(l => l.name).join(", ") +
+            ". Omit 'layer' to measure the whole comp mix." };
+        }
+      }
+      const heard = only ? 1 : audible.length;
+      const wanted = (args && args.name) ? String(args.name)
+                                         : "Audio Amplitude";
+      const name = auUnique(wanted);
+      auNulls.push(name);
+      const out = { layer: name, index: 1, controlLayer: name,
+        controlEffects: ["Left Channel", "Right Channel", "Both Channels"],
+        keyframes: 73, rangeStart: 0, rangeEnd: 3, peak: auPeak(heard),
+        measured: only ? only.name : "whole comp mix",
+        next: "Drive anything with link_property {layer: <target>, " +
+              "property: <prop>, controlLayer: '" + name + "', " +
+              "controlEffect: 'Both Channels', scale: <n>}." };
+      if (name !== wanted) {
+        out.nameTaken = "'" + wanted + "' was already a layer in this comp " +
+          "- this one is '" + name + "'. Use THIS name from here on.";
+      }
+      if (only && audible.length > 1) {
+        out.isolated = "AE's converter always reads the whole comp mix, so " +
+          audible.filter(l => l !== only).map(l => l.name).join(", ") +
+          " was muted for the conversion and un-muted again.";
+      }
+      return out;
+    }
     case "list_render_templates": {
       return { renderSettings: RQ_RS_TEMPLATES.slice(),
                outputModules: RQ_OM_TEMPLATES.slice(),
@@ -2849,7 +3027,7 @@ SelfTest.run({
     ordStack = [];
     maskKeys = {};
     batchLayers = 0; batchFx = {}; batchBlur = null;
-    batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetPresetRig(); resetRqRig();
+    batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetPresetRig(); resetRqRig(); resetAuRig();
     SelfTest.run({
       callHostTool(tool, args, cb) {
         if (tool === "grid_layout") {
@@ -2879,7 +3057,7 @@ SelfTest.run({
         ordStack = [];
         maskKeys = {};
         batchLayers = 0; batchFx = {}; batchBlur = null;
-        batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetPresetRig(); resetRqRig();
+        batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetPresetRig(); resetRqRig(); resetAuRig();
         SelfTest.run({
           callHostTool(tool, args, cb) {
             // Never refuse anything -- the old permissive host.
