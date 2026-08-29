@@ -829,7 +829,7 @@ const resetBoundsRig = () => {
 function bnAdd(name, kind, extra) {
   const L = { kind: kind, pos: [0, 0], anchor: [0, 0], scale: [100, 100],
               rot: 0, parent: null, startTime: 0, stretch: 100,
-              threeD: false, w: 100, h: 100, __name: name };
+              threeD: false, w: 100, h: 100, posKeys: [], __name: name };
   Object.assign(L, extra || {});
   bnLayers[name] = L;
   return L;
@@ -1006,22 +1006,73 @@ function bnCanned(tool, args) {
       else if (args.property === "rotation") L.rot = Number(v);
       return { layer: name, property: args.property, value: v };
     }
+    // Two DIFFERENT AE calls, and the tool shipped with them swapped
+    // (measured 2026-08-29): keepPosition (the default) is `.parent =`,
+    // which rewrites the child's transform -- current value AND every
+    // keyframe -- so nothing moves on screen; keepPosition:false is
+    // setParentWithJump, which touches nothing and lets the layer jump.
     case "set_layer_parent": {
       const L = bnLayers[name];
       if (!L) return undefined;
-      if (args.parent === null || typeof args.parent === "undefined") {
-        // Unparenting preserves the transform too: bake the comp-space
-        // position back down.
-        if (L.parent) L.pos = bnCompPoint(name, L.anchor);
-        L.parent = null;
-      } else {
-        // AE preserves the visual transform when a parent is picked, so
-        // the stored Position becomes PARENT-space.
+      const keep = args.keepPosition !== false;
+      const clearing = args.parent === null ||
+                       typeof args.parent === "undefined";
+      const nk = keep ? L.posKeys.length : 0;
+      if (keep) {
+        // Bake the comp-space point, relink, then read it back in the
+        // new parent's space -- the shift AE applies to every key too.
         const compPos = bnCompPoint(name, L.anchor);
-        L.parent = args.parent;
-        L.pos = bnUnXform(bnLayers[args.parent], compPos);
+        const before = L.pos;
+        L.parent = clearing ? null : args.parent;
+        L.pos = clearing ? compPos
+                         : bnUnXform(bnLayers[args.parent], compPos);
+        const dx = L.pos[0] - before[0], dy = L.pos[1] - before[1];
+        for (const k of L.posKeys) {
+          k.value = [k.value[0] + dx, k.value[1] + dy, 0];
+        }
+      } else {
+        L.parent = clearing ? null : args.parent;
       }
-      return { layer: name, parent: args.parent };
+      const out = { layer: name, parent: clearing ? "(none)" : args.parent,
+        parented: name, skipped: "", keepPosition: keep,
+        note: keep
+          ? (clearing
+              ? "Unparented with no visual jump: AE rewrote each layer's " +
+                "Position/Scale/Rotation back into comp space, so the " +
+                "numbers changed and the picture did not."
+              : "No visual jump: AE rewrote each layer's Position/Scale/" +
+                "Rotation into the parent's space, so those values now " +
+                "read differently from before. Read them back rather " +
+                "than assuming the old ones.")
+          : (clearing
+              ? "keepPosition:false -- values were left alone, so each " +
+                "layer JUMPED to wherever its raw transform puts it in " +
+                "comp space."
+              : "keepPosition:false -- values were left alone, so each " +
+                "layer JUMPED by the parent's transform.") };
+      if (nk > 0) {
+        out.keyframesRewritten = name + " (" + nk + ")";
+        out.keyframesNote = "AE rewrote all " + nk + " transform " +
+          "keyframe(s) on these layers, not just the current value; the " +
+          "old numbers are gone.";
+      }
+      return out;
+    }
+    case "set_keyframes": {
+      const L = bnLayers[name];
+      if (!L || !/position/i.test(String(args.property || ""))) {
+        return undefined;
+      }
+      L.posKeys = (args.keys || []).map(k => ({
+        time: k.time, value: [k.value[0], k.value[1], 0] }));
+      if (L.posKeys.length) L.pos = L.posKeys[0].value.slice(0, 2);
+      return { layer: name, property: args.property,
+               keysSet: L.posKeys.length };
+    }
+    case "delete_layer": {
+      if (!bnLayers[name]) return undefined;
+      delete bnLayers[name];
+      return { deleted: name };
     }
     case "set_layer_timing": {
       const L = bnLayers[name];
@@ -1042,6 +1093,16 @@ function bnCanned(tool, args) {
       if (/anchor point$/i.test(String(args.property || ""))) {
         return { layer: name, property: args.property,
                  value: [L.anchor[0], L.anchor[1], 0], numKeys: 0 };
+      }
+      if (/^position$/i.test(String(args.property || ""))) {
+        const out = { layer: name, property: args.property,
+                      value: [L.pos[0], L.pos[1], 0],
+                      numKeys: L.posKeys.length };
+        if (L.posKeys.length) {
+          out.keys = L.posKeys.map(k => ({ time: k.time,
+                                           value: k.value.slice() }));
+        }
+        return out;
       }
       return undefined;
     }

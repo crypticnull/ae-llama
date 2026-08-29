@@ -775,13 +775,27 @@
         },
         check: function (d) { return d.name === "ST Cam Kid" || d.name; } },
 
+      // Read the Position back rather than assuming it: parenting with
+      // the default keepPosition makes AE REWRITE it into the rig's
+      // space (measured 2026-08-29), so the number here is not the one
+      // add_camera was given. What the later step needs is whatever it
+      // became, so that scale_comp can be shown not to touch it.
       { name: "parent it",
-        tool: "set_layer_parent",
-        args: function (ctx) {
-          return { comp: ctx.camComp, layer: "ST Cam Kid",
-                   parent: "ST Cam Rig" };
+        batch: function (ctx) {
+          return [
+            { tool: "set_layer_parent", args: { comp: ctx.camComp,
+                layer: "ST Cam Kid", parent: "ST Cam Rig" } },
+            { tool: "get_property", args: { comp: ctx.camComp,
+                layer: "ST Cam Kid", property: "Position" } }
+          ];
         },
-        check: function () { return true; } },
+        check: function (rows, ctx) {
+          if (!rows[0].ok) return rows[0].error;
+          if (!rows[1].ok) return rows[1].error;
+          ctx.camKidPos = rows[1].data.value || [];
+          return ctx.camKidPos.length >= 3 ||
+                 "position " + JSON.stringify(ctx.camKidPos);
+        } },
 
       // ---- lights in the same resize (WORKPLAN item 2 follow-up) ------
       // A light's pixel options live in Light Options, OUTSIDE the
@@ -831,13 +845,24 @@
         },
         check: function (d) { return d.name === "ST Lit Kid" || d.name; } },
 
+      // Same as the camera above: the link rewrites Position, so the
+      // "left to its parent" step compares against what it became.
       { name: "parent the light",
-        tool: "set_layer_parent",
-        args: function (ctx) {
-          return { comp: ctx.camComp, layer: "ST Lit Kid",
-                   parent: "ST Cam Rig" };
+        batch: function (ctx) {
+          return [
+            { tool: "set_layer_parent", args: { comp: ctx.camComp,
+                layer: "ST Lit Kid", parent: "ST Cam Rig" } },
+            { tool: "get_property", args: { comp: ctx.camComp,
+                layer: "ST Lit Kid", property: "Position" } }
+          ];
         },
-        check: function () { return true; } },
+        check: function (rows, ctx) {
+          if (!rows[0].ok) return rows[0].error;
+          if (!rows[1].ok) return rows[1].error;
+          ctx.litKidPos = rows[1].data.value || [];
+          return ctx.litKidPos.length >= 3 ||
+                 "position " + JSON.stringify(ctx.litKidPos);
+        } },
 
       // THE assertion that would have caught the camera regression: the
       // tool reported its own failure honestly in layersSkipped and
@@ -971,10 +996,15 @@
           return { comp: ctx.camComp, layer: "ST Lit Kid",
                    property: "Position" };
         },
-        check: function (d) {
-          var v = d.value || [];
-          return (Math.abs(v[0] - 400) < 0.6 && Math.abs(v[1] - 300) < 0.6) ||
-                 "position " + JSON.stringify(v) + " (double-scaled?)";
+        check: function (d, ctx) {
+          var v = d.value || [], was = ctx.litKidPos || [];
+          for (var i = 0; i < 3; i++) {
+            if (Math.abs((v[i] || 0) - (was[i] || 0)) > 0.6) {
+              return "position " + JSON.stringify(v) + ", was " +
+                     JSON.stringify(was) + " (double-scaled?)";
+            }
+          }
+          return true;
         } },
 
       { name: "the ambient light's hidden Position was not touched",
@@ -1102,10 +1132,15 @@
           return { comp: ctx.camComp, layer: "ST Cam Kid",
                    property: "Position" };
         },
-        check: function (d) {
-          var v = d.value || [];
-          return (Math.abs(v[0] - 400) < 0.6 && Math.abs(v[2] + 800) < 0.6) ||
-                 "position " + JSON.stringify(v) + " (double-transformed)";
+        check: function (d, ctx) {
+          var v = d.value || [], was = ctx.camKidPos || [];
+          for (var i = 0; i < 3; i++) {
+            if (Math.abs((v[i] || 0) - (was[i] || 0)) > 0.6) {
+              return "position " + JSON.stringify(v) + ", was " +
+                     JSON.stringify(was) + " (double-transformed)";
+            }
+          }
+          return true;
         } },
 
       // ---- center_anchor_point on a moving rig (WORKPLAN item 2) -------
@@ -6616,13 +6651,13 @@
         },
         check: function () { return true; } },
 
-      // NB: this reads the box AFTER the link rather than asserting it is
-      // unmoved. Measured here in real AE 2026: set_layer_parent with its
-      // default keepPosition makes the layer JUMP by the parent's
-      // position (it calls setParentWithJump, the opposite of the note it
-      // returns). That is a set_layer_parent bug and has its own pass —
-      // what these two steps prove is that get_bounds follows the chain.
-      { name: "parenting: the box is measured through the chain",
+      // The step that caught set_layer_parent's inverted keepPosition:
+      // the solid sits at 500,400 with a [0,0] anchor and is 200x100, so
+      // its box centre is 600,450 and the LINK ALONE must not move it.
+      // Before the fix it jumped to 900,650 — by the null's position —
+      // while the tool still reported "Visual positions preserved".
+      // Doubles as proof that get_bounds follows the parent chain.
+      { name: "parenting: the link does not move the box",
         tool: "get_bounds",
         args: function (ctx) {
           return { comp: ctx.bnComp, layer: "ST BN Solid" };
@@ -6632,6 +6667,11 @@
           if (d.comp.width !== 200 || d.comp.height !== 100) {
             return "a parented, untransformed layer changed size: " +
                    d.comp.width + "x" + d.comp.height;
+          }
+          if (Math.abs(d.comp.centerX - 600) > 0.01 ||
+              Math.abs(d.comp.centerY - 450) > 0.01) {
+            return "the link moved the layer: centre " + d.comp.centerX +
+                   "," + d.comp.centerY + ", expected 600,450";
           }
           return d.inFrame === "fully" ||
                  "inFrame " + d.inFrame + " at " + JSON.stringify(ctx.bnCentre);
@@ -6682,6 +6722,168 @@
             if (!rows[i].ok) return "row " + (i + 1) + ": " + rows[i].error;
           }
           return true;
+        } },
+
+      // ---- set_layer_parent's two halves, measured not assumed --------
+      // AE's two calls do the OPPOSITE of what their names suggest, and
+      // this tool had them swapped from the day it shipped: `.parent =`
+      // is the pick-whip (AE rewrites the transform, nothing moves) and
+      // setParentWithJump keeps the numbers and moves the layer. The
+      // steps below assert on WHERE THE LAYER ENDS UP, so they cannot be
+      // satisfied by a tool that merely reports the right thing.
+      // ST BN Null sits at 300,200 with no rotation by now.
+      { name: "parent rig: a 100x100 solid parked at 500,400",
+        batch: function (ctx) {
+          return [
+            { tool: "add_solid", args: { comp: ctx.bnComp,
+                name: "ST PR Kid", color: [0, 0.6, 0.9],
+                width: 100, height: 100 } },
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST PR Kid", property: "anchorPoint",
+                value: [0, 0] } },
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST PR Kid", property: "position",
+                value: [500, 400] } },
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST PR Kid" } }
+          ];
+        },
+        check: function (rows, ctx) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + (i + 1) + ": " + rows[i].error;
+          }
+          var d = rows[3].data;
+          ctx.prCentre = [d.comp.centerX, d.comp.centerY];
+          return (Math.abs(d.comp.centerX - 550) < 0.01 &&
+                  Math.abs(d.comp.centerY - 450) < 0.01) ||
+                 "centre " + d.comp.centerX + "," + d.comp.centerY +
+                 ", expected 550,450";
+        } },
+
+      { name: "the default link moves nothing and rewrites the numbers",
+        batch: function (ctx) {
+          return [
+            { tool: "set_layer_parent", args: { comp: ctx.bnComp,
+                layer: "ST PR Kid", parent: "ST BN Null" } },
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST PR Kid" } },
+            { tool: "get_property", args: { comp: ctx.bnComp,
+                layer: "ST PR Kid", property: "position" } }
+          ];
+        },
+        check: function (rows, ctx) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + (i + 1) + ": " + rows[i].error;
+          }
+          if (rows[0].data.keepPosition !== true) {
+            return "keepPosition reported " +
+                   JSON.stringify(rows[0].data.keepPosition);
+          }
+          var d = rows[1].data;
+          if (Math.abs(d.comp.centerX - ctx.prCentre[0]) > 0.01 ||
+              Math.abs(d.comp.centerY - ctx.prCentre[1]) > 0.01) {
+            return "the layer MOVED: " + d.comp.centerX + "," +
+                   d.comp.centerY + ", expected " +
+                   ctx.prCentre.join(",") + " (inverted keepPosition)";
+          }
+          // The other half: AE paid for that by rewriting Position into
+          // the parent's space, 500,400 -> 200,200. A tool that parented
+          // without compensating would leave 500,400 here.
+          var v = rows[2].data.value;
+          if (Math.abs(v[0] - 200) > 0.01 || Math.abs(v[1] - 200) > 0.01) {
+            return "Position reads " + v.join(",") + ", expected 200,200";
+          }
+          return /rewrote/.test(rows[0].data.note || "") ||
+                 "the note does not mention the rewrite: " +
+                 rows[0].data.note;
+        } },
+
+      { name: "keepPosition:false jumps by exactly the parent's position",
+        batch: function (ctx) {
+          return [
+            { tool: "set_layer_parent", args: { comp: ctx.bnComp,
+                layer: "ST PR Kid", parent: null } },
+            { tool: "set_layer_parent", args: { comp: ctx.bnComp,
+                layer: "ST PR Kid", parent: "ST BN Null",
+                keepPosition: false } },
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST PR Kid" } },
+            { tool: "get_property", args: { comp: ctx.bnComp,
+                layer: "ST PR Kid", property: "position" } }
+          ];
+        },
+        check: function (rows, ctx) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + (i + 1) + ": " + rows[i].error;
+          }
+          var v = rows[3].data.value;
+          if (Math.abs(v[0] - 500) > 0.01 || Math.abs(v[1] - 400) > 0.01) {
+            return "keepPosition:false changed Position to " + v.join(",");
+          }
+          var d = rows[2].data;
+          var wantX = ctx.prCentre[0] + 300, wantY = ctx.prCentre[1] + 200;
+          if (Math.abs(d.comp.centerX - wantX) > 0.01 ||
+              Math.abs(d.comp.centerY - wantY) > 0.01) {
+            return "centre " + d.comp.centerX + "," + d.comp.centerY +
+                   ", expected " + wantX + "," + wantY;
+          }
+          return /JUMPED/.test(rows[1].data.note || "") ||
+                 "the note does not admit the jump: " + rows[1].data.note;
+        } },
+
+      // The silence worth breaking: keepPosition rewrites EVERY key, not
+      // just the current value, so a model holding the old numbers is
+      // holding numbers AE has thrown away.
+      { name: "a keyframed layer has all its keys rewritten, and is told",
+        batch: function (ctx) {
+          return [
+            { tool: "add_solid", args: { comp: ctx.bnComp,
+                name: "ST PR Keyed", color: [0.9, 0.4, 0],
+                width: 100, height: 100 } },
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST PR Keyed", property: "anchorPoint",
+                value: [0, 0] } },
+            { tool: "set_keyframes", args: { comp: ctx.bnComp,
+                layer: "ST PR Keyed", property: "Position",
+                keys: [{ time: 0, value: [500, 400] },
+                       { time: 2, value: [700, 400] }] } },
+            { tool: "set_layer_parent", args: { comp: ctx.bnComp,
+                layer: "ST PR Keyed", parent: "ST BN Null" } },
+            { tool: "get_property", args: { comp: ctx.bnComp,
+                layer: "ST PR Keyed", property: "position" } }
+          ];
+        },
+        check: function (rows) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + (i + 1) + ": " + rows[i].error;
+          }
+          var keys = rows[4].data.keys || [];
+          if (keys.length !== 2) return "keys: " + keys.length;
+          if (Math.abs(keys[0].value[0] - 200) > 0.01 ||
+              Math.abs(keys[1].value[0] - 400) > 0.01) {
+            return "keys read " + keys[0].value.join(",") + " and " +
+                   keys[1].value.join(",") + ", expected 200,200 and 400,200";
+          }
+          var rep = rows[3].data.keyframesRewritten || "";
+          if (rep.indexOf("ST PR Keyed") === -1) {
+            return "keyframesRewritten does not name the layer: " + rep;
+          }
+          return /old numbers are gone/.test(
+                   rows[3].data.keyframesNote || "") ||
+                 "no keyframesNote: " + rows[3].data.keyframesNote;
+        } },
+
+      { name: "parent rig: clean up",
+        batch: function (ctx) {
+          return [
+            { tool: "delete_layer", args: { comp: ctx.bnComp,
+                layer: "ST PR Kid" } },
+            { tool: "delete_layer", args: { comp: ctx.bnComp,
+                layer: "ST PR Keyed" } }
+          ];
+        },
+        check: function (rows) {
+          return (rows[0].ok && rows[1].ok) || "cleanup failed";
         } },
 
       // add_text_layer takes no 'name': AE names a text layer after its

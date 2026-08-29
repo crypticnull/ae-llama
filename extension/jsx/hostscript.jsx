@@ -6784,6 +6784,47 @@ AELL_TOOLS.set_layer_3d = function (args) {
   return AELL_okay(out);
 };
 
+/* MEASURED in AE 2026 (26.3x87) -- the two ways to set a parent do the
+ * OPPOSITE of what the names suggest, and this tool had them the wrong
+ * way round from the day it shipped:
+ *
+ *  - `L.parent = p` is the pick-whip. AE REWRITES the child's transform
+ *    so nothing moves on screen: a child at [400,300] under a parent
+ *    whose layer origin sits at [50,50] reads back [350,250]. Scale and
+ *    Rotation are compensated too (a 200%/45deg parent left the child
+ *    50%/-45), Z included, and EVERY keyframe is rewritten, not just the
+ *    current value.
+ *  - `L.setParentWithJump(p)` leaves every value alone, so the layer
+ *    JUMPS by the parent's transform.
+ *
+ * Unparenting obeys the same rule: `.parent = null` restores comp-space
+ * values, `setParentWithJump(null)` leaves the child where the parent
+ * had been putting it.
+ *
+ * So keepPosition (the default) is `.parent =`, NOT setParentWithJump.
+ * The old code chose setParentWithJump for keepPosition and then
+ * reported "Visual positions preserved" over the top of the jump. */
+
+/* How many keyframes AE is about to rewrite on this layer. Only the
+ * properties parenting compensates are counted; a layer with none gets
+ * no note. Failures here are never fatal -- this is reporting. */
+function AELL_parentKeyCount(layer) {
+  var names = ["ADBE Position", "ADBE Scale", "ADBE Rotate Z",
+               "ADBE Rotate X", "ADBE Rotate Y", "ADBE Orientation"];
+  var n = 0, i, p;
+  try {
+    var grp = layer.property("ADBE Transform Group");
+    if (!grp) return 0;
+    for (i = 0; i < names.length; i++) {
+      try {
+        p = grp.property(names[i]);
+        if (p && p.numKeys) n += p.numKeys;
+      } catch (eP) {}
+    }
+  } catch (eG) { return 0; }
+  return n;
+}
+
 AELL_TOOLS.set_layer_parent = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var targets = [];
@@ -6807,8 +6848,8 @@ AELL_TOOLS.set_layer_parent = function (args) {
                  args.parent === "" ||
                  String(args.parent).toLowerCase() === "none";
   var parent = clearing ? null : AELL_resolveLayer(comp, args.parent);
-  var jump = args.keepPosition !== false;   // default: no visual jump
-  var done = [], skipped = [];
+  var keep = args.keepPosition !== false;   // default: no visual jump
+  var done = [], skipped = [], rekeyed = [], keysTotal = 0;
   for (i = 0; i < targets.length; i++) {
     var L = targets[i];
     if (parent && L === parent) {
@@ -6816,20 +6857,51 @@ AELL_TOOLS.set_layer_parent = function (args) {
       continue;
     }
     try {
-      if (jump && typeof L.setParentWithJump === "function") {
-        L.setParentWithJump(parent);
+      var nk = keep ? AELL_parentKeyCount(L) : 0;
+      if (keep) {
+        L.parent = parent;              // AE compensates; nothing moves
+      } else if (typeof L.setParentWithJump === "function") {
+        L.setParentWithJump(parent);    // values kept; the layer jumps
       } else {
-        L.parent = parent;
+        skipped.push(L.name + " (this After Effects build has no " +
+                     "setParentWithJump, so keepPosition:false cannot " +
+                     "be honoured -- omit it to keep the layer still)");
+        continue;
       }
       done.push(L.name);
+      if (nk > 0) {
+        rekeyed.push(L.name + " (" + nk + ")");
+        keysTotal += nk;
+      }
     } catch (e) {
       skipped.push(L.name + " (" + (e.message || e) + ")");
     }
   }
-  return AELL_okay({ parent: parent ? parent.name : "(none)",
+  var out = { parent: parent ? parent.name : "(none)",
     parented: done.join(", ") || "(none)",
     skipped: skipped.join("; "),
-    note: jump ? "Visual positions preserved" : "" });
+    keepPosition: keep,
+    note: keep
+      ? (clearing
+          ? "Unparented with no visual jump: AE rewrote each layer's " +
+            "Position/Scale/Rotation back into comp space, so the " +
+            "numbers changed and the picture did not."
+          : "No visual jump: AE rewrote each layer's Position/Scale/" +
+            "Rotation into the parent's space, so those values now read " +
+            "differently from before. Read them back rather than " +
+            "assuming the old ones.")
+      : (clearing
+          ? "keepPosition:false -- values were left alone, so each layer " +
+            "JUMPED to wherever its raw transform puts it in comp space."
+          : "keepPosition:false -- values were left alone, so each layer " +
+            "JUMPED by the parent's transform.") };
+  if (rekeyed.length) {
+    out.keyframesRewritten = rekeyed.join("; ");
+    out.keyframesNote = "AE rewrote all " + keysTotal + " transform " +
+      "keyframe(s) on these layers, not just the current value; the old " +
+      "numbers are gone.";
+  }
+  return AELL_okay(out);
 };
 
 /* ---------------------------------------------------- render queue

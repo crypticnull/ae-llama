@@ -438,8 +438,13 @@
       args: "{comp?: string, layer: name|index, enabled: bool}" },
     { name: "set_layer_parent", mutating: true,
       desc: "Parent layers to another layer (omit/null parent to " +
-            "unparent). Visual positions are preserved by default. Omit " +
-            "layer/layers to use the selection.",
+            "unparent). Visual positions are preserved by default, but " +
+            "AE pays for that by REWRITING the child's Position/Scale/" +
+            "Rotation (every keyframe, not just the current value) into " +
+            "the parent's space — so read those values back rather " +
+            "than reusing the ones you had. keepPosition:false keeps the " +
+            "numbers and lets the layer jump. Omit layer/layers to use " +
+            "the selection.",
       args: "{comp?: string, layer?: name|index, layers?: [name|index], parent?: name|index|null, keepPosition?: bool (default true)}" },
     { name: "list_properties", mutating: false,
       desc: "DISCOVER a layer's real property tree — names, paths, types, " +

@@ -5742,3 +5742,97 @@ measure the link's result instead of assuming it, and say so in a comment.
   duplicate_comp pass).
 - Probe scratch under `logs/` (gitignored). AE left on the harness's own
   project, dirty, with no dialog open.
+
+## 2026-08-29 (local) - set_layer_parent had AE's two calls swapped
+
+Harness green on arrival (477/477), so the pass took the item the
+previous entry filed as "take this first": `set_layer_parent`'s inverted
+`keepPosition`, spotted when a get_bounds step measured a link that was
+supposed to move nothing and found the layer 300px away.
+
+### What real AE does (probe `logs/probe-parent.txt`, AE 2026 26.3x87)
+
+The two ways to set a parent do the OPPOSITE of what the names suggest,
+and the tool picked the wrong one for its own default from the day it
+shipped:
+
+- **`L.parent = p` is the pick-whip.** AE REWRITES the child's transform
+  so nothing moves on screen: a child at [400,300] under a parent whose
+  layer origin sits at [50,50] reads back [350,250]. Not just Position -
+  a 200%/45deg parent left the child at 50%/-45. Z included.
+- **`L.setParentWithJump(p)` leaves every value alone**, so the layer
+  JUMPS by the parent's transform.
+- **Unparenting obeys the same rule.** `.parent = null` restores
+  comp-space values; `setParentWithJump(null)` leaves the child sitting
+  wherever the parent had been putting it. So the bug was not confined to
+  linking - "unparent this without moving it" moved it too.
+- **`.parent =` rewrites EVERY KEYFRAME, not just the current value.** A
+  child with Position keys at [400,300] and [600,300] came back with
+  [350,250] and [550,250]. Nothing told the model its numbers were gone.
+- `setParentWithJump` exists on camera, light, text and shape layers, so
+  the old `typeof` guard never actually fell through on this build.
+
+### What the tool does now
+
+The branches are swapped: `keepPosition` (the default) is `.parent =`,
+`keepPosition:false` is `setParentWithJump`. The result reports
+`keepPosition` and a note that names the CONSEQUENCE instead of the old
+blanket "Visual positions preserved" - the honest version says AE rewrote
+Position/Scale/Rotation into the parent's space and the old values should
+be read back, with a separate wording for unparenting and for the jump.
+`keyframesRewritten` names each layer whose keys AE just rewrote and how
+many, and `keyframesNote` says the old numbers are gone. If a build ever
+lacks `setParentWithJump`, `keepPosition:false` is now SKIPPED with the
+reason rather than silently doing the exact opposite of what was asked.
+
+### Verification
+
+- `tests/test-layer-parent.js`, new: 47 checks, opening with a STUB
+  FIDELITY block. The stub's `parent` setter does the real compensation
+  arithmetic (current value and every key) and `setParentWithJump` does
+  not, so the tests assert on WHERE THE LAYER ENDS UP - a tool that only
+  reported the right thing cannot pass.
+- `tests/test-property-access.js` actively asserted the BUG
+  ("multi-layer parenting uses setParentWithJump") against a stub whose
+  two calls were the same function. Both made faithful.
+- `tests/test-self-test.js`'s canned host modelled only the default path
+  and no keyframes; it now models both branches, the key rewrite,
+  `set_keyframes`/`delete_layer` in the bounds rig, and `get_property`
+  for Position.
+- Full stub sweep: 50 files, all green; capability doc regenerated.
+- **Harness: 477 -> 482/482 PASSED.** The bounds-rig step that filed this
+  bug went back to being the assertion it wanted to be (the link does not
+  move the box, centre 600,450), plus four new steps: the default link
+  leaves the box where it was AND Position reads 200,200 instead of
+  500,400; `keepPosition:false` jumps by exactly the parent's position and
+  says JUMPED; a keyframed layer has both keys rewritten and is told so.
+- Bumped 0.10.5 -> 0.10.6 (fix to shipped behaviour, verified in AE).
+
+### The two steps this moved the ground under
+
+As the previous entry predicted, the camera/light rig broke: "the
+parented camera's transform is left to its parent" and its light twin
+asserted LITERALS ([400,300,-800] / [400,300]) that were only right
+because the old code jumped. Their real claim is that `scale_comp` does
+not touch a parented layer's transform, so they now capture the Position
+right after the link and assert scale_comp left THAT unchanged. Stronger
+than the literal was, and it no longer encodes which parenting call was
+used. The other three parenting sites in the suite (grid rig, precompose
+rig, anchor rig) set their keyframes after the link or assert on names,
+so nothing there needed touching.
+
+### Still open
+
+- Next on the feature track: 5.9 (.mogrt export), still flagged as a
+  LAST-item-of-the-night job for dialog risk.
+- `comfy_generate` still calls `import_file` rather than 5.8's
+  `import_as_layer` - a small remote-session pass.
+- `release-notes.txt` still reads "0.10.0" while the feed ships 0.10.6 -
+  ninth pass to flag it; it belongs to the remote session's release cut.
+- Rollback's reach over PROJECT ITEMS is still unmeasured (filed by the
+  duplicate_comp pass).
+- Not measured here: whether `.parent =` compensation survives a child
+  that is 3D under a 2D parent, or a parent with a keyframed transform.
+  The probe covered 3D-under-3D only.
+- Probe scratch under `logs/` (gitignored). AE left on the harness's own
+  project, dirty, with no dialog open.

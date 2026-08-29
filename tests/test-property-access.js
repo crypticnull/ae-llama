@@ -126,7 +126,9 @@ function Layer(name, comp, kind) {
   this.comp = comp;
   this.kind = kind || "solid";
   this.selected = false;
-  this.parent = null;
+  this._parentRef = null;
+  this._compensated = false;
+  this._jumped = false;
   this.inPoint = 0;
   this._root = new PGroup("(layer)", "(layer)");
   const t = new PGroup("Transform", "ADBE Transform Group");
@@ -265,8 +267,22 @@ Object.defineProperty(Layer.prototype, "threeDLayer", {
 Object.defineProperty(Layer.prototype, "index", {
   get() { return this.comp._layers.indexOf(this) + 1; }
 });
+// The two ways AE sets a parent are NOT interchangeable, and the tool
+// shipped with them swapped (measured 2026-08-29): `.parent =` is the
+// pick-whip, which REWRITES the child's transform so nothing moves on
+// screen, while setParentWithJump keeps the numbers and lets the layer
+// jump. The arithmetic is exercised in tests/test-layer-parent.js; what
+// this stub has to preserve is that they are two different calls, so a
+// tool that picks the wrong one cannot pass here either.
+Object.defineProperty(Layer.prototype, "parent", {
+  get() { return this._parentRef; },
+  set(p) {
+    this._parentRef = p || null;
+    this._compensated = true;
+  }
+});
 Layer.prototype.setParentWithJump = function (p) {
-  this.parent = p;
+  this._parentRef = p || null;
   this._jumped = true;
 };
 Layer.prototype.setTrackMatte = function (m, t) {
@@ -434,8 +450,13 @@ assert(r.ok && r.data.removed === 2 && r.data.remaining === 0,
 
 // 6. parenting with visual-position preservation + selection default
 r = call("set_layer_parent", { layers: ["A", "B"], parent: "CTRL" });
-assert(r.ok && A.parent === CTRL && B.parent === CTRL && A._jumped,
-       "multi-layer parenting uses setParentWithJump");
+assert(r.ok && A.parent === CTRL && B.parent === CTRL,
+       "multi-layer parenting links both layers");
+assert(A._compensated && B._compensated && !A._jumped && !B._jumped,
+       "...by default through the compensating call, never the jumping one");
+r = call("set_layer_parent", { layer: "B", parent: "CTRL",
+                               keepPosition: false });
+assert(r.ok && B._jumped, "keepPosition:false is the jumping call");
 r = call("set_layer_parent", { layer: "A", parent: "none" });
 assert(r.ok && A.parent === null, "'none' unparents");
 r = call("set_layer_parent", { layers: ["CTRL"], parent: "CTRL" });
