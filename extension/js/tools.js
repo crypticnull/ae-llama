@@ -542,6 +542,31 @@
             "template names for render_comp. Installed templates differ " +
             "per machine — never guess a name, list them.",
       args: "{}" },
+    { name: "render_comp_audio", mutating: true,
+      desc: "Render ONLY the comp's audio to a file (AE's audio-only " +
+            "output module, picked for you). Refuses when no layer in " +
+            "the comp has audio, or when every audio layer is muted — " +
+            "AE would otherwise write a full file of SILENCE and report " +
+            "success. Use it to export a mix; transcribe_to_captions " +
+            "calls it for you.",
+      args: "{comp?: string, output: string (ABSOLUTE file path), template?: string (only to override the automatic audio module), startTime?: number (seconds), durationSeconds?: number, overwrite?: bool = false}" },
+    { name: "add_captions", mutating: true,
+      desc: "Build MANY timed captions in one call: one text layer per " +
+            "segment (trimmed to its own start/end), or one marker per " +
+            "segment with {as: 'markers'}. Text layers default to the " +
+            "lower third, centred. This is the batch tool — never make " +
+            "captions with one add_text_layer per line. Every segment is " +
+            "validated before anything is created, so a bad one refuses " +
+            "the whole batch instead of leaving half a transcript behind.",
+      args: "{comp?: string, segments: [{start: seconds, end: seconds, text: string}], as?: 'text' (default) | 'markers', layer?: name|index (marker target; omit for comp markers), name?: string (layer name prefix, default 'Caption'), fontSize?: number, font?: string, fillColor?: [r,g,b] 0-1, position?: [x,y], justification?: 'left'|'center'|'right'}" },
+    { name: "transcribe_to_captions", mutating: true,
+      desc: "TRANSCRIBE the comp's own audio with the local speech model " +
+            "and put the result on the timeline as timed text layers (or " +
+            "markers). Renders the audio, transcribes it offline, and " +
+            "builds the captions — one call. Needs whisper.cpp installed; " +
+            "the refusal says how. Blocks for roughly a second per five " +
+            "seconds of audio.",
+      args: "{comp?: string, as?: 'text' (default) | 'markers', startTime?: number (seconds), durationSeconds?: number, language?: string, maxSegments?: int, name?: string (layer name prefix), fontSize?: number, font?: string, fillColor?: [r,g,b] 0-1, position?: [x,y], justification?: 'left'|'center'|'right', keepAudio?: bool = false (keep the rendered audio file and report its path)}" },
     { name: "comfy_status", mutating: false,
       desc: "Check the local ComfyUI instance (online? queue depth?).",
       args: "{}" },
@@ -1218,6 +1243,134 @@
         enhanceDone();
       }
     }
+  };
+
+  /*
+   * transcribe_to_captions — the one tool of WORKPLAN 6.1 Pass C the
+   * model actually calls. It is a PANEL tool because the middle step is
+   * a child process, which ExtendScript cannot spawn; the two ends are
+   * host tools (render_comp_audio, add_captions) so the self-test can
+   * cover them in real AE with no speech model installed.
+   *
+   *   comp -> render_comp_audio -> AIFF -> whisper-cli -> segments
+   *        -> add_captions -> text layers or markers
+   *
+   * The AIFF is a throwaway in Folder.temp and is deleted afterwards
+   * unless {keepAudio: true}. Measured end to end on 2026-08-29: a 5 s
+   * comp rendered in 0.1 s and transcribed in 682 ms.
+   */
+  PANEL_TOOLS.transcribe_to_captions = function (args, cb) {
+    args = args || {};
+    if (!global.Whisper) {
+      cb({ ok: false, error: "Speech-to-text is not available in this " +
+           "panel build." });
+      return;
+    }
+    var found;
+    try { found = global.Whisper.find(args.model); }
+    catch (e) { cb({ ok: false, error: "whisper.cpp lookup failed: " +
+                     e.message }); return; }
+    if (!found.ok) { cb({ ok: false, error: found.reason }); return; }
+
+    var as = String(args.as || "text").toLowerCase();
+    if (as !== "text" && as !== "markers") {
+      cb({ ok: false, error: "'as' must be 'text' (a text layer per " +
+           "caption, the default) or 'markers' — got " + String(args.as) });
+      return;
+    }
+
+    var fs = null, path = null;
+    try {
+      fs = global.AEBridge.nodeRequire("fs");
+      path = global.AEBridge.nodeRequire("path");
+    } catch (eN) {
+      cb({ ok: false, error: "Node is unavailable in this panel: " +
+           eN.message });
+      return;
+    }
+
+    // A fixed name would collide with the last run's leftovers, and
+    // render_comp REFUSES an existing output rather than raise AE's
+    // overwrite modal — so the name carries the clock, and overwrite
+    // stays on as the belt to that braces.
+    var tmp = path.join(
+      global.AEBridge.nodeRequire("os").tmpdir(),
+      "aell-transcribe-" + new Date().getTime() + ".aif");
+
+    var sink = args.progressSink || null;
+    if (sink) sink("Rendering the comp's audio…");
+
+    callHostTool("render_comp_audio", {
+      comp: args.comp, output: tmp.replace(/\\/g, "/"), overwrite: true,
+      startTime: args.startTime, durationSeconds: args.durationSeconds
+    }, function (rendered) {
+      if (!rendered.ok) { cb(rendered); return; }
+      var wrote = String((rendered.data && rendered.data.output) || tmp);
+
+      function cleanup() {
+        if (args.keepAudio) return;
+        try { fs.unlinkSync(wrote); } catch (eU) {}
+      }
+
+      if (sink) sink("Transcribing…");
+      global.Whisper.transcribe(wrote, { model: args.model,
+                                         install: found,
+                                         language: args.language },
+        function (err, out) {
+          if (err) { cleanup(); cb({ ok: false, error: err.message }); return; }
+          var segs = out.segments;
+          if (!segs.length) {
+            cleanup();
+            cb({ ok: false, error: "The transcriber found no speech in '" +
+                 ((rendered.data && rendered.data.comp) || "the comp") +
+                 "'. Its audio layers are " +
+                 ((rendered.data && rendered.data.audioLayers) || "unknown") +
+                 " — music and effects transcribe to nothing." });
+            return;
+          }
+          // FACT 1 (whisper.js): a silent file transcribes as the word
+          // "You" with exit code 0. render_comp_audio refuses a comp with
+          // no audio LAYER, but a layer whose audio is silence gets past
+          // it, and this is the shape that leaves behind.
+          if (global.Whisper.looksLikeSilence(segs)) {
+            cleanup();
+            cb({ ok: false, error: "The only thing transcribed was \"" +
+                 segs[0].text + "\", which is what whisper.cpp hears in " +
+                 "SILENCE — not speech it recognised. Check that the " +
+                 "audio layers (" +
+                 ((rendered.data && rendered.data.audioLayers) || "?") +
+                 ") actually carry speech in this part of the comp." });
+            return;
+          }
+          if (args.maxSegments > 0 && segs.length > args.maxSegments) {
+            segs = segs.slice(0, args.maxSegments);
+          }
+          // Segment times are relative to the RENDER, so a partial render
+          // has to be put back on the comp's own clock.
+          var offset = Number(args.startTime) || 0;
+          if (offset) {
+            for (var i = 0; i < segs.length; i++) {
+              segs[i] = { start: segs[i].start + offset,
+                          end: segs[i].end + offset, text: segs[i].text };
+            }
+          }
+          if (sink) sink("Building " + segs.length + " caption(s)…");
+          callHostTool("add_captions", {
+            comp: args.comp, segments: segs, as: as, layer: args.layer,
+            name: args.name, fontSize: args.fontSize, font: args.font,
+            fillColor: args.fillColor, position: args.position,
+            justification: args.justification
+          }, function (built) {
+            cleanup();
+            if (!built.ok) { cb(built); return; }
+            built.data.transcribed = segs.length + " segment(s) in " +
+              out.ms + " ms";
+            built.data.transcript = out.text;
+            if (args.keepAudio) built.data.audioFile = wrote;
+            cb(built);
+          });
+        });
+    });
   };
 
   /** JSON, as an ExtendScript string literal holding that JSON. */

@@ -7342,6 +7342,303 @@ AELL_TOOLS.render_comp = function (args) {
   return AELL_okay(result);
 };
 
+/*
+ * CAPTIONS (WORKPLAN 6.1 Pass C) — the AE half of speech-to-captions.
+ *
+ * The panel side (extension/js/whisper.js + the transcribe_to_captions
+ * panel tool) renders the comp's audio with render_comp_audio below,
+ * hands the file to whisper.cpp, and brings the segments back here.
+ * Everything AE-shaped lives in these two tools so the self-test can
+ * exercise it without a speech model installed.
+ *
+ * Measured in AE 2026 (probe, 2026-08-29). Five facts, and four of them
+ * are silent losses:
+ *
+ *  - A comp with NO audio layer still renders a full, valid, audio-only
+ *    AIFF: status DONE, 772 674 bytes of digital silence, no warning.
+ *    Two seconds of silence transcribes as the word "You" (WORKPLAN 6.1
+ *    Pass B), so the honest-looking end of that pipeline is a caption
+ *    layer reading "You" over a comp nobody spoke in. The refusal has to
+ *    happen HERE, before the render, because nothing downstream can tell
+ *    that file apart from a real one.
+ *  - `layer.inPoint` is a SLIDE, not a trim: it drags outPoint with it
+ *    and preserves the duration. A fresh text layer in a 5 s comp reads
+ *    in=0 out=5; setting inPoint=2 reads back in=2 **out=7**. So in is
+ *    always set BEFORE out — the obvious other order leaves every
+ *    caption the wrong length, and AE says nothing.
+ *  - An INVERTED span is accepted in silence. in=2 then out=1 reads back
+ *    in=2 out=1: a layer of negative duration that never appears on the
+ *    timeline. Same for a zero-length span (in=1, out=1).
+ *  - inPoint/outPoint QUANTIZE to AE's internal time base, not to the
+ *    frame grid: 0.3333 reads back 0.33329264322917, 1.7777 reads back
+ *    1.7777099609375. Anything comparing these needs a tolerance.
+ *  - addText names the layer after its own text, so a transcript makes
+ *    layers called "this is quite a long caption line that goes on".
+ *    Captions are named and numbered instead.
+ */
+
+/* Which of this machine's output-module templates writes AUDIO ONLY?
+ * The names differ per install (this machine ships exactly one, "AIFF
+ * 48kHz"), so it is matched by format rather than hard-coded, lossless
+ * first. whisper.cpp decodes AIFF as happily as WAV — measured, it goes
+ * through miniaudio, so no conversion step is needed. */
+function AELL_audioTemplate(list) {
+  var wants = [/(^|[^a-z])wav([^a-z]|$)/i, /(^|[^a-z])aiff?([^a-z]|$)/i,
+               /(^|[^a-z])mp3([^a-z]|$)/i, /audio[- ]?only/i];
+  var i, j;
+  for (i = 0; i < wants.length; i++) {
+    for (j = 0; j < list.length; j++) {
+      if (/^_HIDDEN/.test(list[j])) continue;
+      if (wants[i].test(String(list[j]))) return list[j];
+    }
+  }
+  return "";
+}
+
+AELL_TOOLS.render_comp_audio = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  var i;
+
+  // The comp's STATE is checked before anything is queued, because a
+  // silent render succeeds and there is no way to tell it apart later.
+  var audio = AELL_a2kAudioLayers(comp);
+  if (audio.length === 0) {
+    var names = [];
+    for (i = 1; i <= comp.numLayers && names.length < 15; i++) {
+      names.push(comp.layer(i).name);
+    }
+    return AELL_err("No layer in '" + comp.name + "' has audio. AE would " +
+      "still render a full file of SILENCE and report DONE, and a " +
+      "transcriber hears the word \"You\" in silence — so this refuses " +
+      "rather than hand back something that looks like a result. Layers " +
+      "here: " + (names.join(", ") || "(none)") + ". Import an audio or " +
+      "video file with import_file and add it to the comp first.");
+  }
+  var audible = [], muted = [];
+  for (i = 0; i < audio.length; i++) {
+    if (AELL_audioOn(audio[i])) audible.push(audio[i]);
+    else muted.push(audio[i]);
+  }
+  if (audible.length === 0) {
+    return AELL_err("Every audio layer in '" + comp.name + "' is muted (" +
+      AELL_layerNamesOf(muted) + "), so the render would be silence. " +
+      "Un-mute one first.");
+  }
+
+  var tmpl = AELL_rqTemplates();
+  var picked = "";
+  if (args.template) {
+    picked = AELL_rqPickTemplate(tmpl.outputModules, args.template,
+                                 "output-module");
+  } else {
+    picked = AELL_audioTemplate(tmpl.outputModules);
+    if (!picked) {
+      var offer = [];
+      for (i = 0; i < tmpl.outputModules.length; i++) {
+        if (!/^_HIDDEN/.test(tmpl.outputModules[i])) {
+          offer.push(tmpl.outputModules[i]);
+        }
+      }
+      return AELL_err("No audio-only output-module template is installed, " +
+        "so AE has nothing to render the sound to on its own. Installed: " +
+        offer.join(", ") + ". Pass one of those as {template} if you know " +
+        "it writes audio, or add an AIFF/WAV output module in AE's " +
+        "Output Module Template editor.");
+    }
+  }
+
+  // render_comp already owns everything else a render needs -- holding
+  // back the user's queued items, the overwrite refusal that otherwise
+  // wedges AE on a modal, the extension AE forces on the path, and
+  // polling for the bytes. Calling it is the point: a second copy of
+  // that would be a second thing to get wrong.
+  var r = AELL_TOOLS.render_comp({
+    comp: args.comp, output: args.output, template: picked,
+    overwrite: args.overwrite, startTime: args.startTime,
+    durationSeconds: args.durationSeconds, frames: args.frames
+  });
+  if (!r.ok) return r;
+  r.data.audioLayers = AELL_layerNamesOf(audible);
+  if (muted.length) {
+    r.data.mutedLayers = AELL_layerNamesOf(muted) +
+      " (muted, so not in the mix)";
+  }
+  return r;
+};
+
+/* One caption's worth of validated numbers, or a thrown grounded error.
+ * Every segment is checked BEFORE any layer is made: half a transcript
+ * on the timeline plus an error is worse than an error. */
+function AELL_capSegment(raw, n, compDur) {
+  var where = "segment " + n;
+  if (!raw || typeof raw !== "object") {
+    throw new Error(where + " is not an object — each entry of " +
+      "'segments' must be {start: seconds, end: seconds, text: \"...\"}. " +
+      "Got " + AELL_showValue(raw) + ".");
+  }
+  var start = AELL_numArg(raw.start);
+  var end = AELL_numArg(raw.end);
+  if (start === null) {
+    throw new Error(where + ": 'start' must be a number of seconds — got " +
+      AELL_showValue(raw.start) + ".");
+  }
+  if (end === null) {
+    throw new Error(where + ": 'end' must be a number of seconds — got " +
+      AELL_showValue(raw.end) + ".");
+  }
+  if (start < 0) {
+    throw new Error(where + ": 'start' is " + start + "s. A caption before " +
+      "the start of the comp is never visible.");
+  }
+  if (end <= start) {
+    throw new Error(where + ": end (" + end + "s) is not after start (" +
+      start + "s). AE accepts that silently — the layer exists with zero " +
+      "or negative duration and never appears on the timeline — so it is " +
+      "refused here instead.");
+  }
+  var text = raw.text;
+  if (typeof text !== "string" || !AELL_trim(text)) {
+    throw new Error(where + ": 'text' must be a non-empty string — got " +
+      AELL_showValue(raw.text) + ".");
+  }
+  return { start: start, end: end, text: AELL_trim(text),
+           past: end > compDur + 0.0001 };
+}
+
+function AELL_trim(s) {
+  return String(s).replace(/^\s+/, "").replace(/\s+$/, "");
+}
+
+AELL_TOOLS.add_captions = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  var i;
+
+  var as = String(args.as || "text").toLowerCase();
+  if (as !== "text" && as !== "markers") {
+    return AELL_err("'as' must be 'text' (a text layer per caption, the " +
+      "default) or 'markers' (one comp/layer marker per caption) — got " +
+      AELL_showValue(args.as) + ".");
+  }
+  // 'layer' names where MARKERS go and means nothing to a text caption.
+  // Refusing it is what stops for_each_layer {tool: "add_captions"} from
+  // silently building one whole transcript per selected layer.
+  if (as === "text" && args.layer !== null &&
+      typeof args.layer !== "undefined" && args.layer !== "") {
+    return AELL_err("'layer' only applies to {as: 'markers'} — it is the " +
+      "layer the markers land on. Text captions are new layers of their " +
+      "own, so there is nothing for it to mean here. Drop it, or pass " +
+      "{as: 'markers'}.");
+  }
+  var segsIn = args.segments;
+  if (!AELLJSON.isArray(segsIn) || segsIn.length === 0) {
+    return AELL_err("'segments' is required: an array of {start, end, " +
+      "text} in seconds, e.g. [{\"start\":0,\"end\":1.5,\"text\":\"hello\"}]" +
+      ". Got " + AELL_showValue(args.segments) + ".");
+  }
+  var segs = [];
+  try {
+    for (i = 0; i < segsIn.length; i++) {
+      segs.push(AELL_capSegment(segsIn[i], i + 1, comp.duration));
+    }
+  } catch (eV) {
+    return AELL_err(eV.message || String(eV));
+  }
+
+  var pastEnd = 0;
+  for (i = 0; i < segs.length; i++) if (segs[i].past) pastEnd++;
+
+  if (as === "markers") {
+    var layer = null, target, where;
+    if (args.layer !== null && typeof args.layer !== "undefined" &&
+        args.layer !== "") {
+      layer = AELL_resolveLayer(comp, args.layer);
+      target = layer.property("ADBE Marker");
+      where = "layer " + layer.name;
+    } else {
+      target = comp.markerProperty;
+      where = "comp " + comp.name;
+    }
+    // AE keeps ONE marker per exact time, so two segments starting at the
+    // same instant silently become one. Counted rather than hidden.
+    var before = target.numKeys;
+    for (i = 0; i < segs.length; i++) {
+      var mv = new MarkerValue(segs[i].text);
+      mv.duration = segs[i].end - segs[i].start;
+      target.setValueAtTime(segs[i].start, mv);
+    }
+    var addedM = target.numKeys - before;
+    var outM = { comp: comp.name, as: "markers", target: where,
+                 captions: segs.length, markersAdded: addedM,
+                 markers: target.numKeys };
+    if (addedM < segs.length) {
+      outM.collapsed = (segs.length - addedM) + " caption(s) landed on a " +
+        "time that already had a marker and REPLACED it — AE keeps one " +
+        "marker per exact time.";
+    }
+    if (pastEnd) {
+      outM.note = pastEnd + " caption(s) end past '" + comp.name + "' (" +
+        comp.duration + "s) — they exist but run off the timeline.";
+    }
+    return AELL_okay(outM);
+  }
+
+  var base = (typeof args.name === "string" && AELL_trim(args.name))
+    ? AELL_trim(args.name) : "Caption";
+  // Captions want the lower third and a centred anchor. AE's own default
+  // is the middle of the comp, left-justified, which is never what a
+  // caption wants -- so this is the default and 'position' overrides it.
+  var pos = null;
+  if (AELLJSON.isArray(args.position) && args.position.length >= 2) {
+    pos = [Number(args.position[0]), Number(args.position[1])];
+  } else {
+    pos = [comp.width / 2, Math.round(comp.height * 0.85)];
+  }
+  var just = (typeof args.justification === "string" && args.justification)
+    ? args.justification : "center";
+
+  var made = [], stuck = null, notReset = null;
+  AELL_keepSelection(comp, function () {
+    for (var k = 0; k < segs.length; k++) {
+      var t = comp.layers.addText(segs[k].text);
+      t.name = AELL_uniqueLayerName(comp, base + " " + (k + 1));
+      var reset = args.inheritStyle ? null : {};
+      var style = AELL_applyTextStyle(t, {
+        fontSize: args.fontSize, font: args.font,
+        fillColor: args.fillColor, tracking: args.tracking,
+        leading: args.leading, justification: just
+      }, reset);
+      if (reset && reset.stuck && !stuck) stuck = reset.stuck;
+      if (reset && reset.skipped && reset.skipped.length && !notReset) {
+        notReset = reset.skipped;
+      }
+      t.property("ADBE Transform Group").property("ADBE Position")
+       .setValue(pos);
+      // IN BEFORE OUT, always: inPoint drags outPoint with it.
+      t.inPoint = segs[k].start;
+      t.outPoint = segs[k].end;
+      made.push({ name: t.name, index: t.index, start: segs[k].start,
+                  end: segs[k].end, style: style });
+    }
+  });
+
+  var names = [];
+  for (i = 0; i < made.length && i < 12; i++) names.push(made[i].name);
+  var out = { comp: comp.name, as: "text", captions: made.length,
+              layers: names, position: pos, justification: just };
+  if (made.length > names.length) {
+    out.layers.push("… and " + (made.length - names.length) + " more");
+  }
+  if (pastEnd) {
+    out.note = pastEnd + " caption(s) end past '" + comp.name + "' (" +
+      comp.duration + "s) — they exist but run off the timeline. " +
+      "set_comp_setting {duration} if the comp should be longer.";
+  }
+  var stuckWarn = AELL_stuckStyleWarning(stuck);
+  if (stuckWarn) out.warning = stuckWarn;
+  if (notReset) out.notReset = notReset;
+  return AELL_okay(out);
+};
+
 AELL_TOOLS.add_to_render_queue = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var proj = app.project;
@@ -8431,7 +8728,7 @@ AELL_TOOLS.remove_keyframes = function (args) {
  * source and fails if a tool is added without being classified here.
  */
 var AELL_PER_LAYER_LIST = [
-  "add_control", "add_keyframe", "add_marker", "add_mask",
+  "add_captions", "add_control", "add_keyframe", "add_marker", "add_mask",
   "add_shape_content", "add_text_animator", "apply_effect",
   "apply_expression_preset", "audio_to_keyframes",
   "center_anchor_point", "delete_layer", "duplicate_layer", "link_property",
@@ -9042,7 +9339,11 @@ var AELL_MUTATING = {
   // (measured), so a preview still costs the user nothing.
   rename_comps: true,
   set_solid_color: true,
-  apply_preset: true
+  apply_preset: true,
+  // add_captions makes N ordinary text layers (or writes N markers) and
+  // nothing else -- one Ctrl+Z, like add_text_layer. render_comp_audio is
+  // deliberately ABSENT for render_comp's reason: it IS a render.
+  add_captions: true
 };
 
 /* Tools that must NOT run inside an undo group, whatever else is in the
@@ -9054,6 +9355,9 @@ var AELL_MUTATING = {
  * balances. */
 var AELL_NO_UNDO_GROUP = {
   render_comp: true,
+  // render_comp_audio delegates straight to render_comp, so it inherits
+  // the "Undo group mismatch" modal along with the rest of the render.
+  render_comp_audio: true,
   // snapshot_frame is here for the SECOND half of that reasoning rather
   // than the first. It is safe inside a group -- saveFrameToPng was
   // measured inside three nested undo groups, followed by three more

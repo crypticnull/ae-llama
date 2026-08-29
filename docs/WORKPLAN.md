@@ -823,10 +823,29 @@ as "hack", so a verification phrase is a fixture that has to be
 measured; and 44.1 kHz audio transcribes fine - the old "whisper refuses
 anything but 16 kHz" note was wrong, which matters for Pass C's comp
 audio.
-Pass C: AE wiring — render a comp/layer's
-audio to WAV via 5.5, transcribe with timestamps, build styled text
-layers (5.1/text tools) or markers from the segments:
-`transcribe_to_captions` {comp|layer}. Do NOT start C before 5.5 lands.
+~~Pass C: AE wiring~~ DONE 2026-08-29. Three tools, split so the two
+ends can be tested where the middle cannot: `render_comp_audio` and
+`add_captions` are HOST tools the self-test drives in real AE with no
+speech model present, and `transcribe_to_captions` is the PANEL tool
+that joins them (ExtendScript cannot spawn a child process).
+`extension/js/whisper.js` finds the install and parses the segments.
+Verified end to end in real AE: a 20 s comp of synthesized speech
+rendered in 0.1 s, transcribed in 1053 ms, and became five caption
+layers each trimmed to its own span. Field facts this paid for: a comp
+with NO audio layer STILL renders a full, valid, audio-only AIFF (DONE,
+772 674 bytes, no warning) and silence transcribes as the word "You" —
+so the refusal has to come before the render or the feature's failure
+mode is a confident wrong answer; `layer.inPoint` is a SLIDE that DRAGS
+outPoint and preserves duration (in=2 in a 5 s comp reads back out=7),
+so in is always set before out; AE accepts inverted and zero-length
+spans in silence; in/out QUANTIZE to AE's own time base (0.3333 ->
+0.33329264322917), so every comparison needs a tolerance; whisper.cpp
+decodes AE's AIFF directly through miniaudio, so no WAV conversion and
+no ffmpeg; and `om.getSettings()` throws while `setSettings({Format})`
+answers "Property is read-only", so the audio format comes from the
+output-module TEMPLATE, matched by name. 115 stub checks in
+`tests/test-captions.js`, 16 suite steps, harness 498 -> 514. No version
+bump (feature track).
 
 ### 6.2 ffmpeg post-renders
 Pass A: acquire a static ffmpeg build the same way; verify with ffprobe.

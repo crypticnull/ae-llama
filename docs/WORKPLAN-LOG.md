@@ -6409,3 +6409,158 @@ and `tests/`. There is no shipped behaviour for a feed to carry.
   ggml-base.en (149 MB), left in place because Pass C needs it. Temp
   WAVs and the compiled stand-in exe are removed by the code that makes
   them.
+
+## 2026-08-29 (local) - item 6.1 Pass C: captions, and the pipeline whose
+## failure mode is a confident wrong answer
+
+**Item:** WORKPLAN 6.1 Pass C - AE wiring for local captions. Render a
+comp's audio, transcribe it with timestamps, put the segments on the
+timeline as text layers or markers: `transcribe_to_captions`.
+
+Harness green at 498/498 before the pass, so item 1 was satisfied. Pass C
+was the top unfinished item: A and B landed earlier tonight, 5.5 (the
+render queue) landed 2026-08-28, and nothing else blocked it.
+
+### What shipped
+
+Three tools, split so the two ends can be tested where the middle
+cannot:
+
+- **`render_comp_audio`** (host) - renders ONLY the comp's audio, picking
+  an audio-only output module itself. Refuses a comp with no audio layer,
+  or one whose audio layers are all muted, naming what IS there. It
+  DELEGATES the render to `render_comp` rather than carrying a second
+  copy of the hold-back / overwrite-refusal / extension-forcing logic.
+- **`add_captions`** (host) - one text layer per segment trimmed to its
+  own span, or one marker per segment with `{as: "markers"}`. Every
+  segment is validated BEFORE anything is created. In `AELL_MUTATING`
+  (one Ctrl+Z), and in `AELL_PER_LAYER` for for_each_layer.
+- **`transcribe_to_captions`** (PANEL) - the only one the model calls.
+  It has to be panel-side: the middle step is a child process, which
+  ExtendScript cannot spawn.
+- **`extension/js/whisper.js`** - finds the install under
+  `<dataRoot>\vendor\whisper.cpp`, runs whisper-cli, parses the
+  timestamped output into segments. Independent of
+  `scripts\lib\whisper-verify.ps1` on purpose: the panel cannot shell out
+  to PowerShell for every caption.
+
+### Six things real AE and the model said that the obvious version gets wrong
+
+1. **A comp with NO audio renders a full, valid, audio-only AIFF.**
+   Status DONE, 772 674 bytes, no warning of any kind. And two seconds of
+   silence transcribes as the word "You" with exit code 0 (Pass B's
+   finding, from the other end). So the honest-looking end of the obvious
+   pipeline is a caption layer reading "You" over a comp nobody spoke in,
+   and every step of it reports success. Nothing downstream can tell that
+   file apart from a real one, so the refusal has to happen BEFORE the
+   render. That is the load-bearing suite step, and the panel tool also
+   refuses the "You" shape if a silent LAYER gets past it.
+2. **`layer.inPoint` is a SLIDE, not a trim.** It drags outPoint with it
+   and preserves the duration: a fresh text layer in a 5 s comp reads
+   in=0 out=5, and after `inPoint = 2` it reads in=2 **out=7**. Set out
+   before in and every caption is the wrong length, in silence. In is now
+   always set first, and the suite asserts the resulting spans rather
+   than trusting the call.
+3. **An inverted span is accepted without a word.** in=2 then out=1 reads
+   back in=2 out=1 - a layer of negative duration that never appears on
+   the timeline. Zero-length (in=1, out=1) too. Both are refused by
+   `add_captions` and dropped by the parser, because whisper does emit
+   the occasional `0.000 --> 0.000` line.
+4. **in/out QUANTIZE to AE's internal time base, not the frame grid.**
+   0.3333 reads back 0.33329264322917; 1.7777 reads back
+   1.7777099609375. Every comparison in the tests and the suite is a
+   tolerance. An equality assertion here would have looked right and
+   failed on the machine.
+5. **whisper.cpp reads AE's AIFF directly.** stderr says "trying to
+   decode with miniaudio" - a 964 674-byte stereo 48 kHz AIFF straight
+   out of the render queue transcribed in 682 ms, exit 0. So there is no
+   conversion step, no WAV rewrite, and 6.2 (ffmpeg) is NOT a
+   prerequisite for captions. This is the finding that shrank the pass.
+6. **The audio format comes from the TEMPLATE, not from the API.**
+   `om.getSettings(GetSettingsFormat.STRING)` throws ("Object of type
+   Object found where a Number, Array, or Property is needed") and
+   `om.setSettings({Format: "WAV"})` answers "Invalid Value for key:
+   <Format>. Property is read-only". So the module is matched by NAME
+   against the installed list (word-bounded, WAV preferred over AIFF over
+   MP3, never an `_HIDDEN` internal), and a machine with no audio module
+   gets a grounded refusal listing what it does have. This machine ships
+   exactly one: "AIFF 48kHz".
+
+### The end-to-end run
+
+The suite cannot transcribe - that needs a ~150 MB install no CI runner
+has - so the round trip was driven by hand in real AE with the shipped
+code: 20 s comp of synthesized speech -> `render_comp_audio` (0.1 s,
+3 844 674 bytes, "AIFF 48kHz") -> whisper-cli (1053 ms, five segments)
+-> `Whisper.parseSegments` -> `add_captions`. Result: five text layers
+spanning 0-3.32, 3.32-6.24, 6.24-9.90, 9.90-13.28, 13.28-15.92, every
+one within quantization tolerance of the transcript. That is fact 2
+proved on the machine rather than argued.
+
+### Verification
+
+- `node tests/test-captions.js`: 115 checks, green. Seven of them are
+  STUB FIDELITY checks that drive the raw API first, so a stub that
+  stopped modelling the inPoint slide cannot let the fix pass on a
+  technicality. It builds a real (tiny) whisper tree in %TEMP% to prove
+  the walk, the smallest-model rule and the three grounded refusals.
+- Two existing suites caught the new code before I did, which is what
+  they are for: `test-for-each-layer` refused an unclassified layer tool,
+  and `test-chat-probe` refused a `global.Whisper` that mapped to no
+  panel file. `add_captions` is now classified, and it REFUSES `layer`
+  with text captions - which is what stops `for_each_layer
+  {tool: "add_captions"}` from building the whole transcript once per
+  selected layer.
+- Full stub sweep: all 53 test files exit 0. `capability-report.js`
+  regenerated.
+- **Harness: 514/514 PASSED** (from 498), green on two consecutive runs
+  plus a third after cleanup.
+
+### No version bump
+
+The feature-track rule in WORKPLAN section 5: new tools ride the next
+MINOR, which the remote session cuts after reviewing the batch. Same call
+as Passes A and B and as 5.5-5.8. Pushing without bumping is correct
+here - the feed publishing an equal version is the intended outcome.
+
+### Still open
+
+- **The harness caught my own debris, and the mechanism is worth a note.**
+  The first run after the new steps failed one UNRELATED step:
+  `clean_project`'s "Comp not found" refusal lists the project's comps
+  and that list is CAPPED, so my two probe comps pushed the comp the step
+  was looking for out of the list. Removing them made it green. The
+  latent issue is real though: in a user's large project that refusal can
+  fail to name the comp the user just asked about. Small remote-session
+  job - the grounded list should prefer near-matches to alphabetical
+  order.
+- **Project debris from earlier passes is still in the harness project**:
+  two comps both called `AELL_PROBE_WA`, `PROBE_PARENT`, and roughly 250
+  nulls named "Audio Amplitude" (5.7 measured that AE never uniques that
+  name; these are the leftovers). Harmless today and the harness is green
+  with them, but they are what makes the capped-list trap above easy to
+  hit. A human with the project open could clear them in a minute.
+- **`get-llama.ps1` still has the two latent traps Pass A flagged**: it
+  greps for `CUDA Version:` (misses this machine's `CUDA UMD Version:`)
+  and pads versions to two parts. `Get-AellCudaVersionFromSmi` and
+  `ConvertTo-AellPaddedVersion` in `whisper-assets.ps1` are the fixes,
+  already written and tested - a small pass points get-llama at them.
+- **6.1 is now COMPLETE** (A, B, C). 6.2 (ffmpeg) is the next item on
+  that track, and finding 5 above means it is no longer a prerequisite
+  for anything - it is only worth what `export_gif` / `export_social`
+  are worth on their own.
+- `Invoke-AellWhisperCli -Timestamps` in the PowerShell library is still
+  unused by shipped code; the panel has its own runner. It is used by
+  this pass's manual verification and is worth keeping for that.
+- 5.9 (.mogrt export) still deferred by its own LAST-item-of-the-night
+  rule. Fourteenth pass. Someone should decide whether that rule means
+  "last pass of a night" or "never".
+- `release-notes.txt` still reads "0.10.0" while the feed ships 0.10.8 -
+  thirteenth pass to flag it; remote session's release cut.
+- `comfy_generate` still calls `import_file` rather than 5.8's
+  `import_as_layer` - small remote-session pass.
+- Machine state: AE left on the harness's own project with every comp and
+  footage item this pass made removed, no dialog open. Temp WAVs, AIFFs
+  and probe scripts deleted. `%APPDATA%\AE-Llama\vendor\whisper.cpp`
+  still holds the CPU build and ggml-base.en (149 MB) - now used by
+  shipped code, so it stays.

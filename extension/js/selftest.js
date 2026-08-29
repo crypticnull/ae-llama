@@ -56,6 +56,13 @@
   // And the frame round-trip rig: snapshot_frame writes FILES and
   // import_as_layer brings project items in, so like the render rig it
   // works in comps of its own and takes them away again.
+  // And the caption rigs. Two, for the same reason the render and frame
+  // rigs are separate: one gets a Tone effect so it has real audio to
+  // render, the other is 1920x1080 because add_captions' default
+  // position is the comp's own lower third and a 160x120 comp would
+  // prove nothing about it.
+  var CAPCOMP = "AELL Self-Test Caption Audio";
+  var CAPTEXT = "AELL Self-Test Captions";
   var FRCOMP = "AELL Self-Test Frame";
   var FRWIDE = "AELL Self-Test Frame Wide";
   // And the bounds rig: it slides a layer in time, pushes one off the
@@ -6045,6 +6052,256 @@
           }
           return true;
         } },
+
+      // ---- captions: render_comp_audio + add_captions (WORKPLAN 6.1
+      // Pass C, the AE half of speech-to-captions).
+      //
+      // The transcription itself is NOT here and cannot be: it needs a
+      // ~150 MB whisper.cpp install that no CI runner and few user
+      // machines have, and it is covered by tests\test-captions.js and
+      // scripts\verify-whisper.ps1 instead. What IS here is everything
+      // AE owns, and every step below is a measurement from the probe:
+      //
+      //  - A comp with NO audio layer still renders a full, valid,
+      //    audio-only AIFF: DONE, 772 674 bytes, no warning. Two seconds
+      //    of silence transcribes as the word "You", so the honest-looking
+      //    end of that pipeline is a caption reading "You" over a comp
+      //    nobody spoke in. The refusal is the load-bearing step.
+      //  - layer.inPoint is a SLIDE: it drags outPoint along and keeps
+      //    the duration (in a 5s comp, in=2 reads back out=7). Set out
+      //    first and every caption is the wrong length, silently. That is
+      //    what the span assertions below exist for.
+      //  - AE accepts an inverted or zero-length span without a word.
+      //  - in/out QUANTIZE to AE's own time base (0.3333 -> 0.33329264),
+      //    so every comparison here is a tolerance, never an equality.
+      //
+      // The rig needs no audio FILE: Tone on a solid flips hasAudio to
+      // true, exactly as the audio_to_keyframes rig does. One second at
+      // 24 fps, 160x120, so the audio render costs about as much as the
+      // one-frame render above.
+      { name: "create the caption rig (a solid, still silent)",
+        batch: function () {
+          return [
+            { tool: "create_comp",
+              args: { name: CAPCOMP, width: 160, height: 120,
+                      duration: 1, frameRate: 24 } },
+            { tool: "add_solid",
+              args: { comp: CAPCOMP, name: "ST Cap Host",
+                      color: [0.2, 0.2, 0.2], width: 160, height: 120 } }
+          ];
+        },
+        check: function (rows, ctx) {
+          if (!rows[0].ok) return "create_comp: " + rows[0].error;
+          if (!rows[1].ok) return "add_solid: " + rows[1].error;
+          ctx.capComp = rows[0].data.name;
+          return true;
+        } },
+
+      // THE step. AE renders silence happily and reports DONE, so
+      // without this the whole feature produces a confident wrong answer.
+      { name: "rendering the audio of a comp with NO audio is REFUSED",
+        tool: "render_comp_audio",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.capComp,
+                   output: ctx.rqTemp + "/AELL_ST_never_audio.aif" };
+        },
+        check: function (err) {
+          if (!/silence/i.test(err)) {
+            return "does not say AE would render SILENCE, which is the " +
+                   "whole reason to refuse: " + err;
+          }
+          return err.indexOf("ST Cap Host") !== -1 ||
+                 "does not list what IS in the comp: " + err;
+        } },
+
+      { name: "Tone gives the caption rig a real audio track",
+        tool: "apply_effect",
+        args: function (ctx) {
+          return { comp: ctx.capComp, layer: "ST Cap Host", effect: "Tone" };
+        },
+        check: function (d) {
+          return d.matchName === "ADBE Aud Tone" ||
+                 "wrong effect: " + d.matchName;
+        } },
+
+      { name: "render_comp_audio picks the audio module and writes bytes",
+        tool: "render_comp_audio",
+        args: function (ctx) {
+          return { comp: ctx.capComp,
+                   output: ctx.rqTemp + "/AELL_ST_audio.wav",
+                   overwrite: true };
+        },
+        check: function (d, ctx) {
+          if (d.status !== "DONE") {
+            return "status " + d.status + (d.warning ? " — " + d.warning : "");
+          }
+          if (!(d.bytes > 0)) return "reported DONE but " + d.bytes + " bytes";
+          if (!d.audioLayers || d.audioLayers.indexOf("ST Cap Host") === -1) {
+            return "does not report what went into the mix: " + d.audioLayers;
+          }
+          // The audio output module forces its own extension, so the
+          // path asked for (.wav) is not the path written.
+          ctx.capAudio = d.output;
+          return /\.(aif|aiff|wav|mp3)$/i.test(d.output) ||
+                 "did not write an audio container: " + d.output;
+        } },
+
+      { name: "cleanup: drop the caption audio rig",
+        tool: "delete_item",
+        args: function (ctx) { return { item: ctx.capComp }; },
+        check: function () { return true; } },
+
+      // add_captions works in a comp of its own: it makes one layer per
+      // caption and its default position is comp-relative.
+      { name: "create the caption text rig",
+        tool: "create_comp",
+        args: { name: CAPTEXT, width: 1920, height: 1080, duration: 5,
+                frameRate: 24 },
+        check: function (d, ctx) { ctx.capText = d.name; return true; } },
+
+      { name: "a zero-length caption is refused, not silently invisible",
+        tool: "add_captions",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.capText,
+                   segments: [{ start: 1, end: 1, text: "never seen" }] };
+        },
+        check: function (err) {
+          return /not after start/i.test(err) ||
+                 "does not explain the span: " + err;
+        } },
+
+      { name: "an inverted caption is refused with its own segment number",
+        tool: "add_captions",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.capText, segments: [
+            { start: 0, end: 1, text: "good" },
+            { start: 3, end: 2, text: "backwards" }
+          ] };
+        },
+        check: function (err) {
+          return /segment 2/.test(err) ||
+                 "does not say WHICH segment is wrong: " + err;
+        } },
+
+      { name: "and the good segment before it was not built either",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.capText, limit: 0 }; },
+        check: function (d) {
+          return d.numLayers === 0 ||
+                 "a refused batch left " + d.numLayers + " layer(s) behind";
+        } },
+
+      { name: "add_captions builds one trimmed text layer per segment",
+        tool: "add_captions",
+        args: function (ctx) {
+          return { comp: ctx.capText, fontSize: 48, segments: [
+            { start: 0, end: 3.32,
+              text: "The quick brown fox jumps over the lazy dog." },
+            { start: 3.32, end: 4.9,
+              text: "After effects renders the composition." }
+          ] };
+        },
+        check: function (d, ctx) {
+          if (d.captions !== 2) return "built " + d.captions + " captions";
+          // Named and numbered, NOT named after the transcript.
+          if (d.layers.join(",") !== "Caption 1,Caption 2") {
+            return "captions are named after their text: " + d.layers;
+          }
+          ctx.capNames = d.layers;
+          return true;
+        } },
+
+      // THE assertion of this block. Set outPoint before inPoint and
+      // these read 8.32 and 8.22 instead, in real AE, silently.
+      { name: "each caption is trimmed to its own span (inPoint SLIDES)",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.capText, limit: 0 }; },
+        check: function (d) {
+          if (d.numLayers !== 2) return d.numLayers + " layers, expected 2";
+          var by = {};
+          for (var i = 0; i < d.layers.length; i++) {
+            by[d.layers[i].name] = d.layers[i];
+          }
+          var a = by["Caption 1"], b = by["Caption 2"];
+          if (!a || !b) return "captions not found by name";
+          // Tolerances, not equalities: AE quantizes to its own time base.
+          if (Math.abs(a.inPoint - 0) > 0.001 ||
+              Math.abs(a.outPoint - 3.32) > 0.001) {
+            return "caption 1 spans " + a.inPoint + ".." + a.outPoint +
+                   ", expected 0..3.32";
+          }
+          if (Math.abs(b.inPoint - 3.32) > 0.001 ||
+              Math.abs(b.outPoint - 4.9) > 0.001) {
+            return "caption 2 spans " + b.inPoint + ".." + b.outPoint +
+                   ", expected 3.32..4.9 — outPoint dragged by inPoint " +
+                   "means the two were set in the wrong order";
+          }
+          return true;
+        } },
+
+      { name: "a caption past the end of the comp is built AND reported",
+        tool: "add_captions",
+        args: function (ctx) {
+          return { comp: ctx.capText, name: "ST Late", segments: [
+            { start: 4.5, end: 9, text: "runs off the end" }
+          ] };
+        },
+        check: function (d) {
+          return /past/i.test(d.note || "") ||
+                 "no note that it runs off the timeline: " + d.note;
+        } },
+
+      { name: "'layer' is refused for text captions, not silently ignored",
+        tool: "add_captions",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.capText, layer: "Caption 1",
+                   segments: [{ start: 0, end: 1, text: "x" }] };
+        },
+        check: function (err) {
+          return /markers/i.test(err) ||
+                 "does not point at the mode where it means something: " +
+                 err;
+        } },
+
+      { name: "as:'markers' writes timed markers instead of layers",
+        tool: "add_captions",
+        args: function (ctx) {
+          return { comp: ctx.capText, as: "markers", segments: [
+            { start: 0, end: 1.5, text: "first" },
+            { start: 1.5, end: 2.5, text: "second" }
+          ] };
+        },
+        check: function (d) {
+          if (d.markersAdded !== 2) {
+            return "wrote " + d.markersAdded + " markers, expected 2";
+          }
+          return d.as === "markers" || "reported as " + d.as;
+        } },
+
+      { name: "two captions at the same instant collapse, and it SAYS so",
+        tool: "add_captions",
+        args: function (ctx) {
+          return { comp: ctx.capText, as: "markers", segments: [
+            { start: 3, end: 3.5, text: "one" },
+            { start: 3, end: 4, text: "same instant" }
+          ] };
+        },
+        check: function (d) {
+          if (d.markersAdded !== 1) {
+            return "expected AE to keep one marker, it kept " + d.markersAdded;
+          }
+          return !!d.collapsed ||
+                 "AE silently dropped a caption and the result did not say";
+        } },
+
+      { name: "cleanup: drop the caption text rig",
+        tool: "delete_item",
+        args: function (ctx) { return { item: ctx.capText }; },
+        check: function () { return true; } },
 
       // ---- comp-rename audit + bulk rename. A three-comp rig: one
       // plain, one nested (a utility), one named by an expression.

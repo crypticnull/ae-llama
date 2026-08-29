@@ -379,6 +379,22 @@ function resetFrRig() {
   }
 }
 const auFind = (n) => auLayers.filter(l => l.name === String(n))[0];
+
+// The caption rigs (WORKPLAN 6.1 Pass C). Two comps: one that gets a Tone
+// effect so render_comp_audio has real audio to find, and one the text
+// captions are built in. The facts this canned host has to model are the
+// silent ones -- AE renders a comp with NO audio just as happily as one
+// with, and inPoint DRAGS outPoint -- because those are the only ones the
+// suite steps can catch.
+const inCapAudio = (a) => !!(a && /Self-Test Caption Audio/.test(a.comp || ""));
+const inCapText = (a) => !!(a && /Self-Test Captions/.test(a.comp || ""));
+let capAudio = [];      // {name, audio: bool} in the audio rig
+let capRows = [];       // {name, inPoint, outPoint} in the text rig
+let capMarks = [];      // {time, comment, duration} on the text comp
+function resetCapRig() { capAudio = []; capRows = []; capMarks = []; }
+// AE stores time on its own base: 0.3333 reads back 0.33329264322917.
+const CAP_TICKS = 254016000;
+const capQuant = (t) => Math.round(Number(t) * CAP_TICKS) / CAP_TICKS;
 const auPeak = (n) => Math.round((34.33 + 1.69 * (n - 1)) * 100) / 100;
 const auUnique = (base) => {
   const taken = auLayers.map(l => l.name).concat(auNulls);
@@ -1662,6 +1678,11 @@ function cannedOk(tool, args) {
         return capLayers(args.comp, mine.map((nm, i) => ({
           index: i + 1, name: nm, type: "light", effects: [] })), args);
       }
+      if (inCapText(args)) {
+        return capLayers(args.comp, capRows.map((r, i) => ({
+          index: i + 1, name: r.name, inPoint: r.inPoint,
+          outPoint: r.outPoint, effects: [] })), args);
+      }
       if (args && /Self-Test Frame/.test(args.comp || "")) {
         return capLayers(args.comp, (frLayers[args.comp] || []).map(
           (nm, i) => ({ index: i + 1, name: nm, effects: [] })), args);
@@ -2508,8 +2529,20 @@ function cannedOk(tool, args) {
       if (inPcComp(args)) pcLayers.push(args.name);
       // A fresh solid is SILENT — hasAudio is false until Tone lands.
       if (inAuComp(args)) auLayers.push({ name: args.name, audio: false });
+      if (inCapAudio(args)) capAudio.push({ name: args.name, audio: false });
       return { name: (args && args.name) || "ST Square" };
     case "apply_effect":
+      if (inCapAudio(args)) {
+        if (String(args.effect) !== "Tone") {
+          return { __err: "Effect not available: " + args.effect };
+        }
+        const capHost = capAudio.filter(l => l.name === String(args.layer))[0];
+        if (!capHost) return { __err: "Layer not found: " + args.layer };
+        capHost.audio = true;
+        return { layer: args.layer, effect: "Tone",
+                 matchName: "ADBE Aud Tone",
+                 params: ["Waveform options", "Level", "Compositing Options"] };
+      }
       if (inAuComp(args)) {
         if (String(args.effect) !== "Tone") {
           return { __err: "Effect not available: " + args.effect };
@@ -3565,6 +3598,116 @@ function cannedOk(tool, args) {
       }
       return out;
     }
+    // FACT: a comp with NO audio layer STILL renders a full, valid,
+    // audio-only AIFF -- DONE, 772 674 bytes, no warning -- and silence
+    // transcribes as the word "You". So this canned host renders happily
+    // either way, and the refusal has to come from the tool.
+    case "render_comp_audio": {
+      const audible = capAudio.filter(l => l.audio);
+      if (!capAudio.length || !audible.length) {
+        const have = capAudio.map(l => l.name).join(", ") || "(none)";
+        return { __err: !capAudio.length || capAudio.every(l => !l.audio)
+          ? "No layer in '" + (args && args.comp) + "' has audio. AE would " +
+            "still render a full file of SILENCE and report DONE, and a " +
+            "transcriber hears the word \"You\" in silence. Layers here: " +
+            have + ". Import an audio or video file with import_file and " +
+            "add it to the comp first."
+          : "Every audio layer is muted, so the render would be silence." };
+      }
+      const audioOm = RQ_OM_TEMPLATES.filter(
+        n => !/^_HIDDEN/.test(n) && /(^|[^a-z])(wav|aiff?|mp3)([^a-z]|$)/i
+                                      .test(n))[0];
+      if (!audioOm) {
+        return { __err: "No audio-only output-module template is " +
+          "installed. Installed: " + RQ_OM_TEMPLATES.join(", ") + "." };
+      }
+      const inner = cannedOk("render_comp",
+        { comp: args && args.comp, output: args && args.output,
+          template: audioOm, overwrite: args && args.overwrite });
+      if (inner && inner.__err) return inner;
+      inner.audioLayers = audible.map(l => l.name).join(", ");
+      return inner;
+    }
+    case "add_captions": {
+      const as = String((args && args.as) || "text").toLowerCase();
+      if (as !== "text" && as !== "markers") {
+        return { __err: "'as' must be 'text' (a text layer per caption, " +
+          "the default) or 'markers' — got " + (args && args.as) };
+      }
+      if (as === "text" && args && args.layer) {
+        return { __err: "'layer' only applies to {as: 'markers'} — it is " +
+          "the layer the markers land on. Drop it, or pass " +
+          "{as: 'markers'}." };
+      }
+      const segs = (args && args.segments) || [];
+      if (!segs.length) {
+        return { __err: "'segments' is required: an array of {start, end, " +
+          "text} in seconds." };
+      }
+      // Every segment is validated BEFORE anything is created: half a
+      // transcript on the timeline plus an error is worse than an error.
+      for (let i = 0; i < segs.length; i++) {
+        const sg = segs[i] || {};
+        const where = "segment " + (i + 1);
+        if (typeof sg.start !== "number" || typeof sg.end !== "number") {
+          return { __err: where + ": 'start' must be a number of seconds" };
+        }
+        if (sg.start < 0) {
+          return { __err: where + ": 'start' is " + sg.start + "s. A " +
+            "caption before the start of the comp is never visible." };
+        }
+        if (sg.end <= sg.start) {
+          return { __err: where + ": end (" + sg.end + "s) is not after " +
+            "start (" + sg.start + "s). AE accepts that silently." };
+        }
+        if (typeof sg.text !== "string" || !sg.text.replace(/\s/g, "")) {
+          return { __err: where + ": 'text' must be a non-empty string" };
+        }
+      }
+      const compName = String((args && args.comp) || "");
+      const dur = (compProps[compName] || { duration: 10 }).duration;
+      let past = 0;
+      for (const sg of segs) if (sg.end > dur + 0.0001) past++;
+      if (as === "markers") {
+        const before = capMarks.length;
+        for (const sg of segs) {
+          const at = capMarks.filter(m => m.time === sg.start)[0];
+          if (at) { at.comment = sg.text; at.duration = sg.end - sg.start; }
+          else capMarks.push({ time: sg.start, comment: sg.text,
+                               duration: sg.end - sg.start });
+        }
+        const added = capMarks.length - before;
+        const outM = { comp: compName, as: "markers",
+                       target: args && args.layer ? "layer " + args.layer
+                                                  : "comp " + compName,
+                       captions: segs.length, markersAdded: added,
+                       markers: capMarks.length };
+        if (added < segs.length) {
+          outM.collapsed = (segs.length - added) + " caption(s) landed on " +
+            "a time that already had a marker and REPLACED it.";
+        }
+        return outM;
+      }
+      const base = (args && args.name) || "Caption";
+      const built = [];
+      for (let i = 0; i < segs.length; i++) {
+        let nm = base + " " + (i + 1), k = 2;
+        while (capRows.some(r => r.name === nm)) nm = base + " " + (i + 1) +
+          " " + (k++);
+        // inPoint FIRST, then outPoint: the other order leaves the layer
+        // the wrong length, which is what the suite step reads.
+        capRows.push({ name: nm, inPoint: capQuant(segs[i].start),
+                       outPoint: capQuant(segs[i].end) });
+        built.push(nm);
+      }
+      const out = { comp: compName, as: "text", captions: built.length,
+                    layers: built.slice(0, 12), justification: "center" };
+      if (past) {
+        out.note = past + " caption(s) end past '" + compName + "' (" +
+          dur + "s) — they exist but run off the timeline.";
+      }
+      return out;
+    }
     case "render_comp": {
       const comp = String((args && args.comp) || "");
       const raw = (args && args.output) ? String(args.output) : "";
@@ -3920,7 +4063,7 @@ SelfTest.run({
     ordStack = [];
     maskKeys = {};
     batchLayers = 0; batchFx = {}; batchBlur = null;
-    batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetBoundsRig(); resetPresetRig(); resetRqRig(); resetAuRig(); resetFrRig();
+    batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetBoundsRig(); resetPresetRig(); resetRqRig(); resetAuRig(); resetFrRig(); resetCapRig();
     SelfTest.run({
       callHostTool(tool, args, cb) {
         if (tool === "grid_layout") {
@@ -3950,7 +4093,7 @@ SelfTest.run({
         ordStack = [];
         maskKeys = {};
         batchLayers = 0; batchFx = {}; batchBlur = null;
-        batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetBoundsRig(); resetPresetRig(); resetRqRig(); resetAuRig(); resetFrRig();
+        batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetBoundsRig(); resetPresetRig(); resetRqRig(); resetAuRig(); resetFrRig(); resetCapRig();
         SelfTest.run({
           callHostTool(tool, args, cb) {
             // Never refuse anything -- the old permissive host.
