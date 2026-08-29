@@ -6382,14 +6382,15 @@ AELL_TOOLS.list_render_templates = function (args) {
  * way it can be wrong ends in either a wedged AE or bytes in a folder
  * nobody meant. So it is checked to destruction before anything is
  * queued. */
-function AELL_rqCheckOutput(raw, overwrite) {
+function AELL_rqCheckOutput(raw, overwrite, argName, existsWhy) {
+  var arg = argName || "output";
   if (raw === null || typeof raw === "undefined" || raw === "") {
-    throw new Error("'output' is required - an ABSOLUTE file path to " +
-      "render to, e.g. \"C:/renders/shot.avi\".");
+    throw new Error("'" + arg + "' is required - an ABSOLUTE file path to " +
+      "write to, e.g. \"C:/renders/shot.avi\".");
   }
   var path = String(raw);
   if (!/^[a-zA-Z]:[\\\/]/.test(path) && path.indexOf("\\\\") !== 0) {
-    throw new Error("'output' must be an ABSOLUTE path (got \"" + path +
+    throw new Error("'" + arg + "' must be an ABSOLUTE path (got \"" + path +
       "\"). AE resolves a relative path against its own working " +
       "directory, not the project.");
   }
@@ -6413,8 +6414,9 @@ function AELL_rqCheckOutput(raw, overwrite) {
   if (file.exists && !overwrite) {
     throw new Error("Output file already exists: " + file.fsName + " (" +
       file.length + " bytes). Pass {overwrite: true} to replace it, or " +
-      "choose another path. (Rendering onto an existing file without " +
-      "this raises a modal dialog that blocks After Effects.)");
+      "choose another path. " + (existsWhy ||
+      "(Rendering onto an existing file without this raises a modal " +
+      "dialog that blocks After Effects.)"));
   }
   return file;
 }
@@ -6608,6 +6610,340 @@ AELL_TOOLS.add_to_render_queue = function (args) {
   if (already) {
     out.warning = comp.name + " was already in the render queue " +
       already + " time(s); this adds another, and both would render.";
+  }
+  return AELL_okay(out);
+};
+
+// ------------------------------------------------ frame round-trip (5.8)
+//
+// comp -> PNG -> layer. This is the bridge every image/video generator
+// stands on: something has to get a frame OUT of a comp and a file back
+// IN as a layer, and until now the panel could do neither (import_file
+// stops at the project panel). Both halves are built on measurements
+// from three probe rounds against real AE 2026 (WORKPLAN-LOG
+// 2026-08-28/29), and almost every line below is one of AE's silent
+// answers turned into a spoken one.
+
+/* What is ACTUALLY in the file AE just wrote. The dimensions of a
+ * snapshot are the one thing the caller cannot infer: a comp sitting at
+ * Half resolution writes a half-size frame and AE says nothing at all.
+ * PNG carries them in its first 24 bytes (8-byte signature, then the
+ * IHDR chunk), so this reads them rather than repeating the arithmetic
+ * and hoping. Returns null for anything that is not a PNG. */
+function AELL_pngInfo(file) {
+  var f = new File(file.fsName), head = null;
+  try {
+    f.encoding = "BINARY";
+    if (!f.open("r")) return null;
+    head = f.read(24);
+    f.close();
+  } catch (e) {
+    try { f.close(); } catch (eC) {}
+    return null;
+  }
+  if (!head || head.length < 24) return null;
+  if (head.charCodeAt(1) !== 80 || head.charCodeAt(2) !== 78 ||
+      head.charCodeAt(3) !== 71) return null;        // not a PNG signature
+  // Big-endian, by multiplication: ExtendScript's << is signed 32-bit.
+  var w = (head.charCodeAt(16) * 16777216) + (head.charCodeAt(17) * 65536) +
+          (head.charCodeAt(18) * 256) + head.charCodeAt(19);
+  var h = (head.charCodeAt(20) * 16777216) + (head.charCodeAt(21) * 65536) +
+          (head.charCodeAt(22) * 256) + head.charCodeAt(23);
+  return { width: w, height: h };
+}
+
+AELL_TOOLS.snapshot_frame = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  var overwrite = args.overwrite === true || args.overwrite === "true";
+
+  var wanted = (args.path === null || typeof args.path === "undefined" ||
+                args.path === "") ? args.output : args.path;
+  if (wanted === null || typeof wanted === "undefined" || wanted === "") {
+    return AELL_err("'path' is required - an ABSOLUTE .png path to write " +
+      "the frame to, e.g. \"C:/frames/shot.png\". list_render_templates " +
+      "reports a writable folder if this is a throwaway.");
+  }
+
+  // AE writes PNG BYTES into whatever name it is handed and never
+  // mentions it - measured: a frame saved as "wrongext.jpg" is a PNG
+  // called .jpg, and no .png appears beside it. Correct the extension
+  // BEFORE the exists check, so the check is about the file that will
+  // really be written.
+  var askedExt = AELL_extOf(wanted);
+  var pngPath = String(wanted), extNote = "";
+  if (askedExt !== "png") {
+    pngPath = askedExt
+      ? pngPath.slice(0, pngPath.length - askedExt.length - 1) + ".png"
+      : pngPath + ".png";
+    extNote = "AE writes PNG bytes whatever the file is called, so the " +
+      "path was corrected to \"" + pngPath + "\" - a frame saved as ." +
+      askedExt + " would be a PNG that no ." + askedExt + " reader opens.";
+  }
+
+  // Same absolute-path and missing-folder checks as a render (a missing
+  // folder is a SILENT no-op here: saveFrameToPng returns normally and
+  // writes nothing). The overwrite rule is the tool's own: unlike a
+  // render, saveFrameToPng overwrites without a dialog, so the hazard
+  // is a quietly destroyed file rather than a wedged AE.
+  var file = AELL_rqCheckOutput(pngPath, overwrite, "path",
+    "(saveFrameToPng overwrites silently - no dialog, and no undo.)");
+
+  var t = AELL_numArg(args.time);
+  if (t === null && args.time !== null && typeof args.time !== "undefined" &&
+      args.time !== "") {
+    return AELL_err("'time' must be a number of seconds (got \"" +
+      args.time + "\").");
+  }
+  var atCompTime = false;
+  if (t === null) { t = comp.time; atCompTime = true; }
+  // AE CLAMPS an out-of-range time and writes a BLANK frame rather than
+  // complaining - measured: time 99 and time -5 on the same 4s comp both
+  // produced 378-byte frames while the real one was 644. A blank PNG
+  // nobody is told about is exactly the silent loss this panel exists
+  // to stop.
+  if (t < 0 || t > comp.duration) {
+    return AELL_err("'time' " + t + "s is outside '" + comp.name +
+      "' (0 to " + comp.duration + "s). AE does not refuse this - it " +
+      "CLAMPS to the nearest end and writes a BLANK frame, so it is " +
+      "refused here instead.");
+  }
+  var frame = Math.round(t * comp.frameRate);
+  var lastFrame = Math.round(comp.duration * comp.frameRate) - 1;
+  if (frame > lastFrame) frame = lastFrame;          // duration is exclusive
+  if (frame < 0) frame = 0;
+  t = frame / comp.frameRate;
+
+  var res = args.resolution ? String(args.resolution).toLowerCase() : "full";
+  if (res !== "full" && res !== "comp") {
+    return AELL_err("'resolution' must be 'full' (default - the comp's " +
+      "real pixel size) or 'comp' (whatever downsample the comp is set " +
+      "to). Got: " + args.resolution);
+  }
+  // A comp left at Half/Third resolution writes a frame that size and
+  // says nothing (measured: a 320x240 comp at factor [2,2] wrote a
+  // 160x120 PNG). Someone asking for a snapshot means the picture, not
+  // the preview quality, so the default overrides the downsample and
+  // SAYS it did. The restore runs whatever happens - a throw must not
+  // hand the user a comp switched to Full behind their back.
+  var priorFactor = null;
+  try {
+    var rf = comp.resolutionFactor;
+    if (res === "full" && rf && (rf[0] !== 1 || rf[1] !== 1)) {
+      priorFactor = [rf[0], rf[1]];
+      comp.resolutionFactor = [1, 1];
+    }
+  } catch (eRf) { priorFactor = null; }
+
+  var thrown = null;
+  try {
+    // A String path THROWS ("is not a File or Folder object"), so this
+    // is always a File.
+    comp.saveFrameToPng(t, file);
+  } catch (eS) {
+    thrown = eS;
+  }
+  if (priorFactor) {
+    try { comp.resolutionFactor = priorFactor; } catch (eBack) {}
+  }
+  if (thrown) {
+    return AELL_err("Could not write the frame: " +
+      (thrown.message || thrown));
+  }
+
+  // AE hides a file it has just written for ~300 ms, so one look would
+  // report a good snapshot as a failure (the same fact render_comp
+  // polls for).
+  var bytes = AELL_rqSettle(file, 10);
+  if (bytes < 0) {
+    return AELL_err("After Effects reported no error but no file appeared " +
+      "at " + file.fsName + ". Check that the folder is writable.");
+  }
+
+  var info = AELL_pngInfo(file);
+  var out = {
+    comp: comp.name,
+    path: file.fsName,
+    time: t,
+    frame: frame,
+    bytes: bytes,
+    width: info ? info.width : comp.width,
+    height: info ? info.height : comp.height,
+    compSize: comp.width + "x" + comp.height,
+    next: "import_as_layer {path: \"" + file.fsName.replace(/\\/g, "/") +
+          "\"} places this PNG back into a comp as a layer."
+  };
+  if (extNote) out.pathNote = extNote;
+  if (atCompTime) {
+    out.timeNote = "No 'time' given, so the comp's current time (" + t +
+      "s, frame " + frame + ") was used.";
+  }
+  if (priorFactor) {
+    out.resolutionNote = "'" + comp.name + "' was set to resolution 1/" +
+      priorFactor[0] + " - it was snapshotted at FULL size and put back " +
+      "the way it was. Pass {resolution: \"comp\"} to keep the downsample.";
+  }
+  if (info && (info.width !== comp.width || info.height !== comp.height)) {
+    out.warning = "The PNG is " + info.width + "x" + info.height +
+      ", not the comp's " + comp.width + "x" + comp.height +
+      " - the comp is downsampled and {resolution: \"comp\"} kept it.";
+  }
+  // Guide layers are NOT rendered into a snapshot (measured: identical
+  // byte counts with and without a full-frame guide layer on top).
+  return AELL_okay(out);
+};
+
+AELL_TOOLS.import_as_layer = function (args) {
+  var raw = (args.path === null || typeof args.path === "undefined" ||
+             args.path === "") ? args.file : args.path;
+  if (raw === null || typeof raw === "undefined" || raw === "") {
+    return AELL_err("'path' is required - the ABSOLUTE path of an image, " +
+      "video or audio file to place in a comp.");
+  }
+  var p = String(raw);
+  if (!/^[a-zA-Z]:[\\\/]/.test(p) && p.indexOf("\\\\") !== 0) {
+    return AELL_err("'path' must be ABSOLUTE (got \"" + p + "\"). AE " +
+      "resolves a relative path against its own working directory, not " +
+      "the project folder.");
+  }
+  var file = new File(p);
+  if (!file.exists) {
+    return AELL_err("File not found: " + file.fsName +
+      ". Check the path - nothing was imported.");
+  }
+  var comp = AELL_resolveComp(args.comp);
+  var fit = args.fit ? String(args.fit).toLowerCase() : "fit";
+  if (fit === "center") fit = "none";
+  if (fit !== "fit" && fit !== "fill" && fit !== "stretch" &&
+      fit !== "width" && fit !== "height" && fit !== "none") {
+    return AELL_err("'fit' must be one of: fit (contain, default), fill " +
+      "(cover, crops), stretch (fills exactly, distorts - what AE's own " +
+      "\"Fit to Comp\" does), width, height, none (100%; 'center' means " +
+      "the same). Got: " + args.fit);
+  }
+
+  // AE imports the same file again as a SECOND project item and says
+  // nothing (measured: one path, two ids), so a loop that regenerates
+  // frames fills the project with duplicates and every later name
+  // lookup becomes a coin toss. Reuse what is already there.
+  var proj = app.project, i, it, src, fsName;
+  var existing = null, duplicates = 0;
+  for (i = 1; i <= proj.numItems; i++) {
+    it = proj.item(i);
+    src = null;
+    try { src = it.mainSource; } catch (eM) { src = null; }
+    // Comps answer `undefined` and solids hold a SolidSource: neither
+    // has a file, and asking one for a file throws.
+    if (!src || !(src instanceof FileSource)) continue;
+    fsName = null;
+    try { fsName = src.file.fsName; } catch (eF) { fsName = null; }
+    if (fsName && fsName.toLowerCase() === file.fsName.toLowerCase()) {
+      if (existing) duplicates++; else existing = it;
+    }
+  }
+
+  var item = existing, reused = false, reloaded = false;
+  if (item) {
+    reused = true;
+    // The bytes on disk can be NEWER than the frames AE cached - a
+    // generator writing the same path over and over is the whole point
+    // of this tool. reload() re-reads the file and keeps the item id
+    // (measured), so every layer already using it picks the new picture
+    // up.
+    try { item.mainSource.reload(); reloaded = true; } catch (eRl) {}
+  } else {
+    try {
+      item = proj.importFile(new ImportOptions(file));
+    } catch (eI) {
+      // canImportAs() is no help here: it answered TRUE for a .txt file
+      // that importFile then refused outright (measured), so the throw
+      // is the only honest signal.
+      return AELL_err("After Effects could not import " + file.fsName +
+        ": " + (eI.message || eI) + ". It reads images (png, jpg, tif, " +
+        "exr, psd), video (mov, mp4, avi) and audio (wav, mp3, aif); a " +
+        "file with the right extension can still be refused if its " +
+        "contents are something else.");
+    }
+  }
+
+  var layer = AELL_keepSelection(comp, function () {
+    return comp.layers.add(item);
+  });
+  if (args.name) layer.name = String(args.name);
+
+  var srcW = item.width, srcH = item.height;
+  var hasPixels = srcW > 0 && srcH > 0;
+  var transform = layer.property("ADBE Transform Group");
+  var out = {
+    comp: comp.name,
+    layer: layer.name,
+    index: layer.index,
+    source: item.name,
+    sourceSize: hasPixels ? (srcW + "x" + srcH) : "(no picture)",
+    compSize: comp.width + "x" + comp.height,
+    fit: fit,
+    inPoint: layer.inPoint,
+    outPoint: layer.outPoint
+  };
+
+  if (hasPixels && fit !== "none") {
+    var srcPar = item.pixelAspect > 0 ? item.pixelAspect : 1;
+    var compPar = comp.pixelAspect > 0 ? comp.pixelAspect : 1;
+    // This arithmetic is AE's, not ours: it reproduces every value the
+    // "Fit to Comp" family of menu commands produced in the probe,
+    // INCLUDING the pixel-aspect correction on X (a 320x240 par-1
+    // source in a 720x480 par-1.2121 comp fits at 272.727 x 200, not
+    // 225 x 200). The menu commands themselves are unusable here: with
+    // no comp viewer open they silently do NOTHING - scale stayed
+    // 100,100 - so an unattended panel must do the maths itself.
+    var rx = 100 * (comp.width * compPar) / (srcW * srcPar);
+    var ry = 100 * comp.height / srcH;
+    var sx, sy;
+    if (fit === "stretch") { sx = rx; sy = ry; }
+    else if (fit === "width") { sx = rx; sy = rx; }
+    else if (fit === "height") { sx = ry; sy = ry; }
+    else if (fit === "fill") { sx = Math.max(rx, ry); sy = sx; }
+    else { sx = Math.min(rx, ry); sy = sx; }        // "fit": contain
+    var scaleProp = transform.property("ADBE Scale");
+    var cur = scaleProp.value;
+    // The scripting API pads a 2D layer's Scale to three components;
+    // hand back whatever shape it gave us.
+    scaleProp.setValue((AELLJSON.isArray(cur) && cur.length > 2)
+      ? [sx, sy, cur[2]] : [sx, sy]);
+    out.scale = [Math.round(sx * 1000) / 1000, Math.round(sy * 1000) / 1000];
+    if (srcPar !== compPar) {
+      out.pixelAspectNote = "The comp's pixel aspect (" + compPar +
+        ") differs from the footage's (" + srcPar + "), so the X scale " +
+        "is corrected for it - the same as AE's own Fit to Comp.";
+    }
+  } else if (!hasPixels) {
+    out.note = "'" + item.name + "' has no picture (audio only), so there " +
+      "was nothing to fit; it was placed as-is.";
+  }
+
+  if (AELLJSON.isArray(args.position) && args.position.length >= 2) {
+    var posProp = transform.property("ADBE Position");
+    var curPos = posProp.value;
+    posProp.setValue((AELLJSON.isArray(curPos) && curPos.length > 2)
+      ? [args.position[0], args.position[1], curPos[2]]
+      : [args.position[0], args.position[1]]);
+  }
+
+  if (reused) {
+    out.reusedExisting = true;
+    out.reuseNote = "'" + item.name + "' was already in the project for " +
+      "that file, so it was reused" +
+      (reloaded ? " and RELOADED from disk (any layer already using it " +
+                  "now shows the current file)" : "") +
+      " instead of imported a second time.";
+  }
+  if (duplicates) {
+    out.warning = "The project already holds " + (duplicates + 1) +
+      " items for this file; the first was used. clean_project or " +
+      "delete_item can clear the rest.";
+  }
+  if (item.duration === 0) {
+    out.stillNote = "A still spans the whole comp (" + layer.inPoint +
+      "s to " + layer.outPoint + "s). set_layer_timing changes that.";
   }
   return AELL_okay(out);
 };
@@ -7860,6 +8196,12 @@ var AELL_MUTATING = {
   apply_effect: true, set_effect_param: true, set_layer_timing: true,
   delete_layer: true, set_comp_setting: true, import_file: true,
   add_to_render_queue: true, add_shape_layer: true, add_mask: true,
+  // import_as_layer imports and adds a layer: ordinary edits, one
+  // Ctrl+Z. snapshot_frame is absent for render_comp's second reason
+  // (see below): it changes NOTHING that survives the call, so counting
+  // it as a mutation would let a successful snapshot arm a rollback and
+  // spend the round's one Ctrl+Z on somebody else's edit.
+  import_as_layer: true,
   // render_comp and list_render_templates are deliberately ABSENT, and
   // render_comp's absence is load-bearing rather than tidy.
   //
@@ -7921,7 +8263,17 @@ var AELL_MUTATING = {
  * one and earn the modal again. The batch runner steps out of the group
  * for these and steps back in, so the caller's endUndoGroup still
  * balances. */
-var AELL_NO_UNDO_GROUP = { render_comp: true };
+var AELL_NO_UNDO_GROUP = {
+  render_comp: true,
+  // snapshot_frame is here for the SECOND half of that reasoning rather
+  // than the first. It is safe inside a group -- saveFrameToPng was
+  // measured inside three nested undo groups, followed by three more
+  // group cycles, with no "Undo group mismatch" -- but the file it
+  // writes cannot be undone by anything, so a round containing one is
+  // not honestly "one Ctrl+Z" either way, and its success must not arm
+  // AELL_maybeRollback.
+  snapshot_frame: true
+};
 
 // --------------------------------------------------------------- entry point
 

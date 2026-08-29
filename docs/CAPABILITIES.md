@@ -12,7 +12,7 @@ feature they describe. Use this to look at the product whole and ask
 
 _Regenerate with `node scripts/capability-report.js` — CI fails if this section is stale._
 
-**67 tools** (57 mutating, 10 read-only; 64 host-side, 3 panel-side).
+**69 tools** (59 mutating, 10 read-only; 66 host-side, 3 panel-side).
 
 | Tool | Does | Writes | Side | Stub tests | Suite steps |
 |---|---|---|---|---|---|
@@ -25,7 +25,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `add_null` | Add a null layer (use as a controller or parent) | yes | host | 1 | 7 |
 | `add_shape_content` | Add content INSIDE a shape layer: kinds group, rectangle, ellipse, star, polygon, path, fill, stroke, gradient_fill, gradient_stroke, repeater, trim_paths, merge_paths, offset_paths, rounded_corners, pucker_bloat, twist, zigzag | yes | host | 1 | 8 |
 | `add_shape_layer` | Add a shape layer (rectangle, ellipse, polygon, or star) | yes | host | — | 2 |
-| `add_solid` | Add a solid layer | yes | host | — | 32 |
+| `add_solid` | Add a solid layer | yes | host | — | 33 |
 | `add_text_animator` | Animate a text layer PER CHARACTER (typewriter, cascade, wiggle) — an animator holds the properties, a selector picks which characters get them | yes | host | 1 | 10 |
 | `add_text_layer` | Add a text layer to a comp | yes | host | 1 | 7 |
 | `add_to_render_queue` | Add a comp to the render queue WITHOUT rendering it | yes | host | 1 | 3 |
@@ -40,24 +40,25 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `comfy_generate` | Generate an image/video with local ComfyUI and import it into the AE project | yes | panel | — | — |
 | `comfy_list_workflows` | List available ComfyUI generation workflow templates by name | no | panel | — | — |
 | `comfy_status` | Check the local ComfyUI instance (online? queue depth?) | no | panel | — | — |
-| `create_comp` | Create a composition and open it | yes | host | 1 | 25 |
+| `create_comp` | Create a composition and open it | yes | host | 1 | 27 |
 | `create_folder` | Create a project-panel folder | yes | host | 1 | 10 |
-| `delete_item` | Delete a project item | yes | host | 1 | 32 |
+| `delete_item` | Delete a project item | yes | host | 1 | 34 |
 | `delete_layer` | Delete a layer from a comp | yes | host | — | 9 |
 | `distribute_property` | Distribute a property VALUE across layers | yes | host | 1 | 5 |
 | `duplicate_comp` | Duplicate a composition | yes | host | 1 | 1 |
 | `duplicate_layer` | Duplicate a LAYER inside its comp (use duplicate_comp only for whole compositions) | yes | host | 1 | 6 |
 | `for_each_layer` | Run a PER-LAYER tool once per target layer in ONE call (max 200 layers) — the batch executor for anything without its own layers arg: {tool: 'apply_effect', args: {effect: 'Gaussian Blur'}} blurs every target | yes | host | 1 | 6 |
-| `get_comp_details` | Layers of a comp with index, name, type, timing, effects | no | host | 2 | 21 |
+| `get_comp_details` | Layers of a comp with index, name, type, timing, effects | no | host | 2 | 22 |
 | `get_project_info` | List project items (comps/footage/folders) and the active comp | no | host | 2 | 13 |
-| `get_property` | Read ANY property by path: value, keyframes, expression | no | host | 3 | 79 |
+| `get_property` | Read ANY property by path: value, keyframes, expression | no | host | 3 | 81 |
 | `grid_layout` | Arrange layers into a grid rigged to a control null: its 'Grid X Spacing'/'Grid Y Spacing'/'Grid Columns' sliders drive spacing AND column count live, and the grid centers on the null's position (all expressions generated host-side) | yes | host | 1 | 2 |
-| `import_file` | Import a footage/image/video file into the project | yes | host | — | — |
+| `import_as_layer` | Import a file AND place it in a comp as a layer, scaled to the comp | yes | host | 1 | 8 |
+| `import_file` | Import a footage/image/video file into the PROJECT PANEL only — it does not appear in any comp | yes | host | — | 1 |
 | `link_property` | Drive a layer property from a control | yes | host | — | 2 |
 | `list_effects` | Enumerate effects INSTALLED in this AE (name, matchName, category), filtered and paged | no | host | 1 | 2 |
 | `list_presets` | Enumerate the ANIMATION PRESETS (.ffx) installed in this AE — AE ships ~679 (Behaviors, Text, Backgrounds, Transitions, Image, Shapes…) plus the user's own | no | host | 1 | 3 |
 | `list_properties` | DISCOVER a layer's real property tree — names, paths, types, current values | no | host | 2 | 9 |
-| `list_render_templates` | List this machine's render-settings and output-module template names for render_comp | no | host | 1 | 1 |
+| `list_render_templates` | List this machine's render-settings and output-module template names for render_comp | no | host | 1 | 2 |
 | `move_to_folder` | Move project items into a folder (batch) | yes | host | 1 | 2 |
 | `organize_project` | File loose root-level items into Comps/Footage/Solids/Audio/Images folders at the project ROOT | yes | host | 1 | 2 |
 | `precompose` | Move layers into a new nested comp (precompose) | yes | host | 1 | 5 |
@@ -81,13 +82,14 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `set_text_style` | Restyle an existing text layer (any subset of fields) | yes | host | 1 | 2 |
 | `set_track_matte` | Use one layer as another's track matte (alpha or luma, optionally inverted), or remove it with mode 'none' | yes | host | 1 | 1 |
 | `set_transform` | Set a transform property | yes | host | 1 | 7 |
+| `snapshot_frame` | Write one frame of a comp to a PNG on disk | yes | host | 1 | 5 |
 | `split_layer_into_chunks` | Cut a layer into chunks, each on its own layer trimmed to its own window — ONE call does the whole edit | yes | host | 1 | 2 |
 | `stagger_layers` | Distribute layer START TIMES | yes | host | 1 | 4 |
 
 **Coverage gaps (computed):**
 
 - Host tools with NO stubbed test: `add_camera`, `add_shape_layer`, `add_solid`, `apply_effect`, `delete_layer`, `import_file`, `link_property`, `set_effect_param`, `set_layer_timing`
-- Host tools never exercised by the self-test suite: `import_file`
+- Host tools never exercised by the self-test suite: none
 
 <!-- END GENERATED TOOL INVENTORY -->
 
@@ -190,8 +192,11 @@ Queued (see WORKPLAN for owners/order):
   falloff), so any bare name AE refuses is now searched down the real
   tree.
 - Suite coverage: `add_marker`/`precompose` (5.4) and
-  `add_to_render_queue` (5.5) have since been covered; `import_file`
-  waits on 5.8. `organize_project` is covered as of 0.10.2, but by its
+  `add_to_render_queue` (5.5) have since been covered, and `import_file`
+  with them on 2026-08-29 — it only ever needed a file on disk, and
+  `snapshot_frame` is that file. The computed gap list above now reads
+  "never exercised by the self-test suite: none", which is the first
+  time every host tool has been touched in real AE. `organize_project` is covered as of 0.10.2, but by its
   PREVIEW only: it files every LOOSE item at the project root and the
   suite runs inside whatever project the user has open, so the suite
   proves the preview counts and names correctly and moves nothing, and
@@ -302,8 +307,31 @@ Queued (see WORKPLAN for owners/order):
   that are actually there. Suite coverage needs no audio FILE: applying
   the Tone effect to a solid flips `layer.hasAudio` to true and the
   converter measures it.
-- Feature track not yet built: frame round-trip, .mogrt export, whisper
-  captions, ffmpeg exports (items 5.8-6).
+- The comp/file bridge closed 2026-08-29: `snapshot_frame` writes one
+  frame of a comp to a PNG and `import_as_layer` puts a file back into a
+  comp as a layer, scaled to it. `comp.saveFrameToPng` needs no viewer
+  and no render queue (a 320x240 frame in a few ms), but everything it
+  gets wrong it gets wrong QUIETLY, and each of those is now a refusal
+  or a spoken note: a folder that does not exist is a SILENT no-op, an
+  out-of-range time CLAMPS and writes a blank frame, an existing file is
+  replaced with no dialog and no undo, a comp left at Half resolution
+  writes a half-size frame (so the default overrides the downsample,
+  restores it, and says so), and it writes PNG BYTES into whatever name
+  it is handed — a frame saved as .jpg is a PNG called .jpg. The
+  dimensions REPORTED are read back out of the file's own PNG header,
+  not repeated from the comp. On the import side, AE makes a second
+  project item for a path it already holds and says nothing, so an
+  existing item is reused and `reload()`ed instead — which is what makes
+  regenerating the same path and re-placing it safe. The fit arithmetic
+  is the panel's own because AE's "Fit to Comp" menu commands do NOTHING
+  with no comp viewer open (measured: scale stayed 100,100); it
+  reproduces their numbers exactly WITH one open, pixel-aspect
+  correction on X included (a 320x240 par-1 source fits a 720x480
+  par-1.2121 comp at 272.727 x 200, not 225 x 200). `import_file` still
+  exists and still only reaches the project panel; its docs now say so
+  and point here.
+- Feature track not yet built: .mogrt export, whisper captions, ffmpeg
+  exports (items 5.9-6).
 - Image/video generation is not yet seamless: no frame-aware img2img,
   no mask-driven inpainting, no depth/parallax, no upscale/interpolate.
   The Krea 2 workflow now ships adapted and runnable

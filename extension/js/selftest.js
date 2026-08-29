@@ -53,6 +53,11 @@
   // AE's Tone effect turns a plain solid into a real audio source
   // (measured: layer.hasAudio flips to true and the converter hears it).
   var AUCOMP = "AELL Self-Test Audio";
+  // And the frame round-trip rig: snapshot_frame writes FILES and
+  // import_as_layer brings project items in, so like the render rig it
+  // works in comps of its own and takes them away again.
+  var FRCOMP = "AELL Self-Test Frame";
+  var FRWIDE = "AELL Self-Test Frame Wide";
   var running = false;
 
   /**
@@ -5228,6 +5233,316 @@
         tool: "delete_item",
         args: function (ctx) { return { item: ctx.auComp }; },
         check: function () { return true; } },
+
+      // ---- the frame round-trip: snapshot_frame / import_as_layer
+      // (WORKPLAN 5.8). A comp goes out to a PNG and comes back as a
+      // layer, which is the bridge every generator stands on.
+      //
+      // Every step below pins one thing AE does silently (all measured
+      // in AE 2026 across three probe rounds):
+      //
+      //  - saveFrameToPng overwrites an existing file with NO dialog and
+      //    no undo, so the refusal is the only thing between a user's
+      //    file and a quiet replacement.
+      //  - an out-of-range time CLAMPS and writes a BLANK frame rather
+      //    than complaining.
+      //  - it writes PNG BYTES into whatever name it is handed: a frame
+      //    saved as .jpg is a PNG called .jpg.
+      //  - importing a path the project ALREADY holds makes a second
+      //    item and says nothing.
+      //  - AE's "Fit to Comp" menu commands do NOTHING with no viewer
+      //    open, so the fit arithmetic here is the panel's own and is
+      //    checked against the numbers those commands produced WITH one
+      //    open: 250x200 stretch / 250 wide / 200 high for a 320x240
+      //    source in an 800x480 comp.
+      { name: "create the frame rig, and a wider comp to fit into",
+        batch: function () {
+          return [
+            { tool: "create_comp",
+              args: { name: FRCOMP, width: 240, height: 180,
+                      duration: 2, frameRate: 24 } },
+            { tool: "add_solid",
+              args: { comp: FRCOMP, name: "ST FR Fill",
+                      color: [0.9, 0.3, 0.1], width: 240, height: 180 } },
+            { tool: "create_comp",
+              args: { name: FRWIDE, width: 480, height: 180,
+                      duration: 2, frameRate: 24 } }
+          ];
+        },
+        check: function (rows, ctx) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + i + ": " + rows[i].error;
+          }
+          ctx.frComp = rows[0].data.name;
+          ctx.frWide = rows[2].data.name;
+          return true;
+        } },
+
+      { name: "a writable folder to snapshot into",
+        tool: "list_render_templates",
+        args: {},
+        check: function (d, ctx) {
+          if (!d.tempFolder) return "no tempFolder to write into";
+          ctx.frTemp = d.tempFolder.replace(/\\/g, "/").replace(/\/$/, "");
+          // Named "ST ..." on purpose: the imported footage item takes
+          // the FILE's name, and the suite's own cleanup sweeps exactly
+          // that prefix out of the project at the end.
+          ctx.frPath = ctx.frTemp + "/ST Frame.png";
+          return true;
+        } },
+
+      { name: "snapshot_frame writes a real PNG of the comp",
+        tool: "snapshot_frame",
+        args: function (ctx) {
+          return { comp: ctx.frComp, time: 1, path: ctx.frPath,
+                   overwrite: true };
+        },
+        check: function (d, ctx) {
+          if (!(d.bytes > 0)) {
+            return "reported " + d.bytes + " bytes — AE hides a file it " +
+                   "has just written for ~300 ms, so this is what a " +
+                   "single unpolled look reports";
+          }
+          // Read back out of the FILE's own header, not from the comp.
+          if (d.width !== 240 || d.height !== 180) {
+            return "the PNG is " + d.width + "x" + d.height +
+                   ", not the comp's 240x180";
+          }
+          if (d.frame !== 24) return "frame " + d.frame + ", not 24";
+          if (d.warning) return "unexpected warning: " + d.warning;
+          ctx.frWrote = d.path.replace(/\\/g, "/");
+          return (d.next || "").indexOf("import_as_layer") !== -1 ||
+                 "no route on to import_as_layer: " + d.next;
+        } },
+
+      // THE refusal. Without it a second snapshot silently destroys the
+      // first, with no dialog and nothing to undo.
+      { name: "snapshotting onto an existing file is REFUSED",
+        tool: "snapshot_frame",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.frComp, time: 1, path: ctx.frWrote };
+        },
+        check: function (err) {
+          if (!/already exists/i.test(err)) return "not a refusal: " + err;
+          return /silently|no undo/i.test(err) ||
+                 "does not say what would have happened: " + err;
+        } },
+
+      { name: "a time past the end is refused, not clamped to a blank frame",
+        tool: "snapshot_frame",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.frComp, time: 99,
+                   path: ctx.frTemp + "/ST Never.png" };
+        },
+        check: function (err) {
+          if (err.indexOf("outside") === -1) return "not a range error: " + err;
+          return /CLAMPS|BLANK/.test(err) ||
+                 "does not say what AE would have done: " + err;
+        } },
+
+      { name: "a relative path is refused, naming 'path' not 'output'",
+        tool: "snapshot_frame",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.frComp, path: "frames/rel.png" };
+        },
+        check: function (err) {
+          if (!/ABSOLUTE/i.test(err)) return "not a path error: " + err;
+          return err.indexOf("'path'") !== -1 ||
+                 "names the wrong argument: " + err;
+        } },
+
+      { name: "a non-.png extension is corrected, because AE would not",
+        tool: "snapshot_frame",
+        args: function (ctx) {
+          return { comp: ctx.frComp, time: 0,
+                   path: ctx.frTemp + "/ST Wrongext.jpg", overwrite: true };
+        },
+        check: function (d) {
+          if (!/\.png$/i.test(d.path)) {
+            return "wrote to " + d.path + " — AE puts PNG bytes in a .jpg " +
+                   "and says nothing";
+          }
+          return (d.pathNote || "").indexOf("PNG bytes") !== -1 ||
+                 "the correction was silent: " + d.pathNote;
+        } },
+
+      // The round trip itself: the comp's own frame, back in the comp,
+      // at exactly 100%.
+      { name: "import_as_layer brings the frame back at 1:1",
+        tool: "import_as_layer",
+        args: function (ctx) {
+          return { path: ctx.frWrote, comp: ctx.frComp, name: "ST FR Back" };
+        },
+        check: function (d, ctx) {
+          if (d.index !== 1) return "landed at index " + d.index;
+          if (d.sourceSize !== d.compSize) {
+            return "ROUND TRIP: " + d.sourceSize + " came back into " +
+                   d.compSize;
+          }
+          if (!d.scale || Math.abs(d.scale[0] - 100) > 0.001 ||
+              Math.abs(d.scale[1] - 100) > 0.001) {
+            return "ROUND TRIP: scaled to " +
+                   (d.scale ? d.scale.join(",") : "(nothing)") +
+                   ", not 100,100";
+          }
+          ctx.frSource = d.source;
+          return (d.stillNote || "").indexOf("whole comp") !== -1 ||
+                 "a still's timing was not explained: " + d.stillNote;
+        } },
+
+      { name: "AE really holds that scale, not just the report",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.frComp, layer: "ST FR Back",
+                   property: "Scale" };
+        },
+        check: function (d) {
+          var v = d.value;
+          if (!v || v.length < 2) return "no scale value: " +
+            JSON.stringify(v);
+          return (Math.abs(v[0] - 100) < 0.001 &&
+                  Math.abs(v[1] - 100) < 0.001) ||
+                 "AE holds " + v.join(",");
+        } },
+
+      { name: "the same file again is REUSED and reloaded, not doubled",
+        tool: "import_as_layer",
+        args: function (ctx) {
+          return { path: ctx.frWrote, comp: ctx.frComp, name: "ST FR Again" };
+        },
+        check: function (d) {
+          if (d.reusedExisting !== true) {
+            return "imported a second project item for one path";
+          }
+          if (d.warning) return "unexpected warning: " + d.warning;
+          return (d.reuseNote || "").indexOf("RELOADED") !== -1 ||
+                 "did not reload from disk, so a regenerated file would " +
+                 "still show the old picture: " + d.reuseNote;
+        } },
+
+      // The fit arithmetic, against AE's own Fit to Comp numbers. A
+      // 240x180 source in a 480x180 comp: x ratio 200, y ratio 100.
+      { name: "fit CONTAINS, fill COVERS, stretch fills exactly",
+        batch: function (ctx) {
+          return [
+            { tool: "import_as_layer",
+              args: { path: ctx.frWrote, comp: ctx.frWide, fit: "fit",
+                      name: "ST FR Contain" } },
+            { tool: "import_as_layer",
+              args: { path: ctx.frWrote, comp: ctx.frWide, fit: "fill",
+                      name: "ST FR Cover" } },
+            { tool: "import_as_layer",
+              args: { path: ctx.frWrote, comp: ctx.frWide, fit: "stretch",
+                      name: "ST FR Stretch" } },
+            { tool: "import_as_layer",
+              args: { path: ctx.frWrote, comp: ctx.frWide, fit: "none",
+                      name: "ST FR AsIs" } }
+          ];
+        },
+        check: function (rows) {
+          var i;
+          for (i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + i + ": " + rows[i].error;
+          }
+          var fit = rows[0].data.scale, fill = rows[1].data.scale,
+              str = rows[2].data.scale;
+          if (Math.abs(fit[0] - 100) > 0.001 ||
+              Math.abs(fit[1] - 100) > 0.001) {
+            return "'fit' should contain at 100,100 — got " + fit.join(",");
+          }
+          if (Math.abs(fill[0] - 200) > 0.001 ||
+              Math.abs(fill[1] - 200) > 0.001) {
+            return "'fill' should cover at 200,200 — got " + fill.join(",");
+          }
+          if (Math.abs(str[0] - 200) > 0.001 ||
+              Math.abs(str[1] - 100) > 0.001) {
+            return "'stretch' should be 200,100 (AE's own Fit to Comp) — " +
+                   "got " + str.join(",");
+          }
+          return rows[3].data.scale === undefined ||
+                 "'none' touched the scale: " +
+                 JSON.stringify(rows[3].data.scale);
+        } },
+
+      { name: "AE really holds the stretched, non-uniform scale",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.frWide, layer: "ST FR Stretch",
+                   property: "Scale" };
+        },
+        check: function (d) {
+          var v = d.value;
+          if (!v || v.length < 2) return "no scale value";
+          return (Math.abs(v[0] - 200) < 0.001 &&
+                  Math.abs(v[1] - 100) < 0.001) ||
+                 "AE holds " + v.join(",");
+        } },
+
+      { name: "an invented fit is refused with the real list",
+        tool: "import_as_layer",
+        expectError: true,
+        args: function (ctx) {
+          return { path: ctx.frWrote, comp: ctx.frWide, fit: "squish" };
+        },
+        check: function (err) {
+          return (err.indexOf("stretch") !== -1 &&
+                  err.indexOf("fill") !== -1) ||
+                 "does not name the real modes: " + err;
+        } },
+
+      { name: "a file that is not there is refused before AE is asked",
+        tool: "import_as_layer",
+        expectError: true,
+        args: function (ctx) {
+          return { path: ctx.frTemp + "/ST Nothing Here.png",
+                   comp: ctx.frWide };
+        },
+        check: function (err) {
+          return /File not found/.test(err) || "not a missing-file error: " +
+                 err;
+        } },
+
+      // import_file has shipped since the beginning and has never been
+      // exercised here, for want of a file on disk — snapshot_frame is
+      // that file. It reaches the PROJECT PANEL only, which is the whole
+      // difference between it and the tool above, and AE really does
+      // take a second item for a path it already holds.
+      { name: "import_file reaches the project panel and nothing else",
+        tool: "import_file",
+        args: function (ctx) { return { path: ctx.frWrote }; },
+        check: function (d, ctx) {
+          if (!d.name) return "no item name came back";
+          if (!(d.id > 0)) return "no item id came back: " + d.id;
+          return d.name.indexOf("ST Frame") === 0 ||
+                 "imported something else: " + d.name;
+        } },
+
+      { name: "and the layer count of the comp is untouched by it",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.frComp, limit: 0 }; },
+        check: function (d) {
+          // Three layers: the solid, and the two import_as_layer made.
+          return d.numLayers === 3 ||
+                 "import_file changed the comp: " + d.numLayers +
+                 " layers, expected 3";
+        } },
+
+      { name: "cleanup: drop the frame rig (the footage sweep takes the PNG)",
+        batch: function (ctx) {
+          return [
+            { tool: "delete_item", args: { item: ctx.frWide } },
+            { tool: "delete_item", args: { item: ctx.frComp } }
+          ];
+        },
+        check: function (rows) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + i + ": " + rows[i].error;
+          }
+          return true;
+        } },
 
       // ---- comp-rename audit + bulk rename. A three-comp rig: one
       // plain, one nested (a utility), one named by an expression.

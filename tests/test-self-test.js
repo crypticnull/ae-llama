@@ -118,6 +118,15 @@ const RQ_FOLDERS = ["c:\\users\\probe\\appdata\\local\\temp",
                     RQ_INHERITED.toLowerCase()];
 const rqItems = [];        // what the user has queued
 const rqDisk = {};         // lowercased path -> bytes
+// The frame round-trip (WORKPLAN 5.8) writes into that same virtual
+// disk. frPngs remembers each written frame's real pixel size (the tool
+// reads it back out of the PNG header, not out of the comp), frItems
+// which paths the project already holds an item for, and frScales what
+// AE ends up holding, so get_property can be asked rather than trusted.
+const frPngs = {};
+const frItems = {};
+const frScales = {};
+const frLayers = {};
 function rqNorm(p) { return String(p).split("/").join("\\"); }
 function rqDirOf(p) {
   const n = rqNorm(p);
@@ -346,6 +355,12 @@ const inAuComp = (a) => !!(a && /Self-Test Audio/.test(a.comp || ""));
 let auLayers = [];         // {name, audio: bool}
 let auNulls = [];          // the nulls the converter has left behind
 function resetAuRig() { auLayers = []; auNulls = []; }
+// resetRqRig already empties the virtual disk the frame rig shares.
+function resetFrRig() {
+  for (const m of [frPngs, frItems, frScales, frLayers]) {
+    for (const k of Object.keys(m)) delete m[k];
+  }
+}
 const auFind = (n) => auLayers.filter(l => l.name === String(n))[0];
 const auPeak = (n) => Math.round((34.33 + 1.69 * (n - 1)) * 100) / 100;
 const auUnique = (base) => {
@@ -1192,6 +1207,10 @@ function cannedOk(tool, args) {
         return capLayers(args.comp, mine.map((nm, i) => ({
           index: i + 1, name: nm, type: "light", effects: [] })), args);
       }
+      if (args && /Self-Test Frame/.test(args.comp || "")) {
+        return capLayers(args.comp, (frLayers[args.comp] || []).map(
+          (nm, i) => ({ index: i + 1, name: nm, effects: [] })), args);
+      }
       if (args && /Solid Room/.test(args.comp || "")) {
         return capLayers(args.comp,
           scShared.concat(scText).map((nm, i) => ({
@@ -1477,6 +1496,14 @@ function cannedOk(tool, args) {
       return out;
     }
     case "get_property": {
+      // What import_as_layer wrote, read back the way the suite reads it:
+      // the report is not evidence, the property is.
+      const frS = frScales[((args && args.comp) || "") + "|" +
+                           ((args && args.layer) || "")];
+      if (frS && /^scale$/i.test(String((args && args.property) || ""))) {
+        return { property: "Scale", matchName: "ADBE Scale", value: frS,
+                 numKeys: 0 };
+      }
       const SLg = shapeLayerOf(args && args.layer);
       if (SLg && /^contents\//i.test(String((args && args.property) || ""))) {
         const hit = shapeResolve(SLg, args.layer, args.property);
@@ -2003,6 +2030,10 @@ function cannedOk(tool, args) {
       return out;
     }
     case "add_solid":
+      if (args && /Self-Test Frame/.test(String(args.comp || ""))) {
+        frLayers[args.comp] = (frLayers[args.comp] || []);
+        frLayers[args.comp].unshift(String(args.name || "solid"));
+      }
       // The hygiene steps ask get_project_info whether a PREVIEW deleted
       // the orphaned solid, so its source has to really exist here.
       if (args && String(args.name || "").indexOf("ST HYG") === 0) {
@@ -2934,6 +2965,149 @@ function cannedOk(tool, args) {
       }
       return out;
     }
+    // ---- the frame round-trip (WORKPLAN 5.8). Faithful to what real
+    // AE does SILENTLY: PNG bytes into whatever name it is handed, an
+    // overwrite with no dialog, an out-of-range time clamped to a blank
+    // frame, and a second project item for a path it already holds.
+    case "import_file": {
+      const rawF = (args && args.path) ? String(args.path) : "";
+      if (!rawF) return { __err: "'path' is required" };
+      const pF = rqNorm(rawF);
+      if (rqDisk[pF.toLowerCase()] === undefined) {
+        return { __err: "File not found: " + pF };
+      }
+      frItems[pF.toLowerCase()] = true;
+      return { name: pF.slice(pF.lastIndexOf("\\") + 1), id: 9100 };
+    }
+    case "snapshot_frame": {
+      const comp = String((args && args.comp) || "");
+      const props = compProps[comp] ||
+        { width: 1280, height: 720, duration: 8, frameRate: 30 };
+      const raw = (args && args.path) ? String(args.path) : "";
+      if (!raw) {
+        return { __err: "'path' is required - an ABSOLUTE .png path to " +
+          "write the frame to, e.g. \"C:/frames/shot.png\"." };
+      }
+      if (!/^[a-zA-Z]:[\\/]/.test(raw) && raw.indexOf("\\\\") !== 0) {
+        return { __err: "'path' must be an ABSOLUTE path (got \"" + raw +
+          "\"). AE resolves a relative path against its own working " +
+          "directory, not the project." };
+      }
+      const png = rqExtOf(raw) === "png" ? rqNorm(raw)
+        : (rqExtOf(raw) ? rqNorm(raw).replace(/\.[^.\\]*$/, ".png")
+                        : rqNorm(raw) + ".png");
+      const dir = rqDirOf(png);
+      if (!rqFolderExists(dir)) {
+        return { __err: "Output folder does not exist: " + dir +
+          ". Deepest folder that does exist: " + rqNearestFolder(dir) +
+          ". Create the folder, or write somewhere that exists." };
+      }
+      const overwrite = args && (args.overwrite === true ||
+                                 args.overwrite === "true");
+      if (rqDisk[png.toLowerCase()] !== undefined && !overwrite) {
+        return { __err: "Output file already exists: " + png + " (" +
+          rqDisk[png.toLowerCase()] + " bytes). Pass {overwrite: true} to " +
+          "replace it, or choose another path. (saveFrameToPng overwrites " +
+          "silently - no dialog, and no undo.)" };
+      }
+      const gaveTime = args && args.time !== undefined &&
+                       args.time !== null && args.time !== "";
+      const t = gaveTime ? Number(args.time) : 0;
+      if (isNaN(t)) {
+        return { __err: "'time' must be a number of seconds (got \"" +
+          args.time + "\")." };
+      }
+      if (t < 0 || t > props.duration) {
+        return { __err: "'time' " + t + "s is outside '" + comp + "' (0 to " +
+          props.duration + "s). AE does not refuse this - it CLAMPS to the " +
+          "nearest end and writes a BLANK frame, so it is refused here " +
+          "instead." };
+      }
+      let frame = Math.round(t * props.frameRate);
+      const lastFrame = Math.round(props.duration * props.frameRate) - 1;
+      if (frame > lastFrame) frame = lastFrame;
+      rqDisk[png.toLowerCase()] = 644;
+      frPngs[png.toLowerCase()] = { width: props.width, height: props.height };
+      const out = { comp: comp, path: png, time: frame / props.frameRate,
+                    frame: frame, bytes: 644,
+                    width: props.width, height: props.height,
+                    compSize: props.width + "x" + props.height,
+                    next: "import_as_layer {path: \"" +
+                      png.split("\\").join("/") +
+                      "\"} places this PNG back into a comp as a layer." };
+      if (rqExtOf(raw) !== "png") {
+        out.pathNote = "AE writes PNG bytes whatever the file is called, " +
+          "so the path was corrected to \"" + png + "\".";
+      }
+      if (!gaveTime) {
+        out.timeNote = "No 'time' given, so the comp's current time (" +
+          out.time + "s, frame " + frame + ") was used.";
+      }
+      return out;
+    }
+    case "import_as_layer": {
+      const raw = (args && args.path) ? String(args.path) : "";
+      if (!raw) {
+        return { __err: "'path' is required - the ABSOLUTE path of an " +
+          "image, video or audio file to place in a comp." };
+      }
+      if (!/^[a-zA-Z]:[\\/]/.test(raw) && raw.indexOf("\\\\") !== 0) {
+        return { __err: "'path' must be ABSOLUTE (got \"" + raw + "\"). " +
+          "AE resolves a relative path against its own working directory, " +
+          "not the project folder." };
+      }
+      const p2 = rqNorm(raw);
+      if (rqDisk[p2.toLowerCase()] === undefined) {
+        return { __err: "File not found: " + p2 +
+          ". Check the path - nothing was imported." };
+      }
+      let fit = (args && args.fit) ? String(args.fit).toLowerCase() : "fit";
+      if (fit === "center") fit = "none";
+      if (["fit", "fill", "stretch", "width", "height",
+           "none"].indexOf(fit) === -1) {
+        return { __err: "'fit' must be one of: fit (contain, default), " +
+          "fill (cover, crops), stretch (fills exactly, distorts - what " +
+          "AE's own \"Fit to Comp\" does), width, height, none (100%; " +
+          "'center' means the same). Got: " + args.fit };
+      }
+      const comp2 = String((args && args.comp) || "");
+      const props2 = compProps[comp2] ||
+        { width: 1280, height: 720, duration: 8, frameRate: 30 };
+      const src = frPngs[p2.toLowerCase()] || { width: 320, height: 240 };
+      const fileName = p2.slice(p2.lastIndexOf("\\") + 1);
+      const name = (args && args.name) ? String(args.name) : fileName;
+      const reused = frItems[p2.toLowerCase()] === true;
+      frItems[p2.toLowerCase()] = true;
+      const rx = 100 * props2.width / src.width;
+      const ry = 100 * props2.height / src.height;
+      let sx = null, sy = null;
+      if (fit === "stretch") { sx = rx; sy = ry; }
+      else if (fit === "width") { sx = rx; sy = rx; }
+      else if (fit === "height") { sx = ry; sy = ry; }
+      else if (fit === "fill") { sx = Math.max(rx, ry); sy = sx; }
+      else if (fit === "fit") { sx = Math.min(rx, ry); sy = sx; }
+      const out2 = { comp: comp2, layer: name, index: 1, source: fileName,
+                     sourceSize: src.width + "x" + src.height,
+                     compSize: props2.width + "x" + props2.height,
+                     fit: fit, inPoint: 0, outPoint: props2.duration };
+      if (sx !== null) {
+        out2.scale = [Math.round(sx * 1000) / 1000,
+                      Math.round(sy * 1000) / 1000];
+        frScales[comp2 + "|" + name] = [out2.scale[0], out2.scale[1], 100];
+      }
+      if (reused) {
+        out2.reusedExisting = true;
+        out2.reuseNote = "'" + fileName + "' was already in the project " +
+          "for that file, so it was reused and RELOADED from disk (any " +
+          "layer already using it now shows the current file) instead of " +
+          "imported a second time.";
+      }
+      out2.stillNote = "A still spans the whole comp (0s to " +
+        props2.duration + "s). set_layer_timing changes that.";
+      frLayers[comp2] = (frLayers[comp2] || []);
+      frLayers[comp2].unshift(name);
+      return out2;
+    }
     default: return { done: true };
   }
 }
@@ -3027,7 +3201,7 @@ SelfTest.run({
     ordStack = [];
     maskKeys = {};
     batchLayers = 0; batchFx = {}; batchBlur = null;
-    batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetPresetRig(); resetRqRig(); resetAuRig();
+    batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetPresetRig(); resetRqRig(); resetAuRig(); resetFrRig();
     SelfTest.run({
       callHostTool(tool, args, cb) {
         if (tool === "grid_layout") {
@@ -3057,7 +3231,7 @@ SelfTest.run({
         ordStack = [];
         maskKeys = {};
         batchLayers = 0; batchFx = {}; batchBlur = null;
-        batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetPresetRig(); resetRqRig(); resetAuRig();
+        batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetPresetRig(); resetRqRig(); resetAuRig(); resetFrRig();
         SelfTest.run({
           callHostTool(tool, args, cb) {
             // Never refuse anything -- the old permissive host.

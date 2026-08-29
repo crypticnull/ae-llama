@@ -5258,3 +5258,162 @@ green, including the new `tests/test-audio-keyframes.js` (66 checks).
   Fourth pass to flag it; it belongs to the remote session's release cut.
 - Probe scratch files were written under `logs/` (gitignored) and AE was
   left on an empty untitled project.
+
+## 2026-08-29 (local) - item 5.8: the frame round-trip, and the fit AE will not do for you
+
+Harness green on arrival (404/404), so the pass took the next feature
+item: 5.8, the comp<->file bridge. It shipped whole in one pass -
+`snapshot_frame` and `import_as_layer`, both docs, 100 stub checks, 17
+suite steps - because most of the probing was already on disk.
+
+### A probe nobody logged
+
+`logs/probe58.txt` and `probe58b.txt` were sitting in the (gitignored)
+logs folder, written 2026-08-28 21:58-22:01, with no WORKPLAN-LOG entry
+anywhere. A pass ran the 5.8 PROBE and died before it could write
+anything down; the log's last entry is 5.7, and the run that made those
+files left no other trace. The measurements were good and were reused
+rather than repeated. **The lesson is the log's own rule, from the other
+direction: a pass that has measured something and not yet written it
+down has produced nothing.** Had those two files been swept, this pass
+would have re-run every probe.
+
+### The three questions the earlier probe left open
+
+One more probe round (`logs/probe58c.jsx`) answered them:
+
+- **Is `saveFrameToPng` safe inside an undo group?** YES - three nested
+  `beginUndoGroup`/`saveFrameToPng`/`endUndoGroup` rounds followed by
+  three innocent group cycles, no exception and no "Undo group mismatch"
+  modal. This is NOT the render_comp case: AE's renderer closes the
+  script's group out from under it, this does not.
+- **What does a non-.png extension do?** AE writes **PNG bytes into the
+  name it was given**. `wrongext.jpg` is a 897-byte PNG called .jpg, and
+  no .png appears beside it. A user double-clicking that file gets a
+  broken-image icon and no idea why.
+- **Does `mainSource.reload()` work on an imported still?** Yes, keeps
+  the item id and the dimensions. That is what makes re-placing a
+  regenerated file safe.
+
+Plus one accident worth more than the three: matching project items by
+`mainSource.file.fsName` found **2** items for one path in the harness's
+own leftover project, and 37 items with no file at all (comps answer
+`undefined` for `mainSource`, solids hold a `SolidSource`). Both shapes
+are now handled and the duplicate is reported.
+
+### PROBE RULE: never call app.newProject() in a probe
+
+The first run of probe58c produced no output file at all and AE looked
+healthy. It was blocked on **"Save changes to \"Untitled Project.aep\"
+before closing?"** - `app.newProject()` on the dirty project the HARNESS
+leaves behind. Every `-r` script after that was swallowed silently, the
+same signature as the overwrite modal and the undo-group modal. The
+harness's own `Clear-AellStaleDialog` answered it with WM_CLOSE (Cancel)
+on the next run. Probes work inside whatever project is open and clean
+up after themselves; the rewritten probe does exactly that and removed
+its 12 items on the way out.
+
+### What AE does silently, and what the tools say instead
+
+Every one of these is measured, and every one is now a refusal or a
+spoken note:
+
+- a folder that does not exist is a **silent no-op** - `saveFrameToPng`
+  returns normally and writes nothing;
+- an out-of-range time **CLAMPS** and writes a BLANK frame (time 99 and
+  time -5 on a 4s comp both wrote 378 bytes where the real frame was
+  644);
+- an existing file is replaced with **no dialog and no undo** (unlike a
+  render, which raises a modal - so the refusal here protects the user's
+  file rather than the harness);
+- a comp left at **Half resolution** writes a half-size frame and says
+  nothing. The default overrides the downsample, restores it in a block
+  that runs whatever happens, and REPORTS it; `{resolution: "comp"}`
+  keeps AE's behaviour and warns about the smaller frame;
+- the reported dimensions are read back out of the **PNG's own IHDR
+  header**, not repeated from the comp, so "did I get the pixels I asked
+  for" is answerable rather than assumed;
+- guide layers are not rendered into a snapshot;
+- `importFile` on a path the project already holds makes a **second
+  item** and says nothing, so an existing item is reused and reloaded;
+- `canImportAs(FOOTAGE)` answered **TRUE for a .txt** that `importFile`
+  then refused outright, so the throw is the only honest signal and the
+  refusal names what AE really reads.
+
+### The fit arithmetic is ours, because AE's is unusable here
+
+`app.findMenuCommandId("Fit to Comp")` resolves (2156, plus 2732/2733
+for Width/Height) and **does nothing at all with no comp viewer open** -
+scale stayed 100,100 across every rig. With a viewer open it works, and
+those numbers are what the panel's own arithmetic reproduces:
+
+| source 320x240 par 1 | AE Fit to Comp | Width | Height |
+|---|---|---|---|
+| in 800x480 par 1 | 250 x 200 | 250 x 250 | 200 x 200 |
+| in 720x480 par 1.2121 | **272.727** x 200 | 272.727 x 272.727 | 200 x 200 |
+
+So `rx = 100 * (compW * compPar) / (srcW * srcPar)`, `ry = 100 * compH /
+srcH`, and the modes are combinations of the two: `stretch` = AE's "Fit
+to Comp" (non-uniform, distorts), `width`/`height` = its uniform
+siblings, `fit` = min (contain, the default), `fill` = max (cover),
+`none`/`center` = AE's own 100%. The pixel-aspect correction on X is the
+part nobody would guess - the pixel-only answer there is 225, not
+272.727 - and the suite asserts the real AE numbers, not the formula.
+
+### Where the two tools sit in the undo machinery
+
+`import_as_layer` is ordinary: `AELL_MUTATING`, one Ctrl+Z.
+`snapshot_frame` is in **`AELL_NO_UNDO_GROUP`**, but for the second half
+of render_comp's reasoning rather than the first. It is SAFE inside a
+group (measured above); what it is not is undoable - the file it writes
+survives any Ctrl+Z - so counting it as a mutation would let a
+successful snapshot arm `AELL_maybeRollback` and spend the round's one
+undo on somebody else's edit. `tests/test-undo-groups.js` caught this
+the moment the tool was documented `mutating: true` and listed in
+neither map: a tool owes the host one answer or the other, and that
+invariant is what made the question get asked at all.
+
+### import_file, covered at last
+
+It has shipped since the beginning, had zero suite steps, and the only
+thing it ever needed was a file on disk - which `snapshot_frame` now
+makes. Two steps: it returns an item, and the comp's layer count does
+not change, which is the whole difference between it and
+`import_as_layer`. **`docs/CAPABILITIES.md`'s computed gap list now
+reads "Host tools never exercised by the self-test suite: none"** - the
+first time every host tool has been touched in real After Effects.
+
+### Verification
+
+- `tests/test-frame-roundtrip.js`: 100 checks, including a STUB FIDELITY
+  block that drives the raw API first so a stub that stopped modelling
+  the hazards cannot let the fixes pass on a technicality.
+- Full stub sweep: 46 files, all green.
+- **Harness: 404 -> 419 -> 421/421 PASSED**, three consecutive runs
+  (419 twice back-to-back before the two import_file steps were added).
+- The canned host in `tests/test-self-test.js` learned all three tools,
+  and a `resetFrRig()` with them: the second (deliberately failing) run
+  shares the virtual disk, so without it the layer-count assertion
+  counted two runs' imports and the injected-failure test read
+  419/421.
+
+### Still open
+
+- Next on the feature track: 5.9 (.mogrt export) - flagged in the
+  workplan as a LAST-item-of-the-night job for dialog risk, which this
+  pass's save-changes modal is a fresh argument for.
+- Generation wiring stays remote, but the bridge it was waiting on is
+  now here: `comfy_generate` still calls `import_file` and leaves its
+  output in the project panel. Pointing it at `import_as_layer` is a
+  small remote-session pass, and the reuse+reload path was built for
+  exactly the regenerate-the-same-path case.
+- No suite step covers `snapshot_frame`'s resolution override: nothing
+  in the tool set can SET a comp's resolutionFactor, so it is proven by
+  the stub only. Same shape as 5.7's work-area gap, and the same
+  `set_comp_setting` extension would close both.
+- `duplicate_comp` still takes a name without uniquing; no read-only
+  `get_bounds`. Both still unclaimed.
+- `release-notes.txt` still reads "0.10.0" while the feed ships 0.10.2 -
+  fifth pass to flag it; it belongs to the remote session's release cut.
+- Probe and patch scratch files under `logs/` (gitignored). AE left on
+  the harness's own project, which is dirty - see the probe rule above.

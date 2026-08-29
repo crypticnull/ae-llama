@@ -314,8 +314,31 @@
             "request.",
       args: "{comp?: string, width?: px, height?: px (omit one to keep aspect), factor?: number (e.g. 0.5 = half), mode?: 'fit'|'fill'}" },
     { name: "import_file", mutating: true,
-      desc: "Import a footage/image/video file into the project.",
+      desc: "Import a footage/image/video file into the PROJECT PANEL " +
+            "only — it does not appear in any comp. To put it on screen " +
+            "use import_as_layer instead.",
       args: "{path: string (absolute)}" },
+    { name: "import_as_layer", mutating: true,
+      desc: "Import a file AND place it in a comp as a layer, scaled to " +
+            "the comp. 'fit' (default) contains it without cropping or " +
+            "distorting, 'fill' covers and crops, 'stretch' fills exactly " +
+            "and distorts (what AE's own \"Fit to Comp\" does), 'none' " +
+            "leaves it at 100%. A file already in the project is REUSED " +
+            "and reloaded from disk rather than imported twice, so " +
+            "regenerating the same path and re-placing it is safe. A " +
+            "still spans the whole comp — set_layer_timing retimes it.",
+      args: "{path: string (ABSOLUTE), comp?: string, fit?: 'fit'|'fill'|'stretch'|'width'|'height'|'none', name?: string, position?: [x,y]}" },
+    { name: "snapshot_frame", mutating: true,
+      desc: "Write one frame of a comp to a PNG on disk. Use it to show " +
+            "someone what a comp looks like, or to feed a comp's own " +
+            "frame to an image generator. Defaults to the comp's current " +
+            "time and to FULL resolution even when the comp is " +
+            "downsampled (it puts the downsample back). Refuses an " +
+            "existing file unless {overwrite: true} — it would be " +
+            "replaced silently and cannot be undone. Guide layers are " +
+            "not rendered. list_render_templates reports a writable temp " +
+            "folder; import_as_layer puts the PNG back into a comp.",
+      args: "{path: string (ABSOLUTE .png), comp?: string, time?: seconds (default: the comp's current time), resolution?: 'full'|'comp', overwrite?: bool = false}" },
     { name: "add_shape_layer", mutating: true,
       desc: "Add a shape layer (rectangle, ellipse, polygon, or star).",
       args: "{comp?: string, name?: string, shape?: 'rectangle'|'ellipse'|'polygon'|'star', size?: [w,h], position?: [x,y], fillColor?: [r,g,b] 0..1, strokeColor?: [r,g,b], strokeWidth?: px, roundness?: px (rectangle), points?: int (polygon/star)}" },

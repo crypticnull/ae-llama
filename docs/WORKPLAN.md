@@ -724,7 +724,30 @@ needs, exact name of the created null and its slider paths. Build:
 link_property. Grounded error lists audio-capable layers. This plus
 link_property = beat-driven anything.
 
-### 5.8 Frame round-trip (the local foundation for image/video gen)
+### 5.8 Frame round-trip — DONE 2026-08-29
+Probed, built and covered in one pass. `snapshot_frame {comp?, time?,
+path, resolution?, overwrite?}` and `import_as_layer {path, comp?, fit?,
+name?, position?}` are both almost entirely made of what AE does
+SILENTLY, all measured: a missing folder is a no-op with no error, an
+out-of-range time CLAMPS and writes a blank frame, an existing file is
+replaced with no dialog and no undo, a comp at Half resolution writes a
+half-size frame, PNG bytes go into whatever name is handed over (a
+frame saved as .jpg is a PNG called .jpg), and a path the project
+already holds is imported a SECOND time without a word. Two findings
+shaped the design rather than a report: AE's "Fit to Comp" menu commands
+do NOTHING with no comp viewer open, so the fit arithmetic is the
+panel's own — reproducing their numbers exactly, pixel-aspect correction
+on X included (320x240 par-1 into 720x480 par-1.2121 = 272.727 x 200,
+not 225 x 200) — and `saveFrameToPng` is SAFE inside an undo group
+(measured across three nested groups plus three more cycles), unlike
+`renderQueue.render()`, so snapshot_frame is in `AELL_NO_UNDO_GROUP`
+only to keep an un-undoable file write from arming a rollback. Reported
+dimensions are read back out of the PNG's own header. `import_file`
+finally got suite coverage too — it only ever needed a file on disk —
+which closes the last "never exercised in real AE" gap. 100 stub checks
+in `tests/test-frame-roundtrip.js`, 17 suite steps, harness 404 -> 421.
+No version bump (feature track). Original text below.
+
 Build on 5.5's probe: `snapshot_frame` {comp, time, path} writes a PNG
 of the comp at a time; `import_as_layer` {path, comp, fit} imports a
 file and places it as a layer scaled fit/fill/center to the comp. Verify
