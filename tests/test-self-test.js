@@ -835,10 +835,27 @@ const resetBoundsRig = () => {
 function bnAdd(name, kind, extra) {
   const L = { kind: kind, pos: [0, 0], anchor: [0, 0], scale: [100, 100],
               rot: 0, parent: null, startTime: 0, stretch: 100,
-              threeD: false, w: 100, h: 100, posKeys: [], __name: name };
+              threeD: false, w: 100, h: 100, posKeys: [], z: 0,
+              __name: name };
   Object.assign(L, extra || {});
   bnLayers[name] = L;
   return L;
+}
+/* Where a layer's Position IS at a time. Keyframes make this differ from
+   L.pos, which is the whole reason parenting to an animated layer only
+   holds still at one frame -- a model that ignored time could not tell
+   the two apart. Linear between keys, held outside them. */
+function bnPosAt(L, t) {
+  const ks = L.posKeys;
+  if (!ks || !ks.length) return L.pos;
+  const at = typeof t === "number" ? t : 0;
+  if (at <= ks[0].time) return ks[0].value;
+  if (at >= ks[ks.length - 1].time) return ks[ks.length - 1].value;
+  let i = 0;
+  while (i < ks.length - 1 && ks[i + 1].time < at) i++;
+  const f = (at - ks[i].time) / (ks[i + 1].time - ks[i].time);
+  return [ks[i].value[0] + (ks[i + 1].value[0] - ks[i].value[0]) * f,
+          ks[i].value[1] + (ks[i + 1].value[1] - ks[i].value[1]) * f];
 }
 function bnRect(name, t, extents) {
   const L = bnLayers[name];
@@ -856,28 +873,43 @@ function bnRect(name, t, extents) {
 }
 /* One layer's own transform applied to a point already measured from its
    anchor -- scale, then rotation, then position. */
-function bnXform(L, pt) {
+function bnXform(L, pt, t) {
+  const P = bnPosAt(L, t);
   const x = pt[0] * (L.scale[0] / 100), y = pt[1] * (L.scale[1] / 100);
   const rad = L.rot * Math.PI / 180;
-  return [x * Math.cos(rad) - y * Math.sin(rad) + L.pos[0],
-          x * Math.sin(rad) + y * Math.cos(rad) + L.pos[1]];
+  return [x * Math.cos(rad) - y * Math.sin(rad) + P[0],
+          x * Math.sin(rad) + y * Math.cos(rad) + P[1]];
 }
-function bnUnXform(L, pt) {          // the inverse, for a new parent link
+function bnUnXform(L, pt, t) {       // the inverse, for a new parent link
+  const P = bnPosAt(L, t);
   const rad = -L.rot * Math.PI / 180;
-  const dx = pt[0] - L.pos[0], dy = pt[1] - L.pos[1];
+  const dx = pt[0] - P[0], dy = pt[1] - P[1];
   const x = dx * Math.cos(rad) - dy * Math.sin(rad);
   const y = dx * Math.sin(rad) + dy * Math.cos(rad);
   return [x / (L.scale[0] / 100), y / (L.scale[1] / 100)];
 }
-function bnCompPoint(name, srcPt) {
+function bnCompPoint(name, srcPt, t) {
   const L = bnLayers[name];
-  let pt = bnXform(L, [srcPt[0] - L.anchor[0], srcPt[1] - L.anchor[1]]);
+  let pt = bnXform(L, [srcPt[0] - L.anchor[0], srcPt[1] - L.anchor[1]], t);
   let up = L.parent ? bnLayers[L.parent] : null, guard = 0;
   while (up && guard++ < 32) {
-    pt = bnXform(up, pt);
+    pt = bnXform(up, pt, t);
     up = up.parent ? bnLayers[up.parent] : null;
   }
   return pt;
+}
+/* Everything above a layer that MOVES, in the shape set_layer_parent
+   reports it -- the model's half of the warning. */
+function bnMovingChain(name) {
+  const out = [];
+  let L = name ? bnLayers[name] : null, guard = 0;
+  while (L && guard++ < 32) {
+    if (L.posKeys && L.posKeys.length) {
+      out.push(L.__name + ": Position (" + L.posKeys.length + " keys)");
+    }
+    L = L.parent ? bnLayers[L.parent] : null;
+  }
+  return out;
 }
 function bnThreeD(name) {
   const hits = [];
@@ -950,7 +982,7 @@ function bnBounds(args, compW, compH) {
   }
   const pts = [[r.left, r.top], [r.left + r.width, r.top],
                [r.left + r.width, r.top + r.height],
-               [r.left, r.top + r.height]].map(p => bnCompPoint(name, p));
+               [r.left, r.top + r.height]].map(p => bnCompPoint(name, p, t));
   const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
   const minX = Math.min.apply(null, xs), maxX = Math.max.apply(null, xs);
   const minY = Math.min.apply(null, ys), maxY = Math.max.apply(null, ys);
@@ -1006,8 +1038,10 @@ function bnCanned(tool, args) {
       const L = bnLayers[name];
       if (!L) return undefined;
       const v = args.value;
-      if (args.property === "position") L.pos = [v[0], v[1]];
-      else if (args.property === "anchorPoint") L.anchor = [v[0], v[1]];
+      if (args.property === "position") {
+        L.pos = [v[0], v[1]];
+        if (v.length > 2) L.z = v[2];
+      } else if (args.property === "anchorPoint") L.anchor = [v[0], v[1]];
       else if (args.property === "scale") L.scale = [v[0], v[1]];
       else if (args.property === "rotation") L.rot = Number(v);
       return { layer: name, property: args.property, value: v };
@@ -1024,18 +1058,57 @@ function bnCanned(tool, args) {
       const clearing = args.parent === null ||
                        typeof args.parent === "undefined";
       const nk = keep ? L.posKeys.length : 0;
+      // The compensation is worked out ONCE, at one frame (measured
+      // 2026-08-29). With no atTime/atFrame that frame is the playhead,
+      // which this rig leaves at 0.
+      let T = 0, asked = false;
+      if (typeof args.atFrame !== "undefined" && args.atFrame !== null &&
+          args.atFrame !== "") {
+        if (isNaN(Number(args.atFrame))) {
+          return { __err: "atFrame must be a frame number; got " +
+                          JSON.stringify(args.atFrame) };
+        }
+        T = Number(args.atFrame) / 30; asked = true;
+      } else if (typeof args.atTime !== "undefined" && args.atTime !== null &&
+                 args.atTime !== "") {
+        if (isNaN(Number(args.atTime))) {
+          return { __err: "atTime must be a number of seconds; got " +
+                          JSON.stringify(args.atTime) };
+        }
+        T = Number(args.atTime); asked = true;
+      }
+      if (asked && !keep) {
+        return { __err: "atTime/atFrame only means something when the " +
+          "layer is being kept still. keepPosition:false leaves every " +
+          "value alone, so there is no frame to compensate at -- drop " +
+          "one of the two." };
+      }
+      if (asked && (T < 0 || T > 6)) {
+        return { __err: "atTime " + T + "s is outside \"" + args.comp +
+          "\", which runs 0 to 6s at 30 fps" };
+      }
+      const oldParent = L.parent;
+      const movers = bnMovingChain(clearing ? oldParent : args.parent);
       if (keep) {
-        // Bake the comp-space point, relink, then read it back in the
-        // new parent's space -- the shift AE applies to every key too.
-        const compPos = bnCompPoint(name, L.anchor);
+        // Bake the comp-space point AT THAT FRAME, relink, then read it
+        // back in the new parent's space -- the shift AE applies to every
+        // key too, which is why a keyed child's MOTION changes.
+        const compPos = bnCompPoint(name, L.anchor, T);
         const before = L.pos;
         L.parent = clearing ? null : args.parent;
         L.pos = clearing ? compPos
-                         : bnUnXform(bnLayers[args.parent], compPos);
+                         : bnUnXform(bnLayers[args.parent], compPos, T);
         const dx = L.pos[0] - before[0], dy = L.pos[1] - before[1];
         for (const k of L.posKeys) {
           k.value = [k.value[0] + dx, k.value[1] + dy, 0];
         }
+        // Z only passes between two 3D layers: a 2D parent leaves a 3D
+        // child's Z alone, and a 3D parent's Z never reaches a 2D child.
+        const wasP = oldParent ? bnLayers[oldParent] : null;
+        const nowP = clearing ? null : bnLayers[args.parent];
+        const oldZ = (wasP && wasP.threeD && L.threeD) ? (wasP.z || 0) : 0;
+        const newZ = (nowP && nowP.threeD && L.threeD) ? (nowP.z || 0) : 0;
+        L.z = (L.z || 0) + oldZ - newZ;
       } else {
         L.parent = clearing ? null : args.parent;
       }
@@ -1061,6 +1134,32 @@ function bnCanned(tool, args) {
         out.keyframesNote = "AE rewrote all " + nk + " transform " +
           "keyframe(s) on these layers, not just the current value; the " +
           "old numbers are gone.";
+      }
+      if (keep) {
+        out.compensatedAt = (Math.round(T * 1000) / 1000) + "s (frame " +
+          Math.round(T * 30) + ")" +
+          (asked ? ", as asked" : ", the playhead where it stood");
+      }
+      if (movers.length) {
+        out.parentAnimated = movers.join("; ");
+        out.parentAnimatedNote = (clearing
+          ? "The parent it left MOVES over time. AE compensates once, at " +
+            out.compensatedAt.split(",")[0] + ", so the layer keeps the " +
+            "position it had THERE and loses the motion the parent was " +
+            "giving it at every other frame."
+          : "That parent MOVES over time. AE compensates once, at " +
+            out.compensatedAt.split(",")[0] + ", so the layer sits " +
+            "exactly where it was at that frame and travels with the " +
+            "parent everywhere else -- this is NOT a jump-free link " +
+            "across the whole timeline.") +
+          " Pass atTime/atFrame to choose the frame that must not move" +
+          (clearing ? "." : ", or keepPosition:false to leave the numbers " +
+            "alone and let the layer ride the parent.");
+        if (nk > 0) {
+          out.parentAnimatedNote += " These layers have keyframes of " +
+            "their own, which now play inside that moving space, so " +
+            "their MOTION changed, not just their numbers.";
+        }
       }
       return out;
     }
@@ -1102,7 +1201,7 @@ function bnCanned(tool, args) {
       }
       if (/^position$/i.test(String(args.property || ""))) {
         const out = { layer: name, property: args.property,
-                      value: [L.pos[0], L.pos[1], 0],
+                      value: [L.pos[0], L.pos[1], L.z || 0],
                       numKeys: L.posKeys.length };
         if (L.posKeys.length) {
           out.keys = L.posKeys.map(k => ({ time: k.time,

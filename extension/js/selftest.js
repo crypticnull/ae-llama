@@ -7030,17 +7030,338 @@
                  "no keyframesNote: " + rows[3].data.keyframesNote;
         } },
 
+      // ---- the compensation happens at ONE frame -----------------------
+      // Measured 2026-08-29: AE works the compensation out once, from the
+      // parent's transform at the PLAYHEAD, and writes it into the child
+      // as fixed numbers. Under a parent that MOVES that makes "nothing
+      // jumped" true at exactly one frame -- a still layer stayed put at
+      // t=0 and was 400px away at t=2. Anchors are pinned to [0,0] so the
+      // offset AE applies is the parent's Position exactly.
+      { name: "parent rig: a parent that MOVES, and a still layer",
+        batch: function (ctx) {
+          return [
+            { tool: "add_solid", args: { comp: ctx.bnComp,
+                name: "ST PR Mover", color: [0.2, 0.8, 0.2],
+                width: 100, height: 100 } },
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST PR Mover", property: "anchorPoint",
+                value: [0, 0] } },
+            { tool: "set_keyframes", args: { comp: ctx.bnComp,
+                layer: "ST PR Mover", property: "Position",
+                keys: [{ time: 0, value: [100, 100] },
+                       { time: 2, value: [500, 100] }] } },
+            { tool: "add_solid", args: { comp: ctx.bnComp,
+                name: "ST PR Still", color: [0.8, 0.8, 0.2],
+                width: 100, height: 100 } },
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST PR Still", property: "anchorPoint",
+                value: [0, 0] } },
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST PR Still", property: "position",
+                value: [400, 300] } },
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST PR Still", time: 0 } },
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST PR Still", time: 2 } }
+          ];
+        },
+        check: function (rows) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + (i + 1) + ": " + rows[i].error;
+          }
+          var a = rows[6].data.comp, b = rows[7].data.comp;
+          return (Math.abs(a.centerX - 450) < 0.01 &&
+                  Math.abs(b.centerX - 450) < 0.01 &&
+                  Math.abs(a.centerY - 350) < 0.01) ||
+                 "the unparented layer is not still: t0 " + a.centerX + "," +
+                 a.centerY + " t2 " + b.centerX + "," + b.centerY +
+                 ", expected 450,350 at both";
+        } },
+
+      { name: "an animated parent holds the link at ONE frame, and says so",
+        batch: function (ctx) {
+          return [
+            { tool: "set_layer_parent", args: { comp: ctx.bnComp,
+                layer: "ST PR Still", parent: "ST PR Mover", atTime: 0 } },
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST PR Still", time: 0 } },
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST PR Still", time: 2 } },
+            { tool: "get_property", args: { comp: ctx.bnComp,
+                layer: "ST PR Still", property: "position" } }
+          ];
+        },
+        check: function (rows) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + (i + 1) + ": " + rows[i].error;
+          }
+          var d = rows[0].data;
+          if ((d.parentAnimated || "").indexOf("ST PR Mover") === -1 ||
+              (d.parentAnimated || "").indexOf("Position (2 keys)") === -1) {
+            return "parentAnimated does not name the moving parent: " +
+                   d.parentAnimated;
+          }
+          if (!/NOT a jump-free link/.test(d.parentAnimatedNote || "")) {
+            return "the note still calls it jump-free: " +
+                   d.parentAnimatedNote;
+          }
+          if (!/^0s \(frame 0\), as asked/.test(d.compensatedAt || "")) {
+            return "compensatedAt: " + d.compensatedAt;
+          }
+          var a = rows[1].data.comp, b = rows[2].data.comp;
+          if (Math.abs(a.centerX - 450) > 0.01) {
+            return "the layer moved AT the compensation frame: " + a.centerX;
+          }
+          if (Math.abs(b.centerX - 850) > 0.01) {
+            return "at t=2 the layer is at " + b.centerX +
+                   ", expected 850 (it must travel with the parent)";
+          }
+          var v = rows[3].data.value;
+          return (Math.abs(v[0] - 300) < 0.01 && Math.abs(v[1] - 200) < 0.01) ||
+                 "Position reads " + v.join(",") + ", expected 300,200";
+        } },
+
+      { name: "atTime picks WHICH frame must not move",
+        batch: function (ctx) {
+          return [
+            { tool: "add_solid", args: { comp: ctx.bnComp,
+                name: "ST PR Pinned", color: [0.2, 0.4, 0.9],
+                width: 100, height: 100 } },
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST PR Pinned", property: "anchorPoint",
+                value: [0, 0] } },
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST PR Pinned", property: "position",
+                value: [400, 300] } },
+            { tool: "set_layer_parent", args: { comp: ctx.bnComp,
+                layer: "ST PR Pinned", parent: "ST PR Mover", atFrame: 60 } },
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST PR Pinned", time: 2 } },
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST PR Pinned", time: 0 } }
+          ];
+        },
+        check: function (rows) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + (i + 1) + ": " + rows[i].error;
+          }
+          var d = rows[3].data;
+          if (!/^2s \(frame 60\)/.test(d.compensatedAt || "")) {
+            return "compensatedAt: " + d.compensatedAt;
+          }
+          var at2 = rows[4].data.comp, at0 = rows[5].data.comp;
+          if (Math.abs(at2.centerX - 450) > 0.01) {
+            return "the frame that was ASKED for moved: " + at2.centerX +
+                   ", expected 450";
+          }
+          return Math.abs(at0.centerX - 50) < 0.01 ||
+                 "t=0 is at " + at0.centerX + ", expected 50 (it is the " +
+                 "frame that gives way instead)";
+        } },
+
+      { name: "with no atTime the playhead is used, and named",
+        batch: function (ctx) {
+          return [
+            { tool: "add_solid", args: { comp: ctx.bnComp,
+                name: "ST PR Default", color: [0.9, 0.2, 0.6],
+                width: 100, height: 100 } },
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST PR Default", property: "anchorPoint",
+                value: [0, 0] } },
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST PR Default", property: "position",
+                value: [400, 300] } },
+            { tool: "set_layer_parent", args: { comp: ctx.bnComp,
+                layer: "ST PR Default", parent: "ST PR Mover" } },
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST PR Default", time: 0 } },
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST PR Default", time: 2 } }
+          ];
+        },
+        check: function (rows) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + (i + 1) + ": " + rows[i].error;
+          }
+          var d = rows[3].data;
+          if (!/playhead where it stood/.test(d.compensatedAt || "")) {
+            return "compensatedAt does not say where the frame came " +
+                   "from: " + d.compensatedAt;
+          }
+          if (!/frame \d+/.test(d.compensatedAt || "")) {
+            return "compensatedAt names no frame: " + d.compensatedAt;
+          }
+          // Playhead-agnostic: wherever it was compensated, the layer now
+          // travels, which is the whole point of the warning.
+          var a = rows[4].data.comp, b = rows[5].data.comp;
+          return Math.abs(b.centerX - a.centerX - 400) < 0.01 ||
+                 "the layer does not travel with the parent: t0 " +
+                 a.centerX + " t2 " + b.centerX + " (expected 400 apart)";
+        } },
+
+      { name: "unparenting from a moving parent admits what it took away",
+        batch: function (ctx) {
+          return [
+            { tool: "set_layer_parent", args: { comp: ctx.bnComp,
+                layer: "ST PR Still", parent: null, atTime: 0 } },
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST PR Still", time: 0 } },
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST PR Still", time: 2 } }
+          ];
+        },
+        check: function (rows) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + (i + 1) + ": " + rows[i].error;
+          }
+          var d = rows[0].data;
+          if ((d.parentAnimated || "").indexOf("ST PR Mover") === -1) {
+            return "the parent it LEFT is not named: " + d.parentAnimated;
+          }
+          if (!/loses the motion/.test(d.parentAnimatedNote || "")) {
+            return "the note is not about what was taken away: " +
+                   d.parentAnimatedNote;
+          }
+          var a = rows[1].data.comp, b = rows[2].data.comp;
+          return (Math.abs(a.centerX - 450) < 0.01 &&
+                  Math.abs(b.centerX - 450) < 0.01) ||
+                 "the layer did not come to rest at 450: t0 " + a.centerX +
+                 " t2 " + b.centerX;
+        } },
+
+      { name: "atTime outside the comp is refused with the range",
+        tool: "set_layer_parent",
+        args: function (ctx) {
+          return { comp: ctx.bnComp, layer: "ST PR Still",
+                   parent: "ST PR Mover", atTime: 99 };
+        },
+        expectError: true,
+        check: function (err) {
+          return (/0 to 6/.test(err) && /30 fps/.test(err)) ||
+                 "ungrounded refusal: " + err;
+        } },
+
+      // ---- mixed dimensions: the other half of the same question -------
+      // Measured 2026-08-29: the compensation SURVIVES a child and parent
+      // that disagree about 3D. A 2D parent leaves the child's Z alone
+      // (it does not zero it, the way turning the 3D switch off does),
+      // and a 3D parent's Z never reaches a 2D child at all -- AE
+      // compensates in X/Y only and the picture does not move.
+      { name: "a 2D parent leaves a 3D child's Z alone",
+        batch: function (ctx) {
+          return [
+            { tool: "add_solid", args: { comp: ctx.bnComp,
+                name: "ST PR Flat", color: [0.5, 0.5, 0.5],
+                width: 100, height: 100 } },
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST PR Flat", property: "anchorPoint",
+                value: [0, 0] } },
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST PR Flat", property: "position",
+                value: [100, 100] } },
+            { tool: "add_solid", args: { comp: ctx.bnComp,
+                name: "ST PR Deep", color: [0.3, 0.9, 0.9],
+                width: 100, height: 100 } },
+            { tool: "set_layer_3d", args: { comp: ctx.bnComp,
+                layer: "ST PR Deep", enabled: true } },
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST PR Deep", property: "anchorPoint",
+                value: [0, 0, 0] } },
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST PR Deep", property: "position",
+                value: [400, 300, 200] } },
+            { tool: "set_layer_parent", args: { comp: ctx.bnComp,
+                layer: "ST PR Deep", parent: "ST PR Flat" } },
+            { tool: "get_property", args: { comp: ctx.bnComp,
+                layer: "ST PR Deep", property: "position" } }
+          ];
+        },
+        check: function (rows) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + (i + 1) + ": " + rows[i].error;
+          }
+          if (rows[7].data.parentAnimated) {
+            return "a still parent was reported as animated: " +
+                   rows[7].data.parentAnimated;
+          }
+          var v = rows[8].data.value;
+          if (Math.abs(v[0] - 300) > 0.01 || Math.abs(v[1] - 200) > 0.01) {
+            return "X/Y read " + v[0] + "," + v[1] + ", expected 300,200";
+          }
+          return Math.abs(v[2] - 200) < 0.01 ||
+                 "the Z was changed to " + v[2] + "; a 2D parent must " +
+                 "leave it at 200";
+        } },
+
+      { name: "a 3D parent's Z never reaches a 2D child",
+        batch: function (ctx) {
+          return [
+            { tool: "add_solid", args: { comp: ctx.bnComp,
+                name: "ST PR ZParent", color: [0.6, 0.3, 0.1],
+                width: 100, height: 100 } },
+            { tool: "set_layer_3d", args: { comp: ctx.bnComp,
+                layer: "ST PR ZParent", enabled: true } },
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST PR ZParent", property: "anchorPoint",
+                value: [0, 0, 0] } },
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST PR ZParent", property: "position",
+                value: [400, 300, -400] } },
+            { tool: "add_solid", args: { comp: ctx.bnComp,
+                name: "ST PR FlatKid", color: [0.9, 0.9, 0.3],
+                width: 100, height: 100 } },
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST PR FlatKid", property: "anchorPoint",
+                value: [0, 0] } },
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST PR FlatKid", property: "position",
+                value: [400, 300] } },
+            { tool: "set_layer_parent", args: { comp: ctx.bnComp,
+                layer: "ST PR FlatKid", parent: "ST PR ZParent" } },
+            { tool: "get_property", args: { comp: ctx.bnComp,
+                layer: "ST PR FlatKid", property: "position" } }
+          ];
+        },
+        check: function (rows) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + (i + 1) + ": " + rows[i].error;
+          }
+          var v = rows[8].data.value;
+          return (Math.abs(v[0]) < 0.01 && Math.abs(v[1]) < 0.01) ||
+                 "Position reads " + v.join(",") + ", expected 0,0 -- the " +
+                 "compensation must use the parent's X/Y and nothing else";
+        } },
+
       { name: "parent rig: clean up",
         batch: function (ctx) {
           return [
             { tool: "delete_layer", args: { comp: ctx.bnComp,
                 layer: "ST PR Kid" } },
             { tool: "delete_layer", args: { comp: ctx.bnComp,
-                layer: "ST PR Keyed" } }
+                layer: "ST PR Keyed" } },
+            { tool: "delete_layer", args: { comp: ctx.bnComp,
+                layer: "ST PR Still" } },
+            { tool: "delete_layer", args: { comp: ctx.bnComp,
+                layer: "ST PR Pinned" } },
+            { tool: "delete_layer", args: { comp: ctx.bnComp,
+                layer: "ST PR Default" } },
+            { tool: "delete_layer", args: { comp: ctx.bnComp,
+                layer: "ST PR Mover" } },
+            { tool: "delete_layer", args: { comp: ctx.bnComp,
+                layer: "ST PR Deep" } },
+            { tool: "delete_layer", args: { comp: ctx.bnComp,
+                layer: "ST PR Flat" } },
+            { tool: "delete_layer", args: { comp: ctx.bnComp,
+                layer: "ST PR FlatKid" } },
+            { tool: "delete_layer", args: { comp: ctx.bnComp,
+                layer: "ST PR ZParent" } }
           ];
         },
         check: function (rows) {
-          return (rows[0].ok && rows[1].ok) || "cleanup failed";
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + (i + 1) + ": " + rows[i].error;
+          }
+          return true;
         } },
 
       // add_text_layer takes no 'name': AE names a text layer after its

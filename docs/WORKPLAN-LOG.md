@@ -5990,3 +5990,138 @@ by any suite step that quotes the project's contents back.
 - Probe scratch under `logs/` (gitignored). AE left on the harness's own
   project, dirty, with no dialog open, and with this pass's PRBI rigs
   removed.
+
+## 2026-08-29 (local) - "nothing moved" was only ever true at one frame
+## (0.10.8)
+
+Harness green on arrival (490/490), so the pass took the oldest thing the
+open list carries: the question the set_layer_parent pass filed about its
+own fix - "not measured here: whether `.parent =` compensation survives a
+child that is 3D under a 2D parent, or a parent with a keyframed
+transform. The probe covered 3D-under-3D only." Both halves are measured
+now. The first survives. The second does not, and the tool had been
+promising it since the day it shipped.
+
+### The probe (`logs/probe-parent2.txt`, AE 2026 26.3x87)
+
+Nine rigs, each measured the only honest way: a probe null carrying
+`thisComp.layer("X").toComp([0,0,0])` as its Position expression, read
+back with `valueAtTime` at several times, so the question is always
+"where do the pixels land" and never "what does the tool say".
+
+**Mixed dimensions: compensation holds.**
+
+- A 3D child under a 2D parent stays put (world 394.16,276.79 ->
+  393.85,275.56 - AE re-decomposes the parent's 2D rotation into the
+  child's Orientation, [10,20,30] -> [18.65,12.39,359.73], and the
+  round trip costs about a pixel). The Z is NOT touched: a 2D parent
+  leaves 200 at 200. Worth stating plainly because turning the 3D switch
+  off zeroes exactly that number, and the two look alike from outside.
+- A 2D child under a 3D parent does not move either, and the reason is
+  that the parent's Z and Y-rotation never reach it at all: the
+  compensation is a pure X/Y translation by the parent's `position -
+  anchor`. Rig I, a parent moved ONLY in Z, still rewrote the child's
+  Position by the parent's X/Y and left the picture where it was.
+
+**An animated parent: the promise breaks, and nothing said so.**
+
+- (D) A STILL layer parented to a 2-key parent: world 360 at every time
+  before, and 360 / 560 / 760 at t=0/1/2 after. It sat still at exactly
+  one frame and was 400 px away two seconds later.
+- (E) A KEYFRAMED child under the same parent: 360/460/560 became
+  360/660/960. Not an offset - its speed doubled. The tool's existing
+  `keyframesNote` says the old numbers are gone; it never said the
+  MOTION was gone.
+- (F) A parent driven by an EXPRESSION does the same with ZERO
+  keyframes, which is precisely what the key-count accounting cannot
+  see.
+- (G) The compensation lands on the PLAYHEAD. The same rig parented at
+  t=1 instead of t=0 came out with different numbers and a different
+  frame left standing still (160/360/560). The tool never set comp.time,
+  so the same call gave different results depending on where the user
+  had left the playhead - and the model has no way to know where that
+  was.
+- (H) Unparenting is the same class: a layer riding an animated parent
+  keeps only the position it had at that one frame (360/560/760 ->
+  360/360/360) and silently loses the motion.
+
+### The fix
+
+`set_layer_parent` still does the same two AE calls; what changed is that
+it no longer claims more than AE delivers.
+
+- `AELL_animatedXform` reports which transform properties MOVE -
+  keyframes or expression, so rig F is visible - and `AELL_movingChain`
+  asks it of the parent AND everything above it, because a still parent
+  bolted to a moving grandparent moves in comp space just the same.
+- `parentAnimated` names them; `parentAnimatedNote` says the link is NOT
+  jump-free across the timeline, names the frame it IS true at, and adds
+  the E sentence when the child has keys of its own. Unparenting gets its
+  own wording about the motion it just took away.
+- `compensatedAt` is reported on every keep-position call, including the
+  quiet ones, and says whether the frame came from the caller or from the
+  playhead. A tool whose result depends on invisible state should say
+  what that state was.
+- New `atTime` / `atFrame`: set the playhead, parent, put it back. This
+  is the only way to ask for "don't move AT THE START of the animation"
+  rather than "don't move wherever the user happens to be parked".
+  Refused with the comp's range when out of bounds, refused when combined
+  with `keepPosition:false` (there is no frame to compensate at), refused
+  with the value when not a number.
+
+Deliberately NOT done: no refusal on an animated parent, and no attempt
+to bake the parent's motion into the child. The user asked for a link;
+AE's answer is a legitimate one. The house rule is that nothing
+disappears quietly, not that the tool second-guesses the ask.
+
+### Verification
+
+- `tests/test-layer-parent.js`: 47 -> 89 checks. The stub's fidelity block
+  grew the part that made this bug invisible - `valueAtTime` on every
+  property, an `_originInComp(t)` that answers "where does it draw AT A
+  TIME", and a `parent` setter that takes its offset from the parent's
+  value at `comp.time` ONCE. So the tests assert the layer is at x=400 at
+  the compensation frame and at x=800 two seconds later; a tool that only
+  printed the right warning cannot pass them. Eight new groups: animated
+  parent, still parent (says nothing), expression-only parent, moving
+  GRANDparent, atTime/atFrame pinning (including that the playhead is put
+  back), the three refusals, unparenting, and a keyed child told its
+  motion changed.
+- `tests/test-self-test.js`'s canned host modelled the bounds rig with no
+  notion of time and no Z at all, so it could not have run any of the new
+  suite steps. It now has `bnPosAt` (keyframed position, linear), a
+  time-aware `bnXform`/`bnCompPoint`/`bnBounds`, a Z that only passes
+  between two 3D layers, and the compensation-at-a-frame rule with its
+  refusals.
+- Full stub sweep: 50 files green; capability doc regenerated.
+- **Harness: 490 -> 498/498 PASSED**, twice consecutively, every new step
+  green on its first real-AE run - which is the interesting part, since
+  the steps assert exact numbers (450 at the pinned frame, 850 two
+  seconds later, 50 at the frame that gives way, Position [300,200,200]
+  under a 2D parent, [0,0] under a 3D one). Real AE agreed with all of
+  them. Eight steps: the moving-parent rig, the animated link and its
+  warning, `atFrame` picking the frame, the default playhead path
+  (asserted playhead-agnostically - the layer must simply travel), the
+  unparent, the out-of-range refusal, and the two mixed-dimension pins.
+- Bumped 0.10.7 -> 0.10.8 (fix to shipped behaviour, verified in AE).
+
+### Still open
+
+- The ~1 px drift when a 3D child is parented to a ROTATED 2D parent
+  (394.16,276.79 -> 393.85,275.56). It is AE's own matrix-to-Orientation
+  decomposition, not this panel's arithmetic, and nothing here can fix
+  it. Not pinned in the suite because the exact numbers are AE's to
+  change; recorded here so the next pass does not re-discover it as a
+  bug.
+- Next on the feature track: 5.9 (.mogrt export), still flagged as a
+  LAST-item-of-the-night job for dialog risk. Eleventh pass to defer it.
+- `comfy_generate` still calls `import_file` rather than 5.8's
+  `import_as_layer` - a small remote-session pass.
+- `release-notes.txt` still reads "0.10.0" while the feed now ships
+  0.10.8 - tenth pass to flag it; it belongs to the remote session's
+  release cut.
+- Rollback's two stated limits are unchanged: arbitrary property values
+  beyond the transform basics, and folders that share a name.
+- Probe scratch under `logs/` (gitignored); the probe removed its own
+  PPAR2 rig. AE left on the harness's own project, dirty, with no dialog
+  open.

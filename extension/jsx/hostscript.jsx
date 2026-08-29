@@ -6808,6 +6808,54 @@ AELL_TOOLS.set_layer_3d = function (args) {
 /* How many keyframes AE is about to rewrite on this layer. Only the
  * properties parenting compensates are counted; a layer with none gets
  * no note. Failures here are never fatal -- this is reporting. */
+/* The transform properties AE's parent compensation writes, with the
+ * names a user would recognise. */
+var AELL_XFORM_PROPS = [
+  ["ADBE Anchor Point", "Anchor Point"], ["ADBE Position", "Position"],
+  ["ADBE Scale", "Scale"], ["ADBE Rotate Z", "Rotation"],
+  ["ADBE Rotate X", "X Rotation"], ["ADBE Rotate Y", "Y Rotation"],
+  ["ADBE Orientation", "Orientation"]
+];
+
+/* Which of a layer's transform properties MOVE over time. Keyframes and
+ * expressions both count: probe F used an expression with zero keys and
+ * the parent travelled 400 px anyway, which the old key-count accounting
+ * could never have seen. */
+function AELL_animatedXform(layer) {
+  var out = [], i, p, grp;
+  try { grp = layer.property("ADBE Transform Group"); } catch (eG) { return out; }
+  if (!grp) return out;
+  for (i = 0; i < AELL_XFORM_PROPS.length; i++) {
+    try {
+      p = grp.property(AELL_XFORM_PROPS[i][0]);
+      if (!p) continue;
+      if (p.numKeys > 0) {
+        out.push(AELL_XFORM_PROPS[i][1] + " (" + p.numKeys + " keys)");
+      } else if (p.expressionEnabled && p.expression) {
+        out.push(AELL_XFORM_PROPS[i][1] + " (expression)");
+      }
+    } catch (eP) {}
+  }
+  return out;
+}
+
+/* ...and the same question for a layer AND everything it hangs from: a
+ * still parent bolted to a moving grandparent moves in comp space, so
+ * the compensation is just as time-local. Depth-capped; AE forbids
+ * cycles, but an unattended walk should not depend on that. */
+function AELL_movingChain(layer) {
+  var out = [], L = layer, hops = 0, a, nx;
+  while (L && hops < 30) {
+    a = AELL_animatedXform(L);
+    if (a.length) out.push(L.name + ": " + a.join(", "));
+    nx = null;
+    try { nx = L.parent; } catch (eN) { nx = null; }
+    L = nx;
+    hops++;
+  }
+  return out;
+}
+
 function AELL_parentKeyCount(layer) {
   var names = ["ADBE Position", "ADBE Scale", "ADBE Rotate Z",
                "ADBE Rotate X", "ADBE Rotate Y", "ADBE Orientation"];
@@ -6849,7 +6897,60 @@ AELL_TOOLS.set_layer_parent = function (args) {
                  String(args.parent).toLowerCase() === "none";
   var parent = clearing ? null : AELL_resolveLayer(comp, args.parent);
   var keep = args.keepPosition !== false;   // default: no visual jump
+
+  /* AE computes the compensation ONCE, from the parent's transform at
+   * the PLAYHEAD (probe G, 2026-08-29: the same rig parented at t=1
+   * instead of t=0 came out with different numbers and a different frame
+   * left standing still). The playhead is wherever the user left it, so
+   * the caller gets to pin the frame that must not move. */
+  var atTime = null, n;
+  if (args.atFrame !== null && typeof args.atFrame !== "undefined" &&
+      args.atFrame !== "") {
+    n = Number(args.atFrame);
+    if (isNaN(n)) {
+      return AELL_err("atFrame must be a frame number; got " +
+                      AELL_showValue(args.atFrame));
+    }
+    atTime = n / (comp.frameRate || 1);
+  } else if (args.atTime !== null && typeof args.atTime !== "undefined" &&
+             args.atTime !== "") {
+    n = Number(args.atTime);
+    if (isNaN(n)) {
+      return AELL_err("atTime must be a number of seconds; got " +
+                      AELL_showValue(args.atTime));
+    }
+    atTime = n;
+  }
+  if (atTime !== null && !keep) {
+    return AELL_err("atTime/atFrame only means something when the layer " +
+      "is being kept still. keepPosition:false leaves every value alone, " +
+      "so there is no frame to compensate at -- drop one of the two.");
+  }
+  if (atTime !== null && (atTime < 0 || atTime > comp.duration)) {
+    return AELL_err("atTime " + atTime + "s is outside \"" + comp.name +
+      "\", which runs 0 to " + comp.duration + "s at " + comp.frameRate +
+      " fps");
+  }
+
   var done = [], skipped = [], rekeyed = [], keysTotal = 0;
+  var movers = [], m;
+  /* Whose motion makes the compensation time-local: the parent being
+   * joined, or -- when unparenting -- the parent being left. */
+  function noteMover(who) {
+    var lines = who ? AELL_movingChain(who) : [], q, r, seen;
+    for (q = 0; q < lines.length; q++) {
+      seen = false;
+      for (r = 0; r < movers.length; r++) {
+        if (movers[r] === lines[q]) { seen = true; break; }
+      }
+      if (!seen) movers.push(lines[q]);
+    }
+  }
+
+  var prevTime = comp.time;
+  if (atTime !== null) comp.time = atTime;
+  var usedTime = comp.time;   // AE snaps to a frame; report what it took
+
   for (i = 0; i < targets.length; i++) {
     var L = targets[i];
     if (parent && L === parent) {
@@ -6859,6 +6960,7 @@ AELL_TOOLS.set_layer_parent = function (args) {
     try {
       var nk = keep ? AELL_parentKeyCount(L) : 0;
       if (keep) {
+        if (clearing) noteMover(L.parent);   // read it BEFORE it is gone
         L.parent = parent;              // AE compensates; nothing moves
       } else if (typeof L.setParentWithJump === "function") {
         L.setParentWithJump(parent);    // values kept; the layer jumps
@@ -6877,6 +6979,9 @@ AELL_TOOLS.set_layer_parent = function (args) {
       skipped.push(L.name + " (" + (e.message || e) + ")");
     }
   }
+  if (keep && !clearing && done.length) noteMover(parent);
+  comp.time = prevTime;
+
   var out = { parent: parent ? parent.name : "(none)",
     parented: done.join(", ") || "(none)",
     skipped: skipped.join("; "),
@@ -6900,6 +7005,36 @@ AELL_TOOLS.set_layer_parent = function (args) {
     out.keyframesNote = "AE rewrote all " + keysTotal + " transform " +
       "keyframe(s) on these layers, not just the current value; the old " +
       "numbers are gone.";
+  }
+  if (keep) {
+    out.compensatedAt = AELL_r3(usedTime) + "s (frame " +
+      Math.round(usedTime * (comp.frameRate || 1)) + ")" +
+      (atTime === null ? ", the playhead where it stood" : ", as asked");
+  }
+  if (movers.length) {
+    /* Measured 2026-08-29 (probe D/E/F): a still layer parented to a
+     * 2-key parent stayed put at the compensation frame and was 400 px
+     * away two seconds later, and a keyframed child came out travelling
+     * at twice its old speed. "Nothing moved" is true at ONE frame. */
+    out.parentAnimated = movers.join("; ");
+    out.parentAnimatedNote = (clearing
+      ? "The parent it left MOVES over time. AE compensates once, at " +
+        out.compensatedAt.split(",")[0] + ", so the layer keeps the " +
+        "position it had THERE and loses the motion the parent was " +
+        "giving it at every other frame."
+      : "That parent MOVES over time. AE compensates once, at " +
+        out.compensatedAt.split(",")[0] + ", so the layer sits exactly " +
+        "where it was at that frame and travels with the parent " +
+        "everywhere else -- this is NOT a jump-free link across the " +
+        "whole timeline.") +
+      " Pass atTime/atFrame to choose the frame that must not move" +
+      (clearing ? "." : ", or keepPosition:false to leave the numbers " +
+        "alone and let the layer ride the parent.");
+    if (rekeyed.length) {
+      out.parentAnimatedNote += " These layers have keyframes of their " +
+        "own, which now play inside that moving space, so their MOTION " +
+        "changed, not just their numbers.";
+    }
   }
   return AELL_okay(out);
 };

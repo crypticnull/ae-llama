@@ -442,10 +442,15 @@
             "AE pays for that by REWRITING the child's Position/Scale/" +
             "Rotation (every keyframe, not just the current value) into " +
             "the parent's space — so read those values back rather " +
-            "than reusing the ones you had. keepPosition:false keeps the " +
-            "numbers and lets the layer jump. Omit layer/layers to use " +
-            "the selection.",
-      args: "{comp?: string, layer?: name|index, layers?: [name|index], parent?: name|index|null, keepPosition?: bool (default true)}" },
+            "than reusing the ones you had. That compensation is worked " +
+            "out ONCE, at one frame: if the parent itself is animated " +
+            "the layer only stays put at that frame and rides the parent " +
+            "everywhere else (the result says so in parentAnimated). " +
+            "atTime/atFrame picks the frame that must not move; without " +
+            "it AE uses wherever the playhead happens to be. " +
+            "keepPosition:false keeps the numbers and lets the layer " +
+            "jump. Omit layer/layers to use the selection.",
+      args: "{comp?: string, layer?: name|index, layers?: [name|index], parent?: name|index|null, keepPosition?: bool (default true), atTime?: seconds, atFrame?: number}" },
     { name: "list_properties", mutating: false,
       desc: "DISCOVER a layer's real property tree — names, paths, types, " +
             "current values. Use this whenever a parameter/effect/mask " +

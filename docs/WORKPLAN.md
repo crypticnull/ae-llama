@@ -388,6 +388,18 @@ FOUR tools are still uncovered and each is deliberate, not pending:
     recorded now. Harness 482 -> 490. Two limits stated in the log and
     left open on purpose: arbitrary property values beyond the transform
     basics, and folders that share a name.
+  - ~~Whether `.parent =` compensation survives a child that is 3D under
+    a 2D parent, or a parent with a keyframed transform~~ MEASURED
+    2026-08-29 (0.10.8). Mixed dimensions survive: a 2D parent leaves a
+    3D child's Z alone and a 3D parent's Z never reaches a 2D child (the
+    compensation is a pure X/Y translation, measured). An ANIMATED
+    parent does not - AE works the compensation out ONCE, at the
+    playhead, so "nothing moved" is true at exactly one frame and the
+    layer is 400 px away two seconds later; a keyframed child's MOTION
+    changes, not just its numbers; and an expression-driven parent does
+    it with ZERO keyframes. set_layer_parent now reports
+    `parentAnimated` and `compensatedAt`, and takes `atTime`/`atFrame`
+    to pin the frame that must not move. Harness 490 -> 498.
 - ~~Performance: 200-layer comps — measure grid_layout and batch
   keyframe wall time~~ DONE 2026-08-28 (0.9.29). The batch-keyframe half
   is measured and fine: at 200 layers set_keyframes (600 keys) 167 ms,

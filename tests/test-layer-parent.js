@@ -10,9 +10,17 @@
 //   2. `layer.setParentWithJump(p)` leaves every value alone, so the
 //      layer JUMPS by the parent's transform.
 //   3. Both rules hold for UNPARENTING (parent = null) as well.
+//   4. The compensation is a ONE-TIME rewrite computed from the parent's
+//      transform at the PLAYHEAD (probe D/E/F/G, 2026-08-29). Under an
+//      animated parent that makes "nothing moved" true at exactly one
+//      frame: a still layer under a 2-key parent sat where it was at t=0
+//      and was 400 px away at t=2, and a keyframed child came out
+//      travelling at twice its old speed.
 // A stub whose `parent` setter did nothing would let the inverted tool
-// pass, so the setter here does the real compensation arithmetic and the
-// tests assert on where the layer ENDS UP, not on which call was made.
+// pass, so the setter here does the real compensation arithmetic — at
+// comp.time, from the parent's value AT THAT TIME — and the tests assert
+// on where the layer ENDS UP, at several times, not on which call was
+// made.
 //
 // Values are PADDED to 3 components for 2D layers (CLAUDE.md).
 "use strict";
@@ -35,6 +43,20 @@ Prop.prototype.keyTime = function (i) { return this._keyTimes[i - 1]; };
 Prop.prototype.keyValue = function (i) { return this._keyValues[i - 1]; };
 Prop.prototype.setValueAtTime = function (t, v) {
   this._keyTimes.push(t); this._keyValues.push(v); this.numKeys++;
+};
+// Linear between keys, held outside them — enough to tell a layer that
+// travels from one that does not.
+Prop.prototype.valueAtTime = function (t) {
+  if (this.numKeys === 0) return this._value;
+  const times = this._keyTimes, vals = this._keyValues;
+  if (t <= times[0]) return vals[0];
+  if (t >= times[times.length - 1]) return vals[vals.length - 1];
+  let i = 0;
+  while (i < times.length - 1 && times[i + 1] < t) i++;
+  const f = (t - times[i]) / (times[i + 1] - times[i]);
+  const a = vals[i], b = vals[i + 1];
+  if (!Array.isArray(a)) return a + (b - a) * f;
+  return a.map((n, k) => n + (b[k] - n) * f);
 };
 
 function Layer(name, comp) {
@@ -61,20 +83,21 @@ Layer.prototype.property = function (name) {
   }
   return null;
 };
-Layer.prototype._pos = function () {
-  return this._transform["ADBE Position"].value;
+Layer.prototype._pos = function (t) {
+  return this._transform["ADBE Position"].valueAtTime(t);
 };
-// Where this layer's own coordinate origin sits in COMP space, walking
-// the whole parent chain. Ancestor rotation/scale are left out on
-// purpose — plain offsets are enough to tell "moved" from "did not".
-Layer.prototype._originInComp = function () {
-  const a = this._transform["ADBE Anchor Point"].value;
-  const p = this._pos();
+// Where this layer's own coordinate origin sits in COMP space AT A TIME,
+// walking the whole parent chain. Ancestor rotation/scale are left out
+// on purpose — plain offsets are enough to tell "moved" from "did not".
+Layer.prototype._originInComp = function (t) {
+  const at = typeof t === "number" ? t : this.comp.time;
+  const a = this._transform["ADBE Anchor Point"].valueAtTime(at);
+  const p = this._pos(at);
   let x = p[0] - a[0], y = p[1] - a[1], z = (p[2] || 0) - (a[2] || 0);
   let par = this._parent;
   while (par) {
-    const pa = par._transform["ADBE Anchor Point"].value;
-    const pp = par._pos();
+    const pa = par._transform["ADBE Anchor Point"].valueAtTime(at);
+    const pp = par._pos(at);
     x += pp[0] - pa[0]; y += pp[1] - pa[1]; z += (pp[2] || 0) - (pa[2] || 0);
     par = par._parent;
   }
@@ -82,18 +105,21 @@ Layer.prototype._originInComp = function () {
 };
 // The origin of whatever this layer is parented to, in comp space —
 // [0,0,0] when it is parented to nothing.
-Layer.prototype._parentOrigin = function () {
-  return this._parent ? this._parent._originInComp() : [0, 0, 0];
+Layer.prototype._parentOrigin = function (t) {
+  return this._parent ? this._parent._originInComp(t) : [0, 0, 0];
 };
 
 // THE fidelity rule. `.parent = p` compensates; the stub does the same
-// arithmetic AE was measured doing, on the current value AND on keys.
+// arithmetic AE was measured doing, on the current value AND on keys —
+// and it takes the offset from the parent AT comp.time, ONCE, which is
+// what makes an animated parent's link time-local.
 Object.defineProperty(Layer.prototype, "parent", {
   get() { return this._parent; },
   set(next) {
-    const was = this._parentOrigin();
+    const t = this.comp.time;
+    const was = this._parentOrigin(t);
     this._parent = next || null;
-    const now = this._parentOrigin();
+    const now = this._parentOrigin(t);
     const d = [was[0] - now[0], was[1] - now[1], was[2] - now[2]];
     if (d[0] === 0 && d[1] === 0 && d[2] === 0) return;
     const pos = this._transform["ADBE Position"];
@@ -171,9 +197,11 @@ function place(l, x, y) {
   return l;
 }
 function posOf(l) { return l._transform["ADBE Position"].value; }
-// Where the layer actually DRAWS: its origin in comp space. This is the
-// number that must not change when a link preserves visual position.
-function screenOf(l) { return l._originInComp(); }
+// Where the layer actually DRAWS at a time: its origin in comp space.
+// This is the number that must not change when a link preserves visual
+// position — and under an animated parent it only holds at ONE time,
+// which is why every caller here may name the time it means.
+function screenOf(l, t) { return l._originInComp(t); }
 
 const project = { rootFolder: { name: "(root)" }, numItems: 0,
                   item() { return null; }, items: {}, activeItem: comp };
@@ -337,6 +365,192 @@ assert(!r.ok && /Kid/.test(r.error),
 r = call("set_layer_parent", { layer: "Kid", parent: "nope" });
 assert(!r.ok && /Null 1/.test(r.error),
        "an unknown PARENT is refused the same grounded way");
+
+console.log("");
+console.log("== an ANIMATED parent makes the link hold at ONE frame only ==");
+{
+  const mover = place(addLayer("Mover"), 100, 100);
+  const mp = mover._transform["ADBE Position"];
+  mp.setValueAtTime(0, [100, 100, 0]);
+  mp.setValueAtTime(2, [500, 100, 0]);
+  const still = place(addLayer("Still"), 400, 300);
+  // stub fidelity first: the rig really is still before the link
+  assert(near(screenOf(still, 0)[0], 400) && near(screenOf(still, 2)[0], 400),
+         "stub: the unparented layer sits at x=400 at t=0 AND t=2");
+  comp.time = 0;
+  r = call("set_layer_parent", { layer: "Still", parent: "Mover" });
+  assert(r.ok && still.parent === mover, "the link was made");
+  assert(near(screenOf(still, 0)[0], 400),
+         "at the compensation frame the layer really has not moved");
+  assert(near(screenOf(still, 2)[0], 800),
+         "...and two seconds later it is 400px away, because the parent " +
+         "moved and the compensation was computed once (AE: 360 -> 760)");
+  assert(/Mover: Position \(2 keys\)/.test(r.data.parentAnimated || ""),
+         "the result names the moving parent and what animates it: " +
+         r.data.parentAnimated);
+  assert(/MOVES/.test(r.data.parentAnimatedNote || "") &&
+         /NOT a jump-free link/.test(r.data.parentAnimatedNote || ""),
+         "the note refuses to call this a jump-free link: " +
+         r.data.parentAnimatedNote);
+  assert(/atTime/.test(r.data.parentAnimatedNote || ""),
+         "...and points at the way to choose the frame");
+  assert(/^0s \(frame 0\)/.test(r.data.compensatedAt || ""),
+         "the frame the compensation landed on is reported: " +
+         r.data.compensatedAt);
+  assert(/playhead/.test(r.data.compensatedAt || ""),
+         "...and says it came from the playhead, not from the caller");
+}
+
+console.log("");
+console.log("== a STILL parent says nothing about animation ==");
+{
+  const q = place(addLayer("Quiet parent"), 100, 100);
+  const k = place(addLayer("Quiet kid"), 400, 300);
+  r = call("set_layer_parent", { layer: "Quiet kid", parent: "Quiet parent" });
+  assert(r.ok && !r.data.parentAnimated && !r.data.parentAnimatedNote,
+         "no parentAnimated field at all when the parent holds still");
+  assert(near(screenOf(k, 0)[0], 400) && near(screenOf(k, 5)[0], 400),
+         "...and the link really does hold at every frame");
+  assert(r.data.compensatedAt,
+         "compensatedAt is still reported, so the frame is never a guess");
+}
+
+console.log("");
+console.log("== an EXPRESSION on the parent counts, with zero keyframes ==");
+{
+  const ex = place(addLayer("Wiggler"), 100, 100);
+  ex._transform["ADBE Position"].expression = "[100 + time * 200, 100]";
+  ex._transform["ADBE Position"].expressionEnabled = true;
+  const k = place(addLayer("Expr kid"), 400, 300);
+  r = call("set_layer_parent", { layer: "Expr kid", parent: "Wiggler" });
+  assert(r.ok, "the link is made");
+  assert(/Wiggler: Position \(expression\)/.test(r.data.parentAnimated || ""),
+         "a key-count check would have seen nothing here: " +
+         r.data.parentAnimated);
+}
+
+console.log("");
+console.log("== a still parent hanging from a moving GRANDparent ==");
+{
+  const gp = place(addLayer("Grandmover"), 100, 100);
+  const gpp = gp._transform["ADBE Position"];
+  gpp.setValueAtTime(0, [100, 100, 0]);
+  gpp.setValueAtTime(2, [500, 100, 0]);
+  const mid = place(addLayer("Midpoint"), 200, 200);
+  comp.time = 0;
+  mid.parent = gp;
+  const k = place(addLayer("Grandkid"), 400, 300);
+  r = call("set_layer_parent", { layer: "Grandkid", parent: "Midpoint" });
+  assert(r.ok, "the link is made");
+  assert(/Grandmover: Position/.test(r.data.parentAnimated || ""),
+         "the walk goes up the whole chain, not one hop: " +
+         r.data.parentAnimated);
+  assert(near(screenOf(k, 2)[0], 800),
+         "...and it was right to: the layer does travel");
+}
+
+console.log("");
+console.log("== the caller can pin the frame that must not move ==");
+{
+  const mover = place(addLayer("Mover 2"), 100, 100);
+  const mp = mover._transform["ADBE Position"];
+  mp.setValueAtTime(0, [100, 100, 0]);
+  mp.setValueAtTime(2, [500, 100, 0]);
+  const kid3 = place(addLayer("Pinned"), 400, 300);
+  comp.time = 0;
+  r = call("set_layer_parent", { layer: "Pinned", parent: "Mover 2",
+                                 atTime: 2 });
+  assert(r.ok && kid3.parent === mover, "the link was made");
+  assert(near(screenOf(kid3, 2)[0], 400),
+         "the layer is exactly where it was at the frame that was ASKED for");
+  assert(near(screenOf(kid3, 0)[0], 0),
+         "...and t=0 is the one that moved instead");
+  assert(comp.time === 0, "the playhead was put back where the user left it");
+  assert(/^2s \(frame 60\)/.test(r.data.compensatedAt || "") &&
+         /as asked/.test(r.data.compensatedAt || ""),
+         "the result reports the frame and that the caller chose it: " +
+         r.data.compensatedAt);
+  const kid4 = place(addLayer("Pinned by frame"), 400, 300);
+  r = call("set_layer_parent", { layer: "Pinned by frame", parent: "Mover 2",
+                                 atFrame: 60 });
+  assert(r.ok && near(screenOf(kid4, 2)[0], 400),
+         "atFrame 60 at 30fps means the same frame as atTime 2");
+}
+
+console.log("");
+console.log("== atTime refusals are grounded ==");
+{
+  const kid5 = place(addLayer("Refused"), 400, 300);
+  r = call("set_layer_parent", { layer: "Refused", parent: "Null 1",
+                                 atTime: 99 });
+  assert(!r.ok && /0 to 10s/.test(r.error) && /30 fps/.test(r.error),
+         "a time past the end of the comp is refused with the range: " +
+         r.error);
+  assert(kid5.parent === null, "...and nothing was parented on the way out");
+  r = call("set_layer_parent", { layer: "Refused", parent: "Null 1",
+                                 atTime: "soon" });
+  assert(!r.ok && /seconds/.test(r.error),
+         "a non-numeric time is refused: " + r.error);
+  r = call("set_layer_parent", { layer: "Refused", parent: "Null 1",
+                                 atFrame: "later" });
+  assert(!r.ok && /frame number/.test(r.error),
+         "so is a non-numeric frame: " + r.error);
+  r = call("set_layer_parent", { layer: "Refused", parent: "Null 1",
+                                 atTime: 1, keepPosition: false });
+  assert(!r.ok && /keepPosition:false/.test(r.error),
+         "asking to compensate at a frame while asking not to compensate " +
+         "is refused rather than silently ignored: " + r.error);
+}
+
+console.log("");
+console.log("== unparenting from an animated parent says the same thing ==");
+{
+  const mover = place(addLayer("Mover 3"), 100, 100);
+  const mp = mover._transform["ADBE Position"];
+  mp.setValueAtTime(0, [100, 100, 0]);
+  mp.setValueAtTime(2, [500, 100, 0]);
+  const rider = place(addLayer("Rider"), 400, 300);
+  comp.time = 0;
+  rider.parent = mover;
+  assert(near(screenOf(rider, 2)[0], 800), "stub: the rider travels with it");
+  r = call("set_layer_parent", { layer: "Rider", parent: null });
+  assert(r.ok && rider.parent === null, "the parent was cleared");
+  assert(near(screenOf(rider, 0)[0], 400) && near(screenOf(rider, 2)[0], 400),
+         "the layer keeps the position it had at the frame and stops moving");
+  assert(/Mover 3: Position \(2 keys\)/.test(r.data.parentAnimated || ""),
+         "the parent it LEFT is the one reported: " + r.data.parentAnimated);
+  assert(/loses the motion/.test(r.data.parentAnimatedNote || ""),
+         "the note is about what unparenting took away: " +
+         r.data.parentAnimatedNote);
+}
+
+console.log("");
+console.log("== a keyframed child under a moving parent is told its " +
+            "MOTION changed ==");
+{
+  const mover = place(addLayer("Mover 4"), 100, 100);
+  const mp = mover._transform["ADBE Position"];
+  mp.setValueAtTime(0, [100, 100, 0]);
+  mp.setValueAtTime(2, [500, 100, 0]);
+  const kid6 = place(addLayer("Animated kid"), 400, 300);
+  const kp = kid6._transform["ADBE Position"];
+  kp.setValueAtTime(0, [400, 300, 0]);
+  kp.setValueAtTime(2, [600, 300, 0]);
+  comp.time = 0;
+  assert(near(screenOf(kid6, 1)[0], 500), "stub: it crosses x=500 at t=1");
+  r = call("set_layer_parent", { layer: "Animated kid", parent: "Mover 4" });
+  assert(r.ok, "the link was made");
+  assert(near(screenOf(kid6, 1)[0], 700),
+         "its own animation now plays inside a moving space, so it is " +
+         "200px off its old path at t=1 (AE: 460 -> 660)");
+  assert(/MOTION/.test(r.data.parentAnimatedNote || ""),
+         "the note says the motion changed, not just the numbers: " +
+         r.data.parentAnimatedNote);
+  const quiet = place(addLayer("Quiet 2"), 400, 300);
+  r = call("set_layer_parent", { layer: "Quiet 2", parent: "Mover 4" });
+  assert(!/MOTION/.test(r.data.parentAnimatedNote || ""),
+         "a child with no keys of its own is not told its motion changed");
+}
 
 console.log("");
 console.log(process.exitCode ? "FAILURES"
