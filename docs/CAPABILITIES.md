@@ -42,13 +42,13 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `comfy_status` | Check the local ComfyUI instance (online? queue depth?) | no | panel | — | — |
 | `create_comp` | Create a composition and open it | yes | host | 1 | 27 |
 | `create_folder` | Create a project-panel folder | yes | host | 1 | 10 |
-| `delete_item` | Delete a project item | yes | host | 1 | 34 |
+| `delete_item` | Delete a project item | yes | host | 1 | 37 |
 | `delete_layer` | Delete a layer from a comp | yes | host | — | 9 |
 | `distribute_property` | Distribute a property VALUE across layers | yes | host | 1 | 5 |
-| `duplicate_comp` | Duplicate a composition | yes | host | 1 | 1 |
+| `duplicate_comp` | Duplicate a composition | yes | host | 2 | 5 |
 | `duplicate_layer` | Duplicate a LAYER inside its comp (use duplicate_comp only for whole compositions) | yes | host | 1 | 6 |
 | `for_each_layer` | Run a PER-LAYER tool once per target layer in ONE call (max 200 layers) — the batch executor for anything without its own layers arg: {tool: 'apply_effect', args: {effect: 'Gaussian Blur'}} blurs every target | yes | host | 1 | 6 |
-| `get_comp_details` | Layers of a comp with index, name, type, timing, effects | no | host | 2 | 25 |
+| `get_comp_details` | Layers of a comp with index, name, type, timing, effects | no | host | 3 | 26 |
 | `get_project_info` | List project items (comps/footage/folders) and the active comp | no | host | 2 | 13 |
 | `get_property` | Read ANY property by path: value, keyframes, expression | no | host | 3 | 81 |
 | `grid_layout` | Arrange layers into a grid rigged to a control null: its 'Grid X Spacing'/'Grid Y Spacing'/'Grid Columns' sliders drive spacing AND column count live, and the grid centers on the null's position (all expressions generated host-side) | yes | host | 1 | 2 |
@@ -70,7 +70,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `scale_comp` | Resize a comp AND scale its content to match, re-centered — like the native 'Scale Composition' script | yes | host | 2 | 2 |
 | `set_comp_setting` | Change a comp setting: duration, frame rate, bg color, the WORK AREA (workAreaStart with workAreaDuration or workAreaEnd, in seconds — or workArea: 'comp' to reset it to the whole comp) and preview resolution | yes | host | 2 | 9 |
 | `set_effect_param` | Set a parameter on an effect already applied to a layer | yes | host | — | 1 |
-| `set_expression` | LAST RESORT: set a raw expression (or clear with '') | yes | host | 1 | 11 |
+| `set_expression` | LAST RESORT: set a raw expression (or clear with '') | yes | host | 1 | 13 |
 | `set_keyframes` | Set the SAME keyframes on MANY layers in ONE call | yes | host | 2 | 9 |
 | `set_layer_3d` | Enable/disable a layer's 3D switch | yes | host | 1 | 3 |
 | `set_layer_parent` | Parent layers to another layer (omit/null parent to unparent) | yes | host | 1 | 5 |

@@ -1128,11 +1128,124 @@ AELL_TOOLS.delete_item = function (args) {
   return AELL_okay(data);
 };
 
+/* Sources a duplicate SHARES with its original. AE copies the layers,
+ * never what they point at, so a precomp/solid/footage item is the SAME
+ * project item in both comps — editing "the copy" edits the original.
+ * Precomps and solids lead the list because the panel has tools that
+ * change exactly those (set_solid_color, anything inside a precomp). */
+function AELL_dupSharedSources(dup, src) {
+  var mine = {}, i, j, out = [];
+  for (i = 1; i <= src.numLayers; i++) {
+    var s = null;
+    try { s = src.layer(i).source; } catch (eS) {}
+    if (s) mine["id" + s.id] = true;
+  }
+  var seen = {};
+  for (j = 1; j <= dup.numLayers; j++) {
+    var d = null;
+    try { d = dup.layer(j).source; } catch (eD) {}
+    if (!d || !mine["id" + d.id] || seen["id" + d.id]) continue;
+    seen["id" + d.id] = true;
+    var kind = (d instanceof CompItem) ? "precomp" : "footage";
+    if (!(d instanceof CompItem)) {
+      var ms = null;
+      try { ms = d.mainSource; } catch (eM) {}
+      if (ms instanceof SolidSource) kind = "solid";
+    }
+    out.push(d.name + " (" + kind + ")");
+  }
+  return out;
+}
+
+/*
+ * duplicate_comp. AE does the copying itself and does it well: measured
+ * in AE 2026 (probe 2026-08-29, see WORKPLAN-LOG) the copy is named
+ * "<name> 2" by AE, lands in the SOURCE'S OWN FOLDER directly after it,
+ * carries every comp setting (bgColor, resolution, work area, motion
+ * blur, comment, markers), keeps relative expressions and parenting
+ * pointing INSIDE the copy, and leaves the project-panel selection
+ * alone — so there is nothing to fix there and no selection to restore.
+ *
+ * What it does SILENTLY, and what this tool says out loud instead:
+ *  - A requested `name` that another project item already holds is
+ *    ACCEPTED. A by-name walk then finds the OLDER item (measured), so
+ *    the copy would be unreachable by the very name the model just
+ *    asked for. Auto-numbered and redirected exactly as create_comp and
+ *    precompose do.
+ *  - An EMPTY name is accepted too and leaves a comp with no name at
+ *    all. Refused.
+ *  - Layer SOURCES are shared, not copied (AELL_dupSharedSources).
+ *  - AE rewrites nothing: an absolute comp("Source") reference in the
+ *    copy still drives off the SOURCE comp, and expressionError stays
+ *    EMPTY, so nothing else would ever mention it.
+ */
 AELL_TOOLS.duplicate_comp = function (args) {
   var comp = AELL_resolveComp(args.comp);
+  var srcName = comp.name;
+  var wanted = null;
+  if (typeof args.name !== "undefined" && args.name !== null) {
+    wanted = String(args.name);
+    if (/^\s*$/.test(wanted)) {
+      return AELL_err("'name' was blank. AE accepts a blank comp name and " +
+        "the copy then has none, which nothing can look up. Leave 'name' " +
+        "out to take AE's own '" + srcName + " 2', or pass a real name.");
+    }
+  }
   var dup = comp.duplicate();
-  if (args.name) dup.name = String(args.name);
-  return AELL_okay({ name: dup.name, id: dup.id, duplicatedFrom: comp.name });
+  if (wanted) {
+    var unique = AELL_uniqueItemName(wanted, dup);
+    dup.name = unique;
+    if (!$.global.AELL_compAliases) $.global.AELL_compAliases = {};
+    if (unique !== wanted) {
+      // Redirect this request's later commands at the comp that exists
+      // (see AELL_resolveComp) — the batch was written before this ran.
+      // NOT when the name asked for is the SOURCE'S OWN: "duplicate Main
+      // and call it Main" still leaves "Main" meaning the original, and
+      // an alias there would silently point the rest of the request at
+      // the copy instead.
+      if (wanted !== srcName) $.global.AELL_compAliases[wanted] = unique;
+    } else {
+      delete $.global.AELL_compAliases[wanted];
+    }
+  }
+  var out = { name: dup.name, id: dup.id, duplicatedFrom: srcName,
+              folder: dup.parentFolder.name };
+  if (wanted && dup.name !== wanted) {
+    out.nameTaken = "'" + wanted + "' was already another project item's " +
+      "name — a second one is unreachable by name, so the copy is '" +
+      dup.name + "'. Use THIS name in every following command" +
+      (wanted === srcName
+        ? "; '" + srcName + "' still means the comp it was copied FROM."
+        : ".");
+  }
+  var shared = AELL_dupSharedSources(dup, comp);
+  if (shared.length) {
+    AELL_hygCap(shared, out, "sharedSources");
+    out.sharedNote = "AE copied the LAYERS, not what they point at: " +
+      "these items are the same in both comps, so changing one there " +
+      "changes '" + srcName + "' too.";
+  }
+  // Expressions in the copy that name the SOURCE comp as a string: AE
+  // leaves them driving the original and flags nothing.
+  var hits = [], k;
+  for (k = 1; k <= dup.numLayers; k++) {
+    try { AELL_walkExpressions(dup.layer(k), hits, dup.name, dup.layer(k).name); }
+    catch (eW) {}
+  }
+  var back = [];
+  for (k = 0; k < hits.length; k++) {
+    if (AELL_expressionNames(hits[k].expression, srcName)) {
+      back.push(hits[k].layer + " > " + hits[k].property);
+    }
+  }
+  if (back.length) {
+    AELL_hygCap(back, out, "stillDrivenBySource");
+    out.expressionNote = "These expressions in the copy name '" + srcName +
+      "' as a string, so they still read the ORIGINAL comp. AE does not " +
+      "rewrite them and expressionError stays empty. Point them at " +
+      "thisComp (or at '" + dup.name + "') if the copy should stand alone.";
+  }
+  return AELL_okay(out);
 };
 
 // ------------------------------------------------ organize_project
@@ -1773,11 +1886,17 @@ AELL_TOOLS.get_comp_details = function (args) {
 };
 
 /* First free project-item name — duplicate comp names make every later
- * name-based comp reference ambiguous (it silently hits the OLDEST one). */
-function AELL_uniqueItemName(base) {
+ * name-based comp reference ambiguous (it silently hits the OLDEST one).
+ * `except` is an item allowed to keep the name it already has: renaming
+ * an item to its own current name must be a no-op, not a bump to " 2". */
+function AELL_uniqueItemName(base, except) {
   var taken = {};
   for (var i = 1; i <= app.project.numItems; i++) {
-    try { taken[app.project.item(i).name] = true; } catch (e) {}
+    try {
+      var it = app.project.item(i);
+      if (except && it === except) continue;
+      taken[it.name] = true;
+    } catch (e) {}
   }
   if (!taken[base]) return base;
   var k = 2;

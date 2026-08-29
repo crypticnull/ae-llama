@@ -287,6 +287,7 @@ function Comp(name) {
   this.width = 1920;
   this.height = 1080;
   this.duration = 10;
+  this.parentFolder = { name: "(root)" };   // every real comp has one
   const self = this;
   this.layers = {
     addSolid(color, nm, w, h, ar, dur) {
@@ -310,11 +311,20 @@ Object.defineProperty(Comp.prototype, "selectedLayers", {
   get() { return this._layers.filter(l => l.selected); }
 });
 // AE names the copy itself; duplicate_comp only renames it afterwards.
+// The copy lands in the SOURCE'S OWN folder with the source's layers
+// (measured 2026-08-29) — every real comp has a parentFolder, so the
+// stub gives it one rather than letting the tool read undefined.
 Comp.prototype.duplicate = function () {
   const c = new Comp(this.name + " 2");
   c.width = this.width;
   c.height = this.height;
   c.duration = this.duration;
+  c.parentFolder = this.parentFolder;
+  for (const l of this._layers) {
+    const copy = new Layer(l.name, c, l.kind);
+    copy.source = l.source;          // SHARED, never copied
+    c._layers.push(copy);
+  }
   return c;
 };
 

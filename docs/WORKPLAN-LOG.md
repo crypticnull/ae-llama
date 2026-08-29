@@ -5523,3 +5523,100 @@ working end to end - field truth caught it, the stubs hold it.
   sixth pass to flag it; it belongs to the remote session's release cut.
 - Probe scratch under `logs/` (gitignored). AE left on the harness's own
   project, dirty, with no dialog open.
+
+## 2026-08-29 (local) - duplicate_comp: the copy that could not be reached
+## by the name it was given
+
+Harness green on arrival (437/437), items 1-4 all closed by earlier
+passes, so the pass took the oldest unclaimed shipped-behaviour item -
+`duplicate_comp` "still takes a name without uniquing", flagged in three
+separate entries and never picked up. The tool was five lines
+(`comp.duplicate()`, `dup.name = String(args.name)`), and the probe found
+that four of the things it was quiet about are AE's, not the tool's.
+
+### What comp.duplicate() actually does, measured
+
+`logs/probe-dup.txt` (AE 2026, 26.3x87):
+
+- AE **names the copy itself**: "Src" -> "Src 2", the next one "Src 3".
+  The tool never needs to invent a name.
+- The copy lands in the **source's own folder**, at the project index
+  directly after it (a root comp's copy stays at the root), and carries
+  every comp setting with it - bgColor, resolutionFactor, work area,
+  motionBlur, comment, markers, 4 ms for the whole thing.
+- It does **not touch the project-panel selection**: the source stays
+  selected, the copy is not. So unlike every layer-creating tool here,
+  nothing needs restoring.
+- **Layer SOURCES are shared, not copied.** The nested precomp, the
+  solids, the footage are the SAME project items in both comps
+  (`dup.layer(n).source === src.layer(n).source`). "Duplicate this comp
+  and make the copy blue" edits the original too - and this panel ships
+  `set_solid_color`, whose whole `makeUnique` argument exists for that
+  trap.
+- **Expressions are copied verbatim and nothing is rewritten.** A
+  relative one (`thisComp.layer("A")`) correctly follows the copy;
+  an absolute `comp("Src")` one still drives off the ORIGINAL, and
+  `expressionError` stays EMPTY, so nothing else would ever mention it.
+  Parenting IS remapped inside the copy.
+- **The bug: `dup.name = <a name another item holds>` is ACCEPTED.** The
+  project then has two items with that name and a by-name walk finds the
+  OLDER one (measured), so the copy the model just made was unreachable
+  by the name it just asked for. Same shape as the collision 5.4 found in
+  precompose. A **blank** name is accepted too, leaving a comp with no
+  name at all.
+
+### What the tool does now
+
+`AELL_uniqueItemName` grew an `except` argument (an item may keep the
+name it already has, so asking for the name AE already gave the copy is a
+no-op, not a bump to " 3"), and duplicate_comp auto-numbers + registers
+the request-scoped comp alias exactly as create_comp and precompose do.
+One deliberate exception, and it is the reason the alias needed thinking
+about at all: **when the requested name is the SOURCE'S own** ("duplicate
+Main and call it Main") the alias is NOT registered - later commands
+saying "Main" still mean the comp it was copied from, and the result says
+so. A blank name is refused before anything is duplicated. The result
+also reports `folder`, `sharedSources` (each named as precomp/solid/
+footage) with the consequence spelled out, and `stillDrivenBySource` for
+the expressions AE left pointing at the original.
+
+### Verification
+
+- `tests/test-duplicate-comp.js`, new: 46 checks, opening with a STUB
+  FIDELITY block that drives the raw API - a stub that stopped accepting
+  the name collision would let the tool pass on a technicality.
+- `tests/test-property-access.js` and the canned host in
+  `tests/test-self-test.js` both modelled a duplicate with no
+  parentFolder, no layers and no name rules. Made faithful rather than
+  worked around in the host.
+- Full stub sweep: 48 files, all green (capability doc regenerated).
+- **Harness: 437 -> 446/446 PASSED**, nine new steps: the shared solid is
+  named, the source's own name is auto-numbered and the original still
+  answers to it, a blank name is refused, and the copy reports the
+  expression still reading the original.
+- Bumped 0.10.3 -> 0.10.4 (fix to shipped behaviour, verified in AE).
+
+### One measurement that came back inconclusive
+
+Probe B (`logs/probe-dup2.txt`) asked whether `duplicate()` is undone by
+one Ctrl+Z, because probe A suggested it was not. It is not answerable
+this way: the CONTROL - a plain `items.addComp` inside the same
+begin/endUndoGroup - was not undone either, so `executeCommand(Undo)`
+simply does not take effect on PROJECT ITEMS from inside a running `-r`
+script. Nothing here is specific to duplicate_comp, and the shipped
+rollback (which issues its Undo inside the same batch execution) was
+verified on layers in 0.9.14. Worth a proper look by whoever next touches
+rollback: if item creation really is outside its reach, a round that
+created a comp and then failed is not fully rolled back.
+
+### Still open
+
+- Next on the feature track: 5.9 (.mogrt export), still flagged as a
+  LAST-item-of-the-night job for dialog risk.
+- No read-only `get_bounds` yet (unclaimed).
+- `comfy_generate` still calls `import_file` rather than 5.8's
+  `import_as_layer` - a small remote-session pass.
+- `release-notes.txt` still reads "0.10.0" while the feed ships 0.10.4 -
+  seventh pass to flag it; it belongs to the remote session's release cut.
+- Probe scratch under `logs/` (gitignored). AE left on the harness's own
+  project, dirty, with no dialog open.

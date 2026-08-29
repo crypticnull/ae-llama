@@ -77,7 +77,13 @@
             "only), comps?: [string] (default every comp), dryRun?: bool " +
             "(default TRUE), includeUtility?: bool}" },
     { name: "duplicate_comp", mutating: true,
-      desc: "Duplicate a composition.",
+      desc: "Duplicate a composition. AE names the copy '<name> 2' and " +
+            "puts it in the source's own folder; pass 'name' to rename " +
+            "it, and a name another item already holds is auto-numbered " +
+            "(reported as nameTaken — use the returned name afterwards). " +
+            "The copy SHARES its layers' sources with the original " +
+            "(precomps, solids, footage), so editing those changes both; " +
+            "sharedSources lists them.",
       args: "{comp: string, name?: string}" },
     { name: "organize_project", mutating: true,
       desc: "File loose root-level items into Comps/Footage/Solids/Audio/" +

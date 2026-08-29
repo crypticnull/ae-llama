@@ -3617,8 +3617,110 @@
         check: function (d, ctx) {
           ctx.cvCopy = d.name;
           if (d.name !== "ST Cov Copy") return "named " + d.name;
-          return d.duplicatedFrom === ctx.cvComp ||
-                 "duplicatedFrom " + d.duplicatedFrom;
+          if (d.duplicatedFrom !== ctx.cvComp) {
+            return "duplicatedFrom " + d.duplicatedFrom;
+          }
+          // AE puts the copy in the SOURCE'S folder, and the coverage comp
+          // is a root one, so this is where the copy has to be.
+          return d.folder === "Root" || "folder " + d.folder;
+        } },
+
+      // ---- what duplicate_comp used to do silently. Measured in AE 2026
+      // (probe 2026-08-29, WORKPLAN-LOG): the copy SHARES its layers'
+      // sources, AE accepts a name another item already holds (and a
+      // by-name walk then finds the older one), and it accepts a blank
+      // name too.
+      { name: "the copy is told it SHARES the solid it was copied with",
+        tool: "duplicate_comp",
+        args: function (ctx) { return { comp: ctx.cvComp }; },
+        check: function (d, ctx) {
+          ctx.cvShared = d.name;
+          if (d.name !== ctx.cvComp + " 2") {
+            return "AE named the copy " + d.name;
+          }
+          var list = (d.sharedSources || []).join(" | ");
+          if (list.indexOf("ST Cov Box (solid)") === -1) {
+            return "sharedSources: " + (list || "(none)");
+          }
+          return (d.sharedNote || "").indexOf("both comps") !== -1 ||
+                 "the consequence is not stated: " + d.sharedNote;
+        } },
+
+      { name: "cleanup: delete that copy",
+        tool: "delete_item",
+        args: function (ctx) { return { item: ctx.cvShared }; },
+        check: function () { return true; } },
+
+      { name: "a name another item already holds is auto-numbered",
+        tool: "duplicate_comp",
+        args: function (ctx) {
+          // The SOURCE'S own name: the collision case that must NOT
+          // redirect later commands, since they still mean the original.
+          return { comp: ctx.cvComp, name: ctx.cvComp };
+        },
+        check: function (d, ctx) {
+          ctx.cvTaken = d.name;
+          if (d.name !== ctx.cvComp + " 2") return "named " + d.name;
+          return (d.nameTaken || "").indexOf("copied FROM") !== -1 ||
+                 "no nameTaken note: " + d.nameTaken;
+        } },
+
+      { name: "and the original still answers to its own name",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.cvComp }; },
+        check: function (d, ctx) {
+          return d.name === ctx.cvComp || "'" + ctx.cvComp +
+                 "' now resolves to " + d.name;
+        } },
+
+      { name: "cleanup: delete the auto-numbered copy",
+        tool: "delete_item",
+        args: function (ctx) { return { item: ctx.cvTaken }; },
+        check: function () { return true; } },
+
+      { name: "a blank name is refused, not made",
+        tool: "duplicate_comp",
+        expectError: true,
+        args: function (ctx) { return { comp: ctx.cvComp, name: "   " }; },
+        check: function (err) {
+          return err.indexOf("blank") !== -1 || "err: " + err;
+        } },
+
+      { name: "an expression naming the source comp is set up",
+        tool: "set_expression",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box", property: "opacity",
+                   expression: 'comp("' + ctx.cvComp +
+                     '").layer("ST Cov Box").transform.rotation + 100' };
+        },
+        check: function (d) { return true; } },
+
+      { name: "the copy is told which expressions still drive off the source",
+        tool: "duplicate_comp",
+        args: function (ctx) { return { comp: ctx.cvComp }; },
+        check: function (d, ctx) {
+          ctx.cvExprCopy = d.name;
+          var list = (d.stillDrivenBySource || []).join(" | ");
+          // AE copies the expression verbatim and leaves expressionError
+          // EMPTY, so this report is the only place it is ever mentioned.
+          if (list.indexOf("ST Cov Box > Opacity") === -1) {
+            return "stillDrivenBySource: " + (list || "(none)");
+          }
+          return (d.expressionNote || "").indexOf("thisComp") !== -1 ||
+                 "no route out of it: " + d.expressionNote;
+        } },
+
+      { name: "cleanup: delete the expression copy and clear the expression",
+        batch: function (ctx) {
+          return [
+            { tool: "delete_item", args: { item: ctx.cvExprCopy } },
+            { tool: "set_expression",
+              args: { comp: ctx.cvComp, layer: "ST Cov Box",
+                      property: "opacity", expression: "" } }
+          ];
+        },
+        check: function (rows) {
+          return rows[0].ok || "delete: " + rows[0].error;
         } },
 
       { name: "rename_item reports the name it replaced",

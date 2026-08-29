@@ -317,6 +317,7 @@ const cvKeys = {};       // "layer/prop"  -> [{time, value}]
 const parentedLayers = {}; // layer -> parent, so the resize can tell a
                            // child's inherited transform from its own
 const cvExpr = {};       // "layer/prop"  -> expression
+let cvSolids = [];       // solids in the coverage comp, by name
 const cvThreeD = {};     // layer -> bool
 const cvAnchor = {};     // layer -> [x, y, z]
 const cvXRot = {};       // layer -> deg (3D-only, cleared by going 2D)
@@ -347,6 +348,7 @@ const LIGHT_DEEP_PATH = {
 // the Position keyframes the discard-report steps leave behind made the
 // NEXT run's expression read answer with a key list instead.
 const resetCoverRig = () => {
+  cvSolids = [];
   const stores = [cvControls, cvKeys, cvExpr, cvThreeD, cvAnchor, cvXRot,
                   cvFx];
   for (const store of stores) {
@@ -1773,6 +1775,10 @@ function cannedOk(tool, args) {
       return { index: 1, name: (args && args.name) || "Null 1" };
     case "set_expression": {
       const expr = (args && args.expression) || "";
+      if (inCvComp(args) && args.layer) {
+        const ck = args.layer + "/" + cvProp(args.property);
+        if (expr === "") delete cvExpr[ck]; else cvExpr[ck] = expr;
+      }
       if (expr === "") {
         delete driven[drivenKey(args && args.layer, args && args.property)];
         return { layer: args && args.layer, property: args && args.property,
@@ -2057,6 +2063,7 @@ function cannedOk(tool, args) {
         solidSources.push({ name: args.name, id: 950 + solidSources.length,
                             type: "footage" });
       }
+      if (inCvComp(args)) cvSolids.push(String(args.name));
       if (inBatComp(args)) batSolids.push(args.name);
       if (inRbComp(args)) rbLayers.push(args.name);
       if (inPcComp(args)) pcLayers.push(args.name);
@@ -2894,18 +2901,76 @@ function cannedOk(tool, args) {
       if (notes.length) out.note = notes.join(" ");
       return out;
     }
+    // Modelled from AE 2026 (probe 2026-08-29): AE names the copy itself
+    // ("X" -> "X 2"), puts it in the SOURCE'S folder, shares its layers'
+    // sources with the original, copies expressions verbatim, and accepts
+    // both a blank name and one another item already holds.
     case "duplicate_comp": {
       const src = (args && args.comp) || "";
       if (createdComps.indexOf(src) === -1) {
         return { __err: "Comp not found: " + src +
                  ". Existing comps: " + createdComps.join(", ") };
       }
-      const nm = (args && args.name) || (src + " 2");
-      createdComps.push(nm);
+      const taken = (n) => createdComps.indexOf(n) !== -1 || !!folders[n] ||
+                           cvSolids.indexOf(n) !== -1;
+      const nextFree = (base) => {
+        let k = 2;
+        while (taken(base + " " + k)) k++;
+        return base + " " + k;
+      };
+      const out = { name: nextFree(src), duplicatedFrom: src,
+                    folder: "Root" };
+      if (args && typeof args.name !== "undefined" && args.name !== null) {
+        const want = String(args.name);
+        if (/^\s*$/.test(want)) {
+          return { __err: "'name' was blank. AE accepts a blank comp name " +
+            "and the copy then has none, which nothing can look up. Leave " +
+            "'name' out to take AE's own '" + src + " 2', or pass a real " +
+            "name." };
+        }
+        if (taken(want)) {
+          out.name = nextFree(want);
+          out.nameTaken = "'" + want + "' was already another project " +
+            "item's name — a second one is unreachable by name, so the " +
+            "copy is '" + out.name + "'. Use THIS name in every following " +
+            "command" + (want === src
+              ? "; '" + src + "' still means the comp it was copied FROM."
+              : ".");
+        } else {
+          out.name = want;
+        }
+      }
+      createdComps.push(out.name);
+      out.id = 5000 + createdComps.length;
       // A duplicate carries the ORIGINAL's settings, not the defaults.
-      compProps[nm] = Object.assign({}, compProps[src]);
-      return { name: nm, id: 5000 + createdComps.length,
-               duplicatedFrom: src };
+      compProps[out.name] = Object.assign({}, compProps[src]);
+      if (/Cover/.test(src)) {
+        const shared = cvSolids.map((n) => n + " (solid)");
+        if (shared.length) {
+          out.sharedSources = shared;
+          out.sharedNote = "AE copied the LAYERS, not what they point at: " +
+            "these items are the same in both comps, so changing one " +
+            "there changes '" + src + "' too.";
+        }
+        const back = [];
+        for (const key of Object.keys(cvExpr)) {
+          if (String(cvExpr[key]).indexOf('comp("' + src + '")') === -1) {
+            continue;
+          }
+          const bits = key.split("/");
+          back.push(bits[0] + " > " + bits[1].charAt(0).toUpperCase() +
+                    bits[1].slice(1));
+        }
+        if (back.length) {
+          out.stillDrivenBySource = back;
+          out.expressionNote = "These expressions in the copy name '" + src +
+            "' as a string, so they still read the ORIGINAL comp. AE does " +
+            "not rewrite them and expressionError stays empty. Point them " +
+            "at thisComp (or at '" + out.name + "') if the copy should " +
+            "stand alone.";
+        }
+      }
+      return out;
     }
     case "rename_item": {
       const key = String((args && args.item) || "");
