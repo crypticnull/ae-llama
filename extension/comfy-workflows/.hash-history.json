@@ -1,0 +1,29 @@
+{
+  "note": "Append-only sha1 (CRLF-normalized) of every version of each bundled ComfyUI template this panel has shipped. setup.js's ensureDataDirs refreshes an installed copy only when its hash appears here (an unedited shipped copy); an unknown hash is a user edit and is never overwritten. Regenerate with `node scripts/workflow-hash-history.js`. Never delete entries.",
+  "algorithm": "sha1 of file bytes with CRLF normalized to LF",
+  "files": {
+    "AE_LLAMA_H3_I2V_V1.json": [
+      "bbb18843bf0a4dc057bf221e34d3f92531f013bb"
+    ],
+    "AE_LLAMA_H3_I2V_V1.manifest.json": [
+      "4b747fb1502147df239068f74dbc036321c206d4",
+      "24a70d3d81d5f250f0014875396dac76d100c709",
+      "8b9f9c77500be7eaa89b212b326e6b393ffcc579",
+      "9e284b1492213f81a7a26a47acc1172eddacb2fd",
+      "895e829a2b8d5cf544a46bc207889e000d2e0d6a"
+    ],
+    "AE_LLAMA_KREA2_V1.json": [
+      "a12cbd6596cc196f6fba446a349b57d326b9ba9d"
+    ],
+    "AE_LLAMA_KREA2_V1.manifest.json": [
+      "0ff48df275bd0d5e1a418e3811461245be46ebd2"
+    ],
+    "README.md": [
+      "562135571cdebf4b565982444017fa48a5c46c1a",
+      "a59b011ccbbfac4275937129108a87e496ac3f6f"
+    ],
+    "example-txt2img.json": [
+      "1186980c6dd9d09b86edc8fddef10a1740a1b4e8"
+    ]
+  }
+}

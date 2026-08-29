@@ -317,6 +317,19 @@ Queued (see WORKPLAN for owners/order):
   specific literals — an absolute output path, a reference image only
   one disk has — are corrected in the sidecar's `panelAdaptation`, not
   by hand, so the next regeneration keeps the fix.
+- A bundled template REACHES an existing install. Seeding used to copy
+  only what was missing, so a machine froze on the templates it first
+  saw (this one was running the H3 manifest from five releases earlier).
+  The bundle now carries `.hash-history.json` — the append-only sha1 of
+  every version ever shipped, CRLF-normalized because git hands a
+  Windows checkout different bytes for the same version — and
+  `ensureDataDirs` refreshes an installed file only when its hash is one
+  of ours. An unknown hash is a user's edit and is never touched; a
+  bundle with no readable history falls back to never overwriting.
+  `node scripts/workflow-hash-history.js` records a new version and
+  `tests/test-workflow-hash-history.js` fails CI when a template changes
+  without it — an unrecorded hash would make every install look edited
+  and silently re-freeze the bug.
 - The tier build's REMOTE half (P1–P3) is in: tiers.js, the arbiter
   with verified release, the combined recommendation, comfyCatalog.
   Still open: every VRAM figure and catalog URL is PROVISIONAL until

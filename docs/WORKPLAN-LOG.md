@@ -4725,3 +4725,110 @@ what a release IS instead of just its number.
 
 Queue for tonight, in order: the three specs above, then 5.7-5.9
 (mogrt last), 6.1-6.2, item 7 (tier P4).
+
+## 2026-08-28 (local, fifteenth pass) - item 4: a shipped template that never reached a shipped panel
+
+Harness green on arrival (385/385), so the pass took the first of the
+three specs the remote session answered on 2026-08-28: **version-aware
+template seeding**. Patch bump (0.10.0 -> 0.10.1): this fixes shipped
+behaviour, and it is the kind of fix that has to reach a panel to mean
+anything.
+
+### The bug, measured on this machine before touching any code
+
+`ensureDataDirs` seeded bundled ComfyUI templates with "copy what is
+missing, touch nothing that is present", so an install froze on whatever
+it first saw. Comparing %APPDATA%\AE-Llama\comfy-workflows against the
+bundle: **AE_LLAMA_H3_I2V_V1.manifest.json was the version shipped on
+2026-08-26**, three releases and two content changes behind - missing the
+corrected node attribution and the removal rules that make the template
+run on a bare ComfyUI. Every push since had "shipped" it and none of them
+had delivered it.
+
+### The one thing the spec could not have known: line endings
+
+The same comparison said the TEMPLATE differed too. It did not. There is
+no `.gitattributes` here, so git checks these text files out with the
+platform's line endings, and the installed copy was CRLF where the bundle
+is LF - byte-different, version-identical. A raw-byte hash would have
+recorded hashes that no Windows install ever matches, called every
+untouched file a user edit, and re-frozen the exact bug this mechanism
+exists to end. So the identity used everywhere is **sha1 of the bytes
+with CRLF normalized to LF**, in the script and in setup.js both. It is
+the reason only ONE file on this machine turned out to be stale rather
+than three.
+
+Second measurement that changed the build: `git log -- <path>` lists ONE
+commit for the H3 template where `git log --all --full-history` lists
+three (history simplification, plus the panel ships from the dev branch
+as well as main). The three happened to hold identical bytes, so nothing
+was lost this time, but a version missing from the history is an install
+misread as user-edited forever - the seeder walks the full history.
+
+### Built
+
+- `scripts/workflow-hash-history.js` maintains
+  `extension/comfy-workflows/.hash-history.json`, append-only: 11
+  versions of 6 bundled files, seeded from git. `--check` fails when a
+  bundled file's current hash is unrecorded, `--from-git` walks history,
+  `--dir` points it at another bundle (the tests use it).
+- `ensureDataDirs` now decides per file: absent -> copy; hash IS in the
+  history -> unedited shipped copy, refresh it; hash unknown -> a human's
+  work, never touched. No readable history (an older ZXP, a build that
+  dropped the dotfile) -> the old never-overwrite rule stands, because a
+  bundle that lost its record must not start guessing. It returns a
+  summary {seeded, refreshed, preserved, current}, and main.js logs a
+  refresh rather than changing a workflow file in total silence.
+- The dotfile is bundle metadata: it is not seeded into the data root,
+  and the history does not record itself. Confirmed the ZXP packager
+  carries it (`Copy-Item -Recurse` does take dotfiles in subdirectories -
+  tested directly, since a dotfile silently missing from the ZXP would
+  degrade to the old behaviour with no symptom).
+
+### Verified in the field
+
+Ran the real `ensureDataDirs` against the real %APPDATA%\AE-Llama: it
+**refreshed AE_LLAMA_H3_I2V_V1.manifest.json**, reported the other five
+as current, preserved nothing (nothing was edited here), and the second
+run was a clean no-op. All six installed files now hash equal to the
+bundle. This machine is no longer running a five-release-old manifest.
+
+### Covered without AE
+
+- `tests/test-workflow-seeding.js` (new, 33 checks) drives the real
+  setup.js against throwaway bundles: fresh seed, stale-unedited refresh
+  from the FIRST and from a MIDDLE recorded version, user edit preserved
+  byte-for-byte, both CRLF cases (a CRLF copy of the current version is
+  "current", a CRLF copy of an old one is still refreshed), missing
+  history, unparseable history, a history that forgot one file, an absent
+  bundle, and the real shipped bundle (every file must read as current -
+  if any shipped file's own hash were missing, a real install of it would
+  read as an edit and never update again).
+- `tests/test-workflow-hash-history.js` (new, 16 checks) runs `--check`
+  against the shipped bundle the way test-capability-doc does, and proves
+  the CI failure it exists for: change a template without recording it
+  and --check fails naming that file and not the untouched one; record it
+  and the OLD hash survives (append-only - some install is still on it).
+- docs/CAPABILITIES.md curated half updated. Stubbed suite: **43 files
+  green** (41 -> 43). **Harness: 385/385 PASSED**, green before and after.
+
+### For the next pass
+
+- Two specs left from the remote's three: **organize_project's dry-run
+  shape**, then **the dialog triage that READS before it answers**. Then
+  5.7 (audio to keyframes), 5.8, 5.9 (mogrt last).
+- The harness found AE **already blocked by a wordless dialog on arrival**
+  for the second run of this pass and answered it with Cancel, as
+  designed. Nothing this pass did could raise one (no AE writes outside
+  the suite), so it was left over from the first run's teardown - which is
+  precisely the case the dialog-triage spec wants evidence for. Both runs
+  passed 385/385 and AE was clear afterwards.
+- Small, for whoever does the next template change: run
+  `node scripts/workflow-hash-history.js` after editing a bundled
+  template, or CI fails. That is deliberate.
+- Note for anyone driving Windows paths through the Bash tool here:
+  an inline `node -e "...'C:\Users\...'..."` had its backslashes eaten
+  and created a literal `C:\UsersmrAppDataRoamingAE-Llama` tree. Found
+  and removed in the same pass; use a script file for Windows paths.
+- Still open from earlier passes: `duplicate_comp` takes a name without
+  uniquing; no read-only `get_bounds`.

@@ -419,9 +419,20 @@ FOUR tools are still uncovered and each is deliberate, not pending:
     spending a pass on it. Original text: ComfyUI rejected the workflow
     the model chose; the model had four rounds left, said "let's try a
     different approach or workflow", and stopped.
-  - **A bundled workflow template never reaches an existing install
-    once it has been seeded.** DESIGN DECIDED by the remote session
-    2026-08-28 — build it locally, one pass:
+  - ~~**A bundled workflow template never reaches an existing install
+    once it has been seeded.**~~ DONE 2026-08-28 (0.10.1). Built to the
+    spec below, with one thing the spec could not have known: hashes are
+    taken over CRLF-NORMALIZED bytes. Git checks these templates out with
+    the platform's line endings, so on this machine the installed H3
+    template and the bundled one differed in raw bytes and in nothing
+    else - a raw-byte hash would have called an identical file a user
+    edit. Verified in the field: seeding against the real
+    %APPDATA%\AE-Llama refreshed the one genuinely stale file (the H3
+    i2v manifest, five releases behind), reported the other five as
+    current, overwrote nothing, and the second run was a no-op. Also
+    measured: `git log -- path` lists one commit for the H3 template
+    where `--all --full-history` lists three, so the seeder walks the
+    full history. Original spec:
     (1) `scripts/workflow-hash-history.js` maintains
     `extension/comfy-workflows/.hash-history.json`: for every bundled
     template/manifest, an APPEND-ONLY list of the sha1 of every version
