@@ -77,7 +77,13 @@
             "only), comps?: [string] (default every comp), dryRun?: bool " +
             "(default TRUE), includeUtility?: bool}" },
     { name: "duplicate_comp", mutating: true,
-      desc: "Duplicate a composition.",
+      desc: "Duplicate a composition. AE names the copy '<name> 2' and " +
+            "puts it in the source's own folder; pass 'name' to rename " +
+            "it, and a name another item already holds is auto-numbered " +
+            "(reported as nameTaken — use the returned name afterwards). " +
+            "The copy SHARES its layers' sources with the original " +
+            "(precomps, solids, footage), so editing those changes both; " +
+            "sharedSources lists them.",
       args: "{comp: string, name?: string}" },
     { name: "organize_project", mutating: true,
       desc: "File loose root-level items into Comps/Footage/Solids/Audio/" +
@@ -161,6 +167,17 @@
             "Rotation are animated too, the note says where the " +
             "compensation is exact.",
       args: "{comp?: string, layer: name|index, preservePosition?: bool = true}" },
+    { name: "get_bounds", mutating: false,
+      desc: "MEASURE a layer's rendered content without touching it — how " +
+            "wide the text actually is, where the shape sits in the " +
+            "frame, whether anything overflows. Returns the source rect, " +
+            "the comp-space box and corners (parenting, scale and " +
+            "rotation included) and inFrame: fully|partly|outside. Use " +
+            "this before fitting, centering or aligning anything instead " +
+            "of assuming a size. extents:true adds a shape's stroke. A " +
+            "3D layer reports the source rect only (the camera decides " +
+            "the rest).",
+      args: "{comp?: string, layer?: name|index (omit = selected layer), time?: seconds (default current), extents?: bool}" },
     { name: "add_keyframe", mutating: true,
       desc: "Add a keyframe on a layer property at a time (seconds).",
       args: "{comp?: string, layer: name|index, property: transform name or 'effect.<EffectName>.<ParamName>', time: seconds, value: number|[..]}" },
@@ -291,10 +308,14 @@
       desc: "Delete a layer from a comp.",
       args: "{comp?: string, layer: name|index}" },
     { name: "set_comp_setting", mutating: true,
-      desc: "Change a comp setting (duration, frame rate, bg color). Its " +
+      desc: "Change a comp setting: duration, frame rate, bg color, the " +
+            "WORK AREA (workAreaStart with workAreaDuration or " +
+            "workAreaEnd, in seconds — or workArea: 'comp' to reset it to " +
+            "the whole comp) and preview resolution. Times snap to the " +
+            "frame grid and the result says when they did. Its " +
             "width/height change ONLY the canvas and leave layers stuck at " +
             "the top-left — to resize a comp, use scale_comp instead.",
-      args: "{comp?: string, duration?: s, frameRate?: number, width?: int, height?: int, bgColor?: [r,g,b] 0..1}" },
+      args: "{comp?: string, duration?: s, frameRate?: number, width?: int, height?: int, bgColor?: [r,g,b] 0..1, workArea?: 'comp', workAreaStart?: s, workAreaDuration?: s, workAreaEnd?: s, resolution?: 'full'|'half'|'third'|'quarter'|int|[h,v]}" },
     { name: "scale_comp", mutating: true,
       desc: "Resize a comp AND scale its content to match, re-centered — " +
             "like the native 'Scale Composition' script. Uniform factor " +
@@ -314,8 +335,31 @@
             "request.",
       args: "{comp?: string, width?: px, height?: px (omit one to keep aspect), factor?: number (e.g. 0.5 = half), mode?: 'fit'|'fill'}" },
     { name: "import_file", mutating: true,
-      desc: "Import a footage/image/video file into the project.",
+      desc: "Import a footage/image/video file into the PROJECT PANEL " +
+            "only — it does not appear in any comp. To put it on screen " +
+            "use import_as_layer instead.",
       args: "{path: string (absolute)}" },
+    { name: "import_as_layer", mutating: true,
+      desc: "Import a file AND place it in a comp as a layer, scaled to " +
+            "the comp. 'fit' (default) contains it without cropping or " +
+            "distorting, 'fill' covers and crops, 'stretch' fills exactly " +
+            "and distorts (what AE's own \"Fit to Comp\" does), 'none' " +
+            "leaves it at 100%. A file already in the project is REUSED " +
+            "and reloaded from disk rather than imported twice, so " +
+            "regenerating the same path and re-placing it is safe. A " +
+            "still spans the whole comp — set_layer_timing retimes it.",
+      args: "{path: string (ABSOLUTE), comp?: string, fit?: 'fit'|'fill'|'stretch'|'width'|'height'|'none', name?: string, position?: [x,y]}" },
+    { name: "snapshot_frame", mutating: true,
+      desc: "Write one frame of a comp to a PNG on disk. Use it to show " +
+            "someone what a comp looks like, or to feed a comp's own " +
+            "frame to an image generator. Defaults to the comp's current " +
+            "time and to FULL resolution even when the comp is " +
+            "downsampled (it puts the downsample back). Refuses an " +
+            "existing file unless {overwrite: true} — it would be " +
+            "replaced silently and cannot be undone. Guide layers are " +
+            "not rendered. list_render_templates reports a writable temp " +
+            "folder; import_as_layer puts the PNG back into a comp.",
+      args: "{path: string (ABSOLUTE .png), comp?: string, time?: seconds (default: the comp's current time), resolution?: 'full'|'comp', overwrite?: bool = false}" },
     { name: "add_shape_layer", mutating: true,
       desc: "Add a shape layer (rectangle, ellipse, polygon, or star).",
       args: "{comp?: string, name?: string, shape?: 'rectangle'|'ellipse'|'polygon'|'star', size?: [w,h], position?: [x,y], fillColor?: [r,g,b] 0..1, strokeColor?: [r,g,b], strokeWidth?: px, roundness?: px (rectangle), points?: int (polygon/star)}" },
@@ -394,9 +438,19 @@
       args: "{comp?: string, layer: name|index, enabled: bool}" },
     { name: "set_layer_parent", mutating: true,
       desc: "Parent layers to another layer (omit/null parent to " +
-            "unparent). Visual positions are preserved by default. Omit " +
-            "layer/layers to use the selection.",
-      args: "{comp?: string, layer?: name|index, layers?: [name|index], parent?: name|index|null, keepPosition?: bool (default true)}" },
+            "unparent). Visual positions are preserved by default, but " +
+            "AE pays for that by REWRITING the child's Position/Scale/" +
+            "Rotation (every keyframe, not just the current value) into " +
+            "the parent's space — so read those values back rather " +
+            "than reusing the ones you had. That compensation is worked " +
+            "out ONCE, at one frame: if the parent itself is animated " +
+            "the layer only stays put at that frame and rides the parent " +
+            "everywhere else (the result says so in parentAnimated). " +
+            "atTime/atFrame picks the frame that must not move; without " +
+            "it AE uses wherever the playhead happens to be. " +
+            "keepPosition:false keeps the numbers and lets the layer " +
+            "jump. Omit layer/layers to use the selection.",
+      args: "{comp?: string, layer?: name|index, layers?: [name|index], parent?: name|index|null, keepPosition?: bool (default true), atTime?: seconds, atFrame?: number}" },
     { name: "list_properties", mutating: false,
       desc: "DISCOVER a layer's real property tree — names, paths, types, " +
             "current values. Use this whenever a parameter/effect/mask " +
@@ -488,6 +542,31 @@
             "template names for render_comp. Installed templates differ " +
             "per machine — never guess a name, list them.",
       args: "{}" },
+    { name: "render_comp_audio", mutating: true,
+      desc: "Render ONLY the comp's audio to a file (AE's audio-only " +
+            "output module, picked for you). Refuses when no layer in " +
+            "the comp has audio, or when every audio layer is muted — " +
+            "AE would otherwise write a full file of SILENCE and report " +
+            "success. Use it to export a mix; transcribe_to_captions " +
+            "calls it for you.",
+      args: "{comp?: string, output: string (ABSOLUTE file path), template?: string (only to override the automatic audio module), startTime?: number (seconds), durationSeconds?: number, overwrite?: bool = false}" },
+    { name: "add_captions", mutating: true,
+      desc: "Build MANY timed captions in one call: one text layer per " +
+            "segment (trimmed to its own start/end), or one marker per " +
+            "segment with {as: 'markers'}. Text layers default to the " +
+            "lower third, centred. This is the batch tool — never make " +
+            "captions with one add_text_layer per line. Every segment is " +
+            "validated before anything is created, so a bad one refuses " +
+            "the whole batch instead of leaving half a transcript behind.",
+      args: "{comp?: string, segments: [{start: seconds, end: seconds, text: string}], as?: 'text' (default) | 'markers', layer?: name|index (marker target; omit for comp markers), name?: string (layer name prefix, default 'Caption'), fontSize?: number, font?: string, fillColor?: [r,g,b] 0-1, position?: [x,y], justification?: 'left'|'center'|'right'}" },
+    { name: "transcribe_to_captions", mutating: true,
+      desc: "TRANSCRIBE the comp's own audio with the local speech model " +
+            "and put the result on the timeline as timed text layers (or " +
+            "markers). Renders the audio, transcribes it offline, and " +
+            "builds the captions — one call. Needs whisper.cpp installed; " +
+            "the refusal says how. Blocks for roughly a second per five " +
+            "seconds of audio.",
+      args: "{comp?: string, as?: 'text' (default) | 'markers', startTime?: number (seconds), durationSeconds?: number, language?: string, maxSegments?: int, name?: string (layer name prefix), fontSize?: number, font?: string, fillColor?: [r,g,b] 0-1, position?: [x,y], justification?: 'left'|'center'|'right', keepAudio?: bool = false (keep the rendered audio file and report its path)}" },
     { name: "comfy_status", mutating: false,
       desc: "Check the local ComfyUI instance (online? queue depth?).",
       args: "{}" },
@@ -561,6 +640,12 @@
       "- Anchor points are in LAYER space, not comp space. To center one,",
       "  call center_anchor_point — never set anchorPoint coordinates by",
       "  guesswork.",
+      "- NEVER assume how big a layer's content is. 'fit the title to the",
+      "  frame', 'put it under the logo', 'is it cut off?' all start with",
+      "  get_bounds {layer} — it reports the real rendered size, where it",
+      "  sits in the comp and whether it overflows. Text and shape layers",
+      "  are the ones that surprise you: their box is nothing like the",
+      "  comp size.",
       "- Your reply text is shown BEFORE your commands run. Phrase it as",
       "  intent ('Centering the anchor point…'), then after reading TOOL",
       "  RESULTS confirm what actually happened — including any 'warning'",
@@ -1158,6 +1243,134 @@
         enhanceDone();
       }
     }
+  };
+
+  /*
+   * transcribe_to_captions — the one tool of WORKPLAN 6.1 Pass C the
+   * model actually calls. It is a PANEL tool because the middle step is
+   * a child process, which ExtendScript cannot spawn; the two ends are
+   * host tools (render_comp_audio, add_captions) so the self-test can
+   * cover them in real AE with no speech model installed.
+   *
+   *   comp -> render_comp_audio -> AIFF -> whisper-cli -> segments
+   *        -> add_captions -> text layers or markers
+   *
+   * The AIFF is a throwaway in Folder.temp and is deleted afterwards
+   * unless {keepAudio: true}. Measured end to end on 2026-08-29: a 5 s
+   * comp rendered in 0.1 s and transcribed in 682 ms.
+   */
+  PANEL_TOOLS.transcribe_to_captions = function (args, cb) {
+    args = args || {};
+    if (!global.Whisper) {
+      cb({ ok: false, error: "Speech-to-text is not available in this " +
+           "panel build." });
+      return;
+    }
+    var found;
+    try { found = global.Whisper.find(args.model); }
+    catch (e) { cb({ ok: false, error: "whisper.cpp lookup failed: " +
+                     e.message }); return; }
+    if (!found.ok) { cb({ ok: false, error: found.reason }); return; }
+
+    var as = String(args.as || "text").toLowerCase();
+    if (as !== "text" && as !== "markers") {
+      cb({ ok: false, error: "'as' must be 'text' (a text layer per " +
+           "caption, the default) or 'markers' — got " + String(args.as) });
+      return;
+    }
+
+    var fs = null, path = null;
+    try {
+      fs = global.AEBridge.nodeRequire("fs");
+      path = global.AEBridge.nodeRequire("path");
+    } catch (eN) {
+      cb({ ok: false, error: "Node is unavailable in this panel: " +
+           eN.message });
+      return;
+    }
+
+    // A fixed name would collide with the last run's leftovers, and
+    // render_comp REFUSES an existing output rather than raise AE's
+    // overwrite modal — so the name carries the clock, and overwrite
+    // stays on as the belt to that braces.
+    var tmp = path.join(
+      global.AEBridge.nodeRequire("os").tmpdir(),
+      "aell-transcribe-" + new Date().getTime() + ".aif");
+
+    var sink = args.progressSink || null;
+    if (sink) sink("Rendering the comp's audio…");
+
+    callHostTool("render_comp_audio", {
+      comp: args.comp, output: tmp.replace(/\\/g, "/"), overwrite: true,
+      startTime: args.startTime, durationSeconds: args.durationSeconds
+    }, function (rendered) {
+      if (!rendered.ok) { cb(rendered); return; }
+      var wrote = String((rendered.data && rendered.data.output) || tmp);
+
+      function cleanup() {
+        if (args.keepAudio) return;
+        try { fs.unlinkSync(wrote); } catch (eU) {}
+      }
+
+      if (sink) sink("Transcribing…");
+      global.Whisper.transcribe(wrote, { model: args.model,
+                                         install: found,
+                                         language: args.language },
+        function (err, out) {
+          if (err) { cleanup(); cb({ ok: false, error: err.message }); return; }
+          var segs = out.segments;
+          if (!segs.length) {
+            cleanup();
+            cb({ ok: false, error: "The transcriber found no speech in '" +
+                 ((rendered.data && rendered.data.comp) || "the comp") +
+                 "'. Its audio layers are " +
+                 ((rendered.data && rendered.data.audioLayers) || "unknown") +
+                 " — music and effects transcribe to nothing." });
+            return;
+          }
+          // FACT 1 (whisper.js): a silent file transcribes as the word
+          // "You" with exit code 0. render_comp_audio refuses a comp with
+          // no audio LAYER, but a layer whose audio is silence gets past
+          // it, and this is the shape that leaves behind.
+          if (global.Whisper.looksLikeSilence(segs)) {
+            cleanup();
+            cb({ ok: false, error: "The only thing transcribed was \"" +
+                 segs[0].text + "\", which is what whisper.cpp hears in " +
+                 "SILENCE — not speech it recognised. Check that the " +
+                 "audio layers (" +
+                 ((rendered.data && rendered.data.audioLayers) || "?") +
+                 ") actually carry speech in this part of the comp." });
+            return;
+          }
+          if (args.maxSegments > 0 && segs.length > args.maxSegments) {
+            segs = segs.slice(0, args.maxSegments);
+          }
+          // Segment times are relative to the RENDER, so a partial render
+          // has to be put back on the comp's own clock.
+          var offset = Number(args.startTime) || 0;
+          if (offset) {
+            for (var i = 0; i < segs.length; i++) {
+              segs[i] = { start: segs[i].start + offset,
+                          end: segs[i].end + offset, text: segs[i].text };
+            }
+          }
+          if (sink) sink("Building " + segs.length + " caption(s)…");
+          callHostTool("add_captions", {
+            comp: args.comp, segments: segs, as: as, layer: args.layer,
+            name: args.name, fontSize: args.fontSize, font: args.font,
+            fillColor: args.fillColor, position: args.position,
+            justification: args.justification
+          }, function (built) {
+            cleanup();
+            if (!built.ok) { cb(built); return; }
+            built.data.transcribed = segs.length + " segment(s) in " +
+              out.ms + " ms";
+            built.data.transcript = out.text;
+            if (args.keepAudio) built.data.audioFile = wrote;
+            cb(built);
+          });
+        });
+    });
   };
 
   /** JSON, as an ExtendScript string literal holding that JSON. */

@@ -703,7 +703,8 @@ const toolsSrc = fs2.readFileSync(
   path2.join(__dirname, "..", "extension", "js", "tools.js"), "utf8");
 const MODULE_FILE = {
   Comfy: "comfy.js", Setup: "setup.js", Llama: "llama.js",
-  Settings: "settings.js", Tiers: "tiers.js", Tools: "tools.js"
+  Settings: "settings.js", Tiers: "tiers.js", Tools: "tools.js",
+  Whisper: "whisper.js"
 };
 const needed = new Set(
   (toolsSrc.match(/global\.([A-Z][A-Za-z]+)/g) || [])

@@ -246,6 +246,9 @@ loadPanelFile("llama.js");
 // a picture.
 loadPanelFile("setup.js");
 loadPanelFile("comfy.js");
+// Same reason: transcribe_to_captions reaches for global.Whisper before
+// it can produce a grounded "not installed" refusal.
+loadPanelFile("whisper.js");
 loadPanelFile("tools.js");
 
 const Settings = window.Settings;

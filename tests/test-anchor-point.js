@@ -86,7 +86,21 @@ function Layer(name, comp) {
 Object.defineProperty(Layer.prototype, "index", {
   get() { return this.comp._layers.indexOf(this) + 1; }
 });
-Layer.prototype.sourceRectAtTime = function () { return this._rect; };
+// Faithful to AE 2026 (measured 2026-08-29): the call needs BOTH
+// arguments, and the time it takes is the layer's own source time, not
+// comp time. This stub only has one rect, but it records what it was
+// asked for so a caller that hands over comp time is caught -- see
+// tests/test-get-bounds.js for the rect-over-time version.
+Layer.prototype.sourceRectAtTime = function (t, extents) {
+  if (arguments.length < 2) {
+    throw new Error("After Effects error: Unable to call " +
+                    "sourceRectAtTime because the call requires 2 " +
+                    "parameters.");
+  }
+  this.rectCalls = this.rectCalls || [];
+  this.rectCalls.push(t);
+  return this._rect;
+};
 Layer.prototype.property = function (name) {
   if (name === "ADBE Transform Group") {
     const t = this._transform;

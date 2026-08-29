@@ -40,8 +40,20 @@ Object.defineProperty(FolderItem.prototype, "numItems", {
 });
 FolderItem.prototype.item = function (i) { return this.children[i - 1]; };
 
-function CompItem(name) { Item.call(this, name); this.numLayers = 0; }
+function CompItem(name) {
+  Item.call(this, name);
+  this.numLayers = 0;
+  // Every real comp carries these, and set_comp_setting reads them back
+  // on every write - a stub without them fails a tool that is correct.
+  this.bgColor = [0, 0, 0];
+  this.workAreaStart = 0;
+  this.workAreaDuration = 0;
+  this.resolutionFactor = [1, 1];
+}
 CompItem.prototype = Object.create(Item.prototype);
+Object.defineProperty(CompItem.prototype, "frameDuration", {
+  get() { return this.frameRate > 0 ? 1 / this.frameRate : 0; }
+});
 function FootageItem(name) { Item.call(this, name); }
 FootageItem.prototype = Object.create(Item.prototype);
 function TextLayer() {} function ShapeLayer() {} function CameraLayer() {}
@@ -64,6 +76,7 @@ const project = {
     addComp(name, w, h, ar, dur, fps) {
       const c = new CompItem(name);
       c.width = w; c.height = h; c.duration = dur; c.frameRate = fps;
+      c.workAreaDuration = dur;
       c.openInViewer = () => {};
       c.parentFolder = root;
       return c;

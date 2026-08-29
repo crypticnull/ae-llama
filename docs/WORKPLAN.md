@@ -375,6 +375,31 @@ FOUR tools are still uncovered and each is deliberate, not pending:
   Budget: one rollback per user request. A failing READ-ONLY tool does
   not trigger it. Four AE measurements gated the design; they and the
   answer to "what if it overshoots" are in WORKPLAN-LOG 2026-08-25.
+  - ~~Rollback's reach over PROJECT ITEMS is unmeasured~~ MEASURED
+    2026-08-29 (0.10.7). It reaches: comp creation, duplication,
+    deletion, folder moves and renames all revert on the one Undo, and
+    the shipped AELL_callBatch path was driven through each. The real
+    finding was AELL_fingerprint - the check that proves the Undo landed
+    where it started, and the only guard against it overshooting into
+    the user's own last edit. Of 25 dimensions a mutating tool can
+    write, AE reverted all 25 and the fingerprint saw 4; the blind 21
+    (every comp setting, every layer switch, markers, the 3D-only
+    rotations, a solid SOURCE's colour, a text layer's style) are
+    recorded now. Harness 482 -> 490. Two limits stated in the log and
+    left open on purpose: arbitrary property values beyond the transform
+    basics, and folders that share a name.
+  - ~~Whether `.parent =` compensation survives a child that is 3D under
+    a 2D parent, or a parent with a keyframed transform~~ MEASURED
+    2026-08-29 (0.10.8). Mixed dimensions survive: a 2D parent leaves a
+    3D child's Z alone and a 3D parent's Z never reaches a 2D child (the
+    compensation is a pure X/Y translation, measured). An ANIMATED
+    parent does not - AE works the compensation out ONCE, at the
+    playhead, so "nothing moved" is true at exactly one frame and the
+    layer is 400 px away two seconds later; a keyframed child's MOTION
+    changes, not just its numbers; and an expression-driven parent does
+    it with ZERO keyframes. set_layer_parent now reports
+    `parentAnimated` and `compensatedAt`, and takes `atTime`/`atFrame`
+    to pin the frame that must not move. Harness 490 -> 498.
 - ~~Performance: 200-layer comps — measure grid_layout and batch
   keyframe wall time~~ DONE 2026-08-28 (0.9.29). The batch-keyframe half
   is measured and fine: at 200 layers set_keyframes (600 keys) 167 ms,
@@ -724,7 +749,30 @@ needs, exact name of the created null and its slider paths. Build:
 link_property. Grounded error lists audio-capable layers. This plus
 link_property = beat-driven anything.
 
-### 5.8 Frame round-trip (the local foundation for image/video gen)
+### 5.8 Frame round-trip — DONE 2026-08-29
+Probed, built and covered in one pass. `snapshot_frame {comp?, time?,
+path, resolution?, overwrite?}` and `import_as_layer {path, comp?, fit?,
+name?, position?}` are both almost entirely made of what AE does
+SILENTLY, all measured: a missing folder is a no-op with no error, an
+out-of-range time CLAMPS and writes a blank frame, an existing file is
+replaced with no dialog and no undo, a comp at Half resolution writes a
+half-size frame, PNG bytes go into whatever name is handed over (a
+frame saved as .jpg is a PNG called .jpg), and a path the project
+already holds is imported a SECOND time without a word. Two findings
+shaped the design rather than a report: AE's "Fit to Comp" menu commands
+do NOTHING with no comp viewer open, so the fit arithmetic is the
+panel's own — reproducing their numbers exactly, pixel-aspect correction
+on X included (320x240 par-1 into 720x480 par-1.2121 = 272.727 x 200,
+not 225 x 200) — and `saveFrameToPng` is SAFE inside an undo group
+(measured across three nested groups plus three more cycles), unlike
+`renderQueue.render()`, so snapshot_frame is in `AELL_NO_UNDO_GROUP`
+only to keep an un-undoable file write from arming a rollback. Reported
+dimensions are read back out of the PNG's own header. `import_file`
+finally got suite coverage too — it only ever needed a file on disk —
+which closes the last "never exercised in real AE" gap. 100 stub checks
+in `tests/test-frame-roundtrip.js`, 17 suite steps, harness 404 -> 421.
+No version bump (feature track). Original text below.
+
 Build on 5.5's probe: `snapshot_frame` {comp, time, path} writes a PNG
 of the comp at a time; `import_as_layer` {path, comp, fit} imports a
 file and places it as a layer scaled fit/fill/center to the comp. Verify
@@ -746,16 +794,58 @@ leave it panel-interactive-only for the remote session to design.
 ## 6. Binary track (multi-night; same lifecycle pattern as llama-server)
 
 ### 6.1 Local captions via whisper.cpp
-Pass A: acquire — download a prebuilt whisper.cpp Windows binary +
-ggml-base.en model the way get-llama.ps1 does llama-server; verify it
-runs on a WAV. Pass B: verification harness with NO human audio —
-synthesize a spoken WAV locally (PowerShell System.Speech TTS, e.g.
-"the quick brown fox"), transcribe, assert the transcript contains the
-phrase; make that a stub-level test that skips cleanly when the binary
-is absent (CI has no binary). Pass C: AE wiring — render a comp/layer's
-audio to WAV via 5.5, transcribe with timestamps, build styled text
-layers (5.1/text tools) or markers from the segments:
-`transcribe_to_captions` {comp|layer}. Do NOT start C before 5.5 lands.
+~~Pass A: acquire~~ DONE 2026-08-29. `scripts/get-whisper.ps1` +
+`scripts/lib/whisper-assets.ps1` (the choice, testable without a
+network) + `tests/test-whisper-acquire.js`. Acquires into
+`vendor\whisper.cpp\{bin,models}` — split so a binary update does not
+re-download the 141 MB model — and verifies by synthesizing a WAV and
+transcribing it: measured 818 ms for a 3 s clip, base.en, CPU. Facts the
+probe paid for, all now pinned by tests: the newest tag can be an
+asset-less prerelease; the archive nests under `Release\` and `main.exe`
+is a deprecation shim (`whisper-cli.exe` is the transcriber); the models
+are on HuggingFace under `ggerganov`, not `ggml-org` (which answers 401);
+`Invoke-RestMethod` hands a JSON array back as ONE object, so `@()`
+around it pools every release's assets together; and this machine's
+nvidia-smi says "CUDA **UMD** Version", which the usual regex misses.
+~~Pass B: verification harness~~ DONE 2026-08-29.
+`scripts/lib/whisper-verify.ps1` (the round-trip, one implementation for
+the acquirer, the standalone runner and the test),
+`scripts/verify-whisper.ps1` (SKIP + exit 0 with no install, `-Require`
+to make that a failure) and `tests/test-whisper-verify.js`, which runs
+49 of its 52 checks with NO install present (verified by pointing
+APPDATA at an empty folder). Field
+facts this paid for: 2 s of SILENCE transcribes as " You", so "a
+transcript came back" is not a check at all; whisper-cli writes nothing
+to stdout on failure and ~6 KB to stderr, so draining stdout before
+waiting on the process deadlocks (measured: a five-minute hang);
+base.en writes numbers as DIGITS and the synthesizer's "pack" comes back
+as "hack", so a verification phrase is a fixture that has to be
+measured; and 44.1 kHz audio transcribes fine - the old "whisper refuses
+anything but 16 kHz" note was wrong, which matters for Pass C's comp
+audio.
+~~Pass C: AE wiring~~ DONE 2026-08-29. Three tools, split so the two
+ends can be tested where the middle cannot: `render_comp_audio` and
+`add_captions` are HOST tools the self-test drives in real AE with no
+speech model present, and `transcribe_to_captions` is the PANEL tool
+that joins them (ExtendScript cannot spawn a child process).
+`extension/js/whisper.js` finds the install and parses the segments.
+Verified end to end in real AE: a 20 s comp of synthesized speech
+rendered in 0.1 s, transcribed in 1053 ms, and became five caption
+layers each trimmed to its own span. Field facts this paid for: a comp
+with NO audio layer STILL renders a full, valid, audio-only AIFF (DONE,
+772 674 bytes, no warning) and silence transcribes as the word "You" —
+so the refusal has to come before the render or the feature's failure
+mode is a confident wrong answer; `layer.inPoint` is a SLIDE that DRAGS
+outPoint and preserves duration (in=2 in a 5 s comp reads back out=7),
+so in is always set before out; AE accepts inverted and zero-length
+spans in silence; in/out QUANTIZE to AE's own time base (0.3333 ->
+0.33329264322917), so every comparison needs a tolerance; whisper.cpp
+decodes AE's AIFF directly through miniaudio, so no WAV conversion and
+no ffmpeg; and `om.getSettings()` throws while `setSettings({Format})`
+answers "Property is read-only", so the audio format comes from the
+output-module TEMPLATE, matched by name. 115 stub checks in
+`tests/test-captions.js`, 16 suite steps, harness 498 -> 514. No version
+bump (feature track).
 
 ### 6.2 ffmpeg post-renders
 Pass A: acquire a static ffmpeg build the same way; verify with ffprobe.

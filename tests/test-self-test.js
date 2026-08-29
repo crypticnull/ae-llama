@@ -62,6 +62,14 @@ function listLimit(raw) {
 }
 
 /** Window a full layer list the way the host does. */
+// "half [2, 2]" - the same shape the host reports.
+function compResolutionLabel(c) {
+  const rf = (c && c.rf) || [1, 1];
+  const NAMES = { 1: "full", 2: "half", 3: "third", 4: "quarter" };
+  const name = (rf[0] === rf[1] && NAMES[rf[0]]) ? NAMES[rf[0]] : "custom";
+  return name + " [" + rf[0] + ", " + rf[1] + "]";
+}
+
 function capLayers(compName, all, args) {
   const total = all.length;
   const limit = listLimit(args && args.limit);
@@ -78,8 +86,15 @@ function capLayers(compName, all, args) {
     if (l && wanted.indexOf(l) < 0) wanted.push(l);
   }
   wanted.sort((a, b) => a.index - b.index);
+  const cp = compProps[compName];
   const out = { name: compName, numLayers: total,
                 layersShown: wanted.length, layers: wanted };
+  if (cp) {
+    const secs = (t) => (Math.round(Number(t) * 1000) / 1000) + "s";
+    out.workArea = secs(cp.waStart || 0) +
+                   "-" + secs((cp.waStart || 0) + (cp.waDur || 0));
+    out.resolution = compResolutionLabel(cp);
+  }
   if (wanted.length < total) {
     out.note = "Showing " + wanted.length + " of " + total +
       " layers (indexes " + start + "-" + last + "). Ask again with start:" +
@@ -118,6 +133,15 @@ const RQ_FOLDERS = ["c:\\users\\probe\\appdata\\local\\temp",
                     RQ_INHERITED.toLowerCase()];
 const rqItems = [];        // what the user has queued
 const rqDisk = {};         // lowercased path -> bytes
+// The frame round-trip (WORKPLAN 5.8) writes into that same virtual
+// disk. frPngs remembers each written frame's real pixel size (the tool
+// reads it back out of the PNG header, not out of the comp), frItems
+// which paths the project already holds an item for, and frScales what
+// AE ends up holding, so get_property can be asked rather than trusted.
+const frPngs = {};
+const frItems = {};
+const frScales = {};
+const frLayers = {};
 function rqNorm(p) { return String(p).split("/").join("\\"); }
 function rqDirOf(p) {
   const n = rqNorm(p);
@@ -293,6 +317,7 @@ const cvKeys = {};       // "layer/prop"  -> [{time, value}]
 const parentedLayers = {}; // layer -> parent, so the resize can tell a
                            // child's inherited transform from its own
 const cvExpr = {};       // "layer/prop"  -> expression
+let cvSolids = [];       // solids in the coverage comp, by name
 const cvThreeD = {};     // layer -> bool
 const cvAnchor = {};     // layer -> [x, y, z]
 const cvXRot = {};       // layer -> deg (3D-only, cleared by going 2D)
@@ -323,6 +348,7 @@ const LIGHT_DEEP_PATH = {
 // the Position keyframes the discard-report steps leave behind made the
 // NEXT run's expression read answer with a key list instead.
 const resetCoverRig = () => {
+  cvSolids = [];
   const stores = [cvControls, cvKeys, cvExpr, cvThreeD, cvAnchor, cvXRot,
                   cvFx];
   for (const store of stores) {
@@ -346,7 +372,29 @@ const inAuComp = (a) => !!(a && /Self-Test Audio/.test(a.comp || ""));
 let auLayers = [];         // {name, audio: bool}
 let auNulls = [];          // the nulls the converter has left behind
 function resetAuRig() { auLayers = []; auNulls = []; }
+// resetRqRig already empties the virtual disk the frame rig shares.
+function resetFrRig() {
+  for (const m of [frPngs, frItems, frScales, frLayers]) {
+    for (const k of Object.keys(m)) delete m[k];
+  }
+}
 const auFind = (n) => auLayers.filter(l => l.name === String(n))[0];
+
+// The caption rigs (WORKPLAN 6.1 Pass C). Two comps: one that gets a Tone
+// effect so render_comp_audio has real audio to find, and one the text
+// captions are built in. The facts this canned host has to model are the
+// silent ones -- AE renders a comp with NO audio just as happily as one
+// with, and inPoint DRAGS outPoint -- because those are the only ones the
+// suite steps can catch.
+const inCapAudio = (a) => !!(a && /Self-Test Caption Audio/.test(a.comp || ""));
+const inCapText = (a) => !!(a && /Self-Test Captions/.test(a.comp || ""));
+let capAudio = [];      // {name, audio: bool} in the audio rig
+let capRows = [];       // {name, inPoint, outPoint} in the text rig
+let capMarks = [];      // {time, comment, duration} on the text comp
+function resetCapRig() { capAudio = []; capRows = []; capMarks = []; }
+// AE stores time on its own base: 0.3333 reads back 0.33329264322917.
+const CAP_TICKS = 254016000;
+const capQuant = (t) => Math.round(Number(t) * CAP_TICKS) / CAP_TICKS;
 const auPeak = (n) => Math.round((34.33 + 1.69 * (n - 1)) * 100) / 100;
 const auUnique = (base) => {
   const taken = auLayers.map(l => l.name).concat(auNulls);
@@ -476,7 +524,13 @@ let rnRenamedTo = null;
 const scShared = ["ST SC Square", "ST SC Square 2", "ST SC Square 3"];
 const scText = ["ST SC Words"];
 let scUnique = [];
-const inRbComp = (a) => a && /Rollback/.test(a.comp || "");
+// The rollback comp, by its CURRENT name. A step renames it inside an
+// armed round that then fails, so a substring match on "Rollback"
+// would lose track of the comp exactly when the rename is the thing
+// being verified -- and every tool aimed at it would start
+// succeeding, which is the one answer that makes the step vacuous.
+let rbCompName = "ST Rollback";
+const inRbComp = (a) => a && String(a.comp || "") === rbCompName;
 let batSolidFx = {};
 let batSolidPos = {};
 const inBatComp = a => !!(a && /Undo/.test(a.comp || ""));
@@ -653,12 +707,15 @@ function shapeAddItem(layer, container, kind, name) {
   return it;
 }
 function shapeLayerOf(name) { return shapeLayers[name] || null; }
-function shapeSeedLayer(name) {
-  // add_shape_layer draws its rectangle inside a group, exactly as AE does.
+function shapeSeedLayer(name, size) {
+  // add_shape_layer draws its rectangle inside a group, exactly as AE does,
+  // at the size it was ASKED for -- a fixed 10x10 here would have let a
+  // step assert bounds the real tool never produces.
   const L = { items: [] };
   const g = shapeAddItem(name, L.items, "group", "Rectangle 1");
   const r = shapeAddItem(name, g.items, "rectangle");
-  r.vals.Size = [10, 10];
+  r.vals.Size = (Array.isArray(size) && size.length >= 2)
+    ? [size[0], size[1]] : [200, 200];
   shapeLayers[name] = L;
   return L;
 }
@@ -718,7 +775,16 @@ function shapeResolve(L, layerName, path) {
 }
 /* Rendered bounds, which is the only thing that says a repeater repeated:
    geometry in a group, widened by any repeater BELOW it. */
-function shapeBounds(L) {
+/* The value of an animated shape param at SOURCE time t: AE holds before
+   the first key and after the last, which is all the bounds steps read. */
+function shapeValAt(it, key, t) {
+  const keys = it.keys && it.keys[key];
+  if (!keys || !keys.length || typeof t !== "number") return it.vals[key];
+  let v = keys[0].value;
+  for (const k of keys) if (t >= k.time) v = k.value;
+  return v;
+}
+function shapeBounds(L, t, extents) {
   let minX = null, maxX = null, minY = null, maxY = null;
   function eat(x0, x1, y0, y1) {
     minX = minX === null ? x0 : Math.min(minX, x0);
@@ -729,9 +795,20 @@ function shapeBounds(L) {
   L.items.forEach(g => {
     if (g.kind !== "group") return;
     let gx0 = null, gx1 = 0, gy0 = 0, gy1 = 0;
+    // extents grows the box by the stroke's MITER ALLOWANCE, not by half
+    // its width: measured in AE 2026 twice, a 40px stroke adds 100 on
+    // every side -- half-width x (the default miter limit 4 + 1).
+    let pad = 0;
+    if (extents) {
+      g.items.forEach(it => {
+        if (it.kind === "stroke") {
+          pad = Math.max(pad, (Number(it.vals["Stroke Width"]) || 0) * 2.5);
+        }
+      });
+    }
     g.items.forEach(it => {
       if (/^(rectangle|ellipse)$/.test(it.kind)) {
-        const s = it.vals.Size || [100, 100];
+        const s = shapeValAt(it, "Size", t) || [100, 100];
         const p = it.vals.Position || [0, 0];
         const x0 = p[0] - s[0] / 2, x1 = p[0] + s[0] / 2;
         const y0 = p[1] - s[1] / 2, y1 = p[1] + s[1] / 2;
@@ -748,13 +825,420 @@ function shapeBounds(L) {
         gy0 = Math.min(gy0, gy0 + dy); gy1 = Math.max(gy1, gy1 + dy);
       }
     });
-    if (gx0 !== null) eat(gx0, gx1, gy0, gy1);
+    if (gx0 !== null) eat(gx0 - pad, gx1 + pad, gy0 - pad, gy1 + pad);
   });
   if (minX === null) return null;
   return [minX, maxX, minY, maxY];
 }
 
+
+// ---- the bounds rig, modelled from AE 2026 (probes, WORKPLAN-LOG
+// 2026-08-29) rather than from the tool ------------------------------
+// The three facts the get_bounds steps exist to pin, and which this
+// model therefore has to obey on AE's side of the fence:
+//   - sourceRectAtTime ignores the layer's transform entirely;
+//   - its time argument is the layer's OWN source time (unshifted by
+//     startTime, unscaled by stretch) while property times are comp
+//     times;
+//   - cameras and lights have no sourceRectAtTime at all.
+// A text layer's rect is the glyphs', measured from the BASELINE, so its
+// top is negative -- the numbers below are 48px readings, not round ones.
+const bnLayers = {};
+const inBnComp = (a) => !!(a && /Bounds/.test(a.comp || ""));
+const resetBoundsRig = () => {
+  for (const k of Object.keys(bnLayers)) delete bnLayers[k];
+};
+function bnAdd(name, kind, extra) {
+  const L = { kind: kind, pos: [0, 0], anchor: [0, 0], scale: [100, 100],
+              rot: 0, parent: null, startTime: 0, stretch: 100,
+              threeD: false, w: 100, h: 100, posKeys: [], z: 0,
+              __name: name };
+  Object.assign(L, extra || {});
+  bnLayers[name] = L;
+  return L;
+}
+/* Where a layer's Position IS at a time. Keyframes make this differ from
+   L.pos, which is the whole reason parenting to an animated layer only
+   holds still at one frame -- a model that ignored time could not tell
+   the two apart. Linear between keys, held outside them. */
+function bnPosAt(L, t) {
+  const ks = L.posKeys;
+  if (!ks || !ks.length) return L.pos;
+  const at = typeof t === "number" ? t : 0;
+  if (at <= ks[0].time) return ks[0].value;
+  if (at >= ks[ks.length - 1].time) return ks[ks.length - 1].value;
+  let i = 0;
+  while (i < ks.length - 1 && ks[i + 1].time < at) i++;
+  const f = (at - ks[i].time) / (ks[i + 1].time - ks[i].time);
+  return [ks[i].value[0] + (ks[i + 1].value[0] - ks[i].value[0]) * f,
+          ks[i].value[1] + (ks[i + 1].value[1] - ks[i].value[1]) * f];
+}
+function bnRect(name, t, extents) {
+  const L = bnLayers[name];
+  if (!L) return { left: 0, top: 0, width: 100, height: 100 };
+  if (L.kind === "shape") {
+    const SL = shapeLayerOf(name);
+    const b = SL ? shapeBounds(SL, t, extents) : null;
+    if (!b) return { left: 0, top: 0, width: 0, height: 0 };
+    return { left: b[0], top: b[2], width: b[1] - b[0], height: b[3] - b[2] };
+  }
+  if (L.kind === "text") {
+    return { left: 2.53, top: -34.7, width: 148.34, height: 35.06 };
+  }
+  return { left: 0, top: 0, width: L.w, height: L.h };
+}
+/* One layer's own transform applied to a point already measured from its
+   anchor -- scale, then rotation, then position. */
+function bnXform(L, pt, t) {
+  const P = bnPosAt(L, t);
+  const x = pt[0] * (L.scale[0] / 100), y = pt[1] * (L.scale[1] / 100);
+  const rad = L.rot * Math.PI / 180;
+  return [x * Math.cos(rad) - y * Math.sin(rad) + P[0],
+          x * Math.sin(rad) + y * Math.cos(rad) + P[1]];
+}
+function bnUnXform(L, pt, t) {       // the inverse, for a new parent link
+  const P = bnPosAt(L, t);
+  const rad = -L.rot * Math.PI / 180;
+  const dx = pt[0] - P[0], dy = pt[1] - P[1];
+  const x = dx * Math.cos(rad) - dy * Math.sin(rad);
+  const y = dx * Math.sin(rad) + dy * Math.cos(rad);
+  return [x / (L.scale[0] / 100), y / (L.scale[1] / 100)];
+}
+function bnCompPoint(name, srcPt, t) {
+  const L = bnLayers[name];
+  let pt = bnXform(L, [srcPt[0] - L.anchor[0], srcPt[1] - L.anchor[1]], t);
+  let up = L.parent ? bnLayers[L.parent] : null, guard = 0;
+  while (up && guard++ < 32) {
+    pt = bnXform(up, pt, t);
+    up = up.parent ? bnLayers[up.parent] : null;
+  }
+  return pt;
+}
+/* Everything above a layer that MOVES, in the shape set_layer_parent
+   reports it -- the model's half of the warning. */
+function bnMovingChain(name) {
+  const out = [];
+  let L = name ? bnLayers[name] : null, guard = 0;
+  while (L && guard++ < 32) {
+    if (L.posKeys && L.posKeys.length) {
+      out.push(L.__name + ": Position (" + L.posKeys.length + " keys)");
+    }
+    L = L.parent ? bnLayers[L.parent] : null;
+  }
+  return out;
+}
+function bnThreeD(name) {
+  const hits = [];
+  let L = bnLayers[name], guard = 0;
+  while (L && guard++ < 32) {
+    if (L.threeD) hits.push(L.__name);
+    L = L.parent ? bnLayers[L.parent] : null;
+  }
+  return hits;
+}
+const bnR3 = (v) => Math.round(v * 1000) / 1000;
+const bnSecs = (t) => (Math.round(Number(t) * 1000) / 1000) + "s";
+function bnBounds(args, compW, compH) {
+  const name = args && args.layer;
+  const L = bnLayers[name];
+  if (Array.isArray(args && args.layers)) {
+    return { __err: "get_bounds reads ONE layer. Call it once per " +
+      "layer -- for_each_layer reports only counts, so it would throw " +
+      "every measurement away." };
+  }
+  if (!L) {
+    return { __err: "No layer '" + name + "' in '" + args.comp + "' -- " +
+      "it holds: " + Object.keys(bnLayers).join(", ") };
+  }
+  if (L.kind === "camera" || L.kind === "light") {
+    return { __err: "A " + L.kind + " layer ('" + name + "') renders no " +
+      "pixels, so it has no bounds -- AE gives sourceRectAtTime only to " +
+      "layers with content (text, shape, solid, footage, precomp, null). " +
+      "For a camera or light read its Position with get_property instead." };
+  }
+  let t = args && args.time;
+  if (typeof t === "string" && t !== "" && !isNaN(Number(t))) t = Number(t);
+  if (typeof t !== "number") {
+    if (typeof (args && args.time) !== "undefined" && args.time !== null) {
+      return { __err: "'time' must be a number of seconds; got " +
+        JSON.stringify(args.time) };
+    }
+    t = 0;
+  }
+  const extents = !!(args && args.extents);
+  const srcT = (t - L.startTime) / (L.stretch / 100);
+  const r = bnRect(name, srcT, extents);
+  const out = { layer: name, layerType: L.kind, time: bnR3(t),
+    extents: extents,
+    source: { left: bnR3(r.left), top: bnR3(r.top),
+              right: bnR3(r.left + r.width), bottom: bnR3(r.top + r.height),
+              width: bnR3(r.width), height: bnR3(r.height),
+              centerX: bnR3(r.left + r.width / 2),
+              centerY: bnR3(r.top + r.height / 2) },
+    compSize: [compW, compH] };
+  if (bnR3(srcT) !== bnR3(t)) {
+    out.sourceTime = bnR3(srcT);
+    out.timeNote = "measured at source time " + bnSecs(srcT) + ", which " +
+      "is comp time " + bnSecs(t) + " for this layer (it starts at " +
+      bnSecs(L.startTime) + " and is stretched to " + L.stretch + "%)";
+  }
+  if (out.source.width === 0 && out.source.height === 0) {
+    out.empty = "this layer renders nothing at " + bnSecs(t) +
+      (L.kind === "shape" ? " -- the shape layer has no drawn content yet"
+                          : " -- check that the layer is on at this time");
+  }
+  const threeD = bnThreeD(name);
+  if (threeD.length) {
+    out.comp = null;
+    out.compBoxUnavailable = "'" + threeD[0] + "' is a 3D layer, so where " +
+      "these pixels land in the frame depends on the camera. AE's own " +
+      "sourcePointToComp ignores Z, the camera and a 3D parent's rotation " +
+      "(measured), so no honest comp-space box can be reported.";
+    return out;
+  }
+  const pts = [[r.left, r.top], [r.left + r.width, r.top],
+               [r.left + r.width, r.top + r.height],
+               [r.left, r.top + r.height]].map(p => bnCompPoint(name, p, t));
+  const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+  const minX = Math.min.apply(null, xs), maxX = Math.max.apply(null, xs);
+  const minY = Math.min.apply(null, ys), maxY = Math.max.apply(null, ys);
+  out.comp = { left: bnR3(minX), top: bnR3(minY), right: bnR3(maxX),
+    bottom: bnR3(maxY), width: bnR3(maxX - minX), height: bnR3(maxY - minY),
+    centerX: bnR3((minX + maxX) / 2), centerY: bnR3((minY + maxY) / 2) };
+  out.corners = pts.map(p => [bnR3(p[0]), bnR3(p[1])]);
+  if (L.rot % 360 !== 0) {
+    out.rotated = L.rot % 360;
+    out.rotatedNote = "the layer is rotated " + bnR3(L.rot % 360) +
+      " degrees, so comp.width/height describe the axis-aligned box " +
+      "AROUND it, not the layer's own size (source.width/height is that)";
+  }
+  const over = {};
+  if (minX < 0) over.left = bnR3(-minX);
+  if (minY < 0) over.top = bnR3(-minY);
+  if (maxX > compW) over.right = bnR3(maxX - compW);
+  if (maxY > compH) over.bottom = bnR3(maxY - compH);
+  if (!Object.keys(over).length) {
+    out.inFrame = "fully";
+  } else if (maxX <= 0 || maxY <= 0 || minX >= compW || minY >= compH) {
+    out.inFrame = "outside";
+    out.outsideBy = over;
+  } else {
+    out.inFrame = "partly";
+    out.outsideBy = over;
+  }
+  return out;
+}
+/* AE's side of every bounds-rig call. Returns undefined for the tools the
+   generic canned host already models (the shape ones), so they fall
+   through instead of being modelled twice. */
+function bnCanned(tool, args) {
+  const name = args && args.layer;
+  switch (tool) {
+    case "add_solid":
+      bnAdd(args.name, "solid",
+            { w: args.width || 100, h: args.height || 100,
+              anchor: [(args.width || 100) / 2, (args.height || 100) / 2],
+              pos: [500, 400] });
+      return { name: args.name, index: 1 };
+    case "add_null":
+      bnAdd(args.name, "null", { pos: (args.position || [0, 0]).slice() });
+      return { name: args.name, index: 1 };
+    case "add_text_layer":
+      // AE names a text layer after its TEXT; the tool takes no 'name'.
+      bnAdd(args.text, "text", { pos: [500, 400] });
+      return { name: args.text, index: 1 };
+    case "add_camera":
+      bnAdd(args.name || "Camera", "camera", { threeD: true });
+      return { name: args.name || "Camera", index: 1 };
+    case "set_transform": {
+      const L = bnLayers[name];
+      if (!L) return undefined;
+      const v = args.value;
+      if (args.property === "position") {
+        L.pos = [v[0], v[1]];
+        if (v.length > 2) L.z = v[2];
+      } else if (args.property === "anchorPoint") L.anchor = [v[0], v[1]];
+      else if (args.property === "scale") L.scale = [v[0], v[1]];
+      else if (args.property === "rotation") L.rot = Number(v);
+      return { layer: name, property: args.property, value: v };
+    }
+    // Two DIFFERENT AE calls, and the tool shipped with them swapped
+    // (measured 2026-08-29): keepPosition (the default) is `.parent =`,
+    // which rewrites the child's transform -- current value AND every
+    // keyframe -- so nothing moves on screen; keepPosition:false is
+    // setParentWithJump, which touches nothing and lets the layer jump.
+    case "set_layer_parent": {
+      const L = bnLayers[name];
+      if (!L) return undefined;
+      const keep = args.keepPosition !== false;
+      const clearing = args.parent === null ||
+                       typeof args.parent === "undefined";
+      const nk = keep ? L.posKeys.length : 0;
+      // The compensation is worked out ONCE, at one frame (measured
+      // 2026-08-29). With no atTime/atFrame that frame is the playhead,
+      // which this rig leaves at 0.
+      let T = 0, asked = false;
+      if (typeof args.atFrame !== "undefined" && args.atFrame !== null &&
+          args.atFrame !== "") {
+        if (isNaN(Number(args.atFrame))) {
+          return { __err: "atFrame must be a frame number; got " +
+                          JSON.stringify(args.atFrame) };
+        }
+        T = Number(args.atFrame) / 30; asked = true;
+      } else if (typeof args.atTime !== "undefined" && args.atTime !== null &&
+                 args.atTime !== "") {
+        if (isNaN(Number(args.atTime))) {
+          return { __err: "atTime must be a number of seconds; got " +
+                          JSON.stringify(args.atTime) };
+        }
+        T = Number(args.atTime); asked = true;
+      }
+      if (asked && !keep) {
+        return { __err: "atTime/atFrame only means something when the " +
+          "layer is being kept still. keepPosition:false leaves every " +
+          "value alone, so there is no frame to compensate at -- drop " +
+          "one of the two." };
+      }
+      if (asked && (T < 0 || T > 6)) {
+        return { __err: "atTime " + T + "s is outside \"" + args.comp +
+          "\", which runs 0 to 6s at 30 fps" };
+      }
+      const oldParent = L.parent;
+      const movers = bnMovingChain(clearing ? oldParent : args.parent);
+      if (keep) {
+        // Bake the comp-space point AT THAT FRAME, relink, then read it
+        // back in the new parent's space -- the shift AE applies to every
+        // key too, which is why a keyed child's MOTION changes.
+        const compPos = bnCompPoint(name, L.anchor, T);
+        const before = L.pos;
+        L.parent = clearing ? null : args.parent;
+        L.pos = clearing ? compPos
+                         : bnUnXform(bnLayers[args.parent], compPos, T);
+        const dx = L.pos[0] - before[0], dy = L.pos[1] - before[1];
+        for (const k of L.posKeys) {
+          k.value = [k.value[0] + dx, k.value[1] + dy, 0];
+        }
+        // Z only passes between two 3D layers: a 2D parent leaves a 3D
+        // child's Z alone, and a 3D parent's Z never reaches a 2D child.
+        const wasP = oldParent ? bnLayers[oldParent] : null;
+        const nowP = clearing ? null : bnLayers[args.parent];
+        const oldZ = (wasP && wasP.threeD && L.threeD) ? (wasP.z || 0) : 0;
+        const newZ = (nowP && nowP.threeD && L.threeD) ? (nowP.z || 0) : 0;
+        L.z = (L.z || 0) + oldZ - newZ;
+      } else {
+        L.parent = clearing ? null : args.parent;
+      }
+      const out = { layer: name, parent: clearing ? "(none)" : args.parent,
+        parented: name, skipped: "", keepPosition: keep,
+        note: keep
+          ? (clearing
+              ? "Unparented with no visual jump: AE rewrote each layer's " +
+                "Position/Scale/Rotation back into comp space, so the " +
+                "numbers changed and the picture did not."
+              : "No visual jump: AE rewrote each layer's Position/Scale/" +
+                "Rotation into the parent's space, so those values now " +
+                "read differently from before. Read them back rather " +
+                "than assuming the old ones.")
+          : (clearing
+              ? "keepPosition:false -- values were left alone, so each " +
+                "layer JUMPED to wherever its raw transform puts it in " +
+                "comp space."
+              : "keepPosition:false -- values were left alone, so each " +
+                "layer JUMPED by the parent's transform.") };
+      if (nk > 0) {
+        out.keyframesRewritten = name + " (" + nk + ")";
+        out.keyframesNote = "AE rewrote all " + nk + " transform " +
+          "keyframe(s) on these layers, not just the current value; the " +
+          "old numbers are gone.";
+      }
+      if (keep) {
+        out.compensatedAt = (Math.round(T * 1000) / 1000) + "s (frame " +
+          Math.round(T * 30) + ")" +
+          (asked ? ", as asked" : ", the playhead where it stood");
+      }
+      if (movers.length) {
+        out.parentAnimated = movers.join("; ");
+        out.parentAnimatedNote = (clearing
+          ? "The parent it left MOVES over time. AE compensates once, at " +
+            out.compensatedAt.split(",")[0] + ", so the layer keeps the " +
+            "position it had THERE and loses the motion the parent was " +
+            "giving it at every other frame."
+          : "That parent MOVES over time. AE compensates once, at " +
+            out.compensatedAt.split(",")[0] + ", so the layer sits " +
+            "exactly where it was at that frame and travels with the " +
+            "parent everywhere else -- this is NOT a jump-free link " +
+            "across the whole timeline.") +
+          " Pass atTime/atFrame to choose the frame that must not move" +
+          (clearing ? "." : ", or keepPosition:false to leave the numbers " +
+            "alone and let the layer ride the parent.");
+        if (nk > 0) {
+          out.parentAnimatedNote += " These layers have keyframes of " +
+            "their own, which now play inside that moving space, so " +
+            "their MOTION changed, not just their numbers.";
+        }
+      }
+      return out;
+    }
+    case "set_keyframes": {
+      const L = bnLayers[name];
+      if (!L || !/position/i.test(String(args.property || ""))) {
+        return undefined;
+      }
+      L.posKeys = (args.keys || []).map(k => ({
+        time: k.time, value: [k.value[0], k.value[1], 0] }));
+      if (L.posKeys.length) L.pos = L.posKeys[0].value.slice(0, 2);
+      return { layer: name, property: args.property,
+               keysSet: L.posKeys.length };
+    }
+    case "delete_layer": {
+      if (!bnLayers[name]) return undefined;
+      delete bnLayers[name];
+      return { deleted: name };
+    }
+    case "set_layer_timing": {
+      const L = bnLayers[name];
+      if (!L) return undefined;
+      if (typeof args.startTime === "number") L.startTime = args.startTime;
+      return { layer: name, startTime: L.startTime, inPoint: L.startTime,
+               outPoint: L.startTime + 6 };
+    }
+    case "set_layer_3d": {
+      const L = bnLayers[name];
+      if (!L) return undefined;
+      L.threeD = !!args.enabled;
+      return { layer: name, threeD: L.threeD };
+    }
+    case "get_property": {
+      const L = bnLayers[name];
+      if (!L) return undefined;
+      if (/anchor point$/i.test(String(args.property || ""))) {
+        return { layer: name, property: args.property,
+                 value: [L.anchor[0], L.anchor[1], 0], numKeys: 0 };
+      }
+      if (/^position$/i.test(String(args.property || ""))) {
+        const out = { layer: name, property: args.property,
+                      value: [L.pos[0], L.pos[1], L.z || 0],
+                      numKeys: L.posKeys.length };
+        if (L.posKeys.length) {
+          out.keys = L.posKeys.map(k => ({ time: k.time,
+                                           value: k.value.slice() }));
+        }
+        return out;
+      }
+      return undefined;
+    }
+    case "get_bounds":
+      return bnBounds(args, 1000, 800);
+    default:
+      return undefined;
+  }
+}
+
 function cannedOk(tool, args) {
+  if (inBnComp(args)) {
+    const bn = bnCanned(tool, args);
+    if (typeof bn !== "undefined") return bn;
+  }
   switch (tool) {
     case "create_comp":
       createCount++;
@@ -768,7 +1252,9 @@ function cannedOk(tool, args) {
         width: (args && args.width) || 1280,
         height: (args && args.height) || 720,
         duration: (args && args.duration) || 8,
-        frameRate: (args && args.frameRate) || 30 };
+        frameRate: (args && args.frameRate) || 30,
+        // Every real comp carries these from the moment it exists.
+        waStart: 0, waDur: (args && args.duration) || 8, rf: [1, 1] };
       // 1st = the scratch comp, 2nd = the deliberate name collision that
       // must auto-number, 3rd+ = whatever was asked for (the camera comp).
       if (createCount === 1) return { name: "AELL Self-Test", id: 1 };
@@ -1192,6 +1678,15 @@ function cannedOk(tool, args) {
         return capLayers(args.comp, mine.map((nm, i) => ({
           index: i + 1, name: nm, type: "light", effects: [] })), args);
       }
+      if (inCapText(args)) {
+        return capLayers(args.comp, capRows.map((r, i) => ({
+          index: i + 1, name: r.name, inPoint: r.inPoint,
+          outPoint: r.outPoint, effects: [] })), args);
+      }
+      if (args && /Self-Test Frame/.test(args.comp || "")) {
+        return capLayers(args.comp, (frLayers[args.comp] || []).map(
+          (nm, i) => ({ index: i + 1, name: nm, effects: [] })), args);
+      }
       if (args && /Solid Room/.test(args.comp || "")) {
         return capLayers(args.comp,
           scShared.concat(scText).map((nm, i) => ({
@@ -1477,6 +1972,14 @@ function cannedOk(tool, args) {
       return out;
     }
     case "get_property": {
+      // What import_as_layer wrote, read back the way the suite reads it:
+      // the report is not evidence, the property is.
+      const frS = frScales[((args && args.comp) || "") + "|" +
+                           ((args && args.layer) || "")];
+      if (frS && /^scale$/i.test(String((args && args.property) || ""))) {
+        return { property: "Scale", matchName: "ADBE Scale", value: frS,
+                 numKeys: 0 };
+      }
       const SLg = shapeLayerOf(args && args.layer);
       if (SLg && /^contents\//i.test(String((args && args.property) || ""))) {
         const hit = shapeResolve(SLg, args.layer, args.property);
@@ -1729,6 +2232,10 @@ function cannedOk(tool, args) {
       return { index: 1, name: (args && args.name) || "Null 1" };
     case "set_expression": {
       const expr = (args && args.expression) || "";
+      if (inCvComp(args) && args.layer) {
+        const ck = args.layer + "/" + cvProp(args.property);
+        if (expr === "") delete cvExpr[ck]; else cvExpr[ck] = expr;
+      }
       if (expr === "") {
         delete driven[drivenKey(args && args.layer, args && args.property)];
         return { layer: args && args.layer, property: args && args.property,
@@ -1881,7 +2388,10 @@ function cannedOk(tool, args) {
     }
     case "add_shape_layer": {
       const nm = (args && args.name) || "Shape Layer 1";
-      shapeSeedLayer(nm);
+      shapeSeedLayer(nm, args && args.size);
+      if (inBnComp(args)) {
+        bnAdd(nm, "shape", { pos: (args && args.position) || [0, 0] });
+      }
       return { index: 1, name: nm,
                shape: (args && args.shape) || "rectangle" };
     }
@@ -2003,19 +2513,36 @@ function cannedOk(tool, args) {
       return out;
     }
     case "add_solid":
+      if (args && /Self-Test Frame/.test(String(args.comp || ""))) {
+        frLayers[args.comp] = (frLayers[args.comp] || []);
+        frLayers[args.comp].unshift(String(args.name || "solid"));
+      }
       // The hygiene steps ask get_project_info whether a PREVIEW deleted
       // the orphaned solid, so its source has to really exist here.
       if (args && String(args.name || "").indexOf("ST HYG") === 0) {
         solidSources.push({ name: args.name, id: 950 + solidSources.length,
                             type: "footage" });
       }
+      if (inCvComp(args)) cvSolids.push(String(args.name));
       if (inBatComp(args)) batSolids.push(args.name);
       if (inRbComp(args)) rbLayers.push(args.name);
       if (inPcComp(args)) pcLayers.push(args.name);
       // A fresh solid is SILENT — hasAudio is false until Tone lands.
       if (inAuComp(args)) auLayers.push({ name: args.name, audio: false });
+      if (inCapAudio(args)) capAudio.push({ name: args.name, audio: false });
       return { name: (args && args.name) || "ST Square" };
     case "apply_effect":
+      if (inCapAudio(args)) {
+        if (String(args.effect) !== "Tone") {
+          return { __err: "Effect not available: " + args.effect };
+        }
+        const capHost = capAudio.filter(l => l.name === String(args.layer))[0];
+        if (!capHost) return { __err: "Layer not found: " + args.layer };
+        capHost.audio = true;
+        return { layer: args.layer, effect: "Tone",
+                 matchName: "ADBE Aud Tone",
+                 params: ["Waveform options", "Level", "Compositing Options"] };
+      }
       if (inAuComp(args)) {
         if (String(args.effect) !== "Tone") {
           return { __err: "Effect not available: " + args.effect };
@@ -2708,25 +3235,214 @@ function cannedOk(tool, args) {
     case "set_comp_setting": {
       const nm = (args && args.comp) || createdComps[createdComps.length - 1];
       const c = compProps[nm] || (compProps[nm] = {});
-      if (args.width > 0) c.width = Math.round(args.width);
-      if (args.height > 0) c.height = Math.round(args.height);
-      if (args.duration > 0) c.duration = args.duration;
-      if (args.frameRate > 0) c.frameRate = args.frameRate;
-      return { name: nm, width: c.width, height: c.height,
-               duration: c.duration, frameRate: c.frameRate };
+      const notes = [];
+      const changed = [];
+      if (args.width > 0) {
+        c.width = Math.round(args.width); changed.push("width");
+      }
+      if (args.height > 0) {
+        c.height = Math.round(args.height); changed.push("height");
+      }
+      if (args.duration > 0) {
+        c.duration = args.duration;
+        changed.push("duration");
+        if (c.waStart + c.waDur > c.duration) {       // AE's silent drag
+          c.waDur = Math.max(0, c.duration - c.waStart);
+          notes.push("Re-timing the comp pulled the work area in with it.");
+        }
+      }
+      if (args.frameRate > 0) {
+        c.frameRate = args.frameRate; changed.push("frameRate");
+      }
+      if (Array.isArray(args.bgColor)) {
+        c.bg = args.bgColor.slice(0, 3); changed.push("bgColor");
+      }
+      const fd = 1 / (c.frameRate || 30);
+      const snap = (t) => Math.round(Number(t) / fd) * fd;
+      const secs = (t) => (Math.round(Number(t) * 1000) / 1000) + "s";
+      const num = (v) => (typeof v === "number" ? v
+        : (typeof v === "string" && v !== "" && !isNaN(Number(v)))
+            ? Number(v) : null);
+      const aS = num(args.workAreaStart), aD = num(args.workAreaDuration),
+            aE = num(args.workAreaEnd);
+      if (args.workArea !== undefined || aS !== null || aD !== null ||
+          aE !== null) {
+        let start, dur;
+        if (args.workArea !== undefined) {
+          if (String(args.workArea).toLowerCase() !== "comp") {
+            return { __err: "'workArea' takes 'comp' - reset the work area " +
+              "to the whole comp. Got '" + args.workArea + "'. For a " +
+              "sub-range pass workAreaStart with workAreaDuration or " +
+              "workAreaEnd, in seconds." };
+          }
+          start = 0; dur = c.duration;
+        } else {
+          if (aD !== null && aE !== null) {
+            return { __err: "Pass workAreaDuration OR workAreaEnd, not " +
+              "both - they say the same thing two ways." };
+          }
+          start = aS === null ? c.waStart : aS;
+          dur = aE !== null ? aE - start : (aD !== null ? aD : c.waDur);
+        }
+        const rawStart = start, rawDur = dur;
+        start = snap(start); dur = snap(dur);
+        let trimmed = 0;
+        if (aD === null && aE === null && args.workArea === undefined &&
+            start + dur > c.duration) {
+          trimmed = dur;
+          dur = snap(c.duration - start);
+        }
+        if (start < 0) {
+          return { __err: "A work area cannot start before 0 - got " +
+            secs(rawStart) + "." };
+        }
+        if (start > c.duration - fd + 0.0001) {
+          return { __err: "Comp '" + nm + "' is " + secs(c.duration) +
+            " long, so its last frame starts at " + secs(c.duration - fd) +
+            " - a work area cannot start at " + secs(rawStart) + "." };
+        }
+        if (dur <= 0 || dur < fd - 0.0001) {
+          return { __err: "A work area of " + secs(rawDur) + " holds no " +
+            "frame - the shortest one is " + secs(fd) + " (one frame)." };
+        }
+        if (start + dur > c.duration + 0.0001) {
+          return { __err: "A work area of " + secs(rawDur) + " starting at " +
+            secs(start) + " would end at " + secs(start + dur) + ", past " +
+            "the end of comp '" + nm + "' (" + secs(c.duration) + "). The " +
+            "longest that fits from there is " + secs(c.duration - start) +
+            "." };
+        }
+        c.waStart = start; c.waDur = dur;
+        changed.push("workArea");
+        if (Math.abs(start - rawStart) > 0.000001) {
+          notes.push("The work area start snapped to the frame grid: " +
+            secs(rawStart) + " -> " + secs(start) + " (frame " +
+            Math.round(start / fd) + ").");
+        }
+        if (!trimmed && Math.abs(dur - rawDur) > 0.000001) {
+          notes.push("The work area duration snapped to the frame grid.");
+        }
+        if (trimmed) {
+          notes.push("Moving the start left only " + secs(dur) +
+            " before the comp ends, so the work area is shorter than the " +
+            secs(trimmed) + " it was.");
+        }
+      }
+      if (args.resolution !== undefined) {
+        const NAMED = { full: 1, half: 2, third: 3, quarter: 4 };
+        let pair = null;
+        if (Array.isArray(args.resolution)) {
+          if (args.resolution.length !== 2) {
+            return { __err: "'resolution' as an array needs exactly two " +
+              "values, [horizontal, vertical]." };
+          }
+          pair = [Number(args.resolution[0]), Number(args.resolution[1])];
+        } else if (num(args.resolution) !== null) {
+          pair = [num(args.resolution), num(args.resolution)];
+        } else if (NAMED[String(args.resolution).toLowerCase()]) {
+          const n = NAMED[String(args.resolution).toLowerCase()];
+          pair = [n, n];
+        } else {
+          return { __err: "Unknown resolution '" + args.resolution +
+            "'. Named resolutions: 'full' (1), 'half' (2), 'third' (3), " +
+            "'quarter' (4) - or pass a whole-number downsample factor, or " +
+            "a [horizontal, vertical] pair." };
+        }
+        for (const v of pair) {
+          if (!(v >= 1) || !(v <= 99) || Math.floor(v) !== v) {
+            return { __err: "A resolution factor is a whole number from 1 " +
+              "(full, every pixel) to 99 - got " + v + "." };
+          }
+        }
+        c.rf = pair;
+        changed.push("resolution");
+      }
+      if (!changed.length) {
+        return { __err: "set_comp_setting was given nothing to change. It " +
+          "sets: duration, frameRate, width, height, bgColor, " +
+          "workAreaStart / workAreaDuration / workAreaEnd and resolution." };
+      }
+      const out = { name: nm, width: c.width, height: c.height,
+                    duration: c.duration, frameRate: c.frameRate,
+                    bgColor: c.bg || [0, 0, 0],
+                    workAreaStart: c.waStart, workAreaDuration: c.waDur,
+                    workArea: secs(c.waStart) + "-" +
+                              secs(c.waStart + c.waDur),
+                    resolution: compResolutionLabel(c),
+                    changed: changed.join(", ") };
+      if (notes.length) out.note = notes.join(" ");
+      return out;
     }
+    // Modelled from AE 2026 (probe 2026-08-29): AE names the copy itself
+    // ("X" -> "X 2"), puts it in the SOURCE'S folder, shares its layers'
+    // sources with the original, copies expressions verbatim, and accepts
+    // both a blank name and one another item already holds.
     case "duplicate_comp": {
       const src = (args && args.comp) || "";
       if (createdComps.indexOf(src) === -1) {
         return { __err: "Comp not found: " + src +
                  ". Existing comps: " + createdComps.join(", ") };
       }
-      const nm = (args && args.name) || (src + " 2");
-      createdComps.push(nm);
+      const taken = (n) => createdComps.indexOf(n) !== -1 || !!folders[n] ||
+                           cvSolids.indexOf(n) !== -1;
+      const nextFree = (base) => {
+        let k = 2;
+        while (taken(base + " " + k)) k++;
+        return base + " " + k;
+      };
+      const out = { name: nextFree(src), duplicatedFrom: src,
+                    folder: "Root" };
+      if (args && typeof args.name !== "undefined" && args.name !== null) {
+        const want = String(args.name);
+        if (/^\s*$/.test(want)) {
+          return { __err: "'name' was blank. AE accepts a blank comp name " +
+            "and the copy then has none, which nothing can look up. Leave " +
+            "'name' out to take AE's own '" + src + " 2', or pass a real " +
+            "name." };
+        }
+        if (taken(want)) {
+          out.name = nextFree(want);
+          out.nameTaken = "'" + want + "' was already another project " +
+            "item's name — a second one is unreachable by name, so the " +
+            "copy is '" + out.name + "'. Use THIS name in every following " +
+            "command" + (want === src
+              ? "; '" + src + "' still means the comp it was copied FROM."
+              : ".");
+        } else {
+          out.name = want;
+        }
+      }
+      createdComps.push(out.name);
+      out.id = 5000 + createdComps.length;
       // A duplicate carries the ORIGINAL's settings, not the defaults.
-      compProps[nm] = Object.assign({}, compProps[src]);
-      return { name: nm, id: 5000 + createdComps.length,
-               duplicatedFrom: src };
+      compProps[out.name] = Object.assign({}, compProps[src]);
+      if (/Cover/.test(src)) {
+        const shared = cvSolids.map((n) => n + " (solid)");
+        if (shared.length) {
+          out.sharedSources = shared;
+          out.sharedNote = "AE copied the LAYERS, not what they point at: " +
+            "these items are the same in both comps, so changing one " +
+            "there changes '" + src + "' too.";
+        }
+        const back = [];
+        for (const key of Object.keys(cvExpr)) {
+          if (String(cvExpr[key]).indexOf('comp("' + src + '")') === -1) {
+            continue;
+          }
+          const bits = key.split("/");
+          back.push(bits[0] + " > " + bits[1].charAt(0).toUpperCase() +
+                    bits[1].slice(1));
+        }
+        if (back.length) {
+          out.stillDrivenBySource = back;
+          out.expressionNote = "These expressions in the copy name '" + src +
+            "' as a string, so they still read the ORIGINAL comp. AE does " +
+            "not rewrite them and expressionError stays empty. Point them " +
+            "at thisComp (or at '" + out.name + "') if the copy should " +
+            "stand alone.";
+        }
+      }
+      return out;
     }
     case "rename_item": {
       const key = String((args && args.item) || "");
@@ -2736,6 +3452,7 @@ function cannedOk(tool, args) {
       createdComps[i] = String(args.name);
       compProps[args.name] = compProps[key] || {};
       delete compProps[key];
+      if (key === rbCompName) rbCompName = String(args.name);
       return { oldName: key, name: String(args.name) };
     }
     case "move_to_folder": {
@@ -2797,13 +3514,24 @@ function cannedOk(tool, args) {
         }
       }
       const heard = only ? 1 : audible.length;
+      // AE's converter reads the WORK AREA, not the comp: the default
+      // widens it and puts it back, range:'workArea' leaves it alone.
+      const acp = compProps[comp] ||
+        { duration: 3, frameRate: 24, waStart: 0, waDur: 3 };
+      const auPartial = acp.waStart > 0.0000001 ||
+                        acp.waDur < acp.duration - 0.0000001;
+      const auStart = (range === "workArea" && auPartial) ? acp.waStart : 0;
+      const auEnd = (range === "workArea" && auPartial)
+        ? acp.waStart + acp.waDur : acp.duration;
+      const auKeys = Math.round((auEnd - auStart) * acp.frameRate) + 1;
       const wanted = (args && args.name) ? String(args.name)
                                          : "Audio Amplitude";
       const name = auUnique(wanted);
       auNulls.push(name);
       const out = { layer: name, index: 1, controlLayer: name,
         controlEffects: ["Left Channel", "Right Channel", "Both Channels"],
-        keyframes: 73, rangeStart: 0, rangeEnd: 3, peak: auPeak(heard),
+        keyframes: auKeys, rangeStart: auStart, rangeEnd: auEnd,
+        peak: auPeak(heard),
         measured: only ? only.name : "whole comp mix",
         next: "Drive anything with link_property {layer: <target>, " +
               "property: <prop>, controlLayer: '" + name + "', " +
@@ -2811,6 +3539,16 @@ function cannedOk(tool, args) {
       if (name !== wanted) {
         out.nameTaken = "'" + wanted + "' was already a layer in this comp " +
           "- this one is '" + name + "'. Use THIS name from here on.";
+      }
+      if (auPartial && range === "comp") {
+        out.workArea = "The work area covered " + acp.waStart.toFixed(3) +
+          "s-" + (acp.waStart + acp.waDur).toFixed(3) + "s and AE only " +
+          "converts inside it, so it was widened to the whole comp and put " +
+          "back. Pass range: 'workArea' to keep AE's own behaviour.";
+      } else if (auPartial && range === "workArea") {
+        out.workArea = "Keyframes cover the WORK AREA only (" +
+          acp.waStart.toFixed(3) + "s-" +
+          (acp.waStart + acp.waDur).toFixed(3) + "s), as asked.";
       }
       if (only && audible.length > 1) {
         out.isolated = "AE's converter always reads the whole comp mix, so " +
@@ -2857,6 +3595,116 @@ function cannedOk(tool, args) {
       if (already) {
         out.warning = comp + " was already in the render queue " + already +
           " time(s); this adds another, and both would render.";
+      }
+      return out;
+    }
+    // FACT: a comp with NO audio layer STILL renders a full, valid,
+    // audio-only AIFF -- DONE, 772 674 bytes, no warning -- and silence
+    // transcribes as the word "You". So this canned host renders happily
+    // either way, and the refusal has to come from the tool.
+    case "render_comp_audio": {
+      const audible = capAudio.filter(l => l.audio);
+      if (!capAudio.length || !audible.length) {
+        const have = capAudio.map(l => l.name).join(", ") || "(none)";
+        return { __err: !capAudio.length || capAudio.every(l => !l.audio)
+          ? "No layer in '" + (args && args.comp) + "' has audio. AE would " +
+            "still render a full file of SILENCE and report DONE, and a " +
+            "transcriber hears the word \"You\" in silence. Layers here: " +
+            have + ". Import an audio or video file with import_file and " +
+            "add it to the comp first."
+          : "Every audio layer is muted, so the render would be silence." };
+      }
+      const audioOm = RQ_OM_TEMPLATES.filter(
+        n => !/^_HIDDEN/.test(n) && /(^|[^a-z])(wav|aiff?|mp3)([^a-z]|$)/i
+                                      .test(n))[0];
+      if (!audioOm) {
+        return { __err: "No audio-only output-module template is " +
+          "installed. Installed: " + RQ_OM_TEMPLATES.join(", ") + "." };
+      }
+      const inner = cannedOk("render_comp",
+        { comp: args && args.comp, output: args && args.output,
+          template: audioOm, overwrite: args && args.overwrite });
+      if (inner && inner.__err) return inner;
+      inner.audioLayers = audible.map(l => l.name).join(", ");
+      return inner;
+    }
+    case "add_captions": {
+      const as = String((args && args.as) || "text").toLowerCase();
+      if (as !== "text" && as !== "markers") {
+        return { __err: "'as' must be 'text' (a text layer per caption, " +
+          "the default) or 'markers' — got " + (args && args.as) };
+      }
+      if (as === "text" && args && args.layer) {
+        return { __err: "'layer' only applies to {as: 'markers'} — it is " +
+          "the layer the markers land on. Drop it, or pass " +
+          "{as: 'markers'}." };
+      }
+      const segs = (args && args.segments) || [];
+      if (!segs.length) {
+        return { __err: "'segments' is required: an array of {start, end, " +
+          "text} in seconds." };
+      }
+      // Every segment is validated BEFORE anything is created: half a
+      // transcript on the timeline plus an error is worse than an error.
+      for (let i = 0; i < segs.length; i++) {
+        const sg = segs[i] || {};
+        const where = "segment " + (i + 1);
+        if (typeof sg.start !== "number" || typeof sg.end !== "number") {
+          return { __err: where + ": 'start' must be a number of seconds" };
+        }
+        if (sg.start < 0) {
+          return { __err: where + ": 'start' is " + sg.start + "s. A " +
+            "caption before the start of the comp is never visible." };
+        }
+        if (sg.end <= sg.start) {
+          return { __err: where + ": end (" + sg.end + "s) is not after " +
+            "start (" + sg.start + "s). AE accepts that silently." };
+        }
+        if (typeof sg.text !== "string" || !sg.text.replace(/\s/g, "")) {
+          return { __err: where + ": 'text' must be a non-empty string" };
+        }
+      }
+      const compName = String((args && args.comp) || "");
+      const dur = (compProps[compName] || { duration: 10 }).duration;
+      let past = 0;
+      for (const sg of segs) if (sg.end > dur + 0.0001) past++;
+      if (as === "markers") {
+        const before = capMarks.length;
+        for (const sg of segs) {
+          const at = capMarks.filter(m => m.time === sg.start)[0];
+          if (at) { at.comment = sg.text; at.duration = sg.end - sg.start; }
+          else capMarks.push({ time: sg.start, comment: sg.text,
+                               duration: sg.end - sg.start });
+        }
+        const added = capMarks.length - before;
+        const outM = { comp: compName, as: "markers",
+                       target: args && args.layer ? "layer " + args.layer
+                                                  : "comp " + compName,
+                       captions: segs.length, markersAdded: added,
+                       markers: capMarks.length };
+        if (added < segs.length) {
+          outM.collapsed = (segs.length - added) + " caption(s) landed on " +
+            "a time that already had a marker and REPLACED it.";
+        }
+        return outM;
+      }
+      const base = (args && args.name) || "Caption";
+      const built = [];
+      for (let i = 0; i < segs.length; i++) {
+        let nm = base + " " + (i + 1), k = 2;
+        while (capRows.some(r => r.name === nm)) nm = base + " " + (i + 1) +
+          " " + (k++);
+        // inPoint FIRST, then outPoint: the other order leaves the layer
+        // the wrong length, which is what the suite step reads.
+        capRows.push({ name: nm, inPoint: capQuant(segs[i].start),
+                       outPoint: capQuant(segs[i].end) });
+        built.push(nm);
+      }
+      const out = { comp: compName, as: "text", captions: built.length,
+                    layers: built.slice(0, 12), justification: "center" };
+      if (past) {
+        out.note = past + " caption(s) end past '" + compName + "' (" +
+          dur + "s) — they exist but run off the timeline.";
       }
       return out;
     }
@@ -2934,6 +3782,170 @@ function cannedOk(tool, args) {
       }
       return out;
     }
+    // ---- the frame round-trip (WORKPLAN 5.8). Faithful to what real
+    // AE does SILENTLY: PNG bytes into whatever name it is handed, an
+    // overwrite with no dialog, an out-of-range time clamped to a blank
+    // frame, and a second project item for a path it already holds.
+    case "import_file": {
+      const rawF = (args && args.path) ? String(args.path) : "";
+      if (!rawF) return { __err: "'path' is required" };
+      const pF = rqNorm(rawF);
+      if (rqDisk[pF.toLowerCase()] === undefined) {
+        return { __err: "File not found: " + pF };
+      }
+      frItems[pF.toLowerCase()] = true;
+      return { name: pF.slice(pF.lastIndexOf("\\") + 1), id: 9100 };
+    }
+    case "snapshot_frame": {
+      const comp = String((args && args.comp) || "");
+      const props = compProps[comp] ||
+        { width: 1280, height: 720, duration: 8, frameRate: 30 };
+      const raw = (args && args.path) ? String(args.path) : "";
+      if (!raw) {
+        return { __err: "'path' is required - an ABSOLUTE .png path to " +
+          "write the frame to, e.g. \"C:/frames/shot.png\"." };
+      }
+      if (!/^[a-zA-Z]:[\\/]/.test(raw) && raw.indexOf("\\\\") !== 0) {
+        return { __err: "'path' must be an ABSOLUTE path (got \"" + raw +
+          "\"). AE resolves a relative path against its own working " +
+          "directory, not the project." };
+      }
+      const png = rqExtOf(raw) === "png" ? rqNorm(raw)
+        : (rqExtOf(raw) ? rqNorm(raw).replace(/\.[^.\\]*$/, ".png")
+                        : rqNorm(raw) + ".png");
+      const dir = rqDirOf(png);
+      if (!rqFolderExists(dir)) {
+        return { __err: "Output folder does not exist: " + dir +
+          ". Deepest folder that does exist: " + rqNearestFolder(dir) +
+          ". Create the folder, or write somewhere that exists." };
+      }
+      const overwrite = args && (args.overwrite === true ||
+                                 args.overwrite === "true");
+      if (rqDisk[png.toLowerCase()] !== undefined && !overwrite) {
+        return { __err: "Output file already exists: " + png + " (" +
+          rqDisk[png.toLowerCase()] + " bytes). Pass {overwrite: true} to " +
+          "replace it, or choose another path. (saveFrameToPng overwrites " +
+          "silently - no dialog, and no undo.)" };
+      }
+      const gaveTime = args && args.time !== undefined &&
+                       args.time !== null && args.time !== "";
+      const t = gaveTime ? Number(args.time) : 0;
+      if (isNaN(t)) {
+        return { __err: "'time' must be a number of seconds (got \"" +
+          args.time + "\")." };
+      }
+      if (t < 0 || t > props.duration) {
+        return { __err: "'time' " + t + "s is outside '" + comp + "' (0 to " +
+          props.duration + "s). AE does not refuse this - it CLAMPS to the " +
+          "nearest end and writes a BLANK frame, so it is refused here " +
+          "instead." };
+      }
+      const res = (args && args.resolution)
+        ? String(args.resolution).toLowerCase() : "full";
+      if (res !== "full" && res !== "comp") {
+        return { __err: "'resolution' must be 'full' (default - the comp's " +
+          "real pixel size) or 'comp' (whatever downsample the comp is set " +
+          "to). Got: " + args.resolution };
+      }
+      const srf = props.rf || [1, 1];
+      const shrunk = res === "comp" && (srf[0] !== 1 || srf[1] !== 1);
+      const pngW = shrunk ? Math.round(props.width / srf[0]) : props.width;
+      const pngH = shrunk ? Math.round(props.height / srf[1]) : props.height;
+      let frame = Math.round(t * props.frameRate);
+      const lastFrame = Math.round(props.duration * props.frameRate) - 1;
+      if (frame > lastFrame) frame = lastFrame;
+      rqDisk[png.toLowerCase()] = 644;
+      frPngs[png.toLowerCase()] = { width: pngW, height: pngH };
+      const out = { comp: comp, path: png, time: frame / props.frameRate,
+                    frame: frame, bytes: 644,
+                    width: pngW, height: pngH,
+                    compSize: props.width + "x" + props.height,
+                    next: "import_as_layer {path: \"" +
+                      png.split("\\").join("/") +
+                      "\"} places this PNG back into a comp as a layer." };
+      if (rqExtOf(raw) !== "png") {
+        out.pathNote = "AE writes PNG bytes whatever the file is called, " +
+          "so the path was corrected to \"" + png + "\".";
+      }
+      if (!gaveTime) {
+        out.timeNote = "No 'time' given, so the comp's current time (" +
+          out.time + "s, frame " + frame + ") was used.";
+      }
+      if (res === "full" && (srf[0] !== 1 || srf[1] !== 1)) {
+        out.resolutionNote = "'" + comp + "' was set to resolution 1/" +
+          srf[0] + " - it was snapshotted at FULL size and put back the " +
+          "way it was. Pass {resolution: \"comp\"} to keep the downsample.";
+      }
+      if (shrunk) {
+        out.warning = "The PNG is " + pngW + "x" + pngH + ", not the " +
+          "comp's " + props.width + "x" + props.height + " - the comp is " +
+          "downsampled and {resolution: \"comp\"} kept it.";
+      }
+      return out;
+    }
+    case "import_as_layer": {
+      const raw = (args && args.path) ? String(args.path) : "";
+      if (!raw) {
+        return { __err: "'path' is required - the ABSOLUTE path of an " +
+          "image, video or audio file to place in a comp." };
+      }
+      if (!/^[a-zA-Z]:[\\/]/.test(raw) && raw.indexOf("\\\\") !== 0) {
+        return { __err: "'path' must be ABSOLUTE (got \"" + raw + "\"). " +
+          "AE resolves a relative path against its own working directory, " +
+          "not the project folder." };
+      }
+      const p2 = rqNorm(raw);
+      if (rqDisk[p2.toLowerCase()] === undefined) {
+        return { __err: "File not found: " + p2 +
+          ". Check the path - nothing was imported." };
+      }
+      let fit = (args && args.fit) ? String(args.fit).toLowerCase() : "fit";
+      if (fit === "center") fit = "none";
+      if (["fit", "fill", "stretch", "width", "height",
+           "none"].indexOf(fit) === -1) {
+        return { __err: "'fit' must be one of: fit (contain, default), " +
+          "fill (cover, crops), stretch (fills exactly, distorts - what " +
+          "AE's own \"Fit to Comp\" does), width, height, none (100%; " +
+          "'center' means the same). Got: " + args.fit };
+      }
+      const comp2 = String((args && args.comp) || "");
+      const props2 = compProps[comp2] ||
+        { width: 1280, height: 720, duration: 8, frameRate: 30 };
+      const src = frPngs[p2.toLowerCase()] || { width: 320, height: 240 };
+      const fileName = p2.slice(p2.lastIndexOf("\\") + 1);
+      const name = (args && args.name) ? String(args.name) : fileName;
+      const reused = frItems[p2.toLowerCase()] === true;
+      frItems[p2.toLowerCase()] = true;
+      const rx = 100 * props2.width / src.width;
+      const ry = 100 * props2.height / src.height;
+      let sx = null, sy = null;
+      if (fit === "stretch") { sx = rx; sy = ry; }
+      else if (fit === "width") { sx = rx; sy = rx; }
+      else if (fit === "height") { sx = ry; sy = ry; }
+      else if (fit === "fill") { sx = Math.max(rx, ry); sy = sx; }
+      else if (fit === "fit") { sx = Math.min(rx, ry); sy = sx; }
+      const out2 = { comp: comp2, layer: name, index: 1, source: fileName,
+                     sourceSize: src.width + "x" + src.height,
+                     compSize: props2.width + "x" + props2.height,
+                     fit: fit, inPoint: 0, outPoint: props2.duration };
+      if (sx !== null) {
+        out2.scale = [Math.round(sx * 1000) / 1000,
+                      Math.round(sy * 1000) / 1000];
+        frScales[comp2 + "|" + name] = [out2.scale[0], out2.scale[1], 100];
+      }
+      if (reused) {
+        out2.reusedExisting = true;
+        out2.reuseNote = "'" + fileName + "' was already in the project " +
+          "for that file, so it was reused and RELOADED from disk (any " +
+          "layer already using it now shows the current file) instead of " +
+          "imported a second time.";
+      }
+      out2.stillNote = "A still spans the whole comp (0s to " +
+        props2.duration + "s). set_layer_timing changes that.";
+      frLayers[comp2] = (frLayers[comp2] || []);
+      frLayers[comp2].unshift(name);
+      return out2;
+    }
     default: return { done: true };
   }
 }
@@ -2966,8 +3978,25 @@ function cannedBatch(cmds, opts, cb) {
   opts = opts || {};
   batchCalls.push(cmds.length);
   // Snapshot what an Undo would restore, so a rolled-back round really
-  // does put the canned comp back rather than only SAYING it did.
+  // does put the canned project back rather than only SAYING it did.
+  //
+  // PROJECT ITEMS are in here as of 2026-08-29, when the question "does
+  // one Undo reach them" was finally measured in real AE — it does, for
+  // creation, deletion, duplication, folder moves and renames alike. A
+  // canned host that only rewound layers let a step assert an item-level
+  // rollback that never happened.
   const rbBefore = rbLayers.slice();
+  const itemsBefore = {
+    comps: createdComps.slice(),
+    createCount,
+    unique: scUnique.slice(),
+    rbName: rbCompName,
+    props: (function () {
+      const o = {};
+      for (const k in compProps) o[k] = Object.assign({}, compProps[k]);
+      return o;
+    })()
+  };
   const rows = cmds.map(c => cannedResult(c.tool, c.args || {}));
   let okMut = 0, badMut = 0, firstError = "";
   cmds.forEach((c, i) => {
@@ -2978,6 +4007,13 @@ function cannedBatch(cmds, opts, cb) {
   });
   if (opts.rollback && okMut && badMut) {
     rbLayers = rbBefore;
+    createdComps.length = 0;
+    Array.prototype.push.apply(createdComps, itemsBefore.comps);
+    createCount = itemsBefore.createCount;
+    scUnique = itemsBefore.unique;
+    rbCompName = itemsBefore.rbName;
+    for (const k in compProps) delete compProps[k];
+    Object.assign(compProps, itemsBefore.props);
     const note = "ROLLED BACK: a command in this round failed (" +
       firstError + ") after others had already changed the project.";
     cmds.forEach((c, i) => {
@@ -3027,7 +4063,7 @@ SelfTest.run({
     ordStack = [];
     maskKeys = {};
     batchLayers = 0; batchFx = {}; batchBlur = null;
-    batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetPresetRig(); resetRqRig(); resetAuRig();
+    batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetBoundsRig(); resetPresetRig(); resetRqRig(); resetAuRig(); resetFrRig(); resetCapRig();
     SelfTest.run({
       callHostTool(tool, args, cb) {
         if (tool === "grid_layout") {
@@ -3057,7 +4093,7 @@ SelfTest.run({
         ordStack = [];
         maskKeys = {};
         batchLayers = 0; batchFx = {}; batchBlur = null;
-        batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetPresetRig(); resetRqRig(); resetAuRig();
+        batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetBoundsRig(); resetPresetRig(); resetRqRig(); resetAuRig(); resetFrRig(); resetCapRig();
         SelfTest.run({
           callHostTool(tool, args, cb) {
             // Never refuse anything -- the old permissive host.

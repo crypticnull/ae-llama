@@ -12,82 +12,88 @@ feature they describe. Use this to look at the product whole and ask
 
 _Regenerate with `node scripts/capability-report.js` — CI fails if this section is stale._
 
-**67 tools** (57 mutating, 10 read-only; 64 host-side, 3 panel-side).
+**73 tools** (62 mutating, 11 read-only; 69 host-side, 4 panel-side).
 
 | Tool | Does | Writes | Side | Stub tests | Suite steps |
 |---|---|---|---|---|---|
-| `add_camera` | Add a camera | yes | host | — | 4 |
+| `add_camera` | Add a camera | yes | host | — | 5 |
+| `add_captions` | Build MANY timed captions in one call: one text layer per segment (trimmed to its own start/end), or one marker per segment with {as: 'markers'} | yes | host | 1 | 7 |
 | `add_control` | Add a named expression control (Slider/Angle/Checkbox/Color/Point Control effect) to a layer — usually a null | yes | host | 1 | 4 |
 | `add_keyframe` | Add a keyframe on a layer property at a time (seconds) | yes | host | 1 | 10 |
 | `add_light` | Add a light | yes | host | 1 | 13 |
-| `add_marker` | Add a marker to the comp (omit 'layer') or to a layer | yes | host | 1 | 8 |
+| `add_marker` | Add a marker to the comp (omit 'layer') or to a layer | yes | host | 1 | 9 |
 | `add_mask` | Add a mask to a layer | yes | host | 1 | 3 |
-| `add_null` | Add a null layer (use as a controller or parent) | yes | host | 1 | 7 |
-| `add_shape_content` | Add content INSIDE a shape layer: kinds group, rectangle, ellipse, star, polygon, path, fill, stroke, gradient_fill, gradient_stroke, repeater, trim_paths, merge_paths, offset_paths, rounded_corners, pucker_bloat, twist, zigzag | yes | host | 1 | 8 |
-| `add_shape_layer` | Add a shape layer (rectangle, ellipse, polygon, or star) | yes | host | — | 2 |
-| `add_solid` | Add a solid layer | yes | host | — | 32 |
+| `add_null` | Add a null layer (use as a controller or parent) | yes | host | 1 | 8 |
+| `add_shape_content` | Add content INSIDE a shape layer: kinds group, rectangle, ellipse, star, polygon, path, fill, stroke, gradient_fill, gradient_stroke, repeater, trim_paths, merge_paths, offset_paths, rounded_corners, pucker_bloat, twist, zigzag | yes | host | 1 | 12 |
+| `add_shape_layer` | Add a shape layer (rectangle, ellipse, polygon, or star) | yes | host | — | 4 |
+| `add_solid` | Add a solid layer | yes | host | — | 45 |
 | `add_text_animator` | Animate a text layer PER CHARACTER (typewriter, cascade, wiggle) — an animator holds the properties, a selector picks which characters get them | yes | host | 1 | 10 |
-| `add_text_layer` | Add a text layer to a comp | yes | host | 1 | 7 |
+| `add_text_layer` | Add a text layer to a comp | yes | host | 1 | 8 |
 | `add_to_render_queue` | Add a comp to the render queue WITHOUT rendering it | yes | host | 1 | 3 |
-| `apply_effect` | Apply an effect to a layer | yes | host | — | 8 |
+| `apply_effect` | Apply an effect to a layer | yes | host | — | 9 |
 | `apply_expression_preset` | Apply a known-good expression | yes | host | 1 | 3 |
 | `apply_keyframe_ease` | Apply a bezier as TEMPORAL easing between keyframes on one property across MANY layers in ONE call (converts to AE speed/influence ease) | yes | host | 1 | 3 |
 | `apply_preset` | Apply an installed .ffx animation preset to layer(s) | yes | host | 1 | 5 |
-| `audio_to_keyframes` | Convert audio amplitude to keyframes: adds a null carrying Left/Right/Both Channels sliders keyframed to the loudness, one key per frame | yes | host | 1 | 8 |
+| `audio_to_keyframes` | Convert audio amplitude to keyframes: adds a null carrying Left/Right/Both Channels sliders keyframed to the loudness, one key per frame | yes | host | 1 | 11 |
 | `audit_comp_usage` | Facts about how comps are used, before renaming anything: which comps each one is nested in, whether it is in the render queue, and every expression that names it as a string | no | host | 1 | 1 |
-| `center_anchor_point` | Center a layer's anchor point on its visible content (sourceRect math done host-side; position compensated so the layer does not jump, at every Position keyframe) | yes | host | 1 | 2 |
+| `center_anchor_point` | Center a layer's anchor point on its visible content (sourceRect math done host-side; position compensated so the layer does not jump, at every Position keyframe) | yes | host | 2 | 2 |
 | `clean_project` | Delete project clutter | yes | host | 1 | 8 |
 | `comfy_generate` | Generate an image/video with local ComfyUI and import it into the AE project | yes | panel | — | — |
 | `comfy_list_workflows` | List available ComfyUI generation workflow templates by name | no | panel | — | — |
 | `comfy_status` | Check the local ComfyUI instance (online? queue depth?) | no | panel | — | — |
-| `create_comp` | Create a composition and open it | yes | host | 1 | 25 |
+| `create_comp` | Create a composition and open it | yes | host | 1 | 31 |
 | `create_folder` | Create a project-panel folder | yes | host | 1 | 10 |
-| `delete_item` | Delete a project item | yes | host | 1 | 32 |
-| `delete_layer` | Delete a layer from a comp | yes | host | — | 9 |
+| `delete_item` | Delete a project item | yes | host | 1 | 40 |
+| `delete_layer` | Delete a layer from a comp | yes | host | — | 19 |
 | `distribute_property` | Distribute a property VALUE across layers | yes | host | 1 | 5 |
-| `duplicate_comp` | Duplicate a composition | yes | host | 1 | 1 |
-| `duplicate_layer` | Duplicate a LAYER inside its comp (use duplicate_comp only for whole compositions) | yes | host | 1 | 6 |
+| `duplicate_comp` | Duplicate a composition | yes | host | 2 | 5 |
+| `duplicate_layer` | Duplicate a LAYER inside its comp (use duplicate_comp only for whole compositions) | yes | host | 1 | 10 |
 | `for_each_layer` | Run a PER-LAYER tool once per target layer in ONE call (max 200 layers) — the batch executor for anything without its own layers arg: {tool: 'apply_effect', args: {effect: 'Gaussian Blur'}} blurs every target | yes | host | 1 | 6 |
-| `get_comp_details` | Layers of a comp with index, name, type, timing, effects | no | host | 2 | 21 |
-| `get_project_info` | List project items (comps/footage/folders) and the active comp | no | host | 2 | 13 |
-| `get_property` | Read ANY property by path: value, keyframes, expression | no | host | 3 | 79 |
+| `get_bounds` | MEASURE a layer's rendered content without touching it — how wide the text actually is, where the shape sits in the frame, whether anything overflows | no | host | 1 | 32 |
+| `get_comp_details` | Layers of a comp with index, name, type, timing, effects | no | host | 3 | 30 |
+| `get_project_info` | List project items (comps/footage/folders) and the active comp | no | host | 2 | 14 |
+| `get_property` | Read ANY property by path: value, keyframes, expression | no | host | 3 | 90 |
 | `grid_layout` | Arrange layers into a grid rigged to a control null: its 'Grid X Spacing'/'Grid Y Spacing'/'Grid Columns' sliders drive spacing AND column count live, and the grid centers on the null's position (all expressions generated host-side) | yes | host | 1 | 2 |
-| `import_file` | Import a footage/image/video file into the project | yes | host | — | — |
+| `import_as_layer` | Import a file AND place it in a comp as a layer, scaled to the comp | yes | host | 1 | 8 |
+| `import_file` | Import a footage/image/video file into the PROJECT PANEL only — it does not appear in any comp | yes | host | — | 1 |
 | `link_property` | Drive a layer property from a control | yes | host | — | 2 |
 | `list_effects` | Enumerate effects INSTALLED in this AE (name, matchName, category), filtered and paged | no | host | 1 | 2 |
 | `list_presets` | Enumerate the ANIMATION PRESETS (.ffx) installed in this AE — AE ships ~679 (Behaviors, Text, Backgrounds, Transitions, Image, Shapes…) plus the user's own | no | host | 1 | 3 |
 | `list_properties` | DISCOVER a layer's real property tree — names, paths, types, current values | no | host | 2 | 9 |
-| `list_render_templates` | List this machine's render-settings and output-module template names for render_comp | no | host | 1 | 1 |
+| `list_render_templates` | List this machine's render-settings and output-module template names for render_comp | no | host | 1 | 2 |
 | `move_to_folder` | Move project items into a folder (batch) | yes | host | 1 | 2 |
 | `organize_project` | File loose root-level items into Comps/Footage/Solids/Audio/Images folders at the project ROOT | yes | host | 1 | 2 |
 | `precompose` | Move layers into a new nested comp (precompose) | yes | host | 1 | 5 |
 | `remove_keyframes` | Remove keyframes from a property on many layers at once — specific times or all | yes | host | 1 | 5 |
 | `rename_comps` | Rename MANY comps in one call, on the org convention (REVyy_ from a year in the old name, else REV_NO-YEAR_) | yes | host | 1 | 3 |
-| `rename_item` | Rename any project item (comp, footage, folder) | yes | host | 1 | 2 |
+| `rename_item` | Rename any project item (comp, footage, folder) | yes | host | 1 | 3 |
 | `render_comp` | Actually RENDER a comp to a file | yes | host | 1 | 8 |
+| `render_comp_audio` | Render ONLY the comp's audio to a file (AE's audio-only output module, picked for you) | yes | host | 1 | 2 |
 | `reorder_layers` | Restack layers WITHOUT changing their timing | yes | host | 1 | 2 |
 | `scale_comp` | Resize a comp AND scale its content to match, re-centered — like the native 'Scale Composition' script | yes | host | 2 | 2 |
-| `set_comp_setting` | Change a comp setting (duration, frame rate, bg color) | yes | host | 1 | 1 |
+| `set_comp_setting` | Change a comp setting: duration, frame rate, bg color, the WORK AREA (workAreaStart with workAreaDuration or workAreaEnd, in seconds — or workArea: 'comp' to reset it to the whole comp) and preview resolution | yes | host | 2 | 10 |
 | `set_effect_param` | Set a parameter on an effect already applied to a layer | yes | host | — | 1 |
-| `set_expression` | LAST RESORT: set a raw expression (or clear with '') | yes | host | 1 | 11 |
-| `set_keyframes` | Set the SAME keyframes on MANY layers in ONE call | yes | host | 2 | 9 |
-| `set_layer_3d` | Enable/disable a layer's 3D switch | yes | host | 1 | 3 |
-| `set_layer_parent` | Parent layers to another layer (omit/null parent to unparent) | yes | host | 1 | 5 |
-| `set_layer_timing` | Set layer inPoint/outPoint/startTime (seconds) | yes | host | — | 3 |
+| `set_expression` | LAST RESORT: set a raw expression (or clear with '') | yes | host | 1 | 13 |
+| `set_keyframes` | Set the SAME keyframes on MANY layers in ONE call | yes | host | 2 | 12 |
+| `set_layer_3d` | Enable/disable a layer's 3D switch | yes | host | 1 | 8 |
+| `set_layer_parent` | Parent layers to another layer (omit/null parent to unparent) | yes | host | 2 | 18 |
+| `set_layer_timing` | Set layer inPoint/outPoint/startTime (seconds) | yes | host | — | 5 |
 | `set_mask` | Edit an EXISTING mask: mode, feather, expansion, opacity, inverted, rename | yes | host | 1 | 1 |
 | `set_mask_path` | Replace or ANIMATE a mask's path | yes | host | 1 | 7 |
-| `set_property` | Set ANY property by path — the universal fallback when no dedicated tool fits | yes | host | 3 | 9 |
-| `set_solid_color` | Change a SOLID layer's colour (this is the ONLY way — a solid's colour is not a property you can set_property) | yes | host | 1 | 4 |
+| `set_property` | Set ANY property by path — the universal fallback when no dedicated tool fits | yes | host | 3 | 10 |
+| `set_solid_color` | Change a SOLID layer's colour (this is the ONLY way — a solid's colour is not a property you can set_property) | yes | host | 1 | 5 |
 | `set_text_style` | Restyle an existing text layer (any subset of fields) | yes | host | 1 | 2 |
 | `set_track_matte` | Use one layer as another's track matte (alpha or luma, optionally inverted), or remove it with mode 'none' | yes | host | 1 | 1 |
-| `set_transform` | Set a transform property | yes | host | 1 | 7 |
+| `set_transform` | Set a transform property | yes | host | 1 | 38 |
+| `snapshot_frame` | Write one frame of a comp to a PNG on disk | yes | host | 1 | 7 |
 | `split_layer_into_chunks` | Cut a layer into chunks, each on its own layer trimmed to its own window — ONE call does the whole edit | yes | host | 1 | 2 |
 | `stagger_layers` | Distribute layer START TIMES | yes | host | 1 | 4 |
+| `transcribe_to_captions` | TRANSCRIBE the comp's own audio with the local speech model and put the result on the timeline as timed text layers (or markers) | yes | panel | — | — |
 
 **Coverage gaps (computed):**
 
 - Host tools with NO stubbed test: `add_camera`, `add_shape_layer`, `add_solid`, `apply_effect`, `delete_layer`, `import_file`, `link_property`, `set_effect_param`, `set_layer_timing`
-- Host tools never exercised by the self-test suite: `import_file`
+- Host tools never exercised by the self-test suite: none
 
 <!-- END GENERATED TOOL INVENTORY -->
 
@@ -190,8 +196,11 @@ Queued (see WORKPLAN for owners/order):
   falloff), so any bare name AE refuses is now searched down the real
   tree.
 - Suite coverage: `add_marker`/`precompose` (5.4) and
-  `add_to_render_queue` (5.5) have since been covered; `import_file`
-  waits on 5.8. `organize_project` is covered as of 0.10.2, but by its
+  `add_to_render_queue` (5.5) have since been covered, and `import_file`
+  with them on 2026-08-29 — it only ever needed a file on disk, and
+  `snapshot_frame` is that file. The computed gap list above now reads
+  "never exercised by the self-test suite: none", which is the first
+  time every host tool has been touched in real AE. `organize_project` is covered as of 0.10.2, but by its
   PREVIEW only: it files every LOOSE item at the project root and the
   suite runs inside whatever project the user has open, so the suite
   proves the preview counts and names correctly and moves nothing, and
@@ -302,8 +311,49 @@ Queued (see WORKPLAN for owners/order):
   that are actually there. Suite coverage needs no audio FILE: applying
   the Tone effect to a solid flips `layer.hasAudio` to true and the
   converter measures it.
-- Feature track not yet built: frame round-trip, .mogrt export, whisper
-  captions, ffmpeg exports (items 5.8-6).
+- The comp/file bridge closed 2026-08-29: `snapshot_frame` writes one
+  frame of a comp to a PNG and `import_as_layer` puts a file back into a
+  comp as a layer, scaled to it. `comp.saveFrameToPng` needs no viewer
+  and no render queue (a 320x240 frame in a few ms), but everything it
+  gets wrong it gets wrong QUIETLY, and each of those is now a refusal
+  or a spoken note: a folder that does not exist is a SILENT no-op, an
+  out-of-range time CLAMPS and writes a blank frame, an existing file is
+  replaced with no dialog and no undo, a comp left at Half resolution
+  writes a half-size frame (so the default overrides the downsample,
+  restores it, and says so), and it writes PNG BYTES into whatever name
+  it is handed — a frame saved as .jpg is a PNG called .jpg. The
+  dimensions REPORTED are read back out of the file's own PNG header,
+  not repeated from the comp. On the import side, AE makes a second
+  project item for a path it already holds and says nothing, so an
+  existing item is reused and `reload()`ed instead — which is what makes
+  regenerating the same path and re-placing it safe. The fit arithmetic
+  is the panel's own because AE's "Fit to Comp" menu commands do NOTHING
+  with no comp viewer open (measured: scale stayed 100,100); it
+  reproduces their numbers exactly WITH one open, pixel-aspect
+  correction on X included (a 320x240 par-1 source fits a 720x480
+  par-1.2121 comp at 272.727 x 200, not 225 x 200). `import_file` still
+  exists and still only reaches the project panel; its docs now say so
+  and point here.
+- Two comp settings AE keeps to itself became reachable 2026-08-29:
+  `set_comp_setting` now writes the WORK AREA and the preview
+  RESOLUTION, and `get_comp_details` reads both back. AE does not treat
+  these like ordinary setters, and every rule below is measured: a
+  work-area write SNAPS to the frame grid in silence (0.333s becomes
+  frame 8 on a 24 fps comp), an out-of-range one THROWS rather than
+  clamping, and the legal range for the duration is computed from the
+  CURRENT start -- so widening a work area that sits late in the comp
+  throws unless the start is written first, which is the order the tool
+  uses. Shortening a comp drags its work area in with it, quietly; the
+  tool says so. Resolution is a pair of whole numbers 1..99 (a bare
+  number, a one-element array and a fraction each throw a different raw
+  message), so 'full'/'half'/'third'/'quarter' are accepted names and
+  anything else is refused before AE is asked. This also closed the last
+  two suite gaps that could only be proven by stubs: `audio_to_keyframes`
+  with `range: 'workArea'` and `snapshot_frame`'s resolution override are
+  now exercised in real AE, the audio converter's own key count being the
+  witness that the work area landed and was put back.
+- Feature track not yet built: .mogrt export, whisper captions, ffmpeg
+  exports (items 5.9-6).
 - Image/video generation is not yet seamless: no frame-aware img2img,
   no mask-driven inpainting, no depth/parallax, no upscale/interpolate.
   The Krea 2 workflow now ships adapted and runnable
@@ -362,6 +412,23 @@ Queued (see WORKPLAN for owners/order):
   Architecture: docs/COMFY_TIERS_PLAN.md.
 - Chat probe never exercises ComfyUI, multi-turn references ("make them
   blue instead"), or undo across a mixed round.
+- **`set_layer_parent` moves the layer it parents.** Measured in real AE
+  2026 on 2026-08-29 by the new bounds steps: with the default
+  `keepPosition: true` the tool calls `setParentWithJump`, which is AE's
+  *jumping* form, so a layer parented to a null at [300,200] slides by
+  exactly that much while the result still reports "Visual positions
+  preserved". The two calls are the wrong way round (`layer.parent = p`
+  is the pick-whip that compensates). One-line fix, but it moves the
+  ground under every rig in the suite that parents something, so it gets
+  its own pass rather than riding another one.
+- Measuring a layer is READ-ONLY as of `get_bounds` (2026-08-29): before
+  it, the only route to `sourceRectAtTime` was `center_anchor_point`,
+  which mutates the anchor to tell you. It reports the source rect, the
+  comp-space box and corners through parenting/scale/rotation, and
+  whether the layer overflows the frame. A 3D layer gets the source rect
+  and an explicit refusal for the comp box — AE's own
+  `sourcePointToComp` ignores Z, the camera and a 3D parent's rotation
+  (all measured), so any comp-space number for it would be a lie.
 
 Not queued anywhere yet (candidates to promote):
 

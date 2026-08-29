@@ -5258,3 +5258,1309 @@ green, including the new `tests/test-audio-keyframes.js` (66 checks).
   Fourth pass to flag it; it belongs to the remote session's release cut.
 - Probe scratch files were written under `logs/` (gitignored) and AE was
   left on an empty untitled project.
+
+## 2026-08-29 (local) - item 5.8: the frame round-trip, and the fit AE will not do for you
+
+Harness green on arrival (404/404), so the pass took the next feature
+item: 5.8, the comp<->file bridge. It shipped whole in one pass -
+`snapshot_frame` and `import_as_layer`, both docs, 100 stub checks, 17
+suite steps - because most of the probing was already on disk.
+
+### A probe nobody logged
+
+`logs/probe58.txt` and `probe58b.txt` were sitting in the (gitignored)
+logs folder, written 2026-08-28 21:58-22:01, with no WORKPLAN-LOG entry
+anywhere. A pass ran the 5.8 PROBE and died before it could write
+anything down; the log's last entry is 5.7, and the run that made those
+files left no other trace. The measurements were good and were reused
+rather than repeated. **The lesson is the log's own rule, from the other
+direction: a pass that has measured something and not yet written it
+down has produced nothing.** Had those two files been swept, this pass
+would have re-run every probe.
+
+### The three questions the earlier probe left open
+
+One more probe round (`logs/probe58c.jsx`) answered them:
+
+- **Is `saveFrameToPng` safe inside an undo group?** YES - three nested
+  `beginUndoGroup`/`saveFrameToPng`/`endUndoGroup` rounds followed by
+  three innocent group cycles, no exception and no "Undo group mismatch"
+  modal. This is NOT the render_comp case: AE's renderer closes the
+  script's group out from under it, this does not.
+- **What does a non-.png extension do?** AE writes **PNG bytes into the
+  name it was given**. `wrongext.jpg` is a 897-byte PNG called .jpg, and
+  no .png appears beside it. A user double-clicking that file gets a
+  broken-image icon and no idea why.
+- **Does `mainSource.reload()` work on an imported still?** Yes, keeps
+  the item id and the dimensions. That is what makes re-placing a
+  regenerated file safe.
+
+Plus one accident worth more than the three: matching project items by
+`mainSource.file.fsName` found **2** items for one path in the harness's
+own leftover project, and 37 items with no file at all (comps answer
+`undefined` for `mainSource`, solids hold a `SolidSource`). Both shapes
+are now handled and the duplicate is reported.
+
+### PROBE RULE: never call app.newProject() in a probe
+
+The first run of probe58c produced no output file at all and AE looked
+healthy. It was blocked on **"Save changes to \"Untitled Project.aep\"
+before closing?"** - `app.newProject()` on the dirty project the HARNESS
+leaves behind. Every `-r` script after that was swallowed silently, the
+same signature as the overwrite modal and the undo-group modal. The
+harness's own `Clear-AellStaleDialog` answered it with WM_CLOSE (Cancel)
+on the next run. Probes work inside whatever project is open and clean
+up after themselves; the rewritten probe does exactly that and removed
+its 12 items on the way out.
+
+### What AE does silently, and what the tools say instead
+
+Every one of these is measured, and every one is now a refusal or a
+spoken note:
+
+- a folder that does not exist is a **silent no-op** - `saveFrameToPng`
+  returns normally and writes nothing;
+- an out-of-range time **CLAMPS** and writes a BLANK frame (time 99 and
+  time -5 on a 4s comp both wrote 378 bytes where the real frame was
+  644);
+- an existing file is replaced with **no dialog and no undo** (unlike a
+  render, which raises a modal - so the refusal here protects the user's
+  file rather than the harness);
+- a comp left at **Half resolution** writes a half-size frame and says
+  nothing. The default overrides the downsample, restores it in a block
+  that runs whatever happens, and REPORTS it; `{resolution: "comp"}`
+  keeps AE's behaviour and warns about the smaller frame;
+- the reported dimensions are read back out of the **PNG's own IHDR
+  header**, not repeated from the comp, so "did I get the pixels I asked
+  for" is answerable rather than assumed;
+- guide layers are not rendered into a snapshot;
+- `importFile` on a path the project already holds makes a **second
+  item** and says nothing, so an existing item is reused and reloaded;
+- `canImportAs(FOOTAGE)` answered **TRUE for a .txt** that `importFile`
+  then refused outright, so the throw is the only honest signal and the
+  refusal names what AE really reads.
+
+### The fit arithmetic is ours, because AE's is unusable here
+
+`app.findMenuCommandId("Fit to Comp")` resolves (2156, plus 2732/2733
+for Width/Height) and **does nothing at all with no comp viewer open** -
+scale stayed 100,100 across every rig. With a viewer open it works, and
+those numbers are what the panel's own arithmetic reproduces:
+
+| source 320x240 par 1 | AE Fit to Comp | Width | Height |
+|---|---|---|---|
+| in 800x480 par 1 | 250 x 200 | 250 x 250 | 200 x 200 |
+| in 720x480 par 1.2121 | **272.727** x 200 | 272.727 x 272.727 | 200 x 200 |
+
+So `rx = 100 * (compW * compPar) / (srcW * srcPar)`, `ry = 100 * compH /
+srcH`, and the modes are combinations of the two: `stretch` = AE's "Fit
+to Comp" (non-uniform, distorts), `width`/`height` = its uniform
+siblings, `fit` = min (contain, the default), `fill` = max (cover),
+`none`/`center` = AE's own 100%. The pixel-aspect correction on X is the
+part nobody would guess - the pixel-only answer there is 225, not
+272.727 - and the suite asserts the real AE numbers, not the formula.
+
+### Where the two tools sit in the undo machinery
+
+`import_as_layer` is ordinary: `AELL_MUTATING`, one Ctrl+Z.
+`snapshot_frame` is in **`AELL_NO_UNDO_GROUP`**, but for the second half
+of render_comp's reasoning rather than the first. It is SAFE inside a
+group (measured above); what it is not is undoable - the file it writes
+survives any Ctrl+Z - so counting it as a mutation would let a
+successful snapshot arm `AELL_maybeRollback` and spend the round's one
+undo on somebody else's edit. `tests/test-undo-groups.js` caught this
+the moment the tool was documented `mutating: true` and listed in
+neither map: a tool owes the host one answer or the other, and that
+invariant is what made the question get asked at all.
+
+### import_file, covered at last
+
+It has shipped since the beginning, had zero suite steps, and the only
+thing it ever needed was a file on disk - which `snapshot_frame` now
+makes. Two steps: it returns an item, and the comp's layer count does
+not change, which is the whole difference between it and
+`import_as_layer`. **`docs/CAPABILITIES.md`'s computed gap list now
+reads "Host tools never exercised by the self-test suite: none"** - the
+first time every host tool has been touched in real After Effects.
+
+### Verification
+
+- `tests/test-frame-roundtrip.js`: 100 checks, including a STUB FIDELITY
+  block that drives the raw API first so a stub that stopped modelling
+  the hazards cannot let the fixes pass on a technicality.
+- Full stub sweep: 46 files, all green.
+- **Harness: 404 -> 419 -> 421/421 PASSED**, three consecutive runs
+  (419 twice back-to-back before the two import_file steps were added).
+- The canned host in `tests/test-self-test.js` learned all three tools,
+  and a `resetFrRig()` with them: the second (deliberately failing) run
+  shares the virtual disk, so without it the layer-count assertion
+  counted two runs' imports and the injected-failure test read
+  419/421.
+
+### Still open
+
+- Next on the feature track: 5.9 (.mogrt export) - flagged in the
+  workplan as a LAST-item-of-the-night job for dialog risk, which this
+  pass's save-changes modal is a fresh argument for.
+- Generation wiring stays remote, but the bridge it was waiting on is
+  now here: `comfy_generate` still calls `import_file` and leaves its
+  output in the project panel. Pointing it at `import_as_layer` is a
+  small remote-session pass, and the reuse+reload path was built for
+  exactly the regenerate-the-same-path case.
+- No suite step covers `snapshot_frame`'s resolution override: nothing
+  in the tool set can SET a comp's resolutionFactor, so it is proven by
+  the stub only. Same shape as 5.7's work-area gap, and the same
+  `set_comp_setting` extension would close both.
+- `duplicate_comp` still takes a name without uniquing; no read-only
+  `get_bounds`. Both still unclaimed.
+- `release-notes.txt` still reads "0.10.0" while the feed ships 0.10.2 -
+  fifth pass to flag it; it belongs to the remote session's release cut.
+- Probe and patch scratch files under `logs/` (gitignored). AE left on
+  the harness's own project, which is dirty - see the probe rule above.
+
+## 2026-08-29 (local) - the two comp settings nothing could reach, and the
+## frame they were quietly stealing
+
+Harness green on arrival (421/421), so the pass took the item the last
+two entries had each filed as "a small pass of its own": `set_comp_setting`
+could not reach the WORK AREA or the comp RESOLUTION, which left 5.7's
+`range: 'workArea'` and 5.8's `resolution` override proven by stubs alone.
+Both are now real-AE steps - and closing that gap turned up a shipped bug
+that had been moving the user's work area by a frame since 5.7 landed.
+
+### What AE does with a work-area write, measured
+
+`logs/probe-cs.txt`, then `probe-cs3.txt` for the part that mattered:
+
+- a write **SNAPS to the frame grid**, silently: on a 24 fps comp 0.333s
+  reads back as exactly 8 frames and 1.7s as 41;
+- an out-of-range write **THROWS**, it does not clamp ("Value 99 out of
+  range 0.04 to 4") - and AE's message arrives with mojibake curly quotes
+  through ExtendScript, so the tool refuses in its own words first;
+- the legal range for `workAreaDuration` is computed from the CURRENT
+  start, so widening from a late start throws ("out of range 0.04 to 1"
+  with the start at 3s) - duration-before-start is a trap;
+- a `workAreaStart` write keeps the DURATION and shortens it only when
+  that would run past the end of the comp (0..4s work area, start 3.9 ->
+  start 3.9167, duration 0.0833, end still 4);
+- **and the one that cost a bug: a start written EXACTLY onto the work
+  area's own current end comes back one frame EARLY and one frame LONG.**
+  [0..24] frames on a 3s/24fps comp, `workAreaStart = 1` -> [23..48].
+  From any other state the same write is exact ([0..24] with start 0.5 ->
+  [12..36]). Widening to the whole comp first makes every target exact,
+  which is what `AELL_setWorkArea` now does: widen, start, duration.
+- shortening `comp.duration` drags the work area in with it, silently;
+  layer outPoints survive it.
+
+Resolution is simpler and stricter: `[x, y]` whole numbers 1..99, both
+elements required, non-uniform pairs legal ([1, 3] is fine), and a bare
+number, a one-element array, a fraction, 0 and -1 each throw a different
+raw message. So 'full'/'half'/'third'/'quarter' are names the tool
+accepts and everything else is refused before AE is asked.
+
+### The bug the suite found the moment it could ask the question
+
+The new steps set a 1s-2s work area on the audio comp, convert inside it
+(25 keys), let the default widen to the whole comp (73 keys), and then
+ask AE what the work area is. It was **0.958s-2s**. `audio_to_keyframes`
+has restored the user's work area since 5.7 with the naive triple
+(`start = 0`, `duration = wasDur`, `start = wasStart`) - which is exactly
+the collision above, every time the start equals the duration. One frame
+earlier and one frame longer, silently, on every audio conversion over a
+partial work area. Both it and `set_comp_setting` now go through
+`AELL_setWorkArea`, and both stub suites reproduce the quirk: reverting
+the host to the naive order makes `tests/test-audio-keyframes.js` fail on
+"the user's work area is put back EXACTLY" (0.958333 / 1.041667) and
+`tests/test-comp-settings.js` fail on the same shape. That is the loop
+working end to end - field truth caught it, the stubs hold it.
+
+### Also shipped in this pass
+
+- `set_comp_setting` gained `workAreaStart` / `workAreaDuration` /
+  `workAreaEnd` / `workArea: 'comp'` and `resolution`, reports `bgColor`
+  and `changed`, speaks every snap and every quiet shortening (including
+  AE's own drag when the comp is re-timed), and refuses an empty call
+  with the whole menu of what it can set.
+- `get_comp_details` now reports `workArea` and `resolution`: a setting
+  the model can write has to be one it can read, or a narrowed work area
+  is indistinguishable from a short comp.
+- Three stub suites had comps without a `bgColor`, a work area or a
+  resolutionFactor - properties every real comp has from birth. Made
+  faithful rather than worked around in the host.
+
+### Verification
+
+- `tests/test-comp-settings.js`, new: 58 checks, opening with a STUB
+  FIDELITY block that drives the raw API so a stub that stopped modelling
+  the throws could not let the tool pass on a technicality.
+- Full stub sweep: 47 files, all green.
+- **Harness: 421 -> 437/437 PASSED** (and 436/437 on the run that found
+  the work-area bug, which is why the entry above exists).
+
+### Probe hazards, both paid for tonight
+
+- An uncaught throw in a `-r` probe leaves AE on a modal and every later
+  `-r` script is swallowed in silence - the same signature as the
+  save-changes prompt. Harvested via WM_GETTEXT, it read "Unable to
+  execute script at line NN. Object of type Error found where a Number,
+  Array, or Property is needed", and WM_CLOSE cleared it. Worth knowing:
+  **`e.toString()` on an AE-thrown error inside a probe's catch can
+  itself throw that**, so a probe's catch should say as little as
+  possible about the error object. Write every probe line to disk as it
+  is measured (open, writeln, close) - a buffered file closed at the end
+  loses everything a throw interrupts.
+- The harness's own dialog triage then answered a leftover of exactly
+  that kind on the next run, logged it as UNRECOGNISED with a screenshot,
+  and carried on. It works.
+
+### Still open
+
+- Next on the feature track: 5.9 (.mogrt export), still flagged as a
+  LAST-item-of-the-night job for dialog risk.
+- `duplicate_comp` still takes a name without uniquing; no read-only
+  `get_bounds`. Both still unclaimed.
+- `release-notes.txt` still reads "0.10.0" while the feed ships 0.10.3 -
+  sixth pass to flag it; it belongs to the remote session's release cut.
+- Probe scratch under `logs/` (gitignored). AE left on the harness's own
+  project, dirty, with no dialog open.
+
+## 2026-08-29 (local) - duplicate_comp: the copy that could not be reached
+## by the name it was given
+
+Harness green on arrival (437/437), items 1-4 all closed by earlier
+passes, so the pass took the oldest unclaimed shipped-behaviour item -
+`duplicate_comp` "still takes a name without uniquing", flagged in three
+separate entries and never picked up. The tool was five lines
+(`comp.duplicate()`, `dup.name = String(args.name)`), and the probe found
+that four of the things it was quiet about are AE's, not the tool's.
+
+### What comp.duplicate() actually does, measured
+
+`logs/probe-dup.txt` (AE 2026, 26.3x87):
+
+- AE **names the copy itself**: "Src" -> "Src 2", the next one "Src 3".
+  The tool never needs to invent a name.
+- The copy lands in the **source's own folder**, at the project index
+  directly after it (a root comp's copy stays at the root), and carries
+  every comp setting with it - bgColor, resolutionFactor, work area,
+  motionBlur, comment, markers, 4 ms for the whole thing.
+- It does **not touch the project-panel selection**: the source stays
+  selected, the copy is not. So unlike every layer-creating tool here,
+  nothing needs restoring.
+- **Layer SOURCES are shared, not copied.** The nested precomp, the
+  solids, the footage are the SAME project items in both comps
+  (`dup.layer(n).source === src.layer(n).source`). "Duplicate this comp
+  and make the copy blue" edits the original too - and this panel ships
+  `set_solid_color`, whose whole `makeUnique` argument exists for that
+  trap.
+- **Expressions are copied verbatim and nothing is rewritten.** A
+  relative one (`thisComp.layer("A")`) correctly follows the copy;
+  an absolute `comp("Src")` one still drives off the ORIGINAL, and
+  `expressionError` stays EMPTY, so nothing else would ever mention it.
+  Parenting IS remapped inside the copy.
+- **The bug: `dup.name = <a name another item holds>` is ACCEPTED.** The
+  project then has two items with that name and a by-name walk finds the
+  OLDER one (measured), so the copy the model just made was unreachable
+  by the name it just asked for. Same shape as the collision 5.4 found in
+  precompose. A **blank** name is accepted too, leaving a comp with no
+  name at all.
+
+### What the tool does now
+
+`AELL_uniqueItemName` grew an `except` argument (an item may keep the
+name it already has, so asking for the name AE already gave the copy is a
+no-op, not a bump to " 3"), and duplicate_comp auto-numbers + registers
+the request-scoped comp alias exactly as create_comp and precompose do.
+One deliberate exception, and it is the reason the alias needed thinking
+about at all: **when the requested name is the SOURCE'S own** ("duplicate
+Main and call it Main") the alias is NOT registered - later commands
+saying "Main" still mean the comp it was copied from, and the result says
+so. A blank name is refused before anything is duplicated. The result
+also reports `folder`, `sharedSources` (each named as precomp/solid/
+footage) with the consequence spelled out, and `stillDrivenBySource` for
+the expressions AE left pointing at the original.
+
+### Verification
+
+- `tests/test-duplicate-comp.js`, new: 46 checks, opening with a STUB
+  FIDELITY block that drives the raw API - a stub that stopped accepting
+  the name collision would let the tool pass on a technicality.
+- `tests/test-property-access.js` and the canned host in
+  `tests/test-self-test.js` both modelled a duplicate with no
+  parentFolder, no layers and no name rules. Made faithful rather than
+  worked around in the host.
+- Full stub sweep: 48 files, all green (capability doc regenerated).
+- **Harness: 437 -> 446/446 PASSED**, nine new steps: the shared solid is
+  named, the source's own name is auto-numbered and the original still
+  answers to it, a blank name is refused, and the copy reports the
+  expression still reading the original.
+- Bumped 0.10.3 -> 0.10.4 (fix to shipped behaviour, verified in AE).
+
+### One measurement that came back inconclusive
+
+Probe B (`logs/probe-dup2.txt`) asked whether `duplicate()` is undone by
+one Ctrl+Z, because probe A suggested it was not. It is not answerable
+this way: the CONTROL - a plain `items.addComp` inside the same
+begin/endUndoGroup - was not undone either, so `executeCommand(Undo)`
+simply does not take effect on PROJECT ITEMS from inside a running `-r`
+script. Nothing here is specific to duplicate_comp, and the shipped
+rollback (which issues its Undo inside the same batch execution) was
+verified on layers in 0.9.14. Worth a proper look by whoever next touches
+rollback: if item creation really is outside its reach, a round that
+created a comp and then failed is not fully rolled back.
+
+### Still open
+
+- Next on the feature track: 5.9 (.mogrt export), still flagged as a
+  LAST-item-of-the-night job for dialog risk.
+- No read-only `get_bounds` yet (unclaimed).
+- `comfy_generate` still calls `import_file` rather than 5.8's
+  `import_as_layer` - a small remote-session pass.
+- `release-notes.txt` still reads "0.10.0" while the feed ships 0.10.4 -
+  seventh pass to flag it; it belongs to the remote session's release cut.
+- Probe scratch under `logs/` (gitignored). AE left on the harness's own
+  project, dirty, with no dialog open.
+
+## 2026-08-29 (local) - get_bounds: the measurement that used to cost you
+## your anchor point
+
+Harness green on arrival (446/446), so the pass took the oldest unclaimed
+item in the log's own "still open" list - the read-only `get_bounds`
+filed by the 0.9.31 pass on 2026-08-28 and re-flagged in eight entries
+since. Until now the only route to a layer's rendered size was
+`center_anchor_point`, which MOVES the anchor to tell you, so no step and
+no chat request could ask "how wide is this text" without changing the
+comp.
+
+### What real AE measures, and what it lies about
+
+Three probes (`logs/probe-bounds{,2,3}.txt`, AE 2026 26.3x87):
+
+- `sourceRectAtTime` exists on every layer that draws pixels - solid,
+  text, shape, null (100x100), adjustment, precomp - and does NOT exist
+  at all on a camera or a light (`typeof` is undefined, so a call throws
+  AE's raw "Function is undefined"). It needs BOTH arguments; one throws.
+- It ignores the layer's own transform completely (position, scale,
+  rotation, anchor - the rect is unchanged), ignores MASKS, and ignores
+  even an expanding effect (a 200px drop shadow moves nothing).
+- **THE TRAP: its time argument is the layer's own SOURCE time.** Every
+  property time in AE scripting is COMP time and slides with the layer -
+  a key at 2s reads 3s once startTime is 1, and 4s once the layer is
+  stretched to 200% - but sourceRectAtTime's argument is unshifted by
+  startTime and unscaled by stretch. Two clocks, one function call.
+  `center_anchor_point` had been handing it `comp.time` since it shipped,
+  so on any slid or stretched layer it centred the anchor on a frame the
+  viewer was not showing. Fixed at the root with `AELL_sourceTime`, which
+  get_bounds uses too.
+- `extents: true` is a SHAPE thing: it grows the box by the stroke's
+  MITER ALLOWANCE, not by half its width - a 40px stroke adds 100 on
+  every side (half-width x (the default miter limit 4 + 1)), measured
+  twice on different rects. On TEXT, extents changed nothing at all, even
+  with a 20px stroke applied.
+- Text is measured from the BASELINE, so a text rect's `top` is
+  negative. An empty text layer and a shape layer with no drawn content
+  both measure 0x0.
+- **AE's own `sourcePointToComp` cannot be trusted once 3D is
+  involved.** It agrees with hand-rolled 2D math exactly on 2D rigs
+  (including through parenting, non-uniform scale and rotation - scale
+  before rotation), but it ignores a 3D layer's Z entirely (z=0 and
+  z=500 give the same answer), ignores the camera (moving it changes
+  nothing), and ignores a 3D PARENT's rotation. It also samples at the
+  comp's CURRENT time and takes no time argument. So the tool does the 2D
+  math itself and refuses to invent a comp-space box for a 3D chain.
+- Cost is nil: 200 rect reads 2 ms, 200 text extents reads 23 ms.
+
+### The tool
+
+`get_bounds {comp?, layer?, time?, extents?}` - read-only, no undo group,
+no selection change. It returns the source rect (left/top/right/bottom/
+width/height/centre), the comp-space box AND the four corners through the
+whole parent chain, `compSize`, and `inFrame: fully|partly|outside` with
+an `outsideBy` naming each side that overflows and by how many pixels. A
+rotated layer gets `rotated` + a note that comp.width is the axis-aligned
+box around it, not the layer's size. A slid or stretched layer gets
+`sourceTime` + a note naming both clocks. A 0x0 layer gets `empty`
+instead of a box of zeroes. A camera or light is refused with the list of
+what DOES have bounds. A 3D chain gets the exact source rect, `comp:
+null`, and `compBoxUnavailable` naming the 3D layer and why no honest
+number exists. `{layers: [...]}` is refused with the way to do it
+instead (it is classified read-only for for_each_layer, which would
+throw every measurement away).
+
+The system prompt gained the rule that pays for it: never assume how big
+a layer's content is - "fit the title", "put it under the logo", "is it
+cut off" all start with get_bounds.
+
+### Verification
+
+- `tests/test-get-bounds.js`, new: 51 checks, opening with a STUB
+  FIDELITY block - the stub keys its rect by SOURCE time, throws on a
+  one-argument call, and gives cameras no such method, so a tool that
+  went back to comp time cannot pass. `tests/test-anchor-point.js`'s
+  stub was made faithful the same way (it accepted any arguments and
+  ignored them).
+- `tests/test-self-test.js`'s canned host grew a bounds rig modelling
+  AE's side (transforms, the parent chain, source time, the miter
+  allowance), and its `shapeSeedLayer` now honours the size it is given
+  instead of always seeding 10x10.
+- Full stub sweep: 49 files, all green; capability doc regenerated.
+- **Harness: 446 -> 477/477 PASSED**, 31 new steps in a comp of their
+  own, including the source-time trap end to end (a shape whose Size is
+  keyframed, slid two seconds, measured at comp 2s and 4s), the miter
+  allowance, the frame test, the 3D refusal, the camera refusal and a
+  read-back proving the anchor did not move.
+- Bumped 0.10.4 -> 0.10.5: the pass fixes shipped behaviour
+  (center_anchor_point's timebase). The new TOOL still rides the remote
+  session's next minor.
+
+### What the new steps found in a SHIPPED tool - next pass's item
+
+**`set_layer_parent` moves the layer it parents.** The first version of
+the parenting step asserted the box was unchanged by the link, because
+`layer.parent = p` is AE's pick-whip and compensates (measured in probe
+2: the child's Position became -100,-100 by itself). Real AE failed the
+step: the box slid by exactly the null's position, [600,450] ->
+[900,650]. The tool has the two calls the wrong way round -
+`keepPosition !== false` selects `setParentWithJump`, which is AE's
+JUMPING form - while its result still says "Visual positions preserved".
+One line. It is NOT fixed here: four other rigs in the suite parent
+things and the change moves the ground under them, so it deserves its own
+pass rather than being smuggled into this one. The two bounds steps now
+measure the link's result instead of assuming it, and say so in a comment.
+
+### Still open
+
+- **`set_layer_parent`'s inverted keepPosition (above) - take this
+  first.**
+- Next on the feature track: 5.9 (.mogrt export), still flagged as a
+  LAST-item-of-the-night job for dialog risk.
+- `comfy_generate` still calls `import_file` rather than 5.8's
+  `import_as_layer` - a small remote-session pass.
+- `release-notes.txt` still reads "0.10.0" while the feed ships 0.10.5 -
+  eighth pass to flag it; it belongs to the remote session's release cut.
+- Rollback's reach over PROJECT ITEMS is still unmeasured (filed by the
+  duplicate_comp pass).
+- Probe scratch under `logs/` (gitignored). AE left on the harness's own
+  project, dirty, with no dialog open.
+
+## 2026-08-29 (local) - set_layer_parent had AE's two calls swapped
+
+Harness green on arrival (477/477), so the pass took the item the
+previous entry filed as "take this first": `set_layer_parent`'s inverted
+`keepPosition`, spotted when a get_bounds step measured a link that was
+supposed to move nothing and found the layer 300px away.
+
+### What real AE does (probe `logs/probe-parent.txt`, AE 2026 26.3x87)
+
+The two ways to set a parent do the OPPOSITE of what the names suggest,
+and the tool picked the wrong one for its own default from the day it
+shipped:
+
+- **`L.parent = p` is the pick-whip.** AE REWRITES the child's transform
+  so nothing moves on screen: a child at [400,300] under a parent whose
+  layer origin sits at [50,50] reads back [350,250]. Not just Position -
+  a 200%/45deg parent left the child at 50%/-45. Z included.
+- **`L.setParentWithJump(p)` leaves every value alone**, so the layer
+  JUMPS by the parent's transform.
+- **Unparenting obeys the same rule.** `.parent = null` restores
+  comp-space values; `setParentWithJump(null)` leaves the child sitting
+  wherever the parent had been putting it. So the bug was not confined to
+  linking - "unparent this without moving it" moved it too.
+- **`.parent =` rewrites EVERY KEYFRAME, not just the current value.** A
+  child with Position keys at [400,300] and [600,300] came back with
+  [350,250] and [550,250]. Nothing told the model its numbers were gone.
+- `setParentWithJump` exists on camera, light, text and shape layers, so
+  the old `typeof` guard never actually fell through on this build.
+
+### What the tool does now
+
+The branches are swapped: `keepPosition` (the default) is `.parent =`,
+`keepPosition:false` is `setParentWithJump`. The result reports
+`keepPosition` and a note that names the CONSEQUENCE instead of the old
+blanket "Visual positions preserved" - the honest version says AE rewrote
+Position/Scale/Rotation into the parent's space and the old values should
+be read back, with a separate wording for unparenting and for the jump.
+`keyframesRewritten` names each layer whose keys AE just rewrote and how
+many, and `keyframesNote` says the old numbers are gone. If a build ever
+lacks `setParentWithJump`, `keepPosition:false` is now SKIPPED with the
+reason rather than silently doing the exact opposite of what was asked.
+
+### Verification
+
+- `tests/test-layer-parent.js`, new: 47 checks, opening with a STUB
+  FIDELITY block. The stub's `parent` setter does the real compensation
+  arithmetic (current value and every key) and `setParentWithJump` does
+  not, so the tests assert on WHERE THE LAYER ENDS UP - a tool that only
+  reported the right thing cannot pass.
+- `tests/test-property-access.js` actively asserted the BUG
+  ("multi-layer parenting uses setParentWithJump") against a stub whose
+  two calls were the same function. Both made faithful.
+- `tests/test-self-test.js`'s canned host modelled only the default path
+  and no keyframes; it now models both branches, the key rewrite,
+  `set_keyframes`/`delete_layer` in the bounds rig, and `get_property`
+  for Position.
+- Full stub sweep: 50 files, all green; capability doc regenerated.
+- **Harness: 477 -> 482/482 PASSED.** The bounds-rig step that filed this
+  bug went back to being the assertion it wanted to be (the link does not
+  move the box, centre 600,450), plus four new steps: the default link
+  leaves the box where it was AND Position reads 200,200 instead of
+  500,400; `keepPosition:false` jumps by exactly the parent's position and
+  says JUMPED; a keyframed layer has both keys rewritten and is told so.
+- Bumped 0.10.5 -> 0.10.6 (fix to shipped behaviour, verified in AE).
+
+### The two steps this moved the ground under
+
+As the previous entry predicted, the camera/light rig broke: "the
+parented camera's transform is left to its parent" and its light twin
+asserted LITERALS ([400,300,-800] / [400,300]) that were only right
+because the old code jumped. Their real claim is that `scale_comp` does
+not touch a parented layer's transform, so they now capture the Position
+right after the link and assert scale_comp left THAT unchanged. Stronger
+than the literal was, and it no longer encodes which parenting call was
+used. The other three parenting sites in the suite (grid rig, precompose
+rig, anchor rig) set their keyframes after the link or assert on names,
+so nothing there needed touching.
+
+### Still open
+
+- Next on the feature track: 5.9 (.mogrt export), still flagged as a
+  LAST-item-of-the-night job for dialog risk.
+- `comfy_generate` still calls `import_file` rather than 5.8's
+  `import_as_layer` - a small remote-session pass.
+- `release-notes.txt` still reads "0.10.0" while the feed ships 0.10.6 -
+  ninth pass to flag it; it belongs to the remote session's release cut.
+- Rollback's reach over PROJECT ITEMS is still unmeasured (filed by the
+  duplicate_comp pass).
+- Not measured here: whether `.parent =` compensation survives a child
+  that is 3D under a 2D parent, or a parent with a keyframed transform.
+  The probe covered 3D-under-3D only.
+- Probe scratch under `logs/` (gitignored). AE left on the harness's own
+  project, dirty, with no dialog open.
+
+## 2026-08-29 (local) - the rollback reaches project items; its own
+## check could not see them (0.10.7)
+
+Harness green on arrival (482/482), so the pass took the oldest thing on
+the still-open list rather than the next feature: "Rollback's reach over
+PROJECT ITEMS is still unmeasured", filed by the duplicate_comp pass and
+re-filed by three entries after it. 5.9 (.mogrt) is still deferred by its
+own rule - LAST item of any night, and at 03:20 with the loop still
+running there would have been another pass behind this one to wedge.
+
+### The question that was filed, answered: it reaches
+
+`logs/probe-rollback-items.txt`, AE 2026 26.3x87. Probe B of the
+duplicate_comp pass had suggested `executeCommand(16)` simply does not
+take effect on project items from inside a running `-r` script, because
+its CONTROL - a plain `items.addComp` in a begin/endUndoGroup - was not
+undone either. That is wrong, and the control is what was wrong with it.
+Six shapes, all in one execution:
+
+- `items.addComp` inside a group: **undone.**
+- comp + layer in ONE group: **both undone** by the single Undo.
+- `comp.duplicate()`: **undone.**
+- `items.addFolder`: **undone** (this is the sentinel's own fallback).
+- `item.remove()`: the item **comes back.**
+- layer control: undone, as 0.9.14 documented.
+
+Then the SHIPPED path, seven armed rounds through `AELL_callBatch`
+(`logs/probe-rollback-items2.txt`): create_comp, create_comp+add_solid,
+create_folder+move_to_folder, delete_item, duplicate_comp and
+rename_item each paired with a failing mutating command. Every one came
+back `rolledBack:true` with the item gone (or restored, for the delete
+and the move), and the all-succeeding control was correctly left alone.
+16-67 ms per round. Nothing needed fixing here.
+
+### What the probe found instead: the check was blind in 21 places
+
+`AELL_fingerprint` exists to prove the one Undo landed EXACTLY on the
+pre-round state - and it is the only guard against the Undo overshooting
+past our group into the user's own last edit, which is the hazard the
+sentinel and the single-Redo rule are both built around. Probe 3
+(`logs/probe-rollback-items3.txt`) wrote 25 dimensions that a tool in
+`AELL_MUTATING` can write, undid each with one Undo, and asked two
+questions per dimension: did the value come back, and did the
+fingerprint move.
+
+**AE reverted all 25. The fingerprint saw 4** - name, enabled, comment,
+and a text layer's source string. The blind 21:
+
+- **Every comp setting**: bgColor, resolutionFactor, workAreaStart,
+  workAreaDuration, pixelAspect, displayStartTime, motionBlur,
+  shutterAngle, frameBlending, hideShyLayers. `set_comp_setting` writes
+  five of those by name.
+- **Comp markers and layer markers** (`add_marker`).
+- **Every layer switch**: threeDLayer (`set_layer_3d`), blendingMode,
+  shy, locked, motionBlur, adjustmentLayer, audioEnabled.
+- **The 3D-only rotations**: Rotate X, Rotate Y, Orientation - which is
+  exactly what `set_layer_3d` was documented in 0.9.25 as discarding.
+- **The solid SOURCE's colour** (`set_solid_color`). It lives on the
+  project ITEM, so no walk of a comp's layers could ever have seen it.
+- **A text layer's fontSize/font/tracking/justification**
+  (`set_text_style`, which never touches `.text`, the one text field the
+  fingerprint did record).
+
+Nothing was being left in anyone's project today: AE's Undo is better
+than the check watching it. But the check had nothing to check. A
+rollback that half-landed would have reported itself clean, and an
+overshoot that ate the user's last edit was invisible whenever that edit
+was a switch, a work area or a background colour - the common case.
+
+### The fix
+
+`AELL_fingerprint` and `AELL_layerSig` now record all of it, via two new
+helpers. `AELL_sigOf(obj, key)` reads one switch and turns a build that
+lacks it, or an object that refuses it, into a STABLE absence - a camera
+has no `adjustmentLayer`, and a throw part-way through a concatenation
+would silently drop every field behind it and, worse, move the
+fingerprint from one read to the next. `AELL_markerSig` records the key
+TIMES as well as the count, because `add_marker` was measured in 5.4
+REPLACING a marker already at that time - a count alone calls that a
+no-op. It is capped at 50 so a heavily marked comp cannot make the
+verification the expensive half of a round.
+
+Cost, measured on the harness's own 338-item project: one fingerprint
+was 11031 chars in 6 ms before. The arming round pays one of these.
+
+### Verification
+
+- `tests/test-round-rollback.js`: 48 -> 121 checks. The stub grew all 23
+  dimensions as real, undoable state, and each gets both halves - written
+  normally the round must roll back CLEAN (which is what fails if the
+  widened fingerprint ever starts reading noise), and written as a TORN
+  change the undo stack cannot reverse, the round must be reported as NOT
+  rolled back. Before the fix every torn half reported `rolledBack:true`
+  over a change still sitting in the project. Plus a byte-stability check
+  and a layer that THROWS on all eight switches, asserting each refusal
+  reads as `?` in place rather than truncating the signature.
+- One stub bug found on the way: the sentinel-fallback test emptied
+  `project._items` and pushed back only the comp, so the footage item was
+  silently gone for every test after it.
+- `tests/test-self-test.js`'s canned host modelled an Undo over LAYERS
+  only, so an item-level rollback step could pass while nothing was
+  rewound. It now snapshots and restores the created comps, the create
+  counter, comp settings and the makeUnique solids, and it tracks the
+  rollback comp by its CURRENT name - a substring match on "Rollback"
+  lost the comp exactly when a step renames it, and every tool aimed at
+  it started succeeding, which is the one answer that makes the step
+  vacuous.
+- Full stub sweep: 50 files green; capability doc regenerated.
+- **Harness: 482 -> 490/490 PASSED**, twice consecutively. Eight steps:
+  a round that created a comp and failed leaves no comp; a round that
+  changed the work area and preview resolution puts both back (read back
+  through get_comp_details); a round that turned a layer 3D AND added a
+  marker AND recoloured its solid with makeUnique rolls all three back
+  (get_bounds stops calling it a 3D layer); a round that renamed the comp
+  leaves it answering to its old name. A suite step cannot make a torn
+  write, so these own the OTHER risk the widening created - a field AE
+  reports with noise would make every rollback in the product report
+  itself as an abandoned overshoot, and each of these fails loudly if
+  that ever starts.
+- Bumped 0.10.6 -> 0.10.7 (fix to shipped behaviour, verified in AE).
+
+### One thing this pass caused and cleaned up
+
+The first harness run after the change was 489/490: the hygiene step that
+asserts a grounded "Comp not found" listed the six PRBI comps my own
+probes had left in the harness project. Not a regression - probe debris.
+Removed with `logs/probe-cleanup.jsx`, and both runs after that were
+490/490. Worth remembering: probe rigs that outlive their pass are read
+by any suite step that quotes the project's contents back.
+
+### Still open
+
+- What is NOT fingerprinted, deliberately, and why it is a limit rather
+  than a bug: arbitrary PROPERTY values beyond the transform basics
+  (Position/Scale/Rotate Z/Opacity/the 3D rotations) and effect/mask
+  COUNTS. Covering them means a per-layer tree walk on every armed round,
+  which is the one cost this check cannot afford. A `set_effect_param`
+  round that half-undid would still be reported clean.
+- Two same-named folders are indistinguishable to it: `parentFolder` goes
+  in by NAME, so a `move_to_folder` between homonyms is invisible. Cheap
+  to close with the item id; not measured here, so not done here.
+- Next on the feature track: 5.9 (.mogrt export), still flagged as a
+  LAST-item-of-the-night job for dialog risk. Tenth pass to defer it -
+  worth the remote session deciding whether that rule can ever fire under
+  a loop that always starts another pass.
+- `comfy_generate` still calls `import_file` rather than 5.8's
+  `import_as_layer` - a small remote-session pass.
+- Not measured here: whether `.parent =` compensation survives a child
+  that is 3D under a 2D parent, or a parent with a keyframed transform
+  (filed by the previous pass).
+- Probe scratch under `logs/` (gitignored). AE left on the harness's own
+  project, dirty, with no dialog open, and with this pass's PRBI rigs
+  removed.
+
+## 2026-08-29 (local) - "nothing moved" was only ever true at one frame
+## (0.10.8)
+
+Harness green on arrival (490/490), so the pass took the oldest thing the
+open list carries: the question the set_layer_parent pass filed about its
+own fix - "not measured here: whether `.parent =` compensation survives a
+child that is 3D under a 2D parent, or a parent with a keyframed
+transform. The probe covered 3D-under-3D only." Both halves are measured
+now. The first survives. The second does not, and the tool had been
+promising it since the day it shipped.
+
+### The probe (`logs/probe-parent2.txt`, AE 2026 26.3x87)
+
+Nine rigs, each measured the only honest way: a probe null carrying
+`thisComp.layer("X").toComp([0,0,0])` as its Position expression, read
+back with `valueAtTime` at several times, so the question is always
+"where do the pixels land" and never "what does the tool say".
+
+**Mixed dimensions: compensation holds.**
+
+- A 3D child under a 2D parent stays put (world 394.16,276.79 ->
+  393.85,275.56 - AE re-decomposes the parent's 2D rotation into the
+  child's Orientation, [10,20,30] -> [18.65,12.39,359.73], and the
+  round trip costs about a pixel). The Z is NOT touched: a 2D parent
+  leaves 200 at 200. Worth stating plainly because turning the 3D switch
+  off zeroes exactly that number, and the two look alike from outside.
+- A 2D child under a 3D parent does not move either, and the reason is
+  that the parent's Z and Y-rotation never reach it at all: the
+  compensation is a pure X/Y translation by the parent's `position -
+  anchor`. Rig I, a parent moved ONLY in Z, still rewrote the child's
+  Position by the parent's X/Y and left the picture where it was.
+
+**An animated parent: the promise breaks, and nothing said so.**
+
+- (D) A STILL layer parented to a 2-key parent: world 360 at every time
+  before, and 360 / 560 / 760 at t=0/1/2 after. It sat still at exactly
+  one frame and was 400 px away two seconds later.
+- (E) A KEYFRAMED child under the same parent: 360/460/560 became
+  360/660/960. Not an offset - its speed doubled. The tool's existing
+  `keyframesNote` says the old numbers are gone; it never said the
+  MOTION was gone.
+- (F) A parent driven by an EXPRESSION does the same with ZERO
+  keyframes, which is precisely what the key-count accounting cannot
+  see.
+- (G) The compensation lands on the PLAYHEAD. The same rig parented at
+  t=1 instead of t=0 came out with different numbers and a different
+  frame left standing still (160/360/560). The tool never set comp.time,
+  so the same call gave different results depending on where the user
+  had left the playhead - and the model has no way to know where that
+  was.
+- (H) Unparenting is the same class: a layer riding an animated parent
+  keeps only the position it had at that one frame (360/560/760 ->
+  360/360/360) and silently loses the motion.
+
+### The fix
+
+`set_layer_parent` still does the same two AE calls; what changed is that
+it no longer claims more than AE delivers.
+
+- `AELL_animatedXform` reports which transform properties MOVE -
+  keyframes or expression, so rig F is visible - and `AELL_movingChain`
+  asks it of the parent AND everything above it, because a still parent
+  bolted to a moving grandparent moves in comp space just the same.
+- `parentAnimated` names them; `parentAnimatedNote` says the link is NOT
+  jump-free across the timeline, names the frame it IS true at, and adds
+  the E sentence when the child has keys of its own. Unparenting gets its
+  own wording about the motion it just took away.
+- `compensatedAt` is reported on every keep-position call, including the
+  quiet ones, and says whether the frame came from the caller or from the
+  playhead. A tool whose result depends on invisible state should say
+  what that state was.
+- New `atTime` / `atFrame`: set the playhead, parent, put it back. This
+  is the only way to ask for "don't move AT THE START of the animation"
+  rather than "don't move wherever the user happens to be parked".
+  Refused with the comp's range when out of bounds, refused when combined
+  with `keepPosition:false` (there is no frame to compensate at), refused
+  with the value when not a number.
+
+Deliberately NOT done: no refusal on an animated parent, and no attempt
+to bake the parent's motion into the child. The user asked for a link;
+AE's answer is a legitimate one. The house rule is that nothing
+disappears quietly, not that the tool second-guesses the ask.
+
+### Verification
+
+- `tests/test-layer-parent.js`: 47 -> 89 checks. The stub's fidelity block
+  grew the part that made this bug invisible - `valueAtTime` on every
+  property, an `_originInComp(t)` that answers "where does it draw AT A
+  TIME", and a `parent` setter that takes its offset from the parent's
+  value at `comp.time` ONCE. So the tests assert the layer is at x=400 at
+  the compensation frame and at x=800 two seconds later; a tool that only
+  printed the right warning cannot pass them. Eight new groups: animated
+  parent, still parent (says nothing), expression-only parent, moving
+  GRANDparent, atTime/atFrame pinning (including that the playhead is put
+  back), the three refusals, unparenting, and a keyed child told its
+  motion changed.
+- `tests/test-self-test.js`'s canned host modelled the bounds rig with no
+  notion of time and no Z at all, so it could not have run any of the new
+  suite steps. It now has `bnPosAt` (keyframed position, linear), a
+  time-aware `bnXform`/`bnCompPoint`/`bnBounds`, a Z that only passes
+  between two 3D layers, and the compensation-at-a-frame rule with its
+  refusals.
+- Full stub sweep: 50 files green; capability doc regenerated.
+- **Harness: 490 -> 498/498 PASSED**, twice consecutively, every new step
+  green on its first real-AE run - which is the interesting part, since
+  the steps assert exact numbers (450 at the pinned frame, 850 two
+  seconds later, 50 at the frame that gives way, Position [300,200,200]
+  under a 2D parent, [0,0] under a 3D one). Real AE agreed with all of
+  them. Eight steps: the moving-parent rig, the animated link and its
+  warning, `atFrame` picking the frame, the default playhead path
+  (asserted playhead-agnostically - the layer must simply travel), the
+  unparent, the out-of-range refusal, and the two mixed-dimension pins.
+- Bumped 0.10.7 -> 0.10.8 (fix to shipped behaviour, verified in AE).
+
+### Still open
+
+- The ~1 px drift when a 3D child is parented to a ROTATED 2D parent
+  (394.16,276.79 -> 393.85,275.56). It is AE's own matrix-to-Orientation
+  decomposition, not this panel's arithmetic, and nothing here can fix
+  it. Not pinned in the suite because the exact numbers are AE's to
+  change; recorded here so the next pass does not re-discover it as a
+  bug.
+- Next on the feature track: 5.9 (.mogrt export), still flagged as a
+  LAST-item-of-the-night job for dialog risk. Eleventh pass to defer it.
+- `comfy_generate` still calls `import_file` rather than 5.8's
+  `import_as_layer` - a small remote-session pass.
+- `release-notes.txt` still reads "0.10.0" while the feed now ships
+  0.10.8 - tenth pass to flag it; it belongs to the remote session's
+  release cut.
+- Rollback's two stated limits are unchanged: arbitrary property values
+  beyond the transform basics, and folders that share a name.
+- Probe scratch under `logs/` (gitignored); the probe removed its own
+  PPAR2 rig. AE left on the harness's own project, dirty, with no dialog
+  open.
+
+## 2026-08-29 (local) - item 6.1 Pass A: whisper.cpp acquired, and the
+## release nobody was choosing
+
+**Item:** 6.1 Pass A - acquire a prebuilt whisper.cpp Windows binary plus
+the ggml-base.en model the way `get-llama.ps1` does llama-server, and
+verify it runs on a WAV.
+
+Picked because the harness was already green (498/498 before any change),
+items 2-5.8 are struck, and 5.9 (.mogrt) is gated by its own rule to the
+LAST item of a night - twelfth pass to defer it, and the first one to say
+so while actually moving the item behind it.
+
+### What shipped
+
+- `scripts/lib/whisper-assets.ps1` - WHICH file to take. Split out for
+  the same reason `ae-dialog-triage.ps1` is: the acquirer is PowerShell,
+  so the decision has to live somewhere a Node test can drive it without
+  a network or a 640 MB download.
+- `scripts/get-whisper.ps1` - the I/O half. `-Variant cpu|blas|cublas`,
+  `-Tag`, `-Model`, `-SkipModel`, `-SkipVerify`.
+- `tests/test-whisper-acquire.js` - 43 checks, no network.
+
+### Probe facts, and the four that break the obvious implementation
+
+1. **The newest tag is not the one with the files.** On 2026-08-29
+   `ggml-org/whisper.cpp`'s newest release is `v1.9.3` - a PRERELEASE
+   with ZERO assets, published six minutes AFTER `b4938`, which carries
+   all nine. `/releases/latest` happens to skip prereleases, but an
+   asset-less normal release would sail through it, so the choice walks
+   the release LIST and takes the first that actually has a build.
+2. **The archive is not flat and `main.exe` is a decoy.** Everything
+   sits under `Release\`, and `main.exe` is 27 KB - a deprecation shim.
+   The transcriber is `whisper-cli.exe` (479 KB). "Find main.exe" finds
+   the stub. The zip also ships `whisper-server.exe`, which is the same
+   HTTP-server shape as llama-server and may matter for Pass C.
+3. **The models are under `ggerganov`, not `ggml-org`.** llama.cpp moved
+   to the ggml-org org and the whisper REPO moved with it, so
+   `ggml-org/whisper.cpp` is the natural guess for the weights too.
+   Measured: it answers **HTTP 401**, not 404 - which reads like a token
+   problem and sends you looking in the wrong place entirely.
+   `ggerganov/whisper.cpp` answers 200, 147 964 211 bytes.
+4. **`Invoke-RestMethod` does not enumerate a JSON array.** It emits ONE
+   object that IS the array. So `@(Invoke-RestMethod .../releases)` is a
+   one-element array holding all 15 releases.
+
+### The bug (4), and why it looked green
+
+The first version of `get-whisper.ps1` wrote exactly that `@()`. Its
+`foreach` therefore ran ONCE with `$r` bound to the whole list, and
+PowerShell's property flattening turned `$r.assets` into every asset of
+every release pooled together. It found a real `whisper-bin-x64.zip` in
+that soup - from no particular release - downloaded it, extracted it,
+transcribed the WAV correctly and printed `Verify: PASS`.
+
+The only symptom was six characters in one log line: `Release:
+System.Object[]`. The walk that exists to skip the asset-less prerelease
+had never executed at all, and the version actually installed was
+whichever release's asset happened to sort first.
+
+Fixed with `Expand-AellReleaseList`, which flattens whatever shape it is
+handed and runs INSIDE the choice so nothing can reach the walk without
+it. It emits its result WITHOUT a leading comma on purpose: `return
+,$out` hands back a single object that IS the array, and the caller's own
+`@()` then re-wraps it into one element - the exact nesting being undone.
+That mistake was made and caught here too.
+
+Three more found by writing the test, each a silent wrong answer:
+
+- **`[version]` pads with -1, not 0.** `[version]'11.8'` compares LESS
+  than `[version]'11.8.0'`, so a driver reporting `11.8` REJECTED the
+  `whisper-cublas-11.8.0` build made for it and fell through to "no
+  compatible build". Both sides are now padded to three parts.
+  (`get-llama.ps1` pads to two and has the same latent trap; its assets
+  are `12.4`-shaped so it does not bite today. Flagged, not touched.)
+- **An empty JSON asset list yields `$null`, and `@($null)` has Count
+  1.** The grounded error printed `Looked at: v1.9.3 ()` instead of
+  saying the release had no assets.
+- **This machine's nvidia-smi says `CUDA UMD Version: 13.4`**, not
+  `CUDA Version:` (driver 616.56, RTX 5090). The regex every script here
+  greps with - `get-llama.ps1` included - matches NOTHING, and the caller
+  silently loses its driver ceiling. `Get-AellCudaVersionFromSmi` reads
+  both spellings; after the fix the cublas dry-run resolves 13.4 and
+  picks `whisper-cublas-12.4.0-bin-x64.zip` from `b4938`.
+
+### Decisions taken (no human awake to ask)
+
+- **Default variant is CPU.** base.en does 3 s of speech in ~820 ms on
+  this machine, and the CUDA build is a 640 MB download whose VRAM would
+  come out of the same budget the tier arbiter in `tools.js` rations
+  between the chat model and ComfyUI. `-Variant cublas` is there for
+  anyone who wants to spend it; Pass C can revisit if captions turn out
+  to be slow on long comps.
+- **`bin\` and `models\` are separate folders.** `get-llama.ps1` clears
+  its whole vendor folder because a llama.cpp build IS the download; here
+  an 8 MB binary update must not cost the 141 MB model. Re-running wipes
+  only `bin\`. Verified: two re-acquisitions, model untouched both times.
+- **The model downloads to `.part` and is renamed on completion**, so an
+  interrupted download cannot look acquired on the next run and fail at
+  load instead.
+- **Scope held to Pass A.** The verify step synthesizes its WAV with
+  System.Speech at 16 kHz mono 16-bit (whisper refuses anything else)
+  because Pass A has to run on *a* WAV and there is no sample in the zip.
+  Pass B still owns making that a skip-when-absent stub test; this is the
+  one-shot version of it, inside the acquirer.
+
+### Verification
+
+- `node tests/test-whisper-acquire.js`: 43 checks, all green. The
+  assertions are about the RELEASE an asset came from, not just about
+  finding an asset - a test that only checked "we picked
+  whisper-bin-x64.zip" passes on the broken version. The nested shape is
+  reproduced explicitly (`WRAPPED_COUNT=1`) and the chosen asset is
+  pinned BY SIZE, so a flattening regression that reorders the pool lands
+  on v1.9.2's asset and is caught. Release lists and the nvidia-smi
+  banner are captured verbatim from this machine.
+- Full stub sweep: all 51 test files exit 0. CI globs `tests/test-*.js`,
+  so the new suite is picked up with no workflow change.
+- Real end-to-end run, three times: acquire -> extract -> model ->
+  synthesize -> transcribe. Transcript exact, `Verify: PASS`, 818 ms and
+  829 ms. `Release: b4938` now prints a tag.
+- **Harness: 498/498 PASSED**, before and after. Nothing in `extension/`
+  was touched.
+- Capability doc still fresh (no new tools).
+
+### No version bump
+
+Deliberate. The panel ships `extension/` alone and this pass added only
+`scripts/` and `tests/` - there is no shipped behaviour for a feed to
+carry. Same call as the 2026-08-28 harness-dialog-triage pass.
+
+### Still open
+
+- **`get-llama.ps1` has two of the same latent traps**: it greps for
+  `CUDA Version:` (misses this machine's `CUDA UMD Version:`, so the
+  driver ceiling silently stops applying) and pads versions to two
+  parts. Neither bites today - the compute-cap rule still runs and its
+  asset names are `12.4`-shaped - so it was left alone rather than
+  widening a one-item pass. Small remote-session job, or the next local
+  pass that has nothing better.
+- 6.1 Pass B is now unblocked and is the natural next item on this track.
+  Pass C follows B; 5.5 landed, so nothing else blocks it.
+- 5.9 (.mogrt export) still deferred by its own LAST-item-of-the-night
+  rule. Twelfth pass. If the queue ahead of it keeps emptying, someone
+  should decide whether that rule means "last pass of a night" or "never".
+- `release-notes.txt` still reads "0.10.0" while the feed ships 0.10.8 -
+  eleventh pass to flag it; remote session's release cut.
+- `comfy_generate` still calls `import_file` rather than 5.8's
+  `import_as_layer` - small remote-session pass.
+- Machine state: AE left on the harness's own project, no dialog open.
+  `%APPDATA%\AE-Llama\vendor\whisper.cpp` now holds the CPU build and
+  ggml-base.en (149 MB total) - new, and not cleaned up, because Pass B
+  needs it.
+
+## 2026-08-29 (local) - item 6.1 Pass B: the verification that would have
+## passed on silence
+
+**Item:** WORKPLAN 6.1 Pass B - a whisper.cpp verification harness with
+no human audio: speak a phrase with the OS synthesizer, transcribe it,
+assert the phrase came back, and make it a stub-level test that skips
+cleanly where there is no binary (CI has none).
+
+Harness green at 498/498 before the pass, so item 1 was satisfied and
+Pass B was the top unfinished item - Pass A landed earlier tonight and
+Pass C is explicitly blocked behind it.
+
+### What shipped
+
+- **`scripts/lib/whisper-verify.ps1`** - the round-trip, split out the
+  same way `whisper-assets.ps1` holds the download choice.
+  `Find-AellWhisperInstall`, `ConvertTo-AellWhisperText`,
+  `Test-AellPhraseHeard`, `New-AellSpokenWav`, `Invoke-AellWhisperCli`,
+  `Get-AellWhisperCliError`, `Invoke-AellWhisperCheck`,
+  `Invoke-AellWhisperVerify`.
+- **`scripts/verify-whisper.ps1`** - run it standalone. Exit 0 on pass
+  AND on "not installed" (prints SKIP), 1 on a failed phrase, 2 when
+  `-Require` turns a missing install into a failure.
+- **`get-whisper.ps1`'s verify step now calls the shared check** instead
+  of carrying its own copy. That was the point of splitting it: two
+  copies drift, and the one that ships is whichever the user ran.
+- **`tests/test-whisper-verify.js`** - 52 checks, 49 of which need no
+  install at all.
+
+### Five things the machine said that the obvious version gets wrong
+
+1. **Two seconds of digital silence transcribes as " You".** Not `''`,
+   not `[BLANK_AUDIO]` - a plain, confident word. Every "did it work?"
+   check that asserts the transcript is non-empty therefore PASSES on a
+   file with no speech in it, which is the exact failure a verification
+   harness exists to catch. The assertion has to be the SPOKEN PHRASE.
+   Pinned by `OUT_SILENCE` in the test.
+2. **Draining stdout before waiting on the process hangs forever.**
+   whisper-cli writes ~6 KB to stderr (backend banner, plus its whole
+   usage screen on any argument error) and NOTHING to stdout when it
+   fails. `StandardOutput.ReadToEnd()` blocks until the child exits; the
+   child blocks writing into a full stderr pipe; neither moves. Measured
+   as a five-minute wall-clock timeout with both processes alive - the
+   symptom is total silence, which reads like a slow model rather than a
+   bug in the caller. Both pipes are now read asynchronously with a hard
+   timeout on top. Regression-tested WITHOUT the binary by compiling a
+   stand-in console exe on the spot (`Add-Type -OutputAssembly`) that
+   writes 200 KB to stderr and exits 7; on the broken implementation that
+   case never returns.
+3. **base.en writes numbers as digits, and the synthesizer's "pack" is
+   heard as "hack".** The first phrase list included "pack my box with
+   five dozen liquor jugs" and it came back as "hack my box with 5 dozen
+   liquor jugs" - two independent failures in one line. A verification
+   phrase is a FIXTURE: one the model gets wrong tests nothing but
+   itself. All three defaults are now measured-exact, and the test
+   asserts no default phrase contains a number word.
+4. **44.1 kHz audio transcribes fine.** The note in the code this
+   replaced said whisper "refuses anything but 16 kHz mono 16-bit". It
+   does not - a 44 100 Hz mono WAV (header read back to confirm it really
+   was 44 100) transcribed correctly, exit 0. It resamples. Corrected in
+   place, and it matters for Pass C: comp audio out of the render queue
+   does not need converting first.
+5. **`-like "*$phrase*"` is a wildcard match, not a contains.** The code
+   being replaced compared that way. A phrase holding `*` matches almost
+   anything and reports PASS for audio nobody spoke; a phrase holding `[`
+   opens a character class and never matches. Now literal `.Contains()`
+   on normalized text, with both traps as test cases.
+
+### The negative control
+
+Every phrase check only ever asks the comparison to say YES, so a
+`Test-AellPhraseHeard` that returned `$true` unconditionally - or a
+normalizer that reduced both sides to `''` - would report a perfect score
+on a broken install. The runner now also asserts that phrase 2 is NOT
+heard in the recording of phrase 1. It reuses text already transcribed,
+so it costs nothing, and a harness that cannot fail proves nothing.
+
+### Verification
+
+- `node tests/test-whisper-verify.js`: 52 checks green with the install
+  present. Re-run with `APPDATA` pointed at an empty folder to model a CI
+  runner: 49 green, 3 skipped, exit 0 - the skip path is measured, not
+  assumed.
+- `node tests/test-whisper-acquire.js`: 3 assertions in it pointed at the
+  verify block that moved. Rewritten to assert the opposite and stronger
+  thing - that the acquirer dot-sources the shared library and carries NO
+  second copy of the synthesizer or the comparison. Green.
+- Full stub sweep: all 52 test files exit 0.
+- `scripts\verify-whisper.ps1`: 4/4 PASSED against the real install
+  (~680 ms per phrase, base.en, CPU). Skip and `-Require` paths exercised
+  against five fabricated trees - missing root, wrong exes, no model,
+  named model absent - each answering with a grounded reason that lists
+  what IS there.
+- `scripts\get-whisper.ps1` re-run end to end after the refactor:
+  re-downloaded the 8 MB build, kept the 141 MB model, `Verify: PASS` in
+  837 ms.
+- **Harness: 498/498 PASSED**, before and after. Nothing in `extension/`
+  was touched.
+
+### No version bump
+
+Deliberate, same call as Pass A and the 2026-08-28 harness-dialog pass:
+the panel ships `extension/` alone, and this pass added only `scripts/`
+and `tests/`. There is no shipped behaviour for a feed to carry.
+
+### Still open
+
+- **`get-llama.ps1` still has the two latent traps Pass A flagged**: it
+  greps for `CUDA Version:` (misses this machine's `CUDA UMD Version:`,
+  so the driver ceiling silently stops applying) and pads versions to two
+  parts. `Get-AellCudaVersionFromSmi` and `ConvertTo-AellPaddedVersion`
+  in `whisper-assets.ps1` are the fixes, already written and tested -
+  this is a small pass that points get-llama at them.
+- 6.1 Pass C (AE wiring: `transcribe_to_captions`) is now unblocked and
+  is the natural next item. 5.5 landed, so nothing else blocks it. Note
+  for whoever takes it: `Invoke-AellWhisperCli -Timestamps` already
+  exists and is unused, and comp audio at 48 kHz needs no conversion
+  (finding 4).
+- 5.9 (.mogrt export) still deferred by its own LAST-item-of-the-night
+  rule. Thirteenth pass. Someone should decide whether that rule means
+  "last pass of a night" or "never".
+- `release-notes.txt` still reads "0.10.0" while the feed ships 0.10.8 -
+  twelfth pass to flag it; remote session's release cut.
+- `comfy_generate` still calls `import_file` rather than 5.8's
+  `import_as_layer` - small remote-session pass.
+- Machine state: AE left on the harness's own project, no dialog open.
+  `%APPDATA%\AE-Llama\vendor\whisper.cpp` holds the CPU build and
+  ggml-base.en (149 MB), left in place because Pass C needs it. Temp
+  WAVs and the compiled stand-in exe are removed by the code that makes
+  them.
+
+## 2026-08-29 (local) - item 6.1 Pass C: captions, and the pipeline whose
+## failure mode is a confident wrong answer
+
+**Item:** WORKPLAN 6.1 Pass C - AE wiring for local captions. Render a
+comp's audio, transcribe it with timestamps, put the segments on the
+timeline as text layers or markers: `transcribe_to_captions`.
+
+Harness green at 498/498 before the pass, so item 1 was satisfied. Pass C
+was the top unfinished item: A and B landed earlier tonight, 5.5 (the
+render queue) landed 2026-08-28, and nothing else blocked it.
+
+### What shipped
+
+Three tools, split so the two ends can be tested where the middle
+cannot:
+
+- **`render_comp_audio`** (host) - renders ONLY the comp's audio, picking
+  an audio-only output module itself. Refuses a comp with no audio layer,
+  or one whose audio layers are all muted, naming what IS there. It
+  DELEGATES the render to `render_comp` rather than carrying a second
+  copy of the hold-back / overwrite-refusal / extension-forcing logic.
+- **`add_captions`** (host) - one text layer per segment trimmed to its
+  own span, or one marker per segment with `{as: "markers"}`. Every
+  segment is validated BEFORE anything is created. In `AELL_MUTATING`
+  (one Ctrl+Z), and in `AELL_PER_LAYER` for for_each_layer.
+- **`transcribe_to_captions`** (PANEL) - the only one the model calls.
+  It has to be panel-side: the middle step is a child process, which
+  ExtendScript cannot spawn.
+- **`extension/js/whisper.js`** - finds the install under
+  `<dataRoot>\vendor\whisper.cpp`, runs whisper-cli, parses the
+  timestamped output into segments. Independent of
+  `scripts\lib\whisper-verify.ps1` on purpose: the panel cannot shell out
+  to PowerShell for every caption.
+
+### Six things real AE and the model said that the obvious version gets wrong
+
+1. **A comp with NO audio renders a full, valid, audio-only AIFF.**
+   Status DONE, 772 674 bytes, no warning of any kind. And two seconds of
+   silence transcribes as the word "You" with exit code 0 (Pass B's
+   finding, from the other end). So the honest-looking end of the obvious
+   pipeline is a caption layer reading "You" over a comp nobody spoke in,
+   and every step of it reports success. Nothing downstream can tell that
+   file apart from a real one, so the refusal has to happen BEFORE the
+   render. That is the load-bearing suite step, and the panel tool also
+   refuses the "You" shape if a silent LAYER gets past it.
+2. **`layer.inPoint` is a SLIDE, not a trim.** It drags outPoint with it
+   and preserves the duration: a fresh text layer in a 5 s comp reads
+   in=0 out=5, and after `inPoint = 2` it reads in=2 **out=7**. Set out
+   before in and every caption is the wrong length, in silence. In is now
+   always set first, and the suite asserts the resulting spans rather
+   than trusting the call.
+3. **An inverted span is accepted without a word.** in=2 then out=1 reads
+   back in=2 out=1 - a layer of negative duration that never appears on
+   the timeline. Zero-length (in=1, out=1) too. Both are refused by
+   `add_captions` and dropped by the parser, because whisper does emit
+   the occasional `0.000 --> 0.000` line.
+4. **in/out QUANTIZE to AE's internal time base, not the frame grid.**
+   0.3333 reads back 0.33329264322917; 1.7777 reads back
+   1.7777099609375. Every comparison in the tests and the suite is a
+   tolerance. An equality assertion here would have looked right and
+   failed on the machine.
+5. **whisper.cpp reads AE's AIFF directly.** stderr says "trying to
+   decode with miniaudio" - a 964 674-byte stereo 48 kHz AIFF straight
+   out of the render queue transcribed in 682 ms, exit 0. So there is no
+   conversion step, no WAV rewrite, and 6.2 (ffmpeg) is NOT a
+   prerequisite for captions. This is the finding that shrank the pass.
+6. **The audio format comes from the TEMPLATE, not from the API.**
+   `om.getSettings(GetSettingsFormat.STRING)` throws ("Object of type
+   Object found where a Number, Array, or Property is needed") and
+   `om.setSettings({Format: "WAV"})` answers "Invalid Value for key:
+   <Format>. Property is read-only". So the module is matched by NAME
+   against the installed list (word-bounded, WAV preferred over AIFF over
+   MP3, never an `_HIDDEN` internal), and a machine with no audio module
+   gets a grounded refusal listing what it does have. This machine ships
+   exactly one: "AIFF 48kHz".
+
+### The end-to-end run
+
+The suite cannot transcribe - that needs a ~150 MB install no CI runner
+has - so the round trip was driven by hand in real AE with the shipped
+code: 20 s comp of synthesized speech -> `render_comp_audio` (0.1 s,
+3 844 674 bytes, "AIFF 48kHz") -> whisper-cli (1053 ms, five segments)
+-> `Whisper.parseSegments` -> `add_captions`. Result: five text layers
+spanning 0-3.32, 3.32-6.24, 6.24-9.90, 9.90-13.28, 13.28-15.92, every
+one within quantization tolerance of the transcript. That is fact 2
+proved on the machine rather than argued.
+
+### Verification
+
+- `node tests/test-captions.js`: 115 checks, green. Seven of them are
+  STUB FIDELITY checks that drive the raw API first, so a stub that
+  stopped modelling the inPoint slide cannot let the fix pass on a
+  technicality. It builds a real (tiny) whisper tree in %TEMP% to prove
+  the walk, the smallest-model rule and the three grounded refusals.
+- Two existing suites caught the new code before I did, which is what
+  they are for: `test-for-each-layer` refused an unclassified layer tool,
+  and `test-chat-probe` refused a `global.Whisper` that mapped to no
+  panel file. `add_captions` is now classified, and it REFUSES `layer`
+  with text captions - which is what stops `for_each_layer
+  {tool: "add_captions"}` from building the whole transcript once per
+  selected layer.
+- Full stub sweep: all 53 test files exit 0. `capability-report.js`
+  regenerated.
+- **Harness: 514/514 PASSED** (from 498), green on two consecutive runs
+  plus a third after cleanup.
+
+### No version bump
+
+The feature-track rule in WORKPLAN section 5: new tools ride the next
+MINOR, which the remote session cuts after reviewing the batch. Same call
+as Passes A and B and as 5.5-5.8. Pushing without bumping is correct
+here - the feed publishing an equal version is the intended outcome.
+
+### Still open
+
+- **The harness caught my own debris, and the mechanism is worth a note.**
+  The first run after the new steps failed one UNRELATED step:
+  `clean_project`'s "Comp not found" refusal lists the project's comps
+  and that list is CAPPED, so my two probe comps pushed the comp the step
+  was looking for out of the list. Removing them made it green. The
+  latent issue is real though: in a user's large project that refusal can
+  fail to name the comp the user just asked about. Small remote-session
+  job - the grounded list should prefer near-matches to alphabetical
+  order.
+- **Project debris from earlier passes is still in the harness project**:
+  two comps both called `AELL_PROBE_WA`, `PROBE_PARENT`, and roughly 250
+  nulls named "Audio Amplitude" (5.7 measured that AE never uniques that
+  name; these are the leftovers). Harmless today and the harness is green
+  with them, but they are what makes the capped-list trap above easy to
+  hit. A human with the project open could clear them in a minute.
+- **`get-llama.ps1` still has the two latent traps Pass A flagged**: it
+  greps for `CUDA Version:` (misses this machine's `CUDA UMD Version:`)
+  and pads versions to two parts. `Get-AellCudaVersionFromSmi` and
+  `ConvertTo-AellPaddedVersion` in `whisper-assets.ps1` are the fixes,
+  already written and tested - a small pass points get-llama at them.
+- **6.1 is now COMPLETE** (A, B, C). 6.2 (ffmpeg) is the next item on
+  that track, and finding 5 above means it is no longer a prerequisite
+  for anything - it is only worth what `export_gif` / `export_social`
+  are worth on their own.
+- `Invoke-AellWhisperCli -Timestamps` in the PowerShell library is still
+  unused by shipped code; the panel has its own runner. It is used by
+  this pass's manual verification and is worth keeping for that.
+- 5.9 (.mogrt export) still deferred by its own LAST-item-of-the-night
+  rule. Fourteenth pass. Someone should decide whether that rule means
+  "last pass of a night" or "never".
+- `release-notes.txt` still reads "0.10.0" while the feed ships 0.10.8 -
+  thirteenth pass to flag it; remote session's release cut.
+- `comfy_generate` still calls `import_file` rather than 5.8's
+  `import_as_layer` - small remote-session pass.
+- Machine state: AE left on the harness's own project with every comp and
+  footage item this pass made removed, no dialog open. Temp WAVs, AIFFs
+  and probe scripts deleted. `%APPDATA%\AE-Llama\vendor\whisper.cpp`
+  still holds the CPU build and ggml-base.en (149 MB) - now used by
+  shipped code, so it stays.

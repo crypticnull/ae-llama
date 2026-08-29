@@ -1128,11 +1128,124 @@ AELL_TOOLS.delete_item = function (args) {
   return AELL_okay(data);
 };
 
+/* Sources a duplicate SHARES with its original. AE copies the layers,
+ * never what they point at, so a precomp/solid/footage item is the SAME
+ * project item in both comps — editing "the copy" edits the original.
+ * Precomps and solids lead the list because the panel has tools that
+ * change exactly those (set_solid_color, anything inside a precomp). */
+function AELL_dupSharedSources(dup, src) {
+  var mine = {}, i, j, out = [];
+  for (i = 1; i <= src.numLayers; i++) {
+    var s = null;
+    try { s = src.layer(i).source; } catch (eS) {}
+    if (s) mine["id" + s.id] = true;
+  }
+  var seen = {};
+  for (j = 1; j <= dup.numLayers; j++) {
+    var d = null;
+    try { d = dup.layer(j).source; } catch (eD) {}
+    if (!d || !mine["id" + d.id] || seen["id" + d.id]) continue;
+    seen["id" + d.id] = true;
+    var kind = (d instanceof CompItem) ? "precomp" : "footage";
+    if (!(d instanceof CompItem)) {
+      var ms = null;
+      try { ms = d.mainSource; } catch (eM) {}
+      if (ms instanceof SolidSource) kind = "solid";
+    }
+    out.push(d.name + " (" + kind + ")");
+  }
+  return out;
+}
+
+/*
+ * duplicate_comp. AE does the copying itself and does it well: measured
+ * in AE 2026 (probe 2026-08-29, see WORKPLAN-LOG) the copy is named
+ * "<name> 2" by AE, lands in the SOURCE'S OWN FOLDER directly after it,
+ * carries every comp setting (bgColor, resolution, work area, motion
+ * blur, comment, markers), keeps relative expressions and parenting
+ * pointing INSIDE the copy, and leaves the project-panel selection
+ * alone — so there is nothing to fix there and no selection to restore.
+ *
+ * What it does SILENTLY, and what this tool says out loud instead:
+ *  - A requested `name` that another project item already holds is
+ *    ACCEPTED. A by-name walk then finds the OLDER item (measured), so
+ *    the copy would be unreachable by the very name the model just
+ *    asked for. Auto-numbered and redirected exactly as create_comp and
+ *    precompose do.
+ *  - An EMPTY name is accepted too and leaves a comp with no name at
+ *    all. Refused.
+ *  - Layer SOURCES are shared, not copied (AELL_dupSharedSources).
+ *  - AE rewrites nothing: an absolute comp("Source") reference in the
+ *    copy still drives off the SOURCE comp, and expressionError stays
+ *    EMPTY, so nothing else would ever mention it.
+ */
 AELL_TOOLS.duplicate_comp = function (args) {
   var comp = AELL_resolveComp(args.comp);
+  var srcName = comp.name;
+  var wanted = null;
+  if (typeof args.name !== "undefined" && args.name !== null) {
+    wanted = String(args.name);
+    if (/^\s*$/.test(wanted)) {
+      return AELL_err("'name' was blank. AE accepts a blank comp name and " +
+        "the copy then has none, which nothing can look up. Leave 'name' " +
+        "out to take AE's own '" + srcName + " 2', or pass a real name.");
+    }
+  }
   var dup = comp.duplicate();
-  if (args.name) dup.name = String(args.name);
-  return AELL_okay({ name: dup.name, id: dup.id, duplicatedFrom: comp.name });
+  if (wanted) {
+    var unique = AELL_uniqueItemName(wanted, dup);
+    dup.name = unique;
+    if (!$.global.AELL_compAliases) $.global.AELL_compAliases = {};
+    if (unique !== wanted) {
+      // Redirect this request's later commands at the comp that exists
+      // (see AELL_resolveComp) — the batch was written before this ran.
+      // NOT when the name asked for is the SOURCE'S OWN: "duplicate Main
+      // and call it Main" still leaves "Main" meaning the original, and
+      // an alias there would silently point the rest of the request at
+      // the copy instead.
+      if (wanted !== srcName) $.global.AELL_compAliases[wanted] = unique;
+    } else {
+      delete $.global.AELL_compAliases[wanted];
+    }
+  }
+  var out = { name: dup.name, id: dup.id, duplicatedFrom: srcName,
+              folder: dup.parentFolder.name };
+  if (wanted && dup.name !== wanted) {
+    out.nameTaken = "'" + wanted + "' was already another project item's " +
+      "name — a second one is unreachable by name, so the copy is '" +
+      dup.name + "'. Use THIS name in every following command" +
+      (wanted === srcName
+        ? "; '" + srcName + "' still means the comp it was copied FROM."
+        : ".");
+  }
+  var shared = AELL_dupSharedSources(dup, comp);
+  if (shared.length) {
+    AELL_hygCap(shared, out, "sharedSources");
+    out.sharedNote = "AE copied the LAYERS, not what they point at: " +
+      "these items are the same in both comps, so changing one there " +
+      "changes '" + srcName + "' too.";
+  }
+  // Expressions in the copy that name the SOURCE comp as a string: AE
+  // leaves them driving the original and flags nothing.
+  var hits = [], k;
+  for (k = 1; k <= dup.numLayers; k++) {
+    try { AELL_walkExpressions(dup.layer(k), hits, dup.name, dup.layer(k).name); }
+    catch (eW) {}
+  }
+  var back = [];
+  for (k = 0; k < hits.length; k++) {
+    if (AELL_expressionNames(hits[k].expression, srcName)) {
+      back.push(hits[k].layer + " > " + hits[k].property);
+    }
+  }
+  if (back.length) {
+    AELL_hygCap(back, out, "stillDrivenBySource");
+    out.expressionNote = "These expressions in the copy name '" + srcName +
+      "' as a string, so they still read the ORIGINAL comp. AE does not " +
+      "rewrite them and expressionError stays empty. Point them at " +
+      "thisComp (or at '" + dup.name + "') if the copy should stand alone.";
+  }
+  return AELL_okay(out);
 };
 
 // ------------------------------------------------ organize_project
@@ -1744,6 +1857,13 @@ AELL_TOOLS.get_comp_details = function (args) {
     height: comp.height,
     duration: comp.duration,
     frameRate: comp.frameRate,
+    // A setting set_comp_setting can WRITE has to be readable, or the
+    // model cannot tell a narrowed work area from a short comp — and AE
+    // only renders, previews and converts audio inside the work area.
+    workArea: AELL_secs(comp.workAreaStart) + "-" +
+              AELL_secs(Number(comp.workAreaStart) +
+                        Number(comp.workAreaDuration)),
+    resolution: AELL_resolutionLabel(comp.resolutionFactor),
     numLayers: total,
     layersShown: layers.length,
     layers: layers
@@ -1766,11 +1886,17 @@ AELL_TOOLS.get_comp_details = function (args) {
 };
 
 /* First free project-item name — duplicate comp names make every later
- * name-based comp reference ambiguous (it silently hits the OLDEST one). */
-function AELL_uniqueItemName(base) {
+ * name-based comp reference ambiguous (it silently hits the OLDEST one).
+ * `except` is an item allowed to keep the name it already has: renaming
+ * an item to its own current name must be a no-op, not a bump to " 2". */
+function AELL_uniqueItemName(base, except) {
   var taken = {};
   for (var i = 1; i <= app.project.numItems; i++) {
-    try { taken[app.project.item(i).name] = true; } catch (e) {}
+    try {
+      var it = app.project.item(i);
+      if (except && it === except) continue;
+      taken[it.name] = true;
+    } catch (e) {}
   }
   if (!taken[base]) return base;
   var k = 2;
@@ -2777,7 +2903,12 @@ AELL_TOOLS.center_anchor_point = function (args) {
     return AELL_err("Layer type has no measurable content bounds: " +
                     layer.name);
   }
-  var rect = layer.sourceRectAtTime(comp.time, false);
+  // sourceRectAtTime wants the layer's own SOURCE time, not comp time —
+  // see AELL_sourceTime. A slid or stretched layer used to be measured at
+  // the wrong frame here, which centred the anchor on content the viewer
+  // was not showing.
+  var rect = layer.sourceRectAtTime(AELL_sourceTime(layer, comp.time),
+                                    false);
   var transform = layer.property("ADBE Transform Group");
   var apProp = transform.property("ADBE Anchor Point");
   var posProp = transform.property("ADBE Position");
@@ -2871,6 +3002,215 @@ AELL_TOOLS.center_anchor_point = function (args) {
   }
   return AELL_okay({ layer: layer.name, oldAnchor: oldAp, newAnchor: newAp,
                      note: note });
+};
+
+/*
+ * The time to hand sourceRectAtTime for a given COMP time.
+ *
+ * MEASURED in AE 2026 (WORKPLAN-LOG 2026-08-29): a property's own times
+ * — keyTime, valueAtTime, setValueAtTime — are COMP times and slide with
+ * the layer (a key at 2s reports 3s once startTime is 1, and 4s once the
+ * layer is stretched to 200%). sourceRectAtTime's argument does NOT: it
+ * is the layer's own SOURCE time, unshifted by startTime and unscaled by
+ * stretch. Handing it comp.time therefore measures the wrong frame of an
+ * animated text or shape on any layer that has been slid or stretched —
+ * which is exactly what center_anchor_point used to do.
+ */
+function AELL_sourceTime(layer, compTime) {
+  var st = 0, stretch = 100;
+  try { st = Number(layer.startTime) || 0; } catch (eS) {}
+  try { stretch = Number(layer.stretch); } catch (eT) {}
+  if (!stretch || isNaN(stretch)) stretch = 100;
+  return (compTime - st) / (stretch / 100);
+}
+
+/*
+ * Apply ONE layer's own transform to a point that is already expressed
+ * relative to that layer's anchor point, at comp time t. Returns the
+ * point in the layer's PARENT space (comp space when unparented) —
+ * itself relative to the parent's anchor, which is why the recursion in
+ * AELL_compPoint never subtracts an anchor twice. Scale runs before
+ * rotation; verified against AE's own sourcePointToComp on a parented,
+ * scaled and rotated rig.
+ */
+function AELL_xform2d(layer, pt, t) {
+  var tr = layer.property("ADBE Transform Group");
+  var s = tr.property("ADBE Scale").valueAtTime(t, false);
+  var r = tr.property("ADBE Rotate Z").valueAtTime(t, false);
+  var p = tr.property("ADBE Position").valueAtTime(t, false);
+  var x = pt[0] * (s[0] / 100);
+  var y = pt[1] * (s[1] / 100);
+  var rad = Number(r) * Math.PI / 180;
+  return [x * Math.cos(rad) - y * Math.sin(rad) + Number(p[0]),
+          x * Math.sin(rad) + y * Math.cos(rad) + Number(p[1])];
+}
+
+/*
+ * A point in the layer's SOURCE space mapped to comp space at comp time
+ * t, through the whole parent chain. 2D only — the caller must have
+ * ruled out 3D first (AELL_threeDInChain); AE's own sourcePointToComp is
+ * no help there and is measured lying about it, see get_bounds.
+ */
+function AELL_compPoint(layer, srcPt, t) {
+  var anchor = layer.property("ADBE Transform Group")
+                    .property("ADBE Anchor Point").valueAtTime(t, false);
+  var pt = AELL_xform2d(layer, [srcPt[0] - Number(anchor[0]),
+                                srcPt[1] - Number(anchor[1])], t);
+  var up = null;
+  try { up = layer.parent; } catch (eP) { up = null; }
+  var guard = 0;
+  while (up && guard++ < 64) {
+    pt = AELL_xform2d(up, pt, t);
+    try { up = up.parent; } catch (eP2) { up = null; }
+  }
+  return pt;
+}
+
+/* Every 3D layer in this layer's chain, nearest first (empty = all 2D). */
+function AELL_threeDInChain(layer) {
+  var hits = [];
+  var l = layer, guard = 0;
+  while (l && guard++ < 64) {
+    var is3d = false;
+    try { is3d = !!l.threeDLayer; } catch (eD) {}
+    if (is3d) hits.push(l.name);
+    try { l = l.parent; } catch (eU) { l = null; }
+  }
+  return hits;
+}
+
+AELL_TOOLS.get_bounds = function (args) {
+  if (AELLJSON.isArray(args.layers)) {
+    return AELL_err("get_bounds reads ONE layer. Call it once per " +
+      "layer — for_each_layer reports only counts, so it would throw " +
+      "every measurement away.");
+  }
+  var comp = AELL_resolveComp(args.comp);
+  var layer = AELL_layerOrSelection(comp, args.layer);
+  var kind = AELL_layerType(layer);
+  if (typeof layer.sourceRectAtTime !== "function") {
+    return AELL_err("A " + kind + " layer ('" + layer.name + "') renders " +
+      "no pixels, so it has no bounds — AE gives sourceRectAtTime only to " +
+      "layers with content (text, shape, solid, footage, precomp, null). " +
+      "For a camera or light read its Position with get_property instead.");
+  }
+  var t = AELL_numArg(args.time);
+  if (t === null) {
+    if (typeof args.time !== "undefined" && args.time !== null) {
+      return AELL_err("'time' must be a number of seconds; got " +
+        AELLJSON.stringify(args.time));
+    }
+    t = comp.time;
+  }
+  var extents = !!args.extents;
+  var srcT = AELL_sourceTime(layer, t);
+  var rect;
+  try {
+    rect = layer.sourceRectAtTime(srcT, extents);
+  } catch (eR) {
+    return AELL_err("AE could not measure '" + layer.name + "' at " +
+      AELL_secs(t) + ": " + (eR.message || eR));
+  }
+  var w = AELL_r3(rect.width), h = AELL_r3(rect.height);
+  var out = {
+    layer: layer.name, layerType: kind, time: AELL_r3(t),
+    extents: extents,
+    source: { left: AELL_r3(rect.left), top: AELL_r3(rect.top),
+              right: AELL_r3(rect.left + rect.width),
+              bottom: AELL_r3(rect.top + rect.height),
+              width: w, height: h,
+              centerX: AELL_r3(rect.left + rect.width / 2),
+              centerY: AELL_r3(rect.top + rect.height / 2) },
+    compSize: [comp.width, comp.height]
+  };
+  if (AELL_r3(srcT) !== AELL_r3(t)) {
+    out.sourceTime = AELL_r3(srcT);
+    out.timeNote = "measured at source time " + AELL_secs(srcT) +
+      ", which is comp time " + AELL_secs(t) + " for this layer (it " +
+      "starts at " + AELL_secs(layer.startTime) + " and is stretched to " +
+      layer.stretch + "%)";
+  }
+  if (w === 0 && h === 0) {
+    out.empty = "this layer renders nothing at " + AELL_secs(t) +
+      (kind === "shape" ? " — the shape layer has no drawn content yet " +
+        "(add_shape_content adds some)"
+       : kind === "text" ? " — the text is empty at this time"
+       : " — check that the layer is on at this time");
+  }
+
+  // Comp space. AE's own sourcePointToComp is NOT usable here: measured
+  // 2026-08-29, it ignores a 3D layer's Z entirely, ignores the camera,
+  // and ignores a 3D PARENT's rotation, so for any 3D chain it answers
+  // with confident numbers that are not where the pixels land. The 2D
+  // math below was checked against it on 2D rigs and agrees exactly.
+  var threeD = AELL_threeDInChain(layer);
+  if (threeD.length) {
+    out.comp = null;
+    out.compBoxUnavailable = "'" + threeD[0] + "' is a 3D layer" +
+      (threeD.length > 1 ? " (as are " + threeD.slice(1).join(", ") + ")" :
+       "") + ", so where these pixels land in the frame depends on the " +
+      "camera. AE's own sourcePointToComp ignores Z, the camera and a 3D " +
+      "parent's rotation (measured), so no honest comp-space box can be " +
+      "reported. The source rect above is still exact.";
+    return AELL_okay(out);
+  }
+
+  var corners = [[rect.left, rect.top],
+                 [rect.left + rect.width, rect.top],
+                 [rect.left + rect.width, rect.top + rect.height],
+                 [rect.left, rect.top + rect.height]];
+  var mapped = [], i;
+  for (i = 0; i < corners.length; i++) {
+    mapped.push(AELL_compPoint(layer, corners[i], t));
+  }
+  var minX = mapped[0][0], maxX = mapped[0][0];
+  var minY = mapped[0][1], maxY = mapped[0][1];
+  for (i = 1; i < mapped.length; i++) {
+    if (mapped[i][0] < minX) minX = mapped[i][0];
+    if (mapped[i][0] > maxX) maxX = mapped[i][0];
+    if (mapped[i][1] < minY) minY = mapped[i][1];
+    if (mapped[i][1] > maxY) maxY = mapped[i][1];
+  }
+  out.comp = { left: AELL_r3(minX), top: AELL_r3(minY),
+               right: AELL_r3(maxX), bottom: AELL_r3(maxY),
+               width: AELL_r3(maxX - minX), height: AELL_r3(maxY - minY),
+               centerX: AELL_r3((minX + maxX) / 2),
+               centerY: AELL_r3((minY + maxY) / 2) };
+  var round = [];
+  for (i = 0; i < mapped.length; i++) {
+    round.push([AELL_r3(mapped[i][0]), AELL_r3(mapped[i][1])]);
+  }
+  out.corners = round;
+  // A rotated layer's axis-aligned box is bigger than its content; say so
+  // rather than letting a caller read comp.width as the layer's width.
+  var rotProp = layer.property("ADBE Transform Group")
+                     .property("ADBE Rotate Z");
+  var rot = Number(rotProp.valueAtTime(t, false)) % 360;
+  if (rot !== 0) {
+    out.rotated = rot;
+    out.rotatedNote = "the layer is rotated " + AELL_r3(rot) + " degrees, " +
+      "so comp.width/height describe the axis-aligned box AROUND it, not " +
+      "the layer's own size (source.width/height is that)";
+  }
+
+  var over = {};
+  if (minX < 0) over.left = AELL_r3(-minX);
+  if (minY < 0) over.top = AELL_r3(-minY);
+  if (maxX > comp.width) over.right = AELL_r3(maxX - comp.width);
+  if (maxY > comp.height) over.bottom = AELL_r3(maxY - comp.height);
+  var anyOver = false;
+  for (var side in over) { if (over.hasOwnProperty(side)) anyOver = true; }
+  if (!anyOver) {
+    out.inFrame = "fully";
+  } else if (maxX <= 0 || maxY <= 0 || minX >= comp.width ||
+             minY >= comp.height) {
+    out.inFrame = "outside";
+    out.outsideBy = over;
+  } else {
+    out.inFrame = "partly";
+    out.outsideBy = over;
+  }
+  return AELL_okay(out);
 };
 
 AELL_TOOLS.add_keyframe = function (args) {
@@ -3229,8 +3569,7 @@ AELL_TOOLS.audio_to_keyframes = function (args) {
   try {
     for (i = 0; i < silenced.length; i++) silenced[i].audioEnabled = false;
     if (range === "comp" && partial) {
-      comp.workAreaStart = 0;
-      comp.workAreaDuration = comp.duration;
+      AELL_setWorkArea(comp, 0, comp.duration);
       widened = true;
     }
     before = AELL_layerIdSet(comp);
@@ -3256,11 +3595,10 @@ AELL_TOOLS.audio_to_keyframes = function (args) {
     try { silenced[i].audioEnabled = true; } catch (eR) {}
   }
   if (widened) {
-    try {
-      comp.workAreaStart = 0;
-      comp.workAreaDuration = wasDur;
-      comp.workAreaStart = wasStart;
-    } catch (eW) {}
+    // The naive order (duration, then start) moved the user's work area
+    // one frame every time the start landed on its own old end - see
+    // AELL_setWorkArea, and the self-test step that caught it.
+    try { AELL_setWorkArea(comp, wasStart, wasDur); } catch (eW) {}
   }
   if (failure) {
     return AELL_err("AE refused the audio conversion in '" + comp.name +
@@ -4385,17 +4723,260 @@ AELL_TOOLS.delete_layer = function (args) {
   return AELL_okay({ removed: name });
 };
 
+/*
+ * Named comp resolutions. AE stores resolution as an [x, y] pair of
+ * integer DOWNSAMPLE factors; measured in AE 2026: both elements are
+ * required, each must be a whole number 1..99, and a non-uniform pair
+ * ([1, 3]) is legal. A bare number, a one-element array, a fraction, 0
+ * and -1 each throw a different raw AE message, so the tool checks
+ * before it writes and says what IS accepted.
+ */
+var AELL_RESOLUTIONS = { full: 1, half: 2, third: 3, quarter: 4 };
+
+function AELL_resolutionNames() {
+  var k, out = [];
+  for (k in AELL_RESOLUTIONS) {
+    if (AELL_RESOLUTIONS.hasOwnProperty(k)) {
+      out.push("'" + k + "' (" + AELL_RESOLUTIONS[k] + ")");
+    }
+  }
+  return out.join(", ");
+}
+
+/* "half [2, 2]" — the name when there is one, the pair always. */
+function AELL_resolutionLabel(rf) {
+  var k, name = "custom";
+  for (k in AELL_RESOLUTIONS) {
+    if (AELL_RESOLUTIONS.hasOwnProperty(k) && rf[0] === rf[1] &&
+        AELL_RESOLUTIONS[k] === rf[0]) { name = k; break; }
+  }
+  return name + " [" + rf[0] + ", " + rf[1] + "]";
+}
+
+/* What the model sent -> AE's [x, y] pair. Returns null and fills
+ * bad.why with a grounded refusal when it cannot. */
+function AELL_resolutionPair(v, bad) {
+  var pair = null, i, n, name;
+  if (AELLJSON.isArray(v)) {
+    if (v.length !== 2) {
+      bad.why = "'resolution' as an array needs exactly two values, " +
+        "[horizontal, vertical] — got " + v.length + ". Named " +
+        "resolutions: " + AELL_resolutionNames() + ".";
+      return null;
+    }
+    pair = [AELL_numArg(v[0]), AELL_numArg(v[1])];
+  } else {
+    n = AELL_numArg(v);
+    if (n !== null) {
+      pair = [n, n];
+    } else {
+      name = (typeof v === "string") ? String(v).toLowerCase() : "";
+      if (AELL_RESOLUTIONS.hasOwnProperty(name)) {
+        pair = [AELL_RESOLUTIONS[name], AELL_RESOLUTIONS[name]];
+      } else {
+        bad.why = "Unknown resolution '" + v + "'. Named resolutions: " +
+          AELL_resolutionNames() + " — or pass a whole-number downsample " +
+          "factor, or a [horizontal, vertical] pair.";
+        return null;
+      }
+    }
+  }
+  for (i = 0; i < 2; i++) {
+    if (pair[i] === null || !(pair[i] >= 1) || !(pair[i] <= 99) ||
+        Math.floor(pair[i]) !== pair[i]) {
+      bad.why = "A resolution factor is a whole number from 1 (full, " +
+        "every pixel) to 99 — got " + AELL_showValue(v) + ". Named " +
+        "resolutions: " + AELL_resolutionNames() + ".";
+      return null;
+    }
+  }
+  return pair;
+}
+
+/* AE snaps a work-area write to the comp's frame grid, silently
+ * (measured on a 24 fps comp: 0.333s reads back as exactly 8 frames,
+ * 1.7s as 41). Rounding here is what lets the tool REPORT the snap. */
+function AELL_snapFrames(t, fd) {
+  if (!(fd > 0)) return Number(t);
+  return Math.round(Number(t) / fd) * fd;
+}
+
+function AELL_secs(t) { return (Math.round(Number(t) * 1000) / 1000) + "s"; }
+
+/*
+ * Land an EXACT work area, because the obvious two writes do not.
+ * Measured in AE 2026 (a 3s/24fps comp, work area frames [0..24]):
+ * writing workAreaStart = 1s — the frame the CURRENT work area ends on —
+ * gives [23..48], one frame early and one frame long, silently. From any
+ * other state the same write is exact ([0..24] -> start 0.5 -> [12..36]).
+ * A start write otherwise keeps the DURATION and only shortens it when
+ * that would run past the end of the comp.
+ *
+ * So: widen to the whole comp FIRST (from there no requested start can
+ * collide with the end), then the start, then the duration. Measured
+ * exact from every rig tried, including the collision above. This is not
+ * only set_comp_setting's problem: audio_to_keyframes restored the
+ * user's work area with the naive order and moved it a frame every time.
+ */
+function AELL_setWorkArea(comp, start, dur) {
+  comp.workAreaStart = 0;
+  comp.workAreaDuration = comp.duration;
+  if (start > 0) comp.workAreaStart = start;
+  comp.workAreaDuration = dur;
+}
+
 AELL_TOOLS.set_comp_setting = function (args) {
   var comp = AELL_resolveComp(args.comp);
-  if (args.duration > 0) comp.duration = args.duration;
-  if (args.frameRate > 0) comp.frameRate = args.frameRate;
-  if (args.width > 0) comp.width = Math.round(args.width);
-  if (args.height > 0) comp.height = Math.round(args.height);
+  var notes = [], changed = [];
+  var wasDur = Number(comp.duration);
+  var wasWaStart = Number(comp.workAreaStart);
+  var wasWaDur = Number(comp.workAreaDuration);
+  var bad, pair, rf;
+
+  if (args.duration > 0) { comp.duration = args.duration; changed.push("duration"); }
+  if (args.frameRate > 0) { comp.frameRate = args.frameRate; changed.push("frameRate"); }
+  if (args.width > 0) { comp.width = Math.round(args.width); changed.push("width"); }
+  if (args.height > 0) { comp.height = Math.round(args.height); changed.push("height"); }
   if (AELLJSON.isArray(args.bgColor) && args.bgColor.length >= 3) {
     comp.bgColor = [args.bgColor[0], args.bgColor[1], args.bgColor[2]];
+    changed.push("bgColor");
   }
-  return AELL_okay({ name: comp.name, width: comp.width, height: comp.height,
-                     duration: comp.duration, frameRate: comp.frameRate });
+  if ((args.width > 0 || args.height > 0) && comp.numLayers > 0) {
+    notes.push("Width/height moved the CANVAS only — the " + comp.numLayers +
+      " layer(s) stayed where they were. scale_comp resizes a comp AND " +
+      "its content.");
+  }
+
+  var fd = Number(comp.frameDuration) || 0;
+  var fps = fd ? (Math.round(1 / fd * 100) / 100) : 0;
+  var compDur = Number(comp.duration);
+
+  // Shortening a comp drags the work area in with it and says nothing
+  // (measured: a work area of 0-4s on a comp cut to 2s came back 0-2s).
+  if (Math.abs(compDur - wasDur) > 0.0001 &&
+      (Math.abs(Number(comp.workAreaStart) - wasWaStart) > 0.0001 ||
+       Math.abs(Number(comp.workAreaDuration) - wasWaDur) > 0.0001)) {
+    notes.push("Re-timing the comp pulled the work area in with it: " +
+      AELL_secs(wasWaStart) + "-" + AELL_secs(wasWaStart + wasWaDur) +
+      " is now " + AELL_secs(comp.workAreaStart) + "-" +
+      AELL_secs(Number(comp.workAreaStart) +
+                Number(comp.workAreaDuration)) + ".");
+  }
+
+  var aStart = AELL_numArg(args.workAreaStart);
+  var aDur = AELL_numArg(args.workAreaDuration);
+  var aEnd = AELL_numArg(args.workAreaEnd);
+  var wantWa = args.workArea !== null && typeof args.workArea !== "undefined";
+  if (wantWa || aStart !== null || aDur !== null || aEnd !== null) {
+    var curStart = Number(comp.workAreaStart);
+    var curDur = Number(comp.workAreaDuration);
+    var start, dur, word;
+    if (wantWa) {
+      word = String(args.workArea).toLowerCase();
+      if (word !== "comp" && word !== "whole" && word !== "all" &&
+          word !== "full") {
+        return AELL_err("'workArea' takes 'comp' — reset the work area to " +
+          "the whole comp. Got '" + args.workArea + "'. For a sub-range " +
+          "pass workAreaStart with workAreaDuration or workAreaEnd, in " +
+          "seconds.");
+      }
+      start = 0;
+      dur = compDur;
+    } else {
+      if (aDur !== null && aEnd !== null) {
+        return AELL_err("Pass workAreaDuration OR workAreaEnd, not both — " +
+          "they say the same thing two ways (from " +
+          AELL_secs(aStart === null ? curStart : aStart) + ", a duration " +
+          "of " + aDur + "s ends at " +
+          AELL_secs((aStart === null ? curStart : aStart) + aDur) + ", " +
+          "not " + AELL_secs(aEnd) + ").");
+      }
+      start = (aStart === null) ? curStart : aStart;
+      if (aEnd !== null) dur = aEnd - start;
+      else if (aDur !== null) dur = aDur;
+      else dur = curDur;
+    }
+
+    var rawStart = start, rawDur = dur;
+    start = AELL_snapFrames(start, fd);
+    dur = AELL_snapFrames(dur, fd);
+    // Moving only the start onto a late frame is AE's own quiet
+    // shortening; keep the behaviour, but say it out loud.
+    var trimmed = 0;
+    if (aDur === null && aEnd === null && !wantWa && start + dur > compDur) {
+      trimmed = dur;
+      dur = AELL_snapFrames(compDur - start, fd);
+    }
+    if (start < 0) {
+      return AELL_err("A work area cannot start before 0 — got " +
+        AELL_secs(rawStart) + ".");
+    }
+    if (fd > 0 && start > compDur - fd + 0.0001) {
+      return AELL_err("Comp '" + comp.name + "' is " + AELL_secs(compDur) +
+        " long at " + fps + " fps, so its last frame starts at " +
+        AELL_secs(compDur - fd) + " — a work area cannot start at " +
+        AELL_secs(rawStart) + ".");
+    }
+    if (dur <= 0 || (fd > 0 && dur < fd - 0.0001)) {
+      return AELL_err("A work area of " + AELL_secs(rawDur) + " holds no " +
+        "frame — at " + fps + " fps the shortest one is " + AELL_secs(fd) +
+        " (one frame). AE refuses a zero-length work area outright.");
+    }
+    if (start + dur > compDur + 0.0001) {
+      return AELL_err("A work area of " + AELL_secs(rawDur) + " starting " +
+        "at " + AELL_secs(start) + " would end at " +
+        AELL_secs(start + dur) + ", past the end of comp '" + comp.name +
+        "' (" + AELL_secs(compDur) + "). The longest that fits from there " +
+        "is " + AELL_secs(compDur - start) + ".");
+    }
+    AELL_setWorkArea(comp, start, dur);
+    changed.push("workArea");
+    if (fd > 0 && Math.abs(start - rawStart) > 0.000001) {
+      notes.push("The work area start snapped to the frame grid: " +
+        AELL_secs(rawStart) + " -> " + AELL_secs(start) + " (frame " +
+        Math.round(start / fd) + " at " + fps + " fps).");
+    }
+    if (fd > 0 && !trimmed && Math.abs(dur - rawDur) > 0.000001) {
+      notes.push("The work area duration snapped to the frame grid: " +
+        AELL_secs(rawDur) + " -> " + AELL_secs(dur) + ".");
+    }
+    if (trimmed) {
+      notes.push("Moving the start to " + AELL_secs(start) + " left only " +
+        AELL_secs(dur) + " before the comp ends, so the work area is " +
+        "shorter than the " + AELL_secs(trimmed) + " it was.");
+    }
+  }
+
+  if (args.resolution !== null && typeof args.resolution !== "undefined") {
+    bad = {};
+    pair = AELL_resolutionPair(args.resolution, bad);
+    if (!pair) return AELL_err(bad.why);
+    comp.resolutionFactor = pair;
+    changed.push("resolution");
+  }
+
+  if (!changed.length) {
+    return AELL_err("set_comp_setting was given nothing to change. It " +
+      "sets: duration (seconds), frameRate, width, height, bgColor " +
+      "[r, g, b] 0..1, workAreaStart with workAreaDuration or " +
+      "workAreaEnd (seconds, or workArea: 'comp' for the whole comp), " +
+      "and resolution (" + AELL_resolutionNames() + ", or a " +
+      "[horizontal, vertical] pair).");
+  }
+
+  rf = comp.resolutionFactor;
+  var out = { name: comp.name, width: comp.width, height: comp.height,
+              duration: comp.duration, frameRate: comp.frameRate,
+              bgColor: [comp.bgColor[0], comp.bgColor[1], comp.bgColor[2]],
+              workAreaStart: Number(comp.workAreaStart),
+              workAreaDuration: Number(comp.workAreaDuration),
+              workArea: AELL_secs(comp.workAreaStart) + "-" +
+                        AELL_secs(Number(comp.workAreaStart) +
+                                  Number(comp.workAreaDuration)),
+              resolution: AELL_resolutionLabel(rf),
+              changed: changed.join(", ") };
+  if (notes.length) out.note = notes.join(" ");
+  return AELL_okay(out);
 };
 
 /* Compare a written value with what AE read back. Tolerant of the
@@ -6203,6 +6784,95 @@ AELL_TOOLS.set_layer_3d = function (args) {
   return AELL_okay(out);
 };
 
+/* MEASURED in AE 2026 (26.3x87) -- the two ways to set a parent do the
+ * OPPOSITE of what the names suggest, and this tool had them the wrong
+ * way round from the day it shipped:
+ *
+ *  - `L.parent = p` is the pick-whip. AE REWRITES the child's transform
+ *    so nothing moves on screen: a child at [400,300] under a parent
+ *    whose layer origin sits at [50,50] reads back [350,250]. Scale and
+ *    Rotation are compensated too (a 200%/45deg parent left the child
+ *    50%/-45), Z included, and EVERY keyframe is rewritten, not just the
+ *    current value.
+ *  - `L.setParentWithJump(p)` leaves every value alone, so the layer
+ *    JUMPS by the parent's transform.
+ *
+ * Unparenting obeys the same rule: `.parent = null` restores comp-space
+ * values, `setParentWithJump(null)` leaves the child where the parent
+ * had been putting it.
+ *
+ * So keepPosition (the default) is `.parent =`, NOT setParentWithJump.
+ * The old code chose setParentWithJump for keepPosition and then
+ * reported "Visual positions preserved" over the top of the jump. */
+
+/* How many keyframes AE is about to rewrite on this layer. Only the
+ * properties parenting compensates are counted; a layer with none gets
+ * no note. Failures here are never fatal -- this is reporting. */
+/* The transform properties AE's parent compensation writes, with the
+ * names a user would recognise. */
+var AELL_XFORM_PROPS = [
+  ["ADBE Anchor Point", "Anchor Point"], ["ADBE Position", "Position"],
+  ["ADBE Scale", "Scale"], ["ADBE Rotate Z", "Rotation"],
+  ["ADBE Rotate X", "X Rotation"], ["ADBE Rotate Y", "Y Rotation"],
+  ["ADBE Orientation", "Orientation"]
+];
+
+/* Which of a layer's transform properties MOVE over time. Keyframes and
+ * expressions both count: probe F used an expression with zero keys and
+ * the parent travelled 400 px anyway, which the old key-count accounting
+ * could never have seen. */
+function AELL_animatedXform(layer) {
+  var out = [], i, p, grp;
+  try { grp = layer.property("ADBE Transform Group"); } catch (eG) { return out; }
+  if (!grp) return out;
+  for (i = 0; i < AELL_XFORM_PROPS.length; i++) {
+    try {
+      p = grp.property(AELL_XFORM_PROPS[i][0]);
+      if (!p) continue;
+      if (p.numKeys > 0) {
+        out.push(AELL_XFORM_PROPS[i][1] + " (" + p.numKeys + " keys)");
+      } else if (p.expressionEnabled && p.expression) {
+        out.push(AELL_XFORM_PROPS[i][1] + " (expression)");
+      }
+    } catch (eP) {}
+  }
+  return out;
+}
+
+/* ...and the same question for a layer AND everything it hangs from: a
+ * still parent bolted to a moving grandparent moves in comp space, so
+ * the compensation is just as time-local. Depth-capped; AE forbids
+ * cycles, but an unattended walk should not depend on that. */
+function AELL_movingChain(layer) {
+  var out = [], L = layer, hops = 0, a, nx;
+  while (L && hops < 30) {
+    a = AELL_animatedXform(L);
+    if (a.length) out.push(L.name + ": " + a.join(", "));
+    nx = null;
+    try { nx = L.parent; } catch (eN) { nx = null; }
+    L = nx;
+    hops++;
+  }
+  return out;
+}
+
+function AELL_parentKeyCount(layer) {
+  var names = ["ADBE Position", "ADBE Scale", "ADBE Rotate Z",
+               "ADBE Rotate X", "ADBE Rotate Y", "ADBE Orientation"];
+  var n = 0, i, p;
+  try {
+    var grp = layer.property("ADBE Transform Group");
+    if (!grp) return 0;
+    for (i = 0; i < names.length; i++) {
+      try {
+        p = grp.property(names[i]);
+        if (p && p.numKeys) n += p.numKeys;
+      } catch (eP) {}
+    }
+  } catch (eG) { return 0; }
+  return n;
+}
+
 AELL_TOOLS.set_layer_parent = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var targets = [];
@@ -6226,8 +6896,61 @@ AELL_TOOLS.set_layer_parent = function (args) {
                  args.parent === "" ||
                  String(args.parent).toLowerCase() === "none";
   var parent = clearing ? null : AELL_resolveLayer(comp, args.parent);
-  var jump = args.keepPosition !== false;   // default: no visual jump
-  var done = [], skipped = [];
+  var keep = args.keepPosition !== false;   // default: no visual jump
+
+  /* AE computes the compensation ONCE, from the parent's transform at
+   * the PLAYHEAD (probe G, 2026-08-29: the same rig parented at t=1
+   * instead of t=0 came out with different numbers and a different frame
+   * left standing still). The playhead is wherever the user left it, so
+   * the caller gets to pin the frame that must not move. */
+  var atTime = null, n;
+  if (args.atFrame !== null && typeof args.atFrame !== "undefined" &&
+      args.atFrame !== "") {
+    n = Number(args.atFrame);
+    if (isNaN(n)) {
+      return AELL_err("atFrame must be a frame number; got " +
+                      AELL_showValue(args.atFrame));
+    }
+    atTime = n / (comp.frameRate || 1);
+  } else if (args.atTime !== null && typeof args.atTime !== "undefined" &&
+             args.atTime !== "") {
+    n = Number(args.atTime);
+    if (isNaN(n)) {
+      return AELL_err("atTime must be a number of seconds; got " +
+                      AELL_showValue(args.atTime));
+    }
+    atTime = n;
+  }
+  if (atTime !== null && !keep) {
+    return AELL_err("atTime/atFrame only means something when the layer " +
+      "is being kept still. keepPosition:false leaves every value alone, " +
+      "so there is no frame to compensate at -- drop one of the two.");
+  }
+  if (atTime !== null && (atTime < 0 || atTime > comp.duration)) {
+    return AELL_err("atTime " + atTime + "s is outside \"" + comp.name +
+      "\", which runs 0 to " + comp.duration + "s at " + comp.frameRate +
+      " fps");
+  }
+
+  var done = [], skipped = [], rekeyed = [], keysTotal = 0;
+  var movers = [], m;
+  /* Whose motion makes the compensation time-local: the parent being
+   * joined, or -- when unparenting -- the parent being left. */
+  function noteMover(who) {
+    var lines = who ? AELL_movingChain(who) : [], q, r, seen;
+    for (q = 0; q < lines.length; q++) {
+      seen = false;
+      for (r = 0; r < movers.length; r++) {
+        if (movers[r] === lines[q]) { seen = true; break; }
+      }
+      if (!seen) movers.push(lines[q]);
+    }
+  }
+
+  var prevTime = comp.time;
+  if (atTime !== null) comp.time = atTime;
+  var usedTime = comp.time;   // AE snaps to a frame; report what it took
+
   for (i = 0; i < targets.length; i++) {
     var L = targets[i];
     if (parent && L === parent) {
@@ -6235,20 +6958,85 @@ AELL_TOOLS.set_layer_parent = function (args) {
       continue;
     }
     try {
-      if (jump && typeof L.setParentWithJump === "function") {
-        L.setParentWithJump(parent);
+      var nk = keep ? AELL_parentKeyCount(L) : 0;
+      if (keep) {
+        if (clearing) noteMover(L.parent);   // read it BEFORE it is gone
+        L.parent = parent;              // AE compensates; nothing moves
+      } else if (typeof L.setParentWithJump === "function") {
+        L.setParentWithJump(parent);    // values kept; the layer jumps
       } else {
-        L.parent = parent;
+        skipped.push(L.name + " (this After Effects build has no " +
+                     "setParentWithJump, so keepPosition:false cannot " +
+                     "be honoured -- omit it to keep the layer still)");
+        continue;
       }
       done.push(L.name);
+      if (nk > 0) {
+        rekeyed.push(L.name + " (" + nk + ")");
+        keysTotal += nk;
+      }
     } catch (e) {
       skipped.push(L.name + " (" + (e.message || e) + ")");
     }
   }
-  return AELL_okay({ parent: parent ? parent.name : "(none)",
+  if (keep && !clearing && done.length) noteMover(parent);
+  comp.time = prevTime;
+
+  var out = { parent: parent ? parent.name : "(none)",
     parented: done.join(", ") || "(none)",
     skipped: skipped.join("; "),
-    note: jump ? "Visual positions preserved" : "" });
+    keepPosition: keep,
+    note: keep
+      ? (clearing
+          ? "Unparented with no visual jump: AE rewrote each layer's " +
+            "Position/Scale/Rotation back into comp space, so the " +
+            "numbers changed and the picture did not."
+          : "No visual jump: AE rewrote each layer's Position/Scale/" +
+            "Rotation into the parent's space, so those values now read " +
+            "differently from before. Read them back rather than " +
+            "assuming the old ones.")
+      : (clearing
+          ? "keepPosition:false -- values were left alone, so each layer " +
+            "JUMPED to wherever its raw transform puts it in comp space."
+          : "keepPosition:false -- values were left alone, so each layer " +
+            "JUMPED by the parent's transform.") };
+  if (rekeyed.length) {
+    out.keyframesRewritten = rekeyed.join("; ");
+    out.keyframesNote = "AE rewrote all " + keysTotal + " transform " +
+      "keyframe(s) on these layers, not just the current value; the old " +
+      "numbers are gone.";
+  }
+  if (keep) {
+    out.compensatedAt = AELL_r3(usedTime) + "s (frame " +
+      Math.round(usedTime * (comp.frameRate || 1)) + ")" +
+      (atTime === null ? ", the playhead where it stood" : ", as asked");
+  }
+  if (movers.length) {
+    /* Measured 2026-08-29 (probe D/E/F): a still layer parented to a
+     * 2-key parent stayed put at the compensation frame and was 400 px
+     * away two seconds later, and a keyframed child came out travelling
+     * at twice its old speed. "Nothing moved" is true at ONE frame. */
+    out.parentAnimated = movers.join("; ");
+    out.parentAnimatedNote = (clearing
+      ? "The parent it left MOVES over time. AE compensates once, at " +
+        out.compensatedAt.split(",")[0] + ", so the layer keeps the " +
+        "position it had THERE and loses the motion the parent was " +
+        "giving it at every other frame."
+      : "That parent MOVES over time. AE compensates once, at " +
+        out.compensatedAt.split(",")[0] + ", so the layer sits exactly " +
+        "where it was at that frame and travels with the parent " +
+        "everywhere else -- this is NOT a jump-free link across the " +
+        "whole timeline.") +
+      " Pass atTime/atFrame to choose the frame that must not move" +
+      (clearing ? "." : ", or keepPosition:false to leave the numbers " +
+        "alone and let the layer ride the parent.");
+    if (rekeyed.length) {
+      out.parentAnimatedNote += " These layers have keyframes of their " +
+        "own, which now play inside that moving space, so their MOTION " +
+        "changed, not just their numbers.";
+    }
+  }
+  return AELL_okay(out);
 };
 
 /* ---------------------------------------------------- render queue
@@ -6382,14 +7170,15 @@ AELL_TOOLS.list_render_templates = function (args) {
  * way it can be wrong ends in either a wedged AE or bytes in a folder
  * nobody meant. So it is checked to destruction before anything is
  * queued. */
-function AELL_rqCheckOutput(raw, overwrite) {
+function AELL_rqCheckOutput(raw, overwrite, argName, existsWhy) {
+  var arg = argName || "output";
   if (raw === null || typeof raw === "undefined" || raw === "") {
-    throw new Error("'output' is required - an ABSOLUTE file path to " +
-      "render to, e.g. \"C:/renders/shot.avi\".");
+    throw new Error("'" + arg + "' is required - an ABSOLUTE file path to " +
+      "write to, e.g. \"C:/renders/shot.avi\".");
   }
   var path = String(raw);
   if (!/^[a-zA-Z]:[\\\/]/.test(path) && path.indexOf("\\\\") !== 0) {
-    throw new Error("'output' must be an ABSOLUTE path (got \"" + path +
+    throw new Error("'" + arg + "' must be an ABSOLUTE path (got \"" + path +
       "\"). AE resolves a relative path against its own working " +
       "directory, not the project.");
   }
@@ -6413,8 +7202,9 @@ function AELL_rqCheckOutput(raw, overwrite) {
   if (file.exists && !overwrite) {
     throw new Error("Output file already exists: " + file.fsName + " (" +
       file.length + " bytes). Pass {overwrite: true} to replace it, or " +
-      "choose another path. (Rendering onto an existing file without " +
-      "this raises a modal dialog that blocks After Effects.)");
+      "choose another path. " + (existsWhy ||
+      "(Rendering onto an existing file without this raises a modal " +
+      "dialog that blocks After Effects.)"));
   }
   return file;
 }
@@ -6552,6 +7342,303 @@ AELL_TOOLS.render_comp = function (args) {
   return AELL_okay(result);
 };
 
+/*
+ * CAPTIONS (WORKPLAN 6.1 Pass C) — the AE half of speech-to-captions.
+ *
+ * The panel side (extension/js/whisper.js + the transcribe_to_captions
+ * panel tool) renders the comp's audio with render_comp_audio below,
+ * hands the file to whisper.cpp, and brings the segments back here.
+ * Everything AE-shaped lives in these two tools so the self-test can
+ * exercise it without a speech model installed.
+ *
+ * Measured in AE 2026 (probe, 2026-08-29). Five facts, and four of them
+ * are silent losses:
+ *
+ *  - A comp with NO audio layer still renders a full, valid, audio-only
+ *    AIFF: status DONE, 772 674 bytes of digital silence, no warning.
+ *    Two seconds of silence transcribes as the word "You" (WORKPLAN 6.1
+ *    Pass B), so the honest-looking end of that pipeline is a caption
+ *    layer reading "You" over a comp nobody spoke in. The refusal has to
+ *    happen HERE, before the render, because nothing downstream can tell
+ *    that file apart from a real one.
+ *  - `layer.inPoint` is a SLIDE, not a trim: it drags outPoint with it
+ *    and preserves the duration. A fresh text layer in a 5 s comp reads
+ *    in=0 out=5; setting inPoint=2 reads back in=2 **out=7**. So in is
+ *    always set BEFORE out — the obvious other order leaves every
+ *    caption the wrong length, and AE says nothing.
+ *  - An INVERTED span is accepted in silence. in=2 then out=1 reads back
+ *    in=2 out=1: a layer of negative duration that never appears on the
+ *    timeline. Same for a zero-length span (in=1, out=1).
+ *  - inPoint/outPoint QUANTIZE to AE's internal time base, not to the
+ *    frame grid: 0.3333 reads back 0.33329264322917, 1.7777 reads back
+ *    1.7777099609375. Anything comparing these needs a tolerance.
+ *  - addText names the layer after its own text, so a transcript makes
+ *    layers called "this is quite a long caption line that goes on".
+ *    Captions are named and numbered instead.
+ */
+
+/* Which of this machine's output-module templates writes AUDIO ONLY?
+ * The names differ per install (this machine ships exactly one, "AIFF
+ * 48kHz"), so it is matched by format rather than hard-coded, lossless
+ * first. whisper.cpp decodes AIFF as happily as WAV — measured, it goes
+ * through miniaudio, so no conversion step is needed. */
+function AELL_audioTemplate(list) {
+  var wants = [/(^|[^a-z])wav([^a-z]|$)/i, /(^|[^a-z])aiff?([^a-z]|$)/i,
+               /(^|[^a-z])mp3([^a-z]|$)/i, /audio[- ]?only/i];
+  var i, j;
+  for (i = 0; i < wants.length; i++) {
+    for (j = 0; j < list.length; j++) {
+      if (/^_HIDDEN/.test(list[j])) continue;
+      if (wants[i].test(String(list[j]))) return list[j];
+    }
+  }
+  return "";
+}
+
+AELL_TOOLS.render_comp_audio = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  var i;
+
+  // The comp's STATE is checked before anything is queued, because a
+  // silent render succeeds and there is no way to tell it apart later.
+  var audio = AELL_a2kAudioLayers(comp);
+  if (audio.length === 0) {
+    var names = [];
+    for (i = 1; i <= comp.numLayers && names.length < 15; i++) {
+      names.push(comp.layer(i).name);
+    }
+    return AELL_err("No layer in '" + comp.name + "' has audio. AE would " +
+      "still render a full file of SILENCE and report DONE, and a " +
+      "transcriber hears the word \"You\" in silence — so this refuses " +
+      "rather than hand back something that looks like a result. Layers " +
+      "here: " + (names.join(", ") || "(none)") + ". Import an audio or " +
+      "video file with import_file and add it to the comp first.");
+  }
+  var audible = [], muted = [];
+  for (i = 0; i < audio.length; i++) {
+    if (AELL_audioOn(audio[i])) audible.push(audio[i]);
+    else muted.push(audio[i]);
+  }
+  if (audible.length === 0) {
+    return AELL_err("Every audio layer in '" + comp.name + "' is muted (" +
+      AELL_layerNamesOf(muted) + "), so the render would be silence. " +
+      "Un-mute one first.");
+  }
+
+  var tmpl = AELL_rqTemplates();
+  var picked = "";
+  if (args.template) {
+    picked = AELL_rqPickTemplate(tmpl.outputModules, args.template,
+                                 "output-module");
+  } else {
+    picked = AELL_audioTemplate(tmpl.outputModules);
+    if (!picked) {
+      var offer = [];
+      for (i = 0; i < tmpl.outputModules.length; i++) {
+        if (!/^_HIDDEN/.test(tmpl.outputModules[i])) {
+          offer.push(tmpl.outputModules[i]);
+        }
+      }
+      return AELL_err("No audio-only output-module template is installed, " +
+        "so AE has nothing to render the sound to on its own. Installed: " +
+        offer.join(", ") + ". Pass one of those as {template} if you know " +
+        "it writes audio, or add an AIFF/WAV output module in AE's " +
+        "Output Module Template editor.");
+    }
+  }
+
+  // render_comp already owns everything else a render needs -- holding
+  // back the user's queued items, the overwrite refusal that otherwise
+  // wedges AE on a modal, the extension AE forces on the path, and
+  // polling for the bytes. Calling it is the point: a second copy of
+  // that would be a second thing to get wrong.
+  var r = AELL_TOOLS.render_comp({
+    comp: args.comp, output: args.output, template: picked,
+    overwrite: args.overwrite, startTime: args.startTime,
+    durationSeconds: args.durationSeconds, frames: args.frames
+  });
+  if (!r.ok) return r;
+  r.data.audioLayers = AELL_layerNamesOf(audible);
+  if (muted.length) {
+    r.data.mutedLayers = AELL_layerNamesOf(muted) +
+      " (muted, so not in the mix)";
+  }
+  return r;
+};
+
+/* One caption's worth of validated numbers, or a thrown grounded error.
+ * Every segment is checked BEFORE any layer is made: half a transcript
+ * on the timeline plus an error is worse than an error. */
+function AELL_capSegment(raw, n, compDur) {
+  var where = "segment " + n;
+  if (!raw || typeof raw !== "object") {
+    throw new Error(where + " is not an object — each entry of " +
+      "'segments' must be {start: seconds, end: seconds, text: \"...\"}. " +
+      "Got " + AELL_showValue(raw) + ".");
+  }
+  var start = AELL_numArg(raw.start);
+  var end = AELL_numArg(raw.end);
+  if (start === null) {
+    throw new Error(where + ": 'start' must be a number of seconds — got " +
+      AELL_showValue(raw.start) + ".");
+  }
+  if (end === null) {
+    throw new Error(where + ": 'end' must be a number of seconds — got " +
+      AELL_showValue(raw.end) + ".");
+  }
+  if (start < 0) {
+    throw new Error(where + ": 'start' is " + start + "s. A caption before " +
+      "the start of the comp is never visible.");
+  }
+  if (end <= start) {
+    throw new Error(where + ": end (" + end + "s) is not after start (" +
+      start + "s). AE accepts that silently — the layer exists with zero " +
+      "or negative duration and never appears on the timeline — so it is " +
+      "refused here instead.");
+  }
+  var text = raw.text;
+  if (typeof text !== "string" || !AELL_trim(text)) {
+    throw new Error(where + ": 'text' must be a non-empty string — got " +
+      AELL_showValue(raw.text) + ".");
+  }
+  return { start: start, end: end, text: AELL_trim(text),
+           past: end > compDur + 0.0001 };
+}
+
+function AELL_trim(s) {
+  return String(s).replace(/^\s+/, "").replace(/\s+$/, "");
+}
+
+AELL_TOOLS.add_captions = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  var i;
+
+  var as = String(args.as || "text").toLowerCase();
+  if (as !== "text" && as !== "markers") {
+    return AELL_err("'as' must be 'text' (a text layer per caption, the " +
+      "default) or 'markers' (one comp/layer marker per caption) — got " +
+      AELL_showValue(args.as) + ".");
+  }
+  // 'layer' names where MARKERS go and means nothing to a text caption.
+  // Refusing it is what stops for_each_layer {tool: "add_captions"} from
+  // silently building one whole transcript per selected layer.
+  if (as === "text" && args.layer !== null &&
+      typeof args.layer !== "undefined" && args.layer !== "") {
+    return AELL_err("'layer' only applies to {as: 'markers'} — it is the " +
+      "layer the markers land on. Text captions are new layers of their " +
+      "own, so there is nothing for it to mean here. Drop it, or pass " +
+      "{as: 'markers'}.");
+  }
+  var segsIn = args.segments;
+  if (!AELLJSON.isArray(segsIn) || segsIn.length === 0) {
+    return AELL_err("'segments' is required: an array of {start, end, " +
+      "text} in seconds, e.g. [{\"start\":0,\"end\":1.5,\"text\":\"hello\"}]" +
+      ". Got " + AELL_showValue(args.segments) + ".");
+  }
+  var segs = [];
+  try {
+    for (i = 0; i < segsIn.length; i++) {
+      segs.push(AELL_capSegment(segsIn[i], i + 1, comp.duration));
+    }
+  } catch (eV) {
+    return AELL_err(eV.message || String(eV));
+  }
+
+  var pastEnd = 0;
+  for (i = 0; i < segs.length; i++) if (segs[i].past) pastEnd++;
+
+  if (as === "markers") {
+    var layer = null, target, where;
+    if (args.layer !== null && typeof args.layer !== "undefined" &&
+        args.layer !== "") {
+      layer = AELL_resolveLayer(comp, args.layer);
+      target = layer.property("ADBE Marker");
+      where = "layer " + layer.name;
+    } else {
+      target = comp.markerProperty;
+      where = "comp " + comp.name;
+    }
+    // AE keeps ONE marker per exact time, so two segments starting at the
+    // same instant silently become one. Counted rather than hidden.
+    var before = target.numKeys;
+    for (i = 0; i < segs.length; i++) {
+      var mv = new MarkerValue(segs[i].text);
+      mv.duration = segs[i].end - segs[i].start;
+      target.setValueAtTime(segs[i].start, mv);
+    }
+    var addedM = target.numKeys - before;
+    var outM = { comp: comp.name, as: "markers", target: where,
+                 captions: segs.length, markersAdded: addedM,
+                 markers: target.numKeys };
+    if (addedM < segs.length) {
+      outM.collapsed = (segs.length - addedM) + " caption(s) landed on a " +
+        "time that already had a marker and REPLACED it — AE keeps one " +
+        "marker per exact time.";
+    }
+    if (pastEnd) {
+      outM.note = pastEnd + " caption(s) end past '" + comp.name + "' (" +
+        comp.duration + "s) — they exist but run off the timeline.";
+    }
+    return AELL_okay(outM);
+  }
+
+  var base = (typeof args.name === "string" && AELL_trim(args.name))
+    ? AELL_trim(args.name) : "Caption";
+  // Captions want the lower third and a centred anchor. AE's own default
+  // is the middle of the comp, left-justified, which is never what a
+  // caption wants -- so this is the default and 'position' overrides it.
+  var pos = null;
+  if (AELLJSON.isArray(args.position) && args.position.length >= 2) {
+    pos = [Number(args.position[0]), Number(args.position[1])];
+  } else {
+    pos = [comp.width / 2, Math.round(comp.height * 0.85)];
+  }
+  var just = (typeof args.justification === "string" && args.justification)
+    ? args.justification : "center";
+
+  var made = [], stuck = null, notReset = null;
+  AELL_keepSelection(comp, function () {
+    for (var k = 0; k < segs.length; k++) {
+      var t = comp.layers.addText(segs[k].text);
+      t.name = AELL_uniqueLayerName(comp, base + " " + (k + 1));
+      var reset = args.inheritStyle ? null : {};
+      var style = AELL_applyTextStyle(t, {
+        fontSize: args.fontSize, font: args.font,
+        fillColor: args.fillColor, tracking: args.tracking,
+        leading: args.leading, justification: just
+      }, reset);
+      if (reset && reset.stuck && !stuck) stuck = reset.stuck;
+      if (reset && reset.skipped && reset.skipped.length && !notReset) {
+        notReset = reset.skipped;
+      }
+      t.property("ADBE Transform Group").property("ADBE Position")
+       .setValue(pos);
+      // IN BEFORE OUT, always: inPoint drags outPoint with it.
+      t.inPoint = segs[k].start;
+      t.outPoint = segs[k].end;
+      made.push({ name: t.name, index: t.index, start: segs[k].start,
+                  end: segs[k].end, style: style });
+    }
+  });
+
+  var names = [];
+  for (i = 0; i < made.length && i < 12; i++) names.push(made[i].name);
+  var out = { comp: comp.name, as: "text", captions: made.length,
+              layers: names, position: pos, justification: just };
+  if (made.length > names.length) {
+    out.layers.push("… and " + (made.length - names.length) + " more");
+  }
+  if (pastEnd) {
+    out.note = pastEnd + " caption(s) end past '" + comp.name + "' (" +
+      comp.duration + "s) — they exist but run off the timeline. " +
+      "set_comp_setting {duration} if the comp should be longer.";
+  }
+  var stuckWarn = AELL_stuckStyleWarning(stuck);
+  if (stuckWarn) out.warning = stuckWarn;
+  if (notReset) out.notReset = notReset;
+  return AELL_okay(out);
+};
+
 AELL_TOOLS.add_to_render_queue = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var proj = app.project;
@@ -6608,6 +7695,340 @@ AELL_TOOLS.add_to_render_queue = function (args) {
   if (already) {
     out.warning = comp.name + " was already in the render queue " +
       already + " time(s); this adds another, and both would render.";
+  }
+  return AELL_okay(out);
+};
+
+// ------------------------------------------------ frame round-trip (5.8)
+//
+// comp -> PNG -> layer. This is the bridge every image/video generator
+// stands on: something has to get a frame OUT of a comp and a file back
+// IN as a layer, and until now the panel could do neither (import_file
+// stops at the project panel). Both halves are built on measurements
+// from three probe rounds against real AE 2026 (WORKPLAN-LOG
+// 2026-08-28/29), and almost every line below is one of AE's silent
+// answers turned into a spoken one.
+
+/* What is ACTUALLY in the file AE just wrote. The dimensions of a
+ * snapshot are the one thing the caller cannot infer: a comp sitting at
+ * Half resolution writes a half-size frame and AE says nothing at all.
+ * PNG carries them in its first 24 bytes (8-byte signature, then the
+ * IHDR chunk), so this reads them rather than repeating the arithmetic
+ * and hoping. Returns null for anything that is not a PNG. */
+function AELL_pngInfo(file) {
+  var f = new File(file.fsName), head = null;
+  try {
+    f.encoding = "BINARY";
+    if (!f.open("r")) return null;
+    head = f.read(24);
+    f.close();
+  } catch (e) {
+    try { f.close(); } catch (eC) {}
+    return null;
+  }
+  if (!head || head.length < 24) return null;
+  if (head.charCodeAt(1) !== 80 || head.charCodeAt(2) !== 78 ||
+      head.charCodeAt(3) !== 71) return null;        // not a PNG signature
+  // Big-endian, by multiplication: ExtendScript's << is signed 32-bit.
+  var w = (head.charCodeAt(16) * 16777216) + (head.charCodeAt(17) * 65536) +
+          (head.charCodeAt(18) * 256) + head.charCodeAt(19);
+  var h = (head.charCodeAt(20) * 16777216) + (head.charCodeAt(21) * 65536) +
+          (head.charCodeAt(22) * 256) + head.charCodeAt(23);
+  return { width: w, height: h };
+}
+
+AELL_TOOLS.snapshot_frame = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  var overwrite = args.overwrite === true || args.overwrite === "true";
+
+  var wanted = (args.path === null || typeof args.path === "undefined" ||
+                args.path === "") ? args.output : args.path;
+  if (wanted === null || typeof wanted === "undefined" || wanted === "") {
+    return AELL_err("'path' is required - an ABSOLUTE .png path to write " +
+      "the frame to, e.g. \"C:/frames/shot.png\". list_render_templates " +
+      "reports a writable folder if this is a throwaway.");
+  }
+
+  // AE writes PNG BYTES into whatever name it is handed and never
+  // mentions it - measured: a frame saved as "wrongext.jpg" is a PNG
+  // called .jpg, and no .png appears beside it. Correct the extension
+  // BEFORE the exists check, so the check is about the file that will
+  // really be written.
+  var askedExt = AELL_extOf(wanted);
+  var pngPath = String(wanted), extNote = "";
+  if (askedExt !== "png") {
+    pngPath = askedExt
+      ? pngPath.slice(0, pngPath.length - askedExt.length - 1) + ".png"
+      : pngPath + ".png";
+    extNote = "AE writes PNG bytes whatever the file is called, so the " +
+      "path was corrected to \"" + pngPath + "\" - a frame saved as ." +
+      askedExt + " would be a PNG that no ." + askedExt + " reader opens.";
+  }
+
+  // Same absolute-path and missing-folder checks as a render (a missing
+  // folder is a SILENT no-op here: saveFrameToPng returns normally and
+  // writes nothing). The overwrite rule is the tool's own: unlike a
+  // render, saveFrameToPng overwrites without a dialog, so the hazard
+  // is a quietly destroyed file rather than a wedged AE.
+  var file = AELL_rqCheckOutput(pngPath, overwrite, "path",
+    "(saveFrameToPng overwrites silently - no dialog, and no undo.)");
+
+  var t = AELL_numArg(args.time);
+  if (t === null && args.time !== null && typeof args.time !== "undefined" &&
+      args.time !== "") {
+    return AELL_err("'time' must be a number of seconds (got \"" +
+      args.time + "\").");
+  }
+  var atCompTime = false;
+  if (t === null) { t = comp.time; atCompTime = true; }
+  // AE CLAMPS an out-of-range time and writes a BLANK frame rather than
+  // complaining - measured: time 99 and time -5 on the same 4s comp both
+  // produced 378-byte frames while the real one was 644. A blank PNG
+  // nobody is told about is exactly the silent loss this panel exists
+  // to stop.
+  if (t < 0 || t > comp.duration) {
+    return AELL_err("'time' " + t + "s is outside '" + comp.name +
+      "' (0 to " + comp.duration + "s). AE does not refuse this - it " +
+      "CLAMPS to the nearest end and writes a BLANK frame, so it is " +
+      "refused here instead.");
+  }
+  var frame = Math.round(t * comp.frameRate);
+  var lastFrame = Math.round(comp.duration * comp.frameRate) - 1;
+  if (frame > lastFrame) frame = lastFrame;          // duration is exclusive
+  if (frame < 0) frame = 0;
+  t = frame / comp.frameRate;
+
+  var res = args.resolution ? String(args.resolution).toLowerCase() : "full";
+  if (res !== "full" && res !== "comp") {
+    return AELL_err("'resolution' must be 'full' (default - the comp's " +
+      "real pixel size) or 'comp' (whatever downsample the comp is set " +
+      "to). Got: " + args.resolution);
+  }
+  // A comp left at Half/Third resolution writes a frame that size and
+  // says nothing (measured: a 320x240 comp at factor [2,2] wrote a
+  // 160x120 PNG). Someone asking for a snapshot means the picture, not
+  // the preview quality, so the default overrides the downsample and
+  // SAYS it did. The restore runs whatever happens - a throw must not
+  // hand the user a comp switched to Full behind their back.
+  var priorFactor = null;
+  try {
+    var rf = comp.resolutionFactor;
+    if (res === "full" && rf && (rf[0] !== 1 || rf[1] !== 1)) {
+      priorFactor = [rf[0], rf[1]];
+      comp.resolutionFactor = [1, 1];
+    }
+  } catch (eRf) { priorFactor = null; }
+
+  var thrown = null;
+  try {
+    // A String path THROWS ("is not a File or Folder object"), so this
+    // is always a File.
+    comp.saveFrameToPng(t, file);
+  } catch (eS) {
+    thrown = eS;
+  }
+  if (priorFactor) {
+    try { comp.resolutionFactor = priorFactor; } catch (eBack) {}
+  }
+  if (thrown) {
+    return AELL_err("Could not write the frame: " +
+      (thrown.message || thrown));
+  }
+
+  // AE hides a file it has just written for ~300 ms, so one look would
+  // report a good snapshot as a failure (the same fact render_comp
+  // polls for).
+  var bytes = AELL_rqSettle(file, 10);
+  if (bytes < 0) {
+    return AELL_err("After Effects reported no error but no file appeared " +
+      "at " + file.fsName + ". Check that the folder is writable.");
+  }
+
+  var info = AELL_pngInfo(file);
+  var out = {
+    comp: comp.name,
+    path: file.fsName,
+    time: t,
+    frame: frame,
+    bytes: bytes,
+    width: info ? info.width : comp.width,
+    height: info ? info.height : comp.height,
+    compSize: comp.width + "x" + comp.height,
+    next: "import_as_layer {path: \"" + file.fsName.replace(/\\/g, "/") +
+          "\"} places this PNG back into a comp as a layer."
+  };
+  if (extNote) out.pathNote = extNote;
+  if (atCompTime) {
+    out.timeNote = "No 'time' given, so the comp's current time (" + t +
+      "s, frame " + frame + ") was used.";
+  }
+  if (priorFactor) {
+    out.resolutionNote = "'" + comp.name + "' was set to resolution 1/" +
+      priorFactor[0] + " - it was snapshotted at FULL size and put back " +
+      "the way it was. Pass {resolution: \"comp\"} to keep the downsample.";
+  }
+  if (info && (info.width !== comp.width || info.height !== comp.height)) {
+    out.warning = "The PNG is " + info.width + "x" + info.height +
+      ", not the comp's " + comp.width + "x" + comp.height +
+      " - the comp is downsampled and {resolution: \"comp\"} kept it.";
+  }
+  // Guide layers are NOT rendered into a snapshot (measured: identical
+  // byte counts with and without a full-frame guide layer on top).
+  return AELL_okay(out);
+};
+
+AELL_TOOLS.import_as_layer = function (args) {
+  var raw = (args.path === null || typeof args.path === "undefined" ||
+             args.path === "") ? args.file : args.path;
+  if (raw === null || typeof raw === "undefined" || raw === "") {
+    return AELL_err("'path' is required - the ABSOLUTE path of an image, " +
+      "video or audio file to place in a comp.");
+  }
+  var p = String(raw);
+  if (!/^[a-zA-Z]:[\\\/]/.test(p) && p.indexOf("\\\\") !== 0) {
+    return AELL_err("'path' must be ABSOLUTE (got \"" + p + "\"). AE " +
+      "resolves a relative path against its own working directory, not " +
+      "the project folder.");
+  }
+  var file = new File(p);
+  if (!file.exists) {
+    return AELL_err("File not found: " + file.fsName +
+      ". Check the path - nothing was imported.");
+  }
+  var comp = AELL_resolveComp(args.comp);
+  var fit = args.fit ? String(args.fit).toLowerCase() : "fit";
+  if (fit === "center") fit = "none";
+  if (fit !== "fit" && fit !== "fill" && fit !== "stretch" &&
+      fit !== "width" && fit !== "height" && fit !== "none") {
+    return AELL_err("'fit' must be one of: fit (contain, default), fill " +
+      "(cover, crops), stretch (fills exactly, distorts - what AE's own " +
+      "\"Fit to Comp\" does), width, height, none (100%; 'center' means " +
+      "the same). Got: " + args.fit);
+  }
+
+  // AE imports the same file again as a SECOND project item and says
+  // nothing (measured: one path, two ids), so a loop that regenerates
+  // frames fills the project with duplicates and every later name
+  // lookup becomes a coin toss. Reuse what is already there.
+  var proj = app.project, i, it, src, fsName;
+  var existing = null, duplicates = 0;
+  for (i = 1; i <= proj.numItems; i++) {
+    it = proj.item(i);
+    src = null;
+    try { src = it.mainSource; } catch (eM) { src = null; }
+    // Comps answer `undefined` and solids hold a SolidSource: neither
+    // has a file, and asking one for a file throws.
+    if (!src || !(src instanceof FileSource)) continue;
+    fsName = null;
+    try { fsName = src.file.fsName; } catch (eF) { fsName = null; }
+    if (fsName && fsName.toLowerCase() === file.fsName.toLowerCase()) {
+      if (existing) duplicates++; else existing = it;
+    }
+  }
+
+  var item = existing, reused = false, reloaded = false;
+  if (item) {
+    reused = true;
+    // The bytes on disk can be NEWER than the frames AE cached - a
+    // generator writing the same path over and over is the whole point
+    // of this tool. reload() re-reads the file and keeps the item id
+    // (measured), so every layer already using it picks the new picture
+    // up.
+    try { item.mainSource.reload(); reloaded = true; } catch (eRl) {}
+  } else {
+    try {
+      item = proj.importFile(new ImportOptions(file));
+    } catch (eI) {
+      // canImportAs() is no help here: it answered TRUE for a .txt file
+      // that importFile then refused outright (measured), so the throw
+      // is the only honest signal.
+      return AELL_err("After Effects could not import " + file.fsName +
+        ": " + (eI.message || eI) + ". It reads images (png, jpg, tif, " +
+        "exr, psd), video (mov, mp4, avi) and audio (wav, mp3, aif); a " +
+        "file with the right extension can still be refused if its " +
+        "contents are something else.");
+    }
+  }
+
+  var layer = AELL_keepSelection(comp, function () {
+    return comp.layers.add(item);
+  });
+  if (args.name) layer.name = String(args.name);
+
+  var srcW = item.width, srcH = item.height;
+  var hasPixels = srcW > 0 && srcH > 0;
+  var transform = layer.property("ADBE Transform Group");
+  var out = {
+    comp: comp.name,
+    layer: layer.name,
+    index: layer.index,
+    source: item.name,
+    sourceSize: hasPixels ? (srcW + "x" + srcH) : "(no picture)",
+    compSize: comp.width + "x" + comp.height,
+    fit: fit,
+    inPoint: layer.inPoint,
+    outPoint: layer.outPoint
+  };
+
+  if (hasPixels && fit !== "none") {
+    var srcPar = item.pixelAspect > 0 ? item.pixelAspect : 1;
+    var compPar = comp.pixelAspect > 0 ? comp.pixelAspect : 1;
+    // This arithmetic is AE's, not ours: it reproduces every value the
+    // "Fit to Comp" family of menu commands produced in the probe,
+    // INCLUDING the pixel-aspect correction on X (a 320x240 par-1
+    // source in a 720x480 par-1.2121 comp fits at 272.727 x 200, not
+    // 225 x 200). The menu commands themselves are unusable here: with
+    // no comp viewer open they silently do NOTHING - scale stayed
+    // 100,100 - so an unattended panel must do the maths itself.
+    var rx = 100 * (comp.width * compPar) / (srcW * srcPar);
+    var ry = 100 * comp.height / srcH;
+    var sx, sy;
+    if (fit === "stretch") { sx = rx; sy = ry; }
+    else if (fit === "width") { sx = rx; sy = rx; }
+    else if (fit === "height") { sx = ry; sy = ry; }
+    else if (fit === "fill") { sx = Math.max(rx, ry); sy = sx; }
+    else { sx = Math.min(rx, ry); sy = sx; }        // "fit": contain
+    var scaleProp = transform.property("ADBE Scale");
+    var cur = scaleProp.value;
+    // The scripting API pads a 2D layer's Scale to three components;
+    // hand back whatever shape it gave us.
+    scaleProp.setValue((AELLJSON.isArray(cur) && cur.length > 2)
+      ? [sx, sy, cur[2]] : [sx, sy]);
+    out.scale = [Math.round(sx * 1000) / 1000, Math.round(sy * 1000) / 1000];
+    if (srcPar !== compPar) {
+      out.pixelAspectNote = "The comp's pixel aspect (" + compPar +
+        ") differs from the footage's (" + srcPar + "), so the X scale " +
+        "is corrected for it - the same as AE's own Fit to Comp.";
+    }
+  } else if (!hasPixels) {
+    out.note = "'" + item.name + "' has no picture (audio only), so there " +
+      "was nothing to fit; it was placed as-is.";
+  }
+
+  if (AELLJSON.isArray(args.position) && args.position.length >= 2) {
+    var posProp = transform.property("ADBE Position");
+    var curPos = posProp.value;
+    posProp.setValue((AELLJSON.isArray(curPos) && curPos.length > 2)
+      ? [args.position[0], args.position[1], curPos[2]]
+      : [args.position[0], args.position[1]]);
+  }
+
+  if (reused) {
+    out.reusedExisting = true;
+    out.reuseNote = "'" + item.name + "' was already in the project for " +
+      "that file, so it was reused" +
+      (reloaded ? " and RELOADED from disk (any layer already using it " +
+                  "now shows the current file)" : "") +
+      " instead of imported a second time.";
+  }
+  if (duplicates) {
+    out.warning = "The project already holds " + (duplicates + 1) +
+      " items for this file; the first was used. clean_project or " +
+      "delete_item can clear the rest.";
+  }
+  if (item.duration === 0) {
+    out.stillNote = "A still spans the whole comp (" + layer.inPoint +
+      "s to " + layer.outPoint + "s). set_layer_timing changes that.";
   }
   return AELL_okay(out);
 };
@@ -7307,7 +8728,7 @@ AELL_TOOLS.remove_keyframes = function (args) {
  * source and fails if a tool is added without being classified here.
  */
 var AELL_PER_LAYER_LIST = [
-  "add_control", "add_keyframe", "add_marker", "add_mask",
+  "add_captions", "add_control", "add_keyframe", "add_marker", "add_mask",
   "add_shape_content", "add_text_animator", "apply_effect",
   "apply_expression_preset", "audio_to_keyframes",
   "center_anchor_point", "delete_layer", "duplicate_layer", "link_property",
@@ -7316,7 +8737,8 @@ var AELL_PER_LAYER_LIST = [
   "set_text_style", "set_track_matte", "set_transform",
   "split_layer_into_chunks"
 ];
-var AELL_PER_LAYER_READ_LIST = ["get_property", "list_properties"];
+var AELL_PER_LAYER_READ_LIST = ["get_bounds", "get_property",
+                                "list_properties"];
 var AELL_ALREADY_BATCHED_LIST = [
   "apply_keyframe_ease", "apply_preset", "distribute_property",
   "for_each_layer", "grid_layout", "precompose", "remove_keyframes",
@@ -7860,6 +9282,12 @@ var AELL_MUTATING = {
   apply_effect: true, set_effect_param: true, set_layer_timing: true,
   delete_layer: true, set_comp_setting: true, import_file: true,
   add_to_render_queue: true, add_shape_layer: true, add_mask: true,
+  // import_as_layer imports and adds a layer: ordinary edits, one
+  // Ctrl+Z. snapshot_frame is absent for render_comp's second reason
+  // (see below): it changes NOTHING that survives the call, so counting
+  // it as a mutation would let a successful snapshot arm a rollback and
+  // spend the round's one Ctrl+Z on somebody else's edit.
+  import_as_layer: true,
   // render_comp and list_render_templates are deliberately ABSENT, and
   // render_comp's absence is load-bearing rather than tidy.
   //
@@ -7911,7 +9339,11 @@ var AELL_MUTATING = {
   // (measured), so a preview still costs the user nothing.
   rename_comps: true,
   set_solid_color: true,
-  apply_preset: true
+  apply_preset: true,
+  // add_captions makes N ordinary text layers (or writes N markers) and
+  // nothing else -- one Ctrl+Z, like add_text_layer. render_comp_audio is
+  // deliberately ABSENT for render_comp's reason: it IS a render.
+  add_captions: true
 };
 
 /* Tools that must NOT run inside an undo group, whatever else is in the
@@ -7921,7 +9353,20 @@ var AELL_MUTATING = {
  * one and earn the modal again. The batch runner steps out of the group
  * for these and steps back in, so the caller's endUndoGroup still
  * balances. */
-var AELL_NO_UNDO_GROUP = { render_comp: true };
+var AELL_NO_UNDO_GROUP = {
+  render_comp: true,
+  // render_comp_audio delegates straight to render_comp, so it inherits
+  // the "Undo group mismatch" modal along with the rest of the render.
+  render_comp_audio: true,
+  // snapshot_frame is here for the SECOND half of that reasoning rather
+  // than the first. It is safe inside a group -- saveFrameToPng was
+  // measured inside three nested undo groups, followed by three more
+  // group cycles, with no "Undo group mismatch" -- but the file it
+  // writes cannot be undone by anything, so a round containing one is
+  // not honestly "one Ctrl+Z" either way, and its success must not arm
+  // AELL_maybeRollback.
+  snapshot_frame: true
+};
 
 // --------------------------------------------------------------- entry point
 
@@ -7995,7 +9440,51 @@ $.global.AELL_call = AELL_call;
  *    the viewer alive.
  *  - two full 200-layer fingerprints cost 37 ms, so the verification
  *    below can afford full fidelity over the whole project.
+ *
+ * Measured again on 2026-08-29, when "does rollback reach PROJECT ITEMS"
+ * was finally answered (it does -- addComp, duplicate, addFolder,
+ * item.remove, move_to_folder and rename all revert on the one Undo, and
+ * the shipped AELL_callBatch path was driven through each). The real
+ * finding was the other half: of 25 dimensions a mutating tool can
+ * write, AE's Undo reverted ALL 25 and the fingerprint could see only 4.
+ * The blind 21 are recorded below now. Nothing about the rollback
+ * changed; what changed is that its self-check can now fail honestly.
  */
+
+/* One switch or scalar, read defensively.
+ *
+ * A build that does not have this property, or an object that refuses it
+ * (a camera has no adjustmentLayer, a folder has no bgColor), must
+ * produce a STABLE absence -- the same string every time -- or the
+ * fingerprint stops being deterministic and every rollback reports
+ * itself as an overshoot. */
+function AELL_sigOf(obj, key) {
+  try {
+    var v = obj[key];
+    if (v === true) return "1";
+    if (v === false) return "0";
+    if (v === undefined || v === null) return "-";
+    return String(v);
+  } catch (e) { return "?"; }
+}
+
+/* Markers, cheaply.
+ *
+ * The count alone is not enough: add_marker was measured REPLACING a
+ * marker already at that time (item 5.4), so a rollback that failed to
+ * restore the old one would leave the count identical. The key TIMES go
+ * in too, capped so that a comp somebody has marked up heavily cannot
+ * turn the verification into the expensive half of the round. */
+function AELL_markerSig(mp) {
+  if (!mp) return "-";
+  var n;
+  try { n = mp.numKeys; } catch (e) { return "?"; }
+  var t = String(n), lim = (n < 50) ? n : 50, i;
+  for (i = 1; i <= lim; i++) {
+    try { t += ":" + mp.keyTime(i); } catch (e2) { t += ":?"; }
+  }
+  return t;
+}
 
 /* One layer's contribution to the fingerprint. Everything is wrapped:
  * cameras, lights and shape layers each lack some of these, and a
@@ -8023,6 +9512,41 @@ function AELL_layerSig(L, idx) {
       t += "|x" + L.property("Source Text").value.text;
     }
   } catch (e7) {}
+  // The switches and 3D-only values. Every one of these is written by a
+  // tool in AELL_MUTATING (set_layer_3d, add_marker, set_text_style,
+  // apply_preset, for_each_layer), and probe 3 on 2026-08-29 measured
+  // all of them changing WITHOUT moving the fingerprint by a byte -- 21
+  // of 25 dimensions were blind. That did not make the rollback wrong
+  // (AE's single Undo reverted every one), it made the VERIFICATION
+  // blind: an undo that failed in one of these would have been reported
+  // as a clean rollback, and an undo that overshot into the user's own
+  // last edit -- the hazard the whole design exists for -- would have
+  // been invisible whenever that edit was a switch.
+  t += "|3" + AELL_sigOf(L, "threeDLayer") +
+       AELL_sigOf(L, "shy") + AELL_sigOf(L, "locked") +
+       AELL_sigOf(L, "motionBlur") + AELL_sigOf(L, "adjustmentLayer") +
+       AELL_sigOf(L, "audioEnabled") + AELL_sigOf(L, "collapseTransformation") +
+       "|b" + AELL_sigOf(L, "blendingMode");
+  try { t += "|M" + AELL_markerSig(L.property("ADBE Marker")); }
+  catch (e8) { t += "|M?"; }
+  try {
+    var tr3 = L.property("ADBE Transform Group");
+    // 3D-only, and set_layer_3d's own documented loss. On a 2D layer AE
+    // still answers these, so they read as a stable 0 rather than as an
+    // absence -- which is the point: turning 3D off zeroes them.
+    t += "|R" + tr3.property("ADBE Rotate X").value +
+         "," + tr3.property("ADBE Rotate Y").value +
+         "," + tr3.property("ADBE Orientation").value.join(",");
+  } catch (e9) {}
+  try {
+    if (L instanceof TextLayer) {
+      var td = L.property("Source Text").value;
+      // set_text_style writes these and never touches .text, so the
+      // "|x" above cannot see any of its work.
+      t += "|X" + td.fontSize + "," + td.font + "," + td.tracking +
+           "," + td.justification;
+    }
+  } catch (e10) {}
   return t;
 }
 
@@ -8048,9 +9572,38 @@ function AELL_fingerprint() {
     try {
       if (it.parentFolder) t += "/in:" + it.parentFolder.name;
     } catch (e1) {}
+    // A solid's colour lives on the project ITEM, not on the layer --
+    // which is why set_solid_color changes every layer sharing the
+    // source, and why a fingerprint that only walked layers could not
+    // see the change at all.
+    try {
+      if (it.mainSource instanceof SolidSource) {
+        t += "/solid" + it.mainSource.color.join(",") +
+             "@" + it.width + "x" + it.height;
+      }
+    } catch (eS) {}
     if (it instanceof CompItem) {
       t += "/" + it.width + "x" + it.height + "/" + it.duration +
            "/" + it.frameRate + "/" + it.numLayers;
+      // Everything set_comp_setting can write, plus the switches beside
+      // them in AE's own Composition Settings dialog. All measured blind
+      // before this (probe 3, 2026-08-29): a rolled-back work area,
+      // background colour or preview resolution left the fingerprint
+      // byte-identical, so the verification had nothing to verify.
+      t += "/s" + AELL_sigOf(it, "pixelAspect") +
+           "," + AELL_sigOf(it, "displayStartTime") +
+           "," + AELL_sigOf(it, "workAreaStart") +
+           "," + AELL_sigOf(it, "workAreaDuration") +
+           "," + AELL_sigOf(it, "motionBlur") +
+           "," + AELL_sigOf(it, "shutterAngle") +
+           "," + AELL_sigOf(it, "shutterPhase") +
+           "," + AELL_sigOf(it, "frameBlending") +
+           "," + AELL_sigOf(it, "hideShyLayers") +
+           "," + AELL_sigOf(it, "preserveNestedFrameRate") +
+           "," + AELL_sigOf(it, "preserveNestedResolution");
+      try { t += "/bg" + it.bgColor.join(","); } catch (eB) {}
+      try { t += "/rf" + it.resolutionFactor.join(","); } catch (eR) {}
+      try { t += "/cm" + AELL_markerSig(it.markerProperty); } catch (eM) {}
       for (var j = 1; j <= it.numLayers; j++) {
         if (budget <= 0) { t += "\n (truncated)"; break; }
         budget--;

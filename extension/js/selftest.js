@@ -53,6 +53,22 @@
   // AE's Tone effect turns a plain solid into a real audio source
   // (measured: layer.hasAudio flips to true and the converter hears it).
   var AUCOMP = "AELL Self-Test Audio";
+  // And the frame round-trip rig: snapshot_frame writes FILES and
+  // import_as_layer brings project items in, so like the render rig it
+  // works in comps of its own and takes them away again.
+  // And the caption rigs. Two, for the same reason the render and frame
+  // rigs are separate: one gets a Tone effect so it has real audio to
+  // render, the other is 1920x1080 because add_captions' default
+  // position is the comp's own lower third and a 160x120 comp would
+  // prove nothing about it.
+  var CAPCOMP = "AELL Self-Test Caption Audio";
+  var CAPTEXT = "AELL Self-Test Captions";
+  var FRCOMP = "AELL Self-Test Frame";
+  var FRWIDE = "AELL Self-Test Frame Wide";
+  // And the bounds rig: it slides a layer in time, pushes one off the
+  // frame and turns another 3D, so it may not share a comp anything else
+  // is measuring.
+  var BNCOMP = "AELL Self-Test Bounds";
   var running = false;
 
   /**
@@ -766,13 +782,27 @@
         },
         check: function (d) { return d.name === "ST Cam Kid" || d.name; } },
 
+      // Read the Position back rather than assuming it: parenting with
+      // the default keepPosition makes AE REWRITE it into the rig's
+      // space (measured 2026-08-29), so the number here is not the one
+      // add_camera was given. What the later step needs is whatever it
+      // became, so that scale_comp can be shown not to touch it.
       { name: "parent it",
-        tool: "set_layer_parent",
-        args: function (ctx) {
-          return { comp: ctx.camComp, layer: "ST Cam Kid",
-                   parent: "ST Cam Rig" };
+        batch: function (ctx) {
+          return [
+            { tool: "set_layer_parent", args: { comp: ctx.camComp,
+                layer: "ST Cam Kid", parent: "ST Cam Rig" } },
+            { tool: "get_property", args: { comp: ctx.camComp,
+                layer: "ST Cam Kid", property: "Position" } }
+          ];
         },
-        check: function () { return true; } },
+        check: function (rows, ctx) {
+          if (!rows[0].ok) return rows[0].error;
+          if (!rows[1].ok) return rows[1].error;
+          ctx.camKidPos = rows[1].data.value || [];
+          return ctx.camKidPos.length >= 3 ||
+                 "position " + JSON.stringify(ctx.camKidPos);
+        } },
 
       // ---- lights in the same resize (WORKPLAN item 2 follow-up) ------
       // A light's pixel options live in Light Options, OUTSIDE the
@@ -822,13 +852,24 @@
         },
         check: function (d) { return d.name === "ST Lit Kid" || d.name; } },
 
+      // Same as the camera above: the link rewrites Position, so the
+      // "left to its parent" step compares against what it became.
       { name: "parent the light",
-        tool: "set_layer_parent",
-        args: function (ctx) {
-          return { comp: ctx.camComp, layer: "ST Lit Kid",
-                   parent: "ST Cam Rig" };
+        batch: function (ctx) {
+          return [
+            { tool: "set_layer_parent", args: { comp: ctx.camComp,
+                layer: "ST Lit Kid", parent: "ST Cam Rig" } },
+            { tool: "get_property", args: { comp: ctx.camComp,
+                layer: "ST Lit Kid", property: "Position" } }
+          ];
         },
-        check: function () { return true; } },
+        check: function (rows, ctx) {
+          if (!rows[0].ok) return rows[0].error;
+          if (!rows[1].ok) return rows[1].error;
+          ctx.litKidPos = rows[1].data.value || [];
+          return ctx.litKidPos.length >= 3 ||
+                 "position " + JSON.stringify(ctx.litKidPos);
+        } },
 
       // THE assertion that would have caught the camera regression: the
       // tool reported its own failure honestly in layersSkipped and
@@ -962,10 +1003,15 @@
           return { comp: ctx.camComp, layer: "ST Lit Kid",
                    property: "Position" };
         },
-        check: function (d) {
-          var v = d.value || [];
-          return (Math.abs(v[0] - 400) < 0.6 && Math.abs(v[1] - 300) < 0.6) ||
-                 "position " + JSON.stringify(v) + " (double-scaled?)";
+        check: function (d, ctx) {
+          var v = d.value || [], was = ctx.litKidPos || [];
+          for (var i = 0; i < 3; i++) {
+            if (Math.abs((v[i] || 0) - (was[i] || 0)) > 0.6) {
+              return "position " + JSON.stringify(v) + ", was " +
+                     JSON.stringify(was) + " (double-scaled?)";
+            }
+          }
+          return true;
         } },
 
       { name: "the ambient light's hidden Position was not touched",
@@ -1093,10 +1139,15 @@
           return { comp: ctx.camComp, layer: "ST Cam Kid",
                    property: "Position" };
         },
-        check: function (d) {
-          var v = d.value || [];
-          return (Math.abs(v[0] - 400) < 0.6 && Math.abs(v[2] + 800) < 0.6) ||
-                 "position " + JSON.stringify(v) + " (double-transformed)";
+        check: function (d, ctx) {
+          var v = d.value || [], was = ctx.camKidPos || [];
+          for (var i = 0; i < 3; i++) {
+            if (Math.abs((v[i] || 0) - (was[i] || 0)) > 0.6) {
+              return "position " + JSON.stringify(v) + ", was " +
+                     JSON.stringify(was) + " (double-transformed)";
+            }
+          }
+          return true;
         } },
 
       // ---- center_anchor_point on a moving rig (WORKPLAN item 2) -------
@@ -2464,6 +2515,163 @@
                  "survivor missing, comp holds " + (names.join(", ") || "nothing");
         } },
 
+      // ---- what the rollback reaches, and what its check can SEE ----
+      //
+      // Two questions the log carried for four passes, both answered in
+      // real AE on 2026-08-29. (1) Does the one Undo reach PROJECT
+      // ITEMS? It does — comps, folders, duplicates, deletions, moves
+      // and renames all revert, and the steps below keep it that way.
+      // (2) Does AELL_fingerprint — the check that proves the Undo
+      // landed EXACTLY on the pre-round state, and the only guard
+      // against it overshooting into the user's own last edit — see the
+      // dimensions those tools write? It did not: of 25 dimensions
+      // measured, AE reverted all 25 and the fingerprint saw 4.
+      //
+      // A suite step cannot make a TORN write (no tool leaves a change
+      // the undo stack cannot reverse), so the stubbed test owns that
+      // half. What these steps own is the other risk the widening
+      // created: a field AE reports with noise would make the
+      // fingerprints differ after a PERFECT undo, and every rollback in
+      // the product would start reporting itself as an abandoned
+      // overshoot. Each step below fails loudly if that ever happens.
+
+      { name: "an armed round that created a COMP and failed undoes it",
+        batchOpts: { rollback: true },
+        batch: function (ctx) {
+          return [
+            { tool: "create_comp",
+              args: { name: "ST RB Ghost Comp", width: 160, height: 120,
+                      duration: 2, frameRate: 30 } },
+            { tool: "duplicate_layer",
+              args: { comp: ctx.rbComp, layer: "ST No Source", count: 1 } }
+          ];
+        },
+        check: function (rows) {
+          if (rows[0].ok) return "create_comp still reports ok";
+          return rows[0].rolledBack ||
+                 "the comp-creating round was not rolled back: " +
+                 String(rows[0].error).slice(0, 120);
+        } },
+
+      { name: "and the comp it made is not in the project",
+        tool: "get_project_info",
+        args: { limit: 0 },
+        check: function (d) {
+          var items = d.items || d.comps || [];
+          for (var i = 0; i < items.length; i++) {
+            var n = items[i] && (items[i].name || items[i]);
+            if (String(n) === "ST RB Ghost Comp") {
+              return "the rolled-back comp is still in the project";
+            }
+          }
+          return true;
+        } },
+
+      { name: "an armed round that changed COMP SETTINGS and failed " +
+              "puts them back",
+        batchOpts: { rollback: true },
+        batch: function (ctx) {
+          return [
+            { tool: "set_comp_setting",
+              args: { comp: ctx.rbComp, workAreaStart: 1,
+                      workAreaDuration: 1, resolution: "quarter" } },
+            { tool: "duplicate_layer",
+              args: { comp: ctx.rbComp, layer: "ST No Source", count: 1 } }
+          ];
+        },
+        check: function (rows) {
+          if (rows[0].ok) return "set_comp_setting still reports ok";
+          if (!rows[0].rolledBack) {
+            return "a comp-settings round was NOT rolled back — if the " +
+                   "reason is 'did not land on the pre-round state', a " +
+                   "comp setting in AELL_fingerprint is reading noise: " +
+                   String(rows[0].error).slice(0, 160);
+          }
+          return true;
+        } },
+
+      { name: "the work area and resolution are the ones from before it",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.rbComp, limit: 0 }; },
+        check: function (d) {
+          if (d.workArea !== "0s-4s") {
+            return "work area is " + d.workArea + ", expected the " +
+                   "whole 4s comp back";
+          }
+          return d.resolution === "full [1, 1]" ||
+                 "resolution is " + d.resolution + ", expected full [1, 1]";
+        } },
+
+      { name: "an armed round that turned a layer 3D and failed leaves " +
+              "it 2D",
+        batchOpts: { rollback: true },
+        batch: function (ctx) {
+          return [
+            { tool: "set_layer_3d",
+              args: { comp: ctx.rbComp, layer: "ST RB Survivor",
+                      enabled: true } },
+            { tool: "add_marker",
+              args: { comp: ctx.rbComp, layer: "ST RB Survivor", time: 1,
+                      comment: "ST RB mark" } },
+            { tool: "set_solid_color",
+              args: { comp: ctx.rbComp, layer: "ST RB Survivor",
+                      color: [0, 0, 1], makeUnique: true } },
+            { tool: "duplicate_layer",
+              args: { comp: ctx.rbComp, layer: "ST No Source", count: 1 } }
+          ];
+        },
+        check: function (rows) {
+          // Four dimensions at once, three of them invisible to the
+          // fingerprint before 2026-08-29: the 3D switch, a layer
+          // marker, and the solid SOURCE's colour (which makeUnique
+          // turns into a new project item as well).
+          for (var i = 0; i < 3; i++) {
+            if (rows[i].ok) return "row " + i + " still reports ok";
+            if (!rows[i].rolledBack) {
+              return "row " + i + " was not rolled back: " +
+                     String(rows[i].error).slice(0, 160);
+            }
+          }
+          return true;
+        } },
+
+      { name: "and get_bounds no longer calls it a 3D layer",
+        tool: "get_bounds",
+        args: function (ctx) {
+          return { comp: ctx.rbComp, layer: "ST RB Survivor" };
+        },
+        check: function (d) {
+          return !d.compBoxUnavailable ||
+                 "still 3D after the rollback: " + d.compBoxUnavailable;
+        } },
+
+      { name: "an armed round that RENAMED an item and failed puts the " +
+              "name back",
+        batchOpts: { rollback: true },
+        batch: function (ctx) {
+          return [
+            { tool: "rename_item",
+              args: { item: ctx.rbComp, name: "ST RB Renamed" } },
+            { tool: "duplicate_layer",
+              args: { comp: "ST RB Renamed", layer: "ST No Source",
+                      count: 1 } }
+          ];
+        },
+        check: function (rows) {
+          if (rows[0].ok) return "rename_item still reports ok";
+          return rows[0].rolledBack ||
+                 "the rename was not rolled back: " +
+                 String(rows[0].error).slice(0, 160);
+        } },
+
+      { name: "so the comp still answers to the name it started with",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.rbComp, limit: 0 }; },
+        check: function (d, ctx) {
+          return d.name === ctx.rbComp ||
+                 "comp is called " + d.name + ", expected " + ctx.rbComp;
+        } },
+
       { name: "cleanup: delete the rollback comp",
         tool: "delete_item",
         args: function (ctx) { return { item: ctx.rbComp }; },
@@ -3552,6 +3760,58 @@
           return "the coverage comp is not in the project listing";
         } },
 
+      { name: "an off-grid work area snaps to a frame, and says so",
+        tool: "set_comp_setting",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, workAreaStart: 0.333,
+                   workAreaDuration: 1.7 };
+        },
+        check: function (d) {
+          // Measured in AE 2026: on a 24 fps comp 0.333s becomes frame 8
+          // (0.333333s) and 1.7s becomes 41 frames (1.708333s), silently.
+          if (Math.abs(d.workAreaStart - 8 / 24) > 0.0005 ||
+              Math.abs(d.workAreaDuration - 41 / 24) > 0.0005) {
+            return "AE holds " + d.workAreaStart + " / " + d.workAreaDuration;
+          }
+          return (d.note || "").indexOf("frame 8") !== -1 ||
+                 "the snap was not reported: " + d.note;
+        } },
+
+      { name: "a work area past the comp's end is refused, not clamped",
+        tool: "set_comp_setting",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.cvComp, workAreaStart: 4, workAreaDuration: 9 };
+        },
+        check: function (err) {
+          if (err.indexOf("past the end") === -1) {
+            return "not a range refusal: " + err;
+          }
+          return err.indexOf("2s") !== -1 ||
+                 "does not say what DOES fit from there: " + err;
+        } },
+
+      { name: "an invented resolution is refused with the real ones",
+        tool: "set_comp_setting",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.cvComp, resolution: "low" };
+        },
+        check: function (err) {
+          return (err.indexOf("'half'") !== -1 &&
+                  err.indexOf("'quarter'") !== -1) ||
+                 "does not name the real resolutions: " + err;
+        } },
+
+      { name: "and the comp is put back the way the suite found it",
+        tool: "set_comp_setting",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, workArea: "comp" };
+        },
+        check: function (d) {
+          return d.workArea === "0s-6s" || "work area reads " + d.workArea;
+        } },
+
       { name: "duplicate_comp copies it, settings and all",
         tool: "duplicate_comp",
         args: function (ctx) {
@@ -3560,8 +3820,110 @@
         check: function (d, ctx) {
           ctx.cvCopy = d.name;
           if (d.name !== "ST Cov Copy") return "named " + d.name;
-          return d.duplicatedFrom === ctx.cvComp ||
-                 "duplicatedFrom " + d.duplicatedFrom;
+          if (d.duplicatedFrom !== ctx.cvComp) {
+            return "duplicatedFrom " + d.duplicatedFrom;
+          }
+          // AE puts the copy in the SOURCE'S folder, and the coverage comp
+          // is a root one, so this is where the copy has to be.
+          return d.folder === "Root" || "folder " + d.folder;
+        } },
+
+      // ---- what duplicate_comp used to do silently. Measured in AE 2026
+      // (probe 2026-08-29, WORKPLAN-LOG): the copy SHARES its layers'
+      // sources, AE accepts a name another item already holds (and a
+      // by-name walk then finds the older one), and it accepts a blank
+      // name too.
+      { name: "the copy is told it SHARES the solid it was copied with",
+        tool: "duplicate_comp",
+        args: function (ctx) { return { comp: ctx.cvComp }; },
+        check: function (d, ctx) {
+          ctx.cvShared = d.name;
+          if (d.name !== ctx.cvComp + " 2") {
+            return "AE named the copy " + d.name;
+          }
+          var list = (d.sharedSources || []).join(" | ");
+          if (list.indexOf("ST Cov Box (solid)") === -1) {
+            return "sharedSources: " + (list || "(none)");
+          }
+          return (d.sharedNote || "").indexOf("both comps") !== -1 ||
+                 "the consequence is not stated: " + d.sharedNote;
+        } },
+
+      { name: "cleanup: delete that copy",
+        tool: "delete_item",
+        args: function (ctx) { return { item: ctx.cvShared }; },
+        check: function () { return true; } },
+
+      { name: "a name another item already holds is auto-numbered",
+        tool: "duplicate_comp",
+        args: function (ctx) {
+          // The SOURCE'S own name: the collision case that must NOT
+          // redirect later commands, since they still mean the original.
+          return { comp: ctx.cvComp, name: ctx.cvComp };
+        },
+        check: function (d, ctx) {
+          ctx.cvTaken = d.name;
+          if (d.name !== ctx.cvComp + " 2") return "named " + d.name;
+          return (d.nameTaken || "").indexOf("copied FROM") !== -1 ||
+                 "no nameTaken note: " + d.nameTaken;
+        } },
+
+      { name: "and the original still answers to its own name",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.cvComp }; },
+        check: function (d, ctx) {
+          return d.name === ctx.cvComp || "'" + ctx.cvComp +
+                 "' now resolves to " + d.name;
+        } },
+
+      { name: "cleanup: delete the auto-numbered copy",
+        tool: "delete_item",
+        args: function (ctx) { return { item: ctx.cvTaken }; },
+        check: function () { return true; } },
+
+      { name: "a blank name is refused, not made",
+        tool: "duplicate_comp",
+        expectError: true,
+        args: function (ctx) { return { comp: ctx.cvComp, name: "   " }; },
+        check: function (err) {
+          return err.indexOf("blank") !== -1 || "err: " + err;
+        } },
+
+      { name: "an expression naming the source comp is set up",
+        tool: "set_expression",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box", property: "opacity",
+                   expression: 'comp("' + ctx.cvComp +
+                     '").layer("ST Cov Box").transform.rotation + 100' };
+        },
+        check: function (d) { return true; } },
+
+      { name: "the copy is told which expressions still drive off the source",
+        tool: "duplicate_comp",
+        args: function (ctx) { return { comp: ctx.cvComp }; },
+        check: function (d, ctx) {
+          ctx.cvExprCopy = d.name;
+          var list = (d.stillDrivenBySource || []).join(" | ");
+          // AE copies the expression verbatim and leaves expressionError
+          // EMPTY, so this report is the only place it is ever mentioned.
+          if (list.indexOf("ST Cov Box > Opacity") === -1) {
+            return "stillDrivenBySource: " + (list || "(none)");
+          }
+          return (d.expressionNote || "").indexOf("thisComp") !== -1 ||
+                 "no route out of it: " + d.expressionNote;
+        } },
+
+      { name: "cleanup: delete the expression copy and clear the expression",
+        batch: function (ctx) {
+          return [
+            { tool: "delete_item", args: { item: ctx.cvExprCopy } },
+            { tool: "set_expression",
+              args: { comp: ctx.cvComp, layer: "ST Cov Box",
+                      property: "opacity", expression: "" } }
+          ];
+        },
+        check: function (rows) {
+          return rows[0].ok || "delete: " + rows[0].error;
         } },
 
       { name: "rename_item reports the name it replaced",
@@ -5209,6 +5571,92 @@
                  "the two-layer mix is not louder than one layer alone";
         } },
 
+      // ---- the WORK AREA. range:'workArea' shipped with 5.7 and had no
+      // real-AE step at all, because nothing in the tool set could SET a
+      // work area; set_comp_setting can now. The audio converter is its
+      // own witness here: AE converts INSIDE the work area only, so a key
+      // count that drops to the narrowed range and comes back is proof
+      // the setting really landed in AE and was really put back.
+      { name: "set_comp_setting puts a work area on the audio comp",
+        tool: "set_comp_setting",
+        args: function (ctx) {
+          return { comp: ctx.auComp, workAreaStart: 1, workAreaEnd: 2 };
+        },
+        check: function (d) {
+          if (d.workArea !== "1s-2s") return "work area reads " + d.workArea;
+          return Math.abs(d.workAreaDuration - 1) < 0.001 ||
+                 "duration " + d.workAreaDuration;
+        } },
+
+      { name: "and get_comp_details can READ the work area back",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.auComp, limit: 0 }; },
+        check: function (d) {
+          if (d.workArea !== "1s-2s") {
+            return "the comp reports " + d.workArea;
+          }
+          return d.resolution === "full [1, 1]" ||
+                 "resolution reads " + d.resolution;
+        } },
+
+      { name: "range:'workArea' converts inside it and nowhere else",
+        tool: "audio_to_keyframes",
+        args: function (ctx) {
+          return { comp: ctx.auComp, range: "workArea" };
+        },
+        check: function (d) {
+          if (d.keyframes !== 25) {
+            return "1s of a 24 fps comp is 25 keys, got " + d.keyframes;
+          }
+          if (Math.abs(d.rangeStart - 1) > 0.001 ||
+              Math.abs(d.rangeEnd - 2) > 0.001) {
+            return "the keys cover " + d.rangeStart + "-" + d.rangeEnd +
+                   ", not the work area";
+          }
+          return (d.workArea || "").indexOf("WORK AREA") !== -1 ||
+                 "the narrowed range was not reported: " + d.workArea;
+        } },
+
+      { name: "the default widens to the whole comp and says it did",
+        tool: "audio_to_keyframes",
+        args: function (ctx) { return { comp: ctx.auComp }; },
+        check: function (d) {
+          if (d.keyframes !== 73) {
+            return "the whole 3s comp is 73 keys, got " + d.keyframes;
+          }
+          return (d.workArea || "").indexOf("widened") !== -1 ||
+                 "the widening was silent: " + d.workArea;
+        } },
+
+      { name: "...and put the user's work area back afterwards",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.auComp, limit: 0 }; },
+        check: function (d) {
+          return d.workArea === "1s-2s" ||
+                 "the widened work area was left behind: " + d.workArea;
+        } },
+
+      { name: "workArea:'comp' resets it to the whole comp",
+        tool: "set_comp_setting",
+        args: function (ctx) { return { comp: ctx.auComp, workArea: "comp" }; },
+        check: function (d) {
+          return d.workArea === "0s-3s" || "work area reads " + d.workArea;
+        } },
+
+      { name: "and then range:'workArea' is the whole comp too",
+        tool: "audio_to_keyframes",
+        args: function (ctx) {
+          return { comp: ctx.auComp, range: "workArea" };
+        },
+        check: function (d) {
+          if (d.keyframes !== 73) {
+            return "the reset work area should convert 73 keys, got " +
+                   d.keyframes;
+          }
+          return !d.workArea ||
+                 "a full-width work area needs no note: " + d.workArea;
+        } },
+
       { name: "a layer with no audio is refused with the ones that have it",
         tool: "audio_to_keyframes",
         expectError: true,
@@ -5227,6 +5675,632 @@
       { name: "cleanup: delete the audio rig",
         tool: "delete_item",
         args: function (ctx) { return { item: ctx.auComp }; },
+        check: function () { return true; } },
+
+      // ---- the frame round-trip: snapshot_frame / import_as_layer
+      // (WORKPLAN 5.8). A comp goes out to a PNG and comes back as a
+      // layer, which is the bridge every generator stands on.
+      //
+      // Every step below pins one thing AE does silently (all measured
+      // in AE 2026 across three probe rounds):
+      //
+      //  - saveFrameToPng overwrites an existing file with NO dialog and
+      //    no undo, so the refusal is the only thing between a user's
+      //    file and a quiet replacement.
+      //  - an out-of-range time CLAMPS and writes a BLANK frame rather
+      //    than complaining.
+      //  - it writes PNG BYTES into whatever name it is handed: a frame
+      //    saved as .jpg is a PNG called .jpg.
+      //  - importing a path the project ALREADY holds makes a second
+      //    item and says nothing.
+      //  - AE's "Fit to Comp" menu commands do NOTHING with no viewer
+      //    open, so the fit arithmetic here is the panel's own and is
+      //    checked against the numbers those commands produced WITH one
+      //    open: 250x200 stretch / 250 wide / 200 high for a 320x240
+      //    source in an 800x480 comp.
+      { name: "create the frame rig, and a wider comp to fit into",
+        batch: function () {
+          return [
+            { tool: "create_comp",
+              args: { name: FRCOMP, width: 240, height: 180,
+                      duration: 2, frameRate: 24 } },
+            { tool: "add_solid",
+              args: { comp: FRCOMP, name: "ST FR Fill",
+                      color: [0.9, 0.3, 0.1], width: 240, height: 180 } },
+            { tool: "create_comp",
+              args: { name: FRWIDE, width: 480, height: 180,
+                      duration: 2, frameRate: 24 } }
+          ];
+        },
+        check: function (rows, ctx) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + i + ": " + rows[i].error;
+          }
+          ctx.frComp = rows[0].data.name;
+          ctx.frWide = rows[2].data.name;
+          return true;
+        } },
+
+      { name: "a writable folder to snapshot into",
+        tool: "list_render_templates",
+        args: {},
+        check: function (d, ctx) {
+          if (!d.tempFolder) return "no tempFolder to write into";
+          ctx.frTemp = d.tempFolder.replace(/\\/g, "/").replace(/\/$/, "");
+          // Named "ST ..." on purpose: the imported footage item takes
+          // the FILE's name, and the suite's own cleanup sweeps exactly
+          // that prefix out of the project at the end.
+          ctx.frPath = ctx.frTemp + "/ST Frame.png";
+          return true;
+        } },
+
+      { name: "snapshot_frame writes a real PNG of the comp",
+        tool: "snapshot_frame",
+        args: function (ctx) {
+          return { comp: ctx.frComp, time: 1, path: ctx.frPath,
+                   overwrite: true };
+        },
+        check: function (d, ctx) {
+          if (!(d.bytes > 0)) {
+            return "reported " + d.bytes + " bytes — AE hides a file it " +
+                   "has just written for ~300 ms, so this is what a " +
+                   "single unpolled look reports";
+          }
+          // Read back out of the FILE's own header, not from the comp.
+          if (d.width !== 240 || d.height !== 180) {
+            return "the PNG is " + d.width + "x" + d.height +
+                   ", not the comp's 240x180";
+          }
+          if (d.frame !== 24) return "frame " + d.frame + ", not 24";
+          if (d.warning) return "unexpected warning: " + d.warning;
+          ctx.frWrote = d.path.replace(/\\/g, "/");
+          return (d.next || "").indexOf("import_as_layer") !== -1 ||
+                 "no route on to import_as_layer: " + d.next;
+        } },
+
+      // THE refusal. Without it a second snapshot silently destroys the
+      // first, with no dialog and nothing to undo.
+      { name: "snapshotting onto an existing file is REFUSED",
+        tool: "snapshot_frame",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.frComp, time: 1, path: ctx.frWrote };
+        },
+        check: function (err) {
+          if (!/already exists/i.test(err)) return "not a refusal: " + err;
+          return /silently|no undo/i.test(err) ||
+                 "does not say what would have happened: " + err;
+        } },
+
+      { name: "a time past the end is refused, not clamped to a blank frame",
+        tool: "snapshot_frame",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.frComp, time: 99,
+                   path: ctx.frTemp + "/ST Never.png" };
+        },
+        check: function (err) {
+          if (err.indexOf("outside") === -1) return "not a range error: " + err;
+          return /CLAMPS|BLANK/.test(err) ||
+                 "does not say what AE would have done: " + err;
+        } },
+
+      { name: "a relative path is refused, naming 'path' not 'output'",
+        tool: "snapshot_frame",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.frComp, path: "frames/rel.png" };
+        },
+        check: function (err) {
+          if (!/ABSOLUTE/i.test(err)) return "not a path error: " + err;
+          return err.indexOf("'path'") !== -1 ||
+                 "names the wrong argument: " + err;
+        } },
+
+      { name: "a non-.png extension is corrected, because AE would not",
+        tool: "snapshot_frame",
+        args: function (ctx) {
+          return { comp: ctx.frComp, time: 0,
+                   path: ctx.frTemp + "/ST Wrongext.jpg", overwrite: true };
+        },
+        check: function (d) {
+          if (!/\.png$/i.test(d.path)) {
+            return "wrote to " + d.path + " — AE puts PNG bytes in a .jpg " +
+                   "and says nothing";
+          }
+          return (d.pathNote || "").indexOf("PNG bytes") !== -1 ||
+                 "the correction was silent: " + d.pathNote;
+        } },
+
+      // ---- the resolution override, which had no real-AE step either,
+      // for the same reason: nothing could set resolutionFactor. A comp
+      // left at Half writes a half-size frame and AE says nothing, so
+      // the default overrides it and REPORTS the override; only the
+      // PNG's own IHDR header can tell the difference.
+      { name: "set_comp_setting drops the frame comp to Half resolution",
+        tool: "set_comp_setting",
+        args: function (ctx) {
+          return { comp: ctx.frComp, resolution: "half" };
+        },
+        check: function (d) {
+          return d.resolution === "half [2, 2]" ||
+                 "resolution reads " + d.resolution;
+        } },
+
+      { name: "a snapshot overrides the downsample and says it did",
+        tool: "snapshot_frame",
+        args: function (ctx) {
+          return { comp: ctx.frComp, time: 1,
+                   path: ctx.frTemp + "/ST Frame Full.png",
+                   overwrite: true };
+        },
+        check: function (d) {
+          if (d.width !== 240 || d.height !== 180) {
+            return "the PNG is " + d.width + "x" + d.height +
+                   " — the comp's Half resolution was not overridden";
+          }
+          if (d.warning) return "unexpected warning: " + d.warning;
+          return (d.resolutionNote || "").indexOf("resolution 1/2") !== -1 ||
+                 "the override was silent: " + d.resolutionNote;
+        } },
+
+      { name: "and the comp is still at Half afterwards, not switched",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.frComp, limit: 0 }; },
+        check: function (d) {
+          return d.resolution === "half [2, 2]" ||
+                 "the snapshot left the comp at " + d.resolution;
+        } },
+
+      { name: "{resolution: 'comp'} keeps AE's downsample and warns",
+        tool: "snapshot_frame",
+        args: function (ctx) {
+          return { comp: ctx.frComp, time: 1, resolution: "comp",
+                   path: ctx.frTemp + "/ST Frame Half.png",
+                   overwrite: true };
+        },
+        check: function (d) {
+          if (d.width !== 120 || d.height !== 90) {
+            return "a Half-resolution comp should write 120x90, got " +
+                   d.width + "x" + d.height;
+          }
+          return (d.warning || "").indexOf("downsampled") !== -1 ||
+                 "the smaller frame was not flagged: " + d.warning;
+        } },
+
+      { name: "cleanup: the frame comp goes back to Full",
+        tool: "set_comp_setting",
+        args: function (ctx) {
+          return { comp: ctx.frComp, resolution: "full" };
+        },
+        check: function (d) {
+          return d.resolution === "full [1, 1]" ||
+                 "resolution reads " + d.resolution;
+        } },
+
+      // The round trip itself: the comp's own frame, back in the comp,
+      // at exactly 100%.
+      { name: "import_as_layer brings the frame back at 1:1",
+        tool: "import_as_layer",
+        args: function (ctx) {
+          return { path: ctx.frWrote, comp: ctx.frComp, name: "ST FR Back" };
+        },
+        check: function (d, ctx) {
+          if (d.index !== 1) return "landed at index " + d.index;
+          if (d.sourceSize !== d.compSize) {
+            return "ROUND TRIP: " + d.sourceSize + " came back into " +
+                   d.compSize;
+          }
+          if (!d.scale || Math.abs(d.scale[0] - 100) > 0.001 ||
+              Math.abs(d.scale[1] - 100) > 0.001) {
+            return "ROUND TRIP: scaled to " +
+                   (d.scale ? d.scale.join(",") : "(nothing)") +
+                   ", not 100,100";
+          }
+          ctx.frSource = d.source;
+          return (d.stillNote || "").indexOf("whole comp") !== -1 ||
+                 "a still's timing was not explained: " + d.stillNote;
+        } },
+
+      { name: "AE really holds that scale, not just the report",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.frComp, layer: "ST FR Back",
+                   property: "Scale" };
+        },
+        check: function (d) {
+          var v = d.value;
+          if (!v || v.length < 2) return "no scale value: " +
+            JSON.stringify(v);
+          return (Math.abs(v[0] - 100) < 0.001 &&
+                  Math.abs(v[1] - 100) < 0.001) ||
+                 "AE holds " + v.join(",");
+        } },
+
+      { name: "the same file again is REUSED and reloaded, not doubled",
+        tool: "import_as_layer",
+        args: function (ctx) {
+          return { path: ctx.frWrote, comp: ctx.frComp, name: "ST FR Again" };
+        },
+        check: function (d) {
+          if (d.reusedExisting !== true) {
+            return "imported a second project item for one path";
+          }
+          if (d.warning) return "unexpected warning: " + d.warning;
+          return (d.reuseNote || "").indexOf("RELOADED") !== -1 ||
+                 "did not reload from disk, so a regenerated file would " +
+                 "still show the old picture: " + d.reuseNote;
+        } },
+
+      // The fit arithmetic, against AE's own Fit to Comp numbers. A
+      // 240x180 source in a 480x180 comp: x ratio 200, y ratio 100.
+      { name: "fit CONTAINS, fill COVERS, stretch fills exactly",
+        batch: function (ctx) {
+          return [
+            { tool: "import_as_layer",
+              args: { path: ctx.frWrote, comp: ctx.frWide, fit: "fit",
+                      name: "ST FR Contain" } },
+            { tool: "import_as_layer",
+              args: { path: ctx.frWrote, comp: ctx.frWide, fit: "fill",
+                      name: "ST FR Cover" } },
+            { tool: "import_as_layer",
+              args: { path: ctx.frWrote, comp: ctx.frWide, fit: "stretch",
+                      name: "ST FR Stretch" } },
+            { tool: "import_as_layer",
+              args: { path: ctx.frWrote, comp: ctx.frWide, fit: "none",
+                      name: "ST FR AsIs" } }
+          ];
+        },
+        check: function (rows) {
+          var i;
+          for (i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + i + ": " + rows[i].error;
+          }
+          var fit = rows[0].data.scale, fill = rows[1].data.scale,
+              str = rows[2].data.scale;
+          if (Math.abs(fit[0] - 100) > 0.001 ||
+              Math.abs(fit[1] - 100) > 0.001) {
+            return "'fit' should contain at 100,100 — got " + fit.join(",");
+          }
+          if (Math.abs(fill[0] - 200) > 0.001 ||
+              Math.abs(fill[1] - 200) > 0.001) {
+            return "'fill' should cover at 200,200 — got " + fill.join(",");
+          }
+          if (Math.abs(str[0] - 200) > 0.001 ||
+              Math.abs(str[1] - 100) > 0.001) {
+            return "'stretch' should be 200,100 (AE's own Fit to Comp) — " +
+                   "got " + str.join(",");
+          }
+          return rows[3].data.scale === undefined ||
+                 "'none' touched the scale: " +
+                 JSON.stringify(rows[3].data.scale);
+        } },
+
+      { name: "AE really holds the stretched, non-uniform scale",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.frWide, layer: "ST FR Stretch",
+                   property: "Scale" };
+        },
+        check: function (d) {
+          var v = d.value;
+          if (!v || v.length < 2) return "no scale value";
+          return (Math.abs(v[0] - 200) < 0.001 &&
+                  Math.abs(v[1] - 100) < 0.001) ||
+                 "AE holds " + v.join(",");
+        } },
+
+      { name: "an invented fit is refused with the real list",
+        tool: "import_as_layer",
+        expectError: true,
+        args: function (ctx) {
+          return { path: ctx.frWrote, comp: ctx.frWide, fit: "squish" };
+        },
+        check: function (err) {
+          return (err.indexOf("stretch") !== -1 &&
+                  err.indexOf("fill") !== -1) ||
+                 "does not name the real modes: " + err;
+        } },
+
+      { name: "a file that is not there is refused before AE is asked",
+        tool: "import_as_layer",
+        expectError: true,
+        args: function (ctx) {
+          return { path: ctx.frTemp + "/ST Nothing Here.png",
+                   comp: ctx.frWide };
+        },
+        check: function (err) {
+          return /File not found/.test(err) || "not a missing-file error: " +
+                 err;
+        } },
+
+      // import_file has shipped since the beginning and has never been
+      // exercised here, for want of a file on disk — snapshot_frame is
+      // that file. It reaches the PROJECT PANEL only, which is the whole
+      // difference between it and the tool above, and AE really does
+      // take a second item for a path it already holds.
+      { name: "import_file reaches the project panel and nothing else",
+        tool: "import_file",
+        args: function (ctx) { return { path: ctx.frWrote }; },
+        check: function (d, ctx) {
+          if (!d.name) return "no item name came back";
+          if (!(d.id > 0)) return "no item id came back: " + d.id;
+          return d.name.indexOf("ST Frame") === 0 ||
+                 "imported something else: " + d.name;
+        } },
+
+      { name: "and the layer count of the comp is untouched by it",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.frComp, limit: 0 }; },
+        check: function (d) {
+          // Three layers: the solid, and the two import_as_layer made.
+          return d.numLayers === 3 ||
+                 "import_file changed the comp: " + d.numLayers +
+                 " layers, expected 3";
+        } },
+
+      { name: "cleanup: drop the frame rig (the footage sweep takes the PNG)",
+        batch: function (ctx) {
+          return [
+            { tool: "delete_item", args: { item: ctx.frWide } },
+            { tool: "delete_item", args: { item: ctx.frComp } }
+          ];
+        },
+        check: function (rows) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + i + ": " + rows[i].error;
+          }
+          return true;
+        } },
+
+      // ---- captions: render_comp_audio + add_captions (WORKPLAN 6.1
+      // Pass C, the AE half of speech-to-captions).
+      //
+      // The transcription itself is NOT here and cannot be: it needs a
+      // ~150 MB whisper.cpp install that no CI runner and few user
+      // machines have, and it is covered by tests\test-captions.js and
+      // scripts\verify-whisper.ps1 instead. What IS here is everything
+      // AE owns, and every step below is a measurement from the probe:
+      //
+      //  - A comp with NO audio layer still renders a full, valid,
+      //    audio-only AIFF: DONE, 772 674 bytes, no warning. Two seconds
+      //    of silence transcribes as the word "You", so the honest-looking
+      //    end of that pipeline is a caption reading "You" over a comp
+      //    nobody spoke in. The refusal is the load-bearing step.
+      //  - layer.inPoint is a SLIDE: it drags outPoint along and keeps
+      //    the duration (in a 5s comp, in=2 reads back out=7). Set out
+      //    first and every caption is the wrong length, silently. That is
+      //    what the span assertions below exist for.
+      //  - AE accepts an inverted or zero-length span without a word.
+      //  - in/out QUANTIZE to AE's own time base (0.3333 -> 0.33329264),
+      //    so every comparison here is a tolerance, never an equality.
+      //
+      // The rig needs no audio FILE: Tone on a solid flips hasAudio to
+      // true, exactly as the audio_to_keyframes rig does. One second at
+      // 24 fps, 160x120, so the audio render costs about as much as the
+      // one-frame render above.
+      { name: "create the caption rig (a solid, still silent)",
+        batch: function () {
+          return [
+            { tool: "create_comp",
+              args: { name: CAPCOMP, width: 160, height: 120,
+                      duration: 1, frameRate: 24 } },
+            { tool: "add_solid",
+              args: { comp: CAPCOMP, name: "ST Cap Host",
+                      color: [0.2, 0.2, 0.2], width: 160, height: 120 } }
+          ];
+        },
+        check: function (rows, ctx) {
+          if (!rows[0].ok) return "create_comp: " + rows[0].error;
+          if (!rows[1].ok) return "add_solid: " + rows[1].error;
+          ctx.capComp = rows[0].data.name;
+          return true;
+        } },
+
+      // THE step. AE renders silence happily and reports DONE, so
+      // without this the whole feature produces a confident wrong answer.
+      { name: "rendering the audio of a comp with NO audio is REFUSED",
+        tool: "render_comp_audio",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.capComp,
+                   output: ctx.rqTemp + "/AELL_ST_never_audio.aif" };
+        },
+        check: function (err) {
+          if (!/silence/i.test(err)) {
+            return "does not say AE would render SILENCE, which is the " +
+                   "whole reason to refuse: " + err;
+          }
+          return err.indexOf("ST Cap Host") !== -1 ||
+                 "does not list what IS in the comp: " + err;
+        } },
+
+      { name: "Tone gives the caption rig a real audio track",
+        tool: "apply_effect",
+        args: function (ctx) {
+          return { comp: ctx.capComp, layer: "ST Cap Host", effect: "Tone" };
+        },
+        check: function (d) {
+          return d.matchName === "ADBE Aud Tone" ||
+                 "wrong effect: " + d.matchName;
+        } },
+
+      { name: "render_comp_audio picks the audio module and writes bytes",
+        tool: "render_comp_audio",
+        args: function (ctx) {
+          return { comp: ctx.capComp,
+                   output: ctx.rqTemp + "/AELL_ST_audio.wav",
+                   overwrite: true };
+        },
+        check: function (d, ctx) {
+          if (d.status !== "DONE") {
+            return "status " + d.status + (d.warning ? " — " + d.warning : "");
+          }
+          if (!(d.bytes > 0)) return "reported DONE but " + d.bytes + " bytes";
+          if (!d.audioLayers || d.audioLayers.indexOf("ST Cap Host") === -1) {
+            return "does not report what went into the mix: " + d.audioLayers;
+          }
+          // The audio output module forces its own extension, so the
+          // path asked for (.wav) is not the path written.
+          ctx.capAudio = d.output;
+          return /\.(aif|aiff|wav|mp3)$/i.test(d.output) ||
+                 "did not write an audio container: " + d.output;
+        } },
+
+      { name: "cleanup: drop the caption audio rig",
+        tool: "delete_item",
+        args: function (ctx) { return { item: ctx.capComp }; },
+        check: function () { return true; } },
+
+      // add_captions works in a comp of its own: it makes one layer per
+      // caption and its default position is comp-relative.
+      { name: "create the caption text rig",
+        tool: "create_comp",
+        args: { name: CAPTEXT, width: 1920, height: 1080, duration: 5,
+                frameRate: 24 },
+        check: function (d, ctx) { ctx.capText = d.name; return true; } },
+
+      { name: "a zero-length caption is refused, not silently invisible",
+        tool: "add_captions",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.capText,
+                   segments: [{ start: 1, end: 1, text: "never seen" }] };
+        },
+        check: function (err) {
+          return /not after start/i.test(err) ||
+                 "does not explain the span: " + err;
+        } },
+
+      { name: "an inverted caption is refused with its own segment number",
+        tool: "add_captions",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.capText, segments: [
+            { start: 0, end: 1, text: "good" },
+            { start: 3, end: 2, text: "backwards" }
+          ] };
+        },
+        check: function (err) {
+          return /segment 2/.test(err) ||
+                 "does not say WHICH segment is wrong: " + err;
+        } },
+
+      { name: "and the good segment before it was not built either",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.capText, limit: 0 }; },
+        check: function (d) {
+          return d.numLayers === 0 ||
+                 "a refused batch left " + d.numLayers + " layer(s) behind";
+        } },
+
+      { name: "add_captions builds one trimmed text layer per segment",
+        tool: "add_captions",
+        args: function (ctx) {
+          return { comp: ctx.capText, fontSize: 48, segments: [
+            { start: 0, end: 3.32,
+              text: "The quick brown fox jumps over the lazy dog." },
+            { start: 3.32, end: 4.9,
+              text: "After effects renders the composition." }
+          ] };
+        },
+        check: function (d, ctx) {
+          if (d.captions !== 2) return "built " + d.captions + " captions";
+          // Named and numbered, NOT named after the transcript.
+          if (d.layers.join(",") !== "Caption 1,Caption 2") {
+            return "captions are named after their text: " + d.layers;
+          }
+          ctx.capNames = d.layers;
+          return true;
+        } },
+
+      // THE assertion of this block. Set outPoint before inPoint and
+      // these read 8.32 and 8.22 instead, in real AE, silently.
+      { name: "each caption is trimmed to its own span (inPoint SLIDES)",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.capText, limit: 0 }; },
+        check: function (d) {
+          if (d.numLayers !== 2) return d.numLayers + " layers, expected 2";
+          var by = {};
+          for (var i = 0; i < d.layers.length; i++) {
+            by[d.layers[i].name] = d.layers[i];
+          }
+          var a = by["Caption 1"], b = by["Caption 2"];
+          if (!a || !b) return "captions not found by name";
+          // Tolerances, not equalities: AE quantizes to its own time base.
+          if (Math.abs(a.inPoint - 0) > 0.001 ||
+              Math.abs(a.outPoint - 3.32) > 0.001) {
+            return "caption 1 spans " + a.inPoint + ".." + a.outPoint +
+                   ", expected 0..3.32";
+          }
+          if (Math.abs(b.inPoint - 3.32) > 0.001 ||
+              Math.abs(b.outPoint - 4.9) > 0.001) {
+            return "caption 2 spans " + b.inPoint + ".." + b.outPoint +
+                   ", expected 3.32..4.9 — outPoint dragged by inPoint " +
+                   "means the two were set in the wrong order";
+          }
+          return true;
+        } },
+
+      { name: "a caption past the end of the comp is built AND reported",
+        tool: "add_captions",
+        args: function (ctx) {
+          return { comp: ctx.capText, name: "ST Late", segments: [
+            { start: 4.5, end: 9, text: "runs off the end" }
+          ] };
+        },
+        check: function (d) {
+          return /past/i.test(d.note || "") ||
+                 "no note that it runs off the timeline: " + d.note;
+        } },
+
+      { name: "'layer' is refused for text captions, not silently ignored",
+        tool: "add_captions",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.capText, layer: "Caption 1",
+                   segments: [{ start: 0, end: 1, text: "x" }] };
+        },
+        check: function (err) {
+          return /markers/i.test(err) ||
+                 "does not point at the mode where it means something: " +
+                 err;
+        } },
+
+      { name: "as:'markers' writes timed markers instead of layers",
+        tool: "add_captions",
+        args: function (ctx) {
+          return { comp: ctx.capText, as: "markers", segments: [
+            { start: 0, end: 1.5, text: "first" },
+            { start: 1.5, end: 2.5, text: "second" }
+          ] };
+        },
+        check: function (d) {
+          if (d.markersAdded !== 2) {
+            return "wrote " + d.markersAdded + " markers, expected 2";
+          }
+          return d.as === "markers" || "reported as " + d.as;
+        } },
+
+      { name: "two captions at the same instant collapse, and it SAYS so",
+        tool: "add_captions",
+        args: function (ctx) {
+          return { comp: ctx.capText, as: "markers", segments: [
+            { start: 3, end: 3.5, text: "one" },
+            { start: 3, end: 4, text: "same instant" }
+          ] };
+        },
+        check: function (d) {
+          if (d.markersAdded !== 1) {
+            return "expected AE to keep one marker, it kept " + d.markersAdded;
+          }
+          return !!d.collapsed ||
+                 "AE silently dropped a caption and the result did not say";
+        } },
+
+      { name: "cleanup: drop the caption text rig",
+        tool: "delete_item",
+        args: function (ctx) { return { item: ctx.capText }; },
         check: function () { return true; } },
 
       // ---- comp-rename audit + bulk rename. A three-comp rig: one
@@ -5838,9 +6912,1013 @@
                  "re-run says " + JSON.stringify(d);
         } },
 
+      // ---- get_bounds: measuring without touching ---------------------
+      // Its own comp because it moves a solid off the frame and turns it
+      // 3D, and because the source-time steps SLIDE a layer in time —
+      // none of which may reach a comp another group is measuring.
+      //
+      // What real AE taught this group (probes, WORKPLAN-LOG 2026-08-29):
+      // sourceRectAtTime ignores the transform, ignores masks and
+      // effects, needs BOTH arguments, and — the trap — takes the
+      // layer's own SOURCE time while every property time is comp time.
+      { name: "bounds scratch comp",
+        tool: "create_comp",
+        args: { name: BNCOMP, width: 1000, height: 800, duration: 6,
+                frameRate: 30 },
+        check: function (d, ctx) {
+          ctx.bnComp = d.name;
+          return typeof d.id === "number" || !!d.id || "no comp id";
+        } },
+
+      { name: "bounds rig: a 200x100 solid",
+        tool: "add_solid",
+        args: function (ctx) {
+          return { comp: ctx.bnComp, name: "ST BN Solid", color: [1, 0, 0],
+                   width: 200, height: 100 };
+        },
+        check: function (d) { return d.name === "ST BN Solid" || d.name; } },
+
+      { name: "bounds rig: anchor to the corner",
+        tool: "set_transform",
+        args: function (ctx) {
+          return { comp: ctx.bnComp, layer: "ST BN Solid",
+                   property: "anchorPoint", value: [0, 0] };
+        },
+        check: function () { return true; } },
+
+      { name: "bounds rig: park it at 500,400",
+        tool: "set_transform",
+        args: function (ctx) {
+          return { comp: ctx.bnComp, layer: "ST BN Solid",
+                   property: "position", value: [500, 400] };
+        },
+        check: function () { return true; } },
+
+      { name: "get_bounds measures the solid in source AND comp space",
+        tool: "get_bounds",
+        args: function (ctx) {
+          return { comp: ctx.bnComp, layer: "ST BN Solid" };
+        },
+        check: function (d) {
+          var s = d.source || {}, c = d.comp || {};
+          if (s.width !== 200 || s.height !== 100) {
+            return "source " + s.width + "x" + s.height + ", expected 200x100";
+          }
+          if (c.left !== 500 || c.top !== 400 || c.right !== 700 ||
+              c.bottom !== 500) {
+            return "comp box " + JSON.stringify(c);
+          }
+          if (d.inFrame !== "fully") return "inFrame " + d.inFrame;
+          if (d.outsideBy) return "reported overflow: " +
+                                  JSON.stringify(d.outsideBy);
+          if (!d.corners || d.corners.length !== 4 ||
+              d.corners[2][0] !== 700 || d.corners[2][1] !== 500) {
+            return "corners " + JSON.stringify(d.corners);
+          }
+          return (d.compSize[0] === 1000 && d.compSize[1] === 800) ||
+                 "compSize " + JSON.stringify(d.compSize);
+        } },
+
+      { name: "…and does not disturb the layer it measured",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.bnComp, layer: "ST BN Solid",
+                   property: "transform/Anchor Point" };
+        },
+        check: function (d) {
+          var v = d.value || [];
+          return (v[0] === 0 && v[1] === 0) ||
+                 "anchor moved to " + JSON.stringify(v) +
+                 " — get_bounds must be read-only";
+        } },
+
+      { name: "scale changes the COMP box and not the source rect",
+        batch: function (ctx) {
+          return [
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST BN Solid", property: "scale", value: [200, 50] } },
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST BN Solid" } }
+          ];
+        },
+        check: function (rows) {
+          if (!rows[0].ok) return rows[0].error;
+          if (!rows[1].ok) return rows[1].error;
+          var d = rows[1].data;
+          if (d.source.width !== 200 || d.source.height !== 100) {
+            return "the transform reached the SOURCE rect: " +
+                   JSON.stringify(d.source);
+          }
+          return (d.comp.width === 400 && d.comp.height === 50) ||
+                 "comp box " + d.comp.width + "x" + d.comp.height +
+                 ", expected 400x50";
+        } },
+
+      { name: "a rotated layer says its box is the one AROUND it",
+        batch: function (ctx) {
+          return [
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST BN Solid", property: "rotation", value: 90 } },
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST BN Solid" } }
+          ];
+        },
+        check: function (rows) {
+          if (!rows[1].ok) return rows[1].error;
+          var d = rows[1].data;
+          if (Math.abs(d.comp.width - 50) > 0.01 ||
+              Math.abs(d.comp.height - 400) > 0.01) {
+            return "rotated box " + d.comp.width + "x" + d.comp.height +
+                   ", expected 50x400";
+          }
+          if (d.rotated !== 90) return "rotated: " + d.rotated;
+          return /axis-aligned/.test(d.rotatedNote || "") ||
+                 "no rotatedNote: " + d.rotatedNote;
+        } },
+
+      { name: "bounds rig: back to square",
+        batch: function (ctx) {
+          return [
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST BN Solid", property: "rotation", value: 0 } },
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST BN Solid", property: "scale", value: [100, 100] } }
+          ];
+        },
+        check: function (rows) {
+          return (rows[0].ok && rows[1].ok) || "reset failed";
+        } },
+
+      { name: "bounds rig: a parent null at 300,200",
+        tool: "add_null",
+        args: function (ctx) {
+          return { comp: ctx.bnComp, name: "ST BN Null",
+                   position: [300, 200] };
+        },
+        check: function (d) { return d.name === "ST BN Null" || d.name; } },
+
+      { name: "bounds rig: parent the solid to it",
+        tool: "set_layer_parent",
+        args: function (ctx) {
+          return { comp: ctx.bnComp, layer: "ST BN Solid",
+                   parent: "ST BN Null" };
+        },
+        check: function () { return true; } },
+
+      // The step that caught set_layer_parent's inverted keepPosition:
+      // the solid sits at 500,400 with a [0,0] anchor and is 200x100, so
+      // its box centre is 600,450 and the LINK ALONE must not move it.
+      // Before the fix it jumped to 900,650 — by the null's position —
+      // while the tool still reported "Visual positions preserved".
+      // Doubles as proof that get_bounds follows the parent chain.
+      { name: "parenting: the link does not move the box",
+        tool: "get_bounds",
+        args: function (ctx) {
+          return { comp: ctx.bnComp, layer: "ST BN Solid" };
+        },
+        check: function (d, ctx) {
+          ctx.bnCentre = [d.comp.centerX, d.comp.centerY];
+          if (d.comp.width !== 200 || d.comp.height !== 100) {
+            return "a parented, untransformed layer changed size: " +
+                   d.comp.width + "x" + d.comp.height;
+          }
+          if (Math.abs(d.comp.centerX - 600) > 0.01 ||
+              Math.abs(d.comp.centerY - 450) > 0.01) {
+            return "the link moved the layer: centre " + d.comp.centerX +
+                   "," + d.comp.centerY + ", expected 600,450";
+          }
+          return d.inFrame === "fully" ||
+                 "inFrame " + d.inFrame + " at " + JSON.stringify(ctx.bnCentre);
+        } },
+
+      { name: "parenting: the PARENT's rotation moves the child's box",
+        batch: function (ctx) {
+          return [
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST BN Null", property: "rotation", value: 180 } },
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST BN Solid" } }
+          ];
+        },
+        check: function (rows, ctx) {
+          if (!rows[1].ok) return rows[1].error;
+          var d = rows[1].data;
+          // Rotating the parent 180 degrees mirrors the child through the
+          // parent's own position — the anchor is what a rotation turns
+          // about, and Position is where that anchor sits.
+          var wantX = 2 * 300 - ctx.bnCentre[0];
+          var wantY = 2 * 200 - ctx.bnCentre[1];
+          if (Math.abs(d.comp.centerX - wantX) > 0.01 ||
+              Math.abs(d.comp.centerY - wantY) > 0.01) {
+            return "centre " + d.comp.centerX + "," + d.comp.centerY +
+                   ", expected " + wantX + "," + wantY;
+          }
+          return !d.rotated ||
+                 "the CHILD is not rotated, but rotated=" + d.rotated;
+        } },
+
+      { name: "bounds rig: unparent and unrotate",
+        batch: function (ctx) {
+          return [
+            { tool: "set_layer_parent", args: { comp: ctx.bnComp,
+                layer: "ST BN Solid", parent: null } },
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST BN Null", property: "rotation", value: 0 } },
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST BN Solid", property: "position",
+                value: [500, 400] } },
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST BN Solid", property: "rotation", value: 0 } }
+          ];
+        },
+        check: function (rows) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + (i + 1) + ": " + rows[i].error;
+          }
+          return true;
+        } },
+
+      // ---- set_layer_parent's two halves, measured not assumed --------
+      // AE's two calls do the OPPOSITE of what their names suggest, and
+      // this tool had them swapped from the day it shipped: `.parent =`
+      // is the pick-whip (AE rewrites the transform, nothing moves) and
+      // setParentWithJump keeps the numbers and moves the layer. The
+      // steps below assert on WHERE THE LAYER ENDS UP, so they cannot be
+      // satisfied by a tool that merely reports the right thing.
+      // ST BN Null sits at 300,200 with no rotation by now.
+      { name: "parent rig: a 100x100 solid parked at 500,400",
+        batch: function (ctx) {
+          return [
+            { tool: "add_solid", args: { comp: ctx.bnComp,
+                name: "ST PR Kid", color: [0, 0.6, 0.9],
+                width: 100, height: 100 } },
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST PR Kid", property: "anchorPoint",
+                value: [0, 0] } },
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST PR Kid", property: "position",
+                value: [500, 400] } },
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST PR Kid" } }
+          ];
+        },
+        check: function (rows, ctx) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + (i + 1) + ": " + rows[i].error;
+          }
+          var d = rows[3].data;
+          ctx.prCentre = [d.comp.centerX, d.comp.centerY];
+          return (Math.abs(d.comp.centerX - 550) < 0.01 &&
+                  Math.abs(d.comp.centerY - 450) < 0.01) ||
+                 "centre " + d.comp.centerX + "," + d.comp.centerY +
+                 ", expected 550,450";
+        } },
+
+      { name: "the default link moves nothing and rewrites the numbers",
+        batch: function (ctx) {
+          return [
+            { tool: "set_layer_parent", args: { comp: ctx.bnComp,
+                layer: "ST PR Kid", parent: "ST BN Null" } },
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST PR Kid" } },
+            { tool: "get_property", args: { comp: ctx.bnComp,
+                layer: "ST PR Kid", property: "position" } }
+          ];
+        },
+        check: function (rows, ctx) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + (i + 1) + ": " + rows[i].error;
+          }
+          if (rows[0].data.keepPosition !== true) {
+            return "keepPosition reported " +
+                   JSON.stringify(rows[0].data.keepPosition);
+          }
+          var d = rows[1].data;
+          if (Math.abs(d.comp.centerX - ctx.prCentre[0]) > 0.01 ||
+              Math.abs(d.comp.centerY - ctx.prCentre[1]) > 0.01) {
+            return "the layer MOVED: " + d.comp.centerX + "," +
+                   d.comp.centerY + ", expected " +
+                   ctx.prCentre.join(",") + " (inverted keepPosition)";
+          }
+          // The other half: AE paid for that by rewriting Position into
+          // the parent's space, 500,400 -> 200,200. A tool that parented
+          // without compensating would leave 500,400 here.
+          var v = rows[2].data.value;
+          if (Math.abs(v[0] - 200) > 0.01 || Math.abs(v[1] - 200) > 0.01) {
+            return "Position reads " + v.join(",") + ", expected 200,200";
+          }
+          return /rewrote/.test(rows[0].data.note || "") ||
+                 "the note does not mention the rewrite: " +
+                 rows[0].data.note;
+        } },
+
+      { name: "keepPosition:false jumps by exactly the parent's position",
+        batch: function (ctx) {
+          return [
+            { tool: "set_layer_parent", args: { comp: ctx.bnComp,
+                layer: "ST PR Kid", parent: null } },
+            { tool: "set_layer_parent", args: { comp: ctx.bnComp,
+                layer: "ST PR Kid", parent: "ST BN Null",
+                keepPosition: false } },
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST PR Kid" } },
+            { tool: "get_property", args: { comp: ctx.bnComp,
+                layer: "ST PR Kid", property: "position" } }
+          ];
+        },
+        check: function (rows, ctx) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + (i + 1) + ": " + rows[i].error;
+          }
+          var v = rows[3].data.value;
+          if (Math.abs(v[0] - 500) > 0.01 || Math.abs(v[1] - 400) > 0.01) {
+            return "keepPosition:false changed Position to " + v.join(",");
+          }
+          var d = rows[2].data;
+          var wantX = ctx.prCentre[0] + 300, wantY = ctx.prCentre[1] + 200;
+          if (Math.abs(d.comp.centerX - wantX) > 0.01 ||
+              Math.abs(d.comp.centerY - wantY) > 0.01) {
+            return "centre " + d.comp.centerX + "," + d.comp.centerY +
+                   ", expected " + wantX + "," + wantY;
+          }
+          return /JUMPED/.test(rows[1].data.note || "") ||
+                 "the note does not admit the jump: " + rows[1].data.note;
+        } },
+
+      // The silence worth breaking: keepPosition rewrites EVERY key, not
+      // just the current value, so a model holding the old numbers is
+      // holding numbers AE has thrown away.
+      { name: "a keyframed layer has all its keys rewritten, and is told",
+        batch: function (ctx) {
+          return [
+            { tool: "add_solid", args: { comp: ctx.bnComp,
+                name: "ST PR Keyed", color: [0.9, 0.4, 0],
+                width: 100, height: 100 } },
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST PR Keyed", property: "anchorPoint",
+                value: [0, 0] } },
+            { tool: "set_keyframes", args: { comp: ctx.bnComp,
+                layer: "ST PR Keyed", property: "Position",
+                keys: [{ time: 0, value: [500, 400] },
+                       { time: 2, value: [700, 400] }] } },
+            { tool: "set_layer_parent", args: { comp: ctx.bnComp,
+                layer: "ST PR Keyed", parent: "ST BN Null" } },
+            { tool: "get_property", args: { comp: ctx.bnComp,
+                layer: "ST PR Keyed", property: "position" } }
+          ];
+        },
+        check: function (rows) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + (i + 1) + ": " + rows[i].error;
+          }
+          var keys = rows[4].data.keys || [];
+          if (keys.length !== 2) return "keys: " + keys.length;
+          if (Math.abs(keys[0].value[0] - 200) > 0.01 ||
+              Math.abs(keys[1].value[0] - 400) > 0.01) {
+            return "keys read " + keys[0].value.join(",") + " and " +
+                   keys[1].value.join(",") + ", expected 200,200 and 400,200";
+          }
+          var rep = rows[3].data.keyframesRewritten || "";
+          if (rep.indexOf("ST PR Keyed") === -1) {
+            return "keyframesRewritten does not name the layer: " + rep;
+          }
+          return /old numbers are gone/.test(
+                   rows[3].data.keyframesNote || "") ||
+                 "no keyframesNote: " + rows[3].data.keyframesNote;
+        } },
+
+      // ---- the compensation happens at ONE frame -----------------------
+      // Measured 2026-08-29: AE works the compensation out once, from the
+      // parent's transform at the PLAYHEAD, and writes it into the child
+      // as fixed numbers. Under a parent that MOVES that makes "nothing
+      // jumped" true at exactly one frame -- a still layer stayed put at
+      // t=0 and was 400px away at t=2. Anchors are pinned to [0,0] so the
+      // offset AE applies is the parent's Position exactly.
+      { name: "parent rig: a parent that MOVES, and a still layer",
+        batch: function (ctx) {
+          return [
+            { tool: "add_solid", args: { comp: ctx.bnComp,
+                name: "ST PR Mover", color: [0.2, 0.8, 0.2],
+                width: 100, height: 100 } },
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST PR Mover", property: "anchorPoint",
+                value: [0, 0] } },
+            { tool: "set_keyframes", args: { comp: ctx.bnComp,
+                layer: "ST PR Mover", property: "Position",
+                keys: [{ time: 0, value: [100, 100] },
+                       { time: 2, value: [500, 100] }] } },
+            { tool: "add_solid", args: { comp: ctx.bnComp,
+                name: "ST PR Still", color: [0.8, 0.8, 0.2],
+                width: 100, height: 100 } },
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST PR Still", property: "anchorPoint",
+                value: [0, 0] } },
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST PR Still", property: "position",
+                value: [400, 300] } },
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST PR Still", time: 0 } },
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST PR Still", time: 2 } }
+          ];
+        },
+        check: function (rows) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + (i + 1) + ": " + rows[i].error;
+          }
+          var a = rows[6].data.comp, b = rows[7].data.comp;
+          return (Math.abs(a.centerX - 450) < 0.01 &&
+                  Math.abs(b.centerX - 450) < 0.01 &&
+                  Math.abs(a.centerY - 350) < 0.01) ||
+                 "the unparented layer is not still: t0 " + a.centerX + "," +
+                 a.centerY + " t2 " + b.centerX + "," + b.centerY +
+                 ", expected 450,350 at both";
+        } },
+
+      { name: "an animated parent holds the link at ONE frame, and says so",
+        batch: function (ctx) {
+          return [
+            { tool: "set_layer_parent", args: { comp: ctx.bnComp,
+                layer: "ST PR Still", parent: "ST PR Mover", atTime: 0 } },
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST PR Still", time: 0 } },
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST PR Still", time: 2 } },
+            { tool: "get_property", args: { comp: ctx.bnComp,
+                layer: "ST PR Still", property: "position" } }
+          ];
+        },
+        check: function (rows) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + (i + 1) + ": " + rows[i].error;
+          }
+          var d = rows[0].data;
+          if ((d.parentAnimated || "").indexOf("ST PR Mover") === -1 ||
+              (d.parentAnimated || "").indexOf("Position (2 keys)") === -1) {
+            return "parentAnimated does not name the moving parent: " +
+                   d.parentAnimated;
+          }
+          if (!/NOT a jump-free link/.test(d.parentAnimatedNote || "")) {
+            return "the note still calls it jump-free: " +
+                   d.parentAnimatedNote;
+          }
+          if (!/^0s \(frame 0\), as asked/.test(d.compensatedAt || "")) {
+            return "compensatedAt: " + d.compensatedAt;
+          }
+          var a = rows[1].data.comp, b = rows[2].data.comp;
+          if (Math.abs(a.centerX - 450) > 0.01) {
+            return "the layer moved AT the compensation frame: " + a.centerX;
+          }
+          if (Math.abs(b.centerX - 850) > 0.01) {
+            return "at t=2 the layer is at " + b.centerX +
+                   ", expected 850 (it must travel with the parent)";
+          }
+          var v = rows[3].data.value;
+          return (Math.abs(v[0] - 300) < 0.01 && Math.abs(v[1] - 200) < 0.01) ||
+                 "Position reads " + v.join(",") + ", expected 300,200";
+        } },
+
+      { name: "atTime picks WHICH frame must not move",
+        batch: function (ctx) {
+          return [
+            { tool: "add_solid", args: { comp: ctx.bnComp,
+                name: "ST PR Pinned", color: [0.2, 0.4, 0.9],
+                width: 100, height: 100 } },
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST PR Pinned", property: "anchorPoint",
+                value: [0, 0] } },
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST PR Pinned", property: "position",
+                value: [400, 300] } },
+            { tool: "set_layer_parent", args: { comp: ctx.bnComp,
+                layer: "ST PR Pinned", parent: "ST PR Mover", atFrame: 60 } },
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST PR Pinned", time: 2 } },
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST PR Pinned", time: 0 } }
+          ];
+        },
+        check: function (rows) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + (i + 1) + ": " + rows[i].error;
+          }
+          var d = rows[3].data;
+          if (!/^2s \(frame 60\)/.test(d.compensatedAt || "")) {
+            return "compensatedAt: " + d.compensatedAt;
+          }
+          var at2 = rows[4].data.comp, at0 = rows[5].data.comp;
+          if (Math.abs(at2.centerX - 450) > 0.01) {
+            return "the frame that was ASKED for moved: " + at2.centerX +
+                   ", expected 450";
+          }
+          return Math.abs(at0.centerX - 50) < 0.01 ||
+                 "t=0 is at " + at0.centerX + ", expected 50 (it is the " +
+                 "frame that gives way instead)";
+        } },
+
+      { name: "with no atTime the playhead is used, and named",
+        batch: function (ctx) {
+          return [
+            { tool: "add_solid", args: { comp: ctx.bnComp,
+                name: "ST PR Default", color: [0.9, 0.2, 0.6],
+                width: 100, height: 100 } },
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST PR Default", property: "anchorPoint",
+                value: [0, 0] } },
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST PR Default", property: "position",
+                value: [400, 300] } },
+            { tool: "set_layer_parent", args: { comp: ctx.bnComp,
+                layer: "ST PR Default", parent: "ST PR Mover" } },
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST PR Default", time: 0 } },
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST PR Default", time: 2 } }
+          ];
+        },
+        check: function (rows) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + (i + 1) + ": " + rows[i].error;
+          }
+          var d = rows[3].data;
+          if (!/playhead where it stood/.test(d.compensatedAt || "")) {
+            return "compensatedAt does not say where the frame came " +
+                   "from: " + d.compensatedAt;
+          }
+          if (!/frame \d+/.test(d.compensatedAt || "")) {
+            return "compensatedAt names no frame: " + d.compensatedAt;
+          }
+          // Playhead-agnostic: wherever it was compensated, the layer now
+          // travels, which is the whole point of the warning.
+          var a = rows[4].data.comp, b = rows[5].data.comp;
+          return Math.abs(b.centerX - a.centerX - 400) < 0.01 ||
+                 "the layer does not travel with the parent: t0 " +
+                 a.centerX + " t2 " + b.centerX + " (expected 400 apart)";
+        } },
+
+      { name: "unparenting from a moving parent admits what it took away",
+        batch: function (ctx) {
+          return [
+            { tool: "set_layer_parent", args: { comp: ctx.bnComp,
+                layer: "ST PR Still", parent: null, atTime: 0 } },
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST PR Still", time: 0 } },
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST PR Still", time: 2 } }
+          ];
+        },
+        check: function (rows) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + (i + 1) + ": " + rows[i].error;
+          }
+          var d = rows[0].data;
+          if ((d.parentAnimated || "").indexOf("ST PR Mover") === -1) {
+            return "the parent it LEFT is not named: " + d.parentAnimated;
+          }
+          if (!/loses the motion/.test(d.parentAnimatedNote || "")) {
+            return "the note is not about what was taken away: " +
+                   d.parentAnimatedNote;
+          }
+          var a = rows[1].data.comp, b = rows[2].data.comp;
+          return (Math.abs(a.centerX - 450) < 0.01 &&
+                  Math.abs(b.centerX - 450) < 0.01) ||
+                 "the layer did not come to rest at 450: t0 " + a.centerX +
+                 " t2 " + b.centerX;
+        } },
+
+      { name: "atTime outside the comp is refused with the range",
+        tool: "set_layer_parent",
+        args: function (ctx) {
+          return { comp: ctx.bnComp, layer: "ST PR Still",
+                   parent: "ST PR Mover", atTime: 99 };
+        },
+        expectError: true,
+        check: function (err) {
+          return (/0 to 6/.test(err) && /30 fps/.test(err)) ||
+                 "ungrounded refusal: " + err;
+        } },
+
+      // ---- mixed dimensions: the other half of the same question -------
+      // Measured 2026-08-29: the compensation SURVIVES a child and parent
+      // that disagree about 3D. A 2D parent leaves the child's Z alone
+      // (it does not zero it, the way turning the 3D switch off does),
+      // and a 3D parent's Z never reaches a 2D child at all -- AE
+      // compensates in X/Y only and the picture does not move.
+      { name: "a 2D parent leaves a 3D child's Z alone",
+        batch: function (ctx) {
+          return [
+            { tool: "add_solid", args: { comp: ctx.bnComp,
+                name: "ST PR Flat", color: [0.5, 0.5, 0.5],
+                width: 100, height: 100 } },
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST PR Flat", property: "anchorPoint",
+                value: [0, 0] } },
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST PR Flat", property: "position",
+                value: [100, 100] } },
+            { tool: "add_solid", args: { comp: ctx.bnComp,
+                name: "ST PR Deep", color: [0.3, 0.9, 0.9],
+                width: 100, height: 100 } },
+            { tool: "set_layer_3d", args: { comp: ctx.bnComp,
+                layer: "ST PR Deep", enabled: true } },
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST PR Deep", property: "anchorPoint",
+                value: [0, 0, 0] } },
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST PR Deep", property: "position",
+                value: [400, 300, 200] } },
+            { tool: "set_layer_parent", args: { comp: ctx.bnComp,
+                layer: "ST PR Deep", parent: "ST PR Flat" } },
+            { tool: "get_property", args: { comp: ctx.bnComp,
+                layer: "ST PR Deep", property: "position" } }
+          ];
+        },
+        check: function (rows) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + (i + 1) + ": " + rows[i].error;
+          }
+          if (rows[7].data.parentAnimated) {
+            return "a still parent was reported as animated: " +
+                   rows[7].data.parentAnimated;
+          }
+          var v = rows[8].data.value;
+          if (Math.abs(v[0] - 300) > 0.01 || Math.abs(v[1] - 200) > 0.01) {
+            return "X/Y read " + v[0] + "," + v[1] + ", expected 300,200";
+          }
+          return Math.abs(v[2] - 200) < 0.01 ||
+                 "the Z was changed to " + v[2] + "; a 2D parent must " +
+                 "leave it at 200";
+        } },
+
+      { name: "a 3D parent's Z never reaches a 2D child",
+        batch: function (ctx) {
+          return [
+            { tool: "add_solid", args: { comp: ctx.bnComp,
+                name: "ST PR ZParent", color: [0.6, 0.3, 0.1],
+                width: 100, height: 100 } },
+            { tool: "set_layer_3d", args: { comp: ctx.bnComp,
+                layer: "ST PR ZParent", enabled: true } },
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST PR ZParent", property: "anchorPoint",
+                value: [0, 0, 0] } },
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST PR ZParent", property: "position",
+                value: [400, 300, -400] } },
+            { tool: "add_solid", args: { comp: ctx.bnComp,
+                name: "ST PR FlatKid", color: [0.9, 0.9, 0.3],
+                width: 100, height: 100 } },
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST PR FlatKid", property: "anchorPoint",
+                value: [0, 0] } },
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST PR FlatKid", property: "position",
+                value: [400, 300] } },
+            { tool: "set_layer_parent", args: { comp: ctx.bnComp,
+                layer: "ST PR FlatKid", parent: "ST PR ZParent" } },
+            { tool: "get_property", args: { comp: ctx.bnComp,
+                layer: "ST PR FlatKid", property: "position" } }
+          ];
+        },
+        check: function (rows) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + (i + 1) + ": " + rows[i].error;
+          }
+          var v = rows[8].data.value;
+          return (Math.abs(v[0]) < 0.01 && Math.abs(v[1]) < 0.01) ||
+                 "Position reads " + v.join(",") + ", expected 0,0 -- the " +
+                 "compensation must use the parent's X/Y and nothing else";
+        } },
+
+      { name: "parent rig: clean up",
+        batch: function (ctx) {
+          return [
+            { tool: "delete_layer", args: { comp: ctx.bnComp,
+                layer: "ST PR Kid" } },
+            { tool: "delete_layer", args: { comp: ctx.bnComp,
+                layer: "ST PR Keyed" } },
+            { tool: "delete_layer", args: { comp: ctx.bnComp,
+                layer: "ST PR Still" } },
+            { tool: "delete_layer", args: { comp: ctx.bnComp,
+                layer: "ST PR Pinned" } },
+            { tool: "delete_layer", args: { comp: ctx.bnComp,
+                layer: "ST PR Default" } },
+            { tool: "delete_layer", args: { comp: ctx.bnComp,
+                layer: "ST PR Mover" } },
+            { tool: "delete_layer", args: { comp: ctx.bnComp,
+                layer: "ST PR Deep" } },
+            { tool: "delete_layer", args: { comp: ctx.bnComp,
+                layer: "ST PR Flat" } },
+            { tool: "delete_layer", args: { comp: ctx.bnComp,
+                layer: "ST PR FlatKid" } },
+            { tool: "delete_layer", args: { comp: ctx.bnComp,
+                layer: "ST PR ZParent" } }
+          ];
+        },
+        check: function (rows) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + (i + 1) + ": " + rows[i].error;
+          }
+          return true;
+        } },
+
+      // add_text_layer takes no 'name': AE names a text layer after its
+      // own text, so the step uses whatever came back.
+      { name: "text is measured as CONTENT, not as the comp",
+        batch: function (ctx) {
+          return [
+            { tool: "add_text_layer", args: { comp: ctx.bnComp,
+                text: "ST BN Text", fontSize: 48 } },
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST BN Text" } }
+          ];
+        },
+        check: function (rows) {
+          if (!rows[0].ok) return rows[0].error;
+          if (!rows[1].ok) return rows[1].error;
+          var s = rows[1].data.source;
+          if (!(s.width > 10 && s.width < 900)) {
+            return "text width " + s.width + " — expected the drawn glyphs";
+          }
+          if (!(s.height > 10 && s.height < 200)) {
+            return "text height " + s.height;
+          }
+          // AE measures text from its BASELINE, so the box starts above
+          // the origin. A tool that reported 0 here would be guessing.
+          return s.top < 0 ||
+                 "text top " + s.top + " — expected a negative (above the " +
+                 "baseline) origin";
+        } },
+
+      { name: "bounds rig: a shape layer with a tiny default rect",
+        tool: "add_shape_layer",
+        args: function (ctx) {
+          return { comp: ctx.bnComp, name: "ST BN Shape", size: [2, 2],
+                   fillColor: [0, 0, 1], position: [500, 400] };
+        },
+        check: function (d) { return d.name === "ST BN Shape" || d.name; } },
+
+      { name: "bounds rig: a 100x100 stroked rectangle in its own group",
+        batch: function (ctx) {
+          return [
+            { tool: "add_shape_content", args: { comp: ctx.bnComp,
+                layer: "ST BN Shape", kind: "group", name: "ST BN Grp" } },
+            { tool: "add_shape_content", args: { comp: ctx.bnComp,
+                layer: "ST BN Shape", kind: "rectangle", group: "ST BN Grp",
+                params: { Size: [100, 100], Position: [0, 0] } } },
+            { tool: "add_shape_content", args: { comp: ctx.bnComp,
+                layer: "ST BN Shape", kind: "fill", group: "ST BN Grp",
+                params: { Color: [0, 1, 0, 1] } } },
+            { tool: "add_shape_content", args: { comp: ctx.bnComp,
+                layer: "ST BN Shape", kind: "stroke", group: "ST BN Grp" } }
+          ];
+        },
+        check: function (rows, ctx) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + (i + 1) + ": " + rows[i].error;
+          }
+          ctx.bnRect = rows[1].data.added;
+          ctx.bnStroke = rows[3].data.added;
+          return true;
+        } },
+
+      { name: "bounds rig: a 40px stroke on it",
+        tool: "set_property",
+        args: function (ctx) {
+          return { comp: ctx.bnComp, layer: "ST BN Shape",
+                   property: "contents/ST BN Grp/" + ctx.bnStroke +
+                             "/Stroke Width", value: 40 };
+        },
+        check: function (d) { return d.value === 40 || "value " + d.value; } },
+
+      { name: "extents:false measures the path, extents:true the stroke",
+        batch: function (ctx) {
+          return [
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST BN Shape" } },
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST BN Shape", extents: true } }
+          ];
+        },
+        check: function (rows) {
+          if (!rows[0].ok) return rows[0].error;
+          if (!rows[1].ok) return rows[1].error;
+          var plain = rows[0].data.source, ext = rows[1].data.source;
+          if (plain.width !== 100 || plain.height !== 100) {
+            return "path box " + plain.width + "x" + plain.height +
+                   ", expected 100x100";
+          }
+          if (ext.width !== 300 || ext.height !== 300) {
+            return "extents box " + ext.width + "x" + ext.height +
+                   ", expected 300x300 — AE reserves the MITER allowance " +
+                   "(half-width x (miter limit 4 + 1) = 100 a side for a " +
+                   "40px stroke), not half the stroke width";
+          }
+          return rows[0].data.extents === false &&
+                 rows[1].data.extents === true ||
+                 "the result did not report which mode it used";
+        } },
+
+      { name: "bounds rig: animate the rectangle's Size",
+        tool: "set_keyframes",
+        args: function (ctx) {
+          return { comp: ctx.bnComp, layer: "ST BN Shape",
+                   property: "contents/ST BN Grp/" + ctx.bnRect + "/Size",
+                   keys: [{ time: 0, value: [100, 100] },
+                          { time: 2, value: [600, 100] }] };
+        },
+        check: function (d) {
+          return d.easedPairs === undefined || true;
+        } },
+
+      { name: "bounds at a TIME reads that frame's content",
+        batch: function (ctx) {
+          return [
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST BN Shape", time: 0 } },
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST BN Shape", time: 2 } }
+          ];
+        },
+        check: function (rows) {
+          if (!rows[0].ok) return rows[0].error;
+          if (!rows[1].ok) return rows[1].error;
+          if (rows[0].data.source.width !== 100) {
+            return "t=0 width " + rows[0].data.source.width;
+          }
+          return rows[1].data.source.width === 600 ||
+                 "t=2 width " + rows[1].data.source.width + ", expected 600";
+        } },
+
+      { name: "bounds rig: slide the shape two seconds later",
+        tool: "set_layer_timing",
+        args: function (ctx) {
+          return { comp: ctx.bnComp, layer: "ST BN Shape", startTime: 2 };
+        },
+        check: function (d) {
+          return d.startTime === 2 || "startTime " + d.startTime;
+        } },
+
+      // THE trap: AE's property times are comp times and slid with the
+      // layer, but sourceRectAtTime takes the layer's own source time.
+      // Handing it comp time (as this panel used to) measures a frame the
+      // viewer is not showing.
+      { name: "a slid layer is measured at SOURCE time, not comp time",
+        batch: function (ctx) {
+          return [
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST BN Shape", time: 2 } },
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST BN Shape", time: 4 } }
+          ];
+        },
+        check: function (rows) {
+          if (!rows[0].ok) return rows[0].error;
+          if (!rows[1].ok) return rows[1].error;
+          var early = rows[0].data, late = rows[1].data;
+          if (early.source.width !== 100) {
+            return "comp 2s (source 0s) width " + early.source.width +
+                   ", expected 100 — comp time was passed straight through";
+          }
+          if (late.source.width !== 600) {
+            return "comp 4s (source 2s) width " + late.source.width;
+          }
+          if (early.sourceTime !== 0) {
+            return "sourceTime " + early.sourceTime + ", expected 0";
+          }
+          return /source time/.test(early.timeNote || "") ||
+                 "no timeNote explaining the two clocks";
+        } },
+
+      { name: "bounds rig: slide the shape back",
+        tool: "set_layer_timing",
+        args: function (ctx) {
+          return { comp: ctx.bnComp, layer: "ST BN Shape", startTime: 0 };
+        },
+        check: function () { return true; } },
+
+      { name: "a layer over the edge reports which side and by how much",
+        batch: function (ctx) {
+          return [
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST BN Solid", property: "position",
+                value: [-100, 400] } },
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST BN Solid" } },
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST BN Solid", property: "position",
+                value: [2000, 400] } },
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST BN Solid" } }
+          ];
+        },
+        check: function (rows) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + (i + 1) + ": " + rows[i].error;
+          }
+          var part = rows[1].data, gone = rows[3].data;
+          if (part.inFrame !== "partly") return "inFrame " + part.inFrame;
+          if (part.outsideBy.left !== 100) {
+            return "outsideBy " + JSON.stringify(part.outsideBy);
+          }
+          if (part.outsideBy.right || part.outsideBy.top ||
+              part.outsideBy.bottom) {
+            return "sides that are inside were reported: " +
+                   JSON.stringify(part.outsideBy);
+          }
+          if (gone.inFrame !== "outside") return "inFrame " + gone.inFrame;
+          return gone.outsideBy.right === 1200 ||
+                 "outsideBy " + JSON.stringify(gone.outsideBy);
+        } },
+
+      { name: "a 3D layer gets the source rect and an honest refusal",
+        batch: function (ctx) {
+          return [
+            { tool: "set_transform", args: { comp: ctx.bnComp,
+                layer: "ST BN Solid", property: "position",
+                value: [500, 400] } },
+            { tool: "set_layer_3d", args: { comp: ctx.bnComp,
+                layer: "ST BN Solid", enabled: true } },
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST BN Solid" } },
+            { tool: "set_layer_3d", args: { comp: ctx.bnComp,
+                layer: "ST BN Solid", enabled: false } }
+          ];
+        },
+        check: function (rows) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!rows[i].ok) return "row " + (i + 1) + ": " + rows[i].error;
+          }
+          var d = rows[2].data;
+          if (d.source.width !== 200) {
+            return "3D source rect " + JSON.stringify(d.source);
+          }
+          if (d.comp !== null) {
+            return "a comp box was reported for a 3D layer: " +
+                   JSON.stringify(d.comp);
+          }
+          return (/ST BN Solid/.test(d.compBoxUnavailable || "") &&
+                  /camera/.test(d.compBoxUnavailable || "")) ||
+                 "compBoxUnavailable: " + d.compBoxUnavailable;
+        } },
+
+      { name: "bounds rig: a camera",
+        tool: "add_camera",
+        args: function (ctx) {
+          return { comp: ctx.bnComp, name: "ST BN Cam" };
+        },
+        check: function () { return true; } },
+
+      { name: "a camera has no bounds, and the refusal says what does",
+        tool: "get_bounds",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.bnComp, layer: "ST BN Cam" };
+        },
+        check: function (err) {
+          if (!/renders no pixels/.test(err)) return err;
+          return /text, shape, solid, footage, precomp, null/.test(err) ||
+                 "the refusal does not list what DOES have bounds: " + err;
+        } },
+
+      { name: "a layer that draws nothing says so instead of reporting 0",
+        batch: function (ctx) {
+          return [
+            { tool: "add_shape_layer", args: { comp: ctx.bnComp,
+                name: "ST BN Empty", size: [0, 0] } },
+            { tool: "get_bounds", args: { comp: ctx.bnComp,
+                layer: "ST BN Empty" } }
+          ];
+        },
+        check: function (rows) {
+          if (!rows[0].ok) return rows[0].error;
+          if (!rows[1].ok) return rows[1].error;
+          var d = rows[1].data;
+          if (d.source.width !== 0 || d.source.height !== 0) {
+            return "an empty shape layer measured " +
+                   d.source.width + "x" + d.source.height;
+          }
+          return /renders nothing/.test(d.empty || "") ||
+                 "no 'empty' note: " + JSON.stringify(d);
+        } },
+
+      { name: "a {layers: [...]} batch is refused, not half-done",
+        tool: "get_bounds",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.bnComp, layers: ["ST BN Solid", "ST BN Text"] };
+        },
+        check: function (err) {
+          return (/ONE layer/.test(err) && /once per layer/.test(err)) || err;
+        } },
+
       { name: "cleanup: delete the fan-out rig",
         tool: "delete_item",
         args: { item: "ST FanParent" },
+        check: function () { return true; } },
+
+      { name: "cleanup: delete the bounds comp",
+        tool: "delete_item",
+        args: function (ctx) { return { item: ctx.bnComp }; },
         check: function () { return true; } },
 
       { name: "cleanup: delete the renamed plain comp",
