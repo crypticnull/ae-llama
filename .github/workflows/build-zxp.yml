@@ -126,11 +126,18 @@ jobs:
           $feed.panelVersion = $ver
           $feed.panelPackageUrl = "https://raw.githubusercontent.com/crypticnull/ae-llama-updates/main/AE-Llama.zxp?v=$ver"
           # Real release notes ride in release-notes.txt at the repo root
-          # (the update banner shows them to every panel); without one the
-          # version string is the note, as before.
+          # (the update banner shows them to every panel). MINOR-scoped:
+          # the file is used only while its leading version matches the
+          # current minor, so a patch feed cannot carry stale notes from
+          # a previous release line (four unattended passes flagged
+          # exactly that before this guard existed). Notes for 0.10.x
+          # start "0.10"; when 0.11.0 ships without a rewrite, the feed
+          # falls back to the plain version string instead of lying.
           $notes = "AE Llama $ver"
           if (Test-Path release-notes.txt) {
-            $notes = (Get-Content -Raw release-notes.txt).Trim()
+            $txt = (Get-Content -Raw release-notes.txt).Trim()
+            $minor = $ver -replace '\.\d+$', ''
+            if ($txt.StartsWith($minor)) { $notes = $txt }
           }
           $feed.notes = $notes
           $feed | ConvertTo-Json -Depth 8 | Set-Content ../feedwt/update.json -Encoding UTF8
