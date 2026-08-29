@@ -337,6 +337,24 @@ const cvKeyList = (layer, prop) => {
   return cvKeys[k];
 };
 const inCvComp = (a) => !!(a && /Cover/.test(a.comp || ""));
+
+// ---- the audio rig, modelled from AE 2026 rather than from the tool.
+// A solid is silent until Tone is applied; then the converter hears it.
+// One tone peaks at 34.33 on this rig, two at 36.02 — both measured, and
+// the gap is what the suite's isolate/un-mute steps read.
+const inAuComp = (a) => !!(a && /Self-Test Audio/.test(a.comp || ""));
+let auLayers = [];         // {name, audio: bool}
+let auNulls = [];          // the nulls the converter has left behind
+function resetAuRig() { auLayers = []; auNulls = []; }
+const auFind = (n) => auLayers.filter(l => l.name === String(n))[0];
+const auPeak = (n) => Math.round((34.33 + 1.69 * (n - 1)) * 100) / 100;
+const auUnique = (base) => {
+  const taken = auLayers.map(l => l.name).concat(auNulls);
+  if (taken.indexOf(base) === -1) return base;
+  let k = 2;
+  while (taken.indexOf(base + " " + k) !== -1) k++;
+  return base + " " + k;
+};
 // Two effects of one class on one layer: AE names the second "<name> 2",
 // and both hand out a param called "Blurriness" at the same depth under
 // the same root. Equal standing is never guessed between.
@@ -1441,11 +1459,23 @@ function cannedOk(tool, args) {
         markDriven(nm, "position", [320 + (i % 3) * 320, 180, 0]));
       return { sliders: ["Grid X Spacing", "Grid Y Spacing",
                          "Grid Columns"] };
-    case "link_property":
+    case "link_property": {
       // Same shape: the linked property now reads from the slider.
       markDriven(args && args.layer, args && args.property, 22.2);
-      return { layer: args && args.layer,
-               property: args && args.property };
+      const out = { layer: args && args.layer,
+                    property: args && args.property };
+      // The real tool WRITES the expression and reports it — a canned
+      // host that omitted it let a step assert on a field that is
+      // always there in AE and never here.
+      const cl = args && args.controlLayer, ce = args && args.controlEffect;
+      if (cl && ce) {
+        const sc = args && typeof args.scale === "number" ? args.scale : 1;
+        out.linkedTo = cl + " > " + ce;
+        out.expression = 'thisComp.layer("' + cl + '").effect("' + ce +
+                         '")(1)' + (sc !== 1 ? " * " + sc : "") + ";";
+      }
+      return out;
+    }
     case "get_property": {
       const SLg = shapeLayerOf(args && args.layer);
       if (SLg && /^contents\//i.test(String((args && args.property) || ""))) {
@@ -1982,8 +2012,23 @@ function cannedOk(tool, args) {
       if (inBatComp(args)) batSolids.push(args.name);
       if (inRbComp(args)) rbLayers.push(args.name);
       if (inPcComp(args)) pcLayers.push(args.name);
+      // A fresh solid is SILENT — hasAudio is false until Tone lands.
+      if (inAuComp(args)) auLayers.push({ name: args.name, audio: false });
       return { name: (args && args.name) || "ST Square" };
     case "apply_effect":
+      if (inAuComp(args)) {
+        if (String(args.effect) !== "Tone") {
+          return { __err: "Effect not available: " + args.effect };
+        }
+        const host = auFind(args.layer);
+        if (!host) return { __err: "Layer not found: " + args.layer };
+        host.audio = true;      // measured: layer.hasAudio flips to true
+        return { layer: args.layer, effect: "Tone",
+                 matchName: "ADBE Aud Tone",
+                 params: ["Waveform options", "Frequency 1", "Frequency 2",
+                          "Frequency 3", "Frequency 4", "Frequency 5",
+                          "Level", "Compositing Options"] };
+      }
       if (inCvComp(args)) {
         const have = cvFx[args.layer] || (cvFx[args.layer] = []);
         // AE's own duplicate-name rule: the second copy becomes "<name> 2".
@@ -2723,6 +2768,57 @@ function cannedOk(tool, args) {
     // measured hazards rather than the happy path: the whole-queue
     // render, the overwrite modal, and the output module forcing its own
     // extension onto the path it is handed.
+    // AE's converter is silent on failure and blind to the selection, so
+    // this models the TOOL's contract around it: refuse before calling,
+    // isolate by muting, unique the null's name, say what it measured.
+    case "audio_to_keyframes": {
+      const comp = String((args && args.comp) || "");
+      const range = String((args && args.range) || "comp");
+      if (range !== "comp" && range !== "workArea") {
+        return { __err: "'range' must be 'comp' (whole comp, the default) " +
+          "or 'workArea' (AE's own behaviour - work area only)." };
+      }
+      const audible = auLayers.filter(l => l.audio);
+      if (!auLayers.some(l => l.audio)) {
+        return { __err: "No layer in '" + comp + "' has audio, and AE's " +
+          "converter would silently do nothing. Layers here: " +
+          auLayers.map(l => l.name).concat(auNulls).join(", ") +
+          ". Import an audio or video file with import_file and add it to " +
+          "the comp first." };
+      }
+      let only = null;
+      if (args && args.layer) {
+        only = auFind(args.layer);
+        if (!only || !only.audio) {
+          return { __err: "'" + args.layer + "' has no audio track. Layers " +
+            "with audio in '" + comp + "': " +
+            audible.map(l => l.name).join(", ") +
+            ". Omit 'layer' to measure the whole comp mix." };
+        }
+      }
+      const heard = only ? 1 : audible.length;
+      const wanted = (args && args.name) ? String(args.name)
+                                         : "Audio Amplitude";
+      const name = auUnique(wanted);
+      auNulls.push(name);
+      const out = { layer: name, index: 1, controlLayer: name,
+        controlEffects: ["Left Channel", "Right Channel", "Both Channels"],
+        keyframes: 73, rangeStart: 0, rangeEnd: 3, peak: auPeak(heard),
+        measured: only ? only.name : "whole comp mix",
+        next: "Drive anything with link_property {layer: <target>, " +
+              "property: <prop>, controlLayer: '" + name + "', " +
+              "controlEffect: 'Both Channels', scale: <n>}." };
+      if (name !== wanted) {
+        out.nameTaken = "'" + wanted + "' was already a layer in this comp " +
+          "- this one is '" + name + "'. Use THIS name from here on.";
+      }
+      if (only && audible.length > 1) {
+        out.isolated = "AE's converter always reads the whole comp mix, so " +
+          audible.filter(l => l !== only).map(l => l.name).join(", ") +
+          " was muted for the conversion and un-muted again.";
+      }
+      return out;
+    }
     case "list_render_templates": {
       return { renderSettings: RQ_RS_TEMPLATES.slice(),
                outputModules: RQ_OM_TEMPLATES.slice(),
@@ -2931,7 +3027,7 @@ SelfTest.run({
     ordStack = [];
     maskKeys = {};
     batchLayers = 0; batchFx = {}; batchBlur = null;
-    batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetPresetRig(); resetRqRig();
+    batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetPresetRig(); resetRqRig(); resetAuRig();
     SelfTest.run({
       callHostTool(tool, args, cb) {
         if (tool === "grid_layout") {
@@ -2961,7 +3057,7 @@ SelfTest.run({
         ordStack = [];
         maskKeys = {};
         batchLayers = 0; batchFx = {}; batchBlur = null;
-        batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetPresetRig(); resetRqRig();
+        batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetPresetRig(); resetRqRig(); resetAuRig();
         SelfTest.run({
           callHostTool(tool, args, cb) {
             // Never refuse anything -- the old permissive host.

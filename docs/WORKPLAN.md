@@ -698,13 +698,31 @@ reduceProject DELETES, so it requires an explicit comp argument and
 reports counts; everything in one undo group. Refuse vague asks with a
 grounded list of actions.
 
-### 5.7 Audio to keyframes
-Probe: `app.findMenuCommandId("Convert Audio to Keyframes")` — does the
-id exist, what selection/active-comp state it needs, exact name of the
-created null and its slider paths. Build: `audio_to_keyframes` {layer}
-returning the null + slider path ready for link_property. Grounded error
-lists audio-capable layers. This plus link_property = beat-driven
-anything.
+### 5.7 Audio to keyframes — DONE 2026-08-28
+Probed, built and covered in one pass. The id exists (4218, and ONLY for
+the exact string "Convert Audio to Keyframes"), but the sketch's `{layer}`
+was disproven: the command ignores the selection and converts the whole
+comp MIX of whatever comp is ACTIVE. Per-layer isolation is built on the
+next measurement instead — a muted layer contributes an all-zero curve —
+so `audio_to_keyframes {comp?, layer?, name?, range?}` mutes the other
+audible layers for the conversion and un-mutes them again. Four more
+measurements shaped it: the command is bounded by the WORK AREA (0.5..1.5
+on a 4s/24fps comp gave 25 keys, not 97), it never uniques the null's
+name (two runs, two layers called "Audio Amplitude"), it leaves nothing
+selected, and with no audio-capable layer it creates nothing and says
+nothing at all — no throw, no dialog — which is why the tool refuses
+first and lists what IS in the comp. Suite coverage needed no audio file:
+Tone on a solid flips `layer.hasAudio` to true and the converter hears it
+(73 keys, peak 34.33 on 3s/24fps; two tones 36.02, which is what the
+isolate/un-mute steps read). 66 stub checks, 13 suite steps, harness
+391 -> 404. No version bump (feature track).
+
+Original text: Probe: `app.findMenuCommandId("Convert Audio to
+Keyframes")` — does the id exist, what selection/active-comp state it
+needs, exact name of the created null and its slider paths. Build:
+`audio_to_keyframes` {layer} returning the null + slider path ready for
+link_property. Grounded error lists audio-capable layers. This plus
+link_property = beat-driven anything.
 
 ### 5.8 Frame round-trip (the local foundation for image/video gen)
 Build on 5.5's probe: `snapshot_frame` {comp, time, path} writes a PNG

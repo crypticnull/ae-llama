@@ -3079,6 +3079,268 @@ AELL_TOOLS.link_property = function (args) {
                      expression: expr });
 };
 
+/*
+ * Convert Audio to Keyframes (menu command 4218, measured in AE 2026 —
+ * the exact string "Convert Audio to Keyframes" resolves, any other
+ * casing or an ellipsis returns 0).
+ *
+ * Everything this tool does around that one call comes from what the
+ * command does NOT do, all measured in the field:
+ *  - it reads the ACTIVE comp, not a comp we hand it, so the target has
+ *    to be in the viewer first;
+ *  - it reads the whole comp MIX and ignores the selection entirely, so
+ *    isolating one layer means temporarily muting the other audible
+ *    ones (a muted layer contributes an all-zero curve, measured);
+ *  - it is bounded by the WORK AREA, so a trimmed work area silently
+ *    yields keyframes for that slice only;
+ *  - with no audible audio it does nothing at all: no layer, no error,
+ *    no dialog — which is why this refuses BEFORE calling it;
+ *  - it never uniques the null's name: run it twice and the comp has
+ *    two layers called "Audio Amplitude", and every name-based
+ *    reference after that is ambiguous.
+ */
+var AELL_A2K_CMD = "Convert Audio to Keyframes";
+var AELL_A2K_MAIN = "Both Channels";
+
+/* AVLayer-only switches: cameras and lights answer 'undefined'. */
+function AELL_hasAudio(layer) {
+  try { return layer.hasAudio === true; } catch (e) { return false; }
+}
+function AELL_audioOn(layer) {
+  // audioEnabled is the MUTE switch and is time-independent. audioActive
+  // is NOT usable here: it also asks whether the layer is audible at the
+  // CURRENT time, so a music layer starting at 2s reads false while the
+  // playhead sits at 0 and this would refuse a perfectly good comp.
+  try { return layer.audioEnabled === true && layer.enabled !== false; }
+  catch (e) { return false; }
+}
+
+function AELL_a2kAudioLayers(comp) {
+  var out = [];
+  for (var i = 1; i <= comp.numLayers; i++) {
+    var L = comp.layer(i);
+    if (AELL_hasAudio(L)) out.push(L);
+  }
+  return out;
+}
+
+/* AELL_uniqueLayerName with one layer held out of the "taken" set — the
+ * layer AE has just created is already IN the comp when we go to name
+ * it, so counting it would rename every single null "Audio Amplitude 2".
+ */
+function AELL_uniqueLayerNameExcept(comp, base, skip) {
+  var taken = {};
+  for (var i = 1; i <= comp.numLayers; i++) {
+    var L = comp.layer(i);
+    if (L === skip || AELL_sameLayer(L, skip)) continue;
+    taken[L.name] = true;
+  }
+  if (!taken[base]) return base;
+  var k = 2;
+  while (taken[base + " " + k]) k++;
+  return base + " " + k;
+}
+
+function AELL_sameLayer(a, b) {
+  try {
+    if (typeof a.id === "number" && typeof b.id === "number") {
+      return a.id === b.id;
+    }
+  } catch (e) {}
+  return false;
+}
+
+function AELL_layerIdSet(comp) {
+  var ids = {};
+  for (var i = 1; i <= comp.numLayers; i++) {
+    try { ids[comp.layer(i).id] = true; } catch (e) {}
+  }
+  return ids;
+}
+
+AELL_TOOLS.audio_to_keyframes = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  var i;
+
+  // A bad ARGUMENT is checked before the comp's STATE, so a typo in
+  // 'range' is refused as a typo rather than as "this comp has no audio".
+  var range = String(args.range || "comp").toLowerCase();
+  if (range !== "comp" && range !== "workarea") {
+    return AELL_err("'range' must be 'comp' (whole comp, the default) or " +
+                    "'workArea' (AE's own behaviour — work area only).");
+  }
+
+  var audio = AELL_a2kAudioLayers(comp);
+  if (audio.length === 0) {
+    var names = [];
+    for (i = 1; i <= comp.numLayers && names.length < 15; i++) {
+      names.push(comp.layer(i).name);
+    }
+    return AELL_err("No layer in '" + comp.name + "' has audio, and AE's " +
+      "converter would silently do nothing. Layers here: " +
+      (names.join(", ") || "(none)") + ". Import an audio or video file " +
+      "with import_file and add it to the comp first.");
+  }
+
+  // Which layer's audio are we measuring?
+  var only = null;
+  if (args.layer !== null && typeof args.layer !== "undefined" &&
+      args.layer !== "") {
+    only = AELL_resolveLayer(comp, args.layer);
+    if (!AELL_hasAudio(only)) {
+      return AELL_err("'" + only.name + "' has no audio track. Layers with " +
+        "audio in '" + comp.name + "': " +
+        AELL_layerNamesOf(audio) +
+        ". Omit 'layer' to measure the whole comp mix.");
+    }
+    if (!AELL_audioOn(only)) {
+      return AELL_err("'" + only.name + "' has audio but it is muted (the " +
+        "speaker switch is off" + (only.enabled === false ?
+        " and the layer is disabled" : "") + "), so every keyframe would " +
+        "be zero. Un-mute it in AE, or pick another layer.");
+    }
+  }
+
+  var audible = [], mutedByUser = [];
+  for (i = 0; i < audio.length; i++) {
+    if (AELL_audioOn(audio[i])) audible.push(audio[i]);
+    else mutedByUser.push(audio[i]);
+  }
+  if (audible.length === 0) {
+    return AELL_err("Every audio layer in '" + comp.name + "' is muted (" +
+      AELL_layerNamesOf(mutedByUser) + ") — the converter would " +
+      "write a flat zero curve. Un-mute one first.");
+  }
+
+  // Silence everything we are not measuring, and remember exactly what we
+  // changed so a throw cannot leave the user's comp muted.
+  var silenced = [];
+  if (only) {
+    for (i = 0; i < audible.length; i++) {
+      if (audible[i] === only) continue;
+      silenced.push(audible[i]);
+    }
+  }
+  var wasStart = comp.workAreaStart, wasDur = comp.workAreaDuration;
+  var partial = wasStart > 0.0000001 || wasDur < comp.duration - 0.0000001;
+  var widened = false;
+  var created = null, before = null;
+  var failure = "";
+  try {
+    for (i = 0; i < silenced.length; i++) silenced[i].audioEnabled = false;
+    if (range === "comp" && partial) {
+      comp.workAreaStart = 0;
+      comp.workAreaDuration = comp.duration;
+      widened = true;
+    }
+    before = AELL_layerIdSet(comp);
+    AELL_keepSelection(comp, function () {
+      // The command drops the new null next to whatever is selected;
+      // with nothing selected it always lands at the top. keepSelection
+      // hands the user's selection back afterwards.
+      for (var k = 1; k <= comp.numLayers; k++) comp.layer(k).selected = false;
+      comp.openInViewer();
+      app.executeCommand(app.findMenuCommandId(AELL_A2K_CMD));
+    });
+    for (i = 1; i <= comp.numLayers; i++) {
+      var L = comp.layer(i);
+      var id = null;
+      try { id = L.id; } catch (eI) { id = null; }
+      if (id !== null && !before[id]) { created = L; break; }
+    }
+  } catch (eRun) {
+    failure = eRun.toString();
+  }
+  // Put the comp back, whatever happened above.
+  for (i = 0; i < silenced.length; i++) {
+    try { silenced[i].audioEnabled = true; } catch (eR) {}
+  }
+  if (widened) {
+    try {
+      comp.workAreaStart = 0;
+      comp.workAreaDuration = wasDur;
+      comp.workAreaStart = wasStart;
+    } catch (eW) {}
+  }
+  if (failure) {
+    return AELL_err("AE refused the audio conversion in '" + comp.name +
+                    "': " + failure);
+  }
+  if (!created) {
+    return AELL_err("AE's converter ran but created nothing in '" +
+      comp.name + "' — it does that silently when the audible layers " +
+      "carry no audio inside the range. Check that " +
+      (only ? "'" + only.name + "'" : "the audio") + " actually plays.");
+  }
+
+  var wanted = args.name ? String(args.name) : created.name;
+  var finalName = AELL_uniqueLayerNameExcept(comp, wanted, created);
+  // AE reuses "Audio Amplitude" verbatim however many already exist, so
+  // this rename is not cosmetic: two same-named layers make every later
+  // link_property or expression reference resolve to whichever is higher.
+  if (finalName !== created.name) created.name = finalName;
+
+  var effects = [], keyCount = 0, peak = 0, firstT = null, lastT = null;
+  var parade = created.property("ADBE Effect Parade");
+  for (i = 1; i <= parade.numProperties; i++) {
+    var fx = parade.property(i);
+    effects.push(fx.name);
+    if (fx.name !== AELL_A2K_MAIN) continue;
+    var sl = fx.property(1);
+    keyCount = sl.numKeys;
+    for (var k = 1; k <= sl.numKeys; k++) {
+      var v = sl.keyValue(k);
+      if (v > peak) peak = v;
+      if (firstT === null) firstT = sl.keyTime(k);
+      lastT = sl.keyTime(k);
+    }
+  }
+
+  var out = {
+    layer: created.name, index: created.index,
+    controlLayer: created.name,
+    controlEffects: effects,
+    keyframes: keyCount,
+    rangeStart: firstT === null ? 0 : firstT,
+    rangeEnd: lastT === null ? 0 : lastT,
+    peak: Math.round(peak * 100) / 100,
+    measured: only ? only.name : "whole comp mix",
+    next: "Drive anything with link_property {layer: <target>, property: " +
+          "<prop>, controlLayer: '" + created.name + "', controlEffect: '" +
+          AELL_A2K_MAIN + "', scale: <n>}."
+  };
+  if (finalName !== wanted) {
+    out.nameTaken = "'" + wanted + "' was already a layer in this comp — " +
+      "this one is '" + finalName + "'. Use THIS name from here on.";
+  }
+  if (silenced.length > 0) {
+    out.isolated = "AE's converter always reads the whole comp mix, so " +
+      AELL_layerNamesOf(silenced) + " " +
+      (silenced.length === 1 ? "was" : "were") + " muted for the " +
+      "conversion and un-muted again.";
+  }
+  if (mutedByUser.length > 0) {
+    out.mutedLayersIgnored = AELL_layerNamesOf(mutedByUser) +
+      " " + (mutedByUser.length === 1 ? "is" : "are") + " muted and " +
+      "contributed nothing.";
+  }
+  if (widened) {
+    out.workArea = "The work area covered " + wasStart.toFixed(3) + "s-" +
+      (wasStart + wasDur).toFixed(3) + "s and AE only converts inside it, " +
+      "so it was widened to the whole comp and put back. Pass " +
+      "range: 'workArea' to keep AE's own behaviour.";
+  } else if (range === "workarea" && partial) {
+    out.workArea = "Keyframes cover the WORK AREA only (" +
+      wasStart.toFixed(3) + "s-" + (wasStart + wasDur).toFixed(3) +
+      "s), as asked.";
+  }
+  if (peak === 0) {
+    out.note = "Every keyframe is zero — the audible layers are silent " +
+      "over this range.";
+  }
+  return AELL_okay(out);
+};
+
 AELL_TOOLS.grid_layout = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var layers = [];
@@ -7047,7 +7309,7 @@ AELL_TOOLS.remove_keyframes = function (args) {
 var AELL_PER_LAYER_LIST = [
   "add_control", "add_keyframe", "add_marker", "add_mask",
   "add_shape_content", "add_text_animator", "apply_effect",
-  "apply_expression_preset",
+  "apply_expression_preset", "audio_to_keyframes",
   "center_anchor_point", "delete_layer", "duplicate_layer", "link_property",
   "set_effect_param", "set_expression", "set_layer_3d", "set_layer_parent",
   "set_layer_timing", "set_mask", "set_mask_path", "set_property",
@@ -7623,6 +7885,10 @@ var AELL_MUTATING = {
   add_marker: true,
   set_layer_3d: true, set_layer_parent: true,
   add_null: true, add_control: true, link_property: true,
+  // Unlike render_comp, AE's "Convert Audio to Keyframes" menu command
+  // nests happily inside a script's undo group -- measured across six
+  // calls in one group with no "Undo group mismatch" warning.
+  audio_to_keyframes: true,
   apply_expression_preset: true, set_text_style: true,
   center_anchor_point: true,
   create_folder: true, move_to_folder: true, rename_item: true,

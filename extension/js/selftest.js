@@ -47,6 +47,12 @@
   // and takes it away again. Small on purpose — 160x120 for one frame
   // renders in about 180 ms, measured.
   var RQCOMP = "AELL Self-Test Render";
+  // And the audio rig: audio_to_keyframes MUTES other layers for the
+  // duration of a conversion and can widen the work area, so it may not
+  // share a comp anything else is measuring. It needs no file on disk —
+  // AE's Tone effect turns a plain solid into a real audio source
+  // (measured: layer.hasAudio flips to true and the converter hears it).
+  var AUCOMP = "AELL Self-Test Audio";
   var running = false;
 
   /**
@@ -5015,6 +5021,213 @@
           // its queue items too, silently and with no dialog.
           return rows[0].ok || "cleanup: " + rows[0].error;
         } },
+
+      // ---- audio_to_keyframes. AE's "Convert Audio to Keyframes" is one
+      // menu command (id 4218) wrapped in everything it does NOT do, and
+      // every step below pins one of those, all measured in AE 2026:
+      //
+      //  - with no audio-capable layer it creates nothing and says
+      //    nothing at all — no exception, no dialog. Silence is the only
+      //    signal, so the tool has to refuse BEFORE calling it.
+      //  - it reads the whole comp MIX and ignores the selection, so
+      //    "just this layer" means muting the others for the conversion
+      //    and putting them back. The mix/isolate/mix triple below is
+      //    what proves the un-muting really happens.
+      //  - it never uniques the null's name: two runs, two layers both
+      //    called "Audio Amplitude", and every later name lookup
+      //    ambiguous.
+      //
+      // The rig needs no audio FILE: applying Tone to a solid flips
+      // layer.hasAudio to true and the converter measures it (73 keys,
+      // peak ~34 on a 3s/24fps comp).
+      { name: "create the audio rig (a solid, still silent)",
+        batch: function () {
+          return [
+            { tool: "create_comp",
+              args: { name: AUCOMP, width: 160, height: 120,
+                      duration: 3, frameRate: 24 } },
+            { tool: "add_solid",
+              args: { comp: AUCOMP, name: "ST Aud Host",
+                      color: [0.1, 0.4, 0.8], width: 160, height: 120 } }
+          ];
+        },
+        check: function (rows, ctx) {
+          if (!rows[0].ok) return "create_comp: " + rows[0].error;
+          if (!rows[1].ok) return "add_solid: " + rows[1].error;
+          ctx.auComp = rows[0].data.name;
+          return true;
+        } },
+
+      { name: "a comp with no audio is refused, not silently converted",
+        tool: "audio_to_keyframes",
+        expectError: true,
+        args: function (ctx) { return { comp: ctx.auComp }; },
+        check: function (err) {
+          if (err.indexOf("ST Aud Host") === -1) {
+            return "refusal does not list what IS in the comp: " + err;
+          }
+          return err.indexOf("import_file") !== -1 ||
+                 "no route out of the refusal: " + err;
+        } },
+
+      { name: "an unknown 'range' is refused as a typo, not as no-audio",
+        tool: "audio_to_keyframes",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.auComp, range: "everything" };
+        },
+        check: function (err) {
+          if (err.indexOf("no audio") !== -1) {
+            return "the argument typo was reported as a comp problem: " + err;
+          }
+          return (err.indexOf("workArea") !== -1 &&
+                  err.indexOf("'comp'") !== -1) ||
+                 "refusal names neither real choice: " + err;
+        } },
+
+      { name: "Tone turns the solid into a real audio source",
+        tool: "apply_effect",
+        args: function (ctx) {
+          return { comp: ctx.auComp, layer: "ST Aud Host", effect: "Tone" };
+        },
+        check: function (d) {
+          if (d.matchName !== "ADBE Aud Tone") {
+            return "wrong effect: " + d.matchName;
+          }
+          return (d.params.join(",").indexOf("Level") !== -1) ||
+                 "Tone has no Level param: " + d.params;
+        } },
+
+      { name: "audio_to_keyframes writes one key per frame of the mix",
+        tool: "audio_to_keyframes",
+        args: function (ctx) { return { comp: ctx.auComp }; },
+        check: function (d, ctx) {
+          if (d.keyframes !== 73) {
+            return "3s at 24fps should be 73 keys, got " + d.keyframes;
+          }
+          if (d.rangeStart !== 0 || Math.abs(d.rangeEnd - 3) > 0.001) {
+            return "range " + d.rangeStart + ".." + d.rangeEnd;
+          }
+          if (!(d.peak > 0)) return "silent curve, peak " + d.peak;
+          if (d.controlEffects.join(",") !==
+              "Left Channel,Right Channel,Both Channels") {
+            return "channel controls: " + d.controlEffects;
+          }
+          if (d.measured !== "whole comp mix") {
+            return "measured: " + d.measured;
+          }
+          if ((d.next || "").indexOf("link_property") === -1) {
+            return "no route on to link_property: " + d.next;
+          }
+          ctx.auMix = d.peak;
+          ctx.auNull = d.layer;
+          return d.layer === "Audio Amplitude" ||
+                 "unexpected null name: " + d.layer;
+        } },
+
+      { name: "the slider really drives a property through link_property",
+        tool: "link_property",
+        args: function (ctx) {
+          return { comp: ctx.auComp, layer: "ST Aud Host",
+                   property: "opacity", controlLayer: ctx.auNull,
+                   controlEffect: "Both Channels", scale: 2 };
+        },
+        check: function (d, ctx) {
+          return (d.expression.indexOf(ctx.auNull) !== -1 &&
+                  d.expression.indexOf("Both Channels") !== -1) ||
+                 "expression does not reach the audio slider: " + d.expression;
+        } },
+
+      { name: "a second conversion is renamed, never left ambiguous",
+        tool: "audio_to_keyframes",
+        args: function (ctx) { return { comp: ctx.auComp }; },
+        check: function (d) {
+          if (d.layer !== "Audio Amplitude 2") {
+            return "AE reuses the name; the tool should not: " + d.layer;
+          }
+          return (d.nameTaken || "").indexOf("Audio Amplitude") !== -1 ||
+                 "the rename was silent";
+        } },
+
+      { name: "add a second audible layer to the rig",
+        batch: function (ctx) {
+          return [
+            { tool: "add_solid",
+              args: { comp: ctx.auComp, name: "ST Aud Extra",
+                      color: [0.8, 0.3, 0], width: 160, height: 120 } },
+            { tool: "apply_effect",
+              args: { comp: ctx.auComp, layer: "ST Aud Extra",
+                      effect: "Tone" } }
+          ];
+        },
+        check: function (rows) {
+          if (!rows[0].ok) return "add_solid: " + rows[0].error;
+          return rows[1].ok || "apply_effect: " + rows[1].error;
+        } },
+
+      { name: "two audible layers mix louder than one",
+        tool: "audio_to_keyframes",
+        args: function (ctx) { return { comp: ctx.auComp }; },
+        check: function (d, ctx) {
+          ctx.auMixTwo = d.peak;
+          return d.peak > ctx.auMix ||
+                 "two tones peak at " + d.peak + ", one at " + ctx.auMix +
+                 " — the second layer is not being heard";
+        } },
+
+      { name: "isolating one layer mutes the others and says so",
+        tool: "audio_to_keyframes",
+        args: function (ctx) {
+          return { comp: ctx.auComp, layer: "ST Aud Host",
+                   name: "ST Aud Beat" };
+        },
+        check: function (d, ctx) {
+          if (d.measured !== "ST Aud Host") {
+            return "measured: " + d.measured;
+          }
+          if ((d.isolated || "").indexOf("ST Aud Extra") === -1) {
+            return "the mute was not reported: " + d.isolated;
+          }
+          if (!(d.peak > 0)) return "isolated curve is silent";
+          ctx.auSolo = d.peak;
+          // Two tones are louder than one — if the isolation had not
+          // happened this would equal the mix.
+          return d.peak < ctx.auMixTwo ||
+                 "isolated peak " + d.peak + " is not below the two-layer " +
+                 "mix — the other layer was still audible";
+        } },
+
+      { name: "every mute is undone: the mix is as loud as before",
+        tool: "audio_to_keyframes",
+        args: function (ctx) { return { comp: ctx.auComp }; },
+        check: function (d, ctx) {
+          if (Math.abs(d.peak - ctx.auMixTwo) > 0.01) {
+            return "mix peak " + d.peak + " != " + ctx.auMixTwo +
+                   " — a layer was left muted";
+          }
+          return d.peak > ctx.auSolo ||
+                 "the two-layer mix is not louder than one layer alone";
+        } },
+
+      { name: "a layer with no audio is refused with the ones that have it",
+        tool: "audio_to_keyframes",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.auComp, layer: "ST Aud Beat" };
+        },
+        check: function (err) {
+          if (err.indexOf("ST Aud Host") === -1 ||
+              err.indexOf("ST Aud Extra") === -1) {
+            return "refusal does not list the audible layers: " + err;
+          }
+          return err.indexOf("whole comp mix") !== -1 ||
+                 "no route out of the refusal: " + err;
+        } },
+
+      { name: "cleanup: delete the audio rig",
+        tool: "delete_item",
+        args: function (ctx) { return { item: ctx.auComp }; },
+        check: function () { return true; } },
 
       // ---- comp-rename audit + bulk rename. A three-comp rig: one
       // plain, one nested (a utility), one named by an expression.

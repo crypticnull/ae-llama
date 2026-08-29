@@ -176,6 +176,18 @@
             "expression itself with correct syntax (dimension-aware; " +
             "optional value = control*scale + offset).",
       args: "{comp?: string, layer: name|index, property: transform name or 'effect.<Effect>.<Param>', controlLayer: name|index, controlEffect: string (control name), scale?: number, offset?: number}" },
+    { name: "audio_to_keyframes", mutating: true,
+      desc: "Convert audio amplitude to keyframes: adds a null carrying " +
+            "Left/Right/Both Channels sliders keyframed to the loudness, " +
+            "one key per frame. Use it for anything beat-driven — then " +
+            "link_property {controlLayer: <the null>, controlEffect: " +
+            "'Both Channels', scale: n} drives scale/opacity/position " +
+            "from the music. AE's own command reads the WHOLE comp mix " +
+            "and only inside the work area; this tool isolates 'layer' " +
+            "by muting the others for the conversion and covers the " +
+            "whole comp unless range says otherwise, and says so in the " +
+            "result.",
+      args: "{comp?: string, layer?: name|index (omit for the whole comp mix), name?: string (default 'Audio Amplitude'), range?: 'comp' (default) | 'workArea'}" },
     { name: "stagger_layers", mutating: true,
       desc: "Distribute layer START TIMES. Gap mode (use this for 'X " +
             "frames/seconds apart'): stepFrames or step is the gap " +

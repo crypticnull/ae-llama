@@ -5120,3 +5120,141 @@ still reported.
 - Unattended runs write evidence PNGs to `logs\dialogs\`. Nothing prunes
   them. They are ~100KB each and only written when a dialog is not the
   save prompt, so this is a note rather than a problem.
+
+## 2026-08-28 (local, eighteenth pass) - item 5.7: audio to keyframes
+
+Harness green on arrival (391/391), so the pass took the next unfinished
+feature-track item. Probe, build and lock-in all landed; no version bump,
+because a NEW tool rides the remote session's next MINOR.
+
+### The sketch was half wrong, and the half that was wrong is the design
+
+The workplan asked for `audio_to_keyframes {layer}`. AE's command has no
+notion of a layer at all. Measured, in this order:
+
+- `app.findMenuCommandId("Convert Audio to Keyframes")` = **4218**.
+  "Convert Audio To Keyframes" (capital To) = 0. The same string with an
+  ellipsis = 0. The spelling is not a style choice.
+- It converts **the ACTIVE comp**. With another comp in the viewer it ran,
+  returned, and created nothing anywhere.
+- It **ignores the selection**. With only a silent solid selected it still
+  measured the whole comp mix - same peak, 56.53, as with nothing
+  selected.
+- A **muted layer contributes an all-zero curve**. That is the whole basis
+  of per-layer isolation, and it was measured both ways round on two
+  copies of one beat offset by 2s: mute B and the second half of the curve
+  is flat, mute A and the first half is.
+- It is **bounded by the work area**. Work area 0.5..1.5 on a 4s/24fps
+  comp gave 25 keys from 0.5 to 1.5, not 97 from 0 to 4.
+- It **never uniques the null's name**. Two runs, two layers both called
+  "Audio Amplitude" - and then every name-based reference after that
+  (link_property, any expression) silently takes whichever is higher.
+- With **no audio-capable layer it does nothing at all**: no layer, no
+  exception, no dialog. Silence is the only signal it gives.
+- The created layer: a null, `nullLayer` true, 100x100, spanning the COMP
+  (not the audio), three `ADBE Slider Control` effects in the order Left
+  Channel / Right Channel / Both Channels, each holding a "Slider"
+  (`ADBE Slider Control-0001`) with LINEAR keys, one per frame. It also
+  leaves a footage item named "Audio Amplitude" in the project, the way
+  every AE null does.
+- `layer.id` is a plain unique number and object identity holds, so
+  "which layer is new" is answerable without guessing at names.
+
+So the shipped tool is `audio_to_keyframes {comp?, layer?, name?, range?}`
+and is almost entirely the difference between that list and what a user
+means:
+
+- the target comp is opened in the viewer before the call;
+- `layer` isolates by muting every OTHER audible layer and un-muting it
+  again, in a restore block that runs whatever happened, so a throw cannot
+  hand the user a comp with a layer left muted (a stub test forces that
+  throw);
+- `range` defaults to `"comp"`: the work area is widened to the whole
+  comp, restored exactly, and the widening is REPORTED. `range:
+  "workArea"` keeps AE's own behaviour and says so. **Assumption written
+  down:** AE's native behaviour is work-area-bound, and I made the tool's
+  default differ from it. A user asking for beat-driven animation and
+  silently getting one second of keys is the worse surprise, and the
+  result names the range either way;
+- the null is renamed to the first free "Audio Amplitude N" and the
+  rename is reported;
+- refusals come BEFORE the call, because after it there is nothing to
+  read: no audio-capable layer (lists the layers that ARE there and names
+  `import_file`), every audio layer muted (names them), a named layer
+  with no audio (lists the ones with audio), and a bad `range` - which is
+  checked FIRST, ahead of the comp's state, so an argument typo is not
+  reported as "this comp has no audio";
+- `audioActive` is deliberately NOT used for any of that. It also asks
+  whether the layer is audible at the CURRENT time, so a music layer
+  starting at 2s reads false with the playhead at 0 and the tool would
+  refuse a perfectly good comp. `audioEnabled` is the mute switch and is
+  time-independent.
+
+### The suite needed audio and got it with no file on disk
+
+`import_file` is still uncovered because it needs a file, and the audio
+steps looked like they had the same blocker. They do not: applying **Tone
+(`ADBE Aud Tone`) to a plain solid flips `layer.hasAudio` to true** and
+the converter measures it - 73 keys, peak 34.33 on a 3s/24fps comp, two
+tone layers 36.02. That gap is what the lock-in steps read: mix, isolate
+(must be BELOW the two-layer mix), mix again (must be back UP to it),
+which is the only way the suite can prove the un-muting really happened.
+Thirteen steps in a comp of their own, including the three refusals and a
+`link_property` step that closes the loop the tool's own `next` promises.
+
+### Two bugs found before AE ever saw them, both real
+
+- The uniquing counted the layer AE had just made. `AELL_uniqueLayerName`
+  walks the comp, and the new null is already IN the comp when it runs, so
+  EVERY conversion would have come back "Audio Amplitude 2" with a
+  spurious `nameTaken` note. Fixed with `AELL_uniqueLayerNameExcept`,
+  which holds one layer out of the taken set.
+- `AELL_layerNamesOf` already returns a joined STRING; four call sites had
+  `.join(", ")` on it. That is a "join is not a function" in ES3, inside
+  the refusal path - the grounded errors would all have thrown.
+
+The canned host in `tests/test-self-test.js` was unfaithful in a way that
+mattered too: its `link_property` returned no `expression`, though the
+real tool always does. A suite step asserting on it passed against AE and
+failed against the stub. The canned host now writes the expression.
+
+### One dialog, and it was mine
+
+The first harness run after the change came back exit 4 on "After Effects
+warning: Undo group mismatch, will attempt to fix." Two clean facts
+separate the tool from the blame: replaying the ENTIRE thirteen-step
+group through AELL_call / AELL_callBatch in a `-r` script produced no
+warning at all, and the harness has been green 404/404 twice back-to-back
+since. What differed was the earlier PROBE: it wrapped its AELL_call
+rounds in its own `app.beginUndoGroup(...)` / `endUndoGroup()`, so the
+menu command ran two undo levels deep. **Probe rule for the next pass:
+never wrap AELL_call in your own undo group** - the tool opens one
+already, and a menu command inside the nested pair leaves the count wrong
+for whoever calls `endUndoGroup` next, which was the harness. Same family
+as the render_comp warning already in the log, and the same delayed,
+misleading signature.
+
+`audio_to_keyframes` IS registered in `AELL_MUTATING` (one Ctrl+Z undoes
+a round) and in `AELL_PER_LAYER_LIST` (for_each_layer may drive it: one
+amplitude null per audio layer is a coherent ask, and a silent layer just
+earns the grounded refusal). It is NOT exempted the way `render_comp` is;
+measured across six calls in one group with no warning.
+
+**Harness: 404/404 PASSED, twice** (391 -> 404). Stubbed suite: 45 files
+green, including the new `tests/test-audio-keyframes.js` (66 checks).
+
+### Still open
+
+- Next on the feature track: 5.8 (frame round-trip), which also unblocks
+  `import_file`'s suite coverage and H3 r2v.
+- No suite step covers the work-area path: nothing in the tool set can
+  SET a comp's work area, so `range` is proven by the stub only. A
+  `set_comp_setting` that reached workAreaStart/workAreaDuration would
+  close it, and is a small pass of its own.
+- `duplicate_comp` takes a name without uniquing; no read-only
+  `get_bounds`. Both still unclaimed. The uniquing bug above is the same
+  class as the first of those.
+- `release-notes.txt` still reads "0.10.0" while the feed ships 0.10.2.
+  Fourth pass to flag it; it belongs to the remote session's release cut.
+- Probe scratch files were written under `logs/` (gitignored) and AE was
+  left on an empty untitled project.
