@@ -375,6 +375,19 @@ FOUR tools are still uncovered and each is deliberate, not pending:
   Budget: one rollback per user request. A failing READ-ONLY tool does
   not trigger it. Four AE measurements gated the design; they and the
   answer to "what if it overshoots" are in WORKPLAN-LOG 2026-08-25.
+  - ~~Rollback's reach over PROJECT ITEMS is unmeasured~~ MEASURED
+    2026-08-29 (0.10.7). It reaches: comp creation, duplication,
+    deletion, folder moves and renames all revert on the one Undo, and
+    the shipped AELL_callBatch path was driven through each. The real
+    finding was AELL_fingerprint - the check that proves the Undo landed
+    where it started, and the only guard against it overshooting into
+    the user's own last edit. Of 25 dimensions a mutating tool can
+    write, AE reverted all 25 and the fingerprint saw 4; the blind 21
+    (every comp setting, every layer switch, markers, the 3D-only
+    rotations, a solid SOURCE's colour, a text layer's style) are
+    recorded now. Harness 482 -> 490. Two limits stated in the log and
+    left open on purpose: arbitrary property values beyond the transform
+    basics, and folders that share a name.
 - ~~Performance: 200-layer comps — measure grid_layout and batch
   keyframe wall time~~ DONE 2026-08-28 (0.9.29). The batch-keyframe half
   is measured and fine: at 200 layers set_keyframes (600 keys) 167 ms,

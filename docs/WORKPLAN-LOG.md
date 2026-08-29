@@ -5836,3 +5836,157 @@ so nothing there needed touching.
   The probe covered 3D-under-3D only.
 - Probe scratch under `logs/` (gitignored). AE left on the harness's own
   project, dirty, with no dialog open.
+
+## 2026-08-29 (local) - the rollback reaches project items; its own
+## check could not see them (0.10.7)
+
+Harness green on arrival (482/482), so the pass took the oldest thing on
+the still-open list rather than the next feature: "Rollback's reach over
+PROJECT ITEMS is still unmeasured", filed by the duplicate_comp pass and
+re-filed by three entries after it. 5.9 (.mogrt) is still deferred by its
+own rule - LAST item of any night, and at 03:20 with the loop still
+running there would have been another pass behind this one to wedge.
+
+### The question that was filed, answered: it reaches
+
+`logs/probe-rollback-items.txt`, AE 2026 26.3x87. Probe B of the
+duplicate_comp pass had suggested `executeCommand(16)` simply does not
+take effect on project items from inside a running `-r` script, because
+its CONTROL - a plain `items.addComp` in a begin/endUndoGroup - was not
+undone either. That is wrong, and the control is what was wrong with it.
+Six shapes, all in one execution:
+
+- `items.addComp` inside a group: **undone.**
+- comp + layer in ONE group: **both undone** by the single Undo.
+- `comp.duplicate()`: **undone.**
+- `items.addFolder`: **undone** (this is the sentinel's own fallback).
+- `item.remove()`: the item **comes back.**
+- layer control: undone, as 0.9.14 documented.
+
+Then the SHIPPED path, seven armed rounds through `AELL_callBatch`
+(`logs/probe-rollback-items2.txt`): create_comp, create_comp+add_solid,
+create_folder+move_to_folder, delete_item, duplicate_comp and
+rename_item each paired with a failing mutating command. Every one came
+back `rolledBack:true` with the item gone (or restored, for the delete
+and the move), and the all-succeeding control was correctly left alone.
+16-67 ms per round. Nothing needed fixing here.
+
+### What the probe found instead: the check was blind in 21 places
+
+`AELL_fingerprint` exists to prove the one Undo landed EXACTLY on the
+pre-round state - and it is the only guard against the Undo overshooting
+past our group into the user's own last edit, which is the hazard the
+sentinel and the single-Redo rule are both built around. Probe 3
+(`logs/probe-rollback-items3.txt`) wrote 25 dimensions that a tool in
+`AELL_MUTATING` can write, undid each with one Undo, and asked two
+questions per dimension: did the value come back, and did the
+fingerprint move.
+
+**AE reverted all 25. The fingerprint saw 4** - name, enabled, comment,
+and a text layer's source string. The blind 21:
+
+- **Every comp setting**: bgColor, resolutionFactor, workAreaStart,
+  workAreaDuration, pixelAspect, displayStartTime, motionBlur,
+  shutterAngle, frameBlending, hideShyLayers. `set_comp_setting` writes
+  five of those by name.
+- **Comp markers and layer markers** (`add_marker`).
+- **Every layer switch**: threeDLayer (`set_layer_3d`), blendingMode,
+  shy, locked, motionBlur, adjustmentLayer, audioEnabled.
+- **The 3D-only rotations**: Rotate X, Rotate Y, Orientation - which is
+  exactly what `set_layer_3d` was documented in 0.9.25 as discarding.
+- **The solid SOURCE's colour** (`set_solid_color`). It lives on the
+  project ITEM, so no walk of a comp's layers could ever have seen it.
+- **A text layer's fontSize/font/tracking/justification**
+  (`set_text_style`, which never touches `.text`, the one text field the
+  fingerprint did record).
+
+Nothing was being left in anyone's project today: AE's Undo is better
+than the check watching it. But the check had nothing to check. A
+rollback that half-landed would have reported itself clean, and an
+overshoot that ate the user's last edit was invisible whenever that edit
+was a switch, a work area or a background colour - the common case.
+
+### The fix
+
+`AELL_fingerprint` and `AELL_layerSig` now record all of it, via two new
+helpers. `AELL_sigOf(obj, key)` reads one switch and turns a build that
+lacks it, or an object that refuses it, into a STABLE absence - a camera
+has no `adjustmentLayer`, and a throw part-way through a concatenation
+would silently drop every field behind it and, worse, move the
+fingerprint from one read to the next. `AELL_markerSig` records the key
+TIMES as well as the count, because `add_marker` was measured in 5.4
+REPLACING a marker already at that time - a count alone calls that a
+no-op. It is capped at 50 so a heavily marked comp cannot make the
+verification the expensive half of a round.
+
+Cost, measured on the harness's own 338-item project: one fingerprint
+was 11031 chars in 6 ms before. The arming round pays one of these.
+
+### Verification
+
+- `tests/test-round-rollback.js`: 48 -> 121 checks. The stub grew all 23
+  dimensions as real, undoable state, and each gets both halves - written
+  normally the round must roll back CLEAN (which is what fails if the
+  widened fingerprint ever starts reading noise), and written as a TORN
+  change the undo stack cannot reverse, the round must be reported as NOT
+  rolled back. Before the fix every torn half reported `rolledBack:true`
+  over a change still sitting in the project. Plus a byte-stability check
+  and a layer that THROWS on all eight switches, asserting each refusal
+  reads as `?` in place rather than truncating the signature.
+- One stub bug found on the way: the sentinel-fallback test emptied
+  `project._items` and pushed back only the comp, so the footage item was
+  silently gone for every test after it.
+- `tests/test-self-test.js`'s canned host modelled an Undo over LAYERS
+  only, so an item-level rollback step could pass while nothing was
+  rewound. It now snapshots and restores the created comps, the create
+  counter, comp settings and the makeUnique solids, and it tracks the
+  rollback comp by its CURRENT name - a substring match on "Rollback"
+  lost the comp exactly when a step renames it, and every tool aimed at
+  it started succeeding, which is the one answer that makes the step
+  vacuous.
+- Full stub sweep: 50 files green; capability doc regenerated.
+- **Harness: 482 -> 490/490 PASSED**, twice consecutively. Eight steps:
+  a round that created a comp and failed leaves no comp; a round that
+  changed the work area and preview resolution puts both back (read back
+  through get_comp_details); a round that turned a layer 3D AND added a
+  marker AND recoloured its solid with makeUnique rolls all three back
+  (get_bounds stops calling it a 3D layer); a round that renamed the comp
+  leaves it answering to its old name. A suite step cannot make a torn
+  write, so these own the OTHER risk the widening created - a field AE
+  reports with noise would make every rollback in the product report
+  itself as an abandoned overshoot, and each of these fails loudly if
+  that ever starts.
+- Bumped 0.10.6 -> 0.10.7 (fix to shipped behaviour, verified in AE).
+
+### One thing this pass caused and cleaned up
+
+The first harness run after the change was 489/490: the hygiene step that
+asserts a grounded "Comp not found" listed the six PRBI comps my own
+probes had left in the harness project. Not a regression - probe debris.
+Removed with `logs/probe-cleanup.jsx`, and both runs after that were
+490/490. Worth remembering: probe rigs that outlive their pass are read
+by any suite step that quotes the project's contents back.
+
+### Still open
+
+- What is NOT fingerprinted, deliberately, and why it is a limit rather
+  than a bug: arbitrary PROPERTY values beyond the transform basics
+  (Position/Scale/Rotate Z/Opacity/the 3D rotations) and effect/mask
+  COUNTS. Covering them means a per-layer tree walk on every armed round,
+  which is the one cost this check cannot afford. A `set_effect_param`
+  round that half-undid would still be reported clean.
+- Two same-named folders are indistinguishable to it: `parentFolder` goes
+  in by NAME, so a `move_to_folder` between homonyms is invisible. Cheap
+  to close with the item id; not measured here, so not done here.
+- Next on the feature track: 5.9 (.mogrt export), still flagged as a
+  LAST-item-of-the-night job for dialog risk. Tenth pass to defer it -
+  worth the remote session deciding whether that rule can ever fire under
+  a loop that always starts another pass.
+- `comfy_generate` still calls `import_file` rather than 5.8's
+  `import_as_layer` - a small remote-session pass.
+- Not measured here: whether `.parent =` compensation survives a child
+  that is 3D under a 2D parent, or a parent with a keyframed transform
+  (filed by the previous pass).
+- Probe scratch under `logs/` (gitignored). AE left on the harness's own
+  project, dirty, with no dialog open, and with this pass's PRBI rigs
+  removed.

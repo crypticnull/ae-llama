@@ -2508,6 +2508,163 @@
                  "survivor missing, comp holds " + (names.join(", ") || "nothing");
         } },
 
+      // ---- what the rollback reaches, and what its check can SEE ----
+      //
+      // Two questions the log carried for four passes, both answered in
+      // real AE on 2026-08-29. (1) Does the one Undo reach PROJECT
+      // ITEMS? It does — comps, folders, duplicates, deletions, moves
+      // and renames all revert, and the steps below keep it that way.
+      // (2) Does AELL_fingerprint — the check that proves the Undo
+      // landed EXACTLY on the pre-round state, and the only guard
+      // against it overshooting into the user's own last edit — see the
+      // dimensions those tools write? It did not: of 25 dimensions
+      // measured, AE reverted all 25 and the fingerprint saw 4.
+      //
+      // A suite step cannot make a TORN write (no tool leaves a change
+      // the undo stack cannot reverse), so the stubbed test owns that
+      // half. What these steps own is the other risk the widening
+      // created: a field AE reports with noise would make the
+      // fingerprints differ after a PERFECT undo, and every rollback in
+      // the product would start reporting itself as an abandoned
+      // overshoot. Each step below fails loudly if that ever happens.
+
+      { name: "an armed round that created a COMP and failed undoes it",
+        batchOpts: { rollback: true },
+        batch: function (ctx) {
+          return [
+            { tool: "create_comp",
+              args: { name: "ST RB Ghost Comp", width: 160, height: 120,
+                      duration: 2, frameRate: 30 } },
+            { tool: "duplicate_layer",
+              args: { comp: ctx.rbComp, layer: "ST No Source", count: 1 } }
+          ];
+        },
+        check: function (rows) {
+          if (rows[0].ok) return "create_comp still reports ok";
+          return rows[0].rolledBack ||
+                 "the comp-creating round was not rolled back: " +
+                 String(rows[0].error).slice(0, 120);
+        } },
+
+      { name: "and the comp it made is not in the project",
+        tool: "get_project_info",
+        args: { limit: 0 },
+        check: function (d) {
+          var items = d.items || d.comps || [];
+          for (var i = 0; i < items.length; i++) {
+            var n = items[i] && (items[i].name || items[i]);
+            if (String(n) === "ST RB Ghost Comp") {
+              return "the rolled-back comp is still in the project";
+            }
+          }
+          return true;
+        } },
+
+      { name: "an armed round that changed COMP SETTINGS and failed " +
+              "puts them back",
+        batchOpts: { rollback: true },
+        batch: function (ctx) {
+          return [
+            { tool: "set_comp_setting",
+              args: { comp: ctx.rbComp, workAreaStart: 1,
+                      workAreaDuration: 1, resolution: "quarter" } },
+            { tool: "duplicate_layer",
+              args: { comp: ctx.rbComp, layer: "ST No Source", count: 1 } }
+          ];
+        },
+        check: function (rows) {
+          if (rows[0].ok) return "set_comp_setting still reports ok";
+          if (!rows[0].rolledBack) {
+            return "a comp-settings round was NOT rolled back — if the " +
+                   "reason is 'did not land on the pre-round state', a " +
+                   "comp setting in AELL_fingerprint is reading noise: " +
+                   String(rows[0].error).slice(0, 160);
+          }
+          return true;
+        } },
+
+      { name: "the work area and resolution are the ones from before it",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.rbComp, limit: 0 }; },
+        check: function (d) {
+          if (d.workArea !== "0s-4s") {
+            return "work area is " + d.workArea + ", expected the " +
+                   "whole 4s comp back";
+          }
+          return d.resolution === "full [1, 1]" ||
+                 "resolution is " + d.resolution + ", expected full [1, 1]";
+        } },
+
+      { name: "an armed round that turned a layer 3D and failed leaves " +
+              "it 2D",
+        batchOpts: { rollback: true },
+        batch: function (ctx) {
+          return [
+            { tool: "set_layer_3d",
+              args: { comp: ctx.rbComp, layer: "ST RB Survivor",
+                      enabled: true } },
+            { tool: "add_marker",
+              args: { comp: ctx.rbComp, layer: "ST RB Survivor", time: 1,
+                      comment: "ST RB mark" } },
+            { tool: "set_solid_color",
+              args: { comp: ctx.rbComp, layer: "ST RB Survivor",
+                      color: [0, 0, 1], makeUnique: true } },
+            { tool: "duplicate_layer",
+              args: { comp: ctx.rbComp, layer: "ST No Source", count: 1 } }
+          ];
+        },
+        check: function (rows) {
+          // Four dimensions at once, three of them invisible to the
+          // fingerprint before 2026-08-29: the 3D switch, a layer
+          // marker, and the solid SOURCE's colour (which makeUnique
+          // turns into a new project item as well).
+          for (var i = 0; i < 3; i++) {
+            if (rows[i].ok) return "row " + i + " still reports ok";
+            if (!rows[i].rolledBack) {
+              return "row " + i + " was not rolled back: " +
+                     String(rows[i].error).slice(0, 160);
+            }
+          }
+          return true;
+        } },
+
+      { name: "and get_bounds no longer calls it a 3D layer",
+        tool: "get_bounds",
+        args: function (ctx) {
+          return { comp: ctx.rbComp, layer: "ST RB Survivor" };
+        },
+        check: function (d) {
+          return !d.compBoxUnavailable ||
+                 "still 3D after the rollback: " + d.compBoxUnavailable;
+        } },
+
+      { name: "an armed round that RENAMED an item and failed puts the " +
+              "name back",
+        batchOpts: { rollback: true },
+        batch: function (ctx) {
+          return [
+            { tool: "rename_item",
+              args: { item: ctx.rbComp, name: "ST RB Renamed" } },
+            { tool: "duplicate_layer",
+              args: { comp: "ST RB Renamed", layer: "ST No Source",
+                      count: 1 } }
+          ];
+        },
+        check: function (rows) {
+          if (rows[0].ok) return "rename_item still reports ok";
+          return rows[0].rolledBack ||
+                 "the rename was not rolled back: " +
+                 String(rows[0].error).slice(0, 160);
+        } },
+
+      { name: "so the comp still answers to the name it started with",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.rbComp, limit: 0 }; },
+        check: function (d, ctx) {
+          return d.name === ctx.rbComp ||
+                 "comp is called " + d.name + ", expected " + ctx.rbComp;
+        } },
+
       { name: "cleanup: delete the rollback comp",
         tool: "delete_item",
         args: function (ctx) { return { item: ctx.rbComp }; },

@@ -508,7 +508,13 @@ let rnRenamedTo = null;
 const scShared = ["ST SC Square", "ST SC Square 2", "ST SC Square 3"];
 const scText = ["ST SC Words"];
 let scUnique = [];
-const inRbComp = (a) => a && /Rollback/.test(a.comp || "");
+// The rollback comp, by its CURRENT name. A step renames it inside an
+// armed round that then fails, so a substring match on "Rollback"
+// would lose track of the comp exactly when the rename is the thing
+// being verified -- and every tool aimed at it would start
+// succeeding, which is the one answer that makes the step vacuous.
+let rbCompName = "ST Rollback";
+const inRbComp = (a) => a && String(a.comp || "") === rbCompName;
 let batSolidFx = {};
 let batSolidPos = {};
 const inBatComp = a => !!(a && /Undo/.test(a.comp || ""));
@@ -3314,6 +3320,7 @@ function cannedOk(tool, args) {
       createdComps[i] = String(args.name);
       compProps[args.name] = compProps[key] || {};
       delete compProps[key];
+      if (key === rbCompName) rbCompName = String(args.name);
       return { oldName: key, name: String(args.name) };
     }
     case "move_to_folder": {
@@ -3729,8 +3736,25 @@ function cannedBatch(cmds, opts, cb) {
   opts = opts || {};
   batchCalls.push(cmds.length);
   // Snapshot what an Undo would restore, so a rolled-back round really
-  // does put the canned comp back rather than only SAYING it did.
+  // does put the canned project back rather than only SAYING it did.
+  //
+  // PROJECT ITEMS are in here as of 2026-08-29, when the question "does
+  // one Undo reach them" was finally measured in real AE — it does, for
+  // creation, deletion, duplication, folder moves and renames alike. A
+  // canned host that only rewound layers let a step assert an item-level
+  // rollback that never happened.
   const rbBefore = rbLayers.slice();
+  const itemsBefore = {
+    comps: createdComps.slice(),
+    createCount,
+    unique: scUnique.slice(),
+    rbName: rbCompName,
+    props: (function () {
+      const o = {};
+      for (const k in compProps) o[k] = Object.assign({}, compProps[k]);
+      return o;
+    })()
+  };
   const rows = cmds.map(c => cannedResult(c.tool, c.args || {}));
   let okMut = 0, badMut = 0, firstError = "";
   cmds.forEach((c, i) => {
@@ -3741,6 +3765,13 @@ function cannedBatch(cmds, opts, cb) {
   });
   if (opts.rollback && okMut && badMut) {
     rbLayers = rbBefore;
+    createdComps.length = 0;
+    Array.prototype.push.apply(createdComps, itemsBefore.comps);
+    createCount = itemsBefore.createCount;
+    scUnique = itemsBefore.unique;
+    rbCompName = itemsBefore.rbName;
+    for (const k in compProps) delete compProps[k];
+    Object.assign(compProps, itemsBefore.props);
     const note = "ROLLED BACK: a command in this round failed (" +
       firstError + ") after others had already changed the project.";
     cmds.forEach((c, i) => {

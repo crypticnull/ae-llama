@@ -65,6 +65,34 @@ function resetUndo() {
   undo.unbalanced = 0; undo.undos = 0; undo.redos = 0;
 }
 
+// Write a field the way AE writes it: the new value AND the step that
+// puts the old one back. `tear` skips the recording, which models a
+// change the undo stack cannot reverse -- the only thing that can make
+// the post-Undo fingerprint differ, and therefore the only thing the
+// verification can ever catch.
+function setRec(obj, key, next, tear) {
+  const old = obj[key];
+  obj[key] = next;
+  if (tear) return;
+  record({ undo() { obj[key] = old; }, redo() { obj[key] = next; } });
+}
+
+// A marker property, backed by an array of times. AE's own add_marker
+// REPLACES a marker already at that time (measured, item 5.4), so the
+// count alone cannot tell a replacement from a no-op.
+function MarkerProp(owner) { this._t = []; this._owner = owner; }
+Object.defineProperty(MarkerProp.prototype, "numKeys", {
+  get() { return this._t.length; }
+});
+MarkerProp.prototype.keyTime = function (i) { return this._t[i - 1]; };
+MarkerProp.prototype.add = function (t, tear) {
+  const self = this, next = this._t.concat([t]).sort((a, b) => a - b);
+  const old = this._t;
+  this._t = next;
+  if (tear) return;
+  record({ undo() { self._t = old; }, redo() { self._t = next; } });
+};
+
 function Layer(name, comp) {
   this.name = name;
   this.comp = comp;
@@ -72,6 +100,20 @@ function Layer(name, comp) {
   this.parent = null;
   this.inPoint = 0; this.outPoint = 10; this.startTime = 0;
   this._pos = [320, 180, 0];
+  // Every one of these was measured in AE 2026 (probe 3, 2026-08-29) as
+  // written by a tool in AELL_MUTATING, reverted by the single Undo, and
+  // INVISIBLE to the fingerprint before this. A stub that omitted them
+  // would let a fingerprint that still ignores them pass.
+  this.threeDLayer = false;
+  this.shy = false;
+  this.locked = false;
+  this.motionBlur = false;
+  this.adjustmentLayer = false;
+  this.audioEnabled = true;
+  this.collapseTransformation = false;
+  this.blendingMode = 5212;                 // BlendingMode.NORMAL
+  this._rot = { x: 0, y: 0, o: [0, 0, 0] };
+  this._markers = new MarkerProp(this);
 }
 Layer.prototype.property = function (p) {
   const self = this;
@@ -82,10 +124,17 @@ Layer.prototype.property = function (p) {
         if (n === "ADBE Scale") return { value: [100, 100, 100], numKeys: 0 };
         if (n === "ADBE Rotate Z") return { value: 0, numKeys: 0 };
         if (n === "ADBE Opacity") return { value: 100, numKeys: 0 };
+        // AE answers the 3D-only rotations on a 2D layer too — they read
+        // as a stable 0 rather than throwing, which is exactly why
+        // set_layer_3d can zero them without the fingerprint noticing.
+        if (n === "ADBE Rotate X") return { value: self._rot.x, numKeys: 0 };
+        if (n === "ADBE Rotate Y") return { value: self._rot.y, numKeys: 0 };
+        if (n === "ADBE Orientation") return { value: self._rot.o, numKeys: 0 };
         throw new Error("no property " + n);
       }
     };
   }
+  if (p === "ADBE Marker") return this._markers;
   if (p === "ADBE Effect Parade") return { numProperties: 0 };
   if (p === "ADBE Mask Parade") return { numProperties: 0 };
   throw new Error("no property " + p);
@@ -103,6 +152,23 @@ function Comp(name) {
   this._comment = "";
   this._layers = [];
   this.parentFolder = null;
+  // Composition Settings, i.e. everything set_comp_setting can write.
+  // Same measurement as the layer switches: undoable in AE, and invisible
+  // to the fingerprint until 2026-08-29.
+  this.bgColor = [0, 0, 0];
+  this.resolutionFactor = [1, 1];
+  this.workAreaStart = 0;
+  this.workAreaDuration = 10;
+  this.pixelAspect = 1;
+  this.displayStartTime = 0;
+  this.motionBlur = false;
+  this.shutterAngle = 180;
+  this.shutterPhase = 0;
+  this.frameBlending = false;
+  this.hideShyLayers = false;
+  this.preserveNestedFrameRate = false;
+  this.preserveNestedResolution = false;
+  this.markerProperty = new MarkerProp(this);
 }
 Object.defineProperty(Comp.prototype, "numLayers", {
   get() { return this._layers.length; }
@@ -217,6 +283,20 @@ const { AELL_TOOLS, AELL_MUTATING, AELL_okay, AELL_err, AELL_errPartial,
 // ------------------------------------------------------- scenario tools
 
 const comp = project.items.addComp("Rollback scratch");
+
+// A solid's colour lives on the project ITEM, so set_solid_color changes
+// something no walk of the comp's layers can reach. The fingerprint has
+// to read it off the footage item or it cannot see that tool at all.
+const solidItem = (function () {
+  const src = { color: [1, 0, 0] };
+  Object.setPrototypeOf(src, SolidSource.prototype);
+  const it = { name: "Red Solid", width: 100, height: 100, comment: "",
+               parentFolder: null, mainSource: src };
+  Object.setPrototypeOf(it, FootageItem.prototype);
+  project._items.push(it);
+  return it;
+})();
+
 function squares() {
   return comp._layers.filter(l => /^Square/.test(l.name));
 }
@@ -265,18 +345,74 @@ AELL_TOOLS.__ghost = function () {
 AELL_TOOLS.__read = function () { return AELL_okay({ read: true }); };
 AELL_TOOLS.__readFail = function () { return AELL_err("bad lookup"); };
 
+// One dimension a MUTATING tool can write, named by the tool that writes
+// it. `write(tear)` changes it; with tear=true the change is made WITHOUT
+// an undo step, so it survives the one Undo. That is the whole test: the
+// fingerprint must notice, or AELL_maybeRollback reports a clean
+// rollback over a change that is still sitting in the user's project.
+const DIMENSIONS = [
+  ["comp bgColor (set_comp_setting)", t => setRec(comp, "bgColor", [0, 0, 1], t)],
+  ["comp resolutionFactor (set_comp_setting)",
+   t => setRec(comp, "resolutionFactor", [2, 2], t)],
+  ["comp workAreaStart (set_comp_setting)", t => setRec(comp, "workAreaStart", 1, t)],
+  ["comp workAreaDuration (set_comp_setting)",
+   t => setRec(comp, "workAreaDuration", 2, t)],
+  ["comp pixelAspect", t => setRec(comp, "pixelAspect", 2, t)],
+  ["comp displayStartTime", t => setRec(comp, "displayStartTime", 1, t)],
+  ["comp motionBlur", t => setRec(comp, "motionBlur", true, t)],
+  ["comp shutterAngle", t => setRec(comp, "shutterAngle", 90, t)],
+  ["comp frameBlending", t => setRec(comp, "frameBlending", true, t)],
+  ["comp hideShyLayers", t => setRec(comp, "hideShyLayers", true, t)],
+  ["comp markers (add_marker)", t => comp.markerProperty.add(1, t)],
+  ["layer threeDLayer (set_layer_3d)",
+   t => setRec(comp._layers[0], "threeDLayer", true, t)],
+  ["layer blendingMode", t => setRec(comp._layers[0], "blendingMode", 5216, t)],
+  ["layer shy", t => setRec(comp._layers[0], "shy", true, t)],
+  ["layer locked", t => setRec(comp._layers[0], "locked", true, t)],
+  ["layer motionBlur", t => setRec(comp._layers[0], "motionBlur", true, t)],
+  ["layer adjustmentLayer",
+   t => setRec(comp._layers[0], "adjustmentLayer", true, t)],
+  ["layer audioEnabled", t => setRec(comp._layers[0], "audioEnabled", false, t)],
+  ["layer collapseTransformation",
+   t => setRec(comp._layers[0], "collapseTransformation", true, t)],
+  ["layer markers (add_marker)", t => comp._layers[0]._markers.add(1, t)],
+  ["layer rotationX (set_layer_3d's discard)",
+   t => setRec(comp._layers[0]._rot, "x", 45, t)],
+  ["layer orientation (set_layer_3d's discard)",
+   t => setRec(comp._layers[0]._rot, "o", [0, 0, 90], t)],
+  ["solid source colour (set_solid_color)",
+   t => setRec(solidItem.mainSource, "color", [0, 0, 1], t)]
+];
+
+let tearIndex = 0, tearTorn = true;
+// Succeeds, having changed exactly one dimension.
+AELL_TOOLS.__dim = function () {
+  DIMENSIONS[tearIndex][1](tearTorn);
+  return AELL_okay({ wrote: DIMENSIONS[tearIndex][0] });
+};
+
 AELL_MUTATING.__square = true;
 AELL_MUTATING.__dup = true;
 AELL_MUTATING.__partial = true;
 AELL_MUTATING.__failMut = true;
 AELL_MUTATING.__ghost = true;
+AELL_MUTATING.__dim = true;
 
 const batch = (cmds, opts) => JSON.parse($.global.AELL_callBatch(
   JSON.stringify(cmds), opts === undefined ? undefined : JSON.stringify(opts)));
 
+const COMP_DEFAULTS = new Comp("defaults");
 function reset() {
   comp._layers.length = 0;
   comp._comment = "";
+  for (const k in COMP_DEFAULTS) {
+    if (k === "name" || k === "_layers" || k === "_comment" ||
+        k === "markerProperty") continue;
+    comp[k] = Array.isArray(COMP_DEFAULTS[k])
+      ? COMP_DEFAULTS[k].slice() : COMP_DEFAULTS[k];
+  }
+  comp.markerProperty = new MarkerProp(comp);
+  solidItem.mainSource.color = [1, 0, 0];
   folderAddThrows = false;
   resetUndo();
 }
@@ -432,7 +568,11 @@ assert(undo.undos === 0,
        undo.undos + ")");
 assert(/could not be rolled back safely/.test(r8.data.rollback.why),
        "saying so: " + r8.data.rollback.why.slice(0, 50));
-project._items.push(comp);
+// The solid goes back with the comp: emptying the project was about
+// leaving the sentinel no COMP to write a comment on, and dropping the
+// footage item as well quietly cost the fingerprint the only solid
+// source in the stub for every test after this one.
+project._items.push(comp, solidItem);
 folderAddThrows = false;
 
 reset();
@@ -510,6 +650,85 @@ function run(commands, opts) {
     Tools.executeCommands(commands, opts || {}, null, resolve);
   });
 }
+// ------------------------------- N. the fingerprint's 21 blind spots
+//
+// AELL_fingerprint's only job is to prove the one Undo landed EXACTLY on
+// the pre-round state. Probe 3 (real AE, 2026-08-29) wrote 25 dimensions
+// a tool in AELL_MUTATING can write and found the fingerprint saw only
+// four of them: name, enabled, comment and a text layer's source string.
+// AE reverted all 25, so nothing was being left behind TODAY — but the
+// check could not have told anyone if it had been, and the overshoot it
+// exists to catch (one Undo reaching past our group into the user's own
+// last edit) is invisible whenever that edit was a switch, a work area
+// or a background colour.
+//
+// Each dimension gets both halves. The first is stub fidelity: written
+// normally it is undoable, so a rollback over it must come back CLEAN —
+// this is what fails if the fingerprint ever starts reading something
+// non-deterministic. The second is the bug: written as a TORN change the
+// Undo cannot reverse, the round must be reported as NOT rolled back.
+// Before the fix every one of the second halves reported rolledBack:true
+// over a change still sitting in the project.
+
+function withOneDim(i, torn) {
+  reset();
+  addLayer("Square 1");             // the dimension tools need a layer
+  undo.stack.length = 0;            // and that layer is older history
+  tearIndex = i; tearTorn = torn;
+  return batch([{ tool: "__dim", args: {} },
+                { tool: "__failMut", args: {} }], ROLL);
+}
+
+for (let i = 0; i < DIMENSIONS.length; i++) {
+  const label = DIMENSIONS[i][0];
+
+  const clean = withOneDim(i, false);
+  assert(clean.data.rollback && clean.data.rollback.rolledBack === true,
+         "STUB FIDELITY: an undoable write to " + label +
+         " rolls back clean");
+
+  const torn = withOneDim(i, true);
+  const v = torn.data.rollback || {};
+  assert(v.rolledBack === false,
+         "the fingerprint SEES " + label +
+         " — a torn write there is not reported as a clean rollback");
+  assert(/did not land on the pre-round state/.test(String(v.why || "")),
+         "and says so honestly instead: " + label);
+}
+
+// The verification has to be deterministic or it would cry overshoot on
+// every rollback. Two reads of an untouched project must be identical.
+reset();
+addLayer("Square 1");
+comp.markerProperty.add(2, false);
+comp._layers[0].threeDLayer = true;
+comp._layers[0]._rot.o = [10, 20, 30];
+assert(AELL_fingerprint() === AELL_fingerprint(),
+       "the widened fingerprint is byte-stable across back-to-back reads");
+
+// A camera has no adjustmentLayer and no audio. AE throws on some of
+// these rather than answering undefined, and a throw mid-signature would
+// drop every field after it — a STABLE absence is the requirement.
+reset();
+const hostile = new Layer("Hostile", comp);
+["threeDLayer", "shy", "locked", "motionBlur", "adjustmentLayer",
+ "audioEnabled", "collapseTransformation", "blendingMode"].forEach(k => {
+  Object.defineProperty(hostile, k, {
+    get() { throw new Error("this layer has no " + k); }, configurable: true
+  });
+});
+comp._layers.push(hostile);
+const sig1 = AELL_fingerprint();
+assert(typeof sig1 === "string" && sig1.length > 0,
+       "a layer that THROWS on every switch still fingerprints");
+assert(sig1 === AELL_fingerprint(),
+       "and does so identically twice — a refusal is a stable absence, " +
+       "not a moving value");
+assert(/\|3\?\?\?\?\?\?\?/.test(sig1),
+       "each refused switch reads as '?' in place, so the fields after " +
+       "it are not lost with it");
+reset();
+
 const H = t => ({ tool: t, args: {} });
 
 (async function () {

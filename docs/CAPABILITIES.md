@@ -20,7 +20,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `add_control` | Add a named expression control (Slider/Angle/Checkbox/Color/Point Control effect) to a layer — usually a null | yes | host | 1 | 4 |
 | `add_keyframe` | Add a keyframe on a layer property at a time (seconds) | yes | host | 1 | 10 |
 | `add_light` | Add a light | yes | host | 1 | 13 |
-| `add_marker` | Add a marker to the comp (omit 'layer') or to a layer | yes | host | 1 | 8 |
+| `add_marker` | Add a marker to the comp (omit 'layer') or to a layer | yes | host | 1 | 9 |
 | `add_mask` | Add a mask to a layer | yes | host | 1 | 3 |
 | `add_null` | Add a null layer (use as a controller or parent) | yes | host | 1 | 8 |
 | `add_shape_content` | Add content INSIDE a shape layer: kinds group, rectangle, ellipse, star, polygon, path, fill, stroke, gradient_fill, gradient_stroke, repeater, trim_paths, merge_paths, offset_paths, rounded_corners, pucker_bloat, twist, zigzag | yes | host | 1 | 12 |
@@ -40,17 +40,17 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `comfy_generate` | Generate an image/video with local ComfyUI and import it into the AE project | yes | panel | — | — |
 | `comfy_list_workflows` | List available ComfyUI generation workflow templates by name | no | panel | — | — |
 | `comfy_status` | Check the local ComfyUI instance (online? queue depth?) | no | panel | — | — |
-| `create_comp` | Create a composition and open it | yes | host | 1 | 28 |
+| `create_comp` | Create a composition and open it | yes | host | 1 | 29 |
 | `create_folder` | Create a project-panel folder | yes | host | 1 | 10 |
 | `delete_item` | Delete a project item | yes | host | 1 | 38 |
 | `delete_layer` | Delete a layer from a comp | yes | host | — | 11 |
 | `distribute_property` | Distribute a property VALUE across layers | yes | host | 1 | 5 |
 | `duplicate_comp` | Duplicate a composition | yes | host | 2 | 5 |
-| `duplicate_layer` | Duplicate a LAYER inside its comp (use duplicate_comp only for whole compositions) | yes | host | 1 | 6 |
+| `duplicate_layer` | Duplicate a LAYER inside its comp (use duplicate_comp only for whole compositions) | yes | host | 1 | 10 |
 | `for_each_layer` | Run a PER-LAYER tool once per target layer in ONE call (max 200 layers) — the batch executor for anything without its own layers arg: {tool: 'apply_effect', args: {effect: 'Gaussian Blur'}} blurs every target | yes | host | 1 | 6 |
-| `get_bounds` | MEASURE a layer's rendered content without touching it — how wide the text actually is, where the shape sits in the frame, whether anything overflows | no | host | 1 | 21 |
-| `get_comp_details` | Layers of a comp with index, name, type, timing, effects | no | host | 3 | 26 |
-| `get_project_info` | List project items (comps/footage/folders) and the active comp | no | host | 2 | 13 |
+| `get_bounds` | MEASURE a layer's rendered content without touching it — how wide the text actually is, where the shape sits in the frame, whether anything overflows | no | host | 1 | 22 |
+| `get_comp_details` | Layers of a comp with index, name, type, timing, effects | no | host | 3 | 28 |
+| `get_project_info` | List project items (comps/footage/folders) and the active comp | no | host | 2 | 14 |
 | `get_property` | Read ANY property by path: value, keyframes, expression | no | host | 3 | 87 |
 | `grid_layout` | Arrange layers into a grid rigged to a control null: its 'Grid X Spacing'/'Grid Y Spacing'/'Grid Columns' sliders drive spacing AND column count live, and the grid centers on the null's position (all expressions generated host-side) | yes | host | 1 | 2 |
 | `import_as_layer` | Import a file AND place it in a comp as a layer, scaled to the comp | yes | host | 1 | 8 |
@@ -65,21 +65,21 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `precompose` | Move layers into a new nested comp (precompose) | yes | host | 1 | 5 |
 | `remove_keyframes` | Remove keyframes from a property on many layers at once — specific times or all | yes | host | 1 | 5 |
 | `rename_comps` | Rename MANY comps in one call, on the org convention (REVyy_ from a year in the old name, else REV_NO-YEAR_) | yes | host | 1 | 3 |
-| `rename_item` | Rename any project item (comp, footage, folder) | yes | host | 1 | 2 |
+| `rename_item` | Rename any project item (comp, footage, folder) | yes | host | 1 | 3 |
 | `render_comp` | Actually RENDER a comp to a file | yes | host | 1 | 8 |
 | `reorder_layers` | Restack layers WITHOUT changing their timing | yes | host | 1 | 2 |
 | `scale_comp` | Resize a comp AND scale its content to match, re-centered — like the native 'Scale Composition' script | yes | host | 2 | 2 |
-| `set_comp_setting` | Change a comp setting: duration, frame rate, bg color, the WORK AREA (workAreaStart with workAreaDuration or workAreaEnd, in seconds — or workArea: 'comp' to reset it to the whole comp) and preview resolution | yes | host | 2 | 9 |
+| `set_comp_setting` | Change a comp setting: duration, frame rate, bg color, the WORK AREA (workAreaStart with workAreaDuration or workAreaEnd, in seconds — or workArea: 'comp' to reset it to the whole comp) and preview resolution | yes | host | 2 | 10 |
 | `set_effect_param` | Set a parameter on an effect already applied to a layer | yes | host | — | 1 |
 | `set_expression` | LAST RESORT: set a raw expression (or clear with '') | yes | host | 1 | 13 |
 | `set_keyframes` | Set the SAME keyframes on MANY layers in ONE call | yes | host | 2 | 11 |
-| `set_layer_3d` | Enable/disable a layer's 3D switch | yes | host | 1 | 5 |
+| `set_layer_3d` | Enable/disable a layer's 3D switch | yes | host | 1 | 6 |
 | `set_layer_parent` | Parent layers to another layer (omit/null parent to unparent) | yes | host | 2 | 11 |
 | `set_layer_timing` | Set layer inPoint/outPoint/startTime (seconds) | yes | host | — | 5 |
 | `set_mask` | Edit an EXISTING mask: mode, feather, expansion, opacity, inverted, rename | yes | host | 1 | 1 |
 | `set_mask_path` | Replace or ANIMATE a mask's path | yes | host | 1 | 7 |
 | `set_property` | Set ANY property by path — the universal fallback when no dedicated tool fits | yes | host | 3 | 10 |
-| `set_solid_color` | Change a SOLID layer's colour (this is the ONLY way — a solid's colour is not a property you can set_property) | yes | host | 1 | 4 |
+| `set_solid_color` | Change a SOLID layer's colour (this is the ONLY way — a solid's colour is not a property you can set_property) | yes | host | 1 | 5 |
 | `set_text_style` | Restyle an existing text layer (any subset of fields) | yes | host | 1 | 2 |
 | `set_track_matte` | Use one layer as another's track matte (alpha or luma, optionally inverted), or remove it with mode 'none' | yes | host | 1 | 1 |
 | `set_transform` | Set a transform property | yes | host | 1 | 23 |

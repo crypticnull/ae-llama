@@ -9001,7 +9001,51 @@ $.global.AELL_call = AELL_call;
  *    the viewer alive.
  *  - two full 200-layer fingerprints cost 37 ms, so the verification
  *    below can afford full fidelity over the whole project.
+ *
+ * Measured again on 2026-08-29, when "does rollback reach PROJECT ITEMS"
+ * was finally answered (it does -- addComp, duplicate, addFolder,
+ * item.remove, move_to_folder and rename all revert on the one Undo, and
+ * the shipped AELL_callBatch path was driven through each). The real
+ * finding was the other half: of 25 dimensions a mutating tool can
+ * write, AE's Undo reverted ALL 25 and the fingerprint could see only 4.
+ * The blind 21 are recorded below now. Nothing about the rollback
+ * changed; what changed is that its self-check can now fail honestly.
  */
+
+/* One switch or scalar, read defensively.
+ *
+ * A build that does not have this property, or an object that refuses it
+ * (a camera has no adjustmentLayer, a folder has no bgColor), must
+ * produce a STABLE absence -- the same string every time -- or the
+ * fingerprint stops being deterministic and every rollback reports
+ * itself as an overshoot. */
+function AELL_sigOf(obj, key) {
+  try {
+    var v = obj[key];
+    if (v === true) return "1";
+    if (v === false) return "0";
+    if (v === undefined || v === null) return "-";
+    return String(v);
+  } catch (e) { return "?"; }
+}
+
+/* Markers, cheaply.
+ *
+ * The count alone is not enough: add_marker was measured REPLACING a
+ * marker already at that time (item 5.4), so a rollback that failed to
+ * restore the old one would leave the count identical. The key TIMES go
+ * in too, capped so that a comp somebody has marked up heavily cannot
+ * turn the verification into the expensive half of the round. */
+function AELL_markerSig(mp) {
+  if (!mp) return "-";
+  var n;
+  try { n = mp.numKeys; } catch (e) { return "?"; }
+  var t = String(n), lim = (n < 50) ? n : 50, i;
+  for (i = 1; i <= lim; i++) {
+    try { t += ":" + mp.keyTime(i); } catch (e2) { t += ":?"; }
+  }
+  return t;
+}
 
 /* One layer's contribution to the fingerprint. Everything is wrapped:
  * cameras, lights and shape layers each lack some of these, and a
@@ -9029,6 +9073,41 @@ function AELL_layerSig(L, idx) {
       t += "|x" + L.property("Source Text").value.text;
     }
   } catch (e7) {}
+  // The switches and 3D-only values. Every one of these is written by a
+  // tool in AELL_MUTATING (set_layer_3d, add_marker, set_text_style,
+  // apply_preset, for_each_layer), and probe 3 on 2026-08-29 measured
+  // all of them changing WITHOUT moving the fingerprint by a byte -- 21
+  // of 25 dimensions were blind. That did not make the rollback wrong
+  // (AE's single Undo reverted every one), it made the VERIFICATION
+  // blind: an undo that failed in one of these would have been reported
+  // as a clean rollback, and an undo that overshot into the user's own
+  // last edit -- the hazard the whole design exists for -- would have
+  // been invisible whenever that edit was a switch.
+  t += "|3" + AELL_sigOf(L, "threeDLayer") +
+       AELL_sigOf(L, "shy") + AELL_sigOf(L, "locked") +
+       AELL_sigOf(L, "motionBlur") + AELL_sigOf(L, "adjustmentLayer") +
+       AELL_sigOf(L, "audioEnabled") + AELL_sigOf(L, "collapseTransformation") +
+       "|b" + AELL_sigOf(L, "blendingMode");
+  try { t += "|M" + AELL_markerSig(L.property("ADBE Marker")); }
+  catch (e8) { t += "|M?"; }
+  try {
+    var tr3 = L.property("ADBE Transform Group");
+    // 3D-only, and set_layer_3d's own documented loss. On a 2D layer AE
+    // still answers these, so they read as a stable 0 rather than as an
+    // absence -- which is the point: turning 3D off zeroes them.
+    t += "|R" + tr3.property("ADBE Rotate X").value +
+         "," + tr3.property("ADBE Rotate Y").value +
+         "," + tr3.property("ADBE Orientation").value.join(",");
+  } catch (e9) {}
+  try {
+    if (L instanceof TextLayer) {
+      var td = L.property("Source Text").value;
+      // set_text_style writes these and never touches .text, so the
+      // "|x" above cannot see any of its work.
+      t += "|X" + td.fontSize + "," + td.font + "," + td.tracking +
+           "," + td.justification;
+    }
+  } catch (e10) {}
   return t;
 }
 
@@ -9054,9 +9133,38 @@ function AELL_fingerprint() {
     try {
       if (it.parentFolder) t += "/in:" + it.parentFolder.name;
     } catch (e1) {}
+    // A solid's colour lives on the project ITEM, not on the layer --
+    // which is why set_solid_color changes every layer sharing the
+    // source, and why a fingerprint that only walked layers could not
+    // see the change at all.
+    try {
+      if (it.mainSource instanceof SolidSource) {
+        t += "/solid" + it.mainSource.color.join(",") +
+             "@" + it.width + "x" + it.height;
+      }
+    } catch (eS) {}
     if (it instanceof CompItem) {
       t += "/" + it.width + "x" + it.height + "/" + it.duration +
            "/" + it.frameRate + "/" + it.numLayers;
+      // Everything set_comp_setting can write, plus the switches beside
+      // them in AE's own Composition Settings dialog. All measured blind
+      // before this (probe 3, 2026-08-29): a rolled-back work area,
+      // background colour or preview resolution left the fingerprint
+      // byte-identical, so the verification had nothing to verify.
+      t += "/s" + AELL_sigOf(it, "pixelAspect") +
+           "," + AELL_sigOf(it, "displayStartTime") +
+           "," + AELL_sigOf(it, "workAreaStart") +
+           "," + AELL_sigOf(it, "workAreaDuration") +
+           "," + AELL_sigOf(it, "motionBlur") +
+           "," + AELL_sigOf(it, "shutterAngle") +
+           "," + AELL_sigOf(it, "shutterPhase") +
+           "," + AELL_sigOf(it, "frameBlending") +
+           "," + AELL_sigOf(it, "hideShyLayers") +
+           "," + AELL_sigOf(it, "preserveNestedFrameRate") +
+           "," + AELL_sigOf(it, "preserveNestedResolution");
+      try { t += "/bg" + it.bgColor.join(","); } catch (eB) {}
+      try { t += "/rf" + it.resolutionFactor.join(","); } catch (eR) {}
+      try { t += "/cm" + AELL_markerSig(it.markerProperty); } catch (eM) {}
       for (var j = 1; j <= it.numLayers; j++) {
         if (budget <= 0) { t += "\n (truncated)"; break; }
         budget--;
