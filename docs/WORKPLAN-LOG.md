@@ -4973,3 +4973,150 @@ Two probe rules for whoever writes the next one:
   unsaved) was saved before the probes isolated: a temp copy plus
   `X:\_CLAUDE\26_08_19_AE_Llama\aell-project-snapshot-2026-08-28-organize.aep`.
   AE was left on an empty project.
+
+## 2026-08-28 (local, seventeenth pass) - item 4: the harness reads the dialog before it answers it
+
+Harness green on arrival (391/391), so the pass took the LAST of the
+remote session's three specs: **harness dialog triage learns to READ
+before it answers**. No version bump, for the reason the 2026-08-26
+harness pass gave: the panel ships `extension/` alone, and this touches
+`scripts/` and `tests/` only. Bumping would publish a feed telling every
+installed panel to update to a build identical to the one it is running.
+
+### The thing that was never true
+
+For months every After Effects dialog reached the triage as "no readable
+text", and the whole machinery was built around that: verdicts decided
+from the SITUATION (is AE started, is a script executing, has the popup
+lasted), because nothing could read the words. `GetWindowTextW` returns
+EMPTY for a control owned by another process, which is the whole of it.
+
+`SendMessage(WM_GETTEXT)` on the very same child returns the sentence.
+Measured on the save-changes prompt, first try, no screenshot needed:
+
+    [#32770] title=''
+      DroverLord  GWT='OS_ViewContainer'     WMGT='OS_ViewContainer'
+      DroverLord  GWT='OS_ViewContainer'     WMGT='OS_ViewContainer'
+      DroverLord  GWT='OS_EditTextContainer' WMGT='OS_EditTextContainer'
+      Edit        GWT=''                     WMGT='Save changes to
+                                                   "Untitled Project.aep"
+                                                   before closing?'
+
+One `Edit` child holds the text, its `GetWindowTextW` is empty, and the
+quotes are CURLY. The buttons (Save / Don't Save / Cancel) are drawn by
+AE and have no windows at all.
+
+### What shipped, and the one line it must never cross
+
+- `HarvestDialogText` in the runner's C#: for every visible top-level
+  `#32770` of the AE process, the window title plus `WM_GETTEXT` from
+  every child. `SendMessageTimeoutW` with `SMTO_ABORTIFHUNG` and 400ms,
+  never `SendMessage` -- this runs unattended and a wedged dialog must
+  not wedge the harness with it. A control that does not answer is
+  recorded as `<no answer>`, so a failed read cannot pass for a dialog
+  with nothing to say.
+- `Get-AellHarvestClass` (triage lib) sorts a harvest into known-benign
+  (nothing readable, or the save-changes prompt) and everything else.
+  Judged LINE BY LINE, never on the joined text: two popups can be up at
+  once and "the save prompt is in there somewhere" must not launder an
+  error alert standing next to it. The pattern reaches AROUND the
+  project name (`Save changes to .* before closing`) because the real
+  text has curly quotes and the .ps1 is ASCII by rule.
+- The harvest is **evidence, not a verdict**, and this is the load-
+  bearing decision of the pass. `Get-AellStaleDialogPlan` answers a
+  leftover dialog only on the `unreadable` verdict. Feed it the harvest
+  and the save-changes prompt becomes readable, the verdict flips to
+  `blocked`, and the harness stops answering the ONE dialog the whole
+  mechanism exists for -- an unattended pass would be back to losing its
+  first run to a prompt the previous run left up. Reading a dialog must
+  not make the runner more timid than it was when it was blind, so the
+  answer set is exactly what it was: still gated on the situation, still
+  only a `#32770` that is wordless to `GetWindowText`, still
+  `PostMessage`. A stub test pins the separation (the verdict function
+  may not mention the harvest functions).
+- Screenshot to `logs\dialogs\<timestamp>.png` for everything except the
+  recognized save prompt -- the wordless case the spec asked for, plus
+  every unrecognized one, so the `UNRECOGNIZED DIALOG` marker always has
+  a picture to point at. `logs/` is gitignored.
+- `UNRECOGNIZED DIALOG <context>` printed with the text and the PNG
+  path, at both places a dialog is now read: before the pre-launch
+  answer, and in the exit-4 report. The run proceeds either way.
+
+### Three measurements that cost an attempt each
+
+1. **The dialog is not drawn where Win32 says it is.** `GetWindowRect`
+   returned 60,60 for a prompt whose visible frame started near 133,127.
+   A crop to the rect captured the desktop behind it -- twice. Fix: grab
+   the whole virtual screen.
+2. **"Move it only if the rect leaves the screen" is not enough**, for
+   the same reason. The error alert's RECT fitted, its PICTURE ran off
+   the bottom-right, and the first evidence PNG had the sentence cut off
+   mid-word. Every dialog is now moved to the top-left unconditionally
+   (staggered so two do not stack) before the capture. It only happens
+   when the harness is already taking evidence on a dialog it is about
+   to answer, and a picture missing the words is not evidence.
+3. **A moved window has not repainted yet.** A capture taken immediately
+   after `MoveWindow` caught the desktop; raise it (`BringWindowToTop` +
+   `SetForegroundWindow`) and wait 1.2s and it is perfectly readable.
+
+### Two bugs the stub test found, both real
+
+- `return ,$words` in the new word filter. The comma wraps an EMPTY
+  array in a one-element array, so a dialog with nothing to say came
+  back with Count 1 (its one "word" being an empty array), fell through
+  to the unknown loop, added nothing, and classified as the save-changes
+  prompt. Every wordless popup would have been reported as recognized.
+  Plain `return $words` plus `@()` at the call sites is right for none,
+  one and many.
+- The test's own `psString` could not carry AE's text: **PowerShell 5.1
+  accepts curly quotes as string DELIMITERS**, so pasting the real
+  sentence into a double-quoted literal ends the string mid-way and the
+  script does not parse. It now splices them in with `[char]0x201c` and
+  writes the temp .ps1 as UTF-8 with a BOM -- the old ASCII write masked
+  U+201C into a control character, and the test would have proved the
+  pattern matches garbage rather than what AE actually says.
+
+### Verified in the field
+
+Every path exercised against real AE 2026:
+
+- **Unrecognized dialog**: a deliberate `addComp("wedge")` (6 params
+  required) left AE's own error alert up. The harness read it in one
+  call -- "Unable to execute script at line 3. After Effects error:
+  Unable to call addComp because the call requires 6 parameters." --
+  saved a PNG showing the whole alert including the OK button, printed
+  `UNRECOGNIZED DIALOG answered before the launch`, answered it, and ran
+  391/391. Run twice: the first PNG was the one cut off at the screen
+  edge, which is how measurement (2) above was found.
+- **Recognized dialog**: the save prompt raised by posting WM_CLOSE to a
+  dirty AE. Named in the log, NO screenshot, NO marker, answered,
+  391/391.
+- **Clean runs**: the harness twice back-to-back as the spec requires.
+  391/391, exit 0, both times, with none of the new output on screen.
+- Stubbed suite: 44 files green, `tests/test-selftest-runner.js` grown
+  by 20 checks over the harvests captured from real AE.
+
+**Harness: 391/391 PASSED, twice.** No suite steps changed (this is
+harness machinery, not panel behaviour).
+
+### One earlier note corrected, and what is still open
+
+The organize_project entry above recorded that `PostMessage(WM_CLOSE)`
+does NOT answer AE's script-error alerts. On AE 2026 it does: the posted
+WM_CLOSE cleared the addComp alert on both runs of this pass ("answered
+1 dialog(s)" then "cleared", suite green immediately after). That note
+held for whatever alert the earlier pass was looking at; it is not a
+general rule, so a dialog that does not clear is still expected and
+still reported.
+
+- All three of the remote session's specs are now built (0.10.1 workflow
+  seeding, 0.10.2 organize_project preview, this one).
+- Next on the feature track: item 5.7 (audio to keyframes); 5.8 is
+  unblocked and cheap.
+- `duplicate_comp` takes a name without uniquing; no read-only
+  `get_bounds`. Both still unclaimed.
+- `release-notes.txt` still reads "0.10.0" while the feed ships 0.10.2.
+  Third pass to flag it; it belongs to the remote session's release cut.
+- Unattended runs write evidence PNGs to `logs\dialogs\`. Nothing prunes
+  them. They are ~100KB each and only written when a dialog is not the
+  save prompt, so this is a note rather than a problem.

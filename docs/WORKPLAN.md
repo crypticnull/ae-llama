@@ -399,10 +399,24 @@ FOUR tools are still uncovered and each is deliberate, not pending:
   were filed into a user's nested `PR Archive/Comps`. Destinations are
   now root-only and a nested homonym is named in the result instead.
 
-- **Harness dialog triage learns to READ before it answers** (design
-  decided 2026-08-28; its OWN pass, and run the full harness twice
-  back-to-back afterwards — this changes the machinery every unattended
-  run depends on): before CloseWordlessDialogs answers a `#32770`,
+- ~~**Harness dialog triage learns to READ before it answers**~~ DONE
+  2026-08-28. Built to the spec, with the one line the spec implied and
+  this pass had to make explicit: the harvest is EVIDENCE and is
+  deliberately NOT fed to `Get-AellDialogVerdict`. That verdict is what
+  gates the pre-launch answer, and it fires on `unreadable` — so making
+  the save-changes prompt readable would have flipped it to `blocked`
+  and stopped the harness answering the one dialog the mechanism exists
+  for. Same answer set as before, now with the words and a picture.
+  Measured: the text lives in an `Edit` child whose `GetWindowTextW` is
+  empty and whose `WM_GETTEXT` is the whole sentence, in CURLY quotes;
+  AE draws its dialog frame offset from the rect Win32 reports, so the
+  screenshot is of the whole virtual screen and the dialog is moved to
+  the corner and raised first. Verified in real AE on all three paths
+  (a deliberate addComp error alert → UNRECOGNIZED + readable PNG, the
+  save prompt → named, no PNG, no marker, and two clean back-to-back
+  runs), 391/391 each time. No version bump: the panel ships
+  `extension/` alone. Original spec:
+  before CloseWordlessDialogs answers a `#32770`,
   (1) collect WM_GETTEXT from every child control and log it;
   (2) if that yields nothing, move the window on-screen and save a
   screenshot to `logs\dialogs\<timestamp>.png` (measured readable on

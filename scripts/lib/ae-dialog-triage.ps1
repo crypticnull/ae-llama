@@ -211,3 +211,94 @@ function Get-AellStaleDialogPlan {
     Reason = $reason
   }
 }
+
+# --- what the dialog SAYS -------------------------------------------------
+#
+# Everything above decides from the SITUATION, because for years nothing
+# could read an After Effects dialog: GetWindowTextW on a control owned by
+# another process returns EMPTY, so every AE alert arrived here as "no
+# readable text" and the runner could only guess from context.
+#
+# It was never unreadable. Measured 2026-08-28 on AE 2026, first try:
+# SendMessage(WM_GETTEXT) to the same child returns the whole sentence.
+# The save-changes prompt is a #32770 with an empty title, three
+# DroverLord containers that report their own class, and one `Edit` child
+# whose GetWindowTextW is empty and whose WM_GETTEXT is
+#
+#     Save changes to "Untitled Project.aep" before closing?      (curly quotes)
+#
+# The harvest is EVIDENCE, not a new verdict. It deliberately does not
+# feed Get-AellDialogVerdict: the stale-dialog answer below is gated on
+# the `unreadable` verdict, so making the save prompt readable would flip
+# it to `blocked` and the harness would stop answering the one dialog the
+# whole mechanism exists to answer. Reading it must not make the runner
+# more timid than it was when it was blind.
+
+# The words a human would actually read, out of a raw harvest. AE's
+# container children report their CLASS as their text (OS_ViewContainer
+# and friends) and a control that did not answer in time is recorded as
+# <no answer>; neither is something a dialog says.
+function Get-AellHarvestWords {
+  param([string]$Harvest = "")
+  $words = @()
+  foreach ($raw in ($Harvest -split "`r?`n")) {
+    $t = $raw.Trim()
+    if ($t.Length -eq 0) { continue }
+    if ($t -match '^OS_[A-Za-z0-9_]+$') { continue }
+    if ($t -eq '<no answer>') { continue }
+    $words += $t
+  }
+  # Plain $words, never ,$words: the comma wraps an EMPTY array in a
+  # one-element array, so a dialog with nothing to say came back with
+  # one (empty) word and classified as the save prompt. Callers wrap the
+  # call in @() instead, which is right for none, one and many.
+  return $words
+}
+
+# Two harvests are known-benign, and everything else is worth a human's
+# eye in the morning:
+#   - nothing readable at all: the wordless popup the runner has always
+#     answered (AE's teardown flicker, or a dialog even WM_GETTEXT cannot
+#     reach). Unchanged from the blind behaviour, so still benign.
+#   - the save-changes prompt: the leftover this machinery exists for.
+#
+# Judged LINE BY LINE, never on the joined text: two popups can be up at
+# once, and "the save prompt is in there somewhere" must not launder an
+# error alert standing next to it.
+#
+# The pattern reaches AROUND the project name rather than through it --
+# the real text carries curly quotes and this file is ASCII by rule
+# (CLAUDE.md), so the quotes are never matched literally.
+function Get-AellHarvestClass {
+  param([string]$Harvest = "")
+
+  $words = @(Get-AellHarvestWords -Harvest $Harvest)
+  if ($words.Count -eq 0) {
+    return New-Object PSObject -Property @{
+      Known = $true
+      Label = "wordless"
+      Text = ""
+      Unknown = ""
+    }
+  }
+
+  $unknown = @()
+  foreach ($w in $words) {
+    if ($w -match 'Save changes to .* before closing') { continue }
+    $unknown += $w
+  }
+  if ($unknown.Count -eq 0) {
+    return New-Object PSObject -Property @{
+      Known = $true
+      Label = "save-changes prompt"
+      Text = ($words -join " / ")
+      Unknown = ""
+    }
+  }
+  return New-Object PSObject -Property @{
+    Known = $false
+    Label = "unrecognized"
+    Text = ($words -join " / ")
+    Unknown = ($unknown -join " / ")
+  }
+}
