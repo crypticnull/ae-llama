@@ -230,7 +230,7 @@
    *
    * input: {vramGB|null, headroomGB, chatRunning, chatLoadedMB|null,
    *         genNeedMB|null, pauseMode: 'auto'|'always'|'never',
-   *         mandatory}
+   *         mandatory, overridden}
    * out:   {mode: 'concurrent'|'handoff'|'refuse', reason}
    */
   function planHandoff(inp) {
@@ -254,11 +254,19 @@
       typeof inp.genNeedMB === "number" && inp.genNeedMB > 0;
     var fits = known &&
       inp.chatLoadedMB + inp.genNeedMB + headMB <= vramMB;
+    // The chat model's figure is MEASURED off the model that is really
+    // loaded; the card's can be a fiction (`vramOverrideGB` impersonates
+    // any card on any card). Unlabelled, the two together produce
+    // sentences that read as nonsense — measured in the field
+    // 2026-08-30 with a 32B model and an 8 GB override: "the chat model
+    // holds ~20 GB of the card's 8 GB". Both numbers are true; only the
+    // budget's provenance was missing.
     function numbers() {
       return "the generation needs ~" +
         Math.round(inp.genNeedMB / 1024 * 10) / 10 + " GB and the chat " +
         "model holds ~" + Math.round(inp.chatLoadedMB / 1024 * 10) / 10 +
-        " GB of the card's " + inp.vramGB + " GB";
+        " GB of the card's " + inp.vramGB + " GB" +
+        (inp.overridden ? " (VRAM override)" : "");
     }
     if (pause === "never") {
       if (fits && !inp.mandatory) {

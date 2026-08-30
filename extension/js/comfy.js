@@ -201,6 +201,14 @@
       // A sidecar is not a workflow. Listing it would offer the model a
       // "<name>.manifest" template that loadWorkflow can only reject.
       if (/\.manifest\.json$/i.test(entries[i])) continue;
+      // Neither is a DOTFILE. The bundle carries .hash-history.json (the
+      // seeder's record of every version ever shipped, 0.10.1), and a
+      // leading dot sorts FIRST — so anything pointed at the bundled
+      // directory got ".hash-history" offered to the model as a template
+      // and, because the default is simply list[0], generating without
+      // naming a workflow ran the record file as a graph. Measured
+      // 2026-08-30 against extension/comfy-workflows.
+      if (entries[i].charAt(0) === ".") continue;
       if (/\.json$/i.test(entries[i])) {
         var file = path.join(dir, entries[i]);
         // A template that still holds this project's own placeholder
@@ -499,6 +507,154 @@
     }
   }
 
+  /*
+   * ------------------------------------------ what width/height BECOME
+   *
+   * A template that renders at one size and enlarges before it saves is
+   * ordinary, and the shipped KREA2 graph is one: authored 1920x1080, a
+   * 1.6x latent upscale between its two passes, 3072x1728 on disk. So a
+   * caller asking for 1024x1024 gets a 1640x1640 file, and until now the
+   * only record of that anywhere was the file itself.
+   *
+   * `widget` is the factor's input name per class. `latent` says the
+   * enlargement happens in LATENT space, where the factor lands on the /8
+   * grid and is multiplied back out - which is why 1024 becomes 1640 and
+   * not 1638. Both shipped sizes reproduce exactly this way.
+   */
+  var SCALE_CLASSES = {
+    LatentUpscaleBy:     { widget: "scale_by", latent: true },
+    SesquiLatentUpscale: { widget: "scale",    latent: true },
+    ImageScaleBy:        { widget: "scale_by", latent: false }
+  };
+
+  /** True for a node that writes a file, i.e. the end of a size chain. */
+  function isOutputNode(node) {
+    if (!node || !node.inputs) return false;
+    if (node.inputs.hasOwnProperty("filename_prefix")) return true;
+    return /^Save/.test(String(node.class_type || ""));
+  }
+
+  /** nodeId -> [ids of the nodes taking one of its outputs]. */
+  function consumerMap(graph) {
+    var consumers = {}, k, key;
+    for (k in graph) {
+      if (!graph.hasOwnProperty(k)) continue;
+      if (!graph[k] || !graph[k].inputs) continue;
+      for (key in graph[k].inputs) {
+        if (!graph[k].inputs.hasOwnProperty(key)) continue;
+        var v = graph[k].inputs[key];
+        if (!isLink(v)) continue;
+        var src = String(v[0]);
+        if (!consumers[src]) consumers[src] = [];
+        consumers[src].push(k);
+      }
+    }
+    return consumers;
+  }
+
+  /**
+   * Follow the picture made at `startId` forward to whatever writes it to
+   * disk, and answer by how much its size is multiplied on the way.
+   *
+   * Returns {factor, latent} or NULL, and null is reported as nothing at
+   * all. The rule is the one the weight check already lives by: a number
+   * that might be wrong is worse than no number, because it sends a user
+   * looking for pixels that were never there. So every case this cannot
+   * account for - a resize whose amount lives in a MODEL rather than in a
+   * widget, a scale widget that is not a positive number, two output
+   * branches that disagree, a chain that reaches no output at all - gives
+   * up rather than guesses.
+   */
+  function outputScaleFrom(graph, startId) {
+    var consumers = consumerMap(graph);
+    var unknown = false;
+    var factors = {};          // "1.6|l" -> {factor, latent}
+    var found = 0;
+
+    function visit(id, factor, latent, depth) {
+      if (unknown) return;
+      if (depth > 64) { unknown = true; return; }
+      var node = graph[id];
+      if (!node || !node.inputs) return;
+      var cls = String(node.class_type || "");
+      var f = factor, lat = latent;
+
+      if (depth > 0) {
+        var rule = SCALE_CLASSES.hasOwnProperty(cls)
+          ? SCALE_CLASSES[cls] : null;
+        if (rule) {
+          var raw = node.inputs[rule.widget];
+          var num = (typeof raw === "string") ? Number(raw) : raw;
+          if (typeof num !== "number" || !(num > 0)) { unknown = true; return; }
+          f = factor * num;
+          if (rule.latent) lat = true;
+        } else if (node.inputs.hasOwnProperty("upscale_model") ||
+                   /UpscaleWithModel/.test(cls)) {
+          // The factor is a property of the .pth, not of the graph.
+          unknown = true;
+          return;
+        } else if (typeof node.inputs.width === "number" &&
+                   typeof node.inputs.height === "number") {
+          // An absolute resize, and injectParams has just written the
+          // caller's own numbers into it - so from here the size IS the
+          // size that was asked for, whatever happened upstream.
+          f = 1;
+          lat = false;
+        }
+      }
+
+      if (isOutputNode(node)) {
+        var key = f + "|" + (lat ? "l" : "p");
+        if (!factors.hasOwnProperty(key)) {
+          factors[key] = { factor: f, latent: lat };
+          found++;
+        }
+      }
+      var next = consumers[String(id)] || [];
+      for (var i = 0; i < next.length; i++) visit(next[i], f, lat, depth + 1);
+    }
+
+    visit(String(startId), 1, false, 0);
+    if (unknown || found !== 1) return null;
+    for (var key2 in factors) {
+      if (factors.hasOwnProperty(key2)) return factors[key2];
+    }
+    return null;
+  }
+
+  /** Apply a scale the way the node carrying it would. */
+  function scaleDim(px, factor, latent) {
+    if (latent) return Math.round((px / 8) * factor) * 8;
+    return Math.round(px * factor);
+  }
+
+  /**
+   * The line that closes the gap: for every node whose size was just set,
+   * say what that size turns into on disk. Silent when nothing enlarges it
+   * and silent whenever outputScaleFrom cannot account for the chain.
+   */
+  function noteOutputSize(graph, sizedIds, applied) {
+    var seen = {};
+    for (var i = 0; i < sizedIds.length; i++) {
+      var id = sizedIds[i];
+      var node = graph[id];
+      if (!node || !node.inputs) continue;
+      var w = node.inputs.width, h = node.inputs.height;
+      if (typeof w !== "number" || typeof h !== "number") continue;
+      var sc = outputScaleFrom(graph, id);
+      if (!sc || sc.factor === 1) continue;
+      var line = "size " + w + "x" + h + " on node " + id + " is enlarged " +
+        sc.factor + "x before this template saves, so the file will be " +
+        scaleDim(w, sc.factor, sc.latent) + "x" +
+        scaleDim(h, sc.factor, sc.latent) +
+        " - width/height set the size it GENERATES at, not the size it " +
+        "writes";
+      if (seen.hasOwnProperty(line)) continue;
+      seen[line] = true;
+      applied.push(line);
+    }
+  }
+
   /**
    * Graft params onto the graph. Returns a list of what was changed so the
    * LLM (and user) can see how the template was used.
@@ -510,6 +666,7 @@
   function injectParams(graph, params, manifest) {
     var applied = [];
     var cls = classifyEncoders(graph);
+    var sizedIds = [];
     var k, node;
 
     for (k in graph) {
@@ -556,6 +713,7 @@
           node.inputs.height = Math.round(params.height);
           applied.push("height -> node " + k);
         }
+        if (params.width > 0 || params.height > 0) sizedIds.push(k);
       }
 
       // Frame count for video workflows.
@@ -586,6 +744,9 @@
     if (manifest && manifest.procedural) {
       injectProcedural(graph, params, manifest.procedural, applied);
     }
+    // After everything, because the answer depends on the graph as it is
+    // going to be queued.
+    noteOutputSize(graph, sizedIds, applied);
     return applied;
   }
 
@@ -734,6 +895,127 @@
         }
         cb(null, Object.prototype.hasOwnProperty.call(json, className));
       });
+  }
+
+  // ------------------------------------------------- weight availability
+
+  /**
+   * A loader widget's value is a WEIGHT when it names a weight FILE.
+   * The same combo lists also carry modes (`weight_dtype: "default"`,
+   * `type: "krea2"`), and those are not what this asks about.
+   */
+  var WEIGHT_FILE_RE = /\.(safetensors|ckpt|pt|pth|bin|gguf|sft|onnx)$/i;
+
+  /**
+   * The list of values a node class declares for one input, or null when
+   * that input is not a combo this can answer about.
+   *
+   * Measured on ComfyUI 0.32.0: `input.required.<name>` is
+   * `[[choice, ...], {...}]`. The `["COMBO", {options: [...]}]` form some
+   * builds emit is read too; anything else answers null, which makes the
+   * caller silent rather than wrong.
+   */
+  function comboChoices(def, name) {
+    if (!def || !def.input) return null;
+    var spec = null;
+    if (def.input.required &&
+        Object.prototype.hasOwnProperty.call(def.input.required, name)) {
+      spec = def.input.required[name];
+    } else if (def.input.optional &&
+               Object.prototype.hasOwnProperty.call(def.input.optional, name)) {
+      spec = def.input.optional[name];
+    }
+    if (!(spec instanceof Array) || !spec.length) return null;
+    if (spec[0] instanceof Array) return spec[0];
+    if (spec[0] === "COMBO" && spec[1] && spec[1].options instanceof Array) {
+      return spec[1].options;
+    }
+    return null;
+  }
+
+  /**
+   * Which weights in `graph` the RUNNING backend cannot load.
+   *
+   * The panel prices a generation off the DISK (tools.js modelFileMB) and
+   * ComfyUI decides off ITS OWN search path, and the two answer different
+   * questions: the disk knows how big a weight is (/object_info carries no
+   * sizes), the backend knows whether it can open it (the disk cannot know
+   * the search path). Measured on this machine 2026-08-30, they disagreed:
+   * all four MiniMax H3 weights are on disk where the panel looks, and the
+   * running ComfyUI — launched `--base-directory Documents\ComfyUI`, with
+   * no extra_model_paths.yaml anywhere — sees none of them. So the arbiter
+   * would stop the chat model to make room for 40 503 MiB of weights and
+   * only then hear `Value not in list — vae_name: ...`. A user pays a full
+   * handoff for a job that was never runnable.
+   *
+   * cb(err, {missing: [{node, classType, input, value, choiceCount}],
+   *          checked}). NEVER guesses: a class the server does not know, an
+   * input that is not a combo, and a value that is not a weight filename
+   * are all passed over in silence, so this can only ever report a weight
+   * ComfyUI itself would reject at queue time — never a false refusal.
+   */
+  function missingWeights(comfyUrl, graph, cb) {
+    var base;
+    try { base = parseBase(comfyUrl); } catch (e) { cb(e); return; }
+    var ids = [], k;
+    for (k in graph) {
+      if (Object.prototype.hasOwnProperty.call(graph, k)) ids.push(k);
+    }
+    ids.sort();
+    var defs = {};                 // class_type -> definition|null, once each
+    var missing = [], checked = 0;
+    (function next(i) {
+      if (i >= ids.length) {
+        cb(null, { missing: missing, checked: checked });
+        return;
+      }
+      var nid = ids[i];
+      var node = graph[nid] || {};
+      var cls = node.class_type;
+      var inputs = node.inputs || {};
+      var names = [], n;
+      for (n in inputs) {
+        if (!Object.prototype.hasOwnProperty.call(inputs, n)) continue;
+        if (typeof inputs[n] === "string" && WEIGHT_FILE_RE.test(inputs[n])) {
+          names.push(n);
+        }
+      }
+      if (!cls || !names.length) { next(i + 1); return; }
+      function withDef(def) {
+        for (var j = 0; j < names.length; j++) {
+          var name = names[j];
+          var choices = comboChoices(def, name);
+          if (!choices) continue;
+          checked++;
+          var hit = false;
+          for (var c = 0; c < choices.length; c++) {
+            if (choices[c] === inputs[name]) { hit = true; break; }
+          }
+          if (!hit) {
+            missing.push({ node: nid, classType: cls, input: name,
+                           value: inputs[name], choiceCount: choices.length });
+          }
+        }
+        next(i + 1);
+      }
+      if (Object.prototype.hasOwnProperty.call(defs, cls)) {
+        withDef(defs[cls]);
+        return;
+      }
+      requestJson(base, "GET", "/object_info/" + encodeURIComponent(cls),
+        null, 10000, function (err, statusCode, json) {
+          if (err) {
+            cb(new Error("ComfyUI unreachable at " + base.label + " — " +
+                         err.message));
+            return;
+          }
+          var def = (statusCode === 200 && json &&
+                     Object.prototype.hasOwnProperty.call(json, cls))
+            ? json[cls] : null;
+          defs[cls] = def;
+          withDef(def);
+        });
+    })(0);
   }
 
   /**
@@ -1097,6 +1379,73 @@
   }
 
   /**
+   * Stop a prompt this panel queued and then gave up on.
+   *
+   * A timeout used to be pure ABANDONMENT: the panel stopped looking, the
+   * job kept the card and kept computing, and the VRAM arbiter's very next
+   * act was to reload the chat model into whatever was left. Measured
+   * 2026-08-30 on a 32 GB card (logs/oom-probe-*): a KREA2 job the panel
+   * timed out on at 90 s still held **23 673 MB** when llama-server was
+   * asked to load a 18 932 MB model back into the same card, the "verified
+   * release" wait burned its whole 10 s reporting a release that had not
+   * happened, and the abandoned job went on grinding for another ten
+   * minutes. On Windows the driver's system-memory fallback hid the
+   * collision — the chat model "came back" spilled into host RAM.
+   *
+   * Never a blind POST /interrupt. This is the USER'S ComfyUI and they may
+   * have queued their own work in its own UI, so the queue is READ first
+   * and only our own prompt id is acted on:
+   *   still pending  -> POST /queue {delete: [id]}  (id-targeted on every
+   *                     ComfyUI version)
+   *   still running  -> POST /interrupt {prompt_id} (targeted on 0.32; on
+   *                     older builds that ignore prompt_id it is a global
+   *                     interrupt, which by then cancels exactly the job we
+   *                     mean, because we just proved ours is the running one)
+   *   neither        -> nothing to do; it finished or was already dropped.
+   *
+   * cb(note) — a clause for the error message saying what was actually done.
+   * Never fails the round: a backend that cannot be asked leaves the job
+   * alone and says so.
+   */
+  function cancelPrompt(base, promptId, cb) {
+    requestJson(base, "GET", "/queue", null, 10000,
+      function (err, statusCode, json) {
+        if (err || statusCode !== 200 || !json) {
+          cb(" — ComfyUI's queue could not be read, so it was left alone " +
+             "and may still be running");
+          return;
+        }
+        // Queue rows are positional: [number, prompt_id, prompt, ...].
+        function holds(list) {
+          if (!(list instanceof Array)) return false;
+          for (var i = 0; i < list.length; i++) {
+            if (list[i] && list[i][1] === promptId) return true;
+          }
+          return false;
+        }
+        if (holds(json.queue_pending)) {
+          requestJson(base, "POST", "/queue", { "delete": [promptId] }, 10000,
+            function (dErr, dStatus) {
+              cb(dErr || dStatus !== 200
+                ? " — it was still queued and ComfyUI refused to drop it"
+                : " — it was still queued and has been removed");
+            });
+          return;
+        }
+        if (holds(json.queue_running)) {
+          requestJson(base, "POST", "/interrupt", { prompt_id: promptId },
+            10000, function (iErr, iStatus) {
+              cb(iErr || iStatus !== 200
+                ? " — it is still running and ComfyUI refused to cancel it"
+                : " — it was still running and has been cancelled");
+            });
+          return;
+        }
+        cb(" — ComfyUI is no longer running it");
+      });
+  }
+
+  /**
    * End-to-end generation.
    * opts: {comfyUrl, workflowFile, params, outDir, timeoutSec}
    * onProgress(secondsElapsed) fires periodically while waiting.
@@ -1190,9 +1539,12 @@
         }
 
         // Partial validation: valid branches queued, broken ones dropped.
-        // Surface what was skipped alongside the eventual result.
+        // Surface what was skipped alongside the eventual result — and
+        // keep it, because when EVERY output branch is dropped this is the
+        // only account of why the run produced nothing.
+        var skipped = "";
         if (json.node_errors) {
-          var skipped = describeNodeErrors(json.node_errors);
+          skipped = describeNodeErrors(json.node_errors);
           if (skipped) applied.push("WARNING skipped branches: " + skipped);
         }
 
@@ -1206,6 +1558,7 @@
         // in-flight /history responses can land after the timer is cleared.
         var finished = false;
         var inFlight = false;
+        var cancelling = false;
         var timer = null;
 
         function settle(err2, res2) {
@@ -1223,9 +1576,17 @@
             onProgress(Math.round(elapsed / 1000));
           }
           if (elapsed >= timeoutMs) {
-            settle(new Error("Generation timed out after " +
-                             Math.round(elapsed / 1000) + "s (prompt " +
-                             promptId + " may still finish in ComfyUI)"));
+            // Stop looking AND stop the job — see cancelPrompt. The cancel
+            // is awaited before settling so the arbiter's resume, which
+            // runs next and waits for the card to come back to the floor,
+            // is waiting for something that can actually happen.
+            if (cancelling) return;
+            cancelling = true;
+            var secs = Math.round(elapsed / 1000);
+            cancelPrompt(base, promptId, function (note) {
+              settle(new Error("Generation timed out after " + secs +
+                               "s (prompt " + promptId + ")" + note));
+            });
             return;
           }
           if (inFlight) return;
@@ -1233,7 +1594,12 @@
           requestJson(base, "GET", "/history/" + promptId, null, 10000,
             function (herr, hstatus, hjson) {
               inFlight = false;
-              if (finished) return;
+              // A poll issued just before the timeout can land while the
+              // cancel is in flight. Let the timeout own the message —
+              // "timed out and has been cancelled" is the truth, where
+              // this path would report the panel's own interrupt back to
+              // the user as if ComfyUI had been cancelled from elsewhere.
+              if (finished || cancelling) return;
               if (herr || hstatus !== 200 || !hjson) return; // retry next tick
               var entry = hjson[promptId];
               if (!entry) return;                            // still queued/running
@@ -1261,8 +1627,20 @@
               var files = collectOutputFiles(entry);
               if (files.length === 0 && !st.completed) return; // keep waiting
               if (files.length === 0) {
-                settle(new Error("Workflow finished but produced no output " +
-                                 "files (no SaveImage/SaveVideo node?)"));
+                // ComfyUI QUEUES a prompt whose outputs all failed
+                // validation, runs it in ~0.01 s and reports it complete
+                // with no error and no outputs. Measured 2026-08-30: a
+                // CLIPLoader type the backend does not know dropped all
+                // five output branches and the panel blamed a missing
+                // SaveImage node — the real reason was in node_errors at
+                // queue time and had been thrown away. Say what ComfyUI
+                // said.
+                settle(new Error(skipped
+                  ? "ComfyUI dropped every output branch of this workflow " +
+                    "when it validated it, so nothing was rendered: " +
+                    skipped
+                  : "Workflow finished but produced no output files (no " +
+                    "SaveImage/SaveVideo node?)"));
                 return;
               }
               // Terminal success path: latch BEFORE the downloads so a
@@ -1719,6 +2097,7 @@
     readManifest: readManifest,
     loadWorkflow: loadWorkflow,
     injectParams: injectParams,
+    outputScaleFrom: outputScaleFrom,
     uploadImage: uploadImage,
     generate: generate,
     status: status,
@@ -1731,6 +2110,7 @@
     substituteNode: substituteNode,
     expandFilenameTokens: expandFilenameTokens,
     classInstalled: classInstalled,
+    missingWeights: missingWeights,
     resolveOptionalNodes: resolveOptionalNodes,
     _applyExtraModelPaths: applyExtraModelPaths   // exposed for tests
   };

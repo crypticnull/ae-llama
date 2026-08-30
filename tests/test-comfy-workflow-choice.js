@@ -47,6 +47,15 @@ fs.writeFileSync(path.join(dir, "example-txt2img.json"), JSON.stringify({
   "4": { class_type: "CheckpointLoaderSimple",
          inputs: { ckpt_name: "CHANGE-ME.safetensors" } }
 }));
+// The seeder's own record of every version ever shipped (0.10.1). It is
+// a real .json file sitting in the bundled workflow directory, and its
+// leading dot sorts it FIRST — which is what made this worth pinning:
+// found 2026-08-30, .hash-history was offered to the model as a template
+// AND was list[0], so a generation that named no workflow ran the record
+// file as a graph.
+fs.writeFileSync(path.join(dir, ".hash-history.json"), JSON.stringify({
+  files: { "AE_LLAMA_KREA2_V1.json": ["abc123"] }
+}));
 
 // ------------------------------------------------- 1. the Comfy half
 
@@ -61,9 +70,14 @@ new Function("window", fs.readFileSync(
 )(comfyWindow);
 
 const listed = comfyWindow.Comfy.listWorkflows(dir);
-assert(listed.length === 3, "the manifest sidecar is still not a workflow");
+assert(listed.length === 3,
+       "the manifest sidecar and the dotfile are still not workflows");
 const byName = {};
 for (const w of listed) byName[w.name] = w;
+assert(!byName[".hash-history"],
+       "the seeder's hash record is not offered as a workflow");
+assert(listed[0].name !== ".hash-history",
+       "and so cannot be the default a nameless generation falls on");
 assert(byName["example-txt2img"].example === true,
        "a template holding CHANGE-ME is flagged as an example");
 assert(byName["AE_LLAMA_KREA2_V1"].example === false &&

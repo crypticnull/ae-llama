@@ -337,7 +337,9 @@
     { name: "import_file", mutating: true,
       desc: "Import a footage/image/video file into the PROJECT PANEL " +
             "only — it does not appear in any comp. To put it on screen " +
-            "use import_as_layer instead.",
+            "use import_as_layer instead. Returns the size AE measured " +
+            "(width/height, plus duration and frameRate for media that " +
+            "has them) — use those, not the size you expected.",
       args: "{path: string (absolute)}" },
     { name: "import_as_layer", mutating: true,
       desc: "Import a file AND place it in a comp as a layer, scaled to " +
@@ -535,13 +537,37 @@
             "is held back, not rendered. Use list_render_templates for " +
             "valid template names — the output module forces its own " +
             "file extension, so the result says where the bytes really " +
-            "went.",
-      args: "{comp?: string, output: string (ABSOLUTE file path), template?: string (output module, e.g. \"Lossless\" or \"H.264 - Match Render Settings - 15 Mbps\"), renderSettings?: string (e.g. \"Best Settings\"), startTime?: number (seconds), durationSeconds?: number, frames?: int (instead of durationSeconds), overwrite?: bool = false}" },
+            "went. {resolution} renders FEWER PIXELS (\"half\" writes a " +
+            "file half as wide and half as tall, a quarter of the bytes) " +
+            "— use it for previews and for anything that will be scaled " +
+            "down afterwards; the result says the size AE really wrote.",
+      args: "{comp?: string, output: string (ABSOLUTE file path), template?: string (output module, e.g. \"Lossless\" or \"H.264 - Match Render Settings - 15 Mbps\"), renderSettings?: string (e.g. \"Best Settings\"), resolution?: \"full\"|\"half\"|\"third\"|\"quarter\" = full, startTime?: number (seconds), durationSeconds?: number, frames?: int (instead of durationSeconds), overwrite?: bool = false}" },
     { name: "list_render_templates", mutating: false,
       desc: "List this machine's render-settings and output-module " +
             "template names for render_comp. Installed templates differ " +
             "per machine — never guess a name, list them.",
       args: "{}" },
+    { name: "expose_property", mutating: true,
+      desc: "Expose one property in the comp's ESSENTIAL GRAPHICS panel, " +
+            "so an editor can change it in Premiere. This is step one of " +
+            "making a .mogrt template. AE names the controller after the " +
+            "LAYER (transform/text) or the EFFECT (effect parameters), " +
+            "never after the property, and it allows duplicate names — " +
+            "so always pass a 'label' the editor will understand. There " +
+            "is no rename and no remove: AE ships neither, and a " +
+            "controller cannot be exposed twice.",
+      args: "{comp?: string, layer?: name|index (omit = selected), property: string (e.g. 'opacity', 'position', 'effect.Tint.Amount to Tint', or a full path), label?: string}" },
+    { name: "export_mogrt", mutating: true,
+      desc: "Write a comp out as a .mogrt Motion Graphics template. " +
+            "Needs at least one exposed control (expose_property) and a " +
+            "project that is SAVED and has NO unsaved changes — AE " +
+            "silently writes nothing otherwise, so pass {save: true} to " +
+            "save the project first. The FILE NAME comes from the " +
+            "template name, not from 'folder'. AE reports success even " +
+            "when it wrote nothing, so this tool checks the file and " +
+            "reports its real size; a failure usually means a font in " +
+            "the comp is not installed.",
+      args: "{comp?: string, folder: string (ABSOLUTE folder), name?: string (template name = file name; default the comp's), save?: bool = false (save the project first), overwrite?: bool = false}" },
     { name: "render_comp_audio", mutating: true,
       desc: "Render ONLY the comp's audio to a file (AE's audio-only " +
             "output module, picked for you). Refuses when no layer in " +
@@ -567,6 +593,25 @@
             "the refusal says how. Blocks for roughly a second per five " +
             "seconds of audio.",
       args: "{comp?: string, as?: 'text' (default) | 'markers', startTime?: number (seconds), durationSeconds?: number, language?: string, maxSegments?: int, name?: string (layer name prefix), fontSize?: number, font?: string, fillColor?: [r,g,b] 0-1, position?: [x,y], justification?: 'left'|'center'|'right', keepAudio?: bool = false (keep the rendered audio file and report its path)}" },
+    { name: "export_gif", mutating: true,
+      desc: "Export a comp as an animated GIF. Renders a lossless master " +
+            "and converts it with a two-pass palette, then DELETES the " +
+            "master. Defaults to 480 px wide at 12 fps because that is " +
+            "what a GIF is for — say so if the user wants otherwise. " +
+            "Renders the comp's WORK AREA unless you pass " +
+            "{wholeComp: true}; the result says which. Needs ffmpeg " +
+            "installed; the refusal says how.",
+      args: "{comp?: string, output: string (ABSOLUTE path ending .gif), size?: string (\"480\" = width, \"480x270\", \"720p\" = height), width?: int, height?: int, fit?: 'contain' (letterbox, default) | 'cover' (fill and crop) | 'stretch', padColor?: string, fps?: number (default 12), colors?: int 4-256 (default 256), dither?: 'bayer' (default) | 'none' | 'sierra2_4a' | 'floyd_steinberg', loop?: bool = true, masterResolution?: 'full' (default) | 'half' | 'third' | 'quarter' | 'auto' (render the intermediate smaller — much faster and far less disk when the export is much smaller than the comp; refused if it would end up smaller than the output), wholeComp?: bool, startTime?: number (seconds), durationSeconds?: number, overwrite?: bool = false}" },
+    { name: "export_social", mutating: true,
+      desc: "Export a comp as an H.264 .mp4 (or .mov) sized for posting, " +
+            "AUDIO INCLUDED when the comp has any. Renders a lossless " +
+            "master, encodes it, verifies the result and deletes the " +
+            "master. Use {size} for a platform frame — \"1080x1920\" for " +
+            "a story/reel, \"1080x1080\" square, \"1920x1080\" landscape " +
+            "— and {fit} to say whether the picture is letterboxed or " +
+            "cropped into it. Renders the comp's WORK AREA unless you " +
+            "pass {wholeComp: true}. Needs ffmpeg installed.",
+      args: "{comp?: string, output: string (ABSOLUTE path ending .mp4 or .mov), size?: string (\"1080x1920\", \"1080p\", \"720\"), width?: int, height?: int, fit?: 'contain' (letterbox, default) | 'cover' (fill and crop) | 'stretch', padColor?: string, fps?: number (default: the comp's), quality?: 'low'|'medium' (default)|'high', audio?: bool = true, hardware?: bool = false (try the GPU encoder first), masterResolution?: 'full' (default) | 'half' | 'third' | 'quarter' | 'auto' (render the intermediate smaller — much faster and far less disk when the export is much smaller than the comp; refused if it would end up smaller than the output), wholeComp?: bool, startTime?: number (seconds), durationSeconds?: number, overwrite?: bool = false}" },
     { name: "comfy_status", mutating: false,
       desc: "Check the local ComfyUI instance (online? queue depth?).",
       args: "{}" },
@@ -578,7 +623,7 @@
             "the AE project. Blocks until finished (may take minutes). If " +
             "the hidden backend is installed it BOOTS AUTOMATICALLY — " +
             "never tell the user to start ComfyUI first.",
-      args: "{workflow: string (name from comfy_list_workflows), prompt: string, negative?: string, width?: int, height?: int, seed?: int, frames?: int (video workflows), durationSeconds?: number (video templates whose length is set in seconds — the error tells you which), image?: string (absolute path to a reference/first-frame image), import?: bool = true}" }
+      args: "{workflow: string (name from comfy_list_workflows), prompt: string, negative?: string, width?: int, height?: int (the size the template GENERATES at, which is not always the size it saves: a template that upscales between passes writes a larger file, and the result reports the size actually imported), seed?: int, frames?: int (video workflows), durationSeconds?: number (video templates whose length is set in seconds — the error tells you which), image?: string (absolute path to a reference/first-frame image), import?: bool = true}" }
   ];
 
   var TOOL_NAMES = [];
@@ -948,19 +993,325 @@
     }
   }
 
-  /** The generation's weight bill from its workflow manifest, if known. */
-  function genNeedMBFor(manifest) {
-    if (!manifest || !(manifest.models instanceof Array)) return null;
-    var sum = 0, known = false;
-    for (var i = 0; i < manifest.models.length; i++) {
-      var m = manifest.models[i];
-      if (m && !m.optional && typeof m.sizeMB === "number" && m.sizeMB > 0) {
-        sum += m.sizeMB;
-        known = true;
+  /**
+   * The model roots a ComfyUI CONFIG FILE declares. ComfyUI's own answer
+   * to "my weights are on another drive" is
+   * `extra_model_paths.yaml` (next to main.py), and the Desktop app
+   * keeps the same format in `%APPDATA%\ComfyUI\extra_models_config.yaml`
+   * — so the roots a real install loads from are frequently in neither
+   * the panel's settings nor the folder the panel calls comfyDir.
+   *
+   * Deliberately a NARROW reader, not a YAML parser: top-level sections,
+   * two-space keys, `base_path`, and per-kind keys whose value is one
+   * path or a `|` block of them. Anything it does not understand it
+   * skips — a root that does not exist costs nothing (the caller asks
+   * the filesystem), while a root it never returns is a generation the
+   * panel cannot price.
+   */
+  function configuredModelRoots(s, pathMod) {
+    var fsMod, proc;
+    try {
+      fsMod = global.AEBridge.nodeRequire("fs");
+      proc = global.AEBridge.nodeRequire("process");
+    } catch (e) { return []; }
+    var files = [];
+    if (s && s.comfyDir) {
+      files.push(pathMod.join(s.comfyDir, "extra_model_paths.yaml"));
+    }
+    var appdata = proc.env && proc.env.APPDATA;
+    if (appdata) {
+      files.push(pathMod.join(appdata, "ComfyUI", "extra_models_config.yaml"));
+    }
+    var out = [];
+    for (var f = 0; f < files.length; f++) {
+      var text = null;
+      try {
+        if (fsMod.existsSync(files[f])) text = fsMod.readFileSync(files[f], "utf8");
+      } catch (eR) {}
+      if (text) parseComfyPathsYaml(String(text), pathMod, out);
+    }
+    return out;
+  }
+
+  /* One config file -> {kind, path} roots, appended to `out`. A section's
+   * `base_path` can appear after the keys it resolves (the Desktop app
+   * writes it LAST), so a section's keys are held and resolved when the
+   * section ends. */
+  function parseComfyPathsYaml(text, pathMod, out) {
+    var lines = text.split(/\r?\n/);
+    var base = null, pending = [], blockKey = null, i;
+    function flush() {
+      for (var p = 0; p < pending.length; p++) {
+        var rel = pending[p].path;
+        var abs = /^([a-zA-Z]:[\\/]|[\\/])/.test(rel)
+          ? rel : (base ? pathMod.join(base, rel) : null);
+        if (abs) out.push({ kind: pending[p].kind, path: abs });
+      }
+      pending = [];
+      base = null;
+    }
+    for (i = 0; i < lines.length; i++) {
+      var line = lines[i].replace(/\s+$/, "");
+      if (!line || /^\s*#/.test(line)) continue;
+      if (!/^\s/.test(line)) { flush(); blockKey = null; continue; }
+      var m = line.match(/^\s{1,4}([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$/);
+      if (m) {
+        blockKey = null;
+        var key = m[1], val = m[2].replace(/^["']|["']$/g, "");
+        if (key === "base_path") { base = val; continue; }
+        // A whole models TREE (the Desktop app's own key), not one kind.
+        if (key === "download_model_base") {
+          pending.push({ kind: null, path: val });
+          continue;
+        }
+        // Not model dirs: config flags and the node roots.
+        if (key === "is_default" || key === "custom_nodes") continue;
+        if (val === "|" || val === "") { blockKey = key; continue; }
+        pending.push({ kind: key, path: val });
+        continue;
+      }
+      if (blockKey && /^\s{4,}\S/.test(line)) {
+        pending.push({ kind: blockKey, path: line.replace(/^\s+/, "") });
       }
     }
-    return known ? sum : null;
+    flush();
   }
+
+  /**
+   * Where a ComfyUI model file could live on this machine, most specific
+   * first. Each entry is {kind, path}: a `kind` is a per-type root the
+   * user wrote as "checkpoints=D:\SD\ckpts" in settings and only answers
+   * for that model dir; a null kind is a whole models tree with the usual
+   * subfolders under it.
+   */
+  function comfyModelRoots(s) {
+    var pathMod, proc;
+    try {
+      pathMod = global.AEBridge.nodeRequire("path");
+      proc = global.AEBridge.nodeRequire("process");
+    } catch (e) { return []; }
+    var roots = [];
+    if (s && s.comfyModelsDir) roots.push({ kind: null, path: s.comfyModelsDir });
+    var extra = s && s.comfyModelRoots instanceof Array ? s.comfyModelRoots : [];
+    for (var i = 0; i < extra.length; i++) {
+      var entry = String(extra[i] || "").replace(/^\s+|\s+$/g, "");
+      if (!entry) continue;
+      var eq = entry.indexOf("=");
+      if (eq > 0) {
+        roots.push({ kind: entry.slice(0, eq).replace(/\s+$/, ""),
+                     path: entry.slice(eq + 1).replace(/^\s+/, "") });
+      } else {
+        roots.push({ kind: null, path: entry });
+      }
+    }
+    // The ComfyUI DESKTOP app's shared auto-download store. It is where
+    // the Desktop downloader puts weights fetched from a workflow's
+    // embedded URLs, it is resolved BEFORE the Documents tree (measured
+    // from the running instance's own startup log, 2026-08-25), and it is
+    // declared in no config file at all — so nothing else here can reach
+    // it. Measured 2026-08-30: all four MiniMax H3 weights this machine
+    // has already generated with live here and NOWHERE else, so the
+    // arbiter priced the shipped H3 template at null, paused chat for
+    // every H3 generation on a card that fits both, and refused the
+    // generation outright whenever pausing was set to never.
+    var localApp = proc.env && proc.env.LOCALAPPDATA;
+    if (localApp) {
+      roots.push({ kind: null,
+                   path: pathMod.join(localApp, "Comfy-Desktop",
+                                      "ComfyUI-Shared", "models") });
+    }
+    // The user's own ComfyUI, then the hidden backend's own tree.
+    if (s && s.comfyDir) {
+      roots.push({ kind: null, path: pathMod.join(s.comfyDir, "models") });
+    }
+    try {
+      var install = global.Setup && global.Setup.findComfyInstall
+        ? global.Setup.findComfyInstall() : null;
+      if (install && install.root) {
+        roots.push({ kind: null,
+                     path: pathMod.join(install.root, "ComfyUI", "models") });
+      }
+    } catch (e2) {}
+    // Last: whatever ComfyUI's own config files declare. A user who moved
+    // their models to another drive told ComfyUI, not this panel.
+    var declared = configuredModelRoots(s, pathMod);
+    for (var d = 0; d < declared.length; d++) roots.push(declared[d]);
+    // A root reached two ways is one root — the Desktop config file
+    // declares the same tree `comfyDir` already names on this machine.
+    var seen = {}, unique = [];
+    for (var u = 0; u < roots.length; u++) {
+      var sig = String(roots[u].kind) + " " +
+                String(roots[u].path).toLowerCase();
+      if (seen[sig]) continue;
+      seen[sig] = true;
+      unique.push(roots[u]);
+    }
+    return unique;
+  }
+
+  /**
+   * The size on disk of one manifest model entry, in MB, or null when no
+   * root holds it. Weights are the thing the card actually has to fit, and
+   * the file IS the weights — an authored number would go stale the first
+   * time somebody swapped a quantization.
+   */
+  function modelFilePath(m, s) {
+    var fsMod, pathMod;
+    try {
+      fsMod = global.AEBridge.nodeRequire("fs");
+      pathMod = global.AEBridge.nodeRequire("path");
+    } catch (e) { return null; }
+    if (!m || !m.file) return null;
+    var roots = comfyModelRoots(s);
+    for (var i = 0; i < roots.length; i++) {
+      var r = roots[i];
+      if (!r.path) continue;
+      var candidate = r.kind === null
+        ? pathMod.join(r.path, String(m.dir || ""), String(m.file))
+        : (r.kind === m.dir ? pathMod.join(r.path, String(m.file)) : null);
+      if (!candidate) continue;
+      try {
+        if (fsMod.existsSync(candidate) &&
+            fsMod.statSync(candidate).size > 0) return candidate;
+      } catch (e2) {}
+    }
+    return null;
+  }
+
+  function modelFileMB(m, s) {
+    var fsMod;
+    try { fsMod = global.AEBridge.nodeRequire("fs"); } catch (e) { return null; }
+    var found = modelFilePath(m, s);
+    if (!found) return null;
+    try {
+      var bytes = fsMod.statSync(found).size;
+      if (bytes > 0) return Math.round(bytes / 1048576);
+    } catch (e2) {}
+    return null;
+  }
+
+  /**
+   * The generation's weight bill: every non-optional model the workflow
+   * loads, measured on disk (a manifest `sizeMB` is honoured first, for a
+   * template that ships one).
+   *
+   * ONE unknown weight makes the whole answer null. A partial sum reads
+   * like a verified fit and understates the bill in exactly the direction
+   * that OOMs a card, and "unprovable" already has a safe meaning here:
+   * pause the chat model. Measured 2026-08-30: no shipped manifest carried
+   * a single sizeMB, so this returned null for every template ever
+   * shipped, and a 32 GB card paused chat for every generation it could
+   * have run concurrently.
+   */
+  function genNeedMBFor(manifest, settings) {
+    if (!manifest || !(manifest.models instanceof Array)) return null;
+    var s = settings;
+    if (!s) {
+      try { s = global.Settings.get(); } catch (e) { s = null; }
+    }
+    var sum = 0, counted = 0;
+    for (var i = 0; i < manifest.models.length; i++) {
+      var m = manifest.models[i];
+      if (!m || m.optional) continue;
+      var mb = typeof m.sizeMB === "number" && m.sizeMB > 0
+        ? m.sizeMB : modelFileMB(m, s);
+      if (typeof mb !== "number" || !(mb > 0)) return null;
+      sum += mb;
+      counted++;
+    }
+    return counted > 0 ? sum : null;
+  }
+
+  /**
+   * The generation's OTHER precondition, and the one no arithmetic can
+   * see: whether the running backend can actually LOAD these weights.
+   *
+   * `genNeedMBFor` above reads the DISK, because that is the only place a
+   * weight's SIZE exists (/object_info carries none). ComfyUI decides what
+   * it can open from its own search path, and on a machine where those two
+   * trees differ the panel prices a job, stops the chat model to make room
+   * for it, and only then hears `Value not in list`. Measured 2026-08-30:
+   * all four MiniMax H3 weights sit where `comfyModelRoots` looks and the
+   * running backend (launched `--base-directory Documents\ComfyUI`, no
+   * extra_model_paths.yaml on the machine) sees none of them.
+   *
+   * So both sources are asked, and the refusal is the one sentence that
+   * tells a user their backend is pointed at the wrong root: the files it
+   * cannot load AND where they are on disk.
+   *
+   * cb(refusalResult|null). Anything that stops the question being
+   * answered — an unreadable template, an unreachable backend, a class the
+   * server does not know — answers null and the round proceeds exactly as
+   * before. This may only ever refuse a weight ComfyUI would itself reject.
+   */
+  function weightRefusalFor(s, workflowFile, manifest, cb) {
+    var graph = null;
+    try {
+      graph = global.Comfy.loadWorkflow ?
+        global.Comfy.loadWorkflow(workflowFile) : null;
+    } catch (e) { cb(null); return; }
+    if (!graph || !global.Comfy.missingWeights) { cb(null); return; }
+    global.Comfy.missingWeights(s.comfyUrl, graph, function (err, res) {
+      if (err || !res || !(res.missing instanceof Array) ||
+          !res.missing.length) { cb(null); return; }
+      cb({ ok: false,
+           error: describeMissingWeights(res.missing, manifest, s) });
+    });
+  }
+
+  /** Where a weight the backend refused actually sits on this disk. */
+  function diskPathForWeight(fileName, manifest, s) {
+    var base = String(fileName).replace(/^.*[\\\/]/, "");
+    var models = (manifest && manifest.models instanceof Array)
+      ? manifest.models : [];
+    for (var i = 0; i < models.length; i++) {
+      var m = models[i];
+      if (!m || !m.file) continue;
+      if (String(m.file).replace(/^.*[\\\/]/, "") !== base) continue;
+      var found = modelFilePath(m, s);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  var MISSING_WEIGHTS_LISTED = 6;
+
+  function describeMissingWeights(missing, manifest, s) {
+    var lines = [], onDisk = 0;
+    var shown = Math.min(missing.length, MISSING_WEIGHTS_LISTED);
+    for (var i = 0; i < missing.length; i++) {
+      var w = missing[i];
+      var where = diskPathForWeight(w.value, manifest, s);
+      if (where) onDisk++;
+      if (i >= shown) continue;
+      lines.push(w.value + " (node " + w.node + " " + w.classType + "." +
+                 w.input + ", " + (where ? "on disk at " + where
+                                         : "not on this disk either") + ")");
+    }
+    var tail = missing.length > shown
+      ? " and " + (missing.length - shown) + " more" : "";
+    var advice = onDisk === missing.length
+      ? "Every one of those files IS on this machine, so the running " +
+        "ComfyUI is searching a different models tree — point it at them " +
+        "(extra_model_paths.yaml, or the --base-directory it was started " +
+        "with) and try again."
+      : (onDisk > 0
+          ? "Some are on this machine and some are not, so both the " +
+            "download and the backend's model search path need checking."
+          : "Download them into the models tree ComfyUI searches.");
+    return "ComfyUI at " + s.comfyUrl + " cannot load " + missing.length +
+           " of this workflow's weights, so the generation would fail even " +
+           "after freeing VRAM for it. Missing from the backend's own model " +
+           "list: " + lines.join("; ") + tail + ". " + advice;
+  }
+
+  // How long a VRAM wait is willing to sit there. The release wait is the
+  // longer one for a measured reason: on a cancelled round (0.10.14) this
+  // backend finished handing the card back at ~10.5 s, so a 10 s limit is
+  // a coin flip on exactly the round the cancel created. It costs nothing
+  // when the card is already free — the predicate answers on poll one.
+  var VRAM_WAIT_MS = 10000;
+  var VRAM_ROOM_WAIT_MS = 30000;
 
   /**
    * Poll nvidia-smi until total used VRAM drops by ~half the released
@@ -971,24 +1322,40 @@
   function waitForVramDrop(baselineMB, expectDropMB, sink, done) {
     if (typeof baselineMB !== "number") {
       // nvidia-smi unavailable — the old fixed grace period is all we have.
-      global.setTimeout(done, 1500);
+      global.setTimeout(function () { done(null); }, 1500);
       return;
     }
     var target = Math.max(512,
       typeof expectDropMB === "number" ? Math.round(expectDropMB / 2) : 512);
+    waitForVram(function (usedMB) { return baselineMB - usedMB >= target; },
+                VRAM_WAIT_MS,
+                "VRAM did not visibly release within 10 s — proceeding " +
+                "anyway.",
+                sink, done);
+  }
+
+  /**
+   * Poll nvidia-smi until `reached(usedMB)` or `limitMs` — proceed either
+   * way, loudly. `msg` is the sentence the timeout prints: a string, or a
+   * function(lastUsedMB) that may answer null to stay quiet. Reports the
+   * last reading so the caller can remember where the card settled.
+   */
+  function waitForVram(reached, limitMs, msg, sink, done) {
     var waited = 0;
     var STEP = 500;
-    var LIMIT = 10000;
+    var LIMIT = typeof limitMs === "number" && limitMs > 0
+      ? limitMs : VRAM_WAIT_MS;
     (function poll() {
       global.Setup.queryVramUsedMB(function (err, usedMB) {
-        if (!err && baselineMB - usedMB >= target) { done(); return; }
+        if (!err && reached(usedMB)) { done(usedMB); return; }
         waited += STEP;
         if (err || waited >= LIMIT) {
-          if (sink && waited >= LIMIT) {
-            sink("VRAM did not visibly release within 10 s — proceeding " +
-                 "anyway.");
+          if (sink && waited >= LIMIT && msg) {
+            var line = typeof msg === "function"
+              ? msg(err ? null : usedMB) : msg;
+            if (line) sink(line);
           }
-          done();
+          done(err ? null : usedMB);
           return;
         }
         global.setTimeout(poll, STEP);
@@ -996,9 +1363,60 @@
     })();
   }
 
+  /**
+   * The card's REAL size in MB, from nvidia-smi's own total — never
+   * `vramOverrideGB`. The override impersonates a tier so any card can
+   * test any policy, but the release wait asks a physical question about
+   * a physical reading, and pairing a measured `memory.used` with a
+   * fictional total is arithmetic about no machine at all.
+   */
+  function cardTotalMBNow() {
+    return gpuCache && typeof gpuCache.vramGB === "number" &&
+           gpuCache.vramGB > 0 ? gpuCache.vramGB * 1024 : null;
+  }
+
   var VramArbiter = {
     paused: false,
     _opts: null,
+    // Where the card settled once the chat model was gone — the floor the
+    // resume aims at when it cannot ask the better question.
+    _floorMB: null,
+    // The better question's two numbers, remembered at pause time: what
+    // the chat model's footprint was, and how big the card really is.
+    _needMB: null,
+    _cardMB: null,
+
+    /**
+     * The decision, assembled from what is REALLY on this machine and
+     * decided nowhere else: the measured card (or the impersonated one),
+     * the tier that VRAM lands in, the running chat model's own file, and
+     * the workflow's weight bill off disk.
+     *
+     * Split out of ensureFor so the answer can be asked WITHOUT paying
+     * for it. ensureFor's other half kills llama-server, so every probe
+     * of the decision surface used to cost a model reload — which is why
+     * the tier ladder (workplan item 7) could only ever be spot-checked.
+     * Returns {decision, tier, eff, chat, genNeedMB}.
+     */
+    planFor: function (s, manifest) {
+      var chat = chatLoadedMBNow();
+      var eff = global.Tiers.effectiveVram(gpuCache, s);
+      var tier = global.Tiers.tierFor(eff.vramGB);
+      var need = genNeedMBFor(manifest, s);
+      return {
+        decision: global.Tiers.planHandoff({
+          vramGB: eff.vramGB,
+          headroomGB: tier.headroomGB,
+          chatRunning: chat.running,
+          chatLoadedMB: chat.mb,
+          genNeedMB: need,
+          pauseMode: s.comfyPauseLlm,
+          mandatory: tier.mandatory,
+          overridden: eff.overridden
+        }),
+        tier: tier, eff: eff, chat: chat, genNeedMB: need
+      };
+    },
 
     /**
      * Decide and, when the arithmetic says so, perform the chat→gen
@@ -1008,18 +1426,9 @@
      */
     ensureFor: function (s, manifest, sink, cb) {
       if (VramArbiter.paused) { cb(null); return; }   // this round already paid
-      var chat = chatLoadedMBNow();
-      var eff = global.Tiers.effectiveVram(gpuCache, s);
-      var tier = global.Tiers.tierFor(eff.vramGB);
-      var decision = global.Tiers.planHandoff({
-        vramGB: eff.vramGB,
-        headroomGB: tier.headroomGB,
-        chatRunning: chat.running,
-        chatLoadedMB: chat.mb,
-        genNeedMB: genNeedMBFor(manifest),
-        pauseMode: s.comfyPauseLlm,
-        mandatory: tier.mandatory
-      });
+      var plan = VramArbiter.planFor(s, manifest);
+      var chat = plan.chat;
+      var decision = plan.decision;
       if (decision.mode === "refuse") {
         cb({ ok: false, error: decision.reason });
         return;
@@ -1033,10 +1442,17 @@
       VramArbiter._opts = { serverPath: s.serverPath,
         modelPath: s.modelPath, port: s.port, ctxSize: s.ctxSize,
         gpuLayers: s.gpuLayers };
+      VramArbiter._needMB = typeof chat.mb === "number" && chat.mb > 0
+        ? chat.mb : null;
+      VramArbiter._cardMB = cardTotalMBNow();
       global.Setup.queryVramUsedMB(function (qErr, baseMB) {
         global.Llama.stop();
         waitForVramDrop(qErr ? null : baseMB, chat.mb, sink,
-                        function () { cb(null); });
+                        function (settledMB) {
+                          VramArbiter._floorMB =
+                            typeof settledMB === "number" ? settledMB : null;
+                          cb(null);
+                        });
       });
     },
 
@@ -1045,19 +1461,65 @@
      * ask ComfyUI to drop its cached models (they otherwise sit in VRAM
      * and block the chat model from coming back on exclusive tiers),
      * verify the release, then warm the chat model back up.
+     *
+     * The wait asks whether there is ROOM FOR THE CHAT MODEL — not
+     * whether the card is back to the floor the pause left it at. Both
+     * were tried in the field:
+     *
+     * A DELTA from a baseline sampled here can never appear (ComfyUI 0.32
+     * drops a Krea generation's ~19.5 GB about ten seconds BEFORE the
+     * round ends), so it burned the full timeout on every healthy round.
+     * The FLOOR is honest but asks for more than the resume needs, and it
+     * lies in the safe-looking direction: measured 2026-08-30 after a
+     * cancelled round, the card sat at 23 654 MB for the whole window and
+     * fell to 2 918 MB one second later, so the panel told a user with
+     * 29 GB free that their VRAM had not been released. Room is the thing
+     * llama-server actually has to have; the floor stays in as an OR,
+     * since a card back where it started is by definition room enough,
+     * and as the whole answer when the card's own size is unknown.
      */
     resumeIfPaused: function (s, sink, cb) {
       if (!VramArbiter.paused) { cb(); return; }
       VramArbiter.paused = false;
       var opts = VramArbiter._opts;
+      var floor = VramArbiter._floorMB;
+      var need = VramArbiter._needMB;
+      var card = VramArbiter._cardMB;
       VramArbiter._opts = null;
-      global.Setup.queryVramUsedMB(function (qErr, baseMB) {
-        global.Comfy.freeVram(s.comfyUrl, function () {
-          waitForVramDrop(qErr ? null : baseMB, null, sink, function () {
-            if (sink) sink("Warming the chat model back up…");
-            global.Llama.start(opts, function () { cb(); });
-          });
-        });
+      VramArbiter._floorMB = null;
+      VramArbiter._needMB = null;
+      VramArbiter._cardMB = null;
+      function warm() {
+        if (sink) sink("Warming the chat model back up…");
+        global.Llama.start(opts, function () { cb(); });
+      }
+      function atFloor(usedMB) {
+        return typeof floor === "number" && usedMB <= floor + 512;
+      }
+      global.Comfy.freeVram(s.comfyUrl, function () {
+        if (typeof need === "number" && typeof card === "number") {
+          waitForVram(
+            function (usedMB) { return card - usedMB >= need || atFloor(usedMB); },
+            VRAM_ROOM_WAIT_MS,
+            function (usedMB) {
+              if (typeof usedMB !== "number") return null;
+              return "The card still holds " + usedMB + " MB of " + card +
+                     " MB and the chat model needs about " + need +
+                     " MB — loading it anyway.";
+            },
+            sink, function () { warm(); });
+          return;
+        }
+        if (typeof floor !== "number") {
+          // Nothing to aim at (nvidia-smi was unavailable at pause time) —
+          // the old fixed grace period is all there is.
+          global.setTimeout(warm, 1500);
+          return;
+        }
+        waitForVram(atFloor, VRAM_WAIT_MS,
+                    "VRAM did not visibly release within 10 s — proceeding " +
+                    "anyway.",
+                    sink, function () { warm(); });
       });
     }
   };
@@ -1160,12 +1622,6 @@
         cb(result);
       }
       function begin() {
-      // Boot the hidden backend first if nothing answers at the URL —
-      // the user never has to start ComfyUI by hand.
-      global.Comfy.ensureRunning(s.comfyUrl, function (bootMsg) {
-        if (progressSink) progressSink(bootMsg);
-      }, function (bootErr) {
-      if (bootErr) { finish({ ok: false, error: bootErr.message }); return; }
       global.Comfy.generate({
         comfyUrl: s.comfyUrl,
         workflowFile: chosen.file,
@@ -1197,9 +1653,22 @@
         var imported = [];
         (function next(i) {
           if (i >= result.files.length) {
-            finish({ ok: true,
-                     data: { files: result.files, imported: imported,
-                             applied: result.applied } });
+            // The size that was REQUESTED is not always the size that was
+            // rendered - the shipped KREA2 template upscales 1.6x between
+            // its passes, so width 1024 saves 1640. import_file measures
+            // the file in AE; hoist that measurement to the top of the
+            // result so the model plans the comp around the real picture
+            // instead of around its own request.
+            var data = { files: result.files, imported: imported,
+                         applied: result.applied };
+            for (var m = 0; m < imported.length; m++) {
+              if (imported[m] && imported[m].width > 0 &&
+                  imported[m].height > 0) {
+                data.outputSize = imported[m].width + "x" + imported[m].height;
+                break;
+              }
+            }
+            finish({ ok: true, data: data });
             return;
           }
           callHostTool("import_file", { path: result.files[i] },
@@ -1208,7 +1677,6 @@
               next(i + 1);
             });
         })(0);
-      });
       });
       }
       // Enhancement runs FIRST, while the chat model is still loaded —
@@ -1219,11 +1687,37 @@
         ? global.Comfy.readManifest(chosen.file) : null;
       var plan = planEnhancement(s, args.workflow, args.prompt, manifest);
       var enhanceDone = function () {
-        VramArbiter.ensureFor(s, manifest, progressSink,
-          function (refusal) {
-            if (refusal) { cb(refusal); return; }
-            begin();
+        // Three preconditions, cheapest first, and every one of them
+        // answered BEFORE the arbiter stops the chat model.
+        //
+        // The VRAM refusal goes first because `planFor` is the decision
+        // with no side effects at all (that is what it was split out
+        // for) — a job that can never fit is refused without booting
+        // anything. The weight check needs a RUNNING backend, since
+        // /object_info is its ground truth, so it sits after the boot
+        // the generation was going to pay for anyway and before the
+        // handoff, which is the churn worth saving.
+        if (VramArbiter.planFor(s, manifest).decision.mode === "refuse") {
+          VramArbiter.ensureFor(s, manifest, progressSink,
+            function (refusal) {
+              if (refusal) { cb(refusal); return; }
+              begin();
+            });
+          return;
+        }
+        global.Comfy.ensureRunning(s.comfyUrl, function (bootMsg) {
+          if (progressSink) progressSink(bootMsg);
+        }, function (bootErr) {
+          if (bootErr) { finish({ ok: false, error: bootErr.message }); return; }
+          weightRefusalFor(s, chosen.file, manifest, function (weightRefusal) {
+            if (weightRefusal) { cb(weightRefusal); return; }
+            VramArbiter.ensureFor(s, manifest, progressSink,
+              function (refusal) {
+                if (refusal) { cb(refusal); return; }
+                begin();
+              });
           });
+        });
       };
       if (plan.enabled && global.Llama.getState() === "running") {
         if (progressSink) progressSink("Refining the prompt…");
@@ -1370,6 +1864,360 @@
             cb(built);
           });
         });
+    });
+  };
+
+  /*
+   * export_gif / export_social (WORKPLAN 6.2 Pass B) — the comp, out to
+   * a file somebody can actually post.
+   *
+   *   comp -> render_comp "Lossless" -> rawvideo AVI -> ffmpeg -> .gif/.mp4
+   *
+   * PANEL tools, for transcribe_to_captions' reason: the middle step is a
+   * child process and ExtendScript cannot spawn one. Both ends are
+   * already covered in real AE by the self-test (render_comp), so this
+   * pass adds no suite steps — what it adds is a refusal at every point
+   * where a step reports success and means nothing.
+   *
+   * Three of those, all measured (see extension/js/ffmpeg.js):
+   *  - AE renders the WORK AREA when no span is given. A 3 s comp
+   *    trimmed to its middle second exports ONE second and says DONE.
+   *    So the span is always reported, and a short one is called out.
+   *  - The lossless intermediate is width*height*3 PER FRAME: 1.87 GB
+   *    for 10 s of 1080p30. It is estimated and refused BEFORE the
+   *    render, not discovered when the disk fills.
+   *  - ffmpeg exits 0 when it writes nothing, and can write a container
+   *    with no picture in it. The result is read back with ffprobe every
+   *    time; the exit code is never the check.
+   */
+
+  /* Everything the two exports share: find ffmpeg, measure the comp,
+   * check the destination, render the master, encode, VERIFY, clean up.
+   * `plan(ctx)` is the only part that differs, and it returns the ffmpeg
+   * argument list. */
+  function ffmpegExport(kind, args, cb, plan) {
+    args = args || {};
+    if (!global.Ffmpeg) {
+      cb({ ok: false, error: "Video export is not available in this " +
+           "panel build." });
+      return;
+    }
+    var F = global.Ffmpeg;
+    var install;
+    try { install = F.find(); }
+    catch (eF) { cb({ ok: false, error: "ffmpeg lookup failed: " +
+                      eF.message }); return; }
+    if (!install.ok) { cb({ ok: false, error: install.reason }); return; }
+
+    var fs = null, path = null, os = null;
+    try {
+      fs = global.AEBridge.nodeRequire("fs");
+      path = global.AEBridge.nodeRequire("path");
+      os = global.AEBridge.nodeRequire("os");
+    } catch (eN) {
+      cb({ ok: false, error: "Node is unavailable in this panel: " +
+           eN.message });
+      return;
+    }
+
+    var exts = (kind === "gif") ? [".gif"] : [".mp4", ".mov"];
+    var out = F.checkOutput(args.output, exts,
+                            args.overwrite === true || args.overwrite === "true");
+    if (out.err) { cb({ ok: false, error: out.err }); return; }
+
+    var sink = args.progressSink || null;
+    var wallStart = new Date().getTime();
+
+    callHostTool("get_comp_details", { comp: args.comp }, function (det) {
+      if (!det.ok) { cb(det); return; }
+      var d = det.data;
+      var compFps = Number(d.frameRate) || 0;
+      var compDur = Number(d.duration) || 0;
+
+      // --- how much of the comp, and at what rate ---------------------
+      //
+      // AE's render queue takes its span from the WORK AREA, which is
+      // what the user sees when they press Ctrl+M — so that is the
+      // default here too. What is NOT acceptable is it happening
+      // silently, which is what render_comp alone does.
+      var span = {};
+      var explicitSpan = false;
+      if (args.wholeComp === true || args.wholeComp === "true") {
+        span.startTime = 0; span.durationSeconds = compDur;
+        explicitSpan = true;
+      }
+      if (typeof args.startTime !== "undefined" && args.startTime !== null &&
+          args.startTime !== "") {
+        span.startTime = Number(args.startTime); explicitSpan = true;
+      }
+      if (typeof args.durationSeconds !== "undefined" &&
+          args.durationSeconds !== null && args.durationSeconds !== "") {
+        span.durationSeconds = Number(args.durationSeconds);
+        explicitSpan = true;
+      }
+
+      var fps = Number(args.fps) || 0;
+      if (fps > 0 && compFps > 0 && fps > compFps) {
+        cb({ ok: false, error: "The comp runs at " + compFps + " fps, so " +
+             "asking for " + fps + " fps cannot add motion that was never " +
+             "rendered — ffmpeg would duplicate frames and the file would " +
+             "just be bigger. Pick " + compFps + " or less." });
+        return;
+      }
+      if (kind === "gif" && !fps) fps = Math.min(compFps || 12, 12);
+
+      // A GIF at comp size is a GIF nobody can post. 480 wide is the
+      // convention, and it is a DEFAULT rather than a cap — never an
+      // upscale, because enlarging a master to make a smaller format is
+      // only ever bytes.
+      var wantW = args.width, wantH = args.height, wantSize = args.size;
+      var gifDefault = false;
+      if (kind === "gif" && !wantW && !wantH && !wantSize &&
+          Number(d.width) > 480) {
+        wantW = 480; gifDefault = true;
+      }
+      var sized = F.planSize({ w: d.width, h: d.height }, {
+        size: wantSize, width: wantW, height: wantH,
+        fit: args.fit, padColor: args.padColor
+      });
+      if (sized.err) { cb({ ok: false, error: sized.err }); return; }
+
+      // The master only ever gets scaled DOWN, so AE can be asked to
+      // render fewer pixels in the first place. Opt-in: the default is
+      // still a full-resolution master.
+      var mPlan = F.planMaster({ w: d.width, h: d.height }, sized,
+                               args.masterResolution);
+      if (mPlan.err) { cb({ ok: false, error: mPlan.err }); return; }
+
+      // --- the intermediate, before it exists -------------------------
+      var spanSecs = (typeof span.durationSeconds !== "undefined")
+        ? span.durationSeconds : compDur;
+      var srcFrames = Math.max(1, Math.round(spanSecs * (compFps || 1)));
+      var estimate = F.estimateIntermediate(mPlan.width, mPlan.height,
+                                            srcFrames);
+      /*
+       * The 8 GB cap was a GUESS for eleven versions, and the open
+       * question under it was whether AE's AVI writer survives the
+       * classic RIFF boundaries — 32-bit chunk offsets break at 2 GiB
+       * and 4 GiB, and a writer that wraps there hands back a file a
+       * reader accepts and truncates.
+       *
+       * Measured 2026-08-30 (scripts/riff-boundary-probe.js), and the
+       * answer is that the FORMAT is not the risk at all. Real 1080p30
+       * masters at 5.214 GiB (900 frames) and 7.995 GiB (1380 frames) —
+       * the largest this cap allows — both rendered DONE, probed at the
+       * full frame count, decoded end to end under `-xerror` with no
+       * error, and their pictures at frames 343-347, 688-692 and the
+       * last five were byte-identical (framemd5) to short reference
+       * spans re-rendered across the same boundaries. Nothing wrapped
+       * and nothing was dropped.
+       *
+       * So this stays a DISK-AND-TIME guard, not a format limit, and it
+       * is safe to raise when the disk has room — which is what the
+       * refusal now says, because a caller told "the limit is 8 GB" with
+       * no reason will read it as "the file cannot be bigger" and shorten
+       * an export it never needed to shorten. The default is unchanged:
+       * 8 GiB is ~46 s of 1080p and 26 s of rendering here, and nobody
+       * has asked for more.
+       */
+      var capGB = Number(args.maxIntermediateGB) || 8;
+      var cap = capGB * 1024 * 1024 * 1024;
+      if (estimate > cap) {
+        cb({ ok: false, error: "The lossless master AE has to render " +
+             "first would be about " + F.humanBytes(estimate) + " — " +
+             mPlan.width + "x" + mPlan.height + " raw is " +
+             F.humanBytes(mPlan.width * mPlan.height * 3) + " a frame " +
+             "and this span is " + srcFrames + " frames. The limit is " +
+             capGB + " GB, and it guards the DISK and the render time " +
+             "rather than the file format (AE's lossless AVI and ffmpeg " +
+             "were measured good to 7.99 GiB). Export a shorter span with " +
+             "{durationSeconds}" +
+             (mPlan.factor > 1 ? "" : ", render the master smaller with " +
+              "{masterResolution: \"auto\"}") +
+             ", or raise it with {maxIntermediateGB} if the disk has " +
+             "room — that is safe." });
+        return;
+      }
+      var free = F.freeBytes(os.tmpdir());
+      if (free >= 0 && free < estimate * 1.1) {
+        cb({ ok: false, error: "The lossless master would need about " +
+             F.humanBytes(estimate) + " in " + os.tmpdir() + ", which has " +
+             F.humanBytes(free) + " free. AE would fill the disk and " +
+             "report a partial render. Free some space or export a " +
+             "shorter span." });
+        return;
+      }
+
+      // A fixed name would collide with the last run's leftovers, and
+      // render_comp REFUSES an existing output rather than raise AE's
+      // overwrite modal.
+      var tmp = path.join(os.tmpdir(),
+        "aell-export-" + new Date().getTime() + ".avi");
+
+      if (sink) {
+        sink("Rendering a lossless master (" + F.humanBytes(estimate) +
+             ")…");
+      }
+      callHostTool("render_comp", {
+        comp: args.comp, output: tmp.replace(/\\/g, "/"),
+        template: "Lossless", overwrite: true,
+        resolution: mPlan.name,
+        startTime: span.startTime, durationSeconds: span.durationSeconds
+      }, function (rendered) {
+        if (!rendered.ok) { cb(rendered); return; }
+        var master = String((rendered.data && rendered.data.output) || tmp);
+
+        function cleanup() {
+          if (args.keepMaster === true || args.keepMaster === "true") return;
+          try { fs.unlinkSync(master); } catch (eU) {}
+        }
+        function fail(msg) {
+          cleanup();
+          cb({ ok: false, error: msg });
+        }
+
+        // FACT 2, applied to AE's own output: a render that reported DONE
+        // is still just a file until something reads a picture out of it.
+        F.inspect(install, master, function (eM, mInfo) {
+          if (!mInfo.ok) {
+            fail("AE reported " +
+              ((rendered.data && rendered.data.status) || "DONE") +
+              " but the master is not usable: " + mInfo.reason);
+            return;
+          }
+
+          plan({
+            F: F, install: install, args: args, comp: d, master: master,
+            output: out.path, sized: sized, fps: fps, info: mInfo
+          }, function (built) {
+            if (built.err) { fail(built.err); return; }
+            if (sink) sink("Encoding " + built.what + "…");
+            F.run(install.ffmpeg, built.args, {}, function (eE, res) {
+              if (eE) {
+                var tail = String(res && res.stderr || "").split(/\r?\n/);
+                tail = tail.slice(Math.max(0, tail.length - 3))
+                  .join(" ").replace(/^\s+/, "");
+                fail("ffmpeg failed: " + (tail || eE.message));
+                return;
+              }
+              // FACT 1: ffmpeg's exit code is not evidence. This is.
+              F.inspect(install, out.path, function (eO, oInfo) {
+                cleanup();
+                if (!oInfo.ok) { cb({ ok: false, error: oInfo.reason }); return; }
+                var data = {
+                  comp: d.name,
+                  output: out.path,
+                  bytes: oInfo.bytes,
+                  size: F.humanBytes(oInfo.bytes),
+                  dimensions: oInfo.width + "x" + oInfo.height,
+                  frames: oInfo.frames,
+                  codec: oInfo.codec,
+                  seconds: Math.round(
+                    (new Date().getTime() - wallStart) / 100) / 10,
+                  timeSpan: (rendered.data && rendered.data.timeSpan) || "",
+                  ffmpeg: install.source === "vendor"
+                    ? "bundled" : "found on PATH"
+                };
+                if (fps > 0) data.fps = fps;
+                if (built.extra) {
+                  for (var k in built.extra) {
+                    if (Object.prototype.hasOwnProperty.call(built.extra, k)) {
+                      data[k] = built.extra[k];
+                    }
+                  }
+                }
+                var notes = [];
+                if (sized.note) notes.push(sized.note);
+                // Predicted vs written: a reduced master that came back
+                // full size means AE ignored the request, and the only
+                // way anyone finds out is if this says so.
+                if (mPlan.factor > 1) {
+                  notes.push(mPlan.note +
+                    (mInfo.width && mInfo.width !== mPlan.width
+                      ? " AE actually wrote " + mInfo.width + "x" +
+                        mInfo.height + "."
+                      : ""));
+                }
+                if (gifDefault) {
+                  notes.push("Scaled to 480 px wide, the GIF default — " +
+                    "the comp is " + d.width + " px. Pass {size} for " +
+                    "another width.");
+                }
+                // THE work-area trap. AE renders the work area and says
+                // nothing; the whole point of saying it here is that the
+                // user asked for "the comp".
+                if (!explicitSpan && compDur > 0 &&
+                    mInfo.duration > 0 && mInfo.duration < compDur - 0.001) {
+                  notes.push("Exported " +
+                    (Math.round(mInfo.duration * 100) / 100) + "s of a " +
+                    compDur + "s comp, because that is the comp's WORK " +
+                    "AREA and it is what AE renders. Pass " +
+                    "{wholeComp: true} for all of it.");
+                }
+                if (kind !== "gif" && args.audio !== false &&
+                    !oInfo.hasAudio) {
+                  notes.push("No audio: nothing in this part of the comp " +
+                    "makes a sound.");
+                }
+                if (args.keepMaster === true || args.keepMaster === "true") {
+                  data.master = master;
+                }
+                if (notes.length) data.notes = notes;
+                cb({ ok: true, data: data });
+              });
+            });
+          });
+        });
+      });
+    });
+  }
+
+  PANEL_TOOLS.export_gif = function (args, cb) {
+    ffmpegExport("gif", args, cb, function (ctx, done) {
+      var built = ctx.F.buildGifArgs(ctx.master, ctx.output, {
+        filter: ctx.sized.filter, fps: ctx.fps, colors: ctx.args.colors,
+        dither: ctx.args.dither, loop: ctx.args.loop
+      });
+      if (built.err) { done({ err: built.err }); return; }
+      done({ args: built.args,
+             what: "a " + ctx.sized.width + "x" + ctx.sized.height +
+                   " GIF at " + ctx.fps + " fps",
+             extra: { loops: (ctx.args.loop === false ||
+                              ctx.args.loop === "once") ? "once" : "forever" } });
+    });
+  };
+
+  PANEL_TOOLS.export_social = function (args, cb) {
+    ffmpegExport("social", args, cb, function (ctx, done) {
+      // FACT 8: the encoder census is compile-time. Hardware encoders are
+      // an opt-in that gets TRIED, never a name taken on trust.
+      var candidates = ["libopenh264"];
+      if (ctx.args.encoder) {
+        candidates = [String(ctx.args.encoder)];
+      } else if (ctx.args.hardware === true || ctx.args.hardware === "true") {
+        candidates = ["h264_nvenc", "h264_mf", "libopenh264"];
+      }
+      // The trial frame is the size the export will be: h264_nvenc
+      // refuses anything under about 145x49, so a fixed small one
+      // answers about the wrong picture.
+      var dims = { w: ctx.sized.width, h: ctx.sized.height };
+      ctx.F.pickEncoder(ctx.install, candidates, dims, function (picked) {
+        if (!picked.ok) { done({ err: picked.reason }); return; }
+        var fps = ctx.fps || Number(ctx.comp.frameRate) || 30;
+        var built = ctx.F.buildSocialArgs(ctx.master, ctx.output, {
+          filter: ctx.sized.filter, fps: ctx.args.fps ? ctx.fps : 0,
+          width: ctx.sized.width, height: ctx.sized.height,
+          quality: ctx.args.quality, encoder: picked.name,
+          audio: ctx.args.audio === false ? false : ctx.info.hasAudio,
+          audioKbps: ctx.args.audioKbps
+        });
+        if (built.err) { done({ err: built.err }); return; }
+        done({ args: built.args,
+               what: "a " + ctx.sized.width + "x" + ctx.sized.height +
+                     " H.264 file at " + Math.round(built.kbps / 100) / 10 +
+                     " Mbps",
+               extra: { encoder: picked.name, videoBitrate: built.kbps + " kbps" } });
+      });
     });
   };
 
@@ -1941,7 +2789,13 @@
     setGpuInfo: setGpuInfo,
     setProgressSink: function (fn) { progressSink = fn; },
     _vramArbiter: VramArbiter,        // exposed for tests
-    _genNeedMBFor: genNeedMBFor       // exposed for tests
+    _genNeedMBFor: genNeedMBFor,      // exposed for tests
+    _comfyModelRoots: comfyModelRoots, // exposed for tests
+    _vramArbiter: VramArbiter,        // exposed for tests and probes
+    _weightRefusalFor: weightRefusalFor,          // exposed for tests
+    _describeMissingWeights: describeMissingWeights, // exposed for tests
+    _parseComfyPathsYaml: parseComfyPathsYaml,   // exposed for tests
+    _panelTools: PANEL_TOOLS          // exposed for tests
   };
 
 })(window);

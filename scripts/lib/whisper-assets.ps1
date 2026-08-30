@@ -37,6 +37,11 @@
 #     the guard, and it runs INSIDE the choice so nothing can reach the
 #     walk without it.
 
+# Expand-AellReleaseList (note 4 above) now lives in gh-releases.ps1 --
+# get-ffmpeg.ps1 needs the same flattening, and one copy is one place
+# to get it wrong.
+. (Join-Path $PSScriptRoot 'gh-releases.ps1')
+
 # The single file that proves an install works. See note 2 above.
 $script:AellWhisperExe = 'whisper-cli.exe'
 
@@ -51,39 +56,10 @@ $script:AellWhisperModels = @(
   'large-v3-turbo'
 )
 
-function ConvertTo-AellPaddedVersion([string]$v) {
-  # Padded to THREE parts, and that is not cosmetic. [version] fills a
-  # missing part with -1, not 0, so [version]'11.8' compares LESS than
-  # [version]'11.8.0' -- which made a driver reporting "11.8" reject the
-  # whisper-cublas-11.8.0 build built exactly for it, and fall through to
-  # "no compatible build". Padding both sides to 11.8.0 makes them equal.
-  $parts = $v.Split('.')
-  while ($parts.Count -lt 3) { $parts += '0' }
-  return [version]($parts -join '.')
-}
-
-function Get-AellCudaVersionFromSmi {
-  <#
-    Pull the driver's CUDA version out of `nvidia-smi` banner text.
-
-    Measured on this machine 2026-08-29, driver 616.56 / RTX 5090, the
-    banner reads:
-
-      | NVIDIA-SMI 616.56   KMD Version: 616.56   CUDA UMD Version: 13.4 |
-
-    -- "CUDA UMD Version", not the "CUDA Version" every script (including
-    scripts\get-llama.ps1) greps for. The old regex finds nothing and the
-    caller quietly loses its driver ceiling, so the label is optional
-    here. Returns '' when the banner says nothing, which is a legitimate
-    answer: take the newest published build and let it speak for itself.
-  #>
-  param([string]$Text = '')
-
-  if ($Text -match 'CUDA(?:\s+\w+)?\s+Version\s*:\s*([\d]+(?:\.[\d]+)*)') {
-    return $Matches[1]
-  }
-  return ''
-}
+# ConvertTo-AellPaddedVersion and Get-AellCudaVersionFromSmi now live in
+# gpu-detect.ps1 -- get-llama.ps1 needs the same two, and one copy is one
+# place to get it wrong. The traps they guard are documented there.
+. (Join-Path $PSScriptRoot 'gpu-detect.ps1')
 
 function Get-AellWhisperCublasAssets {
   param($Assets)
@@ -142,29 +118,6 @@ function Select-AellWhisperAsset {
   }
   $pick = $cuda | Sort-Object Ver | Select-Object -Last 1
   return $pick.Asset
-}
-
-function Expand-AellReleaseList {
-  <#
-    Flatten nested arrays down to one release per element. See note 4 at
-    the top: the caller cannot tell by looking whether it holds 15
-    releases or one array of 15, and getting it wrong does not throw --
-    it quietly pools every release's assets together.
-  #>
-  param($Releases)
-
-  $out = @()
-  foreach ($r in @($Releases)) {
-    if ($null -eq $r) { continue }
-    if ($r -is [System.Array]) { $out += @(Expand-AellReleaseList $r) }
-    else { $out += $r }
-  }
-  # Emitted WITHOUT a leading comma, so `@(Expand-AellReleaseList $x)` is
-  # the count of releases. Returning `,$out` instead hands back a single
-  # object that IS the array, and then the caller's own @() re-wraps it
-  # into one element -- the exact nesting this function exists to undo.
-  # Safe here only because no element of $out is itself an array.
-  return $out
 }
 
 function Select-AellWhisperRelease {

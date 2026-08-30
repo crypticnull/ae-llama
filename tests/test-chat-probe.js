@@ -624,6 +624,115 @@ function genOk(files) {
 try { fsC.unlinkSync(realPng); } catch (e) {}
 try { fsC.unlinkSync(emptyPng); } catch (e) {}
 
+// -------------------------------------- 2c. the refusal nobody can see
+//
+// WORKPLAN item 7: a generation refused for want of VRAM renders
+// nothing, imports nothing and raises no dialog, so the ONLY evidence a
+// user ever gets is the sentence the model writes. Every near-miss below
+// is a way that sentence can be wrong while every tool behaved.
+
+const refused = stepByTitle("a generation that cannot fit is refused, in words");
+
+// The shipped refusal, measured in the field 2026-08-30 (32B chat model,
+// vramOverrideGB 8), with the override annotation this pass added.
+const REFUSAL =
+  "It does not fit beside the chat model \u2014 the generation needs " +
+  "~17.7 GB and the chat model holds ~20 GB of the card's 8 GB (VRAM " +
+  "override). 'Pause chat during generation' is set to never, so nothing " +
+  "was started. Set it to auto (settings) or stop the chat server, then " +
+  "ask again.";
+// What the model actually replied on that run — the pass bar is a real
+// sentence a real 32B produced, not one written to fit the regex.
+const RELAY =
+  "It looks like there isn't enough GPU memory to generate the image " +
+  "while the chat model is running. Please pause the chat during " +
+  "generation or use a machine with more GPU memory. Once you've " +
+  "adjusted the settings, you can try again.";
+
+function refusalCtx(over) {
+  return Object.assign({
+    tools: [{ tool: "comfy_generate", ok: false, error: REFUSAL }],
+    replies: [RELAY], chatState: "running" }, over || {});
+}
+
+assert(refused.settings && refused.settings.vramOverrideGB === 8 &&
+       refused.settings.comfyPauseLlm === "never",
+       "the step impersonates an 8 GB card with pausing turned off");
+assert(refused.check({}, refusalCtx()) === null,
+       "the field capture is the pass case");
+{
+  const v = refused.check({}, refusalCtx({ tools: [] }));
+  assert(v && /never called comfy_generate/.test(v),
+         "a model that never reaches the generator fails: " + v);
+}
+{
+  // The failure the whole step exists for: the arbiter let a job through
+  // that cannot fit, which on a real card is an OOM instead of a
+  // sentence.
+  const v = refused.check({}, refusalCtx({
+    tools: [{ tool: "comfy_generate", ok: true,
+              data: { files: ["C:\\gen\\mug.png"] } }] }));
+  assert(v && /SUCCEEDED/.test(v),
+         "a generation that RAN on an 8 GB budget with pausing off " +
+         "fails: " + v);
+}
+{
+  // A different error means the step measured nothing — the arbiter was
+  // never reached — and that is not a pass either.
+  const v = refused.check({}, refusalCtx({
+    tools: [{ tool: "comfy_generate", ok: false,
+              error: "Unknown workflow 'image-to-image'. Available: ..." }] }));
+  assert(v && /never reached/.test(v),
+         "a refusal about something else does not count: " + v);
+}
+{
+  // The 0.10.9 regression guard: before that pass no shipped manifest
+  // carried a sizeMB, so every refusal on every card read like this.
+  const v = refused.check({}, refusalCtx({
+    tools: [{ tool: "comfy_generate", ok: false, error:
+      "The panel cannot verify this generation fits beside the chat " +
+      "model. 'Pause chat during generation' is set to never, so nothing " +
+      "was started." }] }));
+  assert(v && /does not say what does not fit/.test(v),
+         "a refusal with no arithmetic in it fails: " + v);
+}
+{
+  // The defect this step found on its first field run.
+  const v = refused.check({}, refusalCtx({
+    tools: [{ tool: "comfy_generate", ok: false,
+              error: REFUSAL.replace(" (VRAM override)", "") }] }));
+  assert(v && /impersonated card size/.test(v),
+         "an unlabelled fictional card size fails: " + v);
+}
+{
+  const v = refused.check({}, refusalCtx({ chatState: "stopped" }));
+  assert(v && /cost the chat model/.test(v),
+         "refusing is a decision, not an eviction: " + v);
+}
+{
+  const v = refused.check({}, refusalCtx({ replies: [] }));
+  assert(v && /relayed nothing/.test(v),
+         "a refusal the user never sees fails: " + v);
+}
+{
+  const v = refused.check({}, refusalCtx({
+    replies: ["Here's your image of a blue ceramic mug on a wooden table!"] }));
+  assert(v && /reported SUCCESS/.test(v),
+         "and hallucinating the picture is the worst case of all: " + v);
+}
+{
+  const v = refused.check({}, refusalCtx({
+    replies: ["Sorry, I couldn't do that."] }));
+  assert(v && /no reason in it/.test(v),
+         "declining without saying why fails: " + v);
+}
+{
+  const v = refused.check({}, refusalCtx({
+    replies: ["I can't generate that — there isn't enough VRAM free."] }));
+  assert(v && /never mentions the pause setting/.test(v),
+         "and so does declining without naming the setting to change: " + v);
+}
+
 // ---- the generation cleanup only ever takes back what it imported
 
 const { sweepImports, rememberGenerated, generated } = probe;
@@ -704,7 +813,7 @@ const toolsSrc = fs2.readFileSync(
 const MODULE_FILE = {
   Comfy: "comfy.js", Setup: "setup.js", Llama: "llama.js",
   Settings: "settings.js", Tiers: "tiers.js", Tools: "tools.js",
-  Whisper: "whisper.js"
+  Whisper: "whisper.js", Ffmpeg: "ffmpeg.js"
 };
 const needed = new Set(
   (toolsSrc.match(/global\.([A-Z][A-Za-z]+)/g) || [])
@@ -718,6 +827,47 @@ for (const mod of [...needed].sort()) {
   if (!file) continue;
   assert(probeSrc.indexOf('loadPanelFile("' + file + '")') !== -1,
          "the probe loads " + file + ", which tools.js dispatches through");
+}
+
+// Loading it is not the same as it ARRIVING. Ten panel modules end
+// `})(window)` and two end `})(this)` — identical in a browser, where
+// `this` at the top of a script IS window, and not identical at all
+// inside `new Function`, where it is Node's global. The plain
+// `new Function("window", src)(window)` therefore published Whisper on
+// globalThis while tools.js looked for it on the probe's window, and
+// every whisper/ffmpeg tool answered "not available in this panel
+// build". Nothing about that refusal mentions the probe, which is why
+// this asserts the module LANDS rather than that the file was read.
+{
+  const loaderRe =
+    /function loadPanelFile\(rel\) \{[\s\S]*?new Function\("window", src\)([\s\S]*?)\n\}/;
+  const m = loaderRe.exec(probeSrc);
+  assert(!!m, "the probe's loadPanelFile is still shaped the way this " +
+         "check expects");
+  assert(!!m && /\.call\(window/.test(m[1]),
+         "and it binds `this` to the probe's window as well as passing " +
+         "it, so a `})(this)` module lands where tools.js looks");
+
+  const EXT2 = path2.join(__dirname, "..", "extension");
+  for (const [mod, file] of Object.entries(MODULE_FILE)) {
+    if (file === "tools.js") continue;   // that one is the dispatcher
+    const win = { console, setTimeout, clearTimeout,
+                  localStorage: { getItem: () => null, setItem: () => {},
+                                  removeItem: () => {} },
+                  AEBridge: { nodeRequire: require,
+                              getExtensionPath: () => EXT2,
+                              evalScript: () => {} } };
+    win.window = win;
+    const src = fs2.readFileSync(path2.join(EXT2, "js", file), "utf8");
+    let threw = null;
+    try { new Function("window", src).call(win, win); }
+    catch (e) { threw = e; }
+    assert(!threw, file + " loads the way the probe loads it" +
+           (threw ? ": " + threw.message : ""));
+    assert(!threw && typeof win[mod] !== "undefined",
+           "and publishes global." + mod + " onto the probe's window, " +
+           "which is where tools.js dispatches through");
+  }
 }
 
 

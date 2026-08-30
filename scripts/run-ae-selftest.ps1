@@ -104,6 +104,8 @@ public class AellWin {
     [DllImport("user32.dll")] private static extern bool PostMessageW(IntPtr h, uint msg, IntPtr w, IntPtr l);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern IntPtr SendMessageTimeoutW(IntPtr h, uint msg, IntPtr w, StringBuilder l, uint flags, uint timeout, out UIntPtr res);
     [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr h, out RECT r);
+    [DllImport("user32.dll")] private static extern int GetWindowLong(IntPtr h, int i);
+    [DllImport("user32.dll")] private static extern IntPtr GetWindow(IntPtr h, uint cmd);
     [DllImport("user32.dll")] private static extern bool MoveWindow(IntPtr h, int x, int y, int w, int t, bool repaint);
     [DllImport("user32.dll")] private static extern bool BringWindowToTop(IntPtr h);
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr h);
@@ -112,6 +114,7 @@ public class AellWin {
     private static StringBuilder found;
     private static int target;
     private static IntPtr appWindow;
+    private static IntPtr progressWindow;
     private static int popups;
     private static int closed;
     private static bool hasWords;
@@ -155,6 +158,14 @@ public class AellWin {
             found.Append("  (After Effects has not opened its main " +
                          "window yet)" + NL);
         }
+        // Which window is AE's "Executing Script ..." progress window?
+        // Found in a pass of its own because EnumWindows walks the
+        // Z-ORDER, top first: anything the running script raises sits
+        // IN FRONT of the progress window and is therefore enumerated
+        // BEFORE it, so a single pass could never have the handle in
+        // hand at the moment it needs it.
+        progressWindow = IntPtr.Zero;
+        EnumWindows(new EnumProc(OnFindProgress), IntPtr.Zero);
         EnumWindows(new EnumProc(OnTop), IntPtr.Zero);
         if (popups == 0 && appWindow != IntPtr.Zero) {
             found.Append("  (main window is disabled but no popup text " +
@@ -185,16 +196,107 @@ public class AellWin {
         }
         return true;
     }
+    // AE's own script-progress window, by the title it has always been
+    // recognised by everywhere else in this harness. If AE ever stops
+    // calling it that, this simply finds nothing and every window is
+    // judged exactly as it was before -- the annotation below is added
+    // evidence, never a precondition.
+    private static bool OnFindProgress(IntPtr h, IntPtr lp) {
+        uint wid;
+        GetWindowThreadProcessId(h, out wid);
+        if ((int)wid != target) { return true; }
+        if (!IsWindowVisible(h)) { return true; }
+        if (ClassOf(h) != "#32770") { return true; }
+        StringBuilder t = new StringBuilder(512);
+        GetWindowTextW(h, t, 512);
+        if (t.ToString().Trim().StartsWith("Executing Script")) {
+            progressWindow = h;
+            return false;
+        }
+        return true;
+    }
     private static bool OnTop(IntPtr h, IntPtr lp) {
         uint wid;
         GetWindowThreadProcessId(h, out wid);
         if ((int)wid != target) { return true; }
         if (h == appWindow) { return true; }
         if (!IsWindowVisible(h)) { return true; }
-        popups++;
+        // Is this window even ALLOWED to be the thing that disabled AE's
+        // main window? Two extended styles answer that, and both were
+        // measured against real After Effects on 2026-08-30:
+        //
+        //   WS_EX_NOACTIVATE (0x08000000) - the window can never become
+        //     the active window. It cannot hold the keyboard focus, so
+        //     it cannot be a dialog waiting for an answer. Every idle AE
+        //     on this machine has one: a top-level, wordless, zero-sized
+        //     "DroverLord - Window Class" popup host parked at 0,0,0,0
+        //     that AE re-uses for whatever floats.
+        //   WS_EX_TOOLWINDOW (0x00000080) - carried by BOTH pieces of
+        //     Windows chrome that cost the 2026-08-30 pass a run
+        //     (tooltips_class32 ex=00080088, SysShadow ex=000800A8).
+        //
+        // And the two real AE modals measured the same night carry
+        // NEITHER: a Script Alert and the save-changes prompt are both
+        // #32770 ex=00010101, owned by the main window, activatable.
+        // So this is the property that made the old two-class list safe,
+        // stated as the property instead of as two names -- the names
+        // are kept below as a rail, because a proven-in-the-field filter
+        // is not deleted on the strength of a better theory.
+        //
+        // Such a window is LISTED, with its flags, and deliberately not
+        // COUNTED: the popup counter is what decides whether the probe
+        // falls through to "main window is disabled but no popup text
+        // could be read", and a run blocked by something only chrome is
+        // standing next to must still reach that honest answer.
+        string cls = ClassOf(h);
+        uint ex = (uint)GetWindowLong(h, -20);
+        bool nonModal = (ex & 0x08000000) != 0 || (ex & 0x00000080) != 0 ||
+                        cls == "SysShadow" || cls == "tooltips_class32";
         StringBuilder t = new StringBuilder(512);
         GetWindowTextW(h, t, 512);
-        found.Append("  [" + ClassOf(h) + "] " + t.ToString().Trim() + NL);
+        if (nonModal) {
+            found.Append("  [" + cls + "] {nonmodal ex=" + ex.ToString("X8") +
+                         " owner=" + GetWindow(h, 4).ToInt64().ToString("X") +
+                         "} " + t.ToString().Trim() + NL);
+            return true;
+        }
+        // WHO OWNS IT. A dialog raised by After Effects while it works
+        // on OUR script is owned by the script-progress window; a
+        // question meant for a human is owned by the MAIN window. Both
+        // halves measured on AE 2026, 2026-08-30, on this machine:
+        //
+        //   Analyzing Audio...  #32770 ex=00090121 owner=<progress hwnd>
+        //   Script Alert        #32770 ex=00010101 owner=<main hwnd>
+        //   Auto-Save Project   #32770 ex=00010101 owner=<main hwnd>
+        //   Executing Script    #32770 ex=00010101 owner=<main hwnd>
+        //
+        // The Analyzing Audio one is the reason this exists: the suite's
+        // audio_to_keyframes step raises it for ~7.5s of every run, its
+        // window TITLE is empty (the name lives in an `Edit` four levels
+        // down, which only WM_GETTEXT can read), and a wordless popup is
+        // `unreadable` -- eight of those in a row is exit 4 on a suite
+        // that is passing. So every run has spent a fifth of itself
+        // looking like it might be stuck on After Effects doing what the
+        // suite asked it to do.
+        //
+        // ANNOTATED, not hidden, and still COUNTED and read for its
+        // children: this is a real dialog, unlike the chrome above, and
+        // the verdict layer only lets the annotation speak for a window
+        // that has nothing to say. One that says something is judged on
+        // its words, which is what keeps a hypothetical script-owned
+        // QUESTION blocking.
+        if (progressWindow != IntPtr.Zero && h != progressWindow &&
+            GetWindow(h, 4) == progressWindow) {
+            popups++;
+            found.Append("  [" + cls + "] {scriptowner ex=" +
+                         ex.ToString("X8") + " owner=" +
+                         progressWindow.ToInt64().ToString("X") + "} " +
+                         t.ToString().Trim() + NL);
+            EnumChildWindows(h, new EnumProc(OnChild), IntPtr.Zero);
+            return true;
+        }
+        popups++;
+        found.Append("  [" + cls + "] " + t.ToString().Trim() + NL);
         EnumChildWindows(h, new EnumProc(OnChild), IntPtr.Zero);
         return true;
     }
@@ -266,7 +368,24 @@ public class AellWin {
         GetWindowThreadProcessId(h, out wid);
         if ((int)wid != target) { return true; }
         if (!IsWindowVisible(h)) { return true; }
-        if (ClassOf(h) != "#32770") { return true; }
+        // #32770 is the standard dialog class, and it is what every AE
+        // popup captured before 2026-08-30 turned out to be. It is NOT
+        // all of them: on 2026-08-30 a run was stopped by a
+        // "DroverLord - Window Class" popup -- Adobe's own toolkit shell
+        // -- carrying the same three containers as the save prompt, and
+        // because the harvester only read #32770 the evidence it printed
+        // was AE's progress window standing innocently next to it. The
+        // harness reported on the one window in the room that was not
+        // the problem.
+        //
+        // Widened for READING only. CloseWordlessDialogs still posts to
+        // #32770 alone: what may be ANSWERED unattended is a much
+        // narrower question than what may be looked at, and a DroverLord
+        // popup is one nobody has identified yet.
+        string hcls = ClassOf(h);
+        if (hcls != "#32770" && hcls.IndexOf("DroverLord") < 0) {
+            return true;
+        }
         StringBuilder t = new StringBuilder(512);
         GetWindowTextW(h, t, 512);
         string title = t.ToString().Trim();
@@ -444,7 +563,7 @@ function Save-AellDialogShot {
 # the change is evidence, not behaviour -- but 'UNRECOGNIZED DIALOG' in
 # a pass log is what makes the morning review look at the picture.
 function Write-AellDialogEvidence {
-  param([string]$Context = '')
+  param([string]$Context = '', [switch]$AlwaysShoot)
   $harvest = Get-AellDialogHarvest
   $class = Get-AellHarvestClass -Harvest $harvest
   $words = @(Get-AellHarvestWords -Harvest $harvest)
@@ -454,12 +573,20 @@ function Write-AellDialogEvidence {
   } else {
     Write-Host '  it says nothing Win32 can read, even with WM_GETTEXT.'
   }
-  # The save-changes prompt is the one dialog this harness fully
-  # understands, and it turns up on most runs. Everything else gets its
-  # picture taken -- including the wordless one, which is exactly the
-  # case a screenshot exists for.
+  # A dialog this harness fully understands does not need its picture
+  # taken -- the save-changes prompt turns up on most runs and AE's
+  # progress window is up for all of every run. Everything else does,
+  # INCLUDING the wordless one, which is exactly the case a screenshot
+  # exists for: known, and yet with nothing to say.
+  #
+  # -AlwaysShoot overrides all of that, and the run that is FAILING
+  # passes it. What the harvest recognised is not the same question as
+  # what stopped the run: the harvest reads dialog-shell windows, the
+  # verdict judges every popup the probe can see, and on 2026-08-30
+  # those two disagreed -- a benign-looking harvest beside a popup that
+  # cost the run its night. A failing run gets its picture, always.
   $png = ''
-  if ($class.Label -ne 'save-changes prompt') {
+  if ($AlwaysShoot -or -not $class.Known -or $class.Label -eq 'wordless') {
     $png = Save-AellDialogShot
     if ($png) { Write-Host ('  screenshot: ' + $png) }
   }
@@ -559,6 +686,12 @@ while (-not (Test-Path $out) -and (Get-Date) -lt $deadline) {
 }
 $blocking = $state.BlockingText
 $sawRunning = $state.SawProgress
+# What AE last said it was DOING, if it was one of its own named
+# progress windows (saving, opening, exporting a template). Measured
+# 2026-08-30: an export_mogrt puts five of these up in five seconds, and
+# with `running` outranking `progress` a run wedged inside one would
+# otherwise time out saying only "still executing the script".
+$working = ($state.WorkingText -replace "`r?`n", " / ").Trim()
 
 if ($blocking -and -not (Test-Path $out)) {
   Write-Host '----'
@@ -569,7 +702,8 @@ if ($blocking -and -not (Test-Path $out)) {
   # dialog is usually nothing. Ask the controls directly before telling a
   # human to go and look: the 2026-08-28 pass spent two blind re-runs on
   # a dialog that named its own cause in one WM_GETTEXT call.
-  Write-AellDialogEvidence -Context 'blocking this run' | Out-Null
+  Write-AellDialogEvidence -Context 'blocking this run' -AlwaysShoot |
+    Out-Null
   Write-Host '----'
   Write-Host 'This is not the scripting-file-access preference. Until the'
   Write-Host 'dialog is dismissed AE ignores every -r script while still'
@@ -605,6 +739,12 @@ if (-not (Test-Path $out)) {
       "executing the script (its progress window was up). The suite is " +
       "running and just did not finish -- re-run with a larger " +
       "-TimeoutSec rather than hunting for a dialog.")
+    if ($working) {
+      Write-Host ("  The last thing After Effects named itself as doing: " +
+        $working + ". If that window is still up, look at it: an export " +
+        "raises a font question wearing the same kind of title, and " +
+        "GetWindowText reads nothing out of another process's controls.")
+    }
   } elseif ($state.SawStartup) {
     Write-Host ("No results after " + $TimeoutSec + "s: After Effects " +
       "never opened its main window, with a popup in front of it the " +

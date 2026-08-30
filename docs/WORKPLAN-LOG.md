@@ -6564,3 +6564,3223 @@ here - the feed publishing an equal version is the intended outcome.
   and probe scripts deleted. `%APPDATA%\AE-Llama\vendor\whisper.cpp`
   still holds the CPU build and ggml-base.en (149 MB) - now used by
   shipped code, so it stays.
+
+## 2026-08-30 (local) - item 6.2 Pass A: ffmpeg acquired, and the exit
+## code that means nothing
+
+First pass of the night. Harness green on arrival (514/514), so item 1
+was satisfied and the next unfinished workplan item was 6.2 Pass A:
+"acquire a static ffmpeg build the same way; verify with ffprobe."
+5.9 was skipped by its own LAST-item-of-the-night rule, which this pass
+is not.
+
+Built, mirroring the whisper Pass A/B split so the choice and the check
+are testable without a network or a binary:
+
+- `scripts/lib/ffmpeg-assets.ps1` - WHICH download to take.
+- `scripts/lib/ffmpeg-verify.ps1` - install discovery, the process
+  runner, the clip round trip, the encoder census.
+- `scripts/get-ffmpeg.ps1` - acquire into
+  `%APPDATA%\AE-Llama\vendor\ffmpeg\bin`, then verify.
+- `scripts/verify-ffmpeg.ps1` - standalone; SKIP + exit 0 with no
+  install, `-Require` to make that a failure.
+- `tests/test-ffmpeg-acquire.js` - 55 checks.
+- `scripts/lib/gh-releases.ps1` - `Expand-AellReleaseList` lifted out of
+  whisper-assets.ps1, which now dot-sources it. Both acquirers walk the
+  same GitHub release shape and there is now one place to get it wrong.
+  `test-whisper-acquire.js` re-run green after the move.
+
+Source is BtbN/FFmpeg-Builds, chosen over gyan.dev because it publishes
+through the releases API - the same shape get-whisper.ps1 already walks -
+and because it ships an LGPL build alongside the GPL one, which this
+product needs to be able to choose.
+
+### Seven things the obvious version gets wrong
+
+1. **ffmpeg EXITS 0 WHEN IT REFUSES TO WRITE.** Handed an output path
+   that already exists and no `-y`, it prints "File ... already exists.
+   Exiting." and "Error opening output file", writes nothing, and returns
+   **0**. Measured twice; the file is byte-for-byte identical before and
+   after. Real argument errors do return non-zero (-22 for a bad filter,
+   -2 for a missing input), which is exactly what makes the 0 believable.
+   For 6.2 Pass B this is the whole ballgame: an `export_social` that
+   checks the exit code hands the user LAST WEEK'S render as this week's,
+   and every layer of the pipeline reports success.
+2. **Without `-nostdin` that same case HANGS FOREVER.** The
+   already-exists path is an interactive "Overwrite? [y/N]" on stdin.
+   Measured: killed at a 10 s timeout with the process alive and idle.
+   Unattended that is a wedged pass with no output at all. Every
+   invocation in the new library passes `-nostdin`, and `-y` is explicit
+   rather than assumed.
+3. **A VALID FILE CAN CONTAIN NOTHING, AND EVERYTHING SAYS IT IS FINE.**
+   `ffmpeg -t 0` exits 0 and writes a 262-byte MP4 that is structurally
+   perfect: ffprobe exits 0 on it, prints valid JSON, writes NOTHING to
+   stderr, and scores `probe_score: 100` - with `"nb_streams": 0` and an
+   empty streams array. This is the ffmpeg twin of 6.1 Pass B's "silence
+   transcribes as You". So the check reads width, height and FRAME COUNT
+   back out of the stream, and `Test-AellFfmpegCheckerRejectsEmpty`
+   builds that empty file ON PURPOSE every run and fails if the checker
+   accepts it - a checker that returned true unconditionally passes every
+   other assertion in the file.
+4. **ffprobe exits 0 on a file with no matching stream too.**
+   `-select_streams v` against an audio-only file answers
+   `{ "streams": [] }`, exit 0, empty stderr. It DOES exit 1 on a
+   zero-byte or non-media file - while still printing parseable `{ }`.
+   So neither the exit code nor "the JSON parsed" is a check.
+5. **Matroska reports NEITHER `nb_frames` NOR `duration`.** Measured
+   across four containers: .mp4 and .gif carry both; .webm and .mkv carry
+   neither, on the stream. The first version of the checker read that as
+   "0 frames" and rejected a perfectly good 10-frame VP9 file - the
+   mirror image of the bug it exists to catch, and one that would have
+   made this unusable for half the formats Pass B needs. The frame count
+   now falls back to ffprobe's `-count_frames` (correct for all four,
+   25 ms for a 1 s clip) and the duration to the FORMAT's duration.
+   Neither fallback loosens anything; both produce the real number where
+   the fast field was absent.
+6. **The asset names are TWO schemes, not one, and the first version of
+   the choice silently disabled half the walk.** The rolling `latest` tag
+   names files `ffmpeg-n9.0-latest-win64-gpl-9.0.zip`; the dated
+   autobuild releases name the SAME builds
+   `ffmpeg-N-126313-g1ae4048218-win64-gpl.zip` and
+   `ffmpeg-n8.1.2-50-g1a748fe2cd-win64-gpl-8.1.zip`. Matching `-latest-`
+   literally chose correctly from `latest` - so every positive test
+   passed - while reading every dated release as carrying NOTHING: the
+   fallback for the day `latest` lacks a build could never fire, and the
+   grounded error printed those tags as `()` while looking well-formed.
+   The build field is no longer parsed at all; the trailing series suffix
+   is, and its ABSENCE is what means master, in both schemes.
+   Two smaller traps in the same names: `-like '*gpl*'` MATCHES the LGPL
+   build (different licence, different codec set), and `n10` sorts BEFORE
+   `n9` as a string - invisible today, and it silently picks the older
+   build the day an n10 series is published. Series are compared as
+   padded `[version]`, the same fix whisper-assets.ps1 uses for CUDA
+   lines.
+7. **`-encoders` is a COMPILE-time list, not a runtime one.** This build
+   names `h264_amf` and `h264_qsv`, and BOTH fail at encode time on this
+   machine (exit -558323010 and -1313558101, zero bytes written) for want
+   of an AMD or Intel device - while libopenh264, h264_nvenc and h264_mf
+   all produce real h264 in 37-190 ms. Pass B must not pick the first
+   name off the census and trust it.
+
+### The licence call, settled by measurement
+
+BtbN publishes each build twice. This is a COMMERCIAL product, and
+bundling an installer that fetches GPL binaries alongside closed source
+is a question for a human, not a default for a script - so **LGPL is the
+default** and `-License gpl` is an explicit, logged choice.
+
+The reason that default is affordable is measured rather than assumed,
+which is why the acquirer prints the census: the LGPL build has no
+libx264 or libx265, but it DOES have **libopenh264** - software H.264,
+verified encoding a real h264 stream in 37 ms - plus h264_nvenc and
+h264_mf. So `export_social` needs no GPL binary on anyone's machine.
+Default to libopenh264; treat the hardware encoders as an opt-in that has
+to be TRIED, per finding 7.
+
+### One PowerShell trap worth writing down
+
+`$series` inside `Select-AellFfmpegRelease` IS the `$Series` parameter -
+PowerShell variable names are case-insensitive - so building the seen
+list overwrote what the caller had asked for, and the grounded error read
+back its own list instead. Caught only because the error text looked
+wrong. Here it cost one line of message; the same shadowing in a loop
+that re-ran the filter would have changed the WALK.
+
+### Verification
+
+- `node tests/test-ffmpeg-acquire.js`: 55 checks, green. The choice is
+  driven over BOTH captured naming schemes and over the nested shape
+  `Invoke-RestMethod` really returns (asset pinned by SIZE, so a
+  flattening regression that pools every release's assets cannot pass);
+  the checker is driven against files the test writes itself, so the
+  missing/zero-byte/no-install cases run on a CI runner with no binary;
+  and the live half, gated on an install being present, asserts the
+  round trip reads back 96x64 with the 12 frames 8fps x 1.5s implies AND
+  that the checker rejects the deliberately empty file.
+- Full stub sweep: all 54 test files exit 0.
+- `scripts/verify-ffmpeg.ps1 -VendorOnly -Require`: 4/4 PASSED against
+  the freshly installed build.
+- The acquirer was run END TO END TWICE - a clean install and a re-run
+  that wipes `bin` first - both exit 0, both verifying the binary they
+  had just downloaded. n9.0.1-11-ge47273f4d9-20260829, 140.2 MB.
+- `capability-report.js` regenerated: no change (this pass adds no AE
+  tools).
+- **Harness: 514/514 PASSED**, before the pass and after it. Nothing here
+  touches AE. See the note below about the run in between.
+
+### The harness failed once in the middle, and it was not this pass
+
+Between the two green runs, one run exited 4 with "UNRECOGNIZED DIALOG:
+Executing Script aell-selftest-run.jsx...". That string is AE's own
+SCRIPT PROGRESS window, not a modal anyone has to answer - the blocked
+check caught the suite legitimately running. The run before it had left
+a stale "Save changes to Untitled Project.aep before closing?" prompt,
+which the triage answered with Cancel as designed; that keeps AE open on
+the old project and evidently makes the next launch slow enough to be
+caught mid-execution. AE was `Responding=True` with no dialog up by the
+time it was checked, and the immediate re-run was green.
+
+Worth a small pass rather than a fix smuggled in here: the dialog triage
+should treat a window whose text is `Executing Script *` as BENIGN and
+keep waiting, the same way it already knows the save-changes prompt.
+Today it screenshots it, calls it unrecognized and fails the run, which
+on an unattended night turns one slow launch into a lost pass. The
+screenshot is at `logs\dialogs\2026-08-30T01-04-58.png`.
+
+### No version bump
+
+Binary track, same lifecycle as 6.1 Passes A-C and the 5.x feature
+items: no shipped behaviour changed, `extension/` is untouched, and
+nothing new is reachable from the panel yet. Pushing without bumping is
+correct - the feed publishing an equal version is the intended outcome.
+
+### Still open
+
+- **The panel cannot reach any of this yet, by design.** Pass A is the
+  acquirer only. There is no `Ffmpeg` panel module the way there is a
+  `Whisper` one, and no tool in `tools.js` - that is Pass B's job, and
+  `test-chat-probe.js` will refuse a `global.Ffmpeg` that maps to no
+  panel file, exactly as it did for Whisper.
+- **This machine already had an ffmpeg** - gyan.dev 8.1 GPL essentials at
+  `C:\Program Files\ffmpeg\bin`, on PATH, 96 MB per binary. That is why
+  `Find-AellFfmpegInstall` falls back to PATH rather than insisting on
+  the vendored copy: making a user download 140 MB they already have is
+  the kind of thing they notice. It is also a second real build to test
+  against, and the verify passes on both. Worth remembering that a user's
+  own ffmpeg may be a GPL one - which is THEIR licence choice to have
+  made, not ours, but Pass B should not assume a codec set from it.
+- `Invoke-AellFfmpegProcess` duplicates the async-pipe-drain pattern from
+  `whisper-verify.ps1` rather than sharing it. Deliberate for now (the
+  two differ in what they return, and the whisper one is load-bearing for
+  a shipped feature), but if a third acquirer appears that is the next
+  thing to lift into `lib/`, the same way `Expand-AellReleaseList` was
+  lifted this pass.
+- **`get-llama.ps1` still has the two latent traps 6.1 Pass A flagged**:
+  it greps for `CUDA Version:` (misses this machine's `CUDA UMD
+  Version:`) and pads versions to two parts.
+  `Get-AellCudaVersionFromSmi` and `ConvertTo-AellPaddedVersion` in
+  `whisper-assets.ps1` are the fixes, already written and tested - a
+  small pass points get-llama at them. Third flag; now that
+  `lib/gh-releases.ps1` exists, that pass has an obvious home for the
+  shared half too.
+- Project debris in the harness project is unchanged from the 6.1 Pass C
+  entry (two comps called `AELL_PROBE_WA`, `PROBE_PARENT`, ~250 nulls
+  named "Audio Amplitude"), and the capped-grounded-list trap it makes
+  easy to hit is still a small remote-session job.
+- 5.9 (.mogrt export) still deferred by its own LAST-item-of-the-night
+  rule. Fifteenth pass. Someone should decide whether that rule means
+  "last pass of a night" or "never".
+- `release-notes.txt` still reads "0.10.0" while the feed ships 0.10.8 -
+  fourteenth pass to flag it; remote session's release cut.
+- `comfy_generate` still calls `import_file` rather than 5.8's
+  `import_as_layer` - small remote-session pass.
+- Machine state: AE was not driven by this pass beyond the harness runs;
+  it is left on the harness's own project with no dialog open. Temp clips
+  and probe scripts deleted. `%APPDATA%\AE-Llama\vendor\ffmpeg` now holds
+  the LGPL n9.0 build (ffmpeg/ffprobe/ffplay); `vendor\whisper.cpp` is
+  untouched.
+
+## 2026-08-30 (local) - item 6.2 Pass B: the comp goes out as a file, and
+## the encoder that was named but could not run this frame
+
+**Item:** WORKPLAN 6.2 Pass B - `export_gif` / `export_social`. The
+harness was green before the pass (514/514), so this is the next
+unfinished queue item rather than a repair.
+
+**Shipped**
+
+- `extension/js/ffmpeg.js` - the panel's side, the same split whisper.js
+  uses: this is the PANEL's implementation and `scripts\lib\`
+  `ffmpeg-verify.ps1` is the acquirer's and CI's, deliberately
+  independent because the panel cannot shell out to PowerShell for every
+  export. Find (vendor, then PATH), `planSize`, the argument builders,
+  `inspect` (the only real check), `tryEncoder`/`pickEncoder`,
+  `checkOutput`.
+- `export_gif` and `export_social` in `tools.js`, PANEL tools for
+  `transcribe_to_captions`' reason: the middle step is a child process
+  and ExtendScript cannot spawn one. Both ends of the pipeline are
+  already covered in real AE by the suite (`render_comp`), so this pass
+  adds NO suite steps - what it adds is a refusal at every point where a
+  step reports success and means nothing.
+- `tests/test-ffmpeg-export.js` - 122 checks, no ffmpeg binary and no AE.
+- `extension/index.html` and `scripts/chat-probe.js` load the new module;
+  `tests/test-chat-probe.js` knows about it (Pass A predicted exactly
+  this and was right).
+
+The shape is `comp -> render_comp "Lossless" -> rawvideo AVI -> ffmpeg
+-> .gif/.mp4`, master deleted on every path including the failures.
+
+### Six things the obvious version gets wrong
+
+1. **AE's "Lossless" is RAWVIDEO, and it is enormous.** ffmpeg reads it
+   natively - `rawvideo`/`bgr24` in an AVI, no QuickTime and no
+   intermediate codec, which is the good news. The bad news is the
+   price: measured 231 040 B/frame at 320x240 and **6 224 440 B/frame at
+   1920x1080**, i.e. 1.87 GB for ten seconds of 1080p30 and 5.6 GB for
+   thirty. An exporter that just renders and then encodes fills
+   someone's disk and finds out afterwards. So the master is ESTIMATED
+   from width*height*3*frames before anything is queued, refused over a
+   cap (default 8 GB, `maxIntermediateGB` raises it), and refused again
+   if the temp volume has less free than the estimate. The refusal shows
+   the arithmetic - bytes a frame, frame count, both levers - because a
+   number without its derivation is not actionable.
+2. **THE WORK AREA SILENTLY SHORTENS THE RENDER.** `render_comp` with no
+   span takes AE's own default, which is the queue item's, which is the
+   **work area**. Measured: a 3 s comp trimmed to `workAreaStart 1,
+   workAreaDuration 1` renders `start 1s, 10 frame(s)`, status DONE,
+   file written, every layer of the stack reporting success. An explicit
+   `startTime`/`durationSeconds` beats it and leaves the work area
+   alone. This is AE's own Ctrl+M behaviour so it stays the DEFAULT -
+   what is not acceptable is it happening in silence, so the export
+   compares the master's real duration against the comp's and says
+   "Exported 1s of a 3s comp, because that is the comp's WORK AREA",
+   naming `{wholeComp: true}`.
+3. **The lossless AVI carries the comp's AUDIO.** Measured by adding a
+   2 s 48 kHz stereo tone to the rig: the AVI grew by exactly 384 000
+   bytes and ffprobe found a second stream, `pcm_s16le`. So
+   `export_social` needs no separate `render_comp_audio` pass and no
+   muxing step - one intermediate serves both. When there is no audio
+   stream the export says so in a note, because "my video has no sound"
+   is otherwise a support question.
+4. **A NEGATIVE finding worth as much as a positive one.** Bottom-up BGR
+   in an AVI is the classic upside-down trap, and AE's is NOT affected.
+   A rig with a red top half and a blue bottom half came back out of
+   ffmpeg with pixel (0,0) = (254,0,0). No vflip. Written down so the
+   next person does not add one "to be safe" and invert every export.
+   (The 254 rather than 255 is AE's own 8-bit rounding of a [1,0,0]
+   solid, measured, and not worth chasing.)
+5. **ffmpeg exits 0 having written nothing, and can write a container
+   with no picture in it** (Pass A's findings 1 and 3). So `-nostdin -y`
+   lead every argument list this module builds, and the exit code is
+   never the check: `inspect()` reads WIDTH, HEIGHT and FRAME COUNT back
+   out of both the master AE rendered AND the file ffmpeg wrote, with
+   Pass A's `-count_frames` fallback for the containers that report
+   neither. The stub suite drives all four shapes off captured ffprobe
+   output - the 262-byte zero-stream MP4 that scores `probe_score: 100`,
+   the zero-byte file that exits 1 while still printing `{ }`, the
+   matroska that carries no `nb_frames`, and a real export.
+6. **`-encoders` is a compile-time list, and trialling it at the wrong
+   size is the same lie with extra steps.** Pass A said an encoder must
+   be TRIED, so `tryEncoder` encodes one frame of colour bars and
+   inspects the result. The first version trialled at a fixed 64x64 and
+   the field run picked **h264_mf on a machine with an NVIDIA card** -
+   because `h264_nvenc` answers "InitializeEncoder failed: invalid param
+   (8): Frame Dimension less than the minimum supported value", exit
+   -22, zero bytes written. Measured boundary on this card: **146x50
+   encodes, 144x48 does not, 128x128 does not, 160x96 does.** The trial
+   now runs at the size the export will actually be and the verdict is
+   cached per name AND size. Re-run in the field: `hardware: true` at
+   1280x720 now picks `h264_nvenc`, and at 128x128 it correctly still
+   falls through to software.
+
+   This one is worth dwelling on. Every stub check passed with the 64x64
+   trial - the mechanism worked perfectly, `inspect` correctly rejected
+   nvenc's zero-byte output, `pickEncoder` correctly moved on, and the
+   export succeeded. Nothing was broken. It was just answering a
+   question about a picture nobody was going to encode. The only thing
+   that caught it was the field run naming an encoder that disagreed
+   with the hardware in the box.
+
+### A defect in chat-probe, found on the way in
+
+`scripts/chat-probe.js` loaded panel modules with
+`new Function("window", src)(window)`. Ten of the twelve modules end
+`})(window)` and two - whisper.js and now ffmpeg.js - end `})(this)`.
+Those are the SAME OBJECT in a browser, where `this` at the top of a
+script is `window`, and they are not the same object at all inside
+`new Function`, where `this` is Node's global. So `Whisper` was
+published on globalThis while tools.js looked for `global.Whisper` on
+the probe's window and found nothing, and `transcribe_to_captions`
+answered **"Speech-to-text is not available in this panel build"** - a
+shipped-looking refusal that says nothing whatever about the machine.
+Fixed with `.call(window, window)`, which works for both shapes.
+
+`test-chat-probe.js` had been asserting that the probe LOADS each file,
+which is why this passed for a whole release: loading it is not the same
+as it arriving. It now loads every module the way the probe does and
+asserts the module lands on the probe's window.
+
+**This is not a shipped bug.** The panel is a browser, `this === window`
+there, and the real product was never affected - which is precisely why
+it survived. No version bump is owed for it.
+
+### Design calls, made and written down
+
+- **`size` parses two conventions that genuinely disagree**: `"480"` is
+  a WIDTH (how GIFs are spoken about), `"720p"` is a HEIGHT (how video
+  is), `"1080x1920"` is both. Guessing between the first two would be
+  wrong half the time, so the `p` is honoured rather than inferred.
+- **`fit` defaults to `contain`** (letterbox). Cropping the edges off
+  someone's comp is not a thing to do without being asked; both modes
+  emit a note naming the other one.
+- **`export_gif` defaults to 480 px wide at 12 fps** and says that it
+  did. A GIF at comp size is a GIF nobody can post. It never UPSCALES -
+  a 320-wide comp stays 320.
+- **Dimensions round DOWN to even.** libopenh264 does NOT refuse odd
+  ones (measured: 101x75 encodes fine), so this is a compatibility
+  choice for players and platforms, and it is stated as one rather than
+  dressed up as a crash guard.
+- **libopenh264 is the default encoder**, per Pass A's licence
+  measurement: the LGPL build has no libx264 and this is a commercial
+  product. `hardware: true` opts into the nvenc/mf ladder, which is
+  tried, not trusted. libopenh264 has no CRF, so `quality` becomes a
+  real bitrate here (bits per pixel per frame: 0.06/0.1/0.15, floored at
+  200 kbps and capped at 20 Mbps - 1080p30 medium lands on 6221 kbps).
+- **The output extension picks the MUXER**, so unlike `render_comp` -
+  where a wrong extension is cosmetic and gets reported - a wrong one
+  here cannot run at all and is refused with the list of what can.
+  `.webm`/VP9 and animated `.webp` are deliberately NOT built; they are
+  refused by name.
+- `mutating: true` on both, which for a PANEL tool only gates the dry
+  run (panel tools are excluded from `batchable()`, so the round
+  rollback's Ctrl+Z can never reach them). That is the behaviour wanted:
+  a dry run should not spend three seconds and 534 MB.
+
+### Verification
+
+- `node tests/test-ffmpeg-export.js`: **122 checks, green.** The pure
+  half (sizing, filters, bitrates, path checks) is proved outright; the
+  install walk runs against a real tiny tree including the nested
+  `bin\ffmpeg-...-lgpl\bin\` layout this machine really has and the
+  half-install case; `inspect` and `pickEncoder` run against a SCRIPTED
+  child_process replaying captured field output, including nvenc's
+  size floor; and the two tools run end to end against a scripted AE
+  whose `render_comp` truncates to the work area the way the real one
+  measurably does.
+- `node tests/test-chat-probe.js` green with the new module assertions.
+- **Full stub sweep: all 55 test files exit 0.**
+- **Field, in real AE 2026 with the bundled LGPL ffmpeg** - a 1920x1080
+  30 fps 3 s comp with an animated solid, five paths, all green:
+  - `export_gif` -> 480x270, 12 fps, 36 frames, 23 958 bytes, **2.8 s**
+    (534 MB master rendered, converted and deleted).
+  - `export_social {size: "1080x1920"}` -> 1080x1920 h264, 90 frames,
+    38 302 bytes, 6221 kbps, 2.9 s, letterbox note present.
+  - `export_social {fit: "cover", quality: "high"}` -> same frame,
+    9331 kbps, crop note present.
+  - existing output with no `overwrite` -> refused, with the file's size
+    in the message.
+  - `export_social {hardware: true, size: "720p"}` -> `h264_nvenc`,
+    1280x720, 90 frames, 3.1 s. (This is the run that found finding 6:
+    before the fix it said `h264_mf`.)
+  - `stray masters in TEMP: []` after all five.
+- `capability-report.js` regenerated: 73 -> 75 tools, 4 -> 6 panel-side.
+- **Harness: 514/514 PASSED**, before the pass and after it. Unchanged
+  by design - this pass adds no AE tool, so there is nothing new for the
+  suite to drive.
+
+### No version bump
+
+Feature track, the same lifecycle as 6.1 Passes A-C and the 5.x items:
+new tools ride the next MINOR, which is the remote session's. The
+chat-probe fix is a script, not `extension/`, and was never a shipped
+defect. Pushing without bumping is the intended outcome here.
+
+### Still open
+
+- **The panel UI has no button for either tool.** They are reachable by
+  the model through chat, which is the product's main path, but a
+  "Export GIF" affordance in Settings/main is a remote-session design
+  call the way the render-queue one was.
+- **`export_social` cannot write `.webm` or animated `.webp`.** Both
+  encoders are in the LGPL build (`libvpx-vp9`, `libwebp_anim`) and both
+  are refused by name today. Whether VP9's encode time is acceptable for
+  a panel that blocks is a measurement plus a product call.
+- **The intermediate is always the FULL comp size**, then scaled by
+  ffmpeg. For a 4K comp exported to a 480 px GIF that is a lot of bytes
+  moved to throw most of them away. AE's render settings can resize
+  (Half/Third/Quarter) but `render_comp` exposes no way to ask, and
+  `om.getSettings()` throws (6.1 Pass C measured that). A `resolution`
+  argument on `render_comp` would make this much cheaper and is a
+  self-contained small pass.
+- **The 8 GB intermediate cap is a guess**, not a measurement. Nobody
+  has established whether AE's AVI writer survives past the classic 2 GB
+  / 4 GB RIFF boundaries, or whether ffmpeg reads what it writes there.
+  Testing it costs a multi-gigabyte render; worth one deliberate pass
+  rather than a surprise on someone's 30-second 1080p export.
+- **Panel tools read as UNCOVERED in the generated capability table**
+  ("stub tests: -"). `stubCoverage()` counts `call("tool")`, the
+  host-tool convention, so `comfy_generate`, `transcribe_to_captions`
+  and now both exports show a dash despite real coverage. Pre-existing
+  shape of the metric, not a regression; a one-line regex change if
+  anyone minds.
+- **The dialog triage still calls AE's "Executing Script *" progress
+  window an UNRECOGNIZED DIALOG** and fails the run. Second flag; the
+  6.2 Pass A entry has the screenshot path and the reasoning. On an
+  unattended night this turns one slow AE launch into a lost pass.
+- `get-llama.ps1` still has the two latent traps 6.1 Pass A flagged
+  (`CUDA Version:` vs this machine's `CUDA UMD Version:`, two-part
+  version padding). Fourth flag; `whisper-assets.ps1` has both fixes
+  written and tested, and `lib/gh-releases.ps1` is now the obvious home
+  for the shared half.
+- 5.9 (.mogrt export) still deferred by its own LAST-item-of-the-night
+  rule. Sixteenth pass.
+- `release-notes.txt` still reads "0.10.0" while the feed ships 0.10.8 -
+  fifteenth flag; remote session's release cut.
+- `comfy_generate` still calls `import_file` rather than 5.8's
+  `import_as_layer` - small remote-session pass.
+- Project debris in the harness project is unchanged (two comps called
+  `AELL_PROBE_WA`, `PROBE_PARENT`, ~250 nulls named "Audio Amplitude").
+- Machine state: AE left on the harness project with no dialog open, 95
+  items (down from the 100 the probes left). The export rig comp, the
+  four probe comps, the tone WAV and every temp master are gone;
+  `%TEMP%\aell-probe-ffmpeg` holds only probe outputs and can be
+  deleted. No change to `%APPDATA%\AE-Llama\vendor`.
+
+  Worth writing down because this entry nearly claimed the cleanup had
+  happened when it had not: **the probes' own `delete_item` calls all
+  failed silently and every probe comp survived.** Not a tool defect -
+  `delete_item` takes `{item: ...}` and the probe passed `{name: ...}`,
+  so it returned a perfectly good grounded refusal into a `try/catch`
+  that threw the message away. The lesson is about the probe, not the
+  tool: a cleanup step whose result is not read is not a cleanup step.
+  Caught only by going back and LOOKING at the project before writing
+  the sentence that said it was clean.
+
+## 2026-08-30 (local) - the window After Effects did not draw, and the
+## dialog the evidence never looked at
+
+Harness green on arrival, 514/514, so the pass took the item the last two
+entries had filed and neither had spent: **the dialog triage calls AE's
+"Executing Script *" progress window an UNRECOGNIZED DIALOG and fails the
+run.** It was flagged as a small pass. It was not a small pass, because
+the filed symptom was not the defect - it was the second-loudest thing in
+the room.
+
+### What the screenshot said that the log entry did not
+
+`logs\dialogs\2026-08-30T01-04-58.png`, saved by the run that exited 4,
+shows AE's progress window reading **"Script execution time 0 minutes 17
+seconds"** in front of a perfectly ordinary After Effects. Nothing was
+stuck. Seventeen seconds is eight 2s polls plus the time to take the
+picture - which is exactly `Get-AellVerdictPatience`'s patience for the
+`unreadable` verdict. So the run was stopped by something the probe could
+see and not read, and the "Executing Script" headline came from the
+EVIDENCE path afterwards, naming a different window entirely.
+
+### The measurement: AE's drop shadow outvotes AE's progress window
+
+A probe drove a cold launch with a 26s sleep script and dumped every
+top-level window of the process, the probe's own text, the harvest and
+the verdict, every 1.5s. At **t=28..31s, three consecutive polls**, with
+the suite provably running:
+
+    vis=1 en=0 [tooltips_class32] ''
+    vis=1 en=1 [SysShadow] ''
+    vis=1 en=1 [#32770] 'Executing Script sleep.jsx...'
+    vis=1 en=0 [AE_CApplication_26.3] 'Adobe After Effects 2026 - ...'
+
+    verdict = unreadable
+
+`SysShadow` is the drop shadow Windows draws under a tooltip and
+`tooltips_class32` is the tooltip itself. Both are **visible top-level
+windows owned by the AfterFX process**, both carry no text whatever, and
+`OnTop` listed them as popups - so the triage saw two dialogs nobody
+could read. A wordless block outranks a running script (`blocked` >
+`startup` > `unreadable` > `running`), so the verdict was `unreadable`
+while AE's own window sat there in plain English saying it was busy.
+
+**Eight of those in a row is exit 4 on a suite that goes on to pass
+514/514.** That is the lost run. Not the progress window: the shadow the
+tooltip cast beside it.
+
+The two are one bug in two layers, and both are fixed:
+
+- `ae-dialog-triage.ps1` - a block with no words whose header class is
+  `SysShadow` or `tooltips_class32` is not a popup. Judged on CLASS and
+  only for a block with nothing to say: one of those windows that
+  somehow carries words is still read for its words. This is the
+  load-bearing half, because it is the half a Node test can drive.
+- `run-ae-selftest.ps1` - `OnTop` does not list them at all, and skips
+  them BEFORE the popup counter, so a probe that finds only chrome does
+  not fall through to "main window is disabled but no popup text could
+  be read" - the same wrong answer by a different road.
+
+`Get-AellHarvestClass` also learned AE's progress window (harvested
+verbatim: `Executing Script <file>...` + `OS_ViewContainer`), which is
+the defect as filed. It was real, it was just not what cost the night:
+what it cost was the diagnosis, by headlining UNRECOGNIZED DIALOG over
+the top of AE reporting that it was busy doing what it was asked.
+
+### Then the harness went red again, and the fix was incomplete
+
+Post-fix field run 1 of 4 exited 4 on a popup no capture in this repo
+has ever recorded:
+
+    [DroverLord - Window Class]
+        OS_ViewContainer
+        OS_ViewContainer
+        OS_EditTextContainer
+
+Adobe's own toolkit shell, not the standard dialog class, carrying the
+same three containers as the save-changes prompt and no words. The
+immediate re-run was green and so were the three after it.
+
+What that run PRINTED is the finding worth keeping. Its evidence read:
+
+    what it says (WM_GETTEXT):
+      Executing Script aell-selftest-run.jsx...
+
+...because `HarvestDialogText` only ever harvested `#32770`. The window
+that stopped the run was never read, never photographed, and the harness
+reported on the one window in the room that was not the problem. Two
+things came apart that had been assumed to be one:
+
+- **what the HARVEST recognises is not what STOPPED the run.** The
+  harvest reads dialog-shell windows; the verdict judges every popup the
+  probe can see. A benign harvest beside a fatal popup now photographs
+  the screen anyway: `Write-AellDialogEvidence -AlwaysShoot`, passed by
+  the blocked path and only by it. (This pass introduced that hole
+  itself, by letting a known harvest skip the picture. Caught by the
+  field, four runs later.)
+- **reading is widened; ANSWERING is not.** The harvest now reads
+  `DroverLord` shells as well as `#32770`. `CloseWordlessDialogs` still
+  posts WM_CLOSE to `#32770` alone, and a test pins that it does: what
+  may be answered by an unattended run is a much narrower question than
+  what may be looked at, and nobody has identified this window yet.
+
+### Verification
+
+- `node tests/test-selftest-runner.js` green. **Reverted against the
+  pre-fix scripts it fails 8 assertions**, including
+  `chrome-beside-progress reads as running (got unreadable)` - the bug
+  class is caught without AE.
+- New coverage, all from captures taken in real AE this pass: the chrome
+  sample beside the progress window (`running`), alone (`clear`), beside
+  a real modal (still `blocked`, on schedule, 3 polls), beside the
+  teardown flicker (still `unreadable`); a 20-poll chrome timeline that
+  must never stop; the DroverLord popup (`unreadable`, and NOT swallowed
+  by the chrome filter - which is why that filter is two class names and
+  not "anything wordless"); the progress-window harvest alone, beside
+  the save prompt, and beside an error alert.
+- **Full stub sweep: all 55 test files exit 0.**
+- **Harness: 514/514 PASSED, three consecutive runs**, plus the green
+  run this pass opened with. The one red run in between is the
+  DroverLord finding above.
+- Both .ps1 files re-checked pure ASCII.
+
+### No version bump
+
+`extension/` is untouched - the panel ships `extension/` alone and this
+is harness tooling. Same call, for the same reason, as the 2026-08-28
+dialog-triage pass.
+
+### Still open
+
+- **What IS the DroverLord popup?** Unidentified, and the honest answer
+  is that this pass could not make it happen again. It is now readable
+  and photographed when it recurs, which is the whole point of the two
+  changes above, but until someone catches it the harness has a failure
+  mode that cost one run in five tonight. Whoever meets it next: the
+  picture and the WM_GETTEXT will both be there. Do NOT widen
+  `CloseWordlessDialogs` to answer it blind - a wordless AE popup that
+  persists 16s is exactly the case that refusal exists for.
+- The chrome filter is proven two ways - a verbatim real-AE capture and
+  a stub test that fails without it - but **the post-fix field runs did
+  not reproduce the chrome state**, so they prove no regression rather
+  than proving the filter firing. A deliberate attempt to raise a
+  tooltip on demand (a scan grid of cursor positions across AE's window)
+  raised none, so this is written down rather than claimed. The trigger
+  is a tooltip lingering as AE disables its main window, which is mouse
+  position and timing, not something the harness controls.
+- Everything the 6.2 Pass B entry left open is unchanged: no panel UI
+  for the export tools, no `.webm`/`.webp`, the full-size intermediate
+  and the `resolution` argument `render_comp` does not have, the 8 GB
+  cap that is still a guess, panel tools reading as uncovered in the
+  capability table.
+- `get-llama.ps1` still has the two latent traps 6.1 Pass A flagged.
+  Fifth flag.
+- 5.9 (.mogrt export) still deferred by its own LAST-item-of-the-night
+  rule. Seventeenth pass.
+- `release-notes.txt` still reads "0.10.0" while the feed ships 0.10.8 -
+  sixteenth flag; remote session's release cut.
+- `comfy_generate` still calls `import_file` rather than 5.8's
+  `import_as_layer`.
+- Machine state: AE left running on an empty Untitled project with no
+  dialog open, three green runs behind it. The project debris the
+  earlier passes recorded went with the harness project, which this
+  pass's probe closed WITHOUT saving (`CloseOptions.DO_NOT_SAVE_CHANGES`
+  then `app.quit()`, deliberately, so no save prompt was raised and AE
+  was never force-killed - a hard kill is what raises the recovery
+  dialog on the next launch). `%TEMP%\aell-probe-progress` holds the
+  four probe scripts and their logs and can be deleted.
+
+## 2026-08-30 (local) - item 6.2 follow-up: the pixels After Effects
+## never had to render, and the template that quietly ate the setting
+
+Harness was GREEN on arrival (514/514), so the pass went to the queue.
+Sections 1-4 are struck through, 5.9 is still held back by its own
+last-item-of-the-night rule (eighteenth pass), and the freshest open
+item is the one 6.2 Pass B filed against itself: **the lossless master
+is always rendered at the FULL comp size and then thrown away by the
+scaler.** A 4K comp exported to a 480 px GIF moves 24 MB a frame to
+keep 0.4. Pass B called a `resolution` argument on `render_comp` "a
+self-contained small pass". It was.
+
+### What the probe measured (AE 2026, two temp .jsx runs)
+
+Everything below is field truth; none of it was in the sketch.
+
+- **The render-queue ITEM answers `getSettings()`.** It hands back a
+  plain name-keyed map (Quality, Resolution, Time Span, ...). This is
+  worth writing down because the OUTPUT MODULE's `getSettings()`
+  THROWS - 6.1 Pass C paid for that fact - and the two objects had been
+  assumed to behave alike.
+- **`getSetting("Resolution")` and `getSettings()["Resolution"]` do not
+  answer the same question.** The first returns the JSON-ish pair
+  verbatim, curly braces and all: `({"x":2,"y":2})`. The second returns
+  the NAME: `Half`. A human asked for a name, so the tool reports the
+  name and reads it from the map.
+- **Resolution is written by NAME and by nothing else.** `"Half"` works;
+  `"half"`, `2` and `"Custom"` all take the same throw - *Invalid Value
+  for key: <Resolution>. Missing or incorrect component. Must have form:
+  "x,y"* - which names a form the API will not actually accept from a
+  script. So the tool normalises ("half", "1/2", 2, "QUARTER") and
+  refuses anything else with AE's real four.
+- **`applyTemplate` RESETS Resolution to Full.** This is the whole
+  reason this pass has an ordering test in three places. Set the
+  resolution next to the other arguments - the obvious place - and AE
+  wipes it when the render-settings template lands, renders full size,
+  and reports success. Same trap shape as Pass A's "template BEFORE
+  file", one line further down.
+- **The rendered frame is `ceil(dim/factor)` per axis, not floor.**
+  Measured with ffprobe on real renders: 640x360 at Third is **214x120**
+  and 641x361 at Half is **321x181**. A floor would have been wrong on
+  both.
+- And the thing the argument exists for: resolution changes the OUTPUT
+  FILE, not just AE's sampling. 640x360 -> 320x180 -> 214x120 -> 160x90,
+  1 389 680 bytes down to 93 680.
+
+### What shipped
+
+- `render_comp {resolution}` (hostscript.jsx): parsed and validated
+  BEFORE anything is queued, applied AFTER both templates, then READ
+  BACK from `getSettings()` rather than trusted. The result reports
+  `resolution` (AE's name) and `renderedSize` (with the comp's own size
+  beside it when they differ), and a `resolutionWarning` when what AE
+  confirms is not what was asked for.
+- `export_gif` / `export_social` `{masterResolution}` via
+  `Ffmpeg.planMaster` (the pure half, so it is stub-testable):
+  full/half/third/quarter/auto. **`auto` picks the largest reduction
+  that still COVERS the output**, so ffmpeg never enlarges; a named
+  reduction that would land under the requested size is REFUSED and the
+  refusal names the largest one that would work. The intermediate
+  estimate and the cap message are computed from the reduced size, and
+  the cap refusal now points at `{masterResolution: "auto"}` as a way
+  through.
+- **Opt-in, deliberately.** AE's reduced-resolution render is its own
+  sampler and nobody here has measured it against ffmpeg's downscale on
+  real FOOTAGE (a flat solid proves nothing about aliasing). Making it
+  the default would be a silent quality change to a shipped path on an
+  unmeasured assumption. The default is exactly what shipped.
+
+### Verification
+
+- **Harness: 517/517 PASSED in real AE** (514 before), three new suite
+  steps: half really writes 80x60 AND fewer bytes than the same frame at
+  full; a render-settings template together with a resolution still
+  reports Quarter (the ordering step); an arbitrary percentage is refused
+  with the four names. The existing "writes one real frame" step also
+  now asserts `Full` / `160x120`, so the default is pinned too.
+- `tests/test-render-queue.js` 82 -> 108 checks. The stub learned five
+  more AE facts (facts 13-17 in its header comment: the applyTemplate
+  reset, the item-level `getSettings`, the pair-vs-name split, the
+  name-only write, the ceil rounding). **Reverted against a hostscript
+  that sets the resolution before `applyTemplate`, three assertions
+  fail** - including `resolutionWarning` firing - so the bug class is
+  caught without AE.
+- `tests/test-ffmpeg-export.js` 122 -> 138 checks for `planMaster`,
+  including the two refusals and the auto ladder (700 wide stops at
+  half, because a third of 1920 is 640).
+- `tests/test-self-test.js`: its hand-written render_comp stub learned
+  the same rules, or the suite's new steps would have passed against a
+  fake that knows nothing about resolution. 517/517 there too.
+- **Full stub sweep: all 55 test files exit 0.** Capability report
+  regenerated (render_comp 8 -> 11 steps); curated half updated.
+- **Export path driven end to end in real AE** through the panel tools
+  (a probe that slices chat-probe.js's own bridge out of the file, so
+  it cannot drift from what the panel does):
+  - `export_gif {masterResolution: "auto"}` on a 1920x1080 comp to 480
+    wide -> quarter master, 480x270 GIF, and the note says so.
+  - `export_social {masterResolution: "half"}` -> 960x540 h264,
+    libopenh264, master 960x540.
+  - `{masterResolution: "quarter"}` for a 1920x1080 output -> refused:
+    "AE would render 480x270 ... would have to ENLARGE the master".
+  - `"35%"` -> refused with the list.
+  - **The payoff, measured:** a 10 s 1080p comp to 480x270 with
+    `maxIntermediateGB: 0.2` is REFUSED at full size (1.74 GB) and RUNS
+    with `auto` (116 MB). Wall clock 6 598 ms full vs 5 966 ms quarter.
+  - `stray masters in TEMP: []` after every run; the probe comps were
+    removed and the removal COUNT was read (the Pass B lesson).
+
+### No version bump
+
+Feature track: this is a new argument on shipped tools, not a fix to
+shipped behaviour - nothing was broken before it. Same call, for the
+same reason, as 6.1 Passes A-C and 6.2 Passes A-B. It rides the next
+MINOR, which is the remote session's.
+
+### Still open
+
+- **The quality question this pass deliberately did not answer.** Is
+  AE's own downsample at Half/Quarter as good as rendering full and
+  letting ffmpeg's scaler do it? Measured on a flat solid: identical
+  output bytes, which proves nothing. On real footage with fine detail
+  it might alias. Until someone measures it (an SSIM comparison against
+  a detailed source would settle it in one pass), `masterResolution`
+  stays opt-in and the default stays full.
+- **The speed claim is smaller than it looks on this machine.** 6.6 s ->
+  6.0 s for 10 s of 1080p. The disk here is fast and the test comp was a
+  solid; a comp with heavy effects should gain much more, because AE
+  computes a quarter of the pixels - but that is reasoning, not a
+  measurement, and it is written here as such. The measured, banked win
+  is the intermediate: 1.74 GB -> 116 MB, which is the difference
+  between an export the cap refuses and one that runs.
+- **What IS the `DroverLord - Window Class` popup?** Unchanged from the
+  previous entry, and still not reproduced. Evidence will be captured
+  when it recurs.
+- Everything 6.2 Pass B left open otherwise: no panel UI for the export
+  tools, no `.webm`/`.webp`, the 8 GB cap that is still a guess (this
+  pass makes it easier to live with, not measured), panel tools reading
+  as uncovered in the capability table.
+- `get-llama.ps1` still has the two latent traps 6.1 Pass A flagged.
+  Sixth flag.
+- 5.9 (.mogrt export) still deferred by its own LAST-item-of-the-night
+  rule. Eighteenth pass.
+- `release-notes.txt` still reads "0.10.0" while the feed ships 0.10.8 -
+  seventeenth flag; remote session's release cut.
+- `comfy_generate` still calls `import_file` rather than 5.8's
+  `import_as_layer`.
+- Machine state: AE left running with no dialog open, harness green
+  behind it. Both probe comps (`AELL_EXPORT_RES`, `AELL_EXPORT_RES2`)
+  were removed and the removal count read back (2 and 1). The probe
+  folder under TEMP holds the four probe scripts, their JSON results
+  and the small test renders, and can be deleted.
+
+## 2026-08-30 (local) - item 7 Tier P4 bullet 1: the arithmetic that
+## every shipped manifest made impossible (0.10.9)
+
+Harness green before the pass (517/517) and green after, so the item was
+the top unfinished one: WORKPLAN item 7's first bullet, the chat<->
+generation VRAM handoff, measured on the real 5090 for the first time.
+Everything tiers.js and the arbiter assert had until tonight been
+arithmetic the stubs themselves supplied.
+
+### What the probe is
+
+`scripts/handoff-probe.js` — settings.js + tiers.js + setup.js + llama.js
++ comfy.js + tools.js loaded into a Node `window`, then
+`Tools.executeCommands([comfy_generate])` against a REAL llama-server, a
+REAL local ComfyUI and REAL nvidia-smi, sampled every 500 ms into a
+labelled timeline that goes into the transcript. Two rounds, because the
+interesting thing is the difference: (A) no override, the card's own
+32 GB; (B) `vramOverrideGB: 8`, the same job on an impersonated T3.
+Every generation runs `{import: false}` — no After Effects, so no dialog
+can be raised and the user's project is never touched.
+
+It wraps `Tiers.planHandoff` and `Comfy.freeVram` to record their exact
+inputs and answers, because neither is visible in a tool result: one is a
+status line, the other is best-effort and swallows its own error.
+
+### The finding the bullet existed to make, and it is the opposite of what the bullet predicted
+
+The bullet says a T7 card "should run CONCURRENT". It could not, ever.
+
+**No shipped workflow manifest carries a single `sizeMB`.** They carry
+`file`, `dir`, `role` and a download `url` — that is all. `genNeedMBFor`
+summed `sizeMB` and returned null when it found none, so the field answer
+on a 32 GB card with a 7B chat model was:
+
+    planHandoff({vramGB:32, chatLoadedMB:6002, genNeedMB:null, auto})
+      -> handoff: "the fit cannot be verified - pausing chat is the safe
+         default"
+
+Every generation on every card paused the chat model, whatever the
+arithmetic would have said, while T6/T7's own settings copy tells the
+user "the panel checks the arithmetic per job". And with
+`comfyPauseLlm: "never"` a 5090 owner got a refusal that says "The panel
+cannot verify this generation fits" — for every job, forever.
+
+The stub suite could not see it: `tests/test-vram-arbiter.js` handed the
+arbiter a manifest with `sizeMB: 6000` — a shape no bundled template has
+ever had. The stub was testing a manifest format that does not exist.
+
+**Fix at the root: measure the weights on disk.** `genNeedMBFor` now
+resolves each non-optional `{dir, file}` against the model roots the
+panel already knows — `comfyModelsDir`, each `comfyModelRoots` entry
+(including the per-kind `"checkpoints=D:\SD\ckpts"` form), the user's
+`comfyDir/models`, and the hidden backend's own tree — and stats it. A
+manifest that DOES author a `sizeMB` is still believed first. The file is
+the weights; an authored number goes stale the first time somebody swaps
+a quantization.
+
+**One unknown weight poisons the whole answer.** The old code returned a
+partial sum as soon as any one entry had a size. A partial sum reads like
+a verified fit and understates the bill in exactly the direction that
+OOMs a card, and "unprovable" already has a safe meaning here: pause.
+
+### The measurement, on the real card
+
+RTX 5090, 32 607 MiB. Chat: Qwen2.5-7B-Instruct-Q4_K_M (llama-server
+reports 6002 MB by the arbiter's file-size+1536 rule). Generation:
+AE_LLAMA_KREA2_V1 at 768x768, weights measured on disk at **18 110 MB**
+(12 868 diffusion + 5 000 text encoder + 242 VAE). ComfyUI 0.32.0.
+
+- Idle, nothing loaded: 3 255 MB. ComfyUI up and idle: ~3 750 MB.
+  Chat loaded on top: **9 724 MB**.
+- **Round A, no override -> CONCURRENT.** "fits beside chat: the
+  generation needs ~17.7 GB and the chat model holds ~5.9 GB of the
+  card's 32 GB". No pause status line, `Llama.getState()` sampled
+  every 250 ms said `running` throughout, generation **10 s**, peak
+  **29 064 MB** — chat and Krea side by side with ~3.5 GB to spare. It
+  did not OOM.
+- **Round B, vramOverrideGB 8 -> HANDOFF**, now with honest numbers
+  instead of "cannot verify": "it does not fit beside the chat model
+  (the generation needs ~17.7 GB and the chat model holds ~5.9 GB of the
+  card's 8 GB)". VRAM 9 736 -> **4 004 MB** at the pause, generation
+  14 s peaking 22 372 MB, /free, chat warmed back up to `running`.
+- So the handoff costs what it looks like it costs: the same job is 10 s
+  concurrent and 14 s plus a model reload when it has to pause.
+
+### Two more defects the same run paid for
+
+**1. ComfyUI 0.32 lets go BEFORE the round ends, and the resume waited
+for a drop that had already happened.** The timeline is unambiguous:
+generation peaks at 23 291 MB at t=16.2 s and is back to 3 995 MB at
+t=18.2 s — ten seconds before `resumeIfPaused` runs. That code sampled a
+fresh baseline at that moment and then polled for it to drop a further
+512 MB, which can never occur, so it burned the full 10 s timeout and
+told the user "VRAM did not visibly release within 10 s" on every single
+healthy paused round. Fixed: the pause now remembers the floor the card
+settled at, and the resume asks the absolute question — "are we back at
+that floor?" — which the first poll answers. Also answers the tier plan's
+open question: **POST /free is supported, HTTP 200, ~65 ms, and frees
+0 MB here because there is nothing left to free.**
+
+**2. "Workflow finished but produced no output files (no
+SaveImage/SaveVideo node?)" was blaming the one thing that was not
+wrong.** Hit for real when the probe first came up against a ComfyUI one
+release behind (the electron app's bundled 0.22.2, which does not know
+`CLIPLoader` type `krea2`). ComfyUI **queues** a prompt whose outputs all
+failed validation: `/prompt` answers 200 WITH a `prompt_id` and a
+`node_errors` bag, the run "executes" in 0.01 s, and `/history` reports
+it complete with no error and no outputs. The reason was handed over at
+queue time and thrown away. The error now says what ComfyUI said:
+"ComfyUI dropped every output branch of this workflow when it validated
+it, so nothing was rendered: node 1 (CLIPLoader): Value not in list -
+type: 'krea2' not in [...]".
+
+### Verification
+
+- **Handoff probe: 15/15 verdicts PASS** in the field, both rounds.
+- `tests/test-vram-arbiter.js` 13 -> 22 checks. Its manifest stub now has
+  the SHIPPED shape (file + dir, no sizeMB) and a fake disk it resolves
+  against, plus the missing-weight, `comfyModelsDir`, per-kind-root and
+  wrong-kind cases, and scenario 6 for the resume stall. **Reverted
+  against the old tools.js, five assertions fail** — including "on 32 GB
+  the same job runs CONCURRENT", the `never` refusal losing its numbers,
+  and the resume taking 22 nvidia-smi reads and 18 poll delays instead
+  of 3 and 0.
+- `tests/test-comfy-node-errors.js` is new (5 checks): a fake ComfyUI
+  reproducing the field capture exactly — 200 + prompt_id + node_errors,
+  then a completed history entry with no outputs. **Reverted against the
+  old comfy.js, three of them fail.** The control case (nothing skipped,
+  genuinely no save node) still gets the old message.
+- Full stub sweep: all 56 test files exit 0. Capability report
+  regenerated (no tool changes).
+- **Real-AE harness 517/517 before and after** — nothing AE-side moved,
+  and it proves the pass left AE alone.
+
+### Version
+
+**Patch bumped to 0.10.9.** All three changes are fixes to shipped
+behaviour, not new capability: a promise the panel makes in its own
+settings copy and could not keep, a 10 s stall plus a false alarm on
+every paused round, and an error message that named the wrong cause.
+
+### Notes for whoever runs the next pass
+
+- **The backend matters and this machine has two.** The ComfyUI the
+  electron app ships in `AppData\Local\Programs\ComfyUI\resources\ComfyUI`
+  is **0.22.2** and cannot run KREA2. The one the earlier passes used is
+  **0.32.0**, at
+  `AppData\Local\Comfy-Desktop\ComfyUI-Installs\ComfyUI\ComfyUI`. Launch:
+  `C:\Users\mr\Documents\ComfyUI\.venv\Scripts\python.exe -s <that
+  main.py> --base-directory C:\Users\mr\Documents\ComfyUI --port 8188
+  --listen 127.0.0.1 --disable-auto-launch`. `Comfy.ensureRunning` cannot
+  start either one: it only knows the vendor portable layout, and there
+  is no vendor ComfyUI installed here.
+- **The concurrent decision is a weights-only sum.** Measured tonight,
+  KREA2's peak ran ~1.4 GB above its weights (19.5 vs 18.1 GB) and the
+  tier's 1 GB headroom nearly covered it; the 29 064 MB peak left 3.5 GB
+  on a 32 GB card. That is ONE model at ONE size. A workflow whose
+  activations cost much more than its weights could still overshoot, and
+  nothing here measures that. If a concurrent run ever OOMs in the field,
+  this is the number to grow.
+- The remaining item 7 bullets are unblocked by this pass and none were
+  attempted: the `never` refusal in the field (it now produces real
+  numbers instead of "cannot verify", so it is finally worth testing),
+  the catalog measurements, the 4/6/8/12/16/24 impersonation ladder, and
+  OOM recovery.
+- Machine state: AE left running with no dialog open, harness green
+  behind it. **The ComfyUI this pass started was stopped again** — it was
+  not running when the pass began. llama-server is stopped (the probe
+  stops it on the way out). Probe transcripts and the small test renders
+  are under `logs/handoff-probe*`; they can be deleted.
+- Still open from earlier passes, unchanged and unattempted tonight: the
+  `DroverLord - Window Class` popup; no panel UI for the export tools;
+  no `.webm`/`.webp`; the 8 GB intermediate cap that is still a guess;
+  AE's downsampler never measured against ffmpeg's on real footage;
+  `get-llama.ps1`'s two latent traps (seventh flag);
+  `release-notes.txt` still reads "0.10.0" while the feed now ships
+  0.10.9 (eighteenth flag, remote session's release cut);
+  `comfy_generate` still calls `import_file` rather than 5.8's
+  `import_as_layer`; and 5.9 (.mogrt export) deferred again by its own
+  LAST-item-of-the-night rule — nineteenth pass, at 02:30 local with the
+  loop still running.
+
+## 2026-08-30 (local) - item 7 Tier P4 bullet 3: the refusal nobody can
+## see, and the card that was never there (0.10.10)
+
+Harness green before the pass (517/517), so the item was the top
+unfinished one that is eligible: item 7's third bullet, the pause-
+"never" refusal, measured through the MODEL for the first time. (5.9
+.mogrt still outranks it on paper and still defers itself by its own
+LAST-item-of-the-night rule - twentieth pass, the loop is still
+running.)
+
+### Why this bullet is not the same as the arithmetic
+
+0.10.9 measured the handoff arithmetic on the real card. What it could
+not say is what happens on the ONE generation outcome a user cannot
+check for themselves: a refusal renders nothing, imports nothing, opens
+no dialog and touches no VRAM. The only evidence that reaches a human is
+the sentence the model chooses to write. A model that answers "here's
+your image" is indistinguishable from a working panel until they go
+looking for the file.
+
+So the bullet is now `scripts/chat-probe.js` **step 14**, permanent:
+impersonate an 8 GB card (T3), turn pausing off, ask for a picture.
+
+### What the field run did
+
+Two runs, both PASS, neither with ComfyUI running - the refusal comes
+from the arbiter BEFORE `Comfy.ensureRunning`, which is also why the
+step costs no VRAM and no backend. Chat model was this machine's own
+Qwen2.5-32B-Instruct-Q4_K_M; KREA2's weights measured 18 110 MB.
+
+Three rounds each time, and the interesting half is the first two:
+
+- The model invented a workflow name (`image-to-image`, then
+  `Stable Diffusion` on the second run), took the grounded
+  "Unknown workflow ... Available: AE_LLAMA_H3_I2V_V1,
+  AE_LLAMA_KREA2_V1" error and re-planned onto KREA2 unaided. That is
+  0.9.28's finding reproducing twice more.
+- Then the refusal, and it was relayed: *"The generation requires more
+  VRAM than is currently available. Please pause the chat during
+  generation or stop the chat server and try again."* (Run 1: *"It looks
+  like there isn't enough GPU memory to generate the image while the
+  chat model is running. Please pause the chat during generation..."*)
+  Declined, reason, and the setting to change - all three.
+
+### Defect 1: the refusal quoted a card that does not exist
+
+Run 1's shipped sentence, verbatim:
+
+    the generation needs ~17.7 GB and the chat model holds ~20 GB of
+    the card's 8 GB
+
+A chat model holding 20 GB of an 8 GB card is impossible on its face.
+Both numbers are true and they cannot both be about the same machine:
+the chat figure is MEASURED off the model really loaded (a 32B), and the
+card figure comes from `vramOverrideGB`, which is a fiction by design.
+Only the budget's provenance was missing. `planHandoff` now takes
+`overridden` (the arbiter already had `eff.overridden` in hand) and says
+"of the card's 8 GB **(VRAM override)**". A real 8 GB card's refusal is
+unchanged - asserted, so the annotation cannot leak into the normal
+sentence.
+
+Narrow but shipped: `vramOverrideGB` is a settings field, not a debug
+flag, and this is the sentence anyone who sets it reads.
+
+### Defect 2: the default workflow was the seeder's hash record
+
+Found by the pre-check that measured `genNeedMBFor` before the field run
+- `Comfy.listWorkflows` on the BUNDLE answers:
+
+    .hash-history, AE_LLAMA_H3_I2V_V1, AE_LLAMA_KREA2_V1, example-txt2img
+
+`.hash-history.json` is 0.10.1's append-only record of every template
+version ever shipped. It is a real `.json` in the workflow directory, it
+was offered to the model as a template, and a leading dot sorts FIRST -
+so `comfy_generate`'s default (`list[0]`, which is "whatever the
+alphabet says", per test-comfy-workflow-choice's own note) was the
+record file. A generation that named no workflow ran it as a graph.
+
+Reach: the seeder deliberately never INSTALLS it (test-workflow-seeding
+asserts that), so shipped installs were not hit. What was hit is
+anything pointing at `extension/comfy-workflows` - which is exactly what
+this project's own probes do on purpose (`handoff-probe.js`: "the REPO's
+shipped template, not a stale install copy"). Fixed at the root:
+listWorkflows skips dotfiles, so the next sidecar is covered too.
+
+### One more thing the step needed, and the trap in it
+
+A step can now carry `settings: {...}`, applied for its own sentence and
+restored after. Deliberately NOT `Settings.set`: set() mirrors every key
+to `%APPDATA%\AE-Llama\settings.json`, so a probe that died mid-step
+would leave the OWNER'S panel running on an 8 GB budget with chat
+pausing turned off. `Settings.get()` hands back one cached object every
+tool reads, so patching it in place reaches the whole panel path and
+restoring puts back exactly what was there. Read back after both field
+runs: `vramOverrideGB = 0`, `comfyPauseLlm = auto`.
+
+### Verification
+
+- **Field: 1/1 both runs**, exit 0, transcripts in `logs/`.
+- `tests/test-comfy-workflow-choice.js` +3 checks (the dotfile is not a
+  workflow, and cannot be the default). **Reverted against the old
+  comfy.js, five assertions fail** - including the one that prints
+  `ran: ...\.hash-history.json`, which is the bug stated as evidence.
+- `tests/test-vram-arbiter.js` scenario 3b: the same refusal on an
+  impersonated card names the override, a real card's does not, neither
+  loses its measured numbers. Writing it also exposed a latent
+  test-order bug - scenario 4 was INHERITING its card from whichever
+  scenario ran before it, and silently changed meaning the moment one
+  was inserted above it. It declares its own now.
+- `tests/test-chat-probe.js` +12 checks on step 14's verdict, against
+  the real field capture: no comfy_generate, a generation that
+  SUCCEEDED (the OOM case), a refusal about something else (the arbiter
+  never reached), a refusal with no arithmetic (the 0.10.9 regression),
+  an unlabelled fictional card, a chat model evicted by a job that never
+  started, silence, a hallucinated success, no reason, no setting.
+- Full stub sweep: **56/56 test files exit 0**.
+- **Real-AE harness 517/517 after** (517/517 before) - nothing AE-side
+  moved, and it proves the pass left AE alone.
+
+### Version
+
+**Patch bumped to 0.10.10.** Both changes are fixes to shipped
+behaviour: a user-facing sentence that states an impossibility, and a
+default workflow choice that could run a bookkeeping file as a graph.
+
+### Notes for whoever runs the next pass
+
+- **Step 14 needs no ComfyUI and no GPU work** - it is the cheapest
+  ComfyUI-adjacent step in the probe. Steps 12 and 13 still need a
+  backend, and `Comfy.ensureRunning` still cannot start either ComfyUI
+  on this machine (0.10.9's note stands: the electron app's bundled
+  0.22.2 cannot run KREA2; the working 0.32.0 must be launched by hand).
+- The step asserts THREE things about the model's reply (it declined, a
+  reason, the setting). The 32B cleared all three unprompted on both
+  runs, so no system-prompt rule was needed. If a smaller model ever
+  drops the setting, that is a prompt fix, not a looser check.
+- Remaining item 7 bullets, none attempted: measure the catalog
+  (sd15/sdxl/wan22-5b/minimax-h3 VRAM deltas + honest sizes), the
+  4/6/8/12/16/24 impersonation ladder, and OOM recovery. The ladder is
+  now cheap - step 14 proves the impersonation plumbing works end to
+  end through the model.
+- Machine state: AE left running with no dialog open, harness green
+  behind it. llama-server stopped (the probe stops it on the way out).
+  ComfyUI was never started. Two probe transcripts under `logs/`.
+- Still open from earlier passes, unchanged and unattempted tonight: the
+  `DroverLord - Window Class` popup; no panel UI for the export tools;
+  no `.webm`/`.webp`; the 8 GB intermediate cap that is still a guess;
+  AE's downsampler never measured against ffmpeg's on real footage;
+  `get-llama.ps1`'s two latent traps (eighth flag); `release-notes.txt`
+  still reads "0.10.0" while the feed now ships 0.10.10 (nineteenth
+  flag, remote session's release cut); `comfy_generate` still calls
+  `import_file` rather than 5.8's `import_as_layer`; and 5.9 (.mogrt
+  export) deferred again by its own LAST-item-of-the-night rule -
+  twentieth pass, at 03:10 local with the loop still running.
+
+## 2026-08-30 (local) - item 7 Tier P4 bullet 4: every size in the catalog
+## was wrong, and not one URL was (0.10.11)
+
+Harness green before the pass (517/517), so the item was the top
+unfinished one: item 7's fourth bullet, the catalog measurement. (5.9
+.mogrt still outranks it on paper and still defers itself by its own
+LAST-item-of-the-night rule - twenty-first pass, the loop is still
+running.)
+
+The bullet asks for three things: honest sizes, live URLs, and a real
+VRAM delta per model. Two of the three need no GPU, no generation and
+not one byte of the weights downloaded - and those two are the ones the
+remote session could never do, because HuggingFace is unreachable from
+there. They are done. The third is not, and the reason is written into
+the workplan rather than guessed at here.
+
+### The probe
+
+`scripts/catalog-probe.js`, permanent, reads-only. It loads the REAL
+panel stack (version.js + settings.js + tiers.js + setup.js) and, for
+every URL in both catalogs:
+
+- HEADs it. HuggingFace answers `resolve/main/...` with a 302 whose
+  headers carry **`x-linked-size`** - the exact byte count of the file
+  the download would have fetched, without fetching it. That is the
+  whole trick; the CDN URL behind the redirect does NOT carry it.
+- looks the same file up on this machine's own model roots (settings'
+  comfyModelRoots + comfyDir + Setup.findComfyInstall + the Desktop
+  app's ComfyUI-Shared store). Eight of the fourteen files are already
+  here, and a stat beats a network header.
+
+### Finding 1: no URL is dead. All twelve answered.
+
+Worth stating plainly because the bullet expected the opposite ("they
+are training-quoted"). Every `resolve/main/` path in both catalogs is
+still valid: 4 chat GGUFs on bartowski, sd15 on Comfy-Org's archive,
+sdxl on stabilityai, 3 Wan 2.2 files, 4 H3 files and the int8 encoder.
+Nothing to correct.
+
+### Finding 2: every size was wrong, and the reason was a UNIT
+
+The catalog was counting in DECIMAL MB. Everything downstream of it
+counts in MiB: nvidia-smi reports MiB, `tools.js modelFileMB` divides by
+1048576, `planHandoff` multiplies vramGB by 1024, and Windows labels GiB
+"GB" in its own Explorer. So every file was overstated by ~4.9%:
+
+    Qwen2.5-32B   19900 -> 18932 MiB   (19851336576 B)
+    Qwen2.5-14B    9000 ->  8572 MiB    (8988110976 B)
+    Qwen2.5-7B     4700 ->  4466 MiB    (4683074240 B)
+    Llama-3.2-3B   2100 ->  1926 MiB    (2019377696 B)  9.0% off - the
+                                        decimal number was wrong too
+    sd15           2132 ->  2034 MiB
+    sdxl           6939 ->  6617 MiB
+    wan22 diff     9700 ->  9536 MiB   (1.7% off - a wrong guess, not
+                                        the unit)
+    wan22 umt5     6400 ->  6424 MiB   (0.4% - the only near-right one)
+    wan22 vae      1400 ->  1344 MiB
+
+The four MiniMax H3 numbers (19999 / 14960 / 4967 / 577) were EXACT to
+the byte. They came from the real manifest when 2d adapted the template;
+everything else came from training. One field, two provenances, no label
+- which is how it went unnoticed.
+
+The consequence was not theoretical. `main.js` drew the model dropdown
+with `sizeMB / 1000` and `setup.js` wrote its download status line with
+`sizeMB / 1024`, so the same file was quoted two different sizes in the
+same window, and `setup.js`'s progress-bar fallback
+(`sizeMB * 1048576`, used whenever the server sends no Content-Length)
+set a total 5% larger than the file - a bar that stops at 95% and never
+finishes. With the data in MiB both are now right; main.js's /1000 is
+fixed to /1024 and the divergence is a test.
+
+### Finding 3: two entry totals disagreed with their own parts
+
+`wan22-5b` said 17000 while its three urls summed to 17500; `minimax-h3`
+said 40543 against 40503. The entry total is the only figure a user sees
+before agreeing to a multi-gigabyte download, so a total that does not
+match its own file list is a bug on its own terms. Both are now the sum
+(17304 / 40503, in MiB), and the sum is asserted for every entry.
+
+### Verification
+
+- **Field: catalog-probe 0 failures** after the fix, 9 before (the
+  transcript of both runs is in `logs/catalog-probe-*.md`).
+- `tests/test-model-catalog.js` 17 -> 88 checks, built on the byte counts the
+  network actually reported that day - the field capture replayed as a
+  stub, the same shape as 0.10.8's SysShadow capture. Reverted against
+  the old version.js/main.js, **12 assertions fail**, including
+  `main.js: no decimal-MB arithmetic on sizeMB (found sizeMB / 1000)`.
+  That last one is a source scan, so the NEXT consumer that assumes
+  decimal fails CI without needing the network.
+- Also asserted: a chat model's URL filename is the name it is saved
+  under (the downloader looks it up by `model.name`), every url entry
+  names its models/ subfolder, and an entry with nothing to download
+  quotes no total.
+- Full stub sweep: **56/56 test files exit 0**.
+- **Real-AE harness 517/517 after** (517/517 before) - nothing AE-side
+  moved, and it proves the pass left AE alone.
+
+### Version
+
+**Patch bumped to 0.10.11.** Shipped, user-facing numbers: the size on
+every download button, the download progress bar's fallback total, and
+the disk the user is asked to give up.
+
+### Notes for whoever runs the next pass
+
+- **The VRAM half of this bullet is a pass PER MODEL, not one pass.** It
+  needs the weights (sd15 2.0 GB, sdxl 6.5 GB - already on this disk at
+  `ComfyUI-Shared\models\checkpoints` - wan22 17.3 GB of which the umt5
+  encoder is already here, H3 39.6 GB already here), a per-model
+  workflow template (the panel ships only KREA2 and H3 i2v, so sd15/
+  sdxl/wan22 have no graph to run), and a ComfyUI started by hand.
+  `catalog-probe.js --no-net` prints exactly which files are already
+  local, so the download list is one command away.
+- `catalog-probe.js` is NOT wired into CI on purpose - it hits the
+  network and HF rate-limits unauthenticated requests (3000 per 5 min
+  window, per its own `ratelimit` header). The offline half of what it
+  proves lives in test-model-catalog.js, which CI does run.
+- The `measured` flag stays FALSE on every COMFY_CATALOG entry. It is
+  about the VRAM figure, not the file size; version.js now says so.
+- If the update feed ever ships a `modelCatalog`/`comfyCatalog`
+  override, it inherits the MiB convention silently - nothing validates
+  a hosted catalog's units. Small future guard, not built tonight.
+- Machine state: AE left running with no dialog open, harness green
+  behind it. llama-server and ComfyUI were never started - this pass
+  needed neither. Two probe transcripts under `logs/`.
+- Still open from earlier passes, unchanged and unattempted tonight: the
+  `DroverLord - Window Class` popup; no panel UI for the export tools;
+  no `.webm`/`.webp`; the 8 GB intermediate cap that is still a guess;
+  AE's downsampler never measured against ffmpeg's on real footage;
+  `get-llama.ps1`'s two latent traps (ninth flag); `release-notes.txt`
+  still reads "0.10.0" while the feed now ships 0.10.11 (twentieth flag,
+  remote session's release cut); `comfy_generate` still calls
+  `import_file` rather than 5.8's `import_as_layer`; and 5.9 (.mogrt
+  export) deferred again by its own LAST-item-of-the-night rule -
+  twenty-first pass, at 03:35 local with the loop still running.
+
+## 2026-08-30 (local) - item 5.9: the template After Effects wrote and
+## then said it had not
+
+Harness green on arrival (517/517), so item 1 was satisfied and the pass
+took the top unfinished workplan item. That is 5.9, and it has been the
+top unfinished item for twenty-two passes.
+
+### First: a whole pass that happened and was never committed
+
+Before writing any code this pass went looking for prior art and found
+`logs/entry59.md` - a complete, dated, well-written entry for a **5.9
+PROBE pass that ran in real AE on 2026-08-29**, with eight probe scripts
+and their transcripts beside it. It is not in WORKPLAN-LOG.md. There is
+no commit for it (`git log` goes straight from 0.10.8 to whisper Pass A),
+and `logs/` is gitignored. So the pass ran, measured thirteen facts,
+claimed to have written them into WORKPLAN.md as a build spec - and every
+word of it died with the process. The next six passes each re-read the
+log, saw 5.9 deferred, and deferred it again.
+
+The lesson is small and worth acting on: **a pass's entry belongs in
+`docs/WORKPLAN-LOG.md` from the first keystroke, not in `logs/`**, which
+is exactly the directory git is told to forget. This entry was written
+there too, then committed; the next pass should skip the middle step.
+
+The probe's measurements are recovered and folded in below, with two of
+them corrected - see "what the probe got wrong".
+
+### The answer: yes, headless, with four conditions
+
+`exportAsMotionGraphicsTemplate` runs from a `-r` session with no viewer
+and no human: measured repeatedly today at 3.6-5.4 s, returning `true`
+and leaving a real `.mogrt`, which is a ZIP (`50 4B 03 04`, confirmed by
+reading the first four bytes). It needs the project **SAVED and CLEAN**,
+a **FOLDER** path, a template name Windows will accept, and
+`app.beginSuppressDialogs()`.
+
+### The finding the item exists for
+
+**A cancelled export returns `true` and writes nothing.** Any comp
+holding a text layer whose font is not installed raises "The following 1
+fonts were not synced from Adobe... Click OK to continue. Click Cancel to
+stop the export", and answering it with anything but OK stops the export
+while the call still answers `true` - four times running, with an empty
+folder. The only tell is the clock: ~1.5 s against ~4.6 s.
+
+So `true` is not evidence. `export_mogrt` stats the file, the way
+`snapshot_frame` reads the PNG's own IHDR instead of repeating the comp's
+dimensions, and `beginSuppressDialogs` is REQUIRED rather than defensive:
+the same text comp exported whole (28 577 b) inside it.
+
+### The bug this pass's own field run found, twice
+
+The first field run reported `{"ok":false,"error":"Object is invalid"}`
+for three exports - and all three files were sitting on the disk. An
+instrumented copy of the tool pinned it: the tool ran to the last line
+and died on `proj.file.fsName`. **A successful export invalidates the
+held `app.project` reference as well as the CompItem.** Nobody had
+measured that; entry59 had only the CompItem half.
+
+Which is the same class of failure as the one the tool exists to
+prevent - a report that disagrees with the disk - arriving from the
+opposite direction. Both halves are now closed: everything the result
+needs is read BEFORE the call, and a THROW is checked against the folder
+too, because a template that is on the disk is on the disk whatever AE
+said on the way out.
+
+### What the 2026-08-29 probe got wrong, and how
+
+- **"AE strips the SPACES out of the template name."** It does not. It
+  writes the name verbatim: `P60 Brand Card` -> `P60 Brand Card.mogrt`,
+  confirmed from outside AE with `Get-ChildItem`. Two things produced
+  that conclusion. The probe's stage E set the name to
+  `"AELLProbeTemplate"` - a string that never had spaces - and compared
+  it against stage A's `"AELL Probe Template"`. And `File.name` is
+  URI-ENCODED, so the same file reads back as
+  `P60%20Brand%20Card.mogrt`; only `displayName` is a name a user can
+  open. The first version of this tool believed the probe, guessed
+  `name.replace(/\s+/g, "")` for the file, and its overwrite check
+  therefore looked for a file that was never there - so AE threw "already
+  exists" instead.
+- **"Controller index 1 is the newest."** True, and it survived. But the
+  first version of `AELL_mogrtFound` also had a fallback that said "if
+  the folder holds exactly one .mogrt, that must be the one we wrote" -
+  which handed back a file an earlier export had written, in a tool whose
+  entire reason for existing is that AE reports success without writing
+  anything. Removed. Only two things count as evidence now: a `.mogrt`
+  that was not there before, or one whose size or modified stamp moved.
+
+### The rest of the measured facts, all of them in the tools
+
+**Exposing:**
+- `canAddToMotionGraphicsTemplate` is false for a GROUP (Transform, a
+  shape layer's Contents, and the effect row above a Slider all answer
+  false), false for a Layer Control, and false once the property is
+  already a controller - after which `addToMotionGraphicsTemplate`
+  returns `undefined`, not `false`. Slider, Color, Checkbox, Angle, Point
+  and Dropdown controls all work, as do Position, Scale, Rotation,
+  Opacity, Source Text, and keyframed or expression-driven properties.
+- **The default controller name is not the property's name.** It is the
+  LAYER's name for a transform or text property and the EFFECT's name for
+  an effect parameter - measured again today: exposing `opacity` on a
+  layer called "P60 BG" produced a controller called "P60 BG Opacity",
+  and exposing the Slider produced "Slider Control". Two properties of
+  one layer therefore become two controllers with confusingly similar
+  names unless a label is passed, so the tool reads back what AE actually
+  called it and says so.
+- AE accepts **duplicate** controller names in silence (two called "Wipe
+  Amount", measured), so a duplicate is reported.
+- Indices are **newest-first** and renumber on every add; reading out of
+  range answers the string `"undefined"` and a negative index throws.
+  `setMotionGraphicsTemplateControllerName` **does not exist** on AE
+  2026, so there is no rename and no remove - the tool says so rather
+  than letting the model try.
+- `textDocument.isSubstitute` does not exist either, which matters
+  because THIS ITEM'S OWN SPEC said to pre-clean with it.
+
+**Exporting:**
+- Unsaved project -> "The project needs to be saved first". Saved but
+  DIRTY -> `false` in ~390 ms, silently, nothing written. A SUCCESSFUL
+  export dirties the project, so a second one with no save between is a
+  silent failure - which is why `{save: true}` exists and why the success
+  result warns about it. The tool never saves the user's project without
+  that flag.
+- The path is a **FOLDER**, and AE `mkdir -p`s whatever it is handed,
+  including for calls that then fail: the 08-29 probe left four empty
+  directories named `probe-e1.mogrt`, `nope-does-not-exist` and so on. So
+  a missing folder is refused here (naming the deepest one that does
+  exist) rather than created and failed into, and a path ending `.mogrt`
+  has its basename read off as the template name instead of becoming a
+  directory. Verified today: `.../mogrt60/P60 Lower Third.mogrt` produced
+  the FILE `P60 Lower Third.mogrt` and no directory.
+- A template name holding `\ / : * ? " < > |` exports for 3.7 s, returns
+  false and writes nothing - refused before the clock starts.
+- Zero controllers -> false in ~340 ms.
+- `overwrite=false` onto an existing file THROWS; the tool refuses first,
+  quoting the existing file's byte count, so AE is never asked.
+- Setting the template name to `""` resets it to "Untitled", so the
+  tool falls back to the COMP's name rather than shipping a file called
+  Untitled.mogrt.
+- A `File` or `Folder` OBJECT throws; the path must be a string.
+
+### Verification
+
+- **Field, through the shipped `AELL_call` path**, three runs: six
+  refusals that never reach AE, then a real export (11 669 b), a correct
+  overwrite refusal, an overwrite that replaced it (11 822 b, 3.6 s,
+  `replaced: true`), and the `.mogrt`-path case. First bytes of the
+  output: `50-4B-03-04`.
+- **`tests/test-mogrt.js`: 95 checks**, all fifteen measured facts
+  encoded in the stub. Reverting the one-line `proj.file` fix makes it
+  fail loudly, which is the bug the field found.
+- Full stub sweep: **57/57 test files exit 0**.
+- **Real-AE harness 517/517 after** (517/517 before). No suite steps were
+  added - that is LOCK-IN, and it is blocked on the harness triage
+  learning three progress dialogs (see the workplan).
+- `docs/CAPABILITIES.md` regenerated, curated half updated.
+
+### No version bump
+
+Feature track: new tools ride the next MINOR, which is the remote
+session's. Nothing shipped behaves differently.
+
+### Notes for whoever runs the next pass
+
+- **Machine state changed, deliberately.** The open project is now SAVED
+  at `logs\mogrt60\P60-scratch.aep` (it was "Untitled Project.aep *").
+  The export cannot be exercised any other way. It holds only agent
+  debris - 262 items, the same count as before this pass, since the three
+  solid sources the field runs left were swept - and the harness is green
+  with it. `logs/` is gitignored, so none of it is committed.
+- **5.9 LOCK-IN is a pass on its own** and it needs the harness triage
+  taught first, or the suite will cancel its own exports.
+- `expose_property` is registered as MUTATING (an ordinary project edit);
+  `export_mogrt` is in `AELL_NO_UNDO_GROUP` for render_comp's second
+  reason - it writes a file and may save the project, and a save inside
+  an open undo group is the one thing it must never do.
+- Still open from earlier passes, unchanged and unattempted tonight: the
+  `DroverLord - Window Class` popup; item 7's VRAM half (a pass per
+  model, ~36 GB of weights); the tier impersonation ladder; OOM recovery;
+  no panel UI for the export tools; no `.webm`/`.webp`; the 8 GB
+  intermediate cap that is still a guess; `get-llama.ps1`'s two latent
+  traps (tenth flag); and `comfy_generate` still calls `import_file`
+  rather than 5.8's `import_as_layer`.
+- **One flag can stop being repeated.** Six entries running have said
+  "`release-notes.txt` still reads 0.10.0 while the feed ships 0.10.x".
+  It does not: it reads `0.10: text animators, ...` and has since
+  788e799 made it MINOR-scoped precisely so patch feeds cannot age it.
+  The flag was already answered when it was first re-filed. Checked, not
+  copied forward.
+
+## 2026-08-30 (local) - item 5.9 LOCK-IN: the five windows After Effects
+## puts up while it works, every one of which read as a modal
+
+Harness green on arrival (517/517), so item 1 was satisfied and the pass
+took the top unfinished item. That is 5.9's LOCK-IN, whose own text named
+its blocker: "the export raises three progress dialogs that are not
+errors... Either the suite stays off the export path or the triage learns
+those three titles first."
+
+Both halves are now done. The triage learned them - from a capture, not
+from that sentence - and the suite covers what it can safely reach.
+
+### The measurement: watch the windows while a real export runs
+
+`logs/mogrt-lockin/watch.ps1` lifts the harness's OWN Win32 probe out of
+`run-ae-selftest.ps1` (regex over the `$win32` here-string, then
+`Add-Type`) so the capture is exactly what the harness would see, and
+polls `FindDialog` + `HarvestDialogText` every 150-200 ms while a `-r`
+script builds a mogrt rig and exports it. Two runs, the second with the
+save split out into its own timestamped step so every window could be
+attributed to the call that raised it.
+
+**Five windows, not three.** All `#32770`, all with a real TITLE and one
+`OS_ViewContainer` child, none lasting a whole second:
+
+| window | raised by | measured |
+|---|---|---|
+| `Save Project` | `app.project.save()` | ~550 ms, confirmed alone with a save-only script |
+| `Open Project` | **the export** | ~200 ms |
+| `Creating Motion Graphics Template` | the export | ~550 ms |
+| `Verifying Adobe Fonts...` | the export | ~200 ms |
+| `Exporting Motion Graphics Template` | the export | ~170 ms |
+
+`Save Project` is not the export's, which matters because it belongs to
+**any** tool that saves. And `Open Project` is the visible half of the bug
+the BUILD pass found from the inside: **After Effects reopens the project
+while exporting a template**, which is why a successful export invalidates
+the held `app.project` reference and not just the CompItem. That was
+inferred from a crash last time; this pass watched it happen.
+
+**Every one of them read as `blocked`.** The watcher printed the verdict
+beside each sample and it is in the transcripts. `blocked` gives up after
+three consecutive polls, and the harness polls every 2 s, so five progress
+windows across a five-second export is three blocked samples in a row on
+a suite that is working perfectly. That is the exit 4 the item was
+avoiding, and it was never about the export path alone - a save is enough.
+
+### The fix: a verdict for "AE is working", with a clock on it
+
+`Get-AellProgressTitles` lists the six measured titles (the five above
+plus `Executing Script`), matched as a PREFIX because AE appends to them -
+the script one carries the file name, the font one an ellipsis. A block is
+a progress window only when EVERY word it says is one of those; a popup
+that names itself `Verifying Adobe Fonts...` and then says something else
+is a popup that said something else.
+
+Two verdicts, not one, and the split is the whole design:
+
+- `running` - AE's script window is up. Proof OUR script is alive.
+  Patience 0: a run is never given up on while that is true.
+- `progress` - only AE's own other work is visible. Patience **15 polls
+  (~30 s)**.
+
+The clock exists because of the one thing the probe layer cannot see. The
+font ALERT an export raises ("The following 1 fonts were not synced...
+Click OK to continue. Click Cancel to stop the export") is a QUESTION, and
+`GetWindowText` returns EMPTY for another process's child controls - so
+from the probe's side it is indistinguishable from the progress window of
+the same name. Declaring these titles benign-forever would have handed an
+unattended run a dialog that waits for a human who is asleep. 30 s is far
+past every progress window measured here and far short of the 240 s
+timeout.
+
+The EVIDENCE layer can tell them apart, and does: it reads children with
+`WM_GETTEXT`, so the alert's sentence arrives as a line of its own and
+lands in `unknown` while the title is recognised. `Get-AellHarvestClass`
+therefore labels a bare progress window benign and still headlines the
+alert wearing the same title as UNRECOGNIZED. That asymmetry between the
+two layers is deliberate and is now written down in both of them.
+
+`running` outranking `progress` costs one thing - a run wedged INSIDE an
+export reports as "still executing" at the timeout rather than stopping at
+6 s - so the wait state now remembers `WorkingText` and the timeout names
+the last window AE put up, with the font question called out by name.
+
+The pre-launch answerer needed no change and gets none: `WM_CLOSE` on the
+font window is CANCEL, and a cancelled export answers `true` and writes
+nothing. These windows all have titles, so the wordless rail already
+refused them - three new stale-plan cases pin that, and the reason string
+now says `verdict is 'progress'` instead of guessing.
+
+### The suite: 14 steps, and the one that cannot exist
+
+`expose_property` is covered end to end (AE's default controller name is
+the LAYER's, a label is verbatim, a duplicate name is reported, a GROUP is
+refused with the leaf list, a second copy is refused with the roster) and
+`export_mogrt` by its whole refusal wall: no folder, a relative folder, a
+missing folder, a name Windows will not take, a comp with no controllers,
+and an unsaved project.
+
+**The export itself is not a step, and that is a decision.** AE exports
+only from a project that is SAVED and CLEAN, and by then the suite has
+created a dozen comps in whatever project the user has open - so the only
+route to the export is saving the user's project, which the suite may
+never do. Same shape as `clean_project` and `organize_project`: the
+positive path is verified by hand in real AE (this pass: two more real
+exports, 11 335 b and 11 305 b, 4.3 s and 2.5 s) and the suite holds the
+wall. The wall is worth as much as the export anyway - AE answers `true`
+and writes nothing for most of what is on it.
+
+So the triage work is not made pointless by that decision: it is what
+makes an export safe to run AT ALL while the harness is watching, and
+`Save Project` alone would have tripped the old rules on any future step
+that saves.
+
+### Verification
+
+- **Real-AE harness 531/531**, twice, back to back (517/517 before; +14).
+  Every one of the new steps passes against real After Effects.
+- `tests/test-selftest-runner.js`: the two captured export timelines
+  replayed poll by poll (never stops), a progress window that never leaves
+  (stops at poll 15), the font alert's harvest (UNRECOGNIZED by its
+  sentence, not by its title), and each of the five windows as its own
+  verdict case.
+- `tests/test-self-test.js`: the canned host grew a faithful Essential
+  Graphics model - the refusal chain in the real order, the layer-name
+  default, duplicate names accepted in silence - and 531/531 on the happy
+  path with all 75 refusal steps failing against a permissive host.
+- Full stub sweep: **57/57 test files exit 0**.
+- `docs/CAPABILITIES.md` regenerated. Its computed gap list now reads
+  **"Host tools never exercised by the self-test suite: none"** and is
+  true for the first time since the mogrt tools landed. The curated half
+  also had the BUILD pass's correction to make: it still said the file
+  name has "its spaces stripped", which AE does not do.
+
+### No version bump
+
+Feature track: 5.9's tools ride the next MINOR, which is the remote
+session's. Nothing that ships behaves differently - the triage is harness
+machinery, and suite steps are coverage.
+
+### Filed for the next pass, measured tonight
+
+**The suite leaks 34 project items per run, into the user's project.**
+Counted before and after one harness run on the scratch project: 313 ->
+347, all of it `Null` (162 -> 180) and `Audio Amplitude` (144 -> 160)
+FOOTAGE sources. The suite's own cleanup sweeps the `ST ` namespace, and
+these are named by AE, not by the suite - `audio_to_keyframes` never
+uniques its null's name (measured 2026-08-28) and a null layer's source
+outlives the comp that held it, which is the same class of leak the `ST `
+sweep was built for. It reaches real users: anyone pressing Settings ->
+"Run self-test" leaves ~34 orphan sources in their project every time.
+Small, well-defined, and its own pass.
+
+### Notes for whoever runs the next pass
+
+- Machine state: the scratch project `logs\mogrt60\P60-scratch.aep` is
+  still the open one and was SAVED twice by this pass's probes (the export
+  cannot be exercised any other way). The two probe comps and their two
+  solid sources were swept; the 347 items are the leak above.
+- Probe scripts and transcripts are in `logs\mogrt-lockin\` (gitignored).
+  `watch.ps1` is reusable for any "what does AE put on screen while X
+  runs" question - it borrows the harness's own probe rather than a copy.
+- Still open from earlier passes, unattempted tonight: the `DroverLord -
+  Window Class` popup; item 7's VRAM half; the tier impersonation ladder;
+  OOM recovery; no panel UI for the export tools; no `.webm`/`.webp`; the
+  8 GB intermediate cap that is still a guess; `get-llama.ps1`'s two
+  latent traps; and `comfy_generate` still calls `import_file` rather than
+  5.8's `import_as_layer`.
+
+## 2026-08-30 (local) - item 3: the 34 items every self-test run left in
+## somebody else's project (0.10.12)
+
+Harness green on arrival (531/531), so item 1 was satisfied and the pass
+took the top unfinished item: the leak the PREVIOUS pass measured and
+filed. It is fixed, and the field numbers are 364 items before a run and
+364 after, twice.
+
+### What was actually leaking, counted
+
+A census of the open project (`logs\leak-probe\p1.jsx` - a plain
+ExtendScript walk of `app.project`, classifying every item and its
+`mainSource`) found **364 items, 357 of them orphan SOLID sources**:
+
+| name | count | source |
+|---|---|---|
+| `Null 1` .. `Null 189` | 189 | every `add_null`; AE uniques the name |
+| `Audio Amplitude` | 168 | every `audio_to_keyframes`; AE does NOT unique it |
+
+Both are SolidSources. That is the whole leak: a null layer's SOURCE is a
+project item, and deleting the comp that held the layer does not delete
+it. The suite deletes its comps and its `ST `-named solids, and every run
+walked away from ~34 items named by After Effects.
+
+### Why eleven versions of a cleanup never saw it
+
+The last step of the suite has always been *"nothing of the suite's
+remains in the project"*, and it read:
+
+    if (d.items[i].name.indexOf("ST ") === 0) stale.push(...)
+
+**That assertion was TRUE on every single leaking run.** Not one of the
+34 items is called `ST ` anything - they are called what AE calls them.
+The sweep and the check shared one assumption, so the check could only
+ever confirm the sweep's own blind spot. This is the second time in this
+project a namespace sweep has been outflanked from outside the prefix.
+
+### The fix: identity, not names
+
+Names cannot decide this. `Null 1` is a name a real user's project will
+hold, and deleting it would be far worse than leaking one. So the run now
+answers a different question - *did THIS run make it?* - which needs a
+before-picture:
+
+- **New first step**, ahead of `create_comp`: `get_project_info
+  {limit: 0}` into `ctx.baseIds`, a set of item IDs. It also asserts
+  `items.length === numItems`, because a capped baseline would make the
+  sweep delete items it never created - that is a guard on the cleanup,
+  not a spare check.
+- **The sweep** takes footage that is (1) absent from the baseline - this
+  run's, whatever AE named it - or (2) in the `ST ` namespace, the old
+  rule, kept because it still reaches leftovers from an earlier run that
+  died before its own cleanup and are therefore IN the baseline.
+- **Footage only, deliberately.** The one non-footage item a run can add
+  is AE's own `Solids` FOLDER, which AE creates on demand and which the
+  user's next solid will want.
+- **The final assertion** now counts against the baseline as well as the
+  prefix, and names what it found (`Null 1 (#20001), ...`). The step that
+  could not fail can now fail.
+
+### Verification
+
+- **Real-AE harness 532/532, twice** (531/531 before; +1, the baseline
+  step). Census run between them: **364 items before, 364 after, item for
+  item identical** - `diff` of the two censuses is empty. Same again
+  after the second run.
+- **The 357 orphans already in that project were left alone**, which is
+  the real-AE proof of the half that matters more than the sweep: 189
+  items called `Null <n>` and 168 called `Audio Amplitude` sat in the
+  baseline through two runs of a cleanup that deletes items by exactly
+  those names when it made them. A name-based fix would have destroyed
+  them.
+- `tests/test-self-test.js`: the canned host now LEAKS the way AE does -
+  every `add_null` pushes a `Null <n>` solid source, every
+  `audio_to_keyframes` an `Audio Amplitude` one (not uniqued, faithfully),
+  and both survive a comp delete. Reverting the sweep to the name-only
+  rule fails the run with *"16 footage item(s) the run created are still
+  in the project, under names the ST sweep cannot see"*. Two seeded
+  USER decoys named `Null 1` and `Audio Amplitude` pin the other half:
+  a sweep rewritten to match those names fails with *"the user's own
+  'Null 1' survives the sweep"*. Both failure modes were run and seen.
+- Full stub sweep: **57/57 test files exit 0**. `docs/CAPABILITIES.md`
+  regenerated (`get_project_info` 14 -> 15 suite steps).
+
+One stub trap paid for on the way: the leaked ids were seeded at 5000,
+which is where the canned host's `nextFolderId` starts, so a leaked solid
+and a folder shared an id and `delete_item` deleted the folder instead.
+It surfaced as `ST ORG Nest` surviving cleanup. Leaked ids now start at
+20000.
+
+### Version: PATCH bumped to 0.10.12
+
+This is a fix to SHIPPED behaviour, not a feature: anyone pressing
+Settings -> "Run self-test" was leaving ~34 orphan sources in their own
+project, every time.
+
+### Notes for whoever runs the next pass
+
+- Machine state: the open project is still `logs\mogrt60\P60-scratch.aep`
+  with its 364 items. The 357 orphans are earlier passes' debris and are
+  deliberately NOT cleaned - they are now the field's own decoy set, and
+  any future pass that touches the cleanup should re-run
+  `logs\leak-probe\p1.jsx` before and after and diff the two.
+- Still open from earlier passes, unattempted tonight: the `DroverLord -
+  Window Class` popup; item 7's VRAM half (needs ~36 GB of weights not on
+  this disk), the tier impersonation ladder and OOM recovery; no panel UI
+  for the mogrt export tools; no `.webm`/`.webp`; the 8 GB intermediate
+  cap that is still a guess; `get-llama.ps1`'s two latent traps; and
+  `comfy_generate` still calls `import_file` rather than 5.8's
+  `import_as_layer`.
+
+## 2026-08-30 (local) - item 7: the tier impersonation ladder, and the
+## model root nobody declares (0.10.13)
+
+Harness green on arrival (532/532), so item 1 was satisfied and the pass
+took the top unfinished item: item 7's tier impersonation ladder. Items
+2-6 are closed; item 7's other open bullets are the VRAM delta (still
+blocked on ~36 GB of weights not on this disk) and OOM recovery.
+
+### What was built
+
+`scripts/tier-ladder-probe.js` walks every budget a user can type -
+4/6/8/12/16/24/32, plus the card's own number - against real nvidia-smi,
+a real llama-server and the weights really on this disk, and asks the
+three questions the bullet asks: does the budget produce the matching
+tier line, the matching catalog picks, and a handoff (or refusal)
+consistent with planHandoff. Nothing in it is arithmetic the probe
+supplies.
+
+The point is that it asserts INVARIANTS rather than printing a table for
+a human to read: 176 of them per run, including the ones no single-tier
+spot check can see - the chat pick is the LARGEST that fits and never
+shrinks as the budget grows; a demoted pick (experimental, or a
+mode-change slow at this size) only wins when nothing solid fits its
+kind; `never` is `auto` with the pause taken away, so it may only ever
+answer what auto answered or refuse; a mandatory tier never shares the
+card; and the sentence a user reads labels an impersonated budget,
+because only one of its two numbers is measured.
+
+One refactor paid for it: the decision half of `VramArbiter.ensureFor`
+is now `VramArbiter.planFor`, because the other half kills llama-server
+and every probe of the decision surface used to cost a model reload.
+
+### The ladder was green. What it found was a rung's INPUT.
+
+All 176 invariants held, on the owner's real 32B chat model and again on
+the 7B - the second run is the one that reaches the `concurrent` branch
+at all, and it puts the crossover exactly where the arithmetic does:
+6002 + 18110 + 1024 = 25136 MB, so KREA2 runs beside the 7B at 32 GB and
+hands off at 24, **560 MB short**.
+
+What the table showed instead was a column that read `?`:
+
+    | budget | workflow           | need MB | auto    | always  | never  |
+    | any    | AE_LLAMA_H3_I2V_V1 |    ?    | handoff | handoff | refuse |
+
+**The panel could not price the H3 i2v template on the machine that has
+already rendered with it** (2026-08-27, 12 s, VRAM peak 28.4 GB). All
+four of its weights are on this disk - and all four are in
+`%LOCALAPPDATA%\Comfy-Desktop\ComfyUI-Shared\models`, the Desktop app's
+shared auto-download store, where its downloader puts weights fetched
+from a workflow's embedded URLs. `comfyModelRoots` knew four roots and
+not that one, so `genNeedMBFor` returned null, and null means "the fit
+cannot be verified": chat paused for every H3 generation, and pause
+`never` refused the generation outright with a sentence carrying no
+numbers.
+
+This is 0.10.9's bug arriving from outside the manifest. That pass fixed
+"no shipped manifest carries a sizeMB" by measuring the weights on disk;
+this one fixes "the panel looks in fewer places than ComfyUI does".
+COMFY_TIERS_PLAN has said since 2026-08-25 that the matcher's root list
+is Documents + code install + ComfyUI-Shared + extra_model_paths roots.
+Two of the four were never implemented in `tools.js`.
+
+### The fix, and its second half
+
+`comfyModelRoots` gained the shared store, and `configuredModelRoots` +
+`parseComfyPathsYaml` gained the roots a ComfyUI CONFIG FILE declares -
+`extra_model_paths.yaml` next to main.py, and the Desktop app's
+`%APPDATA%\ComfyUI\extra_models_config.yaml`, which uses the same format.
+A user who moved their models to another drive told ComfyUI, not this
+panel, and had no reason to say it twice.
+
+Deliberately a narrow reader, not a YAML parser: top-level sections,
+`base_path`, per-kind keys, and `|` blocks. Two things measured off the
+real file on this machine shaped it - the Desktop app writes `base_path`
+**after** the keys it resolves, so a section's keys are held and resolved
+when the section ENDS; and it names the whole tree `download_model_base`
+rather than per-kind, which is a null-kind root. `custom_nodes` and
+`is_default` are skipped: they are not model dirs. Anything the reader
+does not understand it skips, and a root that does not exist costs
+nothing, because the caller asks the filesystem.
+
+Roots are also deduplicated now: on this machine the Desktop config
+declares the same tree `comfyDir` already names, so the list held
+`Documents\ComfyUI\models` twice.
+
+### Verification
+
+- **The ladder, twice, green**: 176/176 with the owner's configured 32B
+  chat model, and 176/176 with the 7B. Transcripts in `logs/`.
+- **The H3 bill is now 40503 MB**, which is exactly what
+  `catalog-probe.js` measured from HuggingFace's `x-linked-size` on
+  2026-08-30 for the `minimax-h3` catalog entry. Four files found through
+  a new root summing to the byte count a different probe got from the
+  network is as good a cross-check as this pass could ask for.
+- **Real-AE harness 532/532** after the change (532/532 before; the
+  arbiter is panel-side and adds no suite steps).
+- `tests/test-tier-ladder.js` (NEW): the same ladder invariants over the
+  shipped catalogs with the hardware stubbed, so a rung that stops making
+  sense fails CI on a machine with no GPU. Includes the crossover, the
+  Blackwell gate under a 32 GB budget on pre-Ada silicon, and the
+  unprovable-bill rule at seven budgets.
+- `tests/test-vram-arbiter.js`: five checks pin the roots. Reverting the
+  fix fails two of them by name ("weights only in the Desktop app's
+  shared store are found", "extra_model_paths.yaml roots resolve") - both
+  failure modes were run and seen.
+- Full stub sweep: **58/58 test files exit 0**. `capability-report.js`
+  regenerated: no change, the pass ships no new tool.
+
+### Version: PATCH bumped to 0.10.13
+
+A fix to SHIPPED behaviour, not a feature. A ComfyUI Desktop user - the
+install kind whose downloader puts weights in that store by default - had
+every generation priced at null: chat paused when it did not need to, and
+every generation refused outright if they had turned pausing off.
+
+### Filed for a later pass, measured tonight
+
+**The weight bill is not the VRAM footprint, and H3 is the proof.** The
+panel now prices H3 i2v at 40503 MB of weights, and this machine rendered
+it with a measured VRAM peak of **28.4 GB** - ComfyUI streams and
+offloads, so the sum of the files overstates the card's real bill by
+~12 GB. Every decision made from it is therefore conservative in the safe
+direction (pause when it might not have needed to), never the unsafe one,
+which is why this is a filing and not a bug. Closing the gap is what item
+7's still-open VRAM-delta bullet is for: a `measured: true` number in the
+catalog entry beats a file sum, and `genNeedMBFor` should prefer it once
+one exists.
+
+### Notes for whoever runs the next pass
+
+- Machine state: llama-server was started and stopped by the probe; the
+  open AE project is still `logs\mogrt60\P60-scratch.aep`. Nothing was
+  generated - the ladder runs no ComfyUI job at all, by design (the
+  executed handoff and refusal paths are 0.10.9's and 0.10.10's, already
+  in this log).
+- `scripts/tier-ladder-probe.js` is cheap to re-run (`--no-server` skips
+  the model load entirely) and is the fastest way to see what the panel
+  would decide on any card without owning one.
+- Still open from earlier passes, unattempted tonight: the `DroverLord -
+  Window Class` popup; item 7's VRAM half (needs ~36 GB of weights not on
+  this disk) and OOM recovery; no panel UI for the mogrt export tools; no
+  `.webm`/`.webp`; the 8 GB intermediate cap that is still a guess;
+  `get-llama.ps1`'s two latent traps; and `comfy_generate` still calls
+  `import_file` rather than 5.8's `import_as_layer`.
+
+## 2026-08-30 (local) - item 7, OOM recovery: the job the panel gave up on
+and left running
+
+**Item:** WORKPLAN item 7, last bullet - "force one real OOM ... and verify
+the chat model comes back afterward regardless."
+
+Harness green before the pass (532/532), so the queue applied. Item 7's
+other open bullet, the catalog VRAM delta, stays blocked exactly where the
+0.10.11 entry left it: ~36 GB of weights that are not on this disk and a
+per-model workflow template the panel does not ship. Nothing was
+downloaded; that is the next pass's call, not this one's.
+
+### The premise was wrong, and finding that out was most of the pass
+
+The bullet assumes an oversized job OOMs. On this backend it does not.
+Measured first, before anything was written: **KREA2 at 4096x4096 on a
+32 GB card offloads its weights and GRINDS** - 33 s/it on pass one
+(2 m 19 s for four steps), then 92 s/it on pass two, with no exception, no
+error and no end. ComfyUI 0.32 boots here with async weight offloading and
+25 140 MB of pinned memory; it will trade speed for memory almost
+indefinitely rather than raise `OutOfMemoryError`.
+
+So "a generation the card cannot do" does not reach the user as an OOM. It
+reaches them as the panel's own generation TIMEOUT - and that is the WORSE
+case of the two, which is why it is the one worth probing. A torch OOM
+frees its allocation on the way out. An abandoned job does not: it keeps
+computing and keeps the card.
+
+### What the probe found
+
+`scripts/oom-probe.js` (NEW) drives the real panel path - settings.js +
+tiers.js + llama.js + comfy.js + tools.js -> `Tools.executeCommands([
+comfy_generate])` -> a real llama-server, a real ComfyUI, real nvidia-smi.
+`vramOverrideGB 6` puts it in T2, mandatory handoff, so the chat model is
+genuinely stopped and the panel genuinely owes it back. The job is the
+4096x4096 grind above with `comfyTimeoutSec 90`. `{import: false}`, so no
+After Effects is involved and no dialog can be raised.
+
+Before the fix, on the owner's 32B chat model:
+
+    .. ComfyUI still generating... 90s
+    .. VRAM did not visibly release within 10 s - proceeding anyway.
+    .. Warming the chat model back up...
+    -- at warm-up: VRAM 23673 MB, ComfyUI queue 1 running / 0 pending
+    == FAIL the abandoned job is no longer running when the chat model is
+            reloaded - 1 running / 0 pending in ComfyUI
+    == FAIL ...and the card has room for it - VRAM at warm-up 23673 MB,
+            chat model 18932 MB, card 32768 MB
+
+The panel stopped LOOKING and called that stopping. Its error even said so
+- "prompt <id> may still finish in ComfyUI" - and then, one line later, it
+asked llama-server to load 18 932 MB into a 32 768 MB card of which the
+job it had just abandoned held 23 673 MB. The round took 225 s and the
+abandoned job went on to grind for another ten minutes on a machine whose
+user had been told their generation was over.
+
+**The chat model did come back**, which is the bullet's literal question,
+and the honest answer is that Windows papered over the collision: the
+driver's system-memory fallback let llama-server load spilled into host
+RAM. It answered in 144 ms and the card read 32 021 MB - pegged. A card
+that pegs is not a card that recovered; on any machine without sysmem
+fallback that load fails outright. So the verdict the probe asserts is not
+"did llama reach state running" but the four things that have to be true
+for that to mean anything: the round ends once with a grounded error, the
+abandoned job is gone, the card has room, and the model ANSWERS.
+
+### The fix: a timeout cancels
+
+`comfy.js` gained `cancelPrompt`, awaited before the timeout settles so
+the arbiter's resume - which runs next and waits for the card to come back
+- is waiting for something that can actually happen.
+
+Never a blind `POST /interrupt`. **This is the USER'S ComfyUI and they may
+have queued their own work in its own UI**, so the queue is READ first and
+only the panel's own prompt id is ever acted on:
+
+- still pending -> `POST /queue {delete: [id]}`, id-targeted on every
+  ComfyUI version;
+- still running -> `POST /interrupt {prompt_id}`. Read from this backend's
+  own `server.py`: 0.32 interrupts only if that id is the running one, and
+  older builds that ignore `prompt_id` do a GLOBAL interrupt - which by
+  then cancels exactly the job we mean, because the queue read just proved
+  ours is the one running. Correct on both, without a version check;
+- neither -> nothing. It finished, or it was already dropped.
+
+An unreadable queue cancels nothing and says so. A poll that lands while
+the cancel is in flight is dropped rather than allowed to report the
+panel's own interrupt back to the user as `execution_interrupted`, which
+would have blamed them for cancelling their own render.
+
+### Verification
+
+- **The probe, re-run, green**: VRAM at warm-up 23 673 -> **10 588 MB**,
+  ComfyUI queue 1 running -> **0 running / 0 pending**, round 225 s ->
+  **112 s**, error now "Generation timed out after 90s (prompt ...) - it
+  was still running and has been cancelled", chat back and answering in
+  93 ms. Transcripts both sides in `logs/oom-probe-*.md`.
+- `tests/test-comfy-timeout-cancel.js` (NEW, 18 checks) scripts a ComfyUI
+  that accepts a prompt and never finishes it, and pins all four queue
+  states plus "cb fires exactly once" and the message shape. **10 of the
+  18 fail on the reverted file** - run and seen, not assumed. The check
+  that matters most for a user's machine is the third: with only the
+  user's own jobs in the queue, the panel must POST nothing at all.
+- **Full stub sweep: 59/59 test files exit 0.**
+- **Real-AE harness 532/532** before and after. The change is panel-side
+  and adds no suite steps; the run proves it left AE alone.
+- `capability-report.js` regenerated: no change, the pass ships no new tool.
+
+### Version: PATCH bumped to 0.10.14
+
+A fix to shipped behaviour. Any user whose generation outruns
+`comfyTimeoutSec` - the default is 600 s and this machine's own oversized
+job would need ten times that - had the panel walk away from a running job
+and then fight it for the card.
+
+### Filed, measured tonight, deliberately NOT fixed here
+
+**The resume's release message is still a false alarm on a cancelled
+round.** "VRAM did not visibly release within 10 s" still prints: ComfyUI
+holds ~7.8 GB of cache after the cancel, and `/free` only sets FLAGS the
+queue worker reads BETWEEN prompts, so the floor sampled at pause time is
+not reached inside the 10 s window. The card had 22 GB free and the model
+loaded and answered, so this is a sentence that misreports a healthy
+round, not a failure. The honest predicate is "is there room for the chat
+model", not "is the card back to the floor it was at" - a change to a
+shipped path (0.10.9 wrote that wait) and worth its own small pass.
+
+### Notes for whoever runs the next pass
+
+- **ComfyUI must be started by hand and this pass started it**: the 0.32.0
+  at `AppData\Local\Comfy-Desktop\ComfyUI-Installs\ComfyUI\ComfyUI`, per
+  0.10.9's note. It is still running and idle; `Comfy.ensureRunning` still
+  cannot start it.
+- Machine state: llama-server was started and stopped by the probe. The
+  open AE project is still `logs\mogrt60\P60-scratch.aep`. ComfyUI was
+  interrupted and `/free`d on the way out - the probe always does this, so
+  an unattended run cannot leave a 4096x4096 job grinding all night.
+- `scripts/oom-probe.js` is ~2 minutes end to end and is now the cheapest
+  way to ask "does a failed generation leave the panel in a state it can
+  recover from". Re-run it after anything that touches the arbiter, the
+  generation poller or the resume.
+- Item 7 now has ONE bullet left, the catalog VRAM delta, and it is the
+  expensive one: ~36 GB of weights to download, a per-model workflow
+  template to write for sd15/sdxl/wan22-5b (the panel ships only KREA2 and
+  H3 i2v), and a whole pass budgeted per model.
+- Still open from earlier passes, unattempted tonight: the `DroverLord -
+  Window Class` popup; no panel UI for the mogrt export tools; no
+  `.webm`/`.webp`; the 8 GB intermediate cap that is still a guess;
+  `get-llama.ps1`'s two latent traps; and `comfy_generate` still calls
+  `import_file` rather than 5.8's `import_as_layer`.
+
+## 2026-08-30 (local) - item 7 follow-up: the release the panel reported
+was not the question it needed to ask
+
+**Item:** the sub-bullet 0.10.14 filed and deliberately left - "the resume
+still prints 'VRAM did not visibly release within 10 s' after a cancelled
+round ... the honest predicate is 'is there room for the chat model', not
+'is the card back to the floor'; that is a change to a shipped path and
+wants its own pass."
+
+Harness green before the pass (**532/532**), so the queue applied. Item 1's
+`DroverLord - Window Class` popup is still unanswered and still has no new
+evidence (`logs\dialogs\` holds nothing since 2026-08-30 01:04), and item
+7's catalog VRAM delta is still the expensive one (~36 GB of weights not on
+this disk, plus a per-model template the panel does not ship). Neither
+moved tonight; this one could.
+
+### Reproduced first, and the field named a worse number than the filing
+
+`scripts/oom-probe.js`, unmodified, on the real path (real llama-server,
+real ComfyUI 0.32, real nvidia-smi, `{import: false}` so no AE):
+
+    .. ComfyUI still generating... 90s
+    .. VRAM did not visibly release within 10 s - proceeding anyway.
+    .. Warming the chat model back up...
+    -- at warm-up: VRAM 2918 MB, ComfyUI queue 0 running / 0 pending
+
+**2 918 MB used of 32 768.** The panel told a user with 29 GB free that
+their VRAM had not been released. The filing guessed ComfyUI was sitting on
+~7.8 GB of cache; the transcript's timeline says something simpler and
+sharper - the card held **23 654 MB for the whole 10 s window** and fell to
+2 918 MB **one second after the wait expired**:
+
+    - 109.0s  23654  generate
+    - 109.5s  15974  generate
+    - 111.0s   6822  generate
+    - 111.1s   2918  warm      <- the message had already printed
+
+So the release was not slow in any way that mattered, and the sentence was
+not merely pessimistic: it was reporting on the wrong thing. The floor the
+pause left (2 916 MB) is a HARDER question than the resume needs. What
+llama-server has to have is ROOM, and a card still holding a generation's
+cache can have plenty of it.
+
+### The fix: ask whether the chat model fits
+
+`extension/js/tools.js`, `VramArbiter.resumeIfPaused` + `waitForVram`:
+
+- The predicate is `card - used >= chatFootprint`, with the old floor kept
+  as an **OR** (a card back where it started is by definition room enough)
+  and as the whole answer when the card's own size is unknown. Both numbers
+  are remembered at pause time (`_needMB`, `_cardMB`) beside `_floorMB`.
+- The card total comes from **nvidia-smi, never `vramOverrideGB`**
+  (`cardTotalMBNow`). The override impersonates a tier so any card can test
+  any policy, but this wait asks a physical question about a physical
+  reading, and pairing a measured `memory.used` with a fictional total is
+  arithmetic about no machine at all. The 0.10.10 lesson, one layer down.
+- `waitForVram` took a hard-coded sentence and a hard-coded 10 s; it now
+  takes both from the caller, and the message may be a function that
+  answers null to stay quiet. The timeout **reports what it measured** -
+  "The card still holds 7000 MB of 8192 MB and the chat model needs about
+  6236 MB - loading it anyway" - instead of asserting a release failure.
+- The room wait is **30 s**, and that number is measured, not chosen: this
+  backend finished handing the card back at ~10.5 s after a cancel, so a
+  10 s limit was a coin flip on exactly the round the cancel created. It
+  costs nothing on a free card - the predicate answers on poll one, which
+  is the case every healthy round takes.
+
+The pause side (`waitForVramDrop`) is untouched: there the panel has just
+killed llama-server and a DELTA is the right question.
+
+### Verification
+
+- **The probe, re-run, green.** No release sentence at all; warm-up at
+  **10 793 MB** with 0 running / 0 pending; round 112 s; chat back and
+  answering in 90 ms. `oom-probe.js` gained the verdict that pins it - a
+  release failure may only be reported when there was no room - so the
+  next pass cannot regress it silently. Transcripts:
+  `logs/oom-probe-2026-08-30T09-40-21.md` (before) and
+  `...T09-46-28.md` (after).
+- `tests/test-vram-arbiter.js` grew scenarios **7 and 8**: a 32 GB card
+  where ComfyUI still holds 8 000 MB (room, nowhere near the floor - one
+  poll, silence) and an 8 GB card that never gets room (waits, gives up,
+  and says so with all three numbers). **4 of the new checks fail on the
+  reverted file** - run and seen.
+- **Full stub sweep: 59/59 test files exit 0.**
+- **Real-AE harness 532/532** before and after. The change is panel-side
+  and adds no suite steps.
+- `capability-report.js` regenerated: no change, the pass ships no tool.
+
+### Version: PATCH bumped to 0.10.15
+
+A fix to shipped behaviour. Every user on an exclusive tier whose ComfyUI
+had not finished dropping its cache within 10 s - which after 0.10.14's
+cancel is the normal case, not the edge - was told their card had not been
+released when it had, or was about to be.
+
+### Notes for whoever runs the next pass
+
+- **ComfyUI is still running** (the 0.32.0 at
+  `AppData\Local\Comfy-Desktop\ComfyUI-Installs\ComfyUI\ComfyUI`, started
+  by hand on 2026-08-30 per 0.10.9's note) and was interrupted and
+  `/free`d by the probe on the way out, twice. `Comfy.ensureRunning` still
+  cannot start it.
+- Machine state: llama-server was started and stopped by the probe (twice).
+  The open AE project is still `logs\mogrt60\P60-scratch.aep`.
+- Item 7 now has ONE bullet left, the catalog VRAM delta, and it is a whole
+  pass per model: ~36 GB to download, a per-model workflow template to
+  write for sd15/sdxl/wan22-5b, and a ComfyUI started by hand. Somebody
+  should decide whether that download is wanted before a pass spends the
+  night on it.
+- Still open from earlier passes, unattempted tonight: the `DroverLord -
+  Window Class` popup (no new evidence); no panel UI for the mogrt export
+  tools; no `.webm`/`.webp`; the 8 GB intermediate cap that is still a
+  guess; `get-llama.ps1`'s two latent traps; and `comfy_generate` still
+  calls `import_file` rather than 5.8's `import_as_layer`.
+
+## 2026-08-30 (local) - `get-llama.ps1`'s two latent traps, and the
+## one-click engine install that had stopped working for everybody (0.10.16)
+
+**Item:** the flag ten passes had carried without spending a night on it -
+"`get-llama.ps1` still has the two latent traps 6.1 Pass A flagged: it
+greps for `CUDA Version:` and pads versions to two parts. Neither bites
+today ... small remote-session job, or the next local pass that has
+nothing better."
+
+Harness green before the pass (**532/532**), so the queue applied. Item 1's
+`DroverLord` popup still has no new evidence (`logs\dialogs\` holds nothing
+since 2026-08-30 01:04) and item 7's catalog VRAM delta still wants ~36 GB
+of downloads and a human's say-so. This was the next thing that could
+actually move. It moved further than the flag did.
+
+### The flag was right about the script and wrong about "neither bites"
+
+The pass started by pointing the SHIPPED panel at the same question, because
+`get-llama.ps1`'s own header says "the panel does all of this by itself on
+first launch (auto GPU detection included) -- this script exists for
+development, CI, and offline prep." If the script's detection is wrong, the
+panel's copy of it is the one that reaches users. It was.
+
+`scripts/engine-asset-probe.js` drives the real `extension/js/setup.js`
+(`detectGpu` + the asset chooser) against real nvidia-smi and the real
+GitHub API. Two findings, in order of how much they cost:
+
+**1. The panel's one-click engine install was dead. For everyone.**
+
+    /releases/latest  : v0.3.0 -> nightly-tag.txt
+    walk over /latest alone : REFUSED - No Windows llama-server build in
+                              the 1 newest llama.cpp release(s): v0.3.0.
+
+`ggml-org/llama.cpp`'s `/releases/latest` answers **`v0.3.0`, whose entire
+asset list is one `nightly-tag.txt`**. Every release carrying Windows
+binaries is a `bNNNNN` tag and **every one of those is flagged prerelease**,
+which `/releases/latest` never returns. So `bootstrapEngine` - Settings ->
+"Reinstall / update engine", and the whole first-run path - ended at "No
+suitable Windows build found in release v0.3.0". `get-llama.ps1` failed the
+same way, run from HEAD and seen:
+
+    Release: v0.3.0
+    No Windows CPU x64 asset found in v0.3.0.
+
+This is not a latent trap. It is the product's front door, and it had
+already blown shut. Nothing in the repo could have caught it: the asset
+matching is correct, the URL is the bug, and upstream changed under a
+shipped release.
+
+**2. The flagged regex, and what it actually cost.** This machine's banner
+reads `CUDA UMD Version: 13.4`, so `/CUDA Version:/` matched nothing and
+`detectGpu` answered `cudaVersion: null`. That is not an error path - it is
+the "be conservative, take the OLDEST published line" path, so the symptom
+is a **working install of the wrong build**:
+
+    with detectGpu as it stands : CUDA 12.4 -> llama-b10690-bin-win-cuda-12.4-x64.zip
+    with the driver CUDA read   : CUDA 13.3 -> llama-b10690-bin-win-cuda-13.3-x64.zip
+
+250 MB of CUDA 12.4 on an RTX 5090 whose driver runs the 13.3 build, which
+is 146 MB. The 2026-08-29 whisper pass called this one "flagged, not
+touched" because whisper's asset names are `12.4`-shaped; llama.cpp's are
+not, and here it decided the answer.
+
+### The fix
+
+- `extension/js/setup.js` `detectGpu`: the word between CUDA and Version is
+  optional - `/CUDA(?:\s+\w+)?\s+Version\s*:\s*([\d.]+)/`. `Driver Version:`
+  on the classic banner sits one word away and is NOT swallowed (asserted).
+- `extension/js/setup.js` gains `pickReleaseAssets(releases, gpu)`: walk the
+  release LIST and take the newest one that actually carries a build,
+  skipping drafts, flattening a nested array, and refusing with the tags it
+  looked at. `bootstrapEngine` asks for `releases?per_page=15` instead of
+  `/releases/latest`. An explicit `{tag}` still fetches that one release and
+  goes through the same walk. This is the rule `get-whisper.ps1` and
+  `get-ffmpeg.ps1` have had since 2026-08-29/30; the engine never got it.
+- `scripts/lib/gpu-detect.ps1` is new and holds the two helpers that were
+  written for whisper and that get-llama had broken copies of -
+  `Get-AellCudaVersionFromSmi` and `ConvertTo-AellPaddedVersion` (three
+  parts, because `[version]` pads a missing one with **-1**, so `11.8` is
+  LESS than `11.8.0`). `whisper-assets.ps1` and `get-llama.ps1` both
+  dot-source it. Same extraction move as `gh-releases.ps1`.
+- `get-llama.ps1` gains **`-ListOnly`**: the entire choice runs - driver
+  read, release walk, CUDA line, cudart match - and it prints what it would
+  download instead of wiping the vendor folder and pulling 500 MB. That is
+  what made this verifiable in the field at all; a pass that had to actually
+  download would have had to destroy the panel's working install to test it.
+- `pickAssets` and the walk are exported as `pickEngineAssets` /
+  `pickEngineRelease`, the way `pickComfyAsset` already was. The choice was
+  unreachable from a test before this.
+
+### Verification
+
+- **`get-llama.ps1 -ListOnly` in the field**, real API, real nvidia-smi:
+  `driver CUDA: 13.4` -> `Release: b10690` -> `CUDA toolkit line: 13.3` ->
+  `llama-b10690-bin-win-cuda-13.3-x64.zip` + its cudart. Nothing downloaded,
+  vendor folder untouched. The pre-fix copy of the same script, run from
+  HEAD beside it, threw on `v0.3.0`.
+- **`scripts/engine-asset-probe.js`** re-run green; transcript at
+  `logs/engine-probe/probe-after.md`.
+- **`tests/test-engine-assets.js`, 36 checks**, all real captured field data
+  (this machine's two banner spellings, the real `v0.3.0` and `b10690` asset
+  lists). Reverting the regex alone fails 2 of them; reverting the walk
+  removes the export and the file will not run at all.
+- **Full stub sweep: 60/60 test files exit 0.**
+- **Real-AE harness 532/532** before and after. The change is panel-side and
+  adds no suite steps.
+- `capability-report.js` regenerated: no change, the pass ships no tool.
+
+### Version: PATCH bumped to 0.10.16
+
+The strongest case for a bump this project has had. Until this ships, a new
+user's engine install cannot succeed, and Settings -> "Reinstall / update
+engine" cannot repair it either - both go through the same dead URL. The
+feed is the only way that reaches an installed panel.
+
+### Notes for whoever runs the next pass
+
+- **ComfyUI's own release query was checked and is FINE.** `bootstrapComfy`
+  hits `comfyanonymous/ComfyUI/releases/latest`, which now answers **HTTP
+  301** (the repo moved), but `fetchJson` follows redirects up to 5 and the
+  target is `v0.34.0` with all four portable `.7z` assets present. Measured,
+  not assumed - no item filed.
+- The panel picks a CUDA line but **nothing here has run llama-server from a
+  freshly bootstrapped install**; the owner's install predates this. A pass
+  that wants to close that loop can point `-ListOnly` at a temp vendor dir
+  and then actually download once.
+- Machine state: AE left on the harness's own project; no llama-server was
+  started or stopped by this pass. ComfyUI is still running from 0.10.9's
+  hand start.
+- Still open from earlier passes, unattempted tonight: the `DroverLord -
+  Window Class` popup (no new evidence); item 7's catalog VRAM delta (~36 GB
+  of weights and a human's decision); no panel UI for the mogrt export
+  tools; no `.webm`/`.webp`; the 8 GB intermediate cap that is still a
+  guess; and `comfy_generate` still calls `import_file` rather than 5.8's
+  `import_as_layer`. The `get-llama.ps1` flag is now struck after ten
+  passes carried it.
+- `release-notes.txt` still reads "0.10.0" while the feed now ships 0.10.16.
+  Remote session's release cut.
+
+## 2026-08-30 (local) - the boundary every 1080p export over eleven
+## seconds crosses, and that nobody had ever tested (0.10.17)
+
+**Item:** item 6.2's longest-lived flag, carried by twelve passes and
+never spent a night on - "**The 8 GB intermediate cap is a guess**, not a
+measurement. Nobody has established whether AE's AVI writer survives past
+the classic 2 GB / 4 GB RIFF boundaries, or whether ffmpeg reads what it
+writes there. Testing it costs a multi-gigabyte render; worth one
+deliberate pass rather than a surprise on someone's 30-second 1080p
+export."
+
+Harness green before the pass (**532/532**), so the queue applied.
+Item 1's `DroverLord` popup still has no new evidence (`logs\dialogs\`
+holds nothing since 2026-08-30 01:04, which the previous pass already
+read) and item 7's remaining bullet still wants ~36 GB of weights and a
+human's say-so. Everything else in items 1-6 is struck. This flag was the
+next thing that could actually move, and its own text sizes it as one
+deliberate pass, which is what it got.
+
+### Why it was worth a night
+
+The exporters render a LOSSLESS master first: rawvideo/bgr24 AVI, three
+bytes a pixel, ~6.22 MB per 1080p frame. AVI is RIFF and RIFF chunk
+offsets are **32 bits**, so 2 GiB and 4 GiB are exactly where a writer
+classically wraps - and the failure mode is not a crash, it is a file the
+reader accepts and truncates. The arithmetic says how routine that is:
+
+    1080p30 crosses 2 GiB at ~11.5 s and 4 GiB at ~23 s
+
+So **almost every real export is already past one boundary**, the shipped
+cap lets a user go to ~46 s, and the whole span was untested.
+
+### The method, and the one trick that makes it exact
+
+`scripts/riff-boundary-probe.js`. It takes its bridge wrapper from
+`chat-probe.js` by require rather than by copy, so it cannot drift from
+the way the panel actually talks to AE.
+
+1. A rig comp whose every frame is a different picture, both drivers pure
+   functions of `time` so frame N depends on N and nothing else -
+   Position a 1720 px traverse, Rotation 120 deg/s (4 deg a frame, which
+   no antialiasing accident can blur between neighbours). Position gets
+   TWO components, not three: the expression engine sees 2 dims on a 2D
+   layer however many the scripting API pads to.
+2. The whole comp through the shipped `render_comp` at "Lossless".
+3. ffprobe, then a full decode under `-xerror` - a corrupt tail is
+   invisible to the header read that ffprobe does.
+4. `framemd5`: one MD5 per DECODED frame, and assert they are all
+   DISTINCT, or step 5 would be comparing nothing.
+5. **The trick.** Re-render SHORT spans of the same comp straddling each
+   boundary via `render_comp`'s `startTime`/`durationSeconds`. Those
+   reference files are a few MB and nowhere near any boundary. Frame for
+   frame their MD5s must equal the big file's at the same comp times.
+   That compares **AE against itself** - same comp, same renderer, same
+   codec - so no assumption about colour management, gamma, or what the
+   picture ought to look like enters the verdict.
+
+A file that truncates, wraps, repeats a frame or garbles its tail fails
+(5) even when ffprobe reports a tidy 900 frames.
+
+### The answer: the format is not the risk
+
+Two real renders, 11 checks each, all green.
+
+    30 s = 900 frames   5 598 817 144 B (5.214 GiB)  17 s wall
+    46 s = 1380 frames  8 584 826 232 B (7.995 GiB)  26 s wall
+
+46 s is not an arbitrary second number: at 1080p it is **the longest
+master the shipped 8 GB cap allows**, so the cap was tested at its own
+edge. Both: status DONE with no warning, on disk at or above the raw
+pixel floor, ffprobe 1920x1080 rawvideo at the full frame count, full
+decode exit 0 with an empty stderr, 900/900 and 1380/1380 DISTINCT frame
+hashes, and the reference spans at **frames 343-347 (the 2 GiB
+boundary), 688-692 (the 4 GiB boundary) and the final five** matching
+5/5 byte for byte inside the multi-gigabyte file. Nothing wrapped and
+nothing was dropped.
+
+So the 8 GB cap is not protecting against the container. It is a
+**disk-and-time guard**, which is a legitimate thing to be and a
+different thing from what the code implied.
+
+### What that changed at the root
+
+- `extension/js/tools.js`: the cap keeps its default (8 GiB is ~46 s of
+  1080p and 26 s of rendering here; nobody has asked for more) and gains
+  the measurement as the comment that explains why it is a number at all.
+  The refusal now says **which kind of limit it is** - "it guards the
+  DISK and the render time rather than the file format (AE's lossless AVI
+  and ffmpeg were measured good to 7.99 GiB) ... or raise it with
+  {maxIntermediateGB} if the disk has room - that is safe." A caller told
+  only "the limit is 8 GB" reads it as "the file cannot be bigger" and
+  shortens an export that never needed shortening. This project's
+  grounded-error rule applied to a number.
+- `extension/js/ffmpeg.js`: **the comment under `estimateIntermediate`
+  was wrong.** It claimed "3 640 B/frame at 1920x1080" and generalised
+  it. That figure came from the TWO-frame render it was measured on,
+  where a fixed ~7 KB of AVI header and index divided by two frames looks
+  like a per-frame cost. Over long files the overhead is nearly all
+  fixed, so the share collapses:
+
+        frames     file bytes        over the raw floor    per frame
+            2      12 448 880               7 280            3 640
+           60     373 257 600               9 600              160
+          900   5 598 817 144              97 144              108
+         1380   8 584 826 232             122 232               89
+
+  The gap a caller must allow for is **~0.0015% of an export-sized
+  master, not 0.06%** - which is why the disk guard's 1.1x headroom is
+  not tight even at the cap. The estimate itself is unchanged and is
+  still a true FLOOR; only the story about it was wrong.
+
+### Verification
+
+- **`tests/test-ffmpeg-export.js` 138 -> 154 checks.** Every `bytes`
+  above is a real file, replayed as a fixture, and the estimate is held
+  to both properties that pull opposite ways: it must never EXCEED the
+  file (the disk guard would refuse exports that fit) and must stay
+  within 0.3% (the guard would let the disk fill). A second block pins
+  the arithmetic that put the two renders on either side of the
+  boundaries, so a change to `estimateIntermediate` cannot quietly move
+  the shipped cap off the span that was actually tested - had anyone
+  "corrected" the estimate by the old comment's 3 640 B/frame, the
+  1380-frame floor assertion would fail.
+- Reverting the two source files fails **2** of the new checks (the
+  refusal wording); the field-data block passes either way by design,
+  because it guards the estimate going forward rather than the comment.
+- **Full stub sweep: 60/60 test files exit 0.**
+- **Real-AE harness 532/532** before and after. No suite steps: the
+  change is panel-side, and a multi-gigabyte render has no business in a
+  suite that has to finish.
+- `capability-report.js` regenerated and `test-capability-doc.js` green;
+  the pass ships no tool, and the curated half gained the measurement.
+- The probe cleans up after itself: the master and every reference file
+  are unlinked, and the project sweep removes the comp **and its two
+  solid SOURCES** - a solid source outlives the comp that held it, which
+  is the same leak 0.10.12 rebuilt the suite's cleanup for. Verified:
+  "project cleanup removed 3 item(s)" on all three runs.
+
+### Version: PATCH bumped to 0.10.17
+
+A fix to shipped behaviour, not a feature: the refusal a user and the
+model both read was misleading about what it was refusing, and the feed
+is the only thing that reaches an installed panel.
+
+### Notes for whoever runs the next pass
+
+- The probe is repeatable and cheap now that it exists:
+  `node scripts/riff-boundary-probe.js --seconds 46`, ~30 s of render
+  plus ~40 s of decoding, `--keep` to leave the master, `--dir` to put it
+  somewhere other than TEMP. It smoke-tests honestly at `--seconds 2`
+  (one deliberate FAIL, the "past 4 GiB" check).
+- **Not measured, and the obvious next question if anyone cares:** where
+  the writer ACTUALLY breaks. This pass proved 7.995 GiB good and stopped
+  there because that is the shipped cap's own edge; nothing here says a
+  16 GB or 64 GB master works, so raising the DEFAULT would need its own
+  render. Raising it per-call with `{maxIntermediateGB}` is what the new
+  message calls safe, and within the measured range it is.
+- Machine state: AE left on the harness's own project, no dialog open,
+  nothing left in TEMP (checked). No llama-server or ComfyUI was started
+  or stopped by this pass.
+- Still open from earlier passes, unattempted tonight: the `DroverLord -
+  Window Class` popup (no new evidence); item 7's catalog VRAM delta
+  (~36 GB of weights and a human's decision); no panel UI for the mogrt
+  export tools; no `.webm`/`.webp` (a remote-session call); and
+  `comfy_generate` still calls `import_file` rather than 5.8's
+  `import_as_layer` - which the workplan puts OUT OF SCOPE for the local
+  session ("wiring generation into 5.8's round-trip" is remote), so it
+  should probably stop being listed here as if a local pass could take
+  it. The 8 GB cap flag is now struck after twelve passes carried it.
+- `release-notes.txt` still reads "0.10.0" while the feed now ships
+  0.10.17. Remote session's release cut.
+
+## 2026-08-30 (local) - the popup that was never a dialog, and the two
+## windows nobody had ever watched a run put on screen
+
+Harness green on arrival, 532/532, so the pass took the only thing left
+open under item 1: **what is the `DroverLord - Window Class` popup?** The
+2026-08-30 pass that filed it could not make it happen again and said so.
+This pass did not make it happen again either. It identified it anyway,
+by photographing every window After Effects owns instead of waiting for
+the one that misbehaves.
+
+### The tool: scripts/ae-window-census.ps1
+
+The harness's own probe looks at exactly as much as an unattended gate
+needs - visible top-level popups, text read out of `#32770` and
+DroverLord shells. That is the right amount of looking to decide "is AE
+stuck" and the wrong amount to diagnose one. The census is the other
+half: every top-level window of the AfterFX process INCLUDING the hidden
+ones, with class, title, styles, owner, rect, and the whole descendant
+tree read both ways - the `GetWindowTextW` that returns empty across a
+process boundary and the `WM_GETTEXT` that does not. `-Seconds n` watches
+and logs every change; the change poll is top-level only and the
+expensive read happens once, on the sample where something appeared,
+because the watch runs BESIDE a real harness run and must not perturb the
+thing it is measuring.
+
+### `DroverLord - Window Class` is not a dialog class
+
+It is Adobe's widget class. **Every window inside After Effects is one** -
+frames, tab panels, view containers, the lot. The first census made that
+obvious and made the old assumption ("Adobe's own toolkit shell", i.e. a
+dialog) untenable.
+
+Three measurements name the popup:
+
+1. **The save-changes prompt's own `#32770` contains exactly three
+   DroverLord children** reporting `OS_ViewContainer`,
+   `OS_ViewContainer`, `OS_EditTextContainer`, plus an `Edit` whose
+   WM_GETTEXT is the save sentence. That is the field capture's
+   fingerprint, container for container.
+2. **Every idle After Effects on this machine has a top-level DroverLord
+   popup already there**, hidden: `hwnd=8707C4`, `WS_POPUP`,
+   `WS_EX_NOACTIVATE`, unowned, wordless, parked at 0,0,0,0, one
+   `OS_ViewContainer` inside it. A re-usable host for whatever AE floats.
+3. **During a real self-test run AE creates those same containers as
+   PARENTLESS TOP-LEVEL WINDOWS** - `OS_ViewContainer`,
+   `OS_EditTextContainer` and a bare top-level `Edit`, WS_CHILD-styled
+   with no parent, so `EnumWindows` hands them back as top-level.
+   Captured 20+ times across four watched runs, all invisible.
+
+So the popup that stopped a field run is **After Effects' own dialog
+CONTENT, caught top-level before it was parented into its shell**. It can
+never take focus. It was never a question anybody could answer.
+
+### The fix: the property, not the name list
+
+The 2026-08-28 fix was a list of two Windows class names (`SysShadow`,
+`tooltips_class32`). This pass measured what made those two safe to
+ignore, and it is a Win32 declaration, not a name:
+
+    Script Alert            #32770  ex=00010101  owner=main window
+    save-changes prompt     #32770  ex=00010101  owner=main window
+    tooltips_class32                ex=00080088  TOOLWINDOW
+    SysShadow                       ex=000800A8  TOOLWINDOW
+    DroverLord popup host           ex=08000000  NOACTIVATE
+
+**Both real AE modals carry neither flag**, are owned by the main window,
+and disable it. `WS_EX_NOACTIVATE` cannot become the active window, so it
+cannot be a dialog waiting for an answer; `WS_EX_TOOLWINDOW` is what both
+pieces of chrome actually are. Fixed in both layers, as the SysShadow fix
+was:
+
+- `run-ae-selftest.ps1` - a top-level window carrying either flag is
+  LISTED with the flags that discounted it (`{nonmodal ex=... owner=...}`)
+  and deliberately not COUNTED. The popup counter is what makes the probe
+  fall through to its honest "main window is disabled but no popup text
+  could be read", and a run blocked by something only chrome stands
+  beside must still reach that answer.
+- `ae-dialog-triage.ps1` - a WORDLESS block so marked is discounted. A
+  marked window that says something is still judged on what it says; the
+  annotation is stripped before the words are counted, so it cannot
+  itself read as a word.
+
+**`CloseWordlessDialogs` was not widened.** It still posts WM_CLOSE to
+`#32770` alone, which is what the workplan asked. And the change is
+toothless in the worst case by construction: a real modal that somehow
+declared itself non-activatable would be the only thing on screen, the
+popup counter would stay at zero, and the run would still stop on the
+note. The only behaviour that changes is a marked window standing NEXT
+to AE saying it is executing our script.
+
+### What the watch found that nobody had filed
+
+Four runs watched at 250 ms turned up two windows no capture in this repo
+had ever recorded, and both are live problems:
+
+- **`Auto-Save Project`.** AE's own timed auto-save fires in the MIDDLE
+  of a run and disables the script-progress window behind it. In all four
+  of four runs, ~2.5 s each. It has a real title, so it read as
+  `blocked` - and `blocked` gives up after three consecutive polls, 6 s.
+  Two and a half seconds is not six, which is the only reason this has
+  never cost a run here; a project big enough to take six seconds to save
+  is a red run nobody could have explained. Added to
+  `Get-AellProgressTitles`. The test proves it: reverted, `autosave reads
+  as progress (got blocked)`.
+- **`Analyzing Audio...`, and this is the more dangerous one.** The
+  suite's `audio_to_keyframes` step raises a `#32770` with an **empty
+  window title** whose name lives in an `Edit` child four levels down.
+  The verdict layer reads titles, so it sees three containers and no
+  words: `unreadable`, which gives up after 8 polls, ~16 s. Measured up
+  for **~6.5 s of every single run**. Every harness run this project
+  makes is already 40% of the way to dying on a dialog that is After
+  Effects working on our own script - and it is a far better candidate
+  for the lost field run than anything previously filed.
+
+The harvest layer now names it, so evidence taken during those seconds is
+no longer headlined UNRECOGNIZED DIALOG. **The verdict layer still cannot
+see it**, and that is left open ON PURPOSE rather than smuggled into this
+pass: the test pins the current behaviour (`analyzing-audio` reads as
+`unreadable`) so nobody mistakes it for solved.
+
+### Verification
+
+- **`tests/test-selftest-runner.js` 132 -> 165 checks.** Every fixture is
+  verbatim from real AE tonight. **Reverted against the pre-fix scripts
+  it fails 9 assertions**, including `popup-host-beside-progress reads as
+  running (got blocked)` and `autosave reads as progress (got blocked)`.
+- The pair that proves the rule is about the FACT and not the class:
+  an unannotated `DroverLord` popup STILL stops the run (both existing
+  cases untouched, plus a new 12-poll timeline), while one that has
+  declared it cannot take focus does not. Also pinned: a `{nonmodal}`
+  window that says something is still `blocked`, and the popup host alone
+  still stops the run at the eighth poll.
+- **Full stub sweep: 60/60 test files exit 0.**
+- **Real-AE harness 532/532, three consecutive runs after the change**
+  (and four before it, all green, which is what let the watch run at all).
+- Both .ps1 files re-checked pure ASCII by the suite's own assertion.
+- The chrome filter's own "could not reproduce" note from 2026-08-30 is
+  now closed: a hover grid across AE's window raises `tooltips_class32` +
+  `SysShadow` on demand, 10 of 54 points. The earlier pass looked for
+  them and wrote down that it had failed; they are reproducible.
+
+### No version bump
+
+`extension/` is untouched - the panel ships `extension/` alone and this
+is harness tooling. Same call, for the same reason, as the 2026-08-28 and
+2026-08-30 dialog-triage passes.
+
+### Notes for whoever runs the next pass
+
+- **The next item is specified and it is a BUILD, not a probe**: give the
+  verdict layer the `Analyzing Audio` discriminator. Everything it needs
+  was measured tonight. That dialog is **owned by the script-progress
+  window** (`owner=<the "Executing Script" #32770>`), whereas a script's
+  own `alert()` is owned by the MAIN window - measured, both of them. So
+  "a wordless popup owned by AE's script-progress window is our script
+  working, not our script stuck" is a fact the probe can annotate exactly
+  the way it now annotates `{nonmodal}`. Filed in WORKPLAN item 1.
+- One more latent one, seen but NOT visible and so not fixed: a
+  detached top-level `DroverLord - TabPanel Window` carries no
+  `WS_EX_NOACTIVATE` and a title that is not a progress name, so if one
+  were ever caught visible it would read as `blocked`. Never observed
+  visible in four runs; written down rather than guarded against.
+- `scripts/ae-window-census.ps1` is the tool to reach for next time
+  anything about AE's windows is in question: `-IncludeHidden` for one
+  census, `-Seconds n -Out <file>` to watch a run. It writes its log at
+  the END, so a watch that is killed leaves nothing - worth fixing if
+  anyone leans on it.
+- Machine state: AE left running on `logs\mogrt60\P60-scratch.aep`, three
+  green runs behind it, no dialog open. This pass deliberately raised two
+  real dialogs to measure them - a Script Alert and the save-changes
+  prompt - and dismissed both (the save prompt with WM_CLOSE, which is
+  Cancel: the project was not closed). `%TEMP%\aell-modal-flags.jsx` and
+  `%TEMP%\aell-save-prompt.jsx` can be deleted. The census log is under
+  `logs\`, which is gitignored.
+- Still open from earlier passes, unattempted tonight: item 7's catalog
+  VRAM delta (~36 GB of weights, a per-model template and a human's
+  decision); no panel UI for the mogrt export tools; no `.webm`/`.webp`
+  (a remote-session call). `release-notes.txt` still reads "0.10.0" while
+  the feed ships 0.10.17 - remote session's release cut.
+
+## 2026-08-30 (local) - item 1: the dialog After Effects raises for our
+## own script, and the 7.5 seconds every run spent halfway to exit 4
+
+Harness green before the pass (532/532), so this took the single item
+the previous pass filed and specified: give the VERDICT layer a way to
+see `Analyzing Audio...`. That pass had named it for the evidence layer
+only and deliberately left the verdict half open, with the
+discriminator measured and written down. This is the build.
+
+### The problem, restated from the run that was watched tonight
+
+`audio_to_keyframes` raises a `#32770` whose window TITLE IS EMPTY -
+the words live in an `Edit` child four levels down, reachable only by
+WM_GETTEXT, which is what the evidence layer uses and the verdict layer
+cannot. So the verdict layer sees three containers and no words:
+`unreadable`, a verdict that gives up after 8 consecutive polls.
+
+Watching the harness's OWN probe (the `$win32` here-string, extracted
+out of run-ae-selftest.ps1 so the shipping code was what got measured)
+at 200 ms through a real 532/532 run:
+
+    24.13s verdict=unreadable    ... 31.71s
+      [#32770]
+        OS_ViewContainer
+        OS_ViewContainer
+        OS_EditTextContainer
+      [#32770] Executing Script aell-selftest-run.jsx...
+
+Seven and a half seconds of a ~35 s run, flapping `unreadable` /
+`clear` as AE toggles which window is disabled. On a 2 s poll that is
+close to four samples of an eight-sample clock - **every run this
+harness makes has been running at about half the patience it appears
+to have, on a window that is proof the suite is being executed.** The
+flapping is the only reason it has never actually killed a run here,
+and flapping is not a guarantee: it depends on a poll phase, a machine
+speed and an audio layer's length, none of which are pinned.
+
+### The discriminator, re-measured rather than taken on trust
+
+`scripts/ae-window-census.ps1` at 200 ms across a real run, and then a
+`Script Alert` raised on purpose through `AfterFX.exe -r` and measured
+the same way:
+
+    Analyzing Audio   #32770  ex=00090121  owner=20780896  title=''
+    Executing Script  #32770  ex=00010101  owner=170224    (hwnd 20780896)
+    Auto-Save Project #32770  ex=00010101  owner=170224
+    Script Alert      #32770  ex=00010101  owner=170224
+    AE_CApplication            ex=00000100  owner=0        (hwnd 170224)
+
+The audio dialog is owned by **the script-progress window**. Everything
+that is or could be a QUESTION - the alert, the save prompt, auto-save,
+the progress window itself - is owned by the MAIN window. That holds
+without reading a single word, which is the whole point: this dialog
+cannot be identified by what it says from the layer that has to judge
+it. Note also `ex=00090121` carries neither WS_EX_NOACTIVATE nor
+WS_EX_TOOLWINDOW, so the existing `{nonmodal}` filter could never have
+reached it.
+
+### The fix, both layers
+
+- **`run-ae-selftest.ps1`** - `OnFindProgress` locates AE's
+  "Executing Script ..." window **in a pass of its own**, and this is
+  the part that is easy to get wrong: `EnumWindows` walks the Z-ORDER,
+  top first, so a dialog the running script raised is enumerated BEFORE
+  the window that owns it. A single pass would never hold the handle at
+  the moment it needed it. `OnTop` then marks any popup whose
+  `GetWindow(h, GW_OWNER)` is that window:
+  `[#32770] {scriptowner ex=00090121 owner=94F0B68}`.
+  Unlike the chrome filter, a marked popup is still **counted** and
+  still **read for its children** - it is a real dialog, and the
+  annotation is a fact about it, not permission to stop looking.
+- **`lib/ae-dialog-triage.ps1`** - a WORDLESS block so marked sets
+  `SawProgress`, the same flag the progress window sets, because it is
+  the same evidence: AE is working on our script. A marked block that
+  says ANYTHING falls through to the word test and can still block.
+
+Nothing was widened that answers dialogs: `CloseWordlessDialogs` still
+posts WM_CLOSE to `#32770` alone, and `Get-AellStaleDialogPlan` is
+gated on `unreadable`, so the audio dialog moving to `running` makes
+the harness strictly LESS likely to close something AE is using. That
+is pinned by a test rather than left as an argument.
+
+### Verification
+
+- **Real AE, after the fix, same watch: `unreadable` does not occur in
+  a whole run.** Seven distinct `unreadable` states before, zero after;
+  the run's verdicts are now 10 `clear`, 10 `running`, 1 `startup`. The
+  probe emits `{scriptowner ex=00090121 owner=94F0B68}` - the same `ex`
+  the census measured, a per-launch owner handle.
+- **`tests/test-selftest-runner.js` 165 -> 187 checks**, fixture
+  verbatim from tonight's capture. **Reverted against the pre-fix
+  scripts it fails 15 assertions.**
+- The rails, each its own case: the same window UNMARKED still stops
+  the run at the eighth poll; a marked popup that says something is
+  `blocked`; a marked popup does not vouch for a different wordless
+  popup in the same sample; a marked popup beside a real modal is
+  `blocked`; and the stale-dialog planner refuses to WM_CLOSE it.
+- **Full stub sweep: 60/60 test files exit 0.** Harness 532/532, three
+  runs tonight (one before the change, two after). Both .ps1 files
+  re-checked pure ASCII by the suite's own assertion.
+
+### Version
+
+`node scripts/bump-version.js patch` -> 0.10.18. This is harness
+tooling and `extension/` is untouched, which is the same shape as the
+2026-08-28 and 2026-08-30 dialog passes that did NOT bump - but those
+were called for their own reasons and the standing instruction for this
+session is to bump a patch on any verified push, so it is bumped. If
+the remote session would rather harness-only changes never move the
+feed, say so here and the next pass will follow it.
+
+### Notes for whoever runs the next pass
+
+- The watcher that made this measurable is worth rebuilding when needed
+  and was NOT committed (it lived in gitignored `logs/`): it reads
+  `run-ae-selftest.ps1`, pulls the `$win32` here-string out with
+  `(?s)\$win32 = @'\r?\n(.*?)\r?\n'@`, `Add-Type`s it, dot-sources the
+  triage lib, and prints `FindDialog` + `Get-AellDialogVerdict` on every
+  CHANGE. Measuring the shipping probe rather than a copy of it is what
+  made the before/after comparison mean anything.
+- Still latent, seen but never seen VISIBLE: a detached top-level
+  `DroverLord - TabPanel Window` carries neither flag and a title that
+  is not a progress name, so it would read as `blocked`. Written down,
+  not guarded against.
+- Machine state: AE left running on `logs\mogrt60\P60-scratch.aep`, no
+  dialog open. This pass raised one Script Alert on purpose and
+  dismissed it with WM_CLOSE. Scratch under `logs\audio-owner\` and
+  `%TEMP%\aell-alert-owner.jsx` were deleted.
+- Still open from earlier passes, unattempted tonight: item 7's catalog
+  VRAM delta; no panel UI for the mogrt export tools; no `.webm`/
+  `.webp`. `release-notes.txt` still reads "0.10.0" while the feed ships
+  0.10.18 - remote session's release cut.
+
+## 2026-08-30 (local) - item 7: the number the catalog had been guessing,
+## and the weights the panel can see but the backend cannot (0.10.19)
+
+Harness green before the pass (532/532), so this took the last bullet in
+the whole workplan that is still open: item 7's catalog VRAM delta. The
+SIZE and URL halves were settled 2026-08-30 (0.10.11); every `minVramGB`
+in `COMFY_CATALOG` was still a training guess and every entry still said
+`measured: false`.
+
+That number is not decoration. `tiers.js entryFits()` gates an entry on
+`vram < entry.minVramGB` and the comment above it says what the gate
+means: *can this entry run on this machine at all*. A wrong one either
+offers a card a model it cannot hold, or hides one it can.
+
+### The instrument
+
+`scripts/catalog-vram-probe.js`, built this pass. It drives the REAL
+panel path - settings.js + tiers.js + setup.js + comfy.js + tools.js -
+so what gets measured is `comfy_generate` and not a hand-rolled queue
+post. Three decisions in it, each paid for by an earlier pass:
+
+- **The floor is established, not glanced at.** `nvidia-smi memory.used`
+  is the whole card, and a generation that ran ten minutes ago may still
+  hold 19 GB. So the probe POSTs `/free` and then waits for twelve
+  consecutive samples to agree within 64 MiB before it writes the idle
+  number down. 0.10.15 is why: it measured this backend sitting at
+  23 654 MiB for ten seconds and dropping to 2 918 one second later. A
+  floor read on a timer would have been that 23 654, and every delta
+  after it would have been understated by 20 GB.
+- **The witness is one streaming process, not a timer.**
+  `nvidia-smi --query-gpu=memory.used -lms 250` is a single child
+  printing four readings a second. `comfy-probe.js` samples with
+  execFile every 4 s, which is fine for "did it use the GPU" and useless
+  for a peak - a VAE decode spike is shorter than one sample.
+- **It never touches After Effects.** `import: false`. The catalog
+  question is about the card.
+
+`--list` answers what this machine can measure with no GPU work at all,
+and that answer was itself worth having:
+
+    skip     sd15         (no workflowTemplate - the panel ships no graph)
+    skip     sdxl         (no workflowTemplate)
+    RUNNABLE krea2        (AE_LLAMA_KREA2_V1, 18109 MiB on disk)
+    skip     ltx-small    (no workflowTemplate)
+    skip     wan22-5b     (no workflowTemplate)
+    RUNNABLE minimax-h3   (AE_LLAMA_H3_I2V_V1, 40503 MiB on disk)
+    skip     minimax-h3-int8 (no workflowTemplate)
+
+The weights a template loads are read out of the GRAPH, not out of the
+catalog entry - 0.10.9's lesson, that an entry's `urls`/`files` and what
+the shipped template names are two different lists. The H3 total the
+graph produced, 40 503 MiB, matches the entry's own `sizeMB` exactly,
+which is a free cross-check on 0.10.11's work.
+
+### krea2: the catalog was wrong by a factor of two
+
+Three runs on the 5090 (32 607 MiB), ComfyUI 0.32.0, idle floor
+2861-2867 MiB every time:
+
+| run | size out | idle | peak | DELTA | seconds |
+|---|---|---|---|---|---|
+| authored, seed 12345 | 3072x1728 | 2861 | 26 897 | **24 036 MiB** | 32 |
+| authored, seed 4242  | 3072x1728 | 2867 | 27 027 | **24 160 MiB** | 32 |
+| `--width 1024 --height 1024` | 1640x1640 | 2867 | 23 667 | **20 800 MiB** | 18 |
+
+The two authored runs are 124 MiB apart (0.5%), so the number
+reproduces. The catalog claimed **12 GB**.
+
+The third row is the one that settles the argument, because the obvious
+objection to a measurement taken on a 32 GB card is that PyTorch
+allocates greedily when there is room. Cut the frame to a third of the
+pixels and the cost only falls to 20 800 MiB - because the floor is the
+WEIGHTS, and this entry's own three files are 18 109 MiB. That part
+needs no GPU at all: a 12 GB card cannot hold 17.7 GiB of weights, so it
+must page ~6 GiB of them every step, and 0.10.14 measured what this
+backend does when a job outgrows the card - it does not OOM, it GRINDS
+(33 s/it on pass one, 92 s/it on pass two, no exception, no end).
+
+So `minVramGB` 12 -> **24**, `measured: true`, and the reading rides IN
+the entry rather than in a comment: `measuredVramMB: 24160`,
+`measuredSeconds: 32`, `measuredAt` (the pixel size, which is half the
+number), `measuredOn` (the card).
+
+**Ripple, checked rather than assumed** - `recommendGen` across the
+ladder now reads:
+
+    8 GB -> image=sdxl   12 GB -> image=sdxl   16 GB -> image=sdxl
+    24 GB -> image=krea2   32 GB -> image=krea2
+
+which is the intended effect: a 16 GB card is no longer offered a model
+whose weights alone are larger than its card.
+
+### minimax-h3: attempted, blocked, and the blocker is a shipped defect
+
+The probe got as far as the queue and ComfyUI refused the graph:
+
+    node 129 (VAELoader): Value not in list - vae_name:
+    'minimax_h3_video_vae_fp16.safetensors' not in [...
+     'minimax_h3_video_vae_int8_convrot.safetensors', ...]
+
+Chased with `/object_info` rather than guessed at. The running backend
+sees **none** of the four H3 weights - no `minimax_h3_fl2va_*` unet, no
+`qwen3vl_32b_minimax_h3_nvfp4_awq` encoder, neither H3 VAE. All four
+live only in `AppData\Local\Comfy-Desktop\ComfyUI-Shared\models`, and
+this instance was launched with `--base-directory` pointing at
+`Documents\ComfyUI`. There is no `extra_model_paths.yaml` anywhere on
+the machine.
+
+**That is not a probe problem, it is the panel's.** `comfyModelRoots`
+(0.10.13) was widened to include that shared store precisely because the
+panel had priced the H3 template at null on a machine that had already
+rendered with it. The fix was right for the arithmetic and it created a
+second, worse failure: the panel now believes 40 503 MiB of weights are
+available, prices the job, and on a 32 GB card that means **stopping the
+chat model to make room** - and only then does ComfyUI say it cannot
+load any of them. The user pays a full handoff for a job that was never
+runnable.
+
+The two questions are genuinely different and both sources are needed:
+the DISK knows how big a weight is (`/object_info` has no sizes), and
+the BACKEND knows whether it can load it (the disk cannot know the
+search path). Filed in WORKPLAN as its own item with the shape of the
+fix - check the chosen template's weights against `/object_info` before
+the arbiter acts, and refuse early naming the missing files AND where
+they are on disk, because that sentence is the one that tells a user
+their backend is pointed at the wrong root.
+
+I did NOT restart the owner's ComfyUI to unblock it. It is their
+instance, 0.10.9 established `Comfy.ensureRunning` cannot start the
+working 0.32.0 here, and a restart under an unattended pass could leave
+the machine with no backend at all.
+
+### Two smaller things the pass measured, filed not fixed
+
+- **Four of seven catalog entries have no bundled template** (`sd15`,
+  `sdxl`, `ltx-small`, `wan22-5b`) and `recommendGen` offers them
+  anyway. Pre-existing, but the krea2 correction just made it the COMMON
+  case: every card under 24 GB is now recommended `sdxl` for image, and
+  `comfy_generate` cannot render it. Remote session's call.
+- **The KREA2 template upscales 1.6x**, so `comfy_generate {width: 1024,
+  height: 1024}` returns 1640x1640 (and the authored 1920x1080 latent is
+  why the default output is 3072x1728). Deliberate in the graph - 0.9.23
+  substituted `LatentUpscaleBy` for `SesquiLatentUpscale` exactly so it
+  would NOT shrink - but `width`/`height` are documented to the model as
+  the output size and they are not it.
+
+### Verification
+
+- **Three real generations on the real GPU**, numbers above; the two
+  authored runs agree to 0.5%.
+- **`tests/test-model-catalog.js`** carries the bug class, not the
+  instance: an entry with `measured: true` must carry all four reading
+  fields, `measuredAt` must name a pixel size, and `minVramGB * 1024`
+  must cover `measuredVramMB`. Reverting the gate to 12 fails 3
+  assertions; setting `measured: true` on an entry with no reading fails
+  8. It also now fails a `workflowTemplate` naming a file the bundle does
+  not contain.
+- **Full stub sweep: 60/60 test files exit 0.**
+- **Harness 532/532**, before and after.
+
+### Version
+
+`node scripts/bump-version.js patch` -> 0.10.19. This changes shipped
+behaviour: `entryFits` is panel code and a 16 GB card's image
+recommendation is different after it.
+
+### Notes for whoever runs the next pass
+
+- **Do not re-attempt minimax-h3 without reading the blocked section
+  above.** It is one restart away from measurable, but the restart is
+  the owner's to make - or the filed `/object_info` item lands first, in
+  which case the panel will say so out loud and the probe will too.
+- `logs/catalog-vram/` holds the three PNGs and the
+  `logs/catalog-vram-probe-*.md` transcripts; both are gitignored.
+- Machine state: AE running, no dialog open, project untouched (the
+  probe never imports). ComfyUI still up on 8188, queue idle, card back
+  to 2 870 MiB.
+- Still open elsewhere: no panel UI for the mogrt export tools; no
+  `.webm`/`.webp`. `release-notes.txt` still reads "0.10.0" while the
+  feed ships 0.10.19 - remote session's release cut.
+
+## 2026-08-30 (local) - item 7: the weights the panel could see and the
+## backend could not, and the handoff paid for a job that never ran (0.10.20)
+
+**Item:** WORKPLAN 7, the item the previous pass filed rather than fixed -
+"the panel decides a model is available by looking at the DISK, and the
+backend decides by its own search path. On this machine the two disagree
+today."
+
+Harness green at 532/532 before the pass and after it, so item 1 did not
+claim the night. Sections 1-6 are struck; this was the highest-priority
+item that could actually move (the remaining catalog VRAM entries need
+~26 GB downloaded and templates the panel does not ship, and minimax-h3
+is blocked on exactly the defect below).
+
+### The disagreement, reproduced before anything was written
+
+`/object_info` against the running ComfyUI 0.32.0, per node of each
+shipped template:
+
+    AE_LLAMA_KREA2_V1    3 weight slots, 3 present
+    AE_LLAMA_H3_I2V_V1   4 weight slots, 4 MISSING
+
+    node 129 VAELoader.vae_name  minimax_h3_video_vae_fp16.safetensors
+    node 130 VAELoader.vae_name  minimax_h3_audio_vae_fp32.safetensors
+    node 137 CLIPLoader.clip_name qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors
+    node 148 UNETLoader.unet_name minimax_h3_fl2va_pruned_int8_convrot.safetensors
+
+and the panel prices that same template at **40 503 MiB** off the disk,
+because all four files really are in `%LOCALAPPDATA%\Comfy-Desktop\
+ComfyUI-Shared\models` where `comfyModelRoots` (0.10.13) looks. So on a
+card that cannot hold both, the arbiter stopped the chat model, warmed
+ComfyUI up, and only then heard `Value not in list`. The user paid a full
+handoff for a job that was never runnable.
+
+### The fix, and the rule that makes it safe
+
+`Comfy.missingWeights(comfyUrl, graph, cb)` walks the API-format graph,
+fetches `/object_info/<class>` once per CLASS (the H3 graph has two
+VAELoaders), and compares each node's file-valued input against the combo
+list the server itself declares. `comfy_generate` asks it BEFORE the
+arbiter acts and refuses with the sentence that tells a user their backend
+is pointed at the wrong root - every missing file, the node and input
+ComfyUI would have failed at, and where the file sits ON DISK:
+
+    ComfyUI at http://127.0.0.1:8188 cannot load 4 of this workflow's
+    weights, so the generation would fail even after freeing VRAM for it.
+    Missing from the backend's own model list:
+    minimax_h3_video_vae_fp16.safetensors (node 129 VAELoader.vae_name, on
+    disk at C:\Users\...\ComfyUI-Shared\models\vae\...); [...] Every one of
+    those files IS on this machine, so the running ComfyUI is searching a
+    different models tree - point it at them (extra_model_paths.yaml, or
+    the --base-directory it was started with) and try again.
+
+Both sources stay, because they answer different questions: the DISK knows
+how big a weight is (`/object_info` carries no sizes, and size is what the
+arithmetic runs on), the BACKEND knows whether it can open it.
+
+**The rule that decides whether this is shippable is SILENCE.** A check
+that guesses is worse than no check, so every case it cannot answer passes
+over without a word: a class the server does not know, an input the class
+does not declare, a LINKED input, a value that is not a weight filename,
+and an unreachable backend. It can therefore only ever refuse a weight
+ComfyUI would itself reject. Two of those are not hypothetical - the real
+`vae_name` list carries `pixel_space`, a non-file choice, and `UNETLoader`
+carries `weight_dtype`, a mode; calling either a missing weight would send
+a user hunting for a file that never existed.
+
+A near-miss is still a miss, and this machine proves it: the backend DOES
+list `minimax_h3_video_vae_int8_convrot.safetensors`, a different
+quantization of the same model, and the template names the fp16.
+
+### The ordering trap this pass walked into
+
+The check needs a RUNNING backend, so the first version hoisted
+`Comfy.ensureRunning` ahead of the arbiter - and `test-vram-arbiter.js`
+caught it immediately: a pause-"never" refusal that the arithmetic alone
+can reach was now BOOTING a backend on its way to refusing. `planFor` was
+split out precisely because it is the decision with no side effects, so
+the order is now: planFor refusal (free) -> boot -> weight check ->
+handoff. Pinned by a test of its own; the stub suite caught this, not the
+field.
+
+### Verification
+
+- **`scripts/weight-availability-probe.js`, 11/11 verdicts on the real
+  backend.** It drives the panel's own code (settings + tiers + comfy +
+  tools) and asserts invariants rather than reading a table: a listed
+  template is never refused; a blocked one is, naming every file and
+  locating all 4/4 on disk; the panel still prices it at 40 503 MiB (the
+  disagreement, as a number); an unreachable backend refuses nothing; and
+  the refusal comes back through the REAL `comfy_generate` with
+  `llama.stop` never called and the graph never queued - on a job
+  `planFor` independently calls a `handoff`, so the saved churn is not a
+  vacuous pass.
+- **`tests/test-weight-availability.js`, 33 checks**, replaying the
+  machine's real `/object_info` lists (trimmed, not invented). Mutation-
+  tested: moving the weight check back after the handoff fails the
+  ordering assertion with the whole trace printed (`comfy.ensure,
+  llama.stop, comfy.free, llama.start`).
+- **Full stub sweep: 61/61 test files exit 0.** capability-report
+  `--check` and workflow-hash-history `--check` both fresh.
+- **Harness 532/532**, before and after.
+
+### Version
+
+`node scripts/bump-version.js patch` -> 0.10.20. Shipped behaviour: a
+generation the backend cannot load is now refused early instead of after
+a handoff.
+
+### Notes for whoever runs the next pass
+
+- **minimax-h3's VRAM measurement is now one step less blocked.** The
+  panel says out loud what is wrong, and so does the probe, but the
+  weights are still invisible to the owner's instance - it is launched
+  `--base-directory Documents\ComfyUI` and there is no
+  `extra_model_paths.yaml` on the machine. Fixing that is the OWNER's
+  call (restarting their ComfyUI under an unattended pass could leave the
+  machine with no backend at all), so do not re-attempt the measurement
+  without reading the 0.10.19 entry first.
+- Machine state: AE running, no dialog open, project untouched (nothing
+  this pass ran imports). ComfyUI still up on 8188, queue idle - the probe
+  never queues a graph, by design.
+- Still open elsewhere: sd15/sdxl/wan22-5b VRAM (needs ~26 GB downloaded
+  AND templates the panel does not ship); four catalog entries with no
+  `workflowTemplate` that `recommendGen` offers anyway (remote session's
+  call); no panel UI for the mogrt export tools; no `.webm`/`.webp`.
+  `release-notes.txt` still reads "0.10.0" while the feed ships 0.10.20 -
+  remote session's release cut.
+
+
+---
+
+## 2026-08-30 — the size the panel asked for and the size it got (0.10.21)
+
+**Item:** WORKPLAN 7, the last unstruck bullet that could move — *"one
+measured oddity, logged not fixed: the KREA2 template upscales 1.6x, so
+`comfy_generate {width: 1024, height: 1024}` returns a 1640x1640 image
+... `width`/`height` are documented to the model as the output size and
+they are not."*
+
+Harness green at **532/532** before the pass, so item 1 did not claim the
+night. Sections 1-6 are struck. Of what remains in section 7, sd15 /
+sdxl / wan22-5b need ~26 GB downloaded and templates the panel does not
+ship, minimax-h3 is blocked on a backend that cannot see its weights
+(0.10.19 / 0.10.20 — do not re-attempt), and the four template-less
+catalog entries are filed for the remote session. This was the item.
+
+### What the defect actually was
+
+Not the graph. The 1.6x upscale is deliberate — 0.9.23 substituted
+`LatentUpscaleBy` for `SesquiLatentUpscale` precisely so a machine
+without the pack would not render SMALLER — and changing it would mean
+running the first pass at 640 for a 1024 request on a model authored at
+1920x1080. The defect is that **nobody said so, at either end**:
+
+- the tool told the model `width`/`height` were the output size;
+- and the panel could not have corrected itself if it wanted to, because
+  `import_file` returned `{name, id}` and nothing else. The panel imported
+  a 1640x1640 file into the user's project and the only record of its
+  size anywhere was the file.
+
+So every decision made after a generation — a comp built to hold it, a
+scale, a position — was made from the number that had been REQUESTED.
+
+### The fix, both ends
+
+**1. Say what the size becomes (`extension/js/comfy.js`).** `injectParams`
+now records every node whose size it set, and `outputScaleFrom` walks
+FORWARD from each one, through consumers, to the node that writes a file,
+accumulating the factor. One line lands in `applied`:
+
+    size 1024x1024 on node 500 is enlarged 1.6x before this template
+    saves, so the file will be 1640x1640 - width/height set the size it
+    GENERATES at, not the size it writes
+
+The arithmetic is the node's own, and that detail is the whole test:
+1024 x 1.6 is 1638.4, but a LATENT upscale lands on the /8 grid and
+multiplies back out, so the answer is **1640**. Predicting 1638 would
+have been a plausible-sounding lie.
+
+**It is silent by the same rule the weight check ships under (0.10.20):**
+an upscale whose factor lives in a `.pth` rather than in a widget, a
+factor behind a link, a widget that is not a positive number, two output
+branches that disagree, a chain reaching no output at all, and a caller
+who set no size — every one of those produces nothing rather than a
+number that might be wrong. An absolute resize downstream RESETS the
+factor to 1, because `injectParams` has just written the caller's own
+numbers into it and from there the request is the truth again.
+
+**2. Measure what was imported (`extension/jsx/hostscript.jsx`).**
+`import_file` returns `width`/`height` — AE has measured the file by the
+time `importFile` returns — plus `duration`/`frameRate` for media that
+has them. A still reports NEITHER rather than zero, so "no duration"
+cannot read as "0 seconds". The reads are guarded: `importFile` does not
+always answer with an AVItem (an `.aep` comes back as a FolderItem) and a
+host object with no `width` must not take the tool down. `comfy_generate`
+hoists the measurement to `data.outputSize`.
+
+`import_as_layer` already reported `sourceSize`, so it needed nothing.
+
+### Verification
+
+- **`scripts/output-size-probe.js` on the real card, both runs green.**
+  It makes the prediction from the panel's own code BEFORE it renders,
+  then reads the saved PNG's own IHDR header — the file the user gets,
+  not ComfyUI's opinion of it:
+  - 512x512 asked -> predicted 816x816 -> **measured 816x816**, 10 s.
+    Plain arithmetic would have said 819, so the /8 grid is measured here
+    rather than assumed.
+  - 1024x1024 asked -> predicted 1640x1640 -> **measured 1640x1640**,
+    14 s. That is the exact number this bullet was filed with.
+  It never touches AE (`import: false`) and never calls the arbiter, so
+  no chat model was stopped for it.
+- **`tests/test-comfy-output-size.js`, 23 checks** — the note, the
+  substituted class, an un-set dimension scaling with the template's own,
+  image-space vs latent rounding, two upscales compounding, and seven
+  distinct silences. Mutation-tested: replacing the /8-grid rounding with
+  plain rounding fails 5 of them. The shipped template is replayed
+  against both field numbers.
+- **Real-AE harness: 533/533** (was 532 — the new step is *"import_file
+  reports the size AE measured, not one we asked for"*, which is what
+  proves AE really answers 240x180 and really omits duration and
+  frameRate for a still; no stub could have settled that).
+- `tests/test-frame-roundtrip.js` +5 checks against the real hostscript:
+  a measured still, an audio file reporting duration and NO 0x0 size, and
+  a FolderItem-shaped item whose every property throws.
+- **Full stub sweep: 62/62 test files exit 0.** capability-report
+  `--check` and workflow-hash-history `--check` both fresh.
+
+### Assumptions written down
+
+- **Report, do not compensate.** Pre-dividing the request by 1.6 would
+  make `width` mean the output size, but it would also run a model
+  authored at 1920x1080 at 1200x675 and change what it draws. The bullet
+  itself calls the graph's behaviour deliberate, so the contract was
+  corrected instead of the graph.
+- **The note fires only when the caller SET a size.** A caller who passed
+  none gets the template's authored size and no note — the mismatch this
+  item is about cannot arise. The real size still comes back through
+  `outputSize` either way.
+
+### Version
+
+`node scripts/bump-version.js patch` -> **0.10.21**. Shipped behaviour: a
+generation says what size it will write, and an import says what size it
+got.
+
+### Notes for whoever runs the next pass
+
+- Machine state: AE running, no dialog open, project untouched (nothing
+  this pass ran imports into it). ComfyUI still up on 8188, queue idle;
+  the two probe renders are in `logs/output-size/`, which is gitignored.
+  The chat model was never stopped.
+- **Section 7 now has nothing left that this machine can move on its
+  own.** What is open there is open on someone else: sd15 / sdxl /
+  wan22-5b want ~26 GB of weights AND templates the panel does not ship;
+  minimax-h3 wants the owner to repoint their ComfyUI (see 0.10.19 and
+  0.10.20 before touching it); the four `workflowTemplate`-less catalog
+  entries that `recommendGen` offers anyway are filed for the remote
+  session. A pass that finds no new harness failure should say so and
+  stop rather than manufacture work.
+- Still open elsewhere: no panel UI for the mogrt export tools; no
+  `.webm`/`.webp`. `release-notes.txt` still reads "0.10.0" while the feed
+  ships 0.10.21 — remote session's release cut.

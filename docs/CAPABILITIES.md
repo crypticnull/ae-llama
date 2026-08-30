@@ -12,7 +12,7 @@ feature they describe. Use this to look at the product whole and ask
 
 _Regenerate with `node scripts/capability-report.js` — CI fails if this section is stale._
 
-**73 tools** (62 mutating, 11 read-only; 69 host-side, 4 panel-side).
+**77 tools** (66 mutating, 11 read-only; 71 host-side, 6 panel-side).
 
 | Tool | Does | Writes | Side | Stub tests | Suite steps |
 |---|---|---|---|---|---|
@@ -26,7 +26,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `add_null` | Add a null layer (use as a controller or parent) | yes | host | 1 | 8 |
 | `add_shape_content` | Add content INSIDE a shape layer: kinds group, rectangle, ellipse, star, polygon, path, fill, stroke, gradient_fill, gradient_stroke, repeater, trim_paths, merge_paths, offset_paths, rounded_corners, pucker_bloat, twist, zigzag | yes | host | 1 | 12 |
 | `add_shape_layer` | Add a shape layer (rectangle, ellipse, polygon, or star) | yes | host | — | 4 |
-| `add_solid` | Add a solid layer | yes | host | — | 45 |
+| `add_solid` | Add a solid layer | yes | host | — | 46 |
 | `add_text_animator` | Animate a text layer PER CHARACTER (typewriter, cascade, wiggle) — an animator holds the properties, a selector picks which characters get them | yes | host | 1 | 10 |
 | `add_text_layer` | Add a text layer to a comp | yes | host | 1 | 8 |
 | `add_to_render_queue` | Add a comp to the render queue WITHOUT rendering it | yes | host | 1 | 3 |
@@ -41,33 +41,37 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `comfy_generate` | Generate an image/video with local ComfyUI and import it into the AE project | yes | panel | — | — |
 | `comfy_list_workflows` | List available ComfyUI generation workflow templates by name | no | panel | — | — |
 | `comfy_status` | Check the local ComfyUI instance (online? queue depth?) | no | panel | — | — |
-| `create_comp` | Create a composition and open it | yes | host | 1 | 31 |
+| `create_comp` | Create a composition and open it | yes | host | 1 | 32 |
 | `create_folder` | Create a project-panel folder | yes | host | 1 | 10 |
-| `delete_item` | Delete a project item | yes | host | 1 | 40 |
+| `delete_item` | Delete a project item | yes | host | 1 | 41 |
 | `delete_layer` | Delete a layer from a comp | yes | host | — | 19 |
 | `distribute_property` | Distribute a property VALUE across layers | yes | host | 1 | 5 |
 | `duplicate_comp` | Duplicate a composition | yes | host | 2 | 5 |
 | `duplicate_layer` | Duplicate a LAYER inside its comp (use duplicate_comp only for whole compositions) | yes | host | 1 | 10 |
+| `export_gif` | Export a comp as an animated GIF | yes | panel | — | — |
+| `export_mogrt` | Write a comp out as a .mogrt Motion Graphics template | yes | host | 1 | 6 |
+| `export_social` | Export a comp as an H.264 .mp4 (or .mov) sized for posting, AUDIO INCLUDED when the comp has any | yes | panel | — | — |
+| `expose_property` | Expose one property in the comp's ESSENTIAL GRAPHICS panel, so an editor can change it in Premiere | yes | host | 1 | 5 |
 | `for_each_layer` | Run a PER-LAYER tool once per target layer in ONE call (max 200 layers) — the batch executor for anything without its own layers arg: {tool: 'apply_effect', args: {effect: 'Gaussian Blur'}} blurs every target | yes | host | 1 | 6 |
 | `get_bounds` | MEASURE a layer's rendered content without touching it — how wide the text actually is, where the shape sits in the frame, whether anything overflows | no | host | 1 | 32 |
 | `get_comp_details` | Layers of a comp with index, name, type, timing, effects | no | host | 3 | 30 |
-| `get_project_info` | List project items (comps/footage/folders) and the active comp | no | host | 2 | 14 |
+| `get_project_info` | List project items (comps/footage/folders) and the active comp | no | host | 2 | 15 |
 | `get_property` | Read ANY property by path: value, keyframes, expression | no | host | 3 | 90 |
 | `grid_layout` | Arrange layers into a grid rigged to a control null: its 'Grid X Spacing'/'Grid Y Spacing'/'Grid Columns' sliders drive spacing AND column count live, and the grid centers on the null's position (all expressions generated host-side) | yes | host | 1 | 2 |
 | `import_as_layer` | Import a file AND place it in a comp as a layer, scaled to the comp | yes | host | 1 | 8 |
-| `import_file` | Import a footage/image/video file into the PROJECT PANEL only — it does not appear in any comp | yes | host | — | 1 |
+| `import_file` | Import a footage/image/video file into the PROJECT PANEL only — it does not appear in any comp | yes | host | 1 | 2 |
 | `link_property` | Drive a layer property from a control | yes | host | — | 2 |
 | `list_effects` | Enumerate effects INSTALLED in this AE (name, matchName, category), filtered and paged | no | host | 1 | 2 |
 | `list_presets` | Enumerate the ANIMATION PRESETS (.ffx) installed in this AE — AE ships ~679 (Behaviors, Text, Backgrounds, Transitions, Image, Shapes…) plus the user's own | no | host | 1 | 3 |
 | `list_properties` | DISCOVER a layer's real property tree — names, paths, types, current values | no | host | 2 | 9 |
-| `list_render_templates` | List this machine's render-settings and output-module template names for render_comp | no | host | 1 | 2 |
+| `list_render_templates` | List this machine's render-settings and output-module template names for render_comp | no | host | 1 | 3 |
 | `move_to_folder` | Move project items into a folder (batch) | yes | host | 1 | 2 |
 | `organize_project` | File loose root-level items into Comps/Footage/Solids/Audio/Images folders at the project ROOT | yes | host | 1 | 2 |
 | `precompose` | Move layers into a new nested comp (precompose) | yes | host | 1 | 5 |
 | `remove_keyframes` | Remove keyframes from a property on many layers at once — specific times or all | yes | host | 1 | 5 |
 | `rename_comps` | Rename MANY comps in one call, on the org convention (REVyy_ from a year in the old name, else REV_NO-YEAR_) | yes | host | 1 | 3 |
 | `rename_item` | Rename any project item (comp, footage, folder) | yes | host | 1 | 3 |
-| `render_comp` | Actually RENDER a comp to a file | yes | host | 1 | 8 |
+| `render_comp` | Actually RENDER a comp to a file | yes | host | 1 | 11 |
 | `render_comp_audio` | Render ONLY the comp's audio to a file (AE's audio-only output module, picked for you) | yes | host | 1 | 2 |
 | `reorder_layers` | Restack layers WITHOUT changing their timing | yes | host | 1 | 2 |
 | `scale_comp` | Resize a comp AND scale its content to match, re-centered — like the native 'Scale Composition' script | yes | host | 2 | 2 |
@@ -92,7 +96,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 
 **Coverage gaps (computed):**
 
-- Host tools with NO stubbed test: `add_camera`, `add_shape_layer`, `add_solid`, `apply_effect`, `delete_layer`, `import_file`, `link_property`, `set_effect_param`, `set_layer_timing`
+- Host tools with NO stubbed test: `add_camera`, `add_shape_layer`, `add_solid`, `apply_effect`, `delete_layer`, `link_property`, `set_effect_param`, `set_layer_timing`
 - Host tools never exercised by the self-test suite: none
 
 <!-- END GENERATED TOOL INVENTORY -->
@@ -142,8 +146,14 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
   the models REALLY loaded — concurrent, exclusive handoff (verified
   release both directions: nvidia-smi polling + ComfyUI /free), or a
   grounded refusal under pause="never". One pause covers a whole
-  round. (The curated model stack ships with the feed's comfyCatalog;
-  built-in entries are PROVISIONAL until P4 measures them.)
+  round. Before any of that churn, the chosen template's weights are
+  checked against the BACKEND's own /object_info: the disk answers how
+  big a weight is, the backend answers whether it can open it, and a
+  job whose weights the running ComfyUI cannot see is refused naming
+  each missing file and where it sits on disk — rather than costing a
+  handoff and then failing. (The curated model stack ships with the
+  feed's comfyCatalog; built-in entries are PROVISIONAL until P4
+  measures them.)
 - Auto-update: push → CI builds signed ZXP → feed branch → public repo →
   panels update and reload in place. Version-gated: the panel takes an
   update only when the feed is strictly newer (see CLAUDE.md
@@ -257,7 +267,46 @@ Queued (see WORKPLAN for owners/order):
   `beginSuppressDialogs`; and the output module forces its OWN file
   extension onto whatever path it is handed (an .mp4 set under
   "Lossless" reads back as .avi immediately), so the path REPORTED is the
-  one AE settled on, never the one that was asked for.
+  one AE settled on, never the one that was asked for. Since 2026-08-30 it
+  also takes `{resolution}` — AE's Render Settings resolution, so a
+  preview or a soon-to-be-scaled master costs the pixels it will actually
+  use rather than the comp's full frame. The result reports the
+  resolution AE confirms and the frame size it really wrote
+  (`ceil(dim/factor)` per axis, measured — 641x361 at half is 321x181),
+  and the four names are all AE accepts: anything else is refused with
+  the list. Ordering is load-bearing and is the reason a suite step
+  exists for it: `applyTemplate` RESETS the resolution to Full, so it is
+  set AFTER both templates or it silently does nothing.
+  `export_gif`/`export_social` expose the same lever as
+  `{masterResolution}` (`"auto"` picks the largest reduction that still
+  covers the output, and a reduction that would land UNDER the requested
+  size is refused rather than upscaled). It is opt-in: on this machine a
+  10 s 1080p comp to 480x270 went 6.6 s -> 6.0 s, so the win is the
+  intermediate itself — 1.74 GB down to 116 MB — not the clock.
+- **AE's lossless AVI clears the RIFF boundaries, so the 8 GB cap on the
+  export intermediate guards the disk and the clock — not the format.**
+  AVI is RIFF and RIFF offsets are 32 bits, so 2 GiB and 4 GiB are where
+  a writer classically wraps and hands back a file the reader truncates
+  without complaint. At 1080p30 a lossless master crosses 2 GiB at about
+  11.5 s and 4 GiB at 23 s, so almost every real export is past one of
+  them and nobody had ever checked. Measured 2026-08-30
+  (`scripts/riff-boundary-probe.js`): masters of **5.214 GiB (900
+  frames)** and **7.995 GiB (1380 frames — the largest the shipped cap
+  allows)** both rendered DONE with no warning, probed at the full frame
+  count and right frame size, decoded end to end under `-xerror` with an
+  empty stderr, and gave 900 and 1380 DISTINCT frame hashes. The check
+  that settles it is the last one: short reference spans re-rendered
+  across frames 343-347, 688-692 and the final five are **byte-identical
+  (framemd5) to those same frames inside the multi-gigabyte file**, which
+  compares AE against itself and so needs no assumption about colour
+  management or what the picture ought to look like. Nothing wrapped and
+  nothing was dropped. The default cap is therefore left at 8 GB and the
+  refusal now says which kind of limit it is, because a caller told only
+  "the limit is 8 GB" shortens an export that never needed shortening.
+  The per-frame overhead was re-measured while the files were there and
+  the old "3 640 B/frame at 1080p" note was an artefact of a TWO-frame
+  render: the cost is a fixed ~9.6 KB header, so the share falls to
+  **89 B/frame by 1380 frames** and the estimate stays a true floor.
 - **After Effects cannot render inside an undo group.** Its renderer
   closes the script's group out from under it and AE raises a modal
   "Undo group mismatch" — later in the run, at some innocent
@@ -352,8 +401,22 @@ Queued (see WORKPLAN for owners/order):
   with `range: 'workArea'` and `snapshot_frame`'s resolution override are
   now exercised in real AE, the audio converter's own key count being the
   witness that the work area landed and was put back.
-- Feature track not yet built: .mogrt export, whisper captions, ffmpeg
-  exports (items 5.9-6).
+- Essential Graphics is now reachable: `expose_property` puts one
+  property in the comp's EG panel and `export_mogrt` writes the comp out
+  as a .mogrt for Premiere. Both are made almost entirely of what AE does
+  silently -- a CANCELLED export (a font that is not installed, and its
+  alert answered anywhere but OK) returns TRUE and writes nothing, so the
+  tool stats the file rather than trusting the boolean; the export needs
+  the project saved AND clean, and dirties it again on success, so a
+  second export with no save between is a silent failure; the path is a
+  FOLDER and the file name is the template name VERBATIM, spaces and all.
+  There is no rename and no remove -- AE 2026 ships neither -- and
+  controller indices renumber on every add, newest first. Suite coverage
+  as of 2026-08-30 is `expose_property` end to end plus the whole
+  `export_mogrt` refusal wall; the EXPORT itself cannot be a suite step,
+  because AE exports only from a saved, CLEAN project and the suite has
+  been creating comps in the user's open one since step 1 -- the same
+  shape as `clean_project` and `organize_project`.
 - Image/video generation is not yet seamless: no frame-aware img2img,
   no mask-driven inpainting, no depth/parallax, no upscale/interpolate.
   The Krea 2 workflow now ships adapted and runnable
@@ -378,7 +441,16 @@ Queued (see WORKPLAN for owners/order):
   whose length is authored in seconds refuse a `frames` argument instead
   of mis-writing it) and `image`, which uploads a local file to
   ComfyUI's input folder — with no image the reference `LoadImage` is
-  detached and the graph runs as text-to-video.
+  detached and the graph runs as text-to-video. `width`/`height` are the
+  size the template GENERATES at, which is not always the size it writes:
+  the Krea 2 graph upscales its latent 1.6x between passes, so a request
+  for 1024x1024 saves 1640x1640. `injectParams` traces the size chain
+  forward to the node that writes the file and says so in `applied`
+  (staying silent for any chain it cannot account for — an upscale whose
+  factor lives in a `.pth`, a factor behind a link, two output branches
+  that disagree), and `import_file` reports the size AE MEASURED, which
+  `comfy_generate` hoists to `outputSize`. Both numbers verified against
+  the card by `scripts/output-size-probe.js`.
 - A shipped template must run on a bare ComfyUI, and the manifest is
   what makes that true: every non-core node class carries an
   `optionalNodes` rule — `passthrough` (drop it, rewire consumers to a

@@ -233,7 +233,15 @@ window.window = window;
 
 function loadPanelFile(rel) {
   const src = fs.readFileSync(path.join(EXT, "js", rel), "utf8");
-  new Function("window", src)(window);
+  // `.call(window, ...)` and not just `(window)`: ten of the panel
+  // modules end `})(window)` but whisper.js and ffmpeg.js end `})(this)`,
+  // which is the same object in a browser and is NODE'S GLOBAL here. So
+  // loading them the plain way published Whisper on globalThis, tools.js
+  // looked for global.Whisper on the probe's window and found nothing,
+  // and transcribe_to_captions answered "not available in this panel
+  // build" — a shipped-looking refusal that says nothing about the
+  // machine. Binding `this` too makes the loader work for both shapes.
+  new Function("window", src).call(window, window);
 }
 loadPanelFile("settings.js");
 loadPanelFile("tiers.js");
@@ -249,12 +257,37 @@ loadPanelFile("comfy.js");
 // Same reason: transcribe_to_captions reaches for global.Whisper before
 // it can produce a grounded "not installed" refusal.
 loadPanelFile("whisper.js");
+// And again for export_gif/export_social, which reach for global.Ffmpeg.
+loadPanelFile("ffmpeg.js");
 loadPanelFile("tools.js");
 
 const Settings = window.Settings;
 const Llama = window.Llama;
 const Tools = window.Tools;
 const Comfy = window.Comfy;
+
+/*
+ * A step that has to impersonate different hardware (`settings: {...}` on
+ * the step) gets it for the length of its own sentence and no longer.
+ *
+ * Deliberately NOT Settings.set: that mirrors every key to
+ * %APPDATA%\AE-Llama\settings.json, so a probe that died mid-step would
+ * leave the OWNER'S panel running on an 8 GB budget with chat pausing
+ * turned off — a probe must never be able to reconfigure the product it
+ * is measuring. Settings.get() hands back one cached object that every
+ * tool reads, so patching it in place reaches the whole panel path and
+ * restoring puts back exactly what was there.
+ */
+function applyStepSettings(patch) {
+  if (!patch) return function () {};
+  const s = Settings.get();
+  const saved = {};
+  for (const k in patch) { saved[k] = s[k]; s[k] = patch[k]; }
+  say("info", "settings for this step: " +
+      Object.keys(patch).map(k => k + " = " + JSON.stringify(patch[k]))
+        .join(", "));
+  return function restore() { for (const k in saved) s[k] = saved[k]; };
+}
 
 // The panel shows the arbiter's pause/resume and ComfyUI's progress in
 // its status line; here they belong in the transcript, or a step that
@@ -1108,6 +1141,118 @@ const STEPS = [
       }
       return null;
     }
+  },
+  {
+    // WORKPLAN item 7: the pause-"never" refusal, in the field.
+    //
+    // The arithmetic behind it was measured on a real 5090 on 2026-08-30
+    // (scripts/handoff-probe.js), and until that pass it could not
+    // produce numbers at all — no shipped manifest carried a sizeMB, so
+    // every refusal read "The panel cannot verify this generation fits".
+    // What no probe has ever checked is the last hop: whether a refusal
+    // survives the trip back THROUGH THE MODEL to the user.
+    //
+    // It is the one generation outcome the user cannot check for
+    // themselves. Nothing renders, nothing reaches the project, no
+    // dialog appears — so a model that answers "here's your image" is
+    // indistinguishable from a working panel until they go looking, and
+    // the setting they would have to change is never named.
+    //
+    // Impersonates an 8 GB card (T3) with pausing turned off: KREA2's
+    // ~17.7 GB of weights cannot fit beside a loaded 7B, so planHandoff
+    // refuses BEFORE Comfy.ensureRunning is reached. That is why this
+    // step needs no backend running, renders nothing, and costs no VRAM.
+    title: "a generation that cannot fit is refused, in words",
+    settings: { vramOverrideGB: 8, comfyPauseLlm: "never" },
+    say: "Make me a picture of a blue ceramic mug on a wooden table.",
+    check(state, ctx) {
+      const gen = (ctx.tools || []).filter(t => t.tool === "comfy_generate");
+      if (!gen.length) {
+        const tried = (ctx.tools || []).map(t => t.tool);
+        return "the model never called comfy_generate" +
+               (tried.length ? " — it ran " + tried.join(", ") + " instead"
+                             : " and ran no tools at all");
+      }
+      const ok = gen.filter(t => t.ok);
+      if (ok.length) {
+        return "comfy_generate SUCCEEDED on an 8 GB budget with pausing " +
+               "set to never — the arbiter started a job whose weights " +
+               "cannot fit beside the chat model";
+      }
+      // A refusal about anything else (an unknown workflow, a dead
+      // backend) means the arbiter was never reached, so the step proved
+      // nothing — that is a failure of the probe's own premise, not a
+      // pass.
+      const refusals = gen.filter(t =>
+        /pause chat during generation/i.test(String(t.error || "")));
+      if (!refusals.length) {
+        return "comfy_generate failed for some other reason than the " +
+               "pause setting, so the VRAM arbiter was never reached: " +
+               String(gen[gen.length - 1].error || "(no error text)");
+      }
+      const err = String(refusals[0].error);
+      // The 0.10.9 regression guard: a refusal that cannot name the
+      // arithmetic is the "cannot verify" answer every card used to get,
+      // and it tells the user nothing they can act on.
+      const nums = err.match(/[\d.]+ ?GB/g) || [];
+      if (nums.length < 3) {
+        return "the refusal does not say what does not fit — it needs " +
+               "the generation's size, the chat model's and the card's, " +
+               "and carries " + nums.length + ": \"" + err + "\"";
+      }
+      // The card's number here is a FICTION and the chat model's is
+      // measured, so unlabelled they can contradict each other outright
+      // — the first field run of this step got "the chat model holds
+      // ~20 GB of the card's 8 GB" (a 32B model, an 8 GB override) and
+      // it is the shipped sentence a user with vramOverrideGB set would
+      // read.
+      if (!/override/i.test(err)) {
+        return "the refusal quotes an impersonated card size as if it " +
+               "were the real one: \"" + err + "\"";
+      }
+      say("info", "refusal: " + err);
+      // Refusing is a decision, not an eviction: the chat model must
+      // still be loaded, because nothing was ever started.
+      if (ctx.chatState && ctx.chatState !== "running") {
+        return "the refusal cost the chat model anyway — llama-server is " +
+               ctx.chatState + " after a job that was never started";
+      }
+      const said = (ctx.replies || []).join(" ");
+      if (!said.trim()) {
+        return "the model relayed nothing at all back to the user";
+      }
+      // Three things the user needs and only the model can deliver: that
+      // it did NOT happen, why, and which setting to change.
+      const declined = new RegExp(
+        "\\b(?:can(?:no|')?t|cannot|could\\s?n['o]t|unable|" +
+        "did\\s?n['o]t|was\\s?n['o]t|is\\s?n['o]t|not able|no room|" +
+        "not enough|insufficient|refus\\w*|blocked|skipped|" +
+        "nothing was (?:started|generated)|" +
+        "did not (?:start|generate|run))\\b", "i");
+      const claimed = new RegExp(
+        "\\b(?:here(?:'s| is) (?:your|the)|" +
+        "i(?:'ve| have) (?:made|created|generated|rendered)|" +
+        "(?:image|picture) is ready|all done)\\b", "i");
+      if (!declined.test(said)) {
+        return (claimed.test(said)
+          ? "the model reported SUCCESS for a generation that never ran: \""
+          : "the model never told the user the picture was not made: \"") +
+          said.slice(0, 200) + "\"";
+      }
+      const reason =
+        /\b(?:vram|video memory|gpu memory|memory|fits?\b|\d\s?gb)/i;
+      if (!reason.test(said)) {
+        return "the refusal reached the user with no reason in it: \"" +
+               said.slice(0, 200) + "\"";
+      }
+      const setting = /\b(?:pause|paus\w+|never|auto|setting)/i;
+      if (!setting.test(said)) {
+        return "the user is told it cannot be done and not what to " +
+               "change — the reply never mentions the pause setting: \"" +
+               said.slice(0, 200) + "\"";
+      }
+      return null;
+    }
   }
 ];
 
@@ -1237,12 +1382,17 @@ function main() {
     aeRead(READ_COMP, function (before) {
       aeRead(SIG_FN + " return sig();", function (sigBefore) {
         const runsBefore = probeRuns;
+        const restoreSettings = applyStepSettings(step.settings);
         sendMessage(step.say, function (round) {
           aeRead(READ_COMP, function (state, readErr) {
             const ctx = { before: before && before.found ? before : null,
                           rounds: round.rounds,
                           toolRounds: round.toolRounds,
                           rolledBack: round.rolledBack, undo: null,
+                          // Sampled AFTER the round: a tool that refuses a
+                          // job is not allowed to have unloaded the chat
+                          // model on the way to saying no.
+                          chatState: Llama.getState(),
                           tools: round.tools, replies: round.replies };
             if (!step.undo) { judge(state, readErr, ctx); return; }
             measureUndo(sigBefore, runsBefore, function (u) {
@@ -1262,6 +1412,7 @@ function main() {
         });
 
         function judge(state, readErr, ctx) {
+          restoreSettings();
           let verdict = null;
           if (readErr) verdict = "could not read the comp: " + readErr.message;
           else verdict = step.check(state, ctx) || null;

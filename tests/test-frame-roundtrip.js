@@ -722,6 +722,55 @@ writePng("C:/frames/src.png", 320, 240, 644);
 }
 
 {
+  // import_file MEASURES what it imported. Nothing upstream can: the
+  // caller knows only the size it ASKED for, and comfy_generate proved
+  // that is a different number - the shipped KREA2 template upscales
+  // 1.6x between its two passes, so a request for 1024x1024 saves a
+  // 1640x1640 file and every decision made after the import (a comp
+  // built to hold it, a scale) was being made from the wrong one.
+  writePng("C:/frames/measured.png", 1640, 1640, 900);
+  const r = call("import_file", { path: "C:/frames/measured.png" });
+  assert(r.ok && r.data.width === 1640 && r.data.height === 1640,
+         "import_file reports the size AE measured: " +
+         JSON.stringify(r.data));
+  assert(r.data.name && r.data.id > 0,
+         "and still reports the item it made");
+  assert(r.data.duration === undefined && r.data.frameRate === undefined,
+         "a still carries no duration and no frame rate - reporting 0 " +
+         "would read as '0 seconds': " + JSON.stringify(r.data));
+
+  // Audio has a duration and no picture, and 0x0 must be ABSENT rather
+  // than reported as a size, or a comp gets built around nothing.
+  writePlain("C:/frames/track.wav", 2048);
+  const a = call("import_file", { path: "C:/frames/track.wav" });
+  assert(a.ok && a.data.width === undefined && a.data.height === undefined,
+         "an audio file reports no dimensions rather than 0x0: " +
+         JSON.stringify(a.data));
+  assert(a.data.duration === 3,
+         "and does report its duration: " + JSON.stringify(a.data));
+
+  // The guard that matters in the field: importFile does not always
+  // answer with an AVItem (an .aep comes back as a FolderItem), and a
+  // host object with no `width` must not take the tool down with it.
+  const items = project._items.slice();
+  const realImport = project.importFile;
+  project.importFile = function () {
+    const folder = { name: "legacy.aep", id: 7777,
+                     get width() { throw new Error("Unknown property"); },
+                     get duration() { throw new Error("Unknown property"); },
+                     get hasAudio() { throw new Error("Unknown property"); } };
+    return folder;
+  };
+  writePlain("C:/frames/legacy.aep", 64);
+  const f = call("import_file", { path: "C:/frames/legacy.aep" });
+  project.importFile = realImport;
+  project._items = items;
+  assert(f.ok && f.data.name === "legacy.aep" && f.data.width === undefined,
+         "an item with no measurable size still imports cleanly: " +
+         JSON.stringify(f));
+}
+
+{
   const r = call("import_as_layer", { path: "C:/frames/notes.txt",
                                       comp: "Shot" });
   assert(!r.ok && /could not import/i.test(r.error),

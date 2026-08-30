@@ -69,6 +69,12 @@
   // frame and turns another 3D, so it may not share a comp anything else
   // is measuring.
   var BNCOMP = "AELL Self-Test Bounds";
+  // And the Essential Graphics rig: exposing a property writes to the
+  // COMP's controller list, which nothing else in the suite reads, and
+  // there is no way to remove a controller once it is added (AE 2026
+  // ships no such call) — so the rig has to be a comp that is thrown
+  // away whole.
+  var MGCOMP = "AELL Self-Test Mogrt";
   var running = false;
 
   /**
@@ -91,6 +97,34 @@
     var batchNames = ["ST Batch"];
     for (var b = 2; b <= 60; b++) batchNames.push("ST Batch " + b);
     return [
+      // FIRST, before anything is created: photograph the project as the
+      // user left it. The cleanup at the bottom sweeps the suite's own
+      // "ST " namespace, but the items a run leaks are named by AFTER
+      // EFFECTS, not by the suite — every add_null leaves a solid source
+      // called "Null <n>" behind and every audio_to_keyframes one called
+      // "Audio Amplitude" (measured 2026-08-30: 34 orphans per run, in
+      // whatever project the user had open). Those names cannot be swept
+      // by name: "Null 1" is a name a user's own project will hold. So
+      // the sweep is scoped by ID to the items THIS RUN created, which
+      // needs the before-picture taken here.
+      { name: "baseline: photograph the project before the suite touches it",
+        tool: "get_project_info",
+        args: { limit: 0 },
+        check: function (d, ctx) {
+          ctx.baseIds = {};
+          for (var i = 0; i < d.items.length; i++) {
+            ctx.baseIds[d.items[i].id] = true;
+          }
+          ctx.baseCount = d.items.length;
+          // limit:0 means "no cap". If it ever capped, the baseline would
+          // be partial and the sweep would delete items it never created —
+          // so this is a guard on the cleanup, not a spare assertion.
+          return d.items.length === d.numItems ||
+                 "limit:0 listed " + d.items.length + " of " + d.numItems +
+                 " items; the cleanup cannot scope itself to this run " +
+                 "without the whole list";
+        } },
+
       { name: "create scratch comp",
         tool: "create_comp",
         args: { name: COMP, width: 1280, height: 720, duration: 8,
@@ -5244,6 +5278,14 @@
           // actually settled on so the next steps aim at the same file.
           ctx.rqWrote = d.output.replace(/\\/g, "/");
           ctx.rqBytes = d.bytes;
+          if (d.resolution !== "Full") {
+            return "an unasked render is not Full resolution: " +
+                   d.resolution;
+          }
+          if (d.renderedSize !== "160x120") {
+            return "did not report the comp's own frame size: " +
+                   d.renderedSize;
+          }
           return /1 frame/.test(d.timeSpan) ||
                  "did not report one frame: " + d.timeSpan;
         } },
@@ -5282,6 +5324,75 @@
           return d.bytes > ctx.rqBytes ||
                  "the file did not grow (" + ctx.rqBytes + " -> " +
                  d.bytes + "), so the render was silently skipped";
+        } },
+
+      // ---- {resolution}: AE renders FEWER PIXELS, rather than the same
+      // pixels scaled afterwards. The export path's master exists only to
+      // be scaled down, so this is where the bytes are saved. Every step
+      // here pins a measurement from the 2026-08-30 probe.
+      { name: "resolution:half renders a HALF-SIZE frame, and says so",
+        tool: "render_comp",
+        args: function (ctx) {
+          return { comp: ctx.rqComp, output: ctx.rqWrote,
+                   template: ctx.rqTemplate, frames: 1, overwrite: true,
+                   resolution: "half" };
+        },
+        check: function (d, ctx) {
+          if (d.status !== "DONE") return "status " + d.status;
+          if (d.resolution !== "Half") {
+            return "AE reports " + d.resolution + ", not Half";
+          }
+          var rs = String(d.renderedSize || "");
+          if (rs.indexOf("80x60") !== 0) {
+            return "half of 160x120 should be 80x60: " + rs;
+          }
+          if (rs.indexOf("160x120") < 0) {
+            return "the comp's own size is not named beside it: " + rs;
+          }
+          // The file itself, not just the report: a quarter of the
+          // pixels cannot cost the same bytes as all of them.
+          return d.bytes < ctx.rqBytes ||
+                 "the same frame at half resolution was not smaller (" +
+                 ctx.rqBytes + " -> " + d.bytes + "), so AE rendered " +
+                 "full size and the setting did nothing";
+        } },
+
+      // THE ordering step. applyTemplate RESETS Resolution to Full
+      // (measured), so a tool that sets it beside the other arguments
+      // renders full size and reports success. Only a render-settings
+      // template TOGETHER with a resolution can catch that.
+      { name: "a render-settings template does not eat the resolution",
+        tool: "render_comp",
+        args: function (ctx) {
+          var a = { comp: ctx.rqComp, output: ctx.rqWrote,
+                    template: ctx.rqTemplate, frames: 1, overwrite: true,
+                    resolution: "quarter" };
+          if (ctx.rqSettings) a.renderSettings = ctx.rqSettings;
+          return a;
+        },
+        check: function (d) {
+          if (d.status !== "DONE") return "status " + d.status;
+          if (d.resolutionWarning) return d.resolutionWarning;
+          if (d.resolution !== "Quarter") {
+            return "the template reset the resolution to " + d.resolution +
+                   " and the render went out full size";
+          }
+          return String(d.renderedSize || "").indexOf("40x30") === 0 ||
+                 "quarter of 160x120 should be 40x30: " + d.renderedSize;
+        } },
+
+      { name: "an arbitrary percentage is refused with AE's four names",
+        tool: "render_comp",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.rqComp, output: ctx.rqWrote,
+                   template: ctx.rqTemplate, frames: 1, overwrite: true,
+                   resolution: "35%" };
+        },
+        check: function (err) {
+          if (!/resolution/i.test(err)) return "not a resolution error: " + err;
+          return (/Full/.test(err) && /Quarter/.test(err)) ||
+                 "does not list what AE really offers: " + err;
         } },
 
       { name: "the queue is left exactly as it was found",
@@ -6027,6 +6138,29 @@
           if (!(d.id > 0)) return "no item id came back: " + d.id;
           return d.name.indexOf("ST Frame") === 0 ||
                  "imported something else: " + d.name;
+        } },
+
+      // And it MEASURES what it imported. Nothing else could: the caller
+      // knows only the size it asked for, and comfy_generate proved that
+      // is a different number - the KREA2 template upscales 1.6x between
+      // its passes, so a request for 1024x1024 lands a 1640x1640 file.
+      // The PNG here is a 240x180 still, so duration and frameRate must
+      // be ABSENT rather than reported as zero.
+      { name: "import_file reports the size AE measured, not one we asked for",
+        tool: "import_file",
+        args: function (ctx) { return { path: ctx.frWrote }; },
+        check: function (d) {
+          if (d.width !== 240 || d.height !== 180) {
+            return "wrong or missing dimensions: " + d.width + "x" + d.height;
+          }
+          if (d.duration !== undefined) {
+            return "a still reported a duration: " + d.duration;
+          }
+          if (d.frameRate !== undefined) {
+            return "a still reported a frame rate: " + d.frameRate;
+          }
+          return d.hasAudio === undefined ||
+                 "a still reported audio: " + d.hasAudio;
         } },
 
       { name: "and the layer count of the comp is untouched by it",
@@ -7911,6 +8045,241 @@
           return (/ONE layer/.test(err) && /once per layer/.test(err)) || err;
         } },
 
+      // ---- Essential Graphics: expose_property / export_mogrt
+      // (WORKPLAN 5.9 LOCK-IN).
+      //
+      // The EXPORT itself is not a step here, and that is a decision
+      // rather than an omission. AE exports a template only from a
+      // project that is SAVED and CLEAN, and by this point the suite has
+      // created a dozen comps in whatever project the user has open — so
+      // the only way to reach the export is to save the user's project,
+      // which the suite may never do. Same shape as clean_project and
+      // organize_project: the positive path is real-AE verified by hand
+      // (2026-08-30, three field runs, an 11 822 b .mogrt) and the SUITE
+      // holds the refusal wall, which is where every measured trap
+      // lives anyway.
+      //
+      // The wall is worth as much as the export: AE answers `true` and
+      // writes nothing for most of these, so a refusal that stops
+      // reaching AE at all is the tool's whole job.
+      { name: "create the mogrt rig",
+        batch: function () {
+          return [
+            { tool: "create_comp",
+              args: { name: MGCOMP, width: 320, height: 240,
+                      duration: 2, frameRate: 24 } },
+            { tool: "add_solid",
+              args: { comp: MGCOMP, name: "ST MG Fill",
+                      color: [0.2, 0.6, 0.9], width: 320, height: 240 } }
+          ];
+        },
+        check: function (rows, ctx) {
+          if (!rows[0].ok) return rows[0].error;
+          if (!rows[1].ok) return rows[1].error;
+          ctx.mgComp = rows[0].data.name;
+          return true;
+        } },
+
+      // AE's default controller name is NOT the property's name: it is
+      // the LAYER's for a transform or text property (and the EFFECT's
+      // for an effect parameter), so two properties of one layer become
+      // two confusingly similar controllers unless a label is passed.
+      // The tool reads back what AE actually called it.
+      { name: "expose_property reports the name AE really used",
+        tool: "expose_property",
+        args: function (ctx) {
+          return { comp: ctx.mgComp, layer: "ST MG Fill",
+                   property: "opacity" };
+        },
+        check: function (d, ctx) {
+          if (d.controllerCount !== 1) {
+            return "controllerCount " + d.controllerCount + ", expected 1";
+          }
+          if (d.controller.indexOf("ST MG Fill") !== 0) {
+            return "AE named the controller \"" + d.controller +
+                   "\", which does not start with the LAYER's name — the " +
+                   "measured default";
+          }
+          ctx.mgDefaultName = d.controller;
+          return /LAYER's name/.test(d.note || "") ||
+                 "no note explaining AE's default name: " +
+                 JSON.stringify(d);
+        } },
+
+      { name: "a label is used verbatim, and the indices renumber",
+        tool: "expose_property",
+        args: function (ctx) {
+          return { comp: ctx.mgComp, layer: "ST MG Fill",
+                   property: "position", label: "ST MG Move" };
+        },
+        check: function (d) {
+          if (d.controller !== "ST MG Move") {
+            return "controller is \"" + d.controller + "\", not the label";
+          }
+          if (d.controllerCount !== 2) {
+            return "controllerCount " + d.controllerCount + ", expected 2";
+          }
+          // Index 1 is the NEWEST and every index renumbers on the next
+          // add, so nothing may remember "my slider is number 3".
+          return /1 is the newest/.test(d.next || "") ||
+                 "the result does not say the indices renumber";
+        } },
+
+      // AE accepts duplicate controller names in silence (measured: two
+      // called "Wipe Amount"), and an editor cannot tell them apart.
+      { name: "a duplicate controller name is reported, not swallowed",
+        tool: "expose_property",
+        args: function (ctx) {
+          return { comp: ctx.mgComp, layer: "ST MG Fill",
+                   property: "scale", label: "ST MG Move" };
+        },
+        check: function (d) {
+          return /ALSO called/.test(d.warning || "") ||
+                 "no duplicate warning: " + JSON.stringify(d);
+        } },
+
+      { name: "a GROUP is refused with the leaf list to look in",
+        tool: "expose_property",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.mgComp, layer: "ST MG Fill",
+                   property: "Transform" };
+        },
+        check: function (err) {
+          return (/is a GROUP/.test(err) && /list_properties/.test(err)) ||
+                 err;
+        } },
+
+      // AE refuses a second copy of a property that is already a
+      // controller, and answers `undefined` rather than false. There is
+      // no rename and no remove either — AE 2026 ships neither call — so
+      // the refusal has to name the roster instead.
+      { name: "exposing the same property twice is refused with the roster",
+        tool: "expose_property",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.mgComp, layer: "ST MG Fill",
+                   property: "opacity" };
+        },
+        check: function (err, ctx) {
+          if (!/ALREADY a controller/.test(err)) return err;
+          return err.indexOf(ctx.mgDefaultName) !== -1 ||
+                 "the refusal does not list the controllers that exist: " +
+                 err;
+        } },
+
+      { name: "a writable folder for the export refusals",
+        tool: "list_render_templates",
+        args: {},
+        check: function (d, ctx) {
+          if (!d.tempFolder) return "no tempFolder to aim at";
+          ctx.mgTemp = d.tempFolder.replace(/\\/g, "/").replace(/\/$/, "");
+          return true;
+        } },
+
+      { name: "export_mogrt with no folder says what 'folder' is",
+        tool: "export_mogrt",
+        expectError: true,
+        args: function (ctx) { return { comp: ctx.mgComp }; },
+        check: function (err) {
+          return (/'folder' is required/.test(err) &&
+                  /FILE name comes from the template name/.test(err)) || err;
+        } },
+
+      { name: "a relative folder is refused before AE resolves it",
+        tool: "export_mogrt",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.mgComp, folder: "templates/out" };
+        },
+        check: function (err) {
+          return (/must be an ABSOLUTE path/.test(err) &&
+                  /working directory/.test(err)) || err;
+        } },
+
+      // AE mkdir -p's whatever folder it is handed and then fails INTO
+      // it: the 2026-08-29 probe left four empty directories named after
+      // its own failed calls. Refused here, naming the deepest folder
+      // that does exist so the caller can see where the path went wrong.
+      { name: "a missing folder is refused, not created and failed into",
+        tool: "export_mogrt",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.mgComp,
+                   folder: ctx.mgTemp + "/ST MG Nope/deeper" };
+        },
+        check: function (err, ctx) {
+          if (!/Folder does not exist/.test(err)) return err;
+          if (!/Deepest folder that does exist/.test(err)) {
+            return "the refusal does not name where the path stops: " + err;
+          }
+          return /CREATE this folder and then fail into it/.test(err) ||
+                 "the refusal does not say why AE cannot be asked: " + err;
+        } },
+
+      // A name Windows will not accept is not refused by AE: it works
+      // for 3.7 seconds, returns false and writes nothing.
+      { name: "a name Windows will not take is refused before the clock",
+        tool: "export_mogrt",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.mgComp, folder: ctx.mgTemp,
+                   name: "ST:MG*Bad?Name" };
+        },
+        check: function (err) {
+          if (!/Windows will not put in a file name/.test(err)) return err;
+          return (err.indexOf(":") !== -1 && err.indexOf("*") !== -1 &&
+                  err.indexOf("?") !== -1) ||
+                 "the refusal does not list the characters: " + err;
+        } },
+
+      { name: "a comp with no controllers is sent to expose_property",
+        tool: "export_mogrt",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.comp, folder: ctx.mgTemp };
+        },
+        check: function (err) {
+          return (/no Essential Graphics controllers/.test(err) &&
+                  /expose_property/.test(err)) || err;
+        } },
+
+      // The last refusal in the wall, and the one that keeps the suite
+      // off the export path: AE exports only from a SAVED, CLEAN
+      // project, and the suite has been creating comps in the user's
+      // open project since step 1. A dirty project returns false in
+      // ~390 ms and writes nothing, with no message at all — so this
+      // refusal is the only thing that would tell a user why. Either
+      // refusal is correct here: a project that was never saved fails
+      // the earlier check with its own text.
+      { name: "an unsaved project is refused instead of failing silently",
+        tool: "export_mogrt",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.mgComp, folder: ctx.mgTemp,
+                   name: "ST MG Template" };
+        },
+        check: function (err) {
+          if (/never been saved/.test(err)) {
+            return /needs to be saved first/.test(err) ||
+                   "the refusal does not quote what AE says: " + err;
+          }
+          if (!/unsaved changes/.test(err)) {
+            return "expected the dirty-project or never-saved refusal, " +
+                   "got: " + err;
+          }
+          if (!/390/.test(err)) {
+            return "the refusal does not say AE fails SILENTLY: " + err;
+          }
+          return /\{save: true\}/.test(err) ||
+                 "the refusal does not offer the way through: " + err;
+        } },
+
+      { name: "cleanup: delete the mogrt comp",
+        tool: "delete_item",
+        args: function (ctx) { return { item: ctx.mgComp }; },
+        check: function () { return true; } },
+
       { name: "cleanup: delete the fan-out rig",
         tool: "delete_item",
         args: { item: "ST FanParent" },
@@ -7984,20 +8353,42 @@
       // Deleting a comp does NOT delete the solid SOURCES its layers
       // used — they stay in the project panel, so every suite run left
       // its solids behind and a scratch project accumulated dozens of
-      // duplicates (field-observed: 45 items, visibly doubling). Find
-      // every leftover footage item in the suite's own namespace and
-      // queue its deletion for the step below. Names outside "ST " are
-      // never touched — that prefix is the suite's, nothing else's.
+      // duplicates (field-observed: 45 items, visibly doubling).
+      //
+      // Two rules find them, because the sources have two kinds of name:
+      //
+      // (1) BY ID, against the baseline photographed in step 1: any
+      //     footage item that was not in the project when the run started
+      //     is this run's. That is the only rule that can reach the ones
+      //     AE names for itself — "Null 1".."Null 189" from add_null and
+      //     "Audio Amplitude" from audio_to_keyframes (which never uniques
+      //     its null's name, so 168 of them read identically). Measured
+      //     2026-08-30: 34 such orphans per run, in whatever project the
+      //     user had open, including a real user's after Settings ->
+      //     "Run self-test". They cannot be swept by NAME — a user's own
+      //     project will hold a "Null 1" — so they are swept by identity.
+      // (2) BY NAME, the original rule: footage in the suite's own "ST "
+      //     namespace, which also reaches leftovers from an EARLIER run
+      //     that died before its cleanup and are therefore in the
+      //     baseline. Names outside "ST " are never touched by this half.
+      //
+      // Footage only, deliberately: the one non-footage item a run can add
+      // is AE's own "Solids" FOLDER, which AE creates on demand and which
+      // the user's next solid will want.
       { name: "cleanup: find the solid sources the suite left behind",
         tool: "get_project_info",
         args: { limit: 0 },
         check: function (d, ctx) {
+          var base = ctx.baseIds || {};
           ctx.leftoverIds = [];
+          ctx.leftoverNames = [];
           for (var i = 0; i < d.items.length; i++) {
             var it = d.items[i];
-            if (it.type === "footage" && it.name.indexOf("ST ") === 0) {
-              ctx.leftoverIds.push(it.id);
-            }
+            if (it.type !== "footage") continue;
+            var mine = !base[it.id] || it.name.indexOf("ST ") === 0;
+            if (!mine) continue;
+            ctx.leftoverIds.push(it.id);
+            ctx.leftoverNames.push(it.name);
           }
           return true;
         } },
@@ -8018,27 +8409,47 @@
           return cmds;
         },
         check: function (rows, ctx) {
+          var names = ctx.leftoverNames || [];
           for (var i = 0; i < rows.length; i++) {
             if (!rows[i].ok) {
               return "leftover " + (i + 1) + " of " + rows.length +
+                     (names[i] ? " ('" + names[i] + "')" : "") +
                      " not deleted: " + rows[i].error;
             }
           }
           return true;
         } },
 
+      // The assertion the leak got past for eleven versions: "no ST item
+      // remains" was true on every run that leaked 34 items, because not
+      // one of them was called "ST " anything. So the count is checked
+      // against the baseline as well — a run must hand the project panel
+      // back the way it found it, whatever AE chose to name what it made.
       { name: "cleanup: nothing of the suite's remains in the project",
         tool: "get_project_info",
         args: { limit: 0 },
-        check: function (d) {
-          var stale = [];
-          for (var i = 0; i < d.items.length; i++) {
-            if (d.items[i].name.indexOf("ST ") === 0) {
-              stale.push(d.items[i].name);
+        check: function (d, ctx) {
+          var stale = [], added = [], i;
+          var base = ctx.baseIds || {};
+          for (i = 0; i < d.items.length; i++) {
+            var it = d.items[i];
+            if (it.name.indexOf("ST ") === 0) stale.push(it.name);
+            // AE's "Solids" folder is created on demand and kept: it is
+            // AE's, not the suite's, and the user's next solid wants it.
+            else if (!base[it.id] && it.type === "footage") {
+              added.push(it.name + " (#" + it.id + ")");
             }
           }
-          return stale.length === 0 ||
-                 "the suite left items behind: " + stale.join(", ");
+          if (stale.length) {
+            return "the suite left items behind: " + stale.join(", ");
+          }
+          if (added.length) {
+            return added.length + " footage item(s) the run created are " +
+                   "still in the project, under names the ST sweep cannot " +
+                   "see: " + added.slice(0, 8).join(", ") +
+                   (added.length > 8 ? ", ..." : "");
+          }
+          return true;
         } }
     ];
   }

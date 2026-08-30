@@ -12,6 +12,7 @@
   .\scripts\get-llama.ps1 -Variant cpu    # force CPU build
   .\scripts\get-llama.ps1 -Variant cuda -CudaVersion 13  # force a toolkit line
   .\scripts\get-llama.ps1 -Tag b6099      # pin a specific release tag
+  .\scripts\get-llama.ps1 -ListOnly      # show the pick, download nothing
 #>
 [CmdletBinding()]
 param(
@@ -20,7 +21,11 @@ param(
     [string]$Tag = 'latest',
     # Major CUDA toolkit line to force (e.g. '12' or '13'). With -Variant
     # auto the right line is chosen from the driver + GPU compute capability.
-    [string]$CudaVersion = ''
+    [string]$CudaVersion = '',
+    # Print the release and assets that WOULD be downloaded, then stop.
+    # The whole choice -- driver read, release walk, CUDA line -- runs;
+    # nothing is downloaded and the existing install is left alone.
+    [switch]$ListOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -31,6 +36,15 @@ $ProgressPreference = 'SilentlyContinue'
 
 $vendorDir = Join-Path $env:APPDATA 'AE-Llama\vendor\llama.cpp'
 
+# Get-AellCudaVersionFromSmi (the "CUDA UMD Version:" banner this machine
+# actually prints) and ConvertTo-AellPaddedVersion (three parts, because
+# [version] pads a missing one with -1). Both were written and tested for
+# get-whisper.ps1; this script carried its own broken copy of each.
+. (Join-Path $PSScriptRoot 'lib\gpu-detect.ps1')
+# Expand-AellReleaseList: Invoke-RestMethod hands a JSON array back as ONE
+# object, so the release walk below needs flattening. See lib\gh-releases.ps1.
+. (Join-Path $PSScriptRoot 'lib\gh-releases.ps1')
+
 # --------------------------------------------------------------- detection
 
 function Get-NvidiaInfo {
@@ -38,8 +52,12 @@ function Get-NvidiaInfo {
     $out = ''
     try { $out = (& nvidia-smi 2>$null) | Out-String } catch { return $null }
     if (-not $out) { return $null }
-    $cuda = $null
-    if ($out -match 'CUDA Version:\s*([\d\.]+)') { $cuda = $Matches[1] }
+    # NOT /CUDA Version:/ - this machine's banner reads "CUDA UMD
+    # Version: 13.4" and the old regex found nothing there, which
+    # silently dropped the driver ceiling and took the OLDEST
+    # published CUDA line instead of the newest the driver runs.
+    $cuda = Get-AellCudaVersionFromSmi -Text $out
+    if (-not $cuda) { $cuda = $null }
     $cc = $null
     try {
         $q = (& nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>$null) |
@@ -47,13 +65,6 @@ function Get-NvidiaInfo {
         if ($q -and $q.Trim() -match '^[\d\.]+$') { $cc = [double]$q.Trim() }
     } catch {}
     [pscustomobject]@{ CudaVersion = $cuda; ComputeCap = $cc }
-}
-
-function ConvertTo-PaddedVersion([string]$v) {
-    # [version] needs at least two parts: pad '13' -> 13.0, '12.2.0' stays.
-    $parts = $v.Split('.')
-    while ($parts.Count -lt 2) { $parts += '0' }
-    return [version]($parts -join '.')
 }
 
 $gpu = $null
@@ -70,8 +81,14 @@ if ($Variant -eq 'auto') {
 
 # ----------------------------------------------------------- release query
 
+# The LIST, not /releases/latest. Measured 2026-08-30: llama.cpp's
+# /releases/latest is `v0.3.0`, whose entire asset list is one
+# nightly-tag.txt, and EVERY release carrying Windows binaries (bNNNNN)
+# is flagged prerelease -- which /releases/latest never returns. So this
+# script, and the panel's own installer, ended at "No Windows CPU x64
+# asset found" for everyone. Same walk get-whisper.ps1 already does.
 if ($Tag -eq 'latest') {
-    $apiUrl = 'https://api.github.com/repos/ggml-org/llama.cpp/releases/latest'
+    $apiUrl = 'https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=15'
 } else {
     $apiUrl = "https://api.github.com/repos/ggml-org/llama.cpp/releases/tags/$Tag"
 }
@@ -81,7 +98,10 @@ if ($env:GITHUB_TOKEN) { $headers['Authorization'] = "Bearer $env:GITHUB_TOKEN" 
 
 Write-Host "Querying release info: $apiUrl"
 try {
-    $release = Invoke-RestMethod -Uri $apiUrl -Headers $headers
+    # Deliberately NOT wrapped in @(): Invoke-RestMethod hands a JSON array
+    # back as one object, and @() would nest it. Expand-AellReleaseList
+    # flattens whatever shape this is.
+    $apiResult = Invoke-RestMethod -Uri $apiUrl -Headers $headers
 } catch {
     $status = $null
     try { $status = [int]$_.Exception.Response.StatusCode } catch {}
@@ -93,6 +113,27 @@ try {
         throw "Release tag '$Tag' not found. Check https://github.com/ggml-org/llama.cpp/releases"
     }
     throw
+}
+# Walk to the newest release that actually carries a Windows engine build.
+$candidates = @(Expand-AellReleaseList $apiResult) | Where-Object { -not $_.draft }
+$winAssetRx = '^llama-.*-bin-win-(?:cpu|avx2|cuda-(?:cu)?[\d\.]+)-x64\.zip$'
+$release = $null
+$skipped = @()
+foreach ($r in $candidates) {
+    if (@($r.assets | Where-Object { $_.name -match $winAssetRx }).Count -gt 0) {
+        $release = $r
+        break
+    }
+    $skipped += $r.tag_name
+}
+if (-not $release) {
+    if ($skipped.Count -eq 0) { throw 'GitHub returned no llama.cpp releases.' }
+    throw ("No Windows llama-server build in the $($skipped.Count) newest " +
+           "llama.cpp release(s): $($skipped -join ', '). Check " +
+           'https://github.com/ggml-org/llama.cpp/releases')
+}
+if ($skipped.Count -gt 0) {
+    Write-Host "Walked past $($skipped -join ', ') - no Windows build there."
 }
 Write-Host "Release: $($release.tag_name)"
 
@@ -125,7 +166,7 @@ if ($Variant -eq 'cpu') {
     $cudaAssets = $assets | Where-Object { $_.name -match $cudaRegex } |
         ForEach-Object {
             $ver = [regex]::Match($_.name, $cudaRegex).Groups[1].Value
-            [pscustomobject]@{ Asset = $_; VerString = $ver; Ver = ConvertTo-PaddedVersion $ver }
+            [pscustomobject]@{ Asset = $_; VerString = $ver; Ver = ConvertTo-AellPaddedVersion $ver }
         }
     if (-not $cudaAssets) { throw "No Windows CUDA x64 asset found in $($release.tag_name)." }
 
@@ -143,10 +184,10 @@ if ($Variant -eq 'cpu') {
         $eligible = $cudaAssets | Where-Object {
             $ok = $true
             if ($gpu.CudaVersion) {
-                $ok = $_.Ver -le (ConvertTo-PaddedVersion $gpu.CudaVersion)
+                $ok = $_.Ver -le (ConvertTo-AellPaddedVersion $gpu.CudaVersion)
             }
             if ($ok -and $null -ne $gpu.ComputeCap -and $gpu.ComputeCap -lt 7.5) {
-                $ok = $_.Ver -lt (ConvertTo-PaddedVersion '13')
+                $ok = $_.Ver -lt (ConvertTo-AellPaddedVersion '13')
             }
             $ok
         }
@@ -177,6 +218,16 @@ if ($Variant -eq 'cpu') {
             Write-Warning "No cudart bundle found for CUDA $($pick.VerString). If llama-server.exe complains about missing DLLs, install that CUDA runtime."
         }
     }
+}
+
+if ($ListOnly) {
+    Write-Host ''
+    Write-Host "Would download from $($release.tag_name):" -ForegroundColor Green
+    foreach ($a in $toDownload) {
+        Write-Host ("  {0} ({1} MB)" -f $a.name, [math]::Round($a.size / 1MB, 1))
+    }
+    Write-Host "Into: $vendorDir (not touched -- ListOnly)"
+    return
 }
 
 # ------------------------------------------------------ download & install
