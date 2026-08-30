@@ -7035,3 +7035,171 @@ defect. Pushing without bumping is the intended outcome here.
   tool: a cleanup step whose result is not read is not a cleanup step.
   Caught only by going back and LOOKING at the project before writing
   the sentence that said it was clean.
+
+## 2026-08-30 (local) - the window After Effects did not draw, and the
+## dialog the evidence never looked at
+
+Harness green on arrival, 514/514, so the pass took the item the last two
+entries had filed and neither had spent: **the dialog triage calls AE's
+"Executing Script *" progress window an UNRECOGNIZED DIALOG and fails the
+run.** It was flagged as a small pass. It was not a small pass, because
+the filed symptom was not the defect - it was the second-loudest thing in
+the room.
+
+### What the screenshot said that the log entry did not
+
+`logs\dialogs\2026-08-30T01-04-58.png`, saved by the run that exited 4,
+shows AE's progress window reading **"Script execution time 0 minutes 17
+seconds"** in front of a perfectly ordinary After Effects. Nothing was
+stuck. Seventeen seconds is eight 2s polls plus the time to take the
+picture - which is exactly `Get-AellVerdictPatience`'s patience for the
+`unreadable` verdict. So the run was stopped by something the probe could
+see and not read, and the "Executing Script" headline came from the
+EVIDENCE path afterwards, naming a different window entirely.
+
+### The measurement: AE's drop shadow outvotes AE's progress window
+
+A probe drove a cold launch with a 26s sleep script and dumped every
+top-level window of the process, the probe's own text, the harvest and
+the verdict, every 1.5s. At **t=28..31s, three consecutive polls**, with
+the suite provably running:
+
+    vis=1 en=0 [tooltips_class32] ''
+    vis=1 en=1 [SysShadow] ''
+    vis=1 en=1 [#32770] 'Executing Script sleep.jsx...'
+    vis=1 en=0 [AE_CApplication_26.3] 'Adobe After Effects 2026 - ...'
+
+    verdict = unreadable
+
+`SysShadow` is the drop shadow Windows draws under a tooltip and
+`tooltips_class32` is the tooltip itself. Both are **visible top-level
+windows owned by the AfterFX process**, both carry no text whatever, and
+`OnTop` listed them as popups - so the triage saw two dialogs nobody
+could read. A wordless block outranks a running script (`blocked` >
+`startup` > `unreadable` > `running`), so the verdict was `unreadable`
+while AE's own window sat there in plain English saying it was busy.
+
+**Eight of those in a row is exit 4 on a suite that goes on to pass
+514/514.** That is the lost run. Not the progress window: the shadow the
+tooltip cast beside it.
+
+The two are one bug in two layers, and both are fixed:
+
+- `ae-dialog-triage.ps1` - a block with no words whose header class is
+  `SysShadow` or `tooltips_class32` is not a popup. Judged on CLASS and
+  only for a block with nothing to say: one of those windows that
+  somehow carries words is still read for its words. This is the
+  load-bearing half, because it is the half a Node test can drive.
+- `run-ae-selftest.ps1` - `OnTop` does not list them at all, and skips
+  them BEFORE the popup counter, so a probe that finds only chrome does
+  not fall through to "main window is disabled but no popup text could
+  be read" - the same wrong answer by a different road.
+
+`Get-AellHarvestClass` also learned AE's progress window (harvested
+verbatim: `Executing Script <file>...` + `OS_ViewContainer`), which is
+the defect as filed. It was real, it was just not what cost the night:
+what it cost was the diagnosis, by headlining UNRECOGNIZED DIALOG over
+the top of AE reporting that it was busy doing what it was asked.
+
+### Then the harness went red again, and the fix was incomplete
+
+Post-fix field run 1 of 4 exited 4 on a popup no capture in this repo
+has ever recorded:
+
+    [DroverLord - Window Class]
+        OS_ViewContainer
+        OS_ViewContainer
+        OS_EditTextContainer
+
+Adobe's own toolkit shell, not the standard dialog class, carrying the
+same three containers as the save-changes prompt and no words. The
+immediate re-run was green and so were the three after it.
+
+What that run PRINTED is the finding worth keeping. Its evidence read:
+
+    what it says (WM_GETTEXT):
+      Executing Script aell-selftest-run.jsx...
+
+...because `HarvestDialogText` only ever harvested `#32770`. The window
+that stopped the run was never read, never photographed, and the harness
+reported on the one window in the room that was not the problem. Two
+things came apart that had been assumed to be one:
+
+- **what the HARVEST recognises is not what STOPPED the run.** The
+  harvest reads dialog-shell windows; the verdict judges every popup the
+  probe can see. A benign harvest beside a fatal popup now photographs
+  the screen anyway: `Write-AellDialogEvidence -AlwaysShoot`, passed by
+  the blocked path and only by it. (This pass introduced that hole
+  itself, by letting a known harvest skip the picture. Caught by the
+  field, four runs later.)
+- **reading is widened; ANSWERING is not.** The harvest now reads
+  `DroverLord` shells as well as `#32770`. `CloseWordlessDialogs` still
+  posts WM_CLOSE to `#32770` alone, and a test pins that it does: what
+  may be answered by an unattended run is a much narrower question than
+  what may be looked at, and nobody has identified this window yet.
+
+### Verification
+
+- `node tests/test-selftest-runner.js` green. **Reverted against the
+  pre-fix scripts it fails 8 assertions**, including
+  `chrome-beside-progress reads as running (got unreadable)` - the bug
+  class is caught without AE.
+- New coverage, all from captures taken in real AE this pass: the chrome
+  sample beside the progress window (`running`), alone (`clear`), beside
+  a real modal (still `blocked`, on schedule, 3 polls), beside the
+  teardown flicker (still `unreadable`); a 20-poll chrome timeline that
+  must never stop; the DroverLord popup (`unreadable`, and NOT swallowed
+  by the chrome filter - which is why that filter is two class names and
+  not "anything wordless"); the progress-window harvest alone, beside
+  the save prompt, and beside an error alert.
+- **Full stub sweep: all 55 test files exit 0.**
+- **Harness: 514/514 PASSED, three consecutive runs**, plus the green
+  run this pass opened with. The one red run in between is the
+  DroverLord finding above.
+- Both .ps1 files re-checked pure ASCII.
+
+### No version bump
+
+`extension/` is untouched - the panel ships `extension/` alone and this
+is harness tooling. Same call, for the same reason, as the 2026-08-28
+dialog-triage pass.
+
+### Still open
+
+- **What IS the DroverLord popup?** Unidentified, and the honest answer
+  is that this pass could not make it happen again. It is now readable
+  and photographed when it recurs, which is the whole point of the two
+  changes above, but until someone catches it the harness has a failure
+  mode that cost one run in five tonight. Whoever meets it next: the
+  picture and the WM_GETTEXT will both be there. Do NOT widen
+  `CloseWordlessDialogs` to answer it blind - a wordless AE popup that
+  persists 16s is exactly the case that refusal exists for.
+- The chrome filter is proven two ways - a verbatim real-AE capture and
+  a stub test that fails without it - but **the post-fix field runs did
+  not reproduce the chrome state**, so they prove no regression rather
+  than proving the filter firing. A deliberate attempt to raise a
+  tooltip on demand (a scan grid of cursor positions across AE's window)
+  raised none, so this is written down rather than claimed. The trigger
+  is a tooltip lingering as AE disables its main window, which is mouse
+  position and timing, not something the harness controls.
+- Everything the 6.2 Pass B entry left open is unchanged: no panel UI
+  for the export tools, no `.webm`/`.webp`, the full-size intermediate
+  and the `resolution` argument `render_comp` does not have, the 8 GB
+  cap that is still a guess, panel tools reading as uncovered in the
+  capability table.
+- `get-llama.ps1` still has the two latent traps 6.1 Pass A flagged.
+  Fifth flag.
+- 5.9 (.mogrt export) still deferred by its own LAST-item-of-the-night
+  rule. Seventeenth pass.
+- `release-notes.txt` still reads "0.10.0" while the feed ships 0.10.8 -
+  sixteenth flag; remote session's release cut.
+- `comfy_generate` still calls `import_file` rather than 5.8's
+  `import_as_layer`.
+- Machine state: AE left running on an empty Untitled project with no
+  dialog open, three green runs behind it. The project debris the
+  earlier passes recorded went with the harness project, which this
+  pass's probe closed WITHOUT saving (`CloseOptions.DO_NOT_SAVE_CHANGES`
+  then `app.quit()`, deliberately, so no save prompt was raised and AE
+  was never force-killed - a hard kill is what raises the recovery
+  dialog on the next launch). `%TEMP%\aell-probe-progress` holds the
+  four probe scripts and their logs and can be deleted.

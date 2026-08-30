@@ -191,10 +191,20 @@ public class AellWin {
         if ((int)wid != target) { return true; }
         if (h == appWindow) { return true; }
         if (!IsWindowVisible(h)) { return true; }
+        // Windows' chrome, not After Effects': SysShadow is the drop
+        // shadow it draws UNDER a dialog and tooltips_class32 is the
+        // tooltip it draws OVER a control. Both are visible top-level
+        // windows of this process and both are wordless, so listing
+        // them told the triage a dialog nobody could read was up.
+        // Measured 2026-08-30 -- see ae-dialog-triage.ps1 for the cold
+        // launch where AE's own drop shadow outvoted AE's own progress
+        // window and a healthy run reported as blocked.
+        string cls = ClassOf(h);
+        if (cls == "SysShadow" || cls == "tooltips_class32") { return true; }
         popups++;
         StringBuilder t = new StringBuilder(512);
         GetWindowTextW(h, t, 512);
-        found.Append("  [" + ClassOf(h) + "] " + t.ToString().Trim() + NL);
+        found.Append("  [" + cls + "] " + t.ToString().Trim() + NL);
         EnumChildWindows(h, new EnumProc(OnChild), IntPtr.Zero);
         return true;
     }
@@ -266,7 +276,24 @@ public class AellWin {
         GetWindowThreadProcessId(h, out wid);
         if ((int)wid != target) { return true; }
         if (!IsWindowVisible(h)) { return true; }
-        if (ClassOf(h) != "#32770") { return true; }
+        // #32770 is the standard dialog class, and it is what every AE
+        // popup captured before 2026-08-30 turned out to be. It is NOT
+        // all of them: on 2026-08-30 a run was stopped by a
+        // "DroverLord - Window Class" popup -- Adobe's own toolkit shell
+        // -- carrying the same three containers as the save prompt, and
+        // because the harvester only read #32770 the evidence it printed
+        // was AE's progress window standing innocently next to it. The
+        // harness reported on the one window in the room that was not
+        // the problem.
+        //
+        // Widened for READING only. CloseWordlessDialogs still posts to
+        // #32770 alone: what may be ANSWERED unattended is a much
+        // narrower question than what may be looked at, and a DroverLord
+        // popup is one nobody has identified yet.
+        string hcls = ClassOf(h);
+        if (hcls != "#32770" && hcls.IndexOf("DroverLord") < 0) {
+            return true;
+        }
         StringBuilder t = new StringBuilder(512);
         GetWindowTextW(h, t, 512);
         string title = t.ToString().Trim();
@@ -444,7 +471,7 @@ function Save-AellDialogShot {
 # the change is evidence, not behaviour -- but 'UNRECOGNIZED DIALOG' in
 # a pass log is what makes the morning review look at the picture.
 function Write-AellDialogEvidence {
-  param([string]$Context = '')
+  param([string]$Context = '', [switch]$AlwaysShoot)
   $harvest = Get-AellDialogHarvest
   $class = Get-AellHarvestClass -Harvest $harvest
   $words = @(Get-AellHarvestWords -Harvest $harvest)
@@ -454,12 +481,20 @@ function Write-AellDialogEvidence {
   } else {
     Write-Host '  it says nothing Win32 can read, even with WM_GETTEXT.'
   }
-  # The save-changes prompt is the one dialog this harness fully
-  # understands, and it turns up on most runs. Everything else gets its
-  # picture taken -- including the wordless one, which is exactly the
-  # case a screenshot exists for.
+  # A dialog this harness fully understands does not need its picture
+  # taken -- the save-changes prompt turns up on most runs and AE's
+  # progress window is up for all of every run. Everything else does,
+  # INCLUDING the wordless one, which is exactly the case a screenshot
+  # exists for: known, and yet with nothing to say.
+  #
+  # -AlwaysShoot overrides all of that, and the run that is FAILING
+  # passes it. What the harvest recognised is not the same question as
+  # what stopped the run: the harvest reads dialog-shell windows, the
+  # verdict judges every popup the probe can see, and on 2026-08-30
+  # those two disagreed -- a benign-looking harvest beside a popup that
+  # cost the run its night. A failing run gets its picture, always.
   $png = ''
-  if ($class.Label -ne 'save-changes prompt') {
+  if ($AlwaysShoot -or -not $class.Known -or $class.Label -eq 'wordless') {
     $png = Save-AellDialogShot
     if ($png) { Write-Host ('  screenshot: ' + $png) }
   }
@@ -569,7 +604,8 @@ if ($blocking -and -not (Test-Path $out)) {
   # dialog is usually nothing. Ask the controls directly before telling a
   # human to go and look: the 2026-08-28 pass spent two blind re-runs on
   # a dialog that named its own cause in one WM_GETTEXT call.
-  Write-AellDialogEvidence -Context 'blocking this run' | Out-Null
+  Write-AellDialogEvidence -Context 'blocking this run' -AlwaysShoot |
+    Out-Null
   Write-Host '----'
   Write-Host 'This is not the scripting-file-access preference. Until the'
   Write-Host 'dialog is dismissed AE ignores every -r script while still'

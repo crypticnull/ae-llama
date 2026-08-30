@@ -67,6 +67,28 @@ const STARTUP =
   "    OS_ViewContainer\r\n" +
   "  [#32770] \r\n" +
   "    OS_ViewContainer\r\n";
+// Captured 2026-08-30, cold launch, t=28..31s of a 26s script: WINDOWS'
+// own chrome standing next to a perfectly healthy progress window. The
+// drop shadow under a dialog (SysShadow) and the tooltip over a control
+// (tooltips_class32) are visible top-level windows of the AfterFX
+// process, and both are wordless -- so they read as a dialog nobody
+// could see. This exact sample was `unreadable` for three consecutive
+// polls, and eight in a row is exit 4 on a suite that is running fine:
+// it is what cost the 2026-08-30 pass its first harness run.
+const CHROME =
+  "  [tooltips_class32] \r\n" +
+  "  [SysShadow] \r\n";
+// Captured 2026-08-30 from the run that exited 4 while the suite was
+// mid-flight. AE's OWN toolkit shell, not the standard dialog class,
+// carrying the same three containers as the save prompt and no words.
+// Nobody has identified it yet, so it is pinned here as what it is
+// measured to be -- an unreadable popup, escalated only by lasting --
+// rather than assumed benign because that run's re-run went green.
+const DROVERLORD =
+  "  [DroverLord - Window Class] \r\n" +
+  "    OS_ViewContainer\r\n" +
+  "    OS_ViewContainer\r\n" +
+  "    OS_EditTextContainer\r\n";
 
 if (process.platform !== "win32") {
   console.log("SKIPPED - test-selftest-runner.js drives Windows PowerShell");
@@ -132,7 +154,24 @@ const CASES = [
   ["startup", STARTUP, "startup", false],
   // A dialog we CAN read outranks "still starting" -- if AE names the
   // problem, the problem is what gets reported.
-  ["startup-with-modal", STARTUP + MODAL, "blocked", false]
+  ["startup-with-modal", STARTUP + MODAL, "blocked", false],
+  // The 2026-08-30 regression, in one line: AE's own drop shadow must
+  // not outvote AE's own "I am executing your script".
+  ["chrome-beside-progress", CHROME + PROGRESS, "running", true],
+  // Windows' chrome on its own says nothing about AE either way.
+  ["chrome-alone", CHROME, "clear", false],
+  // ...and it must not launder anything standing next to it. A real
+  // modal is still a real modal with a drop shadow in front of it --
+  // which is always, because that shadow is the modal's own.
+  ["chrome-beside-modal", CHROME + MODAL, "blocked", false],
+  // Nor may it hide a genuinely unreadable AE popup: the teardown
+  // flicker is still escalated by lasting, shadow or no shadow.
+  ["chrome-beside-teardown", CHROME + TEARDOWN, "unreadable", false],
+  // AE's own toolkit shell is a popup like any other. The chrome filter
+  // is a list of two Windows classes, deliberately, and widening it to
+  // "anything wordless" would swallow this one.
+  ["droverlord", DROVERLORD, "unreadable", false],
+  ["droverlord-beside-progress", PROGRESS + DROVERLORD, "unreadable", true]
 ];
 
 let body = "";
@@ -241,6 +280,23 @@ const remembered = runPs([
 assert(remembered.indexOf("SAW|True") !== -1,
   "the run remembers it saw AE stuck before its main window opened");
 
+// The 2026-08-30 lost run, replayed. A long suite with Windows' chrome
+// up beside the progress window the whole time is a HEALTHY run, and
+// before the chrome was recognised this stopped at poll 8 -- exit 4 on a
+// suite that went on to pass 514/514.
+const chromeRun = stopIndex(repeat(CHROME + PROGRESS, 20));
+assert(chromeRun.at === -1,
+  "AE's own drop shadow never outvotes AE's own progress window");
+assert(chromeRun.sawProgress,
+  "the chrome timeline is still recognised as AE executing the script");
+
+// The other half of that: chrome must not buy a real modal any patience
+// it did not have. A dialog draws a shadow, so this is what EVERY real
+// modal actually looks like to the probe.
+const modalWithChrome = stopIndex(repeat(CHROME + MODAL, 6));
+assert(modalWithChrome.at === 2,
+  "a real modal still stops the run on schedule with its shadow up");
+
 // ...and a modal that appears DURING startup is still caught, on the
 // normal schedule, because it has words.
 const modalAtStartup = stopIndex(
@@ -338,6 +394,48 @@ assert(compiled.indexOf("CS|ok") !== -1,
   "the dialog probe's C# compiles: " +
   (compiled.split("CS|")[1] || "").split("\n")[0].trim());
 
+// Windows' chrome is filtered in BOTH layers, and on purpose. The triage
+// stops it being read as a dialog (that half is driven above with real
+// captured probe text); this stops it being LISTED as a popup, which
+// matters because a probe that counts only chrome would otherwise emit
+// "main window is disabled but no popup text could be read" -- the same
+// wrong answer arriving by a different road.
+assert(/cls == "SysShadow" \|\| cls == "tooltips_class32"/.test(win32),
+  "the probe does not list Windows' own shadow and tooltip as popups");
+assert(/popups\+\+/.test(win32.split('cls == "SysShadow"')[1] || ""),
+  "chrome is skipped BEFORE the popup counter, not after it");
+
+// Evidence is for the dialogs this harness cannot name. A known one
+// costs a screenshot, 1.2s and a raise-to-front of AE's windows on every
+// single run, so it is taken for the wordless popup and the unknown --
+// and not for the two the harness can read.
+assert(/if \(\$AlwaysShoot -or -not \$class\.Known -or \$class\.Label -eq 'wordless'\)/
+  .test(runner),
+  "a dialog the harness recognises does not get its picture taken");
+// ...except on the run that is failing, where the two questions come
+// apart: what the HARVEST recognised is not what STOPPED the run. On
+// 2026-08-30 a benign harvest (AE's progress window) stood beside the
+// popup that cost the run its night, and the picture was skipped.
+assert(/-Context 'blocking this run' -AlwaysShoot/.test(runner),
+  "a blocked run photographs the screen whatever the harvest recognised");
+assert(!/-Context "answered before the launch"[\s\S]{0,40}-AlwaysShoot/
+  .test(runner),
+  "the pre-launch path still skips the picture for a dialog it knows");
+
+// The harvest reads AE's OWN dialog shell too, not just the standard
+// dialog class. Measured 2026-08-30: a run was stopped by a
+// "DroverLord - Window Class" popup and the harvest, looking only at
+// #32770, reported the progress window standing next to it.
+assert(/hcls != "#32770" && hcls\.IndexOf\("DroverLord"\) < 0/.test(win32),
+  "the harvest reads AE's DroverLord dialog shell as well as #32770");
+// Reading is widened; ANSWERING is not. WM_CLOSE still goes to the
+// standard dialog class alone -- a DroverLord popup is one nobody has
+// identified, and it is not for an unattended run to close it.
+const onClose = win32.split("private static bool OnClose(")[1].split("private static bool")[0];
+assert(/ClassOf\(h\) != "#32770"/.test(onClose) &&
+  onClose.indexOf("DroverLord") === -1,
+  "what may be ANSWERED unattended is still #32770 and nothing else");
+
 // The other half of the same cold-start bug: `& $exe -r $f | Out-Null`
 // returns instantly when AE is already up (the running instance takes the
 // script), but on a cold machine the process PowerShell started IS After
@@ -411,6 +509,15 @@ const HARVEST_ERROR =
   "Unable to execute script at line 35. After Effects error: Unable to " +
   "call \"addComp\" because the call requires 6 parameters.\r\n";
 
+// AE's own script-progress window, harvested 2026-08-30: two lines, and
+// the only one with words in it is AE saying it is busy. It is up for
+// every second of every -r run this harness makes, so until it was named
+// the evidence path headlined UNRECOGNIZED DIALOG over the top of it and
+// pointed the morning review at the wrong window.
+const HARVEST_PROGRESS =
+  "Executing Script aell-selftest-run.jsx...\r\n" +
+  "OS_ViewContainer\r\n";
+
 const HARVEST_CASES = [
   // name, harvest, known-benign?, label
   ["save", HARVEST_SAVE, true, "save-changes prompt"],
@@ -418,9 +525,20 @@ const HARVEST_CASES = [
   ["noanswer", HARVEST_NOANSWER, true, "wordless"],
   ["empty", "", true, "wordless"],
   ["error", HARVEST_ERROR, false, "unrecognized"],
+  ["progress", HARVEST_PROGRESS, true, "script-progress window"],
+  // Both benign windows at once -- the save prompt a previous run left
+  // and the progress window of the script asking about it. Named, both
+  // of them, rather than one of them standing in for the pair.
+  ["save-plus-progress", HARVEST_SAVE + HARVEST_PROGRESS, true,
+    "save-changes prompt + script-progress window"],
   // Two popups at once: the save prompt standing next to an error alert
   // must NOT launder it. Judged line by line, never on the joined text.
-  ["save-plus-error", HARVEST_SAVE + HARVEST_ERROR, false, "unrecognized"]
+  ["save-plus-error", HARVEST_SAVE + HARVEST_ERROR, false, "unrecognized"],
+  // The same rule for the progress window: a script that is running AND
+  // has raised an alert is a run that is stuck, and the alert is what
+  // the morning review has to see.
+  ["progress-plus-error", HARVEST_PROGRESS + HARVEST_ERROR, false,
+    "unrecognized"]
 ];
 
 let harvestBody = "";
@@ -448,6 +566,10 @@ assert(classes["save-plus-error"] &&
   classes["save-plus-error"].unknown.indexOf("Save changes") === -1 &&
   classes["save-plus-error"].unknown.indexOf("addComp") !== -1,
   "only the line nobody recognised is named as unknown");
+assert(classes["progress-plus-error"] &&
+  classes["progress-plus-error"].unknown.indexOf("Executing Script") === -1 &&
+  classes["progress-plus-error"].unknown.indexOf("addComp") !== -1,
+  "an alert beside the progress window is reported without it");
 
 // The noise filter: AE's containers report their CLASS as their text, so
 // they are not words a dialog said. If this stopped filtering, every

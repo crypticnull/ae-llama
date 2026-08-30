@@ -21,6 +21,25 @@ tool, not the test), then update the stubbed Node test in `tests/` so
 the same bug class is caught WITHOUT AE — that is the whole loop:
 field truth -> fix -> stub faithfulness.
 
+- ~~The triage calls AE's "Executing Script *" progress window an
+  UNRECOGNIZED DIALOG and fails the run~~ DONE 2026-08-30, and the
+  filed symptom was not the defect. What actually stopped those runs
+  was **Windows' own chrome**: `SysShadow` (a tooltip's drop shadow)
+  and `tooltips_class32` are visible, wordless, top-level windows of
+  the AfterFX process, and a wordless popup outranks a running script —
+  so AE's drop shadow outvoted AE's own progress window and a suite
+  that went on to pass 514/514 exited 4. Filtered in both layers, with
+  the real-AE capture replayed as a stub test (8 assertions fail
+  without the fix). The harvest learned the progress window too.
+- **STILL OPEN, filed by that pass: what is the `DroverLord - Window
+  Class` popup?** It stopped one field run in five, with the same three
+  containers as the save-changes prompt and no words, and the re-run
+  was green. It is now READ (the harvest was widened past `#32770`) and
+  photographed (a blocked run always shoots, whatever the harvest
+  recognised), so the next occurrence leaves evidence in
+  `logs\dialogs\`. Do NOT widen `CloseWordlessDialogs` to answer it
+  blind. See WORKPLAN-LOG 2026-08-30.
+
 ## FAST-TRACK: comp-rename audit tools — DONE 2026-08-25 (0.9.15)
 
 The owner has a real work assignment: bring an old roofing-presentation

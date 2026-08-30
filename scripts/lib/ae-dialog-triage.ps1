@@ -90,7 +90,34 @@ function Get-AellDialogVerdict {
       if ($t -match '^OS_[A-Za-z0-9_]+$') { continue }
       $words += $t
     }
-    if ($words.Count -eq 0) { $sawUnreadable = $true; continue }
+    if ($words.Count -eq 0) {
+      # Not every wordless top-level window of the AfterFX process is a
+      # window After Effects put there. Windows draws the drop SHADOW
+      # under a dialog (SysShadow) and the TOOLTIP over a control
+      # (tooltips_class32) as visible top-level windows owned by the
+      # same process, and both carry no text at all -- so they arrive
+      # here looking exactly like a dialog nobody can read.
+      #
+      # Measured 2026-08-30 on a cold launch driving a 26s script: at
+      # t=28..31s the probe saw [tooltips_class32], [SysShadow] and a
+      # perfectly healthy "[#32770] Executing Script sleep.jsx...". A
+      # wordless block outranks a running script, so the verdict was
+      # `unreadable` for three consecutive polls -- and eight of those
+      # in a row is exit 4 on a suite that is running fine. That is what
+      # cost the 2026-08-30 pass its first harness run; its evidence
+      # screenshot shows the progress window at 17 seconds, which is
+      # eight 2s polls plus the time to take the picture.
+      #
+      # Judged on CLASS, and only for a block with nothing to say: a
+      # window of either class that somehow carries words is still read
+      # for its words below, because the point is to ignore Windows'
+      # chrome, not to grow a list of things the harness will not look at.
+      if ($block[0] -match '^\s*\[(SysShadow|tooltips_class32)\]') {
+        continue
+      }
+      $sawUnreadable = $true
+      continue
+    }
 
     $blockingLines += $block
   }
@@ -255,12 +282,14 @@ function Get-AellHarvestWords {
   return $words
 }
 
-# Two harvests are known-benign, and everything else is worth a human's
-# eye in the morning:
+# Three harvests are known-benign, and everything else is worth a
+# human's eye in the morning:
 #   - nothing readable at all: the wordless popup the runner has always
 #     answered (AE's teardown flicker, or a dialog even WM_GETTEXT cannot
 #     reach). Unchanged from the blind behaviour, so still benign.
 #   - the save-changes prompt: the leftover this machinery exists for.
+#   - AE's script-progress window: proof the suite is RUNNING, and up
+#     for the whole of every -r run this harness makes.
 #
 # Judged LINE BY LINE, never on the joined text: two popups can be up at
 # once, and "the save prompt is in there somewhere" must not launder an
@@ -283,14 +312,34 @@ function Get-AellHarvestClass {
   }
 
   $unknown = @()
+  $kinds = @()
   foreach ($w in $words) {
-    if ($w -match 'Save changes to .* before closing') { continue }
+    if ($w -match 'Save changes to .* before closing') {
+      if ($kinds -notcontains "save-changes prompt") {
+        $kinds += "save-changes prompt"
+      }
+      continue
+    }
+    # AE's OWN script-progress window, which is up for every second of
+    # every -r run this harness makes. Measured 2026-08-30: it harvests
+    # as exactly two lines, "Executing Script <file>..." and
+    # OS_ViewContainer. Until it was named here, any evidence taken
+    # while a script was running was headlined UNRECOGNIZED DIALOG over
+    # the top of AE reporting that it was busy doing what it was asked
+    # -- which on 2026-08-30 pointed the morning review at the one
+    # window in the picture that was not the problem.
+    if ($w -match '^Executing Script') {
+      if ($kinds -notcontains "script-progress window") {
+        $kinds += "script-progress window"
+      }
+      continue
+    }
     $unknown += $w
   }
   if ($unknown.Count -eq 0) {
     return New-Object PSObject -Property @{
       Known = $true
-      Label = "save-changes prompt"
+      Label = ($kinds -join " + ")
       Text = ($words -join " / ")
       Unknown = ""
     }
