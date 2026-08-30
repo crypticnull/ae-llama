@@ -1,7 +1,7 @@
 {
-  "panelVersion": "0.10.12",
+  "panelVersion": "0.10.13",
   "panelUrl": "https://aescripts.com/",
-  "panelPackageUrl": "https://raw.githubusercontent.com/crypticnull/ae-llama-updates/main/AE-Llama.zxp?v=0.10.12",
+  "panelPackageUrl": "https://raw.githubusercontent.com/crypticnull/ae-llama-updates/main/AE-Llama.zxp?v=0.10.13",
   "notes": "0.10: text animators (per-character animation via add_text_animator), browse and apply AE's 679 shipped animation presets, render straight from chat (render_comp), safe project cleanup with dry-run previews (clean_project), portable ComfyUI workflow templates, and the VRAM tier system that sizes everything to your card.",
   "llamaTag": "latest",
   "modelCatalog": [
