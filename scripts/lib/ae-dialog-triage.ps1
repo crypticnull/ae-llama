@@ -16,7 +16,9 @@
 #
 # Verdicts:
 #   clear      - nothing on screen (or main window enabled); keep waiting
-#   running    - only AE's own script-progress window; keep waiting
+#   running    - AE's own script-progress window, or a wordless dialog
+#                that window OWNS (AE working on our script); keep
+#                waiting
 #   progress   - one of AE's OWN named progress windows, and not the
 #                script one: AE is working, but nothing here proves it
 #                is working on OUR script. Never blocks on sight, and
@@ -73,17 +75,18 @@
 #                       machine yet; on a heavier project, where saving
 #                       takes longer, it is exactly the failure the five
 #                       titles above were added for.
-#   Analyzing Audio     raised by the suite's audio_to_keyframes step.
-#                       Named here for the EVIDENCE layer only, and it
-#                       is worth being precise about why: this dialog's
-#                       window title is EMPTY and its name lives in an
-#                       `Edit` child, so Get-AellDialogVerdict (which
-#                       reads titles) cannot see it and still calls it
-#                       `unreadable`. Get-AellHarvestClass (which asks
-#                       with WM_GETTEXT) can, and without this line it
-#                       headlines a healthy run UNRECOGNIZED DIALOG.
-#                       The verdict half is a separate, open problem --
-#                       see WORKPLAN item 1.
+#   Analyzing Audio     raised by the suite's audio_to_keyframes step,
+#                       up ~7.5 s of every run. Named here for the
+#                       EVIDENCE layer, which asks with WM_GETTEXT and
+#                       can read it; without this line it headlines a
+#                       healthy run UNRECOGNIZED DIALOG. The VERDICT
+#                       layer still cannot read it -- the window's own
+#                       title is EMPTY and the name lives in an `Edit`
+#                       child four levels down -- and it does not need
+#                       to: it is recognised by its OWNER instead, which
+#                       is the "Executing Script ..." window rather than
+#                       the main window. See the `{scriptowner}` branch
+#                       in Get-AellDialogVerdict.
 function Get-AellProgressTitles {
   return @(
     "Executing Script",
@@ -160,13 +163,13 @@ function Get-AellDialogVerdict {
     foreach ($line in $block) {
       $t = $line.Trim()
       $t = $t -replace '^\[[^\]]*\]', ''
-      # The probe's non-modal annotation is a FACT ABOUT the window, not
-      # something the window said. Stripped before the words are counted,
-      # so an annotated popup with nothing to say still reaches the
-      # wordless branch below -- and one that DOES say something is still
-      # judged on what it says, which is the whole point of annotating
-      # rather than hiding it.
-      $t = $t -replace '\{nonmodal[^}]*\}', ''
+      # The probe's annotations are FACTS ABOUT the window, not things
+      # the window said. Stripped before the words are counted, so an
+      # annotated popup with nothing to say still reaches the wordless
+      # branch below -- and one that DOES say something is still judged
+      # on what it says, which is the whole point of annotating rather
+      # than hiding it.
+      $t = $t -replace '\{(nonmodal|scriptowner)[^}]*\}', ''
       $t = $t.Trim()
       if ($t.Length -eq 0) { continue }
       if ($t -match '^OS_[A-Za-z0-9_]+$') { continue }
@@ -227,6 +230,34 @@ function Get-AellDialogVerdict {
       # read". The only behaviour that changes is a marked window
       # standing NEXT to AE's own "I am executing your script".
       if ($block[0] -match '\{nonmodal') {
+        continue
+      }
+      # A wordless dialog OWNED BY AE's script-progress window is After
+      # Effects working on our script, not After Effects waiting on a
+      # human. The probe marks it (see run-ae-selftest.ps1): a dialog AE
+      # raises for the running script is owned by the "Executing Script
+      # ..." window, while a question -- a script's own alert(), the
+      # save-changes prompt -- is owned by the MAIN window. Both
+      # measured on AE 2026, 2026-08-30.
+      #
+      # The one that made this necessary is `Analyzing Audio...`, raised
+      # by the suite's audio_to_keyframes step for ~7.5s of EVERY run.
+      # Its window title is empty (the name lives in an `Edit` four
+      # levels down, reachable only by WM_GETTEXT, which the evidence
+      # layer at the bottom of this file uses and this one cannot), so
+      # it has always arrived here as a wordless popup and been called
+      # `unreadable` -- a verdict that gives up after 8 polls. Every
+      # harness run was therefore already 40% of the way to exit 4 on a
+      # window that is proof the suite is being executed.
+      #
+      # Counted as PROGRESS OF OUR SCRIPT, the same as the progress
+      # window itself, because that is what it is evidence of. It is a
+      # rule about a window with NOTHING TO SAY only: a script-owned
+      # popup carrying words falls through to the word test below and
+      # can still block, so making this dialog legible cannot make a
+      # real question invisible.
+      if ($block[0] -match '\{scriptowner') {
+        $sawProgress = $true
         continue
       }
       $sawUnreadable = $true

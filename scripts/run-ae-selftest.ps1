@@ -114,6 +114,7 @@ public class AellWin {
     private static StringBuilder found;
     private static int target;
     private static IntPtr appWindow;
+    private static IntPtr progressWindow;
     private static int popups;
     private static int closed;
     private static bool hasWords;
@@ -157,6 +158,14 @@ public class AellWin {
             found.Append("  (After Effects has not opened its main " +
                          "window yet)" + NL);
         }
+        // Which window is AE's "Executing Script ..." progress window?
+        // Found in a pass of its own because EnumWindows walks the
+        // Z-ORDER, top first: anything the running script raises sits
+        // IN FRONT of the progress window and is therefore enumerated
+        // BEFORE it, so a single pass could never have the handle in
+        // hand at the moment it needs it.
+        progressWindow = IntPtr.Zero;
+        EnumWindows(new EnumProc(OnFindProgress), IntPtr.Zero);
         EnumWindows(new EnumProc(OnTop), IntPtr.Zero);
         if (popups == 0 && appWindow != IntPtr.Zero) {
             found.Append("  (main window is disabled but no popup text " +
@@ -183,6 +192,25 @@ public class AellWin {
         if (!IsWindowVisible(h)) { return true; }
         if (ClassOf(h).StartsWith("AE_CApplication")) {
             appWindow = h;
+            return false;
+        }
+        return true;
+    }
+    // AE's own script-progress window, by the title it has always been
+    // recognised by everywhere else in this harness. If AE ever stops
+    // calling it that, this simply finds nothing and every window is
+    // judged exactly as it was before -- the annotation below is added
+    // evidence, never a precondition.
+    private static bool OnFindProgress(IntPtr h, IntPtr lp) {
+        uint wid;
+        GetWindowThreadProcessId(h, out wid);
+        if ((int)wid != target) { return true; }
+        if (!IsWindowVisible(h)) { return true; }
+        if (ClassOf(h) != "#32770") { return true; }
+        StringBuilder t = new StringBuilder(512);
+        GetWindowTextW(h, t, 512);
+        if (t.ToString().Trim().StartsWith("Executing Script")) {
+            progressWindow = h;
             return false;
         }
         return true;
@@ -230,6 +258,41 @@ public class AellWin {
             found.Append("  [" + cls + "] {nonmodal ex=" + ex.ToString("X8") +
                          " owner=" + GetWindow(h, 4).ToInt64().ToString("X") +
                          "} " + t.ToString().Trim() + NL);
+            return true;
+        }
+        // WHO OWNS IT. A dialog raised by After Effects while it works
+        // on OUR script is owned by the script-progress window; a
+        // question meant for a human is owned by the MAIN window. Both
+        // halves measured on AE 2026, 2026-08-30, on this machine:
+        //
+        //   Analyzing Audio...  #32770 ex=00090121 owner=<progress hwnd>
+        //   Script Alert        #32770 ex=00010101 owner=<main hwnd>
+        //   Auto-Save Project   #32770 ex=00010101 owner=<main hwnd>
+        //   Executing Script    #32770 ex=00010101 owner=<main hwnd>
+        //
+        // The Analyzing Audio one is the reason this exists: the suite's
+        // audio_to_keyframes step raises it for ~7.5s of every run, its
+        // window TITLE is empty (the name lives in an `Edit` four levels
+        // down, which only WM_GETTEXT can read), and a wordless popup is
+        // `unreadable` -- eight of those in a row is exit 4 on a suite
+        // that is passing. So every run has spent a fifth of itself
+        // looking like it might be stuck on After Effects doing what the
+        // suite asked it to do.
+        //
+        // ANNOTATED, not hidden, and still COUNTED and read for its
+        // children: this is a real dialog, unlike the chrome above, and
+        // the verdict layer only lets the annotation speak for a window
+        // that has nothing to say. One that says something is judged on
+        // its words, which is what keeps a hypothetical script-owned
+        // QUESTION blocking.
+        if (progressWindow != IntPtr.Zero && h != progressWindow &&
+            GetWindow(h, 4) == progressWindow) {
+            popups++;
+            found.Append("  [" + cls + "] {scriptowner ex=" +
+                         ex.ToString("X8") + " owner=" +
+                         progressWindow.ToInt64().ToString("X") + "} " +
+                         t.ToString().Trim() + NL);
+            EnumChildWindows(h, new EnumProc(OnChild), IntPtr.Zero);
             return true;
         }
         popups++;

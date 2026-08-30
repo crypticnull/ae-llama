@@ -55,23 +55,22 @@ field truth -> fix -> stub faithfulness.
   window. `scripts/ae-window-census.ps1` is the tool that answered it.
   See WORKPLAN-LOG 2026-08-30.
 
-- **NEW, measured 2026-08-30 by the census, and the better candidate for
-  the lost run: `Analyzing Audio...` is up for ~6.5 s of EVERY harness
-  run and reads as `unreadable`.** The suite's `audio_to_keyframes` step
-  raises it. It is a `#32770` with an EMPTY window title whose name
-  lives in an `Edit` child four levels down, so the verdict layer (which
-  reads titles) sees three containers and no words — and `unreadable`
-  gives up after 8 polls, ~16 s. Every run is therefore already 40% of
-  the way to dying on a dialog that is AE working on our own script. The
-  harvest layer now names it, so the evidence no longer says
-  UNRECOGNIZED; the VERDICT layer still cannot see it, and that is the
-  open half. The discriminator is measured and ready: this dialog is
-  **owned by the script-progress window** (`owner=<the "Executing
-  Script" #32770>`), whereas a script's own `alert()` is owned by the
-  MAIN window — so "a wordless popup owned by AE's script-progress
-  window is our script working, not our script stuck" is a fact the
-  probe can annotate the same way it now annotates `{nonmodal}`. That is
-  a BUILD, not a probe: everything it needs was measured. Do it next.
+- ~~**`Analyzing Audio...` is up for ~6.5 s of EVERY harness run and
+  reads as `unreadable`**~~ DONE 2026-08-30. Built as filed, from the
+  discriminator the census had already measured: the probe now finds
+  AE's "Executing Script ..." window in a pass of its own (EnumWindows
+  walks the Z-order, so a dialog the script raised is enumerated BEFORE
+  its owner) and annotates any popup that window OWNS as
+  `{scriptowner ex=... owner=...}`; the verdict layer reads a WORDLESS
+  block so marked as evidence the script is running, exactly as it
+  reads the progress window itself. Re-measured first, on this machine:
+  the audio dialog is `ex=00090121 owner=<progress hwnd>`, while the
+  progress window, `Auto-Save Project` and a deliberately-raised
+  `Script Alert` are all `owner=<main hwnd>`. A marked popup is still
+  COUNTED and still read for its children (unlike the chrome filter) —
+  one that says anything still blocks. Field result: `unreadable`
+  disappeared from a whole run (7 distinct states before, 0 after);
+  stub test 165 -> 187 checks, 15 of which fail if the fix is reverted.
 
 ## FAST-TRACK: comp-rename audit tools — DONE 2026-08-25 (0.9.15)
 

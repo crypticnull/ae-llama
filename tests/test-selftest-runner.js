@@ -157,16 +157,34 @@ const AUTOSAVE =
 // AE's "Analyzing Audio..." dialog -- raised by the suite's own
 // audio_to_keyframes step -- has an EMPTY title, so this layer reads
 // three containers and NO words: `unreadable`, which gives up after 8
-// polls (~16 s). Measured up for ~6.5 s of every single run, owned by
-// the script-progress window it disables. That is 40% of the way to
-// killing every run the harness makes, on a dialog that is AE working
-// on our own script.
+// polls (~16 s). Measured up for ~7.5 s of every single run. That is
+// 40% of the way to killing every run the harness makes, on a dialog
+// that is AE working on our own script.
 //
-// Pinned here as what it currently IS, not as what it should be: the
-// verdict layer cannot see this window's name and this pass did not
-// give it a way to. See WORKPLAN item 1.
+// This is how the probe recorded it BEFORE it looked at who owns it,
+// and it is kept because it is also what any OTHER wordless dialog
+// looks like. Nothing about being silent is benign; the marked sample
+// below is the one that is.
 const ANALYZING_AUDIO =
   "  [#32770] \r\n" +
+  "    OS_ViewContainer\r\n" +
+  "    OS_ViewContainer\r\n" +
+  "    OS_EditTextContainer\r\n";
+// The same window, as the probe records it now. Verbatim from real AE
+// 2026 on 2026-08-30 (scripts/ae-window-census.ps1 watching a real
+// 532/532 self-test run at 200 ms):
+//
+//   Analyzing Audio   #32770 ex=00090121 owner=20780896 title=''
+//   Executing Script  #32770 ex=00010101 owner=170224   (hwnd 20780896)
+//   AE_CApplication   ex=00000100        owner=0        (hwnd 170224)
+//
+// So the audio dialog is owned by the SCRIPT-PROGRESS window, while
+// every window that is or could be a question -- the Script Alert
+// measured the same night, the save prompt, Auto-Save Project, the
+// progress window itself -- is owned by the MAIN window. That is the
+// discriminator, and it does not need the dialog's name.
+const ANALYZING_AUDIO_MARKED =
+  "  [#32770] {scriptowner ex=00090121 owner=20780896} \r\n" +
   "    OS_ViewContainer\r\n" +
   "    OS_ViewContainer\r\n" +
   "    OS_EditTextContainer\r\n";
@@ -291,13 +309,41 @@ const CASES = [
   // ...and it is still only a progress window. An alert beside it is
   // what the run is actually stuck on.
   ["autosave-beside-modal", AUTOSAVE + MODAL, "blocked", false],
-  // The audio dialog is NOT fixed by this pass, and the test says so
-  // rather than leaving the gap undocumented. It has no title for this
-  // layer to read, so it is `unreadable` and it is on a 16 s clock while
-  // it is up for 6.5 s of every run.
+  // The rail. A wordless dialog nobody has vouched for is still on a
+  // 16 s clock, whatever it turns out to be -- which is exactly what
+  // the audio dialog got before the probe looked at its owner.
   ["analyzing-audio", ANALYZING_AUDIO, "unreadable", false],
   ["analyzing-audio-beside-progress", PROGRESS + ANALYZING_AUDIO,
     "unreadable", true],
+  // ...and the same window once the probe has said WHO OWNS IT. A
+  // wordless dialog owned by the script-progress window is AE working
+  // on our script, so it counts as evidence the script is alive rather
+  // than as a reason to doubt it.
+  ["analyzing-audio-marked", ANALYZING_AUDIO_MARKED, "running", true],
+  // Which is how it actually arrives: in FRONT of the progress window
+  // that owns it (it is the foreground window; the progress window is
+  // the disabled one behind).
+  ["analyzing-audio-marked-beside-progress",
+    ANALYZING_AUDIO_MARKED + PROGRESS, "running", true],
+  // The safety rail that makes the whole thing safe to do: the owner
+  // speaks only for a window with NOTHING TO SAY. A script-owned popup
+  // that says something is a popup that said something, and it still
+  // stops the run. (No such window has ever been seen -- AE's own
+  // Script Alert is owned by the MAIN window, measured 2026-08-30 --
+  // and the rule holds if one ever is.)
+  ["scriptowner-with-words",
+    "  [#32770] {scriptowner ex=00090121 owner=20780896} After Effects" +
+    "\r\n    Warning: audio conforming failed.\r\n    OK\r\n",
+    "blocked", false],
+  // ...and it launders nothing standing beside it either. (Still
+  // evidence the script is running -- that is what the window IS; it
+  // just is not a reason to ignore the alert next to it.)
+  ["analyzing-audio-marked-beside-modal", ANALYZING_AUDIO_MARKED + MODAL,
+    "blocked", true],
+  // Nor does it answer for a DIFFERENT wordless popup in the same
+  // sample: one window vouched for is one window vouched for.
+  ["analyzing-audio-marked-beside-teardown",
+    ANALYZING_AUDIO_MARKED + TEARDOWN, "unreadable", true],
   // The measured normal case: the export's window standing beside the
   // script window that asked for it. AE saying it is executing our
   // script is the strongest thing on screen, so the run keeps going
@@ -457,6 +503,29 @@ const droverRun = stopIndex(repeat(DROVERLORD, 12));
 assert(droverRun.at === 7,
   "an unidentified DroverLord popup still stops the run");
 
+// The audio dialog over a whole run. `audio_to_keyframes` holds it up
+// for ~7.5 s of every self-test the harness makes, and at a 2 s poll
+// that is four samples of a verdict whose clock runs out at eight --
+// half of every run spent halfway to exit 4 on After Effects doing what
+// the suite asked it to do. Twenty polls here, because the point is
+// that there is no clock on it at all now.
+const audioRun = stopIndex(repeat(ANALYZING_AUDIO_MARKED + PROGRESS, 20));
+assert(audioRun.at === -1,
+  "the dialog AE raises for our own script never stops the run");
+assert(audioRun.sawProgress,
+  "the audio-dialog timeline is still recognised as AE executing the script");
+// Alone, too: the progress window it owns is not always visible in the
+// same sample (measured -- AE toggles which of the two is on top).
+const audioAlone = stopIndex(repeat(ANALYZING_AUDIO_MARKED, 20));
+assert(audioAlone.at === -1,
+  "a script-owned wordless dialog is believed without the progress window");
+// And the rail over a timeline: the SAME window, unvouched-for, still
+// runs out of patience on the old schedule. Whatever this fixed, it did
+// not quietly make every silent dialog benign.
+const audioUnmarked = stopIndex(repeat(ANALYZING_AUDIO, 12));
+assert(audioUnmarked.at === 7,
+  "an unowned wordless dialog still stops the run (8 polls, ~16s)");
+
 // The export timeline, replayed in the order it was captured (poll
 // samples from the 2026-08-30 watch, condensed to what the probe saw at
 // each change). Under the old rules five of these six samples read as
@@ -543,7 +612,13 @@ const STALE_CASES = [
   // already refused it -- and now the verdict says so out loud too.
   ["mgt-fonts", MGT_FONTS, false],
   ["mgt-creating", MGT_CREATE, false],
-  ["save-project", SAVE_PROJECT, false]
+  ["save-project", SAVE_PROJECT, false],
+  // WM_CLOSE on the dialog AE raises while it analyses audio for our
+  // own script would cancel AE's work mid-step. It cannot happen by
+  // construction -- the answer is gated on `unreadable` and this reads
+  // as `running` -- and it is pinned here so a future widening of that
+  // gate has to argue with a test.
+  ["analyzing-audio-marked", ANALYZING_AUDIO_MARKED, false]
 ];
 
 let staleBody = "";
@@ -641,6 +716,36 @@ assert(afterMark.indexOf("return true;") !== -1 &&
   (afterMark.indexOf("popups++") === -1 ||
    afterMark.indexOf("return true;") < afterMark.indexOf("popups++")),
   "a non-modal window is listed for the evidence but never counted");
+
+// WHO OWNS IT -- the other question the probe now asks, and the one that
+// makes AE's "Analyzing Audio..." dialog legible without being able to
+// read a word of it. GW_OWNER is 4.
+assert(/private static bool OnFindProgress\(/.test(win32),
+  "the probe locates AE's script-progress window");
+assert(/StartsWith\("Executing Script"\)/.test(win32),
+  "the script-progress window is found by the title used everywhere else");
+// In a pass of ITS OWN, and before the listing pass: EnumWindows walks
+// the Z-order top-first, so a dialog the running script raised is
+// enumerated BEFORE the window that owns it. A single pass could never
+// have the handle at the moment it needed it.
+const findProgressAt = win32.indexOf("EnumWindows(new EnumProc(OnFindProgress)");
+const onTopAt = win32.indexOf("EnumWindows(new EnumProc(OnTop)");
+assert(findProgressAt !== -1 && onTopAt !== -1 && findProgressAt < onTopAt,
+  "the progress window is found before the popups are listed, not during");
+assert(/GetWindow\(h, 4\) == progressWindow/.test(win32),
+  "the probe compares a popup's OWNER against the script-progress window");
+assert(/\{scriptowner ex=/.test(win32),
+  "a script-owned popup is recorded with the owner that vouched for it");
+// Unlike the chrome above, this one IS counted and IS read for its
+// children: it is a real dialog, and the annotation only speaks for it
+// if it turns out to have nothing to say.
+const afterOwner = win32.split("{scriptowner ex=")[1] || "";
+assert(win32.split("{scriptowner ex=")[0].indexOf(
+  "GetWindow(h, 4) == progressWindow") !== -1 &&
+  /popups\+\+/.test(win32.split("GetWindow(h, 4) == progressWindow")[1] || ""),
+  "a script-owned popup is still counted as a popup");
+assert(/EnumChildWindows/.test(afterOwner.split("return true;")[0] || ""),
+  "a script-owned popup is still read for what its children say");
 
 // Evidence is for the dialogs this harness cannot name. A known one
 // costs a screenshot, 1.2s and a raise-to-front of AE's windows on every

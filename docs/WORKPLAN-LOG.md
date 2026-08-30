@@ -9205,3 +9205,136 @@ is harness tooling. Same call, for the same reason, as the 2026-08-28 and
   decision); no panel UI for the mogrt export tools; no `.webm`/`.webp`
   (a remote-session call). `release-notes.txt` still reads "0.10.0" while
   the feed ships 0.10.17 - remote session's release cut.
+
+## 2026-08-30 (local) - item 1: the dialog After Effects raises for our
+## own script, and the 7.5 seconds every run spent halfway to exit 4
+
+Harness green before the pass (532/532), so this took the single item
+the previous pass filed and specified: give the VERDICT layer a way to
+see `Analyzing Audio...`. That pass had named it for the evidence layer
+only and deliberately left the verdict half open, with the
+discriminator measured and written down. This is the build.
+
+### The problem, restated from the run that was watched tonight
+
+`audio_to_keyframes` raises a `#32770` whose window TITLE IS EMPTY -
+the words live in an `Edit` child four levels down, reachable only by
+WM_GETTEXT, which is what the evidence layer uses and the verdict layer
+cannot. So the verdict layer sees three containers and no words:
+`unreadable`, a verdict that gives up after 8 consecutive polls.
+
+Watching the harness's OWN probe (the `$win32` here-string, extracted
+out of run-ae-selftest.ps1 so the shipping code was what got measured)
+at 200 ms through a real 532/532 run:
+
+    24.13s verdict=unreadable    ... 31.71s
+      [#32770]
+        OS_ViewContainer
+        OS_ViewContainer
+        OS_EditTextContainer
+      [#32770] Executing Script aell-selftest-run.jsx...
+
+Seven and a half seconds of a ~35 s run, flapping `unreadable` /
+`clear` as AE toggles which window is disabled. On a 2 s poll that is
+close to four samples of an eight-sample clock - **every run this
+harness makes has been running at about half the patience it appears
+to have, on a window that is proof the suite is being executed.** The
+flapping is the only reason it has never actually killed a run here,
+and flapping is not a guarantee: it depends on a poll phase, a machine
+speed and an audio layer's length, none of which are pinned.
+
+### The discriminator, re-measured rather than taken on trust
+
+`scripts/ae-window-census.ps1` at 200 ms across a real run, and then a
+`Script Alert` raised on purpose through `AfterFX.exe -r` and measured
+the same way:
+
+    Analyzing Audio   #32770  ex=00090121  owner=20780896  title=''
+    Executing Script  #32770  ex=00010101  owner=170224    (hwnd 20780896)
+    Auto-Save Project #32770  ex=00010101  owner=170224
+    Script Alert      #32770  ex=00010101  owner=170224
+    AE_CApplication            ex=00000100  owner=0        (hwnd 170224)
+
+The audio dialog is owned by **the script-progress window**. Everything
+that is or could be a QUESTION - the alert, the save prompt, auto-save,
+the progress window itself - is owned by the MAIN window. That holds
+without reading a single word, which is the whole point: this dialog
+cannot be identified by what it says from the layer that has to judge
+it. Note also `ex=00090121` carries neither WS_EX_NOACTIVATE nor
+WS_EX_TOOLWINDOW, so the existing `{nonmodal}` filter could never have
+reached it.
+
+### The fix, both layers
+
+- **`run-ae-selftest.ps1`** - `OnFindProgress` locates AE's
+  "Executing Script ..." window **in a pass of its own**, and this is
+  the part that is easy to get wrong: `EnumWindows` walks the Z-ORDER,
+  top first, so a dialog the running script raised is enumerated BEFORE
+  the window that owns it. A single pass would never hold the handle at
+  the moment it needed it. `OnTop` then marks any popup whose
+  `GetWindow(h, GW_OWNER)` is that window:
+  `[#32770] {scriptowner ex=00090121 owner=94F0B68}`.
+  Unlike the chrome filter, a marked popup is still **counted** and
+  still **read for its children** - it is a real dialog, and the
+  annotation is a fact about it, not permission to stop looking.
+- **`lib/ae-dialog-triage.ps1`** - a WORDLESS block so marked sets
+  `SawProgress`, the same flag the progress window sets, because it is
+  the same evidence: AE is working on our script. A marked block that
+  says ANYTHING falls through to the word test and can still block.
+
+Nothing was widened that answers dialogs: `CloseWordlessDialogs` still
+posts WM_CLOSE to `#32770` alone, and `Get-AellStaleDialogPlan` is
+gated on `unreadable`, so the audio dialog moving to `running` makes
+the harness strictly LESS likely to close something AE is using. That
+is pinned by a test rather than left as an argument.
+
+### Verification
+
+- **Real AE, after the fix, same watch: `unreadable` does not occur in
+  a whole run.** Seven distinct `unreadable` states before, zero after;
+  the run's verdicts are now 10 `clear`, 10 `running`, 1 `startup`. The
+  probe emits `{scriptowner ex=00090121 owner=94F0B68}` - the same `ex`
+  the census measured, a per-launch owner handle.
+- **`tests/test-selftest-runner.js` 165 -> 187 checks**, fixture
+  verbatim from tonight's capture. **Reverted against the pre-fix
+  scripts it fails 15 assertions.**
+- The rails, each its own case: the same window UNMARKED still stops
+  the run at the eighth poll; a marked popup that says something is
+  `blocked`; a marked popup does not vouch for a different wordless
+  popup in the same sample; a marked popup beside a real modal is
+  `blocked`; and the stale-dialog planner refuses to WM_CLOSE it.
+- **Full stub sweep: 60/60 test files exit 0.** Harness 532/532, three
+  runs tonight (one before the change, two after). Both .ps1 files
+  re-checked pure ASCII by the suite's own assertion.
+
+### Version
+
+`node scripts/bump-version.js patch` -> 0.10.18. This is harness
+tooling and `extension/` is untouched, which is the same shape as the
+2026-08-28 and 2026-08-30 dialog passes that did NOT bump - but those
+were called for their own reasons and the standing instruction for this
+session is to bump a patch on any verified push, so it is bumped. If
+the remote session would rather harness-only changes never move the
+feed, say so here and the next pass will follow it.
+
+### Notes for whoever runs the next pass
+
+- The watcher that made this measurable is worth rebuilding when needed
+  and was NOT committed (it lived in gitignored `logs/`): it reads
+  `run-ae-selftest.ps1`, pulls the `$win32` here-string out with
+  `(?s)\$win32 = @'\r?\n(.*?)\r?\n'@`, `Add-Type`s it, dot-sources the
+  triage lib, and prints `FindDialog` + `Get-AellDialogVerdict` on every
+  CHANGE. Measuring the shipping probe rather than a copy of it is what
+  made the before/after comparison mean anything.
+- Still latent, seen but never seen VISIBLE: a detached top-level
+  `DroverLord - TabPanel Window` carries neither flag and a title that
+  is not a progress name, so it would read as `blocked`. Written down,
+  not guarded against.
+- Machine state: AE left running on `logs\mogrt60\P60-scratch.aep`, no
+  dialog open. This pass raised one Script Alert on purpose and
+  dismissed it with WM_CLOSE. Scratch under `logs\audio-owner\` and
+  `%TEMP%\aell-alert-owner.jsx` were deleted.
+- Still open from earlier passes, unattempted tonight: item 7's catalog
+  VRAM delta; no panel UI for the mogrt export tools; no `.webm`/
+  `.webp`. `release-notes.txt` still reads "0.10.0" while the feed ships
+  0.10.18 - remote session's release cut.
