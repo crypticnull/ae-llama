@@ -1389,6 +1389,75 @@ asked, answered from the 0.10.17 measurements — it is a per-call
 `maxIntermediateGB` disk guard now, not a format limit; no render test
 needed).
 
+## 8. Natural-language robustness — the paraphrase matrix (local; owner-requested 2026-08-30)
+
+The owner's words: "a full natural language pass ensuring that
+functions and actions can be adequately used with varied inputs rather
+than exact prescribed trigger words." The instrument exists —
+`scripts/chat-probe.js` already drives the REAL model through the REAL
+panel code against the canned host — what it lacks is VARIANCE. One
+bullet per pass:
+
+- **Wire the paraphrase matrix into chat-probe.** Every scenario in
+  `docs/USEFULNESS-TESTS.md` marked `probe` becomes a probe step that
+  runs its VARIANTS (the doc's alternate phrasings, plus casual, vague,
+  typo'd, and compound forms — 3 to 5 per scenario). Score each
+  phrasing: right tool + right target = pass; honest grounded refusal
+  or a sensible clarifying question = pass; wrong-target mutation that
+  claims success = the failure class that matters, log it loudly.
+  Acceptance per scenario: no variant may do harm, and at most one may
+  miss where the canonical passes.
+- **Report, don't fix, in the same pass.** Append a table to
+  WORKPLAN-LOG per run: scenario / phrasing / chosen tool / verdict.
+  Recurring misses are WORDING dependencies; the fix lives in tool
+  descriptions and the system prompt (tools.js), which changes model
+  behavior — make the doc change, re-run the matrix to show the flip,
+  patch-bump. One tool-doc change per pass so a regression is
+  attributable.
+- **Anti-drift:** the doc's `probe` column and the probe's step list
+  must agree — add the check to test-chat-probe.js so a scenario added
+  to one place fails until it reaches the other.
+- **First pass housekeeping check:** eyeball the newest
+  `logs\local-agent-*.log` — the Clean-Line scrubber (ANSI escapes,
+  UTF-8 punctuation transliteration) shipped 2026-08-30 unparsed by any
+  Windows PowerShell; if the loop dies on a syntax error or the log
+  still shows mojibake, that fix is the pass.
+
+## 9. Evolution track — proposals for the owner to prioritize
+
+Filed 2026-08-30 after the 0.11.0 cut. NOT approved work — the owner
+picks; remote builds most of these (features/minors), local verifies.
+Ordered by leverage-per-effort as the remote session sees it:
+
+1. **Generate-and-place as the default.** `comfy_generate` ->
+   `import_as_layer` chained so "make me a background" ENDS in the comp,
+   not the project panel (the gap chat-probe logs today). Small; mostly
+   prompt + one tool-doc rule.
+2. **"Undo that."** Wire each chat round's undo group to a natural
+   command, so any round is one sentence away from reverted. Trust
+   feature: it makes every other test in USEFULNESS-TESTS.md cheaper to
+   run.
+3. **Beat markers.** `audio_to_keyframes` sibling that drops comp
+   markers on onsets/beats, so "cut on the beat" / "stagger to the
+   music" become rig targets. The DSP is the same file the keyframe
+   tool already reads.
+4. **Action macros.** Save a successful round (the executed command
+   list, parameterized by target) under a name; replay on another comp/
+   selection. Repeat client work is the same five asks every week.
+5. **Look transfer.** "Make comp B look like comp A": copy effects +
+   settings + text styles with a receipt of what could not carry over.
+6. **Voice input.** whisper.cpp is already bundled for captions; a mic
+   button is the panel's own dogfood of it.
+7. **Project memory.** Cache a project outline per session so big
+   projects stop paying list_* round-trips every ask; staleness rules
+   from the same honesty playbook (measure, never assume).
+8. **MOGRT panel UI + .webm/.webp export** — both filed as gaps in the
+   log 2026-08-29.
+9. **Bundled ComfyUI installer + per-tier curated stacks** (#21 + tier
+   P5) — zero-setup generation for test users.
+10. **Phase D/E** as already queued (animation utilities largely landed
+    via 5.1–5.7; roto/tracking hybrids remain the big one).
+
 ## Out of scope for the local session (remote builds these)
 
 - ComfyUI bundled node-pack installer and wiring generation into

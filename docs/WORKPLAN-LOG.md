@@ -9811,3 +9811,25 @@ got.
   `maxIntermediateGB`, disk guard not format limit). Remote-side items
   still open: rollback design review, `comfy_generate ->
   import_as_layer`, bundled ComfyUI installer (#21), Phase E.
+
+## 2026-08-30 (remote session, later) — usefulness tests + NL matrix queued + log scrubber
+
+- Changed: docs/USEFULNESS-TESTS.md (NEW — 30 scenarios with phrasing
+  variants and useful/harmless/harmful verdicts; the `probe` column is
+  the automation contract), docs/WORKPLAN.md (section 8: paraphrase
+  matrix in chat-probe, owner-requested; section 9: evolution proposals
+  for the owner to prioritize), scripts/run-local-agent.ps1
+  (`Clean-Line`: strips ANSI escapes and control chars from captured
+  CLI output, transliterates UTF-8 punctuation to ASCII — the log and
+  console were showing escape codes and mojibake under Windows
+  PowerShell 5.1's ASCII log encoding).
+- Harness: docs + one .ps1 function; no extension/ change, NO bump (the
+  new rule, applied). Stub suite untouched by these files.
+- Notes: Clean-Line is UNPARSED by any real PowerShell (no pwsh in the
+  remote container) — section 8's first bullet includes eyeballing the
+  first new log; if the loop fails to start, that function is the first
+  suspect. The NUL-byte class got a second hit today: the remote
+  session itself pasted a literal NUL into THIS log while documenting
+  the tools.js NUL fix (scrubbed same day) — worth remembering that the
+  escape sequence renders as the character it names in some paste
+  paths.
