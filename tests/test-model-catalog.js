@@ -159,6 +159,78 @@ window.AELL.COMFY_CATALOG.forEach((e) => {
          urls.length + " files (" + sum + ")");
 });
 
+// ---------------------------------------------------------------------------
+// A `measured` VRAM figure has to BE a measurement.
+//
+// Every COMFY_CATALOG entry shipped `measured: false` and a minVramGB copied
+// out of training. On 2026-08-30 scripts/catalog-vram-probe.js ran the
+// shipped KREA2 template on a real 5090 and the card disagreed with the
+// catalog by a factor of two: 24 160 MiB measured against a claimed 12 GB
+// floor, and the three weights alone are 18 109 MiB, so no arrangement of
+// offload makes 12 GB hold the job. entryFits() gates on minVramGB, so that
+// number decides whether a card is offered a model it cannot run.
+//
+// These assertions are the bug class, not the instance: an entry may not
+// claim to be measured without carrying the reading, and no entry's gate may
+// sit below what was measured through it.
+const MEASURED_FIELDS = ["measuredVramMB", "measuredSeconds", "measuredAt",
+                         "measuredOn"];
+let measuredEntries = 0;
+window.AELL.COMFY_CATALOG.forEach((e) => {
+  if (!e.measured) {
+    MEASURED_FIELDS.forEach((f) => {
+      assert(!(f in e), e.name + ": measured:false, so it carries no " + f);
+    });
+    return;
+  }
+  measuredEntries++;
+  MEASURED_FIELDS.forEach((f) => {
+    assert(e[f] !== undefined && e[f] !== null && e[f] !== "",
+           e.name + ": measured:true, so it carries " + f);
+  });
+  assert(typeof e.measuredVramMB === "number" && e.measuredVramMB > 0,
+         e.name + ": measuredVramMB is a real reading");
+  assert(typeof e.measuredSeconds === "number" && e.measuredSeconds > 0,
+         e.name + ": measuredSeconds is a real wall clock");
+  // The size is half the number: a delta without the frame it was taken at
+  // cannot be compared with anything.
+  assert(/\d+\s*x\s*\d+/.test(String(e.measuredAt)),
+         e.name + ": measuredAt names the pixel size it was measured at");
+  assert(typeof e.minVramGB === "number",
+         e.name + ": a measured entry still has a gate");
+  assert(e.minVramGB * 1024 >= e.measuredVramMB,
+         e.name + ": minVramGB " + e.minVramGB + " (" + (e.minVramGB * 1024) +
+         " MiB) covers the measured " + e.measuredVramMB + " MiB");
+});
+assert(measuredEntries >= 1,
+       "at least one catalog entry has had its VRAM figure measured");
+
+// The one that was measured, pinned by name so a silent revert is a failure.
+const krea2 = window.AELL.COMFY_CATALOG.filter((e) => e.name === "krea2")[0];
+assert(!!krea2, "the catalog still holds krea2");
+if (krea2) {
+  assert(krea2.measured === true,
+         "krea2: measured on real hardware 2026-08-30");
+  assert(krea2.minVramGB === 24,
+         "krea2: the 12 GB floor was disproved by measurement -> 24");
+  // The weights are the floor and they are knowable without a GPU: the
+  // entry's own file list is 18 109 MiB, so any gate under 18 GB is wrong
+  // whatever the activations cost.
+  assert(krea2.minVramGB * 1024 >= 18109,
+         "krea2: the gate at least holds the weights it names");
+}
+
+// A workflowTemplate an entry names must be a template the panel BUNDLES,
+// or the recommendation points at a graph that cannot be run. (The probe's
+// --list found four entries with no template at all; that is a known gap,
+// but a WRONG name is a different thing and is caught here.)
+const wfDir = path.join(__dirname, "..", "extension", "comfy-workflows");
+window.AELL.COMFY_CATALOG.forEach((e) => {
+  if (!e.workflowTemplate) return;
+  assert(fs.existsSync(path.join(wfDir, e.workflowTemplate + ".json")),
+         e.name + ": bundles its workflowTemplate " + e.workflowTemplate);
+});
+
 // No consumer may do decimal-MB arithmetic on the field. main.js's model
 // dropdown divided by 1000 while the downloader's status line divided by
 // 1024, so one file was quoted two sizes in the same window.

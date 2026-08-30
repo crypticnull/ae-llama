@@ -8,7 +8,7 @@
   "use strict";
 
   global.AELL = {
-    VERSION: "0.10.18",
+    VERSION: "0.10.19",
 
     // Release channel label, shown wherever the version is displayed.
     // Purely cosmetic — update comparisons use the numeric VERSION only.
@@ -80,7 +80,14 @@
     // to the download, so a total that disagrees with its own parts is a
     // bug. All twelve URLs were alive on 2026-08-30 and every size below is
     // that day's measurement (x-linked-size, or the file already on this
-    // machine); `measured` is about the VRAM figure, which still is not.
+    // machine); `measured` is about the VRAM figure, which is measured
+    // for `krea2` alone (2026-08-30) and still a guess everywhere else.
+    // An entry with measured: true carries the reading that earned it --
+    // measuredVramMB (nvidia-smi peak minus an established idle floor),
+    // measuredSeconds, measuredAt (the SIZE it was measured at, which is
+    // half the number) and measuredOn (the card). minVramGB must cover
+    // measuredVramMB or the entry is offered to a card that cannot hold
+    // it; tests/test-model-catalog.js enforces exactly that.
     COMFY_CATALOG: [
       {
         name: "sd15",
@@ -106,7 +113,25 @@
       {
         name: "krea2",
         label: "Krea 2 (turbo)",
-        kind: "image", sizeMB: null, minVramGB: 12, measured: false,
+        // MEASURED 2026-08-30 on an RTX 5090 (32 607 MiB) by
+        // scripts/catalog-vram-probe.js, running the SHIPPED
+        // AE_LLAMA_KREA2_V1 through the panel's own comfy_generate with
+        // nvidia-smi streaming at 250 ms. Two runs at the template's
+        // AUTHORED size, different seeds: 24 036 and 24 160 MiB over an
+        // established idle floor, 32 s each. A third at a 1024 latent
+        // (1640x1640 out, the template upscales 1.6x) still cost
+        // 20 800 MiB in 18 s -- the floor is the weights, not the frame.
+        //
+        // minVramGB was 12, which the three weights alone disprove: they
+        // are 18 109 MiB and all three are resident. A 12 GB card must
+        // page ~6 GiB of weights every step, and 0.10.14 measured what
+        // this backend does when a job outgrows the card -- it does not
+        // OOM, it GRINDS. So 24 is the smallest card that holds the job
+        // the panel actually ships.
+        kind: "image", sizeMB: null, minVramGB: 24, measured: true,
+        measuredVramMB: 24160, measuredSeconds: 32,
+        measuredAt: "3072x1728 (the template's authored size), seed 4242",
+        measuredOn: "NVIDIA GeForce RTX 5090, ComfyUI 0.32.0, 2026-08-30",
         workflowTemplate: "AE_LLAMA_KREA2_V1",
         files: ["krea2_turbo_int8_convrot.safetensors",
                 "qwen3vl_4b_fp8_scaled.safetensors",

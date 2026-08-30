@@ -1162,15 +1162,70 @@ GPU. This item is that touch, one pass per bullet, smallest first:
     divided by 1024, quoting one file two sizes. Two entry totals also
     disagreed with their own url lists (Wan 2.2 17000 vs 17500, H3 40543
     vs 40503). All measured, unit documented, 12 stub assertions.
-  - **STILL OPEN: the VRAM delta.** For each downloadable entry that fits
-    the card (sd15, sdxl, wan22-5b, minimax-h3): real VRAM delta during a
-    generation (nvidia-smi peak − idle) and wall clock, then flip
-    measured:false → true with the number IN the entry, patch bump. Needs
-    the weights downloaded (~36 GB not on this disk) AND a per-model
-    workflow template — the panel ships only KREA2 and H3 i2v — AND a
-    ComfyUI started by hand (0.10.9: `Comfy.ensureRunning` cannot start
-    the working 0.32.0 here). Budget a whole pass per model, not one pass
-    for the bullet.
+  - **The VRAM delta — FIRST ENTRY MEASURED 2026-08-30 (0.10.19), the
+    rest still open.** `scripts/catalog-vram-probe.js` is the instrument:
+    it runs a catalog entry's SHIPPED template through the panel's own
+    `comfy_generate` with `nvidia-smi -lms 250` streaming throughout, and
+    it establishes the idle floor by waiting for the card to STOP MOVING
+    rather than glancing at it once. `--list` says what this machine can
+    measure without touching the GPU.
+
+    **krea2 is done and the catalog was wrong by a factor of two**: 24 160
+    MiB measured (two runs, 24 036 / 24 160, 32 s each, at the template's
+    authored 3072x1728) against a claimed 12 GB floor. Its three weights
+    alone are 18 109 MiB, so no arrangement of offload makes 12 GB hold
+    it. `minVramGB` 12 → 24, `measured: true`, and the reading now rides
+    IN the entry (`measuredVramMB` / `measuredSeconds` / `measuredAt` /
+    `measuredOn`). Ripple, checked: cards under 24 GB now get `sdxl` for
+    image instead of a model they cannot hold.
+
+    **minimax-h3 was ATTEMPTED and is blocked — do not re-attempt without
+    reading the log entry first.** All four of its weights are on this
+    disk and the panel finds them, but the RUNNING ComfyUI cannot load
+    any of them: it was launched `--base-directory Documents\ComfyUI` and
+    the weights live only in the Comfy-Desktop shared store, which that
+    instance does not search and which no `extra_model_paths.yaml`
+    declares. See the new item below — that disagreement is a shipped
+    defect, not a probe problem.
+
+    Still open, each its own pass: **sd15, sdxl, wan22-5b** need ~26 GB
+    downloaded AND a per-model workflow template the panel does not ship
+    (`--list` reports exactly this), and **minimax-h3** needs a backend
+    that can see its weights.
+
+- **NEW, filed 2026-08-30 by the probe above: the panel decides a model
+  is available by looking at the DISK, and the backend decides by its own
+  search path. On this machine the two disagree today.** `comfyModelRoots`
+  (0.10.13) includes the Comfy-Desktop shared store, so the arbiter prices
+  the H3 template at 40 503 MiB and will stop the chat model to make room
+  for it — and then ComfyUI answers `Value not in list — vae_name:
+  'minimax_h3_video_vae_fp16.safetensors' not in [...]`. The user pays a
+  handoff for a job that was never runnable. The ground truth for "can
+  this graph load" is the backend's own `/object_info`, which lists
+  exactly what it can see (it has no sizes, so the DISK is still the right
+  source for the arithmetic — the two answer different questions and both
+  are needed). Shape of the fix: before the arbiter acts, check every
+  weight the chosen template names against `/object_info`, and refuse
+  early with a grounded error naming the missing ones AND where they sit
+  on disk — which is the sentence that tells a user their backend is
+  pointed at the wrong root. Probe first: `/object_info` is already
+  fetched by `scripts/attribute-workflow-nodes.js`, so the route exists.
+
+- **Also filed 2026-08-30, smaller, for the remote session:** four of the
+  seven catalog entries (`sd15`, `sdxl`, `ltx-small`, `wan22-5b`) have NO
+  `workflowTemplate`, and `recommendGen` happily offers them — an 8/12/16
+  GB card is now recommended `sdxl` for image, which `comfy_generate`
+  cannot render because the panel bundles no SDXL graph. Pre-existing;
+  the krea2 correction just made it the common case rather than the edge.
+  `tests/test-model-catalog.js` now at least fails a template name that
+  does not exist.
+
+- **And one measured oddity, logged not fixed:** the KREA2 template
+  upscales 1.6x, so `comfy_generate {width: 1024, height: 1024}` returns a
+  1640x1640 image. That is deliberate in the graph (0.9.23 substituted
+  `LatentUpscaleBy` for `SesquiLatentUpscale` precisely so it would not
+  shrink), but `width`/`height` are documented to the model as the output
+  size and they are not.
 - ~~**Tier impersonation ladder**~~ DONE 2026-08-30 (0.10.13).
   `scripts/tier-ladder-probe.js` walks 4/6/8/12/16/24/32 plus the card's
   own number, against real nvidia-smi, a real llama-server and the

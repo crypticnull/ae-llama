@@ -9338,3 +9338,184 @@ feed, say so here and the next pass will follow it.
   VRAM delta; no panel UI for the mogrt export tools; no `.webm`/
   `.webp`. `release-notes.txt` still reads "0.10.0" while the feed ships
   0.10.18 - remote session's release cut.
+
+## 2026-08-30 (local) - item 7: the number the catalog had been guessing,
+## and the weights the panel can see but the backend cannot (0.10.19)
+
+Harness green before the pass (532/532), so this took the last bullet in
+the whole workplan that is still open: item 7's catalog VRAM delta. The
+SIZE and URL halves were settled 2026-08-30 (0.10.11); every `minVramGB`
+in `COMFY_CATALOG` was still a training guess and every entry still said
+`measured: false`.
+
+That number is not decoration. `tiers.js entryFits()` gates an entry on
+`vram < entry.minVramGB` and the comment above it says what the gate
+means: *can this entry run on this machine at all*. A wrong one either
+offers a card a model it cannot hold, or hides one it can.
+
+### The instrument
+
+`scripts/catalog-vram-probe.js`, built this pass. It drives the REAL
+panel path - settings.js + tiers.js + setup.js + comfy.js + tools.js -
+so what gets measured is `comfy_generate` and not a hand-rolled queue
+post. Three decisions in it, each paid for by an earlier pass:
+
+- **The floor is established, not glanced at.** `nvidia-smi memory.used`
+  is the whole card, and a generation that ran ten minutes ago may still
+  hold 19 GB. So the probe POSTs `/free` and then waits for twelve
+  consecutive samples to agree within 64 MiB before it writes the idle
+  number down. 0.10.15 is why: it measured this backend sitting at
+  23 654 MiB for ten seconds and dropping to 2 918 one second later. A
+  floor read on a timer would have been that 23 654, and every delta
+  after it would have been understated by 20 GB.
+- **The witness is one streaming process, not a timer.**
+  `nvidia-smi --query-gpu=memory.used -lms 250` is a single child
+  printing four readings a second. `comfy-probe.js` samples with
+  execFile every 4 s, which is fine for "did it use the GPU" and useless
+  for a peak - a VAE decode spike is shorter than one sample.
+- **It never touches After Effects.** `import: false`. The catalog
+  question is about the card.
+
+`--list` answers what this machine can measure with no GPU work at all,
+and that answer was itself worth having:
+
+    skip     sd15         (no workflowTemplate - the panel ships no graph)
+    skip     sdxl         (no workflowTemplate)
+    RUNNABLE krea2        (AE_LLAMA_KREA2_V1, 18109 MiB on disk)
+    skip     ltx-small    (no workflowTemplate)
+    skip     wan22-5b     (no workflowTemplate)
+    RUNNABLE minimax-h3   (AE_LLAMA_H3_I2V_V1, 40503 MiB on disk)
+    skip     minimax-h3-int8 (no workflowTemplate)
+
+The weights a template loads are read out of the GRAPH, not out of the
+catalog entry - 0.10.9's lesson, that an entry's `urls`/`files` and what
+the shipped template names are two different lists. The H3 total the
+graph produced, 40 503 MiB, matches the entry's own `sizeMB` exactly,
+which is a free cross-check on 0.10.11's work.
+
+### krea2: the catalog was wrong by a factor of two
+
+Three runs on the 5090 (32 607 MiB), ComfyUI 0.32.0, idle floor
+2861-2867 MiB every time:
+
+| run | size out | idle | peak | DELTA | seconds |
+|---|---|---|---|---|---|
+| authored, seed 12345 | 3072x1728 | 2861 | 26 897 | **24 036 MiB** | 32 |
+| authored, seed 4242  | 3072x1728 | 2867 | 27 027 | **24 160 MiB** | 32 |
+| `--width 1024 --height 1024` | 1640x1640 | 2867 | 23 667 | **20 800 MiB** | 18 |
+
+The two authored runs are 124 MiB apart (0.5%), so the number
+reproduces. The catalog claimed **12 GB**.
+
+The third row is the one that settles the argument, because the obvious
+objection to a measurement taken on a 32 GB card is that PyTorch
+allocates greedily when there is room. Cut the frame to a third of the
+pixels and the cost only falls to 20 800 MiB - because the floor is the
+WEIGHTS, and this entry's own three files are 18 109 MiB. That part
+needs no GPU at all: a 12 GB card cannot hold 17.7 GiB of weights, so it
+must page ~6 GiB of them every step, and 0.10.14 measured what this
+backend does when a job outgrows the card - it does not OOM, it GRINDS
+(33 s/it on pass one, 92 s/it on pass two, no exception, no end).
+
+So `minVramGB` 12 -> **24**, `measured: true`, and the reading rides IN
+the entry rather than in a comment: `measuredVramMB: 24160`,
+`measuredSeconds: 32`, `measuredAt` (the pixel size, which is half the
+number), `measuredOn` (the card).
+
+**Ripple, checked rather than assumed** - `recommendGen` across the
+ladder now reads:
+
+    8 GB -> image=sdxl   12 GB -> image=sdxl   16 GB -> image=sdxl
+    24 GB -> image=krea2   32 GB -> image=krea2
+
+which is the intended effect: a 16 GB card is no longer offered a model
+whose weights alone are larger than its card.
+
+### minimax-h3: attempted, blocked, and the blocker is a shipped defect
+
+The probe got as far as the queue and ComfyUI refused the graph:
+
+    node 129 (VAELoader): Value not in list - vae_name:
+    'minimax_h3_video_vae_fp16.safetensors' not in [...
+     'minimax_h3_video_vae_int8_convrot.safetensors', ...]
+
+Chased with `/object_info` rather than guessed at. The running backend
+sees **none** of the four H3 weights - no `minimax_h3_fl2va_*` unet, no
+`qwen3vl_32b_minimax_h3_nvfp4_awq` encoder, neither H3 VAE. All four
+live only in `AppData\Local\Comfy-Desktop\ComfyUI-Shared\models`, and
+this instance was launched with `--base-directory` pointing at
+`Documents\ComfyUI`. There is no `extra_model_paths.yaml` anywhere on
+the machine.
+
+**That is not a probe problem, it is the panel's.** `comfyModelRoots`
+(0.10.13) was widened to include that shared store precisely because the
+panel had priced the H3 template at null on a machine that had already
+rendered with it. The fix was right for the arithmetic and it created a
+second, worse failure: the panel now believes 40 503 MiB of weights are
+available, prices the job, and on a 32 GB card that means **stopping the
+chat model to make room** - and only then does ComfyUI say it cannot
+load any of them. The user pays a full handoff for a job that was never
+runnable.
+
+The two questions are genuinely different and both sources are needed:
+the DISK knows how big a weight is (`/object_info` has no sizes), and
+the BACKEND knows whether it can load it (the disk cannot know the
+search path). Filed in WORKPLAN as its own item with the shape of the
+fix - check the chosen template's weights against `/object_info` before
+the arbiter acts, and refuse early naming the missing files AND where
+they are on disk, because that sentence is the one that tells a user
+their backend is pointed at the wrong root.
+
+I did NOT restart the owner's ComfyUI to unblock it. It is their
+instance, 0.10.9 established `Comfy.ensureRunning` cannot start the
+working 0.32.0 here, and a restart under an unattended pass could leave
+the machine with no backend at all.
+
+### Two smaller things the pass measured, filed not fixed
+
+- **Four of seven catalog entries have no bundled template** (`sd15`,
+  `sdxl`, `ltx-small`, `wan22-5b`) and `recommendGen` offers them
+  anyway. Pre-existing, but the krea2 correction just made it the COMMON
+  case: every card under 24 GB is now recommended `sdxl` for image, and
+  `comfy_generate` cannot render it. Remote session's call.
+- **The KREA2 template upscales 1.6x**, so `comfy_generate {width: 1024,
+  height: 1024}` returns 1640x1640 (and the authored 1920x1080 latent is
+  why the default output is 3072x1728). Deliberate in the graph - 0.9.23
+  substituted `LatentUpscaleBy` for `SesquiLatentUpscale` exactly so it
+  would NOT shrink - but `width`/`height` are documented to the model as
+  the output size and they are not it.
+
+### Verification
+
+- **Three real generations on the real GPU**, numbers above; the two
+  authored runs agree to 0.5%.
+- **`tests/test-model-catalog.js`** carries the bug class, not the
+  instance: an entry with `measured: true` must carry all four reading
+  fields, `measuredAt` must name a pixel size, and `minVramGB * 1024`
+  must cover `measuredVramMB`. Reverting the gate to 12 fails 3
+  assertions; setting `measured: true` on an entry with no reading fails
+  8. It also now fails a `workflowTemplate` naming a file the bundle does
+  not contain.
+- **Full stub sweep: 60/60 test files exit 0.**
+- **Harness 532/532**, before and after.
+
+### Version
+
+`node scripts/bump-version.js patch` -> 0.10.19. This changes shipped
+behaviour: `entryFits` is panel code and a 16 GB card's image
+recommendation is different after it.
+
+### Notes for whoever runs the next pass
+
+- **Do not re-attempt minimax-h3 without reading the blocked section
+  above.** It is one restart away from measurable, but the restart is
+  the owner's to make - or the filed `/object_info` item lands first, in
+  which case the panel will say so out loud and the probe will too.
+- `logs/catalog-vram/` holds the three PNGs and the
+  `logs/catalog-vram-probe-*.md` transcripts; both are gitignored.
+- Machine state: AE running, no dialog open, project untouched (the
+  probe never imports). ComfyUI still up on 8188, queue idle, card back
+  to 2 870 MiB.
+- Still open elsewhere: no panel UI for the mogrt export tools; no
+  `.webm`/`.webp`. `release-notes.txt` still reads "0.10.0" while the
+  feed ships 0.10.19 - remote session's release cut.
