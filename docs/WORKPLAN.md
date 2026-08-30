@@ -985,10 +985,22 @@ GPU. This item is that touch, one pass per bullet, smallest first:
   a baseline sampled after that release, which can never come, so every
   paused round paid a 10 s timeout and said "VRAM did not visibly
   release". Fixed: the resume aims at the absolute floor the pause left.
-- **pause "never" refusal in the field**: override 8 GB, pause never,
-  ask for a generation → the model must relay the grounded refusal
-  (numbers + the setting), not hallucinate success. This is a chat-probe
-  style check, worth a probe step if it holds.
+- ~~**pause "never" refusal in the field**~~ DONE 2026-08-30 (0.10.10),
+  and it holds: it is now `chat-probe.js` **step 14**, permanent. Asked
+  for a picture on an impersonated 8 GB card with pausing off, the model
+  invented a workflow name, took the grounded "Available:" error,
+  re-planned onto KREA2, got the refusal and relayed it — "The
+  generation requires more VRAM than is currently available. Please
+  pause the chat during generation or stop the chat server and try
+  again." Two defects paid for the run: the refusal quoted an
+  IMPERSONATED card size as if it were real ("the chat model holds
+  ~20 GB of the card's 8 GB" — a measured 32B against a fictional
+  budget), now annotated "(VRAM override)"; and `.hash-history.json`
+  was being listed as a workflow, sorting FIRST, so a generation that
+  named no workflow ran the seeder's hash record as a graph. Steps get
+  a `settings:` block that patches the cached settings object and
+  restores it — never `Settings.set`, which mirrors to the owner's real
+  settings.json. See WORKPLAN-LOG 2026-08-30.
 - **Measure the catalog**: for each downloadable entry that fits the
   card (sd15, sdxl, wan22-5b, minimax-h3): real VRAM delta during a
   generation (nvidia-smi peak − idle), wall clock, and whether the

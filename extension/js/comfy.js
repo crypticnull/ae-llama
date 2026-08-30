@@ -201,6 +201,14 @@
       // A sidecar is not a workflow. Listing it would offer the model a
       // "<name>.manifest" template that loadWorkflow can only reject.
       if (/\.manifest\.json$/i.test(entries[i])) continue;
+      // Neither is a DOTFILE. The bundle carries .hash-history.json (the
+      // seeder's record of every version ever shipped, 0.10.1), and a
+      // leading dot sorts FIRST — so anything pointed at the bundled
+      // directory got ".hash-history" offered to the model as a template
+      // and, because the default is simply list[0], generating without
+      // naming a workflow ran the record file as a graph. Measured
+      // 2026-08-30 against extension/comfy-workflows.
+      if (entries[i].charAt(0) === ".") continue;
       if (/\.json$/i.test(entries[i])) {
         var file = path.join(dir, entries[i]);
         // A template that still holds this project's own placeholder

@@ -1142,7 +1142,8 @@
         chatLoadedMB: chat.mb,
         genNeedMB: genNeedMBFor(manifest, s),
         pauseMode: s.comfyPauseLlm,
-        mandatory: tier.mandatory
+        mandatory: tier.mandatory,
+        overridden: eff.overridden
       });
       if (decision.mode === "refuse") {
         cb({ ok: false, error: decision.reason });

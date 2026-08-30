@@ -247,12 +247,37 @@ run(gen(2), function (results) {
              log.indexOf("comfy.ensure") === -1 &&
              log.indexOf("comfy.generate") === -1,
              "…and NOTHING was started or stopped first");
+      assert(!/override/i.test(r3[0].error),
+             "a REAL 8 GB card's refusal says nothing about an override");
+
+      // ---- scenario 3b: the same refusal on an IMPERSONATED card.
+      // Found in the field 2026-08-30 by chat-probe step 14: the chat
+      // model's figure is measured off what is really loaded while the
+      // card's comes from vramOverrideGB, so the two can contradict
+      // each other outright — a 32B model on an 8 GB override reads
+      // "the chat model holds ~20 GB of the card's 8 GB". Both numbers
+      // are true; the sentence has to say which one is a fiction.
+      log.length = 0;
+      settings = baseSettings({ comfyPauseLlm: "never",
+                                vramOverrideGB: 8 });
+      Tools.setGpuInfo({ hasNvidia: true, vramGB: 32, computeCap: 12 });
+      run(gen(1), function (r3b) {
+        assert(r3b[0].ok === false && /8 GB \(VRAM override\)/
+                 .test(r3b[0].error),
+               "an impersonated budget is named as one (got: " +
+               (r3b[0].error || "ok") + ")");
+        assert(/6\.3 GB/.test(r3b[0].error) && /6\.1 GB/.test(r3b[0].error),
+               "…without losing either measured number");
 
       // ---- scenario 4: nvidia-smi dead — the old fixed grace period
       // is the fallback, loudly not silently better.
       log.length = 0;
       delays.length = 0;
       settings = baseSettings();
+      // Declared, not inherited: this scenario is about a card too small
+      // for both, and it used to pick that up from whichever scenario ran
+      // before it.
+      Tools.setGpuInfo({ hasNvidia: true, vramGB: 8, computeCap: 8.9 });
       vramReadings = [null, null];      // both baselines error out
       run(gen(1), function (r4) {
         assert(r4[0].ok, "no nvidia-smi still generates");
@@ -319,6 +344,7 @@ run(gen(2), function (results) {
             process.exitCode = failed ? 1 : 0;
           });
         });
+      });
       });
     });
   });

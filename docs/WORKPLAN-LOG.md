@@ -7537,3 +7537,158 @@ every paused round, and an error message that named the wrong cause.
   `import_as_layer`; and 5.9 (.mogrt export) deferred again by its own
   LAST-item-of-the-night rule — nineteenth pass, at 02:30 local with the
   loop still running.
+
+## 2026-08-30 (local) - item 7 Tier P4 bullet 3: the refusal nobody can
+## see, and the card that was never there (0.10.10)
+
+Harness green before the pass (517/517), so the item was the top
+unfinished one that is eligible: item 7's third bullet, the pause-
+"never" refusal, measured through the MODEL for the first time. (5.9
+.mogrt still outranks it on paper and still defers itself by its own
+LAST-item-of-the-night rule - twentieth pass, the loop is still
+running.)
+
+### Why this bullet is not the same as the arithmetic
+
+0.10.9 measured the handoff arithmetic on the real card. What it could
+not say is what happens on the ONE generation outcome a user cannot
+check for themselves: a refusal renders nothing, imports nothing, opens
+no dialog and touches no VRAM. The only evidence that reaches a human is
+the sentence the model chooses to write. A model that answers "here's
+your image" is indistinguishable from a working panel until they go
+looking for the file.
+
+So the bullet is now `scripts/chat-probe.js` **step 14**, permanent:
+impersonate an 8 GB card (T3), turn pausing off, ask for a picture.
+
+### What the field run did
+
+Two runs, both PASS, neither with ComfyUI running - the refusal comes
+from the arbiter BEFORE `Comfy.ensureRunning`, which is also why the
+step costs no VRAM and no backend. Chat model was this machine's own
+Qwen2.5-32B-Instruct-Q4_K_M; KREA2's weights measured 18 110 MB.
+
+Three rounds each time, and the interesting half is the first two:
+
+- The model invented a workflow name (`image-to-image`, then
+  `Stable Diffusion` on the second run), took the grounded
+  "Unknown workflow ... Available: AE_LLAMA_H3_I2V_V1,
+  AE_LLAMA_KREA2_V1" error and re-planned onto KREA2 unaided. That is
+  0.9.28's finding reproducing twice more.
+- Then the refusal, and it was relayed: *"The generation requires more
+  VRAM than is currently available. Please pause the chat during
+  generation or stop the chat server and try again."* (Run 1: *"It looks
+  like there isn't enough GPU memory to generate the image while the
+  chat model is running. Please pause the chat during generation..."*)
+  Declined, reason, and the setting to change - all three.
+
+### Defect 1: the refusal quoted a card that does not exist
+
+Run 1's shipped sentence, verbatim:
+
+    the generation needs ~17.7 GB and the chat model holds ~20 GB of
+    the card's 8 GB
+
+A chat model holding 20 GB of an 8 GB card is impossible on its face.
+Both numbers are true and they cannot both be about the same machine:
+the chat figure is MEASURED off the model really loaded (a 32B), and the
+card figure comes from `vramOverrideGB`, which is a fiction by design.
+Only the budget's provenance was missing. `planHandoff` now takes
+`overridden` (the arbiter already had `eff.overridden` in hand) and says
+"of the card's 8 GB **(VRAM override)**". A real 8 GB card's refusal is
+unchanged - asserted, so the annotation cannot leak into the normal
+sentence.
+
+Narrow but shipped: `vramOverrideGB` is a settings field, not a debug
+flag, and this is the sentence anyone who sets it reads.
+
+### Defect 2: the default workflow was the seeder's hash record
+
+Found by the pre-check that measured `genNeedMBFor` before the field run
+- `Comfy.listWorkflows` on the BUNDLE answers:
+
+    .hash-history, AE_LLAMA_H3_I2V_V1, AE_LLAMA_KREA2_V1, example-txt2img
+
+`.hash-history.json` is 0.10.1's append-only record of every template
+version ever shipped. It is a real `.json` in the workflow directory, it
+was offered to the model as a template, and a leading dot sorts FIRST -
+so `comfy_generate`'s default (`list[0]`, which is "whatever the
+alphabet says", per test-comfy-workflow-choice's own note) was the
+record file. A generation that named no workflow ran it as a graph.
+
+Reach: the seeder deliberately never INSTALLS it (test-workflow-seeding
+asserts that), so shipped installs were not hit. What was hit is
+anything pointing at `extension/comfy-workflows` - which is exactly what
+this project's own probes do on purpose (`handoff-probe.js`: "the REPO's
+shipped template, not a stale install copy"). Fixed at the root:
+listWorkflows skips dotfiles, so the next sidecar is covered too.
+
+### One more thing the step needed, and the trap in it
+
+A step can now carry `settings: {...}`, applied for its own sentence and
+restored after. Deliberately NOT `Settings.set`: set() mirrors every key
+to `%APPDATA%\AE-Llama\settings.json`, so a probe that died mid-step
+would leave the OWNER'S panel running on an 8 GB budget with chat
+pausing turned off. `Settings.get()` hands back one cached object every
+tool reads, so patching it in place reaches the whole panel path and
+restoring puts back exactly what was there. Read back after both field
+runs: `vramOverrideGB = 0`, `comfyPauseLlm = auto`.
+
+### Verification
+
+- **Field: 1/1 both runs**, exit 0, transcripts in `logs/`.
+- `tests/test-comfy-workflow-choice.js` +3 checks (the dotfile is not a
+  workflow, and cannot be the default). **Reverted against the old
+  comfy.js, five assertions fail** - including the one that prints
+  `ran: ...\.hash-history.json`, which is the bug stated as evidence.
+- `tests/test-vram-arbiter.js` scenario 3b: the same refusal on an
+  impersonated card names the override, a real card's does not, neither
+  loses its measured numbers. Writing it also exposed a latent
+  test-order bug - scenario 4 was INHERITING its card from whichever
+  scenario ran before it, and silently changed meaning the moment one
+  was inserted above it. It declares its own now.
+- `tests/test-chat-probe.js` +12 checks on step 14's verdict, against
+  the real field capture: no comfy_generate, a generation that
+  SUCCEEDED (the OOM case), a refusal about something else (the arbiter
+  never reached), a refusal with no arithmetic (the 0.10.9 regression),
+  an unlabelled fictional card, a chat model evicted by a job that never
+  started, silence, a hallucinated success, no reason, no setting.
+- Full stub sweep: **56/56 test files exit 0**.
+- **Real-AE harness 517/517 after** (517/517 before) - nothing AE-side
+  moved, and it proves the pass left AE alone.
+
+### Version
+
+**Patch bumped to 0.10.10.** Both changes are fixes to shipped
+behaviour: a user-facing sentence that states an impossibility, and a
+default workflow choice that could run a bookkeeping file as a graph.
+
+### Notes for whoever runs the next pass
+
+- **Step 14 needs no ComfyUI and no GPU work** - it is the cheapest
+  ComfyUI-adjacent step in the probe. Steps 12 and 13 still need a
+  backend, and `Comfy.ensureRunning` still cannot start either ComfyUI
+  on this machine (0.10.9's note stands: the electron app's bundled
+  0.22.2 cannot run KREA2; the working 0.32.0 must be launched by hand).
+- The step asserts THREE things about the model's reply (it declined, a
+  reason, the setting). The 32B cleared all three unprompted on both
+  runs, so no system-prompt rule was needed. If a smaller model ever
+  drops the setting, that is a prompt fix, not a looser check.
+- Remaining item 7 bullets, none attempted: measure the catalog
+  (sd15/sdxl/wan22-5b/minimax-h3 VRAM deltas + honest sizes), the
+  4/6/8/12/16/24 impersonation ladder, and OOM recovery. The ladder is
+  now cheap - step 14 proves the impersonation plumbing works end to
+  end through the model.
+- Machine state: AE left running with no dialog open, harness green
+  behind it. llama-server stopped (the probe stops it on the way out).
+  ComfyUI was never started. Two probe transcripts under `logs/`.
+- Still open from earlier passes, unchanged and unattempted tonight: the
+  `DroverLord - Window Class` popup; no panel UI for the export tools;
+  no `.webm`/`.webp`; the 8 GB intermediate cap that is still a guess;
+  AE's downsampler never measured against ffmpeg's on real footage;
+  `get-llama.ps1`'s two latent traps (eighth flag); `release-notes.txt`
+  still reads "0.10.0" while the feed now ships 0.10.10 (nineteenth
+  flag, remote session's release cut); `comfy_generate` still calls
+  `import_file` rather than 5.8's `import_as_layer`; and 5.9 (.mogrt
+  export) deferred again by its own LAST-item-of-the-night rule -
+  twentieth pass, at 03:10 local with the loop still running.
