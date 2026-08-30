@@ -970,18 +970,107 @@
     }
   }
 
-  /** The generation's weight bill from its workflow manifest, if known. */
-  function genNeedMBFor(manifest) {
-    if (!manifest || !(manifest.models instanceof Array)) return null;
-    var sum = 0, known = false;
-    for (var i = 0; i < manifest.models.length; i++) {
-      var m = manifest.models[i];
-      if (m && !m.optional && typeof m.sizeMB === "number" && m.sizeMB > 0) {
-        sum += m.sizeMB;
-        known = true;
+  /**
+   * Where a ComfyUI model file could live on this machine, most specific
+   * first. Each entry is {kind, path}: a `kind` is a per-type root the
+   * user wrote as "checkpoints=D:\SD\ckpts" in settings and only answers
+   * for that model dir; a null kind is a whole models tree with the usual
+   * subfolders under it.
+   */
+  function comfyModelRoots(s) {
+    var pathMod;
+    try { pathMod = global.AEBridge.nodeRequire("path"); }
+    catch (e) { return []; }
+    var roots = [];
+    if (s && s.comfyModelsDir) roots.push({ kind: null, path: s.comfyModelsDir });
+    var extra = s && s.comfyModelRoots instanceof Array ? s.comfyModelRoots : [];
+    for (var i = 0; i < extra.length; i++) {
+      var entry = String(extra[i] || "").replace(/^\s+|\s+$/g, "");
+      if (!entry) continue;
+      var eq = entry.indexOf("=");
+      if (eq > 0) {
+        roots.push({ kind: entry.slice(0, eq).replace(/\s+$/, ""),
+                     path: entry.slice(eq + 1).replace(/^\s+/, "") });
+      } else {
+        roots.push({ kind: null, path: entry });
       }
     }
-    return known ? sum : null;
+    // The user's own ComfyUI, then the hidden backend's own tree.
+    if (s && s.comfyDir) {
+      roots.push({ kind: null, path: pathMod.join(s.comfyDir, "models") });
+    }
+    try {
+      var install = global.Setup && global.Setup.findComfyInstall
+        ? global.Setup.findComfyInstall() : null;
+      if (install && install.root) {
+        roots.push({ kind: null,
+                     path: pathMod.join(install.root, "ComfyUI", "models") });
+      }
+    } catch (e2) {}
+    return roots;
+  }
+
+  /**
+   * The size on disk of one manifest model entry, in MB, or null when no
+   * root holds it. Weights are the thing the card actually has to fit, and
+   * the file IS the weights — an authored number would go stale the first
+   * time somebody swapped a quantization.
+   */
+  function modelFileMB(m, s) {
+    var fsMod, pathMod;
+    try {
+      fsMod = global.AEBridge.nodeRequire("fs");
+      pathMod = global.AEBridge.nodeRequire("path");
+    } catch (e) { return null; }
+    if (!m || !m.file) return null;
+    var roots = comfyModelRoots(s);
+    for (var i = 0; i < roots.length; i++) {
+      var r = roots[i];
+      if (!r.path) continue;
+      var candidate = r.kind === null
+        ? pathMod.join(r.path, String(m.dir || ""), String(m.file))
+        : (r.kind === m.dir ? pathMod.join(r.path, String(m.file)) : null);
+      if (!candidate) continue;
+      try {
+        if (fsMod.existsSync(candidate)) {
+          var bytes = fsMod.statSync(candidate).size;
+          if (bytes > 0) return Math.round(bytes / 1048576);
+        }
+      } catch (e2) {}
+    }
+    return null;
+  }
+
+  /**
+   * The generation's weight bill: every non-optional model the workflow
+   * loads, measured on disk (a manifest `sizeMB` is honoured first, for a
+   * template that ships one).
+   *
+   * ONE unknown weight makes the whole answer null. A partial sum reads
+   * like a verified fit and understates the bill in exactly the direction
+   * that OOMs a card, and "unprovable" already has a safe meaning here:
+   * pause the chat model. Measured 2026-08-30: no shipped manifest carried
+   * a single sizeMB, so this returned null for every template ever
+   * shipped, and a 32 GB card paused chat for every generation it could
+   * have run concurrently.
+   */
+  function genNeedMBFor(manifest, settings) {
+    if (!manifest || !(manifest.models instanceof Array)) return null;
+    var s = settings;
+    if (!s) {
+      try { s = global.Settings.get(); } catch (e) { s = null; }
+    }
+    var sum = 0, counted = 0;
+    for (var i = 0; i < manifest.models.length; i++) {
+      var m = manifest.models[i];
+      if (!m || m.optional) continue;
+      var mb = typeof m.sizeMB === "number" && m.sizeMB > 0
+        ? m.sizeMB : modelFileMB(m, s);
+      if (typeof mb !== "number" || !(mb > 0)) return null;
+      sum += mb;
+      counted++;
+    }
+    return counted > 0 ? sum : null;
   }
 
   /**
@@ -993,24 +1082,34 @@
   function waitForVramDrop(baselineMB, expectDropMB, sink, done) {
     if (typeof baselineMB !== "number") {
       // nvidia-smi unavailable — the old fixed grace period is all we have.
-      global.setTimeout(done, 1500);
+      global.setTimeout(function () { done(null); }, 1500);
       return;
     }
     var target = Math.max(512,
       typeof expectDropMB === "number" ? Math.round(expectDropMB / 2) : 512);
+    waitForVram(function (usedMB) { return baselineMB - usedMB >= target; },
+                sink, done);
+  }
+
+  /**
+   * Poll nvidia-smi until `reached(usedMB)` or a 10 s timeout — proceed
+   * either way, loudly. Reports the last reading so the caller can
+   * remember where the card actually settled.
+   */
+  function waitForVram(reached, sink, done) {
     var waited = 0;
     var STEP = 500;
     var LIMIT = 10000;
     (function poll() {
       global.Setup.queryVramUsedMB(function (err, usedMB) {
-        if (!err && baselineMB - usedMB >= target) { done(); return; }
+        if (!err && reached(usedMB)) { done(usedMB); return; }
         waited += STEP;
         if (err || waited >= LIMIT) {
           if (sink && waited >= LIMIT) {
             sink("VRAM did not visibly release within 10 s — proceeding " +
                  "anyway.");
           }
-          done();
+          done(err ? null : usedMB);
           return;
         }
         global.setTimeout(poll, STEP);
@@ -1021,6 +1120,9 @@
   var VramArbiter = {
     paused: false,
     _opts: null,
+    // Where the card settled once the chat model was gone — the floor the
+    // resume has to get back to before llama-server can reload.
+    _floorMB: null,
 
     /**
      * Decide and, when the arithmetic says so, perform the chat→gen
@@ -1038,7 +1140,7 @@
         headroomGB: tier.headroomGB,
         chatRunning: chat.running,
         chatLoadedMB: chat.mb,
-        genNeedMB: genNeedMBFor(manifest),
+        genNeedMB: genNeedMBFor(manifest, s),
         pauseMode: s.comfyPauseLlm,
         mandatory: tier.mandatory
       });
@@ -1058,7 +1160,11 @@
       global.Setup.queryVramUsedMB(function (qErr, baseMB) {
         global.Llama.stop();
         waitForVramDrop(qErr ? null : baseMB, chat.mb, sink,
-                        function () { cb(null); });
+                        function (settledMB) {
+                          VramArbiter._floorMB =
+                            typeof settledMB === "number" ? settledMB : null;
+                          cb(null);
+                        });
       });
     },
 
@@ -1067,19 +1173,35 @@
      * ask ComfyUI to drop its cached models (they otherwise sit in VRAM
      * and block the chat model from coming back on exclusive tiers),
      * verify the release, then warm the chat model back up.
+     *
+     * The wait is an ABSOLUTE question — "is the card back to the floor
+     * the pause left it at?" — not a delta from a fresh baseline. Measured
+     * 2026-08-30 on a 5090: ComfyUI 0.32 drops a Krea generation's ~19.5 GB
+     * about ten seconds BEFORE the round ends, so a baseline sampled here
+     * is already the floor, no delta can ever appear, and the delta version
+     * burned the full 10 s timeout and cried "VRAM did not visibly release"
+     * on every single healthy paused round.
      */
     resumeIfPaused: function (s, sink, cb) {
       if (!VramArbiter.paused) { cb(); return; }
       VramArbiter.paused = false;
       var opts = VramArbiter._opts;
+      var floor = VramArbiter._floorMB;
       VramArbiter._opts = null;
-      global.Setup.queryVramUsedMB(function (qErr, baseMB) {
-        global.Comfy.freeVram(s.comfyUrl, function () {
-          waitForVramDrop(qErr ? null : baseMB, null, sink, function () {
-            if (sink) sink("Warming the chat model back up…");
-            global.Llama.start(opts, function () { cb(); });
-          });
-        });
+      VramArbiter._floorMB = null;
+      function warm() {
+        if (sink) sink("Warming the chat model back up…");
+        global.Llama.start(opts, function () { cb(); });
+      }
+      global.Comfy.freeVram(s.comfyUrl, function () {
+        if (typeof floor !== "number") {
+          // No floor to aim at (nvidia-smi was unavailable at pause time) —
+          // the old fixed grace period is all there is.
+          global.setTimeout(warm, 1500);
+          return;
+        }
+        waitForVram(function (usedMB) { return usedMB <= floor + 512; },
+                    sink, function () { warm(); });
       });
     }
   };

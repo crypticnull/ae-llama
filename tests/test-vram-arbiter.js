@@ -24,8 +24,23 @@ let vramReadings = [];     // scripted nvidia-smi answers (null = error)
 let llamaState = "running";
 const delays = [];
 
+/* A fake disk. The chat .gguf is always there; DISK holds the ComfyUI
+ * model files, keyed by the path the arbiter would build, so a test can
+ * take one away and watch the arithmetic go back to "unprovable".
+ * Windows separators, because that is what path.join produces here and
+ * what the arbiter is looking at in the field. */
+const CHAT_GGUF = "C:\\models\\qwen7b.gguf";
+let DISK = {};
 const fakeFs = {
-  statSync: () => ({ size: 4700 * 1048576 })   // the chat .gguf on disk
+  statSync: (p) => {
+    if (p === CHAT_GGUF) return { size: 4700 * 1048576 };
+    if (Object.prototype.hasOwnProperty.call(DISK, p)) {
+      return { size: DISK[p] * 1048576 };
+    }
+    throw new Error("ENOENT: " + p);
+  },
+  existsSync: (p) => p === CHAT_GGUF ||
+    Object.prototype.hasOwnProperty.call(DISK, p)
 };
 
 const window = {
@@ -35,7 +50,7 @@ const window = {
   Settings: { get: () => settings },
   Llama: {
     getState: () => llamaState,
-    getCurrentModel: () => "C:\\models\\qwen7b.gguf",
+    getCurrentModel: () => CHAT_GGUF,
     stop: () => { log.push("llama.stop"); llamaState = "stopped"; },
     start: (opts, cb) => {
       log.push("llama.start");
@@ -57,10 +72,15 @@ const window = {
   },
   Comfy: {
     listWorkflows: () => [{ name: "WF", file: "/wf/WF.json" }],
+    // The shape every SHIPPED manifest really has: a file and the model
+    // dir it belongs in, and no size at all. The old stub handed the
+    // arbiter sizeMB numbers no bundled template has ever carried, which
+    // is why every scenario below passed while the field answer was
+    // "the fit cannot be verified" on every card.
     readManifest: () => ({ models: [
-      { file: "gen.safetensors", sizeMB: 6000 },
-      { file: "enc.safetensors", sizeMB: 500 },
-      { file: "extra.safetensors", sizeMB: 999, optional: true }
+      { file: "gen.safetensors", dir: "diffusion_models", role: "diffusion" },
+      { file: "enc.safetensors", dir: "text_encoders", role: "text_encoder" },
+      { file: "extra.safetensors", dir: "loras", optional: true }
     ] }),
     ensureRunning: (url, st, cb) => { log.push("comfy.ensure"); cb(null); },
     generate: (opts, prog, cb) => {
@@ -75,10 +95,12 @@ window.window = window;
 let settings = null;
 function baseSettings(patch) {
   return Object.assign({
-    serverPath: "s", modelPath: "C:\\models\\qwen7b.gguf", port: 1,
+    serverPath: "s", modelPath: CHAT_GGUF, port: 1,
     ctxSize: 16384, gpuLayers: 99, comfyUrl: "http://127.0.0.1:8188",
     comfyWorkflowsDir: "/wf", comfyOutDir: "/out", comfyTimeoutSec: 60,
-    comfyPauseLlm: "auto", comfyEnhance: {}, vramOverrideGB: 0
+    comfyPauseLlm: "auto", comfyEnhance: {}, vramOverrideGB: 0,
+    comfyDir: "C:\\Users\\x\\ComfyUI", comfyModelsDir: "",
+    comfyModelRoots: []
   }, patch || {});
 }
 
@@ -88,10 +110,74 @@ eval(fs.readFileSync(path.join(__dirname, "..", "extension", "js",
                                "tools.js"), "utf8"));
 const Tools = window.Tools;
 
-// The non-optional manifest weights: 6000 + 500 (the optional 999 is a
-// bypassed branch the run never loads).
-assert(Tools._genNeedMBFor(window.Comfy.readManifest()) === 6500,
-       "genNeedMB sums the manifest's non-optional weights (6.5 GB)");
+// ------------------------------------------------- the weight bill
+//
+// The bill is what the card has to fit, and the FILES are the weights.
+// Measured 2026-08-30 in the field: not one shipped manifest carries a
+// sizeMB, so a manifest-only sum answered null for every template ever
+// shipped and a 32 GB card paused chat for every generation it could
+// have run beside it.
+
+const jn = (...p) => require("path").join(...p);
+const USER_MODELS = jn("C:\\Users\\x\\ComfyUI", "models");
+function stockDisk() {
+  return {
+    [jn(USER_MODELS, "diffusion_models", "gen.safetensors")]: 6000,
+    [jn(USER_MODELS, "text_encoders", "enc.safetensors")]: 500,
+    // The optional one IS on disk — it must still not be counted, because
+    // the run bypasses that branch.
+    [jn(USER_MODELS, "loras", "extra.safetensors")]: 999
+  };
+}
+DISK = stockDisk();
+settings = baseSettings();
+
+assert(Tools._genNeedMBFor(window.Comfy.readManifest(), settings) === 6500,
+       "a shipped-shape manifest (file + dir, NO sizeMB) is measured on " +
+       "disk: 6000 + 500, optional branch excluded");
+
+assert(Tools._genNeedMBFor({ models: [
+         { file: "gen.safetensors", dir: "diffusion_models", sizeMB: 4321 }
+       ] }, settings) === 4321,
+       "a manifest that DOES author a size is believed without touching " +
+       "the disk");
+
+{
+  // One weight the panel cannot find is one weight it cannot count. A
+  // partial sum reads like a verified fit and understates the bill in
+  // exactly the direction that OOMs a card.
+  const missing = Object.assign({}, stockDisk());
+  delete missing[jn(USER_MODELS, "text_encoders", "enc.safetensors")];
+  DISK = missing;
+  assert(Tools._genNeedMBFor(window.Comfy.readManifest(), settings) === null,
+         "ONE weight no root holds makes the whole answer unprovable, not " +
+         "a partial sum");
+  DISK = stockDisk();
+}
+
+{
+  // The user with models on another drive: a whole tree, and a per-kind
+  // root written "kind=path", which answers only for its own kind.
+  const spread = {
+    [jn("D:\\big", "diffusion_models", "gen.safetensors")]: 6000,
+    [jn("E:\\enc", "enc.safetensors")]: 500
+  };
+  DISK = spread;
+  settings = baseSettings({ comfyDir: "", comfyModelsDir: "D:\\big",
+                            comfyModelRoots: ["text_encoders=E:\\enc"] });
+  assert(Tools._genNeedMBFor(window.Comfy.readManifest(), settings) === 6500,
+         "comfyModelsDir and a 'kind=path' extra root both resolve");
+  settings = baseSettings({ comfyDir: "", comfyModelsDir: "D:\\big",
+                            comfyModelRoots: ["loras=E:\\enc"] });
+  assert(Tools._genNeedMBFor(window.Comfy.readManifest(), settings) === null,
+         "…and a per-kind root does NOT answer for a different kind");
+  DISK = stockDisk();
+  settings = baseSettings();
+}
+
+// What the panel would have SAID — the status lines are half the contract.
+const sink = [];
+Tools.setProgressSink((msg) => { sink.push(msg); });
 
 const gen = (n) => {
   const cmds = [];
@@ -187,8 +273,51 @@ run(gen(2), function (results) {
           assert(r5[0].ok && log.indexOf("llama.start") === -1,
                  "a chat server the USER had stopped is not restarted " +
                  "by the round");
-          console.log(failed ? "\nTESTS FAILED" : "\nALL TESTS PASSED");
-          process.exitCode = failed ? 1 : 0;
+
+          // ---- scenario 6: ComfyUI has ALREADY let go by the time the
+          // round ends.
+          //
+          // Measured 2026-08-30 on a 5090: ComfyUI 0.32 drops a finished
+          // generation's ~19.5 GB about TEN SECONDS before the round is
+          // over, so /free frees nothing and the card is already at the
+          // floor. The resume used to sample a fresh baseline at that
+          // moment and then wait for it to drop 512 MB further — which can
+          // never happen — so every healthy paused round paid a full 10 s
+          // timeout and told the user "VRAM did not visibly release".
+          // The wait is an absolute question now: are we back at the floor
+          // the pause left?
+          log.length = 0;
+          delays.length = 0;
+          sink.length = 0;
+          llamaState = "running";
+          settings = baseSettings();
+          Tools.setGpuInfo({ hasNvidia: true, vramGB: 8, computeCap: 8.9 });
+          vramReadings = [7000,   // baseline before the stop
+                          600,    // released: the floor is 600
+                          620,    // resume: already there, nothing to wait for
+                          // …and plenty more of the same, so a version that
+                          // waits for a further drop has something to spin
+                          // on rather than running the array dry.
+                          620, 620, 620, 620, 620, 620, 620, 620, 620,
+                          620, 620, 620, 620, 620, 620, 620, 620, 620];
+          run(gen(1), function (r6) {
+            assert(r6[0].ok, "the round still generates");
+            const polls = log.filter((x) => /^smi:/.test(x)).length;
+            assert(polls === 3,
+                   "an already-released card costs ONE resume poll, not " +
+                   "twenty (3 nvidia-smi reads total, got " + polls + ")");
+            assert(sink.join(" ").indexOf("did not visibly release") === -1,
+                   "…and nothing cries about a release that had already " +
+                   "happened (said: " + sink.join(" | ") + ")");
+            assert(delays.filter((d) => d === 500).length <= 1,
+                   "…and it does not sit in the 500 ms poll loop " +
+                   "(delays: " + delays.join(",") + ")");
+            assert(llamaState === "running",
+                   "…the chat model is back either way");
+
+            console.log(failed ? "\nTESTS FAILED" : "\nALL TESTS PASSED");
+            process.exitCode = failed ? 1 : 0;
+          });
         });
       });
     });

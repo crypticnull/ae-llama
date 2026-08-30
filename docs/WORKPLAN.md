@@ -961,16 +961,30 @@ test-tiers, test-vram-arbiter, test-settings-migrate, extended
 test-model-catalog / test-comfy-backend. NONE of it has touched a real
 GPU. This item is that touch, one pass per bullet, smallest first:
 
-- **Handoff smoke on the 5090, no override**: one comfy_generate with
-  chat loaded on a T7 budget should run CONCURRENT (watch the panel
-  status lines — no pause). Then set vramOverrideGB 8 and repeat: it
-  must pause, generate, /free, and warm chat back up. nvidia-smi in a
-  second terminal is the witness: total used must actually DROP at the
-  handoff and again after /free. Log the real numbers.
-- **Probe /free support**: the tier plan's open question — does the
-  bundled portable build's API answer POST /free {unload_models:true}?
-  Record HTTP status + observed VRAM delta in the log; if unsupported,
-  the fallback (restart the managed process) becomes a build item.
+- ~~**Handoff smoke on the 5090, no override**~~ DONE 2026-08-30 (0.10.9),
+  and it found that the concurrent path had never been reachable.
+  `scripts/handoff-probe.js` drives the real panel path (settings + tiers
+  + llama.js + comfy.js + tools.js) against a real llama-server, a real
+  ComfyUI and real nvidia-smi, in two rounds. **Every shipped manifest
+  carries `file`+`dir` and NO `sizeMB`**, so `genNeedMB` was null for
+  every template ever shipped: the arbiter answered "the fit cannot be
+  verified" and a 32 GB card paused chat for every generation it could
+  have run beside it — while T6/T7's own copy promises "per-job
+  arithmetic". The weights are now MEASURED on disk across the panel's
+  model roots. Numbers: 7B chat 6002 MB + KREA2 18110 MB on a 32 607 MB
+  card -> CONCURRENT, peak **29 064 MB**, 10 s, chat holding the card
+  throughout; vramOverrideGB 8 -> handoff, 9736 -> 4004 MB, 14 s, chat
+  warmed back up. See WORKPLAN-LOG 2026-08-30.
+- ~~**Probe /free support**~~ ANSWERED 2026-08-30. ComfyUI 0.32.0 answers
+  **HTTP 200** with an empty body to POST /free {unload_models:true,
+  free_memory:true} in ~65 ms. The observed VRAM delta is **0 MB**, and
+  that is not a failure: this backend drops a finished generation's
+  ~19.5 GB *on its own*, about ten seconds before the round ends, so
+  /free routinely has nothing left to release. No fallback build item.
+  What it DID cost was a bug — the resume waited for a further drop from
+  a baseline sampled after that release, which can never come, so every
+  paused round paid a 10 s timeout and said "VRAM did not visibly
+  release". Fixed: the resume aims at the absolute floor the pause left.
 - **pause "never" refusal in the field**: override 8 GB, pause never,
   ask for a generation → the model must relay the grounded refusal
   (numbers + the setting), not hallucinate success. This is a chat-probe

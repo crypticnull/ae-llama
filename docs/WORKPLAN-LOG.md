@@ -7355,3 +7355,185 @@ MINOR, which is the remote session's.
   were removed and the removal count read back (2 and 1). The probe
   folder under TEMP holds the four probe scripts, their JSON results
   and the small test renders, and can be deleted.
+
+## 2026-08-30 (local) - item 7 Tier P4 bullet 1: the arithmetic that
+## every shipped manifest made impossible (0.10.9)
+
+Harness green before the pass (517/517) and green after, so the item was
+the top unfinished one: WORKPLAN item 7's first bullet, the chat<->
+generation VRAM handoff, measured on the real 5090 for the first time.
+Everything tiers.js and the arbiter assert had until tonight been
+arithmetic the stubs themselves supplied.
+
+### What the probe is
+
+`scripts/handoff-probe.js` — settings.js + tiers.js + setup.js + llama.js
++ comfy.js + tools.js loaded into a Node `window`, then
+`Tools.executeCommands([comfy_generate])` against a REAL llama-server, a
+REAL local ComfyUI and REAL nvidia-smi, sampled every 500 ms into a
+labelled timeline that goes into the transcript. Two rounds, because the
+interesting thing is the difference: (A) no override, the card's own
+32 GB; (B) `vramOverrideGB: 8`, the same job on an impersonated T3.
+Every generation runs `{import: false}` — no After Effects, so no dialog
+can be raised and the user's project is never touched.
+
+It wraps `Tiers.planHandoff` and `Comfy.freeVram` to record their exact
+inputs and answers, because neither is visible in a tool result: one is a
+status line, the other is best-effort and swallows its own error.
+
+### The finding the bullet existed to make, and it is the opposite of what the bullet predicted
+
+The bullet says a T7 card "should run CONCURRENT". It could not, ever.
+
+**No shipped workflow manifest carries a single `sizeMB`.** They carry
+`file`, `dir`, `role` and a download `url` — that is all. `genNeedMBFor`
+summed `sizeMB` and returned null when it found none, so the field answer
+on a 32 GB card with a 7B chat model was:
+
+    planHandoff({vramGB:32, chatLoadedMB:6002, genNeedMB:null, auto})
+      -> handoff: "the fit cannot be verified - pausing chat is the safe
+         default"
+
+Every generation on every card paused the chat model, whatever the
+arithmetic would have said, while T6/T7's own settings copy tells the
+user "the panel checks the arithmetic per job". And with
+`comfyPauseLlm: "never"` a 5090 owner got a refusal that says "The panel
+cannot verify this generation fits" — for every job, forever.
+
+The stub suite could not see it: `tests/test-vram-arbiter.js` handed the
+arbiter a manifest with `sizeMB: 6000` — a shape no bundled template has
+ever had. The stub was testing a manifest format that does not exist.
+
+**Fix at the root: measure the weights on disk.** `genNeedMBFor` now
+resolves each non-optional `{dir, file}` against the model roots the
+panel already knows — `comfyModelsDir`, each `comfyModelRoots` entry
+(including the per-kind `"checkpoints=D:\SD\ckpts"` form), the user's
+`comfyDir/models`, and the hidden backend's own tree — and stats it. A
+manifest that DOES author a `sizeMB` is still believed first. The file is
+the weights; an authored number goes stale the first time somebody swaps
+a quantization.
+
+**One unknown weight poisons the whole answer.** The old code returned a
+partial sum as soon as any one entry had a size. A partial sum reads like
+a verified fit and understates the bill in exactly the direction that
+OOMs a card, and "unprovable" already has a safe meaning here: pause.
+
+### The measurement, on the real card
+
+RTX 5090, 32 607 MiB. Chat: Qwen2.5-7B-Instruct-Q4_K_M (llama-server
+reports 6002 MB by the arbiter's file-size+1536 rule). Generation:
+AE_LLAMA_KREA2_V1 at 768x768, weights measured on disk at **18 110 MB**
+(12 868 diffusion + 5 000 text encoder + 242 VAE). ComfyUI 0.32.0.
+
+- Idle, nothing loaded: 3 255 MB. ComfyUI up and idle: ~3 750 MB.
+  Chat loaded on top: **9 724 MB**.
+- **Round A, no override -> CONCURRENT.** "fits beside chat: the
+  generation needs ~17.7 GB and the chat model holds ~5.9 GB of the
+  card's 32 GB". No pause status line, `Llama.getState()` sampled
+  every 250 ms said `running` throughout, generation **10 s**, peak
+  **29 064 MB** — chat and Krea side by side with ~3.5 GB to spare. It
+  did not OOM.
+- **Round B, vramOverrideGB 8 -> HANDOFF**, now with honest numbers
+  instead of "cannot verify": "it does not fit beside the chat model
+  (the generation needs ~17.7 GB and the chat model holds ~5.9 GB of the
+  card's 8 GB)". VRAM 9 736 -> **4 004 MB** at the pause, generation
+  14 s peaking 22 372 MB, /free, chat warmed back up to `running`.
+- So the handoff costs what it looks like it costs: the same job is 10 s
+  concurrent and 14 s plus a model reload when it has to pause.
+
+### Two more defects the same run paid for
+
+**1. ComfyUI 0.32 lets go BEFORE the round ends, and the resume waited
+for a drop that had already happened.** The timeline is unambiguous:
+generation peaks at 23 291 MB at t=16.2 s and is back to 3 995 MB at
+t=18.2 s — ten seconds before `resumeIfPaused` runs. That code sampled a
+fresh baseline at that moment and then polled for it to drop a further
+512 MB, which can never occur, so it burned the full 10 s timeout and
+told the user "VRAM did not visibly release within 10 s" on every single
+healthy paused round. Fixed: the pause now remembers the floor the card
+settled at, and the resume asks the absolute question — "are we back at
+that floor?" — which the first poll answers. Also answers the tier plan's
+open question: **POST /free is supported, HTTP 200, ~65 ms, and frees
+0 MB here because there is nothing left to free.**
+
+**2. "Workflow finished but produced no output files (no
+SaveImage/SaveVideo node?)" was blaming the one thing that was not
+wrong.** Hit for real when the probe first came up against a ComfyUI one
+release behind (the electron app's bundled 0.22.2, which does not know
+`CLIPLoader` type `krea2`). ComfyUI **queues** a prompt whose outputs all
+failed validation: `/prompt` answers 200 WITH a `prompt_id` and a
+`node_errors` bag, the run "executes" in 0.01 s, and `/history` reports
+it complete with no error and no outputs. The reason was handed over at
+queue time and thrown away. The error now says what ComfyUI said:
+"ComfyUI dropped every output branch of this workflow when it validated
+it, so nothing was rendered: node 1 (CLIPLoader): Value not in list -
+type: 'krea2' not in [...]".
+
+### Verification
+
+- **Handoff probe: 15/15 verdicts PASS** in the field, both rounds.
+- `tests/test-vram-arbiter.js` 13 -> 22 checks. Its manifest stub now has
+  the SHIPPED shape (file + dir, no sizeMB) and a fake disk it resolves
+  against, plus the missing-weight, `comfyModelsDir`, per-kind-root and
+  wrong-kind cases, and scenario 6 for the resume stall. **Reverted
+  against the old tools.js, five assertions fail** — including "on 32 GB
+  the same job runs CONCURRENT", the `never` refusal losing its numbers,
+  and the resume taking 22 nvidia-smi reads and 18 poll delays instead
+  of 3 and 0.
+- `tests/test-comfy-node-errors.js` is new (5 checks): a fake ComfyUI
+  reproducing the field capture exactly — 200 + prompt_id + node_errors,
+  then a completed history entry with no outputs. **Reverted against the
+  old comfy.js, three of them fail.** The control case (nothing skipped,
+  genuinely no save node) still gets the old message.
+- Full stub sweep: all 56 test files exit 0. Capability report
+  regenerated (no tool changes).
+- **Real-AE harness 517/517 before and after** — nothing AE-side moved,
+  and it proves the pass left AE alone.
+
+### Version
+
+**Patch bumped to 0.10.9.** All three changes are fixes to shipped
+behaviour, not new capability: a promise the panel makes in its own
+settings copy and could not keep, a 10 s stall plus a false alarm on
+every paused round, and an error message that named the wrong cause.
+
+### Notes for whoever runs the next pass
+
+- **The backend matters and this machine has two.** The ComfyUI the
+  electron app ships in `AppData\Local\Programs\ComfyUI\resources\ComfyUI`
+  is **0.22.2** and cannot run KREA2. The one the earlier passes used is
+  **0.32.0**, at
+  `AppData\Local\Comfy-Desktop\ComfyUI-Installs\ComfyUI\ComfyUI`. Launch:
+  `C:\Users\mr\Documents\ComfyUI\.venv\Scripts\python.exe -s <that
+  main.py> --base-directory C:\Users\mr\Documents\ComfyUI --port 8188
+  --listen 127.0.0.1 --disable-auto-launch`. `Comfy.ensureRunning` cannot
+  start either one: it only knows the vendor portable layout, and there
+  is no vendor ComfyUI installed here.
+- **The concurrent decision is a weights-only sum.** Measured tonight,
+  KREA2's peak ran ~1.4 GB above its weights (19.5 vs 18.1 GB) and the
+  tier's 1 GB headroom nearly covered it; the 29 064 MB peak left 3.5 GB
+  on a 32 GB card. That is ONE model at ONE size. A workflow whose
+  activations cost much more than its weights could still overshoot, and
+  nothing here measures that. If a concurrent run ever OOMs in the field,
+  this is the number to grow.
+- The remaining item 7 bullets are unblocked by this pass and none were
+  attempted: the `never` refusal in the field (it now produces real
+  numbers instead of "cannot verify", so it is finally worth testing),
+  the catalog measurements, the 4/6/8/12/16/24 impersonation ladder, and
+  OOM recovery.
+- Machine state: AE left running with no dialog open, harness green
+  behind it. **The ComfyUI this pass started was stopped again** — it was
+  not running when the pass began. llama-server is stopped (the probe
+  stops it on the way out). Probe transcripts and the small test renders
+  are under `logs/handoff-probe*`; they can be deleted.
+- Still open from earlier passes, unchanged and unattempted tonight: the
+  `DroverLord - Window Class` popup; no panel UI for the export tools;
+  no `.webm`/`.webp`; the 8 GB intermediate cap that is still a guess;
+  AE's downsampler never measured against ffmpeg's on real footage;
+  `get-llama.ps1`'s two latent traps (seventh flag);
+  `release-notes.txt` still reads "0.10.0" while the feed now ships
+  0.10.9 (eighteenth flag, remote session's release cut);
+  `comfy_generate` still calls `import_file` rather than 5.8's
+  `import_as_layer`; and 5.9 (.mogrt export) deferred again by its own
+  LAST-item-of-the-night rule — nineteenth pass, at 02:30 local with the
+  loop still running.

@@ -1190,9 +1190,12 @@
         }
 
         // Partial validation: valid branches queued, broken ones dropped.
-        // Surface what was skipped alongside the eventual result.
+        // Surface what was skipped alongside the eventual result — and
+        // keep it, because when EVERY output branch is dropped this is the
+        // only account of why the run produced nothing.
+        var skipped = "";
         if (json.node_errors) {
-          var skipped = describeNodeErrors(json.node_errors);
+          skipped = describeNodeErrors(json.node_errors);
           if (skipped) applied.push("WARNING skipped branches: " + skipped);
         }
 
@@ -1261,8 +1264,20 @@
               var files = collectOutputFiles(entry);
               if (files.length === 0 && !st.completed) return; // keep waiting
               if (files.length === 0) {
-                settle(new Error("Workflow finished but produced no output " +
-                                 "files (no SaveImage/SaveVideo node?)"));
+                // ComfyUI QUEUES a prompt whose outputs all failed
+                // validation, runs it in ~0.01 s and reports it complete
+                // with no error and no outputs. Measured 2026-08-30: a
+                // CLIPLoader type the backend does not know dropped all
+                // five output branches and the panel blamed a missing
+                // SaveImage node — the real reason was in node_errors at
+                // queue time and had been thrown away. Say what ComfyUI
+                // said.
+                settle(new Error(skipped
+                  ? "ComfyUI dropped every output branch of this workflow " +
+                    "when it validated it, so nothing was rendered: " +
+                    skipped
+                  : "Workflow finished but produced no output files (no " +
+                    "SaveImage/SaveVideo node?)"));
                 return;
               }
               // Terminal success path: latch BEFORE the downloads so a
