@@ -81,4 +81,93 @@ assert(combo.tier.id === "T3" && combo.chat &&
 assert(/RTX 4060/.test(combo.copy) && /pauses chat/i.test(combo.copy),
        "…and its copy names the card and says generation pauses chat");
 
+// ---------------------------------------------------------------------
+// Catalog honesty: units, totals, and the real byte counts.
+//
+// Every sizeMB in version.js was written from training. Measured on
+// 2026-08-30 by scripts/catalog-probe.js — a HEAD against each URL, whose
+// redirect carries HuggingFace's `x-linked-size`, cross-checked against the
+// copies already on the AE machine's disk. All twelve URLs answered.
+//
+// The bug class this pins is a UNIT: the catalog counted in decimal MB
+// while everything downstream counts in MiB (nvidia-smi, tools.js
+// modelFileMB, planHandoff's vramGB*1024), so every file was overstated by
+// ~5%. The numbers below are bytes, exactly as the network reported them,
+// and the assertion is the same division the panel does.
+
+const MIB = 1048576;
+const MEASURED_BYTES = {           // filename -> bytes, 2026-08-30
+  "Qwen2.5-32B-Instruct-Q4_K_M.gguf": 19851336576,
+  "Qwen2.5-14B-Instruct-Q4_K_M.gguf": 8988110976,
+  "Qwen2.5-7B-Instruct-Q4_K_M.gguf": 4683074240,
+  "Llama-3.2-3B-Instruct-Q4_K_M.gguf": 2019377696,
+  "v1-5-pruned-emaonly-fp16.safetensors": 2132696762,
+  "sd_xl_base_1.0.safetensors": 6938078334,
+  "wan2.2_ti2v_5B_fp16.safetensors": 9999658848,
+  "umt5_xxl_fp8_e4m3fn_scaled.safetensors": 6735906897,
+  "wan2.2_vae.safetensors": 1409400960,
+  "minimax_h3_fl2va_pruned_int8_convrot.safetensors": 20970379616,
+  "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors": 15687142551,
+  "qwen3vl_32b_minimax_h3_int8_convrot.safetensors": 27141342152,
+  "minimax_h3_video_vae_fp16.safetensors": 5207808496,
+  "minimax_h3_audio_vae_fp32.safetensors": 605254808
+};
+function fileOf(url) {
+  return decodeURIComponent(String(url).split("/").pop().split("?")[0]);
+}
+
+let sized = 0;
+cat.forEach((m) => {
+  assert(fileOf(m.url) === m.name,
+         m.name + ": the URL's filename is the name it is saved under");
+  const bytes = MEASURED_BYTES[m.name];
+  assert(typeof bytes === "number", m.name + ": has a measured byte count");
+  if (typeof bytes !== "number") return;
+  sized++;
+  assert(m.sizeMB === Math.round(bytes / MIB),
+         m.name + ": sizeMB " + m.sizeMB + " is the file in MiB (" +
+         Math.round(bytes / MIB) + "), not decimal MB (" +
+         Math.round(bytes / 1e6) + ")");
+});
+assert(sized === 4, "all four chat models are covered by the capture");
+
+window.AELL.COMFY_CATALOG.forEach((e) => {
+  const urls = e.urls || [];
+  urls.forEach((u) => {
+    const f = fileOf(u.url);
+    const bytes = MEASURED_BYTES[f];
+    assert(typeof bytes === "number", e.name + "/" + f + ": measured");
+    if (typeof bytes !== "number") return;
+    assert(u.sizeMB === Math.round(bytes / MIB),
+           e.name + "/" + f + ": sizeMB " + u.sizeMB + " is MiB (" +
+           Math.round(bytes / MIB) + "), not decimal MB (" +
+           Math.round(bytes / 1e6) + ")");
+    assert(typeof u.dir === "string" && u.dir,
+           e.name + "/" + f + ": names the models/ subfolder it lands in");
+  });
+  if (!urls.length) {
+    assert(e.sizeMB === null,
+           e.name + ": nothing to download, so no download total is quoted");
+    return;
+  }
+  // The entry total is the only figure a user sees before agreeing to the
+  // download; a total that disagrees with its own parts is a bug. Both Wan
+  // 2.2 (17000 vs 17500) and MiniMax H3 (40543 vs 40503) shipped that way.
+  const sum = urls.reduce((a, u) => a + u.sizeMB, 0);
+  assert(e.sizeMB === sum,
+         e.name + ": entry sizeMB " + e.sizeMB + " is the sum of its " +
+         urls.length + " files (" + sum + ")");
+});
+
+// No consumer may do decimal-MB arithmetic on the field. main.js's model
+// dropdown divided by 1000 while the downloader's status line divided by
+// 1024, so one file was quoted two sizes in the same window.
+const jsDir = path.join(__dirname, "..", "extension", "js");
+fs.readdirSync(jsDir).filter((f) => /\.js$/.test(f)).forEach((f) => {
+  const src = fs.readFileSync(path.join(jsDir, f), "utf8");
+  const bad = src.match(/sizeMB\s*[\/*]\s*(1000|1e6|1000000)\b/g);
+  assert(!bad, "extension/js/" + f + ": no decimal-MB arithmetic on " +
+                "sizeMB" + (bad ? " (found " + bad.join(", ") + ")" : ""));
+});
+
 console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");

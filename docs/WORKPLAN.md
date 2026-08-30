@@ -1001,13 +1001,28 @@ GPU. This item is that touch, one pass per bullet, smallest first:
   a `settings:` block that patches the cached settings object and
   restores it — never `Settings.set`, which mirrors to the owner's real
   settings.json. See WORKPLAN-LOG 2026-08-30.
-- **Measure the catalog**: for each downloadable entry that fits the
-  card (sd15, sdxl, wan22-5b, minimax-h3): real VRAM delta during a
-  generation (nvidia-smi peak − idle), wall clock, and whether the
-  fixed sizes in version.js COMFY_CATALOG are honest. Flip
-  measured:false → true with the number IN the entry, patch bump.
-  Correct any dead download URL the same way (they are
-  training-quoted; HF was unreachable from the remote session).
+- **Measure the catalog** — the SIZE and URL halves are DONE 2026-08-30
+  (0.10.11); the VRAM half is still open.
+  - ~~whether the fixed sizes in version.js COMFY_CATALOG are honest~~ and
+    ~~correct any dead download URL~~ DONE. `scripts/catalog-probe.js`
+    HEADs every URL (HuggingFace's redirect carries `x-linked-size`, the
+    exact byte count) and cross-checks the copies already on this disk.
+    **No URL is dead — all twelve answered.** Every size was wrong: the
+    catalog counted in DECIMAL MB while the whole panel counts in MiB
+    (nvidia-smi, modelFileMB, planHandoff's `vramGB*1024`), so each file
+    was overstated ~5% — and `main.js` divided by 1000 where `setup.js`
+    divided by 1024, quoting one file two sizes. Two entry totals also
+    disagreed with their own url lists (Wan 2.2 17000 vs 17500, H3 40543
+    vs 40503). All measured, unit documented, 12 stub assertions.
+  - **STILL OPEN: the VRAM delta.** For each downloadable entry that fits
+    the card (sd15, sdxl, wan22-5b, minimax-h3): real VRAM delta during a
+    generation (nvidia-smi peak − idle) and wall clock, then flip
+    measured:false → true with the number IN the entry, patch bump. Needs
+    the weights downloaded (~36 GB not on this disk) AND a per-model
+    workflow template — the panel ships only KREA2 and H3 i2v — AND a
+    ComfyUI started by hand (0.10.9: `Comfy.ensureRunning` cannot start
+    the working 0.32.0 here). Budget a whole pass per model, not one pass
+    for the bullet.
 - **Tier impersonation ladder**: vramOverrideGB 4/6/8/12/16/24 — each
   budget must produce the matching tier line in settings, the matching
   catalog picks, and a handoff (or refusal) consistent with

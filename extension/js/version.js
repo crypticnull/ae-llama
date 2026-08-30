@@ -8,7 +8,7 @@
   "use strict";
 
   global.AELL = {
-    VERSION: "0.10.10",
+    VERSION: "0.10.11",
 
     // Release channel label, shown wherever the version is displayed.
     // Purely cosmetic — update comparisons use the numeric VERSION only.
@@ -30,30 +30,38 @@
     // this list via a "modelCatalog" field without shipping a new panel.
     // minVramGB is the smallest GPU the model runs comfortably on at the
     // default 8k context; cpuDefault marks the pick for no-NVIDIA machines.
+    //
+    // EVERY sizeMB IN THIS FILE IS MEBIBYTES (bytes / 1048576), the unit
+    // the rest of the panel counts in: nvidia-smi reports MiB, tools.js
+    // modelFileMB divides by 1048576, planHandoff multiplies vramGB by
+    // 1024, and Windows itself labels GiB "GB". These four were written
+    // from training in DECIMAL MB and so overstated every file by ~5%
+    // (Llama 3.2 3B by 9%); measured against HuggingFace's x-linked-size
+    // 2026-08-30 by scripts/catalog-probe.js, which re-checks them.
     MODEL_CATALOG: [
       {
         name: "Qwen2.5-32B-Instruct-Q4_K_M.gguf",
         label: "Qwen2.5 32B — best quality",
         url: "https://huggingface.co/bartowski/Qwen2.5-32B-Instruct-GGUF/resolve/main/Qwen2.5-32B-Instruct-Q4_K_M.gguf",
-        sizeMB: 19900, minVramGB: 22
+        sizeMB: 18932, minVramGB: 22
       },
       {
         name: "Qwen2.5-14B-Instruct-Q4_K_M.gguf",
         label: "Qwen2.5 14B — great quality",
         url: "https://huggingface.co/bartowski/Qwen2.5-14B-Instruct-GGUF/resolve/main/Qwen2.5-14B-Instruct-Q4_K_M.gguf",
-        sizeMB: 9000, minVramGB: 11
+        sizeMB: 8572, minVramGB: 11
       },
       {
         name: "Qwen2.5-7B-Instruct-Q4_K_M.gguf",
         label: "Qwen2.5 7B — solid default",
         url: "https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/resolve/main/Qwen2.5-7B-Instruct-Q4_K_M.gguf",
-        sizeMB: 4700, minVramGB: 7, cpuDefault: true
+        sizeMB: 4466, minVramGB: 7, cpuDefault: true
       },
       {
         name: "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
         label: "Llama 3.2 3B — light",
         url: "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
-        sizeMB: 2100, minVramGB: 4
+        sizeMB: 1926, minVramGB: 4
       }
     ],
 
@@ -66,26 +74,33 @@
     // empty urls list are visible in the recommendation but not yet
     // downloadable; their files get pinned via the feed (P4/P5).
     // urls[].dir is the ComfyUI models/ subfolder the file lands in.
+    //
+    // Sizes are MiB (see MODEL_CATALOG above) and an entry's sizeMB is the
+    // SUM of its urls[] — it is the only number a user sees before agreeing
+    // to the download, so a total that disagrees with its own parts is a
+    // bug. All twelve URLs were alive on 2026-08-30 and every size below is
+    // that day's measurement (x-linked-size, or the file already on this
+    // machine); `measured` is about the VRAM figure, which still is not.
     COMFY_CATALOG: [
       {
         name: "sd15",
         label: "Stable Diffusion 1.5",
-        kind: "image", sizeMB: 2132, minVramGB: 4, measured: false,
+        kind: "image", sizeMB: 2034, minVramGB: 4, measured: false,
         urls: [{
           url: "https://huggingface.co/Comfy-Org/stable-diffusion-v1-5-archive/resolve/main/v1-5-pruned-emaonly-fp16.safetensors",
-          sizeMB: 2132, dir: "checkpoints"
+          sizeMB: 2034, dir: "checkpoints"
         }]
       },
       {
         name: "sdxl",
         label: "SDXL",
-        kind: "image", sizeMB: 6939, minVramGB: 6, measured: false,
+        kind: "image", sizeMB: 6617, minVramGB: 6, measured: false,
         slowBelowGB: 8,
         slowNote: "under 8 GB this offloads: typically 2-4 minutes per " +
                   "image on 6 GB cards",
         urls: [{
           url: "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/main/sd_xl_base_1.0.safetensors",
-          sizeMB: 6939, dir: "checkpoints"
+          sizeMB: 6617, dir: "checkpoints"
         }]
       },
       {
@@ -112,22 +127,22 @@
       {
         name: "wan22-5b",
         label: "Wan 2.2 5B",
-        kind: "video", sizeMB: 17000, minVramGB: 8, measured: false,
+        kind: "video", sizeMB: 17304, minVramGB: 8, measured: false,
         urls: [{
           url: "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/diffusion_models/wan2.2_ti2v_5B_fp16.safetensors",
-          sizeMB: 9700, dir: "diffusion_models"
+          sizeMB: 9536, dir: "diffusion_models"
         }, {
           url: "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors",
-          sizeMB: 6400, dir: "text_encoders"
+          sizeMB: 6424, dir: "text_encoders"
         }, {
           url: "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/vae/wan2.2_vae.safetensors",
-          sizeMB: 1400, dir: "vae"
+          sizeMB: 1344, dir: "vae"
         }]
       },
       {
         name: "minimax-h3",
         label: "MiniMax H3 (RTX 50 series)",
-        kind: "video", sizeMB: 40543, minVramGB: 32, measured: false,
+        kind: "video", sizeMB: 40503, minVramGB: 32, measured: false,
         requiresBlackwell: true,
         workflowTemplate: "AE_LLAMA_H3_I2V_V1",
         urls: [{

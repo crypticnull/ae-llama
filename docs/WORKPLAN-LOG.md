@@ -7692,3 +7692,141 @@ default workflow choice that could run a bookkeeping file as a graph.
   `import_file` rather than 5.8's `import_as_layer`; and 5.9 (.mogrt
   export) deferred again by its own LAST-item-of-the-night rule -
   twentieth pass, at 03:10 local with the loop still running.
+
+## 2026-08-30 (local) - item 7 Tier P4 bullet 4: every size in the catalog
+## was wrong, and not one URL was (0.10.11)
+
+Harness green before the pass (517/517), so the item was the top
+unfinished one: item 7's fourth bullet, the catalog measurement. (5.9
+.mogrt still outranks it on paper and still defers itself by its own
+LAST-item-of-the-night rule - twenty-first pass, the loop is still
+running.)
+
+The bullet asks for three things: honest sizes, live URLs, and a real
+VRAM delta per model. Two of the three need no GPU, no generation and
+not one byte of the weights downloaded - and those two are the ones the
+remote session could never do, because HuggingFace is unreachable from
+there. They are done. The third is not, and the reason is written into
+the workplan rather than guessed at here.
+
+### The probe
+
+`scripts/catalog-probe.js`, permanent, reads-only. It loads the REAL
+panel stack (version.js + settings.js + tiers.js + setup.js) and, for
+every URL in both catalogs:
+
+- HEADs it. HuggingFace answers `resolve/main/...` with a 302 whose
+  headers carry **`x-linked-size`** - the exact byte count of the file
+  the download would have fetched, without fetching it. That is the
+  whole trick; the CDN URL behind the redirect does NOT carry it.
+- looks the same file up on this machine's own model roots (settings'
+  comfyModelRoots + comfyDir + Setup.findComfyInstall + the Desktop
+  app's ComfyUI-Shared store). Eight of the fourteen files are already
+  here, and a stat beats a network header.
+
+### Finding 1: no URL is dead. All twelve answered.
+
+Worth stating plainly because the bullet expected the opposite ("they
+are training-quoted"). Every `resolve/main/` path in both catalogs is
+still valid: 4 chat GGUFs on bartowski, sd15 on Comfy-Org's archive,
+sdxl on stabilityai, 3 Wan 2.2 files, 4 H3 files and the int8 encoder.
+Nothing to correct.
+
+### Finding 2: every size was wrong, and the reason was a UNIT
+
+The catalog was counting in DECIMAL MB. Everything downstream of it
+counts in MiB: nvidia-smi reports MiB, `tools.js modelFileMB` divides by
+1048576, `planHandoff` multiplies vramGB by 1024, and Windows labels GiB
+"GB" in its own Explorer. So every file was overstated by ~4.9%:
+
+    Qwen2.5-32B   19900 -> 18932 MiB   (19851336576 B)
+    Qwen2.5-14B    9000 ->  8572 MiB    (8988110976 B)
+    Qwen2.5-7B     4700 ->  4466 MiB    (4683074240 B)
+    Llama-3.2-3B   2100 ->  1926 MiB    (2019377696 B)  9.0% off - the
+                                        decimal number was wrong too
+    sd15           2132 ->  2034 MiB
+    sdxl           6939 ->  6617 MiB
+    wan22 diff     9700 ->  9536 MiB   (1.7% off - a wrong guess, not
+                                        the unit)
+    wan22 umt5     6400 ->  6424 MiB   (0.4% - the only near-right one)
+    wan22 vae      1400 ->  1344 MiB
+
+The four MiniMax H3 numbers (19999 / 14960 / 4967 / 577) were EXACT to
+the byte. They came from the real manifest when 2d adapted the template;
+everything else came from training. One field, two provenances, no label
+- which is how it went unnoticed.
+
+The consequence was not theoretical. `main.js` drew the model dropdown
+with `sizeMB / 1000` and `setup.js` wrote its download status line with
+`sizeMB / 1024`, so the same file was quoted two different sizes in the
+same window, and `setup.js`'s progress-bar fallback
+(`sizeMB * 1048576`, used whenever the server sends no Content-Length)
+set a total 5% larger than the file - a bar that stops at 95% and never
+finishes. With the data in MiB both are now right; main.js's /1000 is
+fixed to /1024 and the divergence is a test.
+
+### Finding 3: two entry totals disagreed with their own parts
+
+`wan22-5b` said 17000 while its three urls summed to 17500; `minimax-h3`
+said 40543 against 40503. The entry total is the only figure a user sees
+before agreeing to a multi-gigabyte download, so a total that does not
+match its own file list is a bug on its own terms. Both are now the sum
+(17304 / 40503, in MiB), and the sum is asserted for every entry.
+
+### Verification
+
+- **Field: catalog-probe 0 failures** after the fix, 9 before (the
+  transcript of both runs is in `logs/catalog-probe-*.md`).
+- `tests/test-model-catalog.js` 17 -> 88 checks, built on the byte counts the
+  network actually reported that day - the field capture replayed as a
+  stub, the same shape as 0.10.8's SysShadow capture. Reverted against
+  the old version.js/main.js, **12 assertions fail**, including
+  `main.js: no decimal-MB arithmetic on sizeMB (found sizeMB / 1000)`.
+  That last one is a source scan, so the NEXT consumer that assumes
+  decimal fails CI without needing the network.
+- Also asserted: a chat model's URL filename is the name it is saved
+  under (the downloader looks it up by `model.name`), every url entry
+  names its models/ subfolder, and an entry with nothing to download
+  quotes no total.
+- Full stub sweep: **56/56 test files exit 0**.
+- **Real-AE harness 517/517 after** (517/517 before) - nothing AE-side
+  moved, and it proves the pass left AE alone.
+
+### Version
+
+**Patch bumped to 0.10.11.** Shipped, user-facing numbers: the size on
+every download button, the download progress bar's fallback total, and
+the disk the user is asked to give up.
+
+### Notes for whoever runs the next pass
+
+- **The VRAM half of this bullet is a pass PER MODEL, not one pass.** It
+  needs the weights (sd15 2.0 GB, sdxl 6.5 GB - already on this disk at
+  `ComfyUI-Shared\models\checkpoints` - wan22 17.3 GB of which the umt5
+  encoder is already here, H3 39.6 GB already here), a per-model
+  workflow template (the panel ships only KREA2 and H3 i2v, so sd15/
+  sdxl/wan22 have no graph to run), and a ComfyUI started by hand.
+  `catalog-probe.js --no-net` prints exactly which files are already
+  local, so the download list is one command away.
+- `catalog-probe.js` is NOT wired into CI on purpose - it hits the
+  network and HF rate-limits unauthenticated requests (3000 per 5 min
+  window, per its own `ratelimit` header). The offline half of what it
+  proves lives in test-model-catalog.js, which CI does run.
+- The `measured` flag stays FALSE on every COMFY_CATALOG entry. It is
+  about the VRAM figure, not the file size; version.js now says so.
+- If the update feed ever ships a `modelCatalog`/`comfyCatalog`
+  override, it inherits the MiB convention silently - nothing validates
+  a hosted catalog's units. Small future guard, not built tonight.
+- Machine state: AE left running with no dialog open, harness green
+  behind it. llama-server and ComfyUI were never started - this pass
+  needed neither. Two probe transcripts under `logs/`.
+- Still open from earlier passes, unchanged and unattempted tonight: the
+  `DroverLord - Window Class` popup; no panel UI for the export tools;
+  no `.webm`/`.webp`; the 8 GB intermediate cap that is still a guess;
+  AE's downsampler never measured against ffmpeg's on real footage;
+  `get-llama.ps1`'s two latent traps (ninth flag); `release-notes.txt`
+  still reads "0.10.0" while the feed now ships 0.10.11 (twentieth flag,
+  remote session's release cut); `comfy_generate` still calls
+  `import_file` rather than 5.8's `import_as_layer`; and 5.9 (.mogrt
+  export) deferred again by its own LAST-item-of-the-night rule -
+  twenty-first pass, at 03:35 local with the loop still running.

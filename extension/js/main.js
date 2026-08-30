@@ -772,7 +772,10 @@
         var fits = gpuInfo && gpuInfo.vramGB
           ? gpuInfo.vramGB >= m.minVramGB
           : !!m.cpuDefault;
-        var label = m.label + " · " + (m.sizeMB / 1000).toFixed(1) + " GB";
+        // sizeMB is MiB (version.js) — the same /1024 the download status
+        // line uses. Dividing by 1000 here made the dropdown and the
+        // downloader quote two different sizes for one file.
+        var label = m.label + " · " + (m.sizeMB / 1024).toFixed(1) + " GB";
         if (!fits) label += " — needs " + m.minVramGB + "+ GB VRAM";
         if (rec && m.name === rec.name) label += "  ✓ recommended";
         var o = document.createElement("option");
