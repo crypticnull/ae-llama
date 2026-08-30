@@ -881,9 +881,35 @@ h264_nvenc and h264_mf. So Pass B needs no GPL binary in a commercial
 product — default to libopenh264 and treat hardware encoders as an
 opt-in that must be tried, not trusted.
 
-Pass B: `export_gif` / `export_social` {comp, path, size, fps} =
-lossless render via 5.5 piped through ffmpeg, temp files cleaned. After
-5.5 only (5.5 landed 2026-08-28, so this is unblocked).
+~~Pass B: `export_gif` / `export_social` {comp, path, size, fps} =
+lossless render via 5.5 piped through ffmpeg, temp files cleaned.~~ DONE
+2026-08-30. `extension/js/ffmpeg.js` (the panel's find/plan/build/VERIFY,
+mirroring whisper.js) + the two PANEL tools in `tools.js` +
+`tests/test-ffmpeg-export.js` (122 checks, no binary and no AE — the
+child process is scripted with captured field output). Verified end to
+end in real AE: a 3 s 1080p30 comp exported to a 480x270 GIF and to
+1080x1920 H.264 in ~2.8 s each, master cleaned every time.
+
+Field facts this paid for, all in the log: AE's "Lossless" module writes
+**rawvideo/bgr24 AVI that ffmpeg reads natively** — and it costs
+width*height*3 PER FRAME (6 224 440 B/f at 1080p, 1.87 GB for ten
+seconds), so the master is estimated and REFUSED before the render
+rather than discovered when the disk fills; that same AVI **carries the
+comp's audio** as pcm_s16le, so one intermediate serves both streams;
+**a trimmed WORK AREA silently shortens the render** (a 3 s comp trimmed
+to its middle second renders ONE second and reports DONE), which is now
+reported rather than discovered; the bottom-up-BGR upside-down trap does
+NOT apply to AE's AVI (measured, (0,0) stays red — do not add a vflip);
+and **h264_nvenc refuses a frame under about 145x49**, so the encoder
+trial that Pass A demanded had to run at the export's REAL size — the
+first version used a fixed 64x64 and a working NVIDIA card fell through
+to h264_mf in silence, caught only because the field run disagreed with
+the hardware in the box.
+
+Not built, deliberately: `.webm`/VP9 and animated `.webp`, both refused
+by name with the list of what IS written. A GIF/MP4 pair is the ask;
+the third format is a remote-session call about whether libvpx's speed
+is acceptable.
 
 ## 7. Tier P4 — real-GPU measurement (local; P1–P3 landed 2026-08-25)
 

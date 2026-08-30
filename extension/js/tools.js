@@ -567,6 +567,25 @@
             "the refusal says how. Blocks for roughly a second per five " +
             "seconds of audio.",
       args: "{comp?: string, as?: 'text' (default) | 'markers', startTime?: number (seconds), durationSeconds?: number, language?: string, maxSegments?: int, name?: string (layer name prefix), fontSize?: number, font?: string, fillColor?: [r,g,b] 0-1, position?: [x,y], justification?: 'left'|'center'|'right', keepAudio?: bool = false (keep the rendered audio file and report its path)}" },
+    { name: "export_gif", mutating: true,
+      desc: "Export a comp as an animated GIF. Renders a lossless master " +
+            "and converts it with a two-pass palette, then DELETES the " +
+            "master. Defaults to 480 px wide at 12 fps because that is " +
+            "what a GIF is for — say so if the user wants otherwise. " +
+            "Renders the comp's WORK AREA unless you pass " +
+            "{wholeComp: true}; the result says which. Needs ffmpeg " +
+            "installed; the refusal says how.",
+      args: "{comp?: string, output: string (ABSOLUTE path ending .gif), size?: string (\"480\" = width, \"480x270\", \"720p\" = height), width?: int, height?: int, fit?: 'contain' (letterbox, default) | 'cover' (fill and crop) | 'stretch', padColor?: string, fps?: number (default 12), colors?: int 4-256 (default 256), dither?: 'bayer' (default) | 'none' | 'sierra2_4a' | 'floyd_steinberg', loop?: bool = true, wholeComp?: bool, startTime?: number (seconds), durationSeconds?: number, overwrite?: bool = false}" },
+    { name: "export_social", mutating: true,
+      desc: "Export a comp as an H.264 .mp4 (or .mov) sized for posting, " +
+            "AUDIO INCLUDED when the comp has any. Renders a lossless " +
+            "master, encodes it, verifies the result and deletes the " +
+            "master. Use {size} for a platform frame — \"1080x1920\" for " +
+            "a story/reel, \"1080x1080\" square, \"1920x1080\" landscape " +
+            "— and {fit} to say whether the picture is letterboxed or " +
+            "cropped into it. Renders the comp's WORK AREA unless you " +
+            "pass {wholeComp: true}. Needs ffmpeg installed.",
+      args: "{comp?: string, output: string (ABSOLUTE path ending .mp4 or .mov), size?: string (\"1080x1920\", \"1080p\", \"720\"), width?: int, height?: int, fit?: 'contain' (letterbox, default) | 'cover' (fill and crop) | 'stretch', padColor?: string, fps?: number (default: the comp's), quality?: 'low'|'medium' (default)|'high', audio?: bool = true, hardware?: bool = false (try the GPU encoder first), wholeComp?: bool, startTime?: number (seconds), durationSeconds?: number, overwrite?: bool = false}" },
     { name: "comfy_status", mutating: false,
       desc: "Check the local ComfyUI instance (online? queue depth?).",
       args: "{}" },
@@ -1373,6 +1392,310 @@
     });
   };
 
+  /*
+   * export_gif / export_social (WORKPLAN 6.2 Pass B) — the comp, out to
+   * a file somebody can actually post.
+   *
+   *   comp -> render_comp "Lossless" -> rawvideo AVI -> ffmpeg -> .gif/.mp4
+   *
+   * PANEL tools, for transcribe_to_captions' reason: the middle step is a
+   * child process and ExtendScript cannot spawn one. Both ends are
+   * already covered in real AE by the self-test (render_comp), so this
+   * pass adds no suite steps — what it adds is a refusal at every point
+   * where a step reports success and means nothing.
+   *
+   * Three of those, all measured (see extension/js/ffmpeg.js):
+   *  - AE renders the WORK AREA when no span is given. A 3 s comp
+   *    trimmed to its middle second exports ONE second and says DONE.
+   *    So the span is always reported, and a short one is called out.
+   *  - The lossless intermediate is width*height*3 PER FRAME: 1.87 GB
+   *    for 10 s of 1080p30. It is estimated and refused BEFORE the
+   *    render, not discovered when the disk fills.
+   *  - ffmpeg exits 0 when it writes nothing, and can write a container
+   *    with no picture in it. The result is read back with ffprobe every
+   *    time; the exit code is never the check.
+   */
+
+  /* Everything the two exports share: find ffmpeg, measure the comp,
+   * check the destination, render the master, encode, VERIFY, clean up.
+   * `plan(ctx)` is the only part that differs, and it returns the ffmpeg
+   * argument list. */
+  function ffmpegExport(kind, args, cb, plan) {
+    args = args || {};
+    if (!global.Ffmpeg) {
+      cb({ ok: false, error: "Video export is not available in this " +
+           "panel build." });
+      return;
+    }
+    var F = global.Ffmpeg;
+    var install;
+    try { install = F.find(); }
+    catch (eF) { cb({ ok: false, error: "ffmpeg lookup failed: " +
+                      eF.message }); return; }
+    if (!install.ok) { cb({ ok: false, error: install.reason }); return; }
+
+    var fs = null, path = null, os = null;
+    try {
+      fs = global.AEBridge.nodeRequire("fs");
+      path = global.AEBridge.nodeRequire("path");
+      os = global.AEBridge.nodeRequire("os");
+    } catch (eN) {
+      cb({ ok: false, error: "Node is unavailable in this panel: " +
+           eN.message });
+      return;
+    }
+
+    var exts = (kind === "gif") ? [".gif"] : [".mp4", ".mov"];
+    var out = F.checkOutput(args.output, exts,
+                            args.overwrite === true || args.overwrite === "true");
+    if (out.err) { cb({ ok: false, error: out.err }); return; }
+
+    var sink = args.progressSink || null;
+    var wallStart = new Date().getTime();
+
+    callHostTool("get_comp_details", { comp: args.comp }, function (det) {
+      if (!det.ok) { cb(det); return; }
+      var d = det.data;
+      var compFps = Number(d.frameRate) || 0;
+      var compDur = Number(d.duration) || 0;
+
+      // --- how much of the comp, and at what rate ---------------------
+      //
+      // AE's render queue takes its span from the WORK AREA, which is
+      // what the user sees when they press Ctrl+M — so that is the
+      // default here too. What is NOT acceptable is it happening
+      // silently, which is what render_comp alone does.
+      var span = {};
+      var explicitSpan = false;
+      if (args.wholeComp === true || args.wholeComp === "true") {
+        span.startTime = 0; span.durationSeconds = compDur;
+        explicitSpan = true;
+      }
+      if (typeof args.startTime !== "undefined" && args.startTime !== null &&
+          args.startTime !== "") {
+        span.startTime = Number(args.startTime); explicitSpan = true;
+      }
+      if (typeof args.durationSeconds !== "undefined" &&
+          args.durationSeconds !== null && args.durationSeconds !== "") {
+        span.durationSeconds = Number(args.durationSeconds);
+        explicitSpan = true;
+      }
+
+      var fps = Number(args.fps) || 0;
+      if (fps > 0 && compFps > 0 && fps > compFps) {
+        cb({ ok: false, error: "The comp runs at " + compFps + " fps, so " +
+             "asking for " + fps + " fps cannot add motion that was never " +
+             "rendered — ffmpeg would duplicate frames and the file would " +
+             "just be bigger. Pick " + compFps + " or less." });
+        return;
+      }
+      if (kind === "gif" && !fps) fps = Math.min(compFps || 12, 12);
+
+      // A GIF at comp size is a GIF nobody can post. 480 wide is the
+      // convention, and it is a DEFAULT rather than a cap — never an
+      // upscale, because enlarging a master to make a smaller format is
+      // only ever bytes.
+      var wantW = args.width, wantH = args.height, wantSize = args.size;
+      var gifDefault = false;
+      if (kind === "gif" && !wantW && !wantH && !wantSize &&
+          Number(d.width) > 480) {
+        wantW = 480; gifDefault = true;
+      }
+      var sized = F.planSize({ w: d.width, h: d.height }, {
+        size: wantSize, width: wantW, height: wantH,
+        fit: args.fit, padColor: args.padColor
+      });
+      if (sized.err) { cb({ ok: false, error: sized.err }); return; }
+
+      // --- the intermediate, before it exists -------------------------
+      var spanSecs = (typeof span.durationSeconds !== "undefined")
+        ? span.durationSeconds : compDur;
+      var srcFrames = Math.max(1, Math.round(spanSecs * (compFps || 1)));
+      var estimate = F.estimateIntermediate(d.width, d.height, srcFrames);
+      var capGB = Number(args.maxIntermediateGB) || 8;
+      var cap = capGB * 1024 * 1024 * 1024;
+      if (estimate > cap) {
+        cb({ ok: false, error: "The lossless master AE has to render " +
+             "first would be about " + F.humanBytes(estimate) + " — " +
+             d.width + "x" + d.height + " raw is " +
+             F.humanBytes(d.width * d.height * 3) + " a frame and this " +
+             "span is " + srcFrames + " frames. The limit is " + capGB +
+             " GB. Export a shorter span with {durationSeconds}, or raise " +
+             "it with {maxIntermediateGB} if there is room." });
+        return;
+      }
+      var free = F.freeBytes(os.tmpdir());
+      if (free >= 0 && free < estimate * 1.1) {
+        cb({ ok: false, error: "The lossless master would need about " +
+             F.humanBytes(estimate) + " in " + os.tmpdir() + ", which has " +
+             F.humanBytes(free) + " free. AE would fill the disk and " +
+             "report a partial render. Free some space or export a " +
+             "shorter span." });
+        return;
+      }
+
+      // A fixed name would collide with the last run's leftovers, and
+      // render_comp REFUSES an existing output rather than raise AE's
+      // overwrite modal.
+      var tmp = path.join(os.tmpdir(),
+        "aell-export-" + new Date().getTime() + ".avi");
+
+      if (sink) {
+        sink("Rendering a lossless master (" + F.humanBytes(estimate) +
+             ")…");
+      }
+      callHostTool("render_comp", {
+        comp: args.comp, output: tmp.replace(/\\/g, "/"),
+        template: "Lossless", overwrite: true,
+        startTime: span.startTime, durationSeconds: span.durationSeconds
+      }, function (rendered) {
+        if (!rendered.ok) { cb(rendered); return; }
+        var master = String((rendered.data && rendered.data.output) || tmp);
+
+        function cleanup() {
+          if (args.keepMaster === true || args.keepMaster === "true") return;
+          try { fs.unlinkSync(master); } catch (eU) {}
+        }
+        function fail(msg) {
+          cleanup();
+          cb({ ok: false, error: msg });
+        }
+
+        // FACT 2, applied to AE's own output: a render that reported DONE
+        // is still just a file until something reads a picture out of it.
+        F.inspect(install, master, function (eM, mInfo) {
+          if (!mInfo.ok) {
+            fail("AE reported " +
+              ((rendered.data && rendered.data.status) || "DONE") +
+              " but the master is not usable: " + mInfo.reason);
+            return;
+          }
+
+          plan({
+            F: F, install: install, args: args, comp: d, master: master,
+            output: out.path, sized: sized, fps: fps, info: mInfo
+          }, function (built) {
+            if (built.err) { fail(built.err); return; }
+            if (sink) sink("Encoding " + built.what + "…");
+            F.run(install.ffmpeg, built.args, {}, function (eE, res) {
+              if (eE) {
+                var tail = String(res && res.stderr || "").split(/\r?\n/);
+                tail = tail.slice(Math.max(0, tail.length - 3))
+                  .join(" ").replace(/^\s+/, "");
+                fail("ffmpeg failed: " + (tail || eE.message));
+                return;
+              }
+              // FACT 1: ffmpeg's exit code is not evidence. This is.
+              F.inspect(install, out.path, function (eO, oInfo) {
+                cleanup();
+                if (!oInfo.ok) { cb({ ok: false, error: oInfo.reason }); return; }
+                var data = {
+                  comp: d.name,
+                  output: out.path,
+                  bytes: oInfo.bytes,
+                  size: F.humanBytes(oInfo.bytes),
+                  dimensions: oInfo.width + "x" + oInfo.height,
+                  frames: oInfo.frames,
+                  codec: oInfo.codec,
+                  seconds: Math.round(
+                    (new Date().getTime() - wallStart) / 100) / 10,
+                  timeSpan: (rendered.data && rendered.data.timeSpan) || "",
+                  ffmpeg: install.source === "vendor"
+                    ? "bundled" : "found on PATH"
+                };
+                if (fps > 0) data.fps = fps;
+                if (built.extra) {
+                  for (var k in built.extra) {
+                    if (Object.prototype.hasOwnProperty.call(built.extra, k)) {
+                      data[k] = built.extra[k];
+                    }
+                  }
+                }
+                var notes = [];
+                if (sized.note) notes.push(sized.note);
+                if (gifDefault) {
+                  notes.push("Scaled to 480 px wide, the GIF default — " +
+                    "the comp is " + d.width + " px. Pass {size} for " +
+                    "another width.");
+                }
+                // THE work-area trap. AE renders the work area and says
+                // nothing; the whole point of saying it here is that the
+                // user asked for "the comp".
+                if (!explicitSpan && compDur > 0 &&
+                    mInfo.duration > 0 && mInfo.duration < compDur - 0.001) {
+                  notes.push("Exported " +
+                    (Math.round(mInfo.duration * 100) / 100) + "s of a " +
+                    compDur + "s comp, because that is the comp's WORK " +
+                    "AREA and it is what AE renders. Pass " +
+                    "{wholeComp: true} for all of it.");
+                }
+                if (kind !== "gif" && args.audio !== false &&
+                    !oInfo.hasAudio) {
+                  notes.push("No audio: nothing in this part of the comp " +
+                    "makes a sound.");
+                }
+                if (args.keepMaster === true || args.keepMaster === "true") {
+                  data.master = master;
+                }
+                if (notes.length) data.notes = notes;
+                cb({ ok: true, data: data });
+              });
+            });
+          });
+        });
+      });
+    });
+  }
+
+  PANEL_TOOLS.export_gif = function (args, cb) {
+    ffmpegExport("gif", args, cb, function (ctx, done) {
+      var built = ctx.F.buildGifArgs(ctx.master, ctx.output, {
+        filter: ctx.sized.filter, fps: ctx.fps, colors: ctx.args.colors,
+        dither: ctx.args.dither, loop: ctx.args.loop
+      });
+      if (built.err) { done({ err: built.err }); return; }
+      done({ args: built.args,
+             what: "a " + ctx.sized.width + "x" + ctx.sized.height +
+                   " GIF at " + ctx.fps + " fps",
+             extra: { loops: (ctx.args.loop === false ||
+                              ctx.args.loop === "once") ? "once" : "forever" } });
+    });
+  };
+
+  PANEL_TOOLS.export_social = function (args, cb) {
+    ffmpegExport("social", args, cb, function (ctx, done) {
+      // FACT 8: the encoder census is compile-time. Hardware encoders are
+      // an opt-in that gets TRIED, never a name taken on trust.
+      var candidates = ["libopenh264"];
+      if (ctx.args.encoder) {
+        candidates = [String(ctx.args.encoder)];
+      } else if (ctx.args.hardware === true || ctx.args.hardware === "true") {
+        candidates = ["h264_nvenc", "h264_mf", "libopenh264"];
+      }
+      // The trial frame is the size the export will be: h264_nvenc
+      // refuses anything under about 145x49, so a fixed small one
+      // answers about the wrong picture.
+      var dims = { w: ctx.sized.width, h: ctx.sized.height };
+      ctx.F.pickEncoder(ctx.install, candidates, dims, function (picked) {
+        if (!picked.ok) { done({ err: picked.reason }); return; }
+        var fps = ctx.fps || Number(ctx.comp.frameRate) || 30;
+        var built = ctx.F.buildSocialArgs(ctx.master, ctx.output, {
+          filter: ctx.sized.filter, fps: ctx.args.fps ? ctx.fps : 0,
+          width: ctx.sized.width, height: ctx.sized.height,
+          quality: ctx.args.quality, encoder: picked.name,
+          audio: ctx.args.audio === false ? false : ctx.info.hasAudio,
+          audioKbps: ctx.args.audioKbps
+        });
+        if (built.err) { done({ err: built.err }); return; }
+        done({ args: built.args,
+               what: "a " + ctx.sized.width + "x" + ctx.sized.height +
+                     " H.264 file at " + Math.round(built.kbps / 100) / 10 +
+                     " Mbps",
+               extra: { encoder: picked.name, videoBitrate: built.kbps + " kbps" } });
+      });
+    });
+  };
+
   /** JSON, as an ExtendScript string literal holding that JSON. */
   function jsxJsonLiteral(value) {
     // U+2028/U+2029 are legal raw inside modern JSON.stringify output but
@@ -1941,7 +2264,8 @@
     setGpuInfo: setGpuInfo,
     setProgressSink: function (fn) { progressSink = fn; },
     _vramArbiter: VramArbiter,        // exposed for tests
-    _genNeedMBFor: genNeedMBFor       // exposed for tests
+    _genNeedMBFor: genNeedMBFor,      // exposed for tests
+    _panelTools: PANEL_TOOLS          // exposed for tests
   };
 
 })(window);

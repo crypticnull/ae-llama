@@ -6779,3 +6779,259 @@ correct - the feed publishing an equal version is the intended outcome.
   and probe scripts deleted. `%APPDATA%\AE-Llama\vendor\ffmpeg` now holds
   the LGPL n9.0 build (ffmpeg/ffprobe/ffplay); `vendor\whisper.cpp` is
   untouched.
+
+## 2026-08-30 (local) - item 6.2 Pass B: the comp goes out as a file, and
+## the encoder that was named but could not run this frame
+
+**Item:** WORKPLAN 6.2 Pass B - `export_gif` / `export_social`. The
+harness was green before the pass (514/514), so this is the next
+unfinished queue item rather than a repair.
+
+**Shipped**
+
+- `extension/js/ffmpeg.js` - the panel's side, the same split whisper.js
+  uses: this is the PANEL's implementation and `scripts\lib\`
+  `ffmpeg-verify.ps1` is the acquirer's and CI's, deliberately
+  independent because the panel cannot shell out to PowerShell for every
+  export. Find (vendor, then PATH), `planSize`, the argument builders,
+  `inspect` (the only real check), `tryEncoder`/`pickEncoder`,
+  `checkOutput`.
+- `export_gif` and `export_social` in `tools.js`, PANEL tools for
+  `transcribe_to_captions`' reason: the middle step is a child process
+  and ExtendScript cannot spawn one. Both ends of the pipeline are
+  already covered in real AE by the suite (`render_comp`), so this pass
+  adds NO suite steps - what it adds is a refusal at every point where a
+  step reports success and means nothing.
+- `tests/test-ffmpeg-export.js` - 122 checks, no ffmpeg binary and no AE.
+- `extension/index.html` and `scripts/chat-probe.js` load the new module;
+  `tests/test-chat-probe.js` knows about it (Pass A predicted exactly
+  this and was right).
+
+The shape is `comp -> render_comp "Lossless" -> rawvideo AVI -> ffmpeg
+-> .gif/.mp4`, master deleted on every path including the failures.
+
+### Six things the obvious version gets wrong
+
+1. **AE's "Lossless" is RAWVIDEO, and it is enormous.** ffmpeg reads it
+   natively - `rawvideo`/`bgr24` in an AVI, no QuickTime and no
+   intermediate codec, which is the good news. The bad news is the
+   price: measured 231 040 B/frame at 320x240 and **6 224 440 B/frame at
+   1920x1080**, i.e. 1.87 GB for ten seconds of 1080p30 and 5.6 GB for
+   thirty. An exporter that just renders and then encodes fills
+   someone's disk and finds out afterwards. So the master is ESTIMATED
+   from width*height*3*frames before anything is queued, refused over a
+   cap (default 8 GB, `maxIntermediateGB` raises it), and refused again
+   if the temp volume has less free than the estimate. The refusal shows
+   the arithmetic - bytes a frame, frame count, both levers - because a
+   number without its derivation is not actionable.
+2. **THE WORK AREA SILENTLY SHORTENS THE RENDER.** `render_comp` with no
+   span takes AE's own default, which is the queue item's, which is the
+   **work area**. Measured: a 3 s comp trimmed to `workAreaStart 1,
+   workAreaDuration 1` renders `start 1s, 10 frame(s)`, status DONE,
+   file written, every layer of the stack reporting success. An explicit
+   `startTime`/`durationSeconds` beats it and leaves the work area
+   alone. This is AE's own Ctrl+M behaviour so it stays the DEFAULT -
+   what is not acceptable is it happening in silence, so the export
+   compares the master's real duration against the comp's and says
+   "Exported 1s of a 3s comp, because that is the comp's WORK AREA",
+   naming `{wholeComp: true}`.
+3. **The lossless AVI carries the comp's AUDIO.** Measured by adding a
+   2 s 48 kHz stereo tone to the rig: the AVI grew by exactly 384 000
+   bytes and ffprobe found a second stream, `pcm_s16le`. So
+   `export_social` needs no separate `render_comp_audio` pass and no
+   muxing step - one intermediate serves both. When there is no audio
+   stream the export says so in a note, because "my video has no sound"
+   is otherwise a support question.
+4. **A NEGATIVE finding worth as much as a positive one.** Bottom-up BGR
+   in an AVI is the classic upside-down trap, and AE's is NOT affected.
+   A rig with a red top half and a blue bottom half came back out of
+   ffmpeg with pixel (0,0) = (254,0,0). No vflip. Written down so the
+   next person does not add one "to be safe" and invert every export.
+   (The 254 rather than 255 is AE's own 8-bit rounding of a [1,0,0]
+   solid, measured, and not worth chasing.)
+5. **ffmpeg exits 0 having written nothing, and can write a container
+   with no picture in it** (Pass A's findings 1 and 3). So `-nostdin -y`
+   lead every argument list this module builds, and the exit code is
+   never the check: `inspect()` reads WIDTH, HEIGHT and FRAME COUNT back
+   out of both the master AE rendered AND the file ffmpeg wrote, with
+   Pass A's `-count_frames` fallback for the containers that report
+   neither. The stub suite drives all four shapes off captured ffprobe
+   output - the 262-byte zero-stream MP4 that scores `probe_score: 100`,
+   the zero-byte file that exits 1 while still printing `{ }`, the
+   matroska that carries no `nb_frames`, and a real export.
+6. **`-encoders` is a compile-time list, and trialling it at the wrong
+   size is the same lie with extra steps.** Pass A said an encoder must
+   be TRIED, so `tryEncoder` encodes one frame of colour bars and
+   inspects the result. The first version trialled at a fixed 64x64 and
+   the field run picked **h264_mf on a machine with an NVIDIA card** -
+   because `h264_nvenc` answers "InitializeEncoder failed: invalid param
+   (8): Frame Dimension less than the minimum supported value", exit
+   -22, zero bytes written. Measured boundary on this card: **146x50
+   encodes, 144x48 does not, 128x128 does not, 160x96 does.** The trial
+   now runs at the size the export will actually be and the verdict is
+   cached per name AND size. Re-run in the field: `hardware: true` at
+   1280x720 now picks `h264_nvenc`, and at 128x128 it correctly still
+   falls through to software.
+
+   This one is worth dwelling on. Every stub check passed with the 64x64
+   trial - the mechanism worked perfectly, `inspect` correctly rejected
+   nvenc's zero-byte output, `pickEncoder` correctly moved on, and the
+   export succeeded. Nothing was broken. It was just answering a
+   question about a picture nobody was going to encode. The only thing
+   that caught it was the field run naming an encoder that disagreed
+   with the hardware in the box.
+
+### A defect in chat-probe, found on the way in
+
+`scripts/chat-probe.js` loaded panel modules with
+`new Function("window", src)(window)`. Ten of the twelve modules end
+`})(window)` and two - whisper.js and now ffmpeg.js - end `})(this)`.
+Those are the SAME OBJECT in a browser, where `this` at the top of a
+script is `window`, and they are not the same object at all inside
+`new Function`, where `this` is Node's global. So `Whisper` was
+published on globalThis while tools.js looked for `global.Whisper` on
+the probe's window and found nothing, and `transcribe_to_captions`
+answered **"Speech-to-text is not available in this panel build"** - a
+shipped-looking refusal that says nothing whatever about the machine.
+Fixed with `.call(window, window)`, which works for both shapes.
+
+`test-chat-probe.js` had been asserting that the probe LOADS each file,
+which is why this passed for a whole release: loading it is not the same
+as it arriving. It now loads every module the way the probe does and
+asserts the module lands on the probe's window.
+
+**This is not a shipped bug.** The panel is a browser, `this === window`
+there, and the real product was never affected - which is precisely why
+it survived. No version bump is owed for it.
+
+### Design calls, made and written down
+
+- **`size` parses two conventions that genuinely disagree**: `"480"` is
+  a WIDTH (how GIFs are spoken about), `"720p"` is a HEIGHT (how video
+  is), `"1080x1920"` is both. Guessing between the first two would be
+  wrong half the time, so the `p` is honoured rather than inferred.
+- **`fit` defaults to `contain`** (letterbox). Cropping the edges off
+  someone's comp is not a thing to do without being asked; both modes
+  emit a note naming the other one.
+- **`export_gif` defaults to 480 px wide at 12 fps** and says that it
+  did. A GIF at comp size is a GIF nobody can post. It never UPSCALES -
+  a 320-wide comp stays 320.
+- **Dimensions round DOWN to even.** libopenh264 does NOT refuse odd
+  ones (measured: 101x75 encodes fine), so this is a compatibility
+  choice for players and platforms, and it is stated as one rather than
+  dressed up as a crash guard.
+- **libopenh264 is the default encoder**, per Pass A's licence
+  measurement: the LGPL build has no libx264 and this is a commercial
+  product. `hardware: true` opts into the nvenc/mf ladder, which is
+  tried, not trusted. libopenh264 has no CRF, so `quality` becomes a
+  real bitrate here (bits per pixel per frame: 0.06/0.1/0.15, floored at
+  200 kbps and capped at 20 Mbps - 1080p30 medium lands on 6221 kbps).
+- **The output extension picks the MUXER**, so unlike `render_comp` -
+  where a wrong extension is cosmetic and gets reported - a wrong one
+  here cannot run at all and is refused with the list of what can.
+  `.webm`/VP9 and animated `.webp` are deliberately NOT built; they are
+  refused by name.
+- `mutating: true` on both, which for a PANEL tool only gates the dry
+  run (panel tools are excluded from `batchable()`, so the round
+  rollback's Ctrl+Z can never reach them). That is the behaviour wanted:
+  a dry run should not spend three seconds and 534 MB.
+
+### Verification
+
+- `node tests/test-ffmpeg-export.js`: **122 checks, green.** The pure
+  half (sizing, filters, bitrates, path checks) is proved outright; the
+  install walk runs against a real tiny tree including the nested
+  `bin\ffmpeg-...-lgpl\bin\` layout this machine really has and the
+  half-install case; `inspect` and `pickEncoder` run against a SCRIPTED
+  child_process replaying captured field output, including nvenc's
+  size floor; and the two tools run end to end against a scripted AE
+  whose `render_comp` truncates to the work area the way the real one
+  measurably does.
+- `node tests/test-chat-probe.js` green with the new module assertions.
+- **Full stub sweep: all 55 test files exit 0.**
+- **Field, in real AE 2026 with the bundled LGPL ffmpeg** - a 1920x1080
+  30 fps 3 s comp with an animated solid, five paths, all green:
+  - `export_gif` -> 480x270, 12 fps, 36 frames, 23 958 bytes, **2.8 s**
+    (534 MB master rendered, converted and deleted).
+  - `export_social {size: "1080x1920"}` -> 1080x1920 h264, 90 frames,
+    38 302 bytes, 6221 kbps, 2.9 s, letterbox note present.
+  - `export_social {fit: "cover", quality: "high"}` -> same frame,
+    9331 kbps, crop note present.
+  - existing output with no `overwrite` -> refused, with the file's size
+    in the message.
+  - `export_social {hardware: true, size: "720p"}` -> `h264_nvenc`,
+    1280x720, 90 frames, 3.1 s. (This is the run that found finding 6:
+    before the fix it said `h264_mf`.)
+  - `stray masters in TEMP: []` after all five.
+- `capability-report.js` regenerated: 73 -> 75 tools, 4 -> 6 panel-side.
+- **Harness: 514/514 PASSED**, before the pass and after it. Unchanged
+  by design - this pass adds no AE tool, so there is nothing new for the
+  suite to drive.
+
+### No version bump
+
+Feature track, the same lifecycle as 6.1 Passes A-C and the 5.x items:
+new tools ride the next MINOR, which is the remote session's. The
+chat-probe fix is a script, not `extension/`, and was never a shipped
+defect. Pushing without bumping is the intended outcome here.
+
+### Still open
+
+- **The panel UI has no button for either tool.** They are reachable by
+  the model through chat, which is the product's main path, but a
+  "Export GIF" affordance in Settings/main is a remote-session design
+  call the way the render-queue one was.
+- **`export_social` cannot write `.webm` or animated `.webp`.** Both
+  encoders are in the LGPL build (`libvpx-vp9`, `libwebp_anim`) and both
+  are refused by name today. Whether VP9's encode time is acceptable for
+  a panel that blocks is a measurement plus a product call.
+- **The intermediate is always the FULL comp size**, then scaled by
+  ffmpeg. For a 4K comp exported to a 480 px GIF that is a lot of bytes
+  moved to throw most of them away. AE's render settings can resize
+  (Half/Third/Quarter) but `render_comp` exposes no way to ask, and
+  `om.getSettings()` throws (6.1 Pass C measured that). A `resolution`
+  argument on `render_comp` would make this much cheaper and is a
+  self-contained small pass.
+- **The 8 GB intermediate cap is a guess**, not a measurement. Nobody
+  has established whether AE's AVI writer survives past the classic 2 GB
+  / 4 GB RIFF boundaries, or whether ffmpeg reads what it writes there.
+  Testing it costs a multi-gigabyte render; worth one deliberate pass
+  rather than a surprise on someone's 30-second 1080p export.
+- **Panel tools read as UNCOVERED in the generated capability table**
+  ("stub tests: -"). `stubCoverage()` counts `call("tool")`, the
+  host-tool convention, so `comfy_generate`, `transcribe_to_captions`
+  and now both exports show a dash despite real coverage. Pre-existing
+  shape of the metric, not a regression; a one-line regex change if
+  anyone minds.
+- **The dialog triage still calls AE's "Executing Script *" progress
+  window an UNRECOGNIZED DIALOG** and fails the run. Second flag; the
+  6.2 Pass A entry has the screenshot path and the reasoning. On an
+  unattended night this turns one slow AE launch into a lost pass.
+- `get-llama.ps1` still has the two latent traps 6.1 Pass A flagged
+  (`CUDA Version:` vs this machine's `CUDA UMD Version:`, two-part
+  version padding). Fourth flag; `whisper-assets.ps1` has both fixes
+  written and tested, and `lib/gh-releases.ps1` is now the obvious home
+  for the shared half.
+- 5.9 (.mogrt export) still deferred by its own LAST-item-of-the-night
+  rule. Sixteenth pass.
+- `release-notes.txt` still reads "0.10.0" while the feed ships 0.10.8 -
+  fifteenth flag; remote session's release cut.
+- `comfy_generate` still calls `import_file` rather than 5.8's
+  `import_as_layer` - small remote-session pass.
+- Project debris in the harness project is unchanged (two comps called
+  `AELL_PROBE_WA`, `PROBE_PARENT`, ~250 nulls named "Audio Amplitude").
+- Machine state: AE left on the harness project with no dialog open, 95
+  items (down from the 100 the probes left). The export rig comp, the
+  four probe comps, the tone WAV and every temp master are gone;
+  `%TEMP%\aell-probe-ffmpeg` holds only probe outputs and can be
+  deleted. No change to `%APPDATA%\AE-Llama\vendor`.
+
+  Worth writing down because this entry nearly claimed the cleanup had
+  happened when it had not: **the probes' own `delete_item` calls all
+  failed silently and every probe comp survived.** Not a tool defect -
+  `delete_item` takes `{item: ...}` and the probe passed `{name: ...}`,
+  so it returned a perfectly good grounded refusal into a `try/catch`
+  that threw the message away. The lesson is about the probe, not the
+  tool: a cleanup step whose result is not read is not a cleanup step.
+  Caught only by going back and LOOKING at the project before writing
+  the sentence that said it was clean.

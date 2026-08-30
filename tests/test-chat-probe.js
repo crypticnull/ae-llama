@@ -704,7 +704,7 @@ const toolsSrc = fs2.readFileSync(
 const MODULE_FILE = {
   Comfy: "comfy.js", Setup: "setup.js", Llama: "llama.js",
   Settings: "settings.js", Tiers: "tiers.js", Tools: "tools.js",
-  Whisper: "whisper.js"
+  Whisper: "whisper.js", Ffmpeg: "ffmpeg.js"
 };
 const needed = new Set(
   (toolsSrc.match(/global\.([A-Z][A-Za-z]+)/g) || [])
@@ -718,6 +718,47 @@ for (const mod of [...needed].sort()) {
   if (!file) continue;
   assert(probeSrc.indexOf('loadPanelFile("' + file + '")') !== -1,
          "the probe loads " + file + ", which tools.js dispatches through");
+}
+
+// Loading it is not the same as it ARRIVING. Ten panel modules end
+// `})(window)` and two end `})(this)` — identical in a browser, where
+// `this` at the top of a script IS window, and not identical at all
+// inside `new Function`, where it is Node's global. The plain
+// `new Function("window", src)(window)` therefore published Whisper on
+// globalThis while tools.js looked for it on the probe's window, and
+// every whisper/ffmpeg tool answered "not available in this panel
+// build". Nothing about that refusal mentions the probe, which is why
+// this asserts the module LANDS rather than that the file was read.
+{
+  const loaderRe =
+    /function loadPanelFile\(rel\) \{[\s\S]*?new Function\("window", src\)([\s\S]*?)\n\}/;
+  const m = loaderRe.exec(probeSrc);
+  assert(!!m, "the probe's loadPanelFile is still shaped the way this " +
+         "check expects");
+  assert(!!m && /\.call\(window/.test(m[1]),
+         "and it binds `this` to the probe's window as well as passing " +
+         "it, so a `})(this)` module lands where tools.js looks");
+
+  const EXT2 = path2.join(__dirname, "..", "extension");
+  for (const [mod, file] of Object.entries(MODULE_FILE)) {
+    if (file === "tools.js") continue;   // that one is the dispatcher
+    const win = { console, setTimeout, clearTimeout,
+                  localStorage: { getItem: () => null, setItem: () => {},
+                                  removeItem: () => {} },
+                  AEBridge: { nodeRequire: require,
+                              getExtensionPath: () => EXT2,
+                              evalScript: () => {} } };
+    win.window = win;
+    const src = fs2.readFileSync(path2.join(EXT2, "js", file), "utf8");
+    let threw = null;
+    try { new Function("window", src).call(win, win); }
+    catch (e) { threw = e; }
+    assert(!threw, file + " loads the way the probe loads it" +
+           (threw ? ": " + threw.message : ""));
+    assert(!threw && typeof win[mod] !== "undefined",
+           "and publishes global." + mod + " onto the probe's window, " +
+           "which is where tools.js dispatches through");
+  }
 }
 
 

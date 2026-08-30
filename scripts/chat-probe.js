@@ -233,7 +233,15 @@ window.window = window;
 
 function loadPanelFile(rel) {
   const src = fs.readFileSync(path.join(EXT, "js", rel), "utf8");
-  new Function("window", src)(window);
+  // `.call(window, ...)` and not just `(window)`: ten of the panel
+  // modules end `})(window)` but whisper.js and ffmpeg.js end `})(this)`,
+  // which is the same object in a browser and is NODE'S GLOBAL here. So
+  // loading them the plain way published Whisper on globalThis, tools.js
+  // looked for global.Whisper on the probe's window and found nothing,
+  // and transcribe_to_captions answered "not available in this panel
+  // build" — a shipped-looking refusal that says nothing about the
+  // machine. Binding `this` too makes the loader work for both shapes.
+  new Function("window", src).call(window, window);
 }
 loadPanelFile("settings.js");
 loadPanelFile("tiers.js");
@@ -249,6 +257,8 @@ loadPanelFile("comfy.js");
 // Same reason: transcribe_to_captions reaches for global.Whisper before
 // it can produce a grounded "not installed" refusal.
 loadPanelFile("whisper.js");
+// And again for export_gif/export_social, which reach for global.Ffmpeg.
+loadPanelFile("ffmpeg.js");
 loadPanelFile("tools.js");
 
 const Settings = window.Settings;
