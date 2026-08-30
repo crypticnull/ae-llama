@@ -507,6 +507,154 @@
     }
   }
 
+  /*
+   * ------------------------------------------ what width/height BECOME
+   *
+   * A template that renders at one size and enlarges before it saves is
+   * ordinary, and the shipped KREA2 graph is one: authored 1920x1080, a
+   * 1.6x latent upscale between its two passes, 3072x1728 on disk. So a
+   * caller asking for 1024x1024 gets a 1640x1640 file, and until now the
+   * only record of that anywhere was the file itself.
+   *
+   * `widget` is the factor's input name per class. `latent` says the
+   * enlargement happens in LATENT space, where the factor lands on the /8
+   * grid and is multiplied back out - which is why 1024 becomes 1640 and
+   * not 1638. Both shipped sizes reproduce exactly this way.
+   */
+  var SCALE_CLASSES = {
+    LatentUpscaleBy:     { widget: "scale_by", latent: true },
+    SesquiLatentUpscale: { widget: "scale",    latent: true },
+    ImageScaleBy:        { widget: "scale_by", latent: false }
+  };
+
+  /** True for a node that writes a file, i.e. the end of a size chain. */
+  function isOutputNode(node) {
+    if (!node || !node.inputs) return false;
+    if (node.inputs.hasOwnProperty("filename_prefix")) return true;
+    return /^Save/.test(String(node.class_type || ""));
+  }
+
+  /** nodeId -> [ids of the nodes taking one of its outputs]. */
+  function consumerMap(graph) {
+    var consumers = {}, k, key;
+    for (k in graph) {
+      if (!graph.hasOwnProperty(k)) continue;
+      if (!graph[k] || !graph[k].inputs) continue;
+      for (key in graph[k].inputs) {
+        if (!graph[k].inputs.hasOwnProperty(key)) continue;
+        var v = graph[k].inputs[key];
+        if (!isLink(v)) continue;
+        var src = String(v[0]);
+        if (!consumers[src]) consumers[src] = [];
+        consumers[src].push(k);
+      }
+    }
+    return consumers;
+  }
+
+  /**
+   * Follow the picture made at `startId` forward to whatever writes it to
+   * disk, and answer by how much its size is multiplied on the way.
+   *
+   * Returns {factor, latent} or NULL, and null is reported as nothing at
+   * all. The rule is the one the weight check already lives by: a number
+   * that might be wrong is worse than no number, because it sends a user
+   * looking for pixels that were never there. So every case this cannot
+   * account for - a resize whose amount lives in a MODEL rather than in a
+   * widget, a scale widget that is not a positive number, two output
+   * branches that disagree, a chain that reaches no output at all - gives
+   * up rather than guesses.
+   */
+  function outputScaleFrom(graph, startId) {
+    var consumers = consumerMap(graph);
+    var unknown = false;
+    var factors = {};          // "1.6|l" -> {factor, latent}
+    var found = 0;
+
+    function visit(id, factor, latent, depth) {
+      if (unknown) return;
+      if (depth > 64) { unknown = true; return; }
+      var node = graph[id];
+      if (!node || !node.inputs) return;
+      var cls = String(node.class_type || "");
+      var f = factor, lat = latent;
+
+      if (depth > 0) {
+        var rule = SCALE_CLASSES.hasOwnProperty(cls)
+          ? SCALE_CLASSES[cls] : null;
+        if (rule) {
+          var raw = node.inputs[rule.widget];
+          var num = (typeof raw === "string") ? Number(raw) : raw;
+          if (typeof num !== "number" || !(num > 0)) { unknown = true; return; }
+          f = factor * num;
+          if (rule.latent) lat = true;
+        } else if (node.inputs.hasOwnProperty("upscale_model") ||
+                   /UpscaleWithModel/.test(cls)) {
+          // The factor is a property of the .pth, not of the graph.
+          unknown = true;
+          return;
+        } else if (typeof node.inputs.width === "number" &&
+                   typeof node.inputs.height === "number") {
+          // An absolute resize, and injectParams has just written the
+          // caller's own numbers into it - so from here the size IS the
+          // size that was asked for, whatever happened upstream.
+          f = 1;
+          lat = false;
+        }
+      }
+
+      if (isOutputNode(node)) {
+        var key = f + "|" + (lat ? "l" : "p");
+        if (!factors.hasOwnProperty(key)) {
+          factors[key] = { factor: f, latent: lat };
+          found++;
+        }
+      }
+      var next = consumers[String(id)] || [];
+      for (var i = 0; i < next.length; i++) visit(next[i], f, lat, depth + 1);
+    }
+
+    visit(String(startId), 1, false, 0);
+    if (unknown || found !== 1) return null;
+    for (var key2 in factors) {
+      if (factors.hasOwnProperty(key2)) return factors[key2];
+    }
+    return null;
+  }
+
+  /** Apply a scale the way the node carrying it would. */
+  function scaleDim(px, factor, latent) {
+    if (latent) return Math.round((px / 8) * factor) * 8;
+    return Math.round(px * factor);
+  }
+
+  /**
+   * The line that closes the gap: for every node whose size was just set,
+   * say what that size turns into on disk. Silent when nothing enlarges it
+   * and silent whenever outputScaleFrom cannot account for the chain.
+   */
+  function noteOutputSize(graph, sizedIds, applied) {
+    var seen = {};
+    for (var i = 0; i < sizedIds.length; i++) {
+      var id = sizedIds[i];
+      var node = graph[id];
+      if (!node || !node.inputs) continue;
+      var w = node.inputs.width, h = node.inputs.height;
+      if (typeof w !== "number" || typeof h !== "number") continue;
+      var sc = outputScaleFrom(graph, id);
+      if (!sc || sc.factor === 1) continue;
+      var line = "size " + w + "x" + h + " on node " + id + " is enlarged " +
+        sc.factor + "x before this template saves, so the file will be " +
+        scaleDim(w, sc.factor, sc.latent) + "x" +
+        scaleDim(h, sc.factor, sc.latent) +
+        " - width/height set the size it GENERATES at, not the size it " +
+        "writes";
+      if (seen.hasOwnProperty(line)) continue;
+      seen[line] = true;
+      applied.push(line);
+    }
+  }
+
   /**
    * Graft params onto the graph. Returns a list of what was changed so the
    * LLM (and user) can see how the template was used.
@@ -518,6 +666,7 @@
   function injectParams(graph, params, manifest) {
     var applied = [];
     var cls = classifyEncoders(graph);
+    var sizedIds = [];
     var k, node;
 
     for (k in graph) {
@@ -564,6 +713,7 @@
           node.inputs.height = Math.round(params.height);
           applied.push("height -> node " + k);
         }
+        if (params.width > 0 || params.height > 0) sizedIds.push(k);
       }
 
       // Frame count for video workflows.
@@ -594,6 +744,9 @@
     if (manifest && manifest.procedural) {
       injectProcedural(graph, params, manifest.procedural, applied);
     }
+    // After everything, because the answer depends on the graph as it is
+    // going to be queued.
+    noteOutputSize(graph, sizedIds, applied);
     return applied;
   }
 
@@ -1944,6 +2097,7 @@
     readManifest: readManifest,
     loadWorkflow: loadWorkflow,
     injectParams: injectParams,
+    outputScaleFrom: outputScaleFrom,
     uploadImage: uploadImage,
     generate: generate,
     status: status,

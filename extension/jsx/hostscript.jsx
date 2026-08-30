@@ -5469,8 +5469,45 @@ AELL_TOOLS.import_file = function (args) {
   var f = new File(args.path);
   if (!f.exists) return AELL_err("File not found: " + args.path);
   var item = app.project.importFile(new ImportOptions(f));
-  return AELL_okay({ name: item.name, id: item.id });
+  // The DIMENSIONS come back because nothing upstream can supply them.
+  // comfy_generate is the case that made this bite: the KREA2 template
+  // upscales 1.6x between its two passes, so a caller asking for
+  // 1024x1024 imports a 1640x1640 file, and every decision after the
+  // import (a comp built to hold it, a scale, a position) was being made
+  // from the number that had been REQUESTED. AE has measured the file by
+  // the time this returns; report what it measured.
+  //
+  // Reads are guarded because importFile does not always answer with an
+  // AVItem - an .aep comes back as a FolderItem, which has no width, and
+  // a missing property on a host object is not always a plain undefined.
+  var out = { name: item.name, id: item.id };
+  AELL_addFootageDims(out, item);
+  return AELL_okay(out);
 };
+
+/** Copy whichever of AE's measured media dimensions this item really has. */
+function AELL_addFootageDims(out, item) {
+  try {
+    if (typeof item.width === "number" && item.width > 0) {
+      out.width = item.width;
+      out.height = item.height;
+    }
+  } catch (eD) {}
+  try {
+    // A still is duration 0 with no frame rate; both are omitted rather
+    // than reported as zero, so "no duration" never reads as "0 seconds".
+    if (typeof item.duration === "number" && item.duration > 0) {
+      out.duration = item.duration;
+    }
+    if (typeof item.frameRate === "number" && item.frameRate > 0) {
+      out.frameRate = item.frameRate;
+    }
+  } catch (eT) {}
+  try {
+    if (item.hasAudio === true) out.hasAudio = true;
+  } catch (eA) {}
+  return out;
+}
 
 AELL_TOOLS.add_shape_layer = function (args) {
   var comp = AELL_resolveComp(args.comp);

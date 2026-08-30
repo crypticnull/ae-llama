@@ -6140,6 +6140,29 @@
                  "imported something else: " + d.name;
         } },
 
+      // And it MEASURES what it imported. Nothing else could: the caller
+      // knows only the size it asked for, and comfy_generate proved that
+      // is a different number - the KREA2 template upscales 1.6x between
+      // its passes, so a request for 1024x1024 lands a 1640x1640 file.
+      // The PNG here is a 240x180 still, so duration and frameRate must
+      // be ABSENT rather than reported as zero.
+      { name: "import_file reports the size AE measured, not one we asked for",
+        tool: "import_file",
+        args: function (ctx) { return { path: ctx.frWrote }; },
+        check: function (d) {
+          if (d.width !== 240 || d.height !== 180) {
+            return "wrong or missing dimensions: " + d.width + "x" + d.height;
+          }
+          if (d.duration !== undefined) {
+            return "a still reported a duration: " + d.duration;
+          }
+          if (d.frameRate !== undefined) {
+            return "a still reported a frame rate: " + d.frameRate;
+          }
+          return d.hasAudio === undefined ||
+                 "a still reported audio: " + d.hasAudio;
+        } },
+
       { name: "and the layer count of the comp is untouched by it",
         tool: "get_comp_details",
         args: function (ctx) { return { comp: ctx.frComp, limit: 0 }; },

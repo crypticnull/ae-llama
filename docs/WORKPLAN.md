@@ -1238,12 +1238,30 @@ GPU. This item is that touch, one pass per bullet, smallest first:
   `tests/test-model-catalog.js` now at least fails a template name that
   does not exist.
 
-- **And one measured oddity, logged not fixed:** the KREA2 template
+- ~~**And one measured oddity, logged not fixed:** the KREA2 template
   upscales 1.6x, so `comfy_generate {width: 1024, height: 1024}` returns a
-  1640x1640 image. That is deliberate in the graph (0.9.23 substituted
-  `LatentUpscaleBy` for `SesquiLatentUpscale` precisely so it would not
-  shrink), but `width`/`height` are documented to the model as the output
-  size and they are not.
+  1640x1640 image.~~ DONE 2026-08-30 (0.10.21), and the graph's behaviour
+  was left exactly as authored — what was wrong was that nobody said so.
+  Two halves, because the panel had no way to answer the question at
+  either end. (1) `injectParams` traces the size chain FORWARD from every
+  node it sized to the node that writes the file and appends one line
+  saying what the size becomes, using the scaling node's own arithmetic:
+  a latent upscale lands on the /8 grid, which is why 1024 is 1640 and
+  not 1638. It stays SILENT for every chain it cannot account for — a
+  factor that lives in a `.pth`, a factor behind a link, a non-positive
+  widget, two output branches that disagree, a chain reaching no output —
+  by the 0.10.20 rule that a number which might be wrong is worse than no
+  number. (2) `import_file` returns the size AE MEASURED (plus duration /
+  frameRate for media that has them, absent rather than zero for a
+  still), and `comfy_generate` hoists it to `outputSize`; before this,
+  nothing anywhere in the panel knew the size of a file it had just
+  imported. Field-verified on the real card by
+  `scripts/output-size-probe.js`, which predicts BEFORE it renders and
+  then reads the PNG's own IHDR: 512 -> 816 (not the 819 plain arithmetic
+  would give, so the /8 grid is measured and not assumed) and 1024 ->
+  1640, reproducing the number this bullet was filed with.
+  `tests/test-comfy-output-size.js`, 23 checks, and the AE half is
+  self-test step 533.
 - ~~**Tier impersonation ladder**~~ DONE 2026-08-30 (0.10.13).
   `scripts/tier-ladder-probe.js` walks 4/6/8/12/16/24/32 plus the card's
   own number, against real nvidia-smi, a real llama-server and the

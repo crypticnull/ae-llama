@@ -3977,7 +3977,12 @@ function cannedOk(tool, args) {
         return { __err: "File not found: " + pF };
       }
       frItems[pF.toLowerCase()] = true;
-      return { name: pF.slice(pF.lastIndexOf("\\") + 1), id: 9100 };
+      // Real AE has MEASURED the file by the time importFile returns, and
+      // a still has no duration and no frame rate at all - reporting them
+      // as 0 would let "no duration" read as "0 seconds" downstream.
+      const dimF = frPngs[pF.toLowerCase()] || { width: 320, height: 240 };
+      return { name: pF.slice(pF.lastIndexOf("\\") + 1), id: 9100,
+               width: dimF.width, height: dimF.height };
     }
     case "snapshot_frame": {
       const comp = String((args && args.comp) || "");

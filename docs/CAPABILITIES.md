@@ -59,7 +59,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `get_property` | Read ANY property by path: value, keyframes, expression | no | host | 3 | 90 |
 | `grid_layout` | Arrange layers into a grid rigged to a control null: its 'Grid X Spacing'/'Grid Y Spacing'/'Grid Columns' sliders drive spacing AND column count live, and the grid centers on the null's position (all expressions generated host-side) | yes | host | 1 | 2 |
 | `import_as_layer` | Import a file AND place it in a comp as a layer, scaled to the comp | yes | host | 1 | 8 |
-| `import_file` | Import a footage/image/video file into the PROJECT PANEL only — it does not appear in any comp | yes | host | — | 1 |
+| `import_file` | Import a footage/image/video file into the PROJECT PANEL only — it does not appear in any comp | yes | host | 1 | 2 |
 | `link_property` | Drive a layer property from a control | yes | host | — | 2 |
 | `list_effects` | Enumerate effects INSTALLED in this AE (name, matchName, category), filtered and paged | no | host | 1 | 2 |
 | `list_presets` | Enumerate the ANIMATION PRESETS (.ffx) installed in this AE — AE ships ~679 (Behaviors, Text, Backgrounds, Transitions, Image, Shapes…) plus the user's own | no | host | 1 | 3 |
@@ -96,7 +96,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 
 **Coverage gaps (computed):**
 
-- Host tools with NO stubbed test: `add_camera`, `add_shape_layer`, `add_solid`, `apply_effect`, `delete_layer`, `import_file`, `link_property`, `set_effect_param`, `set_layer_timing`
+- Host tools with NO stubbed test: `add_camera`, `add_shape_layer`, `add_solid`, `apply_effect`, `delete_layer`, `link_property`, `set_effect_param`, `set_layer_timing`
 - Host tools never exercised by the self-test suite: none
 
 <!-- END GENERATED TOOL INVENTORY -->
@@ -441,7 +441,16 @@ Queued (see WORKPLAN for owners/order):
   whose length is authored in seconds refuse a `frames` argument instead
   of mis-writing it) and `image`, which uploads a local file to
   ComfyUI's input folder — with no image the reference `LoadImage` is
-  detached and the graph runs as text-to-video.
+  detached and the graph runs as text-to-video. `width`/`height` are the
+  size the template GENERATES at, which is not always the size it writes:
+  the Krea 2 graph upscales its latent 1.6x between passes, so a request
+  for 1024x1024 saves 1640x1640. `injectParams` traces the size chain
+  forward to the node that writes the file and says so in `applied`
+  (staying silent for any chain it cannot account for — an upscale whose
+  factor lives in a `.pth`, a factor behind a link, two output branches
+  that disagree), and `import_file` reports the size AE MEASURED, which
+  `comfy_generate` hoists to `outputSize`. Both numbers verified against
+  the card by `scripts/output-size-probe.js`.
 - A shipped template must run on a bare ComfyUI, and the manifest is
   what makes that true: every non-core node class carries an
   `optionalNodes` rule — `passthrough` (drop it, rewire consumers to a

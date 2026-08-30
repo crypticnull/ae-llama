@@ -337,7 +337,9 @@
     { name: "import_file", mutating: true,
       desc: "Import a footage/image/video file into the PROJECT PANEL " +
             "only — it does not appear in any comp. To put it on screen " +
-            "use import_as_layer instead.",
+            "use import_as_layer instead. Returns the size AE measured " +
+            "(width/height, plus duration and frameRate for media that " +
+            "has them) — use those, not the size you expected.",
       args: "{path: string (absolute)}" },
     { name: "import_as_layer", mutating: true,
       desc: "Import a file AND place it in a comp as a layer, scaled to " +
@@ -621,7 +623,7 @@
             "the AE project. Blocks until finished (may take minutes). If " +
             "the hidden backend is installed it BOOTS AUTOMATICALLY — " +
             "never tell the user to start ComfyUI first.",
-      args: "{workflow: string (name from comfy_list_workflows), prompt: string, negative?: string, width?: int, height?: int, seed?: int, frames?: int (video workflows), durationSeconds?: number (video templates whose length is set in seconds — the error tells you which), image?: string (absolute path to a reference/first-frame image), import?: bool = true}" }
+      args: "{workflow: string (name from comfy_list_workflows), prompt: string, negative?: string, width?: int, height?: int (the size the template GENERATES at, which is not always the size it saves: a template that upscales between passes writes a larger file, and the result reports the size actually imported), seed?: int, frames?: int (video workflows), durationSeconds?: number (video templates whose length is set in seconds — the error tells you which), image?: string (absolute path to a reference/first-frame image), import?: bool = true}" }
   ];
 
   var TOOL_NAMES = [];
@@ -1651,9 +1653,22 @@
         var imported = [];
         (function next(i) {
           if (i >= result.files.length) {
-            finish({ ok: true,
-                     data: { files: result.files, imported: imported,
-                             applied: result.applied } });
+            // The size that was REQUESTED is not always the size that was
+            // rendered - the shipped KREA2 template upscales 1.6x between
+            // its passes, so width 1024 saves 1640. import_file measures
+            // the file in AE; hoist that measurement to the top of the
+            // result so the model plans the comp around the real picture
+            // instead of around its own request.
+            var data = { files: result.files, imported: imported,
+                         applied: result.applied };
+            for (var m = 0; m < imported.length; m++) {
+              if (imported[m] && imported[m].width > 0 &&
+                  imported[m].height > 0) {
+                data.outputSize = imported[m].width + "x" + imported[m].height;
+                break;
+              }
+            }
+            finish({ ok: true, data: data });
             return;
           }
           callHostTool("import_file", { path: result.files[i] },

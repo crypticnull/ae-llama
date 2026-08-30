@@ -9648,3 +9648,139 @@ a handoff.
   call); no panel UI for the mogrt export tools; no `.webm`/`.webp`.
   `release-notes.txt` still reads "0.10.0" while the feed ships 0.10.20 -
   remote session's release cut.
+
+
+---
+
+## 2026-08-30 — the size the panel asked for and the size it got (0.10.21)
+
+**Item:** WORKPLAN 7, the last unstruck bullet that could move — *"one
+measured oddity, logged not fixed: the KREA2 template upscales 1.6x, so
+`comfy_generate {width: 1024, height: 1024}` returns a 1640x1640 image
+... `width`/`height` are documented to the model as the output size and
+they are not."*
+
+Harness green at **532/532** before the pass, so item 1 did not claim the
+night. Sections 1-6 are struck. Of what remains in section 7, sd15 /
+sdxl / wan22-5b need ~26 GB downloaded and templates the panel does not
+ship, minimax-h3 is blocked on a backend that cannot see its weights
+(0.10.19 / 0.10.20 — do not re-attempt), and the four template-less
+catalog entries are filed for the remote session. This was the item.
+
+### What the defect actually was
+
+Not the graph. The 1.6x upscale is deliberate — 0.9.23 substituted
+`LatentUpscaleBy` for `SesquiLatentUpscale` precisely so a machine
+without the pack would not render SMALLER — and changing it would mean
+running the first pass at 640 for a 1024 request on a model authored at
+1920x1080. The defect is that **nobody said so, at either end**:
+
+- the tool told the model `width`/`height` were the output size;
+- and the panel could not have corrected itself if it wanted to, because
+  `import_file` returned `{name, id}` and nothing else. The panel imported
+  a 1640x1640 file into the user's project and the only record of its
+  size anywhere was the file.
+
+So every decision made after a generation — a comp built to hold it, a
+scale, a position — was made from the number that had been REQUESTED.
+
+### The fix, both ends
+
+**1. Say what the size becomes (`extension/js/comfy.js`).** `injectParams`
+now records every node whose size it set, and `outputScaleFrom` walks
+FORWARD from each one, through consumers, to the node that writes a file,
+accumulating the factor. One line lands in `applied`:
+
+    size 1024x1024 on node 500 is enlarged 1.6x before this template
+    saves, so the file will be 1640x1640 - width/height set the size it
+    GENERATES at, not the size it writes
+
+The arithmetic is the node's own, and that detail is the whole test:
+1024 x 1.6 is 1638.4, but a LATENT upscale lands on the /8 grid and
+multiplies back out, so the answer is **1640**. Predicting 1638 would
+have been a plausible-sounding lie.
+
+**It is silent by the same rule the weight check ships under (0.10.20):**
+an upscale whose factor lives in a `.pth` rather than in a widget, a
+factor behind a link, a widget that is not a positive number, two output
+branches that disagree, a chain reaching no output at all, and a caller
+who set no size — every one of those produces nothing rather than a
+number that might be wrong. An absolute resize downstream RESETS the
+factor to 1, because `injectParams` has just written the caller's own
+numbers into it and from there the request is the truth again.
+
+**2. Measure what was imported (`extension/jsx/hostscript.jsx`).**
+`import_file` returns `width`/`height` — AE has measured the file by the
+time `importFile` returns — plus `duration`/`frameRate` for media that
+has them. A still reports NEITHER rather than zero, so "no duration"
+cannot read as "0 seconds". The reads are guarded: `importFile` does not
+always answer with an AVItem (an `.aep` comes back as a FolderItem) and a
+host object with no `width` must not take the tool down. `comfy_generate`
+hoists the measurement to `data.outputSize`.
+
+`import_as_layer` already reported `sourceSize`, so it needed nothing.
+
+### Verification
+
+- **`scripts/output-size-probe.js` on the real card, both runs green.**
+  It makes the prediction from the panel's own code BEFORE it renders,
+  then reads the saved PNG's own IHDR header — the file the user gets,
+  not ComfyUI's opinion of it:
+  - 512x512 asked -> predicted 816x816 -> **measured 816x816**, 10 s.
+    Plain arithmetic would have said 819, so the /8 grid is measured here
+    rather than assumed.
+  - 1024x1024 asked -> predicted 1640x1640 -> **measured 1640x1640**,
+    14 s. That is the exact number this bullet was filed with.
+  It never touches AE (`import: false`) and never calls the arbiter, so
+  no chat model was stopped for it.
+- **`tests/test-comfy-output-size.js`, 23 checks** — the note, the
+  substituted class, an un-set dimension scaling with the template's own,
+  image-space vs latent rounding, two upscales compounding, and seven
+  distinct silences. Mutation-tested: replacing the /8-grid rounding with
+  plain rounding fails 5 of them. The shipped template is replayed
+  against both field numbers.
+- **Real-AE harness: 533/533** (was 532 — the new step is *"import_file
+  reports the size AE measured, not one we asked for"*, which is what
+  proves AE really answers 240x180 and really omits duration and
+  frameRate for a still; no stub could have settled that).
+- `tests/test-frame-roundtrip.js` +5 checks against the real hostscript:
+  a measured still, an audio file reporting duration and NO 0x0 size, and
+  a FolderItem-shaped item whose every property throws.
+- **Full stub sweep: 62/62 test files exit 0.** capability-report
+  `--check` and workflow-hash-history `--check` both fresh.
+
+### Assumptions written down
+
+- **Report, do not compensate.** Pre-dividing the request by 1.6 would
+  make `width` mean the output size, but it would also run a model
+  authored at 1920x1080 at 1200x675 and change what it draws. The bullet
+  itself calls the graph's behaviour deliberate, so the contract was
+  corrected instead of the graph.
+- **The note fires only when the caller SET a size.** A caller who passed
+  none gets the template's authored size and no note — the mismatch this
+  item is about cannot arise. The real size still comes back through
+  `outputSize` either way.
+
+### Version
+
+`node scripts/bump-version.js patch` -> **0.10.21**. Shipped behaviour: a
+generation says what size it will write, and an import says what size it
+got.
+
+### Notes for whoever runs the next pass
+
+- Machine state: AE running, no dialog open, project untouched (nothing
+  this pass ran imports into it). ComfyUI still up on 8188, queue idle;
+  the two probe renders are in `logs/output-size/`, which is gitignored.
+  The chat model was never stopped.
+- **Section 7 now has nothing left that this machine can move on its
+  own.** What is open there is open on someone else: sd15 / sdxl /
+  wan22-5b want ~26 GB of weights AND templates the panel does not ship;
+  minimax-h3 wants the owner to repoint their ComfyUI (see 0.10.19 and
+  0.10.20 before touching it); the four `workflowTemplate`-less catalog
+  entries that `recommendGen` offers anyway are filed for the remote
+  session. A pass that finds no new harness failure should say so and
+  stop rather than manufacture work.
+- Still open elsewhere: no panel UI for the mogrt export tools; no
+  `.webm`/`.webp`. `release-notes.txt` still reads "0.10.0" while the feed
+  ships 0.10.21 — remote session's release cut.
