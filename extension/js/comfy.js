@@ -1878,7 +1878,8 @@
    * Point the hidden backend at the user's external models folder (they
    * get big) via ComfyUI's own extra_model_paths.yaml mechanism. The yaml
    * lives inside OUR vendor install, so it is safe to (re)write on every
-   * boot; blank setting = the backend's built-in models folder only.
+   * boot; blank setting = the backend's built-in models folder only —
+   * plus the Comfy-Desktop shared store below, when the machine has one.
    */
   var COMFY_MODEL_SUBS = ["checkpoints", "diffusion_models", "text_encoders",
     "clip", "clip_vision", "vae", "loras", "controlnet", "upscale_models",
@@ -1893,10 +1894,26 @@
     // per-kind folder written as "kind=path" (e.g.
     // "checkpoints=D:\\SD\\ckpts").
     var roots = s.comfyModelRoots instanceof Array ? s.comfyModelRoots : [];
+    // The Comfy-Desktop app's shared auto-download store. Weights the
+    // Desktop downloader already fetched live here and are declared in no
+    // config file, so without this section the hidden backend prices a
+    // job the panel can see and then cannot load it (the H3 gap, measured
+    // 2026-08-30). Search it, read-only; never a download target.
+    var sharedStore = null;
+    try {
+      var proc = global.AEBridge.nodeRequire("process");
+      var localApp = proc.env && proc.env.LOCALAPPDATA;
+      if (localApp) {
+        var cand = path.join(localApp, "Comfy-Desktop", "ComfyUI-Shared",
+                             "models");
+        if (fs.existsSync(cand)) sharedStore = cand;
+      }
+    } catch (eP) {}
     var yamlPath = path.join(install.root, "ComfyUI",
                              "extra_model_paths.yaml");
-    if (!dir && !roots.length) {
-      // Setting cleared — remove a previously written mapping.
+    if (!dir && !roots.length && !sharedStore) {
+      // Setting cleared and nothing shared to point at — remove a
+      // previously written mapping.
       try { if (fs.existsSync(yamlPath)) fs.unlinkSync(yamlPath); }
       catch (eU) {}
       return null;
@@ -1942,6 +1959,14 @@
           }
         }
         n++;
+      }
+      if (sharedStore) {
+        lines.push("comfy_desktop_shared:");
+        lines.push("  base_path: " + sharedStore.replace(/\\/g, "/"));
+        for (k = 0; k < COMFY_MODEL_SUBS.length; k++) {
+          lines.push("  " + COMFY_MODEL_SUBS[k] + ": " +
+                     COMFY_MODEL_SUBS[k]);
+        }
       }
       fs.writeFileSync(yamlPath, lines.join("\n") + "\n");
       return yamlPath;
@@ -2112,6 +2137,7 @@
     classInstalled: classInstalled,
     missingWeights: missingWeights,
     resolveOptionalNodes: resolveOptionalNodes,
+    MODEL_SUBS: COMFY_MODEL_SUBS,
     _applyExtraModelPaths: applyExtraModelPaths   // exposed for tests
   };
 

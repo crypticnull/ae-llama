@@ -119,8 +119,41 @@ $logFile = Join-Path $logDir ("local-agent-" + $stamp + ".log")
 # The detached run is windowless -- the pid file is how it gets stopped.
 Set-Content -Path (Join-Path $logDir 'local-agent.pid') -Value $PID -Encoding ASCII
 
+# The CLI's output arrives with ANSI color escapes and UTF-8 punctuation.
+# Echoed raw on Windows PowerShell 5.1 that renders as garbage (ESC[36m,
+# mojibake for dashes/quotes), and -Encoding ASCII turns every non-ASCII
+# char into '?'. Scrub each line once: drop escape sequences and control
+# chars, transliterate the common punctuation, '?' only as the last
+# resort. The log stays readable in Notepad AND in the console.
+$script:escChar = [char]27
+$script:ansiRe = New-Object System.Text.RegularExpressions.Regex `
+    ([string]$script:escChar + '\[[0-9;?]*[A-Za-z]')
+function Clean-Line([string]$s) {
+    if ($null -eq $s) { return '' }
+    $s = $script:ansiRe.Replace($s, '')
+    $sb = New-Object System.Text.StringBuilder
+    foreach ($ch in $s.ToCharArray()) {
+        $c = [int]$ch
+        if ($c -lt 32 -and $c -ne 9) { continue }
+        if ($c -le 126) { [void]$sb.Append($ch); continue }
+        switch ($c) {
+            0x2013 { [void]$sb.Append('-') }
+            0x2014 { [void]$sb.Append('--') }
+            0x2018 { [void]$sb.Append("'") }
+            0x2019 { [void]$sb.Append("'") }
+            0x201C { [void]$sb.Append('"') }
+            0x201D { [void]$sb.Append('"') }
+            0x2022 { [void]$sb.Append('*') }
+            0x2026 { [void]$sb.Append('...') }
+            0x2192 { [void]$sb.Append('->') }
+            default { [void]$sb.Append('?') }
+        }
+    }
+    return $sb.ToString()
+}
+
 function Write-Log([string]$msg) {
-    $line = '[' + (Get-Date -Format 'HH:mm:ss') + '] ' + $msg
+    $line = '[' + (Get-Date -Format 'HH:mm:ss') + '] ' + (Clean-Line $msg)
     Write-Host $line
     Add-Content -Path $logFile -Value $line -Encoding ASCII
 }
@@ -162,6 +195,11 @@ Hard limits for this session:
 - When you push a fix you VERIFIED in real AE, bump the patch version
   first: node scripts/bump-version.js patch. Without it CI publishes a
   feed the panel ignores, so the fix never reaches a real panel.
+- BUT: a pass that never touches extension/ (harness scripts, tests,
+  docs, workplan bookkeeping) must NOT bump. A bump with no panel
+  change publishes an update that installs nothing new, and every
+  test user pays the reinstall for it. Bump exactly when extension/
+  changed, skip exactly when it did not.
 - Do not bump minor/major, do not merge to main, do not open or merge a
   PR. Those belong to the remote session.
 - If the harness cannot run at all (AE closed, scripting file access
@@ -250,7 +288,7 @@ for ($i = 1; $i -le $Iterations; $i++) {
     $passLines = New-Object System.Collections.Generic.List[string]
     try {
         & $ClaudePath @claudeArgs 2>&1 | ForEach-Object {
-            $line = [string]$_
+            $line = Clean-Line ([string]$_)
             $passLines.Add($line)
             Add-Content -Path $logFile -Value $line -Encoding ASCII
             Write-Host $line

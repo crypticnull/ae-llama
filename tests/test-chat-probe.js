@@ -782,7 +782,11 @@ assert(/rolledBack/.test(probeSrc),
 // probe went on reporting passes while testing a product the panel no
 // longer was.
 const PANEL_ONLY = {
-  callHostBatch: "main.js only hands it to SelfTest, not to its round loop"
+  callHostBatch: "main.js only hands it to SelfTest, not to its round loop",
+  catalogModelStatus: "settings UI rows (gen model manager), never a " +
+    "chat round — covered by test-gen-model-manager.js",
+  removeCatalogWeights: "settings Remove button, never a chat round — " +
+    "covered by test-gen-model-manager.js"
 };
 const used = src => new Set(
   (src.match(/Tools\.[a-zA-Z]+/g) || []).map(m => m.split(".")[1]));

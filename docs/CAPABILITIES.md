@@ -131,6 +131,12 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
   during generation" (auto/always/never), a VRAM override for
   impersonating any tier, the combined hardware-tier line, one-click
   real-AE self-test with copyable report.
+- Per-model generation-weight rows (ComfyUI submenu): each catalog model
+  with its measured on-disk size and where it lives, Download with
+  progress/cancel into the panel's own model folders, Remove with
+  receipts (freed MiB; files kept because they sit in the user's own
+  folders or the Comfy-Desktop shared store are reported, never
+  deleted).
 - Branding: llama topbar icon, "Ask the llama to do something in After
   Effects" placeholder, Alpha channel label.
 

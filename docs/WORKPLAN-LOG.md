@@ -9784,3 +9784,52 @@ got.
 - Still open elsewhere: no panel UI for the mogrt export tools; no
   `.webm`/`.webp`. `release-notes.txt` still reads "0.10.0" while the feed
   ships 0.10.21 — remote session's release cut.
+
+## 2026-08-30 (remote session) — 0.11.0 cut: gen model manager + shared-store yaml + section 7b queued
+
+- Changed: extension/js/tools.js (`catalogModelStatus` /
+  `removeCatalogWeights` + helpers — status and fenced deletion of
+  catalog weights; also replaced a literal NUL byte on the
+  comfyModelRoots dedupe line with the `\u0000` escape, which had made
+  the file read as binary to grep/diff, and deduped the doubled
+  `_vramArbiter` export), extension/js/setup.js (`downloadGenWeight` +
+  `_genWeightDest`), extension/js/comfy.js (`applyExtraModelPaths` now
+  writes the Comfy-Desktop shared store into the hidden backend's yaml;
+  exports `MODEL_SUBS`), main.js/index.html/style.css (per-model
+  Download / Remove rows in the ComfyUI settings section),
+  tests/test-gen-model-manager.js (40 checks), docs/CAPABILITIES.md
+  (curated half), docs/WORKPLAN.md (new section 7b),
+  scripts/run-local-agent.ps1 (bump rule: extension/ untouched = no
+  bump), release-notes.txt (0.11 scope), version bump to 0.11.0.
+- Harness: stub suite green in the remote container (the two known
+  container-only skips: test-engine-assets spawns powershell,
+  test-ffmpeg-export needs Windows output paths); real-AE verification
+  of the new settings rows is queued as a 7b bullet.
+- Notes: owner approved the section-7 downloads and the H3 yaml fix in
+  plain words — 7b carries the exact scope, one bullet per pass,
+  smallest first. The 8 GB intermediate question is closed (per-call
+  `maxIntermediateGB`, disk guard not format limit). Remote-side items
+  still open: rollback design review, `comfy_generate ->
+  import_as_layer`, bundled ComfyUI installer (#21), Phase E.
+
+## 2026-08-30 (remote session, later) — usefulness tests + NL matrix queued + log scrubber
+
+- Changed: docs/USEFULNESS-TESTS.md (NEW — 30 scenarios with phrasing
+  variants and useful/harmless/harmful verdicts; the `probe` column is
+  the automation contract), docs/WORKPLAN.md (section 8: paraphrase
+  matrix in chat-probe, owner-requested; section 9: evolution proposals
+  for the owner to prioritize), scripts/run-local-agent.ps1
+  (`Clean-Line`: strips ANSI escapes and control chars from captured
+  CLI output, transliterates UTF-8 punctuation to ASCII — the log and
+  console were showing escape codes and mojibake under Windows
+  PowerShell 5.1's ASCII log encoding).
+- Harness: docs + one .ps1 function; no extension/ change, NO bump (the
+  new rule, applied). Stub suite untouched by these files.
+- Notes: Clean-Line is UNPARSED by any real PowerShell (no pwsh in the
+  remote container) — section 8's first bullet includes eyeballing the
+  first new log; if the loop fails to start, that function is the first
+  suspect. The NUL-byte class got a second hit today: the remote
+  session itself pasted a literal NUL into THIS log while documenting
+  the tools.js NUL fix (scrubbed same day) — worth remembering that the
+  escape sequence renders as the character it names in some paste
+  paths.

@@ -1191,7 +1191,9 @@ GPU. This item is that touch, one pass per bullet, smallest first:
     Still open, each its own pass: **sd15, sdxl, wan22-5b** need ~26 GB
     downloaded AND a per-model workflow template the panel does not ship
     (`--list` reports exactly this), and **minimax-h3** needs a backend
-    that can see its weights.
+    that can see its weights. **Both blockers cleared 2026-08-30 —
+    see section 7b below; the downloads and the yaml write are
+    owner-approved, do them.**
 
 - ~~**NEW, filed 2026-08-30 by the probe above: the panel decides a model
   is available by looking at the DISK, and the backend decides by its own
@@ -1321,6 +1323,140 @@ GPU. This item is that touch, one pass per bullet, smallest first:
     costs nothing on a free card: the predicate answers on poll one.
     `oom-probe.js` gained the verdict and is green on it; four new checks
     in `tests/test-vram-arbiter.js` fail on the reverted file.
+
+## 7b. OWNER-APPROVED 2026-08-30: finish the catalog measurements
+
+The owner approved (in so many words: "bake in the other models for the
+rest of the tier package. Test on this machine, it has the space") the
+downloads that section 7 was blocked on, and settled the H3 question
+("if you know where the models are just use them"). The panel side
+shipped with 0.11.0: settings now has per-model Download / Remove rows
+(`Tools.catalogModelStatus` / `removeCatalogWeights`,
+`Setup.downloadGenWeight`, `tests/test-gen-model-manager.js`), and
+`applyExtraModelPaths` writes the Comfy-Desktop shared store into the
+hidden backend's yaml. What is left needs this machine. One bullet per
+pass, smallest first:
+
+- **Un-blind the running ComfyUI (H3 unblock, do this first — it is one
+  file).** The running instance was launched `--base-directory
+  Documents\ComfyUI` and reads `extra_model_paths.yaml` from that base
+  directory; none exists there. Write one declaring the Comfy-Desktop
+  shared store (`%LOCALAPPDATA%\Comfy-Desktop\ComfyUI-Shared\models`,
+  every kind folder mapped — copy the section
+  `Comfy._applyExtraModelPaths` writes, it is the same yaml dialect).
+  Restart the backend, then verify the fix through the panel's own
+  refusal machinery: `scripts/weight-availability-probe.js` must flip
+  from "H3 refused, four weights named" to clean, and
+  `Comfy.missingWeights` on the H3 template must answer empty. THEN
+  measure minimax-h3 with `scripts/catalog-vram-probe.js` (this card is
+  Blackwell, so the shipped nvfp4 template applies) and write the
+  reading into version.js the way krea2 carries its own.
+- **Templates for the template-less entries.** sd15, sdxl and wan22-5b
+  have no `workflowTemplate`, which both blocks the probe and lets
+  `recommendGen` offer models `comfy_generate` cannot render (the open
+  "smaller, for the remote session" item above — fix it HERE, the
+  running backend is what makes a template verifiable). Author minimal
+  API-format graphs (checkpoint -> sampler -> vae -> save; wan22 per its
+  repackaged workflow docs), name them `AE_LLAMA_SD15_V1` /
+  `AE_LLAMA_SDXL_V1` / `AE_LLAMA_WAN22_V1`, set `workflowTemplate` on
+  the catalog entries, and give each a models manifest with `file`+`dir`
+  so the arbiter can price it from the disk. Verify one real render each
+  through `comfy_generate` before calling the template shipped.
+- **Download + measure, one entry per pass: sd15 (2 GB), then sdxl
+  (6.6 GB), then wan22-5b (17.3 GB).** Use the panel's own settings
+  Download button path (`Setup.downloadGenWeight`) — that is field
+  verification of the new rows, note how it behaves in the log — then
+  `catalog-vram-probe.js`, then the measured block into version.js
+  (`measured: true`, `measuredVramMB`, `measuredSeconds`, `measuredAt`,
+  `measuredOn`), correcting `minVramGB` wherever the reading disproves
+  it, with the ripple check on `recommendGen` picks that krea2's
+  correction established as the pattern.
+- **Verify the settings rows in real AE while the disk is in each
+  state** (absent -> partial mid-download -> present -> removed):
+  labels, measured sizes, the shared-store "in a folder the panel
+  doesn't manage" copy on the H3 row, Remove receipts in chat. Add a
+  selftest.js step for `catalogModelStatus` against a temp root if one
+  does not exist yet.
+- **Optional, last, owner-approved on space: minimax-h3-int8's own
+  encoder** (~25.3 GB, the non-Blackwell variant). Measuring it on this
+  Blackwell card still answers "does 32 GB hold the int8 encoder at
+  all", which is the entry's open `note:` question. Skip if the night
+  runs short — it gates nothing.
+
+After each pass: patch bump (these are panel-visible catalog/measurement
+changes), push, log. The 8 GB intermediate cap question is CLOSED (owner
+asked, answered from the 0.10.17 measurements — it is a per-call
+`maxIntermediateGB` disk guard now, not a format limit; no render test
+needed).
+
+## 8. Natural-language robustness — the paraphrase matrix (local; owner-requested 2026-08-30)
+
+The owner's words: "a full natural language pass ensuring that
+functions and actions can be adequately used with varied inputs rather
+than exact prescribed trigger words." The instrument exists —
+`scripts/chat-probe.js` already drives the REAL model through the REAL
+panel code against the canned host — what it lacks is VARIANCE. One
+bullet per pass:
+
+- **Wire the paraphrase matrix into chat-probe.** Every scenario in
+  `docs/USEFULNESS-TESTS.md` marked `probe` becomes a probe step that
+  runs its VARIANTS (the doc's alternate phrasings, plus casual, vague,
+  typo'd, and compound forms — 3 to 5 per scenario). Score each
+  phrasing: right tool + right target = pass; honest grounded refusal
+  or a sensible clarifying question = pass; wrong-target mutation that
+  claims success = the failure class that matters, log it loudly.
+  Acceptance per scenario: no variant may do harm, and at most one may
+  miss where the canonical passes.
+- **Report, don't fix, in the same pass.** Append a table to
+  WORKPLAN-LOG per run: scenario / phrasing / chosen tool / verdict.
+  Recurring misses are WORDING dependencies; the fix lives in tool
+  descriptions and the system prompt (tools.js), which changes model
+  behavior — make the doc change, re-run the matrix to show the flip,
+  patch-bump. One tool-doc change per pass so a regression is
+  attributable.
+- **Anti-drift:** the doc's `probe` column and the probe's step list
+  must agree — add the check to test-chat-probe.js so a scenario added
+  to one place fails until it reaches the other.
+- **First pass housekeeping check:** eyeball the newest
+  `logs\local-agent-*.log` — the Clean-Line scrubber (ANSI escapes,
+  UTF-8 punctuation transliteration) shipped 2026-08-30 unparsed by any
+  Windows PowerShell; if the loop dies on a syntax error or the log
+  still shows mojibake, that fix is the pass.
+
+## 9. Evolution track — proposals for the owner to prioritize
+
+Filed 2026-08-30 after the 0.11.0 cut. NOT approved work — the owner
+picks; remote builds most of these (features/minors), local verifies.
+Ordered by leverage-per-effort as the remote session sees it:
+
+1. **Generate-and-place as the default.** `comfy_generate` ->
+   `import_as_layer` chained so "make me a background" ENDS in the comp,
+   not the project panel (the gap chat-probe logs today). Small; mostly
+   prompt + one tool-doc rule.
+2. **"Undo that."** Wire each chat round's undo group to a natural
+   command, so any round is one sentence away from reverted. Trust
+   feature: it makes every other test in USEFULNESS-TESTS.md cheaper to
+   run.
+3. **Beat markers.** `audio_to_keyframes` sibling that drops comp
+   markers on onsets/beats, so "cut on the beat" / "stagger to the
+   music" become rig targets. The DSP is the same file the keyframe
+   tool already reads.
+4. **Action macros.** Save a successful round (the executed command
+   list, parameterized by target) under a name; replay on another comp/
+   selection. Repeat client work is the same five asks every week.
+5. **Look transfer.** "Make comp B look like comp A": copy effects +
+   settings + text styles with a receipt of what could not carry over.
+6. **Voice input.** whisper.cpp is already bundled for captions; a mic
+   button is the panel's own dogfood of it.
+7. **Project memory.** Cache a project outline per session so big
+   projects stop paying list_* round-trips every ask; staleness rules
+   from the same honesty playbook (measure, never assume).
+8. **MOGRT panel UI + .webm/.webp export** — both filed as gaps in the
+   log 2026-08-29.
+9. **Bundled ComfyUI installer + per-tier curated stacks** (#21 + tier
+   P5) — zero-setup generation for test users.
+10. **Phase D/E** as already queued (animation utilities largely landed
+    via 5.1–5.7; roto/tracking hybrids remain the big one).
 
 ## Out of scope for the local session (remote builds these)
 

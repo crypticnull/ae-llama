@@ -1140,7 +1140,7 @@
     // declares the same tree `comfyDir` already names on this machine.
     var seen = {}, unique = [];
     for (var u = 0; u < roots.length; u++) {
-      var sig = String(roots[u].kind) + " " +
+      var sig = String(roots[u].kind) + "\u0000" +
                 String(roots[u].path).toLowerCase();
       if (seen[sig]) continue;
       seen[sig] = true;
@@ -1188,6 +1188,192 @@
       if (bytes > 0) return Math.round(bytes / 1048576);
     } catch (e2) {}
     return null;
+  }
+
+  /**
+   * The weight files ONE catalog entry is made of, from whichever shape
+   * the entry carries: urls[] pin a filename (the URL's basename) and a
+   * kind folder; files[] (entries whose links are not pinned yet) name
+   * bare files that register wherever they are found.
+   */
+  function catalogEntryFiles(entry) {
+    var out = [], seen = {}, i;
+    var urls = entry && entry.urls instanceof Array ? entry.urls : [];
+    for (i = 0; i < urls.length; i++) {
+      var u = urls[i] || {};
+      if (!u.url) continue;
+      var base = String(u.url).split("?")[0].split("#")[0];
+      base = base.slice(base.lastIndexOf("/") + 1);
+      if (!base || seen[base]) continue;
+      seen[base] = true;
+      out.push({ file: base, dir: u.dir || null });
+    }
+    var files = entry && entry.files instanceof Array ? entry.files : [];
+    for (i = 0; i < files.length; i++) {
+      var f = String(files[i] || "");
+      if (!f || seen[f]) continue;
+      seen[f] = true;
+      out.push({ file: f, dir: null });
+    }
+    return out;
+  }
+
+  /**
+   * Find one weight file across every root the panel knows. A pinned
+   * kind searches that kind only; a bare name searches every kind folder
+   * ComfyUI has — the same tolerance the backend itself applies.
+   */
+  function findWeightFile(file, dir, s) {
+    var fsMod, pathMod;
+    try {
+      fsMod = global.AEBridge.nodeRequire("fs");
+      pathMod = global.AEBridge.nodeRequire("path");
+    } catch (e) { return null; }
+    var roots = comfyModelRoots(s);
+    var kinds = dir ? [dir]
+      : ((global.Comfy && global.Comfy.MODEL_SUBS) || []);
+    for (var i = 0; i < roots.length; i++) {
+      var r = roots[i];
+      if (!r.path) continue;
+      for (var k = 0; k < kinds.length; k++) {
+        var candidate;
+        if (r.kind === null) {
+          candidate = pathMod.join(r.path, kinds[k], file);
+        } else if (r.kind === kinds[k]) {
+          candidate = pathMod.join(r.path, file);
+        } else { continue; }
+        try {
+          var st = fsMod.statSync(candidate);
+          if (st.size > 0) return { path: candidate, bytes: st.size };
+        } catch (e2) {}
+      }
+    }
+    return null;
+  }
+
+  /**
+   * The two roots the panel itself put files in — the Settings models
+   * folder (whose kind layout ensureDataDirs/applyExtraModelPaths
+   * created) and the hidden backend's own tree. These are the ONLY
+   * places the Remove button may reap: everything else the search finds
+   * (the user's extra roots, the Comfy-Desktop shared store, a root a
+   * config file declared) belongs to someone else's downloader.
+   */
+  function managedModelRoots(s) {
+    var pathMod;
+    try { pathMod = global.AEBridge.nodeRequire("path"); }
+    catch (e) { return []; }
+    var out = [];
+    if (s && s.comfyModelsDir) out.push(String(s.comfyModelsDir));
+    try {
+      var install = global.Setup && global.Setup.findComfyInstall
+        ? global.Setup.findComfyInstall() : null;
+      if (install && install.root) {
+        out.push(pathMod.join(install.root, "ComfyUI", "models"));
+      }
+    } catch (e2) {}
+    return out;
+  }
+
+  function isManagedPath(p, s) {
+    var pathMod;
+    try { pathMod = global.AEBridge.nodeRequire("path"); }
+    catch (e) { return false; }
+    var roots = managedModelRoots(s);
+    var full = String(pathMod.resolve(String(p))).toLowerCase();
+    for (var i = 0; i < roots.length; i++) {
+      var root = String(pathMod.resolve(roots[i])).toLowerCase();
+      if (full === root ||
+          full.indexOf(root + pathMod.sep) === 0) return true;
+    }
+    return false;
+  }
+
+  /**
+   * What is on disk for one catalog entry, file by file, with where it
+   * lives and whether that place is the panel's to clean up. This is the
+   * settings row's whole truth: present/absent, measured MiB, and
+   * managed (deletable) or somebody else's copy.
+   */
+  function catalogModelStatus(entry, s) {
+    if (!s) { try { s = global.Settings.get(); } catch (e) { s = null; } }
+    var wanted = catalogEntryFiles(entry);
+    var files = [], present = 0, presentMB = 0;
+    var anyManaged = false;
+    for (var i = 0; i < wanted.length; i++) {
+      var w = wanted[i];
+      var hit = findWeightFile(w.file, w.dir, s);
+      var row = {
+        file: w.file, dir: w.dir,
+        path: hit ? hit.path : null,
+        mb: hit ? Math.round(hit.bytes / 1048576) : null,
+        managed: hit ? isManagedPath(hit.path, s) : false
+      };
+      if (hit) {
+        present++;
+        presentMB += row.mb;
+        if (row.managed) anyManaged = true;
+      }
+      files.push(row);
+    }
+    return {
+      name: entry ? entry.name : null,
+      label: entry ? (entry.label || entry.name) : null,
+      files: files,
+      totalCount: wanted.length,
+      presentCount: present,
+      presentMB: presentMB,
+      anyManaged: anyManaged,
+      downloadable: !!(entry && entry.urls instanceof Array &&
+                       entry.urls.length)
+    };
+  }
+
+  /**
+   * Delete one catalog entry's weights from the panel-managed roots and
+   * ONLY from there. Receipts either way: what was removed (with the
+   * MiB it freed), what was left because it lives in a folder the panel
+   * does not own, and what could not be deleted (Windows holds a file
+   * the backend still has open). Nothing here ever touches the user's
+   * own collections or the Comfy-Desktop shared store.
+   */
+  function removeCatalogWeights(entry, s) {
+    if (!s) { try { s = global.Settings.get(); } catch (e) { s = null; } }
+    var fsMod;
+    try { fsMod = global.AEBridge.nodeRequire("fs"); }
+    catch (e) {
+      return { removed: [], freedMB: 0, kept: [], failed: [],
+               note: "No filesystem access — is the panel running " +
+                     "outside CEP?" };
+    }
+    var st = catalogModelStatus(entry, s);
+    var removed = [], kept = [], failed = [], freedMB = 0;
+    for (var i = 0; i < st.files.length; i++) {
+      var row = st.files[i];
+      if (!row.path) continue;
+      if (!row.managed) {
+        kept.push({ file: row.file, path: row.path,
+                    why: "not in a panel-managed folder — the panel " +
+                         "only deletes files it downloaded itself" });
+        continue;
+      }
+      try {
+        fsMod.unlinkSync(row.path);
+        removed.push({ file: row.file, path: row.path, mb: row.mb });
+        freedMB += row.mb;
+      } catch (e2) {
+        failed.push({ file: row.file, path: row.path,
+                      error: e2.message + " — if the generation backend " +
+                             "is running it may still hold this file; " +
+                             "stop it and retry" });
+      }
+    }
+    var note = "";
+    if (!removed.length && !kept.length && !failed.length) {
+      note = "Nothing of " + (st.label || "this model") + " is on disk.";
+    }
+    return { removed: removed, freedMB: freedMB, kept: kept,
+             failed: failed, note: note };
   }
 
   /**
@@ -2788,10 +2974,11 @@
     executeCommands: executeCommands,
     setGpuInfo: setGpuInfo,
     setProgressSink: function (fn) { progressSink = fn; },
-    _vramArbiter: VramArbiter,        // exposed for tests
+    catalogModelStatus: catalogModelStatus,
+    removeCatalogWeights: removeCatalogWeights,
+    _vramArbiter: VramArbiter,        // exposed for tests and probes
     _genNeedMBFor: genNeedMBFor,      // exposed for tests
     _comfyModelRoots: comfyModelRoots, // exposed for tests
-    _vramArbiter: VramArbiter,        // exposed for tests and probes
     _weightRefusalFor: weightRefusalFor,          // exposed for tests
     _describeMissingWeights: describeMissingWeights, // exposed for tests
     _parseComfyPathsYaml: parseComfyPathsYaml,   // exposed for tests
