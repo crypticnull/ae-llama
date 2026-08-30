@@ -12,7 +12,7 @@ feature they describe. Use this to look at the product whole and ask
 
 _Regenerate with `node scripts/capability-report.js` — CI fails if this section is stale._
 
-**75 tools** (64 mutating, 11 read-only; 69 host-side, 6 panel-side).
+**77 tools** (66 mutating, 11 read-only; 71 host-side, 6 panel-side).
 
 | Tool | Does | Writes | Side | Stub tests | Suite steps |
 |---|---|---|---|---|---|
@@ -49,7 +49,9 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `duplicate_comp` | Duplicate a composition | yes | host | 2 | 5 |
 | `duplicate_layer` | Duplicate a LAYER inside its comp (use duplicate_comp only for whole compositions) | yes | host | 1 | 10 |
 | `export_gif` | Export a comp as an animated GIF | yes | panel | — | — |
+| `export_mogrt` | Write a comp out as a .mogrt Motion Graphics template | yes | host | 1 | — |
 | `export_social` | Export a comp as an H.264 .mp4 (or .mov) sized for posting, AUDIO INCLUDED when the comp has any | yes | panel | — | — |
+| `expose_property` | Expose one property in the comp's ESSENTIAL GRAPHICS panel, so an editor can change it in Premiere | yes | host | 1 | — |
 | `for_each_layer` | Run a PER-LAYER tool once per target layer in ONE call (max 200 layers) — the batch executor for anything without its own layers arg: {tool: 'apply_effect', args: {effect: 'Gaussian Blur'}} blurs every target | yes | host | 1 | 6 |
 | `get_bounds` | MEASURE a layer's rendered content without touching it — how wide the text actually is, where the shape sits in the frame, whether anything overflows | no | host | 1 | 32 |
 | `get_comp_details` | Layers of a comp with index, name, type, timing, effects | no | host | 3 | 30 |
@@ -95,7 +97,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 **Coverage gaps (computed):**
 
 - Host tools with NO stubbed test: `add_camera`, `add_shape_layer`, `add_solid`, `apply_effect`, `delete_layer`, `import_file`, `link_property`, `set_effect_param`, `set_layer_timing`
-- Host tools never exercised by the self-test suite: none
+- Host tools never exercised by the self-test suite: `export_mogrt`, `expose_property`
 
 <!-- END GENERATED TOOL INVENTORY -->
 
@@ -369,8 +371,19 @@ Queued (see WORKPLAN for owners/order):
   with `range: 'workArea'` and `snapshot_frame`'s resolution override are
   now exercised in real AE, the audio converter's own key count being the
   witness that the work area landed and was put back.
-- Feature track not yet built: .mogrt export, whisper captions, ffmpeg
-  exports (items 5.9-6).
+- Essential Graphics is now reachable: `expose_property` puts one
+  property in the comp's EG panel and `export_mogrt` writes the comp out
+  as a .mogrt for Premiere. Both are made almost entirely of what AE does
+  silently -- a CANCELLED export (a font that is not installed, and its
+  alert answered anywhere but OK) returns TRUE and writes nothing, so the
+  tool stats the file rather than trusting the boolean; the export needs
+  the project saved AND clean, and dirties it again on success, so a
+  second export with no save between is a silent failure; the path is a
+  FOLDER and the file name comes from the template name with its spaces
+  stripped. There is no rename and no remove -- AE 2026 ships neither --
+  and controller indices renumber on every add, newest first. NOT yet
+  covered by the real-AE suite: the export raises three progress dialogs
+  the harness triage has not been taught.
 - Image/video generation is not yet seamless: no frame-aware img2img,
   no mask-driven inpainting, no depth/parallax, no upscale/interpolate.
   The Krea 2 workflow now ships adapted and runnable

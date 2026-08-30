@@ -799,9 +799,36 @@ the full loop: snapshot -> import -> pixel dimensions match the comp.
 Generation wiring stays remote — this is the comp<->file bridge it will
 stand on.
 
-### 5.9 .mogrt export (LAST item of any night — dialog risk)
-Probe with everything pre-cleaned (project saved, text using a font
-verified via isSubstitute===false): set
+### 5.9 .mogrt export — PROBE + BUILD DONE 2026-08-30
+`expose_property` and `export_mogrt` are built, documented and covered by
+95 stub checks in `tests/test-mogrt.js`, and driven end to end in real AE:
+a comp with three controllers went out as a genuine ZIP (`PK\x03\x04`,
+11 822 b) in 3.6 s. The export DOES run headless, with four conditions —
+project SAVED and CLEAN, a FOLDER path, a legal template name, and
+`beginSuppressDialogs()`.
+
+The item's own **LAST-item-of-the-night rule is struck**: it deferred the
+item 22 times, and the machinery it was written against (the harness's
+dialog triage, 2026-08-28) did not exist when it was written.
+
+Two things the pass found that no probe had: **a successful export
+invalidates the held `app.project` reference as well as the CompItem**,
+which made a tool that had already written the file report "Object is
+invalid"; and AE writes the template name **verbatim** — the 2026-08-29
+probe's "AE strips the spaces" was that probe reading back a name that
+never had spaces in it, compounded by `File.name` being URI-ENCODED.
+
+**LOCK-IN (pass c) is what is LEFT, and it is not free:** the export
+raises three progress dialogs that are not errors — "Creating Motion
+Graphics Template", "Exporting Motion Graphics Template", "Verifying
+Adobe Fonts...". They are `#32770`s, so the harness triage will see them,
+and WM_CLOSE on the font one is CANCEL — which is how a cancelled export
+answers `true` and writes nothing. Either the suite stays off the export
+path (expose_property alone is safe) or the triage learns those three
+titles first. A suite step must also not save the user's project.
+
+Original text: Probe with everything pre-cleaned (project saved, text
+using a font verified via isSubstitute===false): set
 comp.motionGraphicsTemplateName, property.canAddToMotionGraphicsTemplate,
 addToMotionGraphicsTemplateAs, then
 exportAsMotionGraphicsTemplate(true, path). Log which steps raise

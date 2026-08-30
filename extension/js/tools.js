@@ -545,6 +545,27 @@
             "template names for render_comp. Installed templates differ " +
             "per machine — never guess a name, list them.",
       args: "{}" },
+    { name: "expose_property", mutating: true,
+      desc: "Expose one property in the comp's ESSENTIAL GRAPHICS panel, " +
+            "so an editor can change it in Premiere. This is step one of " +
+            "making a .mogrt template. AE names the controller after the " +
+            "LAYER (transform/text) or the EFFECT (effect parameters), " +
+            "never after the property, and it allows duplicate names — " +
+            "so always pass a 'label' the editor will understand. There " +
+            "is no rename and no remove: AE ships neither, and a " +
+            "controller cannot be exposed twice.",
+      args: "{comp?: string, layer?: name|index (omit = selected), property: string (e.g. 'opacity', 'position', 'effect.Tint.Amount to Tint', or a full path), label?: string}" },
+    { name: "export_mogrt", mutating: true,
+      desc: "Write a comp out as a .mogrt Motion Graphics template. " +
+            "Needs at least one exposed control (expose_property) and a " +
+            "project that is SAVED and has NO unsaved changes — AE " +
+            "silently writes nothing otherwise, so pass {save: true} to " +
+            "save the project first. The FILE NAME comes from the " +
+            "template name, not from 'folder'. AE reports success even " +
+            "when it wrote nothing, so this tool checks the file and " +
+            "reports its real size; a failure usually means a font in " +
+            "the comp is not installed.",
+      args: "{comp?: string, folder: string (ABSOLUTE folder), name?: string (template name = file name; default the comp's), save?: bool = false (save the project first), overwrite?: bool = false}" },
     { name: "render_comp_audio", mutating: true,
       desc: "Render ONLY the comp's audio to a file (AE's audio-only " +
             "output module, picked for you). Refuses when no layer in " +

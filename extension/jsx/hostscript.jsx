@@ -8816,7 +8816,8 @@ var AELL_PER_LAYER_LIST = [
   "add_captions", "add_control", "add_keyframe", "add_marker", "add_mask",
   "add_shape_content", "add_text_animator", "apply_effect",
   "apply_expression_preset", "audio_to_keyframes",
-  "center_anchor_point", "delete_layer", "duplicate_layer", "link_property",
+  "center_anchor_point", "delete_layer", "duplicate_layer", "expose_property",
+  "link_property",
   "set_effect_param", "set_expression", "set_layer_3d", "set_layer_parent",
   "set_layer_timing", "set_mask", "set_mask_path", "set_property",
   "set_text_style", "set_track_matte", "set_transform",
@@ -9359,6 +9360,424 @@ AELL_TOOLS.apply_preset = function (args) {
   return AELL_okay(out);
 };
 
+// ------------------------------------------------ .mogrt export (5.9)
+//
+// Essential Graphics: expose a property as a CONTROLLER, then write the
+// comp out as a .mogrt an editor can drop into Premiere. Both halves are
+// built on a probe against real AE 2026 (26.3x87, WORKPLAN-LOG
+// 2026-08-30), and nearly every branch below is one of AE's silent
+// answers turned into a spoken one. The two that shaped the design:
+//
+//  - A CANCELLED export returns `true` and writes NOTHING. Every comp
+//    holding a text layer raises a "fonts were not synced" alert whose
+//    Cancel button stops the export, and the call still answers true.
+//    So `true` is not evidence: the file is stat'd, exactly as
+//    snapshot_frame reads the PNG's own IHDR rather than trusting the
+//    call. app.beginSuppressDialogs() is the fix and it is REQUIRED,
+//    not defensive.
+//  - The export needs the project SAVED **and CLEAN**. A saved-but-dirty
+//    project returns false in ~390 ms and writes nothing, and a
+//    SUCCESSFUL export dirties the project again - so two exports in a
+//    row with no save between them is one export and one silent failure.
+
+/* Characters Windows will not put in a filename. Measured: a template
+ * name holding one of these exports for 3.7 s, returns false and writes
+ * nothing at all, so it is refused before the clock starts. */
+function AELL_mogrtBadName(name) {
+  var bad = [], seen = {}, s = String(name);
+  for (var i = 0; i < s.length; i++) {
+    var c = s.charAt(i);
+    if ("\\/:*?\"<>|".indexOf(c) !== -1 && !seen[c]) {
+      seen[c] = 1;
+      bad.push(c);
+    }
+  }
+  return bad;
+}
+
+/* The file AE writes is the template name, VERBATIM, plus ".mogrt" -
+ * spaces and all (measured: "P60 Brand Card" -> "P60 Brand Card.mogrt").
+ * This is only the expected name; the folder diff below is where the
+ * reported path actually comes from, because a name AE transformed and
+ * a file AE never wrote must not look the same from here. */
+function AELL_mogrtFileName(name) {
+  return String(name) + ".mogrt";
+}
+
+/* Every .mogrt in a folder, name -> "<bytes>@<modified>". Taken before
+ * and after the export: the file AE really wrote is the one that
+ * appeared, or the one whose stamp moved. The modified time is in there
+ * because an overwrite can land on the same byte count. */
+function AELL_mogrtScan(folderPath) {
+  var out = {}, list = null;
+  try { list = (new Folder(folderPath)).getFiles("*.mogrt"); }
+  catch (e) { return out; }
+  if (!list) return out;
+  for (var i = 0; i < list.length; i++) {
+    try {
+      if (!(list[i] instanceof File)) continue;
+      var when = "";
+      try { when = String(list[i].modified); } catch (eM) { when = ""; }
+      // File.name is URI-ENCODED: a template called "Brand Card" comes
+      // back as "Brand%20Card.mogrt", and reporting that path sends the
+      // user looking for a file that is not there under that name.
+      var nm = "";
+      try { nm = String(list[i].displayName || ""); } catch (eD) { nm = ""; }
+      if (!nm) {
+        try { nm = decodeURI(String(list[i].name)); }
+        catch (eU) { nm = String(list[i].name); }
+      }
+      out[nm] = { bytes: list[i].length, stamp: when };
+    } catch (e2) {}
+  }
+  return out;
+}
+
+/* The file this export wrote, or null. Only two things count as
+ * evidence: a .mogrt that was not there before, or one whose size or
+ * modified stamp moved. Nothing else may -- "the folder holds one
+ * .mogrt, so that must be it" would hand back a file some earlier
+ * export wrote, and a tool whose whole reason for existing is that AE
+ * reports success without writing anything cannot afford that. The name
+ * AE was expected to use only breaks a tie. Polled, because AE hides a
+ * file it has just written for a moment: the fact render_comp and
+ * snapshot_frame both settle for. */
+function AELL_mogrtFound(folderPath, before, expected, tries) {
+  var n = tries > 0 ? tries : 10;
+  for (var t = 0; t < n; t++) {
+    var after = AELL_mogrtScan(folderPath), name, hit = null;
+    for (name in after) {
+      if (!after.hasOwnProperty(name)) continue;
+      var was = before[name], now = after[name], cand = null;
+      if (typeof was === "undefined") {
+        cand = { name: name, bytes: now.bytes, replaced: false };
+      } else if (was.bytes !== now.bytes || was.stamp !== now.stamp) {
+        cand = { name: name, bytes: now.bytes, replaced: true };
+      }
+      if (cand && (!hit || cand.name === expected)) hit = cand;
+    }
+    if (hit) return hit;
+    $.sleep(100);
+  }
+  return null;
+}
+
+/* The controller roster, newest FIRST - index 1 is the most recent add
+ * and every index renumbers on the next one, so nothing may remember
+ * "my slider is number 3". Reading out of range answers the string
+ * "undefined" rather than throwing, except for a negative index. */
+function AELL_mogrtRoster(comp, cap) {
+  var names = [], n = 0;
+  try { n = comp.motionGraphicsTemplateControllerCount || 0; }
+  catch (e) { n = 0; }
+  for (var i = 1; i <= n && names.length < (cap || 30); i++) {
+    try {
+      names.push(String(comp.getMotionGraphicsTemplateControllerName(i)));
+    } catch (e2) { names.push("(unreadable)"); }
+  }
+  return names;
+}
+
+AELL_TOOLS.expose_property = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  var layer = AELL_layerOrSelection(comp, args.layer);
+  var prop = AELL_anyProperty(layer, args.property);
+  var resolved = AELL_lastResolve;
+  var spec = String(args.property);
+
+  // A GROUP always answers canAdd = false (measured on Transform, on a
+  // shape layer's Contents and on the effect row above a Slider), so the
+  // useful answer is which leaf to name instead.
+  if (!AELL_isLeafProp(prop)) {
+    return AELL_err("'" + spec + "' is a GROUP, and Essential Graphics " +
+      "takes single properties, not groups - list_properties {layer: \"" +
+      layer.name + "\", path: \"" + spec + "\"} shows the ones inside. " +
+      "(An EFFECT row is a group too: expose \"effect." + spec +
+      ".<Parameter>\", not the effect.)");
+  }
+  if (typeof prop.canAddToMotionGraphicsTemplate !== "function") {
+    return AELL_err("This build of After Effects has no Essential " +
+      "Graphics API on '" + spec + "'.");
+  }
+
+  var can = false, canErr = "";
+  try { can = prop.canAddToMotionGraphicsTemplate(comp) === true; }
+  catch (eC) { canErr = eC.message || String(eC); }
+  if (!can) {
+    var roster = AELL_mogrtRoster(comp, 20);
+    return AELL_err("After Effects will not expose '" + spec + "' on '" +
+      layer.name + "' in '" + comp.name + "'" +
+      (canErr ? " (" + canErr + ")" : "") + ". Measured reasons, in the " +
+      "order they happen: it is ALREADY a controller (AE refuses a " +
+      "second copy); it is a kind Essential Graphics does not take (a " +
+      "Layer Control is the one measured - Slider, Color, Checkbox, " +
+      "Angle, Point and Dropdown controls all work, as do Position, " +
+      "Scale, Rotation, Opacity, Source Text, and keyframed or " +
+      "expression-driven properties); or it belongs to a layer INSIDE a " +
+      "precomp of this comp. Controllers on '" + comp.name +
+      "' now (newest first): " + (roster.join(", ") || "(none)") + ".");
+  }
+
+  var label = (args.label === null || typeof args.label === "undefined")
+    ? "" : String(args.label);
+  var ok = false;
+  try {
+    // An EMPTY label is not "no label": AE falls back to its own default
+    // and returns true, so the two calls are kept apart deliberately.
+    ok = (label === "")
+      ? prop.addToMotionGraphicsTemplate(comp)
+      : prop.addToMotionGraphicsTemplateAs(comp, label);
+  } catch (eA) {
+    return AELL_err("Could not expose '" + spec + "': " + (eA.message || eA));
+  }
+  if (ok !== true) {
+    return AELL_err("After Effects returned " + String(ok) + " for '" +
+      spec + "' instead of exposing it. (It answers undefined when the " +
+      "property is already a controller.)");
+  }
+
+  // Read the name AE really used. The default is NOT the property's
+  // name: for a transform or Source Text property it is the LAYER's
+  // name, and for an effect parameter it is the EFFECT's name - so two
+  // properties of one layer become two controllers with one name unless
+  // a label is passed. Index 1 is the newest.
+  var count = 0;
+  try { count = comp.motionGraphicsTemplateControllerCount || 0; }
+  catch (eN) {}
+  var got = "";
+  try { got = String(comp.getMotionGraphicsTemplateControllerName(1)); }
+  catch (eG) { got = label; }
+
+  var out = { comp: comp.name, layer: layer.name, property: spec,
+              controller: got, controllerCount: count, templateName: "" };
+  try { out.templateName = String(comp.motionGraphicsTemplateName); }
+  catch (eT) {}
+
+  var roster2 = AELL_mogrtRoster(comp, 30), dupes = 0;
+  for (var i = 1; i < roster2.length; i++) {
+    if (roster2[i] === got) dupes++;
+  }
+  if (dupes > 0) {
+    out.warning = dupes + " other controller(s) on '" + comp.name +
+      "' are ALSO called \"" + got + "\" - AE accepts duplicate names " +
+      "and an editor cannot tell them apart. Pass {label: \"...\"} to " +
+      "name this one.";
+  } else if (label === "") {
+    out.note = "No label given, so AE named the controller \"" + got +
+      "\" - its default is the LAYER's name for a transform or text " +
+      "property and the EFFECT's name for an effect parameter, never " +
+      "the property's own. Pass {label: \"...\"} for a name an editor " +
+      "will understand.";
+  }
+  out.next = "export_mogrt {comp: \"" + comp.name + "\", folder: \"...\"} " +
+    "writes the template once every control is exposed. There is no " +
+    "rename and no remove: AE ships neither, and the indices renumber " +
+    "on every add (1 is the newest).";
+  AELL_lastResolve = resolved;
+  return AELL_okay(AELL_noteResolved(out));
+};
+
+AELL_TOOLS.export_mogrt = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  var proj = app.project;
+  var compName = comp.name;                 // read BEFORE the export
+  var overwrite = args.overwrite === true || args.overwrite === "true";
+  var wantSave = args.save === true || args.save === "true";
+
+  var raw = args.folder;
+  if (raw === null || typeof raw === "undefined" || raw === "") {
+    raw = args.path;
+  }
+  if (raw === null || typeof raw === "undefined" || raw === "") {
+    raw = args.output;
+  }
+  if (raw === null || typeof raw === "undefined" || raw === "") {
+    return AELL_err("'folder' is required - the ABSOLUTE folder to write " +
+      "the .mogrt into, e.g. \"C:/templates\". The FILE name comes from " +
+      "the template name, not from this path.");
+  }
+  var pathStr = String(raw).replace(/[\\\/]+$/, "");
+  if (!/^[a-zA-Z]:[\\\/]/.test(pathStr) && pathStr.indexOf("\\\\") !== 0) {
+    return AELL_err("'folder' must be an ABSOLUTE path (got \"" + pathStr +
+      "\"). AE resolves a relative path against its own working " +
+      "directory, not the project.");
+  }
+
+  // A path ending .mogrt is what anyone would write, and AE would take
+  // it literally: it mkdir -p's whatever it is handed, so the export
+  // would leave a DIRECTORY called "brand.mogrt" with the real file
+  // inside it. The basename becomes the template name instead.
+  var nameArg = (args.name === null || typeof args.name === "undefined" ||
+                 args.name === "") ? "" : String(args.name);
+  var pathNote = "";
+  if (/\.mogrt$/i.test(pathStr)) {
+    var cut = Math.max(pathStr.lastIndexOf("/"), pathStr.lastIndexOf("\\"));
+    var base = pathStr.slice(cut + 1).replace(/\.mogrt$/i, "");
+    pathStr = cut > 0 ? pathStr.slice(0, cut) : pathStr;
+    if (nameArg === "") nameArg = base;
+    pathNote = "'folder' ended in .mogrt. AE takes that path as a FOLDER " +
+      "and would have created a directory of that name, so the file name " +
+      "was read out of it instead: folder \"" + pathStr +
+      "\", template \"" + nameArg + "\".";
+  }
+
+  var dir = new Folder(pathStr);
+  if (!dir.exists) {
+    var probe = dir, nearest = "", guard = 0;
+    while (probe && guard < 40) {
+      if (probe.exists) { nearest = probe.fsName; break; }
+      probe = probe.parent;
+      guard++;
+    }
+    return AELL_err("Folder does not exist: " + dir.fsName +
+      ". Deepest folder that does exist: " +
+      (nearest || "(none - check the drive letter)") + ". AE would " +
+      "CREATE this folder and then fail into it, leaving an empty " +
+      "directory behind, so it is refused here instead.");
+  }
+
+  // The template name is the file name. The comp's current one is only a
+  // fallback, because AE's own default for it is the string "Untitled".
+  var current = "";
+  try { current = String(comp.motionGraphicsTemplateName || ""); }
+  catch (eN) {}
+  var tplName = nameArg ||
+    ((current && current !== "Untitled") ? current : compName);
+  var bad = AELL_mogrtBadName(tplName);
+  if (bad.length) {
+    return AELL_err("Template name \"" + tplName + "\" contains " +
+      bad.join(" ") + ", which Windows will not put in a file name. AE " +
+      "does not refuse this - it works for 3.7 seconds, returns false " +
+      "and writes nothing. Pass {name: \"...\"} without those characters.");
+  }
+
+  var controllers = 0;
+  try { controllers = comp.motionGraphicsTemplateControllerCount || 0; }
+  catch (eC) {}
+  if (controllers === 0) {
+    return AELL_err("'" + compName + "' has no Essential Graphics " +
+      "controllers, and AE will not export a template without one (it " +
+      "returns false and writes nothing). Use expose_property {layer: " +
+      "\"...\", property: \"...\", label: \"...\"} first - that is what " +
+      "an editor gets to change.");
+  }
+
+  if (!proj.file) {
+    return AELL_err("The project has never been saved, and AE cannot " +
+      "export a Motion Graphics template from an unsaved project (it " +
+      "raises \"The project needs to be saved first\"). Save it in After " +
+      "Effects (File > Save As), then ask again.");
+  }
+  if (proj.dirty) {
+    if (!wantSave) {
+      return AELL_err("The project has unsaved changes, and AE exports " +
+        "only from a CLEAN one - a dirty project returns false in about " +
+        "390 ms and writes nothing, with no message at all. Pass {save: " +
+        "true} to save \"" + proj.file.fsName + "\" first, or save it in " +
+        "After Effects and ask again. (Exposing a property is itself a " +
+        "change, so this is the normal state right after expose_property.)");
+    }
+    try { proj.save(); } catch (eS) {
+      return AELL_err("Could not save the project before exporting: " +
+        (eS.message || eS));
+    }
+    if (proj.dirty) {
+      return AELL_err("The project still reports unsaved changes after " +
+        "app.project.save(), so the export would fail silently. Save it " +
+        "in After Effects and ask again.");
+    }
+  }
+
+  // Read this NOW. A successful export invalidates the held app.project
+  // reference as well as the CompItem -- measured: the tool ran to
+  // completion and then died on proj.file.fsName with "Object is
+  // invalid", which looked exactly like AE refusing an export it had in
+  // fact just written.
+  var savedTo = "";
+  try { savedTo = String(proj.file.fsName); } catch (eF) {}
+
+  var expected = AELL_mogrtFileName(tplName);
+  var target = new File(dir.fsName + "\\" + expected);
+  if (target.exists && !overwrite) {
+    return AELL_err("A template already exists there: " + target.fsName +
+      " (" + target.length + " bytes). Pass {overwrite: true} to replace " +
+      "it, or choose another folder or name. (AE throws \"A file with " +
+      "that filename in that location already exists\" without it.)");
+  }
+
+  var before = AELL_mogrtScan(dir.fsName);
+  try { comp.motionGraphicsTemplateName = tplName; } catch (eSet) {
+    return AELL_err("AE rejected the template name \"" + tplName + "\": " +
+      (eSet.message || eSet));
+  }
+
+  // Everything the result needs was read BEFORE the call: a successful
+  // export INVALIDATES every reference held across it, and `comp`
+  // answers "Object is invalid" from here on.
+  var started = new Date().getTime();
+  var returned = null, thrown = null;
+  app.beginSuppressDialogs();
+  try {
+    returned = comp.exportAsMotionGraphicsTemplate(overwrite, dir.fsName);
+  } catch (eX) {
+    thrown = eX;
+  } finally {
+    app.endSuppressDialogs(false);
+  }
+  var ms = new Date().getTime() - started;
+
+  // The disk decides. A cancelled export answers TRUE with an empty
+  // folder (measured), so the boolean is not the verdict; the same rule
+  // is applied to a throw, because a template that is on the disk is on
+  // the disk whatever AE said on the way out.
+  var found = AELL_mogrtFound(dir.fsName, before, expected, 10);
+  if (!found) {
+    if (thrown) {
+      return AELL_err("After Effects refused the export: " +
+        (thrown.message || thrown));
+    }
+    // The finding the whole probe was worth: true, with an empty folder.
+    return AELL_err("After Effects returned " + String(returned) +
+      " but wrote no .mogrt into " + dir.fsName + " (" + ms + " ms). " +
+      "Measured causes: the project was dirty (a silent false in ~390 " +
+      "ms), or a font alert stopped the export - a cancelled export " +
+      "also answers true, in about 1.5 s where a real one takes 4.5. " +
+      "Check that every font in '" + compName + "' is installed, save " +
+      "the project, and try again.");
+  }
+
+  var out = {
+    comp: compName,
+    template: tplName,
+    path: dir.fsName + "\\" + found.name,
+    bytes: found.bytes,
+    seconds: Math.round(ms / 100) / 10,
+    controllers: controllers,
+    returned: returned === true,
+    note: "The export left the project with unsaved changes, so a " +
+      "SECOND export with no save in between returns false and writes " +
+      "nothing - pass {save: true} next time."
+  };
+  if (pathNote) out.pathNote = pathNote;
+  if (found.replaced) out.replaced = true;
+  if (thrown) {
+    // Not a measured AE behaviour, and deliberately not dressed up as
+    // one: it is the boolean rule applied to the other signal. A
+    // template that is on the disk is on the disk, whatever After
+    // Effects said on the way out.
+    out.threw = String(thrown.message || thrown);
+    out.threwNote = "After Effects raised \"" + out.threw + "\" and the " +
+      "file is on the disk anyway. The bytes above were read from it.";
+  }
+  if (found.name !== expected) {
+    out.nameNote = "AE named the file \"" + found.name + "\", not \"" +
+      expected + "\" - it transformed the template name on the way to " +
+      "the file system.";
+  }
+  if (wantSave) out.projectSaved = savedTo;
+  return AELL_okay(out);
+};
+
 // Tools that modify the project get wrapped in an undo group.
 var AELL_MUTATING = {
   create_comp: true, add_text_layer: true, add_solid: true,
@@ -9428,7 +9847,12 @@ var AELL_MUTATING = {
   // add_captions makes N ordinary text layers (or writes N markers) and
   // nothing else -- one Ctrl+Z, like add_text_layer. render_comp_audio is
   // deliberately ABSENT for render_comp's reason: it IS a render.
-  add_captions: true
+  add_captions: true,
+  // expose_property adds an Essential Graphics controller to the comp,
+  // which is an ordinary project edit. export_mogrt is NOT here for
+  // render_comp's second reason: it writes a file, and it may SAVE the
+  // user's project, neither of which one Ctrl+Z takes back.
+  expose_property: true
 };
 
 /* Tools that must NOT run inside an undo group, whatever else is in the
@@ -9450,7 +9874,13 @@ var AELL_NO_UNDO_GROUP = {
   // writes cannot be undone by anything, so a round containing one is
   // not honestly "one Ctrl+Z" either way, and its success must not arm
   // AELL_maybeRollback.
-  snapshot_frame: true
+  snapshot_frame: true,
+  // export_mogrt writes a .mogrt and, with {save: true}, calls
+  // app.project.save() -- a save inside an open undo group is the one
+  // thing this tool must never do, and the file it leaves behind is not
+  // undoable either. Whether the export itself minds a group was never
+  // measured, and being here means it never has to be.
+  export_mogrt: true
 };
 
 // --------------------------------------------------------------- entry point

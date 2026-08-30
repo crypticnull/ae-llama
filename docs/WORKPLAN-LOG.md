@@ -7830,3 +7830,193 @@ the disk the user is asked to give up.
   `import_file` rather than 5.8's `import_as_layer`; and 5.9 (.mogrt
   export) deferred again by its own LAST-item-of-the-night rule -
   twenty-first pass, at 03:35 local with the loop still running.
+
+## 2026-08-30 (local) - item 5.9: the template After Effects wrote and
+## then said it had not
+
+Harness green on arrival (517/517), so item 1 was satisfied and the pass
+took the top unfinished workplan item. That is 5.9, and it has been the
+top unfinished item for twenty-two passes.
+
+### First: a whole pass that happened and was never committed
+
+Before writing any code this pass went looking for prior art and found
+`logs/entry59.md` - a complete, dated, well-written entry for a **5.9
+PROBE pass that ran in real AE on 2026-08-29**, with eight probe scripts
+and their transcripts beside it. It is not in WORKPLAN-LOG.md. There is
+no commit for it (`git log` goes straight from 0.10.8 to whisper Pass A),
+and `logs/` is gitignored. So the pass ran, measured thirteen facts,
+claimed to have written them into WORKPLAN.md as a build spec - and every
+word of it died with the process. The next six passes each re-read the
+log, saw 5.9 deferred, and deferred it again.
+
+The lesson is small and worth acting on: **a pass's entry belongs in
+`docs/WORKPLAN-LOG.md` from the first keystroke, not in `logs/`**, which
+is exactly the directory git is told to forget. This entry was written
+there too, then committed; the next pass should skip the middle step.
+
+The probe's measurements are recovered and folded in below, with two of
+them corrected - see "what the probe got wrong".
+
+### The answer: yes, headless, with four conditions
+
+`exportAsMotionGraphicsTemplate` runs from a `-r` session with no viewer
+and no human: measured repeatedly today at 3.6-5.4 s, returning `true`
+and leaving a real `.mogrt`, which is a ZIP (`50 4B 03 04`, confirmed by
+reading the first four bytes). It needs the project **SAVED and CLEAN**,
+a **FOLDER** path, a template name Windows will accept, and
+`app.beginSuppressDialogs()`.
+
+### The finding the item exists for
+
+**A cancelled export returns `true` and writes nothing.** Any comp
+holding a text layer whose font is not installed raises "The following 1
+fonts were not synced from Adobe... Click OK to continue. Click Cancel to
+stop the export", and answering it with anything but OK stops the export
+while the call still answers `true` - four times running, with an empty
+folder. The only tell is the clock: ~1.5 s against ~4.6 s.
+
+So `true` is not evidence. `export_mogrt` stats the file, the way
+`snapshot_frame` reads the PNG's own IHDR instead of repeating the comp's
+dimensions, and `beginSuppressDialogs` is REQUIRED rather than defensive:
+the same text comp exported whole (28 577 b) inside it.
+
+### The bug this pass's own field run found, twice
+
+The first field run reported `{"ok":false,"error":"Object is invalid"}`
+for three exports - and all three files were sitting on the disk. An
+instrumented copy of the tool pinned it: the tool ran to the last line
+and died on `proj.file.fsName`. **A successful export invalidates the
+held `app.project` reference as well as the CompItem.** Nobody had
+measured that; entry59 had only the CompItem half.
+
+Which is the same class of failure as the one the tool exists to
+prevent - a report that disagrees with the disk - arriving from the
+opposite direction. Both halves are now closed: everything the result
+needs is read BEFORE the call, and a THROW is checked against the folder
+too, because a template that is on the disk is on the disk whatever AE
+said on the way out.
+
+### What the 2026-08-29 probe got wrong, and how
+
+- **"AE strips the SPACES out of the template name."** It does not. It
+  writes the name verbatim: `P60 Brand Card` -> `P60 Brand Card.mogrt`,
+  confirmed from outside AE with `Get-ChildItem`. Two things produced
+  that conclusion. The probe's stage E set the name to
+  `"AELLProbeTemplate"` - a string that never had spaces - and compared
+  it against stage A's `"AELL Probe Template"`. And `File.name` is
+  URI-ENCODED, so the same file reads back as
+  `P60%20Brand%20Card.mogrt`; only `displayName` is a name a user can
+  open. The first version of this tool believed the probe, guessed
+  `name.replace(/\s+/g, "")` for the file, and its overwrite check
+  therefore looked for a file that was never there - so AE threw "already
+  exists" instead.
+- **"Controller index 1 is the newest."** True, and it survived. But the
+  first version of `AELL_mogrtFound` also had a fallback that said "if
+  the folder holds exactly one .mogrt, that must be the one we wrote" -
+  which handed back a file an earlier export had written, in a tool whose
+  entire reason for existing is that AE reports success without writing
+  anything. Removed. Only two things count as evidence now: a `.mogrt`
+  that was not there before, or one whose size or modified stamp moved.
+
+### The rest of the measured facts, all of them in the tools
+
+**Exposing:**
+- `canAddToMotionGraphicsTemplate` is false for a GROUP (Transform, a
+  shape layer's Contents, and the effect row above a Slider all answer
+  false), false for a Layer Control, and false once the property is
+  already a controller - after which `addToMotionGraphicsTemplate`
+  returns `undefined`, not `false`. Slider, Color, Checkbox, Angle, Point
+  and Dropdown controls all work, as do Position, Scale, Rotation,
+  Opacity, Source Text, and keyframed or expression-driven properties.
+- **The default controller name is not the property's name.** It is the
+  LAYER's name for a transform or text property and the EFFECT's name for
+  an effect parameter - measured again today: exposing `opacity` on a
+  layer called "P60 BG" produced a controller called "P60 BG Opacity",
+  and exposing the Slider produced "Slider Control". Two properties of
+  one layer therefore become two controllers with confusingly similar
+  names unless a label is passed, so the tool reads back what AE actually
+  called it and says so.
+- AE accepts **duplicate** controller names in silence (two called "Wipe
+  Amount", measured), so a duplicate is reported.
+- Indices are **newest-first** and renumber on every add; reading out of
+  range answers the string `"undefined"` and a negative index throws.
+  `setMotionGraphicsTemplateControllerName` **does not exist** on AE
+  2026, so there is no rename and no remove - the tool says so rather
+  than letting the model try.
+- `textDocument.isSubstitute` does not exist either, which matters
+  because THIS ITEM'S OWN SPEC said to pre-clean with it.
+
+**Exporting:**
+- Unsaved project -> "The project needs to be saved first". Saved but
+  DIRTY -> `false` in ~390 ms, silently, nothing written. A SUCCESSFUL
+  export dirties the project, so a second one with no save between is a
+  silent failure - which is why `{save: true}` exists and why the success
+  result warns about it. The tool never saves the user's project without
+  that flag.
+- The path is a **FOLDER**, and AE `mkdir -p`s whatever it is handed,
+  including for calls that then fail: the 08-29 probe left four empty
+  directories named `probe-e1.mogrt`, `nope-does-not-exist` and so on. So
+  a missing folder is refused here (naming the deepest one that does
+  exist) rather than created and failed into, and a path ending `.mogrt`
+  has its basename read off as the template name instead of becoming a
+  directory. Verified today: `.../mogrt60/P60 Lower Third.mogrt` produced
+  the FILE `P60 Lower Third.mogrt` and no directory.
+- A template name holding `\ / : * ? " < > |` exports for 3.7 s, returns
+  false and writes nothing - refused before the clock starts.
+- Zero controllers -> false in ~340 ms.
+- `overwrite=false` onto an existing file THROWS; the tool refuses first,
+  quoting the existing file's byte count, so AE is never asked.
+- Setting the template name to `""` resets it to "Untitled", so the
+  tool falls back to the COMP's name rather than shipping a file called
+  Untitled.mogrt.
+- A `File` or `Folder` OBJECT throws; the path must be a string.
+
+### Verification
+
+- **Field, through the shipped `AELL_call` path**, three runs: six
+  refusals that never reach AE, then a real export (11 669 b), a correct
+  overwrite refusal, an overwrite that replaced it (11 822 b, 3.6 s,
+  `replaced: true`), and the `.mogrt`-path case. First bytes of the
+  output: `50-4B-03-04`.
+- **`tests/test-mogrt.js`: 95 checks**, all fifteen measured facts
+  encoded in the stub. Reverting the one-line `proj.file` fix makes it
+  fail loudly, which is the bug the field found.
+- Full stub sweep: **57/57 test files exit 0**.
+- **Real-AE harness 517/517 after** (517/517 before). No suite steps were
+  added - that is LOCK-IN, and it is blocked on the harness triage
+  learning three progress dialogs (see the workplan).
+- `docs/CAPABILITIES.md` regenerated, curated half updated.
+
+### No version bump
+
+Feature track: new tools ride the next MINOR, which is the remote
+session's. Nothing shipped behaves differently.
+
+### Notes for whoever runs the next pass
+
+- **Machine state changed, deliberately.** The open project is now SAVED
+  at `logs\mogrt60\P60-scratch.aep` (it was "Untitled Project.aep *").
+  The export cannot be exercised any other way. It holds only agent
+  debris - 262 items, the same count as before this pass, since the three
+  solid sources the field runs left were swept - and the harness is green
+  with it. `logs/` is gitignored, so none of it is committed.
+- **5.9 LOCK-IN is a pass on its own** and it needs the harness triage
+  taught first, or the suite will cancel its own exports.
+- `expose_property` is registered as MUTATING (an ordinary project edit);
+  `export_mogrt` is in `AELL_NO_UNDO_GROUP` for render_comp's second
+  reason - it writes a file and may save the project, and a save inside
+  an open undo group is the one thing it must never do.
+- Still open from earlier passes, unchanged and unattempted tonight: the
+  `DroverLord - Window Class` popup; item 7's VRAM half (a pass per
+  model, ~36 GB of weights); the tier impersonation ladder; OOM recovery;
+  no panel UI for the export tools; no `.webm`/`.webp`; the 8 GB
+  intermediate cap that is still a guess; `get-llama.ps1`'s two latent
+  traps (tenth flag); and `comfy_generate` still calls `import_file`
+  rather than 5.8's `import_as_layer`.
+- **One flag can stop being repeated.** Six entries running have said
+  "`release-notes.txt` still reads 0.10.0 while the feed ships 0.10.x".
+  It does not: it reads `0.10: text animators, ...` and has since
+  788e799 made it MINOR-scoped precisely so patch feeds cannot age it.
+  The flag was already answered when it was first re-filed. Checked, not
+  copied forward.
