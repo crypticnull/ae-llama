@@ -1115,9 +1115,35 @@ GPU. This item is that touch, one pass per bullet, smallest first:
   in `tests/test-vram-arbiter.js`. Timings on small cards stay
   training-quoted and still say "typically" — the ladder impersonates
   VRAM, never speed. See WORKPLAN-LOG 2026-08-30.
-- **OOM recovery**: force one real OOM (override 6, generate something
-  known too big with pause never overridden off — or drive ComfyUI
-  directly) and verify the chat model comes back afterward regardless.
+- ~~**OOM recovery**~~ DONE 2026-08-30 (0.10.14), and the bullet's premise
+  did not survive the field. **This backend does not OOM on an oversized
+  job — it GRINDS**: KREA2 at 4096x4096 on a 32 GB card offloads weights
+  and runs at 33 s/it on pass one and 92 s/it on pass two, no exception,
+  no end. So the reachable shape of "a generation the card cannot do" is
+  the panel's own TIMEOUT, and that is the WORSE case: a torch OOM frees
+  its allocation on the way out, an abandoned job does not.
+  `scripts/oom-probe.js` drives the real panel path (override 6 ->
+  mandatory handoff, so chat is really stopped) into exactly that, and it
+  found the panel abandoning a job it had queued: the round timed out,
+  said "prompt <id> may still finish in ComfyUI", and then asked
+  llama-server to load 18 932 MB back into a 32 768 MB card the abandoned
+  job still held **23 673 MB** of, with 1 job still running in ComfyUI.
+  Windows' sysmem fallback hid the collision. A timeout now CANCELS —
+  queue read first, only the panel's OWN prompt id acted on (deleted if
+  pending, targeted-interrupted if running, nothing touched if it is
+  someone else's), because this is the user's ComfyUI and they may have
+  queued their own work in its UI. Re-measured: 10 588 MB at warm-up,
+  0 running, round 225 s -> 112 s, chat back and answering in 93 ms.
+  `tests/test-comfy-timeout-cancel.js` (18 checks; 10 fail on the
+  reverted file). Harness 532/532 either side.
+  - **Filed, measured, NOT fixed here**: the resume still prints "VRAM did
+    not visibly release within 10 s" after a cancelled round. ComfyUI
+    holds ~7.8 GB of cache after the cancel and `/free` only sets FLAGS
+    the queue worker reads BETWEEN prompts, so the floor is never reached
+    inside the 10 s. The card had 22 GB free and the model loaded fine —
+    the sentence is a false alarm, not a failure. The honest predicate is
+    "is there room for the chat model", not "is the card back to the
+    floor"; that is a change to a shipped path and wants its own pass.
 
 ## Out of scope for the local session (remote builds these)
 

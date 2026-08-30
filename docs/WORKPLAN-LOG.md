@@ -8447,3 +8447,154 @@ one exists.
   `.webm`/`.webp`; the 8 GB intermediate cap that is still a guess;
   `get-llama.ps1`'s two latent traps; and `comfy_generate` still calls
   `import_file` rather than 5.8's `import_as_layer`.
+
+## 2026-08-30 (local) - item 7, OOM recovery: the job the panel gave up on
+and left running
+
+**Item:** WORKPLAN item 7, last bullet - "force one real OOM ... and verify
+the chat model comes back afterward regardless."
+
+Harness green before the pass (532/532), so the queue applied. Item 7's
+other open bullet, the catalog VRAM delta, stays blocked exactly where the
+0.10.11 entry left it: ~36 GB of weights that are not on this disk and a
+per-model workflow template the panel does not ship. Nothing was
+downloaded; that is the next pass's call, not this one's.
+
+### The premise was wrong, and finding that out was most of the pass
+
+The bullet assumes an oversized job OOMs. On this backend it does not.
+Measured first, before anything was written: **KREA2 at 4096x4096 on a
+32 GB card offloads its weights and GRINDS** - 33 s/it on pass one
+(2 m 19 s for four steps), then 92 s/it on pass two, with no exception, no
+error and no end. ComfyUI 0.32 boots here with async weight offloading and
+25 140 MB of pinned memory; it will trade speed for memory almost
+indefinitely rather than raise `OutOfMemoryError`.
+
+So "a generation the card cannot do" does not reach the user as an OOM. It
+reaches them as the panel's own generation TIMEOUT - and that is the WORSE
+case of the two, which is why it is the one worth probing. A torch OOM
+frees its allocation on the way out. An abandoned job does not: it keeps
+computing and keeps the card.
+
+### What the probe found
+
+`scripts/oom-probe.js` (NEW) drives the real panel path - settings.js +
+tiers.js + llama.js + comfy.js + tools.js -> `Tools.executeCommands([
+comfy_generate])` -> a real llama-server, a real ComfyUI, real nvidia-smi.
+`vramOverrideGB 6` puts it in T2, mandatory handoff, so the chat model is
+genuinely stopped and the panel genuinely owes it back. The job is the
+4096x4096 grind above with `comfyTimeoutSec 90`. `{import: false}`, so no
+After Effects is involved and no dialog can be raised.
+
+Before the fix, on the owner's 32B chat model:
+
+    .. ComfyUI still generating... 90s
+    .. VRAM did not visibly release within 10 s - proceeding anyway.
+    .. Warming the chat model back up...
+    -- at warm-up: VRAM 23673 MB, ComfyUI queue 1 running / 0 pending
+    == FAIL the abandoned job is no longer running when the chat model is
+            reloaded - 1 running / 0 pending in ComfyUI
+    == FAIL ...and the card has room for it - VRAM at warm-up 23673 MB,
+            chat model 18932 MB, card 32768 MB
+
+The panel stopped LOOKING and called that stopping. Its error even said so
+- "prompt <id> may still finish in ComfyUI" - and then, one line later, it
+asked llama-server to load 18 932 MB into a 32 768 MB card of which the
+job it had just abandoned held 23 673 MB. The round took 225 s and the
+abandoned job went on to grind for another ten minutes on a machine whose
+user had been told their generation was over.
+
+**The chat model did come back**, which is the bullet's literal question,
+and the honest answer is that Windows papered over the collision: the
+driver's system-memory fallback let llama-server load spilled into host
+RAM. It answered in 144 ms and the card read 32 021 MB - pegged. A card
+that pegs is not a card that recovered; on any machine without sysmem
+fallback that load fails outright. So the verdict the probe asserts is not
+"did llama reach state running" but the four things that have to be true
+for that to mean anything: the round ends once with a grounded error, the
+abandoned job is gone, the card has room, and the model ANSWERS.
+
+### The fix: a timeout cancels
+
+`comfy.js` gained `cancelPrompt`, awaited before the timeout settles so
+the arbiter's resume - which runs next and waits for the card to come back
+- is waiting for something that can actually happen.
+
+Never a blind `POST /interrupt`. **This is the USER'S ComfyUI and they may
+have queued their own work in its own UI**, so the queue is READ first and
+only the panel's own prompt id is ever acted on:
+
+- still pending -> `POST /queue {delete: [id]}`, id-targeted on every
+  ComfyUI version;
+- still running -> `POST /interrupt {prompt_id}`. Read from this backend's
+  own `server.py`: 0.32 interrupts only if that id is the running one, and
+  older builds that ignore `prompt_id` do a GLOBAL interrupt - which by
+  then cancels exactly the job we mean, because the queue read just proved
+  ours is the one running. Correct on both, without a version check;
+- neither -> nothing. It finished, or it was already dropped.
+
+An unreadable queue cancels nothing and says so. A poll that lands while
+the cancel is in flight is dropped rather than allowed to report the
+panel's own interrupt back to the user as `execution_interrupted`, which
+would have blamed them for cancelling their own render.
+
+### Verification
+
+- **The probe, re-run, green**: VRAM at warm-up 23 673 -> **10 588 MB**,
+  ComfyUI queue 1 running -> **0 running / 0 pending**, round 225 s ->
+  **112 s**, error now "Generation timed out after 90s (prompt ...) - it
+  was still running and has been cancelled", chat back and answering in
+  93 ms. Transcripts both sides in `logs/oom-probe-*.md`.
+- `tests/test-comfy-timeout-cancel.js` (NEW, 18 checks) scripts a ComfyUI
+  that accepts a prompt and never finishes it, and pins all four queue
+  states plus "cb fires exactly once" and the message shape. **10 of the
+  18 fail on the reverted file** - run and seen, not assumed. The check
+  that matters most for a user's machine is the third: with only the
+  user's own jobs in the queue, the panel must POST nothing at all.
+- **Full stub sweep: 59/59 test files exit 0.**
+- **Real-AE harness 532/532** before and after. The change is panel-side
+  and adds no suite steps; the run proves it left AE alone.
+- `capability-report.js` regenerated: no change, the pass ships no new tool.
+
+### Version: PATCH bumped to 0.10.14
+
+A fix to shipped behaviour. Any user whose generation outruns
+`comfyTimeoutSec` - the default is 600 s and this machine's own oversized
+job would need ten times that - had the panel walk away from a running job
+and then fight it for the card.
+
+### Filed, measured tonight, deliberately NOT fixed here
+
+**The resume's release message is still a false alarm on a cancelled
+round.** "VRAM did not visibly release within 10 s" still prints: ComfyUI
+holds ~7.8 GB of cache after the cancel, and `/free` only sets FLAGS the
+queue worker reads BETWEEN prompts, so the floor sampled at pause time is
+not reached inside the 10 s window. The card had 22 GB free and the model
+loaded and answered, so this is a sentence that misreports a healthy
+round, not a failure. The honest predicate is "is there room for the chat
+model", not "is the card back to the floor it was at" - a change to a
+shipped path (0.10.9 wrote that wait) and worth its own small pass.
+
+### Notes for whoever runs the next pass
+
+- **ComfyUI must be started by hand and this pass started it**: the 0.32.0
+  at `AppData\Local\Comfy-Desktop\ComfyUI-Installs\ComfyUI\ComfyUI`, per
+  0.10.9's note. It is still running and idle; `Comfy.ensureRunning` still
+  cannot start it.
+- Machine state: llama-server was started and stopped by the probe. The
+  open AE project is still `logs\mogrt60\P60-scratch.aep`. ComfyUI was
+  interrupted and `/free`d on the way out - the probe always does this, so
+  an unattended run cannot leave a 4096x4096 job grinding all night.
+- `scripts/oom-probe.js` is ~2 minutes end to end and is now the cheapest
+  way to ask "does a failed generation leave the panel in a state it can
+  recover from". Re-run it after anything that touches the arbiter, the
+  generation poller or the resume.
+- Item 7 now has ONE bullet left, the catalog VRAM delta, and it is the
+  expensive one: ~36 GB of weights to download, a per-model workflow
+  template to write for sd15/sdxl/wan22-5b (the panel ships only KREA2 and
+  H3 i2v), and a whole pass budgeted per model.
+- Still open from earlier passes, unattempted tonight: the `DroverLord -
+  Window Class` popup; no panel UI for the mogrt export tools; no
+  `.webm`/`.webp`; the 8 GB intermediate cap that is still a guess;
+  `get-llama.ps1`'s two latent traps; and `comfy_generate` still calls
+  `import_file` rather than 5.8's `import_as_layer`.

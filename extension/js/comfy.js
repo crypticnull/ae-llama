@@ -1105,6 +1105,73 @@
   }
 
   /**
+   * Stop a prompt this panel queued and then gave up on.
+   *
+   * A timeout used to be pure ABANDONMENT: the panel stopped looking, the
+   * job kept the card and kept computing, and the VRAM arbiter's very next
+   * act was to reload the chat model into whatever was left. Measured
+   * 2026-08-30 on a 32 GB card (logs/oom-probe-*): a KREA2 job the panel
+   * timed out on at 90 s still held **23 673 MB** when llama-server was
+   * asked to load a 18 932 MB model back into the same card, the "verified
+   * release" wait burned its whole 10 s reporting a release that had not
+   * happened, and the abandoned job went on grinding for another ten
+   * minutes. On Windows the driver's system-memory fallback hid the
+   * collision — the chat model "came back" spilled into host RAM.
+   *
+   * Never a blind POST /interrupt. This is the USER'S ComfyUI and they may
+   * have queued their own work in its own UI, so the queue is READ first
+   * and only our own prompt id is acted on:
+   *   still pending  -> POST /queue {delete: [id]}  (id-targeted on every
+   *                     ComfyUI version)
+   *   still running  -> POST /interrupt {prompt_id} (targeted on 0.32; on
+   *                     older builds that ignore prompt_id it is a global
+   *                     interrupt, which by then cancels exactly the job we
+   *                     mean, because we just proved ours is the running one)
+   *   neither        -> nothing to do; it finished or was already dropped.
+   *
+   * cb(note) — a clause for the error message saying what was actually done.
+   * Never fails the round: a backend that cannot be asked leaves the job
+   * alone and says so.
+   */
+  function cancelPrompt(base, promptId, cb) {
+    requestJson(base, "GET", "/queue", null, 10000,
+      function (err, statusCode, json) {
+        if (err || statusCode !== 200 || !json) {
+          cb(" — ComfyUI's queue could not be read, so it was left alone " +
+             "and may still be running");
+          return;
+        }
+        // Queue rows are positional: [number, prompt_id, prompt, ...].
+        function holds(list) {
+          if (!(list instanceof Array)) return false;
+          for (var i = 0; i < list.length; i++) {
+            if (list[i] && list[i][1] === promptId) return true;
+          }
+          return false;
+        }
+        if (holds(json.queue_pending)) {
+          requestJson(base, "POST", "/queue", { "delete": [promptId] }, 10000,
+            function (dErr, dStatus) {
+              cb(dErr || dStatus !== 200
+                ? " — it was still queued and ComfyUI refused to drop it"
+                : " — it was still queued and has been removed");
+            });
+          return;
+        }
+        if (holds(json.queue_running)) {
+          requestJson(base, "POST", "/interrupt", { prompt_id: promptId },
+            10000, function (iErr, iStatus) {
+              cb(iErr || iStatus !== 200
+                ? " — it is still running and ComfyUI refused to cancel it"
+                : " — it was still running and has been cancelled");
+            });
+          return;
+        }
+        cb(" — ComfyUI is no longer running it");
+      });
+  }
+
+  /**
    * End-to-end generation.
    * opts: {comfyUrl, workflowFile, params, outDir, timeoutSec}
    * onProgress(secondsElapsed) fires periodically while waiting.
@@ -1217,6 +1284,7 @@
         // in-flight /history responses can land after the timer is cleared.
         var finished = false;
         var inFlight = false;
+        var cancelling = false;
         var timer = null;
 
         function settle(err2, res2) {
@@ -1234,9 +1302,17 @@
             onProgress(Math.round(elapsed / 1000));
           }
           if (elapsed >= timeoutMs) {
-            settle(new Error("Generation timed out after " +
-                             Math.round(elapsed / 1000) + "s (prompt " +
-                             promptId + " may still finish in ComfyUI)"));
+            // Stop looking AND stop the job — see cancelPrompt. The cancel
+            // is awaited before settling so the arbiter's resume, which
+            // runs next and waits for the card to come back to the floor,
+            // is waiting for something that can actually happen.
+            if (cancelling) return;
+            cancelling = true;
+            var secs = Math.round(elapsed / 1000);
+            cancelPrompt(base, promptId, function (note) {
+              settle(new Error("Generation timed out after " + secs +
+                               "s (prompt " + promptId + ")" + note));
+            });
             return;
           }
           if (inFlight) return;
@@ -1244,7 +1320,12 @@
           requestJson(base, "GET", "/history/" + promptId, null, 10000,
             function (herr, hstatus, hjson) {
               inFlight = false;
-              if (finished) return;
+              // A poll issued just before the timeout can land while the
+              // cancel is in flight. Let the timeout own the message —
+              // "timed out and has been cancelled" is the truth, where
+              // this path would report the panel's own interrupt back to
+              // the user as if ComfyUI had been cancelled from elsewhere.
+              if (finished || cancelling) return;
               if (herr || hstatus !== 200 || !hjson) return; // retry next tick
               var entry = hjson[promptId];
               if (!entry) return;                            // still queued/running
