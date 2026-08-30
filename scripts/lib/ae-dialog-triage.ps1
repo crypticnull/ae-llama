@@ -59,11 +59,38 @@
 #
 # Matched as a PREFIX, because AE appends to these: the script window
 # carries the file name and the font one carries an ellipsis.
+# Two more, measured 2026-08-30 by watching a real self-test run's
+# windows every 250 ms for four consecutive runs
+# (scripts/ae-window-census.ps1):
+#
+#   Auto-Save Project   AE's own timed auto-save, which fires DURING a
+#                       run and disables the script-progress window
+#                       behind it. Seen in every one of the four runs,
+#                       up ~2.5 s each time. It has a real title, so
+#                       until it was named here it read as `blocked` --
+#                       and `blocked` gives up after 3 polls, which is
+#                       6 s on a 2 s poll. It has not cost a run on this
+#                       machine yet; on a heavier project, where saving
+#                       takes longer, it is exactly the failure the five
+#                       titles above were added for.
+#   Analyzing Audio     raised by the suite's audio_to_keyframes step.
+#                       Named here for the EVIDENCE layer only, and it
+#                       is worth being precise about why: this dialog's
+#                       window title is EMPTY and its name lives in an
+#                       `Edit` child, so Get-AellDialogVerdict (which
+#                       reads titles) cannot see it and still calls it
+#                       `unreadable`. Get-AellHarvestClass (which asks
+#                       with WM_GETTEXT) can, and without this line it
+#                       headlines a healthy run UNRECOGNIZED DIALOG.
+#                       The verdict half is a separate, open problem --
+#                       see WORKPLAN item 1.
 function Get-AellProgressTitles {
   return @(
     "Executing Script",
     "Save Project",
     "Open Project",
+    "Auto-Save Project",
+    "Analyzing Audio",
     "Creating Motion Graphics Template",
     "Exporting Motion Graphics Template",
     "Verifying Adobe Fonts"
@@ -133,6 +160,13 @@ function Get-AellDialogVerdict {
     foreach ($line in $block) {
       $t = $line.Trim()
       $t = $t -replace '^\[[^\]]*\]', ''
+      # The probe's non-modal annotation is a FACT ABOUT the window, not
+      # something the window said. Stripped before the words are counted,
+      # so an annotated popup with nothing to say still reaches the
+      # wordless branch below -- and one that DOES say something is still
+      # judged on what it says, which is the whole point of annotating
+      # rather than hiding it.
+      $t = $t -replace '\{nonmodal[^}]*\}', ''
       $t = $t.Trim()
       if ($t.Length -eq 0) { continue }
       if ($t -match '^OS_[A-Za-z0-9_]+$') { continue }
@@ -161,6 +195,38 @@ function Get-AellDialogVerdict {
       # for its words below, because the point is to ignore Windows'
       # chrome, not to grow a list of things the harness will not look at.
       if ($block[0] -match '^\s*\[(SysShadow|tooltips_class32)\]') {
+        continue
+      }
+      # The same answer arrived at from the window's own declaration
+      # instead of from its name. The probe marks a top-level window
+      # that carries WS_EX_NOACTIVATE or WS_EX_TOOLWINDOW: the first
+      # cannot become the active window, so it cannot be a dialog
+      # waiting for an answer, and the second is what both pieces of
+      # Windows chrome above turned out to be.
+      #
+      # Measured in real AE 2026 on 2026-08-30, all four in one sitting:
+      #
+      #   Script Alert          #32770  ex=00010101  owner=main window
+      #   save-changes prompt   #32770  ex=00010101  owner=main window
+      #   tooltips_class32              ex=00080088  TOOLWINDOW
+      #   SysShadow                     ex=000800A8  TOOLWINDOW
+      #   DroverLord popup host         ex=08000000  NOACTIVATE
+      #
+      # The two real modals carry neither flag and both disable the main
+      # window; the DroverLord popup host is a wordless, zero-sized,
+      # unowned top-level window that sits hidden in EVERY running After
+      # Effects, waiting to be re-used -- exactly the shape of the
+      # SysShadow bug, one class further on.
+      #
+      # This is a rule about what may BLOCK, never about what may be
+      # ANSWERED: CloseWordlessDialogs still posts WM_CLOSE to #32770
+      # alone. And it is deliberately toothless in the worst case -- if
+      # a real modal ever declared itself non-activatable, it would be
+      # the only thing on screen, the probe's popup counter would stay
+      # at zero, and the run would still stop on "no popup text could be
+      # read". The only behaviour that changes is a marked window
+      # standing NEXT to AE's own "I am executing your script".
+      if ($block[0] -match '\{nonmodal') {
         continue
       }
       $sawUnreadable = $true

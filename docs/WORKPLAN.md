@@ -31,14 +31,47 @@ field truth -> fix -> stub faithfulness.
   that went on to pass 514/514 exited 4. Filtered in both layers, with
   the real-AE capture replayed as a stub test (8 assertions fail
   without the fix). The harvest learned the progress window too.
-- **STILL OPEN, filed by that pass: what is the `DroverLord - Window
-  Class` popup?** It stopped one field run in five, with the same three
-  containers as the save-changes prompt and no words, and the re-run
-  was green. It is now READ (the harvest was widened past `#32770`) and
-  photographed (a blocked run always shoots, whatever the harvest
-  recognised), so the next occurrence leaves evidence in
-  `logs\dialogs\`. Do NOT widen `CloseWordlessDialogs` to answer it
-  blind. See WORKPLAN-LOG 2026-08-30.
+- ~~**STILL OPEN, filed by that pass: what is the `DroverLord - Window
+  Class` popup?**~~ IDENTIFIED 2026-08-30, by census rather than by
+  luck. `DroverLord - Window Class` is not a dialog class at all — it is
+  Adobe's widget class, and EVERY window inside After Effects is one.
+  Three measurements name the popup: (1) the save-changes prompt's own
+  `#32770` contains exactly three DroverLord children reporting
+  `OS_ViewContainer / OS_ViewContainer / OS_EditTextContainer` plus an
+  `Edit` — the field capture's fingerprint, container for container;
+  (2) every idle AE has a top-level DroverLord popup host parked hidden
+  at 0,0,0,0, `WS_POPUP | WS_EX_NOACTIVATE`, unowned and wordless; and
+  (3) during a real self-test run AE creates those same containers as
+  PARENTLESS top-level windows (`OS_ViewContainer`,
+  `OS_EditTextContainer`, a bare `Edit`) before parenting them into a
+  dialog shell — captured 20+ times across four watched runs. So the
+  popup is AE's own dialog CONTENT, caught top-level, and it can never
+  take focus. `CloseWordlessDialogs` was NOT widened: it still posts to
+  `#32770` alone. What changed is what may BLOCK — a wordless popup
+  carrying `WS_EX_NOACTIVATE` or `WS_EX_TOOLWINDOW` is discounted, which
+  is the property the SysShadow/tooltips class list turned out to be an
+  instance of. Both real AE modals measured that night (a Script Alert
+  and the save prompt) carry neither flag and are owned by the main
+  window. `scripts/ae-window-census.ps1` is the tool that answered it.
+  See WORKPLAN-LOG 2026-08-30.
+
+- **NEW, measured 2026-08-30 by the census, and the better candidate for
+  the lost run: `Analyzing Audio...` is up for ~6.5 s of EVERY harness
+  run and reads as `unreadable`.** The suite's `audio_to_keyframes` step
+  raises it. It is a `#32770` with an EMPTY window title whose name
+  lives in an `Edit` child four levels down, so the verdict layer (which
+  reads titles) sees three containers and no words — and `unreadable`
+  gives up after 8 polls, ~16 s. Every run is therefore already 40% of
+  the way to dying on a dialog that is AE working on our own script. The
+  harvest layer now names it, so the evidence no longer says
+  UNRECOGNIZED; the VERDICT layer still cannot see it, and that is the
+  open half. The discriminator is measured and ready: this dialog is
+  **owned by the script-progress window** (`owner=<the "Executing
+  Script" #32770>`), whereas a script's own `alert()` is owned by the
+  MAIN window — so "a wordless popup owned by AE's script-progress
+  window is our script working, not our script stuck" is a fact the
+  probe can annotate the same way it now annotates `{nonmodal}`. That is
+  a BUILD, not a probe: everything it needs was measured. Do it next.
 
 ## FAST-TRACK: comp-rename audit tools — DONE 2026-08-25 (0.9.15)
 

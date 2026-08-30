@@ -89,6 +89,29 @@ const DROVERLORD =
   "    OS_ViewContainer\r\n" +
   "    OS_ViewContainer\r\n" +
   "    OS_EditTextContainer\r\n";
+// The same two pieces of chrome as CHROME, as the probe records them
+// now: annotated with the extended styles that say they cannot be the
+// window that disabled After Effects. Verbatim from real AE 2026 on
+// 2026-08-30 (scripts/ae-window-census.ps1, hovering AE's own toolbar
+// to raise a tooltip on demand -- the earlier pass could not make one
+// appear and wrote that down instead of claiming it).
+//
+//   tooltips_class32  ex=00080088  TOOLWINDOW, owned by the main window
+//   SysShadow         ex=000800A8  TOOLWINDOW, unowned
+const CHROME_MARKED =
+  "  [tooltips_class32] {nonmodal ex=00080088 owner=170224} \r\n" +
+  "  [SysShadow] {nonmodal ex=000800A8 owner=0} \r\n";
+// The one this pass went looking for. EVERY running After Effects on
+// this machine has a top-level "DroverLord - Window Class" popup sitting
+// hidden at 0,0,0,0 -- WS_POPUP | WS_EX_NOACTIVATE, unowned, wordless,
+// one OS_ViewContainer inside it, re-used for whatever AE floats. It
+// carries the same class and the same silence as the popup that stopped
+// a field run, and a window that can never become the active window can
+// never be a dialog waiting for an answer. Its title is its container's
+// class, which the triage strips like any other OS_ name.
+const POPUP_HOST =
+  "  [DroverLord - Window Class] {nonmodal ex=08000000 owner=0} " +
+  "OS_ViewContainer\r\n";
 // Captured 2026-08-30 (WORKPLAN 5.9) by listing AE's windows every 150ms
 // while a real export_mogrt ran. AE's OWN progress windows: a #32770
 // with a real title and one container child, which is what a dialog that
@@ -118,6 +141,35 @@ const SAVE_PROJECT =
 const OPEN_PROJECT =
   "  [#32770] Open Project\r\n" +
   "    OS_ViewContainer\r\n";
+// Nobody put this one there on purpose: AE's own timed auto-save, which
+// fires in the MIDDLE of a run and disables the script-progress window
+// behind it. Captured verbatim 2026-08-30 in all four of four watched
+// self-test runs, up ~2.5 s each time, owned by the main window. It has
+// a real title, so before it was named it read as `blocked` -- and
+// `blocked` gives up after three consecutive polls, which is 6 s. Two
+// and a half seconds is not six, which is the only reason this has not
+// cost a run on this machine; a project big enough to take six seconds
+// to save is a red run nobody could have explained.
+const AUTOSAVE =
+  "  [#32770] Auto-Save Project\r\n" +
+  "    OS_ViewContainer\r\n";
+// The other window that watch turned up, and the more dangerous one.
+// AE's "Analyzing Audio..." dialog -- raised by the suite's own
+// audio_to_keyframes step -- has an EMPTY title, so this layer reads
+// three containers and NO words: `unreadable`, which gives up after 8
+// polls (~16 s). Measured up for ~6.5 s of every single run, owned by
+// the script-progress window it disables. That is 40% of the way to
+// killing every run the harness makes, on a dialog that is AE working
+// on our own script.
+//
+// Pinned here as what it currently IS, not as what it should be: the
+// verdict layer cannot see this window's name and this pass did not
+// give it a way to. See WORKPLAN item 1.
+const ANALYZING_AUDIO =
+  "  [#32770] \r\n" +
+  "    OS_ViewContainer\r\n" +
+  "    OS_ViewContainer\r\n" +
+  "    OS_EditTextContainer\r\n";
 
 if (process.platform !== "win32") {
   console.log("SKIPPED - test-selftest-runner.js drives Windows PowerShell");
@@ -201,6 +253,28 @@ const CASES = [
   // "anything wordless" would swallow this one.
   ["droverlord", DROVERLORD, "unreadable", false],
   ["droverlord-beside-progress", PROGRESS + DROVERLORD, "unreadable", true],
+  // The same class, ANNOTATED. This is the pair that proves the rule is
+  // about the window's own declaration and not about its name: an
+  // unannotated DroverLord popup still stops the run (the two cases
+  // above), and one that has told us it cannot take focus does not.
+  ["popup-host-beside-progress", POPUP_HOST + PROGRESS, "running", true],
+  // Alone, it changes nothing: the probe never counted it, so the run
+  // still reaches "main window is disabled but no popup text could be
+  // read" and still gives up on schedule. The fix is deliberately
+  // toothless in the case where something really is wrong.
+  ["popup-host-alone", POPUP_HOST + UNREADABLE_NOTE, "unreadable", false],
+  // ...and it launders nothing standing beside it.
+  ["popup-host-beside-modal", POPUP_HOST + MODAL, "blocked", false],
+  // The annotation is a fact ABOUT the window, never a licence to stop
+  // reading it. A non-activatable popup that says something is a popup
+  // that said something.
+  ["nonmodal-with-words",
+    "  [DroverLord - Window Class] {nonmodal ex=08000000 owner=0} " +
+    "After Effects can't continue: out of disk space\r\n", "blocked", false],
+  // Windows' chrome arrives annotated too now, and reads exactly as it
+  // did when it was recognised by class alone.
+  ["chrome-marked-beside-progress", CHROME_MARKED + PROGRESS, "running", true],
+  ["chrome-marked-beside-modal", CHROME_MARKED + MODAL, "blocked", false],
   // AE's own progress windows. Each says AE is working; none of them is
   // evidence that OUR script is the thing it is working on, which is
   // why they are their own verdict rather than joining `running`.
@@ -209,6 +283,21 @@ const CASES = [
   ["mgt-fonts", MGT_FONTS, "progress", false],
   ["save-project", SAVE_PROJECT, "progress", false],
   ["open-project", OPEN_PROJECT, "progress", false],
+  ["autosave", AUTOSAVE, "progress", false],
+  // Which is how it actually arrives: mid-run, with AE's own script
+  // window up beside it. `running` wins, and correctly -- the strongest
+  // thing on screen is AE saying it is executing our script.
+  ["autosave-beside-progress", PROGRESS + AUTOSAVE, "running", true],
+  // ...and it is still only a progress window. An alert beside it is
+  // what the run is actually stuck on.
+  ["autosave-beside-modal", AUTOSAVE + MODAL, "blocked", false],
+  // The audio dialog is NOT fixed by this pass, and the test says so
+  // rather than leaving the gap undocumented. It has no title for this
+  // layer to read, so it is `unreadable` and it is on a 16 s clock while
+  // it is up for 6.5 s of every run.
+  ["analyzing-audio", ANALYZING_AUDIO, "unreadable", false],
+  ["analyzing-audio-beside-progress", PROGRESS + ANALYZING_AUDIO,
+    "unreadable", true],
   // The measured normal case: the export's window standing beside the
   // script window that asked for it. AE saying it is executing our
   // script is the strongest thing on screen, so the run keeps going
@@ -346,6 +435,27 @@ assert(chromeRun.sawProgress,
 const modalWithChrome = stopIndex(repeat(CHROME + MODAL, 6));
 assert(modalWithChrome.at === 2,
   "a real modal still stops the run on schedule with its shadow up");
+
+// The bug class one class further on, over a whole run: AE's own popup
+// host standing beside the progress window for twenty polls is a
+// HEALTHY run. Before this pass it was eight polls of `unreadable` and
+// exit 4, the same way the drop shadow was.
+const hostRun = stopIndex(repeat(POPUP_HOST + PROGRESS, 20));
+assert(hostRun.at === -1,
+  "AE's own popup host never outvotes AE's own progress window");
+assert(hostRun.sawProgress,
+  "the popup-host timeline is still recognised as AE executing the script");
+// And the safety rail, over a timeline: with nothing but the host and
+// the probe's own note, the run still gives up at the eighth poll.
+const hostAlone = stopIndex(repeat(POPUP_HOST + UNREADABLE_NOTE, 12));
+assert(hostAlone.at === 7,
+  "a run blocked by something invisible still stops, popup host or not");
+// An unannotated DroverLord popup is UNCHANGED -- it is what stopped a
+// field run on 2026-08-30 and nobody has identified it yet. Whatever
+// this pass fixed, it did not quietly answer that one.
+const droverRun = stopIndex(repeat(DROVERLORD, 12));
+assert(droverRun.at === 7,
+  "an unidentified DroverLord popup still stops the run");
 
 // The export timeline, replayed in the order it was captured (poll
 // samples from the 2026-08-30 watch, condensed to what the probe saw at
@@ -511,6 +621,27 @@ assert(/cls == "SysShadow" \|\| cls == "tooltips_class32"/.test(win32),
 assert(/popups\+\+/.test(win32.split('cls == "SysShadow"')[1] || ""),
   "chrome is skipped BEFORE the popup counter, not after it");
 
+// The property the two class names turned out to be an instance of.
+// WS_EX_NOACTIVATE (0x08000000) cannot become the active window, so it
+// cannot be a dialog awaiting an answer; WS_EX_TOOLWINDOW (0x00000080)
+// is what both pieces of chrome above actually are. Measured against
+// two REAL AE modals the same night, which carry neither.
+assert(/ex & 0x08000000/.test(win32),
+  "the probe reads WS_EX_NOACTIVATE off a popup before believing in it");
+assert(/ex & 0x00000080/.test(win32),
+  "the probe reads WS_EX_TOOLWINDOW off a popup before believing in it");
+// Listed, so the morning review can see what was on screen and why the
+// harness discounted it -- and never counted, because the popup counter
+// is what makes the probe fall through to its honest "something is up
+// and I cannot read it" note.
+assert(/\{nonmodal ex=/.test(win32),
+  "a discounted window is recorded with the flags that discounted it");
+const afterMark = win32.split("{nonmodal ex=")[1] || "";
+assert(afterMark.indexOf("return true;") !== -1 &&
+  (afterMark.indexOf("popups++") === -1 ||
+   afterMark.indexOf("return true;") < afterMark.indexOf("popups++")),
+  "a non-modal window is listed for the evidence but never counted");
+
 // Evidence is for the dialogs this harness cannot name. A known one
 // costs a screenshot, 1.2s and a raise-to-front of AE's windows on every
 // single run, so it is taken for the wordless popup and the unknown --
@@ -642,6 +773,18 @@ const HARVEST_FONT_ALERT =
   "OS_ViewContainer\r\n" +
   "The following 1 fonts were not synced from Adobe Fonts. Click OK to " +
   "continue. Click Cancel to stop the export.\r\n";
+// Harvested 2026-08-30 from a real self-test run, and the reason this
+// layer exists. AE's "Analyzing Audio..." dialog (the suite's
+// audio_to_keyframes step raises it) has an EMPTY window title and keeps
+// its name in an `Edit` child four levels down -- so the probe layer,
+// which reads titles, sees three containers and no words at all, while
+// WM_GETTEXT reads it straight off. Before it was named, evidence taken
+// during those ~6.5 s of every run was headlined UNRECOGNIZED DIALOG.
+const HARVEST_AUDIO =
+  "OS_ViewContainer\r\n" +
+  "OS_ViewContainer\r\n" +
+  "OS_EditTextContainer\r\n" +
+  "Analyzing Audio...\r\n";
 
 const HARVEST_CASES = [
   // name, harvest, known-benign?, label
@@ -673,7 +816,15 @@ const HARVEST_CASES = [
     "script-progress window + progress window"],
   // The one that matters: same title, one more sentence, and the answer
   // flips. A question is not a progress window however it is dressed.
-  ["font-alert", HARVEST_FONT_ALERT, false, "unrecognized"]
+  ["font-alert", HARVEST_FONT_ALERT, false, "unrecognized"],
+  // AE analysing audio is AE working, not AE asking. Its containers are
+  // stripped like any other, leaving the one line it actually said.
+  ["audio", HARVEST_AUDIO, true, "progress window"],
+  ["audio-plus-script", HARVEST_PROGRESS + HARVEST_AUDIO, true,
+    "script-progress window + progress window"],
+  // ...and it launders nothing either: the same dialog with an error
+  // beside it is still a run somebody has to look at.
+  ["audio-plus-error", HARVEST_AUDIO + HARVEST_ERROR, false, "unrecognized"]
 ];
 
 let harvestBody = "";

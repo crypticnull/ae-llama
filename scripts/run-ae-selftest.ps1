@@ -104,6 +104,8 @@ public class AellWin {
     [DllImport("user32.dll")] private static extern bool PostMessageW(IntPtr h, uint msg, IntPtr w, IntPtr l);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern IntPtr SendMessageTimeoutW(IntPtr h, uint msg, IntPtr w, StringBuilder l, uint flags, uint timeout, out UIntPtr res);
     [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr h, out RECT r);
+    [DllImport("user32.dll")] private static extern int GetWindowLong(IntPtr h, int i);
+    [DllImport("user32.dll")] private static extern IntPtr GetWindow(IntPtr h, uint cmd);
     [DllImport("user32.dll")] private static extern bool MoveWindow(IntPtr h, int x, int y, int w, int t, bool repaint);
     [DllImport("user32.dll")] private static extern bool BringWindowToTop(IntPtr h);
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr h);
@@ -191,19 +193,46 @@ public class AellWin {
         if ((int)wid != target) { return true; }
         if (h == appWindow) { return true; }
         if (!IsWindowVisible(h)) { return true; }
-        // Windows' chrome, not After Effects': SysShadow is the drop
-        // shadow it draws UNDER a dialog and tooltips_class32 is the
-        // tooltip it draws OVER a control. Both are visible top-level
-        // windows of this process and both are wordless, so listing
-        // them told the triage a dialog nobody could read was up.
-        // Measured 2026-08-30 -- see ae-dialog-triage.ps1 for the cold
-        // launch where AE's own drop shadow outvoted AE's own progress
-        // window and a healthy run reported as blocked.
+        // Is this window even ALLOWED to be the thing that disabled AE's
+        // main window? Two extended styles answer that, and both were
+        // measured against real After Effects on 2026-08-30:
+        //
+        //   WS_EX_NOACTIVATE (0x08000000) - the window can never become
+        //     the active window. It cannot hold the keyboard focus, so
+        //     it cannot be a dialog waiting for an answer. Every idle AE
+        //     on this machine has one: a top-level, wordless, zero-sized
+        //     "DroverLord - Window Class" popup host parked at 0,0,0,0
+        //     that AE re-uses for whatever floats.
+        //   WS_EX_TOOLWINDOW (0x00000080) - carried by BOTH pieces of
+        //     Windows chrome that cost the 2026-08-30 pass a run
+        //     (tooltips_class32 ex=00080088, SysShadow ex=000800A8).
+        //
+        // And the two real AE modals measured the same night carry
+        // NEITHER: a Script Alert and the save-changes prompt are both
+        // #32770 ex=00010101, owned by the main window, activatable.
+        // So this is the property that made the old two-class list safe,
+        // stated as the property instead of as two names -- the names
+        // are kept below as a rail, because a proven-in-the-field filter
+        // is not deleted on the strength of a better theory.
+        //
+        // Such a window is LISTED, with its flags, and deliberately not
+        // COUNTED: the popup counter is what decides whether the probe
+        // falls through to "main window is disabled but no popup text
+        // could be read", and a run blocked by something only chrome is
+        // standing next to must still reach that honest answer.
         string cls = ClassOf(h);
-        if (cls == "SysShadow" || cls == "tooltips_class32") { return true; }
-        popups++;
+        uint ex = (uint)GetWindowLong(h, -20);
+        bool nonModal = (ex & 0x08000000) != 0 || (ex & 0x00000080) != 0 ||
+                        cls == "SysShadow" || cls == "tooltips_class32";
         StringBuilder t = new StringBuilder(512);
         GetWindowTextW(h, t, 512);
+        if (nonModal) {
+            found.Append("  [" + cls + "] {nonmodal ex=" + ex.ToString("X8") +
+                         " owner=" + GetWindow(h, 4).ToInt64().ToString("X") +
+                         "} " + t.ToString().Trim() + NL);
+            return true;
+        }
+        popups++;
         found.Append("  [" + cls + "] " + t.ToString().Trim() + NL);
         EnumChildWindows(h, new EnumProc(OnChild), IntPtr.Zero);
         return true;

@@ -9025,3 +9025,183 @@ is the only thing that reaches an installed panel.
   it. The 8 GB cap flag is now struck after twelve passes carried it.
 - `release-notes.txt` still reads "0.10.0" while the feed now ships
   0.10.17. Remote session's release cut.
+
+## 2026-08-30 (local) - the popup that was never a dialog, and the two
+## windows nobody had ever watched a run put on screen
+
+Harness green on arrival, 532/532, so the pass took the only thing left
+open under item 1: **what is the `DroverLord - Window Class` popup?** The
+2026-08-30 pass that filed it could not make it happen again and said so.
+This pass did not make it happen again either. It identified it anyway,
+by photographing every window After Effects owns instead of waiting for
+the one that misbehaves.
+
+### The tool: scripts/ae-window-census.ps1
+
+The harness's own probe looks at exactly as much as an unattended gate
+needs - visible top-level popups, text read out of `#32770` and
+DroverLord shells. That is the right amount of looking to decide "is AE
+stuck" and the wrong amount to diagnose one. The census is the other
+half: every top-level window of the AfterFX process INCLUDING the hidden
+ones, with class, title, styles, owner, rect, and the whole descendant
+tree read both ways - the `GetWindowTextW` that returns empty across a
+process boundary and the `WM_GETTEXT` that does not. `-Seconds n` watches
+and logs every change; the change poll is top-level only and the
+expensive read happens once, on the sample where something appeared,
+because the watch runs BESIDE a real harness run and must not perturb the
+thing it is measuring.
+
+### `DroverLord - Window Class` is not a dialog class
+
+It is Adobe's widget class. **Every window inside After Effects is one** -
+frames, tab panels, view containers, the lot. The first census made that
+obvious and made the old assumption ("Adobe's own toolkit shell", i.e. a
+dialog) untenable.
+
+Three measurements name the popup:
+
+1. **The save-changes prompt's own `#32770` contains exactly three
+   DroverLord children** reporting `OS_ViewContainer`,
+   `OS_ViewContainer`, `OS_EditTextContainer`, plus an `Edit` whose
+   WM_GETTEXT is the save sentence. That is the field capture's
+   fingerprint, container for container.
+2. **Every idle After Effects on this machine has a top-level DroverLord
+   popup already there**, hidden: `hwnd=8707C4`, `WS_POPUP`,
+   `WS_EX_NOACTIVATE`, unowned, wordless, parked at 0,0,0,0, one
+   `OS_ViewContainer` inside it. A re-usable host for whatever AE floats.
+3. **During a real self-test run AE creates those same containers as
+   PARENTLESS TOP-LEVEL WINDOWS** - `OS_ViewContainer`,
+   `OS_EditTextContainer` and a bare top-level `Edit`, WS_CHILD-styled
+   with no parent, so `EnumWindows` hands them back as top-level.
+   Captured 20+ times across four watched runs, all invisible.
+
+So the popup that stopped a field run is **After Effects' own dialog
+CONTENT, caught top-level before it was parented into its shell**. It can
+never take focus. It was never a question anybody could answer.
+
+### The fix: the property, not the name list
+
+The 2026-08-28 fix was a list of two Windows class names (`SysShadow`,
+`tooltips_class32`). This pass measured what made those two safe to
+ignore, and it is a Win32 declaration, not a name:
+
+    Script Alert            #32770  ex=00010101  owner=main window
+    save-changes prompt     #32770  ex=00010101  owner=main window
+    tooltips_class32                ex=00080088  TOOLWINDOW
+    SysShadow                       ex=000800A8  TOOLWINDOW
+    DroverLord popup host           ex=08000000  NOACTIVATE
+
+**Both real AE modals carry neither flag**, are owned by the main window,
+and disable it. `WS_EX_NOACTIVATE` cannot become the active window, so it
+cannot be a dialog waiting for an answer; `WS_EX_TOOLWINDOW` is what both
+pieces of chrome actually are. Fixed in both layers, as the SysShadow fix
+was:
+
+- `run-ae-selftest.ps1` - a top-level window carrying either flag is
+  LISTED with the flags that discounted it (`{nonmodal ex=... owner=...}`)
+  and deliberately not COUNTED. The popup counter is what makes the probe
+  fall through to its honest "main window is disabled but no popup text
+  could be read", and a run blocked by something only chrome stands
+  beside must still reach that answer.
+- `ae-dialog-triage.ps1` - a WORDLESS block so marked is discounted. A
+  marked window that says something is still judged on what it says; the
+  annotation is stripped before the words are counted, so it cannot
+  itself read as a word.
+
+**`CloseWordlessDialogs` was not widened.** It still posts WM_CLOSE to
+`#32770` alone, which is what the workplan asked. And the change is
+toothless in the worst case by construction: a real modal that somehow
+declared itself non-activatable would be the only thing on screen, the
+popup counter would stay at zero, and the run would still stop on the
+note. The only behaviour that changes is a marked window standing NEXT
+to AE saying it is executing our script.
+
+### What the watch found that nobody had filed
+
+Four runs watched at 250 ms turned up two windows no capture in this repo
+had ever recorded, and both are live problems:
+
+- **`Auto-Save Project`.** AE's own timed auto-save fires in the MIDDLE
+  of a run and disables the script-progress window behind it. In all four
+  of four runs, ~2.5 s each. It has a real title, so it read as
+  `blocked` - and `blocked` gives up after three consecutive polls, 6 s.
+  Two and a half seconds is not six, which is the only reason this has
+  never cost a run here; a project big enough to take six seconds to save
+  is a red run nobody could have explained. Added to
+  `Get-AellProgressTitles`. The test proves it: reverted, `autosave reads
+  as progress (got blocked)`.
+- **`Analyzing Audio...`, and this is the more dangerous one.** The
+  suite's `audio_to_keyframes` step raises a `#32770` with an **empty
+  window title** whose name lives in an `Edit` child four levels down.
+  The verdict layer reads titles, so it sees three containers and no
+  words: `unreadable`, which gives up after 8 polls, ~16 s. Measured up
+  for **~6.5 s of every single run**. Every harness run this project
+  makes is already 40% of the way to dying on a dialog that is After
+  Effects working on our own script - and it is a far better candidate
+  for the lost field run than anything previously filed.
+
+The harvest layer now names it, so evidence taken during those seconds is
+no longer headlined UNRECOGNIZED DIALOG. **The verdict layer still cannot
+see it**, and that is left open ON PURPOSE rather than smuggled into this
+pass: the test pins the current behaviour (`analyzing-audio` reads as
+`unreadable`) so nobody mistakes it for solved.
+
+### Verification
+
+- **`tests/test-selftest-runner.js` 132 -> 165 checks.** Every fixture is
+  verbatim from real AE tonight. **Reverted against the pre-fix scripts
+  it fails 9 assertions**, including `popup-host-beside-progress reads as
+  running (got blocked)` and `autosave reads as progress (got blocked)`.
+- The pair that proves the rule is about the FACT and not the class:
+  an unannotated `DroverLord` popup STILL stops the run (both existing
+  cases untouched, plus a new 12-poll timeline), while one that has
+  declared it cannot take focus does not. Also pinned: a `{nonmodal}`
+  window that says something is still `blocked`, and the popup host alone
+  still stops the run at the eighth poll.
+- **Full stub sweep: 60/60 test files exit 0.**
+- **Real-AE harness 532/532, three consecutive runs after the change**
+  (and four before it, all green, which is what let the watch run at all).
+- Both .ps1 files re-checked pure ASCII by the suite's own assertion.
+- The chrome filter's own "could not reproduce" note from 2026-08-30 is
+  now closed: a hover grid across AE's window raises `tooltips_class32` +
+  `SysShadow` on demand, 10 of 54 points. The earlier pass looked for
+  them and wrote down that it had failed; they are reproducible.
+
+### No version bump
+
+`extension/` is untouched - the panel ships `extension/` alone and this
+is harness tooling. Same call, for the same reason, as the 2026-08-28 and
+2026-08-30 dialog-triage passes.
+
+### Notes for whoever runs the next pass
+
+- **The next item is specified and it is a BUILD, not a probe**: give the
+  verdict layer the `Analyzing Audio` discriminator. Everything it needs
+  was measured tonight. That dialog is **owned by the script-progress
+  window** (`owner=<the "Executing Script" #32770>`), whereas a script's
+  own `alert()` is owned by the MAIN window - measured, both of them. So
+  "a wordless popup owned by AE's script-progress window is our script
+  working, not our script stuck" is a fact the probe can annotate exactly
+  the way it now annotates `{nonmodal}`. Filed in WORKPLAN item 1.
+- One more latent one, seen but NOT visible and so not fixed: a
+  detached top-level `DroverLord - TabPanel Window` carries no
+  `WS_EX_NOACTIVATE` and a title that is not a progress name, so if one
+  were ever caught visible it would read as `blocked`. Never observed
+  visible in four runs; written down rather than guarded against.
+- `scripts/ae-window-census.ps1` is the tool to reach for next time
+  anything about AE's windows is in question: `-IncludeHidden` for one
+  census, `-Seconds n -Out <file>` to watch a run. It writes its log at
+  the END, so a watch that is killed leaves nothing - worth fixing if
+  anyone leans on it.
+- Machine state: AE left running on `logs\mogrt60\P60-scratch.aep`, three
+  green runs behind it, no dialog open. This pass deliberately raised two
+  real dialogs to measure them - a Script Alert and the save-changes
+  prompt - and dismissed both (the save prompt with WM_CLOSE, which is
+  Cancel: the project was not closed). `%TEMP%\aell-modal-flags.jsx` and
+  `%TEMP%\aell-save-prompt.jsx` can be deleted. The census log is under
+  `logs\`, which is gitignored.
+- Still open from earlier passes, unattempted tonight: item 7's catalog
+  VRAM delta (~36 GB of weights, a per-model template and a human's
+  decision); no panel UI for the mogrt export tools; no `.webm`/`.webp`
+  (a remote-session call). `release-notes.txt` still reads "0.10.0" while
+  the feed ships 0.10.17 - remote session's release cut.
