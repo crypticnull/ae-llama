@@ -7146,6 +7146,63 @@ function AELL_rqPickTemplate(list, want, label) {
     "'. Installed: " + list.join(", ") + ".");
 }
 
+/* Render Settings "Resolution" -- the one lever that makes AE render
+ * FEWER PIXELS rather than the same pixels scaled afterwards.
+ *
+ * Measured in AE 2026, and every line of this helper is one of those
+ * measurements:
+ *   - the setting is written by NAME ("Half"), never by number: AE
+ *     answers anything else with 'Must have form: "x,y"'.
+ *   - getSetting("Resolution") reads back the JSON-ish string
+ *     ({"x":2,"y":2}), while getSettings()["Resolution"] reads back the
+ *     NAME. The name is what a human asked for, so the name is reported.
+ *   - the rendered frame is ceil(dim / factor) on each axis, NOT floor:
+ *     a 641x361 comp at Half writes 321x181, and 640x360 at Third writes
+ *     214x120.
+ *   - applyTemplate RESETS Resolution to Full, so this is applied AFTER
+ *     both templates or the argument is silently dropped.
+ */
+var AELL_RQ_RESOLUTIONS = [
+  { name: "Full", factor: 1 },
+  { name: "Half", factor: 2 },
+  { name: "Third", factor: 3 },
+  { name: "Quarter", factor: 4 }
+];
+
+function AELL_rqResolution(raw) {
+  var want = AELL_trim(String(raw)).toLowerCase(), i, r;
+  // "1/2" and a bare 2 both mean Half to a user; AE means Half by "Half"
+  // and by nothing else.
+  var m = /^1\s*\/\s*([1-4])$/.exec(want);
+  if (m) want = m[1];
+  for (i = 0; i < AELL_RQ_RESOLUTIONS.length; i++) {
+    r = AELL_RQ_RESOLUTIONS[i];
+    if (want === r.name.toLowerCase() || want === String(r.factor)) return r;
+  }
+  var names = [];
+  for (i = 0; i < AELL_RQ_RESOLUTIONS.length; i++) {
+    names.push(AELL_RQ_RESOLUTIONS[i].name + " (1/" +
+               AELL_RQ_RESOLUTIONS[i].factor + ")");
+  }
+  throw new Error("'resolution' must be one of: " + names.join(", ") +
+    " - got \"" + String(raw) + "\". AE's Render Settings only offer " +
+    "these four; there is no arbitrary percentage.");
+}
+
+/* The name AE reports back after the write, and the factor that goes
+ * with it. Read from getSettings() rather than trusted from the
+ * argument: a setting that did not take is exactly the failure this
+ * reports instead of hiding. */
+function AELL_rqResolutionOf(item, fallback) {
+  var name = "";
+  try { name = String(item.getSettings()["Resolution"]); } catch (e) { name = ""; }
+  if (!name) return fallback || { name: "(unread)", factor: 0 };
+  for (var i = 0; i < AELL_RQ_RESOLUTIONS.length; i++) {
+    if (AELL_RQ_RESOLUTIONS[i].name === name) return AELL_RQ_RESOLUTIONS[i];
+  }
+  return { name: name, factor: 0 };
+}
+
 AELL_TOOLS.list_render_templates = function (args) {
   var t = AELL_rqTemplates();
   // render_comp demands an absolute path in a folder that exists, and
@@ -7240,6 +7297,12 @@ AELL_TOOLS.render_comp = function (args) {
     wantRS = AELL_rqPickTemplate(tmpl.renderSettings, args.renderSettings,
                                  "render-settings");
   }
+  // Parsed BEFORE the queue item exists, so a bad value costs nothing.
+  var wantRes = null;
+  if (typeof args.resolution !== "undefined" && args.resolution !== null &&
+      args.resolution !== "") {
+    wantRes = AELL_rqResolution(args.resolution);
+  }
 
   // Hold back everything the USER already queued. render() takes the
   // whole queue, so without this a "render this comp" turns into
@@ -7259,6 +7322,9 @@ AELL_TOOLS.render_comp = function (args) {
     if (wantRS) mine.applyTemplate(wantRS);
     // Template BEFORE file: applyTemplate rewrites the extension.
     if (wantOM) mine.outputModule(1).applyTemplate(wantOM);
+    // Resolution AFTER both templates: applyTemplate resets it to Full
+    // (measured), so setting it any earlier is setting it to nothing.
+    if (wantRes) mine.setSetting("Resolution", wantRes.name);
     mine.outputModule(1).file = file;
 
     if (typeof args.startTime !== "undefined" && args.startTime !== null &&
@@ -7276,6 +7342,7 @@ AELL_TOOLS.render_comp = function (args) {
     var spanStart = mine.timeSpanStart, spanDur = mine.timeSpanDuration;
     var finalPath = mine.outputModule(1).file.fsName;
     var omName = mine.outputModule(1).name;
+    var gotRes = AELL_rqResolutionOf(mine, wantRes);
 
     // Suppression is entered ONLY here, with overwrite already decided
     // above. Its single job is to stop the overwrite modal from wedging
@@ -7299,10 +7366,28 @@ AELL_TOOLS.render_comp = function (args) {
       seconds: Math.round((new Date().getTime() - started) / 100) / 10,
       outputModule: omName,
       renderSettings: wantRS || "(AE default)",
+      resolution: gotRes.name,
       timeSpan: "start " + spanStart + "s, " +
         Math.round(spanDur * comp.frameRate) + " frame(s) at " +
         comp.frameRate + " fps"
     };
+    // The frame AE actually wrote. A reduced render is the one case where
+    // the file's size is NOT the comp's size, and a caller that scales
+    // afterwards has to be told which number it is scaling from.
+    if (gotRes.factor > 0) {
+      var rw = Math.ceil(comp.width / gotRes.factor);
+      var rh = Math.ceil(comp.height / gotRes.factor);
+      result.renderedSize = rw + "x" + rh;
+      if (gotRes.factor > 1) {
+        result.renderedSize += " (comp is " + comp.width + "x" +
+          comp.height + ", rendered at " + gotRes.name + ")";
+      }
+    }
+    if (wantRes && gotRes.name !== wantRes.name) {
+      result.resolutionWarning = "Asked AE for " + wantRes.name +
+        " resolution; it reports " + gotRes.name + ". The file is what " +
+        "AE reports, not what was asked for.";
+    }
     if (status !== RQItemStatus.DONE) {
       result.warning = "AE finished with " + AELL_rqStatusName(status) +
         " - nothing was written. Check the output path and the comp.";

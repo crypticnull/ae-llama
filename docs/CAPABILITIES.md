@@ -69,7 +69,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `remove_keyframes` | Remove keyframes from a property on many layers at once — specific times or all | yes | host | 1 | 5 |
 | `rename_comps` | Rename MANY comps in one call, on the org convention (REVyy_ from a year in the old name, else REV_NO-YEAR_) | yes | host | 1 | 3 |
 | `rename_item` | Rename any project item (comp, footage, folder) | yes | host | 1 | 3 |
-| `render_comp` | Actually RENDER a comp to a file | yes | host | 1 | 8 |
+| `render_comp` | Actually RENDER a comp to a file | yes | host | 1 | 11 |
 | `render_comp_audio` | Render ONLY the comp's audio to a file (AE's audio-only output module, picked for you) | yes | host | 1 | 2 |
 | `reorder_layers` | Restack layers WITHOUT changing their timing | yes | host | 1 | 2 |
 | `scale_comp` | Resize a comp AND scale its content to match, re-centered — like the native 'Scale Composition' script | yes | host | 2 | 2 |
@@ -259,7 +259,22 @@ Queued (see WORKPLAN for owners/order):
   `beginSuppressDialogs`; and the output module forces its OWN file
   extension onto whatever path it is handed (an .mp4 set under
   "Lossless" reads back as .avi immediately), so the path REPORTED is the
-  one AE settled on, never the one that was asked for.
+  one AE settled on, never the one that was asked for. Since 2026-08-30 it
+  also takes `{resolution}` — AE's Render Settings resolution, so a
+  preview or a soon-to-be-scaled master costs the pixels it will actually
+  use rather than the comp's full frame. The result reports the
+  resolution AE confirms and the frame size it really wrote
+  (`ceil(dim/factor)` per axis, measured — 641x361 at half is 321x181),
+  and the four names are all AE accepts: anything else is refused with
+  the list. Ordering is load-bearing and is the reason a suite step
+  exists for it: `applyTemplate` RESETS the resolution to Full, so it is
+  set AFTER both templates or it silently does nothing.
+  `export_gif`/`export_social` expose the same lever as
+  `{masterResolution}` (`"auto"` picks the largest reduction that still
+  covers the output, and a reduction that would land UNDER the requested
+  size is refused rather than upscaled). It is opt-in: on this machine a
+  10 s 1080p comp to 480x270 went 6.6 s -> 6.0 s, so the win is the
+  intermediate itself — 1.74 GB down to 116 MB — not the clock.
 - **After Effects cannot render inside an undo group.** Its renderer
   closes the script's group out from under it and AE raises a modal
   "Undo group mismatch" — later in the run, at some innocent

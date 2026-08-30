@@ -5244,6 +5244,14 @@
           // actually settled on so the next steps aim at the same file.
           ctx.rqWrote = d.output.replace(/\\/g, "/");
           ctx.rqBytes = d.bytes;
+          if (d.resolution !== "Full") {
+            return "an unasked render is not Full resolution: " +
+                   d.resolution;
+          }
+          if (d.renderedSize !== "160x120") {
+            return "did not report the comp's own frame size: " +
+                   d.renderedSize;
+          }
           return /1 frame/.test(d.timeSpan) ||
                  "did not report one frame: " + d.timeSpan;
         } },
@@ -5282,6 +5290,75 @@
           return d.bytes > ctx.rqBytes ||
                  "the file did not grow (" + ctx.rqBytes + " -> " +
                  d.bytes + "), so the render was silently skipped";
+        } },
+
+      // ---- {resolution}: AE renders FEWER PIXELS, rather than the same
+      // pixels scaled afterwards. The export path's master exists only to
+      // be scaled down, so this is where the bytes are saved. Every step
+      // here pins a measurement from the 2026-08-30 probe.
+      { name: "resolution:half renders a HALF-SIZE frame, and says so",
+        tool: "render_comp",
+        args: function (ctx) {
+          return { comp: ctx.rqComp, output: ctx.rqWrote,
+                   template: ctx.rqTemplate, frames: 1, overwrite: true,
+                   resolution: "half" };
+        },
+        check: function (d, ctx) {
+          if (d.status !== "DONE") return "status " + d.status;
+          if (d.resolution !== "Half") {
+            return "AE reports " + d.resolution + ", not Half";
+          }
+          var rs = String(d.renderedSize || "");
+          if (rs.indexOf("80x60") !== 0) {
+            return "half of 160x120 should be 80x60: " + rs;
+          }
+          if (rs.indexOf("160x120") < 0) {
+            return "the comp's own size is not named beside it: " + rs;
+          }
+          // The file itself, not just the report: a quarter of the
+          // pixels cannot cost the same bytes as all of them.
+          return d.bytes < ctx.rqBytes ||
+                 "the same frame at half resolution was not smaller (" +
+                 ctx.rqBytes + " -> " + d.bytes + "), so AE rendered " +
+                 "full size and the setting did nothing";
+        } },
+
+      // THE ordering step. applyTemplate RESETS Resolution to Full
+      // (measured), so a tool that sets it beside the other arguments
+      // renders full size and reports success. Only a render-settings
+      // template TOGETHER with a resolution can catch that.
+      { name: "a render-settings template does not eat the resolution",
+        tool: "render_comp",
+        args: function (ctx) {
+          var a = { comp: ctx.rqComp, output: ctx.rqWrote,
+                    template: ctx.rqTemplate, frames: 1, overwrite: true,
+                    resolution: "quarter" };
+          if (ctx.rqSettings) a.renderSettings = ctx.rqSettings;
+          return a;
+        },
+        check: function (d) {
+          if (d.status !== "DONE") return "status " + d.status;
+          if (d.resolutionWarning) return d.resolutionWarning;
+          if (d.resolution !== "Quarter") {
+            return "the template reset the resolution to " + d.resolution +
+                   " and the render went out full size";
+          }
+          return String(d.renderedSize || "").indexOf("40x30") === 0 ||
+                 "quarter of 160x120 should be 40x30: " + d.renderedSize;
+        } },
+
+      { name: "an arbitrary percentage is refused with AE's four names",
+        tool: "render_comp",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.rqComp, output: ctx.rqWrote,
+                   template: ctx.rqTemplate, frames: 1, overwrite: true,
+                   resolution: "35%" };
+        },
+        check: function (err) {
+          if (!/resolution/i.test(err)) return "not a resolution error: " + err;
+          return (/Full/.test(err) && /Quarter/.test(err)) ||
+                 "does not list what AE really offers: " + err;
         } },
 
       { name: "the queue is left exactly as it was found",

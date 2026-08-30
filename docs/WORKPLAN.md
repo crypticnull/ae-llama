@@ -930,6 +930,25 @@ by name with the list of what IS written. A GIF/MP4 pair is the ask;
 the third format is a remote-session call about whether libvpx's speed
 is acceptable.
 
+~~Pass B follow-up: the intermediate is always the FULL comp size, then
+scaled by ffmpeg — a `resolution` argument on `render_comp` would make
+this much cheaper.~~ DONE 2026-08-30. `render_comp` takes
+`{resolution}` and both exporters take `{masterResolution}` (plus
+`"auto"`, the largest reduction that still covers the output; a
+reduction that would land UNDER the requested size is refused rather
+than upscaled). The probe paid for the fact that decides its shape: the
+render-queue ITEM answers `getSettings()` where the OUTPUT MODULE
+throws (6.1 Pass C measured that throw), Resolution is written by NAME
+and nothing else, `getSetting` answers the pair and `getSettings` the
+name — and `applyTemplate` RESETS Resolution to Full, so it is set
+AFTER both templates or the argument silently does nothing. The
+rendered frame is `ceil(dim/factor)` per axis, not floor: 641x361 at
+half is 321x181. Measured payoff on a 10 s 1080p comp to 480x270: the
+master went 1.74 GB -> 116 MB, the wall clock 6.6 s -> 6.0 s. So it
+buys HEADROOM — an export the intermediate cap refused now runs — not
+speed. Opt-in on the export side, because nobody has measured AE's own
+downsampler against ffmpeg's on real footage. Harness 514 -> 517.
+
 ## 7. Tier P4 — real-GPU measurement (local; P1–P3 landed 2026-08-25)
 
 The remote half of docs/COMFY_TIERS_PLAN.md is in: tiers.js (T0–T7 +

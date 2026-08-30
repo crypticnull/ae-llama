@@ -301,6 +301,108 @@
              note: note, err: "" };
   }
 
+  /**
+   * Which Render Settings resolution AE should render the master at.
+   *
+   * The master exists only to be scaled DOWN, so rendering it at comp
+   * size and throwing most of the pixels away is pure cost: a 4K comp
+   * exported to a 480 px GIF moves 24 MB a frame to keep 0.4. AE can
+   * render the smaller frame itself (render_comp {resolution}), and
+   * ceil(dim/factor) is the size it writes -- measured, not floor.
+   *
+   * The one rule this must never break is the export path's own: never
+   * upscale. A master smaller than the requested output on either axis
+   * is refused by name rather than quietly enlarged, and "auto" picks
+   * the largest reduction that still covers the output.
+   *
+   * OPT-IN, deliberately. AE's reduced-resolution render is its own
+   * sampler and nobody here has measured it against ffmpeg's downscale
+   * on real footage, so the default stays exactly what shipped.
+   *
+   * @param {{w:number,h:number}} src the comp's own pixels
+   * @param {{width:number,height:number}} out the planned output frame
+   * @param {string} raw the caller's masterResolution, or nothing
+   */
+  var MASTER_RES = [
+    { name: "full", factor: 1 }, { name: "half", factor: 2 },
+    { name: "third", factor: 3 }, { name: "quarter", factor: 4 }
+  ];
+
+  function masterSize(src, factor) {
+    return { width: Math.ceil(Number(src.w) / factor),
+             height: Math.ceil(Number(src.h) / factor) };
+  }
+
+  function covers(src, factor, out) {
+    var m = masterSize(src, factor);
+    return m.width >= Number(out.width) && m.height >= Number(out.height);
+  }
+
+  function planMaster(src, out, raw) {
+    var i, chosen = null;
+    var none = { name: "full", factor: 1, width: Math.round(Number(src.w)),
+                 height: Math.round(Number(src.h)), note: "", err: "" };
+    if (raw === null || typeof raw === "undefined" || raw === "") return none;
+    var want = String(raw).trim().toLowerCase();
+    var m = /^1\s*\/\s*([1-4])$/.exec(want);
+    if (m) want = { "1": "full", "2": "half", "3": "third",
+                    "4": "quarter" }[m[1]];
+
+    if (want === "auto") {
+      for (i = MASTER_RES.length - 1; i >= 0; i--) {
+        if (covers(src, MASTER_RES[i].factor, out)) {
+          chosen = MASTER_RES[i];
+          break;
+        }
+      }
+      // Full always covers unless the output is bigger than the comp,
+      // which planSize has already decided is allowed (an upscale the
+      // user asked for by name). Then there is nothing to reduce.
+      if (!chosen) return none;
+    } else {
+      for (i = 0; i < MASTER_RES.length; i++) {
+        if (want === MASTER_RES[i].name ||
+            want === String(MASTER_RES[i].factor)) {
+          chosen = MASTER_RES[i];
+          break;
+        }
+      }
+      if (!chosen) {
+        return { err: "'masterResolution' must be full, half, third, " +
+          "quarter or auto - got \"" + String(raw) + "\". It is the " +
+          "resolution AE renders the intermediate at; ffmpeg still " +
+          "produces the size you asked for." };
+      }
+      if (chosen.factor > 1 && !covers(src, chosen.factor, out)) {
+        var got = masterSize(src, chosen.factor);
+        var best = null;
+        for (i = MASTER_RES.length - 1; i >= 0; i--) {
+          if (covers(src, MASTER_RES[i].factor, out)) {
+            best = MASTER_RES[i];
+            break;
+          }
+        }
+        return { err: "At " + chosen.name + " resolution AE would render " +
+          got.width + "x" + got.height + ", which is smaller than the " +
+          Number(out.width) + "x" + Number(out.height) + " you asked " +
+          "for - the export would have to ENLARGE the master, which is " +
+          "only ever a blurrier file. " + (best && best.factor > 1
+            ? "The most it can be reduced for this size is " + best.name + "."
+            : "This size needs the full-resolution master.") };
+      }
+    }
+
+    var size = masterSize(src, chosen.factor);
+    var note = "";
+    if (chosen.factor > 1) {
+      note = "AE renders the master at " + chosen.name + " resolution (" +
+        size.width + "x" + size.height + " instead of " +
+        Math.round(Number(src.w)) + "x" + Math.round(Number(src.h)) + ").";
+    }
+    return { name: chosen.name, factor: chosen.factor, width: size.width,
+             height: size.height, note: note, err: "" };
+  }
+
   /** Join the fps filter (if any) in front of a size filter. */
   function withFps(filter, fps) {
     var f = Number(fps);
@@ -668,6 +770,7 @@
     evenDown: evenDown,
     parseSize: parseSize,
     planSize: planSize,
+    planMaster: planMaster,
     withFps: withFps,
     estimateIntermediate: estimateIntermediate,
     humanBytes: humanBytes,

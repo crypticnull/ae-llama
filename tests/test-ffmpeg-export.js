@@ -213,6 +213,86 @@ const SRC = { w: 1920, h: 1080 };
          "a comp with no pixels is refused rather than divided by");
 }
 
+// ---- planMaster: the pixels AE never has to render
+//
+// The master exists only to be scaled DOWN, so a 4K comp going to a
+// 480 px GIF moves 24 MB a frame to keep 0.4. AE's Render Settings can
+// render the smaller frame itself, and render_comp grew {resolution}
+// for it. Measured in AE 2026: the rendered frame is ceil(dim/factor)
+// on each axis, and the FOUR names are all AE offers.
+
+{
+  const none = F.planMaster(SRC, { width: 480, height: 270 });
+  assert(none.factor === 1 && none.width === SRC.w && none.height === SRC.h,
+         "no masterResolution is the shipped behaviour, unchanged: a " +
+         "full-size master (" + none.width + "x" + none.height + ")");
+  assert(!none.note, "and nothing to say about it");
+}
+{
+  const h = F.planMaster(SRC, { width: 480, height: 270 }, "half");
+  assert(h.factor === 2 && h.width === 960 && h.height === 540,
+         "half of 1920x1080 is 960x540 — " + h.width + "x" + h.height);
+  assert(/half resolution/.test(h.note) && /1920x1080/.test(h.note),
+         "and the note names both sizes, because the user asked for a " +
+         "1920-wide comp: " + h.note);
+}
+{
+  // ceil, not floor. 641/2 is 321 in After Effects, measured.
+  const o = F.planMaster({ w: 641, h: 361 }, { width: 320, height: 180 },
+                         "half");
+  assert(o.width === 321 && o.height === 181,
+         "an odd comp rounds each axis UP: 641x361 at half is 321x181, " +
+         "not 320x180 — got " + o.width + "x" + o.height);
+}
+{
+  // THE rule: this may never hand ffmpeg something it has to enlarge.
+  const bad = F.planMaster(SRC, { width: 1080, height: 1920 }, "quarter");
+  assert(/ENLARGE/.test(bad.err || ""),
+         "a reduction that lands under the output is refused, not " +
+         "quietly upscaled: " + String(bad.err).slice(0, 90));
+  assert(/480x270/.test(bad.err || ""),
+         "and the refusal says what AE WOULD have rendered: " +
+         String(bad.err).slice(0, 90));
+  assert(/full-resolution master/.test(bad.err || ""),
+         "and that this size has nothing to spare: " +
+         String(bad.err).slice(-70));
+}
+{
+  const bad2 = F.planMaster(SRC, { width: 960, height: 540 }, "quarter");
+  assert(/most it can be reduced .* is half/.test(bad2.err || ""),
+         "when a smaller reduction WOULD work, the refusal names it " +
+         "rather than leaving the user to bisect: " +
+         String(bad2.err).slice(-80));
+}
+{
+  const a = F.planMaster(SRC, { width: 480, height: 270 }, "auto");
+  assert(a.factor === 4 && a.width === 480 && a.height === 270,
+         "'auto' takes the largest reduction that still COVERS the " +
+         "output — 1920 to a 480 px GIF is exactly quarter, so ffmpeg " +
+         "scales nothing at all (" + a.width + "x" + a.height + ")");
+  const b = F.planMaster(SRC, { width: 1080, height: 1920 }, "auto");
+  assert(b.factor === 1 && !b.err,
+         "and when nothing fits, 'auto' is simply the full master — " +
+         "never a refusal, because the user asked for a choice, not a " +
+         "size");
+  const c = F.planMaster(SRC, { width: 700, height: 394 }, "auto");
+  assert(c.factor === 2,
+         "700 wide needs more than a third of 1920 (640), so auto stops " +
+         "at half — got factor " + c.factor);
+}
+{
+  assert(F.planMaster(SRC, { width: 480, height: 270 }, "1/4").factor === 4,
+         "'1/4' is quarter, the way a person would write it");
+  assert(F.planMaster(SRC, { width: 480, height: 270 }, "QUARTER").factor === 4,
+         "and case is not a trap");
+  assert(F.planMaster(SRC, { width: 480, height: 270 }, "full").factor === 1,
+         "'full' is the explicit way to say the default");
+  const e = F.planMaster(SRC, { width: 480, height: 270 }, "35%");
+  assert(/must be full, half, third, quarter or auto/.test(e.err || ""),
+         "an arbitrary percentage is refused with the list — AE has no " +
+         "such setting: " + String(e.err).slice(0, 80));
+}
+
 // ---- fps + the size estimate
 assert(F.withFps("scale=2:2", 12) === "fps=12,scale=2:2",
        "the fps filter goes FIRST — dropping frames before scaling them " +

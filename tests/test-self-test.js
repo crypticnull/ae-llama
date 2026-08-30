@@ -3764,10 +3764,40 @@ function cannedOk(tool, args) {
       const frames = (args && args.frames) ? Number(args.frames)
         : ((args && args.durationSeconds)
             ? Math.round(Number(args.durationSeconds) * 24) : 24);
-      rqDisk[path.toLowerCase()] = 64840 * Math.max(1, frames);
+      // Render Settings Resolution. AE takes the four NAMES and nothing
+      // else, and writes ceil(dim / factor) on each axis -- measured
+      // 2026-08-30, and 641x361 at Half really is 321x181.
+      const RES_F = { full: 1, half: 2, third: 3, quarter: 4 };
+      let resName = "Full", resF = 1;
+      if (args && args.resolution !== undefined &&
+          args.resolution !== null && args.resolution !== "") {
+        let wr = String(args.resolution).trim().toLowerCase();
+        const mm = /^1\s*\/\s*([1-4])$/.exec(wr);
+        if (mm) wr = { "1": "full", "2": "half", "3": "third",
+                       "4": "quarter" }[mm[1]];
+        if (wr === "1" || wr === "2" || wr === "3" || wr === "4") {
+          wr = ["full", "half", "third", "quarter"][Number(wr) - 1];
+        }
+        if (!Object.prototype.hasOwnProperty.call(RES_F, wr)) {
+          return { __err: "'resolution' must be one of: Full (1/1), " +
+            "Half (1/2), Third (1/3), Quarter (1/4) - got \"" +
+            String(args.resolution) + "\". AE's Render Settings only " +
+            "offer these four; there is no arbitrary percentage." };
+        }
+        resF = RES_F[wr];
+        resName = wr.charAt(0).toUpperCase() + wr.slice(1);
+      }
+      const cp = compProps[comp] || { width: 1280, height: 720 };
+      const rw = Math.ceil(cp.width / resF), rh = Math.ceil(cp.height / resF);
+      rqDisk[path.toLowerCase()] =
+        Math.round(64840 * Math.max(1, frames) / (resF * resF));
       const out = { comp, output: path, status: "DONE",
                     bytes: rqDisk[path.toLowerCase()],
                     seconds: 0.2, outputModule: om,
+                    resolution: resName,
+                    renderedSize: rw + "x" + rh + (resF > 1
+                      ? " (comp is " + cp.width + "x" + cp.height +
+                        ", rendered at " + resName + ")" : ""),
                     renderSettings: rs || "(AE default)",
                     timeSpan: "start 0s, " + Math.max(1, frames) +
                       " frame(s) at 24 fps" };

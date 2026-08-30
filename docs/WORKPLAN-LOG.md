@@ -7203,3 +7203,155 @@ dialog-triage pass.
   was never force-killed - a hard kill is what raises the recovery
   dialog on the next launch). `%TEMP%\aell-probe-progress` holds the
   four probe scripts and their logs and can be deleted.
+
+## 2026-08-30 (local) - item 6.2 follow-up: the pixels After Effects
+## never had to render, and the template that quietly ate the setting
+
+Harness was GREEN on arrival (514/514), so the pass went to the queue.
+Sections 1-4 are struck through, 5.9 is still held back by its own
+last-item-of-the-night rule (eighteenth pass), and the freshest open
+item is the one 6.2 Pass B filed against itself: **the lossless master
+is always rendered at the FULL comp size and then thrown away by the
+scaler.** A 4K comp exported to a 480 px GIF moves 24 MB a frame to
+keep 0.4. Pass B called a `resolution` argument on `render_comp` "a
+self-contained small pass". It was.
+
+### What the probe measured (AE 2026, two temp .jsx runs)
+
+Everything below is field truth; none of it was in the sketch.
+
+- **The render-queue ITEM answers `getSettings()`.** It hands back a
+  plain name-keyed map (Quality, Resolution, Time Span, ...). This is
+  worth writing down because the OUTPUT MODULE's `getSettings()`
+  THROWS - 6.1 Pass C paid for that fact - and the two objects had been
+  assumed to behave alike.
+- **`getSetting("Resolution")` and `getSettings()["Resolution"]` do not
+  answer the same question.** The first returns the JSON-ish pair
+  verbatim, curly braces and all: `({"x":2,"y":2})`. The second returns
+  the NAME: `Half`. A human asked for a name, so the tool reports the
+  name and reads it from the map.
+- **Resolution is written by NAME and by nothing else.** `"Half"` works;
+  `"half"`, `2` and `"Custom"` all take the same throw - *Invalid Value
+  for key: <Resolution>. Missing or incorrect component. Must have form:
+  "x,y"* - which names a form the API will not actually accept from a
+  script. So the tool normalises ("half", "1/2", 2, "QUARTER") and
+  refuses anything else with AE's real four.
+- **`applyTemplate` RESETS Resolution to Full.** This is the whole
+  reason this pass has an ordering test in three places. Set the
+  resolution next to the other arguments - the obvious place - and AE
+  wipes it when the render-settings template lands, renders full size,
+  and reports success. Same trap shape as Pass A's "template BEFORE
+  file", one line further down.
+- **The rendered frame is `ceil(dim/factor)` per axis, not floor.**
+  Measured with ffprobe on real renders: 640x360 at Third is **214x120**
+  and 641x361 at Half is **321x181**. A floor would have been wrong on
+  both.
+- And the thing the argument exists for: resolution changes the OUTPUT
+  FILE, not just AE's sampling. 640x360 -> 320x180 -> 214x120 -> 160x90,
+  1 389 680 bytes down to 93 680.
+
+### What shipped
+
+- `render_comp {resolution}` (hostscript.jsx): parsed and validated
+  BEFORE anything is queued, applied AFTER both templates, then READ
+  BACK from `getSettings()` rather than trusted. The result reports
+  `resolution` (AE's name) and `renderedSize` (with the comp's own size
+  beside it when they differ), and a `resolutionWarning` when what AE
+  confirms is not what was asked for.
+- `export_gif` / `export_social` `{masterResolution}` via
+  `Ffmpeg.planMaster` (the pure half, so it is stub-testable):
+  full/half/third/quarter/auto. **`auto` picks the largest reduction
+  that still COVERS the output**, so ffmpeg never enlarges; a named
+  reduction that would land under the requested size is REFUSED and the
+  refusal names the largest one that would work. The intermediate
+  estimate and the cap message are computed from the reduced size, and
+  the cap refusal now points at `{masterResolution: "auto"}` as a way
+  through.
+- **Opt-in, deliberately.** AE's reduced-resolution render is its own
+  sampler and nobody here has measured it against ffmpeg's downscale on
+  real FOOTAGE (a flat solid proves nothing about aliasing). Making it
+  the default would be a silent quality change to a shipped path on an
+  unmeasured assumption. The default is exactly what shipped.
+
+### Verification
+
+- **Harness: 517/517 PASSED in real AE** (514 before), three new suite
+  steps: half really writes 80x60 AND fewer bytes than the same frame at
+  full; a render-settings template together with a resolution still
+  reports Quarter (the ordering step); an arbitrary percentage is refused
+  with the four names. The existing "writes one real frame" step also
+  now asserts `Full` / `160x120`, so the default is pinned too.
+- `tests/test-render-queue.js` 82 -> 108 checks. The stub learned five
+  more AE facts (facts 13-17 in its header comment: the applyTemplate
+  reset, the item-level `getSettings`, the pair-vs-name split, the
+  name-only write, the ceil rounding). **Reverted against a hostscript
+  that sets the resolution before `applyTemplate`, three assertions
+  fail** - including `resolutionWarning` firing - so the bug class is
+  caught without AE.
+- `tests/test-ffmpeg-export.js` 122 -> 138 checks for `planMaster`,
+  including the two refusals and the auto ladder (700 wide stops at
+  half, because a third of 1920 is 640).
+- `tests/test-self-test.js`: its hand-written render_comp stub learned
+  the same rules, or the suite's new steps would have passed against a
+  fake that knows nothing about resolution. 517/517 there too.
+- **Full stub sweep: all 55 test files exit 0.** Capability report
+  regenerated (render_comp 8 -> 11 steps); curated half updated.
+- **Export path driven end to end in real AE** through the panel tools
+  (a probe that slices chat-probe.js's own bridge out of the file, so
+  it cannot drift from what the panel does):
+  - `export_gif {masterResolution: "auto"}` on a 1920x1080 comp to 480
+    wide -> quarter master, 480x270 GIF, and the note says so.
+  - `export_social {masterResolution: "half"}` -> 960x540 h264,
+    libopenh264, master 960x540.
+  - `{masterResolution: "quarter"}` for a 1920x1080 output -> refused:
+    "AE would render 480x270 ... would have to ENLARGE the master".
+  - `"35%"` -> refused with the list.
+  - **The payoff, measured:** a 10 s 1080p comp to 480x270 with
+    `maxIntermediateGB: 0.2` is REFUSED at full size (1.74 GB) and RUNS
+    with `auto` (116 MB). Wall clock 6 598 ms full vs 5 966 ms quarter.
+  - `stray masters in TEMP: []` after every run; the probe comps were
+    removed and the removal COUNT was read (the Pass B lesson).
+
+### No version bump
+
+Feature track: this is a new argument on shipped tools, not a fix to
+shipped behaviour - nothing was broken before it. Same call, for the
+same reason, as 6.1 Passes A-C and 6.2 Passes A-B. It rides the next
+MINOR, which is the remote session's.
+
+### Still open
+
+- **The quality question this pass deliberately did not answer.** Is
+  AE's own downsample at Half/Quarter as good as rendering full and
+  letting ffmpeg's scaler do it? Measured on a flat solid: identical
+  output bytes, which proves nothing. On real footage with fine detail
+  it might alias. Until someone measures it (an SSIM comparison against
+  a detailed source would settle it in one pass), `masterResolution`
+  stays opt-in and the default stays full.
+- **The speed claim is smaller than it looks on this machine.** 6.6 s ->
+  6.0 s for 10 s of 1080p. The disk here is fast and the test comp was a
+  solid; a comp with heavy effects should gain much more, because AE
+  computes a quarter of the pixels - but that is reasoning, not a
+  measurement, and it is written here as such. The measured, banked win
+  is the intermediate: 1.74 GB -> 116 MB, which is the difference
+  between an export the cap refuses and one that runs.
+- **What IS the `DroverLord - Window Class` popup?** Unchanged from the
+  previous entry, and still not reproduced. Evidence will be captured
+  when it recurs.
+- Everything 6.2 Pass B left open otherwise: no panel UI for the export
+  tools, no `.webm`/`.webp`, the 8 GB cap that is still a guess (this
+  pass makes it easier to live with, not measured), panel tools reading
+  as uncovered in the capability table.
+- `get-llama.ps1` still has the two latent traps 6.1 Pass A flagged.
+  Sixth flag.
+- 5.9 (.mogrt export) still deferred by its own LAST-item-of-the-night
+  rule. Eighteenth pass.
+- `release-notes.txt` still reads "0.10.0" while the feed ships 0.10.8 -
+  seventeenth flag; remote session's release cut.
+- `comfy_generate` still calls `import_file` rather than 5.8's
+  `import_as_layer`.
+- Machine state: AE left running with no dialog open, harness green
+  behind it. Both probe comps (`AELL_EXPORT_RES`, `AELL_EXPORT_RES2`)
+  were removed and the removal count read back (2 and 1). The probe
+  folder under TEMP holds the four probe scripts, their JSON results
+  and the small test renders, and can be deleted.

@@ -535,8 +535,11 @@
             "is held back, not rendered. Use list_render_templates for " +
             "valid template names — the output module forces its own " +
             "file extension, so the result says where the bytes really " +
-            "went.",
-      args: "{comp?: string, output: string (ABSOLUTE file path), template?: string (output module, e.g. \"Lossless\" or \"H.264 - Match Render Settings - 15 Mbps\"), renderSettings?: string (e.g. \"Best Settings\"), startTime?: number (seconds), durationSeconds?: number, frames?: int (instead of durationSeconds), overwrite?: bool = false}" },
+            "went. {resolution} renders FEWER PIXELS (\"half\" writes a " +
+            "file half as wide and half as tall, a quarter of the bytes) " +
+            "— use it for previews and for anything that will be scaled " +
+            "down afterwards; the result says the size AE really wrote.",
+      args: "{comp?: string, output: string (ABSOLUTE file path), template?: string (output module, e.g. \"Lossless\" or \"H.264 - Match Render Settings - 15 Mbps\"), renderSettings?: string (e.g. \"Best Settings\"), resolution?: \"full\"|\"half\"|\"third\"|\"quarter\" = full, startTime?: number (seconds), durationSeconds?: number, frames?: int (instead of durationSeconds), overwrite?: bool = false}" },
     { name: "list_render_templates", mutating: false,
       desc: "List this machine's render-settings and output-module " +
             "template names for render_comp. Installed templates differ " +
@@ -575,7 +578,7 @@
             "Renders the comp's WORK AREA unless you pass " +
             "{wholeComp: true}; the result says which. Needs ffmpeg " +
             "installed; the refusal says how.",
-      args: "{comp?: string, output: string (ABSOLUTE path ending .gif), size?: string (\"480\" = width, \"480x270\", \"720p\" = height), width?: int, height?: int, fit?: 'contain' (letterbox, default) | 'cover' (fill and crop) | 'stretch', padColor?: string, fps?: number (default 12), colors?: int 4-256 (default 256), dither?: 'bayer' (default) | 'none' | 'sierra2_4a' | 'floyd_steinberg', loop?: bool = true, wholeComp?: bool, startTime?: number (seconds), durationSeconds?: number, overwrite?: bool = false}" },
+      args: "{comp?: string, output: string (ABSOLUTE path ending .gif), size?: string (\"480\" = width, \"480x270\", \"720p\" = height), width?: int, height?: int, fit?: 'contain' (letterbox, default) | 'cover' (fill and crop) | 'stretch', padColor?: string, fps?: number (default 12), colors?: int 4-256 (default 256), dither?: 'bayer' (default) | 'none' | 'sierra2_4a' | 'floyd_steinberg', loop?: bool = true, masterResolution?: 'full' (default) | 'half' | 'third' | 'quarter' | 'auto' (render the intermediate smaller — much faster and far less disk when the export is much smaller than the comp; refused if it would end up smaller than the output), wholeComp?: bool, startTime?: number (seconds), durationSeconds?: number, overwrite?: bool = false}" },
     { name: "export_social", mutating: true,
       desc: "Export a comp as an H.264 .mp4 (or .mov) sized for posting, " +
             "AUDIO INCLUDED when the comp has any. Renders a lossless " +
@@ -585,7 +588,7 @@
             "— and {fit} to say whether the picture is letterboxed or " +
             "cropped into it. Renders the comp's WORK AREA unless you " +
             "pass {wholeComp: true}. Needs ffmpeg installed.",
-      args: "{comp?: string, output: string (ABSOLUTE path ending .mp4 or .mov), size?: string (\"1080x1920\", \"1080p\", \"720\"), width?: int, height?: int, fit?: 'contain' (letterbox, default) | 'cover' (fill and crop) | 'stretch', padColor?: string, fps?: number (default: the comp's), quality?: 'low'|'medium' (default)|'high', audio?: bool = true, hardware?: bool = false (try the GPU encoder first), wholeComp?: bool, startTime?: number (seconds), durationSeconds?: number, overwrite?: bool = false}" },
+      args: "{comp?: string, output: string (ABSOLUTE path ending .mp4 or .mov), size?: string (\"1080x1920\", \"1080p\", \"720\"), width?: int, height?: int, fit?: 'contain' (letterbox, default) | 'cover' (fill and crop) | 'stretch', padColor?: string, fps?: number (default: the comp's), quality?: 'low'|'medium' (default)|'high', audio?: bool = true, hardware?: bool = false (try the GPU encoder first), masterResolution?: 'full' (default) | 'half' | 'third' | 'quarter' | 'auto' (render the intermediate smaller — much faster and far less disk when the export is much smaller than the comp; refused if it would end up smaller than the output), wholeComp?: bool, startTime?: number (seconds), durationSeconds?: number, overwrite?: bool = false}" },
     { name: "comfy_status", mutating: false,
       desc: "Check the local ComfyUI instance (online? queue depth?).",
       args: "{}" },
@@ -1507,21 +1510,31 @@
       });
       if (sized.err) { cb({ ok: false, error: sized.err }); return; }
 
+      // The master only ever gets scaled DOWN, so AE can be asked to
+      // render fewer pixels in the first place. Opt-in: the default is
+      // still a full-resolution master.
+      var mPlan = F.planMaster({ w: d.width, h: d.height }, sized,
+                               args.masterResolution);
+      if (mPlan.err) { cb({ ok: false, error: mPlan.err }); return; }
+
       // --- the intermediate, before it exists -------------------------
       var spanSecs = (typeof span.durationSeconds !== "undefined")
         ? span.durationSeconds : compDur;
       var srcFrames = Math.max(1, Math.round(spanSecs * (compFps || 1)));
-      var estimate = F.estimateIntermediate(d.width, d.height, srcFrames);
+      var estimate = F.estimateIntermediate(mPlan.width, mPlan.height,
+                                            srcFrames);
       var capGB = Number(args.maxIntermediateGB) || 8;
       var cap = capGB * 1024 * 1024 * 1024;
       if (estimate > cap) {
         cb({ ok: false, error: "The lossless master AE has to render " +
              "first would be about " + F.humanBytes(estimate) + " — " +
-             d.width + "x" + d.height + " raw is " +
-             F.humanBytes(d.width * d.height * 3) + " a frame and this " +
-             "span is " + srcFrames + " frames. The limit is " + capGB +
-             " GB. Export a shorter span with {durationSeconds}, or raise " +
-             "it with {maxIntermediateGB} if there is room." });
+             mPlan.width + "x" + mPlan.height + " raw is " +
+             F.humanBytes(mPlan.width * mPlan.height * 3) + " a frame " +
+             "and this span is " + srcFrames + " frames. The limit is " +
+             capGB + " GB. Export a shorter span with {durationSeconds}" +
+             (mPlan.factor > 1 ? "" : ", render the master smaller with " +
+              "{masterResolution: \"auto\"}") +
+             ", or raise it with {maxIntermediateGB} if there is room." });
         return;
       }
       var free = F.freeBytes(os.tmpdir());
@@ -1547,6 +1560,7 @@
       callHostTool("render_comp", {
         comp: args.comp, output: tmp.replace(/\\/g, "/"),
         template: "Lossless", overwrite: true,
+        resolution: mPlan.name,
         startTime: span.startTime, durationSeconds: span.durationSeconds
       }, function (rendered) {
         if (!rendered.ok) { cb(rendered); return; }
@@ -1613,6 +1627,16 @@
                 }
                 var notes = [];
                 if (sized.note) notes.push(sized.note);
+                // Predicted vs written: a reduced master that came back
+                // full size means AE ignored the request, and the only
+                // way anyone finds out is if this says so.
+                if (mPlan.factor > 1) {
+                  notes.push(mPlan.note +
+                    (mInfo.width && mInfo.width !== mPlan.width
+                      ? " AE actually wrote " + mInfo.width + "x" +
+                        mInfo.height + "."
+                      : ""));
+                }
                 if (gifDefault) {
                   notes.push("Scaled to 480 px wide, the GIF default — " +
                     "the comp is " + d.width + " px. Pass {size} for " +

@@ -224,6 +224,55 @@ RQItem.prototype.applyTemplate = function (name) {
                     " is not a valid template name.");
   }
   this._rs = name;
+  // FACT 13: applyTemplate RESETS Resolution to Full. Measured in AE
+  // 2026 -- an item set to Quarter and then given "Best Settings" reads
+  // back ({"x":1,"y":1}). This is why render_comp sets resolution AFTER
+  // both templates, and it is the fact this stub exists to enforce.
+  this._res = "Full";
+};
+
+// FACT 14: the render-queue ITEM answers getSettings() with a plain
+// name-keyed map (unlike the OUTPUT MODULE, whose getSettings() throws
+// -- 6.1 Pass C measured that). Resolution reads back as the NAME here.
+const RES_FACTORS = { Full: 1, Half: 2, Third: 3, Quarter: 4 };
+RQItem.prototype.getSettings = function () {
+  return {
+    "Quality": "Best",
+    "Resolution": this._res || "Full",
+    "Proxy Use": "Use No Proxies",
+    "Time Span": "Work Area Only",
+    "Time Span Duration": String(this.timeSpanDuration),
+    "Skip Existing Files": "false"
+  };
+};
+// FACT 15: getSetting("Resolution") does NOT answer the name -- it
+// answers the JSON-ish pair, verbatim, curly braces and all. Anything
+// that wants the word has to read getSettings().
+RQItem.prototype.getSetting = function (key) {
+  if (key !== "Resolution") return String(this.getSettings()[key]);
+  const f = RES_FACTORS[this._res || "Full"];
+  return '({"x":' + f + ',"y":' + f + '})';
+};
+// FACT 16: Resolution is written by NAME and by nothing else. A number,
+// a lowercase name and the word "Custom" all take the same throw, and
+// the message names a form the API will not actually accept from a
+// script -- so a tool that passes anything but the four names is broken
+// in a way only this throw reveals.
+RQItem.prototype.setSetting = function (key, value) {
+  if (key !== "Resolution") { this._other = value; return; }
+  if (!Object.prototype.hasOwnProperty.call(RES_FACTORS, String(value))) {
+    throw new Error("After Effects error: Invalid Value for key: " +
+      "<Resolution>.  Missing or incorrect component.  Must have form: " +
+      "\"x,y\".");
+  }
+  this._res = String(value);
+};
+RQItem.prototype.setSettings = function (map) {
+  for (const k in map) {
+    if (Object.prototype.hasOwnProperty.call(map, k)) {
+      this.setSetting(k, map[k]);
+    }
+  }
 };
 RQItem.prototype.remove = function () {
   const i = this._queue._items.indexOf(this);
@@ -231,6 +280,7 @@ RQItem.prototype.remove = function () {
 };
 
 let suppressing = false;
+const renderedFrames = [];
 const renderQueue = {
   _items: [],
   rendering: false,
@@ -274,7 +324,19 @@ const renderQueue = {
       // the frames actually rendered, so a silent skip is visible.
       const frames = Math.max(1,
         Math.round(it.timeSpanDuration * it.comp.frameRate));
-      writeFile(out.fsName, 64840 * frames);
+      // FACT 17: Resolution changes the FRAME AE writes, and the size is
+      // ceil(dim / factor) on each axis -- NOT floor. Measured: a
+      // 641x361 comp at Half writes 321x181, and 640x360 at Third writes
+      // 214x120. Bytes here are raw-ish so a reduced render is visible
+      // in the file, the way it was in the field (1 389 680 -> 352 880).
+      const rf = RES_FACTORS[it._res || "Full"];
+      const rw = Math.ceil(it.comp.width / rf);
+      const rh = Math.ceil(it.comp.height / rf);
+      renderedFrames.push({ width: rw, height: rh, path: out.fsName });
+      // Bytes stay the FULL-resolution figure the earlier facts were
+      // measured with, divided by the pixels no longer being written --
+      // the field ratio was 1 389 680 -> 352 880 for Half, which is 3.94.
+      writeFile(out.fsName, Math.round(64840 * frames / (rf * rf)));
       it._status = RQItemStatus.DONE;
       it.elapsedSeconds = 1;
     }
@@ -713,6 +775,130 @@ assert(typeof AELL_TOOLS.add_to_render_queue === "function",
   renderQueue._items.length = 0;
   delete FILES["c:\\renders\\grp.avi"];
   delete FILES["c:\\renders\\grp_q.avi"];
+}
+
+// ---------------- 14. resolution: rendering FEWER PIXELS, not smaller ones
+//
+// The export path renders a lossless master and then scales it down, so
+// a 4K comp going to a 480 px GIF moved 24 MB a frame to keep 0.4. AE
+// can render the smaller frame itself. Everything below is a measured
+// AE 2026 fact first and an assertion second.
+
+{
+  // STUB FIDELITY first, driving the raw API: if the stub ever stops
+  // modelling the reset, the ordering test after it passes for free.
+  const it = renderQueue.items.add(shot);
+  it.setSetting("Resolution", "Quarter");
+  assert(it.getSettings()["Resolution"] === "Quarter",
+         "STUB FIDELITY: getSettings() answers Resolution by NAME");
+  assert(it.getSetting("Resolution") === '({"x":4,"y":4})',
+         "STUB FIDELITY: getSetting() answers the PAIR, not the name — " +
+         it.getSetting("Resolution"));
+  it.applyTemplate("Best Settings");
+  assert(it.getSettings()["Resolution"] === "Full",
+         "STUB FIDELITY: applyTemplate RESETS Resolution to Full — this " +
+         "is why the tool must set it last");
+  let threw = "";
+  try { it.setSetting("Resolution", "half"); } catch (e) { threw = String(e); }
+  assert(/Must have form/.test(threw),
+         "STUB FIDELITY: AE takes the NAME and nothing else — a lowercase " +
+         "one throws: " + threw.slice(0, 80));
+  threw = "";
+  try { it.setSetting("Resolution", 2); } catch (e) { threw = String(e); }
+  assert(/Must have form/.test(threw),
+         "STUB FIDELITY: and so does a bare number");
+  it.remove();
+  renderQueue._items.length = 0;
+}
+
+{
+  const r = call("render_comp",
+    { comp: "Shot", output: "C:/renders/half.avi", template: "Lossless",
+      resolution: "half", frames: 4 });
+  assert(r.ok, "render_comp takes {resolution}: " + (r.error || ""));
+  assert(r.data.resolution === "Half",
+         "and reports the resolution AE confirms, by name: " +
+         r.data.resolution);
+  assert(/^160x120/.test(r.data.renderedSize || ""),
+         "and the SIZE AE actually wrote, not the comp's — " +
+         r.data.renderedSize);
+  assert(/comp is 320x240/.test(r.data.renderedSize || ""),
+         "naming the comp's own size beside it, because a caller that " +
+         "scales afterwards is scaling from the smaller number: " +
+         r.data.renderedSize);
+  assert(FILES["c:\\renders\\half.avi"].bytes === Math.round(64840 * 4 / 4),
+         "and a quarter of the bytes reached the disk (got " +
+         FILES["c:\\renders\\half.avi"].bytes + ")");
+}
+
+{
+  // THE bug class this section exists for. Set before applyTemplate --
+  // the obvious place, next to the other settings -- and AE silently
+  // renders at Full while the tool reports success.
+  const r = call("render_comp",
+    { comp: "Shot", output: "C:/renders/order.avi", template: "Lossless",
+      renderSettings: "Best Settings", resolution: "quarter", frames: 2,
+      overwrite: true });
+  assert(r.ok, "a render-settings template and a resolution together: " +
+         (r.error || ""));
+  assert(r.data.resolution === "Quarter",
+         "the resolution SURVIVES applyTemplate — set any earlier and AE " +
+         "resets it to Full and says nothing (got " + r.data.resolution + ")");
+  assert(/^80x60/.test(r.data.renderedSize || ""),
+         "and the frame really is a quarter: " + r.data.renderedSize);
+  assert(!r.data.resolutionWarning,
+         "no warning, because what AE reports is what was asked for");
+}
+
+{
+  const odd = project.items.addComp("Odd", 641, 361);
+  const r = call("render_comp",
+    { comp: "Odd", output: "C:/renders/odd.avi", template: "Lossless",
+      resolution: "third", frames: 1 });
+  assert(r.ok, "an odd-sized comp renders reduced: " + (r.error || ""));
+  assert(/^214x121/.test(r.data.renderedSize || ""),
+         "AE rounds each axis UP, not down: 641/3 is 214 and 361/3 is " +
+         "121, measured — " + r.data.renderedSize);
+  void odd;
+}
+
+{
+  const forms = [["QUARTER", "Quarter"], ["1/2", "Half"], [3, "Third"],
+                 ["Full", "Full"], [1, "Full"]];
+  for (let i = 0; i < forms.length; i++) {
+    const r = call("render_comp",
+      { comp: "Shot", output: "C:/renders/forms.avi", template: "Lossless",
+        resolution: forms[i][0], frames: 1, overwrite: true });
+    assert(r.ok && r.data.resolution === forms[i][1],
+           "\"" + forms[i][0] + "\" means " + forms[i][1] + " — a user " +
+           "who says \"half\" or \"1/2\" gets the same render (got " +
+           (r.ok ? r.data.resolution : r.error) + ")");
+  }
+}
+
+{
+  const before = renderQueue.numItems;
+  const r = call("render_comp",
+    { comp: "Shot", output: "C:/renders/bad.avi", template: "Lossless",
+      resolution: "35%" });
+  assert(!r.ok, "an arbitrary percentage is refused — AE has no such thing");
+  assert(/Full/.test(r.error) && /Quarter/.test(r.error),
+         "and the refusal LISTS the four AE really offers: " +
+         r.error.slice(0, 120));
+  assert(renderQueue.numItems === before && !FILES["c:\\renders\\bad.avi"],
+         "nothing was queued and nothing was written for a bad value");
+}
+
+{
+  const r = call("render_comp",
+    { comp: "Shot", output: "C:/renders/plain.avi", template: "Lossless",
+      frames: 1, overwrite: true });
+  assert(r.ok && r.data.resolution === "Full",
+         "no {resolution} still reports what AE used: " +
+         (r.ok ? r.data.resolution : r.error));
+  assert(r.data.renderedSize === "320x240",
+         "and a full render says the size plainly, with no comparison " +
+         "nobody needs: " + r.data.renderedSize);
 }
 
 // ------------------------------------------- 13. registry + documentation
