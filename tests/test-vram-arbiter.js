@@ -175,6 +175,113 @@ assert(Tools._genNeedMBFor({ models: [
   settings = baseSettings();
 }
 
+// ---- the roots the panel does not own -------------------------------
+//
+// ComfyUI loads models from places nothing in the panel's settings names,
+// and a weight the panel cannot FIND is a generation it cannot PRICE:
+// unprovable means pause the chat model, and refuse outright when pausing
+// is set to never. Measured in the field 2026-08-30 by the tier ladder:
+// all four MiniMax H3 weights on the dev machine live in the ComfyUI
+// DESKTOP app's shared auto-download store, which no config file declares
+// and no setting pointed at — so the shipped H3 template priced at null on
+// a machine that had already rendered with it.
+{
+  const env = require("process").env;
+  const savedLocal = env.LOCALAPPDATA, savedApp = env.APPDATA;
+  env.LOCALAPPDATA = "C:\\Users\\x\\AppData\\Local";
+  env.APPDATA = "C:\\Users\\x\\AppData\\Roaming";
+  const SHARED = jn(env.LOCALAPPDATA, "Comfy-Desktop", "ComfyUI-Shared",
+                    "models");
+
+  settings = baseSettings({ comfyDir: "", comfyModelsDir: "",
+                            comfyModelRoots: [] });
+  DISK = {
+    [jn(SHARED, "diffusion_models", "gen.safetensors")]: 6000,
+    [jn(SHARED, "text_encoders", "enc.safetensors")]: 500
+  };
+  assert(Tools._genNeedMBFor(window.Comfy.readManifest(), settings) === 6500,
+         "weights only in the Desktop app's shared store are found — no " +
+         "setting and no config file names that root");
+
+  // The classic answer to "my models are on another drive" is ComfyUI's
+  // own yaml, next to main.py. The panel has to read what the user told
+  // COMFYUI, because they had no reason to tell the panel twice.
+  const YAML_DIR = "C:\\Users\\x\\ComfyUI";
+  const yamlFile = jn(YAML_DIR, "extra_model_paths.yaml");
+  const yamlText = [
+    "# comment",
+    "comfyui:",
+    "  base_path: D:/spread",
+    "  diffusion_models: models/diffusion_models",
+    "  text_encoders: |",
+    "    nowhere/one",
+    "    models/text_encoders",
+    "other:",
+    "  loras: Z:/never/loras"
+  ].join("\n");
+  const withYaml = Object.assign({}, fakeFs);
+  DISK = {
+    [jn("D:/spread", "models", "diffusion_models", "gen.safetensors")]: 6000,
+    [jn("D:/spread", "models", "text_encoders", "enc.safetensors")]: 500
+  };
+  const realExists = fakeFs.existsSync, realStat = fakeFs.statSync;
+  fakeFs.existsSync = (p) => p === yamlFile || realExists(p);
+  fakeFs.readFileSync = (p) => {
+    if (p === yamlFile) return yamlText;
+    throw new Error("ENOENT: " + p);
+  };
+  settings = baseSettings({ comfyDir: YAML_DIR, comfyModelsDir: "",
+                            comfyModelRoots: [] });
+  assert(Tools._genNeedMBFor(window.Comfy.readManifest(), settings) === 6500,
+         "extra_model_paths.yaml roots resolve: base_path + a per-kind " +
+         "key, and a '|' block whose SECOND line is the real one");
+
+  const parsed = [];
+  Tools._parseComfyPathsYaml(yamlText, require("path"), parsed);
+  assert(parsed.length === 4 &&
+         parsed[0].kind === "diffusion_models" &&
+         parsed[3].kind === "loras" && parsed[3].path === "Z:/never/loras",
+         "an ABSOLUTE value needs no base_path, and each section is " +
+         "resolved against its own (got " + parsed.length + ")");
+
+  // The Desktop app writes base_path LAST and calls the whole tree
+  // `download_model_base` — a section's keys cannot be resolved until the
+  // section ends. This is the real file from the dev machine.
+  const desktop = [];
+  Tools._parseComfyPathsYaml([
+    "# ComfyUI extra_model_paths.yaml for win32",
+    "comfyui_desktop:",
+    "  is_default: \"true\"",
+    "  custom_nodes: custom_nodes/",
+    "  download_model_base: models",
+    "  base_path: C:\\Users\\x\\Documents\\ComfyUI",
+    "desktop_extensions:",
+    "  custom_nodes: C:\\Users\\x\\AppData\\Local\\Programs\\ComfyUI"
+  ].join("\n"), require("path"), desktop);
+  assert(desktop.length === 1 && desktop[0].kind === null &&
+         desktop[0].path === jn("C:\\Users\\x\\Documents\\ComfyUI", "models"),
+         "the Desktop config yields ONE whole-tree root, resolved against " +
+         "a base_path written after it, and no custom_nodes root (got " +
+         JSON.stringify(desktop) + ")");
+
+  // Reaching one tree two ways must not make it two roots.
+  settings = baseSettings({ comfyDir: YAML_DIR });
+  const roots = Tools._comfyModelRoots(settings);
+  const sigs = roots.map(r => String(r.kind) + " " + r.path.toLowerCase());
+  assert(sigs.length === new Set(sigs).size,
+         "a root reached twice is listed once (" + sigs.join(" | ") + ")");
+
+  fakeFs.existsSync = realExists;
+  fakeFs.statSync = realStat;
+  delete fakeFs.readFileSync;
+  if (savedLocal === undefined) delete env.LOCALAPPDATA;
+  else env.LOCALAPPDATA = savedLocal;
+  if (savedApp === undefined) delete env.APPDATA;
+  else env.APPDATA = savedApp;
+  DISK = stockDisk();
+  settings = baseSettings();
+}
+
 // What the panel would have SAID — the status lines are half the contract.
 const sink = [];
 Tools.setProgressSink((msg) => { sink.push(msg); });

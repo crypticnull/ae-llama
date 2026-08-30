@@ -992,6 +992,90 @@
   }
 
   /**
+   * The model roots a ComfyUI CONFIG FILE declares. ComfyUI's own answer
+   * to "my weights are on another drive" is
+   * `extra_model_paths.yaml` (next to main.py), and the Desktop app
+   * keeps the same format in `%APPDATA%\ComfyUI\extra_models_config.yaml`
+   * — so the roots a real install loads from are frequently in neither
+   * the panel's settings nor the folder the panel calls comfyDir.
+   *
+   * Deliberately a NARROW reader, not a YAML parser: top-level sections,
+   * two-space keys, `base_path`, and per-kind keys whose value is one
+   * path or a `|` block of them. Anything it does not understand it
+   * skips — a root that does not exist costs nothing (the caller asks
+   * the filesystem), while a root it never returns is a generation the
+   * panel cannot price.
+   */
+  function configuredModelRoots(s, pathMod) {
+    var fsMod, proc;
+    try {
+      fsMod = global.AEBridge.nodeRequire("fs");
+      proc = global.AEBridge.nodeRequire("process");
+    } catch (e) { return []; }
+    var files = [];
+    if (s && s.comfyDir) {
+      files.push(pathMod.join(s.comfyDir, "extra_model_paths.yaml"));
+    }
+    var appdata = proc.env && proc.env.APPDATA;
+    if (appdata) {
+      files.push(pathMod.join(appdata, "ComfyUI", "extra_models_config.yaml"));
+    }
+    var out = [];
+    for (var f = 0; f < files.length; f++) {
+      var text = null;
+      try {
+        if (fsMod.existsSync(files[f])) text = fsMod.readFileSync(files[f], "utf8");
+      } catch (eR) {}
+      if (text) parseComfyPathsYaml(String(text), pathMod, out);
+    }
+    return out;
+  }
+
+  /* One config file -> {kind, path} roots, appended to `out`. A section's
+   * `base_path` can appear after the keys it resolves (the Desktop app
+   * writes it LAST), so a section's keys are held and resolved when the
+   * section ends. */
+  function parseComfyPathsYaml(text, pathMod, out) {
+    var lines = text.split(/\r?\n/);
+    var base = null, pending = [], blockKey = null, i;
+    function flush() {
+      for (var p = 0; p < pending.length; p++) {
+        var rel = pending[p].path;
+        var abs = /^([a-zA-Z]:[\\/]|[\\/])/.test(rel)
+          ? rel : (base ? pathMod.join(base, rel) : null);
+        if (abs) out.push({ kind: pending[p].kind, path: abs });
+      }
+      pending = [];
+      base = null;
+    }
+    for (i = 0; i < lines.length; i++) {
+      var line = lines[i].replace(/\s+$/, "");
+      if (!line || /^\s*#/.test(line)) continue;
+      if (!/^\s/.test(line)) { flush(); blockKey = null; continue; }
+      var m = line.match(/^\s{1,4}([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$/);
+      if (m) {
+        blockKey = null;
+        var key = m[1], val = m[2].replace(/^["']|["']$/g, "");
+        if (key === "base_path") { base = val; continue; }
+        // A whole models TREE (the Desktop app's own key), not one kind.
+        if (key === "download_model_base") {
+          pending.push({ kind: null, path: val });
+          continue;
+        }
+        // Not model dirs: config flags and the node roots.
+        if (key === "is_default" || key === "custom_nodes") continue;
+        if (val === "|" || val === "") { blockKey = key; continue; }
+        pending.push({ kind: key, path: val });
+        continue;
+      }
+      if (blockKey && /^\s{4,}\S/.test(line)) {
+        pending.push({ kind: blockKey, path: line.replace(/^\s+/, "") });
+      }
+    }
+    flush();
+  }
+
+  /**
    * Where a ComfyUI model file could live on this machine, most specific
    * first. Each entry is {kind, path}: a `kind` is a per-type root the
    * user wrote as "checkpoints=D:\SD\ckpts" in settings and only answers
@@ -999,9 +1083,11 @@
    * subfolders under it.
    */
   function comfyModelRoots(s) {
-    var pathMod;
-    try { pathMod = global.AEBridge.nodeRequire("path"); }
-    catch (e) { return []; }
+    var pathMod, proc;
+    try {
+      pathMod = global.AEBridge.nodeRequire("path");
+      proc = global.AEBridge.nodeRequire("process");
+    } catch (e) { return []; }
     var roots = [];
     if (s && s.comfyModelsDir) roots.push({ kind: null, path: s.comfyModelsDir });
     var extra = s && s.comfyModelRoots instanceof Array ? s.comfyModelRoots : [];
@@ -1016,6 +1102,22 @@
         roots.push({ kind: null, path: entry });
       }
     }
+    // The ComfyUI DESKTOP app's shared auto-download store. It is where
+    // the Desktop downloader puts weights fetched from a workflow's
+    // embedded URLs, it is resolved BEFORE the Documents tree (measured
+    // from the running instance's own startup log, 2026-08-25), and it is
+    // declared in no config file at all — so nothing else here can reach
+    // it. Measured 2026-08-30: all four MiniMax H3 weights this machine
+    // has already generated with live here and NOWHERE else, so the
+    // arbiter priced the shipped H3 template at null, paused chat for
+    // every H3 generation on a card that fits both, and refused the
+    // generation outright whenever pausing was set to never.
+    var localApp = proc.env && proc.env.LOCALAPPDATA;
+    if (localApp) {
+      roots.push({ kind: null,
+                   path: pathMod.join(localApp, "Comfy-Desktop",
+                                      "ComfyUI-Shared", "models") });
+    }
     // The user's own ComfyUI, then the hidden backend's own tree.
     if (s && s.comfyDir) {
       roots.push({ kind: null, path: pathMod.join(s.comfyDir, "models") });
@@ -1028,7 +1130,21 @@
                      path: pathMod.join(install.root, "ComfyUI", "models") });
       }
     } catch (e2) {}
-    return roots;
+    // Last: whatever ComfyUI's own config files declare. A user who moved
+    // their models to another drive told ComfyUI, not this panel.
+    var declared = configuredModelRoots(s, pathMod);
+    for (var d = 0; d < declared.length; d++) roots.push(declared[d]);
+    // A root reached two ways is one root — the Desktop config file
+    // declares the same tree `comfyDir` already names on this machine.
+    var seen = {}, unique = [];
+    for (var u = 0; u < roots.length; u++) {
+      var sig = String(roots[u].kind) + " " +
+                String(roots[u].path).toLowerCase();
+      if (seen[sig]) continue;
+      seen[sig] = true;
+      unique.push(roots[u]);
+    }
+    return unique;
   }
 
   /**
@@ -1146,6 +1262,38 @@
     _floorMB: null,
 
     /**
+     * The decision, assembled from what is REALLY on this machine and
+     * decided nowhere else: the measured card (or the impersonated one),
+     * the tier that VRAM lands in, the running chat model's own file, and
+     * the workflow's weight bill off disk.
+     *
+     * Split out of ensureFor so the answer can be asked WITHOUT paying
+     * for it. ensureFor's other half kills llama-server, so every probe
+     * of the decision surface used to cost a model reload — which is why
+     * the tier ladder (workplan item 7) could only ever be spot-checked.
+     * Returns {decision, tier, eff, chat, genNeedMB}.
+     */
+    planFor: function (s, manifest) {
+      var chat = chatLoadedMBNow();
+      var eff = global.Tiers.effectiveVram(gpuCache, s);
+      var tier = global.Tiers.tierFor(eff.vramGB);
+      var need = genNeedMBFor(manifest, s);
+      return {
+        decision: global.Tiers.planHandoff({
+          vramGB: eff.vramGB,
+          headroomGB: tier.headroomGB,
+          chatRunning: chat.running,
+          chatLoadedMB: chat.mb,
+          genNeedMB: need,
+          pauseMode: s.comfyPauseLlm,
+          mandatory: tier.mandatory,
+          overridden: eff.overridden
+        }),
+        tier: tier, eff: eff, chat: chat, genNeedMB: need
+      };
+    },
+
+    /**
      * Decide and, when the arithmetic says so, perform the chat→gen
      * handoff with verified release. cb(refusalResult|null) — a refusal
      * is a grounded {ok:false} the caller returns as the tool result,
@@ -1153,19 +1301,9 @@
      */
     ensureFor: function (s, manifest, sink, cb) {
       if (VramArbiter.paused) { cb(null); return; }   // this round already paid
-      var chat = chatLoadedMBNow();
-      var eff = global.Tiers.effectiveVram(gpuCache, s);
-      var tier = global.Tiers.tierFor(eff.vramGB);
-      var decision = global.Tiers.planHandoff({
-        vramGB: eff.vramGB,
-        headroomGB: tier.headroomGB,
-        chatRunning: chat.running,
-        chatLoadedMB: chat.mb,
-        genNeedMB: genNeedMBFor(manifest, s),
-        pauseMode: s.comfyPauseLlm,
-        mandatory: tier.mandatory,
-        overridden: eff.overridden
-      });
+      var plan = VramArbiter.planFor(s, manifest);
+      var chat = plan.chat;
+      var decision = plan.decision;
       if (decision.mode === "refuse") {
         cb({ ok: false, error: decision.reason });
         return;
@@ -2433,6 +2571,8 @@
     setProgressSink: function (fn) { progressSink = fn; },
     _vramArbiter: VramArbiter,        // exposed for tests
     _genNeedMBFor: genNeedMBFor,      // exposed for tests
+    _comfyModelRoots: comfyModelRoots, // exposed for tests
+    _parseComfyPathsYaml: parseComfyPathsYaml,   // exposed for tests
     _panelTools: PANEL_TOOLS          // exposed for tests
   };
 

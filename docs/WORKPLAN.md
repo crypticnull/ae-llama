@@ -1096,11 +1096,25 @@ GPU. This item is that touch, one pass per bullet, smallest first:
     ComfyUI started by hand (0.10.9: `Comfy.ensureRunning` cannot start
     the working 0.32.0 here). Budget a whole pass per model, not one pass
     for the bullet.
-- **Tier impersonation ladder**: vramOverrideGB 4/6/8/12/16/24 — each
-  budget must produce the matching tier line in settings, the matching
-  catalog picks, and a handoff (or refusal) consistent with
-  planHandoff. The 5090 exercises every PATH; timings on small cards
-  stay training-quoted and must keep saying "typically".
+- ~~**Tier impersonation ladder**~~ DONE 2026-08-30 (0.10.13).
+  `scripts/tier-ladder-probe.js` walks 4/6/8/12/16/24/32 plus the card's
+  own number, against real nvidia-smi, a real llama-server and the
+  weights on the real disk, and asserts the three questions this bullet
+  asks as INVARIANTS rather than reading a table by eye: 176 of them,
+  green on the 32B chat model and again on the 7B (which is what reaches
+  the `concurrent` branch — the crossover is between 24 and 32 GB, 560 MB
+  short at 24). Every rung was consistent; what the ladder found was one
+  rung's INPUT. The panel priced the shipped H3 i2v template at null on
+  the machine that had already rendered with it, because all four of its
+  weights live in the ComfyUI Desktop app's shared auto-download store —
+  a root no setting and no config file declares. Fixed at
+  `comfyModelRoots` (shared store + any `extra_model_paths.yaml` /
+  Desktop `extra_models_config.yaml` roots), which is the 0.10.9 bug
+  arriving from outside the manifest. Backfilled by
+  `tests/test-tier-ladder.js` (the ladder without a GPU) and five checks
+  in `tests/test-vram-arbiter.js`. Timings on small cards stay
+  training-quoted and still say "typically" — the ladder impersonates
+  VRAM, never speed. See WORKPLAN-LOG 2026-08-30.
 - **OOM recovery**: force one real OOM (override 6, generate something
   known too big with pause never overridden off — or drive ComfyUI
   directly) and verify the chat model comes back afterward regardless.

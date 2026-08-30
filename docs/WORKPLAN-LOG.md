@@ -8301,3 +8301,149 @@ project, every time.
   cap that is still a guess; `get-llama.ps1`'s two latent traps; and
   `comfy_generate` still calls `import_file` rather than 5.8's
   `import_as_layer`.
+
+## 2026-08-30 (local) - item 7: the tier impersonation ladder, and the
+## model root nobody declares (0.10.13)
+
+Harness green on arrival (532/532), so item 1 was satisfied and the pass
+took the top unfinished item: item 7's tier impersonation ladder. Items
+2-6 are closed; item 7's other open bullets are the VRAM delta (still
+blocked on ~36 GB of weights not on this disk) and OOM recovery.
+
+### What was built
+
+`scripts/tier-ladder-probe.js` walks every budget a user can type -
+4/6/8/12/16/24/32, plus the card's own number - against real nvidia-smi,
+a real llama-server and the weights really on this disk, and asks the
+three questions the bullet asks: does the budget produce the matching
+tier line, the matching catalog picks, and a handoff (or refusal)
+consistent with planHandoff. Nothing in it is arithmetic the probe
+supplies.
+
+The point is that it asserts INVARIANTS rather than printing a table for
+a human to read: 176 of them per run, including the ones no single-tier
+spot check can see - the chat pick is the LARGEST that fits and never
+shrinks as the budget grows; a demoted pick (experimental, or a
+mode-change slow at this size) only wins when nothing solid fits its
+kind; `never` is `auto` with the pause taken away, so it may only ever
+answer what auto answered or refuse; a mandatory tier never shares the
+card; and the sentence a user reads labels an impersonated budget,
+because only one of its two numbers is measured.
+
+One refactor paid for it: the decision half of `VramArbiter.ensureFor`
+is now `VramArbiter.planFor`, because the other half kills llama-server
+and every probe of the decision surface used to cost a model reload.
+
+### The ladder was green. What it found was a rung's INPUT.
+
+All 176 invariants held, on the owner's real 32B chat model and again on
+the 7B - the second run is the one that reaches the `concurrent` branch
+at all, and it puts the crossover exactly where the arithmetic does:
+6002 + 18110 + 1024 = 25136 MB, so KREA2 runs beside the 7B at 32 GB and
+hands off at 24, **560 MB short**.
+
+What the table showed instead was a column that read `?`:
+
+    | budget | workflow           | need MB | auto    | always  | never  |
+    | any    | AE_LLAMA_H3_I2V_V1 |    ?    | handoff | handoff | refuse |
+
+**The panel could not price the H3 i2v template on the machine that has
+already rendered with it** (2026-08-27, 12 s, VRAM peak 28.4 GB). All
+four of its weights are on this disk - and all four are in
+`%LOCALAPPDATA%\Comfy-Desktop\ComfyUI-Shared\models`, the Desktop app's
+shared auto-download store, where its downloader puts weights fetched
+from a workflow's embedded URLs. `comfyModelRoots` knew four roots and
+not that one, so `genNeedMBFor` returned null, and null means "the fit
+cannot be verified": chat paused for every H3 generation, and pause
+`never` refused the generation outright with a sentence carrying no
+numbers.
+
+This is 0.10.9's bug arriving from outside the manifest. That pass fixed
+"no shipped manifest carries a sizeMB" by measuring the weights on disk;
+this one fixes "the panel looks in fewer places than ComfyUI does".
+COMFY_TIERS_PLAN has said since 2026-08-25 that the matcher's root list
+is Documents + code install + ComfyUI-Shared + extra_model_paths roots.
+Two of the four were never implemented in `tools.js`.
+
+### The fix, and its second half
+
+`comfyModelRoots` gained the shared store, and `configuredModelRoots` +
+`parseComfyPathsYaml` gained the roots a ComfyUI CONFIG FILE declares -
+`extra_model_paths.yaml` next to main.py, and the Desktop app's
+`%APPDATA%\ComfyUI\extra_models_config.yaml`, which uses the same format.
+A user who moved their models to another drive told ComfyUI, not this
+panel, and had no reason to say it twice.
+
+Deliberately a narrow reader, not a YAML parser: top-level sections,
+`base_path`, per-kind keys, and `|` blocks. Two things measured off the
+real file on this machine shaped it - the Desktop app writes `base_path`
+**after** the keys it resolves, so a section's keys are held and resolved
+when the section ENDS; and it names the whole tree `download_model_base`
+rather than per-kind, which is a null-kind root. `custom_nodes` and
+`is_default` are skipped: they are not model dirs. Anything the reader
+does not understand it skips, and a root that does not exist costs
+nothing, because the caller asks the filesystem.
+
+Roots are also deduplicated now: on this machine the Desktop config
+declares the same tree `comfyDir` already names, so the list held
+`Documents\ComfyUI\models` twice.
+
+### Verification
+
+- **The ladder, twice, green**: 176/176 with the owner's configured 32B
+  chat model, and 176/176 with the 7B. Transcripts in `logs/`.
+- **The H3 bill is now 40503 MB**, which is exactly what
+  `catalog-probe.js` measured from HuggingFace's `x-linked-size` on
+  2026-08-30 for the `minimax-h3` catalog entry. Four files found through
+  a new root summing to the byte count a different probe got from the
+  network is as good a cross-check as this pass could ask for.
+- **Real-AE harness 532/532** after the change (532/532 before; the
+  arbiter is panel-side and adds no suite steps).
+- `tests/test-tier-ladder.js` (NEW): the same ladder invariants over the
+  shipped catalogs with the hardware stubbed, so a rung that stops making
+  sense fails CI on a machine with no GPU. Includes the crossover, the
+  Blackwell gate under a 32 GB budget on pre-Ada silicon, and the
+  unprovable-bill rule at seven budgets.
+- `tests/test-vram-arbiter.js`: five checks pin the roots. Reverting the
+  fix fails two of them by name ("weights only in the Desktop app's
+  shared store are found", "extra_model_paths.yaml roots resolve") - both
+  failure modes were run and seen.
+- Full stub sweep: **58/58 test files exit 0**. `capability-report.js`
+  regenerated: no change, the pass ships no new tool.
+
+### Version: PATCH bumped to 0.10.13
+
+A fix to SHIPPED behaviour, not a feature. A ComfyUI Desktop user - the
+install kind whose downloader puts weights in that store by default - had
+every generation priced at null: chat paused when it did not need to, and
+every generation refused outright if they had turned pausing off.
+
+### Filed for a later pass, measured tonight
+
+**The weight bill is not the VRAM footprint, and H3 is the proof.** The
+panel now prices H3 i2v at 40503 MB of weights, and this machine rendered
+it with a measured VRAM peak of **28.4 GB** - ComfyUI streams and
+offloads, so the sum of the files overstates the card's real bill by
+~12 GB. Every decision made from it is therefore conservative in the safe
+direction (pause when it might not have needed to), never the unsafe one,
+which is why this is a filing and not a bug. Closing the gap is what item
+7's still-open VRAM-delta bullet is for: a `measured: true` number in the
+catalog entry beats a file sum, and `genNeedMBFor` should prefer it once
+one exists.
+
+### Notes for whoever runs the next pass
+
+- Machine state: llama-server was started and stopped by the probe; the
+  open AE project is still `logs\mogrt60\P60-scratch.aep`. Nothing was
+  generated - the ladder runs no ComfyUI job at all, by design (the
+  executed handoff and refusal paths are 0.10.9's and 0.10.10's, already
+  in this log).
+- `scripts/tier-ladder-probe.js` is cheap to re-run (`--no-server` skips
+  the model load entirely) and is the fastest way to see what the panel
+  would decide on any card without owning one.
+- Still open from earlier passes, unattempted tonight: the `DroverLord -
+  Window Class` popup; item 7's VRAM half (needs ~36 GB of weights not on
+  this disk) and OOM recovery; no panel UI for the mogrt export tools; no
+  `.webm`/`.webp`; the 8 GB intermediate cap that is still a guess;
+  `get-llama.ps1`'s two latent traps; and `comfy_generate` still calls
+  `import_file` rather than 5.8's `import_as_layer`.
