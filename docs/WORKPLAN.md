@@ -848,10 +848,42 @@ output-module TEMPLATE, matched by name. 115 stub checks in
 bump (feature track).
 
 ### 6.2 ffmpeg post-renders
-Pass A: acquire a static ffmpeg build the same way; verify with ffprobe.
+~~Pass A: acquire a static ffmpeg build the same way; verify with
+ffprobe.~~ DONE 2026-08-30. `scripts/get-ffmpeg.ps1` +
+`scripts/lib/ffmpeg-assets.ps1` (the choice, testable without a network)
++ `scripts/lib/ffmpeg-verify.ps1` (the round trip) +
+`scripts/verify-ffmpeg.ps1` (SKIP + exit 0 with no install, `-Require`
+to make that a failure) + `tests/test-ffmpeg-acquire.js` (55 checks).
+Source is BtbN/FFmpeg-Builds; installs to `vendor\ffmpeg\bin`; verified
+in the field at n9.0.1-11-ge47273f4d9. `Expand-AellReleaseList` moved to
+the new `scripts/lib/gh-releases.ps1`, shared with get-whisper.
+
+Field facts this paid for, all in the log: **ffmpeg exits 0 when it
+refuses to overwrite an existing output**, writing nothing at all (real
+errors return -22/-2, which is what makes the 0 believable) — so an
+exporter that trusts the exit code hands the user last week's render;
+without `-nostdin` that same case is an interactive prompt and it HANGS
+FOREVER; `ffmpeg -t 0` writes a 262-byte MP4 with ZERO streams that
+ffprobe then accepts with exit 0, valid JSON, empty stderr and
+probe_score 100, so the only real check is reading width/height/frame
+count back; matroska containers (.webm, .mkv) report NEITHER `nb_frames`
+NOR `duration` on the stream, which made the first checker reject a good
+VP9 file; the asset names are TWO schemes, not one, and matching
+`-latest-` literally disables the dated-release fallback while every
+positive test still passes; and `-encoders` is a COMPILE-time list —
+h264_amf and h264_qsv are named by this build and both fail at encode
+time here for want of a device.
+
+**The licence question is settled by measurement, and the answer is
+LGPL.** The LGPL build has no libx264/libx265, but it does have
+**libopenh264** (software H.264, works: exit 0, real h264, 37 ms) plus
+h264_nvenc and h264_mf. So Pass B needs no GPL binary in a commercial
+product — default to libopenh264 and treat hardware encoders as an
+opt-in that must be tried, not trusted.
+
 Pass B: `export_gif` / `export_social` {comp, path, size, fps} =
 lossless render via 5.5 piped through ffmpeg, temp files cleaned. After
-5.5 only.
+5.5 only (5.5 landed 2026-08-28, so this is unblocked).
 
 ## 7. Tier P4 — real-GPU measurement (local; P1–P3 landed 2026-08-25)
 

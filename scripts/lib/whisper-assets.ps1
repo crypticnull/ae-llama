@@ -37,6 +37,11 @@
 #     the guard, and it runs INSIDE the choice so nothing can reach the
 #     walk without it.
 
+# Expand-AellReleaseList (note 4 above) now lives in gh-releases.ps1 --
+# get-ffmpeg.ps1 needs the same flattening, and one copy is one place
+# to get it wrong.
+. (Join-Path $PSScriptRoot 'gh-releases.ps1')
+
 # The single file that proves an install works. See note 2 above.
 $script:AellWhisperExe = 'whisper-cli.exe'
 
@@ -142,29 +147,6 @@ function Select-AellWhisperAsset {
   }
   $pick = $cuda | Sort-Object Ver | Select-Object -Last 1
   return $pick.Asset
-}
-
-function Expand-AellReleaseList {
-  <#
-    Flatten nested arrays down to one release per element. See note 4 at
-    the top: the caller cannot tell by looking whether it holds 15
-    releases or one array of 15, and getting it wrong does not throw --
-    it quietly pools every release's assets together.
-  #>
-  param($Releases)
-
-  $out = @()
-  foreach ($r in @($Releases)) {
-    if ($null -eq $r) { continue }
-    if ($r -is [System.Array]) { $out += @(Expand-AellReleaseList $r) }
-    else { $out += $r }
-  }
-  # Emitted WITHOUT a leading comma, so `@(Expand-AellReleaseList $x)` is
-  # the count of releases. Returning `,$out` instead hands back a single
-  # object that IS the array, and then the caller's own @() re-wraps it
-  # into one element -- the exact nesting this function exists to undo.
-  # Safe here only because no element of $out is itself an array.
-  return $out
 }
 
 function Select-AellWhisperRelease {

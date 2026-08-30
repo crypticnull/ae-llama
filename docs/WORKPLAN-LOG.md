@@ -6564,3 +6564,218 @@ here - the feed publishing an equal version is the intended outcome.
   and probe scripts deleted. `%APPDATA%\AE-Llama\vendor\whisper.cpp`
   still holds the CPU build and ggml-base.en (149 MB) - now used by
   shipped code, so it stays.
+
+## 2026-08-30 (local) - item 6.2 Pass A: ffmpeg acquired, and the exit
+## code that means nothing
+
+First pass of the night. Harness green on arrival (514/514), so item 1
+was satisfied and the next unfinished workplan item was 6.2 Pass A:
+"acquire a static ffmpeg build the same way; verify with ffprobe."
+5.9 was skipped by its own LAST-item-of-the-night rule, which this pass
+is not.
+
+Built, mirroring the whisper Pass A/B split so the choice and the check
+are testable without a network or a binary:
+
+- `scripts/lib/ffmpeg-assets.ps1` - WHICH download to take.
+- `scripts/lib/ffmpeg-verify.ps1` - install discovery, the process
+  runner, the clip round trip, the encoder census.
+- `scripts/get-ffmpeg.ps1` - acquire into
+  `%APPDATA%\AE-Llama\vendor\ffmpeg\bin`, then verify.
+- `scripts/verify-ffmpeg.ps1` - standalone; SKIP + exit 0 with no
+  install, `-Require` to make that a failure.
+- `tests/test-ffmpeg-acquire.js` - 55 checks.
+- `scripts/lib/gh-releases.ps1` - `Expand-AellReleaseList` lifted out of
+  whisper-assets.ps1, which now dot-sources it. Both acquirers walk the
+  same GitHub release shape and there is now one place to get it wrong.
+  `test-whisper-acquire.js` re-run green after the move.
+
+Source is BtbN/FFmpeg-Builds, chosen over gyan.dev because it publishes
+through the releases API - the same shape get-whisper.ps1 already walks -
+and because it ships an LGPL build alongside the GPL one, which this
+product needs to be able to choose.
+
+### Seven things the obvious version gets wrong
+
+1. **ffmpeg EXITS 0 WHEN IT REFUSES TO WRITE.** Handed an output path
+   that already exists and no `-y`, it prints "File ... already exists.
+   Exiting." and "Error opening output file", writes nothing, and returns
+   **0**. Measured twice; the file is byte-for-byte identical before and
+   after. Real argument errors do return non-zero (-22 for a bad filter,
+   -2 for a missing input), which is exactly what makes the 0 believable.
+   For 6.2 Pass B this is the whole ballgame: an `export_social` that
+   checks the exit code hands the user LAST WEEK'S render as this week's,
+   and every layer of the pipeline reports success.
+2. **Without `-nostdin` that same case HANGS FOREVER.** The
+   already-exists path is an interactive "Overwrite? [y/N]" on stdin.
+   Measured: killed at a 10 s timeout with the process alive and idle.
+   Unattended that is a wedged pass with no output at all. Every
+   invocation in the new library passes `-nostdin`, and `-y` is explicit
+   rather than assumed.
+3. **A VALID FILE CAN CONTAIN NOTHING, AND EVERYTHING SAYS IT IS FINE.**
+   `ffmpeg -t 0` exits 0 and writes a 262-byte MP4 that is structurally
+   perfect: ffprobe exits 0 on it, prints valid JSON, writes NOTHING to
+   stderr, and scores `probe_score: 100` - with `"nb_streams": 0` and an
+   empty streams array. This is the ffmpeg twin of 6.1 Pass B's "silence
+   transcribes as You". So the check reads width, height and FRAME COUNT
+   back out of the stream, and `Test-AellFfmpegCheckerRejectsEmpty`
+   builds that empty file ON PURPOSE every run and fails if the checker
+   accepts it - a checker that returned true unconditionally passes every
+   other assertion in the file.
+4. **ffprobe exits 0 on a file with no matching stream too.**
+   `-select_streams v` against an audio-only file answers
+   `{ "streams": [] }`, exit 0, empty stderr. It DOES exit 1 on a
+   zero-byte or non-media file - while still printing parseable `{ }`.
+   So neither the exit code nor "the JSON parsed" is a check.
+5. **Matroska reports NEITHER `nb_frames` NOR `duration`.** Measured
+   across four containers: .mp4 and .gif carry both; .webm and .mkv carry
+   neither, on the stream. The first version of the checker read that as
+   "0 frames" and rejected a perfectly good 10-frame VP9 file - the
+   mirror image of the bug it exists to catch, and one that would have
+   made this unusable for half the formats Pass B needs. The frame count
+   now falls back to ffprobe's `-count_frames` (correct for all four,
+   25 ms for a 1 s clip) and the duration to the FORMAT's duration.
+   Neither fallback loosens anything; both produce the real number where
+   the fast field was absent.
+6. **The asset names are TWO schemes, not one, and the first version of
+   the choice silently disabled half the walk.** The rolling `latest` tag
+   names files `ffmpeg-n9.0-latest-win64-gpl-9.0.zip`; the dated
+   autobuild releases name the SAME builds
+   `ffmpeg-N-126313-g1ae4048218-win64-gpl.zip` and
+   `ffmpeg-n8.1.2-50-g1a748fe2cd-win64-gpl-8.1.zip`. Matching `-latest-`
+   literally chose correctly from `latest` - so every positive test
+   passed - while reading every dated release as carrying NOTHING: the
+   fallback for the day `latest` lacks a build could never fire, and the
+   grounded error printed those tags as `()` while looking well-formed.
+   The build field is no longer parsed at all; the trailing series suffix
+   is, and its ABSENCE is what means master, in both schemes.
+   Two smaller traps in the same names: `-like '*gpl*'` MATCHES the LGPL
+   build (different licence, different codec set), and `n10` sorts BEFORE
+   `n9` as a string - invisible today, and it silently picks the older
+   build the day an n10 series is published. Series are compared as
+   padded `[version]`, the same fix whisper-assets.ps1 uses for CUDA
+   lines.
+7. **`-encoders` is a COMPILE-time list, not a runtime one.** This build
+   names `h264_amf` and `h264_qsv`, and BOTH fail at encode time on this
+   machine (exit -558323010 and -1313558101, zero bytes written) for want
+   of an AMD or Intel device - while libopenh264, h264_nvenc and h264_mf
+   all produce real h264 in 37-190 ms. Pass B must not pick the first
+   name off the census and trust it.
+
+### The licence call, settled by measurement
+
+BtbN publishes each build twice. This is a COMMERCIAL product, and
+bundling an installer that fetches GPL binaries alongside closed source
+is a question for a human, not a default for a script - so **LGPL is the
+default** and `-License gpl` is an explicit, logged choice.
+
+The reason that default is affordable is measured rather than assumed,
+which is why the acquirer prints the census: the LGPL build has no
+libx264 or libx265, but it DOES have **libopenh264** - software H.264,
+verified encoding a real h264 stream in 37 ms - plus h264_nvenc and
+h264_mf. So `export_social` needs no GPL binary on anyone's machine.
+Default to libopenh264; treat the hardware encoders as an opt-in that has
+to be TRIED, per finding 7.
+
+### One PowerShell trap worth writing down
+
+`$series` inside `Select-AellFfmpegRelease` IS the `$Series` parameter -
+PowerShell variable names are case-insensitive - so building the seen
+list overwrote what the caller had asked for, and the grounded error read
+back its own list instead. Caught only because the error text looked
+wrong. Here it cost one line of message; the same shadowing in a loop
+that re-ran the filter would have changed the WALK.
+
+### Verification
+
+- `node tests/test-ffmpeg-acquire.js`: 55 checks, green. The choice is
+  driven over BOTH captured naming schemes and over the nested shape
+  `Invoke-RestMethod` really returns (asset pinned by SIZE, so a
+  flattening regression that pools every release's assets cannot pass);
+  the checker is driven against files the test writes itself, so the
+  missing/zero-byte/no-install cases run on a CI runner with no binary;
+  and the live half, gated on an install being present, asserts the
+  round trip reads back 96x64 with the 12 frames 8fps x 1.5s implies AND
+  that the checker rejects the deliberately empty file.
+- Full stub sweep: all 54 test files exit 0.
+- `scripts/verify-ffmpeg.ps1 -VendorOnly -Require`: 4/4 PASSED against
+  the freshly installed build.
+- The acquirer was run END TO END TWICE - a clean install and a re-run
+  that wipes `bin` first - both exit 0, both verifying the binary they
+  had just downloaded. n9.0.1-11-ge47273f4d9-20260829, 140.2 MB.
+- `capability-report.js` regenerated: no change (this pass adds no AE
+  tools).
+- **Harness: 514/514 PASSED**, before the pass and after it. Nothing here
+  touches AE. See the note below about the run in between.
+
+### The harness failed once in the middle, and it was not this pass
+
+Between the two green runs, one run exited 4 with "UNRECOGNIZED DIALOG:
+Executing Script aell-selftest-run.jsx...". That string is AE's own
+SCRIPT PROGRESS window, not a modal anyone has to answer - the blocked
+check caught the suite legitimately running. The run before it had left
+a stale "Save changes to Untitled Project.aep before closing?" prompt,
+which the triage answered with Cancel as designed; that keeps AE open on
+the old project and evidently makes the next launch slow enough to be
+caught mid-execution. AE was `Responding=True` with no dialog up by the
+time it was checked, and the immediate re-run was green.
+
+Worth a small pass rather than a fix smuggled in here: the dialog triage
+should treat a window whose text is `Executing Script *` as BENIGN and
+keep waiting, the same way it already knows the save-changes prompt.
+Today it screenshots it, calls it unrecognized and fails the run, which
+on an unattended night turns one slow launch into a lost pass. The
+screenshot is at `logs\dialogs\2026-08-30T01-04-58.png`.
+
+### No version bump
+
+Binary track, same lifecycle as 6.1 Passes A-C and the 5.x feature
+items: no shipped behaviour changed, `extension/` is untouched, and
+nothing new is reachable from the panel yet. Pushing without bumping is
+correct - the feed publishing an equal version is the intended outcome.
+
+### Still open
+
+- **The panel cannot reach any of this yet, by design.** Pass A is the
+  acquirer only. There is no `Ffmpeg` panel module the way there is a
+  `Whisper` one, and no tool in `tools.js` - that is Pass B's job, and
+  `test-chat-probe.js` will refuse a `global.Ffmpeg` that maps to no
+  panel file, exactly as it did for Whisper.
+- **This machine already had an ffmpeg** - gyan.dev 8.1 GPL essentials at
+  `C:\Program Files\ffmpeg\bin`, on PATH, 96 MB per binary. That is why
+  `Find-AellFfmpegInstall` falls back to PATH rather than insisting on
+  the vendored copy: making a user download 140 MB they already have is
+  the kind of thing they notice. It is also a second real build to test
+  against, and the verify passes on both. Worth remembering that a user's
+  own ffmpeg may be a GPL one - which is THEIR licence choice to have
+  made, not ours, but Pass B should not assume a codec set from it.
+- `Invoke-AellFfmpegProcess` duplicates the async-pipe-drain pattern from
+  `whisper-verify.ps1` rather than sharing it. Deliberate for now (the
+  two differ in what they return, and the whisper one is load-bearing for
+  a shipped feature), but if a third acquirer appears that is the next
+  thing to lift into `lib/`, the same way `Expand-AellReleaseList` was
+  lifted this pass.
+- **`get-llama.ps1` still has the two latent traps 6.1 Pass A flagged**:
+  it greps for `CUDA Version:` (misses this machine's `CUDA UMD
+  Version:`) and pads versions to two parts.
+  `Get-AellCudaVersionFromSmi` and `ConvertTo-AellPaddedVersion` in
+  `whisper-assets.ps1` are the fixes, already written and tested - a
+  small pass points get-llama at them. Third flag; now that
+  `lib/gh-releases.ps1` exists, that pass has an obvious home for the
+  shared half too.
+- Project debris in the harness project is unchanged from the 6.1 Pass C
+  entry (two comps called `AELL_PROBE_WA`, `PROBE_PARENT`, ~250 nulls
+  named "Audio Amplitude"), and the capped-grounded-list trap it makes
+  easy to hit is still a small remote-session job.
+- 5.9 (.mogrt export) still deferred by its own LAST-item-of-the-night
+  rule. Fifteenth pass. Someone should decide whether that rule means
+  "last pass of a night" or "never".
+- `release-notes.txt` still reads "0.10.0" while the feed ships 0.10.8 -
+  fourteenth pass to flag it; remote session's release cut.
+- `comfy_generate` still calls `import_file` rather than 5.8's
+  `import_as_layer` - small remote-session pass.
+- Machine state: AE was not driven by this pass beyond the harness runs;
+  it is left on the harness's own project with no dialog open. Temp clips
+  and probe scripts deleted. `%APPDATA%\AE-Llama\vendor\ffmpeg` now holds
+  the LGPL n9.0 build (ffmpeg/ffprobe/ffplay); `vendor\whisper.cpp` is
+  untouched.
