@@ -8190,3 +8190,114 @@ Small, well-defined, and its own pass.
   8 GB intermediate cap that is still a guess; `get-llama.ps1`'s two
   latent traps; and `comfy_generate` still calls `import_file` rather than
   5.8's `import_as_layer`.
+
+## 2026-08-30 (local) - item 3: the 34 items every self-test run left in
+## somebody else's project (0.10.12)
+
+Harness green on arrival (531/531), so item 1 was satisfied and the pass
+took the top unfinished item: the leak the PREVIOUS pass measured and
+filed. It is fixed, and the field numbers are 364 items before a run and
+364 after, twice.
+
+### What was actually leaking, counted
+
+A census of the open project (`logs\leak-probe\p1.jsx` - a plain
+ExtendScript walk of `app.project`, classifying every item and its
+`mainSource`) found **364 items, 357 of them orphan SOLID sources**:
+
+| name | count | source |
+|---|---|---|
+| `Null 1` .. `Null 189` | 189 | every `add_null`; AE uniques the name |
+| `Audio Amplitude` | 168 | every `audio_to_keyframes`; AE does NOT unique it |
+
+Both are SolidSources. That is the whole leak: a null layer's SOURCE is a
+project item, and deleting the comp that held the layer does not delete
+it. The suite deletes its comps and its `ST `-named solids, and every run
+walked away from ~34 items named by After Effects.
+
+### Why eleven versions of a cleanup never saw it
+
+The last step of the suite has always been *"nothing of the suite's
+remains in the project"*, and it read:
+
+    if (d.items[i].name.indexOf("ST ") === 0) stale.push(...)
+
+**That assertion was TRUE on every single leaking run.** Not one of the
+34 items is called `ST ` anything - they are called what AE calls them.
+The sweep and the check shared one assumption, so the check could only
+ever confirm the sweep's own blind spot. This is the second time in this
+project a namespace sweep has been outflanked from outside the prefix.
+
+### The fix: identity, not names
+
+Names cannot decide this. `Null 1` is a name a real user's project will
+hold, and deleting it would be far worse than leaking one. So the run now
+answers a different question - *did THIS run make it?* - which needs a
+before-picture:
+
+- **New first step**, ahead of `create_comp`: `get_project_info
+  {limit: 0}` into `ctx.baseIds`, a set of item IDs. It also asserts
+  `items.length === numItems`, because a capped baseline would make the
+  sweep delete items it never created - that is a guard on the cleanup,
+  not a spare check.
+- **The sweep** takes footage that is (1) absent from the baseline - this
+  run's, whatever AE named it - or (2) in the `ST ` namespace, the old
+  rule, kept because it still reaches leftovers from an earlier run that
+  died before its own cleanup and are therefore IN the baseline.
+- **Footage only, deliberately.** The one non-footage item a run can add
+  is AE's own `Solids` FOLDER, which AE creates on demand and which the
+  user's next solid will want.
+- **The final assertion** now counts against the baseline as well as the
+  prefix, and names what it found (`Null 1 (#20001), ...`). The step that
+  could not fail can now fail.
+
+### Verification
+
+- **Real-AE harness 532/532, twice** (531/531 before; +1, the baseline
+  step). Census run between them: **364 items before, 364 after, item for
+  item identical** - `diff` of the two censuses is empty. Same again
+  after the second run.
+- **The 357 orphans already in that project were left alone**, which is
+  the real-AE proof of the half that matters more than the sweep: 189
+  items called `Null <n>` and 168 called `Audio Amplitude` sat in the
+  baseline through two runs of a cleanup that deletes items by exactly
+  those names when it made them. A name-based fix would have destroyed
+  them.
+- `tests/test-self-test.js`: the canned host now LEAKS the way AE does -
+  every `add_null` pushes a `Null <n>` solid source, every
+  `audio_to_keyframes` an `Audio Amplitude` one (not uniqued, faithfully),
+  and both survive a comp delete. Reverting the sweep to the name-only
+  rule fails the run with *"16 footage item(s) the run created are still
+  in the project, under names the ST sweep cannot see"*. Two seeded
+  USER decoys named `Null 1` and `Audio Amplitude` pin the other half:
+  a sweep rewritten to match those names fails with *"the user's own
+  'Null 1' survives the sweep"*. Both failure modes were run and seen.
+- Full stub sweep: **57/57 test files exit 0**. `docs/CAPABILITIES.md`
+  regenerated (`get_project_info` 14 -> 15 suite steps).
+
+One stub trap paid for on the way: the leaked ids were seeded at 5000,
+which is where the canned host's `nextFolderId` starts, so a leaked solid
+and a folder shared an id and `delete_item` deleted the folder instead.
+It surfaced as `ST ORG Nest` surviving cleanup. Leaked ids now start at
+20000.
+
+### Version: PATCH bumped to 0.10.12
+
+This is a fix to SHIPPED behaviour, not a feature: anyone pressing
+Settings -> "Run self-test" was leaving ~34 orphan sources in their own
+project, every time.
+
+### Notes for whoever runs the next pass
+
+- Machine state: the open project is still `logs\mogrt60\P60-scratch.aep`
+  with its 364 items. The 357 orphans are earlier passes' debris and are
+  deliberately NOT cleaned - they are now the field's own decoy set, and
+  any future pass that touches the cleanup should re-run
+  `logs\leak-probe\p1.jsx` before and after and diff the two.
+- Still open from earlier passes, unattempted tonight: the `DroverLord -
+  Window Class` popup; item 7's VRAM half (needs ~36 GB of weights not on
+  this disk), the tier impersonation ladder and OOM recovery; no panel UI
+  for the mogrt export tools; no `.webm`/`.webp`; the 8 GB intermediate
+  cap that is still a guess; `get-llama.ps1`'s two latent traps; and
+  `comfy_generate` still calls `import_file` rather than 5.8's
+  `import_as_layer`.

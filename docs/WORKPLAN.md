@@ -346,9 +346,20 @@ As of 2026-08-30 the computed gap list reads **"Host tools never
 exercised by the self-test suite: none"** — every host tool has now been
 run against real After Effects.
 
-**NEW, measured 2026-08-30, and its own small pass: the suite LEAKS 34
-project items every run, into whatever project the user has open.**
-Counted before and after one harness run: 313 -> 347, all of it `Null`
+~~**NEW, measured 2026-08-30, and its own small pass: the suite LEAKS 34
+project items every run, into whatever project the user has open.**~~
+DONE 2026-08-30 (0.10.12), exactly as specified: the run now photographs
+the project by ITEM ID before it creates anything, and the cleanup sweeps
+the footage that photograph does not contain — plus the `ST ` namespace
+as before, which still reaches an earlier run's leftovers. Measured in
+the field: 364 items before, 364 after, item for item, twice; and the
+357 `Null <n>` / `Audio Amplitude` orphans the earlier passes had already
+left were untouched, which is the real-AE proof of the half that matters
+more (a user's own "Null 1" must survive). The assertion that let this
+run for eleven versions is fixed too — "nothing named `ST ` remains" was
+TRUE on every leaking run, so the step now counts against the baseline as
+well. Harness 531 -> 532. Original text: Counted before and after one
+harness run: 313 -> 347, all of it `Null`
 (162 -> 180) and `Audio Amplitude` (144 -> 160) FOOTAGE sources. The
 suite's cleanup sweeps the `ST ` namespace and these are named by AE, not
 by the suite — `audio_to_keyframes` never uniques its null's name

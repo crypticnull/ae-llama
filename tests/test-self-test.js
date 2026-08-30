@@ -278,6 +278,29 @@ for (let i = 1; i <= 400; i++) {
  "ST Cov Box"].forEach((nm, i) => {
   solidSources.push({ name: nm, id: 900 + i, type: "footage" });
 });
+// The leak the ST sweep could never see (measured in the real project
+// 2026-08-30: 189 "Null <n>" and 168 "Audio Amplitude" solid sources
+// accumulated, 34 of them per run). Every null AE makes gets a solid
+// SOURCE in the project panel, and deleting the comp does not delete it.
+// AE uniques the null's source name and does NOT unique the audio one —
+// and neither name is in the suite's "ST " namespace, which is why a
+// name-only cleanup swept a project it was leaking into. The stub leaks
+// exactly the same way so the cleanup has something to fail on.
+// And the other half of the contract: a project of the USER's that
+// already holds items by those exact names. The sweep may not touch
+// these -- they were here before the run, which is the only thing that
+// tells them apart from the ones it leaked.
+const USER_DECOYS = ["Null 1", "Audio Amplitude"];
+USER_DECOYS.forEach((nm, i) => {
+  solidSources.push({ name: nm, id: 950 + i, type: "footage" });
+});
+let leakedId = 20000;      // clear of the solid-source and folder ids
+let leakedNulls = 0;
+function leakSolidSource(name) {
+  solidSources.push({ name, id: ++leakedId, type: "footage" });
+  return name;
+}
+function leakNullSource() { return leakSolidSource("Null " + (++leakedNulls)); }
 let camProbeReads = 0;
 let textStyle = null;
 // The ordering steps read back what the previous step wrote, so the canned
@@ -1062,6 +1085,7 @@ function bnCanned(tool, args) {
       return { name: args.name, index: 1 };
     case "add_null":
       bnAdd(args.name, "null", { pos: (args.position || [0, 0]).slice() });
+      leakNullSource();
       return { name: args.name, index: 1 };
     case "add_text_layer":
       // AE names a text layer after its TEXT; the tool takes no 'name'.
@@ -2249,6 +2273,7 @@ function cannedOk(tool, args) {
         ? args.keys.length : 18 };
     }
     case "add_null":
+      leakNullSource();
       return { index: 1, name: (args && args.name) || "Null 1" };
     case "set_expression": {
       const expr = (args && args.expression) || "";
@@ -3548,6 +3573,10 @@ function cannedOk(tool, args) {
                                          : "Audio Amplitude";
       const name = auUnique(wanted);
       auNulls.push(name);
+      // AE's converter leaves a solid source behind too, and it never
+      // uniques THAT name: the real project holds 168 items all called
+      // "Audio Amplitude".
+      leakSolidSource("Audio Amplitude");
       const out = { layer: name, index: 1, controlLayer: name,
         controlEffects: ["Left Channel", "Right Channel", "Both Channels"],
         keyframes: auKeys, rangeStart: auStart, rangeEnd: auEnd,
@@ -4206,6 +4235,22 @@ SelfTest.run({
            calls[calls.length - 1] + ")");
     assert(calls.lastIndexOf("delete_item") > calls.length - 30,
            "the delete cleanup runs at the end, just before verification");
+    // The leak this cleanup was rebuilt for: the sources AE names for
+    // itself ("Null <n>", "Audio Amplitude") are gone, and the user's
+    // own items of the SAME NAMES are untouched. Both halves, or the
+    // fix is either useless or destructive.
+    const leftBehind = solidSources.filter((so) => so.id > 20000);
+    assert(leftBehind.length === 0,
+           "the run's own solid sources are all swept (left " +
+           leftBehind.length + ": " +
+           leftBehind.slice(0, 5).map((so) => so.name).join(", ") + ")");
+    USER_DECOYS.forEach((nm) => {
+      assert(solidSources.some((so) => so.name === nm && so.id < 20000),
+             "the user's own '" + nm + "' survives the sweep");
+    });
+    assert(calls[0] === "get_project_info",
+           "the run photographs the project BEFORE it creates anything " +
+           "(got " + calls[0] + ")");
     assert(/Self-test: \d+\/\d+ passed/.test(res.text),
            "report carries the summary line");
 

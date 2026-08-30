@@ -97,6 +97,34 @@
     var batchNames = ["ST Batch"];
     for (var b = 2; b <= 60; b++) batchNames.push("ST Batch " + b);
     return [
+      // FIRST, before anything is created: photograph the project as the
+      // user left it. The cleanup at the bottom sweeps the suite's own
+      // "ST " namespace, but the items a run leaks are named by AFTER
+      // EFFECTS, not by the suite — every add_null leaves a solid source
+      // called "Null <n>" behind and every audio_to_keyframes one called
+      // "Audio Amplitude" (measured 2026-08-30: 34 orphans per run, in
+      // whatever project the user had open). Those names cannot be swept
+      // by name: "Null 1" is a name a user's own project will hold. So
+      // the sweep is scoped by ID to the items THIS RUN created, which
+      // needs the before-picture taken here.
+      { name: "baseline: photograph the project before the suite touches it",
+        tool: "get_project_info",
+        args: { limit: 0 },
+        check: function (d, ctx) {
+          ctx.baseIds = {};
+          for (var i = 0; i < d.items.length; i++) {
+            ctx.baseIds[d.items[i].id] = true;
+          }
+          ctx.baseCount = d.items.length;
+          // limit:0 means "no cap". If it ever capped, the baseline would
+          // be partial and the sweep would delete items it never created —
+          // so this is a guard on the cleanup, not a spare assertion.
+          return d.items.length === d.numItems ||
+                 "limit:0 listed " + d.items.length + " of " + d.numItems +
+                 " items; the cleanup cannot scope itself to this run " +
+                 "without the whole list";
+        } },
+
       { name: "create scratch comp",
         tool: "create_comp",
         args: { name: COMP, width: 1280, height: 720, duration: 8,
@@ -8302,20 +8330,42 @@
       // Deleting a comp does NOT delete the solid SOURCES its layers
       // used — they stay in the project panel, so every suite run left
       // its solids behind and a scratch project accumulated dozens of
-      // duplicates (field-observed: 45 items, visibly doubling). Find
-      // every leftover footage item in the suite's own namespace and
-      // queue its deletion for the step below. Names outside "ST " are
-      // never touched — that prefix is the suite's, nothing else's.
+      // duplicates (field-observed: 45 items, visibly doubling).
+      //
+      // Two rules find them, because the sources have two kinds of name:
+      //
+      // (1) BY ID, against the baseline photographed in step 1: any
+      //     footage item that was not in the project when the run started
+      //     is this run's. That is the only rule that can reach the ones
+      //     AE names for itself — "Null 1".."Null 189" from add_null and
+      //     "Audio Amplitude" from audio_to_keyframes (which never uniques
+      //     its null's name, so 168 of them read identically). Measured
+      //     2026-08-30: 34 such orphans per run, in whatever project the
+      //     user had open, including a real user's after Settings ->
+      //     "Run self-test". They cannot be swept by NAME — a user's own
+      //     project will hold a "Null 1" — so they are swept by identity.
+      // (2) BY NAME, the original rule: footage in the suite's own "ST "
+      //     namespace, which also reaches leftovers from an EARLIER run
+      //     that died before its cleanup and are therefore in the
+      //     baseline. Names outside "ST " are never touched by this half.
+      //
+      // Footage only, deliberately: the one non-footage item a run can add
+      // is AE's own "Solids" FOLDER, which AE creates on demand and which
+      // the user's next solid will want.
       { name: "cleanup: find the solid sources the suite left behind",
         tool: "get_project_info",
         args: { limit: 0 },
         check: function (d, ctx) {
+          var base = ctx.baseIds || {};
           ctx.leftoverIds = [];
+          ctx.leftoverNames = [];
           for (var i = 0; i < d.items.length; i++) {
             var it = d.items[i];
-            if (it.type === "footage" && it.name.indexOf("ST ") === 0) {
-              ctx.leftoverIds.push(it.id);
-            }
+            if (it.type !== "footage") continue;
+            var mine = !base[it.id] || it.name.indexOf("ST ") === 0;
+            if (!mine) continue;
+            ctx.leftoverIds.push(it.id);
+            ctx.leftoverNames.push(it.name);
           }
           return true;
         } },
@@ -8336,27 +8386,47 @@
           return cmds;
         },
         check: function (rows, ctx) {
+          var names = ctx.leftoverNames || [];
           for (var i = 0; i < rows.length; i++) {
             if (!rows[i].ok) {
               return "leftover " + (i + 1) + " of " + rows.length +
+                     (names[i] ? " ('" + names[i] + "')" : "") +
                      " not deleted: " + rows[i].error;
             }
           }
           return true;
         } },
 
+      // The assertion the leak got past for eleven versions: "no ST item
+      // remains" was true on every run that leaked 34 items, because not
+      // one of them was called "ST " anything. So the count is checked
+      // against the baseline as well — a run must hand the project panel
+      // back the way it found it, whatever AE chose to name what it made.
       { name: "cleanup: nothing of the suite's remains in the project",
         tool: "get_project_info",
         args: { limit: 0 },
-        check: function (d) {
-          var stale = [];
-          for (var i = 0; i < d.items.length; i++) {
-            if (d.items[i].name.indexOf("ST ") === 0) {
-              stale.push(d.items[i].name);
+        check: function (d, ctx) {
+          var stale = [], added = [], i;
+          var base = ctx.baseIds || {};
+          for (i = 0; i < d.items.length; i++) {
+            var it = d.items[i];
+            if (it.name.indexOf("ST ") === 0) stale.push(it.name);
+            // AE's "Solids" folder is created on demand and kept: it is
+            // AE's, not the suite's, and the user's next solid wants it.
+            else if (!base[it.id] && it.type === "footage") {
+              added.push(it.name + " (#" + it.id + ")");
             }
           }
-          return stale.length === 0 ||
-                 "the suite left items behind: " + stale.join(", ");
+          if (stale.length) {
+            return "the suite left items behind: " + stale.join(", ");
+          }
+          if (added.length) {
+            return added.length + " footage item(s) the run created are " +
+                   "still in the project, under names the ST sweep cannot " +
+                   "see: " + added.slice(0, 8).join(", ") +
+                   (added.length > 8 ? ", ..." : "");
+          }
+          return true;
         } }
     ];
   }
