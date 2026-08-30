@@ -1868,6 +1868,31 @@
       var srcFrames = Math.max(1, Math.round(spanSecs * (compFps || 1)));
       var estimate = F.estimateIntermediate(mPlan.width, mPlan.height,
                                             srcFrames);
+      /*
+       * The 8 GB cap was a GUESS for eleven versions, and the open
+       * question under it was whether AE's AVI writer survives the
+       * classic RIFF boundaries — 32-bit chunk offsets break at 2 GiB
+       * and 4 GiB, and a writer that wraps there hands back a file a
+       * reader accepts and truncates.
+       *
+       * Measured 2026-08-30 (scripts/riff-boundary-probe.js), and the
+       * answer is that the FORMAT is not the risk at all. Real 1080p30
+       * masters at 5.214 GiB (900 frames) and 7.995 GiB (1380 frames) —
+       * the largest this cap allows — both rendered DONE, probed at the
+       * full frame count, decoded end to end under `-xerror` with no
+       * error, and their pictures at frames 343-347, 688-692 and the
+       * last five were byte-identical (framemd5) to short reference
+       * spans re-rendered across the same boundaries. Nothing wrapped
+       * and nothing was dropped.
+       *
+       * So this stays a DISK-AND-TIME guard, not a format limit, and it
+       * is safe to raise when the disk has room — which is what the
+       * refusal now says, because a caller told "the limit is 8 GB" with
+       * no reason will read it as "the file cannot be bigger" and shorten
+       * an export it never needed to shorten. The default is unchanged:
+       * 8 GiB is ~46 s of 1080p and 26 s of rendering here, and nobody
+       * has asked for more.
+       */
       var capGB = Number(args.maxIntermediateGB) || 8;
       var cap = capGB * 1024 * 1024 * 1024;
       if (estimate > cap) {
@@ -1876,10 +1901,14 @@
              mPlan.width + "x" + mPlan.height + " raw is " +
              F.humanBytes(mPlan.width * mPlan.height * 3) + " a frame " +
              "and this span is " + srcFrames + " frames. The limit is " +
-             capGB + " GB. Export a shorter span with {durationSeconds}" +
+             capGB + " GB, and it guards the DISK and the render time " +
+             "rather than the file format (AE's lossless AVI and ffmpeg " +
+             "were measured good to 7.99 GiB). Export a shorter span with " +
+             "{durationSeconds}" +
              (mPlan.factor > 1 ? "" : ", render the master smaller with " +
               "{masterResolution: \"auto\"}") +
-             ", or raise it with {maxIntermediateGB} if there is room." });
+             ", or raise it with {maxIntermediateGB} if the disk has " +
+             "room — that is safe." });
         return;
       }
       var free = F.freeBytes(os.tmpdir());

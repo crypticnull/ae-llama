@@ -411,9 +411,25 @@
     return head || filter;
   }
 
-  /* FACT 5: raw BGR is 3 bytes a pixel and AE adds a little per frame
-   * (measured 640 B/frame at 320x240, 3 640 at 1920x1080). The estimate
-   * is the floor, not the ceiling, so it is reported as such. */
+  /* FACT 5: raw BGR is 3 bytes a pixel and AE adds a little on top. The
+   * estimate is the FLOOR, not the ceiling, and it is reported as such.
+   *
+   * The "3 640 B/frame at 1920x1080" this comment used to claim was an
+   * artefact of the render it was taken from: a TWO-frame file, where a
+   * fixed ~7 KB of AVI header and index divided by two frames looks like
+   * a big per-frame cost. Re-measured 2026-08-30 over long renders
+   * (riff-boundary-probe.js), the overhead is nearly all fixed and the
+   * per-frame share falls away as the file grows:
+   *
+   *     frames     file bytes       over the raw floor    per frame
+   *         2      12 448 880              7 280            3 640
+   *        60     373 257 600              9 600              160
+   *       900   5 598 817 144             97 144              108
+   *      1380   8 584 826 232            122 232               89
+   *
+   * So the gap the caller has to allow for is ~0.0015% of an export-sized
+   * master, not 0.06% — which is why the disk guard's 1.1x headroom is
+   * not tight even at the 8 GB cap. */
   function estimateIntermediate(w, h, frames) {
     return Math.round(Number(w) * Number(h) * 3 * Number(frames));
   }

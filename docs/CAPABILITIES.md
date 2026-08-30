@@ -277,6 +277,30 @@ Queued (see WORKPLAN for owners/order):
   size is refused rather than upscaled). It is opt-in: on this machine a
   10 s 1080p comp to 480x270 went 6.6 s -> 6.0 s, so the win is the
   intermediate itself — 1.74 GB down to 116 MB — not the clock.
+- **AE's lossless AVI clears the RIFF boundaries, so the 8 GB cap on the
+  export intermediate guards the disk and the clock — not the format.**
+  AVI is RIFF and RIFF offsets are 32 bits, so 2 GiB and 4 GiB are where
+  a writer classically wraps and hands back a file the reader truncates
+  without complaint. At 1080p30 a lossless master crosses 2 GiB at about
+  11.5 s and 4 GiB at 23 s, so almost every real export is past one of
+  them and nobody had ever checked. Measured 2026-08-30
+  (`scripts/riff-boundary-probe.js`): masters of **5.214 GiB (900
+  frames)** and **7.995 GiB (1380 frames — the largest the shipped cap
+  allows)** both rendered DONE with no warning, probed at the full frame
+  count and right frame size, decoded end to end under `-xerror` with an
+  empty stderr, and gave 900 and 1380 DISTINCT frame hashes. The check
+  that settles it is the last one: short reference spans re-rendered
+  across frames 343-347, 688-692 and the final five are **byte-identical
+  (framemd5) to those same frames inside the multi-gigabyte file**, which
+  compares AE against itself and so needs no assumption about colour
+  management or what the picture ought to look like. Nothing wrapped and
+  nothing was dropped. The default cap is therefore left at 8 GB and the
+  refusal now says which kind of limit it is, because a caller told only
+  "the limit is 8 GB" shortens an export that never needed shortening.
+  The per-frame overhead was re-measured while the files were there and
+  the old "3 640 B/frame at 1080p" note was an artefact of a TWO-frame
+  render: the cost is a fixed ~9.6 KB header, so the share falls to
+  **89 B/frame by 1380 frames** and the estimate stays a true floor.
 - **After Effects cannot render inside an undo group.** Its renderer
   closes the script's group out from under it and AE raises a modal
   "Undo group mismatch" — later in the run, at some innocent

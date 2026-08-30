@@ -313,6 +313,73 @@ assert(F.estimateIntermediate(1920, 1080, 2) === 12441600,
          "master — " + F.humanBytes(tenSec) + " once the GB is the " +
          "binary one the guard counts in. This is why there is a guard");
 }
+
+/*
+ * The RIFF-boundary renders, 2026-08-30 (scripts/riff-boundary-probe.js).
+ * Every `bytes` below is a real file AE wrote and ffmpeg read back frame
+ * for frame — these are the measurements that turned the 8 GB cap from a
+ * guess into a number, so they are the fixture the estimate is held to.
+ *
+ * Two properties matter and they pull opposite ways: the estimate must
+ * never EXCEED the file (the disk guard would refuse exports that fit)
+ * and it must not fall far UNDER it (the guard would let the disk fill).
+ */
+{
+  const FIELD = [
+    { w: 320,  h: 240,  frames: 12,   bytes: 2772480 },
+    { w: 1920, h: 1080, frames: 2,    bytes: 12448880 },
+    { w: 1920, h: 1080, frames: 60,   bytes: 373257600 },
+    { w: 1920, h: 1080, frames: 900,  bytes: 5598817144 },
+    { w: 1920, h: 1080, frames: 1380, bytes: 8584826232 }
+  ];
+  for (const f of FIELD) {
+    const est = F.estimateIntermediate(f.w, f.h, f.frames);
+    assert(est <= f.bytes,
+           f.w + "x" + f.h + "x" + f.frames + ": the estimate " + est +
+           " is a FLOOR under the measured " + f.bytes + " — an estimate " +
+           "that overshoots refuses exports that would have fit");
+    assert((f.bytes - est) / f.bytes < 0.003,
+           f.w + "x" + f.h + "x" + f.frames + ": and it is within 0.3% (" +
+           (f.bytes - est) + " B of AVI header and index), so the disk " +
+           "guard's 1.1x headroom covers the gap many times over");
+  }
+  // The old comment read the 2-frame render as "3 640 B/frame at 1080p"
+  // and generalised it. It does not generalise: the overhead is nearly
+  // all FIXED, so the per-frame share shrinks as the file grows. Pinning
+  // it here stops the next reader taking a short render as the rule.
+  const perFrame = (f) =>
+    (f.bytes - F.estimateIntermediate(f.w, f.h, f.frames)) / f.frames;
+  assert(perFrame(FIELD[1]) > 3000 && perFrame(FIELD[4]) < 100,
+         "the per-frame overhead FALLS from 3 640 B on a 2-frame file to " +
+         "under 100 B on a 1380-frame one, because it is a fixed header " +
+         "amortised — not a per-frame cost");
+}
+
+/*
+ * The boundaries themselves. AVI is RIFF and RIFF offsets are 32-bit, so
+ * 2 GiB and 4 GiB are where a writer classically wraps. Measured
+ * 2026-08-30: 1080p30 masters of 5.214 GiB and 7.995 GiB both wrote,
+ * probed at full frame count, decoded clean under -xerror, and matched
+ * re-rendered reference spans byte for byte ACROSS both boundaries.
+ *
+ * This asserts the arithmetic that put those two renders on either side
+ * of the boundaries, so a change to estimateIntermediate cannot quietly
+ * move the shipped cap off the span that was actually tested.
+ */
+{
+  const GiB = 1024 * 1024 * 1024;
+  const at = (secs) => F.estimateIntermediate(1920, 1080, secs * 30);
+  assert(at(11) < 2 * GiB && at(12) > 2 * GiB,
+         "1080p30 crosses 2 GiB between 11 and 12 seconds — every export " +
+         "longer than that is past the first boundary, which is why the " +
+         "default cap could never have been left a guess");
+  assert(at(23) < 4 * GiB && at(24) > 4 * GiB,
+         "and 4 GiB between 23 and 24 seconds");
+  assert(at(30) > 4 * GiB && at(46) < 8 * GiB && at(47) > 8 * GiB,
+         "the 30 s render measured is past 4 GiB, and 46 s is the longest " +
+         "1080p master the shipped 8 GB cap allows — which is the second " +
+         "span that was measured, so the cap is tested AT its own edge");
+}
 assert(F.humanBytes(2772480) === "3 MB" && /GB$/.test(F.humanBytes(2e9)),
        "humanBytes is for a sentence, not a spreadsheet");
 
@@ -943,6 +1010,19 @@ function guardTests(dir, next) {
       assert(/durationSeconds/.test(r.error) &&
              /maxIntermediateGB/.test(r.error),
              "and both levers named");
+      // Measured 2026-08-30: the cap guards the disk and the clock, NOT
+      // the container. A caller told only "the limit is 8 GB" reads it as
+      // "the file cannot be bigger" and shortens an export that never
+      // needed shortening, so the refusal has to say which kind of limit
+      // it is — this project's grounded-error rule applied to a number.
+      assert(/DISK/.test(r.error) && /format/.test(r.error) &&
+             /7.99 GiB/.test(r.error),
+             "the refusal says the cap guards the disk and the render " +
+             "time rather than the file format, and names the size the " +
+             "format was actually measured good to: " + r.error);
+      assert(/that is safe/.test(r.error),
+             "and says raising it is safe, because it now is — that was " +
+             "an open question for eleven versions: " + r.error);
       assert(CALLS.length === callsBefore,
              "nothing was spawned and nothing was rendered — the point of " +
              "the guard is that the disk is never touched");

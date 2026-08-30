@@ -1042,6 +1042,29 @@ buys HEADROOM — an export the intermediate cap refused now runs — not
 speed. Opt-in on the export side, because nobody has measured AE's own
 downsampler against ffmpeg's on real footage. Harness 514 -> 517.
 
+~~Pass B follow-up: **the 8 GB intermediate cap is a guess, not a
+measurement.** Nobody has established whether AE's AVI writer survives
+past the classic 2 GB / 4 GB RIFF boundaries, or whether ffmpeg reads
+what it writes there. Testing it costs a multi-gigabyte render; worth
+one deliberate pass rather than a surprise on someone's 30-second 1080p
+export.~~ MEASURED 2026-08-30 (0.10.17), and the format is not the risk.
+`scripts/riff-boundary-probe.js` rendered real 1080p30 masters of
+**5.214 GiB** and **7.995 GiB** — the largest the shipped cap allows —
+through the shipped `render_comp`, and both came back DONE with no
+warning, at full frame count, decoding end to end under `-xerror` with
+an empty stderr. The check that settles it compares AE against ITSELF:
+short reference spans re-rendered across frames 343-347, 688-692 and the
+final five are byte-identical (framemd5) to those frames inside the
+multi-gigabyte file, so no assumption about colour management or what
+the picture should look like enters the answer. Nothing wrapped, nothing
+was dropped. The cap therefore stays 8 GB as a DISK-AND-TIME guard and
+the refusal now says so, because a caller told only "the limit is 8 GB"
+shortens an export that never needed shortening. The pass also found the
+"3 640 B/frame at 1080p" note in `estimateIntermediate` was an artefact
+of the two-frame render it was taken from — the overhead is a fixed
+~9.6 KB header, 89 B/frame by 1380 frames. 16 new checks in
+`tests/test-ffmpeg-export.js` carry the field bytes. See the log.
+
 ## 7. Tier P4 — real-GPU measurement (local; P1–P3 landed 2026-08-25)
 
 The remote half of docs/COMFY_TIERS_PLAN.md is in: tiers.js (T0–T7 +

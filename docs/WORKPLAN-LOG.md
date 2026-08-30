@@ -8853,3 +8853,175 @@ feed is the only way that reaches an installed panel.
   passes carried it.
 - `release-notes.txt` still reads "0.10.0" while the feed now ships 0.10.16.
   Remote session's release cut.
+
+## 2026-08-30 (local) - the boundary every 1080p export over eleven
+## seconds crosses, and that nobody had ever tested (0.10.17)
+
+**Item:** item 6.2's longest-lived flag, carried by twelve passes and
+never spent a night on - "**The 8 GB intermediate cap is a guess**, not a
+measurement. Nobody has established whether AE's AVI writer survives past
+the classic 2 GB / 4 GB RIFF boundaries, or whether ffmpeg reads what it
+writes there. Testing it costs a multi-gigabyte render; worth one
+deliberate pass rather than a surprise on someone's 30-second 1080p
+export."
+
+Harness green before the pass (**532/532**), so the queue applied.
+Item 1's `DroverLord` popup still has no new evidence (`logs\dialogs\`
+holds nothing since 2026-08-30 01:04, which the previous pass already
+read) and item 7's remaining bullet still wants ~36 GB of weights and a
+human's say-so. Everything else in items 1-6 is struck. This flag was the
+next thing that could actually move, and its own text sizes it as one
+deliberate pass, which is what it got.
+
+### Why it was worth a night
+
+The exporters render a LOSSLESS master first: rawvideo/bgr24 AVI, three
+bytes a pixel, ~6.22 MB per 1080p frame. AVI is RIFF and RIFF chunk
+offsets are **32 bits**, so 2 GiB and 4 GiB are exactly where a writer
+classically wraps - and the failure mode is not a crash, it is a file the
+reader accepts and truncates. The arithmetic says how routine that is:
+
+    1080p30 crosses 2 GiB at ~11.5 s and 4 GiB at ~23 s
+
+So **almost every real export is already past one boundary**, the shipped
+cap lets a user go to ~46 s, and the whole span was untested.
+
+### The method, and the one trick that makes it exact
+
+`scripts/riff-boundary-probe.js`. It takes its bridge wrapper from
+`chat-probe.js` by require rather than by copy, so it cannot drift from
+the way the panel actually talks to AE.
+
+1. A rig comp whose every frame is a different picture, both drivers pure
+   functions of `time` so frame N depends on N and nothing else -
+   Position a 1720 px traverse, Rotation 120 deg/s (4 deg a frame, which
+   no antialiasing accident can blur between neighbours). Position gets
+   TWO components, not three: the expression engine sees 2 dims on a 2D
+   layer however many the scripting API pads to.
+2. The whole comp through the shipped `render_comp` at "Lossless".
+3. ffprobe, then a full decode under `-xerror` - a corrupt tail is
+   invisible to the header read that ffprobe does.
+4. `framemd5`: one MD5 per DECODED frame, and assert they are all
+   DISTINCT, or step 5 would be comparing nothing.
+5. **The trick.** Re-render SHORT spans of the same comp straddling each
+   boundary via `render_comp`'s `startTime`/`durationSeconds`. Those
+   reference files are a few MB and nowhere near any boundary. Frame for
+   frame their MD5s must equal the big file's at the same comp times.
+   That compares **AE against itself** - same comp, same renderer, same
+   codec - so no assumption about colour management, gamma, or what the
+   picture ought to look like enters the verdict.
+
+A file that truncates, wraps, repeats a frame or garbles its tail fails
+(5) even when ffprobe reports a tidy 900 frames.
+
+### The answer: the format is not the risk
+
+Two real renders, 11 checks each, all green.
+
+    30 s = 900 frames   5 598 817 144 B (5.214 GiB)  17 s wall
+    46 s = 1380 frames  8 584 826 232 B (7.995 GiB)  26 s wall
+
+46 s is not an arbitrary second number: at 1080p it is **the longest
+master the shipped 8 GB cap allows**, so the cap was tested at its own
+edge. Both: status DONE with no warning, on disk at or above the raw
+pixel floor, ffprobe 1920x1080 rawvideo at the full frame count, full
+decode exit 0 with an empty stderr, 900/900 and 1380/1380 DISTINCT frame
+hashes, and the reference spans at **frames 343-347 (the 2 GiB
+boundary), 688-692 (the 4 GiB boundary) and the final five** matching
+5/5 byte for byte inside the multi-gigabyte file. Nothing wrapped and
+nothing was dropped.
+
+So the 8 GB cap is not protecting against the container. It is a
+**disk-and-time guard**, which is a legitimate thing to be and a
+different thing from what the code implied.
+
+### What that changed at the root
+
+- `extension/js/tools.js`: the cap keeps its default (8 GiB is ~46 s of
+  1080p and 26 s of rendering here; nobody has asked for more) and gains
+  the measurement as the comment that explains why it is a number at all.
+  The refusal now says **which kind of limit it is** - "it guards the
+  DISK and the render time rather than the file format (AE's lossless AVI
+  and ffmpeg were measured good to 7.99 GiB) ... or raise it with
+  {maxIntermediateGB} if the disk has room - that is safe." A caller told
+  only "the limit is 8 GB" reads it as "the file cannot be bigger" and
+  shortens an export that never needed shortening. This project's
+  grounded-error rule applied to a number.
+- `extension/js/ffmpeg.js`: **the comment under `estimateIntermediate`
+  was wrong.** It claimed "3 640 B/frame at 1920x1080" and generalised
+  it. That figure came from the TWO-frame render it was measured on,
+  where a fixed ~7 KB of AVI header and index divided by two frames looks
+  like a per-frame cost. Over long files the overhead is nearly all
+  fixed, so the share collapses:
+
+        frames     file bytes        over the raw floor    per frame
+            2      12 448 880               7 280            3 640
+           60     373 257 600               9 600              160
+          900   5 598 817 144              97 144              108
+         1380   8 584 826 232             122 232               89
+
+  The gap a caller must allow for is **~0.0015% of an export-sized
+  master, not 0.06%** - which is why the disk guard's 1.1x headroom is
+  not tight even at the cap. The estimate itself is unchanged and is
+  still a true FLOOR; only the story about it was wrong.
+
+### Verification
+
+- **`tests/test-ffmpeg-export.js` 138 -> 154 checks.** Every `bytes`
+  above is a real file, replayed as a fixture, and the estimate is held
+  to both properties that pull opposite ways: it must never EXCEED the
+  file (the disk guard would refuse exports that fit) and must stay
+  within 0.3% (the guard would let the disk fill). A second block pins
+  the arithmetic that put the two renders on either side of the
+  boundaries, so a change to `estimateIntermediate` cannot quietly move
+  the shipped cap off the span that was actually tested - had anyone
+  "corrected" the estimate by the old comment's 3 640 B/frame, the
+  1380-frame floor assertion would fail.
+- Reverting the two source files fails **2** of the new checks (the
+  refusal wording); the field-data block passes either way by design,
+  because it guards the estimate going forward rather than the comment.
+- **Full stub sweep: 60/60 test files exit 0.**
+- **Real-AE harness 532/532** before and after. No suite steps: the
+  change is panel-side, and a multi-gigabyte render has no business in a
+  suite that has to finish.
+- `capability-report.js` regenerated and `test-capability-doc.js` green;
+  the pass ships no tool, and the curated half gained the measurement.
+- The probe cleans up after itself: the master and every reference file
+  are unlinked, and the project sweep removes the comp **and its two
+  solid SOURCES** - a solid source outlives the comp that held it, which
+  is the same leak 0.10.12 rebuilt the suite's cleanup for. Verified:
+  "project cleanup removed 3 item(s)" on all three runs.
+
+### Version: PATCH bumped to 0.10.17
+
+A fix to shipped behaviour, not a feature: the refusal a user and the
+model both read was misleading about what it was refusing, and the feed
+is the only thing that reaches an installed panel.
+
+### Notes for whoever runs the next pass
+
+- The probe is repeatable and cheap now that it exists:
+  `node scripts/riff-boundary-probe.js --seconds 46`, ~30 s of render
+  plus ~40 s of decoding, `--keep` to leave the master, `--dir` to put it
+  somewhere other than TEMP. It smoke-tests honestly at `--seconds 2`
+  (one deliberate FAIL, the "past 4 GiB" check).
+- **Not measured, and the obvious next question if anyone cares:** where
+  the writer ACTUALLY breaks. This pass proved 7.995 GiB good and stopped
+  there because that is the shipped cap's own edge; nothing here says a
+  16 GB or 64 GB master works, so raising the DEFAULT would need its own
+  render. Raising it per-call with `{maxIntermediateGB}` is what the new
+  message calls safe, and within the measured range it is.
+- Machine state: AE left on the harness's own project, no dialog open,
+  nothing left in TEMP (checked). No llama-server or ComfyUI was started
+  or stopped by this pass.
+- Still open from earlier passes, unattempted tonight: the `DroverLord -
+  Window Class` popup (no new evidence); item 7's catalog VRAM delta
+  (~36 GB of weights and a human's decision); no panel UI for the mogrt
+  export tools; no `.webm`/`.webp` (a remote-session call); and
+  `comfy_generate` still calls `import_file` rather than 5.8's
+  `import_as_layer` - which the workplan puts OUT OF SCOPE for the local
+  session ("wiring generation into 5.8's round-trip" is remote), so it
+  should probably stop being listed here as if a local pass could take
+  it. The 8 GB cap flag is now struck after twelve passes carried it.
+- `release-notes.txt` still reads "0.10.0" while the feed now ships
+  0.10.17. Remote session's release cut.
