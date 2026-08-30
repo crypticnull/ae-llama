@@ -744,6 +744,127 @@
       });
   }
 
+  // ------------------------------------------------- weight availability
+
+  /**
+   * A loader widget's value is a WEIGHT when it names a weight FILE.
+   * The same combo lists also carry modes (`weight_dtype: "default"`,
+   * `type: "krea2"`), and those are not what this asks about.
+   */
+  var WEIGHT_FILE_RE = /\.(safetensors|ckpt|pt|pth|bin|gguf|sft|onnx)$/i;
+
+  /**
+   * The list of values a node class declares for one input, or null when
+   * that input is not a combo this can answer about.
+   *
+   * Measured on ComfyUI 0.32.0: `input.required.<name>` is
+   * `[[choice, ...], {...}]`. The `["COMBO", {options: [...]}]` form some
+   * builds emit is read too; anything else answers null, which makes the
+   * caller silent rather than wrong.
+   */
+  function comboChoices(def, name) {
+    if (!def || !def.input) return null;
+    var spec = null;
+    if (def.input.required &&
+        Object.prototype.hasOwnProperty.call(def.input.required, name)) {
+      spec = def.input.required[name];
+    } else if (def.input.optional &&
+               Object.prototype.hasOwnProperty.call(def.input.optional, name)) {
+      spec = def.input.optional[name];
+    }
+    if (!(spec instanceof Array) || !spec.length) return null;
+    if (spec[0] instanceof Array) return spec[0];
+    if (spec[0] === "COMBO" && spec[1] && spec[1].options instanceof Array) {
+      return spec[1].options;
+    }
+    return null;
+  }
+
+  /**
+   * Which weights in `graph` the RUNNING backend cannot load.
+   *
+   * The panel prices a generation off the DISK (tools.js modelFileMB) and
+   * ComfyUI decides off ITS OWN search path, and the two answer different
+   * questions: the disk knows how big a weight is (/object_info carries no
+   * sizes), the backend knows whether it can open it (the disk cannot know
+   * the search path). Measured on this machine 2026-08-30, they disagreed:
+   * all four MiniMax H3 weights are on disk where the panel looks, and the
+   * running ComfyUI — launched `--base-directory Documents\ComfyUI`, with
+   * no extra_model_paths.yaml anywhere — sees none of them. So the arbiter
+   * would stop the chat model to make room for 40 503 MiB of weights and
+   * only then hear `Value not in list — vae_name: ...`. A user pays a full
+   * handoff for a job that was never runnable.
+   *
+   * cb(err, {missing: [{node, classType, input, value, choiceCount}],
+   *          checked}). NEVER guesses: a class the server does not know, an
+   * input that is not a combo, and a value that is not a weight filename
+   * are all passed over in silence, so this can only ever report a weight
+   * ComfyUI itself would reject at queue time — never a false refusal.
+   */
+  function missingWeights(comfyUrl, graph, cb) {
+    var base;
+    try { base = parseBase(comfyUrl); } catch (e) { cb(e); return; }
+    var ids = [], k;
+    for (k in graph) {
+      if (Object.prototype.hasOwnProperty.call(graph, k)) ids.push(k);
+    }
+    ids.sort();
+    var defs = {};                 // class_type -> definition|null, once each
+    var missing = [], checked = 0;
+    (function next(i) {
+      if (i >= ids.length) {
+        cb(null, { missing: missing, checked: checked });
+        return;
+      }
+      var nid = ids[i];
+      var node = graph[nid] || {};
+      var cls = node.class_type;
+      var inputs = node.inputs || {};
+      var names = [], n;
+      for (n in inputs) {
+        if (!Object.prototype.hasOwnProperty.call(inputs, n)) continue;
+        if (typeof inputs[n] === "string" && WEIGHT_FILE_RE.test(inputs[n])) {
+          names.push(n);
+        }
+      }
+      if (!cls || !names.length) { next(i + 1); return; }
+      function withDef(def) {
+        for (var j = 0; j < names.length; j++) {
+          var name = names[j];
+          var choices = comboChoices(def, name);
+          if (!choices) continue;
+          checked++;
+          var hit = false;
+          for (var c = 0; c < choices.length; c++) {
+            if (choices[c] === inputs[name]) { hit = true; break; }
+          }
+          if (!hit) {
+            missing.push({ node: nid, classType: cls, input: name,
+                           value: inputs[name], choiceCount: choices.length });
+          }
+        }
+        next(i + 1);
+      }
+      if (Object.prototype.hasOwnProperty.call(defs, cls)) {
+        withDef(defs[cls]);
+        return;
+      }
+      requestJson(base, "GET", "/object_info/" + encodeURIComponent(cls),
+        null, 10000, function (err, statusCode, json) {
+          if (err) {
+            cb(new Error("ComfyUI unreachable at " + base.label + " — " +
+                         err.message));
+            return;
+          }
+          var def = (statusCode === 200 && json &&
+                     Object.prototype.hasOwnProperty.call(json, cls))
+            ? json[cls] : null;
+          defs[cls] = def;
+          withDef(def);
+        });
+    })(0);
+  }
+
   /**
    * Drop node `id` and rewire its consumers to whatever fed its `passthrough`
    * input — ComfyUI's own mode-4 bypass semantics, except the pass-through
@@ -1835,6 +1956,7 @@
     substituteNode: substituteNode,
     expandFilenameTokens: expandFilenameTokens,
     classInstalled: classInstalled,
+    missingWeights: missingWeights,
     resolveOptionalNodes: resolveOptionalNodes,
     _applyExtraModelPaths: applyExtraModelPaths   // exposed for tests
   };

@@ -146,8 +146,14 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
   the models REALLY loaded — concurrent, exclusive handoff (verified
   release both directions: nvidia-smi polling + ComfyUI /free), or a
   grounded refusal under pause="never". One pause covers a whole
-  round. (The curated model stack ships with the feed's comfyCatalog;
-  built-in entries are PROVISIONAL until P4 measures them.)
+  round. Before any of that churn, the chosen template's weights are
+  checked against the BACKEND's own /object_info: the disk answers how
+  big a weight is, the backend answers whether it can open it, and a
+  job whose weights the running ComfyUI cannot see is refused naming
+  each missing file and where it sits on disk — rather than costing a
+  handoff and then failing. (The curated model stack ships with the
+  feed's comfyCatalog; built-in entries are PROVISIONAL until P4
+  measures them.)
 - Auto-update: push → CI builds signed ZXP → feed branch → public repo →
   panels update and reload in place. Version-gated: the panel takes an
   update only when the feed is strictly newer (see CLAUDE.md

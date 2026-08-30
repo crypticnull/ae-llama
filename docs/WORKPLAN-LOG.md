@@ -9519,3 +9519,132 @@ recommendation is different after it.
 - Still open elsewhere: no panel UI for the mogrt export tools; no
   `.webm`/`.webp`. `release-notes.txt` still reads "0.10.0" while the
   feed ships 0.10.19 - remote session's release cut.
+
+## 2026-08-30 (local) - item 7: the weights the panel could see and the
+## backend could not, and the handoff paid for a job that never ran (0.10.20)
+
+**Item:** WORKPLAN 7, the item the previous pass filed rather than fixed -
+"the panel decides a model is available by looking at the DISK, and the
+backend decides by its own search path. On this machine the two disagree
+today."
+
+Harness green at 532/532 before the pass and after it, so item 1 did not
+claim the night. Sections 1-6 are struck; this was the highest-priority
+item that could actually move (the remaining catalog VRAM entries need
+~26 GB downloaded and templates the panel does not ship, and minimax-h3
+is blocked on exactly the defect below).
+
+### The disagreement, reproduced before anything was written
+
+`/object_info` against the running ComfyUI 0.32.0, per node of each
+shipped template:
+
+    AE_LLAMA_KREA2_V1    3 weight slots, 3 present
+    AE_LLAMA_H3_I2V_V1   4 weight slots, 4 MISSING
+
+    node 129 VAELoader.vae_name  minimax_h3_video_vae_fp16.safetensors
+    node 130 VAELoader.vae_name  minimax_h3_audio_vae_fp32.safetensors
+    node 137 CLIPLoader.clip_name qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors
+    node 148 UNETLoader.unet_name minimax_h3_fl2va_pruned_int8_convrot.safetensors
+
+and the panel prices that same template at **40 503 MiB** off the disk,
+because all four files really are in `%LOCALAPPDATA%\Comfy-Desktop\
+ComfyUI-Shared\models` where `comfyModelRoots` (0.10.13) looks. So on a
+card that cannot hold both, the arbiter stopped the chat model, warmed
+ComfyUI up, and only then heard `Value not in list`. The user paid a full
+handoff for a job that was never runnable.
+
+### The fix, and the rule that makes it safe
+
+`Comfy.missingWeights(comfyUrl, graph, cb)` walks the API-format graph,
+fetches `/object_info/<class>` once per CLASS (the H3 graph has two
+VAELoaders), and compares each node's file-valued input against the combo
+list the server itself declares. `comfy_generate` asks it BEFORE the
+arbiter acts and refuses with the sentence that tells a user their backend
+is pointed at the wrong root - every missing file, the node and input
+ComfyUI would have failed at, and where the file sits ON DISK:
+
+    ComfyUI at http://127.0.0.1:8188 cannot load 4 of this workflow's
+    weights, so the generation would fail even after freeing VRAM for it.
+    Missing from the backend's own model list:
+    minimax_h3_video_vae_fp16.safetensors (node 129 VAELoader.vae_name, on
+    disk at C:\Users\...\ComfyUI-Shared\models\vae\...); [...] Every one of
+    those files IS on this machine, so the running ComfyUI is searching a
+    different models tree - point it at them (extra_model_paths.yaml, or
+    the --base-directory it was started with) and try again.
+
+Both sources stay, because they answer different questions: the DISK knows
+how big a weight is (`/object_info` carries no sizes, and size is what the
+arithmetic runs on), the BACKEND knows whether it can open it.
+
+**The rule that decides whether this is shippable is SILENCE.** A check
+that guesses is worse than no check, so every case it cannot answer passes
+over without a word: a class the server does not know, an input the class
+does not declare, a LINKED input, a value that is not a weight filename,
+and an unreachable backend. It can therefore only ever refuse a weight
+ComfyUI would itself reject. Two of those are not hypothetical - the real
+`vae_name` list carries `pixel_space`, a non-file choice, and `UNETLoader`
+carries `weight_dtype`, a mode; calling either a missing weight would send
+a user hunting for a file that never existed.
+
+A near-miss is still a miss, and this machine proves it: the backend DOES
+list `minimax_h3_video_vae_int8_convrot.safetensors`, a different
+quantization of the same model, and the template names the fp16.
+
+### The ordering trap this pass walked into
+
+The check needs a RUNNING backend, so the first version hoisted
+`Comfy.ensureRunning` ahead of the arbiter - and `test-vram-arbiter.js`
+caught it immediately: a pause-"never" refusal that the arithmetic alone
+can reach was now BOOTING a backend on its way to refusing. `planFor` was
+split out precisely because it is the decision with no side effects, so
+the order is now: planFor refusal (free) -> boot -> weight check ->
+handoff. Pinned by a test of its own; the stub suite caught this, not the
+field.
+
+### Verification
+
+- **`scripts/weight-availability-probe.js`, 11/11 verdicts on the real
+  backend.** It drives the panel's own code (settings + tiers + comfy +
+  tools) and asserts invariants rather than reading a table: a listed
+  template is never refused; a blocked one is, naming every file and
+  locating all 4/4 on disk; the panel still prices it at 40 503 MiB (the
+  disagreement, as a number); an unreachable backend refuses nothing; and
+  the refusal comes back through the REAL `comfy_generate` with
+  `llama.stop` never called and the graph never queued - on a job
+  `planFor` independently calls a `handoff`, so the saved churn is not a
+  vacuous pass.
+- **`tests/test-weight-availability.js`, 33 checks**, replaying the
+  machine's real `/object_info` lists (trimmed, not invented). Mutation-
+  tested: moving the weight check back after the handoff fails the
+  ordering assertion with the whole trace printed (`comfy.ensure,
+  llama.stop, comfy.free, llama.start`).
+- **Full stub sweep: 61/61 test files exit 0.** capability-report
+  `--check` and workflow-hash-history `--check` both fresh.
+- **Harness 532/532**, before and after.
+
+### Version
+
+`node scripts/bump-version.js patch` -> 0.10.20. Shipped behaviour: a
+generation the backend cannot load is now refused early instead of after
+a handoff.
+
+### Notes for whoever runs the next pass
+
+- **minimax-h3's VRAM measurement is now one step less blocked.** The
+  panel says out loud what is wrong, and so does the probe, but the
+  weights are still invisible to the owner's instance - it is launched
+  `--base-directory Documents\ComfyUI` and there is no
+  `extra_model_paths.yaml` on the machine. Fixing that is the OWNER's
+  call (restarting their ComfyUI under an unattended pass could leave the
+  machine with no backend at all), so do not re-attempt the measurement
+  without reading the 0.10.19 entry first.
+- Machine state: AE running, no dialog open, project untouched (nothing
+  this pass ran imports). ComfyUI still up on 8188, queue idle - the probe
+  never queues a graph, by design.
+- Still open elsewhere: sd15/sdxl/wan22-5b VRAM (needs ~26 GB downloaded
+  AND templates the panel does not ship); four catalog entries with no
+  `workflowTemplate` that `recommendGen` offers anyway (remote session's
+  call); no panel UI for the mogrt export tools; no `.webm`/`.webp`.
+  `release-notes.txt` still reads "0.10.0" while the feed ships 0.10.20 -
+  remote session's release cut.

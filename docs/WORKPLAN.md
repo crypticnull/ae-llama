@@ -1193,9 +1193,27 @@ GPU. This item is that touch, one pass per bullet, smallest first:
     (`--list` reports exactly this), and **minimax-h3** needs a backend
     that can see its weights.
 
-- **NEW, filed 2026-08-30 by the probe above: the panel decides a model
+- ~~**NEW, filed 2026-08-30 by the probe above: the panel decides a model
   is available by looking at the DISK, and the backend decides by its own
-  search path. On this machine the two disagree today.** `comfyModelRoots`
+  search path. On this machine the two disagree today.**~~ DONE
+  2026-08-30 (0.10.20), built as filed. `Comfy.missingWeights` asks the
+  RUNNING backend's `/object_info` which of the chosen graph's weights it
+  can actually load, and `comfy_generate` refuses on that answer BEFORE
+  the arbiter stops the chat model, naming every missing file and where
+  it sits on disk. Field-verified on the real backend, 11/11 verdicts
+  (`scripts/weight-availability-probe.js`): H3 refused with all four
+  weights located in the Desktop shared store, KREA2 untouched, the chat
+  model never stopped, the graph never queued — on a job `planFor` says
+  is a `handoff`, so the saved churn is real. The rule that makes it safe
+  to ship is SILENCE: an unknown class, a non-combo input, a linked
+  input, a non-file combo value (the field list really does carry
+  `pixel_space` inside `vae_name`) and an unreachable backend all refuse
+  NOTHING, so this can only ever refuse what ComfyUI would refuse itself.
+  One ordering trap the first version walked into and the tests now pin:
+  the boot moved ahead of the arbiter, which made a pause-"never" refusal
+  start a backend it was about to refuse on — so `planFor` (side-effect
+  free by design) answers first and only then is anything booted.
+  `tests/test-weight-availability.js`, 33 checks. Original text: `comfyModelRoots`
   (0.10.13) includes the Comfy-Desktop shared store, so the arbiter prices
   the H3 template at 40 503 MiB and will stop the chat model to make room
   for it — and then ComfyUI answers `Value not in list — vae_name:

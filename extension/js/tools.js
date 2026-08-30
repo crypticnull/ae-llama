@@ -1153,7 +1153,7 @@
    * the file IS the weights — an authored number would go stale the first
    * time somebody swapped a quantization.
    */
-  function modelFileMB(m, s) {
+  function modelFilePath(m, s) {
     var fsMod, pathMod;
     try {
       fsMod = global.AEBridge.nodeRequire("fs");
@@ -1169,12 +1169,22 @@
         : (r.kind === m.dir ? pathMod.join(r.path, String(m.file)) : null);
       if (!candidate) continue;
       try {
-        if (fsMod.existsSync(candidate)) {
-          var bytes = fsMod.statSync(candidate).size;
-          if (bytes > 0) return Math.round(bytes / 1048576);
-        }
+        if (fsMod.existsSync(candidate) &&
+            fsMod.statSync(candidate).size > 0) return candidate;
       } catch (e2) {}
     }
+    return null;
+  }
+
+  function modelFileMB(m, s) {
+    var fsMod;
+    try { fsMod = global.AEBridge.nodeRequire("fs"); } catch (e) { return null; }
+    var found = modelFilePath(m, s);
+    if (!found) return null;
+    try {
+      var bytes = fsMod.statSync(found).size;
+      if (bytes > 0) return Math.round(bytes / 1048576);
+    } catch (e2) {}
     return null;
   }
 
@@ -1208,6 +1218,89 @@
       counted++;
     }
     return counted > 0 ? sum : null;
+  }
+
+  /**
+   * The generation's OTHER precondition, and the one no arithmetic can
+   * see: whether the running backend can actually LOAD these weights.
+   *
+   * `genNeedMBFor` above reads the DISK, because that is the only place a
+   * weight's SIZE exists (/object_info carries none). ComfyUI decides what
+   * it can open from its own search path, and on a machine where those two
+   * trees differ the panel prices a job, stops the chat model to make room
+   * for it, and only then hears `Value not in list`. Measured 2026-08-30:
+   * all four MiniMax H3 weights sit where `comfyModelRoots` looks and the
+   * running backend (launched `--base-directory Documents\ComfyUI`, no
+   * extra_model_paths.yaml on the machine) sees none of them.
+   *
+   * So both sources are asked, and the refusal is the one sentence that
+   * tells a user their backend is pointed at the wrong root: the files it
+   * cannot load AND where they are on disk.
+   *
+   * cb(refusalResult|null). Anything that stops the question being
+   * answered — an unreadable template, an unreachable backend, a class the
+   * server does not know — answers null and the round proceeds exactly as
+   * before. This may only ever refuse a weight ComfyUI would itself reject.
+   */
+  function weightRefusalFor(s, workflowFile, manifest, cb) {
+    var graph = null;
+    try {
+      graph = global.Comfy.loadWorkflow ?
+        global.Comfy.loadWorkflow(workflowFile) : null;
+    } catch (e) { cb(null); return; }
+    if (!graph || !global.Comfy.missingWeights) { cb(null); return; }
+    global.Comfy.missingWeights(s.comfyUrl, graph, function (err, res) {
+      if (err || !res || !(res.missing instanceof Array) ||
+          !res.missing.length) { cb(null); return; }
+      cb({ ok: false,
+           error: describeMissingWeights(res.missing, manifest, s) });
+    });
+  }
+
+  /** Where a weight the backend refused actually sits on this disk. */
+  function diskPathForWeight(fileName, manifest, s) {
+    var base = String(fileName).replace(/^.*[\\\/]/, "");
+    var models = (manifest && manifest.models instanceof Array)
+      ? manifest.models : [];
+    for (var i = 0; i < models.length; i++) {
+      var m = models[i];
+      if (!m || !m.file) continue;
+      if (String(m.file).replace(/^.*[\\\/]/, "") !== base) continue;
+      var found = modelFilePath(m, s);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  var MISSING_WEIGHTS_LISTED = 6;
+
+  function describeMissingWeights(missing, manifest, s) {
+    var lines = [], onDisk = 0;
+    var shown = Math.min(missing.length, MISSING_WEIGHTS_LISTED);
+    for (var i = 0; i < missing.length; i++) {
+      var w = missing[i];
+      var where = diskPathForWeight(w.value, manifest, s);
+      if (where) onDisk++;
+      if (i >= shown) continue;
+      lines.push(w.value + " (node " + w.node + " " + w.classType + "." +
+                 w.input + ", " + (where ? "on disk at " + where
+                                         : "not on this disk either") + ")");
+    }
+    var tail = missing.length > shown
+      ? " and " + (missing.length - shown) + " more" : "";
+    var advice = onDisk === missing.length
+      ? "Every one of those files IS on this machine, so the running " +
+        "ComfyUI is searching a different models tree — point it at them " +
+        "(extra_model_paths.yaml, or the --base-directory it was started " +
+        "with) and try again."
+      : (onDisk > 0
+          ? "Some are on this machine and some are not, so both the " +
+            "download and the backend's model search path need checking."
+          : "Download them into the models tree ComfyUI searches.");
+    return "ComfyUI at " + s.comfyUrl + " cannot load " + missing.length +
+           " of this workflow's weights, so the generation would fail even " +
+           "after freeing VRAM for it. Missing from the backend's own model " +
+           "list: " + lines.join("; ") + tail + ". " + advice;
   }
 
   // How long a VRAM wait is willing to sit there. The release wait is the
@@ -1527,12 +1620,6 @@
         cb(result);
       }
       function begin() {
-      // Boot the hidden backend first if nothing answers at the URL —
-      // the user never has to start ComfyUI by hand.
-      global.Comfy.ensureRunning(s.comfyUrl, function (bootMsg) {
-        if (progressSink) progressSink(bootMsg);
-      }, function (bootErr) {
-      if (bootErr) { finish({ ok: false, error: bootErr.message }); return; }
       global.Comfy.generate({
         comfyUrl: s.comfyUrl,
         workflowFile: chosen.file,
@@ -1576,7 +1663,6 @@
             });
         })(0);
       });
-      });
       }
       // Enhancement runs FIRST, while the chat model is still loaded —
       // the VRAM decision comes after, and a refusal (pause mode
@@ -1586,11 +1672,37 @@
         ? global.Comfy.readManifest(chosen.file) : null;
       var plan = planEnhancement(s, args.workflow, args.prompt, manifest);
       var enhanceDone = function () {
-        VramArbiter.ensureFor(s, manifest, progressSink,
-          function (refusal) {
-            if (refusal) { cb(refusal); return; }
-            begin();
+        // Three preconditions, cheapest first, and every one of them
+        // answered BEFORE the arbiter stops the chat model.
+        //
+        // The VRAM refusal goes first because `planFor` is the decision
+        // with no side effects at all (that is what it was split out
+        // for) — a job that can never fit is refused without booting
+        // anything. The weight check needs a RUNNING backend, since
+        // /object_info is its ground truth, so it sits after the boot
+        // the generation was going to pay for anyway and before the
+        // handoff, which is the churn worth saving.
+        if (VramArbiter.planFor(s, manifest).decision.mode === "refuse") {
+          VramArbiter.ensureFor(s, manifest, progressSink,
+            function (refusal) {
+              if (refusal) { cb(refusal); return; }
+              begin();
+            });
+          return;
+        }
+        global.Comfy.ensureRunning(s.comfyUrl, function (bootMsg) {
+          if (progressSink) progressSink(bootMsg);
+        }, function (bootErr) {
+          if (bootErr) { finish({ ok: false, error: bootErr.message }); return; }
+          weightRefusalFor(s, chosen.file, manifest, function (weightRefusal) {
+            if (weightRefusal) { cb(weightRefusal); return; }
+            VramArbiter.ensureFor(s, manifest, progressSink,
+              function (refusal) {
+                if (refusal) { cb(refusal); return; }
+                begin();
+              });
           });
+        });
       };
       if (plan.enabled && global.Llama.getState() === "running") {
         if (progressSink) progressSink("Refining the prompt…");
@@ -2664,6 +2776,9 @@
     _vramArbiter: VramArbiter,        // exposed for tests
     _genNeedMBFor: genNeedMBFor,      // exposed for tests
     _comfyModelRoots: comfyModelRoots, // exposed for tests
+    _vramArbiter: VramArbiter,        // exposed for tests and probes
+    _weightRefusalFor: weightRefusalFor,          // exposed for tests
+    _describeMissingWeights: describeMissingWeights, // exposed for tests
     _parseComfyPathsYaml: parseComfyPathsYaml,   // exposed for tests
     _panelTools: PANEL_TOOLS          // exposed for tests
   };
