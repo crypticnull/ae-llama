@@ -129,6 +129,14 @@ function stockDisk() {
     [jn(USER_MODELS, "loras", "extra.safetensors")]: 999
   };
 }
+/* A 26.5 GB bill: too much to sit beside a 6.2 GB chat model even on a
+ * 32 GB card, so T7 hands the card over too. */
+function bigDisk() {
+  return {
+    [jn(USER_MODELS, "diffusion_models", "gen.safetensors")]: 26000,
+    [jn(USER_MODELS, "text_encoders", "enc.safetensors")]: 500
+  };
+}
 DISK = stockDisk();
 settings = baseSettings();
 
@@ -447,8 +455,86 @@ run(gen(2), function (results) {
             assert(llamaState === "running",
                    "…the chat model is back either way");
 
-            console.log(failed ? "\nTESTS FAILED" : "\nALL TESTS PASSED");
-            process.exitCode = failed ? 1 : 0;
+          // ---- scenario 7: ComfyUI is still holding the card, and there
+          // is ROOM ANYWAY.
+          //
+          // Measured 2026-08-30 (0.10.14's own probe, re-run): after a
+          // cancelled round the card sat at 23 654 MB of 32 768 for the
+          // whole wait and fell to 2 918 MB one second after it expired,
+          // so the panel told a user with 29 GB free that their VRAM had
+          // not been released. The floor is a harder question than the
+          // resume needs: what llama-server has to have is ROOM, and a
+          // card holding a generation's cache can have plenty.
+          //
+          // 32 GB card, chat model 4700 MB file (+1536 overhead = 6236),
+          // ComfyUI sitting on 8000 MB: 24 768 MB free, nowhere near the
+          // 900 MB floor. The old floor-only wait spun 20 polls and cried.
+          log.length = 0;
+          delays.length = 0;
+          sink.length = 0;
+          llamaState = "running";
+          settings = baseSettings();
+          Tools.setGpuInfo({ hasNvidia: true, vramGB: 32, computeCap: 12 });
+          DISK = bigDisk();       // a bill this 32 GB card must still pause for
+          vramReadings = [20000,        // baseline before the stop
+                          900,          // released: the floor is 900
+                          8000,         // resume: ComfyUI's cache, room to spare
+                          8000, 8000, 8000, 8000, 8000, 8000, 8000, 8000,
+                          8000, 8000, 8000, 8000, 8000, 8000, 8000, 8000,
+                          8000, 8000, 8000, 8000, 8000, 8000, 8000, 8000];
+          run(gen(1), function (r7) {
+            assert(r7[0].ok, "the round still generates");
+            assert(log.indexOf("llama.stop") !== -1,
+                   "…having really paused chat (a 32 GB card the bill " +
+                   "does not fit beside)");
+            const polls7 = log.filter((x) => /^smi:/.test(x)).length;
+            assert(polls7 === 3,
+                   "a card with ROOM costs ONE resume poll even though it " +
+                   "is nowhere near the floor (3 reads total, got " +
+                   polls7 + ")");
+            assert(sink.join(" ").indexOf("did not visibly release") === -1 &&
+                   sink.join(" ").indexOf("loading it anyway") === -1,
+                   "…and nothing is claimed about a release that did not " +
+                   "have to happen (said: " + sink.join(" | ") + ")");
+            assert(llamaState === "running", "…the chat model is back");
+
+            // ---- scenario 8: and when there really is NO room, the
+            // sentence says what it measured instead of asserting a
+            // release failure. 8 GB card, ComfyUI keeping 7000 MB, a
+            // chat model that needs 6236: it waits, gives up, and says
+            // so with all three numbers in it.
+            log.length = 0;
+            delays.length = 0;
+            sink.length = 0;
+            llamaState = "running";
+            settings = baseSettings();
+            Tools.setGpuInfo({ hasNvidia: true, vramGB: 8, computeCap: 8.9 });
+            DISK = stockDisk();
+            vramReadings = [20000, 900].concat(
+              new Array(200).fill(7000));    // never any room, ever
+            run(gen(1), function (r8) {
+              assert(r8[0].ok, "the round still generates");
+              const said = sink.join(" | ");
+              assert(said.indexOf("did not visibly release") === -1,
+                     "a full card is not reported as a failed release " +
+                     "(said: " + said + ")");
+              assert(/still holds 7000 MB of 8192 MB/.test(said) &&
+                     /needs about 6236 MB/.test(said),
+                     "…it is reported with the three numbers that make it " +
+                     "true (said: " + said + ")");
+              assert(llamaState === "running",
+                     "…and the chat model is loaded anyway — proceeding " +
+                     "loudly, never hanging");
+              const polls8 = log.filter((x) => /^smi:/.test(x)).length;
+              assert(polls8 > 20 && polls8 <= 63,
+                     "…after a wait long enough to outlast this backend's " +
+                     "own ~10.5 s post-cancel release (" + polls8 +
+                     " reads)");
+
+              console.log(failed ? "\nTESTS FAILED" : "\nALL TESTS PASSED");
+              process.exitCode = failed ? 1 : 0;
+            });
+          });
           });
         });
       });

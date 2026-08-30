@@ -8598,3 +8598,119 @@ shipped path (0.10.9 wrote that wait) and worth its own small pass.
   `.webm`/`.webp`; the 8 GB intermediate cap that is still a guess;
   `get-llama.ps1`'s two latent traps; and `comfy_generate` still calls
   `import_file` rather than 5.8's `import_as_layer`.
+
+## 2026-08-30 (local) - item 7 follow-up: the release the panel reported
+was not the question it needed to ask
+
+**Item:** the sub-bullet 0.10.14 filed and deliberately left - "the resume
+still prints 'VRAM did not visibly release within 10 s' after a cancelled
+round ... the honest predicate is 'is there room for the chat model', not
+'is the card back to the floor'; that is a change to a shipped path and
+wants its own pass."
+
+Harness green before the pass (**532/532**), so the queue applied. Item 1's
+`DroverLord - Window Class` popup is still unanswered and still has no new
+evidence (`logs\dialogs\` holds nothing since 2026-08-30 01:04), and item
+7's catalog VRAM delta is still the expensive one (~36 GB of weights not on
+this disk, plus a per-model template the panel does not ship). Neither
+moved tonight; this one could.
+
+### Reproduced first, and the field named a worse number than the filing
+
+`scripts/oom-probe.js`, unmodified, on the real path (real llama-server,
+real ComfyUI 0.32, real nvidia-smi, `{import: false}` so no AE):
+
+    .. ComfyUI still generating... 90s
+    .. VRAM did not visibly release within 10 s - proceeding anyway.
+    .. Warming the chat model back up...
+    -- at warm-up: VRAM 2918 MB, ComfyUI queue 0 running / 0 pending
+
+**2 918 MB used of 32 768.** The panel told a user with 29 GB free that
+their VRAM had not been released. The filing guessed ComfyUI was sitting on
+~7.8 GB of cache; the transcript's timeline says something simpler and
+sharper - the card held **23 654 MB for the whole 10 s window** and fell to
+2 918 MB **one second after the wait expired**:
+
+    - 109.0s  23654  generate
+    - 109.5s  15974  generate
+    - 111.0s   6822  generate
+    - 111.1s   2918  warm      <- the message had already printed
+
+So the release was not slow in any way that mattered, and the sentence was
+not merely pessimistic: it was reporting on the wrong thing. The floor the
+pause left (2 916 MB) is a HARDER question than the resume needs. What
+llama-server has to have is ROOM, and a card still holding a generation's
+cache can have plenty of it.
+
+### The fix: ask whether the chat model fits
+
+`extension/js/tools.js`, `VramArbiter.resumeIfPaused` + `waitForVram`:
+
+- The predicate is `card - used >= chatFootprint`, with the old floor kept
+  as an **OR** (a card back where it started is by definition room enough)
+  and as the whole answer when the card's own size is unknown. Both numbers
+  are remembered at pause time (`_needMB`, `_cardMB`) beside `_floorMB`.
+- The card total comes from **nvidia-smi, never `vramOverrideGB`**
+  (`cardTotalMBNow`). The override impersonates a tier so any card can test
+  any policy, but this wait asks a physical question about a physical
+  reading, and pairing a measured `memory.used` with a fictional total is
+  arithmetic about no machine at all. The 0.10.10 lesson, one layer down.
+- `waitForVram` took a hard-coded sentence and a hard-coded 10 s; it now
+  takes both from the caller, and the message may be a function that
+  answers null to stay quiet. The timeout **reports what it measured** -
+  "The card still holds 7000 MB of 8192 MB and the chat model needs about
+  6236 MB - loading it anyway" - instead of asserting a release failure.
+- The room wait is **30 s**, and that number is measured, not chosen: this
+  backend finished handing the card back at ~10.5 s after a cancel, so a
+  10 s limit was a coin flip on exactly the round the cancel created. It
+  costs nothing on a free card - the predicate answers on poll one, which
+  is the case every healthy round takes.
+
+The pause side (`waitForVramDrop`) is untouched: there the panel has just
+killed llama-server and a DELTA is the right question.
+
+### Verification
+
+- **The probe, re-run, green.** No release sentence at all; warm-up at
+  **10 793 MB** with 0 running / 0 pending; round 112 s; chat back and
+  answering in 90 ms. `oom-probe.js` gained the verdict that pins it - a
+  release failure may only be reported when there was no room - so the
+  next pass cannot regress it silently. Transcripts:
+  `logs/oom-probe-2026-08-30T09-40-21.md` (before) and
+  `...T09-46-28.md` (after).
+- `tests/test-vram-arbiter.js` grew scenarios **7 and 8**: a 32 GB card
+  where ComfyUI still holds 8 000 MB (room, nowhere near the floor - one
+  poll, silence) and an 8 GB card that never gets room (waits, gives up,
+  and says so with all three numbers). **4 of the new checks fail on the
+  reverted file** - run and seen.
+- **Full stub sweep: 59/59 test files exit 0.**
+- **Real-AE harness 532/532** before and after. The change is panel-side
+  and adds no suite steps.
+- `capability-report.js` regenerated: no change, the pass ships no tool.
+
+### Version: PATCH bumped to 0.10.15
+
+A fix to shipped behaviour. Every user on an exclusive tier whose ComfyUI
+had not finished dropping its cache within 10 s - which after 0.10.14's
+cancel is the normal case, not the edge - was told their card had not been
+released when it had, or was about to be.
+
+### Notes for whoever runs the next pass
+
+- **ComfyUI is still running** (the 0.32.0 at
+  `AppData\Local\Comfy-Desktop\ComfyUI-Installs\ComfyUI\ComfyUI`, started
+  by hand on 2026-08-30 per 0.10.9's note) and was interrupted and
+  `/free`d by the probe on the way out, twice. `Comfy.ensureRunning` still
+  cannot start it.
+- Machine state: llama-server was started and stopped by the probe (twice).
+  The open AE project is still `logs\mogrt60\P60-scratch.aep`.
+- Item 7 now has ONE bullet left, the catalog VRAM delta, and it is a whole
+  pass per model: ~36 GB to download, a per-model workflow template to
+  write for sd15/sdxl/wan22-5b, and a ComfyUI started by hand. Somebody
+  should decide whether that download is wanted before a pass spends the
+  night on it.
+- Still open from earlier passes, unattempted tonight: the `DroverLord -
+  Window Class` popup (no new evidence); no panel UI for the mogrt export
+  tools; no `.webm`/`.webp`; the 8 GB intermediate cap that is still a
+  guess; `get-llama.ps1`'s two latent traps; and `comfy_generate` still
+  calls `import_file` rather than 5.8's `import_as_layer`.

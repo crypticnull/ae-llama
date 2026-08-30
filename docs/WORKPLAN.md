@@ -1136,14 +1136,25 @@ GPU. This item is that touch, one pass per bullet, smallest first:
   0 running, round 225 s -> 112 s, chat back and answering in 93 ms.
   `tests/test-comfy-timeout-cancel.js` (18 checks; 10 fail on the
   reverted file). Harness 532/532 either side.
-  - **Filed, measured, NOT fixed here**: the resume still prints "VRAM did
-    not visibly release within 10 s" after a cancelled round. ComfyUI
-    holds ~7.8 GB of cache after the cancel and `/free` only sets FLAGS
-    the queue worker reads BETWEEN prompts, so the floor is never reached
-    inside the 10 s. The card had 22 GB free and the model loaded fine —
-    the sentence is a false alarm, not a failure. The honest predicate is
-    "is there room for the chat model", not "is the card back to the
-    floor"; that is a change to a shipped path and wants its own pass.
+  - ~~**Filed, measured, NOT fixed here**: the resume still prints "VRAM
+    did not visibly release within 10 s" after a cancelled round.~~ DONE
+    2026-08-30 (0.10.15). Reproduced first, and the timeline named a
+    worse number than the filing: the card sat at **23 654 MB of 32 768**
+    for the entire wait and fell to **2 918 MB one second after it
+    expired**, so a user with 29 GB free was told their VRAM had not been
+    released. The wait now asks the honest question — is there ROOM for
+    the chat model (card total minus used ≥ its footprint), with the old
+    floor kept as an OR and as the whole answer when the card's own size
+    is unknown — and the card total comes from nvidia-smi, never from
+    `vramOverrideGB`, because pairing a measured reading with an
+    impersonated total is arithmetic about no machine at all. The
+    timeout's sentence now reports what it measured (used / card / need)
+    instead of asserting a failure, and the room wait is 30 s because
+    this backend's own post-cancel release finishes at ~10.5 s — a 10 s
+    limit was a coin flip on exactly the round the cancel created. It
+    costs nothing on a free card: the predicate answers on poll one.
+    `oom-probe.js` gained the verdict and is green on it; four new checks
+    in `tests/test-vram-arbiter.js` fail on the reverted file.
 
 ## Out of scope for the local session (remote builds these)
 

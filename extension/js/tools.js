@@ -1210,6 +1210,14 @@
     return counted > 0 ? sum : null;
   }
 
+  // How long a VRAM wait is willing to sit there. The release wait is the
+  // longer one for a measured reason: on a cancelled round (0.10.14) this
+  // backend finished handing the card back at ~10.5 s, so a 10 s limit is
+  // a coin flip on exactly the round the cancel created. It costs nothing
+  // when the card is already free — the predicate answers on poll one.
+  var VRAM_WAIT_MS = 10000;
+  var VRAM_ROOM_WAIT_MS = 30000;
+
   /**
    * Poll nvidia-smi until total used VRAM drops by ~half the released
    * model (or a 10 s timeout — proceed either way, loudly). A fixed
@@ -1225,26 +1233,32 @@
     var target = Math.max(512,
       typeof expectDropMB === "number" ? Math.round(expectDropMB / 2) : 512);
     waitForVram(function (usedMB) { return baselineMB - usedMB >= target; },
+                VRAM_WAIT_MS,
+                "VRAM did not visibly release within 10 s — proceeding " +
+                "anyway.",
                 sink, done);
   }
 
   /**
-   * Poll nvidia-smi until `reached(usedMB)` or a 10 s timeout — proceed
-   * either way, loudly. Reports the last reading so the caller can
-   * remember where the card actually settled.
+   * Poll nvidia-smi until `reached(usedMB)` or `limitMs` — proceed either
+   * way, loudly. `msg` is the sentence the timeout prints: a string, or a
+   * function(lastUsedMB) that may answer null to stay quiet. Reports the
+   * last reading so the caller can remember where the card settled.
    */
-  function waitForVram(reached, sink, done) {
+  function waitForVram(reached, limitMs, msg, sink, done) {
     var waited = 0;
     var STEP = 500;
-    var LIMIT = 10000;
+    var LIMIT = typeof limitMs === "number" && limitMs > 0
+      ? limitMs : VRAM_WAIT_MS;
     (function poll() {
       global.Setup.queryVramUsedMB(function (err, usedMB) {
         if (!err && reached(usedMB)) { done(usedMB); return; }
         waited += STEP;
         if (err || waited >= LIMIT) {
-          if (sink && waited >= LIMIT) {
-            sink("VRAM did not visibly release within 10 s — proceeding " +
-                 "anyway.");
+          if (sink && waited >= LIMIT && msg) {
+            var line = typeof msg === "function"
+              ? msg(err ? null : usedMB) : msg;
+            if (line) sink(line);
           }
           done(err ? null : usedMB);
           return;
@@ -1254,12 +1268,28 @@
     })();
   }
 
+  /**
+   * The card's REAL size in MB, from nvidia-smi's own total — never
+   * `vramOverrideGB`. The override impersonates a tier so any card can
+   * test any policy, but the release wait asks a physical question about
+   * a physical reading, and pairing a measured `memory.used` with a
+   * fictional total is arithmetic about no machine at all.
+   */
+  function cardTotalMBNow() {
+    return gpuCache && typeof gpuCache.vramGB === "number" &&
+           gpuCache.vramGB > 0 ? gpuCache.vramGB * 1024 : null;
+  }
+
   var VramArbiter = {
     paused: false,
     _opts: null,
     // Where the card settled once the chat model was gone — the floor the
-    // resume has to get back to before llama-server can reload.
+    // resume aims at when it cannot ask the better question.
     _floorMB: null,
+    // The better question's two numbers, remembered at pause time: what
+    // the chat model's footprint was, and how big the card really is.
+    _needMB: null,
+    _cardMB: null,
 
     /**
      * The decision, assembled from what is REALLY on this machine and
@@ -1317,6 +1347,9 @@
       VramArbiter._opts = { serverPath: s.serverPath,
         modelPath: s.modelPath, port: s.port, ctxSize: s.ctxSize,
         gpuLayers: s.gpuLayers };
+      VramArbiter._needMB = typeof chat.mb === "number" && chat.mb > 0
+        ? chat.mb : null;
+      VramArbiter._cardMB = cardTotalMBNow();
       global.Setup.queryVramUsedMB(function (qErr, baseMB) {
         global.Llama.stop();
         waitForVramDrop(qErr ? null : baseMB, chat.mb, sink,
@@ -1334,33 +1367,63 @@
      * and block the chat model from coming back on exclusive tiers),
      * verify the release, then warm the chat model back up.
      *
-     * The wait is an ABSOLUTE question — "is the card back to the floor
-     * the pause left it at?" — not a delta from a fresh baseline. Measured
-     * 2026-08-30 on a 5090: ComfyUI 0.32 drops a Krea generation's ~19.5 GB
-     * about ten seconds BEFORE the round ends, so a baseline sampled here
-     * is already the floor, no delta can ever appear, and the delta version
-     * burned the full 10 s timeout and cried "VRAM did not visibly release"
-     * on every single healthy paused round.
+     * The wait asks whether there is ROOM FOR THE CHAT MODEL — not
+     * whether the card is back to the floor the pause left it at. Both
+     * were tried in the field:
+     *
+     * A DELTA from a baseline sampled here can never appear (ComfyUI 0.32
+     * drops a Krea generation's ~19.5 GB about ten seconds BEFORE the
+     * round ends), so it burned the full timeout on every healthy round.
+     * The FLOOR is honest but asks for more than the resume needs, and it
+     * lies in the safe-looking direction: measured 2026-08-30 after a
+     * cancelled round, the card sat at 23 654 MB for the whole window and
+     * fell to 2 918 MB one second later, so the panel told a user with
+     * 29 GB free that their VRAM had not been released. Room is the thing
+     * llama-server actually has to have; the floor stays in as an OR,
+     * since a card back where it started is by definition room enough,
+     * and as the whole answer when the card's own size is unknown.
      */
     resumeIfPaused: function (s, sink, cb) {
       if (!VramArbiter.paused) { cb(); return; }
       VramArbiter.paused = false;
       var opts = VramArbiter._opts;
       var floor = VramArbiter._floorMB;
+      var need = VramArbiter._needMB;
+      var card = VramArbiter._cardMB;
       VramArbiter._opts = null;
       VramArbiter._floorMB = null;
+      VramArbiter._needMB = null;
+      VramArbiter._cardMB = null;
       function warm() {
         if (sink) sink("Warming the chat model back up…");
         global.Llama.start(opts, function () { cb(); });
       }
+      function atFloor(usedMB) {
+        return typeof floor === "number" && usedMB <= floor + 512;
+      }
       global.Comfy.freeVram(s.comfyUrl, function () {
+        if (typeof need === "number" && typeof card === "number") {
+          waitForVram(
+            function (usedMB) { return card - usedMB >= need || atFloor(usedMB); },
+            VRAM_ROOM_WAIT_MS,
+            function (usedMB) {
+              if (typeof usedMB !== "number") return null;
+              return "The card still holds " + usedMB + " MB of " + card +
+                     " MB and the chat model needs about " + need +
+                     " MB — loading it anyway.";
+            },
+            sink, function () { warm(); });
+          return;
+        }
         if (typeof floor !== "number") {
-          // No floor to aim at (nvidia-smi was unavailable at pause time) —
+          // Nothing to aim at (nvidia-smi was unavailable at pause time) —
           // the old fixed grace period is all there is.
           global.setTimeout(warm, 1500);
           return;
         }
-        waitForVram(function (usedMB) { return usedMB <= floor + 512; },
+        waitForVram(atFloor, VRAM_WAIT_MS,
+                    "VRAM did not visibly release within 10 s — proceeding " +
+                    "anyway.",
                     sink, function () { warm(); });
       });
     }

@@ -30,7 +30,8 @@
  * have to be true for the answer to be "yes":
  *   1. the round ENDS, once, with a grounded error (never a hang);
  *   2. the abandoned job is not still burning the card when it does;
- *   3. the card is actually free for the chat model to come back into;
+ *   3. the card is actually free for the chat model to come back into,
+ *      and the panel's account of that is honest (0.10.15);
  *   4. the chat model is running AND answering afterwards.
  *
  *   node scripts/oom-probe.js
@@ -467,13 +468,27 @@ function judge(r, cb) {
   try { chatMB = Math.round(fs.statSync(s.modelPath).size / (1024 * 1024)); }
   catch (e) {}
   const totalMB = (window.__gpuTotalMB || 0);
-  verdict(r.vramAtWarm !== null && totalMB > 0 && chatMB !== null
-            ? r.vramAtWarm + chatMB <= totalMB
-            : r.vramAtWarm !== null && r.vramAtWarm < 8000,
+  const roomAtWarm = r.vramAtWarm !== null && totalMB > 0 && chatMB !== null
+    ? r.vramAtWarm + chatMB <= totalMB
+    : r.vramAtWarm !== null && r.vramAtWarm < 8000;
+  verdict(roomAtWarm,
     "…and the card has room for it",
     "VRAM at warm-up " + r.vramAtWarm + " MB" +
       (chatMB !== null ? ", chat model " + chatMB + " MB" : "") +
       (totalMB ? ", card " + totalMB + " MB" : ""));
+
+  // What the panel TOLD the user about that handover has to be true too.
+  // Measured here 2026-08-30: the card sat at 23 654 MB for the whole
+  // release wait and fell to 2 918 MB one second after it expired, so a
+  // user with 29 GB free was told their VRAM had not been released. The
+  // wait asks about ROOM now; a sentence about the release may only
+  // appear when there was none.
+  const cried = (r.status || []).filter(
+    (m) => /did not visibly release|still holds/.test(String(m)));
+  verdict(!(roomAtWarm && cried.length),
+    "…and the panel did not report a release failure on a card with room",
+    cried.length ? cried.join(" | ")
+                 : "nothing was claimed about the release");
 
   verdict(r.chatAfter === "running",
     "the chat model came back",
