@@ -542,6 +542,26 @@ alone, because "Null" is a name a user's own project will hold.
     No version bump gate: bump patch once verified (it fixes shipped
     behaviour — this machine still lacks templates shipped 5 versions
     ago).
+- ~~**`get-llama.ps1`'s two latent traps**~~ DONE 2026-08-30 (0.10.16),
+  and the pass found the traps were not confined to a dev script: the
+  SHIPPED panel had one of them and a worse one beside it. Measured
+  through `extension/js/setup.js`'s own code with
+  `scripts/engine-asset-probe.js`: (1) llama.cpp's `/releases/latest` is
+  `v0.3.0`, whose entire asset list is one `nightly-tag.txt`, and every
+  release carrying Windows binaries is a `bNNNNN` PRERELEASE that
+  `/releases/latest` never returns - so **the panel's one-click engine
+  install ended at "No suitable Windows build found in release v0.3.0"
+  for every user**, and `get-llama.ps1` threw the same way (run and seen);
+  (2) this machine's nvidia-smi says `CUDA UMD Version: 13.4`, which the
+  `/CUDA Version:/` regex misses, so `cudaVersion` was null and the
+  chooser took its conservative "oldest published line" branch - CUDA
+  12.4 (250 MB) on a driver that runs the 13.3 build (146 MB). Both fixed
+  at the root: a release WALK (the one the whisper and ffmpeg acquirers
+  already do) and the widened banner regex. `get-llama.ps1` now
+  dot-sources the shared helpers instead of carrying its own broken
+  copies, and gained `-ListOnly` so the whole choice can be verified
+  without a 500 MB download. 36 checks in `tests/test-engine-assets.js`.
+
 - ~~**`set_layer_3d` loses the Z in silence.**~~ DONE 2026-08-28 (0.9.25).
   A second probe measured the FULL loss (Scale Z resets to 100 rather
   than zeroing, Orientation and X/Y Rotation clear, keyframe values are

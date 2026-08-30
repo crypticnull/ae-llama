@@ -135,7 +135,15 @@
           return;
         }
         var cuda = null;
-        var m = String(stdout).match(/CUDA Version:\s*([\d.]+)/);
+        // The banner does NOT always say "CUDA Version:". Measured on
+        // this machine 2026-08-30 (driver 616.56, RTX 5090):
+        //   | NVIDIA-SMI 616.56  KMD Version: 616.56  CUDA UMD Version: 13.4 |
+        // The old /CUDA Version:/ found nothing there, so cudaVersion was
+        // null on a perfectly ordinary NVIDIA box and pickAssets fell
+        // through to its "be conservative, oldest line" branch — CUDA 12.4
+        // on a card whose driver runs 13.3. The word between CUDA and
+        // Version is optional.
+        var m = String(stdout).match(/CUDA(?:\s+\w+)?\s+Version\s*:\s*([\d.]+)/);
         if (m) cuda = m[1];
         child_process.execFile("nvidia-smi",
           ["--query-gpu=name,compute_cap,memory.total",
@@ -405,6 +413,45 @@
     return { assets: out, label: "CUDA " + best.ver };
   }
 
+  /**
+   * Pick the newest release that actually CARRIES a Windows build.
+   *
+   * Measured 2026-08-30: ggml-org/llama.cpp's /releases/latest answers
+   * `v0.3.0`, whose entire asset list is one `nightly-tag.txt`. Every
+   * real Windows build lives in a `bNNNNN` release and every one of
+   * those is flagged PRERELEASE, which /releases/latest never returns.
+   * So the panel's one-click engine install ended at "No suitable
+   * Windows build found in release v0.3.0" for every user — pointing at
+   * a single release is the bug, not the asset matching.
+   *
+   * Same rule the whisper and ffmpeg acquirers already use (see
+   * scripts/lib/whisper-assets.ps1): walk the LIST and take the first
+   * release that has what this machine needs.
+   *
+   * releases: one release object or an array of them.
+   * Returns {release, picked} or {err} naming the tags it looked at.
+   */
+  function pickReleaseAssets(releases, gpu) {
+    var list = [];
+    (function flatten(x) {
+      if (!x) return;
+      if (Object.prototype.toString.call(x) === "[object Array]") {
+        for (var j = 0; j < x.length; j++) flatten(x[j]);
+      } else { list.push(x); }
+    })(releases);
+
+    var seen = [], i, picked;
+    for (i = 0; i < list.length; i++) {
+      if (list[i].draft) continue;
+      picked = pickAssets(list[i], gpu);
+      if (picked) return { release: list[i], picked: picked };
+      seen.push(list[i].tag_name || "(untagged)");
+    }
+    if (!seen.length) return { err: "GitHub returned no llama.cpp releases." };
+    return { err: "No Windows llama-server build in the " + seen.length +
+             " newest llama.cpp release(s): " + seen.join(", ") + "." };
+  }
+
   // ------------------------------------------------------------- bootstrap
 
   var bootstrapBusy = false;
@@ -459,19 +506,20 @@
         : "No NVIDIA GPU detected — using the CPU build");
 
       var tag = opts.tag || "latest";
+      // The LIST, not /releases/latest — llama.cpp's "latest" is an
+      // asset-less v0.3.0 and every Windows build is a prerelease.
+      // See pickReleaseAssets.
       var api = tag === "latest"
-        ? "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest"
+        ? "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=15"
         : "https://api.github.com/repos/ggml-org/llama.cpp/releases/tags/" + tag;
 
       status("Fetching llama.cpp release info…");
-      fetchJson(api, 30000, function (err, release) {
+      fetchJson(api, 30000, function (err, body) {
         if (err) { finish(new Error("Could not reach GitHub: " + err.message)); return; }
-        var picked = pickAssets(release, gpu);
-        if (!picked) {
-          finish(new Error("No suitable Windows build found in release " +
-                           (release.tag_name || tag)));
-          return;
-        }
+        var choice = pickReleaseAssets(body, gpu);
+        if (choice.err) { finish(new Error(choice.err)); return; }
+        var release = choice.release;
+        var picked = choice.picked;
         status("Selected " + picked.label + " build from " +
                (release.tag_name || tag));
 
@@ -934,6 +982,8 @@
     detectGpu: detectGpu,
     queryVramUsedMB: queryVramUsedMB,
     bootstrapEngine: bootstrapEngine,
+    pickEngineAssets: pickAssets,
+    pickEngineRelease: pickReleaseAssets,
     downloadModel: downloadModel,
     modelCatalog: modelCatalog,
     comfyCatalog: comfyCatalog,

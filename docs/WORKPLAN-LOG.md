@@ -8714,3 +8714,142 @@ released when it had, or was about to be.
   tools; no `.webm`/`.webp`; the 8 GB intermediate cap that is still a
   guess; `get-llama.ps1`'s two latent traps; and `comfy_generate` still
   calls `import_file` rather than 5.8's `import_as_layer`.
+
+## 2026-08-30 (local) - `get-llama.ps1`'s two latent traps, and the
+## one-click engine install that had stopped working for everybody (0.10.16)
+
+**Item:** the flag ten passes had carried without spending a night on it -
+"`get-llama.ps1` still has the two latent traps 6.1 Pass A flagged: it
+greps for `CUDA Version:` and pads versions to two parts. Neither bites
+today ... small remote-session job, or the next local pass that has
+nothing better."
+
+Harness green before the pass (**532/532**), so the queue applied. Item 1's
+`DroverLord` popup still has no new evidence (`logs\dialogs\` holds nothing
+since 2026-08-30 01:04) and item 7's catalog VRAM delta still wants ~36 GB
+of downloads and a human's say-so. This was the next thing that could
+actually move. It moved further than the flag did.
+
+### The flag was right about the script and wrong about "neither bites"
+
+The pass started by pointing the SHIPPED panel at the same question, because
+`get-llama.ps1`'s own header says "the panel does all of this by itself on
+first launch (auto GPU detection included) -- this script exists for
+development, CI, and offline prep." If the script's detection is wrong, the
+panel's copy of it is the one that reaches users. It was.
+
+`scripts/engine-asset-probe.js` drives the real `extension/js/setup.js`
+(`detectGpu` + the asset chooser) against real nvidia-smi and the real
+GitHub API. Two findings, in order of how much they cost:
+
+**1. The panel's one-click engine install was dead. For everyone.**
+
+    /releases/latest  : v0.3.0 -> nightly-tag.txt
+    walk over /latest alone : REFUSED - No Windows llama-server build in
+                              the 1 newest llama.cpp release(s): v0.3.0.
+
+`ggml-org/llama.cpp`'s `/releases/latest` answers **`v0.3.0`, whose entire
+asset list is one `nightly-tag.txt`**. Every release carrying Windows
+binaries is a `bNNNNN` tag and **every one of those is flagged prerelease**,
+which `/releases/latest` never returns. So `bootstrapEngine` - Settings ->
+"Reinstall / update engine", and the whole first-run path - ended at "No
+suitable Windows build found in release v0.3.0". `get-llama.ps1` failed the
+same way, run from HEAD and seen:
+
+    Release: v0.3.0
+    No Windows CPU x64 asset found in v0.3.0.
+
+This is not a latent trap. It is the product's front door, and it had
+already blown shut. Nothing in the repo could have caught it: the asset
+matching is correct, the URL is the bug, and upstream changed under a
+shipped release.
+
+**2. The flagged regex, and what it actually cost.** This machine's banner
+reads `CUDA UMD Version: 13.4`, so `/CUDA Version:/` matched nothing and
+`detectGpu` answered `cudaVersion: null`. That is not an error path - it is
+the "be conservative, take the OLDEST published line" path, so the symptom
+is a **working install of the wrong build**:
+
+    with detectGpu as it stands : CUDA 12.4 -> llama-b10690-bin-win-cuda-12.4-x64.zip
+    with the driver CUDA read   : CUDA 13.3 -> llama-b10690-bin-win-cuda-13.3-x64.zip
+
+250 MB of CUDA 12.4 on an RTX 5090 whose driver runs the 13.3 build, which
+is 146 MB. The 2026-08-29 whisper pass called this one "flagged, not
+touched" because whisper's asset names are `12.4`-shaped; llama.cpp's are
+not, and here it decided the answer.
+
+### The fix
+
+- `extension/js/setup.js` `detectGpu`: the word between CUDA and Version is
+  optional - `/CUDA(?:\s+\w+)?\s+Version\s*:\s*([\d.]+)/`. `Driver Version:`
+  on the classic banner sits one word away and is NOT swallowed (asserted).
+- `extension/js/setup.js` gains `pickReleaseAssets(releases, gpu)`: walk the
+  release LIST and take the newest one that actually carries a build,
+  skipping drafts, flattening a nested array, and refusing with the tags it
+  looked at. `bootstrapEngine` asks for `releases?per_page=15` instead of
+  `/releases/latest`. An explicit `{tag}` still fetches that one release and
+  goes through the same walk. This is the rule `get-whisper.ps1` and
+  `get-ffmpeg.ps1` have had since 2026-08-29/30; the engine never got it.
+- `scripts/lib/gpu-detect.ps1` is new and holds the two helpers that were
+  written for whisper and that get-llama had broken copies of -
+  `Get-AellCudaVersionFromSmi` and `ConvertTo-AellPaddedVersion` (three
+  parts, because `[version]` pads a missing one with **-1**, so `11.8` is
+  LESS than `11.8.0`). `whisper-assets.ps1` and `get-llama.ps1` both
+  dot-source it. Same extraction move as `gh-releases.ps1`.
+- `get-llama.ps1` gains **`-ListOnly`**: the entire choice runs - driver
+  read, release walk, CUDA line, cudart match - and it prints what it would
+  download instead of wiping the vendor folder and pulling 500 MB. That is
+  what made this verifiable in the field at all; a pass that had to actually
+  download would have had to destroy the panel's working install to test it.
+- `pickAssets` and the walk are exported as `pickEngineAssets` /
+  `pickEngineRelease`, the way `pickComfyAsset` already was. The choice was
+  unreachable from a test before this.
+
+### Verification
+
+- **`get-llama.ps1 -ListOnly` in the field**, real API, real nvidia-smi:
+  `driver CUDA: 13.4` -> `Release: b10690` -> `CUDA toolkit line: 13.3` ->
+  `llama-b10690-bin-win-cuda-13.3-x64.zip` + its cudart. Nothing downloaded,
+  vendor folder untouched. The pre-fix copy of the same script, run from
+  HEAD beside it, threw on `v0.3.0`.
+- **`scripts/engine-asset-probe.js`** re-run green; transcript at
+  `logs/engine-probe/probe-after.md`.
+- **`tests/test-engine-assets.js`, 36 checks**, all real captured field data
+  (this machine's two banner spellings, the real `v0.3.0` and `b10690` asset
+  lists). Reverting the regex alone fails 2 of them; reverting the walk
+  removes the export and the file will not run at all.
+- **Full stub sweep: 60/60 test files exit 0.**
+- **Real-AE harness 532/532** before and after. The change is panel-side and
+  adds no suite steps.
+- `capability-report.js` regenerated: no change, the pass ships no tool.
+
+### Version: PATCH bumped to 0.10.16
+
+The strongest case for a bump this project has had. Until this ships, a new
+user's engine install cannot succeed, and Settings -> "Reinstall / update
+engine" cannot repair it either - both go through the same dead URL. The
+feed is the only way that reaches an installed panel.
+
+### Notes for whoever runs the next pass
+
+- **ComfyUI's own release query was checked and is FINE.** `bootstrapComfy`
+  hits `comfyanonymous/ComfyUI/releases/latest`, which now answers **HTTP
+  301** (the repo moved), but `fetchJson` follows redirects up to 5 and the
+  target is `v0.34.0` with all four portable `.7z` assets present. Measured,
+  not assumed - no item filed.
+- The panel picks a CUDA line but **nothing here has run llama-server from a
+  freshly bootstrapped install**; the owner's install predates this. A pass
+  that wants to close that loop can point `-ListOnly` at a temp vendor dir
+  and then actually download once.
+- Machine state: AE left on the harness's own project; no llama-server was
+  started or stopped by this pass. ComfyUI is still running from 0.10.9's
+  hand start.
+- Still open from earlier passes, unattempted tonight: the `DroverLord -
+  Window Class` popup (no new evidence); item 7's catalog VRAM delta (~36 GB
+  of weights and a human's decision); no panel UI for the mogrt export
+  tools; no `.webm`/`.webp`; the 8 GB intermediate cap that is still a
+  guess; and `comfy_generate` still calls `import_file` rather than 5.8's
+  `import_as_layer`. The `get-llama.ps1` flag is now struck after ten
+  passes carried it.
+- `release-notes.txt` still reads "0.10.0" while the feed now ships 0.10.16.
+  Remote session's release cut.

@@ -236,7 +236,8 @@ native/               AEGP C++ plugin scaffold (phase 2, experimental):
                       Window-menu command that opens the panel; see
                       native/README.md for SDK setup and build
 scripts/
-  get-llama.ps1       dev/CI engine download (-Variant auto|cpu|cuda)
+  get-llama.ps1       dev/CI engine download (-Variant auto|cpu|cuda,
+                      -ListOnly to see the pick without downloading)
   install.ps1         dev install: junction the panel + PlayerDebugMode
   uninstall.ps1       remove the dev junction
   package-zxp.ps1     build the signed ZXP for distribution
