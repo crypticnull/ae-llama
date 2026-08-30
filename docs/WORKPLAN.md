@@ -1191,7 +1191,9 @@ GPU. This item is that touch, one pass per bullet, smallest first:
     Still open, each its own pass: **sd15, sdxl, wan22-5b** need ~26 GB
     downloaded AND a per-model workflow template the panel does not ship
     (`--list` reports exactly this), and **minimax-h3** needs a backend
-    that can see its weights.
+    that can see its weights. **Both blockers cleared 2026-08-30 —
+    see section 7b below; the downloads and the yaml write are
+    owner-approved, do them.**
 
 - ~~**NEW, filed 2026-08-30 by the probe above: the panel decides a model
   is available by looking at the DISK, and the backend decides by its own
@@ -1321,6 +1323,71 @@ GPU. This item is that touch, one pass per bullet, smallest first:
     costs nothing on a free card: the predicate answers on poll one.
     `oom-probe.js` gained the verdict and is green on it; four new checks
     in `tests/test-vram-arbiter.js` fail on the reverted file.
+
+## 7b. OWNER-APPROVED 2026-08-30: finish the catalog measurements
+
+The owner approved (in so many words: "bake in the other models for the
+rest of the tier package. Test on this machine, it has the space") the
+downloads that section 7 was blocked on, and settled the H3 question
+("if you know where the models are just use them"). The panel side
+shipped with 0.11.0: settings now has per-model Download / Remove rows
+(`Tools.catalogModelStatus` / `removeCatalogWeights`,
+`Setup.downloadGenWeight`, `tests/test-gen-model-manager.js`), and
+`applyExtraModelPaths` writes the Comfy-Desktop shared store into the
+hidden backend's yaml. What is left needs this machine. One bullet per
+pass, smallest first:
+
+- **Un-blind the running ComfyUI (H3 unblock, do this first — it is one
+  file).** The running instance was launched `--base-directory
+  Documents\ComfyUI` and reads `extra_model_paths.yaml` from that base
+  directory; none exists there. Write one declaring the Comfy-Desktop
+  shared store (`%LOCALAPPDATA%\Comfy-Desktop\ComfyUI-Shared\models`,
+  every kind folder mapped — copy the section
+  `Comfy._applyExtraModelPaths` writes, it is the same yaml dialect).
+  Restart the backend, then verify the fix through the panel's own
+  refusal machinery: `scripts/weight-availability-probe.js` must flip
+  from "H3 refused, four weights named" to clean, and
+  `Comfy.missingWeights` on the H3 template must answer empty. THEN
+  measure minimax-h3 with `scripts/catalog-vram-probe.js` (this card is
+  Blackwell, so the shipped nvfp4 template applies) and write the
+  reading into version.js the way krea2 carries its own.
+- **Templates for the template-less entries.** sd15, sdxl and wan22-5b
+  have no `workflowTemplate`, which both blocks the probe and lets
+  `recommendGen` offer models `comfy_generate` cannot render (the open
+  "smaller, for the remote session" item above — fix it HERE, the
+  running backend is what makes a template verifiable). Author minimal
+  API-format graphs (checkpoint -> sampler -> vae -> save; wan22 per its
+  repackaged workflow docs), name them `AE_LLAMA_SD15_V1` /
+  `AE_LLAMA_SDXL_V1` / `AE_LLAMA_WAN22_V1`, set `workflowTemplate` on
+  the catalog entries, and give each a models manifest with `file`+`dir`
+  so the arbiter can price it from the disk. Verify one real render each
+  through `comfy_generate` before calling the template shipped.
+- **Download + measure, one entry per pass: sd15 (2 GB), then sdxl
+  (6.6 GB), then wan22-5b (17.3 GB).** Use the panel's own settings
+  Download button path (`Setup.downloadGenWeight`) — that is field
+  verification of the new rows, note how it behaves in the log — then
+  `catalog-vram-probe.js`, then the measured block into version.js
+  (`measured: true`, `measuredVramMB`, `measuredSeconds`, `measuredAt`,
+  `measuredOn`), correcting `minVramGB` wherever the reading disproves
+  it, with the ripple check on `recommendGen` picks that krea2's
+  correction established as the pattern.
+- **Verify the settings rows in real AE while the disk is in each
+  state** (absent -> partial mid-download -> present -> removed):
+  labels, measured sizes, the shared-store "in a folder the panel
+  doesn't manage" copy on the H3 row, Remove receipts in chat. Add a
+  selftest.js step for `catalogModelStatus` against a temp root if one
+  does not exist yet.
+- **Optional, last, owner-approved on space: minimax-h3-int8's own
+  encoder** (~25.3 GB, the non-Blackwell variant). Measuring it on this
+  Blackwell card still answers "does 32 GB hold the int8 encoder at
+  all", which is the entry's open `note:` question. Skip if the night
+  runs short — it gates nothing.
+
+After each pass: patch bump (these are panel-visible catalog/measurement
+changes), push, log. The 8 GB intermediate cap question is CLOSED (owner
+asked, answered from the 0.10.17 measurements — it is a per-call
+`maxIntermediateGB` disk guard now, not a format limit; no render test
+needed).
 
 ## Out of scope for the local session (remote builds these)
 

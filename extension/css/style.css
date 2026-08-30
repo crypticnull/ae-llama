@@ -332,6 +332,15 @@ input:focus, select:focus, textarea:focus { outline: 1px solid #2d6ca2; }
 .enhance-title { display: block; color: #bbb; margin-bottom: 4px; }
 .enhance-hint { color: #777; font-size: 11px; }
 #comfy-enhance-list .check { margin: 2px 0 2px 12px; }
+
+/* Per-model download/remove rows (ComfyUI settings section) */
+.genmodel-row { display: flex; align-items: center; gap: 8px;
+                margin: 3px 0 3px 12px; }
+.genmodel-name { flex: 0 0 auto; }
+.genmodel-state { flex: 1 1 auto; color: #999; font-size: 11px;
+                  overflow: hidden; text-overflow: ellipsis;
+                  white-space: nowrap; }
+.genmodel-row button { flex: 0 0 auto; }
 .tier-line { margin: 8px 0; color: #9a9; font-size: 11px;
              line-height: 1.45; }
 .tier-line:empty { display: none; }

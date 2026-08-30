@@ -659,6 +659,81 @@
     });
   }
 
+  /**
+   * Where one GENERATION weight lands: the Settings models folder when
+   * set, else the hidden backend's own tree — the two panel-managed
+   * roots, which is exactly the set the settings Remove button may later
+   * reap. Pure path arithmetic (no download), so the refusal for "no
+   * place to put it" is testable without a network.
+   */
+  function genWeightDest(u) {
+    ensureNode();
+    if (!u || !u.url) {
+      return { err: "This model's download links are not pinned yet — " +
+                    "they ship via the update feed." };
+    }
+    var s = currentSettings();
+    var root = s.comfyModelsDir ? String(s.comfyModelsDir) : null;
+    if (!root) {
+      var install = findComfyInstall();
+      if (install && install.root) {
+        root = path.join(install.root, "ComfyUI", "models");
+      }
+    }
+    if (!root) {
+      return { err: "No place to put it: set a Models folder in " +
+                    "Settings (ComfyUI section) or install the hidden " +
+                    "backend first." };
+    }
+    var base = String(u.url).split("?")[0].split("#")[0];
+    base = base.slice(base.lastIndexOf("/") + 1);
+    if (!base) {
+      return { err: "The pinned URL has no filename: " + String(u.url) };
+    }
+    return { root: root,
+             dest: path.join(root, String(u.dir || ""), base) };
+  }
+
+  /**
+   * Download ONE generation weight (an entry of a catalog model's
+   * urls[]) into the panel-managed models tree.
+   * ui: {status(text)?, progress(receivedBytes, totalBytes)?}
+   * Returns the download controller ({cancel()}), or null when nothing
+   * had to be downloaded (already present, or refused).
+   */
+  function downloadGenWeight(u, ui, cb) {
+    ensureNode();
+    ui = ui || {};
+    var plan = genWeightDest(u);
+    if (plan.err) { cb(new Error(plan.err)); return null; }
+    var dest = plan.dest;
+    try {
+      var destDir = path.dirname(dest);
+      if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
+    } catch (eD) { cb(eD); return null; }
+    if (fs.existsSync(dest)) { cb(null, dest); return null; }
+    var base = path.basename(dest);
+    var tmp = dest + ".part";
+    if (ui.status) {
+      ui.status("Downloading " + base +
+        (u.sizeMB ? " (~" + Math.round(u.sizeMB / 1024 * 10) / 10 +
+         " GB — this can take a while)…" : "…"));
+    }
+    return downloadToFile(u.url, tmp, function (rec, total) {
+      if (ui.progress) {
+        ui.progress(rec, total || (u.sizeMB ? u.sizeMB * 1048576 : 0));
+      }
+    }, function (err) {
+      if (err) {
+        try { fs.unlinkSync(tmp); } catch (e) {}
+        cb(err);
+        return;
+      }
+      try { fs.renameSync(tmp, dest); } catch (e) { cb(e); return; }
+      cb(null, dest);
+    });
+  }
+
   // ------------------------------------------------------------- updates
 
   function compareVersions(a, b) {
@@ -985,6 +1060,8 @@
     pickEngineAssets: pickAssets,
     pickEngineRelease: pickReleaseAssets,
     downloadModel: downloadModel,
+    downloadGenWeight: downloadGenWeight,
+    _genWeightDest: genWeightDest,    // exposed for tests
     modelCatalog: modelCatalog,
     comfyCatalog: comfyCatalog,
     recommendModel: recommendModel,

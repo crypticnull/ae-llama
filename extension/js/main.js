@@ -49,6 +49,185 @@
     }
   }
 
+  /**
+   * The per-model rows in Settings: what each catalog model costs on
+   * disk RIGHT NOW (measured, never the authored number), with Download
+   * for entries whose links are pinned and Remove for files the panel
+   * itself downloaded. Remove never reaches into the user's own model
+   * folders or the Comfy-Desktop shared store — those rows say where
+   * the files live instead of offering to delete them.
+   */
+  var genDownloads = {};   // entry name -> {ctrl} while a download runs
+
+  function renderGenModelRows() {
+    if (!els.comfyGenModelsList) return;
+    els.comfyGenModelsList.innerHTML = "";
+    var s = global.Settings.get();
+    var catalog = [];
+    try { catalog = global.Setup.comfyCatalog(updateManifest) || []; }
+    catch (e) {}
+    if (!catalog.length) return;
+    for (var i = 0; i < catalog.length; i++) {
+      buildGenModelRow(catalog[i], s);
+    }
+  }
+
+  function gbText(mb) {
+    return (Math.round(mb / 1024 * 10) / 10) + " GB";
+  }
+
+  function buildGenModelRow(entry, s) {
+    var st;
+    try { st = global.Tools.catalogModelStatus(entry, s); }
+    catch (e) { return; }
+    if (!st.totalCount && !st.downloadable) {
+      // Nothing to show or do (no pinned links AND no known filenames).
+      return;
+    }
+    var row = document.createElement("div");
+    row.className = "genmodel-row";
+    var name = document.createElement("span");
+    name.className = "genmodel-name";
+    name.textContent = entry.label || entry.name;
+    row.appendChild(name);
+
+    var state = document.createElement("span");
+    state.className = "genmodel-state";
+    row.appendChild(state);
+
+    function setState() {
+      if (st.presentCount === 0) {
+        state.textContent = st.downloadable
+          ? "not downloaded" +
+            (entry.sizeMB ? " — " + gbText(entry.sizeMB) : "")
+          : "no download links pinned yet — they ship via the update feed";
+      } else if (st.presentCount < st.totalCount) {
+        state.textContent = st.presentCount + " of " + st.totalCount +
+          " files on disk (" + gbText(st.presentMB) + ")";
+      } else {
+        state.textContent = gbText(st.presentMB) + " on disk" +
+          (st.anyManaged ? "" : " — in a folder the panel doesn't manage");
+      }
+    }
+    setState();
+
+    var running = genDownloads[entry.name];
+    if (running) {
+      var cancelBtn = document.createElement("button");
+      cancelBtn.textContent = "Cancel";
+      cancelBtn.onclick = function () {
+        try { if (running.ctrl) running.ctrl.cancel(); } catch (e) {}
+        delete genDownloads[entry.name];
+        renderGenModelRows();
+      };
+      row.appendChild(cancelBtn);
+      state.textContent = running.text || "downloading…";
+      running.onText = function (t) { state.textContent = t; };
+    } else {
+      if (st.downloadable && st.presentCount < st.totalCount) {
+        var dlBtn = document.createElement("button");
+        dlBtn.textContent = "Download";
+        dlBtn.onclick = function () { startGenDownload(entry, st); };
+        row.appendChild(dlBtn);
+      }
+      if (st.anyManaged) {
+        var rmBtn = document.createElement("button");
+        rmBtn.textContent = "Remove";
+        rmBtn.onclick = function () { removeGenModel(entry); };
+        row.appendChild(rmBtn);
+      }
+    }
+
+    els.comfyGenModelsList.appendChild(row);
+  }
+
+  function startGenDownload(entry, st) {
+    // Only what is missing: a partial download resumes with the files
+    // that are not there, never re-fetching the ones that are.
+    var missing = [];
+    for (var i = 0; i < (entry.urls || []).length; i++) {
+      var u = entry.urls[i];
+      var base = String(u.url).split("?")[0].split("#")[0];
+      base = base.slice(base.lastIndexOf("/") + 1);
+      var have = false;
+      for (var j = 0; j < st.files.length; j++) {
+        if (st.files[j].file === base && st.files[j].path) { have = true; }
+      }
+      if (!have) missing.push(u);
+    }
+    if (!missing.length) { renderGenModelRows(); return; }
+    var slot = { ctrl: null, text: "starting…", onText: null };
+    genDownloads[entry.name] = slot;
+    function say(t) {
+      slot.text = t;
+      if (slot.onText) slot.onText(t);
+    }
+    (function next(k) {
+      if (k >= missing.length) {
+        delete genDownloads[entry.name];
+        renderGenModelRows();
+        renderTierLine();   // a new weight can change the tier copy
+        return;
+      }
+      var u = missing[k];
+      var fileLabel = (missing.length > 1)
+        ? "file " + (k + 1) + " of " + missing.length + ": " : "";
+      slot.ctrl = global.Setup.downloadGenWeight(u, {
+        status: function (t) { say(fileLabel + t); },
+        progress: function (rec, total) {
+          var pct = total ? Math.round(rec / total * 100) : 0;
+          say(fileLabel + pct + "% of " +
+              gbText(Math.round((total || 0) / 1048576)));
+        }
+      }, function (err) {
+        if (err) {
+          delete genDownloads[entry.name];
+          renderGenModelRows();
+          appendMsg("error", "Download failed: " + err.message);
+          return;
+        }
+        next(k + 1);
+      });
+    })(0);
+  }
+
+  function removeGenModel(entry) {
+    var s = global.Settings.get();
+    var st = global.Tools.catalogModelStatus(entry, s);
+    var lines = [], i;
+    for (i = 0; i < st.files.length; i++) {
+      if (st.files[i].path && st.files[i].managed) {
+        lines.push(st.files[i].file + " (" + gbText(st.files[i].mb) + ")");
+      }
+    }
+    if (!lines.length) { renderGenModelRows(); return; }
+    var yes = window.confirm("Remove " + (entry.label || entry.name) +
+      " from disk?\n\n" + lines.join("\n") +
+      "\n\nOnly the panel's own model folders are touched. Download " +
+      "again any time.");
+    if (!yes) return;
+    var r = global.Tools.removeCatalogWeights(entry, s);
+    var parts = [];
+    if (r.removed.length) {
+      parts.push("Freed " + gbText(r.freedMB) + " (" + r.removed.length +
+                 (r.removed.length === 1 ? " file" : " files") + ").");
+    }
+    for (i = 0; i < r.kept.length; i++) {
+      parts.push("Kept " + r.kept[i].file + " — " + r.kept[i].why +
+                 " (" + r.kept[i].path + ").");
+    }
+    for (i = 0; i < r.failed.length; i++) {
+      parts.push("Could not delete " + r.failed[i].file + ": " +
+                 r.failed[i].error);
+    }
+    if (r.note) parts.push(r.note);
+    renderGenModelRows();
+    // Re-render dropped the old note node; say the receipt in the chat
+    // instead so it survives the refresh.
+    if (parts.length) appendMsg("info", parts.join(" "));
+    renderTierLine();
+  }
+
   function collectEnhanceToggles() {
     var map = {};
     if (!els.comfyEnhanceList) return map;
@@ -846,6 +1025,7 @@
         ? s.comfyPauseLlm : "auto";
     els.setVramOverride.value = s.vramOverrideGB || 0;
     renderEnhanceToggles(s);
+    renderGenModelRows();
     renderTierLine();
     els.setAutoUpdate.checked = !!s.autoInstallUpdates;
   }
@@ -933,6 +1113,7 @@
       setVramOverride: $("set-vram-override"),
       tierLine: $("tier-line"),
       comfyEnhanceList: $("comfy-enhance-list"),
+      comfyGenModelsList: $("comfy-genmodels-list"),
       setAutoUpdate: $("set-auto-update"),
       starterRow: $("starter-row"),
       starterSelect: $("starter-select"),
