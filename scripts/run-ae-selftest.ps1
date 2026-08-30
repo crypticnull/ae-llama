@@ -594,6 +594,12 @@ while (-not (Test-Path $out) -and (Get-Date) -lt $deadline) {
 }
 $blocking = $state.BlockingText
 $sawRunning = $state.SawProgress
+# What AE last said it was DOING, if it was one of its own named
+# progress windows (saving, opening, exporting a template). Measured
+# 2026-08-30: an export_mogrt puts five of these up in five seconds, and
+# with `running` outranking `progress` a run wedged inside one would
+# otherwise time out saying only "still executing the script".
+$working = ($state.WorkingText -replace "`r?`n", " / ").Trim()
 
 if ($blocking -and -not (Test-Path $out)) {
   Write-Host '----'
@@ -641,6 +647,12 @@ if (-not (Test-Path $out)) {
       "executing the script (its progress window was up). The suite is " +
       "running and just did not finish -- re-run with a larger " +
       "-TimeoutSec rather than hunting for a dialog.")
+    if ($working) {
+      Write-Host ("  The last thing After Effects named itself as doing: " +
+        $working + ". If that window is still up, look at it: an export " +
+        "raises a font question wearing the same kind of title, and " +
+        "GetWindowText reads nothing out of another process's controls.")
+    }
   } elseif ($state.SawStartup) {
     Write-Host ("No results after " + $TimeoutSec + "s: After Effects " +
       "never opened its main window, with a popup in front of it the " +

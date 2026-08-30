@@ -89,6 +89,35 @@ const DROVERLORD =
   "    OS_ViewContainer\r\n" +
   "    OS_ViewContainer\r\n" +
   "    OS_EditTextContainer\r\n";
+// Captured 2026-08-30 (WORKPLAN 5.9) by listing AE's windows every 150ms
+// while a real export_mogrt ran. AE's OWN progress windows: a #32770
+// with a real title and one container child, which is what a dialog that
+// named itself also looks like from here. Five of them went by in five
+// seconds -- and every one read as `blocked`, which gives up after three
+// consecutive polls. Three in a row on a 2s poll is exit 4 on a run that
+// is working perfectly, and that is what kept the suite off the export
+// path for a whole item.
+const MGT_CREATE =
+  "  [#32770] Creating Motion Graphics Template\r\n" +
+  "    OS_ViewContainer\r\n";
+const MGT_EXPORT =
+  "  [#32770] Exporting Motion Graphics Template\r\n" +
+  "    OS_ViewContainer\r\n";
+const MGT_FONTS =
+  "  [#32770] Verifying Adobe Fonts...\r\n" +
+  "    OS_ViewContainer\r\n";
+// Not the export's: app.project.save() raises this one, measured on its
+// own with a save-only script (~550ms). Any tool that saves shows it.
+const SAVE_PROJECT =
+  "  [#32770] Save Project\r\n" +
+  "    OS_ViewContainer\r\n";
+// This one IS the export's, which is the surprise in the capture: AE
+// REOPENS the project while exporting a template. It is the visible half
+// of the bug the 5.9 build pass found from the inside -- a successful
+// export invalidates the held app.project reference, not just the comp.
+const OPEN_PROJECT =
+  "  [#32770] Open Project\r\n" +
+  "    OS_ViewContainer\r\n";
 
 if (process.platform !== "win32") {
   console.log("SKIPPED - test-selftest-runner.js drives Windows PowerShell");
@@ -171,7 +200,28 @@ const CASES = [
   // is a list of two Windows classes, deliberately, and widening it to
   // "anything wordless" would swallow this one.
   ["droverlord", DROVERLORD, "unreadable", false],
-  ["droverlord-beside-progress", PROGRESS + DROVERLORD, "unreadable", true]
+  ["droverlord-beside-progress", PROGRESS + DROVERLORD, "unreadable", true],
+  // AE's own progress windows. Each says AE is working; none of them is
+  // evidence that OUR script is the thing it is working on, which is
+  // why they are their own verdict rather than joining `running`.
+  ["mgt-creating", MGT_CREATE, "progress", false],
+  ["mgt-exporting", MGT_EXPORT, "progress", false],
+  ["mgt-fonts", MGT_FONTS, "progress", false],
+  ["save-project", SAVE_PROJECT, "progress", false],
+  ["open-project", OPEN_PROJECT, "progress", false],
+  // The measured normal case: the export's window standing beside the
+  // script window that asked for it. AE saying it is executing our
+  // script is the strongest thing on screen, so the run keeps going
+  // with no clock on it at all.
+  ["mgt-beside-progress", PROGRESS + MGT_EXPORT, "running", true],
+  // ...and none of it launders an alert standing next to it.
+  ["mgt-beside-modal", MGT_CREATE + MODAL, "blocked", false],
+  // A popup that names itself as a progress window AND says something
+  // else is a popup that said something else. The test is on every word
+  // it has, never on the joined text.
+  ["mgt-plus-words", "  [#32770] Verifying Adobe Fonts...\r\n" +
+    "    The following 1 fonts were not synced from Adobe Fonts.\r\n" +
+    "    OK\r\n", "blocked", false]
 ];
 
 let body = "";
@@ -297,6 +347,55 @@ const modalWithChrome = stopIndex(repeat(CHROME + MODAL, 6));
 assert(modalWithChrome.at === 2,
   "a real modal still stops the run on schedule with its shadow up");
 
+// The export timeline, replayed in the order it was captured (poll
+// samples from the 2026-08-30 watch, condensed to what the probe saw at
+// each change). Under the old rules five of these six samples read as
+// `blocked` and the run would have been abandoned at the third.
+const EXPORT_RUN = [
+  SAVE_PROJECT, SAVE_PROJECT, "", OPEN_PROJECT, MGT_CREATE, MGT_FONTS,
+  "", MGT_EXPORT, PROGRESS, ""
+];
+const exportRun = stopIndex(EXPORT_RUN);
+assert(exportRun.at === -1,
+  "the recorded export timeline never reports a blocking dialog");
+
+// The same windows with the script window up beside them, which is what
+// the second capture actually looked like end to end.
+const exportBehindScript = stopIndex([
+  PROGRESS, PROGRESS + SAVE_PROJECT, PROGRESS, PROGRESS + OPEN_PROJECT,
+  PROGRESS + MGT_CREATE, PROGRESS, PROGRESS + MGT_EXPORT, ""
+]);
+assert(exportBehindScript.at === -1,
+  "an export running under AE's script window never stops the run");
+assert(exportBehindScript.sawProgress,
+  "the export timeline is still recognised as AE executing the script");
+
+// The other half, and the reason `progress` has a clock at all: the font
+// ALERT an export raises is a QUESTION, and from the probe's side it is
+// indistinguishable from the progress window of the same name --
+// GetWindowText reads nothing out of another process's child controls.
+// So a progress window that never leaves is still reported, just later.
+const progressStuck = stopIndex(repeat(MGT_FONTS, 20));
+assert(progressStuck.at === 14,
+  "a progress window that never leaves is still reported (15 polls, ~30s)");
+const progressPatient = stopIndex(repeat(MGT_FONTS, 14));
+assert(progressPatient.at === -1,
+  "a slow progress window is not given up on before ~30s");
+
+// What a run that times out can say about it. `running` outranks
+// `progress`, so a wedged export reports as "still executing" -- and
+// then has to be able to name the window AE last put up.
+const workingSeen = runPs([
+  "$s = New-AellWaitState",
+  "$s = Update-AellWaitState -State $s -ProbeText " +
+    psString(PROGRESS + MGT_FONTS) + " -ScriptName 'aell-selftest-run.jsx'",
+  "Write-Host ('WORK|' + $s.SawWorking + '|' + " +
+    "(($s.WorkingText -replace '\\s+', ' ').Trim()))"
+].join("\n"));
+assert(/WORK\|True\|/.test(workingSeen) &&
+  workingSeen.indexOf("Verifying Adobe Fonts") !== -1,
+  "the run remembers what AE last named itself as doing");
+
 // ...and a modal that appears DURING startup is still caught, on the
 // normal schedule, because it has words.
 const modalAtStartup = stopIndex(
@@ -327,7 +426,14 @@ const STALE_CASES = [
   ["startup", STARTUP, false],
   // Unreadable, but the probe found no window at all to post to.
   ["note", UNREADABLE_NOTE, false],
-  ["empty", "", false]
+  ["empty", "", false],
+  // THE trap this whole item was blocked on: WM_CLOSE on the font
+  // window an export raises is CANCEL, and a cancelled export answers
+  // true and writes nothing. It has a title, so the wordless rail
+  // already refused it -- and now the verdict says so out loud too.
+  ["mgt-fonts", MGT_FONTS, false],
+  ["mgt-creating", MGT_CREATE, false],
+  ["save-project", SAVE_PROJECT, false]
 ];
 
 let staleBody = "";
@@ -518,6 +624,25 @@ const HARVEST_PROGRESS =
   "Executing Script aell-selftest-run.jsx...\r\n" +
   "OS_ViewContainer\r\n";
 
+// AE's other progress windows, harvested 2026-08-30 during a real
+// export_mogrt. Same two-line shape as the script one.
+const HARVEST_MGT =
+  "Exporting Motion Graphics Template\r\n" +
+  "OS_ViewContainer\r\n";
+const HARVEST_FONTS =
+  "Verifying Adobe Fonts...\r\n" +
+  "OS_ViewContainer\r\n";
+// And the reason it is safe to recognise those HERE but not in the
+// verdict: this layer asks the children with WM_GETTEXT, so the font
+// ALERT's own sentence comes back as a line of its own. The alert wears
+// a benign title and is still unrecognised, which is exactly the
+// distinction the probe layer cannot make.
+const HARVEST_FONT_ALERT =
+  "Verifying Adobe Fonts...\r\n" +
+  "OS_ViewContainer\r\n" +
+  "The following 1 fonts were not synced from Adobe Fonts. Click OK to " +
+  "continue. Click Cancel to stop the export.\r\n";
+
 const HARVEST_CASES = [
   // name, harvest, known-benign?, label
   ["save", HARVEST_SAVE, true, "save-changes prompt"],
@@ -538,7 +663,17 @@ const HARVEST_CASES = [
   // has raised an alert is a run that is stuck, and the alert is what
   // the morning review has to see.
   ["progress-plus-error", HARVEST_PROGRESS + HARVEST_ERROR, false,
-    "unrecognized"]
+    "unrecognized"],
+  // AE's other progress windows: benign when they say nothing but their
+  // own name, so evidence taken mid-export is not headlined
+  // UNRECOGNIZED DIALOG over the top of AE reporting that it is busy.
+  ["mgt", HARVEST_MGT, true, "progress window"],
+  ["fonts", HARVEST_FONTS, true, "progress window"],
+  ["mgt-plus-script", HARVEST_PROGRESS + HARVEST_MGT, true,
+    "script-progress window + progress window"],
+  // The one that matters: same title, one more sentence, and the answer
+  // flips. A question is not a progress window however it is dressed.
+  ["font-alert", HARVEST_FONT_ALERT, false, "unrecognized"]
 ];
 
 let harvestBody = "";
@@ -570,6 +705,10 @@ assert(classes["progress-plus-error"] &&
   classes["progress-plus-error"].unknown.indexOf("Executing Script") === -1 &&
   classes["progress-plus-error"].unknown.indexOf("addComp") !== -1,
   "an alert beside the progress window is reported without it");
+assert(classes["font-alert"] &&
+  classes["font-alert"].unknown.indexOf("Verifying Adobe Fonts") === -1 &&
+  classes["font-alert"].unknown.indexOf("Click Cancel to stop") !== -1,
+  "the font QUESTION is reported by its sentence, not by its title");
 
 // The noise filter: AE's containers report their CLASS as their text, so
 // they are not words a dialog said. If this stopped filtering, every

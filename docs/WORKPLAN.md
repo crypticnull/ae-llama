@@ -332,14 +332,32 @@ FOUR tools are still uncovered and each is deliberate, not pending:
 
 - ~~`add_marker`, `precompose`~~ COVERED 2026-08-28 (0.9.30) by item
   5.4 — 18 steps, after a probe found five silent losses in them.
-- `add_to_render_queue` — item 5.5; it writes to the user's render queue.
-- `import_file` — item 5.8; it needs a file on disk.
+- ~~`add_to_render_queue`~~ COVERED 2026-08-28 by item 5.5 (14 steps).
+- ~~`import_file`~~ COVERED 2026-08-29 by item 5.8 — it only ever needed
+  a file on disk, and `snapshot_frame` is that file.
 - ~~`organize_project` — **cannot be suite-tested at all.**~~ COVERED
   2026-08-28 (0.10.2) once it grew the `dryRun` argument this bullet
   asked for: six steps, PREVIEWS only. The preview must count the suite's
   own new comp, name the nested folder it refuses to file into, and leave
   the project panel byte-for-byte alone — that last step is the one the
   group exists for.
+
+As of 2026-08-30 the computed gap list reads **"Host tools never
+exercised by the self-test suite: none"** — every host tool has now been
+run against real After Effects.
+
+**NEW, measured 2026-08-30, and its own small pass: the suite LEAKS 34
+project items every run, into whatever project the user has open.**
+Counted before and after one harness run: 313 -> 347, all of it `Null`
+(162 -> 180) and `Audio Amplitude` (144 -> 160) FOOTAGE sources. The
+suite's cleanup sweeps the `ST ` namespace and these are named by AE, not
+by the suite — `audio_to_keyframes` never uniques its null's name
+(measured 2026-08-28) and a null layer's SOURCE outlives the comp that
+held it. Same class of leak the `ST ` sweep was built for, arriving from
+outside the prefix. It reaches real users: pressing Settings -> "Run
+self-test" leaves ~34 orphan sources behind each time. Fix at the
+cleanup, by ID and scoped to what the run itself created — never by name
+alone, because "Null" is a name a user's own project will hold.
 
 ## 4. Field-quality passes
 
@@ -799,7 +817,7 @@ the full loop: snapshot -> import -> pixel dimensions match the comp.
 Generation wiring stays remote — this is the comp<->file bridge it will
 stand on.
 
-### 5.9 .mogrt export — PROBE + BUILD DONE 2026-08-30
+### 5.9 .mogrt export — DONE 2026-08-30 (probe, build AND lock-in)
 `expose_property` and `export_mogrt` are built, documented and covered by
 95 stub checks in `tests/test-mogrt.js`, and driven end to end in real AE:
 a comp with three controllers went out as a genuine ZIP (`PK\x03\x04`,
@@ -818,7 +836,24 @@ invalid"; and AE writes the template name **verbatim** — the 2026-08-29
 probe's "AE strips the spaces" was that probe reading back a name that
 never had spaces in it, compounded by `File.name` being URI-ENCODED.
 
-**LOCK-IN (pass c) is what is LEFT, and it is not free:** the export
+~~**LOCK-IN (pass c) is what is LEFT, and it is not free:**~~ DONE
+2026-08-30, and the capture found **five** windows where this text
+predicted three. `Save Project` (raised by any tool that saves, not just
+this one) and `Open Project` (raised by the EXPORT — After Effects
+reopens the project while writing a template, which is the visible half
+of "a successful export invalidates app.project") stand beside the three
+named below, and every one of them read as `blocked` — three of those in
+a row on a 2 s poll is exit 4 on a healthy run, so a SAVE alone was
+enough to trip it. The triage now has a `progress` verdict with a 30 s
+clock on it, because the font ALERT is a question the probe layer cannot
+tell from the progress window of the same name (the evidence layer can,
+and does). 14 suite steps: `expose_property` end to end and
+`export_mogrt`'s whole refusal wall. **The export itself cannot be a
+suite step** — AE exports only from a saved, CLEAN project and the suite
+has created a dozen comps in the user's own project by then — so it is
+covered the way `clean_project` and `organize_project` are: verified by
+hand in real AE, with the suite holding the wall. Harness 517 -> 531,
+green twice. Original text: the export
 raises three progress dialogs that are not errors — "Creating Motion
 Graphics Template", "Exporting Motion Graphics Template", "Verifying
 Adobe Fonts...". They are `#32770`s, so the harness triage will see them,

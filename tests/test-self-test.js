@@ -392,6 +392,26 @@ let capAudio = [];      // {name, audio: bool} in the audio rig
 let capRows = [];       // {name, inPoint, outPoint} in the text rig
 let capMarks = [];      // {time, comment, duration} on the text comp
 function resetCapRig() { capAudio = []; capRows = []; capMarks = []; }
+
+// The Essential Graphics rig (WORKPLAN 5.9). Everything the suite can
+// reach here is a REFUSAL, because AE exports a template only from a
+// saved, CLEAN project and the suite has been creating comps in the
+// user's open one since step 1 -- so the canned host's job is to model
+// the refusal chain in the order the real tool applies it. A permissive
+// host that answered "ok" would let a tool that dropped any of these
+// pass its own steps.
+//
+// Measured facts it has to carry: the default controller name is the
+// LAYER's (never the property's), AE accepts DUPLICATE controller names
+// in silence, a property that is already a controller is refused, and
+// AE 2026 ships no rename and no remove.
+const mgCtrl = {};         // comp -> [controller names, NEWEST first]
+const mgFrom = {};         // comp -> {controller name: "layer|property"}
+function resetMgRig() {
+  for (const m of [mgCtrl, mgFrom]) {
+    for (const k of Object.keys(m)) delete m[k];
+  }
+}
 // AE stores time on its own base: 0.3333 reads back 0.33329264322917.
 const CAP_TICKS = 254016000;
 const capQuant = (t) => Math.round(Number(t) * CAP_TICKS) / CAP_TICKS;
@@ -3557,6 +3577,110 @@ function cannedOk(tool, args) {
       }
       return out;
     }
+    // --- Essential Graphics (WORKPLAN 5.9) ---------------------------
+    case "expose_property": {
+      const comp = String((args && args.comp) || "");
+      const layer = String((args && args.layer) || "");
+      const spec = String((args && args.property) || "");
+      const label = (args && args.label) ? String(args.label) : "";
+      const list = mgCtrl[comp] || (mgCtrl[comp] = []);
+      const from = mgFrom[comp] || (mgFrom[comp] = {});
+      // A GROUP always answers canAdd = false, so the useful answer is
+      // which leaf to name instead.
+      if (/^(transform|contents|effects|masks|text)$/i.test(spec)) {
+        return { __err: "'" + spec + "' is a GROUP, and Essential " +
+          "Graphics takes single properties, not groups - " +
+          "list_properties {layer: \"" + layer + "\", path: \"" + spec +
+          "\"} shows the ones inside. (An EFFECT row is a group too.)" };
+      }
+      // Already a controller: AE refuses a second copy, and answers
+      // `undefined` rather than false.
+      if (from[layer + "|" + spec.toLowerCase()]) {
+        return { __err: "After Effects will not expose '" + spec +
+          "' on '" + layer + "' in '" + comp + "'. Measured reasons, in " +
+          "the order they happen: it is ALREADY a controller (AE refuses " +
+          "a second copy); it is a kind Essential Graphics does not take " +
+          "(a Layer Control is the one measured); or it belongs to a " +
+          "layer INSIDE a precomp of this comp. Controllers on '" + comp +
+          "' now (newest first): " + (list.join(", ") || "(none)") + "." };
+      }
+      // AE's default is the LAYER's name for a transform or text
+      // property, never the property's own.
+      const got = label || (layer + " " + spec.charAt(0).toUpperCase() +
+        spec.slice(1));
+      const dupes = list.filter(n => n === got).length;
+      list.unshift(got);
+      from[layer + "|" + spec.toLowerCase()] = got;
+      const out = { comp, layer, property: spec, controller: got,
+        controllerCount: list.length, templateName: "Untitled" };
+      if (dupes > 0) {
+        out.warning = dupes + " other controller(s) on '" + comp +
+          "' are ALSO called \"" + got + "\" - AE accepts duplicate " +
+          "names and an editor cannot tell them apart. Pass {label: " +
+          "\"...\"} to name this one.";
+      } else if (!label) {
+        out.note = "No label given, so AE named the controller \"" + got +
+          "\" - its default is the LAYER's name for a transform or text " +
+          "property and the EFFECT's name for an effect parameter, " +
+          "never the property's own.";
+      }
+      out.next = "export_mogrt {comp: \"" + comp + "\", folder: \"...\"} " +
+        "writes the template once every control is exposed. There is no " +
+        "rename and no remove: AE ships neither, and the indices " +
+        "renumber on every add (1 is the newest).";
+      return out;
+    }
+    case "export_mogrt": {
+      const comp = String((args && args.comp) || "");
+      let raw = (args && (args.folder || args.path || args.output)) || "";
+      if (!raw) {
+        return { __err: "'folder' is required - the ABSOLUTE folder to " +
+          "write the .mogrt into, e.g. \"C:/templates\". The FILE name " +
+          "comes from the template name, not from this path." };
+      }
+      raw = String(raw).replace(/[\\/]+$/, "");
+      if (!/^[a-zA-Z]:[\\/]/.test(raw) && raw.indexOf("\\\\") !== 0) {
+        return { __err: "'folder' must be an ABSOLUTE path (got \"" +
+          raw + "\"). AE resolves a relative path against its own " +
+          "working directory, not the project." };
+      }
+      if (!rqFolderExists(raw)) {
+        return { __err: "Folder does not exist: " + rqNorm(raw) +
+          ". Deepest folder that does exist: " + rqNearestFolder(raw) +
+          ". AE would CREATE this folder and then fail into it, leaving " +
+          "an empty directory behind, so it is refused here instead." };
+      }
+      const tpl = (args && args.name) ? String(args.name) : comp;
+      const bad = [];
+      for (const ch of "\\/:*?\"<>|") {
+        if (tpl.indexOf(ch) !== -1 && bad.indexOf(ch) === -1) bad.push(ch);
+      }
+      if (bad.length) {
+        return { __err: "Template name \"" + tpl + "\" contains " +
+          bad.join(" ") + ", which Windows will not put in a file name. " +
+          "AE does not refuse this - it works for 3.7 seconds, returns " +
+          "false and writes nothing. Pass {name: \"...\"} without those " +
+          "characters." };
+      }
+      if (!(mgCtrl[comp] || []).length) {
+        return { __err: "'" + comp + "' has no Essential Graphics " +
+          "controllers, and AE will not export a template without one " +
+          "(it returns false and writes nothing). Use expose_property " +
+          "{layer: \"...\", property: \"...\", label: \"...\"} first - " +
+          "that is what an editor gets to change." };
+      }
+      // And the wall the suite stops at. By the time these steps run the
+      // suite has created a dozen comps, so the open project is ALWAYS
+      // dirty; there is no path from here to a real export that does not
+      // save the user's project, which the suite may never do.
+      return { __err: "The project has unsaved changes, and AE exports " +
+        "only from a CLEAN one - a dirty project returns false in about " +
+        "390 ms and writes nothing, with no message at all. Pass {save: " +
+        "true} to save \"C:\\\\Users\\\\probe\\\\Documents\\\\scratch.aep\" " +
+        "first, or save it in After Effects and ask again. (Exposing a " +
+        "property is itself a change, so this is the normal state right " +
+        "after expose_property.)" };
+    }
     case "list_render_templates": {
       return { renderSettings: RQ_RS_TEMPLATES.slice(),
                outputModules: RQ_OM_TEMPLATES.slice(),
@@ -4093,7 +4217,7 @@ SelfTest.run({
     ordStack = [];
     maskKeys = {};
     batchLayers = 0; batchFx = {}; batchBlur = null;
-    batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetBoundsRig(); resetPresetRig(); resetRqRig(); resetAuRig(); resetFrRig(); resetCapRig();
+    batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetBoundsRig(); resetPresetRig(); resetRqRig(); resetAuRig(); resetFrRig(); resetCapRig(); resetMgRig();
     SelfTest.run({
       callHostTool(tool, args, cb) {
         if (tool === "grid_layout") {
@@ -4123,7 +4247,7 @@ SelfTest.run({
         ordStack = [];
         maskKeys = {};
         batchLayers = 0; batchFx = {}; batchBlur = null;
-        batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetBoundsRig(); resetPresetRig(); resetRqRig(); resetAuRig(); resetFrRig(); resetCapRig();
+        batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetBoundsRig(); resetPresetRig(); resetRqRig(); resetAuRig(); resetFrRig(); resetCapRig(); resetMgRig();
         SelfTest.run({
           callHostTool(tool, args, cb) {
             // Never refuse anything -- the old permissive host.

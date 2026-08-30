@@ -26,7 +26,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `add_null` | Add a null layer (use as a controller or parent) | yes | host | 1 | 8 |
 | `add_shape_content` | Add content INSIDE a shape layer: kinds group, rectangle, ellipse, star, polygon, path, fill, stroke, gradient_fill, gradient_stroke, repeater, trim_paths, merge_paths, offset_paths, rounded_corners, pucker_bloat, twist, zigzag | yes | host | 1 | 12 |
 | `add_shape_layer` | Add a shape layer (rectangle, ellipse, polygon, or star) | yes | host | — | 4 |
-| `add_solid` | Add a solid layer | yes | host | — | 45 |
+| `add_solid` | Add a solid layer | yes | host | — | 46 |
 | `add_text_animator` | Animate a text layer PER CHARACTER (typewriter, cascade, wiggle) — an animator holds the properties, a selector picks which characters get them | yes | host | 1 | 10 |
 | `add_text_layer` | Add a text layer to a comp | yes | host | 1 | 8 |
 | `add_to_render_queue` | Add a comp to the render queue WITHOUT rendering it | yes | host | 1 | 3 |
@@ -41,17 +41,17 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `comfy_generate` | Generate an image/video with local ComfyUI and import it into the AE project | yes | panel | — | — |
 | `comfy_list_workflows` | List available ComfyUI generation workflow templates by name | no | panel | — | — |
 | `comfy_status` | Check the local ComfyUI instance (online? queue depth?) | no | panel | — | — |
-| `create_comp` | Create a composition and open it | yes | host | 1 | 31 |
+| `create_comp` | Create a composition and open it | yes | host | 1 | 32 |
 | `create_folder` | Create a project-panel folder | yes | host | 1 | 10 |
-| `delete_item` | Delete a project item | yes | host | 1 | 40 |
+| `delete_item` | Delete a project item | yes | host | 1 | 41 |
 | `delete_layer` | Delete a layer from a comp | yes | host | — | 19 |
 | `distribute_property` | Distribute a property VALUE across layers | yes | host | 1 | 5 |
 | `duplicate_comp` | Duplicate a composition | yes | host | 2 | 5 |
 | `duplicate_layer` | Duplicate a LAYER inside its comp (use duplicate_comp only for whole compositions) | yes | host | 1 | 10 |
 | `export_gif` | Export a comp as an animated GIF | yes | panel | — | — |
-| `export_mogrt` | Write a comp out as a .mogrt Motion Graphics template | yes | host | 1 | — |
+| `export_mogrt` | Write a comp out as a .mogrt Motion Graphics template | yes | host | 1 | 6 |
 | `export_social` | Export a comp as an H.264 .mp4 (or .mov) sized for posting, AUDIO INCLUDED when the comp has any | yes | panel | — | — |
-| `expose_property` | Expose one property in the comp's ESSENTIAL GRAPHICS panel, so an editor can change it in Premiere | yes | host | 1 | — |
+| `expose_property` | Expose one property in the comp's ESSENTIAL GRAPHICS panel, so an editor can change it in Premiere | yes | host | 1 | 5 |
 | `for_each_layer` | Run a PER-LAYER tool once per target layer in ONE call (max 200 layers) — the batch executor for anything without its own layers arg: {tool: 'apply_effect', args: {effect: 'Gaussian Blur'}} blurs every target | yes | host | 1 | 6 |
 | `get_bounds` | MEASURE a layer's rendered content without touching it — how wide the text actually is, where the shape sits in the frame, whether anything overflows | no | host | 1 | 32 |
 | `get_comp_details` | Layers of a comp with index, name, type, timing, effects | no | host | 3 | 30 |
@@ -64,7 +64,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `list_effects` | Enumerate effects INSTALLED in this AE (name, matchName, category), filtered and paged | no | host | 1 | 2 |
 | `list_presets` | Enumerate the ANIMATION PRESETS (.ffx) installed in this AE — AE ships ~679 (Behaviors, Text, Backgrounds, Transitions, Image, Shapes…) plus the user's own | no | host | 1 | 3 |
 | `list_properties` | DISCOVER a layer's real property tree — names, paths, types, current values | no | host | 2 | 9 |
-| `list_render_templates` | List this machine's render-settings and output-module template names for render_comp | no | host | 1 | 2 |
+| `list_render_templates` | List this machine's render-settings and output-module template names for render_comp | no | host | 1 | 3 |
 | `move_to_folder` | Move project items into a folder (batch) | yes | host | 1 | 2 |
 | `organize_project` | File loose root-level items into Comps/Footage/Solids/Audio/Images folders at the project ROOT | yes | host | 1 | 2 |
 | `precompose` | Move layers into a new nested comp (precompose) | yes | host | 1 | 5 |
@@ -97,7 +97,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 **Coverage gaps (computed):**
 
 - Host tools with NO stubbed test: `add_camera`, `add_shape_layer`, `add_solid`, `apply_effect`, `delete_layer`, `import_file`, `link_property`, `set_effect_param`, `set_layer_timing`
-- Host tools never exercised by the self-test suite: `export_mogrt`, `expose_property`
+- Host tools never exercised by the self-test suite: none
 
 <!-- END GENERATED TOOL INVENTORY -->
 
@@ -379,11 +379,14 @@ Queued (see WORKPLAN for owners/order):
   tool stats the file rather than trusting the boolean; the export needs
   the project saved AND clean, and dirties it again on success, so a
   second export with no save between is a silent failure; the path is a
-  FOLDER and the file name comes from the template name with its spaces
-  stripped. There is no rename and no remove -- AE 2026 ships neither --
-  and controller indices renumber on every add, newest first. NOT yet
-  covered by the real-AE suite: the export raises three progress dialogs
-  the harness triage has not been taught.
+  FOLDER and the file name is the template name VERBATIM, spaces and all.
+  There is no rename and no remove -- AE 2026 ships neither -- and
+  controller indices renumber on every add, newest first. Suite coverage
+  as of 2026-08-30 is `expose_property` end to end plus the whole
+  `export_mogrt` refusal wall; the EXPORT itself cannot be a suite step,
+  because AE exports only from a saved, CLEAN project and the suite has
+  been creating comps in the user's open one since step 1 -- the same
+  shape as `clean_project` and `organize_project`.
 - Image/video generation is not yet seamless: no frame-aware img2img,
   no mask-driven inpainting, no depth/parallax, no upscale/interpolate.
   The Krea 2 workflow now ships adapted and runnable

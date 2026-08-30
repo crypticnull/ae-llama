@@ -8020,3 +8020,173 @@ session's. Nothing shipped behaves differently.
   788e799 made it MINOR-scoped precisely so patch feeds cannot age it.
   The flag was already answered when it was first re-filed. Checked, not
   copied forward.
+
+## 2026-08-30 (local) - item 5.9 LOCK-IN: the five windows After Effects
+## puts up while it works, every one of which read as a modal
+
+Harness green on arrival (517/517), so item 1 was satisfied and the pass
+took the top unfinished item. That is 5.9's LOCK-IN, whose own text named
+its blocker: "the export raises three progress dialogs that are not
+errors... Either the suite stays off the export path or the triage learns
+those three titles first."
+
+Both halves are now done. The triage learned them - from a capture, not
+from that sentence - and the suite covers what it can safely reach.
+
+### The measurement: watch the windows while a real export runs
+
+`logs/mogrt-lockin/watch.ps1` lifts the harness's OWN Win32 probe out of
+`run-ae-selftest.ps1` (regex over the `$win32` here-string, then
+`Add-Type`) so the capture is exactly what the harness would see, and
+polls `FindDialog` + `HarvestDialogText` every 150-200 ms while a `-r`
+script builds a mogrt rig and exports it. Two runs, the second with the
+save split out into its own timestamped step so every window could be
+attributed to the call that raised it.
+
+**Five windows, not three.** All `#32770`, all with a real TITLE and one
+`OS_ViewContainer` child, none lasting a whole second:
+
+| window | raised by | measured |
+|---|---|---|
+| `Save Project` | `app.project.save()` | ~550 ms, confirmed alone with a save-only script |
+| `Open Project` | **the export** | ~200 ms |
+| `Creating Motion Graphics Template` | the export | ~550 ms |
+| `Verifying Adobe Fonts...` | the export | ~200 ms |
+| `Exporting Motion Graphics Template` | the export | ~170 ms |
+
+`Save Project` is not the export's, which matters because it belongs to
+**any** tool that saves. And `Open Project` is the visible half of the bug
+the BUILD pass found from the inside: **After Effects reopens the project
+while exporting a template**, which is why a successful export invalidates
+the held `app.project` reference and not just the CompItem. That was
+inferred from a crash last time; this pass watched it happen.
+
+**Every one of them read as `blocked`.** The watcher printed the verdict
+beside each sample and it is in the transcripts. `blocked` gives up after
+three consecutive polls, and the harness polls every 2 s, so five progress
+windows across a five-second export is three blocked samples in a row on
+a suite that is working perfectly. That is the exit 4 the item was
+avoiding, and it was never about the export path alone - a save is enough.
+
+### The fix: a verdict for "AE is working", with a clock on it
+
+`Get-AellProgressTitles` lists the six measured titles (the five above
+plus `Executing Script`), matched as a PREFIX because AE appends to them -
+the script one carries the file name, the font one an ellipsis. A block is
+a progress window only when EVERY word it says is one of those; a popup
+that names itself `Verifying Adobe Fonts...` and then says something else
+is a popup that said something else.
+
+Two verdicts, not one, and the split is the whole design:
+
+- `running` - AE's script window is up. Proof OUR script is alive.
+  Patience 0: a run is never given up on while that is true.
+- `progress` - only AE's own other work is visible. Patience **15 polls
+  (~30 s)**.
+
+The clock exists because of the one thing the probe layer cannot see. The
+font ALERT an export raises ("The following 1 fonts were not synced...
+Click OK to continue. Click Cancel to stop the export") is a QUESTION, and
+`GetWindowText` returns EMPTY for another process's child controls - so
+from the probe's side it is indistinguishable from the progress window of
+the same name. Declaring these titles benign-forever would have handed an
+unattended run a dialog that waits for a human who is asleep. 30 s is far
+past every progress window measured here and far short of the 240 s
+timeout.
+
+The EVIDENCE layer can tell them apart, and does: it reads children with
+`WM_GETTEXT`, so the alert's sentence arrives as a line of its own and
+lands in `unknown` while the title is recognised. `Get-AellHarvestClass`
+therefore labels a bare progress window benign and still headlines the
+alert wearing the same title as UNRECOGNIZED. That asymmetry between the
+two layers is deliberate and is now written down in both of them.
+
+`running` outranking `progress` costs one thing - a run wedged INSIDE an
+export reports as "still executing" at the timeout rather than stopping at
+6 s - so the wait state now remembers `WorkingText` and the timeout names
+the last window AE put up, with the font question called out by name.
+
+The pre-launch answerer needed no change and gets none: `WM_CLOSE` on the
+font window is CANCEL, and a cancelled export answers `true` and writes
+nothing. These windows all have titles, so the wordless rail already
+refused them - three new stale-plan cases pin that, and the reason string
+now says `verdict is 'progress'` instead of guessing.
+
+### The suite: 14 steps, and the one that cannot exist
+
+`expose_property` is covered end to end (AE's default controller name is
+the LAYER's, a label is verbatim, a duplicate name is reported, a GROUP is
+refused with the leaf list, a second copy is refused with the roster) and
+`export_mogrt` by its whole refusal wall: no folder, a relative folder, a
+missing folder, a name Windows will not take, a comp with no controllers,
+and an unsaved project.
+
+**The export itself is not a step, and that is a decision.** AE exports
+only from a project that is SAVED and CLEAN, and by then the suite has
+created a dozen comps in whatever project the user has open - so the only
+route to the export is saving the user's project, which the suite may
+never do. Same shape as `clean_project` and `organize_project`: the
+positive path is verified by hand in real AE (this pass: two more real
+exports, 11 335 b and 11 305 b, 4.3 s and 2.5 s) and the suite holds the
+wall. The wall is worth as much as the export anyway - AE answers `true`
+and writes nothing for most of what is on it.
+
+So the triage work is not made pointless by that decision: it is what
+makes an export safe to run AT ALL while the harness is watching, and
+`Save Project` alone would have tripped the old rules on any future step
+that saves.
+
+### Verification
+
+- **Real-AE harness 531/531**, twice, back to back (517/517 before; +14).
+  Every one of the new steps passes against real After Effects.
+- `tests/test-selftest-runner.js`: the two captured export timelines
+  replayed poll by poll (never stops), a progress window that never leaves
+  (stops at poll 15), the font alert's harvest (UNRECOGNIZED by its
+  sentence, not by its title), and each of the five windows as its own
+  verdict case.
+- `tests/test-self-test.js`: the canned host grew a faithful Essential
+  Graphics model - the refusal chain in the real order, the layer-name
+  default, duplicate names accepted in silence - and 531/531 on the happy
+  path with all 75 refusal steps failing against a permissive host.
+- Full stub sweep: **57/57 test files exit 0**.
+- `docs/CAPABILITIES.md` regenerated. Its computed gap list now reads
+  **"Host tools never exercised by the self-test suite: none"** and is
+  true for the first time since the mogrt tools landed. The curated half
+  also had the BUILD pass's correction to make: it still said the file
+  name has "its spaces stripped", which AE does not do.
+
+### No version bump
+
+Feature track: 5.9's tools ride the next MINOR, which is the remote
+session's. Nothing that ships behaves differently - the triage is harness
+machinery, and suite steps are coverage.
+
+### Filed for the next pass, measured tonight
+
+**The suite leaks 34 project items per run, into the user's project.**
+Counted before and after one harness run on the scratch project: 313 ->
+347, all of it `Null` (162 -> 180) and `Audio Amplitude` (144 -> 160)
+FOOTAGE sources. The suite's own cleanup sweeps the `ST ` namespace, and
+these are named by AE, not by the suite - `audio_to_keyframes` never
+uniques its null's name (measured 2026-08-28) and a null layer's source
+outlives the comp that held it, which is the same class of leak the `ST `
+sweep was built for. It reaches real users: anyone pressing Settings ->
+"Run self-test" leaves ~34 orphan sources in their project every time.
+Small, well-defined, and its own pass.
+
+### Notes for whoever runs the next pass
+
+- Machine state: the scratch project `logs\mogrt60\P60-scratch.aep` is
+  still the open one and was SAVED twice by this pass's probes (the export
+  cannot be exercised any other way). The two probe comps and their two
+  solid sources were swept; the 347 items are the leak above.
+- Probe scripts and transcripts are in `logs\mogrt-lockin\` (gitignored).
+  `watch.ps1` is reusable for any "what does AE put on screen while X
+  runs" question - it borrows the harness's own probe rather than a copy.
+- Still open from earlier passes, unattempted tonight: the `DroverLord -
+  Window Class` popup; item 7's VRAM half; the tier impersonation ladder;
+  OOM recovery; no panel UI for the export tools; no `.webm`/`.webp`; the
+  8 GB intermediate cap that is still a guess; `get-llama.ps1`'s two
+  latent traps; and `comfy_generate` still calls `import_file` rather than
+  5.8's `import_as_layer`.

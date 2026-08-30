@@ -17,6 +17,10 @@
 # Verdicts:
 #   clear      - nothing on screen (or main window enabled); keep waiting
 #   running    - only AE's own script-progress window; keep waiting
+#   progress   - one of AE's OWN named progress windows, and not the
+#                script one: AE is working, but nothing here proves it
+#                is working on OUR script. Never blocks on sight, and
+#                escalated only by lasting (see the title list below).
 #   startup    - AE has not opened its application window yet and
 #                something is up in front of it. A healthy cold launch
 #                looks exactly like this for ~5s (measured: two untitled
@@ -30,6 +34,53 @@
 # Kept in its own file so tests/test-selftest-runner.js can feed it the
 # probe strings captured from real AE without needing AE.
 
+# After Effects' OWN progress windows. Each is a #32770 with a real
+# TITLE and nothing inside it but a container, so it looks to the probe
+# exactly like a dialog that named itself.
+#
+# Measured 2026-08-30 (WORKPLAN 5.9) by listing AE's windows every 150 ms
+# while a real export_mogrt ran, twice, with the save split out into its
+# own timestamped step so each window could be attributed:
+#
+#   Save Project                        app.project.save(), ~550 ms; any
+#                                       tool that saves raises it
+#   Open Project                        raised by the EXPORT - AE reopens
+#                                       the project, which is why a
+#                                       successful export invalidates the
+#                                       held app.project reference
+#   Creating Motion Graphics Template   the export
+#   Verifying Adobe Fonts...            the export
+#   Exporting Motion Graphics Template  the export
+#
+# Before this list existed every one of them read as `blocked`, and
+# `blocked` gives up after 3 consecutive polls: five progress windows
+# across a ~5 s export is three blocked samples in a row on a 2 s poll,
+# which is exit 4 on a run that is working perfectly.
+#
+# Matched as a PREFIX, because AE appends to these: the script window
+# carries the file name and the font one carries an ellipsis.
+function Get-AellProgressTitles {
+  return @(
+    "Executing Script",
+    "Save Project",
+    "Open Project",
+    "Creating Motion Graphics Template",
+    "Exporting Motion Graphics Template",
+    "Verifying Adobe Fonts"
+  )
+}
+
+function Test-AellProgressWord {
+  param([string]$Word = "", [string]$ScriptName = "")
+  $w = $Word.Trim()
+  if ($w.Length -eq 0) { return $false }
+  if ($ScriptName -and $w.Contains($ScriptName)) { return $true }
+  foreach ($p in (Get-AellProgressTitles)) {
+    if ($w.StartsWith($p)) { return $true }
+  }
+  return $false
+}
+
 function Get-AellDialogVerdict {
   param(
     [string]$ProbeText = "",
@@ -37,7 +88,9 @@ function Get-AellDialogVerdict {
   )
 
   $blockingLines = @()
+  $workingLines = @()
   $sawProgress = $false
+  $sawWorking = $false
   $sawUnreadable = $false
   $sawStartup = $false
 
@@ -63,11 +116,6 @@ function Get-AellDialogVerdict {
 
   foreach ($block in $blocks) {
     $joined = ($block -join " ")
-    $isProgress = $joined -match 'Executing Script'
-    if (-not $isProgress -and $ScriptName -and $joined.Contains($ScriptName)) {
-      $isProgress = $true
-    }
-    if ($isProgress) { $sawProgress = $true; continue }
 
     # A popup carrying no words -- empty title, children that report only
     # their container class - tells us nothing. AE shows one for a moment
@@ -119,37 +167,87 @@ function Get-AellDialogVerdict {
       continue
     }
 
+    # Is EVERY word this popup says one of AE's own progress titles? The
+    # test is on all of them, never on the joined text: a popup that
+    # names itself "Verifying Adobe Fonts..." and then says something
+    # else as well is a popup that said something else, and the words it
+    # added are the whole reason a human would want to see it.
+    $allProgress = $true
+    $isScript = $false
+    foreach ($w in $words) {
+      if (-not (Test-AellProgressWord -Word $w -ScriptName $ScriptName)) {
+        $allProgress = $false
+        break
+      }
+      if ($w -match '^Executing Script' -or
+          ($ScriptName -and $w.Contains($ScriptName))) {
+        $isScript = $true
+      }
+    }
+    if ($allProgress) {
+      # AE's script window is PROOF our script is alive; any other
+      # progress window only says AE is busy. Kept apart so the second
+      # kind can still be escalated by lasting.
+      if ($isScript) { $sawProgress = $true }
+      else { $sawWorking = $true; $workingLines += $block }
+      continue
+    }
+
     $blockingLines += $block
   }
 
   # A popup WITH WORDS is judged on its words whatever else is up. Short
   # of that, "AE is still starting" outranks "something unreadable is on
   # screen", because during startup the unreadable thing is AE itself.
+  # `running` outranks `progress` deliberately: when AE's script window
+  # is up beside "Exporting Motion Graphics Template" (the measured
+  # normal case), the strongest thing on screen is AE saying it is
+  # executing our script, and a run must not be given up on while that
+  # is true. `progress` is what is left when only AE's own work is
+  # visible, and that is the one with a clock on it.
   $verdict = "clear"
   if ($blockingLines.Count -gt 0) { $verdict = "blocked" }
   elseif ($sawStartup) { $verdict = "startup" }
   elseif ($sawUnreadable) { $verdict = "unreadable" }
   elseif ($sawProgress) { $verdict = "running" }
+  elseif ($sawWorking) { $verdict = "progress" }
 
   $text = ""
   if ($verdict -eq "blocked") { $text = ($blockingLines -join "`r`n") }
   elseif ($verdict -eq "unreadable") { $text = $ProbeText }
+  elseif ($verdict -eq "progress") { $text = ($workingLines -join "`r`n") }
 
   return New-Object PSObject -Property @{
     Verdict = $verdict
     Text = $text
     SawProgress = $sawProgress
     SawStartup = $sawStartup
+    SawWorking = $sawWorking
+    WorkingText = ($workingLines -join "`r`n")
   }
 }
 
 # How many consecutive polls a verdict must survive before the runner
 # gives up on it. Readable popups are believed quickly; an unreadable one
 # has to prove it is not a teardown flicker. A real modal outlasts both.
+#
+# `progress` gets the longest rope of the three that have one. A named
+# AE progress window is not a question, so it must never stop a run for
+# being slow -- the longest measured one is ~2.5 s and a heavy comp will
+# beat that. But it cannot be infinite either: the font ALERT an export
+# raises ("...fonts were not synced... Click OK to continue") is a
+# QUESTION, and the probe layer cannot tell it from the progress window
+# of the same name, because GetWindowText reads nothing out of another
+# process's child controls. 15 polls is 30 s -- far past any progress
+# window measured here, far short of the 240 s timeout, and the only
+# thing standing between an unattended run and a dialog that waits
+# forever wearing a working window's title. (The evidence layer at the
+# bottom of this file CAN read that alert's sentence, and reports it.)
 function Get-AellVerdictPatience {
   param([string]$Verdict)
   if ($Verdict -eq "blocked") { return 3 }
   if ($Verdict -eq "unreadable") { return 8 }
+  if ($Verdict -eq "progress") { return 15 }
   return 0
 }
 
@@ -162,6 +260,8 @@ function New-AellWaitState {
     Streak = 0
     SawProgress = $false
     SawStartup = $false
+    SawWorking = $false
+    WorkingText = ""
     StopNow = $false
     BlockingText = ""
   }
@@ -177,6 +277,12 @@ function Update-AellWaitState {
   $triage = Get-AellDialogVerdict -ProbeText $ProbeText -ScriptName $ScriptName
   if ($triage.SawProgress) { $State.SawProgress = $true }
   if ($triage.SawStartup) { $State.SawStartup = $true }
+  # Remembered, not just counted: a run that times out should be able to
+  # say what AE last told it it was doing.
+  if ($triage.SawWorking) {
+    $State.SawWorking = $true
+    $State.WorkingText = $triage.WorkingText
+  }
   if ($triage.Verdict -eq $State.LastVerdict) {
     $State.Streak = $State.Streak + 1
   } else {
@@ -282,7 +388,7 @@ function Get-AellHarvestWords {
   return $words
 }
 
-# Three harvests are known-benign, and everything else is worth a
+# Four harvests are known-benign, and everything else is worth a
 # human's eye in the morning:
 #   - nothing readable at all: the wordless popup the runner has always
 #     answered (AE's teardown flicker, or a dialog even WM_GETTEXT cannot
@@ -290,6 +396,8 @@ function Get-AellHarvestWords {
 #   - the save-changes prompt: the leftover this machinery exists for.
 #   - AE's script-progress window: proof the suite is RUNNING, and up
 #     for the whole of every -r run this harness makes.
+#   - AE's other progress windows (saving, opening, exporting a template)
+#     when they say nothing but their own name.
 #
 # Judged LINE BY LINE, never on the joined text: two popups can be up at
 # once, and "the save prompt is in there somewhere" must not launder an
@@ -331,6 +439,24 @@ function Get-AellHarvestClass {
     if ($w -match '^Executing Script') {
       if ($kinds -notcontains "script-progress window") {
         $kinds += "script-progress window"
+      }
+      continue
+    }
+    # AE's other progress windows -- the ones an export or a save raises
+    # (see Get-AellProgressTitles). Named here for the same reason the
+    # script one is: five of them go by during one export_mogrt, and
+    # every run that took evidence while one was up was headlined
+    # UNRECOGNIZED DIALOG over the top of AE saying it was busy.
+    #
+    # Safe to recognise HERE in a way it is not in the verdict layer:
+    # this reads children with WM_GETTEXT, which cross-process
+    # GetWindowText cannot, so the font ALERT's own sentence arrives as
+    # a line of its own and lands in $unknown. A progress window that
+    # says nothing but its name is benign; one that says anything else
+    # is not, and that difference is only visible from here.
+    if (Test-AellProgressWord -Word $w) {
+      if ($kinds -notcontains "progress window") {
+        $kinds += "progress window"
       }
       continue
     }

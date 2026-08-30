@@ -69,6 +69,12 @@
   // frame and turns another 3D, so it may not share a comp anything else
   // is measuring.
   var BNCOMP = "AELL Self-Test Bounds";
+  // And the Essential Graphics rig: exposing a property writes to the
+  // COMP's controller list, which nothing else in the suite reads, and
+  // there is no way to remove a controller once it is added (AE 2026
+  // ships no such call) — so the rig has to be a comp that is thrown
+  // away whole.
+  var MGCOMP = "AELL Self-Test Mogrt";
   var running = false;
 
   /**
@@ -7987,6 +7993,241 @@
         check: function (err) {
           return (/ONE layer/.test(err) && /once per layer/.test(err)) || err;
         } },
+
+      // ---- Essential Graphics: expose_property / export_mogrt
+      // (WORKPLAN 5.9 LOCK-IN).
+      //
+      // The EXPORT itself is not a step here, and that is a decision
+      // rather than an omission. AE exports a template only from a
+      // project that is SAVED and CLEAN, and by this point the suite has
+      // created a dozen comps in whatever project the user has open — so
+      // the only way to reach the export is to save the user's project,
+      // which the suite may never do. Same shape as clean_project and
+      // organize_project: the positive path is real-AE verified by hand
+      // (2026-08-30, three field runs, an 11 822 b .mogrt) and the SUITE
+      // holds the refusal wall, which is where every measured trap
+      // lives anyway.
+      //
+      // The wall is worth as much as the export: AE answers `true` and
+      // writes nothing for most of these, so a refusal that stops
+      // reaching AE at all is the tool's whole job.
+      { name: "create the mogrt rig",
+        batch: function () {
+          return [
+            { tool: "create_comp",
+              args: { name: MGCOMP, width: 320, height: 240,
+                      duration: 2, frameRate: 24 } },
+            { tool: "add_solid",
+              args: { comp: MGCOMP, name: "ST MG Fill",
+                      color: [0.2, 0.6, 0.9], width: 320, height: 240 } }
+          ];
+        },
+        check: function (rows, ctx) {
+          if (!rows[0].ok) return rows[0].error;
+          if (!rows[1].ok) return rows[1].error;
+          ctx.mgComp = rows[0].data.name;
+          return true;
+        } },
+
+      // AE's default controller name is NOT the property's name: it is
+      // the LAYER's for a transform or text property (and the EFFECT's
+      // for an effect parameter), so two properties of one layer become
+      // two confusingly similar controllers unless a label is passed.
+      // The tool reads back what AE actually called it.
+      { name: "expose_property reports the name AE really used",
+        tool: "expose_property",
+        args: function (ctx) {
+          return { comp: ctx.mgComp, layer: "ST MG Fill",
+                   property: "opacity" };
+        },
+        check: function (d, ctx) {
+          if (d.controllerCount !== 1) {
+            return "controllerCount " + d.controllerCount + ", expected 1";
+          }
+          if (d.controller.indexOf("ST MG Fill") !== 0) {
+            return "AE named the controller \"" + d.controller +
+                   "\", which does not start with the LAYER's name — the " +
+                   "measured default";
+          }
+          ctx.mgDefaultName = d.controller;
+          return /LAYER's name/.test(d.note || "") ||
+                 "no note explaining AE's default name: " +
+                 JSON.stringify(d);
+        } },
+
+      { name: "a label is used verbatim, and the indices renumber",
+        tool: "expose_property",
+        args: function (ctx) {
+          return { comp: ctx.mgComp, layer: "ST MG Fill",
+                   property: "position", label: "ST MG Move" };
+        },
+        check: function (d) {
+          if (d.controller !== "ST MG Move") {
+            return "controller is \"" + d.controller + "\", not the label";
+          }
+          if (d.controllerCount !== 2) {
+            return "controllerCount " + d.controllerCount + ", expected 2";
+          }
+          // Index 1 is the NEWEST and every index renumbers on the next
+          // add, so nothing may remember "my slider is number 3".
+          return /1 is the newest/.test(d.next || "") ||
+                 "the result does not say the indices renumber";
+        } },
+
+      // AE accepts duplicate controller names in silence (measured: two
+      // called "Wipe Amount"), and an editor cannot tell them apart.
+      { name: "a duplicate controller name is reported, not swallowed",
+        tool: "expose_property",
+        args: function (ctx) {
+          return { comp: ctx.mgComp, layer: "ST MG Fill",
+                   property: "scale", label: "ST MG Move" };
+        },
+        check: function (d) {
+          return /ALSO called/.test(d.warning || "") ||
+                 "no duplicate warning: " + JSON.stringify(d);
+        } },
+
+      { name: "a GROUP is refused with the leaf list to look in",
+        tool: "expose_property",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.mgComp, layer: "ST MG Fill",
+                   property: "Transform" };
+        },
+        check: function (err) {
+          return (/is a GROUP/.test(err) && /list_properties/.test(err)) ||
+                 err;
+        } },
+
+      // AE refuses a second copy of a property that is already a
+      // controller, and answers `undefined` rather than false. There is
+      // no rename and no remove either — AE 2026 ships neither call — so
+      // the refusal has to name the roster instead.
+      { name: "exposing the same property twice is refused with the roster",
+        tool: "expose_property",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.mgComp, layer: "ST MG Fill",
+                   property: "opacity" };
+        },
+        check: function (err, ctx) {
+          if (!/ALREADY a controller/.test(err)) return err;
+          return err.indexOf(ctx.mgDefaultName) !== -1 ||
+                 "the refusal does not list the controllers that exist: " +
+                 err;
+        } },
+
+      { name: "a writable folder for the export refusals",
+        tool: "list_render_templates",
+        args: {},
+        check: function (d, ctx) {
+          if (!d.tempFolder) return "no tempFolder to aim at";
+          ctx.mgTemp = d.tempFolder.replace(/\\/g, "/").replace(/\/$/, "");
+          return true;
+        } },
+
+      { name: "export_mogrt with no folder says what 'folder' is",
+        tool: "export_mogrt",
+        expectError: true,
+        args: function (ctx) { return { comp: ctx.mgComp }; },
+        check: function (err) {
+          return (/'folder' is required/.test(err) &&
+                  /FILE name comes from the template name/.test(err)) || err;
+        } },
+
+      { name: "a relative folder is refused before AE resolves it",
+        tool: "export_mogrt",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.mgComp, folder: "templates/out" };
+        },
+        check: function (err) {
+          return (/must be an ABSOLUTE path/.test(err) &&
+                  /working directory/.test(err)) || err;
+        } },
+
+      // AE mkdir -p's whatever folder it is handed and then fails INTO
+      // it: the 2026-08-29 probe left four empty directories named after
+      // its own failed calls. Refused here, naming the deepest folder
+      // that does exist so the caller can see where the path went wrong.
+      { name: "a missing folder is refused, not created and failed into",
+        tool: "export_mogrt",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.mgComp,
+                   folder: ctx.mgTemp + "/ST MG Nope/deeper" };
+        },
+        check: function (err, ctx) {
+          if (!/Folder does not exist/.test(err)) return err;
+          if (!/Deepest folder that does exist/.test(err)) {
+            return "the refusal does not name where the path stops: " + err;
+          }
+          return /CREATE this folder and then fail into it/.test(err) ||
+                 "the refusal does not say why AE cannot be asked: " + err;
+        } },
+
+      // A name Windows will not accept is not refused by AE: it works
+      // for 3.7 seconds, returns false and writes nothing.
+      { name: "a name Windows will not take is refused before the clock",
+        tool: "export_mogrt",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.mgComp, folder: ctx.mgTemp,
+                   name: "ST:MG*Bad?Name" };
+        },
+        check: function (err) {
+          if (!/Windows will not put in a file name/.test(err)) return err;
+          return (err.indexOf(":") !== -1 && err.indexOf("*") !== -1 &&
+                  err.indexOf("?") !== -1) ||
+                 "the refusal does not list the characters: " + err;
+        } },
+
+      { name: "a comp with no controllers is sent to expose_property",
+        tool: "export_mogrt",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.comp, folder: ctx.mgTemp };
+        },
+        check: function (err) {
+          return (/no Essential Graphics controllers/.test(err) &&
+                  /expose_property/.test(err)) || err;
+        } },
+
+      // The last refusal in the wall, and the one that keeps the suite
+      // off the export path: AE exports only from a SAVED, CLEAN
+      // project, and the suite has been creating comps in the user's
+      // open project since step 1. A dirty project returns false in
+      // ~390 ms and writes nothing, with no message at all — so this
+      // refusal is the only thing that would tell a user why. Either
+      // refusal is correct here: a project that was never saved fails
+      // the earlier check with its own text.
+      { name: "an unsaved project is refused instead of failing silently",
+        tool: "export_mogrt",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.mgComp, folder: ctx.mgTemp,
+                   name: "ST MG Template" };
+        },
+        check: function (err) {
+          if (/never been saved/.test(err)) {
+            return /needs to be saved first/.test(err) ||
+                   "the refusal does not quote what AE says: " + err;
+          }
+          if (!/unsaved changes/.test(err)) {
+            return "expected the dirty-project or never-saved refusal, " +
+                   "got: " + err;
+          }
+          if (!/390/.test(err)) {
+            return "the refusal does not say AE fails SILENTLY: " + err;
+          }
+          return /\{save: true\}/.test(err) ||
+                 "the refusal does not offer the way through: " + err;
+        } },
+
+      { name: "cleanup: delete the mogrt comp",
+        tool: "delete_item",
+        args: function (ctx) { return { item: ctx.mgComp }; },
+        check: function () { return true; } },
 
       { name: "cleanup: delete the fan-out rig",
         tool: "delete_item",
