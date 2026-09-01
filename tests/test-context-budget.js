@@ -319,6 +319,60 @@ Tools.fetchProjectState(function (json) {
   assert(raw.slice(0, 6000).indexOf('"activeComp"') < 0,
          "and the old byte-slice would still lose the comp entirely");
 
+  // ---------------------------------------------- the prompt's own size
+  //
+  // Context is a functional resource (CLAUDE.md, owner 2026-09-01). The
+  // full prompt measured 58,766 chars with no state on 2026-09-01 —
+  // about 15K tokens against the 16,384 default window, which left no
+  // room for a conversation. Two guards: the full form may not grow past
+  // its ceiling without a matching cut, and the compact form (what a
+  // 16K window actually gets) must be a real cut, not a rounding error.
+  const Tools = window.Tools;
+  const full = Tools.buildSystemPrompt("");
+  const compact = Tools.buildSystemPrompt("", { compact: true });
+  const FULL_CEILING = 59000;
+  assert(full.length <= FULL_CEILING,
+         "the full prompt stays under its ceiling (" + full.length +
+         " of " + FULL_CEILING + ") — growth needs a matching cut");
+  assert(compact.length < full.length * 0.72,
+         "compact docs cut the prompt by more than a quarter (" +
+         compact.length + " vs " + full.length + ")");
+  for (const t of Tools.TOOL_DEFS) {
+    if (compact.indexOf("- " + t.name + " " + t.args) === -1) {
+      assert(false, "compact mode keeps every tool's args line: " + t.name);
+      break;
+    }
+  }
+  const rulesEnd = (s) => s.indexOf("Available tools:");
+  assert(full.slice(0, rulesEnd(full)) === compact.slice(0, rulesEnd(compact)),
+         "compact mode never touches the rules block (where the phrase " +
+         "lists that route casual language live)");
+  assert(/one or two short sentences/.test(full),
+         "the reply-brevity rule is in the prompt");
+
+  // The window arithmetic, on the measured sizes.
+  const hb16 = Tools.historyBudget(16384, full.length);
+  assert(hb16.starved,
+         "at 16K the FULL prompt leaves the window starved (" +
+         hb16.chars + " chars of history)");
+  const hb16c = Tools.historyBudget(16384, compact.length);
+  assert(hb16c.chars > hb16.chars,
+         "and the compact prompt leaves more room (" + hb16c.chars + " vs " +
+         hb16.chars + ")");
+  const hb32 = Tools.historyBudget(32768, full.length);
+  assert(!hb32.starved && hb32.chars > 20000,
+         "at 32K the full prompt leaves a real conversation (" +
+         hb32.chars + " chars)");
+  assert(Tools.promptModeFor(16384).compact === true &&
+         Tools.promptModeFor(32768).compact === false,
+         "prompt mode follows the window: compact under 24K, full above");
+  assert(Tools._compactDesc("First sentence here. Second sentence.") ===
+         "First sentence here.",
+         "compactDesc keeps the first sentence");
+  const long = Tools._compactDesc("A".repeat(50) + " " + "B".repeat(200) + ".");
+  assert(long.length <= 111 && /…$/.test(long),
+         "a long first sentence is cut at a word boundary with an ellipsis");
+
   done();
 });
 

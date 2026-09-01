@@ -246,7 +246,8 @@
   var busy = false;
   // One-time notice when history first outgrows the model's window;
   // reset only by clearing the chat, not per message.
-  var trimNoticeShown = false;          // a chat round-trip is in flight
+  var trimNoticeShown = false;
+  var starveNoticeShown = false;      // once per session: the window itself          // a chat round-trip is in flight
   var history = [];          // [{role, content}] — excludes system prompt
   var updateManifest = null; // cached update.json from the update channel
 
@@ -561,7 +562,12 @@
     var s = global.Settings.get();
 
     fetchProjectState(function (stateJson) {
-      var system = global.Tools.buildSystemPrompt(stateJson);
+      // The prompt form follows the window: under 24K tokens the full
+      // tool docs leave no room for a conversation (measured 2026-09-01),
+      // so those windows get the compact docs. The rules block is the
+      // same in both.
+      var system = global.Tools.buildSystemPrompt(
+        stateJson, global.Tools.promptModeFor(s.ctxSize));
       runRound(system, 0);
     });
 
@@ -587,11 +593,12 @@
     function runRound(system, round) {
       if (cancelRequested) { finish(); return; }
       // Bound what the model is SENT — the visible transcript keeps
-      // everything. ~3 chars/token is deliberately conservative for the
-      // JSON-heavy turns this chat produces; 3072 is the reply budget
-      // (llama.js max_tokens) plus headroom for the template overhead.
-      var histBudget = Math.max(
-        4000, (s.ctxSize - 3600) * 3 - system.length);
+      // everything. The budget is arithmetic over the window and the
+      // MEASURED prompt (Tools.historyBudget), not a floor: the old
+      // max(4000, …) floor was negative at real prompt sizes, so most
+      // rounds ran with one turn of memory and nobody knew.
+      var hb = global.Tools.historyBudget(s.ctxSize, system.length);
+      var histBudget = hb.chars;
       if (round.forceTinyContext) {
         // The reactive path: a context 400 got through anyway (one huge
         // entry, or the estimate lost). Keep only the current exchange.
@@ -599,18 +606,25 @@
       }
       var fitted = global.Tools.fitHistory(history, histBudget);
       var sys = system;
-      if (fitted.dropped > 0) {
-        sys += "\n\n(NOTE: " + fitted.dropped + " earlier message(s) " +
-          "were trimmed from your context to fit the model's window. " +
-          "The transcript the user sees is complete — if they refer to " +
-          "something you cannot see, say so and ask, do not guess.)";
-        if (!trimNoticeShown) {
-          trimNoticeShown = true;
-          appendMsg("info", "This chat is getting long — older turns are " +
-            "now trimmed from the model's context (your transcript is " +
-            "unaffected). Clearing the chat starts the model fresh.",
-            "context trimmed");
-        }
+      if (fitted.ledger) {
+        // Dropped turns come back as the ledger: one line of function
+        // each (what ran, what it named), in the prompt's own slice.
+        sys += "\n\n" + fitted.ledger;
+      }
+      if (fitted.dropped > 0 && !trimNoticeShown) {
+        trimNoticeShown = true;
+        appendMsg("info", "Older turns now reach the model as a one-line " +
+          "ledger of what ran and what it named, instead of in full — " +
+          "your transcript is unaffected. Clearing the chat starts fresh.",
+          "context ledger");
+      }
+      if (hb.starved && !starveNoticeShown) {
+        starveNoticeShown = true;
+        appendMsg("info", "The model's context window (" + s.ctxSize +
+          " tokens) is nearly filled by the tool documentation and " +
+          "project state alone (~" + hb.promptTokens + " tokens), so it " +
+          "will forget turns quickly. Raising Context size in Settings " +
+          "gives it memory — it costs VRAM.", "context");
       }
       var messages = [{ role: "system", content: sys }]
         .concat(fitted.entries);

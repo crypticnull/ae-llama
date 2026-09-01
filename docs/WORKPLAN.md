@@ -163,6 +163,26 @@ one push. One pass per bullet:
   the value at the current time? The probe's "un-animate" step records
   the residual opacity without failing on it; measure it, then pin the
   answer in the remove_keyframes doc (the unmeasured claim was removed).
+- **Context budget + ledger (roadmap 13, shipped remote 2026-09-01
+  evening, UNBUMPED, rides the same bump).** Three measurements, then
+  the probe: (1) ask the running llama-server `/tokenize` for the REAL
+  token count of `Tools.buildSystemPrompt(state, {compact:true})` and
+  of the full form — the panel's estimate assumes ~3.9 chars/token for
+  the prompt and ~3 for history; pin the measured ratios into
+  `PROMPT_CHARS_PER_TOKEN` / `HISTORY_CHARS_PER_TOKEN` in tools.js if
+  they are off by more than 10%; (2) at ctx 16384 the panel now sends
+  COMPACT tool docs (one sentence each; the rules block is unchanged)
+  — run `scripts/chat-probe.js` in that mode (it follows the same
+  promptModeFor) and log every step verdict: a routing regression
+  against the full-doc run is a doc that lost its load-bearing
+  sentence — restore that ONE sentence, re-run; (3) drive a chat past
+  the window (ten turns naming things, then "make them blue instead")
+  and confirm the ledger carries the names — the "context ledger"
+  info line appears once, the "context" starvation line appears at
+  16384 with the full prompt and NOT with the compact one. Record the
+  measured room (`Tools.historyBudget(ctx, system.length)`) at 16384
+  and at 32768 in the log; if 32768 fits the card with the 32B (the
+  arbiter's numbers say), propose raising the T7 default.
 - **MOGRT verifier (harness plan 1, steps 1-3).** Export a small real
   mogrt through the panel: the receipt must now carry
   `controllerNames`, `zipValid: true`, `controllersInFile` equal to
@@ -1635,7 +1655,30 @@ local verifies in real AE.
     sentences over the receipts, never a restatement of what the tool
     results already say (its replies live in the same window and in
     the 3,072-token reserve); (e) a prompt-size ceiling pinned in
-    tests/test-context-budget.js so growth without a cut fails CI.
+    tests/test-context-budget.js so growth without a cut fails CI;
+    (f) **the summarization protocol (owner ask 2026-09-01)** — the
+    measured truth today is that main.js's histBudget floor (4,000
+    chars) means most rounds already run with about ONE turn of
+    memory; fitHistory drops whole entries silently and the system
+    note only says "N messages were trimmed". Replace the silent drop
+    with a deterministic LEDGER: every entry fitHistory would drop is
+    folded into one line the panel builds WITHOUT a model call — a
+    user turn → its first ~120 chars; an assistant turn → the tool
+    names it ran with their naming args (layer/comp/property) and its
+    reply's first clause; a TOOL RESULTS turn → ok/error counts and
+    the names created/renamed/deleted from the receipts. The ledger
+    ("Earlier in this session:" one-liners, newest last, hard cap ~1.5
+    KB with its own reserved slice) rides in the system prompt tail so
+    the user-first template invariant holds, and it is what lets "make
+    them blue instead" resolve after the original exchange fell out of
+    the window. Phase 2, measured before adopted: when the ledger
+    itself hits its cap, ONE cheap model call (max_tokens ~200, only
+    between rounds, never mid-round) compresses it; skip if the 32B's
+    latency cost is not worth it. NOTE for the local session: pass 22's
+    stash (`pass22-salvage`) touched llama.js/main.js/tools.js and a
+    tests/test-history-trim.js change — it was working THIS area;
+    reconcile the two when recovering it (keep whichever keeps more
+    function per char, measured by tests/test-context-budget.js).
     Stub-testable; local measures the VRAM side.
 
 Dropped for now, with reasons recorded in the audit doc: comp

@@ -103,5 +103,88 @@ function convo(pairs, size) {
   assert(r.dropped > 0 && r.entries.length >= 4, "by dropping, not dying");
 }
 
+// 8. the ledger: a dropped turn comes back as one line of FUNCTION
+//    (owner 2026-09-01: function over conversation). Before this, the
+//    turns simply vanished and "make them blue instead" had nothing to
+//    refer back to.
+{
+  const h = [
+    { role: "user", content: "Make a comp called Promo, 1920x1080, then " +
+        "add a title that says HELLO in white" },
+    { role: "assistant", content: JSON.stringify({
+        reply: "Creating the comp and the title.", commands: [
+          { tool: "create_comp", args: { name: "Promo", width: 1920, height: 1080 } },
+          { tool: "add_text_layer", args: { comp: "Promo", text: "HELLO", name: "Title" } }
+        ] }) },
+    { role: "user", content: "TOOL RESULTS:\n" + JSON.stringify([
+        { ok: true, data: { name: "Promo", width: 1920 } },
+        { ok: true, data: { layer: "Title", index: 1 } } ]) },
+    { role: "assistant", content: JSON.stringify({ reply: "Done.", commands: [] }) },
+    { role: "user", content: "now make it blue" },
+    { role: "assistant", content: JSON.stringify({ reply: "Coloring it.",
+        commands: [{ tool: "set_text_style", args: { layer: "Title", fillColor: [0, 0, 1] } }] }) },
+    { role: "user", content: "TOOL RESULTS:\n" + JSON.stringify([
+        { ok: false, error: "Layer not found: Titel. Layers here: Title" } ]) },
+    { role: "assistant", content: JSON.stringify({ reply: "Fixed the name.", commands: [] }) }
+  ];
+  const r = fit(h, 1);   // the hard floor: only the last four survive
+  assert(r.dropped === 4 && r.entries.length === 4,
+         "eight entries, four dropped (" + r.dropped + ")");
+  assert(/EARLIER IN THIS SESSION/.test(r.ledger),
+         "a ledger comes back for the dropped turns");
+  assert(/user: Make a comp called Promo/.test(r.ledger),
+         "the user's request keeps its first clause");
+  assert(/did: create_comp Promo, add_text_layer Promo/.test(r.ledger),
+         "the assistant turn keeps the tools it ran with their naming " +
+         "args: " + r.ledger.split("\n")[2]);
+  assert(/results: 2 ok; Promo, Title/.test(r.ledger),
+         "the receipts keep the names they created: " +
+         r.ledger.split("\n")[3]);
+  assert(r.ledger.length < 600,
+         "and four turns of memory cost under 600 chars (" +
+         r.ledger.length + ")");
+  assert(/if they refer to something not here, ask/.test(r.ledger),
+         "with the honesty clause");
+  assert(fit(h, 100000).ledger === "",
+         "no ledger when nothing was dropped");
+}
+
+// 9. the ledger has its own cap: oldest lines fold away, counted
+{
+  const many = [];
+  for (let i = 0; i < 60; i++) {
+    many.push({ role: "user", content: "request number " + i + " " +
+                "words ".repeat(30) });
+    many.push({ role: "assistant", content: JSON.stringify({
+        reply: "ok " + i,
+        commands: [{ tool: "add_solid", args: { name: "Solid " + i } }] }) });
+  }
+  const r = fit(many, 1);
+  assert(r.ledger.length <= 1500,
+         "the ledger stays under its 1500-char slice (" + r.ledger.length + ")");
+  assert(/folded away/.test(r.ledger),
+         "and says how many older lines it folded");
+  assert(/Solid 5[0-9]/.test(r.ledger) && !/request number 0 /.test(r.ledger),
+         "keeping the NEWEST memory, not the oldest");
+}
+
+// 10. what is not memory, and what cannot be read
+{
+  const s = window.Tools._summarizeEntry;
+  assert(s({ role: "user", content: "SYSTEM: Only your LAST response was truncated" }) === "",
+         "a SYSTEM control message is not memory");
+  assert(/^assistant: not json/.test(s({ role: "assistant", content: "not json at all" })),
+         "an unparseable assistant turn keeps a clipped text");
+  assert(/results: \(unreadable\)/.test(s({ role: "user", content: "TOOL RESULTS:\n{oops" })),
+         "unreadable results say so");
+  assert(/1 error \(Layer not found: X/.test(s({ role: "user",
+           content: "TOOL RESULTS:\n" + JSON.stringify([{ ok: false, error: "Layer not found: X" }]) })),
+         "an error result keeps its first clause");
+  assert(/did: import_file frame\.png/.test(s({ role: "assistant",
+           content: JSON.stringify({ commands: [{ tool: "import_file",
+             args: { file: "X:\\renders\\deep\\frame.png" } }] }) })),
+         "a path collapses to its basename — the folder is not memory");
+}
+
 console.log(failed ? "\nTESTS FAILED" : "\nALL TESTS PASSED");
 process.exitCode = failed ? 1 : 0;

@@ -9985,3 +9985,37 @@ got.
   sizes) — a remote fix, stub-testable. Left for a later pass: the
   hostscript comment about the reorder helper's placement is now
   redundant with the classifier exemption (harmless).
+
+## 2026-09-01 (remote session, evening) — roadmap 13: context budget, compact docs, the history ledger (UNBUMPED)
+
+- Why now: the daytime batch's prompt (58.7K chars ≈ 15K tokens) plus
+  ~1.5K tokens of state is AT the 16,384 default window — tonight's
+  bump would have shipped a panel that overflows on ordinary rounds.
+  And the code showed the panel was already "summarizing by
+  forgetting": main.js's `max(4000, …)` history floor was negative at
+  real prompt sizes, so most rounds carried one turn of memory.
+- Changed — tools.js: `buildSystemPrompt(state, {compact, ledger})`;
+  `compactDesc` (first sentence, ≤110 chars at a word boundary; args
+  lines and the rules block untouched); `promptModeFor(ctx)` (compact
+  under 24K); `historyBudget(ctx, systemChars)` (two measured-side
+  ratios, reply reserve, the ledger's own 1,500-char slice, a
+  `starved` flag); the reply-brevity rule; `fitHistory` now returns
+  `ledger` — `rollupHistory` folds every dropped entry into one line
+  of FUNCTION with no model call (user: first clause; assistant: tools
+  + naming args + reply clause; results: ok/error counts + created
+  names; SYSTEM control turns are not memory; paths collapse to
+  basenames), oldest lines folding away under the cap with the count
+  in the header. main.js: prompt form by window, ledger injected in
+  the prompt tail, one-time "context ledger" and "context"
+  (starvation) info lines. chat-probe.js mirrors all three.
+  tests/test-history-trim.js +3 sections, tests/test-context-budget.js
+  pins the full-prompt CEILING (59,000) so growth without a cut fails
+  CI, the compact cut (>28%), rules-block identity, and the window
+  arithmetic at 16K/32K.
+- Harness: stub sweep green (two Windows-only suites as always).
+- Notes: UNBUMPED, rides tonight's bump; WORKPLAN 1c carries the
+  measurements (real /tokenize ratios, compact-mode routing via the
+  probe, the ledger drive-past-the-window). Phase 2 (a model call to
+  compress the ledger) is NOT built — measure whether it is worth the
+  32B's latency first. Pass 22's stash touched this same area:
+  reconcile on recovery.
