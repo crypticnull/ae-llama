@@ -66,6 +66,14 @@ interactive session does NOT self-start; it answers one prompt and waits.
 - `.ps1` must be pure ASCII (Windows PowerShell 5.1, BOM-less).
 - Every failed lookup must list what actually exists (grounded errors) —
   it is how the small local model self-corrects.
+- **Context is a functional resource. Function over conversation**
+  (owner, 2026-09-01). The system prompt + tool docs + state + results
+  + history share one window (default ctx 16384), and when it
+  overflows the panel drops HISTORY — refer-back turns break, which is
+  function loss. Every prompt/doc addition must be measured
+  (buildSystemPrompt().length before/after) and paid for by a cut;
+  rules carry phrase lists, docs carry one phrase; the model's replies
+  are receipts, not prose. See WORKPLAN roadmap item 13.
 
 ## Shipping (BUMP OR IT DOES NOT SHIP)
 

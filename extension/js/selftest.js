@@ -1712,6 +1712,176 @@
           return true;
         } },
 
+      // ---- relative reorder (audit 0.11 item 4) ------------------------
+      // "Put it behind the logo": ONE layer next to ONE anchor, nothing
+      // else disturbed. The sorter above pulls a list contiguous and pushes
+      // the rest aside, so it could never answer that request honestly.
+      // Every landing slot is read back from AE with get_comp_details, and
+      // the four moves return the stack to exactly what it was.
+      { name: "below: ST Ord 3 goes under ST Ord 7",
+        tool: "reorder_layers",
+        args: function (ctx) {
+          return { comp: ctx.orComp, layer: "ST Ord 3", below: "ST Ord 7" };
+        },
+        check: function (d) {
+          if (d.layer !== "ST Ord 3") return "layer " + d.layer;
+          if (d.previousIndex !== 3) return "previousIndex " + d.previousIndex;
+          if (d.movedTo !== 7) return "movedTo " + d.movedTo;
+          if (d.below !== "ST Ord 7") return "below " + d.below;
+          if (d.by || d.topToBottom) return "answered as a SORT: " + d.by;
+          if (d.warning) return "warning: " + d.warning;
+          return true;
+        } },
+
+      { name: "read-back: only ST Ord 3 moved, the rest kept their order",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.orComp }; },
+        check: function (d) {
+          var want = ["ST Ord", "ST Ord 2", "ST Ord 4", "ST Ord 5",
+                      "ST Ord 6", "ST Ord 7", "ST Ord 3", "ST Ord 8",
+                      "ST Ord 9", "ST Ord 10", "ST Ord 11", "ST Ord 12"];
+          var L = d.layers || [];
+          if (L.length !== 12) return "comp holds " + L.length + " layers";
+          for (var i = 0; i < 12; i++) {
+            if (L[i].name !== want[i]) {
+              return "slot " + (i + 1) + " holds " + L[i].name + ", not " +
+                     want[i];
+            }
+          }
+          return true;
+        } },
+
+      { name: "above: ST Ord 3 goes back on top of ST Ord 4",
+        tool: "reorder_layers",
+        args: function (ctx) {
+          return { comp: ctx.orComp, layer: "ST Ord 3", above: "ST Ord 4" };
+        },
+        check: function (d) {
+          if (d.previousIndex !== 7) return "previousIndex " + d.previousIndex;
+          if (d.movedTo !== 3) return "movedTo " + d.movedTo;
+          return d.above === "ST Ord 4" || "above " + d.above;
+        } },
+
+      { name: "toBack: the top layer goes to the bottom",
+        tool: "reorder_layers",
+        args: function (ctx) {
+          return { comp: ctx.orComp, layer: "ST Ord", toBack: true };
+        },
+        check: function (d) {
+          if (d.previousIndex !== 1) return "previousIndex " + d.previousIndex;
+          if (d.movedTo !== 12) return "movedTo " + d.movedTo;
+          return d.toBack === true || "toBack " + d.toBack;
+        } },
+
+      { name: "toFront: and back up again",
+        tool: "reorder_layers",
+        args: function (ctx) {
+          return { comp: ctx.orComp, layer: "ST Ord", toFront: true };
+        },
+        check: function (d) {
+          if (d.previousIndex !== 12) return "previousIndex " + d.previousIndex;
+          if (d.movedTo !== 1) return "movedTo " + d.movedTo;
+          return d.toFront === true || "toFront " + d.toFront;
+        } },
+
+      { name: "toFront on the top layer is an honest no-op",
+        tool: "reorder_layers",
+        args: function (ctx) {
+          return { comp: ctx.orComp, layer: "ST Ord", toFront: true };
+        },
+        check: function (d) {
+          if (d.movedTo !== 1 || d.previousIndex !== 1) {
+            return "slots " + d.previousIndex + " -> " + d.movedTo;
+          }
+          return /Nothing moved/.test(d.note || "") ||
+                 "the receipt claims a move: " + d.note;
+        } },
+
+      { name: "read-back: the stack is exactly what it was",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.orComp }; },
+        check: function (d) {
+          var L = d.layers || [];
+          if (L.length !== 12) return "comp holds " + L.length + " layers";
+          for (var i = 0; i < 12; i++) {
+            if (L[i].name !== ords[i]) {
+              return "slot " + (i + 1) + " holds " + L[i].name + ", not " +
+                     ords[i];
+            }
+          }
+          return true;
+        } },
+
+      { name: "a layer cannot be moved relative to itself",
+        tool: "reorder_layers",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.orComp, layer: "ST Ord 2", above: "ST Ord 2" };
+        },
+        check: function (e) {
+          if (!/itself/.test(e)) return "message was: " + e;
+          return /ST Ord 5/.test(e) || "the refusal lists no layers: " + e;
+        } },
+
+      { name: "a relative key and 'by' cannot be combined",
+        tool: "reorder_layers",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.orComp, layer: "ST Ord 2", above: "ST Ord 3",
+                   by: "name" };
+        },
+        check: function (e) {
+          return (/cannot be combined/.test(e) && /'by: name'/.test(e)) ||
+                 "message was: " + e;
+        } },
+
+      { name: "above and below at once are refused by name",
+        tool: "reorder_layers",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.orComp, layer: "ST Ord 2", above: "ST Ord 3",
+                   below: "ST Ord 4" };
+        },
+        check: function (e) {
+          return /above \+ below/.test(e) || "message was: " + e;
+        } },
+
+      { name: "an anchor name in toFront is refused, not read as true",
+        tool: "reorder_layers",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.orComp, layer: "ST Ord 2", toFront: "ST Ord 5" };
+        },
+        check: function (e) {
+          if (!/'toFront' takes true/.test(e)) return "message was: " + e;
+          return /above: 'ST Ord 5'/.test(e) || "no way out offered: " + e;
+        } },
+
+      { name: "a missing anchor lists the comp's real layers",
+        tool: "reorder_layers",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.orComp, layer: "ST Ord 2", above: "ST Logo" };
+        },
+        check: function (e) {
+          if (!/Layer not found/.test(e)) return "message was: " + e;
+          return (/Actual layers:/.test(e) && /ST Ord 2/.test(e)) ||
+                 "the refusal lists no layers: " + e;
+        } },
+
+      // The ordered layers carry no effects, which is the state the
+      // "take off the glow" refusal has to name.
+      { name: "remove_effect on a layer with no effects points at apply_effect",
+        tool: "remove_effect",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.orComp, layer: "ST Ord 12", effect: "Glow" };
+        },
+        check: function (e) {
+          if (!/has no effects/.test(e)) return "message was: " + e;
+          return /apply_effect/.test(e) || "no way out offered: " + e;
+        } },
+
       // ---- mask path animation ------------------------------------
       // The suite used to prove a mask was animated by counting keyframes,
       // which is exactly the number that stays right when the animation is
@@ -1950,6 +2120,78 @@
         check: function (e) {
           return (/already animated/.test(e) && /atTime/.test(e)) ||
                  "message was: " + e;
+        } },
+
+      // ---- delete_mask (audit 0.11 item 4) -----------------------------
+      // The off-grid probe's expression points at the mask about to go;
+      // it is cleared first so the deletion cannot leave an expression
+      // error behind (AE flags those in the timeline, and older versions
+      // put up a dialog).
+      { name: "clear the off-grid probe before its mask goes",
+        tool: "set_expression",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Off Probe",
+                   property: "Position", expression: "" };
+        },
+        check: function (d) {
+          return d.expression === "cleared" || "expression: " + d.expression;
+        } },
+
+      { name: "delete_mask by name",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Mask Off",
+                   mask: "ST Off Path" };
+        },
+        check: function (d) {
+          if (d.layer !== "ST Mask Off") return "layer " + d.layer;
+          if (d.removed !== "ST Off Path") return "removed " + d.removed;
+          var rem = d.remainingMasks;
+          return (rem && rem.length === 0) ||
+                 "remainingMasks " + JSON.stringify(rem);
+        } },
+
+      { name: "…and a second delete finds nothing to delete",
+        tool: "delete_mask",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Mask Off" };
+        },
+        check: function (e) {
+          if (!/has no masks/.test(e)) return "message was: " + e;
+          return /add_mask/.test(e) || "no way out offered: " + e;
+        } },
+
+      { name: "delete_mask miss lists the masks that exist",
+        tool: "delete_mask",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Mask", mask: "ST Nope" };
+        },
+        check: function (e) {
+          if (!/Mask not found/.test(e)) return "message was: " + e;
+          return /ST Path/.test(e) || "the refusal lists no masks: " + e;
+        } },
+
+      { name: "a second mask, to delete by index",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Mask", name: "ST Path 2",
+                   shape: "rectangle" };
+        },
+        check: function (d) {
+          return d.mask === "ST Path 2" || "mask named " + d.mask;
+        } },
+
+      { name: "delete_mask by 1-based index leaves the animated one",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Mask", mask: 2 };
+        },
+        check: function (d) {
+          if (d.removed !== "ST Path 2") return "removed " + d.removed;
+          var rem = (d.remainingMasks || []).join(",");
+          return rem === "ST Path" || "remainingMasks " + rem;
         } },
 
       // --- the batch executor, at the scale it is actually used at.
@@ -3735,6 +3977,74 @@
                  "a refused write still moved something: " +
                  rows[0].data.value + "->" + rows[3].data.value + " / " +
                  rows[1].data.value + "->" + rows[4].data.value;
+        } },
+
+      // ---- remove_effect (audit 0.11 item 4) ---------------------------
+      // The two blurs above share one matchName. A matchName call takes
+      // the FIRST and says what else matched; the tie the search refused
+      // is then gone, which the bare-name read proves.
+      { name: "remove_effect by matchName takes the first of two, and says so",
+        tool: "remove_effect",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box",
+                   effect: "ADBE Gaussian Blur 2" };
+        },
+        check: function (d) {
+          if (d.layer !== "ST Cov Box") return "layer " + d.layer;
+          if (d.removed !== "Gaussian Blur") return "removed " + d.removed;
+          var also = (d.alsoMatched || []).join(",");
+          if (also !== "Gaussian Blur 2") return "alsoMatched " + also;
+          if (!/removed the first/.test(d.note || "")) {
+            return "the duplicate went unmentioned: " + d.note;
+          }
+          var rem = d.remainingEffects || [];
+          var hasFirst = false, hasSecond = false;
+          for (var i = 0; i < rem.length; i++) {
+            if (rem[i] === "Gaussian Blur") hasFirst = true;
+            if (rem[i] === "Gaussian Blur 2") hasSecond = true;
+          }
+          if (hasFirst) return "'Gaussian Blur' is still listed";
+          return hasSecond || "'Gaussian Blur 2' vanished too: " + rem;
+        } },
+
+      { name: "read-back: the tie is gone, so the bare name resolves",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box",
+                   property: "Blurriness" };
+        },
+        check: function (d) {
+          return d.resolvedPath === "Effects/Gaussian Blur 2/Blurriness" ||
+                 "resolved to " + d.resolvedPath;
+        } },
+
+      { name: "remove_effect by display name takes the survivor",
+        tool: "remove_effect",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box",
+                   effect: "Gaussian Blur 2" };
+        },
+        check: function (d) {
+          if (d.removed !== "Gaussian Blur 2") return "removed " + d.removed;
+          if (d.alsoMatched) return "alsoMatched " + d.alsoMatched;
+          var rem = d.remainingEffects || [];
+          for (var i = 0; i < rem.length; i++) {
+            if (/^Gaussian Blur/.test(rem[i])) {
+              return "a blur is still listed: " + rem[i];
+            }
+          }
+          return rem.length > 0 || "the controls vanished with it";
+        } },
+
+      { name: "remove_effect miss lists the effects that exist",
+        tool: "remove_effect",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box", effect: "Glow" };
+        },
+        check: function (e) {
+          if (!/No effect 'Glow'/.test(e)) return "message was: " + e;
+          return /ST Cov Amp/.test(e) || "the refusal lists no effects: " + e;
         } },
 
       { name: "list_effects filters by name OR category",

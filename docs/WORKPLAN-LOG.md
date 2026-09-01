@@ -9931,3 +9931,57 @@ got.
   was. The previous entry's "expected: only the stale bump" was wrong
   — WORKPLAN 1b now carries the recovery bullet (apply-and-verify, or
   document-and-drop; never silent drop).
+
+## 2026-09-01 (remote session, daytime batch) — trigger layer + missing verbs + MOGRT verifier, UNBUMPED
+
+- Built by three domain passes with fixed file ownership, each
+  adversarially reviewed, review fixes applied by the original builders
+  (their context) with the integrator owning the cross-file wiring.
+- Changed — trigger layer (roadmap 2): extension/js/tools.js gains a
+  "Plain-English requests" rules block (group/trim/attach/smoother/
+  pivot/crop/un-animate/make-it-pop/drifting/see-through/sync-to-music/
+  remove-effect/delete-mask/stacking) + the project-vs-comp "clean this
+  up" split (the one exception to ACT, DON'T ASK: deletions nobody
+  named) + the ON-SCREEN-vs-IN-THE-STACK "under" split (the review
+  caught the collision with the get_bounds rule); docs carry ONE phrase
+  each, rules carry the lists; "freeze it" removed (it means Freeze
+  Frame); expression-driven motion routed to set_expression "". Prompt
+  54,460 → 58,726 chars no-state (+7.8%; a first cut at +12.3% was
+  trimmed after the budget review — see roadmap item 13).
+  scripts/chat-probe.js: 15 appended steps (15-29), richer READ_COMP
+  (anchor, opacity, sourceRect, mask boxes+mode+inverted, ease flags,
+  expressions, matte, isPrecomp), a `prepare` hook, and a precomp-aware
+  sweep (rememberPrecomp + sweepScript) — the review found the
+  precompose step would have left a "Squares" comp + nine solids in the
+  owner's LIVE project every run. tests/test-chat-probe.js ≈310 checks.
+- Changed — missing verbs (roadmap 4): hostscript.jsx reorder_layers
+  RELATIVE mode {layer, above|below|toFront|toBack} (type-checked — the
+  review found {toFront:"Logo"} would have moved silently), NEW
+  remove_effect + delete_mask with grounded listings, AELL_findMask
+  accepts numeric strings; selftest 533 → 556 steps; stubs model
+  removal-invalidation and refuse self-moves; tests/test-for-each-layer
+  classifier carries an explicit reorder_layers exemption.
+- Changed — MOGRT verifier (harness plan 1, steps 1-3): NEW
+  extension/js/mogrt-read.js (zero-dep zip reader, windowed fd I/O —
+  never a whole-file read on the CEP thread — definitionOnly mode,
+  4 MB cap, readable:false for a file that could not be opened =
+  UNJUDGED, roster read with rosterVia/rosterProvisional, nested
+  groups, fallback requires a type key so a fonts list is never a
+  roster), scripts/lib/mogrt-read.js, index.html script tag,
+  tests/test-mogrt-read.js 105 checks (hand-built zips, independent
+  CRC, Python zipfile cross-check recorded). export_mogrt's receipt
+  gains controllerNames (read before the export); tools.js
+  callHostTool runs verifyMogrtResult on every ok export → zipValid
+  (true/false/null), controllersInFileCount, templateNameInFile,
+  verifyNote (count-only parity when names are unreadable or capped;
+  provisional roster reads are evidence, never verdicts).
+- Harness: full sweep green in the container except the two
+  Windows-only suites; docs/CAPABILITIES.md regenerated (79 tools).
+- Notes: UNBUMPED — WORKPLAN 1c is tonight's verification, riding the
+  same patch bump as 1b. New for the real-AE pass: which value
+  remove_keyframes leaves behind (1c item 8). New roadmap item 13:
+  the context budget was already over the default window before this
+  batch (main.js's histBudget floor is negative at these prompt
+  sizes) — a remote fix, stub-testable. Left for a later pass: the
+  hostscript comment about the reorder helper's placement is now
+  redundant with the classifier exemption (harmless).

@@ -64,10 +64,21 @@ function square(over) {
     position: [100 * uid, 540, 0], startTime: 0, inPoint: 0,
     solidColor: [1, 0, 0], effectNames: [], effectColors: [],
     scale: [100, 100, 100], rotation: 0, isText: false, isShape: false,
-    isNull: false, isSolid: true
+    isNull: false, isSolid: true,
+    // What READ_COMP grew for the trigger-layer steps (14 onward). A
+    // 200x200 solid: anchor in its middle, fully opaque, no masks, no
+    // expressions, linear keys if any.
+    matteLayer: null, isPrecomp: false, anchorPoint: [100, 100, 0],
+    opacity: 100, sourceRect: { left: 0, top: 0, width: 200, height: 200 },
+    layerWidth: 200, layerHeight: 200, maskBoxes: [], maskModes: [],
+    maskInverted: [], opacityKeyEased: [], expressions: {}, textAnimators: 0
   };
   for (const k in over) row[k] = over[k];
   return row;
+}
+/** Any non-solid layer (text, shape, null, precomp) in the same shape. */
+function layer(over) {
+  return square(Object.assign({ isSolid: false, solidColor: null }, over));
 }
 function comp(layers) {
   return { found: true, name: "Probe Room", width: 1920, height: 1080,
@@ -211,6 +222,10 @@ function FootageItem() {}
 function TextLayer() {}
 function ShapeLayer() {}
 const PropertyValueType = { COLOR: 6618, OneD: 6417 };
+// AE's enum values (KeyframeInterpolationType.LINEAR is 6612, BEZIER
+// 6613, HOLD 6614); the stub only needs them to be distinct.
+const KeyframeInterpolationType = { LINEAR: 6612, BEZIER: 6613, HOLD: 6614 };
+const MaskMode = { NONE: 6412, ADD: 6413, SUBTRACT: 6414, INTERSECT: 6415 };
 
 function propGroup(map) {
   return {
@@ -230,14 +245,31 @@ function buildLayer(spec, index) {
     name: spec.name, index: index,
     parent: spec.parent ? { name: spec.parent } : null,
     trackMatteType: spec.matte || 0,
+    // AE 23+: the matte is a layer reference, not just a type.
+    trackMatteLayer: spec.matteLayer ? { name: spec.matteLayer } : null,
     inPoint: spec.inPoint || 0, outPoint: spec.outPoint || 6,
     startTime: spec.startTime || 0,
     nullLayer: !!spec.isNull,
-    source: solid
-      ? { mainSource: Object.assign(new SolidSource(),
-                                    { color: solid.slice(0) }) }
-      : null
+    width: spec.width || 100, height: spec.height || 100,
+    source: spec.precomp
+      ? Object.assign(new CompItem(), { name: spec.precomp })
+      : solid
+        ? { mainSource: Object.assign(new SolidSource(),
+                                      { color: solid.slice(0) }) }
+        : null
   };
+  L.sourceRectAtTime = function () {
+    const r = spec.rect || [0, 0, L.width, L.height];
+    return { left: r[0], top: r[1], width: r[2], height: r[3] };
+  };
+  // An expression lives on the property with its enabled switch; a
+  // property without one reads as "" / false exactly as in AE.
+  const expressions = spec.expressions || {};
+  function withExpr(key, prop) {
+    prop.expression = expressions[key] || "";
+    prop.expressionEnabled = !!expressions[key];
+    return prop;
+  }
   const effectList = (spec.effects || []).map(function (fx) {
     const params = (fx.colors || []).map(function (c) {
       return { propertyValueType: PropertyValueType.COLOR,
@@ -246,21 +278,57 @@ function buildLayer(spec, index) {
     return { name: fx.name, numProperties: params.length,
              property(i) { return params[i - 1]; } };
   });
+  const eased = spec.eased || [];
+  function interp(k) {
+    return eased[k - 1] ? KeyframeInterpolationType.BEZIER
+                        : KeyframeInterpolationType.LINEAR;
+  }
   const transform = propGroup({
-    "ADBE Position": { value: (spec.pos || [0, 0, 0]).slice(0) },
-    "ADBE Scale": { value: (spec.scale || [100, 100, 100]).slice(0) },
-    "ADBE Rotate Z": { value: spec.rot || 0 },
-    "ADBE Opacity": { numKeys: spec.keys || 0,
-                      keyTime(k) { return (spec.keyTimes || [])[k - 1]; } }
+    "ADBE Position": withExpr("position",
+      { value: (spec.pos || [0, 0, 0]).slice(0) }),
+    "ADBE Scale": withExpr("scale",
+      { value: (spec.scale || [100, 100, 100]).slice(0) }),
+    "ADBE Rotate Z": withExpr("rotation", { value: spec.rot || 0 }),
+    "ADBE Anchor Point": { value: (spec.anchor || [0, 0, 0]).slice(0) },
+    "ADBE Opacity": withExpr("opacity", {
+      value: spec.opacity === undefined ? 100 : spec.opacity,
+      numKeys: spec.keys || 0,
+      keyTime(k) { return (spec.keyTimes || [])[k - 1]; },
+      keyInInterpolationType: interp,
+      keyOutInterpolationType: interp })
   });
+  // Masks as rectangles [x, y, w, h] in layer space; a bare `masks`
+  // count (the older specs) gets full-layer rectangles.
+  const maskRects = (spec.maskRects || []).slice(0);
+  const maskCount = spec.masks !== undefined ? spec.masks : maskRects.length;
+  while (maskRects.length < maskCount) {
+    maskRects.push([0, 0, L.width, L.height]);
+  }
   const groups = {
     "ADBE Transform Group": transform,
     "ADBE Effect Parade": { numProperties: effectList.length,
                             property(i) { return effectList[i - 1]; } },
-    "ADBE Mask Parade": { numProperties: spec.masks || 0 }
+    "ADBE Mask Parade": {
+      numProperties: maskCount,
+      property(i) {
+        const r = maskRects[i - 1];
+        const mode = (spec.maskModes || [])[i - 1] || "add";
+        return {
+          maskMode: mode === "subtract" ? MaskMode.SUBTRACT
+                  : mode === "add" ? MaskMode.ADD : MaskMode.INTERSECT,
+          inverted: !!(spec.maskInverted || [])[i - 1],
+          property(name) {
+            if (name !== "ADBE Mask Shape") throw new Error("no " + name);
+            return { value: { vertices: [[r[0], r[1]], [r[0] + r[2], r[1]],
+              [r[0] + r[2], r[1] + r[3]], [r[0], r[1] + r[3]]] } };
+          } };
+      }
+    }
   };
   if (spec.text !== undefined) {
     groups["Source Text"] = { value: { text: spec.text } };
+    groups["ADBE Text Properties"] = propGroup({
+      "ADBE Text Animators": { numProperties: spec.animators || 0 } });
   }
   L.property = function (name) {
     if (!(name in groups)) throw new Error("no group " + name);
@@ -305,17 +373,50 @@ function runJsx(body) {
 const BASE = [
   { name: "Red Square 1", pos: [660, 400, 0], solid: [1, 0, 0] },
   { name: "Red Square 2", pos: [960, 400, 0], solid: [1, 0, 0],
-    parent: "Rig", masks: 1, effects: [{ name: "Fill",
-      colors: [[0, 0, 1]] }] },
-  { name: "HELLO", pos: [960, 200, 0], isText: true, text: "HELLO" }
+    parent: "Rig", effects: [{ name: "Fill", colors: [[0, 0, 1]] }],
+    // The trigger-layer fields, all on one layer: a half-height mask, a
+    // two-key fade with the first pair eased, a wiggle on position, an
+    // anchor in the middle, HELLO as its matte.
+    width: 200, height: 200, maskRects: [[0, 0, 200, 100]],
+    maskModes: ["subtract"], maskInverted: [true],
+    keys: 2, keyTimes: [0, 1], eased: [true, false],
+    anchor: [100, 100, 0], opacity: 80,
+    expressions: { position: "wiggle(2, 30)" }, matteLayer: "HELLO" },
+  { name: "HELLO", pos: [960, 200, 0], isText: true, text: "HELLO",
+    rect: [2, -86, 350, 90], animators: 2 },
+  { name: "Squares", pos: [960, 540, 0], precomp: "Squares" }
 ];
 
 setLayers(BASE);
 
 {
   const state = runJsx(READ_COMP);
-  assert(state.found === true && state.layers.length === 3,
+  assert(state.found === true && state.layers.length === 4,
          "READ_COMP walks the comp");
+  // The fields the trigger-layer verdicts read, pinned against the stub
+  // so a typo in the ExtendScript is caught here and not ten minutes
+  // into a field run.
+  const sq2 = state.layers[1];
+  assert(JSON.stringify(sq2.maskBoxes) === "[[0,0,200,100]]" &&
+         sq2.layerWidth === 200 && sq2.layerHeight === 200,
+         "READ_COMP reports mask bounding boxes and the layer size");
+  assert(JSON.stringify(sq2.maskModes) === '["subtract"]' &&
+         JSON.stringify(sq2.maskInverted) === "[true]",
+         "READ_COMP reports each mask's mode and inverted switch");
+  assert(JSON.stringify(sq2.opacityKeyEased) === "[true,false]",
+         "READ_COMP reports which opacity keys are eased (BEZIER)");
+  assert(sq2.expressions.position === "wiggle(2, 30)" &&
+         !("scale" in sq2.expressions),
+         "READ_COMP reports enabled transform expressions only");
+  assert(JSON.stringify(sq2.anchorPoint) === "[100,100,0]" &&
+         sq2.opacity === 80 && sq2.matteLayer === "HELLO",
+         "READ_COMP reports anchor point, opacity and the matte layer");
+  assert(state.layers[2].sourceRect.left === 2 &&
+         state.layers[2].sourceRect.width === 350 &&
+         state.layers[2].textAnimators === 2,
+         "READ_COMP reports a text layer's source rect and animator count");
+  assert(state.layers[3].isPrecomp === true && state.layers[0].isPrecomp === false,
+         "READ_COMP tells a precomp layer from a solid");
   assert(JSON.stringify(state.layers[0].solidColor) === "[1,0,0]",
          "READ_COMP reports a solid's source colour (the recolour check " +
          "has nothing to read without it)");
@@ -817,7 +918,7 @@ const toolsSrc = fs2.readFileSync(
 const MODULE_FILE = {
   Comfy: "comfy.js", Setup: "setup.js", Llama: "llama.js",
   Settings: "settings.js", Tiers: "tiers.js", Tools: "tools.js",
-  Whisper: "whisper.js", Ffmpeg: "ffmpeg.js"
+  Whisper: "whisper.js", Ffmpeg: "ffmpeg.js", MogrtRead: "mogrt-read.js"
 };
 const needed = new Set(
   (toolsSrc.match(/global\.([A-Z][A-Za-z]+)/g) || [])
@@ -1041,6 +1142,921 @@ const oldHost = function () {
                          script: "AELLJSON.stringify({n: 1})" });
   assert(w.loads === 1, "the first call of a run always loads the host");
 }
+
+// ------------------------------------ 5. the trigger-layer steps (14+)
+//
+// AUDIT-0.11 part 1.2. Each of these verdicts has to fail when the NEAREST
+// WRONG tool ran — a fade faked with opacity keys instead of a retime, an
+// expression instead of a parent, a sort instead of a relative restack,
+// a mask instead of a matte — so every step is pinned with the state the
+// right tool leaves AND the state the wrong one leaves.
+
+/* The Probe Room as the fourteen earlier steps leave it. Each new layer
+ * lands on TOP of the stack, so the order is the reverse of creation:
+ * Beta (step 11) at 1, the Rig null (step 8) at 2, the White Ellipse
+ * (step 6) at 3, HELLO (step 4) at 4, the nine blue squares (step 2)
+ * below — parented to Rig with a linear two-key fade; HELLO with its
+ * oval mask and a corner anchor. */
+function room() {
+  uid = 0;
+  const sq = nine({ solidColor: [0, 0.2, 1], parent: "Rig", opacityKeys: 2,
+                    opacityKeyTimes: [0, 1], opacityKeyEased: [false, false] });
+  const beta = square({ name: "Beta", solidColor: [1, 0.5, 0],
+    position: [960, 540, 0], anchorPoint: [50, 50, 0], layerWidth: 100,
+    layerHeight: 100, sourceRect: { left: 0, top: 0, width: 100, height: 100 } });
+  const hello = layer({ name: "HELLO", isText: true, text: "HELLO", masks: 1,
+    maskBoxes: [[-20, -100, 400, 130]], maskModes: ["add"],
+    maskInverted: [false], anchorPoint: [0, 0, 0], position: [800, 200, 0],
+    sourceRect: { left: 2, top: -86, width: 350, height: 90 },
+    layerWidth: 1920, layerHeight: 1080 });
+  const ellipse = layer({ name: "White Ellipse", isShape: true });
+  const rig = layer({ name: "Rig", isNull: true, rotation: 15 });
+  const layers = [beta, rig, ellipse, hello].concat(sq);
+  layers.forEach((l, i) => { l.index = i + 1; });
+  return comp(layers);
+}
+function without(state, name) {
+  return after(state, c => { c.layers = c.layers.filter(l => l.name !== name); });
+}
+function after(before, fn) {
+  const c = JSON.parse(JSON.stringify(before));
+  fn(c);
+  c.layers.forEach((l, i) => { l.index = i + 1; });
+  return c;
+}
+function find(state, name) {
+  return state.layers.filter(l => l.name === name)[0];
+}
+function everySquare(state, fn) {
+  state.layers.filter(l => /^Red Square/.test(l.name)).forEach(fn);
+}
+
+// --- push a layer back on the timeline --------------------------------
+{
+  const s = stepByTitle("push a layer back on the timeline");
+  const before = room();
+  const slid = after(before, c => { find(c, "Beta").inPoint = 2;
+                                    find(c, "Beta").startTime = 2; });
+  assert(s.check(slid, { before }) === null,
+         "Beta sliding to 2s (startTime) is a pass");
+  const trimmed = after(before, c => { find(c, "Beta").inPoint = 2; });
+  assert(s.check(trimmed, { before }) === null,
+         "and so is trimming its in point to 2s");
+  assert(s.check(slid, { before: null }) === null,
+         "with no before-state it still judges the timing");
+  {
+    const v = s.check(after(before, () => {}), { before });
+    assert(v && /starts at 0\.00s/.test(v),
+           "an untouched Beta fails and says where it starts: " + v);
+  }
+  {
+    const faked = after(before, c => { find(c, "Beta").opacityKeys = 2; });
+    const v = s.check(faked, { before });
+    assert(v && /faked with a fade/.test(v),
+           "a fade-in standing in for a retime fails: " + v);
+  }
+  {
+    const doubled = after(slid, c => { c.layers.push(square({ name: "Beta 2",
+      inPoint: 2 })); });
+    const v = s.check(doubled, { before });
+    assert(v && /layer count/.test(v),
+           "retiming that duplicated the layer fails: " + v);
+  }
+  {
+    const v = s.check(after(before, c => { c.layers.shift(); }), { before });
+    assert(v && /Beta layer is gone/.test(v), "no Beta at all fails");
+  }
+}
+
+// --- attach a layer to a null -----------------------------------------
+{
+  const s = stepByTitle("attach a layer to a null");
+  const before = room();
+  assert(s.check(after(before, c => { find(c, "Beta").parent = "Rig"; })) === null,
+         "Beta parented to Rig is a pass");
+  {
+    const v = s.check(before);
+    assert(v && /parent is nothing, wanted Rig/.test(v),
+           "an unparented Beta fails: " + v);
+  }
+  {
+    // link_property leaves an expression, not a parent — the nearest
+    // wrong tool, and a naive "did Beta change?" check would pass it.
+    const linked = after(before, c => { find(c, "Beta").expressions =
+      { position: 'thisComp.layer("Rig").transform.position' }; });
+    const v = s.check(linked);
+    assert(v && /linked with an expression/.test(v),
+           "an expression link instead of a parent fails: " + v);
+  }
+  {
+    const wrong = after(before, c => { find(c, "Beta").parent = "GRID CTRL"; });
+    const v = s.check(wrong);
+    assert(v && /parent is GRID CTRL/.test(v),
+           "the wrong parent fails and is named: " + v);
+  }
+  {
+    const v = s.check(without(before, "Rig"));
+    assert(v && /no Rig null/.test(v), "no Rig null is a premise failure");
+  }
+}
+
+// --- smooth a mechanical fade -----------------------------------------
+{
+  const s = stepByTitle("smooth a mechanical fade");
+  const before = room();
+  const eased = after(before, c => everySquare(c, l => {
+    l.opacityKeyEased = [true, true]; }));
+  assert(s.check(eased, { before }) === null,
+         "every square's fade eased is a pass");
+  const oneSide = after(before, c => everySquare(c, l => {
+    l.opacityKeyEased = [true, false]; }));
+  assert(s.check(oneSide, { before }) === null,
+         "easing one key of the pair still counts (AE marks the pair)");
+  {
+    const v = s.check(after(before, () => {}), { before });
+    assert(v && /9 of 9 squares still have linear/.test(v),
+           "untouched linear keys fail: " + v);
+  }
+  {
+    const eight = after(eased, c => { find(c, "Red Square 5").opacityKeyEased =
+      [false, false]; });
+    const v = s.check(eight, { before });
+    assert(v && /1 of 9/.test(v), "eight of nine eased is a fail: " + v);
+  }
+  {
+    const expr = after(before, c => everySquare(c, l => {
+      l.expressions = { opacity: "ease(time, 0, 1, 0, 100)" }; }));
+    const v = s.check(expr, { before });
+    assert(v && /expression was put on opacity/.test(v),
+           "an opacity expression instead of eased keys fails: " + v);
+  }
+  {
+    const rekeyed = after(before, c => everySquare(c, l => {
+      l.opacityKeys = 4; l.opacityKeyEased = [false, false, false, false]; }));
+    const v = s.check(rekeyed, { before });
+    assert(v && /extra keyframes were added/.test(v),
+           "more linear keys is not smoother: " + v);
+  }
+  {
+    const flat = after(before, c => everySquare(c, l => {
+      l.opacityKeys = 0; l.opacityKeyEased = []; }));
+    const v = s.check(flat, { before: flat });
+    assert(v && /no square has opacity keyframes/.test(v),
+           "no fade to ease is a premise failure: " + v);
+  }
+}
+
+// --- fix a text layer's pivot -----------------------------------------
+{
+  const s = stepByTitle("fix a text layer's pivot");
+  const before = room();
+  // Rect left 2, top -86, 350x90 -> centre [177, -41]; position moves
+  // by the same amount so the text does not jump.
+  const centred = after(before, c => { const t = find(c, "HELLO");
+    t.anchorPoint = [177, -41, 0]; t.position = [977, 159, 0]; });
+  assert(s.check(centred, { before }) === null,
+         "anchor at the text's centre with position compensated is a pass");
+  assert(s.check(centred, { before: null }) === null,
+         "with no before-state it still judges the anchor");
+  {
+    const v = s.check(after(before, () => {}), { before });
+    assert(v && /still the default corner/.test(v),
+           "the untouched corner anchor fails: " + v);
+  }
+  {
+    const guessed = after(before, c => { find(c, "HELLO").anchorPoint =
+      [960, 540, 0]; });
+    const v = s.check(guessed, { before });
+    assert(v && /centre is \[177, -41\]/.test(v),
+           "a comp-centre guess in layer space fails: " + v);
+  }
+  {
+    const jumped = after(before, c => { find(c, "HELLO").anchorPoint =
+      [177, -41, 0]; });
+    const v = s.check(jumped, { before });
+    assert(v && /jumped by \[-177, 41\]/.test(v),
+           "a raw set_transform anchor that moves the text fails: " + v);
+  }
+  {
+    const v = s.check(without(before, "HELLO"), { before });
+    assert(v && /HELLO layer is gone/.test(v), "no text layer fails");
+  }
+}
+
+// --- hide half a layer with a mask ------------------------------------
+{
+  const s = stepByTitle("hide half a layer with a mask");
+  const before = room();
+  const masked = after(before, c => { const b = find(c, "Beta");
+    b.masks = 1; b.maskBoxes = [[0, 0, 100, 50]]; b.maskModes = ["add"];
+    b.maskInverted = [false]; });
+  assert(s.check(masked, { before }) === null,
+         "a rectangle over the top half of Beta is a pass");
+  {
+    const cut = after(before, c => { const b = find(c, "Beta");
+      b.masks = 1; b.maskBoxes = [[0, 50, 100, 50]];
+      b.maskModes = ["subtract"]; b.maskInverted = [false]; });
+    assert(s.check(cut, { before }) === null,
+           "and so is a SUBTRACT rectangle over the bottom half");
+    const inverted = after(cut, c => { const b = find(c, "Beta");
+      b.maskModes = ["add"]; b.maskInverted = [true]; });
+    assert(s.check(inverted, { before }) === null,
+           "or an inverted add mask over the bottom half");
+    const wrongHalf = after(cut, c => { find(c, "Beta").maskModes = ["add"]; });
+    const v = s.check(wrongHalf, { before });
+    assert(v && /not a band across the top half/.test(v),
+           "an add mask over the BOTTOM half hides the top and fails: " + v);
+  }
+  {
+    const dot = after(before, c => { const b = find(c, "Beta");
+      b.masks = 1; b.maskBoxes = [[40, 40, 20, 20]]; b.maskModes = ["add"]; });
+    const v = s.check(dot, { before });
+    assert(v && /not a band across the top half/.test(v),
+           "a small mask that hides most of the layer fails: " + v);
+    const sliver = after(before, c => { const b = find(c, "Beta");
+      b.masks = 1; b.maskBoxes = [[0, 0, 100, 10]]; b.maskModes = ["add"]; });
+    const v2 = s.check(sliver, { before });
+    assert(v2 && /not a band across the top half/.test(v2),
+           "and so does a full-width sliver that is not half the height");
+  }
+  {
+    const v = s.check(after(before, () => {}), { before });
+    assert(v && /same as before/.test(v), "no new mask fails: " + v);
+  }
+  {
+    const squashed = after(before, c => { find(c, "Beta").scale =
+      [100, 50, 100]; });
+    const v = s.check(squashed, { before });
+    assert(v && /squashed/.test(v),
+           "halving the scale instead of masking fails: " + v);
+  }
+  {
+    const whole = after(before, c => { const b = find(c, "Beta");
+      b.masks = 1; b.maskBoxes = [[0, 0, 100, 100]]; });
+    const v = s.check(whole, { before });
+    assert(v && /covers the whole 100x100 layer/.test(v),
+           "a mask the size of the layer hides nothing: " + v);
+  }
+  {
+    // A second mask on a layer that already had a full one: only the
+    // NEW box is judged.
+    const had = after(before, c => { const b = find(c, "Beta");
+      b.masks = 1; b.maskBoxes = [[0, 0, 100, 100]]; b.maskModes = ["add"];
+      b.maskInverted = [false]; });
+    const added = after(had, c => { const b = find(c, "Beta");
+      b.masks = 2; b.maskBoxes.push([0, 0, 100, 50]); b.maskModes.push("add");
+      b.maskInverted.push(false); });
+    assert(s.check(added, { before: had }) === null,
+           "a new half-layer mask beside an old full one is a pass");
+  }
+}
+
+// --- take a mask off again --------------------------------------------
+{
+  const s = stepByTitle("take a mask off again");
+  const before = room();
+  const bare = after(before, c => { const t = find(c, "HELLO");
+    t.masks = 0; t.maskBoxes = []; });
+  assert(s.check(bare, { before }) === null, "HELLO's mask gone is a pass");
+  assert(s.check(bare, { before: null }) === null,
+         "with no before-state, no masks is still a pass");
+  {
+    const v = s.check(after(before, () => {}), { before });
+    assert(v && /still has 1 mask\(s\), same as before/.test(v),
+           "set_mask {mode: none} leaves the mask and fails: " + v);
+  }
+  {
+    const v = s.check(before, { before: null });
+    assert(v && /still has 1 mask/.test(v), "and fails without a before too");
+  }
+  {
+    const v = s.check(bare, { before: bare });
+    assert(v && /nothing to prove/.test(v),
+           "a HELLO that never had a mask is a premise failure: " + v);
+  }
+  {
+    const v = s.check(without(before, "HELLO"), { before });
+    assert(v && /went with the whole layer/.test(v),
+           "deleting the layer to lose the mask fails: " + v);
+  }
+}
+
+// --- un-animate the squares -------------------------------------------
+{
+  const s = stepByTitle("un-animate the squares");
+  const before = room();
+  const still = after(before, c => everySquare(c, l => {
+    l.opacityKeys = 0; l.opacityKeyTimes = []; l.opacityKeyEased = []; }));
+  assert(s.check(still, { before }) === null,
+         "every square's opacity keys removed is a pass");
+  {
+    const v = s.check(after(before, () => {}), { before });
+    assert(v && /9 of 9 squares still carry opacity keyframes/.test(v),
+           "untouched keys fail: " + v);
+  }
+  {
+    const flat = after(before, c => everySquare(c, l => {
+      l.opacityKeyTimes = [0, 1]; }));
+    const v = s.check(flat, { before });
+    assert(v && /keyframing 100 to 100 is not un-animating/.test(v),
+           "re-keying to a flat 100 still leaves keys and fails: " + v);
+  }
+  {
+    // Which value survives the keys is UNMEASURED in AE, so a dark
+    // square is reported (say "info") for the real-AE pass, not failed.
+    const dark = after(still, c => everySquare(c, l => { l.opacity = 0; }));
+    assert(s.check(dark, { before }) === null,
+           "keys gone but the squares dark is reported, not failed " +
+           "(the surviving value is for the real-AE pass to measure)");
+  }
+  {
+    const eight = after(still, c => { find(c, "Red Square 3").opacityKeys = 2; });
+    const v = s.check(eight, { before });
+    assert(v && /1 of 9/.test(v), "one square still animated fails: " + v);
+  }
+  {
+    const rebuilt = without(without(still, "Red Square 4"), "Red Square 5");
+    const v = s.check(rebuilt, { before });
+    assert(v && /should not add or remove layers/.test(v),
+           "un-animating by deleting squares fails: " + v);
+  }
+}
+
+// --- give a layer a finished look -------------------------------------
+{
+  const s = stepByTitle("give a layer a finished look");
+  const before = room();
+  const preset = (rows) => ({ tool: "apply_preset", ok: true,
+    args: { preset: "Text/Animate In/Fade Up Characters", layer: "HELLO" },
+    data: { preset: "Fade Up Characters", category: "Text/Animate In",
+            applied: rows } });
+  const glowed = after(before, c => { const t = find(c, "HELLO");
+    t.effects = 1; t.effectNames = ["Glow"]; });
+  assert(s.check(glowed, { before, tools: [
+    preset([{ layer: "HELLO", type: "text", effectsAdded: ["Glow"] }]) ] }) === null,
+    "a preset that landed on HELLO is a pass");
+  assert(s.check(after(before, c => { find(c, "HELLO").textAnimators = 1; }),
+    { before, tools: [preset([{ layer: "HELLO", type: "text",
+                                keysAndExpressionsAdded: 15 }])] }) === null,
+    "and so is one that added only animators and keys");
+  {
+    const v = s.check(glowed, { before, tools: [
+      { tool: "apply_effect", ok: true, args: { layer: "HELLO", effect: "Glow" } },
+      { tool: "apply_effect", ok: true, args: { layer: "HELLO", effect: "Drop Shadow" } }] });
+    assert(v && /never reached apply_preset/.test(v) && /apply_effect/.test(v),
+           "an improvised Glow + Drop Shadow fails and is named: " + v);
+  }
+  {
+    const v = s.check(before, { before, tools: [{ tool: "apply_preset",
+      ok: false, error: "No preset named 'Cinematic'" }] });
+    assert(v && /failed 1 time/.test(v) && /Cinematic/.test(v),
+           "a preset AE could not find fails with its error: " + v);
+  }
+  {
+    const v = s.check(before, { before, tools: [
+      preset([{ layer: "Beta", type: "solid", effectsAdded: ["Glow"] }]) ] });
+    assert(v && /landed on Beta, not on HELLO/.test(v),
+           "a preset that dressed the wrong layer fails: " + v);
+  }
+  {
+    const v = s.check(before, { before, tools: [
+      preset([{ layer: "HELLO", type: "text", effectsAdded: ["Glow"] }]) ] });
+    assert(v && /still has 0 effect/.test(v),
+           "a receipt the comp does not bear out fails: " + v);
+  }
+}
+
+// --- keep a layer drifting --------------------------------------------
+{
+  const s = stepByTitle("keep a layer drifting");
+  const before = room();
+  const wiggled = after(before, c => { find(c, "Beta").expressions =
+    { position: "wiggle(0.5, 20)" }; });
+  const viaPreset = [{ tool: "apply_expression_preset", ok: true,
+    args: { layer: "Beta", property: "position", preset: "wiggle" } }];
+  assert(s.check(wiggled, { before, tools: viaPreset }) === null,
+         "a wiggle on Beta's position via the preset is a pass");
+  {
+    const v = s.check(before, { before, tools: viaPreset });
+    assert(v && /no wiggle expression/.test(v),
+           "Beta with no expression fails: " + v);
+  }
+  {
+    const keyed = after(before, c => { find(c, "Beta").opacityKeys = 6; });
+    const v = s.check(keyed, { before, tools: [{ tool: "set_keyframes", ok: true }] });
+    assert(v && /keyframed instead/.test(v),
+           "a hand-keyed bob instead of a wiggle fails: " + v);
+  }
+  {
+    const v = s.check(wiggled, { before, tools: [{ tool: "set_expression",
+      ok: true, args: { layer: "Beta", property: "position",
+                        expression: "wiggle(0.5, 20)" } }] });
+    assert(v && /hand-written code/.test(v),
+           "the same wiggle via set_expression fails: " + v);
+  }
+  {
+    const v = s.check(wiggled, { before, tools: [] });
+    assert(v && /without apply_expression_preset/.test(v),
+           "a wiggle the tools did not put there fails: " + v);
+  }
+}
+
+// --- sync a layer to the music ----------------------------------------
+{
+  const s = stepByTitle("sync a layer to the music");
+  const before = room();
+  // The refusal hostscript hands back for a comp with no audio layer.
+  const NO_AUDIO = "No layer in 'Probe Room' has audio, and AE's converter " +
+    "would silently do nothing. Layers here: Beta, HELLO, White Ellipse. " +
+    "Import an audio or video file with import_file and add it to the " +
+    "comp first.";
+  const refused = { tool: "audio_to_keyframes", ok: false, error: NO_AUDIO };
+  assert(s.check(before, { before, tools: [refused],
+    replies: ["Probe Room has no audio layer to sync to — import a music " +
+              "track first and I can drive Beta from it."] }) === null,
+    "a grounded refusal relayed to the user is the pass for a silent comp");
+  {
+    const v = s.check(before, { before, tools: [{ tool: "apply_expression_preset",
+      ok: true }], replies: ["Beta now bounces!"] });
+    assert(v && /never reached audio_to_keyframes/.test(v),
+           "a wiggle passed off as a beat fails: " + v);
+  }
+  {
+    const v = s.check(before, { before, tools: [{ tool: "audio_to_keyframes",
+      ok: false, error: "'range' must be 'comp' or 'workArea'." }],
+      replies: ["Could not do it."] });
+    assert(v && /some other reason/.test(v),
+           "a refusal about something else proves nothing: " + v);
+  }
+  {
+    const v = s.check(before, { before, tools: [refused,
+      { tool: "apply_expression_preset", ok: true }],
+      replies: ["There's no audio, so I gave it a wiggle instead."] });
+    assert(v && /faked a beat with apply_expression_preset/.test(v),
+           "faking the beat after being told there is no audio fails: " + v);
+  }
+  {
+    const v = s.check(before, { before, tools: [refused], replies: [] });
+    assert(v && /never reached the user/.test(v), "a swallowed refusal fails");
+  }
+  {
+    const v = s.check(before, { before, tools: [refused],
+      replies: ["Beta now throbs in time with the music!"] });
+    assert(v && /does not tell the user/.test(v),
+           "claiming success over a refusal fails: " + v);
+  }
+  // The other branch: an audio layer in the rig, the chain must finish.
+  const converted = { tool: "audio_to_keyframes", ok: true,
+    data: { layer: "Audio Amplitude" } };
+  const linked = { tool: "link_property", ok: true,
+    args: { layer: "Beta", property: "scale", controlLayer: "Audio Amplitude",
+            controlEffect: "Both Channels", scale: 2 } };
+  const driven = after(before, c => { find(c, "Beta").expressions = { scale:
+    'var c = thisComp.layer("Audio Amplitude").effect("Both Channels")(1); ' +
+    '[value[0] + c * 2, value[1] + c * 2]' }; });
+  assert(s.check(driven, { before, tools: [converted, linked] }) === null,
+         "converted, linked and driving Beta's scale is a pass");
+  {
+    const v = s.check(before, { before, tools: [converted] });
+    assert(v && /model stopped/.test(v),
+           "converting and stopping fails — the follow-up is the point: " + v);
+  }
+  {
+    const v = s.check(before, { before, tools: [converted, linked] });
+    assert(v && /reads the amplitude null/.test(v),
+           "a link receipt with no expression on Beta fails: " + v);
+  }
+}
+
+// --- tuck one layer under another -------------------------------------
+{
+  const s = stepByTitle("tuck one layer under another");
+  const before = room();   // Beta 1, Rig 2, ellipse 3, HELLO 4, squares
+  const tucked = after(before, c => { const b = c.layers.shift();
+    c.layers.splice(c.layers.findIndex(l => l.name === "HELLO") + 1, 0, b); });
+  assert(find(tucked, "HELLO").index === 3 && find(tucked, "Beta").index === 4,
+         "(fixture) Beta now sits directly under HELLO");
+  assert(s.check(tucked, { before }) === null,
+         "Beta directly under HELLO with nothing else moved is a pass");
+  assert(s.check(tucked, { before: null }) === null,
+         "with no before-state adjacency alone is judged");
+  {
+    const v = s.check(after(before, () => {}), { before });
+    assert(v && /still above the text/.test(v), "untouched fails: " + v);
+  }
+  {
+    // The SORT mode: Beta lands under HELLO by coincidence of start
+    // times, and every other layer moved too.
+    const sorted = after(before, c => { c.layers.reverse();
+      const b = c.layers.splice(c.layers.length - 1, 1)[0];
+      const h = c.layers.findIndex(l => l.name === "HELLO");
+      c.layers.splice(h + 1, 0, b); });
+    assert(find(sorted, "Beta").index === find(sorted, "HELLO").index + 1,
+           "(fixture) the sorted comp also has Beta right under HELLO");
+    const v = s.check(sorted, { before });
+    assert(v && /a SORT ran/.test(v),
+           "a sort that happens to put Beta under HELLO still fails: " + v);
+  }
+  {
+    const low = after(before, c => { c.layers.push(c.layers.shift()); });
+    const v = s.check(low, { before });
+    assert(v && /not directly under it/.test(v),
+           "sent to the back instead of under the text fails: " + v);
+  }
+  {
+    const v = s.check(tucked, { before: tucked });
+    assert(v && /proved nothing/.test(v),
+           "already under HELLO before the sentence is a premise failure");
+  }
+  {
+    const dup = after(tucked, c => { c.layers.push(square({ name: "Beta 2" })); });
+    const v = s.check(dup, { before });
+    assert(v && /should not add or remove/.test(v),
+           "restacking that added a layer fails: " + v);
+  }
+}
+
+// --- take an effect off a layer ---------------------------------------
+{
+  const s = stepByTitle("take an effect off a layer");
+  assert(typeof s.prepare === "string" && /AELL_call\("apply_effect"/.test(s.prepare),
+         "the step plants its blur through AELL_call before the sentence");
+  {
+    // The fixture string must be valid ExtendScript that hands the host
+    // the args the verdict relies on.
+    let got = null;
+    const AELL_call = (tool, json) => { got = { tool, args: JSON.parse(json) }; };
+    // eslint-disable-next-line no-eval
+    eval(s.prepare);
+    assert(got && got.tool === "apply_effect" && got.args.layer === "Beta" &&
+           /Gaussian Blur/.test(got.args.effect) && got.args.comp === "Probe Room",
+           "and the fixture names the comp, Beta and a Gaussian Blur");
+  }
+  const before = after(room(), c => { const b = find(c, "Beta");
+    b.effects = 1; b.effectNames = ["Gaussian Blur"]; });
+  const clean = after(before, c => { const b = find(c, "Beta");
+    b.effects = 0; b.effectNames = []; });
+  assert(s.check(clean, { before }) === null, "the blur gone is a pass");
+  {
+    const v = s.check(after(before, () => {}), { before });
+    assert(v && /still carries Gaussian Blur/.test(v),
+           "Blurriness 0 leaves the effect and fails: " + v);
+  }
+  {
+    const v = s.check(after(before, c => { c.layers.shift(); }), { before });
+    assert(v && /deleting the layer is not removing/.test(v),
+           "deleting Beta to lose the blur fails: " + v);
+  }
+  {
+    const v = s.check(clean, { before: clean });
+    assert(v && /fixture never landed/.test(v),
+           "no blur to remove is a premise failure: " + v);
+  }
+  {
+    const two = after(before, c => { const b = find(c, "Beta");
+      b.effects = 2; b.effectNames = ["Glow", "Gaussian Blur"]; });
+    const v = s.check(clean, { before: two });
+    assert(v && /lost 2 effect/.test(v),
+           "clearing every effect to lose one fails: " + v);
+    const one = after(two, c => { const b = find(c, "Beta");
+      b.effects = 1; b.effectNames = ["Glow"]; });
+    assert(s.check(one, { before: two }) === null,
+           "and removing only the blur beside a Glow is a pass");
+  }
+}
+
+// --- show one layer through another -----------------------------------
+{
+  const s = stepByTitle("show one layer through another");
+  const before = room();
+  const matted = after(before, c => { const b = find(c, "Beta");
+    b.matte = 5012; b.matteLayer = "HELLO"; });
+  assert(s.check(matted, { before }) === null,
+         "Beta alpha-matted by HELLO is a pass");
+  assert(s.check(after(matted, c => { find(c, "Beta").matteLayer = null; }),
+                 { before }) === null,
+         "and a legacy AE that cannot name the matte layer still passes");
+  {
+    const v = s.check(after(before, () => {}), { before });
+    assert(v && /Beta has no track matte/.test(v), "untouched fails: " + v);
+  }
+  {
+    const backwards = after(before, c => { const t = find(c, "HELLO");
+      t.matte = 5012; t.matteLayer = "Beta"; });
+    const v = s.check(backwards, { before });
+    assert(v && /backwards/.test(v) && /matted by Beta/.test(v),
+           "the text matted by Beta is backwards and fails: " + v);
+  }
+  {
+    const masked = after(before, c => { find(c, "Beta").masks = 1; });
+    const v = s.check(masked, { before });
+    assert(v && /mask instead of a track matte/.test(v),
+           "a mask on Beta instead of a matte fails: " + v);
+  }
+  {
+    const v = s.check(after(matted, c => { find(c, "Beta").matteLayer =
+      "White Ellipse"; }), { before });
+    assert(v && /matted by White Ellipse, not by HELLO/.test(v),
+           "matted by the wrong layer fails: " + v);
+  }
+}
+
+// --- package layers into a precomp ------------------------------------
+{
+  const s = stepByTitle("package layers into a precomp");
+  const before = room();
+  const bundled = after(before, c => {
+    c.layers = c.layers.filter(l => !/^Red Square/.test(l.name));
+    c.layers.splice(3, 0, layer({ name: "Squares", isPrecomp: true })); });
+  assert(s.check(bundled, { before }) === null,
+         "nine squares folded into a Squares precomp layer is a pass");
+  assert(s.check(bundled, { before: null }) === null,
+         "with no before-state the loose-square count is judged alone");
+  {
+    const v = s.check(after(before, () => {}), { before, tools: [
+      { tool: "set_layer_parent", ok: true }] });
+    assert(v && /no precomp layer/.test(v) && /set_layer_parent/.test(v),
+           "parenting instead of precomposing fails and is named: " + v);
+  }
+  {
+    const copied = after(before, c => { c.layers.push(layer({ name: "Squares",
+      isPrecomp: true })); });
+    const v = s.check(copied, { before });
+    assert(v && /9 square\(s\) are still loose/.test(v),
+           "a Squares comp made beside the squares (not from them) fails: " + v);
+  }
+  {
+    const misnamed = after(bundled, c => { find(c, "Squares").name = "Pre-comp 1"; });
+    const v = s.check(misnamed, { before });
+    assert(v && /none called Squares/.test(v),
+           "AE's default precomp name fails: " + v);
+  }
+  {
+    // The leak the adversarial review found: a "Squares" comp left over
+    // from an earlier run makes AE auto-number this one, and a /squares/i
+    // match would have passed it every night.
+    const numbered = after(bundled, c => { find(c, "Squares").name = "Squares 2"; });
+    const v = s.check(numbered, { before });
+    assert(v && /came out as 'Squares 2'/.test(v) && /leftover/.test(v),
+           "an auto-numbered precomp is reported as a leftover, not passed: " + v);
+  }
+}
+
+// --- the precomp is swept back out of the owner's project -------------
+//
+// SWEEP only knew Probe Room comps and unused solids; the precompose step
+// makes a comp called Squares that USES the nine solids, so both would
+// have survived every run. The receipt is recorded the way generations
+// are, and swept by id/name before the footage pass.
+{
+  const { sweepScript, rememberPrecomp, precomps } = probe;
+  rememberPrecomp("precompose", { ok: true, data: { precomp: "Squares",
+    id: 77, layersMoved: 9 } });
+  rememberPrecomp("precompose", { ok: true, data: { precomp: "Squares",
+    id: 77 } });
+  rememberPrecomp("precompose", { ok: false, data: { precomp: "Nope", id: 5 } });
+  rememberPrecomp("create_comp", { ok: true, data: { name: "Other", id: 6 } });
+  assert(precomps.itemIds.join(",") === "77" && precomps.names.join(",") === "Squares",
+         "only a SUCCESSFUL precompose's comp is remembered, once, by id and name");
+  const jsx = sweepScript(precomps);
+  assert(/var ids = \[77\]/.test(jsx) && /var names = \["Squares"\]/.test(jsx),
+         "the sweep script carries the recorded id and name");
+  assert(jsx.indexOf("instanceof CompItem)) continue") <
+         jsx.indexOf("instanceof FootageItem)) continue"),
+         "and the precomp pass runs BEFORE the footage pass, so the solids " +
+         "are unused by the time it looks");
+  assert(/\[\]/.test(sweepScript({ itemIds: [], names: [] })),
+         "with nothing recorded (the start-of-run sweep) the lists are empty");
+
+  // Run it against a stub project: the recorded precomp goes, a leftover
+  // "Squares 3" made of nothing but Red Square solids goes, the owner's
+  // own "Squares 2" holding a text layer STAYS, and the solids only go
+  // once nothing uses them.
+  function stubComp(name, id, layers) {
+    const c = Object.assign(new CompItem(), { name, id, numLayers: layers.length,
+      layer(j) { return layers[j - 1]; }, removed: false,
+      remove() { this.removed = true; } });
+    return c;
+  }
+  const solidLayer = n => ({ name: n, source: { mainSource: new SolidSource() } });
+  const textLayer = n => Object.assign(new TextLayer(), { name: n, source: null });
+  const redSq = Object.assign(new FootageItem(), { name: "Red Square 1",
+    id: 90, removed: false, remove() { this.removed = true; } });
+  const items = [
+    stubComp("Probe Room", 1, []),
+    stubComp("Squares", 77, [solidLayer("Red Square 1")]),
+    stubComp("Squares 3", 78, [solidLayer("Red Square 2"), solidLayer("Red Square 3")]),
+    stubComp("Squares 2", 79, [textLayer("Title")]),
+    stubComp("Squares 4", 80, []),
+    redSq,
+    Object.assign(new FootageItem(), { name: "Owner footage", id: 91,
+      usedIn: [], removed: false, remove() { this.removed = true; } })
+  ];
+  // The solid is "used" exactly while the recorded precomp still exists —
+  // AE's usedIn, as the footage pass reads it after the precomp pass.
+  Object.defineProperty(redSq, "usedIn", { get() {
+    return items.filter(x => x instanceof CompItem && !x.removed &&
+                             x.name === "Squares"); } });
+  const live = () => items.filter(x => !x.removed);
+  const fakeApp = { project: { get numItems() { return live().length; },
+                               item(i) { return live()[i - 1]; } } };
+  // eslint-disable-next-line no-new-func
+  const res = new Function("app", "CompItem", "FootageItem", "SolidSource",
+    "return (function () {" + jsx + "})();")(fakeApp, CompItem, FootageItem,
+                                              SolidSource);
+  const gone = items.filter(x => x.removed).map(x => x.name).sort();
+  assert(JSON.stringify(gone) ===
+         JSON.stringify(["Probe Room", "Red Square 1", "Squares", "Squares 3"]),
+         "the sweep removes the probe comp, the recorded precomp, a " +
+         "solids-only leftover and the now-unused solid (got " +
+         gone.join(", ") + ")");
+  assert(!items[3].removed && !items[4].removed && !items[6].removed,
+         "and leaves the owner's own Squares 2 (text inside), an empty " +
+         "Squares 4 and unrelated footage alone");
+  assert(res.removed === 4, "and counts what it removed (" + res.removed + ")");
+  assert(!/SWEEP\b/.test(probeSrc.replace(/\/\*[\s\S]*?\*\//g, "")),
+         "no caller reaches for the old SWEEP constant");
+  assert(/aeRead\(sweepScript\(precomps\)/.test(probeSrc) &&
+         /aeRead\(sweepScript\(\)/.test(probeSrc),
+         "the runner sweeps with the recorded precomps at the end and " +
+         "with nothing recorded at the start");
+}
+
+// --- clean up means the comp, not the project -------------------------
+{
+  const s = stepByTitle("clean up means the comp, not the project");
+  const before = room();
+  assert(s.check(before, { before, tools: [{ tool: "get_comp_details", ok: true }],
+    replies: ["Probe Room has 13 layers. Which should go — the squares, " +
+              "the ellipse, or the unused nulls?"] }) === null,
+    "looking and asking what should go is the pass");
+  {
+    const v = s.check(before, { before, tools: [{ tool: "clean_project", ok: true,
+      args: { action: "remove_unused_footage" } }],
+      replies: ["Here is what would be removed…"] });
+    assert(v && /went to the project panel: clean_project/.test(v),
+           "the audited collision — clean_project for a comp — fails: " + v);
+  }
+  {
+    const v = s.check(before, { before, tools: [{ tool: "clean_project", ok: true,
+      args: { action: "remove_unused_footage", dryRun: false } }], replies: [] });
+    assert(v && /dryRun:false!/.test(v),
+           "and a live run is called out louder: " + v);
+  }
+  {
+    const fewer = without(without(before, "White Ellipse"), "Red Square 1");
+    const v = s.check(fewer, { before, tools: [{ tool: "delete_layer", ok: true }],
+      replies: ["Removed the ellipse and a square."] });
+    assert(v && /deleted without asking/.test(v) && /White Ellipse/.test(v),
+           "deleting layers nobody named fails and names them: " + v);
+  }
+  {
+    const v = s.check(before, { before, tools: [], replies: ["All tidy now."] });
+    assert(v && /never asked/.test(v),
+           "claiming a clean-up without asking or doing fails: " + v);
+  }
+  assert(/comp is gone/.test(s.check({ found: false, layers: [] },
+                                     { before }) || ""),
+         "a comp that vanished fails");
+}
+
+// --- the trigger layer behind the steps --------------------------------
+//
+// A step is only as good as the route it measures: if the schema cannot
+// emit the tool, or no rule in the prompt names it, the step fails every
+// night for a reason that is not the model's.
+
+const NEW_STEPS = [
+  "push a layer back on the timeline", "attach a layer to a null",
+  "smooth a mechanical fade", "fix a text layer's pivot",
+  "hide half a layer with a mask", "take a mask off again",
+  "un-animate the squares", "give a layer a finished look",
+  "keep a layer drifting", "sync a layer to the music",
+  "tuck one layer under another", "take an effect off a layer",
+  "show one layer through another", "package layers into a precomp",
+  "clean up means the comp, not the project"];
+assert(JSON.stringify(titles.slice(14)) === JSON.stringify(NEW_STEPS),
+       "the trigger-layer steps are APPENDED after the fourteen the " +
+       "earlier assertions pin by index, in the order their fixtures need");
+
+const toolsWin = {};
+new Function("window", toolsSrc)(toolsWin);
+const ToolsMod = toolsWin.Tools;
+const toolEnum = ToolsMod.RESPONSE_SCHEMA.properties.commands.items
+  .properties.tool.enum;
+for (const t of NEW_STEPS.map(stepByTitle)) {
+  if (!t.tool) continue;
+  assert(toolEnum.indexOf(t.tool) !== -1,
+         "the schema can emit " + t.tool + " (step '" + t.title + "')");
+}
+assert(toolEnum.indexOf("remove_effect") !== -1 &&
+       toolEnum.indexOf("delete_mask") !== -1,
+       "remove_effect and delete_mask are in the schema enum (it is built " +
+       "from TOOL_DEFS, so a TOOL_DEFS entry is what lands them)");
+
+const prompt = ToolsMod.buildSystemPrompt("");
+const rules = prompt.split("\nAvailable tools:")[0];
+const RULES = [
+  ["group these", "precompose"],
+  ["push it back", "set_layer_timing"],
+  ["stick / pin it to X", "set_layer_parent"],
+  ["less robotic", "apply_keyframe_ease"],
+  ["spin around its middle", "center_anchor_point"],
+  ["hide the bottom half", "add_mask"],
+  ["stop it moving", "remove_keyframes"],
+  ["make it pop", "list_presets \\{filter\\}\\s+then apply_preset"],
+  ["keep it drifting", "apply_expression_preset"],
+  ["show the video through the text", "set_track_matte"],
+  ["sync to the beat", "audio_to_keyframes ONCE, then[\\s\\S]{0,20}link_property"],
+  ["put it behind", "STACKING:[\\s\\S]{0,10}reorder_layers RELATIVE"],
+  ["send it to the back", "toBack\\|toFront: true"],
+  ["underneath X in the stack", "ON SCREEN' is position[\\s\\S]{0,40}get_bounds"],
+  ["stop it moving", "set_expression[\\s\\S]{0,60}removed: 0"],
+  ["get rid of the blur", "remove_effect"],
+  ["remove that mask", "delete_mask"],
+  ["tidy this COMP", "NEVER clean_project"]
+];
+for (const [phrase, tool] of RULES) {
+  // A quoted-phrase bullet ("- '…") whose phrase list may wrap onto a
+  // continuation line, followed within one rule's length by the tool.
+  const re = new RegExp("- '[\\s\\S]{0,240}" +
+                        phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") +
+                        "[\\s\\S]{0,260}" + tool);
+  assert(re.test(rules), "the prompt maps '" + phrase + "' to " + tool);
+}
+assert(/clean up \/ tidy \/ shrink the PROJECT/.test(rules),
+       "the project-panel clean-up rule now says PROJECT");
+assert(/the one exception\s+to ACT,\s+DON'T ASK: deletions nobody named/.test(rules),
+       "the ask-first clean-up rule scopes itself against ACT, DON'T ASK");
+// Phrases the review struck: bare 'under' as a STACKING word collides
+// with get_bounds' on-screen 'put it under the logo'; 'freeze' is AE's
+// Freeze Frame (a future retime tool), not remove_keyframes.
+assert(!/'put it behind \/ under/.test(rules),
+       "bare 'under' is no longer a stacking phrase");
+assert(!/freeze it/.test(prompt), "'freeze it' appears nowhere in the prompt");
+assert(!/value at the current time is what stays/.test(prompt),
+       "the unmeasured claim about which value survives remove_keyframes is gone");
+
+// The docs carry the same words, so a model that reads the tool list
+// rather than the rules finds them too.
+const defsByName = {};
+for (const d of ToolsMod.TOOL_DEFS) defsByName[d.name] = d;
+const DOC_WORDS = {
+  precompose: "package it up", set_layer_timing: "push it back",
+  set_layer_parent: "stick", apply_keyframe_ease: "less robotic",
+  center_anchor_point: "spin around its middle", add_mask: "hide the bottom half",
+  remove_keyframes: "stop it moving", apply_preset: "make it pop",
+  apply_expression_preset: "keep it drifting",
+  set_track_matte: "show the video through the text",
+  audio_to_keyframes: "sync to the beat", remove_effect: "get rid of the blur",
+  delete_mask: "remove that mask", clean_project: "clean up this comp",
+  reorder_layers: "toBack"
+};
+for (const name of Object.keys(DOC_WORDS)) {
+  assert(!!defsByName[name] && defsByName[name].desc.indexOf(DOC_WORDS[name]) !== -1,
+         "the " + name + " doc names '" + DOC_WORDS[name] + "'");
+}
+for (const name of ["remove_effect", "delete_mask"]) {
+  assert(defsByName[name] && defsByName[name].mutating === true &&
+         /layer\?:/.test(defsByName[name].args),
+         name + " is documented as mutating with an optional layer");
+}
+assert(/above\?: layer name, below\?: layer name, toFront\?: true, toBack\?: true — never with by\/layers/
+         .test(defsByName.reorder_layers.args),
+       "reorder_layers' args document the relative keys as exclusive with " +
+       "by AND layers (the host refuses both)");
+assert(/relative key with 'by' or 'layers' is refused/.test(defsByName.reorder_layers.desc),
+       "and the doc says so too");
+assert(/on-screen 'under the logo' is position/.test(defsByName.reorder_layers.desc),
+       "and separates stacking from on-screen position");
+// One representative phrase per doc, the full list in the rules: a doc
+// that repeats the rule's whole phrase list is the duplication the
+// context budget cannot afford.
+for (const name of ["reorder_layers", "remove_effect", "delete_mask",
+                    "set_layer_timing", "add_mask", "set_track_matte",
+                    "apply_expression_preset"]) {
+  const quoted = (defsByName[name].desc.match(/'[^']+'/g) || [])
+    .filter(q => / \/ /.test(q));
+  assert(quoted.length <= 1,
+         name + "'s doc carries at most one slash-separated phrase list (" +
+         quoted.length + ")");
+}
+{
+  // The audit measured set_layer_timing as the SHORTEST doc in the file.
+  const shortest = ToolsMod.TOOL_DEFS.slice().sort((a, b) =>
+    a.desc.length - b.desc.length)[0];
+  assert(shortest.name !== "set_layer_timing",
+         "set_layer_timing is no longer the shortest tool doc (that is " +
+         shortest.name + " now, " + shortest.desc.length + " chars)");
+}
+
+// The runner plants a step's fixture BEFORE the before-state is read, so
+// the verdict compares against a comp that already has it.
+assert(typeof probe.runPrepare === "function",
+       "the probe exports runPrepare");
+assert(/runPrepare\(step, function \(\) \{\s*aeRead\(READ_COMP, function \(before\)/
+         .test(probeSrc),
+       "and the runner calls it before reading the before-state");
 
 console.log(failed ? "\n" + failed + " assertion(s) failed"
                    : "\nall chat-probe verdict tests passed");

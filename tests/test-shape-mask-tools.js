@@ -31,6 +31,20 @@ PGroup.prototype.property = function (ref) {
   return this._children.find(c => c.name === ref || c.matchName === ref) ||
          null;
 };
+// PropertyBase.remove() for an indexed group's child (a mask in the Mask
+// Parade): the siblings close up, and the removed object is INVALIDATED
+// — AE throws "Object is invalid" on every later read of it. The host
+// has to read the mask's name BEFORE removing it, and this is what
+// catches a host that does not.
+PGroup.prototype.remove = function () {
+  if (!this._parent) throw new Error("After Effects error: Object is invalid");
+  const sib = this._parent._children;
+  sib.splice(sib.indexOf(this), 1);
+  this._parent = null;
+  Object.defineProperty(this, "name", {
+    get() { throw new Error("After Effects error: Object is invalid"); }
+  });
+};
 
 function Prop(name, matchName, value, min, max) {
   this.name = name;
@@ -611,6 +625,77 @@ r = call("set_property", { layer: "Shapes",
 assert(!r.ok && /inside Contents:/.test(r.error) &&
        /Rectangle Path 1/.test(r.error),
        "a bad segment under a group lists the items inside it: " + r.error);
+
+// 9. delete_mask (audit 0.11 item 4). "Take the mask off" had no tool;
+// a reverted host answers "Unknown tool: delete_mask" to every call
+// below. Footage carries the animated "Cutout" from section 1.
+const maskNames = (L) => {
+  const g = L.property("ADBE Mask Parade");
+  const out = [];
+  for (let i = 1; i <= g.numProperties; i++) out.push(g.property(i).name);
+  return out.join(", ");
+};
+r = call("add_mask", { layer: "Footage", name: "Bottom", shape: "rectangle",
+                       bounds: [0, 150, 400, 150] });
+assert(r.ok && maskNames(footage) === "Cutout, Bottom",
+       "a second mask to delete by index (holds: " + maskNames(footage) + ")");
+r = call("delete_mask", { layer: "Footage", mask: 2 });
+assert(r.ok, "delete_mask by 1-based index: " + (r.error || ""));
+assert(r.ok && r.data.layer === "Footage" && r.data.removed === "Bottom" &&
+       r.data.remainingMasks.join(", ") === "Cutout",
+       "receipt: {layer, removed, remainingMasks} (got " +
+       JSON.stringify(r.ok ? r.data : r.error) + ")");
+assert(maskNames(footage) === "Cutout",
+       "the parade really lost it (holds: " + maskNames(footage) + ")");
+r = call("delete_mask", { layer: "Footage", mask: "Nope" });
+assert(!r.ok && /Mask not found on 'Footage': Nope/.test(r.error) &&
+       /Masks here: Cutout/.test(r.error),
+       "a miss lists the real masks (AELL_findMask's grounding): " + r.error);
+assert(maskNames(footage) === "Cutout", "…and removed nothing");
+// A numeric STRING is the 1-based index the doc promises, not a name.
+r = call("add_mask", { layer: "Footage", name: "Third", shape: "rectangle" });
+assert(r.ok && maskNames(footage) === "Cutout, Third", "a mask at index 2");
+r = call("set_mask", { layer: "Footage", mask: "2", feather: 3 });
+assert(r.ok && r.data.mask === "Third",
+       "mask: \"2\" resolves as index 2 (got " +
+       JSON.stringify(r.ok ? r.data : r.error) + ")");
+r = call("delete_mask", { layer: "Footage", mask: "2" });
+assert(r.ok && r.data.removed === "Third" && maskNames(footage) === "Cutout",
+       "delete_mask {mask: \"2\"} deletes the second mask: " +
+       JSON.stringify(r.ok ? r.data : r.error));
+// One mask and no ref: that mask, the same rule set_mask follows.
+r = call("delete_mask", { layer: "Footage" });
+assert(r.ok && r.data.removed === "Cutout" &&
+       r.data.remainingMasks.length === 0,
+       "the only mask goes without being named: " +
+       JSON.stringify(r.ok ? r.data : r.error));
+assert(footage.property("ADBE Mask Parade").numProperties === 0,
+       "the animated mask is gone, keys and all");
+r = call("delete_mask", { layer: "Footage" });
+assert(!r.ok && /'Footage' has no masks/.test(r.error) &&
+       /add_mask creates one/.test(r.error),
+       "a layer with no masks is refused, pointing at add_mask: " + r.error);
+// A layer type with no Mask Parade at all (camera/light): refused by type.
+const noMasks = new Layer("Cam", comp, false);
+noMasks._root._children = noMasks._root._children
+  .filter(c => c.matchName !== "ADBE Mask Parade");
+Object.setPrototypeOf(noMasks, Object.create(CameraLayer.prototype,
+  Object.getOwnPropertyDescriptors(Layer.prototype)));
+comp._layers.push(noMasks);
+r = call("delete_mask", { layer: "Cam", mask: 1 });
+assert(!r.ok && /'Cam' is a camera layer and cannot carry masks/.test(r.error),
+       "no Mask Parade: refused by layer type: " + r.error);
+comp._layers.pop();
+// {layer} omitted = the selection, and the selection survives the call.
+comp._layers.forEach(l => { l.selected = l === off; });
+r = call("delete_mask", {});
+assert(r.ok && r.data.layer === "Off Grid" && r.data.removed === "Mask 2" &&
+       off.property("ADBE Mask Parade").numProperties === 0,
+       "no {layer}: the selected layer's only mask goes: " +
+       JSON.stringify(r.ok ? r.data : r.error));
+assert(comp.selectedLayers.length === 1 && comp.selectedLayers[0] === off,
+       "…and Off Grid is still the selection afterwards");
+comp._layers.forEach(l => { l.selected = false; });
 
 assert(AE_MODALS.length === 0,
        "no tool call left After Effects behind a modal dialog: " +

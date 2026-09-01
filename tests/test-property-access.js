@@ -10,10 +10,31 @@ function PGroup(name, matchName) {
   this.matchName = matchName || name;
   this._children = [];
 }
-PGroup.prototype.add = function (c) { this._children.push(c); return c; };
+PGroup.prototype.add = function (c) {
+  c._parent = this;
+  this._children.push(c);
+  return c;
+};
 Object.defineProperty(PGroup.prototype, "numProperties", {
   get() { return this._children.length; }
 });
+// PropertyBase.remove(), as AE does it for an indexed group's child: the
+// siblings close up (their propertyIndex shifts), and the removed object
+// is INVALIDATED — every later read of it throws "Object is invalid". A
+// host that read the victim's name after the call would surface that
+// raw error instead of a receipt, which is what this models.
+PGroup.prototype.remove = function () {
+  if (!this._parent) throw new Error("After Effects error: Object is invalid");
+  const sib = this._parent._children;
+  sib.splice(sib.indexOf(this), 1);
+  this._parent = null;
+  Object.defineProperty(this, "name", {
+    get() { throw new Error("After Effects error: Object is invalid"); }
+  });
+  Object.defineProperty(this, "matchName", {
+    get() { throw new Error("After Effects error: Object is invalid"); }
+  });
+};
 PGroup.prototype.property = function (ref) {
   if (typeof ref === "number") return this._children[ref - 1] || null;
   return this._children.find(c => c.name === ref || c.matchName === ref ||
@@ -947,5 +968,94 @@ assert(/visual \(AV\) layers/.test(r.error) &&
        "with the constraint and the tool that shows layer types: " +
        r.error.slice(0, 140));
 A.removeTrackMatte = rawRemove;
+
+// ------------------------------------- remove_effect (audit 0.11 item 4)
+// "Take off the glow" had no tool. A reverted host answers every call
+// below with "Unknown tool: remove_effect", so the first assertion is the
+// whole proof; the rest pin the receipt, the first-match rule and the
+// grounded refusals. A carries Gaussian Blur, Grid X Spacing, the two
+// controls earlier sections added, Tint and Fill — the expectations are
+// taken from the parade itself rather than from a list that would rot.
+const fxNames = () => {
+  const out = [];
+  for (let i = 1; i <= fxA.numProperties; i++) out.push(fxA.property(i).name);
+  return out.join(", ");
+};
+const fxBefore = fxNames();
+const fxWithout = (nm) => fxBefore.split(", ").filter(n => n !== nm).join(", ");
+assert(/Tint/.test(fxBefore) && /Fill/.test(fxBefore),
+       "A carries Tint and Fill going in (" + fxBefore + ")");
+r = call("remove_effect", { layer: "A", effect: "Tint" });
+assert(r.ok, "remove_effect removes by display name: " + (r.error || ""));
+assert(r.ok && r.data.layer === "A" && r.data.removed === "Tint" &&
+       r.data.matchName === "ADBE Tint" &&
+       r.data.remainingEffects.join(", ") === fxWithout("Tint"),
+       "receipt: {layer, removed, remainingEffects} (got " +
+       JSON.stringify(r.ok ? r.data : r.error) + ")");
+assert(fxNames() === fxWithout("Tint"),
+       "the parade really lost it (holds: " + fxNames() + ")");
+assert(r.ok && r.data.alsoMatched === undefined && r.data.note === undefined,
+       "a single match carries no duplicate note");
+
+// Two copies share one matchName; AE numbers the second "Glow 2". A
+// matchName call removes the FIRST and says what else matched.
+const glow1 = new PGroup("Glow", "ADBE Glo2");
+glow1.add(new Prop("Glow Threshold", "ADBE Glo2-0001", 60));
+const glow2 = new PGroup("Glow 2", "ADBE Glo2");
+glow2.add(new Prop("Glow Threshold", "ADBE Glo2-0001", 60));
+fxA.add(glow1); fxA.add(glow2);
+r = call("remove_effect", { layer: "A", effect: "ADBE Glo2" });
+assert(r.ok && r.data.removed === "Glow" &&
+       r.data.alsoMatched.join(",") === "Glow 2" &&
+       /2 effects matched 'ADBE Glo2'/.test(r.data.note) &&
+       /removed the first/.test(r.data.note) && /Glow 2 still/.test(r.data.note),
+       "two matchName hits: the top-most goes and the receipt names the " +
+       "survivor: " + JSON.stringify(r.ok ? r.data : r.error));
+assert(fxNames() === fxWithout("Tint") + ", Glow 2",
+       "only the first copy is gone (holds: " + fxNames() + ")");
+
+// The model lowercases what the user said: exact wins, then case-blind.
+r = call("remove_effect", { layer: "A", effect: "glow 2" });
+assert(r.ok && r.data.removed === "Glow 2" &&
+       r.data.remainingEffects.indexOf("Glow 2") === -1,
+       "a case-insensitive display name still finds it: " +
+       JSON.stringify(r.ok ? r.data : r.error));
+
+// Grounded refusals.
+r = call("remove_effect", { layer: "A", effect: "Glow" });
+assert(!r.ok && /No effect 'Glow' on 'A'/.test(r.error) &&
+       r.error.indexOf("Effects here: " + fxWithout("Tint")) !== -1 &&
+       /apply_effect/.test(r.error),
+       "a miss lists the layer's real effects: " + r.error);
+assert(fxNames() === fxWithout("Tint"),
+       "…and removed nothing");
+r = call("remove_effect", { layer: "A" });
+assert(!r.ok && /'effect' is required/.test(r.error) &&
+       /Effects on 'A': Gaussian Blur/.test(r.error),
+       "a missing 'effect' arg lists what could be named: " + r.error);
+const bare = new Layer("Bare", comp);
+bare.property("ADBE Effect Parade")._children.length = 0;
+comp._layers.push(bare);
+r = call("remove_effect", { layer: "Bare", effect: "Glow" });
+assert(!r.ok && /'Bare' has no effects/.test(r.error) &&
+       /apply_effect adds one/.test(r.error),
+       "a layer with no effects is refused, pointing at apply_effect: " +
+       r.error);
+// (The stub light is not an instanceof LightLayer, so the type word is
+// whatever AELL_layerType falls back to — the refusal is what matters.)
+r = call("remove_effect", { layer: "Key", effect: "Glow" });
+assert(!r.ok && /'Key' is a \w+ layer and cannot carry effects/.test(r.error),
+       "a light (no Effect Parade at all) is refused by type: " + r.error);
+
+// {layer} omitted = the selection, and the selection survives the call.
+comp._layers.forEach(l => { l.selected = l.name === "B"; });
+r = call("remove_effect", { effect: "Gaussian Blur" });
+assert(r.ok && r.data.layer === "B" && r.data.removed === "Gaussian Blur",
+       "no {layer}: the selected layer's effect goes: " +
+       JSON.stringify(r.ok ? r.data : r.error));
+assert(comp.selectedLayers.length === 1 && comp.selectedLayers[0] === B,
+       "…and B is still the selection afterwards");
+comp._layers.forEach(l => { l.selected = false; });
+comp._layers.splice(comp._layers.indexOf(bare), 1);
 
 console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");

@@ -659,6 +659,12 @@ assert(!r.data.nameNote,
        "the file is where the tool predicted, so nothing is flagged");
 assert(!r.data.threw, "and AE raised nothing on a comp's FIRST export");
 assert(r.data.controllers === 4, "the controller count comes back");
+assert(Array.isArray(r.data.controllerNames) &&
+       r.data.controllerNames.length === r.data.controllers &&
+       r.data.controllerNames.every((n) => typeof n === "string" && n),
+       "and the roster by NAME rides with it, read before the export " +
+       "(the panel-side zip verifier needs names for multiset parity): " +
+       JSON.stringify(r.data.controllerNames));
 assert(/SECOND export with no save/.test(r.data.note || ""),
        "and the success warns that the export dirtied the project");
 // Read through app.project, not the stale handle - the export killed

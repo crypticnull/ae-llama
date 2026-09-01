@@ -127,6 +127,58 @@ and patch-bumps. One pass, in this order:
   aell-backup-pass22`. The four bump files in the stash are noise
   either way (0.11.x supersedes them).
 
+## 1c. VERIFY the daytime batch of 2026-09-01 (trigger layer + missing verbs + MOGRT verifier; UNBUMPED)
+
+Built remote by three passes + adversarial review, full stub suite
+green. Rides the SAME patch bump as 1b when both verify — one bump,
+one push. One pass per bullet:
+
+- **Trigger layer (roadmap 2).** Run `scripts/chat-probe.js` with the
+  real model — 15 new steps (indexes 15-29) each say a casual sentence
+  ("delay it", "tag along", "chop off the lower half", "dress HELLO
+  up", "tuck it in underneath", "strip it off", "bundle") and assert
+  the RIGHT tool's fingerprint. Log per-step verdicts to WORKPLAN-LOG.
+  A miss is a WORDING dependency: one tool-doc/rule change per pass,
+  re-run to show the flip (section 8 rules). The "sync to the music"
+  step judges the honest refusal on the silent rig — add an audio
+  layer to the rig if you want its success branch measured. Also
+  measure: the prompt grew ~12% (54.5k → 61.1k chars); confirm a
+  full round at ctx 16384 still leaves room for results + 4 turns of
+  history (a context-400 hard-trim on an ordinary ask = trim rules).
+- **Missing verbs (roadmap 4).** Selftest is 555 steps now; run it to
+  green. Then probe the seven flagged AE-semantics assumptions
+  directly (temp .jsx via AELL_call): (1) moveBefore/moveAfter on a
+  LOCKED layer — the tool refuses first; does AE honour the lock if
+  called?; (2) moveBefore(self); (3) already-in-place move reports
+  "Nothing moved"; (4) toFront/toBack via moveBefore(layer(1)) /
+  moveAfter(last) land at index 1 / last; (5) after remove_effect and
+  delete_mask, survivors are NOT renumbered ("Glow 2" stays) and
+  later-sibling references invalidate; (6) bare-name read-back
+  "Blurriness" after removing one of two blurs resolves to
+  Effects/Gaussian Blur 2/Blurriness; (7) the delete_mask step's
+  expression clear avoids a modal. Fix stubs to what AE MEASURED
+  wherever an assumption was wrong. Plus one the trigger-layer review
+  raised: (8) after remove_keyframes removes every key (the host
+  removes key 1 repeatedly), WHICH value remains — the last key's, or
+  the value at the current time? The probe's "un-animate" step records
+  the residual opacity without failing on it; measure it, then pin the
+  answer in the remove_keyframes doc (the unmeasured claim was removed).
+- **MOGRT verifier (harness plan 1, steps 1-3).** Export a small real
+  mogrt through the panel: the receipt must now carry
+  `controllerNames`, `zipValid: true`, `controllersInFile` equal to
+  the exposed count, `templateNameInFile`, and no `verifyNote`.
+  Hand-truncate a copy and re-run `MogrtRead.verifyExport` on it →
+  grounded failure naming the path. THEN the measure pass the plan
+  gates everything on: drop one export into real Premiere Pro (the
+  ONE manual step), and if it opens, commit its definition.json
+  (scrubbed) as the pinned fixture and correct `PROVISIONAL_KEYS` in
+  extension/js/mogrt-read.js to the field names Adobe actually uses —
+  until then the roster parity is best-effort and its mismatches are
+  WARN-class evidence, not verdicts. Also run the Windows independent
+  check: `AELL_MOGRT_FIXTURE_OUT=<path> node tests/test-mogrt-read.js`
+  emits the all-forms fixture; open it with
+  System.IO.Compression (Expand-Archive) and record agreement.
+
 ## FAST-TRACK: comp-rename audit tools — DONE 2026-08-25 (0.9.15)
 
 The owner has a real work assignment: bring an old roofing-presentation
@@ -1559,6 +1611,32 @@ local verifies in real AE.
 12. **[M] Bring-your-own-endpoint chat** — settings URL for any
     OpenAI-compatible server, skip spawn lifecycle; salvage path
     becomes load-bearing off llama.cpp, test it explicitly.
+13. **[S/remote] Context budget is already over the default window
+    (found 2026-09-01 by the trigger-layer review). OWNER PRIORITY
+    2026-09-01 — "function needs to be prioritized much higher than
+    conversation": this is the NEXT remote build, ahead of the rest of
+    the list; the daytime batch's prompt growth (+7.8% after trimming)
+    is the last addition that lands without a matching cut.** At ctx 16384 the
+    arithmetic is: 3,072-token reply reserve, ~1.5K tokens of state,
+    and a ~54.5K-char system prompt (~13.6K tokens) — HEAD sat at the
+    edge (matches the field-observed 16,755-token overflow) and every
+    prompt addition lands on history first. main.js's proactive
+    `histBudget = max(4000, (ctx-3600)*3 - system.length)` is NEGATIVE
+    at these sizes, so history gets the 4,000-char floor and the panel
+    leans on the HTTP-400 `forceTinyContext` retry, which keeps four
+    entries and breaks refer-back turns. The trigger layer was trimmed
+    to fit (rules carry the phrase lists, docs carry one phrase each),
+    but the shape is wrong: (a) make the budget ctx-aware from the
+    measured prompt size, not a floor; (b) default ctxSize by TIER
+    (T7 with a 32B Q4 on 32 GB has KV-cache room for 32768 — measure
+    the VRAM cost with the arbiter's numbers before raising it);
+    (c) a compact tool-doc mode where well-routed tools get one line;
+    (d) a reply-brevity rule — the model's answer is one or two
+    sentences over the receipts, never a restatement of what the tool
+    results already say (its replies live in the same window and in
+    the 3,072-token reserve); (e) a prompt-size ceiling pinned in
+    tests/test-context-budget.js so growth without a cut fails CI.
+    Stub-testable; local measures the VRAM side.
 
 Dropped for now, with reasons recorded in the audit doc: comp
 versioning (first post-alpha minor), comp checkpoint/diff, review

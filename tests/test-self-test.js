@@ -308,6 +308,10 @@ let textStyle = null;
 // "did slot i go to layer i" is a question the stub answers for free.
 let ordX = {};
 let ordStack = [];
+// The masks each layer holds, "comp|layer" -> [names], so delete_mask
+// answers from what add_mask really put there and the mask refusals
+// ("no masks", "Mask not found ... Masks here:") are measurements.
+let mkMasks = {};
 // The mask rig reads back what it just wrote (numKeys after a refusal),
 // so the canned host has to remember how many keys each mask carries.
 let maskKeys = {};
@@ -1672,6 +1676,63 @@ function cannedOk(tool, args) {
       return out;
     }
     case "reorder_layers": {
+      // RELATIVE mode: one layer moved next to one anchor in the order
+      // rig's stack. Faithful to the host's index rule (moveBefore = one
+      // slot above the anchor, moveAfter = one below), to the refusals
+      // it makes by name, and to the no-op it reports honestly.
+      const relKeys = ["above", "below", "toFront", "toBack"]
+        .filter(k => args && args[k] !== undefined && args[k] !== null &&
+                     args[k] !== "" && args[k] !== false);
+      if (relKeys.length) {
+        if (relKeys.length > 1) {
+          return { __err: "reorder_layers takes ONE relative key, got " +
+            relKeys.join(" + ") + ". Pick one." };
+        }
+        if (args.by) {
+          return { __err: "'" + relKeys[0] + "' moves ONE layer relative " +
+            "to another; 'by: " + args.by + "' SORTS a whole list. They " +
+            "cannot be combined — drop 'by' to move the layer." };
+        }
+        const key = relKeys[0];
+        if ((key === "above" || key === "below")
+              ? (typeof args[key] !== "string" && typeof args[key] !== "number")
+              : args[key] !== true) {
+          return { __err: (key === "toFront" || key === "toBack")
+            ? "'" + key + "' takes true, got '" + args[key] + "' — did " +
+              "you mean {" + (key === "toFront" ? "above" : "below") +
+              ": '" + args[key] + "'}?"
+            : "'" + key + "' names a layer to sit next to — pass {" + key +
+              ": 'X'}." };
+        }
+        const who = String(args.layer);
+        const from = ordStack.indexOf(who);
+        const notFound = (nm) => ({ __err: "Layer not found in '" +
+          args.comp + "': " + nm + ". Actual layers: " +
+          ordStack.join(", ") + ". For the user's selection, OMIT the " +
+          "'layer' argument on tools that support it." });
+        if (from < 0) return notFound(who);
+        let anchor = null;
+        if (key === "above" || key === "below") {
+          anchor = String(args[key]);
+          if (ordStack.indexOf(anchor) < 0) return notFound(anchor);
+          if (anchor === who) {
+            return { __err: "'" + who + "' cannot be moved " + key +
+              " itself — name a DIFFERENT layer to sit " + key +
+              ". Layers in '" + args.comp + "': " + ordStack.join(", ") };
+          }
+        }
+        ordStack.splice(from, 1);
+        const at = key === "toFront" ? 0
+          : key === "toBack" ? ordStack.length
+          : ordStack.indexOf(anchor) + (key === "below" ? 1 : 0);
+        ordStack.splice(at, 0, who);
+        const out = { layer: who, movedTo: at + 1, previousIndex: from + 1 };
+        out[key] = anchor || true;
+        out.note = out.movedTo === out.previousIndex
+          ? "Nothing moved — '" + who + "' was already there"
+          : "Only '" + who + "' moved; every other layer kept its order";
+        return out;
+      }
       const L = ((args && args.layers) || []).slice();
       if (args && args.by === "name") {
         // Faithful to the fix: the trailing number sorts as a NUMBER, so
@@ -2067,6 +2128,16 @@ function cannedOk(tool, args) {
         // search must refuse rather than pick.
         const tie = cvAmbiguous(args.layer, P);
         if (tie) return { __err: tie };
+        // With ONE blur left (remove_effect took the other) the bare
+        // name resolves through the deep search to that one's path.
+        if (/^blurriness$/i.test(P)) {
+          const blurs = (cvFx[args.layer] || [])
+            .filter(n => /^Gaussian Blur/.test(n));
+          if (blurs.length === 1) {
+            return { value: 25, matchName: "ADBE Gaussian Blur 2-0001",
+                     resolvedPath: "Effects/" + blurs[0] + "/Blurriness" };
+          }
+        }
         // A full path still reads the one it names.
         // Measured in AE 2026: a freshly applied Gaussian Blur comes up
         // at Blurriness 25, not 0.
@@ -2366,10 +2437,39 @@ function cannedOk(tool, args) {
       }
       return out;
     }
-    case "add_mask":
-      return { layer: args && args.layer,
-               mask: (args && args.name) || "Mask 1",
+    case "add_mask": {
+      const mkKey = ((args && args.comp) || "") + "|" + ((args && args.layer) || "");
+      const held = mkMasks[mkKey] || (mkMasks[mkKey] = []);
+      const mkName = (args && args.name) || ("Mask " + (held.length + 1));
+      held.push(mkName);
+      return { layer: args && args.layer, mask: mkName,
                shape: (args && args.shape) || "rectangle" };
+    }
+    case "delete_mask": {
+      // Faithful to the host's three refusals and to AELL_findMask: one
+      // mask needs no ref, a number is a 1-based index, a miss lists
+      // what exists. A host that accepted a delete on an empty layer
+      // again would fail its own step here.
+      const dmKey = ((args && args.comp) || "") + "|" + ((args && args.layer) || "");
+      const dm = mkMasks[dmKey] || [];
+      if (dm.length === 0) {
+        return { __err: "'" + args.layer + "' has no masks — nothing to " +
+          "delete. add_mask creates one." };
+      }
+      const ref = args && args.mask;
+      let at = -1;
+      if (typeof ref === "number") at = Math.round(ref) - 1;
+      else if (ref !== undefined && ref !== null && ref !== "") {
+        at = dm.indexOf(String(ref));
+      } else if (dm.length === 1) at = 0;
+      if (at < 0 || at >= dm.length) {
+        return { __err: "Mask not found on '" + args.layer + "'" +
+          (ref ? ": " + ref : " (several masks — pass {mask: name|index})") +
+          ". Masks here: " + dm.join(", ") };
+      }
+      const gone = dm.splice(at, 1)[0];
+      return { layer: args.layer, removed: gone, remainingMasks: dm.slice() };
+    }
     case "set_mask_path": {
       // Faithful to the host's rules, not to its happy path: keys that
       // disagree on point count and key times that collide on a frame
@@ -2621,6 +2721,47 @@ function cannedOk(tool, args) {
         return { layer: args.layer, effect: args.effect };
       }
       return { done: true };
+    case "remove_effect": {
+      // The coverage rig's parade: the controls add_control put there
+      // (AE lists them as effects too) then the blurs, in AE's order.
+      // Every blur shares the one matchName, so a matchName call matches
+      // them all and the FIRST goes. Anywhere else the layer carries no
+      // effects, which is the refusal the order rig measures.
+      const ctrlNames = Object.keys(cvControls)
+        .filter(k => k.indexOf(args.layer + "/") === 0)
+        .map(k => k.slice(String(args.layer).length + 1));
+      const blurs = inCvComp(args) ? (cvFx[args.layer] || []) : [];
+      const parade = ctrlNames.concat(blurs);
+      if (!inCvComp(args) || parade.length === 0) {
+        return { __err: "'" + args.layer + "' has no effects — nothing " +
+          "to remove. apply_effect adds one." };
+      }
+      const want = String((args && args.effect) || "");
+      const hits = parade.filter(n => n === want ||
+        (want === "ADBE Gaussian Blur 2" && /^Gaussian Blur/.test(n)));
+      if (!hits.length) {
+        return { __err: "No effect '" + want + "' on '" + args.layer +
+          "'. Effects here: " + parade.join(", ") + " — pass one of " +
+          "those display names (or its matchName). apply_effect adds " +
+          "one that is missing." };
+      }
+      const victim = hits[0];
+      if (blurs.indexOf(victim) !== -1) {
+        cvFx[args.layer].splice(cvFx[args.layer].indexOf(victim), 1);
+      } else {
+        delete cvControls[args.layer + "/" + victim];
+      }
+      const out = { layer: args.layer, removed: victim,
+                    matchName: "ADBE Gaussian Blur 2",
+                    remainingEffects: parade.filter(n => n !== victim) };
+      if (hits.length > 1) {
+        out.alsoMatched = hits.slice(1);
+        out.note = hits.length + " effects matched '" + want + "' — " +
+          "removed the first (top-most, '" + victim + "'); " +
+          hits.slice(1).join(", ") + " still on the layer.";
+      }
+      return out;
+    }
     case "set_transform": {
       const shows = drivenShows(args && args.layer, args && args.property);
       if (shows !== null) {
@@ -4266,6 +4407,7 @@ SelfTest.run({
     ordX = {};
     ordStack = [];
     maskKeys = {};
+    mkMasks = {};
     batchLayers = 0; batchFx = {}; batchBlur = null;
     batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetBoundsRig(); resetPresetRig(); resetRqRig(); resetAuRig(); resetFrRig(); resetCapRig(); resetMgRig();
     SelfTest.run({
@@ -4296,6 +4438,7 @@ SelfTest.run({
         ordX = {};
         ordStack = [];
         maskKeys = {};
+        mkMasks = {};
         batchLayers = 0; batchFx = {}; batchBlur = null;
         batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetBoundsRig(); resetPresetRig(); resetRqRig(); resetAuRig(); resetFrRig(); resetCapRig(); resetMgRig();
         SelfTest.run({

@@ -108,7 +108,8 @@
             "reduce_project refuses to run without keepComps, and refuses " +
             "a keepComps entry that is not a comp (AE would delete every " +
             "comp in the project). It also names the render-queue items " +
-            "and the expressions that would break silently.",
+            "and the expressions that would break silently. PROJECT PANEL " +
+            "only ('clean up this comp' is never this tool).",
       args: "{action: 'remove_unused_footage'|'consolidate_footage'|" +
             "'reduce_project', keepComps?: [string] (reduce_project " +
             "only, REQUIRED), dryRun?: bool (default TRUE)}" },
@@ -163,9 +164,9 @@
       desc: "Center a layer's anchor point on its visible content " +
             "(sourceRect math done host-side; position compensated so the " +
             "layer does not jump, at every Position keyframe). ALWAYS use " +
-            "this instead of guessing anchor coordinates. If Scale or " +
-            "Rotation are animated too, the note says where the " +
-            "compensation is exact.",
+            "this instead of guessing anchor coordinates. 'spin around " +
+            "its middle / fix the pivot' = this. If Scale or Rotation are " +
+            "animated too, the note says where the compensation is exact.",
       args: "{comp?: string, layer: name|index, preservePosition?: bool = true}" },
     { name: "get_bounds", mutating: false,
       desc: "MEASURE a layer's rendered content without touching it — how " +
@@ -199,7 +200,8 @@
             "one key per frame. Use it for anything beat-driven — then " +
             "link_property {controlLayer: <the null>, controlEffect: " +
             "'Both Channels', scale: n} drives scale/opacity/position " +
-            "from the music. AE's own command reads the WHOLE comp mix " +
+            "from the music ('sync to the beat' = this then " +
+            "link_property). AE's own command reads the WHOLE comp mix " +
             "and only inside the work area; this tool isolates 'layer' " +
             "by muting the others for the conversion and covers the " +
             "whole comp unless range says otherwise, and says so in the " +
@@ -238,7 +240,8 @@
       desc: "Apply a bezier as TEMPORAL easing between keyframes on one " +
             "property across MANY layers in ONE call (converts to AE " +
             "speed/influence ease). keyIndex eases pair k..k+1; omit for " +
-            "all pairs.",
+            "all pairs. 'smoother / less robotic' = this on the property " +
+            "that HAS the keys (smooth = [0.42,0,0.58,1]).",
       args: "{comp?: string, layers?: [name|index] | layer?: name|index (omit = selection), property: path, bezier: [x1,y1,x2,y2], keyIndex?: int, allPairs?: bool}" },
     { name: "grid_layout", mutating: true,
       desc: "Arrange layers into a grid rigged to a control null: its " +
@@ -254,7 +257,9 @@
       desc: "Apply a known-good expression. Presets: wiggle (frequency/" +
             "amplitude as numbers OR freqControl/ampControl {layer, effect} " +
             "to drive from sliders), loop_cycle, loop_pingpong, loop_offset " +
-            "(need keyframes), time_linear (scalar props; rate or rateControl).",
+            "(need keyframes), time_linear (scalar props; rate or rateControl). " +
+            "'keep it drifting' = wiggle on position (slow drift = " +
+            "frequency 0.5, amplitude 20).",
       args: "{comp?: string, layer: name|index, property: string, preset: string, frequency?: n, amplitude?: n, rate?: n, freqControl?: {layer, effect}, ampControl?: {layer, effect}, rateControl?: {layer, effect}}" },
     { name: "set_expression", mutating: true,
       desc: "LAST RESORT: set a raw expression (or clear with ''). Prefer " +
@@ -268,8 +273,17 @@
     { name: "set_effect_param", mutating: true,
       desc: "Set a parameter on an effect already applied to a layer.",
       args: "{comp?: string, layer: name|index, effect: string, param: string, value: number|[..]|string}" },
+    { name: "remove_effect", mutating: true,
+      desc: "REMOVE one effect from a layer by display name or matchName " +
+            "('get rid of the blur'). An unknown name is refused listing " +
+            "the effects the layer really has; the result names what was " +
+            "removed and what remains.",
+      args: "{comp?: string, layer?: name|index (omit = selected layer), effect: display name or matchName}" },
     { name: "set_layer_timing", mutating: true,
-      desc: "Set layer inPoint/outPoint/startTime (seconds).",
+      desc: "Retime a layer on the TIMELINE, in comp seconds: startTime " +
+            "slides the whole layer ('push it back two seconds' = " +
+            "startTime: current + 2), inPoint/outPoint TRIM its ends " +
+            "without sliding it.",
       args: "{comp?: string, layer: name|index, inPoint?: s, outPoint?: s, startTime?: s}" },
     { name: "duplicate_layer", mutating: true,
       desc: "Duplicate a LAYER inside its comp (use duplicate_comp only " +
@@ -294,16 +308,20 @@
             "than created invisible.",
       args: "{comp?: string, layer?: name|index (omit = selected layer), chunks?: exact piece count, chunkSeconds?: s, offsetPerChunk?: s (extra gaps only), order?: 'ascending'|'descending' (stack order, default ascending)}" },
     { name: "reorder_layers", mutating: true,
-      desc: "Restack layers WITHOUT changing their timing. 'ascending' " +
-            "(default) = later start times sit higher in the stack (bars " +
-            "staircase upward); 'descending' = earliest on top. Targets " +
-            "the selection when 'layers' omitted, else every layer in the " +
-            "comp. Use for 'change/sort the layer order'. by:'name' sorts " +
-            "numbers inside names numerically ('X 2' before 'X 10'). " +
-            "Layers with equal keys keep the stack order they had. The " +
-            "targets end up CONTIGUOUS, which can push untargeted layers " +
-            "aside — the result reports how many.",
-      args: "{comp?: string, layers?: [name|index] (omit = selection, else all), by?: 'startTime'|'inPoint'|'name' (default startTime), order?: 'ascending'|'descending'}" },
+      desc: "Restack layers WITHOUT changing their timing. RELATIVE " +
+            "({layer, above|below: name} or {layer, toFront|toBack: " +
+            "true}) moves ONE layer and disturbs nothing else — 'put it " +
+            "behind X' in the STACK (on-screen 'under the logo' is " +
+            "position, not stacking). SORT restacks a whole set by a " +
+            "key: 'ascending' (default) = later start times sit higher " +
+            "in the stack; 'descending' = earliest on top. by:'name' " +
+            "sorts numbers inside names " +
+            "numerically ('X 2' before 'X 10'). Layers with equal keys " +
+            "keep the stack order they had. The targets end up " +
+            "CONTIGUOUS, which can push untargeted layers aside — the " +
+            "result reports how many. A relative key with 'by' or " +
+            "'layers' is refused.",
+      args: "{comp?: string, layer?: name|index (RELATIVE mode, plus exactly one of:) above?: layer name, below?: layer name, toFront?: true, toBack?: true — never with by/layers | layers?: [name|index] (SORT mode; omit = selection, else all), by?: 'startTime'|'inPoint'|'name' (default startTime), order?: 'ascending'|'descending'}" },
     { name: "delete_layer", mutating: true,
       desc: "Delete a layer from a comp.",
       args: "{comp?: string, layer: name|index}" },
@@ -366,8 +384,18 @@
       desc: "Add a shape layer (rectangle, ellipse, polygon, or star).",
       args: "{comp?: string, name?: string, shape?: 'rectangle'|'ellipse'|'polygon'|'star', size?: [w,h], position?: [x,y], fillColor?: [r,g,b] 0..1, strokeColor?: [r,g,b], strokeWidth?: px, roundness?: px (rectangle), points?: int (polygon/star)}" },
     { name: "add_mask", mutating: true,
-      desc: "Add a mask to a layer. Coordinates are in LAYER space.",
+      desc: "Add a mask to a layer. Coordinates are in LAYER space " +
+            "('hide the bottom half' = a rectangle over the top half, " +
+            "bounds [0, 0, w, h/2]; sizes from get_comp_details, never " +
+            "guessed).",
       args: "{comp?: string, layer: name|index, shape?: 'rectangle'|'ellipse'|'custom', bounds?: [x,y,w,h], vertices?: [[x,y],...] (custom), mode?: 'add'|'subtract'|'intersect'|..., inverted?: bool, feather?: px, name?: string}" },
+    { name: "delete_mask", mutating: true,
+      desc: "REMOVE one mask from a layer by name or 1-based index " +
+            "('remove that mask'); omit 'mask' when the layer has exactly " +
+            "one. An unknown mask is refused listing the masks the layer " +
+            "really has; the result names what was removed and what " +
+            "remains.",
+      args: "{comp?: string, layer?: name|index (omit = selected layer), mask?: name|1-based index (omit when the layer has one)}" },
     { name: "set_mask", mutating: true,
       desc: "Edit an EXISTING mask: mode, feather, expansion, opacity, " +
             "inverted, rename. Omit 'mask' when the layer has exactly one.",
@@ -398,7 +426,8 @@
             "('…/Repeater 1/Transform/Position').",
       args: "{comp?: string, layer?: name|index (shape layer; omit = selected), kind: string, group?: name (add inside this group), name?: string, params?: {ParamName: value, …}}" },
     { name: "precompose", mutating: true,
-      desc: "Move layers into a new nested comp (precompose). The result " +
+      desc: "Move layers into a new nested comp (precompose). 'group " +
+            "these / package it up' = this — AE has no layer groups. The result " +
             "names the precomp AE actually made (auto-numbered if the " +
             "name was taken), what it broke — a moved layer's parent that " +
             "stayed behind is DROPPED, and an expression left behind that " +
@@ -440,7 +469,9 @@
       args: "{comp?: string, layer: name|index, enabled: bool}" },
     { name: "set_layer_parent", mutating: true,
       desc: "Parent layers to another layer (omit/null parent to " +
-            "unparent). Visual positions are preserved by default, but " +
+            "unparent). 'stick it to X / make it follow X' = {layer, " +
+            "parent: 'X'} — never an expression. Visual positions are " +
+            "preserved by default, but " +
             "AE pays for that by REWRITING the child's Position/Scale/" +
             "Rotation (every keyframe, not just the current value) into " +
             "the parent's space — so read those values back rather " +
@@ -480,7 +511,9 @@
       args: "{comp?: string, layers?: [name|index] | layer?: name|index (omit = selection), property: path, keys: [{time: s, value: any}, …] (max 100), relativeTo?: 'inPoint'}" },
     { name: "remove_keyframes", mutating: true,
       desc: "Remove keyframes from a property on many layers at once — " +
-            "specific times or all.",
+            "specific times or all ('stop it moving / un-animate it' = " +
+            "this, times omitted). The value left behind is measured in " +
+            "the real-AE pass.",
       args: "{comp?: string, layers?: [name|index] | layer?: name|index (omit = selection), property: path, times?: [s, …] (omit = remove ALL)}" },
     { name: "for_each_layer", mutating: true,
       desc: "Run a PER-LAYER tool once per target layer in ONE call (max " +
@@ -500,7 +533,9 @@
     { name: "set_track_matte", mutating: true,
       desc: "Use one layer as another's track matte (alpha or luma, " +
             "optionally inverted), or remove it with mode 'none'. No " +
-            "layer-stacking requirement.",
+            "layer-stacking requirement. 'show the video through the " +
+            "text' = {layer: the footage being cut, matteLayer: the " +
+            "text, mode: alpha}.",
       args: "{comp?: string, layer?: name|index (the layer being matted; omit = selected), matteLayer: name|index, mode: 'alpha'|'alpha_inverted'|'luma'|'luma_inverted'|'none'}" },
     { name: "list_effects", mutating: false,
       desc: "Enumerate effects INSTALLED in this AE (name, matchName, " +
@@ -515,7 +550,8 @@
     { name: "apply_preset", mutating: true,
       desc: "Apply an installed .ffx animation preset to layer(s). One " +
             "preset can add several effects, expressions and keyframes at " +
-            "once — the fastest route to a finished look. Match the " +
+            "once — the fastest route to a finished look ('make it pop' " +
+            "= list_presets {filter} then this). Match the " +
             "preset's CATEGORY to the layer: a Text preset on a non-text " +
             "layer lands at best partially (its sliders, never the " +
             "animation) and cameras/lights take nothing at all. The tool " +
@@ -692,9 +728,10 @@
       "- UNITS: scale and opacity are PERCENT (100 = normal size, 200 =",
       "  double, 50 = half). NEVER send 2 to mean 200%. Rotation is in",
       "  degrees. 'scale BY X%' is relative:true; 'scale TO X%' is absolute.",
-      "- Anchor points are in LAYER space, not comp space. To center one,",
-      "  call center_anchor_point — never set anchorPoint coordinates by",
-      "  guesswork.",
+      "- 'spin around its middle / rotate in place / fix the pivot / it",
+      "  swings around its corner' = center_anchor_point. Anchor points",
+      "  are in LAYER space, not comp space — never set anchorPoint",
+      "  coordinates by guesswork.",
       "- NEVER assume how big a layer's content is. 'fit the title to the",
       "  frame', 'put it under the logo', 'is it cut off?' all start with",
       "  get_bounds {layer} — it reports the real rendered size, where it",
@@ -736,12 +773,16 @@
       "  ascending by default (later chunks HIGHER in the stack, bars",
       "  building a staircase upward); order: 'descending' = chunk 1 on",
       "  top, staircase downward.",
-      "- 'change/sort the layer order or stacking' = reorder_layers. It",
-      "  restacks only — start times are untouched. ascending = later",
-      "  start times higher in the stack (staircase up); descending =",
-      "  earliest on top (staircase down). Omit 'layers' to use the",
-      "  selection (or all layers when nothing is selected). Do NOT use",
-      "  stagger_layers to reorder — it changes TIMES, not stacking.",
+      "- 'change/sort the layer order' = reorder_layers SORT {by, order}",
+      "  (omit 'layers' for the selection, else all) — restacks only,",
+      "  start times untouched. Never stagger_layers to reorder — it",
+      "  changes TIMES, not stacking.",
+      "- 'put it behind X / in front of X / underneath X in the stack /",
+      "  send it to the back / bring it to the front' = STACKING:",
+      "  reorder_layers RELATIVE {layer, below|above: 'X'} or {layer,",
+      "  toBack|toFront: true} — ONE layer moves, nothing else; never the",
+      "  sort mode ('by'). 'under / below the logo ON SCREEN' is position:",
+      "  get_bounds, then set_transform.",
       "- To RESIZE a comp ('make it 1920x1080', 'scale the comp down'),",
       "  use scale_comp — it scales and re-centers the content like the",
       "  native Scale Composition script. set_comp_setting width/height",
@@ -828,14 +869,9 @@
       "- Unsure an effect exists or of its exact name? list_effects",
       "  {filter} searches everything installed; apply_effect accepts the",
       "  returned name or matchName.",
-      "- A whole LOOK in one call: list_presets {filter} then apply_preset",
-      "  — AE ships ~679 .ffx presets (Behaviors/Wiggle - position,",
-      "  Text/Animate In/*, Backgrounds, Transitions). Match the preset's",
-      "  CATEGORY to the layer: a Text preset does nothing on a solid,",
-      "  and cameras/lights take no effect presets at all.",
-      "- set_track_matte mattes one layer with another (alpha/luma,",
-      "  inverted variants, 'none' removes). set_layer_parent parents",
-      "  (selection default, visual position preserved).",
+      "- 'make it pop / cinematic / polished / fancy / dress it up / a",
+      "  finished look' = a whole LOOK in one call: list_presets {filter}",
+      "  then apply_preset — never an improvised stack of effects.",
       "",
       "Masks & shape content:",
       "- add_mask creates a mask (rectangle/ellipse/custom points);",
@@ -861,11 +897,45 @@
       "- 'animate the mask / wipe it on' = set_mask_path {keys: […]} or",
       "  add trim_paths and keyframe its End — never hand-write",
       "  expressions for plain keyframe animation.",
-      "- Curve requests: 'stagger with an ease' = stagger_layers with",
-      "  spread + bezier (step mode is evenly spaced, no curve);",
-      "  'ramp opacity/scale across these layers' = distribute_property;",
-      "  'ease between the keyframes' = apply_keyframe_ease. All take the",
-      "  same CSS-style bezier [x1,y1,x2,y2].",
+      "- 'stagger with an ease' = stagger_layers with spread + bezier",
+      "  (step mode is evenly spaced, no curve); 'ramp opacity/scale",
+      "  across these layers' = distribute_property; 'ease between the",
+      "  keyframes / smoother / snappier / less robotic / mechanical / not",
+      "  so linear' = apply_keyframe_ease on the property that HAS the",
+      "  keys. All take the same CSS-style bezier [x1,y1,x2,y2].",
+      "",
+      "Plain-English requests:",
+      "- 'group these / package it up / bundle them / collapse them into",
+      "  one layer' = precompose {layers, name}.",
+      "- 'trim it / start it later / push it back / delay it / shift it N",
+      "  seconds' = set_layer_timing (startTime slides, inPoint/outPoint",
+      "  trim). Never fake timing with opacity keyframes.",
+      "- 'attach / stick / pin it to X', 'make it follow / ride along",
+      "  with X' = set_layer_parent {layer, parent: 'X'}.",
+      "- 'crop this / hide the bottom half / cut a hole / vignette' =",
+      "  add_mask (a hole is mode 'subtract'; a vignette is a big",
+      "  feathered ellipse).",
+      "- 'stop it moving / un-animate it / no more fading' =",
+      "  remove_keyframes, times omitted. Motion from an EXPRESSION is",
+      "  cleared with set_expression {expression: ''} — remove_keyframes",
+      "  reports removed: 0 there, not success.",
+      "- 'keep it drifting / floating / hovering / jittering' =",
+      "  apply_expression_preset wiggle; 'bouncing back and forth / keep",
+      "  it looping' = loop_pingpong / loop_cycle. Never set_expression.",
+      "- 'show the video through the text / cut the logo out of the",
+      "  footage / X only visible through Y' = set_track_matte {layer:",
+      "  X (the footage being cut), matteLayer: Y (the text/logo), mode:",
+      "  alpha}.",
+      "- 'dance to the music / sync to the beat / react to the bass' =",
+      "  audio_to_keyframes ONCE, then link_property {layer, property,",
+      "  controlLayer: <its null>, controlEffect: 'Both Channels', scale}",
+      "  — the conversion alone moves nothing. If it refuses (no audio),",
+      "  say so; never fake a beat with keyframes or wiggle.",
+      "- 'take off the glow / get rid of the blur / lose the drop shadow'",
+      "  = remove_effect {layer, effect}; 'remove that mask / take the",
+      "  mask off' = delete_mask {layer, mask}. Removing is not hiding",
+      "  (never set_effect_param 0 or set_mask {mode: none}), and never",
+      "  delete the layer.",
       "",
       "Renaming MANY comps (a naming convention / cleanup job):",
       "- Use rename_comps ONCE for the whole job. Never rename_item in a",
@@ -888,13 +958,20 @@
       "  get_project_info shows each item's parent folder and each",
       "  folder's path. Same-named folders under different parents are",
       "  normal — use paths when names repeat.",
-      "- 'clean up / tidy / shrink the project' = clean_project with ONE",
+      "- 'clean up / tidy / shrink the PROJECT' (unused footage, the",
+      "  project panel) = clean_project with ONE",
       "  action. It answers with a PREVIEW (dryRun defaults to true): list",
       "  what would be deleted in your reply, call out anything the user",
       "  did not ask for (empty folders, render-queue items, expressions",
       "  that would break), and STOP. Only after they say go, call it",
       "  again with dryRun:false. reduce_project needs keepComps — ask",
       "  which comps matter, never guess.",
+      "- 'clean up / tidy this COMP / the timeline / these layers' is",
+      "  NEVER clean_project (that deletes footage). Named clutter goes",
+      "  with the tool that removes exactly it (remove_keyframes,",
+      "  remove_effect, delete_mask, delete_layer, precompose); unnamed,",
+      "  ask what to remove and return commands: [] — the one exception",
+      "  to ACT, DON'T ASK: deletions nobody named.",
       "- 'file / sort / organize the project panel' = organize_project,",
       "  which PREVIEWS the same way (dryRun defaults to true): report the",
       "  moves it lists and any folder it would create, then STOP until",
@@ -2447,8 +2524,115 @@
              String(result).slice(0, 200) });
         return;
       }
+      if (tool === "export_mogrt" && obj.ok && obj.data && obj.data.path) {
+        verifyMogrtResult(obj.data);
+      }
       cb(obj);
     });
+  }
+
+  /**
+   * The export_mogrt receipt, checked against the FILE. The host side
+   * proves bytes appeared; it never opens them, and a truncated zip or a
+   * definition.json missing a controller was full success until this
+   * (docs/SELF-VERIFY-PLANS.md section 1). MogrtRead parses the zip on
+   * the panel's Node side in definitionOnly mode — headers for every
+   * entry, inflate for definition.json alone, under a byte cap — so a
+   * media-heavy capsule never freezes the CEP thread. Verdicts land on
+   * the receipt: zipValid (true / false / null = unjudged),
+   * controllersInFileCount, templateNameInFile, and a grounded
+   * verifyNote when anything disagrees (expected vs measured, with the
+   * path). Never throws — a verifier that fails is reported as a
+   * verifier that failed, not as a bad export.
+   */
+  function verifyMogrtResult(data) {
+    var MR = global.MogrtRead;
+    if (!MR || typeof MR.verifyExport !== "function") return data;
+    try {
+      // The host roster can carry "(unreadable)" placeholders (AE threw
+      // on a name read) and is capped at 500 names. Either makes name
+      // parity a guaranteed false mismatch, so those cases fall back to
+      // COUNT parity and the note says so — a receipt must never assert
+      // a dropped controller it cannot have measured.
+      var names = data.controllerNames instanceof Array
+        ? data.controllerNames : null;
+      var countOnly = null;
+      if (names) {
+        var clean = [], dropped = 0, i;
+        for (i = 0; i < names.length; i++) {
+          if (names[i] === "(unreadable)") dropped++;
+          else clean.push(names[i]);
+        }
+        if (dropped > 0) {
+          countOnly = dropped + " controller name(s) were unreadable " +
+            "from AE, so parity is by COUNT only";
+        } else if (typeof data.controllers === "number" &&
+                   names.length < data.controllers) {
+          countOnly = "the roster was capped at " + names.length +
+            " of " + data.controllers + " names, so parity is by " +
+            "COUNT only";
+        }
+        names = countOnly ? null : clean;
+      }
+      var v = MR.verifyExport({
+        path: data.path,
+        expectedControllers: names,
+        templateName: data.template,
+        definitionOnly: true,
+        maxInflate: 4 * 1024 * 1024
+      });
+      if (v.readable === false) {
+        // Could not even open/read the file (locked, too large for a
+        // single read, gone): the export is UNJUDGED, not invalid.
+        data.zipValid = null;
+        data.verifyNote = "The verifier could not read the file back" +
+          (v.errors && v.errors.length ? " (" + v.errors[0] + ")" : "") +
+          " — the export itself is unjudged, not failed.";
+        return data;
+      }
+      data.zipValid = v.zipValid === true;
+      var inFile = v.controllersInFile instanceof Array
+        ? v.controllersInFile.length : null;
+      data.controllersInFileCount = inFile;
+      if (typeof v.templateNameInFile === "string") {
+        data.templateNameInFile = v.templateNameInFile;
+      }
+      var notes = [];
+      if (v.errors instanceof Array) notes = notes.concat(v.errors);
+      // Roster verdicts are FACTS only when the reader found the roster
+      // under a known definition.json key; a provisional read (fallback
+      // scan, nested groups) reports as evidence, never as a defect.
+      var provisional = v.rosterProvisional === true;
+      var rosterPrefix = provisional
+        ? "provisional roster read (via " + (v.rosterVia || "fallback") +
+          ", field names unpinned): " : "";
+      if (countOnly) {
+        if (inFile !== null && typeof data.controllers === "number" &&
+            inFile !== data.controllers) {
+          notes.push(rosterPrefix + countOnly + " — " + data.controllers +
+                     " exposed, " + inFile + " in definition.json");
+        } else {
+          notes.push(countOnly);
+        }
+      } else {
+        if (v.missing instanceof Array && v.missing.length) {
+          notes.push(rosterPrefix + "controllers exposed but absent " +
+                     "from definition.json: " + v.missing.join(", "));
+        }
+        if (v.extra instanceof Array && v.extra.length) {
+          notes.push(rosterPrefix + "controllers in definition.json " +
+                     "nobody exposed: " + v.extra.join(", "));
+        }
+      }
+      if (v.warnings instanceof Array) notes = notes.concat(v.warnings);
+      if (notes.length) data.verifyNote = notes.join(" | ");
+    } catch (e) {
+      data.zipValid = null;
+      data.verifyNote = "The verifier could not read the file back (" +
+        (e && e.message ? e.message : String(e)) + ") — the export " +
+        "itself is unjudged, not failed.";
+    }
+    return data;
   }
 
   // ---------------------------------------------------- project state
@@ -3037,6 +3221,7 @@
     setProgressSink: function (fn) { progressSink = fn; },
     catalogModelStatus: catalogModelStatus,
     removeCatalogWeights: removeCatalogWeights,
+    _verifyMogrtResult: verifyMogrtResult, // exposed for tests
     _vramArbiter: VramArbiter,        // exposed for tests and probes
     _genNeedMBFor: genNeedMBFor,      // exposed for tests
     _comfyModelRoots: comfyModelRoots, // exposed for tests

@@ -216,6 +216,15 @@ function classify(src) {
   for (let i = 0; i < starts.length; i++) {
     const body = src.slice(starts[i].at,
       i + 1 < starts.length ? starts[i + 1].at : src.length);
+    // reorder_layers reads a singular {layer} only in its RELATIVE mode
+    // (one layer moved next to one anchor); for for_each_layer's purposes
+    // it is still the batched sorter and must not be driven per layer.
+    // An explicit exemption, so the host helper can live beside the tool
+    // instead of being placed out of this scanner's sight.
+    if (starts[i].name === "reorder_layers") {
+      out[starts[i].name] = "batched";
+      continue;
+    }
     const sing = /args\.layer\b/.test(body) ||
                  /AELL_layerOrSelection/.test(body);
     const plur = /args\.layers\b/.test(body) ||
