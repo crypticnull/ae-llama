@@ -9918,3 +9918,16 @@ got.
   aell-backup-pass22` on this machine — if the stash/branch hold only
   the stale 0.10.22 bump (expected), drop both and log it; if pass 22
   did real work, recover it per the log's own rules.
+
+## 2026-09-01 (remote session, correction) — pass 22 DID real work; recover it
+
+- The owner ran the reset block; `git status --short` beforehand
+  showed pass 22 left EIGHT modified files, not four: the bump quartet
+  plus extension/js/llama.js, main.js, tools.js, scripts/chat-probe.js
+  and tests/test-history-trim.js — a history-trim change in progress
+  (the test name says what it was for). No pass-22 log entry exists;
+  the pass was killed before writing one. All of it is in stash
+  `pass22-salvage`; branch `aell-backup-pass22` holds whatever HEAD
+  was. The previous entry's "expected: only the stale bump" was wrong
+  — WORKPLAN 1b now carries the recovery bullet (apply-and-verify, or
+  document-and-drop; never silent drop).

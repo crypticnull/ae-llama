@@ -107,6 +107,25 @@ and patch-bumps. One pass, in this order:
   and the fix.
 - All green → `node scripts/bump-version.js patch`, push, log. Any
   failure → fix at the root, keep the stubs faithful, then bump.
+- **Pass-22 salvage — RECOVER, do not drop.** The owner's reset on
+  2026-09-01 parked pass 22's uncommitted work in stash
+  `pass22-salvage` (and any unpushed commits on branch
+  `aell-backup-pass22`). It was NOT just the 0.10.22 bump: `git
+  status` showed extension/js/llama.js, main.js, tools.js,
+  scripts/chat-probe.js and tests/test-history-trim.js modified — a
+  coherent history-trim change the pass was killed in the middle of,
+  with no log entry (it never got that far). Own pass, after the
+  verification above: `git stash show -p stash@{0}` (or the named
+  stash) and `git log aell-backup-pass22 --not origin/main`; read
+  what it was building; then EITHER apply it onto the current head
+  (`git stash apply`, resolve conflicts against today's tools.js /
+  main.js changes with the audit's rules — tools.js changed a lot
+  2026-09-01), run the full stub sweep + real AE, commit under the
+  pass-22 intent, bump, push — OR, if it is fragmentary, write a log
+  entry naming exactly what it attempted and which files, so the
+  intent is not lost, then `git stash drop` + `git branch -D
+  aell-backup-pass22`. The four bump files in the stash are noise
+  either way (0.11.x supersedes them).
 
 ## FAST-TRACK: comp-rename audit tools — DONE 2026-08-25 (0.9.15)
 
