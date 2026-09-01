@@ -1635,7 +1635,30 @@ local verifies in real AE.
     sentences over the receipts, never a restatement of what the tool
     results already say (its replies live in the same window and in
     the 3,072-token reserve); (e) a prompt-size ceiling pinned in
-    tests/test-context-budget.js so growth without a cut fails CI.
+    tests/test-context-budget.js so growth without a cut fails CI;
+    (f) **the summarization protocol (owner ask 2026-09-01)** — the
+    measured truth today is that main.js's histBudget floor (4,000
+    chars) means most rounds already run with about ONE turn of
+    memory; fitHistory drops whole entries silently and the system
+    note only says "N messages were trimmed". Replace the silent drop
+    with a deterministic LEDGER: every entry fitHistory would drop is
+    folded into one line the panel builds WITHOUT a model call — a
+    user turn → its first ~120 chars; an assistant turn → the tool
+    names it ran with their naming args (layer/comp/property) and its
+    reply's first clause; a TOOL RESULTS turn → ok/error counts and
+    the names created/renamed/deleted from the receipts. The ledger
+    ("Earlier in this session:" one-liners, newest last, hard cap ~1.5
+    KB with its own reserved slice) rides in the system prompt tail so
+    the user-first template invariant holds, and it is what lets "make
+    them blue instead" resolve after the original exchange fell out of
+    the window. Phase 2, measured before adopted: when the ledger
+    itself hits its cap, ONE cheap model call (max_tokens ~200, only
+    between rounds, never mid-round) compresses it; skip if the 32B's
+    latency cost is not worth it. NOTE for the local session: pass 22's
+    stash (`pass22-salvage`) touched llama.js/main.js/tools.js and a
+    tests/test-history-trim.js change — it was working THIS area;
+    reconcile the two when recovering it (keep whichever keeps more
+    function per char, measured by tests/test-context-budget.js).
     Stub-testable; local measures the VRAM side.
 
 Dropped for now, with reasons recorded in the audit doc: comp
