@@ -40,12 +40,19 @@ Object.defineProperty(Layer.prototype, "index", {
   get() { return this.comp._layers.indexOf(this) + 1; }
 });
 Layer.prototype.property = function () { return null; };
+// A layer moved relative to ITSELF throws here: after the first splice
+// indexOf(this) is -1, and the silent version inserted before the LAST
+// element — a scrambled stack that a host dropping its self-move refusal
+// would have passed with. (What real AE does with moveBefore(self) is
+// unmeasured; the host refuses before the call either way.)
 Layer.prototype.moveAfter = function (other) {
+  if (other === this) throw new Error("After Effects error: a layer cannot be moved after itself");
   const arr = this.comp._layers;
   arr.splice(arr.indexOf(this), 1);
   arr.splice(arr.indexOf(other) + 1, 0, this);
 };
 Layer.prototype.moveBefore = function (other) {
+  if (other === this) throw new Error("After Effects error: a layer cannot be moved before itself");
   const arr = this.comp._layers;
   arr.splice(arr.indexOf(this), 1);
   arr.splice(arr.indexOf(other), 0, this);
@@ -506,5 +513,149 @@ assert(Math.abs(wS[0][0] - 2) < 1e-9 && Math.abs(wS[2][1] - 7) < 1e-9,
 assert(compS._layers.every(l => l.startTime === 1),
        "startTime untouched, so each piece shows the same source frames it " +
        "did before the split");
+
+// ---- reorder_layers RELATIVE mode (audit 0.11 item 4) -------------------
+// "Put it behind the logo" used to have no tool: the nearest routing was
+// the SORTER above, which restacks a whole list by start time. The start
+// times here are deliberately scrambled so that a host which fell through
+// to the sort would scramble the stack — a reverted host answers these
+// calls with {by, topToBottom} and a re-sorted comp, never with movedTo.
+// The stub's moveBefore/moveAfter are the splice AE documents: moveBefore
+// lands directly ABOVE the anchor (one index lower), moveAfter directly
+// BELOW. Locked/shy carry no AE behaviour in this stub beyond the flags —
+// the host refuses locked and notes shy before touching either.
+const compR = new Comp("Relative", 10, 30);
+Object.setPrototypeOf(compR, Object.create(CompItem.prototype,
+  Object.getOwnPropertyDescriptors(Comp.prototype)));
+[["L1", 5], ["L2", 1], ["L3", 4], ["L4", 2], ["L5", 6], ["L6", 3]]
+  .forEach(([n, st]) => compR._layers.push(new Layer(n, compR, 0, 8, st)));
+project.activeItem = compR;
+const stackR = () => compR._layers.map(l => l.name).join("|");
+
+let rr = call("reorder_layers", { layer: "L2", below: "L5" });
+assert(rr.ok, "below: moves one layer under the anchor: " + (rr.error || ""));
+assert(stackR() === "L1|L3|L4|L5|L2|L6",
+       "…and every other layer keeps its order (got " + stackR() + ")");
+assert(rr.ok && rr.data.layer === "L2" && rr.data.movedTo === 5 &&
+       rr.data.previousIndex === 2 && rr.data.below === "L5",
+       "receipt: {layer, movedTo, previousIndex, below} (got " +
+       JSON.stringify(rr.data) + ")");
+assert(rr.ok && rr.data.by === undefined && rr.data.displaced === undefined &&
+       rr.data.topToBottom === undefined,
+       "a relative move never reports as a sort");
+assert(rr.ok && /Only 'L2' moved/.test(rr.data.note),
+       "the note says only the named layer moved: " + (rr.ok && rr.data.note));
+
+rr = call("reorder_layers", { layer: "L2", above: "L3" });
+assert(rr.ok && stackR() === "L1|L2|L3|L4|L5|L6" && rr.data.movedTo === 2 &&
+       rr.data.previousIndex === 5 && rr.data.above === "L3",
+       "above: lands directly on top of the anchor (got " + stackR() +
+       ", " + JSON.stringify(rr.ok ? rr.data : rr.error) + ")");
+
+rr = call("reorder_layers", { layer: "L6", toFront: true });
+assert(rr.ok && stackR() === "L6|L1|L2|L3|L4|L5" && rr.data.movedTo === 1 &&
+       rr.data.previousIndex === 6 && rr.data.toFront === true,
+       "toFront: slot 1 (got " + stackR() + ")");
+rr = call("reorder_layers", { layer: "L6", toBack: true });
+assert(rr.ok && stackR() === "L1|L2|L3|L4|L5|L6" && rr.data.movedTo === 6 &&
+       rr.data.previousIndex === 1 && rr.data.toBack === true,
+       "toBack: last slot (got " + stackR() + ")");
+
+// Already there: an honest no-op, not a claimed move.
+rr = call("reorder_layers", { layer: "L1", toFront: true });
+assert(rr.ok && rr.data.movedTo === 1 && rr.data.previousIndex === 1 &&
+       /Nothing moved/.test(rr.data.note) && stackR() === "L1|L2|L3|L4|L5|L6",
+       "toFront on the top layer says nothing moved: " +
+       JSON.stringify(rr.ok ? rr.data : rr.error));
+rr = call("reorder_layers", { layer: "L3", above: "L4" });
+assert(rr.ok && rr.data.movedTo === 3 && rr.data.previousIndex === 3 &&
+       /already above 'L4'/.test(rr.data.note),
+       "above the layer it already sits above says so: " +
+       JSON.stringify(rr.ok ? rr.data : rr.error));
+
+// The refusals, each grounded.
+rr = call("reorder_layers", { layer: "L2", above: "L2" });
+assert(!rr.ok && /cannot be moved above itself/.test(rr.error) &&
+       /Layers in 'Relative': L1, L2, L3/.test(rr.error),
+       "relative to ITSELF is refused with the comp's layers: " + rr.error);
+rr = call("reorder_layers", { layer: "L2", above: "L3", below: "L4" });
+assert(!rr.ok && /ONE relative key/.test(rr.error) &&
+       /above \+ below/.test(rr.error),
+       "two relative keys are refused by name: " + rr.error);
+rr = call("reorder_layers", { layer: "L2", above: "L3", by: "name" });
+assert(!rr.ok && /cannot be combined/.test(rr.error) &&
+       /'by: name'/.test(rr.error) && /drop 'by'/.test(rr.error),
+       "a relative key plus 'by' is refused, naming both: " + rr.error);
+rr = call("reorder_layers", { layers: ["L1", "L2"], above: "L3" });
+assert(!rr.ok && /moves ONE layer/.test(rr.error) &&
+       /\{layers, by/.test(rr.error),
+       "{layers} with a relative key is refused, naming the sort form: " +
+       rr.error);
+rr = call("reorder_layers", { layer: "L2", above: "Logo" });
+assert(!rr.ok && /Layer not found in 'Relative': Logo/.test(rr.error) &&
+       /Actual layers: L1, L2, L3, L4, L5, L6/.test(rr.error),
+       "a missing anchor lists the comp's real layers: " + rr.error);
+// The wrong TYPE in a relative slot is a request nobody made: an anchor
+// in toFront/toBack must not become "true", and a boolean in above/below
+// must not reach comp.layer(true).
+rr = call("reorder_layers", { layer: "L2", toFront: "L5" });
+assert(!rr.ok && /'toFront' takes true, got 'L5'/.test(rr.error) &&
+       /did you mean \{above: 'L5'\}/.test(rr.error),
+       "an anchor name in toFront is refused, suggesting above: " + rr.error);
+rr = call("reorder_layers", { layer: "L2", toBack: "L5" });
+assert(!rr.ok && /'toBack' takes true, got 'L5'/.test(rr.error) &&
+       /did you mean \{below: 'L5'\}/.test(rr.error),
+       "an anchor name in toBack is refused, suggesting below: " + rr.error);
+rr = call("reorder_layers", { layer: "L2", above: true });
+assert(!rr.ok && /'above' names a layer to sit next to/.test(rr.error) &&
+       /\{toFront: true\}/.test(rr.error),
+       "a boolean in above is refused, suggesting toFront: " + rr.error);
+rr = call("reorder_layers", { layer: "L2", below: true });
+assert(!rr.ok && /'below' names a layer to sit next to/.test(rr.error) &&
+       /\{toBack: true\}/.test(rr.error),
+       "a boolean in below is refused, suggesting toBack: " + rr.error);
+assert(stackR() === "L1|L2|L3|L4|L5|L6",
+       "no refusal moved anything (got " + stackR() + ")");
+
+// toFront:false is not a request — the call is still the sorter. (By
+// name, descending, puts L1 on top: the stack is already in that order,
+// so the sort proves the mode without disturbing the checks below.)
+rr = call("reorder_layers", { by: "name", order: "descending",
+                              toFront: false });
+assert(rr.ok && rr.data.by === "name" && rr.data.movedTo === undefined &&
+       stackR() === "L1|L2|L3|L4|L5|L6",
+       "a false relative flag leaves the call in sort mode: " +
+       JSON.stringify(rr.ok ? rr.data : rr.error) + " " + stackR());
+
+// {layer} omitted = the user's selection, and the selection survives.
+compR._layers.forEach(l => { l.selected = l.name === "L4"; });
+rr = call("reorder_layers", { below: "L6" });
+assert(rr.ok && rr.data.layer === "L4" && rr.data.movedTo === 6 &&
+       stackR() === "L1|L2|L3|L5|L6|L4",
+       "no {layer}: the selected layer moves (got " + stackR() + ", " +
+       JSON.stringify(rr.ok ? rr.data : rr.error) + ")");
+assert(compR.selectedLayers.length === 1 &&
+       compR.selectedLayers[0].name === "L4",
+       "…and stays selected afterwards");
+compR._layers.forEach(l => { l.selected = l.name === "L1" || l.name === "L2"; });
+rr = call("reorder_layers", { toFront: true });
+assert(!rr.ok && /2 layers selected \(L1, L2\)/.test(rr.error),
+       "two selected and no {layer} is refused, naming them: " + rr.error);
+compR._layers.forEach(l => { l.selected = false; });
+
+// Locked: refused before the primitive runs (AE's scripting behaviour on
+// a locked layer is unmeasured — see the host comment).
+compR.layer("L3").locked = true;
+rr = call("reorder_layers", { layer: "L3", toBack: true });
+assert(!rr.ok && /'L3' is LOCKED/.test(rr.error) && /padlock/.test(rr.error) &&
+       stackR() === "L1|L2|L3|L5|L6|L4",
+       "a locked layer is refused and untouched: " + rr.error);
+compR.layer("L3").locked = false;
+// Shy: moved, and the receipt says the timeline may be hiding it.
+compR.layer("L5").shy = true;
+rr = call("reorder_layers", { layer: "L5", toFront: true });
+assert(rr.ok && rr.data.movedTo === 1 && /SHY/.test(rr.data.shyNote || ""),
+       "a shy layer moves with a note: " +
+       JSON.stringify(rr.ok ? rr.data : rr.error));
 
 console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");

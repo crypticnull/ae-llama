@@ -185,6 +185,30 @@ function aeEval(script, cb, timeoutMs) {
   })();
 }
 
+/*
+ * A step's fixture, when the earlier steps do not leave one behind
+ * (nothing before the remove_effect step puts an effect on Beta).
+ * `prepare` is ExtendScript sent through the bridge OUTSIDE the model
+ * path: it is not a tool run, so it does not count toward probeRuns, and
+ * the comp is read back AFTER it the same way as after any other turn,
+ * so the verdict sees exactly what it planted.
+ *
+ * Consequence for undo: measureUndo caps Ctrl+Z at probeRuns, and a
+ * fixture is one more AE script execution (one more undo step) that the
+ * cap does not know about. An undo:true step that follows a prepared
+ * step would find its cap one short of reaching "before". Today the only
+ * undo:true step is 10 and every prepared step comes after it; keep it
+ * that way, or count fixtures into the cap.
+ */
+function runPrepare(step, cb) {
+  if (!step.prepare) { cb(); return; }
+  aeEval(step.prepare, function (text, isError) {
+    say("info", "fixture: " + (isError ? "AE did not answer"
+      : String(text || "").slice(0, 200)));
+    cb();
+  });
+}
+
 /** Read-only inspection expression -> parsed JSON (probe verdicts). */
 function aeRead(expr, cb) {
   aeEval("AELLJSON.stringify((function () { " + expr + " })())",
@@ -259,6 +283,10 @@ loadPanelFile("comfy.js");
 loadPanelFile("whisper.js");
 // And again for export_gif/export_social, which reach for global.Ffmpeg.
 loadPanelFile("ffmpeg.js");
+// mogrt-read.js: tools.js verifies every export_mogrt receipt against
+// the file through global.MogrtRead — load it the way the panel does
+// (index.html order) so the probe exercises the shipped hook.
+loadPanelFile("mogrt-read.js");
 loadPanelFile("tools.js");
 
 const Settings = window.Settings;
@@ -484,6 +512,7 @@ function sendMessage(text, done) {
                                ok: !!result.ok, data: result.data || null,
                                error: result.error || null });
             rememberGenerated(cmd.tool, result);
+            rememberPrecomp(cmd.tool, result);
             const body = result.ok
               ? "ok" + (result.data
                   ? ": " + JSON.stringify(result.data).slice(0, 400) : "")
@@ -536,7 +565,11 @@ const READ_COMP = FIND_COMP +
   "    startTime: 0, inPoint: 0, solidColor: null," +
   "    effectNames: [], effectColors: []," +
   "    scale: null, rotation: null, isText: false, isShape: false," +
-  "    isNull: false, isSolid: false, sourceFile: null };" +
+  "    isNull: false, isSolid: false, sourceFile: null," +
+  "    matteLayer: null, isPrecomp: false, anchorPoint: null, opacity: null," +
+  "    sourceRect: null, layerWidth: null, layerHeight: null, maskBoxes: []," +
+  "    maskModes: [], maskInverted: []," +
+  "    opacityKeyEased: [], expressions: {}, textAnimators: 0 };" +
   "  try { row.matte = L.trackMatteType; } catch (e1) {}" +
   "  try { row.startTime = L.startTime; row.inPoint = L.inPoint;" +
   "  } catch (e1b) {}" +
@@ -592,6 +625,78 @@ const READ_COMP = FIND_COMP +
   "      row.opacityKeyTimes.push(op.keyTime(k));" +
   "    }" +
   "  } catch (e12) {}" +
+  // What the trigger-layer steps (14 onward) judge on, each read in its
+  // own try: a null has no source rect worth reading, a camera no anchor
+  // point, and one throw must not blank the rest of the row.
+  "  try { row.matteLayer = L.trackMatteLayer ? L.trackMatteLayer.name" +
+  "    : null; } catch (e13) {}" +
+  "  try { row.isPrecomp = !!(L.source && (L.source instanceof CompItem));" +
+  "  } catch (e14) {}" +
+  "  try { row.anchorPoint = L.property('ADBE Transform Group')" +
+  "    .property('ADBE Anchor Point').value.slice(0); } catch (e15) {}" +
+  "  try { row.opacity = L.property('ADBE Transform Group')" +
+  "    .property('ADBE Opacity').value; } catch (e16) {}" +
+  "  try { var sr = L.sourceRectAtTime(0, false);" +
+  "    row.sourceRect = { left: sr.left, top: sr.top, width: sr.width," +
+  "      height: sr.height }; } catch (e17) {}" +
+  "  try { row.layerWidth = L.width; row.layerHeight = L.height;" +
+  "  } catch (e18) {}" +
+  // Bounding box of every mask path: 'hide the bottom half' is only
+  // judged honestly when the verdict can see how much of the layer the
+  // mask covers — a count alone passes a mask the size of the layer.
+  "  try {" +
+  "    var mp = L.property('ADBE Mask Parade');" +
+  "    for (var mi = 1; mi <= mp.numProperties && mi <= 8; mi++) {" +
+  "      var mk = mp.property(mi);" +
+  "      try {" +
+  "        var mm = mk.maskMode;" +
+  "        row.maskModes.push(mm === MaskMode.SUBTRACT ? 'subtract'" +
+  "          : mm === MaskMode.ADD ? 'add' : 'other');" +
+  "        row.maskInverted.push(!!mk.inverted);" +
+  "      } catch (emm) {" +
+  "        row.maskModes.push('unknown'); row.maskInverted.push(false);" +
+  "      }" +
+  "      var vs = mk.property('ADBE Mask Shape').value.vertices;" +
+  "      var x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;" +
+  "      for (var vi = 0; vi < vs.length; vi++) {" +
+  "        if (vs[vi][0] < x0) x0 = vs[vi][0];" +
+  "        if (vs[vi][0] > x1) x1 = vs[vi][0];" +
+  "        if (vs[vi][1] < y0) y0 = vs[vi][1];" +
+  "        if (vs[vi][1] > y1) y1 = vs[vi][1];" +
+  "      }" +
+  "      row.maskBoxes.push([x0, y0, x1 - x0, y1 - y0]);" +
+  "    }" +
+  "  } catch (e19) {}" +
+  // apply_keyframe_ease sets BEZIER interpolation on the keys it eases
+  // (hostscript setInterpolationTypeAtKey); keys set_keyframes makes are
+  // LINEAR. That is the whole difference 'smoother' has to produce.
+  "  try {" +
+  "    var op2 = L.property('ADBE Transform Group')" +
+  "      .property('ADBE Opacity');" +
+  "    for (var k2 = 1; k2 <= op2.numKeys && k2 <= 12; k2++) {" +
+  "      row.opacityKeyEased.push(" +
+  "        op2.keyInInterpolationType(k2) ===" +
+  "          KeyframeInterpolationType.BEZIER ||" +
+  "        op2.keyOutInterpolationType(k2) ===" +
+  "          KeyframeInterpolationType.BEZIER);" +
+  "    }" +
+  "  } catch (e20) {}" +
+  "  try {" +
+  "    var xn = ['ADBE Position', 'ADBE Scale', 'ADBE Rotate Z'," +
+  "      'ADBE Opacity'];" +
+  "    var xk = ['position', 'scale', 'rotation', 'opacity'];" +
+  "    for (var xi = 0; xi < xn.length; xi++) {" +
+  "      try {" +
+  "        var xp = L.property('ADBE Transform Group').property(xn[xi]);" +
+  "        if (xp.expressionEnabled && xp.expression) {" +
+  "          row.expressions[xk[xi]] = String(xp.expression).slice(0, 200);" +
+  "        }" +
+  "      } catch (ex) {}" +
+  "    }" +
+  "  } catch (e21) {}" +
+  "  try { if (row.isText) row.textAnimators =" +
+  "    L.property('ADBE Text Properties').property('ADBE Text Animators')" +
+  "      .numProperties; } catch (e22) {}" +
   "  out.layers.push(row);" +
   "}" +
   // Every file-backed footage item in the PROJECT. comfy_generate imports
@@ -612,27 +717,71 @@ const READ_COMP = FIND_COMP +
   "}" +
   "return out;";
 
-/* Remove every comp this probe made, plus the solid footage it left
- * behind (only when nothing else uses it). Direct ExtendScript rather
- * than delete_item: a LEFTOVER comp is worse than a messy project — the
+/* What the precompose step made, so the sweep can take it back out. The
+ * nine solids live inside it afterwards, so until it is gone they count
+ * as used and the footage pass below would leave them behind too — a
+ * "Squares", "Squares 2", "Squares 3"… per run in the owner's project. */
+const precomps = { itemIds: [], names: [] };
+
+function rememberPrecomp(tool, result) {
+  if (tool !== "precompose" || !result || !result.ok || !result.data) return;
+  const d = result.data;
+  if (typeof d.id === "number" && precomps.itemIds.indexOf(d.id) === -1) {
+    precomps.itemIds.push(d.id);
+  }
+  if (typeof d.precomp === "string" && d.precomp &&
+      precomps.names.indexOf(d.precomp) === -1) {
+    precomps.names.push(d.precomp);
+  }
+}
+
+/* Remove every comp this probe made — the Probe Room comps, the precomp
+ * its precompose step reported (by id and name), and, for a run that
+ * died before a receipt was recorded, any "Squares[ N]" comp holding
+ * NOTHING but the probe's own solids — plus the solid footage left
+ * behind once nothing uses it. Direct ExtendScript rather than
+ * delete_item: a LEFTOVER comp is worse than a messy project — the
  * model's create_comp gets auto-numbered to "Probe Room 2" while the
  * verdicts below still read "Probe Room", so every check silently
- * inspects the previous run's comp. That happened. */
-const SWEEP =
-  "var killed = 0, i, it;" +
-  "for (i = app.project.numItems; i >= 1; i--) {" +
-  "  it = app.project.item(i);" +
-  "  if (it instanceof CompItem && it.name.indexOf(" +
-  JSON.stringify(COMP) + ") === 0) { it.remove(); killed++; }" +
-  "}" +
-  "for (i = app.project.numItems; i >= 1; i--) {" +
-  "  it = app.project.item(i);" +
-  "  if (!(it instanceof FootageItem)) continue;" +
-  "  if (!/^(Red Square|White Ellipse|Rig)/.test(it.name)) continue;" +
-  "  try { if (it.usedIn.length === 0) { it.remove(); killed++; } }" +
-  "  catch (e) {}" +
-  "}" +
-  "return { removed: killed };";
+ * inspects the previous run's comp. That happened. The precomp pass runs
+ * BEFORE the footage pass so the solids are unused by the time it looks. */
+function sweepScript(pre) {
+  pre = pre || precomps;
+  return "var ids = " + JSON.stringify(pre.itemIds) + ";" +
+    "var names = " + JSON.stringify(pre.names) + ";" +
+    "var killed = 0, i, j, it, hit;" +
+    "for (i = app.project.numItems; i >= 1; i--) {" +
+    "  it = app.project.item(i);" +
+    "  if (it instanceof CompItem && it.name.indexOf(" +
+    JSON.stringify(COMP) + ") === 0) { it.remove(); killed++; }" +
+    "}" +
+    "for (i = app.project.numItems; i >= 1; i--) {" +
+    "  it = app.project.item(i);" +
+    "  if (!(it instanceof CompItem)) continue;" +
+    "  hit = false;" +
+    "  for (j = 0; j < ids.length; j++) if (it.id === ids[j]) hit = true;" +
+    "  for (j = 0; j < names.length; j++) if (it.name === names[j]) hit = true;" +
+    "  if (!hit && /^Squares( \\d+)?$/.test(it.name) && it.numLayers > 0) {" +
+    "    hit = true;" +
+    "    for (j = 1; j <= it.numLayers; j++) {" +
+    "      try {" +
+    "        var L = it.layer(j);" +
+    "        if (!/^Red Square/.test(L.name) || !L.source ||" +
+    "            !(L.source.mainSource instanceof SolidSource)) hit = false;" +
+    "      } catch (eL) { hit = false; }" +
+    "    }" +
+    "  }" +
+    "  if (hit) { it.remove(); killed++; }" +
+    "}" +
+    "for (i = app.project.numItems; i >= 1; i--) {" +
+    "  it = app.project.item(i);" +
+    "  if (!(it instanceof FootageItem)) continue;" +
+    "  if (!/^(Red Square|White Ellipse|Rig)/.test(it.name)) continue;" +
+    "  try { if (it.usedIn.length === 0) { it.remove(); killed++; } }" +
+    "  catch (e) {}" +
+    "}" +
+    "return { removed: killed };";
+}
 
 /* Take back out exactly what a generation step imported, by item id.
  * Never by folder: the probe's output directory is the panel's, and the
@@ -749,6 +898,35 @@ function distinct(values, tol) {
   }
   return out.sort((a, b) => a - b);
 }
+
+/* The layers the trigger-layer steps (14 onward) name. Beta and Rig are
+ * the model's own creations from earlier turns and carry the names those
+ * sentences asked for; HELLO is the one text layer. Beta is a solid too,
+ * so the nine squares are squares() MINUS Beta from step 11 on. */
+function textLayer(state) {
+  const t = state.layers.filter(l => l.isText);
+  return t.filter(l => /HELLO/i.test(l.text || ""))[0] || t[0] || null;
+}
+function betaLayer(state) {
+  return state.layers.filter(l => /^Beta/i.test(l.name))[0] || null;
+}
+function rigNull(state) {
+  const n = state.layers.filter(l => l.isNull && !/CTRL/i.test(l.name));
+  return n.filter(l => /rig/i.test(l.name))[0] || n[0] || null;
+}
+function nineSquares(state) {
+  return squares(state).filter(l => !/^Beta/i.test(l.name));
+}
+function calls(ctx, name) {
+  return (ctx.tools || []).filter(t => t.tool === name);
+}
+function ranInstead(ctx) {
+  const tried = (ctx.tools || []).map(t => t.tool);
+  return tried.length ? " — it ran " + tried.join(", ") + " instead"
+                      : " and ran no tools at all";
+}
+/* AE's TrackMatteType.NO_TRACK_MATTE is 5013; a fresh layer reads 0. */
+function hasMatte(m) { return !!m && m !== 5013; }
 
 const STEPS = [
   {
@@ -1253,6 +1431,565 @@ const STEPS = [
       }
       return null;
     }
+  },
+
+  // ------------------------------------------------ the trigger layer
+  //
+  // AUDIT-0.11 part 1.2: ten tools a designer's own words never reached,
+  // because the docs and rules named the tools' vocabulary rather than
+  // the user's. Each step below types ONE such sentence and reads the
+  // comp for the RIGHT tool's fingerprint — a fingerprint the nearest
+  // wrong tool cannot leave (a sort restacks the other layers, a mask
+  // cannot take the shape of letters, an expression is not a parent).
+  //
+  // The sentences lean on the words AROUND each rule's phrase list where
+  // a synonym proves more ('delay it', 'tag along', 'mechanically',
+  // 'dress up', 'floaty', 'throb', 'tuck', 'bundle'): a step that only
+  // echoes its own rule measures the echo. `tool` names the tool the
+  // sentence is meant to reach; tests/test-chat-probe.js pins that the
+  // schema can emit it and that a rule in the prompt names it.
+  //
+  // Order is load-bearing here too: the ease step needs the squares'
+  // fade (step 3) still in place, so it runs before the un-animate step;
+  // the restack runs before the matte so a legacy-AE matte would also
+  // have its layer directly above; precompose folds the squares away
+  // last of the comp edits.
+  {
+    // The shortest tool doc in the file until this pass ("Set layer
+    // inPoint/outPoint/startTime (seconds).") and no rule at all.
+    // 'delay' is deliberately NOT in the rule's phrase list.
+    title: "push a layer back on the timeline",
+    tool: "set_layer_timing",
+    say: "Beta shouldn't show up until two seconds in — delay it.",
+    check(state, ctx) {
+      const b = betaLayer(state);
+      if (!b) return "the Beta layer is gone";
+      const fd = 1 / (state.frameRate || 30);
+      const was = ctx.before ? betaLayer(ctx.before) : null;
+      if (Math.abs(b.inPoint - 2) > fd) {
+        if (was && b.opacityKeys > was.opacityKeys) {
+          return "Beta still starts at " + b.inPoint.toFixed(2) + "s and " +
+                 "gained opacity keyframes — the delay was faked with a " +
+                 "fade instead of retiming the layer";
+        }
+        return "Beta starts at " + b.inPoint.toFixed(2) + "s (startTime " +
+               b.startTime.toFixed(2) + "), wanted 2";
+      }
+      if (ctx.before && state.layers.length !== ctx.before.layers.length) {
+        return "the layer count went from " + ctx.before.layers.length +
+               " to " + state.layers.length + " — retiming should not " +
+               "add or remove layers";
+      }
+      return null;
+    }
+  },
+  {
+    title: "attach a layer to a null",
+    tool: "set_layer_parent",
+    say: "Make Beta tag along with the Rig null wherever it goes.",
+    check(state) {
+      const b = betaLayer(state);
+      if (!b) return "the Beta layer is gone";
+      const rig = rigNull(state);
+      if (!rig) {
+        return "no Rig null in the comp (the parenting step must have " +
+               "failed)";
+      }
+      if (b.parent !== rig.name) {
+        const expr = b.expressions && b.expressions.position;
+        return "Beta's parent is " + (b.parent || "nothing") + ", wanted " +
+               rig.name + (expr
+                 ? " — it was linked with an expression (" +
+                   expr.slice(0, 60) + ") instead of parented"
+                 : "");
+      }
+      return null;
+    }
+  },
+  {
+    title: "smooth a mechanical fade",
+    tool: "apply_keyframe_ease",
+    say: "The squares fade in too mechanically — make it feel smoother.",
+    check(state, ctx) {
+      const sq = nineSquares(state);
+      const animated = sq.filter(l => l.opacityKeys >= 2);
+      if (!animated.length) {
+        return "no square has opacity keyframes to ease (the stagger " +
+               "step must have failed)";
+      }
+      if (ctx.before && sq.length !== nineSquares(ctx.before).length) {
+        return "there were " + nineSquares(ctx.before).length +
+               " squares before the sentence and " + sq.length +
+               " after — easing should not add or remove layers";
+      }
+      const stiff = animated.filter(l =>
+        !(l.opacityKeyEased || []).some(Boolean));
+      if (stiff.length) {
+        if (animated.some(l => l.expressions && l.expressions.opacity)) {
+          return stiff.length + " of " + animated.length + " squares " +
+                 "still have linear opacity keys — an expression was put " +
+                 "on opacity instead of easing the keys";
+        }
+        const rekeyed = ctx.before && animated.some(l => {
+          const w = nineSquares(ctx.before).find(x => x.name === l.name);
+          return w && l.opacityKeys > w.opacityKeys;
+        });
+        return stiff.length + " of " + animated.length + " squares still " +
+               "have linear opacity keys" + (rekeyed
+                 ? " — extra keyframes were added instead of easing the " +
+                   "existing ones"
+                 : "");
+      }
+      return null;
+    }
+  },
+  {
+    // A text layer's anchor sits at its baseline origin, nowhere near
+    // its middle, so the fingerprint is the anchor landing inside the
+    // rendered rect — and the layer NOT jumping, which is what a raw
+    // set_transform {anchorPoint} guess does.
+    title: "fix a text layer's pivot",
+    tool: "center_anchor_point",
+    say: "HELLO swings around its corner when it rotates — make it turn " +
+         "about its own centre.",
+    check(state, ctx) {
+      const t = textLayer(state);
+      if (!t) return "the HELLO layer is gone";
+      const r = t.sourceRect, a = t.anchorPoint;
+      if (!r || !a) return "could not read HELLO's anchor point or source rect";
+      const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+      const tolX = Math.max(4, r.width * 0.15);
+      const tolY = Math.max(4, r.height * 0.15);
+      if (Math.abs(a[0] - cx) > tolX || Math.abs(a[1] - cy) > tolY) {
+        return "HELLO's anchor point is at [" + a[0].toFixed(0) + ", " +
+               a[1].toFixed(0) + "] and the text's centre is [" +
+               cx.toFixed(0) + ", " + cy.toFixed(0) + "] (layer space)" +
+               (a[0] === 0 && a[1] === 0 ? " — still the default corner"
+                                          : "");
+      }
+      const was = ctx.before ? textLayer(ctx.before) : null;
+      if (was && was.anchorPoint && was.position && t.position &&
+          Math.abs(t.rotation || 0) < 0.01 && t.scale &&
+          Math.abs(t.scale[0] - 100) < 0.01) {
+        const dx = (t.position[0] - a[0]) - (was.position[0] - was.anchorPoint[0]);
+        const dy = (t.position[1] - a[1]) - (was.position[1] - was.anchorPoint[1]);
+        if (Math.abs(dx) > 2 || Math.abs(dy) > 2) {
+          return "the anchor is centred but the text jumped by [" +
+                 dx.toFixed(0) + ", " + dy.toFixed(0) + "] px — the anchor " +
+                 "moved without compensating position";
+        }
+      }
+      return null;
+    }
+  },
+  {
+    title: "hide half a layer with a mask",
+    tool: "add_mask",
+    say: "Chop off the lower half of Beta so only the top shows.",
+    check(state, ctx) {
+      const b = betaLayer(state);
+      if (!b) return "the Beta layer is gone";
+      const was = ctx.before ? betaLayer(ctx.before) : null;
+      const had = was ? was.masks : 0;
+      if (b.masks <= had) {
+        if (was && b.scale && was.scale &&
+            Math.abs(b.scale[1] - was.scale[1]) > 1) {
+          return "Beta was squashed (scale " + was.scale[1] + " -> " +
+                 b.scale[1] + ") instead of masked";
+        }
+        return "Beta has " + b.masks + " mask(s), same as before — " +
+               "nothing hides its lower half";
+      }
+      const W = b.layerWidth, H = b.layerHeight;
+      const boxes = (b.maskBoxes || []).slice(had);
+      const modes = (b.maskModes || []).slice(had);
+      const inv = (b.maskInverted || []).slice(had);
+      if (W && H && boxes.length) {
+        if (!boxes.some(bx => bx[2] * bx[3] < 0.8 * W * H)) {
+          return "the new mask covers the whole " + W + "x" + H + " layer (" +
+                 JSON.stringify(boxes) + ") — it hides nothing";
+        }
+        // A band the full width of the layer and half its height: over
+        // the TOP half (add mode keeps what it covers), or over the
+        // BOTTOM half when the mask subtracts or is inverted. A dot, a
+        // sliver or a band in the wrong place hides the wrong thing.
+        const band = boxes.some((bx, i) => {
+          const fullWide = bx[2] >= 0.9 * W;
+          const half = Math.abs(bx[3] - H / 2) <= 0.15 * H;
+          const top = Math.abs(bx[1]) <= 0.1 * H;
+          const bottom = Math.abs(bx[1] - H / 2) <= 0.1 * H &&
+            (modes[i] === "subtract" || inv[i] === true);
+          return fullWide && half && (top || bottom);
+        });
+        if (!band) {
+          return "the new mask is " + JSON.stringify(boxes) + " (" +
+                 modes.join(", ") + ") on a " + W + "x" + H + " layer — " +
+                 "not a band across the top half";
+        }
+      }
+      return null;
+    }
+  },
+  {
+    title: "take a mask off again",
+    tool: "delete_mask",
+    say: "Lose the oval mask on HELLO — it's not needed any more.",
+    check(state, ctx) {
+      const t = textLayer(state);
+      if (!t) {
+        return "the HELLO layer is gone — the mask went with the whole layer";
+      }
+      const was = ctx.before ? textLayer(ctx.before) : null;
+      const had = was ? was.masks : null;
+      if (had === 0) {
+        return "HELLO had no mask before the sentence (the mask step must " +
+               "have failed), so there was nothing to prove";
+      }
+      if (had !== null ? t.masks >= had : t.masks > 0) {
+        return "HELLO still has " + t.masks + " mask(s)" +
+               (had !== null ? ", same as before" : "") + " — setting a " +
+               "mask's mode to none or its feather to 0 is not removing it";
+      }
+      return null;
+    }
+  },
+  {
+    title: "un-animate the squares",
+    tool: "remove_keyframes",
+    say: "The squares shouldn't fade in any more — just have them there " +
+         "from the start.",
+    check(state, ctx) {
+      const sq = nineSquares(state);
+      if (!sq.length) return "no squares in the comp";
+      if (ctx.before && sq.length !== nineSquares(ctx.before).length) {
+        return "there were " + nineSquares(ctx.before).length +
+               " squares before the sentence and " + sq.length +
+               " after — removing animation should not add or remove layers";
+      }
+      const still = sq.filter(l => l.opacityKeys > 0);
+      if (still.length) {
+        return still.length + " of " + sq.length + " squares still carry " +
+               "opacity keyframes (" + still.slice(0, 3)
+                 .map(l => l.name + ": " + l.opacityKeys + " keys")
+                 .join(", ") + ") — keyframing 100 to 100 is not " +
+               "un-animating";
+      }
+      // Which value AE leaves behind when every key goes is UNMEASURED
+      // (the host removes key 1 repeatedly, so the last key's value is
+      // the likely survivor — 100 here, but that is a reading of the
+      // code, not of AE). Reported for the real-AE pass, not failed.
+      const left = distinct(sq.map(l => l.opacity).filter(v =>
+        typeof v === "number"), 0.5);
+      say("info", "residual opacity after the keys went: " +
+          (left.length ? left.join(", ") : "(unreadable)") +
+          (left.some(v => v < 50) ? " — LOW, the squares may be invisible;" +
+            " measure which key's value AE keeps" : ""));
+      return null;
+    }
+  },
+  {
+    // The designed "make it pop" tool was findable only via the word
+    // 'preset'. The receipt is what proves the route: an improvised
+    // Glow + Drop Shadow also changes the layer.
+    title: "give a layer a finished look",
+    tool: "apply_preset",
+    say: "Dress HELLO up a bit — it looks too plain.",
+    check(state, ctx) {
+      const t = textLayer(state);
+      if (!t) return "the HELLO layer is gone";
+      const applied = calls(ctx, "apply_preset");
+      if (!applied.length) {
+        return "the model never reached apply_preset" + ranInstead(ctx) +
+               " — a look is a preset, not an improvised effect stack";
+      }
+      const ok = applied.filter(c => c.ok);
+      if (!ok.length) {
+        return "apply_preset failed " + applied.length + " time(s), last " +
+               "error: " + applied[applied.length - 1].error;
+      }
+      const rows = [];
+      for (const c of ok) {
+        for (const r of (c.data && c.data.applied) || []) rows.push(r);
+      }
+      const onText = rows.filter(r => r.layer === t.name);
+      if (!onText.length) {
+        return "the preset landed on " + (rows.length
+          ? rows.map(r => r.layer).join(", ") : "nothing") + ", not on " +
+          t.name;
+      }
+      const was = ctx.before ? textLayer(ctx.before) : null;
+      if (was && onText.some(r => (r.effectsAdded || []).length) &&
+          t.effects <= was.effects) {
+        return "the receipt says effects were added to " + t.name +
+               " but the layer still has " + t.effects + " effect(s)";
+      }
+      return null;
+    }
+  },
+  {
+    title: "keep a layer drifting",
+    tool: "apply_expression_preset",
+    say: "Give Beta a lazy, floaty hover so it never sits completely still.",
+    check(state, ctx) {
+      const b = betaLayer(state);
+      if (!b) return "the Beta layer is gone";
+      const ex = b.expressions || {};
+      const moving = Object.keys(ex).filter(k => /wiggle/i.test(ex[k]));
+      if (!moving.length) {
+        const was = ctx.before ? betaLayer(ctx.before) : null;
+        const keyed = was && b.opacityKeys > was.opacityKeys;
+        return "Beta has no wiggle expression on any transform property" +
+               (Object.keys(ex).length
+                 ? " (expressions: " + JSON.stringify(ex).slice(0, 120) + ")"
+                 : "") +
+               (keyed ? " — it was keyframed instead, and keyframes stop"
+                      : "");
+      }
+      if (!calls(ctx, "apply_expression_preset").some(c => c.ok)) {
+        const raw = calls(ctx, "set_expression").filter(c => c.ok);
+        return "the wiggle got there " + (raw.length
+          ? "via set_expression — hand-written code, the route the rules " +
+            "forbid"
+          : "without apply_expression_preset" + ranInstead(ctx));
+      }
+      return null;
+    }
+  },
+  {
+    // The follow-up (link_property) was doc prose only. Probe Room has
+    // no audio layer, so the honest outcome here is a GROUNDED refusal
+    // relayed to the user — the branch below that reads the expression
+    // runs the day someone drops an audio layer into the rig.
+    title: "sync a layer to the music",
+    tool: "audio_to_keyframes",
+    say: "Make Beta throb in time with the music.",
+    check(state, ctx) {
+      const a2k = calls(ctx, "audio_to_keyframes");
+      if (!a2k.length) {
+        return "the model never reached audio_to_keyframes" + ranInstead(ctx);
+      }
+      if (a2k.some(c => c.ok)) {
+        const link = calls(ctx, "link_property").filter(c => c.ok);
+        if (!link.length) {
+          return "the audio was converted and the model stopped — the " +
+                 "amplitude null drives nothing until link_property runs";
+        }
+        const b = betaLayer(state);
+        if (!b) return "the Beta layer is gone";
+        const ex = b.expressions || {};
+        const ctrl = String((link[0].args || {}).controlLayer || "");
+        const driven = Object.keys(ex).filter(k =>
+          (ctrl && ex[k].indexOf(ctrl) !== -1) ||
+          /Both Channels|Left Channel|Right Channel|Audio Amplitude/i
+            .test(ex[k]));
+        if (!driven.length) {
+          return "link_property ran but no Beta transform property reads " +
+                 "the amplitude null" + (Object.keys(ex).length
+                   ? " (expressions: " + JSON.stringify(ex).slice(0, 120) + ")"
+                   : " — Beta has no expressions at all");
+        }
+        return null;
+      }
+      const err = String(a2k[a2k.length - 1].error || "");
+      if (!/audio/i.test(err)) {
+        return "audio_to_keyframes failed for some other reason than the " +
+               "missing audio, so the step proved nothing: " + err;
+      }
+      const faked = (ctx.tools || []).filter(c => c.ok &&
+        /^(set_keyframes|add_keyframe|set_expression|apply_expression_preset|set_property)$/
+          .test(c.tool));
+      if (faked.length) {
+        return "told there is no audio, the model faked a beat with " +
+               faked.map(c => c.tool).join(", ");
+      }
+      const said = (ctx.replies || []).join(" ");
+      if (!said.trim()) return "the refusal never reached the user";
+      const declined = new RegExp(
+        "\\b(?:can(?:no|')?t|cannot|could\\s?n['o]t|unable|no audio|" +
+        "(?:there(?: is|'s)|is|has|have) no|isn'?t any|does ?n['o]t " +
+        "(?:have|contain)|without|missing|not (?:found|present)|" +
+        "did\\s?n['o]t|refus\\w*)\\b", "i");
+      if (!declined.test(said) || !/audio|music|sound|track/i.test(said)) {
+        return "the reply does not tell the user the comp has no audio to " +
+               "sync to: \"" + said.slice(0, 160) + "\"";
+      }
+      return null;
+    }
+  },
+  {
+    // reorder_layers' RELATIVE mode. The sort mode would also put Beta
+    // somewhere else — and move every other layer with it, which is the
+    // half a naive "is Beta under HELLO now?" check never sees.
+    title: "tuck one layer under another",
+    tool: "reorder_layers",
+    say: "Beta is covering HELLO — tuck it in underneath the text.",
+    check(state, ctx) {
+      const b = betaLayer(state), t = textLayer(state);
+      if (!b) return "the Beta layer is gone";
+      if (!t) return "the HELLO layer is gone";
+      if (ctx.before) {
+        const b0 = betaLayer(ctx.before), t0 = textLayer(ctx.before);
+        if (b0 && t0 && b0.index === t0.index + 1) {
+          return "Beta already sat directly under HELLO before the " +
+                 "sentence, so the step proved nothing";
+        }
+        if (state.layers.length !== ctx.before.layers.length) {
+          return "the layer count went from " + ctx.before.layers.length +
+                 " to " + state.layers.length + " — restacking should not " +
+                 "add or remove layers";
+        }
+        // Everything except THE Beta layer, by name and in stack order:
+        // a relative move leaves this list untouched, a sort does not.
+        const others = st => st.layers
+          .filter(l => l.name !== b.name).map(l => l.name);
+        const w = others(ctx.before), n = others(state);
+        const moved = w.filter((name, i) => n[i] !== name).length;
+        if (moved) {
+          return moved + " of the other " + w.length + " layers changed " +
+                 "places — a SORT ran where one layer should have moved";
+        }
+      }
+      if (b.index !== t.index + 1) {
+        return "Beta is at index " + b.index + " and HELLO at " + t.index +
+               " — " + (b.index < t.index
+                 ? "Beta is still above the text"
+                 : "Beta went below the text but not directly under it");
+      }
+      return null;
+    }
+  },
+  {
+    // Nothing earlier leaves an effect on Beta (Dot's drop shadow was
+    // undone in step 10), so the blur is planted through the bridge
+    // before the sentence — see runPrepare.
+    title: "take an effect off a layer",
+    tool: "remove_effect",
+    prepare: "AELL_call(\"apply_effect\", " + JSON.stringify(JSON.stringify(
+      { comp: COMP, layer: "Beta", effect: "Gaussian Blur" })) + ")",
+    say: "Beta doesn't need that blur any more — strip it off.",
+    check(state, ctx) {
+      const b = betaLayer(state);
+      if (!b) {
+        return "the Beta layer is gone — deleting the layer is not " +
+               "removing the effect";
+      }
+      const was = ctx.before ? betaLayer(ctx.before) : null;
+      const blurs = names => (names || []).filter(n => /blur/i.test(n));
+      if (was && !blurs(was.effectNames).length) {
+        return "Beta carried no blur before the sentence (the fixture " +
+               "never landed), so there was nothing to prove";
+      }
+      const blur = blurs(b.effectNames);
+      if (blur.length) {
+        return "Beta still carries " + blur.join(", ") + " — setting " +
+               "Blurriness to 0 or switching the effect off is not " +
+               "removing it";
+      }
+      if (was && b.effects !== was.effects - blurs(was.effectNames).length) {
+        return "Beta lost " + (was.effects - b.effects) + " effect(s) when " +
+               "only the blur should have gone (had " +
+               was.effectNames.join(", ") + ")";
+      }
+      return null;
+    }
+  },
+  {
+    title: "show one layer through another",
+    tool: "set_track_matte",
+    say: "I want Beta to show only through the HELLO letters.",
+    check(state, ctx) {
+      const b = betaLayer(state), t = textLayer(state);
+      if (!b) return "the Beta layer is gone";
+      if (!t) return "the HELLO layer is gone";
+      if (!hasMatte(b.matte)) {
+        const t0 = ctx.before ? textLayer(ctx.before) : null;
+        if (hasMatte(t.matte) && !(t0 && hasMatte(t0.matte))) {
+          return "it is backwards — HELLO got matted" +
+                 (t.matteLayer ? " by " + t.matteLayer : "") + " and Beta " +
+                 "is untouched; 'layer' is the thing being cut, " +
+                 "'matteLayer' the text";
+        }
+        const was = ctx.before ? betaLayer(ctx.before) : null;
+        if (was && b.masks > was.masks) {
+          return "Beta was given a mask instead of a track matte — a mask " +
+                 "cannot take the shape of the letters";
+        }
+        return "Beta has no track matte";
+      }
+      if (b.matteLayer && b.matteLayer !== t.name) {
+        return "Beta is matted by " + b.matteLayer + ", not by " + t.name;
+      }
+      return null;
+    }
+  },
+  {
+    title: "package layers into a precomp",
+    tool: "precompose",
+    say: "Bundle the nine blue squares into a single layer called Squares.",
+    check(state, ctx) {
+      const pre = state.layers.filter(l => l.isPrecomp);
+      // Exactly "Squares": AE auto-numbers a taken name, so "Squares 2"
+      // means a previous run's precomp is still in the project — a
+      // sweep failure to report, not a pass.
+      const named = pre.filter(l => l.name === "Squares");
+      if (!named.length) {
+        const near = pre.filter(l => /^Squares/i.test(l.name));
+        if (near.length) {
+          return "the precomp came out as '" + near[0].name + "', not " +
+                 "'Squares' — a comp called Squares already existed (a " +
+                 "leftover from an earlier run the sweep missed?)";
+        }
+        return pre.length
+          ? "there is a precomp layer (" + pre.map(l => l.name).join(", ") +
+            ") but none called Squares"
+          : "no precomp layer in the comp" + ranInstead(ctx);
+      }
+      const left = nineSquares(state);
+      const was = ctx.before ? nineSquares(ctx.before).length : null;
+      const allowed = was !== null ? Math.max(0, was - 9) : 0;
+      if (left.length > allowed) {
+        return left.length + " square(s) are still loose in " + COMP +
+               (was !== null ? " (" + was + " before)" : "") + " — a comp " +
+               "was made but the squares never moved into it";
+      }
+      return null;
+    }
+  },
+  {
+    // The collision the audit named: 'clean this up' about a COMP used to
+    // route to clean_project, the project-panel tool that deletes
+    // footage (safe only because it previews first — and still a
+    // non-sequitur). No tool is named here on purpose: the right answer
+    // to an unnamed mess is a question.
+    title: "clean up means the comp, not the project",
+    say: "Probe Room is a mess now — clean it up.",
+    check(state, ctx) {
+      if (!state.found) return "the comp is gone";
+      const project = (ctx.tools || []).filter(c =>
+        /^(clean_project|organize_project|delete_item|rename_comps)$/
+          .test(c.tool));
+      if (project.length) {
+        return "a complaint about the COMP went to the project panel: " +
+               project.map(c => c.tool + (c.args && c.args.dryRun === false
+                 ? " (dryRun:false!)" : "")).join(", ") +
+               " — clean_project deletes footage, not clutter in a timeline";
+      }
+      if (ctx.before && state.layers.length < ctx.before.layers.length) {
+        const gone = ctx.before.layers
+          .filter(l => !state.layers.some(a => a.name === l.name))
+          .map(l => l.name);
+        return (ctx.before.layers.length - state.layers.length) +
+               " layer(s) were deleted without asking what should go: " +
+               gone.slice(0, 5).join(", ");
+      }
+      const said = (ctx.replies || []).join(" ");
+      if (!/\?|which|what|tell me|let me know|should i|would you like/i
+            .test(said)) {
+        return "nothing was named to remove and the model never asked " +
+               "what should go: \"" + said.slice(0, 160) + "\"";
+      }
+      return null;
+    }
   }
 ];
 
@@ -1364,7 +2101,7 @@ function main() {
     console.log("-- model ready");
     // Clear the decks BEFORE the first prompt: the comp name has to be
     // free or create_comp auto-numbers away from what the verdicts read.
-    aeRead(SWEEP, function (res) {
+    aeRead(sweepScript(), function (res) {
       console.log("-- cleared " + ((res && res.removed) || 0) +
                   " leftover item(s)\n");
       next(0);
@@ -1378,7 +2115,9 @@ function main() {
     const mark = transcript.length;
     console.log("\n=== step " + (idx + 1) + ": " + step.title + " ===");
     // How the comp looked BEFORE the sentence: a step that refers back to
-    // an earlier turn is judged on what changed, not on absolutes.
+    // an earlier turn is judged on what changed, not on absolutes. A
+    // fixture the step plants goes in first, so it is part of "before".
+    runPrepare(step, function () {
     aeRead(READ_COMP, function (before) {
       aeRead(SIG_FN + " return sig();", function (sigBefore) {
         const runsBefore = probeRuns;
@@ -1428,6 +2167,7 @@ function main() {
         }
       });
     });
+    });
   }
 
   /** Press Undo until the comp matches `sigBefore`, never past our own work. */
@@ -1459,7 +2199,7 @@ function main() {
       process.exit(failed.length ? 1 : 0);
     };
     if (OPT.keep) { done(); return; }
-    aeRead(SWEEP, function (res) {
+    aeRead(sweepScript(precomps), function (res) {
       let removed = (res && res.removed) || 0;
       const finishCleanup = function () {
         console.log("cleanup: removed " + removed + " project item(s)");
@@ -1489,5 +2229,6 @@ if (require.main === module) {
 } else {
   module.exports = { STEPS, squares, undoProbe, SIG_FN, READ_COMP,
                      bridgeWrapper, sweepImports, samePath, rememberGenerated,
-                     generated };
+                     generated, runPrepare, sweepScript, rememberPrecomp,
+                     precomps };
 }

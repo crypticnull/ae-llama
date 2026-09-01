@@ -227,6 +227,164 @@ function AELL_layersOrSelection(comp, args) {
   return out;
 }
 
+/* The comp's layer names, capped — the grounding half of every layer
+ * refusal that is not a plain lookup miss (AELL_resolveLayer lists them
+ * itself on a miss). */
+function AELL_layerNamesHere(comp, cap) {
+  var names = [];
+  for (var i = 1; i <= comp.numLayers; i++) {
+    try { names.push(comp.layer(i).name); } catch (e) {}
+  }
+  return AELL_capJoin(names, cap || 20);
+}
+
+/*
+ * reorder_layers' RELATIVE mode ("put it behind the logo", "send it to
+ * the back"): ONE layer moved next to ONE anchor, every other layer
+ * keeping its place. The sorter below it restacks a whole list and
+ * pushes untargeted layers aside to make the list contiguous, which is
+ * the wrong tool for a three-word request about a single layer.
+ *
+ * These two helpers live up here with the resolvers rather than beside
+ * reorder_layers on purpose: tests/test-for-each-layer.js classifies
+ * every tool by the TEXT of its body, and a singular {layer} read next
+ * to the sorter would refile the batched sorter as per-layer drivable.
+ * Only the sorter's body calls in here.
+ */
+var AELL_REORDER_REL_KEYS = ["above", "below", "toFront", "toBack"];
+
+/* Which relative key a call carries: {key: ""} for plain sort mode,
+ * {key: name} for exactly one, or {error} when the keys conflict.
+ * "toFront: false" counts as absent — a model that fills every slot
+ * with a boolean is asking for nothing by it. */
+function AELL_relativeReorderKey(args) {
+  var found = [], i, k, v;
+  for (i = 0; i < AELL_REORDER_REL_KEYS.length; i++) {
+    k = AELL_REORDER_REL_KEYS[i];
+    v = args[k];
+    if (v === null || typeof v === "undefined" || v === "" || v === false) {
+      continue;
+    }
+    found.push(k);
+  }
+  if (found.length === 0) return { key: "" };
+  if (found.length > 1) {
+    return { error: "reorder_layers takes ONE relative key, got " +
+      found.join(" + ") + ". above/below name the layer to sit next to; " +
+      "toFront/toBack need no anchor. Pick one." };
+  }
+  if (args.by !== null && typeof args.by !== "undefined" && args.by !== "") {
+    return { error: "'" + found[0] + "' moves ONE layer relative to " +
+      "another; 'by: " + args.by + "' SORTS a whole list. They cannot be " +
+      "combined — drop 'by' to move the layer, or drop '" + found[0] +
+      "' to sort {layers} by " + args.by + "." };
+  }
+  if (AELLJSON.isArray(args.layers) && args.layers.length > 0) {
+    return { error: "'" + found[0] + "' moves ONE layer — pass {layer: " +
+      "name}, not {layers: [...]}. To restack several layers at once " +
+      "use {layers, by: startTime|inPoint|name}." };
+  }
+  // The TYPE has to match the key, or a move happens that nobody asked
+  // for: {toFront: "Logo"} is an anchor in the wrong slot, and treating
+  // it as true would send the layer to the top and throw the name away;
+  // {above: true} would reach comp.layer(true), which is unmeasured.
+  k = found[0];
+  v = args[k];
+  if (k === "above" || k === "below") {
+    if (typeof v !== "string" && typeof v !== "number") {
+      return { error: "'" + k + "' names a layer to sit next to — pass {" +
+        k + ": 'X'}; to move to the " + (k === "above" ? "top" : "bottom") +
+        " use {" + (k === "above" ? "toFront" : "toBack") + ": true}." };
+    }
+  } else if (v !== true) {
+    return { error: "'" + k + "' takes true, got '" + v + "' — did you " +
+      "mean {" + (k === "toFront" ? "above" : "below") + ": '" + v + "'}?" };
+  }
+  return { key: k };
+}
+
+/*
+ * The move itself. AE's own primitives: moveBefore(other) lands the layer
+ * directly ABOVE other (one index lower), moveAfter directly BELOW; the
+ * front and back are moveBefore(layer 1) / moveAfter(last layer), the
+ * same two calls the sorter already relies on. The landing slot is READ
+ * BACK from AE rather than computed, and a mismatch is reported.
+ *
+ * Refused or no-op'd honestly, with the AE facts that decide each:
+ * - relative to ITSELF: refused. moveBefore(self) has no meaning and
+ *   what AE does with it has not been measured (assumed: no-op or
+ *   throw); either way the receipt would lie about a move.
+ * - LOCKED layer: refused. AE's timeline will not drag a locked layer;
+ *   whether the scripting primitives honour that lock has NOT been
+ *   measured here (apply_preset measured that presets DO land on locked
+ *   layers, so the lock is not a scripting-wide guard). The stubs assume
+ *   the primitives would move it; refusing before the call keeps the
+ *   answer the same whichever way real AE goes. Real-AE pass: verify.
+ * - SHY layer: moved, with a note — a shy layer is only hidden from the
+ *   timeline while Hide Shy Layers is on, and the move is invisible
+ *   there until the user turns it off.
+ * - already in place: moved anyway (the primitives tolerate it in the
+ *   stubs; assumed harmless in AE) and reported as "nothing moved".
+ */
+function AELL_reorderRelative(comp, args, key) {
+  var layer = AELL_layerOrSelection(comp, args.layer);
+  var target = null;
+  if (key === "above" || key === "below") {
+    target = AELL_resolveLayer(comp, args[key]);
+    if (target === layer) {
+      return AELL_err("'" + layer.name + "' cannot be moved " + key +
+        " itself — name a DIFFERENT layer to sit " + key + ". Layers in '" +
+        comp.name + "': " + AELL_layerNamesHere(comp, 20));
+    }
+  }
+  var isLocked = false;
+  try { isLocked = !!layer.locked; } catch (eL) {}
+  if (isLocked) {
+    return AELL_err("'" + layer.name + "' is LOCKED — AE's timeline " +
+      "refuses to move a locked layer, and this tool does not unlock it. " +
+      "Unlock it in AE (the padlock switch) and retry.");
+  }
+  var previousIndex = layer.index;
+  var numLayers = comp.numLayers;
+  if (key === "above") {
+    layer.moveBefore(target);
+  } else if (key === "below") {
+    layer.moveAfter(target);
+  } else if (key === "toFront") {
+    if (previousIndex !== 1) layer.moveBefore(comp.layer(1));
+  } else {
+    if (previousIndex !== numLayers) layer.moveAfter(comp.layer(numLayers));
+  }
+  var movedTo = layer.index;
+  var want = key === "above" ? target.index - 1
+    : key === "below" ? target.index + 1
+    : key === "toFront" ? 1 : numLayers;
+  var res = { layer: layer.name, movedTo: movedTo,
+              previousIndex: previousIndex };
+  res[key] = target ? target.name : true;
+  if (movedTo !== want) {
+    res.warning = "AE reports '" + layer.name + "' at slot " + movedTo +
+      ", not the expected " + want + " — read the comp back with " +
+      "get_comp_details";
+  } else if (movedTo === previousIndex) {
+    res.note = "Nothing moved — '" + layer.name + "' was already " +
+      (target ? key + " '" + target.name + "'"
+              : (key === "toFront" ? "at the front" : "at the back")) +
+      " (slot " + movedTo + ")";
+  } else {
+    res.note = "Only '" + layer.name + "' moved; every other layer kept " +
+      "its order (slot " + previousIndex + " -> " + movedTo + " of " +
+      numLayers + ")";
+  }
+  var isShy = false;
+  try { isShy = !!layer.shy; } catch (eS) {}
+  if (isShy) {
+    res.shyNote = "'" + layer.name + "' is SHY — the move is real but " +
+      "invisible in the timeline while Hide Shy Layers is on";
+  }
+  return AELL_okay(res);
+}
+
 var AELL_TRANSFORM_MAP = {
   position:    "ADBE Position",
   scale:       "ADBE Scale",
@@ -3990,6 +4148,90 @@ AELL_TOOLS.set_effect_param = function (args) {
   return AELL_okay(out);
 };
 
+/*
+ * "Take off the glow." Removes ONE effect, matched by display name or
+ * matchName — exact first, then case-insensitive, because the model
+ * lowercases what the user said. The FIRST (top-most) match goes when
+ * several carry the name: AE numbers a second copy "Glow 2" itself, but
+ * every copy shares one matchName and a user can rename two alike, so
+ * the receipt names what else matched and stays.
+ *
+ * AE facts this leans on: PropertyBase.remove() is documented for
+ * indexed groups, which the Effect Parade is, and AE INVALIDATES the
+ * removed object (every later read of it throws "Object is invalid") —
+ * so the name and the other matches are read BEFORE the call. The stubs
+ * model that invalidation. NOT measured here: whether a surviving
+ * "Glow 2" keeps its number once "Glow" is gone (assumed: names persist,
+ * AE never renames on removal) and whether removing a parade entry
+ * invalidates references to its LATER siblings (assumed yes, which is
+ * why nothing is read from them afterwards). Real-AE pass: verify both.
+ */
+AELL_TOOLS.remove_effect = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  var layer = AELL_layerOrSelection(comp, args.layer);
+  var effects = null;
+  try { effects = layer.property("ADBE Effect Parade"); } catch (eP) {}
+  if (!effects) {
+    return AELL_err("'" + layer.name + "' is a " + AELL_layerType(layer) +
+      " layer and cannot carry effects, so there is nothing to remove.");
+  }
+  var have = AELL_effectNames(layer);
+  if (have.length === 0) {
+    return AELL_err("'" + layer.name + "' has no effects — nothing to " +
+      "remove. apply_effect adds one.");
+  }
+  if (args.effect === null || typeof args.effect === "undefined" ||
+      args.effect === "") {
+    return AELL_err("'effect' is required (display name or matchName). " +
+      "Effects on '" + layer.name + "': " + AELL_capJoin(have, 15));
+  }
+  var want = String(args.effect);
+  var wantLower = want.toLowerCase();
+  var exact = [], loose = [], i, fx, mn;
+  for (i = 1; i <= effects.numProperties; i++) {
+    fx = effects.property(i);
+    if (!fx) continue;
+    mn = "";
+    try { mn = String(fx.matchName || ""); } catch (eM) {}
+    if (fx.name === want || mn === want) {
+      exact.push(fx);
+    } else if (String(fx.name).toLowerCase() === wantLower ||
+               mn.toLowerCase() === wantLower) {
+      loose.push(fx);
+    }
+  }
+  var matches = exact.length ? exact : loose;
+  if (matches.length === 0) {
+    return AELL_err("No effect '" + want + "' on '" + layer.name +
+      "'. Effects here: " + AELL_capJoin(have, 15) + " — pass one of " +
+      "those display names (or its matchName). apply_effect adds one " +
+      "that is missing.");
+  }
+  var victim = matches[0];
+  var removedName = String(victim.name);
+  var removedMatch = "";
+  try { removedMatch = String(victim.matchName || ""); } catch (eM2) {}
+  var others = [];
+  for (i = 1; i < matches.length; i++) others.push(String(matches[i].name));
+  try {
+    victim.remove();
+  } catch (eR) {
+    return AELL_err("AE refused to remove '" + removedName + "' from '" +
+      layer.name + "': " + (eR && eR.message ? eR.message : eR));
+  }
+  var out = { layer: layer.name, removed: removedName,
+              matchName: removedMatch,
+              remainingEffects: AELL_effectNames(layer) };
+  if (others.length) {
+    out.alsoMatched = others;
+    out.note = matches.length + " effects matched '" + want +
+      "' — removed the first (top-most, '" + removedName + "'); " +
+      others.join(", ") + " still on the layer. Call again with that " +
+      "display name to remove another.";
+  }
+  return AELL_okay(out);
+};
+
 /* First free name of the form "base", "base 2", "base 3", … in a comp. */
 function AELL_uniqueLayerName(comp, base) {
   var taken = {};
@@ -4334,14 +4576,25 @@ function AELL_targetLayers(comp, args) {
 }
 
 /*
- * Restack layers WITHOUT touching their timing. Ascending (default):
- * later start times sit higher in the stack, so the timeline bars build
- * a staircase going UP; descending: earliest on top, staircase going
- * down. Targets the explicit list, else the selection, else every layer
- * in the comp.
+ * Two modes, one tool.
+ *
+ * RELATIVE ({layer, above|below: name} or {layer, toFront|toBack: true}):
+ * one layer next to one anchor, nothing else disturbed — the "put it
+ * behind the logo" request. Handled by AELL_reorderRelative (defined
+ * with the resolvers; see the note there for why).
+ *
+ * SORT ({layers?, by, order}): restack a whole list WITHOUT touching
+ * timing. Ascending (default): later start times sit higher in the
+ * stack, so the timeline bars build a staircase going UP; descending:
+ * earliest on top, staircase going down. Targets the explicit list, else
+ * the selection, else every layer in the comp. Pulling a subset together
+ * pushes untargeted layers aside, and the receipt says how many.
  */
 AELL_TOOLS.reorder_layers = function (args) {
   var comp = AELL_resolveComp(args.comp);
+  var rel = AELL_relativeReorderKey(args);
+  if (rel.error) return AELL_err(rel.error);
+  if (rel.key) return AELL_reorderRelative(comp, args, rel.key);
   var layers = [];
   var i;
   if (AELLJSON.isArray(args.layers) && args.layers.length > 0) {
@@ -5714,6 +5967,8 @@ function AELL_findMask(layer, ref) {
   var n = 0;
   try { n = masks.numProperties || 0; } catch (e) {}
   var i;
+  // "2" is the 1-based index the doc promises, not a mask named "2".
+  if (typeof ref === "string" && /^\d+$/.test(ref)) ref = Number(ref);
   if (typeof ref === "number") {
     var byIdx = null;
     try { byIdx = masks.property(Math.round(ref)); } catch (e2) {}
@@ -5780,6 +6035,61 @@ AELL_TOOLS.set_mask = function (args) {
   }
   return AELL_okay({ layer: layer.name, mask: mask.name,
                      changed: changed.join(", ") });
+};
+
+/* Mask names on a layer, in AE's order — the receipt half of delete_mask. */
+function AELL_maskNames(layer) {
+  var names = [];
+  var masks = null;
+  try { masks = layer.property("ADBE Mask Parade"); } catch (e) {}
+  if (!masks) return names;
+  var n = 0;
+  try { n = masks.numProperties || 0; } catch (e2) {}
+  for (var i = 1; i <= n; i++) {
+    try { names.push(masks.property(i).name); } catch (e3) {}
+  }
+  return names;
+}
+
+/*
+ * Removes ONE mask, by name or 1-based index (AELL_findMask: with a
+ * single mask on the layer the ref may be omitted; a miss lists the
+ * masks that exist). A layer with no masks is refused up front — the
+ * resolver's "several masks" wording would be wrong for zero.
+ *
+ * MaskPropertyGroup.remove() is the indexed-group removal PropertyBase
+ * documents, and AE invalidates the removed object, so the name is read
+ * first (the stubs throw on a read after removal). NOT measured here:
+ * whether AE renumbers the default names of the masks below ("Mask 2"
+ * becoming "Mask 1") — assumed not, names persist. Real-AE pass: verify.
+ */
+AELL_TOOLS.delete_mask = function (args) {
+  var comp = AELL_resolveComp(args.comp);
+  var layer = AELL_layerOrSelection(comp, args.layer);
+  var masks = null;
+  try { masks = layer.property("ADBE Mask Parade"); } catch (eP) {}
+  if (!masks) {
+    return AELL_err("'" + layer.name + "' is a " + AELL_layerType(layer) +
+      " layer and cannot carry masks, so there is nothing to delete.");
+  }
+  var n = 0;
+  try { n = masks.numProperties || 0; } catch (eN) {}
+  if (n === 0) {
+    return AELL_err("'" + layer.name + "' has no masks — nothing to " +
+      "delete. add_mask creates one.");
+  }
+  var mask;
+  try { mask = AELL_findMask(layer, args.mask); }
+  catch (eF) { return AELL_err(eF.message); }
+  var removedName = String(mask.name);
+  try {
+    mask.remove();
+  } catch (eR) {
+    return AELL_err("AE refused to delete mask '" + removedName +
+      "' on '" + layer.name + "': " + (eR && eR.message ? eR.message : eR));
+  }
+  return AELL_okay({ layer: layer.name, removed: removedName,
+                     remainingMasks: AELL_maskNames(layer) });
 };
 
 /*
@@ -8947,8 +9257,8 @@ var AELL_PER_LAYER_LIST = [
   "add_captions", "add_control", "add_keyframe", "add_marker", "add_mask",
   "add_shape_content", "add_text_animator", "apply_effect",
   "apply_expression_preset", "audio_to_keyframes",
-  "center_anchor_point", "delete_layer", "duplicate_layer", "expose_property",
-  "link_property",
+  "center_anchor_point", "delete_layer", "delete_mask", "duplicate_layer",
+  "expose_property", "link_property", "remove_effect",
   "set_effect_param", "set_expression", "set_layer_3d", "set_layer_parent",
   "set_layer_timing", "set_mask", "set_mask_path", "set_property",
   "set_text_style", "set_track_matte", "set_transform",
@@ -9847,6 +10157,13 @@ AELL_TOOLS.export_mogrt = function (args) {
   var controllers = 0;
   try { controllers = comp.motionGraphicsTemplateControllerCount || 0; }
   catch (eC) {}
+  // The roster by NAME, read here with everything else result-bearing:
+  // a successful export invalidates the CompItem (the "lied both ways"
+  // bug), so nothing can be read after the call. The panel side hands
+  // these names to the zip verifier for multiset parity against
+  // definition.json - the receipt's `controllers` count alone cannot
+  // tell a dropped controller from a duplicate collapsed.
+  var controllerNames = AELL_mogrtRoster(comp, 500);
   if (controllers === 0) {
     return AELL_err("'" + compName + "' has no Essential Graphics " +
       "controllers, and AE will not export a template without one (it " +
@@ -9946,6 +10263,7 @@ AELL_TOOLS.export_mogrt = function (args) {
     bytes: found.bytes,
     seconds: Math.round(ms / 100) / 10,
     controllers: controllers,
+    controllerNames: controllerNames,
     returned: returned === true,
     note: "The export left the project with unsaved changes, so a " +
       "SECOND export with no save in between returns false and writes " +
@@ -10029,6 +10347,9 @@ var AELL_MUTATING = {
   set_property: true, set_keyframes: true, remove_keyframes: true,
   set_track_matte: true,
   set_mask: true, set_mask_path: true, add_shape_content: true,
+  // The removal verbs (audit 0.11 item 4): one effect, one mask — each
+  // its own Ctrl+Z, same as the tools that added them.
+  remove_effect: true, delete_mask: true,
   for_each_layer: true,
   // audit_comp_usage is READ-only and deliberately absent. rename_comps
   // is here even though its DEFAULT dry run changes nothing: the group it
