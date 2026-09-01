@@ -159,13 +159,23 @@
       throw readFailure("cannot open " + path + ": " +
         String(err && err.message || err));
     }
-    var size;
+    var size, st;
     try {
-      size = fs.fstatSync(fd).size;
+      st = fs.fstatSync(fd);
+      size = st.size;
     } catch (err2) {
       try { fs.closeSync(fd); } catch (ignore) {}
       throw readFailure("cannot stat " + path + ": " +
         String(err2 && err2.message || err2));
+    }
+    // Windows opens a DIRECTORY handle without complaint and fstat
+    // reports it as 0 bytes (measured on windows-latest CI 2026-09-01);
+    // Linux only fails at the first read. A directory is unreadable as
+    // a capsule, never a "0-byte zip" verdict.
+    if (st && typeof st.isDirectory === "function" && st.isDirectory()) {
+      try { fs.closeSync(fd); } catch (ignore2) {}
+      throw readFailure("cannot read " + path + ": it is a directory, " +
+        "not a .mogrt file");
     }
     return {
       length: size,
