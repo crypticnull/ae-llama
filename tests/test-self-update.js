@@ -117,6 +117,40 @@ function install(manifest) {
          (r.err ? r.err.message.slice(0, 80) : "no error"));
   assert(fs.existsSync(path.join(workDir, "extension", "local.txt")),
          "local work untouched after refused update");
+  assert(r.err && /checkout -B/.test(r.err.message) &&
+         /salvage/i.test(r.err.message),
+         "and the refusal carries the re-align fix, not 'manually': " +
+         (r.err ? r.err.message.slice(-120) : ""));
+
+  // 6. dirty tree -> the field case of 2026-09-01: a stopped agent pass
+  // left uncommitted bump files, the merge refuses, and the panel's old
+  // message cut git's stderr mid-word so the owner never saw WHICH
+  // files. The message must keep whole lines and say both fixes (the
+  // overnight salvage and the manual stash).
+  sh(workDir, "reset", "--hard", "origin/main");   // clear the divergence
+  sh(workDir, "pull", "--ff-only");                // back in sync
+  fs.writeFileSync(path.join(seedDir, "extension", "version.txt"), "v4");
+  sh(seedDir, "add", "-A");
+  sh(seedDir, "commit", "-m", "v4");
+  sh(seedDir, "push", "origin", "main");
+  fs.writeFileSync(path.join(workDir, "extension", "version.txt"),
+                   "half-bumped by a stopped pass");
+
+  r = await install({});
+  assert(r.err && /git pull failed/i.test(r.err.message),
+         "a dirty tracked file refuses the update: " +
+         (r.err ? r.err.message.slice(0, 80) : "no error"));
+  assert(r.err && /uncommitted local changes/i.test(r.err.message) &&
+         /overnight agent/i.test(r.err.message) &&
+         /git stash push -u/.test(r.err.message),
+         "naming the state and BOTH ways out: " +
+         (r.err ? r.err.message.slice(-140) : ""));
+  assert(r.err && /version\.txt/.test(r.err.message),
+         "with git's own file list intact (whole lines, no mid-word " +
+         "cut): " + (r.err ? r.err.message.slice(0, 160) : ""));
+  assert(fs.readFileSync(path.join(workDir, "extension", "version.txt"),
+                         "utf8").indexOf("half-bumped") === 0,
+         "and the dirty file itself is untouched");
 
   console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");
 })();

@@ -748,6 +748,50 @@
   }
 
   /**
+   * The sentence a dev can act on when the repo refuses to update.
+   * git's stderr is kept as WHOLE lines (a hard byte cut mid-word cost
+   * an owner the file list, 2026-09-01), and the two states this repo
+   * actually gets into are answered with their fix — "update the repo
+   * manually" helped nobody:
+   * - uncommitted changes (a stopped agent pass mid-bump is the field
+   *   case) block the merge; the overnight agent salvage-stashes these
+   *   at its next pass start, so the message says that AND the manual
+   *   stash for whoever will not wait;
+   * - the dev branch was reset upstream (house policy after merges),
+   *   so ff-only refuses; the fix is re-aligning onto origin, never
+   *   merging the old history back in.
+   */
+  function gitPullProblem(raw) {
+    var lines = String(raw).split(/\r?\n/), keep = [], len = 0, i;
+    for (i = 0; i < lines.length && keep.length < 8; i++) {
+      var ln = lines[i].replace(/\s+$/, "");
+      if (!ln) continue;
+      // Fetch progress ("From https://…", ref updates) is not the
+      // problem statement — in the field it ate the whole budget and
+      // the error line arrived amputated.
+      if (/^From /.test(ln) || /^ *[0-9a-f]+\.\.[0-9a-f]+ /.test(ln) ||
+          /^ \* \[new /.test(ln)) continue;
+      if (len + ln.length > 400) break;
+      keep.push(ln);
+      len += ln.length;
+    }
+    var msg = "git pull failed: " + keep.join(" | ");
+    if (/would be overwritten|local changes/i.test(raw)) {
+      return msg + " — the repo has uncommitted local changes (usually " +
+        "an agent pass stopped mid-work). The overnight agent salvages " +
+        "them at its next pass start; to update now, stash them " +
+        "(git stash push -u) and reopen the panel.";
+    }
+    if (/fast-forward|diverge/i.test(raw)) {
+      return msg + " — the local branch has commits origin no longer " +
+        "has (the dev branch is reset upstream after merges). Salvage " +
+        "anything unpushed, then: git fetch origin && git checkout -B " +
+        "<branch> origin/<branch>, and reopen the panel.";
+    }
+    return msg + " — update the repo manually.";
+  }
+
+  /**
    * How is this panel installed?
    * - "git": the extension folder is (a junction into) a git checkout —
    *   updating means `git pull` in the repo root.
@@ -785,9 +829,7 @@
         { cwd: install.repoRoot, timeout: 120000 },
         function (err, stdout, stderr) {
           if (err) {
-            cb(new Error("git pull failed: " +
-               String(stderr || err.message).slice(0, 300) +
-               " — update the repo manually."));
+            cb(new Error(gitPullProblem(String(stderr || err.message))));
             return;
           }
           var out = String(stdout || "").replace(/\s+$/, "");

@@ -9893,3 +9893,28 @@ got.
   dropped-commands row to the USER (model-visible only); the comfy
   refusal could name an optional-node resolution as the cause when
   one removed the target node.
+
+## 2026-09-01 (remote session) — field failure: panel self-update blocked by pass 22's dirty tree
+
+- What happened: the owner's panel (0.10.22-alpha — pass 22 had run
+  the bump before being stopped, leaving the four bump files
+  UNCOMMITTED) tried to auto-update to 0.11.0; `git pull --ff-only`
+  refused on the uncommitted manifest.xml, and the panel's error cut
+  git's stderr at byte 300 mid-word ("extension/CSXS/manifes"), so
+  neither the file list nor a fix reached the owner. Owner was given
+  the manual salvage+realign block (backup branch aell-backup-pass22
+  + stash "pass22-salvage" + checkout -B onto origin).
+- Changed: extension/js/setup.js `gitPullProblem` — whole stderr
+  lines only (never a byte cut), fetch-progress noise filtered so the
+  error line + file list always fit, and the two real states answered
+  with their fix (dirty tree → the overnight salvage OR
+  `git stash push -u`; non-FF → salvage then re-align onto origin,
+  never merge the old history). tests/test-self-update.js grew the
+  dirty-tree field case against a real git rig and pins the message
+  contract.
+- Harness: full sweep 62/64 (the two Windows-only suites).
+- Notes: UNBUMPED — rides tonight's 1b patch bump. Local session:
+  after 1b, check `git stash list` and `git branch --list
+  aell-backup-pass22` on this machine — if the stash/branch hold only
+  the stale 0.10.22 bump (expected), drop both and log it; if pass 22
+  did real work, recover it per the log's own rules.

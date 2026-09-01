@@ -99,6 +99,12 @@ and patch-bumps. One pass, in this order:
   AE_LLAMA_KREA2_V1, image: <any png>} must REFUSE naming the
   workflow and the firstFrame-capable templates — nothing queued, no
   GPU spend. Then the H3 I2V happy path with an image still works.
+- Also riding this same bump (no separate verification needed —
+  stub-tested against real git repos): the dev-install updater's
+  failure copy (`gitPullProblem` in setup.js) — a stopped pass's
+  uncommitted bump files blocked the owner's panel update 2026-09-01
+  and the old message cut git's stderr mid-word, hiding the file list
+  and the fix.
 - All green → `node scripts/bump-version.js patch`, push, log. Any
   failure → fix at the root, keep the stubs faithful, then bump.
 
