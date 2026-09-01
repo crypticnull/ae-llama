@@ -38,6 +38,11 @@ PGroup.prototype.addProperty = function (matchName) {
   this.add(g);
   return g;
 };
+// AE answers canAddProperty(false) for anything not installed — it does
+// not throw — which is the branch apply_effect's grounded refusal rides.
+PGroup.prototype.canAddProperty = function (matchName) {
+  return !!CONTROL_LEAF[matchName];
+};
 
 function Prop(name, matchName, value) {
   this.name = name;
@@ -867,5 +872,80 @@ r = call("get_property", { layer: "Key", property: "Diffusion" });
 assert(!r.ok && /Names containing it/.test(r.error) &&
        /Shadow Diffusion/.test(r.error),
        "a near miss names the real neighbours: " + (r.error || ""));
+
+// ------------------------------------- grounded effect errors (audit 0.11)
+// The three bare paths: "Effect not available", "Effect not found on
+// layer" and "Parameter not found" each said only that, leaving the
+// small model nothing to retry from.
+
+r = call("apply_effect", { layer: "A", effect: "CC Particle World" });
+assert(!r.ok && /Effect not available: CC Particle World/.test(r.error),
+       "apply_effect still names the effect that missed");
+assert(/display name nor a matchName/.test(r.error),
+       "and says what the lookup tried: " + r.error.slice(0, 100));
+assert(/list_effects \{filter: "cc"\}/.test(r.error),
+       "and points to list_effects WITH its filter arg: " +
+       r.error.slice(90, 220));
+assert(/Effects already on 'A'/.test(r.error) &&
+       /Gaussian Blur/.test(r.error) && /set_effect_param/.test(r.error),
+       "and lists the layer's real effects so 'wrong tool' is " +
+       "distinguishable from 'not installed'");
+
+r = call("set_effect_param", { layer: "A", effect: "Glow",
+                               param: "Threshold" });
+assert(!r.ok && /Effect not found on layer: Glow/.test(r.error),
+       "set_effect_param still names the effect that missed");
+assert(/Effects on 'A':/.test(r.error) && /Gaussian Blur/.test(r.error) &&
+       /Grid X Spacing/.test(r.error),
+       "and lists what the layer really carries: " + r.error.slice(0, 140));
+assert(/apply_effect/.test(r.error),
+       "and names the tool that adds a missing one");
+
+r = call("set_effect_param", { layer: "A", effect: "Gaussian Blur",
+                               param: "Radius" });
+assert(!r.ok && /Parameter not found: Radius/.test(r.error),
+       "a bad param is still named");
+assert(/'Gaussian Blur' has: Blurriness/.test(r.error),
+       "and the effect's real parameters are listed: " +
+       r.error.slice(0, 120));
+assert(/list_properties/.test(r.error) &&
+       /effects\/Gaussian Blur/.test(r.error),
+       "and the lister that shows types/values is named with its path");
+
+// ------------------------------- set_track_matte wraps AE's raw message
+// AE's throw alone ("Object is invalid" and friends) tells the model
+// nothing about mattes; the wrap keeps the raw text and adds the
+// constraints it cannot guess.
+
+const rawSet = A.setTrackMatte;
+A.setTrackMatte = function () {
+  throw new Error("After Effects error: invalid matte layer");
+};
+r = call("set_track_matte", { layer: "A", matteLayer: "B", mode: "luma" });
+assert(!r.ok && /AE rejected the matte: .*invalid matte layer/
+         .test(r.error),
+       "the raw AE message survives the wrap: " + r.error.slice(0, 80));
+assert(/visual \(AV\) layers/.test(r.error) && /camera/.test(r.error),
+       "and the layer-type constraint is spelled out");
+assert(/alpha, alpha_inverted, luma, luma_inverted or none/.test(r.error),
+       "and the valid modes ride along, matching the mode refusal");
+assert(/'A' is /.test(r.error) && /'B' is /.test(r.error),
+       "and both layers' actual types are reported: " +
+       r.error.slice(100, 260));
+A.setTrackMatte = rawSet;
+
+const rawRemove = A.removeTrackMatte;
+A.removeTrackMatte = function () {
+  throw new Error("After Effects error: Object is invalid");
+};
+r = call("set_track_matte", { layer: "A", mode: "none" });
+assert(!r.ok && /Could not remove the matte: .*Object is invalid/
+         .test(r.error),
+       "removal failure keeps AE's raw message too");
+assert(/visual \(AV\) layers/.test(r.error) &&
+       /get_comp_details/.test(r.error),
+       "with the constraint and the tool that shows layer types: " +
+       r.error.slice(0, 140));
+A.removeTrackMatte = rawRemove;
 
 console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");

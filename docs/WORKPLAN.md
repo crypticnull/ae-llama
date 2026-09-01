@@ -72,6 +72,36 @@ field truth -> fix -> stub faithfulness.
   disappeared from a whole run (7 distinct states before, 0 after);
   stub test 165 -> 187 checks, 15 of which fail if the fix is reverted.
 
+## 1b. VERIFY the zero-silent-failure batch (remote shipped 2026-09-01, UNBUMPED — verifying it here is what ships it)
+
+The remote session built roadmap item 1 + MOGRT step 0 (see
+docs/AUDIT-0.11.md part 2 item 1) with the full stub suite green.
+None of it reaches a panel until this machine verifies it in real AE
+and patch-bumps. One pass, in this order:
+
+- Run `scripts/run-ae-selftest.ps1` to green (533+ steps; the changed
+  error texts were grepped against existing steps — none pin the old
+  bare forms — but real AE is the judge).
+- Probe the stub-blind class directly (temp .jsx via AELL_call, per
+  CLAUDE.md): (a) a set_keyframes batch where key 3 of 5 is invalid →
+  the result must be mutated:true and a BATCH round must roll back
+  (fingerprint restore); same for apply_keyframe_ease; (b)
+  set_track_matte against a shape/text layer → the wrapped error
+  names both layers' types and the valid modes; (c) apply_effect with
+  a garbage name → refusal lists the layer's effects and the
+  list_effects pointer; (d) export_mogrt name "CON" → refused before
+  AE (no debris folder created).
+- MOGRT settle: export a real (small) mogrt to a scratch folder and
+  confirm the bytes receipt equals the final on-disk size (the fix
+  polls for two stable sizes ≥250ms apart — a mid-write number was
+  the live bug).
+- comfy image-landed: with ComfyUI up, comfy_generate {workflow:
+  AE_LLAMA_KREA2_V1, image: <any png>} must REFUSE naming the
+  workflow and the firstFrame-capable templates — nothing queued, no
+  GPU spend. Then the H3 I2V happy path with an image still works.
+- All green → `node scripts/bump-version.js patch`, push, log. Any
+  failure → fix at the root, keep the stubs faithful, then bump.
+
 ## FAST-TRACK: comp-rename audit tools — DONE 2026-08-25 (0.9.15)
 
 The owner has a real work assignment: bring an old roofing-presentation

@@ -476,6 +476,39 @@ function AELL_findItem(ref) {
   return null;
 }
 
+/* "A, B, C … and 4 more" — the bounded-list voice of the grounded
+ * errors. The cap exists for the same context-budget reason as
+ * AELL_LIST_LIMIT: an uncapped list in an error can push the very state
+ * the model needs out of its window. */
+function AELL_capJoin(names, cap) {
+  if (names.length === 0) return "(none)";
+  if (names.length <= cap) return names.join(", ");
+  return names.slice(0, cap).join(", ") + " … and " +
+         (names.length - cap) + " more";
+}
+
+/* The grounding half of an item-lookup refusal: what the project really
+ * holds, bounded like AELL_resolveComp's comp list, plus the tool that
+ * shows the full roster. */
+function AELL_itemsHere() {
+  var proj = app.project;
+  var names = [], extra = 0, i;
+  for (i = 1; i <= proj.numItems; i++) {
+    if (names.length < 15) names.push(proj.item(i).name);
+    else extra++;
+  }
+  return "Items in this project: " + (names.join(", ") || "(none)") +
+    (extra > 0 ? " … and " + extra + " more" : "") +
+    ". get_project_info {limit: \"all\"} lists them all, with ids and " +
+    "folder paths — same-named items need the path or id.";
+}
+
+/* The grounded "no such item" refusal shared by every tool that takes an
+ * {item} reference. */
+function AELL_itemNotFound(ref) {
+  return "Project item not found: " + ref + ". " + AELL_itemsHere();
+}
+
 /* Full path of a folder from the project root, e.g. "_COMPS/Promo". */
 function AELL_folderPath(folder) {
   var parts = [];
@@ -727,7 +760,9 @@ AELL_TOOLS.move_to_folder = function (args) {
   if (missing.length > 0) data.notFound = missing;
   if (moved.length === 0) {
     return AELL_err("Nothing was moved" +
-      (missing.length ? " — items not found: " + missing.join(", ") : ""));
+      (missing.length
+        ? " — items not found: " + missing.join(", ")
+        : "") + ". " + AELL_itemsHere());
   }
   return AELL_okay(data);
 };
@@ -739,7 +774,7 @@ AELL_TOOLS.rename_item = function (args) {
   }
   if (!args.name) return AELL_err("'name' is required");
   var it = AELL_findItem(args.item);
-  if (!it) return AELL_err("Project item not found: " + args.item);
+  if (!it) return AELL_err(AELL_itemNotFound(args.item));
   var old = it.name;
   it.name = String(args.name);
   return AELL_okay({ oldName: old, name: it.name });
@@ -1115,7 +1150,7 @@ AELL_TOOLS.rename_comps = function (args) {
 
 AELL_TOOLS.delete_item = function (args) {
   var it = AELL_findItem(args.item);
-  if (!it) return AELL_err("Project item not found: " + args.item);
+  if (!it) return AELL_err(AELL_itemNotFound(args.item));
   var name = it.name;
   var note = "";
   if (it instanceof FolderItem && it.numItems > 0) {
@@ -3882,7 +3917,29 @@ AELL_TOOLS.apply_effect = function (args) {
   var effects = layer.property("ADBE Effect Parade");
   if (!effects) return AELL_err("This layer type cannot take effects");
   if (!effects.canAddProperty(args.effect)) {
-    return AELL_err("Effect not available: " + args.effect);
+    // Grounded: AE tried the string as a display name AND a matchName,
+    // so the miss means "not installed" or "misspelled" — and when the
+    // layer already carries effects, showing them separates a third
+    // case: the model meant to CHANGE one, which is set_effect_param.
+    // The suggested filter skips a leading "ADBE" token: list_effects
+    // matches display names and categories, never matchNames, so a
+    // matchName-style miss ("ADBE Glo2") would suggest a filter of
+    // "adbe" that finds nothing.
+    var fWords = String(args.effect).replace(/^\s*ADBE\s+/i, "")
+      .split(" ");
+    var fSug = (fWords[0] || String(args.effect)).toLowerCase();
+    var msg = "Effect not available: " + args.effect + " — AE matched " +
+      "it to neither a display name nor a matchName, so it is not " +
+      "installed under that spelling. list_effects {filter: \"" +
+      fSug + "\"} searches " +
+      "the installed catalog by name/category substring.";
+    var have = AELL_effectNames(layer);
+    if (have.length) {
+      msg += " Effects already on '" + layer.name + "': " +
+        AELL_capJoin(have, 15) + " — set_effect_param changes those; " +
+        "apply_effect only adds new ones.";
+    }
+    return AELL_err(msg);
   }
   var fx = effects.addProperty(args.effect);
   var params = [];
@@ -3903,9 +3960,24 @@ AELL_TOOLS.set_effect_param = function (args) {
   var effects = layer.property("ADBE Effect Parade");
   if (!effects) return AELL_err("This layer type cannot take effects");
   var fx = effects.property(args.effect);
-  if (!fx) return AELL_err("Effect not found on layer: " + args.effect);
+  if (!fx) {
+    return AELL_err("Effect not found on layer: " + args.effect +
+      ". Effects on '" + layer.name + "': " +
+      AELL_capJoin(AELL_effectNames(layer), 15) +
+      ". apply_effect adds one that is missing.");
+  }
   var p = fx.property(args.param);
-  if (!p) return AELL_err("Parameter not found: " + args.param);
+  if (!p) {
+    var pnames = [];
+    for (var pi = 1; pi <= fx.numProperties; pi++) {
+      var pn = fx.property(pi);
+      if (pn && pn.name) pnames.push(pn.name);
+    }
+    return AELL_err("Parameter not found: " + args.param + ". '" +
+      fx.name + "' has: " + AELL_capJoin(pnames, 20) +
+      ". list_properties {layer: \"" + layer.name + "\", path: " +
+      "\"effects/" + fx.name + "\"} shows types and current values.");
+  }
   var warn;
   try {
     warn = AELL_writeValue(p, args.value, args.effect + "/" + p.name);
@@ -4686,16 +4758,26 @@ AELL_TOOLS.apply_keyframe_ease = function (args) {
   catch (eL) { return AELL_err(eL.message); }
   var bez = AELL_bezierArgs(args);
   var totalPairs = 0;
+  // Once totalPairs > 0 a failure return must be AELL_errPartial: eases
+  // already landed on earlier layers, and a plain AELL_err reads as
+  // failure-only to AELL_maybeRollback — an armed round would keep the
+  // half-eased keys. AELL_easeProp's own refusals (too few keys, bad
+  // keyIndex) throw before its first write, so the usual failures are
+  // counted exactly.
   for (var i = 0; i < layers.length; i++) {
     var prop;
     try { prop = AELL_anyProperty(layers[i], args.property); }
     catch (eP) {
-      return AELL_err("On '" + layers[i].name + "': " + eP.message);
+      return (totalPairs > 0 ? AELL_errPartial : AELL_err)(
+        "On '" + layers[i].name + "': " + eP.message +
+        (totalPairs ? " — " + totalPairs + " pair(s) eased before this"
+                    : ""));
     }
     try {
       totalPairs += AELL_easeProp(prop, bez, args.keyIndex, args.allPairs);
     } catch (e) {
-      return AELL_err("On '" + layers[i].name + "', " + args.property +
+      return (totalPairs > 0 ? AELL_errPartial : AELL_err)(
+        "On '" + layers[i].name + "', " + args.property +
         " " + (e.message || e) +
         (totalPairs ? " — " + totalPairs + " pair(s) eased before this"
                     : ""));
@@ -8749,18 +8831,29 @@ AELL_TOOLS.set_keyframes = function (args) {
   var rel = String(args.relativeTo || "");
   var relative = rel === "inPoint" || rel === "layerStart";
   var total = 0;
+  // Once total > 0 every failure return must be AELL_errPartial: keys
+  // are already on earlier layers/times, and to AELL_maybeRollback a
+  // plain AELL_err reads as failure-only — an armed round would never
+  // undo the half-applied keys (same rule as for_each_layer's give-up).
   for (var L = 0; L < layers.length; L++) {
     var layer = layers[L];
     var prop;
     try { prop = AELL_anyProperty(layer, args.property); }
-    catch (eP) { return AELL_err("On '" + layer.name + "': " + eP.message); }
+    catch (eP) {
+      return (total > 0 ? AELL_errPartial : AELL_err)(
+        "On '" + layer.name + "': " + eP.message +
+        (total ? " — " + total + " key(s) were applied before this" : ""));
+    }
     if (!AELL_isLeafProp(prop)) {
-      return AELL_err("'" + args.property + "' is a GROUP — keyframes go " +
-                      "on a property inside it");
+      return (total > 0 ? AELL_errPartial : AELL_err)(
+        "'" + args.property + "' is a GROUP — keyframes go " +
+        "on a property inside it" +
+        (total ? " — " + total + " key(s) were applied before this" : ""));
     }
     if (AELL_animPropDormant(prop)) {
-      return AELL_err(AELL_animDormantMsg(layer, String(args.property),
-                                          "keyframing"));
+      return (total > 0 ? AELL_errPartial : AELL_err)(
+        AELL_animDormantMsg(layer, String(args.property), "keyframing") +
+        (total ? " — " + total + " key(s) were applied before this" : ""));
     }
     var base = relative ? layer.inPoint : 0;
     for (var i = 0; i < args.keys.length; i++) {
@@ -8769,7 +8862,8 @@ AELL_TOOLS.set_keyframes = function (args) {
         prop.setValueAtTime(base + k.time, k.value);
         total++;
       } catch (e) {
-        return AELL_err("AE rejected keys[" + i + "] on '" + layer.name +
+        return (total > 0 ? AELL_errPartial : AELL_err)(
+          "AE rejected keys[" + i + "] on '" + layer.name +
           "' (" + (e.message || e) + ") — " + total +
           " key(s) were applied before this");
       }
@@ -8967,7 +9061,10 @@ AELL_TOOLS.set_track_matte = function (args) {
         layer.trackMatteType = TrackMatteType.NO_TRACK_MATTE;
       }
     } catch (e) {
-      return AELL_err("Could not remove the matte: " + (e.message || e));
+      return AELL_err("Could not remove the matte: " + (e.message || e) +
+        ". Mattes exist only on visual (AV) layers — a camera or a " +
+        "light never has one to remove. get_comp_details shows '" +
+        comp.name + "'s layers and their types.");
     }
     return AELL_okay({ layer: layer.name, matte: "removed" });
   }
@@ -8995,7 +9092,12 @@ AELL_TOOLS.set_track_matte = function (args) {
       layer.trackMatteType = tmt;
     }
   } catch (e) {
-    return AELL_err("AE rejected the matte: " + (e.message || e));
+    return AELL_err("AE rejected the matte: " + (e.message || e) +
+      ". Both layers must be visual (AV) layers — a camera or a light " +
+      "can neither take nor be a matte (layer: '" + layer.name +
+      "' is " + AELL_layerType(layer) + ", matteLayer: '" + matte.name +
+      "' is " + AELL_layerType(matte) + "). 'mode' must be alpha, " +
+      "alpha_inverted, luma, luma_inverted or none.");
   }
   return AELL_okay({ layer: layer.name, matte: matte.name, mode: mode });
 };
@@ -9432,6 +9534,32 @@ function AELL_mogrtBadName(name) {
   return bad;
 }
 
+/* Names that pass every character check and still break on Windows.
+ * Two families, both refused before the export starts, in the same
+ * grounded voice as the character check above:
+ *  - reserved DEVICE names (CON, PRN, AUX, NUL, COM1-COM9, LPT1-LPT9),
+ *    case-insensitive, and an extension does not rescue one -- Windows
+ *    reserves the part before the first dot, so "nul.v2" is still the
+ *    device. A file cannot be created under such a name at all.
+ *  - a trailing dot or space: the Win32 layer silently strips them
+ *    when the name becomes a file or folder, so what lands on disk no
+ *    longer matches the name every receipt here would be built from.
+ * Returns "" for a usable name, else the reason. */
+function AELL_mogrtNameTrap(name) {
+  var s = String(name);
+  var dot = s.indexOf(".");
+  var stem = dot === -1 ? s : s.substring(0, dot);
+  if (/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i.test(stem)) {
+    return "is the reserved Windows device name \"" + stem +
+      "\" (extension or not), and Windows refuses to create a file " +
+      "under it, so nothing would be written.";
+  }
+  // A trailing dot/space is NOT trapped here: the file on disk is
+  // tplName + ".mogrt" (AELL_mogrtFileName), so the dot/space is
+  // interior in the real filename and Windows keeps it.
+  return "";
+}
+
 /* The file AE writes is the template name, VERBATIM, plus ".mogrt" -
  * spaces and all (measured: "P60 Brand Card" -> "P60 Brand Card.mogrt").
  * This is only the expected name; the folder diff below is where the
@@ -9478,9 +9606,23 @@ function AELL_mogrtScan(folderPath) {
  * reports success without writing anything cannot afford that. The name
  * AE was expected to use only breaks a tie. Polled, because AE hides a
  * file it has just written for a moment: the fact render_comp and
- * snapshot_frame both settle for. */
+ * snapshot_frame both settle for.
+ *
+ * A hit is NOT returned on first sight. The size read the moment the
+ * file appears can be an archive AE is still flushing, so the same file
+ * must report the SAME size on two polls at least 250 ms apart before
+ * the receipt quotes it. That stability wait is this function's own
+ * rule, not AE behaviour anyone measured, and it is NOT what
+ * AELL_rqSettle does (that returns on the first stat that exists) -- do
+ * not read the two as one pattern. The MOGRT harness's Node-side stat
+ * of the reported path stays the authoritative size; this only stops
+ * the receipt from quoting a size the export was still changing. A file
+ * still changing when the poll budget runs out is handed back at its
+ * last observed size rather than reported as missing -- a false "wrote
+ * no .mogrt" over a file that is visibly there would be the worse lie. */
 function AELL_mogrtFound(folderPath, before, expected, tries) {
   var n = tries > 0 ? tries : 10;
+  var pending = null;
   for (var t = 0; t < n; t++) {
     var after = AELL_mogrtScan(folderPath), name, hit = null;
     for (name in after) {
@@ -9493,10 +9635,19 @@ function AELL_mogrtFound(folderPath, before, expected, tries) {
       }
       if (cand && (!hit || cand.name === expected)) hit = cand;
     }
-    if (hit) return hit;
+    if (hit) {
+      if (pending && pending.name === hit.name &&
+          pending.bytes === hit.bytes) {
+        return hit;
+      }
+      pending = hit;
+      $.sleep(250);
+      continue;
+    }
+    pending = null;
     $.sleep(100);
   }
-  return null;
+  return pending;
 }
 
 /* The controller roster, newest FIRST - index 1 is the most recent add
@@ -9686,6 +9837,11 @@ AELL_TOOLS.export_mogrt = function (args) {
       bad.join(" ") + ", which Windows will not put in a file name. AE " +
       "does not refuse this - it works for 3.7 seconds, returns false " +
       "and writes nothing. Pass {name: \"...\"} without those characters.");
+  }
+  var trap = AELL_mogrtNameTrap(tplName);
+  if (trap) {
+    return AELL_err("Template name \"" + tplName + "\" " + trap +
+      " Pass {name: \"...\"} that avoids it.");
   }
 
   var controllers = 0;

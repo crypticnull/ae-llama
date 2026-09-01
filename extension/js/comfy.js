@@ -109,10 +109,24 @@
     req.end();
   }
 
+  /* ComfyUI stores an upload under the CLIENT-sent name, and this panel
+   * posts overwrite=true — so two different source files sharing a basename
+   * (AE frame grabs are all "grab NNNN.png"-shaped) replace each other in
+   * ComfyUI's input dir, and a prior job still sitting in the queue then
+   * renders the LATER file. Every upload therefore gets a name unique to
+   * the call: the run id separates two panel processes, the counter orders
+   * calls within one. Deliberately no timestamp — batched uploads land in
+   * the same millisecond routinely, which is exactly when uniqueness is
+   * needed most. */
+  var uploadRunId = Math.floor(Math.random() * 1679616).toString(36);
+  var uploadSeq = 0;
+
   /**
    * Upload a local file into ComfyUI's input folder so a LoadImage node can
    * name it. LoadImage takes a FILENAME inside ComfyUI's own input dir, never
    * a path, so an AE-side render can only reach the graph this way.
+   * The name handed to cb is the one the SERVER says it stored — ComfyUI may
+   * place it in a subfolder — and it is the only name the graph may use.
    * cb(err, nameForLoadImage)
    */
   function uploadImage(base, filePath, cb) {
@@ -126,7 +140,11 @@
     }
     // A quote, backslash or newline in the name would break the multipart
     // header apart; ComfyUI stores whatever name we send, so sanitise here.
-    var name = String(path.basename(filePath)).replace(/["\\\r\n]/g, "_");
+    // The per-call prefix goes in FRONT so the extension keeps deciding how
+    // ComfyUI decodes the file.
+    uploadSeq++;
+    var name = "aell-" + uploadRunId + "-" + uploadSeq + "_" +
+               String(path.basename(filePath)).replace(/["\\\r\n]/g, "_");
     var boundary = "----aellama" + Math.floor(Math.random() * 1e12);
     var CRLF = "\r\n";
     var head = NodeBuffer.from(
@@ -748,6 +766,50 @@
     // going to be queued.
     noteOutputSize(graph, sizedIds, applied);
     return applied;
+  }
+
+  /**
+   * True when `value` appears verbatim as a LITERAL (non-link) input
+   * somewhere in the graph. The queue/no-queue decisions in generate() read
+   * the graph itself through this, never the applied[] prose: applied is
+   * written for the model's benefit, and prose can fail to say what the
+   * graph does not carry — a KREA2 run with an image uploaded the file,
+   * injected nothing, and rendered as pure text-to-image without a word.
+   */
+  function graphCarriesValue(graph, value) {
+    for (var k in graph) {
+      if (!graph.hasOwnProperty(k)) continue;
+      var node = graph[k];
+      if (!node || !node.inputs) continue;
+      for (var ik in node.inputs) {
+        if (!node.inputs.hasOwnProperty(ik)) continue;
+        var v = node.inputs[ik];
+        if (typeof v === "string" && v === value) return true;
+      }
+    }
+    return false;
+  }
+
+  /* Same cap the AE-side tools use for grounded listings
+   * (AELL_LIST_LIMIT in hostscript.jsx). */
+  var COMFY_LIST_LIMIT = 40;
+
+  /**
+   * Names of the workflows in `dir` whose manifest declares
+   * procedural.firstFrame — the only path by which a caller's image ever
+   * reaches a graph, so also the only templates worth naming when an image
+   * landed nowhere.
+   */
+  function imageCapableWorkflows(dir) {
+    var names = [];
+    var all = listWorkflows(dir);
+    for (var i = 0; i < all.length; i++) {
+      var mf = readManifest(all[i].file);
+      if (mf && mf.procedural && mf.procedural.firstFrame) {
+        names.push(all[i].name);
+      }
+    }
+    return names;
   }
 
 
@@ -1491,27 +1553,57 @@
     }
 
     function queueIt() {
-    // Last thing before the POST, exactly where the browser does it: a
-    // %date:…% left in a filename_prefix kills the render at its final node,
-    // after every GPU second has already been spent.
-    var expanded = expandFilenameTokens(graph, new Date());
-    for (var ei = 0; ei < expanded.length; ei++) {
-      applied.push("filename token expanded — " + expanded[ei]);
-    }
+    // Both landed checks run BEFORE token expansion: expandFilenameTokens
+    // rewrites every literal string input it recognizes, so a prompt that
+    // happens to contain a resolvable %token% would no longer match the
+    // injected text verbatim and a healthy round would be refused. The
+    // checks still run after injectParams AND resolveOptionalNodes, so a
+    // node a later step took back out is still caught.
 
     // A prompt that lands nowhere means the render would use the template's
     // baked-in text — fail fast instead of burning GPU minutes on it.
-    if (typeof params.prompt === "string" && params.prompt !== "") {
-      var landed = false;
-      for (var ai = 0; ai < applied.length; ai++) {
-        if (applied[ai].indexOf("prompt -> ") === 0) { landed = true; break; }
-      }
-      if (!landed) {
-        cb(new Error("This workflow has no editable prompt text (its text " +
-          "widget may be converted to a non-literal input). Un-convert it " +
-          "in ComfyUI and re-export, or use another template."));
-        return;
-      }
+    if (typeof params.prompt === "string" && params.prompt !== "" &&
+        !graphCarriesValue(graph, params.prompt)) {
+      cb(new Error("This workflow has no editable prompt text (its text " +
+        "widget may be converted to a non-literal input). Un-convert it " +
+        "in ComfyUI and re-export, or use another template."));
+      return;
+    }
+
+    // An image that lands nowhere is worse: the upload succeeded, so
+    // everything up to here looked right, and the render would finish —
+    // as text-to-image, the reference silently ignored. The only route an
+    // image takes into a graph is a manifest's procedural.firstFrame, so
+    // the refusal names the templates that have one.
+    if (typeof params.imageName === "string" && params.imageName !== "" &&
+        !graphCarriesValue(graph, params.imageName)) {
+      var wfName = path.basename(String(opts.workflowFile || ""))
+                       .replace(/\.json$/i, "");
+      var capable = imageCapableWorkflows(
+        path.dirname(String(opts.workflowFile || "")));
+      var shownCap = capable.slice(0, COMFY_LIST_LIMIT);
+      cb(new Error("Workflow '" + wfName + "' has no image input — the " +
+        "uploaded reference (" + params.imageName + ") reached ComfyUI " +
+        "but lands on no node of this graph, so the render would have " +
+        "ignored it and run as text-to-image. Use a template whose " +
+        "manifest declares procedural.firstFrame" +
+        (capable.length
+          ? ": " + shownCap.join(", ") +
+            (capable.length > shownCap.length
+              ? " (showing " + shownCap.length + " of " + capable.length +
+                "; comfy_list_workflows lists all)"
+              : "")
+          : " — none of the templates alongside this one do") +
+        ". Or re-call without an image."));
+      return;
+    }
+
+    // Last thing before the POST, exactly where the browser does it: a
+    // %date:…% left in a filename_prefix kills the render at its final
+    // node, after every GPU second has already been spent.
+    var expanded = expandFilenameTokens(graph, new Date());
+    for (var ei = 0; ei < expanded.length; ei++) {
+      applied.push("filename token expanded — " + expanded[ei]);
     }
 
     var clientId = "aellama-" + Math.floor(Math.random() * 1e9);

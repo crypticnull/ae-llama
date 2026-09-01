@@ -352,15 +352,48 @@ const H = t => ({ tool: t, args: {} });
   assert(r7.results.some(x => !x.ok && /Cancelled by user/.test(x.error)),
          "shouldStop still cancels the remaining commands");
 
-  // -- the per-round cap still holds
+  // -- the per-round cap still holds, and the cut is REPORTED
+  //
+  // A silent slice hands a model that emitted 30 commands exactly 20
+  // results: it counts the round complete and never re-issues 21-30.
+  // The cut therefore costs one more ERROR-shaped row, and the schema
+  // the model decodes through carries the same cap as maxItems.
   scripts.length = 0;
   const many = [];
   for (let i = 0; i < 30; i++) many.push(H("add_solid"));
   const r8 = await run(many);
-  assert(r8.results.length === 20,
-         "still capped at 20 commands per round (got " + r8.results.length +
-         ")");
+  assert(r8.results.length === 21,
+         "20 command results plus ONE dropped-commands row (got " +
+         r8.results.length + ")");
+  assert(r8.results.slice(0, 20).every(x => x.ok),
+         "the first 20 commands really ran");
   assert(scripts.length === 1, "and they go out as a single batch");
+  const drop = r8.results[20] || {};
+  assert(drop.ok === false,
+         "the extra row is ERROR-shaped, so the round loop relays it " +
+         "like any failed command");
+  assert(/10 of your 30 were NOT run/.test(drop.error || ""),
+         "it counts exactly what was cut: " + (drop.error || "(none)"));
+  assert(/#21 add_solid/.test(drop.error || "") &&
+         /#30 add_solid/.test(drop.error || ""),
+         "and names the dropped commands by index and tool");
+  assert(/[Rr]e-issue/.test(drop.error || ""),
+         "and says they must be re-issued next round");
+
+  // A bigger cut: the name listing is capped, the count never is.
+  scripts.length = 0;
+  const many2 = [];
+  for (let i = 0; i < 45; i++) many2.push(H("add_solid"));
+  const drop2 = (await run(many2)).results[20] || {};
+  assert(/25 of your 45 were NOT run/.test(drop2.error || ""),
+         "a 25-command cut still counts in full");
+  assert(/\+15 more/.test(drop2.error || ""),
+         "with the listing capped, not the count: …" +
+         (drop2.error || "").slice(-70));
+
+  assert(Tools.RESPONSE_SCHEMA.properties.commands.maxItems === 20,
+         "RESPONSE_SCHEMA caps commands at the executor's 20, so " +
+         "constrained decoding refuses what the executor would cut");
 
   // ------------------------------ 4. anti-drift: the two mutating tables
   //

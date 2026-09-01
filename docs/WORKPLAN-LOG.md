@@ -9858,3 +9858,38 @@ got.
   was WRONG in a way that mattered: variance numbers on the current
   probe harness would overstate robustness (shared history, loose
   checks) — do the prerequisites first.
+
+## 2026-09-01 (remote session) — zero-silent-failure gate built (roadmap item 1 + MOGRT step 0), UNBUMPED
+
+- Changed: extension/jsx/hostscript.jsx (set_keyframes /
+  apply_keyframe_ease return AELL_errPartial once anything landed, with
+  the applied-count clause on every branch; grounded errors for
+  apply_effect / set_effect_param / rename_item / delete_item /
+  move_to_folder / set_track_matte via new AELL_itemNotFound /
+  AELL_itemsHere / AELL_capJoin helpers; AELL_mogrtFound requires two
+  stable sizes >=250ms apart; new AELL_mogrtNameTrap refuses reserved
+  Windows device names — trailing dot/space deliberately NOT trapped,
+  the on-disk name is tplName + ".mogrt" so they are interior),
+  extension/js/tools.js (dropped-commands error row + RESPONSE_SCHEMA
+  maxItems:20; both fitResult byte-slices replaced with whole-unit
+  drops — the unserializable case now an ok-less outcome-unknown note
+  so a landed mutation is never re-run), extension/js/comfy.js
+  (uploadImage unique per-call name prefixes; image-landed fail-fast
+  reading the MUTATED GRAPH before the /prompt POST, prompt check
+  hardened onto the same mechanism, both checks run BEFORE
+  expandFilenameTokens so a tokened prompt is not falsely refused),
+  tests: test-round-rollback +133, test-mogrt, test-property-access,
+  test-project-tools, test-tool-result-budget, test-undo-groups,
+  test-comfy-inject, NEW test-comfy-image-landed; CAPABILITIES
+  regenerated.
+- Harness: full stub sweep 62/64 green in the container (the two
+  Windows-only suites as always); every new check proven to FAIL on
+  reverted code (worktree/git-show reverts, per-family).
+- Notes: NOT BUMPED on purpose — WORKPLAN section 1b is tonight's
+  first pass: real-AE verification of the stub-blind class (rollback
+  arming, matte error texts, mogrt settle, image-landed refusal +
+  H3 happy path), THEN the patch bump ships it. Known polish left on
+  the table (filed, small): main.js does not render the
+  dropped-commands row to the USER (model-visible only); the comfy
+  refusal could name an optional-node resolution as the cause when
+  one removed the target node.

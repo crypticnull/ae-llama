@@ -30,7 +30,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `add_text_animator` | Animate a text layer PER CHARACTER (typewriter, cascade, wiggle) — an animator holds the properties, a selector picks which characters get them | yes | host | 1 | 10 |
 | `add_text_layer` | Add a text layer to a comp | yes | host | 1 | 8 |
 | `add_to_render_queue` | Add a comp to the render queue WITHOUT rendering it | yes | host | 1 | 3 |
-| `apply_effect` | Apply an effect to a layer | yes | host | — | 9 |
+| `apply_effect` | Apply an effect to a layer | yes | host | 1 | 9 |
 | `apply_expression_preset` | Apply a known-good expression | yes | host | 1 | 3 |
 | `apply_keyframe_ease` | Apply a bezier as TEMPORAL easing between keyframes on one property across MANY layers in ONE call (converts to AE speed/influence ease) | yes | host | 1 | 3 |
 | `apply_preset` | Apply an installed .ffx animation preset to layer(s) | yes | host | 1 | 5 |
@@ -76,7 +76,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `reorder_layers` | Restack layers WITHOUT changing their timing | yes | host | 1 | 2 |
 | `scale_comp` | Resize a comp AND scale its content to match, re-centered — like the native 'Scale Composition' script | yes | host | 2 | 2 |
 | `set_comp_setting` | Change a comp setting: duration, frame rate, bg color, the WORK AREA (workAreaStart with workAreaDuration or workAreaEnd, in seconds — or workArea: 'comp' to reset it to the whole comp) and preview resolution | yes | host | 2 | 10 |
-| `set_effect_param` | Set a parameter on an effect already applied to a layer | yes | host | — | 1 |
+| `set_effect_param` | Set a parameter on an effect already applied to a layer | yes | host | 1 | 1 |
 | `set_expression` | LAST RESORT: set a raw expression (or clear with '') | yes | host | 1 | 13 |
 | `set_keyframes` | Set the SAME keyframes on MANY layers in ONE call | yes | host | 2 | 12 |
 | `set_layer_3d` | Enable/disable a layer's 3D switch | yes | host | 1 | 8 |
@@ -96,7 +96,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 
 **Coverage gaps (computed):**
 
-- Host tools with NO stubbed test: `add_camera`, `add_shape_layer`, `add_solid`, `apply_effect`, `delete_layer`, `link_property`, `set_effect_param`, `set_layer_timing`
+- Host tools with NO stubbed test: `add_camera`, `add_shape_layer`, `add_solid`, `delete_layer`, `link_property`, `set_layer_timing`
 - Host tools never exercised by the self-test suite: none
 
 <!-- END GENERATED TOOL INVENTORY -->

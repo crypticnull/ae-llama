@@ -106,6 +106,14 @@ function writeFile(p, bytes) {
   FILES[norm(p).toLowerCase()] =
     { path: norm(p), bytes, hidden: HIDE_TICKS, mtime: ++fakeClock };
 }
+// A file AE is STILL WRITING: visible at once, but each size read
+// advances to the next entry until the last one — the settled size.
+// This is the mid-write receipt hazard the live-bug fix polls against.
+function writeGrowingFile(p, sizes) {
+  FILES[norm(p).toLowerCase()] =
+    { path: norm(p), bytes: sizes[0], growth: sizes.slice(1),
+      hidden: 0, mtime: ++fakeClock };
+}
 
 function File(p) {
   this._p = norm(p);
@@ -127,7 +135,10 @@ Object.defineProperty(File.prototype, "exists", {
 Object.defineProperty(File.prototype, "length", {
   get() {
     const rec = FILES[this._p.toLowerCase()];
-    return rec ? rec.bytes : -1;
+    if (!rec) return -1;
+    const now = rec.bytes;
+    if (rec.growth && rec.growth.length) rec.bytes = rec.growth.shift();
+    return now;
   }
 });
 // An overwrite can land on the SAME byte count, so the modified stamp is
@@ -439,15 +450,18 @@ const app = {
   beginSuppressDialogs() { suppressDepth++; },
   endSuppressDialogs() { if (suppressDepth > 0) suppressDepth--; }
 };
-const $ = { global: {}, hiresTimer: 0, sleep() {} };
+const SLEEPS = [];
+const $ = { global: {}, hiresTimer: 0, sleep(ms) { SLEEPS.push(ms); } };
 
 const host = eval(hostSrc + ";\n({ AELL_TOOLS: AELL_TOOLS, " +
   "AELL_MUTATING: AELL_MUTATING, AELL_runTool: AELL_runTool, " +
   "AELL_NO_UNDO_GROUP: AELL_NO_UNDO_GROUP, AELL_PER_LAYER: AELL_PER_LAYER, " +
   "AELL_mogrtFileName: AELL_mogrtFileName, " +
-  "AELL_mogrtBadName: AELL_mogrtBadName })");
+  "AELL_mogrtBadName: AELL_mogrtBadName, " +
+  "AELL_mogrtNameTrap: AELL_mogrtNameTrap })");
 const { AELL_TOOLS, AELL_MUTATING, AELL_runTool, AELL_NO_UNDO_GROUP,
-        AELL_PER_LAYER, AELL_mogrtFileName, AELL_mogrtBadName } = host;
+        AELL_PER_LAYER, AELL_mogrtFileName, AELL_mogrtBadName,
+        AELL_mogrtNameTrap } = host;
 const call = (t, a) => AELL_runTool(t, a || {});
 
 // ---------------------------------------------------------------- rig
@@ -573,6 +587,26 @@ assert(/: \/|\/ :/.test(r.error) || (r.error.indexOf(":") !== -1 &&
 assert(/returns false and writes nothing/.test(r.error),
        "with what AE would have done instead - 3.7 s and no file");
 
+// ---- Windows reserved device names, past the character check -----------
+// CON PRN AUX NUL COM1-9 LPT1-9 hold no forbidden character at all, so
+// the character check alone waves every one of them through. (A trailing
+// dot/space in the NAME is deliberately NOT trapped: the file on disk is
+// name + ".mogrt", which makes it interior and legal.)
+r = call("export_mogrt", { folder: "C:\\out", name: "CON" });
+assert(!r.ok && /reserved Windows device name/.test(r.error),
+       "'CON' is refused as a reserved device name: " +
+       (r.ok ? "(it passed!)" : r.error.slice(0, 80)));
+assert(/\{name: "\.\.\."\}/.test(r.error),
+       "and the refusal offers the way through");
+r = call("export_mogrt", { folder: "C:\\out", name: "com7" });
+assert(!r.ok && /reserved Windows device name/.test(r.error),
+       "COM1-COM9 are caught case-insensitively ('com7')");
+r = call("export_mogrt", { folder: "C:\\out", name: "Nul.v2" });
+assert(!r.ok && /reserved Windows device name/.test(r.error) &&
+       /extension or not/.test(r.error),
+       "an extension does not rescue a device name ('Nul.v2'): " +
+       (r.ok ? "(it passed!)" : r.error.slice(0, 90)));
+
 // ---- zero controllers (FACT 8) -----------------------------------------
 const bare = project.items.addComp("Bare");
 makeLayer(bare, "Solo");
@@ -590,7 +624,7 @@ assert(/needs to be saved first/.test(r.error),
        "quoting the alert AE would have raised");
 
 assert(exportCalls === callsBefore,
-       "not one of those six refusals reached After Effects (" +
+       "not one of those refusals reached After Effects (" +
        (exportCalls - callsBefore) + " calls)");
 
 console.log("=== export_mogrt: saved, dirty, clean ===");
@@ -789,6 +823,35 @@ assert(r.data.bytes === 9001, "the bytes are read off the disk");
 assert(/is on the disk anyway/.test(r.data.threwNote || ""),
        "and AE's message is passed on rather than swallowed");
 
+console.log("=== the receipt that waits for the archive to finish ===");
+
+// The live bug the harness design found (AUDIT-0.11): AELL_mogrtFound
+// returned on the FIRST folder-diff hit, so a file AE was still
+// flushing put a mid-write size in the receipt. The fix requires the
+// same size on two polls at least 250 ms apart; this rig makes the
+// size move twice before settling.
+const card8 = app.project.items.addComp("Card Eight");
+makeLayer(card8, "Body");
+card8._layers[0].selected = true;
+call("expose_property", { comp: "Card Eight", layer: "Body",
+                          property: "opacity", label: "Fade" });
+app.project.dirty = false;
+card8.exportAsMotionGraphicsTemplate = function (ow, where) {
+  writeGrowingFile(norm(where + "\\CardEight.mogrt"),
+                   [4096, 9001, 13337]);
+  return true;
+};
+SLEEPS.length = 0;
+r = call("export_mogrt", { comp: "Card Eight", folder: "C:\\out",
+                           name: "CardEight" });
+assert(r.ok, "a still-growing file still lands: " + (r.error || ""));
+assert(r.data.bytes === 13337,
+       "the receipt reports the SETTLED size, not the first size a " +
+       "poll saw (got " + r.data.bytes + ")");
+assert(SLEEPS.some((ms) => ms >= 250),
+       "and the size was confirmed across polls at least 250 ms " +
+       "apart (sleeps: " + SLEEPS.join(",") + ")");
+
 console.log("=== helpers, registration and docs ===");
 
 assert(AELL_mogrtFileName("AELL Probe Template") ===
@@ -800,6 +863,23 @@ assert(AELL_mogrtBadName("a:b/c").join("") === ":/",
        "AELL_mogrtBadName finds the characters Windows forbids");
 assert(AELL_mogrtBadName("Perfectly Fine 2").length === 0,
        "and leaves an ordinary name alone");
+assert(AELL_mogrtBadName("CON").length === 0 &&
+       AELL_mogrtNameTrap("CON") !== "",
+       "the device names slip the character check - the trap is a " +
+       "separate wall, not a widening of it");
+assert(AELL_mogrtNameTrap("lpt9") !== "" &&
+       AELL_mogrtNameTrap("prn.mogrt") !== "",
+       "LPT1-9 and an extension-carrying device name are trapped");
+assert(AELL_mogrtNameTrap("CONTROL") === "" &&
+       AELL_mogrtNameTrap("COM10") === "" &&
+       AELL_mogrtNameTrap("LPT0") === "",
+       "but a name merely STARTING with a device name is left alone - " +
+       "CONTROL, COM10 and LPT0 are all legal on Windows");
+assert(AELL_mogrtNameTrap("Fine. Name") === "" &&
+       AELL_mogrtNameTrap("Brand Card.") === "" &&
+       AELL_mogrtNameTrap("Brand Card ") === "",
+       "dots and spaces trap nothing, trailing included - the file on " +
+       "disk is name + '.mogrt', which makes them interior and legal");
 
 assert(AELL_MUTATING.expose_property === true,
        "expose_property gets an undo group - it edits the project");

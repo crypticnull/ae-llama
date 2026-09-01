@@ -633,6 +633,11 @@
     if (TOOL_DEFS[i].mutating) MUTATING[TOOL_DEFS[i].name] = true;
   }
 
+  // The executor's hard per-round cap (executeCommands). Declared here,
+  // above RESPONSE_SCHEMA, because the schema's maxItems must be the
+  // same number: a command past this cap does not run.
+  var MAX_COMMANDS_PER_ROUND = 20;
+
   // Forced output shape for constrained decoding (llama.cpp json_schema).
   var RESPONSE_SCHEMA = {
     type: "object",
@@ -643,6 +648,11 @@
       },
       commands: {
         type: "array",
+        // The grammar refuses what the executor would cut: commands past
+        // MAX_COMMANDS_PER_ROUND never run, so letting the model emit
+        // them only manufactures the dropped-commands error row. The
+        // system prompt's "AT MOST 8" stays an advisory aim below this.
+        maxItems: MAX_COMMANDS_PER_ROUND,
         items: {
           type: "object",
           properties: {
@@ -2579,7 +2589,19 @@
     if (s.length <= cap) return s;
 
     var copy;
-    try { copy = JSON.parse(s); } catch (e) { return s.slice(0, cap) + " …(truncated)"; }
+    try { copy = JSON.parse(s); } catch (e) {
+      // Not JSON at all — a result that could not serialize, rendered by
+      // String(). There is no row structure to shrink, and the head of
+      // it would be exactly the cut fragment this block bans, handed to
+      // a model that will try to parse it. Dropped WHOLE instead, with
+      // its size. No ok:false — the TOOL may well have succeeded, and
+      // an error shape here invites the model to re-run a mutation that
+      // already landed; the outcome is unknown, and it must say so.
+      return JSON.stringify({ truncated:
+        s.length + "-byte result could not be relayed as JSON — the " +
+        "outcome is unknown, NOT failed; verify state (get_comp_details" +
+        " / get_property) before re-running anything that mutates." });
+    }
 
     var arrays = shrinkableArrays(copy, 0, []);
     var touched = [];
@@ -2634,7 +2656,21 @@
         out = JSON.stringify(copy);
       }
     }
-    return out.length > cap ? out.slice(0, cap) + " …(truncated)" : out;
+    if (out.length > cap) {
+      // Arrays emptied, the longest string shortened, and the result is
+      // STILL over its share (several long strings, or a shell of many
+      // scalar fields). The payload goes the way its rows went — dropped
+      // whole, reported in the same `truncated` wording annotate writes.
+      // ok survives when it is readable: losing the payload in transit
+      // is not a tool failure, and the model must still see the outcome.
+      var shell = {};
+      if (copy && typeof copy.ok === "boolean") shell.ok = copy.ok;
+      shell.truncated = s.length + "-byte result dropped whole to fit " +
+        "the model's context, NOT by the tool — narrow the request and " +
+        "call again";
+      out = JSON.stringify(shell);
+    }
+    return out;
   }
 
   /**
@@ -2739,7 +2775,8 @@
       });
   }
 
-  var MAX_COMMANDS_PER_ROUND = 20;
+  // MAX_COMMANDS_PER_ROUND is declared next to RESPONSE_SCHEMA — the
+  // schema's maxItems and this executor enforce the same cap.
 
   /**
    * Execute a command list in order.
@@ -2761,11 +2798,38 @@
    */
   function executeCommands(commands, opts, onEach, done) {
     opts = opts || {};
+    // Commands past the cap are cut here, and the cut is REPORTED as one
+    // more ERROR-shaped result row at the end of the round. A silent cut
+    // hands a model that emitted 25 commands exactly 20 results — it
+    // counts the round complete and never re-issues 21-25. The schema's
+    // maxItems keeps a constrained-decoding model from ever getting
+    // here; this row covers every caller that did not decode through it.
+    var overflowRow = null;
+    if (commands.length > MAX_COMMANDS_PER_ROUND) {
+      var cut = commands.slice(MAX_COMMANDS_PER_ROUND);
+      commands = commands.slice(0, MAX_COMMANDS_PER_ROUND);
+      var cutNames = [];
+      for (var cn = 0; cn < cut.length && cn < 10; cn++) {
+        cutNames.push("#" + (MAX_COMMANDS_PER_ROUND + cn + 1) + " " +
+                      (cut[cn] && typeof cut[cn].tool === "string"
+                        ? cut[cn].tool : "(malformed)"));
+      }
+      if (cut.length > cutNames.length) {
+        cutNames.push("+" + (cut.length - cutNames.length) + " more");
+      }
+      overflowRow = { ok: false, error:
+        "Round capped at " + MAX_COMMANDS_PER_ROUND + " commands: the " +
+        "last " + cut.length + " of your " +
+        (MAX_COMMANDS_PER_ROUND + cut.length) + " were NOT run — " +
+        cutNames.join(", ") + ". Re-issue them in your next reply, in " +
+        "rounds of " + MAX_COMMANDS_PER_ROUND + " or fewer." };
+    }
     // If a generation paused the chat model this round, warm it back up
     // BEFORE handing the results on — the very next thing the caller
     // does with them is ask the model for its reply.
     var doneInner = done;
     done = function (results) {
+      if (overflowRow) results.push(overflowRow);
       VramArbiter.resumeIfPaused(global.Settings.get(), progressSink,
         function () { doneInner(results); });
     };
@@ -2773,9 +2837,6 @@
     // A dry run mutates nothing, so there is never anything to roll back.
     var rollbackArmed = !!opts.allowRollback && !dryRun;
     var results = [];
-    if (commands.length > MAX_COMMANDS_PER_ROUND) {
-      commands = commands.slice(0, MAX_COMMANDS_PER_ROUND);
-    }
 
     // A command can join a batched host run only if it goes to the host
     // unconditionally — anything the panel answers itself would lose its

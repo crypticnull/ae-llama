@@ -204,6 +204,66 @@ for (const n of [1, 2, 3, 8, 20]) {
   assert(sent([]).text === "[]", "an empty round is an empty array");
 }
 
+// ------------------------------ 6b. the last two byte-slices, removed
+//
+// fitResult's doctrine bans byte-slicing, and two fallbacks outlived it:
+// a result that could not serialize went out as String(result) cut at
+// the cap, and a result still over cap after the row drops and the
+// string shorten was cut the same way. Both cuts produced the exact
+// artifact the ban exists for — a fragment the model parses as the
+// whole answer. Both are whole-unit drops now, and both old behaviors
+// fail this section.
+
+{
+  // Cannot serialize: circular, with a String() form far past the cap.
+  // JSON.stringify throws on it, so the shrinker has no structure to
+  // work with at all.
+  const circ = { ok: true, data: { name: "Loop" } };
+  circ.data.self = circ;
+  circ.toString = function () {
+    return "get_comp_details walked into a cycle: " + "x".repeat(9000);
+  };
+  const r = sent([circ]);
+  assert(!r.err, "a result that cannot serialize still reaches the " +
+         "model as parseable JSON");
+  assert(r.text.length <= BUDGET, "and inside the budget (" +
+         r.text.length + " bytes)");
+  const row = r.parsed ? r.parsed[0] : {};
+  assert(row.ok === undefined,
+         "with NO ok field — the tool may have SUCCEEDED, and an " +
+         "error shape would invite re-running a landed mutation");
+  assert(/\d+-byte result could not be relayed/.test(String(row.truncated)) &&
+         /outcome is unknown/.test(String(row.truncated)) &&
+         /verify state/.test(String(row.truncated)),
+         "as an honest outcome-unknown note telling the model to " +
+         "verify before re-running: " + row.truncated);
+  assert(r.text.indexOf("xxxx") === -1,
+         "with NONE of the unparseable payload leaking through");
+}
+
+{
+  // Over cap with no arrays to drop and more long strings than the
+  // single string-shorten can absorb.
+  const r = sent([{ ok: true, data: {
+    a: "a".repeat(3000), b: "b".repeat(3000), c: "c".repeat(3000) } }]);
+  assert(!r.err, "a result the string-shorten cannot rescue is still " +
+         "parseable JSON");
+  assert(r.text.length <= BUDGET, "and inside the budget (" +
+         r.text.length + " bytes)");
+  const row = r.parsed ? r.parsed[0] : {};
+  assert(row.ok === true,
+         "ok:true survives the drop — losing the payload in transit is " +
+         "not a tool failure");
+  assert(/\d+-byte result dropped whole/.test(String(row.truncated)),
+         "and the row says the payload was dropped whole: " +
+         row.truncated);
+  assert(/NOT by the tool/.test(String(row.truncated)),
+         "in the same wording every other trim uses");
+}
+
+assert(!/slice\(0,\s*cap\)/.test(toolsSrc),
+       "no slice-at-cap fallback survives in tools.js — the ban is total");
+
 // ------------------------- 7. the HOST's own cap, against this budget
 
 // The two tools the 2026-08-21 pass bounded host-side are the ones that
