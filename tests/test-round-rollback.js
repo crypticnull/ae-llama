@@ -93,13 +93,82 @@ MarkerProp.prototype.add = function (t, tear) {
   record({ undo() { self._t = old; }, redo() { self._t = next; } });
 };
 
+// A leaf transform property with real keyframe/ease writes, each
+// recorded on the undo stack the way AE records them — what lets the
+// REAL set_keyframes and apply_keyframe_ease run against this stub
+// instead of a stand-in, so their partial-failure returns are the
+// actual code under test.
+function KeyProp(name, matchName, value) {
+  this.name = name;
+  this.matchName = matchName;
+  this._v = value;
+  this._keys = [];              // sorted [{time, value, eases…}]
+  this.canSetExpression = true; // not a dormant animator slot
+}
+Object.defineProperty(KeyProp.prototype, "value", {
+  get() { return this._v; }
+});
+Object.defineProperty(KeyProp.prototype, "numKeys", {
+  get() { return this._keys.length; }
+});
+KeyProp.prototype.setValue = function (v) {
+  const self = this, old = this._v;
+  this._v = v;
+  record({ undo() { self._v = old; }, redo() { self._v = v; } });
+};
+KeyProp.prototype.setValueAtTime = function (t, v) {
+  // AE rejects a value the property cannot hold; the stub's stand-in
+  // for that refusal is any non-numeric scalar.
+  if (typeof v !== "number" && !Array.isArray(v)) {
+    throw new Error("value is not a Number");
+  }
+  const self = this, old = this._keys;
+  const next = old.concat([{ time: t, value: v }])
+    .sort((a, b) => a.time - b.time);
+  this._keys = next;
+  record({ undo() { self._keys = old; }, redo() { self._keys = next; } });
+};
+KeyProp.prototype.keyTime = function (i) { return this._keys[i - 1].time; };
+KeyProp.prototype.keyValue = function (i) { return this._keys[i - 1].value; };
+KeyProp.prototype.setInterpolationTypeAtKey = function (i, inT, outT) {
+  const k = this._keys[i - 1], wasI = k.interpIn, wasO = k.interpOut;
+  k.interpIn = inT; k.interpOut = outT;
+  record({ undo() { k.interpIn = wasI; k.interpOut = wasO; },
+           redo() { k.interpIn = inT; k.interpOut = outT; } });
+};
+KeyProp.prototype.setTemporalEaseAtKey = function (i, inE, outE) {
+  const k = this._keys[i - 1], wasI = k.inEase, wasO = k.outEase;
+  k.inEase = inE; k.outEase = outE;
+  record({ undo() { k.inEase = wasI; k.outEase = wasO; },
+           redo() { k.inEase = inE; k.outEase = outE; } });
+};
+KeyProp.prototype.keyInTemporalEase = function (i) {
+  return this._keys[i - 1].inEase || null;
+};
+KeyProp.prototype.keyOutTemporalEase = function (i) {
+  return this._keys[i - 1].outEase || null;
+};
+
+function KeyframeEase(speed, influence) {
+  this.speed = speed;
+  this.influence = influence;
+}
+const KeyframeInterpolationType = { LINEAR: 6612, BEZIER: 6613,
+                                    HOLD: 6614 };
+
 function Layer(name, comp) {
   this.name = name;
   this.comp = comp;
   this.enabled = true;
   this.parent = null;
   this.inPoint = 0; this.outPoint = 10; this.startTime = 0;
-  this._pos = [320, 180, 0];
+  this._t = {
+    "ADBE Position": new KeyProp("Position", "ADBE Position",
+                                 [320, 180, 0]),
+    "ADBE Scale": new KeyProp("Scale", "ADBE Scale", [100, 100, 100]),
+    "ADBE Rotate Z": new KeyProp("Rotation", "ADBE Rotate Z", 0),
+    "ADBE Opacity": new KeyProp("Opacity", "ADBE Opacity", 100)
+  };
   // Every one of these was measured in AE 2026 (probe 3, 2026-08-29) as
   // written by a tool in AELL_MUTATING, reverted by the single Undo, and
   // INVISIBLE to the fingerprint before this. A stub that omitted them
@@ -120,10 +189,7 @@ Layer.prototype.property = function (p) {
   if (p === "ADBE Transform Group") {
     return {
       property(n) {
-        if (n === "ADBE Position") return { value: self._pos, numKeys: 0 };
-        if (n === "ADBE Scale") return { value: [100, 100, 100], numKeys: 0 };
-        if (n === "ADBE Rotate Z") return { value: 0, numKeys: 0 };
-        if (n === "ADBE Opacity") return { value: 100, numKeys: 0 };
+        if (self._t[n]) return self._t[n];
         // AE answers the 3D-only rotations on a 2D layer too — they read
         // as a stable 0 rather than throwing, which is exactly why
         // set_layer_3d can zero them without the fingerprint noticing.
@@ -552,6 +618,87 @@ assert(r7.data.rollback && r7.data.rollback.rolledBack === true,
 assert(comp._layers.length === 0,
        "the half-applied work is gone (got " + comp._layers.length + ")");
 assert(undo.undos === 1, "one Undo");
+
+// ----------------- 3b. the REAL partial-mutation tools, not stand-ins
+//
+// Audit 0.11: set_keyframes and apply_keyframe_ease returned a PLAIN
+// AELL_err after keys/eases had already been written, so to
+// AELL_maybeRollback the round read as failure-only and never armed —
+// half-applied keyframes silently survived an armed round. These cases
+// drive the real tools through the batch runner, so the mutated flag on
+// their failure is the actual code under test.
+
+const opProp = () => comp._layers[0].property("ADBE Transform Group")
+  .property("ADBE Opacity");
+
+reset();
+addLayer("Square 1");
+undo.stack.length = 0;            // the layer is older history
+const kfDirect = AELL_TOOLS.set_keyframes({ comp: "Rollback scratch",
+  layer: 1, property: "opacity",
+  keys: [{ time: 0, value: 0 }, { time: 1, value: "not-a-number" }] });
+assert(!kfDirect.ok && kfDirect.mutated === true,
+       "set_keyframes that fails after writing a key reports " +
+       "mutated:true: " + (kfDirect.error || "(it succeeded)"));
+assert(/1 key\(s\) were applied before this/.test(kfDirect.error),
+       "and keeps the message that counts the applied keys");
+
+reset();
+addLayer("Square 1");
+undo.stack.length = 0;
+const rk = batch([{ tool: "set_keyframes", args: { comp: "Rollback scratch",
+  layer: 1, property: "opacity",
+  keys: [{ time: 0, value: 0 }, { time: 1, value: "not-a-number" }] } }],
+  ROLL);
+assert(rk.data.rollback && rk.data.rollback.rolledBack === true,
+       "an armed round with a part-way set_keyframes now ROLLS BACK");
+assert(opProp().numKeys === 0,
+       "and the key it did write is gone (got " + opProp().numKeys + ")");
+assert(undo.undos === 1, "one Undo (got " + undo.undos + ")");
+
+// a set_keyframes that fails before ANY write stays a plain error — a
+// bad lookup with no debris must not spend the round's one Undo.
+reset();
+addLayer("Square 1");
+undo.stack.length = 0;
+const kfClean = AELL_TOOLS.set_keyframes({ comp: "Rollback scratch",
+  layer: 1, property: "opacity",
+  keys: [{ time: 0, value: "not-a-number" }] });
+assert(!kfClean.ok && !kfClean.mutated,
+       "a first-key failure mutated nothing and says so");
+
+reset();
+addLayer("Square 1");
+addLayer("Square 2");
+opProp().setValueAtTime(0, 0);
+opProp().setValueAtTime(1, 100);
+undo.stack.length = 0;            // the seeded keys are older history
+const easeDirect = AELL_TOOLS.apply_keyframe_ease({
+  comp: "Rollback scratch", layers: [1, 2], property: "opacity" });
+assert(!easeDirect.ok && easeDirect.mutated === true,
+       "apply_keyframe_ease that fails after easing layer 1 reports " +
+       "mutated:true: " + (easeDirect.error || "(it succeeded)"));
+assert(/1 pair\(s\) eased before this/.test(easeDirect.error),
+       "and keeps the message that counts the eased pairs");
+
+reset();
+addLayer("Square 1");
+addLayer("Square 2");
+opProp().setValueAtTime(0, 0);
+opProp().setValueAtTime(1, 100);
+undo.stack.length = 0;
+const re = batch([{ tool: "apply_keyframe_ease",
+  args: { comp: "Rollback scratch", layers: [1, 2],
+          property: "opacity" } }], ROLL);
+assert(re.data.rollback && re.data.rollback.rolledBack === true,
+       "an armed round with a part-way apply_keyframe_ease now ROLLS " +
+       "BACK (layer 2 has no keys to ease)");
+assert(typeof opProp()._keys[0].outEase === "undefined" &&
+       typeof opProp()._keys[0].interpIn === "undefined",
+       "and layer 1's ease is off again");
+assert(opProp().numKeys === 2,
+       "while its seeded keys — older history — survive the one Undo");
+assert(undo.undos === 1, "one Undo (got " + undo.undos + ")");
 
 // ------------------------------- 4. the safety nets: sentinel and Redo
 

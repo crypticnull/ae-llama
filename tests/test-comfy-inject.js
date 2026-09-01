@@ -335,6 +335,14 @@ const imgPath = path.join(tmp, "grab 0001.png");
 const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
                            0x00, 0x0d, 0x2d, 0x2d, 0xff]);
 fs.writeFileSync(imgPath, bytes);
+// A SECOND source file with the SAME basename, different bytes — the AE
+// frame-grab shape. Under the old basename+overwrite=true naming these two
+// held one slot in ComfyUI's input dir, and a queued-but-not-started job
+// rendered whichever was uploaded last.
+const twinDir = path.join(tmp, "other-comp");
+fs.mkdirSync(twinDir);
+const twinPath = path.join(twinDir, "grab 0001.png");
+fs.writeFileSync(twinPath, Buffer.from([0x01, 0x02, 0x03]));
 
 server.listen(0, "127.0.0.1", () => {
   const port = server.address().port;
@@ -344,12 +352,28 @@ server.listen(0, "127.0.0.1", () => {
   Comfy.uploadImage(base, imgPath, (err, name) => {
     assert(!err, "uploadImage posts a well-formed multipart body" +
                  (err ? " (" + err.message + ")" : ""));
-    assert(name === "grab 0001.png",
-           "and returns the filename LoadImage should name");
+    assert(typeof name === "string" && /_grab 0001\.png$/.test(name),
+           "the stored name keeps the source basename AND its extension (" +
+           name + ")");
+    assert(name !== "grab 0001.png",
+           "but is never the bare basename — two sources sharing one would " +
+           "overwrite each other under overwrite=true");
     // The file arrives byte for byte — these bytes contain a CRLF and a "--"
     // on purpose, the two things a hand-rolled multipart body gets wrong.
     assert(receivedHex === bytes.toString("hex"),
            "the image bytes survive the encoding intact");
+
+    // Same-basename second upload, same process: the stored names must
+    // differ. No wall clock is involved, so back-to-back calls in one
+    // millisecond — the batch case — cannot collide.
+    Comfy.uploadImage(base, twinPath, (errB, nameB) => {
+      assert(!errB && typeof nameB === "string" &&
+             /_grab 0001\.png$/.test(nameB),
+             "a same-basename file from another folder uploads under its " +
+             "basename too (" + nameB + ")");
+      assert(nameB !== name,
+             "and under a DISTINCT stored name — no overwrite (" + name +
+             " vs " + nameB + ")");
 
     // A path that does not exist must fail before any socket is opened.
     Comfy.uploadImage(base, path.join(tmp, "nope.png"), (err2) => {
@@ -376,6 +400,7 @@ server.listen(0, "127.0.0.1", () => {
           process.exit(failures ? 1 : 0);
         });
       });
+    });
     });
   });
 });

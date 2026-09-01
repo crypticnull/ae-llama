@@ -347,4 +347,35 @@ const fanAll = call("create_folder",
 assert(!fanAll.ok && /every subfolder/.test(fanAll.error),
        "excluding every subfolder refuses with the reason");
 
+// 13. ITEM lookups are grounded too (audit 0.11: rename_item,
+// delete_item and move_to_folder's item side answered a bare
+// "not found" while the FOLDER side already listed what exists).
+const badRen = call("rename_item", { item: "Ghost Comp", name: "X" });
+assert(!badRen.ok && /Project item not found: Ghost Comp/.test(badRen.error),
+       "rename_item still names the reference that missed");
+assert(/Items in this project:/.test(badRen.error) &&
+       /_COMPS/.test(badRen.error),
+       "and lists real item names: " + badRen.error.slice(0, 130));
+assert(/get_project_info/.test(badRen.error),
+       "and names the tool that lists them all");
+assert(/and \d+ more/.test(badRen.error),
+       "the list is CAPPED with an honest remainder, not dumped whole " +
+       "(project holds " + ALL_ITEMS.length + " items)");
+
+const badDel = call("delete_item", { item: "Ghost Comp" });
+assert(!badDel.ok && /Items in this project:/.test(badDel.error) &&
+       /get_project_info/.test(badDel.error),
+       "delete_item's refusal is grounded the same way: " +
+       badDel.error.slice(0, 110));
+
+const badMvItem = call("move_to_folder",
+  { items: ["Ghost Comp"], folder: "_COMPS" });
+assert(!badMvItem.ok &&
+       /items not found: Ghost Comp/.test(badMvItem.error),
+       "move_to_folder still names the missing items");
+assert(/Items in this project:/.test(badMvItem.error) &&
+       /get_project_info/.test(badMvItem.error),
+       "and grounds them in what really exists: " +
+       badMvItem.error.slice(0, 140));
+
 console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");
