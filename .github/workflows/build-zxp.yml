@@ -144,8 +144,25 @@ jobs:
           Push-Location ../feedwt
           git add -A
           git commit -m "feed: AE Llama $ver"
-          git push origin HEAD:feed --force
+          # Two runs publish within seconds of each other on every merge
+          # (the merge into main and the dev-branch reset both trigger
+          # CI), and the second loses the ref lock: "cannot lock ref
+          # 'refs/heads/feed'" (measured 2026-09-01, PR #59). The feed
+          # content is fully regenerated from dist/ each run, so on a
+          # rejected push re-base OUR commit onto the tip that won --
+          # reset --soft keeps the index (our files) -- and push again.
+          $pushed = $false
+          for ($try = 1; $try -le 4; $try++) {
+            git push origin HEAD:feed --force
+            if ($LASTEXITCODE -eq 0) { $pushed = $true; break }
+            Write-Host "feed push rejected (attempt $try) - retrying on the new tip"
+            Start-Sleep -Seconds (3 * $try)
+            git fetch origin feed
+            git reset --soft origin/feed
+            git commit -q -m "feed: AE Llama $ver"
+          }
           Pop-Location
+          if (-not $pushed) { throw "feed push failed after 4 attempts" }
 
       # Fully hands-off public sync: create a fine-grained PAT with
       # contents:write on crypticnull/ae-llama-updates and save it as the
