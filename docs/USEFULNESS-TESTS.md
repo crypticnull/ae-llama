@@ -95,8 +95,8 @@ are not assertable).
 
 ## Scoring
 
-30 tests, ~90 phrasings once variants count. A useful panel is not
-30/30 — it is: **zero harmful misses**, every miss honest, and the
+31 tests, ~90 phrasings once variants count. A useful panel is not
+31/31 — it is: **zero harmful misses**, every miss honest, and the
 variants no worse than the canonical phrasings. When a variant fails
 where the canonical passes, that is a WORDING dependency — file it; the
 fix belongs in the tool docs / system prompt (tools.js), not in the

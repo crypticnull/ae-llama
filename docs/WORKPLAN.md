@@ -1398,65 +1398,149 @@ than exact prescribed trigger words." The instrument exists —
 panel code against the canned host — what it lacks is VARIANCE. One
 bullet per pass:
 
-- **Wire the paraphrase matrix into chat-probe.** Every scenario in
-  `docs/USEFULNESS-TESTS.md` marked `probe` becomes a probe step that
-  runs its VARIANTS (the doc's alternate phrasings, plus casual, vague,
-  typo'd, and compound forms — 3 to 5 per scenario). Score each
-  phrasing: right tool + right target = pass; honest grounded refusal
-  or a sensible clarifying question = pass; wrong-target mutation that
-  claims success = the failure class that matters, log it loudly.
-  Acceptance per scenario: no variant may do harm, and at most one may
-  miss where the canonical passes.
-- **Report, don't fix, in the same pass.** Append a table to
-  WORKPLAN-LOG per run: scenario / phrasing / chosen tool / verdict.
-  Recurring misses are WORDING dependencies; the fix lives in tool
-  descriptions and the system prompt (tools.js), which changes model
-  behavior — make the doc change, re-run the matrix to show the flip,
-  patch-bump. One tool-doc change per pass so a regression is
-  attributable.
-- **Anti-drift:** the doc's `probe` column and the probe's step list
-  must agree — add the check to test-chat-probe.js so a scenario added
-  to one place fails until it reaches the other.
+**RESCOPED by the 2026-08-30 audit (docs/AUDIT-0.11.md part 1.4): a
+variance number computed on today's harness would LIE.** The audit
+measured: shared history never resets (chat-probe.js:346 — later
+variants ride earlier successes), step order is load-bearing
+(test-chat-probe.js:426-429 pins indexes), checks in steps 4/5/6
+score wrong-but-present as pass (chat-probe.js:830-865), and the
+name-scoped SWEEP whitelist (:621-635) makes project-mutating rows
+(D-section, H3) UNSAFE against the owner's live project. Build in
+this order, one bullet per pass:
+
+- **Prerequisites first.** Per-variant history + comp reset so one
+  scenario can run N phrasings independently; un-pin the load-bearing
+  step indexes in tests/test-chat-probe.js (address steps by title,
+  not position); tighten the loose check() functions in steps 4/5/6
+  with matching canned-host cases. Remote pre-builds; local
+  calibrates with --reuse-server.
+- **Wire variants over the SAFE rows only** (A/B/C/E scenarios + the
+  ten roadmap-item-2 trigger mappings): 2-3 paraphrases each (casual,
+  vague, typo'd). Score: right tool + right target = pass; honest
+  grounded refusal or sensible question = pass; wrong-target mutation
+  claiming success = the failure that matters, logged loudly.
+  Acceptance: no variant may do harm; at most one may miss where the
+  canonical passes.
+- **Report, don't fix, in the same pass.** Append scenario / phrasing
+  / chosen tool / verdict to WORKPLAN-LOG per run. Wording
+  dependencies get ONE tool-doc/system-prompt change per pass (so a
+  regression is attributable), re-run to show the flip, patch bump.
+  Watch the 6KB prompt budget — measure buildSystemPrompt size
+  before/after every rule addition.
+- **DEFERRED until a sandbox design exists:** D/F/H3 rows (project
+  mutation, renders, mass-delete) — wiring them against the live
+  project is the harm the whitelist cannot contain. Also deferred:
+  the full 75-125-variant nightly matrix (multi-hour sequential on
+  the one machine) and the doc anti-drift assertion (it fails both
+  directions today: 16 probe rows lack steps, 6 steps lack doc rows
+  — add the 6 doc rows when wiring starts).
 - **First pass housekeeping check:** eyeball the newest
   `logs\local-agent-*.log` — the Clean-Line scrubber (ANSI escapes,
-  UTF-8 punctuation transliteration) shipped 2026-08-30 unparsed by any
-  Windows PowerShell; if the loop dies on a syntax error or the log
-  still shows mojibake, that fix is the pass.
+  UTF-8 punctuation transliteration) shipped 2026-08-30 unparsed by
+  any Windows PowerShell; if the loop dies on a syntax error or the
+  log still shows mojibake, that fix is the pass.
 
-## 9. Evolution track — proposals for the owner to prioritize
+## 9. Roadmap — ranked by the 2026-08-30 audit (owner approves order)
 
-Filed 2026-08-30 after the 0.11.0 cut. NOT approved work — the owner
-picks; remote builds most of these (features/minors), local verifies.
-Ordered by leverage-per-effort as the remote session sees it:
+Supersedes the earlier proposal list (its items were absorbed,
+re-ranked, or deliberately dropped — see docs/AUDIT-0.11.md part 2
+for the full what/why/file:line and the dropped list with reasons).
+Ranking optimizes for THIS stage: pre-launch alpha, robustness and
+demo-power over breadth. Owner picks; remote builds features/minors,
+local verifies in real AE.
 
-1. **Generate-and-place as the default.** `comfy_generate` ->
-   `import_as_layer` chained so "make me a background" ENDS in the comp,
-   not the project panel (the gap chat-probe logs today). Small; mostly
-   prompt + one tool-doc rule.
-2. **"Undo that."** Wire each chat round's undo group to a natural
-   command, so any round is one sentence away from reverted. Trust
-   feature: it makes every other test in USEFULNESS-TESTS.md cheaper to
-   run.
-3. **Beat markers.** `audio_to_keyframes` sibling that drops comp
-   markers on onsets/beats, so "cut on the beat" / "stagger to the
-   music" become rig targets. The DSP is the same file the keyframe
-   tool already reads.
-4. **Action macros.** Save a successful round (the executed command
-   list, parameterized by target) under a name; replay on another comp/
-   selection. Repeat client work is the same five asks every week.
-5. **Look transfer.** "Make comp B look like comp A": copy effects +
-   settings + text styles with a receipt of what could not carry over.
-6. **Voice input.** whisper.cpp is already bundled for captions; a mic
-   button is the panel's own dogfood of it.
-7. **Project memory.** Cache a project outline per session so big
-   projects stop paying list_* round-trips every ask; staleness rules
-   from the same honesty playbook (measure, never assume).
-8. **MOGRT panel UI + .webm/.webp export** — both filed as gaps in the
-   log 2026-08-29.
-9. **Bundled ComfyUI installer + per-tier curated stacks** (#21 + tier
-   P5) — zero-setup generation for test users.
-10. **Phase D/E** as already queued (animation utilities largely landed
-    via 5.1–5.7; roto/tracking hybrids remain the big one).
+1. **[S] Zero-silent-failure gate** — every audited silent-lie path:
+   set_keyframes:8772 / apply_keyframe_ease:4698 partial-mutation
+   errors become AELL_errPartial so rollback arms; executeCommands'
+   silent 20-command slice (tools.js:2776) gets a synthetic
+   "dropped N — re-issue" row + RESPONSE_SCHEMA maxItems; bare error
+   paths grounded (apply_effect:3885, set_effect_param:3906/:3908 via
+   AELL_effectNames, rename_item:742, delete_item:1118,
+   move_to_folder:729, set_track_matte:8970/:8998); comfy
+   image-landed fail-fast (the KREA2 silent image drop); uploadImage
+   unique name prefixes; the two fitResult byte-slice fallbacks
+   (tools.js:2582/2637) removed.
+2. **[S] Plain-English trigger layer** — synonym rules + doc
+   rebalance for the ten audited orphan tools ("group these" ->
+   precompose, "trim it" -> set_layer_timing, "stick it to" ->
+   set_layer_parent, "smoother" -> apply_keyframe_ease, "fix the
+   pivot" -> center_anchor_point, "hide the bottom half" -> add_mask,
+   "stop it moving" -> remove_keyframes, "make it pop/cinematic" ->
+   list_presets+apply_preset, "keep it drifting" ->
+   apply_expression_preset, "show the video through the text" ->
+   set_track_matte); "clean this up" project-vs-comp disambiguation;
+   one single-phrasing probe step per mapping.
+3. **[S] img2img restyle loop** — un-bypass KREA2's authored image
+   branch, denoise param, snapshot_frame -> comfy_generate{image,
+   denoise} -> import_as_layer reuse+reload. Needs item 1's landed
+   check. Also fix the H3 I2V authoring-manifest drift (detachable
+   flag) while in there.
+4. **[S] Relative restack + removal symmetry** — reorder_layers
+   relative mode (above/below/toFront/toBack on moveBefore/moveAfter),
+   remove_effect, delete_mask, all with grounded neighbor/effect/mask
+   listings; stacking-language disambiguation rule.
+5. **[S] Animate-this-frame I2V one-liner** — trigger rule for
+   snapshot_frame -> H3 I2V {image} -> import_as_layer; flagged
+   3-call chain, fallback = compound panel tool.
+6. **[S] One-click support bundle** — copy-chat grows into a full
+   support report (redacted settings, tier line, comfy_status, server
+   log tail, last round receipts); factor it testable so main.js
+   finally gets executed stub coverage.
+7. **[M] First-run flight check** — GPU/tier verdict in plain words,
+   AE scripting-permission probe with the grounded fix message,
+   guided download, canned first-win demo.
+8. **[M] Timeline finesse pack** — retime_layer (stretch/reverse/
+   time-remap), freeze_frame, shift_keyframes; local MEASURES
+   stretch/remap quirks first, stubs encode them (padded-dims
+   precedent).
+9. **[L] Region inpainting hero demo** — full plan in
+   docs/SELF-VERIFY-PLANS.md section 3; after items 1 and 3; ships
+   as compound repaint_region, never 5-call model choreography.
+10. **[S] Word-level kinetic captions** — whisper -oj JSON, per-word
+    timestamps + confidence gating (retires the English-only
+    SILENCE_WORDS sentinel), karaoke/typewriter mode.
+11. **[M] Chat-probe variant machinery** — section 8's scoped
+    version; measures item 2 and every prompt edit after it.
+12. **[M] Bring-your-own-endpoint chat** — settings URL for any
+    OpenAI-compatible server, skip spawn lifecycle; salvage path
+    becomes load-bearing off llama.cpp, test it explicitly.
+
+Dropped for now, with reasons recorded in the audit doc: comp
+versioning (first post-alpha minor), comp checkpoint/diff, review
+render slates, missing-footage triage, segmentation-to-matte
+(fast-follow AFTER inpainting), 2.5D parallax, variation boards,
+one-call audio reactivity, the full paraphrase matrix.
+
+## 10. Self-verification harness track (owner-requested 2026-08-30)
+
+The owner's words: "built in plans and recursive checks for the more
+advanced tools like mogrt creation and captions generation and
+image/inpainting via mask generation so I dont need to manually test
+nearly as much." The full adversarially-verified plans live in
+**docs/SELF-VERIFY-PLANS.md** — read the relevant section BEFORE
+starting a bullet; the "Requirements from refutation" there are
+constraints, not suggestions. Local passes work these in order,
+smallest first, one bullet per pass; remote pre-builds the [remote]
+steps of each plan's build order:
+
+- **MOGRT step 0 (a live bug, fix immediately):** AELL_mogrtFound
+  (hostscript.jsx:9482) trusts a possibly mid-write file size — add
+  the two-stable-polls settle per the plan, plus the reserved-device-
+  name gap in AELL_mogrtBadName. Remote builds; local verifies.
+- **MOGRT harness** per plan section 1: reader + planted-defect
+  tests [remote], shipped capped post-check [remote], the Premiere-
+  gated fixture pin [local, one manual Premiere drop], mogrt-probe
+  wired into the overnight stage [local].
+- **Captions harness** per plan section 2: bridge factor-out +
+  TextDocument readback + pure helpers [remote], captions-probe with
+  env triage [remote], real-box calibration + nightly wiring +
+  forced-failure drill [local].
+- **Inpainting** per plan section 3: comfy plumbing + export_mask +
+  pixel comparator [remote], AE fact probes BEFORE trusting stubs
+  [local], template authoring + report-only runs + owner-blessed
+  tolerances [local], compound repaint_region + chat-probe scenario
+  [remote]. This is also roadmap item 9 — the harness and the
+  feature ship together.
 
 ## Out of scope for the local session (remote builds these)
 

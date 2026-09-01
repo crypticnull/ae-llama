@@ -9833,3 +9833,28 @@ got.
   the tools.js NUL fix (scrubbed same day) — worth remembering that the
   escape sequence renders as the character it names in some paste
   paths.
+
+## 2026-08-30 (remote session, 15-agent audit) — AUDIT-0.11 + SELF-VERIFY-PLANS + sections 8-10 rewritten
+
+- Changed: docs/AUDIT-0.11.md (NEW — function-state audit with
+  file:line evidence, 12-item ranked roadmap, harness summaries),
+  docs/SELF-VERIFY-PLANS.md (NEW — adversarially-refuted harness
+  plans for MOGRT / captions / inpainting; the "Requirements from
+  refutation" blocks are constraints), docs/WORKPLAN.md (section 8
+  rescoped per the measured probe limitations, section 9 replaced by
+  the ranked roadmap, NEW section 10 harness track),
+  docs/USEFULNESS-TESTS.md (row count corrected 30 -> 31).
+- Harness: docs only, no extension/ change, NO bump.
+- Notes for the next passes: (1) LIVE BUG queued as section 10's
+  first bullet — AELL_mogrtFound (hostscript.jsx:9482) trusts a
+  possibly mid-write size; remote will ship the settle fix, local
+  verifies. (2) The audit found more shipped defects the roadmap's
+  item 1 carries: set_keyframes/apply_keyframe_ease partial-mutation
+  errors never arm rollback, executeCommands silently slices at 20
+  commands, comfy_generate{image} on KREA2 uploads then silently
+  ignores the image, uploadImage collides by basename, two fitResult
+  byte-slice fallbacks survive. None are field-reported yet; all are
+  audit-verified against the code. (3) Section 8's old wiring plan
+  was WRONG in a way that mattered: variance numbers on the current
+  probe harness would overstate robustness (shared history, loose
+  checks) — do the prerequisites first.
