@@ -426,7 +426,9 @@ function sendMessage(text, done) {
   aeEval("if ($.global.AELL_newRequest) $.global.AELL_newRequest();",
     function () {
       Tools.fetchProjectState(function (stateJson) {
-        const system = Tools.buildSystemPrompt(stateJson);
+        // In step with main.js: the prompt form follows the window.
+        const system = Tools.buildSystemPrompt(
+          stateJson, Tools.promptModeFor(s.ctxSize));
         runRound(system, 0);
       });
     });
@@ -438,15 +440,15 @@ function sendMessage(text, done) {
     // thing that holds a ten-turn conversation, so it has to carry the
     // fix too — otherwise it would keep reporting a failure the panel no
     // longer has.
-    let histBudget = Math.max(4000, (s.ctxSize - 3600) * 3 - system.length);
+    let histBudget = Tools.historyBudget(s.ctxSize, system.length).chars;
     if (round.forceTinyContext) histBudget = 1;
     const fitted = Tools.fitHistory(history, histBudget);
     let sys = system;
+    if (fitted.ledger) {
+      // In step with main.js: dropped turns ride as the ledger.
+      sys += "\n\n" + fitted.ledger;
+    }
     if (fitted.dropped > 0) {
-      sys += "\n\n(NOTE: " + fitted.dropped + " earlier message(s) " +
-        "were trimmed from your context to fit the model's window. " +
-        "The transcript the user sees is complete — if they refer to " +
-        "something you cannot see, say so and ask, do not guess.)";
       if (!round.trimNoticeShown) {
         round.trimNoticeShown = true;
         say("info", "context trimmed — " + fitted.dropped +

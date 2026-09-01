@@ -702,7 +702,7 @@
     required: ["reply", "commands"]
   };
 
-  function buildSystemPrompt(projectStateJson) {
+  function buildSystemPrompt(projectStateJson, opts) {
     var lines = [
       "You are an assistant embedded in Adobe After Effects. You control AE",
       "by emitting JSON tool commands, which the host executes and reports",
@@ -742,6 +742,9 @@
       "  intent ('Centering the anchor point…'), then after reading TOOL",
       "  RESULTS confirm what actually happened — including any 'warning'",
       "  fields, which mean the result is probably not what the user wanted.",
+      "- Keep 'reply' to one or two short sentences. The TOOL RESULTS are",
+      "  the record: never restate them, never narrate each step. Every",
+      "  word you write shares the context window with the work.",
       "- 'layer' accepts a layer name or a 1-based index from the top.",
       "- Omit 'comp' to target the active comp.",
       "- Prefer inspecting (get_project_info / get_comp_details) before",
@@ -1025,10 +1028,15 @@
       "",
       "Available tools:"
     ];
+    var compact = !!(opts && opts.compact);
     for (var i = 0; i < TOOL_DEFS.length; i++) {
       var t = TOOL_DEFS[i];
       lines.push("- " + t.name + " " + t.args);
-      lines.push("    " + t.desc);
+      lines.push("    " + (compact ? compactDesc(t.desc) : t.desc));
+    }
+    if (opts && opts.ledger) {
+      lines.push("");
+      lines.push(opts.ledger);
     }
     if (projectStateJson) {
       lines.push("");
@@ -1036,6 +1044,64 @@
       lines.push(projectStateJson);
     }
     return lines.join("\n");
+  }
+
+  /**
+   * The compact form of a tool doc: its first sentence, capped at a word
+   * boundary. Context is a functional resource (CLAUDE.md): the docs
+   * are ~40 of the prompt's ~59 KB, and at the default 16K window that
+   * left no room for conversation at all. The rules block — where the
+   * phrase lists that route casual language live — is never compacted;
+   * a tool's args line is never touched (it is what the model executes).
+   */
+  var COMPACT_DESC_CHARS = 110;
+  function compactDesc(desc) {
+    var s = String(desc || "").replace(/\s+/g, " ").replace(/^\s+|\s+$/g, "");
+    var m = s.match(/^(.*?[.!?])(\s|$)/);
+    var first = m ? m[1] : s;
+    if (first.length <= COMPACT_DESC_CHARS) return first;
+    var cut = first.lastIndexOf(" ", COMPACT_DESC_CHARS - 1);
+    if (cut < 40) cut = COMPACT_DESC_CHARS - 1;
+    return first.slice(0, cut) + "…";
+  }
+
+  /**
+   * Which prompt form a context window can afford. Below 24K tokens the
+   * full docs plus state leave nothing for history (measured 2026-09-01:
+   * ~58.7K chars of prompt is ~15K tokens against 16,384), so the compact
+   * docs are the default there; a window that can hold the full docs AND
+   * a conversation gets them.
+   */
+  function promptModeFor(ctxSize) {
+    var ctx = Number(ctxSize) || 16384;
+    return { compact: ctx < 24576 };
+  }
+
+  /**
+   * How many chars of history the window can carry beside the prompt.
+   * Two ratios, both on the conservative side of what the field showed:
+   * prompt prose tokenizes near 3.9 chars/token, the JSON-heavy history
+   * near 3. The reply reserve is llama.js's max_tokens plus template
+   * overhead; the ledger keeps its own slice so memory of dropped turns
+   * never competes with the current exchange. `starved` is the signal
+   * main.js turns into ONE grounded line: the window is nearly filled by
+   * the prompt alone, and turns will be forgotten fast.
+   */
+  var PROMPT_CHARS_PER_TOKEN = 3.9;
+  var HISTORY_CHARS_PER_TOKEN = 3;
+  var REPLY_RESERVE_TOKENS = 3072 + 256;
+  var LEDGER_BUDGET = 1500;
+  function historyBudget(ctxSize, systemChars) {
+    var ctx = Number(ctxSize) || 16384;
+    var promptTokens = Math.ceil(Number(systemChars || 0) / PROMPT_CHARS_PER_TOKEN);
+    var roomTokens = ctx - REPLY_RESERVE_TOKENS - promptTokens;
+    var chars = Math.floor(roomTokens * HISTORY_CHARS_PER_TOKEN) - LEDGER_BUDGET;
+    return {
+      chars: Math.max(0, chars),
+      roomTokens: roomTokens,
+      promptTokens: promptTokens,
+      starved: chars < 2000
+    };
   }
 
   function isKnownTool(name) {
@@ -3190,25 +3256,172 @@
     for (i = 0; i < history.length; i++) {
       size += (history[i].content || "").length + 16;
     }
-    if (size <= budgetChars) return { entries: history, dropped: 0 };
+    if (size <= budgetChars) return { entries: history, dropped: 0, ledger: "" };
     var entries = history.slice();
-    var dropped = 0;
+    var gone = [];
     while (entries.length > 4 && size > budgetChars) {
       size -= (entries[0].content || "").length + 16;
-      entries.shift();
-      dropped++;
+      gone.push(entries.shift());
     }
     while (entries.length > 1 && entries[0].role !== "user") {
       size -= (entries[0].content || "").length + 16;
-      entries.shift();
-      dropped++;
+      gone.push(entries.shift());
     }
-    return { entries: entries, dropped: dropped };
+    return { entries: entries, dropped: gone.length,
+             ledger: rollupHistory(gone, LEDGER_BUDGET) };
+  }
+
+  // ------------------------------------------------- the history ledger
+  //
+  // What the model keeps of a turn that no longer fits: one line of
+  // FUNCTION, built by the panel with no model call. A user turn keeps
+  // its first clause; an assistant turn keeps the tools it ran and the
+  // names they touched; a TOOL RESULTS turn keeps the counts and the
+  // names the receipts created. The prose is gone — the fact that
+  // "Title" exists, was moved, and got a Glow is not. Measured before
+  // this existed: main.js's floor left most rounds ONE turn of memory,
+  // and "make them blue instead" had nothing to refer back to.
+  var NAMING_KEYS = ["layer", "layers", "comp", "name", "property", "item",
+    "items", "folder", "effect", "mask", "preset", "workflow", "file",
+    "output", "template"];
+  var RECEIPT_KEYS = ["name", "comp", "layer", "created", "renamed",
+    "removed", "precomp", "template", "path"];
+
+  function clipText(s, n) {
+    s = String(s == null ? "" : s).replace(/\s+/g, " ")
+      .replace(/^\s+|\s+$/g, "");
+    return s.length > n ? s.slice(0, n - 1) + "…" : s;
+  }
+  function shortValue(v, n) {
+    if (v instanceof Array) {
+      var out = [];
+      for (var i = 0; i < v.length && i < 4; i++) {
+        out.push(shortValue(v[i], 24));
+      }
+      if (v.length > 4) out.push("+" + (v.length - 4));
+      return clipText(out.join(","), n);
+    }
+    if (v && typeof v === "object") {
+      return clipText(v.name || v.layer || v.comp || "", n);
+    }
+    if (typeof v === "string") {
+      // A path collapses to its basename — the folder is not memory.
+      var base = v.replace(/[\\\/]+$/, "").split(/[\\\/]/).pop();
+      return clipText(base, n);
+    }
+    return clipText(String(v), n);
+  }
+
+  function summarizeEntry(e) {
+    var role = e && e.role, c = String((e && e.content) || "");
+    var i;
+    if (role === "user") {
+      if (c.indexOf("TOOL RESULTS:") === 0) {
+        var arr = null;
+        try { arr = JSON.parse(c.slice(c.indexOf("\n") + 1)); }
+        catch (e1) {}
+        if (!(arr instanceof Array)) return "results: (unreadable)";
+        var ok = 0, bad = 0, names = [], firstErr = "";
+        for (i = 0; i < arr.length; i++) {
+          var r = arr[i];
+          if (r && r.ok === false) {
+            bad++;
+            if (!firstErr && r.error) firstErr = clipText(r.error, 70);
+          } else { ok++; }
+          var d = r && r.data;
+          if (d && typeof d === "object") {
+            for (var k = 0; k < RECEIPT_KEYS.length; k++) {
+              var val = d[RECEIPT_KEYS[k]];
+              if (val === undefined || val === null || val === "") continue;
+              var sv = shortValue(val, 30);
+              if (sv && names.length < 6) names.push(sv);
+              break;
+            }
+          }
+        }
+        return "results: " + ok + " ok" +
+          (bad ? ", " + bad + " error (" + firstErr + ")" : "") +
+          (names.length ? "; " + clipText(names.join(", "), 90) : "");
+      }
+      if (c.indexOf("SYSTEM:") === 0) return "";   // a control message
+      return "user: " + clipText(c, 120);
+    }
+    if (role === "assistant") {
+      var obj = null;
+      try { obj = JSON.parse(c); } catch (e2) {}
+      if (!obj || typeof obj !== "object") {
+        return "assistant: " + clipText(c, 80);
+      }
+      var cmds = obj.commands instanceof Array ? obj.commands : [];
+      var parts = [];
+      for (i = 0; i < cmds.length; i++) {
+        var cm = cmds[i];
+        if (!cm || !cm.tool) continue;
+        var a = cm.args || {}, tag = "";
+        for (var n = 0; n < NAMING_KEYS.length; n++) {
+          if (a[NAMING_KEYS[n]] !== undefined && a[NAMING_KEYS[n]] !== "") {
+            tag = shortValue(a[NAMING_KEYS[n]], 24);
+            break;
+          }
+        }
+        parts.push(cm.tool + (tag ? " " + tag : ""));
+        if (parts.length >= 6 && cmds.length > 6) {
+          parts.push("+" + (cmds.length - 6) + " more");
+          break;
+        }
+      }
+      var reply = typeof obj.reply === "string" ? clipText(obj.reply, 60) : "";
+      return "did: " + (parts.length ? parts.join(", ") : "(no commands)") +
+        (reply ? " — \"" + reply + "\"" : "");
+    }
+    return "";
+  }
+
+  /**
+   * The ledger block for dropped entries, oldest first, under its own
+   * byte budget: when even the one-liners overflow, the OLDEST lines
+   * fold away and the header counts them — the model always sees the
+   * most recent memory and is told what it is missing.
+   */
+  function rollupHistory(dropped, budgetChars) {
+    var lines = [], i;
+    for (i = 0; i < (dropped || []).length; i++) {
+      var s = summarizeEntry(dropped[i]);
+      if (s) lines.push(s);
+    }
+    if (!lines.length) return "";
+    var budget = Number(budgetChars) || LEDGER_BUDGET;
+    var folded = 0;
+    function header() {
+      return "EARLIER IN THIS SESSION (oldest first" +
+        (folded ? "; " + folded + " older line(s) folded away" : "") +
+        "; the user's transcript is complete — if they refer to " +
+        "something not here, ask):";
+    }
+    function total() {
+      // The exact size of the block as joined below: header, then
+      // "\n- " + line for every line.
+      var t = header().length;
+      for (var j = 0; j < lines.length; j++) t += lines[j].length + 3;
+      return t;
+    }
+    while (lines.length > 1 && total() > budget) {
+      lines.shift();
+      folded++;
+    }
+    var out = [header()];
+    for (i = 0; i < lines.length; i++) out.push("- " + lines[i]);
+    return out.join("\n");
   }
 
   global.Tools = {
     TOOL_DEFS: TOOL_DEFS,
     fitHistory: fitHistory,
+    historyBudget: historyBudget,
+    promptModeFor: promptModeFor,
+    rollupHistory: rollupHistory,
+    _summarizeEntry: summarizeEntry,  // exposed for tests
+    _compactDesc: compactDesc,        // exposed for tests
     planEnhancement: planEnhancement,
     RESPONSE_SCHEMA: RESPONSE_SCHEMA,
     buildSystemPrompt: buildSystemPrompt,

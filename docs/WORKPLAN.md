@@ -163,6 +163,26 @@ one push. One pass per bullet:
   the value at the current time? The probe's "un-animate" step records
   the residual opacity without failing on it; measure it, then pin the
   answer in the remove_keyframes doc (the unmeasured claim was removed).
+- **Context budget + ledger (roadmap 13, shipped remote 2026-09-01
+  evening, UNBUMPED, rides the same bump).** Three measurements, then
+  the probe: (1) ask the running llama-server `/tokenize` for the REAL
+  token count of `Tools.buildSystemPrompt(state, {compact:true})` and
+  of the full form — the panel's estimate assumes ~3.9 chars/token for
+  the prompt and ~3 for history; pin the measured ratios into
+  `PROMPT_CHARS_PER_TOKEN` / `HISTORY_CHARS_PER_TOKEN` in tools.js if
+  they are off by more than 10%; (2) at ctx 16384 the panel now sends
+  COMPACT tool docs (one sentence each; the rules block is unchanged)
+  — run `scripts/chat-probe.js` in that mode (it follows the same
+  promptModeFor) and log every step verdict: a routing regression
+  against the full-doc run is a doc that lost its load-bearing
+  sentence — restore that ONE sentence, re-run; (3) drive a chat past
+  the window (ten turns naming things, then "make them blue instead")
+  and confirm the ledger carries the names — the "context ledger"
+  info line appears once, the "context" starvation line appears at
+  16384 with the full prompt and NOT with the compact one. Record the
+  measured room (`Tools.historyBudget(ctx, system.length)`) at 16384
+  and at 32768 in the log; if 32768 fits the card with the 32B (the
+  arbiter's numbers say), propose raising the T7 default.
 - **MOGRT verifier (harness plan 1, steps 1-3).** Export a small real
   mogrt through the panel: the receipt must now carry
   `controllerNames`, `zipValid: true`, `controllersInFile` equal to
