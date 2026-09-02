@@ -1080,16 +1080,46 @@
 
   /**
    * How many chars of history the window can carry beside the prompt.
-   * Two ratios, both on the conservative side of what the field showed:
-   * prompt prose tokenizes near 3.9 chars/token, the JSON-heavy history
-   * near 3. The reply reserve is llama.js's max_tokens plus template
-   * overhead; the ledger keeps its own slice so memory of dropped turns
-   * never competes with the current exchange. `starved` is the signal
-   * main.js turns into ONE grounded line: the window is nearly filled by
-   * the prompt alone, and turns will be forgotten fast.
+   * The reply reserve is llama.js's max_tokens plus template overhead;
+   * the ledger keeps its own slice so memory of dropped turns never
+   * competes with the current exchange. `starved` is the signal main.js
+   * turns into ONE grounded line: the window is nearly filled by the
+   * prompt alone, and turns will be forgotten fast.
+   *
+   * Both ratios were estimates until 2026-09-02, when
+   * scripts/context-budget-probe.js asked the running llama-server's
+   * /tokenize what the panel's OWN payload really costs (Qwen2.5-32B,
+   * ctx 16384, real project state):
+   *
+   *   system prompt, full docs     62364 chars = 16073 tokens  3.88
+   *   system prompt, compact docs  42574 chars = 11446 tokens  3.72
+   *   chat history (JSON-heavy)    56308 chars = 19937 tokens  2.82
+   *                                42431 chars = 15291 tokens  2.77
+   *
+   * The prompt rows are the same in every run — same text, same
+   * tokenizer. The history row is NOT: what a ten-turn chat contains
+   * changes with what the model says, and two runs of the same probe
+   * measured 2.82 and 2.77. So the history bound is set under the
+   * LOWEST sample, not the latest one; a constant tuned to one run is
+   * how this was wrong in the first place.
+   *
+   * The old 3.9 / 3 were both off by under 10% — and both off in the
+   * direction that kills a chat. The constants are not symmetric: the
+   * prompt one DIVIDES chars into tokens, so a value ABOVE the truth
+   * hides tokens (at the shipped default — compact docs at 16384 — it
+   * hid 529 of them); the history one MULTIPLIES room into chars, so a
+   * value ABOVE the truth hands out history the room cannot hold. Both
+   * errors compounded: 4917 chars of budget at the measured 2.82 is
+   * 1744 tokens against 1610 really free. That is the HTTP-400 the
+   * fitHistory work of 2026-08-25 exists to prevent, quietly back.
+   *
+   * So each is pinned just BELOW the densest form measured — 3.7 under
+   * the compact prompt's 3.72, 2.7 under the history's 2.77. Below, not
+   * at: another model's tokenizer is not this one, and the whole point
+   * of the constant is to be wrong in the survivable direction.
    */
-  var PROMPT_CHARS_PER_TOKEN = 3.9;
-  var HISTORY_CHARS_PER_TOKEN = 3;
+  var PROMPT_CHARS_PER_TOKEN = 3.7;
+  var HISTORY_CHARS_PER_TOKEN = 2.7;
   var REPLY_RESERVE_TOKENS = 3072 + 256;
   var LEDGER_BUDGET = 1500;
   function historyBudget(ctxSize, systemChars) {

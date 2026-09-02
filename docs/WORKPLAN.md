@@ -197,6 +197,22 @@ one push. One pass per bullet:
   the value at the current time? The probe's "un-animate" step records
   the residual opacity without failing on it; measure it, then pin the
   answer in the remove_keyframes doc (the unmeasured claim was removed).
+- **Context budget + ledger (roadmap 13) — MOSTLY DONE 2026-09-02
+  (0.11.4).** New re-runnable probe `scripts/context-budget-probe.js`
+  asked the running llama-server's `/tokenize` what the panel's own
+  payload costs. BOTH constants were inside the 10% trigger and BOTH
+  were wrong in the direction that kills a chat: at the shipped default
+  (compact docs, ctx 16384) the arithmetic promised 16515 tokens against
+  a 16384 window. Pinned to the measurement (3.9 -> 3.7, 3 -> 2.7), with
+  `tests/test-token-ratios.js` freezing the tokenizer's answer — seven
+  assertions go red on the old values. The ledger measurement passed end
+  to end (ten naming turns, then "make them blue instead" answered with
+  all ten names). T7 answered NO: at ctx 32768 the 32B leaves 850 MiB on
+  a 32607 MiB card with ComfyUI holding nothing. STILL OPEN — the
+  compact-vs-full ROUTING comparison, which needs its own pass (two runs
+  per mode; a single-run per-step miss at temperature 0.7 is noise). Per
+  step verdicts and numbers in `docs/WORKPLAN-LOG.md`. The original
+  instruction, for reference:
 - **Context budget + ledger (roadmap 13, shipped remote 2026-09-01
   evening, UNBUMPED, rides the same bump).** Three measurements, then
   the probe: (1) ask the running llama-server `/tokenize` for the REAL

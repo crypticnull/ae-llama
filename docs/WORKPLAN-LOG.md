@@ -10590,3 +10590,157 @@ window title before killing AE, which is what I did.
   (context budget + ledger, MOGRT verifier), then the pass-22 salvage.
   `stash@{0}` is still `pass22-salvage` and branch `aell-backup-pass22`
   still exists, untouched.
+
+## 2026-09-02 (local session, real AE) — WORKPLAN 1c bullet 3: the context budget met a tokenizer, and both constants were wrong the dangerous way (0.11.4)
+
+Harness green on arrival (566/566), so this pass took the next
+unfinished workplan item: **1c bullet 3, "context budget + ledger"
+(roadmap 13)**. New probe, committed so it can be re-run:
+`scripts/context-budget-probe.js`. It asks the RUNNING llama-server's
+`/tokenize` what the panel's own payload really costs, then drives a
+real ten-turn chat through chat-probe.js's own round loop and tokenizes
+every round exactly as it was sent. Nothing in it re-implements the
+panel — a second copy of the budgeter is the bug it exists to find.
+
+### Measurement 1 — the two constants, against Qwen2.5-32B's tokenizer
+
+    system prompt, full docs     62364 chars = 16073 tokens   3.88 c/tok
+    system prompt, compact docs  42574 chars = 11446 tokens   3.72 c/tok
+    chat history (JSON-heavy)    56308 chars = 19937 tokens   2.82 c/tok
+                                 42431 chars = 15291 tokens   2.77 c/tok
+                                 41100 chars = 14662 tokens   2.80 c/tok
+
+The workplan's trigger was "off by more than 10%". **Both were inside
+10% and both were wrong anyway**, because the sign is what matters and
+the two constants are not symmetric:
+
+- `PROMPT_CHARS_PER_TOKEN` **divides** chars into tokens, so a value
+  ABOVE the truth hides tokens. At the SHIPPED DEFAULT — compact docs at
+  ctx 16384 — 3.9 predicted 10917 where the tokenizer said 11446. **529
+  tokens of window existed only on paper.**
+- `HISTORY_CHARS_PER_TOKEN` **multiplies** room into chars, so a value
+  ABOVE the truth hands out history the room cannot hold. 4917 chars of
+  budget at the measured 2.82 is 1744 tokens against 1610 really free.
+
+Compounded, at the default: real prompt 11446 + reply reserve 3328 +
+budgeted history 1741 = **16515 tokens against a 16384 window**. At
+32768 with full docs it was worse in absolute terms: **33156 against
+32768**. That is exactly the raw HTTP 400 ("request exceeds the
+available context size") that the fitHistory work of 2026-08-25 was
+written to prevent — back, invisible, and shipped, because nothing in
+this repo had ever asked a tokenizer anything.
+
+Also worth writing down: the COMPACT docs are DENSER than the full ones
+(3.72 vs 3.88). Tool names and arg keys tokenize worse than prose, so
+compacting the docs made the chars/token ratio go the wrong way — and
+compact is the form the default window sends. A constant validated only
+against the full prompt would still have been wrong.
+
+**Fixed at the root, `extension/js/tools.js`:** `PROMPT_CHARS_PER_TOKEN`
+3.9 -> **3.7**, `HISTORY_CHARS_PER_TOKEN` 3 -> **2.7** — each pinned just
+BELOW the densest form measured, not at it. The history row is the one
+that varies (what a ten-turn chat contains depends on what the model
+says: 2.82, 2.77, 2.80 across three runs), so its bound is set under the
+LOWEST sample. Tuning a constant to one run is how this was wrong in the
+first place. No prompt text changed, so the change costs zero context.
+
+### Measurement 3 — the ledger, over a real chat past the window
+
+Ten turns each naming a solid (Alpha..Juliet), then "Make them blue
+instead." Measured, run after run:
+
+- The chat overflows at turn 10 and the ledger appears; the recall turn
+  drops 6 more entries and its ledger carries **Alpha, Bravo, Charlie**
+  — the names of exactly the turns that were dropped, labelled "EARLIER
+  IN THIS SESSION".
+- The recall turn then answered correctly with no help:
+  `set_solid_color {layers: [all ten names], color: [0,0,1]}`, 10 solids
+  touched, no failure. The thing the ledger exists for, working.
+- The panel's `context ledger` info line fired once, as designed.
+- No round exceeded its window (worst: 13056 tokens against 16384).
+
+**Drift found and fixed in `scripts/chat-probe.js`:** the probe mirrored
+main.js's trim but showed NEITHER of the panel's two info lines. The
+`context ledger` line is now mirrored, and the `context` STARVATION line
+— which main.js has shown since 2026-09-01 — was missing from the probe
+entirely, so the only thing that runs the product path headless could
+never have reported it. Both now fire with main.js's own scoping (once
+per chat / once per session). Also added a read-only `roundObserver`
+hook and the module exports the sibling probe uses, so the measurement
+is taken on the product's payload instead of a rebuilt guess of it.
+
+### Measurement 2 and the T7 question
+
+- `Tools.historyBudget()`, after the fix: **ctx 16384 (compact docs)** —
+  prompt 42574 chars, 11507 estimated / 11446 real tokens, room 1549
+  tokens, **2682 chars of history**, starved=false. **ctx 32768 (full
+  docs)** — prompt 62364 chars, 16856 estimated / 16073 real, room 12584
+  tokens, **32476 chars of history**. Twelve times the memory.
+- **Do NOT raise the T7 default to 32768.** Measured on this card
+  (RTX 5090, 32607 MiB): baseline with AE and ComfyUI Desktop idle is
+  4420 MiB; the 32B at ctx 16384 sits at 27753; at ctx 32768 it loads
+  and sits at **31757 — 850 MiB of headroom on the whole card**, with
+  ComfyUI holding NO generation weights yet. Doubling the window costs
+  ~4 GB of KV cache, which is the entire margin the chat/generation
+  handoff runs on. The window is not the constraint; the shared card is.
+  This answers the bullet's last sentence with a no.
+- **Not done: the compact-vs-full ROUTING comparison** (the bullet's
+  "run chat-probe.js in that mode and log every step verdict; a routing
+  regression against the full-doc run is a doc that lost its
+  load-bearing sentence"). It needs two full 29-step probe runs at two
+  window sizes, and the 2026-09-02 log already establishes that
+  single-run per-step misses at temperature 0.7 are noise — so a
+  one-run comparison would produce a verdict nobody should act on.
+  Filed below as its own pass.
+
+### Back-fill: `tests/test-token-ratios.js` (NEW)
+
+Freezes the tokenizer's answer so the bug class is caught with no AE and
+no model. It pins RATIOS, not lengths, so it survives the prompt growing,
+and it reads the constants out of the shipped source (a test that retypes
+the number it checks cannot fail). **Verified it bites:** reverting the
+two constants to 3.9 / 3 turns SEVEN assertions red, including the
+end-to-end ones — 16515 > 16384 at the default and 33156 > 32768 at the
+larger window. It also caught a bug in itself first: `REPLY_RESERVE_TOKENS`
+ships as a sum (`3072 + 256`), and reading only the first number made the
+reserve 256 tokens smaller than the panel's, quietly loosening the
+assertion that matters most.
+
+### Verification
+
+- **Harness: 566/566 PASSED** in real AE.
+- Full stub sweep green except the known environmental
+  `tests/test-comfy-backend.js` (this machine has
+  `%LOCALAPPDATA%\Comfy-Desktop\...\models`, CI does not — still wants a
+  `process.env` stub, still not mine).
+- `scripts/context-budget-probe.js` run three times end to end: two on
+  the old constants (2 and 3 claims missed, the findings above), one on
+  the new (**every claim held**).
+- **BUMPED 0.11.3 -> 0.11.4** — `extension/js/tools.js` changed.
+
+### Filed for later passes, in priority order
+
+1. **The compact-vs-full routing comparison** (1c bullet 2's remaining
+   half). Needs a run at ctx 16384 and one at 32768 over the same steps,
+   and per the noise rule a repeated miss is the only evidence that
+   counts — so budget two runs per mode, not one.
+2. **`add_mask` accepts bounds that miss the layer entirely and reports
+   ok** (unchanged, still first among the tool bugs).
+3. **"Probe Room is a mess — clean it up" routes to the project panel**
+   (unchanged; the only miss that repeated across both chat-probe runs).
+4. **The harness cannot answer "Crash Repair Options"** (unchanged from
+   the previous pass; `scripts/lib/ae-dialog-triage.ps1` is the place,
+   screenshot at `logs/dialogs/crash-repair.png`).
+5. **`starved` may now be too generous a word.** At the shipped default
+   the panel hands out 2682 chars of history — under one exchange — and
+   `starved` is FALSE, because the threshold is 2000. The measurement
+   says the default window is nearly all prompt; the warning the user
+   gets says nothing. Raising the threshold is a behaviour change, not a
+   measurement, so it was not done here.
+6. **delete_mask could warn when an expression still points at the mask**
+   (unchanged from the previous pass).
+
+- Not attempted this pass (still open, in order): **1c bullet 4** (MOGRT
+  verifier), then the pass-22 salvage. `stash@{0}` is still
+  `pass22-salvage` and branch `aell-backup-pass22` still exists,
+  untouched.

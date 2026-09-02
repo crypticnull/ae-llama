@@ -373,6 +373,16 @@ function say(kind, text, label) {
 
 const history = [];
 
+/* Once per session, exactly as main.js scopes them: the ledger notice is
+ * about this conversation, the starvation notice is about the window
+ * itself. */
+const sessionNotices = { ledger: false, starved: false };
+
+/* Set by scripts/context-budget-probe.js. Never set during a normal run,
+ * so it can only observe. */
+let roundObserver = null;
+function setRoundObserver(fn) { roundObserver = fn; }
+
 /* What a generation left behind, so the cleanup can take it back out.
  * IDs only, never "everything under the output folder": the probe runs
  * against the user's live project, and a previous generation of THEIRS
@@ -440,7 +450,8 @@ function sendMessage(text, done) {
     // thing that holds a ten-turn conversation, so it has to carry the
     // fix too — otherwise it would keep reporting a failure the panel no
     // longer has.
-    let histBudget = Tools.historyBudget(s.ctxSize, system.length).chars;
+    const hb = Tools.historyBudget(s.ctxSize, system.length);
+    let histBudget = hb.chars;
     if (round.forceTinyContext) histBudget = 1;
     const fitted = Tools.fitHistory(history, histBudget);
     let sys = system;
@@ -449,6 +460,10 @@ function sendMessage(text, done) {
       sys += "\n\n" + fitted.ledger;
     }
     if (fitted.dropped > 0) {
+      // Per SENTENCE, not per session: the probe's transcript is read
+      // step by step, and "which step started forgetting" is the fact a
+      // verdict is judged against. main.js shows its own once-per-chat
+      // line below; both exist because they answer different questions.
       if (!round.trimNoticeShown) {
         round.trimNoticeShown = true;
         say("info", "context trimmed — " + fitted.dropped +
@@ -456,8 +471,34 @@ function sendMessage(text, done) {
       }
       round.trimmed = (round.trimmed || 0) + fitted.dropped;
     }
+    // The two notices the PANEL shows, mirrored here so a probe run can
+    // prove a real user would have seen them. The starvation one was
+    // missing entirely: main.js has warned since 2026-09-01 that the
+    // window is nearly full of prompt, and the probe — the only thing
+    // that runs the product path headless — never said it.
+    if (fitted.dropped > 0 && !sessionNotices.ledger) {
+      sessionNotices.ledger = true;
+      say("info", "Older turns now reach the model as a one-line ledger " +
+          "of what ran and what it named, instead of in full — your " +
+          "transcript is unaffected. Clearing the chat starts fresh.",
+          "context ledger");
+    }
+    if (hb.starved && !sessionNotices.starved) {
+      sessionNotices.starved = true;
+      say("info", "The model's context window (" + s.ctxSize +
+          " tokens) is nearly filled by the tool documentation and " +
+          "project state alone (~" + hb.promptTokens + " tokens), so it " +
+          "will forget turns quickly.", "context");
+    }
     const messages = [{ role: "system", content: sys }]
       .concat(fitted.entries);
+    // Read-only hook for scripts/context-budget-probe.js: what this
+    // round really sent, so the token measurement is taken on the
+    // product's own payload rather than a rebuilt guess of it.
+    if (roundObserver) {
+      roundObserver({ system: sys, hb: hb, fitted: fitted,
+                      messages: messages, round: n + 1, ctxSize: s.ctxSize });
+    }
     const t0 = Date.now();
     Llama.chat({ port: s.port, temperature: s.temperature }, messages,
       Tools.RESPONSE_SCHEMA, null,
@@ -2266,5 +2307,12 @@ if (require.main === module) {
   module.exports = { STEPS, squares, undoProbe, SIG_FN, READ_COMP,
                      bridgeWrapper, sweepImports, samePath, rememberGenerated,
                      generated, runPrepare, sweepScript, rememberPrecomp,
-                     precomps };
+                     precomps,
+                     // For scripts/context-budget-probe.js: the REAL round
+                     // loop, the REAL panel modules and the REAL AE bridge,
+                     // so the context measurements are taken on the product
+                     // path instead of a second copy of it.
+                     sendMessage, setRoundObserver, history, transcript, say,
+                     aeEval, aeRead, startModel, Tools, Settings, Llama,
+                     AFTERFX, sessionNotices };
 }
