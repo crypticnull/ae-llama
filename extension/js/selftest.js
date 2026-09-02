@@ -461,6 +461,40 @@
         },
         check: function (d) { return d.mode === "alpha" || d.mode; } },
 
+      // The other half of the type guard added 2026-09-01: a SHAPE layer
+      // is not `instanceof AVLayer` in ExtendScript, so the first cut at
+      // refusing cameras locked shapes and text out of mattes as well.
+      // The step above uses solids and stayed green through that, which
+      // is exactly why this one exists.
+      { name: "a shape layer still takes a matte",
+        tool: "set_track_matte",
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: "ST Shape",
+                   matteLayer: "ST Square 4", mode: "luma" };
+        },
+        check: function (d) {
+          return d.layer === "ST Shape" || "layer: " + d.layer;
+        } },
+
+      { name: "…and can BE one",
+        tool: "set_track_matte",
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: "ST Square 7",
+                   matteLayer: "ST Shape", mode: "alpha_inverted" };
+        },
+        check: function (d) {
+          return d.matte === "ST Shape" || "matte: " + d.matte;
+        } },
+
+      { name: "removing the shape layer's matte",
+        tool: "set_track_matte",
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: "ST Shape", mode: "none" };
+        },
+        check: function (d) {
+          return d.matte === "removed" || "matte: " + d.matte;
+        } },
+
       { name: "parent without visual jump",
         tool: "set_layer_parent",
         args: function (ctx) {
@@ -701,6 +735,56 @@
                    color: [1, 1, 1], width: 100, height: 100 };
         },
         check: function (d) { return d.name === "ST Cam Solid" || d.name; } },
+
+      // A camera can neither take a matte nor be one. Measured 2026-09-01
+      // (WORKPLAN 1b): a CameraLayer carries no setTrackMatte at all, and
+      // `camera.trackMatteType = LUMA` is ACCEPTED without throwing (it
+      // reads back 5015), so before the type guard the tool reordered the
+      // stack with moveBefore and reported ok for a matte AE never made.
+      // Nothing threw, so only a by-type refusal can catch it.
+      { name: "a camera cannot take a track matte",
+        tool: "set_track_matte",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.camComp, layer: "ST Cam Aim",
+                   matteLayer: "ST Cam Solid", mode: "luma" };
+        },
+        check: function (err) {
+          if (!/ST Cam Aim/.test(err) || !/camera/.test(err)) {
+            return "does not name the layer and its type: " + err;
+          }
+          if (!/get_comp_details/.test(err)) {
+            return "does not point at the lister: " + err;
+          }
+          return true;
+        } },
+
+      { name: "…and cannot be one either",
+        tool: "set_track_matte",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.camComp, layer: "ST Cam Solid",
+                   matteLayer: "ST Cam One", mode: "alpha" };
+        },
+        check: function (err) {
+          return /matteLayer 'ST Cam One' is camera/.test(err) ||
+                 "does not name the matte layer and its type: " + err;
+        } },
+
+      { name: "…and removing a matte it never had is refused, not 'removed'",
+        tool: "set_track_matte",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.camComp, layer: "ST Cam Aim", mode: "none" };
+        },
+        check: function (err) {
+          return /cannot take a track matte/.test(err) ||
+                 "wrong refusal: " + err;
+        } },
+
+      // (that the refusal also leaves the layer STACK alone is pinned in
+      // tests/test-property-access.js, where the stub can watch
+      // moveBefore; here the refusal itself is the evidence)
 
       // ---- keyframed + parented content (WORKPLAN item 2) -------------
       // scale_comp maps every keyframe VALUE, which is the easy half. The

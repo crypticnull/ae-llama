@@ -60,6 +60,14 @@ interactive session does NOT self-start; it answers one prompt and waits.
   dims (3 for Scale on 2D layers) — the opposite rule from expressions.
 - Generated expressions use only the inline chained pickwhip form
   (`thisComp.layer("X").effect("Y")(1)`), no stored Property refs.
+- **`instanceof AVLayer` is NOT "is this a visual layer".** Measured AE
+  2026: it is FALSE for a TextLayer and a ShapeLayer as well as for a
+  camera and a light — only a plain solid/footage layer answers true.
+  Test the specific class (`AELL_layerType`) instead. Cameras and lights
+  also carry no `setTrackMatte`/`removeTrackMatte` at all, yet
+  `camera.trackMatteType = LUMA` is ACCEPTED silently and reads back
+  5015, so a matte tool that only try/catches AE sees success on a layer
+  AE will never matte.
 - Adding any layer selects it and deselects everything else; creation
   tools here restore the user's selection (`AELL_keepSelection`).
 - `.jsx` is ES3: no JSON (use `AELLJSON`), no Array extras, no `const`.

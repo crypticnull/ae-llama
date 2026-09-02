@@ -151,6 +151,7 @@ function Layer(name, comp, kind) {
   this.name = name;
   this.comp = comp;
   this.kind = kind || "solid";
+  classify(this);
   this.selected = false;
   this._parentRef = null;
   this._compensated = false;
@@ -319,6 +320,18 @@ Layer.prototype.removeTrackMatte = function () {
   this._matte = null;
   this._matteType = null;
 };
+// EVERY AE layer has moveBefore — cameras and lights included — and
+// `layer.trackMatteType = X` is a plain assignment that never throws on
+// one either (measured: a camera reads back 5015 for LUMA). Both are
+// modelled because together they are how set_track_matte's legacy
+// branch reordered the user's stack and then reported a matte AE had
+// not made; a stub without moveBefore turns that silent lie into a
+// TypeError and stops testing the real failure.
+Layer.prototype.moveBefore = function (other) {
+  const ls = this.comp._layers;
+  ls.splice(ls.indexOf(this), 1);
+  ls.splice(ls.indexOf(other), 0, this);
+};
 
 let compIds = 0;
 function Comp(name) {
@@ -373,6 +386,35 @@ Comp.prototype.duplicate = function () {
 function CompItem() {} function FolderItem() {} function FootageItem() {}
 function TextLayer() {} function ShapeLayer() {} function CameraLayer() {}
 function LightLayer() {} function AVLayer() {} function SolidSource() {}
+
+// AE's LAYER CLASSES, measured in AE 2026 (WORKPLAN-LOG 2026-09-01)
+// because a classless stub cannot see the bug it hid: a CameraLayer and
+// a LightLayer carry no setTrackMatte / removeTrackMatte AT ALL
+// (typeof === "undefined"), while a solid, a text layer and a shape
+// layer do. With every stub layer classless, set_track_matte's legacy
+// branch "succeeded" on a camera here exactly as it did in real AE.
+//
+// The classes are FLAT and deliberately so: measured in ExtendScript,
+// `instanceof AVLayer` is FALSE for a TextLayer AND for a ShapeLayer,
+// not just for a camera and a light — only the plain solid answers
+// true. A first cut at the fix keyed the refusal off `instanceof
+// AVLayer` and locked text and shape layers out of mattes entirely; a
+// stub that chained TextLayer to AVLayer would have called that fix
+// green. Layer.prototype's own descriptors are copied onto a per-kind
+// proto so the instance keeps every stub method while its CLASS
+// changes.
+const LAYER_CLASS = { camera: CameraLayer, light: LightLayer,
+                      text: TextLayer, shape: ShapeLayer };
+function classify(layer) {
+  const K = LAYER_CLASS[layer.kind] || AVLayer;
+  const proto = Object.create(K.prototype,
+    Object.getOwnPropertyDescriptors(Layer.prototype));
+  if (K === CameraLayer || K === LightLayer) {
+    delete proto.setTrackMatte;
+    delete proto.removeTrackMatte;
+  }
+  Object.setPrototypeOf(layer, proto);
+}
 const ParagraphJustification = {};
 const TrackMatteType = {
   ALPHA: "alpha", ALPHA_INVERTED: "alpha_inv",
@@ -968,6 +1010,91 @@ assert(/visual \(AV\) layers/.test(r.error) &&
        "with the constraint and the tool that shows layer types: " +
        r.error.slice(0, 140));
 A.removeTrackMatte = rawRemove;
+
+// ---------------- a camera or a light NEVER takes (or makes) a matte
+// The zero-silent-failure hole WORKPLAN 1b's real-AE probe found on
+// 2026-09-01: a camera is not an AVLayer and has no setTrackMatte, so
+// the legacy branch ran, `camera.trackMatteType = LUMA` was ACCEPTED
+// without throwing (it read back 5015), and the tool reported ok for a
+// matte After Effects never made — after moveBefore had already
+// reordered the user's stack. Nothing threw, so the wrap above could
+// not catch it: the refusal has to be by TYPE, before anything moves.
+const CAM = new Layer("Cam 1", comp, "camera");
+comp._layers.push(CAM);
+assert(CAM instanceof CameraLayer && LIT instanceof LightLayer &&
+       SHP instanceof ShapeLayer && A instanceof AVLayer,
+       "stub fidelity: each layer answers its own AE class");
+// The trap the first cut at this fix fell into, pinned so it cannot be
+// re-set: in ExtendScript a TEXT layer and a SHAPE layer are not
+// `instanceof AVLayer` either, so that predicate is not the AV test it
+// reads as — it refuses two types that matte perfectly well.
+assert(!(CAM instanceof AVLayer) && !(LIT instanceof AVLayer) &&
+       !(SHP instanceof AVLayer),
+       "stub fidelity: instanceof AVLayer is false for shape layers too");
+assert(typeof CAM.setTrackMatte === "undefined" &&
+       typeof CAM.removeTrackMatte === "undefined",
+       "stub fidelity: a camera carries neither matte method");
+assert(typeof SHP.setTrackMatte === "function",
+       "stub fidelity: a shape layer does carry setTrackMatte");
+
+const stackBefore = comp._layers.map(l => l.name).join(",");
+r = call("set_track_matte", { layer: "Cam 1", matteLayer: "B",
+                              mode: "luma" });
+assert(!r.ok, "a camera TARGET is refused, not silently 'set': " +
+       JSON.stringify(r.ok ? r.data : r.error));
+assert(/'Cam 1' is camera/.test(r.error) &&
+       /cannot take a track matte/.test(r.error),
+       "…naming the layer and its measured type: " + r.error);
+assert(/visual \(AV\) layers/.test(r.error) &&
+       /get_comp_details/.test(r.error),
+       "…with the rule and the tool that shows layer types");
+assert(comp._layers.map(l => l.name).join(",") === stackBefore,
+       "…and NOTHING moved in the layer stack");
+assert(typeof CAM.trackMatteType === "undefined",
+       "…and no phantom trackMatteType was written on the camera");
+
+r = call("set_track_matte", { layer: "Key", matteLayer: "B",
+                              mode: "alpha" });
+assert(!r.ok && /'Key' is light/.test(r.error),
+       "a light target is refused the same way: " + r.error);
+
+// mode:"none" lied identically — a matte that never existed reported
+// "removed" — so the guard has to sit ahead of the removal branch too.
+r = call("set_track_matte", { layer: "Cam 1", mode: "none" });
+assert(!r.ok && /cannot take a track matte/.test(r.error),
+       "removing a matte from a camera is refused, not reported removed: " +
+       JSON.stringify(r.ok ? r.data : r.error));
+
+r = call("set_track_matte", { layer: "A", matteLayer: "Cam 1",
+                              mode: "alpha" });
+assert(!r.ok && /matteLayer 'Cam 1' is camera/.test(r.error) &&
+       /cannot BE a matte/.test(r.error),
+       "a camera MATTE is refused by type before AE is asked: " + r.error);
+// (the word is whatever AELL_layerType makes of this stub's source —
+// what matters is that the TARGET is named and typed too, the way the
+// AE-throw wrap above does it)
+assert(/\(layer: 'A' is \w+\)/.test(r.error),
+       "…and the target's type rides along, as the AE-throw wrap does");
+
+// …and the guard stops exactly there. A shape layer matting a solid, and
+// a shape layer BEING the matte, both still go through — the over-broad
+// first cut refused both.
+r = call("set_track_matte", { layer: "Box", matteLayer: "A",
+                              mode: "luma" });
+assert(r.ok && r.data.layer === "Box" && r.data.matte === "A",
+       "a SHAPE layer still takes a matte: " +
+       JSON.stringify(r.ok ? r.data : r.error));
+r = call("set_track_matte", { layer: "A", matteLayer: "Box",
+                              mode: "alpha_inverted" });
+assert(r.ok && r.data.matte === "Box" && r.data.mode === "alpha_inverted",
+       "…and still IS one: " + JSON.stringify(r.ok ? r.data : r.error));
+r = call("set_track_matte", { layer: "Box", mode: "none" });
+assert(r.ok && r.data.matte === "removed",
+       "…and removal on a shape layer is untouched: " +
+       JSON.stringify(r.ok ? r.data : r.error));
+r = call("set_track_matte", { layer: "A", mode: "none" });
+assert(r.ok, "…as it is on a solid");
+comp._layers.splice(comp._layers.indexOf(CAM), 1);
 
 // ------------------------------------- remove_effect (audit 0.11 item 4)
 // "Take off the glow" had no tool. A reverted host answers every call

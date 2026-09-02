@@ -609,6 +609,9 @@ const LIGHT_KINDS = ["parallel", "spot", "point", "ambient", "environment"];
 const lightAcc = (list, kind) =>
   (" " + list + " ").indexOf(" " + kind + " ") >= 0;
 let lights = {};
+// The rigger layers the matte tools have to refuse: cameras by name, the
+// same way `lights` already tracks lights.
+let cameraNames = {};
 
 // ---- text animators (WORKPLAN 5.1). A canned host that just answered
 // "ok" would let a silent add_text_animator pass its own suite steps, so
@@ -2609,7 +2612,34 @@ function cannedOk(tool, args) {
       }
       return out;
     }
-    case "set_track_matte": return { mode: "alpha" };
+    // Cameras and lights can neither take a matte nor be one, and real
+    // AE will not say so: measured 2026-09-01, a CameraLayer carries no
+    // setTrackMatte at all and `camera.trackMatteType = LUMA` is
+    // accepted silently. The refusal is the host's own, by layer TYPE,
+    // so the stub answers by type too — every other layer kind, shape
+    // and text included, still mattes.
+    case "set_track_matte": {
+      const tmLayer = (args && args.layer) || "";
+      const rigged = (nm) => cameraNames[nm] || lights[nm];
+      const kind = (nm) => (cameraNames[nm] ? "camera" : "light");
+      if (rigged(tmLayer)) {
+        return { __err: "'" + tmLayer + "' is " + kind(tmLayer) + " and cannot " +
+          "take a track matte — only visual (AV) layers have pixels to " +
+          "cut. get_comp_details {comp: \"" + (args && args.comp) +
+          "\"} lists the layers and their types." };
+      }
+      const mode = String((args && args.mode) || "alpha").toLowerCase();
+      if (mode === "none" || mode === "off" || mode === "remove") {
+        return { layer: tmLayer, matte: "removed" };
+      }
+      const mt = args && args.matteLayer;
+      if (rigged(mt)) {
+        return { __err: "matteLayer '" + mt + "' is " + kind(mt) +
+          " and cannot BE a matte — only a visual (AV) layer has the " +
+          "alpha/luma to cut with (layer: '" + tmLayer + "' is solid)." };
+      }
+      return { layer: tmLayer, matte: mt, mode: mode };
+    }
     case "set_layer_parent":
       if (args && args.layer) parentedLayers[args.layer] = args.parent;
       if (inPcComp(args) && args.layer) pcParent[args.layer] = args.parent;
@@ -3011,6 +3041,7 @@ function cannedOk(tool, args) {
       if (args && /^ST PreCam/.test(String(args.name || ""))) {
         preLayers.push(args.name);
       }
+      cameraNames[(args && args.name) || "Camera"] = true;
       return { index: 1, name: (args && args.name) || "Camera" };
     case "set_layer_timing":
       // Writing the trim echoes it back; calling it with no timing args is

@@ -72,7 +72,20 @@ field truth -> fix -> stub faithfulness.
   disappeared from a whole run (7 distinct states before, 0 after);
   stub test 165 -> 187 checks, 15 of which fail if the fix is reverted.
 
-## 1b. VERIFY the zero-silent-failure batch (remote shipped 2026-09-01, UNBUMPED — verifying it here is what ships it)
+## 1b. ~~VERIFY the zero-silent-failure batch~~ DONE 2026-09-01 (0.11.1)
+
+Every bullet below was run in real AE and the batch SHIPPED (patch bump
+0.11.0 -> 0.11.1). It found one real defect of its own class:
+`set_track_matte` reported ok on a CAMERA — a camera carries no
+`setTrackMatte` at all, and `camera.trackMatteType = LUMA` is accepted
+silently, so the tool reordered the stack with moveBefore and returned a
+receipt for a matte AE never made. Fixed by refusing on layer TYPE, with
+6 new selftest steps and 9 stub assertions. Watch out for the trap the
+first cut fell into: `instanceof AVLayer` is FALSE for text and shape
+layers too. See WORKPLAN-LOG 2026-09-01. The pass-22 salvage bullet at
+the end is STILL OPEN and is its own pass.
+
+<details><summary>original bullets (kept for the measurements they name)</summary>
 
 The remote session built roadmap item 1 + MOGRT step 0 (see
 docs/AUDIT-0.11.md part 2 item 1) with the full stub suite green.
@@ -126,6 +139,8 @@ and patch-bumps. One pass, in this order:
   intent is not lost, then `git stash drop` + `git branch -D
   aell-backup-pass22`. The four bump files in the stash are noise
   either way (0.11.x supersedes them).
+
+</details>
 
 ## 1c. VERIFY the daytime batch of 2026-09-01 (trigger layer + missing verbs + MOGRT verifier; UNBUMPED)
 

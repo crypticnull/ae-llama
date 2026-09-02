@@ -9371,6 +9371,30 @@ AELL_TOOLS.set_track_matte = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var layer = AELL_layerOrSelection(comp, args.layer);
   var mode = String(args.mode || "alpha").toLowerCase();
+  // Measured in AE 2026: a CameraLayer and a LightLayer carry NO
+  // setTrackMatte / removeTrackMatte at all (typeof === "undefined"), so
+  // a camera fell straight through to the legacy branch below — where
+  // ExtendScript ACCEPTS `camera.trackMatteType = LUMA` without throwing
+  // (it reads back 5015) on a layer AE will never show a matte on. The
+  // try/catch could not see it, because nothing threw: the tool moved
+  // the matte layer up the stack with moveBefore, wrote a phantom
+  // property, and reported ok. Refuse by TYPE, before anything moves.
+  //
+  // The test is the CLASS, not `instanceof AVLayer`: measured the same
+  // night, a TextLayer and a ShapeLayer are not `instanceof AVLayer`
+  // either in ExtendScript, so that predicate refused two layer types
+  // that matte perfectly well. AELL_layerType is the one place the
+  // classes are read, and the word it returns is the word this message
+  // quotes.
+  var layerKind = AELL_layerType(layer);
+  if (layerKind === "camera" || layerKind === "light") {
+    return AELL_err("'" + layer.name + "' is " + layerKind +
+      " and cannot take a track matte — only visual (AV) layers have " +
+      "pixels to cut. AE does not refuse this: it accepts the write " +
+      "silently and shows no matte. get_comp_details {comp: \"" +
+      comp.name + "\"} lists the layers in '" + comp.name +
+      "' and their types.");
+  }
   if (mode === "none" || mode === "off" || mode === "remove") {
     try {
       if (typeof layer.removeTrackMatte === "function") {
@@ -9399,6 +9423,18 @@ AELL_TOOLS.set_track_matte = function (args) {
   }
   var matte = AELL_resolveLayer(comp, args.matteLayer);
   if (matte === layer) return AELL_err("A layer cannot matte itself");
+  // Same measurement from the other side. AE's own throw does cover this
+  // one on AE 23+ (setTrackMatte rejects parameter 1), but the legacy
+  // branch would silently reorder the stack first, so the type is
+  // checked here too and the message stays the same shape.
+  var matteKind = AELL_layerType(matte);
+  if (matteKind === "camera" || matteKind === "light") {
+    return AELL_err("matteLayer '" + matte.name + "' is " + matteKind +
+      " and cannot BE a matte — only a visual (AV) layer has the alpha/" +
+      "luma to cut with (layer: '" + layer.name + "' is " + layerKind +
+      "). get_comp_details {comp: \"" + comp.name + "\"} lists the " +
+      "layers and their types.");
+  }
   var tmt = TrackMatteType[MAP[mode]];
   try {
     if (typeof layer.setTrackMatte === "function") {

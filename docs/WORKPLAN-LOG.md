@@ -10127,3 +10127,139 @@ got.
 - Not attempted this pass (still open, in order): 1b, 1c, and the
   pass-22 salvage — `stash@{0}` is still `pass22-salvage` and branch
   `aell-backup-pass22` still exists, untouched by me.
+
+## 2026-09-01 (local session, real AE) — WORKPLAN 1b: the zero-silent-failure batch VERIFIED, and the one hole it did not cover (0.11.1)
+
+- Item: section **1b**, verify the remote's 2026-09-01 zero-silent-failure
+  batch in real AE and ship it. Harness opened at **556/556**, so no
+  section-1 work was owed. Every 1b bullet was run; the pass found one
+  real defect of exactly the class 1b exists to catch, fixed it at the
+  root, and bumped.
+
+### The defect: `set_track_matte` reported success on a camera
+
+Probed with a temp `.jsx` per CLAUDE.md. Measured in AE 2026,
+ExtendScript 4.5.6:
+
+- A `CameraLayer` and a `LightLayer` carry **no `setTrackMatte` and no
+  `removeTrackMatte` at all** — `typeof` is `"undefined"`, not a
+  function. So both fell straight through to the tool's legacy-AE
+  branch.
+- That branch does `matte.moveBefore(layer)` and then
+  `layer.trackMatteType = tmt`. **ExtendScript ACCEPTS that assignment
+  on a camera.** It does not throw; the camera reads back `5015` for
+  LUMA. AE shows no matte, because a camera has no pixels to cut.
+- Net effect: the tool **reordered the user's layer stack** (PSHAPE
+  3 -> 2, PCAM 2 -> 3), wrote a phantom property, and returned
+  `{ok: true, layer: "PCAM", matte: "PSHAPE", mode: "luma"}`. The
+  existing try/catch could not see any of it, because nothing threw.
+- `mode: "none"` lied the same way: `{matte: "removed"}` for a matte
+  that never existed.
+
+Fixed in `extension/jsx/hostscript.jsx`: `set_track_matte` refuses by
+layer TYPE before anything moves, on both sides (target and
+`matteLayer`), naming the layer, its measured type, the other layer's
+type, and `get_comp_details`.
+
+### The trap inside the fix — worth more than the fix
+
+The first cut keyed the refusal off `!(layer instanceof AVLayer)`,
+which reads like "is this a visual layer". **It is not.** Measured the
+same night in real AE:
+
+    solid  instanceof AVLayer -> true
+    text   instanceof AVLayer -> FALSE
+    shape  instanceof AVLayer -> FALSE
+    camera instanceof AVLayer -> false
+    light  instanceof AVLayer -> false
+
+So that version locked text layers and shape layers out of mattes
+entirely — and **the 556-step harness stayed green through it**,
+because its one matte step uses solids. Only the probe caught it. The
+shipped predicate is the specific class, read through `AELL_layerType`,
+so the type word in the message and the branch that produced it can
+never drift apart. `CLAUDE.md` "Hard-won AE facts" carries this now.
+
+### Everything else 1b asked for, measured
+
+- **set_keyframes partial -> rollback.** `keys[2].value = "banana"` (and
+  `[1,2,3]`): `ok:false`, **`mutated:true`**, error quotes AE's raw
+  message and "2 key(s) were applied before this"; 3 keys really were on
+  the layer. An armed round (`add_solid` + that call) came back
+  `rollback.rolledBack: true`, `PROLL` gone, both results rewritten with
+  the ROLLED BACK note. The same round **unarmed** kept the solid and
+  said so. Note for the next probe author: `null` and `"  "` are NOT
+  rejected by `setValueAtTime` — AE coerces both to 0 and the call
+  succeeds, so they cannot be used to force a partial.
+- **apply_keyframe_ease partial -> rollback.** Layers `[eased, no-keys]`:
+  `mutated:true`, "2 pair(s) eased before this"; armed round rolled back
+  and the first layer's key influence was restored to 16.666666667.
+- **apply_effect / set_effect_param grounded.** Garbage display name
+  lists the layer's real effects plus `list_effects {filter: "blurr"}`;
+  a matchName-style miss (`ADBE Glo2xx`) correctly suggests `glo2xx`,
+  not `adbe`; a bad param lists Glow's 15 real parameters and the
+  `list_properties` path.
+- **export_mogrt name trap.** `"CON"` and `"nul.v2"` both refused before
+  AE with the device-name reason; the scratch folder went 0 files -> 0
+  files. `"Trailing Dot."` is correctly NOT trapped (it fell through to
+  the controllers check), which is the documented intent.
+- **MOGRT settle.** Real export of a 1-controller comp: receipt
+  `bytes: 14884`, on-disk 14884, still 14884 after a 1.5 s wait.
+  `controllerNames: ["Fade"]`, `returned: true`, `seconds: 4.5`.
+- **comfy image-landed.** `comfy_generate {workflow: AE_LLAMA_KREA2_V1,
+  image: <png>}` REFUSED, naming the workflow and pointing at
+  `AE_LLAMA_H3_I2V_V1` as the firstFrame-capable template; elapsed 0 s,
+  VRAM peak n/a, nothing queued. Then the H3 I2V happy path with the
+  same image ran green end to end — `image -> node 114.image
+  (manifest)`, 113014-byte mp4, imported into AE at 1920x1080 and
+  removed again. (`scripts/comfy-probe.js --url http://127.0.0.1:8000`.)
+
+### Back-fill, both directions
+
+- `tests/test-property-access.js`: the stub was CLASSLESS — every layer
+  was a bare `Layer`, so the bug could not exist there. It now models
+  AE's real classes (per-kind prototype, camera/light with **no** matte
+  methods) and AE's `moveBefore`, which is what turns the failure into
+  the same silent success it was in the field. **9 assertions fail on
+  the reverted host**, including the exact receipt
+  `{"layer":"Cam 1","matte":"B","mode":"luma"}`, the moved stack and the
+  phantom `trackMatteType`. The flat hierarchy is asserted too
+  (`!(SHP instanceof AVLayer)`) so the `instanceof AVLayer` trap cannot
+  be re-set, and four positive assertions pin that shape layers still
+  matte both ways.
+- `extension/js/selftest.js` (so BOTH runners get it): 6 new steps — a
+  shape layer takes a matte, is one, and has it removed; a camera
+  refused as target, as matte, and on `mode:"none"`. `tests/
+  test-self-test.js`'s canned host learned the type rule (it tracks
+  camera names the way it already tracked lights).
+- `docs/CAPABILITIES.md` regenerated (set_track_matte 1 -> 7 steps).
+
+- **Harness: 562/562 PASSED.** Full stub sweep green except the known
+  environmental `tests/test-comfy-backend.js` failure (documented in the
+  previous entry: this machine has `%LOCALAPPDATA%\Comfy-Desktop\
+  ComfyUI-Shared\models`, CI does not — still worth a `process.env`
+  stub in a later pass).
+
+- **BUMPED 0.11.0 -> 0.11.1**, per 1b's "all green -> bump". That ships
+  1b's whole batch AND the 1c batches that were riding unbumped since
+  2026-09-01. **1c is NOT verified by this pass** — trigger-layer
+  chat-probe, missing-verb semantics, the context-budget measurements
+  and the MOGRT verifier are still the next item, and they now ship
+  ahead of their verification. That is the deliberate trade 1b's own
+  instruction makes, and the alternative (hold the bump) is the mistake
+  CLAUDE.md records: a whole day of fixes sitting in the repo while the
+  installed panel ran old code.
+
+- **Self-inflicted, recorded so nobody repeats it:** I ran
+  `git stash push -- <path> -q`. Git parses the trailing `-q` as a
+  PATHSPEC, the push fails, and my follow-up `git stash pop` then popped
+  `stash@{0}` — which is **pass22-salvage** — into the working tree as
+  eight conflicted files. Recovered with `git reset` + `git checkout --
+  .` after copying my two edited files aside; `stash@{0}` is still
+  `pass22-salvage`, untouched and unpopped, and `aell-backup-pass22`
+  still exists. To revert one file, use
+  `git show HEAD:<path> > <path>` and copy the working version aside —
+  never `git stash` while that salvage sits at the top of the stack.
+
+- Not attempted this pass (still open, in order): **1c**, then the
+  pass-22 salvage.
