@@ -1932,12 +1932,18 @@
    * exists.
    *
    * Deliberately narrow. Localhost only (scanning a remote host's ports is
-   * not the panel's business), the two well-known ComfyUI ports only, and
+   * not the panel's business), the well-known ComfyUI ports only, and
    * only AFTER the configured URL has already failed. It REPORTS what it
    * finds and never reroutes: silently rendering on a different ComfyUI
    * than the user configured would swap the model set under them.
+   *
+   * 8000 earns its place the same way: the owner's own machine moved
+   * ComfyUI there (2026-09-01), and it is what `--port 8000` gives a
+   * launcher that avoids the default. A false positive costs nothing —
+   * isUp() only believes a host that answers /system_stats with 200,
+   * which no plain web server on 8000 does.
    */
-  var LOCAL_COMFY_PORTS = [8188, 8189];
+  var LOCAL_COMFY_PORTS = [8188, 8189, 8000];
 
   function findLocalComfy(base, cb) {
     var localBase = base.host === "127.0.0.1" || base.host === "localhost";

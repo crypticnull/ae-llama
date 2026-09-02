@@ -1453,6 +1453,15 @@ GPU. This item is that touch, one pass per bullet, smallest first:
 
 ## 7b. OWNER-APPROVED 2026-08-30: finish the catalog measurements
 
+**THIS MACHINE'S ComfyUI LISTENS ON PORT 8000** (owner, 2026-09-01).
+Every probe script under `scripts/` defaults to
+`http://127.0.0.1:8188` and will find nothing without
+`--url http://127.0.0.1:8000`; the panel's own `comfyUrl` setting must
+say 8000 too, or `comfy_status` reports the backend down and the
+arbiter refuses every generation. Check the setting FIRST and record
+what it said in the log — a night lost to the wrong port is a night
+lost.
+
 The owner approved (in so many words: "bake in the other models for the
 rest of the tier package. Test on this machine, it has the space") the
 downloads that section 7 was blocked on, and settled the H3 question
