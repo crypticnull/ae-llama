@@ -110,7 +110,12 @@ const OPT = {
   rigCheck: argv.indexOf("--rig-check") !== -1,
   isolate: argv.indexOf("--isolate") !== -1,
   carryHistory: argv.indexOf("--carry-history") !== -1,
-  variants: argv.indexOf("--variants") !== -1
+  variants: argv.indexOf("--variants") !== -1,
+  // Measure the SHIPPED DEFAULTS on purpose, when no settings file is
+  // findable. Never a convenience: without it a probe that cannot see
+  // this machine's settings refuses rather than reporting defaults as
+  // somebody's configuration.
+  defaultsOk: argv.indexOf("--defaults-ok") !== -1
 };
 // A paraphrase run is only honest from a known world: two phrasings of
 // one scenario that inherit each other's leftovers are measuring the
@@ -352,6 +357,38 @@ const Settings = window.Settings;
 const Llama = window.Llama;
 const Tools = window.Tools;
 const Comfy = window.Comfy;
+
+/*
+ * Whose configuration is this? Settings.dataRoot() is built from APPDATA,
+ * and the WMI-detached loop does not always carry it: on 2026-09-02 a
+ * pass with no APPDATA read pure DEFAULTS and filed `comfyUrl: 8188` as
+ * the owner's setting. It was 8000 and had never been touched; two
+ * sessions repeated the claim before anyone checked. A probe that cannot
+ * find the settings file is not measuring this machine, so it says so at
+ * the top of its own output and refuses to run unless asked to.
+ */
+function reportSettingsOrigin() {
+  const o = Settings.origin();
+  if (o.saved) {
+    console.log("settings   : " + o.from + " (" + o.file + ")");
+    console.log("comfyUrl   : " + Settings.get().comfyUrl);
+    return o;
+  }
+  console.log("\n!! SETTINGS NOT FOUND — every value below is a DEFAULT, " +
+              "not this machine's configuration.");
+  console.log("   looked for : " + o.file);
+  console.log("   APPDATA    : " +
+              (o.appdata || "(not set — this is usually why)"));
+  console.log("   Nothing here may be reported as the user's setting. " +
+              "Re-run with APPDATA set, or pass --defaults-ok to measure " +
+              "the shipped defaults deliberately.\n");
+  if (!OPT.defaultsOk) {
+    process.exitCode = 2;
+    throw new Error("refusing to probe against defaults: no settings file " +
+                    "at " + o.file);
+  }
+  return o;
+}
 
 /*
  * --ctx: in-memory only (see the header). Applied here, before the first
@@ -3375,6 +3412,9 @@ function main() {
     process.exit(2);
   }
   console.log("-- AfterFX: " + AFTERFX);
+  // Before any measurement: whose settings are these? (Throws unless
+  // --defaults-ok when there is no settings file to read.)
+  reportSettingsOrigin();
 
   // --bridge-check: prove the AE round trip works before spending ten
   // minutes loading a model behind it.

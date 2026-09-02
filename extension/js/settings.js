@@ -119,15 +119,32 @@
     } catch (e) { /* best effort */ }
   }
 
+  /*
+   * Where the values in `current` came from: "localStorage", "file", or
+   * "defaults". Read it before reporting anyone's configuration.
+   *
+   * Measured 2026-09-02: an unattended probe running in the WMI-detached
+   * loop had no APPDATA, so dataRoot() fell through to a path holding no
+   * settings.json, load() returned pure defaults, and the pass reported
+   * `comfyUrl: 8188` as THE OWNER'S SETTING. It was 8000 and had never
+   * been touched. Two sessions then repeated the claim. Defaults that
+   * cannot be told apart from a saved answer are how a panel invents a
+   * fact about a machine.
+   */
+  var loadedFrom = "defaults";
+
   function load() {
     var merged = defaults();
     var saved = null;
     try {
       var raw = global.localStorage.getItem(STORAGE_KEY);
-      if (raw) saved = JSON.parse(raw);
+      if (raw) { saved = JSON.parse(raw); loadedFrom = "localStorage"; }
     } catch (e) {}
     // localStorage can be wiped by a reinstall — fall back to the mirror.
-    if (!saved) saved = readSettingsFile();
+    if (!saved) {
+      saved = readSettingsFile();
+      if (saved) loadedFrom = "file";
+    }
     if (saved) {
       var ext = extPath();
       for (var k in saved) {
@@ -183,9 +200,27 @@
     },
     reset: function () {
       current = defaults();
+      loadedFrom = "defaults";
       try { global.localStorage.removeItem(STORAGE_KEY); } catch (e) {}
       writeSettingsFile(current);
       return current;
+    },
+    /**
+     * The receipt for Settings.get(): where these values came from, the
+     * file that was looked for, and whether the environment variable
+     * dataRoot() depends on was even set. `saved` is false when nothing
+     * was found and every value is a default — the state in which no
+     * claim about a user's configuration is worth making.
+     */
+    origin: function () {
+      Settings.get();
+      var appdata = "";
+      try {
+        appdata = global.AEBridge.nodeRequire("process").env.APPDATA || "";
+      } catch (e) {}
+      return { from: loadedFrom, saved: loadedFrom !== "defaults",
+               file: settingsFile(), dataRoot: dataRoot(),
+               appdata: appdata };
     },
     dataRoot: dataRoot
   };
