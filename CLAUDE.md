@@ -103,6 +103,13 @@ interactive session does NOT self-start; it answers one prompt and waits.
   (buildSystemPrompt().length before/after) and paid for by a cut;
   rules carry phrase lists, docs carry one phrase; the model's replies
   are receipts, not prose. See WORKPLAN roadmap item 13.
+- Premiere has no `AfterFX -r` equivalent, and its script platform is
+  being retired: Adobe's doc sources say Premiere ExtendScript is
+  supported "through September 2026" and CEP "for a calendar year"
+  after 25.6 (~Nov 2026), new work goes to UXP (no child_process,
+  `.ccx` packaging, no AE host). A CEP Premiere panel is a bridge, not
+  a destination — read `docs/PREMIERE_PLAN.md` before building
+  anything Premiere-side. Owner-gated (WORKPLAN section 12).
 
 ## Shipping (BUMP OR IT DOES NOT SHIP)
 

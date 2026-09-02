@@ -2033,6 +2033,10 @@ steps of each plan's build order:
 
 ## 11. Can the harness drive PREMIERE too? (probe first, owner asked 2026-09-02)
 
+**Folded into section 12 / docs/PREMIERE_PLAN.md P0 on 2026-09-02**
+— the probes below are P0 step 4 there, and P0 is OWNER-GATED. Do not
+run them from an unattended pass; the text stays for context.
+
 The overnight harness exists because After Effects ships
 `AfterFX.exe -r <script.jsx>`, which runs ExtendScript in a live
 instance. **Premiere has no such flag** — that, not effort, is why
@@ -2061,6 +2065,35 @@ measured; this item is the measurement, not the build:
 
 Whatever the answer, write it into CLAUDE.md's hard-won facts: the
 next session must not re-derive whether Premiere is scriptable.
+
+## 12. Premiere panel in the same ZXP — OWNER-GATED, plan filed 2026-09-02
+
+The plan is `docs/PREMIERE_PLAN.md`. Short version: yes, the ZXP can
+carry a second CEP extension for Premiere (one bundle, one feed, one
+installer); but Adobe's own doc sources say Premiere ExtendScript is
+supported "through September 2026" and CEP "for a calendar year" after
+25.6 (~Nov 2026), and UXP cannot spawn processes or ride the ZXP. So
+the CEP surface is a bridge: probe first, MVP on the dev junction
+only, UXP decided on a date.
+
+**Nothing here starts until the owner answers decision 1 in the plan
+(§6).** An unattended pass that reaches this section appends "12:
+waiting on owner" to the log and moves on. When approved, P0 is:
+
+- Remote writes: `probe/com.cptk.aellama.probe/` (throwaway bundle
+  outside `extension/`, AEFT+PPRO, ~40-line jsx, one html page),
+  `scripts/install-probe.ps1`, `scripts/ppro-door-probe.ps1`, the
+  MOGRT acceptance read-back, the `bump-version.js` global-regex fix
+  + fixture test, `ZXPSignCmd -verify` in packaging and CI.
+- Local runs, owner clicks: install via junction, signed ZXP AND the
+  aescripts installer; Premiere 27.0 beta same probe; window census;
+  the three headless doors, 1-day timebox each; export a transcript as
+  TXT/CSV/SRT; record what the Premiere AI Assistant does on this
+  install. Results land in `%APPDATA%\AE-Llama\probes\*.json` and are
+  committed under `docs/measured/`.
+- Exit: Gate G0 in the plan; facts into CLAUDE.md and
+  `docs/PREMIERE-PLATFORM.md`; section 11 closed with its answer.
+  No version bump (nothing ships).
 
 ## Out of scope for the local session (remote builds these)
 

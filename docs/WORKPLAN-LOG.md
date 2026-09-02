@@ -13591,3 +13591,40 @@ Nothing else was left unattempted this pass. Nothing is blocked.
   `node scripts/mogrt-foreign-probe.js`. A `fallback:` row in its
   output is a real finding — the key list is missing a shape Adobe
   uses; add the key, never widen the scan.
+
+## 2026-09-02 (remote session) — Premiere-in-the-same-ZXP plan filed
+
+- Owner asked whether the ZXP can also install a Premiere panel and,
+  if so, for a plan. Ran a research + design + adversarial-review pass
+  (code audit, packaging/CEP mechanics, Premiere ExtendScript/QE/UXP
+  surface, product tiers; three architectures; synthesis; three
+  refuters). NEW docs/PREMIERE_PLAN.md is the result; WORKPLAN gained
+  section 12 (OWNER-GATED) and section 11 was folded into its P0;
+  CLAUDE.md gained the Premiere platform fact.
+- The answer: yes mechanically (second `<Extension>` with its own
+  `<HostList>` PPRO, same bundle/ZXP/installer/feed; ~80% of the panel
+  is already host-agnostic). The catch, quoted from Adobe's doc-source
+  repos: Premiere ExtendScript supported "through September 2026", CEP
+  "for a calendar year" after 25.6, "start in UXP"; UXP has no
+  child_process, packages as .ccx, has no AE host. Premiere 27.0 is in
+  beta; Adobe shipped a cloud AI Assistant beta in June covering the
+  bins/markers/transcript surface a chat MVP would demo.
+- What the refuters changed in the synthesized plan: MVP shrunk to <=8
+  tools ranked by what Adobe's assistant cannot do (delivery receipts,
+  MOGRT round-trip, placement, export) instead of bins/markers; PPRO
+  kept on the dev junction until an EDITOR-scored demand gate passes
+  (owner-scored demand is decorative — step 7 has been owed for days);
+  two-panel coordination moved out of the seams phase (no two-panel
+  state until PPRO ships); rollback branch deleted (no undo API in
+  Premiere ExtendScript); UXP decision made date-based (2026-11-01)
+  with a spike in parallel with the seams; the P0 probe kept OUTSIDE
+  extension/ because CI publishes every push to the stable feed URL;
+  aescripts installer made a mandatory P0 path; PPRO prompt written
+  from zero with a CI-pinned ceiling; silent-ignore treated as a
+  whole-DOM property.
+- Not done here (plan only, per the ask): no probe code, no manifest
+  change, no bump. Harness untouched — docs-only change, CI sweep is
+  the same 66/68.
+- Owner decisions owed before anything starts: PREMIERE_PLAN.md §6,
+  first of all "fund P0 only now, P2+ after roadmap 13 closes"
+  (recommended).
