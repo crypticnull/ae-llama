@@ -1526,6 +1526,42 @@ function cannedOk(tool, args) {
       const action = /reduce/.test(act) ? "reduce_project"
                    : /consolidate/.test(act) ? "consolidate_footage"
                    : "remove_unused_footage";
+      // No comp or layer scope (0.11.7). Modelled here for the same
+      // reason the refusals above are: a canned host that accepted a
+      // comp-scoped call would pass the suite step while the real tool
+      // ignored the argument and deleted project-wide.
+      const scopeKeys = action === "reduce_project"
+        ? ["layer", "layers", "layerName", "layerNames"]
+        : ["comp", "comps", "compName", "compNames", "keepComps",
+           "layer", "layers", "layerName", "layerNames"];
+      const offenders = [], scopeVals = [];
+      for (const k of scopeKeys) {
+        const v = args ? args[k] : undefined;
+        if (v === undefined || v === null || v === "") continue;
+        if (Array.isArray(v)) {
+          if (!v.length) continue;
+          for (const one of v) scopeVals.push(String(one));
+        } else scopeVals.push(String(v));
+        offenders.push(k);
+      }
+      if (offenders.length) {
+        const named = scopeVals.filter((n) => createdComps.indexOf(n) !== -1);
+        let msg = "clean_project has no comp or layer scope: it works on " +
+          "the PROJECT PANEL, and " + action + " would ignore " +
+          offenders.join(", ") + " and delete project-wide. ";
+        if (named.length) {
+          msg += "'" + named.join("', '") + "' " +
+            (named.length > 1 ? "are comps" : "is a comp") +
+            " in this project. To tidy a COMP, remove exactly what was " +
+            "named, with the tool that removes it (remove_keyframes, " +
+            "remove_effect, delete_mask, delete_layer, precompose); if " +
+            "nothing was named, ask the user what should go. ";
+        }
+        msg += "To clean the PROJECT PANEL instead, call clean_project " +
+          "again with action alone" +
+          (action === "reduce_project" ? " plus keepComps" : "") + ".";
+        return { __err: msg };
+      }
       const dryRun = !(args && args.dryRun === false);
       const orphans = solidSources
         .filter((so) => String(so.name).indexOf("ST HYG Orphan") === 0)

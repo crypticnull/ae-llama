@@ -1730,6 +1730,16 @@ local verifies in real AE.
    apply_expression_preset, "show the video through the text" ->
    set_track_matte); "clean this up" project-vs-comp disambiguation;
    one single-phrasing probe step per mapping.
+   **The "clean this up" half is CLOSED 2026-09-02 (0.11.7) — by
+   BEHAVIOUR, not wording. The routing miss itself is unchanged
+   (measured 5 runs, both doc forms, with the disambiguation present in
+   the tool doc AND in the never-compacted rules), but clean_project can
+   no longer act on it: the preview is now a GATE (a delete must cite a
+   preview of the SAME plan taken in an EARLIER user request) and a
+   comp/layer argument is REFUSED instead of silently ignored. The field
+   flip is in docs/WORKPLAN-LOG.md — the same sentence that deleted 7
+   project items now deletes nothing and asks. NEXT of this class:
+   organize_project carries the same preview-shaped advice and no gate.**
 3. **[S] img2img restyle loop** — un-bypass KREA2's authored image
    branch, denoise param, snapshot_frame -> comfy_generate{image,
    denoise} -> import_as_layer reuse+reload. Needs item 1's landed

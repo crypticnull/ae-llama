@@ -37,7 +37,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `audio_to_keyframes` | Convert audio amplitude to keyframes: adds a null carrying Left/Right/Both Channels sliders keyframed to the loudness, one key per frame | yes | host | 1 | 11 |
 | `audit_comp_usage` | Facts about how comps are used, before renaming anything: which comps each one is nested in, whether it is in the render queue, and every expression that names it as a string | no | host | 1 | 1 |
 | `center_anchor_point` | Center a layer's anchor point on its visible content (sourceRect math done host-side; position compensated so the layer does not jump, at every Position keyframe) | yes | host | 2 | 2 |
-| `clean_project` | Delete project clutter | yes | host | 1 | 8 |
+| `clean_project` | Delete project clutter | yes | host | 1 | 9 |
 | `comfy_generate` | Generate an image/video with local ComfyUI and import it into the AE project | yes | panel | — | — |
 | `comfy_list_workflows` | List available ComfyUI generation workflow templates by name | no | panel | — | — |
 | `comfy_status` | Check the local ComfyUI instance (online? queue depth?) | no | panel | — | — |
@@ -349,6 +349,19 @@ Queued (see WORKPLAN for owners/order):
   refusals ONLY -- executing any of them inside the user's open project
   would delete the user's own items -- so the execute paths live in
   `tests/test-project-hygiene.js` against a stub that models each hazard.
+  Since 2026-09-02 the preview is a GATE, not advice: four field runs of
+  the chat probe measured the model going straight to `dryRun:false`
+  half the time, deleting real project items with no list ever put in
+  front of the user, and the prompt had told it to preview first in two
+  places and in both doc forms. So a delete must now cite a preview of
+  the SAME plan -- same action, same kept comps, same item ids -- taken
+  in an EARLIER user request, which is the only boundary at which the
+  user could have seen it and said go. The refusal carries that preview,
+  so the round loses nothing but the deletion. And the tool takes no
+  comp or layer: an argument naming one (the field call was
+  `keepComps:["Probe Room"]` on `remove_unused_footage`, which the tool
+  ignored before deleting project-wide) is refused and told which tools
+  tidy a comp.
 - Audio drives animation since 2026-08-28: `audio_to_keyframes` wraps
   AE's "Convert Audio to Keyframes" menu command (id 4218 -- the exact
   spelling; any other casing resolves to 0) and hands back a null whose

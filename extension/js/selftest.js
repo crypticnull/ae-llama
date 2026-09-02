@@ -7277,6 +7277,27 @@
                  "note did not say it was a preview: " + d.note;
         } },
 
+      // The 2026-09-02 guards. Only the half that CANNOT delete is asked
+      // here: the other half — a dryRun:false with no preview behind it
+      // is refused — would, if it ever regressed, delete the user's own
+      // unused footage from the very step written to prove it does not.
+      // That half is covered against a stubbed project in
+      // tests/test-project-hygiene.js. This step keeps dryRun at its
+      // default, so nothing can go even if the guard is gone.
+      { name: "a comp scope is refused, not silently ignored",
+        tool: "clean_project",
+        expectError: true,
+        args: function (ctx) {
+          return { action: "consolidate", comp: ctx.hygKeep };
+        },
+        check: function (err, ctx) {
+          if (!/no comp or layer scope/.test(err)) {
+            return "wrong refusal: " + err;
+          }
+          return err.indexOf("'" + ctx.hygKeep + "' is a comp") !== -1 ||
+                 "the refusal never named the comp: " + err;
+        } },
+
       { name: "cleanup: delete the hygiene rig comps",
         batch: function (ctx) {
           return [

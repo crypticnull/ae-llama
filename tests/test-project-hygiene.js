@@ -440,9 +440,131 @@ res = call("clean_project", { action: "remove_unused_footage" });
 assert(res.ok && res.data.willRemove === 0 &&
        /nothing to do/i.test(res.data.note), "an already-clean project: " +
        res.data.note);
+// The preview above was of a DIFFERENT action, and the gate says so —
+// each action is previewed on its own or it does not run.
+res = call("clean_project", { action: "consolidate_footage", dryRun: false });
+assert(!res.ok && /no preview of consolidate_footage/.test(res.error),
+       "a preview of another action does not authorise this one: " +
+       (res.error || JSON.stringify(res.data)));
+call("clean_project", { action: "consolidate_footage" });
 res = call("clean_project", { action: "consolidate_footage", dryRun: false });
 assert(res.ok && res.data.removedCount === 0 && res.data.itemsRemoved === 0,
        "executing on a clean project removes nothing");
+
+// 15. THE PREVIEW GATE. Four field runs of the chat probe (2026-09-02)
+//     measured what "dryRun defaults to true" buys when it is only
+//     advice: twice out of four the model went straight to dryRun:false
+//     and deleted real project items with no list ever shown. A delete
+//     must now cite a preview of the SAME plan, taken in an EARLIER user
+//     request -- the only boundary at which the user could have seen it.
+function rigGate() {
+  reset();
+  const keep = project.items.addComp("KEEP");
+  const used = new FootageItem("usedPNG");
+  keep.addLayer("usedPNG", used);
+  new FootageItem("orphanA");
+  new FootageItem("orphanB");
+  return keep;
+}
+
+// (a) No preview at all: refused, and the refusal IS the preview.
+rigGate();
+delete $.global.AELL_hygShown;
+$.global.AELL_requestSeq = 0;
+$.global.AELL_newRequest();
+res = call("clean_project", { action: "remove_unused_footage", dryRun: false });
+assert(!res.ok && /nothing has been previewed yet/.test(res.error),
+       "a first-call delete is refused: " + (res.error || "").slice(0, 60));
+assert(/orphanA/.test(res.error) && /orphanB/.test(res.error),
+       "and the refusal names what would have gone: " + res.error);
+assert(ALL_ITEMS.some(it => it.name === "orphanA") &&
+       ALL_ITEMS.some(it => it.name === "orphanB"),
+       "nothing was deleted by the refused call");
+
+// (b) That refusal recorded the plan, but in THIS request — an immediate
+//     retry is still refused, because nobody has seen the list yet.
+res = call("clean_project", { action: "remove_unused_footage", dryRun: false });
+assert(!res.ok && /THIS same reply/.test(res.error),
+       "retrying inside the same request is refused: " +
+       (res.error || "").slice(0, 80));
+assert(ALL_ITEMS.some(it => it.name === "orphanA"),
+       "and still nothing was deleted");
+
+// (c) The next request goes through — that is the user saying go.
+$.global.AELL_newRequest();
+res = call("clean_project", { action: "remove_unused_footage", dryRun: false });
+assert(res.ok && res.data.itemsRemoved === 2,
+       "the request after the preview deletes: " +
+       JSON.stringify(res.error || res.data.removed));
+
+// (d) An explicit preview in one request, delete in the next.
+rigGate();
+$.global.AELL_newRequest();
+res = call("clean_project", { action: "remove_unused_footage" });
+assert(res.ok && res.data.willRemove === 2, "preview still previews");
+assert(ALL_ITEMS.some(it => it.name === "orphanA"),
+       "the preview deleted nothing");
+res = call("clean_project", { action: "remove_unused_footage", dryRun: false });
+assert(!res.ok && /THIS same reply/.test(res.error),
+       "preview and delete in ONE reply never shows the user anything");
+$.global.AELL_newRequest();
+res = call("clean_project", { action: "remove_unused_footage", dryRun: false });
+assert(res.ok && res.data.itemsRemoved === 2,
+       "and the next request deletes the previewed list");
+
+// (e) Plan drift between the preview and the go: the user agreed to a
+//     different list, so it is refused and re-previewed.
+rigGate();
+$.global.AELL_newRequest();
+call("clean_project", { action: "remove_unused_footage" });
+new FootageItem("orphanC");
+$.global.AELL_newRequest();
+res = call("clean_project", { action: "remove_unused_footage", dryRun: false });
+assert(!res.ok && /project has changed since the last preview/.test(res.error),
+       "a drifted plan is not the list they agreed to: " +
+       (res.error || "").slice(0, 80));
+assert(/orphanC/.test(res.error),
+       "and the new list names the item that appeared: " + res.error);
+$.global.AELL_newRequest();
+res = call("clean_project", { action: "remove_unused_footage", dryRun: false });
+assert(res.ok && res.data.itemsRemoved === 3,
+       "after that re-preview it goes, all three: " +
+       JSON.stringify(res.error || res.data.removed));
+
+// 16. NO COMP SCOPE. The field call was
+//     {action:"remove_unused_footage", keepComps:["Probe Room"],
+//      dryRun:false} -- the tool ignored keepComps and deleted
+//     project-wide. A protective argument is never dropped in silence.
+rigGate();
+$.global.AELL_newRequest();
+res = call("clean_project", { action: "remove_unused_footage",
+                              keepComps: ["KEEP"], dryRun: false });
+assert(!res.ok && /no comp or layer scope/.test(res.error),
+       "keepComps on remove_unused_footage is refused, not ignored: " +
+       (res.error || "").slice(0, 80));
+assert(/'KEEP' is a comp in this project/.test(res.error),
+       "and the refusal names the comp the user meant: " + res.error);
+assert(/delete_layer/.test(res.error) && /precompose/.test(res.error),
+       "and points at the tools that tidy a COMP: " + res.error);
+assert(ALL_ITEMS.some(it => it.name === "orphanA"),
+       "the scoped call deleted nothing");
+res = call("clean_project", { action: "consolidate_footage", comp: "KEEP" });
+assert(!res.ok && /no comp or layer scope/.test(res.error),
+       "a comp scope is refused on the PREVIEW too");
+res = call("clean_project", { action: "remove_unused_footage",
+                              keepComps: [] });
+assert(res.ok, "an EMPTY keepComps is not a scope and does not refuse");
+// reduce_project keeps its aliases; no action has ever had a layer scope.
+res = call("clean_project", { action: "reduce_project", comps: ["KEEP"] });
+assert(res.ok && res.data.keepComps.join() === "KEEP",
+       "reduce_project still reads comps as keepComps: " +
+       (res.error || ""));
+res = call("clean_project", { action: "reduce_project", keepComps: ["KEEP"],
+                              layers: ["usedPNG"] });
+assert(!res.ok && /no comp or layer scope/.test(res.error) &&
+       /plus keepComps/.test(res.error),
+       "a LAYER scope is refused even on reduce_project: " +
+       (res.error || "").slice(0, 90));
 
 // 14. The tool is registered as mutating, so it gets an undo group.
 //     (reduceProject inside one was measured to close cleanly and to be

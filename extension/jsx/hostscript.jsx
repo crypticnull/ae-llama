@@ -1893,11 +1893,43 @@ function AELL_hygNames(doomed, kinds) {
 }
 
 /*
+ * The identity of one deletion plan: the action, the comps being kept,
+ * and the exact set of item ids that would go. A delete must match the
+ * preview the user was shown on all three -- a plan that drifted is a
+ * different list from the one they said go to.
+ */
+function AELL_hygPlanKey(action, keepNames, doomed) {
+  var ids = [], id, i;
+  for (id in doomed) {
+    if (!doomed.hasOwnProperty(id)) continue;
+    ids.push(Number(id));
+  }
+  ids.sort(function (a, b) { return a - b; });
+  // Length-prefixed, because a comp name may contain any separator a
+  // reader would reach for first -- and the only failure mode of a
+  // collision here is a delete matching a preview of something else.
+  var keeps = [];
+  for (i = 0; i < keepNames.length; i++) {
+    var nm = String(keepNames[i]);
+    keeps.push(String(nm.length) + ":" + nm);
+  }
+  return action + "|" + keeps.join(",") + "|" + ids.join(",");
+}
+
+/*
  * clean_project {action, keepComps?, dryRun?}
  *
  * dryRun DEFAULTS TO TRUE: every action here deletes project items, and
  * two of them take things the user never mentioned (empty folders,
  * render-queue entries), so nothing happens until it has been shown once.
+ *
+ * "Shown once" was advice until 2026-09-02, when four field runs of
+ * scripts/chat-probe.js measured what advice buys: asked to tidy a COMP,
+ * the model called this tool every time, and TWICE it went straight to
+ * dryRun:false -- deleting 4 and 7 real project items with no list ever
+ * put in front of the user. The prompt already said preview first, in
+ * the tool doc AND in the never-compacted rules, in both doc forms. So
+ * the preview is a GATE now, not a sentence: see AELL_hygPlanKey.
  */
 AELL_TOOLS.clean_project = function (args) {
   var proj = app.project;
@@ -1929,8 +1961,60 @@ AELL_TOOLS.clean_project = function (args) {
   }
 
   var dryRun = (args.dryRun === false) ? false : true;
-  var doomed = {}, out = { action: action, dryRun: dryRun }, i;
+  var doomed = {}, out = { action: action, dryRun: dryRun }, i, j;
   var dupPlan = null, keepComps = [];
+
+  // A scope this tool does not have. The model that means "tidy this
+  // COMP" reaches for one of these keys on the way to the wrong tool --
+  // measured in the field 2026-09-02, a remove_unused_footage call
+  // carrying keepComps:["Probe Room"] and dryRun:false, which this tool
+  // IGNORED before deleting four items project-wide. Dropping a
+  // caller's protective argument in silence is the class of lie this
+  // project does not ship, so the argument is refused and told where to
+  // go. reduce_project keeps comp/comps (they alias keepComps there);
+  // no action has ever had a LAYER scope.
+  var scopeKeys;
+  if (action === "reduce_project") {
+    scopeKeys = ["layer", "layers", "layerName", "layerNames"];
+  } else {
+    scopeKeys = ["comp", "comps", "compName", "compNames", "keepComps",
+                 "layer", "layers", "layerName", "layerNames"];
+  }
+  var offenders = [], scopeVals = [];
+  for (i = 0; i < scopeKeys.length; i++) {
+    var sv = args[scopeKeys[i]];
+    if (sv === undefined || sv === null || sv === "") continue;
+    if (AELLJSON.isArray(sv)) {
+      if (!sv.length) continue;
+      for (j = 0; j < sv.length; j++) scopeVals.push(String(sv[j]));
+    } else {
+      scopeVals.push(String(sv));
+    }
+    offenders.push(scopeKeys[i]);
+  }
+  if (offenders.length) {
+    var namedComps = [];
+    for (i = 0; i < scopeVals.length; i++) {
+      var hit = null;
+      try { hit = AELL_findItem(scopeVals[i]); } catch (eN) { hit = null; }
+      if (hit && (hit instanceof CompItem)) namedComps.push(scopeVals[i]);
+    }
+    var msg = "clean_project has no comp or layer scope: it works on the " +
+      "PROJECT PANEL, and " + action + " would ignore " +
+      offenders.join(", ") + " and delete project-wide. ";
+    if (namedComps.length) {
+      msg += "'" + namedComps.join("', '") + "' ";
+      if (namedComps.length > 1) msg += "are comps"; else msg += "is a comp";
+      msg += " in this project. To tidy a COMP, remove exactly what was " +
+        "named, with the tool that removes it (remove_keyframes, " +
+        "remove_effect, delete_mask, delete_layer, precompose); if nothing " +
+        "was named, ask the user what should go. ";
+    }
+    msg += "To clean the PROJECT PANEL instead, call clean_project again " +
+      "with action alone";
+    if (action === "reduce_project") msg += " plus keepComps";
+    return AELL_err(msg + ".");
+  }
 
   if (action === "reduce_project") {
     var want = args.keepComps;
@@ -2004,13 +2088,56 @@ AELL_TOOLS.clean_project = function (args) {
       "silent. Fix or keep those comps first.";
   }
 
+  // The gate. A preview RECORDS the plan it showed; a delete must cite
+  // that same plan, from an earlier request. Recording happens on the
+  // refusal path too, so the refusal below IS the preview the round was
+  // missing and the next request can go straight through.
+  var planKey = AELL_hygPlanKey(action, out.keepComps || [], doomed);
+  var seq = $.global.AELL_requestSeq || 0;
+  var shown = $.global.AELL_hygShown;
+
   if (dryRun) {
-    out.note = out.willRemove === 0
+    $.global.AELL_hygShown = { key: planKey, seq: seq };
+    out.note = (out.willRemove === 0)
       ? "PREVIEW ONLY — nothing to do: this action would remove nothing."
       : "PREVIEW ONLY — nothing was deleted. Show the user what would go " +
         "(especially anything above they did not ask about), then call " +
         "again with dryRun:false to do it.";
     return AELL_okay(out);
+  }
+
+  var block = "";
+  if (!shown || shown.key !== planKey) {
+    if (shown && shown.key.split("|")[0] !== action) {
+      block = "no preview of " + action + " has been shown";
+    } else if (shown) {
+      block = "the project has changed since the last preview, so this " +
+        "is not the list the user agreed to";
+    } else {
+      block = "nothing has been previewed yet";
+    }
+  } else if (seq > 0 && shown.seq === seq) {
+    // Same request as the preview: the user has not been back since,
+    // so nobody has seen the list. (seq stays 0 for a caller that never
+    // announces a request -- a raw -r script -- and such a caller then
+    // only has to preview first.)
+    block = "that preview was taken in THIS same reply, so the user has " +
+      "not seen it yet";
+  }
+  if (block) {
+    $.global.AELL_hygShown = { key: planKey, seq: seq };
+    var listed = "";
+    if (doomedList.length) {
+      listed = " — " + doomedList.slice(0, 10).join(", ");
+      if (doomedList.length > 10) {
+        listed += ", +" + (doomedList.length - 10) + " more";
+      }
+    }
+    return AELL_err("clean_project refused to delete: " + block + ". " +
+      "Nothing was deleted. " + out.willRemove + " item(s) would go" +
+      listed + ". That IS the preview — show it to the user, and call " +
+      "clean_project with dryRun:false in your NEXT reply, after they " +
+      "say go.");
   }
 
   var before = AELL_hygSnapshot();
@@ -11043,9 +11170,17 @@ function AELL_callBatch(commandsJson, optsJson) {
 $.global.AELL_callBatch = AELL_callBatch;
 
 /* Called by the panel when a NEW user request starts — comp-name aliases
- * are scoped to one request, deterministically, with no timers. */
+ * are scoped to one request, deterministically, with no timers.
+ *
+ * The counter is what clean_project's preview gate reads: a delete may
+ * only cite a preview taken in an EARLIER request, because that is the
+ * only boundary at which the user could have seen the list and said go.
+ * A request the panel never announced leaves it at 0, and the gate then
+ * degrades to "a matching preview happened first" (see clean_project).
+ */
 $.global.AELL_newRequest = function () {
   $.global.AELL_compAliases = {};
+  $.global.AELL_requestSeq = ($.global.AELL_requestSeq || 0) + 1;
 };
 
 /* AELLJSON is a top-level `var` of THIS file, and ExtendScript keeps such

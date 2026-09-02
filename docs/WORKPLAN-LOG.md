@@ -11274,3 +11274,195 @@ the reinstall for it.
    (harness plan step 6).
 
 Nothing was left unattempted this pass: 1c is now closed entirely.
+
+## 2026-09-02 (local session, real AE) — the filed #1: clean_project could delete without ever showing the list, and ignored the argument the model used to aim it (0.11.7)
+
+Harness first: **566/566 PASSED** before anything was touched, so the pass
+went to the queue. Sections 1b and 1c are closed, so the top open item was
+the one the previous pass filed and promoted above the other tool bugs:
+
+> **`clean_project` answers "clean up this comp"** — now measured as
+> unconditional (4/4 runs, both doc forms), so it is no longer a wording
+> fix. Promoted above the other tool bugs because it is the only step in
+> the suite that fails every single time, and it DELETES things.
+
+### What the four runs actually showed, re-read before deciding
+
+The previous pass proved the routing miss is not a compaction casualty:
+the full doc's "PROJECT PANEL only ('clean up this comp' is never this
+tool)" and the never-compacted rule "'clean up / tidy this COMP / the
+timeline / these layers' is NEVER clean_project" were both in front of
+the model in all four runs, and it called the tool anyway. Adding a
+sentence has been measured not to work. So this pass changed BEHAVIOUR.
+
+Reading the four transcripts for what the HOST could have seen:
+
+    06-15-46  clean_project {action:remove_unused_footage, dryRun:true}
+    06-22-10  clean_project {action:remove_unused_footage, dryRun:true}
+    06-18-52  clean_project {action:remove_unused_footage, dryRun:FALSE}
+              -> 7 project items deleted, no list ever shown
+    06-12-57  clean_project {action:remove_unused_footage,
+                             keepComps:["Probe Room"], dryRun:FALSE}
+              -> 4 project items deleted; keepComps SILENTLY IGNORED
+
+The routing miss itself is invisible to the host (three of four calls
+carry nothing but an action). But the two calls that did HARM are fully
+host-visible, and each is a defect of a class this project has spent the
+week closing:
+
+1. **"dryRun defaults to true, show the user, then call again" was
+   advice.** Half the measured runs skipped it. A preview nobody is
+   required to take is not a safeguard.
+2. **A protective argument was dropped in silence.** The model passed
+   `keepComps:["Probe Room"]` believing it scoped the delete to that
+   comp; `remove_unused_footage` ignores keepComps, and four items went
+   project-wide. That is the silent lie the 0.11.x work exists to kill.
+
+### The fix, at the host root (extension/jsx/hostscript.jsx)
+
+**The preview is a GATE.** A dryRun preview now RECORDS the plan it
+showed — `AELL_hygPlanKey` = action + kept comp names (length-prefixed,
+because a comp name may contain any separator) + the sorted item ids that
+would go. A `dryRun:false` must cite that same plan, taken in an EARLIER
+user request. The request boundary is `AELL_newRequest`, which main.js
+already calls once per user turn and which now bumps
+`$.global.AELL_requestSeq`; it is the only moment at which the user could
+have seen the list and said go. Three refusals, each naming its own
+reason: nothing previewed yet / no preview of THIS action / the project
+changed since the preview, so this is not the list they agreed to. A
+same-request preview is refused too ("that preview was taken in THIS same
+reply") — preview-then-delete inside one reply shows the user nothing.
+
+The refusal **carries the preview** (count plus the first ten paths), and
+records it, so the round loses only the deletion: the next request goes
+straight through. A caller that never announces a request — a raw `-r`
+script — leaves the counter at 0, and the gate then degrades to "a
+matching preview happened first" rather than refusing forever.
+
+**The tool takes no comp or layer.** `comp/comps/compName/compNames/
+keepComps` (and `layer/layers/...` on every action, including
+reduce_project, which keeps comp/comps as its keepComps aliases) are now
+REFUSED, not ignored — before the plan is even computed, so nothing can
+go. When the named thing is a comp that exists the refusal says so and
+names the tools that tidy a COMP (remove_keyframes, remove_effect,
+delete_mask, delete_layer, precompose) plus the ask-first branch.
+
+### The flip, measured in real AE tonight
+
+A fifth probe run, same instrument, same settings, and — measured — the
+same system prompt byte for byte: the compact form is 39,179 chars before
+and after the doc edit, because compaction keeps only a tool's first
+sentence and that sentence did not change. Step 29 hit the worst of the
+four field shapes, and this is what it did now:
+
+    error clean_project {"action":"remove_unused_footage","dryRun":false}:
+      clean_project refused to delete: no preview of remove_unused_footage
+      has been shown. Nothing was deleted. 7 item(s) would go — Solids/
+      Beta, Solids/Beta, Solids/Null 15, ... That IS the preview — show it
+      to the user, and call clean_project with dryRun:false in your NEXT
+      reply, after they say go.
+    assistant: The 'Probe Room' comp can be cleaned up by removing 7
+      unused items. These items are: ... Would you like to proceed?
+
+The identical call deleted 7 real project items at 06:18 tonight. It now
+deletes nothing and ends in the question the rules always wanted. **Step
+29 still scores FAIL, and that is honest**: its check fails any
+project-panel tool for a comp complaint, and the routing is unchanged.
+What changed is that the miss can no longer destroy anything — which is
+why the previous pass ranked it above the rest.
+
+### Verification
+
+- Harness in real AE: **567/567 PASSED** (566 -> 567; one new step).
+- `tests/test-project-hygiene.js`: +21 assertions across two new
+  sections — no-preview refusal, same-request retry refusal, the next
+  request going through, an explicit preview + delete pair, plan drift
+  and its re-preview, the comp-scope refusal naming the comp, an empty
+  keepComps NOT counting as a scope, reduce_project's comp/comps aliases
+  surviving, and a layer scope refused even there. One PRE-EXISTING
+  assertion moved: the "already-clean project" case previewed
+  remove_unused_footage and then executed consolidate_footage, which the
+  gate correctly refuses — it now previews the action it runs, and the
+  cross-action refusal is pinned as its own check.
+- `tests/test-self-test.js`: its canned host now models the comp-scope
+  refusal too. It caught the new suite step on the first sweep — a
+  canned host that ACCEPTS a comp-scoped call would let the step pass
+  while the real tool ignored the argument and deleted project-wide,
+  which is the same faithfulness rule the other 89 refusals follow.
+- Full stub sweep: **66/67**, the odd one out the known environmental
+  `tests/test-comfy-backend.js` (Comfy-Desktop models dir on this
+  machine, none in CI — unchanged, still not mine).
+- `tests/test-es3-ternary.js` green: the new code uses if/else rather
+  than nested conditionals throughout.
+- Prompt budget paid: full 58,969 -> 58,971 chars (+2, i.e. net zero).
+  The gate and the no-scope rule were added to the clean_project doc and
+  paid for by cutting "It also names the render-queue items and the
+  expressions that would break silently" — which the tool's own result
+  already says, in `renderQueueNote` and `expressionNote`. Compact form
+  unchanged at 39,179.
+
+### The one thing real AE is deliberately NOT asked
+
+The new suite step covers the comp-scope refusal only, on a call whose
+dryRun is at its default. The other half — that a dryRun:false with no
+preview behind it is refused — cannot be asked in the suite: the suite
+runs inside whatever project the user has open, so if the gate ever
+regressed, the step written to prove it works would delete the user's own
+unused footage. That half lives in `tests/test-project-hygiene.js`
+against a stub. The comment in selftest.js says so, at the step.
+
+### Two observations from the same run, neither caused by this pass
+
+- **The panel's `comfyUrl` says `http://127.0.0.1:8188` and the only
+  ComfyUI on this machine is answering on 8000.** Steps 12-14 failed on
+  exactly the trap WORKPLAN 7b warns about ("a night lost to the wrong
+  port is a night lost"). The four earlier runs tonight passed those
+  steps, so something moved between 06:22 and 06:44; nothing in this
+  pass touches settings. Check
+  `%APPDATA%\AE-Llama\settings.json` before any Comfy work.
+- **One bad name in step 2 poisons six later steps.** The round-2
+  rollback/retry left the squares named `Red Square` +
+  `Red Square 1..8`, so every later "the nine squares" step addressed
+  eight of them and steps 7, 8, 9, 17, 21 and 28 all failed with an
+  "8 of 9" verdict. Run score 18/29 against 27-28/29 earlier tonight,
+  and every one of the extra failures traces to that single naming
+  accident or to the port above — none to clean_project. This is the
+  concrete case for WORKPLAN section 8's "per-variant history + comp
+  reset" prerequisite: today one unlucky round contaminates a third of
+  the suite, which makes the probe a poor regression detector for
+  anything but the step under test.
+
+### Bumped: 0.11.6 -> 0.11.7
+
+`extension/` changed (hostscript.jsx, tools.js, selftest.js), and the fix
+is verified in real AE, so it bumps.
+
+### Filed for later passes, in priority order
+
+1. **`organize_project` has the same preview-shaped advice and no gate.**
+   It fired beside clean_project in the 06-22 run. It MOVES rather than
+   deletes, so it is a smaller harm and a separate pass — but it is now
+   the odd one out.
+2. **The chat probe's shared history/comp make it contaminating** (see
+   above) — WORKPLAN 8's first bullet, now with a measured example.
+3. **`comfyUrl` is 8188, ComfyUI is on 8000** (above) — one settings
+   line, but it belongs to whoever runs the next Comfy item.
+4. **Ask the SERVER for the two numbers** (`POST /tokenize`, `GET
+   /props`) — unchanged, still no live symptom.
+5. **`add_mask` accepts bounds that miss the layer entirely and reports
+   ok** (unchanged; step 19 failed on it again tonight, with
+   `[[0,0,1920,540]]` on a 100x100 layer).
+6. **The harness cannot answer "Crash Repair Options"** (unchanged;
+   `scripts/lib/ae-dialog-triage.ps1`).
+7. **`starved` may now be too generous a word** (unchanged).
+8. **delete_mask could warn when an expression still points at the mask**
+   (unchanged).
+9. **A controller GROUP has never been measured**, nor any locale but
+   en_US (unchanged).
+10. **`capParams` is a second, independent roster inside the same
+    .mogrt** (unchanged).
+11. **Still owed, needs a human awake:** drop
+    `logs\mogrt-verify\AELL Probe Card.mogrt` into real Premiere
+    (harness plan step 6).
+
+Nothing was left unattempted this pass.

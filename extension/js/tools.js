@@ -105,11 +105,12 @@
             "'reduce_project' (delete EVERYTHING the comps in keepComps " +
             "do not need). dryRun is TRUE by default and returns the " +
             "list of what would go — show the user, especially the parts " +
-            "they did not ask about, then call again with dryRun:false. " +
+            "they did not ask about. The delete is REFUSED until that " +
+            "list was shown in an EARLIER reply. A comp or layer " +
+            "argument is refused, never ignored. " +
             "reduce_project refuses to run without keepComps, and refuses " +
             "a keepComps entry that is not a comp (AE would delete every " +
-            "comp in the project). It also names the render-queue items " +
-            "and the expressions that would break silently. PROJECT PANEL " +
+            "comp in the project). PROJECT PANEL " +
             "only ('clean up this comp' is never this tool).",
       args: "{action: 'remove_unused_footage'|'consolidate_footage'|" +
             "'reduce_project', keepComps?: [string] (reduce_project " +
