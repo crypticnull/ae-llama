@@ -13699,3 +13699,36 @@ Nothing else was left unattempted this pass. Nothing is blocked.
   read the plan was built on was true in April and stale by June, when
   Adobe's AI Assistant beta landed, so no "Adobe does not do X" phrase
   may ship until the owner fills that table from their own install.
+
+## 2026-09-02 (remote session) — shape A did not load; default switched
+
+- FIRST FIELD RUN of the probe. `install-probe.ps1` reported a clean
+  install (PlayerDebugMode already 1 on CSXS.10/11/12, junction made)
+  and the panel was NOT in After Effects' Window > Extensions.
+- That is a bug in what shipped, not a measurement of Adobe. Shape A
+  (per-extension `HostList`) was documented by Adobe and had ZERO field
+  evidence; every shipped multi-host manifest anyone found uses shape B.
+  Defaulting the probe to the unverified shape was a guess, and it cost
+  the owner a round trip. Two sessions in a row have now framed a
+  self-inflicted failure as "a real result" — the owner called it, and
+  the ledger entry says plainly what is and is not established.
+- Changed: shape B is now `manifest.xml` and the `install-probe.ps1`
+  default; shape A stays in `manifest-shape-a.xml` for a deliberate
+  re-test once the probe is known to work. `-Shape A` prints a warning.
+- Changed: install-probe.ps1 now reads the menu label back OUT of the
+  manifest it just installed instead of printing an assumed one. Its
+  first version told the owner to look for "AE Llama P0 Probe (AE)"
+  under a shape whose menu string was different, which is the least
+  useful possible instruction.
+- NEW `scripts/probe-doctor.ps1` — read-only. Separates the six causes
+  that look identical from the Extensions menu (not pulled, not
+  installed, junction wrong, manifest rejected, PlayerDebugMode unset,
+  host not restarted), validates the manifest as XML, lists what else
+  is in the CEP folder as a control (the panel itself loads from there),
+  and prints what CEP logged about our bundle ids. Section 6 is the only
+  thing that settles WHY shape A was dropped: a malformed manifest and a
+  rejected-but-valid one look identical from the menu, and that has not
+  been read yet.
+- `tests/test-probe-bundle.js` now pins shape B as the default and the
+  install script's default flag. Harness 68/70 (the two known
+  Windows-only suites). No `extension/` change, so NO BUMP.

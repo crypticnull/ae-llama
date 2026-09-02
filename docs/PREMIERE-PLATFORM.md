@@ -91,7 +91,34 @@ a native gap.
 
 ## 4. Measured results
 
-Nothing yet. P0 writes into `%APPDATA%\AE-Llama\probes\`:
+### 2026-09-02 — shape A did not list in After Effects
+
+First install on the owner's machine. `install-probe.ps1` reported a
+clean run: PlayerDebugMode already 1 on CSXS.10/11/12 (CSXS.9 present at
+0; 13/14 created by the script), junction created from
+`%APPDATA%\Adobe\CEP\extensions\com.cptk.aellama.probe` to the repo,
+shape A manifest in place. After a full After Effects restart the panel
+was **not** in `Window > Extensions`.
+
+What that does and does not establish:
+
+- It **does** establish that shape A as written here does not load in
+  AE 2026 on a machine where the AE Llama panel itself loads from the
+  same folder. Shape A is now not the default.
+- It does **not** establish that Adobe's per-extension `HostList` is
+  unsupported. The cause has not been read out of CEP's own log yet, and
+  a malformed manifest and a rejected-but-valid one look identical from
+  the menu. `scripts\probe-doctor.ps1` section 6 is what settles it.
+
+Shape A was documented by Adobe and had **zero** field evidence behind
+it; every shipped multi-host manifest anyone found uses shape B.
+Defaulting to it was a guess, and the guess cost a round trip. Shape B
+is the default from this date; shape A stays in `manifest-shape-a.xml`
+for a deliberate re-test once the probe is known to work.
+
+### The rest
+
+Not yet run. P0 writes into `%APPDATA%\AE-Llama\probes\`:
 
 | File | Written by |
 |---|---|
@@ -102,6 +129,12 @@ Nothing yet. P0 writes into `%APPDATA%\AE-Llama\probes\`:
 | `door2-cli.json` | door 2 |
 | `job.json` / `job-result.json` | door 3 |
 | `premiere-window-census.txt` | `ppro-door-probe.ps1 -Census` |
+
+When a panel does not appear in a host's `Window > Extensions`, run
+`scripts\probe-doctor.ps1` before changing anything. It separates the
+six causes that look identical from the menu — not pulled, not
+installed, junction wrong, manifest rejected, PlayerDebugMode unset,
+host not restarted — and prints what CEP itself logged.
 
 Grade them with:
 

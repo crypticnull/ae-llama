@@ -26,8 +26,13 @@
 
 [CmdletBinding()]
 param(
+    # B is the default because it is the only shape with field evidence:
+    # every shipped multi-host CEP manifest found in the wild uses one
+    # HostList on one extension. Shape A (per-extension HostList) is
+    # documented by Adobe and DID NOT LIST in After Effects on the
+    # owner's machine 2026-09-02 -- see docs\PREMIERE-PLATFORM.md.
     [ValidateSet('A', 'B')]
-    [string]$Shape = 'A',
+    [string]$Shape = 'B',
     [switch]$Harness,
     [switch]$Uninstall
 )
@@ -124,7 +129,23 @@ if ($Shape -eq 'B') {
 } else {
     Copy-Item $shapeAPath $manifestPath -Force
     Write-Host 'Manifest shape A in place (two Extensions, per-extension HostList).'
+    Write-Host 'NOTE: shape A did not list in After Effects on 2026-09-02.' -ForegroundColor Yellow
+    Write-Host 'Use it only to re-test that; -Shape B is the working default.' -ForegroundColor Yellow
 }
+
+# Read the menu labels back OUT of the manifest just installed, rather
+# than printing what the shape is assumed to use. The first version of
+# this script told the owner to look for a menu name its own manifest
+# did not contain, which is the least helpful possible instruction.
+$menus = @()
+try {
+    $xmlDoc = [xml](Get-Content -Raw $manifestPath)
+    foreach ($node in $xmlDoc.SelectNodes('//Menu')) { $menus += $node.InnerText }
+} catch {
+    Write-Host "Could not read the menu name back: $($_.Exception.Message)"
+}
+$menuText = if ($menus.Count -gt 0) { '"' + ($menus -join '" / "') + '"' }
+            else { '(no <Menu> in the manifest - it will not be listed)' }
 
 # ----------------------------------------------------- 3. the junctions
 New-Item -ItemType Directory -Force -Path $extDir | Out-Null
@@ -144,16 +165,16 @@ if ($Harness) {
 }
 
 Write-Host ''
-Write-Host 'Installed. Next steps:' -ForegroundColor Green
+Write-Host ("Installed shape " + $Shape + '. Next steps:') -ForegroundColor Green
 Write-Host '  1. Fully quit After Effects AND Premiere (CEP reads extensions at launch).'
-Write-Host '  2. Start After Effects. Window > Extensions > "AE Llama P0 Probe"'
-Write-Host '     (shape A) or "AE Llama P0 Probe" (shape B). Press "Run all'
-Write-Host '     read-only probes", then "Engine soak".'
+Write-Host ('  2. Start After Effects. Window > Extensions > ' + $menuText)
+Write-Host '     Press "Run all read-only probes", then "Engine soak".'
 Write-Host '  3. Start Premiere. Same menu, same two buttons.'
 Write-Host '     Opening AE FIRST matters: the localStorage question is'
 Write-Host '     answered by whether Premiere can see the key AE wrote.'
-Write-Host '  4. Both write into' $probeData
+Write-Host ('  4. Both write into ' + $probeData)
 Write-Host '  5. Then: node scripts\ppro-probe-report.js'
 Write-Host ''
-Write-Host 'If the panel is NOT listed in a host, that is a result, not a'
-Write-Host 'failure - run scripts\ppro-probe-report.js and it will say so.'
+Write-Host 'If it is NOT in that menu after a FULL restart, run:'
+Write-Host '  powershell -ExecutionPolicy Bypass -File scripts\probe-doctor.ps1'
+Write-Host 'It reads CEP''s own log and says which of the six causes it was.'

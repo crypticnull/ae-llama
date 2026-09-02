@@ -160,7 +160,7 @@ function hostsIn(xml) {
 }
 
 {
-  const a = stripXml(read(path.join(PROBE, "CSXS", "manifest.xml")));
+  const a = stripXml(read(path.join(PROBE, "CSXS", "manifest-shape-a.xml")));
   const b = stripXml(read(path.join(PROBE, "CSXS", "manifest-shape-b.xml")));
 
   assert((a.match(/<HostList>/g) || []).length >= 2,
@@ -182,13 +182,21 @@ function hostsIn(xml) {
          "file directly");
 
   // CEP demands the active file be CSXS\manifest.xml, so install-probe.ps1
-  // overwrites it to switch shapes. Both shapes are committed beside it
-  // and manifest.xml starts as shape A, so -Shape A restores byte for
-  // byte and a dirty manifest.xml means a shape-B install is still on.
-  const pristineA = read(path.join(PROBE, "CSXS", "manifest-shape-a.xml"));
-  assert(pristineA === read(path.join(PROBE, "CSXS", "manifest.xml")),
-         "manifest.xml is byte-identical to the committed shape-A copy " +
-         "(if this fails, a -Shape B install is still in place)");
+  // overwrites it to switch shapes. Both shapes are committed beside it.
+  //
+  // The DEFAULT is shape B, and it is the default because of a measured
+  // failure: shape A -- the per-extension HostList form -- did not list
+  // in After Effects on the owner's machine (2026-09-02), with the
+  // junction correct and PlayerDebugMode=1 on CSXS.12. Shape A was
+  // documented by Adobe and had zero field evidence; shipping it as the
+  // default was a guess dressed as a design choice.
+  assert(read(path.join(PROBE, "CSXS", "manifest-shape-b.xml")) ===
+         read(path.join(PROBE, "CSXS", "manifest.xml")),
+         "manifest.xml is byte-identical to shape B, the default that " +
+         "actually loads (if this fails, a -Shape A install is still on)");
+  const install = read(path.join(ROOT, "scripts", "install-probe.ps1"));
+  assert(/\[string\]\$Shape = 'B'/.test(install),
+         "install-probe.ps1 defaults to -Shape B");
 
   const idA = /ExtensionBundleId="([^"]+)"/.exec(a)[1];
   const idB = /ExtensionBundleId="([^"]+)"/.exec(b)[1];
