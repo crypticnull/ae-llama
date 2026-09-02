@@ -2142,8 +2142,17 @@ version bump — nothing here ships.**
 
 ## 12b. DRIVE THE PREMIERE P0 PROBE TO GREEN (loop item, owner-approved)
 
-**This is the highest-priority item for the overnight loop until it is
-done.** Take it before anything else in this file.
+**ALTERNATE with the rest of the backlog. Never two Premiere passes in
+a row.**
+
+Read `docs/WORKPLAN-LOG.md` first, as always. If the LAST entry was a
+12b pass, skip this section this pass and take the next normal item
+instead. If it was anything else, take 12b. That gives roughly half the
+night to Premiere and half to the AE product, which is the actual
+priority: AE is the shipping product and Premiere is an unfunded probe.
+
+A Premiere pass launches and closes Premiere and takes ~5 minutes, so
+it is not free; that is the other reason not to run them back to back.
 
 Everything needed already works unattended: `run-ppro-probe.ps1`
 launches Premiere, the invisible door-3 runner claims the job with

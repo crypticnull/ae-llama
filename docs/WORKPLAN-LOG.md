@@ -14099,3 +14099,14 @@ Nothing else was left unattempted this pass. Nothing is blocked.
     blaming the wait for a condition it only observed is the same false
     attribution this project keeps having to correct.
 - Harness 70/72. No `extension/` change, so NO BUMP.
+
+## 2026-09-02 (remote session) — 12b alternates instead of monopolising
+
+- Owner: not dedicating the machine to Premiere for 12 hours. Correct
+  call, and 12b said "take it before anything else in this file", which
+  would have spent the whole night on an unfunded probe while the AE
+  product - the thing that actually ships - sat still.
+- 12b now ALTERNATES: read the log first (which every pass does anyway),
+  and if the last entry was a 12b pass, skip it and take the next normal
+  backlog item. Never two Premiere passes in a row. Roughly half the
+  night each way, with the AE product getting the other half.
