@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!--
+  SHAPE A -- two <Extension> entries, each with its OWN <HostList>.
+
+  This is the shape docs/PREMIERE_PLAN.md recommends for the real panel,
+  because CEP auto-loads ScriptPath in every host an extension lists and
+  the AE hostscript is 11.8k lines of AE DOM. It is also the shape with
+  the LEAST field evidence: Adobe's XSD and the CEP 12 Cookbook document
+  per-extension HostLists, but every shipped multi-host manifest found in
+  the wild uses one HostList with several hosts (shape B). P0 installs
+  both and lets the machine decide.
+
+  This bundle is a THROWAWAY. It has its own ExtensionBundleId so it can
+  never collide with com.cptk.aellama, and it lives outside extension/ so
+  scripts/package-zxp.ps1 (which stages extension\ wholesale) cannot ship
+  it. Nothing here is ever signed or published.
+-->
+<ExtensionManifest ExtensionBundleId="com.cptk.aellama.probe"
+                   ExtensionBundleName="AE Llama P0 Probe"
+                   ExtensionBundleVersion="0.0.1"
+                   Version="7.0"
+                   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <ExtensionList>
+    <Extension Id="com.cptk.aellama.probe.aeft" Version="0.0.1"/>
+    <Extension Id="com.cptk.aellama.probe.ppro" Version="0.0.1"/>
+  </ExtensionList>
+  <ExecutionEnvironment>
+    <!-- Deliberately narrow: the per-extension HostLists below override
+         this, and leaving it broad would hide which one CEP honoured. -->
+    <HostList>
+      <Host Name="AEFT" Version="[24.0,99.9]"/>
+    </HostList>
+    <LocaleList>
+      <Locale Code="All"/>
+    </LocaleList>
+    <RequiredRuntimeList>
+      <RequiredRuntime Name="CSXS" Version="11.0"/>
+    </RequiredRuntimeList>
+  </ExecutionEnvironment>
+  <DispatchInfoList>
+    <Extension Id="com.cptk.aellama.probe.aeft">
+      <HostList>
+        <Host Name="AEFT" Version="[24.0,99.9]"/>
+      </HostList>
+      <DispatchInfo>
+        <Resources>
+          <MainPath>./index.html</MainPath>
+          <ScriptPath>./jsx/probe.jsx</ScriptPath>
+          <CEFCommandLine>
+            <Parameter>--enable-nodejs</Parameter>
+            <Parameter>--mixed-context</Parameter>
+          </CEFCommandLine>
+        </Resources>
+        <Lifecycle>
+          <AutoVisible>true</AutoVisible>
+        </Lifecycle>
+        <UI>
+          <Type>Panel</Type>
+          <Menu>AE Llama P0 Probe (AE)</Menu>
+          <Geometry>
+            <Size>
+              <Height>700</Height>
+              <Width>560</Width>
+            </Size>
+            <MinSize>
+              <Height>320</Height>
+              <Width>320</Width>
+            </MinSize>
+          </Geometry>
+        </UI>
+      </DispatchInfo>
+    </Extension>
+    <Extension Id="com.cptk.aellama.probe.ppro">
+      <HostList>
+        <!-- Premiere Pro 25.0+ is CEP 12 per Adobe's own host table.
+             Deliberately open-ended so a 27.x beta is covered. -->
+        <Host Name="PPRO" Version="[25.0,99.9]"/>
+      </HostList>
+      <DispatchInfo>
+        <Resources>
+          <MainPath>./index.html</MainPath>
+          <ScriptPath>./jsx/probe.jsx</ScriptPath>
+          <CEFCommandLine>
+            <Parameter>--enable-nodejs</Parameter>
+            <Parameter>--mixed-context</Parameter>
+          </CEFCommandLine>
+        </Resources>
+        <Lifecycle>
+          <AutoVisible>true</AutoVisible>
+        </Lifecycle>
+        <UI>
+          <Type>Panel</Type>
+          <Menu>AE Llama P0 Probe (Premiere)</Menu>
+          <Geometry>
+            <Size>
+              <Height>700</Height>
+              <Width>560</Width>
+            </Size>
+            <MinSize>
+              <Height>320</Height>
+              <Width>320</Width>
+            </MinSize>
+          </Geometry>
+        </UI>
+      </DispatchInfo>
+    </Extension>
+  </DispatchInfoList>
+</ExtensionManifest>

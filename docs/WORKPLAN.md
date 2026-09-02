@@ -2076,24 +2076,69 @@ supported "through September 2026" and CEP "for a calendar year" after
 the CEP surface is a bridge: probe first, MVP on the dev junction
 only, UXP decided on a date.
 
-**Nothing here starts until the owner answers decision 1 in the plan
-(§6).** An unattended pass that reaches this section appends "12:
-waiting on owner" to the log and moves on. When approved, P0 is:
+**P0 is APPROVED (owner, 2026-09-02) and its scripts are written. P1
+and beyond are NOT approved** — an unattended pass that finishes P0
+appends the results and stops; it does not start P1.
 
-- Remote writes: `probe/com.cptk.aellama.probe/` (throwaway bundle
-  outside `extension/`, AEFT+PPRO, ~40-line jsx, one html page),
-  `scripts/install-probe.ps1`, `scripts/ppro-door-probe.ps1`, the
-  MOGRT acceptance read-back, the `bump-version.js` global-regex fix
-  + fixture test, `ZXPSignCmd -verify` in packaging and CI.
-- Local runs, owner clicks: install via junction, signed ZXP AND the
-  aescripts installer; Premiere 27.0 beta same probe; window census;
-  the three headless doors, 1-day timebox each; export a transcript as
-  TXT/CSV/SRT; record what the Premiere AI Assistant does on this
-  install. Results land in `%APPDATA%\AE-Llama\probes\*.json` and are
-  committed under `docs/measured/`.
-- Exit: Gate G0 in the plan; facts into CLAUDE.md and
-  `docs/PREMIERE-PLATFORM.md`; section 11 closed with its answer.
-  No version bump (nothing ships).
+### P0 — what exists now (remote side DONE)
+
+- `probe/com.cptk.aellama.probe/` — throwaway bundle, own bundle id,
+  OUTSIDE `extension/` so CI can never publish it. Shape A manifest
+  (two `<Extension>`, per-extension `HostList`) plus
+  `manifest-shape-b.xml` (one extension, both hosts, loader
+  `ScriptPath`). `jsx/probe.jsx` is the ES3 half; `index.html` is the
+  page, which shims CEP itself and loads nothing from `extension/`.
+- `probe/com.cptk.aellama.harness/` — door 3's invisible runner.
+  DEV-ONLY, never packaged; claims a job file before running it because
+  `StartOn` fires on every OS focus gain.
+- `scripts/install-probe.ps1` — CSXS key snapshot (a measurement in
+  itself) + PlayerDebugMode 10–14 + the junction. `-Shape A|B`,
+  `-Harness`, `-Uninstall`.
+- `scripts/ppro-door-probe.ps1` — all three doors, with
+  `ppro-door-bridgetalk.jsx` (door 1) and `ppro-door-cli.jsx` (door 2).
+  Exit 0 a door answered, 3 every door measured dead, 4 nothing
+  measured.
+- `scripts/ppro-probe-report.js` — the grader. MEASURED / MISSING /
+  FAILED per row; G0 passes only on MEASURED rows.
+- `scripts/ae-window-census.ps1 -ProcessName` — census Premiere too.
+- `scripts/bump-version.js` — global regex + every `<Extension>`
+  asserted (`tests/test-bump-version.js` reproduces the old bug).
+- `ZXPSignCmd -verify` in `package-zxp.ps1` and as its own CI step.
+- `tests/test-probe-bundle.js` — the probe can never ship, never
+  depends on the panel, both shapes are what they claim, both inline
+  page scripts parse, and MISSING never grades as a pass.
+
+### P0 — what the owner runs (in order)
+
+Plain PowerShell in the repo root. Not the Claude CLI.
+
+1. `powershell -ExecutionPolicy Bypass -File scripts\install-probe.ps1`
+2. Quit AE and Premiere completely. Start **After Effects** first,
+   open `Window > Extensions > AE Llama P0 Probe (AE)`, press "Run all
+   read-only probes", then "Engine soak".
+3. Start **Premiere**, same menu, same two buttons. (AE first is what
+   answers the localStorage question.)
+4. `powershell -ExecutionPolicy Bypass -File scripts\ppro-door-probe.ps1 -Census`
+   — add `-AllowAdminWrite` (elevated shell) for door 2 and
+   `-ClosePremiere` if it may quit Premiere for doors 2 and 3.
+5. `node scripts\ppro-probe-report.js`
+6. Repeat 1–3 with `-Shape B`, then with the signed ZXP
+   (`package-zxp.ps1` → `install-zxp.ps1`) and **the aescripts
+   installer** — that last path is mandatory, it is the only one
+   testers use.
+7. Install the Premiere 27.0 beta and repeat step 3 there.
+8. MOGRT: with a scratch sequence open in Premiere, press "MUTATES:
+   MOGRT accept read-back" and give it
+   `logs\mogrt-verify\AELL Probe Card.mogrt`.
+9. Export one transcript as TXT, CSV and SRT; open the Premiere AI
+   Assistant and record what it does, refuses, uploads and charges.
+
+### P0 — exit
+
+Gate G0 in `docs/PREMIERE_PLAN.md`. Commit the probe JSONs under
+`docs/measured/`, fill `docs/PREMIERE-PLATFORM.md` sections 2 and 4,
+add the facts to CLAUDE.md, close section 11 with its answer. **No
+version bump — nothing here ships.**
 
 ## Out of scope for the local session (remote builds these)
 

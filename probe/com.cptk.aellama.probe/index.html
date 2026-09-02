@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>AE Llama P0 Probe</title>
+<style>
+  body { background:#232323; color:#d8d8d8; font:12px/1.45 "Segoe UI",sans-serif;
+         margin:0; padding:12px; }
+  h1 { font-size:14px; margin:0 0 2px; color:#fff; }
+  .sub { color:#8a8a8a; margin:0 0 10px; }
+  button { background:#3a3a3a; color:#e8e8e8; border:1px solid #555;
+           border-radius:3px; padding:5px 9px; margin:0 4px 4px 0;
+           cursor:pointer; font-size:12px; }
+  button:hover { background:#484848; }
+  button.warn { border-color:#8a6a2a; }
+  #out { white-space:pre-wrap; font-family:Consolas,monospace; font-size:11px;
+         background:#1b1b1b; border:1px solid #3a3a3a; border-radius:3px;
+         padding:8px; margin-top:8px; max-height:60vh; overflow:auto; }
+  .row { margin-bottom:6px; }
+  .ok { color:#7ec97e; } .bad { color:#e08a8a; } .warnc { color:#e0c07a; }
+</style>
+</head>
+<body>
+<h1>AE Llama P0 probe</h1>
+<p class="sub">Throwaway bundle. Nothing here is signed, published or part
+of the panel. Read-only unless you press a button marked MUTATES.</p>
+
+<div class="row">
+  <button id="b-run">Run all read-only probes</button>
+  <button id="b-soak">Engine soak (500 round-trips)</button>
+  <button id="b-save">Save JSON</button>
+  <button id="b-copy">Copy</button>
+</div>
+<div class="row">
+  <button id="b-history" class="warn">MUTATES: History granularity</button>
+  <button id="b-mogrt" class="warn">MUTATES: MOGRT accept read-back</button>
+</div>
+
+<div id="out">Press "Run all read-only probes".</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---------------------------------------------------------- CEP shims
+  // Deliberately not the panel's cep-bridge.js: this page has to work
+  // even in a host where the panel's assumptions are wrong.
+  function core() { return window.__adobe_cep__ || null; }
+
+  function nodeRequire(name) {
+    if (window.cep_node && typeof window.cep_node.require === "function") {
+      return window.cep_node.require(name);
+    }
+    if (typeof window.require === "function") { return window.require(name); }
+    throw new Error("no Node in this CEP context");
+  }
+
+  function evalScript(src, cb) {
+    var c = core();
+    if (!c) { cb("EvalScript error.", true); return; }
+    c.evalScript(src, function (r) { cb(r, r === "EvalScript error."); });
+  }
+
+  /** AELLP_call through evalScript, parsed. cb(err, data). */
+  function probe(name, args, cb) {
+    var argsJson = JSON.stringify(args || {});
+    var literal = JSON.stringify(argsJson);   // a JS string literal
+    evalScript('AELLP_call("' + name + '", ' + literal + ')',
+      function (raw, isErr) {
+        if (isErr) { cb("evalScript failed: " + raw); return; }
+        var parsed;
+        try { parsed = JSON.parse(raw); }
+        catch (e) { cb("unparseable reply: " + String(raw).slice(0, 400)); return; }
+        if (!parsed.ok) { cb(parsed.error); return; }
+        cb(null, parsed.data);
+      });
+  }
+
+  function extPath() {
+    var c = core();
+    if (!c) { return ""; }
+    var p = c.getSystemPath("extension");
+    try { p = decodeURI(p); } catch (e) {}
+    if (navigator.platform.indexOf("Win") === 0) {
+      p = p.replace(/^file:\/\/\//, "");
+    } else {
+      p = p.replace(/^file:\/\//, "");
+    }
+    return p.replace(/[\\\/]+$/, "");
+  }
+
+  // ------------------------------------------------------------- state
+  var results = { takenAt: new Date().toISOString(), shape: null };
+  var out = document.getElementById("out");
+
+  function render() {
+    out.textContent = JSON.stringify(results, null, 2);
+  }
+  function note(msg) {
+    out.textContent = msg + "\n\n" + JSON.stringify(results, null, 2);
+  }
+
+  function hostEnv() {
+    var c = core();
+    if (!c) { return null; }
+    try { return JSON.parse(c.getHostEnvironment()); }
+    catch (e) { return { parseError: String(e) }; }
+  }
+
+  // ------------------------------------------------- panel-side facts
+  function panelFacts() {
+    var d = {};
+    var c = core();
+    d.cepPresent = !!c;
+    var env = hostEnv();
+    d.hostEnvironment = env;
+    // The one string host.js will branch on. Expected "AEFT"/"PPRO";
+    // anything else is a finding, not a default.
+    d.appName = env ? env.appName : null;
+    d.appVersion = env ? env.appVersion : null;
+    d.appLocale = env ? env.appLocale : null;
+    d.cepApiVersion = null;
+    try {
+      if (c && typeof c.getCurrentApiVersion === "function") {
+        d.cepApiVersion = JSON.parse(c.getCurrentApiVersion());
+      }
+    } catch (e) { d.cepApiVersion = "throws: " + String(e); }
+    d.extensionPath = extPath();
+    d.userAgent = navigator.userAgent;
+
+    // Node: everything the panel does (llama-server, ComfyUI, ffmpeg,
+    // settings mirror) rests on these three being requirable.
+    d.node = {};
+    ["fs", "path", "http", "child_process", "os", "process"].forEach(
+      function (m) {
+        try { d.node[m] = !!nodeRequire(m); }
+        catch (e) { d.node[m] = "throws: " + String(e.message || e); }
+      });
+    try {
+      var proc = nodeRequire("process");
+      d.nodeVersion = proc.versions ? proc.versions.node : null;
+      d.appdata = proc.env.APPDATA || "";
+      d.localappdata = proc.env.LOCALAPPDATA || "";
+    } catch (e2) { d.nodeVersion = "throws: " + String(e2.message || e2); }
+
+    // cep.fs is what the panel's file picker uses.
+    d.cepFs = !!(window.cep && window.cep.fs &&
+                 window.cep.fs.showOpenDialogEx);
+    return d;
+  }
+
+  /*
+   * localStorage scoping across hosts. If CEP shares storage per
+   * extension id, opening the Premiere panel would let one panel's
+   * orphan reaper kill the other's llama-server; if it is per host,
+   * neither can see the other's PID record. Each host stamps its own
+   * key on load; seeing the OTHER host's key is the answer.
+   */
+  function storageProbe(appName) {
+    var d = { wroteKey: null, sawOtherHost: null, keys: [] };
+    var mine = "aell.probe." + (appName || "unknown");
+    try {
+      localStorage.setItem(mine, new Date().toISOString());
+      d.wroteKey = mine;
+      var i, k;
+      for (i = 0; i < localStorage.length; i++) {
+        k = localStorage.key(i);
+        if (k && k.indexOf("aell.") === 0) {
+          d.keys.push({ key: k, value: localStorage.getItem(k) });
+        }
+      }
+      d.sawOtherHost = false;
+      for (i = 0; i < d.keys.length; i++) {
+        if (d.keys[i].key !== mine) { d.sawOtherHost = true; }
+      }
+      d.note = d.sawOtherHost
+        ? "SHARED across hosts (this panel can see another host's key)"
+        : "no other host's key visible -- either per-host storage, or " +
+          "the other panel has not been opened yet. Open the OTHER " +
+          "host's probe panel first, then re-run this one.";
+    } catch (e) {
+      d.error = String(e.message || e);
+    }
+    return d;
+  }
+
+  // ---------------------------------------------------------- the runs
+  function runReadOnly() {
+    note("running...");
+    results.takenAt = new Date().toISOString();
+    results.panel = panelFacts();
+    results.storage = storageProbe(results.panel.appName);
+    results.shape = shapeInUse();
+
+    probe("ping", {}, function (err, data) {
+      results.evalScript = err ? { ok: false, error: err }
+                               : { ok: true, ping: data };
+      probe("hostFacts", {}, function (err2, facts) {
+        results.hostFacts = err2 ? { error: err2 } : facts;
+        probe("qeProbe", {}, function (err3, qe) {
+          results.qe = err3 ? { error: err3 } : qe;
+          // Loader marker only exists under manifest shape B.
+          evalScript("String($.global.AELLP_LOADER)", function (raw) {
+            results.loaderMarker = (raw && raw !== "undefined") ? raw : null;
+            render();
+            autoSave();
+          });
+        });
+      });
+    });
+  }
+
+  /** Which manifest shape is installed, read from the manifest itself. */
+  function shapeInUse() {
+    try {
+      var fs = nodeRequire("fs");
+      var p = extPath() + "/CSXS/manifest.xml";
+      var xml = fs.readFileSync(p, "utf8");
+      var extensions = (xml.match(/<Extension\s+Id=/g) || []).length;
+      var hostLists = (xml.match(/<HostList>/g) || []).length;
+      return { extensionEntries: extensions, hostLists: hostLists,
+               guess: (hostLists > 1 ? "A (per-extension HostList)"
+                                     : "B (one HostList, loader)") };
+    } catch (e) {
+      return { error: String(e.message || e) };
+    }
+  }
+
+  /*
+   * Engine soak. A third party measured a long-lived Premiere
+   * ExtendScript engine degrading into "InternalError: Stack overrun",
+   * after which every call dies opaquely. The panel would hit that in a
+   * long session; better to hit it here, with a count.
+   */
+  function runSoak() {
+    var total = 500;
+    var done = 0, failedAt = null, started = Date.now();
+    note("soaking: 0/" + total);
+    function step() {
+      if (done >= total || failedAt !== null) {
+        results.soak = {
+          rounds: done, total: total, failedAt: failedAt,
+          ms: Date.now() - started,
+          verdict: failedAt === null
+            ? "survived " + total + " round-trips"
+            : "DEGRADED at round " + failedAt
+        };
+        render();
+        autoSave();
+        return;
+      }
+      probe("echo", { round: done + 1, pad: 2000 }, function (err, data) {
+        if (err || !data || data.pad !== 2000) {
+          failedAt = done + 1;
+          results.soakError = err || "short payload";
+        } else {
+          done++;
+          if (done % 25 === 0) { note("soaking: " + done + "/" + total); }
+        }
+        setTimeout(step, 0);
+      });
+    }
+    step();
+  }
+
+  // ------------------------------------------------------------- saving
+  function probeDir() {
+    var proc = nodeRequire("process");
+    var path = nodeRequire("path");
+    var base = proc.env.APPDATA || proc.env.USERPROFILE || extPath();
+    return path.join(base, "AE-Llama", "probes");
+  }
+
+  function save() {
+    try {
+      var fs = nodeRequire("fs");
+      var path = nodeRequire("path");
+      var dir = probeDir();
+      if (!fs.existsSync(dir)) { fs.mkdirSync(dir, { recursive: true }); }
+      var host = (results.panel && results.panel.appName) || "unknown";
+      var file = path.join(dir, "runtime-" + host + ".json");
+      fs.writeFileSync(file, JSON.stringify(results, null, 2), "utf8");
+      return file;
+    } catch (e) {
+      return "FAILED: " + String(e.message || e);
+    }
+  }
+
+  function autoSave() {
+    var where = save();
+    results.savedTo = where;
+    note("saved to " + where);
+  }
+
+  // -------------------------------------------------------------- wiring
+  document.getElementById("b-run").addEventListener("click", runReadOnly);
+  document.getElementById("b-soak").addEventListener("click", runSoak);
+  document.getElementById("b-save").addEventListener("click", function () {
+    note("saved to " + save());
+  });
+  document.getElementById("b-copy").addEventListener("click", function () {
+    var ta = document.createElement("textarea");
+    ta.value = JSON.stringify(results, null, 2);
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand("copy"); } catch (e) {}
+    document.body.removeChild(ta);
+    note("copied to clipboard");
+  });
+
+  document.getElementById("b-history").addEventListener("click", function () {
+    if (!window.confirm(
+      "MUTATES the open project: creates three bins named 'AELL PROBE 1..3'.\n\n" +
+      "Only run this on a scratch project. Continue?")) { return; }
+    probe("historyProbe", { allowMutate: true }, function (err, data) {
+      results.history = err ? { error: err } : data;
+      render();
+      autoSave();
+    });
+  });
+
+  document.getElementById("b-mogrt").addEventListener("click", function () {
+    var p = window.prompt(
+      "Absolute path to a .mogrt exported by the AE panel:",
+      (results.mogrtPath || ""));
+    if (!p) { return; }
+    if (!window.confirm(
+      "MUTATES the active sequence: imports that graphic onto V1 at 0.\n\n" +
+      "Only run this on a scratch sequence. Continue?")) { return; }
+    results.mogrtPath = p;
+    probe("mogrtAccept", { allowMutate: true, path: p, videoTrack: 0 },
+      function (err, data) {
+        results.mogrtAccept = err ? { error: err } : data;
+        render();
+        autoSave();
+      });
+  });
+
+  // First paint: enough to tell whether the panel even reached a host.
+  results.panel = panelFacts();
+  results.storage = storageProbe(results.panel.appName);
+  render();
+})();
+</script>
+</body>
+</html>

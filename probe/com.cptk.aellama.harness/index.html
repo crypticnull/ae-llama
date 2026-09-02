@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>AE Llama harness runner</title></head>
+<body>
+<script>
+/*
+ * Door 3's runner. Invisible, dev-only, and deliberately dumb:
+ *
+ *   1. Look for <dataRoot>/probes/job.json.
+ *   2. If it is there, RENAME IT AWAY FIRST, then do the work. The
+ *      StartOn event fires on every OS focus gain (Adobe's own PProPanel
+ *      manifest says so), so claiming the job before running it is what
+ *      keeps a job from executing five times.
+ *   3. $.evalFile the .jsx the job names, call one probe, write
+ *      job-result.json.
+ *
+ * With no job file it does nothing at all -- no timers, no polling, no
+ * host calls. That is what makes it safe to leave junctioned while the
+ * other doors are measured.
+ */
+(function () {
+  "use strict";
+
+  function nodeRequire(n) {
+    if (window.cep_node && window.cep_node.require) {
+      return window.cep_node.require(n);
+    }
+    return window.require(n);
+  }
+
+  var fs, path, proc;
+  try {
+    fs = nodeRequire("fs");
+    path = nodeRequire("path");
+    proc = nodeRequire("process");
+  } catch (e) { return; }
+
+  var base = proc.env.APPDATA || proc.env.USERPROFILE;
+  if (!base) { return; }
+  var dir = path.join(base, "AE-Llama", "probes");
+  var jobFile = path.join(dir, "job.json");
+  var claimed = path.join(dir, "job.running.json");
+  var resultFile = path.join(dir, "job-result.json");
+
+  function write(file, obj) {
+    try { fs.writeFileSync(file, JSON.stringify(obj, null, 2), "utf8"); }
+    catch (e) {}
+  }
+
+  if (!fs.existsSync(jobFile)) { return; }
+
+  var job;
+  try {
+    // Claim before reading: renameSync is atomic, so a second firing
+    // finds no job file and stops at the check above.
+    fs.renameSync(jobFile, claimed);
+    job = JSON.parse(fs.readFileSync(claimed, "utf8"));
+  } catch (e) {
+    return;
+  }
+
+  var started = new Date().toISOString();
+  var host = null;
+  try {
+    host = JSON.parse(window.__adobe_cep__.getHostEnvironment());
+  } catch (e2) {}
+
+  function finish(extra) {
+    var out = { door: 3, startedAt: started,
+                finishedAt: new Date().toISOString(),
+                host: host, job: job };
+    for (var k in extra) {
+      if (extra.hasOwnProperty(k)) { out[k] = extra[k]; }
+    }
+    write(resultFile, out);
+    try { fs.unlinkSync(claimed); } catch (e3) {}
+  }
+
+  if (!window.__adobe_cep__) { finish({ error: "no CEP core" }); return; }
+
+  var jsx = String(job.probeJsx || "").replace(/\\/g, "/");
+  var loadSrc = jsx ? '$.evalFile(new File("' + jsx + '"))' : '"no jsx"';
+
+  window.__adobe_cep__.evalScript(loadSrc, function () {
+    var name = JSON.stringify(String(job.probe || "ping"));
+    var args = JSON.stringify(JSON.stringify(job.args || {}));
+    window.__adobe_cep__.evalScript(
+      "AELLP_call(" + name + ", " + args + ")",
+      function (raw) {
+        var parsed = null;
+        try { parsed = JSON.parse(raw); } catch (e) {}
+        finish({ raw: String(raw).slice(0, 20000), parsed: parsed,
+                 ok: !!(parsed && parsed.ok) });
+      });
+  });
+})();
+</script>
+</body>
+</html>
