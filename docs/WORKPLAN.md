@@ -233,6 +233,26 @@ one push. One pass per bullet:
   measured room (`Tools.historyBudget(ctx, system.length)`) at 16384
   and at 32768 in the log; if 32768 fits the card with the 32B (the
   arbiter's numbers say), propose raising the T7 default.
+- **MOGRT verifier (harness plan 1, steps 1-3) — DONE 2026-09-02
+  (0.11.5).** Everything in the bullet was run in real AE by the new
+  `scripts/mogrt-verify-probe.js` + `.jsx`, per-claim verdicts in
+  `docs/WORKPLAN-LOG.md`. It found a defect of exactly its own class:
+  the verifier had never opened a file AE wrote, and could not read one
+  — Adobe's `strDB` rows are `{localeString: <locale>, str: <value>}`
+  and the reader had those swapped, so EVERY controller in EVERY real
+  export read back as the string `"en_US"` and the receipt claimed all
+  of them dropped. The hand-built fixtures shared the invented shape, so
+  105 checks agreed with a reader that could not read anything real.
+  Also measured and pinned: the type key is `type` (never the invented
+  `controlType`), and `capsuleName` is always the literal `"Untitled"`
+  — a permanent false warning, replaced by comp-name parity. Fixture
+  committed at `tests/fixtures/ae2026-definition.json`; the independent
+  PowerShell zip check agreed entry for entry. STILL OWED: the ONE
+  manual step, dropping `logs\mogrt-verify\AELL Probe Card.mogrt` into
+  real Premiere (harness plan step 6) — the pin was taken without it on
+  purpose, see the log for why. Also still unmeasured: a controller
+  GROUP, and any locale but en_US. The original instruction, for
+  reference:
 - **MOGRT verifier (harness plan 1, steps 1-3).** Export a small real
   mogrt through the panel: the receipt must now carry
   `controllerNames`, `zipValid: true`, `controllersInFile` equal to

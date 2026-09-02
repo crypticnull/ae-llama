@@ -643,28 +643,53 @@
     }
   }
 
-  // -------------------------------------------- definition.json (PROVISIONAL)
+  // ------------------------------------------ definition.json (MEASURED)
   //
-  // Adobe's definition.json field names are NOT pinned. Everything in
-  // this block is a best-effort read of the roster that the plan gates on
-  // a measured fixture: an export that real Premiere accepted, captured
-  // by the local session (SELF-VERIFY-PLANS section 1, build step 4).
-  // When that fixture lands, THIS block is the one place that changes —
-  // readMogrt and verifyExport do not care what the keys are called.
+  // Pinned 2026-09-02 against three templates AFTER EFFECTS 2026 WROTE
+  // (scripts/mogrt-verify-probe.js; the captured roster is
+  // tests/fixtures/ae2026-definition.json). Before that every field name
+  // here was a guess, and two of them were wrong.
   //
-  // Keys tried, in order:
+  // What a real AE 2026 export carries, verbatim:
+  //   clientControls   the flat controller array, one entry per exposed
+  //                    property. No groups were produced by any export
+  //                    measured — the group flattening below is still
+  //                    unmeasured and still reports as provisional.
+  //   uiName           the controller's name, strDB-wrapped (see
+  //                    unwrapString: `localeString` is the LOCALE, `str`
+  //                    is the value).
+  //   type             an integer (2 slider, 5 point, 6 source text,
+  //                    9 linked 2D scale were the four measured).
+  //                    `controlType` was invented and appears nowhere.
+  //   capsuleName      ALWAYS the literal "Untitled" — AE never writes
+  //                    the template name into definition.json, not even
+  //                    when export_mogrt set motionGraphicsTemplateName
+  //                    and AE named the FILE from it. Kept as a reported
+  //                    fact; see AE_DEFAULT_TEMPLATE_NAME below for why
+  //                    it can no longer raise a mismatch.
+  //   sourceInfoLocalized[locale].name
+  //                    the COMP the template came from. This is the one
+  //                    name in the file that is worth checking, and
+  //                    compNameOf() reads it.
+  //
+  // Still genuinely unpinned, and still reported as provisional when
+  // used: the fallback array scan, nested controller groups, and every
+  // alternate key kept below for a build that is not AE 2026.
+  //
+  // Keys tried, in order (the MEASURED one first in each row):
   //   controller array : clientControls, controls, controllers, then a
   //                      depth-limited scan for the first array of
   //                      objects that ALL carry a name-like key and a
   //                      type-like key (or a nested controls array) — a
   //                      fonts list {name: "Arial"} does not qualify
   //   controller name  : uiName, name, displayName, title, label
-  //   controller type  : controlType, type, capsuleType
+  //   controller type  : type, controlType, capsuleType
   //   template name    : capsuleName, name, templateName, title
+  //   comp name        : sourceInfoLocalized[en_US or first].name
   // A controller carrying its own controls/clientControls/controllers
   // array is a GROUP: its leaves are emitted, its own name is not.
-  // A value shaped {strDB: [{localeString, localeStr}]} is unwrapped to
-  // its en_US string, else its first localeString.
+  // A value shaped {strDB: [{localeString: <locale>, str: <value>}]} is
+  // unwrapped to its en_US value, else its first.
   //
   // readRoster reports HOW the roster was found: `via` names the key
   // ("clientControls", "clientControls (nested)", "fallback:widgets") and
@@ -673,8 +698,12 @@
   // defect.
   var CONTROL_ARRAY_KEYS = ["clientControls", "controls", "controllers"];
   var NAME_KEYS = ["uiName", "name", "displayName", "title", "label"];
-  var TYPE_KEYS = ["controlType", "type", "capsuleType"];
+  var TYPE_KEYS = ["type", "controlType", "capsuleType"];
   var TEMPLATE_NAME_KEYS = ["capsuleName", "name", "templateName", "title"];
+  // AE 2026 writes this placeholder into capsuleName for EVERY export,
+  // whatever the template is called. A comparison against it can only
+  // ever be a false alarm, so verifyExport refuses to raise one.
+  var AE_DEFAULT_TEMPLATE_NAME = "Untitled";
   var GROUP_DEPTH_MAX = 8;
   var SCAN_DEPTH_MAX = 4;
 
@@ -687,20 +716,31 @@
     if (typeof v === "string") return v;
     if (typeof v === "number" || typeof v === "boolean") return String(v);
     if (typeof v === "object") {
+      // MEASURED, AE 2026 (scripts/mogrt-verify-probe.js, three real
+      // exports): a localized string is
+      //   {"strDB":[{"localeString":"en_US","str":"Headline Text"}]}
+      // — `localeString` is the LOCALE TAG and `str` is the value. This
+      // reader used to have those two the other way round, so every
+      // controller in every file After Effects ever wrote read back as
+      // the string "en_US". Nothing caught it because the hand-built
+      // fixtures were written to the same invented shape: the reader and
+      // its tests agreed with each other and neither had seen a real
+      // file. There is deliberately no fallback to reading the tag as a
+      // value — a null name makes the verifier say so, out loud, which
+      // is what a shape we have not measured deserves.
       var db = v.strDB;
       if (isArray(db)) {
         var first = null;
         for (var i = 0; i < db.length; i++) {
           var row = db[i];
           if (!row || typeof row !== "object") continue;
-          var s = row.localeString;
+          var s = row.str;
           if (typeof s !== "string") continue;
           if (first === null) first = s;
-          if (row.localeStr === "en_US") return s;
+          if (row.localeString === "en_US") return s;
         }
         return first;
       }
-      if (typeof v.localeString === "string") return v.localeString;
     }
     return null;
   }
@@ -823,6 +863,32 @@
     return null;
   }
 
+  /**
+   * compNameOf(definition) -> string|null
+   *
+   * The COMP the template was exported from, out of
+   * sourceInfoLocalized[locale].name. Measured on every real AE 2026
+   * export; en_US is preferred, otherwise whichever locale is first.
+   * This is the only NAME in a real definition.json that carries
+   * information — capsuleName is the fixed placeholder "Untitled".
+   */
+  function compNameOf(definition) {
+    if (!definition || typeof definition !== "object") return null;
+    var loc = definition.sourceInfoLocalized;
+    if (!loc || typeof loc !== "object") return null;
+    var pick = null;
+    if (loc.en_US && typeof loc.en_US === "object") {
+      pick = loc.en_US;
+    } else {
+      for (var k in loc) {
+        if (!Object.prototype.hasOwnProperty.call(loc, k)) continue;
+        if (loc[k] && typeof loc[k] === "object") { pick = loc[k]; break; }
+      }
+    }
+    if (!pick) return null;
+    return typeof pick.name === "string" ? pick.name : null;
+  }
+
   // ---------------------------------------------------------- verdict
   function countNames(list) {
     var counts = {};
@@ -834,12 +900,17 @@
   }
 
   /**
-   * verifyExport({path, expectedControllers, templateName, definitionOnly,
-   *               maxInflate, buffer}) -> {
+   * verifyExport({path, expectedControllers, templateName, compName,
+   *               definitionOnly, maxInflate, buffer}) -> {
    *   readable, zipValid, entryCount, definitionFound, templateNameInFile,
-   *   templateNameMatches, controllersInFile, controllerTypes, rosterVia,
+   *   templateNameMatches, templateNameUnwritten, compNameInFile,
+   *   compNameMatches, controllersInFile, controllerTypes, rosterVia,
    *   rosterProvisional, missing, extra, duplicateCounts, warnings,
    *   errors, entries }
+   *
+   * templateNameMatches is null with templateNameUnwritten true on a real
+   * AE export: capsuleName is the fixed placeholder "Untitled" there, so
+   * the only name parity worth running is compName.
    *
    * Roster parity is a MULTISET: a controller expected twice and present
    * once is a missing controller, and the same name collapsed by the
@@ -864,6 +935,9 @@
       definitionFound: !!read.definition,
       templateNameInFile: null,
       templateNameMatches: null,
+      templateNameUnwritten: false,
+      compNameInFile: null,
+      compNameMatches: null,
       controllersInFile: [],
       controllerTypes: [],
       rosterVia: null,
@@ -890,15 +964,36 @@
         warnings.push("template name not located in definition.json under " +
           TEMPLATE_NAME_KEYS.join("/") + " (keys present: " +
           Object.keys(def).join(", ") + ") in " + path);
+      } else if (v.templateNameInFile === AE_DEFAULT_TEMPLATE_NAME &&
+                 req.templateName !== AE_DEFAULT_TEMPLATE_NAME) {
+        // NOT a mismatch — measured AE 2026: capsuleName is the literal
+        // "Untitled" in every export, including ones where AE went on to
+        // name the FILE from the template name it was given. The field
+        // carries no information about the template name, so comparing
+        // to it produced a warning on every correct export and could
+        // never have produced one on an incorrect one. Reported as a
+        // fact (templateNameInFile) and as `templateNameUnwritten`.
+        v.templateNameMatches = null;
+        v.templateNameUnwritten = true;
       } else {
         v.templateNameMatches = v.templateNameInFile === req.templateName;
         if (!v.templateNameMatches) {
-          // AE may transform the name on the way out (export_mogrt's
-          // nameNote is the file-name branch); the roster below is the
-          // hard verdict, so this is a warning naming both strings.
+          // A build that DOES write a name and wrote a different one.
           warnings.push("template name expected \"" + req.templateName +
             "\", measured \"" + v.templateNameInFile + "\" in " + path);
         }
+      }
+    }
+
+    v.compNameInFile = compNameOf(def);
+    if (typeof req.compName === "string" && v.compNameInFile !== null) {
+      v.compNameMatches = v.compNameInFile === req.compName;
+      if (!v.compNameMatches) {
+        // The comp name IS written, so this one can really fail: the
+        // template in the file came from a different comp than the
+        // receipt claims.
+        warnings.push("comp name expected \"" + req.compName +
+          "\", measured \"" + v.compNameInFile + "\" in " + path);
       }
     }
 
@@ -958,16 +1053,20 @@
     readRoster: readRoster,
     extractControllers: extractControllers,
     templateNameOf: templateNameOf,
+    compNameOf: compNameOf,
     verifyExport: verifyExport,
     crc32: crc32,
     DEFINITION_NAME: DEFINITION_NAME,
     DEFAULT_MAX_INFLATE: DEFAULT_MAX_INFLATE,
-    // Exposed so the measure pass can print what the reader assumed.
+    // Exposed so the measure pass can print what the reader reads. The
+    // FIRST key in each list is the one measured out of a real AE 2026
+    // export; the rest are unmeasured fallbacks for other builds.
     PROVISIONAL_KEYS: {
       controllerArray: CONTROL_ARRAY_KEYS,
       controllerName: NAME_KEYS,
       controllerType: TYPE_KEYS,
       templateName: TEMPLATE_NAME_KEYS
-    }
+    },
+    AE_DEFAULT_TEMPLATE_NAME: AE_DEFAULT_TEMPLATE_NAME
   };
 });

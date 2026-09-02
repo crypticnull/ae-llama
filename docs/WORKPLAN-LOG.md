@@ -10744,3 +10744,184 @@ assertion that matters most.
   verifier), then the pass-22 salvage. `stash@{0}` is still
   `pass22-salvage` and branch `aell-backup-pass22` still exists,
   untouched.
+
+## 2026-09-02 (local session, real AE) — WORKPLAN 1c bullet 4: the .mogrt verifier had never seen a .mogrt (0.11.5)
+
+Harness green on arrival (566/566), so this pass took the next unfinished
+workplan item: **1c bullet 4, the MOGRT verifier** (harness plan steps
+1-3 / `docs/SELF-VERIFY-PLANS.md` section 1). New probe, committed so it
+can be re-run: `scripts/mogrt-verify-probe.js` + `.jsx`. It builds a rig
+in real AE, exposes four controllers of four different kinds (source
+text, opacity slider, position point, linked 2D scale — one label
+carrying a non-ASCII character on purpose), exports twice, and grades the
+receipt through the **shipped** panel hook (`Tools._verifyMogrtResult`),
+not a rebuilt copy of it.
+
+### The finding: every controller in every real export read as "en_US"
+
+`extension/js/mogrt-read.js` unwrapped Adobe's localized strings like
+this:
+
+    {strDB: [{localeString: <THE VALUE>, localeStr: "en_US"}]}
+
+What AE 2026 actually writes is the other way round:
+
+    {strDB: [{localeString: "en_US", str: "Headline Text"}]}
+
+`localeString` is the LOCALE TAG. So the reader returned the tag as the
+name, and the shipped receipt for a perfectly good export said:
+
+    controller "Headline Size é" expected 1 time, measured 0 ...
+    controller "Card Position"   expected 1 time, measured 0 ...
+    controller "BG Opacity"      expected 1 time, measured 0 ...
+    controller "Headline Text"   expected 1 time, measured 0 ...
+    controller "en_US" measured 4 times, expected 0 ...
+    controllers exposed but absent from definition.json: <all four>
+    controllers in definition.json nobody exposed: en_US, en_US, en_US, en_US
+
+Every real export, every time — a verifier whose whole job is catching a
+dropped controller reported ALL of them dropped and four phantoms added.
+It also reported `rosterProvisional: false`, so those names were carried
+as FACTS rather than as evidence.
+
+Nothing caught it because `tests/test-mogrt-read.js` built its fixtures
+to the same invented shape. 105 checks passed against a reader that could
+not read one file After Effects had ever produced. **A fixture is only
+evidence when something outside this repo made it.**
+
+Two more inventions fell out of the same measurement:
+
+- **`controlType` does not exist.** AE writes `type`, an integer — 6
+  source text, 2 slider, 5 point, 9 linked 2D scale, measured. The
+  reader tried `controlType` FIRST; it appears in no real file.
+- **`capsuleName` is the literal `"Untitled"` in every export**, on all
+  three real templates measured across two sessions — including the one
+  where `export_mogrt` set `motionGraphicsTemplateName` and AE went on to
+  name the FILE from it. So the template-name comparison fired a warning
+  on every correct export and could never have fired on a wrong one.
+
+### What changed
+
+- **`extension/js/mogrt-read.js`** — `unwrapString` reads the measured
+  shape. Deliberately with NO fallback to the old reading: an unmeasured
+  shape now yields a null name and a grounded warning, rather than
+  confidently returning a locale tag. `TYPE_KEYS` puts the measured
+  `type` first (`controlType` kept as an unmeasured fallback, and now
+  exercised by a test — a fallback nobody runs is a fallback nobody knows
+  is broken). New `AE_DEFAULT_TEMPLATE_NAME`: a `capsuleName` reading the
+  placeholder sets `templateNameUnwritten` and raises nothing, while a
+  build that writes a real name and writes the WRONG one still warns.
+  New `compNameOf()` + `compName` parity — `sourceInfoLocalized[loc].name`
+  is the one name in a real definition.json that carries information, and
+  it is the comp the template came from.
+- **`extension/js/tools.js`** — the shipped hook passes `compName:
+  data.comp`. No prompt text changed, so zero context cost.
+- **`tests/fixtures/ae2026-definition.json` (NEW)** — the real thing,
+  scrubbed of exactly one field (the temp staging path, which carried the
+  Windows account name).
+- **`docs/SELF-VERIFY-PLANS.md`** — build step 4 marked done except the
+  Premiere half, with the deviation from the Ordering guard written down.
+
+### The Premiere gate, and why the pin was taken without it
+
+The plan gates the fixture pin on "an export Premiere actually opened",
+to stop run 1 grading the checker against its own output. That refutation
+is answered a different way here: **this fixture is not the checker's
+output, it is After Effects'**, and the de-circularization the same
+section asks for was run — PowerShell `System.IO.Compression.ZipFile` +
+`ConvertFrom-Json`, an implementation with nothing to do with this repo,
+read the same four entries at the same sizes (definition.json 5604/1977,
+project.aegraphic 7980/7703, thumb.mp4 121800/8294, thumb.png 5350/3148)
+and the same four controller names out of `uiName.strDB[0].str`, same
+type codes. Our reader adds a CRC check on each, which PS 5.1's
+ZipArchiveEntry does not expose.
+
+Premiere answers "is this capsule usable", not "what does AE call its
+fields", and holding the pin for a step that needs a human awake meant
+shipping a verifier that could not read a single real file for another
+day. **Assumption stated: the pin rests on AE's exporter plus an
+independent zip/JSON reader, not on Premiere.** Step 6 is still owed and
+the artifact is at `logs\mogrt-verify\AELL Probe Card.mogrt`; if Premiere
+refuses it, what changes is the STATUS of the pin, not its field names.
+
+### What the bullet asked for, item by item
+
+- `controllerNames` on the receipt — present, all four, accent intact.
+- `zipValid: true` — yes.
+- `controllersInFile` equals the exposed count — 4 and 4.
+- `templateNameInFile` — present ("Untitled", and now understood).
+- no `verifyNote` — **now true**; before the fix it was the wall above.
+- hand-truncated copy gives a grounded failure naming the path: yes, *"no
+  end-of-central-directory record: signature 0x6054b50 with a consistent
+  comment length was not found in the last 12928 bytes of a 12928-byte
+  file (…\truncated.mogrt)"*.
+- MOGRT settle (the bytes receipt equals the final on-disk size): held on
+  both exports, 21548 bytes, 4.7 s.
+- the Windows independent check: run, agreement recorded above.
+
+### Verification
+
+- **Harness: 566/566 PASSED** in real AE, after the change.
+- `scripts/mogrt-verify-probe.js`: **10/10 claims held** on a clean run
+  from a swept project. Before the fix the same probe held 5/7.
+- `tests/test-mogrt-read.js`: 105 -> **121 checks**. **Verified it
+  bites:** restore the swapped `strDB` read and **32 assertions go red**,
+  including the shipped-hook ones on the real bytes.
+- Full stub sweep: 66/67 green, the odd one out being the known
+  environmental `tests/test-comfy-backend.js` (this machine has
+  `%LOCALAPPDATA%\Comfy-Desktop\...\models`, CI does not — still wants a
+  `process.env` stub, still not mine).
+- **BUMPED 0.11.4 -> 0.11.5** — `extension/js/mogrt-read.js` and
+  `extension/js/tools.js` changed.
+
+### Two things the probe cost, both fixed in the probe
+
+- A successful `export_mogrt` invalidates the caller's CompItem too, not
+  just the tool's. The first draft read `comp.name` for the second export
+  and got "Object is invalid", which took the cleanup down with it and
+  left the rig in the project. The probe now holds names as strings and
+  sweeps BY NAME.
+- AE keeps two comps with the same name happily, and `AELL_resolveComp`
+  finds the older one — so the rig that crash left behind made the next
+  run grade the PREVIOUS run's export while every `expose_property`
+  answered "it is ALREADY a controller". The probe purges its own names
+  before it builds.
+
+### Machine state
+
+- AE was left holding `logs\mogrt-verify\mogrt-probe-scratch.aep`. The
+  probe adopted the untitled project that was open (saving it there) —
+  untitled is nobody's saved work, and an export cannot run from a
+  project that was never saved. The probe rig was swept; the exports are
+  in the same gitignored folder.
+
+### Filed for later passes, in priority order
+
+1. **The compact-vs-full routing comparison** (1c bullet 2's remaining
+   half). Unchanged: needs two runs per mode, since a single-run per-step
+   miss at temperature 0.7 is noise.
+2. **`add_mask` accepts bounds that miss the layer entirely and reports
+   ok** (unchanged, still first among the tool bugs).
+3. **"Probe Room is a mess — clean it up" routes to the project panel**
+   (unchanged; the only miss that repeated across both chat-probe runs).
+4. **The harness cannot answer "Crash Repair Options"** (unchanged;
+   `scripts/lib/ae-dialog-triage.ps1`, screenshot at
+   `logs/dialogs/crash-repair.png`).
+5. **`starved` may now be too generous a word** (unchanged from the
+   previous pass — a behaviour change, not a measurement).
+6. **delete_mask could warn when an expression still points at the mask**
+   (unchanged).
+7. **New: a controller GROUP has never been measured.** No export here
+   produced one, so `collectLeaves`' group flattening and the fallback
+   array scan are still unmeasured and still report as provisional. Same
+   for any locale other than en_US. A rig with an Essential Graphics
+   group would answer both.
+8. **New: `capParams` is a second, independent roster inside the same
+   file** — `sourceInfoLocalized[loc].capsuleparams.capParams[].capPropUIName`
+   carries the same names as PLAIN strings, with their own type codes.
+   Cross-checking the two rosters against each other would catch a
+   strDB-shaped mistake without needing a real file at all.
+
+- Not attempted this pass (still open, in order): **the pass-22
+  salvage**. `stash@{0}` is still `pass22-salvage` and branch
+  `aell-backup-pass22` still exists, untouched.

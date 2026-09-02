@@ -2675,6 +2675,9 @@
         path: data.path,
         expectedControllers: names,
         templateName: data.template,
+        // The comp name is the one name a real definition.json actually
+        // carries (measured AE 2026: capsuleName is always "Untitled").
+        compName: data.comp,
         definitionOnly: true,
         maxInflate: 4 * 1024 * 1024
       });

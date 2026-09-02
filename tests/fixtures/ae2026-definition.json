@@ -1,0 +1,395 @@
+{
+ "aelibCompliantVersion": "201710",
+ "apiVersion": "2.2",
+ "authorApp": "aefx",
+ "authorID": "",
+ "capsuleID": "d4d56a98-d8fa-42d2-8c3c-a248d198de80",
+ "capsuleName": "Untitled",
+ "capsuleNameLocalized": {
+  "strDB": [
+   {
+    "localeString": "en_US",
+    "str": "Untitled"
+   }
+  ]
+ },
+ "capsuleTags": [],
+ "clientControls": [
+  {
+   "canAnimate": true,
+   "dimensions": 2,
+   "id": "63bd3cda-a4a1-4e69-be6e-dc55a8b7a53d",
+   "linked": true,
+   "type": 9,
+   "uiName": {
+    "strDB": [
+     {
+      "localeString": "en_US",
+      "str": "Headline Size é"
+     }
+    ]
+   },
+   "uiSuffix": {
+    "strDB": [
+     {
+      "localeString": "en_US",
+      "str": ""
+     }
+    ]
+   },
+   "uiToolTip": {
+    "strDB": [
+     {
+      "localeString": "en_US",
+      "str": ""
+     }
+    ]
+   },
+   "value": [
+    100,
+    100,
+    100,
+    0
+   ]
+  },
+  {
+   "canAnimate": true,
+   "id": "47893600-b008-44bc-8d88-996117972c93",
+   "type": 5,
+   "uiName": {
+    "strDB": [
+     {
+      "localeString": "en_US",
+      "str": "Card Position"
+     }
+    ]
+   },
+   "uiSuffix": {
+    "strDB": [
+     {
+      "localeString": "en_US",
+      "str": ""
+     }
+    ]
+   },
+   "uiToolTip": {
+    "strDB": [
+     {
+      "localeString": "en_US",
+      "str": ""
+     }
+    ]
+   },
+   "value": {
+    "x": 320,
+    "y": 180
+   }
+  },
+  {
+   "canAnimate": true,
+   "id": "2a1bc0ff-5044-4f11-8d67-f67d30b74533",
+   "max": 100,
+   "min": 0,
+   "type": 2,
+   "uiName": {
+    "strDB": [
+     {
+      "localeString": "en_US",
+      "str": "BG Opacity"
+     }
+    ]
+   },
+   "uiSuffix": {
+    "strDB": [
+     {
+      "localeString": "en_US",
+      "str": ""
+     }
+    ]
+   },
+   "uiToolTip": {
+    "strDB": [
+     {
+      "localeString": "en_US",
+      "str": ""
+     }
+    ]
+   },
+   "value": 100
+  },
+  {
+   "alternateRectInfo": {
+    "compId": -1,
+    "isEnabled": false,
+    "layerId": -1
+   },
+   "canAnimate": true,
+   "fonteditinfo": {
+    "capPropFontEdit": false,
+    "capPropFontFauxStyleEdit": false,
+    "capPropFontSizeEdit": false,
+    "fontEditValue": "PowerCentra-Book",
+    "fontFSAllCapsValue": false,
+    "fontFSBoldValue": false,
+    "fontFSItalicValue": false,
+    "fontFSSmallCapsValue": false,
+    "fontSizeEditValue": 66
+   },
+   "id": "b395b516-049d-4f2e-b8c7-a1d6d92ade06",
+   "type": 6,
+   "uiName": {
+    "strDB": [
+     {
+      "localeString": "en_US",
+      "str": "Headline Text"
+     }
+    ]
+   },
+   "uiSuffix": {
+    "strDB": [
+     {
+      "localeString": "en_US",
+      "str": ""
+     }
+    ]
+   },
+   "uiToolTip": {
+    "strDB": [
+     {
+      "localeString": "en_US",
+      "str": ""
+     }
+    ]
+   },
+   "value": {
+    "strDB": [
+     {
+      "localeString": "en_US",
+      "str": "HELLO"
+     }
+    ]
+   }
+  }
+ ],
+ "description": "",
+ "internalEffectsOnlyVersion": "0",
+ "licenseID": "",
+ "mobileCompatibilityVersion": "201904",
+ "platformSupport": [
+  "ppro"
+ ],
+ "responsiveDesignVersion": "0",
+ "sourceInfoLocalized": {
+  "en_US": {
+   "alphachanneltype": 1,
+   "alphamattecolorb": 0,
+   "alphamattecolorg": 0,
+   "alphamattecolorr": 0,
+   "anywhereassetrequestinfo": {
+    "mAssetInfo": {
+     "mAssetIdentifier": "",
+     "mProductionIdentifier": "",
+     "mProductionRevision": ""
+    },
+    "mServerConnectInfo": {
+     "mAuthToken": "",
+     "mEARPort": "",
+     "mUserName": ""
+    }
+   },
+   "anywhereproductionrequestinfo": {
+    "mProductionInfo": {
+     "mDisplayName": "",
+     "mProductionIdentifier": "",
+     "mRevision": ""
+    },
+    "mServerConnectInfo": {
+     "mAuthToken": "",
+     "mEARPort": "",
+     "mUserName": ""
+    }
+   },
+   "appspecificsourceinfo": "{\"applicationID\":\"AfterEffects\",\"artisanQuality\":0,\"capsuleparamvalues\":{\"capParamValues\":[]},\"downSampleX\":1,\"downSampleY\":1,\"enableMenaIndic\":false,\"fieldType\":4,\"flatArtisanOptions\":[0,0,0,1,0,0,0,0,0,0,0,0],\"needsToPatchSourceForDownsample\":false,\"renderguidelayers\":false,\"stretchFactor\":1,\"stretchOffset\":0,\"useAELib\":false,\"version\":10}",
+   "audiochannellayout": [
+    {
+     "channellabel": 100
+    },
+    {
+     "channellabel": 101
+    }
+   ],
+   "audiosamplerate": {
+    "ticksperframe": 5292000
+   },
+   "capsuleparams": {
+    "capParams": [
+     {
+      "capPropAnimatable": false,
+      "capPropDefault": [
+       100,
+       100,
+       100,
+       0
+      ],
+      "capPropDimensions": 2,
+      "capPropLinked": true,
+      "capPropMatchName": "63bd3cda-a4a1-4e69-be6e-dc55a8b7a53d",
+      "capPropType": 7,
+      "capPropUIName": "Headline Size é"
+     },
+     {
+      "capPropAnimatable": false,
+      "capPropDefault": [
+       320,
+       180
+      ],
+      "capPropMatchName": "47893600-b008-44bc-8d88-996117972c93",
+      "capPropType": 6,
+      "capPropUIName": "Card Position"
+     },
+     {
+      "capPropAnimatable": false,
+      "capPropDecimals": 0,
+      "capPropDefault": 100,
+      "capPropMatchName": "2a1bc0ff-5044-4f11-8d67-f67d30b74533",
+      "capPropMax": 100,
+      "capPropMin": 0,
+      "capPropType": 1,
+      "capPropUIName": "BG Opacity"
+     },
+     {
+      "capPropAnimatable": false,
+      "capPropDefault": "HELLO",
+      "capPropFontEdit": false,
+      "capPropFontFauxStyleEdit": false,
+      "capPropFontSizeEdit": false,
+      "capPropMatchName": "b395b516-049d-4f2e-b8c7-a1d6d92ade06",
+      "capPropTextRunCount": 1,
+      "capPropType": 0,
+      "capPropUIName": "Headline Text",
+      "fontEditValue": [
+       "PowerCentra-Book"
+      ],
+      "fontFSAllCapsValue": [
+       false
+      ],
+      "fontFSBoldValue": [
+       false
+      ],
+      "fontFSItalicValue": [
+       false
+      ],
+      "fontFSSmallCapsValue": [
+       false
+      ],
+      "fontSizeEditValue": [
+       66
+      ],
+      "fontTextRunLength": [
+       5
+      ],
+      "textEditValue": "HELLO"
+     }
+    ]
+   },
+   "colorAwareEffectsEnabled": 0,
+   "colorSpace": {
+    "baseColorProfile": {
+     "colorProfileName": "BT.709 RGB Full"
+    },
+    "baseProfileType": 1
+   },
+   "contentcredentialsinfo": "",
+   "currenttime": {
+    "scale": 1,
+    "value": 0
+   },
+   "duration": {
+    "scale": 1,
+    "value": 4
+   },
+   "enableLogColorManagement": false,
+   "fieldtype": 4,
+   "framerate": {
+    "ticksperframe": 10160640000
+   },
+   "framesize": {
+    "size": {
+     "x": 640,
+     "y": 360
+    },
+    "topleft": {
+     "x": 0,
+     "y": 0
+    }
+   },
+   "graphicsWhiteLuminance": 100,
+   "hasFrozenUnstretchableRegions": false,
+   "hasaudio": false,
+   "hasvideo": true,
+   "id": "000018ad-0000-0000-0000-000000000000",
+   "initialcontentstate": "9f0b7e8f-7362-fe44-2bf6-b5ac13906a9e",
+   "inpoint": {
+    "scale": 1,
+    "value": -400000
+   },
+   "isdropframe": false,
+   "ismedia": false,
+   "isxmpwritable": false,
+   "mediaproducerdescription": "",
+   "missingassets": {
+    "missAssetsOfflineMasks": false,
+    "missAssetsPropMissingFonts": [],
+    "missAssetsPropMissingFootage": [],
+    "missAssetsPropMissingPlugins": []
+   },
+   "name": "AELL MOGRT Probe",
+   "nativefieldtype": 4,
+   "outpoint": {
+    "scale": 1,
+    "value": -400000
+   },
+   "parentprojectfile": "C:\\Users\\<user>\\AppData\\Local\\Temp\\aegraphic\\<guid>\\aemogrtFiles\\",
+   "pixelaspectratio": {
+    "denominator": 1,
+    "numerator": 1
+   },
+   "pixelformatlist": [
+    {
+     "fourcc": 1650946657,
+     "properties": 532768
+    },
+    {
+     "fourcc": 1634887522,
+     "properties": 524576
+    }
+   ],
+   "sourceBitrate": 0,
+   "starttime": {
+    "scale": 1,
+    "value": 0
+   },
+   "supportsvideorenderingsessions": true,
+   "teamProjectName": "",
+   "workinpoint": {
+    "scale": 1,
+    "value": 0
+   },
+   "workoutpoint": {
+    "scale": 1,
+    "value": 4
+   }
+  }
+ },
+ "typekitOnlyVersion": "0",
+ "usedCompRenderers": [
+  "ADBE Escher"
+ ],
+ "usedEffects": [],
+ "usedFileTypes": [],
+ "usedFontsLocalized": {
+  "en_US": [
+   "PowerCentra-Book"
+  ]
+ }
+}
