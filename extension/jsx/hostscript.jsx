@@ -356,9 +356,15 @@ function AELL_reorderRelative(comp, args, key) {
     if (previousIndex !== numLayers) layer.moveAfter(comp.layer(numLayers));
   }
   var movedTo = layer.index;
+  // The parentheses are LOAD-BEARING: ExtendScript groups a bare `a ? b :
+  // c ? d : e` chain LEFT-associatively, so the first branch's VALUE
+  // becomes the next condition. Unparenthesised, this returned 1 for
+  // every "below" move and warned that a correct move had gone wrong.
+  // Measured in AE 2026 / ExtendScript 4.5.6; tests/test-es3-ternary.js
+  // keeps the shape out of every ES3-executed file.
   var want = key === "above" ? target.index - 1
-    : key === "below" ? target.index + 1
-    : key === "toFront" ? 1 : numLayers;
+    : (key === "below" ? target.index + 1
+    : (key === "toFront" ? 1 : numLayers));
   var res = { layer: layer.name, movedTo: movedTo,
               previousIndex: previousIndex };
   res[key] = target ? target.name : true;
@@ -3325,10 +3331,12 @@ AELL_TOOLS.get_bounds = function (args) {
   }
   if (w === 0 && h === 0) {
     out.empty = "this layer renders nothing at " + AELL_secs(t) +
+      // Parenthesised on purpose — see AELL_reorderRelative: a bare
+      // chain here told SHAPE layers "the text is empty at this time".
       (kind === "shape" ? " — the shape layer has no drawn content yet " +
         "(add_shape_content adds some)"
-       : kind === "text" ? " — the text is empty at this time"
-       : " — check that the layer is on at this time");
+       : (kind === "text" ? " — the text is empty at this time"
+       : " — check that the layer is on at this time"));
   }
 
   // Comp space. AE's own sourcePointToComp is NOT usable here: measured

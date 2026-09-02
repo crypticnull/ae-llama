@@ -63,6 +63,17 @@ interactive session does NOT self-start; it answers one prompt and waits.
 - Adding any layer selects it and deselects everything else; creation
   tools here restore the user's selection (`AELL_keepSelection`).
 - `.jsx` is ES3: no JSON (use `AELLJSON`), no Array extras, no `const`.
+- **ExtendScript parses `?:` LEFT-associatively.** `true ? 1 : true ? 2
+  : 3` is **2** there and 1 everywhere else; `false ? 1 : true ? 2 :
+  true ? 3 : 4` is **3**, not 2. It groups as `((a?b:c)?d:e)?f:g`, so
+  the first branch's VALUE becomes the next condition. Every nested
+  conditional in an ES3-executed file needs explicit parentheses —
+  `tests/test-es3-ternary.js` enforces it. A bare chain is only
+  accidentally right when the earlier tests are false, which is why it
+  hid: it shipped a `reorder_layers` warning on correct moves and told
+  empty SHAPE layers "the text is empty". Measured AE 2026 /
+  ExtendScript 4.5.6. This binds `extension/js/selftest.js` too — the
+  CLI runner `$.evalFile`s it.
 - `.ps1` must be pure ASCII (Windows PowerShell 5.1, BOM-less).
 - Every failed lookup must list what actually exists (grounded errors) —
   it is how the small local model self-corrects.

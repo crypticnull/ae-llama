@@ -10019,3 +10019,111 @@ got.
   compress the ledger) is NOT built — measure whether it is worth the
   32B's latency first. Pass 22's stash touched this same area:
   reconcile on recovery.
+
+## 2026-09-01 (local session, real AE) — WORKPLAN 1: harness red -> green. ExtendScript parses `?:` LEFT-associatively. UNBUMPED ON PURPOSE
+
+- Item: section 1, "make the harness green (always first)". The run
+  opened at **555/556**, so 1b/1c waited.
+
+- The failing step was `below: ST Ord 3 goes under ST Ord 7`
+  (reorder_layers relative mode, shipped by the remote daytime batch).
+  The MOVE was correct — the read-back step passed and the stack was
+  exactly right. What failed was the tool's own landing-slot check: it
+  warned "AE reports 'ST Ord 3' at slot 7, not the expected 1" on a
+  perfectly good move, i.e. it told the model a correct edit had gone
+  wrong.
+
+- **Root cause, and it is a whole bug CLASS, not one line.** Measured in
+  real AE 2026, ExtendScript `$.version` 4.5.6 / build 80.1060872:
+
+      true  ? 1 : true ? 2 : 3            -> 2      (ECMA says 1)
+      false ? 1 : true ? 2 : 3            -> 2      (right by luck)
+      false ? 1 : true ? 2 : true ? 3 : 4 -> 3      (ECMA says 2)
+
+  **ExtendScript's conditional operator is LEFT-associative.** It groups
+  `a ? b : c ? d : e ? f : g` as `((a ? b : c) ? d : e) ? f : g`, so the
+  first branch's VALUE becomes the next condition. Confirmed identical
+  in assignment, `return` and string-concat context; explicit nesting
+  parens fix it. Every other engine — including the Chromium that runs
+  the panel's own .js and the Node that runs tests/ — is right-
+  associative, which is exactly why this hid: a two-level chain whose
+  first test is FALSE still returns the right answer, and that is most
+  of them.
+
+- Fixed at the root, `extension/jsx/hostscript.jsx`, both sites the
+  class had actually bitten:
+  1. `AELL_reorderRelative`'s `want` (the harness failure): returned 1
+     for every `below` move.
+  2. `get_bounds`'s empty-layer advice: the three-way `shape / text /
+     other` chain told an empty SHAPE layer **"the text is empty at this
+     time"** — a grounded error pointing the small model at the wrong
+     fix. Not field-reported; found by the scan, then confirmed by
+     hand-evaluating the left-assoc grouping.
+
+- Stub back-fill (both directions, since Node cannot reproduce the
+  miscompute — it parses the same source correctly):
+  - **NEW `tests/test-es3-ternary.js`** — a SOURCE lint that refuses any
+    conditional nested directly inside another at the same bracket depth
+    (the depth test IS the paren test: parenthesising pushes the inner
+    `?` one level down). Comment/string/regex-literal aware with offsets
+    preserved for honest line numbers. Carries 7 known-bad and 15
+    known-good shapes so it cannot rot into a silent no-op. Scope is
+    discovered the SAME way `tests/test-es3-syntax.js` discovers it
+    (every .jsx AE compiles, plus the dual-target
+    `extension/js/selftest.js`), so a new ExtendScript file cannot land
+    in one lint's scope and miss the other's. Proven to FAIL on
+    pre-fix HEAD (3 hits) and pass after.
+  - `tests/test-get-bounds.js` +3 checks: each of the three empty-layer
+    branches asserted by layer TYPE, and each asserted NOT to carry the
+    other branches' wording.
+- `CLAUDE.md` "Hard-won AE facts" carries the associativity rule with
+  the measured numbers.
+
+- **Harness: 556/556 PASSED.** Full stub sweep green except the one
+  noted below.
+
+- **NOT BUMPED — deliberate, please read.** HEAD already carries the
+  remote session's 1b + 1c batches, which the WORKPLAN explicitly gates
+  behind real-AE probes (rollback arming, matte error texts, mogrt
+  settle, comfy image-landed) that this pass did not run. A bump here
+  would have shipped all of that unverified, against 1b's own "all green
+  -> bump" instruction. My fix is a warning-text / branch-selection
+  correction, not a field-stopper, so it rides **1b's single bump**, the
+  way the remote batches are already doing. Next pass: 1b is still the
+  top item, and its bump now ships this too.
+
+- **Pre-existing stub failure, NOT mine, and it is ENVIRONMENTAL:**
+  `tests/test-comfy-backend.js` — "blank settings remove a previously
+  written mapping" fails on THIS machine and passes in CI. Cause:
+  `applyExtraModelPaths` (extension/js/comfy.js) also looks for
+  `%LOCALAPPDATA%\Comfy-Desktop\ComfyUI-Shared\models`, and this machine
+  HAS it (the owner runs Comfy Desktop) — so with settings blanked the
+  function correctly writes a mapping instead of returning null. The
+  SHIPPED behaviour is right; the TEST is host-dependent. Fix for a
+  later pass: stub `process.env.LOCALAPPDATA` in that test. Verified
+  pre-existing by stashing this pass's changes and re-running.
+
+- **Harness gap filed (cost this pass ~20 min, will cost the next one
+  too).** An AE warning dialog that HAS text — here "After Effects
+  warning: Undo group mismatch, will attempt to fix." — wedges every
+  subsequent run: the stale-dialog cleaner only auto-answers WORDLESS
+  popups, so the triage reports UNRECOGNIZED DIALOG forever and no `-r`
+  script executes. Cleared by hand with `PostMessage(hwnd, WM_CLOSE)`.
+  Worth teaching the cleaner to answer AE's own `After Effects warning:`
+  dialogs (they are informational, single-OK), or at least to say
+  "post WM_CLOSE to this hwnd" in the failure copy.
+
+- **Self-inflicted, written down so the next pass does not repeat it:**
+  my first probe wrapped `$.global.AELL_call(...)` inside its own
+  `app.beginUndoGroup`/`endUndoGroup`. The host tools open their own undo
+  groups, so the nesting desynced AE's undo stack — that is where the
+  "Undo group mismatch" modal came from, and the aborted run then rolled
+  the self-test comps back mid-suite and left probe debris (P1..P12
+  solids) in the project. **Never wrap AELL_call in an undo group.**
+  Recovered with `app.project.close(DO_NOT_SAVE_CHANGES)` +
+  `app.newProject()` (the project was scratch, "Untitled Project.aep",
+  no owner work), after which the suite went 556/556.
+
+- Not attempted this pass (still open, in order): 1b, 1c, and the
+  pass-22 salvage — `stash@{0}` is still `pass22-salvage` and branch
+  `aell-backup-pass22` still exists, untouched by me.
