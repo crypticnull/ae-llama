@@ -21,6 +21,13 @@ tool, not the test), then update the stubbed Node test in `tests/` so
 the same bug class is caught WITHOUT AE — that is the whole loop:
 field truth -> fix -> stub faithfulness.
 
+- ~~`organize_project` has clean_project's preview advice and no gate~~
+  DONE 2026-09-02 (0.11.8). A first `dryRun:false` filed every loose
+  root item and created up to five folders with nothing shown. Same
+  three-branch gate as clean_project, on its own `AELL_orgShown`; an
+  empty plan is deliberately not gated. Harness 567 -> 570; prompt
+  budget paid in full (full -13 chars, compact unchanged).
+
 - ~~The triage calls AE's "Executing Script *" progress window an
   UNRECOGNIZED DIALOG and fails the run~~ DONE 2026-08-30, and the
   filed symptom was not the defect. What actually stopped those runs

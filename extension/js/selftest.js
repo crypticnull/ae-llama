@@ -7432,16 +7432,70 @@
                  " where only the rig's 3 were made";
         } },
 
+      // The GATE, taken from the one angle that is safe to ask in the
+      // user's own project. A dryRun:false whose plan MATCHES the last
+      // preview would file their whole project panel if the gate ever
+      // regressed, so the suite never asks that; it asks the drifted
+      // plan, which cannot execute even with the gate gone-- there is no
+      // preview of THIS list anywhere. The other halves (no preview at
+      // all, same-reply retry, the plan that does execute) live against
+      // a stub in tests/test-organize-project.js, for the same reason
+      // clean_project's dryRun:false half does.
+      { name: "organize rig: one more loose comp, made AFTER the preview",
+        tool: "create_comp",
+        args: { name: "ST ORG Drift", width: 160, height: 120,
+                duration: 1, frameRate: 24 },
+        check: function (d, ctx) {
+          ctx.orgDrift = d.name;
+          return !!d.name || "no comp name in " + JSON.stringify(d);
+        } },
+
+      { name: "organize_project refuses a plan the user never saw",
+        tool: "organize_project",
+        expectError: true,
+        args: { dryRun: false },
+        check: function (err, ctx) {
+          if (!/refused to move/.test(err)) return "wrong refusal: " + err;
+          if (!/changed since the last preview/.test(err)) {
+            return "the refusal did not name plan drift: " + err;
+          }
+          // The refusal lists the first ten moves and says how many it
+          // cut; only demand the new comp by name when nothing was cut.
+          if (/\+[0-9]+ more/.test(err)) return true;
+          return err.indexOf(ctx.orgDrift) !== -1 ||
+                 "the refusal never named the new comp: " + err;
+        } },
+
+      { name: "and the refusal moved nothing",
+        tool: "get_project_info",
+        args: { limit: 0 },
+        check: function (d, ctx) {
+          var i, seen = 0;
+          for (i = 0; i < d.items.length; i++) {
+            if (d.items[i].name !== ctx.orgComp &&
+                d.items[i].name !== ctx.orgDrift) continue;
+            seen++;
+            if (d.items[i].folder) {
+              return "a REFUSED move filed '" + d.items[i].name +
+                     "' into '" + d.items[i].folder + "'";
+            }
+          }
+          return seen === 2 ||
+                 "the refusal lost a comp: " + seen + " of 2 still there";
+        } },
+
       { name: "cleanup: delete the organize rig",
         batch: function (ctx) {
           return [
             { tool: "delete_item", args: { item: ctx.orgNest } },
+            { tool: "delete_item", args: { item: ctx.orgDrift } },
             { tool: "delete_item", args: { item: ctx.orgComp } }
           ];
         },
         check: function (rows) {
-          return (rows[0].ok && rows[1].ok) ||
-                 "cleanup: " + (rows[0].error || rows[1].error);
+          return (rows[0].ok && rows[1].ok && rows[2].ok) ||
+                 "cleanup: " + (rows[0].error || rows[1].error ||
+                                rows[2].error);
         } },
 
       // ---- create_folder eachChildOf (field failure 2026-08-26) -------

@@ -41,9 +41,9 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `comfy_generate` | Generate an image/video with local ComfyUI and import it into the AE project | yes | panel | — | — |
 | `comfy_list_workflows` | List available ComfyUI generation workflow templates by name | no | panel | — | — |
 | `comfy_status` | Check the local ComfyUI instance (online? queue depth?) | no | panel | — | — |
-| `create_comp` | Create a composition and open it | yes | host | 1 | 32 |
+| `create_comp` | Create a composition and open it | yes | host | 1 | 33 |
 | `create_folder` | Create a project-panel folder | yes | host | 1 | 10 |
-| `delete_item` | Delete a project item | yes | host | 1 | 41 |
+| `delete_item` | Delete a project item | yes | host | 1 | 42 |
 | `delete_layer` | Delete a layer from a comp | yes | host | — | 19 |
 | `delete_mask` | REMOVE one mask from a layer by name or 1-based index ('remove that mask'); omit 'mask' when the layer has exactly one | yes | host | 1 | 4 |
 | `distribute_property` | Distribute a property VALUE across layers | yes | host | 1 | 5 |
@@ -56,7 +56,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `for_each_layer` | Run a PER-LAYER tool once per target layer in ONE call (max 200 layers) — the batch executor for anything without its own layers arg: {tool: 'apply_effect', args: {effect: 'Gaussian Blur'}} blurs every target | yes | host | 1 | 6 |
 | `get_bounds` | MEASURE a layer's rendered content without touching it — how wide the text actually is, where the shape sits in the frame, whether anything overflows | no | host | 1 | 32 |
 | `get_comp_details` | Layers of a comp with index, name, type, timing, effects, track matte | no | host | 4 | 34 |
-| `get_project_info` | List project items (comps/footage/folders) and the active comp | no | host | 2 | 15 |
+| `get_project_info` | List project items (comps/footage/folders) and the active comp | no | host | 2 | 16 |
 | `get_property` | Read ANY property by path: value, keyframes, expression | no | host | 3 | 92 |
 | `grid_layout` | Arrange layers into a grid rigged to a control null: its 'Grid X Spacing'/'Grid Y Spacing'/'Grid Columns' sliders drive spacing AND column count live, and the grid centers on the null's position (all expressions generated host-side) | yes | host | 1 | 2 |
 | `import_as_layer` | Import a file AND place it in a comp as a layer, scaled to the comp | yes | host | 1 | 8 |
@@ -67,7 +67,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `list_properties` | DISCOVER a layer's real property tree — names, paths, types, current values | no | host | 2 | 9 |
 | `list_render_templates` | List this machine's render-settings and output-module template names for render_comp | no | host | 1 | 3 |
 | `move_to_folder` | Move project items into a folder (batch) | yes | host | 1 | 2 |
-| `organize_project` | File loose root-level items into Comps/Footage/Solids/Audio/Images folders at the project ROOT | yes | host | 1 | 2 |
+| `organize_project` | File loose root-level items into Comps/Footage/Solids/Audio/Images folders at the project ROOT | yes | host | 1 | 3 |
 | `precompose` | Move layers into a new nested comp (precompose) | yes | host | 1 | 5 |
 | `remove_effect` | REMOVE one effect from a layer by display name or matchName ('get rid of the blur') | yes | host | 1 | 4 |
 | `remove_keyframes` | Remove keyframes from a property on many layers at once — specific times or all ('stop it moving / un-animate it' = this, times omitted) | yes | host | 1 | 5 |

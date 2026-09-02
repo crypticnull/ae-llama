@@ -89,11 +89,12 @@
     { name: "organize_project", mutating: true,
       desc: "File loose root-level items into Comps/Footage/Solids/Audio/" +
             "Images folders at the project ROOT. Items already inside a " +
-            "folder are left alone, and so is every existing folder. " +
+            "folder are left alone. " +
             "dryRun is TRUE by default and returns the moves it would " +
-            "make (item -> folder) plus any folder it would create — " +
-            "show them, then call again with dryRun:false. AE files a " +
-            "solid's source into its own Solids folder already, so a " +
+            "make (item -> folder) — " +
+            "show them, then call again with dryRun:false. The move is " +
+            "REFUSED until that list was shown in an EARLIER reply. " +
+            "AE already files a solid's source into Solids, so a " +
             "Solids count of 0 is normal.",
       args: "{dryRun?: bool (default TRUE)}" },
     { name: "clean_project", mutating: true,

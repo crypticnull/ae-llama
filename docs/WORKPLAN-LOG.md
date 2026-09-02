@@ -11466,3 +11466,139 @@ is verified in real AE, so it bumps.
     (harness plan step 6).
 
 Nothing was left unattempted this pass.
+
+## 2026-09-02 (local session, real AE) — the filed #2: organize_project had clean_project's advice and none of its gate (0.11.8)
+
+**Item.** Harness first: green at 567/567 before anything was touched, so
+this pass took the top entry off the previous pass's filed list —
+"`organize_project` has the same preview-shaped advice and no gate. It
+fired beside clean_project in the 06-22 run. It MOVES rather than
+deletes, so it is a smaller harm and a separate pass — but it is now the
+odd one out."
+
+### What was actually wrong
+
+`clean_project` got a real preview GATE in 0.11.7: a delete has to cite a
+preview of the SAME plan, taken in an EARLIER request. `organize_project`
+was written from the same template two weeks earlier and kept the half
+that is only a sentence:
+
+    "PREVIEW ONLY — nothing was moved. Show the user the moves above ...
+     then call again with dryRun:false to do it."
+
+Nothing enforced it. A first call with `dryRun:false` filed every loose
+item at the project root into Comps/Solids/Audio/Images/Footage and
+created up to five folders — on a project the user had never been shown
+a list for. It is one Ctrl+Z, which is why it ranked below the delete;
+it is still a project-wide rearrangement nobody agreed to.
+
+### The fix (extension/jsx/hostscript.jsx)
+
+New `AELL_orgPlanKey(plan)` — the sorted `itemId>destination` pairs — and
+the same three-branch gate `clean_project` uses, on its own
+`$.global.AELL_orgShown` so the two tools cannot arm each other:
+
+- no preview at all → refused;
+- a preview whose key differs → "the project has changed since the last
+  preview, so this is not the list the user agreed to";
+- a preview taken in THIS request (`AELL_requestSeq`) → refused, because
+  the user has not been back to see it.
+
+The refusal path re-records the plan, so the refusal IS the preview the
+round was missing and the next request goes straight through — and the
+refusal text carries the first ten moves, "+N more", and the folders it
+would create, so the model can show the list without a second call.
+
+One deliberate divergence from `clean_project`, commented at the code: an
+**empty plan is not gated**. The execute loop then provably does nothing,
+so a refusal would be noise about a no-op. `clean_project` gates its
+empty case because there AE, not the preview, decides what goes.
+
+### Verification
+
+- **Real AE harness: 570/570 PASSED** (567 → 570, three new steps).
+  The suite asks the gate from the ONE angle that is safe inside the
+  user's own project: it previews, then creates a loose comp, then calls
+  `dryRun:false` — a plan that has DRIFTED cannot execute even with the
+  gate gone, because no preview of that list exists anywhere. The other
+  three halves (no preview at all, the same-reply retry, and the call
+  that does go through) would file the user's real project panel if the
+  guard ever regressed, so they live against a stub. Same reasoning, and
+  the same comment, as `clean_project`'s dryRun:false half. A third step
+  re-reads the project and fails if a REFUSED move filed anything.
+- `tests/test-organize-project.js`: +18 assertions. No-preview refusal
+  naming the moves and the folders, same-reply retry refusal, the next
+  request executing, an explicit preview + execute pair, plan drift and
+  the re-preview that clears it, the un-gated empty plan, and the
+  cross-tool check that an organize preview leaves `AELL_hygShown`
+  undefined. One PRE-EXISTING case moved: section 7 (a move AE refuses)
+  went straight to `dryRun:false`; it previews first now.
+- `tests/test-self-test.js`: the canned host models the gate. It caught
+  the new suite step immediately — a canned host that ACCEPTS an ungated
+  move lets the refusal step pass while the real tool files the project,
+  which is the faithfulness rule the other 90 refusals follow. Modelling
+  it also exposed a second stub gap: the canned refusal had no "+N more"
+  suffix, so the suite's check demanded a comp name out of a list that
+  is capped at ten. The stub emits the suffix now (the real host always
+  did) and the check only demands the name when nothing was cut.
+- Full stub sweep: **66/67**, the odd one out the known environmental
+  `tests/test-comfy-backend.js` (Comfy-Desktop models dir on this
+  machine, none in CI — unchanged, still not mine).
+- `tests/test-es3-ternary.js` green: the gate is if/else throughout.
+- `docs/CAPABILITIES.md` regenerated (`node scripts/capability-report.js`)
+  — the generated tool table carries the new doc sentence.
+
+### Prompt budget paid, in full
+
+Measured with `Tools.buildSystemPrompt("")` before and after: full
+**58,923 → 58,910 chars (−13)**, compact **39,131 → 39,131 (unchanged)**.
+The gate sentence — "The move is REFUSED until that list was shown in an
+EARLIER reply." — went into the `organize_project` doc, which compaction
+drops after the first sentence, so the 16K panel pays nothing. It was
+paid for by three cuts in the same doc:
+
+- "and so is every existing folder" — the result's own note already says
+  "Folders already in the project were left exactly as they are";
+- "plus any folder it would create" — a straight duplicate of the rules
+  block, which already says "report the moves it lists and any folder it
+  would create";
+- "AE files a solid's source into its own Solids folder already" →
+  "AE already files a solid's source into Solids".
+
+The rules block was NOT touched: it already tells the model to STOP until
+the user says go, and it is the never-compacted half, so every byte there
+costs the 16K window too.
+
+### Bumped: 0.11.7 → 0.11.8
+
+`extension/` changed (hostscript.jsx, tools.js, selftest.js) and the fix
+is verified in real AE, so it bumps.
+
+### Filed for later passes, in priority order
+
+The previous pass's list, minus the item this pass took:
+
+1. **The chat probe's shared history/comp make it contaminating** —
+   WORKPLAN 8's first bullet, with the measured example in the 0.11.7
+   entry (one bad name in step 2 poisoned six later steps).
+2. **`comfyUrl` is 8188, ComfyUI answers on 8000** on this machine —
+   one line in `%APPDATA%\AE-Llama\settings.json`, but it belongs to
+   whoever runs the next Comfy item. Not touched this pass.
+3. **Ask the SERVER for the two numbers** (`POST /tokenize`,
+   `GET /props`) — unchanged, still no live symptom.
+4. **`add_mask` accepts bounds that miss the layer entirely and reports
+   ok** — unchanged (`[[0,0,1920,540]]` on a 100x100 layer).
+5. **The harness cannot answer "Crash Repair Options"** — unchanged
+   (`scripts/lib/ae-dialog-triage.ps1`).
+6. **`starved` may now be too generous a word** — unchanged.
+7. **delete_mask could warn when an expression still points at the
+   mask** — unchanged.
+8. **A controller GROUP has never been measured**, nor any locale but
+   en_US — unchanged.
+9. **`capParams` is a second, independent roster inside the same
+   .mogrt** — unchanged.
+10. **Still owed, needs a human awake:** drop
+    `logs\mogrt-verify\AELL Probe Card.mogrt` into real Premiere
+    (harness plan step 6).
+
+Nothing was left unattempted this pass. Nothing is blocked.

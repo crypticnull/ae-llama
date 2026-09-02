@@ -130,6 +130,7 @@ const createdComps = [];
 const folders = {};        // path -> true (the create_folder rig)
 const folderIds = {};      // id -> path; real AE resolves an item by id
 let nextFolderId = 5000;   // clear of the solid-source ids above
+let orgShownKey = null;    // organize_project's preview gate (0.11.8)
 // The render-queue rig (WORKPLAN 5.5). Measured in AE 2026: a render
 // takes the WHOLE queue, an existing output file raises a modal, and the
 // output module forces its own extension onto whatever path it is given.
@@ -1653,12 +1654,34 @@ function cannedOk(tool, args) {
           "in the project. It is NOT used, so the project would end up " +
           "with two folders of that name.";
       }
+      // The preview GATE (0.11.8). A canned host that ACCEPTED an
+      // ungated dryRun:false would let the suite's refusal step pass
+      // while the real tool filed the user's whole project panel --
+      // the same faithfulness rule clean_project's refusals follow.
+      const orgKey = moves.slice(0).sort().join(",");
       if (dryRun) {
+        orgShownKey = orgKey;
         out.note = moves.length === 0
           ? "PREVIEW ONLY — nothing to do: no loose items at the " +
             "project root."
           : "PREVIEW ONLY — nothing was moved.";
         return out;                              // and it moves NOTHING
+      }
+      if (moves.length && orgShownKey !== orgKey) {
+        const why = orgShownKey === null
+          ? "nothing has been previewed yet"
+          : "the project has changed since the last preview, so this is " +
+            "not the list the user agreed to";
+        orgShownKey = orgKey;
+        return { __err: "organize_project refused to move: " + why +
+          ". Nothing was moved. " + moves.length + " item(s) would be " +
+          "filed — " + moves.slice(0, 10).join(", ") +
+          (moves.length > 10 ? ", +" + (moves.length - 10) + " more" : "") +
+          (toCreate.length ? ". It would also create these folders at " +
+            "the project root: " + toCreate.join(", ") : "") +
+          ". That IS the preview — show it to the user, and call " +
+          "organize_project with dryRun:false in your NEXT reply, after " +
+          "they say go." };
       }
       for (const nm of looseComps) {
         (compProps[nm] || (compProps[nm] = {})).folder = "Comps";

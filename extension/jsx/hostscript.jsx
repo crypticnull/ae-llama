@@ -1552,6 +1552,24 @@ function AELL_orgRootFolder(name) {
   return null;
 }
 
+/* The preview GATE's key, same contract as clean_project's
+ * AELL_hygPlanKey: a move may only cite a preview that showed THIS exact
+ * list, taken in an EARLIER request. Keyed on item id AND destination, so
+ * a project that gained, lost or re-filed anything since the preview no
+ * longer matches -- that is not the list the user said go to.
+ *
+ * organize_project moves rather than deletes, so it is the smaller harm;
+ * it is gated anyway because it is project-WIDE and the model reached for
+ * it beside clean_project in the field (WORKPLAN-LOG 2026-09-02). */
+function AELL_orgPlanKey(plan) {
+  var parts = [], i;
+  for (i = 0; i < plan.length; i++) {
+    parts.push(String(plan[i].item.id) + ">" + plan[i].dest);
+  }
+  parts.sort();
+  return parts.join(",");
+}
+
 /* Same name, deeper in the tree: reported so the user knows why a second
  * folder of that name is about to appear at the root. */
 function AELL_orgHomonyms(name) {
@@ -1624,13 +1642,63 @@ AELL_TOOLS.organize_project = function (args) {
       "with two folders of that name — say so before running this.";
   }
 
+  // The gate. A preview RECORDS the plan it showed; a move must cite that
+  // same plan, from an earlier request. Recording happens on the refusal
+  // path too, so the refusal below IS the preview the round was missing
+  // and the next request goes straight through.
+  var planKey = AELL_orgPlanKey(plan);
+  var seq = $.global.AELL_requestSeq || 0;
+  var shown = $.global.AELL_orgShown;
+
   if (dryRun) {
-    out.note = plan.length === 0
-      ? "PREVIEW ONLY — nothing to do: no loose items at the project root."
-      : "PREVIEW ONLY — nothing was moved. Show the user the moves above " +
-        "(and any folder that would be created), then call again with " +
-        "dryRun:false to do it.";
+    $.global.AELL_orgShown = { key: planKey, seq: seq };
+    if (plan.length === 0) {
+      out.note = "PREVIEW ONLY — nothing to do: no loose items at the " +
+        "project root.";
+    } else {
+      out.note = "PREVIEW ONLY — nothing was moved. Show the user the " +
+        "moves above (and any folder that would be created), then call " +
+        "again with dryRun:false to do it.";
+    }
     return AELL_okay(out);
+  }
+
+  // An empty plan is not gated: the loop below provably does nothing, so
+  // a refusal there would be noise about a no-op. (clean_project gates its
+  // empty case because AE, not the preview, decides what it deletes.)
+  if (plan.length > 0) {
+    var block = "";
+    if (!shown) {
+      block = "nothing has been previewed yet";
+    } else if (shown.key !== planKey) {
+      block = "the project has changed since the last preview, so this is " +
+        "not the list the user agreed to";
+    } else if (seq > 0 && shown.seq === seq) {
+      // Same request as the preview: nobody has been back to see it. seq
+      // stays 0 for a caller that never announces a request (a raw -r
+      // script), and such a caller then only has to preview first.
+      block = "that preview was taken in THIS same reply, so the user has " +
+        "not seen it yet";
+    }
+    if (block) {
+      $.global.AELL_orgShown = { key: planKey, seq: seq };
+      var listed = "";
+      if (moves.length) {
+        listed = " — " + moves.slice(0, 10).join(", ");
+        if (moves.length > 10) {
+          listed += ", +" + (moves.length - 10) + " more";
+        }
+      }
+      if (toCreate.length) {
+        listed += ". It would also create these folders at the project " +
+          "root: " + toCreate.join(", ");
+      }
+      return AELL_err("organize_project refused to move: " + block + ". " +
+        "Nothing was moved. " + plan.length + " item(s) would be filed" +
+        listed + ". That IS the preview — show it to the user, and call " +
+        "organize_project with dryRun:false in your NEXT reply, after they " +
+        "say go.");
+    }
   }
 
   var created = [], done = [], notMoved = [], cache = {}, folder;
