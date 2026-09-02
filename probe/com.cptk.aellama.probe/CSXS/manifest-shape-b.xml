@@ -1,19 +1,18 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <!--
-  SHAPE B -- ONE <Extension> whose single HostList names both hosts.
+  SHAPE B: ONE <Extension> whose single HostList names both hosts.
 
-  THIS IS THE DEFAULT -- the file install-probe.ps1 installs unless
+  THIS IS THE DEFAULT, the file install-probe.ps1 installs unless
   -Shape A is passed. It is the shape every shipped multi-host CEP
   manifest found in the wild actually uses. Its cost is that CEP
   auto-loads the one ScriptPath in BOTH hosts, so it must point at a
   loader that branches before touching any app.* API (./jsx/loader.jsx).
 
-  It became the default on 2026-09-02 because shape A -- the
-  per-extension HostList form -- did not list in After Effects on the
-  owner's machine. Shape A is documented by Adobe but had NO field
-  evidence behind it, and defaulting to it was a mistake rather than an
-  experiment. It stays in manifest-shape-a.xml so the comparison can be
-  made deliberately with -Shape A, once the probe is known to work.
+  EDITING THIS FILE: an XML comment may not contain a double dash, and
+  may not end with a dash. Every probe manifest shipped with one on
+  2026-09-02; CEP dropped the whole bundle silently, and the failure
+  looked exactly like a rejected manifest SHAPE, which cost a wrong
+  diagnosis and a round trip. tests/test-manifest-xml.js now refuses it.
 -->
 <ExtensionManifest ExtensionBundleId="com.cptk.aellama.probe"
                    ExtensionBundleName="AE Llama P0 Probe"

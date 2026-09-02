@@ -101,9 +101,26 @@ if (-not (Test-Path $manifestPath)) {
 if (Test-Path $manifestPath) {
     $raw = Get-Content -Raw $manifestPath
     $xml = $null
-    try { $xml = [xml]$raw } catch {
-        Fault ("manifest is not well-formed XML: " + $_.Exception.Message) `
-              'a malformed manifest makes CEP drop the WHOLE bundle silently'
+    # LoadXml, not [xml]$raw: the cast failure embeds the ENTIRE file in
+    # its message, so a one-character error printed 60 unreadable lines
+    # twice. LoadXml throws an XmlException that names the line.
+    try {
+        $doc = New-Object System.Xml.XmlDocument
+        $doc.LoadXml($raw)
+        $xml = $doc
+    } catch {
+        $why = $_.Exception.Message
+        if ($_.Exception.InnerException) { $why = $_.Exception.InnerException.Message }
+        Fault ("manifest is not well-formed XML: " + $why) `
+              'CEP drops the WHOLE bundle silently on a parse error, which looks exactly like a rejected manifest SHAPE. Fix the XML first.'
+        # The trap that actually shipped, called out by name because the
+        # generic parser message ("cannot contain") does not say which
+        # comment or why anyone would write one.
+        if ($why -match 'comment') {
+            Info 'XML comments may not contain a double dash or end with a dash.'
+            Info 'Every probe manifest shipped with one on 2026-09-02.'
+            Info 'tests\test-manifest-xml.js catches this without an Adobe app.'
+        }
     }
     if ($xml) {
         Good 'manifest is well-formed XML'
@@ -118,11 +135,14 @@ if (Test-Path $manifestPath) {
         $perExt = @($xml.ExtensionManifest.DispatchInfoList.Extension |
                     Where-Object { $_.HostList }).Count
         if ($perExt -gt 0) {
-            Fault ("SHAPE A is installed (" + $perExt +
-                   " extension(s) carry their own <HostList>)") `
-                  'shape A did NOT list in After Effects on 2026-09-02 with everything else correct. Run: powershell -ExecutionPolicy Bypass -File scripts\install-probe.ps1   (it defaults to shape B now)'
+            Info ("SHAPE A installed: " + $perExt +
+                  " extension(s) carry their own <HostList>")
+            Info 'Documented by Adobe, but nobody has been seen shipping it.'
+            Info 'If the panel does not list AND the XML parsed above, this'
+            Info 'is the next suspect: re-run install-probe.ps1 for shape B.'
         } else {
-            Good 'SHAPE B installed: one HostList for the whole bundle'
+            Info 'SHAPE B installed: one HostList for the whole bundle'
+            Info '(the shape every shipped multi-host manifest uses)'
         }
 
         $hosts = @()

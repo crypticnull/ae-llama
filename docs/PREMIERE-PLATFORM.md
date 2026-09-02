@@ -91,30 +91,35 @@ a native gap.
 
 ## 4. Measured results
 
-### 2026-09-02 — shape A did not list in After Effects
+### 2026-09-02 — the probe did not load: an illegal XML comment
 
-First install on the owner's machine. `install-probe.ps1` reported a
-clean run: PlayerDebugMode already 1 on CSXS.10/11/12 (CSXS.9 present at
-0; 13/14 created by the script), junction created from
-`%APPDATA%\Adobe\CEP\extensions\com.cptk.aellama.probe` to the repo,
-shape A manifest in place. After a full After Effects restart the panel
-was **not** in `Window > Extensions`.
+**MEASURED.** All four probe manifests contained `--` inside an XML
+comment. XML 1.0 §2.5 forbids it, so the file does not parse, and CEP
+reports a parse failure nowhere a user can see: the extension is simply
+absent from `Window > Extensions`.
 
-What that does and does not establish:
+Environment on the owner's machine was correct throughout, and this is
+what makes the failure mode worth writing down: `install-probe.ps1`
+reported a clean run, the junction resolved, `PlayerDebugMode` was
+already 1 on CSXS.10/11/12, and the AE Llama panel itself loads from the
+same folder. Nothing was wrong except one character.
 
-- It **does** establish that shape A as written here does not load in
-  AE 2026 on a machine where the AE Llama panel itself loads from the
-  same folder. Shape A is now not the default.
-- It does **not** establish that Adobe's per-extension `HostList` is
-  unsupported. The cause has not been read out of CEP's own log yet, and
-  a malformed manifest and a rejected-but-valid one look identical from
-  the menu. `scripts\probe-doctor.ps1` section 6 is what settles it.
+**A retraction.** Before `scripts\probe-doctor.ps1` existed, the first
+diagnosis was "shape A (per-extension `HostList`) does not load" — a
+claim about Adobe — and the default was switched on that basis. That
+was wrong. Both shapes were malformed, so **neither has ever been
+parsed, and the manifest-shape question is still completely open.**
 
-Shape A was documented by Adobe and had **zero** field evidence behind
-it; every shipped multi-host manifest anyone found uses shape B.
-Defaulting to it was a guess, and the guess cost a round trip. Shape B
-is the default from this date; shape A stays in `manifest-shape-a.xml`
-for a deliberate re-test once the probe is known to work.
+Shape B remains the default, on the original evidence rather than on
+this failure: every shipped multi-host CEP manifest anyone found uses
+one `HostList`. Shape A stays in `manifest-shape-a.xml` and deserves a
+real test now that a manifest actually parses.
+
+The generalisable lesson, and the reason it cost a round trip: a
+malformed manifest and a rejected-but-valid one are **indistinguishable
+from the Extensions menu**. `tests/test-manifest-xml.js` now refuses
+either kind of unparseable XML in this repo, in milliseconds, without an
+Adobe app.
 
 ### The rest
 

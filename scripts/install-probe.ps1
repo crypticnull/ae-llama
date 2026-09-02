@@ -29,8 +29,10 @@ param(
     # B is the default because it is the only shape with field evidence:
     # every shipped multi-host CEP manifest found in the wild uses one
     # HostList on one extension. Shape A (per-extension HostList) is
-    # documented by Adobe and DID NOT LIST in After Effects on the
-    # owner's machine 2026-09-02 -- see docs\PREMIERE-PLATFORM.md.
+    # documented by Adobe but nobody has been seen shipping it.
+    # NOTE: neither shape has ever actually been PARSED by CEP - both
+    # shipped with an illegal XML comment on 2026-09-02 - so the shape
+    # question is still open. See docs\PREMIERE-PLATFORM.md.
     [ValidateSet('A', 'B')]
     [string]$Shape = 'B',
     [switch]$Harness,

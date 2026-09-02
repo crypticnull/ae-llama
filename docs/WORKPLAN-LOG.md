@@ -13732,3 +13732,35 @@ Nothing else was left unattempted this pass. Nothing is blocked.
 - `tests/test-probe-bundle.js` now pins shape B as the default and the
   install script's default flag. Harness 68/70 (the two known
   Windows-only suites). No `extension/` change, so NO BUMP.
+
+## 2026-09-02 (remote session) — the real cause: `--` in an XML comment
+
+- The doctor found it on its first run, which is the entire reason it
+  exists. ALL FOUR probe manifests contained `--` inside an XML comment
+  (used as a dash). XML 1.0 forbids it, the file does not parse, and CEP
+  reports that NOWHERE a user can see: the extension is simply absent
+  from Window > Extensions.
+- **The previous entry's diagnosis was wrong and is retracted.** "Shape
+  A does not load" was a claim about Adobe drawn from a self-inflicted
+  typo. Both shapes were malformed, so NEITHER has ever been parsed and
+  the manifest-shape question is completely open. Shape B stays the
+  default on its original evidence (every shipped multi-host manifest
+  uses one HostList), not on this failure.
+- The failure mode is the lesson: a malformed manifest and a
+  rejected-but-valid one are indistinguishable from the Extensions menu,
+  and each guess costs a full quit-and-relaunch on the one machine that
+  can test. NEW `tests/test-manifest-xml.js` refuses unparseable XML
+  repo-wide in milliseconds: comment legality (the exact character that
+  shipped, named as such), tag balance, attribute quoting, plus CEP
+  basics (bundle id, every listed extension dispatched, a host named).
+  Its own checker is tested against each defect, including the fixture
+  trap that a comment written with two trailing dashes tests nothing.
+  CLAUDE.md carries the rule.
+- Also fixed: the doctor used `[xml]$raw`, whose cast failure embeds the
+  WHOLE file in its message, so a one-character error printed 60
+  unreadable lines twice. It uses `XmlDocument.LoadXml` now, which names
+  the line, and adds the double-dash hint when the parser mentions a
+  comment. `install-probe.ps1` no longer claims shape A was measured to
+  fail.
+- Harness 69/71 (the two known Windows-only suites). No `extension/`
+  change, so NO BUMP.

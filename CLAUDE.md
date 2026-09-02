@@ -93,6 +93,14 @@ interactive session does NOT self-start; it answers one prompt and waits.
   ExtendScript 4.5.6. This binds `extension/js/selftest.js` too — the
   CLI runner `$.evalFile`s it.
 - `.ps1` must be pure ASCII (Windows PowerShell 5.1, BOM-less).
+- **An XML comment may not contain `--` or end with `-`** (XML 1.0
+  §2.5), and CEP reports a manifest parse error NOWHERE a user can see:
+  the extension is just absent from Window > Extensions, which looks
+  exactly like a rejected manifest shape or HostList. Measured
+  2026-09-02: all four probe manifests shipped with `--` used as a dash,
+  and the failure was misdiagnosed as "Adobe rejects this manifest
+  shape" before `scripts/probe-doctor.ps1` read the real reason.
+  `tests/test-manifest-xml.js` now refuses unparseable XML repo-wide.
 - Every failed lookup must list what actually exists (grounded errors) —
   it is how the small local model self-corrects.
 - **Context is a functional resource. Function over conversation**

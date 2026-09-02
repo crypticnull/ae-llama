@@ -184,12 +184,14 @@ function hostsIn(xml) {
   // CEP demands the active file be CSXS\manifest.xml, so install-probe.ps1
   // overwrites it to switch shapes. Both shapes are committed beside it.
   //
-  // The DEFAULT is shape B, and it is the default because of a measured
-  // failure: shape A -- the per-extension HostList form -- did not list
-  // in After Effects on the owner's machine (2026-09-02), with the
-  // junction correct and PlayerDebugMode=1 on CSXS.12. Shape A was
-  // documented by Adobe and had zero field evidence; shipping it as the
-  // default was a guess dressed as a design choice.
+  // The DEFAULT is shape B, on the evidence that every shipped
+  // multi-host CEP manifest anyone found uses one HostList.
+  //
+  // It is NOT the default because shape A was measured to fail. Both
+  // shapes shipped with an illegal XML comment on 2026-09-02 and
+  // neither was ever parsed by CEP; the "shape A does not load"
+  // diagnosis drawn from that was wrong, and the shape question is
+  // still open. tests/test-manifest-xml.js is what stops a repeat.
   assert(read(path.join(PROBE, "CSXS", "manifest-shape-b.xml")) ===
          read(path.join(PROBE, "CSXS", "manifest.xml")),
          "manifest.xml is byte-identical to shape B, the default that " +
