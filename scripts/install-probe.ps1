@@ -41,6 +41,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'lib\json-io.ps1')
+
 $repoRoot  = Split-Path -Parent $PSScriptRoot
 $probeSrc  = Join-Path $repoRoot 'probe\com.cptk.aellama.probe'
 $harnSrc   = Join-Path $repoRoot 'probe\com.cptk.aellama.harness'
@@ -111,7 +113,7 @@ foreach ($row in $keySnapshot) {
 
 New-Item -ItemType Directory -Force -Path $probeData | Out-Null
 $snapshotFile = Join-Path $probeData 'csxs-keys.json'
-$keySnapshot | ConvertTo-Json -Depth 4 | Set-Content $snapshotFile -Encoding UTF8
+Write-AellJson -Path $snapshotFile -Object $keySnapshot -Depth 4
 Write-Host "Snapshot written to $snapshotFile"
 
 # ------------------------------------------------- 2. select the shape

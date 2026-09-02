@@ -13955,3 +13955,38 @@ Nothing else was left unattempted this pass. Nothing is blocked.
   is open — and refuses outright rather than touching a project that has
   content in it when no scratch path is given.
 - Harness 70/72. No `extension/` change, so NO BUMP.
+
+## 2026-09-02 (remote session) — ROOT CAUSE: a UTF-8 BOM ate the job
+
+- Two unattended runs, five minutes each, produced nothing. The second
+  one's own instrumentation gave the answer: the ticker said "job
+  claimed" (the atomic rename happened) but no claim breadcrumb and no
+  progress file were written. The claimer died BETWEEN the rename and
+  its first write, and there is exactly one statement there.
+- **`Set-Content -Encoding UTF8` on Windows PowerShell 5.1 writes a
+  UTF-8 BOM.** Node's `readFileSync(p, "utf8")` returns it as a leading
+  U+FEFF and `JSON.parse` THROWS on it. The CEP claimer renamed the job
+  to claim it, threw inside `JSON.parse`, and returned from a SILENT
+  catch. The job was consumed so no other claimer could take it, and
+  nothing was written anywhere. It looked exactly like "Premiere hung".
+- PowerShell 6+ defaults to BOM-less UTF-8, so this would have been
+  invisible on any dev box with pwsh while breaking every 5.1 user.
+- Fixed at both ends, because a format that only works when both ends
+  agree has two chances to break. NEW `scripts/lib/json-io.ps1` writes
+  with `UTF8Encoding($false)` and strips a BOM on read;
+  `run-ppro-probe.ps1`, `install-probe.ps1` and `ppro-door-probe.ps1`
+  all route through it, and the two `.jsx` writes in the door probe are
+  BOM-less now too. Both CEP claimers strip `﻿` before parsing.
+- The second defect was worse than the BOM: **a silent catch after
+  consuming the job**. Both claimers now write a `job-claimed.json`
+  breadcrumb naming what failed before they started, so this shape of
+  failure can never again report "nothing happened" with no reason.
+- Guarded: `tests/test-probe-bundle.js` reproduces the throw, proves the
+  strip fixes it, asserts both claimers strip and neither contains a
+  LITERAL BOM character (the escape is used so the guard is reviewable),
+  asserts the non-silent breadcrumb, and lints every `.ps1` in the repo
+  for `Set-Content -Encoding UTF8`.
+- Caught while writing the fix: the first version of the strip put a
+  raw U+FEFF into the page source - the same invisible-byte hazard as
+  the control bytes earlier today. The test now forbids it explicitly.
+- Harness 70/72. No `extension/` change, so NO BUMP.

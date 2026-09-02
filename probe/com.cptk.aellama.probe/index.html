@@ -589,10 +589,24 @@ of the panel. Read-only unless you press a button marked MUTATES.</p>
       if (!fs.existsSync(jobFile)) { return null; }
       claimed = path.join(dir, "job.running.json");
       fs.renameSync(jobFile, claimed);
-      job = JSON.parse(fs.readFileSync(claimed, "utf8"));
+      // Strip the BOM: Windows PowerShell 5.1 writes one and JSON.parse
+      // throws on it. See the note in the harness runner - this exact
+      // line, failing into a silent catch, ate two unattended runs.
+      job = JSON.parse(String(fs.readFileSync(claimed, "utf8"))
+                         .replace(/^\uFEFF/, ""));
       job.__claimed = claimed;
       return job;
     } catch (e) {
+      // Never die silently after consuming the job.
+      try {
+        fs.writeFileSync(path.join(dir, "job-claimed.json"),
+          JSON.stringify({ via: "visible panel",
+                           at: new Date().toISOString(),
+                           failedBeforeStarting: String(e && e.message ? e.message : e),
+                           hint: "the job could not be parsed after being " +
+                                 "claimed; a UTF-8 BOM from PowerShell does " +
+                                 "exactly this" }, null, 2), "utf8");
+      } catch (e2) {}
       return null;
     }
   }

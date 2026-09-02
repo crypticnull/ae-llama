@@ -43,6 +43,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'lib\json-io.ps1')
+
 $repoRoot  = Split-Path -Parent $PSScriptRoot
 $probeData = Join-Path $env:APPDATA 'AE-Llama\probes'
 New-Item -ItemType Directory -Force -Path $probeData | Out-Null
@@ -67,7 +69,7 @@ function Save-Results {
         afterFXPath = $AfterFXPath
         doors = @($results)
     }
-    $payload | ConvertTo-Json -Depth 6 | Set-Content $file -Encoding UTF8
+    Write-AellJson -Path $file -Object $payload -Depth 6
     Write-Host ''
     Write-Host "Written to $file"
 }
@@ -174,7 +176,12 @@ try {
 '@
         $wrapper = $wrapper.Replace('__OUT__', $outFs).Replace('__TOUCH__', $touchFs).Replace('__JSX__', $doorJsx)
         $wrapperPath = Join-Path $env:TEMP 'aellp-door1.jsx'
-        Set-Content -Path $wrapperPath -Value $wrapper -Encoding UTF8
+        # BOM-less: ExtendScript is handed this file directly and a BOM
+        # at the head of a script is one more thing that can go wrong for
+        # no benefit (see scripts\lib\json-io.ps1 for the JSON case that
+        # actually cost two unattended runs).
+        [System.IO.File]::WriteAllText($wrapperPath, $wrapper,
+            (New-Object System.Text.UTF8Encoding($false)))
 
         Write-Host 'door 1: asking After Effects to BridgeTalk Premiere...'
         Start-Process -FilePath $AfterFXPath -ArgumentList @('-r', $wrapperPath) | Out-Null
@@ -184,7 +191,7 @@ try {
         $targets = ''
         if ($gotOut) {
             try {
-                $j = Get-Content -Raw $out | ConvertFrom-Json
+                $j = Read-AellJson -Path $out
                 $targets = [string]$j.targets
             } catch {}
         }
@@ -246,7 +253,8 @@ if ($Door -eq '2' -or $Door -eq 'all') {
                 $src = Get-Content -Raw (Join-Path $PSScriptRoot 'ppro-door-cli.jsx')
                 $src = $src.Replace('__OUT__', ($out -replace '\\', '/')).Replace('__PROBE__', $probeJsx)
                 $runJsx = Join-Path $env:TEMP 'aellp-door2.jsx'
-                Set-Content -Path $runJsx -Value $src -Encoding UTF8
+                [System.IO.File]::WriteAllText($runJsx, $src,
+                    (New-Object System.Text.UTF8Encoding($false)))
 
                 Write-Host 'door 2: launching Premiere with /C es.processFile...'
                 Start-Process -FilePath $PremierePath `
@@ -290,8 +298,8 @@ if ($Door -eq '3' -or $Door -eq 'all') {
             $jobResult = Join-Path $probeData 'job-result.json'
             Remove-Item $jobResult, (Join-Path $probeData 'job.running.json') -ErrorAction SilentlyContinue
             $probeJsx = (Join-Path $repoRoot 'probe\com.cptk.aellama.probe\jsx\probe.jsx') -replace '\\', '/'
-            [pscustomobject]@{ probeJsx = $probeJsx; probe = 'hostFacts'; args = @{} } |
-                ConvertTo-Json -Depth 4 | Set-Content $job -Encoding UTF8
+            Write-AellJson -Path $job -Depth 4 -Object ([pscustomobject]@{
+                probeJsx = $probeJsx; probe = 'hostFacts'; args = @{} })
 
             Write-Host 'door 3: launching Premiere with a job file waiting...'
             Start-Process -FilePath $PremierePath | Out-Null

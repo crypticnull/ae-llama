@@ -46,6 +46,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'lib\json-io.ps1')
+
 $repoRoot  = Split-Path -Parent $PSScriptRoot
 $probeData = Join-Path $env:APPDATA 'AE-Llama\probes'
 $jobFile   = Join-Path $probeData 'job.json'
@@ -154,7 +156,11 @@ $job = [ordered]@{
     mogrtPath      = $(if ($MogrtPath) { $MogrtPath -replace '\\', '/' } else { $null })
     createdAt      = (Get-Date).ToString('o')
 }
-$job | ConvertTo-Json -Depth 5 | Set-Content $jobFile -Encoding UTF8
+# Write-AellJson, never Set-Content -Encoding UTF8: on Windows
+# PowerShell 5.1 that writes a BOM, JSON.parse throws on it, and the CEP
+# claimer died in a silent catch AFTER consuming the job. Two unattended
+# runs produced nothing because of this one line.
+Write-AellJson -Path $jobFile -Object $job -Depth 5
 Say "Job written: $jobFile"
 Say 'Everything mutating happens in a scratch project, never in yours.'
 
@@ -222,7 +228,7 @@ if (-not (Test-Path $resFile)) {
     $progFile  = Join-Path $probeData 'job-progress.json'
     if (Test-Path $claimFile) {
         try {
-            $c = Get-Content -Raw $claimFile | ConvertFrom-Json
+            $c = Read-AellJson -Path $claimFile
             Say ("Claimed by: " + $c.via + "  (host " + $c.host + ", at " + $c.at + ")")
         } catch { Say "Claim file present but unreadable." }
     } else {
@@ -231,7 +237,7 @@ if (-not (Test-Path $resFile)) {
 
     if (Test-Path $progFile) {
         try {
-            $pr = Get-Content -Raw $progFile | ConvertFrom-Json
+            $pr = Read-AellJson -Path $progFile
             Say ''
             Say '-- how far it got'
             foreach ($s in $pr.steps) {
@@ -272,7 +278,7 @@ if (-not (Test-Path $resFile)) {
 Good ''
 Good 'Result received.'
 $res = $null
-try { $res = Get-Content -Raw $resFile | ConvertFrom-Json } catch {
+try { $res = Read-AellJson -Path $resFile } catch {
     Bad "The result file is not readable JSON: $($_.Exception.Message)"
     exit 1
 }

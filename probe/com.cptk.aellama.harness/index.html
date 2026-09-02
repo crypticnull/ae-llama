@@ -54,8 +54,23 @@
     // Claim before reading: renameSync is atomic, so a second firing
     // finds no job file and stops at the check above.
     fs.renameSync(jobFile, claimed);
-    job = JSON.parse(fs.readFileSync(claimed, "utf8"));
+    // STRIP THE BOM. Windows PowerShell 5.1's Set-Content -Encoding UTF8
+    // writes one, fs.readFileSync hands it back as a leading U+FEFF, and
+    // JSON.parse throws on it. That threw here, this catch returned
+    // silently, and the job was consumed with nothing run and nothing
+    // written - twice, for five minutes each.
+    job = JSON.parse(String(fs.readFileSync(claimed, "utf8"))
+                       .replace(/^\uFEFF/, ""));
   } catch (e) {
+    // NEVER die silently after consuming a job. The claim already
+    // happened, so no other claimer can pick it up; a silent return
+    // means the run reports "nothing happened" with no reason anywhere.
+    write(path.join(dir, "job-claimed.json"),
+          { via: "invisible runner (door 3)",
+            at: new Date().toISOString(),
+            failedBeforeStarting: String(e && e.message ? e.message : e),
+            hint: "the job file could not be read or parsed after being " +
+                  "claimed; a UTF-8 BOM from PowerShell does exactly this" });
     return;
   }
 

@@ -439,5 +439,81 @@ function hostsIn(xml) {
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+// ------------- 8. the BOM that ate two unattended runs
+//
+// Windows PowerShell 5.1's `Set-Content -Encoding UTF8` writes a UTF-8
+// BOM. Node's readFileSync(p, "utf8") returns it as a leading U+FEFF and
+// JSON.parse THROWS. The probe's job file was written that way, so the
+// CEP claimer renamed the job to claim it, threw inside JSON.parse, and
+// returned from a silent catch. The job was consumed, nothing ran,
+// nothing was written, and two 5-minute unattended runs reported only
+// "it hung". PowerShell 6+ defaults to BOM-less and would have hidden
+// this on a dev box forever while breaking every 5.1 user.
+{
+  // The failure, reproduced, so the reason this code exists is provable
+  // rather than a story in a comment.
+  const withBom = "﻿{\"a\":1}";
+  let threw = false;
+  try { JSON.parse(withBom); } catch (e) { threw = true; }
+  assert(threw, "JSON.parse THROWS on a BOM-prefixed document");
+  assert(JSON.parse(withBom.replace(/^﻿/, "")).a === 1,
+         "and stripping the BOM makes it parse");
+
+  const claimers = {
+    "probe/index.html": read(path.join(PROBE, "index.html")),
+    "harness/index.html": read(path.join(HARNESS, "index.html"))
+  };
+  Object.keys(claimers).forEach(function (name) {
+    const src = claimers[name];
+    assert(/replace\(\/\^\\uFEFF\/, ""\)/.test(src),
+           name + " strips a BOM before JSON.parse");
+    assert(!/﻿/.test(src),
+           name + " contains no LITERAL BOM character (the escape is used, " +
+           "so the guard is visible to a reviewer)");
+    assert(/failedBeforeStarting/.test(src),
+           name + " writes a breadcrumb when the claim fails instead of " +
+           "returning silently - a silent catch after consuming the job is " +
+           "what made the failure invisible");
+  });
+
+  // The write side. Every JSON file a Node/CEP reader consumes must be
+  // written BOM-less, so no future script can reintroduce this.
+  const scriptsDir = path.join(ROOT, "scripts");
+  const psFiles = [];
+  (function walk(d) {
+    fs.readdirSync(d, { withFileTypes: true }).forEach(function (e) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) { walk(p); }
+      else if (/\.ps1$/i.test(e.name)) { psFiles.push(p); }
+    });
+  })(scriptsDir);
+
+  const offenders = [];
+  psFiles.forEach(function (f) {
+    const rel = path.relative(ROOT, f).replace(/\\/g, "/");
+    if (rel === "scripts/lib/json-io.ps1") { return; }   // documents it
+    const src = fs.readFileSync(f, "utf8");
+    src.split(/\r?\n/).forEach(function (line, i) {
+      if (/^\s*#/.test(line)) { return; }                // a comment about it
+      if (/Set-Content[^|]*-Encoding\s+UTF8/i.test(line)) {
+        offenders.push(rel + ":" + (i + 1));
+      }
+    });
+  });
+  assert(offenders.length === 0,
+         "no script writes with Set-Content -Encoding UTF8, which BOMs on " +
+         "Windows PowerShell 5.1" +
+         (offenders.length ? " (" + offenders.join(", ") + ")" : ""));
+
+  const jsonIo = path.join(ROOT, "scripts", "lib", "json-io.ps1");
+  assert(fs.existsSync(jsonIo), "scripts/lib/json-io.ps1 exists");
+  const io = read(jsonIo);
+  assert(/UTF8Encoding\(\$false\)/.test(io),
+         "and writes with UTF8Encoding($false), i.e. no BOM");
+  assert(/65279/.test(io),
+         "and strips a BOM on read too - a format that only works when " +
+         "both ends agree has two chances to break");
+}
+
 console.log(failed ? "\nTESTS FAILED" : "\nALL TESTS PASSED");
 process.exitCode = failed ? 1 : 0;
