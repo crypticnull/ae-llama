@@ -66,6 +66,9 @@ function jsxIn(dir) {
 }
 var FILES = jsxIn("extension/jsx")
   .concat(jsxIn("scripts"))
+  // The P0 probe bundle: compiled by ExtendScript in both hosts, so the
+  // left-associative ?: rule binds it too (docs/PREMIERE_PLAN.md P0).
+  .concat(jsxIn("probe/com.cptk.aellama.probe/jsx"))
   .concat(["extension/js/selftest.js"]);
 
 var passed = 0, failed = 0;

@@ -124,6 +124,11 @@ function jsxIn(dir) {
 }
 const TARGETS = jsxIn("extension/jsx")
   .concat(jsxIn("scripts"))
+  // probe/ ships nothing, but ExtendScript still has to COMPILE it, and
+  // a reserved word there costs a trip to the owner's machine with
+  // Premiere open — the most expensive kind of round trip this project
+  // has (docs/PREMIERE_PLAN.md P0).
+  .concat(jsxIn("probe/com.cptk.aellama.probe/jsx"))
   .concat(["extension/js/selftest.js"]);
 
 assert(TARGETS.length >= 3,

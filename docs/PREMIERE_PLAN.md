@@ -205,12 +205,14 @@ restores round rollback.
 Owner = who does the work: **remote** writes, **local** runs in real
 Premiere, **owner** decides/clicks.
 
-### P0 — Feasibility probes (remote writes, local + owner run; days; no bump)
+### P0 — Feasibility probes (APPROVED 2026-09-02; scripts written; days; no bump)
 
 A throwaway probe bundle **outside `extension/`**
-(`probe/com.cptk.aellama.probe/`, own bundle id, AEFT+PPRO, ~40-line
-jsx, one html page) junctioned by `scripts/install-probe.ps1`, so CI can
-never publish it into `AE-Llama.zxp`.
+(`probe/com.cptk.aellama.probe/`, own bundle id, AEFT+PPRO, ES3 jsx,
+one html page) junctioned by `scripts/install-probe.ps1`, so CI can
+never publish it into `AE-Llama.zxp`. The remote side is built —
+`WORKPLAN.md` section 12 lists every file and the owner's run order;
+`scripts/ppro-probe-report.js` grades the results.
 
 Measures, each written to `%APPDATA%\AE-Llama\probes\*.json`:
 
@@ -421,9 +423,9 @@ caption text read/edit. Roughly half of the 79 AE tools.
 
 ## 6. Owner decisions
 
-1. **Fund now?** (a) P0 only — probes, harness door, MOGRT verdict,
-   `bump-version.js` fix; (b) P0 + P1–P3 on the dev junction; (c) the
-   whole plan. **Recommend (a) now**, (b) after roadmap 13 closes.
+1. **Fund now?** — **ANSWERED 2026-09-02: (a) P0 only.** Probes,
+   harness door, MOGRT verdict, `bump-version.js` fix. P1+ remains
+   unfunded until roadmap item 13 closes and G0 has an answer.
 2. **Premiere 27.0 beta on the machine for the probe** (needed for G0;
    installs beside 26.x). Recommend yes.
 3. **Admin write of `extendscriptprqe.txt`** beside the Premiere exe

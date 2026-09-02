@@ -13628,3 +13628,74 @@ Nothing else was left unattempted this pass. Nothing is blocked.
 - Owner decisions owed before anything starts: PREMIERE_PLAN.md §6,
   first of all "fund P0 only now, P2+ after roadmap 13 closes"
   (recommended).
+
+## 2026-09-02 (remote session) — P0 approved and built
+
+- Owner approved decision 1 as (a): fund P0 only. Everything below is
+  the remote half; the owner's run order is WORKPLAN section 12.
+- NEW `probe/com.cptk.aellama.probe/` — throwaway CEP bundle with its
+  OWN ExtensionBundleId, deliberately OUTSIDE `extension/`. That siting
+  is the safety property, not tidiness: CI publishes the feed on every
+  push to a stable URL every installed panel polls, so anything under
+  `extension/` is on customers' machines within minutes. Ships shape A
+  (two `<Extension>`, per-extension `HostList`) as `manifest.xml` plus
+  a pristine `manifest-shape-a.xml`, and `manifest-shape-b.xml` (one
+  extension, both hosts, `loader.jsx` as ScriptPath). `jsx/probe.jsx`
+  is ES3 with its own JSON serializer and no dependency on the panel:
+  ping, hostFacts (appName, BridgeTalk targets, undo API, QE, MOGRT
+  API), qeProbe, historyProbe and mogrtAccept (both gated on
+  `allowMutate:true`), echo (the soak payload). `index.html` shims CEP
+  itself — it loads no external script at all.
+- NEW `probe/com.cptk.aellama.harness/` — door 3's invisible runner.
+  Dev-only, never packaged, no ScriptPath, and it CLAIMS the job file
+  with `renameSync` before doing the work: Adobe's own PProPanel
+  manifest comments the StartOn event as firing on every OS focus gain,
+  so an unclaimed job would run many times.
+- NEW `scripts/install-probe.ps1` (CSXS key snapshot before writing —
+  which CEP runtimes are registered is itself a measurement — then
+  PlayerDebugMode 10-14 and the junction; `-Shape A|B`, `-Harness`,
+  `-Uninstall`), `scripts/ppro-door-probe.ps1` (all three doors; exit 0
+  a door answered, 3 every door measured dead, 4 nothing measured),
+  `scripts/ppro-door-bridgetalk.jsx`, `scripts/ppro-door-cli.jsx`,
+  `scripts/ppro-probe-report.js` (the grader).
+- The grader's one rule, and the reason it exists: MEASURED / MISSING /
+  FAILED per row, and G0 can pass only on MEASURED rows. This is the
+  2026-09-02 settings-origin lesson generalized — a probe that reads
+  nothing must never report a green gate.
+- `scripts/bump-version.js`: the `<Extension Version>` regex and its
+  post-write check were both non-global, so a second `<Extension>` —
+  exactly what the Premiere plan adds — would have been left stale AND
+  reported as bumped. Now global, and every entry is asserted by name.
+  NEW `tests/test-bump-version.js` reproduces the old bug on a
+  hand-built two-entry manifest so it cannot come back.
+- `ZXPSignCmd -verify` now runs in `package-zxp.ps1` and as its own CI
+  step: the manifest is signed DATA, so a second extension changes the
+  signed bytes, and a bad signature installs from a junction while
+  failing from the store — the worst place to learn it.
+- NEW `tests/test-probe-bundle.js` (the probe cannot ship, does not
+  depend on the panel, both shapes are what they claim, both inline
+  page scripts parse under `node --check`, MISSING never grades as a
+  pass). `ae-window-census.ps1` gained `-ProcessName` so Premiere can
+  be photographed the same way; both ES3 lints now scan the probe jsx.
+- Measured while building: the ES3 lint's string-stripper does not know
+  regex LITERALS, so a bare `"` inside one desynchronises it and the
+  NEXT comment gets linted as code — it reported `debugger` from a
+  sentence about the ExtendScript debugger three lines away. Both door
+  scripts now use split/join instead of `/"/g`, with the reason in a
+  comment. The lint itself was left alone: teaching it regex literals
+  means solving the division-vs-regex ambiguity, and false negatives
+  there are worse than this.
+- Also measured: three assertions in the new test failed against their
+  OWN explanatory comments (a comment saying "touches no app.*" reads
+  to a regex exactly like code that does). Every content assertion now
+  strips comments first, which is the lesson `test-es3-syntax.js`
+  already carried.
+- Harness: full sweep 68/70 (the two known Windows-only suites,
+  test-engine-assets and test-ffmpeg-export). No `extension/` change,
+  so NO BUMP — and this is the one place where that is the point: the
+  probe is not a product change and must not reach a panel.
+- NEW `docs/PREMIERE-PLATFORM.md` — the evidence ledger. Section 2
+  ("what Adobe ships natively") is deliberately EMPTY: the competitive
+  read the plan was built on was true in April and stale by June, when
+  Adobe's AI Assistant beta landed, so no "Adobe does not do X" phrase
+  may ship until the owner fills that table from their own install.

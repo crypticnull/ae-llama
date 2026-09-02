@@ -29,7 +29,14 @@ param(
   [int]$IntervalMs = 250,
   [string]$Out = "",
   [switch]$IncludeHidden,
-  [int]$AeProcessId = 0
+  [int]$AeProcessId = 0,
+  # Which app to photograph. Defaults to After Effects, which is what
+  # this was written for; scripts\ppro-door-probe.ps1 -Census passes
+  # "Adobe Premiere*" so a Premiere door that hangs on a dialog can be
+  # diagnosed the same way. The dialog TRIAGE (lib\ae-dialog-triage.ps1)
+  # is still AE-specific - its window titles were measured in AE - so a
+  # Premiere census is a diagnostic, not a verdict.
+  [string]$ProcessName = "AfterFX*"
 )
 
 $ErrorActionPreference = "Stop"
@@ -159,7 +166,7 @@ function Get-AellCensusPids {
   param([int]$Explicit = 0)
   if ($Explicit -gt 0) { return @($Explicit) }
   $ids = @()
-  foreach ($p in @(Get-Process -Name "AfterFX*" -ErrorAction SilentlyContinue)) {
+  foreach ($p in @(Get-Process -Name $ProcessName -ErrorAction SilentlyContinue)) {
     $ids += $p.Id
   }
   return $ids
@@ -216,7 +223,7 @@ $log = @()
 $deadline = (Get-Date).AddSeconds($Seconds)
 $lastKey = "<none>"
 $samples = 0
-Write-Output ("Watching AfterFX windows for " + $Seconds + "s every " + $IntervalMs + "ms")
+Write-Output ("Watching " + $ProcessName + " windows for " + $Seconds + "s every " + $IntervalMs + "ms")
 while ((Get-Date) -lt $deadline) {
   $tops = Get-AellCensus -Hidden:$IncludeHidden -TopsOnly -Explicit $AeProcessId
   $samples++

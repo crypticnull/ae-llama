@@ -102,6 +102,19 @@ try {
         if ($LASTEXITCODE -ne 0 -or -not (Test-Path $outZxp)) { throw 'Signing failed.' }
     }
 
+    # ------------------------------------------------------- verification
+    # Adobe's own tool reading back what we just wrote. A ZXP whose
+    # signature does not verify installs from a junction and fails from
+    # the store, which is the worst possible place to find out --
+    # especially once the bundle carries more than one <Extension>
+    # (docs/PREMIERE_PLAN.md), since the manifest is signed DATA and a
+    # second entry changes those bytes.
+    & $ZxpSignCmd -verify $outZxp -certinfo
+    if ($LASTEXITCODE -ne 0) {
+        throw "ZXPSignCmd -verify rejected $outZxp - do not publish it."
+    }
+    Write-Host 'Signature verified.' -ForegroundColor Green
+
     $size = [math]::Round((Get-Item $outZxp).Length / 1MB, 2)
     Write-Host ''
     Write-Host "Done: $outZxp ($size MB)" -ForegroundColor Green

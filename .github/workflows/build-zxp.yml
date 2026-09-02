@@ -81,6 +81,18 @@ jobs:
           }
           .\scripts\package-zxp.ps1 @params
 
+      # package-zxp.ps1 already runs -verify and throws on a bad
+      # signature. This repeats it as its own step so a verification
+      # failure is a named red step in the CI log rather than a line
+      # inside the build step's output.
+      - name: Verify the signed ZXP
+        shell: pwsh
+        run: |
+          $zxp = Get-ChildItem dist/*.zxp | Select-Object -First 1
+          if (-not $zxp) { throw 'no ZXP to verify' }
+          & "$PWD/tools/ZXPSignCmd.exe" -verify $zxp.FullName -certinfo
+          if ($LASTEXITCODE -ne 0) { throw "signature verification failed for $($zxp.Name)" }
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:

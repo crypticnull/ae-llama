@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!--
+  DOOR 3 -- an invisible CEP extension that runs a job at host launch.
+  DEV-ONLY. This is never signed, never packaged, never installed on a
+  customer machine: an always-on invisible extension in someone else's
+  Premiere is not acceptable even when it is inert.
+
+  Two measured facts shape it:
+   - Adobe's own CEP 12 invisible-extension sample names
+     com.adobe.csxs.events.ApplicationActivate as the event Premiere
+     dispatches, and PProPanel's manifest comments it as "whenever it
+     gains focus from the OS" -- i.e. it fires MANY times, not once at
+     startup. So the page must be idempotent and sentinel-gated.
+   - No ScriptPath: nothing auto-loads into the host's ExtendScript
+     engine. The job file names the .jsx to evaluate, so there is one
+     copy of probe.jsx and it is loaded only when a job asks for it.
+-->
+<ExtensionManifest ExtensionBundleId="com.cptk.aellama.harness"
+                   ExtensionBundleName="AE Llama harness (dev only)"
+                   ExtensionBundleVersion="0.0.1"
+                   Version="7.0"
+                   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <ExtensionList>
+    <Extension Id="com.cptk.aellama.harness.runner" Version="0.0.1"/>
+  </ExtensionList>
+  <ExecutionEnvironment>
+    <HostList>
+      <Host Name="AEFT" Version="[24.0,99.9]"/>
+      <Host Name="PPRO" Version="[25.0,99.9]"/>
+    </HostList>
+    <LocaleList>
+      <Locale Code="All"/>
+    </LocaleList>
+    <RequiredRuntimeList>
+      <RequiredRuntime Name="CSXS" Version="11.0"/>
+    </RequiredRuntimeList>
+  </ExecutionEnvironment>
+  <DispatchInfoList>
+    <Extension Id="com.cptk.aellama.harness.runner">
+      <DispatchInfo>
+        <Resources>
+          <MainPath>./index.html</MainPath>
+          <CEFCommandLine>
+            <Parameter>--enable-nodejs</Parameter>
+            <Parameter>--mixed-context</Parameter>
+          </CEFCommandLine>
+        </Resources>
+        <Lifecycle>
+          <AutoVisible>false</AutoVisible>
+          <StartOn>
+            <Event>com.adobe.csxs.events.ApplicationActivate</Event>
+            <Event>applicationActivate</Event>
+          </StartOn>
+        </Lifecycle>
+        <UI>
+          <!-- Custom + no <Menu> = never listed, never shown. -->
+          <Type>Custom</Type>
+          <Geometry>
+            <Size>
+              <Height>100</Height>
+              <Width>100</Width>
+            </Size>
+          </Geometry>
+        </UI>
+      </DispatchInfo>
+    </Extension>
+  </DispatchInfoList>
+</ExtensionManifest>

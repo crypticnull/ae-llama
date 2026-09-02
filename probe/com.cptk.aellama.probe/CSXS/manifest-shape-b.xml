@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!--
+  SHAPE B -- ONE <Extension> whose single HostList names both hosts.
+
+  This is the shape every shipped multi-host CEP manifest found in the
+  wild actually uses. Its cost is that CEP auto-loads the one ScriptPath
+  in BOTH hosts, so it must point at a loader that branches before
+  touching any app.* API (./jsx/loader.jsx here).
+
+  scripts/install-probe.ps1 -Shape B copies this over CSXS\manifest.xml
+  in the installed junction target. Both shapes carry the same
+  ExtensionBundleId so only one can be installed at a time -- which is
+  the point: whichever shape is present is the one being measured.
+-->
+<ExtensionManifest ExtensionBundleId="com.cptk.aellama.probe"
+                   ExtensionBundleName="AE Llama P0 Probe"
+                   ExtensionBundleVersion="0.0.1"
+                   Version="7.0"
+                   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <ExtensionList>
+    <Extension Id="com.cptk.aellama.probe.both" Version="0.0.1"/>
+  </ExtensionList>
+  <ExecutionEnvironment>
+    <HostList>
+      <Host Name="AEFT" Version="[24.0,99.9]"/>
+      <Host Name="PPRO" Version="[25.0,99.9]"/>
+    </HostList>
+    <LocaleList>
+      <Locale Code="All"/>
+    </LocaleList>
+    <RequiredRuntimeList>
+      <RequiredRuntime Name="CSXS" Version="11.0"/>
+    </RequiredRuntimeList>
+  </ExecutionEnvironment>
+  <DispatchInfoList>
+    <Extension Id="com.cptk.aellama.probe.both">
+      <DispatchInfo>
+        <Resources>
+          <MainPath>./index.html</MainPath>
+          <ScriptPath>./jsx/loader.jsx</ScriptPath>
+          <CEFCommandLine>
+            <Parameter>--enable-nodejs</Parameter>
+            <Parameter>--mixed-context</Parameter>
+          </CEFCommandLine>
+        </Resources>
+        <Lifecycle>
+          <AutoVisible>true</AutoVisible>
+        </Lifecycle>
+        <UI>
+          <Type>Panel</Type>
+          <Menu>AE Llama P0 Probe</Menu>
+          <Geometry>
+            <Size>
+              <Height>700</Height>
+              <Width>560</Width>
+            </Size>
+            <MinSize>
+              <Height>320</Height>
+              <Width>320</Width>
+            </MinSize>
+          </Geometry>
+        </UI>
+      </DispatchInfo>
+    </Extension>
+  </DispatchInfoList>
+</ExtensionManifest>
