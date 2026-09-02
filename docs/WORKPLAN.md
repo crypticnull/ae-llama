@@ -1695,6 +1695,25 @@ this order, one bullet per pass:
   not position); tighten the loose check() functions in steps 4/5/6
   with matching canned-host cases. Remote pre-builds; local
   calibrates with --reuse-server.
+- ~~**Wire variants over the SAFE rows only.**~~ DONE 2026-09-02
+  (local, real AE, UNBUMPED). `--variants` (which implies `--isolate`)
+  runs each step's canonical sentence AND every paraphrase it declares,
+  each from a freshly rebuilt rig with a fresh conversation. 45
+  paraphrases over the 15 trigger-layer steps — casual / vague / typo'd,
+  2-3 each, which covers all fourteen roadmap-item-2 trigger mappings
+  and the A3/B3/E3/E4 usefulness rows that have a rig twin. Scored in
+  three: pass / miss (check failed, comp untouched) / **HARM** (check
+  failed, comp changed anyway), with the change read off the two
+  READ_COMP states the run already fetches (`compDiff` — it sees the
+  expression, the eased key and the recolour that `SIG_FN` cannot).
+  `gradeMatrix` is the acceptance gate the bullet states. Findings are
+  in the log; the wording fixes belong to the next bullet.
+  **Still owed here:** the A/B/C/E rows with no rig twin (A1 grid, A2
+  slider rig, B1 stagger, C1 typewriter, C2 text style, E1 blur, E2
+  for_each) need NEW rig-based steps before they can take paraphrases —
+  the rig already contains a finished grid with fades, so the existing
+  world-building steps 2-8 cannot be reset for a second phrasing. The
+  original instruction, for reference:
 - **Wire variants over the SAFE rows only** (A/B/C/E scenarios + the
   ten roadmap-item-2 trigger mappings): 2-3 paraphrases each (casual,
   vague, typo'd). Score: right tool + right target = pass; honest

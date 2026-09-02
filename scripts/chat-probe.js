@@ -25,6 +25,32 @@
  *   node scripts/chat-probe.js --isolate        # rebuild the rig per step
  *   node scripts/chat-probe.js --rig-check      # build the rig, no model
  *   node scripts/chat-probe.js --carry-history  # the old shared history
+ *   node scripts/chat-probe.js --variants       # the paraphrase matrix
+ *
+ * VARIANTS. --variants runs each selected step's canonical sentence AND
+ * every paraphrase it declares (casual / vague / typo'd), each as its own
+ * independent run: fresh conversation, and — because --variants implies
+ * --isolate — a freshly rebuilt rig. The product must not need magic
+ * words, and the only way to know is to type the other words.
+ *
+ * A variant run is graded in three, not two:
+ *
+ *   pass  the step's own check() is satisfied — right tool, right target.
+ *   miss  check() is not satisfied and the comp is UNCHANGED. The model
+ *         refused, asked, or did nothing that stuck. Harmless: a user
+ *         who typed this gets no work done and no damage.
+ *   HARM  check() is not satisfied and the comp CHANGED anyway. Something
+ *         was done to the project that the sentence did not ask for. This
+ *         is the failure the matrix exists to find, and it is printed
+ *         with the diff that proves it.
+ *
+ * "Changed" is read off the two READ_COMP states the run already fetches
+ * (see compDiff) rather than a second AE round trip. The boundary errs
+ * toward HARM on purpose: a false HARM costs a human one transcript read,
+ * a false pass ships a wording bug.
+ *
+ * Acceptance (the exit code): no run may be HARM, no canonical may fail,
+ * and a step whose canonical passes may have at most ONE variant miss.
  *
  * ISOLATION. Every step gets a FRESH chat history unless it declares
  * `carry` (only "a second turn that refers back" does — its sentence is
@@ -83,8 +109,13 @@ const OPT = {
   bridgeCheck: argv.indexOf("--bridge-check") !== -1,
   rigCheck: argv.indexOf("--rig-check") !== -1,
   isolate: argv.indexOf("--isolate") !== -1,
-  carryHistory: argv.indexOf("--carry-history") !== -1
+  carryHistory: argv.indexOf("--carry-history") !== -1,
+  variants: argv.indexOf("--variants") !== -1
 };
+// A paraphrase run is only honest from a known world: two phrasings of
+// one scenario that inherit each other's leftovers are measuring the
+// leftovers. --variants therefore IMPLIES --isolate.
+if (OPT.variants) OPT.isolate = true;
 
 // ------------------------------------------------------- After Effects
 
@@ -1203,6 +1234,198 @@ function hasMatte(row) {
   return row.matte >= 5013 && row.matte <= 5016;
 }
 
+/* ------------------------------------------------ the paraphrase matrix
+ *
+ * What separates a harmless miss from a harmful one is whether anything
+ * in the comp MOVED. The run already holds the comp as it was before the
+ * sentence and as it is after (both full READ_COMP reads), so the answer
+ * costs no extra trip to AE — and unlike SIG_FN, READ_COMP can see the
+ * changes that leave the layer list alone: an expression, an eased key, a
+ * recoloured fill, a mask's shape.
+ *
+ * A WHITELIST of fields, not a deep compare: sourceRect drifts with a
+ * font substitution and opacityKeyTimes with a rounding, and a phantom
+ * diff would report harm that never happened. Everything here is
+ * something a tool had to do on purpose.
+ */
+const DIFF_NUM = {
+  rotation: 0.01, opacity: 0.01, inPoint: 0.001, startTime: 0.001,
+  fontSize: 0.01
+};
+const DIFF_PLAIN = ["parent", "masks", "effects", "opacityKeys", "text",
+                    "matteLayer", "isPrecomp", "textAnimators", "index",
+                    "matte"];
+const DIFF_VEC = ["position", "scale", "anchorPoint", "solidColor",
+                  "fillColor"];
+const DIFF_LIST = ["effectNames", "maskModes", "maskInverted", "maskRound",
+                   "maskFeather", "maskBoxes", "opacityKeyEased"];
+
+function sameVec(a, b, tol) {
+  if (!(a instanceof Array) || !(b instanceof Array)) return a === b;
+  if (a.length !== b.length) return false;
+  return a.every((v, i) => typeof v === "number" && typeof b[i] === "number"
+    ? Math.abs(v - b[i]) <= (tol || 0.01) : v === b[i]);
+}
+function short(v) {
+  if (v === null || v === undefined) return "none";
+  if (v instanceof Array) return "[" + v.map(x =>
+    typeof x === "number" ? Math.round(x * 100) / 100 : x).join(",") + "]";
+  if (typeof v === "object") return JSON.stringify(v).slice(0, 80);
+  if (typeof v === "number") return String(Math.round(v * 100) / 100);
+  return String(v);
+}
+
+/**
+ * Every difference between two READ_COMP states, in words. Empty array
+ * means the sentence left the comp exactly as it found it.
+ *
+ * Layers are matched by NAME, so a rename reads as one layer gone and
+ * another arrived — which is what it is, for a user looking at the
+ * timeline.
+ */
+function compDiff(before, after) {
+  const out = [];
+  if (!before || !after) return out;
+  if (!before.found || !after.found) {
+    if (before.found !== after.found) {
+      out.push(after.found ? "the comp was created" : "THE COMP IS GONE");
+    }
+    return out;
+  }
+  for (const f of ["width", "height", "duration", "frameRate"]) {
+    if (Math.abs((before[f] || 0) - (after[f] || 0)) > 0.001) {
+      out.push("comp " + f + " " + short(before[f]) + " -> " + short(after[f]));
+    }
+  }
+  const wasL = before.layers || [], nowL = after.layers || [];
+  const byName = list => {
+    const m = {};
+    for (const l of list) m[l.name] = m[l.name] || l;
+    return m;
+  };
+  const w = byName(wasL), n = byName(nowL);
+  for (const name of Object.keys(n)) {
+    if (!w[name]) out.push("layer added: " + name);
+  }
+  for (const name of Object.keys(w)) {
+    if (!n[name]) out.push("layer removed: " + name);
+  }
+  for (const name of Object.keys(w)) {
+    if (!n[name]) continue;
+    const a = w[name], b = n[name];
+    const note = m => out.push(name + ": " + m);
+    for (const f of DIFF_PLAIN) {
+      if (a[f] !== b[f]) note(f + " " + short(a[f]) + " -> " + short(b[f]));
+    }
+    for (const f of Object.keys(DIFF_NUM)) {
+      const x = a[f], y = b[f];
+      if (typeof x === "number" && typeof y === "number") {
+        if (Math.abs(x - y) > DIFF_NUM[f]) {
+          note(f + " " + short(x) + " -> " + short(y));
+        }
+      } else if (x !== y) {
+        note(f + " " + short(x) + " -> " + short(y));
+      }
+    }
+    for (const f of DIFF_VEC) {
+      if (!sameVec(a[f], b[f], f === "solidColor" || f === "fillColor"
+        ? 0.004 : 0.01)) {
+        note(f + " " + short(a[f]) + " -> " + short(b[f]));
+      }
+    }
+    for (const f of DIFF_LIST) {
+      if (JSON.stringify(a[f] || []) !== JSON.stringify(b[f] || [])) {
+        note(f + " " + short(a[f] || []) + " -> " + short(b[f] || []));
+      }
+    }
+    const ax = a.expressions || {}, bx = b.expressions || {};
+    for (const k of Object.keys(bx)) {
+      if (ax[k] !== bx[k]) {
+        note((ax[k] ? "expression on " + k + " changed" : "expression added " +
+              "to " + k) + ": " + String(bx[k]).slice(0, 60));
+      }
+    }
+    for (const k of Object.keys(ax)) {
+      if (!(k in bx)) note("expression removed from " + k);
+    }
+  }
+  return out;
+}
+
+/**
+ * The three-way verdict a paraphrase gets. See the header for why "did
+ * anything change" is the line between a miss and harm.
+ *
+ * `changes` is compDiff's output. A rolled-back round leaves the comp
+ * untouched and therefore lands in `miss` by construction, which is
+ * right: nothing was applied, so nothing can have been applied wrongly.
+ */
+function gradeRun(verdict, changes) {
+  if (!verdict) return "pass";
+  return (changes && changes.length) ? "harm" : "miss";
+}
+
+/**
+ * The runs one --steps selection expands to. Without --variants that is
+ * one run per step, unchanged; with it, the canonical sentence followed
+ * by every paraphrase the step declares.
+ *
+ * A `carry` step is never given variants and never takes them: its
+ * sentence is a pronoun, and rephrasing it without rephrasing the turn it
+ * points at measures nothing.
+ */
+function variantRuns(indexes, withVariants) {
+  const runs = [];
+  for (const idx of indexes) {
+    const step = STEPS[idx];
+    runs.push({ index: idx, step: step, say: step.say, phrasing: "canonical" });
+    if (!withVariants || step.carry) continue;
+    for (const v of step.variants || []) {
+      runs.push({ index: idx, step: step, say: v.say, phrasing: v.kind });
+    }
+  }
+  return runs;
+}
+
+/**
+ * The acceptance gate, as the workplan states it: no run may do harm, no
+ * canonical may fail, and a step whose canonical passes may miss on at
+ * most ONE of its paraphrases. Two misses out of three phrasings is not
+ * a fluke — it is a tool that needs magic words.
+ */
+function gradeMatrix(rows) {
+  const byStep = {};
+  for (const r of rows) {
+    const k = String(r.index);
+    byStep[k] = byStep[k] || { title: r.title, canonical: null, variants: [] };
+    if (r.phrasing === "canonical") byStep[k].canonical = r;
+    else byStep[k].variants.push(r);
+  }
+  const problems = [];
+  for (const r of rows) {
+    if (r.grade === "harm") {
+      problems.push("HARM — " + r.title + " [" + r.phrasing + "] \"" +
+                    r.say + "\": " + r.verdict);
+    }
+  }
+  for (const k of Object.keys(byStep)) {
+    const g = byStep[k];
+    if (g.canonical && g.canonical.grade !== "pass") {
+      problems.push("the CANONICAL sentence failed for " + g.title +
+                    ": " + g.canonical.verdict);
+    }
+    if (!g.canonical || g.canonical.grade !== "pass") continue;
+    const missed = g.variants.filter(v => v.grade !== "pass");
+    if (missed.length > 1) {
+      problems.push(missed.length + " of " + g.variants.length +
+                    " paraphrases missed where the canonical passed — " +
+                    g.title + " needs magic words (" +
+                    missed.map(v => v.phrasing).join(", ") + ")");
+    }
+  }
+  return problems;
+}
+
 const STEPS = [
   {
     title: "create a comp",
@@ -1847,6 +2070,13 @@ const STEPS = [
     fromRig: true,
     tool: "set_layer_timing",
     say: "Beta shouldn't show up until two seconds in — delay it.",
+    variants: [
+      { kind: "casual", say: "hold Beta off till the 2 second mark" },
+      { kind: "vague",
+        say: "Beta comes in way too early — nothing from it before 2s." },
+      { kind: "typo",
+        say: "cna you make beta not appera until 2 secodns in" }
+    ],
     check(state, ctx) {
       const b = betaLayer(state);
       if (!b) return "the Beta layer is gone";
@@ -1874,6 +2104,12 @@ const STEPS = [
     fromRig: true,
     tool: "set_layer_parent",
     say: "Make Beta tag along with the Rig null wherever it goes.",
+    variants: [
+      { kind: "casual", say: "glue Beta onto the Rig null" },
+      { kind: "vague",
+        say: "when the Rig null moves, Beta should move with it" },
+      { kind: "typo", say: "parnet Beta to teh Rig null pls" }
+    ],
     check(state) {
       const b = betaLayer(state);
       if (!b) return "the Beta layer is gone";
@@ -1898,6 +2134,12 @@ const STEPS = [
     fromRig: true,
     tool: "apply_keyframe_ease",
     say: "The squares fade in too mechanically — make it feel smoother.",
+    variants: [
+      { kind: "casual",
+        say: "the squares pop in dead flat — give that fade some finesse" },
+      { kind: "vague", say: "the squares' entrance feels cheap, fix it" },
+      { kind: "typo", say: "the sqaures fade is to stiff, ease it plz" }
+    ],
     check(state, ctx) {
       const sq = nineSquares(state);
       const animated = sq.filter(l => l.opacityKeys >= 2);
@@ -1941,6 +2183,15 @@ const STEPS = [
     tool: "center_anchor_point",
     say: "HELLO swings around its corner when it rotates — make it turn " +
          "about its own centre.",
+    variants: [
+      { kind: "casual",
+        say: "HELLO's pivot is in the wrong spot — put it in the middle " +
+             "of the letters" },
+      { kind: "vague",
+        say: "when I rotate HELLO it arcs away instead of spinning on " +
+             "the spot" },
+      { kind: "typo", say: "cetner the ancor point on HELLO" }
+    ],
     check(state, ctx) {
       const t = textLayer(state);
       if (!t) return "the HELLO layer is gone";
@@ -1976,6 +2227,11 @@ const STEPS = [
     fromRig: true,
     tool: "add_mask",
     say: "Chop off the lower half of Beta so only the top shows.",
+    variants: [
+      { kind: "casual", say: "I only want to see the top half of Beta" },
+      { kind: "vague", say: "Beta's bottom half shouldn't be visible" },
+      { kind: "typo", say: "mask ouf the bottm half of Beta" }
+    ],
     check(state, ctx) {
       const b = betaLayer(state);
       if (!b) return "the Beta layer is gone";
@@ -2025,6 +2281,11 @@ const STEPS = [
     fromRig: true,
     tool: "delete_mask",
     say: "Lose the oval mask on HELLO — it's not needed any more.",
+    variants: [
+      { kind: "casual", say: "get that oval off HELLO, I don't want it" },
+      { kind: "vague", say: "HELLO shouldn't be masked at all any more" },
+      { kind: "typo", say: "delet the msak on HELLO" }
+    ],
     check(state, ctx) {
       const t = textLayer(state);
       if (!t) {
@@ -2050,6 +2311,13 @@ const STEPS = [
     tool: "remove_keyframes",
     say: "The squares shouldn't fade in any more — just have them there " +
          "from the start.",
+    variants: [
+      { kind: "casual",
+        say: "kill the fade on the squares, I want them solid the whole " +
+             "time" },
+      { kind: "vague", say: "the squares are animating and they shouldn't be" },
+      { kind: "typo", say: "remvoe the opacity keyfarmes form the squares" }
+    ],
     check(state, ctx) {
       const sq = nineSquares(state);
       if (!sq.length) return "no squares in the comp";
@@ -2087,6 +2355,11 @@ const STEPS = [
     fromRig: true,
     tool: "apply_preset",
     say: "Dress HELLO up a bit — it looks too plain.",
+    variants: [
+      { kind: "casual", say: "HELLO's boring — give it some polish" },
+      { kind: "vague", say: "can you make HELLO look nicer?" },
+      { kind: "typo", say: "make HELLO look les plain, aply somethign to it" }
+    ],
     check(state, ctx) {
       const t = textLayer(state);
       if (!t) return "the HELLO layer is gone";
@@ -2124,6 +2397,12 @@ const STEPS = [
     fromRig: true,
     tool: "apply_expression_preset",
     say: "Give Beta a lazy, floaty hover so it never sits completely still.",
+    variants: [
+      { kind: "casual",
+        say: "Beta shouldn't be dead still — give it a slow idle wander" },
+      { kind: "vague", say: "Beta feels frozen, make it breathe a little" },
+      { kind: "typo", say: "put a slow wigle on beta so it keeps moviing" }
+    ],
     check(state, ctx) {
       const b = betaLayer(state);
       if (!b) return "the Beta layer is gone";
@@ -2158,6 +2437,11 @@ const STEPS = [
     fromRig: true,
     tool: "audio_to_keyframes",
     say: "Make Beta throb in time with the music.",
+    variants: [
+      { kind: "casual", say: "have Beta pulse along with the audio" },
+      { kind: "vague", say: "Beta should react to the soundtrack" },
+      { kind: "typo", say: "make beta bonuce to the muisc" }
+    ],
     check(state, ctx) {
       const a2k = calls(ctx, "audio_to_keyframes");
       if (!a2k.length) {
@@ -2219,6 +2503,16 @@ const STEPS = [
     fromRig: true,
     tool: "reorder_layers",
     say: "Beta is covering HELLO — tuck it in underneath the text.",
+    // Every phrasing names BETA as the thing that moves. "HELLO is
+    // hidden, I need to see the text" would also be solved by lifting
+    // HELLO — and the check's sort detector reads that as every other
+    // layer changing places, which would fail a legitimate answer.
+    variants: [
+      { kind: "casual", say: "shove Beta below HELLO in the stack" },
+      { kind: "vague",
+        say: "Beta needs to sit behind the text, not in front of it" },
+      { kind: "typo", say: "put beta undeneath HELLO plz" }
+    ],
     check(state, ctx) {
       const b = betaLayer(state), t = textLayer(state);
       if (!b) return "the Beta layer is gone";
@@ -2264,6 +2558,12 @@ const STEPS = [
     prepare: "AELL_call(\"apply_effect\", " + JSON.stringify(JSON.stringify(
       { comp: COMP, layer: "Beta", effect: "Gaussian Blur" })) + ")",
     say: "Beta doesn't need that blur any more — strip it off.",
+    variants: [
+      { kind: "casual",
+        say: "Beta shouldn't be soft any more, drop the effect on it" },
+      { kind: "vague", say: "Beta is too fuzzy — it should be sharp again" },
+      { kind: "typo", say: "remvoe the gaussain blur form Beta" }
+    ],
     check(state, ctx) {
       const b = betaLayer(state);
       if (!b) {
@@ -2295,6 +2595,12 @@ const STEPS = [
     fromRig: true,
     tool: "set_track_matte",
     say: "I want Beta to show only through the HELLO letters.",
+    variants: [
+      { kind: "casual", say: "use HELLO as a stencil for Beta" },
+      { kind: "vague",
+        say: "Beta should appear in the shape of the word HELLO" },
+      { kind: "typo", say: "matte beta wiht the HELLO text" }
+    ],
     check(state, ctx) {
       const b = betaLayer(state), t = textLayer(state);
       if (!b) return "the Beta layer is gone";
@@ -2325,6 +2631,15 @@ const STEPS = [
     fromRig: true,
     tool: "precompose",
     say: "Bundle the nine blue squares into a single layer called Squares.",
+    variants: [
+      { kind: "casual",
+        say: "throw the nine blue squares into their own comp and call " +
+             "it Squares" },
+      { kind: "vague",
+        say: "the nine blue squares should all live inside one thing " +
+             "named Squares" },
+      { kind: "typo", say: "precomp the nine blue sqaures as Squares" }
+    ],
     check(state, ctx) {
       const pre = state.layers.filter(l => l.isPrecomp);
       // Exactly "Squares": AE auto-numbers a taken name, so "Squares 2"
@@ -2363,6 +2678,14 @@ const STEPS = [
     title: "clean up means the comp, not the project",
     fromRig: true,
     say: "Probe Room is a mess now — clean it up.",
+    // The one step with no `tool`: the right answer to an unnamed mess is
+    // a question, and these three phrasings all leave it unnamed. A
+    // variant that DELETES here is the loudest harm the matrix can find.
+    variants: [
+      { kind: "casual", say: "Probe Room's got junk everywhere, tidy it" },
+      { kind: "vague", say: "sort out Probe Room for me" },
+      { kind: "typo", say: "clen up probe room its a mess" }
+    ],
     check(state, ctx) {
       if (!state.found) return "the comp is gone";
       const project = (ctx.tools || []).filter(c =>
@@ -2453,10 +2776,32 @@ function writeTranscript(rows) {
     "- tool docs: " +
       (Tools.promptModeFor(s.ctxSize).compact ? "COMPACT" : "FULL") +
       " (Tools.promptModeFor)", ""];
+  if (OPT.variants) {
+    // Scenario / phrasing / chosen tool / verdict, the table WORKPLAN
+    // section 8 asks for, before the transcripts it summarises.
+    out.push("## the paraphrase matrix", "",
+             "| # | scenario | phrasing | said | tools | verdict |",
+             "|---|----------|----------|------|-------|---------|");
+    for (const row of rows) {
+      out.push("| " + (row.index + 1) + " | " + row.title + " | " +
+               row.phrasing + " | " + String(row.say).replace(/\|/g, "/") +
+               " | " + ((row.tools || []).join(" ") || "—") + " | " +
+               (row.grade === "harm" ? "**HARM** — " + row.verdict
+                 : row.grade === "miss" ? "miss — " + row.verdict : "pass") +
+               " |");
+    }
+    out.push("");
+  }
   for (const row of rows) {
     out.push("## " + (row.index + 1) + ". " + row.title +
-             " — " + (row.verdict ? "FAIL" : "pass"));
+             (row.phrasing && row.phrasing !== "canonical"
+               ? " [" + row.phrasing + "]" : "") +
+             " — " + (row.grade === "harm" ? "HARM"
+               : row.verdict ? (OPT.variants ? "miss" : "FAIL") : "pass"));
     out.push("");
+    if (row.verdict && (row.changes || []).length) {
+      out.push("- **changed anyway**: " + row.changes.join("; "));
+    }
     for (const line of row.lines) {
       const label = line.label ? " `" + line.label + "`" : "";
       out.push("- **" + line.kind + "**" + label + ": " +
@@ -2598,8 +2943,18 @@ function main() {
     return;
   }
 
-  const chosen = pickSteps();
+  const chosen = variantRuns(pickSteps(), OPT.variants);
   const rows = [];
+  if (OPT.variants) {
+    const stepCount = new Set(chosen.map(r => r.index)).size;
+    console.log("-- variants: " + chosen.length + " run(s) over " +
+                stepCount + " step(s) — the rig is rebuilt for each");
+    const bare = chosen.filter(r => r.phrasing === "canonical" &&
+      !(STEPS[r.index].variants || []).length).map(r => STEPS[r.index].title);
+    if (bare.length) {
+      console.log("-- no paraphrases declared for: " + bare.join("; "));
+    }
+  }
 
   startModel(function (err) {
     if (err) {
@@ -2618,10 +2973,13 @@ function main() {
 
   function next(k) {
     if (k >= chosen.length) { finish(); return; }
-    const idx = chosen[k];
-    const step = STEPS[idx];
+    const run = chosen[k];
+    const idx = run.index;
+    const step = run.step;
     const mark = transcript.length;
-    console.log("\n=== step " + (idx + 1) + ": " + step.title + " ===");
+    console.log("\n=== step " + (idx + 1) + ": " + step.title +
+                (run.phrasing === "canonical" ? ""
+                  : " [" + run.phrasing + "]") + " ===");
     resetWorld(step, function () {
     // How the comp looked BEFORE the sentence: a step that refers back to
     // an earlier turn is judged on what changed, not on absolutes. A
@@ -2631,7 +2989,7 @@ function main() {
       aeRead(SIG_FN + " return sig();", function (sigBefore) {
         const runsBefore = probeRuns;
         const restoreSettings = applyStepSettings(step.settings);
-        sendMessage(step.say, function (round) {
+        sendMessage(run.say, function (round) {
           aeRead(READ_COMP, function (state, readErr) {
             const ctx = { before: before && before.found ? before : null,
                           rounds: round.rounds,
@@ -2681,9 +3039,30 @@ function main() {
                   : "");
             }
           }
-          if (verdict) say("verdict", "FAIL — " + verdict);
-          else say("verdict", "pass (" + summary(ctx) + ")");
+          // What the sentence actually did to the comp, whatever the
+          // verdict thinks of it — the line between a harmless miss and
+          // a harmful one. Read off the two states already in hand.
+          // `state` goes in raw, found:false and all: a sentence that
+          // deleted the whole comp is the loudest change there is, and
+          // filtering it out here would score it a harmless miss.
+          const changes = compDiff(ctx.before, state);
+          const grade = gradeRun(verdict, changes);
+          if (verdict) {
+            say("verdict", (OPT.variants ? (grade === "harm"
+              ? "HARM — " : "miss — ") : "FAIL — ") + verdict);
+            if (OPT.variants && changes.length) {
+              say("info", "the comp changed anyway: " +
+                  changes.slice(0, 8).join("; ") +
+                  (changes.length > 8
+                    ? " (+" + (changes.length - 8) + " more)" : ""));
+            } else if (OPT.variants) {
+              say("info", "nothing in the comp moved — harmless");
+            }
+          } else say("verdict", "pass (" + summary(ctx) + ")");
           rows.push({ index: idx, title: step.title, verdict: verdict,
+                      phrasing: run.phrasing, say: run.say, grade: grade,
+                      changes: changes,
+                      tools: (ctx.tools || []).map(t => t.tool),
                       lines: transcript.slice(mark) });
           next(k + 1);
         }
@@ -2751,15 +3130,47 @@ function main() {
     const file = writeTranscript(rows);
     console.log("\n----");
     console.log((rows.length - failed.length) + "/" + rows.length +
-                " steps met their verdict");
-    for (const r of failed) {
-      console.log("FAIL " + (r.index + 1) + ". " + r.title + " — " +
-                  r.verdict);
+                (OPT.variants ? " runs" : " steps") + " met their verdict");
+    let problems = [];
+    if (!OPT.variants) {
+      for (const r of failed) {
+        console.log("FAIL " + (r.index + 1) + ". " + r.title + " — " +
+                    r.verdict);
+      }
+    } else {
+      // The matrix, one line per phrasing, grouped by scenario — the
+      // shape WORKPLAN section 8 asks to be appended to the log:
+      // scenario / phrasing / chosen tool / verdict.
+      console.log("");
+      let lastIdx = -1;
+      for (const r of rows) {
+        if (r.index !== lastIdx) {
+          lastIdx = r.index;
+          console.log((r.index + 1) + ". " + r.title);
+        }
+        const mark = { pass: "  pass", miss: "  miss", harm: "  HARM" };
+        console.log(mark[r.grade] + "  " + r.phrasing.padEnd(9) +
+                    " [" + (r.tools.length ? r.tools.join(" ") : "no tools") +
+                    "]  \"" + r.say + "\"" +
+                    (r.verdict ? "\n            " + r.verdict : ""));
+      }
+      problems = gradeMatrix(rows);
+      const tally = g => rows.filter(r => r.grade === g).length;
+      console.log("\n" + tally("pass") + " pass, " + tally("miss") +
+                  " miss, " + tally("harm") + " HARM");
+      if (problems.length) {
+        console.log("");
+        for (const p of problems) console.log("!! " + p);
+      } else {
+        console.log("acceptance met: no harm, every canonical passed, no " +
+                    "scenario missed more than one paraphrase");
+      }
     }
     console.log("transcript: " + file);
+    const bad = OPT.variants ? problems.length : failed.length;
     const done = function () {
       try { Llama.stop(); } catch (e) {}
-      process.exit(failed.length ? 1 : 0);
+      process.exit(bad ? 1 : 0);
     };
     if (OPT.keep) { done(); return; }
     aeRead(sweepScript(precomps), function (res) {
@@ -2795,6 +3206,11 @@ if (require.main === module) {
                      generated, runPrepare, sweepScript, rememberPrecomp,
                      precomps, toolEntry, rigPlan, rigScript, resetHistory,
                      COMP, textLayer, betaLayer, rigNull, nineSquares,
+                     // The paraphrase matrix: the three-way grade, the
+                     // change detector it rests on, the run expansion and
+                     // the acceptance gate — all pure, all testable with
+                     // neither AE nor a model.
+                     compDiff, gradeRun, variantRuns, gradeMatrix,
                      // For scripts/context-budget-probe.js: the REAL round
                      // loop, the REAL panel modules and the REAL AE bridge,
                      // so the context measurements are taken on the product

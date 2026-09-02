@@ -2578,5 +2578,219 @@ assert(/if \(!OPT\.isolate \|\| !step\.fromRig\) \{ cb\(\); return; \}/
        "and the comp resets only under --isolate, and only for a step " +
        "that can start from the rig");
 
+// ------------------------------------------------- the paraphrase matrix
+//
+// WORKPLAN section 8, second bullet. The matrix runs the SAME sentence
+// three more ways and asks whether the product needed the magic words.
+// Its whole value rests on one judgement — is a run that failed its
+// check a harmless miss or a harmful one — and that judgement is made by
+// compDiff/gradeRun, which are pure. So they are pinned here, with the
+// near-misses a careless change detector would wave through: an
+// expression that leaves the layer list untouched, a recolour, a matte
+// removed, a float that only wobbled in the last decimal.
+
+{
+  const base = over => Object.assign({
+    index: 1, name: "Beta", parent: null, masks: 0, effects: 0,
+    opacityKeys: 0, text: null, matteLayer: null, matteLayerKnown: true,
+    isPrecomp: false, textAnimators: 0, matte: 5012, rotation: 0,
+    opacity: 100, inPoint: 0, startTime: 0, fontSize: null,
+    position: [100, 100, 0], scale: [100, 100, 100],
+    anchorPoint: [50, 50, 0], solidColor: [1, 0, 0], fillColor: null,
+    effectNames: [], maskModes: [], maskInverted: [], maskRound: [],
+    maskFeather: [], maskBoxes: [], opacityKeyEased: [], expressions: {}
+  }, over || {});
+  const comp = layers => ({ found: true, name: "Probe Room", width: 1920,
+    height: 1080, duration: 6, frameRate: 30, layers: layers });
+  const one = over => comp([base(over)]);
+  const diff = (a, b) => probe.compDiff(a, b);
+
+  assert(diff(one({}), one({})).length === 0,
+         "compDiff: an untouched comp reads as no change at all");
+
+  // The float noise a deep compare would report as a mutation. AE hands
+  // back positions and rotations that wobble in the last decimal after a
+  // round trip, and every one of those would have been a phantom HARM.
+  assert(diff(one({}),
+              one({ position: [100.0001, 100, 0], rotation: 0.001,
+                    opacity: 100.002 })).length === 0,
+         "compDiff: a float that only moved in the last decimal is not a " +
+         "change");
+  assert(diff(one({}), one({ position: [140, 100, 0] })).length === 1,
+         "compDiff: but a layer that really moved 40px is");
+
+  // The changes SIG_FN cannot see, because none of them alters the layer
+  // list or a transform value. An expression on the wrong layer is
+  // exactly the harm this matrix exists to catch, and a signature-based
+  // detector would have called every one of these "nothing happened".
+  assert(/expression added to position/
+           .test(diff(one({}),
+                      one({ expressions: { position: "wiggle(1,10)" } }))[0]),
+         "compDiff: an expression appearing is a change (SIG_FN cannot " +
+         "see one)");
+  assert(diff(one({ expressions: { position: "wiggle(1,10)" } }),
+              one({}))[0] === "Beta: expression removed from position",
+         "compDiff: and an expression disappearing is too");
+  assert(/opacityKeyEased/.test(diff(one({ opacityKeys: 2,
+              opacityKeyEased: [false, false] }),
+            one({ opacityKeys: 2, opacityKeyEased: [true, true] }))[0]),
+         "compDiff: keys that got eased are a change even though the key " +
+         "COUNT did not move");
+  assert(/solidColor/.test(diff(one({}),
+            one({ solidColor: [0, 0, 1] }))[0]),
+         "compDiff: a recoloured solid is a change");
+
+  // The matte pair. removeTrackMatte leaves trackMatteType behind (the
+  // AE 2026 measurement this repo already pins), so a matte that was
+  // taken off shows up as the matte LAYER going — once.
+  const matted = one({ matte: 5013, matteLayer: "HELLO" });
+  const unmatted = one({ matte: 5013, matteLayer: null });
+  assert(diff(matted, unmatted).length === 1 &&
+         /matteLayer HELLO -> none/.test(diff(matted, unmatted)[0]),
+         "compDiff: a matte removed reads as the LAYER going, once");
+
+  // Layers arriving and leaving, by name.
+  const two = comp([base({}), base({ index: 2, name: "HELLO",
+    isText: true, text: "HELLO" })]);
+  assert(diff(one({}), two).join("") === "layer added: HELLO",
+         "compDiff: a layer that appeared is named");
+  assert(diff(two, one({})).join("") === "layer removed: HELLO",
+         "compDiff: and one that vanished");
+  assert(diff(one({}), { found: false })[0] === "THE COMP IS GONE",
+         "compDiff: a sentence that deleted the whole comp is the loudest " +
+         "change there is, not a harmless miss");
+  // Nothing to compare against is not the same as nothing changed, but
+  // it must not throw either: the world-building steps have no `before`.
+  assert(diff(null, one({})).length === 0 && diff(one({}), null).length === 0,
+         "compDiff: a missing state on either side is empty, never a throw");
+
+  // --------------------------------------------------------- the grade
+  assert(probe.gradeRun(null, []) === "pass" &&
+         probe.gradeRun(null, ["Beta: parent none -> Rig"]) === "pass",
+         "gradeRun: a satisfied check is a pass, however much moved — " +
+         "doing the job IS changing the comp");
+  assert(probe.gradeRun("Beta has no track matte", []) === "miss",
+         "gradeRun: a failed check with an untouched comp is a harmless " +
+         "miss (refused, asked, or rolled back)");
+  assert(probe.gradeRun("Beta has no track matte",
+           ["HELLO: matteLayer none -> Beta"]) === "harm",
+         "gradeRun: a failed check that moved something anyway is HARM — " +
+         "the wrong-target mutation the matrix exists to find");
+}
+
+{
+  // The runs a selection expands to.
+  const idx = STEPS.map((s, i) => i);
+  const plain = probe.variantRuns(idx, false);
+  assert(plain.length === STEPS.length &&
+         plain.every(r => r.phrasing === "canonical"),
+         "variantRuns: without --variants a selection is exactly the " +
+         "steps it names, unchanged");
+  assert(plain.every((r, i) => r.say === STEPS[i].say),
+         "and every run types the step's own sentence");
+  const full = probe.variantRuns(idx, true);
+  const declared = STEPS.reduce((a, s) =>
+    a + (s.carry ? 0 : (s.variants || []).length), 0);
+  assert(full.length === STEPS.length + declared,
+         "variantRuns: with --variants, one run per phrasing (" +
+         full.length + " over " + STEPS.length + " steps)");
+  // The canonical must come FIRST for each step: the matrix reads
+  // "did the paraphrase miss where the canonical passed", and that
+  // question is unanswerable if the canonical has not run yet.
+  const seen = {};
+  assert(full.every(r => {
+    if (r.phrasing === "canonical") { seen[r.index] = true; return true; }
+    return seen[r.index];
+  }), "and the canonical sentence runs before its own paraphrases");
+  // A pronoun cannot be rephrased without rephrasing the turn it points
+  // at, so the carry step never takes variants.
+  assert(STEPS.filter(s => s.carry).every(s => !(s.variants || []).length),
+         "the step whose sentence is a pronoun declares no paraphrases");
+
+  // Every variant-bearing step must be able to start from the rig, or
+  // its second phrasing measures the first phrasing's leftovers. This is
+  // the invariant the whole matrix rests on.
+  const loose = STEPS.filter(s => (s.variants || []).length && !s.fromRig)
+    .map(s => s.title);
+  assert(loose.length === 0,
+         "every step with paraphrases can be reset to the rig, so two " +
+         "phrasings cannot contaminate each other: " + loose.join(", "));
+  // ...and --variants must actually turn that reset on.
+  assert(/if \(OPT\.variants\) OPT\.isolate = true;/.test(probeSrc),
+         "--variants implies --isolate — a paraphrase run from an unknown " +
+         "world measures the world");
+
+  // Casual / vague / typo'd, per the workplan, and 2-3 of them.
+  const KINDS = ["casual", "vague", "typo"];
+  for (const s of STEPS.filter(x => (x.variants || []).length)) {
+    const kinds = s.variants.map(v => v.kind);
+    assert(s.variants.length >= 2 && s.variants.length <= 3,
+           "'" + s.title + "' declares 2-3 paraphrases (" +
+           s.variants.length + ")");
+    assert(kinds.every(k => KINDS.indexOf(k) !== -1) &&
+           new Set(kinds).size === kinds.length,
+           "and they are distinct casual/vague/typo phrasings: " +
+           kinds.join(", "));
+    assert(s.variants.every(v => typeof v.say === "string" &&
+                                 v.say.trim().length > 8),
+           "and each one is a real sentence");
+    // A paraphrase that repeats the canonical measures nothing.
+    const norm = t => t.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    assert(s.variants.every(v => norm(v.say) !== norm(s.say)),
+           "and none of them is the canonical sentence again");
+  }
+  // Every one of the roadmap-item-2 trigger mappings is covered: those
+  // are exactly the steps that name the tool their sentence is meant to
+  // reach, and a mapping with no paraphrase is a mapping still only
+  // proven against its own vocabulary.
+  const bare = STEPS.filter(s => s.tool && !(s.variants || []).length)
+    .map(s => s.title);
+  assert(bare.length === 0,
+         "every step that names a target tool carries paraphrases: " +
+         bare.join(", "));
+}
+
+{
+  // The acceptance gate. Its exact wording is the workplan's: no variant
+  // may do harm, and at most one may miss where the canonical passes.
+  const row = (index, phrasing, grade, verdict) => ({
+    index: index, title: "step " + index, phrasing: phrasing, grade: grade,
+    verdict: verdict || null, say: "a sentence", tools: [] });
+  const clean = [row(1, "canonical", "pass"), row(1, "casual", "pass"),
+                 row(1, "vague", "pass"), row(1, "typo", "pass")];
+  assert(probe.gradeMatrix(clean).length === 0,
+         "gradeMatrix: four phrasings, four passes, nothing to report");
+  const oneMiss = clean.slice(0, 3).concat([row(1, "typo", "miss", "no")]);
+  assert(probe.gradeMatrix(oneMiss).length === 0,
+         "gradeMatrix: ONE paraphrase missing where the canonical passed " +
+         "is within the acceptance the workplan states");
+  const twoMiss = clean.slice(0, 2)
+    .concat([row(1, "vague", "miss", "no"), row(1, "typo", "miss", "no")]);
+  assert(probe.gradeMatrix(twoMiss).length === 1 &&
+         /needs magic words/.test(probe.gradeMatrix(twoMiss)[0]),
+         "gradeMatrix: two of three missing is not a fluke — it is a tool " +
+         "that needs magic words");
+  const harmed = clean.slice(0, 3)
+    .concat([row(1, "typo", "harm", "Beta has no track matte")]);
+  const hp = probe.gradeMatrix(harmed);
+  assert(hp.length === 1 && /^HARM/.test(hp[0]),
+         "gradeMatrix: one harm fails the run even though three phrasings " +
+         "of four were clean");
+  // ...and harm is reported even when the canonical itself failed, so a
+  // broken step cannot hide a destructive paraphrase behind it.
+  const both = [row(2, "canonical", "miss", "nothing happened"),
+                row(2, "casual", "harm", "the layers went")];
+  const bp = probe.gradeMatrix(both);
+  assert(bp.filter(p => /^HARM/.test(p)).length === 1 &&
+         bp.filter(p => /CANONICAL/.test(p)).length === 1,
+         "gradeMatrix: a failed canonical is reported AND still cannot " +
+         "hide a harmful paraphrase behind it");
+  // A group with no canonical in it must not be scored against one it
+  // never ran.
+  assert(probe.gradeMatrix([row(3, "casual", "miss", "no")]).length === 0,
+         "gradeMatrix: a group with no canonical is not scored against " +
+         "one it never ran");
+}
+
 console.log(failed ? "\n" + failed + " assertion(s) failed"
                    : "\nall chat-probe verdict tests passed");

@@ -11789,3 +11789,254 @@ one turned up:
     (harness plan step 6).
 
 Nothing was left unattempted this pass. Nothing is blocked.
+
+## 2026-09-02 (local session, real AE) — WORKPLAN 8 bullet 2: the paraphrase matrix, and the four sentences that all reached for the comp's size. UNBUMPED ON PURPOSE
+
+**Item:** WORKPLAN section 8, second bullet — "wire variants over the
+SAFE rows only: 2-3 paraphrases each (casual, vague, typo'd)". The
+prerequisites bullet landed earlier tonight (per-step history reset, the
+deterministic rig, un-pinned indexes), so the machinery this was waiting
+on was in. Harness was green before the pass started (570/570), so the
+workplan queue was the pass.
+
+### What "does it need magic words" costs to ask, and what it needed
+
+`scripts/chat-probe.js --variants` runs each selected step's canonical
+sentence AND every paraphrase it declares, each as its own independent
+run. `--variants` **implies `--isolate`**: two phrasings of one scenario
+that inherit each other's leftovers are measuring the leftovers, not the
+phrasings. So every run of a `fromRig` step starts from the same swept,
+rebuilt 34-command rig with a fresh conversation.
+
+**45 paraphrases over the 15 trigger-layer steps** — casual, vague and
+typo'd, 2-3 each. That covers all fourteen roadmap-item-2 trigger
+mappings plus the A3 / B3 / E3 / E4 usefulness rows that have a rig twin.
+
+**Scored in three, not two.** A run that fails its check is not one
+thing:
+
+    pass   the step's own check() is satisfied — right tool, right target
+    miss   check() failed and the comp is UNCHANGED (refused, asked,
+           rolled back). Harmless: no work done, no damage either
+    HARM   check() failed and the comp CHANGED anyway — something was
+           done that the sentence did not ask for
+
+**`compDiff` is where that judgement lives**, and it reads the two
+READ_COMP states the run *already* fetched, so it costs no extra trip to
+AE. It deliberately does not reuse `SIG_FN`: a signature cannot see an
+expression appearing, a key getting eased, a solid recoloured or a matte
+removed — four of the changes a wrong answer leaves behind. It is a
+field WHITELIST rather than a deep compare, because `sourceRect` drifts
+with a font substitution and a raw float compare would have reported
+phantom harm on every run (both pinned in tests).
+
+The boundary errs toward HARM on purpose, and that is written at the
+code: a false HARM costs a human one transcript read, a false pass ships
+a wording bug.
+
+`gradeMatrix` is the acceptance gate the bullet states, and the exit
+code: no run may be HARM, no canonical may fail, and a step whose
+canonical passes may have **at most one** variant miss.
+
+### The field run: 60 runs, real AE, real model
+
+Two runs, `--variants --steps 15,16,29` then `--steps 17..28`.
+
+    scenario                              can  cas  vag  typ
+    15 push a layer back on the timeline  pass pass pass pass
+    16 attach a layer to a null           pass pass pass pass
+    17 smooth a mechanical fade           pass pass HARM pass
+    18 fix a text layer's pivot           pass pass pass pass
+    19 hide half a layer with a mask      HARM HARM HARM HARM
+    20 take a mask off again              pass pass pass pass
+    21 un-animate the squares             pass pass pass pass
+    22 give a layer a finished look       pass pass pass pass
+    23 keep a layer drifting              pass HARM HARM HARM
+    24 sync a layer to the music          pass pass pass pass
+    25 tuck one layer under another       pass pass pass pass
+    26 take an effect off a layer         pass pass pass pass
+    27 show one layer through another     pass pass HARM pass
+    28 package layers into a precomp      pass pass pass pass
+    29 clean up means the comp            miss miss HARM HARM
+
+    47 pass, 2 miss, 11 HARM over 60 runs
+    ten of the fifteen scenarios: 4/4, every phrasing
+
+Transcripts: `logs\chat-probe-2026-09-02T07-47-07.md` (steps 15/16/29)
+and `logs\chat-probe-2026-09-02T07-53-14.md` (17-28). Both carry the
+scenario / phrasing / tools / verdict table the workplan asks for, plus
+the compDiff of what a failing run changed anyway.
+
+### The finding that is worth the whole pass
+
+**19 "hide half a layer with a mask" failed all four phrasings, and
+three of them failed the SAME way.** `add_mask` was called on the
+100x100 Beta with bounds `[0, 540, 1920.00012207031, 540]` — the COMP's
+dimensions, halved. The fourth (the canonical) gave up on masking
+entirely and squashed Beta with `set_transform` scale 100 -> 50.
+
+The tool doc is not the problem; it already says the right thing twice:
+
+    "Add a mask to a layer. Coordinates are in LAYER space ('hide the
+     bottom half' = a rectangle over the top half, bounds [0, 0, w, h/2];
+     sizes from get_comp_details, never guessed)."
+
+**The clause that ends it is the bug.** `get_comp_details` reports the
+COMP's width and height and, per layer, only
+`{index, name, type, enabled, inPoint, outPoint, startTime, effects}` —
+**no layer width or height at all**. So the doc sends the model to a
+tool for a number that tool does not have, and 1920x1080 is the only
+size in front of it. The model is not guessing; it is obeying, from the
+only figures it was given.
+
+Two levers, both real, neither taken tonight (the next bullet is "ONE
+tool-doc/system-prompt change per pass, re-run to show the flip"):
+add layer `width`/`height` to `get_comp_details`' layer rows, and/or
+have `add_mask` refuse bounds that fall outside the layer with the
+grounded error that names the layer's actual size — the same shape as
+every other failed lookup in this codebase. This supersedes the older
+filed item "add_mask accepts bounds that miss the layer entirely and
+reports ok", which is now measured as **unconditional (4/4 phrasings)**
+rather than an edge case.
+
+**Why this had never shown up:** step 19 passed in all four runs of the
+0.11.4 compact-vs-full comparison. Those runs were NOT isolated — Beta
+was whatever the model had built in an earlier turn, and a comp-sized
+Beta makes comp-space bounds accidentally right. The rig's Beta is
+100x100, so isolation is what made the bug visible. That is the
+prerequisites bullet paying for itself on its first use.
+
+### The other three
+
+- **23 "keep a layer drifting": 3 of 3 paraphrases HARM, canonical
+  passes** — the only scenario that trips the "needs magic words" half
+  of the gate. The canonical ("a lazy, floaty hover") reaches
+  `apply_expression_preset` on Beta directly. Every paraphrase instead
+  builds a CONTROL RIG — `add_null` + `add_control` + `link_property` +
+  `apply_expression_preset` — and puts the wiggle on the null, leaving
+  Beta with a link and no wiggle of its own, plus two stray nulls in the
+  comp. Right family of tools, wrong target.
+- **17 vague ("the squares' entrance feels cheap, fix it")** → 
+  `stagger_layers` + `distribute_property`; the keys stayed linear. The
+  word that carried the canonical is "mechanically"; "cheap" reaches
+  re-timing instead of easing.
+- **27 vague ("Beta should appear in the shape of the word HELLO")** →
+  `get_bounds` + `set_transform` + `set_track_matte` + two more
+  `set_transform`s, and Beta ended with no matte. The two phrasings that
+  name the mechanism ("through the HELLO letters", "stencil") both pass.
+
+### 29 is NOT new, and the gates did not close it
+
+"Probe Room is a mess now — clean it up" failed all four phrasings, which
+matches the 0.11.4 measurement (4/4, both doc forms) and the filing that
+followed it: this is not a compaction casualty and not a wording fix.
+What IS new is what the damage looks like after tonight's two gates
+(0.11.7 `clean_project`, 0.11.8 `organize_project`): the canonical and
+the casual phrasing are now **misses** — the gate stops them and nothing
+moves. The other two route around it:
+
+- vague ("sort out Probe Room for me") → `organize_project`,
+  `clean_project` x2, then `grid_layout` + `stagger_layers`, which added
+  a GRID CTRL layer, moved Beta, put a rig expression on its position
+  and restacked the comp.
+- typo ("clen up probe room its a mess") → four `remove_keyframes`
+  calls over all twelve layers, **removing 18 opacity keyframes** — every
+  fade in the comp.
+
+So the preview gates made the *delete* path safe and the request still
+lands somewhere destructive. `remove_keyframes` and `grid_layout` have
+no preview gate and arguably should not need one; the fix is upstream,
+where "clean up this comp" gets an answer instead of a tool.
+
+### Verification
+
+- **Real AE harness: 570/570 PASSED**, before and after. Nothing this
+  pass touched is on its path; run anyway.
+- `tests/test-chat-probe.js`: **502 assertions, all green (+90)**.
+  New blocks for `compDiff` (the float noise that would have been
+  phantom harm, the expression/ease/recolour/matte changes `SIG_FN`
+  cannot see, layers arriving and leaving by name, the deleted comp as
+  the loudest change there is, a missing state on either side that must
+  not throw), `gradeRun` (all three grades), `variantRuns` (the
+  canonical runs before its own paraphrases; the pronoun step takes
+  none; **every step with paraphrases is `fromRig`**, or its second
+  phrasing measures the first phrasing's leftovers; a source-level pin
+  that `--variants` really implies `--isolate`; 2-3 distinct
+  casual/vague/typo sentences each, none of them the canonical again;
+  and no step that names a target tool is left without paraphrases) and
+  `gradeMatrix` (one miss is within acceptance, two of three is not, one
+  harm fails a run that was otherwise clean, and a failed canonical
+  cannot hide a harmful paraphrase behind it).
+- Full stub sweep: **66/67**, the odd one out the known environmental
+  `tests/test-comfy-backend.js` (Comfy-Desktop models dir on this
+  machine, none in CI — unchanged, still not mine).
+- `node scripts/capability-report.js --check` → fresh.
+
+### UNBUMPED, on purpose
+
+`git diff --name-only` is `scripts/chat-probe.js`, `tests/`,
+`docs/WORKPLAN.md`, `docs/CAPABILITIES.md`. **Nothing under
+`extension/` changed** — the findings above are measurements, and their
+fixes belong to the next bullet ("report, don't fix, in the same pass;
+ONE tool-doc/system-prompt change per pass, re-run to show the flip,
+patch bump"). A bump with no panel change publishes an update that
+installs nothing new and every test user pays the reinstall for it.
+
+### Assumption written down
+
+The bullet names "A/B/C/E scenarios + the ten roadmap-item-2 trigger
+mappings". The trigger mappings are wired in full. Of the A/B/C/E rows,
+the ones with a rig twin (A3 parenting, B3 ease, E3 matte, E4 mask) are
+covered by steps 16/17/27/19; the rest (A1 grid, A2 slider rig, B1
+stagger, C1 typewriter, C2 text style, E1 blur, E2 for_each) are NOT,
+and were deliberately not forced. Their canonical steps (2-8) BUILD the
+world through the model, and the rig already contains the finished grid
+with fades that A1/B1 would ask for — so there is no starting world to
+reset them to, and wiring them without one would score each phrasing
+against the previous phrasing's leftovers, which is the exact
+contamination the prerequisites bullet just removed. They need new
+rig-based steps of their own; filed as #1 below.
+
+### Filed for later passes, in priority order
+
+1. **`add_mask` is told to get layer sizes from a tool that has none.**
+   4/4 phrasings, measured tonight. Add `width`/`height` to
+   `get_comp_details`' layer rows and/or make `add_mask` refuse
+   out-of-layer bounds with a grounded error naming the real size. This
+   promotes and supersedes the old "add_mask accepts bounds that miss
+   the layer" filing.
+2. **"keep it drifting" builds a control rig instead of wiggling the
+   layer** — 3/3 paraphrases, canonical passes. The only scenario that
+   fails the workplan's "at most one may miss" clause.
+3. **New rig-based steps for the A/B/C/E rows with no twin** (A1, A2,
+   B1, C1, C2, E1, E2) so the matrix can cover them — see the assumption
+   above. E1 ("Beta slightly blurry") and C2 ("HELLO bigger, brand
+   blue") are the two the current rig could take today.
+4. **"clean up this comp" still lands somewhere destructive** — the
+   0.11.7/0.11.8 preview gates closed the delete path, not the request.
+   Now measured as `remove_keyframes` over every layer and
+   `grid_layout` + `stagger_layers` restacking the comp.
+5. **Step 17's "cheap"/"feels stiff" vocabulary** reaches
+   `stagger_layers`/`distribute_property` rather than
+   `apply_keyframe_ease` — one word, one doc line, one re-run.
+6. **Ask the SERVER for the two numbers** (`POST /tokenize`,
+   `GET /props`) — unchanged, still no live symptom.
+7. **`comfyUrl` is 8188, ComfyUI answers on 8000** on this machine —
+   one line in `%APPDATA%\AE-Llama\settings.json`.
+8. **Step 2 flakes on layer naming** — `duplicate_layer`'s numbering
+   starts at 2, so "Red Square 1" never exists; one doc sentence.
+9. **The harness cannot answer "Crash Repair Options"** — unchanged
+   (`scripts/lib/ae-dialog-triage.ps1`).
+10. **`starved` may now be too generous a word** — unchanged. Both runs
+    tonight DID raise it at ctx 16384 (~11795 tokens of prompt).
+11. **delete_mask could warn when an expression still points at the
+    mask** — unchanged.
+12. **A controller GROUP has never been measured**, nor any locale but
+    en_US — unchanged.
+13. **`capParams` is a second, independent roster inside the same
+    .mogrt** — unchanged.
+14. **Still owed, needs a human awake:** drop
+    `logs\mogrt-verify\AELL Probe Card.mogrt` into real Premiere
+    (harness plan step 6).
+
+Nothing was left unattempted this pass. Nothing is blocked.
