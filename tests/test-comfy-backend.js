@@ -7,9 +7,20 @@ const os = require("os");
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aell-comfy-"));
 
+// applyExtraModelPaths reads LOCALAPPDATA to find the Comfy-Desktop
+// shared store, so this suite must SAY whether one exists instead of
+// inheriting the runner's machine. It inherited it for 21 unattended
+// passes on the owner's box, where the store is real: "blank settings
+// remove the mapping" failed every night against correct behaviour,
+// and every pass logged it as environmental. A test that cannot fail
+// for the right reason on one machine teaches everyone to skip its
+// failures. Both states are pinned below instead.
+const fakeProcess = { env: {}, platform: process.platform };
+const nodeRequire = (n) => (n === "process" ? fakeProcess : require(n));
+
 const window = {
   AEBridge: {
-    nodeRequire: require,
+    nodeRequire: nodeRequire,
     getExtensionPath: () => tmpRoot
   },
   Settings: { dataRoot: () => tmpRoot },
@@ -131,11 +142,43 @@ assert(/base_path: D:\/SD\/everything/.test(
          fs.readFileSync(Comfy._applyExtraModelPaths({ root }), "utf8")),
        "a windows drive path is one root, not a kind=path split");
 
-// clearing the setting removes the mapping
+// clearing the setting removes the mapping — when there is nothing else
+// to map. fakeProcess.env carries no LOCALAPPDATA, so no shared store.
 window.Settings.get = () => ({ comfyModelsDir: "", comfyModelRoots: [] });
 assert(Comfy._applyExtraModelPaths({ root }) === null &&
        !fs.existsSync(yamlPath),
        "blank settings remove a previously written mapping");
+
+// ...but a Comfy-Desktop shared store is not the user's setting to
+// clear. It is declared in no config file, the panel finds it only
+// through LOCALAPPDATA, and the hidden backend cannot load what the
+// Desktop app downloaded without this section (the H3 gap, 0.11.0).
+// So with blank settings AND a store on disk the yaml is still
+// written, carrying that one section and nothing the user cleared.
+const sharedStore = path.join(tmpRoot, "localapp", "Comfy-Desktop",
+                              "ComfyUI-Shared", "models");
+fs.mkdirSync(sharedStore, { recursive: true });
+fakeProcess.env.LOCALAPPDATA = path.join(tmpRoot, "localapp");
+const sharedYaml = Comfy._applyExtraModelPaths({ root });
+assert(sharedYaml === yamlPath && fs.existsSync(yamlPath),
+       "a shared store keeps the yaml alive through blank settings");
+const yamlShared = fs.readFileSync(yamlPath, "utf8");
+assert(yamlShared.includes("comfy_desktop_shared:") &&
+       yamlShared.includes("base_path: " +
+                           sharedStore.replace(/\\/g, "/")),
+       "and it is the shared store's own section: " +
+       yamlShared.split("\n")[1]);
+assert(!yamlShared.includes("aellama:") &&
+       !yamlShared.includes("aellama_extra_"),
+       "with nothing the user cleared carried along");
+
+// A LOCALAPPDATA that names no store is the same as no store at all —
+// the panel must not write a mapping for a folder that is not there.
+fakeProcess.env.LOCALAPPDATA = path.join(tmpRoot, "no-such-localapp");
+assert(Comfy._applyExtraModelPaths({ root }) === null &&
+       !fs.existsSync(yamlPath),
+       "an absent shared store maps nothing");
+delete fakeProcess.env.LOCALAPPDATA;
 
 // 5c. freeVram is exported — the VRAM arbiter's gen->chat half asks
 // ComfyUI to unload its cached models before the chat model returns.

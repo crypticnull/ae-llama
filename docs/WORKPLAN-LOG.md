@@ -13497,3 +13497,30 @@ closed. Its own sweep cleared the leftovers on the next run
 edge for the human too. Not fixed here (one item per pass); filed.
 
 Nothing else was left unattempted this pass. Nothing is blocked.
+
+## 2026-09-02 (remote session) — morning review of the 21-pass night, and the "environmental" failure that was not
+
+- Reviewed 0.11.0 -> 0.11.15 (21 passes, 22:44-08:02). Merged to main
+  and reset the dev branch. Full stub sweep on the merged head: 65/67,
+  the two known Windows-only suites (test-engine-assets needs
+  PowerShell, test-ffmpeg-export needs Windows absolute paths).
+- Changed: tests/test-comfy-backend.js. Every pass last night reported
+  it as "environmental, passes in CI" — 21 times. It was a real defect
+  in the TEST, and mine: the suite passed the runner's own `process`
+  through `nodeRequire`, so `applyExtraModelPaths` read the machine's
+  real LOCALAPPDATA. On the owner's box the Comfy-Desktop shared store
+  exists, so "blank settings remove a previously written mapping"
+  failed against CORRECT behaviour (0.11.0 writes the shared-store
+  section regardless of settings — the H3 gap fix). The suite now
+  supplies a fake process and pins all three states: no store (mapping
+  removed), store present (yaml survives blank settings carrying only
+  that section), and a LOCALAPPDATA naming no store (nothing mapped).
+- Notes: a suite that cannot pass on one machine trains every reader to
+  skip its failures — the lost-coverage class this project already
+  names. It cost nothing last night only because each pass re-derived
+  the same explanation; the next real failure in that file would have
+  read the same way. Filed for a later pass: chat-probe.js treats an
+  unknown argument as a no-op and runs the FULL matrix against the live
+  AE project (`--help` is not a flag; it fired once last night and the
+  probe's own sweep cleaned up after it) — an unknown flag should
+  refuse, naming the flags that exist.
