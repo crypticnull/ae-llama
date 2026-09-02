@@ -13235,3 +13235,110 @@ also the order they are filed below:
     (harness plan step 6).
 
 Nothing was left unattempted this pass. Nothing is blocked.
+
+## 2026-09-02 (local, real AE) - WORKPLAN 1: the harness went red, and the grounded error was the bug (0.11.14)
+
+The pass opened on `scripts/run-ae-selftest.ps1` at **588/589**, so the
+workplan's item 1 took the pass and row 36 of item 8 (the filed #1,
+`Missing 'layer'` never mentions the plural) waits for the next one.
+
+### The failure
+
+    FAIL reduce_project grounds an unknown comp name - error was:
+    Comp not found: ST HYG Nope. Comps in this project: AELL Self-Test,
+    AELL Self-Test Anchor, AELL Self-Test Batch, AELL Self-Test Cam,
+    AELL Self-Test Chunks, AELL Self-Test Mask, AELL Self-Test Order,
+    AELL Self-Test Undo, AELL Self-Test Wipe, AELL Self-Test Wipe 2,
+    AELL Self-Test Wipe 3, AELL Self-Test Wipe 4, Ctx Probe,
+    REV19_ST RN Plain 2019, ST HYG Drop
+
+Count them: fifteen. `AELL_resolveComp`'s roster was built
+`for (i = 1; i <= proj.numItems && compNames.length < 15; i++)` - flat
+PROJECT ORDER, capped at 15, and **nothing in the message said it had
+been cut**. The step asks for `ST HYG Nope` and checks that the refusal
+names `ST HYG Keep`; `ST HYG Keep` is created immediately before
+`ST HYG Drop`, both at the end of the project, and the cap fell between
+them.
+
+Nothing about the step or the tool changed. The SUITE grew - the six
+wipe comps of 0.11.13 plus `Ctx Probe` and the 2019 rename comp pushed
+the project past fifteen - and a silent cap turned into a wrong answer
+the day the roster got long. That is the class worth fixing, not the
+one step: a grounded refusal that drops the row that matters reads as a
+COMPLETE roster, so the model's correct conclusion from it is "that comp
+does not exist", and it stops. An ungrounded refusal would have been
+less harmful.
+
+### The fix (host root, extension/jsx/hostscript.jsx)
+
+New `AELL_compsHere(wanted, cap)`, one helper, two callers:
+
+- **Near misses first.** The missed name is tokenised (alphanumeric
+  runs, 2+ chars) and every comp scores one point per token it contains,
+  with a whole-name substring as the fallback. `ST HYG Nope` scores
+  `ST HYG Keep` and `ST HYG Drop` at 2, everything else at 1 or 0, so
+  the two comps the caller could have meant are the FIRST two rows -
+  from the LAST two positions in project order.
+- **Bucketed, not sorted.** ES3's `Array.prototype.sort` is not required
+  to be stable, and a roster that reshuffles between two identical
+  failures is its own confusion. One pass per score, high to low,
+  project order preserved inside each.
+- **The cap announces itself.** `AELL_capJoin` already appends
+  "... and N more"; when it truncates, the message now also names
+  `get_project_info {limit: "all"}` - the same pointer `AELL_itemsHere`
+  has carried all along. A roster that fits gets neither, so short
+  projects read exactly as before.
+
+Both grounded comp rosters use it: `AELL_resolveComp`'s not-found throw
+(cap 15) and `clean_project`'s "will not guess which comps matter"
+refusal (cap 20, which had the identical silent truncation and had
+simply not been unlucky yet).
+
+### Verification
+
+- **Real AE harness: 588/589 -> 589/589 PASSED.**
+- Stub back-fill, `tests/test-project-hygiene.js` step 11b: a 20-comp
+  project with the two near misses added LAST asserts they survive the
+  cap, appear BEFORE the fillers, that "and 5 more" is stated and that
+  `get_project_info {limit: "all"}` is named; a 2-comp project asserts
+  the whole roster with NO cap wording; and a 26-comp project pins the
+  20-cap disclosure on the reduce_project refusal. All fail against the
+  old code.
+- `node tests/test-es3-syntax.js`, `node tests/test-es3-ternary.js`
+  green (new helper is ES3, no nested ternary).
+- Full stub sweep 66/67 - the odd one out is the known environmental
+  `tests/test-comfy-backend.js`, untouched and still not mine.
+- `node scripts/bump-version.js patch` -> **0.11.14** (extension/ changed,
+  so the bump is owed), `tests/test-capability-doc.js` and
+  `tests/test-self-update.js` green after it.
+
+### Assumptions written down
+
+- **Ranked the roster rather than raising the cap.** Raising 15 to 40
+  would fix this project and break the next one, and it spends context
+  on every failure to help one. Ranking costs nothing when the list
+  fits and is the only thing that works at 200 comps.
+- **Token length floor is 2, not 3.** "st"/"bg"-sized tokens do match
+  inside unrelated words (`AELL Self-Test` scored 1 here), but the
+  bucketing puts every stronger match above them, so the noise never
+  displaces the answer - and a comp genuinely named `BG` stays findable.
+- **The suite's own comp growth was NOT treated as the bug.** Every
+  comp in that list is created by the run and swept by it; the project
+  is simply bigger than it was, which is a legitimate state for any
+  user's project too. Fixing the roster fixes both.
+
+### Filed for later passes
+
+Unchanged from the previous entry (items 1-20 there), with one addition
+and one promotion:
+
+- **NEXT is still row 36** - `Missing 'layer'` never mentions the plural
+  or `for_each_layer`. Untouched tonight; the harness took the pass.
+- **NEW: every OTHER capped roster in hostscript.jsx should be audited
+  the same way.** `AELL_capJoin` is called in ~40 places (layer names,
+  effect names, property names, item names) and each one can silently
+  truncate the row the caller needs. `AELL_resolveLayer`'s 20-layer list
+  is the obvious next one - it is built in project order too, and a
+  60-layer comp hits it. Not done here: one item per pass.
+
+Nothing was left unattempted this pass. Nothing is blocked.

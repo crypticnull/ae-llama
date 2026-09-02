@@ -127,14 +127,10 @@ function AELL_resolveComp(name) {
     }
   }
   // Grounded: the user may have renamed comps since the chat referenced
-  // them — list what actually exists so the retry uses a real name.
-  var compNames = [];
-  for (i = 1; i <= proj.numItems && compNames.length < 15; i++) {
-    it = proj.item(i);
-    if (it instanceof CompItem) compNames.push(it.name);
-  }
+  // them — list what actually exists so the retry uses a real name,
+  // nearest spellings first (AELL_compsHere) so the cap cannot swallow it.
   throw new Error("Comp not found: " + name + ". Comps in this project: " +
-                  (compNames.join(", ") || "(none)"));
+                  AELL_compsHere(name, 15));
 }
 
 function AELL_resolveLayer(comp, ref) {
@@ -827,6 +823,65 @@ function AELL_capJoin(names, cap) {
   if (names.length <= cap) return names.join(", ");
   return names.slice(0, cap).join(", ") + " … and " +
          (names.length - cap) + " more";
+}
+
+/*
+ * The grounding half of "Comp not found", ordered so the CAP cannot hide
+ * the answer.
+ *
+ * Measured 2026-09-02 in real AE: the self-test's own project grew past
+ * fifteen comps and this list — flat, project order, capped at 15 with
+ * NOTHING saying it had been cut — stopped one row short of "ST HYG
+ * Keep", the comp whose misspelling ("ST HYG Nope") raised the error. A
+ * grounded refusal that silently drops the one row that matters is worse
+ * than an ungrounded one: it reads as a COMPLETE roster, so the model
+ * concludes the comp does not exist and stops.
+ *
+ * So the near misses go FIRST — comps sharing a word with the name that
+ * missed — and the cap announces itself and names the tool that shows
+ * the rest.
+ */
+function AELL_compsHere(wanted, cap) {
+  var proj = app.project, i, j, it;
+  var names = [], scores = [];
+  var want = "";
+  if (wanted !== null && typeof wanted !== "undefined") {
+    want = String(wanted).toLowerCase();
+  }
+  var toks = [], raw = want ? want.split(/[^a-z0-9]+/) : [];
+  for (i = 0; i < raw.length; i++) {
+    if (raw[i].length >= 2) toks.push(raw[i]);
+  }
+  for (i = 1; i <= proj.numItems; i++) {
+    it = proj.item(i);
+    if (!(it instanceof CompItem)) continue;
+    var low = String(it.name).toLowerCase(), s = 0;
+    for (j = 0; j < toks.length; j++) {
+      if (low.indexOf(toks[j]) !== -1) s++;
+    }
+    if (s === 0 && want && low.indexOf(want) !== -1) s = 1;
+    names.push(it.name);
+    scores.push(s);
+  }
+  // Bucketed, not sorted: ES3's sort is not required to be stable, and a
+  // roster that reshuffles between two identical failures is its own
+  // confusion. Project order is preserved inside each score.
+  var best = 0;
+  for (i = 0; i < scores.length; i++) {
+    if (scores[i] > best) best = scores[i];
+  }
+  var out = [];
+  for (var s2 = best; s2 >= 0; s2--) {
+    for (i = 0; i < names.length; i++) {
+      if (scores[i] === s2) out.push(names[i]);
+    }
+  }
+  var lim = cap || 15;
+  var msg = AELL_capJoin(out, lim);
+  if (out.length > lim) {
+    msg += " (get_project_info {limit: \"all\"} lists them all)";
+  }
+  return msg;
 }
 
 /* The grounding half of an item-lookup refusal: what the project really
@@ -2216,14 +2271,10 @@ AELL_TOOLS.clean_project = function (args) {
       else want = null;
     }
     if (!want || !want.length) {
-      var have = [], shown = 0;
-      for (i = 1; i <= proj.numItems && shown < 20; i++) {
-        if (proj.item(i) instanceof CompItem) { have.push(proj.item(i).name); shown++; }
-      }
       return AELL_err("reduce_project deletes every comp, footage item " +
         "and folder that the comps you keep do not need, so it will not " +
         "guess which ones matter. Name them in keepComps. Comps in this " +
-        "project: " + (have.join(", ") || "(none)"));
+        "project: " + AELL_compsHere("", 20));
     }
     for (i = 0; i < want.length; i++) {
       var nm = String(want[i]);

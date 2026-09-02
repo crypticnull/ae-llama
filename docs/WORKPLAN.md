@@ -21,6 +21,20 @@ tool, not the test), then update the stubbed Node test in `tests/` so
 the same bug class is caught WITHOUT AE — that is the whole loop:
 field truth -> fix -> stub faithfulness.
 
+- ~~`Comp not found` truncated the list at the comp the caller meant~~
+  DONE 2026-09-02 (0.11.14). Harness went RED at 588/589: the self-test's
+  own project grew past fifteen comps, and the grounded roster was flat
+  project order capped at 15 with NOTHING saying it had been cut, so
+  "ST HYG Nope" listed fourteen unrelated comps and stopped one row short
+  of `ST HYG Keep`. A complete-LOOKING roster that does not contain the
+  answer is worse than no roster: it reads as "that comp does not exist".
+  New `AELL_compsHere(wanted, cap)` ranks near misses first (comps sharing
+  a word with the name that missed, bucketed — ES3 sort is not stable),
+  discloses the cap and names `get_project_info {limit: "all"}` when it
+  truncates. `AELL_resolveComp` and reduce_project's "which comps matter"
+  refusal both use it. Harness 589/589; stub back-fill in
+  tests/test-project-hygiene.js (11b) proves the class without AE.
+
 - ~~`add_mask` is told to get layer sizes from a tool that has none~~
   DONE 2026-09-02 (0.11.9). `layer.width` reports the COMP's dimensions
   on a text or shape layer and nothing at all on a camera or light

@@ -427,6 +427,45 @@ res = call("clean_project", { action: "reduce_project", keepComps: ["Nope"] });
 assert(!res.ok && /Comp not found: Nope/.test(res.error) &&
        /MAIN/.test(res.error), "a bad comp name lists the real ones");
 
+// 11b. The grounded list is RANKED and the cap ANNOUNCES itself.
+//      Measured in real AE 2026 (self-test 588/589, 2026-09-02): the
+//      roster was flat project order capped at 15 with nothing saying so,
+//      so a project that had grown past fifteen comps truncated exactly
+//      the near-miss the caller needed -- a complete-looking roster that
+//      does not contain the answer, which reads as "it does not exist".
+reset();
+for (let i = 1; i <= 18; i++) project.items.addComp("Filler " + i);
+project.items.addComp("ST HYG Keep");          // 19th: past every cap
+project.items.addComp("ST HYG Drop");
+res = call("clean_project", { action: "reduce_project",
+                              keepComps: ["ST HYG Nope"] });
+assert(!res.ok && /Comp not found: ST HYG Nope/.test(res.error),
+       "a 20-comp project still refuses the unknown name");
+assert(/ST HYG Keep/.test(res.error) && /ST HYG Drop/.test(res.error),
+       "the two near-miss comps survive the cap despite being LAST in " +
+       "project order: " + res.error);
+assert(res.error.indexOf("ST HYG Keep") < res.error.indexOf("Filler"),
+       "and they are listed BEFORE the unrelated comps");
+assert(/and 5 more/.test(res.error),
+       "the cap says how many it did not show: " + res.error);
+assert(/get_project_info \{limit: "all"\}/.test(res.error),
+       "and names the tool that shows the rest");
+// Nothing is dropped when the roster fits, and no cap noise is added.
+reset();
+project.items.addComp("MAIN");
+project.items.addComp("OTHER");
+res = call("clean_project", { action: "reduce_project", keepComps: ["Nope"] });
+assert(/MAIN/.test(res.error) && /OTHER/.test(res.error) &&
+       !/more\)?$/.test(res.error) && !/get_project_info/.test(res.error),
+       "a short roster is listed whole, with no cap wording: " + res.error);
+// The "which comps matter" refusal shares the helper, so its 20-cap
+// discloses itself too.
+reset();
+for (let i = 1; i <= 26; i++) project.items.addComp("Filler " + i);
+res = call("clean_project", { action: "reduce_project" });
+assert(!res.ok && /keepComps/.test(res.error) && /and 6 more/.test(res.error),
+       "the no-keepComps refusal caps at 20 and says so: " + res.error);
+
 // 12. A keepComps string (not an array) is accepted rather than refused.
 rigB();
 res = call("clean_project", { action: "reduce_project", keepComps: "MAIN" });
