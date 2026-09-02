@@ -17,7 +17,8 @@
 .EXAMPLE
   .\scripts\run-local-agent.ps1
   .\scripts\run-local-agent.ps1 -Iterations 40 -PauseSec 15
-  .\scripts\run-local-agent.ps1 -UntilHour 7   # stop at 7am
+  .\scripts\run-local-agent.ps1 -UntilHour 7     # stop at 07:00
+  .\scripts\run-local-agent.ps1 -UntilHour 9.5   # stop at 09:30
 
 .NOTES
   Unattended means no one is there to answer permission prompts, so the
@@ -33,7 +34,9 @@
 param(
     [int]$Iterations = 20,
     [int]$PauseSec = 20,
-    [int]$UntilHour = -1,
+    # Stop time as an hour of the day, fractions allowed: 7 = 07:00,
+    # 9.5 = 09:30. -1 = run all Iterations.
+    [double]$UntilHour = -1,
     [string]$RepoRoot = '',
     [string]$Branch = 'claude/ae-plugin-llama-cpp-f13g3x',
     [string]$ClaudePath = '',
@@ -58,7 +61,8 @@ if (-not $Detached) {
            $PSCommandPath + '" -Detached'
     $fwd = $fwd + ' -Iterations ' + $Iterations
     $fwd = $fwd + ' -PauseSec ' + $PauseSec
-    $fwd = $fwd + ' -UntilHour ' + $UntilHour
+    $fwd = $fwd + ' -UntilHour ' + $UntilHour.ToString(
+        [System.Globalization.CultureInfo]::InvariantCulture)
     if ($RepoRoot)   { $fwd = $fwd + ' -RepoRoot "' + $RepoRoot + '"' }
     if ($Branch)     { $fwd = $fwd + ' -Branch "' + $Branch + '"' }
     if ($ClaudePath) { $fwd = $fwd + ' -ClaudePath "' + $ClaudePath + '"' }
@@ -223,14 +227,31 @@ Write-Log ('branch : ' + $Branch)
 Write-Log ('log    : ' + $logFile)
 Write-Log ('plan   : ' + $Iterations + ' iterations, ' + $PauseSec + 's pause')
 
+# The stop time, computed once.
+#
+# The old check was `(Get-Date).Hour -eq $UntilHour`, which only matched
+# if a pass happened to START inside that one hour. A pass that ran long
+# could step straight over it and the loop would keep going all day. A
+# real timestamp cannot be jumped over.
+$stopAt = $null
+if ($UntilHour -ge 0) {
+    $h = [int][Math]::Floor($UntilHour)
+    $m = [int][Math]::Round(($UntilHour - $h) * 60)
+    if ($m -ge 60) { $h = $h + 1; $m = 0 }
+    $today = (Get-Date).Date.AddHours($h).AddMinutes($m)
+    # Overnight: a stop time that has already passed means tomorrow.
+    $stopAt = if ($today -gt (Get-Date)) { $today } else { $today.AddDays(1) }
+    Write-Log ('Will stop at ' + $stopAt.ToString('yyyy-MM-dd HH:mm'))
+}
+
 # Consecutive waits spent on a usage limit (see the check below). Reset
 # whenever a pass actually lands a commit.
 $limitWaits = 0
 
 for ($i = 1; $i -le $Iterations; $i++) {
 
-    if ($UntilHour -ge 0 -and (Get-Date).Hour -eq $UntilHour) {
-        Write-Log ('Reached stop hour ' + $UntilHour + '. Done.')
+    if ($stopAt -and (Get-Date) -ge $stopAt) {
+        Write-Log ('Reached stop time ' + $stopAt.ToString('HH:mm') + '. Done.')
         break
     }
 

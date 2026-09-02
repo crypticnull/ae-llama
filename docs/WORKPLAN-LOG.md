@@ -14110,3 +14110,18 @@ Nothing else was left unattempted this pass. Nothing is blocked.
   and if the last entry was a 12b pass, skip it and take the next normal
   backlog item. Never two Premiere passes in a row. Roughly half the
   night each way, with the AE product getting the other half.
+
+## 2026-09-02 (remote session) — -UntilHour takes fractions, and cannot be stepped over
+
+- `-UntilHour` was `[int]`, so `9.5` was rejected outright. Now
+  `[double]`: 7 = 07:00, 9.5 = 09:30, 0.25 = 00:15.
+- Found while changing it: the stop check was
+  `(Get-Date).Hour -eq $UntilHour`, which only matched if a pass
+  happened to START inside that one hour. A pass that ran long could
+  step straight over it and the loop would keep going all day on the
+  owner's machine. The stop time is now computed ONCE as a real
+  timestamp (tomorrow if it has already passed today) and compared with
+  `-ge`, which cannot be jumped.
+- The WMI relaunch formats it with InvariantCulture, so a comma decimal
+  separator on a non-English locale cannot come back unparseable.
+- Verified the arithmetic under pwsh for 7, 9.5, 0.25 and 23.75.
