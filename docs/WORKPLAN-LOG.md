@@ -14013,3 +14013,24 @@ Nothing else was left unattempted this pass. Nothing is blocked.
   facts under `.panel`, the invisible runner under `.host`) and the
   report read only one of them.
 - Harness 70/72. No `extension/` change, so NO BUMP.
+
+## 2026-09-02 (remote session) — print the measurements, not the step names
+
+- The first successful unattended run printed eight "ok" lines and
+  nothing else, so the actual findings still had to be dug out of a JSON
+  file by hand. That is precisely the extra step this script exists to
+  remove, and the owner said so.
+- `run-ppro-probe.ps1` now prints WHAT WAS MEASURED under each step:
+  ExtendScript build and engine name, BridgeTalk name/specifier/targets,
+  whether beginUndoGroup and executeCommand exist, AME status, QE
+  version and effect count, which sequence route WORKED and which
+  failed with why, the History bins created, and for the MOGRT step the
+  before/after clip counts, whether it LANDED, and every controller read
+  back by name and value.
+- It also copies the result into `docs/measured/ppro-probe-<stamp>.json`
+  so the measurements are committed with the repo instead of living
+  only in AppData.
+- Verified the rendering here against a realistic fake result rather
+  than shipping it blind: the block was extracted and executed under
+  pwsh 7 with a fixture covering all eight steps.
+- Harness 70/72. No `extension/` change, so NO BUMP.

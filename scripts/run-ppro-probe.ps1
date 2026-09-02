@@ -301,19 +301,106 @@ $battery = $null
 if ($res.battery) { $battery = $res.battery }
 elseif ($res.parsed -and $res.parsed.data) { $battery = $res.parsed.data }
 
+# Print WHAT WAS MEASURED, not just which steps ran. The first
+# successful run printed eight "ok" lines and nothing else, so the
+# actual findings still had to be dug out of a JSON file by hand -
+# which is exactly the sort of extra step this script exists to remove.
+function Show-Fact([string]$label, $value) {
+    if ($null -eq $value -or "$value" -eq '') { return }
+    Say ("        " + $label.PadRight(26) + "$value")
+}
+
 if ($battery -and $battery.steps) {
     Say '-- battery'
     foreach ($s in $battery.steps) {
-        if ($s.ok) {
-            Say ("  ok    " + $s.step)
-        } else {
+        if ($s.skipped) { Say ("  skip  " + $s.step); continue }
+        if (-not $s.ok) {
             $failedSteps++
             Bad ("  FAIL  " + $s.step + " : " + $s.error)
+            continue
+        }
+        Say ("  ok    " + $s.step)
+        $d = $s.data
+        if ($null -eq $d) { continue }
+
+        switch ($s.step) {
+            'ping' {
+                Show-Fact 'ExtendScript' ("$($d.esVersion) build $($d.esBuild)")
+                Show-Fact 'engine' $d.engineName
+            }
+            'hostFacts' {
+                Show-Fact 'app version' $d.appVersion
+                Show-Fact 'BridgeTalk name' $d.btAppName
+                Show-Fact 'BridgeTalk specifier' $d.btSpecifier
+                Show-Fact 'beginUndoGroup' $d.beginUndoGroup
+                Show-Fact 'executeCommand' $d.executeCommand
+                Show-Fact 'AME status' $d.ameStatus
+                if ($d.btTargets) { Show-Fact 'BridgeTalk targets' ($d.btTargets -join ' ') }
+            }
+            'qe' {
+                Show-Fact 'enableQE' $d.enableQE
+                Show-Fact 'qe.project' $d.qeProject
+                Show-Fact 'QE version' $d.qeVersion
+                Show-Fact 'effects listed' $d.effectCount
+            }
+            'project' {
+                Show-Fact 'via' $d.via
+                Show-Fact 'name' $d.name
+                Show-Fact 'items' $d.items
+                Show-Fact 'note' $d.note
+            }
+            'sequence' {
+                Show-Fact 'via' $d.via
+                Show-Fact 'active sequence' $d.active
+                Show-Fact 'video tracks' $d.videoTracks
+                foreach ($t in $d.tried) {
+                    $mark = if ($t.ok) { 'WORKED ' } else { 'failed ' }
+                    Say ("        " + $mark + $t.how +
+                         $(if ($t.error) { " -- " + $t.error } else { '' }))
+                }
+            }
+            'history' {
+                Show-Fact 'mutated' $d.mutated
+                if ($d.created) { Show-Fact 'created' ($d.created -join ', ') }
+                Show-Fact 'skipped' $d.skipped
+                Show-Fact 'error' $d.error
+            }
+            'mogrt' {
+                Show-Fact 'clips before / after' ("$($d.before) -> $($d.after)")
+                Show-Fact 'LANDED' $d.landed
+                Show-Fact 'clip name' $d.clipName
+                Show-Fact 'controllers' $d.controllerCount
+                Show-Fact 'names readable' $d.namesReadable
+                Show-Fact 'error' $d.error
+                if ($d.controllers) {
+                    foreach ($c in $d.controllers) {
+                        Say ("          - " + $c.name + " = " + $c.value)
+                    }
+                }
+            }
+            'cleanup' {
+                if ($d.removed) { Show-Fact 'removed' ($d.removed -join ', ') }
+                Show-Fact 'scratch project saved' $d.savedScratchProject
+            }
         }
     }
 } else {
     Warn 'The result carries no battery steps - see the raw file.'
     $failedSteps++
+}
+
+# And keep a copy in the repo, so the measurements are committed with
+# everything else instead of living only in AppData.
+try {
+    $measuredDir = Join-Path $repoRoot 'docs\measured'
+    New-Item -ItemType Directory -Force -Path $measuredDir | Out-Null
+    $stamp = (Get-Date).ToString('yyyy-MM-dd-HHmm')
+    $copy = Join-Path $measuredDir ("ppro-probe-" + $stamp + ".json")
+    Copy-Item $resFile $copy -Force
+    Say ''
+    Say "Copied into the repo: $copy"
+} catch {
+    Warn "Could not copy the result into docs\measured: $($_.Exception.Message)"
 }
 
 Say ''
