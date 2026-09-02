@@ -254,21 +254,26 @@ of the panel. Read-only unless you press a button marked MUTATES.</p>
           // What the manifest's ScriptPath managed on its own. Shape B's
           // loader.jsx is expected to FAIL here (see its header): the
           // measurement is what $.fileName reported, not whether it won.
-          evalScript("String($.global.AELLP_LOADER) + '|' + " +
-                     "String($.global.AELLP_LOADER_FILENAME)",
-            function (raw) {
-              var parts = String(raw || "").split("|");
-              results.scriptPath = {
-                loaderSaid: (parts[0] && parts[0] !== "undefined")
-                  ? parts[0] : null,
-                dollarFileName: (parts[1] && parts[1] !== "undefined")
-                  ? parts[1] : null,
-                note: "ScriptPath is evaluated, but $.fileName inside it " +
-                      "names the HOST's folder, so a loader cannot resolve " +
-                      "its own siblings. The panel loads probe.jsx itself."
-              };
-              render();
-              autoSave();
+          // Read the two globals SEPARATELY. Joining them with a
+          // delimiter and splitting is one embedded delimiter away from
+          // a wrong answer, and this value is a measurement.
+          evalScript("String($.global.AELLP_LOADER_FILENAME)",
+            function (fname) {
+              evalScript("String($.global.AELLP_LOADER)", function (said) {
+                results.scriptPath = {
+                  loaderSaid: (said && said !== "undefined") ? said : null,
+                  dollarFileName: (fname && fname !== "undefined")
+                    ? fname : null,
+                  note: "ScriptPath IS evaluated, but $.fileName inside it " +
+                        "is not a path (AE 26.3 returned \"7\"). new File() " +
+                        "on that is a RELATIVE path, so it resolves against " +
+                        "the host's working directory - which is why it " +
+                        "looks like the host's own folder. The panel loads " +
+                        "probe.jsx by absolute path instead."
+                };
+                render();
+                autoSave();
+              });
             });
         });
       });

@@ -93,13 +93,19 @@ interactive session does NOT self-start; it answers one prompt and waits.
   ExtendScript 4.5.6. This binds `extension/js/selftest.js` too — the
   CLI runner `$.evalFile`s it.
 - `.ps1` must be pure ASCII (Windows PowerShell 5.1, BOM-less).
-- **`$.fileName` inside a CEP `ScriptPath` names the HOST's folder**,
-  not the script's own. Measured AE 26.3 / CEP 12.0.1: it returned
-  `C:\Program Files\Adobe\Adobe After Effects 2026\Support Files\`, so a
-  ScriptPath file cannot resolve its siblings and a "branch then
-  evalFile the right body" loader does not work. Load host code the way
+- **`$.fileName` inside a CEP `ScriptPath` is not a path at all.**
+  Measured on CEP 12.0.1: AE 26.3 returned the string **`"7"`**,
+  Premiere 26.3.2 returned **`""`**. The trap is what happens next —
+  `new File()` treats both as RELATIVE, resolves against the host's
+  working directory, and `.parent.fsName` hands back the host's own
+  install folder, which reads exactly like a real answer. A ScriptPath
+  file
+  therefore cannot locate its own siblings, and a "branch then evalFile
+  the right body" loader does not work. Load host code the way
   `main.js` always has: from the PANEL, with the absolute path from
-  `getSystemPath("extension")`.
+  `getSystemPath("extension")`. (Once loaded that way, `$.fileName`
+  inside the file IS correct — measured
+  `/c/Users/.../jsx/probe.jsx` — so this is specific to ScriptPath.)
 - **An XML comment may not contain `--` or end with `-`** (XML 1.0
   §2.5), and CEP reports a manifest parse error NOWHERE a user can see:
   the extension is just absent from Window > Extensions, which looks
@@ -125,6 +131,20 @@ interactive session does NOT self-start; it answers one prompt and waits.
   `.ccx` packaging, no AE host). A CEP Premiere panel is a bridge, not
   a destination — read `docs/PREMIERE_PLAN.md` before building
   anything Premiere-side. Owner-gated (WORKPLAN section 12).
+- **Premiere facts measured 2026-09-02 (26.3.2, CEP 12.0.1)** — full
+  table in `docs/PREMIERE-PLATFORM.md`. The load-bearing ones: one CEP
+  bundle listing both hosts DOES load in both; `appName` is `PPRO`;
+  CEP's Node (17.7.2) has `child_process`, so the engine/ComfyUI stack
+  works there; ExtendScript is the SAME build as AE's (4.5.6/80.1060872)
+  so every ES3 rule above binds Premiere too; `$.engineName` is
+  `NewWorld`, not `main`; `$.os` is stale there ("Windows 7") so never
+  branch on it. **Premiere has NO undo API** — `beginUndoGroup`,
+  `endUndoGroup`, `executeCommand` and `findMenuCommandId` are all
+  undefined — so AE's one-undo-per-round design cannot transfer and
+  batches must stop at the first failure and report what was applied.
+  QE exists and lists 236 effects on 26.3.2; whether it MUTATES is
+  unmeasured. `localStorage` is per-host, so cross-panel state needs a
+  lease file, not storage.
 
 ## Shipping (BUMP OR IT DOES NOT SHIP)
 

@@ -13796,3 +13796,54 @@ Nothing else was left unattempted this pass. Nothing is blocked.
 - `loader.jsx` is kept as the measurement: it records what `$.fileName`
   actually said, so the next session does not re-derive it. CLAUDE.md
   carries the rule. Harness 69/71. No `extension/` change, NO BUMP.
+
+## 2026-09-02 (remote session) — GATE G0 PASSED
+
+- The probe panel loads and works in **Premiere 26.3.2** as well as AE
+  26.3, from ONE bundle, shape B. Full table in
+  `docs/PREMIERE-PLATFORM.md`; the load-bearing results:
+  - `appName` = `PPRO` / `AEFT`, both confirmed.
+  - CEP API **12.0.1 in both**. Premiere 26.x is CEP 12 — the
+    third-party "CSXS.13/14 required for Premiere 2026" claim is not
+    borne out, and Adobe's own host table was right.
+  - CEP Node **17.7.2** with `child_process` in BOTH hosts. The whole
+    llama-server / ComfyUI / ffmpeg / whisper stack is viable in
+    Premiere. This was the single biggest unknown.
+  - ExtendScript is the **same build in both** (4.5.6, 80.1060872), so
+    every ES3 hard-won fact in CLAUDE.md — no `JSON`, left-associative
+    `?:` — binds Premiere code too. `tests/test-es3-*.js` should scope
+    any future Premiere jsx without a second thought.
+  - 500-round-trip soak survived in both (5.5 s AE, 6.7 s Premiere). No
+    sign of the "InternalError: Stack overrun" degradation a third party
+    reported on 26.2.2, at this size.
+- **Premiere has NO undo API, measured**: `beginUndoGroup`,
+  `endUndoGroup`, `executeCommand` and `findMenuCommandId` are all
+  `undefined` there and all `function` in AE. Adobe's docs said so; it
+  is now a measurement. STOPPED AT #k is the permanent batch contract
+  and the deleted `Host.supportsRollback` branch stays deleted.
+- QE on 26.3.2: `enableQE` works, `qe.project` resolves, version
+  `26.3.2`, `getVideoEffectList()` returned **236 effects**. That
+  contradicts the third-party "26.3 breaks QE" report — but only for
+  ENTERING and LISTING. Whether QE MUTATES is still unmeasured and stays
+  a P1 row; the tier plan does not move on this.
+- `localStorage` is **per-host**: AE wrote its key at 20:31:51, Premiere
+  opened at 20:32:42 and saw only its own. So no cross-kill through PID
+  records — and no cross-panel discovery either, which makes the lease
+  file under `dataRoot()` REQUIRED rather than a nicety.
+- BridgeTalk lists `premierepro` from AE and `aftereffects` from
+  Premiere, specifiers `premierepro-26.0` / `aftereffects-26.0`,
+  `getStatus("ame")` = `ISNOTRUNNING`. Door 1 has a real target; a
+  listed target proves addressing, not delivery.
+- CORRECTION to the previous entry: `$.fileName` in a ScriptPath does
+  not "name the host's folder". It returned **`"7"`** in AE and **`""`**
+  in Premiere; `new File()` treats both as RELATIVE and resolves them
+  against the host's working directory, which is what produced the
+  install-folder path. The earlier wording was an inference from the
+  symptom. CLAUDE.md and the ledger now carry the measured table.
+- Also fixed: the probe read its two ScriptPath globals by joining them
+  with `|` and splitting, which is one embedded delimiter away from a
+  wrong measurement; they are read separately now.
+- Still owed in P0: MOGRT accept read-back (needs a sequence open),
+  History granularity, the three doors, shape A re-test now that XML
+  parses, the aescripts installer path, the 27.0 beta, transcript
+  exports, and the AI Assistant census.
