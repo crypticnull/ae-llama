@@ -12988,3 +12988,250 @@ one; work from `ctx.<name>Comp`), and after a red run, sweep
     (harness plan step 6).
 
 Nothing was left unattempted this pass. Nothing is blocked.
+
+## 2026-09-02 (local, real AE) - WORKPLAN 8: the seven rows that had no world to start from. UNBUMPED ON PURPOSE
+
+**Item:** WORKPLAN section 8, the bullet the last five passes all filed as
+their #1 - "the A/B/C/E rows with no rig twin (A1 grid, A2 slider rig, B1
+stagger, C1 typewriter, C2 text style, E1 blur, E2 for_each) need NEW
+rig-based steps before they can take paraphrases."
+
+**Nothing in `extension/` changed, so nothing was bumped.** This pass is
+probe + tests + docs. A bump with no panel change publishes an update
+that installs nothing and every test user pays the reinstall for it.
+
+### Why these seven had been stuck
+
+The rig (`rigPlan`) builds a FINISHED world: a 3x3 grid of nine squares,
+each already fading in, all parented to a rotated null, HELLO at 120px
+with an oval mask. Every one of the seven rows asks for something that
+world already HAS. "Arrange these into a grid" against a comp that is
+already a grid scores a no-op as a pass; so does "fade these in one
+after another" against nine layers that already fade in. The previous
+pass wrote that down and declined to force it, which was right.
+
+### The fix: a second rig, not a second set of sentences
+
+`fromRig` used to be a boolean. It now names a VARIANT - `true` is the
+finished world, unchanged for all fifteen trigger-layer steps, and
+`"icons"` is a new UNFINISHED one:
+
+- a full-frame `BG` solid, added FIRST so it lands at the BOTTOM of the
+  stack (which is what "everything except the background" and "soften
+  the background" both mean by background),
+- six 160x160 solids `Icon 1`..`Icon 6` at `ICON_SPOTS` - deliberately
+  off-grid and uneven, no two sharing an x or a y, so "is it a grid
+  now?" is only ever a question about what the MODEL did,
+- a small white `HEADLINE` at 48px, so "bigger" and "brand blue" both
+  have somewhere to travel from.
+
+No keyframes, no expressions, no effects, nothing parented, no animator.
+Every fixture is an ABSENCE, and each absence is a step's whole subject.
+Same comp name, so one `sweepScript` still cleans up after either.
+
+`rigScript(variant)` and `resetWorld` thread the variant through;
+`--rig-check` now builds and verifies BOTH rigs in sequence (checking
+only the first would let the second rot silently).
+
+**`rigProblems(variant, state)` is the other half.** The rig-check's
+assertions used to live inline in `main()`, where only real AE could run
+them. They are now a pure function over a READ_COMP state, so
+`--rig-check` runs it against the real comp AND `tests/test-chat-probe.js`
+runs it against a synthetic one - a fixture that quietly stops being
+built is caught with no AE at all. That is the back-fill this item owed:
+the bug class is "a rig ships the thing a sentence asks for, and the
+sentence passes forever on a no-op", and thirteen mutation cases now
+pin it (an icon already animated, already rigged, already effected,
+icons that already line up, a headline already big or already blue or
+already typing on, a background not at the bottom or not full frame).
+
+### The seven steps (30-36)
+
+Sentences come from `docs/USEFULNESS-TESTS.md` where it has one, adapted
+only to name the fixtures - a probe that invents its own phrasing
+measures the phrasing. Three paraphrases each (casual / vague / typo).
+
+| # | row | tool it should reach |
+|---|-----|----------------------|
+| 30 | A1 | `grid_layout` |
+| 31 | A2 | `link_property` |
+| 32 | B1 | `stagger_layers` |
+| 33 | C1 | `add_text_animator` |
+| 34 | C2 | `set_text_style` |
+| 35 | E1 | `apply_effect` |
+| 36 | E2 | `for_each_layer` |
+
+Each check reads what the sentence actually asks for and names the
+near-miss it is refusing, not just "failed": a grid counts whether the
+positions line up OR `grid_layout`'s control rig drives them; a stagger
+counts whether the KEYS are spaced or the LAYERS were retimed; "brand
+blue" counts a Fill effect's colour as well as the text's own; "one
+slider" fails six sliders even though six expressions were written.
+
+### The matrix - 28 runs, real AE, real model
+
+`node scripts/chat-probe.js --variants --steps 30,31,32,33,34,35,36`
+(transcript `logs\chat-probe-2026-09-02T11-22-56.md`, canonical-only
+warm-up `...T11-16-18.md`).
+
+**19 pass, 2 miss, 7 HARM.**
+
+| # | row | pass | miss | HARM |
+|---|-----|------|------|------|
+| 30 | grid | 3 | 0 | 1 |
+| 31 | slider rig | 4 | 0 | 0 |
+| 32 | stagger | 1 | 0 | 3 |
+| 33 | typewriter | 4 | 0 | 0 |
+| 34 | text style | 4 | 0 | 0 |
+| 35 | blur | 1 | 1 | 2 |
+| 36 | for_each | 2 | 1 | 1 |
+
+Two rows (33 typewriter, 34 text style) are clean on all four phrasings
+and need nothing. Row 31 is clean too, by two different shapes -
+`for_each_layer{tool:'link_property'}` three times and per-layer
+`link_property` six times.
+
+### What the five failing phrasings actually found
+
+Reported, not fixed - the bullet says ONE tool-doc/system-prompt change
+per pass so a regression stays attributable. In priority order, which is
+also the order they are filed below:
+
+1. **Row 36 casual, "drop shadow on every layer but the BG":** the model
+   sent `apply_effect {layers: [...seven names]}` and got back
+   `Missing 'layer' (name or 1-based index)`. That refusal never says
+   the plural belongs to `for_each_layer`, so the model re-sent the
+   IDENTICAL call and then told the user "please ensure the layers are
+   correctly named" - the names were fine. Twice in one round. This is
+   the same class as 0.11.10's bare `Missing 'property'` and 0.11.12's
+   three refusals: the refusal is the bug, not the vocabulary.
+   `AELL_resolveLayer`'s throw should read the `layers` it was actually
+   handed and name the tool that takes it.
+
+2. **Row 32, `stagger_layers` on layers with NO keyframes:** 3 of 4
+   phrasings called it alone. It moved six start times, answered
+   `ok {layers:6, spread:2.5, placed:[...]}` - and nothing fades,
+   because there were no opacity keys to stagger. The receipt is a
+   success message for a comp where nothing animates. Only the TYPO
+   phrasing did both halves (`stagger_layers` then `set_keyframes`).
+   Either the doc says "stagger_layers moves layers in TIME - it does
+   not create the animation" or the tool warns when every target has
+   zero keyframes on every animatable property.
+
+3. **Row 35, "soften" and "too sharp" reach `add_mask`:** the vague
+   ("the background is too sharp behind the icons") and typo phrasings
+   both masked the background instead of blurring it. Two of four.
+
+4. **Row 35 canonical, the rollback that ate a correct call:**
+   `apply_effect {effect:'Fast Box Blur'}` succeeded, then
+   `set_effect_param {param:'Radius'}` failed with a properly grounded
+   error ("'Fast Box Blur' has: Blur Radius, ...") - and the whole round
+   rolled back, taking the blur with it. The model read the grounded
+   error, relayed it, and stopped. The grounding worked; what it bought
+   was thrown away by the rollback. Worth a look at whether a
+   parameter-name miss should be rollback-worthy at all.
+
+5. **Row 30 casual, `grid_layout` with no `layers`:** "line the Icon
+   layers up in a neat 3 by 2 grid" became `grid_layout {spacingX:40,
+   spacingY:40}` with no `layers` argument. Headless there is no
+   selection, so the tool did what its doc promises - gridded ALL
+   content layers - and the BACKGROUND and the HEADLINE went into the
+   grid with rig expressions on their positions. The user named a
+   subset in words and got the whole comp.
+
+6. **`link_property {layer: [six names]}` -> "invalid numeric result
+   (divide by zero?)"** (canonical-only warm-up run, step 31). An array
+   where `layer: name|index` is expected reaches AE's native error
+   instead of a grounded refusal, and the whole round rolled back. Same
+   defect as #1 with a worse error string.
+
+7. **Row 36 vague** built a `Shadow Null` with three controls and
+   applied Drop Shadow TWICE to three of the seven layers - 39 tool
+   calls for a one-line ask.
+
+### Verification
+
+- **Real AE harness: 589/589 PASSED**, before and after. Nothing in
+  `extension/` was touched, which is the point.
+- `node scripts/chat-probe.js --rig-check`: both rigs build clean in
+  real AE - `[full] 34 commands, all ok`, `[icons] 15 commands, all ok`,
+  "rigs OK - every fixture the steps name is in the comp".
+- `tests/test-chat-probe.js` 631 assertions (+96), all green: the icon
+  rig's plan (what it builds, what it must NEVER run - `set_keyframes`,
+  `grid_layout`, `apply_effect`, `link_property`, `add_text_animator`,
+  ... - and that the background is added first), `rigProblems` over
+  thirteen synthetic breakages plus the full rig's, and a pass case AND
+  the near-miss cases for all seven checks (the background gridded in
+  with the icons, six sliders instead of one, a fade with no stagger, a
+  whole-layer fade sold as a typewriter, blue text that never grew,
+  a blur on the wrong layer, and the EXCEPT ignored).
+- `node tests/test-es3-ternary.js` green - it lints the ExtendScript
+  embedded in chat-probe.js too.
+- Full stub sweep 66/67. The odd one out is the known environmental
+  `tests/test-comfy-backend.js`, unchanged and still not mine.
+- **`docs/CAPABILITIES.md` was already STALE at HEAD** - the six wipe
+  steps that shipped in 0.11.13 moved two per-tool self-test counts and
+  the generated table was never regenerated, so CI has been red on the
+  dev branch since that commit. `node scripts/capability-report.js` run
+  and committed here. Not caused by this pass; fixed by it.
+
+### Assumptions written down
+
+- **The seven rows keep their own rig rather than sharing the full
+  one.** Merging them would mean adding a background and un-animating
+  the squares, which changes the world fifteen existing steps are
+  scored against - the layer counts, the undo signatures, `nineSquares`,
+  the precompose step. Two rigs cost one `sweepScript` call per step
+  reset and nothing else.
+- **Row 36 requires the HEADLINE to be shadowed too, not just the six
+  icons.** "Everything except the background" is literal; the usefulness
+  table's "BG untouched" is the half that must never fail, and it is
+  checked first and separately so a run that shadows the background is
+  always the loudest failure in the row.
+- **Row 35 matches the WORD "blur" in an effect name**, not a match
+  name: AE display names are locale-dependent and the model reached for
+  Gaussian and Fast Box Blur in different runs. Both count.
+
+### Filed for later passes, in priority order
+
+1. **`Missing 'layer'` never mentions the plural or `for_each_layer`** -
+   the top row, measured twice in one round. See finding 1.
+2. **`stagger_layers` reports `ok` for a stagger that animates nothing**
+   - 3 of 4 phrasings. See finding 2.
+3. **"soften"/"too sharp" routes to `add_mask`** - 2 of 4. See finding 3.
+4. **A rollback throws away the calls that WORKED** when a later one
+   fails on a parameter name. See finding 4.
+5. **`grid_layout` with no `layers` grids the background in** when the
+   user named a subset in words. See finding 5.
+6. **`link_property {layer: [array]}` -> "invalid numeric result"** -
+   AE's native error, not a grounded one. See finding 6.
+7. **Step 2's naming flake** - unchanged. `duplicate_layer` numbers
+   copies from 2, so a model's "Red Square 1" cannot exist.
+8. **Only remove_keyframes opts into the destructive refusal wording** -
+   unchanged. `delete_layer`, `delete_mask`, `remove_effect` still need
+   their own measurement.
+9. **The full prompt has 26 chars of headroom** - unchanged. The next
+   rules addition needs a real cut; the named candidates are unchanged.
+10. **`property: string` is the vaguest args line in TOOL_DEFS** -
+    unchanged, still blocked on 9.
+11. **Every add_mask paraphrase still sends COMP coordinates first** -
+    unchanged.
+12. **Ask the SERVER for the two numbers** (`POST /tokenize`,
+    `GET /props`) - unchanged, still no live symptom.
+13. **`comfyUrl` is 8188, ComfyUI answers on 8000** on this machine -
+    one line in `%APPDATA%\AE-Llama\settings.json`.
+14. **The harness cannot answer a modal with WORDS** - unchanged.
+15. **`starved` may now be too generous a word** - unchanged.
+16. **delete_mask could warn when an expression still points at the
+    mask** - unchanged.
+17. **A controller GROUP has never been measured**, nor any locale but
+    en_US - unchanged.
+18. **`capParams` is a second, independent roster inside the same
+    .mogrt** - unchanged.
+19. **`set_mask_path` takes vertices with no layer-box check at all** -
+    unchanged.
+20. **Still owed, needs a human awake:** drop
+    `logs\mogrt-verify\AELL Probe Card.mogrt` into real Premiere
+    (harness plan step 6).
+
+Nothing was left unattempted this pass. Nothing is blocked.

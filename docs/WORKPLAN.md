@@ -1725,12 +1725,18 @@ this order, one bullet per pass:
   expression, the eased key and the recolour that `SIG_FN` cannot).
   `gradeMatrix` is the acceptance gate the bullet states. Findings are
   in the log; the wording fixes belong to the next bullet.
-  **Still owed here:** the A/B/C/E rows with no rig twin (A1 grid, A2
-  slider rig, B1 stagger, C1 typewriter, C2 text style, E1 blur, E2
-  for_each) need NEW rig-based steps before they can take paraphrases —
-  the rig already contains a finished grid with fades, so the existing
-  world-building steps 2-8 cannot be reset for a second phrasing. The
-  original instruction, for reference:
+  ~~**Still owed here:** the A/B/C/E rows with no rig twin~~ DONE
+  2026-09-02 (local, real AE, UNBUMPED — nothing in `extension/`
+  changed). A SECOND rig, not a second set of sentences: `fromRig` now
+  names a VARIANT, and `"icons"` builds the UNFINISHED world — six
+  scattered solids over a full-frame `BG`, a small white `HEADLINE`, no
+  keyframes, no expressions, no effects, nothing parented. The seven
+  rows ask for exactly what it lacks, which is the only way a pass means
+  anything. Steps 30-36. `rigProblems(variant, state)` is pure, so
+  `--rig-check` runs it against the real comp (both rigs, in sequence)
+  and the stub suite runs it against a synthetic one. Matrix: **19 pass,
+  2 miss, 7 HARM over 28 runs** — findings in the log, fixes are the
+  next bullets. The original instruction, for reference:
 - **Wire variants over the SAFE rows only** (A/B/C/E scenarios + the
   ten roadmap-item-2 trigger mappings): 2-3 paraphrases each (casual,
   vague, typo'd). Score: right tool + right target = pass; honest
@@ -1802,9 +1808,20 @@ this order, one bullet per pass:
     zero tool calls. Prompt full 58989 -> 58974 (ceiling 59000), paid
     for by two third copies of "dryRun defaults to true" and a
     compressed clean_project doc tail. Harness 578 -> 589.
-  - NEXT: the A/B/C/E rows with no rig twin (A1 grid, A2 slider rig,
-    B1 stagger, C1 typewriter, C2 text style, E1 blur, E2 for_each)
-    need NEW rig-based steps before they can take paraphrases.
+  - NEXT: row 36 casual, "drop shadow on every layer but the BG" ->
+    `apply_effect {layers: [...]}` answered `Missing 'layer' (name or
+    1-based index)`, which never says that the PLURAL belongs to
+    `for_each_layer`. The model re-sent the identical call and gave up.
+    Same class as 0.11.10's bare `Missing 'property'`, measured twice in
+    one round. Ground `AELL_resolveLayer`'s missing-layer throw on the
+    plural it was actually handed.
+  - THEN, in priority order: row 32 (`stagger_layers` alone on layers
+    with NO keyframes reports `ok` and animates nothing — 3 of 4
+    phrasings), row 35 ("soften"/"too sharp" reaches `add_mask`, 2 of
+    4), row 30 casual (`grid_layout` with no `layers` grids the
+    BACKGROUND in), and `link_property {layer: [six names]}` ->
+    "invalid numeric result (divide by zero?)" instead of a grounded
+    refusal.
 - **DEFERRED until a sandbox design exists:** D/F/H3 rows (project
   mutation, renders, mass-delete) — wiring them against the live
   project is the harm the whitelist cannot contain. Also deferred:

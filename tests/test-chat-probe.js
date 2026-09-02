@@ -2270,6 +2270,15 @@ const NEW_STEPS = [
 // trigger-layer step exists, that they keep the order their fixtures
 // need (the mask must be planted before it is taken off again), and
 // that they run after the steps that build the world they name.
+const USEFULNESS_STEPS = [
+  "arrange scattered layers into a grid",
+  "rig one slider to drive many layers",
+  "cascade the entrances",
+  "type a title on letter by letter",
+  "restyle a headline",
+  "soften the background",
+  "an effect on everything except one layer"];
+
 for (const t of NEW_STEPS) stepOrder(t);
 for (let i = 1; i < NEW_STEPS.length; i++) {
   assert(stepOrder(NEW_STEPS[i]) > stepOrder(NEW_STEPS[i - 1]),
@@ -2645,9 +2654,10 @@ assert(typeof probe.resetHistory === "function",
 
 {
   const fromRig = STEPS.filter(s => s.fromRig).map(s => s.title);
-  assert(JSON.stringify(fromRig) === JSON.stringify(NEW_STEPS),
-         "every trigger-layer step can start from the rig, and no " +
-         "world-BUILDING step claims to: " + fromRig.join(", "));
+  assert(JSON.stringify(fromRig) ===
+           JSON.stringify(NEW_STEPS.concat(USEFULNESS_STEPS)),
+         "every trigger-layer and usefulness step can start from a rig, " +
+         "and no world-BUILDING step claims to: " + fromRig.join(", "));
   // The world-building steps must NOT reset the comp: building it
   // through the model is their whole coverage.
   for (const t of ["create a comp", "grid layout", "text layer", "mask",
@@ -2882,6 +2892,471 @@ assert(/if \(!OPT\.isolate \|\| !step\.fromRig\) \{ cb\(\); return; \}/
   assert(probe.gradeMatrix([row(3, "casual", "miss", "no")]).length === 0,
          "gradeMatrix: a group with no canonical is not scored against " +
          "one it never ran");
+}
+
+
+// ------------------------------------------- the second rig, and the
+// A/B/C/E usefulness rows that start from it
+//
+// WORKPLAN section 8: "the A/B/C/E rows with no rig twin (A1 grid, A2
+// slider rig, B1 stagger, C1 typewriter, C2 text style, E1 blur, E2
+// for_each) need NEW rig-based steps before they can take paraphrases."
+// They ask for exactly what the FULL rig already has — a grid, a fade,
+// a style — so they start from the UNFINISHED "icons" rig instead. Every
+// assertion below is about an ABSENCE: if the icon rig ever starts
+// shipping the thing a sentence asks for, that sentence stops measuring
+// anything and its step passes forever on a no-op.
+
+for (const t of USEFULNESS_STEPS) {
+  assert(stepByTitle(t).fromRig === "icons",
+         "'" + t + "' starts from the unfinished icon rig, not the " +
+         "finished one");
+}
+
+{
+  const plan = probe.iconRigPlan();
+  const built = plan.map(c => (c.args && c.args.name) || "").filter(Boolean);
+  for (const want of [probe.ICON_BG, "Icon 1",
+                      "Icon " + probe.RIG_ICONS]) {
+    assert(built.indexOf(want) !== -1,
+           "the icon rig builds " + want);
+  }
+  assert(plan.filter(c => c.tool === "add_text_layer" &&
+                          c.args.text === probe.ICON_TEXT).length === 1,
+         "and one " + probe.ICON_TEXT + " text layer");
+  // The background must be added FIRST: every layer AE adds lands at
+  // index 1, so the first one added ends up at the bottom — which is
+  // what "except the background" and "soften the background" both mean
+  // by background.
+  assert(plan.findIndex(c => c.args && c.args.name === probe.ICON_BG) <
+         plan.findIndex(c => c.args && c.args.name === "Icon 1"),
+         "the background is added before the icons, so it ends up " +
+         "beneath them");
+  for (const forbidden of ["set_keyframes", "grid_layout", "apply_effect",
+                           "set_layer_parent", "link_property",
+                           "add_control", "add_text_animator",
+                           "apply_keyframe_ease", "stagger_layers"]) {
+    assert(plan.every(c => c.tool !== forbidden),
+           "the icon rig never runs " + forbidden + " — that is what the " +
+           "sentences are for");
+  }
+  // Off-grid on purpose: no two icons share an x or a y, so "is it a
+  // grid now?" can only be answered by what the model did.
+  const xs = probe.ICON_SPOTS.map(p => p[0]);
+  const ys = probe.ICON_SPOTS.map(p => p[1]);
+  assert(new Set(xs).size === probe.RIG_ICONS &&
+         new Set(ys).size === probe.RIG_ICONS,
+         "the icons start scattered — no shared row, no shared column");
+  assert(probe.ICON_SPOTS.length === probe.RIG_ICONS,
+         "one spot per icon");
+  const script = probe.rigScript("icons");
+  assert(/AELL_callBatch\(/.test(script) &&
+         script.indexOf("Red Square") === -1,
+         "rigScript('icons') builds the icon rig, not the full one");
+  assert(probe.rigScript().indexOf("Red Square") !== -1,
+         "and rigScript() with no variant still builds the full one");
+}
+
+/* The icon rig as READ_COMP would report it: HEADLINE on top, the icons
+ * under it, the background at the bottom. */
+function iconWorld(over) {
+  const layers = [];
+  layers.push(layer({ index: 1, name: probe.ICON_TEXT, isText: true,
+    text: probe.ICON_TEXT, fontSize: probe.ICON_FONT_SIZE,
+    fillColor: [1, 1, 1], position: [960, 140, 0], layerWidth: 1920,
+    layerHeight: 1080 }));
+  for (let i = 0; i < probe.RIG_ICONS; i++) {
+    layers.push(square({ index: 2 + i, name: "Icon " + (i + 1),
+      solidColor: [0.1, 0.2, 0.9],
+      position: probe.ICON_SPOTS[i].concat([0]),
+      layerWidth: 160, layerHeight: 160,
+      sourceRect: { left: 0, top: 0, width: 160, height: 160 },
+      anchorPoint: [80, 80, 0] }));
+  }
+  layers.push(square({ index: 2 + probe.RIG_ICONS, name: probe.ICON_BG,
+    solidColor: [0.12, 0.12, 0.14], position: [960, 540, 0],
+    layerWidth: 1920, layerHeight: 1080,
+    sourceRect: { left: 0, top: 0, width: 1920, height: 1080 },
+    anchorPoint: [960, 540, 0] }));
+  const c = comp(layers);
+  for (const k in over) c[k] = over[k];
+  return c;
+}
+/** The icons of a world, in rig order. */
+function icons(state) {
+  return state.layers.filter(l => /^Icon \d+$/.test(l.name));
+}
+
+{
+  uid = 0;
+  assert(probe.rigProblems("icons", iconWorld()).length === 0,
+         "the icon rig as built has nothing missing: " +
+         probe.rigProblems("icons", iconWorld()).join("; "));
+  assert(/no comp/.test(probe.rigProblems("icons", { found: false })[0]),
+         "and a missing comp is named, not thrown on");
+  // Each fixture removed in turn — a rig that quietly stops building one
+  // of these is a step failing every night for a reason that is not the
+  // model's, which is the whole reason rigProblems is pure.
+  const cases = [
+    [w => { w.layers = w.layers.filter(l => l.name !== "Icon 3"); },
+     /icon layers, wanted/, "an icon that went missing"],
+    [w => { icons(w).forEach((l, i) => { l.position = [200 + i * 200, 400,
+       0]; }); }, /already line up/, "icons that already sit in a row"],
+    [w => { icons(w)[0].expressions = { scale: "x" }; },
+     /already carry an expression/, "an icon already rigged"],
+    [w => { icons(w)[0].opacityKeys = 2; }, /already animated/,
+     "an icon already animated"],
+    [w => { icons(w)[0].effects = 1;
+            icons(w)[0].effectNames = ["Gaussian Blur"]; },
+     /already carry an effect/, "an effect already applied"],
+    [w => { w.layers = w.layers.filter(l => l.name !== probe.ICON_BG); },
+     /no BG layer/, "a missing background"],
+    [w => { w.layers[w.layers.length - 1].layerWidth = 200; },
+     /wanted the full frame/, "a background that is not full frame"],
+    [w => { const bg = w.layers.pop(); w.layers.unshift(bg);
+            w.layers.forEach((l, i) => { l.index = i + 1; }); },
+     /bottom layer/, "a background that is not at the bottom"],
+    [w => { w.layers[0].fontSize = 120; }, /wanted 48/,
+     "a headline that is already big"],
+    [w => { w.layers[0].fillColor = [0.1, 0.3, 1]; }, /not white/,
+     "a headline that is already blue"],
+    [w => { w.layers[0].textAnimators = 1; }, /text animator/,
+     "a headline that already types on"],
+    [w => { icons(w)[0].parent = "Rig"; }, /already parented/,
+     "an icon that is already parented"],
+    [w => { w.frameRate = 25; }, /at 25/, "a comp built at the wrong rate"]
+  ];
+  for (const [mutate, re, what] of cases) {
+    uid = 0;
+    const w = iconWorld();
+    mutate(w);
+    const got = probe.rigProblems("icons", w);
+    assert(got.some(m => re.test(m)),
+           "rigProblems names " + what + " (got: " +
+           (got.join("; ") || "nothing") + ")");
+  }
+  // And the full rig is still checked by the same function: an empty
+  // comp is missing everything the trigger-layer steps name.
+  const empty = probe.rigProblems(null, comp([]));
+  assert(empty.some(m => /squares, wanted 9/.test(m)) &&
+         empty.some(m => /no HELLO layer/.test(m)) &&
+         empty.some(m => /no Rig null/.test(m)) &&
+         empty.some(m => /no Beta layer/.test(m)),
+         "rigProblems(null) still names every full-rig fixture: " +
+         empty.join("; "));
+}
+
+// --------------------------------------------------- A1: grid_layout
+{
+  const grid = stepByTitle("arrange scattered layers into a grid");
+  uid = 0; const before = iconWorld();
+  {
+    uid = 0; const after = iconWorld();
+    icons(after).forEach((l, i) => {
+      l.position = [700 + (i % 3) * 260, 400 + Math.floor(i / 3) * 260, 0];
+    });
+    assert(grid.check(after, { before: before }) === null,
+           "3x2 of six is a grid");
+  }
+  {
+    uid = 0; const after = iconWorld();
+    const v = grid.check(after, { before: before, tools: [] });
+    assert(/not a grid/.test(v || ""),
+           "leaving them scattered is a fail that says so (got: " + v + ")");
+  }
+  {
+    // grid_layout rigs POSITION expressions off its control null. If AE
+    // ever handed back the pre-expression value, a positions-only check
+    // would fail a correct answer.
+    uid = 0; const after = iconWorld();
+    icons(after).forEach(l => {
+      l.expressions = { position: 'thisComp.layer("GRID CTRL").effect(1)' };
+    });
+    after.layers.push(square({ name: "GRID CTRL", isNull: true }));
+    assert(grid.check(after, { before: before }) === null,
+           "a grid driven by the control rig's expressions counts");
+  }
+  {
+    uid = 0; const after = iconWorld();
+    icons(after).forEach((l, i) => {
+      l.position = [700 + (i % 3) * 260, 400 + Math.floor(i / 3) * 260, 0];
+    });
+    after.layers[after.layers.length - 1].position = [400, 200, 0];
+    const v = grid.check(after, { before: before });
+    assert(/background moved/.test(v || ""),
+           "gridding the BACKGROUND in with the icons is a fail (got: " +
+           v + ")");
+  }
+  {
+    uid = 0; const after = iconWorld();
+    after.layers = after.layers.filter(l => l.name !== "Icon 2");
+    const v = grid.check(after, { before: before });
+    assert(/wanted 6/.test(v || ""),
+           "a layout that lost a layer is a fail (got: " + v + ")");
+  }
+}
+
+// ------------------------------------------------ A2: one slider, many
+{
+  const rig = stepByTitle("rig one slider to drive many layers");
+  uid = 0; const before = iconWorld();
+  const linked = who => 'thisComp.layer("' + who +
+    '").effect("Master Scale")("Slider")';
+  {
+    uid = 0; const after = iconWorld();
+    icons(after).forEach(l => { l.expressions = { scale: linked("CTRL") }; });
+    assert(rig.check(after, { before: before }) === null,
+           "six scales driven off one control is a pass");
+  }
+  {
+    // The near-miss the row exists to catch: every icon IS the right
+    // size, and nothing controls any of them.
+    uid = 0; const after = iconWorld();
+    icons(after).forEach(l => { l.scale = [150, 150, 150]; });
+    const v = rig.check(after, { before: before, tools: [] });
+    assert(/scaled directly/.test(v || ""),
+           "scaling them all by hand is a fail that says why (got: " +
+           v + ")");
+  }
+  {
+    uid = 0; const after = iconWorld();
+    icons(after).forEach((l, i) => {
+      if (i < 4) l.expressions = { scale: linked("CTRL") };
+    });
+    const v = rig.check(after, { before: before });
+    assert(/4 of 6/.test(v || "") && /Icon 5/.test(v || ""),
+           "four of six linked is a fail that names the two left out " +
+           "(got: " + v + ")");
+  }
+  {
+    // Six sliders is not one slider, however many expressions were
+    // written — "one place to resize them from" is the whole ask.
+    uid = 0; const after = iconWorld();
+    icons(after).forEach((l, i) => {
+      l.expressions = { scale: linked("CTRL " + i) };
+    });
+    const v = rig.check(after, { before: before });
+    assert(/ONE slider/.test(v || ""),
+           "a control per icon is a fail (got: " + v + ")");
+  }
+}
+
+// -------------------------------------------------- B1: stagger a fade
+{
+  const casc = stepByTitle("cascade the entrances");
+  uid = 0; const before = iconWorld();
+  const fade = (l, t) => {
+    l.opacityKeys = 2; l.opacityKeyTimes = [t, t + 0.4];
+    l.opacityKeyEased = [false, false];
+  };
+  {
+    uid = 0; const after = iconWorld();
+    icons(after).forEach((l, i) => fade(l, i * 0.5));
+    assert(casc.check(after, { before: before }) === null,
+           "six fades half a second apart is a pass");
+  }
+  {
+    // stagger_layers moves START TIMES and leaves the keys where they
+    // are relative to the layer — the same answer, written the other way.
+    uid = 0; const after = iconWorld();
+    icons(after).forEach((l, i) => { fade(l, 0); l.startTime = i * 0.5; });
+    assert(casc.check(after, { before: before }) === null,
+           "the same fade on six layers retimed 0.5s apart is a pass too");
+  }
+  {
+    uid = 0; const after = iconWorld();
+    icons(after).forEach(l => fade(l, 0));
+    const v = casc.check(after, { before: before });
+    assert(/wanted six, half a second apart/.test(v || ""),
+           "six fades all at once is a fail (got: " + v + ")");
+  }
+  {
+    uid = 0; const after = iconWorld();
+    icons(after).forEach((l, i) => { if (i < 3) fade(l, i * 0.5); });
+    const v = casc.check(after, { before: before });
+    assert(/3 of 6/.test(v || "") && /Icon 4/.test(v || ""),
+           "half the icons left un-faded is a fail that names them (got: " +
+           v + ")");
+  }
+  {
+    uid = 0; const after = iconWorld();
+    const v = casc.check(after, { before: before, tools: [] });
+    assert(/nothing fades in/.test(v || ""),
+           "no keyframes at all is a fail (got: " + v + ")");
+  }
+  {
+    // Five frames apart is not half a second, and a check that only
+    // asked "are they different?" would wave it through.
+    uid = 0; const after = iconWorld();
+    icons(after).forEach((l, i) => fade(l, i / 30));
+    const v = casc.check(after, { before: before });
+    assert(/half a second apart/.test(v || ""),
+           "a stagger of one frame is a fail (got: " + v + ")");
+  }
+}
+
+// ------------------------------------------------- C1: typewriter
+{
+  const type = stepByTitle("type a title on letter by letter");
+  uid = 0; const before = iconWorld();
+  {
+    uid = 0; const after = iconWorld();
+    after.layers[0].textAnimators = 1;
+    assert(type.check(after, { before: before }) === null,
+           "a text animator on the headline is a pass");
+  }
+  {
+    // The miss that looks like an answer: the whole layer fades in
+    // together, which is not letter by letter.
+    uid = 0; const after = iconWorld();
+    after.layers[0].opacityKeys = 2;
+    after.layers[0].opacityKeyTimes = [0, 1];
+    const v = type.check(after, { before: before });
+    assert(/not letter by letter/.test(v || ""),
+           "fading the whole layer in is a fail that says why (got: " +
+           v + ")");
+  }
+  {
+    uid = 0; const after = iconWorld();
+    const v = type.check(after, { before: before, tools: ["set_keyframes"] });
+    assert(/no text animator/.test(v || ""),
+           "no animator is a fail (got: " + v + ")");
+  }
+  {
+    uid = 0; const after = iconWorld();
+    after.layers[0].textAnimators = 1;
+    after.layers.push(square({ name: "HEADLINE 2" }));
+    const v = type.check(after, { before: before });
+    assert(/not a new layer/.test(v || ""),
+           "a duplicate text layer per character is a fail (got: " +
+           v + ")");
+  }
+}
+
+// -------------------------------------------------- C2: restyle
+{
+  const style = stepByTitle("restyle a headline");
+  uid = 0; const before = iconWorld();
+  {
+    uid = 0; const after = iconWorld();
+    after.layers[0].fontSize = 140;
+    after.layers[0].fillColor = [0.106, 0.31, 1];
+    assert(style.check(after, { before: before }) === null,
+           "bigger and #1B4FFF is a pass");
+  }
+  {
+    uid = 0; const after = iconWorld();
+    after.layers[0].fontSize = 140;
+    const v = style.check(after, { before: before });
+    assert(/not blue/.test(v || ""),
+           "bigger but still white is a fail (got: " + v + ")");
+  }
+  {
+    uid = 0; const after = iconWorld();
+    after.layers[0].fillColor = [0.106, 0.31, 1];
+    const v = style.check(after, { before: before, tools: [] });
+    assert(/still 48px/.test(v || ""),
+           "blue but the same size is a fail (got: " + v + ")");
+  }
+  {
+    // "only the named layer" is half the row. Resizing the icons on the
+    // way to a bigger headline is the wrong-target mutation.
+    uid = 0; const after = iconWorld();
+    after.layers[0].fontSize = 140;
+    after.layers[0].fillColor = [0.106, 0.31, 1];
+    icons(after).forEach(l => { l.scale = [180, 180, 180]; });
+    const v = style.check(after, { before: before });
+    assert(/only HEADLINE was named/.test(v || ""),
+           "resizing the icons too is a fail (got: " + v + ")");
+  }
+}
+
+// ------------------------------------------------------- E1: blur the BG
+{
+  const soft = stepByTitle("soften the background");
+  uid = 0; const before = iconWorld();
+  const bgOf = w => w.layers[w.layers.length - 1];
+  {
+    uid = 0; const after = iconWorld();
+    bgOf(after).effects = 1;
+    bgOf(after).effectNames = ["Gaussian Blur"];
+    assert(soft.check(after, { before: before }) === null,
+           "a blur on the background is a pass");
+  }
+  {
+    // Locale and taste both vary; the verdict matches a WORD, so
+    // whichever blur the model reached for counts.
+    uid = 0; const after = iconWorld();
+    bgOf(after).effects = 1;
+    bgOf(after).effectNames = ["Camera Lens Blur"];
+    assert(soft.check(after, { before: before }) === null,
+           "any blur counts, not just Gaussian");
+  }
+  {
+    uid = 0; const after = iconWorld();
+    icons(after)[0].effects = 1;
+    icons(after)[0].effectNames = ["Gaussian Blur"];
+    const v = soft.check(after, { before: before });
+    assert(/landed on Icon 1/.test(v || ""),
+           "blurring an icon instead is a fail that names it (got: " +
+           v + ")");
+  }
+  {
+    // 'Soften' read as 'fade' — the layer is still sharp and now
+    // half-transparent, which is a change nobody asked for.
+    uid = 0; const after = iconWorld();
+    bgOf(after).opacity = 40;
+    const v = soft.check(after, { before: before });
+    assert(/not a fade/.test(v || ""),
+           "dropping the background's opacity is a fail (got: " + v + ")");
+  }
+  {
+    uid = 0; const after = iconWorld();
+    for (const l of after.layers) {
+      l.effects = 1; l.effectNames = ["Gaussian Blur"];
+    }
+    const v = soft.check(after, { before: before });
+    assert(/icons were blurred too/.test(v || ""),
+           "blurring everything is a fail (got: " + v + ")");
+  }
+}
+
+// ------------------------------------------ E2: everything EXCEPT one
+{
+  const each = stepByTitle("an effect on everything except one layer");
+  uid = 0; const before = iconWorld();
+  const shadow = l => { l.effects = 1; l.effectNames = ["Drop Shadow"]; };
+  {
+    uid = 0; const after = iconWorld();
+    icons(after).forEach(shadow);
+    shadow(after.layers[0]);
+    assert(each.check(after, { before: before }) === null,
+           "every layer but the background is a pass");
+  }
+  {
+    // The loudest harm this row can find: the EXCEPT ignored. A check
+    // that only counted shadows would score this above the pass.
+    uid = 0; const after = iconWorld();
+    for (const l of after.layers) shadow(l);
+    const v = each.check(after, { before: before });
+    assert(/was the whole instruction/.test(v || ""),
+           "shadowing the background too is a fail (got: " + v + ")");
+  }
+  {
+    uid = 0; const after = iconWorld();
+    icons(after).slice(0, 3).forEach(shadow);
+    const v = each.check(after, { before: before });
+    assert(/4 of 7 layers were skipped/.test(v || "") &&
+           /HEADLINE/.test(v || ""),
+           "three of seven shadowed is a fail that names the rest (got: " +
+           v + ")");
+  }
+  {
+    uid = 0; const after = iconWorld();
+    const v = each.check(after, { before: before, tools: [] });
+    assert(/no layer carries a drop shadow/.test(v || ""),
+           "no shadow anywhere is a fail (got: " + v + ")");
+  }
 }
 
 console.log(failed ? "\n" + failed + " assertion(s) failed"
