@@ -12395,3 +12395,166 @@ including the honest audio refusal.
     (harness plan step 6).
 
 Nothing was left unattempted this pass. Nothing is blocked.
+
+## 2026-09-02 (local session, real AE) — WORKPLAN 8 "report, don't fix", row 19: "chop off" was reaching for the TIMELINE (0.11.11)
+
+Item: WORKPLAN section 8's in-flight row, named there as NEXT — row 19's
+canonical, **"Chop off the lower half of Beta so only the top shows"
+routes to `set_layer_timing`**. Harness was green first (578/578), so
+the pass was the item, not a repair.
+
+### The baseline found a second wrong turn, of a different kind
+
+`node scripts/chat-probe.js --variants --steps 19`, before any change —
+**2 pass / 2 miss / 0 HARM**:
+
+    canonical  "Chop off the lower half of Beta so only the top shows."
+                 -> set_layer_timing, get_bounds          miss
+    casual     "I only want to see the top half of Beta"
+                 -> center_anchor_point, set_transform    miss
+    vague      "Beta's bottom half shouldn't be visible"  pass (2 tries)
+    typo       "mask ouf the bottm half of Beta"          pass (2 tries)
+
+The filing predicted one bug and there were two, in opposite directions:
+
+- **canonical** read "chop off" as the sibling of the timing rule's
+  own phrase list — *'trim it / start it later / push it back …' =
+  set_layer_timing*. Nothing anywhere in the prompt said that hiding
+  part of a layer is not a retime, and "trim" is the word both
+  meanings share in English.
+- **casual** did not reach for time at all. "I only want to SEE the
+  top half" became a framing job: `center_anchor_point` then
+  `set_transform` to [960,540] — it moved the layer to the middle of
+  the comp and reported success. Harmless only because the check reads
+  mask count; a user would have got their layer relocated.
+
+Neither wording ("chop off", "only the top shows") appeared in the mask
+bullet, which said only *'crop this / hide the bottom half / cut a hole
+/ vignette'*. The two phrasings that passed both spoke the magic words.
+
+Worth recording: both passing runs needed TWO tries, and the first try
+was comp coordinates (`bounds [0,540,1920,540]` on a 100x100 layer)
+every time. 0.11.9's grounded refusal caught all of them and the model
+fixed itself in one turn — the fix from two passes ago doing its job in
+a row it was not written for.
+
+### The ONE prompt change (section 8's rule), and what paid for it
+
+One rules bullet, carrying both phrasings and — the new part — the
+anti-targets, because a phrase list alone would not have stopped
+`center_anchor_point`:
+
+    - 'crop / chop off the lower half / hide the bottom half / only
+      the top shows / cut a hole / vignette' = add_mask — never
+      set_layer_timing (that trims TIME), scale or anchor. A hole is
+      mode 'subtract'; a vignette is a big feathered ellipse.
+
+Paid for by deleting `- add_mask creates a mask (rectangle/ellipse/
+custom points);` from the "Masks & shape content" section: the args
+line `shape?: 'rectangle'|'ellipse'|'custom'` already carries the enum
+and is never compacted, so the prose was pure duplication. Measured
+with `buildSystemPrompt`:
+
+    full     58953 -> 58995 chars   (ceiling 59000)
+    compact  39195 -> 39237 chars
+
+Both the addition and the cut land in the rules block, which compact
+mode never touches — the probe runs at 16384, i.e. compact, so this is
+the half of the prompt that was actually doing the routing.
+
+### The flip, measured in real AE with the real model
+
+`node scripts/chat-probe.js --variants --steps 19`, after:
+
+    canonical  pass [add_mask]
+    casual     pass [add_mask]
+    vague      pass [add_mask add_mask]
+    typo       pass [add_mask get_bounds add_mask]
+
+**4 pass, 0 miss, 0 HARM — "acceptance met".** The canonical and the
+casual are now SINGLE first-shot `add_mask` calls with correct
+layer-space bounds `[0,50,100,50]` mode subtract; no timing call, no
+anchor call, no round trip. Transcripts
+`logs\chat-probe-2026-09-02T09-15-42.md` (before) and `...T09-20-07.md`
+(after).
+
+Regression check on the rows the change could plausibly break —
+`--isolate --steps 15,20,5` (push a layer back on the timeline / take a
+mask off again / put an oval mask on HELLO): **3/3**. Step 15 still
+picks `set_layer_timing {startTime: 2}`, so "never set_layer_timing"
+inside the mask bullet did not poison the timing route. Step 5 still
+picks `shape: 'ellipse'` with the deleted prose gone, which is the
+evidence that the args line was carrying it all along.
+
+### Verification
+
+- **Real AE harness: 578/578 PASSED** (unchanged — this pass is prompt
+  wording, and `selftest.js` does not route sentences).
+- `tests/test-chat-probe.js` +33 lines: the bug class is now caught
+  without AE. It pulls the crop/mask bullet out of the built prompt and
+  asserts the five phrasings AND both anti-targets, plus the one that
+  pins the cut — the args line must keep the shape enum, since that is
+  the only reason the prose could go. **Proved it bites**: restoring
+  the old bullet fails four assertions ('chop off the lower half',
+  'only the top shows', 'never set_layer_timing', scale/anchor).
+- `node tests/test-context-budget.js` green — its ceiling assertion is
+  the one that would have caught an unpaid addition (58995 of 59000).
+- Full stub sweep: **66/67**, the odd one out the known environmental
+  `tests/test-comfy-backend.js` (unchanged, still not mine).
+- `node scripts/capability-report.js --check` says fresh (no desc or
+  args changed).
+- Bumped to **0.11.11**: `extension/js/tools.js` changed, so the fix
+  has to reach a real panel.
+
+### Filed for later passes, in priority order
+
+1. **Step 17's "cheap"/"feels stiff" vocabulary** reaches
+   `stagger_layers`/`distribute_property` rather than
+   `apply_keyframe_ease` — unchanged, and now the top in-flight row
+   (WORKPLAN 8 names it as NEXT).
+2. **New rig-based steps for the A/B/C/E rows with no twin** (A1, A2,
+   B1, C1, C2, E1, E2) — unchanged.
+3. **"clean up this comp" still lands somewhere destructive** —
+   unchanged (`remove_keyframes` over every layer, `grid_layout` plus
+   `stagger_layers` restacking).
+4. **The full prompt is 5 chars under its 59000 ceiling.** Was 47
+   before tonight. The next rules addition of ANY size needs a real
+   cut found first — the obvious candidates are the "Known-good forms
+   if you must write one" expression list (3 lines, directly under
+   "NEVER write expression code yourself") and the doc/rules overlap
+   on LAYER space. Nothing in this pass measured either, which is why
+   they are named and not taken.
+5. **`property: string` is the vaguest args line in TOOL_DEFS** —
+   unchanged, and still blocked on item 4's cut (~49 chars against 5).
+6. **Every add_mask paraphrase still sends COMP coordinates first.**
+   New, measured 4 times tonight: `[0,540,1920,540]` on a 100x100
+   layer, corrected only because 0.11.9's refusal names the real box.
+   One round trip per mask, every time. The args line says
+   `bounds?: [x,y,w,h]` with no space named; the doc's LAYER-space
+   sentence lives in the desc, which compact mode CUTS (compact keeps
+   only the first sentence, "Add a mask to a layer."). Moving
+   "in LAYER space" into the args line would reach the 16K window —
+   but it is an args-line change, so it belongs to a pass of its own
+   with its own before/after.
+7. **Ask the SERVER for the two numbers** (`POST /tokenize`,
+   `GET /props`) — unchanged, still no live symptom.
+8. **`comfyUrl` is 8188, ComfyUI answers on 8000** on this machine —
+   one line in `%APPDATA%\AE-Llama\settings.json`.
+9. **Step 2 flakes on layer naming** — `duplicate_layer`'s numbering
+   starts at 2, so "Red Square 1" never exists; one doc sentence.
+10. **The harness cannot answer "Crash Repair Options"** — unchanged.
+11. **`starved` may now be too generous a word** — unchanged.
+12. **delete_mask could warn when an expression still points at the
+    mask** — unchanged.
+13. **A controller GROUP has never been measured**, nor any locale but
+    en_US — unchanged.
+14. **`capParams` is a second, independent roster inside the same
+    .mogrt** — unchanged.
+15. **`set_mask_path` takes vertices with no layer-box check at all** —
+    unchanged, and item 6 raises its odds: the model's instinct for
+    mask coordinates is demonstrably comp space.
+16. **Still owed, needs a human awake:** drop
+    `logs\mogrt-verify\AELL Probe Card.mogrt` into real Premiere
+    (harness plan step 6).
+
+Nothing was left unattempted this pass. Nothing is blocked.

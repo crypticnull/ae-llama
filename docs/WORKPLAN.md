@@ -1755,8 +1755,20 @@ this order, one bullet per pass:
     **4 pass, 0 miss, 0 HARM**, every run a single first-shot call.
     Prompt full 58910 -> 58953 (ceiling 59000 — the next addition needs
     a real cut). Harness 576 -> 578.
-  - NEXT: row 19's canonical, "Chop off the lower half of Beta" ->
-    `set_layer_timing`. One doc phrase, one re-run.
+  - ~~row 19's canonical, "Chop off the lower half of Beta" ->
+    `set_layer_timing`~~ DONE 2026-09-02 (0.11.11). Two wrong turns,
+    not one: the canonical read "chop off" as the timing rule's "trim
+    it", and the casual "I only want to see the top half" reached for
+    center_anchor_point + set_transform. ONE rules bullet now carries
+    both phrasings AND the anti-targets ("never set_layer_timing (that
+    trims TIME), scale or anchor"), paid for by dropping "add_mask
+    creates a mask (rectangle/ellipse/custom points)" — the args line,
+    which compact keeps, already spells the shapes. **2 pass / 2 miss
+    -> 4 pass, 0 miss, 0 HARM**, canonical and casual both single
+    first-shot calls. Prompt full 58953 -> 58995 (ceiling 59000).
+  - NEXT: row 17's "cheap"/"feels stiff" vocabulary reaches
+    stagger_layers / distribute_property rather than
+    apply_keyframe_ease.
 - **DEFERRED until a sandbox design exists:** D/F/H3 rows (project
   mutation, renders, mass-delete) — wiring them against the live
   project is the harm the whitelist cannot contain. Also deferred:

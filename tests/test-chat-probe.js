@@ -2381,6 +2381,42 @@ for (const name of ["reorder_layers", "remove_effect", "delete_mask",
          quoted.length + ")");
 }
 {
+  // Hiding PART of a layer is not a retime, and not a transform.
+  //
+  // Measured 2026-09-02, real AE + the real 32B, --variants on the "hide
+  // half a layer with a mask" row: 2 pass / 2 miss. "Chop off the lower
+  // half of Beta so only the top shows" routed to set_layer_timing (it
+  // read "chop off" as the sibling of the timing rule's "trim it"), and
+  // "I only want to see the top half of Beta" routed to
+  // center_anchor_point + set_transform. Neither wording appeared in the
+  // mask bullet, and nothing in the prompt said which tools masking is
+  // NOT. Both are one bullet away, so both are pinned here: the phrases
+  // AND the anti-targets. The bullet wraps across prompt lines, so the
+  // phrases are matched on a flowed copy of it.
+  const bullets = rules.split(/\n(?=- ')/);
+  const maskRule = bullets.filter(b => /^- 'crop/.test(b))[0];
+  assert(!!maskRule, "the plain-English rules still carry a crop/mask bullet");
+  const flow = (maskRule || "").replace(/\s+/g, " ");
+  for (const phrase of ["chop off the lower half", "hide the bottom half",
+                        "only the top shows", "cut a hole", "vignette"]) {
+    assert(flow.indexOf(phrase) !== -1,
+           "the mask bullet still carries '" + phrase + "'");
+  }
+  assert(/add_mask/.test(flow), "and routes them to add_mask");
+  assert(/never set_layer_timing/.test(flow),
+         "and says outright that masking is never set_layer_timing (the " +
+         "canonical's measured wrong turn)");
+  assert(/scale/.test(flow) && /anchor/.test(flow),
+         "and rules out scale and anchor too (the casual phrasing's)");
+  // The bullet's growth was paid for by dropping "add_mask creates a mask
+  // (rectangle/ellipse/custom points)" from the Masks section — allowed
+  // ONLY because the args line, which compact mode also keeps, spells the
+  // shapes out. Put the prose back and the budget breaks; drop the args
+  // and the model loses the enum entirely.
+  assert(/'rectangle'\|'ellipse'\|'custom'/.test(defsByName.add_mask.args),
+         "add_mask's args line names the shapes the rules no longer repeat");
+}
+{
   // The audit measured set_layer_timing as the SHORTEST doc in the file.
   const shortest = ToolsMod.TOOL_DEFS.slice().sort((a, b) =>
     a.desc.length - b.desc.length)[0];
