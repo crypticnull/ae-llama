@@ -186,5 +186,132 @@ function convo(pairs, size) {
          "a path collapses to its basename — the folder is not memory");
 }
 
+// ===================================================================
+// 11-17. THE FLOOR: what happens when the protected tail ALONE busts
+// the budget.
+//
+// Dropping whole entries stops at the last four, so one oversized entry
+// inside them — a comfy_generate result, a pasted expression, a long
+// TOOL RESULTS array — left fitHistory returning a payload it had
+// already computed was too big. main.js answers a context HTTP 400 by
+// calling back with budget 1; with nothing left to drop that returned
+// the SAME BYTES, the retry earned the SAME 400, and the chat was dead
+// until cleared — the exact failure this file's header says fitHistory
+// ended, arriving through the one door it left open.
+//
+// Measured 2026-09-02, real llama-server, Qwen2.5-32B, ctx 16384
+// (scripts/history-floor-probe.js): a 60334-char four-entry tail, and
+// llama-server refused the attempt AND the retry with the identical
+// "request (17733 tokens) exceeds the available context size (16384)".
+// Everything below is that failure, without the server.
+// ===================================================================
+
+function sizeOf(entries) {
+  let n = 0;
+  for (const e of entries) n += (e.content || "").length + 16;
+  return n;
+}
+
+// 11. THE CONTRACT: fitHistory never returns what it knows is too big
+{
+  const h = [msg("user", 200), msg("assistant", 200),
+             msg("user", 60000), msg("assistant", 200)];
+  const r = fit(h, 5000);
+  assert(sizeOf(r.entries) <= 5000,
+         "the protected tail is cut down to the budget: " +
+         sizeOf(r.entries) + " <= 5000");
+  assert(r.entries.length === 4,
+         "and it is still four entries — content shrank, not the turn count");
+  assert(r.truncated > 0,
+         "the result SAYS how many entries were cut (" + r.truncated + ")");
+}
+
+// 12. the cut is never silent — the model is told the message is partial
+{
+  const h = [msg("user", 200), msg("assistant", 200),
+             msg("user", 60000), msg("assistant", 200)];
+  const r = fit(h, 5000);
+  const cut = r.entries.filter(e => /characters cut/.test(e.content));
+  assert(cut.length > 0, "a cut entry names itself in words");
+  // Read through a placeholder rather than cut[0] directly: without the
+  // floor there IS no cut entry, and a TypeError here would abort the
+  // suite and hide every failure after it.
+  const cutText = cut.length ? cut[0].content : "";
+  assert(/INCOMPLETE/.test(cutText),
+         "and says the end of it is not the end of the data");
+  assert(/\b\d{4,}\b/.test(cutText),
+         "with the number of characters it replaced");
+}
+
+// 13. the NEWEST entry is cut last — it carries the sentence being answered
+{
+  const h = [msg("user", 20000), msg("assistant", 20000),
+             msg("user", 20000), msg("assistant", 400)];
+  const r = fit(h, 3000);
+  assert(r.entries[3].content === h[3].content,
+         "the newest entry survives whole while older ones are cut");
+  assert(sizeOf(r.entries) <= 3000, "and the budget is still met");
+}
+
+// 14. THE REGRESSION: budget 1 (the reactive retry) must actually shrink
+{
+  const h = [msg("user", 200), msg("assistant", 200),
+             msg("user", 60000), msg("assistant", 200)];
+  const first = fit(h, 5000);
+  const retry = fit(h, 1);
+  assert(sizeOf(retry.entries) < sizeOf(first.entries),
+         "the retry sends FEWER bytes than the attempt that 400'd (" +
+         sizeOf(retry.entries) + " < " + sizeOf(first.entries) + ")");
+  assert(sizeOf(retry.entries) < 4000,
+         "and it reaches the four-entry minimum, not the original 60k (" +
+         sizeOf(retry.entries) + ")");
+}
+
+// 15. an already-small history is never touched by the floor
+{
+  const h = convo(2, 100);
+  const r = fit(h, 100000);
+  assert(r.truncated === 0 && r.dropped === 0,
+         "under budget: nothing dropped AND nothing cut");
+  assert(r.entries[2] === h[2], "the entries are still the same objects");
+}
+
+// 16. an entry too short to pay for its own marker is left whole.
+//     "Shortening" it would make it BIGGER, and the loop would walk on
+//     and eat the newest turn it exists to spare.
+{
+  const h = [msg("user", 40), msg("assistant", 40),
+             msg("user", 40), msg("assistant", 40)];
+  const r = fit(h, 1);
+  assert(r.truncated === 0, "nothing was cut (" + r.truncated + ")");
+  let same = true;
+  for (let i = 0; i < 4; i++) {
+    if (r.entries[i].content !== h[i].content) same = false;
+  }
+  assert(same, "every entry came back untouched");
+  assert(sizeOf(r.entries) === sizeOf(h),
+         "and the payload did not GROW trying to shrink (" +
+         sizeOf(r.entries) + " === " + sizeOf(h) + ")");
+}
+
+// 17. dropping and cutting compose: the ledger still carries the turns
+//     that went, and the survivors still fit.
+{
+  const h = convo(6, 800).concat([
+    { role: "user", content: "TOOL RESULTS:\n" + JSON.stringify(
+        [{ ok: true, data: { layer: "Hero", note: "x".repeat(40000) } }]) },
+    { role: "assistant", content: JSON.stringify({ reply: "Done.",
+        commands: [] }) }
+  ]);
+  const r = fit(h, 6000);
+  assert(r.dropped > 0 && r.truncated > 0,
+         "both mechanisms ran (" + r.dropped + " dropped, " +
+         r.truncated + " cut)");
+  assert(sizeOf(r.entries) <= 6000,
+         "and the result fits: " + sizeOf(r.entries) + " <= 6000");
+  assert(/EARLIER IN THIS SESSION/.test(r.ledger),
+         "the dropped turns still come back as the ledger");
+}
+
 console.log(failed ? "\nTESTS FAILED" : "\nALL TESTS PASSED");
 process.exitCode = failed ? 1 : 0;

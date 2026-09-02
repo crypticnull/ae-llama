@@ -127,19 +127,98 @@ function AELL_resolveComp(name) {
     }
   }
   // Grounded: the user may have renamed comps since the chat referenced
-  // them — list what actually exists so the retry uses a real name.
-  var compNames = [];
-  for (i = 1; i <= proj.numItems && compNames.length < 15; i++) {
-    it = proj.item(i);
-    if (it instanceof CompItem) compNames.push(it.name);
-  }
+  // them — list what actually exists so the retry uses a real name,
+  // nearest spellings first (AELL_compsHere) so the cap cannot swallow it.
   throw new Error("Comp not found: " + name + ". Comps in this project: " +
-                  (compNames.join(", ") || "(none)"));
+                  AELL_compsHere(name, 15));
 }
 
-function AELL_resolveLayer(comp, ref) {
+/*
+ * What the caller actually handed over under the PLURAL key, or null.
+ *
+ * AELL_resolveLayer only ever sees the resolved ref, so when the ref is
+ * missing it cannot say WHY without the whole args object. AELL_runTool
+ * parks it — one dispatch point, saved and restored around nesting.
+ */
+function AELL_handedLayers() {
+  var a = $.global.AELL_curArgs;
+  if (a && AELLJSON.isArray(a.layers) && a.layers.length > 0) {
+    return a.layers;
+  }
+  return null;
+}
+
+/*
+ * The grounding half of "you gave me no single layer".
+ *
+ * Measured 2026-09-02 in real AE (chat-probe row 36 casual, "drop shadow
+ * on every layer but the BG"): the model routed CORRECTLY to apply_effect
+ * and passed {layers: [...]}, a plural apply_effect does not take. The
+ * bare "Missing 'layer' (name or 1-based index)" answered the question
+ * "which key is absent" and never the one that was asked — so the model
+ * re-sent the identical call and gave up. Same class as 0.11.10's bare
+ * "Missing 'property'": a refusal that names the missing key but not the
+ * key that WAS handed over cannot be acted on.
+ *
+ * set_property already carried this redirect by hand (its own
+ * {layers: [...]} branch, written after the same mistake was measured
+ * twice in one probe run). This is that fix generalised: every tool with
+ * a singular {layer} gets it from the one place the ref is resolved.
+ *
+ * The comp roster is printed ONLY when nothing was handed over at all —
+ * a caller who just passed six layer names does not need to be told what
+ * the layers are called, and an error list can push the state the model
+ * needs out of its window.
+ */
+function AELL_missingLayer(comp, key, handed, underSingular) {
+  var tool = String($.global.AELL_curTool || "");
+  var named = tool ? "'" + tool + "'" : "this tool";
+  var want = "'" + key + "' (name or 1-based index)";
+  var msg, names, i;
+  if (handed) {
+    if (underSingular) {
+      msg = want + " takes ONE layer, not a list — you passed " +
+        AELL_capJoin(handed, 6) + ".";
+    } else {
+      msg = "Missing " + want + " — you passed 'layers' (" +
+        AELL_capJoin(handed, 6) + "), which " + named + " does not take.";
+    }
+    // The redirect is about the TARGET argument. 'parent' or 'matteLayer'
+    // handed a list is a different mistake, and "run it on each" would be
+    // advice for a question nobody asked.
+    if (key !== "layer") return msg;
+    if (tool && AELL_ALREADY_BATCHED[tool]) {
+      msg += " " + named + " takes its own list: pass {layers: [...]}.";
+    } else if (!tool || AELL_PER_LAYER[tool]) {
+      msg += " for_each_layer {layers: [...], tool: '" +
+        (tool || "<this tool>") + "', args: {...}} runs it on each.";
+    } else {
+      msg += " Call it once per layer.";
+    }
+    return msg;
+  }
+  names = [];
+  for (i = 1; i <= comp.numLayers; i++) names.push(comp.layer(i).name);
+  return "Missing " + want + ". Layers in '" + comp.name + "': " +
+    AELL_capJoin(names, 8) + ".";
+}
+
+function AELL_resolveLayer(comp, ref, key) {
+  // Default key, and the ONE argument the {layers} redirect belongs to:
+  // set_layer_parent's 'parent' and set_track_matte's 'matteLayer' sit
+  // beside a legitimate {layers} list, so offering for_each_layer there
+  // would answer a question nobody asked.
+  var k = key || "layer";
   if (ref === null || typeof ref === "undefined" || ref === "") {
-    throw new Error("Missing 'layer' (name or 1-based index)");
+    throw new Error(AELL_missingLayer(comp, k,
+      k === "layer" ? AELL_handedLayers() : null, false));
+  }
+  // A list under the SINGULAR key is the mirror of the same mistake, and
+  // ExtendScript does not answer usefully for it: comp.layer([a, b])
+  // raised "invalid numeric result (divide by zero?)" in the field, which
+  // names neither the argument nor the tool.
+  if (AELLJSON.isArray(ref)) {
+    throw new Error(AELL_missingLayer(comp, k, ref, true));
   }
   var layer = null;
   try { layer = comp.layer(ref); } catch (e) { layer = null; }
@@ -152,7 +231,7 @@ function AELL_resolveLayer(comp, ref) {
     }
     throw new Error("Layer not found in '" + comp.name + "': " + ref +
       ". Actual layers: " + (names.join(", ") || "(none)") +
-      ". For the user's selection, OMIT the 'layer' argument on tools " +
+      ". For the user's selection, OMIT the '" + k + "' argument on tools " +
       "that support it.");
   }
   return layer;
@@ -166,6 +245,13 @@ function AELL_layerOrSelection(comp, ref) {
   if (ref !== null && typeof ref !== "undefined" && ref !== "") {
     return AELL_resolveLayer(comp, ref);
   }
+  // Named targets under the WRONG key are not "no target": falling
+  // through to the selection would work on layers the caller never named
+  // and report success, and "select one in AE" is a dead end for a caller
+  // that cannot click. Tools with their own plural branch (set_property,
+  // get_bounds) consume args.layers before they ever reach this.
+  var handed = AELL_handedLayers();
+  if (handed) throw new Error(AELL_missingLayer(comp, "layer", handed, false));
   var sel = comp.selectedLayers;
   if (sel.length === 1) return sel[0];
   if (sel.length === 0) {
@@ -181,16 +267,64 @@ function AELL_layerOrSelection(comp, ref) {
 }
 
 /*
+ * The grounding half of a "nothing to work on" refusal.
+ *
+ * "select layers in AE" is a dead end for a caller that cannot click:
+ * measured 2026-09-02 in real AE, the canonical "make it feel smoother"
+ * routed correctly to apply_keyframe_ease, omitted 'layers', hit the bare
+ * form of this refusal and the model simply relayed it to the user
+ * ("please select the square layers") — right tool, no work done. There is
+ * no select tool; names are the only way in. So name the comp's layers,
+ * and when the call carried a property, which of them actually have keys
+ * on it — that second list is the answer to the question that was asked.
+ *
+ * `destroys` is what the caller would DELETE. Measured 2026-09-02
+ * (chat-probe row 29, "Probe Room's got junk everywhere, tidy it"): the
+ * roster this refusal prints is also ammunition. remove_keyframes hit the
+ * bare form, the model copied all twelve names straight back out of it
+ * into ONE call, and 18 opacity keyframes nobody named were gone. Naming
+ * the layers is still right — the model cannot select and cannot guess —
+ * so the list stays and the INSTRUCTION changes: pass only what the user
+ * named, and when they named nothing, ask rather than pass them all.
+ */
+function AELL_noTargets(comp, args, destroys) {
+  var names = [], keyed = [], i, lay, prop;
+  var wanted = (args && typeof args.property === "string" && args.property)
+    ? String(args.property) : "";
+  for (i = 1; i <= comp.numLayers; i++) {
+    lay = comp.layer(i);
+    names.push(lay.name);
+    if (!wanted) continue;
+    prop = null;
+    try { prop = AELL_resolveProperty(lay, wanted); } catch (eP) {}
+    try { if (prop && prop.numKeys > 0) keyed.push(lay.name); } catch (eK) {}
+  }
+  var msg = "No target layers in '" + comp.name + "' — nothing is selected " +
+    "in AE and you cannot select for the user, so pass {layers: […]} " +
+    "or {layer} by NAME";
+  if (destroys) {
+    msg += " — ONLY the layers the user named. If the user named none, " +
+      "ASK which ones; passing every layer here " + String(destroys) +
+      " that nobody asked to lose";
+  }
+  msg += ". Layers here: " + AELL_capJoin(names, 8);
+  if (wanted) {
+    msg += ". With " + wanted + " keyframes: " + AELL_capJoin(keyed, 8);
+  }
+  return msg + ".";
+}
+
+/*
  * Resolve a MULTI-layer target: explicit layers[], else a single layer,
  * else the whole selection (any count), else the comp's only layer.
  * Used by batch tools so ONE call can touch hundreds of layers.
  */
-function AELL_layersOrSelection(comp, args) {
+function AELL_layersOrSelection(comp, args, destroys) {
   var out = [];
   var i;
   if (AELLJSON.isArray(args.layers) && args.layers.length > 0) {
     for (i = 0; i < args.layers.length; i++) {
-      out.push(AELL_resolveLayer(comp, args.layers[i]));
+      out.push(AELL_resolveLayer(comp, args.layers[i], "layers"));
     }
     return out;
   }
@@ -203,8 +337,7 @@ function AELL_layersOrSelection(comp, args) {
   for (i = 0; i < sel.length; i++) out.push(sel[i]);
   if (out.length === 0 && comp.numLayers === 1) out.push(comp.layer(1));
   if (out.length === 0) {
-    throw new Error("No target layers in '" + comp.name + "' — select " +
-                    "layers in AE or pass {layer} / {layers: […]}");
+    throw new Error(AELL_noTargets(comp, args, destroys));
   }
   // A selection that is ONLY control nulls is almost never the intended
   // animation target (the user was probably just inspecting sliders) —
@@ -310,27 +443,33 @@ function AELL_relativeReorderKey(args) {
  * same two calls the sorter already relies on. The landing slot is READ
  * BACK from AE rather than computed, and a mismatch is reported.
  *
- * Refused or no-op'd honestly, with the AE facts that decide each:
- * - relative to ITSELF: refused. moveBefore(self) has no meaning and
- *   what AE does with it has not been measured (assumed: no-op or
- *   throw); either way the receipt would lie about a move.
- * - LOCKED layer: refused. AE's timeline will not drag a locked layer;
- *   whether the scripting primitives honour that lock has NOT been
- *   measured here (apply_preset measured that presets DO land on locked
- *   layers, so the lock is not a scripting-wide guard). The stubs assume
- *   the primitives would move it; refusing before the call keeps the
- *   answer the same whichever way real AE goes. Real-AE pass: verify.
+ * Refused or no-op'd honestly, with the AE facts that decide each. All
+ * three of these were guesses until scripts/verb-semantics-probe.jsx
+ * measured them in AE 2026 (26.3x87); every one is now a measurement:
+ * - relative to ITSELF: refused. AE THROWS on it — "After Effects
+ *   error: Can not move a layer before or after itself." — for both
+ *   moveBefore(self) and moveAfter(self), leaving the index alone. The
+ *   refusal here says the same thing in the caller's own vocabulary
+ *   instead of surfacing AE's raw error.
+ * - LOCKED layer: refused, and AE agrees. The scripting primitives DO
+ *   honour the lock: "Can not call method "moveBefore" on Layer "X"
+ *   because the Layer is locked." — a throw, index unchanged, layer
+ *   still locked. (Not a foregone conclusion: apply_preset measured
+ *   that presets DO land on locked layers, so the lock is not a
+ *   scripting-wide guard.) Refusing first turns AE's raw throw into a
+ *   message that names the padlock.
  * - SHY layer: moved, with a note — a shy layer is only hidden from the
  *   timeline while Hide Shy Layers is on, and the move is invisible
  *   there until the user turns it off.
- * - already in place: moved anyway (the primitives tolerate it in the
- *   stubs; assumed harmless in AE) and reported as "nothing moved".
+ * - already in place: moved anyway and reported as "nothing moved". AE
+ *   tolerates the redundant call — moveBefore on the anchor a layer
+ *   already sits above neither throws nor disturbs the stack.
  */
 function AELL_reorderRelative(comp, args, key) {
   var layer = AELL_layerOrSelection(comp, args.layer);
   var target = null;
   if (key === "above" || key === "below") {
-    target = AELL_resolveLayer(comp, args[key]);
+    target = AELL_resolveLayer(comp, args[key], key);
     if (target === layer) {
       return AELL_err("'" + layer.name + "' cannot be moved " + key +
         " itself — name a DIFFERENT layer to sit " + key + ". Layers in '" +
@@ -356,9 +495,15 @@ function AELL_reorderRelative(comp, args, key) {
     if (previousIndex !== numLayers) layer.moveAfter(comp.layer(numLayers));
   }
   var movedTo = layer.index;
+  // The parentheses are LOAD-BEARING: ExtendScript groups a bare `a ? b :
+  // c ? d : e` chain LEFT-associatively, so the first branch's VALUE
+  // becomes the next condition. Unparenthesised, this returned 1 for
+  // every "below" move and warned that a correct move had gone wrong.
+  // Measured in AE 2026 / ExtendScript 4.5.6; tests/test-es3-ternary.js
+  // keeps the shape out of every ES3-executed file.
   var want = key === "above" ? target.index - 1
-    : key === "below" ? target.index + 1
-    : key === "toFront" ? 1 : numLayers;
+    : (key === "below" ? target.index + 1
+    : (key === "toFront" ? 1 : numLayers));
   var res = { layer: layer.name, movedTo: movedTo,
               previousIndex: previousIndex };
   res[key] = target ? target.name : true;
@@ -393,9 +538,85 @@ var AELL_TRANSFORM_MAP = {
   anchorPoint: "ADBE Anchor Point"
 };
 
+/*
+ * A bare "Missing 'property'" is the one refusal in this file that told
+ * the model NOTHING — no list of what it could have said, no sign of
+ * what this layer actually carries. Measured with the real model
+ * (chat-probe step 23, all four phrasings): every run omitted
+ * 'property' on its first apply_expression_preset, half of them gave up
+ * on the bare error, and one lost the whole round to a rollback and
+ * re-sent everything EXCEPT the call that failed. Grounded errors are
+ * how the small local model self-corrects (CLAUDE.md), so this one
+ * lists the transform names, the layer's own effects (the only way to
+ * spell effect.<Effect>.<Param> correctly) and which properties are
+ * already keyframed — the answer the loop_* presets need.
+ */
+function AELL_missingProperty(layer, why) {
+  var msg = "Missing 'property'" + (why ? " — " + why : "") + ". On '" +
+    layer.name + "' it can be position, scale, rotation, opacity or " +
+    "anchorPoint";
+  var fx = AELL_effectNames(layer);
+  if (fx.length) {
+    msg += ", or effect.<Effect>.<Param> using this layer's effects: " +
+      AELL_capJoin(fx, 8);
+  }
+  var keyed = [], name;
+  for (name in AELL_TRANSFORM_MAP) {
+    if (!AELL_TRANSFORM_MAP.hasOwnProperty(name)) continue;
+    try {
+      var grp = layer.property("ADBE Transform Group");
+      var p = grp ? grp.property(AELL_TRANSFORM_MAP[name]) : null;
+      if (p && p.numKeys > 0) keyed.push(name);
+    } catch (eK) {}
+  }
+  if (keyed.length) {
+    msg += ". Already keyframed here: " + keyed.join(", ");
+  }
+  return msg + ".";
+}
+
+/* Which properties on this layer actually HAVE keyframes, named the way a
+ * tool arg wants them. This is the answer to the question a "that property
+ * has no keys" refusal provokes and used not to answer: then what DO I
+ * ease? Measured 2026-09-02 - "the squares' entrance feels cheap" routed
+ * to apply_keyframe_ease, guessed 'position', was told position has 0
+ * keyframes and nothing else, and asked the USER to go add keyframes. The
+ * opacity keys it wanted were two lines away in the comp state. */
+function AELL_keyedProps(layer) {
+  var out = [], name, grp = null, p, i, j, fx = null, eff, par;
+  try { grp = layer.property("ADBE Transform Group"); } catch (eG) {}
+  for (name in AELL_TRANSFORM_MAP) {
+    if (!AELL_TRANSFORM_MAP.hasOwnProperty(name)) continue;
+    p = null;
+    try { p = grp ? grp.property(AELL_TRANSFORM_MAP[name]) : null; } catch (eT) {}
+    try {
+      if (p && p.numKeys > 0) out.push(name + " (" + p.numKeys + " keys)");
+    } catch (eN) {}
+  }
+  try { fx = layer.property("ADBE Effect Parade"); } catch (eF) {}
+  if (fx) {
+    for (i = 1; i <= fx.numProperties && out.length < 8; i++) {
+      eff = null;
+      try { eff = fx.property(i); } catch (eE) {}
+      if (!eff) continue;
+      for (j = 1; j <= eff.numProperties && out.length < 8; j++) {
+        par = null;
+        try { par = eff.property(j); } catch (eQ) {}
+        try {
+          if (par && par.numKeys > 0) {
+            out.push("effect." + eff.name + "." + par.name +
+                     " (" + par.numKeys + " keys)");
+          }
+        } catch (eR) {}
+      }
+    }
+  }
+  return out;
+}
+
 /* Resolve "position" | "scale" | ... | "effect.<Effect>.<Param>" */
 function AELL_resolveProperty(layer, spec) {
-  if (!spec) throw new Error("Missing 'property'");
+  if (!spec) throw new Error(AELL_missingProperty(layer, ""));
   spec = String(spec);
   if (AELL_TRANSFORM_MAP[spec]) {
     var grp = layer.property("ADBE Transform Group");
@@ -443,6 +664,55 @@ function AELL_layerType(layer) {
     return "footage";
   }
   return "layer";
+}
+
+/*
+ * Track mattes, measured in AE 2026 / ExtendScript 4.5.6 (WORKPLAN 1c),
+ * because the obvious read is the wrong one:
+ *
+ *   TrackMatteType.NO_TRACK_MATTE = 5012   ALPHA          = 5013
+ *   ALPHA_INVERTED                = 5014   LUMA           = 5015
+ *   LUMA_INVERTED                 = 5016
+ *
+ * A layer that never had a matte reads 5012 (NOT 0), and
+ * `removeTrackMatte()` clears `trackMatteLayer` but LEAVES
+ * `trackMatteType` at the type it just removed — a layer whose alpha
+ * matte was taken off still reads 5013 forever. So `trackMatteType`
+ * answers "what KIND, if any", never "is there one": the matte LAYER is
+ * the only honest existence test.
+ */
+function AELL_matteWord(t) {
+  if (t === TrackMatteType.ALPHA) return "alpha";
+  if (t === TrackMatteType.ALPHA_INVERTED) return "alpha_inverted";
+  if (t === TrackMatteType.LUMA) return "luma";
+  if (t === TrackMatteType.LUMA_INVERTED) return "luma_inverted";
+  return null;
+}
+
+/** The layer whose alpha/luma cuts `layer` right now, or null. */
+function AELL_matteLayerOf(layer) {
+  var kind = AELL_layerType(layer);
+  // A camera or a light can never show a matte, but ExtendScript still
+  // ACCEPTS `camera.trackMatteType = LUMA` (measured 2026-09-01), so a
+  // type-only read would report a phantom on one that had been written.
+  if (kind === "camera" || kind === "light") return null;
+  var ml = null, modern = false;
+  try {
+    ml = layer.trackMatteLayer;
+    modern = (typeof ml !== "undefined");
+  } catch (eM) { modern = false; ml = null; }
+  if (modern) return ml || null;
+  // Legacy AE (< 23) has no trackMatteLayer — and no removeTrackMatte
+  // either, so there the type IS trustworthy, and the matte is by
+  // definition the layer directly above.
+  var t = null;
+  try { t = layer.trackMatteType; } catch (eT) { return null; }
+  if (t === null || typeof t === "undefined") return null;
+  if (!AELL_matteWord(t)) return null;
+  try {
+    return layer.index > 1 ? layer.containingComp.layer(layer.index - 1)
+                           : null;
+  } catch (eL) { return null; }
 }
 
 function AELL_effectNames(layer) {
@@ -643,6 +913,65 @@ function AELL_capJoin(names, cap) {
   if (names.length <= cap) return names.join(", ");
   return names.slice(0, cap).join(", ") + " … and " +
          (names.length - cap) + " more";
+}
+
+/*
+ * The grounding half of "Comp not found", ordered so the CAP cannot hide
+ * the answer.
+ *
+ * Measured 2026-09-02 in real AE: the self-test's own project grew past
+ * fifteen comps and this list — flat, project order, capped at 15 with
+ * NOTHING saying it had been cut — stopped one row short of "ST HYG
+ * Keep", the comp whose misspelling ("ST HYG Nope") raised the error. A
+ * grounded refusal that silently drops the one row that matters is worse
+ * than an ungrounded one: it reads as a COMPLETE roster, so the model
+ * concludes the comp does not exist and stops.
+ *
+ * So the near misses go FIRST — comps sharing a word with the name that
+ * missed — and the cap announces itself and names the tool that shows
+ * the rest.
+ */
+function AELL_compsHere(wanted, cap) {
+  var proj = app.project, i, j, it;
+  var names = [], scores = [];
+  var want = "";
+  if (wanted !== null && typeof wanted !== "undefined") {
+    want = String(wanted).toLowerCase();
+  }
+  var toks = [], raw = want ? want.split(/[^a-z0-9]+/) : [];
+  for (i = 0; i < raw.length; i++) {
+    if (raw[i].length >= 2) toks.push(raw[i]);
+  }
+  for (i = 1; i <= proj.numItems; i++) {
+    it = proj.item(i);
+    if (!(it instanceof CompItem)) continue;
+    var low = String(it.name).toLowerCase(), s = 0;
+    for (j = 0; j < toks.length; j++) {
+      if (low.indexOf(toks[j]) !== -1) s++;
+    }
+    if (s === 0 && want && low.indexOf(want) !== -1) s = 1;
+    names.push(it.name);
+    scores.push(s);
+  }
+  // Bucketed, not sorted: ES3's sort is not required to be stable, and a
+  // roster that reshuffles between two identical failures is its own
+  // confusion. Project order is preserved inside each score.
+  var best = 0;
+  for (i = 0; i < scores.length; i++) {
+    if (scores[i] > best) best = scores[i];
+  }
+  var out = [];
+  for (var s2 = best; s2 >= 0; s2--) {
+    for (i = 0; i < names.length; i++) {
+      if (scores[i] === s2) out.push(names[i]);
+    }
+  }
+  var lim = cap || 15;
+  var msg = AELL_capJoin(out, lim);
+  if (out.length > lim) {
+    msg += " (get_project_info {limit: \"all\"} lists them all)";
+  }
+  return msg;
 }
 
 /* The grounding half of an item-lookup refusal: what the project really
@@ -1491,6 +1820,24 @@ function AELL_orgRootFolder(name) {
   return null;
 }
 
+/* The preview GATE's key, same contract as clean_project's
+ * AELL_hygPlanKey: a move may only cite a preview that showed THIS exact
+ * list, taken in an EARLIER request. Keyed on item id AND destination, so
+ * a project that gained, lost or re-filed anything since the preview no
+ * longer matches -- that is not the list the user said go to.
+ *
+ * organize_project moves rather than deletes, so it is the smaller harm;
+ * it is gated anyway because it is project-WIDE and the model reached for
+ * it beside clean_project in the field (WORKPLAN-LOG 2026-09-02). */
+function AELL_orgPlanKey(plan) {
+  var parts = [], i;
+  for (i = 0; i < plan.length; i++) {
+    parts.push(String(plan[i].item.id) + ">" + plan[i].dest);
+  }
+  parts.sort();
+  return parts.join(",");
+}
+
 /* Same name, deeper in the tree: reported so the user knows why a second
  * folder of that name is about to appear at the root. */
 function AELL_orgHomonyms(name) {
@@ -1563,13 +1910,63 @@ AELL_TOOLS.organize_project = function (args) {
       "with two folders of that name — say so before running this.";
   }
 
+  // The gate. A preview RECORDS the plan it showed; a move must cite that
+  // same plan, from an earlier request. Recording happens on the refusal
+  // path too, so the refusal below IS the preview the round was missing
+  // and the next request goes straight through.
+  var planKey = AELL_orgPlanKey(plan);
+  var seq = $.global.AELL_requestSeq || 0;
+  var shown = $.global.AELL_orgShown;
+
   if (dryRun) {
-    out.note = plan.length === 0
-      ? "PREVIEW ONLY — nothing to do: no loose items at the project root."
-      : "PREVIEW ONLY — nothing was moved. Show the user the moves above " +
-        "(and any folder that would be created), then call again with " +
-        "dryRun:false to do it.";
+    $.global.AELL_orgShown = { key: planKey, seq: seq };
+    if (plan.length === 0) {
+      out.note = "PREVIEW ONLY — nothing to do: no loose items at the " +
+        "project root.";
+    } else {
+      out.note = "PREVIEW ONLY — nothing was moved. Show the user the " +
+        "moves above (and any folder that would be created), then call " +
+        "again with dryRun:false to do it.";
+    }
     return AELL_okay(out);
+  }
+
+  // An empty plan is not gated: the loop below provably does nothing, so
+  // a refusal there would be noise about a no-op. (clean_project gates its
+  // empty case because AE, not the preview, decides what it deletes.)
+  if (plan.length > 0) {
+    var block = "";
+    if (!shown) {
+      block = "nothing has been previewed yet";
+    } else if (shown.key !== planKey) {
+      block = "the project has changed since the last preview, so this is " +
+        "not the list the user agreed to";
+    } else if (seq > 0 && shown.seq === seq) {
+      // Same request as the preview: nobody has been back to see it. seq
+      // stays 0 for a caller that never announces a request (a raw -r
+      // script), and such a caller then only has to preview first.
+      block = "that preview was taken in THIS same reply, so the user has " +
+        "not seen it yet";
+    }
+    if (block) {
+      $.global.AELL_orgShown = { key: planKey, seq: seq };
+      var listed = "";
+      if (moves.length) {
+        listed = " — " + moves.slice(0, 10).join(", ");
+        if (moves.length > 10) {
+          listed += ", +" + (moves.length - 10) + " more";
+        }
+      }
+      if (toCreate.length) {
+        listed += ". It would also create these folders at the project " +
+          "root: " + toCreate.join(", ");
+      }
+      return AELL_err("organize_project refused to move: " + block + ". " +
+        "Nothing was moved. " + plan.length + " item(s) would be filed" +
+        listed + ". That IS the preview — show it to the user, and call " +
+        "organize_project with dryRun:false in your NEXT reply, after they " +
+        "say go.");
+    }
   }
 
   var created = [], done = [], notMoved = [], cache = {}, folder;
@@ -1832,11 +2229,43 @@ function AELL_hygNames(doomed, kinds) {
 }
 
 /*
+ * The identity of one deletion plan: the action, the comps being kept,
+ * and the exact set of item ids that would go. A delete must match the
+ * preview the user was shown on all three -- a plan that drifted is a
+ * different list from the one they said go to.
+ */
+function AELL_hygPlanKey(action, keepNames, doomed) {
+  var ids = [], id, i;
+  for (id in doomed) {
+    if (!doomed.hasOwnProperty(id)) continue;
+    ids.push(Number(id));
+  }
+  ids.sort(function (a, b) { return a - b; });
+  // Length-prefixed, because a comp name may contain any separator a
+  // reader would reach for first -- and the only failure mode of a
+  // collision here is a delete matching a preview of something else.
+  var keeps = [];
+  for (i = 0; i < keepNames.length; i++) {
+    var nm = String(keepNames[i]);
+    keeps.push(String(nm.length) + ":" + nm);
+  }
+  return action + "|" + keeps.join(",") + "|" + ids.join(",");
+}
+
+/*
  * clean_project {action, keepComps?, dryRun?}
  *
  * dryRun DEFAULTS TO TRUE: every action here deletes project items, and
  * two of them take things the user never mentioned (empty folders,
  * render-queue entries), so nothing happens until it has been shown once.
+ *
+ * "Shown once" was advice until 2026-09-02, when four field runs of
+ * scripts/chat-probe.js measured what advice buys: asked to tidy a COMP,
+ * the model called this tool every time, and TWICE it went straight to
+ * dryRun:false -- deleting 4 and 7 real project items with no list ever
+ * put in front of the user. The prompt already said preview first, in
+ * the tool doc AND in the never-compacted rules, in both doc forms. So
+ * the preview is a GATE now, not a sentence: see AELL_hygPlanKey.
  */
 AELL_TOOLS.clean_project = function (args) {
   var proj = app.project;
@@ -1868,8 +2297,60 @@ AELL_TOOLS.clean_project = function (args) {
   }
 
   var dryRun = (args.dryRun === false) ? false : true;
-  var doomed = {}, out = { action: action, dryRun: dryRun }, i;
+  var doomed = {}, out = { action: action, dryRun: dryRun }, i, j;
   var dupPlan = null, keepComps = [];
+
+  // A scope this tool does not have. The model that means "tidy this
+  // COMP" reaches for one of these keys on the way to the wrong tool --
+  // measured in the field 2026-09-02, a remove_unused_footage call
+  // carrying keepComps:["Probe Room"] and dryRun:false, which this tool
+  // IGNORED before deleting four items project-wide. Dropping a
+  // caller's protective argument in silence is the class of lie this
+  // project does not ship, so the argument is refused and told where to
+  // go. reduce_project keeps comp/comps (they alias keepComps there);
+  // no action has ever had a LAYER scope.
+  var scopeKeys;
+  if (action === "reduce_project") {
+    scopeKeys = ["layer", "layers", "layerName", "layerNames"];
+  } else {
+    scopeKeys = ["comp", "comps", "compName", "compNames", "keepComps",
+                 "layer", "layers", "layerName", "layerNames"];
+  }
+  var offenders = [], scopeVals = [];
+  for (i = 0; i < scopeKeys.length; i++) {
+    var sv = args[scopeKeys[i]];
+    if (sv === undefined || sv === null || sv === "") continue;
+    if (AELLJSON.isArray(sv)) {
+      if (!sv.length) continue;
+      for (j = 0; j < sv.length; j++) scopeVals.push(String(sv[j]));
+    } else {
+      scopeVals.push(String(sv));
+    }
+    offenders.push(scopeKeys[i]);
+  }
+  if (offenders.length) {
+    var namedComps = [];
+    for (i = 0; i < scopeVals.length; i++) {
+      var hit = null;
+      try { hit = AELL_findItem(scopeVals[i]); } catch (eN) { hit = null; }
+      if (hit && (hit instanceof CompItem)) namedComps.push(scopeVals[i]);
+    }
+    var msg = "clean_project has no comp or layer scope: it works on the " +
+      "PROJECT PANEL, and " + action + " would ignore " +
+      offenders.join(", ") + " and delete project-wide. ";
+    if (namedComps.length) {
+      msg += "'" + namedComps.join("', '") + "' ";
+      if (namedComps.length > 1) msg += "are comps"; else msg += "is a comp";
+      msg += " in this project. To tidy a COMP, remove exactly what was " +
+        "named, with the tool that removes it (remove_keyframes, " +
+        "remove_effect, delete_mask, delete_layer, precompose); if nothing " +
+        "was named, ask the user what should go. ";
+    }
+    msg += "To clean the PROJECT PANEL instead, call clean_project again " +
+      "with action alone";
+    if (action === "reduce_project") msg += " plus keepComps";
+    return AELL_err(msg + ".");
+  }
 
   if (action === "reduce_project") {
     var want = args.keepComps;
@@ -1880,14 +2361,10 @@ AELL_TOOLS.clean_project = function (args) {
       else want = null;
     }
     if (!want || !want.length) {
-      var have = [], shown = 0;
-      for (i = 1; i <= proj.numItems && shown < 20; i++) {
-        if (proj.item(i) instanceof CompItem) { have.push(proj.item(i).name); shown++; }
-      }
       return AELL_err("reduce_project deletes every comp, footage item " +
         "and folder that the comps you keep do not need, so it will not " +
         "guess which ones matter. Name them in keepComps. Comps in this " +
-        "project: " + (have.join(", ") || "(none)"));
+        "project: " + AELL_compsHere("", 20));
     }
     for (i = 0; i < want.length; i++) {
       var nm = String(want[i]);
@@ -1943,13 +2420,56 @@ AELL_TOOLS.clean_project = function (args) {
       "silent. Fix or keep those comps first.";
   }
 
+  // The gate. A preview RECORDS the plan it showed; a delete must cite
+  // that same plan, from an earlier request. Recording happens on the
+  // refusal path too, so the refusal below IS the preview the round was
+  // missing and the next request can go straight through.
+  var planKey = AELL_hygPlanKey(action, out.keepComps || [], doomed);
+  var seq = $.global.AELL_requestSeq || 0;
+  var shown = $.global.AELL_hygShown;
+
   if (dryRun) {
-    out.note = out.willRemove === 0
+    $.global.AELL_hygShown = { key: planKey, seq: seq };
+    out.note = (out.willRemove === 0)
       ? "PREVIEW ONLY — nothing to do: this action would remove nothing."
       : "PREVIEW ONLY — nothing was deleted. Show the user what would go " +
         "(especially anything above they did not ask about), then call " +
         "again with dryRun:false to do it.";
     return AELL_okay(out);
+  }
+
+  var block = "";
+  if (!shown || shown.key !== planKey) {
+    if (shown && shown.key.split("|")[0] !== action) {
+      block = "no preview of " + action + " has been shown";
+    } else if (shown) {
+      block = "the project has changed since the last preview, so this " +
+        "is not the list the user agreed to";
+    } else {
+      block = "nothing has been previewed yet";
+    }
+  } else if (seq > 0 && shown.seq === seq) {
+    // Same request as the preview: the user has not been back since,
+    // so nobody has seen the list. (seq stays 0 for a caller that never
+    // announces a request -- a raw -r script -- and such a caller then
+    // only has to preview first.)
+    block = "that preview was taken in THIS same reply, so the user has " +
+      "not seen it yet";
+  }
+  if (block) {
+    $.global.AELL_hygShown = { key: planKey, seq: seq };
+    var listed = "";
+    if (doomedList.length) {
+      listed = " — " + doomedList.slice(0, 10).join(", ");
+      if (doomedList.length > 10) {
+        listed += ", +" + (doomedList.length - 10) + " more";
+      }
+    }
+    return AELL_err("clean_project refused to delete: " + block + ". " +
+      "Nothing was deleted. " + out.willRemove + " item(s) would go" +
+      listed + ". That IS the preview — show it to the user, and call " +
+      "clean_project with dryRun:false in your NEXT reply, after they " +
+      "say go.");
   }
 
   var before = AELL_hygSnapshot();
@@ -2037,6 +2557,36 @@ AELL_TOOLS.get_comp_details = function (args) {
       startTime: layer.startTime,
       effects: AELL_effectNames(layer)
     };
+    // Only when the layer is NOT the comp's own size, so a comp full of
+    // full-frame layers pays nothing for it and an absent size still
+    // means the number the model already has at the top of this result.
+    //
+    // add_mask's doc says "sizes from get_comp_details, never guessed"
+    // and this result had no layer size in it at all — so four phrasings
+    // of "hide half of Beta" all masked a 100x100 layer with the comp's
+    // 1920x1080, obeying the only figures they were given. That is the
+    // hole these two fields close.
+    var box = AELL_layerBox(layer, comp.time);
+    if (box && (box.width !== comp.width || box.height !== comp.height ||
+                box.left !== 0 || box.top !== 0)) {
+      entry.width = box.width;
+      entry.height = box.height;
+      // A text layer's origin is its baseline, not its top-left, so
+      // [0, 0, w, h] is the wrong rectangle there (measured AE 2026).
+      if (box.left !== 0 || box.top !== 0) {
+        entry.left = box.left;
+        entry.top = box.top;
+      }
+    }
+    // Only when there IS one, so an unmatted comp pays nothing for it.
+    // Without this the panel had no way at all to SEE a track matte:
+    // set_track_matte's receipt was the only evidence it had landed.
+    var matteLayer = AELL_matteLayerOf(layer);
+    if (matteLayer) {
+      entry.matte = matteLayer.name;
+      var matteMode = AELL_matteWord(layer.trackMatteType);
+      if (matteMode) entry.matteMode = matteMode;
+    }
     if (layer.selected) {
       entry.selected = true;
       if (i < start || i > last) selectedOutside++;
@@ -2061,6 +2611,48 @@ AELL_TOOLS.get_comp_details = function (args) {
     layersShown: layers.length,
     layers: layers
   };
+
+  /* The row cap is a BYTE cap as much as a row count. A round of results
+   * shares 6000 bytes on the panel side, and forty rows fitted that only
+   * while a row was short; the moment they started carrying the layer's
+   * own size, forty of them serialized to 6423 and the panel's own
+   * structural shrink took the tail off with no note of its own. Drop it
+   * HERE instead, where the omission is described and pageable — the
+   * same reason the forty-row cap exists at all.
+   *
+   * The SELECTION is never dropped: the system prompt tells the model to
+   * read `selected: true` to resolve "these layers". */
+  /* 5000, not 6000. This result has two consumers and BOTH share a
+   * 6000-byte budget with something else: in the state block it sits
+   * beside the project list (which the panel trims FIRST, so a comp that
+   * takes the whole 6000 leaves the model unable to name any comp but
+   * this one), and in a round of results it takes a fair share. A comp
+   * result at 5000 leaves a working 1000 for the project half — which is
+   * roughly what forty rows cost before they carried a layer size, so
+   * the new field is paid for in rows rather than in project items. */
+  var ROW_BUDGET = 5000;
+  var trimmed = 0;
+  // `limit:0` is an explicit "every layer", and the panel's own internal
+  // callers use it. Trimming that would be answering a different question.
+  while (limit >= 0 && layers.length > 1 &&
+         AELLJSON.stringify(out).length > ROW_BUDGET) {
+    var k = layers.length - 1;
+    while (k >= 0 && layers[k].selected) k--;
+    if (k < 0) break;
+    layers.splice(k, 1);
+    trimmed++;
+    out.layersShown = layers.length;
+  }
+  if (trimmed) {
+    // `last` has to become the last CONTIGUOUS index still shown, or
+    // "ask again with start:" would point past a row that was dropped.
+    var shown = {};
+    for (i = 0; i < layers.length; i++) shown[layers[i].index] = true;
+    var contig = start - 1;
+    while (contig < last && shown[contig + 1]) contig++;
+    last = contig;
+  }
+
   if (layers.length < total) {
     var next = last + 1;
     out.note = "Showing " + layers.length + " of " + total +
@@ -3218,6 +3810,42 @@ function AELL_sourceTime(layer, compTime) {
 }
 
 /*
+ * The layer's OWN box, in the LAYER space that mask vertices live in.
+ * Returns null when the layer has no honest size to report.
+ *
+ * MEASURED AE 2026 (scripts/layer-size-probe.jsx): `layer.width` and
+ * `layer.height` are NOT "how big is this layer". A TEXT layer and a
+ * SHAPE layer both answer with the COMP's dimensions — 1920x1080 for a
+ * 147x28 "HELLO" — and a camera and a light answer with nothing at all.
+ * Only a layer with a SOURCE (solid, footage, precomp, null) has a width
+ * that is its own, and for those the box starts at 0,0, so the source
+ * size IS the box.
+ *
+ * For the sourceless ones the only honest box is sourceRectAtTime's, and
+ * its origin is NOT 0,0: the same "HELLO" measured left 3.487, top
+ * -49.568, because a text layer's coordinate origin is its baseline. A
+ * caller that assumes [0, 0, w, h] there masks the wrong rectangle, so
+ * left/top are reported rather than dropped.
+ */
+function AELL_layerBox(layer, compTime) {
+  var src = null;
+  try { src = layer.source; } catch (eS) {}
+  if (src) {
+    var sw = Number(src.width), sh = Number(src.height);
+    if (sw > 0 && sh > 0) return { left: 0, top: 0, width: sw, height: sh };
+  }
+  if (typeof layer.sourceRectAtTime !== "function") return null;
+  var rect;
+  try {
+    rect = layer.sourceRectAtTime(
+      AELL_sourceTime(layer, Number(compTime) || 0), false);
+  } catch (eR) { return null; }
+  if (!rect || !(rect.width > 0) || !(rect.height > 0)) return null;
+  return { left: AELL_r3(rect.left), top: AELL_r3(rect.top),
+           width: AELL_r3(rect.width), height: AELL_r3(rect.height) };
+}
+
+/*
  * Apply ONE layer's own transform to a point that is already expressed
  * relative to that layer's anchor point, at comp time t. Returns the
  * point in the layer's PARENT space (comp space when unparented) —
@@ -3325,10 +3953,12 @@ AELL_TOOLS.get_bounds = function (args) {
   }
   if (w === 0 && h === 0) {
     out.empty = "this layer renders nothing at " + AELL_secs(t) +
+      // Parenthesised on purpose — see AELL_reorderRelative: a bare
+      // chain here told SHAPE layers "the text is empty at this time".
       (kind === "shape" ? " — the shape layer has no drawn content yet " +
         "(add_shape_content adds some)"
-       : kind === "text" ? " — the text is empty at this time"
-       : " — check that the layer is on at this time");
+       : (kind === "text" ? " — the text is empty at this time"
+       : " — check that the layer is on at this time"));
   }
 
   // Comp space. AE's own sourcePointToComp is NOT usable here: measured
@@ -3543,7 +4173,7 @@ AELL_TOOLS.link_property = function (args) {
   if (!prop.canSetExpression) {
     return AELL_err("Property cannot take an expression: " + args.property);
   }
-  var ctrlLayer = AELL_resolveLayer(comp, args.controlLayer);
+  var ctrlLayer = AELL_resolveLayer(comp, args.controlLayer, "controlLayer");
   var effects = ctrlLayer.property("ADBE Effect Parade");
   var fx = effects && args.controlEffect
     ? effects.property(args.controlEffect) : null;
@@ -3882,7 +4512,7 @@ AELL_TOOLS.grid_layout = function (args) {
   // cameras and lights are riggers, not grid content, so they're skipped.
   if (AELLJSON.isArray(args.layers) && args.layers.length > 0) {
     for (i = 0; i < args.layers.length; i++) {
-      layers.push(AELL_resolveLayer(comp, args.layers[i]));
+      layers.push(AELL_resolveLayer(comp, args.layers[i], "layers"));
     }
   } else {
     var sel = comp.selectedLayers;
@@ -4011,6 +4641,22 @@ AELL_TOOLS.grid_layout = function (args) {
 AELL_TOOLS.apply_expression_preset = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var layer = AELL_resolveLayer(comp, args.layer);
+  // The preset the caller already chose says which property it MEANT,
+  // so the refusal can say it too instead of listing five and shrugging.
+  if (!args.property) {
+    var p0 = String(args.preset || "").toLowerCase();
+    var why = "";
+    if (p0 === "wiggle") {
+      why = "wiggle needs the property to wiggle — 'position' is the " +
+            "drift/float/hover one, rotation a sway, opacity a flicker";
+    } else if (p0.substring(0, 5) === "loop_") {
+      why = "a loop preset needs the property that HAS the keyframes";
+    } else if (p0 === "time_linear") {
+      why = "time_linear needs a scalar property (rotation, opacity, a " +
+            "slider)";
+    }
+    return AELL_err(AELL_missingProperty(layer, why));
+  }
   var prop = AELL_resolveProperty(layer, args.property);
   if (!prop.canSetExpression) {
     return AELL_err("Property cannot take an expression: " + args.property);
@@ -4019,7 +4665,7 @@ AELL_TOOLS.apply_expression_preset = function (args) {
   // Resolve an optional {layer, effect} control reference to a scalar
   // expression source, so sliders can drive preset parameters.
   function ctrlRef(c) {
-    var l = AELL_resolveLayer(comp, c.layer);
+    var l = AELL_resolveLayer(comp, c.layer, "control.layer");
     var effects = l.property("ADBE Effect Parade");
     var fx = effects && c.effect ? effects.property(c.effect) : null;
     if (!fx) {
@@ -4166,6 +4812,26 @@ AELL_TOOLS.set_effect_param = function (args) {
  * invalidates references to its LATER siblings (assumed yes, which is
  * why nothing is read from them afterwards). Real-AE pass: verify both.
  */
+/*
+ * Two AE facts this body depends on, both measured in AE 2026 by
+ * scripts/verb-semantics-probe.jsx (they hold for delete_mask too):
+ *
+ * 1. Survivors are NOT renumbered. Remove "Gaussian Blur" from
+ *    [Gaussian Blur, Gaussian Blur 2, Gaussian Blur 3] and the two left
+ *    are still called "Gaussian Blur 2" and "Gaussian Blur 3" — the
+ *    numbering is a name AE assigned once, not a live position. So the
+ *    remainingEffects/remainingMasks list is the honest thing to report,
+ *    and a caller that removes twice must use the names it was handed
+ *    back rather than counting. (Masks behave identically: Mask 1 gone
+ *    leaves Mask 2 and Mask 3.)
+ * 2. Every SIBLING reference held across the removal dies with it.
+ *    Property objects grabbed before remove() answer "Object is invalid"
+ *    afterwards — measured on the siblings at index 2 AND 3 when index 1
+ *    went, so this is not merely a later-sibling rule. That is why
+ *    `others` below is flattened to NAMES before victim.remove() runs:
+ *    reading matches[i].name after the removal would throw, inside a
+ *    tool that had already succeeded.
+ */
 AELL_TOOLS.remove_effect = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var layer = AELL_layerOrSelection(comp, args.layer);
@@ -4177,8 +4843,31 @@ AELL_TOOLS.remove_effect = function (args) {
   }
   var have = AELL_effectNames(layer);
   if (have.length === 0) {
-    return AELL_err("'" + layer.name + "' has no effects — nothing to " +
-      "remove. apply_effect adds one.");
+    // Measured 2026-09-02 (chat-probe row 29, "Probe Room is a mess now
+    // — clean it up."): the old wording ("nothing to remove. apply_effect
+    // adds one.") left a REMOVE caller with nowhere to go but another
+    // guess, and the model made eight in one round — Text Animator 1
+    // through 8, on a text layer that has neither effects nor animators.
+    // So close the door (no name can match an empty list) and say where
+    // the thing it is probably reaching for actually lives.
+    var elsewhere = "";
+    if (AELL_layerType(layer) === "text") {
+      var anims = [];
+      try {
+        var ag = layer.property("ADBE Text Properties")
+          .property("ADBE Text Animators");
+        for (var a = 1; a <= ag.numProperties; a++) {
+          anims.push(String(ag.property(a).name));
+        }
+      } catch (eA) {}
+      elsewhere = anims.length
+        ? " Text animators are not effects — this layer has " +
+          AELL_capJoin(anims, 6) + "."
+        : " Text animators are not effects, and there are none here " +
+          "either.";
+    }
+    return AELL_err("'" + layer.name + "' has no effects at all — nothing " +
+      "to remove, and no other effect name will match either." + elsewhere);
   }
   if (args.effect === null || typeof args.effect === "undefined" ||
       args.effect === "") {
@@ -4542,7 +5231,7 @@ function AELL_targetLayers(comp, args) {
   var explicit = AELLJSON.isArray(args.layers) && args.layers.length > 0;
   if (explicit) {
     for (i = 0; i < args.layers.length; i++) {
-      layers.push(AELL_resolveLayer(comp, args.layers[i]));
+      layers.push(AELL_resolveLayer(comp, args.layers[i], "layers"));
     }
   } else {
     var sel = comp.selectedLayers;
@@ -4599,7 +5288,7 @@ AELL_TOOLS.reorder_layers = function (args) {
   var i;
   if (AELLJSON.isArray(args.layers) && args.layers.length > 0) {
     for (i = 0; i < args.layers.length; i++) {
-      layers.push(AELL_resolveLayer(comp, args.layers[i]));
+      layers.push(AELL_resolveLayer(comp, args.layers[i], "layers"));
     }
   } else {
     var sel = comp.selectedLayers;
@@ -5029,9 +5718,23 @@ AELL_TOOLS.apply_keyframe_ease = function (args) {
     try {
       totalPairs += AELL_easeProp(prop, bez, args.keyIndex, args.allPairs);
     } catch (e) {
+      // "position has 0 keyframes" is true and useless on its own: the
+      // caller guessed a property and needs to know which one carries the
+      // animation it was asked to smooth. The comp knows; say so.
+      var why = "" + (e.message || e);
+      if (why.indexOf("need at least 2") !== -1) {
+        var keyed = AELL_keyedProps(layers[i]);
+        if (keyed.length) {
+          why += ". Keyframed on this layer: " + AELL_capJoin(keyed, 6) +
+                 " — ease one of those instead";
+        } else {
+          why += ". Nothing on this layer is keyframed, so there is no " +
+                 "animation to ease — set_keyframes first";
+        }
+      }
       return (totalPairs > 0 ? AELL_errPartial : AELL_err)(
         "On '" + layers[i].name + "', " + args.property +
-        " " + (e.message || e) +
+        " " + why +
         (totalPairs ? " — " + totalPairs + " pair(s) eased before this"
                     : ""));
     }
@@ -5369,9 +6072,11 @@ function AELL_writeValue(prop, value, label) {
   try { keys = prop.numKeys; } catch (eK) {}
   if (keys > 0) {
     throw new Error("'" + label + "' is animated (" + keys +
-      " keyframes), so a single value cannot be written to it. Pass " +
-      "{atTime: <seconds>} to set a keyframe at a time instead, or " +
-      "delete the existing keyframes first.");
+      " keyframes), so a single value cannot be written to it. To change " +
+      "HOW it animates use apply_keyframe_ease (easing) or set_keyframes " +
+      "(new key values); for one key here pass {atTime: <seconds>}. " +
+      "remove_keyframes THROWS THE ANIMATION AWAY — only if the user " +
+      "asked to un-animate it.");
   }
   prop.setValue(value);
   return AELL_overrideWarning(prop, value, label);
@@ -5910,6 +6615,25 @@ function AELL_maskMode(name) {
   return AELL_MASK_MODES[String(name).toLowerCase()];
 }
 
+/* Bounding box of a vertex list. Exact for the ellipse too: the four
+ * points add_mask generates for one ARE its extremes. */
+function AELL_boxOfPoints(pts) {
+  if (!AELLJSON.isArray(pts) || !pts.length) return null;
+  var l = null, t = null, r = null, b = null, i;
+  for (i = 0; i < pts.length; i++) {
+    var p = pts[i];
+    if (!AELLJSON.isArray(p) || p.length < 2) continue;
+    var x = Number(p[0]), y = Number(p[1]);
+    if (isNaN(x) || isNaN(y)) continue;
+    if (l === null || x < l) l = x;
+    if (r === null || x > r) r = x;
+    if (t === null || y < t) t = y;
+    if (b === null || y > b) b = y;
+  }
+  if (l === null) return null;
+  return { left: l, top: t, right: r, bottom: b };
+}
+
 AELL_TOOLS.add_mask = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var layer = AELL_resolveLayer(comp, args.layer);
@@ -5918,6 +6642,9 @@ AELL_TOOLS.add_mask = function (args) {
   var shape = new Shape();
   shape.closed = true;
   var kind = args.shape ? String(args.shape) : "rectangle";
+  // The layer's OWN box, not layer.width/height — those report the COMP's
+  // size on a text or shape layer (measured AE 2026).
+  var box = AELL_layerBox(layer, comp.time);
   if (kind === "custom") {
     if (!AELLJSON.isArray(args.vertices) || args.vertices.length < 3) {
       return AELL_err("'vertices' ([[x,y],...] in LAYER space, >= 3 points) " +
@@ -5925,9 +6652,14 @@ AELL_TOOLS.add_mask = function (args) {
     }
     shape.vertices = args.vertices;
   } else {
-    var b = (AELLJSON.isArray(args.bounds) && args.bounds.length >= 4)
-      ? args.bounds
-      : [0, 0, layer.width || comp.width, layer.height || comp.height];
+    var b;
+    if (AELLJSON.isArray(args.bounds) && args.bounds.length >= 4) {
+      b = args.bounds;
+    } else if (box) {
+      b = [box.left, box.top, box.width, box.height];
+    } else {
+      b = [0, 0, layer.width || comp.width, layer.height || comp.height];
+    }
     var x = b[0], y = b[1], w = b[2], h = b[3];
     if (kind === "ellipse") {
       var cx = x + w / 2, cy = y + h / 2, rx = w / 2, ry = h / 2;
@@ -5939,6 +6671,61 @@ AELL_TOOLS.add_mask = function (args) {
       shape.vertices = [[x, y], [x + w, y], [x + w, y + h], [x, y + h]];
     }
   }
+
+  /* A mask that misses the layer entirely hides ALL of it, and AE takes
+   * it without a murmur: measured, setting a comp-sized-and-halved
+   * rectangle on a 100x100 solid threw nothing and this tool answered
+   * ok. The layer's own box is the only thing that can tell an aimed
+   * mask from a comp-space one, so refuse with the box in hand — the
+   * same grounded shape as every other failed lookup here. */
+  var overflow = "";
+  var hit = AELL_boxOfPoints(shape.vertices);
+  if (box && hit) {
+    var bRight = AELL_r3(box.left + box.width);
+    var bBottom = AELL_r3(box.top + box.height);
+    // " to " rather than a dash: a text layer's box has a negative top
+    // and "y -49.568--21.551" is not a number anybody can read.
+    var span = "x " + AELL_r3(hit.left) + " to " + AELL_r3(hit.right) +
+               ", y " + AELL_r3(hit.top) + " to " + AELL_r3(hit.bottom);
+    var mine = box.width + "x" + box.height + " at x " + box.left + " to " +
+               bRight + ", y " + box.top + " to " + bBottom;
+    if (hit.right <= box.left || hit.left >= bRight ||
+        hit.bottom <= box.top || hit.top >= bBottom) {
+      return AELL_err("That mask misses '" + layer.name + "' completely, " +
+        "so it would hide the whole layer: the mask spans " + span +
+        " and the layer is " + mine + ". Mask coordinates are in LAYER " +
+        "space, not comp space — the comp is " + comp.width + "x" +
+        comp.height + " and this layer is not. The whole layer is bounds [" +
+        box.left + ", " + box.top + ", " + box.width + ", " + box.height +
+        "]; half of it is half of those numbers.");
+    }
+    /* The other half of the same mistake, and the one the "misses it
+     * completely" test walks past: comp coordinates that happen to
+     * OVERLAP. Measured in the field — "I only want to see the top half
+     * of Beta" reached add_mask with [0, 0, 1920.0001, 540] on the same
+     * 100x100 layer, which swallows it whole, so the mask changes
+     * nothing at all and the receipt said ok. A mask exactly the layer's
+     * box is fine (it is this tool's own default); one that is BIGGER on
+     * every side is the comp's numbers again. */
+    if (hit.left <= box.left && hit.top <= box.top &&
+        hit.right >= bRight && hit.bottom >= bBottom &&
+        (hit.right - hit.left > box.width ||
+         hit.bottom - hit.top > box.height)) {
+      return AELL_err("That mask covers ALL of '" + layer.name + "', so it " +
+        "hides nothing: the mask spans " + span + " and the layer is only " +
+        mine + ". Mask coordinates are in LAYER space, not comp space — " +
+        "the comp is " + comp.width + "x" + comp.height + " and this layer " +
+        "is not. To show only the top half of this layer, mask bounds [" +
+        box.left + ", " + box.top + ", " + box.width + ", " +
+        AELL_r3(box.height / 2) + "].");
+    }
+    if (hit.left < box.left || hit.top < box.top ||
+        hit.right > bRight || hit.bottom > bBottom) {
+      overflow = "The mask spans " + span + ", past '" + layer.name +
+        "' (" + mine + ") — the part outside the layer does nothing.";
+    }
+  }
+
   var mask = masks.addProperty("ADBE Mask Atom");
   if (args.name) mask.name = String(args.name);
   mask.property("ADBE Mask Shape").setValue(shape);
@@ -5954,7 +6741,9 @@ AELL_TOOLS.add_mask = function (args) {
   if (args.feather > 0) {
     mask.property("ADBE Mask Feather").setValue([args.feather, args.feather]);
   }
-  return AELL_okay({ layer: layer.name, mask: mask.name, shape: kind });
+  var out = { layer: layer.name, mask: mask.name, shape: kind };
+  if (overflow) out.note = overflow;
+  return AELL_okay(out);
 };
 
 /*
@@ -6062,6 +6851,19 @@ function AELL_maskNames(layer) {
  * first (the stubs throw on a read after removal). NOT measured here:
  * whether AE renumbers the default names of the masks below ("Mask 2"
  * becoming "Mask 1") — assumed not, names persist. Real-AE pass: verify.
+ */
+/*
+ * What AE does to an EXPRESSION that still points at the deleted mask,
+ * measured in AE 2026 — the reason the self-test clears its off-grid
+ * probe first. It is not the dialog older versions raised: AE 2026 puts
+ * up NOTHING, and it tells scripting nothing either. After the mask
+ * went, the dependent Position still read expressionEnabled: true with
+ * an EMPTY expressionError, while its value had quietly fallen back
+ * from the mask vertex [100, 0] to the layer's static [160, 120]. So a
+ * broken expression survives this tool looking healthy from every angle
+ * a script can see. Clearing first (set_expression {expression: ""}) is
+ * the only way a caller keeps that visible; the survivors/remainingMasks
+ * receipt cannot show it.
  */
 AELL_TOOLS.delete_mask = function (args) {
   var comp = AELL_resolveComp(args.comp);
@@ -6568,7 +7370,7 @@ AELL_TOOLS.precompose = function (args) {
   var i, j;
   var layers = [], indices = [], seen = {}, dupes = [];
   for (i = 0; i < args.layers.length; i++) {
-    var L = AELL_resolveLayer(comp, args.layers[i]);
+    var L = AELL_resolveLayer(comp, args.layers[i], "layers");
     // A repeated reference used to inflate layersMoved: AE tolerates
     // [2, 2] and moves ONE layer, and the tool reported two.
     if (seen[L.index]) {
@@ -7308,7 +8110,7 @@ AELL_TOOLS.set_layer_parent = function (args) {
   var i;
   if (AELLJSON.isArray(args.layers) && args.layers.length > 0) {
     for (i = 0; i < args.layers.length; i++) {
-      targets.push(AELL_resolveLayer(comp, args.layers[i]));
+      targets.push(AELL_resolveLayer(comp, args.layers[i], "layers"));
     }
   } else if (args.layer !== null && typeof args.layer !== "undefined" &&
              args.layer !== "") {
@@ -7318,13 +8120,13 @@ AELL_TOOLS.set_layer_parent = function (args) {
     for (i = 0; i < sel.length; i++) targets.push(sel[i]);
   }
   if (targets.length === 0) {
-    return AELL_err("No target layers — select some in AE or pass " +
-                    "{layer} / {layers: [...]}");
+    return AELL_err(AELL_noTargets(comp, args));
   }
   var clearing = args.parent === null || typeof args.parent === "undefined" ||
                  args.parent === "" ||
                  String(args.parent).toLowerCase() === "none";
-  var parent = clearing ? null : AELL_resolveLayer(comp, args.parent);
+  var parent = clearing
+    ? null : AELL_resolveLayer(comp, args.parent, "parent");
   var keep = args.keepPosition !== false;   // default: no visual jump
 
   /* AE computes the compensation ONCE, from the parent's transform at
@@ -8913,7 +9715,7 @@ function AELL_descendReported(prop) {
 function AELL_anyProperty(layer, spec) {
   AELL_lastResolve = null;
   var s = String(spec || "");
-  if (s === "") throw new Error("Missing 'property'");
+  if (s === "") throw new Error(AELL_missingProperty(layer, ""));
   if (s.indexOf("/") !== -1) {
     try {
       return AELL_descendToLeaf(AELL_resolvePropPath(layer, s));
@@ -9095,9 +9897,11 @@ AELL_TOOLS.set_property = function (args) {
     try { nkey = prop.numKeys || 0; } catch (eN) {}
     if (nkey > 0 && typeof args.atTime !== "number") {
       return AELL_err("'" + args.property + "' is animated (" + nkey +
-        " keyframes), so a single value cannot be written to it. Pass " +
-        "{atTime: <seconds>} to set a keyframe instead, or delete the " +
-        "keyframes first.");
+        " keyframes), so a single value cannot be written to it. To change " +
+        "HOW it animates use apply_keyframe_ease (easing) or set_keyframes " +
+        "(new key values); for one key here pass {atTime: <seconds>}. " +
+        "remove_keyframes THROWS THE ANIMATION AWAY — only if the user " +
+        "asked to un-animate it.");
     }
     return AELL_err("AE rejected the value for '" + args.property + "': " +
       (e.message || e) + ". Current value: " +
@@ -9191,11 +9995,93 @@ AELL_TOOLS.set_keyframes = function (args) {
   return AELL_okay(res);
 };
 
+/*
+ * The carpet-bomb gate: a keyframe wipe across EVERY layer in the comp
+ * must be seen before it happens.
+ *
+ * Measured 2026-09-02 in real AE (chat-probe row 29, "Probe Room's got
+ * junk everywhere, tidy it"): the model asked to tidy a comp, nobody
+ * named a single layer, and remove_keyframes answered
+ * {"layers":12,"property":"opacity","removed":18} — ok, receipt, 18
+ * keyframes gone. clean_project and organize_project both refuse exactly
+ * this shape until the user has SEEN what would go (0.11.7, 0.11.8); a
+ * keyframe wipe over the whole comp is that shape and had no gate at all.
+ *
+ * Deliberately NARROW, so the tool stays usable:
+ *   - only when the caller passed an explicit `layers` ARRAY that covers
+ *     every layer in the comp. A SELECTION of everything is a human act
+ *     (there is no select tool — the model cannot make one), and one or
+ *     two named layers is the ordinary case, untouched.
+ *   - only when there is something to lose: 0 keys on that property is a
+ *     no-op and a refusal there would be noise, the same reason
+ *     organize_project does not gate an empty plan.
+ *   - only for a full wipe. {times: [...]} names the keys it takes, which
+ *     is the opposite of guessing.
+ * The preview names each layer and its key count, and asks WHICH — the
+ * refusal is meant to be relayed to the user as a question, because
+ * "clean it up" has no answer inside the project.
+ */
+function AELL_wipeGate(comp, args, layers) {
+  if (!AELLJSON.isArray(args.layers) || args.layers.length < 3) return "";
+  if (layers.length !== comp.numLayers) return "";
+  if (AELLJSON.isArray(args.times) && args.times.length > 0) return "";
+  var rows = [], total = 0, i, prop, nk;
+  for (i = 0; i < layers.length; i++) {
+    prop = null;
+    try { prop = AELL_anyProperty(layers[i], args.property); }
+    catch (eP) { prop = null; }
+    nk = 0;
+    try { nk = (prop && prop.numKeys) || 0; } catch (eK) { nk = 0; }
+    if (nk > 0) { rows.push(layers[i].name + " (" + nk + ")"); total += nk; }
+  }
+  if (total === 0) return "";
+  var key = comp.id + "|" + String(args.property) + "|" + total + "|" +
+            rows.length;
+  var seq = $.global.AELL_requestSeq || 0;
+  var shown = $.global.AELL_wipeShown;
+  var block = "";
+  if (!shown) {
+    block = "nothing has been previewed yet";
+  } else if (shown.key !== key) {
+    block = "the comp has changed since the last preview, so this is not " +
+      "the list the user agreed to";
+  } else if (seq > 0 && shown.seq === seq) {
+    block = "that preview was taken in THIS same reply, so the user has " +
+      "not seen it yet";
+  }
+  if (!block) return "";
+  $.global.AELL_wipeShown = { key: key, seq: seq };
+  return "remove_keyframes refused to wipe every layer in '" + comp.name +
+    "': " + block + ". Nothing was removed. This would delete " + total +
+    " " + String(args.property) + " keyframe(s) from " + rows.length +
+    " layer(s): " + AELL_capJoin(rows, 10) + ". That IS the preview — ask " +
+    "the user WHICH of those should lose their keyframes (or whether they " +
+    "really mean all of them), and call again in your NEXT reply once " +
+    "they answer.";
+}
+
+/*
+ * WHICH value the property keeps once the last key is gone — measured in
+ * AE 2026, because "un-animate it" is a request whose whole point is the
+ * value it leaves behind.
+ *
+ * The loop below removes key 1 over and over, so the last key standing
+ * is the LAST one in time, and AE holds that key's value. Two identical
+ * rigs (0s=100, 1s=50, 2s=0) emptied at playheads 0.5s and 1.5s BOTH
+ * ended at 0: the residual does NOT follow the playhead, and it is not
+ * the first key's value either. Whoever changes this loop to removeKey
+ * (numKeys) instead changes the answer to the first key's value — the
+ * order is load-bearing, not incidental.
+ */
 AELL_TOOLS.remove_keyframes = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var layers;
-  try { layers = AELL_layersOrSelection(comp, args); }
-  catch (eL) { return AELL_err(eL.message); }
+  try {
+    layers = AELL_layersOrSelection(comp, args,
+      "deletes animation");
+  } catch (eL) { return AELL_err(eL.message); }
+  var gated = AELL_wipeGate(comp, args, layers);
+  if (gated) return AELL_err(gated);
   var removed = 0;
   for (var L = 0; L < layers.length; L++) {
     var prop;
@@ -9363,7 +10249,40 @@ AELL_TOOLS.set_track_matte = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var layer = AELL_layerOrSelection(comp, args.layer);
   var mode = String(args.mode || "alpha").toLowerCase();
+  // Measured in AE 2026: a CameraLayer and a LightLayer carry NO
+  // setTrackMatte / removeTrackMatte at all (typeof === "undefined"), so
+  // a camera fell straight through to the legacy branch below — where
+  // ExtendScript ACCEPTS `camera.trackMatteType = LUMA` without throwing
+  // (it reads back 5015) on a layer AE will never show a matte on. The
+  // try/catch could not see it, because nothing threw: the tool moved
+  // the matte layer up the stack with moveBefore, wrote a phantom
+  // property, and reported ok. Refuse by TYPE, before anything moves.
+  //
+  // The test is the CLASS, not `instanceof AVLayer`: measured the same
+  // night, a TextLayer and a ShapeLayer are not `instanceof AVLayer`
+  // either in ExtendScript, so that predicate refused two layer types
+  // that matte perfectly well. AELL_layerType is the one place the
+  // classes are read, and the word it returns is the word this message
+  // quotes.
+  var layerKind = AELL_layerType(layer);
+  if (layerKind === "camera" || layerKind === "light") {
+    return AELL_err("'" + layer.name + "' is " + layerKind +
+      " and cannot take a track matte — only visual (AV) layers have " +
+      "pixels to cut. AE does not refuse this: it accepts the write " +
+      "silently and shows no matte. get_comp_details {comp: \"" +
+      comp.name + "\"} lists the layers in '" + comp.name +
+      "' and their types.");
+  }
   if (mode === "none" || mode === "off" || mode === "remove") {
+    // Reading trackMatteType here would be the bug this tool exists to
+    // avoid: after removeTrackMatte() it still reads the type it just
+    // removed, so every second removal would look like a real one.
+    var current = AELL_matteLayerOf(layer);
+    if (!current) {
+      return AELL_err("'" + layer.name + "' has no track matte to " +
+        "remove. get_comp_details {comp: \"" + comp.name + "\"} shows " +
+        "'matte' on every layer in '" + comp.name + "' that has one.");
+    }
     try {
       if (typeof layer.removeTrackMatte === "function") {
         layer.removeTrackMatte();
@@ -9376,7 +10295,8 @@ AELL_TOOLS.set_track_matte = function (args) {
         "light never has one to remove. get_comp_details shows '" +
         comp.name + "'s layers and their types.");
     }
-    return AELL_okay({ layer: layer.name, matte: "removed" });
+    return AELL_okay({ layer: layer.name, matte: "removed",
+                      was: current.name });
   }
   var MAP = { alpha: "ALPHA", alpha_inverted: "ALPHA_INVERTED",
               luma: "LUMA", luma_inverted: "LUMA_INVERTED" };
@@ -9389,8 +10309,20 @@ AELL_TOOLS.set_track_matte = function (args) {
     return AELL_err("'matteLayer' is required — the layer whose alpha/" +
                     "luma cuts this one");
   }
-  var matte = AELL_resolveLayer(comp, args.matteLayer);
+  var matte = AELL_resolveLayer(comp, args.matteLayer, "matteLayer");
   if (matte === layer) return AELL_err("A layer cannot matte itself");
+  // Same measurement from the other side. AE's own throw does cover this
+  // one on AE 23+ (setTrackMatte rejects parameter 1), but the legacy
+  // branch would silently reorder the stack first, so the type is
+  // checked here too and the message stays the same shape.
+  var matteKind = AELL_layerType(matte);
+  if (matteKind === "camera" || matteKind === "light") {
+    return AELL_err("matteLayer '" + matte.name + "' is " + matteKind +
+      " and cannot BE a matte — only a visual (AV) layer has the alpha/" +
+      "luma to cut with (layer: '" + layer.name + "' is " + layerKind +
+      "). get_comp_details {comp: \"" + comp.name + "\"} lists the " +
+      "layers and their types.");
+  }
   var tmt = TrackMatteType[MAP[mode]];
   try {
     if (typeof layer.setTrackMatte === "function") {
@@ -10403,12 +11335,24 @@ var AELL_NO_UNDO_GROUP = {
  * which is what lets a batch put many tools inside a single Ctrl+Z.
  * Never throws: a tool that blows up comes back as a normal error result. */
 function AELL_runTool(toolName, args) {
+  // Park the call so the grounded refusals can quote what was actually
+  // handed over: AELL_resolveLayer sees only the resolved ref, so a
+  // missing {layer} cannot name the {layers} that arrived instead
+  // (AELL_missingLayer). Saved and restored rather than assigned —
+  // for_each_layer runs its sub-tools inside this frame.
+  var prevTool = $.global.AELL_curTool;
+  var prevArgs = $.global.AELL_curArgs;
+  $.global.AELL_curTool = toolName;
+  $.global.AELL_curArgs = args;
   try {
     var tool = AELL_TOOLS[toolName];
     if (!tool) return AELL_err("Unknown tool: " + toolName);
     return tool(args);
   } catch (e) {
     return AELL_err(e && e.message ? e.message : String(e));
+  } finally {
+    $.global.AELL_curTool = prevTool;
+    $.global.AELL_curArgs = prevArgs;
   }
 }
 
@@ -10533,7 +11477,13 @@ function AELL_layerSig(L, idx) {
   try { t += "|m" + L.property("ADBE Mask Parade").numProperties; }
   catch (e3) {}
   try { t += "|f" + (L.parent ? L.parent.index : "-"); } catch (e4) {}
-  try { t += "|t" + L.trackMatteType; } catch (e5) {}
+  // The TYPE alone is blind to a removal (it survives one), so the matte
+  // LAYER goes in the fingerprint too — otherwise set_track_matte and its
+  // undo were invisible to the rollback verifier.
+  try {
+    var sigMatte = AELL_matteLayerOf(L);
+    t += "|t" + L.trackMatteType + "," + (sigMatte ? sigMatte.index : "-");
+  } catch (e5) {}
   try { t += "|i" + L.inPoint + "," + L.outPoint + "," + L.startTime; }
   catch (e6) {}
   try {
@@ -10873,9 +11823,17 @@ function AELL_callBatch(commandsJson, optsJson) {
 $.global.AELL_callBatch = AELL_callBatch;
 
 /* Called by the panel when a NEW user request starts — comp-name aliases
- * are scoped to one request, deterministically, with no timers. */
+ * are scoped to one request, deterministically, with no timers.
+ *
+ * The counter is what clean_project's preview gate reads: a delete may
+ * only cite a preview taken in an EARLIER request, because that is the
+ * only boundary at which the user could have seen the list and said go.
+ * A request the panel never announced leaves it at 0, and the gate then
+ * degrades to "a matching preview happened first" (see clean_project).
+ */
 $.global.AELL_newRequest = function () {
   $.global.AELL_compAliases = {};
+  $.global.AELL_requestSeq = ($.global.AELL_requestSeq || 0) + 1;
 };
 
 /* AELLJSON is a top-level `var` of THIS file, and ExtendScript keeps such

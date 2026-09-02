@@ -68,10 +68,17 @@ function square(over) {
     // What READ_COMP grew for the trigger-layer steps (14 onward). A
     // 200x200 solid: anchor in its middle, fully opaque, no masks, no
     // expressions, linear keys if any.
-    matteLayer: null, isPrecomp: false, anchorPoint: [100, 100, 0],
+    matteLayer: null, matteLayerKnown: true, isPrecomp: false,
+    anchorPoint: [100, 100, 0],
     opacity: 100, sourceRect: { left: 0, top: 0, width: 200, height: 200 },
     layerWidth: 200, layerHeight: 200, maskBoxes: [], maskModes: [],
-    maskInverted: [], opacityKeyEased: [], expressions: {}, textAnimators: 0
+    maskInverted: [], maskFeather: [], maskRound: [],
+    // The two halves of "white, 120 pixels" the text step used not to
+    // read. null is what a layer that is not text reports, and also what
+    // an AE that would not hand the value over reports — the check has
+    // to tell "wrong" from "unreadable".
+    fontSize: null, fillColor: null,
+    opacityKeyEased: [], expressions: {}, textAnimators: 0
   };
   for (const k in over) row[k] = over[k];
   return row;
@@ -244,7 +251,11 @@ function buildLayer(spec, index) {
   const L = {
     name: spec.name, index: index,
     parent: spec.parent ? { name: spec.parent } : null,
-    trackMatteType: spec.matte || 0,
+    // Measured in AE 2026: an unmatted layer reads NO_TRACK_MATTE 5012,
+    // not 0, and ALPHA is 5013 — the constant the probe used to treat as
+    // "no matte". Both directions were wrong, so both are pinned here.
+    trackMatteType: spec.matte ||
+      (spec.matteLayer ? 5013 : 5012),
     // AE 23+: the matte is a layer reference, not just a type.
     trackMatteLayer: spec.matteLayer ? { name: spec.matteLayer } : null,
     inPoint: spec.inPoint || 0, outPoint: spec.outPoint || 6,
@@ -313,20 +324,51 @@ function buildLayer(spec, index) {
       property(i) {
         const r = maskRects[i - 1];
         const mode = (spec.maskModes || [])[i - 1] || "add";
+        // An ellipse mask carries bezier tangents; a rectangle's are all
+        // zero. That is the ONLY thing separating "an oval mask" from "a
+        // box the same size", so the stub has to model both — modelled
+        // exactly the way hostscript's add_mask builds them.
+        const oval = !!(spec.maskOval || [])[i - 1];
+        const kx = oval ? (r[2] / 2) * 0.5523 : 0;
+        const ky = oval ? (r[3] / 2) * 0.5523 : 0;
+        const feather = (spec.maskFeather || [])[i - 1];
         return {
           maskMode: mode === "subtract" ? MaskMode.SUBTRACT
                   : mode === "add" ? MaskMode.ADD : MaskMode.INTERSECT,
           inverted: !!(spec.maskInverted || [])[i - 1],
           property(name) {
+            if (name === "ADBE Mask Feather") {
+              if (feather === undefined) throw new Error("no feather");
+              return { value: [feather, feather] };
+            }
             if (name !== "ADBE Mask Shape") throw new Error("no " + name);
-            return { value: { vertices: [[r[0], r[1]], [r[0] + r[2], r[1]],
-              [r[0] + r[2], r[1] + r[3]], [r[0], r[1] + r[3]]] } };
+            return { value: {
+              vertices: oval
+                ? [[r[0] + r[2] / 2, r[1]], [r[0] + r[2], r[1] + r[3] / 2],
+                   [r[0] + r[2] / 2, r[1] + r[3]], [r[0], r[1] + r[3] / 2]]
+                : [[r[0], r[1]], [r[0] + r[2], r[1]],
+                   [r[0] + r[2], r[1] + r[3]], [r[0], r[1] + r[3]]],
+              inTangents: [[-kx, 0], [0, -ky], [kx, 0], [0, ky]],
+              outTangents: [[kx, 0], [0, ky], [-kx, 0], [0, -ky]] } };
           } };
       }
     }
   };
   if (spec.text !== undefined) {
-    groups["Source Text"] = { value: { text: spec.text } };
+    // A real TextDocument carries the size and the fill beside the
+    // string. applyFill false is AE's "this text has no fill", and
+    // reading fillColor then THROWS — modelled, because READ_COMP reads
+    // the two in separate try blocks for exactly that reason.
+    const doc = { text: spec.text };
+    if (spec.fontSize !== undefined) doc.fontSize = spec.fontSize;
+    if (spec.applyFill === false) {
+      doc.applyFill = false;
+      Object.defineProperty(doc, "fillColor",
+        { get() { throw new Error("no fill on this text"); } });
+    } else if (spec.fillColor !== undefined) {
+      doc.fillColor = spec.fillColor.slice(0);
+    }
+    groups["Source Text"] = { value: doc };
     groups["ADBE Text Properties"] = propGroup({
       "ADBE Text Animators": { numProperties: spec.animators || 0 } });
   }
@@ -378,12 +420,14 @@ const BASE = [
     // two-key fade with the first pair eased, a wiggle on position, an
     // anchor in the middle, HELLO as its matte.
     width: 200, height: 200, maskRects: [[0, 0, 200, 100]],
-    maskModes: ["subtract"], maskInverted: [true],
+    maskModes: ["subtract"], maskInverted: [true], maskFeather: [0],
     keys: 2, keyTimes: [0, 1], eased: [true, false],
     anchor: [100, 100, 0], opacity: 80,
     expressions: { position: "wiggle(2, 30)" }, matteLayer: "HELLO" },
   { name: "HELLO", pos: [960, 200, 0], isText: true, text: "HELLO",
-    rect: [2, -86, 350, 90], animators: 2 },
+    rect: [2, -86, 350, 90], animators: 2, fontSize: 120,
+    fillColor: [1, 1, 1], masks: 1, maskRects: [[-20, -100, 400, 130]],
+    maskOval: [true], maskFeather: [20] },
   { name: "Squares", pos: [960, 540, 0], precomp: "Squares" }
 ];
 
@@ -425,6 +469,22 @@ setLayers(BASE);
          "READ_COMP reports effect names and their colours");
   assert(state.layers[2].text === "HELLO" && state.layers[2].isText === true,
          "READ_COMP still reads text layers");
+  // What the tightened text/mask verdicts read. The oval is the one
+  // that cannot be faked: an ellipse mask and a rectangle mask have the
+  // SAME bounding box, so without the tangents "put an oval mask on it"
+  // has no fingerprint at all.
+  assert(state.layers[2].fontSize === 120 &&
+         JSON.stringify(state.layers[2].fillColor) === "[1,1,1]",
+         "READ_COMP reports a text layer's size and fill colour");
+  assert(JSON.stringify(state.layers[2].maskRound) === "[true]" &&
+         JSON.stringify(state.layers[2].maskFeather) === "[20]",
+         "READ_COMP tells an oval mask from a box, and reads its feather");
+  assert(JSON.stringify(state.layers[1].maskRound) === "[false]" &&
+         JSON.stringify(state.layers[1].maskFeather) === "[0]",
+         "a rectangular mask reads round=false, feather 0");
+  assert(state.layers[0].fontSize === null &&
+         state.layers[0].fillColor === null,
+         "a solid reports no font size and no fill colour");
   assert(state.layers[1].parent === "Rig" && state.layers[1].masks === 1,
          "READ_COMP still reads parenting and masks");
   // The verdicts must be able to run on what the reader actually returns —
@@ -524,10 +584,30 @@ function mutate(fn) {
 // --------------------------------------------------------------- summary
 
 const titles = STEPS.map(s => s.title);
-assert(titles.indexOf("a second turn that refers back") === 8 &&
-       titles.indexOf("one Ctrl+Z for one chat command") === 9,
-       "the two new steps run LAST, after the comp they refer back to " +
-       "has been built");
+/*
+ * ORDER, not position. These used to be `indexOf(...) === 8` and `=== 9`,
+ * which is the pin the 2026-08-30 audit named: inserting one step
+ * anywhere earlier broke assertions that had nothing to do with the new
+ * step, so the suite discouraged the very thing the paraphrase matrix
+ * needs (steps growing). What is actually load-bearing is that a step
+ * comes AFTER the steps that build what it names.
+ */
+function stepOrder(title) {
+  const i = titles.indexOf(title);
+  if (i === -1) throw new Error("no probe step called " + title);
+  return i;
+}
+function assertAfter(later, earlier) {
+  assert(stepOrder(later) > stepOrder(earlier),
+         "'" + later + "' runs after '" + earlier + "'");
+}
+assertAfter("a second turn that refers back", "grid layout");
+assertAfter("one Ctrl+Z for one chat command", "create a comp");
+assert(stepOrder("a second turn that refers back") ===
+       stepOrder("parenting") + 1,
+       "the refer-back step follows its antecedent turn directly — its " +
+       "pronoun resolves against the sentence before it, and nothing " +
+       "else may be typed in between");
 assert(STEPS.filter(s => typeof s.say !== "string" ||
                          typeof s.check !== "function").length === 0,
        "every step still has a sentence and a verdict");
@@ -1725,15 +1805,266 @@ function everySquare(state, fn) {
   }
 }
 
+// --- steps 4, 5 and 6: the three checks the audit called loose ---------
+//
+// docs/AUDIT-0.11.md part 1.4: "checks in steps 4/5/6 score
+// wrong-but-present as pass". They did. Step 4 read one of the four
+// things its sentence asks for (does SOME text layer say HELLO), step 5
+// asked only whether SOME text layer has SOME mask, and step 6 asked
+// whether a shape layer exists AND something somewhere is matted —
+// never whether the shape mattes the square. A variance number computed
+// on checks like these would be a number about nothing.
+//
+// The fixtures are the comp as it really stands at each of those steps,
+// not room() (which is the post-step-14 world and already has the shape
+// layer these steps are supposed to create).
+
+/** The comp at the end of step 3: nine red squares, staggered fades. */
+function earlyRoom() {
+  uid = 0;
+  const sq = nine({ opacityKeys: 2, opacityKeyTimes: [0, 1],
+                    opacityKeyEased: [false, false] });
+  sq.forEach((l, i) => {
+    l.position = [700 + (i % 3) * 260, 280 + Math.floor(i / 3) * 260, 0];
+  });
+  sq.forEach((l, i) => { l.index = i + 1; });
+  return comp(sq);
+}
+/** …with the HELLO the text step is supposed to add. */
+function withHello(over) {
+  const c = earlyRoom();
+  const hello = layer(Object.assign({
+    name: "HELLO", isText: true, text: "HELLO", fontSize: 120,
+    fillColor: [1, 1, 1], position: [960, 200, 0], layerWidth: 1920,
+    layerHeight: 1080, sourceRect: { left: 2, top: -86, width: 350,
+                                     height: 90 } }, over || {}));
+  c.layers = [hello].concat(c.layers);
+  c.layers.forEach((l, i) => { l.index = i + 1; });
+  return c;
+}
+
+{
+  const s = stepByTitle("text layer");
+  const before = earlyRoom();
+  assert(s.check(withHello(), { before }) === null,
+         "a white 120px HELLO near the top is a pass");
+  {
+    const v = s.check(before, { before });
+    assert(v && /no text layer/.test(v), "no text at all fails: " + v);
+  }
+  {
+    const v = s.check(withHello({ text: "GOODBYE" }), { before });
+    assert(v && /GOODBYE/.test(v), "the wrong words fail, and are quoted");
+  }
+  {
+    // AE's default text fill is BLACK. A model that never passed a
+    // colour through leaves exactly this, and the old check passed it.
+    const v = s.check(withHello({ fillColor: [0, 0, 0] }), { before });
+    assert(v && /default black/.test(v),
+           "black HELLO fails and says why: " + v);
+  }
+  {
+    const v = s.check(withHello({ fontSize: 24 }), { before });
+    assert(v && /24px, wanted 120/.test(v), "the wrong size fails: " + v);
+  }
+  {
+    const v = s.check(withHello({ position: [960, 900, 0] }), { before });
+    assert(v && /bottom half/.test(v),
+           "HELLO at the bottom of the frame fails: " + v);
+  }
+  {
+    // Two text layers for one sentence: the debris case a "some layer
+    // says HELLO" check can never see.
+    const two = withHello();
+    two.layers = [layer({ name: "HELLO 2", isText: true, text: "HELLO",
+      fontSize: 120, fillColor: [1, 1, 1], position: [960, 200, 0] })]
+      .concat(two.layers);
+    two.layers.forEach((l, i) => { l.index = i + 1; });
+    const v = s.check(two, { before });
+    assert(v && /2 text layers were added/.test(v),
+           "a leftover second text layer fails: " + v);
+  }
+  {
+    // An AE that will not hand over the size or the fill reports null.
+    // That is not a wrong answer, and must not be scored as one.
+    assert(s.check(withHello({ fontSize: null, fillColor: null }),
+                   { before }) === null,
+           "unreadable size and fill are not failures");
+  }
+  assert(s.check(withHello(), { before: null }) === null,
+         "with no before-state it still judges the text");
+}
+
+{
+  const s = stepByTitle("mask");
+  const before = withHello();
+  const oval = { masks: 1, maskBoxes: [[-20, -100, 400, 130]],
+                 maskModes: ["add"], maskInverted: [false],
+                 maskRound: [true], maskFeather: [20] };
+  assert(s.check(withHello(oval), { before }) === null,
+         "a feathered oval on HELLO is a pass");
+  {
+    const v = s.check(withHello(), { before });
+    assert(v && /HELLO has 0 mask/.test(v), "no mask fails: " + v);
+  }
+  {
+    // The mask landed on a square instead. The comp gained a mask and
+    // the layer the sentence named did not — the wrong-but-present case.
+    const c = withHello();
+    c.layers[c.layers.length - 1].masks = 1;
+    c.layers[c.layers.length - 1].maskRound = [true];
+    const v = s.check(c, { before });
+    assert(v && /landed on Red Square/.test(v),
+           "a mask on the wrong layer fails and names it: " + v);
+  }
+  {
+    const v = s.check(withHello(Object.assign({}, oval,
+      { maskRound: [false] })), { before });
+    assert(v && /rectangle, not an oval/.test(v),
+           "a box where an oval was asked for fails: " + v);
+  }
+  {
+    const v = s.check(withHello(Object.assign({}, oval,
+      { maskFeather: [0] })), { before });
+    assert(v && /never feathered/.test(v),
+           "an unfeathered oval fails: " + v);
+  }
+  {
+    const v = s.check(withHello(Object.assign({}, oval,
+      { maskFeather: [5] })), { before });
+    assert(v && /5px, wanted 20/.test(v), "the wrong feather fails: " + v);
+  }
+  {
+    const v = s.check(withHello(Object.assign({}, oval, { masks: 3,
+      maskRound: [true, true, true], maskFeather: [20, 20, 20] })),
+      { before });
+    assert(v && /3 masks were added/.test(v),
+           "three masks for one oval fails: " + v);
+  }
+  {
+    // A shape the reader could not classify is not evidence either way.
+    assert(s.check(withHello(Object.assign({}, oval,
+      { maskRound: [null], maskFeather: [null] })), { before }) === null,
+      "an unreadable mask shape is not scored as a rectangle");
+  }
+  {
+    // Already masked before the sentence — nothing was proved.
+    const v = s.check(withHello(oval), { before: withHello(oval) });
+    assert(v && /the same as before/.test(v),
+           "a mask that was already there fails: " + v);
+  }
+}
+
+// The step-6 verdict had NO stub coverage, which is how it stayed a
+// false pass for as long as it existed: `l.matte && l.matte !== 5013` is
+// true for every UNMATTED layer, because an unmatted layer reads 5012.
+{
+  const s = stepByTitle("track matte");
+  const before = withHello({ masks: 1, maskRound: [true],
+                             maskFeather: [20] });
+  /** …plus the shape layer the sentence asks for, matting `victim`. */
+  function withEllipse(victim, over) {
+    const c = JSON.parse(JSON.stringify(before));
+    c.layers = [layer(Object.assign({ name: "White Ellipse",
+      isShape: true }, over || {}))].concat(c.layers);
+    if (victim) {
+      const v = c.layers.filter(l => l.name === victim)[0];
+      v.matte = 5013;
+      v.matteLayer = "White Ellipse";
+      v.matteLayerKnown = true;
+    }
+    c.layers.forEach((l, i) => { l.index = i + 1; });
+    return c;
+  }
+  assert(s.check(withEllipse("Red Square 1"), { before }) === null,
+         "a new shape layer alpha-matting a square is a pass");
+  {
+    const v = s.check(before, { before });
+    assert(v && /no shape layer was created/.test(v),
+           "no shape layer fails: " + v);
+  }
+  {
+    // Measured in real AE 2026: the grid step's round rolled back, the
+    // comp held no squares, and the model — asked to matte "the top
+    // square" — matted HELLO. That is a broken premise, not a routing
+    // failure, and the verdict has to say which.
+    const empty = comp([layer({ name: "HELLO", isText: true, text: "HELLO" }),
+                        layer({ name: "White Ellipse", isShape: true })]);
+    const v = s.check(empty, { before: comp([]) });
+    assert(v && /no squares in Probe Room/.test(v) &&
+           /grid step must have failed/.test(v),
+           "no squares at all is reported as the broken premise: " + v);
+  }
+  {
+    const v = s.check(withEllipse(null), { before });
+    assert(v && /no layer has a track matte set/.test(v),
+           "a shape that mattes nothing fails: " + v);
+  }
+  {
+    // The shape was already there and the model added none.
+    const had = withEllipse(null);
+    const v = s.check(withEllipse("Red Square 1"), { before: had });
+    assert(v && /already 1 shape layer/.test(v),
+           "reusing an existing shape layer fails: " + v);
+  }
+  {
+    // Matted, but the TEXT got the matte — the sentence mattes a square.
+    const v = s.check(withEllipse("HELLO"), { before });
+    assert(v && /mattes a SQUARE/.test(v),
+           "the matte on the wrong kind of layer fails: " + v);
+  }
+  {
+    // A square IS matted, but by HELLO — the shape mattes nothing, which
+    // is precisely what "a shape exists AND something is matted" missed.
+    const c = withEllipse("Red Square 1");
+    c.layers.filter(l => l.name === "Red Square 1")[0].matteLayer = "HELLO";
+    const v = s.check(c, { before });
+    assert(v && /matted by HELLO/.test(v),
+           "a square matted by the text, not the new shape, fails: " + v);
+  }
+  {
+    const c = withEllipse("Red Square 1");
+    c.layers.filter(l => l.name === "Red Square 1")[0].matte = 5015;
+    const v = s.check(c, { before });
+    assert(v && /matte is luma, not alpha/.test(v),
+           "a luma matte where alpha was asked for fails: " + v);
+  }
+  {
+    const c = withEllipse("Red Square 1");
+    c.layers.filter(l => l.name === "Red Square 1")[0].matte = 5014;
+    const v = s.check(c, { before });
+    assert(v && /alpha inverted/.test(v),
+           "an INVERTED alpha matte hides what was to be kept: " + v);
+  }
+  {
+    // Legacy AE cannot name the matte layer; the type is the only read
+    // there, and it must still pass.
+    const c = withEllipse("Red Square 1");
+    const sq = c.layers.filter(l => l.name === "Red Square 1")[0];
+    sq.matteLayer = null;
+    sq.matteLayerKnown = false;
+    assert(s.check(c, { before }) === null,
+           "an AE that cannot name the matte layer still passes on type");
+  }
+}
+
 // --- show one layer through another -----------------------------------
 {
   const s = stepByTitle("show one layer through another");
   const before = room();
   const matted = after(before, c => { const b = find(c, "Beta");
-    b.matte = 5012; b.matteLayer = "HELLO"; });
+    b.matte = 5013; b.matteLayer = "HELLO"; b.matteLayerKnown = true; });
   assert(s.check(matted, { before }) === null,
          "Beta alpha-matted by HELLO is a pass");
-  assert(s.check(after(matted, c => { find(c, "Beta").matteLayer = null; }),
+  // On AE 23+ the matte LAYER is the existence test: removeTrackMatte
+  // leaves trackMatteType at the type it removed (measured 2026-09-02),
+  // so an alpha type with no matte layer is a matte that is GONE.
+  assert(/Beta has no track matte/.test(
+           s.check(after(matted, c => { find(c, "Beta").matteLayer = null; }),
+                   { before }) || ""),
+         "a stale ALPHA type with no matte layer is not a matte");
+  assert(s.check(after(matted, c => { const b = find(c, "Beta");
+                   b.matteLayer = null; b.matteLayerKnown = false; }),
                  { before }) === null,
          "and a legacy AE that cannot name the matte layer still passes");
   {
@@ -1742,7 +2073,7 @@ function everySquare(state, fn) {
   }
   {
     const backwards = after(before, c => { const t = find(c, "HELLO");
-      t.matte = 5012; t.matteLayer = "Beta"; });
+      t.matte = 5013; t.matteLayer = "Beta"; t.matteLayerKnown = true; });
     const v = s.check(backwards, { before });
     assert(v && /backwards/.test(v) && /matted by Beta/.test(v),
            "the text matted by Beta is backwards and fails: " + v);
@@ -1935,9 +2266,26 @@ const NEW_STEPS = [
   "tuck one layer under another", "take an effect off a layer",
   "show one layer through another", "package layers into a precomp",
   "clean up means the comp, not the project"];
-assert(JSON.stringify(titles.slice(14)) === JSON.stringify(NEW_STEPS),
-       "the trigger-layer steps are APPENDED after the fourteen the " +
-       "earlier assertions pin by index, in the order their fixtures need");
+// Relative order again, not slice(14): what matters is that every
+// trigger-layer step exists, that they keep the order their fixtures
+// need (the mask must be planted before it is taken off again), and
+// that they run after the steps that build the world they name.
+const USEFULNESS_STEPS = [
+  "arrange scattered layers into a grid",
+  "rig one slider to drive many layers",
+  "cascade the entrances",
+  "type a title on letter by letter",
+  "restyle a headline",
+  "soften the background",
+  "an effect on everything except one layer"];
+
+for (const t of NEW_STEPS) stepOrder(t);
+for (let i = 1; i < NEW_STEPS.length; i++) {
+  assert(stepOrder(NEW_STEPS[i]) > stepOrder(NEW_STEPS[i - 1]),
+         "'" + NEW_STEPS[i] + "' still runs after '" + NEW_STEPS[i - 1] +
+         "'");
+}
+assertAfter(NEW_STEPS[0], "the model re-plans after a round is rolled back");
 
 const toolsWin = {};
 new Function("window", toolsSrc)(toolsWin);
@@ -1974,7 +2322,13 @@ const RULES = [
   ["stop it moving", "set_expression[\\s\\S]{0,60}removed: 0"],
   ["get rid of the blur", "remove_effect"],
   ["remove that mask", "delete_mask"],
-  ["tidy this COMP", "NEVER clean_project"]
+  // Row 29 measured 2026-09-02: all four phrasings avoided
+  // clean_project (that half already worked) and went straight for a
+  // destructive tool instead, so the bullet now leads with the ask
+  // and carries the two wrong turns it took as anti-targets.
+  ["junk everywhere", "never clean_project"],
+  ["sort out this COMP", "ask what should go"],
+  ["a mess / junk everywhere", "no remove_keyframes or delete_layer over"]
 ];
 for (const [phrase, tool] of RULES) {
   // A quoted-phrase bullet ("- '…") whose phrase list may wrap onto a
@@ -1986,8 +2340,13 @@ for (const [phrase, tool] of RULES) {
 }
 assert(/clean up \/ tidy \/ shrink the PROJECT/.test(rules),
        "the project-panel clean-up rule now says PROJECT");
-assert(/the one exception\s+to ACT,\s+DON'T ASK: deletions nobody named/.test(rules),
+assert(/the one exception to ACT, DON'T ASK/.test(rules),
        "the ask-first clean-up rule scopes itself against ACT, DON'T ASK");
+assert(/NAMES NOTHING: ask what should go and\s+return commands: \[\]/
+         .test(rules),
+       "...and the ask comes FIRST, before the removal tools: the old " +
+       "order put the tool list ahead of it and the model read no " +
+       "further (measured, row 29)");
 // Phrases the review struck: bare 'under' as a STACKING word collides
 // with get_bounds' on-screen 'put it under the logo'; 'freeze' is AE's
 // Freeze Frame (a future retime tool), not remove_keyframes.
@@ -2042,12 +2401,163 @@ for (const name of ["reorder_layers", "remove_effect", "delete_mask",
          quoted.length + ")");
 }
 {
+  // Hiding PART of a layer is not a retime, and not a transform.
+  //
+  // Measured 2026-09-02, real AE + the real 32B, --variants on the "hide
+  // half a layer with a mask" row: 2 pass / 2 miss. "Chop off the lower
+  // half of Beta so only the top shows" routed to set_layer_timing (it
+  // read "chop off" as the sibling of the timing rule's "trim it"), and
+  // "I only want to see the top half of Beta" routed to
+  // center_anchor_point + set_transform. Neither wording appeared in the
+  // mask bullet, and nothing in the prompt said which tools masking is
+  // NOT. Both are one bullet away, so both are pinned here: the phrases
+  // AND the anti-targets. The bullet wraps across prompt lines, so the
+  // phrases are matched on a flowed copy of it.
+  const bullets = rules.split(/\n(?=- ')/);
+  const maskRule = bullets.filter(b => /^- 'crop/.test(b))[0];
+  assert(!!maskRule, "the plain-English rules still carry a crop/mask bullet");
+  const flow = (maskRule || "").replace(/\s+/g, " ");
+  for (const phrase of ["chop off the lower half", "hide the bottom half",
+                        "only the top shows", "cut a hole", "vignette"]) {
+    assert(flow.indexOf(phrase) !== -1,
+           "the mask bullet still carries '" + phrase + "'");
+  }
+  assert(/add_mask/.test(flow), "and routes them to add_mask");
+  assert(/never set_layer_timing/.test(flow),
+         "and says outright that masking is never set_layer_timing (the " +
+         "canonical's measured wrong turn)");
+  assert(/scale/.test(flow) && /anchor/.test(flow),
+         "and rules out scale and anchor too (the casual phrasing's)");
+  // The bullet's growth was paid for by dropping "add_mask creates a mask
+  // (rectangle/ellipse/custom points)" from the Masks section — allowed
+  // ONLY because the args line, which compact mode also keeps, spells the
+  // shapes out. Put the prose back and the budget breaks; drop the args
+  // and the model loses the enum entirely.
+  assert(/'rectangle'\|'ellipse'\|'custom'/.test(defsByName.add_mask.args),
+         "add_mask's args line names the shapes the rules no longer repeat");
+}
+{
+  // A cheap-feeling entrance is an EASING complaint, not a restaging job.
+  //
+  // Measured 2026-09-02, real AE + the real 32B, --variants on "smooth a
+  // mechanical fade": "the squares' entrance feels cheap, fix it" reached
+  // stagger_layers (and then distribute_property) twice in a row. It moved
+  // nine layers in TIME and left every opacity key linear - the sentence
+  // asked how the animation FEELS, and the bullet's phrase list carried
+  // 'smoother / snappier / less robotic / mechanical' but nothing a user
+  // says when they cannot name the curve. The neighbouring stagger phrase
+  // in the SAME bullet is what it fell into, so the anti-target is pinned
+  // here beside the vocabulary.
+  const bullets = rules.split(/\n(?=- ')/);
+  const easeRule = bullets.filter(b => /^- 'stagger with an ease'/.test(b))[0];
+  assert(!!easeRule, "the rules still carry the bezier-family bullet");
+  const flow = (easeRule || "").replace(/\s+/g, " ");
+  for (const phrase of ["smoother", "snappier", "less robotic", "mechanical",
+                        "feels cheap"]) {
+    assert(flow.indexOf(phrase) !== -1,
+           "the ease bullet carries '" + phrase + "'");
+  }
+  assert(/never stagger_layers \(that moves\s*layers in TIME\)/.test(flow) ||
+         /never stagger_layers \(that moves layers in TIME\)/.test(flow),
+         "and rules out stagger_layers by name, with the reason (" + flow + ")");
+  // The addition was paid for by three docs that repeated a phrase list the
+  // rules already carry - the rules block is never compacted, so the second
+  // copy bought nothing. Put any of them back and the full prompt breaks its
+  // ceiling (see tests/test-context-budget.js).
+  const CUT = {
+    apply_keyframe_ease: ["smoother", "on the property that HAS the keys"],
+    precompose: ["group these"],
+    remove_keyframes: ["un-animate it"]
+  };
+  for (const name of Object.keys(CUT)) {
+    for (const gone of CUT[name]) {
+      assert(defsByName[name].desc.indexOf(gone) === -1,
+             name + "'s doc no longer repeats '" + gone + "' (the rules " +
+             "block carries it, and compact mode keeps the rules)");
+    }
+    assert(rules.indexOf(name) !== -1,
+           "...and the rules still route to " + name);
+  }
+  assert(/un-animate it/.test(rules),
+         "'un-animate it' survives the cut - in the rules, once");
+}
+{
   // The audit measured set_layer_timing as the SHORTEST doc in the file.
   const shortest = ToolsMod.TOOL_DEFS.slice().sort((a, b) =>
     a.desc.length - b.desc.length)[0];
   assert(shortest.name !== "set_layer_timing",
          "set_layer_timing is no longer the shortest tool doc (that is " +
          shortest.name + " now, " + shortest.desc.length + " chars)");
+}
+
+// ------------------------------------------- a rolled-back round is EVIDENCE
+//
+// Measured 2026-09-02, real AE + the real 32B, doing the compact-vs-full
+// routing comparison: the "sync to the music" step scored FAIL in one
+// run and pass in the next on IDENTICAL model behaviour. Both times the
+// model called audio_to_keyframes, the host refused it with the grounded
+// "no layer has audio", and the model relayed that refusal. The only
+// difference was whether the round ROLLED BACK — and the probe used to
+// `return` before recording a rolled-back command, so its whole round
+// was invisible to the step's check, which then said "the model never
+// reached audio_to_keyframes and ran no tools at all".
+//
+// A verdict that flips on something the model did not do is worse than
+// no verdict: in a comparison between two prompt forms it is
+// indistinguishable from a routing regression.
+{
+  const cmd = { tool: "audio_to_keyframes", args: { comp: "Probe Room" } };
+  const back = probe.toolEntry(cmd,
+    { ok: false, rolledBack: true,
+      error: "No layer in 'Probe Room' has audio, and AE's converter " +
+             "would silently do nothing." });
+  assert(back.tool === "audio_to_keyframes",
+         "a rolled-back command is still recorded — the ATTEMPT is what " +
+         "a routing verdict reads");
+  assert(back.ok === false && back.data === null,
+         "but it is never scored as applied: ok false, data null");
+  assert(back.rolledBack === true,
+         "and it says it was rolled back");
+  assert(/no layer/i.test(back.error),
+         "carrying the host's grounded error, which is what the refusal " +
+         "branch of a check matches on");
+  const plainFail = probe.toolEntry(cmd, { ok: false, error: "boom" });
+  assert(plainFail.rolledBack === false && plainFail.error === "boom",
+         "an ordinary failure is unchanged by the fix");
+  const good = probe.toolEntry({ tool: "add_solid", args: {} },
+                               { ok: true, data: { name: "X" } });
+  assert(good.ok === true && good.data.name === "X" &&
+         good.rolledBack === false,
+         "and so is a success");
+  // The end the bug was actually felt at: the step's own check.
+  const music = stepByTitle("sync a layer to the music");
+  const verdict = music.check(comp([]), {
+    tools: [back],
+    replies: ["There is no audio in the 'Probe Room' comp. Please import " +
+              "an audio file into the composition first."]
+  });
+  assert(verdict === null,
+         "the silent rig's honest refusal PASSES even when the round " +
+         "rolled back (this returned 'never reached audio_to_keyframes " +
+         "and ran no tools at all' before the fix)");
+  // What the OLD loop handed the same check — an empty tools array,
+  // because it returned before recording. Pinned so the delta is a
+  // measured fact and not a claim in a comment.
+  assert(/never reached audio_to_keyframes/.test(
+           String(music.check(comp([]), { tools: [], replies: [] }))),
+         "and an unrecorded round is exactly what produced the false FAIL");
+  // The record has to happen in the LOOP, not just be possible: the bug
+  // was a `return` placed before the push.
+  assert(/round\.rolledBack\+\+;[\s\S]{0,200}round\.tools\.push\(toolEntry/
+           .test(probeSrc),
+         "the rolled-back branch of the round loop records the command " +
+         "before it returns");
+  // ...and the other direction: a rolled-back conversion must not be
+  // read as a conversion that happened.
+  const wouldBeOk = probe.toolEntry(cmd, { ok: true, data: { keys: 180 },
+                                           rolledBack: true });
+  assert(wouldBeOk.ok === false,
+         "a command that succeeded and was then undone is not a success");
 }
 
 // The runner plants a step's fixture BEFORE the before-state is read, so
@@ -2057,6 +2567,797 @@ assert(typeof probe.runPrepare === "function",
 assert(/runPrepare\(step, function \(\) \{\s*aeRead\(READ_COMP, function \(before\)/
          .test(probeSrc),
        "and the runner calls it before reading the before-state");
+
+// --- isolation: no step may ride the one before it --------------------
+//
+// docs/AUDIT-0.11.md part 1.4: "shared history never resets — later
+// variants ride earlier successes". It is not only a variance problem.
+// In the field (WORKPLAN-LOG, 0.11.7) one wrong layer name in step 2
+// stayed in the conversation and poisoned six later steps, so the run
+// reported six failures for one mistake.
+
+assert(typeof probe.resetHistory === "function",
+       "the probe exports resetHistory");
+{
+  probe.history.push({ role: "user", content: "something earlier" });
+  probe.sessionNotices.ledger = true;
+  probe.sessionNotices.starved = true;
+  probe.resetHistory();
+  assert(probe.history.length === 0, "resetHistory empties the history");
+  // main.js scopes both notices to a CONVERSATION, so a new conversation
+  // gets to show them again — otherwise the next step's first trim is
+  // silent and the transcript stops being readable step by step.
+  assert(probe.sessionNotices.ledger === false &&
+         probe.sessionNotices.starved === false,
+         "and puts the once-per-conversation notices back");
+}
+
+{
+  const carriers = STEPS.filter(s => s.carry).map(s => s.title);
+  assert(JSON.stringify(carriers) ===
+           JSON.stringify(["a second turn that refers back"]),
+         "exactly one step carries the previous turn's history, and it " +
+         "is the one whose sentence is a pronoun: " + carriers.join(", "));
+  // Every other step has to NAME what it is talking about, or clearing
+  // the history breaks it. "them"/"it"/"that" with no noun after it is
+  // the shape that cannot survive a fresh conversation.
+  const dangling = STEPS.filter(s => !s.carry &&
+    /^(?:make|do) (?:them|it|those|that)\b/i.test(s.say)).map(s => s.title);
+  assert(dangling.length === 0,
+         "no fresh-history step opens with a bare pronoun: " +
+         dangling.join(", "));
+}
+
+{
+  // The rig is only worth having if it builds everything the steps that
+  // start from it name. Checked against the PLAN, so a fixture that
+  // quietly stops being built is caught with no AE.
+  const plan = probe.rigPlan();
+  const built = plan.map(c => (c.args && c.args.name) || "")
+    .filter(Boolean);
+  for (const want of ["Red Square 1", "Red Square 9", "Rig", "Beta"]) {
+    assert(built.indexOf(want) !== -1,
+           "the rig builds " + want + " (a fromRig step names it)");
+  }
+  assert(plan.filter(c => c.tool === "add_text_layer" &&
+                          c.args.text === "HELLO").length === 1,
+         "the rig builds the HELLO text layer");
+  assert(plan.filter(c => c.tool === "add_mask" &&
+                          c.args.layer === "HELLO" &&
+                          c.args.shape === "ellipse").length === 1,
+         "and the oval mask that 'take a mask off again' removes");
+  assert(plan.filter(c => c.tool === "set_keyframes" &&
+                          c.args.property === "opacity").length === 9,
+         "and a fade on every square, for the ease and un-animate steps");
+  // Beta must be created LAST: layers land at index 1, and "Beta is
+  // covering HELLO, tuck it underneath" is only true if it starts above.
+  const betaAt = plan.map((c, i) => c.args && c.args.name === "Beta"
+    ? i : -1).filter(i => i !== -1);
+  const helloAt = plan.map((c, i) => c.tool === "add_text_layer" ? i : -1)
+    .filter(i => i !== -1);
+  assert(betaAt[0] > helloAt[0],
+         "Beta is added after HELLO, so it starts above the text");
+  // grid_layout would add a "GRID CTRL" solid and rig expressions; the
+  // squares() helper filters that name out, and a rig should hold
+  // nothing the sentences do not name.
+  assert(plan.filter(c => c.tool === "grid_layout").length === 0,
+         "the rig places the grid by hand, with no controller layer");
+  const script = probe.rigScript();
+  assert(/AELL_callBatch\(/.test(script),
+         "the rig runs as ONE batch — one script execution, one undo group");
+  assert(/res\.data && res\.data\.results/.test(script),
+         "and reads AELL_callBatch's {ok, data:{results}} envelope, not " +
+         "a bare array");
+  assert(/failed/.test(script),
+         "a rig command that failed is NAMED, not swallowed");
+}
+
+{
+  const fromRig = STEPS.filter(s => s.fromRig).map(s => s.title);
+  assert(JSON.stringify(fromRig) ===
+           JSON.stringify(NEW_STEPS.concat(USEFULNESS_STEPS)),
+         "every trigger-layer and usefulness step can start from a rig, " +
+         "and no world-BUILDING step claims to: " + fromRig.join(", "));
+  // The world-building steps must NOT reset the comp: building it
+  // through the model is their whole coverage.
+  for (const t of ["create a comp", "grid layout", "text layer", "mask",
+                   "track matte", "parenting"]) {
+    assert(!stepByTitle(t).fromRig,
+           "'" + t + "' builds the world instead of inheriting it");
+  }
+}
+
+assert(/function resetWorld\(step, cb\)/.test(probeSrc) &&
+       /resetWorld\(step, function \(\) \{/.test(probeSrc),
+       "the runner asks resetWorld what a step may inherit, before the " +
+       "step runs");
+assert(/if \(!OPT\.carryHistory && !step\.carry\) resetHistory\(\);/
+         .test(probeSrc),
+       "history resets by DEFAULT — carrying it is the exception a step " +
+       "has to ask for");
+assert(/if \(!OPT\.isolate \|\| !step\.fromRig\) \{ cb\(\); return; \}/
+         .test(probeSrc),
+       "and the comp resets only under --isolate, and only for a step " +
+       "that can start from the rig");
+
+// ------------------------------------------------- the paraphrase matrix
+//
+// WORKPLAN section 8, second bullet. The matrix runs the SAME sentence
+// three more ways and asks whether the product needed the magic words.
+// Its whole value rests on one judgement — is a run that failed its
+// check a harmless miss or a harmful one — and that judgement is made by
+// compDiff/gradeRun, which are pure. So they are pinned here, with the
+// near-misses a careless change detector would wave through: an
+// expression that leaves the layer list untouched, a recolour, a matte
+// removed, a float that only wobbled in the last decimal.
+
+{
+  const base = over => Object.assign({
+    index: 1, name: "Beta", parent: null, masks: 0, effects: 0,
+    opacityKeys: 0, text: null, matteLayer: null, matteLayerKnown: true,
+    isPrecomp: false, textAnimators: 0, matte: 5012, rotation: 0,
+    opacity: 100, inPoint: 0, startTime: 0, fontSize: null,
+    position: [100, 100, 0], scale: [100, 100, 100],
+    anchorPoint: [50, 50, 0], solidColor: [1, 0, 0], fillColor: null,
+    effectNames: [], maskModes: [], maskInverted: [], maskRound: [],
+    maskFeather: [], maskBoxes: [], opacityKeyEased: [], expressions: {}
+  }, over || {});
+  const comp = layers => ({ found: true, name: "Probe Room", width: 1920,
+    height: 1080, duration: 6, frameRate: 30, layers: layers });
+  const one = over => comp([base(over)]);
+  const diff = (a, b) => probe.compDiff(a, b);
+
+  assert(diff(one({}), one({})).length === 0,
+         "compDiff: an untouched comp reads as no change at all");
+
+  // The float noise a deep compare would report as a mutation. AE hands
+  // back positions and rotations that wobble in the last decimal after a
+  // round trip, and every one of those would have been a phantom HARM.
+  assert(diff(one({}),
+              one({ position: [100.0001, 100, 0], rotation: 0.001,
+                    opacity: 100.002 })).length === 0,
+         "compDiff: a float that only moved in the last decimal is not a " +
+         "change");
+  assert(diff(one({}), one({ position: [140, 100, 0] })).length === 1,
+         "compDiff: but a layer that really moved 40px is");
+
+  // The changes SIG_FN cannot see, because none of them alters the layer
+  // list or a transform value. An expression on the wrong layer is
+  // exactly the harm this matrix exists to catch, and a signature-based
+  // detector would have called every one of these "nothing happened".
+  assert(/expression added to position/
+           .test(diff(one({}),
+                      one({ expressions: { position: "wiggle(1,10)" } }))[0]),
+         "compDiff: an expression appearing is a change (SIG_FN cannot " +
+         "see one)");
+  assert(diff(one({ expressions: { position: "wiggle(1,10)" } }),
+              one({}))[0] === "Beta: expression removed from position",
+         "compDiff: and an expression disappearing is too");
+  assert(/opacityKeyEased/.test(diff(one({ opacityKeys: 2,
+              opacityKeyEased: [false, false] }),
+            one({ opacityKeys: 2, opacityKeyEased: [true, true] }))[0]),
+         "compDiff: keys that got eased are a change even though the key " +
+         "COUNT did not move");
+  assert(/solidColor/.test(diff(one({}),
+            one({ solidColor: [0, 0, 1] }))[0]),
+         "compDiff: a recoloured solid is a change");
+
+  // The matte pair. removeTrackMatte leaves trackMatteType behind (the
+  // AE 2026 measurement this repo already pins), so a matte that was
+  // taken off shows up as the matte LAYER going — once.
+  const matted = one({ matte: 5013, matteLayer: "HELLO" });
+  const unmatted = one({ matte: 5013, matteLayer: null });
+  assert(diff(matted, unmatted).length === 1 &&
+         /matteLayer HELLO -> none/.test(diff(matted, unmatted)[0]),
+         "compDiff: a matte removed reads as the LAYER going, once");
+
+  // Layers arriving and leaving, by name.
+  const two = comp([base({}), base({ index: 2, name: "HELLO",
+    isText: true, text: "HELLO" })]);
+  assert(diff(one({}), two).join("") === "layer added: HELLO",
+         "compDiff: a layer that appeared is named");
+  assert(diff(two, one({})).join("") === "layer removed: HELLO",
+         "compDiff: and one that vanished");
+  assert(diff(one({}), { found: false })[0] === "THE COMP IS GONE",
+         "compDiff: a sentence that deleted the whole comp is the loudest " +
+         "change there is, not a harmless miss");
+  // Nothing to compare against is not the same as nothing changed, but
+  // it must not throw either: the world-building steps have no `before`.
+  assert(diff(null, one({})).length === 0 && diff(one({}), null).length === 0,
+         "compDiff: a missing state on either side is empty, never a throw");
+
+  // --------------------------------------------------------- the grade
+  assert(probe.gradeRun(null, []) === "pass" &&
+         probe.gradeRun(null, ["Beta: parent none -> Rig"]) === "pass",
+         "gradeRun: a satisfied check is a pass, however much moved — " +
+         "doing the job IS changing the comp");
+  assert(probe.gradeRun("Beta has no track matte", []) === "miss",
+         "gradeRun: a failed check with an untouched comp is a harmless " +
+         "miss (refused, asked, or rolled back)");
+  assert(probe.gradeRun("Beta has no track matte",
+           ["HELLO: matteLayer none -> Beta"]) === "harm",
+         "gradeRun: a failed check that moved something anyway is HARM — " +
+         "the wrong-target mutation the matrix exists to find");
+}
+
+{
+  // The runs a selection expands to.
+  const idx = STEPS.map((s, i) => i);
+  const plain = probe.variantRuns(idx, false);
+  assert(plain.length === STEPS.length &&
+         plain.every(r => r.phrasing === "canonical"),
+         "variantRuns: without --variants a selection is exactly the " +
+         "steps it names, unchanged");
+  assert(plain.every((r, i) => r.say === STEPS[i].say),
+         "and every run types the step's own sentence");
+  const full = probe.variantRuns(idx, true);
+  const declared = STEPS.reduce((a, s) =>
+    a + (s.carry ? 0 : (s.variants || []).length), 0);
+  assert(full.length === STEPS.length + declared,
+         "variantRuns: with --variants, one run per phrasing (" +
+         full.length + " over " + STEPS.length + " steps)");
+  // The canonical must come FIRST for each step: the matrix reads
+  // "did the paraphrase miss where the canonical passed", and that
+  // question is unanswerable if the canonical has not run yet.
+  const seen = {};
+  assert(full.every(r => {
+    if (r.phrasing === "canonical") { seen[r.index] = true; return true; }
+    return seen[r.index];
+  }), "and the canonical sentence runs before its own paraphrases");
+  // A pronoun cannot be rephrased without rephrasing the turn it points
+  // at, so the carry step never takes variants.
+  assert(STEPS.filter(s => s.carry).every(s => !(s.variants || []).length),
+         "the step whose sentence is a pronoun declares no paraphrases");
+
+  // Every variant-bearing step must be able to start from the rig, or
+  // its second phrasing measures the first phrasing's leftovers. This is
+  // the invariant the whole matrix rests on.
+  const loose = STEPS.filter(s => (s.variants || []).length && !s.fromRig)
+    .map(s => s.title);
+  assert(loose.length === 0,
+         "every step with paraphrases can be reset to the rig, so two " +
+         "phrasings cannot contaminate each other: " + loose.join(", "));
+  // ...and --variants must actually turn that reset on.
+  assert(/if \(OPT\.variants\) OPT\.isolate = true;/.test(probeSrc),
+         "--variants implies --isolate — a paraphrase run from an unknown " +
+         "world measures the world");
+
+  // Casual / vague / typo'd, per the workplan, and 2-3 of them.
+  const KINDS = ["casual", "vague", "typo"];
+  for (const s of STEPS.filter(x => (x.variants || []).length)) {
+    const kinds = s.variants.map(v => v.kind);
+    assert(s.variants.length >= 2 && s.variants.length <= 3,
+           "'" + s.title + "' declares 2-3 paraphrases (" +
+           s.variants.length + ")");
+    assert(kinds.every(k => KINDS.indexOf(k) !== -1) &&
+           new Set(kinds).size === kinds.length,
+           "and they are distinct casual/vague/typo phrasings: " +
+           kinds.join(", "));
+    assert(s.variants.every(v => typeof v.say === "string" &&
+                                 v.say.trim().length > 8),
+           "and each one is a real sentence");
+    // A paraphrase that repeats the canonical measures nothing.
+    const norm = t => t.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    assert(s.variants.every(v => norm(v.say) !== norm(s.say)),
+           "and none of them is the canonical sentence again");
+  }
+  // Every one of the roadmap-item-2 trigger mappings is covered: those
+  // are exactly the steps that name the tool their sentence is meant to
+  // reach, and a mapping with no paraphrase is a mapping still only
+  // proven against its own vocabulary.
+  const bare = STEPS.filter(s => s.tool && !(s.variants || []).length)
+    .map(s => s.title);
+  assert(bare.length === 0,
+         "every step that names a target tool carries paraphrases: " +
+         bare.join(", "));
+}
+
+{
+  // The acceptance gate. Its exact wording is the workplan's: no variant
+  // may do harm, and at most one may miss where the canonical passes.
+  const row = (index, phrasing, grade, verdict) => ({
+    index: index, title: "step " + index, phrasing: phrasing, grade: grade,
+    verdict: verdict || null, say: "a sentence", tools: [] });
+  const clean = [row(1, "canonical", "pass"), row(1, "casual", "pass"),
+                 row(1, "vague", "pass"), row(1, "typo", "pass")];
+  assert(probe.gradeMatrix(clean).length === 0,
+         "gradeMatrix: four phrasings, four passes, nothing to report");
+  const oneMiss = clean.slice(0, 3).concat([row(1, "typo", "miss", "no")]);
+  assert(probe.gradeMatrix(oneMiss).length === 0,
+         "gradeMatrix: ONE paraphrase missing where the canonical passed " +
+         "is within the acceptance the workplan states");
+  const twoMiss = clean.slice(0, 2)
+    .concat([row(1, "vague", "miss", "no"), row(1, "typo", "miss", "no")]);
+  assert(probe.gradeMatrix(twoMiss).length === 1 &&
+         /needs magic words/.test(probe.gradeMatrix(twoMiss)[0]),
+         "gradeMatrix: two of three missing is not a fluke — it is a tool " +
+         "that needs magic words");
+  const harmed = clean.slice(0, 3)
+    .concat([row(1, "typo", "harm", "Beta has no track matte")]);
+  const hp = probe.gradeMatrix(harmed);
+  assert(hp.length === 1 && /^HARM/.test(hp[0]),
+         "gradeMatrix: one harm fails the run even though three phrasings " +
+         "of four were clean");
+  // ...and harm is reported even when the canonical itself failed, so a
+  // broken step cannot hide a destructive paraphrase behind it.
+  const both = [row(2, "canonical", "miss", "nothing happened"),
+                row(2, "casual", "harm", "the layers went")];
+  const bp = probe.gradeMatrix(both);
+  assert(bp.filter(p => /^HARM/.test(p)).length === 1 &&
+         bp.filter(p => /CANONICAL/.test(p)).length === 1,
+         "gradeMatrix: a failed canonical is reported AND still cannot " +
+         "hide a harmful paraphrase behind it");
+  // A group with no canonical in it must not be scored against one it
+  // never ran.
+  assert(probe.gradeMatrix([row(3, "casual", "miss", "no")]).length === 0,
+         "gradeMatrix: a group with no canonical is not scored against " +
+         "one it never ran");
+}
+
+
+// ------------------------------------------- the second rig, and the
+// A/B/C/E usefulness rows that start from it
+//
+// WORKPLAN section 8: "the A/B/C/E rows with no rig twin (A1 grid, A2
+// slider rig, B1 stagger, C1 typewriter, C2 text style, E1 blur, E2
+// for_each) need NEW rig-based steps before they can take paraphrases."
+// They ask for exactly what the FULL rig already has — a grid, a fade,
+// a style — so they start from the UNFINISHED "icons" rig instead. Every
+// assertion below is about an ABSENCE: if the icon rig ever starts
+// shipping the thing a sentence asks for, that sentence stops measuring
+// anything and its step passes forever on a no-op.
+
+for (const t of USEFULNESS_STEPS) {
+  assert(stepByTitle(t).fromRig === "icons",
+         "'" + t + "' starts from the unfinished icon rig, not the " +
+         "finished one");
+}
+
+{
+  const plan = probe.iconRigPlan();
+  const built = plan.map(c => (c.args && c.args.name) || "").filter(Boolean);
+  for (const want of [probe.ICON_BG, "Icon 1",
+                      "Icon " + probe.RIG_ICONS]) {
+    assert(built.indexOf(want) !== -1,
+           "the icon rig builds " + want);
+  }
+  assert(plan.filter(c => c.tool === "add_text_layer" &&
+                          c.args.text === probe.ICON_TEXT).length === 1,
+         "and one " + probe.ICON_TEXT + " text layer");
+  // The background must be added FIRST: every layer AE adds lands at
+  // index 1, so the first one added ends up at the bottom — which is
+  // what "except the background" and "soften the background" both mean
+  // by background.
+  assert(plan.findIndex(c => c.args && c.args.name === probe.ICON_BG) <
+         plan.findIndex(c => c.args && c.args.name === "Icon 1"),
+         "the background is added before the icons, so it ends up " +
+         "beneath them");
+  for (const forbidden of ["set_keyframes", "grid_layout", "apply_effect",
+                           "set_layer_parent", "link_property",
+                           "add_control", "add_text_animator",
+                           "apply_keyframe_ease", "stagger_layers"]) {
+    assert(plan.every(c => c.tool !== forbidden),
+           "the icon rig never runs " + forbidden + " — that is what the " +
+           "sentences are for");
+  }
+  // Off-grid on purpose: no two icons share an x or a y, so "is it a
+  // grid now?" can only be answered by what the model did.
+  const xs = probe.ICON_SPOTS.map(p => p[0]);
+  const ys = probe.ICON_SPOTS.map(p => p[1]);
+  assert(new Set(xs).size === probe.RIG_ICONS &&
+         new Set(ys).size === probe.RIG_ICONS,
+         "the icons start scattered — no shared row, no shared column");
+  assert(probe.ICON_SPOTS.length === probe.RIG_ICONS,
+         "one spot per icon");
+  const script = probe.rigScript("icons");
+  assert(/AELL_callBatch\(/.test(script) &&
+         script.indexOf("Red Square") === -1,
+         "rigScript('icons') builds the icon rig, not the full one");
+  assert(probe.rigScript().indexOf("Red Square") !== -1,
+         "and rigScript() with no variant still builds the full one");
+}
+
+/* The icon rig as READ_COMP would report it: HEADLINE on top, the icons
+ * under it, the background at the bottom. */
+function iconWorld(over) {
+  const layers = [];
+  layers.push(layer({ index: 1, name: probe.ICON_TEXT, isText: true,
+    text: probe.ICON_TEXT, fontSize: probe.ICON_FONT_SIZE,
+    fillColor: [1, 1, 1], position: [960, 140, 0], layerWidth: 1920,
+    layerHeight: 1080 }));
+  for (let i = 0; i < probe.RIG_ICONS; i++) {
+    layers.push(square({ index: 2 + i, name: "Icon " + (i + 1),
+      solidColor: [0.1, 0.2, 0.9],
+      position: probe.ICON_SPOTS[i].concat([0]),
+      layerWidth: 160, layerHeight: 160,
+      sourceRect: { left: 0, top: 0, width: 160, height: 160 },
+      anchorPoint: [80, 80, 0] }));
+  }
+  layers.push(square({ index: 2 + probe.RIG_ICONS, name: probe.ICON_BG,
+    solidColor: [0.12, 0.12, 0.14], position: [960, 540, 0],
+    layerWidth: 1920, layerHeight: 1080,
+    sourceRect: { left: 0, top: 0, width: 1920, height: 1080 },
+    anchorPoint: [960, 540, 0] }));
+  const c = comp(layers);
+  for (const k in over) c[k] = over[k];
+  return c;
+}
+/** The icons of a world, in rig order. */
+function icons(state) {
+  return state.layers.filter(l => /^Icon \d+$/.test(l.name));
+}
+
+{
+  uid = 0;
+  assert(probe.rigProblems("icons", iconWorld()).length === 0,
+         "the icon rig as built has nothing missing: " +
+         probe.rigProblems("icons", iconWorld()).join("; "));
+  assert(/no comp/.test(probe.rigProblems("icons", { found: false })[0]),
+         "and a missing comp is named, not thrown on");
+  // Each fixture removed in turn — a rig that quietly stops building one
+  // of these is a step failing every night for a reason that is not the
+  // model's, which is the whole reason rigProblems is pure.
+  const cases = [
+    [w => { w.layers = w.layers.filter(l => l.name !== "Icon 3"); },
+     /icon layers, wanted/, "an icon that went missing"],
+    [w => { icons(w).forEach((l, i) => { l.position = [200 + i * 200, 400,
+       0]; }); }, /already line up/, "icons that already sit in a row"],
+    [w => { icons(w)[0].expressions = { scale: "x" }; },
+     /already carry an expression/, "an icon already rigged"],
+    [w => { icons(w)[0].opacityKeys = 2; }, /already animated/,
+     "an icon already animated"],
+    [w => { icons(w)[0].effects = 1;
+            icons(w)[0].effectNames = ["Gaussian Blur"]; },
+     /already carry an effect/, "an effect already applied"],
+    [w => { w.layers = w.layers.filter(l => l.name !== probe.ICON_BG); },
+     /no BG layer/, "a missing background"],
+    [w => { w.layers[w.layers.length - 1].layerWidth = 200; },
+     /wanted the full frame/, "a background that is not full frame"],
+    [w => { const bg = w.layers.pop(); w.layers.unshift(bg);
+            w.layers.forEach((l, i) => { l.index = i + 1; }); },
+     /bottom layer/, "a background that is not at the bottom"],
+    [w => { w.layers[0].fontSize = 120; }, /wanted 48/,
+     "a headline that is already big"],
+    [w => { w.layers[0].fillColor = [0.1, 0.3, 1]; }, /not white/,
+     "a headline that is already blue"],
+    [w => { w.layers[0].textAnimators = 1; }, /text animator/,
+     "a headline that already types on"],
+    [w => { icons(w)[0].parent = "Rig"; }, /already parented/,
+     "an icon that is already parented"],
+    [w => { w.frameRate = 25; }, /at 25/, "a comp built at the wrong rate"]
+  ];
+  for (const [mutate, re, what] of cases) {
+    uid = 0;
+    const w = iconWorld();
+    mutate(w);
+    const got = probe.rigProblems("icons", w);
+    assert(got.some(m => re.test(m)),
+           "rigProblems names " + what + " (got: " +
+           (got.join("; ") || "nothing") + ")");
+  }
+  // And the full rig is still checked by the same function: an empty
+  // comp is missing everything the trigger-layer steps name.
+  const empty = probe.rigProblems(null, comp([]));
+  assert(empty.some(m => /squares, wanted 9/.test(m)) &&
+         empty.some(m => /no HELLO layer/.test(m)) &&
+         empty.some(m => /no Rig null/.test(m)) &&
+         empty.some(m => /no Beta layer/.test(m)),
+         "rigProblems(null) still names every full-rig fixture: " +
+         empty.join("; "));
+}
+
+// --------------------------------------------------- A1: grid_layout
+{
+  const grid = stepByTitle("arrange scattered layers into a grid");
+  uid = 0; const before = iconWorld();
+  {
+    uid = 0; const after = iconWorld();
+    icons(after).forEach((l, i) => {
+      l.position = [700 + (i % 3) * 260, 400 + Math.floor(i / 3) * 260, 0];
+    });
+    assert(grid.check(after, { before: before }) === null,
+           "3x2 of six is a grid");
+  }
+  {
+    uid = 0; const after = iconWorld();
+    const v = grid.check(after, { before: before, tools: [] });
+    assert(/not a grid/.test(v || ""),
+           "leaving them scattered is a fail that says so (got: " + v + ")");
+  }
+  {
+    // grid_layout rigs POSITION expressions off its control null. If AE
+    // ever handed back the pre-expression value, a positions-only check
+    // would fail a correct answer.
+    uid = 0; const after = iconWorld();
+    icons(after).forEach(l => {
+      l.expressions = { position: 'thisComp.layer("GRID CTRL").effect(1)' };
+    });
+    after.layers.push(square({ name: "GRID CTRL", isNull: true }));
+    assert(grid.check(after, { before: before }) === null,
+           "a grid driven by the control rig's expressions counts");
+  }
+  {
+    uid = 0; const after = iconWorld();
+    icons(after).forEach((l, i) => {
+      l.position = [700 + (i % 3) * 260, 400 + Math.floor(i / 3) * 260, 0];
+    });
+    after.layers[after.layers.length - 1].position = [400, 200, 0];
+    const v = grid.check(after, { before: before });
+    assert(/background moved/.test(v || ""),
+           "gridding the BACKGROUND in with the icons is a fail (got: " +
+           v + ")");
+  }
+  {
+    uid = 0; const after = iconWorld();
+    after.layers = after.layers.filter(l => l.name !== "Icon 2");
+    const v = grid.check(after, { before: before });
+    assert(/wanted 6/.test(v || ""),
+           "a layout that lost a layer is a fail (got: " + v + ")");
+  }
+}
+
+// ------------------------------------------------ A2: one slider, many
+{
+  const rig = stepByTitle("rig one slider to drive many layers");
+  uid = 0; const before = iconWorld();
+  const linked = who => 'thisComp.layer("' + who +
+    '").effect("Master Scale")("Slider")';
+  {
+    uid = 0; const after = iconWorld();
+    icons(after).forEach(l => { l.expressions = { scale: linked("CTRL") }; });
+    assert(rig.check(after, { before: before }) === null,
+           "six scales driven off one control is a pass");
+  }
+  {
+    // The near-miss the row exists to catch: every icon IS the right
+    // size, and nothing controls any of them.
+    uid = 0; const after = iconWorld();
+    icons(after).forEach(l => { l.scale = [150, 150, 150]; });
+    const v = rig.check(after, { before: before, tools: [] });
+    assert(/scaled directly/.test(v || ""),
+           "scaling them all by hand is a fail that says why (got: " +
+           v + ")");
+  }
+  {
+    uid = 0; const after = iconWorld();
+    icons(after).forEach((l, i) => {
+      if (i < 4) l.expressions = { scale: linked("CTRL") };
+    });
+    const v = rig.check(after, { before: before });
+    assert(/4 of 6/.test(v || "") && /Icon 5/.test(v || ""),
+           "four of six linked is a fail that names the two left out " +
+           "(got: " + v + ")");
+  }
+  {
+    // Six sliders is not one slider, however many expressions were
+    // written — "one place to resize them from" is the whole ask.
+    uid = 0; const after = iconWorld();
+    icons(after).forEach((l, i) => {
+      l.expressions = { scale: linked("CTRL " + i) };
+    });
+    const v = rig.check(after, { before: before });
+    assert(/ONE slider/.test(v || ""),
+           "a control per icon is a fail (got: " + v + ")");
+  }
+}
+
+// -------------------------------------------------- B1: stagger a fade
+{
+  const casc = stepByTitle("cascade the entrances");
+  uid = 0; const before = iconWorld();
+  const fade = (l, t) => {
+    l.opacityKeys = 2; l.opacityKeyTimes = [t, t + 0.4];
+    l.opacityKeyEased = [false, false];
+  };
+  {
+    uid = 0; const after = iconWorld();
+    icons(after).forEach((l, i) => fade(l, i * 0.5));
+    assert(casc.check(after, { before: before }) === null,
+           "six fades half a second apart is a pass");
+  }
+  {
+    // stagger_layers moves START TIMES and leaves the keys where they
+    // are relative to the layer — the same answer, written the other way.
+    uid = 0; const after = iconWorld();
+    icons(after).forEach((l, i) => { fade(l, 0); l.startTime = i * 0.5; });
+    assert(casc.check(after, { before: before }) === null,
+           "the same fade on six layers retimed 0.5s apart is a pass too");
+  }
+  {
+    uid = 0; const after = iconWorld();
+    icons(after).forEach(l => fade(l, 0));
+    const v = casc.check(after, { before: before });
+    assert(/wanted six, half a second apart/.test(v || ""),
+           "six fades all at once is a fail (got: " + v + ")");
+  }
+  {
+    uid = 0; const after = iconWorld();
+    icons(after).forEach((l, i) => { if (i < 3) fade(l, i * 0.5); });
+    const v = casc.check(after, { before: before });
+    assert(/3 of 6/.test(v || "") && /Icon 4/.test(v || ""),
+           "half the icons left un-faded is a fail that names them (got: " +
+           v + ")");
+  }
+  {
+    uid = 0; const after = iconWorld();
+    const v = casc.check(after, { before: before, tools: [] });
+    assert(/nothing fades in/.test(v || ""),
+           "no keyframes at all is a fail (got: " + v + ")");
+  }
+  {
+    // Five frames apart is not half a second, and a check that only
+    // asked "are they different?" would wave it through.
+    uid = 0; const after = iconWorld();
+    icons(after).forEach((l, i) => fade(l, i / 30));
+    const v = casc.check(after, { before: before });
+    assert(/half a second apart/.test(v || ""),
+           "a stagger of one frame is a fail (got: " + v + ")");
+  }
+}
+
+// ------------------------------------------------- C1: typewriter
+{
+  const type = stepByTitle("type a title on letter by letter");
+  uid = 0; const before = iconWorld();
+  {
+    uid = 0; const after = iconWorld();
+    after.layers[0].textAnimators = 1;
+    assert(type.check(after, { before: before }) === null,
+           "a text animator on the headline is a pass");
+  }
+  {
+    // The miss that looks like an answer: the whole layer fades in
+    // together, which is not letter by letter.
+    uid = 0; const after = iconWorld();
+    after.layers[0].opacityKeys = 2;
+    after.layers[0].opacityKeyTimes = [0, 1];
+    const v = type.check(after, { before: before });
+    assert(/not letter by letter/.test(v || ""),
+           "fading the whole layer in is a fail that says why (got: " +
+           v + ")");
+  }
+  {
+    uid = 0; const after = iconWorld();
+    const v = type.check(after, { before: before, tools: ["set_keyframes"] });
+    assert(/no text animator/.test(v || ""),
+           "no animator is a fail (got: " + v + ")");
+  }
+  {
+    uid = 0; const after = iconWorld();
+    after.layers[0].textAnimators = 1;
+    after.layers.push(square({ name: "HEADLINE 2" }));
+    const v = type.check(after, { before: before });
+    assert(/not a new layer/.test(v || ""),
+           "a duplicate text layer per character is a fail (got: " +
+           v + ")");
+  }
+}
+
+// -------------------------------------------------- C2: restyle
+{
+  const style = stepByTitle("restyle a headline");
+  uid = 0; const before = iconWorld();
+  {
+    uid = 0; const after = iconWorld();
+    after.layers[0].fontSize = 140;
+    after.layers[0].fillColor = [0.106, 0.31, 1];
+    assert(style.check(after, { before: before }) === null,
+           "bigger and #1B4FFF is a pass");
+  }
+  {
+    uid = 0; const after = iconWorld();
+    after.layers[0].fontSize = 140;
+    const v = style.check(after, { before: before });
+    assert(/not blue/.test(v || ""),
+           "bigger but still white is a fail (got: " + v + ")");
+  }
+  {
+    uid = 0; const after = iconWorld();
+    after.layers[0].fillColor = [0.106, 0.31, 1];
+    const v = style.check(after, { before: before, tools: [] });
+    assert(/still 48px/.test(v || ""),
+           "blue but the same size is a fail (got: " + v + ")");
+  }
+  {
+    // "only the named layer" is half the row. Resizing the icons on the
+    // way to a bigger headline is the wrong-target mutation.
+    uid = 0; const after = iconWorld();
+    after.layers[0].fontSize = 140;
+    after.layers[0].fillColor = [0.106, 0.31, 1];
+    icons(after).forEach(l => { l.scale = [180, 180, 180]; });
+    const v = style.check(after, { before: before });
+    assert(/only HEADLINE was named/.test(v || ""),
+           "resizing the icons too is a fail (got: " + v + ")");
+  }
+}
+
+// ------------------------------------------------------- E1: blur the BG
+{
+  const soft = stepByTitle("soften the background");
+  uid = 0; const before = iconWorld();
+  const bgOf = w => w.layers[w.layers.length - 1];
+  {
+    uid = 0; const after = iconWorld();
+    bgOf(after).effects = 1;
+    bgOf(after).effectNames = ["Gaussian Blur"];
+    assert(soft.check(after, { before: before }) === null,
+           "a blur on the background is a pass");
+  }
+  {
+    // Locale and taste both vary; the verdict matches a WORD, so
+    // whichever blur the model reached for counts.
+    uid = 0; const after = iconWorld();
+    bgOf(after).effects = 1;
+    bgOf(after).effectNames = ["Camera Lens Blur"];
+    assert(soft.check(after, { before: before }) === null,
+           "any blur counts, not just Gaussian");
+  }
+  {
+    uid = 0; const after = iconWorld();
+    icons(after)[0].effects = 1;
+    icons(after)[0].effectNames = ["Gaussian Blur"];
+    const v = soft.check(after, { before: before });
+    assert(/landed on Icon 1/.test(v || ""),
+           "blurring an icon instead is a fail that names it (got: " +
+           v + ")");
+  }
+  {
+    // 'Soften' read as 'fade' — the layer is still sharp and now
+    // half-transparent, which is a change nobody asked for.
+    uid = 0; const after = iconWorld();
+    bgOf(after).opacity = 40;
+    const v = soft.check(after, { before: before });
+    assert(/not a fade/.test(v || ""),
+           "dropping the background's opacity is a fail (got: " + v + ")");
+  }
+  {
+    uid = 0; const after = iconWorld();
+    for (const l of after.layers) {
+      l.effects = 1; l.effectNames = ["Gaussian Blur"];
+    }
+    const v = soft.check(after, { before: before });
+    assert(/icons were blurred too/.test(v || ""),
+           "blurring everything is a fail (got: " + v + ")");
+  }
+}
+
+// ------------------------------------------ E2: everything EXCEPT one
+{
+  const each = stepByTitle("an effect on everything except one layer");
+  uid = 0; const before = iconWorld();
+  const shadow = l => { l.effects = 1; l.effectNames = ["Drop Shadow"]; };
+  {
+    uid = 0; const after = iconWorld();
+    icons(after).forEach(shadow);
+    shadow(after.layers[0]);
+    assert(each.check(after, { before: before }) === null,
+           "every layer but the background is a pass");
+  }
+  {
+    // The loudest harm this row can find: the EXCEPT ignored. A check
+    // that only counted shadows would score this above the pass.
+    uid = 0; const after = iconWorld();
+    for (const l of after.layers) shadow(l);
+    const v = each.check(after, { before: before });
+    assert(/was the whole instruction/.test(v || ""),
+           "shadowing the background too is a fail (got: " + v + ")");
+  }
+  {
+    uid = 0; const after = iconWorld();
+    icons(after).slice(0, 3).forEach(shadow);
+    const v = each.check(after, { before: before });
+    assert(/4 of 7 layers were skipped/.test(v || "") &&
+           /HEADLINE/.test(v || ""),
+           "three of seven shadowed is a fail that names the rest (got: " +
+           v + ")");
+  }
+  {
+    uid = 0; const after = iconWorld();
+    const v = each.check(after, { before: before, tools: [] });
+    assert(/no layer carries a drop shadow/.test(v || ""),
+           "no shadow anywhere is a fail (got: " + v + ")");
+  }
+}
 
 console.log(failed ? "\n" + failed + " assertion(s) failed"
                    : "\nall chat-probe verdict tests passed");

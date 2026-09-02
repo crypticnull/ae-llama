@@ -97,11 +97,47 @@ authoritative size verdict.
 4. [local] Measure pass: one export per controller type on a scratch
    project; hand the artifact to real Premiere ONCE; pin fixture +
    type map from what Premiere accepted.
+   **DONE 2026-09-02 except the Premiere half** —
+   `scripts/mogrt-verify-probe.js` + `.jsx` drive four controller kinds
+   (source text, opacity slider, position point, linked 2D scale) out of
+   real AE 2026 and grade the receipt through the SHIPPED hook. The pin
+   is `tests/fixtures/ae2026-definition.json`. It found the reader unable
+   to read ANY real export: `strDB` rows are
+   `{localeString: <locale>, str: <value>}` and the reader had those two
+   swapped, so every controller in every file AE ever wrote came back as
+   the string `"en_US"`. Also measured: the type key is `type`, never the
+   invented `controlType`; and `capsuleName` is the literal `"Untitled"`
+   in every export, so the template-name comparison was a permanent false
+   warning — replaced by comp-name parity, which AE does write.
+   **The pin was taken WITHOUT the Premiere gate, deliberately.** What
+   the gate guards against is run 1 grading the checker against its own
+   output; this fixture is not the checker's output, it is After Effects'
+   — and it was de-circularized the way the requirement above asks, by
+   PowerShell `System.IO.Compression.ZipFile` + `ConvertFrom-Json`, which
+   read the same four entries at the same sizes and the same four
+   controller names out of `uiName.strDB[0].str`. Premiere would answer a
+   DIFFERENT question (is the capsule usable), not "what does AE call its
+   fields", and holding the pin for it meant shipping a verifier that
+   could not read a single real file. Roster parity is now a VERDICT for
+   a flat `clientControls` read; nested groups and the fallback scan are
+   still unmeasured and still report as provisional.
+   Also unmeasured: exports containing a controller GROUP, and any
+   locale other than en_US.
+   Deviation from the Ordering requirement, recorded: the guard is not
+   "project file null AND numItems 0". The probe refuses any project that
+   already has a file OUTSIDE the repo's gitignored `logs\`, and adopts
+   an untitled one by saving it into `logs\mogrt-verify\` — an untitled
+   project is nobody's saved work, and `export_mogrt` cannot run from one
+   that was never saved. It also purges its own rig BY NAME before
+   building it: AE keeps two comps with one name happily, and a rig left
+   by an interrupted run made the probe grade the previous run's export.
 5. [local] scripts/mogrt-probe.js end-to-end under the selftest
    runner's triage; two consecutive green runs; wire into the
    overnight stage; patch bump.
 6. [manual, once per release] Drop the newest artifact into Premiere;
-   refresh the fixture on drift.
+   refresh the fixture on drift. **STILL OWED** — the newest artifact is
+   `logs\mogrt-verify\AELL Probe Card.mogrt`. If Premiere refuses it,
+   what changes is the STATUS of the pin above, not its field names.
 
 ---
 

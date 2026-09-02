@@ -22,7 +22,8 @@
             "result says so in 'note' — raise limit to see more.",
       args: "{limit?: int (default 40, 0 = every item)}" },
     { name: "get_comp_details", mutating: false,
-      desc: "Layers of a comp with index, name, type, timing, effects. A " +
+      desc: "Layers of a comp with index, name, type, timing, effects, " +
+            "track matte. A " +
             "long comp is capped to a window: SELECTED layers are always " +
             "included, and 'note' says how many layers exist and how to " +
             "page through them.",
@@ -88,11 +89,12 @@
     { name: "organize_project", mutating: true,
       desc: "File loose root-level items into Comps/Footage/Solids/Audio/" +
             "Images folders at the project ROOT. Items already inside a " +
-            "folder are left alone, and so is every existing folder. " +
+            "folder are left alone. " +
             "dryRun is TRUE by default and returns the moves it would " +
-            "make (item -> folder) plus any folder it would create — " +
-            "show them, then call again with dryRun:false. AE files a " +
-            "solid's source into its own Solids folder already, so a " +
+            "make (item -> folder) — " +
+            "show them, then call again with dryRun:false. The move is " +
+            "REFUSED until that list was shown in an EARLIER reply. " +
+            "AE already files a solid's source into Solids, so a " +
             "Solids count of 0 is normal.",
       args: "{dryRun?: bool (default TRUE)}" },
     { name: "clean_project", mutating: true,
@@ -104,12 +106,12 @@
             "'reduce_project' (delete EVERYTHING the comps in keepComps " +
             "do not need). dryRun is TRUE by default and returns the " +
             "list of what would go — show the user, especially the parts " +
-            "they did not ask about, then call again with dryRun:false. " +
+            "they did not ask about. The delete is REFUSED until that " +
+            "list was shown in an EARLIER reply. A comp or layer " +
+            "argument is refused, never ignored. " +
             "reduce_project refuses to run without keepComps, and refuses " +
             "a keepComps entry that is not a comp (AE would delete every " +
-            "comp in the project). It also names the render-queue items " +
-            "and the expressions that would break silently. PROJECT PANEL " +
-            "only ('clean up this comp' is never this tool).",
+            "comp in the project). Never 'clean up this comp'.",
       args: "{action: 'remove_unused_footage'|'consolidate_footage'|" +
             "'reduce_project', keepComps?: [string] (reduce_project " +
             "only, REQUIRED), dryRun?: bool (default TRUE)}" },
@@ -240,8 +242,7 @@
       desc: "Apply a bezier as TEMPORAL easing between keyframes on one " +
             "property across MANY layers in ONE call (converts to AE " +
             "speed/influence ease). keyIndex eases pair k..k+1; omit for " +
-            "all pairs. 'smoother / less robotic' = this on the property " +
-            "that HAS the keys (smooth = [0.42,0,0.58,1]).",
+            "all pairs. 'less robotic' = this (smooth = [0.42,0,0.58,1]).",
       args: "{comp?: string, layers?: [name|index] | layer?: name|index (omit = selection), property: path, bezier: [x1,y1,x2,y2], keyIndex?: int, allPairs?: bool}" },
     { name: "grid_layout", mutating: true,
       desc: "Arrange layers into a grid rigged to a control null: its " +
@@ -258,8 +259,7 @@
             "amplitude as numbers OR freqControl/ampControl {layer, effect} " +
             "to drive from sliders), loop_cycle, loop_pingpong, loop_offset " +
             "(need keyframes), time_linear (scalar props; rate or rateControl). " +
-            "'keep it drifting' = wiggle on position (slow drift = " +
-            "frequency 0.5, amplitude 20).",
+            "'keep it drifting' = wiggle on position (slow: frequency 0.5).",
       args: "{comp?: string, layer: name|index, property: string, preset: string, frequency?: n, amplitude?: n, rate?: n, freqControl?: {layer, effect}, ampControl?: {layer, effect}, rateControl?: {layer, effect}}" },
     { name: "set_expression", mutating: true,
       desc: "LAST RESORT: set a raw expression (or clear with ''). Prefer " +
@@ -426,8 +426,8 @@
             "('…/Repeater 1/Transform/Position').",
       args: "{comp?: string, layer?: name|index (shape layer; omit = selected), kind: string, group?: name (add inside this group), name?: string, params?: {ParamName: value, …}}" },
     { name: "precompose", mutating: true,
-      desc: "Move layers into a new nested comp (precompose). 'group " +
-            "these / package it up' = this — AE has no layer groups. The result " +
+      desc: "Move layers into a new nested comp (precompose). " +
+            "'package it up' = this — AE has no layer groups. The result " +
             "names the precomp AE actually made (auto-numbered if the " +
             "name was taken), what it broke — a moved layer's parent that " +
             "stayed behind is DROPPED, and an expression left behind that " +
@@ -511,9 +511,9 @@
       args: "{comp?: string, layers?: [name|index] | layer?: name|index (omit = selection), property: path, keys: [{time: s, value: any}, …] (max 100), relativeTo?: 'inPoint'}" },
     { name: "remove_keyframes", mutating: true,
       desc: "Remove keyframes from a property on many layers at once — " +
-            "specific times or all ('stop it moving / un-animate it' = " +
-            "this, times omitted). The value left behind is measured in " +
-            "the real-AE pass.",
+            "specific times or all ('stop it moving' = this, times " +
+            "omitted). Removing ALL keys leaves the LAST " +
+            "key's value.",
       args: "{comp?: string, layers?: [name|index] | layer?: name|index (omit = selection), property: path, times?: [s, …] (omit = remove ALL)}" },
     { name: "for_each_layer", mutating: true,
       desc: "Run a PER-LAYER tool once per target layer in ONE call (max " +
@@ -877,8 +877,7 @@
       "  then apply_preset — never an improvised stack of effects.",
       "",
       "Masks & shape content:",
-      "- add_mask creates a mask (rectangle/ellipse/custom points);",
-      "  set_mask edits mode/feather/expansion/opacity/inverted;",
+      "- set_mask edits mode/feather/expansion/opacity/inverted;",
       "  set_mask_path moves or ANIMATES the points (atTime or keys).",
       "  Mask points are LAYER space, not comp space.",
       "- Build shape layers in steps: add_shape_layer once, then",
@@ -903,9 +902,11 @@
       "- 'stagger with an ease' = stagger_layers with spread + bezier",
       "  (step mode is evenly spaced, no curve); 'ramp opacity/scale",
       "  across these layers' = distribute_property; 'ease between the",
-      "  keyframes / smoother / snappier / less robotic / mechanical / not",
-      "  so linear' = apply_keyframe_ease on the property that HAS the",
-      "  keys. All take the same CSS-style bezier [x1,y1,x2,y2].",
+      "  keyframes / smoother / snappier / less robotic / mechanical /",
+      "  feels cheap / not so linear' = apply_keyframe_ease on the",
+      "  property that HAS the keys — never stagger_layers (that moves",
+      "  layers in TIME). All take the same CSS-style bezier",
+      "  [x1,y1,x2,y2].",
       "",
       "Plain-English requests:",
       "- 'group these / package it up / bundle them / collapse them into",
@@ -915,16 +916,18 @@
       "  trim). Never fake timing with opacity keyframes.",
       "- 'attach / stick / pin it to X', 'make it follow / ride along",
       "  with X' = set_layer_parent {layer, parent: 'X'}.",
-      "- 'crop this / hide the bottom half / cut a hole / vignette' =",
-      "  add_mask (a hole is mode 'subtract'; a vignette is a big",
-      "  feathered ellipse).",
+      "- 'crop / chop off the lower half / hide the bottom half / only",
+      "  the top shows / cut a hole / vignette' = add_mask — never",
+      "  set_layer_timing (that trims TIME), scale or anchor. A hole is",
+      "  mode 'subtract'; a vignette is a big feathered ellipse.",
       "- 'stop it moving / un-animate it / no more fading' =",
       "  remove_keyframes, times omitted. Motion from an EXPRESSION is",
       "  cleared with set_expression {expression: ''} — remove_keyframes",
       "  reports removed: 0 there, not success.",
       "- 'keep it drifting / floating / hovering / jittering' =",
-      "  apply_expression_preset wiggle; 'bouncing back and forth / keep",
-      "  it looping' = loop_pingpong / loop_cycle. Never set_expression.",
+      "  apply_expression_preset {preset: 'wiggle', property: 'position'}",
+      "  on THAT layer, never a null; 'bouncing back and forth / keep it",
+      "  looping' = loop_pingpong / loop_cycle. Never set_expression.",
       "- 'show the video through the text / cut the logo out of the",
       "  footage / X only visible through Y' = set_track_matte {layer:",
       "  X (the footage being cut), matteLayer: Y (the text/logo), mode:",
@@ -962,23 +965,23 @@
       "  folder's path. Same-named folders under different parents are",
       "  normal — use paths when names repeat.",
       "- 'clean up / tidy / shrink the PROJECT' (unused footage, the",
-      "  project panel) = clean_project with ONE",
-      "  action. It answers with a PREVIEW (dryRun defaults to true): list",
-      "  what would be deleted in your reply, call out anything the user",
-      "  did not ask for (empty folders, render-queue items, expressions",
-      "  that would break), and STOP. Only after they say go, call it",
-      "  again with dryRun:false. reduce_project needs keepComps — ask",
-      "  which comps matter, never guess.",
-      "- 'clean up / tidy this COMP / the timeline / these layers' is",
-      "  NEVER clean_project (that deletes footage). Named clutter goes",
-      "  with the tool that removes exactly it (remove_keyframes,",
-      "  remove_effect, delete_mask, delete_layer, precompose); unnamed,",
-      "  ask what to remove and return commands: [] — the one exception",
-      "  to ACT, DON'T ASK: deletions nobody named.",
+      "  project panel) = clean_project with ONE action. It answers with a",
+      "  PREVIEW: list what would be deleted in your reply, call out what",
+      "  the user did not ask for (empty folders, render-queue items,",
+      "  expressions that would break), and STOP. Only after they say go,",
+      "  call it again with dryRun:false. reduce_project needs keepComps",
+      "  — ask which comps matter, never guess.",
+      "- 'clean up / tidy / sort out this COMP (or a named one) / it's",
+      "  a mess / junk everywhere' NAMES NOTHING: ask what should go and",
+      "  return commands: [] — the one exception to ACT, DON'T ASK. Never",
+      "  guess a target (no remove_keyframes or delete_layer over every",
+      "  layer), never clean_project (that deletes footage). Once they",
+      "  name the clutter, remove exactly it (remove_keyframes,",
+      "  remove_effect, delete_mask, delete_layer, precompose).",
       "- 'file / sort / organize the project panel' = organize_project,",
-      "  which PREVIEWS the same way (dryRun defaults to true): report the",
-      "  moves it lists and any folder it would create, then STOP until",
-      "  the user says go, and call again with dryRun:false. A preview is",
+      "  which PREVIEWS the same way: report the moves it lists and any",
+      "  folder it would create, then STOP until the user says go, and",
+      "  call again with dryRun:false. A preview is",
       "  not an organized project — never report one as done.",
       "- Use ONLY folder and item names that appear in CURRENT PROJECT",
       "  STATE or a get_project_info result. NEVER guess a name and never",
@@ -1079,16 +1082,46 @@
 
   /**
    * How many chars of history the window can carry beside the prompt.
-   * Two ratios, both on the conservative side of what the field showed:
-   * prompt prose tokenizes near 3.9 chars/token, the JSON-heavy history
-   * near 3. The reply reserve is llama.js's max_tokens plus template
-   * overhead; the ledger keeps its own slice so memory of dropped turns
-   * never competes with the current exchange. `starved` is the signal
-   * main.js turns into ONE grounded line: the window is nearly filled by
-   * the prompt alone, and turns will be forgotten fast.
+   * The reply reserve is llama.js's max_tokens plus template overhead;
+   * the ledger keeps its own slice so memory of dropped turns never
+   * competes with the current exchange. `starved` is the signal main.js
+   * turns into ONE grounded line: the window is nearly filled by the
+   * prompt alone, and turns will be forgotten fast.
+   *
+   * Both ratios were estimates until 2026-09-02, when
+   * scripts/context-budget-probe.js asked the running llama-server's
+   * /tokenize what the panel's OWN payload really costs (Qwen2.5-32B,
+   * ctx 16384, real project state):
+   *
+   *   system prompt, full docs     62364 chars = 16073 tokens  3.88
+   *   system prompt, compact docs  42574 chars = 11446 tokens  3.72
+   *   chat history (JSON-heavy)    56308 chars = 19937 tokens  2.82
+   *                                42431 chars = 15291 tokens  2.77
+   *
+   * The prompt rows are the same in every run — same text, same
+   * tokenizer. The history row is NOT: what a ten-turn chat contains
+   * changes with what the model says, and two runs of the same probe
+   * measured 2.82 and 2.77. So the history bound is set under the
+   * LOWEST sample, not the latest one; a constant tuned to one run is
+   * how this was wrong in the first place.
+   *
+   * The old 3.9 / 3 were both off by under 10% — and both off in the
+   * direction that kills a chat. The constants are not symmetric: the
+   * prompt one DIVIDES chars into tokens, so a value ABOVE the truth
+   * hides tokens (at the shipped default — compact docs at 16384 — it
+   * hid 529 of them); the history one MULTIPLIES room into chars, so a
+   * value ABOVE the truth hands out history the room cannot hold. Both
+   * errors compounded: 4917 chars of budget at the measured 2.82 is
+   * 1744 tokens against 1610 really free. That is the HTTP-400 the
+   * fitHistory work of 2026-08-25 exists to prevent, quietly back.
+   *
+   * So each is pinned just BELOW the densest form measured — 3.7 under
+   * the compact prompt's 3.72, 2.7 under the history's 2.77. Below, not
+   * at: another model's tokenizer is not this one, and the whole point
+   * of the constant is to be wrong in the survivable direction.
    */
-  var PROMPT_CHARS_PER_TOKEN = 3.9;
-  var HISTORY_CHARS_PER_TOKEN = 3;
+  var PROMPT_CHARS_PER_TOKEN = 3.7;
+  var HISTORY_CHARS_PER_TOKEN = 2.7;
   var REPLY_RESERVE_TOKENS = 3072 + 256;
   var LEDGER_BUDGET = 1500;
   function historyBudget(ctxSize, systemChars) {
@@ -2644,6 +2677,9 @@
         path: data.path,
         expectedControllers: names,
         templateName: data.template,
+        // The comp name is the one name a real definition.json actually
+        // carries (measured AE 2026: capsuleName is always "Untitled").
+        compName: data.comp,
         definitionOnly: true,
         maxInflate: 4 * 1024 * 1024
       });
@@ -3243,20 +3279,22 @@
    * Rules, in order:
    *  - under budget -> unchanged, dropped: 0;
    *  - drop whole entries from the front until under budget, but never
-   *    the last four — the current exchange must survive even when it
-   *    alone busts the budget (the model then gets a too-big prompt and
-   *    the caller's retry path deals with the 400);
+   *    the last four — the current exchange must survive;
    *  - after dropping, keep dropping until the first entry is a USER
    *    turn: chat templates expect user-first after the system message,
    *    and an orphaned assistant turn reads as the model talking to
-   *    itself.
+   *    itself;
+   *  - and then, if the protected tail ALONE is still over budget,
+   *    shorten its entries' CONTENT until it is not. See below.
    */
   function fitHistory(history, budgetChars) {
     var size = 0, i;
     for (i = 0; i < history.length; i++) {
       size += (history[i].content || "").length + 16;
     }
-    if (size <= budgetChars) return { entries: history, dropped: 0, ledger: "" };
+    if (size <= budgetChars) {
+      return { entries: history, dropped: 0, truncated: 0, ledger: "" };
+    }
     var entries = history.slice();
     var gone = [];
     while (entries.length > 4 && size > budgetChars) {
@@ -3267,9 +3305,65 @@
       size -= (entries[0].content || "").length + 16;
       gone.push(entries.shift());
     }
-    return { entries: entries, dropped: gone.length,
+    // THE FLOOR, and why it has to exist. Dropping WHOLE entries stops
+    // at the protected tail, so ONE oversized entry inside it — a
+    // comfy_generate result, a pasted expression, a long TOOL RESULTS
+    // array — left this function returning a payload it had already
+    // computed was too big. main.js answers a context HTTP 400 by
+    // calling back with budget 1; with nothing left to drop that
+    // returned the SAME BYTES, so the retry earned the SAME 400 and the
+    // chat was dead until cleared. That is the exact failure fitHistory
+    // was written to end, arriving through the one door it left open.
+    //
+    // Measured on this machine 2026-09-02 (scripts/history-floor-probe.js,
+    // real llama-server, Qwen2.5-32B, ctx 16384): a four-entry tail of
+    // 60334 chars was refused, and the retry re-sent all 60334 of them.
+    //
+    // So shorten the survivors' CONTENT: oldest of the tail first, the
+    // newest entry last, because that one carries the sentence being
+    // answered. Every cut says so IN WORDS — this is the one place in
+    // the panel that may hand the model a JSON result cut mid-object,
+    // and a silent one is indistinguishable from a tool that returned
+    // half an answer.
+    var truncated = 0;
+    for (i = 0; i < entries.length && size > budgetChars; i++) {
+      var content = entries[i].content || "";
+      // The marker carries the number of characters it replaced, so its
+      // own length depends on the answer. Solve it twice: the first pass
+      // prices the marker at the widest the number can be, the second is
+      // exact. Getting this wrong is not cosmetic — an under-priced
+      // marker leaves the entry over budget, the loop walks on to the
+      // next one, and it eats the newest turn it was supposed to spare.
+      var marker = trimMarker(content.length);
+      var keep = 0, j;
+      for (j = 0; j < 2; j++) {
+        keep = content.length - (size - budgetChars) - marker.length;
+        if (keep < TRIM_MIN_KEEP_CHARS) keep = TRIM_MIN_KEEP_CHARS;
+        marker = trimMarker(content.length - keep);
+      }
+      // An entry shorter than the marker gets BIGGER if we "shorten" it.
+      // Leave it whole and spend the budget on one that pays.
+      if (keep + marker.length >= content.length) continue;
+      entries[i] = {
+        role: entries[i].role,
+        content: content.slice(0, keep) + marker
+      };
+      size -= content.length - entries[i].content.length;
+      truncated++;
+    }
+    return { entries: entries, dropped: gone.length, truncated: truncated,
              ledger: rollupHistory(gone, LEDGER_BUDGET) };
   }
+
+  function trimMarker(cut) {
+    return "\n[... " + cut + " characters cut from this message to fit " +
+      "the model's context window - it is INCOMPLETE, do not read the " +
+      "end of it as the end of the data]";
+  }
+
+  // The smallest remnant worth leaving — below this an entry says
+  // nothing anyway and the marker is most of what is left.
+  var TRIM_MIN_KEEP_CHARS = 200;
 
   // ------------------------------------------------- the history ledger
   //

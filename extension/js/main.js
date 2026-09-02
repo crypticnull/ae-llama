@@ -247,7 +247,8 @@
   // One-time notice when history first outgrows the model's window;
   // reset only by clearing the chat, not per message.
   var trimNoticeShown = false;
-  var starveNoticeShown = false;      // once per session: the window itself          // a chat round-trip is in flight
+  var starveNoticeShown = false;      // once per session: the window itself
+  var cutNoticeShown = false;         // once per chat: a message was cut
   var history = [];          // [{role, content}] — excludes system prompt
   var updateManifest = null; // cached update.json from the update channel
 
@@ -617,6 +618,19 @@
           "ledger of what ran and what it named, instead of in full — " +
           "your transcript is unaffected. Clearing the chat starts fresh.",
           "context ledger");
+      }
+      if (fitted.truncated > 0 && !cutNoticeShown) {
+        cutNoticeShown = true;
+        // Different fact from the ledger's, and worth its own line: the
+        // ledger says old turns were SUMMARISED, this says a message in
+        // the current exchange reached the model with its middle
+        // missing. A result the model half-read is a result it may
+        // half-believe, so the user gets told which way to fix it.
+        appendMsg("info", "One message in this exchange was too large " +
+          "for the model's context window on its own, so the model was " +
+          "sent the start of it and told the rest was cut. If its answer " +
+          "looks like it missed something, raise Context size in " +
+          "Settings or clear the chat.", "message cut to fit");
       }
       if (hb.starved && !starveNoticeShown) {
         starveNoticeShown = true;
@@ -1435,6 +1449,7 @@
     els.clearChatBtn.addEventListener("click", function () {
       history = [];
       trimNoticeShown = false;   // a fresh chat earns a fresh warning
+      cutNoticeShown = false;
       els.chat.innerHTML = "";
       appendMsg("info", "Conversation cleared.");
     });

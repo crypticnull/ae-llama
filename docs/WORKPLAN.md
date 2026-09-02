@@ -21,6 +21,44 @@ tool, not the test), then update the stubbed Node test in `tests/` so
 the same bug class is caught WITHOUT AE — that is the whole loop:
 field truth -> fix -> stub faithfulness.
 
+- ~~`Comp not found` truncated the list at the comp the caller meant~~
+  DONE 2026-09-02 (0.11.14). Harness went RED at 588/589: the self-test's
+  own project grew past fifteen comps, and the grounded roster was flat
+  project order capped at 15 with NOTHING saying it had been cut, so
+  "ST HYG Nope" listed fourteen unrelated comps and stopped one row short
+  of `ST HYG Keep`. A complete-LOOKING roster that does not contain the
+  answer is worse than no roster: it reads as "that comp does not exist".
+  New `AELL_compsHere(wanted, cap)` ranks near misses first (comps sharing
+  a word with the name that missed, bucketed — ES3 sort is not stable),
+  discloses the cap and names `get_project_info {limit: "all"}` when it
+  truncates. `AELL_resolveComp` and reduce_project's "which comps matter"
+  refusal both use it. Harness 589/589; stub back-fill in
+  tests/test-project-hygiene.js (11b) proves the class without AE.
+
+- ~~`add_mask` is told to get layer sizes from a tool that has none~~
+  DONE 2026-09-02 (0.11.9). `layer.width` reports the COMP's dimensions
+  on a text or shape layer and nothing at all on a camera or light
+  (measured, `scripts/layer-size-probe.jsx`), and a text layer's origin
+  is its BASELINE — so `get_comp_details` rows now carry the layer's own
+  `width`/`height` (only when it differs from the comp) plus `left`/`top`
+  (only when the origin is not 0,0), and `add_mask` refuses a mask that
+  misses its layer completely OR swallows it whole, naming the real size.
+  Zero prompt cost: the doc already said "sizes from get_comp_details"
+  and is now true. The bigger rows are paid for by a byte cap on the row
+  list (5000, so the state's project half survives). Step 19's paraphrase
+  matrix flipped 4 HARM -> 3 pass / 1 miss / **0 HARM**. Harness 570 ->
+  576. En route: `tests/test-es3-ternary.js` now also lints the
+  ExtendScript that `.js` files BUILD as strings — chat-probe's mask-mode
+  reader had the left-associative `?:` bug and scored two correct model
+  answers as HARM.
+
+- ~~`organize_project` has clean_project's preview advice and no gate~~
+  DONE 2026-09-02 (0.11.8). A first `dryRun:false` filed every loose
+  root item and created up to five folders with nothing shown. Same
+  three-branch gate as clean_project, on its own `AELL_orgShown`; an
+  empty plan is deliberately not gated. Harness 567 -> 570; prompt
+  budget paid in full (full -13 chars, compact unchanged).
+
 - ~~The triage calls AE's "Executing Script *" progress window an
   UNRECOGNIZED DIALOG and fails the run~~ DONE 2026-08-30, and the
   filed symptom was not the defect. What actually stopped those runs
@@ -72,7 +110,22 @@ field truth -> fix -> stub faithfulness.
   disappeared from a whole run (7 distinct states before, 0 after);
   stub test 165 -> 187 checks, 15 of which fail if the fix is reverted.
 
-## 1b. VERIFY the zero-silent-failure batch (remote shipped 2026-09-01, UNBUMPED — verifying it here is what ships it)
+## 1b. ~~VERIFY the zero-silent-failure batch~~ DONE 2026-09-01 (0.11.1)
+
+Every bullet below was run in real AE and the batch SHIPPED (patch bump
+0.11.0 -> 0.11.1). It found one real defect of its own class:
+`set_track_matte` reported ok on a CAMERA — a camera carries no
+`setTrackMatte` at all, and `camera.trackMatteType = LUMA` is accepted
+silently, so the tool reordered the stack with moveBefore and returned a
+receipt for a matte AE never made. Fixed by refusing on layer TYPE, with
+6 new selftest steps and 9 stub assertions. Watch out for the trap the
+first cut fell into: `instanceof AVLayer` is FALSE for text and shape
+layers too. See WORKPLAN-LOG 2026-09-01. The pass-22 salvage bullet at
+the end was its own pass and is DONE 2026-09-02 (0.11.6) — the stash and
+the backup branch are gone; what was applied, what was filed and why is
+in that bullet.
+
+<details><summary>original bullets (kept for the measurements they name)</summary>
 
 The remote session built roadmap item 1 + MOGRT step 0 (see
 docs/AUDIT-0.11.md part 2 item 1) with the full stub suite green.
@@ -107,7 +160,50 @@ and patch-bumps. One pass, in this order:
   and the fix.
 - All green → `node scripts/bump-version.js patch`, push, log. Any
   failure → fix at the root, keep the stubs faithful, then bump.
-- **Pass-22 salvage — RECOVER, do not drop.** The owner's reset on
+- **Pass-22 salvage — DONE 2026-09-02 (0.11.6).** Read, measured,
+  half-applied, half-filed, stash and branch dropped. `aell-backup-pass22`
+  turned out to hold nothing: it was an ancestor of `origin/main`, so the
+  whole of pass 22 was in the stash. Note for anyone reading the older
+  log entries: the stash had MOVED to `stash@{1}` by the time this ran —
+  `run-local-agent.ps1` pushed a `loop-salvage-*` on top of it, so
+  "stash@{0} is pass22-salvage" was stale advice. **Always find it by
+  name.**
+  - **APPLIED: the `fitHistory` floor.** Pass 22's load-bearing find was
+    still a live defect on today's head, and it was not a guess:
+    reproduced end to end against this machine's real 32B
+    (`scripts/history-floor-probe.js`, new). When one entry inside the
+    protected four-entry tail is bigger than the whole budget,
+    fitHistory returned a payload it had already computed was too big;
+    main.js's reactive retry called back with budget 1, got the SAME
+    BYTES, and llama-server refused both with the identical "request
+    (17733 tokens) exceeds the available context size (16384)". The chat
+    was dead until cleared. Now the survivors' CONTENT is shortened,
+    oldest of the tail first, each cut naming itself in words.
+  - **FILED, not applied — pass 22's other half** (`Llama.measurePrompt`
+    + `Tools.planContext` + a caller-supplied `max_tokens`). It was
+    written against the tools.js of 2026-09-01 and the 0.11.4
+    context-budget pass has since answered the same question differently
+    and with its own tokenizer measurements (`historyBudget`, the pinned
+    3.7/2.7 ratios, the ledger). Applying planContext would have
+    replaced measured work with older measured work. What is worth
+    keeping is the ONE idea 0.11.4 does not have — see roadmap item
+    below.
+- **NEW, from the salvage: ask the SERVER for the two numbers.** The
+  panel budgets the window from `settings.ctxSize` and an estimated
+  chars/token ratio. llama-server will answer both exactly:
+  `POST /tokenize` gives the prompt's real token count, and `GET /props`
+  gives the `n_ctx` the server was actually STARTED with — which is not
+  necessarily the one settings.json remembers (a hand-launched server,
+  or a model whose trained maximum clamped it). Pass 22 measured
+  /tokenize at 14-40 ms on a 54611-char prompt, nothing against a 1-3 s
+  round. **No live symptom on this machine** — measured 2026-09-02,
+  settings said 16384 and the server's own 400 reported `n_ctx: 16384`,
+  so they agreed — which is why this is filed rather than built. Needs
+  its own pass: an extra HTTP call per request is a behaviour change,
+  and the interesting case (the two numbers DISAGREEING) has to be
+  staged deliberately to be measured at all.
+- **Pass-22 salvage — RECOVER, do not drop.** (original instruction,
+  kept for the rules it names.) The owner's reset on
   2026-09-01 parked pass 22's uncommitted work in stash
   `pass22-salvage` (and any unpushed commits on branch
   `aell-backup-pass22`). It was NOT just the 0.10.22 bump: `git
@@ -127,12 +223,23 @@ and patch-bumps. One pass, in this order:
   aell-backup-pass22`. The four bump files in the stash are noise
   either way (0.11.x supersedes them).
 
+</details>
+
 ## 1c. VERIFY the daytime batch of 2026-09-01 (trigger layer + missing verbs + MOGRT verifier; UNBUMPED)
 
 Built remote by three passes + adversarial review, full stub suite
 green. Rides the SAME patch bump as 1b when both verify — one bump,
 one push. One pass per bullet:
 
+- **Trigger layer (roadmap 2) — DONE 2026-09-02 (0.11.2).** Both runs'
+  per-step verdicts are in `docs/WORKPLAN-LOG.md`. It found a real
+  defect of its own class: `trackMatteType` is not an existence test
+  (removeTrackMatte leaves it stale, NO_TRACK_MATTE is 5012), the panel
+  could not SEE a track matte at all, and step 27 flipped to pass after
+  the fix. Two misses filed for later passes: `add_mask` accepts bounds
+  that miss the layer, and "clean up this comp" routes to the project
+  panel (the only miss that repeated across both runs). The original
+  instruction, for reference:
 - **Trigger layer (roadmap 2).** Run `scripts/chat-probe.js` with the
   real model — 15 new steps (indexes 15-29) each say a casual sentence
   ("delay it", "tag along", "chop off the lower half", "dress HELLO
@@ -145,6 +252,16 @@ one push. One pass per bullet:
   measure: the prompt grew ~12% (54.5k → 61.1k chars); confirm a
   full round at ctx 16384 still leaves room for results + 4 turns of
   history (a context-400 hard-trim on an ordinary ask = trim rules).
+- **Missing verbs (roadmap 4) — DONE 2026-09-02 (0.11.3).** All eight
+  measured in AE 2026 by the new `scripts/verb-semantics-probe.jsx`;
+  per-assumption verdicts are in `docs/WORKPLAN-LOG.md`. Two of the
+  three guesses the host code had written down as guesses turned out
+  RIGHT for a reason nobody had checked (AE honours the lock and
+  refuses a self-move at the SCRIPTING layer, throwing both times), (6)
+  was confirmed exactly, and (8) got its answer: emptying a property
+  leaves the LAST key's value — now in the remove_keyframes doc and
+  held by a new real-AE step (566/566). The original instruction, for
+  reference:
 - **Missing verbs (roadmap 4).** Selftest is 555 steps now; run it to
   green. Then probe the seven flagged AE-semantics assumptions
   directly (temp .jsx via AELL_call): (1) moveBefore/moveAfter on a
@@ -163,6 +280,31 @@ one push. One pass per bullet:
   the value at the current time? The probe's "un-animate" step records
   the residual opacity without failing on it; measure it, then pin the
   answer in the remove_keyframes doc (the unmeasured claim was removed).
+- **Context budget + ledger (roadmap 13) — MOSTLY DONE 2026-09-02
+  (0.11.4).** New re-runnable probe `scripts/context-budget-probe.js`
+  asked the running llama-server's `/tokenize` what the panel's own
+  payload costs. BOTH constants were inside the 10% trigger and BOTH
+  were wrong in the direction that kills a chat: at the shipped default
+  (compact docs, ctx 16384) the arithmetic promised 16515 tokens against
+  a 16384 window. Pinned to the measurement (3.9 -> 3.7, 3 -> 2.7), with
+  `tests/test-token-ratios.js` freezing the tokenizer's answer — seven
+  assertions go red on the old values. The ledger measurement passed end
+  to end (ten naming turns, then "make them blue instead" answered with
+  all ten names). T7 answered NO: at ctx 32768 the 32B leaves 850 MiB on
+  a 32607 MiB card with ComfyUI holding nothing. Per step verdicts and
+  numbers in `docs/WORKPLAN-LOG.md`. **The compact-vs-full ROUTING
+  comparison is now DONE 2026-09-02 (UNBUMPED — nothing in extension/
+  changed): compacting the tool docs costs NO routing. Four runs (two
+  per mode, `scripts/chat-probe.js --ctx 32768` for the full form)
+  scored 24 of 26 steps identically; compact 24/26 and 25/26, full
+  25/26 and 24/26. The one step that differed failed once in EACH mode,
+  so it is temperature noise, not a lost sentence — no doc change was
+  owed and none was made. New re-runnable comparator:
+  `scripts/routing-compare.js`. It also settled the standing "clean up
+  this comp" miss: that step failed in ALL FOUR runs, so it is
+  unconditional, NOT a compaction casualty — the full doc's "PROJECT
+  PANEL only" sentence and the never-compacted rule both say it and the
+  model does it anyway.** The original instruction, for reference:
 - **Context budget + ledger (roadmap 13, shipped remote 2026-09-01
   evening, UNBUMPED, rides the same bump).** Three measurements, then
   the probe: (1) ask the running llama-server `/tokenize` for the REAL
@@ -183,6 +325,26 @@ one push. One pass per bullet:
   measured room (`Tools.historyBudget(ctx, system.length)`) at 16384
   and at 32768 in the log; if 32768 fits the card with the 32B (the
   arbiter's numbers say), propose raising the T7 default.
+- **MOGRT verifier (harness plan 1, steps 1-3) — DONE 2026-09-02
+  (0.11.5).** Everything in the bullet was run in real AE by the new
+  `scripts/mogrt-verify-probe.js` + `.jsx`, per-claim verdicts in
+  `docs/WORKPLAN-LOG.md`. It found a defect of exactly its own class:
+  the verifier had never opened a file AE wrote, and could not read one
+  — Adobe's `strDB` rows are `{localeString: <locale>, str: <value>}`
+  and the reader had those swapped, so EVERY controller in EVERY real
+  export read back as the string `"en_US"` and the receipt claimed all
+  of them dropped. The hand-built fixtures shared the invented shape, so
+  105 checks agreed with a reader that could not read anything real.
+  Also measured and pinned: the type key is `type` (never the invented
+  `controlType`), and `capsuleName` is always the literal `"Untitled"`
+  — a permanent false warning, replaced by comp-name parity. Fixture
+  committed at `tests/fixtures/ae2026-definition.json`; the independent
+  PowerShell zip check agreed entry for entry. STILL OWED: the ONE
+  manual step, dropping `logs\mogrt-verify\AELL Probe Card.mogrt` into
+  real Premiere (harness plan step 6) — the pin was taken without it on
+  purpose, see the log for why. Also still unmeasured: a controller
+  GROUP, and any locale but en_US. The original instruction, for
+  reference:
 - **MOGRT verifier (harness plan 1, steps 1-3).** Export a small real
   mogrt through the panel: the receipt must now carry
   `controllerNames`, `zipValid: true`, `controllersInFile` equal to
@@ -1544,12 +1706,51 @@ name-scoped SWEEP whitelist (:621-635) makes project-mutating rows
 (D-section, H3) UNSAFE against the owner's live project. Build in
 this order, one bullet per pass:
 
+- ~~**Prerequisites first.**~~ DONE 2026-09-02 (local, real AE,
+  UNBUMPED — nothing in `extension/` changed). All three parts:
+  history now resets PER STEP by default (only "a second turn that
+  refers back" declares `carry`); `--isolate` rebuilds a
+  deterministic rig (`rigPlan`, 34 AELL_callBatch commands, no model)
+  before every step that declares `fromRig`, so N phrasings of one
+  scenario cannot contaminate each other; the step indexes in
+  tests/test-chat-probe.js are addressed by title and relative order;
+  and steps 4/5/6 now read what their sentences actually ask for.
+  New `--rig-check` builds and verifies the rig in real AE in
+  seconds. Verified: rig-check green, `--isolate --steps 15,20,25`
+  3/3 with the rig rebuilt between each, `--steps 1,2,4,5,6` 5/5.
+  Two AE 2026 measurements are pinned in the log. The original
+  instruction, for reference:
 - **Prerequisites first.** Per-variant history + comp reset so one
   scenario can run N phrasings independently; un-pin the load-bearing
   step indexes in tests/test-chat-probe.js (address steps by title,
   not position); tighten the loose check() functions in steps 4/5/6
   with matching canned-host cases. Remote pre-builds; local
   calibrates with --reuse-server.
+- ~~**Wire variants over the SAFE rows only.**~~ DONE 2026-09-02
+  (local, real AE, UNBUMPED). `--variants` (which implies `--isolate`)
+  runs each step's canonical sentence AND every paraphrase it declares,
+  each from a freshly rebuilt rig with a fresh conversation. 45
+  paraphrases over the 15 trigger-layer steps — casual / vague / typo'd,
+  2-3 each, which covers all fourteen roadmap-item-2 trigger mappings
+  and the A3/B3/E3/E4 usefulness rows that have a rig twin. Scored in
+  three: pass / miss (check failed, comp untouched) / **HARM** (check
+  failed, comp changed anyway), with the change read off the two
+  READ_COMP states the run already fetches (`compDiff` — it sees the
+  expression, the eased key and the recolour that `SIG_FN` cannot).
+  `gradeMatrix` is the acceptance gate the bullet states. Findings are
+  in the log; the wording fixes belong to the next bullet.
+  ~~**Still owed here:** the A/B/C/E rows with no rig twin~~ DONE
+  2026-09-02 (local, real AE, UNBUMPED — nothing in `extension/`
+  changed). A SECOND rig, not a second set of sentences: `fromRig` now
+  names a VARIANT, and `"icons"` builds the UNFINISHED world — six
+  scattered solids over a full-frame `BG`, a small white `HEADLINE`, no
+  keyframes, no expressions, no effects, nothing parented. The seven
+  rows ask for exactly what it lacks, which is the only way a pass means
+  anything. Steps 30-36. `rigProblems(variant, state)` is pure, so
+  `--rig-check` runs it against the real comp (both rigs, in sequence)
+  and the stub suite runs it against a synthetic one. Matrix: **19 pass,
+  2 miss, 7 HARM over 28 runs** — findings in the log, fixes are the
+  next bullets. The original instruction, for reference:
 - **Wire variants over the SAFE rows only** (A/B/C/E scenarios + the
   ten roadmap-item-2 trigger mappings): 2-3 paraphrases each (casual,
   vague, typo'd). Score: right tool + right target = pass; honest
@@ -1562,7 +1763,100 @@ this order, one bullet per pass:
   dependencies get ONE tool-doc/system-prompt change per pass (so a
   regression is attributable), re-run to show the flip, patch bump.
   Watch the 6KB prompt budget — measure buildSystemPrompt size
-  before/after every rule addition.
+  before/after every rule addition. **In flight, one row per pass:**
+  - ~~row 23 "keep it drifting" (was 1 miss + 1 HARM of 4)~~ DONE
+    2026-09-02 (0.11.10). The rig was the second-order failure: ALL
+    FOUR phrasings omitted `property` and hit the bare, ungrounded
+    `Missing 'property'`, which is what the canonical gave up on and
+    what took the typo run's whole round down in a rollback. Grounded
+    now (`AELL_missingProperty`: the transform words, the layer's own
+    effects, what is already keyframed), plus ONE rules bullet that
+    carries `property: 'position'` and "on THAT layer, never a null".
+    **4 pass, 0 miss, 0 HARM**, every run a single first-shot call.
+    Prompt full 58910 -> 58953 (ceiling 59000 — the next addition needs
+    a real cut). Harness 576 -> 578.
+  - ~~row 19's canonical, "Chop off the lower half of Beta" ->
+    `set_layer_timing`~~ DONE 2026-09-02 (0.11.11). Two wrong turns,
+    not one: the canonical read "chop off" as the timing rule's "trim
+    it", and the casual "I only want to see the top half" reached for
+    center_anchor_point + set_transform. ONE rules bullet now carries
+    both phrasings AND the anti-targets ("never set_layer_timing (that
+    trims TIME), scale or anchor"), paid for by dropping "add_mask
+    creates a mask (rectangle/ellipse/custom points)" — the args line,
+    which compact keeps, already spells the shapes. **2 pass / 2 miss
+    -> 4 pass, 0 miss, 0 HARM**, canonical and casual both single
+    first-shot calls. Prompt full 58953 -> 58995 (ceiling 59000).
+  - ~~row 17's "cheap"/"feels stiff" vocabulary reaches stagger_layers
+    / distribute_property rather than apply_keyframe_ease~~ DONE
+    2026-09-02 (0.11.12). The vocabulary was one of four defects and the
+    only one wording could fix: the other three were REFUSALS whose words
+    were the bug. apply_keyframe_ease with no 'layers' said "select
+    layers in AE" and named nothing, so the model relayed it to the user
+    and stopped; distribute_property's animated-property refusal ADVISED
+    "delete the existing keyframes first" and the model obeyed, wiping 18
+    keys; and easing a property with no keys named no property that HAS
+    any, so the model asked the user to go make some. All three grounded
+    (`AELL_noTargets`, `AELL_keyedProps`, non-destructive advice), plus
+    ONE rules bullet carrying 'feels cheap' and "never stagger_layers
+    (that moves layers in TIME)". **2 pass / 1 miss / 1 HARM -> 4 pass,
+    0 miss, 0 HARM**, every run a single first-shot call. Paid for by
+    three docs that repeated a phrase list the never-compacted rules
+    already carry: prompt full 58995 -> 58989 (ceiling 59000, headroom
+    5 -> 11).
+  - ~~row 29, "clean up this comp" still lands somewhere destructive~~
+    DONE 2026-09-02 (0.11.13). The routing bullet existed and was
+    ignored because of its ORDER: it listed five removal tools before
+    the "unnamed, ask" clause, and all four phrasings stopped reading at
+    the tools. Rewritten ask-first, carrying the measured vocabulary
+    ("a mess", "junk everywhere", "sort out") and the two measured wrong
+    turns as anti-targets. Underneath it, three host fixes for the same
+    round: `remove_keyframes` now GATES a wipe that names every layer in
+    the comp (`AELL_wipeGate`, the clean_project/organize_project
+    three-branch shape — the field round removed 18 opacity keyframes
+    on an `ok` receipt); `AELL_noTargets` stops reading as "pass them
+    all" for a destructive caller (the model copied all twelve names
+    straight out of that refusal); and remove_effect's empty-parade
+    refusal closes the door instead of offering apply_effect (the model
+    guessed eight effect names in one round). **0 pass / 3 miss / 1 HARM
+    -> 4 pass, 0 miss, 0 HARM**, every run a single first-shot ASK with
+    zero tool calls. Prompt full 58989 -> 58974 (ceiling 59000), paid
+    for by two third copies of "dryRun defaults to true" and a
+    compressed clean_project doc tail. Harness 578 -> 589.
+  - ~~row 36 casual, "drop shadow on every layer but the BG" ->
+    `apply_effect {layers: [...]}` answered `Missing 'layer'`~~ DONE
+    2026-09-02 (0.11.15). The refusal named the key that was ABSENT and
+    never the key that had ARRIVED, so the model re-sent the identical
+    call and gave up. Fixed at the one place a layer ref is resolved,
+    not per tool: `AELL_missingLayer` reads the `layers` the caller
+    actually handed over (parked by `AELL_runTool`) and names
+    for_each_layer, the plural these tools DO have; a list under the
+    singular `layer` gets the mirror message instead of AE's "invalid
+    numeric result (divide by zero?)"; a bare miss is grounded in the
+    comp's own roster. `AELL_layerOrSelection` refuses the same way
+    rather than falling through to a selection the caller never named.
+    `AELL_resolveLayer` now takes the arg NAME, so 'parent' /
+    'matteLayer' / 'above' report themselves instead of saying 'layer'.
+    **2 pass / 1 miss / 1 HARM -> 3 pass, 0 miss, 1 HARM** — the casual
+    phrasing is a clean seven-call first shot. Zero prompt cost (host
+    strings only). Harness 589 -> 593.
+  - NEXT: row 36 vague, "everything should sit off the background a bit
+    — shadow them, not it" — the remaining HARM, and a different defect
+    from the one just fixed. The model builds a `Shadow Null` slider rig
+    and passes an EXPRESSION STRING as a `set_effect_param` value
+    ("... is not a number"), then asks Drop Shadow for an `Offset`
+    param it does not have; the round rolls back, and the retry shadows
+    HEADLINE alone — 6 of 7 layers skipped on an "ok". Two candidates:
+    set_effect_param should say that a string value belongs in
+    `link_property` / `set_expression`, and `Parameter not found` should
+    name the near miss (Distance/Direction) the way `AELL_compsHere`
+    ranks comps.
+  - THEN, in priority order: row 32 (`stagger_layers` alone on layers
+    with NO keyframes reports `ok` and animates nothing — 3 of 4
+    phrasings), row 35 ("soften"/"too sharp" reaches `add_mask`, 2 of
+    4), and row 30 casual (`grid_layout` with no `layers` grids the
+    BACKGROUND in). `link_property {layer: [six names]}` ->
+    "invalid numeric result (divide by zero?)" is CLOSED by 0.11.15
+    above (grounded, and pinned by a real-AE self-test step).
 - **DEFERRED until a sandbox design exists:** D/F/H3 rows (project
   mutation, renders, mass-delete) — wiring them against the live
   project is the harm the whitelist cannot contain. Also deferred:
@@ -1606,6 +1900,16 @@ local verifies in real AE.
    apply_expression_preset, "show the video through the text" ->
    set_track_matte); "clean this up" project-vs-comp disambiguation;
    one single-phrasing probe step per mapping.
+   **The "clean this up" half is CLOSED 2026-09-02 (0.11.7) — by
+   BEHAVIOUR, not wording. The routing miss itself is unchanged
+   (measured 5 runs, both doc forms, with the disambiguation present in
+   the tool doc AND in the never-compacted rules), but clean_project can
+   no longer act on it: the preview is now a GATE (a delete must cite a
+   preview of the SAME plan taken in an EARLIER user request) and a
+   comp/layer argument is REFUSED instead of silently ignored. The field
+   flip is in docs/WORKPLAN-LOG.md — the same sentence that deleted 7
+   project items now deletes nothing and asks. NEXT of this class:
+   organize_project carries the same preview-shaped advice and no gate.**
 3. **[S] img2img restyle loop** — un-bypass KREA2's authored image
    branch, denoise param, snapshot_frame -> comfy_generate{image,
    denoise} -> import_as_layer reuse+reload. Needs item 1's landed
@@ -1683,12 +1987,12 @@ local verifies in real AE.
     the window. Phase 2, measured before adopted: when the ledger
     itself hits its cap, ONE cheap model call (max_tokens ~200, only
     between rounds, never mid-round) compresses it; skip if the 32B's
-    latency cost is not worth it. NOTE for the local session: pass 22's
-    stash (`pass22-salvage`) touched llama.js/main.js/tools.js and a
-    tests/test-history-trim.js change — it was working THIS area;
-    reconcile the two when recovering it (keep whichever keeps more
-    function per char, measured by tests/test-context-budget.js).
-    Stub-testable; local measures the VRAM side.
+    latency cost is not worth it. NOTE, resolved 2026-09-02: pass 22's
+    stash touched this same area and has been salvaged — the fitHistory
+    floor landed (0.11.6), the planContext half was filed rather than
+    applied because this item's own 0.11.4 work already answers it with
+    better measurements. Nothing left to reconcile; the stash is dropped.
+Stub-testable; local measures the VRAM side.
 
 Dropped for now, with reasons recorded in the audit doc: comp
 versioning (first post-alpha minor), comp checkpoint/diff, review

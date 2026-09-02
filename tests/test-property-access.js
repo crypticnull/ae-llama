@@ -18,27 +18,64 @@ PGroup.prototype.add = function (c) {
 Object.defineProperty(PGroup.prototype, "numProperties", {
   get() { return this._children.length; }
 });
+// An ExtendScript Property reference is a PATH (layer + property indexes),
+// not a handle on an object, so anything that shifts those indexes rots
+// every reference already handed out. Measured in AE 2026 by
+// scripts/verb-semantics-probe.jsx: remove effect 1 of three and the refs
+// grabbed for effects 2 AND 3 beforehand both answer "Object is invalid"
+// — the removed object is not the only casualty, and it is not merely a
+// later-sibling rule. Re-fetching through property() hands back a live
+// reference to the same property, which is why aeRevalidate exists: this
+// models the PATH going stale, not the property disappearing.
+//
+// A host that grabs siblings, removes one, then reads the others (to
+// report what is left) succeeds against a stub without this and throws a
+// raw "Object is invalid" at a user in real AE, from inside a tool that
+// had already done its work. remove_effect flattens its `others` to
+// strings BEFORE the removal for exactly this reason.
+function aeInvalidate(node, dead) {
+  if (dead) node._dead = true;
+  if (node._invalid) return;
+  node._invalid = true;
+  node._realName = node.name;
+  node._realMatch = node.matchName;
+  const boom = { configurable: true,
+    get() { throw new Error("After Effects error: Object is invalid"); } };
+  Object.defineProperty(node, "name", boom);
+  Object.defineProperty(node, "matchName", boom);
+  (node._children || []).forEach((c) => aeInvalidate(c, dead));
+}
+function aeRevalidate(node) {
+  if (!node || !node._invalid || node._dead) return node;
+  node._invalid = false;
+  Object.defineProperty(node, "name", { configurable: true, writable: true,
+    enumerable: true, value: node._realName });
+  Object.defineProperty(node, "matchName", { configurable: true,
+    writable: true, enumerable: true, value: node._realMatch });
+  return node;
+}
 // PropertyBase.remove(), as AE does it for an indexed group's child: the
-// siblings close up (their propertyIndex shifts), and the removed object
-// is INVALIDATED — every later read of it throws "Object is invalid". A
-// host that read the victim's name after the call would surface that
-// raw error instead of a receipt, which is what this models.
+// siblings close up (their propertyIndex shifts), the removed object is
+// invalidated for good, and every surviving sibling's outstanding
+// reference goes stale until it is fetched again. Survivors keep their
+// NAMES through all of it — AE never renumbers "Gaussian Blur 2" down to
+// "Gaussian Blur" when the first one goes (measured with the same probe).
 PGroup.prototype.remove = function () {
   if (!this._parent) throw new Error("After Effects error: Object is invalid");
   const sib = this._parent._children;
   sib.splice(sib.indexOf(this), 1);
   this._parent = null;
-  Object.defineProperty(this, "name", {
-    get() { throw new Error("After Effects error: Object is invalid"); }
-  });
-  Object.defineProperty(this, "matchName", {
-    get() { throw new Error("After Effects error: Object is invalid"); }
-  });
+  aeInvalidate(this, true);
+  sib.forEach((s) => aeInvalidate(s, false));
 };
 PGroup.prototype.property = function (ref) {
-  if (typeof ref === "number") return this._children[ref - 1] || null;
-  return this._children.find(c => c.name === ref || c.matchName === ref ||
-    (c._aliases || []).indexOf(ref) !== -1) || null;
+  if (typeof ref === "number") {
+    return aeRevalidate(this._children[ref - 1]) || null;
+  }
+  return aeRevalidate(this._children.find((c) =>
+    (c._invalid ? c._realName : c.name) === ref ||
+    (c._invalid ? c._realMatch : c.matchName) === ref ||
+    (c._aliases || []).indexOf(ref) !== -1)) || null;
 };
 // What addProperty("ADBE Slider Control") really hands back: a GROUP whose
 // single child is the value, matchName'd "<class>-0001". add_control writes
@@ -147,10 +184,42 @@ const LIGHT_OPTS = [
   ["Shadow Diffusion", "ADBE Light Shadow Diffusion"]
 ];
 
-function Layer(name, comp, kind) {
+function Layer(name, comp, kind, box) {
   this.name = name;
   this.comp = comp;
   this.kind = kind || "solid";
+  classify(this);
+  // How big is this layer, as AE really answers it (measured AE 2026,
+  // scripts/layer-size-probe.jsx). `.width`/`.height` are NOT the layer's
+  // size: a TEXT layer and a SHAPE layer both report the COMP's
+  // dimensions — 1920x1080 for a 147x28 "HELLO" — and a camera and a
+  // light have neither property. Only a layer with a SOURCE reports its
+  // own, and there the box starts at 0,0. For the sourceless ones the
+  // honest box is sourceRectAtTime's, whose origin is the text BASELINE
+  // (that "HELLO" measured left 3.487, top -49.568), so a caller reading
+  // [0, 0, w, h] there is looking below the glyphs.
+  if (this.kind !== "camera" && this.kind !== "light") {
+    if (this.kind === "text" || this.kind === "shape") {
+      this.width = comp.width;            // the lie, on purpose
+      this.height = comp.height;
+      this._rect = box || { top: 0, left: 0, width: 0, height: 0 };
+    } else {
+      const b = box || { top: 0, left: 0,
+                         width: comp.width, height: comp.height };
+      this.width = b.width;
+      this.height = b.height;
+      this.source = { width: b.width, height: b.height };
+      this._rect = { top: 0, left: 0, width: b.width, height: b.height };
+    }
+    this.sourceRectAtTime = function () { return this._rect; };
+  }
+  // A fresh AV layer reads NO_TRACK_MATTE (5012), not 0. A camera or a
+  // light carries NEITHER property until something writes one — which is
+  // exactly how the legacy branch's phantom matte used to hide.
+  if (this.kind !== "camera" && this.kind !== "light") {
+    this.trackMatteType = TrackMatteType.NO_TRACK_MATTE;
+    this.trackMatteLayer = null;
+  }
   this.selected = false;
   this._parentRef = null;
   this._compensated = false;
@@ -311,13 +380,29 @@ Layer.prototype.setParentWithJump = function (p) {
   this._parentRef = p || null;
   this._jumped = true;
 };
+// Measured in AE 2026 (WORKPLAN 1c), and the asymmetry is the whole
+// point: setTrackMatte writes BOTH properties, removeTrackMatte clears
+// only trackMatteLayer and LEAVES trackMatteType at the type it just
+// removed. A stub that reset both would let a type-only "has a matte"
+// read pass here and lie in the field.
 Layer.prototype.setTrackMatte = function (m, t) {
-  this._matte = m;
-  this._matteType = t;
+  this.trackMatteLayer = m;
+  this.trackMatteType = t;
 };
 Layer.prototype.removeTrackMatte = function () {
-  this._matte = null;
-  this._matteType = null;
+  this.trackMatteLayer = null;
+};
+// EVERY AE layer has moveBefore — cameras and lights included — and
+// `layer.trackMatteType = X` is a plain assignment that never throws on
+// one either (measured: a camera reads back 5015 for LUMA). Both are
+// modelled because together they are how set_track_matte's legacy
+// branch reordered the user's stack and then reported a matte AE had
+// not made; a stub without moveBefore turns that silent lie into a
+// TypeError and stops testing the real failure.
+Layer.prototype.moveBefore = function (other) {
+  const ls = this.comp._layers;
+  ls.splice(ls.indexOf(this), 1);
+  ls.splice(ls.indexOf(other), 0, this);
 };
 
 let compIds = 0;
@@ -329,6 +414,12 @@ function Comp(name) {
   this.width = 1920;
   this.height = 1080;
   this.duration = 10;
+  this.frameRate = 30;
+  // get_comp_details reports these, so a comp without them is not a comp
+  // this stub can read back through the tool the panel actually calls.
+  this.resolutionFactor = [1, 1];
+  this.workAreaStart = 0;
+  this.workAreaDuration = 10;
   this.parentFolder = { name: "(root)" };   // every real comp has one
   const self = this;
   this.layers = {
@@ -373,10 +464,43 @@ Comp.prototype.duplicate = function () {
 function CompItem() {} function FolderItem() {} function FootageItem() {}
 function TextLayer() {} function ShapeLayer() {} function CameraLayer() {}
 function LightLayer() {} function AVLayer() {} function SolidSource() {}
+
+// AE's LAYER CLASSES, measured in AE 2026 (WORKPLAN-LOG 2026-09-01)
+// because a classless stub cannot see the bug it hid: a CameraLayer and
+// a LightLayer carry no setTrackMatte / removeTrackMatte AT ALL
+// (typeof === "undefined"), while a solid, a text layer and a shape
+// layer do. With every stub layer classless, set_track_matte's legacy
+// branch "succeeded" on a camera here exactly as it did in real AE.
+//
+// The classes are FLAT and deliberately so: measured in ExtendScript,
+// `instanceof AVLayer` is FALSE for a TextLayer AND for a ShapeLayer,
+// not just for a camera and a light — only the plain solid answers
+// true. A first cut at the fix keyed the refusal off `instanceof
+// AVLayer` and locked text and shape layers out of mattes entirely; a
+// stub that chained TextLayer to AVLayer would have called that fix
+// green. Layer.prototype's own descriptors are copied onto a per-kind
+// proto so the instance keeps every stub method while its CLASS
+// changes.
+const LAYER_CLASS = { camera: CameraLayer, light: LightLayer,
+                      text: TextLayer, shape: ShapeLayer };
+function classify(layer) {
+  const K = LAYER_CLASS[layer.kind] || AVLayer;
+  const proto = Object.create(K.prototype,
+    Object.getOwnPropertyDescriptors(Layer.prototype));
+  if (K === CameraLayer || K === LightLayer) {
+    delete proto.setTrackMatte;
+    delete proto.removeTrackMatte;
+  }
+  Object.setPrototypeOf(layer, proto);
+}
 const ParagraphJustification = {};
+// The real numbers, measured in AE 2026 — an unmatted layer reads 5012,
+// NOT 0, and NO_TRACK_MATTE is 5012 rather than the 5013 the probe used
+// to assume (5013 is ALPHA). Anything that decides "is there a matte"
+// from this number is wrong twice over; see removeTrackMatte above.
 const TrackMatteType = {
-  ALPHA: "alpha", ALPHA_INVERTED: "alpha_inv",
-  LUMA: "luma", LUMA_INVERTED: "luma_inv", NO_TRACK_MATTE: "none"
+  NO_TRACK_MATTE: 5012, ALPHA: 5013, ALPHA_INVERTED: 5014,
+  LUMA: 5015, LUMA_INVERTED: 5016
 };
 
 const comp = new Comp("Props");
@@ -491,10 +615,86 @@ assert(!r.ok || /is the parent/.test(r.data.skipped || ""),
 
 // 7. track mattes
 r = call("set_track_matte", { layer: "A", matteLayer: "B", mode: "luma" });
-assert(r.ok && A._matte === B && A._matteType === "luma",
+assert(r.ok && A.trackMatteLayer === B &&
+       A.trackMatteType === TrackMatteType.LUMA,
        "set_track_matte wires luma matte via setTrackMatte");
 r = call("set_track_matte", { layer: "A", mode: "none" });
-assert(r.ok && A._matte === null, "mode none removes the matte");
+assert(r.ok && A.trackMatteLayer === null, "mode none removes the matte");
+assert(r.data.was === "B", "…and the receipt names what it removed: " +
+       JSON.stringify(r.data));
+// The measurement this whole block exists for: AE does NOT reset the
+// type on removal. Anything reading trackMatteType to answer "does this
+// layer have a matte" says yes here, forever, for a matte that is gone.
+assert(A.trackMatteType === TrackMatteType.LUMA,
+       "AE leaves trackMatteType at the removed type (" +
+       A.trackMatteType + ")");
+r = call("set_track_matte", { layer: "A", mode: "none" });
+assert(!r.ok && /'A' has no track matte to remove/.test(r.error) &&
+       /get_comp_details/.test(r.error),
+       "…so a second removal is REFUSED, not reported as 'removed': " +
+       (r.ok ? JSON.stringify(r.data) : r.error));
+
+// The matte has to be VISIBLE, or set_track_matte's receipt is the only
+// evidence it ever landed — which is how a matte AE never made read
+// exactly like one it did.
+function rowOf(name) {
+  const d = call("get_comp_details", { limit: 0 });
+  assert(d.ok, "get_comp_details answered: " + (d.ok ? "" : d.error));
+  return d.data.layers.filter(l => l.name === name)[0] || null;
+}
+assert(!rowOf("A").matte,
+       "an unmatted layer reports no matte even though trackMatteType " +
+       "still reads " + A.trackMatteType);
+call("set_track_matte", { layer: "A", matteLayer: "B", mode: "alpha" });
+assert(rowOf("A").matte === "B" && rowOf("A").matteMode === "alpha",
+       "get_comp_details names the matte layer and its mode: " +
+       JSON.stringify(rowOf("A")));
+assert(!rowOf("B").matte, "…and only on the layer that has one");
+call("set_track_matte", { layer: "A", mode: "none" });
+assert(!rowOf("A").matte,
+       "…and it goes away when the matte does: " +
+       JSON.stringify(rowOf("A")));
+// The layer's own SIZE has to be visible here too, for the same reason
+// the matte does. add_mask's doc says "sizes from get_comp_details,
+// never guessed" and this result carried no layer size at all — so four
+// separate phrasings of "hide half of Beta" masked a 100x100 layer with
+// [0, 540, 1920.0001, 540], the comp's dimensions halved, and AE took it
+// silently. The model was obeying: 1920x1080 was the only size it had.
+const SMALL = new Layer("Beta", comp, "solid", { width: 100, height: 100 });
+comp._layers.push(SMALL);
+assert(rowOf("Beta").width === 100 && rowOf("Beta").height === 100,
+       "a layer smaller than the comp reports its OWN size: " +
+       JSON.stringify(rowOf("Beta")));
+assert(!("width" in rowOf("A")) && !("height" in rowOf("A")),
+       "a full-frame layer reports none — absent means the comp's size, " +
+       "which is in the same result: " + JSON.stringify(rowOf("A")));
+
+// A text layer is where .width/.height cannot be believed at all, and
+// where the origin is not 0,0 either.
+const TXT = new Layer("HELLO", comp, "text",
+  { left: 3.487, top: -49.568, width: 146.671, height: 28.017 });
+comp._layers.push(TXT);
+assert(TXT.width === 1920,
+       "stub: AE reports the COMP's width for a text layer (measured)");
+assert(rowOf("HELLO").width === 146.671 && rowOf("HELLO").height === 28.017,
+       "…and the row reports the MEASURED box instead: " +
+       JSON.stringify(rowOf("HELLO")));
+assert(rowOf("HELLO").left === 3.487 && rowOf("HELLO").top === -49.568,
+       "…with the baseline origin, so [0, 0, w, h] is visibly not it: " +
+       JSON.stringify(rowOf("HELLO")));
+assert(!("left" in rowOf("Beta")) && !("top" in rowOf("Beta")),
+       "…and a layer whose origin IS 0,0 pays nothing for those two: " +
+       JSON.stringify(rowOf("Beta")));
+
+// An empty shape layer measures 0x0 and a camera has no size at all:
+// neither may be reported as a box, and neither may throw.
+const EMPTY = new Layer("Empty Shape", comp, "shape");
+comp._layers.push(EMPTY);
+assert(!("width" in rowOf("Empty Shape")),
+       "a layer with nothing to measure reports no size: " +
+       JSON.stringify(rowOf("Empty Shape")));
+comp._layers.pop(); comp._layers.pop(); comp._layers.pop();
+
 r = call("set_track_matte", { layer: "A", matteLayer: "A", mode: "alpha" });
 assert(!r.ok && /matte itself/.test(r.error), "self-matte refused");
 r = call("set_track_matte", { layer: "A", mode: "alpha" });
@@ -630,6 +830,56 @@ r = call("apply_expression_preset", { layer: "A", property: "position",
 assert(!r.ok && /link_property/.test(r.error),
        "time_linear refuses an ARRAY property with a route out: " + r.error);
 call("set_expression", { layer: "A", property: "position", expression: "" });
+
+// A missing 'property' was the one refusal in the host that told the
+// model NOTHING back: the string "Missing 'property'", no list of what
+// it could have said, no sign of what this layer carries. Measured with
+// the real model (chat-probe step 23, all four phrasings of "keep it
+// drifting"): every run omitted 'property' on its first
+// apply_expression_preset, two gave up on the bare error, and one lost
+// the whole round to a rollback and then re-sent every command EXCEPT
+// the one that had failed — leaving a null rig wired to Beta and no
+// wiggle anywhere. Grounded errors are how the small local model
+// self-corrects (CLAUDE.md), so the refusal now names the transform
+// words, the layer's OWN effects (the only way to spell
+// effect.<Effect>.<Param>) and whatever is already keyframed.
+r = call("apply_expression_preset", { layer: "A", preset: "wiggle" });
+assert(!r.ok && /Missing 'property'/.test(r.error) &&
+       /position, scale, rotation, opacity or anchorPoint/.test(r.error),
+       "a missing 'property' lists the transform words: " + r.error);
+assert(!r.ok && /'position' is the drift\/float\/hover one/.test(r.error),
+       "…and the wiggle preset says which one it meant: " + r.error);
+assert(/effect\.<Effect>\.<Param>[\s\S]{0,60}Gaussian Blur/.test(r.error),
+       "…and the layer's real effects, so the effect form is spellable: " +
+       r.error);
+assert(A.property("Transform").property("Position").expression === "",
+       "…and nothing was applied");
+r = call("apply_expression_preset", { layer: "A", preset: "loop_cycle" });
+assert(!r.ok && /the property that HAS the keyframes/.test(r.error),
+       "a loop preset asks for the keyframed property instead: " + r.error);
+r = call("apply_expression_preset", { layer: "A", preset: "time_linear" });
+assert(!r.ok && /scalar property/.test(r.error),
+       "time_linear asks for a scalar one: " + r.error);
+// The keyed half is what a loop_* caller actually needs, so it has to be
+// read off the layer rather than guessed.
+call("add_keyframe", { layer: "A", property: "rotation", time: 0, value: 0 });
+r = call("apply_expression_preset", { layer: "A", preset: "loop_cycle" });
+assert(!r.ok && /Already keyframed here: rotation/.test(r.error),
+       "…and the refusal names the property that has keys: " + r.error);
+call("remove_keyframes", { layer: "A", property: "rotation" });
+r = call("apply_expression_preset", { layer: "A", preset: "loop_cycle" });
+assert(!r.ok && !/Already keyframed/.test(r.error),
+       "…and stops saying so once the keys are gone: " + r.error);
+// Every tool that resolves a property shares the refusal, including the
+// path-aware resolver behind set_expression / get_property.
+r = call("set_expression", { layer: "A", expression: "wiggle(2, 30)" });
+assert(!r.ok && /Missing 'property'/.test(r.error) &&
+       /position, scale, rotation, opacity or anchorPoint/.test(r.error),
+       "the path-aware resolver grounds it too: " + r.error);
+r = call("get_property", { layer: "A" });
+assert(!r.ok && /Missing 'property'/.test(r.error) &&
+       /On 'A'/.test(r.error),
+       "…and it names the layer it is talking about: " + r.error);
 
 // add_keyframe / remove_keyframes: the 50 ms nearest-key tolerance is the
 // whole contract of removing BY TIME, and nothing tested it.
@@ -955,6 +1205,10 @@ assert(/'A' is /.test(r.error) && /'B' is /.test(r.error),
        r.error.slice(100, 260));
 A.setTrackMatte = rawSet;
 
+// A real matte first: the removal guard added 2026-09-02 refuses before
+// AE is ever called when there is nothing to remove, so without this the
+// step below would measure the guard instead of AE's raw message.
+call("set_track_matte", { layer: "A", matteLayer: "B", mode: "luma" });
 const rawRemove = A.removeTrackMatte;
 A.removeTrackMatte = function () {
   throw new Error("After Effects error: Object is invalid");
@@ -968,6 +1222,91 @@ assert(/visual \(AV\) layers/.test(r.error) &&
        "with the constraint and the tool that shows layer types: " +
        r.error.slice(0, 140));
 A.removeTrackMatte = rawRemove;
+
+// ---------------- a camera or a light NEVER takes (or makes) a matte
+// The zero-silent-failure hole WORKPLAN 1b's real-AE probe found on
+// 2026-09-01: a camera is not an AVLayer and has no setTrackMatte, so
+// the legacy branch ran, `camera.trackMatteType = LUMA` was ACCEPTED
+// without throwing (it read back 5015), and the tool reported ok for a
+// matte After Effects never made — after moveBefore had already
+// reordered the user's stack. Nothing threw, so the wrap above could
+// not catch it: the refusal has to be by TYPE, before anything moves.
+const CAM = new Layer("Cam 1", comp, "camera");
+comp._layers.push(CAM);
+assert(CAM instanceof CameraLayer && LIT instanceof LightLayer &&
+       SHP instanceof ShapeLayer && A instanceof AVLayer,
+       "stub fidelity: each layer answers its own AE class");
+// The trap the first cut at this fix fell into, pinned so it cannot be
+// re-set: in ExtendScript a TEXT layer and a SHAPE layer are not
+// `instanceof AVLayer` either, so that predicate is not the AV test it
+// reads as — it refuses two types that matte perfectly well.
+assert(!(CAM instanceof AVLayer) && !(LIT instanceof AVLayer) &&
+       !(SHP instanceof AVLayer),
+       "stub fidelity: instanceof AVLayer is false for shape layers too");
+assert(typeof CAM.setTrackMatte === "undefined" &&
+       typeof CAM.removeTrackMatte === "undefined",
+       "stub fidelity: a camera carries neither matte method");
+assert(typeof SHP.setTrackMatte === "function",
+       "stub fidelity: a shape layer does carry setTrackMatte");
+
+const stackBefore = comp._layers.map(l => l.name).join(",");
+r = call("set_track_matte", { layer: "Cam 1", matteLayer: "B",
+                              mode: "luma" });
+assert(!r.ok, "a camera TARGET is refused, not silently 'set': " +
+       JSON.stringify(r.ok ? r.data : r.error));
+assert(/'Cam 1' is camera/.test(r.error) &&
+       /cannot take a track matte/.test(r.error),
+       "…naming the layer and its measured type: " + r.error);
+assert(/visual \(AV\) layers/.test(r.error) &&
+       /get_comp_details/.test(r.error),
+       "…with the rule and the tool that shows layer types");
+assert(comp._layers.map(l => l.name).join(",") === stackBefore,
+       "…and NOTHING moved in the layer stack");
+assert(typeof CAM.trackMatteType === "undefined",
+       "…and no phantom trackMatteType was written on the camera");
+
+r = call("set_track_matte", { layer: "Key", matteLayer: "B",
+                              mode: "alpha" });
+assert(!r.ok && /'Key' is light/.test(r.error),
+       "a light target is refused the same way: " + r.error);
+
+// mode:"none" lied identically — a matte that never existed reported
+// "removed" — so the guard has to sit ahead of the removal branch too.
+r = call("set_track_matte", { layer: "Cam 1", mode: "none" });
+assert(!r.ok && /cannot take a track matte/.test(r.error),
+       "removing a matte from a camera is refused, not reported removed: " +
+       JSON.stringify(r.ok ? r.data : r.error));
+
+r = call("set_track_matte", { layer: "A", matteLayer: "Cam 1",
+                              mode: "alpha" });
+assert(!r.ok && /matteLayer 'Cam 1' is camera/.test(r.error) &&
+       /cannot BE a matte/.test(r.error),
+       "a camera MATTE is refused by type before AE is asked: " + r.error);
+// (the word is whatever AELL_layerType makes of this stub's source —
+// what matters is that the TARGET is named and typed too, the way the
+// AE-throw wrap above does it)
+assert(/\(layer: 'A' is \w+\)/.test(r.error),
+       "…and the target's type rides along, as the AE-throw wrap does");
+
+// …and the guard stops exactly there. A shape layer matting a solid, and
+// a shape layer BEING the matte, both still go through — the over-broad
+// first cut refused both.
+r = call("set_track_matte", { layer: "Box", matteLayer: "A",
+                              mode: "luma" });
+assert(r.ok && r.data.layer === "Box" && r.data.matte === "A",
+       "a SHAPE layer still takes a matte: " +
+       JSON.stringify(r.ok ? r.data : r.error));
+r = call("set_track_matte", { layer: "A", matteLayer: "Box",
+                              mode: "alpha_inverted" });
+assert(r.ok && r.data.matte === "Box" && r.data.mode === "alpha_inverted",
+       "…and still IS one: " + JSON.stringify(r.ok ? r.data : r.error));
+r = call("set_track_matte", { layer: "Box", mode: "none" });
+assert(r.ok && r.data.matte === "removed",
+       "…and removal on a shape layer is untouched: " +
+       JSON.stringify(r.ok ? r.data : r.error));
+r = call("set_track_matte", { layer: "A", mode: "none" });
+assert(r.ok, "…as it is on a solid");
+comp._layers.splice(comp._layers.indexOf(CAM), 1);
 
 // ------------------------------------- remove_effect (audit 0.11 item 4)
 // "Take off the glow" had no tool. A reverted host answers every call
@@ -1021,6 +1360,52 @@ assert(r.ok && r.data.removed === "Glow 2" &&
        "a case-insensitive display name still finds it: " +
        JSON.stringify(r.ok ? r.data : r.error));
 
+// The two AE facts remove_effect's body leans on, measured 2026-09-02
+// (scripts/verb-semantics-probe.jsx, AE 2026): survivors keep the names
+// AE numbered them with, and every sibling reference held across the
+// removal goes stale. The receipt has to be built from strings taken
+// BEFORE the call — a host that read matches[i].name afterwards would
+// throw "Object is invalid" out of a tool that had already succeeded.
+const sib = new Layer("Sib", comp);
+const sibFx = sib.property("ADBE Effect Parade");
+sibFx._children.length = 0;
+["Gaussian Blur", "Gaussian Blur 2", "Gaussian Blur 3"].forEach((n, i) => {
+  const g = new PGroup(n, "ADBE Gaussian Blur 2");
+  g.add(new Prop("Blurriness", "ADBE Gaussian Blur 2-0001", (i + 1) * 11));
+  sibFx.add(g);
+});
+comp._layers.push(sib);
+// By matchName, so all three match and the receipt has to name the two
+// survivors — the read that would throw if it happened after remove().
+r = call("remove_effect", { layer: "Sib", effect: "ADBE Gaussian Blur 2" });
+assert(r.ok && r.data.removed === "Gaussian Blur" &&
+       r.data.remainingEffects.join(", ") === "Gaussian Blur 2, Gaussian Blur 3",
+       "survivors keep the numbers AE gave them — nothing is renumbered " +
+       "down: " + JSON.stringify(r.ok ? r.data : r.error));
+assert(r.ok && r.data.alsoMatched.join(",") === "Gaussian Blur 2,Gaussian Blur 3",
+       "…and the receipt names them, which is only possible because the " +
+       "host read those names before the removal: " +
+       JSON.stringify(r.ok ? r.data.alsoMatched : r.error));
+// The staleness itself, at the primitive: hold both survivors, drop one,
+// and read the other with nothing re-fetching in between — which is the
+// shape the host would have if `others` were built after victim.remove()
+// instead of before it.
+const stale = (p) => {
+  try { return String(p.name); }
+  catch (e) { return "THREW: " + e.message; }
+};
+const keptA = sibFx.property(1), keptB = sibFx.property(2);
+keptA.remove();
+assert(/Object is invalid/.test(stale(keptB)),
+       "a sibling reference held across remove() is dead: " + stale(keptB));
+assert(/Object is invalid/.test(stale(keptA)),
+       "…and so is the removed one: " + stale(keptA));
+assert(sibFx.property(1).name === "Gaussian Blur 3",
+       "re-fetching through property() hands back a live reference again " +
+       "(the PATH went stale, the property did not): " +
+       sibFx.property(1).name);
+comp._layers.splice(comp._layers.indexOf(sib), 1);
+
 // Grounded refusals.
 r = call("remove_effect", { layer: "A", effect: "Glow" });
 assert(!r.ok && /No effect 'Glow' on 'A'/.test(r.error) &&
@@ -1037,10 +1422,15 @@ const bare = new Layer("Bare", comp);
 bare.property("ADBE Effect Parade")._children.length = 0;
 comp._layers.push(bare);
 r = call("remove_effect", { layer: "Bare", effect: "Glow" });
-assert(!r.ok && /'Bare' has no effects/.test(r.error) &&
-       /apply_effect adds one/.test(r.error),
-       "a layer with no effects is refused, pointing at apply_effect: " +
-       r.error);
+// It used to point at apply_effect, which is an ADD offered to a REMOVE
+// caller. Measured 2026-09-02 (chat-probe row 29): the model hit this
+// refusal and guessed seven MORE effect names in the same round, so the
+// sentence has to close the door instead of opening another one.
+assert(!r.ok && /'Bare' has no effects at all/.test(r.error) &&
+       /no other effect name will match/.test(r.error) &&
+       !/apply_effect/.test(r.error),
+       "a layer with no effects is refused in a way that stops the " +
+       "guessing, and offers no ADD to a REMOVE caller: " + r.error);
 // (The stub light is not an instanceof LightLayer, so the type word is
 // whatever AELL_layerType falls back to — the refusal is what matters.)
 r = call("remove_effect", { layer: "Key", effect: "Glow" });
@@ -1057,5 +1447,107 @@ assert(comp.selectedLayers.length === 1 && comp.selectedLayers[0] === B,
        "…and B is still the selection afterwards");
 comp._layers.forEach(l => { l.selected = false; });
 comp._layers.splice(comp._layers.indexOf(bare), 1);
+
+// ---------------------------------------------------------------------
+// 20. The carpet-bomb gate on remove_keyframes, and the refusal that
+//     used to load the gun.
+//
+// Measured 2026-09-02 in real AE (chat-probe row 29, "Probe Room's got
+// junk everywhere, tidy it"): the model called remove_keyframes with no
+// targets, met the grounded "Layers here: ..." refusal, copied all
+// twelve names straight back out of it into ONE call, and the tool
+// answered {"layers":12,"property":"opacity","removed":18} -- ok,
+// receipt, 18 keyframes nobody named gone. Two halves, both here: the
+// refusal must stop handing out the roster as a target list, and a wipe
+// over EVERY layer in the comp must be seen before it happens.
+
+comp._layers.forEach(l => { l.selected = false; });
+delete $.global.AELL_wipeShown;
+$.global.AELL_requestSeq = 0;
+$.global.AELL_newRequest();
+
+const wipeNames = comp._layers.map(l => l.name);
+wipeNames.forEach(n => {
+  call("set_keyframes", { layer: n, property: "opacity",
+    keys: [{ time: 0, value: 0 }, { time: 1, value: 100 }] });
+});
+const wipeKeys = () => comp._layers.reduce((n, l) =>
+  n + l.property("Transform").property("Opacity").numKeys, 0);
+const keysBefore = wipeKeys();
+assert(keysBefore === wipeNames.length * 2,
+       "every layer in the stub comp starts with two opacity keys (" +
+       keysBefore + ")");
+
+// (a) the no-targets refusal names the layers -- it must, the model
+//     cannot select -- but it no longer reads as "pass them all".
+r = call("remove_keyframes", { property: "opacity" });
+assert(!r.ok && /ONLY the layers the user named/.test(r.error) &&
+       /ASK which ones/.test(r.error) &&
+       /deletes animation/.test(r.error),
+       "a destructive no-targets refusal says whose names to pass, and " +
+       "to ask when there are none: " + r.error);
+assert(/Layers here: /.test(r.error) &&
+       /With opacity keyframes: /.test(r.error),
+       "...and is still grounded in what exists: " + r.error);
+
+// (b) naming every layer in the comp is refused, and the refusal IS the
+//     preview -- with a question in it, because "clean it up" has no
+//     answer inside the project.
+r = call("remove_keyframes", { layers: wipeNames, property: "opacity" });
+assert(!r.ok && /refused to wipe every layer/.test(r.error),
+       "a wipe across the whole comp is refused: " +
+       (r.ok ? "IT RAN" : r.error));
+assert(/nothing has been previewed yet/.test(r.error),
+       "and says why: " + r.error);
+assert(new RegExp("delete " + keysBefore + " opacity keyframe\\(s\\) from " +
+                  wipeNames.length + " layer\\(s\\)").test(r.error),
+       "the refusal counts exactly what would go: " + r.error);
+assert(/ask the user WHICH/.test(r.error),
+       "and asks which, rather than offering to do it all: " + r.error);
+assert(wipeKeys() === keysBefore, "nothing was removed");
+
+// A retry inside the SAME reply is refused too -- nobody has seen it.
+r = call("remove_keyframes", { layers: wipeNames, property: "opacity" });
+assert(!r.ok && /THIS same reply/.test(r.error),
+       "a retry in the same reply is refused: " + r.error);
+assert(wipeKeys() === keysBefore, "still nothing removed");
+
+// The next user request has the preview behind it, so it goes through:
+// this gates a guess, it does not forbid the action.
+$.global.AELL_newRequest();
+r = call("remove_keyframes", { layers: wipeNames, property: "opacity" });
+assert(r.ok && r.data.removed === keysBefore,
+       "the NEXT request wipes them: " + (r.ok ? r.data.removed : r.error));
+assert(wipeKeys() === 0, "and the keys really went");
+
+// Narrowness, three ways: a named SUBSET is never gated, a full-comp
+// wipe with nothing to lose is not gated (a refusal about a no-op is
+// noise), and {times} names its own keys, so it is not a guess.
+delete $.global.AELL_wipeShown;
+$.global.AELL_newRequest();
+call("set_keyframes", { layers: wipeNames, property: "opacity",
+  keys: [{ time: 0, value: 0 }, { time: 1, value: 100 }] });
+r = call("remove_keyframes", { layers: wipeNames.slice(0, 2),
+                               property: "opacity" });
+assert(r.ok && r.data.removed === 4,
+       "two named layers out of " + wipeNames.length + " are not gated: " +
+       (r.ok ? r.data.removed : r.error));
+$.global.AELL_newRequest();
+r = call("remove_keyframes", { layers: wipeNames, property: "rotation" });
+assert(r.ok && r.data.removed === 0,
+       "a whole-comp wipe with no keys to lose is not gated: " +
+       (r.ok ? "ok" : r.error));
+$.global.AELL_newRequest();
+delete $.global.AELL_wipeShown;
+r = call("remove_keyframes", { layers: wipeNames, property: "opacity",
+                               times: [0] });
+assert(r.ok && r.data.removed > 0,
+       "{times} names the keys it takes, so it is not gated: " +
+       (r.ok ? r.data.removed : r.error));
+$.global.AELL_newRequest();
+call("remove_keyframes", { layers: wipeNames, property: "opacity" });
+$.global.AELL_newRequest();
+call("remove_keyframes", { layers: wipeNames, property: "opacity" });
+comp._layers.forEach(l => { l.selected = false; });
 
 console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");

@@ -71,6 +71,22 @@ function compResolutionLabel(c) {
 }
 
 function capLayers(compName, all, args) {
+  // The matte rig's layers are in the comp whether or not the branch that
+  // built this row list knows about them, and a layer keeps its row after
+  // its matte is REMOVED -- which is the case the read-back step exists
+  // for (measured in AE 2026: removeTrackMatte leaves trackMatteType at
+  // the type it just removed, so only the matte LAYER tells the truth).
+  const rig = mtRig[compName] || [];
+  if (rig.length) {
+    const have = {};
+    for (const l of all) have[l.name] = true;
+    const extra = [];
+    for (const nm of rig) {
+      if (!have[nm]) extra.push({ index: all.length + extra.length + 1,
+                                  name: nm, effects: [] });
+    }
+    if (extra.length) all = all.concat(extra);
+  }
   const total = all.length;
   const limit = listLimit(args && args.limit);
   let start = (args && args.start > 0) ? Math.round(args.start) : 1;
@@ -86,6 +102,11 @@ function capLayers(compName, all, args) {
     if (l && wanted.indexOf(l) < 0) wanted.push(l);
   }
   wanted.sort((a, b) => a.index - b.index);
+  for (const l of wanted) {
+    const m = mattes[compName + "|" + l.name];
+    if (m) { l.matte = m.matte; l.matteMode = m.mode; }
+    else if (l.matte) { delete l.matte; delete l.matteMode; }
+  }
   const cp = compProps[compName];
   const out = { name: compName, numLayers: total,
                 layersShown: wanted.length, layers: wanted };
@@ -109,6 +130,7 @@ const createdComps = [];
 const folders = {};        // path -> true (the create_folder rig)
 const folderIds = {};      // id -> path; real AE resolves an item by id
 let nextFolderId = 5000;   // clear of the solid-source ids above
+let orgShownKey = null;    // organize_project's preview gate (0.11.8)
 // The render-queue rig (WORKPLAN 5.5). Measured in AE 2026: a render
 // takes the WHOLE queue, an existing output file raises a modal, and the
 // output module forces its own extension onto whatever path it is given.
@@ -308,10 +330,24 @@ let textStyle = null;
 // "did slot i go to layer i" is a question the stub answers for free.
 let ordX = {};
 let ordStack = [];
+// Track mattes, remembered rather than answered with a constant: until
+// 2026-09-02 the suite checked only set_track_matte's RECEIPT, so a matte
+// AE never made read exactly like one it did. "comp|layer" -> the matte
+// it currently carries; mtRig is which layers the matte steps touched, so
+// get_comp_details still has a row for one whose matte was removed.
+let mattes = {};
+let mtRig = {};
 // The masks each layer holds, "comp|layer" -> [names], so delete_mask
 // answers from what add_mask really put there and the mask refusals
 // ("no masks", "Mask not found ... Masks here:") are measurements.
 let mkMasks = {};
+// How big each layer really is, "comp|layer" -> {width, height}. add_mask
+// refuses a mask that misses the layer entirely and get_comp_details puts
+// the layer's own size on its row, and NEITHER can be answered from the
+// comp's dimensions — which is the whole bug: the comp's were the only
+// numbers the model had, so four phrasings masked a 100x100 layer with
+// 1920x1080 and the tool said ok.
+let mkSizes = {};
 // The mask rig reads back what it just wrote (numKeys after a refusal),
 // so the canned host has to remember how many keys each mask carries.
 let maskKeys = {};
@@ -341,6 +377,15 @@ let batchBlur = null;
 //     Options", which is why every entry carries a matchName.
 const cvControls = {};   // "layer/name" -> {type, match, value}
 const cvKeys = {};       // "layer/prop"  -> [{time, value}]
+// What a property SETTLES ON once its last key is taken away.
+// Measured in AE 2026 (scripts/verb-semantics-probe.jsx): the host
+// empties a property by removing key 1 over and over, so the key
+// standing last is the last in TIME and AE holds that value --
+// not the first key's, and not the value under the playhead (two
+// rigs emptied at different playheads both kept the last key's).
+// Without this the canned host answered a constant, which is how a
+// step could read back a value nothing had produced.
+const cvResidual = {};   // "layer/prop"  -> value after the last key
 const parentedLayers = {}; // layer -> parent, so the resize can tell a
                            // child's inherited transform from its own
 const cvExpr = {};       // "layer/prop"  -> expression
@@ -390,6 +435,29 @@ const cvKeyList = (layer, prop) => {
   return cvKeys[k];
 };
 const inCvComp = (a) => !!(a && /Cover/.test(a.comp || ""));
+
+// ---- the carpet-bomb rig. remove_keyframes gained a gate on
+// 2026-09-02: naming EVERY layer in a comp is the shape the model
+// produced from "tidy it" (row 29, 18 opacity keys gone on an ok
+// receipt), so it now previews first and the caller has to come back.
+// Modelled here, not faked: the roster grows from the add_solid calls
+// the suite really makes, so a fourth solid moves this stub's idea of
+// "every layer" the same way it moves real AE's.
+let wpLayers = [];               // solids in the wipe comp, by name
+const wpKeys = {};               // "layer/prop" -> key count
+let wpShown = null;              // what the gate has previewed
+const inWpComp = (a) => !!(a && /Self-Test Wipe/.test(a.comp || ""));
+const wpTargets = (a) => (Array.isArray(a.layers) && a.layers.length)
+  ? a.layers.slice() : (a.layer ? [String(a.layer)] : []);
+const wpCount = (layer, prop) => wpKeys[layer + "/" + cvProp(prop)] || 0;
+// Every run starts on a fresh comp in real AE, and the GATE's memory is
+// per-session there too — a stub that carried either across runs would
+// stop gating the second one.
+const resetWpRig = () => {
+  wpLayers = [];
+  wpShown = null;
+  for (const k of Object.keys(wpKeys)) delete wpKeys[k];
+};
 
 // ---- the audio rig, modelled from AE 2026 rather than from the tool.
 // A solid is silent until Tone is applied; then the converter hears it.
@@ -609,6 +677,9 @@ const LIGHT_KINDS = ["parallel", "spot", "point", "ambient", "environment"];
 const lightAcc = (list, kind) =>
   (" " + list + " ").indexOf(" " + kind + " ") >= 0;
 let lights = {};
+// The rigger layers the matte tools have to refuse: cameras by name, the
+// same way `lights` already tracks lights.
+let cameraNames = {};
 
 // ---- text animators (WORKPLAN 5.1). A canned host that just answered
 // "ok" would let a silent add_text_animator pass its own suite steps, so
@@ -1282,7 +1353,60 @@ function bnCanned(tool, args) {
   }
 }
 
+// The singular-{layer} gate, mirrored from AELL_resolveLayer. A tool that
+// takes ONE layer used to answer the bare "Missing 'layer' (name or
+// 1-based index)" -- which names the absent key and never the key that
+// arrived instead, so chat-probe row 36 re-sent {layers: [...]} to
+// apply_effect and gave up. A canned host that just answered {ok} would
+// let those refusal steps pass against anything.
+//
+// Scoped to the tools with NO plural branch of their own: set_property,
+// set_layer_parent, get_bounds and the batch tools all read {layers}
+// themselves, so the gate must not speak for them.
+const SINGULAR_LAYER_TOOLS = ["apply_effect", "set_effect_param",
+  "link_property", "add_control", "set_expression", "add_mask"];
+
+// The comp's own roster, for the grounded bare-miss message. Only the
+// batch comp is modelled by name here; that is the comp the refusal
+// steps run in, and a roster invented for the others would be a lie.
+function compRoster(comp) {
+  if (!/Batch/.test(String(comp || ""))) return "(none)";
+  const out = [];
+  for (let i = 1; i <= batchLayers && i <= 8; i++) {
+    out.push(i === 1 ? "ST Batch" : "ST Batch " + i);
+  }
+  if (batchLayers > 8) {
+    return out.join(", ") + " … and " + (batchLayers - 8) + " more";
+  }
+  return out.join(", ") || "(none)";
+}
+
+function singularLayerGate(tool, args) {
+  if (SINGULAR_LAYER_TOOLS.indexOf(tool) === -1) return null;
+  const a = args || {};
+  const plural = Array.isArray(a.layers) && a.layers.length
+    ? a.layers : null;
+  const redirect = " for_each_layer {layers: [...], tool: '" + tool +
+    "', args: {...}} runs it on each.";
+  if (Array.isArray(a.layer)) {
+    return { __err: "'layer' (name or 1-based index) takes ONE layer, not " +
+      "a list — you passed " + a.layer.join(", ") + "." + redirect };
+  }
+  if (plural) {
+    return { __err: "Missing 'layer' (name or 1-based index) — you passed " +
+      "'layers' (" + plural.join(", ") + "), which '" + tool +
+      "' does not take." + redirect };
+  }
+  if (a.layer === null || typeof a.layer === "undefined" || a.layer === "") {
+    return { __err: "Missing 'layer' (name or 1-based index). Layers in '" +
+      String(a.comp || "") + "': " + compRoster(a.comp) + "." };
+  }
+  return null;
+}
+
 function cannedOk(tool, args) {
+  const gated = singularLayerGate(tool, args);
+  if (gated) return gated;
   if (inBnComp(args)) {
     const bn = bnCanned(tool, args);
     if (typeof bn !== "undefined") return bn;
@@ -1486,6 +1610,42 @@ function cannedOk(tool, args) {
       const action = /reduce/.test(act) ? "reduce_project"
                    : /consolidate/.test(act) ? "consolidate_footage"
                    : "remove_unused_footage";
+      // No comp or layer scope (0.11.7). Modelled here for the same
+      // reason the refusals above are: a canned host that accepted a
+      // comp-scoped call would pass the suite step while the real tool
+      // ignored the argument and deleted project-wide.
+      const scopeKeys = action === "reduce_project"
+        ? ["layer", "layers", "layerName", "layerNames"]
+        : ["comp", "comps", "compName", "compNames", "keepComps",
+           "layer", "layers", "layerName", "layerNames"];
+      const offenders = [], scopeVals = [];
+      for (const k of scopeKeys) {
+        const v = args ? args[k] : undefined;
+        if (v === undefined || v === null || v === "") continue;
+        if (Array.isArray(v)) {
+          if (!v.length) continue;
+          for (const one of v) scopeVals.push(String(one));
+        } else scopeVals.push(String(v));
+        offenders.push(k);
+      }
+      if (offenders.length) {
+        const named = scopeVals.filter((n) => createdComps.indexOf(n) !== -1);
+        let msg = "clean_project has no comp or layer scope: it works on " +
+          "the PROJECT PANEL, and " + action + " would ignore " +
+          offenders.join(", ") + " and delete project-wide. ";
+        if (named.length) {
+          msg += "'" + named.join("', '") + "' " +
+            (named.length > 1 ? "are comps" : "is a comp") +
+            " in this project. To tidy a COMP, remove exactly what was " +
+            "named, with the tool that removes it (remove_keyframes, " +
+            "remove_effect, delete_mask, delete_layer, precompose); if " +
+            "nothing was named, ask the user what should go. ";
+        }
+        msg += "To clean the PROJECT PANEL instead, call clean_project " +
+          "again with action alone" +
+          (action === "reduce_project" ? " plus keepComps" : "") + ".";
+        return { __err: msg };
+      }
       const dryRun = !(args && args.dryRun === false);
       const orphans = solidSources
         .filter((so) => String(so.name).indexOf("ST HYG Orphan") === 0)
@@ -1577,12 +1737,34 @@ function cannedOk(tool, args) {
           "in the project. It is NOT used, so the project would end up " +
           "with two folders of that name.";
       }
+      // The preview GATE (0.11.8). A canned host that ACCEPTED an
+      // ungated dryRun:false would let the suite's refusal step pass
+      // while the real tool filed the user's whole project panel --
+      // the same faithfulness rule clean_project's refusals follow.
+      const orgKey = moves.slice(0).sort().join(",");
       if (dryRun) {
+        orgShownKey = orgKey;
         out.note = moves.length === 0
           ? "PREVIEW ONLY — nothing to do: no loose items at the " +
             "project root."
           : "PREVIEW ONLY — nothing was moved.";
         return out;                              // and it moves NOTHING
+      }
+      if (moves.length && orgShownKey !== orgKey) {
+        const why = orgShownKey === null
+          ? "nothing has been previewed yet"
+          : "the project has changed since the last preview, so this is " +
+            "not the list the user agreed to";
+        orgShownKey = orgKey;
+        return { __err: "organize_project refused to move: " + why +
+          ". Nothing was moved. " + moves.length + " item(s) would be " +
+          "filed — " + moves.slice(0, 10).join(", ") +
+          (moves.length > 10 ? ", +" + (moves.length - 10) + " more" : "") +
+          (toCreate.length ? ". It would also create these folders at " +
+            "the project root: " + toCreate.join(", ") : "") +
+          ". That IS the preview — show it to the user, and call " +
+          "organize_project with dryRun:false in your NEXT reply, after " +
+          "they say go." };
       }
       for (const nm of looseComps) {
         (compProps[nm] || (compProps[nm] = {})).folder = "Comps";
@@ -1753,6 +1935,28 @@ function cannedOk(tool, args) {
                note: "Stacking changed only" };
     }
     case "get_comp_details": {
+      // The mask rig, where a layer row has to carry the LAYER's size.
+      // Only when it differs from the comp's: absent means "the comp's",
+      // which is in the same result, so a full-frame comp pays nothing.
+      if (args && /Self-Test Mask$/.test(String(args.comp || ""))) {
+        const mkP = compProps[args.comp] || {};
+        const mkRows = Object.keys(mkSizes)
+          .filter((k) => k.indexOf(args.comp + "|") === 0)
+          .map((k, i) => {
+            const sz = mkSizes[k];
+            const row = { index: i + 1,
+                          name: k.slice(args.comp.length + 1), effects: [] };
+            if (sz.width !== mkP.width || sz.height !== mkP.height) {
+              row.width = sz.width;
+              row.height = sz.height;
+            }
+            return row;
+          });
+        const mkOut = capLayers(args.comp, mkRows, args);
+        mkOut.width = mkP.width;
+        mkOut.height = mkP.height;
+        return mkOut;
+      }
       // The preset rig lives in the MAIN scratch comp, and its two split
       // pieces are SELECTED — the state applyPreset misreads in real AE.
       // It answers before the other rigs so the selection is never lost.
@@ -2085,6 +2289,12 @@ function cannedOk(tool, args) {
         return { property: "Scale", matchName: "ADBE Scale", value: frS,
                  numKeys: 0 };
       }
+      if (inWpComp(args)) {
+        return { layer: args.layer, property: args.property,
+                 numKeys: wpCount(String(args.layer),
+                                  String(args.property || "")),
+                 value: 100 };
+      }
       const SLg = shapeLayerOf(args && args.layer);
       if (SLg && /^contents\//i.test(String((args && args.property) || ""))) {
         const hit = shapeResolve(SLg, args.layer, args.property);
@@ -2189,8 +2399,14 @@ function cannedOk(tool, args) {
             ". Use list_properties to inspect the real tree." };
         }
         if (np === "rotation" || np === "zrotation") {
-          // Both names, and the friendly alias, are one property.
-          return { value: 0, matchName: "ADBE Rotate Z", numKeys: 0 };
+          // Both names, and the friendly alias, are one property. Its
+          // VALUE is 0 unless remove_keyframes un-animated it, in which
+          // case AE left the last key's value sitting there and a read
+          // has to say so -- a constant here let a step read back a
+          // number nothing in the suite had produced.
+          const rr = cvResidual[args.layer + "/rotation"];
+          return { value: typeof rr === "undefined" ? 0 : rr,
+                   matchName: "ADBE Rotate Z", numKeys: 0 };
         }
         if (np === "position") {
           // A driven Position reads back EVALUATED: a live wiggle is
@@ -2311,6 +2527,12 @@ function cannedOk(tool, args) {
       return { value: 3 };
     }
     case "set_keyframes": {
+      if (inWpComp(args)) {
+        const wts = wpTargets(args), wn = (args.keys || []).length;
+        for (const L of wts) wpKeys[L + "/" + cvProp(args.property)] = wn;
+        return { layers: wts.length, property: args.property,
+                 keysSet: wts.length * wn };
+      }
       const SLk = shapeLayerOf(args && args.layer);
       if (SLk && /^contents\//i.test(String((args && args.property) || ""))) {
         const hit = shapeResolve(SLk, args.layer, args.property);
@@ -2439,6 +2661,38 @@ function cannedOk(tool, args) {
     }
     case "add_mask": {
       const mkKey = ((args && args.comp) || "") + "|" + ((args && args.layer) || "");
+      // Faithful to the host's new refusal: a rectangle that does not
+      // touch the layer at all hides ALL of it, and AE takes it silently
+      // (measured — setting a comp-sized shape on a 100x100 solid threw
+      // nothing). A canned host that accepted it would let that ship again.
+      const mkSz = mkSizes[mkKey];
+      const mkB = args && args.bounds;
+      if (mkSz && Array.isArray(mkB) && mkB.length >= 4) {
+        const bl = Math.min(mkB[0], mkB[0] + mkB[2]);
+        const br = Math.max(mkB[0], mkB[0] + mkB[2]);
+        const bt = Math.min(mkB[1], mkB[1] + mkB[3]);
+        const bb = Math.max(mkB[1], mkB[1] + mkB[3]);
+        if (bl <= 0 && bt <= 0 && br >= mkSz.width && bb >= mkSz.height &&
+            (br - bl > mkSz.width || bb - bt > mkSz.height)) {
+          return { __err: "That mask covers ALL of '" + args.layer + "', " +
+            "so it hides nothing: the mask spans x " + bl + " to " + br +
+            ", y " + bt + " to " + bb + " and the layer is only " +
+            mkSz.width + "x" + mkSz.height + " at x 0 to " + mkSz.width +
+            ", y 0 to " + mkSz.height + ". Mask coordinates are in LAYER " +
+            "space, not comp space. To show only the top half of this " +
+            "layer, mask bounds [0, 0, " + mkSz.width + ", " +
+            (mkSz.height / 2) + "]." };
+        }
+        if (br <= 0 || bl >= mkSz.width || bb <= 0 || bt >= mkSz.height) {
+          return { __err: "That mask misses '" + args.layer + "' completely, " +
+            "so it would hide the whole layer: the mask spans x " + bl +
+            " to " + br + ", y " + bt + " to " + bb + " and the layer is " +
+            mkSz.width + "x" + mkSz.height + " at x 0 to " + mkSz.width +
+            ", y 0 to " + mkSz.height + ". Mask coordinates are in LAYER " +
+            "space, not comp space. The whole layer is bounds [0, 0, " +
+            mkSz.width + ", " + mkSz.height + "]." };
+        }
+      }
       const held = mkMasks[mkKey] || (mkMasks[mkKey] = []);
       const mkName = (args && args.name) || ("Mask " + (held.length + 1));
       held.push(mkName);
@@ -2609,7 +2863,51 @@ function cannedOk(tool, args) {
       }
       return out;
     }
-    case "set_track_matte": return { mode: "alpha" };
+    // Cameras and lights can neither take a matte nor be one, and real
+    // AE will not say so: measured 2026-09-01, a CameraLayer carries no
+    // setTrackMatte at all and `camera.trackMatteType = LUMA` is
+    // accepted silently. The refusal is the host's own, by layer TYPE,
+    // so the stub answers by type too — every other layer kind, shape
+    // and text included, still mattes.
+    case "set_track_matte": {
+      const tmLayer = (args && args.layer) || "";
+      const rigged = (nm) => cameraNames[nm] || lights[nm];
+      const kind = (nm) => (cameraNames[nm] ? "camera" : "light");
+      if (rigged(tmLayer)) {
+        return { __err: "'" + tmLayer + "' is " + kind(tmLayer) + " and cannot " +
+          "take a track matte — only visual (AV) layers have pixels to " +
+          "cut. get_comp_details {comp: \"" + (args && args.comp) +
+          "\"} lists the layers and their types." };
+      }
+      const mtComp = (args && args.comp) || "";
+      const mtKey = mtComp + "|" + tmLayer;
+      const remember = (nm) => {
+        if (!mtRig[mtComp]) mtRig[mtComp] = [];
+        if (mtRig[mtComp].indexOf(nm) === -1) mtRig[mtComp].push(nm);
+      };
+      const mode = String((args && args.mode) || "alpha").toLowerCase();
+      if (mode === "none" || mode === "off" || mode === "remove") {
+        if (!mattes[mtKey]) {
+          return { __err: "'" + tmLayer + "' has no track matte to " +
+            "remove. get_comp_details {comp: \"" + mtComp + "\"} shows " +
+            "'matte' on every layer in '" + mtComp + "' that has one." };
+        }
+        const was = mattes[mtKey].matte;
+        delete mattes[mtKey];
+        remember(tmLayer);
+        return { layer: tmLayer, matte: "removed", was: was };
+      }
+      const mt = args && args.matteLayer;
+      if (rigged(mt)) {
+        return { __err: "matteLayer '" + mt + "' is " + kind(mt) +
+          " and cannot BE a matte — only a visual (AV) layer has the " +
+          "alpha/luma to cut with (layer: '" + tmLayer + "' is solid)." };
+      }
+      mattes[mtKey] = { matte: mt, mode: mode };
+      remember(tmLayer);
+      remember(mt);
+      return { layer: tmLayer, matte: mt, mode: mode };
+    }
     case "set_layer_parent":
       if (args && args.layer) parentedLayers[args.layer] = args.parent;
       if (inPcComp(args) && args.layer) pcParent[args.layer] = args.parent;
@@ -2658,6 +2956,11 @@ function cannedOk(tool, args) {
       return out;
     }
     case "add_solid":
+      // A solid knows its own size, and every later read of it has to be
+      // able to say so — the comp's dimensions are a different number.
+      mkSizes[((args && args.comp) || "") + "|" + ((args && args.name) || "")] =
+        { width: (args && args.width) || 100,
+          height: (args && args.height) || 100 };
       if (args && /Self-Test Frame/.test(String(args.comp || ""))) {
         frLayers[args.comp] = (frLayers[args.comp] || []);
         frLayers[args.comp].unshift(String(args.name || "solid"));
@@ -2669,6 +2972,7 @@ function cannedOk(tool, args) {
                             type: "footage" });
       }
       if (inCvComp(args)) cvSolids.push(String(args.name));
+      if (inWpComp(args)) wpLayers.push(String(args.name));
       if (inBatComp(args)) batSolids.push(args.name);
       if (inRbComp(args)) rbLayers.push(args.name);
       if (inPcComp(args)) pcLayers.push(args.name);
@@ -2733,8 +3037,8 @@ function cannedOk(tool, args) {
       const blurs = inCvComp(args) ? (cvFx[args.layer] || []) : [];
       const parade = ctrlNames.concat(blurs);
       if (!inCvComp(args) || parade.length === 0) {
-        return { __err: "'" + args.layer + "' has no effects — nothing " +
-          "to remove. apply_effect adds one." };
+        return { __err: "'" + args.layer + "' has no effects at all — " +
+          "nothing to remove, and no other effect name will match either." };
       }
       const want = String((args && args.effect) || "");
       const hits = parade.filter(n => n === want ||
@@ -3011,6 +3315,7 @@ function cannedOk(tool, args) {
       if (args && /^ST PreCam/.test(String(args.name || ""))) {
         preLayers.push(args.name);
       }
+      cameraNames[(args && args.name) || "Camera"] = true;
       return { index: 1, name: (args && args.name) || "Camera" };
     case "set_layer_timing":
       // Writing the trim echoes it back; calling it with no timing args is
@@ -3098,6 +3403,42 @@ function cannedOk(tool, args) {
                numKeys: ks.length };
     }
     case "remove_keyframes": {
+      if (inWpComp(args)) {
+        const wp = String((args && args.property) || "");
+        const wts = wpTargets(args);
+        let wtotal = 0, wrows = 0;
+        for (const L of wts) {
+          const n = wpCount(L, wp);
+          if (n > 0) { wtotal += n; wrows++; }
+        }
+        const wide = Array.isArray(args.layers) && args.layers.length >= 3 &&
+          wts.length === wpLayers.length &&
+          !(Array.isArray(args.times) && args.times.length) && wtotal > 0;
+        if (wide) {
+          const wkey = wp + "|" + wtotal + "|" + wrows;
+          // The suite runs as ONE request in real AE (AELL_requestSeq is
+          // bumped per chat turn, not per step), so a repeat inside it
+          // hits the third branch rather than being let through. Modelled
+          // exactly that way -- a stub that released on the second call
+          // would have passed a suite real AE fails.
+          {
+            const why = (wpShown === wkey)
+              ? "that preview was taken in THIS same reply, so the user " +
+                "has not seen it yet"
+              : "nothing has been previewed yet";
+            wpShown = wkey;
+            return { __err: "remove_keyframes refused to wipe every layer " +
+              "in '" + args.comp + "': " + why + ". " +
+              "Nothing was removed. This would delete " + wtotal + " " + wp +
+              " keyframe(s) from " + wrows + " layer(s). That IS the " +
+              "preview — ask the user WHICH of those should lose their " +
+              "keyframes (or whether they really mean all of them), and " +
+              "call again in your NEXT reply once they answer." };
+          }
+        }
+        for (const L of wts) wpKeys[L + "/" + cvProp(wp)] = 0;
+        return { layers: wts.length, property: wp, removed: wtotal };
+      }
       const P = String((args && args.property) || "");
       // A group has no keys of its own; the host says so rather than
       // walking into it.
@@ -3119,12 +3460,50 @@ function cannedOk(tool, args) {
         }
       } else {
         removed = ks.length;
+        if (ks.length) {
+          cvResidual[args.layer + "/" + cvProp(P)] = ks[ks.length - 1].value;
+        }
         ks.length = 0;
       }
       return { layers: 1, property: P, removed, remaining: ks.length };
     }
     case "apply_expression_preset": {
       const p = String((args && args.preset) || "").toLowerCase();
+      // A missing 'property' is the host's most-hit refusal with the real
+      // model, and it has to hand back what the layer actually carries —
+      // the transform words, this layer's effects (the only way to spell
+      // effect.<Effect>.<Param>) and whatever already has keyframes.
+      if (!(args && args.property)) {
+        let why = "";
+        if (p === "wiggle") {
+          why = " — wiggle needs the property to wiggle — 'position' is " +
+                "the drift/float/hover one, rotation a sway, opacity a " +
+                "flicker";
+        } else if (p.slice(0, 5) === "loop_") {
+          why = " — a loop preset needs the property that HAS the keyframes";
+        } else if (p === "time_linear") {
+          why = " — time_linear needs a scalar property (rotation, " +
+                "opacity, a slider)";
+        }
+        const L = String((args && args.layer) || "");
+        let msg = "Missing 'property'" + why + ". On '" + L + "' it can " +
+          "be position, scale, rotation, opacity or anchorPoint";
+        const parade = Object.keys(cvControls)
+          .filter(k => k.indexOf(L + "/") === 0)
+          .map(k => k.slice(L.length + 1))
+          .concat(cvFx[L] || []);
+        if (parade.length) {
+          msg += ", or effect.<Effect>.<Param> using this layer's " +
+            "effects: " + parade.join(", ");
+        }
+        const keyed = ["position", "scale", "rotation", "opacity",
+                       "anchorPoint"].filter(
+          n => (cvKeys[L + "/" + n.toLowerCase()] || []).length > 0);
+        if (keyed.length) {
+          msg += ". Already keyframed here: " + keyed.join(", ");
+        }
+        return { __err: msg + "." };
+      }
       if (EXPR_PRESETS.indexOf(p) === -1) {
         return { __err: "Unknown preset '" + (args && args.preset) +
                  "'. Available: " + EXPR_PRESETS.join(", ") };
@@ -4406,10 +4785,12 @@ SelfTest.run({
     camProbeReads = 0;
     ordX = {};
     ordStack = [];
+    mattes = {};
+    mtRig = {};
     maskKeys = {};
-    mkMasks = {};
+    mkMasks = {}; mkSizes = {};
     batchLayers = 0; batchFx = {}; batchBlur = null;
-    batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetBoundsRig(); resetPresetRig(); resetRqRig(); resetAuRig(); resetFrRig(); resetCapRig(); resetMgRig();
+    batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetWpRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetBoundsRig(); resetPresetRig(); resetRqRig(); resetAuRig(); resetFrRig(); resetCapRig(); resetMgRig();
     SelfTest.run({
       callHostTool(tool, args, cb) {
         if (tool === "grid_layout") {
@@ -4437,10 +4818,12 @@ SelfTest.run({
         camProbeReads = 0;
         ordX = {};
         ordStack = [];
+        mattes = {};
+        mtRig = {};
         maskKeys = {};
-        mkMasks = {};
+        mkMasks = {}; mkSizes = {};
         batchLayers = 0; batchFx = {}; batchBlur = null;
-        batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetBoundsRig(); resetPresetRig(); resetRqRig(); resetAuRig(); resetFrRig(); resetCapRig(); resetMgRig();
+        batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetWpRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetBoundsRig(); resetPresetRig(); resetRqRig(); resetAuRig(); resetFrRig(); resetCapRig(); resetMgRig();
         SelfTest.run({
           callHostTool(tool, args, cb) {
             // Never refuse anything -- the old permissive host.

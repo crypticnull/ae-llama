@@ -10019,3 +10019,3508 @@ got.
   compress the ledger) is NOT built — measure whether it is worth the
   32B's latency first. Pass 22's stash touched this same area:
   reconcile on recovery.
+
+## 2026-09-01 (local session, real AE) — WORKPLAN 1: harness red -> green. ExtendScript parses `?:` LEFT-associatively. UNBUMPED ON PURPOSE
+
+- Item: section 1, "make the harness green (always first)". The run
+  opened at **555/556**, so 1b/1c waited.
+
+- The failing step was `below: ST Ord 3 goes under ST Ord 7`
+  (reorder_layers relative mode, shipped by the remote daytime batch).
+  The MOVE was correct — the read-back step passed and the stack was
+  exactly right. What failed was the tool's own landing-slot check: it
+  warned "AE reports 'ST Ord 3' at slot 7, not the expected 1" on a
+  perfectly good move, i.e. it told the model a correct edit had gone
+  wrong.
+
+- **Root cause, and it is a whole bug CLASS, not one line.** Measured in
+  real AE 2026, ExtendScript `$.version` 4.5.6 / build 80.1060872:
+
+      true  ? 1 : true ? 2 : 3            -> 2      (ECMA says 1)
+      false ? 1 : true ? 2 : 3            -> 2      (right by luck)
+      false ? 1 : true ? 2 : true ? 3 : 4 -> 3      (ECMA says 2)
+
+  **ExtendScript's conditional operator is LEFT-associative.** It groups
+  `a ? b : c ? d : e ? f : g` as `((a ? b : c) ? d : e) ? f : g`, so the
+  first branch's VALUE becomes the next condition. Confirmed identical
+  in assignment, `return` and string-concat context; explicit nesting
+  parens fix it. Every other engine — including the Chromium that runs
+  the panel's own .js and the Node that runs tests/ — is right-
+  associative, which is exactly why this hid: a two-level chain whose
+  first test is FALSE still returns the right answer, and that is most
+  of them.
+
+- Fixed at the root, `extension/jsx/hostscript.jsx`, both sites the
+  class had actually bitten:
+  1. `AELL_reorderRelative`'s `want` (the harness failure): returned 1
+     for every `below` move.
+  2. `get_bounds`'s empty-layer advice: the three-way `shape / text /
+     other` chain told an empty SHAPE layer **"the text is empty at this
+     time"** — a grounded error pointing the small model at the wrong
+     fix. Not field-reported; found by the scan, then confirmed by
+     hand-evaluating the left-assoc grouping.
+
+- Stub back-fill (both directions, since Node cannot reproduce the
+  miscompute — it parses the same source correctly):
+  - **NEW `tests/test-es3-ternary.js`** — a SOURCE lint that refuses any
+    conditional nested directly inside another at the same bracket depth
+    (the depth test IS the paren test: parenthesising pushes the inner
+    `?` one level down). Comment/string/regex-literal aware with offsets
+    preserved for honest line numbers. Carries 7 known-bad and 15
+    known-good shapes so it cannot rot into a silent no-op. Scope is
+    discovered the SAME way `tests/test-es3-syntax.js` discovers it
+    (every .jsx AE compiles, plus the dual-target
+    `extension/js/selftest.js`), so a new ExtendScript file cannot land
+    in one lint's scope and miss the other's. Proven to FAIL on
+    pre-fix HEAD (3 hits) and pass after.
+  - `tests/test-get-bounds.js` +3 checks: each of the three empty-layer
+    branches asserted by layer TYPE, and each asserted NOT to carry the
+    other branches' wording.
+- `CLAUDE.md` "Hard-won AE facts" carries the associativity rule with
+  the measured numbers.
+
+- **Harness: 556/556 PASSED.** Full stub sweep green except the one
+  noted below.
+
+- **NOT BUMPED — deliberate, please read.** HEAD already carries the
+  remote session's 1b + 1c batches, which the WORKPLAN explicitly gates
+  behind real-AE probes (rollback arming, matte error texts, mogrt
+  settle, comfy image-landed) that this pass did not run. A bump here
+  would have shipped all of that unverified, against 1b's own "all green
+  -> bump" instruction. My fix is a warning-text / branch-selection
+  correction, not a field-stopper, so it rides **1b's single bump**, the
+  way the remote batches are already doing. Next pass: 1b is still the
+  top item, and its bump now ships this too.
+
+- **Pre-existing stub failure, NOT mine, and it is ENVIRONMENTAL:**
+  `tests/test-comfy-backend.js` — "blank settings remove a previously
+  written mapping" fails on THIS machine and passes in CI. Cause:
+  `applyExtraModelPaths` (extension/js/comfy.js) also looks for
+  `%LOCALAPPDATA%\Comfy-Desktop\ComfyUI-Shared\models`, and this machine
+  HAS it (the owner runs Comfy Desktop) — so with settings blanked the
+  function correctly writes a mapping instead of returning null. The
+  SHIPPED behaviour is right; the TEST is host-dependent. Fix for a
+  later pass: stub `process.env.LOCALAPPDATA` in that test. Verified
+  pre-existing by stashing this pass's changes and re-running.
+
+- **Harness gap filed (cost this pass ~20 min, will cost the next one
+  too).** An AE warning dialog that HAS text — here "After Effects
+  warning: Undo group mismatch, will attempt to fix." — wedges every
+  subsequent run: the stale-dialog cleaner only auto-answers WORDLESS
+  popups, so the triage reports UNRECOGNIZED DIALOG forever and no `-r`
+  script executes. Cleared by hand with `PostMessage(hwnd, WM_CLOSE)`.
+  Worth teaching the cleaner to answer AE's own `After Effects warning:`
+  dialogs (they are informational, single-OK), or at least to say
+  "post WM_CLOSE to this hwnd" in the failure copy.
+
+- **Self-inflicted, written down so the next pass does not repeat it:**
+  my first probe wrapped `$.global.AELL_call(...)` inside its own
+  `app.beginUndoGroup`/`endUndoGroup`. The host tools open their own undo
+  groups, so the nesting desynced AE's undo stack — that is where the
+  "Undo group mismatch" modal came from, and the aborted run then rolled
+  the self-test comps back mid-suite and left probe debris (P1..P12
+  solids) in the project. **Never wrap AELL_call in an undo group.**
+  Recovered with `app.project.close(DO_NOT_SAVE_CHANGES)` +
+  `app.newProject()` (the project was scratch, "Untitled Project.aep",
+  no owner work), after which the suite went 556/556.
+
+- Not attempted this pass (still open, in order): 1b, 1c, and the
+  pass-22 salvage — `stash@{0}` is still `pass22-salvage` and branch
+  `aell-backup-pass22` still exists, untouched by me.
+
+## 2026-09-01 (local session, real AE) — WORKPLAN 1b: the zero-silent-failure batch VERIFIED, and the one hole it did not cover (0.11.1)
+
+- Item: section **1b**, verify the remote's 2026-09-01 zero-silent-failure
+  batch in real AE and ship it. Harness opened at **556/556**, so no
+  section-1 work was owed. Every 1b bullet was run; the pass found one
+  real defect of exactly the class 1b exists to catch, fixed it at the
+  root, and bumped.
+
+### The defect: `set_track_matte` reported success on a camera
+
+Probed with a temp `.jsx` per CLAUDE.md. Measured in AE 2026,
+ExtendScript 4.5.6:
+
+- A `CameraLayer` and a `LightLayer` carry **no `setTrackMatte` and no
+  `removeTrackMatte` at all** — `typeof` is `"undefined"`, not a
+  function. So both fell straight through to the tool's legacy-AE
+  branch.
+- That branch does `matte.moveBefore(layer)` and then
+  `layer.trackMatteType = tmt`. **ExtendScript ACCEPTS that assignment
+  on a camera.** It does not throw; the camera reads back `5015` for
+  LUMA. AE shows no matte, because a camera has no pixels to cut.
+- Net effect: the tool **reordered the user's layer stack** (PSHAPE
+  3 -> 2, PCAM 2 -> 3), wrote a phantom property, and returned
+  `{ok: true, layer: "PCAM", matte: "PSHAPE", mode: "luma"}`. The
+  existing try/catch could not see any of it, because nothing threw.
+- `mode: "none"` lied the same way: `{matte: "removed"}` for a matte
+  that never existed.
+
+Fixed in `extension/jsx/hostscript.jsx`: `set_track_matte` refuses by
+layer TYPE before anything moves, on both sides (target and
+`matteLayer`), naming the layer, its measured type, the other layer's
+type, and `get_comp_details`.
+
+### The trap inside the fix — worth more than the fix
+
+The first cut keyed the refusal off `!(layer instanceof AVLayer)`,
+which reads like "is this a visual layer". **It is not.** Measured the
+same night in real AE:
+
+    solid  instanceof AVLayer -> true
+    text   instanceof AVLayer -> FALSE
+    shape  instanceof AVLayer -> FALSE
+    camera instanceof AVLayer -> false
+    light  instanceof AVLayer -> false
+
+So that version locked text layers and shape layers out of mattes
+entirely — and **the 556-step harness stayed green through it**,
+because its one matte step uses solids. Only the probe caught it. The
+shipped predicate is the specific class, read through `AELL_layerType`,
+so the type word in the message and the branch that produced it can
+never drift apart. `CLAUDE.md` "Hard-won AE facts" carries this now.
+
+### Everything else 1b asked for, measured
+
+- **set_keyframes partial -> rollback.** `keys[2].value = "banana"` (and
+  `[1,2,3]`): `ok:false`, **`mutated:true`**, error quotes AE's raw
+  message and "2 key(s) were applied before this"; 3 keys really were on
+  the layer. An armed round (`add_solid` + that call) came back
+  `rollback.rolledBack: true`, `PROLL` gone, both results rewritten with
+  the ROLLED BACK note. The same round **unarmed** kept the solid and
+  said so. Note for the next probe author: `null` and `"  "` are NOT
+  rejected by `setValueAtTime` — AE coerces both to 0 and the call
+  succeeds, so they cannot be used to force a partial.
+- **apply_keyframe_ease partial -> rollback.** Layers `[eased, no-keys]`:
+  `mutated:true`, "2 pair(s) eased before this"; armed round rolled back
+  and the first layer's key influence was restored to 16.666666667.
+- **apply_effect / set_effect_param grounded.** Garbage display name
+  lists the layer's real effects plus `list_effects {filter: "blurr"}`;
+  a matchName-style miss (`ADBE Glo2xx`) correctly suggests `glo2xx`,
+  not `adbe`; a bad param lists Glow's 15 real parameters and the
+  `list_properties` path.
+- **export_mogrt name trap.** `"CON"` and `"nul.v2"` both refused before
+  AE with the device-name reason; the scratch folder went 0 files -> 0
+  files. `"Trailing Dot."` is correctly NOT trapped (it fell through to
+  the controllers check), which is the documented intent.
+- **MOGRT settle.** Real export of a 1-controller comp: receipt
+  `bytes: 14884`, on-disk 14884, still 14884 after a 1.5 s wait.
+  `controllerNames: ["Fade"]`, `returned: true`, `seconds: 4.5`.
+- **comfy image-landed.** `comfy_generate {workflow: AE_LLAMA_KREA2_V1,
+  image: <png>}` REFUSED, naming the workflow and pointing at
+  `AE_LLAMA_H3_I2V_V1` as the firstFrame-capable template; elapsed 0 s,
+  VRAM peak n/a, nothing queued. Then the H3 I2V happy path with the
+  same image ran green end to end — `image -> node 114.image
+  (manifest)`, 113014-byte mp4, imported into AE at 1920x1080 and
+  removed again. (`scripts/comfy-probe.js --url http://127.0.0.1:8000`.)
+
+### Back-fill, both directions
+
+- `tests/test-property-access.js`: the stub was CLASSLESS — every layer
+  was a bare `Layer`, so the bug could not exist there. It now models
+  AE's real classes (per-kind prototype, camera/light with **no** matte
+  methods) and AE's `moveBefore`, which is what turns the failure into
+  the same silent success it was in the field. **9 assertions fail on
+  the reverted host**, including the exact receipt
+  `{"layer":"Cam 1","matte":"B","mode":"luma"}`, the moved stack and the
+  phantom `trackMatteType`. The flat hierarchy is asserted too
+  (`!(SHP instanceof AVLayer)`) so the `instanceof AVLayer` trap cannot
+  be re-set, and four positive assertions pin that shape layers still
+  matte both ways.
+- `extension/js/selftest.js` (so BOTH runners get it): 6 new steps — a
+  shape layer takes a matte, is one, and has it removed; a camera
+  refused as target, as matte, and on `mode:"none"`. `tests/
+  test-self-test.js`'s canned host learned the type rule (it tracks
+  camera names the way it already tracked lights).
+- `docs/CAPABILITIES.md` regenerated (set_track_matte 1 -> 7 steps).
+
+- **Harness: 562/562 PASSED.** Full stub sweep green except the known
+  environmental `tests/test-comfy-backend.js` failure (documented in the
+  previous entry: this machine has `%LOCALAPPDATA%\Comfy-Desktop\
+  ComfyUI-Shared\models`, CI does not — still worth a `process.env`
+  stub in a later pass).
+
+- **BUMPED 0.11.0 -> 0.11.1**, per 1b's "all green -> bump". That ships
+  1b's whole batch AND the 1c batches that were riding unbumped since
+  2026-09-01. **1c is NOT verified by this pass** — trigger-layer
+  chat-probe, missing-verb semantics, the context-budget measurements
+  and the MOGRT verifier are still the next item, and they now ship
+  ahead of their verification. That is the deliberate trade 1b's own
+  instruction makes, and the alternative (hold the bump) is the mistake
+  CLAUDE.md records: a whole day of fixes sitting in the repo while the
+  installed panel ran old code.
+
+- **Self-inflicted, recorded so nobody repeats it:** I ran
+  `git stash push -- <path> -q`. Git parses the trailing `-q` as a
+  PATHSPEC, the push fails, and my follow-up `git stash pop` then popped
+  `stash@{0}` — which is **pass22-salvage** — into the working tree as
+  eight conflicted files. Recovered with `git reset` + `git checkout --
+  .` after copying my two edited files aside; `stash@{0}` is still
+  `pass22-salvage`, untouched and unpopped, and `aell-backup-pass22`
+  still exists. To revert one file, use
+  `git show HEAD:<path> > <path>` and copy the working version aside —
+  never `git stash` while that salvage sits at the top of the stack.
+
+- Not attempted this pass (still open, in order): **1c**, then the
+  pass-22 salvage.
+
+## 2026-09-02 (local session, real AE) — WORKPLAN 1c bullet 1: the trigger-layer chat-probe, and the matte the panel could not see (0.11.2)
+
+- Item: section **1c**, first bullet — run `scripts/chat-probe.js` with the
+  real model over the 15 trigger-layer steps and log per-step verdicts.
+  Harness opened at **562/562**, so no section-1 work was owed.
+
+### Running it at all: steps 15-29 are not a standalone subset
+
+`--steps 15,...,29` crashed on step 15 with a TypeError inside the step's
+`check` (`state.layers` is undefined when the rig comp does not exist).
+Steps 1-11 BUILD the rig those sentences name (Beta, Rig, HELLO, the nine
+squares), and every run sweeps the comp away at startup, so the later
+steps only mean anything in the same process as the earlier ones. Both
+halves fixed:
+
+- `judge()` now wraps `step.check` in try/catch and turns a throw into a
+  VERDICT — a crash used to kill the whole run, so every step after it
+  was never even asked. When the comp is missing the message says so and
+  names the rig steps.
+- The runs below are `--steps 1..11,15..29` (12-14 are the ComfyUI steps,
+  verified in 1b on 2026-09-01, skipped to keep the pass inside a night).
+
+### Run 1 — 22/26. Four misses, and one of them was not the model's
+
+    19 hide half a layer with a mask   FAIL  add_mask bounds in COMP space
+    24 sync a layer to the music       FAIL  ran add_null, never reached
+                                             audio_to_keyframes
+    27 show one layer through another  FAIL  "Beta has no track matte"
+    29 clean up means the comp         FAIL  deleted 2 layers unasked
+
+Step 27 is the one that mattered. The model picked the right tool with
+the right arguments — `set_track_matte {layer: "Beta", matteLayer:
+"HELLO", mode: "alpha"}` — the receipt said ok, and the verdict said no
+matte. Probed the live comp (the run had `--keep`) rather than guessing.
+
+### The measurement: `trackMatteType` does not mean "has a matte"
+
+Measured in real AE 2026 / ExtendScript 4.5.6:
+
+    NO_TRACK_MATTE = 5012    ALPHA          = 5013
+    ALPHA_INVERTED = 5014    LUMA           = 5015
+    LUMA_INVERTED  = 5016
+    fresh solid trackMatteType   = 5012   (NOT 0)
+    after setTrackMatte(ALPHA)   = 5013, trackMatteLayer = ES2
+    after removeTrackMatte()     = 5013, trackMatteLayer = null
+
+So **`removeTrackMatte()` clears `trackMatteLayer` and LEAVES
+`trackMatteType` at the type it just removed.** The type answers "what
+KIND, if any"; only the matte LAYER answers "is there one". Beta really
+was alpha-matted by HELLO — it read 5013 with `trackMatteLayer = HELLO`
+— and the probe called that bare.
+
+`scripts/chat-probe.js` carried `hasMatte(m) { return !!m && m !== 5013 }`
+with a comment asserting 5013 was NO_TRACK_MATTE. Wrong in BOTH
+directions, so one constant produced two opposite lies:
+
+- step 27, a **false FAIL** on a matte AE really made;
+- step 6 (`l.matte && l.matte !== 5013`), a **false PASS** — every
+  unmatted layer reads 5012, so "does any layer have a matte" was true
+  for a comp with none. That step had no stub coverage at all, which is
+  how it stayed green while proving nothing.
+
+### The product gap underneath it
+
+The panel had **no way to see a track matte**. `get_comp_details` never
+reported one, so `set_track_matte`'s own receipt was the only evidence a
+matte existed — the shape of failure 1b spent a night on. The 562-step
+suite's four matte steps all checked the receipt too, so none of them
+could tell a matte AE made from one it only said it made.
+
+Fixed at the root, `extension/jsx/hostscript.jsx`:
+
+- New `AELL_matteWord` / `AELL_matteLayerOf` — the one place mattes are
+  read. Existence is `trackMatteLayer`; cameras and lights return null
+  before anything is read (they accept a phantom `trackMatteType` write,
+  measured 2026-09-01); pre-AE-23 falls back to the type, which is
+  trustworthy THERE because that AE has no `removeTrackMatte` to leave
+  it stale.
+- `get_comp_details` reports `matte` (the layer's name) and `matteMode`,
+  **only on layers that have one**, so an unmatted comp pays nothing.
+- `set_track_matte {mode: "none"}` on a layer with no matte is now
+  REFUSED, grounded ("…has no track matte to remove", pointing at
+  get_comp_details), instead of answering `{matte: "removed"}`. A
+  successful removal also names `was`. Reading the type here would have
+  been the very bug: every second removal would have looked real.
+- `AELL_layerSig` (the undo fingerprint) carries the matte LAYER's index,
+  not just the type — a removal used to be invisible to the rollback
+  verifier, because the type survives it.
+- `tools.js`: `get_comp_details`'s doc gained the words "track matte"
+  (+14 chars; system prompt 58955 -> 58969 full, 39157 -> 39171 compact).
+  Paid for by what it replaces — the model can now READ a matte instead
+  of trusting a receipt.
+
+### Back-fill, all four directions
+
+- `extension/js/selftest.js` (both runners): 3 new steps — AE is read
+  BACK through `get_comp_details` after the matte is set (it names the
+  matte layer and `alpha`), read back again after `mode: "none"` (the
+  field is gone), and a second removal is refused. **565 steps.**
+- `tests/test-property-access.js`: the stub modelled mattes as private
+  `_matte`/`_matteType` and `TrackMatteType` as strings, so neither AE
+  fact could exist in it. It now carries the measured numbers, a fresh
+  layer at 5012, and the asymmetry (`removeTrackMatte` leaves the type).
+  **3 assertions fail on the reverted host**, including the receipt
+  `{"layer":"A","matte":"removed"}` for a matte that was already gone.
+- `tests/test-chat-probe.js`: NEW block for step 6 (a comp where nothing
+  is matted must FAIL — the false pass), the measured constants in the
+  layer builder, and the stale-ALPHA-with-no-matte-layer case pinned as
+  "no matte" while legacy AE (no `trackMatteLayer` at all — new
+  `matteLayerKnown` flag from READ_COMP) still passes on the type.
+- `tests/test-self-test.js`'s canned host learned matte STATE (it
+  answered a constant before, which is what let receipt-only steps look
+  like verification).
+- `CLAUDE.md` "Hard-won AE facts" carries the numbers and the rule.
+
+### Run 2 — 23/26, and step 27 FLIPPED
+
+Same sentences, same model, after the fix:
+
+    15 push a layer back      pass    22 finished look          FAIL*
+    16 attach to a null       pass    23 keep it drifting       pass
+    17 smooth a fade          pass    24 sync to the music      pass*
+    18 fix a text pivot       pass    25 tuck under another     pass
+    19 hide half with a mask  pass*   26 take an effect off     pass
+    20 take a mask off        pass    27 show through another   PASS (was FAIL)
+    21 un-animate             pass    28 precompose             FAIL (mine)
+                                      29 clean up               FAIL
+
+  \* 19 and 24 failed in run 1 and passed in run 2 with no change to
+  either path, and 22 flipped the other way — temperature 0.7 over a 61k
+  char prompt is not reproducible per step. **Only a miss that repeats
+  across runs is a wording dependency;** single-run misses are noise, and
+  both runs are recorded here for exactly that reason.
+
+- **28 is my own fault, not a finding:** run 1 used `--keep`, so a comp
+  called `Squares` survived into run 2 and AE auto-numbered the new one
+  `Squares 2`. Do not use `--keep` before a run whose verdicts read comp
+  names.
+
+- **Harness: 565/565 PASSED** in real AE (the 3 new read-back steps
+  included — so AE really does report the matte through
+  `get_comp_details`, and the removal really clears it). Full stub sweep
+  green except the known environmental `tests/test-comfy-backend.js`
+  (this machine has `%LOCALAPPDATA%\Comfy-Desktop\ComfyUI-Shared\models`,
+  CI does not — still wants a `process.env` stub, still not mine).
+
+- **BUMPED 0.11.1 -> 0.11.2.** `extension/` changed (hostscript, tools,
+  selftest), so the bump is owed.
+
+### Filed for later passes, in priority order
+
+1. **`add_mask` accepts bounds that miss the layer entirely and reports
+   ok.** Run 1: "chop off the lower half of Beta" produced
+   `bounds [910, 500, 100, 100]` — Beta's COMP position, on a 100x100
+   layer whose own box is `[0, 0, 100, 100]`. The mask landed 910px away,
+   `mode: "subtract"`, hid nothing, receipt said ok. The doc ALREADY says
+   "Coordinates are in LAYER space" with the exact worked example, so
+   more words are not the fix: `add_mask` should REFUSE bounds with no
+   overlap at all and name the layer's own box. Same silent-lie class as
+   this pass's matte.
+2. **"Probe Room is a mess — clean it up" routes to the project panel.**
+   Failed in BOTH runs, so this one IS a wording dependency: run 1
+   deleted two layers unasked, run 2 ran
+   `clean_project {remove_unused_footage}` and offered to delete 17
+   solids. A comp name in the sentence should pin the tool to the
+   timeline. One rule change, then re-run 29 to show the flip.
+3. **Anything else still reading `trackMatteType` for existence** is
+   wrong by the measurement above — `AELL_matteLayerOf` is now the one
+   place to read a matte, and new code should go through it.
+
+- Not attempted this pass (still open, in order): **1c bullets 2-4**
+  (missing verbs, context budget + ledger, MOGRT verifier), then the
+  pass-22 salvage. `stash@{0}` is still `pass22-salvage` and branch
+  `aell-backup-pass22` still exists, untouched.
+
+## 2026-09-02 (local session, real AE) — WORKPLAN 1c bullet 2: the eight AE semantics the "missing verbs" only assumed (0.11.3)
+
+Harness was green on arrival (565/565), so this pass took the next
+unfinished workplan item: measure the eight AE-semantics assumptions the
+reorder_layers / remove_effect / delete_mask / remove_keyframes bodies
+had written down as guesses. New probe, committed so it can be re-run:
+`scripts/verb-semantics-probe.jsx` (AE 2026, 26.3x87). It flushes every
+measurement to disk as it takes it, because M7 deliberately does the one
+thing that could raise a modal and stop the script dead.
+
+### The eight, as AE actually answered
+
+1. **LOCKED layer, primitives called directly** — AE HONOURS THE LOCK.
+   `moveBefore`/`moveAfter` both throw *"Can not call method "moveBefore"
+   on Layer "VP C" because the Layer is locked."*, index unchanged. The
+   host comment said the opposite ("the stubs assume the primitives would
+   move it"), and it was not a safe guess: apply_preset had measured that
+   presets DO land on locked layers, so the lock is genuinely not a
+   scripting-wide guard — it just covers this.
+2. **moveBefore(self) / moveAfter(self)** — AE throws *"Can not move a
+   layer before or after itself."*, index unchanged. Recorded as
+   "assumed: no-op or throw"; it is the throw.
+3. **Already-in-place move** — tolerated, no throw, stack undisturbed,
+   and the tool says `Nothing moved — 'VP A' was already above 'VP C'
+   (slot 1)`. The assumption held.
+4. **toFront/toBack** — `moveBefore(layer(1))` lands at 1,
+   `moveAfter(layer(numLayers))` lands at numLayers. Held.
+5. **Survivors are not renumbered** — remove "Gaussian Blur" from
+   [Gaussian Blur, Gaussian Blur 2, Gaussian Blur 3] and the survivors
+   are still "Gaussian Blur 2" and "Gaussian Blur 3". Masks identical
+   (Mask 1 gone leaves Mask 2, Mask 3). Held — and STRONGER than filed:
+   **every sibling reference held across the removal dies**, not just
+   later ones. Refs grabbed for index 2 AND index 3 both answered
+   "Object is invalid" after index 1 went. An ExtendScript Property
+   reference is an index PATH, not a handle.
+6. **Bare-name read-back** — confirmed exactly. Two blurs, remove the
+   first, and `get_property {property: "Blurriness"}` resolves to
+   `Effects/Gaussian Blur 2/Blurriness` with that effect's value. (With
+   TWO survivors the tool refuses as ambiguous and names both paths,
+   which is the right answer to a different question.)
+7. **delete_mask with a live expression pointing at the mask** — worse
+   than the dialog the selftest comment blamed. AE 2026 raises NOTHING,
+   and tells scripting nothing either: the dependent Position still read
+   `expressionEnabled: true` with an EMPTY `expressionError` while its
+   value had quietly fallen back from the mask vertex [100, 0] to the
+   layer's static [160, 120]. A broken expression survives this tool
+   looking healthy from every angle a script can see.
+8. **What remove_keyframes leaves behind** — the LAST key's value. Two
+   identical rigs (0s=100, 1s=50, 2s=0) emptied at playheads 0.5s and
+   1.5s both settled at 0, so it does not follow the playhead and it is
+   not the first key's value. The host empties a property by removing
+   key 1 over and over, so the key standing last is the last in TIME and
+   AE holds that one — the loop order is load-bearing.
+
+### What changed
+
+- `extension/js/tools.js`: the remove_keyframes doc's placeholder ("The
+  value left behind is measured in the real-AE pass") became the answer
+  ("Removing ALL keys leaves the LAST key's value"). Prompt measured
+  before/after: **58969 → 58961 chars**, so the answer costs less than
+  the promise did.
+- `extension/jsx/hostscript.jsx`: comments only, but they were the wrong
+  comments — three assumptions in reorder_layers are now measurements,
+  remove_effect carries WHY `others` must be flattened to strings before
+  `victim.remove()` runs, delete_mask carries the silent-expression
+  finding, and remove_keyframes carries the residual-value rule.
+- `extension/js/selftest.js`: one new step (**566**) — after
+  remove_keyframes empties rotation (keys 0s=0, 1s=90, 2s=180) the
+  property must read back **180**. A better discriminator than the
+  probe's own rig, where the last key happened to be 0. Also corrected
+  the delete_mask comment that blamed a dialog AE no longer raises.
+- `tests/test-layer-chunks.js`: the stub's `moveBefore`/`moveAfter` now
+  throw AE's real messages, and a new `aeLockGuard` makes a locked layer
+  throw the way AE throws. Plus an assertion that the refusal is the
+  tool's own words and not AE's raw "Can not call method …".
+- `tests/test-property-access.js`: `PGroup.remove()` now stales every
+  surviving sibling as well as the victim, with `aeRevalidate` on
+  `property()` modelling the PATH going stale rather than the property
+  disappearing. **Verified it bites:** moving remove_effect's `others`
+  loop to after `victim.remove()` turns three assertions red with
+  "After Effects error: Object is invalid" — the exact failure a user
+  would have seen.
+- `tests/test-self-test.js`: the canned host answered rotation with a
+  constant 0, so a step could read back a value nothing had produced. It
+  now records a residual on remove_keyframes and reads it back.
+
+### Harness: 566/566 PASSED. Full stub sweep green
+
+…except the known environmental `tests/test-comfy-backend.js` (this
+machine has `%LOCALAPPDATA%\Comfy-Desktop\...\models`, CI does not —
+still wants a `process.env` stub, still not mine).
+
+**BUMPED 0.11.2 -> 0.11.3** — `extension/` changed (tools.js doc,
+hostscript comments, selftest step).
+
+### The mess I made, and how to not repeat it
+
+The FIRST draft of the probe wrapped everything in
+`app.beginUndoGroup(...)` / `app.endUndoGroup()`. AE does not support
+nesting undo groups, `AELL_call` opens its own per mutating tool, and an
+inner `endUndoGroup` closes the OUTER group — so the final
+`endUndoGroup()` closed one that was already closed. **AE answered with
+"Undo group mismatch, will attempt to fix" and the counter stayed broken
+for the whole SESSION**: every later `-r` script raised the same modal,
+including three self-test runs that had nothing to do with the probe.
+Restarting AE was the only fix. The probe now opens no undo group at all
+and carries the reason; re-running it and then the harness back to back
+is green, which is the proof. **Never wrap AELL_call in an undo group.**
+
+Restarting AE cost two more dialogs a human should know about:
+
+1. **"Crash Repair Options"** — AE's post-kill startup dialog (Start in
+   Safe Mode / Reset Preferences / Manage Plugins / **Continue**, the
+   default). The harness reports it only as "a dialog blocking STARTUP"
+   and stops, which is correct but unhelpful: any pass that has to kill
+   AE now needs a human. **Filed below.** Answered with Enter =
+   Continue; Safe Mode would have disabled the scripts the suite needs.
+2. **"Save changes to Untitled Project.aep before closing?"** — a
+   leftover `app.quit()` I had queued at AE while it was blocked,
+   delivered to the NEW instance and racing the probe. ESC (Cancel)
+   calls off the quit and touches nothing, per the harness's own note.
+
+The project AE had open throughout was
+`%TEMP%\aell-probe\aell-probe-1b.aep`, a scratch file an earlier pass
+left — no real work was at risk in the restart. Worth checking the
+window title before killing AE, which is what I did.
+
+### Filed for later passes, in priority order
+
+1. **The harness cannot answer "Crash Repair Options".** Any pass that
+   kills or crashes AE leaves the next run reporting "After Effects
+   never opened its main window" for 240s and exiting. The dialog is a
+   wordless `#32770` (AE draws its own text) whose default button is
+   Continue, so Enter is the whole fix — but it must be told apart from
+   the save-changes prompt, where Enter means Save. `scripts/lib/ae-dialog-triage.ps1`
+   is the place, and `tests/test-selftest-runner.js` takes captured probe
+   strings without AE. A screenshot is at `logs/dialogs/crash-repair.png`.
+2. **`add_mask` accepts bounds that miss the layer entirely and reports
+   ok** (unchanged from the last pass — still open, still first among
+   the tool bugs).
+3. **"Probe Room is a mess — clean it up" routes to the project panel**
+   (unchanged; the only miss that repeated across both chat-probe runs).
+4. **delete_mask could warn when an expression still points at the mask.**
+   Measurement 7 says the breakage is invisible to scripting, so the
+   receipt is the only place it could ever surface. Not built this pass:
+   it is a behaviour change, not a measurement.
+
+- Not attempted this pass (still open, in order): **1c bullets 3-4**
+  (context budget + ledger, MOGRT verifier), then the pass-22 salvage.
+  `stash@{0}` is still `pass22-salvage` and branch `aell-backup-pass22`
+  still exists, untouched.
+
+## 2026-09-02 (local session, real AE) — WORKPLAN 1c bullet 3: the context budget met a tokenizer, and both constants were wrong the dangerous way (0.11.4)
+
+Harness green on arrival (566/566), so this pass took the next
+unfinished workplan item: **1c bullet 3, "context budget + ledger"
+(roadmap 13)**. New probe, committed so it can be re-run:
+`scripts/context-budget-probe.js`. It asks the RUNNING llama-server's
+`/tokenize` what the panel's own payload really costs, then drives a
+real ten-turn chat through chat-probe.js's own round loop and tokenizes
+every round exactly as it was sent. Nothing in it re-implements the
+panel — a second copy of the budgeter is the bug it exists to find.
+
+### Measurement 1 — the two constants, against Qwen2.5-32B's tokenizer
+
+    system prompt, full docs     62364 chars = 16073 tokens   3.88 c/tok
+    system prompt, compact docs  42574 chars = 11446 tokens   3.72 c/tok
+    chat history (JSON-heavy)    56308 chars = 19937 tokens   2.82 c/tok
+                                 42431 chars = 15291 tokens   2.77 c/tok
+                                 41100 chars = 14662 tokens   2.80 c/tok
+
+The workplan's trigger was "off by more than 10%". **Both were inside
+10% and both were wrong anyway**, because the sign is what matters and
+the two constants are not symmetric:
+
+- `PROMPT_CHARS_PER_TOKEN` **divides** chars into tokens, so a value
+  ABOVE the truth hides tokens. At the SHIPPED DEFAULT — compact docs at
+  ctx 16384 — 3.9 predicted 10917 where the tokenizer said 11446. **529
+  tokens of window existed only on paper.**
+- `HISTORY_CHARS_PER_TOKEN` **multiplies** room into chars, so a value
+  ABOVE the truth hands out history the room cannot hold. 4917 chars of
+  budget at the measured 2.82 is 1744 tokens against 1610 really free.
+
+Compounded, at the default: real prompt 11446 + reply reserve 3328 +
+budgeted history 1741 = **16515 tokens against a 16384 window**. At
+32768 with full docs it was worse in absolute terms: **33156 against
+32768**. That is exactly the raw HTTP 400 ("request exceeds the
+available context size") that the fitHistory work of 2026-08-25 was
+written to prevent — back, invisible, and shipped, because nothing in
+this repo had ever asked a tokenizer anything.
+
+Also worth writing down: the COMPACT docs are DENSER than the full ones
+(3.72 vs 3.88). Tool names and arg keys tokenize worse than prose, so
+compacting the docs made the chars/token ratio go the wrong way — and
+compact is the form the default window sends. A constant validated only
+against the full prompt would still have been wrong.
+
+**Fixed at the root, `extension/js/tools.js`:** `PROMPT_CHARS_PER_TOKEN`
+3.9 -> **3.7**, `HISTORY_CHARS_PER_TOKEN` 3 -> **2.7** — each pinned just
+BELOW the densest form measured, not at it. The history row is the one
+that varies (what a ten-turn chat contains depends on what the model
+says: 2.82, 2.77, 2.80 across three runs), so its bound is set under the
+LOWEST sample. Tuning a constant to one run is how this was wrong in the
+first place. No prompt text changed, so the change costs zero context.
+
+### Measurement 3 — the ledger, over a real chat past the window
+
+Ten turns each naming a solid (Alpha..Juliet), then "Make them blue
+instead." Measured, run after run:
+
+- The chat overflows at turn 10 and the ledger appears; the recall turn
+  drops 6 more entries and its ledger carries **Alpha, Bravo, Charlie**
+  — the names of exactly the turns that were dropped, labelled "EARLIER
+  IN THIS SESSION".
+- The recall turn then answered correctly with no help:
+  `set_solid_color {layers: [all ten names], color: [0,0,1]}`, 10 solids
+  touched, no failure. The thing the ledger exists for, working.
+- The panel's `context ledger` info line fired once, as designed.
+- No round exceeded its window (worst: 13056 tokens against 16384).
+
+**Drift found and fixed in `scripts/chat-probe.js`:** the probe mirrored
+main.js's trim but showed NEITHER of the panel's two info lines. The
+`context ledger` line is now mirrored, and the `context` STARVATION line
+— which main.js has shown since 2026-09-01 — was missing from the probe
+entirely, so the only thing that runs the product path headless could
+never have reported it. Both now fire with main.js's own scoping (once
+per chat / once per session). Also added a read-only `roundObserver`
+hook and the module exports the sibling probe uses, so the measurement
+is taken on the product's payload instead of a rebuilt guess of it.
+
+### Measurement 2 and the T7 question
+
+- `Tools.historyBudget()`, after the fix: **ctx 16384 (compact docs)** —
+  prompt 42574 chars, 11507 estimated / 11446 real tokens, room 1549
+  tokens, **2682 chars of history**, starved=false. **ctx 32768 (full
+  docs)** — prompt 62364 chars, 16856 estimated / 16073 real, room 12584
+  tokens, **32476 chars of history**. Twelve times the memory.
+- **Do NOT raise the T7 default to 32768.** Measured on this card
+  (RTX 5090, 32607 MiB): baseline with AE and ComfyUI Desktop idle is
+  4420 MiB; the 32B at ctx 16384 sits at 27753; at ctx 32768 it loads
+  and sits at **31757 — 850 MiB of headroom on the whole card**, with
+  ComfyUI holding NO generation weights yet. Doubling the window costs
+  ~4 GB of KV cache, which is the entire margin the chat/generation
+  handoff runs on. The window is not the constraint; the shared card is.
+  This answers the bullet's last sentence with a no.
+- **Not done: the compact-vs-full ROUTING comparison** (the bullet's
+  "run chat-probe.js in that mode and log every step verdict; a routing
+  regression against the full-doc run is a doc that lost its
+  load-bearing sentence"). It needs two full 29-step probe runs at two
+  window sizes, and the 2026-09-02 log already establishes that
+  single-run per-step misses at temperature 0.7 are noise — so a
+  one-run comparison would produce a verdict nobody should act on.
+  Filed below as its own pass.
+
+### Back-fill: `tests/test-token-ratios.js` (NEW)
+
+Freezes the tokenizer's answer so the bug class is caught with no AE and
+no model. It pins RATIOS, not lengths, so it survives the prompt growing,
+and it reads the constants out of the shipped source (a test that retypes
+the number it checks cannot fail). **Verified it bites:** reverting the
+two constants to 3.9 / 3 turns SEVEN assertions red, including the
+end-to-end ones — 16515 > 16384 at the default and 33156 > 32768 at the
+larger window. It also caught a bug in itself first: `REPLY_RESERVE_TOKENS`
+ships as a sum (`3072 + 256`), and reading only the first number made the
+reserve 256 tokens smaller than the panel's, quietly loosening the
+assertion that matters most.
+
+### Verification
+
+- **Harness: 566/566 PASSED** in real AE.
+- Full stub sweep green except the known environmental
+  `tests/test-comfy-backend.js` (this machine has
+  `%LOCALAPPDATA%\Comfy-Desktop\...\models`, CI does not — still wants a
+  `process.env` stub, still not mine).
+- `scripts/context-budget-probe.js` run three times end to end: two on
+  the old constants (2 and 3 claims missed, the findings above), one on
+  the new (**every claim held**).
+- **BUMPED 0.11.3 -> 0.11.4** — `extension/js/tools.js` changed.
+
+### Filed for later passes, in priority order
+
+1. **The compact-vs-full routing comparison** (1c bullet 2's remaining
+   half). Needs a run at ctx 16384 and one at 32768 over the same steps,
+   and per the noise rule a repeated miss is the only evidence that
+   counts — so budget two runs per mode, not one.
+2. **`add_mask` accepts bounds that miss the layer entirely and reports
+   ok** (unchanged, still first among the tool bugs).
+3. **"Probe Room is a mess — clean it up" routes to the project panel**
+   (unchanged; the only miss that repeated across both chat-probe runs).
+4. **The harness cannot answer "Crash Repair Options"** (unchanged from
+   the previous pass; `scripts/lib/ae-dialog-triage.ps1` is the place,
+   screenshot at `logs/dialogs/crash-repair.png`).
+5. **`starved` may now be too generous a word.** At the shipped default
+   the panel hands out 2682 chars of history — under one exchange — and
+   `starved` is FALSE, because the threshold is 2000. The measurement
+   says the default window is nearly all prompt; the warning the user
+   gets says nothing. Raising the threshold is a behaviour change, not a
+   measurement, so it was not done here.
+6. **delete_mask could warn when an expression still points at the mask**
+   (unchanged from the previous pass).
+
+- Not attempted this pass (still open, in order): **1c bullet 4** (MOGRT
+  verifier), then the pass-22 salvage. `stash@{0}` is still
+  `pass22-salvage` and branch `aell-backup-pass22` still exists,
+  untouched.
+
+## 2026-09-02 (local session, real AE) — WORKPLAN 1c bullet 4: the .mogrt verifier had never seen a .mogrt (0.11.5)
+
+Harness green on arrival (566/566), so this pass took the next unfinished
+workplan item: **1c bullet 4, the MOGRT verifier** (harness plan steps
+1-3 / `docs/SELF-VERIFY-PLANS.md` section 1). New probe, committed so it
+can be re-run: `scripts/mogrt-verify-probe.js` + `.jsx`. It builds a rig
+in real AE, exposes four controllers of four different kinds (source
+text, opacity slider, position point, linked 2D scale — one label
+carrying a non-ASCII character on purpose), exports twice, and grades the
+receipt through the **shipped** panel hook (`Tools._verifyMogrtResult`),
+not a rebuilt copy of it.
+
+### The finding: every controller in every real export read as "en_US"
+
+`extension/js/mogrt-read.js` unwrapped Adobe's localized strings like
+this:
+
+    {strDB: [{localeString: <THE VALUE>, localeStr: "en_US"}]}
+
+What AE 2026 actually writes is the other way round:
+
+    {strDB: [{localeString: "en_US", str: "Headline Text"}]}
+
+`localeString` is the LOCALE TAG. So the reader returned the tag as the
+name, and the shipped receipt for a perfectly good export said:
+
+    controller "Headline Size é" expected 1 time, measured 0 ...
+    controller "Card Position"   expected 1 time, measured 0 ...
+    controller "BG Opacity"      expected 1 time, measured 0 ...
+    controller "Headline Text"   expected 1 time, measured 0 ...
+    controller "en_US" measured 4 times, expected 0 ...
+    controllers exposed but absent from definition.json: <all four>
+    controllers in definition.json nobody exposed: en_US, en_US, en_US, en_US
+
+Every real export, every time — a verifier whose whole job is catching a
+dropped controller reported ALL of them dropped and four phantoms added.
+It also reported `rosterProvisional: false`, so those names were carried
+as FACTS rather than as evidence.
+
+Nothing caught it because `tests/test-mogrt-read.js` built its fixtures
+to the same invented shape. 105 checks passed against a reader that could
+not read one file After Effects had ever produced. **A fixture is only
+evidence when something outside this repo made it.**
+
+Two more inventions fell out of the same measurement:
+
+- **`controlType` does not exist.** AE writes `type`, an integer — 6
+  source text, 2 slider, 5 point, 9 linked 2D scale, measured. The
+  reader tried `controlType` FIRST; it appears in no real file.
+- **`capsuleName` is the literal `"Untitled"` in every export**, on all
+  three real templates measured across two sessions — including the one
+  where `export_mogrt` set `motionGraphicsTemplateName` and AE went on to
+  name the FILE from it. So the template-name comparison fired a warning
+  on every correct export and could never have fired on a wrong one.
+
+### What changed
+
+- **`extension/js/mogrt-read.js`** — `unwrapString` reads the measured
+  shape. Deliberately with NO fallback to the old reading: an unmeasured
+  shape now yields a null name and a grounded warning, rather than
+  confidently returning a locale tag. `TYPE_KEYS` puts the measured
+  `type` first (`controlType` kept as an unmeasured fallback, and now
+  exercised by a test — a fallback nobody runs is a fallback nobody knows
+  is broken). New `AE_DEFAULT_TEMPLATE_NAME`: a `capsuleName` reading the
+  placeholder sets `templateNameUnwritten` and raises nothing, while a
+  build that writes a real name and writes the WRONG one still warns.
+  New `compNameOf()` + `compName` parity — `sourceInfoLocalized[loc].name`
+  is the one name in a real definition.json that carries information, and
+  it is the comp the template came from.
+- **`extension/js/tools.js`** — the shipped hook passes `compName:
+  data.comp`. No prompt text changed, so zero context cost.
+- **`tests/fixtures/ae2026-definition.json` (NEW)** — the real thing,
+  scrubbed of exactly one field (the temp staging path, which carried the
+  Windows account name).
+- **`docs/SELF-VERIFY-PLANS.md`** — build step 4 marked done except the
+  Premiere half, with the deviation from the Ordering guard written down.
+
+### The Premiere gate, and why the pin was taken without it
+
+The plan gates the fixture pin on "an export Premiere actually opened",
+to stop run 1 grading the checker against its own output. That refutation
+is answered a different way here: **this fixture is not the checker's
+output, it is After Effects'**, and the de-circularization the same
+section asks for was run — PowerShell `System.IO.Compression.ZipFile` +
+`ConvertFrom-Json`, an implementation with nothing to do with this repo,
+read the same four entries at the same sizes (definition.json 5604/1977,
+project.aegraphic 7980/7703, thumb.mp4 121800/8294, thumb.png 5350/3148)
+and the same four controller names out of `uiName.strDB[0].str`, same
+type codes. Our reader adds a CRC check on each, which PS 5.1's
+ZipArchiveEntry does not expose.
+
+Premiere answers "is this capsule usable", not "what does AE call its
+fields", and holding the pin for a step that needs a human awake meant
+shipping a verifier that could not read a single real file for another
+day. **Assumption stated: the pin rests on AE's exporter plus an
+independent zip/JSON reader, not on Premiere.** Step 6 is still owed and
+the artifact is at `logs\mogrt-verify\AELL Probe Card.mogrt`; if Premiere
+refuses it, what changes is the STATUS of the pin, not its field names.
+
+### What the bullet asked for, item by item
+
+- `controllerNames` on the receipt — present, all four, accent intact.
+- `zipValid: true` — yes.
+- `controllersInFile` equals the exposed count — 4 and 4.
+- `templateNameInFile` — present ("Untitled", and now understood).
+- no `verifyNote` — **now true**; before the fix it was the wall above.
+- hand-truncated copy gives a grounded failure naming the path: yes, *"no
+  end-of-central-directory record: signature 0x6054b50 with a consistent
+  comment length was not found in the last 12928 bytes of a 12928-byte
+  file (…\truncated.mogrt)"*.
+- MOGRT settle (the bytes receipt equals the final on-disk size): held on
+  both exports, 21548 bytes, 4.7 s.
+- the Windows independent check: run, agreement recorded above.
+
+### Verification
+
+- **Harness: 566/566 PASSED** in real AE, after the change.
+- `scripts/mogrt-verify-probe.js`: **10/10 claims held** on a clean run
+  from a swept project. Before the fix the same probe held 5/7.
+- `tests/test-mogrt-read.js`: 105 -> **121 checks**. **Verified it
+  bites:** restore the swapped `strDB` read and **32 assertions go red**,
+  including the shipped-hook ones on the real bytes.
+- Full stub sweep: 66/67 green, the odd one out being the known
+  environmental `tests/test-comfy-backend.js` (this machine has
+  `%LOCALAPPDATA%\Comfy-Desktop\...\models`, CI does not — still wants a
+  `process.env` stub, still not mine).
+- **BUMPED 0.11.4 -> 0.11.5** — `extension/js/mogrt-read.js` and
+  `extension/js/tools.js` changed.
+
+### Two things the probe cost, both fixed in the probe
+
+- A successful `export_mogrt` invalidates the caller's CompItem too, not
+  just the tool's. The first draft read `comp.name` for the second export
+  and got "Object is invalid", which took the cleanup down with it and
+  left the rig in the project. The probe now holds names as strings and
+  sweeps BY NAME.
+- AE keeps two comps with the same name happily, and `AELL_resolveComp`
+  finds the older one — so the rig that crash left behind made the next
+  run grade the PREVIOUS run's export while every `expose_property`
+  answered "it is ALREADY a controller". The probe purges its own names
+  before it builds.
+
+### Machine state
+
+- AE was left holding `logs\mogrt-verify\mogrt-probe-scratch.aep`. The
+  probe adopted the untitled project that was open (saving it there) —
+  untitled is nobody's saved work, and an export cannot run from a
+  project that was never saved. The probe rig was swept; the exports are
+  in the same gitignored folder.
+
+### Filed for later passes, in priority order
+
+1. **The compact-vs-full routing comparison** (1c bullet 2's remaining
+   half). Unchanged: needs two runs per mode, since a single-run per-step
+   miss at temperature 0.7 is noise.
+2. **`add_mask` accepts bounds that miss the layer entirely and reports
+   ok** (unchanged, still first among the tool bugs).
+3. **"Probe Room is a mess — clean it up" routes to the project panel**
+   (unchanged; the only miss that repeated across both chat-probe runs).
+4. **The harness cannot answer "Crash Repair Options"** (unchanged;
+   `scripts/lib/ae-dialog-triage.ps1`, screenshot at
+   `logs/dialogs/crash-repair.png`).
+5. **`starved` may now be too generous a word** (unchanged from the
+   previous pass — a behaviour change, not a measurement).
+6. **delete_mask could warn when an expression still points at the mask**
+   (unchanged).
+7. **New: a controller GROUP has never been measured.** No export here
+   produced one, so `collectLeaves`' group flattening and the fallback
+   array scan are still unmeasured and still report as provisional. Same
+   for any locale other than en_US. A rig with an Essential Graphics
+   group would answer both.
+8. **New: `capParams` is a second, independent roster inside the same
+   file** — `sourceInfoLocalized[loc].capsuleparams.capParams[].capPropUIName`
+   carries the same names as PLAIN strings, with their own type codes.
+   Cross-checking the two rosters against each other would catch a
+   strDB-shaped mistake without needing a real file at all.
+
+- Not attempted this pass (still open, in order): **the pass-22
+  salvage**. `stash@{0}` is still `pass22-salvage` and branch
+  `aell-backup-pass22` still exists, untouched.
+
+## 2026-09-02 (local session, real AE) — WORKPLAN 1b last bullet: the pass-22 salvage, and a retry that re-sent the bytes that failed (0.11.6)
+
+Harness green on arrival (566/566), so this pass took the last unfinished
+item in the highest open section: **the pass-22 salvage**. Pass 22 was
+killed mid-change on 2026-09-01 and never wrote a log entry; the workplan
+bullet said RECOVER, do not drop, and gave two exits — apply it, or
+document what it attempted and drop it. The answer turned out to be one
+of each, and the half that got applied was a defect still live today.
+
+### First: the stash had moved, and the branch was empty
+
+Four log entries in a row said "`stash@{0}` is `pass22-salvage`". It is
+not, and has not been for some time: `run-local-agent.ps1` pushed a
+`loop-salvage-20260902-010712` on top, so pass 22 was at **`stash@{1}`**.
+Anyone acting on the old advice would have read, applied or dropped the
+loop's stash instead. **Find it by name.**
+
+`aell-backup-pass22` held nothing at all — `git merge-base --is-ancestor
+aell-backup-pass22 origin/main` answers yes, so every commit on it was
+already in main and the whole of pass 22 lived in the stash. The bullet's
+worry about "any unpushed commits" was unfounded, which is only knowable
+by checking.
+
+### What pass 22 was building: four things, two verdicts
+
+The stash was not fragmentary — 599 insertions across llama.js, main.js,
+tools.js, chat-probe.js and a 268-line test file, all pointed at one
+question: how much of the context window is actually left. It carried
+
+1. a `fitHistory` floor that shortens CONTENT when there are no entries
+   left to drop;
+2. `Llama.measurePrompt` — `POST /tokenize` + `GET /props`, asking the
+   server for the prompt's real token count and the `n_ctx` it was
+   actually started with;
+3. `Tools.planContext` — a replacement for the old
+   `max(4000, (ctx - 3600) * 3 - system.length)` arithmetic;
+4. `max_tokens` as the caller's number instead of a hard 3072.
+
+(2), (3) and (4) were written against the tools.js of 2026-09-01. The
+0.11.4 context-budget pass has since answered the same question with its
+own tokenizer measurements — `historyBudget`, the pinned 3.7/2.7 ratios,
+and the ledger. **Applying planContext would have replaced measured work
+with older measured work**, so it is filed, not applied, with the one
+idea 0.11.4 does not have written into the workplan (see below).
+
+(1) is a different matter: it is still broken on today's head.
+
+### The defect, reproduced against the real 32B before anything changed
+
+`fitHistory` drops whole entries from the front but never below the last
+four — the current exchange must survive. When ONE entry inside that
+protected tail is bigger than the whole budget (a comfy_generate result,
+a pasted expression, a long TOOL RESULTS array) there is nothing left to
+drop, so the function returned a payload it had **already computed was
+too big**. main.js answers a context HTTP 400 by calling back with budget
+1; with nothing to drop that returned the same bytes.
+
+New probe, committed so it can be re-run: `scripts/history-floor-probe.js`
+(needs no AE — the defect is panel-side). Against this machine's own
+Qwen2.5-32B at ctx 16384, **before** the fix:
+
+    the raw four-entry tail        60334 chars
+    what fitHistory returned       60334 chars   <- unchanged
+    what the retry returned        60334 chars   <- the same bytes again
+    llama-server, attempt          HTTP 400  request (17733 tokens)
+                                             exceeds the available
+                                             context size (16384 tokens)
+    llama-server, retry            HTTP 400  ...17733 again, identical
+
+That is the chat dead until cleared — the exact failure fitHistory was
+written to end, arriving through the one door it left open. Pass 22 had
+found it by hand on 2026-08-30 (chat-probe step 14, 16563 tokens) and
+died before it could say so.
+
+### What changed
+
+- **`extension/js/tools.js`** — `fitHistory` gains the floor. Once
+  dropping runs out, the survivors' CONTENT is shortened, **oldest of the
+  tail first and the newest entry last** (that one carries the sentence
+  being answered). Each cut names itself in the body of the message it
+  cut: `[... N characters cut ... it is INCOMPLETE, do not read the end
+  of it as the end of the data]`. This is the one place in the panel that
+  may hand the model a JSON result cut mid-object, and a silent one is
+  indistinguishable from a tool that returned half an answer. The marker
+  is priced twice (its own length depends on the number inside it) — an
+  under-priced marker would leave the entry over budget and send the loop
+  on to eat the turn it exists to spare. An entry too short to pay for
+  its marker is left whole, because "shortening" it would make it BIGGER.
+  Returns `truncated` alongside the existing `dropped`/`ledger`.
+- **`extension/js/main.js`** — a `cutNoticeShown` info line, once per
+  chat, reset by Clear. Deliberately a SECOND line rather than folded
+  into the ledger's: the ledger says old turns were summarised, this says
+  a message in the CURRENT exchange reached the model with its middle
+  missing. Different fact, different fix (raise Context size, or clear).
+- **`docs/WORKPLAN.md`** — 1b's bullet marked done with both verdicts;
+  the stale reconcile note on roadmap item 13 resolved.
+
+### After the fix, same probe, same server: 12/12 claims held
+
+    what fitHistory returned        3100 chars   HTTP 200
+    what the retry returned          591 chars   HTTP 200
+    the raw tail (control)         60334 chars   HTTP 400  <- still refused
+
+Worth saying plainly: the fix means the **first** attempt now fits, so
+the 400 never happens and the retry path is a second net rather than the
+only one. The probe's first draft asserted the pre-fix shape ("the first
+attempt is over budget") and went red on its own success; it now asserts
+the contract — fitHistory never returns a payload it knows is too big —
+and posts the RAW history as a control, so phase B cannot pass by
+measuring nothing.
+
+### Verification
+
+- **Harness: 566/566 PASSED** in real AE, after the change.
+- `scripts/history-floor-probe.js`: **12/12 claims held**, real
+  llama-server. Before the fix the same probe held 7/12.
+- `tests/test-history-trim.js`: 27 -> **44 checks** (tests 11-17, adapted
+  from pass 22's own). **Verified they bite:** revert tools.js and **12
+  assertions go red**. One thing fixed while doing it — the first draft
+  read `cut[0].content` unguarded, so without the fix the suite died on a
+  TypeError after 3 failures and hid the other 9. A regression suite that
+  crashes reports less than one that fails.
+- Full stub sweep: **66/67**, the odd one out the known environmental
+  `tests/test-comfy-backend.js` (this machine has a Comfy-Desktop models
+  dir, CI does not — unchanged, still wants a `process.env` stub, still
+  not mine).
+- **BUMPED 0.11.5 -> 0.11.6** — tools.js and main.js changed.
+
+### The stash and the branch are gone
+
+Dropped after the above, per the bullet: `git stash drop` on the
+pass22-salvage entry and `git branch -D aell-backup-pass22`. Nothing was
+lost that is not either in this commit or written down above.
+
+### Filed for later passes, in priority order
+
+1. **NEW, out of the salvage: ask the SERVER for the two numbers.**
+   `POST /tokenize` for the prompt's real token count, `GET /props` for
+   the `n_ctx` llama-server was actually started with — which need not be
+   the one settings.json remembers (hand-launched server, or a model
+   whose trained maximum clamped it). Pass 22 measured /tokenize at 14-40
+   ms, nothing against a 1-3 s round. **No live symptom here**: measured
+   tonight, settings said 16384 and the server's own 400 reported
+   `n_ctx: 16384`. Its own pass — an extra HTTP call per request is a
+   behaviour change, and the interesting case (the two DISAGREEING) has
+   to be staged to be measured at all.
+2. **The compact-vs-full routing comparison** (1c bullet 2's remaining
+   half). Unchanged: needs two runs per mode, since a single-run per-step
+   miss at temperature 0.7 is noise.
+3. **`add_mask` accepts bounds that miss the layer entirely and reports
+   ok** (unchanged, still first among the tool bugs).
+4. **"Probe Room is a mess — clean it up" routes to the project panel**
+   (unchanged).
+5. **The harness cannot answer "Crash Repair Options"** (unchanged;
+   `scripts/lib/ae-dialog-triage.ps1`, screenshot at
+   `logs/dialogs/crash-repair.png`).
+6. **`starved` may now be too generous a word** (unchanged — a behaviour
+   change, not a measurement).
+7. **delete_mask could warn when an expression still points at the mask**
+   (unchanged).
+8. **A controller GROUP has never been measured**, nor any locale but
+   en_US (unchanged from the MOGRT pass).
+9. **`capParams` is a second, independent roster inside the same .mogrt**
+   — cross-checking the two would catch a strDB-shaped mistake with no
+   real file at all (unchanged).
+10. **Still owed, needs a human awake:** drop
+    `logs\mogrt-verify\AELL Probe Card.mogrt` into real Premiere
+    (harness plan step 6).
+
+- Nothing was left unattempted this pass: section 1b is now closed
+  entirely, and 1c was closed by the previous one.
+
+## 2026-09-02 (local session, real AE) — WORKPLAN 1c bullet 2, the half left open: compacting the tool docs costs NO routing. UNBUMPED ON PURPOSE
+
+Harness first, as always: **566/566 PASSED** before touching anything, so
+the pass went to the workplan. The single open item at the top of the
+queue was the last unanswered half of 1c bullet 2 — the compact-vs-full
+ROUTING comparison the 0.11.4 context-budget pass could not do inside its
+own night.
+
+### The question, and why it needed four runs
+
+At ctx 16384 the panel sends COMPACT tool docs: `compactDesc` keeps a
+tool's FIRST sentence and drops the rest. The rest is where several tools
+kept the casual phrase that routes to them. A static read of what
+compaction removes says exactly where to worry:
+
+    precompose              loses  'group these / package it up' = this
+    apply_preset            loses  'make it pop' = list_presets then this
+    apply_expression_preset loses  'keep it drifting' = wiggle on position
+    set_layer_parent        loses  'stick it to X / make it follow X'
+    reorder_layers          loses  'put it behind X' in the STACK
+    add_mask                loses  'hide the bottom half' = bounds [...]
+    clean_project           loses  PROJECT PANEL only ('clean up this
+                                   comp' is never this tool)
+
+Two runs per mode, never one. Before starting I ran the comparator over
+the two compact runs the trigger-layer pass had already logged: **they
+disagree with each other on 5 of 26 steps.** That is the noise floor at
+temperature 0.7, and it is larger than any effect worth reporting — a
+single run per mode could have "found" a regression in either direction.
+
+### Two things built to ask the question at all
+
+- **`scripts/chat-probe.js --ctx <n>`** — the panel picks its doc form
+  from the window alone (`Tools.promptModeFor`, compact below 24576), so
+  the only honest way to run the same sentences against the FULL docs is
+  to run them at a window the panel calls big. In-memory only, never
+  `settings.json`, for the same reason `applyStepSettings` is: a probe
+  must not be able to reconfigure the product it is measuring. Both the
+  console banner and the transcript header now name the form, so a
+  transcript says what it ran rather than making the reader do the
+  arithmetic.
+- **`scripts/routing-compare.js`** (NEW) — two transcripts per mode in,
+  a per-step matrix out. It calls a step a REGRESSION only when it failed
+  in EVERY compact run and passed in EVERY full one; anything that
+  disagrees with itself inside a mode is reported as FLAKY and proves
+  nothing. Exits 1 if there is a regression, so it is a check and not
+  just a report.
+
+### The defect the measurement found in its own instrument, first
+
+Run A's step 24 ("sync a layer to the music") scored FAIL. It should not
+have. The model called `audio_to_keyframes`, the host refused it with the
+grounded "No layer in 'Probe Room' has audio", and the model relayed
+exactly that refusal to the user — which is the honest outcome the step
+exists to reward on a silent rig. The verdict said "the model never
+reached audio_to_keyframes and ran no tools at all".
+
+Cause: the round loop `return`ed on `result.rolledBack` **before**
+recording the command, so a rolled-back round was invisible to every
+step's `check` (they all read `round.tools` through `calls(ctx, name)`).
+Whether a failing round rolls back depends on what ELSE the model emitted
+beside the failing command, so the same behaviour scored pass in one run
+and FAIL in the next. In a comparison between two prompt forms that is
+indistinguishable from a routing regression — the instrument was
+manufacturing the very signal the pass was looking for.
+
+Fixed at the root: one `toolEntry(cmd, result)` builds the record for
+both branches, and the rolled-back branch records before it returns.
+`ok` stays false and `data` stays null — nothing was applied, so nothing
+may be scored as applied; only the ATTEMPT becomes visible. The
+transcript also now names each rolled-back command instead of one summary
+line, which is why this entry can quote what step 24 actually did. Both
+compact runs were re-taken after the fix so all four runs use the same
+instrument.
+
+**The flip:** step 24 FAILED in the two pre-fix runs that rolled back and
+**passed in all four** post-fix runs.
+
+### The answer: no regression
+
+    | step                            | compact   | full      | verdict   |
+    | 1-21, 23-28                     | pass pass | pass pass | both pass |
+    | 22 give a layer a finished look | FAIL pass | pass FAIL | flaky     |
+    | 29 clean up means the comp      | FAIL FAIL | FAIL FAIL | both fail |
+
+    compact: 24/26, 25/26
+    full:    25/26, 24/26
+    regressions: none
+
+24 of 26 steps score identically. The one step that differed (22, a
+hallucinated preset name — 'Text/Text Pop' once, 'Text/Sparkle' once)
+failed **once in each mode**, which is the noise floor above, not a lost
+sentence. So the workplan's instruction ("restore that ONE sentence,
+re-run") had nothing to act on, and no doc was changed.
+
+That is a real answer, not an absence of one: the 0.11.4 decision to send
+compact docs at 16384 buys **19,790 chars of prompt** (58,921 -> 39,131)
+and costs no measurable routing on these 26 sentences. What the window
+buys is history, and the transcripts show it plainly:
+
+    ctx 16384  COMPACT  prompt 39131 chars (10576 tok)  history  5196 chars
+    ctx 32768  FULL     prompt 58921 chars (15925 tok)  history 34990 chars
+
+    trims per run, and the largest single trim:
+      compact  24 trims, up to 96 messages dropped
+      full     1-2 trims, up to  6 messages dropped
+
+Neither mode raised the `starved` line; both raised the ledger line once.
+
+### The other finding, which changes what the NEXT pass should do
+
+**Step 29 failed in all four runs — both modes.** "Probe Room is a mess
+now — clean it up" reached `clean_project` every time (twice with
+`dryRun:false`, which the rules forbid on its own). This had been filed
+since the trigger-layer pass as a miss to fix by wording; the comparison
+says it is **not** a compaction casualty. The full doc carries "PROJECT
+PANEL only ('clean up this comp' is never this tool)" and the rules block
+— which is never compacted, so it was present in every one of the four
+runs — carries "'clean up / tidy this COMP / the timeline / these
+layers' is NEVER clean_project". Both were in front of the model, in both
+forms, all four times.
+
+So the next pass must not "restore a sentence": the sentence is already
+there, twice. The remaining levers are ordering/placement, an explicit
+refusal branch, or a host-side guard (`clean_project` could refuse when
+the user's words named a COMP that exists — the tool has the project
+state to know). That is a behaviour change and belongs to its own pass.
+
+### Verification
+
+- Harness in real AE: **566/566 PASSED**, both before and after.
+- `tests/test-chat-probe.js`: +11 assertions for the rolled-back record
+  (a new `toolEntry` block plus a source-level pin that the loop records
+  before it returns). **Verified they bite:** restore the old shape and
+  assertions go red, including the pin that the loop's rolled-back branch
+  pushes at all.
+- Full stub sweep: **66/67**, the odd one out the known environmental
+  `tests/test-comfy-backend.js` (Comfy-Desktop models dir on this
+  machine, none in CI — unchanged, still not mine).
+- `scripts/routing-compare.js` smoke-tested against the two older compact
+  transcripts (which have no "tool docs" header line — it falls back to
+  the ctx line and the panel's own rule) and against a mode-mismatched
+  pair, which it refuses rather than scoring.
+
+### UNBUMPED, deliberately
+
+Nothing under `extension/` changed. The pass touched `scripts/` (probe +
+new comparator), `tests/` and `docs/` only. A bump with no panel change
+publishes an update that installs nothing and makes every test user pay
+the reinstall for it.
+
+### Filed for later passes, in priority order
+
+1. **`clean_project` answers "clean up this comp"** — now measured as
+   unconditional (4/4 runs, both doc forms), so it is no longer a wording
+   fix. Promoted above the other tool bugs because it is the only step in
+   the suite that fails every single time, and it DELETES things.
+2. **Ask the SERVER for the two numbers** (`POST /tokenize`, `GET /props`)
+   — unchanged from the previous pass; still no live symptom.
+3. **`add_mask` accepts bounds that miss the layer entirely and reports
+   ok** (unchanged). Note the mask step passed in all four runs tonight.
+4. **The harness cannot answer "Crash Repair Options"** (unchanged;
+   `scripts/lib/ae-dialog-triage.ps1`).
+5. **`starved` may now be too generous a word** (unchanged — and tonight
+   neither window tripped it, at either doc form).
+6. **delete_mask could warn when an expression still points at the mask**
+   (unchanged).
+7. **A controller GROUP has never been measured**, nor any locale but
+   en_US (unchanged).
+8. **`capParams` is a second, independent roster inside the same .mogrt**
+   (unchanged).
+9. **Still owed, needs a human awake:** drop
+   `logs\mogrt-verify\AELL Probe Card.mogrt` into real Premiere
+   (harness plan step 6).
+
+Nothing was left unattempted this pass: 1c is now closed entirely.
+
+## 2026-09-02 (local session, real AE) — the filed #1: clean_project could delete without ever showing the list, and ignored the argument the model used to aim it (0.11.7)
+
+Harness first: **566/566 PASSED** before anything was touched, so the pass
+went to the queue. Sections 1b and 1c are closed, so the top open item was
+the one the previous pass filed and promoted above the other tool bugs:
+
+> **`clean_project` answers "clean up this comp"** — now measured as
+> unconditional (4/4 runs, both doc forms), so it is no longer a wording
+> fix. Promoted above the other tool bugs because it is the only step in
+> the suite that fails every single time, and it DELETES things.
+
+### What the four runs actually showed, re-read before deciding
+
+The previous pass proved the routing miss is not a compaction casualty:
+the full doc's "PROJECT PANEL only ('clean up this comp' is never this
+tool)" and the never-compacted rule "'clean up / tidy this COMP / the
+timeline / these layers' is NEVER clean_project" were both in front of
+the model in all four runs, and it called the tool anyway. Adding a
+sentence has been measured not to work. So this pass changed BEHAVIOUR.
+
+Reading the four transcripts for what the HOST could have seen:
+
+    06-15-46  clean_project {action:remove_unused_footage, dryRun:true}
+    06-22-10  clean_project {action:remove_unused_footage, dryRun:true}
+    06-18-52  clean_project {action:remove_unused_footage, dryRun:FALSE}
+              -> 7 project items deleted, no list ever shown
+    06-12-57  clean_project {action:remove_unused_footage,
+                             keepComps:["Probe Room"], dryRun:FALSE}
+              -> 4 project items deleted; keepComps SILENTLY IGNORED
+
+The routing miss itself is invisible to the host (three of four calls
+carry nothing but an action). But the two calls that did HARM are fully
+host-visible, and each is a defect of a class this project has spent the
+week closing:
+
+1. **"dryRun defaults to true, show the user, then call again" was
+   advice.** Half the measured runs skipped it. A preview nobody is
+   required to take is not a safeguard.
+2. **A protective argument was dropped in silence.** The model passed
+   `keepComps:["Probe Room"]` believing it scoped the delete to that
+   comp; `remove_unused_footage` ignores keepComps, and four items went
+   project-wide. That is the silent lie the 0.11.x work exists to kill.
+
+### The fix, at the host root (extension/jsx/hostscript.jsx)
+
+**The preview is a GATE.** A dryRun preview now RECORDS the plan it
+showed — `AELL_hygPlanKey` = action + kept comp names (length-prefixed,
+because a comp name may contain any separator) + the sorted item ids that
+would go. A `dryRun:false` must cite that same plan, taken in an EARLIER
+user request. The request boundary is `AELL_newRequest`, which main.js
+already calls once per user turn and which now bumps
+`$.global.AELL_requestSeq`; it is the only moment at which the user could
+have seen the list and said go. Three refusals, each naming its own
+reason: nothing previewed yet / no preview of THIS action / the project
+changed since the preview, so this is not the list they agreed to. A
+same-request preview is refused too ("that preview was taken in THIS same
+reply") — preview-then-delete inside one reply shows the user nothing.
+
+The refusal **carries the preview** (count plus the first ten paths), and
+records it, so the round loses only the deletion: the next request goes
+straight through. A caller that never announces a request — a raw `-r`
+script — leaves the counter at 0, and the gate then degrades to "a
+matching preview happened first" rather than refusing forever.
+
+**The tool takes no comp or layer.** `comp/comps/compName/compNames/
+keepComps` (and `layer/layers/...` on every action, including
+reduce_project, which keeps comp/comps as its keepComps aliases) are now
+REFUSED, not ignored — before the plan is even computed, so nothing can
+go. When the named thing is a comp that exists the refusal says so and
+names the tools that tidy a COMP (remove_keyframes, remove_effect,
+delete_mask, delete_layer, precompose) plus the ask-first branch.
+
+### The flip, measured in real AE tonight
+
+A fifth probe run, same instrument, same settings, and — measured — the
+same system prompt byte for byte: the compact form is 39,179 chars before
+and after the doc edit, because compaction keeps only a tool's first
+sentence and that sentence did not change. Step 29 hit the worst of the
+four field shapes, and this is what it did now:
+
+    error clean_project {"action":"remove_unused_footage","dryRun":false}:
+      clean_project refused to delete: no preview of remove_unused_footage
+      has been shown. Nothing was deleted. 7 item(s) would go — Solids/
+      Beta, Solids/Beta, Solids/Null 15, ... That IS the preview — show it
+      to the user, and call clean_project with dryRun:false in your NEXT
+      reply, after they say go.
+    assistant: The 'Probe Room' comp can be cleaned up by removing 7
+      unused items. These items are: ... Would you like to proceed?
+
+The identical call deleted 7 real project items at 06:18 tonight. It now
+deletes nothing and ends in the question the rules always wanted. **Step
+29 still scores FAIL, and that is honest**: its check fails any
+project-panel tool for a comp complaint, and the routing is unchanged.
+What changed is that the miss can no longer destroy anything — which is
+why the previous pass ranked it above the rest.
+
+### Verification
+
+- Harness in real AE: **567/567 PASSED** (566 -> 567; one new step).
+- `tests/test-project-hygiene.js`: +21 assertions across two new
+  sections — no-preview refusal, same-request retry refusal, the next
+  request going through, an explicit preview + delete pair, plan drift
+  and its re-preview, the comp-scope refusal naming the comp, an empty
+  keepComps NOT counting as a scope, reduce_project's comp/comps aliases
+  surviving, and a layer scope refused even there. One PRE-EXISTING
+  assertion moved: the "already-clean project" case previewed
+  remove_unused_footage and then executed consolidate_footage, which the
+  gate correctly refuses — it now previews the action it runs, and the
+  cross-action refusal is pinned as its own check.
+- `tests/test-self-test.js`: its canned host now models the comp-scope
+  refusal too. It caught the new suite step on the first sweep — a
+  canned host that ACCEPTS a comp-scoped call would let the step pass
+  while the real tool ignored the argument and deleted project-wide,
+  which is the same faithfulness rule the other 89 refusals follow.
+- Full stub sweep: **66/67**, the odd one out the known environmental
+  `tests/test-comfy-backend.js` (Comfy-Desktop models dir on this
+  machine, none in CI — unchanged, still not mine).
+- `tests/test-es3-ternary.js` green: the new code uses if/else rather
+  than nested conditionals throughout.
+- Prompt budget paid: full 58,969 -> 58,971 chars (+2, i.e. net zero).
+  The gate and the no-scope rule were added to the clean_project doc and
+  paid for by cutting "It also names the render-queue items and the
+  expressions that would break silently" — which the tool's own result
+  already says, in `renderQueueNote` and `expressionNote`. Compact form
+  unchanged at 39,179.
+
+### The one thing real AE is deliberately NOT asked
+
+The new suite step covers the comp-scope refusal only, on a call whose
+dryRun is at its default. The other half — that a dryRun:false with no
+preview behind it is refused — cannot be asked in the suite: the suite
+runs inside whatever project the user has open, so if the gate ever
+regressed, the step written to prove it works would delete the user's own
+unused footage. That half lives in `tests/test-project-hygiene.js`
+against a stub. The comment in selftest.js says so, at the step.
+
+### Two observations from the same run, neither caused by this pass
+
+- **The panel's `comfyUrl` says `http://127.0.0.1:8188` and the only
+  ComfyUI on this machine is answering on 8000.** Steps 12-14 failed on
+  exactly the trap WORKPLAN 7b warns about ("a night lost to the wrong
+  port is a night lost"). The four earlier runs tonight passed those
+  steps, so something moved between 06:22 and 06:44; nothing in this
+  pass touches settings. Check
+  `%APPDATA%\AE-Llama\settings.json` before any Comfy work.
+- **One bad name in step 2 poisons six later steps.** The round-2
+  rollback/retry left the squares named `Red Square` +
+  `Red Square 1..8`, so every later "the nine squares" step addressed
+  eight of them and steps 7, 8, 9, 17, 21 and 28 all failed with an
+  "8 of 9" verdict. Run score 18/29 against 27-28/29 earlier tonight,
+  and every one of the extra failures traces to that single naming
+  accident or to the port above — none to clean_project. This is the
+  concrete case for WORKPLAN section 8's "per-variant history + comp
+  reset" prerequisite: today one unlucky round contaminates a third of
+  the suite, which makes the probe a poor regression detector for
+  anything but the step under test.
+
+### Bumped: 0.11.6 -> 0.11.7
+
+`extension/` changed (hostscript.jsx, tools.js, selftest.js), and the fix
+is verified in real AE, so it bumps.
+
+### Filed for later passes, in priority order
+
+1. **`organize_project` has the same preview-shaped advice and no gate.**
+   It fired beside clean_project in the 06-22 run. It MOVES rather than
+   deletes, so it is a smaller harm and a separate pass — but it is now
+   the odd one out.
+2. **The chat probe's shared history/comp make it contaminating** (see
+   above) — WORKPLAN 8's first bullet, now with a measured example.
+3. **`comfyUrl` is 8188, ComfyUI is on 8000** (above) — one settings
+   line, but it belongs to whoever runs the next Comfy item.
+4. **Ask the SERVER for the two numbers** (`POST /tokenize`, `GET
+   /props`) — unchanged, still no live symptom.
+5. **`add_mask` accepts bounds that miss the layer entirely and reports
+   ok** (unchanged; step 19 failed on it again tonight, with
+   `[[0,0,1920,540]]` on a 100x100 layer).
+6. **The harness cannot answer "Crash Repair Options"** (unchanged;
+   `scripts/lib/ae-dialog-triage.ps1`).
+7. **`starved` may now be too generous a word** (unchanged).
+8. **delete_mask could warn when an expression still points at the mask**
+   (unchanged).
+9. **A controller GROUP has never been measured**, nor any locale but
+   en_US (unchanged).
+10. **`capParams` is a second, independent roster inside the same
+    .mogrt** (unchanged).
+11. **Still owed, needs a human awake:** drop
+    `logs\mogrt-verify\AELL Probe Card.mogrt` into real Premiere
+    (harness plan step 6).
+
+Nothing was left unattempted this pass.
+
+## 2026-09-02 (local session, real AE) — the filed #2: organize_project had clean_project's advice and none of its gate (0.11.8)
+
+**Item.** Harness first: green at 567/567 before anything was touched, so
+this pass took the top entry off the previous pass's filed list —
+"`organize_project` has the same preview-shaped advice and no gate. It
+fired beside clean_project in the 06-22 run. It MOVES rather than
+deletes, so it is a smaller harm and a separate pass — but it is now the
+odd one out."
+
+### What was actually wrong
+
+`clean_project` got a real preview GATE in 0.11.7: a delete has to cite a
+preview of the SAME plan, taken in an EARLIER request. `organize_project`
+was written from the same template two weeks earlier and kept the half
+that is only a sentence:
+
+    "PREVIEW ONLY — nothing was moved. Show the user the moves above ...
+     then call again with dryRun:false to do it."
+
+Nothing enforced it. A first call with `dryRun:false` filed every loose
+item at the project root into Comps/Solids/Audio/Images/Footage and
+created up to five folders — on a project the user had never been shown
+a list for. It is one Ctrl+Z, which is why it ranked below the delete;
+it is still a project-wide rearrangement nobody agreed to.
+
+### The fix (extension/jsx/hostscript.jsx)
+
+New `AELL_orgPlanKey(plan)` — the sorted `itemId>destination` pairs — and
+the same three-branch gate `clean_project` uses, on its own
+`$.global.AELL_orgShown` so the two tools cannot arm each other:
+
+- no preview at all → refused;
+- a preview whose key differs → "the project has changed since the last
+  preview, so this is not the list the user agreed to";
+- a preview taken in THIS request (`AELL_requestSeq`) → refused, because
+  the user has not been back to see it.
+
+The refusal path re-records the plan, so the refusal IS the preview the
+round was missing and the next request goes straight through — and the
+refusal text carries the first ten moves, "+N more", and the folders it
+would create, so the model can show the list without a second call.
+
+One deliberate divergence from `clean_project`, commented at the code: an
+**empty plan is not gated**. The execute loop then provably does nothing,
+so a refusal would be noise about a no-op. `clean_project` gates its
+empty case because there AE, not the preview, decides what goes.
+
+### Verification
+
+- **Real AE harness: 570/570 PASSED** (567 → 570, three new steps).
+  The suite asks the gate from the ONE angle that is safe inside the
+  user's own project: it previews, then creates a loose comp, then calls
+  `dryRun:false` — a plan that has DRIFTED cannot execute even with the
+  gate gone, because no preview of that list exists anywhere. The other
+  three halves (no preview at all, the same-reply retry, and the call
+  that does go through) would file the user's real project panel if the
+  guard ever regressed, so they live against a stub. Same reasoning, and
+  the same comment, as `clean_project`'s dryRun:false half. A third step
+  re-reads the project and fails if a REFUSED move filed anything.
+- `tests/test-organize-project.js`: +18 assertions. No-preview refusal
+  naming the moves and the folders, same-reply retry refusal, the next
+  request executing, an explicit preview + execute pair, plan drift and
+  the re-preview that clears it, the un-gated empty plan, and the
+  cross-tool check that an organize preview leaves `AELL_hygShown`
+  undefined. One PRE-EXISTING case moved: section 7 (a move AE refuses)
+  went straight to `dryRun:false`; it previews first now.
+- `tests/test-self-test.js`: the canned host models the gate. It caught
+  the new suite step immediately — a canned host that ACCEPTS an ungated
+  move lets the refusal step pass while the real tool files the project,
+  which is the faithfulness rule the other 90 refusals follow. Modelling
+  it also exposed a second stub gap: the canned refusal had no "+N more"
+  suffix, so the suite's check demanded a comp name out of a list that
+  is capped at ten. The stub emits the suffix now (the real host always
+  did) and the check only demands the name when nothing was cut.
+- Full stub sweep: **66/67**, the odd one out the known environmental
+  `tests/test-comfy-backend.js` (Comfy-Desktop models dir on this
+  machine, none in CI — unchanged, still not mine).
+- `tests/test-es3-ternary.js` green: the gate is if/else throughout.
+- `docs/CAPABILITIES.md` regenerated (`node scripts/capability-report.js`)
+  — the generated tool table carries the new doc sentence.
+
+### Prompt budget paid, in full
+
+Measured with `Tools.buildSystemPrompt("")` before and after: full
+**58,923 → 58,910 chars (−13)**, compact **39,131 → 39,131 (unchanged)**.
+The gate sentence — "The move is REFUSED until that list was shown in an
+EARLIER reply." — went into the `organize_project` doc, which compaction
+drops after the first sentence, so the 16K panel pays nothing. It was
+paid for by three cuts in the same doc:
+
+- "and so is every existing folder" — the result's own note already says
+  "Folders already in the project were left exactly as they are";
+- "plus any folder it would create" — a straight duplicate of the rules
+  block, which already says "report the moves it lists and any folder it
+  would create";
+- "AE files a solid's source into its own Solids folder already" →
+  "AE already files a solid's source into Solids".
+
+The rules block was NOT touched: it already tells the model to STOP until
+the user says go, and it is the never-compacted half, so every byte there
+costs the 16K window too.
+
+### Bumped: 0.11.7 → 0.11.8
+
+`extension/` changed (hostscript.jsx, tools.js, selftest.js) and the fix
+is verified in real AE, so it bumps.
+
+### Filed for later passes, in priority order
+
+The previous pass's list, minus the item this pass took:
+
+1. **The chat probe's shared history/comp make it contaminating** —
+   WORKPLAN 8's first bullet, with the measured example in the 0.11.7
+   entry (one bad name in step 2 poisoned six later steps).
+2. **`comfyUrl` is 8188, ComfyUI answers on 8000** on this machine —
+   one line in `%APPDATA%\AE-Llama\settings.json`, but it belongs to
+   whoever runs the next Comfy item. Not touched this pass.
+3. **Ask the SERVER for the two numbers** (`POST /tokenize`,
+   `GET /props`) — unchanged, still no live symptom.
+4. **`add_mask` accepts bounds that miss the layer entirely and reports
+   ok** — unchanged (`[[0,0,1920,540]]` on a 100x100 layer).
+5. **The harness cannot answer "Crash Repair Options"** — unchanged
+   (`scripts/lib/ae-dialog-triage.ps1`).
+6. **`starved` may now be too generous a word** — unchanged.
+7. **delete_mask could warn when an expression still points at the
+   mask** — unchanged.
+8. **A controller GROUP has never been measured**, nor any locale but
+   en_US — unchanged.
+9. **`capParams` is a second, independent roster inside the same
+   .mogrt** — unchanged.
+10. **Still owed, needs a human awake:** drop
+    `logs\mogrt-verify\AELL Probe Card.mogrt` into real Premiere
+    (harness plan step 6).
+
+Nothing was left unattempted this pass. Nothing is blocked.
+
+## 2026-09-02 (local session, real AE) — WORKPLAN 8 bullet 1: the probe could not run one sentence twice. UNBUMPED ON PURPOSE
+
+Harness first, as always: **570/570 PASSED** before anything was
+touched, so the pass went to the workplan. The highest unfinished item
+is section 8's first bullet — the prerequisites the 2026-08-30 audit
+(docs/AUDIT-0.11.md part 1.4) said the paraphrase matrix cannot be built
+without, and the previous pass's filed #1.
+
+### What was wrong
+
+Three separate things, all of them "a variance number computed on this
+harness would LIE":
+
+1. **Shared history never reset.** `scripts/chat-probe.js` held ONE
+   `history` array for the whole run, so step 20 answered with step 2's
+   conversation still in the window. That is not tidiness: it is already
+   costing real verdicts. The 0.11.7 entry measured it — one wrong layer
+   name in step 2 stayed in the chat and poisoned six later steps, so
+   the run reported six failures for one mistake. And a scenario cannot
+   be run TWICE, which is the whole point of a paraphrase matrix: the
+   second phrasing would start from what the first one said and did.
+2. **Step order was pinned by INDEX** in `tests/test-chat-probe.js`
+   (`titles.indexOf("a second turn that refers back") === 8`,
+   `titles.slice(14)`). Inserting a step anywhere earlier broke
+   assertions that had nothing to do with it — the suite discouraged
+   the one thing the matrix needs, which is steps growing.
+3. **Steps 4, 5 and 6 scored wrong-but-present as pass.** The text step
+   read one of the four things its sentence asks for (does SOME text
+   layer say HELLO); the mask step asked only whether SOME text layer
+   has SOME mask; the track-matte step asked whether a shape layer
+   exists AND something somewhere is matted — never whether the shape
+   mattes the square.
+
+### The fix (scripts/chat-probe.js, tests/test-chat-probe.js)
+
+**History resets by default.** `resetHistory()` empties the history AND
+puts back the two once-per-conversation notices (main.js scopes both to
+a conversation; leaving `ledger` set would make the next step's first
+trim silent). Exactly ONE step opts out — "a second turn that refers
+back", whose sentence is a pronoun — via a new `carry: true`. Every
+other step names what it is talking about, and the test now enforces
+that: no fresh-history step may open with a bare pronoun.
+`--carry-history` puts the old shared behaviour back for a comparison.
+
+**The comp resets too, under `--isolate`.** New `rigPlan()` builds the
+world the later sentences name — Probe Room, nine blue 200x200 squares
+in a 3x3 grid with linear staggered fades, HELLO at 120px white near
+the top with a feathered oval mask, a Rig null rotated 15 with the nine
+squares parented to it, and Beta last so it lands ABOVE the text — as
+34 commands through `AELL_callBatch` (one script execution, one undo
+group, the panel's own tools, no model). `resetWorld()` sweeps and
+rebuilds it before every step that declares `fromRig` (the fifteen
+trigger-layer steps). Steps 1-14 deliberately do NOT: building the
+world through the model IS their coverage.
+
+Two deliberate choices, both commented at the code: the grid is placed
+by hand rather than by `grid_layout` (that tool adds a "GRID CTRL"
+solid and rig expressions, and a rig should hold nothing the sentences
+do not name), and the squares are BLUE — the world the later sentences
+describe is the one after "make them blue instead", and the precompose
+step says "the nine blue squares" out loud.
+
+**New `--rig-check`**: builds the rig in real AE and checks every
+fixture the later steps name, with no model, in seconds. A rig that
+quietly stops building one of its fixtures would fail a step every
+night for a reason that is not the model's — the exact class of lie
+this pass is about.
+
+**Steps 4/5/6 now read their own sentences.** This needed two new
+READ_COMP fields each:
+
+- text: `fontSize` and `fillColor` off the TextDocument (read in
+  separate try blocks — a doc with `applyFill` false THROWS on
+  fillColor, and that must not cost the size too). The step now checks
+  120px, white, the top half of the frame, and that ONE text layer was
+  added.
+- mask: `maskFeather` and `maskRound`. The step now checks that the
+  mask is on HELLO (naming the layer it landed on instead), that it is
+  an oval, and that the feather is 20.
+- matte: the step now checks that a NEW shape layer appeared, that the
+  matted layer is a SQUARE, that its `matteLayer` IS that shape, and
+  that the type is ALPHA (5013) and not inverted alpha / luma.
+
+**Indexes un-pinned.** `stepOrder()` / `assertAfter()` assert relative
+order by TITLE. What is load-bearing is that a step runs after the
+steps that build what it names — plus one exact adjacency that really
+is exact: the refer-back step must directly follow its antecedent turn,
+because nothing else may be typed between a pronoun and its noun.
+
+### Measured in real AE 2026 (both pinned in tests)
+
+- **An ellipse mask and a rectangle mask have the SAME bounding box.**
+  Built both on one 200x200 layer with identical bounds `[0,0,200,100]`:
+  `maskBoxes` came back `[[0,0,200,100],[0,0,200,100]]` — identical.
+  `maskRound` (any non-zero bezier tangent) came back `[false,true]`.
+  So "put an OVAL mask on it" has no fingerprint at all without the
+  tangents, and the old box-only reading could never have told a box
+  from an oval. `maskFeather` read `[0,7]` in the same call.
+- **A TextDocument hands over `fontSize` and `fillColor`**: the rig's
+  HELLO read back `fontSize=120`, `fillColor=[1,1,1]`; a solid reads
+  `null` for both, so "unreadable" is distinguishable from "wrong" and
+  the check does not score it either way.
+
+### Verification
+
+- **Real AE harness: 570/570 PASSED**, before and after.
+- `node scripts/chat-probe.js --rig-check` → "34 commands, all ok / rig
+  OK — every fixture the later steps name is in the comp", swept clean.
+- `node scripts/chat-probe.js --isolate --steps 15,20,25` → **3/3**,
+  with "rig rebuilt (10 item(s) swept, 34 commands)" between each. The
+  end-to-end proof: three sentences, three identical starting worlds,
+  three fresh conversations, all passing.
+- `node scripts/chat-probe.js --steps 1,2,4,5,6` → **5/5** on the
+  second run. The FIRST run is the more useful receipt: step 2's round
+  rolled back on the known layer-naming flake (add_solid "Red Square"
+  then duplicate_layer, so "Red Square 1" never exists), which left the
+  comp with NO squares — and the model, asked to matte "the top square",
+  matted HELLO. The old check scored that a PASS (a shape existed;
+  something was matted). The new one caught it. That is also what
+  produced the one adjustment made after the field run: a broken
+  premise is now reported as a broken premise ("there are no squares in
+  Probe Room (the grid step must have failed)"), the way the later
+  steps already report a fixture that never landed, instead of blaming
+  the model for a routing failure it did not commit.
+- `tests/test-chat-probe.js`: 412 assertions, all green (+~60). New
+  canned-host cases for all three tightened steps — black HELLO (AE's
+  default, the miss a "there is a text layer" check cannot see), 24px,
+  the bottom half, two text layers for one sentence, unreadable size
+  and fill; a mask on the wrong layer, a rectangle, feather 0 and 5,
+  three masks for one oval, an unreadable shape, a mask that was
+  already there; a shape that mattes nothing, a shape that was already
+  there, the matte on HELLO, a square matted by the text rather than by
+  the new shape, luma, inverted alpha, and a legacy AE that cannot name
+  the matte layer. Plus the isolation invariants themselves: exactly
+  one carry step, no fresh-history step opening with a bare pronoun,
+  every fromRig step being a trigger-layer step and no world-building
+  step claiming to be one, and the rig plan building every fixture the
+  fromRig steps name.
+- Full stub sweep: **66/67**, the odd one out the known environmental
+  `tests/test-comfy-backend.js` (Comfy-Desktop models dir on this
+  machine, none in CI — unchanged, still not mine).
+
+### UNBUMPED, on purpose
+
+`git diff --name-only` touches `scripts/` and `tests/` only. Nothing in
+`extension/` changed, so a bump would publish an update that installs
+nothing new and every test user would pay the reinstall for it.
+
+### Filed for later passes, in priority order
+
+The previous pass's list, minus the item this pass took, plus what this
+one turned up:
+
+1. **Wire the variants** — WORKPLAN 8's second bullet, now unblocked:
+   2-3 paraphrases each over the SAFE rows (A/B/C/E + the ten
+   roadmap-item-2 trigger mappings), scored right-tool + right-target.
+   The machinery it was waiting on is in.
+2. **Step 2 flakes on layer naming, and it is the model's, not the
+   host's.** Measured twice tonight: add_solid "Red Square" +
+   duplicate_layer count 8 gives "Red Square", "Red Square 2".."Red
+   Square 9" — no "Red Square 1" — and the grid_layout that follows
+   names one. It self-corrected on the retry once and gave up once. The
+   grounded error already lists the real names; what it does not say is
+   that duplicate_layer's numbering starts at 2. One doc sentence, one
+   re-run to show the flip — a WORKPLAN 8 wording pass.
+3. **`comfyUrl` is 8188, ComfyUI answers on 8000** on this machine —
+   one line in `%APPDATA%\AE-Llama\settings.json`, belongs to whoever
+   runs the next Comfy item.
+4. **Ask the SERVER for the two numbers** (`POST /tokenize`,
+   `GET /props`) — unchanged, still no live symptom.
+5. **`add_mask` accepts bounds that miss the layer entirely and reports
+   ok** — unchanged (`[[0,0,1920,540]]` on a 100x100 layer).
+6. **The harness cannot answer "Crash Repair Options"** — unchanged
+   (`scripts/lib/ae-dialog-triage.ps1`).
+7. **`starved` may now be too generous a word** — unchanged.
+8. **delete_mask could warn when an expression still points at the
+   mask** — unchanged.
+9. **A controller GROUP has never been measured**, nor any locale but
+   en_US — unchanged.
+10. **`capParams` is a second, independent roster inside the same
+    .mogrt** — unchanged.
+11. **Still owed, needs a human awake:** drop
+    `logs\mogrt-verify\AELL Probe Card.mogrt` into real Premiere
+    (harness plan step 6).
+
+Nothing was left unattempted this pass. Nothing is blocked.
+
+## 2026-09-02 (local session, real AE) — WORKPLAN 8 bullet 2: the paraphrase matrix, and the four sentences that all reached for the comp's size. UNBUMPED ON PURPOSE
+
+**Item:** WORKPLAN section 8, second bullet — "wire variants over the
+SAFE rows only: 2-3 paraphrases each (casual, vague, typo'd)". The
+prerequisites bullet landed earlier tonight (per-step history reset, the
+deterministic rig, un-pinned indexes), so the machinery this was waiting
+on was in. Harness was green before the pass started (570/570), so the
+workplan queue was the pass.
+
+### What "does it need magic words" costs to ask, and what it needed
+
+`scripts/chat-probe.js --variants` runs each selected step's canonical
+sentence AND every paraphrase it declares, each as its own independent
+run. `--variants` **implies `--isolate`**: two phrasings of one scenario
+that inherit each other's leftovers are measuring the leftovers, not the
+phrasings. So every run of a `fromRig` step starts from the same swept,
+rebuilt 34-command rig with a fresh conversation.
+
+**45 paraphrases over the 15 trigger-layer steps** — casual, vague and
+typo'd, 2-3 each. That covers all fourteen roadmap-item-2 trigger
+mappings plus the A3 / B3 / E3 / E4 usefulness rows that have a rig twin.
+
+**Scored in three, not two.** A run that fails its check is not one
+thing:
+
+    pass   the step's own check() is satisfied — right tool, right target
+    miss   check() failed and the comp is UNCHANGED (refused, asked,
+           rolled back). Harmless: no work done, no damage either
+    HARM   check() failed and the comp CHANGED anyway — something was
+           done that the sentence did not ask for
+
+**`compDiff` is where that judgement lives**, and it reads the two
+READ_COMP states the run *already* fetched, so it costs no extra trip to
+AE. It deliberately does not reuse `SIG_FN`: a signature cannot see an
+expression appearing, a key getting eased, a solid recoloured or a matte
+removed — four of the changes a wrong answer leaves behind. It is a
+field WHITELIST rather than a deep compare, because `sourceRect` drifts
+with a font substitution and a raw float compare would have reported
+phantom harm on every run (both pinned in tests).
+
+The boundary errs toward HARM on purpose, and that is written at the
+code: a false HARM costs a human one transcript read, a false pass ships
+a wording bug.
+
+`gradeMatrix` is the acceptance gate the bullet states, and the exit
+code: no run may be HARM, no canonical may fail, and a step whose
+canonical passes may have **at most one** variant miss.
+
+### The field run: 60 runs, real AE, real model
+
+Two runs, `--variants --steps 15,16,29` then `--steps 17..28`.
+
+    scenario                              can  cas  vag  typ
+    15 push a layer back on the timeline  pass pass pass pass
+    16 attach a layer to a null           pass pass pass pass
+    17 smooth a mechanical fade           pass pass HARM pass
+    18 fix a text layer's pivot           pass pass pass pass
+    19 hide half a layer with a mask      HARM HARM HARM HARM
+    20 take a mask off again              pass pass pass pass
+    21 un-animate the squares             pass pass pass pass
+    22 give a layer a finished look       pass pass pass pass
+    23 keep a layer drifting              pass HARM HARM HARM
+    24 sync a layer to the music          pass pass pass pass
+    25 tuck one layer under another       pass pass pass pass
+    26 take an effect off a layer         pass pass pass pass
+    27 show one layer through another     pass pass HARM pass
+    28 package layers into a precomp      pass pass pass pass
+    29 clean up means the comp            miss miss HARM HARM
+
+    47 pass, 2 miss, 11 HARM over 60 runs
+    ten of the fifteen scenarios: 4/4, every phrasing
+
+Transcripts: `logs\chat-probe-2026-09-02T07-47-07.md` (steps 15/16/29)
+and `logs\chat-probe-2026-09-02T07-53-14.md` (17-28). Both carry the
+scenario / phrasing / tools / verdict table the workplan asks for, plus
+the compDiff of what a failing run changed anyway.
+
+### The finding that is worth the whole pass
+
+**19 "hide half a layer with a mask" failed all four phrasings, and
+three of them failed the SAME way.** `add_mask` was called on the
+100x100 Beta with bounds `[0, 540, 1920.00012207031, 540]` — the COMP's
+dimensions, halved. The fourth (the canonical) gave up on masking
+entirely and squashed Beta with `set_transform` scale 100 -> 50.
+
+The tool doc is not the problem; it already says the right thing twice:
+
+    "Add a mask to a layer. Coordinates are in LAYER space ('hide the
+     bottom half' = a rectangle over the top half, bounds [0, 0, w, h/2];
+     sizes from get_comp_details, never guessed)."
+
+**The clause that ends it is the bug.** `get_comp_details` reports the
+COMP's width and height and, per layer, only
+`{index, name, type, enabled, inPoint, outPoint, startTime, effects}` —
+**no layer width or height at all**. So the doc sends the model to a
+tool for a number that tool does not have, and 1920x1080 is the only
+size in front of it. The model is not guessing; it is obeying, from the
+only figures it was given.
+
+Two levers, both real, neither taken tonight (the next bullet is "ONE
+tool-doc/system-prompt change per pass, re-run to show the flip"):
+add layer `width`/`height` to `get_comp_details`' layer rows, and/or
+have `add_mask` refuse bounds that fall outside the layer with the
+grounded error that names the layer's actual size — the same shape as
+every other failed lookup in this codebase. This supersedes the older
+filed item "add_mask accepts bounds that miss the layer entirely and
+reports ok", which is now measured as **unconditional (4/4 phrasings)**
+rather than an edge case.
+
+**Why this had never shown up:** step 19 passed in all four runs of the
+0.11.4 compact-vs-full comparison. Those runs were NOT isolated — Beta
+was whatever the model had built in an earlier turn, and a comp-sized
+Beta makes comp-space bounds accidentally right. The rig's Beta is
+100x100, so isolation is what made the bug visible. That is the
+prerequisites bullet paying for itself on its first use.
+
+### The other three
+
+- **23 "keep a layer drifting": 3 of 3 paraphrases HARM, canonical
+  passes** — the only scenario that trips the "needs magic words" half
+  of the gate. The canonical ("a lazy, floaty hover") reaches
+  `apply_expression_preset` on Beta directly. Every paraphrase instead
+  builds a CONTROL RIG — `add_null` + `add_control` + `link_property` +
+  `apply_expression_preset` — and puts the wiggle on the null, leaving
+  Beta with a link and no wiggle of its own, plus two stray nulls in the
+  comp. Right family of tools, wrong target.
+- **17 vague ("the squares' entrance feels cheap, fix it")** → 
+  `stagger_layers` + `distribute_property`; the keys stayed linear. The
+  word that carried the canonical is "mechanically"; "cheap" reaches
+  re-timing instead of easing.
+- **27 vague ("Beta should appear in the shape of the word HELLO")** →
+  `get_bounds` + `set_transform` + `set_track_matte` + two more
+  `set_transform`s, and Beta ended with no matte. The two phrasings that
+  name the mechanism ("through the HELLO letters", "stencil") both pass.
+
+### 29 is NOT new, and the gates did not close it
+
+"Probe Room is a mess now — clean it up" failed all four phrasings, which
+matches the 0.11.4 measurement (4/4, both doc forms) and the filing that
+followed it: this is not a compaction casualty and not a wording fix.
+What IS new is what the damage looks like after tonight's two gates
+(0.11.7 `clean_project`, 0.11.8 `organize_project`): the canonical and
+the casual phrasing are now **misses** — the gate stops them and nothing
+moves. The other two route around it:
+
+- vague ("sort out Probe Room for me") → `organize_project`,
+  `clean_project` x2, then `grid_layout` + `stagger_layers`, which added
+  a GRID CTRL layer, moved Beta, put a rig expression on its position
+  and restacked the comp.
+- typo ("clen up probe room its a mess") → four `remove_keyframes`
+  calls over all twelve layers, **removing 18 opacity keyframes** — every
+  fade in the comp.
+
+So the preview gates made the *delete* path safe and the request still
+lands somewhere destructive. `remove_keyframes` and `grid_layout` have
+no preview gate and arguably should not need one; the fix is upstream,
+where "clean up this comp" gets an answer instead of a tool.
+
+### Verification
+
+- **Real AE harness: 570/570 PASSED**, before and after. Nothing this
+  pass touched is on its path; run anyway.
+- `tests/test-chat-probe.js`: **502 assertions, all green (+90)**.
+  New blocks for `compDiff` (the float noise that would have been
+  phantom harm, the expression/ease/recolour/matte changes `SIG_FN`
+  cannot see, layers arriving and leaving by name, the deleted comp as
+  the loudest change there is, a missing state on either side that must
+  not throw), `gradeRun` (all three grades), `variantRuns` (the
+  canonical runs before its own paraphrases; the pronoun step takes
+  none; **every step with paraphrases is `fromRig`**, or its second
+  phrasing measures the first phrasing's leftovers; a source-level pin
+  that `--variants` really implies `--isolate`; 2-3 distinct
+  casual/vague/typo sentences each, none of them the canonical again;
+  and no step that names a target tool is left without paraphrases) and
+  `gradeMatrix` (one miss is within acceptance, two of three is not, one
+  harm fails a run that was otherwise clean, and a failed canonical
+  cannot hide a harmful paraphrase behind it).
+- Full stub sweep: **66/67**, the odd one out the known environmental
+  `tests/test-comfy-backend.js` (Comfy-Desktop models dir on this
+  machine, none in CI — unchanged, still not mine).
+- `node scripts/capability-report.js --check` → fresh.
+
+### UNBUMPED, on purpose
+
+`git diff --name-only` is `scripts/chat-probe.js`, `tests/`,
+`docs/WORKPLAN.md`, `docs/CAPABILITIES.md`. **Nothing under
+`extension/` changed** — the findings above are measurements, and their
+fixes belong to the next bullet ("report, don't fix, in the same pass;
+ONE tool-doc/system-prompt change per pass, re-run to show the flip,
+patch bump"). A bump with no panel change publishes an update that
+installs nothing new and every test user pays the reinstall for it.
+
+### Assumption written down
+
+The bullet names "A/B/C/E scenarios + the ten roadmap-item-2 trigger
+mappings". The trigger mappings are wired in full. Of the A/B/C/E rows,
+the ones with a rig twin (A3 parenting, B3 ease, E3 matte, E4 mask) are
+covered by steps 16/17/27/19; the rest (A1 grid, A2 slider rig, B1
+stagger, C1 typewriter, C2 text style, E1 blur, E2 for_each) are NOT,
+and were deliberately not forced. Their canonical steps (2-8) BUILD the
+world through the model, and the rig already contains the finished grid
+with fades that A1/B1 would ask for — so there is no starting world to
+reset them to, and wiring them without one would score each phrasing
+against the previous phrasing's leftovers, which is the exact
+contamination the prerequisites bullet just removed. They need new
+rig-based steps of their own; filed as #1 below.
+
+### Filed for later passes, in priority order
+
+1. **`add_mask` is told to get layer sizes from a tool that has none.**
+   4/4 phrasings, measured tonight. Add `width`/`height` to
+   `get_comp_details`' layer rows and/or make `add_mask` refuse
+   out-of-layer bounds with a grounded error naming the real size. This
+   promotes and supersedes the old "add_mask accepts bounds that miss
+   the layer" filing.
+2. **"keep it drifting" builds a control rig instead of wiggling the
+   layer** — 3/3 paraphrases, canonical passes. The only scenario that
+   fails the workplan's "at most one may miss" clause.
+3. **New rig-based steps for the A/B/C/E rows with no twin** (A1, A2,
+   B1, C1, C2, E1, E2) so the matrix can cover them — see the assumption
+   above. E1 ("Beta slightly blurry") and C2 ("HELLO bigger, brand
+   blue") are the two the current rig could take today.
+4. **"clean up this comp" still lands somewhere destructive** — the
+   0.11.7/0.11.8 preview gates closed the delete path, not the request.
+   Now measured as `remove_keyframes` over every layer and
+   `grid_layout` + `stagger_layers` restacking the comp.
+5. **Step 17's "cheap"/"feels stiff" vocabulary** reaches
+   `stagger_layers`/`distribute_property` rather than
+   `apply_keyframe_ease` — one word, one doc line, one re-run.
+6. **Ask the SERVER for the two numbers** (`POST /tokenize`,
+   `GET /props`) — unchanged, still no live symptom.
+7. **`comfyUrl` is 8188, ComfyUI answers on 8000** on this machine —
+   one line in `%APPDATA%\AE-Llama\settings.json`.
+8. **Step 2 flakes on layer naming** — `duplicate_layer`'s numbering
+   starts at 2, so "Red Square 1" never exists; one doc sentence.
+9. **The harness cannot answer "Crash Repair Options"** — unchanged
+   (`scripts/lib/ae-dialog-triage.ps1`).
+10. **`starved` may now be too generous a word** — unchanged. Both runs
+    tonight DID raise it at ctx 16384 (~11795 tokens of prompt).
+11. **delete_mask could warn when an expression still points at the
+    mask** — unchanged.
+12. **A controller GROUP has never been measured**, nor any locale but
+    en_US — unchanged.
+13. **`capParams` is a second, independent roster inside the same
+    .mogrt** — unchanged.
+14. **Still owed, needs a human awake:** drop
+    `logs\mogrt-verify\AELL Probe Card.mogrt` into real Premiere
+    (harness plan step 6).
+
+Nothing was left unattempted this pass. Nothing is blocked.
+
+## 2026-09-02 (local session, real AE) — the filed #1: add_mask was told to get layer sizes from a tool that had none (0.11.9)
+
+**Item:** the filed-for-later list's #1, and the highest-priority
+unfinished thing in the queue: *"`add_mask` is told to get layer sizes
+from a tool that has none. 4/4 phrasings, measured tonight."* The
+harness was green on arrival (570/570), so the queue was the pass.
+
+### What AE actually answers when you ask how big a layer is
+
+New probe, committed so it can be re-run: `scripts/layer-size-probe.jsx`
+(AE 2026, 26.3x87). Eight layer types, every candidate channel, flushed
+to disk as each measurement is taken.
+
+    layer type      .width/.height        sourceRectAtTime(0)
+    solid 100x100   100 x 100             top 0, left 0, 100 x 100
+    precomp         640 x 360             top 0, left 0, 640 x 360
+    null            100 x 100             top 0, left 0, 100 x 100
+    TEXT "HELLO"    1920 x 1080  <-- THE  top -49.568, left 3.487,
+                                   COMP       146.671 x 28.017
+    SHAPE (empty)   1920 x 1080  <-- THE  0 x 0
+                                   COMP
+    camera / light  neither property      no sourceRectAtTime at all
+
+So **`layer.width` is not "how big is this layer"**. A text layer and a
+shape layer both answer with the COMP's dimensions — 1920x1080 for a
+147x28 word — and a camera and a light have no such property. Only a
+layer with a SOURCE has a width that is its own, and only there does the
+box start at 0,0: **a text layer's coordinate origin is its BASELINE**
+(left 3.487, top -49.568), so `[0, 0, w, h]` on one is a rectangle
+sitting below the glyphs, not over them.
+
+Two more measurements, both about silence:
+
+- setting a comp-sized-and-halved Shape on the 100x100 solid **threw
+  nothing**. AE accepts a mask that misses its layer entirely.
+- `add_mask` called exactly as the model called it in the field —
+  `bounds: [0, 540, 1920.00012207031, 540]` — returned **`ok`**.
+
+### The fix, in three parts, all at the root
+
+1. **`AELL_layerBox(layer, t)`** — the layer's own box or null: the
+   sourced size when there is a source, `sourceRectAtTime` when there is
+   not. 0x0 and camera/light both answer null — no honest box, so no
+   guess.
+2. **`get_comp_details` layer rows carry `width`/`height`**, plus
+   `left`/`top` only when the origin is not 0,0. **Only when the layer
+   differs from the comp** — absent means "the comp's size", which is at
+   the top of the same result, so a full-frame comp pays nothing and no
+   inference can go wrong. add_mask's doc already said *"sizes from
+   get_comp_details, never guessed"*; it is now TRUE.
+3. **`add_mask` refuses two shapes of comp-coordinate mistake**, each
+   naming the layer's real size, the way every failed lookup here does:
+   a mask that **misses the layer completely** (it would hide all of it)
+   and a mask that **swallows the layer whole** (it hides nothing). A
+   mask that overhangs on one side still lands, with the real size in a
+   `note` — the tool cannot prove that one wrong. Default bounds are now
+   the layer's box instead of `layer.width || comp.width`.
+
+**No tool-doc or system-prompt change at all: the prompt is byte-for-byte
+what it was.** The doc was already right and the tool was lying, so the
+one-doc-change-per-pass budget was not spent.
+
+### Paying for the bytes
+
+Rows got ~24 bytes bigger, and forty of them serialized to **6423** —
+past the 6000-byte round budget, where the panel's structural shrink
+takes the tail off with no note of its own. So the forty-row cap is now
+a BYTE cap too (`ROW_BUDGET`, 5000): rows are dropped here, where the
+omission is described and pageable, and `last` is recomputed to the last
+CONTIGUOUS index so "ask again with start:" points at the first row
+actually missing. `limit:0` is exempt — the panel's own internal callers
+mean it literally.
+
+5000 rather than 6000 on purpose: in the state block this result sits
+beside the project list, which the panel trims FIRST, so a comp that
+takes the whole budget leaves the model unable to name any comp but this
+one. Measured on the 200-layer stub: 33 rows, 5107 bytes, and the
+project half keeps 7 items (it kept 5 before this pass, and 1 at
+ROW_BUDGET 5800).
+
+### The instrument was lying, and it was the documented bug
+
+The first re-run scored two correct model answers as **HARM**. The comp
+reader classified mask modes with
+
+    mm === MaskMode.SUBTRACT ? 'subtract' : mm === MaskMode.ADD ? 'add' : 'other'
+
+inside a string that AE executes — and **ExtendScript parses `?:`
+LEFT-associatively**, so that reads `((mm===SUBTRACT ? 'subtract' :
+mm===ADD) ? 'add' : 'other')` and **every SUBTRACT mask came back as
+'add'**. Step 19 passes a bottom-half mask only when it subtracts, so
+the probe failed the model for being right.
+
+`tests/test-es3-ternary.js` exists for exactly this class and walked
+past it: its scope was the files ExtendScript evaluates, and this is a
+`.js` file that BUILDS ExtendScript as a string. It now reconstructs the
+ExtendScript out of the string literals of every `.js` under `scripts/`
+and `extension/js/` and scans that too — gated on the strings actually
+naming AE's object model, so tool-doc arg specs (`mode?: add|subtract`)
+and Node-side regex sources stay out. Verified both ways: with the
+parentheses removed the lint fails on `scripts/chat-probe.js:838`, with
+them it passes.
+
+### The flip, measured in real AE with the real model
+
+`node scripts/chat-probe.js --variants --steps 19`, three runs:
+
+    before (2026-09-02 07:53)   HARM HARM HARM HARM   4/4, all with
+                                the comp's 1920x1080 on a 100x100 layer
+    after the size fix          miss pass HARM HARM   (both HARM were the
+                                grader's ES3 bug, not the model)
+    after the grader fix        miss HARM pass pass   (the HARM was the
+                                swallow case, now refused)
+    after the swallow refusal   miss pass pass pass   3 pass, 1 miss,
+                                0 HARM
+
+Transcripts `logs\chat-probe-2026-09-02T08-28-37.md`, `...T08-37-55.md`,
+`...T08-47-55.md`. **Not one run used the comp's dimensions in a mask
+that stuck.** The row now reads `{"index":1,"name":"Beta",...,"width":
+100,"height":100}`, and where the model still reached for comp space
+first it took the grounded refusal and **corrected itself on the very
+next call** — twice in one run, `[0,540,1920,540]` to `[0,50,100,50]`.
+That is the "grounded errors are how the small local model self-corrects"
+claim, measured rather than asserted.
+
+### Verification
+
+- **Real AE harness: 576/576 PASSED** (570 to 576; five new mask steps
+  plus the size row, all in `extension/js/selftest.js`, so the panel's
+  Settings button gets them too).
+- `tests/test-shape-mask-tools.js`, `test-property-access.js`,
+  `test-context-budget.js`, `test-self-test.js`, `test-es3-ternary.js`
+  all extended and green. The stubs now model the AE lie itself: a text
+  or shape layer stub REPORTS the comp's dimensions from `.width`, so a
+  host that trusted them would fail in Node.
+- Full stub sweep: **66/67**, the odd one out the known environmental
+  `tests/test-comfy-backend.js` (Comfy-Desktop models dir on this
+  machine, none in CI — unchanged, still not mine).
+- `node scripts/capability-report.js --check` says fresh.
+- Bumped to **0.11.9**: `extension/` changed, so the fix has to reach a
+  real panel.
+
+### Filed for later passes, in priority order
+
+1. **"keep it drifting" builds a control rig instead of wiggling the
+   layer** — 3/3 paraphrases, canonical passes. Unchanged; still the
+   scenario that most clearly fails the "at most one may miss" clause.
+2. **Step 19's canonical still misses: "Chop off the lower half of Beta"
+   routes to `set_layer_timing`.** New, and now the only thing between
+   this row and a clean 4/4 — "chop off" reads as trimming a layer's
+   duration, not as masking. One doc phrase, one re-run. Measured twice
+   tonight, both times after `get_bounds`, so the model IS measuring the
+   layer first; it just picks the wrong verb.
+3. **New rig-based steps for the A/B/C/E rows with no twin** (A1, A2,
+   B1, C1, C2, E1, E2) — unchanged.
+4. **"clean up this comp" still lands somewhere destructive** —
+   unchanged (`remove_keyframes` over every layer, `grid_layout` plus
+   `stagger_layers` restacking).
+5. **Step 17's "cheap"/"feels stiff" vocabulary** reaches
+   `stagger_layers`/`distribute_property` rather than
+   `apply_keyframe_ease` — unchanged.
+6. **Ask the SERVER for the two numbers** (`POST /tokenize`,
+   `GET /props`) — unchanged, still no live symptom.
+7. **`comfyUrl` is 8188, ComfyUI answers on 8000** on this machine —
+   one line in `%APPDATA%\AE-Llama\settings.json`.
+8. **Step 2 flakes on layer naming** — `duplicate_layer`'s numbering
+   starts at 2, so "Red Square 1" never exists; one doc sentence.
+9. **The harness cannot answer "Crash Repair Options"** — unchanged.
+10. **`starved` may now be too generous a word** — unchanged.
+11. **delete_mask could warn when an expression still points at the
+    mask** — unchanged.
+12. **A controller GROUP has never been measured**, nor any locale but
+    en_US — unchanged.
+13. **`capParams` is a second, independent roster inside the same
+    .mogrt** — unchanged.
+14. **`set_mask_path` takes vertices with no layer-box check at all.**
+    New, and the obvious sibling of this pass: `add_mask` now refuses a
+    mask that misses or swallows its layer, and `set_mask_path` will
+    happily replace that same path with comp coordinates afterwards.
+    Not measured in the field yet, which is why it is filed rather than
+    fixed.
+15. **Still owed, needs a human awake:** drop
+    `logs\mogrt-verify\AELL Probe Card.mogrt` into real Premiere
+    (harness plan step 6).
+
+Nothing was left unattempted this pass. Nothing is blocked.
+
+## 2026-09-02 (local session, real AE) — the filed #1: "keep it drifting" built a control rig, because the refusal it hit said nothing (0.11.10)
+
+Item: WORKPLAN 8, "report, don't fix" bullet — the top entry of the
+previous pass's filed list: **"keep it drifting" builds a control rig
+instead of wiggling the layer** (3 of 3 paraphrases HARM, canonical
+passes). Harness was green first (576/576), so the pass was the item,
+not a repair.
+
+### The baseline re-run said something different — and better
+
+`node scripts/chat-probe.js --variants --steps 23`, before any change:
+
+    canonical  "…a lazy, floaty hover so it never sits completely still"  miss
+    casual     "Beta shouldn't be dead still — give it a slow idle wander" pass
+    vague      "Beta feels frozen, make it breathe a little"               pass
+    typo       "put a slow wigle on beta so it keeps moviing"              HARM
+
+Not the 3/3-rig picture the filing described, and the difference is the
+whole finding: **all four runs called `apply_expression_preset` with no
+`property` at all**, and the host answered with the bare string
+
+    Missing 'property'
+
+No list of what it could have said, no sign of what the layer carries —
+the one refusal in `hostscript.jsx` that handed the model nothing to
+correct with. What each phrasing did with that emptiness is the spread:
+
+- **canonical** gave up on it and stopped. A miss, not a rig.
+- **casual / vague** guessed `position` on the retry and passed — two
+  round trips to reach a one-call answer.
+- **typo** had wrapped the preset in a null rig (`add_null` +
+  `add_control` + `link_property`), so the failed call took the WHOLE
+  round down with it (the rollback gate doing its job), and the model
+  then re-sent every command **except the one that had failed** —
+  leaving "Beta Wiggle Null" in the comp, Beta's position linked to a
+  slider, Beta moved to [50,50], twelve layers restacked, and no wiggle
+  anywhere. HARM.
+
+So the rig was real, but it was the second-order failure. The first-order
+one was an ungrounded error, and CLAUDE.md names that class exactly:
+*every failed lookup must list what actually exists — it is how the
+small local model self-corrects.*
+
+### The fix, at the root
+
+`AELL_missingProperty(layer, why)` in `extension/jsx/hostscript.jsx`:
+one grounded refusal shared by both resolvers (`AELL_resolveProperty`
+and the path-aware `AELL_anyProperty`, so `set_expression`,
+`get_property`, `set_property`, `apply_keyframe_ease` … all inherit it).
+It names three things the model cannot otherwise know:
+
+- the transform words (position, scale, rotation, opacity, anchorPoint);
+- **this layer's own effects**, capped at 8 — the only way to spell
+  `effect.<Effect>.<Param>` correctly;
+- **which properties are already keyframed** — the half a `loop_*`
+  caller actually needs.
+
+`apply_expression_preset` adds the sentence its own preset already
+implies, before resolving anything: wiggle says *"'position' is the
+drift/float/hover one, rotation a sway, opacity a flicker"*, `loop_*`
+says *"needs the property that HAS the keyframes"*, `time_linear` asks
+for a scalar. The preset the caller chose was always evidence of what it
+meant; the refusal just never used it.
+
+### The ONE prompt change (section 8's rule), and what paid for it
+
+The rig half is a wording dependency, so exactly one rules bullet moved:
+
+    - 'keep it drifting / floating / hovering / jittering' =
+      apply_expression_preset {preset: 'wiggle', property: 'position'}
+      on THAT layer, never a null; 'bouncing back and forth / keep it
+      looping' = loop_pingpong / loop_cycle. Never set_expression.
+
+It now carries the arg the model kept omitting AND the target
+discipline. Paid for by shortening `apply_expression_preset`'s doc
+sentence (the phrase list belongs to the rules; the doc keeps its one
+representative phrase, which `tests/test-chat-probe.js` enforces both
+ways). Measured with `buildSystemPrompt`:
+
+    full     58910 -> 58953 chars   (ceiling 59000, still under)
+    compact  39131 -> 39195 chars   (the rules block is never compacted)
+
+### The flip, measured in real AE with the real model
+
+`node scripts/chat-probe.js --variants --steps 23`, after:
+
+    canonical  pass   casual  pass   vague  pass   typo  pass
+    4 pass, 0 miss, 0 HARM — "acceptance met"
+
+Every one of the four is now a **single first-shot call** with
+`property: "position"` on Beta — no missing-arg error anywhere in the
+run, no null, no rollback, no rig. Transcripts
+`logs\chat-probe-2026-09-02T08-57-38.md` (before) and `...T09-09-23.md`
+(after). Regression check on the drift-adjacent rows, `--isolate --steps
+16,21,24` (attach to a null / un-animate / sync to the music): **3/3**,
+including the honest audio refusal.
+
+### Verification
+
+- **Real AE harness: 578/578 PASSED** (576 -> 578). The two new steps
+  are in `extension/js/selftest.js`, so the panel's Settings button
+  gets them too: the wiggle refusal must name `'position'` AND the
+  layer's real effects, and — placed after the three rotation keys
+  exist — the `loop_cycle` refusal must say *"Already keyframed here:
+  rotation"*. Both are real-AE reads of `numKeys` and the Effect
+  Parade, not stub arithmetic.
+- `tests/test-property-access.js` +50 lines: the bare-refusal bug class
+  is now caught without AE, on both resolvers, including that the keyed
+  list appears when keys exist and **disappears when they are removed**
+  (a hard-coded string would pass the first and fail the second).
+- `tests/test-self-test.js`'s canned host mirrors the refusal from its
+  own state (controls + `cvFx` + `cvKeys`), so the stub cannot agree
+  with a host that stopped grounding.
+- Full stub sweep: **66/67**, the odd one out the known environmental
+  `tests/test-comfy-backend.js` (unchanged, still not mine).
+- `node tests/test-es3-ternary.js` green; `node
+  scripts/capability-report.js` regenerated (the doc sentence changed)
+  and `--check` says fresh.
+- Bumped to **0.11.10**: `extension/` changed.
+
+### Filed for later passes, in priority order
+
+1. **Step 19's canonical still misses: "Chop off the lower half of Beta"
+   routes to `set_layer_timing`** — unchanged, and now the highest row
+   left: "chop off" reads as trimming a layer's duration, not as
+   masking. One doc phrase, one re-run.
+2. **New rig-based steps for the A/B/C/E rows with no twin** (A1, A2,
+   B1, C1, C2, E1, E2) — unchanged.
+3. **"clean up this comp" still lands somewhere destructive** —
+   unchanged.
+4. **Step 17's "cheap"/"feels stiff" vocabulary** reaches
+   `stagger_layers`/`distribute_property` rather than
+   `apply_keyframe_ease` — unchanged.
+5. **`property: string` is the vaguest args line in TOOL_DEFS.** New,
+   and the sibling of tonight's fix: every other tool spells the arg out
+   (`transform name or 'effect.<EffectName>.<ParamName>'`) and
+   `apply_expression_preset` says `string`. The args line is never
+   compacted, so it is the one place a fix reaches a 16K window for
+   certain — but it costs ~49 chars against 47 of remaining ceiling, so
+   it needs a cut found first. Not urgent now that the refusal grounds
+   itself, which is why it is filed rather than done.
+6. **The full prompt is 47 chars under its 59000 ceiling.** New. The
+   next rules addition of any size needs a real cut, not a trim; worth
+   a deliberate pass over the rules block for duplication (the
+   "Known-good forms if you must write one" list sits directly under
+   "NEVER write expression code yourself").
+7. **Ask the SERVER for the two numbers** (`POST /tokenize`,
+   `GET /props`) — unchanged, still no live symptom.
+8. **`comfyUrl` is 8188, ComfyUI answers on 8000** on this machine —
+   one line in `%APPDATA%\AE-Llama\settings.json`.
+9. **Step 2 flakes on layer naming** — `duplicate_layer`'s numbering
+   starts at 2, so "Red Square 1" never exists; one doc sentence.
+10. **The harness cannot answer "Crash Repair Options"** — unchanged.
+11. **`starved` may now be too generous a word** — unchanged.
+12. **delete_mask could warn when an expression still points at the
+    mask** — unchanged.
+13. **A controller GROUP has never been measured**, nor any locale but
+    en_US — unchanged.
+14. **`capParams` is a second, independent roster inside the same
+    .mogrt** — unchanged.
+15. **`set_mask_path` takes vertices with no layer-box check at all** —
+    unchanged.
+16. **Still owed, needs a human awake:** drop
+    `logs\mogrt-verify\AELL Probe Card.mogrt` into real Premiere
+    (harness plan step 6).
+
+Nothing was left unattempted this pass. Nothing is blocked.
+
+## 2026-09-02 (local session, real AE) — WORKPLAN 8 "report, don't fix", row 19: "chop off" was reaching for the TIMELINE (0.11.11)
+
+Item: WORKPLAN section 8's in-flight row, named there as NEXT — row 19's
+canonical, **"Chop off the lower half of Beta so only the top shows"
+routes to `set_layer_timing`**. Harness was green first (578/578), so
+the pass was the item, not a repair.
+
+### The baseline found a second wrong turn, of a different kind
+
+`node scripts/chat-probe.js --variants --steps 19`, before any change —
+**2 pass / 2 miss / 0 HARM**:
+
+    canonical  "Chop off the lower half of Beta so only the top shows."
+                 -> set_layer_timing, get_bounds          miss
+    casual     "I only want to see the top half of Beta"
+                 -> center_anchor_point, set_transform    miss
+    vague      "Beta's bottom half shouldn't be visible"  pass (2 tries)
+    typo       "mask ouf the bottm half of Beta"          pass (2 tries)
+
+The filing predicted one bug and there were two, in opposite directions:
+
+- **canonical** read "chop off" as the sibling of the timing rule's
+  own phrase list — *'trim it / start it later / push it back …' =
+  set_layer_timing*. Nothing anywhere in the prompt said that hiding
+  part of a layer is not a retime, and "trim" is the word both
+  meanings share in English.
+- **casual** did not reach for time at all. "I only want to SEE the
+  top half" became a framing job: `center_anchor_point` then
+  `set_transform` to [960,540] — it moved the layer to the middle of
+  the comp and reported success. Harmless only because the check reads
+  mask count; a user would have got their layer relocated.
+
+Neither wording ("chop off", "only the top shows") appeared in the mask
+bullet, which said only *'crop this / hide the bottom half / cut a hole
+/ vignette'*. The two phrasings that passed both spoke the magic words.
+
+Worth recording: both passing runs needed TWO tries, and the first try
+was comp coordinates (`bounds [0,540,1920,540]` on a 100x100 layer)
+every time. 0.11.9's grounded refusal caught all of them and the model
+fixed itself in one turn — the fix from two passes ago doing its job in
+a row it was not written for.
+
+### The ONE prompt change (section 8's rule), and what paid for it
+
+One rules bullet, carrying both phrasings and — the new part — the
+anti-targets, because a phrase list alone would not have stopped
+`center_anchor_point`:
+
+    - 'crop / chop off the lower half / hide the bottom half / only
+      the top shows / cut a hole / vignette' = add_mask — never
+      set_layer_timing (that trims TIME), scale or anchor. A hole is
+      mode 'subtract'; a vignette is a big feathered ellipse.
+
+Paid for by deleting `- add_mask creates a mask (rectangle/ellipse/
+custom points);` from the "Masks & shape content" section: the args
+line `shape?: 'rectangle'|'ellipse'|'custom'` already carries the enum
+and is never compacted, so the prose was pure duplication. Measured
+with `buildSystemPrompt`:
+
+    full     58953 -> 58995 chars   (ceiling 59000)
+    compact  39195 -> 39237 chars
+
+Both the addition and the cut land in the rules block, which compact
+mode never touches — the probe runs at 16384, i.e. compact, so this is
+the half of the prompt that was actually doing the routing.
+
+### The flip, measured in real AE with the real model
+
+`node scripts/chat-probe.js --variants --steps 19`, after:
+
+    canonical  pass [add_mask]
+    casual     pass [add_mask]
+    vague      pass [add_mask add_mask]
+    typo       pass [add_mask get_bounds add_mask]
+
+**4 pass, 0 miss, 0 HARM — "acceptance met".** The canonical and the
+casual are now SINGLE first-shot `add_mask` calls with correct
+layer-space bounds `[0,50,100,50]` mode subtract; no timing call, no
+anchor call, no round trip. Transcripts
+`logs\chat-probe-2026-09-02T09-15-42.md` (before) and `...T09-20-07.md`
+(after).
+
+Regression check on the rows the change could plausibly break —
+`--isolate --steps 15,20,5` (push a layer back on the timeline / take a
+mask off again / put an oval mask on HELLO): **3/3**. Step 15 still
+picks `set_layer_timing {startTime: 2}`, so "never set_layer_timing"
+inside the mask bullet did not poison the timing route. Step 5 still
+picks `shape: 'ellipse'` with the deleted prose gone, which is the
+evidence that the args line was carrying it all along.
+
+### Verification
+
+- **Real AE harness: 578/578 PASSED** (unchanged — this pass is prompt
+  wording, and `selftest.js` does not route sentences).
+- `tests/test-chat-probe.js` +33 lines: the bug class is now caught
+  without AE. It pulls the crop/mask bullet out of the built prompt and
+  asserts the five phrasings AND both anti-targets, plus the one that
+  pins the cut — the args line must keep the shape enum, since that is
+  the only reason the prose could go. **Proved it bites**: restoring
+  the old bullet fails four assertions ('chop off the lower half',
+  'only the top shows', 'never set_layer_timing', scale/anchor).
+- `node tests/test-context-budget.js` green — its ceiling assertion is
+  the one that would have caught an unpaid addition (58995 of 59000).
+- Full stub sweep: **66/67**, the odd one out the known environmental
+  `tests/test-comfy-backend.js` (unchanged, still not mine).
+- `node scripts/capability-report.js --check` says fresh (no desc or
+  args changed).
+- Bumped to **0.11.11**: `extension/js/tools.js` changed, so the fix
+  has to reach a real panel.
+
+### Filed for later passes, in priority order
+
+1. **Step 17's "cheap"/"feels stiff" vocabulary** reaches
+   `stagger_layers`/`distribute_property` rather than
+   `apply_keyframe_ease` — unchanged, and now the top in-flight row
+   (WORKPLAN 8 names it as NEXT).
+2. **New rig-based steps for the A/B/C/E rows with no twin** (A1, A2,
+   B1, C1, C2, E1, E2) — unchanged.
+3. **"clean up this comp" still lands somewhere destructive** —
+   unchanged (`remove_keyframes` over every layer, `grid_layout` plus
+   `stagger_layers` restacking).
+4. **The full prompt is 5 chars under its 59000 ceiling.** Was 47
+   before tonight. The next rules addition of ANY size needs a real
+   cut found first — the obvious candidates are the "Known-good forms
+   if you must write one" expression list (3 lines, directly under
+   "NEVER write expression code yourself") and the doc/rules overlap
+   on LAYER space. Nothing in this pass measured either, which is why
+   they are named and not taken.
+5. **`property: string` is the vaguest args line in TOOL_DEFS** —
+   unchanged, and still blocked on item 4's cut (~49 chars against 5).
+6. **Every add_mask paraphrase still sends COMP coordinates first.**
+   New, measured 4 times tonight: `[0,540,1920,540]` on a 100x100
+   layer, corrected only because 0.11.9's refusal names the real box.
+   One round trip per mask, every time. The args line says
+   `bounds?: [x,y,w,h]` with no space named; the doc's LAYER-space
+   sentence lives in the desc, which compact mode CUTS (compact keeps
+   only the first sentence, "Add a mask to a layer."). Moving
+   "in LAYER space" into the args line would reach the 16K window —
+   but it is an args-line change, so it belongs to a pass of its own
+   with its own before/after.
+7. **Ask the SERVER for the two numbers** (`POST /tokenize`,
+   `GET /props`) — unchanged, still no live symptom.
+8. **`comfyUrl` is 8188, ComfyUI answers on 8000** on this machine —
+   one line in `%APPDATA%\AE-Llama\settings.json`.
+9. **Step 2 flakes on layer naming** — `duplicate_layer`'s numbering
+   starts at 2, so "Red Square 1" never exists; one doc sentence.
+10. **The harness cannot answer "Crash Repair Options"** — unchanged.
+11. **`starved` may now be too generous a word** — unchanged.
+12. **delete_mask could warn when an expression still points at the
+    mask** — unchanged.
+13. **A controller GROUP has never been measured**, nor any locale but
+    en_US — unchanged.
+14. **`capParams` is a second, independent roster inside the same
+    .mogrt** — unchanged.
+15. **`set_mask_path` takes vertices with no layer-box check at all** —
+    unchanged, and item 6 raises its odds: the model's instinct for
+    mask coordinates is demonstrably comp space.
+16. **Still owed, needs a human awake:** drop
+    `logs\mogrt-verify\AELL Probe Card.mogrt` into real Premiere
+    (harness plan step 6).
+
+Nothing was left unattempted this pass. Nothing is blocked.
+
+## 2026-09-02 (local session, real AE) - WORKPLAN 8 "report, don't fix", row 17: the vocabulary was one bug of four, and the other three were the refusals themselves (0.11.12)
+
+Item: WORKPLAN section 8's in-flight row, named there as NEXT - row 17's
+**"cheap"/"feels stiff" vocabulary reaches stagger_layers /
+distribute_property rather than apply_keyframe_ease**. Harness was green
+first (578/578), so the pass was the item, not a repair.
+
+### The baseline: 2 pass / 1 miss / 1 HARM, and only ONE failure was about words
+
+`node scripts/chat-probe.js --variants --steps 17`, before any change:
+
+    canonical  "The squares fade in too mechanically - make it feel
+                smoother."                    -> apply_keyframe_ease  miss
+    casual     "the squares pop in dead flat - give that fade some
+                finesse"                      -> set_keyframes + ease  pass
+    vague      "the squares' entrance feels cheap, fix it"
+                 -> stagger_layers, distribute_property,
+                    remove_keyframes, distribute_property             HARM
+    typo       "the sqaures fade is to stiff, ease it plz"            pass
+
+The filing predicted a routing miss. The canonical was not one: it chose
+**the right tool**, omitted `layers`, and hit
+
+    No target layers in 'Probe Room' - select layers in AE or pass
+    {layer} / {layers: [...]}
+
+which names nothing that exists. The model relayed it verbatim ("Please
+select the square layers in the timeline") and stopped. Right tool, no
+work done - and there is no select tool in the suite, so a caller that
+cannot click has only NAMES to work with, and the comp knows them. Same
+class as 0.11.10's bare `Missing 'property'`.
+
+The HARM was worse, and also a refusal. `distribute_property` correctly
+refused to write a single value onto animated opacity - and then ADVISED:
+
+    ... Pass {atTime: <seconds>} to set a keyframe at a time instead, or
+    delete the existing keyframes first.
+
+The model took the advice, ran `remove_keyframes` over all 18 keys and
+wrote nine static opacity values. **The tool's own advice was the harm
+vector** - the same shape as clean_project's ungated preview advice
+(0.11.7), one layer down: not an action without a gate, a SENTENCE
+without one.
+
+### Three host fixes, then one prompt bullet, each measured on its own
+
+**1. `AELL_noTargets(comp, args)`** (hostscript.jsx) - the "nothing to
+work on" refusal now lists the comp's layers (capped at 8) and, when the
+call carried a `property`, which of them actually have keys on it. Used
+by `AELL_layersOrSelection` (every batch tool) and by set_layer_parent,
+which had its own barer copy.
+
+**2. The animated-property refusal no longer advises deletion**
+(`AELL_writeValue` and `set_property`): it points at apply_keyframe_ease
+and set_keyframes first, keeps `{atTime}`, and says outright that
+"remove_keyframes THROWS THE ANIMATION AWAY - only if the user asked to
+un-animate it".
+
+Re-measured after 1+2, no prompt change: **3 pass / 0 miss / 1 HARM.**
+The destructive chain was gone - the vague run stopped at the refusal
+instead of deleting 18 keys - but stagger_layers had already restacked
+nine layers in time, so it was still HARM.
+
+**3. ONE rules bullet**, the pass's single prompt change, carrying the
+measured word and the measured wrong turn:
+
+    'ease between the keyframes / smoother / snappier / less robotic /
+    mechanical / feels cheap / not so linear' = apply_keyframe_ease on
+    the property that HAS the keys - never stagger_layers (that moves
+    layers in TIME).
+
+Only 'feels cheap' was added to the phrase list: 'dead flat' and 'stiff'
+were measured PASSING already, and vocabulary nobody needs is context
+nobody gets back. Paid for by three docs that repeated a phrase list the
+rules block already carries - and the rules block is the half compact
+mode never touches, so the second copy bought nothing:
+
+    apply_keyframe_ease  "'smoother / less robotic' = this on the
+                          property that HAS the keys"  ->  "'less
+                          robotic' = this"
+    precompose           "'group these / package it up'" -> "'package it up'"
+    remove_keyframes     "'stop it moving / un-animate it'" -> "'stop it moving'"
+
+    full     58995 -> 58989 chars   (ceiling 59000; headroom 5 -> 11)
+    compact  39237 -> 39302 chars   (the addition is all in the rules)
+
+Re-measured after 3: **3 pass / 1 miss / 0 HARM.** The vague run now
+routed to apply_keyframe_ease - and hit the third refusal of the same
+family:
+
+    On 'Red Square 1', position has 0 keyframe(s) - need at least 2 to
+    ease between
+
+The sentence names no property, so the model guessed `position`, was told
+position has no keys and nothing else, and asked the USER to add
+keyframes. The opacity keys it had been sent to smooth were on the same
+layer.
+
+**4. `AELL_keyedProps(layer)`** - that refusal now names what IS
+keyframed, transform properties and effect params alike, in the arg's own
+path form.
+
+### The flip
+
+`node scripts/chat-probe.js --variants --steps 17`, after:
+
+    canonical  pass [apply_keyframe_ease]
+    casual     pass [apply_keyframe_ease]
+    vague      pass [apply_keyframe_ease]
+    typo       pass [apply_keyframe_ease]
+
+**4 pass, 0 miss, 0 HARM - "acceptance met".** Every one of the four is
+now a SINGLE first-shot call; the baseline's canonical took a round trip
+to nowhere and the vague one took four calls to a wrecked comp.
+Transcripts `logs\chat-probe-2026-09-02T09-29-36.md` (before),
+`...T09-33-48.md` (hosts only), `...T09-38-09.md` (+ the bullet) and
+`...T09-42-24.md` (after).
+
+**Honest about attribution.** In the final run the model never hit fixes
+1 or 4 - it named the layers and the property correctly first time. So
+the field flip on the vague row is the BULLET's; fixes 1, 2 and 4 are
+proved by the runs where they did fire (run 2 lost the remove_keyframes
+chain) and by direct AELL_call probes in real AE 2026:
+
+    A  apply_keyframe_ease {property: "position"} on a layer with keyed
+       opacity and a keyed Gaussian Blur ->
+       "... Keyframed on this layer: opacity (2 keys),
+        effect.Gaussian Blur.Blurriness (2 keys) - ease one of those
+        instead"
+    C  set_layer_parent, nothing selected ->
+       "... nothing is selected in AE and you cannot select for the
+        user, so pass {layers: [...]} or {layer} by NAME. Layers here:
+        Probe Solid."
+    D  set_property {value: 50} on animated opacity ->
+       "... use apply_keyframe_ease (easing) or set_keyframes (new key
+        values); for one key here pass {atTime: <seconds>}.
+        remove_keyframes THROWS THE ANIMATION AWAY ..."
+
+### Verification
+
+- **Real AE harness: 578/578 PASSED** (unchanged).
+- `tests/test-curve-tools.js` +10 assertions covering all four fixes;
+  **proved they bite** - reverting hostscript.jsx alone fails exactly 10.
+- `tests/test-chat-probe.js` +1 block: the ease bullet's five phrases,
+  the "never stagger_layers" anti-target, and the three doc cuts that
+  paid for them (put any back and test-context-budget's ceiling breaks).
+- `node tests/test-context-budget.js` green at 58989 of 59000.
+- Full stub sweep **66/67**, the odd one out the known environmental
+  `tests/test-comfy-backend.js` (unchanged, still not mine).
+- `node scripts/capability-report.js` regenerated (two doc lines and
+  set_layer_parent's grounded-error count 2 -> 3).
+- **Routing regression:** `--steps 1,2,3,7`. Steps 3 and 7 still reach
+  for `stagger_layers` and `distribute_property` respectively on their
+  own sentences, so "never stagger_layers" inside the ease bullet did
+  not poison either route. Both then failed on the PRE-EXISTING step-2
+  naming flake (filed #3 below - duplicate_layer numbers from 2, so
+  "Red Square 1" never exists, the round rolls back and the comp is left
+  empty). Not caused by this pass and not fixed by it.
+- Bumped to **0.11.12**: hostscript.jsx and tools.js both changed.
+
+### One self-inflicted blocker, recorded so the next pass does not repeat it
+
+The direct AELL_call probe wrapped its calls in its OWN
+`app.beginUndoGroup` / `endUndoGroup`. `AELL_call` opens and closes undo
+groups itself, so the nesting mismatched and AE put up a MODAL
+"After Effects warning: Undo group mismatch, will attempt to fix." - a
+dialog with WORDS, which the triage's wordless-popup filter deliberately
+will not close. It blocked the next probe run for ~25 minutes until
+`scripts/ae-window-census.ps1` found it (that tool earned its keep again)
+and a posted WM_COMMAND/IDOK cleared it. **A temp probe must never wrap
+AELL_call in an undo group.** Worth a later pass: the harness triage
+could recognise this specific title and answer it - it is a warning with
+an OK button and nothing to decide.
+
+### Filed for later passes, in priority order
+
+1. **"clean up this comp" still lands somewhere destructive**
+   (`remove_keyframes` over every layer, `grid_layout` + `stagger_layers`
+   restacking) - now the top in-flight row; WORKPLAN 8 names it as NEXT.
+   The TOOL was gated in 0.11.7, the ROUTING never was.
+2. **New rig-based steps for the A/B/C/E rows with no twin** (A1, A2,
+   B1, C1, C2, E1, E2) - unchanged.
+3. **Step 2's naming flake is now costing whole regression runs**, not
+   just one row: it empties the comp and every later world-building step
+   cascades (measured twice tonight). `duplicate_layer` numbers copies
+   from 2, so the model's "Red Square 1" cannot exist. One doc sentence,
+   or duplicate_layer could report the names it actually made.
+4. **The full prompt is 11 chars under its 59000 ceiling.** Better than
+   the 5 it inherited, but the next rules addition still needs a cut
+   found first. The named-but-untaken candidates are unchanged: the
+   "Known-good forms if you must write one" expression list and the
+   doc/rules overlap on LAYER space. The method this pass used IS
+   reusable - listing every desc phrase already present in the rules
+   found six more tools carrying a duplicate (audio_to_keyframes,
+   reorder_layers, scale_comp, add_mask, delete_mask, apply_preset);
+   most are pinned by tests, so each needs its own look.
+5. **`property: string` is the vaguest args line in TOOL_DEFS** -
+   unchanged, still blocked on item 4's cut.
+6. **Every add_mask paraphrase still sends COMP coordinates first** -
+   unchanged.
+7. **Ask the SERVER for the two numbers** (`POST /tokenize`,
+   `GET /props`) - unchanged, still no live symptom.
+8. **`comfyUrl` is 8188, ComfyUI answers on 8000** on this machine -
+   one line in `%APPDATA%\AE-Llama\settings.json`.
+9. **The harness cannot answer "Crash Repair Options"** - unchanged, and
+   see the undo-group warning above: the same "a modal with words and
+   nobody awake to click it" shape.
+10. **`starved` may now be too generous a word** - unchanged.
+11. **delete_mask could warn when an expression still points at the
+    mask** - unchanged.
+12. **A controller GROUP has never been measured**, nor any locale but
+    en_US - unchanged.
+13. **`capParams` is a second, independent roster inside the same
+    .mogrt** - unchanged.
+14. **`set_mask_path` takes vertices with no layer-box check at all** -
+    unchanged.
+15. **Still owed, needs a human awake:** drop
+    `logs\mogrt-verify\AELL Probe Card.mogrt` into real Premiere
+    (harness plan step 6).
+
+Nothing was left unattempted this pass. Nothing is blocked.
+
+## 2026-09-02 (local, real AE) - row 29: the ask was at the BOTTOM of the bullet, and nothing underneath it refused a guess (0.11.13)
+
+**Item:** WORKPLAN 8, the in-flight paraphrase row named NEXT - "clean up
+this comp" still lands somewhere destructive. The harness was green
+(578/578) before the pass, so the workplan's own top item was not open.
+
+### The baseline, all four phrasings
+
+`node scripts/chat-probe.js --variants --steps 29` -> **0 pass, 3 miss,
+1 HARM**. Not one of the four asked what should go; all four went
+straight for a destructive tool.
+
+    canonical  miss  remove_effect x8 ("Text Animator 1".."8" on a text
+                     layer with neither effects nor animators)
+    casual     HARM  remove_keyframes {layers: [all 12], property:
+                     "opacity"} -> ok, removed 18
+    vague      miss  get_comp_details, audit_comp_usage (read-only)
+    typo       miss  remove_effect then six delete_layer calls (the
+                     round rolled back on the remove_effect error - the
+                     rollback is the only reason this one is a miss)
+
+The HARM in full: 18 opacity keyframes across nine squares, gone, with a
+receipt. Transcript `logs\chat-probe-2026-09-02T10-32-50.md`.
+
+**What the baseline actually proves:** the clean_project half of the
+existing rule WORKED - no phrasing touched the project panel. The half
+that failed was "unnamed, ask what to remove and return commands: []",
+and it failed for a reason the sentence itself carries: it came SIXTH,
+after a list of five removal tools. The model read the tool list and
+stopped reading.
+
+### Three host fixes, none of which the field flip can take credit for
+
+**1. `AELL_wipeGate`** (hostscript.jsx, new) - `remove_keyframes` now
+previews before wiping EVERY layer in the comp, in the same three-branch
+shape clean_project (0.11.7) and organize_project (0.11.8) already use,
+on its own `$.global.AELL_wipeShown`. Deliberately narrow, and the
+narrowness is load-bearing: it fires only on an explicit `layers` ARRAY
+covering the whole comp (a full SELECTION is a human act - there is no
+select tool, so the model cannot make one), only when there are keys to
+lose, and never when `{times}` names the keys it takes. The refusal
+counts what would go per layer and ends in a question, because "clean it
+up" has no answer inside the project:
+
+    remove_keyframes refused to wipe every layer in 'Probe Room':
+    nothing has been previewed yet. Nothing was removed. This would
+    delete 18 opacity keyframe(s) from 9 layer(s): ... That IS the
+    preview - ask the user WHICH of those should lose their keyframes
+    (or whether they really mean all of them), and call again in your
+    NEXT reply once they answer.
+
+**2. `AELL_noTargets` stops handing out the ammunition.** The roster it
+prints is right - the model cannot select and must not guess - but the
+INSTRUCTION around it was "pass {layers: [...]} by NAME", and in the
+casual run the model copied all twelve names straight back out of the
+refusal into the call that did the harm. For a destructive caller it now
+says: only the layers the USER named, and if they named none, ASK.
+Threaded through as an optional third arg to `AELL_layersOrSelection`,
+so only remove_keyframes opts in for now.
+
+**3. remove_effect's empty-parade refusal closes the door.** It used to
+say "nothing to remove. apply_effect adds one." - an ADD offered to a
+REMOVE caller, and nothing in it to stop another guess. The canonical
+made eight. Now: "has no effects at all - nothing to remove, and no
+other effect name will match either", plus, on a text layer, whether it
+has text animators (which are not effects, and were exactly what the
+model was reaching for).
+
+### One rules bullet - a reorder, not an addition
+
+The bullet already existed and already said the right thing in the wrong
+order. Rewritten ask-first, carrying the measured vocabulary and the two
+measured wrong turns as anti-targets:
+
+    - 'clean up / tidy / sort out this COMP (or a named one) / it's
+      a mess / junk everywhere' NAMES NOTHING: ask what should go and
+      return commands: [] - the one exception to ACT, DON'T ASK. Never
+      guess a target (no remove_keyframes or delete_layer over every
+      layer), never clean_project (that deletes footage). Once they
+      name the clutter, remove exactly it (remove_keyframes,
+      remove_effect, delete_mask, delete_layer, precompose).
+
+Paid for, per the budget rule, with two THIRD copies of the same fact -
+"(dryRun defaults to true)" in both the clean_project and
+organize_project rules bullets, where the args line already carries
+`dryRun?: bool (default TRUE)` - and by compressing clean_project's doc
+tail from "PROJECT PANEL only ('clean up this comp' is never this tool)"
+to "Never 'clean up this comp'", which keeps the DOC_WORDS pin intact.
+
+    full     58989 -> 58974 chars   (ceiling 59000; headroom 11 -> 26)
+    compact  39302 -> 39321 chars
+
+### The flip
+
+`node scripts/chat-probe.js --variants --steps 29`, after:
+
+    canonical  pass  [no tools]  "Sure, let's clean up 'Probe Room'.
+                                  Please specify which elements should
+                                  be removed or adjusted."
+    casual     pass  [no tools]
+    vague      pass  [no tools]
+    typo       pass  [no tools]
+
+**4 pass, 0 miss, 0 HARM - "acceptance met".** Every run is one round
+and ZERO tool calls: the model asks and stops. Transcripts
+`logs\chat-probe-2026-09-02T10-32-50.md` (before) and `...T11-01-03.md`
+(after).
+
+**Honest about attribution.** In the final run the model never reached
+any of the three host fixes - it never called a tool at all. The field
+flip is the BULLET's. The host fixes are proved separately, by the stub
+suite and by six new steps in real AE, and they are what stands between
+the next un-gated guess and someone's work.
+
+### Verification
+
+- **Real AE harness: 589/589 PASSED** (578 -> 589). Six new steps build
+  a three-solid wipe rig and measure the gate in real AE: the refusal
+  with its count, the keys still being there, the retry INSIDE the same
+  reply being refused too, the keys surviving that as well, a named
+  SUBSET going straight through, and a whole-comp call with no keys to
+  lose not being gated at all.
+- **A real-AE measurement worth keeping:** the suite runs as ONE
+  request. `AELL_requestSeq` is bumped per CHAT TURN (main.js:557), not
+  per step, so the harness can prove the "THIS same reply" branch but
+  not the release. That is the right branch for this defect anyway - the
+  round that lost 18 keyframes made sixteen calls without the user
+  seeing one of them. The release ("a LATER request goes through") is
+  pinned in tests/test-property-access.js, which can drive
+  `AELL_newRequest()` directly.
+- `tests/test-property-access.js` +16 assertions: both halves of the
+  no-targets rewording, all three gate branches, the release, and the
+  three narrowness cases.
+- `tests/test-self-test.js` canned host taught the wipe rig (the roster
+  grows from the real add_solid calls rather than being hardcoded, so a
+  fourth solid moves the stub's idea of "every layer" the way it moves
+  AE's), with its own per-run reset - without that the second canned run
+  stopped gating and the suite passed a state real AE fails.
+- `tests/test-chat-probe.js` re-pinned to the new bullet: three phrase
+  mappings ('junk everywhere' -> never clean_project, 'sort out this
+  COMP' -> ask what should go, 'a mess / junk everywhere' -> the
+  anti-targets) plus an assertion that the ask comes BEFORE the removal
+  tools, which is the defect this pass fixed.
+- `node tests/test-context-budget.js` green at 58974 of 59000.
+- Full stub sweep 66/67, the odd one out the known environmental
+  `tests/test-comfy-backend.js` (unchanged, still not mine).
+- `node scripts/capability-report.js` regenerated.
+- **Routing regression:** `--variants --steps 21,26` - the two rows that
+  legitimately remove things. **8/8 pass.** Row 21's four phrasings all
+  named nine of the comp's twelve layers and removed 18 opacity
+  keyframes with no gate in the way, which is the narrowness claim
+  measured in the FIELD rather than only in a stub. Row 26's
+  remove_effect routing is untouched.
+- Bumped to **0.11.13**: hostscript.jsx, tools.js and selftest.js all
+  changed.
+
+### One thing that cost time, recorded so the next pass does not repeat it
+
+A harness run that FAILS does not sweep its scratch comps. The first red
+run left `AELL Self-Test Wipe` in the project, so the next run's
+create_comp got `AELL Self-Test Wipe 2` and the step that pinned the
+exact name failed for a reason that had nothing to do with the fix. Two
+lessons: a rig step must not pin the comp NAME (AE auto-numbers a taken
+one; work from `ctx.<name>Comp`), and after a red run, sweep
+`AELL Self-Test*` out of the project before reading the next result.
+
+### Filed for later passes, in priority order
+
+1. **New rig-based steps for the A/B/C/E rows with no twin** (A1, A2,
+   B1, C1, C2, E1, E2) - now the top in-flight row; WORKPLAN 8 names it
+   as NEXT.
+2. **Step 2's naming flake** - unchanged. `duplicate_layer` numbers
+   copies from 2, so a model's "Red Square 1" cannot exist; it empties
+   the comp and cascades into every later world-building step.
+3. **Only remove_keyframes opts into the destructive refusal wording.**
+   `delete_layer`, `delete_mask` and `remove_effect` reach their targets
+   by other paths and were not touched - the wording is threaded and
+   ready, but each needs its own measurement before it is turned on.
+4. **The full prompt has 26 chars of headroom.** Better than the 11 it
+   inherited. The named-but-untaken cut candidates are unchanged (the
+   "Known-good forms if you must write one" expression list, the
+   doc/rules overlap on LAYER space, and the remaining tools whose desc
+   repeats a phrase list the rules already carry).
+5. **`property: string` is the vaguest args line in TOOL_DEFS** -
+   unchanged, still blocked on item 4's cut.
+6. **Every add_mask paraphrase still sends COMP coordinates first** -
+   unchanged.
+7. **Ask the SERVER for the two numbers** (`POST /tokenize`,
+   `GET /props`) - unchanged, still no live symptom.
+8. **`comfyUrl` is 8188, ComfyUI answers on 8000** on this machine -
+   one line in `%APPDATA%\AE-Llama\settings.json`.
+9. **The harness cannot answer a modal with WORDS** ("Crash Repair
+   Options", the undo-group warning from 2026-09-02) - unchanged.
+10. **`starved` may now be too generous a word** - unchanged.
+11. **delete_mask could warn when an expression still points at the
+    mask** - unchanged.
+12. **A controller GROUP has never been measured**, nor any locale but
+    en_US - unchanged.
+13. **`capParams` is a second, independent roster inside the same
+    .mogrt** - unchanged.
+14. **`set_mask_path` takes vertices with no layer-box check at all** -
+    unchanged.
+15. **Still owed, needs a human awake:** drop
+    `logs\mogrt-verify\AELL Probe Card.mogrt` into real Premiere
+    (harness plan step 6).
+
+Nothing was left unattempted this pass. Nothing is blocked.
+
+## 2026-09-02 (local, real AE) - WORKPLAN 8: the seven rows that had no world to start from. UNBUMPED ON PURPOSE
+
+**Item:** WORKPLAN section 8, the bullet the last five passes all filed as
+their #1 - "the A/B/C/E rows with no rig twin (A1 grid, A2 slider rig, B1
+stagger, C1 typewriter, C2 text style, E1 blur, E2 for_each) need NEW
+rig-based steps before they can take paraphrases."
+
+**Nothing in `extension/` changed, so nothing was bumped.** This pass is
+probe + tests + docs. A bump with no panel change publishes an update
+that installs nothing and every test user pays the reinstall for it.
+
+### Why these seven had been stuck
+
+The rig (`rigPlan`) builds a FINISHED world: a 3x3 grid of nine squares,
+each already fading in, all parented to a rotated null, HELLO at 120px
+with an oval mask. Every one of the seven rows asks for something that
+world already HAS. "Arrange these into a grid" against a comp that is
+already a grid scores a no-op as a pass; so does "fade these in one
+after another" against nine layers that already fade in. The previous
+pass wrote that down and declined to force it, which was right.
+
+### The fix: a second rig, not a second set of sentences
+
+`fromRig` used to be a boolean. It now names a VARIANT - `true` is the
+finished world, unchanged for all fifteen trigger-layer steps, and
+`"icons"` is a new UNFINISHED one:
+
+- a full-frame `BG` solid, added FIRST so it lands at the BOTTOM of the
+  stack (which is what "everything except the background" and "soften
+  the background" both mean by background),
+- six 160x160 solids `Icon 1`..`Icon 6` at `ICON_SPOTS` - deliberately
+  off-grid and uneven, no two sharing an x or a y, so "is it a grid
+  now?" is only ever a question about what the MODEL did,
+- a small white `HEADLINE` at 48px, so "bigger" and "brand blue" both
+  have somewhere to travel from.
+
+No keyframes, no expressions, no effects, nothing parented, no animator.
+Every fixture is an ABSENCE, and each absence is a step's whole subject.
+Same comp name, so one `sweepScript` still cleans up after either.
+
+`rigScript(variant)` and `resetWorld` thread the variant through;
+`--rig-check` now builds and verifies BOTH rigs in sequence (checking
+only the first would let the second rot silently).
+
+**`rigProblems(variant, state)` is the other half.** The rig-check's
+assertions used to live inline in `main()`, where only real AE could run
+them. They are now a pure function over a READ_COMP state, so
+`--rig-check` runs it against the real comp AND `tests/test-chat-probe.js`
+runs it against a synthetic one - a fixture that quietly stops being
+built is caught with no AE at all. That is the back-fill this item owed:
+the bug class is "a rig ships the thing a sentence asks for, and the
+sentence passes forever on a no-op", and thirteen mutation cases now
+pin it (an icon already animated, already rigged, already effected,
+icons that already line up, a headline already big or already blue or
+already typing on, a background not at the bottom or not full frame).
+
+### The seven steps (30-36)
+
+Sentences come from `docs/USEFULNESS-TESTS.md` where it has one, adapted
+only to name the fixtures - a probe that invents its own phrasing
+measures the phrasing. Three paraphrases each (casual / vague / typo).
+
+| # | row | tool it should reach |
+|---|-----|----------------------|
+| 30 | A1 | `grid_layout` |
+| 31 | A2 | `link_property` |
+| 32 | B1 | `stagger_layers` |
+| 33 | C1 | `add_text_animator` |
+| 34 | C2 | `set_text_style` |
+| 35 | E1 | `apply_effect` |
+| 36 | E2 | `for_each_layer` |
+
+Each check reads what the sentence actually asks for and names the
+near-miss it is refusing, not just "failed": a grid counts whether the
+positions line up OR `grid_layout`'s control rig drives them; a stagger
+counts whether the KEYS are spaced or the LAYERS were retimed; "brand
+blue" counts a Fill effect's colour as well as the text's own; "one
+slider" fails six sliders even though six expressions were written.
+
+### The matrix - 28 runs, real AE, real model
+
+`node scripts/chat-probe.js --variants --steps 30,31,32,33,34,35,36`
+(transcript `logs\chat-probe-2026-09-02T11-22-56.md`, canonical-only
+warm-up `...T11-16-18.md`).
+
+**19 pass, 2 miss, 7 HARM.**
+
+| # | row | pass | miss | HARM |
+|---|-----|------|------|------|
+| 30 | grid | 3 | 0 | 1 |
+| 31 | slider rig | 4 | 0 | 0 |
+| 32 | stagger | 1 | 0 | 3 |
+| 33 | typewriter | 4 | 0 | 0 |
+| 34 | text style | 4 | 0 | 0 |
+| 35 | blur | 1 | 1 | 2 |
+| 36 | for_each | 2 | 1 | 1 |
+
+Two rows (33 typewriter, 34 text style) are clean on all four phrasings
+and need nothing. Row 31 is clean too, by two different shapes -
+`for_each_layer{tool:'link_property'}` three times and per-layer
+`link_property` six times.
+
+### What the five failing phrasings actually found
+
+Reported, not fixed - the bullet says ONE tool-doc/system-prompt change
+per pass so a regression stays attributable. In priority order, which is
+also the order they are filed below:
+
+1. **Row 36 casual, "drop shadow on every layer but the BG":** the model
+   sent `apply_effect {layers: [...seven names]}` and got back
+   `Missing 'layer' (name or 1-based index)`. That refusal never says
+   the plural belongs to `for_each_layer`, so the model re-sent the
+   IDENTICAL call and then told the user "please ensure the layers are
+   correctly named" - the names were fine. Twice in one round. This is
+   the same class as 0.11.10's bare `Missing 'property'` and 0.11.12's
+   three refusals: the refusal is the bug, not the vocabulary.
+   `AELL_resolveLayer`'s throw should read the `layers` it was actually
+   handed and name the tool that takes it.
+
+2. **Row 32, `stagger_layers` on layers with NO keyframes:** 3 of 4
+   phrasings called it alone. It moved six start times, answered
+   `ok {layers:6, spread:2.5, placed:[...]}` - and nothing fades,
+   because there were no opacity keys to stagger. The receipt is a
+   success message for a comp where nothing animates. Only the TYPO
+   phrasing did both halves (`stagger_layers` then `set_keyframes`).
+   Either the doc says "stagger_layers moves layers in TIME - it does
+   not create the animation" or the tool warns when every target has
+   zero keyframes on every animatable property.
+
+3. **Row 35, "soften" and "too sharp" reach `add_mask`:** the vague
+   ("the background is too sharp behind the icons") and typo phrasings
+   both masked the background instead of blurring it. Two of four.
+
+4. **Row 35 canonical, the rollback that ate a correct call:**
+   `apply_effect {effect:'Fast Box Blur'}` succeeded, then
+   `set_effect_param {param:'Radius'}` failed with a properly grounded
+   error ("'Fast Box Blur' has: Blur Radius, ...") - and the whole round
+   rolled back, taking the blur with it. The model read the grounded
+   error, relayed it, and stopped. The grounding worked; what it bought
+   was thrown away by the rollback. Worth a look at whether a
+   parameter-name miss should be rollback-worthy at all.
+
+5. **Row 30 casual, `grid_layout` with no `layers`:** "line the Icon
+   layers up in a neat 3 by 2 grid" became `grid_layout {spacingX:40,
+   spacingY:40}` with no `layers` argument. Headless there is no
+   selection, so the tool did what its doc promises - gridded ALL
+   content layers - and the BACKGROUND and the HEADLINE went into the
+   grid with rig expressions on their positions. The user named a
+   subset in words and got the whole comp.
+
+6. **`link_property {layer: [six names]}` -> "invalid numeric result
+   (divide by zero?)"** (canonical-only warm-up run, step 31). An array
+   where `layer: name|index` is expected reaches AE's native error
+   instead of a grounded refusal, and the whole round rolled back. Same
+   defect as #1 with a worse error string.
+
+7. **Row 36 vague** built a `Shadow Null` with three controls and
+   applied Drop Shadow TWICE to three of the seven layers - 39 tool
+   calls for a one-line ask.
+
+### Verification
+
+- **Real AE harness: 589/589 PASSED**, before and after. Nothing in
+  `extension/` was touched, which is the point.
+- `node scripts/chat-probe.js --rig-check`: both rigs build clean in
+  real AE - `[full] 34 commands, all ok`, `[icons] 15 commands, all ok`,
+  "rigs OK - every fixture the steps name is in the comp".
+- `tests/test-chat-probe.js` 631 assertions (+96), all green: the icon
+  rig's plan (what it builds, what it must NEVER run - `set_keyframes`,
+  `grid_layout`, `apply_effect`, `link_property`, `add_text_animator`,
+  ... - and that the background is added first), `rigProblems` over
+  thirteen synthetic breakages plus the full rig's, and a pass case AND
+  the near-miss cases for all seven checks (the background gridded in
+  with the icons, six sliders instead of one, a fade with no stagger, a
+  whole-layer fade sold as a typewriter, blue text that never grew,
+  a blur on the wrong layer, and the EXCEPT ignored).
+- `node tests/test-es3-ternary.js` green - it lints the ExtendScript
+  embedded in chat-probe.js too.
+- Full stub sweep 66/67. The odd one out is the known environmental
+  `tests/test-comfy-backend.js`, unchanged and still not mine.
+- **`docs/CAPABILITIES.md` was already STALE at HEAD** - the six wipe
+  steps that shipped in 0.11.13 moved two per-tool self-test counts and
+  the generated table was never regenerated, so CI has been red on the
+  dev branch since that commit. `node scripts/capability-report.js` run
+  and committed here. Not caused by this pass; fixed by it.
+
+### Assumptions written down
+
+- **The seven rows keep their own rig rather than sharing the full
+  one.** Merging them would mean adding a background and un-animating
+  the squares, which changes the world fifteen existing steps are
+  scored against - the layer counts, the undo signatures, `nineSquares`,
+  the precompose step. Two rigs cost one `sweepScript` call per step
+  reset and nothing else.
+- **Row 36 requires the HEADLINE to be shadowed too, not just the six
+  icons.** "Everything except the background" is literal; the usefulness
+  table's "BG untouched" is the half that must never fail, and it is
+  checked first and separately so a run that shadows the background is
+  always the loudest failure in the row.
+- **Row 35 matches the WORD "blur" in an effect name**, not a match
+  name: AE display names are locale-dependent and the model reached for
+  Gaussian and Fast Box Blur in different runs. Both count.
+
+### Filed for later passes, in priority order
+
+1. **`Missing 'layer'` never mentions the plural or `for_each_layer`** -
+   the top row, measured twice in one round. See finding 1.
+2. **`stagger_layers` reports `ok` for a stagger that animates nothing**
+   - 3 of 4 phrasings. See finding 2.
+3. **"soften"/"too sharp" routes to `add_mask`** - 2 of 4. See finding 3.
+4. **A rollback throws away the calls that WORKED** when a later one
+   fails on a parameter name. See finding 4.
+5. **`grid_layout` with no `layers` grids the background in** when the
+   user named a subset in words. See finding 5.
+6. **`link_property {layer: [array]}` -> "invalid numeric result"** -
+   AE's native error, not a grounded one. See finding 6.
+7. **Step 2's naming flake** - unchanged. `duplicate_layer` numbers
+   copies from 2, so a model's "Red Square 1" cannot exist.
+8. **Only remove_keyframes opts into the destructive refusal wording** -
+   unchanged. `delete_layer`, `delete_mask`, `remove_effect` still need
+   their own measurement.
+9. **The full prompt has 26 chars of headroom** - unchanged. The next
+   rules addition needs a real cut; the named candidates are unchanged.
+10. **`property: string` is the vaguest args line in TOOL_DEFS** -
+    unchanged, still blocked on 9.
+11. **Every add_mask paraphrase still sends COMP coordinates first** -
+    unchanged.
+12. **Ask the SERVER for the two numbers** (`POST /tokenize`,
+    `GET /props`) - unchanged, still no live symptom.
+13. **`comfyUrl` is 8188, ComfyUI answers on 8000** on this machine -
+    one line in `%APPDATA%\AE-Llama\settings.json`.
+14. **The harness cannot answer a modal with WORDS** - unchanged.
+15. **`starved` may now be too generous a word** - unchanged.
+16. **delete_mask could warn when an expression still points at the
+    mask** - unchanged.
+17. **A controller GROUP has never been measured**, nor any locale but
+    en_US - unchanged.
+18. **`capParams` is a second, independent roster inside the same
+    .mogrt** - unchanged.
+19. **`set_mask_path` takes vertices with no layer-box check at all** -
+    unchanged.
+20. **Still owed, needs a human awake:** drop
+    `logs\mogrt-verify\AELL Probe Card.mogrt` into real Premiere
+    (harness plan step 6).
+
+Nothing was left unattempted this pass. Nothing is blocked.
+
+## 2026-09-02 (local, real AE) - WORKPLAN 1: the harness went red, and the grounded error was the bug (0.11.14)
+
+The pass opened on `scripts/run-ae-selftest.ps1` at **588/589**, so the
+workplan's item 1 took the pass and row 36 of item 8 (the filed #1,
+`Missing 'layer'` never mentions the plural) waits for the next one.
+
+### The failure
+
+    FAIL reduce_project grounds an unknown comp name - error was:
+    Comp not found: ST HYG Nope. Comps in this project: AELL Self-Test,
+    AELL Self-Test Anchor, AELL Self-Test Batch, AELL Self-Test Cam,
+    AELL Self-Test Chunks, AELL Self-Test Mask, AELL Self-Test Order,
+    AELL Self-Test Undo, AELL Self-Test Wipe, AELL Self-Test Wipe 2,
+    AELL Self-Test Wipe 3, AELL Self-Test Wipe 4, Ctx Probe,
+    REV19_ST RN Plain 2019, ST HYG Drop
+
+Count them: fifteen. `AELL_resolveComp`'s roster was built
+`for (i = 1; i <= proj.numItems && compNames.length < 15; i++)` - flat
+PROJECT ORDER, capped at 15, and **nothing in the message said it had
+been cut**. The step asks for `ST HYG Nope` and checks that the refusal
+names `ST HYG Keep`; `ST HYG Keep` is created immediately before
+`ST HYG Drop`, both at the end of the project, and the cap fell between
+them.
+
+Nothing about the step or the tool changed. The SUITE grew - the six
+wipe comps of 0.11.13 plus `Ctx Probe` and the 2019 rename comp pushed
+the project past fifteen - and a silent cap turned into a wrong answer
+the day the roster got long. That is the class worth fixing, not the
+one step: a grounded refusal that drops the row that matters reads as a
+COMPLETE roster, so the model's correct conclusion from it is "that comp
+does not exist", and it stops. An ungrounded refusal would have been
+less harmful.
+
+### The fix (host root, extension/jsx/hostscript.jsx)
+
+New `AELL_compsHere(wanted, cap)`, one helper, two callers:
+
+- **Near misses first.** The missed name is tokenised (alphanumeric
+  runs, 2+ chars) and every comp scores one point per token it contains,
+  with a whole-name substring as the fallback. `ST HYG Nope` scores
+  `ST HYG Keep` and `ST HYG Drop` at 2, everything else at 1 or 0, so
+  the two comps the caller could have meant are the FIRST two rows -
+  from the LAST two positions in project order.
+- **Bucketed, not sorted.** ES3's `Array.prototype.sort` is not required
+  to be stable, and a roster that reshuffles between two identical
+  failures is its own confusion. One pass per score, high to low,
+  project order preserved inside each.
+- **The cap announces itself.** `AELL_capJoin` already appends
+  "... and N more"; when it truncates, the message now also names
+  `get_project_info {limit: "all"}` - the same pointer `AELL_itemsHere`
+  has carried all along. A roster that fits gets neither, so short
+  projects read exactly as before.
+
+Both grounded comp rosters use it: `AELL_resolveComp`'s not-found throw
+(cap 15) and `clean_project`'s "will not guess which comps matter"
+refusal (cap 20, which had the identical silent truncation and had
+simply not been unlucky yet).
+
+### Verification
+
+- **Real AE harness: 588/589 -> 589/589 PASSED.**
+- Stub back-fill, `tests/test-project-hygiene.js` step 11b: a 20-comp
+  project with the two near misses added LAST asserts they survive the
+  cap, appear BEFORE the fillers, that "and 5 more" is stated and that
+  `get_project_info {limit: "all"}` is named; a 2-comp project asserts
+  the whole roster with NO cap wording; and a 26-comp project pins the
+  20-cap disclosure on the reduce_project refusal. All fail against the
+  old code.
+- `node tests/test-es3-syntax.js`, `node tests/test-es3-ternary.js`
+  green (new helper is ES3, no nested ternary).
+- Full stub sweep 66/67 - the odd one out is the known environmental
+  `tests/test-comfy-backend.js`, untouched and still not mine.
+- `node scripts/bump-version.js patch` -> **0.11.14** (extension/ changed,
+  so the bump is owed), `tests/test-capability-doc.js` and
+  `tests/test-self-update.js` green after it.
+
+### Assumptions written down
+
+- **Ranked the roster rather than raising the cap.** Raising 15 to 40
+  would fix this project and break the next one, and it spends context
+  on every failure to help one. Ranking costs nothing when the list
+  fits and is the only thing that works at 200 comps.
+- **Token length floor is 2, not 3.** "st"/"bg"-sized tokens do match
+  inside unrelated words (`AELL Self-Test` scored 1 here), but the
+  bucketing puts every stronger match above them, so the noise never
+  displaces the answer - and a comp genuinely named `BG` stays findable.
+- **The suite's own comp growth was NOT treated as the bug.** Every
+  comp in that list is created by the run and swept by it; the project
+  is simply bigger than it was, which is a legitimate state for any
+  user's project too. Fixing the roster fixes both.
+
+### Filed for later passes
+
+Unchanged from the previous entry (items 1-20 there), with one addition
+and one promotion:
+
+- **NEXT is still row 36** - `Missing 'layer'` never mentions the plural
+  or `for_each_layer`. Untouched tonight; the harness took the pass.
+- **NEW: every OTHER capped roster in hostscript.jsx should be audited
+  the same way.** `AELL_capJoin` is called in ~40 places (layer names,
+  effect names, property names, item names) and each one can silently
+  truncate the row the caller needs. `AELL_resolveLayer`'s 20-layer list
+  is the obvious next one - it is built in project order too, and a
+  60-layer comp hits it. Not done here: one item per pass.
+
+Nothing was left unattempted this pass. Nothing is blocked.
+
+## 2026-09-02 (local, real AE) - WORKPLAN 8, row 36: the refusal named the key that was missing, never the key that had arrived (0.11.15)
+
+The harness opened GREEN at 589/589, so the pass took the workplan's
+next unfinished bullet: item 8's filed #1, `Missing 'layer'` never
+mentions the plural or `for_each_layer`.
+
+### The failure, restated from the field
+
+Row 36 casual, "drop shadow on every layer but the BG". The model routed
+CORRECTLY - `apply_effect` is the right tool - and passed
+`{layers: [...seven names]}`. The host answered:
+
+    Missing 'layer' (name or 1-based index)
+
+Which is true, and useless. It names the key that is ABSENT and says
+nothing about the key that ARRIVED, so there is no edit the model can
+make to the call it just sent. It re-sent the identical call and then
+told the user "please ensure the layers are correctly named" - the names
+were fine. Same class as 0.11.10's bare `Missing 'property'` and
+0.11.12's three refusals: **the refusal is the bug, not the vocabulary.**
+
+`set_property` already carried a hand-written redirect for exactly this
+(its own `{layers: [...]}` branch, added after the mistake was measured
+twice in one probe run). That was the tell: one tool had been patched
+where a whole CLASS of tools shares the defect. `AELL_resolveLayer` is
+called from 32 places in the file.
+
+### The fix (host root, extension/jsx/hostscript.jsx)
+
+Fixed once, at the single place a layer ref is resolved, rather than
+once per tool:
+
+- **`AELL_runTool` parks the call.** `AELL_resolveLayer` only ever sees
+  the resolved ref, so a missing `layer` cannot name the `layers` that
+  came instead. The one dispatch point now saves `toolName`/`args` into
+  `$.global` and RESTORES them on the way out - for_each_layer runs its
+  sub-tools inside that frame, so assignment alone would leak.
+- **`AELL_missingLayer(comp, key, handed, underSingular)`** is the whole
+  message. A plural handed over is quoted back and answered with
+  `for_each_layer {layers: [...], tool: '<the tool>', args: {...}}`;
+  an ALREADY-BATCHED tool is told to pass its own `{layers}` instead;
+  a tool with no per-layer target is told to call it once per layer.
+- **The mirror case.** A list under the SINGULAR key (`link_property
+  {layer: [six names]}`, filed in the same round) reached
+  `comp.layer([a, b])`, which answers "invalid numeric result (divide by
+  zero?)" - a message naming neither the argument nor the tool. Refused
+  before AE sees it now, in the same words.
+- **A bare miss is grounded.** Nothing handed over at all gets the
+  comp's own roster (`AELL_capJoin`, cap 8) - names are the only way in
+  for a caller that cannot click. The roster is printed ONLY in that
+  case: a caller who just passed six names does not need to be told what
+  the layers are called, and an error list can push the state the model
+  needs out of its window.
+- **`AELL_layerOrSelection` refuses the same way.** Named targets under
+  the wrong key are not "no target": falling through to the selection
+  would work on layers the caller never named and report success, and
+  "select one in AE" is a dead end for a caller with no hands. Tools with
+  their own plural branch (set_property, get_bounds) consume
+  `args.layers` before they ever reach it, so the redirect cannot speak
+  over them.
+- **`AELL_resolveLayer` now takes the ARG NAME** (default "layer"), so
+  `parent`, `matteLayer`, `controlLayer`, `above`/`below` and the
+  `layers[]` elements report themselves. Before this, a missing `parent`
+  said "Missing 'layer'". The `{layers}` redirect fires for the TARGET
+  argument only - "run it on each" is not an answer to a bad `parent`.
+
+### Verification
+
+- **The row flipped, real AE + real model.** `node scripts/chat-probe.js
+  --variants --steps 36`: **2 pass / 1 miss / 1 HARM -> 3 pass, 0 miss,
+  1 HARM.** The casual phrasing is now a clean first shot - seven
+  `apply_effect` calls, one per icon, BG untouched, two rounds. Typo and
+  canonical unchanged (canonical still reaches `for_each_layer`).
+  Transcript `logs\chat-probe-2026-09-02T11-58-31.md`.
+- **Real AE harness: 589/589 -> 593/593 PASSED.** Four new steps in
+  `extension/js/selftest.js`, in the 60-layer batch comp and BEFORE the
+  blur so "applied nothing" is checkable: the plural redirect (names the
+  key, the layers, the tool AND for_each_layer), the comp is unchanged
+  after it, the bare miss lists real layers, and `link_property
+  {layer: [...]}` is refused without AE's divide-by-zero surfacing.
+- Stub back-fill, `tests/test-for-each-layer.js` section 5: 17
+  assertions over the same six cases plus two guards - a bad `parent` is
+  reported as `'parent'` and is NOT answered with the per-layer
+  redirect, and set_property keeps its own hand-written wording.
+  **8 of them fail against the old host.** The canned host in
+  `tests/test-self-test.js` gained the matching gate
+  (`singularLayerGate`), scoped to the tools with no plural branch of
+  their own, so the new refusal steps cannot pass against anything.
+- `node tests/test-es3-syntax.js`, `node tests/test-es3-ternary.js`
+  green. Full stub sweep 66/67 - the odd one out is the known
+  environmental `tests/test-comfy-backend.js`, untouched and not mine.
+- `node scripts/capability-report.js` re-run (the tool table's self-test
+  counts moved), `node scripts/bump-version.js patch` -> **0.11.15**
+  (extension/ changed, so the bump is owed).
+- **Prompt budget: zero spend.** Nothing in `extension/js/tools.js`
+  changed; this pass is host strings on failure paths only, so the
+  58974/59000 ceiling is where 0.11.13 left it.
+
+### Assumptions written down
+
+- **Fixed the resolver, not apply_effect.** The filed row is one tool,
+  but `set_property`'s hand-written redirect proved the class, and
+  `AELL_resolveLayer` is called from 32 places. A per-tool fix would
+  have shipped the same bug in every one of the others.
+- **The plural redirect is scoped to the TARGET argument.** It would
+  have been cheaper to fire it for any missing layer ref, but
+  `set_layer_parent` and `set_track_matte` take a legitimate `{layers}`
+  list BESIDE their `parent`/`matteLayer`, and "for_each_layer runs it
+  on each" there is advice for a question nobody asked. That is what the
+  new `key` parameter buys.
+- **The globals are saved and restored, not assigned.** for_each_layer
+  calls `tool(sub)` directly rather than through `AELL_runTool`, so the
+  outer args stay parked during sub-calls. That is harmless today
+  (for_each_layer always injects `sub.layer`), but restoring means a
+  future nested caller cannot inherit a stale plural.
+- **The roster in a bare miss is walked in full and capped in the
+  print.** A 200-layer comp reads 200 names to show 8. That matches
+  `AELL_noTargets` next door and costs nothing on a failure path.
+
+### Filed for later passes
+
+- **NEW, and the next row: row 36 VAGUE is still HARM**, for a defect
+  unrelated to the one fixed. "everything should sit off the background
+  a bit - shadow them, not it": the model invents a `Shadow Null` slider
+  rig and passes an EXPRESSION STRING as a `set_effect_param` value -
+  AE answers `Unable to call "setValue" ... is not a number` - then asks
+  Drop Shadow for an `Offset` parameter it does not have. The round
+  rolls back, and the retry shadows HEADLINE alone: **6 of 7 layers
+  skipped on an "ok" reply.** Two candidates, both refusal-wording:
+  `set_effect_param` should say a string value belongs in
+  `link_property`/`set_expression`, and `Parameter not found` should
+  rank the near miss (Distance, Direction) the way `AELL_compsHere`
+  ranks comps.
+- **`link_property {layer: [six names]}` is CLOSED** - it was filed in
+  the "THEN" list and fell out of this fix, grounded and pinned by a
+  real-AE self-test step.
+- Rows 32 / 35 / 30 casual unchanged and still queued in that order.
+- Unchanged from the previous entry: the ~40 other `AELL_capJoin` call
+  sites that can silently truncate the row the caller needs
+  (`AELL_resolveLayer`'s own 20-layer "Actual layers" list is the
+  obvious next one), and items 2-20 filed earlier on 2026-09-02.
+- **Still owed, needs a human awake:** drop
+  `logs\mogrt-verify\AELL Probe Card.mogrt` into real Premiere
+  (harness plan step 6).
+
+One accident worth recording: `node scripts/chat-probe.js --help` is not
+a flag, and the script treats an unknown argument as "run everything" -
+it started a full probe against the live AE project before the pipe was
+closed. Its own sweep cleared the leftovers on the next run
+("cleanup: removed 1 project item(s)"), so nothing was lost, but a
+`--help` that runs the whole matrix against a user's project is a sharp
+edge for the human too. Not fixed here (one item per pass); filed.
+
+Nothing else was left unattempted this pass. Nothing is blocked.
+
+## 2026-09-02 (remote session) — morning review of the 21-pass night, and the "environmental" failure that was not
+
+- Reviewed 0.11.0 -> 0.11.15 (21 passes, 22:44-08:02). Merged to main
+  and reset the dev branch. Full stub sweep on the merged head: 65/67,
+  the two known Windows-only suites (test-engine-assets needs
+  PowerShell, test-ffmpeg-export needs Windows absolute paths).
+- Changed: tests/test-comfy-backend.js. Every pass last night reported
+  it as "environmental, passes in CI" — 21 times. It was a real defect
+  in the TEST, and mine: the suite passed the runner's own `process`
+  through `nodeRequire`, so `applyExtraModelPaths` read the machine's
+  real LOCALAPPDATA. On the owner's box the Comfy-Desktop shared store
+  exists, so "blank settings remove a previously written mapping"
+  failed against CORRECT behaviour (0.11.0 writes the shared-store
+  section regardless of settings — the H3 gap fix). The suite now
+  supplies a fake process and pins all three states: no store (mapping
+  removed), store present (yaml survives blank settings carrying only
+  that section), and a LOCALAPPDATA naming no store (nothing mapped).
+- Notes: a suite that cannot pass on one machine trains every reader to
+  skip its failures — the lost-coverage class this project already
+  names. It cost nothing last night only because each pass re-derived
+  the same explanation; the next real failure in that file would have
+  read the same way. Filed for a later pass: chat-probe.js treats an
+  unknown argument as a no-op and runs the FULL matrix against the live
+  AE project (`--help` is not a flag; it fired once last night and the
+  probe's own sweep cleaned up after it) — an unknown flag should
+  refuse, naming the flags that exist.

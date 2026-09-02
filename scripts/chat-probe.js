@@ -20,7 +20,57 @@
  *   node scripts/chat-probe.js                  # every step
  *   node scripts/chat-probe.js --steps 2,3      # a subset (1-based)
  *   node scripts/chat-probe.js --model <gguf>   # override the model
+ *   node scripts/chat-probe.js --ctx 32768      # override the window
  *   node scripts/chat-probe.js --keep           # do not delete the comp
+ *   node scripts/chat-probe.js --isolate        # rebuild the rig per step
+ *   node scripts/chat-probe.js --rig-check      # build the rig, no model
+ *   node scripts/chat-probe.js --carry-history  # the old shared history
+ *   node scripts/chat-probe.js --variants       # the paraphrase matrix
+ *
+ * VARIANTS. --variants runs each selected step's canonical sentence AND
+ * every paraphrase it declares (casual / vague / typo'd), each as its own
+ * independent run: fresh conversation, and — because --variants implies
+ * --isolate — a freshly rebuilt rig. The product must not need magic
+ * words, and the only way to know is to type the other words.
+ *
+ * A variant run is graded in three, not two:
+ *
+ *   pass  the step's own check() is satisfied — right tool, right target.
+ *   miss  check() is not satisfied and the comp is UNCHANGED. The model
+ *         refused, asked, or did nothing that stuck. Harmless: a user
+ *         who typed this gets no work done and no damage.
+ *   HARM  check() is not satisfied and the comp CHANGED anyway. Something
+ *         was done to the project that the sentence did not ask for. This
+ *         is the failure the matrix exists to find, and it is printed
+ *         with the diff that proves it.
+ *
+ * "Changed" is read off the two READ_COMP states the run already fetches
+ * (see compDiff) rather than a second AE round trip. The boundary errs
+ * toward HARM on purpose: a false HARM costs a human one transcript read,
+ * a false pass ships a wording bug.
+ *
+ * Acceptance (the exit code): no run may be HARM, no canonical may fail,
+ * and a step whose canonical passes may have at most ONE variant miss.
+ *
+ * ISOLATION. Every step gets a FRESH chat history unless it declares
+ * `carry` (only "a second turn that refers back" does — its sentence is
+ * meaningless without the turn before it). That is not tidiness: the
+ * shared history meant a later step could ride an earlier one's success,
+ * and one wrong layer name in step 2 poisoned six later steps. Add
+ * `--isolate` and the COMP resets too — every step that declares
+ * `fromRig` starts from the same deterministically built world (see
+ * rigPlan), which is what lets one scenario run N phrasings that cannot
+ * contaminate each other. `--carry-history` puts the old behaviour back
+ * for a side-by-side comparison.
+ *
+ * `--ctx` is what makes the compact-vs-full ROUTING comparison possible:
+ * the panel chooses its tool-doc form from the window alone
+ * (Tools.promptModeFor — compact below 24576), so the only honest way to
+ * run the same sentences against the full docs is to run them at a
+ * window the panel would call big. It patches the CACHED settings object
+ * in memory only, never settings.json, for the same reason
+ * applyStepSettings does: a probe must not be able to reconfigure the
+ * product it is measuring.
  *
  * Writes a markdown transcript to logs/ and exits 0 only if every step
  * met its verdict. Needs After Effects running with "Allow Scripts to
@@ -52,11 +102,20 @@ function argValue(name) {
 const OPT = {
   steps: argValue("--steps"),
   model: argValue("--model"),
+  ctx: argValue("--ctx"),
   keep: argv.indexOf("--keep") !== -1,
   afterFX: argValue("--afterfx"),
   reuseServer: argv.indexOf("--reuse-server") !== -1,
-  bridgeCheck: argv.indexOf("--bridge-check") !== -1
+  bridgeCheck: argv.indexOf("--bridge-check") !== -1,
+  rigCheck: argv.indexOf("--rig-check") !== -1,
+  isolate: argv.indexOf("--isolate") !== -1,
+  carryHistory: argv.indexOf("--carry-history") !== -1,
+  variants: argv.indexOf("--variants") !== -1
 };
+// A paraphrase run is only honest from a known world: two phrasings of
+// one scenario that inherit each other's leftovers are measuring the
+// leftovers. --variants therefore IMPLIES --isolate.
+if (OPT.variants) OPT.isolate = true;
 
 // ------------------------------------------------------- After Effects
 
@@ -295,6 +354,20 @@ const Tools = window.Tools;
 const Comfy = window.Comfy;
 
 /*
+ * --ctx: in-memory only (see the header). Applied here, before the first
+ * prompt is built and before the server is started, so llama-server is
+ * launched with the same -c the prompt was sized for.
+ */
+if (OPT.ctx) {
+  const want = parseInt(OPT.ctx, 10);
+  if (!(want > 0)) {
+    console.error("--ctx wants a positive integer, got " + OPT.ctx);
+    process.exit(2);
+  }
+  Settings.get().ctxSize = want;
+}
+
+/*
  * A step that has to impersonate different hardware (`settings: {...}` on
  * the step) gets it for the length of its own sentence and no longer.
  *
@@ -373,6 +446,28 @@ function say(kind, text, label) {
 
 const history = [];
 
+/* Once per session, exactly as main.js scopes them: the ledger notice is
+ * about this conversation, the starvation notice is about the window
+ * itself. */
+const sessionNotices = { ledger: false, starved: false };
+
+/*
+ * Start a new CONVERSATION — what a user pressing "clear chat" gets.
+ * Both notices are scoped to a conversation in main.js, so both reset
+ * with it; leaving `ledger` set would make the next step's first trim
+ * silent and the transcript would stop being readable step by step.
+ */
+function resetHistory() {
+  history.length = 0;
+  sessionNotices.ledger = false;
+  sessionNotices.starved = false;
+}
+
+/* Set by scripts/context-budget-probe.js. Never set during a normal run,
+ * so it can only observe. */
+let roundObserver = null;
+function setRoundObserver(fn) { roundObserver = fn; }
+
 /* What a generation left behind, so the cleanup can take it back out.
  * IDs only, never "everything under the output folder": the probe runs
  * against the user's live project, and a previous generation of THEIRS
@@ -405,6 +500,36 @@ function rememberGenerated(tool, result) {
 // the byte-slicer for as long as main.js did.
 function compactToolResults(results) {
   return Tools.compactToolResults(results);
+}
+
+/**
+ * One command's record in `round.tools` — the ONLY thing a step's
+ * `check` can see about what the model did (`calls(ctx, name)` reads
+ * this array).
+ *
+ * A rolled-back command used to be skipped entirely, and that made a
+ * whole round invisible: the "sync to the music" step, whose expected
+ * outcome IS a grounded refusal on a silent rig, reported "the model
+ * never reached audio_to_keyframes and ran no tools at all" about a
+ * round in which the model reached exactly audio_to_keyframes and
+ * relayed exactly the refusal. Whether a failing round rolls back
+ * depends on what ELSE the model emitted beside the failing command, so
+ * the same behaviour scored pass in one run and FAIL in the next — noise
+ * indistinguishable from a real routing regression in any comparison
+ * built on these transcripts.
+ *
+ * `ok` stays false and `data` stays null for a rolled-back command:
+ * nothing was applied, so nothing may be scored as applied. Only the
+ * ATTEMPT becomes visible.
+ */
+function toolEntry(cmd, result) {
+  const back = !!result.rolledBack;
+  return { tool: cmd.tool, args: cmd.args || {},
+           ok: !back && !!result.ok,
+           data: back ? null : (result.data || null),
+           rolledBack: back,
+           error: back ? (result.error || "rolled back with the round")
+                       : (result.error || null) };
 }
 
 function sendMessage(text, done) {
@@ -440,7 +565,8 @@ function sendMessage(text, done) {
     // thing that holds a ten-turn conversation, so it has to carry the
     // fix too — otherwise it would keep reporting a failure the panel no
     // longer has.
-    let histBudget = Tools.historyBudget(s.ctxSize, system.length).chars;
+    const hb = Tools.historyBudget(s.ctxSize, system.length);
+    let histBudget = hb.chars;
     if (round.forceTinyContext) histBudget = 1;
     const fitted = Tools.fitHistory(history, histBudget);
     let sys = system;
@@ -449,6 +575,10 @@ function sendMessage(text, done) {
       sys += "\n\n" + fitted.ledger;
     }
     if (fitted.dropped > 0) {
+      // Per SENTENCE, not per session: the probe's transcript is read
+      // step by step, and "which step started forgetting" is the fact a
+      // verdict is judged against. main.js shows its own once-per-chat
+      // line below; both exist because they answer different questions.
       if (!round.trimNoticeShown) {
         round.trimNoticeShown = true;
         say("info", "context trimmed — " + fitted.dropped +
@@ -456,8 +586,34 @@ function sendMessage(text, done) {
       }
       round.trimmed = (round.trimmed || 0) + fitted.dropped;
     }
+    // The two notices the PANEL shows, mirrored here so a probe run can
+    // prove a real user would have seen them. The starvation one was
+    // missing entirely: main.js has warned since 2026-09-01 that the
+    // window is nearly full of prompt, and the probe — the only thing
+    // that runs the product path headless — never said it.
+    if (fitted.dropped > 0 && !sessionNotices.ledger) {
+      sessionNotices.ledger = true;
+      say("info", "Older turns now reach the model as a one-line ledger " +
+          "of what ran and what it named, instead of in full — your " +
+          "transcript is unaffected. Clearing the chat starts fresh.",
+          "context ledger");
+    }
+    if (hb.starved && !sessionNotices.starved) {
+      sessionNotices.starved = true;
+      say("info", "The model's context window (" + s.ctxSize +
+          " tokens) is nearly filled by the tool documentation and " +
+          "project state alone (~" + hb.promptTokens + " tokens), so it " +
+          "will forget turns quickly.", "context");
+    }
     const messages = [{ role: "system", content: sys }]
       .concat(fitted.entries);
+    // Read-only hook for scripts/context-budget-probe.js: what this
+    // round really sent, so the token measurement is taken on the
+    // product's own payload rather than a rebuilt guess of it.
+    if (roundObserver) {
+      roundObserver({ system: sys, hb: hb, fitted: fitted,
+                      messages: messages, round: n + 1, ctxSize: s.ctxSize });
+    }
     const t0 = Date.now();
     Llama.chat({ port: s.port, temperature: s.temperature }, messages,
       Tools.RESPONSE_SCHEMA, null,
@@ -508,11 +664,14 @@ function sendMessage(text, done) {
                 rollbackBudget--;
               }
               round.rolledBack++;
+              // ...but still RECORD it — see toolEntry().
+              round.tools.push(toolEntry(cmd, result));
+              say("error", "ROLLED BACK: " + String(result.error ||
+                    result.note || "the round was undone").slice(0, 200),
+                  head);
               return;
             }
-            round.tools.push({ tool: cmd.tool, args: cmd.args || {},
-                               ok: !!result.ok, data: result.data || null,
-                               error: result.error || null });
+            round.tools.push(toolEntry(cmd, result));
             rememberGenerated(cmd.tool, result);
             rememberPrecomp(cmd.tool, result);
             const body = result.ok
@@ -568,9 +727,11 @@ const READ_COMP = FIND_COMP +
   "    effectNames: [], effectColors: []," +
   "    scale: null, rotation: null, isText: false, isShape: false," +
   "    isNull: false, isSolid: false, sourceFile: null," +
-  "    matteLayer: null, isPrecomp: false, anchorPoint: null, opacity: null," +
+  "    matteLayer: null, matteLayerKnown: false, isPrecomp: false," +
+  "    anchorPoint: null, opacity: null," +
   "    sourceRect: null, layerWidth: null, layerHeight: null, maskBoxes: []," +
-  "    maskModes: [], maskInverted: []," +
+  "    maskModes: [], maskInverted: [], maskFeather: [], maskRound: []," +
+  "    fontSize: null, fillColor: null," +
   "    opacityKeyEased: [], expressions: {}, textAnimators: 0 };" +
   "  try { row.matte = L.trackMatteType; } catch (e1) {}" +
   "  try { row.startTime = L.startTime; row.inPoint = L.inPoint;" +
@@ -609,6 +770,17 @@ const READ_COMP = FIND_COMP +
   "  } catch (e5c) {}" +
   "  try { if (row.isText) row.text =" +
   "    L.property('Source Text').value.text; } catch (e6) {}" +
+  // "white, 120 pixels" is half the sentence the text step types, and a
+  // check that only reads .text scores a 12px black HELLO as a pass.
+  // fillColor is read in its own try: a TextDocument with applyFill off
+  // throws on it, and that must not cost the size too.
+  "  try { if (row.isText) {" +
+  "    var td = L.property('Source Text').value;" +
+  "    if (typeof td.fontSize === 'number') row.fontSize = td.fontSize;" +
+  "    try { if (td.applyFill !== false && td.fillColor) {" +
+  "      row.fillColor = [td.fillColor[0], td.fillColor[1]," +
+  "        td.fillColor[2]]; } } catch (e6b) {}" +
+  "  } } catch (e6c) {}" +
   "  try { row.masks = L.property('ADBE Mask Parade').numProperties;" +
   "  } catch (e7) {}" +
   "  try { row.effects = L.property('ADBE Effect Parade').numProperties;" +
@@ -630,7 +802,9 @@ const READ_COMP = FIND_COMP +
   // What the trigger-layer steps (14 onward) judge on, each read in its
   // own try: a null has no source rect worth reading, a camera no anchor
   // point, and one throw must not blank the rest of the row.
-  "  try { row.matteLayer = L.trackMatteLayer ? L.trackMatteLayer.name" +
+  "  try { row.matteLayerKnown = (typeof L.trackMatteLayer" +
+  "    !== 'undefined');" +
+  "    row.matteLayer = L.trackMatteLayer ? L.trackMatteLayer.name" +
   "    : null; } catch (e13) {}" +
   "  try { row.isPrecomp = !!(L.source && (L.source instanceof CompItem));" +
   "  } catch (e14) {}" +
@@ -652,13 +826,43 @@ const READ_COMP = FIND_COMP +
   "      var mk = mp.property(mi);" +
   "      try {" +
   "        var mm = mk.maskMode;" +
+        // Parenthesised on purpose: this string is executed by
+        // ExtendScript, which parses `?:` LEFT-associatively, so the bare
+        // chain read `((mm===SUBTRACT ? 'subtract' : mm===ADD) ? 'add'
+        // : 'other')` — every SUBTRACT mask came back as 'add'. That is
+        // not a cosmetic slip: step 19's check passes a bottom-half mask
+        // only when it subtracts, so the probe scored two correct model
+        // answers as HARM. tests/test-es3-ternary.js now lints the
+        // ExtendScript embedded in this file too.
   "        row.maskModes.push(mm === MaskMode.SUBTRACT ? 'subtract'" +
-  "          : mm === MaskMode.ADD ? 'add' : 'other');" +
+  "          : (mm === MaskMode.ADD ? 'add' : 'other'));" +
   "        row.maskInverted.push(!!mk.inverted);" +
   "      } catch (emm) {" +
   "        row.maskModes.push('unknown'); row.maskInverted.push(false);" +
   "      }" +
-  "      var vs = mk.property('ADBE Mask Shape').value.vertices;" +
+  // Feather is a two-component property ([x, y]); the sentence asks for
+  // one number, so the larger of the two is what "feather it 20" means.
+  "      try {" +
+  "        var mf = mk.property('ADBE Mask Feather').value;" +
+  "        row.maskFeather.push(Math.max(mf[0], mf[1]));" +
+  "      } catch (emf) { row.maskFeather.push(null); }" +
+  "      var shp = mk.property('ADBE Mask Shape').value;" +
+  "      var vs = shp.vertices;" +
+  // An ellipse mask and a rectangle mask have the SAME four-vertex
+  // bounding box; the only thing that tells them apart is that AE gives
+  // an ellipse curved segments (non-zero bezier tangents) and a
+  // rectangle straight ones. "Put an OVAL mask on it" has no other
+  // fingerprint, so a box-only check passes a rectangle.
+  "      var round = false, tg;" +
+  "      try {" +
+  "        for (tg = 0; tg < vs.length; tg++) {" +
+  "          var ti = shp.inTangents[tg], to = shp.outTangents[tg];" +
+  "          if ((ti && (ti[0] || ti[1])) || (to && (to[0] || to[1]))) {" +
+  "            round = true; break;" +
+  "          }" +
+  "        }" +
+  "      } catch (etg) { round = null; }" +
+  "      row.maskRound.push(round);" +
   "      var x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;" +
   "      for (var vi = 0; vi < vs.length; vi++) {" +
   "        if (vs[vi][0] < x0) x0 = vs[vi][0];" +
@@ -802,6 +1006,297 @@ function sweepImports(ids) {
     "return { removed: killed };";
 }
 
+// ------------------------------------------------------------ the rig
+/*
+ * The world the LATER steps talk about, built deterministically instead
+ * of inherited from the earlier steps' model turns.
+ *
+ * Every step from "push a layer back on the timeline" onward names
+ * things — Beta, HELLO, the Rig null, the nine squares — that steps 1-14
+ * happened to leave behind. That made the run a chain: step 2 naming one
+ * square wrongly poisoned six later steps, and there was no way to run
+ * one sentence twice (the paraphrase matrix) because the second phrasing
+ * started from what the first one did.
+ *
+ * So the fixtures those sentences need are built here, through
+ * AELL_callBatch (one script execution, one undo group, the panel's own
+ * tools) with no model in the loop. `--isolate` rebuilds this before
+ * every step that declares `fromRig`, so N phrasings of one scenario
+ * each start from a comp that is byte-for-byte the same world.
+ *
+ * The squares are BLUE, not red: the world the later sentences describe
+ * is the one after "make them blue instead", and the precompose step
+ * says "the nine blue squares" out loud. No later verdict reads their
+ * colour, but the sentence has to be true.
+ *
+ * TWO rigs, not one. `fromRig: true` gets the world above — a FINISHED
+ * grid, already faded, already parented. The A/B/C/E usefulness rows
+ * (A1 grid, A2 slider rig, B1 stagger, C1 typewriter, C2 text style,
+ * E1 blur, E2 for_each) ask for exactly the things that world already
+ * has, so scoring them against it would score a no-op as a pass. They
+ * declare `fromRig: "icons"` and get the UNFINISHED world instead:
+ * six scattered icons over a background, no keyframes, no expressions,
+ * no effects, a small plain headline. Same comp name, so one sweep
+ * still cleans up after either.
+ */
+const RIG_SQUARES = 9;
+const RIG_ICONS = 6;
+/* Deliberately off-grid and uneven: no two icons share an x or a y, so
+ * "is this a grid now?" is a question about what the MODEL did and never
+ * about what the rig left behind. */
+const ICON_SPOTS = [[380, 250], [1180, 190], [720, 640],
+                    [1520, 780], [260, 830], [980, 430]];
+const ICON_BG = "BG";
+const ICON_TEXT = "HEADLINE";
+const ICON_FONT_SIZE = 48;
+
+/* The unfinished world. A background solid FIRST (so it lands at the
+ * bottom of the stack, which is what "everything except the background"
+ * and "soften the background" both assume), then the icons, then the
+ * headline on top. Nothing here is animated, styled or rigged — every
+ * fixture a sentence asks for must be absent, or the sentence proves
+ * nothing. */
+function iconRigPlan() {
+  const cmds = [];
+  cmds.push({ tool: "create_comp", args: { name: COMP, width: 1920,
+    height: 1080, duration: 6, frameRate: 30 } });
+  cmds.push({ tool: "add_solid", args: { comp: COMP, name: ICON_BG,
+    color: [0.12, 0.12, 0.14], width: 1920, height: 1080 } });
+  for (let i = 0; i < RIG_ICONS; i++) {
+    const name = "Icon " + (i + 1);
+    cmds.push({ tool: "add_solid", args: { comp: COMP, name: name,
+      color: [0.1, 0.2, 0.9], width: 160, height: 160 } });
+    cmds.push({ tool: "set_transform", args: { comp: COMP, layer: name,
+      property: "position", value: ICON_SPOTS[i].slice(0) } });
+  }
+  // Small and white, so "make it bigger" and "brand blue" both have
+  // somewhere to travel from.
+  cmds.push({ tool: "add_text_layer", args: { comp: COMP, text: ICON_TEXT,
+    fontSize: ICON_FONT_SIZE, fillColor: [1, 1, 1],
+    position: [960, 140] } });
+  return cmds;
+}
+
+function rigPlan(variant) {
+  if (variant === "icons") return iconRigPlan();
+  const cmds = [];
+  cmds.push({ tool: "create_comp", args: { name: COMP, width: 1920,
+    height: 1080, duration: 6, frameRate: 30 } });
+  const names = [];
+  for (let i = 0; i < RIG_SQUARES; i++) {
+    const name = "Red Square " + (i + 1);
+    names.push(name);
+    cmds.push({ tool: "add_solid", args: { comp: COMP, name: name,
+      color: [0.1, 0.2, 0.9], width: 200, height: 200 } });
+    // A 3x3 grid placed by hand rather than by grid_layout: that tool
+    // adds a "GRID CTRL" solid and rig EXPRESSIONS, and a rig is only
+    // useful if it is the same every time and holds nothing the
+    // sentences do not name.
+    cmds.push({ tool: "set_transform", args: { comp: COMP, layer: name,
+      property: "position",
+      value: [700 + (i % 3) * 260, 280 + Math.floor(i / 3) * 260] } });
+    // Linear fade-in, staggered four frames — what "too mechanical" and
+    // "shouldn't fade in any more" are about. set_keyframes makes LINEAR
+    // keys, which is exactly the un-eased state the ease step must change.
+    const t0 = (i * 4) / 30;
+    cmds.push({ tool: "set_keyframes", args: { comp: COMP, layer: name,
+      property: "opacity",
+      keys: [{ time: t0, value: 0 }, { time: t0 + 1, value: 100 }] } });
+  }
+  cmds.push({ tool: "add_text_layer", args: { comp: COMP, text: "HELLO",
+    fontSize: 120, fillColor: [1, 1, 1], position: [960, 200] } });
+  // The oval the "take a mask off again" step removes. Without it that
+  // step can only report that there was nothing to prove.
+  cmds.push({ tool: "add_mask", args: { comp: COMP, layer: "HELLO",
+    shape: "ellipse", feather: 20 } });
+  cmds.push({ tool: "add_null", args: { comp: COMP, name: "Rig" } });
+  cmds.push({ tool: "set_layer_parent", args: { comp: COMP, layers: names,
+    parent: "Rig" } });
+  cmds.push({ tool: "set_transform", args: { comp: COMP, layer: "Rig",
+    property: "rotation", value: 15 } });
+  // Beta LAST, so it lands at index 1 — above HELLO, which is what
+  // "Beta is covering HELLO, tuck it underneath" needs to be true.
+  cmds.push({ tool: "add_solid", args: { comp: COMP, name: "Beta",
+    color: [1, 0.5, 0], width: 100, height: 100 } });
+  return cmds;
+}
+
+/* ExtendScript that builds the rig and hands back a per-command verdict.
+ * Failures are NAMED (tool + error), never swallowed: a rig that half
+ * built itself would fail the step for a reason that is not the model's,
+ * which is the exact class of lie this whole pass is about. */
+function rigScript(variant) {
+  const cmds = rigPlan(variant);
+  return "var out = AELL_callBatch(" +
+    JSON.stringify(JSON.stringify(cmds)) + ");" +
+    // AELL_callBatch answers {ok, data:{results:[...]}} — one envelope
+    // around the per-command results, not the bare array.
+    "var res = AELLJSON.parse(out);" +
+    "var plan = " + JSON.stringify(cmds.map(c => c.tool)) + ";" +
+    "if (!res || !res.ok) {" +
+    "  return { built: 0, failed: ['callBatch: ' +" +
+    "    ((res && res.error) || 'no answer')] };" +
+    "}" +
+    "var rows = (res.data && res.data.results) || [];" +
+    "var bad = [];" +
+    "for (var i = 0; i < plan.length; i++) {" +
+    "  var r = rows[i];" +
+    "  if (!r || !r.ok) {" +
+    "    bad.push(plan[i] + ': ' + ((r && r.error) || 'no result'));" +
+    "  }" +
+    "}" +
+    "return { built: plan.length, failed: bad };";
+}
+
+/* Everything a rig promised and did not deliver, in words — one list per
+ * variant. Pure, so `--rig-check` can run it against the REAL comp and
+ * tests/test-chat-probe.js can run it against a synthetic state with no
+ * AE at all: a fixture that quietly stops being built is a step failing
+ * every night for a reason that is not the model's. */
+function rigProblems(variant, state) {
+  const bad = [];
+  const fail = m => bad.push(m);
+  if (!state || !state.found) { fail("no comp called " + COMP); return bad; }
+  if (state.width !== 1920 || state.height !== 1080 ||
+      Math.abs(state.duration - 6) > 0.05 ||
+      Math.abs(state.frameRate - 30) > 0.01) {
+    fail("comp is " + state.width + "x" + state.height + ", " +
+         state.duration + "s at " + state.frameRate);
+  }
+  if (variant === "icons") {
+    const ic = iconLayers(state);
+    if (ic.length !== RIG_ICONS) {
+      fail(ic.length + " icon layers, wanted " + RIG_ICONS);
+    }
+    // The whole point of this rig is what it does NOT have. Every
+    // assertion below is an absence, and each one is a step's fixture:
+    // a scattered start (A1), un-driven scale (A2), no fade (B1), no
+    // animator (C1), a small white headline (C2), no effect anywhere
+    // (E1/E2).
+    const xs = distinct(ic.map(l => l.position && l.position[0]), 4);
+    const ys = distinct(ic.map(l => l.position && l.position[1]), 4);
+    if (xs.length !== ic.length || ys.length !== ic.length) {
+      fail("the icons already line up (" + xs.length + " distinct x, " +
+           ys.length + " distinct y of " + ic.length +
+           ") — the grid step would have nothing to prove");
+    }
+    const rigged = ic.filter(l =>
+      l.expressions && Object.keys(l.expressions).length);
+    if (rigged.length) {
+      fail(rigged.length + " icon(s) already carry an expression: " +
+           rigged.map(l => l.name).join(", "));
+    }
+    const keyed = ic.filter(l => l.opacityKeys);
+    if (keyed.length) {
+      fail(keyed.length + " icon(s) are already animated: " +
+           keyed.map(l => l.name).join(", "));
+    }
+    const fx = state.layers.filter(l => l.effects);
+    if (fx.length) {
+      fail(fx.length + " layer(s) already carry an effect: " +
+           fx.map(l => l.name).join(", "));
+    }
+    const bg = bgLayer(state);
+    if (!bg) fail("no " + ICON_BG + " layer");
+    else {
+      if (bg.layerWidth !== state.width || bg.layerHeight !== state.height) {
+        fail(ICON_BG + " is " + bg.layerWidth + "x" + bg.layerHeight +
+             ", wanted the full frame");
+      }
+      // 'everything except the background' is only a real exception when
+      // the background is at the BOTTOM of the stack, where a background
+      // belongs — index 1 is the top in AE.
+      const under = state.layers.filter(l => l.index > bg.index);
+      if (under.length) {
+        fail(ICON_BG + " is at index " + bg.index + ", above " +
+             under.map(l => l.name).join(", ") +
+             " — it must be the bottom layer");
+      }
+    }
+    const h = headline(state);
+    if (!h) fail("no " + ICON_TEXT + " layer");
+    else {
+      if (h.fontSize !== null && Math.abs(h.fontSize - ICON_FONT_SIZE) > 1) {
+        fail(ICON_TEXT + " is " + h.fontSize + "px, wanted " +
+             ICON_FONT_SIZE);
+      }
+      if (h.fillColor && !(h.fillColor[0] > 0.8 && h.fillColor[2] > 0.8)) {
+        fail(ICON_TEXT + " is not white (" + h.fillColor.join(",") +
+             ") — 'make it brand blue' needs somewhere to travel from");
+      }
+      if (h.textAnimators) {
+        fail(ICON_TEXT + " already has " + h.textAnimators +
+             " text animator(s)");
+      }
+    }
+    if (state.layers.some(l => l.parent)) {
+      fail("a layer is already parented");
+    }
+    return bad;
+  }
+  const sq = nineSquares(state);
+  if (sq.length !== 9) fail(sq.length + " squares, wanted 9");
+  const xs = distinct(sq.map(l => l.position && l.position[0]), 4);
+  const ys = distinct(sq.map(l => l.position && l.position[1]), 4);
+  if (xs.length !== 3 || ys.length !== 3) {
+    fail("the squares are not a 3x3 grid (" + xs.length + "x" +
+         ys.length + ")");
+  }
+  const keyed = sq.filter(l => l.opacityKeys >= 2);
+  if (keyed.length !== sq.length) {
+    fail(keyed.length + " of " + sq.length + " squares carry a fade");
+  }
+  if (sq.some(l => (l.opacityKeyEased || []).some(Boolean))) {
+    fail("a square's fade is already eased — the ease step would have " +
+         "nothing to prove");
+  }
+  if (state.layers.some(l => /CTRL/i.test(l.name))) {
+    fail("a rig controller layer got into the comp");
+  }
+  const t = textLayer(state);
+  if (!t) fail("no HELLO layer");
+  else {
+    if (t.masks !== 1) fail("HELLO has " + t.masks + " mask(s)");
+    if (t.maskRound && t.maskRound[0] !== true) {
+      fail("HELLO's mask is not an oval (round=" + t.maskRound[0] + ")");
+    }
+    if (t.maskFeather && Math.abs(t.maskFeather[0] - 20) > 0.5) {
+      fail("HELLO's mask feather is " + t.maskFeather[0]);
+    }
+    if (t.fontSize !== null && Math.abs(t.fontSize - 120) > 1) {
+      fail("HELLO is " + t.fontSize + "px, wanted 120");
+    }
+    if (t.anchorPoint && t.anchorPoint[0] === undefined) {
+      fail("HELLO has no readable anchor point");
+    }
+  }
+  const rigN = rigNull(state);
+  if (!rigN) fail("no Rig null");
+  else {
+    if (Math.abs((rigN.rotation || 0) - 15) > 0.5) {
+      fail("the Rig null is rotated " + rigN.rotation);
+    }
+    const kids = state.layers.filter(l => l.parent === rigN.name);
+    if (kids.length !== 9) {
+      fail(kids.length + " layers are parented to the Rig null");
+    }
+  }
+  const b = betaLayer(state);
+  if (!b) fail("no Beta layer");
+  else {
+    if (b.layerWidth !== 100 || b.layerHeight !== 100) {
+      fail("Beta is " + b.layerWidth + "x" + b.layerHeight);
+    }
+    if (b.effects) fail("Beta already carries an effect");
+    if (b.masks) fail("Beta already carries a mask");
+    if (t && !(b.index < t.index)) {
+      fail("Beta is at index " + b.index + " and HELLO at " + t.index +
+           " — Beta must start ABOVE the text");
+    }
+  }
+  return bad;
+}
+
 /* One compact string that changes whenever anything the user would SEE in
  * the probe comp changes. Used to answer "did one Ctrl+Z put it back?" —
  * comparing the whole READ_COMP JSON would work too, but this runs inside
@@ -919,6 +1414,26 @@ function rigNull(state) {
 function nineSquares(state) {
   return squares(state).filter(l => !/^Beta/i.test(l.name));
 }
+/* The icon rig's layers, by NAME rather than by kind: grid_layout adds a
+ * 'GRID CTRL' solid and add_control usually a null, so "every solid that
+ * is not the background" would grow the roster mid-verdict and score the
+ * model's own controller as an icon it failed to move. */
+function iconLayers(state) {
+  return state.layers.filter(l => /^Icon \d+$/i.test(l.name));
+}
+function bgLayer(state) {
+  return state.layers.filter(l => l.name === ICON_BG)[0] || null;
+}
+function headline(state) {
+  const t = state.layers.filter(l => l.isText);
+  return t.filter(l => /HEADLINE/i.test(l.name || ""))[0] || t[0] || null;
+}
+/* An effect roster read by NAME. AE's display names vary by locale and
+ * by which blur the model reached for ('Gaussian Blur', 'Fast Box Blur',
+ * 'Camera Lens Blur'), so the verdicts match a word, not a match name. */
+function hasEffect(layer, re) {
+  return (layer && (layer.effectNames || []).some(n => re.test(n))) || false;
+}
 function calls(ctx, name) {
   return (ctx.tools || []).filter(t => t.tool === name);
 }
@@ -927,8 +1442,214 @@ function ranInstead(ctx) {
   return tried.length ? " — it ran " + tried.join(", ") + " instead"
                       : " and ran no tools at all";
 }
-/* AE's TrackMatteType.NO_TRACK_MATTE is 5013; a fresh layer reads 0. */
-function hasMatte(m) { return !!m && m !== 5013; }
+/* Measured in AE 2026, and the constant this used to carry was wrong in
+ * BOTH directions: TrackMatteType is NO_TRACK_MATTE 5012, ALPHA 5013,
+ * ALPHA_INVERTED 5014, LUMA 5015, LUMA_INVERTED 5016, and an unmatted
+ * layer reads 5012 — not 0. `m !== 5013` therefore called every UNMATTED
+ * layer matted (a false pass) and every alpha-matted one bare (a false
+ * fail). And even the corrected type is not an existence test:
+ * removeTrackMatte() clears trackMatteLayer but LEAVES trackMatteType at
+ * the type it removed. The matte LAYER is the only honest read. */
+function hasMatte(row) {
+  if (!row) return false;
+  if (row.matteLayerKnown) return !!row.matteLayer;
+  // Legacy AE (< 23) has no trackMatteLayer to read — and there the type
+  // IS an existence test, because that AE has no removeTrackMatte to
+  // leave it stale behind a matte that is gone.
+  return row.matte >= 5013 && row.matte <= 5016;
+}
+
+/* ------------------------------------------------ the paraphrase matrix
+ *
+ * What separates a harmless miss from a harmful one is whether anything
+ * in the comp MOVED. The run already holds the comp as it was before the
+ * sentence and as it is after (both full READ_COMP reads), so the answer
+ * costs no extra trip to AE — and unlike SIG_FN, READ_COMP can see the
+ * changes that leave the layer list alone: an expression, an eased key, a
+ * recoloured fill, a mask's shape.
+ *
+ * A WHITELIST of fields, not a deep compare: sourceRect drifts with a
+ * font substitution and opacityKeyTimes with a rounding, and a phantom
+ * diff would report harm that never happened. Everything here is
+ * something a tool had to do on purpose.
+ */
+const DIFF_NUM = {
+  rotation: 0.01, opacity: 0.01, inPoint: 0.001, startTime: 0.001,
+  fontSize: 0.01
+};
+const DIFF_PLAIN = ["parent", "masks", "effects", "opacityKeys", "text",
+                    "matteLayer", "isPrecomp", "textAnimators", "index",
+                    "matte"];
+const DIFF_VEC = ["position", "scale", "anchorPoint", "solidColor",
+                  "fillColor"];
+const DIFF_LIST = ["effectNames", "maskModes", "maskInverted", "maskRound",
+                   "maskFeather", "maskBoxes", "opacityKeyEased"];
+
+function sameVec(a, b, tol) {
+  if (!(a instanceof Array) || !(b instanceof Array)) return a === b;
+  if (a.length !== b.length) return false;
+  return a.every((v, i) => typeof v === "number" && typeof b[i] === "number"
+    ? Math.abs(v - b[i]) <= (tol || 0.01) : v === b[i]);
+}
+function short(v) {
+  if (v === null || v === undefined) return "none";
+  if (v instanceof Array) return "[" + v.map(x =>
+    typeof x === "number" ? Math.round(x * 100) / 100 : x).join(",") + "]";
+  if (typeof v === "object") return JSON.stringify(v).slice(0, 80);
+  if (typeof v === "number") return String(Math.round(v * 100) / 100);
+  return String(v);
+}
+
+/**
+ * Every difference between two READ_COMP states, in words. Empty array
+ * means the sentence left the comp exactly as it found it.
+ *
+ * Layers are matched by NAME, so a rename reads as one layer gone and
+ * another arrived — which is what it is, for a user looking at the
+ * timeline.
+ */
+function compDiff(before, after) {
+  const out = [];
+  if (!before || !after) return out;
+  if (!before.found || !after.found) {
+    if (before.found !== after.found) {
+      out.push(after.found ? "the comp was created" : "THE COMP IS GONE");
+    }
+    return out;
+  }
+  for (const f of ["width", "height", "duration", "frameRate"]) {
+    if (Math.abs((before[f] || 0) - (after[f] || 0)) > 0.001) {
+      out.push("comp " + f + " " + short(before[f]) + " -> " + short(after[f]));
+    }
+  }
+  const wasL = before.layers || [], nowL = after.layers || [];
+  const byName = list => {
+    const m = {};
+    for (const l of list) m[l.name] = m[l.name] || l;
+    return m;
+  };
+  const w = byName(wasL), n = byName(nowL);
+  for (const name of Object.keys(n)) {
+    if (!w[name]) out.push("layer added: " + name);
+  }
+  for (const name of Object.keys(w)) {
+    if (!n[name]) out.push("layer removed: " + name);
+  }
+  for (const name of Object.keys(w)) {
+    if (!n[name]) continue;
+    const a = w[name], b = n[name];
+    const note = m => out.push(name + ": " + m);
+    for (const f of DIFF_PLAIN) {
+      if (a[f] !== b[f]) note(f + " " + short(a[f]) + " -> " + short(b[f]));
+    }
+    for (const f of Object.keys(DIFF_NUM)) {
+      const x = a[f], y = b[f];
+      if (typeof x === "number" && typeof y === "number") {
+        if (Math.abs(x - y) > DIFF_NUM[f]) {
+          note(f + " " + short(x) + " -> " + short(y));
+        }
+      } else if (x !== y) {
+        note(f + " " + short(x) + " -> " + short(y));
+      }
+    }
+    for (const f of DIFF_VEC) {
+      if (!sameVec(a[f], b[f], f === "solidColor" || f === "fillColor"
+        ? 0.004 : 0.01)) {
+        note(f + " " + short(a[f]) + " -> " + short(b[f]));
+      }
+    }
+    for (const f of DIFF_LIST) {
+      if (JSON.stringify(a[f] || []) !== JSON.stringify(b[f] || [])) {
+        note(f + " " + short(a[f] || []) + " -> " + short(b[f] || []));
+      }
+    }
+    const ax = a.expressions || {}, bx = b.expressions || {};
+    for (const k of Object.keys(bx)) {
+      if (ax[k] !== bx[k]) {
+        note((ax[k] ? "expression on " + k + " changed" : "expression added " +
+              "to " + k) + ": " + String(bx[k]).slice(0, 60));
+      }
+    }
+    for (const k of Object.keys(ax)) {
+      if (!(k in bx)) note("expression removed from " + k);
+    }
+  }
+  return out;
+}
+
+/**
+ * The three-way verdict a paraphrase gets. See the header for why "did
+ * anything change" is the line between a miss and harm.
+ *
+ * `changes` is compDiff's output. A rolled-back round leaves the comp
+ * untouched and therefore lands in `miss` by construction, which is
+ * right: nothing was applied, so nothing can have been applied wrongly.
+ */
+function gradeRun(verdict, changes) {
+  if (!verdict) return "pass";
+  return (changes && changes.length) ? "harm" : "miss";
+}
+
+/**
+ * The runs one --steps selection expands to. Without --variants that is
+ * one run per step, unchanged; with it, the canonical sentence followed
+ * by every paraphrase the step declares.
+ *
+ * A `carry` step is never given variants and never takes them: its
+ * sentence is a pronoun, and rephrasing it without rephrasing the turn it
+ * points at measures nothing.
+ */
+function variantRuns(indexes, withVariants) {
+  const runs = [];
+  for (const idx of indexes) {
+    const step = STEPS[idx];
+    runs.push({ index: idx, step: step, say: step.say, phrasing: "canonical" });
+    if (!withVariants || step.carry) continue;
+    for (const v of step.variants || []) {
+      runs.push({ index: idx, step: step, say: v.say, phrasing: v.kind });
+    }
+  }
+  return runs;
+}
+
+/**
+ * The acceptance gate, as the workplan states it: no run may do harm, no
+ * canonical may fail, and a step whose canonical passes may miss on at
+ * most ONE of its paraphrases. Two misses out of three phrasings is not
+ * a fluke — it is a tool that needs magic words.
+ */
+function gradeMatrix(rows) {
+  const byStep = {};
+  for (const r of rows) {
+    const k = String(r.index);
+    byStep[k] = byStep[k] || { title: r.title, canonical: null, variants: [] };
+    if (r.phrasing === "canonical") byStep[k].canonical = r;
+    else byStep[k].variants.push(r);
+  }
+  const problems = [];
+  for (const r of rows) {
+    if (r.grade === "harm") {
+      problems.push("HARM — " + r.title + " [" + r.phrasing + "] \"" +
+                    r.say + "\": " + r.verdict);
+    }
+  }
+  for (const k of Object.keys(byStep)) {
+    const g = byStep[k];
+    if (g.canonical && g.canonical.grade !== "pass") {
+      problems.push("the CANONICAL sentence failed for " + g.title +
+                    ": " + g.canonical.verdict);
+    }
+    if (!g.canonical || g.canonical.grade !== "pass") continue;
+    const missed = g.variants.filter(v => v.grade !== "pass");
+    if (missed.length > 1) {
+      problems.push(missed.length + " of " + g.variants.length +
+                    " paraphrases missed where the canonical passed — " +
+                    g.title + " needs magic words (" +
+                    missed.map(v => v.phrasing).join(", ") + ")");
+    }
+  }
+  return problems;
+}
 
 const STEPS = [
   {
@@ -1008,14 +1729,50 @@ const STEPS = [
     }
   },
   {
+    // The sentence asks for four things and the check used to read one
+    // of them (does SOME text layer say HELLO). A 12px black HELLO at
+    // the bottom of the frame scored a pass — wrong-but-present, the
+    // failure class the 2026-08-30 audit named in steps 4, 5 and 6.
     title: "text layer",
     say: "Add a text layer to Probe Room that says HELLO, white, 120 " +
          "pixels, near the top of the frame.",
-    check(state) {
-      const t = state.layers.filter(l => l.isText);
-      if (!t.length) return "no text layer in the comp";
-      if (!t.some(l => /HELLO/i.test(l.text || ""))) {
-        return "text layers say " + JSON.stringify(t.map(l => l.text));
+    check(state, ctx) {
+      const all = state.layers.filter(l => l.isText);
+      if (!all.length) return "no text layer in the comp";
+      const t = all.filter(l => /HELLO/i.test(l.text || ""))[0];
+      if (!t) {
+        return "text layers say " + JSON.stringify(all.map(l => l.text));
+      }
+      const was = ctx && ctx.before
+        ? ctx.before.layers.filter(l => l.isText).length : null;
+      if (was !== null && all.length > was + 1) {
+        return (all.length - was) + " text layers were added for one " +
+               "sentence: " + JSON.stringify(all.map(l => l.name));
+      }
+      // 120 pixels. Read in its own right rather than inferred from the
+      // rendered rect, which a long word or a tracking change also moves.
+      if (typeof t.fontSize === "number" && Math.abs(t.fontSize - 120) > 6) {
+        return "HELLO is " + t.fontSize + "px, wanted 120";
+      }
+      // White. AE's default text fill is BLACK, so a model that never
+      // passed a colour through leaves [0,0,0] — the exact miss a
+      // "there is a text layer" check cannot see.
+      const c = t.fillColor;
+      if (c && !(c[0] > 0.85 && c[1] > 0.85 && c[2] > 0.85)) {
+        return "HELLO's fill is [" + c.map(v => v.toFixed(2)).join(", ") +
+               "], wanted white" +
+               (c[0] < 0.15 && c[1] < 0.15 && c[2] < 0.15
+                 ? " — that is AE's default black, so no colour was set"
+                 : "");
+      }
+      // Near the top: above the middle of the frame. Deliberately loose
+      // about HOW near — "near the top" is not a number — and strict
+      // about the half it is in, which is the half the sentence means.
+      const y = t.position && t.position[1];
+      if (typeof y === "number" && y > state.height / 2) {
+        return "HELLO sits at y " + Math.round(y) + " in a " +
+               state.height + "px comp — that is the bottom half, not " +
+               "near the top";
       }
       return null;
     }
@@ -1023,10 +1780,41 @@ const STEPS = [
   {
     title: "mask",
     say: "Put an oval mask on the HELLO layer and feather it 20 pixels.",
-    check(state) {
-      const t = state.layers.filter(l => l.isText);
-      if (!t.length) return "the HELLO layer is gone";
-      if (!t.some(l => l.masks > 0)) return "the text layer has no masks";
+    check(state, ctx) {
+      const t = textLayer(state);
+      if (!t) return "the HELLO layer is gone";
+      const was = ctx && ctx.before ? textLayer(ctx.before) : null;
+      const had = was ? was.masks : 0;
+      if (t.masks <= had) {
+        // A mask on the WRONG layer is the wrong-but-present case: the
+        // comp gained a mask, and nothing the sentence named did.
+        const elsewhere = state.layers.filter(l =>
+          !l.isText && l.masks > 0 &&
+          (!ctx || !ctx.before ||
+           l.masks > ((ctx.before.layers.filter(x => x.name === l.name)[0]
+             || {}).masks || 0)));
+        return "HELLO has " + t.masks + " mask(s)" +
+               (had ? ", the same as before the sentence" : "") +
+               (elsewhere.length
+                 ? " — the mask landed on " +
+                   elsewhere.map(l => l.name).join(", ") + " instead"
+                 : "");
+      }
+      const made = t.masks - had;
+      if (made > 1) return made + " masks were added for one oval";
+      const round = (t.maskRound || [])[t.masks - 1];
+      // An ellipse mask and a rectangle mask have the same bounding box;
+      // only the bezier tangents tell them apart (see READ_COMP). null
+      // means the shape could not be read, which is not a failure of the
+      // model — say so rather than scoring it either way.
+      if (round === false) {
+        return "the new mask on HELLO is a rectangle, not an oval";
+      }
+      const f = (t.maskFeather || [])[t.masks - 1];
+      if (typeof f === "number" && Math.abs(f - 20) > 1) {
+        return "the mask's feather is " + f + "px, wanted 20" +
+               (f === 0 ? " — it was never feathered at all" : "");
+      }
       return null;
     }
   },
@@ -1034,12 +1822,51 @@ const STEPS = [
     title: "track matte",
     say: "Add a white ellipse shape layer above the top square and use it " +
          "as an alpha track matte for that square.",
-    check(state) {
-      if (!state.layers.some(l => l.isShape)) {
-        return "no shape layer was created";
+    check(state, ctx) {
+      // The premise first, the way the later steps report a fixture that
+      // never landed. Measured 2026-09-02: when the grid step's round
+      // rolled back, the comp held no squares, the model matted HELLO
+      // instead — and blaming it for that reads as a routing failure it
+      // did not commit.
+      if (!nineSquares(state).length) {
+        return "there are no squares in " + COMP + " (the grid step must " +
+               "have failed), so there was nothing to matte";
       }
-      const matted = state.layers.filter(l => l.matte && l.matte !== 5013);
+      const shapes = state.layers.filter(l => l.isShape);
+      if (!shapes.length) return "no shape layer was created";
+      const wasShapes = ctx && ctx.before
+        ? ctx.before.layers.filter(l => l.isShape).length : null;
+      if (wasShapes !== null && shapes.length <= wasShapes) {
+        return "there were already " + wasShapes + " shape layer(s) and " +
+               "no new one was added";
+      }
+      const matted = state.layers.filter(hasMatte);
       if (!matted.length) return "no layer has a track matte set";
+      // The half that was never checked: WHICH layer is matted, and BY
+      // what. "A shape layer exists" and "something somewhere has a
+      // matte" both passed while the shape matted nothing.
+      const square = matted.filter(l => nineSquares(state)
+        .some(s => s.name === l.name))[0];
+      if (!square) {
+        return "the matte is on " + matted.map(l => l.name).join(", ") +
+               " — the sentence mattes a SQUARE";
+      }
+      if (square.matteLayerKnown &&
+          !shapes.some(s => s.name === square.matteLayer)) {
+        return square.name + " is matted by " +
+               (square.matteLayer || "nothing readable") +
+               ", not by the new shape layer (" +
+               shapes.map(s => s.name).join(", ") + ")";
+      }
+      // ALPHA is 5013; 5014 is ALPHA INVERTED, which hides exactly the
+      // part the sentence asks to keep.
+      if (typeof square.matte === "number" && square.matte >= 5012 &&
+          square.matte !== 5013) {
+        const word = { 5014: "alpha inverted", 5015: "luma",
+                       5016: "luma inverted" }[square.matte] ||
+                     String(square.matte);
+        return square.name + "'s matte is " + word + ", not alpha";
+      }
       return null;
     }
   },
@@ -1096,6 +1923,10 @@ const STEPS = [
     // singular), and "instead" only means anything if the model knows
     // they are currently red. Nothing here names a layer.
     title: "a second turn that refers back",
+    // The ONE step that must keep the previous turn's history — the
+    // whole point of it is the pronoun. Every other step names what it
+    // is talking about, so every other step starts a fresh conversation.
+    carry: true,
     say: "Make them blue instead.",
     check(state, ctx) {
       const sq = squares(state);
@@ -1461,8 +2292,16 @@ const STEPS = [
     // inPoint/outPoint/startTime (seconds).") and no rule at all.
     // 'delay' is deliberately NOT in the rule's phrase list.
     title: "push a layer back on the timeline",
+    fromRig: true,
     tool: "set_layer_timing",
     say: "Beta shouldn't show up until two seconds in — delay it.",
+    variants: [
+      { kind: "casual", say: "hold Beta off till the 2 second mark" },
+      { kind: "vague",
+        say: "Beta comes in way too early — nothing from it before 2s." },
+      { kind: "typo",
+        say: "cna you make beta not appera until 2 secodns in" }
+    ],
     check(state, ctx) {
       const b = betaLayer(state);
       if (!b) return "the Beta layer is gone";
@@ -1487,8 +2326,15 @@ const STEPS = [
   },
   {
     title: "attach a layer to a null",
+    fromRig: true,
     tool: "set_layer_parent",
     say: "Make Beta tag along with the Rig null wherever it goes.",
+    variants: [
+      { kind: "casual", say: "glue Beta onto the Rig null" },
+      { kind: "vague",
+        say: "when the Rig null moves, Beta should move with it" },
+      { kind: "typo", say: "parnet Beta to teh Rig null pls" }
+    ],
     check(state) {
       const b = betaLayer(state);
       if (!b) return "the Beta layer is gone";
@@ -1510,8 +2356,15 @@ const STEPS = [
   },
   {
     title: "smooth a mechanical fade",
+    fromRig: true,
     tool: "apply_keyframe_ease",
     say: "The squares fade in too mechanically — make it feel smoother.",
+    variants: [
+      { kind: "casual",
+        say: "the squares pop in dead flat — give that fade some finesse" },
+      { kind: "vague", say: "the squares' entrance feels cheap, fix it" },
+      { kind: "typo", say: "the sqaures fade is to stiff, ease it plz" }
+    ],
     check(state, ctx) {
       const sq = nineSquares(state);
       const animated = sq.filter(l => l.opacityKeys >= 2);
@@ -1551,9 +2404,19 @@ const STEPS = [
     // rendered rect — and the layer NOT jumping, which is what a raw
     // set_transform {anchorPoint} guess does.
     title: "fix a text layer's pivot",
+    fromRig: true,
     tool: "center_anchor_point",
     say: "HELLO swings around its corner when it rotates — make it turn " +
          "about its own centre.",
+    variants: [
+      { kind: "casual",
+        say: "HELLO's pivot is in the wrong spot — put it in the middle " +
+             "of the letters" },
+      { kind: "vague",
+        say: "when I rotate HELLO it arcs away instead of spinning on " +
+             "the spot" },
+      { kind: "typo", say: "cetner the ancor point on HELLO" }
+    ],
     check(state, ctx) {
       const t = textLayer(state);
       if (!t) return "the HELLO layer is gone";
@@ -1586,8 +2449,14 @@ const STEPS = [
   },
   {
     title: "hide half a layer with a mask",
+    fromRig: true,
     tool: "add_mask",
     say: "Chop off the lower half of Beta so only the top shows.",
+    variants: [
+      { kind: "casual", say: "I only want to see the top half of Beta" },
+      { kind: "vague", say: "Beta's bottom half shouldn't be visible" },
+      { kind: "typo", say: "mask ouf the bottm half of Beta" }
+    ],
     check(state, ctx) {
       const b = betaLayer(state);
       if (!b) return "the Beta layer is gone";
@@ -1634,8 +2503,14 @@ const STEPS = [
   },
   {
     title: "take a mask off again",
+    fromRig: true,
     tool: "delete_mask",
     say: "Lose the oval mask on HELLO — it's not needed any more.",
+    variants: [
+      { kind: "casual", say: "get that oval off HELLO, I don't want it" },
+      { kind: "vague", say: "HELLO shouldn't be masked at all any more" },
+      { kind: "typo", say: "delet the msak on HELLO" }
+    ],
     check(state, ctx) {
       const t = textLayer(state);
       if (!t) {
@@ -1657,9 +2532,17 @@ const STEPS = [
   },
   {
     title: "un-animate the squares",
+    fromRig: true,
     tool: "remove_keyframes",
     say: "The squares shouldn't fade in any more — just have them there " +
          "from the start.",
+    variants: [
+      { kind: "casual",
+        say: "kill the fade on the squares, I want them solid the whole " +
+             "time" },
+      { kind: "vague", say: "the squares are animating and they shouldn't be" },
+      { kind: "typo", say: "remvoe the opacity keyfarmes form the squares" }
+    ],
     check(state, ctx) {
       const sq = nineSquares(state);
       if (!sq.length) return "no squares in the comp";
@@ -1694,8 +2577,14 @@ const STEPS = [
     // 'preset'. The receipt is what proves the route: an improvised
     // Glow + Drop Shadow also changes the layer.
     title: "give a layer a finished look",
+    fromRig: true,
     tool: "apply_preset",
     say: "Dress HELLO up a bit — it looks too plain.",
+    variants: [
+      { kind: "casual", say: "HELLO's boring — give it some polish" },
+      { kind: "vague", say: "can you make HELLO look nicer?" },
+      { kind: "typo", say: "make HELLO look les plain, aply somethign to it" }
+    ],
     check(state, ctx) {
       const t = textLayer(state);
       if (!t) return "the HELLO layer is gone";
@@ -1730,8 +2619,15 @@ const STEPS = [
   },
   {
     title: "keep a layer drifting",
+    fromRig: true,
     tool: "apply_expression_preset",
     say: "Give Beta a lazy, floaty hover so it never sits completely still.",
+    variants: [
+      { kind: "casual",
+        say: "Beta shouldn't be dead still — give it a slow idle wander" },
+      { kind: "vague", say: "Beta feels frozen, make it breathe a little" },
+      { kind: "typo", say: "put a slow wigle on beta so it keeps moviing" }
+    ],
     check(state, ctx) {
       const b = betaLayer(state);
       if (!b) return "the Beta layer is gone";
@@ -1763,8 +2659,14 @@ const STEPS = [
     // relayed to the user — the branch below that reads the expression
     // runs the day someone drops an audio layer into the rig.
     title: "sync a layer to the music",
+    fromRig: true,
     tool: "audio_to_keyframes",
     say: "Make Beta throb in time with the music.",
+    variants: [
+      { kind: "casual", say: "have Beta pulse along with the audio" },
+      { kind: "vague", say: "Beta should react to the soundtrack" },
+      { kind: "typo", say: "make beta bonuce to the muisc" }
+    ],
     check(state, ctx) {
       const a2k = calls(ctx, "audio_to_keyframes");
       if (!a2k.length) {
@@ -1823,8 +2725,19 @@ const STEPS = [
     // somewhere else — and move every other layer with it, which is the
     // half a naive "is Beta under HELLO now?" check never sees.
     title: "tuck one layer under another",
+    fromRig: true,
     tool: "reorder_layers",
     say: "Beta is covering HELLO — tuck it in underneath the text.",
+    // Every phrasing names BETA as the thing that moves. "HELLO is
+    // hidden, I need to see the text" would also be solved by lifting
+    // HELLO — and the check's sort detector reads that as every other
+    // layer changing places, which would fail a legitimate answer.
+    variants: [
+      { kind: "casual", say: "shove Beta below HELLO in the stack" },
+      { kind: "vague",
+        say: "Beta needs to sit behind the text, not in front of it" },
+      { kind: "typo", say: "put beta undeneath HELLO plz" }
+    ],
     check(state, ctx) {
       const b = betaLayer(state), t = textLayer(state);
       if (!b) return "the Beta layer is gone";
@@ -1865,10 +2778,17 @@ const STEPS = [
     // undone in step 10), so the blur is planted through the bridge
     // before the sentence — see runPrepare.
     title: "take an effect off a layer",
+    fromRig: true,
     tool: "remove_effect",
     prepare: "AELL_call(\"apply_effect\", " + JSON.stringify(JSON.stringify(
       { comp: COMP, layer: "Beta", effect: "Gaussian Blur" })) + ")",
     say: "Beta doesn't need that blur any more — strip it off.",
+    variants: [
+      { kind: "casual",
+        say: "Beta shouldn't be soft any more, drop the effect on it" },
+      { kind: "vague", say: "Beta is too fuzzy — it should be sharp again" },
+      { kind: "typo", say: "remvoe the gaussain blur form Beta" }
+    ],
     check(state, ctx) {
       const b = betaLayer(state);
       if (!b) {
@@ -1897,15 +2817,22 @@ const STEPS = [
   },
   {
     title: "show one layer through another",
+    fromRig: true,
     tool: "set_track_matte",
     say: "I want Beta to show only through the HELLO letters.",
+    variants: [
+      { kind: "casual", say: "use HELLO as a stencil for Beta" },
+      { kind: "vague",
+        say: "Beta should appear in the shape of the word HELLO" },
+      { kind: "typo", say: "matte beta wiht the HELLO text" }
+    ],
     check(state, ctx) {
       const b = betaLayer(state), t = textLayer(state);
       if (!b) return "the Beta layer is gone";
       if (!t) return "the HELLO layer is gone";
-      if (!hasMatte(b.matte)) {
+      if (!hasMatte(b)) {
         const t0 = ctx.before ? textLayer(ctx.before) : null;
-        if (hasMatte(t.matte) && !(t0 && hasMatte(t0.matte))) {
+        if (hasMatte(t) && !(t0 && hasMatte(t0))) {
           return "it is backwards — HELLO got matted" +
                  (t.matteLayer ? " by " + t.matteLayer : "") + " and Beta " +
                  "is untouched; 'layer' is the thing being cut, " +
@@ -1926,8 +2853,18 @@ const STEPS = [
   },
   {
     title: "package layers into a precomp",
+    fromRig: true,
     tool: "precompose",
     say: "Bundle the nine blue squares into a single layer called Squares.",
+    variants: [
+      { kind: "casual",
+        say: "throw the nine blue squares into their own comp and call " +
+             "it Squares" },
+      { kind: "vague",
+        say: "the nine blue squares should all live inside one thing " +
+             "named Squares" },
+      { kind: "typo", say: "precomp the nine blue sqaures as Squares" }
+    ],
     check(state, ctx) {
       const pre = state.layers.filter(l => l.isPrecomp);
       // Exactly "Squares": AE auto-numbers a taken name, so "Squares 2"
@@ -1964,7 +2901,16 @@ const STEPS = [
     // non-sequitur). No tool is named here on purpose: the right answer
     // to an unnamed mess is a question.
     title: "clean up means the comp, not the project",
+    fromRig: true,
     say: "Probe Room is a mess now — clean it up.",
+    // The one step with no `tool`: the right answer to an unnamed mess is
+    // a question, and these three phrasings all leave it unnamed. A
+    // variant that DELETES here is the loudest harm the matrix can find.
+    variants: [
+      { kind: "casual", say: "Probe Room's got junk everywhere, tidy it" },
+      { kind: "vague", say: "sort out Probe Room for me" },
+      { kind: "typo", say: "clen up probe room its a mess" }
+    ],
     check(state, ctx) {
       if (!state.found) return "the comp is gone";
       const project = (ctx.tools || []).filter(c =>
@@ -1992,6 +2938,336 @@ const STEPS = [
       }
       return null;
     }
+  },
+  // ---------------------------------------------------------------------
+  // The A/B/C/E usefulness rows (docs/USEFULNESS-TESTS.md) that had no rig
+  // twin: A1 grid, A2 slider rig, B1 stagger, C1 typewriter, C2 text
+  // style, E1 blur, E2 for_each. Every one of them asks for something the
+  // FULL rig already has, so they start from the "icons" rig instead —
+  // six scattered squares over a background, nothing animated, nothing
+  // styled, nothing rigged. What the sentence asks for is exactly what
+  // the world lacks, which is the only way a pass means anything.
+  //
+  // Their sentences come from the usefulness table where it has one,
+  // adapted only to name the fixtures ("the icons", "the HEADLINE", "the
+  // background") — a probe that invents its own phrasing measures the
+  // phrasing.
+  {
+    title: "arrange scattered layers into a grid",
+    fromRig: "icons",
+    tool: "grid_layout",
+    say: "Arrange the icon layers into a grid with a bit of breathing " +
+         "room.",
+    variants: [
+      { kind: "casual", say: "line the Icon layers up in a neat 3 by 2 grid" },
+      { kind: "vague",
+        say: "the icons are scattered all over the place — put them in " +
+             "rows and columns" },
+      { kind: "typo", say: "arrnage teh icon layers into a gird plz" }
+    ],
+    check(state, ctx) {
+      const ic = iconLayers(state);
+      if (ic.length !== RIG_ICONS) {
+        return "there are " + ic.length + " icon layers, wanted " +
+               RIG_ICONS + " — a layout should not add or remove any";
+      }
+      const bg = bgLayer(state);
+      const wasBg = ctx.before ? bgLayer(ctx.before) : null;
+      if (bg && wasBg && bg.position && wasBg.position &&
+          Math.abs(bg.position[0] - wasBg.position[0]) +
+          Math.abs(bg.position[1] - wasBg.position[1]) > 1) {
+        return "the background moved to " + bg.position.slice(0, 2) +
+               " — it is not one of the icons";
+      }
+      // Two ways to be a grid, and both are honest: the positions
+      // themselves line up, or grid_layout's rig drives them. AE
+      // evaluates an expression before handing back .value, so the first
+      // test normally sees the second too — but a controller whose
+      // expression errors would read as un-moved, and naming that is
+      // more useful than "not a grid".
+      const xs = distinct(ic.map(l => l.position && l.position[0]), 4);
+      const ys = distinct(ic.map(l => l.position && l.position[1]), 4);
+      const rigged = ic.filter(l => l.expressions && l.expressions.position);
+      if (xs.length > 1 && ys.length > 1 &&
+          xs.length * ys.length === ic.length) {
+        return null;
+      }
+      if (rigged.length === ic.length) return null;
+      return "the icons sit at " + xs.length + " distinct x and " +
+             ys.length + " distinct y" +
+             (rigged.length ? " (" + rigged.length + " of " + ic.length +
+                              " carry a position expression)"
+                            : " and none carries a position expression") +
+             " — that is not a grid" + ranInstead(ctx);
+    }
+  },
+  {
+    title: "rig one slider to drive many layers",
+    fromRig: "icons",
+    tool: "link_property",
+    say: "Give me one slider that controls the size of all the icon " +
+         "layers.",
+    variants: [
+      { kind: "casual", say: "rig the Icon layers to a master scale control" },
+      { kind: "vague",
+        say: "I want to resize all six icons together from one place" },
+      { kind: "typo", say: "one slidder to contorl the icons scale plz" }
+    ],
+    check(state, ctx) {
+      const ic = iconLayers(state);
+      if (ic.length !== RIG_ICONS) {
+        return "there are " + ic.length + " icon layers, wanted " +
+               RIG_ICONS;
+      }
+      const linked = ic.filter(l => l.expressions && l.expressions.scale);
+      if (!linked.length) {
+        // Scaling them all by hand is the wrong answer even when every
+        // icon ends up the right size: nothing controls them afterwards.
+        const resized = ctx.before && ic.some(l => {
+          const w = iconLayers(ctx.before).filter(x => x.name === l.name)[0];
+          return w && l.scale && w.scale &&
+                 Math.abs(l.scale[0] - w.scale[0]) > 0.5;
+        });
+        return "no icon's scale is driven by an expression" +
+               (resized ? " — they were scaled directly instead, so no " +
+                          "control exists to drive them"
+                        : "") + ranInstead(ctx);
+      }
+      if (linked.length !== ic.length) {
+        return linked.length + " of " + ic.length + " icons are linked — " +
+               ic.filter(l => !(l.expressions && l.expressions.scale))
+                 .map(l => l.name).join(", ") + " still stand alone";
+      }
+      // One slider, not six. Every expression has to name the SAME
+      // control layer, or "one slider that controls all of them" is
+      // false however many expressions were written.
+      const owners = [];
+      for (const l of linked) {
+        const m = /layer\(\s*["']([^"']+)["']\s*\)/.exec(l.expressions.scale);
+        const who = m ? m[1] : "(no layer named)";
+        if (owners.indexOf(who) === -1) owners.push(who);
+      }
+      if (owners.length !== 1) {
+        return "the icons are driven from " + owners.length +
+               " different places (" + owners.join(", ") +
+               ") — the ask was ONE slider";
+      }
+      return null;
+    }
+  },
+  {
+    title: "cascade the entrances",
+    fromRig: "icons",
+    tool: "stagger_layers",
+    say: "Fade the icons in one after another, half a second apart.",
+    variants: [
+      { kind: "casual", say: "cascade the icons' entrances, 0.5s apart" },
+      { kind: "vague",
+        say: "the icons should arrive one by one, not all at once" },
+      { kind: "typo",
+        say: "fade teh icons in one aftre another haf a second apart" }
+    ],
+    check(state, ctx) {
+      const ic = iconLayers(state);
+      if (ic.length !== RIG_ICONS) {
+        return "there are " + ic.length + " icon layers, wanted " +
+               RIG_ICONS;
+      }
+      const faded = ic.filter(l => l.opacityKeys >= 2);
+      if (!faded.length) {
+        return "no icon has opacity keyframes — nothing fades in" +
+               ranInstead(ctx);
+      }
+      if (faded.length !== ic.length) {
+        return faded.length + " of " + ic.length + " icons fade in; " +
+               ic.filter(l => l.opacityKeys < 2).map(l => l.name)
+                 .join(", ") + " have no fade";
+      }
+      // Two honest ways to space them: the keys themselves sit at
+      // different times, or the LAYERS were retimed and carry the same
+      // fade. stagger_layers does the second, set_keyframes the first.
+      const byKey = ic.map(l => l.opacityKeyTimes[0]);
+      const byStart = ic.map(l => l.startTime);
+      for (const offs of [byKey, byStart]) {
+        const d = distinct(offs, 0.02);
+        if (d.length !== ic.length) continue;
+        const gaps = [];
+        for (let i = 1; i < d.length; i++) gaps.push(d[i] - d[i - 1]);
+        if (gaps.every(g => Math.abs(g - 0.5) <= 0.2)) return null;
+      }
+      const shown = distinct(byKey, 0.02);
+      return "the icons' fades start at " +
+             shown.map(t => t.toFixed(2)).join(", ") + "s (start times " +
+             distinct(byStart, 0.02).map(t => t.toFixed(2)).join(", ") +
+             ") — wanted six, half a second apart";
+    }
+  },
+  {
+    title: "type a title on letter by letter",
+    fromRig: "icons",
+    tool: "add_text_animator",
+    say: "Type the HEADLINE on letter by letter.",
+    variants: [
+      { kind: "casual", say: "give HEADLINE a typewriter effect" },
+      { kind: "vague",
+        say: "I want the headline's letters to appear one at a time" },
+      { kind: "typo", say: "typwriter on the HEADLINE layer pls" }
+    ],
+    check(state, ctx) {
+      const t = headline(state);
+      if (!t) return "the HEADLINE text layer is gone";
+      if (!t.textAnimators) {
+        // The two wrong turns worth telling apart: fading the WHOLE
+        // layer in (opacity keys on the transform) says "letter by
+        // letter" was never heard, and an expression on opacity is the
+        // same miss written differently.
+        if (t.opacityKeys >= 2) {
+          return "HEADLINE has " + t.opacityKeys + " opacity keyframes " +
+                 "and no text animator — the whole layer fades in " +
+                 "together, not letter by letter";
+        }
+        return "HEADLINE has no text animator" + ranInstead(ctx);
+      }
+      if (ctx.before && state.layers.length !== ctx.before.layers.length) {
+        return "the layer count went from " + ctx.before.layers.length +
+               " to " + state.layers.length +
+               " — a typewriter is a rig on the text, not a new layer";
+      }
+      return null;
+    }
+  },
+  {
+    title: "restyle a headline",
+    fromRig: "icons",
+    tool: "set_text_style",
+    say: "Make the HEADLINE bigger and brand blue (#1B4FFF).",
+    variants: [
+      { kind: "casual", say: "HEADLINE should be way bigger, in #1B4FFF" },
+      { kind: "vague",
+        say: "the headline is too small and too plain — make it pop in " +
+             "our blue" },
+      { kind: "typo", say: "mkae HEADLINE bigegr and blue #1B4FFF" }
+    ],
+    check(state, ctx) {
+      const t = headline(state);
+      if (!t) return "the HEADLINE text layer is gone";
+      const was = ctx.before ? headline(ctx.before) : null;
+      const wasSize = was && was.fontSize !== null ? was.fontSize
+                                                   : ICON_FONT_SIZE;
+      if (!(t.fontSize > wasSize + 1)) {
+        return "HEADLINE is still " + t.fontSize + "px (was " + wasSize +
+               ")" + ranInstead(ctx);
+      }
+      // #1B4FFF is [0.106, 0.310, 1.0]. Read loosely on purpose: the
+      // ask is "brand blue", and a model that rounds the hex or reaches
+      // for a Fill effect answered it. What must NOT pass is white,
+      // which is what it already was.
+      const blue = c => !!c && c[2] > 0.6 && c[2] - c[0] > 0.35 &&
+                        c[2] - c[1] > 0.25;
+      if (!blue(t.fillColor) && !(t.effectColors || []).some(blue)) {
+        return "HEADLINE is " + wasSize + " -> " + t.fontSize + "px but " +
+               "its fill is " +
+               (t.fillColor ? t.fillColor.map(v => v.toFixed(2)).join(",")
+                            : "unreadable") + ", not blue";
+      }
+      // "only the named layer" is half of what this row asks for.
+      const touched = iconLayers(state).filter(l => {
+        const w = ctx.before &&
+          iconLayers(ctx.before).filter(x => x.name === l.name)[0];
+        return w && l.scale && w.scale &&
+               Math.abs(l.scale[0] - w.scale[0]) > 0.5;
+      });
+      if (touched.length) {
+        return "the icons were resized too (" +
+               touched.map(l => l.name).join(", ") +
+               ") — only HEADLINE was named";
+      }
+      return null;
+    }
+  },
+  {
+    title: "soften the background",
+    fromRig: "icons",
+    tool: "apply_effect",
+    say: "Soften the background a touch.",
+    variants: [
+      { kind: "casual", say: "make the BG layer slightly blurry" },
+      { kind: "vague", say: "the background is too sharp behind the icons" },
+      { kind: "typo", say: "sofetn the backgrond layer a touch" }
+    ],
+    check(state, ctx) {
+      const bg = bgLayer(state);
+      if (!bg) return "the BG layer is gone";
+      const BLUR = /blur|defocus/i;
+      if (!hasEffect(bg, BLUR)) {
+        // The miss that looks like a hit: blurring the wrong layer, or
+        // dropping the background's opacity because "softer" was read
+        // as "fainter".
+        const elsewhere = state.layers.filter(l =>
+          l.name !== bg.name && hasEffect(l, BLUR)).map(l => l.name);
+        if (elsewhere.length) {
+          return "the blur landed on " + elsewhere.join(", ") +
+                 " instead of the background";
+        }
+        const wasBg = ctx.before ? bgLayer(ctx.before) : null;
+        if (wasBg && bg.opacity !== null && wasBg.opacity !== null &&
+            Math.abs(bg.opacity - wasBg.opacity) > 1) {
+          return "the background's opacity went " + wasBg.opacity + " -> " +
+                 bg.opacity + " — 'soften' is a blur, not a fade";
+        }
+        return "the background carries no blur (effects: " +
+               ((bg.effectNames || []).join(", ") || "none") + ")" +
+               ranInstead(ctx);
+      }
+      const spill = iconLayers(state).filter(l => hasEffect(l, BLUR));
+      if (spill.length) {
+        return "the icons were blurred too (" +
+               spill.map(l => l.name).join(", ") +
+               ") — only the background was named";
+      }
+      return null;
+    }
+  },
+  {
+    title: "an effect on everything except one layer",
+    fromRig: "icons",
+    tool: "for_each_layer",
+    say: "Put a drop shadow on everything except the background.",
+    variants: [
+      { kind: "casual", say: "drop shadow on every layer but the BG" },
+      { kind: "vague",
+        say: "everything should sit off the background a bit — shadow " +
+             "them, not it" },
+      { kind: "typo", say: "drop shaddow on everythign excpet the backgrond" }
+    ],
+    check(state, ctx) {
+      const bg = bgLayer(state);
+      if (!bg) return "the BG layer is gone";
+      const SHADOW = /shadow/i;
+      // The EXCEPT is the load-bearing half: an effect on all seven
+      // layers is the "wrong-target mutation claiming success" this
+      // matrix exists to catch, and it is worse than doing nothing.
+      if (hasEffect(bg, SHADOW)) {
+        return "the background got a drop shadow too — 'except the " +
+               "background' was the whole instruction";
+      }
+      const head = headline(state);
+      const want = iconLayers(state).concat(head ? [head] : []);
+      const missing = want.filter(l => !hasEffect(l, SHADOW));
+      if (missing.length === want.length) {
+        return "no layer carries a drop shadow" + ranInstead(ctx);
+      }
+      if (missing.length) {
+        return missing.length + " of " + want.length + " layers were " +
+               "skipped: " + missing.map(l => l.name).join(", ");
+      }
+      if (ctx.before && state.layers.length !== ctx.before.layers.length) {
+        return "the layer count went from " + ctx.before.layers.length +
+               " to " + state.layers.length +
+               " — an effect pass should not add or remove layers";
+      }
+      return null;
+    }
   }
 ];
 
@@ -2009,7 +3285,8 @@ function startModel(cb) {
   const modelPath = OPT.model || s.modelPath;
   console.log("-- model:   " + modelPath);
   console.log("-- ctx:     " + s.ctxSize + ", maxRounds " + s.maxRounds +
-              ", temp " + s.temperature);
+              ", temp " + s.temperature + ", tool docs " +
+              (Tools.promptModeFor(s.ctxSize).compact ? "COMPACT" : "FULL"));
   Llama.on("status", function (state, detail) {
     if (state === "error") console.log("!! llama: " + detail);
   });
@@ -2050,11 +3327,36 @@ function writeTranscript(rows) {
   const out = ["# chat probe " + stamp, "",
     "- model: `" + (OPT.model || s.modelPath) + "`",
     "- ctx " + s.ctxSize + ", temperature " + s.temperature +
-      ", maxRounds " + s.maxRounds, ""];
+      ", maxRounds " + s.maxRounds,
+    "- tool docs: " +
+      (Tools.promptModeFor(s.ctxSize).compact ? "COMPACT" : "FULL") +
+      " (Tools.promptModeFor)", ""];
+  if (OPT.variants) {
+    // Scenario / phrasing / chosen tool / verdict, the table WORKPLAN
+    // section 8 asks for, before the transcripts it summarises.
+    out.push("## the paraphrase matrix", "",
+             "| # | scenario | phrasing | said | tools | verdict |",
+             "|---|----------|----------|------|-------|---------|");
+    for (const row of rows) {
+      out.push("| " + (row.index + 1) + " | " + row.title + " | " +
+               row.phrasing + " | " + String(row.say).replace(/\|/g, "/") +
+               " | " + ((row.tools || []).join(" ") || "—") + " | " +
+               (row.grade === "harm" ? "**HARM** — " + row.verdict
+                 : row.grade === "miss" ? "miss — " + row.verdict : "pass") +
+               " |");
+    }
+    out.push("");
+  }
   for (const row of rows) {
     out.push("## " + (row.index + 1) + ". " + row.title +
-             " — " + (row.verdict ? "FAIL" : "pass"));
+             (row.phrasing && row.phrasing !== "canonical"
+               ? " [" + row.phrasing + "]" : "") +
+             " — " + (row.grade === "harm" ? "HARM"
+               : row.verdict ? (OPT.variants ? "miss" : "FAIL") : "pass"));
     out.push("");
+    if (row.verdict && (row.changes || []).length) {
+      out.push("- **changed anyway**: " + row.changes.join("; "));
+    }
     for (const line of row.lines) {
       const label = line.label ? " `" + line.label + "`" : "";
       out.push("- **" + line.kind + "**" + label + ": " +
@@ -2092,8 +3394,68 @@ function main() {
     return;
   }
 
-  const chosen = pickSteps();
+  // --rig-check: build the rig in the REAL AE and check that everything
+  // the later sentences name is actually in the comp. No model, so it
+  // runs in seconds — and a rig that has quietly stopped building one of
+  // its fixtures is a step failing every night for a reason that is not
+  // the model's, which is the one thing an isolated run must not do.
+  if (OPT.rigCheck) {
+    // BOTH rigs, one after the other: the finished world the trigger
+    // steps inherit and the unfinished one the usefulness rows start
+    // from. Checking only the first would let the second rot silently.
+    const variants = [null, "icons"];
+    const bad = [];
+    (function next(vi) {
+      if (vi >= variants.length) {
+        for (const m of bad) console.log("FAIL " + m);
+        console.log(bad.length ? bad.length + " rig problem(s)"
+                               : "rigs OK — every fixture the steps name " +
+                                 "is in the comp");
+        if (OPT.keep) { process.exit(bad.length ? 1 : 0); return; }
+        aeRead(sweepScript(), function (res2) {
+          console.log("cleanup: removed " +
+                      ((res2 && res2.removed) || 0) + " item(s)");
+          process.exit(bad.length ? 1 : 0);
+        });
+        return;
+      }
+      const variant = variants[vi], label = variant || "full";
+      aeRead(sweepScript(), function (swept) {
+        console.log("[" + label + "] swept " +
+                    ((swept && swept.removed) || 0) + " item(s)");
+        aeRead(rigScript(variant), function (rig, rigErr) {
+          if (rigErr) {
+            console.error("!! " + rigErr.message); process.exit(1); return;
+          }
+          console.log("[" + label + "] rig: " + rig.built + " commands, " +
+                      (rig.failed.length ? "FAILED — " + rig.failed.join("; ")
+                                         : "all ok"));
+          aeRead(READ_COMP, function (state, err) {
+            if (err) { console.error("!! " + err.message); process.exit(1); }
+            for (const m of rig.failed) bad.push("[" + label + "] " + m);
+            for (const m of rigProblems(variant, state)) {
+              bad.push("[" + label + "] " + m);
+            }
+            next(vi + 1);
+          });
+        });
+      });
+    })(0);
+    return;
+  }
+
+  const chosen = variantRuns(pickSteps(), OPT.variants);
   const rows = [];
+  if (OPT.variants) {
+    const stepCount = new Set(chosen.map(r => r.index)).size;
+    console.log("-- variants: " + chosen.length + " run(s) over " +
+                stepCount + " step(s) — the rig is rebuilt for each");
+    const bare = chosen.filter(r => r.phrasing === "canonical" &&
+      !(STEPS[r.index].variants || []).length).map(r => STEPS[r.index].title);
+    if (bare.length) {
+      console.log("-- no paraphrases declared for: " + bare.join("; "));
+    }
+  }
 
   startModel(function (err) {
     if (err) {
@@ -2112,10 +3474,14 @@ function main() {
 
   function next(k) {
     if (k >= chosen.length) { finish(); return; }
-    const idx = chosen[k];
-    const step = STEPS[idx];
+    const run = chosen[k];
+    const idx = run.index;
+    const step = run.step;
     const mark = transcript.length;
-    console.log("\n=== step " + (idx + 1) + ": " + step.title + " ===");
+    console.log("\n=== step " + (idx + 1) + ": " + step.title +
+                (run.phrasing === "canonical" ? ""
+                  : " [" + run.phrasing + "]") + " ===");
+    resetWorld(step, function () {
     // How the comp looked BEFORE the sentence: a step that refers back to
     // an earlier turn is judged on what changed, not on absolutes. A
     // fixture the step plants goes in first, so it is part of "before".
@@ -2124,7 +3490,7 @@ function main() {
       aeRead(SIG_FN + " return sig();", function (sigBefore) {
         const runsBefore = probeRuns;
         const restoreSettings = applyStepSettings(step.settings);
-        sendMessage(step.say, function (round) {
+        sendMessage(run.say, function (round) {
           aeRead(READ_COMP, function (state, readErr) {
             const ctx = { before: before && before.found ? before : null,
                           rounds: round.rounds,
@@ -2156,10 +3522,48 @@ function main() {
           restoreSettings();
           let verdict = null;
           if (readErr) verdict = "could not read the comp: " + readErr.message;
-          else verdict = step.check(state, ctx) || null;
-          if (verdict) say("verdict", "FAIL — " + verdict);
-          else say("verdict", "pass (" + summary(ctx) + ")");
+          // A check that throws used to kill the whole run mid-sweep, so
+          // the steps after it were never even asked. Most checks reach
+          // straight into state.layers, which does not exist when the rig
+          // comp is missing — the shape of "you ran a later step without
+          // the earlier ones that build the rig". That is a verdict, not
+          // a crash.
+          else {
+            try {
+              verdict = step.check(state, ctx) || null;
+            } catch (e) {
+              verdict = "the step's check could not run: " + e.message +
+                (state && !state.found
+                  ? " — no comp called " + COMP + " exists; steps 1-11 " +
+                    "build the rig the later steps name, so run them in " +
+                    "the same --steps list"
+                  : "");
+            }
+          }
+          // What the sentence actually did to the comp, whatever the
+          // verdict thinks of it — the line between a harmless miss and
+          // a harmful one. Read off the two states already in hand.
+          // `state` goes in raw, found:false and all: a sentence that
+          // deleted the whole comp is the loudest change there is, and
+          // filtering it out here would score it a harmless miss.
+          const changes = compDiff(ctx.before, state);
+          const grade = gradeRun(verdict, changes);
+          if (verdict) {
+            say("verdict", (OPT.variants ? (grade === "harm"
+              ? "HARM — " : "miss — ") : "FAIL — ") + verdict);
+            if (OPT.variants && changes.length) {
+              say("info", "the comp changed anyway: " +
+                  changes.slice(0, 8).join("; ") +
+                  (changes.length > 8
+                    ? " (+" + (changes.length - 8) + " more)" : ""));
+            } else if (OPT.variants) {
+              say("info", "nothing in the comp moved — harmless");
+            }
+          } else say("verdict", "pass (" + summary(ctx) + ")");
           rows.push({ index: idx, title: step.title, verdict: verdict,
+                      phrasing: run.phrasing, say: run.say, grade: grade,
+                      changes: changes,
+                      tools: (ctx.tools || []).map(t => t.tool),
                       lines: transcript.slice(mark) });
           next(k + 1);
         }
@@ -2169,6 +3573,47 @@ function main() {
         }
       });
     });
+    });
+    });
+  }
+
+  /*
+   * Everything a step is allowed to inherit, decided in one place.
+   *
+   * HISTORY resets by default (see the header): only a `carry` step, or
+   * --carry-history, keeps the previous sentence's conversation. A carry
+   * step whose predecessor did not run in this selection is SAID so —
+   * it will still be judged, but its pronoun has nothing behind it and
+   * the transcript must not read as though it did.
+   *
+   * The COMP resets only under --isolate, and only for a `fromRig` step:
+   * steps 1-14 build the world through the model on purpose, and that
+   * building IS their coverage.
+   */
+  function resetWorld(step, cb) {
+    if (!OPT.carryHistory && !step.carry) resetHistory();
+    else if (step.carry && !history.length) {
+      say("info", "this step refers back to the turn before it, and no " +
+          "earlier turn ran in this selection — its pronoun has nothing " +
+          "to resolve against");
+    }
+    if (!OPT.isolate || !step.fromRig) { cb(); return; }
+    // `fromRig` is true for the finished world and names a VARIANT for
+    // any other — the usefulness rows start from "icons", the
+    // unfinished one, because what they ask for is what it lacks.
+    const variant = step.fromRig === true ? null : step.fromRig;
+    aeRead(sweepScript(), function (swept) {
+      aeRead(rigScript(variant), function (rig, err) {
+        if (err) { say("error", "the rig could not be built: " + err.message); }
+        else if (rig && rig.failed && rig.failed.length) {
+          say("error", "the rig came up short — " + rig.failed.join("; "));
+        } else {
+          say("info", "rig rebuilt (" + (variant || "full") + ": " +
+              ((swept && swept.removed) || 0) + " item(s) swept, " +
+              ((rig && rig.built) || 0) + " commands)");
+        }
+        cb();
+      });
     });
   }
 
@@ -2190,15 +3635,47 @@ function main() {
     const file = writeTranscript(rows);
     console.log("\n----");
     console.log((rows.length - failed.length) + "/" + rows.length +
-                " steps met their verdict");
-    for (const r of failed) {
-      console.log("FAIL " + (r.index + 1) + ". " + r.title + " — " +
-                  r.verdict);
+                (OPT.variants ? " runs" : " steps") + " met their verdict");
+    let problems = [];
+    if (!OPT.variants) {
+      for (const r of failed) {
+        console.log("FAIL " + (r.index + 1) + ". " + r.title + " — " +
+                    r.verdict);
+      }
+    } else {
+      // The matrix, one line per phrasing, grouped by scenario — the
+      // shape WORKPLAN section 8 asks to be appended to the log:
+      // scenario / phrasing / chosen tool / verdict.
+      console.log("");
+      let lastIdx = -1;
+      for (const r of rows) {
+        if (r.index !== lastIdx) {
+          lastIdx = r.index;
+          console.log((r.index + 1) + ". " + r.title);
+        }
+        const mark = { pass: "  pass", miss: "  miss", harm: "  HARM" };
+        console.log(mark[r.grade] + "  " + r.phrasing.padEnd(9) +
+                    " [" + (r.tools.length ? r.tools.join(" ") : "no tools") +
+                    "]  \"" + r.say + "\"" +
+                    (r.verdict ? "\n            " + r.verdict : ""));
+      }
+      problems = gradeMatrix(rows);
+      const tally = g => rows.filter(r => r.grade === g).length;
+      console.log("\n" + tally("pass") + " pass, " + tally("miss") +
+                  " miss, " + tally("harm") + " HARM");
+      if (problems.length) {
+        console.log("");
+        for (const p of problems) console.log("!! " + p);
+      } else {
+        console.log("acceptance met: no harm, every canonical passed, no " +
+                    "scenario missed more than one paraphrase");
+      }
     }
     console.log("transcript: " + file);
+    const bad = OPT.variants ? problems.length : failed.length;
     const done = function () {
       try { Llama.stop(); } catch (e) {}
-      process.exit(failed.length ? 1 : 0);
+      process.exit(bad ? 1 : 0);
     };
     if (OPT.keep) { done(); return; }
     aeRead(sweepScript(precomps), function (res) {
@@ -2232,5 +3709,25 @@ if (require.main === module) {
   module.exports = { STEPS, squares, undoProbe, SIG_FN, READ_COMP,
                      bridgeWrapper, sweepImports, samePath, rememberGenerated,
                      generated, runPrepare, sweepScript, rememberPrecomp,
-                     precomps };
+                     precomps, toolEntry, rigPlan, rigScript, resetHistory,
+                     COMP, textLayer, betaLayer, rigNull, nineSquares,
+                     // The second rig and the fixtures the A/B/C/E
+                     // usefulness rows name, plus the pure "what did the
+                     // rig fail to build" list both --rig-check and the
+                     // stubbed suite run.
+                     rigProblems, iconRigPlan, iconLayers, bgLayer,
+                     headline, hasEffect, RIG_ICONS, RIG_SQUARES,
+                     ICON_BG, ICON_TEXT, ICON_FONT_SIZE, ICON_SPOTS,
+                     // The paraphrase matrix: the three-way grade, the
+                     // change detector it rests on, the run expansion and
+                     // the acceptance gate — all pure, all testable with
+                     // neither AE nor a model.
+                     compDiff, gradeRun, variantRuns, gradeMatrix,
+                     // For scripts/context-budget-probe.js: the REAL round
+                     // loop, the REAL panel modules and the REAL AE bridge,
+                     // so the context measurements are taken on the product
+                     // path instead of a second copy of it.
+                     sendMessage, setRoundObserver, history, transcript, say,
+                     aeEval, aeRead, startModel, Tools, Settings, Llama,
+                     AFTERFX, sessionNotices };
 }

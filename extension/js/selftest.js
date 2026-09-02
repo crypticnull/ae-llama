@@ -75,6 +75,10 @@
   // ships no such call) — so the rig has to be a comp that is thrown
   // away whole.
   var MGCOMP = "AELL Self-Test Mogrt";
+  // And the carpet-bomb rig. The gate it measures triggers on "the
+  // caller named EVERY layer in this comp", so the comp has to hold a
+  // roster nothing else in the suite adds to.
+  var WPCOMP = "AELL Self-Test Wipe";
   var running = false;
 
   /**
@@ -461,6 +465,90 @@
         },
         check: function (d) { return d.mode === "alpha" || d.mode; } },
 
+      // The other half of the type guard added 2026-09-01: a SHAPE layer
+      // is not `instanceof AVLayer` in ExtendScript, so the first cut at
+      // refusing cameras locked shapes and text out of mattes as well.
+      // The step above uses solids and stayed green through that, which
+      // is exactly why this one exists.
+      { name: "a shape layer still takes a matte",
+        tool: "set_track_matte",
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: "ST Shape",
+                   matteLayer: "ST Square 4", mode: "luma" };
+        },
+        check: function (d) {
+          return d.layer === "ST Shape" || "layer: " + d.layer;
+        } },
+
+      { name: "…and can BE one",
+        tool: "set_track_matte",
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: "ST Square 7",
+                   matteLayer: "ST Shape", mode: "alpha_inverted" };
+        },
+        check: function (d) {
+          return d.matte === "ST Shape" || "matte: " + d.matte;
+        } },
+
+      // Until 2026-09-02 the four steps above checked only the RECEIPT,
+      // so nothing here could tell a matte AE really made from one it
+      // only said it made. AE's own state is read back now.
+      { name: "…and AE really shows the matte, read back from the comp",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.comp, limit: 0 }; },
+        check: function (d) {
+          var row = null, i;
+          for (i = 0; i < d.layers.length; i++) {
+            if (d.layers[i].name === "ST Square 3") row = d.layers[i];
+          }
+          if (!row) return "no row for ST Square 3";
+          if (row.matte !== "ST Square 4") {
+            return "matte reads " + row.matte + ", wanted ST Square 4";
+          }
+          return row.matteMode === "alpha" ||
+                 "matteMode reads " + row.matteMode + ", wanted alpha";
+        } },
+
+      { name: "removing the shape layer's matte",
+        tool: "set_track_matte",
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: "ST Shape", mode: "none" };
+        },
+        check: function (d) {
+          return d.matte === "removed" || "matte: " + d.matte;
+        } },
+
+      // Measured in AE 2026: removeTrackMatte() clears trackMatteLayer
+      // but LEAVES trackMatteType at the type it just removed, so a
+      // type-only read reports a matte that is gone. This is the step
+      // that would catch that.
+      { name: "…and the removal really cleared it in AE",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.comp, limit: 0 }; },
+        check: function (d) {
+          var row = null, i;
+          for (i = 0; i < d.layers.length; i++) {
+            if (d.layers[i].name === "ST Shape") row = d.layers[i];
+          }
+          if (!row) return "no row for ST Shape";
+          if (row.matte) {
+            return "ST Shape still reports matte " + row.matte +
+                   " after mode 'none'";
+          }
+          return true;
+        } },
+
+      { name: "removing a matte a normal layer never had is refused",
+        tool: "set_track_matte",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: "ST Shape", mode: "none" };
+        },
+        check: function (err) {
+          return /has no track matte to remove/.test(err) ||
+                 "does not say there was nothing to remove: " + err;
+        } },
+
       { name: "parent without visual jump",
         tool: "set_layer_parent",
         args: function (ctx) {
@@ -701,6 +789,56 @@
                    color: [1, 1, 1], width: 100, height: 100 };
         },
         check: function (d) { return d.name === "ST Cam Solid" || d.name; } },
+
+      // A camera can neither take a matte nor be one. Measured 2026-09-01
+      // (WORKPLAN 1b): a CameraLayer carries no setTrackMatte at all, and
+      // `camera.trackMatteType = LUMA` is ACCEPTED without throwing (it
+      // reads back 5015), so before the type guard the tool reordered the
+      // stack with moveBefore and reported ok for a matte AE never made.
+      // Nothing threw, so only a by-type refusal can catch it.
+      { name: "a camera cannot take a track matte",
+        tool: "set_track_matte",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.camComp, layer: "ST Cam Aim",
+                   matteLayer: "ST Cam Solid", mode: "luma" };
+        },
+        check: function (err) {
+          if (!/ST Cam Aim/.test(err) || !/camera/.test(err)) {
+            return "does not name the layer and its type: " + err;
+          }
+          if (!/get_comp_details/.test(err)) {
+            return "does not point at the lister: " + err;
+          }
+          return true;
+        } },
+
+      { name: "…and cannot be one either",
+        tool: "set_track_matte",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.camComp, layer: "ST Cam Solid",
+                   matteLayer: "ST Cam One", mode: "alpha" };
+        },
+        check: function (err) {
+          return /matteLayer 'ST Cam One' is camera/.test(err) ||
+                 "does not name the matte layer and its type: " + err;
+        } },
+
+      { name: "…and removing a matte it never had is refused, not 'removed'",
+        tool: "set_track_matte",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.camComp, layer: "ST Cam Aim", mode: "none" };
+        },
+        check: function (err) {
+          return /cannot take a track matte/.test(err) ||
+                 "wrong refusal: " + err;
+        } },
+
+      // (that the refusal also leaves the layer STACK alone is pinned in
+      // tests/test-property-access.js, where the stub can watch
+      // moveBefore; here the refusal itself is the evidence)
 
       // ---- keyframed + parented content (WORKPLAN item 2) -------------
       // scale_comp maps every keyframe VALUE, which is the easy half. The
@@ -1871,15 +2009,21 @@
 
       // The ordered layers carry no effects, which is the state the
       // "take off the glow" refusal has to name.
-      { name: "remove_effect on a layer with no effects points at apply_effect",
+      // It used to point at apply_effect here, which answers a question a
+      // REMOVE caller did not ask. Measured 2026-09-02 (chat-probe row
+      // 29): the model met this refusal and guessed seven more effect
+      // names in the same round, so what it has to say is that no name
+      // can match an empty list.
+      { name: "remove_effect on a layer with no effects closes the door",
         tool: "remove_effect",
         expectError: true,
         args: function (ctx) {
           return { comp: ctx.orComp, layer: "ST Ord 12", effect: "Glow" };
         },
         check: function (e) {
-          if (!/has no effects/.test(e)) return "message was: " + e;
-          return /apply_effect/.test(e) || "no way out offered: " + e;
+          if (!/has no effects at all/.test(e)) return "message was: " + e;
+          return /no other effect name will match/.test(e) ||
+            "another guess is still invited: " + e;
         } },
 
       // ---- mask path animation ------------------------------------
@@ -1919,6 +2063,114 @@
         },
         check: function (d) {
           return d.mask === "ST Path" || "mask named " + d.mask;
+        } },
+
+      // add_mask's doc says "sizes from get_comp_details, never guessed"
+      // and, until 0.11.9, that result carried no layer size at all — so
+      // four separate phrasings of "hide half of Beta" all reached
+      // add_mask with the COMP's dimensions halved, on a 100x100 layer,
+      // and AE took every one of them silently. These two steps are the
+      // field proof that the doc is now true and the miss is now caught.
+      { name: "a layer row carries the LAYER's size, not the comp's",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.mkComp, limit: 0 }; },
+        check: function (d) {
+          if (d.width !== 400 || d.height !== 400) {
+            return "comp reads " + d.width + "x" + d.height;
+          }
+          var rows = d.layers || [], i, row = null;
+          for (i = 0; i < rows.length; i++) {
+            if (rows[i].name === "ST Mask") row = rows[i];
+          }
+          if (!row) return "no ST Mask row";
+          if (row.width !== 200 || row.height !== 200) {
+            return "ST Mask is 200x200 but its row says " +
+                   row.width + "x" + row.height;
+          }
+          // 0,0 origin: a solid's box starts there, so the two extra
+          // fields a text layer needs must NOT be on this row.
+          return (typeof row.left === "undefined" &&
+                  typeof row.top === "undefined") ||
+                 "a 0,0-origin layer paid for left/top: " +
+                 row.left + "," + row.top;
+        } },
+
+      { name: "a comp-sized mask on a smaller layer is refused, with its size",
+        tool: "add_mask",
+        expectError: true,
+        args: function (ctx) {
+          // Exactly what the model produced in the field: the comp's
+          // dimensions, halved, as a "bottom half" rectangle.
+          return { comp: ctx.mkComp, layer: "ST Mask", name: "ST Miss",
+                   shape: "rectangle", bounds: [0, 200, 400, 200] };
+        },
+        check: function (e) {
+          if (!/misses 'ST Mask' completely/.test(e)) {
+            return "message was: " + e;
+          }
+          if (!/200x200/.test(e)) return "the real size is missing: " + e;
+          return /LAYER space/.test(e) ||
+                 "the refusal does not say which space: " + e;
+        } },
+
+      // The same comp coordinates in the phrasing that OVERLAPS: "I only
+      // want to see the top half of Beta" reached add_mask with
+      // [0, 0, 1920.0001, 540] on a 100x100 layer. That swallows the
+      // layer whole — the mask changes nothing — and the tool said ok.
+      { name: "…as is one that swallows the layer whole",
+        tool: "add_mask",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Mask", name: "ST Swallow",
+                   shape: "rectangle", bounds: [0, 0, 400, 400] };
+        },
+        check: function (e) {
+          if (!/covers ALL of 'ST Mask'/.test(e)) return "message was: " + e;
+          if (!/200x200/.test(e)) return "the real size is missing: " + e;
+          // It works the answer out rather than only naming the problem.
+          return /\[0, 0, 200, 100\]/.test(e) ||
+                 "no worked bounds offered: " + e;
+        } },
+
+      { name: "…and the aimed version of it lands, unremarked",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Mask", name: "ST Half",
+                   shape: "rectangle", bounds: [0, 100, 200, 100] };
+        },
+        check: function (d) {
+          if (d.mask !== "ST Half") return "mask named " + d.mask;
+          return !d.note || "an in-bounds mask was noted anyway: " + d.note;
+        } },
+
+      { name: "…and the refused one wrote nothing",
+        tool: "delete_mask",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Mask", mask: "ST Miss" };
+        },
+        check: function (e) {
+          if (!/Mask not found/.test(e)) return "message was: " + e;
+          // The grounded half: the masks that DO exist are the two the
+          // steps above meant to make, and no third one from the refusal.
+          if (!/ST Path/.test(e) || !/ST Half/.test(e)) {
+            return "the refusal lists the wrong masks: " + e;
+          }
+          return true;
+        } },
+
+      // Put the layer back to one mask: the delete-by-index step further
+      // down addresses masks positionally, so an extra one here would
+      // silently change what index 2 means.
+      { name: "…and the aimed one comes off again",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Mask", mask: "ST Half" };
+        },
+        check: function (d) {
+          var rem = d.remainingMasks;
+          return (rem && rem.length === 1 && rem[0] === "ST Path") ||
+                 "remainingMasks " + JSON.stringify(rem);
         } },
 
       { name: "animate the mask path (keys on whole frames)",
@@ -2124,9 +2376,14 @@
 
       // ---- delete_mask (audit 0.11 item 4) -----------------------------
       // The off-grid probe's expression points at the mask about to go;
-      // it is cleared first so the deletion cannot leave an expression
-      // error behind (AE flags those in the timeline, and older versions
-      // put up a dialog).
+      // it is cleared first so the deletion cannot leave a broken
+      // expression behind. Measured 2026-09-02 in AE 2026, and the
+      // reason is worse than the dialog older versions raised: AE puts
+      // up NOTHING and tells scripting nothing either. The dependent
+      // Position still read expressionEnabled: true with an EMPTY
+      // expressionError while its value had quietly fallen back from the
+      // mask vertex to the layer's static one. Clearing first is the
+      // only way that stays visible.
       { name: "clear the off-grid probe before its mask goes",
         tool: "set_expression",
         args: function (ctx) {
@@ -2221,6 +2478,82 @@
         check: function (d) {
           return d.totalLayersInComp === 60 ||
                  "comp holds " + d.totalLayersInComp + " layers, not 60";
+        } },
+
+      // The plural handed to a SINGULAR tool. Measured 2026-09-02
+      // (chat-probe row 36 casual, "drop shadow on every layer but the
+      // BG"): the model routed CORRECTLY to apply_effect and passed
+      // {layers: [...]}, and the bare "Missing 'layer' (name or 1-based
+      // index)" named the absent key but never the key that HAD arrived.
+      // The model re-sent the identical call and gave up. These steps run
+      // BEFORE the blur, so "applied nothing" is checkable.
+      { name: "batch: apply_effect handed {layers} names for_each_layer",
+        tool: "apply_effect",
+        args: function (ctx) {
+          return { comp: ctx.btComp, layers: ["ST Batch", "ST Batch 2"],
+                   effect: "Gaussian Blur" };
+        },
+        expectError: true,
+        check: function (err) {
+          if (!/you passed 'layers'/.test(err)) {
+            return "the refusal never names the key it was handed: " + err;
+          }
+          if (err.indexOf("ST Batch 2") === -1) {
+            return "it does not quote the layers back: " + err;
+          }
+          if (!/apply_effect/.test(err)) {
+            return "it does not name the tool: " + err;
+          }
+          return /for_each_layer \{layers/.test(err) ||
+                 "it does not name for_each_layer: " + err;
+        } },
+
+      { name: "batch: and that refusal applied nothing",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.btComp, limit: 0 }; },
+        check: function (d) {
+          var with_ = [];
+          for (var i = 0; i < d.layers.length; i++) {
+            var fx = d.layers[i].effects || [];
+            if (fx.length) with_.push(d.layers[i].name);
+          }
+          return with_.length === 0 ||
+                 with_.length + " layers already carry an effect: " +
+                 with_.slice(0, 5).join(", ");
+        } },
+
+      { name: "batch: apply_effect with NO layer lists the comp's layers",
+        tool: "apply_effect",
+        args: function (ctx) {
+          return { comp: ctx.btComp, effect: "Gaussian Blur" };
+        },
+        expectError: true,
+        check: function (err) {
+          if (!/Missing 'layer'/.test(err)) return "error was: " + err;
+          if (/you passed 'layers'/.test(err)) {
+            return "it invented a plural nobody sent: " + err;
+          }
+          return err.indexOf("ST Batch") !== -1 ||
+                 "it named no real layer: " + err;
+        } },
+
+      // The mirror: a list under the SINGULAR key. comp.layer([a, b])
+      // answered "invalid numeric result (divide by zero?)" in the field.
+      { name: "batch: a list under 'layer' is named as a list",
+        tool: "link_property",
+        args: function (ctx) {
+          return { comp: ctx.btComp, layer: ["ST Batch", "ST Batch 2"],
+                   property: "opacity", controlLayer: "ST Batch 3",
+                   controlEffect: "Slider" };
+        },
+        expectError: true,
+        check: function (err) {
+          if (/divide by zero/.test(err)) {
+            return "AE's raw error surfaced instead of ours: " + err;
+          }
+          return (/takes ONE layer, not a list/.test(err) &&
+                  err.indexOf("ST Batch 2") !== -1) ||
+                 "error was: " + err;
         } },
 
       { name: "batch: apply_effect across 60 layers in ONE call",
@@ -3528,6 +3861,28 @@
                  "ungrounded: " + err;
         } },
 
+      // The refusal that used to be the bare string "Missing 'property'".
+      // With the real model it was the most-hit error in the whole tool
+      // suite (chat-probe step 23: all four phrasings omitted the arg),
+      // and it handed back nothing to correct with.
+      { name: "a missing 'property' names the wiggle target AND the effects",
+        tool: "apply_expression_preset",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box", preset: "wiggle" };
+        },
+        check: function (err) {
+          if (err.indexOf("'position' is the drift/float/hover one") === -1) {
+            return "does not say which property wiggle meant: " + err;
+          }
+          if (err.indexOf("position, scale, rotation, opacity or " +
+                          "anchorPoint") === -1) {
+            return "does not list the transform words: " + err;
+          }
+          return err.indexOf("ST Cov Amp") !== -1 ||
+                 "does not list the layer's own effects: " + err;
+        } },
+
       { name: "add_keyframe stacks three keys and counts them",
         batch: function (ctx) {
           return [
@@ -3550,6 +3905,23 @@
             }
           }
           return true;
+        } },
+
+      // Three rotation keys exist now, which is the half of the refusal
+      // a loop_* caller actually needs: WHICH property carries keys.
+      { name: "…and for a loop preset it names the keyframed property",
+        tool: "apply_expression_preset",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box",
+                   preset: "loop_cycle" };
+        },
+        check: function (err) {
+          if (err.indexOf("the property that HAS the keyframes") === -1) {
+            return "does not ask for the keyframed property: " + err;
+          }
+          return err.indexOf("Already keyframed here: rotation") !== -1 ||
+                 "does not name the property that has keys: " + err;
         } },
 
       { name: "add_keyframe without a time is refused",
@@ -3608,6 +3980,158 @@
         check: function (d) {
           return (d.removed === 2 && d.remaining === 0) ||
                  "removed " + d.removed + ", remaining " + d.remaining;
+        } },
+
+      // …and the value it LEAVES BEHIND, which is the whole point of
+      // "un-animate it". The keys were 0s=0, 1s=90, 2s=180 and the host
+      // empties a property by removing key 1 over and over, so the last
+      // one standing is the last in TIME and AE holds its value: 180,
+      // not the 0 it started from and not whatever the playhead was
+      // over. Measured 2026-09-02 with two rigs emptied at different
+      // playheads (scripts/verb-semantics-probe.jsx); this step is what
+      // keeps the promise the remove_keyframes doc now makes.
+      { name: "…leaving the LAST key's value behind, not the first",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box",
+                   property: "rotation" };
+        },
+        check: function (d) {
+          if (d.numKeys !== 0) return "still keyed: " + d.numKeys;
+          return Math.abs(d.value - 180) < 0.001 ||
+                 "rotation settled at " + d.value + ", not 180";
+        } },
+
+      // ---- the carpet-bomb gate --------------------------------
+      //
+      // Measured 2026-09-02 in real AE (chat-probe row 29, "Probe Room's
+      // got junk everywhere, tidy it"): nobody named a layer, the model
+      // met the grounded no-targets refusal, copied all twelve names
+      // back out of it into ONE call, and remove_keyframes answered
+      // {"layers":12,"property":"opacity","removed":18}. clean_project
+      // and organize_project both refuse that shape until the user has
+      // SEEN it; this tool had no gate at all.
+      { name: "wipe rig: a comp whose whole roster can be named",
+        tool: "create_comp",
+        args: { name: WPCOMP, width: 320, height: 240, duration: 3,
+                frameRate: 25 },
+        check: function (d, ctx) {
+          ctx.wpComp = d.name;
+          ctx.wpLayers = ["ST Wipe A", "ST Wipe B", "ST Wipe C"];
+          // Not pinned to the exact name: AE auto-numbers a taken one,
+          // and every later step here works from ctx.wpComp anyway.
+          return typeof d.name === "string" || "no comp name";
+        } },
+      { name: "wipe rig: solid A",
+        tool: "add_solid",
+        args: function (ctx) {
+          return { comp: ctx.wpComp, name: "ST Wipe A", color: [1, 0, 0],
+                   width: 80, height: 80 };
+        },
+        check: function (d) { return d.name === "ST Wipe A" || d.name; } },
+      { name: "wipe rig: solid B",
+        tool: "add_solid",
+        args: function (ctx) {
+          return { comp: ctx.wpComp, name: "ST Wipe B", color: [0, 1, 0],
+                   width: 80, height: 80 };
+        },
+        check: function (d) { return d.name === "ST Wipe B" || d.name; } },
+      { name: "wipe rig: solid C",
+        tool: "add_solid",
+        args: function (ctx) {
+          return { comp: ctx.wpComp, name: "ST Wipe C", color: [0, 0, 1],
+                   width: 80, height: 80 };
+        },
+        check: function (d) { return d.name === "ST Wipe C" || d.name; } },
+      { name: "wipe rig: two opacity keys on each of the three",
+        tool: "set_keyframes",
+        args: function (ctx) {
+          return { comp: ctx.wpComp, layers: ctx.wpLayers,
+                   property: "opacity",
+                   keys: [{ time: 0, value: 0 }, { time: 1, value: 100 }] };
+        },
+        check: function (d) {
+          return d.keysSet === 6 || "keysSet " + d.keysSet;
+        } },
+
+      { name: "naming EVERY layer in the comp is refused, with the count",
+        tool: "remove_keyframes",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.wpComp, layers: ctx.wpLayers,
+                   property: "opacity" };
+        },
+        check: function (err) {
+          if (err.indexOf("refused to wipe every layer") === -1) {
+            return "err: " + err;
+          }
+          if (err.indexOf("delete 6 opacity keyframe(s) from 3 layer(s)")
+              === -1) {
+            return "the preview does not count what would go: " + err;
+          }
+          return err.indexOf("ask the user WHICH") !== -1 ||
+                 "no question to relay: " + err;
+        } },
+      // …and nothing went. The refusal has to be a refusal, not a note
+      // printed after the deletion.
+      { name: "…and the keys are all still there",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.wpComp, layer: "ST Wipe A",
+                   property: "opacity" };
+        },
+        check: function (d) {
+          return d.numKeys === 2 || "numKeys " + d.numKeys;
+        } },
+      // Retrying inside the SAME reply is refused too, and that is the
+      // branch the field failure needs: the round that lost 18 keyframes
+      // made sixteen calls without the user seeing one of them. The whole
+      // suite runs as one request (AELL_requestSeq is bumped per chat
+      // turn, not per step), so this is the branch real AE can show. The
+      // release — a LATER request goes through — needs a second turn and
+      // is pinned in tests/test-property-access.js instead.
+      { name: "…and retrying it in the same reply is refused too",
+        tool: "remove_keyframes",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.wpComp, layers: ctx.wpLayers,
+                   property: "opacity" };
+        },
+        check: function (err) {
+          return err.indexOf("THIS same reply") !== -1 || "err: " + err;
+        } },
+      { name: "…and the keys survived the retry as well",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.wpComp, layer: "ST Wipe C",
+                   property: "opacity" };
+        },
+        check: function (d) {
+          return d.numKeys === 2 || "numKeys " + d.numKeys;
+        } },
+      // Narrow on purpose: two of the three layers is the ordinary case
+      // and is never gated, however fresh the project is.
+      { name: "a named SUBSET is not gated",
+        tool: "remove_keyframes",
+        args: function (ctx) {
+          return { comp: ctx.wpComp,
+                   layers: [ctx.wpLayers[0], ctx.wpLayers[1]],
+                   property: "opacity" };
+        },
+        check: function (d) {
+          return d.removed === 4 || "removed " + d.removed;
+        } },
+      // Nor is a whole-comp call with nothing to lose: a refusal about a
+      // provable no-op is noise, the same reason organize_project does
+      // not gate an empty plan.
+      { name: "a whole-comp wipe with no keys to lose is not gated",
+        tool: "remove_keyframes",
+        args: function (ctx) {
+          return { comp: ctx.wpComp, layers: ctx.wpLayers,
+                   property: "rotation" };
+        },
+        check: function (d) {
+          return d.removed === 0 || "removed " + d.removed;
         } },
 
       // set_layer_3d, and the two AE facts underneath it. Measured
@@ -7118,6 +7642,27 @@
                  "note did not say it was a preview: " + d.note;
         } },
 
+      // The 2026-09-02 guards. Only the half that CANNOT delete is asked
+      // here: the other half — a dryRun:false with no preview behind it
+      // is refused — would, if it ever regressed, delete the user's own
+      // unused footage from the very step written to prove it does not.
+      // That half is covered against a stubbed project in
+      // tests/test-project-hygiene.js. This step keeps dryRun at its
+      // default, so nothing can go even if the guard is gone.
+      { name: "a comp scope is refused, not silently ignored",
+        tool: "clean_project",
+        expectError: true,
+        args: function (ctx) {
+          return { action: "consolidate", comp: ctx.hygKeep };
+        },
+        check: function (err, ctx) {
+          if (!/no comp or layer scope/.test(err)) {
+            return "wrong refusal: " + err;
+          }
+          return err.indexOf("'" + ctx.hygKeep + "' is a comp") !== -1 ||
+                 "the refusal never named the comp: " + err;
+        } },
+
       { name: "cleanup: delete the hygiene rig comps",
         batch: function (ctx) {
           return [
@@ -7252,16 +7797,70 @@
                  " where only the rig's 3 were made";
         } },
 
+      // The GATE, taken from the one angle that is safe to ask in the
+      // user's own project. A dryRun:false whose plan MATCHES the last
+      // preview would file their whole project panel if the gate ever
+      // regressed, so the suite never asks that; it asks the drifted
+      // plan, which cannot execute even with the gate gone-- there is no
+      // preview of THIS list anywhere. The other halves (no preview at
+      // all, same-reply retry, the plan that does execute) live against
+      // a stub in tests/test-organize-project.js, for the same reason
+      // clean_project's dryRun:false half does.
+      { name: "organize rig: one more loose comp, made AFTER the preview",
+        tool: "create_comp",
+        args: { name: "ST ORG Drift", width: 160, height: 120,
+                duration: 1, frameRate: 24 },
+        check: function (d, ctx) {
+          ctx.orgDrift = d.name;
+          return !!d.name || "no comp name in " + JSON.stringify(d);
+        } },
+
+      { name: "organize_project refuses a plan the user never saw",
+        tool: "organize_project",
+        expectError: true,
+        args: { dryRun: false },
+        check: function (err, ctx) {
+          if (!/refused to move/.test(err)) return "wrong refusal: " + err;
+          if (!/changed since the last preview/.test(err)) {
+            return "the refusal did not name plan drift: " + err;
+          }
+          // The refusal lists the first ten moves and says how many it
+          // cut; only demand the new comp by name when nothing was cut.
+          if (/\+[0-9]+ more/.test(err)) return true;
+          return err.indexOf(ctx.orgDrift) !== -1 ||
+                 "the refusal never named the new comp: " + err;
+        } },
+
+      { name: "and the refusal moved nothing",
+        tool: "get_project_info",
+        args: { limit: 0 },
+        check: function (d, ctx) {
+          var i, seen = 0;
+          for (i = 0; i < d.items.length; i++) {
+            if (d.items[i].name !== ctx.orgComp &&
+                d.items[i].name !== ctx.orgDrift) continue;
+            seen++;
+            if (d.items[i].folder) {
+              return "a REFUSED move filed '" + d.items[i].name +
+                     "' into '" + d.items[i].folder + "'";
+            }
+          }
+          return seen === 2 ||
+                 "the refusal lost a comp: " + seen + " of 2 still there";
+        } },
+
       { name: "cleanup: delete the organize rig",
         batch: function (ctx) {
           return [
             { tool: "delete_item", args: { item: ctx.orgNest } },
+            { tool: "delete_item", args: { item: ctx.orgDrift } },
             { tool: "delete_item", args: { item: ctx.orgComp } }
           ];
         },
         check: function (rows) {
-          return (rows[0].ok && rows[1].ok) ||
-                 "cleanup: " + (rows[0].error || rows[1].error);
+          return (rows[0].ok && rows[1].ok && rows[2].ok) ||
+                 "cleanup: " + (rows[0].error || rows[1].error ||
+                                rows[2].error);
         } },
 
       // ---- create_folder eachChildOf (field failure 2026-08-26) -------

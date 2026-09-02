@@ -301,6 +301,7 @@ Object.defineProperty(stubborn, "parentFolder", {
   set() {}
 });
 still("fine.png");
+call("organize_project", {});                    // the gate wants a preview
 res = call("organize_project", { dryRun: false });
 assert(res.data.moved === 1, "only the item that really moved is counted: " +
        res.data.moved);
@@ -324,7 +325,103 @@ res = call("organize_project", {});
 assert(res.ok && res.data.willMove === 0 && res.data.alreadyFiled === 0 &&
        res.data.rootFolders === 0, "an empty project: " + res.data.note);
 
-// 10. Registration: mutating (so it gets an undo group), and the model is
+// 10. The preview GATE. Until 2026-09-02 "preview first" was ADVICE: a
+//     dryRun:false with nothing shown behind it filed the user's whole
+//     project panel on the first call. clean_project's gate (0.11.7) got
+//     the same treatment for the same reason -- the model reached for
+//     both tools in the same field round.
+reset();
+delete $.global.AELL_orgShown;
+$.global.AELL_requestSeq = 0;
+$.global.AELL_newRequest();
+
+const gateComp = project.items.addComp("Gate Comp");
+const gatePng = still("gate.png");
+res = call("organize_project", { dryRun: false });
+assert(!res.ok, "a move with no preview behind it is REFUSED");
+assert(/nothing has been previewed yet/.test(res.error),
+       "and the refusal says why: " + res.error);
+assert(/Gate Comp -> Comps/.test(res.error),
+       "the refusal IS the preview -- it names the moves: " + res.error);
+assert(/would also create these folders at the project root: Comps, Images/
+         .test(res.error),
+       "and the folders it would create: " + res.error);
+assert(where(gateComp) === "(root)" && where(gatePng) === "(root)",
+       "nothing moved");
+assert(ALL_ITEMS.filter(x => x instanceof FolderItem).length === 0,
+       "and no folder was created");
+
+// The refusal recorded the plan it showed -- but in THIS request, and the
+// user has not been back since.
+res = call("organize_project", { dryRun: false });
+assert(!res.ok && /THIS same reply/.test(res.error),
+       "a retry inside the same reply is refused too: " + res.error);
+assert(where(gateComp) === "(root)", "still nothing moved");
+
+// A new user request: now the list has been seen and it goes through.
+$.global.AELL_newRequest();
+res = call("organize_project", { dryRun: false });
+assert(res.ok && res.data.moved === 2,
+       "the NEXT request files them: " + (res.ok ? res.data.moved : res.error));
+assert(where(gateComp) === "Comps", "and the comp really landed");
+
+// An explicit preview arms the gate the same way.
+reset();
+$.global.AELL_newRequest();
+const armComp = project.items.addComp("Arm Comp");
+res = call("organize_project", {});
+assert(res.ok && res.data.willMove === 1, "the preview shows one move");
+$.global.AELL_newRequest();
+res = call("organize_project", { dryRun: false });
+assert(res.ok && where(armComp) === "Comps",
+       "a previewed plan executes: " + (res.ok ? "ok" : res.error));
+
+// Plan DRIFT: the project changed after the preview, so this is no longer
+// the list the user said go to.
+reset();
+$.global.AELL_newRequest();
+const driftA = project.items.addComp("Drift A");
+res = call("organize_project", {});
+assert(res.ok && res.data.willMove === 1, "preview of one move");
+$.global.AELL_newRequest();
+const driftB = still("drift.png");             // arrived after the preview
+res = call("organize_project", { dryRun: false });
+assert(!res.ok && /the project has changed since the last preview/.test(res.error),
+       "the drifted plan is refused: " + (res.ok ? "IT RAN" : res.error));
+assert(where(driftA) === "(root)" && where(driftB) === "(root)",
+       "and neither item moved");
+$.global.AELL_newRequest();
+res = call("organize_project", { dryRun: false });
+assert(res.ok && where(driftB) === "Images",
+       "the re-preview in the refusal lets the next request through");
+
+// A plan that moves NOTHING is not gated: the execute provably does
+// nothing, so a refusal there would be noise about a no-op.
+reset();
+delete $.global.AELL_orgShown;
+$.global.AELL_newRequest();
+project.items.addFolder("Only A Folder");
+res = call("organize_project", { dryRun: false });
+assert(res.ok && res.data.moved === 0,
+       "an empty plan executes without a preview: " +
+       (res.ok ? "ok" : res.error));
+
+// The gate is organize_project's own: clean_project's preview does not
+// arm it, and vice versa.
+reset();
+delete $.global.AELL_orgShown;
+delete $.global.AELL_hygShown;
+$.global.AELL_newRequest();
+const crossComp = project.items.addComp("Cross Comp");
+res = call("organize_project", {});
+assert(res.ok, "organize previews");
+$.global.AELL_newRequest();
+assert($.global.AELL_hygShown === undefined,
+       "an organize preview does NOT arm clean_project's gate");
+res = call("organize_project", { dryRun: false });
+assert(res.ok && where(crossComp) === "Comps", "and its own gate opened");
+
+// 11. Registration: mutating (so it gets an undo group), and the model is
 //     told the preview comes first.
 const src = fs.readFileSync(path.join(__dirname, "..", "extension", "jsx",
                                       "hostscript.jsx"), "utf8");
@@ -337,6 +434,8 @@ assert(/name:\s*"organize_project",\s*mutating:\s*true/.test(defs),
 const doc = defs.split('name: "organize_project"')[1].slice(0, 1200);
 assert(/dryRun is TRUE by default/.test(doc),
        "the tool doc tells the model the preview comes first");
+assert(/REFUSED until that list was shown in an EARLIER reply/.test(doc),
+       "and that the move is refused until it was shown");
 assert(/dryRun\?: bool/.test(doc), "and the arg is documented");
 const prompt = defs.split("function buildSystemPrompt")[1] || "";
 assert(/organize the project panel' = organize_project/.test(prompt),

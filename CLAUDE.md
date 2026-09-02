@@ -60,9 +60,38 @@ interactive session does NOT self-start; it answers one prompt and waits.
   dims (3 for Scale on 2D layers) — the opposite rule from expressions.
 - Generated expressions use only the inline chained pickwhip form
   (`thisComp.layer("X").effect("Y")(1)`), no stored Property refs.
+- **`instanceof AVLayer` is NOT "is this a visual layer".** Measured AE
+  2026: it is FALSE for a TextLayer and a ShapeLayer as well as for a
+  camera and a light — only a plain solid/footage layer answers true.
+  Test the specific class (`AELL_layerType`) instead. Cameras and lights
+  also carry no `setTrackMatte`/`removeTrackMatte` at all, yet
+  `camera.trackMatteType = LUMA` is ACCEPTED silently and reads back
+  5015, so a matte tool that only try/catches AE sees success on a layer
+  AE will never matte.
+- **`trackMatteType` is not "does this layer have a matte".** Measured
+  AE 2026: NO_TRACK_MATTE is **5012** (a fresh layer reads 5012, not 0),
+  ALPHA 5013, ALPHA_INVERTED 5014, LUMA 5015, LUMA_INVERTED 5016 — and
+  **`removeTrackMatte()` clears `trackMatteLayer` but LEAVES
+  `trackMatteType` at the type it just removed**, forever. So the matte
+  LAYER is the only honest existence test; the type only says what KIND,
+  once there is one. `AELL_matteLayerOf` / `AELL_matteWord` are the one
+  place this is read. A type-only read is wrong in both directions, which
+  is how `scripts/chat-probe.js` shipped a step that called every
+  unmatted layer matted AND failed a matte AE really made.
 - Adding any layer selects it and deselects everything else; creation
   tools here restore the user's selection (`AELL_keepSelection`).
 - `.jsx` is ES3: no JSON (use `AELLJSON`), no Array extras, no `const`.
+- **ExtendScript parses `?:` LEFT-associatively.** `true ? 1 : true ? 2
+  : 3` is **2** there and 1 everywhere else; `false ? 1 : true ? 2 :
+  true ? 3 : 4` is **3**, not 2. It groups as `((a?b:c)?d:e)?f:g`, so
+  the first branch's VALUE becomes the next condition. Every nested
+  conditional in an ES3-executed file needs explicit parentheses —
+  `tests/test-es3-ternary.js` enforces it. A bare chain is only
+  accidentally right when the earlier tests are false, which is why it
+  hid: it shipped a `reorder_layers` warning on correct moves and told
+  empty SHAPE layers "the text is empty". Measured AE 2026 /
+  ExtendScript 4.5.6. This binds `extension/js/selftest.js` too — the
+  CLI runner `$.evalFile`s it.
 - `.ps1` must be pure ASCII (Windows PowerShell 5.1, BOM-less).
 - Every failed lookup must list what actually exists (grounded errors) —
   it is how the small local model self-corrects.

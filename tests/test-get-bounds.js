@@ -367,6 +367,43 @@ r = call("get_bounds", { layer: "emptyshape" });
 assert(r.ok && /renders nothing/.test(r.data.empty || ""),
        "a 0x0 layer says it renders nothing instead of reporting a box");
 
+// The advice after "renders nothing" is picked by layer TYPE, and each
+// branch has to be the RIGHT one. This was shipped broken: the three-way
+// choice was written as a bare `a ? x : b ? y : z` chain, which
+// ExtendScript groups left-associatively, so an empty SHAPE layer was
+// told "the text is empty at this time" — a grounded error pointing the
+// model at the wrong fix. Node parses the same source correctly, so
+// only these per-branch assertions catch a hand-written mixup here;
+// tests/test-es3-ternary.js catches the engine-divergence shape itself.
+function asKind(layer, Ctor) {
+  Object.setPrototypeOf(layer, Object.create(Ctor.prototype,
+    Object.getOwnPropertyDescriptors(Layer.prototype)));
+  return layer;
+}
+const emptyShape = asKind(addLayer("really-a-shape"), ShapeLayer);
+emptyShape._rects = [[0, { left: 0, top: 0, width: 0, height: 0 }]];
+r = call("get_bounds", { layer: "really-a-shape" });
+assert(r.ok && r.data.layerType === "shape" &&
+       /no drawn content/.test(r.data.empty || "") &&
+       /add_shape_content/.test(r.data.empty || "") &&
+       !/text is empty/.test(r.data.empty || ""),
+       "an empty SHAPE layer is told about drawn content, not about text");
+
+const emptyText = asKind(addLayer("really-a-text"), TextLayer);
+emptyText._rects = [[0, { left: 0, top: 0, width: 0, height: 0 }]];
+r = call("get_bounds", { layer: "really-a-text" });
+assert(r.ok && r.data.layerType === "text" &&
+       /text is empty/.test(r.data.empty || "") &&
+       !/add_shape_content/.test(r.data.empty || ""),
+       "an empty TEXT layer is told the text is empty");
+
+r = call("get_bounds", { layer: "emptyshape" });
+assert(r.ok && r.data.layerType !== "shape" && r.data.layerType !== "text" &&
+       /is on at this time/.test(r.data.empty || "") &&
+       !/add_shape_content/.test(r.data.empty || "") &&
+       !/text is empty/.test(r.data.empty || ""),
+       "any other empty layer is told to check that it is on");
+
 console.log("");
 console.log("== argument handling ==");
 r = call("get_bounds", { layers: ["solid", "kid"] });

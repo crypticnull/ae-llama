@@ -138,14 +138,34 @@ function flip(buf, at) {
 }
 
 // ------------------------------------------------- definition fixtures
-// PROVISIONAL shapes: the Adobe-ish one (strDB-wrapped strings under
-// clientControls) and a flat one. Whichever the measured fixture turns
-// out to be, the reader must keep reading BOTH until the pin lands.
-function strDB(s) { return { strDB: [{ localeString: s, localeStr: "en_US" }] }; }
+// The Adobe shape, MEASURED 2026-09-02 out of three templates AE 2026
+// wrote (scripts/mogrt-verify-probe.js; the capture is
+// tests/fixtures/ae2026-definition.json). These helpers used to build an
+// INVENTED shape — `{localeString: <value>, localeStr: "en_US"}` and a
+// `controlType` key — that matched the reader's equally invented guess.
+// 105 checks passed against a reader that could not read one real file:
+// every controller in every real export came back as the string "en_US".
+// A fixture is only evidence when something outside this repo produced it.
+function strDB(s) { return { strDB: [{ localeString: "en_US", str: s }] }; }
 function adobeDef(name, controllers) {
   return JSON.stringify({
-    capsuleName: strDB(name),
+    // capsuleName is a PLAIN string in a real export (and always the
+    // literal "Untitled" — see the AE_DEFAULT_TEMPLATE_NAME block).
+    capsuleName: name,
+    capsuleNameLocalized: strDB(name),
     capsuleVersion: 1,
+    sourceInfoLocalized: { en_US: { name: name + " Comp" } },
+    clientControls: controllers.map(function (c, i) {
+      return { uiName: strDB(c[0]), type: c[1], id: i + 1 };
+    })
+  });
+}
+// The old key, kept alive on purpose: `controlType` was never measured in
+// any AE build, but it is still a fallback and a fallback nobody exercises
+// is a fallback nobody knows is broken.
+function legacyTypeDef(name, controllers) {
+  return JSON.stringify({
+    capsuleName: name,
     clientControls: controllers.map(function (c, i) {
       return { uiName: strDB(c[0]), controlType: c[1], id: i + 1 };
     })
@@ -197,7 +217,18 @@ function verify(buf, extra) {
   assert(v.duplicateCounts.Color === 2,
     "baseline: duplicate controller name counted (Color x2)");
   assert(JSON.stringify(v.controllerTypes) === "[4,5,5]",
-    "baseline: control type codes read from controlType");
+    "baseline: control type codes read from type");
+  assert(v.compNameInFile === "Brand Card Comp",
+    "baseline: comp name read from sourceInfoLocalized.en_US.name");
+}
+
+{
+  // The unmeasured alternate key still reads.
+  const z = buildZip(baseSpecs(legacyTypeDef("Legacy", ROSTER)));
+  const v = verify(z.buf);
+  assert(JSON.stringify(v.controllersInFile) === JSON.stringify(EXPECTED) &&
+         JSON.stringify(v.controllerTypes) === "[4,5,5]",
+    "the legacy controlType key is still read when `type` is absent");
 }
 
 {
@@ -875,6 +906,114 @@ function verify(buf, extra) {
   const d2 = bare.Tools._verifyMogrtResult({ path: p, controllerNames: [] });
   assert(d2.zipValid === undefined && d2.verifyNote === undefined,
     "without the reader loaded the hook is a no-op, never a false verdict");
+}
+
+// ================================ the pinned real definition.json (AE 2026)
+//
+// tests/fixtures/ae2026-definition.json is the definition.json out of a
+// template AFTER EFFECTS 2026 wrote, captured by
+// scripts/mogrt-verify-probe.js and scrubbed of nothing but the temp
+// staging path (which carried a Windows account name). Every other
+// fixture in this file is hand-built by this file, which is exactly how
+// the reader shipped unable to read a real export for a week: it and its
+// tests were written to the same invented shape and agreed perfectly.
+// These checks are the only ones here whose input this repo did not make.
+{
+  const REAL = fs.readFileSync(
+    path.join(__dirname, "fixtures", "ae2026-definition.json"), "utf8");
+  const def = JSON.parse(REAL);
+  const REAL_ROSTER = ["Headline Size é", "Card Position",
+                       "BG Opacity", "Headline Text"];
+
+  // --- the shape itself, asserted so a future edit cannot re-invent it
+  assert(Array.isArray(def.clientControls) && def.clientControls.length === 4,
+    "real AE 2026: the roster is a flat clientControls array");
+  const row = def.clientControls[0].uiName.strDB[0];
+  assert(row.localeString === "en_US" && typeof row.str === "string",
+    "real AE 2026: a strDB row is {localeString: <LOCALE>, str: <VALUE>} — " +
+    "the locale is in localeString, NOT the value: " + JSON.stringify(row));
+  assert(def.clientControls.every(function (c) {
+    return typeof c.type === "number" && !("controlType" in c);
+  }), "real AE 2026: the control type key is `type`, never `controlType`");
+
+  assert(JSON.stringify(MogrtRead.readRoster(def).controllers
+           .map(function (c) { return c.name; })) ===
+         JSON.stringify(REAL_ROSTER),
+    "real AE 2026: every controller name reads back, accent included " +
+    "(the swapped strDB read returned \"en_US\" four times)");
+  assert(MogrtRead.readRoster(def).provisional === false &&
+         MogrtRead.readRoster(def).via === "clientControls",
+    "real AE 2026: the roster is a flat read under a known key, not provisional");
+  assert(MogrtRead.templateNameOf(def) === "Untitled",
+    "real AE 2026: capsuleName is the placeholder, never the template name");
+  assert(MogrtRead.compNameOf(def) === "AELL MOGRT Probe",
+    "real AE 2026: the comp name IS written, at sourceInfoLocalized.en_US.name");
+
+  // --- through the whole container, and through the shipped hook
+  const z = buildZip(baseSpecs(REAL));
+  const v = MogrtRead.verifyExport({
+    path: "<real>.mogrt", buffer: z.buf, expectedControllers: REAL_ROSTER,
+    templateName: "AELL Probe Card", compName: "AELL MOGRT Probe"
+  });
+  assert(v.zipValid && v.missing.length === 0 && v.extra.length === 0 &&
+         v.errors.length === 0,
+    "real AE 2026: roster parity holds end to end (" + v.errors.join("; ") + ")");
+  assert(v.templateNameUnwritten === true && v.templateNameMatches === null &&
+         v.warnings.length === 0,
+    "real AE 2026: the placeholder capsuleName raises NO mismatch warning — " +
+    "it fired on every correct export and could never fire on a wrong one: " +
+    v.warnings.join("; "));
+  assert(v.compNameInFile === "AELL MOGRT Probe" && v.compNameMatches === true,
+    "real AE 2026: comp-name parity is the name check that carries information");
+
+  const wrong = MogrtRead.verifyExport({
+    path: "<real>.mogrt", buffer: z.buf, compName: "Some Other Comp"
+  });
+  assert(wrong.compNameMatches === false &&
+         /comp name expected "Some Other Comp", measured "AELL MOGRT Probe"/
+           .test(wrong.warnings.join(" ")),
+    "real AE 2026: a comp-name disagreement is reported, naming both: " +
+    wrong.warnings.join("; "));
+
+  // A build that DOES write a template name and writes the wrong one is
+  // still caught — the placeholder is a special case, not an amnesty.
+  const named = JSON.parse(REAL);
+  named.capsuleName = "Something Else";
+  const nv = MogrtRead.verifyExport({
+    path: "<real>.mogrt", buffer: buildZip(baseSpecs(JSON.stringify(named))).buf,
+    templateName: "AELL Probe Card"
+  });
+  assert(nv.templateNameUnwritten === false && nv.templateNameMatches === false &&
+         /template name expected "AELL Probe Card", measured "Something Else"/
+           .test(nv.warnings.join(" ")),
+    "a NON-placeholder template name that disagrees is still a warning: " +
+    nv.warnings.join("; "));
+
+  // The shipped receipt hook, on the real bytes, with the real receipt.
+  {
+    const toolsSrc = fs.readFileSync(
+      path.join(__dirname, "..", "extension", "js", "tools.js"), "utf8");
+    const win = { MogrtRead: MogrtRead };
+    new Function("window", toolsSrc)(win);
+    const p = path.join(os.tmpdir(), "aell-mogrt-real-" + process.pid + ".mogrt");
+    fs.writeFileSync(p, z.buf);
+    const d = win.Tools._verifyMogrtResult({
+      path: p, comp: "AELL MOGRT Probe", template: "AELL Probe Card",
+      controllers: 4, controllerNames: REAL_ROSTER.slice()
+    });
+    assert(d.zipValid === true && d.controllersInFileCount === 4 &&
+           d.templateNameInFile === "Untitled" && d.verifyNote === undefined,
+      "the shipped hook on real AE bytes: clean receipt, NO verifyNote — " +
+      "before the pin this said all four controllers were missing and four " +
+      "called \"en_US\" were extra: " + String(d.verifyNote));
+    const wrongComp = win.Tools._verifyMogrtResult({
+      path: p, comp: "Not The Comp", template: "AELL Probe Card",
+      controllers: 4, controllerNames: REAL_ROSTER.slice()
+    });
+    assert(/comp name expected "Not The Comp"/.test(String(wrongComp.verifyNote)),
+      "and the hook surfaces a comp-name disagreement: " + wrongComp.verifyNote);
+    fs.unlinkSync(p);
+  }
 }
 
 console.log("\n" + checks + " checks");

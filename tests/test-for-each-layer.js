@@ -317,4 +317,84 @@ assert(!rCap.ok && /Capped at 200/.test(rCap.error || ""),
 assert(big._layers.every(l => l._effects._fx.length === 0),
        "the capped call changed nothing");
 
+// --------------------------------- 5. the plural handed to a SINGULAR tool
+//
+// Measured in AE 2026 (chat-probe row 36 casual, "drop shadow on every
+// layer but the BG"): the model routed CORRECTLY to apply_effect and
+// passed {layers: [...]}, which apply_effect does not take. The refusal
+// was the bare "Missing 'layer' (name or 1-based index)" -- it named the
+// absent key and never the key that HAD arrived, so the model re-sent the
+// identical call and gave up. A refusal that cannot be acted on is the
+// bug; for_each_layer is the plural these tools have, and nothing said so.
+
+const plural = makeComp("Plural", 3);
+project.activeItem = plural;
+
+const rPlural = call("apply_effect",
+                     { layers: ["P 1", "P 2"], effect: "Gaussian Blur" });
+assert(!rPlural.ok, "apply_effect {layers: [...]} is refused");
+assert(plural._layers.every(l => l._effects._fx.length === 0),
+       "and nothing was applied to anything");
+assert(/you passed 'layers'/.test(rPlural.error || ""),
+       "the refusal names the key that WAS handed over: " + rPlural.error);
+assert(/P 1/.test(rPlural.error || "") && /P 2/.test(rPlural.error || ""),
+       "and quotes the layers it was given back");
+assert(/apply_effect/.test(rPlural.error || ""),
+       "and names the tool that does not take it");
+assert(/for_each_layer \{layers/.test(rPlural.error || ""),
+       "and names for_each_layer, the plural this tool DOES have");
+
+// Nothing handed over at all: no plural to name, so ground it in the
+// roster instead -- names are the only way in for a caller that cannot
+// click, and the bare form gave it none.
+const rBare = call("apply_effect", { effect: "Gaussian Blur" });
+assert(!rBare.ok && /Missing 'layer'/.test(rBare.error || ""),
+       "a bare call still says which key is missing: " + rBare.error);
+assert(/Layers in 'Plural'/.test(rBare.error || "") &&
+       /P 1, P 2, P 3/.test(rBare.error || ""),
+       "and now lists what the comp actually has: " + rBare.error);
+assert(!/you passed 'layers'/.test(rBare.error || ""),
+       "and does not invent a plural nobody sent");
+
+// The same mistake down the SELECTION path. Falling through to "select
+// one in AE" is a dead end twice over: the caller cannot click, and it
+// NAMED its targets -- honouring a stale selection instead would work on
+// layers nobody asked for and report success.
+plural._layers.forEach(l => { l.selected = false; });
+const rSel = call("duplicate_layer", { layers: ["P 1", "P 2"] });
+assert(!rSel.ok, "a layerOrSelection tool handed {layers} is refused too");
+assert(/you passed 'layers'/.test(rSel.error || "") &&
+       !/select/i.test(rSel.error || ""),
+       "and says so instead of 'select one in AE': " + rSel.error);
+assert(plural._layers.length === 3, "and duplicated nothing");
+
+// The mirror: a list under the SINGULAR key. comp.layer([a, b]) answered
+// "invalid numeric result (divide by zero?)" in the field -- a message
+// that names neither the argument nor the tool.
+const rList = call("link_property",
+                   { layer: ["P 1", "P 2"], property: "opacity",
+                     controlLayer: "P 3", controlEffect: "Slider" });
+assert(!rList.ok && /takes ONE layer, not a list/.test(rList.error || ""),
+       "a list under 'layer' is named as such: " + rList.error);
+assert(/P 1, P 2/.test(rList.error || ""),
+       "and quotes the list it was handed");
+
+// ...but ONLY for the target argument. 'parent' sits beside a legitimate
+// {layers} list, so "run it on each" would answer a question nobody asked.
+const rParent = call("set_layer_parent",
+                     { layers: ["P 1"], parent: ["P 2", "P 3"] });
+assert(!rParent.ok &&
+       /'parent' \(name or 1-based index\)/.test(rParent.error || ""),
+       "a bad 'parent' is reported as 'parent', not 'layer': " +
+       rParent.error);
+assert(!/for_each_layer/.test(rParent.error || ""),
+       "and is not answered with the per-layer redirect: " + rParent.error);
+
+// set_property wrote this redirect by hand after the same mistake was
+// measured twice in one probe run. Its own wording still wins.
+const rSetProp = call("set_property",
+                      { layers: ["P 1"], property: "opacity", value: 50 });
+assert(!rSetProp.ok && /works on ONE layer/.test(rSetProp.error || ""),
+       "set_property keeps its own hand-written redirect: " + rSetProp.error);
+
 console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");
