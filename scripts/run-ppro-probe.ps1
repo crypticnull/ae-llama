@@ -284,8 +284,16 @@ try { $res = Read-AellJson -Path $resFile } catch {
 }
 
 Say ''
-Say ("host: " + $res.panel.appName + " " + $res.panel.appVersion +
-     "   claimed by: " + $(if ($res.job) { $res.job.via } else { 'door 3 runner' }))
+# The two claimers write different shapes: the visible panel nests host
+# facts under .panel, the invisible runner under .host. Reading only one
+# printed a blank "host:   claimed by:" line on the first successful run.
+$hostName = $null; $hostVer = $null; $claimedBy = $null
+if ($res.panel) { $hostName = $res.panel.appName; $hostVer = $res.panel.appVersion }
+elseif ($res.host) { $hostName = $res.host.appName; $hostVer = $res.host.appVersion }
+if ($res.job -and $res.job.via) { $claimedBy = $res.job.via }
+elseif ($res.via) { $claimedBy = $res.via }
+Say ("host: " + $(if ($hostName) { "$hostName $hostVer" } else { '(not recorded)' }) +
+     "   claimed by: " + $(if ($claimedBy) { $claimedBy } else { '(not recorded)' }))
 Say ''
 
 $failedSteps = 0

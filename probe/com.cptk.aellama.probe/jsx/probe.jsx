@@ -526,25 +526,58 @@ AELLP_PROBES.battery = function (args) {
       }
       tried.push({ how: "activeSequence already open", ok: false });
 
-      try {
-        item = app.project.newBarsAndTone(1920, 1080, 1, 1, 1, 48000,
-                                          "AELL PROBE BARS");
-        got = app.project.createNewSequenceFromClips("AELL PROBE SEQ",
-                                                     [item]);
-        tried.push({ how: "newBarsAndTone + createNewSequenceFromClips",
-                     ok: !!got });
-      } catch (e1) {
-        tried.push({ how: "newBarsAndTone + createNewSequenceFromClips",
-                     ok: false, error: AELLP_say(e1) });
+      /*
+       * TIMEBASE IS IN TICKS PER FRAME, not frames per second.
+       * Premiere counts 254016000000 ticks per second, so 25 fps is
+       * 254016000000 / 25. The first version passed 1, which is not a
+       * frame rate in any unit, and the call failed -- dropping through
+       * to createNewSequence and raising the dialog described below.
+       */
+      var TICKS_PER_SECOND = 254016000000;
+      var rates = [25, 24, 30];
+      var r;
+      for (r = 0; r < rates.length && !got; r++) {
+        try {
+          item = app.project.newBarsAndTone(
+            1920, 1080, TICKS_PER_SECOND / rates[r], 1, 1, 48000,
+            "AELL PROBE BARS");
+          got = app.project.createNewSequenceFromClips("AELL PROBE SEQ",
+                                                       [item]);
+          tried.push({ how: "newBarsAndTone " + rates[r] +
+                            "fps + createNewSequenceFromClips",
+                       ok: !!got });
+        } catch (e1) {
+          tried.push({ how: "newBarsAndTone " + rates[r] +
+                            "fps + createNewSequenceFromClips",
+                       ok: false, error: AELLP_say(e1) });
+        }
       }
 
+      /*
+       * createNewSequence(name, "") is DELIBERATELY NOT CALLED unattended.
+       * An empty sequenceID means "ask the user which preset", and it
+       * raised exactly that modal on 2026-09-02 -- a dialog with nobody
+       * at the keyboard is a hang, and the whole point of this runner is
+       * that nobody touches Premiere. It is available only when the
+       * caller says dialogs are acceptable.
+       */
       if (!got) {
-        try {
-          got = app.project.createNewSequence("AELL PROBE SEQ", "");
-          tried.push({ how: "createNewSequence(name, \"\")", ok: !!got });
-        } catch (e2) {
-          tried.push({ how: "createNewSequence(name, \"\")", ok: false,
-                       error: AELLP_say(e2) });
+        if (args.allowDialogs === true) {
+          try {
+            got = app.project.createNewSequence("AELL PROBE SEQ", "");
+            tried.push({ how: "createNewSequence(name, \"\") [may prompt]",
+                         ok: !!got });
+          } catch (e2) {
+            tried.push({ how: "createNewSequence(name, \"\") [may prompt]",
+                         ok: false, error: AELLP_say(e2) });
+          }
+        } else {
+          tried.push({ how: "createNewSequence(name, \"\")",
+                       ok: false,
+                       error: "NOT ATTEMPTED: an empty preset id opens the " +
+                              "New Sequence dialog, which blocks an " +
+                              "unattended run. Pass allowDialogs:true to " +
+                              "try it with a human present." });
         }
       }
 

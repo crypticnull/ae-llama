@@ -13990,3 +13990,26 @@ Nothing else was left unattempted this pass. Nothing is blocked.
   raw U+FEFF into the page source - the same invisible-byte hazard as
   the control bytes earlier today. The test now forbids it explicitly.
 - Harness 70/72. No `extension/` change, so NO BUMP.
+
+## 2026-09-02 (remote session) — the unattended run WORKED: 8/8 steps
+
+- `run-ppro-probe.ps1` completed in one launch: ping, hostFacts, qe,
+  project, sequence, history, mogrt, cleanup all ok. The MOGRT accept
+  read-back that has been owed since docs/SELF-VERIFY-PLANS.md step 7
+  was written finally ran unattended.
+- ONE modal still appeared: Premiere asked for a sequence PRESET. Cause
+  found and fixed. `newBarsAndTone`'s third argument is TIMEBASE IN
+  TICKS PER FRAME (Premiere counts 254016000000 ticks/second), and the
+  first version passed `1`, which is not a frame rate in any unit. That
+  call failed, the step fell through to `createNewSequence(name, "")`,
+  and an EMPTY preset id means "ask the user" -- the dialog.
+- Fixed twice over: `newBarsAndTone` now computes a real timebase and
+  tries 25/24/30 fps in turn, and `createNewSequence(name, "")` is
+  NEVER called unless the caller passes `allowDialogs:true`. A dialog
+  with nobody at the keyboard is a hang, and this runner exists so that
+  nobody touches Premiere.
+- Also fixed: the summary printed a blank `host:   claimed by:` line.
+  The two claimers write different shapes (the visible panel nests host
+  facts under `.panel`, the invisible runner under `.host`) and the
+  report read only one of them.
+- Harness 70/72. No `extension/` change, so NO BUMP.
