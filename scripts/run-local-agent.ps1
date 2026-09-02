@@ -37,6 +37,10 @@ param(
     [string]$RepoRoot = '',
     [string]$Branch = 'claude/ae-plugin-llama-cpp-f13g3x',
     [string]$ClaudePath = '',
+    # Model for every pass, passed straight to `claude --model`. Empty =
+    # the CLI's own default. Overnight verification passes run fine on a
+    # cheaper tier; the expensive one is for daytime design and review.
+    [string]$Model = '',
     [switch]$SkipPermissions = $true,
     [switch]$Detached
 )
@@ -58,6 +62,7 @@ if (-not $Detached) {
     if ($RepoRoot)   { $fwd = $fwd + ' -RepoRoot "' + $RepoRoot + '"' }
     if ($Branch)     { $fwd = $fwd + ' -Branch "' + $Branch + '"' }
     if ($ClaudePath) { $fwd = $fwd + ' -ClaudePath "' + $ClaudePath + '"' }
+    if ($Model)      { $fwd = $fwd + ' -Model "' + $Model + '"' }
     if (-not $SkipPermissions) { $fwd = $fwd + ' -SkipPermissions:$false' }
     $spawn = $null
     try {
@@ -209,9 +214,11 @@ Hard limits for this session:
 
 $claudeArgs = @('-p', $prompt)
 if ($SkipPermissions) { $claudeArgs += '--dangerously-skip-permissions' }
+if ($Model) { $claudeArgs += @('--model', $Model) }
 
 Write-Log ('repo   : ' + $RepoRoot)
 Write-Log ('claude : ' + $ClaudePath)
+Write-Log ('model  : ' + $(if ($Model) { $Model } else { '(CLI default)' }))
 Write-Log ('branch : ' + $Branch)
 Write-Log ('log    : ' + $logFile)
 Write-Log ('plan   : ' + $Iterations + ' iterations, ' + $PauseSec + 's pause')
