@@ -3277,20 +3277,22 @@
    * Rules, in order:
    *  - under budget -> unchanged, dropped: 0;
    *  - drop whole entries from the front until under budget, but never
-   *    the last four — the current exchange must survive even when it
-   *    alone busts the budget (the model then gets a too-big prompt and
-   *    the caller's retry path deals with the 400);
+   *    the last four — the current exchange must survive;
    *  - after dropping, keep dropping until the first entry is a USER
    *    turn: chat templates expect user-first after the system message,
    *    and an orphaned assistant turn reads as the model talking to
-   *    itself.
+   *    itself;
+   *  - and then, if the protected tail ALONE is still over budget,
+   *    shorten its entries' CONTENT until it is not. See below.
    */
   function fitHistory(history, budgetChars) {
     var size = 0, i;
     for (i = 0; i < history.length; i++) {
       size += (history[i].content || "").length + 16;
     }
-    if (size <= budgetChars) return { entries: history, dropped: 0, ledger: "" };
+    if (size <= budgetChars) {
+      return { entries: history, dropped: 0, truncated: 0, ledger: "" };
+    }
     var entries = history.slice();
     var gone = [];
     while (entries.length > 4 && size > budgetChars) {
@@ -3301,9 +3303,65 @@
       size -= (entries[0].content || "").length + 16;
       gone.push(entries.shift());
     }
-    return { entries: entries, dropped: gone.length,
+    // THE FLOOR, and why it has to exist. Dropping WHOLE entries stops
+    // at the protected tail, so ONE oversized entry inside it — a
+    // comfy_generate result, a pasted expression, a long TOOL RESULTS
+    // array — left this function returning a payload it had already
+    // computed was too big. main.js answers a context HTTP 400 by
+    // calling back with budget 1; with nothing left to drop that
+    // returned the SAME BYTES, so the retry earned the SAME 400 and the
+    // chat was dead until cleared. That is the exact failure fitHistory
+    // was written to end, arriving through the one door it left open.
+    //
+    // Measured on this machine 2026-09-02 (scripts/history-floor-probe.js,
+    // real llama-server, Qwen2.5-32B, ctx 16384): a four-entry tail of
+    // 60334 chars was refused, and the retry re-sent all 60334 of them.
+    //
+    // So shorten the survivors' CONTENT: oldest of the tail first, the
+    // newest entry last, because that one carries the sentence being
+    // answered. Every cut says so IN WORDS — this is the one place in
+    // the panel that may hand the model a JSON result cut mid-object,
+    // and a silent one is indistinguishable from a tool that returned
+    // half an answer.
+    var truncated = 0;
+    for (i = 0; i < entries.length && size > budgetChars; i++) {
+      var content = entries[i].content || "";
+      // The marker carries the number of characters it replaced, so its
+      // own length depends on the answer. Solve it twice: the first pass
+      // prices the marker at the widest the number can be, the second is
+      // exact. Getting this wrong is not cosmetic — an under-priced
+      // marker leaves the entry over budget, the loop walks on to the
+      // next one, and it eats the newest turn it was supposed to spare.
+      var marker = trimMarker(content.length);
+      var keep = 0, j;
+      for (j = 0; j < 2; j++) {
+        keep = content.length - (size - budgetChars) - marker.length;
+        if (keep < TRIM_MIN_KEEP_CHARS) keep = TRIM_MIN_KEEP_CHARS;
+        marker = trimMarker(content.length - keep);
+      }
+      // An entry shorter than the marker gets BIGGER if we "shorten" it.
+      // Leave it whole and spend the budget on one that pays.
+      if (keep + marker.length >= content.length) continue;
+      entries[i] = {
+        role: entries[i].role,
+        content: content.slice(0, keep) + marker
+      };
+      size -= content.length - entries[i].content.length;
+      truncated++;
+    }
+    return { entries: entries, dropped: gone.length, truncated: truncated,
              ledger: rollupHistory(gone, LEDGER_BUDGET) };
   }
+
+  function trimMarker(cut) {
+    return "\n[... " + cut + " characters cut from this message to fit " +
+      "the model's context window - it is INCOMPLETE, do not read the " +
+      "end of it as the end of the data]";
+  }
+
+  // The smallest remnant worth leaving — below this an entry says
+  // nothing anyway and the marker is most of what is left.
+  var TRIM_MIN_KEEP_CHARS = 200;
 
   // ------------------------------------------------- the history ledger
   //

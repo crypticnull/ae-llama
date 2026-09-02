@@ -83,7 +83,9 @@ receipt for a matte AE never made. Fixed by refusing on layer TYPE, with
 6 new selftest steps and 9 stub assertions. Watch out for the trap the
 first cut fell into: `instanceof AVLayer` is FALSE for text and shape
 layers too. See WORKPLAN-LOG 2026-09-01. The pass-22 salvage bullet at
-the end is STILL OPEN and is its own pass.
+the end was its own pass and is DONE 2026-09-02 (0.11.6) — the stash and
+the backup branch are gone; what was applied, what was filed and why is
+in that bullet.
 
 <details><summary>original bullets (kept for the measurements they name)</summary>
 
@@ -120,7 +122,50 @@ and patch-bumps. One pass, in this order:
   and the fix.
 - All green → `node scripts/bump-version.js patch`, push, log. Any
   failure → fix at the root, keep the stubs faithful, then bump.
-- **Pass-22 salvage — RECOVER, do not drop.** The owner's reset on
+- **Pass-22 salvage — DONE 2026-09-02 (0.11.6).** Read, measured,
+  half-applied, half-filed, stash and branch dropped. `aell-backup-pass22`
+  turned out to hold nothing: it was an ancestor of `origin/main`, so the
+  whole of pass 22 was in the stash. Note for anyone reading the older
+  log entries: the stash had MOVED to `stash@{1}` by the time this ran —
+  `run-local-agent.ps1` pushed a `loop-salvage-*` on top of it, so
+  "stash@{0} is pass22-salvage" was stale advice. **Always find it by
+  name.**
+  - **APPLIED: the `fitHistory` floor.** Pass 22's load-bearing find was
+    still a live defect on today's head, and it was not a guess:
+    reproduced end to end against this machine's real 32B
+    (`scripts/history-floor-probe.js`, new). When one entry inside the
+    protected four-entry tail is bigger than the whole budget,
+    fitHistory returned a payload it had already computed was too big;
+    main.js's reactive retry called back with budget 1, got the SAME
+    BYTES, and llama-server refused both with the identical "request
+    (17733 tokens) exceeds the available context size (16384)". The chat
+    was dead until cleared. Now the survivors' CONTENT is shortened,
+    oldest of the tail first, each cut naming itself in words.
+  - **FILED, not applied — pass 22's other half** (`Llama.measurePrompt`
+    + `Tools.planContext` + a caller-supplied `max_tokens`). It was
+    written against the tools.js of 2026-09-01 and the 0.11.4
+    context-budget pass has since answered the same question differently
+    and with its own tokenizer measurements (`historyBudget`, the pinned
+    3.7/2.7 ratios, the ledger). Applying planContext would have
+    replaced measured work with older measured work. What is worth
+    keeping is the ONE idea 0.11.4 does not have — see roadmap item
+    below.
+- **NEW, from the salvage: ask the SERVER for the two numbers.** The
+  panel budgets the window from `settings.ctxSize` and an estimated
+  chars/token ratio. llama-server will answer both exactly:
+  `POST /tokenize` gives the prompt's real token count, and `GET /props`
+  gives the `n_ctx` the server was actually STARTED with — which is not
+  necessarily the one settings.json remembers (a hand-launched server,
+  or a model whose trained maximum clamped it). Pass 22 measured
+  /tokenize at 14-40 ms on a 54611-char prompt, nothing against a 1-3 s
+  round. **No live symptom on this machine** — measured 2026-09-02,
+  settings said 16384 and the server's own 400 reported `n_ctx: 16384`,
+  so they agreed — which is why this is filed rather than built. Needs
+  its own pass: an extra HTTP call per request is a behaviour change,
+  and the interesting case (the two numbers DISAGREEING) has to be
+  staged deliberately to be measured at all.
+- **Pass-22 salvage — RECOVER, do not drop.** (original instruction,
+  kept for the rules it names.) The owner's reset on
   2026-09-01 parked pass 22's uncommitted work in stash
   `pass22-salvage` (and any unpushed commits on branch
   `aell-backup-pass22`). It was NOT just the 0.10.22 bump: `git
@@ -1753,12 +1798,12 @@ local verifies in real AE.
     the window. Phase 2, measured before adopted: when the ledger
     itself hits its cap, ONE cheap model call (max_tokens ~200, only
     between rounds, never mid-round) compresses it; skip if the 32B's
-    latency cost is not worth it. NOTE for the local session: pass 22's
-    stash (`pass22-salvage`) touched llama.js/main.js/tools.js and a
-    tests/test-history-trim.js change — it was working THIS area;
-    reconcile the two when recovering it (keep whichever keeps more
-    function per char, measured by tests/test-context-budget.js).
-    Stub-testable; local measures the VRAM side.
+    latency cost is not worth it. NOTE, resolved 2026-09-02: pass 22's
+    stash touched this same area and has been salvaged — the fitHistory
+    floor landed (0.11.6), the planContext half was filed rather than
+    applied because this item's own 0.11.4 work already answers it with
+    better measurements. Nothing left to reconcile; the stash is dropped.
+Stub-testable; local measures the VRAM side.
 
 Dropped for now, with reasons recorded in the audit doc: comp
 versioning (first post-alpha minor), comp checkpoint/diff, review

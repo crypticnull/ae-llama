@@ -10925,3 +10925,175 @@ refuses it, what changes is the STATUS of the pin, not its field names.
 - Not attempted this pass (still open, in order): **the pass-22
   salvage**. `stash@{0}` is still `pass22-salvage` and branch
   `aell-backup-pass22` still exists, untouched.
+
+## 2026-09-02 (local session, real AE) — WORKPLAN 1b last bullet: the pass-22 salvage, and a retry that re-sent the bytes that failed (0.11.6)
+
+Harness green on arrival (566/566), so this pass took the last unfinished
+item in the highest open section: **the pass-22 salvage**. Pass 22 was
+killed mid-change on 2026-09-01 and never wrote a log entry; the workplan
+bullet said RECOVER, do not drop, and gave two exits — apply it, or
+document what it attempted and drop it. The answer turned out to be one
+of each, and the half that got applied was a defect still live today.
+
+### First: the stash had moved, and the branch was empty
+
+Four log entries in a row said "`stash@{0}` is `pass22-salvage`". It is
+not, and has not been for some time: `run-local-agent.ps1` pushed a
+`loop-salvage-20260902-010712` on top, so pass 22 was at **`stash@{1}`**.
+Anyone acting on the old advice would have read, applied or dropped the
+loop's stash instead. **Find it by name.**
+
+`aell-backup-pass22` held nothing at all — `git merge-base --is-ancestor
+aell-backup-pass22 origin/main` answers yes, so every commit on it was
+already in main and the whole of pass 22 lived in the stash. The bullet's
+worry about "any unpushed commits" was unfounded, which is only knowable
+by checking.
+
+### What pass 22 was building: four things, two verdicts
+
+The stash was not fragmentary — 599 insertions across llama.js, main.js,
+tools.js, chat-probe.js and a 268-line test file, all pointed at one
+question: how much of the context window is actually left. It carried
+
+1. a `fitHistory` floor that shortens CONTENT when there are no entries
+   left to drop;
+2. `Llama.measurePrompt` — `POST /tokenize` + `GET /props`, asking the
+   server for the prompt's real token count and the `n_ctx` it was
+   actually started with;
+3. `Tools.planContext` — a replacement for the old
+   `max(4000, (ctx - 3600) * 3 - system.length)` arithmetic;
+4. `max_tokens` as the caller's number instead of a hard 3072.
+
+(2), (3) and (4) were written against the tools.js of 2026-09-01. The
+0.11.4 context-budget pass has since answered the same question with its
+own tokenizer measurements — `historyBudget`, the pinned 3.7/2.7 ratios,
+and the ledger. **Applying planContext would have replaced measured work
+with older measured work**, so it is filed, not applied, with the one
+idea 0.11.4 does not have written into the workplan (see below).
+
+(1) is a different matter: it is still broken on today's head.
+
+### The defect, reproduced against the real 32B before anything changed
+
+`fitHistory` drops whole entries from the front but never below the last
+four — the current exchange must survive. When ONE entry inside that
+protected tail is bigger than the whole budget (a comfy_generate result,
+a pasted expression, a long TOOL RESULTS array) there is nothing left to
+drop, so the function returned a payload it had **already computed was
+too big**. main.js answers a context HTTP 400 by calling back with budget
+1; with nothing to drop that returned the same bytes.
+
+New probe, committed so it can be re-run: `scripts/history-floor-probe.js`
+(needs no AE — the defect is panel-side). Against this machine's own
+Qwen2.5-32B at ctx 16384, **before** the fix:
+
+    the raw four-entry tail        60334 chars
+    what fitHistory returned       60334 chars   <- unchanged
+    what the retry returned        60334 chars   <- the same bytes again
+    llama-server, attempt          HTTP 400  request (17733 tokens)
+                                             exceeds the available
+                                             context size (16384 tokens)
+    llama-server, retry            HTTP 400  ...17733 again, identical
+
+That is the chat dead until cleared — the exact failure fitHistory was
+written to end, arriving through the one door it left open. Pass 22 had
+found it by hand on 2026-08-30 (chat-probe step 14, 16563 tokens) and
+died before it could say so.
+
+### What changed
+
+- **`extension/js/tools.js`** — `fitHistory` gains the floor. Once
+  dropping runs out, the survivors' CONTENT is shortened, **oldest of the
+  tail first and the newest entry last** (that one carries the sentence
+  being answered). Each cut names itself in the body of the message it
+  cut: `[... N characters cut ... it is INCOMPLETE, do not read the end
+  of it as the end of the data]`. This is the one place in the panel that
+  may hand the model a JSON result cut mid-object, and a silent one is
+  indistinguishable from a tool that returned half an answer. The marker
+  is priced twice (its own length depends on the number inside it) — an
+  under-priced marker would leave the entry over budget and send the loop
+  on to eat the turn it exists to spare. An entry too short to pay for
+  its marker is left whole, because "shortening" it would make it BIGGER.
+  Returns `truncated` alongside the existing `dropped`/`ledger`.
+- **`extension/js/main.js`** — a `cutNoticeShown` info line, once per
+  chat, reset by Clear. Deliberately a SECOND line rather than folded
+  into the ledger's: the ledger says old turns were summarised, this says
+  a message in the CURRENT exchange reached the model with its middle
+  missing. Different fact, different fix (raise Context size, or clear).
+- **`docs/WORKPLAN.md`** — 1b's bullet marked done with both verdicts;
+  the stale reconcile note on roadmap item 13 resolved.
+
+### After the fix, same probe, same server: 12/12 claims held
+
+    what fitHistory returned        3100 chars   HTTP 200
+    what the retry returned          591 chars   HTTP 200
+    the raw tail (control)         60334 chars   HTTP 400  <- still refused
+
+Worth saying plainly: the fix means the **first** attempt now fits, so
+the 400 never happens and the retry path is a second net rather than the
+only one. The probe's first draft asserted the pre-fix shape ("the first
+attempt is over budget") and went red on its own success; it now asserts
+the contract — fitHistory never returns a payload it knows is too big —
+and posts the RAW history as a control, so phase B cannot pass by
+measuring nothing.
+
+### Verification
+
+- **Harness: 566/566 PASSED** in real AE, after the change.
+- `scripts/history-floor-probe.js`: **12/12 claims held**, real
+  llama-server. Before the fix the same probe held 7/12.
+- `tests/test-history-trim.js`: 27 -> **44 checks** (tests 11-17, adapted
+  from pass 22's own). **Verified they bite:** revert tools.js and **12
+  assertions go red**. One thing fixed while doing it — the first draft
+  read `cut[0].content` unguarded, so without the fix the suite died on a
+  TypeError after 3 failures and hid the other 9. A regression suite that
+  crashes reports less than one that fails.
+- Full stub sweep: **66/67**, the odd one out the known environmental
+  `tests/test-comfy-backend.js` (this machine has a Comfy-Desktop models
+  dir, CI does not — unchanged, still wants a `process.env` stub, still
+  not mine).
+- **BUMPED 0.11.5 -> 0.11.6** — tools.js and main.js changed.
+
+### The stash and the branch are gone
+
+Dropped after the above, per the bullet: `git stash drop` on the
+pass22-salvage entry and `git branch -D aell-backup-pass22`. Nothing was
+lost that is not either in this commit or written down above.
+
+### Filed for later passes, in priority order
+
+1. **NEW, out of the salvage: ask the SERVER for the two numbers.**
+   `POST /tokenize` for the prompt's real token count, `GET /props` for
+   the `n_ctx` llama-server was actually started with — which need not be
+   the one settings.json remembers (hand-launched server, or a model
+   whose trained maximum clamped it). Pass 22 measured /tokenize at 14-40
+   ms, nothing against a 1-3 s round. **No live symptom here**: measured
+   tonight, settings said 16384 and the server's own 400 reported
+   `n_ctx: 16384`. Its own pass — an extra HTTP call per request is a
+   behaviour change, and the interesting case (the two DISAGREEING) has
+   to be staged to be measured at all.
+2. **The compact-vs-full routing comparison** (1c bullet 2's remaining
+   half). Unchanged: needs two runs per mode, since a single-run per-step
+   miss at temperature 0.7 is noise.
+3. **`add_mask` accepts bounds that miss the layer entirely and reports
+   ok** (unchanged, still first among the tool bugs).
+4. **"Probe Room is a mess — clean it up" routes to the project panel**
+   (unchanged).
+5. **The harness cannot answer "Crash Repair Options"** (unchanged;
+   `scripts/lib/ae-dialog-triage.ps1`, screenshot at
+   `logs/dialogs/crash-repair.png`).
+6. **`starved` may now be too generous a word** (unchanged — a behaviour
+   change, not a measurement).
+7. **delete_mask could warn when an expression still points at the mask**
+   (unchanged).
+8. **A controller GROUP has never been measured**, nor any locale but
+   en_US (unchanged from the MOGRT pass).
+9. **`capParams` is a second, independent roster inside the same .mogrt**
+   — cross-checking the two would catch a strDB-shaped mistake with no
+   real file at all (unchanged).
+10. **Still owed, needs a human awake:** drop
+    `logs\mogrt-verify\AELL Probe Card.mogrt` into real Premiere
+    (harness plan step 6).
+
+- Nothing was left unattempted this pass: section 1b is now closed
+  entirely, and 1c was closed by the previous one.
