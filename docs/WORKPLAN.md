@@ -2031,6 +2031,70 @@ steps of each plan's build order:
   [remote]. This is also roadmap item 9 — the harness and the
   feature ship together.
 
+## 11. Can the harness drive PREMIERE too? (probe first, owner asked 2026-09-02)
+
+**Folded into section 12 / docs/PREMIERE_PLAN.md P0 on 2026-09-02**
+— the probes below are P0 step 4 there, and P0 is OWNER-GATED. Do not
+run them from an unattended pass; the text stays for context.
+
+The overnight harness exists because After Effects ships
+`AfterFX.exe -r <script.jsx>`, which runs ExtendScript in a live
+instance. **Premiere has no such flag** — that, not effort, is why
+every Premiere check has been manual. Two candidate doors, neither
+measured; this item is the measurement, not the build:
+
+- **BridgeTalk from inside AE.** The harness already runs ExtendScript
+  in AE, and BridgeTalk was Adobe's inter-app script channel
+  (`new BridgeTalk(); bt.target = "premierepro"`). If Premiere 2026
+  still answers it, driving Premiere costs no new machinery. Adobe has
+  been retiring ExtendScript in Premiere in favour of UXP, so this may
+  simply not answer. PROBE: from a `-r` script with Premiere RUNNING,
+  send a one-line script that writes a file, and see whether the file
+  appears. Record the exact Premiere target name that worked (it is
+  versioned, e.g. `premierepro-25`), or that none did.
+- **A CEP panel installed into Premiere.** We already build one for
+  AE, so the skill is in the repo. A minimal panel that runs on
+  Premiere launch, does the check, writes a result file and reports.
+  Heavier than BridgeTalk and it changes the user's Premiere install,
+  so only if BridgeTalk is dead.
+- **If both are dead, say so and stop.** The manual step stays manual
+  and gets written up as a genuine limit, not a TODO. Note that the
+  0.11.x foreign-corpus probe already covers the part that matters
+  (can we READ what Premiere ships); what Premiere-driving would add
+  is "does Premiere ACCEPT what AE wrote", a narrower question.
+
+Whatever the answer, write it into CLAUDE.md's hard-won facts: the
+next session must not re-derive whether Premiere is scriptable.
+
+## 12. Premiere panel in the same ZXP — OWNER-GATED, plan filed 2026-09-02
+
+The plan is `docs/PREMIERE_PLAN.md`. Short version: yes, the ZXP can
+carry a second CEP extension for Premiere (one bundle, one feed, one
+installer); but Adobe's own doc sources say Premiere ExtendScript is
+supported "through September 2026" and CEP "for a calendar year" after
+25.6 (~Nov 2026), and UXP cannot spawn processes or ride the ZXP. So
+the CEP surface is a bridge: probe first, MVP on the dev junction
+only, UXP decided on a date.
+
+**Nothing here starts until the owner answers decision 1 in the plan
+(§6).** An unattended pass that reaches this section appends "12:
+waiting on owner" to the log and moves on. When approved, P0 is:
+
+- Remote writes: `probe/com.cptk.aellama.probe/` (throwaway bundle
+  outside `extension/`, AEFT+PPRO, ~40-line jsx, one html page),
+  `scripts/install-probe.ps1`, `scripts/ppro-door-probe.ps1`, the
+  MOGRT acceptance read-back, the `bump-version.js` global-regex fix
+  + fixture test, `ZXPSignCmd -verify` in packaging and CI.
+- Local runs, owner clicks: install via junction, signed ZXP AND the
+  aescripts installer; Premiere 27.0 beta same probe; window census;
+  the three headless doors, 1-day timebox each; export a transcript as
+  TXT/CSV/SRT; record what the Premiere AI Assistant does on this
+  install. Results land in `%APPDATA%\AE-Llama\probes\*.json` and are
+  committed under `docs/measured/`.
+- Exit: Gate G0 in the plan; facts into CLAUDE.md and
+  `docs/PREMIERE-PLATFORM.md`; section 11 closed with its answer.
+  No version bump (nothing ships).
+
 ## Out of scope for the local session (remote builds these)
 
 - ComfyUI bundled node-pack installer and wiring generation into
