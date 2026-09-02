@@ -435,7 +435,33 @@ AELLP_PROBES.battery = function (args) {
     flush();
     try {
       row.data = fn();
-      row.ok = true;
+      /*
+       * A step that RETURNS an error is not a step that passed.
+       *
+       * Measured 2026-09-02: the runner printed "Every battery step
+       * passed" on a run where the sequence was never created, History
+       * was skipped for a missing API, and the MOGRT step refused for
+       * want of a sequence. Only a THROW was counted as failure, so
+       * three dead measurements reported green. That is the exact false
+       * success this project exists to refuse.
+       */
+      if (row.data && typeof row.data === "object") {
+        if (row.data.error) {
+          row.ok = false;
+          row.error = String(row.data.error);
+        } else if (row.data.skipped) {
+          row.ok = true;
+          row.skipped = String(row.data.skipped);
+        } else if (row.data.via === "none" || row.data.via === "refused") {
+          row.ok = false;
+          row.error = "did not achieve its purpose (via: " +
+                      String(row.data.via) + ")";
+        } else {
+          row.ok = true;
+        }
+      } else {
+        row.ok = true;
+      }
     } catch (e) {
       row.ok = false;
       row.error = AELLP_say(e);
@@ -448,6 +474,39 @@ AELLP_PROBES.battery = function (args) {
 
   out.startedAt = String(new Date());
   flush();
+
+  /*
+   * WAIT FOR THE HOST TO BE READY before measuring anything that needs a
+   * project.
+   *
+   * Measured 2026-09-02: the invisible runner fires on the host's
+   * startup event, which happens BEFORE Premiere has finished opening a
+   * project. app.project.name and .path both read back null, so the
+   * project step fell through to app.newProject, newBarsAndTone raised
+   * "Illegal Parameter type", rootItem.createBin looked absent, and the
+   * MOGRT step had no sequence to import into. Four failures, one cause:
+   * we asked too early.
+   */
+  step("waitForReady", function () {
+    var waited = 0;
+    var stepMs = 500;
+    var maxMs = (typeof args.readyTimeoutMs === "number")
+      ? args.readyTimeoutMs : 30000;
+    var name = null;
+    while (waited < maxMs) {
+      name = AELLP_safe(function () { return app.project.name; });
+      if (name && typeof name === "string" && name.length > 0) {
+        return { ready: true, waitedMs: waited, projectName: name };
+      }
+      try { $.sleep(stepMs); } catch (eSleep) { break; }
+      waited += stepMs;
+    }
+    return { ready: false, waitedMs: waited,
+             error: "app.project.name was still empty after " + waited +
+                    "ms -- the host had not finished opening a project, so " +
+                    "every project-dependent step below would be measuring " +
+                    "an empty host" };
+  });
 
   step("ping", function () { return AELLP_PROBES.ping(); });
   step("hostFacts", function () { return AELLP_PROBES.hostFacts(); });
@@ -527,6 +586,38 @@ AELLP_PROBES.battery = function (args) {
       tried.push({ how: "activeSequence already open", ok: false });
 
       /*
+       * SEED MEDIA FIRST. createNewSequenceFromClips derives the whole
+       * sequence from a clip, so it needs no preset and opens no dialog.
+       * Importing a still the repo already ships is the least exotic way
+       * to get a clip: newBarsAndTone answered "Illegal Parameter type"
+       * to every timebase tried on 26.3.2, and its signature is not
+       * worth more guessing when an import cannot be ambiguous.
+       */
+      if (args.seedMedia) {
+        try {
+          var beforeN = app.project.rootItem.children.numItems;
+          app.project.importFiles([args.seedMedia], true,
+                                  app.project.rootItem, false);
+          var afterN = app.project.rootItem.children.numItems;
+          if (afterN > beforeN) {
+            item = app.project.rootItem.children[afterN - 1];
+            got = app.project.createNewSequenceFromClips("AELL PROBE SEQ",
+                                                         [item]);
+          }
+          tried.push({ how: "importFiles(seed still) + " +
+                            "createNewSequenceFromClips",
+                       ok: !!got,
+                       error: got ? null
+                                  : ("import left " + String(beforeN) + " -> " +
+                                     String(afterN) + " items") });
+        } catch (eSeed) {
+          tried.push({ how: "importFiles(seed still) + " +
+                            "createNewSequenceFromClips",
+                       ok: false, error: AELLP_say(eSeed) });
+        }
+      }
+
+      /*
        * TIMEBASE IS IN TICKS PER FRAME, not frames per second.
        * Premiere counts 254016000000 ticks per second, so 25 fps is
        * 254016000000 / 25. The first version passed 1, which is not a
@@ -536,7 +627,7 @@ AELLP_PROBES.battery = function (args) {
       var TICKS_PER_SECOND = 254016000000;
       var rates = [25, 24, 30];
       var r;
-      for (r = 0; r < rates.length && !got; r++) {
+      for (r = 0; r < rates.length && !got; r++) {   /* skipped once got */
         try {
           item = app.project.newBarsAndTone(
             1920, 1080, TICKS_PER_SECOND / rates[r], 1, 1, 48000,

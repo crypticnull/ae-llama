@@ -14034,3 +14034,39 @@ Nothing else was left unattempted this pass. Nothing is blocked.
   than shipping it blind: the block was extracted and executed under
   pwsh 7 with a fixture covering all eight steps.
 - Harness 70/72. No `extension/` change, so NO BUMP.
+
+## 2026-09-02 (remote session) — DOOR 3 IS ALIVE; and a false green
+
+- **The run was fully unattended and the INVISIBLE RUNNER claimed it**:
+  `claimed by: invisible runner (door 3)`. That is the headless door
+  WORKPLAN item 11 asked for. Premiere can be driven with nobody at the
+  keyboard, which is the prerequisite for an overnight Premiere leg.
+- Facts re-confirmed unattended: ExtendScript 4.5.6/80.1060872 and
+  engine `NewWorld` in Premiere; `beginUndoGroup` and `executeCommand`
+  both `undefined` (no undo API, measured a third time); BridgeTalk
+  specifier `premierepro-26.0` with `aftereffects` in its target list;
+  QE enters, `qe.project` resolves, version 26.3.2, 236 effects;
+  `BridgeTalk.getStatus("ame")` = ISNOTRUNNING.
+- **A FALSE GREEN, and it was mine.** The summary said "Every battery
+  step passed" on a run where the sequence was never created, History
+  was skipped for a missing API, and MOGRT refused for want of a
+  sequence. `step()` counted only a THROW as failure, so three dead
+  measurements reported ok. Fixed: a step whose data carries `error`
+  fails, one carrying `skipped` is reported as skipped, and `via:"none"`
+  or `"refused"` fails as "did not achieve its purpose". This project
+  exists to refuse exactly this shape of report.
+- ROOT CAUSE of the three real failures, and it was ONE cause: the
+  invisible runner fires on the host's startup event, which is BEFORE
+  Premiere has finished opening a project. `app.project.name` and
+  `.path` both read null, so the project step fell through to
+  `app.newProject`, `newBarsAndTone` answered "Illegal Parameter type"
+  to every timebase, `rootItem.createBin` looked absent, and MOGRT had
+  no sequence. We asked too early. NEW first step `waitForReady` polls
+  `app.project.name` up to 30 s and reports how long it waited.
+- Sequence creation gained a route that cannot open a dialog and cannot
+  be ambiguous: import a still the repo already ships
+  (`extension/icons/icon-normal.png`) and call
+  `createNewSequenceFromClips`, which derives the sequence from the clip
+  and needs no preset. `newBarsAndTone` stays as a fallback but its
+  signature is not worth more guessing after three rejected timebases.
+- Harness 70/72. No `extension/` change, so NO BUMP.

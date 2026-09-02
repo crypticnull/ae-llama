@@ -152,6 +152,12 @@ $job = [ordered]@{
     allowMutate    = $true
     scratchProject = ($scratch -replace '\\', '/')
     makeSequence   = $true
+    # A still the repo already ships. createNewSequenceFromClips derives
+    # the sequence from a clip, so it needs no preset and opens no
+    # dialog - unlike newBarsAndTone, which answered "Illegal Parameter
+    # type" to every timebase tried on 26.3.2.
+    seedMedia      = ((Join-Path $repoRoot 'extension\icons\icon-normal.png') -replace '\\', '/')
+    readyTimeoutMs = 30000
     skip           = $Skip
     mogrtPath      = $(if ($MogrtPath) { $MogrtPath -replace '\\', '/' } else { $null })
     createdAt      = (Get-Date).ToString('o')
