@@ -74,7 +74,7 @@ a native gap.
 | One aescripts licence can back two host listings | UNVERIFIED | P4 (ask aescripts) |
 | Exact `appName` string Premiere reports | **MEASURED: `PPRO`** | done |
 | CEP API version Premiere 26 uses | **MEASURED: 12.0.1, i.e. CEP 12** (the CSXS.13/14 claim is not borne out) | done |
-| `localStorage` scoping across hosts for one extension id | **MEASURED: per-host, isolated** | done (one direction; re-open AE's panel to confirm both) |
+| `localStorage` scoping across hosts for one extension id | **MEASURED: per-host, isolated BOTH directions** | done |
 | `AutoVisible` actually opens a panel in Premiere | SNIPPET (reported not to) | P0 step 1 |
 | `$.engineName` per host | **MEASURED: `main` (AE), `NewWorld` (Premiere)** | done |
 | ExtendScript engine degradation over a long session | **MEASURED: 500 round-trips survived in both hosts** | done at this size |
@@ -205,9 +205,10 @@ opposite ways:
   the lease file under `Settings.dataRoot()` is **required**, not an
   optional nicety — `localStorage` cannot carry cross-host state at all.
 
-(One direction is measured. Re-open AE's panel now that Premiere has
-written its key: if AE also cannot see `aell.probe.PPRO`, isolation is
-confirmed both ways.)
+**Confirmed both directions.** AE's panel was reopened at 20:44:18,
+twelve minutes after Premiere wrote `aell.probe.PPRO` at 20:32:42, and
+still saw only `aell.probe.AEFT`. Neither host can see the other's
+storage for the same extension id.
 
 ### 2026-09-02 — `$.fileName` in a CEP `ScriptPath` is not a path
 
@@ -216,8 +217,12 @@ but `$.fileName` inside it is not a path:
 
 | Host | `$.fileName` returned | `new File(that).parent.fsName` |
 |---|---|---|
-| After Effects 26.3 | `"7"` | `C:\Program Files\Adobe\Adobe After Effects 2026\Support Files` |
+| After Effects 26.3 | `"7"`, then `"8"` on the next launch | `C:\Program Files\Adobe\Adobe After Effects 2026\Support Files` |
 | Premiere 26.3.2 | `""` (empty) | `C:\Program Files\Adobe\Adobe Premiere Pro 2026` |
+
+Note the AE column: the value **changed between launches**, so it is a
+small counter of some kind, not even a stable token. Anything that
+parses or caches it is building on sand.
 
 The trap is the second column. Neither return value is a path, but
 `new File()` treats both as **relative**, resolves them against the

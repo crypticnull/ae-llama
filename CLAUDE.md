@@ -94,8 +94,9 @@ interactive session does NOT self-start; it answers one prompt and waits.
   CLI runner `$.evalFile`s it.
 - `.ps1` must be pure ASCII (Windows PowerShell 5.1, BOM-less).
 - **`$.fileName` inside a CEP `ScriptPath` is not a path at all.**
-  Measured on CEP 12.0.1: AE 26.3 returned the string **`"7"`**,
-  Premiere 26.3.2 returned **`""`**. The trap is what happens next —
+  Measured on CEP 12.0.1: AE 26.3 returned **`"7"`** on one launch and
+  **`"8"`** on the next (a small counter, not a stable value), Premiere
+  26.3.2 returned **`""`**. The trap is what happens next —
   `new File()` treats both as RELATIVE, resolves against the host's
   working directory, and `.parent.fsName` hands back the host's own
   install folder, which reads exactly like a real answer. A ScriptPath

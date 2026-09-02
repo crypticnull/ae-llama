@@ -18,6 +18,11 @@
          padding:8px; margin-top:8px; max-height:60vh; overflow:auto; }
   .row { margin-bottom:6px; }
   .ok { color:#7ec97e; } .bad { color:#e08a8a; } .warnc { color:#e0c07a; }
+  .hint { color:#e0c07a; font-size:11px; margin-left:4px; }
+  #mogrt-path { width:100%; box-sizing:border-box; background:#1b1b1b;
+                color:#d8d8d8; border:1px solid #3a3a3a; border-radius:3px;
+                padding:5px 7px; font-family:Consolas,monospace;
+                font-size:11px; }
 </style>
 </head>
 <body>
@@ -34,6 +39,11 @@ of the panel. Read-only unless you press a button marked MUTATES.</p>
 <div class="row">
   <button id="b-history" class="warn">MUTATES: History granularity</button>
   <button id="b-mogrt" class="warn">MUTATES: MOGRT accept read-back</button>
+  <span id="arm-hint" class="hint"></span>
+</div>
+<div class="row">
+  <input id="mogrt-path" type="text" spellcheck="false"
+         placeholder="path to a .mogrt (found automatically if it is in logs\mogrt-verify)">
 </div>
 
 <div id="out">Press "Run all read-only probes".</div>
@@ -395,37 +405,102 @@ of the panel. Read-only unless you press a button marked MUTATES.</p>
     note("copied to clipboard");
   });
 
+  /*
+   * The two MUTATES buttons ARM on the first click and FIRE on the
+   * second, instead of calling window.confirm. Two reasons: a CEP panel
+   * can suppress the native dialogs (so a confirm() that never appears
+   * reads as "the button does nothing"), and an arm step is visible in
+   * the panel itself rather than in a modal that may be behind the app.
+   */
+  var armed = null, armTimer = null;
+  var hint = document.getElementById("arm-hint");
+
+  function disarm() {
+    armed = null;
+    hint.textContent = "";
+    if (armTimer) { clearTimeout(armTimer); armTimer = null; }
+  }
+
+  function arm(id, what, go) {
+    if (armed === id) { disarm(); go(); return; }
+    armed = id;
+    hint.textContent = "click again to confirm: " + what;
+    if (armTimer) { clearTimeout(armTimer); }
+    armTimer = setTimeout(disarm, 8000);
+  }
+
   document.getElementById("b-history").addEventListener("click", function () {
-    if (!window.confirm(
-      "MUTATES the open project: creates three bins named 'AELL PROBE 1..3'.\n\n" +
-      "Only run this on a scratch project. Continue?")) { return; }
-    probe("historyProbe", { allowMutate: true }, function (err, data) {
-      results.history = err ? { error: err } : data;
-      render();
-      autoSave();
-    });
+    arm("history", "creates 3 bins named AELL PROBE in the OPEN project",
+      function () {
+        probe("historyProbe", { allowMutate: true }, function (err, data) {
+          results.history = err ? { error: err } : data;
+          render();
+          autoSave();
+        });
+      });
   });
 
   document.getElementById("b-mogrt").addEventListener("click", function () {
-    var p = window.prompt(
-      "Absolute path to a .mogrt exported by the AE panel:",
-      (results.mogrtPath || ""));
-    if (!p) { return; }
-    if (!window.confirm(
-      "MUTATES the active sequence: imports that graphic onto V1 at 0.\n\n" +
-      "Only run this on a scratch sequence. Continue?")) { return; }
-    results.mogrtPath = p;
-    probe("mogrtAccept", { allowMutate: true, path: p, videoTrack: 0 },
-      function (err, data) {
-        results.mogrtAccept = err ? { error: err } : data;
-        render();
-        autoSave();
+    var field = document.getElementById("mogrt-path");
+    var p = (field.value || "").trim();
+    if (!p) {
+      note("No .mogrt path. The box below the buttons is empty and nothing " +
+           "was found automatically.\n\nPut an absolute path to a .mogrt in " +
+           "it (the AE panel writes one to <repo>\\logs\\mogrt-verify\\), " +
+           "then click again.");
+      return;
+    }
+    arm("mogrt", "imports that graphic into the ACTIVE sequence at 0",
+      function () {
+        results.mogrtPath = p;
+        probe("mogrtAccept", { allowMutate: true, path: p, videoTrack: 0 },
+          function (err, data) {
+            results.mogrtAccept = err ? { error: err } : data;
+            render();
+            autoSave();
+          });
       });
   });
+
+  /*
+   * Find a .mogrt without asking anyone to type an absolute path. The
+   * install is a junction, so realpathSync gives the repo copy of this
+   * bundle; the repo root is two levels up, and the AE panel's mogrt
+   * probe writes into <repo>\logs\mogrt-verify\.
+   */
+  function autofillMogrt() {
+    var field = document.getElementById("mogrt-path");
+    try {
+      var fs = nodeRequire("fs");
+      var path = nodeRequire("path");
+      var real = fs.realpathSync(extPath());
+      var repo = path.resolve(real, "..", "..");
+      var dir = path.join(repo, "logs", "mogrt-verify");
+      if (!fs.existsSync(dir)) {
+        results.mogrtSearch = { looked: dir, found: 0 };
+        return;
+      }
+      var hits = fs.readdirSync(dir)
+        .filter(function (n) { return /\.mogrt$/i.test(n); })
+        .map(function (n) {
+          var full = path.join(dir, n);
+          return { full: full, mtime: fs.statSync(full).mtimeMs };
+        })
+        .sort(function (a, b) { return b.mtime - a.mtime; });
+      results.mogrtSearch = { looked: dir, found: hits.length };
+      if (hits.length) {
+        field.value = hits[0].full;
+        results.mogrtSearch.picked = hits[0].full;
+      }
+    } catch (e) {
+      results.mogrtSearch = { error: String(e.message || e) };
+    }
+  }
 
   // First paint: enough to tell whether the panel even reached a host.
   results.panel = panelFacts();
   results.storage = storageProbe(results.panel.appName);
+  autofillMogrt();
   render();
 })();
 </script>
