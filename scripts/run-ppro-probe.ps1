@@ -192,16 +192,44 @@ if ($running.Count -gt 0) {
     Good 'Premiere closed.'
 }
 
-# Launch INTO the scratch project when it already exists. Premiere
-# otherwise reopens whatever was last open, and if that project is dirty
-# the battery's newProject call raises a "save changes?" modal with
-# nobody there to answer it. From the second run on, this side-steps the
-# question entirely.
+# Launch Premiere PLAIN, with no project argument.
+#
+# Measured 2026-09-02: app.newProject returned but wrote no file (its
+# name and path both read back empty), so Premiere kept a path in its
+# recent list that does not exist and greeted the NEXT launch with
+# "the file path does not exist at this location" - a modal, on open,
+# with nobody there. Handing Premiere a project path is a liability with
+# no upside now: waitForReady plus the reuse-the-open-empty-project rule
+# gets a usable project without creating one.
+# A scratch project that REALLY EXISTS is passed on the command line; a
+# stale or empty one is deleted first.
+#
+# Both halves were learned the hard way on 2026-09-02. app.newProject
+# returned without writing a file, so Premiere kept a dead path in its
+# recent list and greeted the next launch with "the file path does not
+# exist at this location" - a modal, on open, with nobody there. Then
+# launching PLAIN turned out to be worse: Premiere sits on the Home
+# screen and never opens a project at all, so app.project.name stayed
+# empty for the full 30s wait and every project-dependent step failed.
+#
+# So: create it once (the battery does that and saves it), and from then
+# on hand it to Premiere directly.
+$haveScratch = $false
 if (Test-Path $scratch) {
-    Say "Launching Premiere with the scratch project..."
+    $size = (Get-Item $scratch).Length
+    if ($size -lt 1024) {
+        Say "Deleting a stale scratch project ($size bytes) - Premiere would"
+        Say 'greet the next launch with a "file path does not exist" modal.'
+        Remove-Item $scratch -Force -ErrorAction SilentlyContinue
+    } else {
+        $haveScratch = $true
+    }
+}
+if ($haveScratch) {
+    Say 'Launching Premiere with the scratch project...'
     Start-Process -FilePath $PremierePath -ArgumentList @($scratch) | Out-Null
 } else {
-    Say 'Launching Premiere (first run: it will create the scratch project)...'
+    Say 'Launching Premiere (no scratch project yet: the battery makes one)...'
     Start-Process -FilePath $PremierePath | Out-Null
 }
 
@@ -349,11 +377,24 @@ if ($battery -and $battery.steps) {
                 Show-Fact 'QE version' $d.qeVersion
                 Show-Fact 'effects listed' $d.effectCount
             }
+            'waitForReady' {
+                Show-Fact 'ready' $d.ready
+                Show-Fact 'waited (ms)' $d.waitedMs
+                Show-Fact 'project name' $d.projectName
+                Show-Fact 'note' $d.note
+            }
             'project' {
                 Show-Fact 'via' $d.via
                 Show-Fact 'name' $d.name
+                Show-Fact 'path' $d.path
                 Show-Fact 'items' $d.items
+                Show-Fact 'saved to' $d.savedTo
                 Show-Fact 'note' $d.note
+                foreach ($t in $d.tried) {
+                    $mark = if ($t.ok) { 'WORKED ' } else { 'failed ' }
+                    Say ("        " + $mark + $t.how +
+                         $(if ($t.error) { " -- " + $t.error } else { '' }))
+                }
             }
             'sequence' {
                 Show-Fact 'via' $d.via

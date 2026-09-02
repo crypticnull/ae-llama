@@ -501,11 +501,13 @@ AELLP_PROBES.battery = function (args) {
       try { $.sleep(stepMs); } catch (eSleep) { break; }
       waited += stepMs;
     }
+    // NOT an error: Premiere launched without a project argument simply
+    // has none, and the `project` step below is what creates one and
+    // carries the real verdict. Reporting a failure here would blame the
+    // wait for a condition it only observed.
     return { ready: false, waitedMs: waited,
-             error: "app.project.name was still empty after " + waited +
-                    "ms -- the host had not finished opening a project, so " +
-                    "every project-dependent step below would be measuring " +
-                    "an empty host" };
+             note: "app.project.name was still empty after " + waited +
+                   "ms; the project step will try to create one" };
   });
 
   step("ping", function () { return AELLP_PROBES.ping(); });
@@ -557,13 +559,103 @@ AELLP_PROBES.battery = function (args) {
     if (!args.scratchProject) {
       throw new Error("no project open and no scratchProject path given");
     }
-    if (typeof app.newProject !== "function") {
-      throw new Error("app.newProject is not a function in this host");
+
+    /*
+     * Premiere launched with no argument sits on the HOME SCREEN and
+     * never opens a project: measured 2026-09-02, app.project.name was
+     * still empty after a full 30 s wait. So one has to be made, and
+     * then VERIFIED -- app.newProject returned without writing a file
+     * once already, which left a dead path in Premiere's recent list.
+     *
+     * Every route is recorded, and success means the project NAME reads
+     * back, not that the call failed to throw.
+     */
+    var tried = [];
+    var got = null;
+
+    function nameNow() {
+      var n = AELLP_safe(function () { return app.project.name; });
+      return (n && typeof n === "string" && n.length > 0) ? n : null;
     }
-    var made2 = app.newProject(args.scratchProject);
-    return { via: "app.newProject", returned: String(made2),
+
+    /** Creating a project is not instant; give it a bounded moment. */
+    function settle(ms) {
+      var waited = 0;
+      var n = null;
+      while (waited < ms) {
+        n = nameNow();
+        if (n) { return n; }
+        try { $.sleep(250); } catch (eS) { return null; }
+        waited += 250;
+      }
+      return nameNow();
+    }
+
+    if (typeof app.newProject === "function") {
+      try {
+        var ret = app.newProject(args.scratchProject);
+        got = settle(8000);
+        tried.push({ how: "app.newProject", ok: !!got,
+                     error: got ? null
+                                : ("returned " + String(ret) +
+                                   " but app.project.name is still empty") });
+      } catch (eNew) {
+        tried.push({ how: "app.newProject", ok: false,
+                     error: AELLP_say(eNew) });
+      }
+    } else {
+      tried.push({ how: "app.newProject", ok: false,
+                   error: "not a function in this host" });
+    }
+
+    // QE is measured alive on this build (236 effects), and it has its
+    // own project creator. Undocumented and unsupported, so it is a
+    // fallback and it is labelled as one.
+    if (!got && typeof app.enableQE === "function") {
+      try {
+        app.enableQE();
+        if (qe && qe.project && typeof qe.project.newProject === "function") {
+          qe.project.newProject(args.scratchProject);
+          got = settle(8000);
+          tried.push({ how: "qe.project.newProject [unsupported API]",
+                       ok: !!got });
+        } else {
+          tried.push({ how: "qe.project.newProject [unsupported API]",
+                       ok: false, error: "qe.project.newProject absent" });
+        }
+      } catch (eQe) {
+        tried.push({ how: "qe.project.newProject [unsupported API]",
+                     ok: false, error: AELLP_say(eQe) });
+      }
+    }
+
+    // Save it, so the NEXT run can be launched straight into it and this
+    // whole dance never happens again.
+    var savedTo = null;
+    if (got) {
+      try {
+        if (typeof app.project.saveAs === "function") {
+          app.project.saveAs(args.scratchProject);
+          savedTo = args.scratchProject;
+        } else if (typeof app.project.save === "function") {
+          app.project.save();
+          savedTo = AELLP_safe(function () { return app.project.path; });
+        }
+      } catch (eSave) { savedTo = "save failed: " + AELLP_say(eSave); }
+    }
+
+    return { via: got ? "created" : "none",
+             name: got,
              path: AELLP_safe(function () { return app.project.path; }),
-             name: AELLP_safe(function () { return app.project.name; }) };
+             items: AELLP_safe(function () {
+               return app.project.rootItem.children.numItems;
+             }),
+             savedTo: savedTo,
+             tried: tried,
+             error: got ? null
+                        : "no project could be opened or created; Premiere " +
+                          "is on the Home screen and every project-dependent " +
+                          "step below cannot run" };
   });
 
   /*

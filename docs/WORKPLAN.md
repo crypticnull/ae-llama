@@ -2140,6 +2140,67 @@ Gate G0 in `docs/PREMIERE_PLAN.md`. Commit the probe JSONs under
 add the facts to CLAUDE.md, close section 11 with its answer. **No
 version bump — nothing here ships.**
 
+## 12b. DRIVE THE PREMIERE P0 PROBE TO GREEN (loop item, owner-approved)
+
+**This is the highest-priority item for the overnight loop until it is
+done.** Take it before anything else in this file.
+
+Everything needed already works unattended: `run-ppro-probe.ps1`
+launches Premiere, the invisible door-3 runner claims the job with
+nobody at the keyboard, every battery step reports its own verdict, and
+the result is copied into `docs/measured/`. What is left is iterating on
+the remaining failures, and that is loop work, not human work. The owner
+has been running it by hand all day and should not have to again.
+
+### One pass
+
+1. `powershell -ExecutionPolicy Bypass -File scripts\run-ppro-probe.ps1`
+   It closes Premiere first, launches it, waits, prints every step, and
+   closes Premiere again. Allow it up to 6 minutes.
+2. Read the printed output AND the newest `docs/measured/ppro-probe-*.json`.
+   The JSON has fields the summary does not print.
+3. If every step passed: write the measurements into
+   `docs/PREMIERE-PLATFORM.md` section 4 (grades: MEASURED), close this
+   item in `docs/WORKPLAN-LOG.md`, and stop working it.
+4. Otherwise fix the FIRST failing step only. One root cause per pass.
+   Re-run the probe in the same pass to confirm the fix before
+   committing; a fix that was not re-run is not a fix.
+5. Commit, push, and append to `docs/WORKPLAN-LOG.md` what failed, what
+   you changed, and what the re-run showed.
+
+### Rules
+
+- **No version bump.** The probe is not shipped; `extension/` is not
+  touched. Bumping would push a no-op update to every panel.
+- **Never touch the owner's projects.** The probe works in a scratch
+  `.prproj` under `%APPDATA%\AE-Llama\probes\`. If a step would mutate
+  anything else, fix the step, do not widen its permission.
+- **No dialogs, ever.** A modal with nobody at the keyboard is a hang.
+  `createNewSequence(name, "")` opens the New Sequence dialog and is
+  gated behind `allowDialogs:true` for exactly this reason. Anything
+  that prompts is a defect to route around, not to accept.
+- **Run the lints before every push**: `node tests/test-es3-syntax.js`,
+  `test-es3-ternary.js`, `test-powershell-syntax.js`,
+  `test-probe-bundle.js`, `test-manifest-xml.js`. They exist because
+  each of them cost a wasted Premiere launch once already.
+- If a step cannot be made to work, that is a RESULT. Record it as a
+  measured limit in `docs/PREMIERE-PLATFORM.md` with what was tried, and
+  move to the next failing step rather than looping on it forever.
+
+### Known open failures as of 2026-09-02 18:00
+
+- `project`: Premiere launched with no argument sits on the Home screen
+  and never opens a project (`app.project.name` empty after 30 s).
+  `app.newProject` returned without writing a file. The step now tries
+  `app.newProject`, then `qe.project.newProject`, verifies by reading
+  the project NAME back, and saves so later runs launch straight into
+  it. UNCONFIRMED - the next run is its first test.
+- `sequence`: `newBarsAndTone` answered "Illegal Parameter type" to
+  timebases 25/24/30 fps expressed in ticks per frame. A seed-still
+  route (`importFiles` + `createNewSequenceFromClips`) was added ahead
+  of it. UNCONFIRMED.
+- `history` and `mogrt` were blocked by the two above, not measured.
+
 ## Out of scope for the local session (remote builds these)
 
 - ComfyUI bundled node-pack installer and wiring generation into

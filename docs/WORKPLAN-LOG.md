@@ -14070,3 +14070,32 @@ Nothing else was left unattempted this pass. Nothing is blocked.
   and needs no preset. `newBarsAndTone` stays as a fallback but its
   signature is not worth more guessing after three rejected timebases.
 - Harness 70/72. No `extension/` change, so NO BUMP.
+
+## 2026-09-02 (remote session) — hand the probe to the loop
+
+- Owner, after running the probe by hand all day: "Should we just set
+  the harness to figuring this shit out on its own?" Yes, and it should
+  have been proposed sooner. Everything the loop needs now exists: the
+  probe runs unattended (door 3 claims it), every step reports its own
+  verdict honestly, and results land in `docs/measured/`.
+- NEW WORKPLAN section 12b: drive the Premiere P0 probe to green, one
+  root cause per pass, re-run in the same pass to confirm before
+  committing, no version bump, no dialogs, lints before every push.
+  Highest priority until done.
+- Two fixes go in with it, both UNCONFIRMED and named as such in 12b:
+  - `project` step: Premiere launched with no argument sits on the Home
+    screen and never opens a project (`app.project.name` empty after the
+    full 30 s wait), and `app.newProject` returned without writing a
+    file - which is what left a dead path in Premiere's recent list and
+    produced "the file path does not exist at this location" as a modal
+    ON OPEN. The step now tries `app.newProject`, then
+    `qe.project.newProject` (QE is measured alive here), VERIFIES by
+    reading the project name back rather than trusting a return value,
+    and saves so later runs launch straight into it. The launcher passes
+    the scratch project only when the file really exists and is over 1
+    KB, and deletes a stale one.
+  - `waitForReady` no longer reports a FAILURE when Premiere simply has
+    no project yet: that is the `project` step's verdict to give, and
+    blaming the wait for a condition it only observed is the same false
+    attribution this project keeps having to correct.
+- Harness 70/72. No `extension/` change, so NO BUMP.
