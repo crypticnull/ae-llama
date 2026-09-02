@@ -22,7 +22,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `add_keyframe` | Add a keyframe on a layer property at a time (seconds) | yes | host | 1 | 10 |
 | `add_light` | Add a light | yes | host | 1 | 13 |
 | `add_marker` | Add a marker to the comp (omit 'layer') or to a layer | yes | host | 1 | 9 |
-| `add_mask` | Add a mask to a layer | yes | host | 1 | 4 |
+| `add_mask` | Add a mask to a layer | yes | host | 1 | 7 |
 | `add_null` | Add a null layer (use as a controller or parent) | yes | host | 1 | 8 |
 | `add_shape_content` | Add content INSIDE a shape layer: kinds group, rectangle, ellipse, star, polygon, path, fill, stroke, gradient_fill, gradient_stroke, repeater, trim_paths, merge_paths, offset_paths, rounded_corners, pucker_bloat, twist, zigzag | yes | host | 1 | 12 |
 | `add_shape_layer` | Add a shape layer (rectangle, ellipse, polygon, or star) | yes | host | — | 4 |
@@ -45,7 +45,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `create_folder` | Create a project-panel folder | yes | host | 1 | 10 |
 | `delete_item` | Delete a project item | yes | host | 1 | 42 |
 | `delete_layer` | Delete a layer from a comp | yes | host | — | 19 |
-| `delete_mask` | REMOVE one mask from a layer by name or 1-based index ('remove that mask'); omit 'mask' when the layer has exactly one | yes | host | 1 | 4 |
+| `delete_mask` | REMOVE one mask from a layer by name or 1-based index ('remove that mask'); omit 'mask' when the layer has exactly one | yes | host | 1 | 6 |
 | `distribute_property` | Distribute a property VALUE across layers | yes | host | 1 | 5 |
 | `duplicate_comp` | Duplicate a composition | yes | host | 2 | 5 |
 | `duplicate_layer` | Duplicate a LAYER inside its comp (use duplicate_comp only for whole compositions) | yes | host | 1 | 10 |
@@ -55,7 +55,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `expose_property` | Expose one property in the comp's ESSENTIAL GRAPHICS panel, so an editor can change it in Premiere | yes | host | 1 | 5 |
 | `for_each_layer` | Run a PER-LAYER tool once per target layer in ONE call (max 200 layers) — the batch executor for anything without its own layers arg: {tool: 'apply_effect', args: {effect: 'Gaussian Blur'}} blurs every target | yes | host | 1 | 6 |
 | `get_bounds` | MEASURE a layer's rendered content without touching it — how wide the text actually is, where the shape sits in the frame, whether anything overflows | no | host | 1 | 32 |
-| `get_comp_details` | Layers of a comp with index, name, type, timing, effects, track matte | no | host | 4 | 34 |
+| `get_comp_details` | Layers of a comp with index, name, type, timing, effects, track matte | no | host | 4 | 35 |
 | `get_project_info` | List project items (comps/footage/folders) and the active comp | no | host | 2 | 16 |
 | `get_property` | Read ANY property by path: value, keyframes, expression | no | host | 3 | 92 |
 | `grid_layout` | Arrange layers into a grid rigged to a control null: its 'Grid X Spacing'/'Grid Y Spacing'/'Grid Columns' sliders drive spacing AND column count live, and the grid centers on the null's position (all expressions generated host-side) | yes | host | 1 | 2 |

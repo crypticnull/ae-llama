@@ -21,6 +21,23 @@ tool, not the test), then update the stubbed Node test in `tests/` so
 the same bug class is caught WITHOUT AE — that is the whole loop:
 field truth -> fix -> stub faithfulness.
 
+- ~~`add_mask` is told to get layer sizes from a tool that has none~~
+  DONE 2026-09-02 (0.11.9). `layer.width` reports the COMP's dimensions
+  on a text or shape layer and nothing at all on a camera or light
+  (measured, `scripts/layer-size-probe.jsx`), and a text layer's origin
+  is its BASELINE — so `get_comp_details` rows now carry the layer's own
+  `width`/`height` (only when it differs from the comp) plus `left`/`top`
+  (only when the origin is not 0,0), and `add_mask` refuses a mask that
+  misses its layer completely OR swallows it whole, naming the real size.
+  Zero prompt cost: the doc already said "sizes from get_comp_details"
+  and is now true. The bigger rows are paid for by a byte cap on the row
+  list (5000, so the state's project half survives). Step 19's paraphrase
+  matrix flipped 4 HARM -> 3 pass / 1 miss / **0 HARM**. Harness 570 ->
+  576. En route: `tests/test-es3-ternary.js` now also lints the
+  ExtendScript that `.js` files BUILD as strings — chat-probe's mask-mode
+  reader had the left-associative `?:` bug and scored two correct model
+  answers as HARM.
+
 - ~~`organize_project` has clean_project's preview advice and no gate~~
   DONE 2026-09-02 (0.11.8). A first `dryRun:false` filed every loose
   root item and created up to five folders with nothing shown. Same

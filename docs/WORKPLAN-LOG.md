@@ -12040,3 +12040,190 @@ rig-based steps of their own; filed as #1 below.
     (harness plan step 6).
 
 Nothing was left unattempted this pass. Nothing is blocked.
+
+## 2026-09-02 (local session, real AE) — the filed #1: add_mask was told to get layer sizes from a tool that had none (0.11.9)
+
+**Item:** the filed-for-later list's #1, and the highest-priority
+unfinished thing in the queue: *"`add_mask` is told to get layer sizes
+from a tool that has none. 4/4 phrasings, measured tonight."* The
+harness was green on arrival (570/570), so the queue was the pass.
+
+### What AE actually answers when you ask how big a layer is
+
+New probe, committed so it can be re-run: `scripts/layer-size-probe.jsx`
+(AE 2026, 26.3x87). Eight layer types, every candidate channel, flushed
+to disk as each measurement is taken.
+
+    layer type      .width/.height        sourceRectAtTime(0)
+    solid 100x100   100 x 100             top 0, left 0, 100 x 100
+    precomp         640 x 360             top 0, left 0, 640 x 360
+    null            100 x 100             top 0, left 0, 100 x 100
+    TEXT "HELLO"    1920 x 1080  <-- THE  top -49.568, left 3.487,
+                                   COMP       146.671 x 28.017
+    SHAPE (empty)   1920 x 1080  <-- THE  0 x 0
+                                   COMP
+    camera / light  neither property      no sourceRectAtTime at all
+
+So **`layer.width` is not "how big is this layer"**. A text layer and a
+shape layer both answer with the COMP's dimensions — 1920x1080 for a
+147x28 word — and a camera and a light have no such property. Only a
+layer with a SOURCE has a width that is its own, and only there does the
+box start at 0,0: **a text layer's coordinate origin is its BASELINE**
+(left 3.487, top -49.568), so `[0, 0, w, h]` on one is a rectangle
+sitting below the glyphs, not over them.
+
+Two more measurements, both about silence:
+
+- setting a comp-sized-and-halved Shape on the 100x100 solid **threw
+  nothing**. AE accepts a mask that misses its layer entirely.
+- `add_mask` called exactly as the model called it in the field —
+  `bounds: [0, 540, 1920.00012207031, 540]` — returned **`ok`**.
+
+### The fix, in three parts, all at the root
+
+1. **`AELL_layerBox(layer, t)`** — the layer's own box or null: the
+   sourced size when there is a source, `sourceRectAtTime` when there is
+   not. 0x0 and camera/light both answer null — no honest box, so no
+   guess.
+2. **`get_comp_details` layer rows carry `width`/`height`**, plus
+   `left`/`top` only when the origin is not 0,0. **Only when the layer
+   differs from the comp** — absent means "the comp's size", which is at
+   the top of the same result, so a full-frame comp pays nothing and no
+   inference can go wrong. add_mask's doc already said *"sizes from
+   get_comp_details, never guessed"*; it is now TRUE.
+3. **`add_mask` refuses two shapes of comp-coordinate mistake**, each
+   naming the layer's real size, the way every failed lookup here does:
+   a mask that **misses the layer completely** (it would hide all of it)
+   and a mask that **swallows the layer whole** (it hides nothing). A
+   mask that overhangs on one side still lands, with the real size in a
+   `note` — the tool cannot prove that one wrong. Default bounds are now
+   the layer's box instead of `layer.width || comp.width`.
+
+**No tool-doc or system-prompt change at all: the prompt is byte-for-byte
+what it was.** The doc was already right and the tool was lying, so the
+one-doc-change-per-pass budget was not spent.
+
+### Paying for the bytes
+
+Rows got ~24 bytes bigger, and forty of them serialized to **6423** —
+past the 6000-byte round budget, where the panel's structural shrink
+takes the tail off with no note of its own. So the forty-row cap is now
+a BYTE cap too (`ROW_BUDGET`, 5000): rows are dropped here, where the
+omission is described and pageable, and `last` is recomputed to the last
+CONTIGUOUS index so "ask again with start:" points at the first row
+actually missing. `limit:0` is exempt — the panel's own internal callers
+mean it literally.
+
+5000 rather than 6000 on purpose: in the state block this result sits
+beside the project list, which the panel trims FIRST, so a comp that
+takes the whole budget leaves the model unable to name any comp but this
+one. Measured on the 200-layer stub: 33 rows, 5107 bytes, and the
+project half keeps 7 items (it kept 5 before this pass, and 1 at
+ROW_BUDGET 5800).
+
+### The instrument was lying, and it was the documented bug
+
+The first re-run scored two correct model answers as **HARM**. The comp
+reader classified mask modes with
+
+    mm === MaskMode.SUBTRACT ? 'subtract' : mm === MaskMode.ADD ? 'add' : 'other'
+
+inside a string that AE executes — and **ExtendScript parses `?:`
+LEFT-associatively**, so that reads `((mm===SUBTRACT ? 'subtract' :
+mm===ADD) ? 'add' : 'other')` and **every SUBTRACT mask came back as
+'add'**. Step 19 passes a bottom-half mask only when it subtracts, so
+the probe failed the model for being right.
+
+`tests/test-es3-ternary.js` exists for exactly this class and walked
+past it: its scope was the files ExtendScript evaluates, and this is a
+`.js` file that BUILDS ExtendScript as a string. It now reconstructs the
+ExtendScript out of the string literals of every `.js` under `scripts/`
+and `extension/js/` and scans that too — gated on the strings actually
+naming AE's object model, so tool-doc arg specs (`mode?: add|subtract`)
+and Node-side regex sources stay out. Verified both ways: with the
+parentheses removed the lint fails on `scripts/chat-probe.js:838`, with
+them it passes.
+
+### The flip, measured in real AE with the real model
+
+`node scripts/chat-probe.js --variants --steps 19`, three runs:
+
+    before (2026-09-02 07:53)   HARM HARM HARM HARM   4/4, all with
+                                the comp's 1920x1080 on a 100x100 layer
+    after the size fix          miss pass HARM HARM   (both HARM were the
+                                grader's ES3 bug, not the model)
+    after the grader fix        miss HARM pass pass   (the HARM was the
+                                swallow case, now refused)
+    after the swallow refusal   miss pass pass pass   3 pass, 1 miss,
+                                0 HARM
+
+Transcripts `logs\chat-probe-2026-09-02T08-28-37.md`, `...T08-37-55.md`,
+`...T08-47-55.md`. **Not one run used the comp's dimensions in a mask
+that stuck.** The row now reads `{"index":1,"name":"Beta",...,"width":
+100,"height":100}`, and where the model still reached for comp space
+first it took the grounded refusal and **corrected itself on the very
+next call** — twice in one run, `[0,540,1920,540]` to `[0,50,100,50]`.
+That is the "grounded errors are how the small local model self-corrects"
+claim, measured rather than asserted.
+
+### Verification
+
+- **Real AE harness: 576/576 PASSED** (570 to 576; five new mask steps
+  plus the size row, all in `extension/js/selftest.js`, so the panel's
+  Settings button gets them too).
+- `tests/test-shape-mask-tools.js`, `test-property-access.js`,
+  `test-context-budget.js`, `test-self-test.js`, `test-es3-ternary.js`
+  all extended and green. The stubs now model the AE lie itself: a text
+  or shape layer stub REPORTS the comp's dimensions from `.width`, so a
+  host that trusted them would fail in Node.
+- Full stub sweep: **66/67**, the odd one out the known environmental
+  `tests/test-comfy-backend.js` (Comfy-Desktop models dir on this
+  machine, none in CI — unchanged, still not mine).
+- `node scripts/capability-report.js --check` says fresh.
+- Bumped to **0.11.9**: `extension/` changed, so the fix has to reach a
+  real panel.
+
+### Filed for later passes, in priority order
+
+1. **"keep it drifting" builds a control rig instead of wiggling the
+   layer** — 3/3 paraphrases, canonical passes. Unchanged; still the
+   scenario that most clearly fails the "at most one may miss" clause.
+2. **Step 19's canonical still misses: "Chop off the lower half of Beta"
+   routes to `set_layer_timing`.** New, and now the only thing between
+   this row and a clean 4/4 — "chop off" reads as trimming a layer's
+   duration, not as masking. One doc phrase, one re-run. Measured twice
+   tonight, both times after `get_bounds`, so the model IS measuring the
+   layer first; it just picks the wrong verb.
+3. **New rig-based steps for the A/B/C/E rows with no twin** (A1, A2,
+   B1, C1, C2, E1, E2) — unchanged.
+4. **"clean up this comp" still lands somewhere destructive** —
+   unchanged (`remove_keyframes` over every layer, `grid_layout` plus
+   `stagger_layers` restacking).
+5. **Step 17's "cheap"/"feels stiff" vocabulary** reaches
+   `stagger_layers`/`distribute_property` rather than
+   `apply_keyframe_ease` — unchanged.
+6. **Ask the SERVER for the two numbers** (`POST /tokenize`,
+   `GET /props`) — unchanged, still no live symptom.
+7. **`comfyUrl` is 8188, ComfyUI answers on 8000** on this machine —
+   one line in `%APPDATA%\AE-Llama\settings.json`.
+8. **Step 2 flakes on layer naming** — `duplicate_layer`'s numbering
+   starts at 2, so "Red Square 1" never exists; one doc sentence.
+9. **The harness cannot answer "Crash Repair Options"** — unchanged.
+10. **`starved` may now be too generous a word** — unchanged.
+11. **delete_mask could warn when an expression still points at the
+    mask** — unchanged.
+12. **A controller GROUP has never been measured**, nor any locale but
+    en_US — unchanged.
+13. **`capParams` is a second, independent roster inside the same
+    .mogrt** — unchanged.
+14. **`set_mask_path` takes vertices with no layer-box check at all.**
+    New, and the obvious sibling of this pass: `add_mask` now refuses a
+    mask that misses or swallows its layer, and `set_mask_path` will
+    happily replace that same path with comp coordinates afterwards.
+    Not measured in the field yet, which is why it is filed rather than
+    fixed.
+15. **Still owed, needs a human awake:** drop
+    `logs\mogrt-verify\AELL Probe Card.mogrt` into real Premiere
+    (harness plan step 6).
+
+Nothing was left unattempted this pass. Nothing is blocked.

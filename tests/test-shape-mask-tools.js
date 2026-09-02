@@ -233,10 +233,42 @@ PGroup.prototype.addProperty = function (mn) {
   return this.add(f());
 };
 
-function Layer(name, comp, isShape) {
+// `box` is how big this layer really is, and `kind` is how AE will LIE
+// about it. Measured in AE 2026 (scripts/layer-size-probe.jsx):
+//
+//   sourced (solid/footage/precomp/null)  .width/.height = the source's
+//       size, and sourceRectAtTime starts at 0,0 — the box IS the size
+//   text / shape                          .width/.height = the COMP's
+//       dimensions (1920x1080 for a 147x28 "HELLO"), and the only honest
+//       box is sourceRectAtTime's, whose origin is the text BASELINE:
+//       "HELLO" measured left 3.487, top -49.568
+//   camera / light                        neither property exists
+//
+// Without this, add_mask cannot tell a mask aimed at the layer from one
+// aimed at the comp — which is how four phrasings of "hide half of Beta"
+// all masked a 100x100 layer with 1920x1080 and were answered `ok`.
+function Layer(name, comp, isShape, box, kind) {
   this.name = name;
   this.comp = comp;
   this.selected = false;
+  this._kind = kind || (isShape ? "shape" : "sourced");
+  if (this._kind === "sourced") {
+    const b = box || { left: 0, top: 0, width: comp.width, height: comp.height };
+    this.width = b.width;
+    this.height = b.height;
+    this.source = { width: b.width, height: b.height };
+    this._rect = { top: 0, left: 0, width: b.width, height: b.height };
+  } else if (this._kind !== "camera" && this._kind !== "light") {
+    // The lie, on purpose: a text or shape layer answers with the comp.
+    this.width = comp.width;
+    this.height = comp.height;
+    this._rect = box
+      ? { top: box.top, left: box.left, width: box.width, height: box.height }
+      : { top: 0, left: 0, width: 0, height: 0 };
+  }
+  if (this._kind !== "camera" && this._kind !== "light") {
+    this.sourceRectAtTime = function () { return this._rect; };
+  }
   this._root = new PGroup("(layer)", "(layer)");
   const t = new PGroup("Transform", "ADBE Transform Group");
   t.add(new Prop("Position", "ADBE Position", [100, 100]));
@@ -696,6 +728,119 @@ assert(r.ok && r.data.layer === "Off Grid" && r.data.removed === "Mask 2" &&
 assert(comp.selectedLayers.length === 1 && comp.selectedLayers[0] === off,
        "…and Off Grid is still the selection afterwards");
 comp._layers.forEach(l => { l.selected = false; });
+
+// ---------------------------------------------------------------------
+// 6. A mask has to land ON the layer it is aimed at.
+//
+// Measured in real AE 2026 through the chat probe: "hide half of Beta"
+// reached add_mask with bounds [0, 540, 1920.0001, 540] — the COMP's
+// dimensions, halved — on a 100x100 solid, in FOUR different phrasings.
+// AE took it without a murmur (the probe set the same comp-sized shape
+// by hand and nothing threw), the mask hid the entire layer, and the
+// tool answered `ok`. The model was not guessing: add_mask's doc says
+// "sizes from get_comp_details" and that result carried no layer size at
+// all, so 1920x1080 was the only figure in front of it.
+const beta = new Layer("Beta", comp, false, { width: 100, height: 100 });
+comp._layers.push(beta);
+const betaMasks = beta.property("ADBE Mask Parade");
+
+r = call("add_mask", { layer: "Beta", shape: "rectangle",
+                       bounds: [0, 540, 1920.00012207031, 540] });
+assert(!r.ok, "the comp-sized mask that four phrasings produced is now " +
+       "REFUSED, not answered ok: " + JSON.stringify(r.ok ? r.data : ""));
+assert(/misses 'Beta' completely/.test(r.error) &&
+       /100x100/.test(r.error) && /\[0, 0, 100, 100\]/.test(r.error),
+       "…and the refusal names the layer's REAL size and box, the way " +
+       "every other failed lookup here does: " + r.error);
+assert(/LAYER space/.test(r.error) && /1920x1080/.test(r.error),
+       "…and says which of the two numbers it was handed is the comp's: " +
+       r.error);
+assert(betaMasks.numProperties === 0,
+       "a refused mask writes NOTHING (" + betaMasks.numProperties + ")");
+
+// The stub is only worth having if it would have PASSED the old code:
+// nothing in AE rejects those vertices, which is why this needed a tool.
+const proof = new Shape();
+proof.vertices = [[0, 540], [1920, 540], [1920, 1080], [0, 1080]];
+let threw = false;
+try { betaMasks.add(new PGroup("Proof", "ADBE Mask Atom")); } catch (e) { threw = true; }
+assert(!threw, "AE itself takes an off-layer mask silently (measured) — " +
+       "the refusal has to come from the tool, not from AE");
+betaMasks._children.length = 0;
+
+// The aimed version of the same sentence goes through, unremarked.
+r = call("add_mask", { layer: "Beta", name: "Half", shape: "rectangle",
+                       bounds: [0, 50, 100, 50] });
+assert(r.ok && !r.data.note,
+       "the same request in LAYER space is accepted with no complaint: " +
+       JSON.stringify(r.ok ? r.data : r.error));
+
+// The other half of the same field mistake: comp coordinates that happen
+// to OVERLAP. "I only want to see the top half of Beta" reached add_mask
+// with [0, 0, 1920.0001, 540] on the same 100x100 layer — that swallows
+// the layer whole, so the mask changes nothing, and the tool said ok.
+r = call("add_mask", { layer: "Beta", name: "Swallow", shape: "rectangle",
+                       bounds: [0, 0, 1920.00012207031, 540] });
+assert(!r.ok && /covers ALL of 'Beta'/.test(r.error) &&
+       /100x100/.test(r.error),
+       "a mask that SWALLOWS the layer is refused too — it hides nothing: " +
+       (r.ok ? JSON.stringify(r.data) : r.error));
+assert(/\[0, 0, 100, 50\]/.test(r.error),
+       "…and the refusal works out the top half of THIS layer for it: " +
+       r.error);
+
+// Overhanging on one side is a mistake the tool cannot prove — part of
+// the layer is still masked — so it lands with the real size attached.
+r = call("add_mask", { layer: "Beta", name: "Over", shape: "rectangle",
+                       bounds: [-20, 40, 80, 40] });
+assert(r.ok && /past 'Beta'/.test(r.data.note || "") &&
+       /100x100/.test(r.data.note || ""),
+       "a mask that overhangs the layer still lands, with the real size " +
+       "in the receipt: " + JSON.stringify(r.ok ? r.data : r.error));
+
+// No bounds at all used to mean layer.width || comp.width. On Beta that
+// was right by luck; on a text layer it is the comp's size.
+r = call("add_mask", { layer: "Beta", name: "Whole", shape: "rectangle" });
+assert(r.ok && !r.data.note,
+       "default bounds are the LAYER's box, so they cannot overhang it: " +
+       JSON.stringify(r.ok ? r.data : r.error));
+const whole = betaMasks.property("Whole").property("ADBE Mask Shape").value;
+assert(JSON.stringify(whole.vertices) === "[[0,0],[100,0],[100,100],[0,100]]",
+       "…and they are 100x100, not the comp's 1920x1080: " +
+       JSON.stringify(whole.vertices));
+
+// A TEXT layer is the case where .width/.height cannot be used at all:
+// AE answers with the comp's dimensions, and the layer's origin is the
+// BASELINE, so even [0, 0, w, h] is the wrong rectangle — it sits
+// entirely below the glyphs.
+const hello = new Layer("HELLO", comp, false,
+  { left: 3.487, top: -49.568, width: 146.671, height: 28.017 }, "text");
+comp._layers.push(hello);
+assert(hello.width === 1920 && hello.height === 1080,
+       "stub: a text layer's .width/.height ARE the comp's (measured)");
+r = call("add_mask", { layer: "HELLO", shape: "rectangle",
+                       bounds: [0, 0, 1920, 540] });
+assert(!r.ok && /misses 'HELLO' completely/.test(r.error) &&
+       /146\.671x28\.017/.test(r.error),
+       "a text layer masked from 0,0 misses it — the origin is the " +
+       "baseline, and the refusal says where the layer actually is: " +
+       (r.ok ? JSON.stringify(r.data) : r.error));
+r = call("add_mask", { layer: "HELLO", name: "OnText", shape: "rectangle" });
+const onText = hello.property("ADBE Mask Parade").property("OnText")
+  .property("ADBE Mask Shape").value;
+assert(r.ok && onText.vertices[0][1] === -49.568,
+       "…and default bounds come from the measured box, negative top " +
+       "and all: " + JSON.stringify(r.ok ? onText.vertices : r.error));
+
+// An EMPTY shape layer measures 0x0, which is no box at all — the tool
+// must not invent one and refuse on it.
+const emptyShape = new Layer("Empty Shape", comp, true, null, "shape");
+comp._layers.push(emptyShape);
+r = call("add_mask", { layer: "Empty Shape", shape: "rectangle",
+                       bounds: [0, 0, 200, 200] });
+assert(r.ok && !r.data.note,
+       "a layer with no measurable box is not second-guessed: " +
+       JSON.stringify(r.ok ? r.data : r.error));
 
 assert(AE_MODALS.length === 0,
        "no tool call left After Effects behind a modal dialog: " +

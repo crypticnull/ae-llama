@@ -826,8 +826,16 @@ const READ_COMP = FIND_COMP +
   "      var mk = mp.property(mi);" +
   "      try {" +
   "        var mm = mk.maskMode;" +
+        // Parenthesised on purpose: this string is executed by
+        // ExtendScript, which parses `?:` LEFT-associatively, so the bare
+        // chain read `((mm===SUBTRACT ? 'subtract' : mm===ADD) ? 'add'
+        // : 'other')` — every SUBTRACT mask came back as 'add'. That is
+        // not a cosmetic slip: step 19's check passes a bottom-half mask
+        // only when it subtracts, so the probe scored two correct model
+        // answers as HARM. tests/test-es3-ternary.js now lints the
+        // ExtendScript embedded in this file too.
   "        row.maskModes.push(mm === MaskMode.SUBTRACT ? 'subtract'" +
-  "          : mm === MaskMode.ADD ? 'add' : 'other');" +
+  "          : (mm === MaskMode.ADD ? 'add' : 'other'));" +
   "        row.maskInverted.push(!!mk.inverted);" +
   "      } catch (emm) {" +
   "        row.maskModes.push('unknown'); row.maskInverted.push(false);" +

@@ -35,6 +35,16 @@
  *   extension/js/selftest.js      ($.evalFile'd by scripts/ae-selftest.jsx)
  *   scripts/ae-selftest.jsx       (the CLI runner itself)
  * The rest of extension/js/ runs in CEP's Chromium and is unaffected.
+ *
+ * ...EXCEPT where a .js file BUILDS ExtendScript as a string and sends it
+ * to AE. That source is ExtendScript-executed too, and the file it lives
+ * in is not, so the list above walked straight past it: scripts/
+ * chat-probe.js's comp reader classified mask modes with a bare chain,
+ * every SUBTRACT mask read back as 'add', and the paraphrase matrix
+ * scored two correct model answers as HARM. So the second half of this
+ * lint reconstructs the ExtendScript out of the STRING LITERALS of every
+ * .js under scripts/ and extension/js/ and scans that too — no list to
+ * keep, and the next embedded body is covered the day it is written.
  */
 
 var fs = require("fs");
@@ -306,6 +316,146 @@ for (var f = 0; f < FILES.length; f++) {
      " — ExtendScript parses these LEFT-associatively and will compute" +
      " the wrong branch. Wrap each nested conditional in parentheses." +
      detail);
+}
+
+// ---- 3. ExtendScript that lives INSIDE a .js file, as string literals -
+/*
+ * The inverse of blankNonCode: blank the comments and the code, KEEP what
+ * is inside double-quoted strings, and preserve every offset so the line
+ * numbers reported are this file's real ones.
+ *
+ * An escaped quote becomes a real quote, because in the reconstructed
+ * ExtendScript it IS one — the scanner then treats what follows as the
+ * string it will be at runtime. Every other escape becomes two spaces:
+ * whitespace parses the same and cannot be mistaken for code.
+ */
+function embeddedEs3(src) {
+  var out = src.split("");
+  var i = 0, n = src.length;
+  function blank(k) { if (src.charAt(k) !== "\n") out[k] = " "; }
+  while (i < n) {
+    var c = src.charAt(i);
+    if (c === "/" && src.charAt(i + 1) === "/") {
+      var eol = src.indexOf("\n", i);
+      if (eol < 0) eol = n;
+      while (i < eol) { blank(i); i++; }
+      continue;
+    }
+    if (c === "/" && src.charAt(i + 1) === "*") {
+      var close = src.indexOf("*/", i + 2);
+      var end = close < 0 ? n : close + 2;
+      while (i < end) { blank(i); i++; }
+      continue;
+    }
+    if (c === '"') {
+      blank(i);                       // the opening quote is not content
+      i++;
+      while (i < n) {
+        var d = src.charAt(i);
+        if (d === "\\") {
+          var esc = src.charAt(i + 1);
+          blank(i);
+          if (esc === '"' || esc === "'") out[i + 1] = esc;
+          else if (i + 1 < n) blank(i + 1);
+          i += 2;
+          continue;
+        }
+        if (d === '"') { blank(i); i++; break; }
+        if (d === "\n") break;       // unterminated: do not swallow the file
+        i++;                          // KEEP: this is ExtendScript source
+      }
+      continue;
+    }
+    // Single-quoted JS strings hold ExtendScript's own string literals in
+    // this codebase's style, so they are code to blank, not content.
+    if (c === "'") {
+      blank(i);
+      i++;
+      while (i < n) {
+        var e2 = src.charAt(i);
+        if (e2 === "\\") { blank(i); if (i + 1 < n) blank(i + 1); i += 2; continue; }
+        blank(i);
+        i++;
+        if (e2 === "'") break;
+        if (e2 === "\n") break;
+      }
+      continue;
+    }
+    blank(i);
+    i++;
+  }
+  return out.join("");
+}
+
+function jsIn(dir) {
+  var abs = path.join(ROOT, dir);
+  if (!fs.existsSync(abs)) return [];
+  return fs.readdirSync(abs).filter(function (f) {
+    return /\.js$/.test(f);
+  }).map(function (f) {
+    return (dir + "/" + f).replace(/\\/g, "/");
+  });
+}
+
+// Prove the extractor on the exact shape that shipped, so a lint that
+// degraded to "found nothing" cannot pass silently.
+var SAMPLE =
+  "var s = \"  row.maskModes.push(mm === MaskMode.SUBTRACT ? 'subtract'\" +\n" +
+  "        \"  : mm === MaskMode.ADD ? 'add' : 'other');\";\n";
+ok(findChainedTernaries(embeddedEs3(SAMPLE)).length > 0,
+   "the extractor finds a chained ternary built out of string literals");
+ok(findChainedTernaries(embeddedEs3(
+     'var s = "a ? 1 : (b ? 2 : 3)";')).length === 0,
+   "…and leaves a parenthesised one alone");
+ok(findChainedTernaries(embeddedEs3(
+     'var w = a ? 1 : b ? 2 : 3;   // NODE code, not ExtendScript'
+   )).length === 0,
+   "…and ignores the host .js file's OWN ternaries");
+
+/*
+ * Which .js files actually BUILD ExtendScript? The ones whose string
+ * literals talk to AE's object model. That test is the file's own
+ * evidence rather than a list somebody has to remember to extend — and
+ * it is what keeps the tool DOCS out: `mode?: add|subtract` reads as a
+ * conditional to any scanner, and tools.js is full of them, but none of
+ * that text is ever handed to an interpreter.
+ */
+var AE_OBJECT_MODEL =
+  /app\.project|\$\.global\.AELL|numLayers|beginUndoGroup|ADBE |MaskMode|CompItem/;
+
+var EMBED = jsIn("scripts").concat(jsIn("extension/js")).filter(function (rel) {
+  var t = embeddedEs3(fs.readFileSync(path.join(ROOT, rel), "utf8"));
+  return AE_OBJECT_MODEL.test(t);
+});
+ok(EMBED.length >= 1,
+   "found " + EMBED.length + " .js file(s) that embed ExtendScript: " +
+   EMBED.join(", "));
+for (var m = 0; m < EMBED.length; m++) {
+  var mrel = EMBED[m];
+  var mtext = fs.readFileSync(path.join(ROOT, mrel), "utf8");
+  var mbody = embeddedEs3(mtext);
+  var mbodyLines = mbody.split("\n");
+  // A .js file that embeds ExtendScript also holds ordinary Node strings,
+  // and some of those are REGEX sources — "(?:need|have) to|without(?:
+  // having to)?" reads as a chained conditional to any scanner and is not
+  // code anybody executes. So a hit counts only where the ExtendScript
+  // AROUND it is talking to AE's object model. The window is the unit
+  // because these bodies are written as one concatenation dozens of
+  // lines long.
+  var mhits = findChainedTernaries(mbody).filter(function (h) {
+    var from = Math.max(0, h.line - 26);
+    return AE_OBJECT_MODEL.test(
+      mbodyLines.slice(from, h.line + 25).join("\n"));
+  });
+  var mlines = mtext.split("\n");
+  var mdetail = mhits.slice(0, 12).map(function (h) {
+    return "\n    " + mrel + ":" + h.line + " [" + h.where + "] " +
+           (mlines[h.line - 1] || "").trim().slice(0, 90);
+  }).join("");
+  ok(mhits.length === 0,
+     mrel + " builds " + mhits.length + " unparenthesised chained " +
+     "ternary/ies inside string literals — if that string reaches AE, " +
+     "ExtendScript computes the wrong branch." + mdetail);
 }
 
 console.log((failed === 0 ? "PASS" : "FAIL") +

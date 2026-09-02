@@ -341,6 +341,13 @@ let mtRig = {};
 // answers from what add_mask really put there and the mask refusals
 // ("no masks", "Mask not found ... Masks here:") are measurements.
 let mkMasks = {};
+// How big each layer really is, "comp|layer" -> {width, height}. add_mask
+// refuses a mask that misses the layer entirely and get_comp_details puts
+// the layer's own size on its row, and NEITHER can be answered from the
+// comp's dimensions — which is the whole bug: the comp's were the only
+// numbers the model had, so four phrasings masked a 100x100 layer with
+// 1920x1080 and the tool said ok.
+let mkSizes = {};
 // The mask rig reads back what it just wrote (numKeys after a refusal),
 // so the canned host has to remember how many keys each mask carries.
 let maskKeys = {};
@@ -1852,6 +1859,28 @@ function cannedOk(tool, args) {
                note: "Stacking changed only" };
     }
     case "get_comp_details": {
+      // The mask rig, where a layer row has to carry the LAYER's size.
+      // Only when it differs from the comp's: absent means "the comp's",
+      // which is in the same result, so a full-frame comp pays nothing.
+      if (args && /Self-Test Mask$/.test(String(args.comp || ""))) {
+        const mkP = compProps[args.comp] || {};
+        const mkRows = Object.keys(mkSizes)
+          .filter((k) => k.indexOf(args.comp + "|") === 0)
+          .map((k, i) => {
+            const sz = mkSizes[k];
+            const row = { index: i + 1,
+                          name: k.slice(args.comp.length + 1), effects: [] };
+            if (sz.width !== mkP.width || sz.height !== mkP.height) {
+              row.width = sz.width;
+              row.height = sz.height;
+            }
+            return row;
+          });
+        const mkOut = capLayers(args.comp, mkRows, args);
+        mkOut.width = mkP.width;
+        mkOut.height = mkP.height;
+        return mkOut;
+      }
       // The preset rig lives in the MAIN scratch comp, and its two split
       // pieces are SELECTED — the state applyPreset misreads in real AE.
       // It answers before the other rigs so the selection is never lost.
@@ -2544,6 +2573,38 @@ function cannedOk(tool, args) {
     }
     case "add_mask": {
       const mkKey = ((args && args.comp) || "") + "|" + ((args && args.layer) || "");
+      // Faithful to the host's new refusal: a rectangle that does not
+      // touch the layer at all hides ALL of it, and AE takes it silently
+      // (measured — setting a comp-sized shape on a 100x100 solid threw
+      // nothing). A canned host that accepted it would let that ship again.
+      const mkSz = mkSizes[mkKey];
+      const mkB = args && args.bounds;
+      if (mkSz && Array.isArray(mkB) && mkB.length >= 4) {
+        const bl = Math.min(mkB[0], mkB[0] + mkB[2]);
+        const br = Math.max(mkB[0], mkB[0] + mkB[2]);
+        const bt = Math.min(mkB[1], mkB[1] + mkB[3]);
+        const bb = Math.max(mkB[1], mkB[1] + mkB[3]);
+        if (bl <= 0 && bt <= 0 && br >= mkSz.width && bb >= mkSz.height &&
+            (br - bl > mkSz.width || bb - bt > mkSz.height)) {
+          return { __err: "That mask covers ALL of '" + args.layer + "', " +
+            "so it hides nothing: the mask spans x " + bl + " to " + br +
+            ", y " + bt + " to " + bb + " and the layer is only " +
+            mkSz.width + "x" + mkSz.height + " at x 0 to " + mkSz.width +
+            ", y 0 to " + mkSz.height + ". Mask coordinates are in LAYER " +
+            "space, not comp space. To show only the top half of this " +
+            "layer, mask bounds [0, 0, " + mkSz.width + ", " +
+            (mkSz.height / 2) + "]." };
+        }
+        if (br <= 0 || bl >= mkSz.width || bb <= 0 || bt >= mkSz.height) {
+          return { __err: "That mask misses '" + args.layer + "' completely, " +
+            "so it would hide the whole layer: the mask spans x " + bl +
+            " to " + br + ", y " + bt + " to " + bb + " and the layer is " +
+            mkSz.width + "x" + mkSz.height + " at x 0 to " + mkSz.width +
+            ", y 0 to " + mkSz.height + ". Mask coordinates are in LAYER " +
+            "space, not comp space. The whole layer is bounds [0, 0, " +
+            mkSz.width + ", " + mkSz.height + "]." };
+        }
+      }
       const held = mkMasks[mkKey] || (mkMasks[mkKey] = []);
       const mkName = (args && args.name) || ("Mask " + (held.length + 1));
       held.push(mkName);
@@ -2807,6 +2868,11 @@ function cannedOk(tool, args) {
       return out;
     }
     case "add_solid":
+      // A solid knows its own size, and every later read of it has to be
+      // able to say so — the comp's dimensions are a different number.
+      mkSizes[((args && args.comp) || "") + "|" + ((args && args.name) || "")] =
+        { width: (args && args.width) || 100,
+          height: (args && args.height) || 100 };
       if (args && /Self-Test Frame/.test(String(args.comp || ""))) {
         frLayers[args.comp] = (frLayers[args.comp] || []);
         frLayers[args.comp].unshift(String(args.name || "solid"));
@@ -4562,7 +4628,7 @@ SelfTest.run({
     mattes = {};
     mtRig = {};
     maskKeys = {};
-    mkMasks = {};
+    mkMasks = {}; mkSizes = {};
     batchLayers = 0; batchFx = {}; batchBlur = null;
     batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetBoundsRig(); resetPresetRig(); resetRqRig(); resetAuRig(); resetFrRig(); resetCapRig(); resetMgRig();
     SelfTest.run({
@@ -4595,7 +4661,7 @@ SelfTest.run({
         mattes = {};
         mtRig = {};
         maskKeys = {};
-        mkMasks = {};
+        mkMasks = {}; mkSizes = {};
         batchLayers = 0; batchFx = {}; batchBlur = null;
         batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetBoundsRig(); resetPresetRig(); resetRqRig(); resetAuRig(); resetFrRig(); resetCapRig(); resetMgRig();
         SelfTest.run({

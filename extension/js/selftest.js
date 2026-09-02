@@ -2055,6 +2055,114 @@
           return d.mask === "ST Path" || "mask named " + d.mask;
         } },
 
+      // add_mask's doc says "sizes from get_comp_details, never guessed"
+      // and, until 0.11.9, that result carried no layer size at all — so
+      // four separate phrasings of "hide half of Beta" all reached
+      // add_mask with the COMP's dimensions halved, on a 100x100 layer,
+      // and AE took every one of them silently. These two steps are the
+      // field proof that the doc is now true and the miss is now caught.
+      { name: "a layer row carries the LAYER's size, not the comp's",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.mkComp, limit: 0 }; },
+        check: function (d) {
+          if (d.width !== 400 || d.height !== 400) {
+            return "comp reads " + d.width + "x" + d.height;
+          }
+          var rows = d.layers || [], i, row = null;
+          for (i = 0; i < rows.length; i++) {
+            if (rows[i].name === "ST Mask") row = rows[i];
+          }
+          if (!row) return "no ST Mask row";
+          if (row.width !== 200 || row.height !== 200) {
+            return "ST Mask is 200x200 but its row says " +
+                   row.width + "x" + row.height;
+          }
+          // 0,0 origin: a solid's box starts there, so the two extra
+          // fields a text layer needs must NOT be on this row.
+          return (typeof row.left === "undefined" &&
+                  typeof row.top === "undefined") ||
+                 "a 0,0-origin layer paid for left/top: " +
+                 row.left + "," + row.top;
+        } },
+
+      { name: "a comp-sized mask on a smaller layer is refused, with its size",
+        tool: "add_mask",
+        expectError: true,
+        args: function (ctx) {
+          // Exactly what the model produced in the field: the comp's
+          // dimensions, halved, as a "bottom half" rectangle.
+          return { comp: ctx.mkComp, layer: "ST Mask", name: "ST Miss",
+                   shape: "rectangle", bounds: [0, 200, 400, 200] };
+        },
+        check: function (e) {
+          if (!/misses 'ST Mask' completely/.test(e)) {
+            return "message was: " + e;
+          }
+          if (!/200x200/.test(e)) return "the real size is missing: " + e;
+          return /LAYER space/.test(e) ||
+                 "the refusal does not say which space: " + e;
+        } },
+
+      // The same comp coordinates in the phrasing that OVERLAPS: "I only
+      // want to see the top half of Beta" reached add_mask with
+      // [0, 0, 1920.0001, 540] on a 100x100 layer. That swallows the
+      // layer whole — the mask changes nothing — and the tool said ok.
+      { name: "…as is one that swallows the layer whole",
+        tool: "add_mask",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Mask", name: "ST Swallow",
+                   shape: "rectangle", bounds: [0, 0, 400, 400] };
+        },
+        check: function (e) {
+          if (!/covers ALL of 'ST Mask'/.test(e)) return "message was: " + e;
+          if (!/200x200/.test(e)) return "the real size is missing: " + e;
+          // It works the answer out rather than only naming the problem.
+          return /\[0, 0, 200, 100\]/.test(e) ||
+                 "no worked bounds offered: " + e;
+        } },
+
+      { name: "…and the aimed version of it lands, unremarked",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Mask", name: "ST Half",
+                   shape: "rectangle", bounds: [0, 100, 200, 100] };
+        },
+        check: function (d) {
+          if (d.mask !== "ST Half") return "mask named " + d.mask;
+          return !d.note || "an in-bounds mask was noted anyway: " + d.note;
+        } },
+
+      { name: "…and the refused one wrote nothing",
+        tool: "delete_mask",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Mask", mask: "ST Miss" };
+        },
+        check: function (e) {
+          if (!/Mask not found/.test(e)) return "message was: " + e;
+          // The grounded half: the masks that DO exist are the two the
+          // steps above meant to make, and no third one from the refusal.
+          if (!/ST Path/.test(e) || !/ST Half/.test(e)) {
+            return "the refusal lists the wrong masks: " + e;
+          }
+          return true;
+        } },
+
+      // Put the layer back to one mask: the delete-by-index step further
+      // down addresses masks positionally, so an extra one here would
+      // silently change what index 2 means.
+      { name: "…and the aimed one comes off again",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Mask", mask: "ST Half" };
+        },
+        check: function (d) {
+          var rem = d.remainingMasks;
+          return (rem && rem.length === 1 && rem[0] === "ST Path") ||
+                 "remainingMasks " + JSON.stringify(rem);
+        } },
+
       { name: "animate the mask path (keys on whole frames)",
         tool: "set_mask_path",
         args: function (ctx) {

@@ -2293,6 +2293,27 @@ AELL_TOOLS.get_comp_details = function (args) {
       startTime: layer.startTime,
       effects: AELL_effectNames(layer)
     };
+    // Only when the layer is NOT the comp's own size, so a comp full of
+    // full-frame layers pays nothing for it and an absent size still
+    // means the number the model already has at the top of this result.
+    //
+    // add_mask's doc says "sizes from get_comp_details, never guessed"
+    // and this result had no layer size in it at all — so four phrasings
+    // of "hide half of Beta" all masked a 100x100 layer with the comp's
+    // 1920x1080, obeying the only figures they were given. That is the
+    // hole these two fields close.
+    var box = AELL_layerBox(layer, comp.time);
+    if (box && (box.width !== comp.width || box.height !== comp.height ||
+                box.left !== 0 || box.top !== 0)) {
+      entry.width = box.width;
+      entry.height = box.height;
+      // A text layer's origin is its baseline, not its top-left, so
+      // [0, 0, w, h] is the wrong rectangle there (measured AE 2026).
+      if (box.left !== 0 || box.top !== 0) {
+        entry.left = box.left;
+        entry.top = box.top;
+      }
+    }
     // Only when there IS one, so an unmatted comp pays nothing for it.
     // Without this the panel had no way at all to SEE a track matte:
     // set_track_matte's receipt was the only evidence it had landed.
@@ -2326,6 +2347,48 @@ AELL_TOOLS.get_comp_details = function (args) {
     layersShown: layers.length,
     layers: layers
   };
+
+  /* The row cap is a BYTE cap as much as a row count. A round of results
+   * shares 6000 bytes on the panel side, and forty rows fitted that only
+   * while a row was short; the moment they started carrying the layer's
+   * own size, forty of them serialized to 6423 and the panel's own
+   * structural shrink took the tail off with no note of its own. Drop it
+   * HERE instead, where the omission is described and pageable — the
+   * same reason the forty-row cap exists at all.
+   *
+   * The SELECTION is never dropped: the system prompt tells the model to
+   * read `selected: true` to resolve "these layers". */
+  /* 5000, not 6000. This result has two consumers and BOTH share a
+   * 6000-byte budget with something else: in the state block it sits
+   * beside the project list (which the panel trims FIRST, so a comp that
+   * takes the whole 6000 leaves the model unable to name any comp but
+   * this one), and in a round of results it takes a fair share. A comp
+   * result at 5000 leaves a working 1000 for the project half — which is
+   * roughly what forty rows cost before they carried a layer size, so
+   * the new field is paid for in rows rather than in project items. */
+  var ROW_BUDGET = 5000;
+  var trimmed = 0;
+  // `limit:0` is an explicit "every layer", and the panel's own internal
+  // callers use it. Trimming that would be answering a different question.
+  while (limit >= 0 && layers.length > 1 &&
+         AELLJSON.stringify(out).length > ROW_BUDGET) {
+    var k = layers.length - 1;
+    while (k >= 0 && layers[k].selected) k--;
+    if (k < 0) break;
+    layers.splice(k, 1);
+    trimmed++;
+    out.layersShown = layers.length;
+  }
+  if (trimmed) {
+    // `last` has to become the last CONTIGUOUS index still shown, or
+    // "ask again with start:" would point past a row that was dropped.
+    var shown = {};
+    for (i = 0; i < layers.length; i++) shown[layers[i].index] = true;
+    var contig = start - 1;
+    while (contig < last && shown[contig + 1]) contig++;
+    last = contig;
+  }
+
   if (layers.length < total) {
     var next = last + 1;
     out.note = "Showing " + layers.length + " of " + total +
@@ -3480,6 +3543,42 @@ function AELL_sourceTime(layer, compTime) {
   try { stretch = Number(layer.stretch); } catch (eT) {}
   if (!stretch || isNaN(stretch)) stretch = 100;
   return (compTime - st) / (stretch / 100);
+}
+
+/*
+ * The layer's OWN box, in the LAYER space that mask vertices live in.
+ * Returns null when the layer has no honest size to report.
+ *
+ * MEASURED AE 2026 (scripts/layer-size-probe.jsx): `layer.width` and
+ * `layer.height` are NOT "how big is this layer". A TEXT layer and a
+ * SHAPE layer both answer with the COMP's dimensions — 1920x1080 for a
+ * 147x28 "HELLO" — and a camera and a light answer with nothing at all.
+ * Only a layer with a SOURCE (solid, footage, precomp, null) has a width
+ * that is its own, and for those the box starts at 0,0, so the source
+ * size IS the box.
+ *
+ * For the sourceless ones the only honest box is sourceRectAtTime's, and
+ * its origin is NOT 0,0: the same "HELLO" measured left 3.487, top
+ * -49.568, because a text layer's coordinate origin is its baseline. A
+ * caller that assumes [0, 0, w, h] there masks the wrong rectangle, so
+ * left/top are reported rather than dropped.
+ */
+function AELL_layerBox(layer, compTime) {
+  var src = null;
+  try { src = layer.source; } catch (eS) {}
+  if (src) {
+    var sw = Number(src.width), sh = Number(src.height);
+    if (sw > 0 && sh > 0) return { left: 0, top: 0, width: sw, height: sh };
+  }
+  if (typeof layer.sourceRectAtTime !== "function") return null;
+  var rect;
+  try {
+    rect = layer.sourceRectAtTime(
+      AELL_sourceTime(layer, Number(compTime) || 0), false);
+  } catch (eR) { return null; }
+  if (!rect || !(rect.width > 0) || !(rect.height > 0)) return null;
+  return { left: AELL_r3(rect.left), top: AELL_r3(rect.top),
+           width: AELL_r3(rect.width), height: AELL_r3(rect.height) };
 }
 
 /*
@@ -6197,6 +6296,25 @@ function AELL_maskMode(name) {
   return AELL_MASK_MODES[String(name).toLowerCase()];
 }
 
+/* Bounding box of a vertex list. Exact for the ellipse too: the four
+ * points add_mask generates for one ARE its extremes. */
+function AELL_boxOfPoints(pts) {
+  if (!AELLJSON.isArray(pts) || !pts.length) return null;
+  var l = null, t = null, r = null, b = null, i;
+  for (i = 0; i < pts.length; i++) {
+    var p = pts[i];
+    if (!AELLJSON.isArray(p) || p.length < 2) continue;
+    var x = Number(p[0]), y = Number(p[1]);
+    if (isNaN(x) || isNaN(y)) continue;
+    if (l === null || x < l) l = x;
+    if (r === null || x > r) r = x;
+    if (t === null || y < t) t = y;
+    if (b === null || y > b) b = y;
+  }
+  if (l === null) return null;
+  return { left: l, top: t, right: r, bottom: b };
+}
+
 AELL_TOOLS.add_mask = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var layer = AELL_resolveLayer(comp, args.layer);
@@ -6205,6 +6323,9 @@ AELL_TOOLS.add_mask = function (args) {
   var shape = new Shape();
   shape.closed = true;
   var kind = args.shape ? String(args.shape) : "rectangle";
+  // The layer's OWN box, not layer.width/height — those report the COMP's
+  // size on a text or shape layer (measured AE 2026).
+  var box = AELL_layerBox(layer, comp.time);
   if (kind === "custom") {
     if (!AELLJSON.isArray(args.vertices) || args.vertices.length < 3) {
       return AELL_err("'vertices' ([[x,y],...] in LAYER space, >= 3 points) " +
@@ -6212,9 +6333,14 @@ AELL_TOOLS.add_mask = function (args) {
     }
     shape.vertices = args.vertices;
   } else {
-    var b = (AELLJSON.isArray(args.bounds) && args.bounds.length >= 4)
-      ? args.bounds
-      : [0, 0, layer.width || comp.width, layer.height || comp.height];
+    var b;
+    if (AELLJSON.isArray(args.bounds) && args.bounds.length >= 4) {
+      b = args.bounds;
+    } else if (box) {
+      b = [box.left, box.top, box.width, box.height];
+    } else {
+      b = [0, 0, layer.width || comp.width, layer.height || comp.height];
+    }
     var x = b[0], y = b[1], w = b[2], h = b[3];
     if (kind === "ellipse") {
       var cx = x + w / 2, cy = y + h / 2, rx = w / 2, ry = h / 2;
@@ -6226,6 +6352,61 @@ AELL_TOOLS.add_mask = function (args) {
       shape.vertices = [[x, y], [x + w, y], [x + w, y + h], [x, y + h]];
     }
   }
+
+  /* A mask that misses the layer entirely hides ALL of it, and AE takes
+   * it without a murmur: measured, setting a comp-sized-and-halved
+   * rectangle on a 100x100 solid threw nothing and this tool answered
+   * ok. The layer's own box is the only thing that can tell an aimed
+   * mask from a comp-space one, so refuse with the box in hand — the
+   * same grounded shape as every other failed lookup here. */
+  var overflow = "";
+  var hit = AELL_boxOfPoints(shape.vertices);
+  if (box && hit) {
+    var bRight = AELL_r3(box.left + box.width);
+    var bBottom = AELL_r3(box.top + box.height);
+    // " to " rather than a dash: a text layer's box has a negative top
+    // and "y -49.568--21.551" is not a number anybody can read.
+    var span = "x " + AELL_r3(hit.left) + " to " + AELL_r3(hit.right) +
+               ", y " + AELL_r3(hit.top) + " to " + AELL_r3(hit.bottom);
+    var mine = box.width + "x" + box.height + " at x " + box.left + " to " +
+               bRight + ", y " + box.top + " to " + bBottom;
+    if (hit.right <= box.left || hit.left >= bRight ||
+        hit.bottom <= box.top || hit.top >= bBottom) {
+      return AELL_err("That mask misses '" + layer.name + "' completely, " +
+        "so it would hide the whole layer: the mask spans " + span +
+        " and the layer is " + mine + ". Mask coordinates are in LAYER " +
+        "space, not comp space — the comp is " + comp.width + "x" +
+        comp.height + " and this layer is not. The whole layer is bounds [" +
+        box.left + ", " + box.top + ", " + box.width + ", " + box.height +
+        "]; half of it is half of those numbers.");
+    }
+    /* The other half of the same mistake, and the one the "misses it
+     * completely" test walks past: comp coordinates that happen to
+     * OVERLAP. Measured in the field — "I only want to see the top half
+     * of Beta" reached add_mask with [0, 0, 1920.0001, 540] on the same
+     * 100x100 layer, which swallows it whole, so the mask changes
+     * nothing at all and the receipt said ok. A mask exactly the layer's
+     * box is fine (it is this tool's own default); one that is BIGGER on
+     * every side is the comp's numbers again. */
+    if (hit.left <= box.left && hit.top <= box.top &&
+        hit.right >= bRight && hit.bottom >= bBottom &&
+        (hit.right - hit.left > box.width ||
+         hit.bottom - hit.top > box.height)) {
+      return AELL_err("That mask covers ALL of '" + layer.name + "', so it " +
+        "hides nothing: the mask spans " + span + " and the layer is only " +
+        mine + ". Mask coordinates are in LAYER space, not comp space — " +
+        "the comp is " + comp.width + "x" + comp.height + " and this layer " +
+        "is not. To show only the top half of this layer, mask bounds [" +
+        box.left + ", " + box.top + ", " + box.width + ", " +
+        AELL_r3(box.height / 2) + "].");
+    }
+    if (hit.left < box.left || hit.top < box.top ||
+        hit.right > bRight || hit.bottom > bBottom) {
+      overflow = "The mask spans " + span + ", past '" + layer.name +
+        "' (" + mine + ") — the part outside the layer does nothing.";
+    }
+  }
+
   var mask = masks.addProperty("ADBE Mask Atom");
   if (args.name) mask.name = String(args.name);
   mask.property("ADBE Mask Shape").setValue(shape);
@@ -6241,7 +6422,9 @@ AELL_TOOLS.add_mask = function (args) {
   if (args.feather > 0) {
     mask.property("ADBE Mask Feather").setValue([args.feather, args.feather]);
   }
-  return AELL_okay({ layer: layer.name, mask: mask.name, shape: kind });
+  var out = { layer: layer.name, mask: mask.name, shape: kind };
+  if (overflow) out.note = overflow;
+  return AELL_okay(out);
 };
 
 /*

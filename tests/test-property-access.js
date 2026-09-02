@@ -184,11 +184,35 @@ const LIGHT_OPTS = [
   ["Shadow Diffusion", "ADBE Light Shadow Diffusion"]
 ];
 
-function Layer(name, comp, kind) {
+function Layer(name, comp, kind, box) {
   this.name = name;
   this.comp = comp;
   this.kind = kind || "solid";
   classify(this);
+  // How big is this layer, as AE really answers it (measured AE 2026,
+  // scripts/layer-size-probe.jsx). `.width`/`.height` are NOT the layer's
+  // size: a TEXT layer and a SHAPE layer both report the COMP's
+  // dimensions — 1920x1080 for a 147x28 "HELLO" — and a camera and a
+  // light have neither property. Only a layer with a SOURCE reports its
+  // own, and there the box starts at 0,0. For the sourceless ones the
+  // honest box is sourceRectAtTime's, whose origin is the text BASELINE
+  // (that "HELLO" measured left 3.487, top -49.568), so a caller reading
+  // [0, 0, w, h] there is looking below the glyphs.
+  if (this.kind !== "camera" && this.kind !== "light") {
+    if (this.kind === "text" || this.kind === "shape") {
+      this.width = comp.width;            // the lie, on purpose
+      this.height = comp.height;
+      this._rect = box || { top: 0, left: 0, width: 0, height: 0 };
+    } else {
+      const b = box || { top: 0, left: 0,
+                         width: comp.width, height: comp.height };
+      this.width = b.width;
+      this.height = b.height;
+      this.source = { width: b.width, height: b.height };
+      this._rect = { top: 0, left: 0, width: b.width, height: b.height };
+    }
+    this.sourceRectAtTime = function () { return this._rect; };
+  }
   // A fresh AV layer reads NO_TRACK_MATTE (5012), not 0. A camera or a
   // light carries NEITHER property until something writes one — which is
   // exactly how the legacy branch's phantom matte used to hide.
@@ -630,6 +654,47 @@ call("set_track_matte", { layer: "A", mode: "none" });
 assert(!rowOf("A").matte,
        "…and it goes away when the matte does: " +
        JSON.stringify(rowOf("A")));
+// The layer's own SIZE has to be visible here too, for the same reason
+// the matte does. add_mask's doc says "sizes from get_comp_details,
+// never guessed" and this result carried no layer size at all — so four
+// separate phrasings of "hide half of Beta" masked a 100x100 layer with
+// [0, 540, 1920.0001, 540], the comp's dimensions halved, and AE took it
+// silently. The model was obeying: 1920x1080 was the only size it had.
+const SMALL = new Layer("Beta", comp, "solid", { width: 100, height: 100 });
+comp._layers.push(SMALL);
+assert(rowOf("Beta").width === 100 && rowOf("Beta").height === 100,
+       "a layer smaller than the comp reports its OWN size: " +
+       JSON.stringify(rowOf("Beta")));
+assert(!("width" in rowOf("A")) && !("height" in rowOf("A")),
+       "a full-frame layer reports none — absent means the comp's size, " +
+       "which is in the same result: " + JSON.stringify(rowOf("A")));
+
+// A text layer is where .width/.height cannot be believed at all, and
+// where the origin is not 0,0 either.
+const TXT = new Layer("HELLO", comp, "text",
+  { left: 3.487, top: -49.568, width: 146.671, height: 28.017 });
+comp._layers.push(TXT);
+assert(TXT.width === 1920,
+       "stub: AE reports the COMP's width for a text layer (measured)");
+assert(rowOf("HELLO").width === 146.671 && rowOf("HELLO").height === 28.017,
+       "…and the row reports the MEASURED box instead: " +
+       JSON.stringify(rowOf("HELLO")));
+assert(rowOf("HELLO").left === 3.487 && rowOf("HELLO").top === -49.568,
+       "…with the baseline origin, so [0, 0, w, h] is visibly not it: " +
+       JSON.stringify(rowOf("HELLO")));
+assert(!("left" in rowOf("Beta")) && !("top" in rowOf("Beta")),
+       "…and a layer whose origin IS 0,0 pays nothing for those two: " +
+       JSON.stringify(rowOf("Beta")));
+
+// An empty shape layer measures 0x0 and a camera has no size at all:
+// neither may be reported as a box, and neither may throw.
+const EMPTY = new Layer("Empty Shape", comp, "shape");
+comp._layers.push(EMPTY);
+assert(!("width" in rowOf("Empty Shape")),
+       "a layer with nothing to measure reports no size: " +
+       JSON.stringify(rowOf("Empty Shape")));
+comp._layers.pop(); comp._layers.pop(); comp._layers.pop();
+
 r = call("set_track_matte", { layer: "A", matteLayer: "A", mode: "alpha" });
 assert(!r.ok && /matte itself/.test(r.error), "self-matte refused");
 r = call("set_track_matte", { layer: "A", mode: "alpha" });

@@ -80,7 +80,17 @@ function AVLayer(name) {
   // Real AE layer names in the field are not "P1" — a solid carries the
   // name the user typed, and the byte cost of the list is what this file
   // measures, so keep them realistic in length.
-  this.source = { mainSource: new SolidSource() };
+  //
+  // And a real solid is a SIZE, not just a name. These are the 100x100
+  // solids their own names advertise, in a 1920x1080 comp, so every row
+  // carries a width and a height — which is exactly the growth that put
+  // forty rows over budget the day the size was added.
+  this.source = { mainSource: new SolidSource(), width: 100, height: 100 };
+  this.width = 100;
+  this.height = 100;
+  this.sourceRectAtTime = function () {
+    return { top: 0, left: 0, width: 100, height: 100 };
+  };
 }
 AVLayer.prototype.property = function () {
   return { numProperties: 0, property() { return null; } };
@@ -156,6 +166,28 @@ assert(selRows.length === 1 && selRows[0].index === SELECTED_INDEX,
        SELECTED_INDEX);
 assert(/selected/i.test(det.data.note || ""),
        "the note mentions the selection so the model trusts the flag");
+
+// The layer's own size is on the row now (add_mask's doc sends the model
+// here for it), and a row that grew has to be PAID for: forty of these
+// serialize past the 6000-byte round budget, and a result that overflows
+// is cut by the panel with no note of its own.
+assert(det.data.layers[0].width === 100 && det.data.layers[0].height === 100,
+       "a layer smaller than the comp reports its own size: " +
+       JSON.stringify(det.data.layers[0]));
+const detBytes = JSON.stringify(det.data).length;
+assert(detBytes < 6000,
+       "…and the capped result still fits the round budget (" +
+       detBytes + " bytes)");
+assert(det.data.layers.length < 41,
+       "…by sending FEWER rows, not by silently overflowing (" +
+       det.data.layers.length + " rows)");
+// The paging offer has to point at the first row actually missing, or the
+// model asks for a page it already has and never sees the gap.
+const shownIdx = det.data.layers.map(l => l.index);
+const firstGap = Number(/start:(\d+)/.exec(det.data.note || "")[1]);
+assert(shownIdx.indexOf(firstGap) < 0 && shownIdx.indexOf(firstGap - 1) >= 0,
+       "the note's start: is the first index NOT shown (" + firstGap +
+       ", shown " + shownIdx[0] + "-" + shownIdx[shownIdx.length - 2] + ")");
 
 const all = call("get_comp_details", { limit: 0 });
 assert(all.ok && all.data.layers.length === LAYERS,
