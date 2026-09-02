@@ -1822,20 +1822,41 @@ this order, one bullet per pass:
     zero tool calls. Prompt full 58989 -> 58974 (ceiling 59000), paid
     for by two third copies of "dryRun defaults to true" and a
     compressed clean_project doc tail. Harness 578 -> 589.
-  - NEXT: row 36 casual, "drop shadow on every layer but the BG" ->
-    `apply_effect {layers: [...]}` answered `Missing 'layer' (name or
-    1-based index)`, which never says that the PLURAL belongs to
-    `for_each_layer`. The model re-sent the identical call and gave up.
-    Same class as 0.11.10's bare `Missing 'property'`, measured twice in
-    one round. Ground `AELL_resolveLayer`'s missing-layer throw on the
-    plural it was actually handed.
+  - ~~row 36 casual, "drop shadow on every layer but the BG" ->
+    `apply_effect {layers: [...]}` answered `Missing 'layer'`~~ DONE
+    2026-09-02 (0.11.15). The refusal named the key that was ABSENT and
+    never the key that had ARRIVED, so the model re-sent the identical
+    call and gave up. Fixed at the one place a layer ref is resolved,
+    not per tool: `AELL_missingLayer` reads the `layers` the caller
+    actually handed over (parked by `AELL_runTool`) and names
+    for_each_layer, the plural these tools DO have; a list under the
+    singular `layer` gets the mirror message instead of AE's "invalid
+    numeric result (divide by zero?)"; a bare miss is grounded in the
+    comp's own roster. `AELL_layerOrSelection` refuses the same way
+    rather than falling through to a selection the caller never named.
+    `AELL_resolveLayer` now takes the arg NAME, so 'parent' /
+    'matteLayer' / 'above' report themselves instead of saying 'layer'.
+    **2 pass / 1 miss / 1 HARM -> 3 pass, 0 miss, 1 HARM** — the casual
+    phrasing is a clean seven-call first shot. Zero prompt cost (host
+    strings only). Harness 589 -> 593.
+  - NEXT: row 36 vague, "everything should sit off the background a bit
+    — shadow them, not it" — the remaining HARM, and a different defect
+    from the one just fixed. The model builds a `Shadow Null` slider rig
+    and passes an EXPRESSION STRING as a `set_effect_param` value
+    ("... is not a number"), then asks Drop Shadow for an `Offset`
+    param it does not have; the round rolls back, and the retry shadows
+    HEADLINE alone — 6 of 7 layers skipped on an "ok". Two candidates:
+    set_effect_param should say that a string value belongs in
+    `link_property` / `set_expression`, and `Parameter not found` should
+    name the near miss (Distance/Direction) the way `AELL_compsHere`
+    ranks comps.
   - THEN, in priority order: row 32 (`stagger_layers` alone on layers
     with NO keyframes reports `ok` and animates nothing — 3 of 4
     phrasings), row 35 ("soften"/"too sharp" reaches `add_mask`, 2 of
-    4), row 30 casual (`grid_layout` with no `layers` grids the
-    BACKGROUND in), and `link_property {layer: [six names]}` ->
-    "invalid numeric result (divide by zero?)" instead of a grounded
-    refusal.
+    4), and row 30 casual (`grid_layout` with no `layers` grids the
+    BACKGROUND in). `link_property {layer: [six names]}` ->
+    "invalid numeric result (divide by zero?)" is CLOSED by 0.11.15
+    above (grounded, and pinned by a real-AE self-test step).
 - **DEFERRED until a sandbox design exists:** D/F/H3 rows (project
   mutation, renders, mass-delete) — wiring them against the live
   project is the harm the whitelist cannot contain. Also deferred:

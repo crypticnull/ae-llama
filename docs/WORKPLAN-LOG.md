@@ -13342,3 +13342,158 @@ and one promotion:
   60-layer comp hits it. Not done here: one item per pass.
 
 Nothing was left unattempted this pass. Nothing is blocked.
+
+## 2026-09-02 (local, real AE) - WORKPLAN 8, row 36: the refusal named the key that was missing, never the key that had arrived (0.11.15)
+
+The harness opened GREEN at 589/589, so the pass took the workplan's
+next unfinished bullet: item 8's filed #1, `Missing 'layer'` never
+mentions the plural or `for_each_layer`.
+
+### The failure, restated from the field
+
+Row 36 casual, "drop shadow on every layer but the BG". The model routed
+CORRECTLY - `apply_effect` is the right tool - and passed
+`{layers: [...seven names]}`. The host answered:
+
+    Missing 'layer' (name or 1-based index)
+
+Which is true, and useless. It names the key that is ABSENT and says
+nothing about the key that ARRIVED, so there is no edit the model can
+make to the call it just sent. It re-sent the identical call and then
+told the user "please ensure the layers are correctly named" - the names
+were fine. Same class as 0.11.10's bare `Missing 'property'` and
+0.11.12's three refusals: **the refusal is the bug, not the vocabulary.**
+
+`set_property` already carried a hand-written redirect for exactly this
+(its own `{layers: [...]}` branch, added after the mistake was measured
+twice in one probe run). That was the tell: one tool had been patched
+where a whole CLASS of tools shares the defect. `AELL_resolveLayer` is
+called from 32 places in the file.
+
+### The fix (host root, extension/jsx/hostscript.jsx)
+
+Fixed once, at the single place a layer ref is resolved, rather than
+once per tool:
+
+- **`AELL_runTool` parks the call.** `AELL_resolveLayer` only ever sees
+  the resolved ref, so a missing `layer` cannot name the `layers` that
+  came instead. The one dispatch point now saves `toolName`/`args` into
+  `$.global` and RESTORES them on the way out - for_each_layer runs its
+  sub-tools inside that frame, so assignment alone would leak.
+- **`AELL_missingLayer(comp, key, handed, underSingular)`** is the whole
+  message. A plural handed over is quoted back and answered with
+  `for_each_layer {layers: [...], tool: '<the tool>', args: {...}}`;
+  an ALREADY-BATCHED tool is told to pass its own `{layers}` instead;
+  a tool with no per-layer target is told to call it once per layer.
+- **The mirror case.** A list under the SINGULAR key (`link_property
+  {layer: [six names]}`, filed in the same round) reached
+  `comp.layer([a, b])`, which answers "invalid numeric result (divide by
+  zero?)" - a message naming neither the argument nor the tool. Refused
+  before AE sees it now, in the same words.
+- **A bare miss is grounded.** Nothing handed over at all gets the
+  comp's own roster (`AELL_capJoin`, cap 8) - names are the only way in
+  for a caller that cannot click. The roster is printed ONLY in that
+  case: a caller who just passed six names does not need to be told what
+  the layers are called, and an error list can push the state the model
+  needs out of its window.
+- **`AELL_layerOrSelection` refuses the same way.** Named targets under
+  the wrong key are not "no target": falling through to the selection
+  would work on layers the caller never named and report success, and
+  "select one in AE" is a dead end for a caller with no hands. Tools with
+  their own plural branch (set_property, get_bounds) consume
+  `args.layers` before they ever reach it, so the redirect cannot speak
+  over them.
+- **`AELL_resolveLayer` now takes the ARG NAME** (default "layer"), so
+  `parent`, `matteLayer`, `controlLayer`, `above`/`below` and the
+  `layers[]` elements report themselves. Before this, a missing `parent`
+  said "Missing 'layer'". The `{layers}` redirect fires for the TARGET
+  argument only - "run it on each" is not an answer to a bad `parent`.
+
+### Verification
+
+- **The row flipped, real AE + real model.** `node scripts/chat-probe.js
+  --variants --steps 36`: **2 pass / 1 miss / 1 HARM -> 3 pass, 0 miss,
+  1 HARM.** The casual phrasing is now a clean first shot - seven
+  `apply_effect` calls, one per icon, BG untouched, two rounds. Typo and
+  canonical unchanged (canonical still reaches `for_each_layer`).
+  Transcript `logs\chat-probe-2026-09-02T11-58-31.md`.
+- **Real AE harness: 589/589 -> 593/593 PASSED.** Four new steps in
+  `extension/js/selftest.js`, in the 60-layer batch comp and BEFORE the
+  blur so "applied nothing" is checkable: the plural redirect (names the
+  key, the layers, the tool AND for_each_layer), the comp is unchanged
+  after it, the bare miss lists real layers, and `link_property
+  {layer: [...]}` is refused without AE's divide-by-zero surfacing.
+- Stub back-fill, `tests/test-for-each-layer.js` section 5: 17
+  assertions over the same six cases plus two guards - a bad `parent` is
+  reported as `'parent'` and is NOT answered with the per-layer
+  redirect, and set_property keeps its own hand-written wording.
+  **8 of them fail against the old host.** The canned host in
+  `tests/test-self-test.js` gained the matching gate
+  (`singularLayerGate`), scoped to the tools with no plural branch of
+  their own, so the new refusal steps cannot pass against anything.
+- `node tests/test-es3-syntax.js`, `node tests/test-es3-ternary.js`
+  green. Full stub sweep 66/67 - the odd one out is the known
+  environmental `tests/test-comfy-backend.js`, untouched and not mine.
+- `node scripts/capability-report.js` re-run (the tool table's self-test
+  counts moved), `node scripts/bump-version.js patch` -> **0.11.15**
+  (extension/ changed, so the bump is owed).
+- **Prompt budget: zero spend.** Nothing in `extension/js/tools.js`
+  changed; this pass is host strings on failure paths only, so the
+  58974/59000 ceiling is where 0.11.13 left it.
+
+### Assumptions written down
+
+- **Fixed the resolver, not apply_effect.** The filed row is one tool,
+  but `set_property`'s hand-written redirect proved the class, and
+  `AELL_resolveLayer` is called from 32 places. A per-tool fix would
+  have shipped the same bug in every one of the others.
+- **The plural redirect is scoped to the TARGET argument.** It would
+  have been cheaper to fire it for any missing layer ref, but
+  `set_layer_parent` and `set_track_matte` take a legitimate `{layers}`
+  list BESIDE their `parent`/`matteLayer`, and "for_each_layer runs it
+  on each" there is advice for a question nobody asked. That is what the
+  new `key` parameter buys.
+- **The globals are saved and restored, not assigned.** for_each_layer
+  calls `tool(sub)` directly rather than through `AELL_runTool`, so the
+  outer args stay parked during sub-calls. That is harmless today
+  (for_each_layer always injects `sub.layer`), but restoring means a
+  future nested caller cannot inherit a stale plural.
+- **The roster in a bare miss is walked in full and capped in the
+  print.** A 200-layer comp reads 200 names to show 8. That matches
+  `AELL_noTargets` next door and costs nothing on a failure path.
+
+### Filed for later passes
+
+- **NEW, and the next row: row 36 VAGUE is still HARM**, for a defect
+  unrelated to the one fixed. "everything should sit off the background
+  a bit - shadow them, not it": the model invents a `Shadow Null` slider
+  rig and passes an EXPRESSION STRING as a `set_effect_param` value -
+  AE answers `Unable to call "setValue" ... is not a number` - then asks
+  Drop Shadow for an `Offset` parameter it does not have. The round
+  rolls back, and the retry shadows HEADLINE alone: **6 of 7 layers
+  skipped on an "ok" reply.** Two candidates, both refusal-wording:
+  `set_effect_param` should say a string value belongs in
+  `link_property`/`set_expression`, and `Parameter not found` should
+  rank the near miss (Distance, Direction) the way `AELL_compsHere`
+  ranks comps.
+- **`link_property {layer: [six names]}` is CLOSED** - it was filed in
+  the "THEN" list and fell out of this fix, grounded and pinned by a
+  real-AE self-test step.
+- Rows 32 / 35 / 30 casual unchanged and still queued in that order.
+- Unchanged from the previous entry: the ~40 other `AELL_capJoin` call
+  sites that can silently truncate the row the caller needs
+  (`AELL_resolveLayer`'s own 20-layer "Actual layers" list is the
+  obvious next one), and items 2-20 filed earlier on 2026-09-02.
+- **Still owed, needs a human awake:** drop
+  `logs\mogrt-verify\AELL Probe Card.mogrt` into real Premiere
+  (harness plan step 6).
+
+One accident worth recording: `node scripts/chat-probe.js --help` is not
+a flag, and the script treats an unknown argument as "run everything" -
+it started a full probe against the live AE project before the pipe was
+closed. Its own sweep cleared the leftovers on the next run
+("cleanup: removed 1 project item(s)"), so nothing was lost, but a
+`--help` that runs the whole matrix against a user's project is a sharp
+edge for the human too. Not fixed here (one item per pass); filed.
+
+Nothing else was left unattempted this pass. Nothing is blocked.

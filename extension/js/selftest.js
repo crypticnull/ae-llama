@@ -2480,6 +2480,82 @@
                  "comp holds " + d.totalLayersInComp + " layers, not 60";
         } },
 
+      // The plural handed to a SINGULAR tool. Measured 2026-09-02
+      // (chat-probe row 36 casual, "drop shadow on every layer but the
+      // BG"): the model routed CORRECTLY to apply_effect and passed
+      // {layers: [...]}, and the bare "Missing 'layer' (name or 1-based
+      // index)" named the absent key but never the key that HAD arrived.
+      // The model re-sent the identical call and gave up. These steps run
+      // BEFORE the blur, so "applied nothing" is checkable.
+      { name: "batch: apply_effect handed {layers} names for_each_layer",
+        tool: "apply_effect",
+        args: function (ctx) {
+          return { comp: ctx.btComp, layers: ["ST Batch", "ST Batch 2"],
+                   effect: "Gaussian Blur" };
+        },
+        expectError: true,
+        check: function (err) {
+          if (!/you passed 'layers'/.test(err)) {
+            return "the refusal never names the key it was handed: " + err;
+          }
+          if (err.indexOf("ST Batch 2") === -1) {
+            return "it does not quote the layers back: " + err;
+          }
+          if (!/apply_effect/.test(err)) {
+            return "it does not name the tool: " + err;
+          }
+          return /for_each_layer \{layers/.test(err) ||
+                 "it does not name for_each_layer: " + err;
+        } },
+
+      { name: "batch: and that refusal applied nothing",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.btComp, limit: 0 }; },
+        check: function (d) {
+          var with_ = [];
+          for (var i = 0; i < d.layers.length; i++) {
+            var fx = d.layers[i].effects || [];
+            if (fx.length) with_.push(d.layers[i].name);
+          }
+          return with_.length === 0 ||
+                 with_.length + " layers already carry an effect: " +
+                 with_.slice(0, 5).join(", ");
+        } },
+
+      { name: "batch: apply_effect with NO layer lists the comp's layers",
+        tool: "apply_effect",
+        args: function (ctx) {
+          return { comp: ctx.btComp, effect: "Gaussian Blur" };
+        },
+        expectError: true,
+        check: function (err) {
+          if (!/Missing 'layer'/.test(err)) return "error was: " + err;
+          if (/you passed 'layers'/.test(err)) {
+            return "it invented a plural nobody sent: " + err;
+          }
+          return err.indexOf("ST Batch") !== -1 ||
+                 "it named no real layer: " + err;
+        } },
+
+      // The mirror: a list under the SINGULAR key. comp.layer([a, b])
+      // answered "invalid numeric result (divide by zero?)" in the field.
+      { name: "batch: a list under 'layer' is named as a list",
+        tool: "link_property",
+        args: function (ctx) {
+          return { comp: ctx.btComp, layer: ["ST Batch", "ST Batch 2"],
+                   property: "opacity", controlLayer: "ST Batch 3",
+                   controlEffect: "Slider" };
+        },
+        expectError: true,
+        check: function (err) {
+          if (/divide by zero/.test(err)) {
+            return "AE's raw error surfaced instead of ours: " + err;
+          }
+          return (/takes ONE layer, not a list/.test(err) &&
+                  err.indexOf("ST Batch 2") !== -1) ||
+                 "error was: " + err;
+        } },
+
       { name: "batch: apply_effect across 60 layers in ONE call",
         tool: "for_each_layer",
         args: function (ctx) {

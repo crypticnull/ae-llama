@@ -133,9 +133,92 @@ function AELL_resolveComp(name) {
                   AELL_compsHere(name, 15));
 }
 
-function AELL_resolveLayer(comp, ref) {
+/*
+ * What the caller actually handed over under the PLURAL key, or null.
+ *
+ * AELL_resolveLayer only ever sees the resolved ref, so when the ref is
+ * missing it cannot say WHY without the whole args object. AELL_runTool
+ * parks it — one dispatch point, saved and restored around nesting.
+ */
+function AELL_handedLayers() {
+  var a = $.global.AELL_curArgs;
+  if (a && AELLJSON.isArray(a.layers) && a.layers.length > 0) {
+    return a.layers;
+  }
+  return null;
+}
+
+/*
+ * The grounding half of "you gave me no single layer".
+ *
+ * Measured 2026-09-02 in real AE (chat-probe row 36 casual, "drop shadow
+ * on every layer but the BG"): the model routed CORRECTLY to apply_effect
+ * and passed {layers: [...]}, a plural apply_effect does not take. The
+ * bare "Missing 'layer' (name or 1-based index)" answered the question
+ * "which key is absent" and never the one that was asked — so the model
+ * re-sent the identical call and gave up. Same class as 0.11.10's bare
+ * "Missing 'property'": a refusal that names the missing key but not the
+ * key that WAS handed over cannot be acted on.
+ *
+ * set_property already carried this redirect by hand (its own
+ * {layers: [...]} branch, written after the same mistake was measured
+ * twice in one probe run). This is that fix generalised: every tool with
+ * a singular {layer} gets it from the one place the ref is resolved.
+ *
+ * The comp roster is printed ONLY when nothing was handed over at all —
+ * a caller who just passed six layer names does not need to be told what
+ * the layers are called, and an error list can push the state the model
+ * needs out of its window.
+ */
+function AELL_missingLayer(comp, key, handed, underSingular) {
+  var tool = String($.global.AELL_curTool || "");
+  var named = tool ? "'" + tool + "'" : "this tool";
+  var want = "'" + key + "' (name or 1-based index)";
+  var msg, names, i;
+  if (handed) {
+    if (underSingular) {
+      msg = want + " takes ONE layer, not a list — you passed " +
+        AELL_capJoin(handed, 6) + ".";
+    } else {
+      msg = "Missing " + want + " — you passed 'layers' (" +
+        AELL_capJoin(handed, 6) + "), which " + named + " does not take.";
+    }
+    // The redirect is about the TARGET argument. 'parent' or 'matteLayer'
+    // handed a list is a different mistake, and "run it on each" would be
+    // advice for a question nobody asked.
+    if (key !== "layer") return msg;
+    if (tool && AELL_ALREADY_BATCHED[tool]) {
+      msg += " " + named + " takes its own list: pass {layers: [...]}.";
+    } else if (!tool || AELL_PER_LAYER[tool]) {
+      msg += " for_each_layer {layers: [...], tool: '" +
+        (tool || "<this tool>") + "', args: {...}} runs it on each.";
+    } else {
+      msg += " Call it once per layer.";
+    }
+    return msg;
+  }
+  names = [];
+  for (i = 1; i <= comp.numLayers; i++) names.push(comp.layer(i).name);
+  return "Missing " + want + ". Layers in '" + comp.name + "': " +
+    AELL_capJoin(names, 8) + ".";
+}
+
+function AELL_resolveLayer(comp, ref, key) {
+  // Default key, and the ONE argument the {layers} redirect belongs to:
+  // set_layer_parent's 'parent' and set_track_matte's 'matteLayer' sit
+  // beside a legitimate {layers} list, so offering for_each_layer there
+  // would answer a question nobody asked.
+  var k = key || "layer";
   if (ref === null || typeof ref === "undefined" || ref === "") {
-    throw new Error("Missing 'layer' (name or 1-based index)");
+    throw new Error(AELL_missingLayer(comp, k,
+      k === "layer" ? AELL_handedLayers() : null, false));
+  }
+  // A list under the SINGULAR key is the mirror of the same mistake, and
+  // ExtendScript does not answer usefully for it: comp.layer([a, b])
+  // raised "invalid numeric result (divide by zero?)" in the field, which
+  // names neither the argument nor the tool.
+  if (AELLJSON.isArray(ref)) {
+    throw new Error(AELL_missingLayer(comp, k, ref, true));
   }
   var layer = null;
   try { layer = comp.layer(ref); } catch (e) { layer = null; }
@@ -148,7 +231,7 @@ function AELL_resolveLayer(comp, ref) {
     }
     throw new Error("Layer not found in '" + comp.name + "': " + ref +
       ". Actual layers: " + (names.join(", ") || "(none)") +
-      ". For the user's selection, OMIT the 'layer' argument on tools " +
+      ". For the user's selection, OMIT the '" + k + "' argument on tools " +
       "that support it.");
   }
   return layer;
@@ -162,6 +245,13 @@ function AELL_layerOrSelection(comp, ref) {
   if (ref !== null && typeof ref !== "undefined" && ref !== "") {
     return AELL_resolveLayer(comp, ref);
   }
+  // Named targets under the WRONG key are not "no target": falling
+  // through to the selection would work on layers the caller never named
+  // and report success, and "select one in AE" is a dead end for a caller
+  // that cannot click. Tools with their own plural branch (set_property,
+  // get_bounds) consume args.layers before they ever reach this.
+  var handed = AELL_handedLayers();
+  if (handed) throw new Error(AELL_missingLayer(comp, "layer", handed, false));
   var sel = comp.selectedLayers;
   if (sel.length === 1) return sel[0];
   if (sel.length === 0) {
@@ -234,7 +324,7 @@ function AELL_layersOrSelection(comp, args, destroys) {
   var i;
   if (AELLJSON.isArray(args.layers) && args.layers.length > 0) {
     for (i = 0; i < args.layers.length; i++) {
-      out.push(AELL_resolveLayer(comp, args.layers[i]));
+      out.push(AELL_resolveLayer(comp, args.layers[i], "layers"));
     }
     return out;
   }
@@ -379,7 +469,7 @@ function AELL_reorderRelative(comp, args, key) {
   var layer = AELL_layerOrSelection(comp, args.layer);
   var target = null;
   if (key === "above" || key === "below") {
-    target = AELL_resolveLayer(comp, args[key]);
+    target = AELL_resolveLayer(comp, args[key], key);
     if (target === layer) {
       return AELL_err("'" + layer.name + "' cannot be moved " + key +
         " itself — name a DIFFERENT layer to sit " + key + ". Layers in '" +
@@ -4083,7 +4173,7 @@ AELL_TOOLS.link_property = function (args) {
   if (!prop.canSetExpression) {
     return AELL_err("Property cannot take an expression: " + args.property);
   }
-  var ctrlLayer = AELL_resolveLayer(comp, args.controlLayer);
+  var ctrlLayer = AELL_resolveLayer(comp, args.controlLayer, "controlLayer");
   var effects = ctrlLayer.property("ADBE Effect Parade");
   var fx = effects && args.controlEffect
     ? effects.property(args.controlEffect) : null;
@@ -4422,7 +4512,7 @@ AELL_TOOLS.grid_layout = function (args) {
   // cameras and lights are riggers, not grid content, so they're skipped.
   if (AELLJSON.isArray(args.layers) && args.layers.length > 0) {
     for (i = 0; i < args.layers.length; i++) {
-      layers.push(AELL_resolveLayer(comp, args.layers[i]));
+      layers.push(AELL_resolveLayer(comp, args.layers[i], "layers"));
     }
   } else {
     var sel = comp.selectedLayers;
@@ -4575,7 +4665,7 @@ AELL_TOOLS.apply_expression_preset = function (args) {
   // Resolve an optional {layer, effect} control reference to a scalar
   // expression source, so sliders can drive preset parameters.
   function ctrlRef(c) {
-    var l = AELL_resolveLayer(comp, c.layer);
+    var l = AELL_resolveLayer(comp, c.layer, "control.layer");
     var effects = l.property("ADBE Effect Parade");
     var fx = effects && c.effect ? effects.property(c.effect) : null;
     if (!fx) {
@@ -5141,7 +5231,7 @@ function AELL_targetLayers(comp, args) {
   var explicit = AELLJSON.isArray(args.layers) && args.layers.length > 0;
   if (explicit) {
     for (i = 0; i < args.layers.length; i++) {
-      layers.push(AELL_resolveLayer(comp, args.layers[i]));
+      layers.push(AELL_resolveLayer(comp, args.layers[i], "layers"));
     }
   } else {
     var sel = comp.selectedLayers;
@@ -5198,7 +5288,7 @@ AELL_TOOLS.reorder_layers = function (args) {
   var i;
   if (AELLJSON.isArray(args.layers) && args.layers.length > 0) {
     for (i = 0; i < args.layers.length; i++) {
-      layers.push(AELL_resolveLayer(comp, args.layers[i]));
+      layers.push(AELL_resolveLayer(comp, args.layers[i], "layers"));
     }
   } else {
     var sel = comp.selectedLayers;
@@ -7280,7 +7370,7 @@ AELL_TOOLS.precompose = function (args) {
   var i, j;
   var layers = [], indices = [], seen = {}, dupes = [];
   for (i = 0; i < args.layers.length; i++) {
-    var L = AELL_resolveLayer(comp, args.layers[i]);
+    var L = AELL_resolveLayer(comp, args.layers[i], "layers");
     // A repeated reference used to inflate layersMoved: AE tolerates
     // [2, 2] and moves ONE layer, and the tool reported two.
     if (seen[L.index]) {
@@ -8020,7 +8110,7 @@ AELL_TOOLS.set_layer_parent = function (args) {
   var i;
   if (AELLJSON.isArray(args.layers) && args.layers.length > 0) {
     for (i = 0; i < args.layers.length; i++) {
-      targets.push(AELL_resolveLayer(comp, args.layers[i]));
+      targets.push(AELL_resolveLayer(comp, args.layers[i], "layers"));
     }
   } else if (args.layer !== null && typeof args.layer !== "undefined" &&
              args.layer !== "") {
@@ -8035,7 +8125,8 @@ AELL_TOOLS.set_layer_parent = function (args) {
   var clearing = args.parent === null || typeof args.parent === "undefined" ||
                  args.parent === "" ||
                  String(args.parent).toLowerCase() === "none";
-  var parent = clearing ? null : AELL_resolveLayer(comp, args.parent);
+  var parent = clearing
+    ? null : AELL_resolveLayer(comp, args.parent, "parent");
   var keep = args.keepPosition !== false;   // default: no visual jump
 
   /* AE computes the compensation ONCE, from the parent's transform at
@@ -10218,7 +10309,7 @@ AELL_TOOLS.set_track_matte = function (args) {
     return AELL_err("'matteLayer' is required — the layer whose alpha/" +
                     "luma cuts this one");
   }
-  var matte = AELL_resolveLayer(comp, args.matteLayer);
+  var matte = AELL_resolveLayer(comp, args.matteLayer, "matteLayer");
   if (matte === layer) return AELL_err("A layer cannot matte itself");
   // Same measurement from the other side. AE's own throw does cover this
   // one on AE 23+ (setTrackMatte rejects parameter 1), but the legacy
@@ -11244,12 +11335,24 @@ var AELL_NO_UNDO_GROUP = {
  * which is what lets a batch put many tools inside a single Ctrl+Z.
  * Never throws: a tool that blows up comes back as a normal error result. */
 function AELL_runTool(toolName, args) {
+  // Park the call so the grounded refusals can quote what was actually
+  // handed over: AELL_resolveLayer sees only the resolved ref, so a
+  // missing {layer} cannot name the {layers} that arrived instead
+  // (AELL_missingLayer). Saved and restored rather than assigned —
+  // for_each_layer runs its sub-tools inside this frame.
+  var prevTool = $.global.AELL_curTool;
+  var prevArgs = $.global.AELL_curArgs;
+  $.global.AELL_curTool = toolName;
+  $.global.AELL_curArgs = args;
   try {
     var tool = AELL_TOOLS[toolName];
     if (!tool) return AELL_err("Unknown tool: " + toolName);
     return tool(args);
   } catch (e) {
     return AELL_err(e && e.message ? e.message : String(e));
+  } finally {
+    $.global.AELL_curTool = prevTool;
+    $.global.AELL_curArgs = prevArgs;
   }
 }
 

@@ -1353,7 +1353,60 @@ function bnCanned(tool, args) {
   }
 }
 
+// The singular-{layer} gate, mirrored from AELL_resolveLayer. A tool that
+// takes ONE layer used to answer the bare "Missing 'layer' (name or
+// 1-based index)" -- which names the absent key and never the key that
+// arrived instead, so chat-probe row 36 re-sent {layers: [...]} to
+// apply_effect and gave up. A canned host that just answered {ok} would
+// let those refusal steps pass against anything.
+//
+// Scoped to the tools with NO plural branch of their own: set_property,
+// set_layer_parent, get_bounds and the batch tools all read {layers}
+// themselves, so the gate must not speak for them.
+const SINGULAR_LAYER_TOOLS = ["apply_effect", "set_effect_param",
+  "link_property", "add_control", "set_expression", "add_mask"];
+
+// The comp's own roster, for the grounded bare-miss message. Only the
+// batch comp is modelled by name here; that is the comp the refusal
+// steps run in, and a roster invented for the others would be a lie.
+function compRoster(comp) {
+  if (!/Batch/.test(String(comp || ""))) return "(none)";
+  const out = [];
+  for (let i = 1; i <= batchLayers && i <= 8; i++) {
+    out.push(i === 1 ? "ST Batch" : "ST Batch " + i);
+  }
+  if (batchLayers > 8) {
+    return out.join(", ") + " … and " + (batchLayers - 8) + " more";
+  }
+  return out.join(", ") || "(none)";
+}
+
+function singularLayerGate(tool, args) {
+  if (SINGULAR_LAYER_TOOLS.indexOf(tool) === -1) return null;
+  const a = args || {};
+  const plural = Array.isArray(a.layers) && a.layers.length
+    ? a.layers : null;
+  const redirect = " for_each_layer {layers: [...], tool: '" + tool +
+    "', args: {...}} runs it on each.";
+  if (Array.isArray(a.layer)) {
+    return { __err: "'layer' (name or 1-based index) takes ONE layer, not " +
+      "a list — you passed " + a.layer.join(", ") + "." + redirect };
+  }
+  if (plural) {
+    return { __err: "Missing 'layer' (name or 1-based index) — you passed " +
+      "'layers' (" + plural.join(", ") + "), which '" + tool +
+      "' does not take." + redirect };
+  }
+  if (a.layer === null || typeof a.layer === "undefined" || a.layer === "") {
+    return { __err: "Missing 'layer' (name or 1-based index). Layers in '" +
+      String(a.comp || "") + "': " + compRoster(a.comp) + "." };
+  }
+  return null;
+}
+
 function cannedOk(tool, args) {
+  const gated = singularLayerGate(tool, args);
+  if (gated) return gated;
   if (inBnComp(args)) {
     const bn = bnCanned(tool, args);
     if (typeof bn !== "undefined") return bn;
