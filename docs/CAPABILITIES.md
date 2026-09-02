@@ -57,7 +57,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `get_bounds` | MEASURE a layer's rendered content without touching it — how wide the text actually is, where the shape sits in the frame, whether anything overflows | no | host | 1 | 32 |
 | `get_comp_details` | Layers of a comp with index, name, type, timing, effects, track matte | no | host | 4 | 34 |
 | `get_project_info` | List project items (comps/footage/folders) and the active comp | no | host | 2 | 15 |
-| `get_property` | Read ANY property by path: value, keyframes, expression | no | host | 3 | 91 |
+| `get_property` | Read ANY property by path: value, keyframes, expression | no | host | 3 | 92 |
 | `grid_layout` | Arrange layers into a grid rigged to a control null: its 'Grid X Spacing'/'Grid Y Spacing'/'Grid Columns' sliders drive spacing AND column count live, and the grid centers on the null's position (all expressions generated host-side) | yes | host | 1 | 2 |
 | `import_as_layer` | Import a file AND place it in a comp as a layer, scaled to the comp | yes | host | 1 | 8 |
 | `import_file` | Import a footage/image/video file into the PROJECT PANEL only — it does not appear in any comp | yes | host | 1 | 2 |

@@ -2258,9 +2258,14 @@
 
       // ---- delete_mask (audit 0.11 item 4) -----------------------------
       // The off-grid probe's expression points at the mask about to go;
-      // it is cleared first so the deletion cannot leave an expression
-      // error behind (AE flags those in the timeline, and older versions
-      // put up a dialog).
+      // it is cleared first so the deletion cannot leave a broken
+      // expression behind. Measured 2026-09-02 in AE 2026, and the
+      // reason is worse than the dialog older versions raised: AE puts
+      // up NOTHING and tells scripting nothing either. The dependent
+      // Position still read expressionEnabled: true with an EMPTY
+      // expressionError while its value had quietly fallen back from the
+      // mask vertex to the layer's static one. Clearing first is the
+      // only way that stays visible.
       { name: "clear the off-grid probe before its mask goes",
         tool: "set_expression",
         args: function (ctx) {
@@ -3742,6 +3747,26 @@
         check: function (d) {
           return (d.removed === 2 && d.remaining === 0) ||
                  "removed " + d.removed + ", remaining " + d.remaining;
+        } },
+
+      // …and the value it LEAVES BEHIND, which is the whole point of
+      // "un-animate it". The keys were 0s=0, 1s=90, 2s=180 and the host
+      // empties a property by removing key 1 over and over, so the last
+      // one standing is the last in TIME and AE holds its value: 180,
+      // not the 0 it started from and not whatever the playhead was
+      // over. Measured 2026-09-02 with two rigs emptied at different
+      // playheads (scripts/verb-semantics-probe.jsx); this step is what
+      // keeps the promise the remove_keyframes doc now makes.
+      { name: "…leaving the LAST key's value behind, not the first",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box",
+                   property: "rotation" };
+        },
+        check: function (d) {
+          if (d.numKeys !== 0) return "still keyed: " + d.numKeys;
+          return Math.abs(d.value - 180) < 0.001 ||
+                 "rotation settled at " + d.value + ", not 180";
         } },
 
       // set_layer_3d, and the two AE facts underneath it. Measured

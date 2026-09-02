@@ -310,21 +310,27 @@ function AELL_relativeReorderKey(args) {
  * same two calls the sorter already relies on. The landing slot is READ
  * BACK from AE rather than computed, and a mismatch is reported.
  *
- * Refused or no-op'd honestly, with the AE facts that decide each:
- * - relative to ITSELF: refused. moveBefore(self) has no meaning and
- *   what AE does with it has not been measured (assumed: no-op or
- *   throw); either way the receipt would lie about a move.
- * - LOCKED layer: refused. AE's timeline will not drag a locked layer;
- *   whether the scripting primitives honour that lock has NOT been
- *   measured here (apply_preset measured that presets DO land on locked
- *   layers, so the lock is not a scripting-wide guard). The stubs assume
- *   the primitives would move it; refusing before the call keeps the
- *   answer the same whichever way real AE goes. Real-AE pass: verify.
+ * Refused or no-op'd honestly, with the AE facts that decide each. All
+ * three of these were guesses until scripts/verb-semantics-probe.jsx
+ * measured them in AE 2026 (26.3x87); every one is now a measurement:
+ * - relative to ITSELF: refused. AE THROWS on it — "After Effects
+ *   error: Can not move a layer before or after itself." — for both
+ *   moveBefore(self) and moveAfter(self), leaving the index alone. The
+ *   refusal here says the same thing in the caller's own vocabulary
+ *   instead of surfacing AE's raw error.
+ * - LOCKED layer: refused, and AE agrees. The scripting primitives DO
+ *   honour the lock: "Can not call method "moveBefore" on Layer "X"
+ *   because the Layer is locked." — a throw, index unchanged, layer
+ *   still locked. (Not a foregone conclusion: apply_preset measured
+ *   that presets DO land on locked layers, so the lock is not a
+ *   scripting-wide guard.) Refusing first turns AE's raw throw into a
+ *   message that names the padlock.
  * - SHY layer: moved, with a note — a shy layer is only hidden from the
  *   timeline while Hide Shy Layers is on, and the move is invisible
  *   there until the user turns it off.
- * - already in place: moved anyway (the primitives tolerate it in the
- *   stubs; assumed harmless in AE) and reported as "nothing moved".
+ * - already in place: moved anyway and reported as "nothing moved". AE
+ *   tolerates the redundant call — moveBefore on the anchor a layer
+ *   already sits above neither throws nor disturbs the stack.
  */
 function AELL_reorderRelative(comp, args, key) {
   var layer = AELL_layerOrSelection(comp, args.layer);
@@ -4232,6 +4238,26 @@ AELL_TOOLS.set_effect_param = function (args) {
  * invalidates references to its LATER siblings (assumed yes, which is
  * why nothing is read from them afterwards). Real-AE pass: verify both.
  */
+/*
+ * Two AE facts this body depends on, both measured in AE 2026 by
+ * scripts/verb-semantics-probe.jsx (they hold for delete_mask too):
+ *
+ * 1. Survivors are NOT renumbered. Remove "Gaussian Blur" from
+ *    [Gaussian Blur, Gaussian Blur 2, Gaussian Blur 3] and the two left
+ *    are still called "Gaussian Blur 2" and "Gaussian Blur 3" — the
+ *    numbering is a name AE assigned once, not a live position. So the
+ *    remainingEffects/remainingMasks list is the honest thing to report,
+ *    and a caller that removes twice must use the names it was handed
+ *    back rather than counting. (Masks behave identically: Mask 1 gone
+ *    leaves Mask 2 and Mask 3.)
+ * 2. Every SIBLING reference held across the removal dies with it.
+ *    Property objects grabbed before remove() answer "Object is invalid"
+ *    afterwards — measured on the siblings at index 2 AND 3 when index 1
+ *    went, so this is not merely a later-sibling rule. That is why
+ *    `others` below is flattened to NAMES before victim.remove() runs:
+ *    reading matches[i].name after the removal would throw, inside a
+ *    tool that had already succeeded.
+ */
 AELL_TOOLS.remove_effect = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var layer = AELL_layerOrSelection(comp, args.layer);
@@ -6128,6 +6154,19 @@ function AELL_maskNames(layer) {
  * first (the stubs throw on a read after removal). NOT measured here:
  * whether AE renumbers the default names of the masks below ("Mask 2"
  * becoming "Mask 1") — assumed not, names persist. Real-AE pass: verify.
+ */
+/*
+ * What AE does to an EXPRESSION that still points at the deleted mask,
+ * measured in AE 2026 — the reason the self-test clears its off-grid
+ * probe first. It is not the dialog older versions raised: AE 2026 puts
+ * up NOTHING, and it tells scripting nothing either. After the mask
+ * went, the dependent Position still read expressionEnabled: true with
+ * an EMPTY expressionError, while its value had quietly fallen back
+ * from the mask vertex [100, 0] to the layer's static [160, 120]. So a
+ * broken expression survives this tool looking healthy from every angle
+ * a script can see. Clearing first (set_expression {expression: ""}) is
+ * the only way a caller keeps that visible; the survivors/remainingMasks
+ * receipt cannot show it.
  */
 AELL_TOOLS.delete_mask = function (args) {
   var comp = AELL_resolveComp(args.comp);
@@ -9257,6 +9296,19 @@ AELL_TOOLS.set_keyframes = function (args) {
   return AELL_okay(res);
 };
 
+/*
+ * WHICH value the property keeps once the last key is gone — measured in
+ * AE 2026, because "un-animate it" is a request whose whole point is the
+ * value it leaves behind.
+ *
+ * The loop below removes key 1 over and over, so the last key standing
+ * is the LAST one in time, and AE holds that key's value. Two identical
+ * rigs (0s=100, 1s=50, 2s=0) emptied at playheads 0.5s and 1.5s BOTH
+ * ended at 0: the residual does NOT follow the playhead, and it is not
+ * the first key's value either. Whoever changes this loop to removeKey
+ * (numKeys) instead changes the answer to the first key's value — the
+ * order is load-bearing, not incidental.
+ */
 AELL_TOOLS.remove_keyframes = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var layers;

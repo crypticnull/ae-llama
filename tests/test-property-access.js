@@ -18,27 +18,64 @@ PGroup.prototype.add = function (c) {
 Object.defineProperty(PGroup.prototype, "numProperties", {
   get() { return this._children.length; }
 });
+// An ExtendScript Property reference is a PATH (layer + property indexes),
+// not a handle on an object, so anything that shifts those indexes rots
+// every reference already handed out. Measured in AE 2026 by
+// scripts/verb-semantics-probe.jsx: remove effect 1 of three and the refs
+// grabbed for effects 2 AND 3 beforehand both answer "Object is invalid"
+// — the removed object is not the only casualty, and it is not merely a
+// later-sibling rule. Re-fetching through property() hands back a live
+// reference to the same property, which is why aeRevalidate exists: this
+// models the PATH going stale, not the property disappearing.
+//
+// A host that grabs siblings, removes one, then reads the others (to
+// report what is left) succeeds against a stub without this and throws a
+// raw "Object is invalid" at a user in real AE, from inside a tool that
+// had already done its work. remove_effect flattens its `others` to
+// strings BEFORE the removal for exactly this reason.
+function aeInvalidate(node, dead) {
+  if (dead) node._dead = true;
+  if (node._invalid) return;
+  node._invalid = true;
+  node._realName = node.name;
+  node._realMatch = node.matchName;
+  const boom = { configurable: true,
+    get() { throw new Error("After Effects error: Object is invalid"); } };
+  Object.defineProperty(node, "name", boom);
+  Object.defineProperty(node, "matchName", boom);
+  (node._children || []).forEach((c) => aeInvalidate(c, dead));
+}
+function aeRevalidate(node) {
+  if (!node || !node._invalid || node._dead) return node;
+  node._invalid = false;
+  Object.defineProperty(node, "name", { configurable: true, writable: true,
+    enumerable: true, value: node._realName });
+  Object.defineProperty(node, "matchName", { configurable: true,
+    writable: true, enumerable: true, value: node._realMatch });
+  return node;
+}
 // PropertyBase.remove(), as AE does it for an indexed group's child: the
-// siblings close up (their propertyIndex shifts), and the removed object
-// is INVALIDATED — every later read of it throws "Object is invalid". A
-// host that read the victim's name after the call would surface that
-// raw error instead of a receipt, which is what this models.
+// siblings close up (their propertyIndex shifts), the removed object is
+// invalidated for good, and every surviving sibling's outstanding
+// reference goes stale until it is fetched again. Survivors keep their
+// NAMES through all of it — AE never renumbers "Gaussian Blur 2" down to
+// "Gaussian Blur" when the first one goes (measured with the same probe).
 PGroup.prototype.remove = function () {
   if (!this._parent) throw new Error("After Effects error: Object is invalid");
   const sib = this._parent._children;
   sib.splice(sib.indexOf(this), 1);
   this._parent = null;
-  Object.defineProperty(this, "name", {
-    get() { throw new Error("After Effects error: Object is invalid"); }
-  });
-  Object.defineProperty(this, "matchName", {
-    get() { throw new Error("After Effects error: Object is invalid"); }
-  });
+  aeInvalidate(this, true);
+  sib.forEach((s) => aeInvalidate(s, false));
 };
 PGroup.prototype.property = function (ref) {
-  if (typeof ref === "number") return this._children[ref - 1] || null;
-  return this._children.find(c => c.name === ref || c.matchName === ref ||
-    (c._aliases || []).indexOf(ref) !== -1) || null;
+  if (typeof ref === "number") {
+    return aeRevalidate(this._children[ref - 1]) || null;
+  }
+  return aeRevalidate(this._children.find((c) =>
+    (c._invalid ? c._realName : c.name) === ref ||
+    (c._invalid ? c._realMatch : c.matchName) === ref ||
+    (c._aliases || []).indexOf(ref) !== -1)) || null;
 };
 // What addProperty("ADBE Slider Control") really hands back: a GROUP whose
 // single child is the value, matchName'd "<class>-0001". add_control writes
@@ -1207,6 +1244,52 @@ assert(r.ok && r.data.removed === "Glow 2" &&
        r.data.remainingEffects.indexOf("Glow 2") === -1,
        "a case-insensitive display name still finds it: " +
        JSON.stringify(r.ok ? r.data : r.error));
+
+// The two AE facts remove_effect's body leans on, measured 2026-09-02
+// (scripts/verb-semantics-probe.jsx, AE 2026): survivors keep the names
+// AE numbered them with, and every sibling reference held across the
+// removal goes stale. The receipt has to be built from strings taken
+// BEFORE the call — a host that read matches[i].name afterwards would
+// throw "Object is invalid" out of a tool that had already succeeded.
+const sib = new Layer("Sib", comp);
+const sibFx = sib.property("ADBE Effect Parade");
+sibFx._children.length = 0;
+["Gaussian Blur", "Gaussian Blur 2", "Gaussian Blur 3"].forEach((n, i) => {
+  const g = new PGroup(n, "ADBE Gaussian Blur 2");
+  g.add(new Prop("Blurriness", "ADBE Gaussian Blur 2-0001", (i + 1) * 11));
+  sibFx.add(g);
+});
+comp._layers.push(sib);
+// By matchName, so all three match and the receipt has to name the two
+// survivors — the read that would throw if it happened after remove().
+r = call("remove_effect", { layer: "Sib", effect: "ADBE Gaussian Blur 2" });
+assert(r.ok && r.data.removed === "Gaussian Blur" &&
+       r.data.remainingEffects.join(", ") === "Gaussian Blur 2, Gaussian Blur 3",
+       "survivors keep the numbers AE gave them — nothing is renumbered " +
+       "down: " + JSON.stringify(r.ok ? r.data : r.error));
+assert(r.ok && r.data.alsoMatched.join(",") === "Gaussian Blur 2,Gaussian Blur 3",
+       "…and the receipt names them, which is only possible because the " +
+       "host read those names before the removal: " +
+       JSON.stringify(r.ok ? r.data.alsoMatched : r.error));
+// The staleness itself, at the primitive: hold both survivors, drop one,
+// and read the other with nothing re-fetching in between — which is the
+// shape the host would have if `others` were built after victim.remove()
+// instead of before it.
+const stale = (p) => {
+  try { return String(p.name); }
+  catch (e) { return "THREW: " + e.message; }
+};
+const keptA = sibFx.property(1), keptB = sibFx.property(2);
+keptA.remove();
+assert(/Object is invalid/.test(stale(keptB)),
+       "a sibling reference held across remove() is dead: " + stale(keptB));
+assert(/Object is invalid/.test(stale(keptA)),
+       "…and so is the removed one: " + stale(keptA));
+assert(sibFx.property(1).name === "Gaussian Blur 3",
+       "re-fetching through property() hands back a live reference again " +
+       "(the PATH went stale, the property did not): " +
+       sibFx.property(1).name);
+comp._layers.splice(comp._layers.indexOf(sib), 1);
 
 // Grounded refusals.
 r = call("remove_effect", { layer: "A", effect: "Glow" });

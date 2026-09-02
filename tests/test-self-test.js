@@ -369,6 +369,15 @@ let batchBlur = null;
 //     Options", which is why every entry carries a matchName.
 const cvControls = {};   // "layer/name" -> {type, match, value}
 const cvKeys = {};       // "layer/prop"  -> [{time, value}]
+// What a property SETTLES ON once its last key is taken away.
+// Measured in AE 2026 (scripts/verb-semantics-probe.jsx): the host
+// empties a property by removing key 1 over and over, so the key
+// standing last is the last in TIME and AE holds that value --
+// not the first key's, and not the value under the playhead (two
+// rigs emptied at different playheads both kept the last key's).
+// Without this the canned host answered a constant, which is how a
+// step could read back a value nothing had produced.
+const cvResidual = {};   // "layer/prop"  -> value after the last key
 const parentedLayers = {}; // layer -> parent, so the resize can tell a
                            // child's inherited transform from its own
 const cvExpr = {};       // "layer/prop"  -> expression
@@ -2220,8 +2229,14 @@ function cannedOk(tool, args) {
             ". Use list_properties to inspect the real tree." };
         }
         if (np === "rotation" || np === "zrotation") {
-          // Both names, and the friendly alias, are one property.
-          return { value: 0, matchName: "ADBE Rotate Z", numKeys: 0 };
+          // Both names, and the friendly alias, are one property. Its
+          // VALUE is 0 unless remove_keyframes un-animated it, in which
+          // case AE left the last key's value sitting there and a read
+          // has to say so -- a constant here let a step read back a
+          // number nothing in the suite had produced.
+          const rr = cvResidual[args.layer + "/rotation"];
+          return { value: typeof rr === "undefined" ? 0 : rr,
+                   matchName: "ADBE Rotate Z", numKeys: 0 };
         }
         if (np === "position") {
           // A driven Position reads back EVALUATED: a live wiggle is
@@ -3195,6 +3210,9 @@ function cannedOk(tool, args) {
         }
       } else {
         removed = ks.length;
+        if (ks.length) {
+          cvResidual[args.layer + "/" + cvProp(P)] = ks[ks.length - 1].value;
+        }
         ks.length = 0;
       }
       return { layers: 1, property: P, removed, remaining: ks.length };

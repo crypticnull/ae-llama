@@ -169,6 +169,16 @@ one push. One pass per bullet:
   measure: the prompt grew ~12% (54.5k → 61.1k chars); confirm a
   full round at ctx 16384 still leaves room for results + 4 turns of
   history (a context-400 hard-trim on an ordinary ask = trim rules).
+- **Missing verbs (roadmap 4) — DONE 2026-09-02 (0.11.3).** All eight
+  measured in AE 2026 by the new `scripts/verb-semantics-probe.jsx`;
+  per-assumption verdicts are in `docs/WORKPLAN-LOG.md`. Two of the
+  three guesses the host code had written down as guesses turned out
+  RIGHT for a reason nobody had checked (AE honours the lock and
+  refuses a self-move at the SCRIPTING layer, throwing both times), (6)
+  was confirmed exactly, and (8) got its answer: emptying a property
+  leaves the LAST key's value — now in the remove_keyframes doc and
+  held by a new real-AE step (566/566). The original instruction, for
+  reference:
 - **Missing verbs (roadmap 4).** Selftest is 555 steps now; run it to
   green. Then probe the seven flagged AE-semantics assumptions
   directly (temp .jsx via AELL_call): (1) moveBefore/moveAfter on a

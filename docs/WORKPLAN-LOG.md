@@ -10438,3 +10438,155 @@ Same sentences, same model, after the fix:
   (missing verbs, context budget + ledger, MOGRT verifier), then the
   pass-22 salvage. `stash@{0}` is still `pass22-salvage` and branch
   `aell-backup-pass22` still exists, untouched.
+
+## 2026-09-02 (local session, real AE) — WORKPLAN 1c bullet 2: the eight AE semantics the "missing verbs" only assumed (0.11.3)
+
+Harness was green on arrival (565/565), so this pass took the next
+unfinished workplan item: measure the eight AE-semantics assumptions the
+reorder_layers / remove_effect / delete_mask / remove_keyframes bodies
+had written down as guesses. New probe, committed so it can be re-run:
+`scripts/verb-semantics-probe.jsx` (AE 2026, 26.3x87). It flushes every
+measurement to disk as it takes it, because M7 deliberately does the one
+thing that could raise a modal and stop the script dead.
+
+### The eight, as AE actually answered
+
+1. **LOCKED layer, primitives called directly** — AE HONOURS THE LOCK.
+   `moveBefore`/`moveAfter` both throw *"Can not call method "moveBefore"
+   on Layer "VP C" because the Layer is locked."*, index unchanged. The
+   host comment said the opposite ("the stubs assume the primitives would
+   move it"), and it was not a safe guess: apply_preset had measured that
+   presets DO land on locked layers, so the lock is genuinely not a
+   scripting-wide guard — it just covers this.
+2. **moveBefore(self) / moveAfter(self)** — AE throws *"Can not move a
+   layer before or after itself."*, index unchanged. Recorded as
+   "assumed: no-op or throw"; it is the throw.
+3. **Already-in-place move** — tolerated, no throw, stack undisturbed,
+   and the tool says `Nothing moved — 'VP A' was already above 'VP C'
+   (slot 1)`. The assumption held.
+4. **toFront/toBack** — `moveBefore(layer(1))` lands at 1,
+   `moveAfter(layer(numLayers))` lands at numLayers. Held.
+5. **Survivors are not renumbered** — remove "Gaussian Blur" from
+   [Gaussian Blur, Gaussian Blur 2, Gaussian Blur 3] and the survivors
+   are still "Gaussian Blur 2" and "Gaussian Blur 3". Masks identical
+   (Mask 1 gone leaves Mask 2, Mask 3). Held — and STRONGER than filed:
+   **every sibling reference held across the removal dies**, not just
+   later ones. Refs grabbed for index 2 AND index 3 both answered
+   "Object is invalid" after index 1 went. An ExtendScript Property
+   reference is an index PATH, not a handle.
+6. **Bare-name read-back** — confirmed exactly. Two blurs, remove the
+   first, and `get_property {property: "Blurriness"}` resolves to
+   `Effects/Gaussian Blur 2/Blurriness` with that effect's value. (With
+   TWO survivors the tool refuses as ambiguous and names both paths,
+   which is the right answer to a different question.)
+7. **delete_mask with a live expression pointing at the mask** — worse
+   than the dialog the selftest comment blamed. AE 2026 raises NOTHING,
+   and tells scripting nothing either: the dependent Position still read
+   `expressionEnabled: true` with an EMPTY `expressionError` while its
+   value had quietly fallen back from the mask vertex [100, 0] to the
+   layer's static [160, 120]. A broken expression survives this tool
+   looking healthy from every angle a script can see.
+8. **What remove_keyframes leaves behind** — the LAST key's value. Two
+   identical rigs (0s=100, 1s=50, 2s=0) emptied at playheads 0.5s and
+   1.5s both settled at 0, so it does not follow the playhead and it is
+   not the first key's value. The host empties a property by removing
+   key 1 over and over, so the key standing last is the last in TIME and
+   AE holds that one — the loop order is load-bearing.
+
+### What changed
+
+- `extension/js/tools.js`: the remove_keyframes doc's placeholder ("The
+  value left behind is measured in the real-AE pass") became the answer
+  ("Removing ALL keys leaves the LAST key's value"). Prompt measured
+  before/after: **58969 → 58961 chars**, so the answer costs less than
+  the promise did.
+- `extension/jsx/hostscript.jsx`: comments only, but they were the wrong
+  comments — three assumptions in reorder_layers are now measurements,
+  remove_effect carries WHY `others` must be flattened to strings before
+  `victim.remove()` runs, delete_mask carries the silent-expression
+  finding, and remove_keyframes carries the residual-value rule.
+- `extension/js/selftest.js`: one new step (**566**) — after
+  remove_keyframes empties rotation (keys 0s=0, 1s=90, 2s=180) the
+  property must read back **180**. A better discriminator than the
+  probe's own rig, where the last key happened to be 0. Also corrected
+  the delete_mask comment that blamed a dialog AE no longer raises.
+- `tests/test-layer-chunks.js`: the stub's `moveBefore`/`moveAfter` now
+  throw AE's real messages, and a new `aeLockGuard` makes a locked layer
+  throw the way AE throws. Plus an assertion that the refusal is the
+  tool's own words and not AE's raw "Can not call method …".
+- `tests/test-property-access.js`: `PGroup.remove()` now stales every
+  surviving sibling as well as the victim, with `aeRevalidate` on
+  `property()` modelling the PATH going stale rather than the property
+  disappearing. **Verified it bites:** moving remove_effect's `others`
+  loop to after `victim.remove()` turns three assertions red with
+  "After Effects error: Object is invalid" — the exact failure a user
+  would have seen.
+- `tests/test-self-test.js`: the canned host answered rotation with a
+  constant 0, so a step could read back a value nothing had produced. It
+  now records a residual on remove_keyframes and reads it back.
+
+### Harness: 566/566 PASSED. Full stub sweep green
+
+…except the known environmental `tests/test-comfy-backend.js` (this
+machine has `%LOCALAPPDATA%\Comfy-Desktop\...\models`, CI does not —
+still wants a `process.env` stub, still not mine).
+
+**BUMPED 0.11.2 -> 0.11.3** — `extension/` changed (tools.js doc,
+hostscript comments, selftest step).
+
+### The mess I made, and how to not repeat it
+
+The FIRST draft of the probe wrapped everything in
+`app.beginUndoGroup(...)` / `app.endUndoGroup()`. AE does not support
+nesting undo groups, `AELL_call` opens its own per mutating tool, and an
+inner `endUndoGroup` closes the OUTER group — so the final
+`endUndoGroup()` closed one that was already closed. **AE answered with
+"Undo group mismatch, will attempt to fix" and the counter stayed broken
+for the whole SESSION**: every later `-r` script raised the same modal,
+including three self-test runs that had nothing to do with the probe.
+Restarting AE was the only fix. The probe now opens no undo group at all
+and carries the reason; re-running it and then the harness back to back
+is green, which is the proof. **Never wrap AELL_call in an undo group.**
+
+Restarting AE cost two more dialogs a human should know about:
+
+1. **"Crash Repair Options"** — AE's post-kill startup dialog (Start in
+   Safe Mode / Reset Preferences / Manage Plugins / **Continue**, the
+   default). The harness reports it only as "a dialog blocking STARTUP"
+   and stops, which is correct but unhelpful: any pass that has to kill
+   AE now needs a human. **Filed below.** Answered with Enter =
+   Continue; Safe Mode would have disabled the scripts the suite needs.
+2. **"Save changes to Untitled Project.aep before closing?"** — a
+   leftover `app.quit()` I had queued at AE while it was blocked,
+   delivered to the NEW instance and racing the probe. ESC (Cancel)
+   calls off the quit and touches nothing, per the harness's own note.
+
+The project AE had open throughout was
+`%TEMP%\aell-probe\aell-probe-1b.aep`, a scratch file an earlier pass
+left — no real work was at risk in the restart. Worth checking the
+window title before killing AE, which is what I did.
+
+### Filed for later passes, in priority order
+
+1. **The harness cannot answer "Crash Repair Options".** Any pass that
+   kills or crashes AE leaves the next run reporting "After Effects
+   never opened its main window" for 240s and exiting. The dialog is a
+   wordless `#32770` (AE draws its own text) whose default button is
+   Continue, so Enter is the whole fix — but it must be told apart from
+   the save-changes prompt, where Enter means Save. `scripts/lib/ae-dialog-triage.ps1`
+   is the place, and `tests/test-selftest-runner.js` takes captured probe
+   strings without AE. A screenshot is at `logs/dialogs/crash-repair.png`.
+2. **`add_mask` accepts bounds that miss the layer entirely and reports
+   ok** (unchanged from the last pass — still open, still first among
+   the tool bugs).
+3. **"Probe Room is a mess — clean it up" routes to the project panel**
+   (unchanged; the only miss that repeated across both chat-probe runs).
+4. **delete_mask could warn when an expression still points at the mask.**
+   Measurement 7 says the breakage is invisible to scripting, so the
+   receipt is the only place it could ever surface. Not built this pass:
+   it is a behaviour change, not a measurement.
+
+- Not attempted this pass (still open, in order): **1c bullets 3-4**
+  (context budget + ledger, MOGRT verifier), then the pass-22 salvage.
+  `stash@{0}` is still `pass22-salvage` and branch `aell-backup-pass22`
+  still exists, untouched.

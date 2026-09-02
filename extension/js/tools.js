@@ -513,8 +513,8 @@
     { name: "remove_keyframes", mutating: true,
       desc: "Remove keyframes from a property on many layers at once — " +
             "specific times or all ('stop it moving / un-animate it' = " +
-            "this, times omitted). The value left behind is measured in " +
-            "the real-AE pass.",
+            "this, times omitted). Removing ALL keys leaves the LAST " +
+            "key's value.",
       args: "{comp?: string, layers?: [name|index] | layer?: name|index (omit = selection), property: path, times?: [s, …] (omit = remove ALL)}" },
     { name: "for_each_layer", mutating: true,
       desc: "Run a PER-LAYER tool once per target layer in ONE call (max " +

@@ -40,19 +40,37 @@ Object.defineProperty(Layer.prototype, "index", {
   get() { return this.comp._layers.indexOf(this) + 1; }
 });
 Layer.prototype.property = function () { return null; };
-// A layer moved relative to ITSELF throws here: after the first splice
-// indexOf(this) is -1, and the silent version inserted before the LAST
-// element — a scrambled stack that a host dropping its self-move refusal
-// would have passed with. (What real AE does with moveBefore(self) is
-// unmeasured; the host refuses before the call either way.)
+// Both refusals the host makes BEFORE calling these were guesses until
+// scripts/verb-semantics-probe.jsx measured AE 2026; the messages below
+// are the ones AE really raises, curly quotes and all.
+//
+// - self: "Can not move a layer before or after itself." The stub threw
+//   here already, on the reasoning that a silent version splices before
+//   the LAST element (indexOf(this) is -1 after the first splice) and a
+//   host dropping its self-move refusal would have passed with a
+//   scrambled stack. Real AE turns out to refuse it outright.
+// - locked: AE honours the lock at the SCRIPTING layer too — it throws
+//   and leaves the index alone. Modelling that is what keeps the host's
+//   grounded "is LOCKED … padlock" refusal load-bearing: drop it and
+//   this stub no longer moves the layer silently, it surfaces AE's raw
+//   method-name error instead, which the assertion below rejects.
+function aeLockGuard(layer, method) {
+  if (layer.locked) {
+    throw new Error("After Effects error: Can not call method “" +
+      method + "” on Layer “" + layer.name +
+      "” because the Layer is locked.");
+  }
+}
 Layer.prototype.moveAfter = function (other) {
-  if (other === this) throw new Error("After Effects error: a layer cannot be moved after itself");
+  if (other === this) throw new Error("After Effects error: Can not move a layer before or after itself.");
+  aeLockGuard(this, "moveAfter");
   const arr = this.comp._layers;
   arr.splice(arr.indexOf(this), 1);
   arr.splice(arr.indexOf(other) + 1, 0, this);
 };
 Layer.prototype.moveBefore = function (other) {
-  if (other === this) throw new Error("After Effects error: a layer cannot be moved before itself");
+  if (other === this) throw new Error("After Effects error: Can not move a layer before or after itself.");
+  aeLockGuard(this, "moveBefore");
   const arr = this.comp._layers;
   arr.splice(arr.indexOf(this), 1);
   arr.splice(arr.indexOf(other), 0, this);
@@ -643,14 +661,36 @@ assert(!rr.ok && /2 layers selected \(L1, L2\)/.test(rr.error),
        "two selected and no {layer} is refused, naming them: " + rr.error);
 compR._layers.forEach(l => { l.selected = false; });
 
-// Locked: refused before the primitive runs (AE's scripting behaviour on
-// a locked layer is unmeasured — see the host comment).
+// Locked: refused before the primitive runs — and AE 2026 refuses too,
+// so the stub throws the way AE throws (see aeLockGuard). Dropping the
+// host's pre-refusal no longer moves the layer, it hands the user
+// AE's raw "Can not call method …" instead of the padlock, which is
+// exactly what these two assertions separate.
 compR.layer("L3").locked = true;
 rr = call("reorder_layers", { layer: "L3", toBack: true });
 assert(!rr.ok && /'L3' is LOCKED/.test(rr.error) && /padlock/.test(rr.error) &&
        stackR() === "L1|L2|L3|L5|L6|L4",
        "a locked layer is refused and untouched: " + rr.error);
+assert(!rr.ok && !/Can not call method/.test(rr.error),
+       "…in the tool's own words, not AE's raw method error: " + rr.error);
+let lockThrew = "";
+try { compR.layer("L3").moveBefore(compR.layer("L1")); }
+catch (e) { lockThrew = e.message; }
+assert(/because the Layer is locked/.test(lockThrew) &&
+       compR.layer("L3").index === 3,
+       "AE itself throws on moving a locked layer and leaves it put " +
+       "(measured 2026-09-02): " + lockThrew);
 compR.layer("L3").locked = false;
+// Self-move: AE's own message, so a host that stopped refusing would
+// surface "Can not move a layer before or after itself." rather than
+// the grounded refusal naming the comp's layers.
+let selfThrew = "";
+try { compR.layer("L2").moveBefore(compR.layer("L2")); }
+catch (e) { selfThrew = e.message; }
+assert(/Can not move a layer before or after itself/.test(selfThrew) &&
+       compR.layer("L2").index === 2,
+       "AE throws on moveBefore(self) and leaves the index alone: " +
+       selfThrew);
 // Shy: moved, and the receipt says the timeline may be hiding it.
 compR.layer("L5").shy = true;
 rr = call("reorder_layers", { layer: "L5", toFront: true });
