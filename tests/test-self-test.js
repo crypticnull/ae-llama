@@ -436,6 +436,29 @@ const cvKeyList = (layer, prop) => {
 };
 const inCvComp = (a) => !!(a && /Cover/.test(a.comp || ""));
 
+// ---- the carpet-bomb rig. remove_keyframes gained a gate on
+// 2026-09-02: naming EVERY layer in a comp is the shape the model
+// produced from "tidy it" (row 29, 18 opacity keys gone on an ok
+// receipt), so it now previews first and the caller has to come back.
+// Modelled here, not faked: the roster grows from the add_solid calls
+// the suite really makes, so a fourth solid moves this stub's idea of
+// "every layer" the same way it moves real AE's.
+let wpLayers = [];               // solids in the wipe comp, by name
+const wpKeys = {};               // "layer/prop" -> key count
+let wpShown = null;              // what the gate has previewed
+const inWpComp = (a) => !!(a && /Self-Test Wipe/.test(a.comp || ""));
+const wpTargets = (a) => (Array.isArray(a.layers) && a.layers.length)
+  ? a.layers.slice() : (a.layer ? [String(a.layer)] : []);
+const wpCount = (layer, prop) => wpKeys[layer + "/" + cvProp(prop)] || 0;
+// Every run starts on a fresh comp in real AE, and the GATE's memory is
+// per-session there too — a stub that carried either across runs would
+// stop gating the second one.
+const resetWpRig = () => {
+  wpLayers = [];
+  wpShown = null;
+  for (const k of Object.keys(wpKeys)) delete wpKeys[k];
+};
+
 // ---- the audio rig, modelled from AE 2026 rather than from the tool.
 // A solid is silent until Tone is applied; then the converter hears it.
 // One tone peaks at 34.33 on this rig, two at 36.02 — both measured, and
@@ -2213,6 +2236,12 @@ function cannedOk(tool, args) {
         return { property: "Scale", matchName: "ADBE Scale", value: frS,
                  numKeys: 0 };
       }
+      if (inWpComp(args)) {
+        return { layer: args.layer, property: args.property,
+                 numKeys: wpCount(String(args.layer),
+                                  String(args.property || "")),
+                 value: 100 };
+      }
       const SLg = shapeLayerOf(args && args.layer);
       if (SLg && /^contents\//i.test(String((args && args.property) || ""))) {
         const hit = shapeResolve(SLg, args.layer, args.property);
@@ -2445,6 +2474,12 @@ function cannedOk(tool, args) {
       return { value: 3 };
     }
     case "set_keyframes": {
+      if (inWpComp(args)) {
+        const wts = wpTargets(args), wn = (args.keys || []).length;
+        for (const L of wts) wpKeys[L + "/" + cvProp(args.property)] = wn;
+        return { layers: wts.length, property: args.property,
+                 keysSet: wts.length * wn };
+      }
       const SLk = shapeLayerOf(args && args.layer);
       if (SLk && /^contents\//i.test(String((args && args.property) || ""))) {
         const hit = shapeResolve(SLk, args.layer, args.property);
@@ -2884,6 +2919,7 @@ function cannedOk(tool, args) {
                             type: "footage" });
       }
       if (inCvComp(args)) cvSolids.push(String(args.name));
+      if (inWpComp(args)) wpLayers.push(String(args.name));
       if (inBatComp(args)) batSolids.push(args.name);
       if (inRbComp(args)) rbLayers.push(args.name);
       if (inPcComp(args)) pcLayers.push(args.name);
@@ -2948,8 +2984,8 @@ function cannedOk(tool, args) {
       const blurs = inCvComp(args) ? (cvFx[args.layer] || []) : [];
       const parade = ctrlNames.concat(blurs);
       if (!inCvComp(args) || parade.length === 0) {
-        return { __err: "'" + args.layer + "' has no effects — nothing " +
-          "to remove. apply_effect adds one." };
+        return { __err: "'" + args.layer + "' has no effects at all — " +
+          "nothing to remove, and no other effect name will match either." };
       }
       const want = String((args && args.effect) || "");
       const hits = parade.filter(n => n === want ||
@@ -3314,6 +3350,42 @@ function cannedOk(tool, args) {
                numKeys: ks.length };
     }
     case "remove_keyframes": {
+      if (inWpComp(args)) {
+        const wp = String((args && args.property) || "");
+        const wts = wpTargets(args);
+        let wtotal = 0, wrows = 0;
+        for (const L of wts) {
+          const n = wpCount(L, wp);
+          if (n > 0) { wtotal += n; wrows++; }
+        }
+        const wide = Array.isArray(args.layers) && args.layers.length >= 3 &&
+          wts.length === wpLayers.length &&
+          !(Array.isArray(args.times) && args.times.length) && wtotal > 0;
+        if (wide) {
+          const wkey = wp + "|" + wtotal + "|" + wrows;
+          // The suite runs as ONE request in real AE (AELL_requestSeq is
+          // bumped per chat turn, not per step), so a repeat inside it
+          // hits the third branch rather than being let through. Modelled
+          // exactly that way -- a stub that released on the second call
+          // would have passed a suite real AE fails.
+          {
+            const why = (wpShown === wkey)
+              ? "that preview was taken in THIS same reply, so the user " +
+                "has not seen it yet"
+              : "nothing has been previewed yet";
+            wpShown = wkey;
+            return { __err: "remove_keyframes refused to wipe every layer " +
+              "in '" + args.comp + "': " + why + ". " +
+              "Nothing was removed. This would delete " + wtotal + " " + wp +
+              " keyframe(s) from " + wrows + " layer(s). That IS the " +
+              "preview — ask the user WHICH of those should lose their " +
+              "keyframes (or whether they really mean all of them), and " +
+              "call again in your NEXT reply once they answer." };
+          }
+        }
+        for (const L of wts) wpKeys[L + "/" + cvProp(wp)] = 0;
+        return { layers: wts.length, property: wp, removed: wtotal };
+      }
       const P = String((args && args.property) || "");
       // A group has no keys of its own; the host says so rather than
       // walking into it.
@@ -4665,7 +4737,7 @@ SelfTest.run({
     maskKeys = {};
     mkMasks = {}; mkSizes = {};
     batchLayers = 0; batchFx = {}; batchBlur = null;
-    batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetBoundsRig(); resetPresetRig(); resetRqRig(); resetAuRig(); resetFrRig(); resetCapRig(); resetMgRig();
+    batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetWpRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetBoundsRig(); resetPresetRig(); resetRqRig(); resetAuRig(); resetFrRig(); resetCapRig(); resetMgRig();
     SelfTest.run({
       callHostTool(tool, args, cb) {
         if (tool === "grid_layout") {
@@ -4698,7 +4770,7 @@ SelfTest.run({
         maskKeys = {};
         mkMasks = {}; mkSizes = {};
         batchLayers = 0; batchFx = {}; batchBlur = null;
-        batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetBoundsRig(); resetPresetRig(); resetRqRig(); resetAuRig(); resetFrRig(); resetCapRig(); resetMgRig();
+        batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetWpRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetBoundsRig(); resetPresetRig(); resetRqRig(); resetAuRig(); resetFrRig(); resetCapRig(); resetMgRig();
         SelfTest.run({
           callHostTool(tool, args, cb) {
             // Never refuse anything -- the old permissive host.

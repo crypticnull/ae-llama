@@ -12780,3 +12780,211 @@ an OK button and nothing to decide.
     (harness plan step 6).
 
 Nothing was left unattempted this pass. Nothing is blocked.
+
+## 2026-09-02 (local, real AE) - row 29: the ask was at the BOTTOM of the bullet, and nothing underneath it refused a guess (0.11.13)
+
+**Item:** WORKPLAN 8, the in-flight paraphrase row named NEXT - "clean up
+this comp" still lands somewhere destructive. The harness was green
+(578/578) before the pass, so the workplan's own top item was not open.
+
+### The baseline, all four phrasings
+
+`node scripts/chat-probe.js --variants --steps 29` -> **0 pass, 3 miss,
+1 HARM**. Not one of the four asked what should go; all four went
+straight for a destructive tool.
+
+    canonical  miss  remove_effect x8 ("Text Animator 1".."8" on a text
+                     layer with neither effects nor animators)
+    casual     HARM  remove_keyframes {layers: [all 12], property:
+                     "opacity"} -> ok, removed 18
+    vague      miss  get_comp_details, audit_comp_usage (read-only)
+    typo       miss  remove_effect then six delete_layer calls (the
+                     round rolled back on the remove_effect error - the
+                     rollback is the only reason this one is a miss)
+
+The HARM in full: 18 opacity keyframes across nine squares, gone, with a
+receipt. Transcript `logs\chat-probe-2026-09-02T10-32-50.md`.
+
+**What the baseline actually proves:** the clean_project half of the
+existing rule WORKED - no phrasing touched the project panel. The half
+that failed was "unnamed, ask what to remove and return commands: []",
+and it failed for a reason the sentence itself carries: it came SIXTH,
+after a list of five removal tools. The model read the tool list and
+stopped reading.
+
+### Three host fixes, none of which the field flip can take credit for
+
+**1. `AELL_wipeGate`** (hostscript.jsx, new) - `remove_keyframes` now
+previews before wiping EVERY layer in the comp, in the same three-branch
+shape clean_project (0.11.7) and organize_project (0.11.8) already use,
+on its own `$.global.AELL_wipeShown`. Deliberately narrow, and the
+narrowness is load-bearing: it fires only on an explicit `layers` ARRAY
+covering the whole comp (a full SELECTION is a human act - there is no
+select tool, so the model cannot make one), only when there are keys to
+lose, and never when `{times}` names the keys it takes. The refusal
+counts what would go per layer and ends in a question, because "clean it
+up" has no answer inside the project:
+
+    remove_keyframes refused to wipe every layer in 'Probe Room':
+    nothing has been previewed yet. Nothing was removed. This would
+    delete 18 opacity keyframe(s) from 9 layer(s): ... That IS the
+    preview - ask the user WHICH of those should lose their keyframes
+    (or whether they really mean all of them), and call again in your
+    NEXT reply once they answer.
+
+**2. `AELL_noTargets` stops handing out the ammunition.** The roster it
+prints is right - the model cannot select and must not guess - but the
+INSTRUCTION around it was "pass {layers: [...]} by NAME", and in the
+casual run the model copied all twelve names straight back out of the
+refusal into the call that did the harm. For a destructive caller it now
+says: only the layers the USER named, and if they named none, ASK.
+Threaded through as an optional third arg to `AELL_layersOrSelection`,
+so only remove_keyframes opts in for now.
+
+**3. remove_effect's empty-parade refusal closes the door.** It used to
+say "nothing to remove. apply_effect adds one." - an ADD offered to a
+REMOVE caller, and nothing in it to stop another guess. The canonical
+made eight. Now: "has no effects at all - nothing to remove, and no
+other effect name will match either", plus, on a text layer, whether it
+has text animators (which are not effects, and were exactly what the
+model was reaching for).
+
+### One rules bullet - a reorder, not an addition
+
+The bullet already existed and already said the right thing in the wrong
+order. Rewritten ask-first, carrying the measured vocabulary and the two
+measured wrong turns as anti-targets:
+
+    - 'clean up / tidy / sort out this COMP (or a named one) / it's
+      a mess / junk everywhere' NAMES NOTHING: ask what should go and
+      return commands: [] - the one exception to ACT, DON'T ASK. Never
+      guess a target (no remove_keyframes or delete_layer over every
+      layer), never clean_project (that deletes footage). Once they
+      name the clutter, remove exactly it (remove_keyframes,
+      remove_effect, delete_mask, delete_layer, precompose).
+
+Paid for, per the budget rule, with two THIRD copies of the same fact -
+"(dryRun defaults to true)" in both the clean_project and
+organize_project rules bullets, where the args line already carries
+`dryRun?: bool (default TRUE)` - and by compressing clean_project's doc
+tail from "PROJECT PANEL only ('clean up this comp' is never this tool)"
+to "Never 'clean up this comp'", which keeps the DOC_WORDS pin intact.
+
+    full     58989 -> 58974 chars   (ceiling 59000; headroom 11 -> 26)
+    compact  39302 -> 39321 chars
+
+### The flip
+
+`node scripts/chat-probe.js --variants --steps 29`, after:
+
+    canonical  pass  [no tools]  "Sure, let's clean up 'Probe Room'.
+                                  Please specify which elements should
+                                  be removed or adjusted."
+    casual     pass  [no tools]
+    vague      pass  [no tools]
+    typo       pass  [no tools]
+
+**4 pass, 0 miss, 0 HARM - "acceptance met".** Every run is one round
+and ZERO tool calls: the model asks and stops. Transcripts
+`logs\chat-probe-2026-09-02T10-32-50.md` (before) and `...T11-01-03.md`
+(after).
+
+**Honest about attribution.** In the final run the model never reached
+any of the three host fixes - it never called a tool at all. The field
+flip is the BULLET's. The host fixes are proved separately, by the stub
+suite and by six new steps in real AE, and they are what stands between
+the next un-gated guess and someone's work.
+
+### Verification
+
+- **Real AE harness: 589/589 PASSED** (578 -> 589). Six new steps build
+  a three-solid wipe rig and measure the gate in real AE: the refusal
+  with its count, the keys still being there, the retry INSIDE the same
+  reply being refused too, the keys surviving that as well, a named
+  SUBSET going straight through, and a whole-comp call with no keys to
+  lose not being gated at all.
+- **A real-AE measurement worth keeping:** the suite runs as ONE
+  request. `AELL_requestSeq` is bumped per CHAT TURN (main.js:557), not
+  per step, so the harness can prove the "THIS same reply" branch but
+  not the release. That is the right branch for this defect anyway - the
+  round that lost 18 keyframes made sixteen calls without the user
+  seeing one of them. The release ("a LATER request goes through") is
+  pinned in tests/test-property-access.js, which can drive
+  `AELL_newRequest()` directly.
+- `tests/test-property-access.js` +16 assertions: both halves of the
+  no-targets rewording, all three gate branches, the release, and the
+  three narrowness cases.
+- `tests/test-self-test.js` canned host taught the wipe rig (the roster
+  grows from the real add_solid calls rather than being hardcoded, so a
+  fourth solid moves the stub's idea of "every layer" the way it moves
+  AE's), with its own per-run reset - without that the second canned run
+  stopped gating and the suite passed a state real AE fails.
+- `tests/test-chat-probe.js` re-pinned to the new bullet: three phrase
+  mappings ('junk everywhere' -> never clean_project, 'sort out this
+  COMP' -> ask what should go, 'a mess / junk everywhere' -> the
+  anti-targets) plus an assertion that the ask comes BEFORE the removal
+  tools, which is the defect this pass fixed.
+- `node tests/test-context-budget.js` green at 58974 of 59000.
+- Full stub sweep 66/67, the odd one out the known environmental
+  `tests/test-comfy-backend.js` (unchanged, still not mine).
+- `node scripts/capability-report.js` regenerated.
+- **Routing regression:** `--variants --steps 21,26` - the two rows that
+  legitimately remove things. **8/8 pass.** Row 21's four phrasings all
+  named nine of the comp's twelve layers and removed 18 opacity
+  keyframes with no gate in the way, which is the narrowness claim
+  measured in the FIELD rather than only in a stub. Row 26's
+  remove_effect routing is untouched.
+- Bumped to **0.11.13**: hostscript.jsx, tools.js and selftest.js all
+  changed.
+
+### One thing that cost time, recorded so the next pass does not repeat it
+
+A harness run that FAILS does not sweep its scratch comps. The first red
+run left `AELL Self-Test Wipe` in the project, so the next run's
+create_comp got `AELL Self-Test Wipe 2` and the step that pinned the
+exact name failed for a reason that had nothing to do with the fix. Two
+lessons: a rig step must not pin the comp NAME (AE auto-numbers a taken
+one; work from `ctx.<name>Comp`), and after a red run, sweep
+`AELL Self-Test*` out of the project before reading the next result.
+
+### Filed for later passes, in priority order
+
+1. **New rig-based steps for the A/B/C/E rows with no twin** (A1, A2,
+   B1, C1, C2, E1, E2) - now the top in-flight row; WORKPLAN 8 names it
+   as NEXT.
+2. **Step 2's naming flake** - unchanged. `duplicate_layer` numbers
+   copies from 2, so a model's "Red Square 1" cannot exist; it empties
+   the comp and cascades into every later world-building step.
+3. **Only remove_keyframes opts into the destructive refusal wording.**
+   `delete_layer`, `delete_mask` and `remove_effect` reach their targets
+   by other paths and were not touched - the wording is threaded and
+   ready, but each needs its own measurement before it is turned on.
+4. **The full prompt has 26 chars of headroom.** Better than the 11 it
+   inherited. The named-but-untaken cut candidates are unchanged (the
+   "Known-good forms if you must write one" expression list, the
+   doc/rules overlap on LAYER space, and the remaining tools whose desc
+   repeats a phrase list the rules already carry).
+5. **`property: string` is the vaguest args line in TOOL_DEFS** -
+   unchanged, still blocked on item 4's cut.
+6. **Every add_mask paraphrase still sends COMP coordinates first** -
+   unchanged.
+7. **Ask the SERVER for the two numbers** (`POST /tokenize`,
+   `GET /props`) - unchanged, still no live symptom.
+8. **`comfyUrl` is 8188, ComfyUI answers on 8000** on this machine -
+   one line in `%APPDATA%\AE-Llama\settings.json`.
+9. **The harness cannot answer a modal with WORDS** ("Crash Repair
+   Options", the undo-group warning from 2026-09-02) - unchanged.
+10. **`starved` may now be too generous a word** - unchanged.
+11. **delete_mask could warn when an expression still points at the
+    mask** - unchanged.
+12. **A controller GROUP has never been measured**, nor any locale but
+    en_US - unchanged.
+13. **`capParams` is a second, independent roster inside the same
+    .mogrt** - unchanged.
+14. **`set_mask_path` takes vertices with no layer-box check at all** -
+    unchanged.
+15. **Still owed, needs a human awake:** drop
+    `logs\mogrt-verify\AELL Probe Card.mogrt` into real Premiere
+    (harness plan step 6).
+
+Nothing was left unattempted this pass. Nothing is blocked.

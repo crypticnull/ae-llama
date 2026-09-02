@@ -1422,10 +1422,15 @@ const bare = new Layer("Bare", comp);
 bare.property("ADBE Effect Parade")._children.length = 0;
 comp._layers.push(bare);
 r = call("remove_effect", { layer: "Bare", effect: "Glow" });
-assert(!r.ok && /'Bare' has no effects/.test(r.error) &&
-       /apply_effect adds one/.test(r.error),
-       "a layer with no effects is refused, pointing at apply_effect: " +
-       r.error);
+// It used to point at apply_effect, which is an ADD offered to a REMOVE
+// caller. Measured 2026-09-02 (chat-probe row 29): the model hit this
+// refusal and guessed seven MORE effect names in the same round, so the
+// sentence has to close the door instead of opening another one.
+assert(!r.ok && /'Bare' has no effects at all/.test(r.error) &&
+       /no other effect name will match/.test(r.error) &&
+       !/apply_effect/.test(r.error),
+       "a layer with no effects is refused in a way that stops the " +
+       "guessing, and offers no ADD to a REMOVE caller: " + r.error);
 // (The stub light is not an instanceof LightLayer, so the type word is
 // whatever AELL_layerType falls back to — the refusal is what matters.)
 r = call("remove_effect", { layer: "Key", effect: "Glow" });
@@ -1442,5 +1447,107 @@ assert(comp.selectedLayers.length === 1 && comp.selectedLayers[0] === B,
        "…and B is still the selection afterwards");
 comp._layers.forEach(l => { l.selected = false; });
 comp._layers.splice(comp._layers.indexOf(bare), 1);
+
+// ---------------------------------------------------------------------
+// 20. The carpet-bomb gate on remove_keyframes, and the refusal that
+//     used to load the gun.
+//
+// Measured 2026-09-02 in real AE (chat-probe row 29, "Probe Room's got
+// junk everywhere, tidy it"): the model called remove_keyframes with no
+// targets, met the grounded "Layers here: ..." refusal, copied all
+// twelve names straight back out of it into ONE call, and the tool
+// answered {"layers":12,"property":"opacity","removed":18} -- ok,
+// receipt, 18 keyframes nobody named gone. Two halves, both here: the
+// refusal must stop handing out the roster as a target list, and a wipe
+// over EVERY layer in the comp must be seen before it happens.
+
+comp._layers.forEach(l => { l.selected = false; });
+delete $.global.AELL_wipeShown;
+$.global.AELL_requestSeq = 0;
+$.global.AELL_newRequest();
+
+const wipeNames = comp._layers.map(l => l.name);
+wipeNames.forEach(n => {
+  call("set_keyframes", { layer: n, property: "opacity",
+    keys: [{ time: 0, value: 0 }, { time: 1, value: 100 }] });
+});
+const wipeKeys = () => comp._layers.reduce((n, l) =>
+  n + l.property("Transform").property("Opacity").numKeys, 0);
+const keysBefore = wipeKeys();
+assert(keysBefore === wipeNames.length * 2,
+       "every layer in the stub comp starts with two opacity keys (" +
+       keysBefore + ")");
+
+// (a) the no-targets refusal names the layers -- it must, the model
+//     cannot select -- but it no longer reads as "pass them all".
+r = call("remove_keyframes", { property: "opacity" });
+assert(!r.ok && /ONLY the layers the user named/.test(r.error) &&
+       /ASK which ones/.test(r.error) &&
+       /deletes animation/.test(r.error),
+       "a destructive no-targets refusal says whose names to pass, and " +
+       "to ask when there are none: " + r.error);
+assert(/Layers here: /.test(r.error) &&
+       /With opacity keyframes: /.test(r.error),
+       "...and is still grounded in what exists: " + r.error);
+
+// (b) naming every layer in the comp is refused, and the refusal IS the
+//     preview -- with a question in it, because "clean it up" has no
+//     answer inside the project.
+r = call("remove_keyframes", { layers: wipeNames, property: "opacity" });
+assert(!r.ok && /refused to wipe every layer/.test(r.error),
+       "a wipe across the whole comp is refused: " +
+       (r.ok ? "IT RAN" : r.error));
+assert(/nothing has been previewed yet/.test(r.error),
+       "and says why: " + r.error);
+assert(new RegExp("delete " + keysBefore + " opacity keyframe\\(s\\) from " +
+                  wipeNames.length + " layer\\(s\\)").test(r.error),
+       "the refusal counts exactly what would go: " + r.error);
+assert(/ask the user WHICH/.test(r.error),
+       "and asks which, rather than offering to do it all: " + r.error);
+assert(wipeKeys() === keysBefore, "nothing was removed");
+
+// A retry inside the SAME reply is refused too -- nobody has seen it.
+r = call("remove_keyframes", { layers: wipeNames, property: "opacity" });
+assert(!r.ok && /THIS same reply/.test(r.error),
+       "a retry in the same reply is refused: " + r.error);
+assert(wipeKeys() === keysBefore, "still nothing removed");
+
+// The next user request has the preview behind it, so it goes through:
+// this gates a guess, it does not forbid the action.
+$.global.AELL_newRequest();
+r = call("remove_keyframes", { layers: wipeNames, property: "opacity" });
+assert(r.ok && r.data.removed === keysBefore,
+       "the NEXT request wipes them: " + (r.ok ? r.data.removed : r.error));
+assert(wipeKeys() === 0, "and the keys really went");
+
+// Narrowness, three ways: a named SUBSET is never gated, a full-comp
+// wipe with nothing to lose is not gated (a refusal about a no-op is
+// noise), and {times} names its own keys, so it is not a guess.
+delete $.global.AELL_wipeShown;
+$.global.AELL_newRequest();
+call("set_keyframes", { layers: wipeNames, property: "opacity",
+  keys: [{ time: 0, value: 0 }, { time: 1, value: 100 }] });
+r = call("remove_keyframes", { layers: wipeNames.slice(0, 2),
+                               property: "opacity" });
+assert(r.ok && r.data.removed === 4,
+       "two named layers out of " + wipeNames.length + " are not gated: " +
+       (r.ok ? r.data.removed : r.error));
+$.global.AELL_newRequest();
+r = call("remove_keyframes", { layers: wipeNames, property: "rotation" });
+assert(r.ok && r.data.removed === 0,
+       "a whole-comp wipe with no keys to lose is not gated: " +
+       (r.ok ? "ok" : r.error));
+$.global.AELL_newRequest();
+delete $.global.AELL_wipeShown;
+r = call("remove_keyframes", { layers: wipeNames, property: "opacity",
+                               times: [0] });
+assert(r.ok && r.data.removed > 0,
+       "{times} names the keys it takes, so it is not gated: " +
+       (r.ok ? r.data.removed : r.error));
+$.global.AELL_newRequest();
+call("remove_keyframes", { layers: wipeNames, property: "opacity" });
+$.global.AELL_newRequest();
+call("remove_keyframes", { layers: wipeNames, property: "opacity" });
+comp._layers.forEach(l => { l.selected = false; });
 
 console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");

@@ -2313,7 +2313,13 @@ const RULES = [
   ["stop it moving", "set_expression[\\s\\S]{0,60}removed: 0"],
   ["get rid of the blur", "remove_effect"],
   ["remove that mask", "delete_mask"],
-  ["tidy this COMP", "NEVER clean_project"]
+  // Row 29 measured 2026-09-02: all four phrasings avoided
+  // clean_project (that half already worked) and went straight for a
+  // destructive tool instead, so the bullet now leads with the ask
+  // and carries the two wrong turns it took as anti-targets.
+  ["junk everywhere", "never clean_project"],
+  ["sort out this COMP", "ask what should go"],
+  ["a mess / junk everywhere", "no remove_keyframes or delete_layer over"]
 ];
 for (const [phrase, tool] of RULES) {
   // A quoted-phrase bullet ("- '…") whose phrase list may wrap onto a
@@ -2325,8 +2331,13 @@ for (const [phrase, tool] of RULES) {
 }
 assert(/clean up \/ tidy \/ shrink the PROJECT/.test(rules),
        "the project-panel clean-up rule now says PROJECT");
-assert(/the one exception\s+to ACT,\s+DON'T ASK: deletions nobody named/.test(rules),
+assert(/the one exception to ACT, DON'T ASK/.test(rules),
        "the ask-first clean-up rule scopes itself against ACT, DON'T ASK");
+assert(/NAMES NOTHING: ask what should go and\s+return commands: \[\]/
+         .test(rules),
+       "...and the ask comes FIRST, before the removal tools: the old " +
+       "order put the tool list ahead of it and the model read no " +
+       "further (measured, row 29)");
 // Phrases the review struck: bare 'under' as a STACKING word collides
 // with get_bounds' on-screen 'put it under the logo'; 'freeze' is AE's
 // Freeze Frame (a future retime tool), not remove_keyframes.

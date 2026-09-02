@@ -26,7 +26,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `add_null` | Add a null layer (use as a controller or parent) | yes | host | 1 | 8 |
 | `add_shape_content` | Add content INSIDE a shape layer: kinds group, rectangle, ellipse, star, polygon, path, fill, stroke, gradient_fill, gradient_stroke, repeater, trim_paths, merge_paths, offset_paths, rounded_corners, pucker_bloat, twist, zigzag | yes | host | 1 | 12 |
 | `add_shape_layer` | Add a shape layer (rectangle, ellipse, polygon, or star) | yes | host | — | 4 |
-| `add_solid` | Add a solid layer | yes | host | — | 46 |
+| `add_solid` | Add a solid layer | yes | host | — | 49 |
 | `add_text_animator` | Animate a text layer PER CHARACTER (typewriter, cascade, wiggle) — an animator holds the properties, a selector picks which characters get them | yes | host | 1 | 10 |
 | `add_text_layer` | Add a text layer to a comp | yes | host | 1 | 8 |
 | `add_to_render_queue` | Add a comp to the render queue WITHOUT rendering it | yes | host | 1 | 3 |
@@ -41,7 +41,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `comfy_generate` | Generate an image/video with local ComfyUI and import it into the AE project | yes | panel | — | — |
 | `comfy_list_workflows` | List available ComfyUI generation workflow templates by name | no | panel | — | — |
 | `comfy_status` | Check the local ComfyUI instance (online? queue depth?) | no | panel | — | — |
-| `create_comp` | Create a composition and open it | yes | host | 1 | 33 |
+| `create_comp` | Create a composition and open it | yes | host | 1 | 34 |
 | `create_folder` | Create a project-panel folder | yes | host | 1 | 10 |
 | `delete_item` | Delete a project item | yes | host | 1 | 42 |
 | `delete_layer` | Delete a layer from a comp | yes | host | — | 19 |
@@ -57,7 +57,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `get_bounds` | MEASURE a layer's rendered content without touching it — how wide the text actually is, where the shape sits in the frame, whether anything overflows | no | host | 1 | 32 |
 | `get_comp_details` | Layers of a comp with index, name, type, timing, effects, track matte | no | host | 4 | 35 |
 | `get_project_info` | List project items (comps/footage/folders) and the active comp | no | host | 2 | 16 |
-| `get_property` | Read ANY property by path: value, keyframes, expression | no | host | 3 | 92 |
+| `get_property` | Read ANY property by path: value, keyframes, expression | no | host | 3 | 93 |
 | `grid_layout` | Arrange layers into a grid rigged to a control null: its 'Grid X Spacing'/'Grid Y Spacing'/'Grid Columns' sliders drive spacing AND column count live, and the grid centers on the null's position (all expressions generated host-side) | yes | host | 1 | 2 |
 | `import_as_layer` | Import a file AND place it in a comp as a layer, scaled to the comp | yes | host | 1 | 8 |
 | `import_file` | Import a footage/image/video file into the PROJECT PANEL only — it does not appear in any comp | yes | host | 1 | 2 |
@@ -70,7 +70,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `organize_project` | File loose root-level items into Comps/Footage/Solids/Audio/Images folders at the project ROOT | yes | host | 1 | 3 |
 | `precompose` | Move layers into a new nested comp (precompose) | yes | host | 1 | 5 |
 | `remove_effect` | REMOVE one effect from a layer by display name or matchName ('get rid of the blur') | yes | host | 1 | 4 |
-| `remove_keyframes` | Remove keyframes from a property on many layers at once — specific times or all ('stop it moving' = this, times omitted) | yes | host | 1 | 5 |
+| `remove_keyframes` | Remove keyframes from a property on many layers at once — specific times or all ('stop it moving' = this, times omitted) | yes | host | 1 | 9 |
 | `rename_comps` | Rename MANY comps in one call, on the org convention (REVyy_ from a year in the old name, else REV_NO-YEAR_) | yes | host | 1 | 3 |
 | `rename_item` | Rename any project item (comp, footage, folder) | yes | host | 1 | 3 |
 | `render_comp` | Actually RENDER a comp to a file | yes | host | 1 | 11 |
@@ -80,7 +80,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `set_comp_setting` | Change a comp setting: duration, frame rate, bg color, the WORK AREA (workAreaStart with workAreaDuration or workAreaEnd, in seconds — or workArea: 'comp' to reset it to the whole comp) and preview resolution | yes | host | 2 | 10 |
 | `set_effect_param` | Set a parameter on an effect already applied to a layer | yes | host | 1 | 1 |
 | `set_expression` | LAST RESORT: set a raw expression (or clear with '') | yes | host | 1 | 14 |
-| `set_keyframes` | Set the SAME keyframes on MANY layers in ONE call | yes | host | 2 | 12 |
+| `set_keyframes` | Set the SAME keyframes on MANY layers in ONE call | yes | host | 2 | 14 |
 | `set_layer_3d` | Enable/disable a layer's 3D switch | yes | host | 1 | 8 |
 | `set_layer_parent` | Parent layers to another layer (omit/null parent to unparent) | yes | host | 3 | 18 |
 | `set_layer_timing` | Retime a layer on the TIMELINE, in comp seconds: startTime slides the whole layer ('push it back two seconds' = startTime: current + 2), inPoint/outPoint TRIM its ends without sliding it | yes | host | — | 5 |

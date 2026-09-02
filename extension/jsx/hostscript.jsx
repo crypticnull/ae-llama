@@ -191,8 +191,17 @@ function AELL_layerOrSelection(comp, ref) {
  * no select tool; names are the only way in. So name the comp's layers,
  * and when the call carried a property, which of them actually have keys
  * on it — that second list is the answer to the question that was asked.
+ *
+ * `destroys` is what the caller would DELETE. Measured 2026-09-02
+ * (chat-probe row 29, "Probe Room's got junk everywhere, tidy it"): the
+ * roster this refusal prints is also ammunition. remove_keyframes hit the
+ * bare form, the model copied all twelve names straight back out of it
+ * into ONE call, and 18 opacity keyframes nobody named were gone. Naming
+ * the layers is still right — the model cannot select and cannot guess —
+ * so the list stays and the INSTRUCTION changes: pass only what the user
+ * named, and when they named nothing, ask rather than pass them all.
  */
-function AELL_noTargets(comp, args) {
+function AELL_noTargets(comp, args, destroys) {
   var names = [], keyed = [], i, lay, prop;
   var wanted = (args && typeof args.property === "string" && args.property)
     ? String(args.property) : "";
@@ -206,7 +215,13 @@ function AELL_noTargets(comp, args) {
   }
   var msg = "No target layers in '" + comp.name + "' — nothing is selected " +
     "in AE and you cannot select for the user, so pass {layers: […]} " +
-    "or {layer} by NAME. Layers here: " + AELL_capJoin(names, 8);
+    "or {layer} by NAME";
+  if (destroys) {
+    msg += " — ONLY the layers the user named. If the user named none, " +
+      "ASK which ones; passing every layer here " + String(destroys) +
+      " that nobody asked to lose";
+  }
+  msg += ". Layers here: " + AELL_capJoin(names, 8);
   if (wanted) {
     msg += ". With " + wanted + " keyframes: " + AELL_capJoin(keyed, 8);
   }
@@ -218,7 +233,7 @@ function AELL_noTargets(comp, args) {
  * else the whole selection (any count), else the comp's only layer.
  * Used by batch tools so ONE call can touch hundreds of layers.
  */
-function AELL_layersOrSelection(comp, args) {
+function AELL_layersOrSelection(comp, args, destroys) {
   var out = [];
   var i;
   if (AELLJSON.isArray(args.layers) && args.layers.length > 0) {
@@ -236,7 +251,7 @@ function AELL_layersOrSelection(comp, args) {
   for (i = 0; i < sel.length; i++) out.push(sel[i]);
   if (out.length === 0 && comp.numLayers === 1) out.push(comp.layer(1));
   if (out.length === 0) {
-    throw new Error(AELL_noTargets(comp, args));
+    throw new Error(AELL_noTargets(comp, args, destroys));
   }
   // A selection that is ONLY control nulls is almost never the intended
   // animation target (the user was probably just inspecting sliders) —
@@ -4687,8 +4702,31 @@ AELL_TOOLS.remove_effect = function (args) {
   }
   var have = AELL_effectNames(layer);
   if (have.length === 0) {
-    return AELL_err("'" + layer.name + "' has no effects — nothing to " +
-      "remove. apply_effect adds one.");
+    // Measured 2026-09-02 (chat-probe row 29, "Probe Room is a mess now
+    // — clean it up."): the old wording ("nothing to remove. apply_effect
+    // adds one.") left a REMOVE caller with nowhere to go but another
+    // guess, and the model made eight in one round — Text Animator 1
+    // through 8, on a text layer that has neither effects nor animators.
+    // So close the door (no name can match an empty list) and say where
+    // the thing it is probably reaching for actually lives.
+    var elsewhere = "";
+    if (AELL_layerType(layer) === "text") {
+      var anims = [];
+      try {
+        var ag = layer.property("ADBE Text Properties")
+          .property("ADBE Text Animators");
+        for (var a = 1; a <= ag.numProperties; a++) {
+          anims.push(String(ag.property(a).name));
+        }
+      } catch (eA) {}
+      elsewhere = anims.length
+        ? " Text animators are not effects — this layer has " +
+          AELL_capJoin(anims, 6) + "."
+        : " Text animators are not effects, and there are none here " +
+          "either.";
+    }
+    return AELL_err("'" + layer.name + "' has no effects at all — nothing " +
+      "to remove, and no other effect name will match either." + elsewhere);
   }
   if (args.effect === null || typeof args.effect === "undefined" ||
       args.effect === "") {
@@ -9816,6 +9854,71 @@ AELL_TOOLS.set_keyframes = function (args) {
 };
 
 /*
+ * The carpet-bomb gate: a keyframe wipe across EVERY layer in the comp
+ * must be seen before it happens.
+ *
+ * Measured 2026-09-02 in real AE (chat-probe row 29, "Probe Room's got
+ * junk everywhere, tidy it"): the model asked to tidy a comp, nobody
+ * named a single layer, and remove_keyframes answered
+ * {"layers":12,"property":"opacity","removed":18} — ok, receipt, 18
+ * keyframes gone. clean_project and organize_project both refuse exactly
+ * this shape until the user has SEEN what would go (0.11.7, 0.11.8); a
+ * keyframe wipe over the whole comp is that shape and had no gate at all.
+ *
+ * Deliberately NARROW, so the tool stays usable:
+ *   - only when the caller passed an explicit `layers` ARRAY that covers
+ *     every layer in the comp. A SELECTION of everything is a human act
+ *     (there is no select tool — the model cannot make one), and one or
+ *     two named layers is the ordinary case, untouched.
+ *   - only when there is something to lose: 0 keys on that property is a
+ *     no-op and a refusal there would be noise, the same reason
+ *     organize_project does not gate an empty plan.
+ *   - only for a full wipe. {times: [...]} names the keys it takes, which
+ *     is the opposite of guessing.
+ * The preview names each layer and its key count, and asks WHICH — the
+ * refusal is meant to be relayed to the user as a question, because
+ * "clean it up" has no answer inside the project.
+ */
+function AELL_wipeGate(comp, args, layers) {
+  if (!AELLJSON.isArray(args.layers) || args.layers.length < 3) return "";
+  if (layers.length !== comp.numLayers) return "";
+  if (AELLJSON.isArray(args.times) && args.times.length > 0) return "";
+  var rows = [], total = 0, i, prop, nk;
+  for (i = 0; i < layers.length; i++) {
+    prop = null;
+    try { prop = AELL_anyProperty(layers[i], args.property); }
+    catch (eP) { prop = null; }
+    nk = 0;
+    try { nk = (prop && prop.numKeys) || 0; } catch (eK) { nk = 0; }
+    if (nk > 0) { rows.push(layers[i].name + " (" + nk + ")"); total += nk; }
+  }
+  if (total === 0) return "";
+  var key = comp.id + "|" + String(args.property) + "|" + total + "|" +
+            rows.length;
+  var seq = $.global.AELL_requestSeq || 0;
+  var shown = $.global.AELL_wipeShown;
+  var block = "";
+  if (!shown) {
+    block = "nothing has been previewed yet";
+  } else if (shown.key !== key) {
+    block = "the comp has changed since the last preview, so this is not " +
+      "the list the user agreed to";
+  } else if (seq > 0 && shown.seq === seq) {
+    block = "that preview was taken in THIS same reply, so the user has " +
+      "not seen it yet";
+  }
+  if (!block) return "";
+  $.global.AELL_wipeShown = { key: key, seq: seq };
+  return "remove_keyframes refused to wipe every layer in '" + comp.name +
+    "': " + block + ". Nothing was removed. This would delete " + total +
+    " " + String(args.property) + " keyframe(s) from " + rows.length +
+    " layer(s): " + AELL_capJoin(rows, 10) + ". That IS the preview — ask " +
+    "the user WHICH of those should lose their keyframes (or whether they " +
+    "really mean all of them), and call again in your NEXT reply once " +
+    "they answer.";
+}
+
+/*
  * WHICH value the property keeps once the last key is gone — measured in
  * AE 2026, because "un-animate it" is a request whose whole point is the
  * value it leaves behind.
@@ -9831,8 +9934,12 @@ AELL_TOOLS.set_keyframes = function (args) {
 AELL_TOOLS.remove_keyframes = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var layers;
-  try { layers = AELL_layersOrSelection(comp, args); }
-  catch (eL) { return AELL_err(eL.message); }
+  try {
+    layers = AELL_layersOrSelection(comp, args,
+      "deletes animation");
+  } catch (eL) { return AELL_err(eL.message); }
+  var gated = AELL_wipeGate(comp, args, layers);
+  if (gated) return AELL_err(gated);
   var removed = 0;
   for (var L = 0; L < layers.length; L++) {
     var prop;

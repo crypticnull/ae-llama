@@ -75,6 +75,10 @@
   // ships no such call) — so the rig has to be a comp that is thrown
   // away whole.
   var MGCOMP = "AELL Self-Test Mogrt";
+  // And the carpet-bomb rig. The gate it measures triggers on "the
+  // caller named EVERY layer in this comp", so the comp has to hold a
+  // roster nothing else in the suite adds to.
+  var WPCOMP = "AELL Self-Test Wipe";
   var running = false;
 
   /**
@@ -2005,15 +2009,21 @@
 
       // The ordered layers carry no effects, which is the state the
       // "take off the glow" refusal has to name.
-      { name: "remove_effect on a layer with no effects points at apply_effect",
+      // It used to point at apply_effect here, which answers a question a
+      // REMOVE caller did not ask. Measured 2026-09-02 (chat-probe row
+      // 29): the model met this refusal and guessed seven more effect
+      // names in the same round, so what it has to say is that no name
+      // can match an empty list.
+      { name: "remove_effect on a layer with no effects closes the door",
         tool: "remove_effect",
         expectError: true,
         args: function (ctx) {
           return { comp: ctx.orComp, layer: "ST Ord 12", effect: "Glow" };
         },
         check: function (e) {
-          if (!/has no effects/.test(e)) return "message was: " + e;
-          return /apply_effect/.test(e) || "no way out offered: " + e;
+          if (!/has no effects at all/.test(e)) return "message was: " + e;
+          return /no other effect name will match/.test(e) ||
+            "another guess is still invited: " + e;
         } },
 
       // ---- mask path animation ------------------------------------
@@ -3914,6 +3924,138 @@
           if (d.numKeys !== 0) return "still keyed: " + d.numKeys;
           return Math.abs(d.value - 180) < 0.001 ||
                  "rotation settled at " + d.value + ", not 180";
+        } },
+
+      // ---- the carpet-bomb gate --------------------------------
+      //
+      // Measured 2026-09-02 in real AE (chat-probe row 29, "Probe Room's
+      // got junk everywhere, tidy it"): nobody named a layer, the model
+      // met the grounded no-targets refusal, copied all twelve names
+      // back out of it into ONE call, and remove_keyframes answered
+      // {"layers":12,"property":"opacity","removed":18}. clean_project
+      // and organize_project both refuse that shape until the user has
+      // SEEN it; this tool had no gate at all.
+      { name: "wipe rig: a comp whose whole roster can be named",
+        tool: "create_comp",
+        args: { name: WPCOMP, width: 320, height: 240, duration: 3,
+                frameRate: 25 },
+        check: function (d, ctx) {
+          ctx.wpComp = d.name;
+          ctx.wpLayers = ["ST Wipe A", "ST Wipe B", "ST Wipe C"];
+          // Not pinned to the exact name: AE auto-numbers a taken one,
+          // and every later step here works from ctx.wpComp anyway.
+          return typeof d.name === "string" || "no comp name";
+        } },
+      { name: "wipe rig: solid A",
+        tool: "add_solid",
+        args: function (ctx) {
+          return { comp: ctx.wpComp, name: "ST Wipe A", color: [1, 0, 0],
+                   width: 80, height: 80 };
+        },
+        check: function (d) { return d.name === "ST Wipe A" || d.name; } },
+      { name: "wipe rig: solid B",
+        tool: "add_solid",
+        args: function (ctx) {
+          return { comp: ctx.wpComp, name: "ST Wipe B", color: [0, 1, 0],
+                   width: 80, height: 80 };
+        },
+        check: function (d) { return d.name === "ST Wipe B" || d.name; } },
+      { name: "wipe rig: solid C",
+        tool: "add_solid",
+        args: function (ctx) {
+          return { comp: ctx.wpComp, name: "ST Wipe C", color: [0, 0, 1],
+                   width: 80, height: 80 };
+        },
+        check: function (d) { return d.name === "ST Wipe C" || d.name; } },
+      { name: "wipe rig: two opacity keys on each of the three",
+        tool: "set_keyframes",
+        args: function (ctx) {
+          return { comp: ctx.wpComp, layers: ctx.wpLayers,
+                   property: "opacity",
+                   keys: [{ time: 0, value: 0 }, { time: 1, value: 100 }] };
+        },
+        check: function (d) {
+          return d.keysSet === 6 || "keysSet " + d.keysSet;
+        } },
+
+      { name: "naming EVERY layer in the comp is refused, with the count",
+        tool: "remove_keyframes",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.wpComp, layers: ctx.wpLayers,
+                   property: "opacity" };
+        },
+        check: function (err) {
+          if (err.indexOf("refused to wipe every layer") === -1) {
+            return "err: " + err;
+          }
+          if (err.indexOf("delete 6 opacity keyframe(s) from 3 layer(s)")
+              === -1) {
+            return "the preview does not count what would go: " + err;
+          }
+          return err.indexOf("ask the user WHICH") !== -1 ||
+                 "no question to relay: " + err;
+        } },
+      // …and nothing went. The refusal has to be a refusal, not a note
+      // printed after the deletion.
+      { name: "…and the keys are all still there",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.wpComp, layer: "ST Wipe A",
+                   property: "opacity" };
+        },
+        check: function (d) {
+          return d.numKeys === 2 || "numKeys " + d.numKeys;
+        } },
+      // Retrying inside the SAME reply is refused too, and that is the
+      // branch the field failure needs: the round that lost 18 keyframes
+      // made sixteen calls without the user seeing one of them. The whole
+      // suite runs as one request (AELL_requestSeq is bumped per chat
+      // turn, not per step), so this is the branch real AE can show. The
+      // release — a LATER request goes through — needs a second turn and
+      // is pinned in tests/test-property-access.js instead.
+      { name: "…and retrying it in the same reply is refused too",
+        tool: "remove_keyframes",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.wpComp, layers: ctx.wpLayers,
+                   property: "opacity" };
+        },
+        check: function (err) {
+          return err.indexOf("THIS same reply") !== -1 || "err: " + err;
+        } },
+      { name: "…and the keys survived the retry as well",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.wpComp, layer: "ST Wipe C",
+                   property: "opacity" };
+        },
+        check: function (d) {
+          return d.numKeys === 2 || "numKeys " + d.numKeys;
+        } },
+      // Narrow on purpose: two of the three layers is the ordinary case
+      // and is never gated, however fresh the project is.
+      { name: "a named SUBSET is not gated",
+        tool: "remove_keyframes",
+        args: function (ctx) {
+          return { comp: ctx.wpComp,
+                   layers: [ctx.wpLayers[0], ctx.wpLayers[1]],
+                   property: "opacity" };
+        },
+        check: function (d) {
+          return d.removed === 4 || "removed " + d.removed;
+        } },
+      // Nor is a whole-comp call with nothing to lose: a refusal about a
+      // provable no-op is noise, the same reason organize_project does
+      // not gate an empty plan.
+      { name: "a whole-comp wipe with no keys to lose is not gated",
+        tool: "remove_keyframes",
+        args: function (ctx) {
+          return { comp: ctx.wpComp, layers: ctx.wpLayers,
+                   property: "rotation" };
+        },
+        check: function (d) {
+          return d.removed === 0 || "removed " + d.removed;
         } },
 
       // set_layer_3d, and the two AE facts underneath it. Measured
