@@ -181,6 +181,39 @@ function AELL_layerOrSelection(comp, ref) {
 }
 
 /*
+ * The grounding half of a "nothing to work on" refusal.
+ *
+ * "select layers in AE" is a dead end for a caller that cannot click:
+ * measured 2026-09-02 in real AE, the canonical "make it feel smoother"
+ * routed correctly to apply_keyframe_ease, omitted 'layers', hit the bare
+ * form of this refusal and the model simply relayed it to the user
+ * ("please select the square layers") — right tool, no work done. There is
+ * no select tool; names are the only way in. So name the comp's layers,
+ * and when the call carried a property, which of them actually have keys
+ * on it — that second list is the answer to the question that was asked.
+ */
+function AELL_noTargets(comp, args) {
+  var names = [], keyed = [], i, lay, prop;
+  var wanted = (args && typeof args.property === "string" && args.property)
+    ? String(args.property) : "";
+  for (i = 1; i <= comp.numLayers; i++) {
+    lay = comp.layer(i);
+    names.push(lay.name);
+    if (!wanted) continue;
+    prop = null;
+    try { prop = AELL_resolveProperty(lay, wanted); } catch (eP) {}
+    try { if (prop && prop.numKeys > 0) keyed.push(lay.name); } catch (eK) {}
+  }
+  var msg = "No target layers in '" + comp.name + "' — nothing is selected " +
+    "in AE and you cannot select for the user, so pass {layers: […]} " +
+    "or {layer} by NAME. Layers here: " + AELL_capJoin(names, 8);
+  if (wanted) {
+    msg += ". With " + wanted + " keyframes: " + AELL_capJoin(keyed, 8);
+  }
+  return msg + ".";
+}
+
+/*
  * Resolve a MULTI-layer target: explicit layers[], else a single layer,
  * else the whole selection (any count), else the comp's only layer.
  * Used by batch tools so ONE call can touch hundreds of layers.
@@ -203,8 +236,7 @@ function AELL_layersOrSelection(comp, args) {
   for (i = 0; i < sel.length; i++) out.push(sel[i]);
   if (out.length === 0 && comp.numLayers === 1) out.push(comp.layer(1));
   if (out.length === 0) {
-    throw new Error("No target layers in '" + comp.name + "' — select " +
-                    "layers in AE or pass {layer} / {layers: […]}");
+    throw new Error(AELL_noTargets(comp, args));
   }
   // A selection that is ONLY control nulls is almost never the intended
   // animation target (the user was probably just inspecting sliders) —
@@ -440,6 +472,45 @@ function AELL_missingProperty(layer, why) {
     msg += ". Already keyframed here: " + keyed.join(", ");
   }
   return msg + ".";
+}
+
+/* Which properties on this layer actually HAVE keyframes, named the way a
+ * tool arg wants them. This is the answer to the question a "that property
+ * has no keys" refusal provokes and used not to answer: then what DO I
+ * ease? Measured 2026-09-02 - "the squares' entrance feels cheap" routed
+ * to apply_keyframe_ease, guessed 'position', was told position has 0
+ * keyframes and nothing else, and asked the USER to go add keyframes. The
+ * opacity keys it wanted were two lines away in the comp state. */
+function AELL_keyedProps(layer) {
+  var out = [], name, grp = null, p, i, j, fx = null, eff, par;
+  try { grp = layer.property("ADBE Transform Group"); } catch (eG) {}
+  for (name in AELL_TRANSFORM_MAP) {
+    if (!AELL_TRANSFORM_MAP.hasOwnProperty(name)) continue;
+    p = null;
+    try { p = grp ? grp.property(AELL_TRANSFORM_MAP[name]) : null; } catch (eT) {}
+    try {
+      if (p && p.numKeys > 0) out.push(name + " (" + p.numKeys + " keys)");
+    } catch (eN) {}
+  }
+  try { fx = layer.property("ADBE Effect Parade"); } catch (eF) {}
+  if (fx) {
+    for (i = 1; i <= fx.numProperties && out.length < 8; i++) {
+      eff = null;
+      try { eff = fx.property(i); } catch (eE) {}
+      if (!eff) continue;
+      for (j = 1; j <= eff.numProperties && out.length < 8; j++) {
+        par = null;
+        try { par = eff.property(j); } catch (eQ) {}
+        try {
+          if (par && par.numKeys > 0) {
+            out.push("effect." + eff.name + "." + par.name +
+                     " (" + par.numKeys + " keys)");
+          }
+        } catch (eR) {}
+      }
+    }
+  }
+  return out;
 }
 
 /* Resolve "position" | "scale" | ... | "effect.<Effect>.<Param>" */
@@ -5468,9 +5539,23 @@ AELL_TOOLS.apply_keyframe_ease = function (args) {
     try {
       totalPairs += AELL_easeProp(prop, bez, args.keyIndex, args.allPairs);
     } catch (e) {
+      // "position has 0 keyframes" is true and useless on its own: the
+      // caller guessed a property and needs to know which one carries the
+      // animation it was asked to smooth. The comp knows; say so.
+      var why = "" + (e.message || e);
+      if (why.indexOf("need at least 2") !== -1) {
+        var keyed = AELL_keyedProps(layers[i]);
+        if (keyed.length) {
+          why += ". Keyframed on this layer: " + AELL_capJoin(keyed, 6) +
+                 " — ease one of those instead";
+        } else {
+          why += ". Nothing on this layer is keyframed, so there is no " +
+                 "animation to ease — set_keyframes first";
+        }
+      }
       return (totalPairs > 0 ? AELL_errPartial : AELL_err)(
         "On '" + layers[i].name + "', " + args.property +
-        " " + (e.message || e) +
+        " " + why +
         (totalPairs ? " — " + totalPairs + " pair(s) eased before this"
                     : ""));
     }
@@ -5808,9 +5893,11 @@ function AELL_writeValue(prop, value, label) {
   try { keys = prop.numKeys; } catch (eK) {}
   if (keys > 0) {
     throw new Error("'" + label + "' is animated (" + keys +
-      " keyframes), so a single value cannot be written to it. Pass " +
-      "{atTime: <seconds>} to set a keyframe at a time instead, or " +
-      "delete the existing keyframes first.");
+      " keyframes), so a single value cannot be written to it. To change " +
+      "HOW it animates use apply_keyframe_ease (easing) or set_keyframes " +
+      "(new key values); for one key here pass {atTime: <seconds>}. " +
+      "remove_keyframes THROWS THE ANIMATION AWAY — only if the user " +
+      "asked to un-animate it.");
   }
   prop.setValue(value);
   return AELL_overrideWarning(prop, value, label);
@@ -7854,8 +7941,7 @@ AELL_TOOLS.set_layer_parent = function (args) {
     for (i = 0; i < sel.length; i++) targets.push(sel[i]);
   }
   if (targets.length === 0) {
-    return AELL_err("No target layers — select some in AE or pass " +
-                    "{layer} / {layers: [...]}");
+    return AELL_err(AELL_noTargets(comp, args));
   }
   var clearing = args.parent === null || typeof args.parent === "undefined" ||
                  args.parent === "" ||
@@ -9631,9 +9717,11 @@ AELL_TOOLS.set_property = function (args) {
     try { nkey = prop.numKeys || 0; } catch (eN) {}
     if (nkey > 0 && typeof args.atTime !== "number") {
       return AELL_err("'" + args.property + "' is animated (" + nkey +
-        " keyframes), so a single value cannot be written to it. Pass " +
-        "{atTime: <seconds>} to set a keyframe instead, or delete the " +
-        "keyframes first.");
+        " keyframes), so a single value cannot be written to it. To change " +
+        "HOW it animates use apply_keyframe_ease (easing) or set_keyframes " +
+        "(new key values); for one key here pass {atTime: <seconds>}. " +
+        "remove_keyframes THROWS THE ANIMATION AWAY — only if the user " +
+        "asked to un-animate it.");
     }
     return AELL_err("AE rejected the value for '" + args.property + "': " +
       (e.message || e) + ". Current value: " +

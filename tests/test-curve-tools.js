@@ -643,4 +643,86 @@ const rots = ["F1", "F2", "F3", "F4", "F5"].map(n =>
 assert(r.ok && [40, 30, 20, 10, 0].every((v, i) => near(rots[i], v)),
        "selection default still sorts by inPoint (got " + rots + ")");
 
+
+// ------------------------------------- a refusal a model can act on
+//
+// Measured 2026-09-02, real AE + the real 32B, --variants on the "smooth
+// a mechanical fade" row. Two of four phrasings failed and NEITHER was a
+// routing miss - both were REFUSALS whose words were the defect:
+//
+//   canonical  "make it feel smoother" -> apply_keyframe_ease with no
+//              'layers' and nothing selected. The old refusal said
+//              "select layers in AE or pass {layer} / {layers}" and named
+//              nothing that exists, so the model relayed it to the user
+//              ("please select the square layers") and stopped. Right
+//              tool, no work done. A caller that cannot click has only
+//              names to work with, and the comp knows them.
+//
+//   vague      "the squares' entrance feels cheap, fix it" -> the model
+//              tried distribute_property on already-animated opacity.
+//              The old refusal ADVISED "delete the existing keyframes
+//              first"; the model obeyed, ran remove_keyframes over 18
+//              keys and wrote static values. The tool's own advice was
+//              the harm vector - the same shape as clean_project's
+//              ungated preview advice.
+comp._layers.forEach(l => { l.selected = false; });
+const eKp = comp.layer("L1")._transform["ADBE Opacity"];
+eKp.numKeys = 2; eKp._keyTimes = [0, 2]; eKp._keyValues = [0, 100];
+r = call("apply_keyframe_ease",
+         { property: "opacity", bezier: [0.42, 0, 0.58, 1] });
+assert(!r.ok, "no layers and no selection is still a refusal");
+assert(/Layers here:/.test(r.error) && /L1/.test(r.error) && /L2/.test(r.error),
+       "...and it NAMES the comp's layers (" + r.error + ")");
+assert(/With opacity keyframes: L1/.test(r.error),
+       "...and which of them have keys on the property that was asked for");
+assert(/by NAME/.test(r.error) && !/select layers in AE/.test(r.error),
+       "...and does not send a caller that cannot click back to AE's UI");
+
+// The same refusal without a property still grounds itself in layer names
+// (set_layer_parent's path - it has no 'property' at all).
+r = call("set_layer_parent", { parent: "L1" });
+assert(!r.ok && /Layers here:/.test(r.error) && !/ keyframes: /.test(r.error),
+       "a property-less caller gets the layer list and no empty key list (" +
+       r.error + ")");
+
+// A keyframed property still refuses a plain value. The question the field
+// answered is what it tells the caller to do NEXT.
+const aKp = comp.layer("L2")._transform["ADBE Opacity"];
+aKp.numKeys = 2; aKp._keyTimes = [0, 2]; aKp._keyValues = [0, 100];
+r = call("distribute_property",
+         { property: "opacity", layers: ["L2", "L3"], from: 0, to: 100 });
+const skipped = (r.ok ? (r.data.skipped || []) : [r.error]).join(" ");
+assert(/is animated \(2 keyframes\)/.test(skipped),
+       "an animated property still refuses a single value (" + skipped + ")");
+assert(/apply_keyframe_ease/.test(skipped) && /set_keyframes/.test(skipped),
+       "...and points at the tools that change HOW it animates");
+assert(!/delete the existing keyframes first/.test(skipped) &&
+       !/delete the keyframes first/.test(skipped),
+       "...and never advises deleting the user's animation as the fix");
+assert(/remove_keyframes THROWS THE ANIMATION AWAY/.test(skipped),
+       "...and says outright what remove_keyframes would cost");
+
+// The third refusal of the same class, found by the same run: with the
+// routing fixed, "the squares' entrance feels cheap" reached
+// apply_keyframe_ease, GUESSED 'position' (the sentence names no
+// property), was told position has 0 keyframes - and asked the user to go
+// add some. The opacity keys it was sent to smooth were on the same layer.
+comp.layer("L2")._transform["ADBE Position"].numKeys = 0;
+r = call("apply_keyframe_ease",
+         { layers: ["L2"], property: "position", bezier: [0.42, 0, 0.58, 1] });
+assert(!r.ok && /position has 0 keyframe/.test(r.error),
+       "easing an unkeyed property is still a refusal (" + r.error + ")");
+assert(/Keyframed on this layer: [^"]*opacity \(2 keys\)/.test(r.error),
+       "...and it names the property that DOES carry the animation");
+assert(/ease one of those instead/.test(r.error),
+       "...and says what to do with that");
+// A layer with nothing keyframed gets the other half of the answer, not an
+// empty list dressed up as one.
+r = call("apply_keyframe_ease",
+         { layers: ["L3"], property: "position", bezier: [0.42, 0, 0.58, 1] });
+assert(!r.ok && /Nothing on this layer is keyframed/.test(r.error) &&
+       /set_keyframes first/.test(r.error),
+       "an unanimated layer is told there is nothing to ease yet (" +
+       r.error + ")");
+
 console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");

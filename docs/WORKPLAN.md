@@ -1766,9 +1766,27 @@ this order, one bullet per pass:
     which compact keeps, already spells the shapes. **2 pass / 2 miss
     -> 4 pass, 0 miss, 0 HARM**, canonical and casual both single
     first-shot calls. Prompt full 58953 -> 58995 (ceiling 59000).
-  - NEXT: row 17's "cheap"/"feels stiff" vocabulary reaches
-    stagger_layers / distribute_property rather than
-    apply_keyframe_ease.
+  - ~~row 17's "cheap"/"feels stiff" vocabulary reaches stagger_layers
+    / distribute_property rather than apply_keyframe_ease~~ DONE
+    2026-09-02 (0.11.12). The vocabulary was one of four defects and the
+    only one wording could fix: the other three were REFUSALS whose words
+    were the bug. apply_keyframe_ease with no 'layers' said "select
+    layers in AE" and named nothing, so the model relayed it to the user
+    and stopped; distribute_property's animated-property refusal ADVISED
+    "delete the existing keyframes first" and the model obeyed, wiping 18
+    keys; and easing a property with no keys named no property that HAS
+    any, so the model asked the user to go make some. All three grounded
+    (`AELL_noTargets`, `AELL_keyedProps`, non-destructive advice), plus
+    ONE rules bullet carrying 'feels cheap' and "never stagger_layers
+    (that moves layers in TIME)". **2 pass / 1 miss / 1 HARM -> 4 pass,
+    0 miss, 0 HARM**, every run a single first-shot call. Paid for by
+    three docs that repeated a phrase list the never-compacted rules
+    already carry: prompt full 58995 -> 58989 (ceiling 59000, headroom
+    5 -> 11).
+  - NEXT: "clean up this comp" still lands somewhere destructive
+    (`remove_keyframes` over every layer, `grid_layout` + `stagger_layers`
+    restacking) — step 29, the one row where the tool was gated (0.11.7)
+    but the routing was never fixed.
 - **DEFERRED until a sandbox design exists:** D/F/H3 rows (project
   mutation, renders, mass-delete) — wiring them against the live
   project is the harm the whitelist cannot contain. Also deferred:

@@ -70,7 +70,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `organize_project` | File loose root-level items into Comps/Footage/Solids/Audio/Images folders at the project ROOT | yes | host | 1 | 3 |
 | `precompose` | Move layers into a new nested comp (precompose) | yes | host | 1 | 5 |
 | `remove_effect` | REMOVE one effect from a layer by display name or matchName ('get rid of the blur') | yes | host | 1 | 4 |
-| `remove_keyframes` | Remove keyframes from a property on many layers at once — specific times or all ('stop it moving / un-animate it' = this, times omitted) | yes | host | 1 | 5 |
+| `remove_keyframes` | Remove keyframes from a property on many layers at once — specific times or all ('stop it moving' = this, times omitted) | yes | host | 1 | 5 |
 | `rename_comps` | Rename MANY comps in one call, on the org convention (REVyy_ from a year in the old name, else REV_NO-YEAR_) | yes | host | 1 | 3 |
 | `rename_item` | Rename any project item (comp, footage, folder) | yes | host | 1 | 3 |
 | `render_comp` | Actually RENDER a comp to a file | yes | host | 1 | 11 |
@@ -82,7 +82,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `set_expression` | LAST RESORT: set a raw expression (or clear with '') | yes | host | 1 | 14 |
 | `set_keyframes` | Set the SAME keyframes on MANY layers in ONE call | yes | host | 2 | 12 |
 | `set_layer_3d` | Enable/disable a layer's 3D switch | yes | host | 1 | 8 |
-| `set_layer_parent` | Parent layers to another layer (omit/null parent to unparent) | yes | host | 2 | 18 |
+| `set_layer_parent` | Parent layers to another layer (omit/null parent to unparent) | yes | host | 3 | 18 |
 | `set_layer_timing` | Retime a layer on the TIMELINE, in comp seconds: startTime slides the whole layer ('push it back two seconds' = startTime: current + 2), inPoint/outPoint TRIM its ends without sliding it | yes | host | — | 5 |
 | `set_mask` | Edit an EXISTING mask: mode, feather, expansion, opacity, inverted, rename | yes | host | 1 | 1 |
 | `set_mask_path` | Replace or ANIMATE a mask's path | yes | host | 1 | 7 |

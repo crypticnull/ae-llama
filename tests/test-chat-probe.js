@@ -2417,6 +2417,51 @@ for (const name of ["reorder_layers", "remove_effect", "delete_mask",
          "add_mask's args line names the shapes the rules no longer repeat");
 }
 {
+  // A cheap-feeling entrance is an EASING complaint, not a restaging job.
+  //
+  // Measured 2026-09-02, real AE + the real 32B, --variants on "smooth a
+  // mechanical fade": "the squares' entrance feels cheap, fix it" reached
+  // stagger_layers (and then distribute_property) twice in a row. It moved
+  // nine layers in TIME and left every opacity key linear - the sentence
+  // asked how the animation FEELS, and the bullet's phrase list carried
+  // 'smoother / snappier / less robotic / mechanical' but nothing a user
+  // says when they cannot name the curve. The neighbouring stagger phrase
+  // in the SAME bullet is what it fell into, so the anti-target is pinned
+  // here beside the vocabulary.
+  const bullets = rules.split(/\n(?=- ')/);
+  const easeRule = bullets.filter(b => /^- 'stagger with an ease'/.test(b))[0];
+  assert(!!easeRule, "the rules still carry the bezier-family bullet");
+  const flow = (easeRule || "").replace(/\s+/g, " ");
+  for (const phrase of ["smoother", "snappier", "less robotic", "mechanical",
+                        "feels cheap"]) {
+    assert(flow.indexOf(phrase) !== -1,
+           "the ease bullet carries '" + phrase + "'");
+  }
+  assert(/never stagger_layers \(that moves\s*layers in TIME\)/.test(flow) ||
+         /never stagger_layers \(that moves layers in TIME\)/.test(flow),
+         "and rules out stagger_layers by name, with the reason (" + flow + ")");
+  // The addition was paid for by three docs that repeated a phrase list the
+  // rules already carry - the rules block is never compacted, so the second
+  // copy bought nothing. Put any of them back and the full prompt breaks its
+  // ceiling (see tests/test-context-budget.js).
+  const CUT = {
+    apply_keyframe_ease: ["smoother", "on the property that HAS the keys"],
+    precompose: ["group these"],
+    remove_keyframes: ["un-animate it"]
+  };
+  for (const name of Object.keys(CUT)) {
+    for (const gone of CUT[name]) {
+      assert(defsByName[name].desc.indexOf(gone) === -1,
+             name + "'s doc no longer repeats '" + gone + "' (the rules " +
+             "block carries it, and compact mode keeps the rules)");
+    }
+    assert(rules.indexOf(name) !== -1,
+           "...and the rules still route to " + name);
+  }
+  assert(/un-animate it/.test(rules),
+         "'un-animate it' survives the cut - in the rules, once");
+}
+{
   // The audit measured set_layer_timing as the SHORTEST doc in the file.
   const shortest = ToolsMod.TOOL_DEFS.slice().sort((a, b) =>
     a.desc.length - b.desc.length)[0];

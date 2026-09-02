@@ -243,8 +243,7 @@
       desc: "Apply a bezier as TEMPORAL easing between keyframes on one " +
             "property across MANY layers in ONE call (converts to AE " +
             "speed/influence ease). keyIndex eases pair k..k+1; omit for " +
-            "all pairs. 'smoother / less robotic' = this on the property " +
-            "that HAS the keys (smooth = [0.42,0,0.58,1]).",
+            "all pairs. 'less robotic' = this (smooth = [0.42,0,0.58,1]).",
       args: "{comp?: string, layers?: [name|index] | layer?: name|index (omit = selection), property: path, bezier: [x1,y1,x2,y2], keyIndex?: int, allPairs?: bool}" },
     { name: "grid_layout", mutating: true,
       desc: "Arrange layers into a grid rigged to a control null: its " +
@@ -428,8 +427,8 @@
             "('…/Repeater 1/Transform/Position').",
       args: "{comp?: string, layer?: name|index (shape layer; omit = selected), kind: string, group?: name (add inside this group), name?: string, params?: {ParamName: value, …}}" },
     { name: "precompose", mutating: true,
-      desc: "Move layers into a new nested comp (precompose). 'group " +
-            "these / package it up' = this — AE has no layer groups. The result " +
+      desc: "Move layers into a new nested comp (precompose). " +
+            "'package it up' = this — AE has no layer groups. The result " +
             "names the precomp AE actually made (auto-numbered if the " +
             "name was taken), what it broke — a moved layer's parent that " +
             "stayed behind is DROPPED, and an expression left behind that " +
@@ -513,8 +512,8 @@
       args: "{comp?: string, layers?: [name|index] | layer?: name|index (omit = selection), property: path, keys: [{time: s, value: any}, …] (max 100), relativeTo?: 'inPoint'}" },
     { name: "remove_keyframes", mutating: true,
       desc: "Remove keyframes from a property on many layers at once — " +
-            "specific times or all ('stop it moving / un-animate it' = " +
-            "this, times omitted). Removing ALL keys leaves the LAST " +
+            "specific times or all ('stop it moving' = this, times " +
+            "omitted). Removing ALL keys leaves the LAST " +
             "key's value.",
       args: "{comp?: string, layers?: [name|index] | layer?: name|index (omit = selection), property: path, times?: [s, …] (omit = remove ALL)}" },
     { name: "for_each_layer", mutating: true,
@@ -904,9 +903,11 @@
       "- 'stagger with an ease' = stagger_layers with spread + bezier",
       "  (step mode is evenly spaced, no curve); 'ramp opacity/scale",
       "  across these layers' = distribute_property; 'ease between the",
-      "  keyframes / smoother / snappier / less robotic / mechanical / not",
-      "  so linear' = apply_keyframe_ease on the property that HAS the",
-      "  keys. All take the same CSS-style bezier [x1,y1,x2,y2].",
+      "  keyframes / smoother / snappier / less robotic / mechanical /",
+      "  feels cheap / not so linear' = apply_keyframe_ease on the",
+      "  property that HAS the keys — never stagger_layers (that moves",
+      "  layers in TIME). All take the same CSS-style bezier",
+      "  [x1,y1,x2,y2].",
       "",
       "Plain-English requests:",
       "- 'group these / package it up / bundle them / collapse them into",

@@ -12558,3 +12558,225 @@ evidence that the args line was carrying it all along.
     (harness plan step 6).
 
 Nothing was left unattempted this pass. Nothing is blocked.
+
+## 2026-09-02 (local session, real AE) - WORKPLAN 8 "report, don't fix", row 17: the vocabulary was one bug of four, and the other three were the refusals themselves (0.11.12)
+
+Item: WORKPLAN section 8's in-flight row, named there as NEXT - row 17's
+**"cheap"/"feels stiff" vocabulary reaches stagger_layers /
+distribute_property rather than apply_keyframe_ease**. Harness was green
+first (578/578), so the pass was the item, not a repair.
+
+### The baseline: 2 pass / 1 miss / 1 HARM, and only ONE failure was about words
+
+`node scripts/chat-probe.js --variants --steps 17`, before any change:
+
+    canonical  "The squares fade in too mechanically - make it feel
+                smoother."                    -> apply_keyframe_ease  miss
+    casual     "the squares pop in dead flat - give that fade some
+                finesse"                      -> set_keyframes + ease  pass
+    vague      "the squares' entrance feels cheap, fix it"
+                 -> stagger_layers, distribute_property,
+                    remove_keyframes, distribute_property             HARM
+    typo       "the sqaures fade is to stiff, ease it plz"            pass
+
+The filing predicted a routing miss. The canonical was not one: it chose
+**the right tool**, omitted `layers`, and hit
+
+    No target layers in 'Probe Room' - select layers in AE or pass
+    {layer} / {layers: [...]}
+
+which names nothing that exists. The model relayed it verbatim ("Please
+select the square layers in the timeline") and stopped. Right tool, no
+work done - and there is no select tool in the suite, so a caller that
+cannot click has only NAMES to work with, and the comp knows them. Same
+class as 0.11.10's bare `Missing 'property'`.
+
+The HARM was worse, and also a refusal. `distribute_property` correctly
+refused to write a single value onto animated opacity - and then ADVISED:
+
+    ... Pass {atTime: <seconds>} to set a keyframe at a time instead, or
+    delete the existing keyframes first.
+
+The model took the advice, ran `remove_keyframes` over all 18 keys and
+wrote nine static opacity values. **The tool's own advice was the harm
+vector** - the same shape as clean_project's ungated preview advice
+(0.11.7), one layer down: not an action without a gate, a SENTENCE
+without one.
+
+### Three host fixes, then one prompt bullet, each measured on its own
+
+**1. `AELL_noTargets(comp, args)`** (hostscript.jsx) - the "nothing to
+work on" refusal now lists the comp's layers (capped at 8) and, when the
+call carried a `property`, which of them actually have keys on it. Used
+by `AELL_layersOrSelection` (every batch tool) and by set_layer_parent,
+which had its own barer copy.
+
+**2. The animated-property refusal no longer advises deletion**
+(`AELL_writeValue` and `set_property`): it points at apply_keyframe_ease
+and set_keyframes first, keeps `{atTime}`, and says outright that
+"remove_keyframes THROWS THE ANIMATION AWAY - only if the user asked to
+un-animate it".
+
+Re-measured after 1+2, no prompt change: **3 pass / 0 miss / 1 HARM.**
+The destructive chain was gone - the vague run stopped at the refusal
+instead of deleting 18 keys - but stagger_layers had already restacked
+nine layers in time, so it was still HARM.
+
+**3. ONE rules bullet**, the pass's single prompt change, carrying the
+measured word and the measured wrong turn:
+
+    'ease between the keyframes / smoother / snappier / less robotic /
+    mechanical / feels cheap / not so linear' = apply_keyframe_ease on
+    the property that HAS the keys - never stagger_layers (that moves
+    layers in TIME).
+
+Only 'feels cheap' was added to the phrase list: 'dead flat' and 'stiff'
+were measured PASSING already, and vocabulary nobody needs is context
+nobody gets back. Paid for by three docs that repeated a phrase list the
+rules block already carries - and the rules block is the half compact
+mode never touches, so the second copy bought nothing:
+
+    apply_keyframe_ease  "'smoother / less robotic' = this on the
+                          property that HAS the keys"  ->  "'less
+                          robotic' = this"
+    precompose           "'group these / package it up'" -> "'package it up'"
+    remove_keyframes     "'stop it moving / un-animate it'" -> "'stop it moving'"
+
+    full     58995 -> 58989 chars   (ceiling 59000; headroom 5 -> 11)
+    compact  39237 -> 39302 chars   (the addition is all in the rules)
+
+Re-measured after 3: **3 pass / 1 miss / 0 HARM.** The vague run now
+routed to apply_keyframe_ease - and hit the third refusal of the same
+family:
+
+    On 'Red Square 1', position has 0 keyframe(s) - need at least 2 to
+    ease between
+
+The sentence names no property, so the model guessed `position`, was told
+position has no keys and nothing else, and asked the USER to add
+keyframes. The opacity keys it had been sent to smooth were on the same
+layer.
+
+**4. `AELL_keyedProps(layer)`** - that refusal now names what IS
+keyframed, transform properties and effect params alike, in the arg's own
+path form.
+
+### The flip
+
+`node scripts/chat-probe.js --variants --steps 17`, after:
+
+    canonical  pass [apply_keyframe_ease]
+    casual     pass [apply_keyframe_ease]
+    vague      pass [apply_keyframe_ease]
+    typo       pass [apply_keyframe_ease]
+
+**4 pass, 0 miss, 0 HARM - "acceptance met".** Every one of the four is
+now a SINGLE first-shot call; the baseline's canonical took a round trip
+to nowhere and the vague one took four calls to a wrecked comp.
+Transcripts `logs\chat-probe-2026-09-02T09-29-36.md` (before),
+`...T09-33-48.md` (hosts only), `...T09-38-09.md` (+ the bullet) and
+`...T09-42-24.md` (after).
+
+**Honest about attribution.** In the final run the model never hit fixes
+1 or 4 - it named the layers and the property correctly first time. So
+the field flip on the vague row is the BULLET's; fixes 1, 2 and 4 are
+proved by the runs where they did fire (run 2 lost the remove_keyframes
+chain) and by direct AELL_call probes in real AE 2026:
+
+    A  apply_keyframe_ease {property: "position"} on a layer with keyed
+       opacity and a keyed Gaussian Blur ->
+       "... Keyframed on this layer: opacity (2 keys),
+        effect.Gaussian Blur.Blurriness (2 keys) - ease one of those
+        instead"
+    C  set_layer_parent, nothing selected ->
+       "... nothing is selected in AE and you cannot select for the
+        user, so pass {layers: [...]} or {layer} by NAME. Layers here:
+        Probe Solid."
+    D  set_property {value: 50} on animated opacity ->
+       "... use apply_keyframe_ease (easing) or set_keyframes (new key
+        values); for one key here pass {atTime: <seconds>}.
+        remove_keyframes THROWS THE ANIMATION AWAY ..."
+
+### Verification
+
+- **Real AE harness: 578/578 PASSED** (unchanged).
+- `tests/test-curve-tools.js` +10 assertions covering all four fixes;
+  **proved they bite** - reverting hostscript.jsx alone fails exactly 10.
+- `tests/test-chat-probe.js` +1 block: the ease bullet's five phrases,
+  the "never stagger_layers" anti-target, and the three doc cuts that
+  paid for them (put any back and test-context-budget's ceiling breaks).
+- `node tests/test-context-budget.js` green at 58989 of 59000.
+- Full stub sweep **66/67**, the odd one out the known environmental
+  `tests/test-comfy-backend.js` (unchanged, still not mine).
+- `node scripts/capability-report.js` regenerated (two doc lines and
+  set_layer_parent's grounded-error count 2 -> 3).
+- **Routing regression:** `--steps 1,2,3,7`. Steps 3 and 7 still reach
+  for `stagger_layers` and `distribute_property` respectively on their
+  own sentences, so "never stagger_layers" inside the ease bullet did
+  not poison either route. Both then failed on the PRE-EXISTING step-2
+  naming flake (filed #3 below - duplicate_layer numbers from 2, so
+  "Red Square 1" never exists, the round rolls back and the comp is left
+  empty). Not caused by this pass and not fixed by it.
+- Bumped to **0.11.12**: hostscript.jsx and tools.js both changed.
+
+### One self-inflicted blocker, recorded so the next pass does not repeat it
+
+The direct AELL_call probe wrapped its calls in its OWN
+`app.beginUndoGroup` / `endUndoGroup`. `AELL_call` opens and closes undo
+groups itself, so the nesting mismatched and AE put up a MODAL
+"After Effects warning: Undo group mismatch, will attempt to fix." - a
+dialog with WORDS, which the triage's wordless-popup filter deliberately
+will not close. It blocked the next probe run for ~25 minutes until
+`scripts/ae-window-census.ps1` found it (that tool earned its keep again)
+and a posted WM_COMMAND/IDOK cleared it. **A temp probe must never wrap
+AELL_call in an undo group.** Worth a later pass: the harness triage
+could recognise this specific title and answer it - it is a warning with
+an OK button and nothing to decide.
+
+### Filed for later passes, in priority order
+
+1. **"clean up this comp" still lands somewhere destructive**
+   (`remove_keyframes` over every layer, `grid_layout` + `stagger_layers`
+   restacking) - now the top in-flight row; WORKPLAN 8 names it as NEXT.
+   The TOOL was gated in 0.11.7, the ROUTING never was.
+2. **New rig-based steps for the A/B/C/E rows with no twin** (A1, A2,
+   B1, C1, C2, E1, E2) - unchanged.
+3. **Step 2's naming flake is now costing whole regression runs**, not
+   just one row: it empties the comp and every later world-building step
+   cascades (measured twice tonight). `duplicate_layer` numbers copies
+   from 2, so the model's "Red Square 1" cannot exist. One doc sentence,
+   or duplicate_layer could report the names it actually made.
+4. **The full prompt is 11 chars under its 59000 ceiling.** Better than
+   the 5 it inherited, but the next rules addition still needs a cut
+   found first. The named-but-untaken candidates are unchanged: the
+   "Known-good forms if you must write one" expression list and the
+   doc/rules overlap on LAYER space. The method this pass used IS
+   reusable - listing every desc phrase already present in the rules
+   found six more tools carrying a duplicate (audio_to_keyframes,
+   reorder_layers, scale_comp, add_mask, delete_mask, apply_preset);
+   most are pinned by tests, so each needs its own look.
+5. **`property: string` is the vaguest args line in TOOL_DEFS** -
+   unchanged, still blocked on item 4's cut.
+6. **Every add_mask paraphrase still sends COMP coordinates first** -
+   unchanged.
+7. **Ask the SERVER for the two numbers** (`POST /tokenize`,
+   `GET /props`) - unchanged, still no live symptom.
+8. **`comfyUrl` is 8188, ComfyUI answers on 8000** on this machine -
+   one line in `%APPDATA%\AE-Llama\settings.json`.
+9. **The harness cannot answer "Crash Repair Options"** - unchanged, and
+   see the undo-group warning above: the same "a modal with words and
+   nobody awake to click it" shape.
+10. **`starved` may now be too generous a word** - unchanged.
+11. **delete_mask could warn when an expression still points at the
+    mask** - unchanged.
+12. **A controller GROUP has never been measured**, nor any locale but
+    en_US - unchanged.
+13. **`capParams` is a second, independent roster inside the same
+    .mogrt** - unchanged.
+14. **`set_mask_path` takes vertices with no layer-box check at all** -
+    unchanged.
+15. **Still owed, needs a human awake:** drop
+    `logs\mogrt-verify\AELL Probe Card.mogrt` into real Premiere
+    (harness plan step 6).
+
+Nothing was left unattempted this pass. Nothing is blocked.
