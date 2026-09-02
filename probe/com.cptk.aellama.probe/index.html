@@ -600,15 +600,34 @@ of the panel. Read-only unless you press a button marked MUTATES.</p>
   function runJob(job) {
     note("unattended run: job claimed, measuring...");
     results.job = { via: "visible panel", args: job };
+    // Breadcrumb the instant we claim, before any host call. A hang
+    // after this point is then attributable to a named claimer rather
+    // than to "something, somewhere".
+    try {
+      var fsC = nodeRequire("fs");
+      var pathC = nodeRequire("path");
+      fsC.writeFileSync(pathC.join(probeDir(), "job-claimed.json"),
+        JSON.stringify({ via: "visible panel",
+                         host: results.panel && results.panel.appName,
+                         at: new Date().toISOString() }, null, 2), "utf8");
+    } catch (eB) {}
     results.panel = panelFacts();
     results.storage = storageProbe(results.panel.appName);
     results.shape = shapeInUse();
     autofillMogrt();
 
+    var progressPath = null;
+    try {
+      progressPath = nodeRequire("path")
+        .join(probeDir(), "job-progress.json").replace(/\\/g, "/");
+    } catch (eP) {}
+
     var battArgs = {
       allowMutate: job.allowMutate === true,
       scratchProject: job.scratchProject || null,
       makeSequence: job.makeSequence === true,
+      skip: job.skip || null,
+      progressPath: progressPath,
       mogrtPath: job.mogrtPath ||
                  (results.mogrtSearch && results.mogrtSearch.picked) || null
     };

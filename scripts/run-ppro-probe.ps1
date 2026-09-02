@@ -38,7 +38,10 @@ param(
     # Leave Premiere open when the run finishes.
     [switch]$KeepOpen,
     [switch]$SkipInstall,
-    [string]$MogrtPath = ''
+    [string]$MogrtPath = '',
+    # Names of battery steps to skip, for when a previous run reported one
+    # of them as HUNG. e.g. -Skip mogrt,history
+    [string[]]$Skip = @()
 )
 
 $ErrorActionPreference = 'Stop'
@@ -136,13 +139,18 @@ if ($MogrtPath) {
 }
 
 # ------------------------------------------------------------ the job
-Remove-Item $resFile, $runFile -ErrorAction SilentlyContinue
+# Clear every breadcrumb, or a stale one from the last run reads as this
+# run's result.
+Remove-Item $resFile, $runFile,
+            (Join-Path $probeData 'job-claimed.json'),
+            (Join-Path $probeData 'job-progress.json') -ErrorAction SilentlyContinue
 $job = [ordered]@{
     probeJsx       = ((Join-Path $repoRoot 'probe\com.cptk.aellama.probe\jsx\probe.jsx') -replace '\\', '/')
     probe          = 'battery'
     allowMutate    = $true
     scratchProject = ($scratch -replace '\\', '/')
     makeSequence   = $true
+    skip           = $Skip
     mogrtPath      = $(if ($MogrtPath) { $MogrtPath -replace '\\', '/' } else { $null })
     createdAt      = (Get-Date).ToString('o')
 }
@@ -203,12 +211,49 @@ while ((Get-Date) -lt $deadline) {
 
 if (-not (Test-Path $resFile)) {
     Bad ''
-    Bad 'No result. Neither door claimed the job.'
+    Bad 'No result.'
     Say ''
-    Say 'What that means, and what to check:'
+
+    # The progress file is written BEFORE each step runs, so it names the
+    # step that never returned. Without this the only output was "it hung
+    # somewhere", which is what the first version of this script produced
+    # after 300 seconds of waiting.
+    $claimFile = Join-Path $probeData 'job-claimed.json'
+    $progFile  = Join-Path $probeData 'job-progress.json'
+    if (Test-Path $claimFile) {
+        try {
+            $c = Get-Content -Raw $claimFile | ConvertFrom-Json
+            Say ("Claimed by: " + $c.via + "  (host " + $c.host + ", at " + $c.at + ")")
+        } catch { Say "Claim file present but unreadable." }
+    } else {
+        Say 'Nothing claimed the job: no claim breadcrumb was written.'
+    }
+
+    if (Test-Path $progFile) {
+        try {
+            $pr = Get-Content -Raw $progFile | ConvertFrom-Json
+            Say ''
+            Say '-- how far it got'
+            foreach ($s in $pr.steps) {
+                if ($s.skipped) { Say ("  skip  " + $s.step) }
+                elseif ($s.ok)  { Say ("  ok    " + $s.step) }
+                else            { Bad ("  FAIL  " + $s.step + " : " + $s.error) }
+            }
+            if ($pr.current) {
+                Bad ("  HUNG  " + $pr.current + "  <-- this step never returned")
+                Say ''
+                Say ("Re-run skipping it:  ... run-ppro-probe.ps1 -Skip " + $pr.current)
+            }
+        } catch { Say "Progress file present but unreadable: $progFile" }
+    } else {
+        Say 'No progress file - the battery never started a step.'
+    }
+
+    Say ''
+    Say 'What to check:'
     if (Test-Path $runFile) {
-        Say '  - the job WAS claimed but never finished: something in the'
-        Say '    battery hung. Look in Premiere for a modal dialog.'
+        Say '  - the job WAS claimed but never finished: look in Premiere'
+        Say '    for a modal dialog sitting behind the main window.'
     } else {
         Say '  - the job was never claimed, so neither the visible panel nor'
         Say '    the invisible runner loaded. Either the panel is not in'

@@ -101,6 +101,16 @@ function AELLP_say(e) {
   return (e && e.message) ? String(e.message) : String(e);
 }
 
+/** ES3 has no Array.indexOf. */
+function AELLP_inList(list, name) {
+  var i;
+  if (!list || typeof list.length !== "number") { return false; }
+  for (i = 0; i < list.length; i++) {
+    if (String(list[i]) === String(name)) { return true; }
+  }
+  return false;
+}
+
 /** typeof without throwing on a host that has no such global at all. */
 function AELLP_typeOf(expr) {
   var t;
@@ -383,11 +393,46 @@ AELLP_PROBES.echo = function (args) {
  */
 AELLP_PROBES.battery = function (args) {
   args = args || {};
-  var out = { steps: [], mutating: args.allowMutate === true };
+  var out = { steps: [], mutating: args.allowMutate === true, current: null };
   var i, seq, item, made;
+  var progress = args.progressPath || null;
+
+  /*
+   * FLUSH AFTER EVERY STEP, and name the step BEFORE running it.
+   *
+   * Measured the hard way 2026-09-02: the first version of this battery
+   * held everything in memory and wrote once at the end. It claimed its
+   * job, hung inside some step, and produced NOTHING -- 300 seconds of
+   * waiting that said only "it hung somewhere". This repo's own
+   * scripts/mogrt-verify-probe.jsx already had the right pattern
+   * ("Every measurement is flushed to disk as it is taken") and this
+   * ignored it.
+   *
+   * With `current` written before the call and the row written after,
+   * a hang leaves a file naming the exact step that never returned.
+   */
+  function flush() {
+    if (!progress) { return; }
+    try {
+      var f = new File(progress);
+      f.encoding = "UTF-8";
+      f.open("w");
+      f.write(AELLP_JSON.stringify(out));
+      f.close();
+    } catch (e) { /* a failed flush must never stop the run */ }
+  }
 
   function step(name, fn) {
     var row = { step: name };
+    if (args.skip && AELLP_inList(args.skip, name)) {
+      row.ok = true;
+      row.skipped = "asked to skip";
+      out.steps.push(row);
+      flush();
+      return row;
+    }
+    out.current = name;
+    flush();
     try {
       row.data = fn();
       row.ok = true;
@@ -396,8 +441,13 @@ AELLP_PROBES.battery = function (args) {
       row.error = AELLP_say(e);
     }
     out.steps.push(row);
+    out.current = null;
+    flush();
     return row;
   }
+
+  out.startedAt = String(new Date());
+  flush();
 
   step("ping", function () { return AELLP_PROBES.ping(); });
   step("hostFacts", function () { return AELLP_PROBES.hostFacts(); });
@@ -408,19 +458,54 @@ AELLP_PROBES.battery = function (args) {
     return out;
   }
 
-  // A scratch project, so nothing here can touch the user's work. If
-  // this fails the later steps still run and say what they hit.
-  if (args.scratchProject) {
-    step("newProject", function () {
-      if (typeof app.newProject !== "function") {
-        throw new Error("app.newProject is not a function in this host");
+  /*
+   * A project to work in, WITHOUT calling app.newProject when we can
+   * avoid it.
+   *
+   * Why the care: app.newProject was the first mutating step of the
+   * first unattended run, and that run claimed its job and then hung for
+   * 300 seconds. It is a strong suspect for raising a New Project dialog
+   * on this build, and a dialog with nobody at the keyboard is a hang,
+   * not an error.
+   *
+   * It is also usually unnecessary. Measured on this machine: Premiere
+   * launches with an EMPTY Untitled.prproj already open (rootItem had 0
+   * children). An empty project is a scratch project, so reuse it and
+   * never open the dialog at all. Only a project with real content in it
+   * is worth stepping around.
+   */
+  step("project", function () {
+    var proj = AELLP_safe(function () { return app.project; });
+    if (proj && typeof proj !== "string") {
+      var kids = AELLP_safe(function () {
+        return app.project.rootItem.children.numItems;
+      });
+      var pname = AELLP_safe(function () { return app.project.name; });
+      var ppath = AELLP_safe(function () { return app.project.path; });
+      if (kids === 0) {
+        return { via: "reused the open EMPTY project",
+                 name: pname, path: ppath, items: kids,
+                 note: "no app.newProject call, so no dialog risk" };
       }
-      var made2 = app.newProject(args.scratchProject);
-      return { returned: String(made2),
-               projectPath: AELLP_safe(function () { return app.project.path; }),
-               projectName: AELLP_safe(function () { return app.project.name; }) };
-    });
-  }
+      // A project with content: do not touch it.
+      if (!args.scratchProject) {
+        return { via: "refused", name: pname, items: kids,
+                 note: "a project with " + String(kids) + " item(s) is open " +
+                       "and no scratch path was given, so nothing was " +
+                       "created and nothing will be mutated" };
+      }
+    }
+    if (!args.scratchProject) {
+      throw new Error("no project open and no scratchProject path given");
+    }
+    if (typeof app.newProject !== "function") {
+      throw new Error("app.newProject is not a function in this host");
+    }
+    var made2 = app.newProject(args.scratchProject);
+    return { via: "app.newProject", returned: String(made2),
+             path: AELLP_safe(function () { return app.project.path; }),
+             name: AELLP_safe(function () { return app.project.name; }) };
+  });
 
   /*
    * A sequence, by whichever route this build accepts. Three strategies

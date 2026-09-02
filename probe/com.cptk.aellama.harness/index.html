@@ -65,6 +65,12 @@
     host = JSON.parse(window.__adobe_cep__.getHostEnvironment());
   } catch (e2) {}
 
+  // Breadcrumb at claim time, before any host call, so a hang names its
+  // claimer instead of leaving two suspects.
+  write(path.join(dir, "job-claimed.json"),
+        { via: "invisible runner (door 3)",
+          host: host ? host.appName : null, at: started });
+
   function finish(extra) {
     var out = { door: 3, startedAt: started,
                 finishedAt: new Date().toISOString(),
@@ -89,6 +95,8 @@
       allowMutate: job.allowMutate === true,
       scratchProject: job.scratchProject || null,
       makeSequence: job.makeSequence === true,
+      skip: job.skip || null,
+      progressPath: path.join(dir, "job-progress.json").replace(/\\/g, "/"),
       mogrtPath: job.mogrtPath || null
     };
     var args = JSON.stringify(JSON.stringify(battArgs));

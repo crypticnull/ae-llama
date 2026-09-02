@@ -13927,3 +13927,31 @@ Nothing else was left unattempted this pass. Nothing is blocked.
   launch of AE or Premiere. All 23 scripts parse today.
 - Harness 70/72 (the two known Windows-only suites). No `extension/`
   change, so NO BUMP.
+
+## 2026-09-02 (remote session) — the first unattended run hung; flush fix
+
+- First real run of `run-ppro-probe.ps1`: the job was claimed inside 20
+  seconds and then hung for the full 300 s timeout, producing NOTHING.
+  The script could only report "it hung somewhere".
+- That is a design failure I had no excuse for. This repo's own
+  `scripts/mogrt-verify-probe.jsx` already carries the pattern —
+  "Every measurement is flushed to disk as it is taken" — because an
+  export can put a window up and stop the script dead. The battery held
+  everything in memory and wrote once at the end.
+- Fixed: the battery names each step in a progress file BEFORE running
+  it and writes the row after, so a hang leaves a file naming the exact
+  step that never returned, plus every measurement taken before it.
+  Both claimers write a `job-claimed.json` breadcrumb the instant they
+  claim, so a hang names its claimer instead of leaving two suspects.
+  `run-ppro-probe.ps1` prints all of that on timeout and suggests the
+  `-Skip <step>` re-run.
+- Also reduced the most likely cause rather than only instrumenting it.
+  `app.newProject` was the first mutating step and is a strong suspect
+  for raising a New Project dialog, which with nobody at the keyboard is
+  a hang rather than an error. It is also usually unnecessary: measured
+  on this machine, Premiere launches with an EMPTY `Untitled.prproj`
+  already open (rootItem 0 children). The step now REUSES an empty open
+  project and only calls `newProject` when a project with real content
+  is open — and refuses outright rather than touching a project that has
+  content in it when no scratch path is given.
+- Harness 70/72. No `extension/` change, so NO BUMP.
