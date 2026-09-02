@@ -11602,3 +11602,190 @@ The previous pass's list, minus the item this pass took:
     (harness plan step 6).
 
 Nothing was left unattempted this pass. Nothing is blocked.
+
+## 2026-09-02 (local session, real AE) — WORKPLAN 8 bullet 1: the probe could not run one sentence twice. UNBUMPED ON PURPOSE
+
+Harness first, as always: **570/570 PASSED** before anything was
+touched, so the pass went to the workplan. The highest unfinished item
+is section 8's first bullet — the prerequisites the 2026-08-30 audit
+(docs/AUDIT-0.11.md part 1.4) said the paraphrase matrix cannot be built
+without, and the previous pass's filed #1.
+
+### What was wrong
+
+Three separate things, all of them "a variance number computed on this
+harness would LIE":
+
+1. **Shared history never reset.** `scripts/chat-probe.js` held ONE
+   `history` array for the whole run, so step 20 answered with step 2's
+   conversation still in the window. That is not tidiness: it is already
+   costing real verdicts. The 0.11.7 entry measured it — one wrong layer
+   name in step 2 stayed in the chat and poisoned six later steps, so
+   the run reported six failures for one mistake. And a scenario cannot
+   be run TWICE, which is the whole point of a paraphrase matrix: the
+   second phrasing would start from what the first one said and did.
+2. **Step order was pinned by INDEX** in `tests/test-chat-probe.js`
+   (`titles.indexOf("a second turn that refers back") === 8`,
+   `titles.slice(14)`). Inserting a step anywhere earlier broke
+   assertions that had nothing to do with it — the suite discouraged
+   the one thing the matrix needs, which is steps growing.
+3. **Steps 4, 5 and 6 scored wrong-but-present as pass.** The text step
+   read one of the four things its sentence asks for (does SOME text
+   layer say HELLO); the mask step asked only whether SOME text layer
+   has SOME mask; the track-matte step asked whether a shape layer
+   exists AND something somewhere is matted — never whether the shape
+   mattes the square.
+
+### The fix (scripts/chat-probe.js, tests/test-chat-probe.js)
+
+**History resets by default.** `resetHistory()` empties the history AND
+puts back the two once-per-conversation notices (main.js scopes both to
+a conversation; leaving `ledger` set would make the next step's first
+trim silent). Exactly ONE step opts out — "a second turn that refers
+back", whose sentence is a pronoun — via a new `carry: true`. Every
+other step names what it is talking about, and the test now enforces
+that: no fresh-history step may open with a bare pronoun.
+`--carry-history` puts the old shared behaviour back for a comparison.
+
+**The comp resets too, under `--isolate`.** New `rigPlan()` builds the
+world the later sentences name — Probe Room, nine blue 200x200 squares
+in a 3x3 grid with linear staggered fades, HELLO at 120px white near
+the top with a feathered oval mask, a Rig null rotated 15 with the nine
+squares parented to it, and Beta last so it lands ABOVE the text — as
+34 commands through `AELL_callBatch` (one script execution, one undo
+group, the panel's own tools, no model). `resetWorld()` sweeps and
+rebuilds it before every step that declares `fromRig` (the fifteen
+trigger-layer steps). Steps 1-14 deliberately do NOT: building the
+world through the model IS their coverage.
+
+Two deliberate choices, both commented at the code: the grid is placed
+by hand rather than by `grid_layout` (that tool adds a "GRID CTRL"
+solid and rig expressions, and a rig should hold nothing the sentences
+do not name), and the squares are BLUE — the world the later sentences
+describe is the one after "make them blue instead", and the precompose
+step says "the nine blue squares" out loud.
+
+**New `--rig-check`**: builds the rig in real AE and checks every
+fixture the later steps name, with no model, in seconds. A rig that
+quietly stops building one of its fixtures would fail a step every
+night for a reason that is not the model's — the exact class of lie
+this pass is about.
+
+**Steps 4/5/6 now read their own sentences.** This needed two new
+READ_COMP fields each:
+
+- text: `fontSize` and `fillColor` off the TextDocument (read in
+  separate try blocks — a doc with `applyFill` false THROWS on
+  fillColor, and that must not cost the size too). The step now checks
+  120px, white, the top half of the frame, and that ONE text layer was
+  added.
+- mask: `maskFeather` and `maskRound`. The step now checks that the
+  mask is on HELLO (naming the layer it landed on instead), that it is
+  an oval, and that the feather is 20.
+- matte: the step now checks that a NEW shape layer appeared, that the
+  matted layer is a SQUARE, that its `matteLayer` IS that shape, and
+  that the type is ALPHA (5013) and not inverted alpha / luma.
+
+**Indexes un-pinned.** `stepOrder()` / `assertAfter()` assert relative
+order by TITLE. What is load-bearing is that a step runs after the
+steps that build what it names — plus one exact adjacency that really
+is exact: the refer-back step must directly follow its antecedent turn,
+because nothing else may be typed between a pronoun and its noun.
+
+### Measured in real AE 2026 (both pinned in tests)
+
+- **An ellipse mask and a rectangle mask have the SAME bounding box.**
+  Built both on one 200x200 layer with identical bounds `[0,0,200,100]`:
+  `maskBoxes` came back `[[0,0,200,100],[0,0,200,100]]` — identical.
+  `maskRound` (any non-zero bezier tangent) came back `[false,true]`.
+  So "put an OVAL mask on it" has no fingerprint at all without the
+  tangents, and the old box-only reading could never have told a box
+  from an oval. `maskFeather` read `[0,7]` in the same call.
+- **A TextDocument hands over `fontSize` and `fillColor`**: the rig's
+  HELLO read back `fontSize=120`, `fillColor=[1,1,1]`; a solid reads
+  `null` for both, so "unreadable" is distinguishable from "wrong" and
+  the check does not score it either way.
+
+### Verification
+
+- **Real AE harness: 570/570 PASSED**, before and after.
+- `node scripts/chat-probe.js --rig-check` → "34 commands, all ok / rig
+  OK — every fixture the later steps name is in the comp", swept clean.
+- `node scripts/chat-probe.js --isolate --steps 15,20,25` → **3/3**,
+  with "rig rebuilt (10 item(s) swept, 34 commands)" between each. The
+  end-to-end proof: three sentences, three identical starting worlds,
+  three fresh conversations, all passing.
+- `node scripts/chat-probe.js --steps 1,2,4,5,6` → **5/5** on the
+  second run. The FIRST run is the more useful receipt: step 2's round
+  rolled back on the known layer-naming flake (add_solid "Red Square"
+  then duplicate_layer, so "Red Square 1" never exists), which left the
+  comp with NO squares — and the model, asked to matte "the top square",
+  matted HELLO. The old check scored that a PASS (a shape existed;
+  something was matted). The new one caught it. That is also what
+  produced the one adjustment made after the field run: a broken
+  premise is now reported as a broken premise ("there are no squares in
+  Probe Room (the grid step must have failed)"), the way the later
+  steps already report a fixture that never landed, instead of blaming
+  the model for a routing failure it did not commit.
+- `tests/test-chat-probe.js`: 412 assertions, all green (+~60). New
+  canned-host cases for all three tightened steps — black HELLO (AE's
+  default, the miss a "there is a text layer" check cannot see), 24px,
+  the bottom half, two text layers for one sentence, unreadable size
+  and fill; a mask on the wrong layer, a rectangle, feather 0 and 5,
+  three masks for one oval, an unreadable shape, a mask that was
+  already there; a shape that mattes nothing, a shape that was already
+  there, the matte on HELLO, a square matted by the text rather than by
+  the new shape, luma, inverted alpha, and a legacy AE that cannot name
+  the matte layer. Plus the isolation invariants themselves: exactly
+  one carry step, no fresh-history step opening with a bare pronoun,
+  every fromRig step being a trigger-layer step and no world-building
+  step claiming to be one, and the rig plan building every fixture the
+  fromRig steps name.
+- Full stub sweep: **66/67**, the odd one out the known environmental
+  `tests/test-comfy-backend.js` (Comfy-Desktop models dir on this
+  machine, none in CI — unchanged, still not mine).
+
+### UNBUMPED, on purpose
+
+`git diff --name-only` touches `scripts/` and `tests/` only. Nothing in
+`extension/` changed, so a bump would publish an update that installs
+nothing new and every test user would pay the reinstall for it.
+
+### Filed for later passes, in priority order
+
+The previous pass's list, minus the item this pass took, plus what this
+one turned up:
+
+1. **Wire the variants** — WORKPLAN 8's second bullet, now unblocked:
+   2-3 paraphrases each over the SAFE rows (A/B/C/E + the ten
+   roadmap-item-2 trigger mappings), scored right-tool + right-target.
+   The machinery it was waiting on is in.
+2. **Step 2 flakes on layer naming, and it is the model's, not the
+   host's.** Measured twice tonight: add_solid "Red Square" +
+   duplicate_layer count 8 gives "Red Square", "Red Square 2".."Red
+   Square 9" — no "Red Square 1" — and the grid_layout that follows
+   names one. It self-corrected on the retry once and gave up once. The
+   grounded error already lists the real names; what it does not say is
+   that duplicate_layer's numbering starts at 2. One doc sentence, one
+   re-run to show the flip — a WORKPLAN 8 wording pass.
+3. **`comfyUrl` is 8188, ComfyUI answers on 8000** on this machine —
+   one line in `%APPDATA%\AE-Llama\settings.json`, belongs to whoever
+   runs the next Comfy item.
+4. **Ask the SERVER for the two numbers** (`POST /tokenize`,
+   `GET /props`) — unchanged, still no live symptom.
+5. **`add_mask` accepts bounds that miss the layer entirely and reports
+   ok** — unchanged (`[[0,0,1920,540]]` on a 100x100 layer).
+6. **The harness cannot answer "Crash Repair Options"** — unchanged
+   (`scripts/lib/ae-dialog-triage.ps1`).
+7. **`starved` may now be too generous a word** — unchanged.
+8. **delete_mask could warn when an expression still points at the
+   mask** — unchanged.
+9. **A controller GROUP has never been measured**, nor any locale but
+   en_US — unchanged.
+10. **`capParams` is a second, independent roster inside the same
+    .mogrt** — unchanged.
+11. **Still owed, needs a human awake:** drop
+    `logs\mogrt-verify\AELL Probe Card.mogrt` into real Premiere
+    (harness plan step 6).
+
+Nothing was left unattempted this pass. Nothing is blocked.

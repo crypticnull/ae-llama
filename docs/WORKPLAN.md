@@ -1675,6 +1675,20 @@ name-scoped SWEEP whitelist (:621-635) makes project-mutating rows
 (D-section, H3) UNSAFE against the owner's live project. Build in
 this order, one bullet per pass:
 
+- ~~**Prerequisites first.**~~ DONE 2026-09-02 (local, real AE,
+  UNBUMPED — nothing in `extension/` changed). All three parts:
+  history now resets PER STEP by default (only "a second turn that
+  refers back" declares `carry`); `--isolate` rebuilds a
+  deterministic rig (`rigPlan`, 34 AELL_callBatch commands, no model)
+  before every step that declares `fromRig`, so N phrasings of one
+  scenario cannot contaminate each other; the step indexes in
+  tests/test-chat-probe.js are addressed by title and relative order;
+  and steps 4/5/6 now read what their sentences actually ask for.
+  New `--rig-check` builds and verifies the rig in real AE in
+  seconds. Verified: rig-check green, `--isolate --steps 15,20,25`
+  3/3 with the rig rebuilt between each, `--steps 1,2,4,5,6` 5/5.
+  Two AE 2026 measurements are pinned in the log. The original
+  instruction, for reference:
 - **Prerequisites first.** Per-variant history + comp reset so one
   scenario can run N phrasings independently; un-pin the load-bearing
   step indexes in tests/test-chat-probe.js (address steps by title,

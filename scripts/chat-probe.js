@@ -22,6 +22,20 @@
  *   node scripts/chat-probe.js --model <gguf>   # override the model
  *   node scripts/chat-probe.js --ctx 32768      # override the window
  *   node scripts/chat-probe.js --keep           # do not delete the comp
+ *   node scripts/chat-probe.js --isolate        # rebuild the rig per step
+ *   node scripts/chat-probe.js --rig-check      # build the rig, no model
+ *   node scripts/chat-probe.js --carry-history  # the old shared history
+ *
+ * ISOLATION. Every step gets a FRESH chat history unless it declares
+ * `carry` (only "a second turn that refers back" does — its sentence is
+ * meaningless without the turn before it). That is not tidiness: the
+ * shared history meant a later step could ride an earlier one's success,
+ * and one wrong layer name in step 2 poisoned six later steps. Add
+ * `--isolate` and the COMP resets too — every step that declares
+ * `fromRig` starts from the same deterministically built world (see
+ * rigPlan), which is what lets one scenario run N phrasings that cannot
+ * contaminate each other. `--carry-history` puts the old behaviour back
+ * for a side-by-side comparison.
  *
  * `--ctx` is what makes the compact-vs-full ROUTING comparison possible:
  * the panel chooses its tool-doc form from the window alone
@@ -66,7 +80,10 @@ const OPT = {
   keep: argv.indexOf("--keep") !== -1,
   afterFX: argValue("--afterfx"),
   reuseServer: argv.indexOf("--reuse-server") !== -1,
-  bridgeCheck: argv.indexOf("--bridge-check") !== -1
+  bridgeCheck: argv.indexOf("--bridge-check") !== -1,
+  rigCheck: argv.indexOf("--rig-check") !== -1,
+  isolate: argv.indexOf("--isolate") !== -1,
+  carryHistory: argv.indexOf("--carry-history") !== -1
 };
 
 // ------------------------------------------------------- After Effects
@@ -403,6 +420,18 @@ const history = [];
  * itself. */
 const sessionNotices = { ledger: false, starved: false };
 
+/*
+ * Start a new CONVERSATION — what a user pressing "clear chat" gets.
+ * Both notices are scoped to a conversation in main.js, so both reset
+ * with it; leaving `ledger` set would make the next step's first trim
+ * silent and the transcript would stop being readable step by step.
+ */
+function resetHistory() {
+  history.length = 0;
+  sessionNotices.ledger = false;
+  sessionNotices.starved = false;
+}
+
 /* Set by scripts/context-budget-probe.js. Never set during a normal run,
  * so it can only observe. */
 let roundObserver = null;
@@ -670,7 +699,8 @@ const READ_COMP = FIND_COMP +
   "    matteLayer: null, matteLayerKnown: false, isPrecomp: false," +
   "    anchorPoint: null, opacity: null," +
   "    sourceRect: null, layerWidth: null, layerHeight: null, maskBoxes: []," +
-  "    maskModes: [], maskInverted: []," +
+  "    maskModes: [], maskInverted: [], maskFeather: [], maskRound: []," +
+  "    fontSize: null, fillColor: null," +
   "    opacityKeyEased: [], expressions: {}, textAnimators: 0 };" +
   "  try { row.matte = L.trackMatteType; } catch (e1) {}" +
   "  try { row.startTime = L.startTime; row.inPoint = L.inPoint;" +
@@ -709,6 +739,17 @@ const READ_COMP = FIND_COMP +
   "  } catch (e5c) {}" +
   "  try { if (row.isText) row.text =" +
   "    L.property('Source Text').value.text; } catch (e6) {}" +
+  // "white, 120 pixels" is half the sentence the text step types, and a
+  // check that only reads .text scores a 12px black HELLO as a pass.
+  // fillColor is read in its own try: a TextDocument with applyFill off
+  // throws on it, and that must not cost the size too.
+  "  try { if (row.isText) {" +
+  "    var td = L.property('Source Text').value;" +
+  "    if (typeof td.fontSize === 'number') row.fontSize = td.fontSize;" +
+  "    try { if (td.applyFill !== false && td.fillColor) {" +
+  "      row.fillColor = [td.fillColor[0], td.fillColor[1]," +
+  "        td.fillColor[2]]; } } catch (e6b) {}" +
+  "  } } catch (e6c) {}" +
   "  try { row.masks = L.property('ADBE Mask Parade').numProperties;" +
   "  } catch (e7) {}" +
   "  try { row.effects = L.property('ADBE Effect Parade').numProperties;" +
@@ -760,7 +801,29 @@ const READ_COMP = FIND_COMP +
   "      } catch (emm) {" +
   "        row.maskModes.push('unknown'); row.maskInverted.push(false);" +
   "      }" +
-  "      var vs = mk.property('ADBE Mask Shape').value.vertices;" +
+  // Feather is a two-component property ([x, y]); the sentence asks for
+  // one number, so the larger of the two is what "feather it 20" means.
+  "      try {" +
+  "        var mf = mk.property('ADBE Mask Feather').value;" +
+  "        row.maskFeather.push(Math.max(mf[0], mf[1]));" +
+  "      } catch (emf) { row.maskFeather.push(null); }" +
+  "      var shp = mk.property('ADBE Mask Shape').value;" +
+  "      var vs = shp.vertices;" +
+  // An ellipse mask and a rectangle mask have the SAME four-vertex
+  // bounding box; the only thing that tells them apart is that AE gives
+  // an ellipse curved segments (non-zero bezier tangents) and a
+  // rectangle straight ones. "Put an OVAL mask on it" has no other
+  // fingerprint, so a box-only check passes a rectangle.
+  "      var round = false, tg;" +
+  "      try {" +
+  "        for (tg = 0; tg < vs.length; tg++) {" +
+  "          var ti = shp.inTangents[tg], to = shp.outTangents[tg];" +
+  "          if ((ti && (ti[0] || ti[1])) || (to && (to[0] || to[1]))) {" +
+  "            round = true; break;" +
+  "          }" +
+  "        }" +
+  "      } catch (etg) { round = null; }" +
+  "      row.maskRound.push(round);" +
   "      var x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;" +
   "      for (var vi = 0; vi < vs.length; vi++) {" +
   "        if (vs[vi][0] < x0) x0 = vs[vi][0];" +
@@ -902,6 +965,100 @@ function sweepImports(ids) {
     "  }" +
     "}" +
     "return { removed: killed };";
+}
+
+// ------------------------------------------------------------ the rig
+/*
+ * The world the LATER steps talk about, built deterministically instead
+ * of inherited from the earlier steps' model turns.
+ *
+ * Every step from "push a layer back on the timeline" onward names
+ * things — Beta, HELLO, the Rig null, the nine squares — that steps 1-14
+ * happened to leave behind. That made the run a chain: step 2 naming one
+ * square wrongly poisoned six later steps, and there was no way to run
+ * one sentence twice (the paraphrase matrix) because the second phrasing
+ * started from what the first one did.
+ *
+ * So the fixtures those sentences need are built here, through
+ * AELL_callBatch (one script execution, one undo group, the panel's own
+ * tools) with no model in the loop. `--isolate` rebuilds this before
+ * every step that declares `fromRig`, so N phrasings of one scenario
+ * each start from a comp that is byte-for-byte the same world.
+ *
+ * The squares are BLUE, not red: the world the later sentences describe
+ * is the one after "make them blue instead", and the precompose step
+ * says "the nine blue squares" out loud. No later verdict reads their
+ * colour, but the sentence has to be true.
+ */
+const RIG_SQUARES = 9;
+function rigPlan() {
+  const cmds = [];
+  cmds.push({ tool: "create_comp", args: { name: COMP, width: 1920,
+    height: 1080, duration: 6, frameRate: 30 } });
+  const names = [];
+  for (let i = 0; i < RIG_SQUARES; i++) {
+    const name = "Red Square " + (i + 1);
+    names.push(name);
+    cmds.push({ tool: "add_solid", args: { comp: COMP, name: name,
+      color: [0.1, 0.2, 0.9], width: 200, height: 200 } });
+    // A 3x3 grid placed by hand rather than by grid_layout: that tool
+    // adds a "GRID CTRL" solid and rig EXPRESSIONS, and a rig is only
+    // useful if it is the same every time and holds nothing the
+    // sentences do not name.
+    cmds.push({ tool: "set_transform", args: { comp: COMP, layer: name,
+      property: "position",
+      value: [700 + (i % 3) * 260, 280 + Math.floor(i / 3) * 260] } });
+    // Linear fade-in, staggered four frames — what "too mechanical" and
+    // "shouldn't fade in any more" are about. set_keyframes makes LINEAR
+    // keys, which is exactly the un-eased state the ease step must change.
+    const t0 = (i * 4) / 30;
+    cmds.push({ tool: "set_keyframes", args: { comp: COMP, layer: name,
+      property: "opacity",
+      keys: [{ time: t0, value: 0 }, { time: t0 + 1, value: 100 }] } });
+  }
+  cmds.push({ tool: "add_text_layer", args: { comp: COMP, text: "HELLO",
+    fontSize: 120, fillColor: [1, 1, 1], position: [960, 200] } });
+  // The oval the "take a mask off again" step removes. Without it that
+  // step can only report that there was nothing to prove.
+  cmds.push({ tool: "add_mask", args: { comp: COMP, layer: "HELLO",
+    shape: "ellipse", feather: 20 } });
+  cmds.push({ tool: "add_null", args: { comp: COMP, name: "Rig" } });
+  cmds.push({ tool: "set_layer_parent", args: { comp: COMP, layers: names,
+    parent: "Rig" } });
+  cmds.push({ tool: "set_transform", args: { comp: COMP, layer: "Rig",
+    property: "rotation", value: 15 } });
+  // Beta LAST, so it lands at index 1 — above HELLO, which is what
+  // "Beta is covering HELLO, tuck it underneath" needs to be true.
+  cmds.push({ tool: "add_solid", args: { comp: COMP, name: "Beta",
+    color: [1, 0.5, 0], width: 100, height: 100 } });
+  return cmds;
+}
+
+/* ExtendScript that builds the rig and hands back a per-command verdict.
+ * Failures are NAMED (tool + error), never swallowed: a rig that half
+ * built itself would fail the step for a reason that is not the model's,
+ * which is the exact class of lie this whole pass is about. */
+function rigScript() {
+  const cmds = rigPlan();
+  return "var out = AELL_callBatch(" +
+    JSON.stringify(JSON.stringify(cmds)) + ");" +
+    // AELL_callBatch answers {ok, data:{results:[...]}} — one envelope
+    // around the per-command results, not the bare array.
+    "var res = AELLJSON.parse(out);" +
+    "var plan = " + JSON.stringify(cmds.map(c => c.tool)) + ";" +
+    "if (!res || !res.ok) {" +
+    "  return { built: 0, failed: ['callBatch: ' +" +
+    "    ((res && res.error) || 'no answer')] };" +
+    "}" +
+    "var rows = (res.data && res.data.results) || [];" +
+    "var bad = [];" +
+    "for (var i = 0; i < plan.length; i++) {" +
+    "  var r = rows[i];" +
+    "  if (!r || !r.ok) {" +
+    "    bad.push(plan[i] + ': ' + ((r && r.error) || 'no result'));" +
+    "  }" +
+    "}" +
+    "return { built: plan.length, failed: bad };";
 }
 
 /* One compact string that changes whenever anything the user would SEE in
@@ -1124,14 +1281,50 @@ const STEPS = [
     }
   },
   {
+    // The sentence asks for four things and the check used to read one
+    // of them (does SOME text layer say HELLO). A 12px black HELLO at
+    // the bottom of the frame scored a pass — wrong-but-present, the
+    // failure class the 2026-08-30 audit named in steps 4, 5 and 6.
     title: "text layer",
     say: "Add a text layer to Probe Room that says HELLO, white, 120 " +
          "pixels, near the top of the frame.",
-    check(state) {
-      const t = state.layers.filter(l => l.isText);
-      if (!t.length) return "no text layer in the comp";
-      if (!t.some(l => /HELLO/i.test(l.text || ""))) {
-        return "text layers say " + JSON.stringify(t.map(l => l.text));
+    check(state, ctx) {
+      const all = state.layers.filter(l => l.isText);
+      if (!all.length) return "no text layer in the comp";
+      const t = all.filter(l => /HELLO/i.test(l.text || ""))[0];
+      if (!t) {
+        return "text layers say " + JSON.stringify(all.map(l => l.text));
+      }
+      const was = ctx && ctx.before
+        ? ctx.before.layers.filter(l => l.isText).length : null;
+      if (was !== null && all.length > was + 1) {
+        return (all.length - was) + " text layers were added for one " +
+               "sentence: " + JSON.stringify(all.map(l => l.name));
+      }
+      // 120 pixels. Read in its own right rather than inferred from the
+      // rendered rect, which a long word or a tracking change also moves.
+      if (typeof t.fontSize === "number" && Math.abs(t.fontSize - 120) > 6) {
+        return "HELLO is " + t.fontSize + "px, wanted 120";
+      }
+      // White. AE's default text fill is BLACK, so a model that never
+      // passed a colour through leaves [0,0,0] — the exact miss a
+      // "there is a text layer" check cannot see.
+      const c = t.fillColor;
+      if (c && !(c[0] > 0.85 && c[1] > 0.85 && c[2] > 0.85)) {
+        return "HELLO's fill is [" + c.map(v => v.toFixed(2)).join(", ") +
+               "], wanted white" +
+               (c[0] < 0.15 && c[1] < 0.15 && c[2] < 0.15
+                 ? " — that is AE's default black, so no colour was set"
+                 : "");
+      }
+      // Near the top: above the middle of the frame. Deliberately loose
+      // about HOW near — "near the top" is not a number — and strict
+      // about the half it is in, which is the half the sentence means.
+      const y = t.position && t.position[1];
+      if (typeof y === "number" && y > state.height / 2) {
+        return "HELLO sits at y " + Math.round(y) + " in a " +
+               state.height + "px comp — that is the bottom half, not " +
+               "near the top";
       }
       return null;
     }
@@ -1139,10 +1332,41 @@ const STEPS = [
   {
     title: "mask",
     say: "Put an oval mask on the HELLO layer and feather it 20 pixels.",
-    check(state) {
-      const t = state.layers.filter(l => l.isText);
-      if (!t.length) return "the HELLO layer is gone";
-      if (!t.some(l => l.masks > 0)) return "the text layer has no masks";
+    check(state, ctx) {
+      const t = textLayer(state);
+      if (!t) return "the HELLO layer is gone";
+      const was = ctx && ctx.before ? textLayer(ctx.before) : null;
+      const had = was ? was.masks : 0;
+      if (t.masks <= had) {
+        // A mask on the WRONG layer is the wrong-but-present case: the
+        // comp gained a mask, and nothing the sentence named did.
+        const elsewhere = state.layers.filter(l =>
+          !l.isText && l.masks > 0 &&
+          (!ctx || !ctx.before ||
+           l.masks > ((ctx.before.layers.filter(x => x.name === l.name)[0]
+             || {}).masks || 0)));
+        return "HELLO has " + t.masks + " mask(s)" +
+               (had ? ", the same as before the sentence" : "") +
+               (elsewhere.length
+                 ? " — the mask landed on " +
+                   elsewhere.map(l => l.name).join(", ") + " instead"
+                 : "");
+      }
+      const made = t.masks - had;
+      if (made > 1) return made + " masks were added for one oval";
+      const round = (t.maskRound || [])[t.masks - 1];
+      // An ellipse mask and a rectangle mask have the same bounding box;
+      // only the bezier tangents tell them apart (see READ_COMP). null
+      // means the shape could not be read, which is not a failure of the
+      // model — say so rather than scoring it either way.
+      if (round === false) {
+        return "the new mask on HELLO is a rectangle, not an oval";
+      }
+      const f = (t.maskFeather || [])[t.masks - 1];
+      if (typeof f === "number" && Math.abs(f - 20) > 1) {
+        return "the mask's feather is " + f + "px, wanted 20" +
+               (f === 0 ? " — it was never feathered at all" : "");
+      }
       return null;
     }
   },
@@ -1150,12 +1374,51 @@ const STEPS = [
     title: "track matte",
     say: "Add a white ellipse shape layer above the top square and use it " +
          "as an alpha track matte for that square.",
-    check(state) {
-      if (!state.layers.some(l => l.isShape)) {
-        return "no shape layer was created";
+    check(state, ctx) {
+      // The premise first, the way the later steps report a fixture that
+      // never landed. Measured 2026-09-02: when the grid step's round
+      // rolled back, the comp held no squares, the model matted HELLO
+      // instead — and blaming it for that reads as a routing failure it
+      // did not commit.
+      if (!nineSquares(state).length) {
+        return "there are no squares in " + COMP + " (the grid step must " +
+               "have failed), so there was nothing to matte";
+      }
+      const shapes = state.layers.filter(l => l.isShape);
+      if (!shapes.length) return "no shape layer was created";
+      const wasShapes = ctx && ctx.before
+        ? ctx.before.layers.filter(l => l.isShape).length : null;
+      if (wasShapes !== null && shapes.length <= wasShapes) {
+        return "there were already " + wasShapes + " shape layer(s) and " +
+               "no new one was added";
       }
       const matted = state.layers.filter(hasMatte);
       if (!matted.length) return "no layer has a track matte set";
+      // The half that was never checked: WHICH layer is matted, and BY
+      // what. "A shape layer exists" and "something somewhere has a
+      // matte" both passed while the shape matted nothing.
+      const square = matted.filter(l => nineSquares(state)
+        .some(s => s.name === l.name))[0];
+      if (!square) {
+        return "the matte is on " + matted.map(l => l.name).join(", ") +
+               " — the sentence mattes a SQUARE";
+      }
+      if (square.matteLayerKnown &&
+          !shapes.some(s => s.name === square.matteLayer)) {
+        return square.name + " is matted by " +
+               (square.matteLayer || "nothing readable") +
+               ", not by the new shape layer (" +
+               shapes.map(s => s.name).join(", ") + ")";
+      }
+      // ALPHA is 5013; 5014 is ALPHA INVERTED, which hides exactly the
+      // part the sentence asks to keep.
+      if (typeof square.matte === "number" && square.matte >= 5012 &&
+          square.matte !== 5013) {
+        const word = { 5014: "alpha inverted", 5015: "luma",
+                       5016: "luma inverted" }[square.matte] ||
+                     String(square.matte);
+        return square.name + "'s matte is " + word + ", not alpha";
+      }
       return null;
     }
   },
@@ -1212,6 +1475,10 @@ const STEPS = [
     // singular), and "instead" only means anything if the model knows
     // they are currently red. Nothing here names a layer.
     title: "a second turn that refers back",
+    // The ONE step that must keep the previous turn's history — the
+    // whole point of it is the pronoun. Every other step names what it
+    // is talking about, so every other step starts a fresh conversation.
+    carry: true,
     say: "Make them blue instead.",
     check(state, ctx) {
       const sq = squares(state);
@@ -1577,6 +1844,7 @@ const STEPS = [
     // inPoint/outPoint/startTime (seconds).") and no rule at all.
     // 'delay' is deliberately NOT in the rule's phrase list.
     title: "push a layer back on the timeline",
+    fromRig: true,
     tool: "set_layer_timing",
     say: "Beta shouldn't show up until two seconds in — delay it.",
     check(state, ctx) {
@@ -1603,6 +1871,7 @@ const STEPS = [
   },
   {
     title: "attach a layer to a null",
+    fromRig: true,
     tool: "set_layer_parent",
     say: "Make Beta tag along with the Rig null wherever it goes.",
     check(state) {
@@ -1626,6 +1895,7 @@ const STEPS = [
   },
   {
     title: "smooth a mechanical fade",
+    fromRig: true,
     tool: "apply_keyframe_ease",
     say: "The squares fade in too mechanically — make it feel smoother.",
     check(state, ctx) {
@@ -1667,6 +1937,7 @@ const STEPS = [
     // rendered rect — and the layer NOT jumping, which is what a raw
     // set_transform {anchorPoint} guess does.
     title: "fix a text layer's pivot",
+    fromRig: true,
     tool: "center_anchor_point",
     say: "HELLO swings around its corner when it rotates — make it turn " +
          "about its own centre.",
@@ -1702,6 +1973,7 @@ const STEPS = [
   },
   {
     title: "hide half a layer with a mask",
+    fromRig: true,
     tool: "add_mask",
     say: "Chop off the lower half of Beta so only the top shows.",
     check(state, ctx) {
@@ -1750,6 +2022,7 @@ const STEPS = [
   },
   {
     title: "take a mask off again",
+    fromRig: true,
     tool: "delete_mask",
     say: "Lose the oval mask on HELLO — it's not needed any more.",
     check(state, ctx) {
@@ -1773,6 +2046,7 @@ const STEPS = [
   },
   {
     title: "un-animate the squares",
+    fromRig: true,
     tool: "remove_keyframes",
     say: "The squares shouldn't fade in any more — just have them there " +
          "from the start.",
@@ -1810,6 +2084,7 @@ const STEPS = [
     // 'preset'. The receipt is what proves the route: an improvised
     // Glow + Drop Shadow also changes the layer.
     title: "give a layer a finished look",
+    fromRig: true,
     tool: "apply_preset",
     say: "Dress HELLO up a bit — it looks too plain.",
     check(state, ctx) {
@@ -1846,6 +2121,7 @@ const STEPS = [
   },
   {
     title: "keep a layer drifting",
+    fromRig: true,
     tool: "apply_expression_preset",
     say: "Give Beta a lazy, floaty hover so it never sits completely still.",
     check(state, ctx) {
@@ -1879,6 +2155,7 @@ const STEPS = [
     // relayed to the user — the branch below that reads the expression
     // runs the day someone drops an audio layer into the rig.
     title: "sync a layer to the music",
+    fromRig: true,
     tool: "audio_to_keyframes",
     say: "Make Beta throb in time with the music.",
     check(state, ctx) {
@@ -1939,6 +2216,7 @@ const STEPS = [
     // somewhere else — and move every other layer with it, which is the
     // half a naive "is Beta under HELLO now?" check never sees.
     title: "tuck one layer under another",
+    fromRig: true,
     tool: "reorder_layers",
     say: "Beta is covering HELLO — tuck it in underneath the text.",
     check(state, ctx) {
@@ -1981,6 +2259,7 @@ const STEPS = [
     // undone in step 10), so the blur is planted through the bridge
     // before the sentence — see runPrepare.
     title: "take an effect off a layer",
+    fromRig: true,
     tool: "remove_effect",
     prepare: "AELL_call(\"apply_effect\", " + JSON.stringify(JSON.stringify(
       { comp: COMP, layer: "Beta", effect: "Gaussian Blur" })) + ")",
@@ -2013,6 +2292,7 @@ const STEPS = [
   },
   {
     title: "show one layer through another",
+    fromRig: true,
     tool: "set_track_matte",
     say: "I want Beta to show only through the HELLO letters.",
     check(state, ctx) {
@@ -2042,6 +2322,7 @@ const STEPS = [
   },
   {
     title: "package layers into a precomp",
+    fromRig: true,
     tool: "precompose",
     say: "Bundle the nine blue squares into a single layer called Squares.",
     check(state, ctx) {
@@ -2080,6 +2361,7 @@ const STEPS = [
     // non-sequitur). No tool is named here on purpose: the right answer
     // to an unnamed mess is a question.
     title: "clean up means the comp, not the project",
+    fromRig: true,
     say: "Probe Room is a mess now — clean it up.",
     check(state, ctx) {
       if (!state.found) return "the comp is gone";
@@ -2212,6 +2494,110 @@ function main() {
     return;
   }
 
+  // --rig-check: build the rig in the REAL AE and check that everything
+  // the later sentences name is actually in the comp. No model, so it
+  // runs in seconds — and a rig that has quietly stopped building one of
+  // its fixtures is a step failing every night for a reason that is not
+  // the model's, which is the one thing an isolated run must not do.
+  if (OPT.rigCheck) {
+    aeRead(sweepScript(), function (swept) {
+      console.log("swept " + ((swept && swept.removed) || 0) + " item(s)");
+      aeRead(rigScript(), function (rig, rigErr) {
+        if (rigErr) { console.error("!! " + rigErr.message); process.exit(1); }
+        console.log("rig: " + rig.built + " commands, " +
+                    (rig.failed.length ? "FAILED — " + rig.failed.join("; ")
+                                       : "all ok"));
+        aeRead(READ_COMP, function (state, err) {
+          if (err) { console.error("!! " + err.message); process.exit(1); }
+          const bad = rig.failed.slice(0);
+          const fail = m => bad.push(m);
+          if (!state.found) fail("no comp called " + COMP);
+          else {
+            if (state.width !== 1920 || state.height !== 1080 ||
+                Math.abs(state.duration - 6) > 0.05 ||
+                Math.abs(state.frameRate - 30) > 0.01) {
+              fail("comp is " + state.width + "x" + state.height + ", " +
+                   state.duration + "s at " + state.frameRate);
+            }
+            const sq = nineSquares(state);
+            if (sq.length !== 9) fail(sq.length + " squares, wanted 9");
+            const xs = distinct(sq.map(l => l.position && l.position[0]), 4);
+            const ys = distinct(sq.map(l => l.position && l.position[1]), 4);
+            if (xs.length !== 3 || ys.length !== 3) {
+              fail("the squares are not a 3x3 grid (" + xs.length + "x" +
+                   ys.length + ")");
+            }
+            const keyed = sq.filter(l => l.opacityKeys >= 2);
+            if (keyed.length !== sq.length) {
+              fail(keyed.length + " of " + sq.length +
+                   " squares carry a fade");
+            }
+            if (sq.some(l => (l.opacityKeyEased || []).some(Boolean))) {
+              fail("a square's fade is already eased — the ease step " +
+                   "would have nothing to prove");
+            }
+            if (state.layers.some(l => /CTRL/i.test(l.name))) {
+              fail("a rig controller layer got into the comp");
+            }
+            const t = textLayer(state);
+            if (!t) fail("no HELLO layer");
+            else {
+              if (t.masks !== 1) fail("HELLO has " + t.masks + " mask(s)");
+              if (t.maskRound && t.maskRound[0] !== true) {
+                fail("HELLO's mask is not an oval (round=" +
+                     t.maskRound[0] + ")");
+              }
+              if (t.maskFeather && Math.abs(t.maskFeather[0] - 20) > 0.5) {
+                fail("HELLO's mask feather is " + t.maskFeather[0]);
+              }
+              if (t.fontSize !== null && Math.abs(t.fontSize - 120) > 1) {
+                fail("HELLO is " + t.fontSize + "px, wanted 120");
+              }
+              if (t.anchorPoint && t.anchorPoint[0] === undefined) {
+                fail("HELLO has no readable anchor point");
+              }
+            }
+            const rigN = rigNull(state);
+            if (!rigN) fail("no Rig null");
+            else {
+              if (Math.abs((rigN.rotation || 0) - 15) > 0.5) {
+                fail("the Rig null is rotated " + rigN.rotation);
+              }
+              const kids = state.layers.filter(l => l.parent === rigN.name);
+              if (kids.length !== 9) {
+                fail(kids.length + " layers are parented to the Rig null");
+              }
+            }
+            const b = betaLayer(state);
+            if (!b) fail("no Beta layer");
+            else {
+              if (b.layerWidth !== 100 || b.layerHeight !== 100) {
+                fail("Beta is " + b.layerWidth + "x" + b.layerHeight);
+              }
+              if (b.effects) fail("Beta already carries an effect");
+              if (b.masks) fail("Beta already carries a mask");
+              if (t && !(b.index < t.index)) {
+                fail("Beta is at index " + b.index + " and HELLO at " +
+                     t.index + " — Beta must start ABOVE the text");
+              }
+            }
+          }
+          for (const m of bad) console.log("FAIL " + m);
+          console.log(bad.length ? bad.length + " rig problem(s)"
+                                 : "rig OK — every fixture the later " +
+                                   "steps name is in the comp");
+          if (OPT.keep) { process.exit(bad.length ? 1 : 0); return; }
+          aeRead(sweepScript(), function (res2) {
+            console.log("cleanup: removed " +
+                        ((res2 && res2.removed) || 0) + " item(s)");
+            process.exit(bad.length ? 1 : 0);
+          });
+        });
+      });
+    });
+    return;
+  }
+
   const chosen = pickSteps();
   const rows = [];
 
@@ -2236,6 +2622,7 @@ function main() {
     const step = STEPS[idx];
     const mark = transcript.length;
     console.log("\n=== step " + (idx + 1) + ": " + step.title + " ===");
+    resetWorld(step, function () {
     // How the comp looked BEFORE the sentence: a step that refers back to
     // an earlier turn is judged on what changed, not on absolutes. A
     // fixture the step plants goes in first, so it is part of "before".
@@ -2307,6 +2694,43 @@ function main() {
       });
     });
     });
+    });
+  }
+
+  /*
+   * Everything a step is allowed to inherit, decided in one place.
+   *
+   * HISTORY resets by default (see the header): only a `carry` step, or
+   * --carry-history, keeps the previous sentence's conversation. A carry
+   * step whose predecessor did not run in this selection is SAID so —
+   * it will still be judged, but its pronoun has nothing behind it and
+   * the transcript must not read as though it did.
+   *
+   * The COMP resets only under --isolate, and only for a `fromRig` step:
+   * steps 1-14 build the world through the model on purpose, and that
+   * building IS their coverage.
+   */
+  function resetWorld(step, cb) {
+    if (!OPT.carryHistory && !step.carry) resetHistory();
+    else if (step.carry && !history.length) {
+      say("info", "this step refers back to the turn before it, and no " +
+          "earlier turn ran in this selection — its pronoun has nothing " +
+          "to resolve against");
+    }
+    if (!OPT.isolate || !step.fromRig) { cb(); return; }
+    aeRead(sweepScript(), function (swept) {
+      aeRead(rigScript(), function (rig, err) {
+        if (err) { say("error", "the rig could not be built: " + err.message); }
+        else if (rig && rig.failed && rig.failed.length) {
+          say("error", "the rig came up short — " + rig.failed.join("; "));
+        } else {
+          say("info", "rig rebuilt (" + ((swept && swept.removed) || 0) +
+              " item(s) swept, " + ((rig && rig.built) || 0) +
+              " commands)");
+        }
+        cb();
+      });
+    });
   }
 
   /** Press Undo until the comp matches `sigBefore`, never past our own work. */
@@ -2369,7 +2793,8 @@ if (require.main === module) {
   module.exports = { STEPS, squares, undoProbe, SIG_FN, READ_COMP,
                      bridgeWrapper, sweepImports, samePath, rememberGenerated,
                      generated, runPrepare, sweepScript, rememberPrecomp,
-                     precomps, toolEntry,
+                     precomps, toolEntry, rigPlan, rigScript, resetHistory,
+                     COMP, textLayer, betaLayer, rigNull, nineSquares,
                      // For scripts/context-budget-probe.js: the REAL round
                      // loop, the REAL panel modules and the REAL AE bridge,
                      // so the context measurements are taken on the product
