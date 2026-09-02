@@ -405,9 +405,46 @@ var AELL_TRANSFORM_MAP = {
   anchorPoint: "ADBE Anchor Point"
 };
 
+/*
+ * A bare "Missing 'property'" is the one refusal in this file that told
+ * the model NOTHING — no list of what it could have said, no sign of
+ * what this layer actually carries. Measured with the real model
+ * (chat-probe step 23, all four phrasings): every run omitted
+ * 'property' on its first apply_expression_preset, half of them gave up
+ * on the bare error, and one lost the whole round to a rollback and
+ * re-sent everything EXCEPT the call that failed. Grounded errors are
+ * how the small local model self-corrects (CLAUDE.md), so this one
+ * lists the transform names, the layer's own effects (the only way to
+ * spell effect.<Effect>.<Param> correctly) and which properties are
+ * already keyframed — the answer the loop_* presets need.
+ */
+function AELL_missingProperty(layer, why) {
+  var msg = "Missing 'property'" + (why ? " — " + why : "") + ". On '" +
+    layer.name + "' it can be position, scale, rotation, opacity or " +
+    "anchorPoint";
+  var fx = AELL_effectNames(layer);
+  if (fx.length) {
+    msg += ", or effect.<Effect>.<Param> using this layer's effects: " +
+      AELL_capJoin(fx, 8);
+  }
+  var keyed = [], name;
+  for (name in AELL_TRANSFORM_MAP) {
+    if (!AELL_TRANSFORM_MAP.hasOwnProperty(name)) continue;
+    try {
+      var grp = layer.property("ADBE Transform Group");
+      var p = grp ? grp.property(AELL_TRANSFORM_MAP[name]) : null;
+      if (p && p.numKeys > 0) keyed.push(name);
+    } catch (eK) {}
+  }
+  if (keyed.length) {
+    msg += ". Already keyframed here: " + keyed.join(", ");
+  }
+  return msg + ".";
+}
+
 /* Resolve "position" | "scale" | ... | "effect.<Effect>.<Param>" */
 function AELL_resolveProperty(layer, spec) {
-  if (!spec) throw new Error("Missing 'property'");
+  if (!spec) throw new Error(AELL_missingProperty(layer, ""));
   spec = String(spec);
   if (AELL_TRANSFORM_MAP[spec]) {
     var grp = layer.property("ADBE Transform Group");
@@ -4377,6 +4414,22 @@ AELL_TOOLS.grid_layout = function (args) {
 AELL_TOOLS.apply_expression_preset = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var layer = AELL_resolveLayer(comp, args.layer);
+  // The preset the caller already chose says which property it MEANT,
+  // so the refusal can say it too instead of listing five and shrugging.
+  if (!args.property) {
+    var p0 = String(args.preset || "").toLowerCase();
+    var why = "";
+    if (p0 === "wiggle") {
+      why = "wiggle needs the property to wiggle — 'position' is the " +
+            "drift/float/hover one, rotation a sway, opacity a flicker";
+    } else if (p0.substring(0, 5) === "loop_") {
+      why = "a loop preset needs the property that HAS the keyframes";
+    } else if (p0 === "time_linear") {
+      why = "time_linear needs a scalar property (rotation, opacity, a " +
+            "slider)";
+    }
+    return AELL_err(AELL_missingProperty(layer, why));
+  }
   var prop = AELL_resolveProperty(layer, args.property);
   if (!prop.canSetExpression) {
     return AELL_err("Property cannot take an expression: " + args.property);
@@ -9396,7 +9449,7 @@ function AELL_descendReported(prop) {
 function AELL_anyProperty(layer, spec) {
   AELL_lastResolve = null;
   var s = String(spec || "");
-  if (s === "") throw new Error("Missing 'property'");
+  if (s === "") throw new Error(AELL_missingProperty(layer, ""));
   if (s.indexOf("/") !== -1) {
     try {
       return AELL_descendToLeaf(AELL_resolvePropPath(layer, s));

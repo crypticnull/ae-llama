@@ -831,6 +831,56 @@ assert(!r.ok && /link_property/.test(r.error),
        "time_linear refuses an ARRAY property with a route out: " + r.error);
 call("set_expression", { layer: "A", property: "position", expression: "" });
 
+// A missing 'property' was the one refusal in the host that told the
+// model NOTHING back: the string "Missing 'property'", no list of what
+// it could have said, no sign of what this layer carries. Measured with
+// the real model (chat-probe step 23, all four phrasings of "keep it
+// drifting"): every run omitted 'property' on its first
+// apply_expression_preset, two gave up on the bare error, and one lost
+// the whole round to a rollback and then re-sent every command EXCEPT
+// the one that had failed — leaving a null rig wired to Beta and no
+// wiggle anywhere. Grounded errors are how the small local model
+// self-corrects (CLAUDE.md), so the refusal now names the transform
+// words, the layer's OWN effects (the only way to spell
+// effect.<Effect>.<Param>) and whatever is already keyframed.
+r = call("apply_expression_preset", { layer: "A", preset: "wiggle" });
+assert(!r.ok && /Missing 'property'/.test(r.error) &&
+       /position, scale, rotation, opacity or anchorPoint/.test(r.error),
+       "a missing 'property' lists the transform words: " + r.error);
+assert(!r.ok && /'position' is the drift\/float\/hover one/.test(r.error),
+       "…and the wiggle preset says which one it meant: " + r.error);
+assert(/effect\.<Effect>\.<Param>[\s\S]{0,60}Gaussian Blur/.test(r.error),
+       "…and the layer's real effects, so the effect form is spellable: " +
+       r.error);
+assert(A.property("Transform").property("Position").expression === "",
+       "…and nothing was applied");
+r = call("apply_expression_preset", { layer: "A", preset: "loop_cycle" });
+assert(!r.ok && /the property that HAS the keyframes/.test(r.error),
+       "a loop preset asks for the keyframed property instead: " + r.error);
+r = call("apply_expression_preset", { layer: "A", preset: "time_linear" });
+assert(!r.ok && /scalar property/.test(r.error),
+       "time_linear asks for a scalar one: " + r.error);
+// The keyed half is what a loop_* caller actually needs, so it has to be
+// read off the layer rather than guessed.
+call("add_keyframe", { layer: "A", property: "rotation", time: 0, value: 0 });
+r = call("apply_expression_preset", { layer: "A", preset: "loop_cycle" });
+assert(!r.ok && /Already keyframed here: rotation/.test(r.error),
+       "…and the refusal names the property that has keys: " + r.error);
+call("remove_keyframes", { layer: "A", property: "rotation" });
+r = call("apply_expression_preset", { layer: "A", preset: "loop_cycle" });
+assert(!r.ok && !/Already keyframed/.test(r.error),
+       "…and stops saying so once the keys are gone: " + r.error);
+// Every tool that resolves a property shares the refusal, including the
+// path-aware resolver behind set_expression / get_property.
+r = call("set_expression", { layer: "A", expression: "wiggle(2, 30)" });
+assert(!r.ok && /Missing 'property'/.test(r.error) &&
+       /position, scale, rotation, opacity or anchorPoint/.test(r.error),
+       "the path-aware resolver grounds it too: " + r.error);
+r = call("get_property", { layer: "A" });
+assert(!r.ok && /Missing 'property'/.test(r.error) &&
+       /On 'A'/.test(r.error),
+       "…and it names the layer it is talking about: " + r.error);
+
 // add_keyframe / remove_keyframes: the 50 ms nearest-key tolerance is the
 // whole contract of removing BY TIME, and nothing tested it.
 r = call("add_keyframe", { layer: "B", property: "rotation", value: 45 });

@@ -261,8 +261,7 @@
             "amplitude as numbers OR freqControl/ampControl {layer, effect} " +
             "to drive from sliders), loop_cycle, loop_pingpong, loop_offset " +
             "(need keyframes), time_linear (scalar props; rate or rateControl). " +
-            "'keep it drifting' = wiggle on position (slow drift = " +
-            "frequency 0.5, amplitude 20).",
+            "'keep it drifting' = wiggle on position (slow: frequency 0.5).",
       args: "{comp?: string, layer: name|index, property: string, preset: string, frequency?: n, amplitude?: n, rate?: n, freqControl?: {layer, effect}, ampControl?: {layer, effect}, rateControl?: {layer, effect}}" },
     { name: "set_expression", mutating: true,
       desc: "LAST RESORT: set a raw expression (or clear with ''). Prefer " +
@@ -926,8 +925,9 @@
       "  cleared with set_expression {expression: ''} — remove_keyframes",
       "  reports removed: 0 there, not success.",
       "- 'keep it drifting / floating / hovering / jittering' =",
-      "  apply_expression_preset wiggle; 'bouncing back and forth / keep",
-      "  it looping' = loop_pingpong / loop_cycle. Never set_expression.",
+      "  apply_expression_preset {preset: 'wiggle', property: 'position'}",
+      "  on THAT layer, never a null; 'bouncing back and forth / keep it",
+      "  looping' = loop_pingpong / loop_cycle. Never set_expression.",
       "- 'show the video through the text / cut the logo out of the",
       "  footage / X only visible through Y' = set_track_matte {layer:",
       "  X (the footage being cut), matteLayer: Y (the text/logo), mode:",

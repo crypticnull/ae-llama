@@ -3775,6 +3775,28 @@
                  "ungrounded: " + err;
         } },
 
+      // The refusal that used to be the bare string "Missing 'property'".
+      // With the real model it was the most-hit error in the whole tool
+      // suite (chat-probe step 23: all four phrasings omitted the arg),
+      // and it handed back nothing to correct with.
+      { name: "a missing 'property' names the wiggle target AND the effects",
+        tool: "apply_expression_preset",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box", preset: "wiggle" };
+        },
+        check: function (err) {
+          if (err.indexOf("'position' is the drift/float/hover one") === -1) {
+            return "does not say which property wiggle meant: " + err;
+          }
+          if (err.indexOf("position, scale, rotation, opacity or " +
+                          "anchorPoint") === -1) {
+            return "does not list the transform words: " + err;
+          }
+          return err.indexOf("ST Cov Amp") !== -1 ||
+                 "does not list the layer's own effects: " + err;
+        } },
+
       { name: "add_keyframe stacks three keys and counts them",
         batch: function (ctx) {
           return [
@@ -3797,6 +3819,23 @@
             }
           }
           return true;
+        } },
+
+      // Three rotation keys exist now, which is the half of the refusal
+      // a loop_* caller actually needs: WHICH property carries keys.
+      { name: "…and for a loop preset it names the keyframed property",
+        tool: "apply_expression_preset",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.cvComp, layer: "ST Cov Box",
+                   preset: "loop_cycle" };
+        },
+        check: function (err) {
+          if (err.indexOf("the property that HAS the keyframes") === -1) {
+            return "does not ask for the keyframed property: " + err;
+          }
+          return err.indexOf("Already keyframed here: rotation") !== -1 ||
+                 "does not name the property that has keys: " + err;
         } },
 
       { name: "add_keyframe without a time is refused",

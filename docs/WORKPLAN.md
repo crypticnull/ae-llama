@@ -1743,7 +1743,20 @@ this order, one bullet per pass:
   dependencies get ONE tool-doc/system-prompt change per pass (so a
   regression is attributable), re-run to show the flip, patch bump.
   Watch the 6KB prompt budget — measure buildSystemPrompt size
-  before/after every rule addition.
+  before/after every rule addition. **In flight, one row per pass:**
+  - ~~row 23 "keep it drifting" (was 1 miss + 1 HARM of 4)~~ DONE
+    2026-09-02 (0.11.10). The rig was the second-order failure: ALL
+    FOUR phrasings omitted `property` and hit the bare, ungrounded
+    `Missing 'property'`, which is what the canonical gave up on and
+    what took the typo run's whole round down in a rollback. Grounded
+    now (`AELL_missingProperty`: the transform words, the layer's own
+    effects, what is already keyframed), plus ONE rules bullet that
+    carries `property: 'position'` and "on THAT layer, never a null".
+    **4 pass, 0 miss, 0 HARM**, every run a single first-shot call.
+    Prompt full 58910 -> 58953 (ceiling 59000 — the next addition needs
+    a real cut). Harness 576 -> 578.
+  - NEXT: row 19's canonical, "Chop off the lower half of Beta" ->
+    `set_layer_timing`. One doc phrase, one re-run.
 - **DEFERRED until a sandbox design exists:** D/F/H3 rows (project
   mutation, renders, mass-delete) — wiring them against the live
   project is the harm the whitelist cannot contain. Also deferred:

@@ -3344,6 +3344,41 @@ function cannedOk(tool, args) {
     }
     case "apply_expression_preset": {
       const p = String((args && args.preset) || "").toLowerCase();
+      // A missing 'property' is the host's most-hit refusal with the real
+      // model, and it has to hand back what the layer actually carries —
+      // the transform words, this layer's effects (the only way to spell
+      // effect.<Effect>.<Param>) and whatever already has keyframes.
+      if (!(args && args.property)) {
+        let why = "";
+        if (p === "wiggle") {
+          why = " — wiggle needs the property to wiggle — 'position' is " +
+                "the drift/float/hover one, rotation a sway, opacity a " +
+                "flicker";
+        } else if (p.slice(0, 5) === "loop_") {
+          why = " — a loop preset needs the property that HAS the keyframes";
+        } else if (p === "time_linear") {
+          why = " — time_linear needs a scalar property (rotation, " +
+                "opacity, a slider)";
+        }
+        const L = String((args && args.layer) || "");
+        let msg = "Missing 'property'" + why + ". On '" + L + "' it can " +
+          "be position, scale, rotation, opacity or anchorPoint";
+        const parade = Object.keys(cvControls)
+          .filter(k => k.indexOf(L + "/") === 0)
+          .map(k => k.slice(L.length + 1))
+          .concat(cvFx[L] || []);
+        if (parade.length) {
+          msg += ", or effect.<Effect>.<Param> using this layer's " +
+            "effects: " + parade.join(", ");
+        }
+        const keyed = ["position", "scale", "rotation", "opacity",
+                       "anchorPoint"].filter(
+          n => (cvKeys[L + "/" + n.toLowerCase()] || []).length > 0);
+        if (keyed.length) {
+          msg += ". Already keyframed here: " + keyed.join(", ");
+        }
+        return { __err: msg + "." };
+      }
       if (EXPR_PRESETS.indexOf(p) === -1) {
         return { __err: "Unknown preset '" + (args && args.preset) +
                  "'. Available: " + EXPR_PRESETS.join(", ") };

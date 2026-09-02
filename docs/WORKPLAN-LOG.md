@@ -12227,3 +12227,171 @@ claim, measured rather than asserted.
     (harness plan step 6).
 
 Nothing was left unattempted this pass. Nothing is blocked.
+
+## 2026-09-02 (local session, real AE) — the filed #1: "keep it drifting" built a control rig, because the refusal it hit said nothing (0.11.10)
+
+Item: WORKPLAN 8, "report, don't fix" bullet — the top entry of the
+previous pass's filed list: **"keep it drifting" builds a control rig
+instead of wiggling the layer** (3 of 3 paraphrases HARM, canonical
+passes). Harness was green first (576/576), so the pass was the item,
+not a repair.
+
+### The baseline re-run said something different — and better
+
+`node scripts/chat-probe.js --variants --steps 23`, before any change:
+
+    canonical  "…a lazy, floaty hover so it never sits completely still"  miss
+    casual     "Beta shouldn't be dead still — give it a slow idle wander" pass
+    vague      "Beta feels frozen, make it breathe a little"               pass
+    typo       "put a slow wigle on beta so it keeps moviing"              HARM
+
+Not the 3/3-rig picture the filing described, and the difference is the
+whole finding: **all four runs called `apply_expression_preset` with no
+`property` at all**, and the host answered with the bare string
+
+    Missing 'property'
+
+No list of what it could have said, no sign of what the layer carries —
+the one refusal in `hostscript.jsx` that handed the model nothing to
+correct with. What each phrasing did with that emptiness is the spread:
+
+- **canonical** gave up on it and stopped. A miss, not a rig.
+- **casual / vague** guessed `position` on the retry and passed — two
+  round trips to reach a one-call answer.
+- **typo** had wrapped the preset in a null rig (`add_null` +
+  `add_control` + `link_property`), so the failed call took the WHOLE
+  round down with it (the rollback gate doing its job), and the model
+  then re-sent every command **except the one that had failed** —
+  leaving "Beta Wiggle Null" in the comp, Beta's position linked to a
+  slider, Beta moved to [50,50], twelve layers restacked, and no wiggle
+  anywhere. HARM.
+
+So the rig was real, but it was the second-order failure. The first-order
+one was an ungrounded error, and CLAUDE.md names that class exactly:
+*every failed lookup must list what actually exists — it is how the
+small local model self-corrects.*
+
+### The fix, at the root
+
+`AELL_missingProperty(layer, why)` in `extension/jsx/hostscript.jsx`:
+one grounded refusal shared by both resolvers (`AELL_resolveProperty`
+and the path-aware `AELL_anyProperty`, so `set_expression`,
+`get_property`, `set_property`, `apply_keyframe_ease` … all inherit it).
+It names three things the model cannot otherwise know:
+
+- the transform words (position, scale, rotation, opacity, anchorPoint);
+- **this layer's own effects**, capped at 8 — the only way to spell
+  `effect.<Effect>.<Param>` correctly;
+- **which properties are already keyframed** — the half a `loop_*`
+  caller actually needs.
+
+`apply_expression_preset` adds the sentence its own preset already
+implies, before resolving anything: wiggle says *"'position' is the
+drift/float/hover one, rotation a sway, opacity a flicker"*, `loop_*`
+says *"needs the property that HAS the keyframes"*, `time_linear` asks
+for a scalar. The preset the caller chose was always evidence of what it
+meant; the refusal just never used it.
+
+### The ONE prompt change (section 8's rule), and what paid for it
+
+The rig half is a wording dependency, so exactly one rules bullet moved:
+
+    - 'keep it drifting / floating / hovering / jittering' =
+      apply_expression_preset {preset: 'wiggle', property: 'position'}
+      on THAT layer, never a null; 'bouncing back and forth / keep it
+      looping' = loop_pingpong / loop_cycle. Never set_expression.
+
+It now carries the arg the model kept omitting AND the target
+discipline. Paid for by shortening `apply_expression_preset`'s doc
+sentence (the phrase list belongs to the rules; the doc keeps its one
+representative phrase, which `tests/test-chat-probe.js` enforces both
+ways). Measured with `buildSystemPrompt`:
+
+    full     58910 -> 58953 chars   (ceiling 59000, still under)
+    compact  39131 -> 39195 chars   (the rules block is never compacted)
+
+### The flip, measured in real AE with the real model
+
+`node scripts/chat-probe.js --variants --steps 23`, after:
+
+    canonical  pass   casual  pass   vague  pass   typo  pass
+    4 pass, 0 miss, 0 HARM — "acceptance met"
+
+Every one of the four is now a **single first-shot call** with
+`property: "position"` on Beta — no missing-arg error anywhere in the
+run, no null, no rollback, no rig. Transcripts
+`logs\chat-probe-2026-09-02T08-57-38.md` (before) and `...T09-09-23.md`
+(after). Regression check on the drift-adjacent rows, `--isolate --steps
+16,21,24` (attach to a null / un-animate / sync to the music): **3/3**,
+including the honest audio refusal.
+
+### Verification
+
+- **Real AE harness: 578/578 PASSED** (576 -> 578). The two new steps
+  are in `extension/js/selftest.js`, so the panel's Settings button
+  gets them too: the wiggle refusal must name `'position'` AND the
+  layer's real effects, and — placed after the three rotation keys
+  exist — the `loop_cycle` refusal must say *"Already keyframed here:
+  rotation"*. Both are real-AE reads of `numKeys` and the Effect
+  Parade, not stub arithmetic.
+- `tests/test-property-access.js` +50 lines: the bare-refusal bug class
+  is now caught without AE, on both resolvers, including that the keyed
+  list appears when keys exist and **disappears when they are removed**
+  (a hard-coded string would pass the first and fail the second).
+- `tests/test-self-test.js`'s canned host mirrors the refusal from its
+  own state (controls + `cvFx` + `cvKeys`), so the stub cannot agree
+  with a host that stopped grounding.
+- Full stub sweep: **66/67**, the odd one out the known environmental
+  `tests/test-comfy-backend.js` (unchanged, still not mine).
+- `node tests/test-es3-ternary.js` green; `node
+  scripts/capability-report.js` regenerated (the doc sentence changed)
+  and `--check` says fresh.
+- Bumped to **0.11.10**: `extension/` changed.
+
+### Filed for later passes, in priority order
+
+1. **Step 19's canonical still misses: "Chop off the lower half of Beta"
+   routes to `set_layer_timing`** — unchanged, and now the highest row
+   left: "chop off" reads as trimming a layer's duration, not as
+   masking. One doc phrase, one re-run.
+2. **New rig-based steps for the A/B/C/E rows with no twin** (A1, A2,
+   B1, C1, C2, E1, E2) — unchanged.
+3. **"clean up this comp" still lands somewhere destructive** —
+   unchanged.
+4. **Step 17's "cheap"/"feels stiff" vocabulary** reaches
+   `stagger_layers`/`distribute_property` rather than
+   `apply_keyframe_ease` — unchanged.
+5. **`property: string` is the vaguest args line in TOOL_DEFS.** New,
+   and the sibling of tonight's fix: every other tool spells the arg out
+   (`transform name or 'effect.<EffectName>.<ParamName>'`) and
+   `apply_expression_preset` says `string`. The args line is never
+   compacted, so it is the one place a fix reaches a 16K window for
+   certain — but it costs ~49 chars against 47 of remaining ceiling, so
+   it needs a cut found first. Not urgent now that the refusal grounds
+   itself, which is why it is filed rather than done.
+6. **The full prompt is 47 chars under its 59000 ceiling.** New. The
+   next rules addition of any size needs a real cut, not a trim; worth
+   a deliberate pass over the rules block for duplication (the
+   "Known-good forms if you must write one" list sits directly under
+   "NEVER write expression code yourself").
+7. **Ask the SERVER for the two numbers** (`POST /tokenize`,
+   `GET /props`) — unchanged, still no live symptom.
+8. **`comfyUrl` is 8188, ComfyUI answers on 8000** on this machine —
+   one line in `%APPDATA%\AE-Llama\settings.json`.
+9. **Step 2 flakes on layer naming** — `duplicate_layer`'s numbering
+   starts at 2, so "Red Square 1" never exists; one doc sentence.
+10. **The harness cannot answer "Crash Repair Options"** — unchanged.
+11. **`starved` may now be too generous a word** — unchanged.
+12. **delete_mask could warn when an expression still points at the
+    mask** — unchanged.
+13. **A controller GROUP has never been measured**, nor any locale but
+    en_US — unchanged.
+14. **`capParams` is a second, independent roster inside the same
+    .mogrt** — unchanged.
+15. **`set_mask_path` takes vertices with no layer-box check at all** —
+    unchanged.
+16. **Still owed, needs a human awake:** drop
+    `logs\mogrt-verify\AELL Probe Card.mogrt` into real Premiere
+    (harness plan step 6).
+
+Nothing was left unattempted this pass. Nothing is blocked.

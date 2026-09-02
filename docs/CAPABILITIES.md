@@ -31,7 +31,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `add_text_layer` | Add a text layer to a comp | yes | host | 1 | 8 |
 | `add_to_render_queue` | Add a comp to the render queue WITHOUT rendering it | yes | host | 1 | 3 |
 | `apply_effect` | Apply an effect to a layer | yes | host | 1 | 9 |
-| `apply_expression_preset` | Apply a known-good expression | yes | host | 1 | 3 |
+| `apply_expression_preset` | Apply a known-good expression | yes | host | 1 | 5 |
 | `apply_keyframe_ease` | Apply a bezier as TEMPORAL easing between keyframes on one property across MANY layers in ONE call (converts to AE speed/influence ease) | yes | host | 1 | 3 |
 | `apply_preset` | Apply an installed .ffx animation preset to layer(s) | yes | host | 1 | 5 |
 | `audio_to_keyframes` | Convert audio amplitude to keyframes: adds a null carrying Left/Right/Both Channels sliders keyframed to the loudness, one key per frame | yes | host | 1 | 11 |
