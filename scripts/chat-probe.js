@@ -20,7 +20,17 @@
  *   node scripts/chat-probe.js                  # every step
  *   node scripts/chat-probe.js --steps 2,3      # a subset (1-based)
  *   node scripts/chat-probe.js --model <gguf>   # override the model
+ *   node scripts/chat-probe.js --ctx 32768      # override the window
  *   node scripts/chat-probe.js --keep           # do not delete the comp
+ *
+ * `--ctx` is what makes the compact-vs-full ROUTING comparison possible:
+ * the panel chooses its tool-doc form from the window alone
+ * (Tools.promptModeFor — compact below 24576), so the only honest way to
+ * run the same sentences against the full docs is to run them at a
+ * window the panel would call big. It patches the CACHED settings object
+ * in memory only, never settings.json, for the same reason
+ * applyStepSettings does: a probe must not be able to reconfigure the
+ * product it is measuring.
  *
  * Writes a markdown transcript to logs/ and exits 0 only if every step
  * met its verdict. Needs After Effects running with "Allow Scripts to
@@ -52,6 +62,7 @@ function argValue(name) {
 const OPT = {
   steps: argValue("--steps"),
   model: argValue("--model"),
+  ctx: argValue("--ctx"),
   keep: argv.indexOf("--keep") !== -1,
   afterFX: argValue("--afterfx"),
   reuseServer: argv.indexOf("--reuse-server") !== -1,
@@ -295,6 +306,20 @@ const Tools = window.Tools;
 const Comfy = window.Comfy;
 
 /*
+ * --ctx: in-memory only (see the header). Applied here, before the first
+ * prompt is built and before the server is started, so llama-server is
+ * launched with the same -c the prompt was sized for.
+ */
+if (OPT.ctx) {
+  const want = parseInt(OPT.ctx, 10);
+  if (!(want > 0)) {
+    console.error("--ctx wants a positive integer, got " + OPT.ctx);
+    process.exit(2);
+  }
+  Settings.get().ctxSize = want;
+}
+
+/*
  * A step that has to impersonate different hardware (`settings: {...}` on
  * the step) gets it for the length of its own sentence and no longer.
  *
@@ -415,6 +440,36 @@ function rememberGenerated(tool, result) {
 // the byte-slicer for as long as main.js did.
 function compactToolResults(results) {
   return Tools.compactToolResults(results);
+}
+
+/**
+ * One command's record in `round.tools` — the ONLY thing a step's
+ * `check` can see about what the model did (`calls(ctx, name)` reads
+ * this array).
+ *
+ * A rolled-back command used to be skipped entirely, and that made a
+ * whole round invisible: the "sync to the music" step, whose expected
+ * outcome IS a grounded refusal on a silent rig, reported "the model
+ * never reached audio_to_keyframes and ran no tools at all" about a
+ * round in which the model reached exactly audio_to_keyframes and
+ * relayed exactly the refusal. Whether a failing round rolls back
+ * depends on what ELSE the model emitted beside the failing command, so
+ * the same behaviour scored pass in one run and FAIL in the next — noise
+ * indistinguishable from a real routing regression in any comparison
+ * built on these transcripts.
+ *
+ * `ok` stays false and `data` stays null for a rolled-back command:
+ * nothing was applied, so nothing may be scored as applied. Only the
+ * ATTEMPT becomes visible.
+ */
+function toolEntry(cmd, result) {
+  const back = !!result.rolledBack;
+  return { tool: cmd.tool, args: cmd.args || {},
+           ok: !back && !!result.ok,
+           data: back ? null : (result.data || null),
+           rolledBack: back,
+           error: back ? (result.error || "rolled back with the round")
+                       : (result.error || null) };
 }
 
 function sendMessage(text, done) {
@@ -549,11 +604,14 @@ function sendMessage(text, done) {
                 rollbackBudget--;
               }
               round.rolledBack++;
+              // ...but still RECORD it — see toolEntry().
+              round.tools.push(toolEntry(cmd, result));
+              say("error", "ROLLED BACK: " + String(result.error ||
+                    result.note || "the round was undone").slice(0, 200),
+                  head);
               return;
             }
-            round.tools.push({ tool: cmd.tool, args: cmd.args || {},
-                               ok: !!result.ok, data: result.data || null,
-                               error: result.error || null });
+            round.tools.push(toolEntry(cmd, result));
             rememberGenerated(cmd.tool, result);
             rememberPrecomp(cmd.tool, result);
             const body = result.ok
@@ -2067,7 +2125,8 @@ function startModel(cb) {
   const modelPath = OPT.model || s.modelPath;
   console.log("-- model:   " + modelPath);
   console.log("-- ctx:     " + s.ctxSize + ", maxRounds " + s.maxRounds +
-              ", temp " + s.temperature);
+              ", temp " + s.temperature + ", tool docs " +
+              (Tools.promptModeFor(s.ctxSize).compact ? "COMPACT" : "FULL"));
   Llama.on("status", function (state, detail) {
     if (state === "error") console.log("!! llama: " + detail);
   });
@@ -2108,7 +2167,10 @@ function writeTranscript(rows) {
   const out = ["# chat probe " + stamp, "",
     "- model: `" + (OPT.model || s.modelPath) + "`",
     "- ctx " + s.ctxSize + ", temperature " + s.temperature +
-      ", maxRounds " + s.maxRounds, ""];
+      ", maxRounds " + s.maxRounds,
+    "- tool docs: " +
+      (Tools.promptModeFor(s.ctxSize).compact ? "COMPACT" : "FULL") +
+      " (Tools.promptModeFor)", ""];
   for (const row of rows) {
     out.push("## " + (row.index + 1) + ". " + row.title +
              " — " + (row.verdict ? "FAIL" : "pass"));
@@ -2307,7 +2369,7 @@ if (require.main === module) {
   module.exports = { STEPS, squares, undoProbe, SIG_FN, READ_COMP,
                      bridgeWrapper, sweepImports, samePath, rememberGenerated,
                      generated, runPrepare, sweepScript, rememberPrecomp,
-                     precomps,
+                     precomps, toolEntry,
                      // For scripts/context-budget-probe.js: the REAL round
                      // loop, the REAL panel modules and the REAL AE bridge,
                      // so the context measurements are taken on the product

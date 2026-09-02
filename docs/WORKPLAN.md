@@ -253,11 +253,20 @@ one push. One pass per bullet:
   assertions go red on the old values. The ledger measurement passed end
   to end (ten naming turns, then "make them blue instead" answered with
   all ten names). T7 answered NO: at ctx 32768 the 32B leaves 850 MiB on
-  a 32607 MiB card with ComfyUI holding nothing. STILL OPEN — the
-  compact-vs-full ROUTING comparison, which needs its own pass (two runs
-  per mode; a single-run per-step miss at temperature 0.7 is noise). Per
-  step verdicts and numbers in `docs/WORKPLAN-LOG.md`. The original
-  instruction, for reference:
+  a 32607 MiB card with ComfyUI holding nothing. Per step verdicts and
+  numbers in `docs/WORKPLAN-LOG.md`. **The compact-vs-full ROUTING
+  comparison is now DONE 2026-09-02 (UNBUMPED — nothing in extension/
+  changed): compacting the tool docs costs NO routing. Four runs (two
+  per mode, `scripts/chat-probe.js --ctx 32768` for the full form)
+  scored 24 of 26 steps identically; compact 24/26 and 25/26, full
+  25/26 and 24/26. The one step that differed failed once in EACH mode,
+  so it is temperature noise, not a lost sentence — no doc change was
+  owed and none was made. New re-runnable comparator:
+  `scripts/routing-compare.js`. It also settled the standing "clean up
+  this comp" miss: that step failed in ALL FOUR runs, so it is
+  unconditional, NOT a compaction casualty — the full doc's "PROJECT
+  PANEL only" sentence and the never-compacted rule both say it and the
+  model does it anyway.** The original instruction, for reference:
 - **Context budget + ledger (roadmap 13, shipped remote 2026-09-01
   evening, UNBUMPED, rides the same bump).** Three measurements, then
   the probe: (1) ask the running llama-server `/tokenize` for the REAL

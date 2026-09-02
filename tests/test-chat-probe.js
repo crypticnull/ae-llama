@@ -2082,6 +2082,76 @@ for (const name of ["reorder_layers", "remove_effect", "delete_mask",
          shortest.name + " now, " + shortest.desc.length + " chars)");
 }
 
+// ------------------------------------------- a rolled-back round is EVIDENCE
+//
+// Measured 2026-09-02, real AE + the real 32B, doing the compact-vs-full
+// routing comparison: the "sync to the music" step scored FAIL in one
+// run and pass in the next on IDENTICAL model behaviour. Both times the
+// model called audio_to_keyframes, the host refused it with the grounded
+// "no layer has audio", and the model relayed that refusal. The only
+// difference was whether the round ROLLED BACK — and the probe used to
+// `return` before recording a rolled-back command, so its whole round
+// was invisible to the step's check, which then said "the model never
+// reached audio_to_keyframes and ran no tools at all".
+//
+// A verdict that flips on something the model did not do is worse than
+// no verdict: in a comparison between two prompt forms it is
+// indistinguishable from a routing regression.
+{
+  const cmd = { tool: "audio_to_keyframes", args: { comp: "Probe Room" } };
+  const back = probe.toolEntry(cmd,
+    { ok: false, rolledBack: true,
+      error: "No layer in 'Probe Room' has audio, and AE's converter " +
+             "would silently do nothing." });
+  assert(back.tool === "audio_to_keyframes",
+         "a rolled-back command is still recorded — the ATTEMPT is what " +
+         "a routing verdict reads");
+  assert(back.ok === false && back.data === null,
+         "but it is never scored as applied: ok false, data null");
+  assert(back.rolledBack === true,
+         "and it says it was rolled back");
+  assert(/no layer/i.test(back.error),
+         "carrying the host's grounded error, which is what the refusal " +
+         "branch of a check matches on");
+  const plainFail = probe.toolEntry(cmd, { ok: false, error: "boom" });
+  assert(plainFail.rolledBack === false && plainFail.error === "boom",
+         "an ordinary failure is unchanged by the fix");
+  const good = probe.toolEntry({ tool: "add_solid", args: {} },
+                               { ok: true, data: { name: "X" } });
+  assert(good.ok === true && good.data.name === "X" &&
+         good.rolledBack === false,
+         "and so is a success");
+  // The end the bug was actually felt at: the step's own check.
+  const music = stepByTitle("sync a layer to the music");
+  const verdict = music.check(comp([]), {
+    tools: [back],
+    replies: ["There is no audio in the 'Probe Room' comp. Please import " +
+              "an audio file into the composition first."]
+  });
+  assert(verdict === null,
+         "the silent rig's honest refusal PASSES even when the round " +
+         "rolled back (this returned 'never reached audio_to_keyframes " +
+         "and ran no tools at all' before the fix)");
+  // What the OLD loop handed the same check — an empty tools array,
+  // because it returned before recording. Pinned so the delta is a
+  // measured fact and not a claim in a comment.
+  assert(/never reached audio_to_keyframes/.test(
+           String(music.check(comp([]), { tools: [], replies: [] }))),
+         "and an unrecorded round is exactly what produced the false FAIL");
+  // The record has to happen in the LOOP, not just be possible: the bug
+  // was a `return` placed before the push.
+  assert(/round\.rolledBack\+\+;[\s\S]{0,200}round\.tools\.push\(toolEntry/
+           .test(probeSrc),
+         "the rolled-back branch of the round loop records the command " +
+         "before it returns");
+  // ...and the other direction: a rolled-back conversion must not be
+  // read as a conversion that happened.
+  const wouldBeOk = probe.toolEntry(cmd, { ok: true, data: { keys: 180 },
+                                           rolledBack: true });
+  assert(wouldBeOk.ok === false,
+         "a command that succeeded and was then undone is not a success");
+}
+
 // The runner plants a step's fixture BEFORE the before-state is read, so
 // the verdict compares against a comp that already has it.
 assert(typeof probe.runPrepare === "function",

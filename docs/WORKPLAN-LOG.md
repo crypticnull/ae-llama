@@ -11097,3 +11097,180 @@ lost that is not either in this commit or written down above.
 
 - Nothing was left unattempted this pass: section 1b is now closed
   entirely, and 1c was closed by the previous one.
+
+## 2026-09-02 (local session, real AE) — WORKPLAN 1c bullet 2, the half left open: compacting the tool docs costs NO routing. UNBUMPED ON PURPOSE
+
+Harness first, as always: **566/566 PASSED** before touching anything, so
+the pass went to the workplan. The single open item at the top of the
+queue was the last unanswered half of 1c bullet 2 — the compact-vs-full
+ROUTING comparison the 0.11.4 context-budget pass could not do inside its
+own night.
+
+### The question, and why it needed four runs
+
+At ctx 16384 the panel sends COMPACT tool docs: `compactDesc` keeps a
+tool's FIRST sentence and drops the rest. The rest is where several tools
+kept the casual phrase that routes to them. A static read of what
+compaction removes says exactly where to worry:
+
+    precompose              loses  'group these / package it up' = this
+    apply_preset            loses  'make it pop' = list_presets then this
+    apply_expression_preset loses  'keep it drifting' = wiggle on position
+    set_layer_parent        loses  'stick it to X / make it follow X'
+    reorder_layers          loses  'put it behind X' in the STACK
+    add_mask                loses  'hide the bottom half' = bounds [...]
+    clean_project           loses  PROJECT PANEL only ('clean up this
+                                   comp' is never this tool)
+
+Two runs per mode, never one. Before starting I ran the comparator over
+the two compact runs the trigger-layer pass had already logged: **they
+disagree with each other on 5 of 26 steps.** That is the noise floor at
+temperature 0.7, and it is larger than any effect worth reporting — a
+single run per mode could have "found" a regression in either direction.
+
+### Two things built to ask the question at all
+
+- **`scripts/chat-probe.js --ctx <n>`** — the panel picks its doc form
+  from the window alone (`Tools.promptModeFor`, compact below 24576), so
+  the only honest way to run the same sentences against the FULL docs is
+  to run them at a window the panel calls big. In-memory only, never
+  `settings.json`, for the same reason `applyStepSettings` is: a probe
+  must not be able to reconfigure the product it is measuring. Both the
+  console banner and the transcript header now name the form, so a
+  transcript says what it ran rather than making the reader do the
+  arithmetic.
+- **`scripts/routing-compare.js`** (NEW) — two transcripts per mode in,
+  a per-step matrix out. It calls a step a REGRESSION only when it failed
+  in EVERY compact run and passed in EVERY full one; anything that
+  disagrees with itself inside a mode is reported as FLAKY and proves
+  nothing. Exits 1 if there is a regression, so it is a check and not
+  just a report.
+
+### The defect the measurement found in its own instrument, first
+
+Run A's step 24 ("sync a layer to the music") scored FAIL. It should not
+have. The model called `audio_to_keyframes`, the host refused it with the
+grounded "No layer in 'Probe Room' has audio", and the model relayed
+exactly that refusal to the user — which is the honest outcome the step
+exists to reward on a silent rig. The verdict said "the model never
+reached audio_to_keyframes and ran no tools at all".
+
+Cause: the round loop `return`ed on `result.rolledBack` **before**
+recording the command, so a rolled-back round was invisible to every
+step's `check` (they all read `round.tools` through `calls(ctx, name)`).
+Whether a failing round rolls back depends on what ELSE the model emitted
+beside the failing command, so the same behaviour scored pass in one run
+and FAIL in the next. In a comparison between two prompt forms that is
+indistinguishable from a routing regression — the instrument was
+manufacturing the very signal the pass was looking for.
+
+Fixed at the root: one `toolEntry(cmd, result)` builds the record for
+both branches, and the rolled-back branch records before it returns.
+`ok` stays false and `data` stays null — nothing was applied, so nothing
+may be scored as applied; only the ATTEMPT becomes visible. The
+transcript also now names each rolled-back command instead of one summary
+line, which is why this entry can quote what step 24 actually did. Both
+compact runs were re-taken after the fix so all four runs use the same
+instrument.
+
+**The flip:** step 24 FAILED in the two pre-fix runs that rolled back and
+**passed in all four** post-fix runs.
+
+### The answer: no regression
+
+    | step                            | compact   | full      | verdict   |
+    | 1-21, 23-28                     | pass pass | pass pass | both pass |
+    | 22 give a layer a finished look | FAIL pass | pass FAIL | flaky     |
+    | 29 clean up means the comp      | FAIL FAIL | FAIL FAIL | both fail |
+
+    compact: 24/26, 25/26
+    full:    25/26, 24/26
+    regressions: none
+
+24 of 26 steps score identically. The one step that differed (22, a
+hallucinated preset name — 'Text/Text Pop' once, 'Text/Sparkle' once)
+failed **once in each mode**, which is the noise floor above, not a lost
+sentence. So the workplan's instruction ("restore that ONE sentence,
+re-run") had nothing to act on, and no doc was changed.
+
+That is a real answer, not an absence of one: the 0.11.4 decision to send
+compact docs at 16384 buys **19,790 chars of prompt** (58,921 -> 39,131)
+and costs no measurable routing on these 26 sentences. What the window
+buys is history, and the transcripts show it plainly:
+
+    ctx 16384  COMPACT  prompt 39131 chars (10576 tok)  history  5196 chars
+    ctx 32768  FULL     prompt 58921 chars (15925 tok)  history 34990 chars
+
+    trims per run, and the largest single trim:
+      compact  24 trims, up to 96 messages dropped
+      full     1-2 trims, up to  6 messages dropped
+
+Neither mode raised the `starved` line; both raised the ledger line once.
+
+### The other finding, which changes what the NEXT pass should do
+
+**Step 29 failed in all four runs — both modes.** "Probe Room is a mess
+now — clean it up" reached `clean_project` every time (twice with
+`dryRun:false`, which the rules forbid on its own). This had been filed
+since the trigger-layer pass as a miss to fix by wording; the comparison
+says it is **not** a compaction casualty. The full doc carries "PROJECT
+PANEL only ('clean up this comp' is never this tool)" and the rules block
+— which is never compacted, so it was present in every one of the four
+runs — carries "'clean up / tidy this COMP / the timeline / these
+layers' is NEVER clean_project". Both were in front of the model, in both
+forms, all four times.
+
+So the next pass must not "restore a sentence": the sentence is already
+there, twice. The remaining levers are ordering/placement, an explicit
+refusal branch, or a host-side guard (`clean_project` could refuse when
+the user's words named a COMP that exists — the tool has the project
+state to know). That is a behaviour change and belongs to its own pass.
+
+### Verification
+
+- Harness in real AE: **566/566 PASSED**, both before and after.
+- `tests/test-chat-probe.js`: +11 assertions for the rolled-back record
+  (a new `toolEntry` block plus a source-level pin that the loop records
+  before it returns). **Verified they bite:** restore the old shape and
+  assertions go red, including the pin that the loop's rolled-back branch
+  pushes at all.
+- Full stub sweep: **66/67**, the odd one out the known environmental
+  `tests/test-comfy-backend.js` (Comfy-Desktop models dir on this
+  machine, none in CI — unchanged, still not mine).
+- `scripts/routing-compare.js` smoke-tested against the two older compact
+  transcripts (which have no "tool docs" header line — it falls back to
+  the ctx line and the panel's own rule) and against a mode-mismatched
+  pair, which it refuses rather than scoring.
+
+### UNBUMPED, deliberately
+
+Nothing under `extension/` changed. The pass touched `scripts/` (probe +
+new comparator), `tests/` and `docs/` only. A bump with no panel change
+publishes an update that installs nothing and makes every test user pay
+the reinstall for it.
+
+### Filed for later passes, in priority order
+
+1. **`clean_project` answers "clean up this comp"** — now measured as
+   unconditional (4/4 runs, both doc forms), so it is no longer a wording
+   fix. Promoted above the other tool bugs because it is the only step in
+   the suite that fails every single time, and it DELETES things.
+2. **Ask the SERVER for the two numbers** (`POST /tokenize`, `GET /props`)
+   — unchanged from the previous pass; still no live symptom.
+3. **`add_mask` accepts bounds that miss the layer entirely and reports
+   ok** (unchanged). Note the mask step passed in all four runs tonight.
+4. **The harness cannot answer "Crash Repair Options"** (unchanged;
+   `scripts/lib/ae-dialog-triage.ps1`).
+5. **`starved` may now be too generous a word** (unchanged — and tonight
+   neither window tripped it, at either doc form).
+6. **delete_mask could warn when an expression still points at the mask**
+   (unchanged).
+7. **A controller GROUP has never been measured**, nor any locale but
+   en_US (unchanged).
+8. **`capParams` is a second, independent roster inside the same .mogrt**
+   (unchanged).
+9. **Still owed, needs a human awake:** drop
+   `logs\mogrt-verify\AELL Probe Card.mogrt` into real Premiere
+   (harness plan step 6).
+
+Nothing was left unattempted this pass: 1c is now closed entirely.
