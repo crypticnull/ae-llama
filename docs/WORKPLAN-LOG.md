@@ -13524,3 +13524,36 @@ Nothing else was left unattempted this pass. Nothing is blocked.
   AE project (`--help` is not a flag; it fired once last night and the
   probe's own sweep cleaned up after it) — an unknown flag should
   refuse, naming the flags that exist.
+
+## 2026-09-02 (remote session) — the port report was about a machine that did not exist
+
+- The owner corrected a claim this session made twice: their panel's
+  `comfyUrl` was **8000** the whole time and had never been changed.
+  Pass 10 filed it as 8188 and both sessions repeated it.
+- Root cause, reproduced: `dataRoot()` is built from
+  `APPDATA || USERPROFILE || extPath()`. The WMI-detached loop does not
+  always carry APPDATA (pass 13's own log records a probe running
+  without it and seeding `extension/AE-Llama/`). With no APPDATA the
+  probe looked for `settings.json` where there is none,
+  `readSettingsFile()` returned null, and `load()` handed back pure
+  DEFAULTS — in which `comfyUrl` is `http://127.0.0.1:8188`. The probe
+  reported a shipped default as the owner's configuration. Nothing ever
+  wrote to their settings file; no revert happened.
+- Changed: `extension/js/settings.js` tracks `loadedFrom` and exposes
+  `Settings.origin()` -> `{from, saved, file, dataRoot, appdata}` — the
+  receipt that tells a default apart from a saved answer.
+  `scripts/chat-probe.js` calls it at the top of `main()`: it prints the
+  source and the comfyUrl when a file was found, and REFUSES to run when
+  none was (exit 2, naming the path it looked for and the missing
+  APPDATA) unless `--defaults-ok` is passed to measure the shipped
+  defaults deliberately. The guard sits in `main()`, not at module load,
+  so the stubbed suite can still import the probe's exports.
+  `tests/test-settings-migrate.js` +12 checks covering both states and
+  the probe's refusal.
+- Notes for the next pass: any probe that reports a SETTING must call
+  `Settings.origin()` first — `verb-semantics`, `context-budget`,
+  `history-floor` and `mogrt-verify` all load panel modules the same way
+  and none of them check. Not done here (one item), filed. Also: the
+  detached loop should pass APPDATA through explicitly in
+  `run-local-agent.ps1`'s WMI relaunch, which fixes the cause rather
+  than the symptom — filed as its own item.
