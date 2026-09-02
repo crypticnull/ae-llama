@@ -13847,3 +13847,45 @@ Nothing else was left unattempted this pass. Nothing is blocked.
   History granularity, the three doors, shape A re-test now that XML
   parses, the aescripts installer path, the 27.0 beta, transcript
   exports, and the AI Assistant census.
+
+## 2026-09-02 (remote session) — importMGT fails silently; the picker did too
+
+- The MOGRT button auto-filled with the NEWEST `.mogrt` in
+  `logs/mogrt-verify/` and picked `truncated.mogrt` — a deliberately
+  damaged fixture that lives there because the reader tests need one.
+  My bug: ranking by mtime with no check that the file is a capsule.
+- It produced a real finding anyway, and a load-bearing one:
+  **`sequence.importMGT()` did NOT throw on a corrupt capsule.** It
+  returned normally and changed nothing (V1 clip count `1 -> 1`). Only
+  the read-back caught it. A tool that try/catches `importMGT` and
+  calls no-exception success would have reported importing a broken
+  file. That is the same shape as the third-party QE razor/ripple
+  reports, now measured on a VANILLA documented API — the strongest
+  argument yet for "a mutator's return value is never the receipt",
+  native tools included.
+- Fixed: the picker validates a candidate is really a zip with a
+  `definition.json` (local header 50 4B 03 04, an end-of-central-
+  directory record, and the entry name in the central directory) before
+  choosing, and records EVERY candidate with its verdict so a wrong
+  pick is visible rather than silent.
+- The first version of that validator compared a 4-byte buffer against
+  the string `"PK"`, which never matches — it would have rejected every
+  file including good ones. The second version fixed the comparison but
+  embedded RAW control bytes (0x03 0x04, 0x05 0x06) in string literals
+  in the page source: invisible, unreviewable, and the same hazard class
+  as the NUL bytes that bit this repo before. Now byte comparisons, and
+  `tests/test-probe-bundle.js` asserts no such literal comes back.
+- The test that proves it drives the REAL function out of the page
+  against four capsules built in the test: good, truncated, non-zip, and
+  a valid zip with no definition. Each must be rejected BY ITS OWN RULE,
+  not by the size floor — the first draft's fixtures were so
+  compressible that deflate put them under 200 bytes and three verdicts
+  were right for the wrong reason.
+- Also corrected in the page: a stale comment still said `$.fileName`
+  "reports the HOST's folder". It reports `"7"`/`"8"` in AE and `""` in
+  Premiere; `new File()` resolving those relatively is what produces the
+  host folder.
+- STILL OWED: the acceptance measurement against a REAL AE export. What
+  is measured is the failure path, not the success path.
+- Harness 69/71 (the two known Windows-only suites). No `extension/`
+  change, so NO BUMP.

@@ -210,6 +210,43 @@ twelve minutes after Premiere wrote `aell.probe.PPRO` at 20:32:42, and
 still saw only `aell.probe.AEFT`. Neither host can see the other's
 storage for the same extension id.
 
+### 2026-09-02 — `importMGT` fails SILENTLY on a bad capsule
+
+**MEASURED**, and it is the strongest argument in the plan for making
+read-back receipts mandatory.
+
+The panel auto-filled the MOGRT path with the newest `.mogrt` in
+`logs\mogrt-verify\` and picked **`truncated.mogrt`** — a deliberately
+damaged fixture that lives there because the reader tests need one.
+`sequence.importMGT()` was called with it and **did not throw**. It
+returned normally, and the V1 clip count went `1 -> 1`.
+
+So the only thing separating "Premiere accepted our graphic" from
+"Premiere silently ignored it" was the read-back:
+
+```
+importMGT returned without throwing but the track's clip count did not
+grow (1 -> 1) -- accepted by API, state unchanged
+```
+
+A tool that try/catches `importMGT` and reports success on no exception
+would have reported a successful import of a corrupt file. This is the
+same failure shape the third-party reports describe for QE
+`razor`/`rippleDelete`, now measured on a **vanilla, documented** API —
+which is why the plan's rule is "a mutator's return value is never the
+receipt", for native tools as much as QE ones.
+
+Two repairs followed: the picker now validates a candidate is really a
+zip with a `definition.json` before choosing it (and records every
+candidate with its verdict), and `tests/test-probe-bundle.js` drives
+that validator against a good capsule, a truncated one, a non-zip and a
+zip without a definition — each rejected by its own rule rather than by
+the size floor.
+
+**Still owed:** the actual acceptance measurement, against a real AE
+export. What is measured so far is the failure path, not the success
+path.
+
 ### 2026-09-02 — `$.fileName` in a CEP `ScriptPath` is not a path
 
 **MEASURED in both hosts.** The manifest's `ScriptPath` *is* evaluated,

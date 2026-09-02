@@ -75,11 +75,13 @@ of the panel. Read-only unless you press a button marked MUTATES.</p>
    * Load probe.jsx by the absolute path CEP hands the PANEL, exactly as
    * extension/js/main.js has always loaded hostscript.jsx.
    *
-   * Measured 2026-09-02 (AE 26.3, CEP 12.0.1): the manifest's ScriptPath
-   * IS evaluated, but $.fileName inside it reports the HOST's folder
-   * ("...\Adobe After Effects 2026\Support Files\"), so a loader cannot
-   * find its own siblings. Relying on ScriptPath alone left AELLP_call
-   * undefined and every probe returned an empty string.
+   * Measured 2026-09-02 (CEP 12.0.1): the manifest's ScriptPath IS
+   * evaluated, but $.fileName inside it is not a path - AE returned "7"
+   * then "8" on the next launch, Premiere returned "". new File() treats
+   * those as RELATIVE and resolves them against the host's working
+   * directory, so a loader "finds" the host's own install folder and
+   * looks for its siblings there. Relying on ScriptPath alone left
+   * AELLP_call undefined and every probe returned an empty string.
    */
   var probeLoaded = false;
 
@@ -468,6 +470,59 @@ of the panel. Read-only unless you press a button marked MUTATES.</p>
    * bundle; the repo root is two levels up, and the AE panel's mogrt
    * probe writes into <repo>\logs\mogrt-verify\.
    */
+  /*
+   * Is this file plausibly a real capsule? logs\mogrt-verify\ is a TEST
+   * folder: it holds deliberately damaged fixtures next to real exports,
+   * and the first version of this picked the newest file by mtime and
+   * landed on truncated.mogrt. Premiere then refused it, which would
+   * have read as "Premiere rejects what AE writes" if the receipt had
+   * not said otherwise.
+   *
+   * A .mogrt is a zip. Checking the local-file signature, the
+   * end-of-central-directory record and a definition.json entry costs
+   * two reads and separates a real export from a damaged fixture.
+   */
+  function looksLikeCapsule(fs, full) {
+    var fd = null;
+    try {
+      var st = fs.statSync(full);
+      if (st.size < 200) { return { ok: false, why: "only " + st.size + " bytes" }; }
+      fd = fs.openSync(full, "r");
+      // Byte comparisons, never string ones. A zip signature contains
+      // control characters, so writing it as a string literal puts raw
+      // invisible bytes into this file - the same hazard class as the
+      // NUL bytes that bit this repo before, and impossible to review.
+      var head = Buffer.alloc(4);
+      fs.readSync(fd, head, 0, 4, 0);
+      if (!(head[0] === 0x50 && head[1] === 0x4B &&
+            head[2] === 0x03 && head[3] === 0x04)) {
+        return { ok: false, why: "not a zip (header bytes " + head[0] + " " +
+                 head[1] + " " + head[2] + " " + head[3] + ")" };
+      }
+      var tailLen = Math.min(st.size, 65536);
+      var tail = Buffer.alloc(tailLen);
+      fs.readSync(fd, tail, 0, tailLen, st.size - tailLen);
+      // End-of-central-directory signature: 50 4B 05 06, searched from
+      // the end because that is where it lives.
+      var eocd = -1, i;
+      for (i = tail.length - 4; i >= 0; i--) {
+        if (tail[i] === 0x50 && tail[i + 1] === 0x4B &&
+            tail[i + 2] === 0x05 && tail[i + 3] === 0x06) { eocd = i; break; }
+      }
+      if (eocd === -1) {
+        return { ok: false, why: "no end-of-central-directory (truncated)" };
+      }
+      if (tail.toString("latin1").indexOf("definition.json") === -1) {
+        return { ok: false, why: "no definition.json entry" };
+      }
+      return { ok: true, why: "zip with a definition.json entry" };
+    } catch (e) {
+      return { ok: false, why: String(e.message || e) };
+    } finally {
+      if (fd !== null) { try { fs.closeSync(fd); } catch (e2) {} }
+    }
+  }
+
   function autofillMogrt() {
     var field = document.getElementById("mogrt-path");
     try {
@@ -484,13 +539,30 @@ of the panel. Read-only unless you press a button marked MUTATES.</p>
         .filter(function (n) { return /\.mogrt$/i.test(n); })
         .map(function (n) {
           var full = path.join(dir, n);
-          return { full: full, mtime: fs.statSync(full).mtimeMs };
+          var v = looksLikeCapsule(fs, full);
+          return { full: full, name: n, mtime: fs.statSync(full).mtimeMs,
+                   usable: v.ok, why: v.why };
         })
         .sort(function (a, b) { return b.mtime - a.mtime; });
-      results.mogrtSearch = { looked: dir, found: hits.length };
-      if (hits.length) {
-        field.value = hits[0].full;
-        results.mogrtSearch.picked = hits[0].full;
+
+      // Every candidate is recorded, so a wrong pick is visible rather
+      // than silent - the whole reason this needed fixing.
+      results.mogrtSearch = {
+        looked: dir,
+        found: hits.length,
+        candidates: hits.map(function (h) {
+          return { name: h.name, usable: h.usable, why: h.why };
+        })
+      };
+      var good = hits.filter(function (h) { return h.usable; });
+      if (good.length) {
+        field.value = good[0].full;
+        results.mogrtSearch.picked = good[0].full;
+      } else if (hits.length) {
+        results.mogrtSearch.picked = null;
+        results.mogrtSearch.note = "found .mogrt files but NONE is a " +
+          "readable capsule - they look like damaged test fixtures. " +
+          "Export one from the AE panel, or type a path.";
       }
     } catch (e) {
       results.mogrtSearch = { error: String(e.message || e) };

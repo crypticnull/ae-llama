@@ -319,5 +319,125 @@ function hostsIn(xml) {
   assert(alive.state === "ALIVE", "an ALIVE door is reported as such");
 }
 
+// ------------------- 7. the .mogrt picker rejects damaged fixtures
+//
+// FIELD FAILURE 2026-09-02: the panel auto-filled the MOGRT path with
+// the NEWEST .mogrt in logs\mogrt-verify\ and landed on
+// truncated.mogrt - a deliberately damaged fixture that lives in that
+// folder precisely because the reader tests need one. Premiere refused
+// it, and without the read-back receipt that would have read as
+// "Premiere rejects what AE writes": a conclusion about Adobe drawn
+// from picking the wrong file.
+//
+// So the picker validates before it picks, and this drives the REAL
+// function out of the page against capsules built here.
+{
+  const zlib = require("zlib");
+  const crypto = require("crypto");
+
+  const html = read(path.join(PROBE, "index.html"));
+  const m = /function looksLikeCapsule\(fs, full\) \{[\s\S]*?\n  \}/.exec(html);
+  assert(!!m, "the page defines looksLikeCapsule");
+  const looksLikeCapsule = m ? eval("(" + m[0] + ")") : null;
+
+  assert(!/"PK[ -]/.test(html),
+         "the zip signature is compared as BYTES, not as a string literal " +
+         "holding raw control characters (invisible bytes in source are " +
+         "the hazard class that already bit this repo once)");
+
+  function le16(n) { const b = Buffer.alloc(2); b.writeUInt16LE(n, 0); return b; }
+  function le32(n) { const b = Buffer.alloc(4); b.writeUInt32LE(n >>> 0, 0); return b; }
+  function crc32(buf) {
+    let c = 0xFFFFFFFF;
+    for (const b of buf) {
+      c ^= b;
+      for (let k = 0; k < 8; k++) { c = (c & 1) ? ((c >>> 1) ^ 0xEDB88320) : (c >>> 1); }
+    }
+    return (c ^ 0xFFFFFFFF) >>> 0;
+  }
+  function zip(entries) {
+    const parts = [], cent = [];
+    let off = 0;
+    entries.forEach(function (e) {
+      const data = Buffer.from(e.data);
+      const body = zlib.deflateRawSync(data);
+      const crc = crc32(data);
+      const nb = Buffer.from(e.name);
+      const loc = Buffer.concat([le32(0x04034b50), le16(20), le16(0), le16(8),
+        le16(0), le16(0), le32(crc), le32(body.length), le32(data.length),
+        le16(nb.length), le16(0), nb]);
+      parts.push(loc, body);
+      cent.push(Buffer.concat([le32(0x02014b50), le16(20), le16(20), le16(0),
+        le16(8), le16(0), le16(0), le32(crc), le32(body.length),
+        le32(data.length), le16(nb.length), le16(0), le16(0), le16(0),
+        le16(0), le32(0), le32(off), nb]));
+      off += loc.length + body.length;
+    });
+    const cd = Buffer.concat(cent);
+    return Buffer.concat(parts.concat([cd, Buffer.concat([le32(0x06054b50),
+      le16(0), le16(0), le16(entries.length), le16(entries.length),
+      le32(cd.length), le32(off), le16(0)])]));
+  }
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "aell-caps-"));
+  // Random payloads on purpose: deflate squashes repeated characters
+  // below the picker's 200-byte floor, and a fixture that trips the
+  // SIZE guard never exercises the signature check it was written for.
+  const good = zip([
+    { name: "definition.json",
+      data: JSON.stringify({ capsuleName: "Untitled", clientControls: [] }) },
+    { name: "project.aegraphic", data: crypto.randomBytes(8000) }
+  ]);
+  const files = {
+    "good.mogrt": good,
+    "truncated.mogrt": good.slice(0, Math.floor(good.length * 0.6)),
+    "notzip.mogrt": crypto.randomBytes(5000),
+    "nodefinition.mogrt": zip([{ name: "readme.txt",
+                                 data: crypto.randomBytes(3000) }]),
+    "tiny.mogrt": Buffer.from("PK")
+  };
+  Object.keys(files).forEach(function (n) {
+    fs.writeFileSync(path.join(dir, n), files[n]);
+  });
+
+  if (looksLikeCapsule) {
+    const verdicts = {};
+    Object.keys(files).forEach(function (n) {
+      verdicts[n] = looksLikeCapsule(fs, path.join(dir, n));
+    });
+    assert(verdicts["good.mogrt"].ok === true,
+           "a real capsule is USABLE: " + verdicts["good.mogrt"].why);
+    assert(verdicts["truncated.mogrt"].ok === false &&
+           /central-directory/.test(verdicts["truncated.mogrt"].why),
+           "the exact file that shipped a wrong conclusion is rejected, " +
+           "and the reason names the defect: " + verdicts["truncated.mogrt"].why);
+    assert(verdicts["notzip.mogrt"].ok === false &&
+           /not a zip/.test(verdicts["notzip.mogrt"].why),
+           "a non-zip is rejected: " + verdicts["notzip.mogrt"].why);
+    assert(verdicts["nodefinition.mogrt"].ok === false &&
+           /definition\.json/.test(verdicts["nodefinition.mogrt"].why),
+           "a valid zip that is not a capsule is rejected: " +
+           verdicts["nodefinition.mogrt"].why);
+    assert(verdicts["tiny.mogrt"].ok === false,
+           "an empty stub is rejected: " + verdicts["tiny.mogrt"].why);
+
+    // The three real defects must be caught by their OWN rule, not by
+    // the size floor happening to fire first.
+    ["truncated.mogrt", "notzip.mogrt", "nodefinition.mogrt"].forEach(
+      function (n) {
+        assert(!/^only \d+ bytes$/.test(verdicts[n].why),
+               n + " is rejected by its real defect, not by the size " +
+               "floor: " + verdicts[n].why);
+      });
+  }
+
+  assert(/usable/.test(read(path.join(PROBE, "index.html"))) &&
+         /candidates/.test(read(path.join(PROBE, "index.html"))),
+         "the page records EVERY candidate and its verdict, so a wrong " +
+         "pick is visible rather than silent");
+
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
 console.log(failed ? "\nTESTS FAILED" : "\nALL TESTS PASSED");
 process.exitCode = failed ? 1 : 0;
