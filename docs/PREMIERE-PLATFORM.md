@@ -121,6 +121,58 @@ from the Extensions menu**. `tests/test-manifest-xml.js` now refuses
 either kind of unparseable XML in this repo, in milliseconds, without an
 Adobe app.
 
+### 2026-09-02 — the probe panel loads in After Effects (AE 26.3)
+
+**MEASURED**, first successful run, `runtime-AEFT.json`:
+
+| Fact | Value |
+|---|---|
+| `appName` / `appId` | `AEFT` (so the string host.js branches on is confirmed for AE) |
+| `appVersion` | `26.3` |
+| CEP API version | **12.0.1** — Adobe's table said "AE 25.0 = CEP 12"; 26.3 is still CEP 12 |
+| CEP user agent | Chrome 99.0.4844.84, `AdobeCEP/12.0.1` |
+| Node in CEP | **17.7.2**, with `fs`, `path`, `http`, `child_process`, `os`, `process` all requirable |
+| `cep.fs.showOpenDialogEx` | present |
+| Manifest shape installed | **B** (one `HostList`, both hosts) — it parses and lists |
+| `localStorage` | AE wrote `aell.probe.AEFT`; the cross-host half needs Premiere's panel opened next |
+
+This settles the two load-bearing assumptions under the whole plan: a
+CEP panel from a junction lists and opens in a current Adobe host, and
+CEP's Node can spawn processes — which is what the llama-server,
+ComfyUI, ffmpeg and whisper stack all rest on.
+
+### 2026-09-02 — `$.fileName` in a CEP `ScriptPath` names the HOST's folder
+
+**MEASURED.** The manifest's `ScriptPath` *is* evaluated, but inside it
+`$.fileName` came back as
+
+```
+C:\Program Files\Adobe\Adobe After Effects 2026\Support Files\
+```
+
+not the extension folder. So shape B's loader looked for `probe.jsx`
+next to `AfterFX.exe`, found nothing, and every probe call returned an
+empty string because `AELLP_call` was never defined.
+
+Consequences, and they reach past the probe:
+
+- **A `ScriptPath` loader cannot locate its own siblings.** Shape B's
+  whole premise was "point `ScriptPath` at a loader that branches on
+  host and `$.evalFile`s the right body". That premise is now measured
+  false as written; a loader would need the path from somewhere else.
+- The fix is what `extension/js/main.js` has always done: the PANEL
+  calls `$.evalFile` with the absolute path from
+  `getSystemPath("extension")`. The probe page does that now.
+- So a dual-host panel does not actually need `ScriptPath` to branch —
+  each host's page can load its own jsx. That weakens the argument for
+  shape A (two extensions purely so each gets its own `ScriptPath`) and
+  is worth re-weighing before the P2 seam is designed.
+
+Also fixed as a result: the soak reported `DEGRADED at round 1` when the
+truth was that `probe.jsx` had never been evaluated. It refuses to run
+now rather than blame the engine, and the grader treats a skipped soak
+as unmeasured instead of failed.
+
 ### The rest
 
 Not yet run. P0 writes into `%APPDATA%\AE-Llama\probes\`:

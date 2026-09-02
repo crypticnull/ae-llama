@@ -61,19 +61,71 @@ of the panel. Read-only unless you press a button marked MUTATES.</p>
     c.evalScript(src, function (r) { cb(r, r === "EvalScript error."); });
   }
 
+  /*
+   * Load probe.jsx by the absolute path CEP hands the PANEL, exactly as
+   * extension/js/main.js has always loaded hostscript.jsx.
+   *
+   * Measured 2026-09-02 (AE 26.3, CEP 12.0.1): the manifest's ScriptPath
+   * IS evaluated, but $.fileName inside it reports the HOST's folder
+   * ("...\Adobe After Effects 2026\Support Files\"), so a loader cannot
+   * find its own siblings. Relying on ScriptPath alone left AELLP_call
+   * undefined and every probe returned an empty string.
+   */
+  var probeLoaded = false;
+
+  function ensureProbe(cb) {
+    if (probeLoaded) { cb(null); return; }
+    var jsx = extPath() + "/jsx/probe.jsx";
+    var literal = JSON.stringify(jsx);
+    evalScript('(function(){try{$.evalFile(new File(' + literal +
+               '));}catch(e){return "throw: "+e;}' +
+               'return typeof AELLP_call;})()',
+      function (raw, isErr) {
+        if (isErr) {
+          cb("evalScript itself failed loading the probe - this host is " +
+             "not reachable from CEP at all");
+          return;
+        }
+        var s = String(raw || "");
+        if (s === "function") {
+          probeLoaded = true;
+          results.probeLoad = { via: "panel $.evalFile", path: jsx };
+          cb(null);
+          return;
+        }
+        results.probeLoad = { via: "panel $.evalFile", path: jsx,
+                              typeofCall: s || "(empty reply)" };
+        cb("probe.jsx did not define AELLP_call (typeof came back " +
+           (s ? '"' + s + '"' : "EMPTY") + "). Looked for: " + jsx);
+      });
+  }
+
   /** AELLP_call through evalScript, parsed. cb(err, data). */
   function probe(name, args, cb) {
-    var argsJson = JSON.stringify(args || {});
-    var literal = JSON.stringify(argsJson);   // a JS string literal
-    evalScript('AELLP_call("' + name + '", ' + literal + ')',
-      function (raw, isErr) {
-        if (isErr) { cb("evalScript failed: " + raw); return; }
-        var parsed;
-        try { parsed = JSON.parse(raw); }
-        catch (e) { cb("unparseable reply: " + String(raw).slice(0, 400)); return; }
-        if (!parsed.ok) { cb(parsed.error); return; }
-        cb(null, parsed.data);
-      });
+    ensureProbe(function (loadErr) {
+      if (loadErr) { cb(loadErr); return; }
+      var argsJson = JSON.stringify(args || {});
+      var literal = JSON.stringify(argsJson);   // a JS string literal
+      evalScript('AELLP_call("' + name + '", ' + literal + ')',
+        function (raw, isErr) {
+          if (isErr) { cb("evalScript failed: " + raw); return; }
+          // An EMPTY reply is the signature of a call into a host where
+          // the function does not exist, not of a malformed result.
+          if (raw === null || typeof raw === "undefined" || raw === "") {
+            cb("empty reply from the host - AELLP_call returned nothing, " +
+               "so it is probably not defined in this engine");
+            return;
+          }
+          var parsed;
+          try { parsed = JSON.parse(raw); }
+          catch (e) {
+            cb("unparseable reply: " + String(raw).slice(0, 400));
+            return;
+          }
+          if (!parsed.ok) { cb(parsed.error); return; }
+          cb(null, parsed.data);
+        });
+    });
   }
 
   function extPath() {
@@ -199,12 +251,25 @@ of the panel. Read-only unless you press a button marked MUTATES.</p>
         results.hostFacts = err2 ? { error: err2 } : facts;
         probe("qeProbe", {}, function (err3, qe) {
           results.qe = err3 ? { error: err3 } : qe;
-          // Loader marker only exists under manifest shape B.
-          evalScript("String($.global.AELLP_LOADER)", function (raw) {
-            results.loaderMarker = (raw && raw !== "undefined") ? raw : null;
-            render();
-            autoSave();
-          });
+          // What the manifest's ScriptPath managed on its own. Shape B's
+          // loader.jsx is expected to FAIL here (see its header): the
+          // measurement is what $.fileName reported, not whether it won.
+          evalScript("String($.global.AELLP_LOADER) + '|' + " +
+                     "String($.global.AELLP_LOADER_FILENAME)",
+            function (raw) {
+              var parts = String(raw || "").split("|");
+              results.scriptPath = {
+                loaderSaid: (parts[0] && parts[0] !== "undefined")
+                  ? parts[0] : null,
+                dollarFileName: (parts[1] && parts[1] !== "undefined")
+                  ? parts[1] : null,
+                note: "ScriptPath is evaluated, but $.fileName inside it " +
+                      "names the HOST's folder, so a loader cannot resolve " +
+                      "its own siblings. The panel loads probe.jsx itself."
+              };
+              render();
+              autoSave();
+            });
         });
       });
     });
@@ -233,6 +298,23 @@ of the panel. Read-only unless you press a button marked MUTATES.</p>
    * long session; better to hit it here, with a count.
    */
   function runSoak() {
+    // Refuse rather than report a degraded engine. The first run of this
+    // panel logged "DEGRADED at round 1" when the real story was that
+    // probe.jsx had never loaded - a soak that cannot tell those apart
+    // is worse than no soak.
+    ensureProbe(function (loadErr) {
+      if (loadErr) {
+        results.soak = { skipped: "the probe is not loaded, so there is " +
+                                  "nothing to soak: " + loadErr };
+        render();
+        autoSave();
+        return;
+      }
+      soakLoop();
+    });
+  }
+
+  function soakLoop() {
     var total = 500;
     var done = 0, failedAt = null, started = Date.now();
     note("soaking: 0/" + total);

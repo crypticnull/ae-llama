@@ -93,6 +93,13 @@ interactive session does NOT self-start; it answers one prompt and waits.
   ExtendScript 4.5.6. This binds `extension/js/selftest.js` too — the
   CLI runner `$.evalFile`s it.
 - `.ps1` must be pure ASCII (Windows PowerShell 5.1, BOM-less).
+- **`$.fileName` inside a CEP `ScriptPath` names the HOST's folder**,
+  not the script's own. Measured AE 26.3 / CEP 12.0.1: it returned
+  `C:\Program Files\Adobe\Adobe After Effects 2026\Support Files\`, so a
+  ScriptPath file cannot resolve its siblings and a "branch then
+  evalFile the right body" loader does not work. Load host code the way
+  `main.js` always has: from the PANEL, with the absolute path from
+  `getSystemPath("extension")`.
 - **An XML comment may not contain `--` or end with `-`** (XML 1.0
   §2.5), and CEP reports a manifest parse error NOWHERE a user can see:
   the extension is just absent from Window > Extensions, which looks

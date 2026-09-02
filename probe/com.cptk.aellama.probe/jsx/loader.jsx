@@ -12,10 +12,29 @@
  * ES3 only. Nothing here may touch app.* : it runs at panel load in a
  * host we have not identified yet.
  */
+/*
+ * MEASURED 2026-09-02, AE 2026 (26.3), CEP 12.0.1: $.fileName inside a
+ * CEP ScriptPath does NOT name this file. It came back as
+ *
+ *     C:\Program Files\Adobe\Adobe After Effects 2026\Support Files\
+ *
+ * i.e. the HOST's own folder, so resolving siblings from it looks for
+ * probe.jsx next to AfterFX.exe. A ScriptPath loader therefore cannot
+ * find its own neighbours this way, and shape B's "branch and load the
+ * right body" trick needs a path from somewhere else.
+ *
+ * That is why index.html now $.evalFile's probe.jsx by the absolute
+ * path CEP hands the PANEL (getSystemPath("extension")) - the same way
+ * extension/js/main.js has always loaded hostscript.jsx. This file
+ * stays as the measurement: it records what $.fileName actually said,
+ * so the next session does not re-derive it.
+ */
 (function () {
   var here, dir, name, target, f;
 
-  // $.fileName is this file; the bodies sit beside it.
+  $.global.AELLP_LOADER_FILENAME = "";
+  try { $.global.AELLP_LOADER_FILENAME = String($.fileName); } catch (eF) {}
+
   try {
     here = new File($.fileName);
     dir = here.parent.fsName;
@@ -39,7 +58,10 @@
 
   f = new File(dir + "/" + target);
   if (!f.exists) {
-    $.global.AELLP_LOADER = "missing " + f.fsName;
+    // Expected on AE 2026: $.fileName gave the host's folder. The panel
+    // loads probe.jsx itself, so this is a recorded fact, not a failure.
+    $.global.AELLP_LOADER = "missing " + f.fsName +
+      " ($.fileName reported " + $.global.AELLP_LOADER_FILENAME + ")";
     return;
   }
   try {

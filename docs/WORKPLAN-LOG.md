@@ -13764,3 +13764,35 @@ Nothing else was left unattempted this pass. Nothing is blocked.
   fail.
 - Harness 69/71 (the two known Windows-only suites). No `extension/`
   change, so NO BUMP.
+
+## 2026-09-02 (remote session) — the probe LOADS; two facts measured
+
+- With the XML fixed, the panel listed and opened in AE 26.3. First real
+  measurements, in `docs/PREMIERE-PLATFORM.md`: `appName` is `AEFT` (the
+  string host.js will branch on, confirmed for AE), CEP API **12.0.1**
+  on AE 26.3 (Adobe's own table stops at "AE 25.0 = CEP 12"), CEP Node
+  **17.7.2** with `child_process` requirable — which is what the whole
+  llama-server / ComfyUI / ffmpeg / whisper stack rests on — and
+  `cep.fs` present. Manifest shape B parses and lists.
+- SECOND FACT, and it reaches past the probe: **`$.fileName` inside a
+  CEP `ScriptPath` reports the HOST's folder**
+  (`...\Adobe After Effects 2026\Support Files\`), not the script's own.
+  ScriptPath IS evaluated, but a loader there cannot resolve its
+  siblings, so shape B's "branch on host and evalFile the right body"
+  premise is measured FALSE as written. `AELLP_call` was never defined
+  and every probe returned an empty string.
+- Fixed the way `extension/js/main.js` has always done it: the PANEL
+  `$.evalFile`s the jsx by the absolute path from
+  `getSystemPath("extension")`. Worth carrying into the P2 seam — if
+  each host's page loads its own jsx, `ScriptPath` does not need to
+  branch at all, which weakens the case for shape A (two extensions
+  purely so each gets its own ScriptPath).
+- Two honesty repairs the same run forced: the soak reported "DEGRADED
+  at round 1" when the truth was that probe.jsx had never been
+  evaluated — it now refuses to run rather than blame the engine — and
+  `ppro-probe-report.js` grades a skipped soak as UNMEASURED instead of
+  failed. An empty evalScript reply is also now its own error ("probably
+  not defined in this engine") rather than "unparseable reply: ".
+- `loader.jsx` is kept as the measurement: it records what `$.fileName`
+  actually said, so the next session does not re-derive it. CLAUDE.md
+  carries the rule. Harness 69/71. No `extension/` change, NO BUMP.
