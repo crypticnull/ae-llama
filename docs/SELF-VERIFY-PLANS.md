@@ -134,7 +134,26 @@ authoritative size verdict.
 5. [local] scripts/mogrt-probe.js end-to-end under the selftest
    runner's triage; two consecutive green runs; wire into the
    overnight stage; patch bump.
-6. [manual, once per release] Drop the newest artifact into Premiere;
+6. **Foreign-corpus read (AUTOMATED 2026-09-02, replaces most of the
+   manual gate).** `scripts/mogrt-foreign-probe.js` reads .mogrt files
+   THIS PROJECT DID NOT WRITE — the templates Adobe ships with Premiere
+   and anything installed into
+   `%APPDATA%\Adobe\Common\Motion Graphics Templates`. Every one is
+   Premiere-accepted by construction and localized, so they are the
+   independent corpus this section wanted, they need no human and no
+   Premiere launch, and a name that comes back as a locale tag (the
+   0.11.5 bug) is a FAIL naming the tags. Exit 0 all read, 1 a capsule
+   the reader could not read, 2 nothing found (never reported as a
+   pass). `tests/test-mogrt-foreign.js` pins the grader against
+   hand-built capsules: flat roster, a controller GROUP, a de_DE-first
+   locale, the locale-tag regression, an unknown roster key, a
+   non-zip, and an absent file. What this measures that no AE export
+   can: groups and non-en_US locales, both listed above as unmeasured.
+   FIRST RUN OWED on the owner's machine (one command, no AE):
+   `node scripts/mogrt-foreign-probe.js` — a `fallback:` row in its
+   output is a real finding (the key list is missing a shape Adobe
+   uses); add the key, never widen the scan.
+7. [manual, once per release] Drop the newest artifact into Premiere;
    refresh the fixture on drift. **STILL OWED** — the newest artifact is
    `logs\mogrt-verify\AELL Probe Card.mogrt`. If Premiere refuses it,
    what changes is the STATUS of the pin above, not its field names.

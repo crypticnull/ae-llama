@@ -13557,3 +13557,37 @@ Nothing else was left unattempted this pass. Nothing is blocked.
   detached loop should pass APPDATA through explicitly in
   `run-local-agent.ps1`'s WMI relaunch, which fixes the cause rather
   than the symptom — filed as its own item.
+
+## 2026-09-02 (remote session) — the Premiere gate, mostly automated away
+
+- The owner could not run the manual Premiere step and asked for it to
+  be driven. Premiere cannot be driven from the remote container, but
+  the part of the gate that MATTERS can be automated: the gate exists
+  so the checker is not graded against its own output, and Adobe ships
+  Motion Graphics templates with Premiere that are Premiere-accepted by
+  construction and localized into a dozen languages. They are the
+  independent corpus the plan asked for, already on the machine.
+- Changed: NEW scripts/mogrt-foreign-probe.js — scans the Premiere and
+  Adobe template folders (named roots only, read-only, never a
+  whole-disk walk), reads each capsule through the SHIPPED reader in
+  definitionOnly mode, and grades it. Exit 0 all read, 1 a capsule the
+  reader could not read, 2 nothing found (never a pass). A name that
+  comes back as a LOCALE TAG — the 0.11.5 bug — is a FAIL naming the
+  tags. NEW tests/test-mogrt-foreign.js pins the grader against
+  hand-built capsules with their own CRC: flat roster, controller
+  GROUP, de_DE-first locale, the locale-tag regression, an unknown
+  roster key, a non-zip, an absent file.
+- Measured while building it: a nested controller GROUP reads to its
+  leaf controllers with the group row dropped, and a de_DE-first
+  capsule still yields the en_US string. Those are the two items
+  docs/SELF-VERIFY-PLANS.md listed as unmeasured, and they are now
+  measurable without a human.
+- Harness: full sweep 66/68 (the two known Windows-only suites). No
+  extension/ change, so NO BUMP.
+- Notes: this does NOT retire step 7. Premiere opening OUR capsule
+  answers "is what AE wrote usable"; this answers "can we read what
+  Premiere ships". Only one of those needs a person. FIRST RUN OWED on
+  the owner's machine, one command, no AE:
+  `node scripts/mogrt-foreign-probe.js`. A `fallback:` row in its
+  output is a real finding — the key list is missing a shape Adobe
+  uses; add the key, never widen the scan.
