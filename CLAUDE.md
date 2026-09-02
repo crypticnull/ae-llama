@@ -93,6 +93,12 @@ interactive session does NOT self-start; it answers one prompt and waits.
   ExtendScript 4.5.6. This binds `extension/js/selftest.js` too — the
   CLI runner `$.evalFile`s it.
 - `.ps1` must be pure ASCII (Windows PowerShell 5.1, BOM-less).
+  **The remote container can PARSE PowerShell** — `pwsh` 7 is
+  cross-platform, and `tests/test-powershell-syntax.js` runs the real
+  parser over every `.ps1` in the repo. It SKIPS when no pwsh is found,
+  so install one before touching a script (the command is in that file's
+  header). A syntax error found here costs seconds; the same error
+  found by the owner costs a launch of AE or Premiere.
 - **`$.fileName` inside a CEP `ScriptPath` is not a path at all.**
   Measured on CEP 12.0.1: AE 26.3 returned **`"7"`** on one launch and
   **`"8"`** on the next (a small counter, not a stable value), Premiere

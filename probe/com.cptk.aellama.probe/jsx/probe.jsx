@@ -367,6 +367,162 @@ AELLP_PROBES.echo = function (args) {
            payload: s };
 };
 
+// ------------------------------------------------------------ battery
+/*
+ * EVERY measurement in one call, so an unattended run costs ONE host
+ * launch instead of one per fact.
+ *
+ * The rule that makes it worth having: no step may abort the run. Each
+ * one is try/caught and recorded with its own ok/error, so a pass
+ * reports ALL of its failures at once. That is the whole point -- the
+ * alternative is what this project just spent a day doing, learning one
+ * defect per round trip on the only machine that can test.
+ *
+ * args: { scratchProject: "<abs .prproj>", makeSequence: true,
+ *         mogrtPath: "<abs .mogrt>", allowMutate: true }
+ */
+AELLP_PROBES.battery = function (args) {
+  args = args || {};
+  var out = { steps: [], mutating: args.allowMutate === true };
+  var i, seq, item, made;
+
+  function step(name, fn) {
+    var row = { step: name };
+    try {
+      row.data = fn();
+      row.ok = true;
+    } catch (e) {
+      row.ok = false;
+      row.error = AELLP_say(e);
+    }
+    out.steps.push(row);
+    return row;
+  }
+
+  step("ping", function () { return AELLP_PROBES.ping(); });
+  step("hostFacts", function () { return AELLP_PROBES.hostFacts(); });
+  step("qe", function () { return AELLP_PROBES.qeProbe(); });
+
+  if (!args.allowMutate) {
+    out.note = "read-only pass; pass allowMutate:true for the rest";
+    return out;
+  }
+
+  // A scratch project, so nothing here can touch the user's work. If
+  // this fails the later steps still run and say what they hit.
+  if (args.scratchProject) {
+    step("newProject", function () {
+      if (typeof app.newProject !== "function") {
+        throw new Error("app.newProject is not a function in this host");
+      }
+      var made2 = app.newProject(args.scratchProject);
+      return { returned: String(made2),
+               projectPath: AELLP_safe(function () { return app.project.path; }),
+               projectName: AELLP_safe(function () { return app.project.name; }) };
+    });
+  }
+
+  /*
+   * A sequence, by whichever route this build accepts. Three strategies
+   * in order, each recorded: an existing sequence, bars-and-tone plus
+   * createNewSequenceFromClips, and the bare createNewSequence. Adobe's
+   * docs disagree with each other on the signatures, so the honest move
+   * is to try them and write down which one answered.
+   */
+  if (args.makeSequence) {
+    step("sequence", function () {
+      var tried = [];
+      var got = null;
+
+      var existing = AELLP_safe(function () { return app.project.activeSequence; });
+      if (existing && typeof existing !== "string") {
+        tried.push({ how: "activeSequence already open", ok: true });
+        return { via: "existing", name: String(existing.name), tried: tried };
+      }
+      tried.push({ how: "activeSequence already open", ok: false });
+
+      try {
+        item = app.project.newBarsAndTone(1920, 1080, 1, 1, 1, 48000,
+                                          "AELL PROBE BARS");
+        got = app.project.createNewSequenceFromClips("AELL PROBE SEQ",
+                                                     [item]);
+        tried.push({ how: "newBarsAndTone + createNewSequenceFromClips",
+                     ok: !!got });
+      } catch (e1) {
+        tried.push({ how: "newBarsAndTone + createNewSequenceFromClips",
+                     ok: false, error: AELLP_say(e1) });
+      }
+
+      if (!got) {
+        try {
+          got = app.project.createNewSequence("AELL PROBE SEQ", "");
+          tried.push({ how: "createNewSequence(name, \"\")", ok: !!got });
+        } catch (e2) {
+          tried.push({ how: "createNewSequence(name, \"\")", ok: false,
+                       error: AELLP_say(e2) });
+        }
+      }
+
+      seq = AELLP_safe(function () { return app.project.activeSequence; });
+      return {
+        via: got ? "created" : "none",
+        active: (seq && typeof seq !== "string") ? String(seq.name) : null,
+        videoTracks: (seq && typeof seq !== "string")
+          ? AELLP_safe(function () { return seq.videoTracks.numTracks; }) : null,
+        tried: tried
+      };
+    });
+  }
+
+  step("history", function () {
+    return AELLP_PROBES.historyProbe({ allowMutate: true });
+  });
+
+  if (args.mogrtPath) {
+    step("mogrt", function () {
+      return AELLP_PROBES.mogrtAccept({ allowMutate: true,
+                                        path: args.mogrtPath,
+                                        videoTrack: 0 });
+    });
+  }
+
+  // Best effort: put back what the mutating steps made. A cleanup that
+  // throws must not lose the measurements above it.
+  step("cleanup", function () {
+    var removed = [];
+    var root = AELLP_safe(function () { return app.project.rootItem; });
+    if (!root || typeof root === "string") { return { removed: removed }; }
+    var n = AELLP_safe(function () { return root.children.numItems; });
+    if (typeof n !== "number") { return { removed: removed }; }
+    for (i = n - 1; i >= 0; i--) {
+      try {
+        var child = root.children[i];
+        if (child && /^AELL PROBE/.test(String(child.name))) {
+          if (typeof child.deleteBin === "function") { child.deleteBin(); }
+          removed.push(String(child.name));
+        }
+      } catch (eC) {}
+    }
+    // SAVE the scratch project. A dirty project makes Premiere put up a
+    // "save changes?" modal when the runner tries to close it, which
+    // then blocks the NEXT unattended run before it starts. Saving a
+    // throwaway file costs nothing and removes that whole failure.
+    var saved = null;
+    try {
+      if (app.project && typeof app.project.save === "function") {
+        app.project.save();
+        saved = true;
+      }
+    } catch (eS) { saved = "save threw: " + AELLP_say(eS); }
+
+    return { removed: removed, savedScratchProject: saved,
+             note: "the scratch project is a throwaway file; nothing else " +
+                   "was touched" };
+  });
+
+  return out;
+};
+
 // --------------------------------------------------------------- call
 
 function AELLP_call(probeName, argsJson) {

@@ -13889,3 +13889,41 @@ Nothing else was left unattempted this pass. Nothing is blocked.
   is measured is the failure path, not the success path.
 - Harness 69/71 (the two known Windows-only suites). No `extension/`
   change, so NO BUMP.
+
+## 2026-09-02 (remote session) — one command, unattended; and the class fix
+
+- Owner: "I WANT IT FULLY AUTOMATED I DONT WANT TO TOUCH PREMIERE AT
+  ALL". Fair. Five round trips in one day, each teaching exactly one
+  defect, is the failure — not any individual bug.
+- NEW `scripts/run-ppro-probe.ps1`: one command, one Premiere launch,
+  one report. It installs, validates and picks a real `.mogrt`, writes a
+  job file, restarts Premiere and waits. TWO independent things race to
+  claim the job so a failure in either still yields a result: the
+  visible panel (Premiere restores workspace panels) and the invisible
+  door-3 runner (fires on the startup event with no panel at all).
+  `renameSync` makes the claim atomic so exactly one wins.
+- NEW `battery` probe in probe.jsx runs EVERY measurement in one call —
+  ping, hostFacts, QE, scratch project, sequence, History, MOGRT accept,
+  cleanup. **No step may abort the run**: each is try/caught and
+  recorded with its own ok/error, so one pass reports ALL failures.
+  That is the whole design goal.
+- Sequence creation tries three routes in order and records which
+  answered (existing activeSequence, newBarsAndTone +
+  createNewSequenceFromClips, bare createNewSequence). Adobe's own docs
+  disagree on the signatures, so measuring beats picking one and hoping.
+- Two runtime hazards removed before they could cost a trip: the
+  battery SAVES the scratch project (a dirty project makes Premiere
+  raise a save-changes modal when the runner closes it, which blocks the
+  NEXT run before it starts), and the launcher opens the scratch project
+  directly once it exists (so Premiere never reopens the owner's last
+  project and never asks about it).
+- THE CLASS FIX: `pwsh` 7 is cross-platform, so this container CAN parse
+  PowerShell. NEW `tests/test-powershell-syntax.js` runs the real
+  parser over every `.ps1` in the repo, plus BOM and pure-ASCII checks
+  that need no shell. Verified it catches a real error by breaking a
+  brace and watching it fail. It SKIPS loudly when no pwsh is present
+  rather than pretending. CLAUDE.md carries the install command.
+  A parse error found here costs seconds; found by the owner it costs a
+  launch of AE or Premiere. All 23 scripts parse today.
+- Harness 70/72 (the two known Windows-only suites). No `extension/`
+  change, so NO BUMP.

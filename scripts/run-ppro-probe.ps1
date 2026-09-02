@@ -1,0 +1,278 @@
+# run-ppro-probe.ps1 - measure Premiere UNATTENDED. One command, one
+# launch, one report. Nobody clicks anything in Premiere.
+#
+#   powershell -ExecutionPolicy Bypass -File scripts\run-ppro-probe.ps1
+#
+# How it works: a job file is dropped in %APPDATA%\AE-Llama\probes\, then
+# Premiere is launched. TWO independent things race to claim that job,
+# so a failure in either one still produces a result:
+#
+#   1. the visible probe panel, which Premiere reopens because it is in
+#      the saved workspace, and
+#   2. the invisible door-3 runner, which fires on the host's startup
+#      event whether or not any panel is open.
+#
+# Whichever claims it first (renameSync is atomic) runs the WHOLE
+# battery -- host facts, QE, undo/History, sequence creation, MOGRT
+# accept read-back -- and writes job-result.json. Every step inside the
+# battery is independently try/caught, so one pass reports ALL of its
+# failures instead of one per launch. That is the entire design goal:
+# this project spent a day learning one defect per round trip on the
+# only machine that can test.
+#
+# Exit codes: 0 = every battery step passed, 1 = ran but some steps
+# failed (the report says which), 2 = Premiere not found, 3 = no result
+# (neither door claimed the job -- Premiere cannot be driven this way),
+# 4 = prerequisites missing.
+#
+# ASCII only, Windows PowerShell 5.1 (CLAUDE.md).
+
+[CmdletBinding()]
+param(
+    [string]$PremierePath = '',
+    [int]$TimeoutSec = 300,
+    # Premiere reads extensions at LAUNCH, so a running instance never
+    # sees a new job. Closing is graceful (CloseMainWindow): if Premiere
+    # asks to save something, this script gives up rather than forcing.
+    [switch]$NoClose,
+    # Leave Premiere open when the run finishes.
+    [switch]$KeepOpen,
+    [switch]$SkipInstall,
+    [string]$MogrtPath = ''
+)
+
+$ErrorActionPreference = 'Stop'
+
+$repoRoot  = Split-Path -Parent $PSScriptRoot
+$probeData = Join-Path $env:APPDATA 'AE-Llama\probes'
+$jobFile   = Join-Path $probeData 'job.json'
+$runFile   = Join-Path $probeData 'job.running.json'
+$resFile   = Join-Path $probeData 'job-result.json'
+$scratch   = Join-Path $probeData 'AELL_PROBE_SCRATCH.prproj'
+
+New-Item -ItemType Directory -Force -Path $probeData | Out-Null
+
+function Say([string]$m) { Write-Host $m }
+function Good([string]$m) { Write-Host $m -ForegroundColor Green }
+function Bad([string]$m) { Write-Host $m -ForegroundColor Red }
+function Warn([string]$m) { Write-Host $m -ForegroundColor Yellow }
+
+function Get-PremiereProcesses {
+    return @(Get-Process -Name 'Adobe Premiere Pro' -ErrorAction SilentlyContinue) +
+           @(Get-Process -Name 'Adobe Premiere' -ErrorAction SilentlyContinue)
+}
+
+# ------------------------------------------------------------ find the app
+if (-not $PremierePath) {
+    $adobe = 'C:\Program Files\Adobe'
+    if (Test-Path $adobe) {
+        $dirs = Get-ChildItem $adobe -Directory |
+            Where-Object { $_.Name -like 'Adobe Premiere*' } |
+            Sort-Object Name -Descending
+        foreach ($d in $dirs) {
+            foreach ($exeName in @('Adobe Premiere Pro.exe', 'Adobe Premiere.exe')) {
+                $exe = Join-Path $d.FullName $exeName
+                if (Test-Path $exe) { $PremierePath = $exe; break }
+            }
+            if ($PremierePath) { break }
+        }
+    }
+}
+if (-not $PremierePath -or -not (Test-Path $PremierePath)) {
+    Bad 'Premiere not found. Pass -PremierePath "C:\...\Adobe Premiere Pro.exe".'
+    exit 2
+}
+Say "Premiere: $PremierePath"
+
+# --------------------------------------------------------------- install
+if (-not $SkipInstall) {
+    Say 'Installing the probe and the door-3 runner...'
+    & powershell -ExecutionPolicy Bypass -File `
+        (Join-Path $PSScriptRoot 'install-probe.ps1') -Harness | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Bad 'install-probe.ps1 failed; run it on its own to see why.'
+        exit 4
+    }
+    Good 'Installed.'
+}
+
+# ------------------------------------------------- pick a REAL .mogrt
+# logs\mogrt-verify\ is a TEST folder: it holds deliberately damaged
+# fixtures beside real exports, and picking the newest one landed on
+# truncated.mogrt, which Premiere then silently refused. Validate first.
+function Test-Capsule([string]$p) {
+    try {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+        $zip = [System.IO.Compression.ZipFile]::OpenRead($p)
+        try {
+            $has = $false
+            foreach ($e in $zip.Entries) {
+                if ($e.FullName -eq 'definition.json') { $has = $true }
+            }
+            return $has
+        } finally { $zip.Dispose() }
+    } catch {
+        return $false
+    }
+}
+
+if (-not $MogrtPath) {
+    $mogrtDir = Join-Path $repoRoot 'logs\mogrt-verify'
+    if (Test-Path $mogrtDir) {
+        $cands = Get-ChildItem $mogrtDir -Filter *.mogrt -ErrorAction SilentlyContinue |
+                 Sort-Object LastWriteTime -Descending
+        foreach ($c in $cands) {
+            $okCap = Test-Capsule $c.FullName
+            Say ("  " + $(if ($okCap) { 'usable ' } else { 'damaged' }) + "  " + $c.Name)
+            if ($okCap -and -not $MogrtPath) { $MogrtPath = $c.FullName }
+        }
+    }
+}
+if ($MogrtPath) {
+    Good "MOGRT to test: $MogrtPath"
+} else {
+    Warn 'No usable .mogrt found - the MOGRT step will be skipped.'
+    Warn 'Export one from the AE panel to measure Premiere acceptance.'
+}
+
+# ------------------------------------------------------------ the job
+Remove-Item $resFile, $runFile -ErrorAction SilentlyContinue
+$job = [ordered]@{
+    probeJsx       = ((Join-Path $repoRoot 'probe\com.cptk.aellama.probe\jsx\probe.jsx') -replace '\\', '/')
+    probe          = 'battery'
+    allowMutate    = $true
+    scratchProject = ($scratch -replace '\\', '/')
+    makeSequence   = $true
+    mogrtPath      = $(if ($MogrtPath) { $MogrtPath -replace '\\', '/' } else { $null })
+    createdAt      = (Get-Date).ToString('o')
+}
+$job | ConvertTo-Json -Depth 5 | Set-Content $jobFile -Encoding UTF8
+Say "Job written: $jobFile"
+Say 'Everything mutating happens in a scratch project, never in yours.'
+
+# ------------------------------------------------------- restart Premiere
+$running = Get-PremiereProcesses
+if ($running.Count -gt 0) {
+    if ($NoClose) {
+        Warn 'Premiere is already running and -NoClose was passed. It will not'
+        Warn 'see the job: extensions load at launch. Quit it and re-run.'
+        exit 4
+    }
+    Say 'Premiere is running; asking it to quit (it will prompt if unsaved)...'
+    foreach ($p in $running) { [void]$p.CloseMainWindow() }
+    $deadline = (Get-Date).AddSeconds(45)
+    while ((Get-Date) -lt $deadline -and (Get-PremiereProcesses).Count -gt 0) {
+        Start-Sleep -Milliseconds 700
+    }
+    if ((Get-PremiereProcesses).Count -gt 0) {
+        Bad 'Premiere did not quit - it is probably asking to save something.'
+        Bad 'Answer that dialog, then re-run this script. Nothing was forced.'
+        exit 4
+    }
+    Good 'Premiere closed.'
+}
+
+# Launch INTO the scratch project when it already exists. Premiere
+# otherwise reopens whatever was last open, and if that project is dirty
+# the battery's newProject call raises a "save changes?" modal with
+# nobody there to answer it. From the second run on, this side-steps the
+# question entirely.
+if (Test-Path $scratch) {
+    Say "Launching Premiere with the scratch project..."
+    Start-Process -FilePath $PremierePath -ArgumentList @($scratch) | Out-Null
+} else {
+    Say 'Launching Premiere (first run: it will create the scratch project)...'
+    Start-Process -FilePath $PremierePath | Out-Null
+}
+
+# ------------------------------------------------------------- wait
+Say ("Waiting up to " + $TimeoutSec + "s for a result (first launch is slow)...")
+$started = Get-Date
+$deadline = $started.AddSeconds($TimeoutSec)
+$lastTick = 0
+while ((Get-Date) -lt $deadline) {
+    if (Test-Path $resFile) { Start-Sleep -Milliseconds 800; break }
+    Start-Sleep -Milliseconds 1000
+    $elapsed = [int](((Get-Date) - $started).TotalSeconds)
+    if ($elapsed - $lastTick -ge 20) {
+        $lastTick = $elapsed
+        $claimed = if (Test-Path $runFile) { ' (job claimed, running)' } else { '' }
+        Say ("  ... " + $elapsed + "s" + $claimed)
+    }
+}
+
+if (-not (Test-Path $resFile)) {
+    Bad ''
+    Bad 'No result. Neither door claimed the job.'
+    Say ''
+    Say 'What that means, and what to check:'
+    if (Test-Path $runFile) {
+        Say '  - the job WAS claimed but never finished: something in the'
+        Say '    battery hung. Look in Premiere for a modal dialog.'
+    } else {
+        Say '  - the job was never claimed, so neither the visible panel nor'
+        Say '    the invisible runner loaded. Either the panel is not in'
+        Say '    Premiere''s saved workspace (open it once, leave it open,'
+        Say '    quit Premiere, re-run this), or the startup event does not'
+        Say '    fire on this build.'
+    }
+    Say '  - scripts\probe-doctor.ps1 reads what CEP logged about both.'
+    if (-not $KeepOpen) {
+        foreach ($p in (Get-PremiereProcesses)) { [void]$p.CloseMainWindow() }
+    }
+    exit 3
+}
+
+# ------------------------------------------------------------- report
+Good ''
+Good 'Result received.'
+$res = $null
+try { $res = Get-Content -Raw $resFile | ConvertFrom-Json } catch {
+    Bad "The result file is not readable JSON: $($_.Exception.Message)"
+    exit 1
+}
+
+Say ''
+Say ("host: " + $res.panel.appName + " " + $res.panel.appVersion +
+     "   claimed by: " + $(if ($res.job) { $res.job.via } else { 'door 3 runner' }))
+Say ''
+
+$failedSteps = 0
+$battery = $null
+if ($res.battery) { $battery = $res.battery }
+elseif ($res.parsed -and $res.parsed.data) { $battery = $res.parsed.data }
+
+if ($battery -and $battery.steps) {
+    Say '-- battery'
+    foreach ($s in $battery.steps) {
+        if ($s.ok) {
+            Say ("  ok    " + $s.step)
+        } else {
+            $failedSteps++
+            Bad ("  FAIL  " + $s.step + " : " + $s.error)
+        }
+    }
+} else {
+    Warn 'The result carries no battery steps - see the raw file.'
+    $failedSteps++
+}
+
+Say ''
+Say "Full result: $resFile"
+Say 'Grade it with:  node scripts\ppro-probe-report.js'
+
+if (-not $KeepOpen) {
+    Say ''
+    Say 'Closing Premiere...'
+    foreach ($p in (Get-PremiereProcesses)) { [void]$p.CloseMainWindow() }
+}
+
+if ($failedSteps -gt 0) {
+    Say ''
+    Warn ("$failedSteps step(s) failed. They are listed above, ALL of them,")
+    Warn 'from one launch - paste this output and they get fixed together.'
+    exit 1
+}
+Good ''
+Good 'Every battery step passed.'
+exit 0

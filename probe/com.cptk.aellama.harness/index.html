@@ -82,14 +82,24 @@
   var loadSrc = jsx ? '$.evalFile(new File("' + jsx + '"))' : '"no jsx"';
 
   window.__adobe_cep__.evalScript(loadSrc, function () {
-    var name = JSON.stringify(String(job.probe || "ping"));
-    var args = JSON.stringify(JSON.stringify(job.args || {}));
+    // Same job shape the visible panel understands, so whichever of the
+    // two claims the file first produces the same result document.
+    var name = JSON.stringify(String(job.probe || "battery"));
+    var battArgs = job.args || {
+      allowMutate: job.allowMutate === true,
+      scratchProject: job.scratchProject || null,
+      makeSequence: job.makeSequence === true,
+      mogrtPath: job.mogrtPath || null
+    };
+    var args = JSON.stringify(JSON.stringify(battArgs));
     window.__adobe_cep__.evalScript(
       "AELLP_call(" + name + ", " + args + ")",
       function (raw) {
         var parsed = null;
         try { parsed = JSON.parse(raw); } catch (e) {}
-        finish({ raw: String(raw).slice(0, 20000), parsed: parsed,
+        finish({ via: "invisible runner (door 3)",
+                 raw: String(raw).slice(0, 20000), parsed: parsed,
+                 battery: (parsed && parsed.ok) ? parsed.data : null,
                  ok: !!(parsed && parsed.ok) });
       });
   });

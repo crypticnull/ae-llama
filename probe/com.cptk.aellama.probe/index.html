@@ -569,11 +569,80 @@ of the panel. Read-only unless you press a button marked MUTATES.</p>
     }
   }
 
+  /*
+   * UNATTENDED MODE. scripts/run-ppro-probe.ps1 drops a job file, then
+   * launches the host. Premiere restores the panels that were open in
+   * the workspace, so this page comes up on its own and runs the whole
+   * battery with nobody at the keyboard.
+   *
+   * The job is CLAIMED (renameSync, atomic) before any work starts:
+   * this page can be reopened, and the invisible door-3 runner may be
+   * installed alongside it, so exactly one of them must win.
+   */
+  function claimJob() {
+    var fs, path, dir, jobFile, claimed, job;
+    try {
+      fs = nodeRequire("fs");
+      path = nodeRequire("path");
+      dir = probeDir();
+      jobFile = path.join(dir, "job.json");
+      if (!fs.existsSync(jobFile)) { return null; }
+      claimed = path.join(dir, "job.running.json");
+      fs.renameSync(jobFile, claimed);
+      job = JSON.parse(fs.readFileSync(claimed, "utf8"));
+      job.__claimed = claimed;
+      return job;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function runJob(job) {
+    note("unattended run: job claimed, measuring...");
+    results.job = { via: "visible panel", args: job };
+    results.panel = panelFacts();
+    results.storage = storageProbe(results.panel.appName);
+    results.shape = shapeInUse();
+    autofillMogrt();
+
+    var battArgs = {
+      allowMutate: job.allowMutate === true,
+      scratchProject: job.scratchProject || null,
+      makeSequence: job.makeSequence === true,
+      mogrtPath: job.mogrtPath ||
+                 (results.mogrtSearch && results.mogrtSearch.picked) || null
+    };
+    probe("battery", battArgs, function (err, data) {
+      results.battery = err ? { error: err } : data;
+      // The ScriptPath measurement costs nothing and is a fact this
+      // project already had to learn twice.
+      evalScript("String($.global.AELLP_LOADER_FILENAME)", function (fname) {
+        results.scriptPath = {
+          dollarFileName: (fname && fname !== "undefined") ? fname : null
+        };
+        results.finishedAt = new Date().toISOString();
+        var where = save();
+        results.savedTo = where;
+        try {
+          var fs2 = nodeRequire("fs");
+          var path2 = nodeRequire("path");
+          fs2.writeFileSync(path2.join(probeDir(), "job-result.json"),
+                            JSON.stringify(results, null, 2), "utf8");
+          if (job.__claimed) { fs2.unlinkSync(job.__claimed); }
+        } catch (e) {}
+        note("unattended run finished. Saved to " + where);
+      });
+    });
+  }
+
   // First paint: enough to tell whether the panel even reached a host.
   results.panel = panelFacts();
   results.storage = storageProbe(results.panel.appName);
   autofillMogrt();
   render();
+
+  var pending = claimJob();
+  if (pending) { runJob(pending); }
 })();
 </script>
 </body>
