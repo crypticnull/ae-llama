@@ -486,6 +486,25 @@
           return d.matte === "ST Shape" || "matte: " + d.matte;
         } },
 
+      // Until 2026-09-02 the four steps above checked only the RECEIPT,
+      // so nothing here could tell a matte AE really made from one it
+      // only said it made. AE's own state is read back now.
+      { name: "…and AE really shows the matte, read back from the comp",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.comp, limit: 0 }; },
+        check: function (d) {
+          var row = null, i;
+          for (i = 0; i < d.layers.length; i++) {
+            if (d.layers[i].name === "ST Square 3") row = d.layers[i];
+          }
+          if (!row) return "no row for ST Square 3";
+          if (row.matte !== "ST Square 4") {
+            return "matte reads " + row.matte + ", wanted ST Square 4";
+          }
+          return row.matteMode === "alpha" ||
+                 "matteMode reads " + row.matteMode + ", wanted alpha";
+        } },
+
       { name: "removing the shape layer's matte",
         tool: "set_track_matte",
         args: function (ctx) {
@@ -493,6 +512,37 @@
         },
         check: function (d) {
           return d.matte === "removed" || "matte: " + d.matte;
+        } },
+
+      // Measured in AE 2026: removeTrackMatte() clears trackMatteLayer
+      // but LEAVES trackMatteType at the type it just removed, so a
+      // type-only read reports a matte that is gone. This is the step
+      // that would catch that.
+      { name: "…and the removal really cleared it in AE",
+        tool: "get_comp_details",
+        args: function (ctx) { return { comp: ctx.comp, limit: 0 }; },
+        check: function (d) {
+          var row = null, i;
+          for (i = 0; i < d.layers.length; i++) {
+            if (d.layers[i].name === "ST Shape") row = d.layers[i];
+          }
+          if (!row) return "no row for ST Shape";
+          if (row.matte) {
+            return "ST Shape still reports matte " + row.matte +
+                   " after mode 'none'";
+          }
+          return true;
+        } },
+
+      { name: "removing a matte a normal layer never had is refused",
+        tool: "set_track_matte",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: "ST Shape", mode: "none" };
+        },
+        check: function (err) {
+          return /has no track matte to remove/.test(err) ||
+                 "does not say there was nothing to remove: " + err;
         } },
 
       { name: "parent without visual jump",

@@ -68,7 +68,8 @@ function square(over) {
     // What READ_COMP grew for the trigger-layer steps (14 onward). A
     // 200x200 solid: anchor in its middle, fully opaque, no masks, no
     // expressions, linear keys if any.
-    matteLayer: null, isPrecomp: false, anchorPoint: [100, 100, 0],
+    matteLayer: null, matteLayerKnown: true, isPrecomp: false,
+    anchorPoint: [100, 100, 0],
     opacity: 100, sourceRect: { left: 0, top: 0, width: 200, height: 200 },
     layerWidth: 200, layerHeight: 200, maskBoxes: [], maskModes: [],
     maskInverted: [], opacityKeyEased: [], expressions: {}, textAnimators: 0
@@ -244,7 +245,11 @@ function buildLayer(spec, index) {
   const L = {
     name: spec.name, index: index,
     parent: spec.parent ? { name: spec.parent } : null,
-    trackMatteType: spec.matte || 0,
+    // Measured in AE 2026: an unmatted layer reads NO_TRACK_MATTE 5012,
+    // not 0, and ALPHA is 5013 — the constant the probe used to treat as
+    // "no matte". Both directions were wrong, so both are pinned here.
+    trackMatteType: spec.matte ||
+      (spec.matteLayer ? 5013 : 5012),
     // AE 23+: the matte is a layer reference, not just a type.
     trackMatteLayer: spec.matteLayer ? { name: spec.matteLayer } : null,
     inPoint: spec.inPoint || 0, outPoint: spec.outPoint || 6,
@@ -1725,15 +1730,42 @@ function everySquare(state, fn) {
   }
 }
 
+// --- track matte (step 6) ---------------------------------------------
+// This step had NO stub coverage, which is how its verdict stayed a false
+// pass for as long as it existed: `l.matte && l.matte !== 5013` is true
+// for every UNMATTED layer, because an unmatted layer reads 5012.
+{
+  const s = stepByTitle("track matte");
+  const bare = room();
+  const v = s.check(bare, { before: bare });
+  assert(v && /no layer has a track matte set/.test(v),
+         "a comp where nothing is matted fails: " + v);
+  const matted = after(bare, c => { const b = find(c, "Beta");
+    b.matte = 5013; b.matteLayer = "White Ellipse"; b.matteLayerKnown = true; });
+  assert(s.check(matted, { before: bare }) === null,
+         "and one real alpha matte passes");
+  assert(/no shape layer was created/.test(
+           s.check(without(matted, "White Ellipse"), { before: bare }) || ""),
+         "a matte with no shape layer still fails on the shape half");
+}
+
 // --- show one layer through another -----------------------------------
 {
   const s = stepByTitle("show one layer through another");
   const before = room();
   const matted = after(before, c => { const b = find(c, "Beta");
-    b.matte = 5012; b.matteLayer = "HELLO"; });
+    b.matte = 5013; b.matteLayer = "HELLO"; b.matteLayerKnown = true; });
   assert(s.check(matted, { before }) === null,
          "Beta alpha-matted by HELLO is a pass");
-  assert(s.check(after(matted, c => { find(c, "Beta").matteLayer = null; }),
+  // On AE 23+ the matte LAYER is the existence test: removeTrackMatte
+  // leaves trackMatteType at the type it removed (measured 2026-09-02),
+  // so an alpha type with no matte layer is a matte that is GONE.
+  assert(/Beta has no track matte/.test(
+           s.check(after(matted, c => { find(c, "Beta").matteLayer = null; }),
+                   { before }) || ""),
+         "a stale ALPHA type with no matte layer is not a matte");
+  assert(s.check(after(matted, c => { const b = find(c, "Beta");
+                   b.matteLayer = null; b.matteLayerKnown = false; }),
                  { before }) === null,
          "and a legacy AE that cannot name the matte layer still passes");
   {
@@ -1742,7 +1774,7 @@ function everySquare(state, fn) {
   }
   {
     const backwards = after(before, c => { const t = find(c, "HELLO");
-      t.matte = 5012; t.matteLayer = "Beta"; });
+      t.matte = 5013; t.matteLayer = "Beta"; t.matteLayerKnown = true; });
     const v = s.check(backwards, { before });
     assert(v && /backwards/.test(v) && /matted by Beta/.test(v),
            "the text matted by Beta is backwards and fails: " + v);

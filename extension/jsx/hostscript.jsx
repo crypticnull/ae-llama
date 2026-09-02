@@ -451,6 +451,55 @@ function AELL_layerType(layer) {
   return "layer";
 }
 
+/*
+ * Track mattes, measured in AE 2026 / ExtendScript 4.5.6 (WORKPLAN 1c),
+ * because the obvious read is the wrong one:
+ *
+ *   TrackMatteType.NO_TRACK_MATTE = 5012   ALPHA          = 5013
+ *   ALPHA_INVERTED                = 5014   LUMA           = 5015
+ *   LUMA_INVERTED                 = 5016
+ *
+ * A layer that never had a matte reads 5012 (NOT 0), and
+ * `removeTrackMatte()` clears `trackMatteLayer` but LEAVES
+ * `trackMatteType` at the type it just removed — a layer whose alpha
+ * matte was taken off still reads 5013 forever. So `trackMatteType`
+ * answers "what KIND, if any", never "is there one": the matte LAYER is
+ * the only honest existence test.
+ */
+function AELL_matteWord(t) {
+  if (t === TrackMatteType.ALPHA) return "alpha";
+  if (t === TrackMatteType.ALPHA_INVERTED) return "alpha_inverted";
+  if (t === TrackMatteType.LUMA) return "luma";
+  if (t === TrackMatteType.LUMA_INVERTED) return "luma_inverted";
+  return null;
+}
+
+/** The layer whose alpha/luma cuts `layer` right now, or null. */
+function AELL_matteLayerOf(layer) {
+  var kind = AELL_layerType(layer);
+  // A camera or a light can never show a matte, but ExtendScript still
+  // ACCEPTS `camera.trackMatteType = LUMA` (measured 2026-09-01), so a
+  // type-only read would report a phantom on one that had been written.
+  if (kind === "camera" || kind === "light") return null;
+  var ml = null, modern = false;
+  try {
+    ml = layer.trackMatteLayer;
+    modern = (typeof ml !== "undefined");
+  } catch (eM) { modern = false; ml = null; }
+  if (modern) return ml || null;
+  // Legacy AE (< 23) has no trackMatteLayer — and no removeTrackMatte
+  // either, so there the type IS trustworthy, and the matte is by
+  // definition the layer directly above.
+  var t = null;
+  try { t = layer.trackMatteType; } catch (eT) { return null; }
+  if (t === null || typeof t === "undefined") return null;
+  if (!AELL_matteWord(t)) return null;
+  try {
+    return layer.index > 1 ? layer.containingComp.layer(layer.index - 1)
+                           : null;
+  } catch (eL) { return null; }
+}
+
 function AELL_effectNames(layer) {
   var names = [];
   var effects = null;
@@ -2043,6 +2092,15 @@ AELL_TOOLS.get_comp_details = function (args) {
       startTime: layer.startTime,
       effects: AELL_effectNames(layer)
     };
+    // Only when there IS one, so an unmatted comp pays nothing for it.
+    // Without this the panel had no way at all to SEE a track matte:
+    // set_track_matte's receipt was the only evidence it had landed.
+    var matteLayer = AELL_matteLayerOf(layer);
+    if (matteLayer) {
+      entry.matte = matteLayer.name;
+      var matteMode = AELL_matteWord(layer.trackMatteType);
+      if (matteMode) entry.matteMode = matteMode;
+    }
     if (layer.selected) {
       entry.selected = true;
       if (i < start || i > last) selectedOutside++;
@@ -9396,6 +9454,15 @@ AELL_TOOLS.set_track_matte = function (args) {
       "' and their types.");
   }
   if (mode === "none" || mode === "off" || mode === "remove") {
+    // Reading trackMatteType here would be the bug this tool exists to
+    // avoid: after removeTrackMatte() it still reads the type it just
+    // removed, so every second removal would look like a real one.
+    var current = AELL_matteLayerOf(layer);
+    if (!current) {
+      return AELL_err("'" + layer.name + "' has no track matte to " +
+        "remove. get_comp_details {comp: \"" + comp.name + "\"} shows " +
+        "'matte' on every layer in '" + comp.name + "' that has one.");
+    }
     try {
       if (typeof layer.removeTrackMatte === "function") {
         layer.removeTrackMatte();
@@ -9408,7 +9475,8 @@ AELL_TOOLS.set_track_matte = function (args) {
         "light never has one to remove. get_comp_details shows '" +
         comp.name + "'s layers and their types.");
     }
-    return AELL_okay({ layer: layer.name, matte: "removed" });
+    return AELL_okay({ layer: layer.name, matte: "removed",
+                      was: current.name });
   }
   var MAP = { alpha: "ALPHA", alpha_inverted: "ALPHA_INVERTED",
               luma: "LUMA", luma_inverted: "LUMA_INVERTED" };
@@ -10577,7 +10645,13 @@ function AELL_layerSig(L, idx) {
   try { t += "|m" + L.property("ADBE Mask Parade").numProperties; }
   catch (e3) {}
   try { t += "|f" + (L.parent ? L.parent.index : "-"); } catch (e4) {}
-  try { t += "|t" + L.trackMatteType; } catch (e5) {}
+  // The TYPE alone is blind to a removal (it survives one), so the matte
+  // LAYER goes in the fingerprint too — otherwise set_track_matte and its
+  // undo were invisible to the rollback verifier.
+  try {
+    var sigMatte = AELL_matteLayerOf(L);
+    t += "|t" + L.trackMatteType + "," + (sigMatte ? sigMatte.index : "-");
+  } catch (e5) {}
   try { t += "|i" + L.inPoint + "," + L.outPoint + "," + L.startTime; }
   catch (e6) {}
   try {

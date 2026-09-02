@@ -68,6 +68,16 @@ interactive session does NOT self-start; it answers one prompt and waits.
   `camera.trackMatteType = LUMA` is ACCEPTED silently and reads back
   5015, so a matte tool that only try/catches AE sees success on a layer
   AE will never matte.
+- **`trackMatteType` is not "does this layer have a matte".** Measured
+  AE 2026: NO_TRACK_MATTE is **5012** (a fresh layer reads 5012, not 0),
+  ALPHA 5013, ALPHA_INVERTED 5014, LUMA 5015, LUMA_INVERTED 5016 — and
+  **`removeTrackMatte()` clears `trackMatteLayer` but LEAVES
+  `trackMatteType` at the type it just removed**, forever. So the matte
+  LAYER is the only honest existence test; the type only says what KIND,
+  once there is one. `AELL_matteLayerOf` / `AELL_matteWord` are the one
+  place this is read. A type-only read is wrong in both directions, which
+  is how `scripts/chat-probe.js` shipped a step that called every
+  unmatted layer matted AND failed a matte AE really made.
 - Adding any layer selects it and deselects everything else; creation
   tools here restore the user's selection (`AELL_keepSelection`).
 - `.jsx` is ES3: no JSON (use `AELLJSON`), no Array extras, no `const`.

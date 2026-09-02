@@ -152,6 +152,13 @@ function Layer(name, comp, kind) {
   this.comp = comp;
   this.kind = kind || "solid";
   classify(this);
+  // A fresh AV layer reads NO_TRACK_MATTE (5012), not 0. A camera or a
+  // light carries NEITHER property until something writes one — which is
+  // exactly how the legacy branch's phantom matte used to hide.
+  if (this.kind !== "camera" && this.kind !== "light") {
+    this.trackMatteType = TrackMatteType.NO_TRACK_MATTE;
+    this.trackMatteLayer = null;
+  }
   this.selected = false;
   this._parentRef = null;
   this._compensated = false;
@@ -312,13 +319,17 @@ Layer.prototype.setParentWithJump = function (p) {
   this._parentRef = p || null;
   this._jumped = true;
 };
+// Measured in AE 2026 (WORKPLAN 1c), and the asymmetry is the whole
+// point: setTrackMatte writes BOTH properties, removeTrackMatte clears
+// only trackMatteLayer and LEAVES trackMatteType at the type it just
+// removed. A stub that reset both would let a type-only "has a matte"
+// read pass here and lie in the field.
 Layer.prototype.setTrackMatte = function (m, t) {
-  this._matte = m;
-  this._matteType = t;
+  this.trackMatteLayer = m;
+  this.trackMatteType = t;
 };
 Layer.prototype.removeTrackMatte = function () {
-  this._matte = null;
-  this._matteType = null;
+  this.trackMatteLayer = null;
 };
 // EVERY AE layer has moveBefore — cameras and lights included — and
 // `layer.trackMatteType = X` is a plain assignment that never throws on
@@ -342,6 +353,12 @@ function Comp(name) {
   this.width = 1920;
   this.height = 1080;
   this.duration = 10;
+  this.frameRate = 30;
+  // get_comp_details reports these, so a comp without them is not a comp
+  // this stub can read back through the tool the panel actually calls.
+  this.resolutionFactor = [1, 1];
+  this.workAreaStart = 0;
+  this.workAreaDuration = 10;
   this.parentFolder = { name: "(root)" };   // every real comp has one
   const self = this;
   this.layers = {
@@ -416,9 +433,13 @@ function classify(layer) {
   Object.setPrototypeOf(layer, proto);
 }
 const ParagraphJustification = {};
+// The real numbers, measured in AE 2026 — an unmatted layer reads 5012,
+// NOT 0, and NO_TRACK_MATTE is 5012 rather than the 5013 the probe used
+// to assume (5013 is ALPHA). Anything that decides "is there a matte"
+// from this number is wrong twice over; see removeTrackMatte above.
 const TrackMatteType = {
-  ALPHA: "alpha", ALPHA_INVERTED: "alpha_inv",
-  LUMA: "luma", LUMA_INVERTED: "luma_inv", NO_TRACK_MATTE: "none"
+  NO_TRACK_MATTE: 5012, ALPHA: 5013, ALPHA_INVERTED: 5014,
+  LUMA: 5015, LUMA_INVERTED: 5016
 };
 
 const comp = new Comp("Props");
@@ -533,10 +554,45 @@ assert(!r.ok || /is the parent/.test(r.data.skipped || ""),
 
 // 7. track mattes
 r = call("set_track_matte", { layer: "A", matteLayer: "B", mode: "luma" });
-assert(r.ok && A._matte === B && A._matteType === "luma",
+assert(r.ok && A.trackMatteLayer === B &&
+       A.trackMatteType === TrackMatteType.LUMA,
        "set_track_matte wires luma matte via setTrackMatte");
 r = call("set_track_matte", { layer: "A", mode: "none" });
-assert(r.ok && A._matte === null, "mode none removes the matte");
+assert(r.ok && A.trackMatteLayer === null, "mode none removes the matte");
+assert(r.data.was === "B", "…and the receipt names what it removed: " +
+       JSON.stringify(r.data));
+// The measurement this whole block exists for: AE does NOT reset the
+// type on removal. Anything reading trackMatteType to answer "does this
+// layer have a matte" says yes here, forever, for a matte that is gone.
+assert(A.trackMatteType === TrackMatteType.LUMA,
+       "AE leaves trackMatteType at the removed type (" +
+       A.trackMatteType + ")");
+r = call("set_track_matte", { layer: "A", mode: "none" });
+assert(!r.ok && /'A' has no track matte to remove/.test(r.error) &&
+       /get_comp_details/.test(r.error),
+       "…so a second removal is REFUSED, not reported as 'removed': " +
+       (r.ok ? JSON.stringify(r.data) : r.error));
+
+// The matte has to be VISIBLE, or set_track_matte's receipt is the only
+// evidence it ever landed — which is how a matte AE never made read
+// exactly like one it did.
+function rowOf(name) {
+  const d = call("get_comp_details", { limit: 0 });
+  assert(d.ok, "get_comp_details answered: " + (d.ok ? "" : d.error));
+  return d.data.layers.filter(l => l.name === name)[0] || null;
+}
+assert(!rowOf("A").matte,
+       "an unmatted layer reports no matte even though trackMatteType " +
+       "still reads " + A.trackMatteType);
+call("set_track_matte", { layer: "A", matteLayer: "B", mode: "alpha" });
+assert(rowOf("A").matte === "B" && rowOf("A").matteMode === "alpha",
+       "get_comp_details names the matte layer and its mode: " +
+       JSON.stringify(rowOf("A")));
+assert(!rowOf("B").matte, "…and only on the layer that has one");
+call("set_track_matte", { layer: "A", mode: "none" });
+assert(!rowOf("A").matte,
+       "…and it goes away when the matte does: " +
+       JSON.stringify(rowOf("A")));
 r = call("set_track_matte", { layer: "A", matteLayer: "A", mode: "alpha" });
 assert(!r.ok && /matte itself/.test(r.error), "self-matte refused");
 r = call("set_track_matte", { layer: "A", mode: "alpha" });
@@ -997,6 +1053,10 @@ assert(/'A' is /.test(r.error) && /'B' is /.test(r.error),
        r.error.slice(100, 260));
 A.setTrackMatte = rawSet;
 
+// A real matte first: the removal guard added 2026-09-02 refuses before
+// AE is ever called when there is nothing to remove, so without this the
+// step below would measure the guard instead of AE's raw message.
+call("set_track_matte", { layer: "A", matteLayer: "B", mode: "luma" });
 const rawRemove = A.removeTrackMatte;
 A.removeTrackMatte = function () {
   throw new Error("After Effects error: Object is invalid");

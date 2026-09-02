@@ -148,6 +148,15 @@ Built remote by three passes + adversarial review, full stub suite
 green. Rides the SAME patch bump as 1b when both verify — one bump,
 one push. One pass per bullet:
 
+- **Trigger layer (roadmap 2) — DONE 2026-09-02 (0.11.2).** Both runs'
+  per-step verdicts are in `docs/WORKPLAN-LOG.md`. It found a real
+  defect of its own class: `trackMatteType` is not an existence test
+  (removeTrackMatte leaves it stale, NO_TRACK_MATTE is 5012), the panel
+  could not SEE a track matte at all, and step 27 flipped to pass after
+  the fix. Two misses filed for later passes: `add_mask` accepts bounds
+  that miss the layer, and "clean up this comp" routes to the project
+  panel (the only miss that repeated across both runs). The original
+  instruction, for reference:
 - **Trigger layer (roadmap 2).** Run `scripts/chat-probe.js` with the
   real model — 15 new steps (indexes 15-29) each say a casual sentence
   ("delay it", "tag along", "chop off the lower half", "dress HELLO

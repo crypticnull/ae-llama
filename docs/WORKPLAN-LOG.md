@@ -10263,3 +10263,178 @@ never drift apart. `CLAUDE.md` "Hard-won AE facts" carries this now.
 
 - Not attempted this pass (still open, in order): **1c**, then the
   pass-22 salvage.
+
+## 2026-09-02 (local session, real AE) — WORKPLAN 1c bullet 1: the trigger-layer chat-probe, and the matte the panel could not see (0.11.2)
+
+- Item: section **1c**, first bullet — run `scripts/chat-probe.js` with the
+  real model over the 15 trigger-layer steps and log per-step verdicts.
+  Harness opened at **562/562**, so no section-1 work was owed.
+
+### Running it at all: steps 15-29 are not a standalone subset
+
+`--steps 15,...,29` crashed on step 15 with a TypeError inside the step's
+`check` (`state.layers` is undefined when the rig comp does not exist).
+Steps 1-11 BUILD the rig those sentences name (Beta, Rig, HELLO, the nine
+squares), and every run sweeps the comp away at startup, so the later
+steps only mean anything in the same process as the earlier ones. Both
+halves fixed:
+
+- `judge()` now wraps `step.check` in try/catch and turns a throw into a
+  VERDICT — a crash used to kill the whole run, so every step after it
+  was never even asked. When the comp is missing the message says so and
+  names the rig steps.
+- The runs below are `--steps 1..11,15..29` (12-14 are the ComfyUI steps,
+  verified in 1b on 2026-09-01, skipped to keep the pass inside a night).
+
+### Run 1 — 22/26. Four misses, and one of them was not the model's
+
+    19 hide half a layer with a mask   FAIL  add_mask bounds in COMP space
+    24 sync a layer to the music       FAIL  ran add_null, never reached
+                                             audio_to_keyframes
+    27 show one layer through another  FAIL  "Beta has no track matte"
+    29 clean up means the comp         FAIL  deleted 2 layers unasked
+
+Step 27 is the one that mattered. The model picked the right tool with
+the right arguments — `set_track_matte {layer: "Beta", matteLayer:
+"HELLO", mode: "alpha"}` — the receipt said ok, and the verdict said no
+matte. Probed the live comp (the run had `--keep`) rather than guessing.
+
+### The measurement: `trackMatteType` does not mean "has a matte"
+
+Measured in real AE 2026 / ExtendScript 4.5.6:
+
+    NO_TRACK_MATTE = 5012    ALPHA          = 5013
+    ALPHA_INVERTED = 5014    LUMA           = 5015
+    LUMA_INVERTED  = 5016
+    fresh solid trackMatteType   = 5012   (NOT 0)
+    after setTrackMatte(ALPHA)   = 5013, trackMatteLayer = ES2
+    after removeTrackMatte()     = 5013, trackMatteLayer = null
+
+So **`removeTrackMatte()` clears `trackMatteLayer` and LEAVES
+`trackMatteType` at the type it just removed.** The type answers "what
+KIND, if any"; only the matte LAYER answers "is there one". Beta really
+was alpha-matted by HELLO — it read 5013 with `trackMatteLayer = HELLO`
+— and the probe called that bare.
+
+`scripts/chat-probe.js` carried `hasMatte(m) { return !!m && m !== 5013 }`
+with a comment asserting 5013 was NO_TRACK_MATTE. Wrong in BOTH
+directions, so one constant produced two opposite lies:
+
+- step 27, a **false FAIL** on a matte AE really made;
+- step 6 (`l.matte && l.matte !== 5013`), a **false PASS** — every
+  unmatted layer reads 5012, so "does any layer have a matte" was true
+  for a comp with none. That step had no stub coverage at all, which is
+  how it stayed green while proving nothing.
+
+### The product gap underneath it
+
+The panel had **no way to see a track matte**. `get_comp_details` never
+reported one, so `set_track_matte`'s own receipt was the only evidence a
+matte existed — the shape of failure 1b spent a night on. The 562-step
+suite's four matte steps all checked the receipt too, so none of them
+could tell a matte AE made from one it only said it made.
+
+Fixed at the root, `extension/jsx/hostscript.jsx`:
+
+- New `AELL_matteWord` / `AELL_matteLayerOf` — the one place mattes are
+  read. Existence is `trackMatteLayer`; cameras and lights return null
+  before anything is read (they accept a phantom `trackMatteType` write,
+  measured 2026-09-01); pre-AE-23 falls back to the type, which is
+  trustworthy THERE because that AE has no `removeTrackMatte` to leave
+  it stale.
+- `get_comp_details` reports `matte` (the layer's name) and `matteMode`,
+  **only on layers that have one**, so an unmatted comp pays nothing.
+- `set_track_matte {mode: "none"}` on a layer with no matte is now
+  REFUSED, grounded ("…has no track matte to remove", pointing at
+  get_comp_details), instead of answering `{matte: "removed"}`. A
+  successful removal also names `was`. Reading the type here would have
+  been the very bug: every second removal would have looked real.
+- `AELL_layerSig` (the undo fingerprint) carries the matte LAYER's index,
+  not just the type — a removal used to be invisible to the rollback
+  verifier, because the type survives it.
+- `tools.js`: `get_comp_details`'s doc gained the words "track matte"
+  (+14 chars; system prompt 58955 -> 58969 full, 39157 -> 39171 compact).
+  Paid for by what it replaces — the model can now READ a matte instead
+  of trusting a receipt.
+
+### Back-fill, all four directions
+
+- `extension/js/selftest.js` (both runners): 3 new steps — AE is read
+  BACK through `get_comp_details` after the matte is set (it names the
+  matte layer and `alpha`), read back again after `mode: "none"` (the
+  field is gone), and a second removal is refused. **565 steps.**
+- `tests/test-property-access.js`: the stub modelled mattes as private
+  `_matte`/`_matteType` and `TrackMatteType` as strings, so neither AE
+  fact could exist in it. It now carries the measured numbers, a fresh
+  layer at 5012, and the asymmetry (`removeTrackMatte` leaves the type).
+  **3 assertions fail on the reverted host**, including the receipt
+  `{"layer":"A","matte":"removed"}` for a matte that was already gone.
+- `tests/test-chat-probe.js`: NEW block for step 6 (a comp where nothing
+  is matted must FAIL — the false pass), the measured constants in the
+  layer builder, and the stale-ALPHA-with-no-matte-layer case pinned as
+  "no matte" while legacy AE (no `trackMatteLayer` at all — new
+  `matteLayerKnown` flag from READ_COMP) still passes on the type.
+- `tests/test-self-test.js`'s canned host learned matte STATE (it
+  answered a constant before, which is what let receipt-only steps look
+  like verification).
+- `CLAUDE.md` "Hard-won AE facts" carries the numbers and the rule.
+
+### Run 2 — 23/26, and step 27 FLIPPED
+
+Same sentences, same model, after the fix:
+
+    15 push a layer back      pass    22 finished look          FAIL*
+    16 attach to a null       pass    23 keep it drifting       pass
+    17 smooth a fade          pass    24 sync to the music      pass*
+    18 fix a text pivot       pass    25 tuck under another     pass
+    19 hide half with a mask  pass*   26 take an effect off     pass
+    20 take a mask off        pass    27 show through another   PASS (was FAIL)
+    21 un-animate             pass    28 precompose             FAIL (mine)
+                                      29 clean up               FAIL
+
+  \* 19 and 24 failed in run 1 and passed in run 2 with no change to
+  either path, and 22 flipped the other way — temperature 0.7 over a 61k
+  char prompt is not reproducible per step. **Only a miss that repeats
+  across runs is a wording dependency;** single-run misses are noise, and
+  both runs are recorded here for exactly that reason.
+
+- **28 is my own fault, not a finding:** run 1 used `--keep`, so a comp
+  called `Squares` survived into run 2 and AE auto-numbered the new one
+  `Squares 2`. Do not use `--keep` before a run whose verdicts read comp
+  names.
+
+- **Harness: 565/565 PASSED** in real AE (the 3 new read-back steps
+  included — so AE really does report the matte through
+  `get_comp_details`, and the removal really clears it). Full stub sweep
+  green except the known environmental `tests/test-comfy-backend.js`
+  (this machine has `%LOCALAPPDATA%\Comfy-Desktop\ComfyUI-Shared\models`,
+  CI does not — still wants a `process.env` stub, still not mine).
+
+- **BUMPED 0.11.1 -> 0.11.2.** `extension/` changed (hostscript, tools,
+  selftest), so the bump is owed.
+
+### Filed for later passes, in priority order
+
+1. **`add_mask` accepts bounds that miss the layer entirely and reports
+   ok.** Run 1: "chop off the lower half of Beta" produced
+   `bounds [910, 500, 100, 100]` — Beta's COMP position, on a 100x100
+   layer whose own box is `[0, 0, 100, 100]`. The mask landed 910px away,
+   `mode: "subtract"`, hid nothing, receipt said ok. The doc ALREADY says
+   "Coordinates are in LAYER space" with the exact worked example, so
+   more words are not the fix: `add_mask` should REFUSE bounds with no
+   overlap at all and name the layer's own box. Same silent-lie class as
+   this pass's matte.
+2. **"Probe Room is a mess — clean it up" routes to the project panel.**
+   Failed in BOTH runs, so this one IS a wording dependency: run 1
+   deleted two layers unasked, run 2 ran
+   `clean_project {remove_unused_footage}` and offered to delete 17
+   solids. A comp name in the sentence should pin the tool to the
+   timeline. One rule change, then re-run 29 to show the flip.
+3. **Anything else still reading `trackMatteType` for existence** is
+   wrong by the measurement above — `AELL_matteLayerOf` is now the one
+   place to read a matte, and new code should go through it.
+
+- Not attempted this pass (still open, in order): **1c bullets 2-4**
+  (missing verbs, context budget + ledger, MOGRT verifier), then the
+  pass-22 salvage. `stash@{0}` is still `pass22-salvage` and branch
+  `aell-backup-pass22` still exists, untouched.

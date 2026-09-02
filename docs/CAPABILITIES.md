@@ -55,7 +55,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `expose_property` | Expose one property in the comp's ESSENTIAL GRAPHICS panel, so an editor can change it in Premiere | yes | host | 1 | 5 |
 | `for_each_layer` | Run a PER-LAYER tool once per target layer in ONE call (max 200 layers) — the batch executor for anything without its own layers arg: {tool: 'apply_effect', args: {effect: 'Gaussian Blur'}} blurs every target | yes | host | 1 | 6 |
 | `get_bounds` | MEASURE a layer's rendered content without touching it — how wide the text actually is, where the shape sits in the frame, whether anything overflows | no | host | 1 | 32 |
-| `get_comp_details` | Layers of a comp with index, name, type, timing, effects | no | host | 3 | 32 |
+| `get_comp_details` | Layers of a comp with index, name, type, timing, effects, track matte | no | host | 4 | 34 |
 | `get_project_info` | List project items (comps/footage/folders) and the active comp | no | host | 2 | 15 |
 | `get_property` | Read ANY property by path: value, keyframes, expression | no | host | 3 | 91 |
 | `grid_layout` | Arrange layers into a grid rigged to a control null: its 'Grid X Spacing'/'Grid Y Spacing'/'Grid Columns' sliders drive spacing AND column count live, and the grid centers on the null's position (all expressions generated host-side) | yes | host | 1 | 2 |
@@ -89,7 +89,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `set_property` | Set ANY property by path — the universal fallback when no dedicated tool fits | yes | host | 3 | 10 |
 | `set_solid_color` | Change a SOLID layer's colour (this is the ONLY way — a solid's colour is not a property you can set_property) | yes | host | 1 | 5 |
 | `set_text_style` | Restyle an existing text layer (any subset of fields) | yes | host | 1 | 2 |
-| `set_track_matte` | Use one layer as another's track matte (alpha or luma, optionally inverted), or remove it with mode 'none' | yes | host | 1 | 7 |
+| `set_track_matte` | Use one layer as another's track matte (alpha or luma, optionally inverted), or remove it with mode 'none' | yes | host | 1 | 8 |
 | `set_transform` | Set a transform property | yes | host | 1 | 38 |
 | `snapshot_frame` | Write one frame of a comp to a PNG on disk | yes | host | 1 | 7 |
 | `split_layer_into_chunks` | Cut a layer into chunks, each on its own layer trimmed to its own window — ONE call does the whole edit | yes | host | 1 | 2 |

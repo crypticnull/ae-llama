@@ -568,7 +568,8 @@ const READ_COMP = FIND_COMP +
   "    effectNames: [], effectColors: []," +
   "    scale: null, rotation: null, isText: false, isShape: false," +
   "    isNull: false, isSolid: false, sourceFile: null," +
-  "    matteLayer: null, isPrecomp: false, anchorPoint: null, opacity: null," +
+  "    matteLayer: null, matteLayerKnown: false, isPrecomp: false," +
+  "    anchorPoint: null, opacity: null," +
   "    sourceRect: null, layerWidth: null, layerHeight: null, maskBoxes: []," +
   "    maskModes: [], maskInverted: []," +
   "    opacityKeyEased: [], expressions: {}, textAnimators: 0 };" +
@@ -630,7 +631,9 @@ const READ_COMP = FIND_COMP +
   // What the trigger-layer steps (14 onward) judge on, each read in its
   // own try: a null has no source rect worth reading, a camera no anchor
   // point, and one throw must not blank the rest of the row.
-  "  try { row.matteLayer = L.trackMatteLayer ? L.trackMatteLayer.name" +
+  "  try { row.matteLayerKnown = (typeof L.trackMatteLayer" +
+  "    !== 'undefined');" +
+  "    row.matteLayer = L.trackMatteLayer ? L.trackMatteLayer.name" +
   "    : null; } catch (e13) {}" +
   "  try { row.isPrecomp = !!(L.source && (L.source instanceof CompItem));" +
   "  } catch (e14) {}" +
@@ -927,8 +930,22 @@ function ranInstead(ctx) {
   return tried.length ? " — it ran " + tried.join(", ") + " instead"
                       : " and ran no tools at all";
 }
-/* AE's TrackMatteType.NO_TRACK_MATTE is 5013; a fresh layer reads 0. */
-function hasMatte(m) { return !!m && m !== 5013; }
+/* Measured in AE 2026, and the constant this used to carry was wrong in
+ * BOTH directions: TrackMatteType is NO_TRACK_MATTE 5012, ALPHA 5013,
+ * ALPHA_INVERTED 5014, LUMA 5015, LUMA_INVERTED 5016, and an unmatted
+ * layer reads 5012 — not 0. `m !== 5013` therefore called every UNMATTED
+ * layer matted (a false pass) and every alpha-matted one bare (a false
+ * fail). And even the corrected type is not an existence test:
+ * removeTrackMatte() clears trackMatteLayer but LEAVES trackMatteType at
+ * the type it removed. The matte LAYER is the only honest read. */
+function hasMatte(row) {
+  if (!row) return false;
+  if (row.matteLayerKnown) return !!row.matteLayer;
+  // Legacy AE (< 23) has no trackMatteLayer to read — and there the type
+  // IS an existence test, because that AE has no removeTrackMatte to
+  // leave it stale behind a matte that is gone.
+  return row.matte >= 5013 && row.matte <= 5016;
+}
 
 const STEPS = [
   {
@@ -1038,7 +1055,7 @@ const STEPS = [
       if (!state.layers.some(l => l.isShape)) {
         return "no shape layer was created";
       }
-      const matted = state.layers.filter(l => l.matte && l.matte !== 5013);
+      const matted = state.layers.filter(hasMatte);
       if (!matted.length) return "no layer has a track matte set";
       return null;
     }
@@ -1903,9 +1920,9 @@ const STEPS = [
       const b = betaLayer(state), t = textLayer(state);
       if (!b) return "the Beta layer is gone";
       if (!t) return "the HELLO layer is gone";
-      if (!hasMatte(b.matte)) {
+      if (!hasMatte(b)) {
         const t0 = ctx.before ? textLayer(ctx.before) : null;
-        if (hasMatte(t.matte) && !(t0 && hasMatte(t0.matte))) {
+        if (hasMatte(t) && !(t0 && hasMatte(t0))) {
           return "it is backwards — HELLO got matted" +
                  (t.matteLayer ? " by " + t.matteLayer : "") + " and Beta " +
                  "is untouched; 'layer' is the thing being cut, " +
@@ -2156,7 +2173,24 @@ function main() {
           restoreSettings();
           let verdict = null;
           if (readErr) verdict = "could not read the comp: " + readErr.message;
-          else verdict = step.check(state, ctx) || null;
+          // A check that throws used to kill the whole run mid-sweep, so
+          // the steps after it were never even asked. Most checks reach
+          // straight into state.layers, which does not exist when the rig
+          // comp is missing — the shape of "you ran a later step without
+          // the earlier ones that build the rig". That is a verdict, not
+          // a crash.
+          else {
+            try {
+              verdict = step.check(state, ctx) || null;
+            } catch (e) {
+              verdict = "the step's check could not run: " + e.message +
+                (state && !state.found
+                  ? " — no comp called " + COMP + " exists; steps 1-11 " +
+                    "build the rig the later steps name, so run them in " +
+                    "the same --steps list"
+                  : "");
+            }
+          }
           if (verdict) say("verdict", "FAIL — " + verdict);
           else say("verdict", "pass (" + summary(ctx) + ")");
           rows.push({ index: idx, title: step.title, verdict: verdict,

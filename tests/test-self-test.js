@@ -71,6 +71,22 @@ function compResolutionLabel(c) {
 }
 
 function capLayers(compName, all, args) {
+  // The matte rig's layers are in the comp whether or not the branch that
+  // built this row list knows about them, and a layer keeps its row after
+  // its matte is REMOVED -- which is the case the read-back step exists
+  // for (measured in AE 2026: removeTrackMatte leaves trackMatteType at
+  // the type it just removed, so only the matte LAYER tells the truth).
+  const rig = mtRig[compName] || [];
+  if (rig.length) {
+    const have = {};
+    for (const l of all) have[l.name] = true;
+    const extra = [];
+    for (const nm of rig) {
+      if (!have[nm]) extra.push({ index: all.length + extra.length + 1,
+                                  name: nm, effects: [] });
+    }
+    if (extra.length) all = all.concat(extra);
+  }
   const total = all.length;
   const limit = listLimit(args && args.limit);
   let start = (args && args.start > 0) ? Math.round(args.start) : 1;
@@ -86,6 +102,11 @@ function capLayers(compName, all, args) {
     if (l && wanted.indexOf(l) < 0) wanted.push(l);
   }
   wanted.sort((a, b) => a.index - b.index);
+  for (const l of wanted) {
+    const m = mattes[compName + "|" + l.name];
+    if (m) { l.matte = m.matte; l.matteMode = m.mode; }
+    else if (l.matte) { delete l.matte; delete l.matteMode; }
+  }
   const cp = compProps[compName];
   const out = { name: compName, numLayers: total,
                 layersShown: wanted.length, layers: wanted };
@@ -308,6 +329,13 @@ let textStyle = null;
 // "did slot i go to layer i" is a question the stub answers for free.
 let ordX = {};
 let ordStack = [];
+// Track mattes, remembered rather than answered with a constant: until
+// 2026-09-02 the suite checked only set_track_matte's RECEIPT, so a matte
+// AE never made read exactly like one it did. "comp|layer" -> the matte
+// it currently carries; mtRig is which layers the matte steps touched, so
+// get_comp_details still has a row for one whose matte was removed.
+let mattes = {};
+let mtRig = {};
 // The masks each layer holds, "comp|layer" -> [names], so delete_mask
 // answers from what add_mask really put there and the mask refusals
 // ("no masks", "Mask not found ... Masks here:") are measurements.
@@ -2628,9 +2656,23 @@ function cannedOk(tool, args) {
           "cut. get_comp_details {comp: \"" + (args && args.comp) +
           "\"} lists the layers and their types." };
       }
+      const mtComp = (args && args.comp) || "";
+      const mtKey = mtComp + "|" + tmLayer;
+      const remember = (nm) => {
+        if (!mtRig[mtComp]) mtRig[mtComp] = [];
+        if (mtRig[mtComp].indexOf(nm) === -1) mtRig[mtComp].push(nm);
+      };
       const mode = String((args && args.mode) || "alpha").toLowerCase();
       if (mode === "none" || mode === "off" || mode === "remove") {
-        return { layer: tmLayer, matte: "removed" };
+        if (!mattes[mtKey]) {
+          return { __err: "'" + tmLayer + "' has no track matte to " +
+            "remove. get_comp_details {comp: \"" + mtComp + "\"} shows " +
+            "'matte' on every layer in '" + mtComp + "' that has one." };
+        }
+        const was = mattes[mtKey].matte;
+        delete mattes[mtKey];
+        remember(tmLayer);
+        return { layer: tmLayer, matte: "removed", was: was };
       }
       const mt = args && args.matteLayer;
       if (rigged(mt)) {
@@ -2638,6 +2680,9 @@ function cannedOk(tool, args) {
           " and cannot BE a matte — only a visual (AV) layer has the " +
           "alpha/luma to cut with (layer: '" + tmLayer + "' is solid)." };
       }
+      mattes[mtKey] = { matte: mt, mode: mode };
+      remember(tmLayer);
+      remember(mt);
       return { layer: tmLayer, matte: mt, mode: mode };
     }
     case "set_layer_parent":
@@ -4437,6 +4482,8 @@ SelfTest.run({
     camProbeReads = 0;
     ordX = {};
     ordStack = [];
+    mattes = {};
+    mtRig = {};
     maskKeys = {};
     mkMasks = {};
     batchLayers = 0; batchFx = {}; batchBlur = null;
@@ -4468,6 +4515,8 @@ SelfTest.run({
         camProbeReads = 0;
         ordX = {};
         ordStack = [];
+        mattes = {};
+        mtRig = {};
         maskKeys = {};
         mkMasks = {};
         batchLayers = 0; batchFx = {}; batchBlur = null;

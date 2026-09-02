@@ -22,7 +22,8 @@
             "result says so in 'note' — raise limit to see more.",
       args: "{limit?: int (default 40, 0 = every item)}" },
     { name: "get_comp_details", mutating: false,
-      desc: "Layers of a comp with index, name, type, timing, effects. A " +
+      desc: "Layers of a comp with index, name, type, timing, effects, " +
+            "track matte. A " +
             "long comp is capped to a window: SELECTED layers are always " +
             "included, and 'note' says how many layers exist and how to " +
             "page through them.",
