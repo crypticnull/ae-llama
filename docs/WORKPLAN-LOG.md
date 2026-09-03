@@ -15523,3 +15523,175 @@ closed and its project was never closed. The self-test cleans up its own
 item(s)", and the bottom-of-suite check confirmed nothing of the run's
 remains. The probe's llama-server was started and stopped by the probe
 itself. No ComfyUI.
+
+## 2026-09-03 (local) - the --variants re-run of rows 30 and 35 (0.11.24)
+
+Workplan section 8, the bullet that read "THEN: a `--variants` re-run of
+rows 30 and 35 - the phrase-list additions for both are unmeasured in the
+field, and that run is what would close either of them for real."
+Harness was green at 644/644 before the pass, so the workplan item was
+the pass.
+
+### Row 30 is CLOSED: 4 pass, 0 miss, 0 HARM
+
+`node scripts/chat-probe.js --variants --steps 30,35`. All four
+phrasings of "arrange scattered layers into a grid" landed
+`grid_layout` on the six icons with the BACKGROUND left out, which is
+exactly what 0.11.22 built and could not prove. The phrase-list
+additions are now measured in the field. One observation, filed not
+fixed: the TYPO phrasing ("arrnage teh icon layers into a gird plz")
+spent six `center_anchor_point` calls before the `grid_layout` that did
+the work. It passes - centering an anchor is harmless and grid_layout
+did the job - but it is six calls of wasted round.
+
+### Row 35: the defect was the REFUSAL's own words
+
+Two of four phrasings were HARM, and both by the identical route:
+
+    !! set_mask {"layer":"BG","feather":10}
+       ERROR: Mask not found on 'BG' (several masks - pass {mask:
+              name|index}). Masks here: (none - add_mask creates one)
+    AI  The background layer does not have a mask. Adding a feathered
+        mask to soften it...
+    .. add_mask {"layer":"BG","feather":10}   -> ok
+
+`AELL_findMask`'s roster branch was answering a layer with ZERO masks,
+and it said two things wrong at once. "(several masks - pass {mask:
+name|index})" is FALSE on a maskless layer, and false in the worst
+direction: it reads as "there are masks, you just have not named one".
+Then it closed with "(none - add_mask creates one)", and the last clause
+of a refusal is an INSTRUCTION to this model - the same class 0.11.12
+fixed when distribute_property's refusal advised "delete the existing
+keyframes first" and the model wiped 18 keys. Here the model obeyed and
+feathered a full-frame mask, which softens nothing at all. Graded HARM
+twice: the CANONICAL sentence and its typo twin.
+
+`delete_mask` already knew the wording was wrong for zero - it carries
+its own up-front guard with a comment saying so ("the resolver's
+'several masks' wording would be wrong for zero"). The guard was never
+pushed down into the resolver, so `set_mask` and `set_mask_path` kept
+the broken message.
+
+### The fix, at the resolver
+
+`AELL_findMask(layer, ref, featherOnly)` gets a zero branch of its own:
+
+- **feather-only ask** (`AELL_featherOnly`: a feather and no mode /
+  inverted / expansion / opacity / name) -> `'BG' has no masks - and a
+  mask feather softens a mask EDGE, never the picture. To soften/blur
+  'BG' itself: apply_effect {layer: "BG", effect: "Gaussian Blur"}.`
+  **add_mask is deliberately NOT named** - the door-closing shape
+  0.11.13 gave remove_effect's empty parade, because the tail is the
+  part the model acts on.
+- **any other edit** -> `'BG' has no masks - nothing to change. add_mask
+  creates one.` That caller does want a mask, so it is told where to get
+  one. Same wording shape as delete_mask's.
+- **n > 0** is untouched: "several masks" is true with two of them and
+  the roster is real. The roster branch can no longer print an empty
+  "Masks here: " at all.
+
+`set_mask_path` shares the resolver and so shares the truth-telling half
+for free.
+
+### Verification
+
+- **Real AE harness 644 -> 653/653 PASSED.** Nine new steps in
+  selftest.js on a fresh maskless `ST Soften` solid: the feather-only
+  refusal carries no "several masks", no "add_mask", the EDGE sentence
+  and a paste-ready apply_effect naming the layer; a following
+  delete_mask proves the refusal wrote no mask; an `opacity` edit still
+  points at add_mask and offers no blur; a feather ALONGSIDE `mode` does
+  the same; and with two real masks the "several masks" roster branch is
+  proved intact.
+- **Field, and it flipped: canonical HARM -> pass and typo HARM -> pass,
+  in BOTH re-runs.** The canonical transcript is the receipt - the model
+  calls set_mask, reads the new refusal, and calls
+  `apply_effect {layer: "BG", effect: "Gaussian Blur"}` on the next
+  round. Row 35 went **2 pass / 2 HARM -> 3 pass / 0 miss / 1 HARM**.
+  Transcripts: `logs/chat-probe-2026-09-03T05-34-43.md` (before),
+  `...T05-46-32.md` and `...T05-47-27.md` (after).
+- `tests/test-shape-mask-tools.js` +19 checks (93 -> 112). **8 go RED
+  against the reverted hostscript**, naming the exact strings.
+- `tests/test-self-test.js`: the canned host had NO `set_mask` case at
+  all and answered permissively, which is why no stub could see this
+  class. It has one now, faithful to AELL_findMask's resolution rules
+  and its zero branch.
+- Full stub sweep: 0 red. `docs/CAPABILITIES.md` regenerated.
+- **Zero prompt cost** - host strings only, nothing in `tools.js`
+  changed (58926 unchanged).
+- `extension/` changed, so BUMPED: 0.11.23 -> **0.11.24**.
+
+### Row 35 is NOT closed, and the reason is a different defect
+
+The `vague` phrasing ("the background is too sharp behind the icons")
+passed in the run BEFORE the fix and was HARM in both runs after it.
+That is not a regression this pass caused - it cannot be, the vague run
+never calls set_mask and `AELL_findMask` is reachable only from
+set_mask / set_mask_path / delete_mask. What the three runs actually
+show is that its earlier pass was the lucky one:
+
+| run | vague call | why nothing was said |
+|-----|-----------|----------------------|
+| before fix | `add_mask` full-frame, mode unset | 0.11.21's warning FIRED, model followed it to Gaussian Blur - pass |
+| after, run 1 | `add_mask` full-frame, **mode: subtract** | 0.11.21 is one-sided: subtract is silent |
+| after, run 2 | `add_mask` **ellipse 400x400** at the centre | it cuts something away, so it is a vignette - silent |
+
+Three runs, three different mask shapes, and the single pass came from
+hitting the one shape the warning covers. So the vague phrasing's defect
+is ROUTING - "too sharp" reaches for a mask at all - and the mask then
+lands somewhere add_mask cannot honestly warn about. One wording change
+per pass is the section 8 rule and this pass spent its change on
+behaviour, so the lever is filed rather than pulled. Filed below.
+
+### Notes / assumptions
+
+- **The zero branch is not `AELL_errArg`.** 0.11.23's rollback exemption
+  would arguably fit (it is a pre-write naming refusal that says what
+  exists), and set_mask does `return AELL_err(e.message)` before
+  touching anything, so it is a return site. Left alone on purpose:
+  widening the exemption is filed workplan item 1 and wants its own
+  pass and its own evidence. This pass measured WORDS, not rollbacks.
+- **`featherOnly` is narrow on purpose.** A feather arriving with any
+  other mask edit means the caller wants a real mask, and gets add_mask.
+  Both directions are asserted in the stubs and in real AE.
+
+### Filed for later passes, in priority order
+
+1. **Row 35 vague: "too sharp / too crisp behind X" routes to a MASK.**
+   The rules bullet added in 0.11.21 carries the right phrases but lives
+   INSIDE the crop/mask bullet, which opens with
+   `'crop / chop off the lower half / ... / vignette' = add_mask` - the
+   0.11.13 ORDER lesson exactly, the model stops reading at the first
+   tool named. Candidate: lift the soften/blur clause out into a bullet
+   of its own so a blur is never read as a sub-case of masking. Costs
+   prompt bytes at 58926 against a 59000 ceiling, so it needs a paired
+   cut. Measure with `--variants --steps 35`; the gate is 4 pass.
+2. **A full-frame SUBTRACT mask hides the entire layer and says
+   nothing.** Measured this pass (run 1 above): `add_mask {bounds:
+   [0,0,1920,1080], mode: "subtract", feather: 100}` erased the BG
+   except a 100px fringe, on an `ok` receipt, in answer to "soften".
+   0.11.21 left subtract and inverted silent deliberately ("that is a
+   deliberate wipe"), which is defensible for a small subtract mask and
+   much weaker for one covering the WHOLE layer - there is nothing left.
+   Needs its own one-sidedness argument before anything is built.
+3. **Row 30 typo burns six `center_anchor_point` calls before the
+   grid_layout that works.** Passes, so it is cost and not harm.
+4. Everything else from the 2026-09-03 lists is unchanged: the dotted
+   `effect.<Fx>.<Param>` spec still rolling a round back, the
+   `distribute_property` mutate-then-throw hole, a bad VALUE not being
+   `argFault`, step 2's naming flake, the destructive-refusal wording on
+   `delete_layer` / `delete_mask` / `remove_effect`, `property: string`
+   in TOOL_DEFS, `POST /tokenize`, the `comfyUrl` 8188/8000 mismatch on
+   this machine, the harness answering a modal with WORDS, `starved`
+   wording, delete_mask warning on a live expression, the unmeasured
+   controller GROUP and non-en_US locale, and `capParams`.
+
+### Machine state
+
+AE running, project untouched and open, no dialog raised. AE was never
+closed and its project was never closed. The self-test cleans up its own
+`ST Soften` solid (a delete_layer step) inside the mask comp it already
+sweeps; all three chat-probe runs reported "cleanup: removed 1 project
+item(s)" and the bottom-of-suite check confirmed nothing of the run's
+remains. The probe's llama-server was started and stopped by the probe
+itself. No ComfyUI.

@@ -2984,6 +2984,74 @@ function cannedOk(tool, args) {
       }
       return mkOut;
     }
+    case "set_mask": {
+      // The canned host had NO set_mask case at all, so it answered every
+      // call permissively — which is exactly why no stub could see the
+      // class the chat probe measured on 2026-09-03: set_mask {feather}
+      // on a MASKLESS layer answered "(several masks — pass {mask:
+      // name|index}). Masks here: (none — add_mask creates one)", and the
+      // model took the last clause as an instruction. Faithful to
+      // AELL_findMask now, zero branch and all.
+      const smKey = ((args && args.comp) || "") + "|" +
+                    ((args && args.layer) || "");
+      const sm = mkMasks[smKey] || [];
+      let smRef = args && args.mask;
+      if (typeof smRef === "string" && /^\d+$/.test(smRef)) smRef = Number(smRef);
+      let smAt = -1;
+      if (typeof smRef === "number") smAt = Math.round(smRef) - 1;
+      else if (smRef !== undefined && smRef !== null && smRef !== "") {
+        smAt = sm.indexOf(String(smRef));
+      } else if (sm.length === 1) smAt = 0;
+      if (smAt < 0 || smAt >= sm.length) {
+        if (sm.length === 0) {
+          // Feather ALONE is the "soften it" ask, and it is the one a mask
+          // cannot answer on a layer that has none — so it goes to the
+          // blur and add_mask is deliberately NOT named.
+          const smFeather = (args &&
+            (typeof args.feather === "number" || Array.isArray(args.feather)));
+          const smOther = !!(args && (args.mode ||
+            typeof args.inverted === "boolean" ||
+            typeof args.expansion === "number" ||
+            typeof args.opacity === "number" || args.name));
+          if (smFeather && !smOther) {
+            return { __err: "'" + args.layer + "' has no masks — and a " +
+              "mask feather softens a mask EDGE, never the picture. To " +
+              "soften/blur '" + args.layer + "' itself: apply_effect " +
+              "{layer: \"" + args.layer + "\", effect: \"Gaussian Blur\"}." };
+          }
+          return { __err: "'" + args.layer + "' has no masks — nothing to " +
+            "change. add_mask creates one." };
+        }
+        return { __err: "Mask not found on '" + args.layer + "'" +
+          (smRef ? ": " + smRef : " (several masks — pass {mask: name|index})") +
+          ". Masks here: " + sm.join(", ") };
+      }
+      const smChanged = [];
+      if (args && args.mode) smChanged.push("mode=" + args.mode);
+      if (args && typeof args.inverted === "boolean") {
+        smChanged.push("inverted=" + args.inverted);
+      }
+      if (args && (typeof args.feather === "number" ||
+                   Array.isArray(args.feather))) {
+        smChanged.push("feather=" + args.feather);
+      }
+      if (args && typeof args.expansion === "number") {
+        smChanged.push("expansion=" + args.expansion);
+      }
+      if (args && typeof args.opacity === "number") {
+        smChanged.push("opacity=" + args.opacity);
+      }
+      if (args && args.name) {
+        sm[smAt] = String(args.name);
+        smChanged.push("name=" + args.name);
+      }
+      if (!smChanged.length) {
+        return { __err: "Nothing to change — pass mode, feather, " +
+          "expansion, opacity, inverted and/or name" };
+      }
+      return { layer: args.layer, mask: sm[smAt],
+               changed: smChanged.join(", ") };
+    }
     case "delete_mask": {
       // Faithful to the host's three refusals and to AELL_findMask: one
       // mask needs no ref, a number is a 1-based index, a miss lists

@@ -7224,10 +7224,37 @@ AELL_TOOLS.add_mask = function (args) {
 };
 
 /*
+ * True when the only mask edit the caller asked for is a FEATHER. That is
+ * the "soften it" shape, and on a layer with NO masks it is the one ask a
+ * mask cannot answer — see AELL_findMask's zero branch.
+ */
+function AELL_featherOnly(args) {
+  if (!args) return false;
+  var wantsFeather = (typeof args.feather === "number" ||
+                      AELLJSON.isArray(args.feather));
+  if (!wantsFeather) return false;
+  return !(args.mode || typeof args.inverted === "boolean" ||
+           typeof args.expansion === "number" ||
+           typeof args.opacity === "number" || args.name);
+}
+
+/*
  * Resolve a mask by name or 1-based index. With one mask on the layer and
  * no ref, that mask wins. Failures list the real masks — grounded.
+ *
+ * ZERO masks is its own answer, not a roster of nothing. The old message
+ * said "(several masks — pass {mask: name|index})" on a layer that had
+ * none — false in the direction that reads as "there ARE masks, name one"
+ * — and closed with "(none — add_mask creates one)", which the model took
+ * as INSTRUCTION: measured 2026-09-03, "Soften the background a touch."
+ * and its typo twin both called set_mask {feather} here, read that tail
+ * and went on to add_mask, feathering a full-frame mask that softens
+ * nothing. So a feather-only ask on a maskless layer is sent where the
+ * picture actually gets softened and add_mask is NOT offered — the same
+ * door-closing shape as remove_effect's empty parade (0.11.13). Any other
+ * edit still names add_mask: there the caller does want a mask.
  */
-function AELL_findMask(layer, ref) {
+function AELL_findMask(layer, ref, featherOnly) {
   var masks = layer.property("ADBE Mask Parade");
   if (!masks) throw new Error("Layer '" + layer.name + "' cannot have masks");
   var n = 0;
@@ -7247,20 +7274,30 @@ function AELL_findMask(layer, ref) {
   } else if (n === 1) {
     return masks.property(1);
   }
+  if (n === 0) {
+    if (featherOnly) {
+      throw new Error("'" + layer.name + "' has no masks — and a mask " +
+        "feather softens a mask EDGE, never the picture. To soften/blur " +
+        "'" + layer.name + "' itself: apply_effect {layer: \"" +
+        layer.name + "\", effect: \"Gaussian Blur\"}.");
+    }
+    throw new Error("'" + layer.name + "' has no masks — nothing to " +
+      "change. add_mask creates one.");
+  }
   var names = [];
   for (i = 1; i <= n; i++) {
     try { names.push(masks.property(i).name); } catch (e3) {}
   }
   throw new Error("Mask not found on '" + layer.name + "'" +
     (ref ? ": " + ref : " (several masks — pass {mask: name|index})") +
-    ". Masks here: " + (names.join(", ") || "(none — add_mask creates one)"));
+    ". Masks here: " + names.join(", "));
 }
 
 AELL_TOOLS.set_mask = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var layer = AELL_layerOrSelection(comp, args.layer);
   var mask;
-  try { mask = AELL_findMask(layer, args.mask); }
+  try { mask = AELL_findMask(layer, args.mask, AELL_featherOnly(args)); }
   catch (e) { return AELL_err(e.message); }
   var changed = [];
   if (args.mode) {

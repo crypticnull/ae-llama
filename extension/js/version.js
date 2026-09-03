@@ -8,7 +8,7 @@
   "use strict";
 
   global.AELL = {
-    VERSION: "0.11.23",
+    VERSION: "0.11.24",
 
     // Release channel label, shown wherever the version is displayed.
     // Purely cosmetic — update comparisons use the numeric VERSION only.

@@ -707,6 +707,83 @@ r = call("delete_mask", { layer: "Footage" });
 assert(!r.ok && /'Footage' has no masks/.test(r.error) &&
        /add_mask creates one/.test(r.error),
        "a layer with no masks is refused, pointing at add_mask: " + r.error);
+
+// 9b. ZERO masks is its own answer (real AE, chat probe 2026-09-03).
+//
+// AELL_findMask's roster branch used to answer a MASKLESS layer with
+// "(several masks - pass {mask: name|index}). Masks here: (none -
+// add_mask creates one)". Both halves did harm and in opposite
+// directions: the first is false where it matters most (there are no
+// masks, and it reads as "there are, name one"), and the second is an
+// INSTRUCTION the small model obeys. Measured: "Soften the background a
+// touch." and "sofetn the backgrond layer a touch" both called
+// set_mask {layer: "BG", feather: 10}, read that tail, and went on to
+// add_mask - a full-frame feathered mask that softens nothing, graded
+// HARM twice over. A feather on a maskless layer is the one ask a mask
+// cannot answer, so it is sent to apply_effect and add_mask is NOT
+// offered (remove_effect's door-closing shape, 0.11.13). Every other
+// edit still names add_mask - there the caller does want a mask.
+assert(footage.property("ADBE Mask Parade").numProperties === 0,
+       "9b starts from a maskless layer");
+r = call("set_mask", { layer: "Footage", feather: 10 });
+assert(!r.ok, "set_mask {feather} on a maskless layer is refused: " +
+       JSON.stringify(r.ok ? r.data : ""));
+assert(!/several masks/.test(r.error),
+       "...and never claims 'several masks' on a layer that has none: " +
+       r.error);
+assert(!/add_mask/.test(r.error),
+       "...and does NOT offer add_mask - that tail is what the model " +
+       "obeyed into the HARM: " + r.error);
+assert(/has no masks/.test(r.error) && /feather softens a mask EDGE/.test(r.error),
+       "...it says the layer has none and what a feather actually does: " +
+       r.error);
+assert(/apply_effect/.test(r.error) && /Gaussian Blur/.test(r.error) &&
+       /"Footage"/.test(r.error),
+       "...and hands back a paste-ready apply_effect naming THIS layer: " +
+       r.error);
+assert(footage.property("ADBE Mask Parade").numProperties === 0,
+       "...and the refusal wrote nothing");
+// A feather in ARRAY form ([x, y]) is the same ask.
+r = call("set_mask", { layer: "Footage", feather: [10, 10] });
+assert(!r.ok && /Gaussian Blur/.test(r.error),
+       "feather: [x, y] is the same ask: " + r.error);
+// Any OTHER edit means the caller really does want a mask.
+r = call("set_mask", { layer: "Footage", opacity: 50 });
+assert(!r.ok && /has no masks/.test(r.error) && /add_mask creates one/.test(r.error) &&
+       !/Gaussian Blur/.test(r.error),
+       "a non-feather edit still points at add_mask, not at a blur: " +
+       r.error);
+r = call("set_mask", { layer: "Footage", feather: 10, mode: "subtract" });
+assert(!r.ok && /add_mask creates one/.test(r.error) &&
+       !/Gaussian Blur/.test(r.error),
+       "feather PLUS a real mask edit wants a mask, so add_mask: " + r.error);
+// A named miss on a maskless layer is still the feather answer - there is
+// no roster to print and "Masks here: " with nothing after it is the same
+// falsehood in a quieter voice.
+r = call("set_mask", { layer: "Footage", mask: "Nope", feather: 10 });
+assert(!r.ok && /Gaussian Blur/.test(r.error) && !/Masks here/.test(r.error),
+       "a named miss on a maskless layer answers the same way: " + r.error);
+// set_mask_path goes through the same resolver and gets the truth too.
+r = call("set_mask_path", { layer: "Footage",
+                            vertices: [[0, 0], [10, 0], [10, 10]] });
+assert(!r.ok && /has no masks/.test(r.error) && !/several masks/.test(r.error),
+       "set_mask_path shares the resolver, so it shares the fix: " + r.error);
+// The n > 0 path is untouched: "several masks" is TRUE with two of them,
+// and the roster is real.
+r = call("add_mask", { layer: "Footage", name: "One", shape: "rectangle" });
+assert(r.ok, "9b rebuilds a mask: " + (r.error || ""));
+r = call("add_mask", { layer: "Footage", name: "Two", shape: "rectangle" });
+assert(r.ok, "9b rebuilds a second mask: " + (r.error || ""));
+r = call("set_mask", { layer: "Footage", feather: 10 });
+assert(!r.ok && /several masks/.test(r.error) && /Masks here: One, Two/.test(r.error),
+       "with two masks and no ref, 'several masks' is true and the " +
+       "roster is real: " + r.error);
+r = call("delete_mask", { layer: "Footage", mask: "Two" });
+assert(r.ok, "9b tidies: " + (r.error || ""));
+r = call("delete_mask", { layer: "Footage", mask: "One" });
+assert(r.ok && footage.property("ADBE Mask Parade").numProperties === 0,
+       "9b leaves the layer as it found it: " + (r.error || ""));
+
 // A layer type with no Mask Parade at all (camera/light): refused by type.
 const noMasks = new Layer("Cam", comp, false);
 noMasks._root._children = noMasks._root._children

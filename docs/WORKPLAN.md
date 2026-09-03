@@ -2014,9 +2014,38 @@ this order, one bullet per pass:
     10 of them RED against the reverted branches. The field run did NOT
     reproduce the failing shape (see the log) — that receipt is still
     open.
-  - THEN: a `--variants` re-run of rows 30 and 35 — the phrase-list
-    additions for both are unmeasured in the field, and that run is what
-    would close either of them for real.
+  - ~~a `--variants` re-run of rows 30 and 35~~ DONE 2026-09-03
+    (0.11.24). **Row 30 is CLOSED — 4 pass, 0 miss, 0 HARM**: every
+    phrasing gridded the six icons and left the BACKGROUND out, so
+    0.11.22's phrase-list additions are measured in the field at last.
+    **Row 35 went 2 pass / 2 HARM -> 3 pass / 0 miss / 1 HARM** on a
+    defect the run named precisely: the CANONICAL sentence and its typo
+    twin both called `set_mask {layer: 'BG', feather: 10}`, and
+    `AELL_findMask`'s roster branch answered a MASKLESS layer with
+    "(several masks — pass {mask: name|index}). Masks here: (none —
+    add_mask creates one)" — false in the direction that reads as
+    "there ARE masks, name one", and closing on an instruction the model
+    obeyed straight into a full-frame feathered mask that softens
+    nothing. Fixed at the resolver, not per tool: a zero branch that
+    sends a FEATHER-ONLY ask to `apply_effect {effect: 'Gaussian Blur'}`
+    and does NOT name add_mask (remove_effect's door-closing shape,
+    0.11.13), while any other edit still points at add_mask — that
+    caller does want a mask. `delete_mask` had carried this guard
+    privately, with a comment saying the resolver's wording was wrong
+    for zero; it is the resolver's now, so `set_mask_path` gets it too.
+    Both HARMs flipped to pass in BOTH re-runs. Zero prompt cost (host
+    strings only). Harness 644 -> 653; +19 stub checks, 8 RED against
+    the reverted host, and the canned host grew the `set_mask` case it
+    never had (which is why no stub could see this class).
+  - THEN, and row 35 stays OPEN for it: **the `vague` phrasing routes
+    "too sharp" to a MASK.** Three runs, three different mask shapes
+    (full-frame add, full-frame subtract, a centred 400x400 ellipse) —
+    its one pass came from hitting the single shape 0.11.21's add_mask
+    warning covers, so it was luck, not routing. The lever is ORDER, the
+    0.11.13 lesson: the soften/blur clause lives INSIDE the crop/mask
+    bullet, which opens by naming add_mask. Lift it into a bullet of its
+    own; it needs a paired cut (58926 against a 59000 ceiling). Gate:
+    `--variants --steps 35` at 4 pass.
 - **DEFERRED until a sandbox design exists:** D/F/H3 rows (project
   mutation, renders, mass-delete) — wiring them against the live
   project is the harm the whitelist cannot contain. Also deferred:

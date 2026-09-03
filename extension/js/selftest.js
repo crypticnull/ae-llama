@@ -2188,6 +2188,128 @@
                  "remainingMasks " + JSON.stringify(rem);
         } },
 
+      // ZERO masks is its own answer, not a roster of nothing. Measured
+      // in real AE through the chat probe 2026-09-03: "Soften the
+      // background a touch." and its typo twin both called
+      // set_mask {layer: "BG", feather: 10} on a maskless layer, and the
+      // refusal told them two untrue-or-unhelpful things -- "(several
+      // masks - pass {mask: name|index})" on a layer with none, and
+      // "(none - add_mask creates one)" as its last word. The model
+      // obeyed that last word and feathered a full-frame mask, which
+      // softens nothing. Both runs graded HARM.
+      { name: "a maskless layer to soften",
+        tool: "add_solid",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, name: "ST Soften", color: [0.2, 0.2, 0.3],
+                   width: 200, height: 200 };
+        },
+        check: function (d) { return d.name === "ST Soften" || d.name; } },
+
+      { name: "set_mask {feather} with no masks routes to a BLUR",
+        tool: "set_mask",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Soften", feather: 10 };
+        },
+        check: function (e) {
+          if (/several masks/.test(e)) {
+            return "still claims 'several masks' on a layer with none: " + e;
+          }
+          if (/add_mask/.test(e)) {
+            return "still offers add_mask -- the tail the model obeyed: " + e;
+          }
+          if (!/has no masks/.test(e)) return "message was: " + e;
+          if (!/feather softens a mask EDGE/.test(e)) {
+            return "does not say what a feather actually does: " + e;
+          }
+          if (!/apply_effect/.test(e) || !/Gaussian Blur/.test(e)) {
+            return "no paste-ready blur offered: " + e;
+          }
+          if (!/ST Soften/.test(e)) return "does not name the layer: " + e;
+          return true;
+        } },
+
+      { name: "…and the refusal wrote no mask",
+        tool: "delete_mask",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Soften" };
+        },
+        check: function (e) {
+          return /has no masks/.test(e) || "message was: " + e;
+        } },
+
+      { name: "any OTHER edit still points at add_mask",
+        tool: "set_mask",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Soften", opacity: 50 };
+        },
+        check: function (e) {
+          if (!/has no masks/.test(e)) return "message was: " + e;
+          if (!/add_mask creates one/.test(e)) {
+            return "a caller who wants a mask is not told where to get " +
+                   "one: " + e;
+          }
+          if (/Gaussian Blur/.test(e)) {
+            return "a blur was offered to a caller who asked for opacity: " + e;
+          }
+          return true;
+        } },
+
+      { name: "…and so does a feather ALONGSIDE a real mask edit",
+        tool: "set_mask",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Soften", feather: 10,
+                   mode: "subtract" };
+        },
+        check: function (e) {
+          if (!/add_mask creates one/.test(e)) return "message was: " + e;
+          return !/Gaussian Blur/.test(e) ||
+                 "that caller does want a mask: " + e;
+        } },
+
+      { name: "two masks and no ref: 'several masks' is TRUE",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Soften", name: "ST S1",
+                   shape: "rectangle", bounds: [0, 0, 50, 50] };
+        },
+        check: function (d) { return d.mask === "ST S1" || "mask " + d.mask; } },
+
+      { name: "…a second one",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Soften", name: "ST S2",
+                   shape: "rectangle", bounds: [10, 10, 50, 50] };
+        },
+        check: function (d) { return d.mask === "ST S2" || "mask " + d.mask; } },
+
+      { name: "…so the roster branch is untouched",
+        tool: "set_mask",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Soften", feather: 10 };
+        },
+        check: function (e) {
+          if (!/several masks/.test(e)) return "message was: " + e;
+          if (!/ST S1/.test(e) || !/ST S2/.test(e)) {
+            return "the roster is not the real one: " + e;
+          }
+          return !/Gaussian Blur/.test(e) ||
+                 "a layer WITH masks was sent to a blur: " + e;
+        } },
+
+      { name: "…and the soften layer goes away again",
+        tool: "delete_layer",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Soften" };
+        },
+        check: function (d) {
+          return d.removed === "ST Soften" || "removed " + d.removed;
+        } },
+
       { name: "animate the mask path (keys on whole frames)",
         tool: "set_mask_path",
         args: function (ctx) {
