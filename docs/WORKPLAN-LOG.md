@@ -14358,3 +14358,50 @@ Nothing else was left unattempted this pass. Nothing is blocked.
 - `tests/test-host-dialogs.js` asserts the brief carries the rule and
   its reasoning. Harness 71/72.
 - No `extension/` change, so NO BUMP.
+
+## 2026-09-03 (remote session) — the loop could kill the owner's desktop app
+
+- Owner: "it always starts saying 11 claude instances are running, and
+  I'm pretty sure 10 of those are the claude desktop app we're chatting
+  in". Correct, and the count was the least of it.
+- `Get-Process claude` matches the DESKTOP APP. It is Electron, so one
+  running copy is a main process plus renderer, GPU, utility and
+  crashpad children, all named claude. Two places killed on that name:
+  - `run-local-agent.ps1` snapshotted every claude process before a pass
+    and force-killed any that appeared during it, as the pass's leak.
+    Electron spawns children in normal use, so opening a tab in the
+    desktop app mid-pass could get it shot, logged as "Reaped lingering
+    claude pid N". Electron restarts its children quietly, which is why
+    this never looked like a crash.
+  - `stop-local-agent.ps1` killed EVERY process named claude. That does
+    not risk the desktop app, it closes it.
+- The reap itself is still wanted (2026-08-29: ten passes, ten zombies,
+  loop dead at pass 11), so the fix is to identify the leak precisely.
+- NEW `scripts/lib/claude-procs.ps1`: identification by DESCENT. A leak
+  of ours is a descendant of the loop's own shell; the desktop app is
+  not, and its Electron markers (`--type=`, the AnthropicClaude install
+  folder) are excluded on top. `Get-AellClaudeCensus` gives the log line
+  the owner reads, so "11 claude processes" now says how many are ours.
+  The old documented caveat -- do not run your own claude session while
+  the loop works -- is gone with the old test: an interactive session
+  the owner starts is not our descendant.
+- `stop-local-agent.ps1` now collects the in-flight passes BEFORE it
+  kills the loop shells. Afterwards their children are reparented and
+  the walk cannot find them, which would have turned "stopped both" into
+  "stopped the loop, left the pass running" -- the exact failure that
+  script was written for.
+- CAUGHT BEFORE SHIPPING, and the reason the behavioural test exists:
+  the first desktop-app guard included `$exe -match '\\Claude\.exe$'`,
+  meant for the app's capitalised binary. PowerShell's `-match` is
+  case-INSENSITIVE, so it matched the CLI's own claude.exe and excluded
+  every process from the reap -- leak-reaping silently off. The
+  synthetic-table run found it immediately.
+- NEW `tests/test-claude-procs.js` + `scripts/lib/claude-procs.selftest.ps1`:
+  static half refuses a kill-by-name in either script and refuses a
+  guard that keys on the executable NAME; behavioural half runs the
+  library under pwsh against a table shaped like the owner's machine
+  (loop -> cmd shim -> CLI pass, plus a five-process desktop app and an
+  interactive CLI of the owner's) and asserts exactly the pass is
+  selected. Skips with an install hint when no pwsh is present.
+- Harness 72/72 locally minus the two container-only failures (74 tests).
+- No `extension/` change, so NO BUMP.

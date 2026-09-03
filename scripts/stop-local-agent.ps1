@@ -27,6 +27,8 @@ param(
 
 $ErrorActionPreference = 'Continue'
 
+. (Join-Path $PSScriptRoot 'lib\claude-procs.ps1')
+
 function Find-Loop {
     return @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" `
              -ErrorAction SilentlyContinue |
@@ -34,6 +36,19 @@ function Find-Loop {
 }
 
 $loops = Find-Loop
+
+# Collect the in-flight passes NOW, while their parent loops are still
+# alive. Once a loop shell is killed its children are reparented and the
+# descent walk can no longer find them -- which would silently turn
+# "stopped both" into "stopped the loop, left the pass running", the
+# exact failure this script was written for.
+$passesInFlight = @()
+if (-not $KeepCurrentPass) {
+    foreach ($p in $loops) {
+        $passesInFlight += @(Get-AellCliPassProcesses -RootId $p.ProcessId)
+    }
+}
+
 if ($loops.Count -eq 0) {
     Write-Host 'No overnight loop is running.'
 } else {
@@ -48,18 +63,34 @@ if ($loops.Count -eq 0) {
 }
 
 if (-not $KeepCurrentPass) {
-    $claudes = @(Get-Process claude -ErrorAction SilentlyContinue)
-    if ($claudes.Count -eq 0) {
+    # By DESCENT from each loop we just found, never by name.
+    #
+    # This used to be `Get-Process claude` and kill them all. The Claude
+    # DESKTOP APP is Electron: one running copy is a main process plus
+    # renderer, GPU and utility children, all named claude -- ten or
+    # eleven of them while the owner is chatting in it. So "stop the
+    # loop" also closed the window the owner was talking to us in.
+    #
+    # A pass in flight is a descendant of a loop shell. Nothing else is.
+    $passes = $passesInFlight
+    if ($passes.Count -eq 0) {
         Write-Host 'No claude pass in flight.'
     } else {
-        foreach ($c in $claudes) {
-            Write-Host ("Stopping claude PID " + $c.Id)
+        foreach ($c in $passes) {
+            Write-Host ("Stopping CLI pass PID " + $c.ProcessId)
             try {
-                Stop-Process -Id $c.Id -Force -ErrorAction Stop
+                Stop-Process -Id $c.ProcessId -Force -ErrorAction Stop
             } catch {
                 Write-Host ("  could not stop it: " + $_.Exception.Message)
             }
         }
+    }
+    $desktop = @(Get-AellProcessTable |
+                 Where-Object { [string]$_.Name -match '^claude' -and
+                                (Test-AellDesktopApp -Proc $_) })
+    if ($desktop.Count -gt 0) {
+        Write-Host ("Left the Claude desktop app alone (" + $desktop.Count +
+                    " processes). It is not part of the loop.")
     }
 } else {
     Write-Host 'Leaving the current pass to finish (-KeepCurrentPass).'

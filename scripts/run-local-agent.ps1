@@ -107,6 +107,11 @@ if (-not $RepoRoot) { $RepoRoot = Split-Path -Parent $PSScriptRoot }
 $RepoRoot = (Resolve-Path $RepoRoot).Path
 Set-Location $RepoRoot
 
+# Telling OUR CLI passes apart from the Claude desktop app, which is
+# Electron and runs many processes named claude. Loaded here because the
+# reap below must never kill by name.
+. (Join-Path $PSScriptRoot 'lib\claude-procs.ps1')
+
 # --- locate the CLI -------------------------------------------------
 if (-not $ClaudePath) {
     $cmd = Get-Command claude -ErrorAction SilentlyContinue
@@ -376,16 +381,28 @@ for ($i = 1; $i -le $Iterations; $i++) {
     # LIMIT exits fast with a message instead of doing work, and only
     # the text tells that apart from a genuinely idle pass.
     #
-    # And snapshot the claude processes alive BEFORE the pass: each pass
-    # leaks one lingering claude.exe (measured 2026-08-29 -- ten passes,
-    # ten zombies, and the loop died of the pile at pass 11). Any claude
-    # process born during the pass is the pass's leak and is reaped once
-    # the pass returns. Consequence, documented: do not run your own
-    # interactive claude session while the loop is working -- a session
-    # started mid-pass is indistinguishable from a leak.
-    $claudeBefore = @(Get-Process claude -ErrorAction SilentlyContinue |
-                      Select-Object -ExpandProperty Id)
-    Write-Log ('claude processes before pass: ' + $claudeBefore.Count)
+    # Each pass leaks one lingering CLI process (measured 2026-08-29 --
+    # ten passes, ten zombies, and the loop died of the pile at pass
+    # 11), so a leak is reaped once the pass returns.
+    #
+    # Identified by DESCENT, never by name. `Get-Process claude` also
+    # matches the Claude DESKTOP APP, which is Electron and so runs a
+    # main process plus renderer, GPU and utility children all named
+    # claude -- the owner sees ten or eleven while chatting in it. The
+    # old code snapshotted that list and killed anything new, so opening
+    # a tab in the desktop app mid-pass could get it shot and logged as
+    # "Reaped lingering claude pid N". A leak of ours is a DESCENDANT of
+    # this shell; the desktop app is not, and its Electron markers are
+    # excluded on top. See scripts/lib/claude-procs.ps1.
+    #
+    # The old caveat is gone with the old test: an interactive claude
+    # session the owner starts is not our descendant, so the loop no
+    # longer has any claim on it.
+    $census = Get-AellClaudeCensus -RootId $PID
+    Write-Log ('claude-named processes on this machine: ' +
+               $census.NamedTotal + ' (' + $census.Ours + ' of them ours; ' +
+               'the rest are the Claude desktop app, which is an Electron ' +
+               'app and runs many processes under that name)')
     $passLines = New-Object System.Collections.Generic.List[string]
     try {
         & $ClaudePath @claudeArgs 2>&1 | ForEach-Object {
@@ -397,15 +414,13 @@ for ($i = 1; $i -le $Iterations; $i++) {
     } catch {
         Write-Log ('Session error: ' + $_.Exception.Message)
     }
-    foreach ($cp in @(Get-Process claude -ErrorAction SilentlyContinue)) {
-        if ($claudeBefore -notcontains $cp.Id) {
-            try {
-                Stop-Process -Id $cp.Id -Force -ErrorAction Stop
-                Write-Log ('Reaped lingering claude pid ' + $cp.Id)
-            } catch {
-                Write-Log ('Could not reap claude pid ' + $cp.Id + ': ' +
-                           $_.Exception.Message)
-            }
+    foreach ($cp in @(Get-AellCliPassProcesses -RootId $PID)) {
+        try {
+            Stop-Process -Id $cp.ProcessId -Force -ErrorAction Stop
+            Write-Log ('Reaped lingering CLI pass pid ' + $cp.ProcessId)
+        } catch {
+            Write-Log ('Could not reap CLI pass pid ' + $cp.ProcessId + ': ' +
+                       $_.Exception.Message)
         }
     }
 
