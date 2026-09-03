@@ -338,8 +338,15 @@ const project = { rootFolder: { name: "(root)" }, numItems: 0,
 const app = { project, beginUndoGroup() {}, endUndoGroup() {} };
 const $ = { global: {} };
 
-eval(fs.readFileSync(path.join(__dirname, "..", "extension", "jsx",
-                                "hostscript.jsx"), "utf8"));
+// The tools come out through $.global.AELL_call as always; the two mask
+// READERS come out by name because what they answer is the thing under
+// test in section 6f — a receipt only shows the reading through a
+// sentence, and "all" and "none" can produce the same sentence.
+// (tests/test-light.js has used this shape since 0.9.x.)
+const host = eval(fs.readFileSync(path.join(__dirname, "..", "extension",
+                                "jsx", "hostscript.jsx"), "utf8") +
+  ";\n({ AELL_paradeShows: AELL_paradeShows, AELL_maskRect: AELL_maskRect })");
+const { AELL_paradeShows, AELL_maskRect } = host;
 
 function call(tool, args) {
   return JSON.parse($.global.AELL_call(tool, JSON.stringify(args)));
@@ -1583,6 +1590,265 @@ r = call("add_mask", { layer: "Empty Shape", shape: "rectangle",
 assert(r.ok && !r.data.note,
        "a layer with no measurable box is not second-guessed: " +
        JSON.stringify(r.ok ? r.data : r.error));
+
+// 6f. A mask's OPACITY is a mask property, and so is its EXPANSION.
+//
+// Neither was read anywhere. Opacity made AELL_maskRect bail, so a
+// parade with one opacity-0 mask in it went unreadable and add_mask's
+// four sentences went quiet; expansion was not read at all, so the rect
+// this returned for an expanded mask was a claim about pixels AE
+// disagrees with. And set_mask writes BOTH and had never said a word
+// about either.
+//
+// Every row below is a measured one: scripts/mask-opacity-probe.js, AE
+// 26.3x87, layer alpha through sampleImage(postEffect), rows scaled from
+// the probe's 400x300 layer to this fixture's 100x100.
+//
+//   ALONE, every compositing mode at opacity 0 empties the layer — add,
+//   subtract, intersect, lighten, darken, difference, at a region worth
+//   everything / half / nothing, inverted too. The lone 'subtract' row is
+//   the one that makes this its own rule: "its region is worth nothing"
+//   predicts the layer stays WHOLE there, and it measures EMPTY.
+//
+//   FURTHER UP the parade it behaves exactly as a region worth nothing:
+//   over an add mask on the left half, a second add at opacity 0 leaves
+//   0.429 unchanged, an off-layer subtract leaves 0.429, a full-coverage
+//   difference leaves 0.429, and intersect/darken EMPTY the layer.
+//
+//   INVERSION does not apply to it (an inverted full-coverage subtract at
+//   opacity 0 leaves the half base at 0.429), and a 'none'-mode mask is
+//   unaffected by opacity at all — it never composites.
+const opMasks = solo.property("ADBE Mask Parade");
+opMasks._children.length = 0;
+const SOLO_BOX = { left: 0, top: 0, width: 100, height: 100 };
+// Bounds worth NOTHING: clear of the layer on both axes, where the probe
+// put its off-layer masks.
+const OFF_BOX = [200, 200, 50, 50];
+function opMask(spec) {
+  const m = opMasks.addProperty("ADBE Mask Atom");
+  const b = spec.bounds || [0, 0, 100, 100];
+  const s = new Shape();
+  s.closed = true;
+  s.vertices = [[b[0], b[1]], [b[0] + b[2], b[1]],
+                [b[0] + b[2], b[1] + b[3]], [b[0], b[1] + b[3]]];
+  m.property("ADBE Mask Shape").setValue(s);
+  m.maskMode = MaskMode[(spec.mode || "add").toUpperCase()];
+  m.inverted = !!spec.inverted;
+  if (typeof spec.opacity === "number") {
+    m.property("ADBE Mask Opacity").setValue(spec.opacity);
+  }
+  if (typeof spec.expansion === "number") {
+    m.property("ADBE Mask Offset").setValue(spec.expansion);
+  }
+  return m;
+}
+function paradeReads(specs) {
+  opMasks._children.length = 0;
+  specs.forEach(opMask);
+  return AELL_paradeShows(opMasks, SOLO_BOX);
+}
+const HALF = [0, 0, 50, 100];
+// The 13 measured parades, each next to the alpha it was read against.
+[
+  { want: "none", alpha: "EMPTY (lone, every mode)",
+    specs: [{ mode: "add", opacity: 0 }] },
+  { want: "none", alpha: "EMPTY (a lone subtract at 0 too)",
+    specs: [{ mode: "subtract", opacity: 0 }] },
+  { want: "none", alpha: "EMPTY (region half, still empty)",
+    specs: [{ mode: "add", bounds: HALF, opacity: 0 }] },
+  { want: "none", alpha: "EMPTY (inverted, still empty)",
+    specs: [{ mode: "add", opacity: 0, inverted: true }] },
+  { want: "all", alpha: "1.0 — a LATER opacity-0 mask contributes nothing",
+    specs: [{ mode: "add" }, { mode: "add", opacity: 0 }] },
+  { want: "some", alpha: "0.429 unchanged",
+    specs: [{ mode: "add", bounds: HALF },
+            { mode: "add", bounds: HALF, opacity: 0 }] },
+  { want: "some", alpha: "0.429 — an off-layer subtract at 0",
+    specs: [{ mode: "add", bounds: HALF },
+            { mode: "subtract", bounds: OFF_BOX, opacity: 0 }] },
+  { want: "none", alpha: "EMPTY — intersect against a zero-alpha mask",
+    specs: [{ mode: "add" }, { mode: "intersect", opacity: 0 }] },
+  { want: "none", alpha: "EMPTY — darken, the same",
+    specs: [{ mode: "add" }, { mode: "darken", opacity: 0 }] },
+  { want: "all", alpha: "1.0 — difference at 0 inverts nothing",
+    specs: [{ mode: "add" }, { mode: "difference", opacity: 0 }] },
+  { want: "some", alpha: "0.429 — inversion is NOT applied at opacity 0",
+    specs: [{ mode: "add", bounds: HALF },
+            { mode: "subtract", opacity: 0, inverted: true }] },
+  { want: "some", alpha: "0.429 — a 'none' carrier ignores opacity",
+    specs: [{ mode: "add", bounds: HALF },
+            { mode: "none", opacity: 0 }] },
+  { want: "all", alpha: "1.0 — opacity 0 first, then a real add",
+    specs: [{ mode: "add", opacity: 0 }, { mode: "add" }] }
+].forEach((row) => {
+  const got = paradeReads(row.specs);
+  assert(got === row.want,
+         "opacity-0 parade reads '" + row.want + "' (" + row.alpha + "), " +
+         "got '" + got + "': " + JSON.stringify(row.specs));
+});
+// A PART opacity is a degree, and "all / some / none" cannot say a degree
+// — measured 0.502 for a full-coverage add at opacity 50. So it is the
+// one opacity that still makes the parade unreadable.
+assert(paradeReads([{ mode: "add", opacity: 50 }]) === "",
+       "a part-opacity mask is still unreadable — the layer is FADED, " +
+       "which is not all, some or none");
+// EXPANSION was never read at all, and it moves the edge: measured, an
+// add mask over the left half reads 0.429 at expansion 0, 0.571 at +25
+// and 1.0 at +300. So the shape alone was a lie in the reader's mouth.
+assert(paradeReads([{ mode: "add", bounds: HALF, expansion: 25 }]) === "",
+       "an EXPANDED mask is unreadable, not 'some' — expansion moves the " +
+       "edge the shape does not know about");
+assert(paradeReads([{ mode: "add", bounds: HALF }]) === "some",
+       "…and expansion 0 is the ordinary readable case");
+// The animated twins of both, for the same reason the shape and feather
+// have them: a keyframed opacity is a different answer at every frame.
+const animOp = paradeReads([{ mode: "add", opacity: 0 }]) === "none";
+assert(animOp, "…and a static opacity-0 mask reads before the animated " +
+       "check below changes it");
+opMasks._children.length = 0;
+const keyedOp = opMask({ mode: "add", opacity: 0 });
+keyedOp.property("ADBE Mask Opacity").setValueAtTime(0, 0);
+keyedOp.property("ADBE Mask Opacity").setValueAtTime(1, 100);
+assert(AELL_paradeShows(opMasks, SOLO_BOX) === "",
+       "a KEYFRAMED mask opacity is unreadable — it is a different " +
+       "answer at every frame");
+opMasks._children.length = 0;
+const keyedExp = opMask({ mode: "add" });
+keyedExp.property("ADBE Mask Offset").setValueAtTime(0, 0);
+keyedExp.property("ADBE Mask Offset").setValueAtTime(1, 40);
+assert(AELL_paradeShows(opMasks, SOLO_BOX) === "",
+       "…and so is a keyframed EXPANSION");
+
+// The write half: set_mask has never said a word about what its edits do
+// to the picture, and it owns the one mask property nothing read back.
+opMasks._children.length = 0;
+opMask({ mode: "add" });
+opMasks.property(1).name = "Keeper";
+r = call("set_mask", { layer: "Solo", opacity: 0 });
+assert(r.ok && /Nothing of 'Solo' shows now/.test(r.data.warning || ""),
+       "set_mask {opacity: 0} on the only mask empties the layer " +
+       "(measured alpha 1.0 -> 0.0) and used to answer a bare ok: " +
+       JSON.stringify(r.ok ? r.data : r.error));
+assert(/not an off switch/.test(r.data.warning || "") &&
+       /mode: "none"/.test(r.data.warning || ""),
+       "…and it says why opacity 0 is not the off switch it reads like, " +
+       "naming the setting that IS one — measured: a 'none' mask leaves " +
+       "every pixel showing at any opacity: " + r.data.warning);
+assert(/opacity 100/.test(r.data.warning || ""),
+       "…and the way back: " + r.data.warning);
+assert(opMasks.property("Keeper").property("ADBE Mask Opacity").value === 0,
+       "…and it WARNS, it does not refuse: the edit was really written");
+// The same call over a mask that was only hiding part of the layer is the
+// same erasure — measured 0.429 -> 0.
+opMasks._children.length = 0;
+opMask({ mode: "add", bounds: HALF });
+r = call("set_mask", { layer: "Solo", opacity: 0 });
+assert(r.ok && /Nothing of 'Solo' shows now/.test(r.data.warning || ""),
+       "…and over a half-covering mask too (measured 0.429 -> 0): " +
+       JSON.stringify(r.ok ? r.data : r.error));
+// A PART opacity is a real, ordinary edit and the layer is faded, not
+// gone: nothing provable to say in all/some/none, so nothing said.
+opMasks._children.length = 0;
+opMask({ mode: "add" });
+r = call("set_mask", { layer: "Solo", opacity: 50 });
+assert(r.ok && !r.data.warning,
+       "set_mask {opacity: 50} fades the layer (measured 0.502) — that " +
+       "is what was asked for and it is not all/some/none: " +
+       JSON.stringify(r.data));
+// …and coming BACK from a part opacity says nothing either, which is the
+// honest end of the same narrowness: the picture before the edit was a
+// faded one, and no reading of it exists to compare against.
+r = call("set_mask", { layer: "Solo", opacity: 100 });
+assert(r.ok && !r.data.warning,
+       "50 -> 100 is silent: the BEFORE picture was unreadable, so there " +
+       "is nothing to say it changed from: " + JSON.stringify(r.data));
+// An edit that changes nothing says so, the same way add_mask's no-op
+// does. Measured: opacity 100 on a mask already at 100, alpha 1.0 -> 1.0.
+opMasks._children.length = 0;
+opMask({ mode: "add" });
+r = call("set_mask", { layer: "Solo", opacity: 100 });
+assert(r.ok && /changed nothing on 'Solo'/.test(r.data.warning || "") &&
+       /already showed/.test(r.data.warning || ""),
+       "an edit that moves no pixels says so: " +
+       JSON.stringify(r.ok ? r.data : r.error));
+// The before/after reading is not about opacity — it catches the MODE
+// change that empties a layer too (measured 1.0 -> 0.0), and there the
+// opacity sentence would be nonsense.
+opMasks._children.length = 0;
+opMask({ mode: "add" });
+opMasks.property(1).name = "Flip";
+r = call("set_mask", { layer: "Solo", mode: "subtract" });
+assert(r.ok && /Nothing of 'Solo' shows now/.test(r.data.warning || "") &&
+       /mode=subtract/.test(r.data.warning || ""),
+       "a MODE change that empties the layer is the same silence, and " +
+       "the same fix catches it: " + JSON.stringify(r.ok ? r.data : r.error));
+assert(!/off switch/.test(r.data.warning || "") &&
+       /delete_mask \{mask: "Flip"\}/.test(r.data.warning || ""),
+       "…with the way out that fits THIS edit, not the opacity one: " +
+       r.data.warning);
+// The mirror: an edit that switches the masking off. Measured — a later
+// mask at opacity 0 takes nothing away, so a subtract over an add that
+// keeps everything hands the whole layer back.
+opMasks._children.length = 0;
+opMask({ mode: "add" });
+opMask({ mode: "subtract", bounds: HALF });
+opMasks.property(2).name = "Cut";
+r = call("set_mask", { layer: "Solo", mask: "Cut", opacity: 0 });
+assert(r.ok && /Every pixel of 'Solo' shows again/.test(r.data.warning || ""),
+       "an edit that stops the masking working says THAT, not 'nothing " +
+       "shows': " + JSON.stringify(r.ok ? r.data : r.error));
+// A rename moves no pixels, so "that changed nothing" about one is noise.
+opMasks._children.length = 0;
+opMask({ mode: "add" });
+r = call("set_mask", { layer: "Solo", name: "Renamed" });
+assert(r.ok && !r.data.warning,
+       "a rename is not a claim about pixels — no no-op warning: " +
+       JSON.stringify(r.data));
+// And the boundary that stops the erasure warning inventing a change: a
+// layer whose masks already showed nothing has nothing left to lose.
+opMasks._children.length = 0;
+opMask({ mode: "add", bounds: OFF_BOX });
+r = call("set_mask", { layer: "Solo", mode: "add" });
+assert(r.ok && !/Nothing of 'Solo' shows now/.test(r.data.warning || "") &&
+       /already masked out completely/.test(r.data.warning || ""),
+       "a layer that already showed nothing is not erased again: " +
+       JSON.stringify(r.ok ? r.data : r.error));
+
+// What the READER's new eyes buy add_mask, which is where the silence
+// used to land: measured, add_mask over a parade holding one opacity-0
+// mask went from saying nothing at all to naming the right outcome.
+opMasks._children.length = 0;
+opMask({ mode: "add", opacity: 0 });
+r = call("add_mask", { layer: "Solo", name: "DiffOver0", shape: "rectangle",
+                       bounds: [0, 0, 100, 100], mode: "difference" });
+assert(r.ok && /every pixel of it shows again/.test(r.data.warning || ""),
+       "a full-coverage 'difference' over an opacity-0 mask hands the " +
+       "layer back (measured 0 -> 1.0) and used to say nothing: " +
+       JSON.stringify(r.ok ? r.data : r.error));
+assert(/INVERTS what it shows/.test(r.data.warning || ""),
+       "…and with ONE mask above it, the clause agrees with itself: " +
+       r.data.warning);
+opMasks._children.length = 0;
+opMask({ mode: "add", bounds: HALF, opacity: 0 });
+r = call("add_mask", { layer: "Solo", name: "AddOver0", shape: "rectangle",
+                       bounds: [0, 0, 100, 100], mode: "add" });
+assert(r.ok && /every pixel of it shows again/.test(r.data.warning || ""),
+       "…and so does a full-coverage 'add' (measured 0 -> 1.0): " +
+       JSON.stringify(r.ok ? r.data : r.error));
+// The other direction, and the row where the old silence was actually a
+// WRONG sentence: with the parade unreadable, add_mask fell back to what
+// every reading agrees on and said this subtract "hides ALL … cuts every
+// pixel away". The layer was already empty (measured 0 -> 0) — this mask
+// is not the reason for anything.
+opMasks._children.length = 0;
+opMask({ mode: "add", opacity: 0 });
+r = call("add_mask", { layer: "Solo", name: "SubOver0", shape: "rectangle",
+                       mode: "subtract" });
+assert(r.ok && !/hides ALL of 'Solo'/.test(r.data.warning || ""),
+       "a subtract over a layer whose masks already hide everything does " +
+       "not get to claim the erasure: " +
+       JSON.stringify(r.ok ? r.data : r.error));
+opMasks._children.length = 0;
 
 assert(AE_MODALS.length === 0,
        "no tool call left After Effects behind a modal dialog: " +

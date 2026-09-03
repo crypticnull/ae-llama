@@ -349,6 +349,93 @@ let mkMasks = {};
 // over a bare layer and an ERASURE over masks that were showing every
 // pixel, and this canned host answered a bare ok for both.
 let mkShapes = {};
+// The mask algebra, shared by add_mask (what one MORE mask would do) and
+// set_mask (what an EDIT to one did). Worked out from the geometry every
+// time, never answered from a constant: a canned host that knows its
+// verdicts by name cannot see a host that stopped computing them.
+const mkNot = (s) => (s === "all" ? "none" : (s === "none" ? "all" : "some"));
+const mkApply = (state, mode, region) => {
+  const m = String(mode || "add").toLowerCase();
+  if (m === "none") return state;
+  // AE composites the FIRST mask against an empty canvas, except
+  // 'subtract', which starts from a full one.
+  if (state === null) return (m === "subtract") ? mkNot(region) : region;
+  if (m === "add" || m === "lighten") return region === "all" ? "all" : state;
+  if (m === "subtract") return region === "all" ? "none" : state;
+  if (m === "intersect" || m === "darken") {
+    return region === "all" ? state : "none";
+  }
+  if (m === "difference") return region === "all" ? mkNot(state) : state;
+  return null;
+};
+// A mask at OPACITY 0, which is neither "switched off" nor "its region is
+// worth nothing". Measured 2026-09-03 (scripts/mask-opacity-probe.js, AE
+// 26.3x87): alone it EMPTIES the layer whatever its mode, region or
+// inversion — the lone 'subtract' row is what makes this its own rule,
+// because "region worth nothing" says that one leaves the layer whole and
+// it measures empty. Further up the parade it behaves exactly as a region
+// worth nothing (a later add/subtract/difference at 0 leaves the picture
+// alone; intersect and darken empty it), and 'inverted' is not applied.
+const mkZeroApply = (state, mode) =>
+  (state === null ? "none" : mkApply(state, mode, "none"));
+// A mask row can be READ only when its shape is an axis-aligned rectangle
+// AND the two properties that scale or move what it covers are absolute:
+// opacity 0/100 (a part opacity fades by degrees, measured 0.502) and
+// expansion 0 (measured: +25 takes a half mask from 0.429 to 0.571 and
+// +300 to 1.0, so the shape alone is not the coverage).
+const mkRowReadable = (r) => !!r.readable &&
+  (r.opacity === 0 || r.opacity === 100 || r.opacity === undefined) &&
+  !r.expansion;
+// What the masks already on this layer show: "nothing" (none of them
+// composites), "all", "some", "none", or "" for a parade this cannot
+// read. Exact, not sampled — with axis-aligned rectangles the composite
+// is constant inside every cell their edges cut the layer into.
+const mkParade = (list, sz) => {
+  if (!sz) return "";
+  const rects = (list || []).filter(r => r.mode !== "none");
+  if (!rects.length) return "nothing";
+  if (rects.some(r => !mkRowReadable(r)) || rects.length > 8) return "";
+  const xs = [0, sz.width], ys = [0, sz.height];
+  const push = (a, v, hi) => {
+    if (v > 0 && v < hi && a.indexOf(v) === -1) a.push(v);
+  };
+  rects.forEach(r => {
+    push(xs, r.l, sz.width); push(xs, r.r, sz.width);
+    push(ys, r.t, sz.height); push(ys, r.b, sz.height);
+  });
+  xs.sort((a, b) => a - b); ys.sort((a, b) => a - b);
+  let anyAll = false, anyNone = false;
+  for (let a = 0; a + 1 < xs.length; a++) {
+    for (let b = 0; b + 1 < ys.length; b++) {
+      const cx = (xs[a] + xs[a + 1]) / 2, cy = (ys[b] + ys[b + 1]) / 2;
+      let state = null;
+      rects.forEach(r => {
+        if (r.opacity === 0) { state = mkZeroApply(state, r.mode); return; }
+        let inside = (cx > r.l && cx < r.r && cy > r.t && cy < r.b);
+        if (r.inverted) inside = !inside;
+        state = mkApply(state, r.mode, inside ? "all" : "none");
+      });
+      if (state === null) continue;
+      if (state === "none") anyNone = true; else anyAll = true;
+    }
+  }
+  if (!anyAll && !anyNone) return "nothing";
+  if (anyAll && anyNone) return "some";
+  return anyAll ? "all" : "none";
+};
+// What an EDIT did, read as the picture before and after. "some" is never
+// compared to "some": both readings are exact about which pixels show,
+// the coarse word is not, and an 'add' flipped to 'subtract' reads
+// "some" -> "some" while the picture inverts.
+const mkEditKind = (before, after) => {
+  if (!before || !after) return "";
+  if (after === "none" && before !== "none") return "erases";
+  if (after === "all" && (before === "some" || before === "none")) {
+    return "undoes";
+  }
+  if (before === after && before !== "some") return "noop";
+  return "";
+};
 // How big each layer really is, "comp|layer" -> {width, height}. add_mask
 // refuses a mask that misses the layer entirely and get_comp_details puts
 // the layer's own size on its row, and NEITHER can be answered from the
@@ -3043,59 +3130,12 @@ function cannedOk(tool, args) {
        * full-coverage 'difference' changes nothing over a bare layer and
        * EMPTIES one whose masks were showing every pixel; a full-coverage
        * 'add' changes nothing over a bare layer and switches every mask
-       * off over one that was hiding something. */
-      const mkNot = (s) => (s === "all" ? "none" : (s === "none" ? "all" : "some"));
-      const mkApply = (state, mode, region) => {
-        const m = String(mode || "add").toLowerCase();
-        if (m === "none") return state;
-        // AE composites the FIRST mask against an empty canvas, except
-        // 'subtract', which starts from a full one.
-        if (state === null) return (m === "subtract") ? mkNot(region) : region;
-        if (m === "add" || m === "lighten") return region === "all" ? "all" : state;
-        if (m === "subtract") return region === "all" ? "none" : state;
-        if (m === "intersect" || m === "darken") {
-          return region === "all" ? state : "none";
-        }
-        if (m === "difference") return region === "all" ? mkNot(state) : state;
-        return null;
-      };
-      // What the masks already on this layer show: "nothing" (none of
-      // them composites), "all", "some", "none", or "" for a parade this
-      // cannot read. Exact, not sampled — with axis-aligned rectangles
-      // the composite is constant inside every cell their edges cut the
-      // layer into.
-      const mkParade = (list, sz) => {
-        if (!sz) return "";
-        const rects = (list || []).filter(r => r.mode !== "none");
-        if (!rects.length) return "nothing";
-        if (rects.some(r => !r.readable) || rects.length > 8) return "";
-        const xs = [0, sz.width], ys = [0, sz.height];
-        const push = (a, v, hi) => {
-          if (v > 0 && v < hi && a.indexOf(v) === -1) a.push(v);
-        };
-        rects.forEach(r => {
-          push(xs, r.l, sz.width); push(xs, r.r, sz.width);
-          push(ys, r.t, sz.height); push(ys, r.b, sz.height);
-        });
-        xs.sort((a, b) => a - b); ys.sort((a, b) => a - b);
-        let anyAll = false, anyNone = false;
-        for (let a = 0; a + 1 < xs.length; a++) {
-          for (let b = 0; b + 1 < ys.length; b++) {
-            const cx = (xs[a] + xs[a + 1]) / 2, cy = (ys[b] + ys[b + 1]) / 2;
-            let state = null;
-            rects.forEach(r => {
-              let inside = (cx > r.l && cx < r.r && cy > r.t && cy < r.b);
-              if (r.inverted) inside = !inside;
-              state = mkApply(state, r.mode, inside ? "all" : "none");
-            });
-            if (state === null) continue;
-            if (state === "none") anyNone = true; else anyAll = true;
-          }
-        }
-        if (!anyAll && !anyNone) return "nothing";
-        if (anyAll && anyNone) return "some";
-        return anyAll ? "all" : "none";
-      };
+       * off over one that was hiding something.
+       *
+       * mkNot / mkApply / mkZeroApply / mkParade live at module scope now
+       * because set_mask needs the same reading: it EDITS a mask, and a
+       * host that judged its own edits from the arguments alone is the
+       * blindness this file keeps re-learning. */
       const mkOutcome1 = (mode, inverted, covered, above, readable) => {
         const m = String(mode || "add").toLowerCase();
         const state = above === "nothing" ? null : above;
@@ -3272,12 +3312,16 @@ function cannedOk(tool, args) {
           mkV.every(v => (v[0] === mkHit.l || v[0] === mkHit.r) &&
                          (v[1] === mkHit.t || v[1] === mkHit.b));
       }
+      // add_mask never sets opacity or expansion, so a mask it makes
+      // starts at 100 / 0 — but set_mask can move both afterwards, and
+      // the row has to carry them or no stub can see what that did.
       heldShapes.push(mkHit
         ? { l: mkHit.l, t: mkHit.t, r: mkHit.r, b: mkHit.b,
             mode: String((args && args.mode) || "add").toLowerCase(),
-            inverted: !!(args && args.inverted), readable: mkReadable }
+            inverted: !!(args && args.inverted), opacity: 100, expansion: 0,
+            readable: mkReadable }
         : { l: 0, t: 0, r: 0, b: 0, mode: "add", inverted: false,
-            readable: false });
+            opacity: 100, expansion: 0, readable: false });
       const mkAsked = (Array.isArray(mkB) && mkB.length >= 4) ||
                       (args && args.shape === "custom" && Array.isArray(mkV));
       // 'lighten' sits with 'add' on a measurement: over the whole layer
@@ -3479,19 +3523,39 @@ function cannedOk(tool, args) {
           (smRef ? ": " + smRef : " (several masks — pass {mask: name|index})") +
           ". Masks here: " + sm.join(", ") };
       }
+      /* THE EDIT ITSELF, applied to the row this host holds for that
+       * mask — it used to answer straight from the arguments, so a
+       * `set_mask {opacity: 0}` that empties the layer and one that
+       * changes nothing read identically and no stub could tell them
+       * apart. That is the same unfaithfulness the link_property pass
+       * found one file over. */
+      const smRow = (mkShapes[smKey] || [])[smAt] || null;
+      const smSz = mkSizes[smKey];
+      const smBefore = mkParade(mkShapes[smKey], smSz);
       const smChanged = [];
-      if (args && args.mode) smChanged.push("mode=" + args.mode);
+      if (args && args.mode) {
+        if (smRow) smRow.mode = String(args.mode).toLowerCase();
+        smChanged.push("mode=" + args.mode);
+      }
       if (args && typeof args.inverted === "boolean") {
+        if (smRow) smRow.inverted = args.inverted;
         smChanged.push("inverted=" + args.inverted);
       }
       if (args && (typeof args.feather === "number" ||
                    Array.isArray(args.feather))) {
+        // A feather hides by degrees, so the row stops being readable —
+        // the same narrowness the shape and the opacity have.
+        const smF = Array.isArray(args.feather) ? args.feather[0]
+                                                : args.feather;
+        if (smRow && smF > 0) smRow.readable = false;
         smChanged.push("feather=" + args.feather);
       }
       if (args && typeof args.expansion === "number") {
+        if (smRow) smRow.expansion = args.expansion;
         smChanged.push("expansion=" + args.expansion);
       }
       if (args && typeof args.opacity === "number") {
+        if (smRow) smRow.opacity = args.opacity;
         smChanged.push("opacity=" + args.opacity);
       }
       if (args && args.name) {
@@ -3502,8 +3566,45 @@ function cannedOk(tool, args) {
         return { __err: "Nothing to change — pass mode, feather, " +
           "expansion, opacity, inverted and/or name" };
       }
-      return { layer: args.layer, mask: sm[smAt],
-               changed: smChanged.join(", ") };
+      const smOut = { layer: args.layer, mask: sm[smAt],
+                      changed: smChanged.join(", ") };
+      const smAfter = mkParade(mkShapes[smKey], smSz);
+      // A rename moves no pixels; every other argument is a claim about
+      // what the layer looks like.
+      const smVisual = !!(args && (args.mode ||
+        typeof args.inverted === "boolean" ||
+        typeof args.opacity === "number" ||
+        typeof args.feather === "number" || Array.isArray(args.feather) ||
+        typeof args.expansion === "number"));
+      const smKind = smVisual ? mkEditKind(smBefore, smAfter) : "";
+      const smZero = !!(args && typeof args.opacity === "number" &&
+                        Number(args.opacity) === 0);
+      if (smKind === "erases") {
+        smOut.warning = "Nothing of '" + args.layer + "' shows now: " +
+          smOut.changed + " leaves every pixel of it masked out." +
+          (smZero
+            ? " Mask opacity 0 is not an off switch: it drops what '" +
+              sm[smAt] + "' lets through to zero. To switch a mask off " +
+              "and leave the layer showing, set_mask {mask: \"" +
+              sm[smAt] + "\", mode: \"none\"}; to undo this, opacity 100."
+            : " Set it back to undo this, or delete_mask {mask: \"" +
+              sm[smAt] + "\"} to remove the mask.");
+      } else if (smKind === "undoes") {
+        smOut.warning = "Every pixel of '" + args.layer + "' shows again: " +
+          "after " + smOut.changed + " the masks on it stop hiding " +
+          "anything." + (smZero
+            ? " Mask opacity 0 drops what '" + sm[smAt] + "' lets " +
+              "through to zero, so it takes nothing away."
+            : "");
+      } else if (smKind === "noop") {
+        let smWhy = "no mask on it composites — every mask here is mode " +
+          "'none', a path carrier.";
+        if (smAfter === "all") smWhy = "every pixel of it already showed.";
+        if (smAfter === "none") smWhy = "it was already masked out completely.";
+        smOut.warning = "That changed nothing on '" + args.layer + "': " +
+          smOut.changed + ", and " + smWhy;
+      }
+      return smOut;
     }
     case "delete_mask": {
       // Faithful to the host's three refusals and to AELL_findMask: one

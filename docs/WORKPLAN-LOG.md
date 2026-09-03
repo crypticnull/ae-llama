@@ -17734,3 +17734,167 @@ on its own way out; all its work was in the scratch
 battery's cleanup removed the three bins and the sequence it made. No
 ComfyUI, no llama-server this pass.
 
+
+## 2026-09-03 (local, real AE) - the mask property nothing read (0.11.33)
+
+WORKPLAN section 8, the top open item filed by the 0.11.32 pass and
+re-filed by every mask pass since 0.11.26. The last log entry was a 12b
+pass, so 12b is skipped this pass per its own alternation rule. Harness
+green at the top of the pass: **722/722**.
+
+### The defect as filed, and the two the measurement added
+
+Filed: `add_mask` never sets mask opacity, `set_mask` can lower it
+afterwards, nothing re-checks - and it is one of the reasons
+`AELL_paradeShows` abandons a reading.
+
+Measured first, before any change, by the new re-runnable
+`scripts/mask-opacity-probe.js` + `.jsx` (AE 26.3x87, layer alpha through
+`sampleImage(postEffect)` at seven points, the same instrument as the
+three mask probes before it):
+
+- **A lone mask at opacity 0 EMPTIES the layer** - every compositing
+  mode (add, subtract, intersect, lighten, darken, difference), at a
+  region worth everything, half or nothing, and inverted as well.
+- **The lone `subtract` row is what makes this its own rule.** "Opacity 0
+  means its region is worth nothing" predicts a subtract taking nothing
+  away leaves the layer WHOLE. It measures EMPTY. So the first mask is a
+  branch, not an instance of the algebra.
+- **Further up the parade it IS "region worth nothing"**, and that had to
+  be measured too because the first reading is so unlike it: over an add
+  mask on the left half, a later add at 0 leaves 0.429 unchanged, an
+  off-layer subtract leaves 0.429, a full-coverage difference leaves
+  0.429 - while `intersect` and `darken` EMPTY the layer, which is the
+  plain algebra and NOT the measured off-layer departure
+  `AELL_maskOutcome1` carries (an off-layer intersect leaves a masked
+  layer alone; an opacity-0 one does not).
+- **`inverted` is not applied to an opacity-0 mask.** An inverted
+  full-coverage subtract at 0 leaves the half base at 0.429, where
+  swapping the region would have emptied it.
+- **A part opacity is a degree** (0.502 for a full-coverage add at 50),
+  which all/some/none cannot say - so that one stays unreadable.
+- **EXPANSION, which nothing read at all**: an add mask over the left
+  half reads 0.429 at expansion 0, **0.571 at +25 and 1.0 at +300**, and
+  a full-coverage subtract stops erasing at -300. So the rectangle
+  `AELL_maskRect` returned from the SHAPE alone was a claim about pixels
+  AE disagrees with.
+- **The shipped receipts**: `set_mask {opacity: 0}` took the layer 1.0 ->
+  0.0 on a bare ok, 0.429 -> 0 on a bare ok, and 0.571 -> 0 on a bare ok;
+  `set_mask {mode: "subtract"}` took 1.0 -> 0.0 on a bare ok; and
+  add_mask over a parade holding one opacity-0 mask said nothing at all
+  where the layer went 0 -> 1.0, or said the WRONG thing (a subtract over
+  an already-blank layer was told it "hides ALL ... cuts every pixel
+  away" while the alpha went 0 -> 0).
+
+### The fix
+
+**Reading** - `AELL_maskZeroApply` is the measured rule (state `null` ->
+"none", otherwise the algebra at region "none", inversion ignored), and
+`AELL_maskRect` now answers for opacity 0 and 100, carries the opacity on
+the rect, and refuses a non-zero or animated EXPANSION the way it already
+refuses a feather. All 13 parades the probe builds now read what the
+alpha reads, and the three bases that were unreadable read `none`.
+
+**Writing** - `set_mask` reads `AELL_paradeShows` BEFORE and AFTER its own
+edit rather than deducing from the argument, which is why the same guard
+catches the mode change that empties a layer. `AELL_maskEditKind` names
+erases / undoes / no-op; "some" is never compared to "some" (both
+readings are exact about which pixels show, the coarse word is not, and
+an add flipped to subtract reads some -> some while the picture inverts).
+The opacity-0 refusal carries the measured way out - **mode 'none' is the
+off switch opacity 0 reads like**, and a 'none' mask leaves every pixel
+showing at any opacity. A rename is not judged at all.
+
+One wording seam fixed on the way, because the fix makes it reachable
+more often: the `undoes` sentence said "'difference' ... INVERTS what
+they show" over a single mask it had just called "the mask".
+
+### Verification
+
+- **Real AE harness 722 -> 736/736 PASSED**, fourteen new steps in
+  `extension/js/selftest.js` (ST Fade for opacity, ST Exp for expansion).
+- **Four of them are RED against the reverted host in REAL AE**
+  (732/736), reproducing the filed failures verbatim - including the
+  expansion row, where the shipped host really did tell a layer that
+  already showed every pixel that this mask had switched its masking off.
+- **The probe re-run against the fixed host**: every A4b/A6 reading now
+  agrees with the alpha beside it, and the three silent erasures name
+  themselves.
+- `tests/test-shape-mask-tools.js` **+34 assertions, 28 RED** against the
+  reverted host: the 13 measured parades as a table, the part-opacity and
+  expansion bails with their keyframed twins, and both ends of set_mask.
+- Full stubbed suite green; `docs/CAPABILITIES.md` regenerated.
+- **Zero prompt cost** - host strings only. 58933 full / 39803 compact,
+  unchanged (headroom 67).
+
+### Stub faithfulness (the canned host was blind in the same place)
+
+`tests/test-self-test.js` answered `set_mask` from its ARGUMENTS alone, so
+an edit that emptied the layer and one that changed nothing read
+identically and four of the new steps passed against it while proving
+nothing. Its mask rows carry opacity and expansion now, the mask algebra
+moved to module scope so `set_mask` reads the same parade `add_mask`
+does, and the edit is applied to the row before the picture is read back.
+Same class as the link_property pass's `Prop.expression`.
+
+### Notes / assumptions
+
+- **Assumed WARN, never refuse**, as everywhere else in these tools: a
+  mask at opacity 0 is a real technique (it is how an opacity keyframe on
+  a mask starts) and refusing would break work that means it.
+- **Assumed the no-op warning may fire for set_mask where add_mask gates
+  its own on `asked`.** Every set_mask argument except `name` is an
+  explicit ask about the picture, so there is no placeholder case to
+  protect - the asymmetry that gates add_mask does not exist here.
+- **Assumed expansion should make a mask unreadable rather than grow its
+  rectangle.** AE rounds the corners of an expanded rectangle, so a
+  bigger rectangle would be a second wrong claim; silence is the honest
+  answer and it is what the neighbouring bails do.
+- The context-budget probe was run for the prompt size and **killed by a
+  truncated pipe before its own cleanup**, so its comps were removed by
+  hand with its own rule (`Ctx Probe*` comps, plus only the solids it
+  names and only when unused). It took two OLDER `Ctx Probe` comps with
+  it - the ones the roster-cap entry above names as junk. The project
+  audits clean afterwards: 398 items, nothing under any probe namespace.
+  Next pass: read the prompt size from `node tests/test-context-budget.js`
+  (it prints "the full prompt stays under its ceiling"), which costs no
+  AE launch and no model.
+
+### Still open, in priority order
+
+1. **`delete_mask` has exactly the blindness `set_mask` just lost.**
+   Removing a mask can empty a layer or hand it back and the receipt says
+   neither; the before/after instrument built this pass reads it in two
+   lines. Its destructive-refusal WORDING is already filed separately -
+   this is the receipt, not the refusal.
+2. An ellipse or a feather ALREADY on the layer still makes the parade
+   unreadable (`AELL_maskRect` takes rectangles only). The algebra could
+   carry an ellipse cell; nothing measured says it must yet.
+3. `add_mask {mode: "subtract"}` with NO bounds over a layer whose masks
+   already hide everything is silent, because the no-op sentence waits to
+   be asked. Measured this pass (0 -> 0). It replaced a WRONG sentence,
+   so this is a smaller item than it was.
+4. `comp.saveFrameToPng` writing nothing is still unexplained.
+5. Row 30's typo still burns six `center_anchor_point` calls before the
+   grid_layout that works. Cost, not harm.
+6. Everything else from the 2026-09-03 lists is unchanged: the
+   `distribute_property` mutate-then-throw hole, a bad VALUE not being
+   `argFault`, widening the `errArg` rollback exemption to thrown
+   lookups, step 2's naming flake, the destructive-refusal wording on
+   `delete_layer` / `delete_mask`, `property: string` in TOOL_DEFS,
+   `POST /tokenize`, the `comfyUrl` 8188/8000 mismatch on this machine,
+   the harness answering a modal with WORDS, `starved` wording,
+   delete_mask warning on a live expression, the unmeasured controller
+   GROUP and non-en_US locale, and `capParams`.
+
+Section 8 still has no open HARM and no open miss in the variant matrix.
+
+### Machine state
+
+**After Effects was never closed and its project was never closed.**
+Three harness runs (baseline 722, green 736, reverted-host red 732),
+three probe runs of the new mask-opacity probe (it removes its own comp
+and solid source each time), one interrupted context-budget probe cleaned
+up by hand as described above, and two small read-only audit scripts. The
+project audits clean: **398 items, nothing under any probe namespace**.
+No Premiere, no ComfyUI, no llama-server left running.

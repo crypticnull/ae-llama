@@ -3674,6 +3674,218 @@
           return d.removed === "ST Blind" || "removed " + d.removed;
         } },
 
+      // ---- the mask property nothing read: OPACITY --------------------
+      //
+      // set_mask writes it and has never said a word about what it did,
+      // and AELL_maskRect REFUSED any mask carrying one, so a single
+      // opacity-0 mask made the whole parade unreadable and every
+      // sentence above went quiet. Measured 2026-09-03
+      // (scripts/mask-opacity-probe.js, AE 26.3x87, layer alpha through
+      // sampleImage at seven points):
+      //
+      //   ALONE, every compositing mode at opacity 0 EMPTIES the layer —
+      //   add, subtract, intersect, lighten, darken, difference, at a
+      //   region worth everything / half / nothing, and inverted too. A
+      //   lone 'subtract' at opacity 0 is the row that makes this its own
+      //   rule: "its region is worth nothing" says the layer stays whole
+      //   there, and it measures EMPTY.
+      //
+      //   FURTHER UP the parade it behaves as a region worth NOTHING: a
+      //   later add/subtract/difference at opacity 0 leaves the picture
+      //   alone (0.429 unchanged), while intersect and darken empty it.
+      //   'inverted' is not applied to it at all, and a 'none' carrier
+      //   ignores opacity entirely.
+      //
+      //   set_mask {opacity: 0} on the only mask of a layer took it from
+      //   alpha 1.0 to 0.0 and answered a bare ok.
+      { name: "a clean layer for the opacity rows",
+        tool: "add_solid",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, name: "ST Fade", color: [0.5, 0.4, 0.2],
+                   width: 200, height: 200 };
+        },
+        check: function (d) { return d.name === "ST Fade" || d.name; } },
+
+      { name: "…a full-coverage add mask, then a subtract that blanks it",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Fade", name: "ST FAll",
+                   shape: "rectangle", bounds: [0, 0, 200, 200] };
+        },
+        check: function (d) {
+          return /cuts nothing away/.test(d.warning || "") ||
+                 "warning: " + (d.warning || "(none)");
+        } },
+
+      { name: "…and the subtract that takes it away",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Fade", name: "ST FCut",
+                   shape: "rectangle", bounds: [0, 0, 200, 200],
+                   mode: "subtract" };
+        },
+        check: function (d) {
+          return /hides ALL of 'ST Fade'/.test(d.warning || "") ||
+                 "warning: " + (d.warning || "(none)");
+        } },
+
+      // Measured: a LATER mask at opacity 0 takes nothing away, so the
+      // layer comes back. set_mask said nothing about that either.
+      { name: "opacity 0 on the cutting mask hands the layer back, and says so",
+        tool: "set_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Fade", mask: "ST FCut",
+                   opacity: 0 };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (!/Every pixel of 'ST Fade' shows again/.test(w)) {
+            return "the masking stopped working in silence: " +
+                   (w || "(none)");
+          }
+          return /takes nothing away/.test(w) ||
+                 "it does not say what opacity 0 did: " + w;
+        } },
+
+      // The same call twice: proof the first one really wrote, and the
+      // no-op receipt that add_mask has and set_mask never did.
+      { name: "…and sending it again is a no-op, which it now says",
+        tool: "set_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Fade", mask: "ST FCut",
+                   opacity: 0 };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (!/changed nothing on 'ST Fade'/.test(w)) {
+            return "warning: " + (w || "(none)");
+          }
+          return /already showed/.test(w) ||
+                 "it does not say what the layer looked like: " + w;
+        } },
+
+      // THE ROW THIS BLOCK WAS WRITTEN FOR. Both masks at opacity 0: the
+      // first one empties the layer whatever its mode, and the receipt
+      // used to be a bare ok.
+      { name: "opacity 0 on the KEEPING mask empties the layer, and says so",
+        tool: "set_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Fade", mask: "ST FAll",
+                   opacity: 0 };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (!/Nothing of 'ST Fade' shows now/.test(w)) {
+            return "the layer went blank in silence: " + (w || "(none)");
+          }
+          if (!/not an off switch/.test(w)) {
+            return "it does not say why 0 is not what it reads like: " + w;
+          }
+          // The setting that IS an off switch — measured: a 'none' mask
+          // leaves every pixel showing at any opacity.
+          if (!/mode: "none"/.test(w)) return "no way to switch it off: " + w;
+          return /opacity 100/.test(w) || "no way back: " + w;
+        } },
+
+      // A PART opacity is a degree, and "all / some / none" cannot say a
+      // degree (measured 0.502 for a full-coverage add at 50). The
+      // reading is abandoned rather than guessed, so this stays silent.
+      { name: "…while a part opacity is a fade nobody has to be warned about",
+        tool: "set_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Fade", mask: "ST FAll",
+                   opacity: 50 };
+        },
+        check: function (d) {
+          return !d.warning || "a fade was called something: " + d.warning;
+        } },
+
+      // A rename moves no pixels, so a "changed nothing" sentence about
+      // one would be noise on the tool working.
+      { name: "…and a rename is not a claim about pixels",
+        tool: "set_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Fade", mask: "ST FAll",
+                   name: "ST FRen" };
+        },
+        check: function (d) {
+          if (d.mask !== "ST FRen") return "mask named " + d.mask;
+          return !d.warning || "a rename was warned about: " + d.warning;
+        } },
+
+      { name: "…and the opacity layer goes away",
+        tool: "delete_layer",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Fade" };
+        },
+        check: function (d) {
+          return d.removed === "ST Fade" || "removed " + d.removed;
+        } },
+
+      // ---- the OTHER unread property: EXPANSION -----------------------
+      // Measured in the same run: an 'add' mask over the left half of a
+      // 400x300 layer reads mean alpha 0.429 at expansion 0, 0.571 at
+      // +25 and 1.0 at +300, and a full-coverage 'subtract' stops erasing
+      // at -300. The reader took its rectangle from the SHAPE alone, so
+      // an expanded mask was read as the region it was drawn at — and
+      // then a full-coverage 'add' over a layer that already showed
+      // everything was told it had switched the masking off.
+      { name: "a clean layer for the expansion rows",
+        tool: "add_solid",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, name: "ST Exp", color: [0.2, 0.5, 0.4],
+                   width: 200, height: 200 };
+        },
+        check: function (d) { return d.name === "ST Exp" || d.name; } },
+
+      { name: "…with an ordinary half mask on it",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Exp", name: "ST EHalf",
+                   shape: "rectangle", bounds: [0, 0, 100, 200] };
+        },
+        check: function (d) {
+          return !d.warning || "an ordinary half mask was warned about: " +
+                 d.warning;
+        } },
+
+      { name: "…expanded until it covers the whole layer",
+        tool: "set_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Exp", mask: "ST EHalf",
+                   expansion: 300 };
+        },
+        check: function (d) {
+          // The picture after is a shape this cannot read, so there is
+          // nothing to compare and nothing to say.
+          return !d.warning || "an unreadable edit was judged: " + d.warning;
+        } },
+
+      { name: "…so a full-coverage add must not claim it undid the masking",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Exp", name: "ST EAll",
+                   shape: "rectangle", bounds: [0, 0, 200, 200] };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (/shows again/.test(w)) {
+            return "the expanded mask was already showing every pixel, " +
+                   "so nothing stopped working: " + w;
+          }
+          return /cuts nothing away/.test(w) ||
+                 "the wider sentence went missing too: " + (w || "(none)");
+        } },
+
+      { name: "…and the expansion layer goes away too",
+        tool: "delete_layer",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Exp" };
+        },
+        check: function (d) {
+          return d.removed === "ST Exp" || "removed " + d.removed;
+        } },
+
       // --- the batch executor, at the scale it is actually used at.
       // for_each_layer used to run ANY tool name, so {tool: "create_comp"}
       // over N layers reported {succeeded: N} and left N junk comps in the

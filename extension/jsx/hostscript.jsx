@@ -7248,6 +7248,41 @@ function AELL_maskApply(state, mode, region) {
   return null;   // a mode this build cannot model — say nothing
 }
 
+/*
+ * WHAT A MASK AT OPACITY 0 DOES, and it is not "nothing" and not "the
+ * mask is switched off". Measured 2026-09-03, AE 26.3x87
+ * (scripts/mask-opacity-probe.js), by the alpha the layer really carries:
+ *
+ *   ALONE (or first in the parade) every compositing mode empties the
+ *   layer — add, subtract, intersect, lighten, darken and difference, at
+ *   a region worth everything, half, or nothing, and inverted as well:
+ *   18+ rows, all alpha 0. A lone 'subtract' at opacity 0 is the row that
+ *   makes this its own rule rather than "its region is worth nothing":
+ *   THAT reading says a subtract taking nothing away leaves the layer
+ *   whole, and the layer measures EMPTY.
+ *
+ *   FURTHER UP the parade it behaves exactly as a region worth NOTHING:
+ *   over an add mask showing the left half, a second 'add' at opacity 0
+ *   leaves 0.429 (unchanged), an off-layer 'subtract' leaves 0.429, a
+ *   full-coverage 'difference' leaves 0.429, and 'intersect' and 'darken'
+ *   EMPTY the layer — which is the plain algebra, not the measured
+ *   off-layer departure AELL_maskOutcome1 carries (an off-layer intersect
+ *   leaves a masked layer alone; an opacity-0 one does not).
+ *
+ *   INVERSION does not apply to it. Measured: an inverted full-coverage
+ *   'subtract' at opacity 0 over the same base leaves 0.429, where
+ *   swapping the region to "everything" would have emptied it, and a lone
+ *   inverted 'add' at opacity 0 empties the layer like every other mode.
+ *
+ * A 'none'-mode mask is not routed here at all — it does not composite at
+ * any opacity (measured: 0.429 unchanged), and AELL_paradeShows skips it
+ * before the shape is ever read.
+ */
+function AELL_maskZeroApply(state, mode) {
+  if (state === null) return "none";
+  return AELL_maskApply(state, mode, "none");
+}
+
 var AELL_MASK_MODE_NAMES = null;
 function AELL_maskModeName(v) {
   if (!AELL_MASK_MODE_NAMES) {
@@ -7270,11 +7305,26 @@ function AELL_maskModeName(v) {
  * The layer-space rectangle an EXISTING mask covers, or null when this
  * build cannot prove one. Deliberately narrow, because every caller uses
  * the answer to make a claim about pixels: only a static, unfeathered,
- * fully opaque, closed, axis-aligned RECTANGLE answers. A bezier can
- * bulge outside the hull of its own vertices, so a vertex box would be a
- * guess; a feather and a part-opacity mask hide by degrees, which "all /
- * some / none" cannot say; and an animated shape is a different answer
- * at every frame.
+ * un-expanded, closed, axis-aligned RECTANGLE at opacity 0 or 100
+ * answers. A bezier can bulge outside the hull of its own vertices, so a
+ * vertex box would be a guess; a feather and a PART opacity hide by
+ * degrees, which "all / some / none" cannot say; and an animated shape is
+ * a different answer at every frame.
+ *
+ * OPACITY 0 is not a degree, it is an absolute, so it answers rather than
+ * bailing — see AELL_maskZeroApply for what it does and for the two
+ * measurements that shape it. Carried on the rect because the parade
+ * reader has to apply it per mask.
+ *
+ * EXPANSION is read here and answered with silence, which it was not
+ * before: measured 2026-09-03 (scripts/mask-opacity-probe.js, AE
+ * 26.3x87), an 'add' mask over the LEFT HALF of a 400x300 layer reads
+ * mean alpha 0.429 at expansion 0, 0.571 at +25 and 1.0 at +300, and a
+ * full-coverage 'subtract' stops erasing the layer at -300. So the shape
+ * alone was never the whole coverage, and every rect this returned for an
+ * expanded mask was a claim about pixels that AE disagreed with. AE
+ * rounds the corners of an expanded rectangle too, so the honest answer
+ * is not a bigger rectangle — it is no rectangle.
  */
 function AELL_maskRect(mask) {
   var r = null;
@@ -7283,13 +7333,17 @@ function AELL_maskRect(mask) {
     var sp = mask.property("ADBE Mask Shape");
     var fp = mask.property("ADBE Mask Feather");
     var op = mask.property("ADBE Mask Opacity");
-    if (!sp || !fp || !op) return null;
+    var xp = mask.property("ADBE Mask Offset");
+    if (!sp || !fp || !op || !xp) return null;
     if (sp.numKeys > 0 || sp.expressionEnabled) return null;
     if (fp.numKeys > 0 || fp.expressionEnabled) return null;
     if (op.numKeys > 0 || op.expressionEnabled) return null;
+    if (xp.numKeys > 0 || xp.expressionEnabled) return null;
     var fv = fp.value;
     if (fv && (fv[0] || fv[1])) return null;
-    if (op.value !== 100) return null;
+    if (Number(xp.value) !== 0) return null;
+    var opv = Number(op.value);
+    if (opv !== 0 && opv !== 100) return null;
     var sh = sp.value;
     if (!sh || !sh.closed || !sh.vertices || sh.vertices.length !== 4) {
       return null;
@@ -7314,7 +7368,8 @@ function AELL_maskRect(mask) {
           (y !== box.top && y !== box.bottom)) return null;
     }
     r = { left: box.left, top: box.top, right: box.right, bottom: box.bottom,
-          inverted: !!mask.inverted, mode: AELL_maskModeName(mask.maskMode) };
+          inverted: !!mask.inverted, opacity: opv,
+          mode: AELL_maskModeName(mask.maskMode) };
     if (!r.mode) return null;
   } catch (e) { return null; }
   return r;
@@ -7377,6 +7432,13 @@ function AELL_paradeShows(masks, box) {
       var state = null;
       for (i = 0; i < rects.length; i++) {
         var rr = rects[i];
+        /* A mask at opacity 0 has its own rule and does not read its
+         * region or its 'inverted' switch at all — see
+         * AELL_maskZeroApply, where the measurements are. */
+        if (rr.opacity === 0) {
+          state = AELL_maskZeroApply(state, rr.mode);
+          continue;
+        }
         var inside = (cx > rr.left && cx < rr.right &&
                       cy > rr.top && cy < rr.bottom);
         if (rr.inverted) inside = !inside;
@@ -7805,7 +7867,8 @@ AELL_TOOLS.add_mask = function (args) {
         " already on it " + (maskCount === 1 ? "stops" : "stop") +
         " hiding anything" +
         ((!args.inverted && modeWord === "difference")
-          ? " ('difference' over the whole layer INVERTS what they show)"
+          ? " ('difference' over the whole layer INVERTS what " +
+            (maskCount === 1 ? "it shows" : "they show") + ")"
           : "") + ". Pass 'bounds' for the part you want to KEEP, or " +
         "leave this mask out to keep the masking already there.";
     }
@@ -8092,12 +8155,47 @@ function AELL_findMask(layer, ref, featherOnly) {
     ". Masks here: " + names.join(", "));
 }
 
+/*
+ * What an EDIT to a mask did to the layer, read as the picture BEFORE and
+ * the picture AFTER rather than deduced from the argument. add_mask has
+ * to deduce (its mask does not exist yet); set_mask does not, and the
+ * before/after reading catches every argument at once — the opacity this
+ * was built for, but the mode and the inversion too.
+ *
+ * "some" is never compared to "some": both readings are exact about which
+ * pixels show, but the coarse word is not, and a mask flipped from 'add'
+ * to 'subtract' reads "some" -> "some" while the picture inverts. Same
+ * reason AELL_maskOutcome1 refuses to call a full-coverage 'difference'
+ * over a part-masked layer a no-op.
+ *
+ * "nothing" (no mask composites on the layer) -> "all" is not a change
+ * anybody can see, so it is not `undoes`: every pixel showed either way.
+ */
+function AELL_maskEditKind(before, after) {
+  if (!before || !after) return "";
+  if (after === "none" && before !== "none") return "erases";
+  if (after === "all" && (before === "some" || before === "none")) {
+    return "undoes";
+  }
+  if (before === after && before !== "some") return "noop";
+  return "";
+}
+
 AELL_TOOLS.set_mask = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var layer = AELL_layerOrSelection(comp, args.layer);
   var mask;
   try { mask = AELL_findMask(layer, args.mask, AELL_featherOnly(args)); }
   catch (e) { return AELL_err(e.message); }
+  /* Read the layer's masking BEFORE the edit — this tool writes the one
+   * mask property nothing here has ever read back (measured: `set_mask
+   * {opacity: 0}` on the only mask of a layer takes it from alpha 1.0 to
+   * 0.0 and answered a bare ok), and the same silence covered a mode
+   * change that empties the layer. */
+  var maskParade = null;
+  try { maskParade = layer.property("ADBE Mask Parade"); } catch (ePar) {}
+  var editBox = AELL_layerBox(layer, comp.time);
+  var showedBefore = maskParade ? AELL_paradeShows(maskParade, editBox) : "";
   var changed = [];
   if (args.mode) {
     var mode = AELL_maskMode(args.mode);
@@ -8135,8 +8233,64 @@ AELL_TOOLS.set_mask = function (args) {
     return AELL_err("Nothing to change — pass mode, feather, expansion, " +
                     "opacity, inverted and/or name");
   }
-  return AELL_okay({ layer: layer.name, mask: mask.name,
-                     changed: changed.join(", ") });
+  var setOut = { layer: layer.name, mask: mask.name,
+                 changed: changed.join(", ") };
+  var showedAfter = maskParade ? AELL_paradeShows(maskParade, editBox) : "";
+  /* A rename moves no pixels, so a "changed nothing" sentence about one
+   * would be noise. Every other argument here is a claim about what the
+   * layer looks like. A feather or a non-zero expansion makes the parade
+   * unreadable (AELL_maskRect) and the reading below goes quiet on its
+   * own — this list is about which edits may be JUDGED, not which are
+   * readable. */
+  var visualEdit = !!(args.mode || typeof args.inverted === "boolean" ||
+                      typeof args.opacity === "number" ||
+                      typeof args.feather === "number" ||
+                      AELLJSON.isArray(args.feather) ||
+                      typeof args.expansion === "number");
+  var kind = visualEdit
+    ? AELL_maskEditKind(showedBefore, showedAfter)
+    : "";
+  var zeroOp = (typeof args.opacity === "number" &&
+                Number(args.opacity) === 0);
+  /* The sentence opacity 0 needs and no other argument does: it reads
+   * like an OFF switch and it is not one. Measured — a lone mask at
+   * opacity 0 empties the layer whatever its mode, region or inversion,
+   * while mode 'none' leaves every pixel showing, so 'none' is the switch
+   * the caller was reaching for. */
+  var offSwitch = " Mask opacity 0 is not an off switch: it drops what " +
+    "'" + mask.name + "' lets through to zero. To switch a mask off and " +
+    "leave the layer showing, set_mask {mask: \"" + mask.name + "\", " +
+    "mode: \"none\"}; to undo this, opacity 100.";
+  if (kind === "erases") {
+    setOut.warning = "Nothing of '" + layer.name + "' shows now: " +
+      setOut.changed + " leaves every pixel of it masked out.";
+    if (zeroOp) {
+      setOut.warning = setOut.warning + offSwitch;
+    } else {
+      setOut.warning = setOut.warning + " Set it back to undo this, or " +
+        "delete_mask {mask: \"" + mask.name + "\"} to remove the mask.";
+    }
+  } else if (kind === "undoes") {
+    setOut.warning = "Every pixel of '" + layer.name + "' shows again: " +
+      "after " + setOut.changed + " the masks on it stop hiding anything.";
+    if (zeroOp) {
+      setOut.warning = setOut.warning + " Mask opacity 0 drops what '" +
+        mask.name + "' lets through to zero, so it takes nothing away.";
+    }
+  } else if (kind === "noop") {
+    setOut.warning = "That changed nothing on '" + layer.name + "': " +
+      setOut.changed + ", and ";
+    if (showedAfter === "all") {
+      setOut.warning = setOut.warning + "every pixel of it already showed.";
+    } else if (showedAfter === "none") {
+      setOut.warning = setOut.warning + "it was already masked out " +
+        "completely.";
+    } else {
+      setOut.warning = setOut.warning + "no mask on it composites — every " +
+        "mask here is mode 'none', a path carrier.";
+    }
+  }
+  return AELL_okay(setOut);
 };
 
 /* Mask names on a layer, in AE's order — the receipt half of delete_mask. */

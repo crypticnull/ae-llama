@@ -2254,6 +2254,37 @@ this order, one bullet per pass:
     `expression` be a plain string and wrote `expressionError` NOWHERE,
     and the canned host answered link_property/set_expression from their
     arguments alone, so a first link and a fifth read identically.
+  - ~~**a mask's OPACITY is read nowhere, and neither is its
+    EXPANSION**~~ DONE 2026-09-03 (0.11.33). The top item every mask
+    pass since 0.11.26 has re-filed: `set_mask {opacity: 0}` on the only
+    mask of a layer took it from alpha 1.0 to **0.0 on a bare ok**, and
+    `AELL_maskRect` REFUSED any mask carrying an opacity, so one of them
+    in a parade made add_mask's four sentences go quiet. Measured first
+    by the new re-runnable `scripts/mask-opacity-probe.js/.jsx`, and the
+    measurement broke the obvious rule twice: opacity 0 is NOT "the mask
+    is off" (alone, every mode empties the layer — including a
+    `subtract`, which "its region is worth nothing" says leaves the layer
+    whole) and it is NOT "the layer is empty" either (further up the
+    parade it behaves exactly as a region worth nothing, and `inverted`
+    is not applied to it at all). `AELL_maskZeroApply` is that rule; all
+    13 parades the probe built now read what the alpha reads. EXPANSION
+    was the rider: measured +25 takes a half mask from 0.429 to 0.571 and
+    +300 to 1.0, so a rect read from the SHAPE alone was a claim AE
+    disagrees with — it makes the mask unreadable now, which turned a
+    false "every pixel of it shows again" into the true sentence. Second
+    half at the write end: `set_mask` reads the picture BEFORE and AFTER
+    its own edit (never deduced from the argument, so the same guard
+    catches a MODE change that empties the layer), and names erases /
+    undoes / no-op, with the measured way out for opacity 0 — mode
+    'none' is the off switch it reads like. "some" is never compared to
+    "some". Zero prompt cost (host strings only, 58933 unchanged).
+    Harness 722 -> **736**, four of the new steps RED against the
+    reverted host in real AE; +34 stub assertions in
+    tests/test-shape-mask-tools.js with 28 RED, and the canned host in
+    tests/test-self-test.js grew an opacity/expansion model and a
+    set_mask that judges its own edit (it answered from the arguments
+    alone, so an edit that emptied the layer and one that changed
+    nothing read identically).
 
 - **DEFERRED until a sandbox design exists:** D/F/H3 rows (project
   mutation, renders, mass-delete) — wiring them against the live
