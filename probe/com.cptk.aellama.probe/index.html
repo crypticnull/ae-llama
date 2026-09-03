@@ -264,47 +264,155 @@ of the panel. Read-only unless you press a button marked MUTATES.</p>
         probe("qeProbe", {}, function (err3, qe) {
           results.qe = err3 ? { error: err3 } : qe;
           // What the manifest's ScriptPath managed on its own. Shape B's
-          // loader.jsx is expected to FAIL here (see its header): the
-          // measurement is what $.fileName reported, not whether it won.
-          // Read the two globals SEPARATELY. Joining them with a
-          // delimiter and splitting is one embedded delimiter away from
-          // a wrong answer, and this value is a measurement.
-          evalScript("String($.global.AELLP_LOADER_FILENAME)",
-            function (fname) {
-              evalScript("String($.global.AELLP_LOADER)", function (said) {
-                results.scriptPath = {
-                  loaderSaid: (said && said !== "undefined") ? said : null,
-                  dollarFileName: (fname && fname !== "undefined")
-                    ? fname : null,
-                  note: "ScriptPath IS evaluated, but $.fileName inside it " +
-                        "is not a path (AE 26.3 returned \"7\"). new File() " +
-                        "on that is a RELATIVE path, so it resolves against " +
-                        "the host's working directory - which is why it " +
-                        "looks like the host's own folder. The panel loads " +
-                        "probe.jsx by absolute path instead."
-                };
-                render();
-                autoSave();
-              });
-            });
+          // loader.jsx is expected to FAIL to find its sibling (see its
+          // header): the measurement is what $.fileName reported, not
+          // whether it won.
+          readScriptPath(function (fact) {
+            results.scriptPath = fact.scriptPath || null;
+            results.scriptPathNote = fact.note || null;
+            render();
+            autoSave();
+          });
         });
       });
     });
   }
 
-  /** Which manifest shape is installed, read from the manifest itself. */
+  /* SHAPE-SHARED-BEGIN (both doors keep this block byte-identical) */
+  /*
+   * WHICH MANIFEST SHAPE IS INSTALLED, graded from the manifest's own
+   * bytes.
+   *
+   * Shape A gives every <Extension> its own HostList; shape B gives one
+   * <Extension> one HostList and branches in a ScriptPath loader. The
+   * two counts are the discriminator, and both doors have to grade them
+   * by the SAME rule: the report merges the two artifacts row by row and
+   * takes the newest source that has a value, so two rules would mean
+   * the row quietly changes question the day a newer run answers it.
+   *
+   * An unreadable or non-manifest file used to grade "B (one HostList,
+   * loader)" -- zero HostLists is not more than one -- so a read that
+   * found nothing at all came back as a measurement. There is no shape
+   * without an <Extension>, and saying so is what keeps a miss out of
+   * the report.
+   */
+  function AELLP_shapeOfXml(xml) {
+    var s = String(xml === null || xml === undefined ? "" : xml);
+    var extensions = (s.match(/<Extension\s+Id=/g) || []).length;
+    var hostLists = (s.match(/<HostList>/g) || []).length;
+    if (!extensions && !hostLists) {
+      return { extensionEntries: 0, hostLists: 0, guess: null,
+               error: "no <Extension Id=...> and no <HostList> in " +
+                      s.length + " bytes: this is not a CEP manifest" };
+    }
+    return { extensionEntries: extensions, hostLists: hostLists,
+             guess: (hostLists > 1 ? "A (per-extension HostList)"
+                                   : "B (one HostList, loader)") };
+  }
+  /* SHAPE-SHARED-END */
+
+  /* SCRIPTPATH-SHARED-BEGIN (both doors keep this block byte-identical) */
+  /*
+   * WHAT $.fileName SAID INSIDE THE MANIFEST'S ScriptPath, recorded the
+   * same way by whichever door took the reading.
+   *
+   * The answer is short and it is the whole point: AE 26.3 returned "7"
+   * and then "8" on the next launch, Premiere 26.3.2 returned "". Both
+   * doors stored it as `(fname && fname !== "undefined") ? fname : null`
+   * -- an expression that throws Premiere's answer away, because "" is
+   * falsy -- so the one host the measurement exists FOR reported the row
+   * unmeasured. Three states, kept apart:
+   *
+   *   unset   the global does not exist, so loader.jsx never ran in this
+   *           engine and THIS RUN has nothing to say. The caller records
+   *           a NOTE and no reading: a reading that says nothing would
+   *           still be the newest source for the row, and would displace
+   *           an older run's real answer with our silence.
+   *   empty   the global exists and is "". That IS the measurement.
+   *   named   whatever it said.
+   *
+   * `chars` is counted in the HOST (String(...).length) because an empty
+   * reply DELIVERED over evalScript cannot otherwise be told apart from
+   * a value that is itself empty -- and those are different findings.
+   */
+  function AELLP_scriptPathFact(typeName, chars, raw, loaderSaid) {
+    var n = parseInt(chars, 10);
+    var text = String(raw === null || raw === undefined ? "" : raw);
+    var said = (loaderSaid && loaderSaid !== "undefined")
+      ? String(loaderSaid) : null;
+    var out;
+    if (String(typeName) !== "string") {
+      return { note: "$.global.AELLP_LOADER_FILENAME is " +
+                     String(typeName || "(no reply)") + " in this engine: " +
+                     "the probe bundle's ScriptPath (jsx/loader.jsx) did " +
+                     "not run here, so this run cannot say what $.fileName " +
+                     "reported inside it" };
+    }
+    if (isNaN(n)) { n = text.length; }
+    out = { dollarFileName: text,
+            dollarFileNameChars: n,
+            dollarFileNameSaid: n === 0 ? "(the empty string)" : text,
+            loaderSaid: said,
+            note: "ScriptPath IS evaluated, but $.fileName inside it is " +
+                  "not a path (AE 26.3 returned \"7\", Premiere 26.3.2 " +
+                  "\"\"). new File() treats that as RELATIVE and resolves " +
+                  "it against the host's working directory, which is why " +
+                  "it reads back like the host's own install folder. Both " +
+                  "doors load probe.jsx by absolute path instead." };
+    if (n > 0 && text === "") {
+      out.dollarFileNameSaid = "(" + n + " characters the host counted, " +
+                               "but evalScript delivered an empty reply)";
+      out.transport = "the value did not survive the CEP round trip";
+    }
+    return { scriptPath: out };
+  }
+  /* SCRIPTPATH-SHARED-END */
+
+  /**
+   * Take that reading through this door. THREE separate one-fact reads:
+   * the type, the length counted in the HOST, and the value. Joining
+   * them into one reply and splitting it is one embedded delimiter away
+   * from a wrong answer, and this value is a measurement.
+   *
+   * cb gets whatever the shared block returns: {scriptPath} or {note}.
+   */
+  function readScriptPath(cb) {
+    evalScript("typeof $.global.AELLP_LOADER_FILENAME", function (t) {
+      if (String(t) !== "string") {
+        cb(AELLP_scriptPathFact(t, 0, "", null));
+        return;
+      }
+      evalScript("String($.global.AELLP_LOADER_FILENAME).length",
+        function (chars) {
+          evalScript("String($.global.AELLP_LOADER_FILENAME)",
+            function (raw) {
+              evalScript("typeof $.global.AELLP_LOADER === 'undefined'" +
+                         " ? '' : String($.global.AELLP_LOADER)",
+                function (said) {
+                  cb(AELLP_scriptPathFact("string", chars, raw, said));
+                });
+            });
+        });
+    });
+  }
+
+  /**
+   * Which manifest shape is installed, read from the folder CEP handed
+   * THIS panel. The grading rule is the shared block above, because the
+   * door-3 runner answers the same row off the same bundle and the
+   * report merges the two artifacts row by row.
+   */
   function shapeInUse() {
+    var p = "(extension path unknown)";
     try {
-      var fs = nodeRequire("fs");
-      var p = extPath() + "/CSXS/manifest.xml";
-      var xml = fs.readFileSync(p, "utf8");
-      var extensions = (xml.match(/<Extension\s+Id=/g) || []).length;
-      var hostLists = (xml.match(/<HostList>/g) || []).length;
-      return { extensionEntries: extensions, hostLists: hostLists,
-               guess: (hostLists > 1 ? "A (per-extension HostList)"
-                                     : "B (one HostList, loader)") };
+      var fsMod = nodeRequire("fs");
+      p = extPath() + "/CSXS/manifest.xml";
+      var out = AELLP_shapeOfXml(fsMod.readFileSync(p, "utf8"));
+      out.readFrom = p;
+      out.via = "the visible panel, from the folder CEP handed it";
+      return out;
     } catch (e) {
-      return { error: String(e.message || e) };
+      return { guess: null, error: String(e.message || e), readFrom: p };
     }
   }
 
@@ -749,10 +857,9 @@ of the panel. Read-only unless you press a button marked MUTATES.</p>
       results.battery = err ? { error: err } : data;
       // The ScriptPath measurement costs nothing and is a fact this
       // project already had to learn twice.
-      evalScript("String($.global.AELLP_LOADER_FILENAME)", function (fname) {
-        results.scriptPath = {
-          dollarFileName: (fname && fname !== "undefined") ? fname : null
-        };
+      readScriptPath(function (fact) {
+        results.scriptPath = fact.scriptPath || null;
+        results.scriptPathNote = fact.note || null;
         results.finishedAt = new Date().toISOString();
         var where = save();
         results.savedTo = where;

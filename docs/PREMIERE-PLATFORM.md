@@ -533,6 +533,72 @@ reason at all.
 `tests/test-probe-bundle.js` section 11 drives the real shared loop out
 of the page and holds every one of these without Premiere.
 
+### 2026-09-03 - the two rows only a CLICK could answer, and why one of them stays that way
+
+Run `-0902`, Premiere 26.3.2, CEP 12.0.1, unattended. The battery was
+green, the soak was green, G0 was PASS - and the PPRO table still showed
+two gaps, **neither of them about Premiere**: `manifest shape installed`
+and `$.fileName inside the manifest's ScriptPath` were read by the
+VISIBLE panel and by nothing else, so no unattended run could answer
+them however green it was, and the report printed them exactly like
+something the host had refused to say.
+
+**The manifest shape is MEASURED unattended now.** The manifest is a
+file and the door-3 runner has `fs`; there was never a reason for that
+row to need a click. It finds the bundle by `ExtensionBundleId` under
+every CEP extensions root (`%APPDATA%`, both `CommonProgramFiles`
+folders) rather than by folder name, and records where it read:
+
+    B (one HostList, loader)
+    readFrom  C:\Users\mr\AppData\Roaming\Adobe\CEP\extensions\
+              com.cptk.aellama.probe\CSXS\manifest.xml
+
+Two installed copies is a finding, not a tie to break - which root CEP
+loads from is not measured, so when the copies disagree the shape is
+withheld and both paths are named.
+
+**`$.fileName` inside `ScriptPath` is CLICK-ONLY, and that is now
+measured rather than assumed.** `loader.jsx` is the PROBE bundle's
+`ScriptPath`; CEP evaluates it when that panel LOADS, and an unattended
+run opens no panel. Read from the engine door 3 talks to, the global is
+simply absent:
+
+    $.global.AELLP_LOADER_FILENAME is undefined in this engine
+
+Door 3 was NOT given a `ScriptPath` of its own to close the row. "No
+ScriptPath: nothing auto-loads into the host's ExtendScript engine" is
+the invariant that keeps the invisible runner inert in the owner's AE
+and Premiere at every launch, `tests/test-probe-bundle.js` section 5
+holds it, and it is worth more than one table cell. What changed is the
+REPORT: a row the newest run could not take and SAID SO now grades
+**EXPLAINED** and prints `n/a` with the reason, because "nobody has run
+this" and "this run cannot answer this, here is why" are different
+reports and printing them identically is how a gap that was never about
+Premiere sat in the PPRO table looking like one.
+
+**A third defect turned up inside the second.** Premiere's answer for
+`$.fileName` in a `ScriptPath` is the EMPTY STRING (measured 2026-09-02,
+recorded in section 3 above). Both doors stored it as
+`(fname && fname !== "undefined") ? fname : null` - an expression that
+throws that answer away, because `""` is falsy - and the grader's picker
+skips `""` exactly as it skips a missing key. So the one host the row
+exists for would have graded itself unmeasured **while holding the
+answer**. The reading is taken in three states now (`unset` / `empty` /
+`named`), by one shared block both doors keep byte-identical, and the
+empty one is printed as `(the empty string)`. The character count is
+taken in the HOST, so a value that did not survive the CEP round trip
+is a transport finding rather than a measurement of an empty
+`$.fileName`.
+
+Also fixed in the same rule: an unreadable manifest used to grade
+`B (one HostList, loader)` - zero HostLists is not more than one - so a
+read that found nothing came back as a measurement.
+
+**PPRO now has no `----` row at all**: 26 measured, 1 `n/a` with its
+reason. Held without Premiere by `tests/test-probe-bundle.js` section 12
+(33 assertions; 10 of them go red against the reverted doors and
+grader).
+
 ### The rest
 
 Not yet run. P0 writes into `%APPDATA%\AE-Llama\probes\`:

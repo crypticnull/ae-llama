@@ -18407,3 +18407,138 @@ needed: the claim is algebra over the parade reader the last three
 passes measured, and the one new geometric fact — that an overflowing
 mask cannot also cover the layer — is a property of a refusal already in
 the file. No Premiere, no ComfyUI, no llama-server left running.
+
+## 2026-09-03 (local, real AE + real Premiere) - WORKPLAN 12b: two rows only a CLICK could answer (no bump)
+
+**Item:** WORKPLAN section 1 was green on the first run of the pass
+(**770/770**), and the previous log entry was an AE pass, so section
+12b's alternation rule takes this one. Its filed next item: the two PPRO
+rows still unmeasured in the per-host table - **the installed manifest
+shape** and **`$.fileName` inside the manifest's `ScriptPath`** - "either
+teach the door-3 runner to read them, or record them as click-only and
+stop showing them as gaps".
+
+### What was wrong
+
+Every battery step passed, the soak passed, G0 passed - and the PPRO
+block still printed two `----` rows. **Neither was about Premiere.**
+Both were read by the VISIBLE panel (`shapeInUse()` off the folder CEP
+handed it, and the ScriptPath globals) and by nothing else, so no
+unattended run could answer them however green it was. A gap whose cause
+is "nobody clicked" printed identically to a gap whose cause is "the
+host refuses to say", which is the same silent-lie shape this project
+keeps finding on the AE side.
+
+A third defect was sitting inside the second one, and it is the worse of
+the two. Premiere's answer for `$.fileName` inside a `ScriptPath` is the
+EMPTY STRING (measured 2026-09-02, in CLAUDE.md and PREMIERE-PLATFORM
+section 3). Both doors stored it as
+`(fname && fname !== "undefined") ? fname : null` - `""` is falsy, so
+that expression throws the answer away - and the grader's picker skips
+`""` exactly as it skips a missing key. The one host the row exists FOR
+would have graded itself unmeasured while holding the measurement.
+
+### What changed
+
+- **The manifest shape is measured unattended now.** The manifest is a
+  file and the door-3 runner has `fs`; that row never needed a click.
+  `readShape()` finds the bundle by `ExtensionBundleId` under every CEP
+  extensions root (`%APPDATA%`, both `CommonProgramFiles`), not by
+  folder name, and records `readFrom`. Two copies is a finding, not a
+  tie to break: when they disagree the shape is withheld and both paths
+  are named, because which root CEP loads from is not measured here.
+- **The ScriptPath row is CLICK-ONLY, measured rather than assumed.**
+  `loader.jsx` is the PROBE bundle's `ScriptPath`; CEP evaluates it when
+  that panel LOADS, and an unattended run opens no panel. Read from the
+  engine door 3 talks to, the global is absent.
+  **Door 3 was NOT given a `ScriptPath` of its own to close the row.**
+  "No ScriptPath: nothing auto-loads into the host's ExtendScript
+  engine" is the invariant that keeps the invisible runner inert in the
+  owner's AE and Premiere at every launch, `tests/test-probe-bundle.js`
+  section 5 asserts it, and buying one table cell by loosening a tested
+  invariant is the trade this repo does not make.
+- **The REPORT changed instead.** A row the newest run could not take
+  and SAID SO grades `EXPLAINED` and prints `n/a` with the reason.
+  `m()` looks for the note only once no source has the value at all, so
+  a note can never pass a row and can never displace an older run that
+  really measured - the same rule `soakNote` established.
+- **Two doors, one rule, twice.** `AELLP_shapeOfXml` and
+  `AELLP_scriptPathFact` are shared blocks both doors keep
+  byte-identical (the `battArgs` / soak pattern), because the report
+  merges the two artifacts per row and two rules would mean the row
+  quietly changing question the day a newer run answers it.
+- The ScriptPath reading is taken as THREE separate one-fact reads -
+  the type, the length counted in the HOST, the value - so `unset`,
+  `empty` and `named` stay apart, and a value that did not survive the
+  CEP round trip is a transport finding rather than a measurement of an
+  empty `$.fileName`.
+- Same rule, one more fix: an unreadable manifest used to grade
+  `B (one HostList, loader)`, because zero HostLists is not more than
+  one. A read that found nothing is not a measurement; it says what it
+  read, with the byte count, and the row grades FAILED.
+
+### Verification
+
+- **Real Premiere, run `-0902`** (26.3.2, unattended, ~5 min): battery
+  9/9, soak 500/500 in 8189 ms, and the two new readings taken for the
+  first time -
+  `shape: B (one HostList, loader)`, `readFrom …\com.cptk.aellama.probe\
+  CSXS\manifest.xml`, and
+  `scriptPathNote: "$.global.AELLP_LOADER_FILENAME is undefined in this
+  engine…"`.
+- `node scripts/ppro-probe-report.js` over that artifact: **PPRO has no
+  `----` row left** - 26 measured, 1 `n/a` with its reason (was 3
+  unmeasured). G0 still PASS, exit 0.
+- `tests/test-probe-bundle.js` section 12: **33 new assertions**, and
+  **10 of them go RED** against the reverted doors and grader (checked
+  by reverting each of the three sites in turn and restoring).
+- Full stubbed suite green (74 files), including the five lints section
+  12b requires before any Premiere push.
+- **Real AE harness 770/770** at the start of the pass; `extension/` was
+  not touched, so it is unchanged by construction.
+- **No version bump.** Nothing in `extension/` moved; the probe is not
+  shipped, and bumping would push a no-op update to every panel.
+
+### Notes / assumptions
+
+- **Assumed the shape row means "what is installed", not "what CEP
+  loaded".** The runner reads a file; only the panel can say what its
+  own host loaded. That is why the reading carries `via` and `readFrom`,
+  and why two disagreeing copies withhold the answer instead of picking
+  one.
+- **Assumed `EXPLAINED` must never reach G0.** It cannot today - no G0
+  row uses a note path - and a test pins that a note is not a
+  measurement. If a future gate row grows one, that assumption needs
+  re-checking.
+- The VISIBLE panel's half of the change (its `shapeInUse` and its two
+  ScriptPath call sites) was exercised only by the page-parses test and
+  the shared-block drive-out; an unattended run never opens that panel.
+  A click in either host would confirm it, and would also re-take the
+  ScriptPath reading that only a click can take.
+
+### Still open, in priority order
+
+1. **`doors.json` is still MISSING** - `scripts/ppro-door-probe.ps1`
+   has not been run since the door-3 runner started working, so the
+   report's "headless doors" block says nothing. That is the LAST filed
+   12b item; if it is bookkeeping, section 12b closes outright.
+2. The AE-side list is unchanged from the previous entry: two ellipses
+   and a feathered mask still make the parade unreadable (deliberate);
+   `comp.saveFrameToPng` writing nothing is unexplained; row 30's typo
+   burns six `center_anchor_point` calls; and everything else from the
+   2026-09-03 lists (the `distribute_property` mutate-then-throw hole, a
+   bad VALUE not being `argFault`, the `errArg` rollback exemption,
+   step 2's naming flake, the destructive-refusal wording, `property:
+   string` in TOOL_DEFS, `POST /tokenize`, the `comfyUrl` 8188/8000
+   mismatch, the harness answering a modal with WORDS, `starved`
+   wording, delete_mask warning on a live expression, the unmeasured
+   controller GROUP and non-en_US locale, and `capParams`).
+
+### Machine state
+
+**After Effects was never closed and its project was never closed.** One
+AE harness run (770/770, green). Premiere was launched and closed by
+`run-ppro-probe.ps1` itself, once; it removed everything it made
+(`AELL PROBE 1..3`, `AELL PROBE SEQ`) and worked only in the scratch
+project under `%APPDATA%\AE-Llama\probes\`. No ComfyUI, no llama-server
+left running.

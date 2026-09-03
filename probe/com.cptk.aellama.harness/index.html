@@ -102,6 +102,198 @@
   var jsx = String(job.probeJsx || "").replace(/\\/g, "/");
   var loadSrc = jsx ? '$.evalFile(new File("' + jsx + '"))' : '"no jsx"';
 
+  /* SHAPE-SHARED-BEGIN (both doors keep this block byte-identical) */
+  /*
+   * WHICH MANIFEST SHAPE IS INSTALLED, graded from the manifest's own
+   * bytes.
+   *
+   * Shape A gives every <Extension> its own HostList; shape B gives one
+   * <Extension> one HostList and branches in a ScriptPath loader. The
+   * two counts are the discriminator, and both doors have to grade them
+   * by the SAME rule: the report merges the two artifacts row by row and
+   * takes the newest source that has a value, so two rules would mean
+   * the row quietly changes question the day a newer run answers it.
+   *
+   * An unreadable or non-manifest file used to grade "B (one HostList,
+   * loader)" -- zero HostLists is not more than one -- so a read that
+   * found nothing at all came back as a measurement. There is no shape
+   * without an <Extension>, and saying so is what keeps a miss out of
+   * the report.
+   */
+  function AELLP_shapeOfXml(xml) {
+    var s = String(xml === null || xml === undefined ? "" : xml);
+    var extensions = (s.match(/<Extension\s+Id=/g) || []).length;
+    var hostLists = (s.match(/<HostList>/g) || []).length;
+    if (!extensions && !hostLists) {
+      return { extensionEntries: 0, hostLists: 0, guess: null,
+               error: "no <Extension Id=...> and no <HostList> in " +
+                      s.length + " bytes: this is not a CEP manifest" };
+    }
+    return { extensionEntries: extensions, hostLists: hostLists,
+             guess: (hostLists > 1 ? "A (per-extension HostList)"
+                                   : "B (one HostList, loader)") };
+  }
+  /* SHAPE-SHARED-END */
+
+  /* SCRIPTPATH-SHARED-BEGIN (both doors keep this block byte-identical) */
+  /*
+   * WHAT $.fileName SAID INSIDE THE MANIFEST'S ScriptPath, recorded the
+   * same way by whichever door took the reading.
+   *
+   * The answer is short and it is the whole point: AE 26.3 returned "7"
+   * and then "8" on the next launch, Premiere 26.3.2 returned "". Both
+   * doors stored it as `(fname && fname !== "undefined") ? fname : null`
+   * -- an expression that throws Premiere's answer away, because "" is
+   * falsy -- so the one host the measurement exists FOR reported the row
+   * unmeasured. Three states, kept apart:
+   *
+   *   unset   the global does not exist, so loader.jsx never ran in this
+   *           engine and THIS RUN has nothing to say. The caller records
+   *           a NOTE and no reading: a reading that says nothing would
+   *           still be the newest source for the row, and would displace
+   *           an older run's real answer with our silence.
+   *   empty   the global exists and is "". That IS the measurement.
+   *   named   whatever it said.
+   *
+   * `chars` is counted in the HOST (String(...).length) because an empty
+   * reply DELIVERED over evalScript cannot otherwise be told apart from
+   * a value that is itself empty -- and those are different findings.
+   */
+  function AELLP_scriptPathFact(typeName, chars, raw, loaderSaid) {
+    var n = parseInt(chars, 10);
+    var text = String(raw === null || raw === undefined ? "" : raw);
+    var said = (loaderSaid && loaderSaid !== "undefined")
+      ? String(loaderSaid) : null;
+    var out;
+    if (String(typeName) !== "string") {
+      return { note: "$.global.AELLP_LOADER_FILENAME is " +
+                     String(typeName || "(no reply)") + " in this engine: " +
+                     "the probe bundle's ScriptPath (jsx/loader.jsx) did " +
+                     "not run here, so this run cannot say what $.fileName " +
+                     "reported inside it" };
+    }
+    if (isNaN(n)) { n = text.length; }
+    out = { dollarFileName: text,
+            dollarFileNameChars: n,
+            dollarFileNameSaid: n === 0 ? "(the empty string)" : text,
+            loaderSaid: said,
+            note: "ScriptPath IS evaluated, but $.fileName inside it is " +
+                  "not a path (AE 26.3 returned \"7\", Premiere 26.3.2 " +
+                  "\"\"). new File() treats that as RELATIVE and resolves " +
+                  "it against the host's working directory, which is why " +
+                  "it reads back like the host's own install folder. Both " +
+                  "doors load probe.jsx by absolute path instead." };
+    if (n > 0 && text === "") {
+      out.dollarFileNameSaid = "(" + n + " characters the host counted, " +
+                               "but evalScript delivered an empty reply)";
+      out.transport = "the value did not survive the CEP round trip";
+    }
+    return { scriptPath: out };
+  }
+  /* SCRIPTPATH-SHARED-END */
+
+  /*
+   * THE TWO ROWS NO UNATTENDED RUN COULD EVER CLOSE. Both were read only
+   * by the VISIBLE panel -- shapeInUse() off the folder CEP handed it,
+   * and the ScriptPath globals -- so a green battery still left the
+   * report showing PPRO gaps that nothing about Premiere was hiding:
+   * nobody had clicked the button. Neither needs a click. The manifest
+   * is a FILE and this runner has fs; the ScriptPath globals live in the
+   * host engine this runner already talks to.
+   */
+  var PROBE_BUNDLE = "com.cptk.aellama.probe";
+
+  /** Every CEP extensions root this machine could have installed into. */
+  function cepRoots() {
+    var roots = [], seen = {};
+    function add(base) {
+      if (!base) { return; }
+      var p = path.join(base, "Adobe", "CEP", "extensions");
+      var k = p.toLowerCase();
+      if (!seen[k]) { seen[k] = 1; roots.push(p); }
+    }
+    add(proc.env.APPDATA);
+    add(proc.env["CommonProgramFiles(x86)"]);
+    add(proc.env.CommonProgramFiles);
+    return roots;
+  }
+
+  /*
+   * The probe bundle's INSTALLED manifest, found by its bundle id rather
+   * than by folder name: install-probe.ps1 junctions it under its id,
+   * but a hand-installed copy need not be, and a name match that missed
+   * would report "not installed" about a bundle that is.
+   *
+   * Two copies is a finding, not a tie to break: which root CEP loads
+   * from is not measured here, so when they disagree the shape is
+   * withheld and both paths are named.
+   */
+  function readShape() {
+    var roots = cepRoots(), found = [], i, j, names, manifest, xml, out;
+    for (i = 0; i < roots.length; i++) {
+      try { names = fs.readdirSync(roots[i]); } catch (e) { continue; }
+      for (j = 0; j < names.length; j++) {
+        manifest = path.join(roots[i], names[j], "CSXS", "manifest.xml");
+        try {
+          if (!fs.existsSync(manifest)) { continue; }
+          xml = String(fs.readFileSync(manifest, "utf8"));
+        } catch (e2) { continue; }
+        if (xml.indexOf("ExtensionBundleId=\"" + PROBE_BUNDLE + "\"") === -1) {
+          continue;
+        }
+        found.push({ at: manifest, shape: AELLP_shapeOfXml(xml) });
+      }
+    }
+    if (!found.length) {
+      return { guess: null, lookedIn: roots,
+               error: "no bundle with ExtensionBundleId " + PROBE_BUNDLE +
+                      " is installed under any CEP extensions root" };
+    }
+    out = found[0].shape;
+    out.readFrom = found[0].at;
+    out.via = "the door-3 runner, from the probe bundle's installed manifest";
+    if (found.length > 1) {
+      out.alsoAt = [];
+      for (i = 1; i < found.length; i++) {
+        out.alsoAt.push(found[i].at + " => " + String(found[i].shape.guess));
+        if (found[i].shape.guess !== found[0].shape.guess) {
+          out.error = "installed " + found.length + " times and the copies " +
+                      "are not the same shape; which one CEP loads is not " +
+                      "measured here";
+          out.guess = null;
+        }
+      }
+    }
+    return out;
+  }
+
+  /** One evalScript, one fact, as a string. */
+  function evalOne(src, cb) {
+    window.__adobe_cep__.evalScript(src, function (r) {
+      cb((r === null || typeof r === "undefined") ? "" : String(r));
+    });
+  }
+
+  /*
+   * THREE separate one-fact reads: the type, the length counted in the
+   * host, and the value. Joining them into one reply and splitting it is
+   * one embedded delimiter away from a wrong answer, and these are
+   * measurements.
+   */
+  function readScriptPath(cb) {
+    evalOne("typeof $.global.AELLP_LOADER_FILENAME", function (t) {
+      if (t !== "string") { cb(AELLP_scriptPathFact(t, 0, "", null)); return; }
+      evalOne("String($.global.AELLP_LOADER_FILENAME).length", function (n) {
+        evalOne("String($.global.AELLP_LOADER_FILENAME)", function (raw) {
+          evalOne("typeof $.global.AELLP_LOADER === 'undefined' ? ''" +
+                  " : String($.global.AELLP_LOADER)", function (said) {
+            cb(AELLP_scriptPathFact("string", n, raw, said));
+          });
+        });
+      });
+    });
+  }
+
   /* BATTARGS-SHARED-BEGIN (both doors keep this block byte-identical) */
   /*
    * THE JOB'S FIELDS ARE THE BATTERY'S ARGUMENTS. What stood here was a
@@ -315,11 +507,20 @@
         try { parsed = JSON.parse(raw); } catch (e) {}
         var ok = !!(parsed && parsed.ok);
         runSoak(ok, function (soak) {
-          finish({ via: "invisible runner (door 3)",
-                   raw: String(raw).slice(0, 20000), parsed: parsed,
-                   battery: ok ? parsed.data : null,
-                   soak: soak, soakNote: soakNote,
-                   ok: ok });
+          readScriptPath(function (fact) {
+            finish({ via: "invisible runner (door 3)",
+                     raw: String(raw).slice(0, 20000), parsed: parsed,
+                     battery: ok ? parsed.data : null,
+                     soak: soak, soakNote: soakNote,
+                     shape: readShape(),
+                     // A run whose engine never saw loader.jsx records a
+                     // NOTE, never an empty reading: the report takes the
+                     // newest source that HAS the row, so a reading that
+                     // says nothing would displace an older run's answer.
+                     scriptPath: fact.scriptPath || null,
+                     scriptPathNote: fact.note || null,
+                     ok: ok });
+          });
         });
       });
   });

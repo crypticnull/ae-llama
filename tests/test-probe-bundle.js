@@ -1311,5 +1311,258 @@ function hostsIn(xml) {
   }
 }
 
+// ------- 12. the two rows only a CLICK could ever answer
+//
+// FIELD STATE 2026-09-03: every battery step passed, the soak passed,
+// G0 passed -- and the PPRO table still showed two gaps. Neither was
+// about Premiere. `manifest shape installed` and `$.fileName inside the
+// manifest's ScriptPath` were read by the VISIBLE panel and by nothing
+// else, so an unattended run could not answer them however green it
+// was, and the report printed them exactly like something Premiere had
+// refused to say.
+//
+// Two defects, one shape: a reading nobody takes, and a reading taken
+// and then thrown away. Premiere's answer for $.fileName IS the empty
+// string, both doors stored it as `(fname && ...) ? fname : null`, and
+// the grader skips "" the same way it skips a missing key -- so the one
+// host the row exists for graded itself unmeasured while holding the
+// answer.
+{
+  function sharedBlock(file, name) {
+    const src = read(file);
+    const BEGIN = "/* " + name + "-SHARED-BEGIN";
+    const END = "/* " + name + "-SHARED-END */";
+    const a = src.indexOf(BEGIN);
+    const b = src.indexOf(END);
+    return (a === -1 || b === -1) ? null : src.slice(a, b + END.length);
+  }
+  const panelShape = sharedBlock(path.join(PROBE, "index.html"), "SHAPE");
+  const door3Shape = sharedBlock(path.join(HARNESS, "index.html"), "SHAPE");
+  const panelSp = sharedBlock(path.join(PROBE, "index.html"), "SCRIPTPATH");
+  const door3Sp = sharedBlock(path.join(HARNESS, "index.html"), "SCRIPTPATH");
+
+  assert(panelShape && door3Shape && panelShape === door3Shape,
+         "both doors carry the shared manifest-shape block, byte-identical");
+  assert(panelSp && door3Sp && panelSp === door3Sp,
+         "and the shared ScriptPath-reading block, byte-identical -- two " +
+         "doors grading one row by two rules is the row changing question");
+
+  // (a) the shape rule, driven over the REAL manifests in this repo.
+  if (panelShape) {
+    const shapeOf = new Function(panelShape + "\nreturn AELLP_shapeOfXml;")();
+    const shapeA = shapeOf(read(path.join(PROBE, "CSXS", "manifest-shape-a.xml")));
+    const shapeB = shapeOf(read(path.join(PROBE, "CSXS", "manifest-shape-b.xml")));
+    assert(/^A \(/.test(shapeA.guess), "shape A grades as A");
+    assert(/^B \(/.test(shapeB.guess), "shape B grades as B");
+    assert(shapeOf(read(path.join(PROBE, "CSXS", "manifest.xml"))).guess ===
+             shapeB.guess,
+           "and the installed default grades as the same shape as the " +
+           "file it is a copy of");
+
+    // THE BUG THE OLD RULE HAD: zero HostLists is not more than one, so
+    // an unreadable file came back "B (one HostList, loader)" -- a
+    // measurement produced by a read that found nothing.
+    const nothing = shapeOf("");
+    assert(nothing.guess === null,
+           "an empty read is NOT graded shape B: zero HostLists is not " +
+           "one, and a read that found nothing is not a measurement");
+    assert(/not a CEP manifest/.test(String(nothing.error)),
+           "it says what it read instead, with the byte count");
+    assert(shapeOf(null).guess === null && shapeOf(undefined).guess === null,
+           "and a missing file reads the same way, not as a throw");
+  }
+
+  // (b) the ScriptPath rule: three states, and the empty one is a value.
+  if (panelSp) {
+    const factOf = new Function(panelSp + "\nreturn AELLP_scriptPathFact;")();
+
+    const unset = factOf("undefined", 0, "", null);
+    assert(!unset.scriptPath && /did not run here/.test(String(unset.note)),
+           "a global that does not exist yields a NOTE and no reading -- " +
+           "loader.jsx never ran in that engine, so this run has nothing " +
+           "to say and must not displace a run that did");
+
+    // Premiere 26.3.2, measured: $.fileName inside ScriptPath is "".
+    const empty = factOf("string", "0", "", "missing X ($.fileName reported )");
+    assert(!!empty.scriptPath, "an EMPTY value is still a reading");
+    assert(empty.scriptPath.dollarFileName === "",
+           "the raw answer is kept verbatim, empty and all");
+    assert(empty.scriptPath.dollarFileNameSaid === "(the empty string)",
+           "and it is ALSO said in a form the report can print: \"\" is " +
+           "skipped by the grader exactly like a missing key, which is " +
+           "how Premiere's own answer read as unmeasured");
+    assert(empty.scriptPath.loaderSaid === "missing X ($.fileName reported )",
+           "the loader's own sentence rides along");
+
+    const named = factOf("string", "1", "7", "undefined");
+    assert(named.scriptPath.dollarFileNameSaid === "7" &&
+           named.scriptPath.loaderSaid === null,
+           "AE's answer (\"7\") is passed through, and an absent loader " +
+           "sentence is null rather than the string \"undefined\"");
+
+    // The two ways of getting "" apart: the host counted characters and
+    // the round trip delivered none.
+    const lost = factOf("string", "42", "", null);
+    assert(/42 characters/.test(lost.scriptPath.dollarFileNameSaid) &&
+           !!lost.scriptPath.transport,
+           "a value the HOST counted but evalScript did not deliver is a " +
+           "transport finding, not a measurement of an empty $.fileName");
+  }
+
+  // (c) the door-3 runner takes both readings, and fabricates neither.
+  {
+    const code = stripJs(read(path.join(HARNESS, "index.html")));
+    assert(/shape:\s*readShape\(\)/.test(code),
+           "the runner puts a manifest-shape reading in its result");
+    assert(/ExtensionBundleId=/.test(code) && /readdirSync/.test(code),
+           "found by BUNDLE ID under the CEP roots, not by trusting a " +
+           "folder name the installer happened to choose");
+    assert(/scriptPath:\s*fact\.scriptPath \|\| null/.test(code) &&
+           /scriptPathNote:\s*fact\.note \|\| null/.test(code),
+           "and a ScriptPath reading only when there is one -- the reason " +
+           "goes in a note, which no row grades");
+    assert(/typeof \$\.global\.AELLP_LOADER_FILENAME/.test(code) &&
+           /AELLP_LOADER_FILENAME\)\.length/.test(code),
+           "it asks the type and the host-side length separately, so an " +
+           "empty reply and an empty value stay different findings");
+  }
+
+  // (d) the panel takes them the same way, through the same blocks.
+  {
+    const code = stripJs(read(path.join(PROBE, "index.html")));
+    assert(/AELLP_shapeOfXml\(/.test(code),
+           "the visible panel grades its manifest with the shared rule");
+    assert(!/hostLists > 1 \?[\s\S]{0,120}guess/.test(
+             code.split(stripJs(panelShape || "x")).join("")),
+           "and has no second copy of the rule left in it");
+    assert((code.match(/readScriptPath\(function/g) || []).length === 2,
+           "both of the panel's runs take the ScriptPath reading through " +
+           "the shared block (the click and the unattended job)");
+    assert(!/dollarFileName: \(fname && fname !== "undefined"\)/.test(code),
+           "and the expression that threw Premiere's answer away is gone");
+  }
+
+  // (e) the grader: both rows close off an unattended run, and a note
+  //     does not displace an older click that really measured.
+  {
+    const rep = require("../scripts/ppro-probe-report.js");
+    function jobWith(over) {
+      const j = {
+        door: 3, startedAt: "2026-09-03T11:00:00.000Z",
+        finishedAt: "2026-09-03T11:05:00.000Z",
+        host: { appName: "PPRO", appVersion: "26.3.2" },
+        via: "invisible runner (door 3)", ok: true, parsed: { ok: true },
+        battery: { steps: [{ step: "ping", ok: true,
+                             data: { pong: true, fileName: "/x/probe.jsx" } }] },
+        shape: { extensionEntries: 1, hostLists: 1,
+                 guess: "B (one HostList, loader)",
+                 readFrom: "C:/x/CSXS/manifest.xml" },
+        scriptPath: { dollarFileName: "", dollarFileNameChars: 0,
+                      dollarFileNameSaid: "(the empty string)" }
+      };
+      if (over) { Object.keys(over).forEach(function (k) { j[k] = over[k]; }); }
+      return j;
+    }
+    const older = {
+      takenAt: "2026-09-02T20:51:46.828Z",
+      panel: { cepPresent: true, appName: "PPRO" },
+      shape: { guess: "A (per-extension HostList)" },
+      scriptPath: { dollarFileName: "8" }
+    };
+    function rowOf(graded, start) {
+      return graded.rows.filter(function (r) {
+        return r.claim.indexOf(start) === 0;
+      })[0];
+    }
+    const asRuntime = rep.fromJobResult(jobWith());
+    assert(!!asRuntime.shape &&
+           asRuntime.shape.guess === "B (one HostList, loader)",
+           "the adapter carries the runner's manifest-shape reading");
+    assert(!!asRuntime.scriptPath &&
+           asRuntime.scriptPath.dollarFileNameSaid === "(the empty string)",
+           "and its ScriptPath reading");
+
+    const graded = rep.gradeHost("PPRO", [
+      { tag: "job", file: "job-result.json", takenAt: asRuntime.takenAt,
+        data: asRuntime },
+      { tag: "pnl", file: "runtime-PPRO.json", takenAt: older.takenAt,
+        data: older }
+    ]);
+    const shapeRow = rowOf(graded, "manifest shape installed");
+    const spRow = rowOf(graded, "$.fileName inside");
+    assert(shapeRow.state === "MEASURED" && shapeRow.from === "job-result.json",
+           "an unattended run closes the manifest-shape row on its own");
+    assert(spRow.state === "MEASURED" && spRow.value === "(the empty string)" &&
+           spRow.from === "job-result.json",
+           "and the ScriptPath row, with Premiere's empty answer PRINTED " +
+           "rather than skipped -- the whole defect in one row");
+
+    // A run that could not take the reading must fall through, not win.
+    const noReading = rep.fromJobResult(jobWith({
+      scriptPath: null, shape: null,
+      scriptPathNote: "loader.jsx did not run in this engine" }));
+    const graded2 = rep.gradeHost("PPRO", [
+      { tag: "job", file: "job-result.json", takenAt: noReading.takenAt,
+        data: noReading },
+      { tag: "pnl", file: "runtime-PPRO.json", takenAt: older.takenAt,
+        data: older }
+    ]);
+    assert(rowOf(graded2, "$.fileName inside").value === "8" &&
+           rowOf(graded2, "$.fileName inside").from === "runtime-PPRO.json",
+           "a run with nothing to say leaves the older click's answer " +
+           "standing instead of overwriting it with silence");
+    assert(rowOf(graded2, "manifest shape installed").from ===
+             "runtime-PPRO.json",
+           "same for the shape row");
+
+    // A failed READ is not a measurement.
+    const broken = rep.fromJobResult(jobWith({
+      shape: { guess: null, lookedIn: ["C:/a", "C:/b"],
+               error: "no bundle with ExtensionBundleId " +
+                      "com.cptk.aellama.probe is installed under any CEP " +
+                      "extensions root" } }));
+    const graded3 = rep.gradeHost("PPRO", [
+      { tag: "job", file: "job-result.json", takenAt: broken.takenAt,
+        data: broken }
+    ]);
+    const bad = rowOf(graded3, "manifest shape installed");
+    assert(bad.state === "FAILED",
+           "a shape read that found nothing grades FAILED, not MEASURED: " +
+           "the sentence explaining why is not a shape");
+    assert(/ExtensionBundleId/.test(String(bad.value)),
+           "and it names what it looked for");
+
+    // (f) EXPLAINED: a reading no unattended run can take.
+    //
+    // MEASURED 2026-09-03 (run -0902): loader.jsx is the PROBE bundle's
+    // ScriptPath, an unattended run opens no panel, so CEP never
+    // evaluates it and the global is absent from the engine door 3
+    // talks to. Door 3 does NOT grow a ScriptPath of its own to close
+    // the row -- "nothing auto-loads" is what keeps the invisible
+    // runner inert (section 5 above) and it outranks one table cell.
+    // What changes is the REPORT: a run that said why it could not
+    // answer must not print like a run that was never made.
+    const clickOnly = rep.fromJobResult(jobWith({
+      scriptPath: null,
+      scriptPathNote: "$.global.AELLP_LOADER_FILENAME is undefined in " +
+                      "this engine: the probe bundle's ScriptPath " +
+                      "(jsx/loader.jsx) did not run here" }));
+    const graded4 = rep.gradeHost("PPRO", [
+      { tag: "job", file: "job-result.json", takenAt: clickOnly.takenAt,
+        data: clickOnly }
+    ]);
+    const explained = rowOf(graded4, "$.fileName inside");
+    assert(explained.state === "EXPLAINED",
+           "with no reading anywhere, the row prints the run's own " +
+           "reason instead of an empty MISSING -- an absence with a " +
+           "cause is not the same report as a probe nobody ran");
+    assert(/did not run here/.test(String(explained.value)) &&
+           explained.from === "job-result.json",
+           "and it names the artifact the reason came from");
+    assert(explained.state !== "MEASURED",
+           "a note is still not a measurement: it can never pass a row");
+  }
+}
+
 console.log(failed ? "\nTESTS FAILED" : "\nALL TESTS PASSED");
 process.exitCode = failed ? 1 : 0;

@@ -1,0 +1,507 @@
+{
+  "door": 3,
+  "startedAt": "2026-09-03T13:01:29.155Z",
+  "finishedAt": "2026-09-03T13:02:17.008Z",
+  "host": {
+    "appVersion": "26.3.2",
+    "appSkinInfo": {
+      "systemHighlightColor": {
+        "alpha": 255,
+        "green": 120,
+        "blue": 215,
+        "red": 0
+      },
+      "baseFontSize": 12,
+      "appBarBackgroundColorSRGB": {
+        "antialiasLevel": 0,
+        "type": 1,
+        "color": {
+          "alpha": 255,
+          "green": 29,
+          "blue": 29,
+          "red": 29
+        }
+      },
+      "appBarBackgroundColor": {
+        "antialiasLevel": 0,
+        "type": 1,
+        "color": {
+          "alpha": 255,
+          "green": 29,
+          "blue": 29,
+          "red": 29
+        }
+      },
+      "panelBackgroundColor": {
+        "antialiasLevel": 0,
+        "type": 1,
+        "color": {
+          "alpha": 255,
+          "green": 29,
+          "blue": 29,
+          "red": 29
+        }
+      },
+      "baseFontFamily": "Adobe Clean",
+      "panelBackgroundColorSRGB": {
+        "antialiasLevel": 0,
+        "type": 1,
+        "color": {
+          "alpha": 255,
+          "green": 29,
+          "blue": 29,
+          "red": 29
+        }
+      }
+    },
+    "appLocale": "en_US",
+    "isAppOnline": true,
+    "appUILocale": "en_US",
+    "appName": "PPRO",
+    "appId": "PPRO"
+  },
+  "job": {
+    "probeJsx": "X:/_CLAUDE/26_08_19_AE_Llama/cptk_claude/probe/com.cptk.aellama.probe/jsx/probe.jsx",
+    "probe": "battery",
+    "allowMutate": true,
+    "scratchProject": "C:/Users/mr/AppData/Roaming/AE-Llama/probes/AELL_PROBE_SCRATCH.prproj",
+    "makeSequence": true,
+    "seedMedia": "X:/_CLAUDE/26_08_19_AE_Llama/cptk_claude/extension/icons/icon-normal.png",
+    "readyTimeoutMs": 30000,
+    "skip": [],
+    "mogrtPath": "X:/_CLAUDE/26_08_19_AE_Llama/cptk_claude/logs/mogrt-verify/AELL MOGRT Probe.mogrt",
+    "soakRounds": 500,
+    "soakBudgetMs": 120000,
+    "createdAt": "2026-09-03T09:01:25.8796629-04:00"
+  },
+  "via": "invisible runner (door 3)",
+  "raw": "{\"ok\":true,\"data\":{\"steps\":[{\"step\":\"waitForReady\",\"data\":{\"ready\":false,\"waitedMs\":30000,\"note\":\"app.project.name was still empty after 30000ms; the project step will try to create one\"},\"ok\":true},{\"step\":\"ping\",\"data\":{\"pong\":true,\"engineName\":\"NewWorld\",\"esVersion\":\"4.5.6\",\"esBuild\":\"80.1060872\",\"os\":\"Windows 7/64 6.2  \",\"fileName\":\"/x/_CLAUDE/26_08_19_AE_Llama/cptk_claude/probe/com.cptk.aellama.probe/jsx/probe.jsx\"},\"ok\":true},{\"step\":\"hostFacts\",\"data\":{\"appVersion\":\"26.3.2\",\"appName\":null,\"appBuild\":null,\"engineName\":\"NewWorld\",\"bridgeTalk\":\"function\",\"btAppName\":\"premierepro\",\"btSpecifier\":\"premierepro-26.0\",\"btVersion\":\"26.0\",\"btTargets\":[\"aftereffects\",\"bridge\",\"photoshop\",\"illustrator\",\"indesign\",\"premierepro\",\"ame\"],\"beginUndoGroup\":\"undefined\",\"endUndoGroup\":\"undefined\",\"executeCommand\":\"undefined\",\"findMenuCommandId\":\"undefined\",\"enableQE\":\"function\",\"project\":\"object\",\"newProject\":\"function\",\"openDocument\":\"function\",\"projectName\":\"\",\"projectPath\":\"\",\"activeSequence\":null,\"rootItemChildren\":\"throws: null is not an object\",\"importMGT\":\"throws: null is not an object\",\"exportAsMediaDirect\":\"throws: null is not an object\",\"encoder\":\"object\",\"ameStatus\":\"ISNOTRUNNING\",\"activeItem\":null,\"numItems\":null},\"ok\":true},{\"step\":\"qe\",\"data\":{\"enableQE\":\"function\",\"enabled\":true,\"qe\":\"object\",\"qeProject\":\"object\",\"qeVersion\":\"26.3.2\",\"getVideoEffectList\":\"function\",\"effectCount\":236},\"ok\":true},{\"step\":\"project\",\"data\":{\"via\":\"created\",\"name\":\"AELL_PROBE_SCRATCH.prproj\",\"path\":\"C:\\\\Users\\\\mr\\\\AppData\\\\Roaming\\\\AE-Llama\\\\probes\\\\AELL_PROBE_SCRATCH.prproj\",\"items\":0,\"savedTo\":\"C:/Users/mr/AppData/Roaming/AE-Llama/probes/AELL_PROBE_SCRATCH.prproj\",\"tried\":[{\"how\":\"app.newProject\",\"ok\":true,\"error\":null}],\"error\":null},\"ok\":true},{\"step\":\"sequence\",\"data\":{\"via\":\"created\",\"active\":\"AELL PROBE SEQ\",\"videoTracks\":3,\"tried\":[{\"how\":\"activeSequence already open\",\"ok\":false},{\"how\":\"importFiles(seed still) + createNewSequenceFromClips\",\"ok\":true,\"error\":null}]},\"ok\":true},{\"step\":\"history\",\"data\":{\"mutated\":true,\"created\":[\"AELL PROBE 1\",\"AELL PROBE 2\",\"AELL PROBE 3\"],\"instruction\":\"Open the History panel NOW and count the entries these three createBin calls produced (1 or 3), then delete the AELL PROBE bins by hand.\"},\"ok\":true},{\"step\":\"mogrt\",\"data\":{\"before\":1,\"after\":2,\"landed\":true,\"pickedBy\":\"diff\",\"trackBefore\":[{\"index\":0,\"name\":\"icon-normal.png\",\"start\":\"0\",\"nodeId\":\"000f4241\"}],\"trackAfter\":[{\"index\":0,\"name\":\"Untitled\",\"start\":\"0\",\"nodeId\":\"000f4242\"},{\"index\":1,\"name\":\"icon-normal.png\",\"start\":\"1008604396800\",\"nodeId\":\"000f4241\"}],\"clipIndex\":0,\"clipName\":\"Untitled\",\"controllerCount\":4,\"controllers\":[{\"name\":\"Headline Size \\u00e9\",\"value\":\"0.15625,0.27777777777778\"},{\"name\":\"Card Position\",\"value\":\"0.5,0.5\"},{\"name\":\"BG Opacity\",\"value\":\"100\"},{\"name\":\"Headline Text\",\"value\":\"{\\\"capPropFontEdit\\\":false,\\\"capPropFontFauxStyleEdit\\\":false,\\\"capPropFontSizeEdit\\\":false,\\\"capPropTextRunCount\\\":1,\\\"fontEditValue\\\":[\\\"PowerCentra-Book\\\"],\\\"fontFSAllCapsValue\\\":[false],\\\"fontFSBoldValue\\\":[false],\\\"fontFSItalicValue\\\":[false],\\\"fontFSSmallCapsValue\\\":[false],\\\"fontSizeEditValue\\\":[66],\\\"fontTextRunLength\\\":[5],\\\"textEditValue\\\":\\\"HELLO\\\"}\"}],\"namesReadable\":true,\"instruction\":\"Delete the imported graphic from the timeline by hand when you are done.\"},\"ok\":true},{\"step\":\"cleanup\",\"data\":{\"removed\":[\"AELL PROBE 3\",\"AELL PROBE 2\",\"AELL PROBE 1\",\"AELL PROBE SEQ\"],\"savedScratchProject\":\"save() to C:\\\\Users\\\\mr\\\\AppData\\\\Roaming\\\\AE-Llama\\\\probes\\\\AELL_PROBE_SCRATCH.prproj\",\"note\":\"the scratch project is a throwaway file; nothing else was touched\"},\"ok\":true}],\"mutating\":true,\"current\":null,\"startedAt\":\"Thu Sep 03 2026 09:01:31 GMT-0400\"}}",
+  "parsed": {
+    "ok": true,
+    "data": {
+      "steps": [
+        {
+          "step": "waitForReady",
+          "data": {
+            "ready": false,
+            "waitedMs": 30000,
+            "note": "app.project.name was still empty after 30000ms; the project step will try to create one"
+          },
+          "ok": true
+        },
+        {
+          "step": "ping",
+          "data": {
+            "pong": true,
+            "engineName": "NewWorld",
+            "esVersion": "4.5.6",
+            "esBuild": "80.1060872",
+            "os": "Windows 7/64 6.2  ",
+            "fileName": "/x/_CLAUDE/26_08_19_AE_Llama/cptk_claude/probe/com.cptk.aellama.probe/jsx/probe.jsx"
+          },
+          "ok": true
+        },
+        {
+          "step": "hostFacts",
+          "data": {
+            "appVersion": "26.3.2",
+            "appName": null,
+            "appBuild": null,
+            "engineName": "NewWorld",
+            "bridgeTalk": "function",
+            "btAppName": "premierepro",
+            "btSpecifier": "premierepro-26.0",
+            "btVersion": "26.0",
+            "btTargets": [
+              "aftereffects",
+              "bridge",
+              "photoshop",
+              "illustrator",
+              "indesign",
+              "premierepro",
+              "ame"
+            ],
+            "beginUndoGroup": "undefined",
+            "endUndoGroup": "undefined",
+            "executeCommand": "undefined",
+            "findMenuCommandId": "undefined",
+            "enableQE": "function",
+            "project": "object",
+            "newProject": "function",
+            "openDocument": "function",
+            "projectName": "",
+            "projectPath": "",
+            "activeSequence": null,
+            "rootItemChildren": "throws: null is not an object",
+            "importMGT": "throws: null is not an object",
+            "exportAsMediaDirect": "throws: null is not an object",
+            "encoder": "object",
+            "ameStatus": "ISNOTRUNNING",
+            "activeItem": null,
+            "numItems": null
+          },
+          "ok": true
+        },
+        {
+          "step": "qe",
+          "data": {
+            "enableQE": "function",
+            "enabled": true,
+            "qe": "object",
+            "qeProject": "object",
+            "qeVersion": "26.3.2",
+            "getVideoEffectList": "function",
+            "effectCount": 236
+          },
+          "ok": true
+        },
+        {
+          "step": "project",
+          "data": {
+            "via": "created",
+            "name": "AELL_PROBE_SCRATCH.prproj",
+            "path": "C:\\Users\\mr\\AppData\\Roaming\\AE-Llama\\probes\\AELL_PROBE_SCRATCH.prproj",
+            "items": 0,
+            "savedTo": "C:/Users/mr/AppData/Roaming/AE-Llama/probes/AELL_PROBE_SCRATCH.prproj",
+            "tried": [
+              {
+                "how": "app.newProject",
+                "ok": true,
+                "error": null
+              }
+            ],
+            "error": null
+          },
+          "ok": true
+        },
+        {
+          "step": "sequence",
+          "data": {
+            "via": "created",
+            "active": "AELL PROBE SEQ",
+            "videoTracks": 3,
+            "tried": [
+              {
+                "how": "activeSequence already open",
+                "ok": false
+              },
+              {
+                "how": "importFiles(seed still) + createNewSequenceFromClips",
+                "ok": true,
+                "error": null
+              }
+            ]
+          },
+          "ok": true
+        },
+        {
+          "step": "history",
+          "data": {
+            "mutated": true,
+            "created": [
+              "AELL PROBE 1",
+              "AELL PROBE 2",
+              "AELL PROBE 3"
+            ],
+            "instruction": "Open the History panel NOW and count the entries these three createBin calls produced (1 or 3), then delete the AELL PROBE bins by hand."
+          },
+          "ok": true
+        },
+        {
+          "step": "mogrt",
+          "data": {
+            "before": 1,
+            "after": 2,
+            "landed": true,
+            "pickedBy": "diff",
+            "trackBefore": [
+              {
+                "index": 0,
+                "name": "icon-normal.png",
+                "start": "0",
+                "nodeId": "000f4241"
+              }
+            ],
+            "trackAfter": [
+              {
+                "index": 0,
+                "name": "Untitled",
+                "start": "0",
+                "nodeId": "000f4242"
+              },
+              {
+                "index": 1,
+                "name": "icon-normal.png",
+                "start": "1008604396800",
+                "nodeId": "000f4241"
+              }
+            ],
+            "clipIndex": 0,
+            "clipName": "Untitled",
+            "controllerCount": 4,
+            "controllers": [
+              {
+                "name": "Headline Size é",
+                "value": "0.15625,0.27777777777778"
+              },
+              {
+                "name": "Card Position",
+                "value": "0.5,0.5"
+              },
+              {
+                "name": "BG Opacity",
+                "value": "100"
+              },
+              {
+                "name": "Headline Text",
+                "value": "{\"capPropFontEdit\":false,\"capPropFontFauxStyleEdit\":false,\"capPropFontSizeEdit\":false,\"capPropTextRunCount\":1,\"fontEditValue\":[\"PowerCentra-Book\"],\"fontFSAllCapsValue\":[false],\"fontFSBoldValue\":[false],\"fontFSItalicValue\":[false],\"fontFSSmallCapsValue\":[false],\"fontSizeEditValue\":[66],\"fontTextRunLength\":[5],\"textEditValue\":\"HELLO\"}"
+              }
+            ],
+            "namesReadable": true,
+            "instruction": "Delete the imported graphic from the timeline by hand when you are done."
+          },
+          "ok": true
+        },
+        {
+          "step": "cleanup",
+          "data": {
+            "removed": [
+              "AELL PROBE 3",
+              "AELL PROBE 2",
+              "AELL PROBE 1",
+              "AELL PROBE SEQ"
+            ],
+            "savedScratchProject": "save() to C:\\Users\\mr\\AppData\\Roaming\\AE-Llama\\probes\\AELL_PROBE_SCRATCH.prproj",
+            "note": "the scratch project is a throwaway file; nothing else was touched"
+          },
+          "ok": true
+        }
+      ],
+      "mutating": true,
+      "current": null,
+      "startedAt": "Thu Sep 03 2026 09:01:31 GMT-0400"
+    }
+  },
+  "battery": {
+    "steps": [
+      {
+        "step": "waitForReady",
+        "data": {
+          "ready": false,
+          "waitedMs": 30000,
+          "note": "app.project.name was still empty after 30000ms; the project step will try to create one"
+        },
+        "ok": true
+      },
+      {
+        "step": "ping",
+        "data": {
+          "pong": true,
+          "engineName": "NewWorld",
+          "esVersion": "4.5.6",
+          "esBuild": "80.1060872",
+          "os": "Windows 7/64 6.2  ",
+          "fileName": "/x/_CLAUDE/26_08_19_AE_Llama/cptk_claude/probe/com.cptk.aellama.probe/jsx/probe.jsx"
+        },
+        "ok": true
+      },
+      {
+        "step": "hostFacts",
+        "data": {
+          "appVersion": "26.3.2",
+          "appName": null,
+          "appBuild": null,
+          "engineName": "NewWorld",
+          "bridgeTalk": "function",
+          "btAppName": "premierepro",
+          "btSpecifier": "premierepro-26.0",
+          "btVersion": "26.0",
+          "btTargets": [
+            "aftereffects",
+            "bridge",
+            "photoshop",
+            "illustrator",
+            "indesign",
+            "premierepro",
+            "ame"
+          ],
+          "beginUndoGroup": "undefined",
+          "endUndoGroup": "undefined",
+          "executeCommand": "undefined",
+          "findMenuCommandId": "undefined",
+          "enableQE": "function",
+          "project": "object",
+          "newProject": "function",
+          "openDocument": "function",
+          "projectName": "",
+          "projectPath": "",
+          "activeSequence": null,
+          "rootItemChildren": "throws: null is not an object",
+          "importMGT": "throws: null is not an object",
+          "exportAsMediaDirect": "throws: null is not an object",
+          "encoder": "object",
+          "ameStatus": "ISNOTRUNNING",
+          "activeItem": null,
+          "numItems": null
+        },
+        "ok": true
+      },
+      {
+        "step": "qe",
+        "data": {
+          "enableQE": "function",
+          "enabled": true,
+          "qe": "object",
+          "qeProject": "object",
+          "qeVersion": "26.3.2",
+          "getVideoEffectList": "function",
+          "effectCount": 236
+        },
+        "ok": true
+      },
+      {
+        "step": "project",
+        "data": {
+          "via": "created",
+          "name": "AELL_PROBE_SCRATCH.prproj",
+          "path": "C:\\Users\\mr\\AppData\\Roaming\\AE-Llama\\probes\\AELL_PROBE_SCRATCH.prproj",
+          "items": 0,
+          "savedTo": "C:/Users/mr/AppData/Roaming/AE-Llama/probes/AELL_PROBE_SCRATCH.prproj",
+          "tried": [
+            {
+              "how": "app.newProject",
+              "ok": true,
+              "error": null
+            }
+          ],
+          "error": null
+        },
+        "ok": true
+      },
+      {
+        "step": "sequence",
+        "data": {
+          "via": "created",
+          "active": "AELL PROBE SEQ",
+          "videoTracks": 3,
+          "tried": [
+            {
+              "how": "activeSequence already open",
+              "ok": false
+            },
+            {
+              "how": "importFiles(seed still) + createNewSequenceFromClips",
+              "ok": true,
+              "error": null
+            }
+          ]
+        },
+        "ok": true
+      },
+      {
+        "step": "history",
+        "data": {
+          "mutated": true,
+          "created": [
+            "AELL PROBE 1",
+            "AELL PROBE 2",
+            "AELL PROBE 3"
+          ],
+          "instruction": "Open the History panel NOW and count the entries these three createBin calls produced (1 or 3), then delete the AELL PROBE bins by hand."
+        },
+        "ok": true
+      },
+      {
+        "step": "mogrt",
+        "data": {
+          "before": 1,
+          "after": 2,
+          "landed": true,
+          "pickedBy": "diff",
+          "trackBefore": [
+            {
+              "index": 0,
+              "name": "icon-normal.png",
+              "start": "0",
+              "nodeId": "000f4241"
+            }
+          ],
+          "trackAfter": [
+            {
+              "index": 0,
+              "name": "Untitled",
+              "start": "0",
+              "nodeId": "000f4242"
+            },
+            {
+              "index": 1,
+              "name": "icon-normal.png",
+              "start": "1008604396800",
+              "nodeId": "000f4241"
+            }
+          ],
+          "clipIndex": 0,
+          "clipName": "Untitled",
+          "controllerCount": 4,
+          "controllers": [
+            {
+              "name": "Headline Size é",
+              "value": "0.15625,0.27777777777778"
+            },
+            {
+              "name": "Card Position",
+              "value": "0.5,0.5"
+            },
+            {
+              "name": "BG Opacity",
+              "value": "100"
+            },
+            {
+              "name": "Headline Text",
+              "value": "{\"capPropFontEdit\":false,\"capPropFontFauxStyleEdit\":false,\"capPropFontSizeEdit\":false,\"capPropTextRunCount\":1,\"fontEditValue\":[\"PowerCentra-Book\"],\"fontFSAllCapsValue\":[false],\"fontFSBoldValue\":[false],\"fontFSItalicValue\":[false],\"fontFSSmallCapsValue\":[false],\"fontSizeEditValue\":[66],\"fontTextRunLength\":[5],\"textEditValue\":\"HELLO\"}"
+            }
+          ],
+          "namesReadable": true,
+          "instruction": "Delete the imported graphic from the timeline by hand when you are done."
+        },
+        "ok": true
+      },
+      {
+        "step": "cleanup",
+        "data": {
+          "removed": [
+            "AELL PROBE 3",
+            "AELL PROBE 2",
+            "AELL PROBE 1",
+            "AELL PROBE SEQ"
+          ],
+          "savedScratchProject": "save() to C:\\Users\\mr\\AppData\\Roaming\\AE-Llama\\probes\\AELL_PROBE_SCRATCH.prproj",
+          "note": "the scratch project is a throwaway file; nothing else was touched"
+        },
+        "ok": true
+      }
+    ],
+    "mutating": true,
+    "current": null,
+    "startedAt": "Thu Sep 03 2026 09:01:31 GMT-0400"
+  },
+  "soak": {
+    "rounds": 500,
+    "total": 500,
+    "failedAt": null,
+    "ms": 8189,
+    "payloadBytes": 2000,
+    "verdict": "survived 500 round-trips"
+  },
+  "soakNote": null,
+  "shape": {
+    "extensionEntries": 2,
+    "hostLists": 1,
+    "guess": "B (one HostList, loader)",
+    "readFrom": "C:\\Users\\mr\\AppData\\Roaming\\Adobe\\CEP\\extensions\\com.cptk.aellama.probe\\CSXS\\manifest.xml",
+    "via": "the door-3 runner, from the probe bundle's installed manifest"
+  },
+  "scriptPath": null,
+  "scriptPathNote": "$.global.AELLP_LOADER_FILENAME is undefined in this engine: the probe bundle's ScriptPath (jsx/loader.jsx) did not run here, so this run cannot say what $.fileName reported inside it",
+  "ok": true
+}

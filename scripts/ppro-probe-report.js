@@ -14,7 +14,12 @@
  * a pass. The panel already shipped one field failure of exactly that
  * shape -- an unattended probe read pure defaults with no APPDATA and
  * filed them as the owner's setting -- so every row here is one of
- * MEASURED / MISSING / FAILED, and G0 can only pass on MEASURED rows.
+ * MEASURED / MISSING / EXPLAINED / FAILED, and G0 can only pass on
+ * MEASURED rows. EXPLAINED is a row the newest run could not take and
+ * SAID SO -- "nobody has run this" and "this run cannot answer this,
+ * here is why" are different reports, and printing them the same way
+ * is how a gap that was never about Premiere sat in the PPRO table
+ * looking like one.
  *
  * Exit codes: 0 = G0 PASS, 1 = G0 FAIL (measured), 2 = nothing measured.
  */
@@ -85,9 +90,13 @@ function stepOf(steps, name) {
  * clip-diff fix had just removed.
  *
  * What the runner CANNOT see is left absent rather than guessed: it
- * never enumerates Node modules, APPDATA, the CEP API version, the
- * manifest shape or localStorage scoping, so those rows fall back to
- * the panel file. What its own existence proves -- a CEP runtime
+ * never enumerates Node modules, APPDATA, the CEP API version or
+ * localStorage scoping, so those rows fall back to the panel file. The
+ * manifest shape and the ScriptPath reading used to be on that list
+ * for no better reason than that only the visible panel took them --
+ * the manifest is a file and the runner has fs, and the ScriptPath
+ * globals live in the engine it already talks to, so it takes both now
+ * and PPRO stopped showing two gaps that were never about Premiere. What its own existence proves -- a CEP runtime
  * answered getHostEnvironment(), and evalScript round-tripped a JSON
  * envelope -- is recorded.
  *
@@ -138,6 +147,12 @@ function fromJobResult(job) {
     // Absent stays absent: a run whose job asked for no soak must fall
     // through to the panel file rather than answer the row with null.
     soak: job.soak || null,
+    // Read from disk / from the engine by the runner itself. Absent
+    // stays absent: a runner that could not take the reading writes
+    // job.scriptPathNote instead, and no row grades a note.
+    shape: job.shape || null,
+    scriptPath: job.scriptPath || null,
+    scriptPathNote: job.scriptPathNote || null,
     qe: dataOf(qe),
     history: dataOf(history),
     mogrtAccept: dataOf(mogrt),
@@ -268,11 +283,24 @@ function gradeHost(hostKey, given) {
     ] };
   }
   const pick = picker(sources);
-  /** One row, tagged with the artifact its value came from. */
-  function m(claim, dotted, shape, badWhen) {
+  /**
+   * One row, tagged with the artifact its value came from.
+   *
+   * `noteAt` is where a run RECORDS THAT IT COULD NOT TAKE THIS
+   * READING. A note is never a value -- it cannot pass, and it cannot
+   * displace an older run that really measured, because it is only
+   * looked for once no source has the value at all.
+   */
+  function m(claim, dotted, shape, badWhen, noteAt) {
     const got = pick(dotted);
     const value = got.value === null ? null :
                   (typeof shape === "function" ? shape(got.value) : got.value);
+    if (value === null && noteAt) {
+      const note = pick(noteAt);
+      if (note.value !== null) {
+        return from(row(claim, "EXPLAINED", String(note.value)), note);
+      }
+    }
     return from(measured(claim, value, badWhen), value === null ? null : got);
   }
   rows.push(m("CEP runtime present (__adobe_cep__)", "panel.cepPresent",
@@ -295,12 +323,30 @@ function gradeHost(hostKey, given) {
                   : ("via " + v.via);
               },
               function (v) { return /^FAILED/.test(String(v)); }));
-  // The manifest's ScriptPath is evaluated, but $.fileName inside it
-  // names the HOST's folder, so a ScriptPath loader cannot resolve its
-  // own siblings. Recorded because it decides whether a dual-host panel
-  // can branch in ScriptPath at all (docs/PREMIERE-PLATFORM.md).
+  // The manifest's ScriptPath IS evaluated, but $.fileName inside it is
+  // not a path, so a ScriptPath loader cannot resolve its own siblings.
+  // Recorded because it decides whether a dual-host panel can branch in
+  // ScriptPath at all (docs/PREMIERE-PLATFORM.md).
+  //
+  // `dollarFileNameSaid` comes first because Premiere's answer is the
+  // EMPTY STRING, and the picker skips "" the same way it skips a
+  // missing key -- so the one host this row exists for graded itself
+  // unmeasured for as long as the raw value was the only path.
+  //
+  // MEASURED 2026-09-03, run -0902: the reading is CLICK-ONLY on an
+  // unattended run. loader.jsx is the PROBE bundle's ScriptPath and
+  // CEP evaluates it when that panel loads; an unattended run opens
+  // no panel, so the global does not exist in the engine door 3 talks
+  // to. The runner records that as a note rather than a reading -- and
+  // the note is what this row prints, so an absence with a reason
+  // stops looking like Premiere refusing to answer. Door 3 does not
+  // grow a ScriptPath of its own to close it: "nothing auto-loads"
+  // is the invariant that keeps the invisible runner inert, and it is
+  // worth more than one row (tests/test-probe-bundle.js section 5).
   rows.push(m("$.fileName inside the manifest's ScriptPath",
-              "scriptPath.dollarFileName"));
+              ["scriptPath.dollarFileNameSaid",
+               "scriptPath.dollarFileName"],
+              null, null, "scriptPathNote"));
   rows.push(m("evalScript round-trips a JSON envelope", "evalScript",
               function (v) { return v.ok === true ? "yes" : (v.error ||
                                                              "did not parse"); },
@@ -316,8 +362,12 @@ function gradeHost(hostKey, given) {
   rows.push(m("app.enableQE", "hostFacts.enableQE"));
   rows.push(m("QE reachable after enableQE", "qe",
               function (v) { return v.qeProject || v.error || null; }));
+  // A shape is A or B. Anything else is the READ having failed, and a
+  // failed read that prints as a value is the report saying "measured"
+  // about a sentence describing why it could not measure.
   rows.push(m("manifest shape installed", "shape",
-              function (v) { return v.guess || v.error || null; }));
+              function (v) { return v.guess || v.error || null; },
+              function (v) { return !/^[AB] \(/.test(String(v)); }));
   rows.push(m("localStorage scoping across hosts", "storage.note"));
   rows.push(m("engine soak (500 round-trips)", "soak",
               function (v) { return v.verdict || v.skipped || null; },
@@ -544,8 +594,10 @@ function print(rep) {
       }).join("\n            "));
     }
     h.rows.forEach(function (r) {
+      // n/a is not ----: the run said why it could not take this one.
       const mark = r.state === "MEASURED" ? "ok  " :
-                   (r.state === "FAILED" ? "FAIL" : "----");
+                   (r.state === "FAILED" ? "FAIL" :
+                    (r.state === "EXPLAINED" ? "n/a " : "----"));
       // [job] / [pnl] is where the value came from; a * means it came
       // from the OLDER artifact because the newer one does not measure it.
       const tag = "[" + (r.fromTag || " - ") + (r.stale ? "*" : " ") + "]";

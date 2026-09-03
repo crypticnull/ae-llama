@@ -2710,21 +2710,38 @@ measurements in `docs/PREMIERE-PLATFORM.md` section 4.
 
 ### The next 12b item
 
-G0 is closed, so section 12b's step 3 applies: the remaining P0 work is
-the three PPRO rows still unmeasured in the per-host table, none of
-which the battery can answer -
+G0 is closed, so section 12b's step 3 applies: what is left is the PPRO
+rows the per-host table could not answer.
 
-1. **the installed manifest shape** and **`$.fileName` inside
-   `ScriptPath`** - both read by the VISIBLE panel's `shapeInUse()` /
-   ScriptPath probe, which no unattended run touches. Either teach the
-   door-3 runner to read them (the manifest is a file; the runner has
-   `fs`), or record them as click-only and stop showing them as gaps.
+1. ~~**the installed manifest shape** and **`$.fileName` inside
+   `ScriptPath`**~~ BOTH SETTLED 2026-09-03 (run `-0902`), and they
+   settled differently, which was the whole finding. The manifest is a
+   FILE and the door-3 runner has `fs`, so the shape row needed no click
+   and is measured unattended now (`B (one HostList, loader)`, found by
+   `ExtensionBundleId` under every CEP root, with the path it read).
+   The ScriptPath row is genuinely CLICK-ONLY and that is now measured
+   rather than assumed: `loader.jsx` is the PROBE bundle's `ScriptPath`,
+   CEP evaluates it when that panel LOADS, and an unattended run opens
+   no panel - the global is absent from the engine door 3 talks to.
+   Door 3 was NOT given a `ScriptPath` of its own to close it: "nothing
+   auto-loads" is what keeps the invisible runner inert in the owner's
+   hosts (section 5 of `tests/test-probe-bundle.js`) and outranks one
+   table cell. The REPORT changed instead - a row the newest run could
+   not take and said why grades **EXPLAINED** and prints `n/a` with the
+   reason, so an absence with a cause stops reading like a host
+   refusing to answer. En route, a third defect: Premiere's answer for
+   `$.fileName` is the EMPTY STRING and both doors stored it as
+   `(fname && ...) ? fname : null`, which threw it away - the one host
+   the row exists for would have graded itself unmeasured while holding
+   the answer. PPRO now has no `----` row at all (26 ok, 1 `n/a`).
+   Held by `tests/test-probe-bundle.js` section 12.
 2. **`doors.json` is still MISSING** - `scripts/ppro-door-probe.ps1`
    has not been run since the door-3 runner started working, so the
    report's "headless doors" block says nothing.
 
-Neither blocks G0. If both turn out to be bookkeeping, close section 12b
-outright and hand Premiere back to the owner-gated section 12.
+Neither blocks G0. Item 2 is the last one; if it turns out to be
+bookkeeping, close section 12b outright and hand Premiere back to the
+owner-gated section 12.
 
 ## Out of scope for the local session (remote builds these)
 
