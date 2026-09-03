@@ -7302,14 +7302,33 @@ function AELL_maskModeName(v) {
 }
 
 /*
- * The layer-space rectangle an EXISTING mask covers, or null when this
- * build cannot prove one. Deliberately narrow, because every caller uses
- * the answer to make a claim about pixels: only a static, unfeathered,
- * un-expanded, closed, axis-aligned RECTANGLE at opacity 0 or 100
- * answers. A bezier can bulge outside the hull of its own vertices, so a
- * vertex box would be a guess; a feather and a PART opacity hide by
- * degrees, which "all / some / none" cannot say; and an animated shape is
- * a different answer at every frame.
+ * The layer-space REGION an EXISTING mask covers, or null when this build
+ * cannot prove one. Deliberately narrow, because every caller uses the
+ * answer to make a claim about pixels: only a static, unfeathered,
+ * un-expanded, closed shape at opacity 0 or 100 answers, and only in one
+ * of two forms — an axis-aligned RECTANGLE ({kind: "rect"}) or an
+ * axis-aligned ELLIPSE ({kind: "ellipse"}). Everything else is a guess: a
+ * general bezier can bulge outside the hull of its own vertices, a
+ * feather and a PART opacity hide by degrees, which "all / some / none"
+ * cannot say, and an animated shape is a different answer at every frame.
+ *
+ * THE ELLIPSE was added 2026-09-03 (scripts/mask-parade-ellipse-probe.js,
+ * AE 26.3x87) because it was costing every mask receipt its voice: one
+ * ellipse anywhere in a parade made AELL_paradeShows return "" and
+ * add_mask, set_mask and delete_mask all went quiet. Unlike a feather it
+ * is not a degree — it is exact algebra — and 13 of the probe's 14
+ * readable parades came back agreeing with the layer's own alpha to the
+ * measurement (a lone full-coverage ellipse add leaves 0.784 of the
+ * layer, pi/4, in the middle; its subtract twin leaves 0.216 in the four
+ * corners).
+ *
+ * Recognised by CONSTRUCTION, not by curvature: four vertices at the
+ * cardinal points of their own bounding box, each with axis-aligned
+ * tangents that are exact opposites of one another and a handle length
+ * within AELL_MASK_KAPPA_LO..HI of the radius. That is the shape add_mask
+ * itself writes (kappa 0.5523, the standard 4/3*(sqrt(2)-1) rounded).
+ * A hand-dragged bezier that merely LOOKS round misses the band and the
+ * reader stays silent, which is the safe direction.
  *
  * OPACITY 0 is not a degree, it is an absolute, so it answers rather than
  * bailing — see AELL_maskZeroApply for what it does and for the two
@@ -7326,7 +7345,7 @@ function AELL_maskModeName(v) {
  * rounds the corners of an expanded rectangle too, so the honest answer
  * is not a bigger rectangle — it is no rectangle.
  */
-function AELL_maskRect(mask) {
+function AELL_maskRegion(mask) {
   var r = null;
   try {
     if (mask.enabled === false) return null;
@@ -7348,31 +7367,152 @@ function AELL_maskRect(mask) {
     if (!sh || !sh.closed || !sh.vertices || sh.vertices.length !== 4) {
       return null;
     }
-    var i, j;
+    var i, j, straight = true;
     for (i = 0; i < 4; i++) {
       var it = sh.inTangents ? sh.inTangents[i] : null;
       var ot = sh.outTangents ? sh.outTangents[i] : null;
       for (j = 0; j < 2; j++) {
-        if (it && it[j]) return null;
-        if (ot && ot[j]) return null;
+        if (it && it[j]) straight = false;
+        if (ot && ot[j]) straight = false;
       }
     }
     var box = AELL_boxOfPoints(sh.vertices);
     if (!box) return null;
-    // Four points inside a box are only a RECTANGLE when each one sits on
-    // a corner of it: a diamond has the same bounding box and covers half
-    // as much.
-    for (i = 0; i < 4; i++) {
-      var x = Number(sh.vertices[i][0]), y = Number(sh.vertices[i][1]);
-      if ((x !== box.left && x !== box.right) ||
-          (y !== box.top && y !== box.bottom)) return null;
+    if (straight) {
+      // Four points inside a box are only a RECTANGLE when each one sits
+      // on a corner of it: a diamond has the same bounding box and covers
+      // half as much.
+      for (i = 0; i < 4; i++) {
+        var x = Number(sh.vertices[i][0]), y = Number(sh.vertices[i][1]);
+        if ((x !== box.left && x !== box.right) ||
+            (y !== box.top && y !== box.bottom)) return null;
+      }
+      r = { kind: "rect",
+            left: box.left, top: box.top,
+            right: box.right, bottom: box.bottom };
+    } else {
+      r = AELL_ellipseOfShape(sh, box);
+      if (!r) return null;
     }
-    r = { left: box.left, top: box.top, right: box.right, bottom: box.bottom,
-          inverted: !!mask.inverted, opacity: opv,
-          mode: AELL_maskModeName(mask.maskMode) };
+    r.inverted = !!mask.inverted;
+    r.opacity = opv;
+    r.mode = AELL_maskModeName(mask.maskMode);
     if (!r.mode) return null;
   } catch (e) { return null; }
   return r;
+}
+
+/*
+ * The kappa band an ELLIPSE's handles must fall in. The exact value for a
+ * circular arc is 4/3*(sqrt(2)-1) = 0.552285, and add_mask writes 0.5523.
+ * The band is +/-0.005 around it, which is wide enough for any spelling
+ * of the same construction and narrow enough that the bezier never leaves
+ * the true ellipse by more than a quarter of a percent of the radius:
+ * the arc's midpoint sits at r*(4+3k)*sqrt(2)/8, i.e. 1.00000 r at
+ * k=0.55228, 0.99772 r at 0.548 and 1.00250 r at 0.557. That quarter of a
+ * percent is what AELL_MASK_R2_IN / _OUT below leave as slack, and it is
+ * why they are not both 1.
+ */
+var AELL_MASK_KAPPA_LO = 0.548, AELL_MASK_KAPPA_HI = 0.557;
+var AELL_MASK_R2_IN = 0.99;     // radius 0.995 — provably inside
+var AELL_MASK_R2_OUT = 1.01;    // radius 1.005 — provably outside
+
+/*
+ * An axis-aligned ELLIPSE read off a four-point closed shape, or null.
+ * See AELL_maskRegion for why this is recognised by construction rather
+ * than by curvature, and scripts/mask-parade-ellipse-probe.js for the
+ * measurements the reading is checked against.
+ *
+ * The four vertices must be the four CARDINAL points of their own
+ * bounding box, one each, with the tangents at a vertex axis-aligned
+ * along the box edge it sits on, equal and opposite, and kappa*radius
+ * long. Anything else — a dragged handle, a rotated ellipse, three
+ * points, a squashed blob — is not proved and gets no answer.
+ */
+function AELL_ellipseOfShape(sh, box) {
+  var rx = (box.right - box.left) / 2, ry = (box.bottom - box.top) / 2;
+  if (!(rx > 0) || !(ry > 0)) return null;
+  var cx = box.left + rx, cy = box.top + ry;
+  // Tolerances are absolute at the pixel scale a mask lives at; the
+  // values come straight out of setValue and round-trip exactly, so this
+  // is slack for float noise, not for a different shape.
+  var tol = 1e-4 * (1 + (rx > ry ? rx : ry));
+  function near(a, b) { return Math.abs(a - b) <= tol; }
+  var seen = { N: false, S: false, E: false, W: false }, i;
+  for (i = 0; i < 4; i++) {
+    var v = sh.vertices[i];
+    if (!AELLJSON.isArray(v) || v.length < 2) return null;
+    var x = Number(v[0]), y = Number(v[1]);
+    var slot = "", axis = -1, arm = 0;
+    if (near(x, cx) && near(y, box.top)) { slot = "N"; axis = 0; arm = rx; }
+    else if (near(x, cx) && near(y, box.bottom)) {
+      slot = "S"; axis = 0; arm = rx;
+    } else if (near(y, cy) && near(x, box.right)) {
+      slot = "E"; axis = 1; arm = ry;
+    } else if (near(y, cy) && near(x, box.left)) {
+      slot = "W"; axis = 1; arm = ry;
+    } else return null;
+    if (seen[slot]) return null;       // two vertices on one cardinal point
+    seen[slot] = true;
+    var it = sh.inTangents ? sh.inTangents[i] : null;
+    var ot = sh.outTangents ? sh.outTangents[i] : null;
+    if (!AELLJSON.isArray(it) || !AELLJSON.isArray(ot)) return null;
+    var other = 1 - axis;
+    // The handle runs ALONG the box edge the vertex sits on: any
+    // component across it would tip the shape out of its own bounds.
+    if (!near(Number(it[other]), 0) || !near(Number(ot[other]), 0)) {
+      return null;
+    }
+    var a = Number(it[axis]), b = Number(ot[axis]);
+    if (!near(a, -b)) return null;     // equal and opposite, or it is a cusp
+    var k = Math.abs(b) / arm;
+    if (k < AELL_MASK_KAPPA_LO || k > AELL_MASK_KAPPA_HI) return null;
+  }
+  if (!seen.N || !seen.S || !seen.E || !seen.W) return null;
+  return { kind: "ellipse", left: box.left, top: box.top,
+           right: box.right, bottom: box.bottom,
+           cx: cx, cy: cy, rx: rx, ry: ry };
+}
+
+/*
+ * Where one grid CELL sits relative to an ellipse: "in" (every point of
+ * it is inside), "out" (no point of its interior is), "split" (both, and
+ * both provably have area), or "" — which makes the whole parade
+ * unreadable rather than guessed.
+ *
+ * This is what lets an ellipse into a reader whose exactness comes from
+ * cells being CONSTANT: a rectangle's coverage is constant inside every
+ * cell its edges cut, an ellipse's is not, so a split cell is read twice
+ * — once as if the ellipse covered it, once as if it did not — and both
+ * readings vote. That is only honest while both readings describe real
+ * pixels, which is why "split" needs a point provably inside AND a corner
+ * provably outside, and why anything less is "".
+ *
+ * The bounding-box test comes FIRST and is exact, because the tangent
+ * case is the one that actually arises: a rect mask edge that lines up
+ * with the ellipse's own extreme touches it at a single point, and the
+ * radius test alone can only call that ambiguous.
+ */
+function AELL_ellipseVsCell(e, x0, x1, y0, y1) {
+  if (x1 <= e.left || x0 >= e.right || y1 <= e.top || y0 >= e.bottom) {
+    return "out";
+  }
+  var nx0 = (x0 - e.cx) / e.rx, nx1 = (x1 - e.cx) / e.rx;
+  var ny0 = (y0 - e.cy) / e.ry, ny1 = (y1 - e.cy) / e.ry;
+  var fx = nx0 * nx0 > nx1 * nx1 ? nx0 * nx0 : nx1 * nx1;
+  var fy = ny0 * ny0 > ny1 * ny1 ? ny0 * ny0 : ny1 * ny1;
+  var far2 = fx + fy;                  // the cell's farthest corner
+  // The closest point of the cell to the centre, in normalised space:
+  // clamp the centre into the cell.
+  var qx = nx0 > 0 ? nx0 : (nx1 < 0 ? nx1 : 0);
+  var qy = ny0 > 0 ? ny0 : (ny1 < 0 ? ny1 : 0);
+  var near2 = qx * qx + qy * qy;
+  // An ellipse is convex, so a cell whose farthest corner is inside it
+  // is inside it whole.
+  if (far2 <= AELL_MASK_R2_IN) return "in";
+  if (near2 >= AELL_MASK_R2_OUT) return "out";
+  if (near2 <= AELL_MASK_R2_IN && far2 >= AELL_MASK_R2_OUT) return "split";
+  return "";
 }
 
 /*
@@ -7392,13 +7532,22 @@ function AELL_maskRect(mask) {
  * this exists to let add_mask say "the layer is gone" or "the masks above
  * just stopped working", and a false one of those costs more than the
  * sentence is worth.
+ *
+ * ONE ELLIPSE may join them, and the exactness survives it because a
+ * split cell is read BOTH ways and both readings vote — see
+ * AELL_ellipseVsCell. One, not two: with a single ellipse every branch
+ * the cells offer is a real region of the layer, where two ellipses would
+ * ask this to prove a cell can be inside both at once, and an unreachable
+ * branch votes for a picture that is not on screen. A second ellipse
+ * therefore reads "" exactly as it did before, and so does an ellipse
+ * this cannot prove is one.
  */
 function AELL_paradeShows(masks, box) {
   var n = 0;
   try { n = masks.numProperties; } catch (eN) { return ""; }
   if (n === 0) return "nothing";
   if (!box || n > 8) return "";      // cost guard; 8 covers real parades
-  var rects = [], i;
+  var rects = [], i, ell = null, offRisk = false;
   for (i = 1; i <= n; i++) {
     var mk = null;
     try { mk = masks.property(i); } catch (eP) { return ""; }
@@ -7408,10 +7557,32 @@ function AELL_paradeShows(masks, box) {
     var modeName = "";
     try { modeName = AELL_maskModeName(mk.maskMode); } catch (eM) {}
     if (modeName === "none") continue;
-    var r = AELL_maskRect(mk);
+    var r = AELL_maskRegion(mk);
     if (!r) return "";
+    /* An ellipse at opacity 0 never has its region read (AELL_maskZeroApply
+     * is an absolute, not a shape), so it does not spend the one slot. */
+    if (r.kind === "ellipse" && r.opacity !== 0) {
+      if (ell) return "";            // the second one — see the note above
+      ell = r;
+    }
+    /* The one place the algebra and AE part company, and the cells cannot
+     * see it because it is not about a region at all: measured (the
+     * off-layer INTERSECT row in selftest.js), AE drops a mask whose
+     * shape lies wholly outside the layer once something else composites,
+     * where "its region is worth nothing" says intersect and darken
+     * EMPTY the layer. Alone it does not drop, and every other mode reads
+     * the same either way — an off-layer add/subtract/lighten/difference
+     * changes nothing under both readings — so this is exactly two modes,
+     * uninverted, with company. Silence, not a guess. */
+    if (r.opacity !== 0 && !r.inverted &&
+        (r.mode === "intersect" || r.mode === "darken") &&
+        (r.right <= box.left || r.left >= box.left + box.width ||
+         r.bottom <= box.top || r.top >= box.top + box.height)) {
+      offRisk = true;
+    }
     rects.push(r);
   }
+  if (offRisk && rects.length > 1) return "";
   if (!rects.length) return "nothing";
   var right = box.left + box.width, bottom = box.top + box.height;
   var xs = [box.left, right], ys = [box.top, bottom];
@@ -7423,33 +7594,53 @@ function AELL_paradeShows(masks, box) {
   }
   xs.sort(AELL_numAsc);
   ys.sort(AELL_numAsc);
-  var anyAll = false, anyNone = false, sawState = false, a, b;
+  var anyAll = false, anyNone = false, sawState = false, a, b, k;
   for (a = 0; a + 1 < xs.length; a++) {
     if (xs[a + 1] <= xs[a]) continue;
     for (b = 0; b + 1 < ys.length; b++) {
       if (ys[b + 1] <= ys[b]) continue;
       var cx = (xs[a] + xs[a + 1]) / 2, cy = (ys[b] + ys[b + 1]) / 2;
-      var state = null;
-      for (i = 0; i < rects.length; i++) {
-        var rr = rects[i];
-        /* A mask at opacity 0 has its own rule and does not read its
-         * region or its 'inverted' switch at all — see
-         * AELL_maskZeroApply, where the measurements are. */
-        if (rr.opacity === 0) {
-          state = AELL_maskZeroApply(state, rr.mode);
-          continue;
-        }
-        var inside = (cx > rr.left && cx < rr.right &&
-                      cy > rr.top && cy < rr.bottom);
-        if (rr.inverted) inside = !inside;
-        state = AELL_maskApply(state, rr.mode, inside ? "all" : "none");
+      /* The branches this cell has to be read as. A cell with no ellipse
+       * in play, or one the ellipse covers whole or misses whole, is the
+       * single reading it always was; a SPLIT cell is two, and both are
+       * real pixels of the layer. */
+      var branches = [true];
+      if (ell) {
+        var where = AELL_ellipseVsCell(ell, xs[a], xs[a + 1],
+                                       ys[b], ys[b + 1]);
+        if (where === "") return "";
+        if (where === "in") branches = [true];
+        else if (where === "out") branches = [false];
+        else branches = [true, false];
       }
-      // Defensive: every mode here came back from AELL_maskModeName, so
-      // AELL_maskApply always answers. A null would mean nothing
-      // composited, and that cell must not vote.
-      if (state === null) continue;
-      sawState = true;
-      if (state === "none") anyNone = true; else anyAll = true;
+      for (k = 0; k < branches.length; k++) {
+        var state = null;
+        for (i = 0; i < rects.length; i++) {
+          var rr = rects[i];
+          /* A mask at opacity 0 has its own rule and does not read its
+           * region or its 'inverted' switch at all — see
+           * AELL_maskZeroApply, where the measurements are. */
+          if (rr.opacity === 0) {
+            state = AELL_maskZeroApply(state, rr.mode);
+            continue;
+          }
+          var inside;
+          if (rr === ell) {
+            inside = branches[k];
+          } else {
+            inside = (cx > rr.left && cx < rr.right &&
+                      cy > rr.top && cy < rr.bottom);
+          }
+          if (rr.inverted) inside = !inside;
+          state = AELL_maskApply(state, rr.mode, inside ? "all" : "none");
+        }
+        // Defensive: every mode here came back from AELL_maskModeName, so
+        // AELL_maskApply always answers. A null would mean nothing
+        // composited, and that cell must not vote.
+        if (state === null) continue;
+        sawState = true;
+        if (state === "none") anyNone = true; else anyAll = true;
+      }
     }
   }
   if (!sawState) return "nothing";

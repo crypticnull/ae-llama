@@ -4115,6 +4115,178 @@
           return d.removed === "ST Del" || "removed " + d.removed;
         } },
 
+      // --- ONE ELLIPSE in the parade. Until 0.11.35 the reader answered
+      // for axis-aligned rectangles only, so an ellipse ANYWHERE in a
+      // layer's masks made AELL_paradeShows return "" and every sentence
+      // add_mask, set_mask and delete_mask build on it went quiet -- three
+      // tools losing their voice over a shape the panel offers by name.
+      // An ellipse is not a degree the way a feather is; it is exact
+      // algebra, and a cell an ellipse SPLITS can be read both ways with
+      // both readings voting.
+      //
+      // Measured 2026-09-03 (scripts/mask-parade-ellipse-probe.js, AE
+      // 26.3x87): fourteen parades holding an ellipse, layer alpha through
+      // sampleImage plus a 21x15 area grid, and every reading agreed --
+      // a lone full-coverage ellipse 'add' leaves 0.784 of the layer (pi/4)
+      // in the middle, its 'subtract' twin leaves 0.216 in the corners.
+      // Sixteen of the seventeen rows were silent before.
+      { name: "the ellipse-parade layer",
+        tool: "add_solid",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, name: "ST Ell", color: [0.3, 0.7, 0.4],
+                   width: 200, height: 200 };
+        },
+        check: function (d) { return d.name === "ST Ell" || d.name; } },
+
+      { name: "…a full-coverage add under everything",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Ell", name: "ST EllBase",
+                   shape: "rectangle", bounds: [0, 0, 200, 200] };
+        },
+        check: function () { return true; } },
+
+      { name: "…and the ellipse that cuts the middle out of it",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Ell", name: "ST EllCut",
+                   shape: "ellipse", mode: "subtract" };
+        },
+        check: function (d) {
+          // The ellipse leaves the four corners, so nothing here may say
+          // the layer is gone -- that gate predates this block and this
+          // row keeps it honest now that the parade around it can be read.
+          return !/Nothing of 'ST Ell' shows/.test(d.warning || "") ||
+                 "an ellipse subtract is not an empty layer: " + d.warning;
+        } },
+
+      // THE ROW THIS BLOCK WAS WRITTEN FOR. Switching the ellipse to the
+      // 'none' carrier mode hands the whole layer back (0.216 -> 1.0), and
+      // before the reader could see an ellipse this answered a bare ok.
+      { name: "switching the ellipse to 'none' hands the layer back, and says so",
+        tool: "set_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Ell", mask: "ST EllCut",
+                   mode: "none" };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (!/Every pixel of 'ST Ell' shows again/.test(w)) {
+            return "the masking stopped in silence: " + (w || "(none)");
+          }
+          return /showed before|hiding/.test(w) ||
+                 "it does not say what changed: " + w;
+        } },
+
+      { name: "…and putting it back to 'subtract' is an ordinary edit",
+        tool: "set_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Ell", mask: "ST EllCut",
+                   mode: "subtract" };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          return !/shows again|shows now/.test(w) ||
+                 "hiding the middle again is not an erasure or a reveal: " +
+                 w;
+        } },
+
+      // The add_mask half of the same silence: a full-coverage 'add' over
+      // an ellipse switches it off, and the receipt used to say nothing
+      // because the parade under it could not be read.
+      { name: "a full add over the ellipse switches it off, and says so",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Ell", name: "ST EllUndo",
+                   shape: "rectangle", bounds: [0, 0, 200, 200] };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (!/every pixel of it shows again/.test(w)) {
+            return "the masks below stopped working in silence: " +
+                   (w || "(none)");
+          }
+          return /2 masks/.test(w) ||
+                 "it does not count what it switched off: " + w;
+        } },
+
+      { name: "…which comes off again",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Ell", mask: "ST EllUndo" };
+        },
+        check: function (d) {
+          return d.removed === "ST EllUndo" || "removed " + d.removed;
+        } },
+
+      // The delete_mask half: taking the ellipse off a layer that keeps a
+      // full-coverage add reveals it whole, with a mask still listed --
+      // the case remainingMasks can never answer, now reachable through an
+      // ellipse too.
+      { name: "deleting the ellipse reveals the layer, and says so",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Ell", mask: "ST EllCut" };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (d.remainingMasks.join(",") !== "ST EllBase") {
+            return "masks left: " + d.remainingMasks.join(", ");
+          }
+          if (!/Every pixel of 'ST Ell' shows again/.test(w)) {
+            return "the masking stopped in silence: " + (w || "(none)");
+          }
+          return w.indexOf("ST EllBase") !== -1 ||
+                 "it does not name the mask that stayed: " + w;
+        } },
+
+      { name: "…the ellipse goes back on",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Ell", name: "ST EllCut2",
+                   shape: "ellipse", mode: "subtract" };
+        },
+        check: function () { return true; } },
+
+      { name: "…and a SECOND ellipse joins it",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Ell", name: "ST EllCut3",
+                   shape: "ellipse", bounds: [0, 0, 100, 200] };
+        },
+        check: function () { return true; } },
+
+      // The boundary, and it is deliberate: ONE ellipse is exact, two
+      // would ask the reader to prove a cell can be inside both at once,
+      // and a branch that describes no real pixel votes for a picture
+      // nobody can see. So the same call that spoke six rows up must go
+      // quiet here rather than guess.
+      { name: "…over TWO ellipses the same call goes quiet, not wrong",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Ell", name: "ST EllQuiet",
+                   shape: "rectangle", bounds: [0, 0, 200, 200] };
+        },
+        check: function (d) {
+          /* "cuts nothing away" is still allowed here: that sentence is
+           * about the NEW mask and is true whatever is under it. What may
+           * not appear is any claim about the LAYER -- those are the ones
+           * the reader has to have proved. */
+          var w = d.warning || "";
+          return !/shows again|hides the WHOLE layer|changes nothing on/
+                   .test(w) ||
+                 "two ellipses are not a readable parade: " + w;
+        } },
+
+      { name: "…and the ellipse-parade layer goes away",
+        tool: "delete_layer",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Ell" };
+        },
+        check: function (d) {
+          return d.removed === "ST Ell" || "removed " + d.removed;
+        } },
+
       // --- the batch executor, at the scale it is actually used at.
       // for_each_layer used to run ANY tool name, so {tool: "create_comp"}
       // over N layers reported {succeeded: N} and left N junk comps in the

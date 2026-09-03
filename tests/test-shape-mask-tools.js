@@ -345,8 +345,8 @@ const $ = { global: {} };
 // (tests/test-light.js has used this shape since 0.9.x.)
 const host = eval(fs.readFileSync(path.join(__dirname, "..", "extension",
                                 "jsx", "hostscript.jsx"), "utf8") +
-  ";\n({ AELL_paradeShows: AELL_paradeShows, AELL_maskRect: AELL_maskRect })");
-const { AELL_paradeShows, AELL_maskRect } = host;
+  ";\n({ AELL_paradeShows: AELL_paradeShows, AELL_maskRegion: AELL_maskRegion })");
+const { AELL_paradeShows, AELL_maskRegion } = host;
 
 function call(tool, args) {
   return JSON.parse($.global.AELL_call(tool, JSON.stringify(args)));
@@ -1593,7 +1593,7 @@ assert(r.ok && !r.data.note,
 
 // 6f. A mask's OPACITY is a mask property, and so is its EXPANSION.
 //
-// Neither was read anywhere. Opacity made AELL_maskRect bail, so a
+// Neither was read anywhere. Opacity made AELL_maskRegion bail, so a
 // parade with one opacity-0 mask in it went unreadable and add_mask's
 // four sentences went quiet; expansion was not read at all, so the rect
 // this returned for an expanded mask was a claim about pixels AE
@@ -1722,6 +1722,150 @@ keyedExp.property("ADBE Mask Offset").setValueAtTime(0, 0);
 keyedExp.property("ADBE Mask Offset").setValueAtTime(1, 40);
 assert(AELL_paradeShows(opMasks, SOLO_BOX) === "",
        "…and so is a keyframed EXPANSION");
+
+// 6h. ONE ELLIPSE in the parade. Until 0.11.35 an ellipse anywhere in a
+// layer's masks made the reader return "" and every sentence add_mask,
+// set_mask and delete_mask build on it went quiet — an ellipse is not a
+// degree the way a feather is, it is exact algebra, and it was costing
+// three tools their voice.
+//
+// Every row is measured: scripts/mask-parade-ellipse-probe.js, AE
+// 26.3x87, layer alpha through sampleImage(postEffect) plus a 21x15 area
+// grid, rows scaled from the probe's 400x300 layer to this fixture's
+// 100x100. All fourteen readable rows agreed with the picture.
+const ELL_HALF = [0, 0, 50, 100];
+// The ellipse EXACTLY as add_mask builds it — same vertices, same 0.5523
+// handles. A stub that drew it any other way would prove nothing about
+// the shape the tool actually writes.
+function ellMask(spec) {
+  const m = opMasks.addProperty("ADBE Mask Atom");
+  const b = spec.bounds || [0, 0, 100, 100];
+  const k = typeof spec.kappa === "number" ? spec.kappa : 0.5523;
+  const rx = b[2] / 2, ry = b[3] / 2;
+  const cx = b[0] + rx, cy = b[1] + ry;
+  const kx = rx * k, ky = ry * k;
+  const s = new Shape();
+  s.closed = true;
+  s.vertices = [[cx, cy - ry], [cx + rx, cy], [cx, cy + ry], [cx - rx, cy]];
+  s.inTangents = [[-kx, 0], [0, -ky], [kx, 0], [0, ky]];
+  s.outTangents = [[kx, 0], [0, ky], [-kx, 0], [0, -ky]];
+  m.property("ADBE Mask Shape").setValue(s);
+  m.maskMode = MaskMode[(spec.mode || "add").toUpperCase()];
+  m.inverted = !!spec.inverted;
+  if (typeof spec.opacity === "number") {
+    m.property("ADBE Mask Opacity").setValue(spec.opacity);
+  }
+  if (typeof spec.feather === "number") {
+    m.property("ADBE Mask Feather").setValue([spec.feather, spec.feather]);
+  }
+  return m;
+}
+function mixedReads(specs) {
+  opMasks._children.length = 0;
+  specs.forEach((s) => (s.ellipse ? ellMask(s) : opMask(s)));
+  return AELL_paradeShows(opMasks, SOLO_BOX);
+}
+const E = (o) => Object.assign({ ellipse: true }, o);
+[
+  { row: "E1", want: "some", alpha: "0.784 showing — pi/4 in the middle, " +
+    "the four corners gone",
+    specs: [E({ mode: "add" })] },
+  { row: "E2", want: "some", alpha: "0.216 — the subtract twin, corners only",
+    specs: [E({ mode: "subtract" })] },
+  { row: "E3", want: "some", alpha: "0.216 — inverted, the same corners",
+    specs: [E({ mode: "add", inverted: true })] },
+  { row: "E4", want: "all", alpha: "1.0 — a full rect add UNION an ellipse " +
+    "add: both branches of every split cell show",
+    specs: [{ mode: "add" }, E({ mode: "add" })] },
+  { row: "E5", want: "none", alpha: "0 — an ellipse add then a full-coverage " +
+    "rect subtract: both branches gone",
+    specs: [E({ mode: "add" }), { mode: "subtract" }] },
+  { row: "E6", want: "some", alpha: "0.892 — an ellipse add over a half add",
+    specs: [{ mode: "add", bounds: ELL_HALF }, E({ mode: "add" })] },
+  { row: "E7", want: "some", alpha: "0.416 — a half subtract under it",
+    specs: [E({ mode: "add" }), { mode: "subtract", bounds: ELL_HALF }] },
+  { row: "E8", want: "some", alpha: "0.784 — an ellipse INTERSECT over a " +
+    "full add",
+    specs: [{ mode: "add" }, E({ mode: "intersect" })] },
+  { row: "E9", want: "all", alpha: "1.0 — an OFF-LAYER ellipse subtract " +
+    "takes nothing from a full add",
+    specs: [{ mode: "add" }, E({ mode: "subtract", bounds: OFF_BOX })] },
+  { row: "E10", want: "none", alpha: "0 — an off-layer ellipse ADD keeps " +
+    "nothing",
+    specs: [E({ mode: "add", bounds: OFF_BOX })] },
+  { row: "E11", want: "some", alpha: "0.394 — an ellipse inscribed in the " +
+    "LEFT HALF, where the half's edge is TANGENT to it",
+    specs: [E({ mode: "add", bounds: ELL_HALF })] },
+  { row: "E12", want: "some", alpha: "0.784 — a lone ellipse 'difference'",
+    specs: [E({ mode: "difference" })] },
+  { row: "E13", want: "none", alpha: "0 — opacity 0 answers without reading " +
+    "the shape at all, so an ellipse there costs nothing",
+    specs: [E({ mode: "add", opacity: 0 })] },
+  { row: "E14", want: "some", alpha: "0.476 — a 'none'-mode ellipse is a " +
+    "path CARRIER and never composites",
+    specs: [{ mode: "add", bounds: ELL_HALF }, E({ mode: "none" })] }
+].forEach((r) => {
+  const got = mixedReads(r.specs);
+  assert(got === r.want,
+         r.row + ": an ellipse parade reads '" + r.want + "' (" + r.alpha +
+         "), got '" + (got || "(silent)") + "'");
+});
+// …and the three rows the reader must go on refusing. Each was measured
+// 'some' in AE, so each is a picture it could have got RIGHT by accident
+// — silence is the answer because the reading is not proved, not because
+// the layer is unremarkable.
+assert(mixedReads([E({ mode: "add" }), E({ mode: "subtract",
+                                           bounds: ELL_HALF })]) === "",
+       "X1: TWO ellipses stay unreadable — one is exact, two would need " +
+       "the reader to prove a cell can be inside both at once");
+assert(mixedReads([E({ mode: "add", feather: 40 })]) === "",
+       "X2: a FEATHERED ellipse stays unreadable — a feather hides by " +
+       "degrees and all/some/none cannot say a degree");
+assert(mixedReads([E({ mode: "add", opacity: 50 })]) === "",
+       "X3: a PART-opacity ellipse stays unreadable");
+// The detector answers for the shape add_mask WRITES and for nothing that
+// merely looks like it. A handle dragged off the standard kappa is not
+// proved to be an ellipse, and the tangent case below is what forced
+// AELL_ellipseVsCell's exact bounding-box test: a rect edge lined up with
+// the ellipse's own extreme touches it at a single point, which the
+// radius test alone can only call ambiguous.
+assert(mixedReads([E({ mode: "add", kappa: 0.75 })]) === "",
+       "a dragged handle (kappa 0.75) is not an ellipse this may claim " +
+       "about — it reads silent, not 'some'");
+assert(mixedReads([E({ mode: "add", kappa: 0.5523 })]) === "some",
+       "…and the kappa add_mask itself writes reads");
+assert(mixedReads([{ mode: "add", bounds: ELL_HALF },
+                   E({ mode: "add", bounds: ELL_HALF })]) === "some",
+       "a rect edge TANGENT to the ellipse still reads — the cell right " +
+       "of the tangent is provably outside it, not ambiguous");
+opMasks._children.length = 0;
+const ellDiamond = opMask({ mode: "add" });
+const dia = new Shape();
+dia.closed = true;
+dia.vertices = [[50, 0], [100, 50], [50, 100], [0, 50]];
+ellDiamond.property("ADBE Mask Shape").setValue(dia);
+assert(AELL_paradeShows(opMasks, SOLO_BOX) === "",
+       "a DIAMOND has the ellipse's four vertices and no handles at all — " +
+       "it is neither shape and stays unreadable");
+// The one place the algebra and AE part company, and it is not about a
+// region: measured (the off-layer INTERSECT step in selftest.js), AE
+// drops a mask lying wholly outside the layer once something else
+// composites, where "its region is worth nothing" says intersect and
+// darken EMPTY the layer. Alone it does not drop — and every other mode
+// reads the same either way.
+assert(mixedReads([{ mode: "add" },
+                   { mode: "intersect", bounds: OFF_BOX }]) === "",
+       "an off-layer INTERSECT with company is unreadable, not 'none' — " +
+       "AE drops it and the layer is untouched");
+assert(mixedReads([{ mode: "add" },
+                   { mode: "darken", bounds: OFF_BOX }]) === "",
+       "…and its 'darken' twin, the other mode the two readings differ on");
+assert(mixedReads([{ mode: "intersect", bounds: OFF_BOX }]) === "none",
+       "…but ALONE it does not drop: measured, it empties the layer");
+assert(mixedReads([{ mode: "add" },
+                   { mode: "subtract", bounds: OFF_BOX }]) === "all",
+       "…and an off-layer SUBTRACT reads the same whether AE drops it or " +
+       "not, so it still answers");
 
 // The write half: set_mask has never said a word about what its edits do
 // to the picture, and it owns the one mask property nothing read back.

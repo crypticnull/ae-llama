@@ -18021,3 +18021,140 @@ Three harness runs (baseline 736, green 753, reverted-host red 748) and
 two runs of the new mask-delete probe, which removes its own comp and
 solid source each time and reported `cleanup + cleaned` on both. No
 Premiere, no ComfyUI, no llama-server left running.
+
+## 2026-09-03 08:02 — one ellipse in the parade, and three tools got their voice back (0.11.35)
+
+The top item the 0.11.34 pass filed. `AELL_maskRect` answered for
+axis-aligned RECTANGLES only, so ONE ellipse anywhere in a layer's mask
+parade made `AELL_paradeShows` return `""` — and with it every sentence
+`add_mask`, `set_mask` and `delete_mask` build on that reading went
+quiet. The narrowness was right about a feather (it hides by degrees, and
+"all / some / none" cannot say a degree) and wrong about an ellipse,
+which is exact algebra. The panel offers `shape: "ellipse"` by name, so
+this was the tool silencing itself with its own output.
+
+### Measured first (scripts/mask-parade-ellipse-probe.js/.jsx, new, AE 26.3x87)
+
+Seventeen parades each holding an ellipse, the layer's own alpha through
+`sampleImage(postEffect)` on nine points plus a 21x15 AREA grid (the
+coarse 11x9 the first ellipse probe used cannot tell "all" from "some" if
+the band is thin). Instrument calibrated on the same run: bare layer
+1.000, inscribed ellipse **0.784** against pi/4 = 0.785.
+
+**16 of the 17 were silent**, and the plan under test predicted all
+fourteen readable pictures correctly before the host was touched:
+
+- lone ellipse `add` 0.784 (the middle) / `subtract` 0.216 (the four
+  corners) / inverted `add` 0.216 — all `some`
+- a full rect `add` UNION an ellipse `add` reads **all** (1.000), and an
+  ellipse `add` under a full rect `subtract` reads **none** (0) — the two
+  rows that prove a split cell must be read BOTH ways rather than called
+  `some` on sight
+- over a half add 0.892; a half subtract under it 0.416; an ellipse
+  `intersect` over a full add 0.784; a lone `difference` 0.784
+- an OFF-LAYER ellipse subtract leaves a full add at **all**; an
+  off-layer ellipse `add` keeps **none**
+- an ellipse inscribed in the LEFT HALF 0.394 — the tangent case
+- an ellipse at opacity 0 reads **none** without its shape being read at
+  all, and a `none`-mode ellipse is a path carrier that decides nothing
+
+### The fix
+
+`AELL_maskRect` is `AELL_maskRegion` now and returns `{kind: "rect"}` or
+`{kind: "ellipse"}`. An ellipse is recognised by CONSTRUCTION, not by
+curvature: four vertices at the cardinal points of their own bounding
+box, axis-aligned tangents that are exact opposites, handle length within
+`AELL_MASK_KAPPA_LO..HI` (0.548..0.557) of the radius — the shape
+`add_mask` itself writes. A dragged handle misses the band and the reader
+stays silent, which is the safe direction.
+
+The exactness argument survives because a cell an ellipse SPLITS is read
+twice, once each way, and both readings vote (`AELL_ellipseVsCell`). That
+is only honest while both readings describe real pixels, so "split" needs
+a point provably inside AND a corner provably outside; anything less
+makes the whole parade unreadable rather than guessed. The 0.99 / 1.01
+slack is the cubic bezier's own quarter of a percent of radius across the
+kappa band. The bounding-box test comes FIRST and is exact, because the
+tangent case is the one that actually arises — a rect edge lined up with
+the ellipse's extreme touches it at one point, which the radius test
+alone can only call ambiguous.
+
+**ONE ellipse, not two.** Two would ask the reader to prove a cell can be
+inside both at once, and a branch describing no real pixel votes for a
+picture nobody can see. A second ellipse reads `""` exactly as before.
+
+Also closed, because the ellipse made it newly reachable: an existing
+mask lying wholly outside the layer in modes `intersect` / `darken` with
+company now makes the parade unreadable. Measured (the off-layer INTERSECT
+step in selftest.js), AE DROPS such a mask once something else composites,
+where "its region is worth nothing" says it empties the layer — and those
+are the only two modes the two readings differ on. That was a shipped
+false claim for rectangles too.
+
+### Verification
+
+- **Real AE harness 753 -> 765/765 PASSED**, twelve new steps in
+  `extension/js/selftest.js` (ST Ell).
+- **Three of them are RED against the reverted host in REAL AE**
+  (762/765), reproducing the filed silence verbatim: switching the
+  ellipse to `none` handed the layer back in silence, a full add over it
+  switched it off in silence, and deleting it revealed the layer in
+  silence.
+- `tests/test-shape-mask-tools.js` section 6h: 25 new assertions, **17 of
+  them RED** against the reverted host — the fourteen measured parades
+  plus the kappa band, the tangent cell and the off-layer intersect pair.
+- Full stubbed suite green; `docs/CAPABILITIES.md` regenerated.
+- **Zero prompt cost** — `extension/js/tools.js` is untouched: this is a
+  reader that was already wired into three tools' sentences.
+
+### Stub faithfulness
+
+`tests/test-self-test.js`'s canned host had `mkReadable = false` for every
+ellipse, so it would have PASSED three of the new steps while proving
+nothing — the same class as the last two passes. It now carries
+`mkEllipseVsCell` and the same one-ellipse rule, and with that reverted it
+fails exactly the three steps real AE fails.
+
+### Notes / assumptions
+
+- **Assumed the only ellipses worth reading are the ones `add_mask`
+  writes.** AE's own ellipse TOOL is a drag gesture and cannot be driven
+  from a script, so a hand-drawn ellipse's kappa is unmeasured on this
+  machine. The band is wide enough for any spelling of the standard
+  construction and the failure direction is silence, not a wrong claim.
+- **Assumed a feather stays unreadable.** It is a degree; the probe's X2
+  row measured `some` in AE and the reader still refuses it on purpose.
+- The tangent-from-INSIDE cell (a grid line touching the ellipse at a
+  corner distance) is still `""`. It needs a coincidence no natural
+  construction produces, and the answer is silence.
+
+### Still open, in priority order
+
+1. `add_mask {mode: "subtract"}` with NO bounds over a layer whose masks
+   already hide everything is silent, because the no-op sentence waits to
+   be asked (`asked` gate).
+2. TWO ellipses, and a feathered mask anywhere, still make the parade
+   unreadable — both deliberate, both measurable if they ever earn a pass.
+3. `comp.saveFrameToPng` writing nothing is still unexplained.
+4. Row 30's typo still burns six `center_anchor_point` calls before the
+   grid_layout that works. Cost, not harm.
+5. Everything else from the 2026-09-03 lists is unchanged: the
+   `distribute_property` mutate-then-throw hole, a bad VALUE not being
+   `argFault`, widening the `errArg` rollback exemption to thrown
+   lookups, step 2's naming flake, the destructive-refusal wording on
+   `delete_layer` / `delete_mask`, `property: string` in TOOL_DEFS,
+   `POST /tokenize`, the `comfyUrl` 8188/8000 mismatch on this machine,
+   the harness answering a modal with WORDS, `starved` wording,
+   delete_mask warning on a live expression, the unmeasured controller
+   GROUP and non-en_US locale, and `capParams`.
+
+Section 8 still has no open HARM and no open miss in the variant matrix.
+
+### Machine state
+
+**After Effects was never closed and its project was never closed.**
+Four harness runs (baseline 753, green 765, reverted-host red 762, and a
+final 765 with the fixed host restored) and one run of the new
+parade-ellipse probe, which removes its own comp and
+solid source and reported `cleanup + cleaned`. No Premiere, no ComfyUI,
+no llama-server left running.

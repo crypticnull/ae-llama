@@ -386,15 +386,57 @@ const mkZeroApply = (state, mode) =>
 const mkRowReadable = (r) => !!r.readable &&
   (r.opacity === 0 || r.opacity === 100 || r.opacity === undefined) &&
   !r.expansion;
+// Where one grid CELL sits relative to an ELLIPSE row: "in" (all of it is
+// inside), "out" (none of its interior is), "split" (both, and both
+// provably have area), or "" — which makes the parade unreadable rather
+// than guessed. This is what lets an ellipse into a reader whose
+// exactness comes from cells being CONSTANT: a split cell is read twice,
+// once each way, and both readings vote. The bounding-box test comes
+// first and is exact, because a rect edge lined up with the ellipse's own
+// extreme touches it at one point and the radius test alone can only call
+// that ambiguous. The 0.99/1.01 slack is the cubic bezier's quarter of a
+// percent of radius — see AELL_MASK_KAPPA_LO in hostscript.jsx.
+const mkEllipseVsCell = (e, x0, x1, y0, y1) => {
+  if (x1 <= e.l || x0 >= e.r || y1 <= e.t || y0 >= e.b) return "out";
+  const cx = (e.l + e.r) / 2, cy = (e.t + e.b) / 2;
+  const rx = (e.r - e.l) / 2, ry = (e.b - e.t) / 2;
+  if (!(rx > 0) || !(ry > 0)) return "";
+  const nx0 = (x0 - cx) / rx, nx1 = (x1 - cx) / rx;
+  const ny0 = (y0 - cy) / ry, ny1 = (y1 - cy) / ry;
+  const far2 = Math.max(nx0 * nx0, nx1 * nx1) +
+               Math.max(ny0 * ny0, ny1 * ny1);
+  const qx = nx0 > 0 ? nx0 : (nx1 < 0 ? nx1 : 0);
+  const qy = ny0 > 0 ? ny0 : (ny1 < 0 ? ny1 : 0);
+  const near2 = qx * qx + qy * qy;
+  if (far2 <= 0.99) return "in";
+  if (near2 >= 1.01) return "out";
+  if (near2 <= 0.99 && far2 >= 1.01) return "split";
+  return "";
+};
 // What the masks already on this layer show: "nothing" (none of them
 // composites), "all", "some", "none", or "" for a parade this cannot
 // read. Exact, not sampled — with axis-aligned rectangles the composite
-// is constant inside every cell their edges cut the layer into.
+// is constant inside every cell their edges cut the layer into, and ONE
+// ellipse may join them because a cell it splits can be read both ways.
+// Two may not: that would ask this to prove a cell can be inside both at
+// once, and an unreachable branch votes for a picture nobody can see.
 const mkParade = (list, sz) => {
   if (!sz) return "";
   const rects = (list || []).filter(r => r.mode !== "none");
   if (!rects.length) return "nothing";
   if (rects.some(r => !mkRowReadable(r)) || rects.length > 8) return "";
+  const ells = rects.filter(r => r.kind === "ellipse" && r.opacity !== 0);
+  if (ells.length > 1) return "";
+  const ell = ells[0] || null;
+  // The one place the algebra and AE part company, and no cell can see
+  // it: measured, AE drops a mask lying wholly outside the layer once
+  // something else composites, where "its region is worth nothing" says
+  // intersect and darken EMPTY the layer. Alone it does not drop, and
+  // every other mode reads the same either way.
+  const offRisk = rects.some(r => r.opacity !== 0 && !r.inverted &&
+    (r.mode === "intersect" || r.mode === "darken") &&
+    (r.r <= 0 || r.l >= sz.width || r.b <= 0 || r.t >= sz.height));
+  if (offRisk && rects.length > 1) return "";
   const xs = [0, sz.width], ys = [0, sz.height];
   const push = (a, v, hi) => {
     if (v > 0 && v < hi && a.indexOf(v) === -1) a.push(v);
@@ -404,21 +446,32 @@ const mkParade = (list, sz) => {
     push(ys, r.t, sz.height); push(ys, r.b, sz.height);
   });
   xs.sort((a, b) => a - b); ys.sort((a, b) => a - b);
-  let anyAll = false, anyNone = false;
+  let anyAll = false, anyNone = false, unreadable = false;
   for (let a = 0; a + 1 < xs.length; a++) {
     for (let b = 0; b + 1 < ys.length; b++) {
       const cx = (xs[a] + xs[a + 1]) / 2, cy = (ys[b] + ys[b + 1]) / 2;
-      let state = null;
-      rects.forEach(r => {
-        if (r.opacity === 0) { state = mkZeroApply(state, r.mode); return; }
-        let inside = (cx > r.l && cx < r.r && cy > r.t && cy < r.b);
-        if (r.inverted) inside = !inside;
-        state = mkApply(state, r.mode, inside ? "all" : "none");
+      let branches = [true];
+      if (ell) {
+        const where = mkEllipseVsCell(ell, xs[a], xs[a + 1], ys[b], ys[b + 1]);
+        if (where === "") { unreadable = true; continue; }
+        branches = where === "split" ? [true, false] : [where === "in"];
+      }
+      branches.forEach(bin => {
+        let state = null;
+        rects.forEach(r => {
+          if (r.opacity === 0) { state = mkZeroApply(state, r.mode); return; }
+          let inside = r === ell
+            ? bin
+            : (cx > r.l && cx < r.r && cy > r.t && cy < r.b);
+          if (r.inverted) inside = !inside;
+          state = mkApply(state, r.mode, inside ? "all" : "none");
+        });
+        if (state === null) return;
+        if (state === "none") anyNone = true; else anyAll = true;
       });
-      if (state === null) continue;
-      if (state === "none") anyNone = true; else anyAll = true;
     }
   }
+  if (unreadable) return "";
   if (!anyAll && !anyNone) return "nothing";
   if (anyAll && anyNone) return "some";
   return anyAll ? "all" : "none";
@@ -3307,14 +3360,13 @@ function cannedOk(tool, args) {
         // emptied the layer in real AE.
         mkHit = { l: 0, t: 0, r: mkSz.width, b: mkSz.height };
       }
-      // Only a static, unfeathered, axis-aligned RECTANGLE can be read
-      // back — the same narrowness AELL_maskRect has, and for the same
-      // reason: an ellipse does not cover the corners of its own bounding
-      // box and a feather hides by degrees, so neither can be described
-      // as all / some / none.
+      // A static, unfeathered, axis-aligned RECTANGLE or ELLIPSE can be
+      // read back — the same narrowness AELL_maskRegion has, and for the
+      // same reason: a feather hides by degrees, which all / some / none
+      // cannot say, while an ellipse is exact algebra and only needs the
+      // cells to be read both ways where it splits one (mkEllipseVsCell).
       const mkShapeKind = (args && args.shape) || "rectangle";
       let mkReadable = !(args && args.feather > 0) && !!mkHit;
-      if (mkShapeKind === "ellipse") mkReadable = false;
       if (mkShapeKind === "custom") {
         // A custom mask counts only when its points really are the four
         // corners of their own box — a diamond has the same box.
@@ -3327,6 +3379,7 @@ function cannedOk(tool, args) {
       // the row has to carry them or no stub can see what that did.
       heldShapes.push(mkHit
         ? { l: mkHit.l, t: mkHit.t, r: mkHit.r, b: mkHit.b,
+            kind: mkShapeKind === "ellipse" ? "ellipse" : "rect",
             mode: String((args && args.mode) || "add").toLowerCase(),
             inverted: !!(args && args.inverted), opacity: 100, expansion: 0,
             readable: mkReadable }

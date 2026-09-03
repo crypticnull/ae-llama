@@ -22,11 +22,11 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `add_keyframe` | Add a keyframe on a layer property at a time (seconds) | yes | host | 1 | 11 |
 | `add_light` | Add a light | yes | host | 1 | 13 |
 | `add_marker` | Add a marker to the comp (omit 'layer') or to a layer | yes | host | 1 | 10 |
-| `add_mask` | Add a mask to a layer ('hide the bottom half') | yes | host | 1 | 63 |
+| `add_mask` | Add a mask to a layer ('hide the bottom half') | yes | host | 1 | 69 |
 | `add_null` | Add a null layer (use as a controller or parent) | yes | host | 1 | 8 |
 | `add_shape_content` | Add content INSIDE a shape layer: kinds group, rectangle, ellipse, star, polygon, path, fill, stroke, gradient_fill, gradient_stroke, repeater, trim_paths, merge_paths, offset_paths, rounded_corners, pucker_bloat, twist, zigzag | yes | host | 1 | 12 |
 | `add_shape_layer` | Add a shape layer (rectangle, ellipse, polygon, or star) | yes | host | — | 4 |
-| `add_solid` | Add a solid layer | yes | host | — | 63 |
+| `add_solid` | Add a solid layer | yes | host | — | 64 |
 | `add_text_animator` | Animate a text layer PER CHARACTER (typewriter, cascade, wiggle) — an animator holds the properties, a selector picks which characters get them | yes | host | 1 | 10 |
 | `add_text_layer` | Add a text layer to a comp | yes | host | 1 | 8 |
 | `add_to_render_queue` | Add a comp to the render queue WITHOUT rendering it | yes | host | 1 | 3 |
@@ -44,8 +44,8 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `create_comp` | Create a composition and open it | yes | host | 1 | 36 |
 | `create_folder` | Create a project-panel folder | yes | host | 1 | 10 |
 | `delete_item` | Delete a project item | yes | host | 1 | 45 |
-| `delete_layer` | Delete a layer from a comp | yes | host | — | 26 |
-| `delete_mask` | REMOVE one mask from a layer by name or 1-based index ('remove that mask'); omit 'mask' when the layer has exactly one | yes | host | 1 | 29 |
+| `delete_layer` | Delete a layer from a comp | yes | host | — | 27 |
+| `delete_mask` | REMOVE one mask from a layer by name or 1-based index ('remove that mask'); omit 'mask' when the layer has exactly one | yes | host | 1 | 31 |
 | `distribute_property` | Distribute a property VALUE across layers | yes | host | 1 | 5 |
 | `duplicate_comp` | Duplicate a composition | yes | host | 2 | 5 |
 | `duplicate_layer` | Duplicate a LAYER inside its comp (use duplicate_comp only for whole compositions) | yes | host | 2 | 12 |
@@ -84,7 +84,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `set_layer_3d` | Enable/disable a layer's 3D switch | yes | host | 1 | 8 |
 | `set_layer_parent` | Parent layers to another layer (omit/null parent to unparent) | yes | host | 4 | 18 |
 | `set_layer_timing` | Retime a layer on the TIMELINE, in comp seconds: startTime slides the whole layer ('push it back two seconds' = startTime: current + 2), inPoint/outPoint TRIM its ends without sliding it | yes | host | — | 5 |
-| `set_mask` | Edit an EXISTING mask: mode, feather, expansion, opacity, inverted, rename | yes | host | 1 | 11 |
+| `set_mask` | Edit an EXISTING mask: mode, feather, expansion, opacity, inverted, rename | yes | host | 1 | 13 |
 | `set_mask_path` | Replace or ANIMATE a mask's path | yes | host | 1 | 7 |
 | `set_property` | Set ANY property by path — the universal fallback when no dedicated tool fits | yes | host | 4 | 10 |
 | `set_solid_color` | Change a SOLID layer's colour (this is the ONLY way — a solid's colour is not a property you can set_property) | yes | host | 1 | 5 |
