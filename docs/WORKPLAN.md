@@ -2454,19 +2454,47 @@ has been running it by hand all day and should not have to again.
   measured limit in `docs/PREMIERE-PLATFORM.md` with what was tried, and
   move to the next failing step rather than looping on it forever.
 
-### Known open failures as of 2026-09-02 18:00
+### Known open failures as of 2026-09-03 03:20
 
-- `project`: Premiere launched with no argument sits on the Home screen
-  and never opens a project (`app.project.name` empty after 30 s).
-  `app.newProject` returned without writing a file. The step now tries
-  `app.newProject`, then `qe.project.newProject`, verifies by reading
-  the project NAME back, and saves so later runs launch straight into
-  it. UNCONFIRMED - the next run is its first test.
-- `sequence`: `newBarsAndTone` answered "Illegal Parameter type" to
-  timebases 25/24/30 fps expressed in ticks per frame. A seed-still
-  route (`importFiles` + `createNewSequenceFromClips`) was added ahead
-  of it. UNCONFIRMED.
-- `history` and `mogrt` were blocked by the two above, not measured.
+- ~~`project`~~ **PASSES 2026-09-03**, and the fix was the opposite of
+  what the old note assumed. Measured over four runs on 26.3.2: a
+  scratch `.prproj` handed to Premiere on the COMMAND LINE is not
+  opened at all (`app.project.name` empty for the full 30 s wait)
+  whether the file was written by a clean close or left by a killed
+  instance, and on the way out Premiere raises "This file path does not
+  exist on disk at this location." about a file that IS on disk - an
+  unanswerable modal, so the close times out and the instance is
+  forced. `app.newProject` then refuses the taken path (returns FALSE,
+  leaves an `AELL_PROBE_SCRATCH<guid>` sidecar). So saving the scratch
+  "for next time" is what broke every run after the first. The runner
+  now archives `AELL_PROBE_SCRATCH*` into `probes\stale` and launches
+  PLAIN; the battery creates and saves a fresh project each time. Also
+  measured: `app.openDocument` EXISTS on 26.3.2 (`hostFacts` records it
+  now) and the project step uses it, with all four
+  suppress-the-dialog flags, whenever the path is already taken.
+  Confirmed from the exact state that had failed twice: `project` ok,
+  and Premiere closed by itself.
+- ~~`history`~~ **MEASURED 2026-09-03** (it was only ever blocked by
+  `project`): three `rootItem.createBin` calls, bins created, and the
+  cleanup removed them. The 1-vs-3-undo-entries question still needs a
+  human to look at the History panel - the step says so itself.
+- `sequence`: STILL FAILING, and the next 12b pass's item. Two causes,
+  and the first is new: **door 3 drops half the job.** The job carries
+  `seedMedia` and `readyTimeoutMs`, but the `battArgs` whitelist in
+  `probe/com.cptk.aellama.harness/index.html:110` (and the same
+  hand-maintained copy in `probe/com.cptk.aellama.probe/index.html:639`)
+  forwards neither - so the dialog-free primary route
+  (`importFiles` + `createNewSequenceFromClips`) has NEVER RUN on any
+  unattended run, and does not even appear in the step's `tried` list.
+  Second: the bars route's error is misattributed. The cleanup removes
+  three `AELL PROBE BARS` items every run, so `newBarsAndTone`
+  SUCCEEDS at all three timebases and **`createNewSequenceFromClips`
+  is what answers "Illegal Parameter type"** - which means forwarding
+  `seedMedia` alone may not be enough, because the seed route ends in
+  that same call. Fix the dropped args first (a whitelist that silently
+  loses fields is the defect either way), then measure what
+  `createNewSequenceFromClips` actually wants.
+- `mogrt` is blocked by `sequence`, not measured.
 
 ## Out of scope for the local session (remote builds these)
 

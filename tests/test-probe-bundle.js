@@ -515,5 +515,68 @@ function hostsIn(xml) {
          "both ends agree has two chances to break");
 }
 
+// ------------------------- 5. the probe has to survive its OWN last run
+//
+// Measured 2026-09-03 on Premiere 26.3.2, three unattended runs back to
+// back:
+//
+//   * a scratch .prproj handed to Premiere on the command line is NOT
+//     opened. app.project.name was still empty after the full 30s wait,
+//     and on the way out Premiere raised "This file path does not exist
+//     on disk at this location. <that path>" about a 14216-byte file
+//     that WAS on disk. Nobody can answer that modal unattended, so the
+//     close timed out and the instance had to be forced.
+//   * the same with a scratch written by a CLEAN close: identical, so
+//     the file's history is not the discriminator.
+//   * the same run with the file moved aside: app.newProject created
+//     the project, `history` measured for the first time, and Premiere
+//     closed by itself.
+//
+// app.newProject will not overwrite a taken path (it returns false and
+// leaves an AELL_PROBE_SCRATCH<guid> sidecar), so a probe that saves a
+// scratch project for "next time" poisons its own next run: the first
+// run of the night passes and every one after it fails. That is the
+// exact shape an unattended loop must never inherit, and it is what
+// these assertions hold shut.
+{
+  const runner = read(path.join(ROOT, "scripts", "run-ppro-probe.ps1"));
+  // Line-based, like the Set-Content check above: a comment EXPLAINING
+  // that we no longer pass a project path reads, to a regex, exactly
+  // like a line passing one.
+  const runnerCode = runner.split(/\r?\n/)
+    .filter(function (l) { return !/^\s*#/.test(l); }).join("\n");
+
+  const launches = runnerCode.match(/Start-Process[^\n]*\$PremierePath[^\n]*/g) || [];
+  assert(launches.length > 0, "run-ppro-probe.ps1 launches Premiere");
+  assert(launches.filter(function (l) { return /-ArgumentList/.test(l); }).length === 0,
+         "and never hands it a project path: Premiere does not open one " +
+         "given on the command line, it raises a modal nobody can answer");
+
+  const idxFree = runnerCode.indexOf("AELL_PROBE_SCRATCH*");
+  const idxLaunch = runnerCode.indexOf("Start-Process -FilePath $PremierePath");
+  assert(idxFree !== -1,
+         "it clears the scratch path it is about to ask for");
+  assert(idxFree !== -1 && idxLaunch !== -1 && idxFree < idxLaunch,
+         "and does it BEFORE the launch, so app.newProject meets a free " +
+         "path instead of returning false against a taken one");
+
+  const jsx = stripJs(read(path.join(PROBE, "jsx", "probe.jsx")));
+  const flat = jsx.replace(/\s+/g, " ");
+  assert(/app\.openDocument\(/.test(flat),
+         "probe.jsx opens an EXISTING scratch project with openDocument, " +
+         "the call newProject cannot stand in for");
+  const call = /app\.openDocument\(([^)]*)\)/.exec(flat);
+  assert(call && (call[1].match(/true/g) || []).length === 4,
+         "and passes all four suppress-the-dialog flags, because a modal " +
+         "with nobody at the keyboard is a hang, not an error");
+  assert(flat.indexOf("app.openDocument(") !== -1 &&
+         flat.indexOf("app.openDocument(") < flat.indexOf("app.newProject("),
+         "and tries it BEFORE creating, which is the order the failure " +
+         "was measured in");
+  assert(/d\.openDocument = AELLP_typeOf/.test(jsx) &&
+         /d\.newProject = AELLP_typeOf/.test(jsx),
+         "hostFacts records whether each of the two routes exists at all");
+}
+
 console.log(failed ? "\nTESTS FAILED" : "\nALL TESTS PASSED");
 process.exitCode = failed ? 1 : 0;

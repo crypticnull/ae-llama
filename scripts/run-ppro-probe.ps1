@@ -271,49 +271,54 @@ if ($running.Count -gt 0) {
     Good 'Premiere closed.'
 }
 
-# Launch Premiere PLAIN, with no project argument.
+# Launch Premiere PLAIN, and FREE THE SCRATCH PATH before doing it.
 #
-# Measured 2026-09-02: app.newProject returned but wrote no file (its
-# name and path both read back empty), so Premiere kept a path in its
-# recent list that does not exist and greeted the NEXT launch with
-# "the file path does not exist at this location" - a modal, on open,
-# with nobody there. Handing Premiere a project path is a liability with
-# no upside now: waitForReady plus the reuse-the-open-empty-project rule
-# gets a usable project without creating one.
-# A scratch project that REALLY EXISTS is passed on the command line; a
-# stale or empty one is deleted first.
+# Measured 2026-09-03 on 26.3.2, three runs back to back, which settled
+# an argument the comment here used to have with itself:
 #
-# Both halves were learned the hard way on 2026-09-02. app.newProject
-# returned without writing a file, so Premiere kept a dead path in its
-# recent list and greeted the next launch with "the file path does not
-# exist at this location" - a modal, on open, with nobody there. Then
-# launching PLAIN turned out to be worse: Premiere sits on the Home
-# screen and never opens a project at all, so app.project.name stayed
-# empty for the full 30s wait and every project-dependent step failed.
+#   A. scratch file present, handed to Premiere on the command line ->
+#      Premiere does NOT open it. app.project.name was still empty
+#      after the full 30s wait, every project-dependent step failed
+#      with it, and on the way out Premiere put up "This file path
+#      does not exist on disk at this location. <that path>" - about a
+#      14216-byte file that WAS on disk. Nobody can answer that modal
+#      unattended, so the close timed out and the instance was forced.
+#   B. the SAME thing with a scratch written by a clean close, not by a
+#      killed one -> identical. So the file's history is not the
+#      discriminator; handing Premiere a project path simply does not
+#      open it here.
+#   C. the same run with the file moved aside -> app.newProject created
+#      the project, save() wrote it, `history` measured for the first
+#      time (3 bins), and Premiere closed by itself.
 #
-# So: create it once (the battery does that and saves it), and from then
-# on hand it to Premiere directly.
-$haveScratch = $false
-if (Test-Path $scratch) {
-    $size = (Get-Item $scratch).Length
-    if ($size -lt 1024) {
-        Say "Deleting a stale scratch project ($size bytes) - Premiere would"
-        Say 'greet the next launch with a "file path does not exist" modal.'
-        Remove-Item $scratch -Force -ErrorAction SilentlyContinue
-    } else {
-        $haveScratch = $true
+# app.newProject will not overwrite a path that is taken (it returned
+# FALSE and left an AELL_PROBE_SCRATCH<guid> sidecar behind), so the
+# scratch file is not an asset to carry forward - it is the thing that
+# breaks the NEXT run. Archive it, never reuse it, and let the battery
+# create a fresh one every time.
+$stale = Join-Path $probeData 'stale'
+$leftovers = @(Get-ChildItem -LiteralPath $probeData -File -ErrorAction SilentlyContinue |
+               Where-Object { $_.Name -like 'AELL_PROBE_SCRATCH*' })
+if ($leftovers.Count -gt 0) {
+    New-Item -ItemType Directory -Force -Path $stale | Out-Null
+    foreach ($f in $leftovers) {
+        # These are this script's own throwaways in its own folder, and
+        # they are MOVED, not deleted, so a run that wants to look at
+        # what the last one wrote still can.
+        try {
+            Move-Item -LiteralPath $f.FullName `
+                      -Destination (Join-Path $stale $f.Name) -Force -ErrorAction Stop
+        } catch {
+            Remove-Item -LiteralPath $f.FullName -Force -ErrorAction SilentlyContinue
+        }
     }
+    Say ('Archived ' + $leftovers.Count + ' scratch file(s) from an earlier run into ' + $stale)
 }
 # -PassThru so the PID is known. Everything that force-closes below
 # targets THIS process and no other: an instance the owner started, with
 # their own work in it, must never be killed by this script.
-if ($haveScratch) {
-    Say 'Launching Premiere with the scratch project...'
-    $ours = Start-Process -FilePath $PremierePath -ArgumentList @($scratch) -PassThru
-} else {
-    Say 'Launching Premiere (no scratch project yet: the battery makes one)...'
-    $ours = Start-Process -FilePath $PremierePath -PassThru
-}
+Say 'Launching Premiere (plain: the battery creates the scratch project).'
+$ours = Start-Process -FilePath $PremierePath -PassThru
 
 # ------------------------------------------------------------- wait
 Say ("Waiting up to " + $TimeoutSec + "s for a result (first launch is slow)...")

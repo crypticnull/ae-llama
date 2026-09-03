@@ -295,6 +295,49 @@ truth was that `probe.jsx` had never been evaluated. It refuses to run
 now rather than blame the engine, and the grader treats a skipped soak
 as unmeasured instead of failed.
 
+### 2026-09-03 - a project on the command line is NOT a way to open one
+
+Four unattended runs of `scripts\run-ppro-probe.ps1` on **26.3.2 / CEP
+12.0.1**, artifacts in `docs/measured/ppro-probe-2026-09-03-*.json`.
+They were a controlled comparison, run by run:
+
+| run | scratch `.prproj` on disk | launched with it | `project` step |
+|---|---|---|---|
+| 0311 | yes (left by a killed instance) | yes | FAIL |
+| 0314 | no (moved aside) | no | **ok** - created + saved |
+| 0316 | yes (written by a CLEAN close) | yes | FAIL |
+| 0320 | yes, archived by the fix | no | **ok** - created + saved |
+
+Measured, all MEASURED-grade:
+
+- **Premiere does not open a project handed to it as its only
+  command-line argument.** `app.project.name` was still empty after the
+  full 30 s `waitForReady`, and `app.project.rootItem` threw
+  `null is not an object` - it sits on the Home screen. Runs 0311 and
+  0316 differ only in who wrote the file, so a damaged or half-written
+  project is NOT the explanation.
+- **What it does instead is raise a modal that is wrong on its face:**
+  `This file path does not exist on disk at this location.` naming a
+  path that holds a 14216-byte valid-gzip `.prproj`. It carries no
+  answerable button the dialog harvester can match, so an unattended
+  close times out and the instance has to be forced.
+- **`app.newProject(path)` refuses a path that is already taken** -
+  returns `false`, leaves `app.project.name` empty, and drops a
+  `AELL_PROBE_SCRATCH<guid>` sidecar next to the target. Against a FREE
+  path it creates the project, and `app.project.save()` then writes it.
+- **`app.openDocument` exists on this build** (`typeof` is `function`;
+  `hostFacts` records it and `app.newProject` from 2026-09-03 on). It
+  is the only project-opening call with suppress-the-dialog flags, so
+  it is what the probe uses when the path is already taken.
+- **`app.project.rootItem.createBin` works** - `history` measured for
+  the first time on 0314 (three bins created, cleanup removed them).
+  Whether three `createBin` calls make one History entry or three is
+  still unmeasured: it needs a human at the History panel.
+
+Consequence for anything that has to drive Premiere unattended: get the
+project from ExtendScript, never from the command line, and never
+inherit the last run's project file.
+
 ### The rest
 
 Not yet run. P0 writes into `%APPDATA%\AE-Llama\probes\`:

@@ -185,6 +185,12 @@ AELLP_PROBES.hostFacts = function () {
   // Premiere-shaped surface.
   d.enableQE = AELLP_typeOf("app.enableQE");
   d.project = AELLP_typeOf("app.project");
+  // The two routes to HAVING a project, and they are not
+  // interchangeable: newProject refuses a path that is already taken
+  // (measured 2026-09-03), openDocument is the one for a file that
+  // exists and the only one with suppress-the-dialog flags.
+  d.newProject = AELLP_typeOf("app.newProject");
+  d.openDocument = AELLP_typeOf("app.openDocument");
   d.projectName = AELLP_safe(function () { return app.project.name; });
   d.projectPath = AELLP_safe(function () { return app.project.path; });
   d.activeSequence = AELLP_safe(function () {
@@ -591,10 +597,74 @@ AELLP_PROBES.battery = function (args) {
       return nameNow();
     }
 
-    if (typeof app.newProject === "function") {
+    /*
+     * THE PATH MAY ALREADY BE TAKEN, and that is not a small detail:
+     * measured 2026-09-03 on 26.3.2, app.newProject against an existing
+     * file returns FALSE, leaves app.project.name empty, and drops an
+     * AELL_PROBE_SCRATCH<guid> sidecar in the folder. Three runs in a
+     * row failed that way before anyone looked at the folder.
+     *
+     * A file that exists wants openDocument, not newProject -- and
+     * openDocument is the better unattended call anyway, because it
+     * takes four suppress-the-dialog flags and this runner's whole
+     * contract is that no modal ever appears.
+     */
+    var scratchFile = null;
+    try { scratchFile = new File(args.scratchProject); } catch (eF) { scratchFile = null; }
+    var pathWasTaken = !!(scratchFile && scratchFile.exists);
+
+    if (pathWasTaken) {
+      if (typeof app.openDocument === "function") {
+        try {
+          /* (path, suppressConversion, bypassLocateFile, bypassWarning,
+              suppressLoadingProjectManager) - every one of them a modal
+              that would hang an unattended run. */
+          var opened = app.openDocument(args.scratchProject,
+                                        true, true, true, true);
+          got = settle(8000);
+          tried.push({ how: "app.openDocument [the file already existed]",
+                       ok: !!got,
+                       error: got ? null
+                                  : ("returned " + String(opened) +
+                                     " but app.project.name is still empty") });
+        } catch (eOpen) {
+          tried.push({ how: "app.openDocument [the file already existed]",
+                       ok: false, error: AELLP_say(eOpen) });
+        }
+      } else {
+        tried.push({ how: "app.openDocument [the file already existed]",
+                     ok: false, error: "not a function in this host" });
+      }
+
+      if (got) { gotVia = "opened the existing scratch project"; }
+
+      /*
+       * Still nothing, so the file is only in the way. It is THIS
+       * script's own throwaway at a path this script chose, never the
+       * owner's project, so move it aside and let the create route
+       * below run against a free path. Renamed and not deleted: the
+       * run that wrote it may be worth reading later.
+       */
+      if (!got) {
+        try {
+          var aside = scratchFile.name + ".stale-" +
+                      String(new Date().getTime());
+          var moved = scratchFile.rename(aside);
+          tried.push({ how: "moved the existing file aside as " + aside,
+                       ok: !!moved,
+                       error: moved ? null : "rename refused" });
+        } catch (eMove) {
+          tried.push({ how: "moved the existing file aside",
+                       ok: false, error: AELLP_say(eMove) });
+        }
+      }
+    }
+
+    if (!got && typeof app.newProject === "function") {
       try {
         var ret = app.newProject(args.scratchProject);
         got = settle(8000);
+        if (got) { gotVia = "created"; }
         tried.push({ how: "app.newProject", ok: !!got,
                      error: got ? null
                                 : ("returned " + String(ret) +
@@ -603,7 +673,9 @@ AELLP_PROBES.battery = function (args) {
         tried.push({ how: "app.newProject", ok: false,
                      error: AELLP_say(eNew) });
       }
-    } else {
+    } else if (!got) {
+      /* Only a REAL gap gets reported. Saying "not a function" after
+         openDocument has already answered would be a false row. */
       tried.push({ how: "app.newProject", ok: false,
                    error: "not a function in this host" });
     }
@@ -617,6 +689,7 @@ AELLP_PROBES.battery = function (args) {
         if (qe && qe.project && typeof qe.project.newProject === "function") {
           qe.project.newProject(args.scratchProject);
           got = settle(8000);
+          if (got) { gotVia = "created via QE"; }
           tried.push({ how: "qe.project.newProject [unsupported API]",
                        ok: !!got });
         } else {
@@ -644,7 +717,7 @@ AELLP_PROBES.battery = function (args) {
       } catch (eSave) { savedTo = "save failed: " + AELLP_say(eSave); }
     }
 
-    return { via: got ? "created" : "none",
+    return { via: gotVia,
              name: got,
              path: AELLP_safe(function () { return app.project.path; }),
              items: AELLP_safe(function () {

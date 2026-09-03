@@ -16187,3 +16187,156 @@ the suite's own `ST ` namespace, and the suite's bottom-of-run check
 confirmed nothing of it remains (the new masks all live on `ST Erase`
 and `ST Mask Off`, which the suite deletes itself). No llama-server, no
 ComfyUI.
+
+## 2026-09-03 (local, real AE + real Premiere) - WORKPLAN 12b: the probe could only ever run ONCE (no bump)
+
+**Item:** section 12b, drive the Premiere P0 probe to green. Taken
+because the alternation rule says so: the last log entry (0.11.27) was
+an AE pass, not a 12b one. Harness first, as always -
+`scripts/run-ae-selftest.ps1` **674/674 PASSED**, so section 1 was
+green and the queue moved on.
+
+### What the first run showed
+
+`project` FAIL, `sequence` FAIL, `history` skipped, `mogrt` FAIL - and
+the close timed out on a dialog no rule matched:
+
+    This file path does not exist on disk at this location.
+    C:\Users\mr\AppData\Roaming\AE-Llama\probes\AELL_PROBE_SCRATCH.prproj
+
+The file was on disk: 14216 bytes, first four bytes `1F 8B 08 00`, a
+valid gzip. So the message is false on its face, and the instance had
+to be forced.
+
+### The measurement, before any fix
+
+The obvious deduction - "the scratch project is corrupt, a killed
+instance left it half-written" - is WRONG, and one run settled it.
+Three runs, changing one thing at a time:
+
+| run | scratch on disk | launched with it | `project` |
+|---|---|---|---|
+| 0311 | yes, left by a killed instance | yes | FAIL |
+| 0314 | no, moved aside by hand | no | **ok** (created + saved) |
+| 0316 | yes, written by run 0314's CLEAN close | yes | FAIL |
+
+0311 and 0316 differ only in who wrote the file, and they fail
+identically. So the file's history is not the discriminator:
+**Premiere 26.3.2 does not open a project handed to it as a
+command-line argument at all.** `app.project.name` stayed empty for the
+full 30 s `waitForReady` and `app.project.rootItem` threw
+`null is not an object` - it sits on the Home screen and eventually
+raises that modal.
+
+Two more facts fell out of the same three runs:
+
+- **`app.newProject(path)` refuses a path that is already taken.** It
+  returns `false`, leaves the project name empty, and drops an
+  `AELL_PROBE_SCRATCH<guid>` sidecar next to the target. The folder had
+  three of those, one per failed run, which is what pointed at the
+  cause in the first place.
+- Against a FREE path it works, and `save()` writes it (run 0314).
+
+So the design in the runner's own comment - "create it once, and from
+then on hand it to Premiere directly" - is what broke every run after
+the first. The probe poisoned its own next run: the first pass of the
+night passes and no later one can. That is exactly the shape an
+unattended loop must never inherit, and it is why the owner saw it fail
+by hand all day.
+
+### The fix
+
+One root cause, both halves of it:
+
+- `scripts/run-ppro-probe.ps1` **launches Premiere PLAIN, always**, and
+  **frees the scratch path first** - every `AELL_PROBE_SCRATCH*` file
+  (the project and the guid sidecars) is MOVED into `probes\stale`, not
+  deleted, and the count is printed. The old size heuristic
+  (`< 1024 bytes = stale`) is gone: it passed a 14216-byte file that
+  Premiere then refused, so it was never the discriminator.
+- `probe/com.cptk.aellama.probe/jsx/probe.jsx`'s `project` step no
+  longer treats `newProject` as the only route. When the scratch path
+  is already taken it tries **`app.openDocument(path, true, true, true,
+  true)`** - four suppress-the-dialog flags, which is the whole reason
+  to prefer it unattended - and only then moves the file aside and
+  creates. The probe is self-sufficient again: a human running the
+  visible panel does not go through the PowerShell runner and would hit
+  the same wall.
+- `hostFacts` now records `app.newProject` and `app.openDocument`.
+  **`openDocument` EXISTS on 26.3.2** (`function`) - a route nobody had
+  measured.
+- Two smaller honesty fixes in the same step: `via` reports how the
+  project was actually obtained (`created` / `opened the existing
+  scratch project` / `created via QE`) instead of always saying
+  "created", and the `app.newProject: not a function in this host` row
+  is now gated on actually having needed it - after `openDocument`
+  answers, that row was a false statement about the host.
+
+### Verification
+
+- **Confirm run 0320, from the exact state that had failed twice** (the
+  stale scratch still on disk): `Archived 3 scratch file(s)`,
+  `project` **ok** (created + saved), **`history` ok** - measured for
+  the first time, three `createBin` bins, cleanup removed them - and
+  **`Premiere closed.`** by itself, no modal, no forced kill.
+- The five lints 12b requires before a push: `test-es3-syntax`,
+  `test-es3-ternary`, `test-powershell-syntax` (pwsh present, so it did
+  NOT skip), `test-probe-bundle`, `test-manifest-xml` - all green.
+- **Stub back-fill: `tests/test-probe-bundle.js` +8 assertions**, a new
+  section 5, so this class is caught with no Premiere at all: the
+  runner never passes `-ArgumentList` on the Premiere launch; it frees
+  `AELL_PROBE_SCRATCH*` and does it BEFORE the launch; `probe.jsx`
+  reaches for `openDocument`, with all four flags, ahead of
+  `newProject`; and `hostFacts` records both routes. **6 of the 8 are
+  RED against the reverted sources** (checked by `git checkout HEAD --`
+  on the two files and re-running). The runner half is read
+  line-by-line with comment lines stripped, the idiom the Set-Content
+  check above it already uses - a comment explaining that we no longer
+  pass a project path reads, to a regex, exactly like a line passing
+  one.
+- AE harness re-checked at the top of the pass: **674/674**. Nothing in
+  `extension/` was touched, so it cannot have moved.
+
+### NOT bumped
+
+Deliberate, and it is 12b's own rule: the probe is not shipped and
+`extension/` is untouched, so a bump would push a no-op update to every
+installed panel.
+
+### Filed for the next 12b pass, in priority order
+
+1. **`sequence` still fails, and door 3 DROPS HALF THE JOB.** The job
+   file carries `seedMedia` and `readyTimeoutMs`; the `battArgs`
+   whitelist at `probe/com.cptk.aellama.harness/index.html:110`
+   forwards neither, and the visible panel keeps its own
+   hand-maintained copy of the same list at
+   `probe/com.cptk.aellama.probe/index.html:639`. So the step's
+   dialog-free PRIMARY route (`importFiles` +
+   `createNewSequenceFromClips`) has never run on any unattended run -
+   it does not even appear in the `tried` list, which is how it hid.
+   A whitelist that silently loses fields is the defect whatever it
+   costs, so fix it first, then re-measure.
+2. **The bars route's error is misattributed, and it changes the plan.**
+   `cleanup` removes three `AELL PROBE BARS` items every single run, so
+   `newBarsAndTone` SUCCEEDS at 25, 24 and 30 fps and
+   **`createNewSequenceFromClips` is the call that answers "Illegal
+   Parameter type"** - the `tried` rows blame the pair. That means (1)
+   alone may not turn `sequence` green, because the seed route ends in
+   the same call. Measure what `createNewSequenceFromClips` actually
+   wants before writing more routes.
+3. `mogrt` is blocked by `sequence` and stays unmeasured.
+4. **One thing that needs a human, not a pass:** whether three
+   `createBin` calls produce one History entry or three. The step
+   prints the instruction; nobody can read the History panel from a
+   script.
+
+### Machine state
+
+**After Effects was never closed and its project was never closed** -
+the only AE work this pass did was the read-only 674/674 harness run at
+the start. Premiere was launched and closed four times by
+`run-ppro-probe.ps1`, which is what that script does; the last close
+was Premiere's own, not a forced kill. Everything mutating happened in
+`%APPDATA%\AE-Llama\probes\AELL_PROBE_SCRATCH.prproj`; the earlier
+scratch files are in `probes\stale`, moved rather than deleted. No
+llama-server, no ComfyUI.
