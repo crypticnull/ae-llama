@@ -2673,8 +2673,23 @@
                    inverted: true, feather: 50 };
         },
         check: function (d) {
-          return !d.warning || "an inverted mask was warned about: " +
-                 d.warning;
+          // Not an ERASURE -- that is what this step was written to
+          // prove. But "alpha is unchanged from those masks' own result"
+          // is the definition of a no-op, and the step used to require a
+          // bare ok for it, which is the silent-lie shape one flag over
+          // from the one above. It is named now.
+          var w = d.warning || "";
+          if (/hides ALL of/.test(w)) return "called an erasure: " + w;
+          if (!/changes nothing on 'ST Mask Off'/.test(w)) {
+            return "the no-op was not named: " + w;
+          }
+          if (!/leaves the mask above it exactly as it was/.test(w)) {
+            return "it does not say WHY nothing changed: " + w;
+          }
+          // The feather cannot fade an edge that was never cut, and
+          // "soften it" is the ask that produces this call.
+          return (/no cut edge to fade/.test(w) &&
+                  /Gaussian Blur/.test(w)) || "no way out offered: " + w;
         } },
 
       // ...and a feather on a region that DOES cut something away is the
@@ -2817,10 +2832,11 @@
         } },
 
       // The same call, now with ST InvA above it: measured, it keeps
-      // whatever that mask kept, so the warning must NOT fire. A false
-      // alarm on a legitimate multi-mask build is how a warning stops
-      // being read at all.
-      { name: "…but the same call under a mask says nothing",
+      // whatever that mask kept, so the ERASURE warning must NOT fire. A
+      // false alarm on a legitimate multi-mask build is how a warning
+      // stops being read at all. What it IS, though, is a mask that
+      // changed nothing, and that is its own receipt.
+      { name: "…but the same call under a mask is a no-op, not an erasure",
         tool: "add_mask",
         args: function (ctx) {
           return { comp: ctx.mkComp, layer: "ST Erase", name: "ST InvB",
@@ -2828,8 +2844,15 @@
                    inverted: true };
         },
         check: function (d) {
-          return !d.warning || "warned on a mask that keeps what is " +
-                 "above it: " + d.warning;
+          var w = d.warning || "";
+          if (/hides ALL of/.test(w)) {
+            return "warned on a mask that keeps what is above it: " + w;
+          }
+          if (!/changes nothing on 'ST Erase'/.test(w)) {
+            return "the no-op was not named: " + w;
+          }
+          return /leaves the mask above it exactly as it was/.test(w) ||
+                 "it does not say WHY nothing changed: " + w;
         } },
 
       { name: "…while an inverted INTERSECT empties it whatever is above",
@@ -2844,9 +2867,19 @@
                  "warning: " + (d.warning || "(none)");
         } },
 
-      // One-sided, like every other verdict in this file. Measured
-      // untouched: an inverted 'subtract' subtracts nothing at all.
-      { name: "…and an inverted SUBTRACT, which empties nothing, is silent",
+      // ---- the THIRD outcome: the mask that changes NOTHING -----------
+      // Filed by the erase pass as its top item, and this step used to BE
+      // the defect: it asserted a bare ok for a call measured to do
+      // nothing at all, on the grounds that not-an-erasure means
+      // nothing-to-say. A tool reporting success for a call that changed
+      // nothing is the silent-lie shape, and it is the harder half to
+      // catch — the screen does not change either, so nobody finds out.
+      //
+      // Every verdict below is the same measured run
+      // (scripts/mask-erase-probe.js, AE 26.3x87) read from its other
+      // end: alone against a baseline mean alpha of 1.0, and added
+      // second over a left-half add mask against a baseline of 0.333.
+      { name: "…and an inverted SUBTRACT, which empties nothing, says so",
         tool: "add_mask",
         args: function (ctx) {
           return { comp: ctx.mkComp, layer: "ST Erase", name: "ST SubI",
@@ -2854,8 +2887,133 @@
                    mode: "subtract", inverted: true };
         },
         check: function (d) {
-          return !d.warning || "warned about a mask that changes nothing: " +
+          var w = d.warning || "";
+          if (/hides ALL of/.test(w)) return "called an erasure: " + w;
+          if (!/changes nothing on 'ST Erase'/.test(w)) {
+            return "the no-op was not named: " + w;
+          }
+          if (!/200x200/.test(w)) return "the real size is missing: " + w;
+          if (!/covering NONE of it, so 'subtract' takes nothing away/
+                .test(w)) {
+            return "it blames the wrong setting: " + w;
+          }
+          // An inverted subtract KEEPS the region it is given, so that is
+          // the way out — the mirror of what an inverted add would say.
+          return /part you want to KEEP/.test(w) || "no way out: " + w;
+        } },
+
+      { name: "…a plain INTERSECT over the whole layer says it too",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", name: "ST IntP",
+                   shape: "rectangle", bounds: [0, 0, 200, 200],
+                   mode: "intersect" };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (!/changes nothing on 'ST Erase'/.test(w)) {
+            return "the no-op was not named: " + w;
+          }
+          if (!/'intersect' over the whole layer keeps everything/.test(w)) {
+            return "the reason is wrong: " + w;
+          }
+          return !/inverted/.test(w) ||
+                 "it blames a flag nobody passed: " + w;
+        } },
+
+      { name: "…and so does a plain DARKEN, one flag from an erasure",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", name: "ST DarkP",
+                   shape: "rectangle", bounds: [0, 0, 200, 200],
+                   mode: "darken" };
+        },
+        check: function (d) {
+          return /changes nothing on 'ST Erase'/.test(d.warning || "") ||
+                 "warning: " + (d.warning || "(none)");
+        } },
+
+      // The feather is named for the same reason the erasure warning
+      // names it: "soften it" is the ask that produces this call, and a
+      // mask that cut nothing has no edge for a feather to fade.
+      { name: "…a feather on a no-op mask fades nothing, and says what does",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", name: "ST SubIF",
+                   shape: "rectangle", bounds: [0, 0, 200, 200],
+                   mode: "subtract", inverted: true, feather: 40 };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (!/changes nothing on 'ST Erase'/.test(w)) return "warning: " + w;
+          if (!/no cut edge to fade/.test(w)) {
+            return "it lets the feather look like it worked: " + w;
+          }
+          return (/apply_effect/.test(w) && /Gaussian Blur/.test(w)) ||
+                 "no way out offered: " + w;
+        } },
+
+      // The no-op warning WAITS TO BE ASKED, unlike the erasure warning
+      // beside it. With no region named the region is this tool's own
+      // default, which is the add_mask + set_mask_path placeholder — and
+      // a no-op is cheap where a vanished layer is not. That asymmetry
+      // is the whole reason the two tables are separate.
+      { name: "…but the tool's OWN default region is never called a no-op",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", name: "ST SubID",
+                   mode: "subtract", inverted: true };
+        },
+        check: function (d) {
+          return !d.warning || "the placeholder was warned about: " +
                  d.warning;
+        } },
+
+      // …and a region that really does something stays silent, or the
+      // warning is noise on the tool's ordinary use.
+      { name: "…nor is an inverted subtract that keeps a real half",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", name: "ST SubIH",
+                   shape: "rectangle", bounds: [0, 0, 200, 100],
+                   mode: "subtract", inverted: true };
+        },
+        check: function (d) {
+          return !d.warning || "a real region was warned about: " +
+                 d.warning;
+        } },
+
+      // mode 'none' is deliberately OUT of the table: it changes nothing
+      // at ANY region, so full coverage is not what makes it a no-op,
+      // and a 'none' mask is a path carrier (Stroke, Scribble, a path
+      // expression) that this must not nag about.
+      { name: "…and a 'none' mask, a path carrier, is left alone",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", name: "ST NoneM",
+                   shape: "rectangle", bounds: [0, 0, 200, 200],
+                   mode: "none" };
+        },
+        check: function (d) {
+          return !d.warning || "a path carrier was warned about: " +
+                 d.warning;
+        } },
+
+      // 'lighten' joins 'add' in the WIDER sentence, on a measurement:
+      // over the whole layer both read mean alpha 1.0 alone AND added
+      // second, so "every pixel of it still shows" holds either way.
+      { name: "…while a full-coverage LIGHTEN gets the same receipt as 'add'",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", name: "ST LightA",
+                   shape: "rectangle", bounds: [0, 0, 200, 200],
+                   mode: "lighten" };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (!/covers all of 'ST Erase'/.test(w)) return "warning: " + w;
+          return /every pixel of it still shows/.test(w) ||
+                 "it does not say what survives: " + w;
         } },
 
       // The two REFUSALS either side carried the same additive

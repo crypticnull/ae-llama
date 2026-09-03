@@ -1015,15 +1015,20 @@ assert(r.ok && /hides ALL of 'Solo'/.test(r.data.warning || "") &&
        "blames the flag that did it: " + JSON.stringify(r.ok ? r.data : r.error));
 
 // …and now it is NOT alone. Measured: over an existing add mask, an
-// inverted full-coverage add leaves exactly what that mask kept, so the
-// warning must not fire — a false alarm on a legitimate multi-mask build
-// is how a warning stops being read.
+// inverted full-coverage add leaves exactly what that mask kept — so the
+// ERASURE warning must not fire (a false alarm on a legitimate
+// multi-mask build is how a warning stops being read), but the call is
+// still a provable no-op and gets the third receipt instead.
 r = call("add_mask", { layer: "Solo", name: "Inv2", shape: "rectangle",
                        bounds: [0, 0, 100, 100], inverted: true });
-assert(r.ok && !r.data.warning,
+assert(r.ok && !/hides ALL of/.test(r.data.warning || ""),
        "…but with a mask already above it, the same call keeps whatever " +
-       "that mask kept, so it says nothing: " +
+       "that mask kept, so it is NOT called an erasure: " +
        JSON.stringify(r.ok ? r.data : r.error));
+assert(/changes nothing on 'Solo'/.test(r.data.warning || "") &&
+       /leaves the mask above it exactly as it was/.test(r.data.warning || ""),
+       "…it is called what it is — a no-op — and the reason names what " +
+       "is above it: " + JSON.stringify(r.data));
 
 // 'subtract' does not care what is above it — measured ERASED with the
 // left-half add mask still in place.
@@ -1047,20 +1052,133 @@ assert(r.ok && /hides ALL of 'Solo'/.test(r.data.warning || ""),
        JSON.stringify(r.ok ? r.data : r.error));
 soloMasks._children.length = 0;
 
-// One-sided, the same way the rest of this tool is. Measured untouched:
-// an inverted SUBTRACT subtracts nothing, a plain 'intersect' keeps
-// everything. Neither empties the layer, so neither is warned about here.
+// ---------------------------------------------------------------------
+// 6d. The THIRD outcome of full coverage: the mask that changes NOTHING.
+//
+// This block replaces two more assertions that pinned a defect. They
+// read "an inverted 'subtract' at full coverage subtracts nothing — no
+// erasure warning" and "…and a plain 'intersect' over the whole layer
+// keeps all of it", and both asserted `!r.data.warning` — i.e. they knew
+// the call did nothing at all and required the receipt to say so with a
+// bare ok. Not being an erasure is not the same as being worth nothing
+// to say; a tool reporting success for a call that changed nothing is
+// the silent-lie shape, and it is the harder one to catch because the
+// screen does not change either.
+//
+// Every verdict below is the same measured run (mask-erase-probe.js,
+// AE 26.3x87), read from its OTHER end: alone against a baseline mean
+// alpha of 1.0, and added second over a left-half add mask against a
+// baseline of 0.333.
 r = call("add_mask", { layer: "Solo", name: "SubInv", shape: "rectangle",
                        bounds: [0, 0, 100, 100], mode: "subtract",
                        inverted: true });
-assert(r.ok && !r.data.warning,
-       "an inverted 'subtract' at full coverage subtracts nothing — no " +
-       "erasure warning: " + JSON.stringify(r.ok ? r.data : r.error));
+assert(r.ok && !/hides ALL of/.test(r.data.warning || ""),
+       "an inverted 'subtract' at full coverage subtracts nothing, so it " +
+       "is not an erasure: " + JSON.stringify(r.ok ? r.data : r.error));
+assert(/changes nothing on 'Solo'/.test(r.data.warning || "") &&
+       /100x100/.test(r.data.warning || ""),
+       "…and the receipt says the call did nothing, naming the layer and " +
+       "its real size: " + JSON.stringify(r.data));
+assert(/covering NONE of it, so 'subtract' takes nothing away/
+         .test(r.data.warning || ""),
+       "…blaming the setting that did it, not the mode alone: " +
+       r.data.warning);
+assert(/part you want to KEEP/.test(r.data.warning || ""),
+       "…and pointing at the argument that fixes it — an inverted " +
+       "subtract KEEPS the region it is given: " + r.data.warning);
+assert(!!soloMasks.property("SubInv"),
+       "…and the mask it warns about was really created");
 soloMasks._children.length = 0;
 r = call("add_mask", { layer: "Solo", name: "IntPlain", shape: "rectangle",
                        bounds: [0, 0, 100, 100], mode: "intersect" });
+assert(r.ok && /changes nothing on 'Solo'/.test(r.data.warning || "") &&
+       /'intersect' over the whole layer keeps everything that already showed/
+         .test(r.data.warning || ""),
+       "…and a plain 'intersect' over the whole layer keeps all of it — " +
+       "measured identical to the mask above it, and identical to no " +
+       "mask at all: " + JSON.stringify(r.ok ? r.data : r.error));
+assert(!/inverted/.test(r.data.warning || ""),
+       "…and does not blame a flag that was never passed: " +
+       r.data.warning);
+soloMasks._children.length = 0;
+// 'darken' is the other always-a-no-op mode at full coverage, and the
+// reason it is worth a row of its own is that its INVERTED twin erases
+// the layer — the two sit one flag apart.
+r = call("add_mask", { layer: "Solo", name: "DarkPlain", shape: "rectangle",
+                       bounds: [0, 0, 100, 100], mode: "darken" });
+assert(r.ok && /changes nothing on 'Solo'/.test(r.data.warning || ""),
+       "a plain 'darken' over the whole layer changes nothing either: " +
+       JSON.stringify(r.ok ? r.data : r.error));
+soloMasks._children.length = 0;
+// 'difference' is the one eff-all mode whose no-op depends on being
+// ALONE: measured mean 1.0 alone, but 0.667 over a left-half add mask,
+// because it inverts what that mask kept. So it warns alone…
+r = call("add_mask", { layer: "Solo", name: "DiffAlone", shape: "rectangle",
+                       bounds: [0, 0, 100, 100], mode: "difference" });
+assert(r.ok && /changes nothing on 'Solo'/.test(r.data.warning || ""),
+       "a lone full-coverage 'difference' keeps every pixel: " +
+       JSON.stringify(r.ok ? r.data : r.error));
+// …and says nothing once there is a mask above it to invert. What it
+// then DOES depends on what that mask kept — measured 0.667 over a
+// left-half add mask, and a base that shows everything would come out
+// empty — and neither table can see the base, only whether one exists.
+// Silence is the honest answer for the no-op question; the erasure
+// question is left open and filed.
+r = call("add_mask", { layer: "Solo", name: "DiffSecond", shape: "rectangle",
+                       bounds: [0, 0, 100, 100], mode: "difference" });
 assert(r.ok && !r.data.warning,
-       "…and a plain 'intersect' over the whole layer keeps all of it: " +
+       "…but over an existing mask it really does change the layer, so " +
+       "the no-op warning must not fire: " +
+       JSON.stringify(r.ok ? r.data : r.error));
+soloMasks._children.length = 0;
+// mode 'none' is deliberately OUT of the table: it changes nothing at
+// any region, so full coverage is not what makes it a no-op, and a
+// 'none' mask is a path carrier (Stroke, Scribble, a path expression)
+// that this must not nag about.
+r = call("add_mask", { layer: "Solo", name: "NoneMask", shape: "rectangle",
+                       bounds: [0, 0, 100, 100], mode: "none" });
+assert(r.ok && !r.data.warning,
+       "a 'none' mask is left alone — it is a path carrier, not a " +
+       "mistake: " + JSON.stringify(r.ok ? r.data : r.error));
+soloMasks._children.length = 0;
+// The no-op warning waits to be ASKED, exactly like "cuts nothing away"
+// and unlike the erasure warning. With no bounds the region is this
+// tool's own default, which is the add_mask + set_mask_path placeholder.
+r = call("add_mask", { layer: "Solo", name: "SubInvDefault",
+                       mode: "subtract", inverted: true });
+assert(r.ok && !r.data.warning,
+       "the tool's OWN default region is never called a no-op — a " +
+       "vanished layer is expensive, a no-op is cheap, and that " +
+       "asymmetry is deliberate: " + JSON.stringify(r.ok ? r.data : r.error));
+soloMasks._children.length = 0;
+// A partly covering mask under the same mode really does something.
+r = call("add_mask", { layer: "Solo", name: "SubInvHalf", shape: "rectangle",
+                       bounds: [0, 0, 100, 50], mode: "subtract",
+                       inverted: true });
+assert(r.ok && !r.data.warning,
+       "an inverted subtract over HALF the layer keeps that half — " +
+       "nothing to warn about: " + JSON.stringify(r.ok ? r.data : r.error));
+soloMasks._children.length = 0;
+// A feather cannot rescue a no-op, and "soften it" is the ask that
+// produces one — so the way to actually blur is named, the same way the
+// erasure and "cuts nothing away" warnings name it.
+r = call("add_mask", { layer: "Solo", name: "SubInvSoft", shape: "rectangle",
+                       bounds: [0, 0, 100, 100], mode: "subtract",
+                       inverted: true, feather: 40 });
+assert(r.ok && /changes nothing on 'Solo'/.test(r.data.warning || "") &&
+       /no cut edge to fade/.test(r.data.warning || "") &&
+       /Gaussian Blur/.test(r.data.warning || ""),
+       "a feather on a no-op mask fades nothing, and the receipt names " +
+       "the call that does blur: " + JSON.stringify(r.ok ? r.data : r.error));
+soloMasks._children.length = 0;
+// 'lighten' joins 'add' in the WIDER sentence, on a measurement: over
+// the whole layer both read mean alpha 1.0 alone AND added second, so
+// "every pixel of it still shows" is true either way.
+r = call("add_mask", { layer: "Solo", name: "LightAll", shape: "rectangle",
+                       bounds: [0, 0, 100, 100], mode: "lighten" });
+assert(r.ok && /covers all of 'Solo'/.test(r.data.warning || "") &&
+       /every pixel of it still shows/.test(r.data.warning || ""),
+       "a full-coverage 'lighten' gets the same receipt as 'add': " +
        JSON.stringify(r.ok ? r.data : r.error));
 soloMasks._children.length = 0;
 

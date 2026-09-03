@@ -2938,6 +2938,32 @@ function cannedOk(tool, args) {
         }
         return false;
       };
+      /* The OTHER end of the same measured run: which full-coverage
+       * masks change NOTHING. Worked out here for the same reason, and
+       * the gap it closes is the one the erase pass filed — an inverted
+       * SUBTRACT over the whole layer is a provable no-op and used to
+       * answer a bare ok, here as well as in real AE. 'none' is out
+       * (it changes nothing at any region, and it is a path carrier);
+       * so are 'add'/'lighten' with the region worth everything, which
+       * the wider "cuts nothing away" sentence below answers instead. */
+      const mkNoOp = (covered) => {
+        const m = String((args && args.mode) || "add").toLowerCase();
+        if (m === "none") return "";
+        let eff = covered;
+        if (args && args.inverted) {
+          eff = covered === "all" ? "none" : (covered === "none" ? "all" : "");
+        }
+        if (eff === "all") {
+          if (m === "intersect" || m === "darken") return "always";
+          return (mkAlone && m === "difference") ? "alone" : "";
+        }
+        if (eff === "none") {
+          if (m === "subtract") return "always";
+          if (!mkAlone && (m === "add" || m === "lighten" ||
+                           m === "difference")) return "notAlone";
+        }
+        return "";
+      };
       if (mkSz && Array.isArray(mkB) && mkB.length >= 4) {
         const bl = Math.min(mkB[0], mkB[0] + mkB[2]);
         const br = Math.max(mkB[0], mkB[0] + mkB[2]);
@@ -3000,9 +3026,13 @@ function cannedOk(tool, args) {
       }
       const mkAsked = (Array.isArray(mkB) && mkB.length >= 4) ||
                       (args && args.shape === "custom" && Array.isArray(mkV));
+      // 'lighten' sits with 'add' on a measurement: over the whole layer
+      // both read mean alpha 1.0 alone AND added second, so "every pixel
+      // still shows" holds whether or not the layer already had masks.
       const mkPlain = !(args && args.inverted) &&
                       (!(args && args.mode) ||
-                       String(args.mode).toLowerCase() === "add");
+                       String(args.mode).toLowerCase() === "add" ||
+                       String(args.mode).toLowerCase() === "lighten");
       const mkCovers = !!(mkSz && mkHit && mkHit.l <= 0 && mkHit.t <= 0 &&
                           mkHit.r >= mkSz.width && mkHit.b >= mkSz.height);
       // The other end of that same coverage: the mask that leaves NOTHING.
@@ -3039,6 +3069,30 @@ function cannedOk(tool, args) {
             "{layer: \"" + args.layer + "\", effect: \"Gaussian Blur\"}."
           : mkAll + " — every pixel of it still shows. Pass 'bounds' for " +
             "the part you want to KEEP.";
+        return mkOut;
+      }
+      if (mkCovers && !mkPlain && mkAsked && mkNoOp("all")) {
+        const nWhy = (args && args.inverted)
+          ? "'inverted' turns a mask covering the whole layer into one " +
+            "covering NONE of it, so '" +
+            String((args && args.mode) || "add").toLowerCase() + "' " +
+            (mkNoOp("all") === "notAlone"
+              ? "leaves the mask above it exactly as it was"
+              : "takes nothing away")
+          : "'" + String((args && args.mode) || "add").toLowerCase() +
+            "' over the whole layer keeps everything that already showed";
+        const nFix = (args && args.inverted &&
+                      String(args.mode).toLowerCase() !== "subtract")
+          ? "Pass 'bounds' for the part you want to CUT AWAY."
+          : "Pass 'bounds' for the part you want to KEEP.";
+        mkOut.warning = "That mask changes nothing on '" + args.layer +
+          "' (" + mkSz.width + "x" + mkSz.height + " at x 0 to " +
+          mkSz.width + ", y 0 to " + mkSz.height + "): " + nWhy +
+          (args && args.feather > 0
+            ? ", and the feather has no cut edge to fade — it does not " +
+              "blur the picture. To blur the picture: apply_effect " +
+              "{layer: \"" + args.layer + "\", effect: \"Gaussian Blur\"}. "
+            : ". ") + nFix;
       }
       return mkOut;
     }

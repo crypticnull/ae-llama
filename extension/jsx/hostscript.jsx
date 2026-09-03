@@ -7093,6 +7093,67 @@ function AELL_maskErases(mode, inverted, covered, alone) {
   return "";
 }
 
+/*
+ * The OTHER end of the same measured table: which full-coverage masks
+ * change NOTHING AT ALL. Same arguments, same inversion rule, same
+ * source — scripts/mask-erase-probe.js, AE 26.3x87, nine sample points
+ * per case, read alone (baseline mean 1.0) and again added SECOND over
+ * an add mask on the left half (baseline mean 0.333):
+ *
+ *   region worth EVERYTHING   intersect, darken   keep what already
+ *                                                 showed, whatever is
+ *                                                 above them
+ *                             difference          keeps every pixel, but
+ *                                                 only while it is ALONE
+ *                                                 (over a mask it reads
+ *                                                 0.667 — it inverts it)
+ *   region worth NOTHING      subtract            subtracts nothing,
+ *                                                 whatever is above it
+ *                             add, lighten,       leave what is above
+ *                             difference          them exactly as it was
+ *                                                 — but ONLY when there
+ *                                                 is something above;
+ *                                                 alone they erase
+ *
+ * Returns "always" / "alone" / "notAlone" / "". Nothing answers both
+ * this and AELL_maskErases — a mask cannot both empty a layer and leave
+ * it alone — and "" is the answer for a partly covering mask, an unknown
+ * mode and a layer whose box cannot be read, on the same reasoning as
+ * the erase table: a false "this did nothing" is worse than silence.
+ *
+ * TWO deliberate omissions, both silence:
+ *  - mode 'none' changes nothing at ANY region, so full coverage is not
+ *    what makes it a no-op and this branch would blame the wrong thing.
+ *    A 'none' mask is also a path CARRIER (Stroke, Scribble, a path
+ *    expression), which is a real technique this must not nag about.
+ *  - 'add' and 'lighten' with the region worth everything are NOT here.
+ *    They are no-ops only when alone, but they leave the layer fully
+ *    showing either way (measured mean 1.0 both), so add_mask answers
+ *    them with the wider, older "covers all … cuts nothing away"
+ *    sentence — which stays true when the layer already had masks, and
+ *    which this helper's narrower question cannot say.
+ */
+function AELL_maskNoOp(mode, inverted, covered, alone) {
+  var m = String(mode || "add").toLowerCase();
+  if (m === "none") return "";
+  var eff = covered;
+  if (inverted) {
+    eff = (covered === "all") ? "none" : ((covered === "none") ? "all" : "");
+  }
+  if (eff === "all") {
+    if (m === "intersect" || m === "darken") return "always";
+    if (alone && m === "difference") return "alone";
+    return "";
+  }
+  if (eff === "none") {
+    if (m === "subtract") return "always";
+    if (!alone && (m === "add" || m === "lighten" || m === "difference")) {
+      return "notAlone";
+    }
+  }
+  return "";
+}
+
 /* Bounding box of a vertex list. Exact for the ellipse too: the four
  * points add_mask generates for one ARE its extremes. */
 function AELL_boxOfPoints(pts) {
@@ -7162,6 +7223,7 @@ AELL_TOOLS.add_mask = function (args) {
    * mask from a comp-space one, so refuse with the box in hand — the
    * same grounded shape as every other failed lookup here. */
   var overflow = "", coversAll = "", erases = "", eraseWhy = "", eraseFix = "";
+  var noop = "", noopWhy = "", noopFix = "";
   var hit = AELL_boxOfPoints(shape.vertices);
   if (box && hit) {
     var bRight = AELL_r3(box.left + box.width);
@@ -7244,13 +7306,59 @@ AELL_TOOLS.add_mask = function (args) {
      * with. */
     var asked = (AELLJSON.isArray(args.bounds) && args.bounds.length >= 4) ||
                 (kind === "custom" && AELLJSON.isArray(args.vertices));
+    var modeWord = args.mode ? String(args.mode).toLowerCase() : "add";
+    /* 'lighten' joins 'add' here on a measurement, not a guess: over the
+     * whole layer BOTH read mean alpha 1.0 alone AND added second over
+     * an add mask (M1/M3), i.e. every pixel shows either way. That is
+     * what this sentence claims, and it is why the claim does not need
+     * to know whether the layer already had masks — unlike the narrower
+     * "changes nothing" below, which does. */
     var plain = (!args.inverted) &&
-                (!args.mode || String(args.mode).toLowerCase() === "add");
+                (modeWord === "add" || modeWord === "lighten");
     var covers = (hit.left <= box.left && hit.top <= box.top &&
                   hit.right >= bRight && hit.bottom >= bBottom);
     if (asked && plain && !overflow && covers) {
       coversAll = "That mask covers all of '" + layer.name + "' (" + mine +
         "), so it cuts nothing away";
+    }
+    /* THE THIRD OUTCOME, and the one this branch used to wave through
+     * with a bare ok. A full-coverage mask either empties the layer
+     * (below), leaves it fully showing (above), or changes NOTHING —
+     * and the third was silent, because the "cuts nothing away" branch
+     * requires an uninverted add and so could never reach it.
+     *
+     * Filed by the 0.11.26 pass as its top item, measured in the same
+     * run: `add_mask {bounds: the whole layer, mode: 'subtract',
+     * inverted: true}` is a provable no-op (mean alpha 1.0 alone, and
+     * identical to the mask above it when not alone) and answered ok.
+     * A tool that reports success for a call that did nothing is the
+     * silent-lie shape this project refuses everywhere else, and it is
+     * worse than the erasing twin in one way: nothing on screen changes,
+     * so nobody finds out.
+     *
+     * Gated on `asked`, the same way "cuts nothing away" is and unlike
+     * the erasure warning: with no region named, this tool's own default
+     * IS the layer's box, and add_mask + set_mask_path opens with
+     * exactly that placeholder. A no-op is cheap; a vanished layer is
+     * not. That asymmetry is the whole reason the two are separate. */
+    if (asked && !plain && !overflow && covers) {
+      noop = AELL_maskNoOp(args.mode, args.inverted, "all", aloneOnLayer);
+      if (noop) {
+        noopWhy = args.inverted
+          ? ("'inverted' turns a mask covering the whole layer into one " +
+             "covering NONE of it, so '" + modeWord + "' " +
+             (noop === "notAlone"
+               ? "leaves the mask above it exactly as it was"
+               : "takes nothing away"))
+          : ("'" + modeWord + "' over the whole layer keeps everything " +
+             "that already showed");
+        /* Which argument fixes it depends on which way the mode reads a
+         * region: inverted, everything except 'subtract' HIDES the
+         * region it is given, and everything else KEEPS it. */
+        noopFix = (args.inverted && modeWord !== "subtract")
+          ? "Pass 'bounds' for the part you want to CUT AWAY."
+          : "Pass 'bounds' for the part you want to KEEP.";
+      }
     }
     /* The OTHER end of the same coverage, and the one this branch used to
      * wave through. Its old comment claimed "'subtract', 'intersect' and
@@ -7324,6 +7432,17 @@ AELL_TOOLS.add_mask = function (args) {
   } else if (coversAll) {
     out.warning = coversAll + " — every pixel of it still shows. Pass " +
       "'bounds' for the part you want to KEEP.";
+  } else if (noop) {
+    /* The feather is worth naming for the same reason it is named in the
+     * erasure warning: a feather is what a "soften it" ask reaches for,
+     * and a mask that changes nothing does not change what its feather
+     * does either — there is no cut edge for it to fade. */
+    out.warning = "That mask changes nothing on '" + layer.name + "' (" +
+      mine + "): " + noopWhy + (args.feather > 0
+        ? ", and the feather has no cut edge to fade — it does not blur " +
+          "the picture. To blur the picture: apply_effect {layer: \"" +
+          layer.name + "\", effect: \"Gaussian Blur\"}. "
+        : ". ") + noopFix;
   }
   return AELL_okay(out);
 };

@@ -22,7 +22,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `add_keyframe` | Add a keyframe on a layer property at a time (seconds) | yes | host | 1 | 11 |
 | `add_light` | Add a light | yes | host | 1 | 13 |
 | `add_marker` | Add a marker to the comp (omit 'layer') or to a layer | yes | host | 1 | 10 |
-| `add_mask` | Add a mask to a layer ('hide the bottom half') | yes | host | 1 | 24 |
+| `add_mask` | Add a mask to a layer ('hide the bottom half') | yes | host | 1 | 31 |
 | `add_null` | Add a null layer (use as a controller or parent) | yes | host | 1 | 8 |
 | `add_shape_content` | Add content INSIDE a shape layer: kinds group, rectangle, ellipse, star, polygon, path, fill, stroke, gradient_fill, gradient_stroke, repeater, trim_paths, merge_paths, offset_paths, rounded_corners, pucker_bloat, twist, zigzag | yes | host | 1 | 12 |
 | `add_shape_layer` | Add a shape layer (rectangle, ellipse, polygon, or star) | yes | host | — | 4 |

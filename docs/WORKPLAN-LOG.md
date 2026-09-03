@@ -16014,3 +16014,176 @@ check confirmed nothing of the run's remains. No llama-server, no
 ComfyUI. The throwaway `saveFrameToPng` diagnostics (`aell-png-diag*.jsx`
 in %TEMP%, `logs/png-diag.txt`) were deleted at the end of the pass; the
 probe's own `logs/mask-erase-probe.json` is kept for `--read`.
+
+## 2026-09-03 — the mask that changes nothing and says nothing (0.11.27)
+
+**WORKPLAN 8, the filed #1 from the 0.11.26 pass**, deliberately left out
+of that pass to keep its change set attributable: *"an inverted SUBTRACT
+at full coverage is a provable no-op and is still silent."*
+
+Harness at the start of the pass: **667/667 PASSED**, so the workplan
+item took it rather than a repair.
+
+### There was no new measurement to take — only one to read backwards
+
+`logs/mask-erase-probe.json` (AE 26.3x87, nine sample points per case,
+`sampleImage(postEffect)`) already carried the answer. Its M1 block reads
+each mode alone against a baseline mean alpha of **1.0**, and its M3
+block reads the same mode added SECOND over a left-half add mask against
+a baseline of **0.333**, with a `sameAsBase` flag already computed. The
+erase pass used the rows that came out 0. This pass used the rows that
+came out **identical to the baseline** — the same fourteen measurements,
+the other end:
+
+```
+mode        inv   ALONE          SECOND (base .333)
+add               1.0 no-op      1.0  changed  (reveals everything)
+add|inv           0.0 ERASES     .333 SAME  -> no-op
+subtract          0.0 ERASES     0.0  ERASES
+subtract|inv      1.0 no-op      .333 SAME  -> no-op   <- the filed row
+intersect         1.0 no-op      .333 SAME  -> no-op
+intersect|inv     0.0 ERASES     0.0  ERASES
+lighten           1.0 no-op      1.0  changed  (reveals everything)
+lighten|inv       0.0 ERASES     .333 SAME  -> no-op
+darken            1.0 no-op      .333 SAME  -> no-op
+darken|inv        0.0 ERASES     0.0  ERASES
+difference        1.0 no-op      .667 changed  (INVERTS what is above)
+difference|inv    0.0 ERASES     .333 SAME  -> no-op
+none              1.0 no-op      .333 SAME  -> no-op
+none|inv          1.0 no-op      .333 SAME  -> no-op
+```
+
+Two things fell out of reading it that a deduction would have got wrong:
+
+- **`add` and `lighten` at full coverage are NOT the same fact as the
+  rest.** They read mean 1.0 alone AND added second — the layer ends up
+  fully showing either way — so "every pixel of it still shows" is true
+  whether or not the layer already had masks, while "changes nothing" is
+  true only when alone. They are two different claims, and the existing
+  `coversAll` warning makes the wider one. It was therefore left alone
+  and **widened to `lighten`**, which measures identically and used to
+  fall through to silence.
+- **`difference` is the one mode whose no-op depends on being alone in
+  the eff-all direction** (1.0 alone, 0.667 second — it inverts what the
+  mask above it kept), which is why the table has an `alone` row and not
+  just `always`.
+
+### The change
+
+`AELL_maskNoOp(mode, inverted, covered, alone)` is that table, the exact
+counterpart of `AELL_maskErases` and shaped like it: same arguments, same
+inversion rule, `"always" / "alone" / "notAlone" / ""`, and `""` for
+everything not measured. Nothing answers both helpers.
+
+One new branch in `add_mask`, after the erasure check and the "cuts
+nothing away" check, producing the receipt this class never had:
+
+    That mask changes nothing on 'BG' (1920x1080 at x 0 to 1920, y 0 to
+    1080): 'inverted' turns a mask covering the whole layer into one
+    covering NONE of it, so 'subtract' takes nothing away. Pass 'bounds'
+    for the part you want to KEEP.
+
+- The **reason** names the setting that did it, not the mode alone —
+  the erasure warning's shape, because a reason is all the model acts on.
+- The **way out** is mode-aware and measured: inverted, everything except
+  `subtract` HIDES the region it is handed and everything else KEEPS it,
+  so the sentence says CUT AWAY or KEEP accordingly.
+- With a **feather**, it adds "the feather has no cut edge to fade" and
+  names `apply_effect {effect: "Gaussian Blur"}`. Same reasoning as its
+  two neighbours: "soften it" is the ask that produces this call.
+
+**Gated on `asked`** — the caller named `bounds` or `vertices` — which is
+the *opposite* one-sidedness from the erasure warning beside it, and
+deliberate. With no region named, the tool's own default IS the layer's
+box, and `add_mask` + `set_mask_path` opens with exactly that
+placeholder. A no-op is cheap; a vanished layer is not.
+
+**Two deliberate omissions, both silence, both in the code comment:**
+
+1. **mode `'none'`** changes nothing at ANY region, so full coverage is
+   not what makes it a no-op and this branch would blame the wrong thing.
+   A `none` mask is also a path CARRIER (Stroke, Scribble, a path
+   expression), which is a real technique and must not be nagged about.
+2. **plain `add`/`lighten` at full coverage** — answered by the wider,
+   older sentence, as above.
+
+### Verification
+
+- **Real AE harness 667 -> 674/674 PASSED.** 7 new steps in
+  `extension/js/selftest.js` (inverted subtract, plain intersect, plain
+  darken, the feathered no-op, the unasked default, a half-layer region,
+  `mode: 'none'`, and lighten's wider receipt), and **two existing steps
+  rewritten because they pinned the defect**: "…nor is an inverted one
+  under masks that already keep some" and "…and an inverted SUBTRACT,
+  which empties nothing, is silent" both required a bare `ok` for a call
+  measured to do nothing, on the grounds that not-an-erasure means
+  nothing-to-say.
+- **7 of those steps are RED against the reverted canned host**, checked
+  by reverting `tests/test-self-test.js` alone: the three silence steps
+  pass both ways (correctly), the seven that assert a receipt do not.
+- `tests/test-shape-mask-tools.js` +18 assertions, **9 RED against the
+  reverted host**. **Three OLD assertions were rewritten, not deleted**,
+  because each was half right — they proved the call is not an erasure,
+  which is still true and still worth pinning, and then asserted
+  `!r.data.warning`, which was the defect. They now assert
+  `!/hides ALL of/` AND the no-op receipt.
+- The canned host in `tests/test-self-test.js` grew `mkNoOp`, worked out
+  from the same geometry rather than answering by name — the rule the
+  0.11.20 pass set after the stub could not see the stagger class.
+- Full stub sweep by exit code: 0 red. `docs/CAPABILITIES.md`
+  regenerated (step count).
+- **Zero prompt cost** — host strings and selftest only, no `tools.js`
+  change, so the full prompt stays 58839 (ceiling 59000, headroom 161).
+- `extension/` changed, so BUMPED: 0.11.26 -> **0.11.27**.
+
+### Notes / assumptions
+
+- **Assumed: WARN, and only when asked.** The erasure warning fires
+  unasked; this one waits. Stated in the code with the reason (cost
+  asymmetry), reversible in one condition if the owner disagrees.
+- **`lighten` joining the `coversAll` sentence is a behaviour widening,
+  not just a new branch.** It is measured, but it is the one change here
+  that touches a message that already shipped.
+- Mask OPACITY is still not read, same as the erase pass: `add_mask`
+  never sets it, `set_mask` can lower it afterwards, nothing re-checks.
+
+### Filed for later passes, in priority order
+
+1. **Neither mask table can see the mask ABOVE, only whether one
+   exists** — and one measured row needs it. A plain full-coverage
+   `difference` added over a mask reads 0.667 over a left-half base
+   (it inverts it), but over a base that shows everything it would come
+   out EMPTY, and `AELL_maskErases` answers `""` for that row, so it
+   would be a silent erasure. Same shape for `add`/`lighten` at full
+   coverage, which silently UNDO whatever the masks above them hid —
+   today they get "every pixel still shows", which is true but does not
+   say that the other masks stopped working. Both need a base the probe
+   never varied (it used one left-half add mask), so this is a
+   measurement pass before it is a code pass.
+2. **Row 36 vague is the last open HARM in the section 8 matrix** — the
+   model over-builds a `CTRL` null rig for a one-line shadow ask, layer
+   count 8 -> 9. Prompt-side, and headroom is 161.
+3. `comp.saveFrameToPng` writing nothing is still unexplained (0.11.26
+   filed it; nothing calls it, but it is the natural instrument for any
+   pixel check).
+4. Row 30's typo still burns six `center_anchor_point` calls before the
+   grid_layout that works. Passes, so it is cost and not harm.
+5. Everything else from the 2026-09-03 lists is unchanged: the
+   `distribute_property` mutate-then-throw hole, a bad VALUE not being
+   `argFault`, widening the `errArg` rollback exemption, step 2's naming
+   flake, the destructive-refusal wording on `delete_layer` /
+   `delete_mask` / `remove_effect`, `property: string` in TOOL_DEFS,
+   `POST /tokenize`, the `comfyUrl` 8188/8000 mismatch on this machine,
+   the harness answering a modal with WORDS, `starved` wording,
+   delete_mask warning on a live expression, the unmeasured controller
+   GROUP and non-en_US locale, and `capParams`.
+
+### Machine state
+
+AE running, project untouched and open, no dialog raised. **AE was never
+closed and its project was never closed.** No probe was run this pass —
+the measurement already existed on disk — so nothing was created outside
+the suite's own `ST ` namespace, and the suite's bottom-of-run check
+confirmed nothing of it remains (the new masks all live on `ST Erase`
+and `ST Mask Off`, which the suite deletes itself). No llama-server, no
+ComfyUI.

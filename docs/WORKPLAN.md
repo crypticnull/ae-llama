@@ -2090,6 +2090,31 @@ this order, one bullet per pass:
     everything — no warning"). The canned host in tests/test-self-test.js
     had no model of the default region at all, which is part of why no
     stub could see this.
+  - ~~**a full-coverage mask that changes NOTHING answers a bare ok**~~
+    DONE 2026-09-03 (0.11.27). Filed by the 0.11.26 pass as its top item
+    and left out of it on purpose: `add_mask {bounds: the whole layer,
+    mode: 'subtract', inverted: true}` is a provable no-op and reported
+    success. No new measurement was needed — the same probe run was read
+    from its other end (the rows that come out IDENTICAL to the baseline
+    rather than 0), which is also what stopped a deduction getting two
+    rows wrong: `add`/`lighten` at full coverage leave the layer fully
+    showing whether or not it already had masks (so the older, wider
+    "cuts nothing away" sentence keeps them, and `lighten` was WIDENED
+    into it), and `difference` is a no-op only while it is alone.
+    `AELL_maskNoOp` is the counterpart table to `AELL_maskErases` —
+    same arguments, same inversion rule, nothing answers both — and the
+    new receipt names the setting that did it and the argument that
+    fixes it, mode-aware (inverted, everything but `subtract` HIDES the
+    region it is handed). Gated on the caller having NAMED a region,
+    which is the opposite one-sidedness from the erasure warning beside
+    it and deliberate: a no-op is cheap, a vanished layer is not. Two
+    omissions left silent on purpose: mode `'none'` (a path carrier, and
+    a no-op at any region) and the two modes above. Zero prompt cost.
+    Harness 667 -> **674**; +18 stub assertions with 9 RED against the
+    reverted host, 7 of the 10 new/rewritten real-AE steps RED against
+    the reverted canned host, and THREE old assertions plus TWO old
+    suite steps rewritten because they pinned the defect — each proved
+    "not an erasure" and then required a bare ok for it.
 - **DEFERRED until a sandbox design exists:** D/F/H3 rows (project
   mutation, renders, mass-delete) — wiring them against the live
   project is the harm the whitelist cannot contain. Also deferred:
