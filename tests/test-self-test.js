@@ -355,6 +355,28 @@ let maskKeys = {};
 // really land 4 frames apart"), so the canned host has to remember where
 // it put them rather than answering with a constant list.
 let stagStart = {};
+// ...and stagger_layers now warns when EVERY target it just retimed is
+// static, so the canned host has to know which layers anything has
+// animated. Answering from a constant is precisely how the class stayed
+// invisible: the real tool reported six cheerful placements for a comp
+// where nothing faded, and a stub with no notion of "is this layer
+// animated" agrees with it every time.
+let motion = {};                       // "comp|layer" -> {keys, fx, expr}
+function moKey(a, nm) { return ((a && a.comp) || "") + "|" + nm; }
+function moOf(a, nm) {
+  const k = moKey(a, nm);
+  if (!motion[k]) motion[k] = { keys: 0, fx: 0, expr: 0 };
+  return motion[k];
+}
+function moTargets(a) {
+  if (a && Array.isArray(a.layers) && a.layers.length) return a.layers.slice();
+  if (a && a.layer) return [String(a.layer)];
+  return [];
+}
+function moStatic(a, nm) {
+  const m = motion[moKey(a, nm)];
+  return !m || (!m.keys && !m.fx && !m.expr);
+}
 // The batch rig checks that for_each_layer really touched all 60 layers
 // and that the tools it must refuse changed nothing, so the canned host
 // tracks which layers carry the blur, what value it holds, and whether a
@@ -2642,6 +2664,9 @@ function cannedOk(tool, args) {
       return { value: 3 };
     }
     case "set_keyframes": {
+      // Recorded before the branches, because every branch below that
+      // returns a count has just animated the layers it names.
+      moTargets(args).forEach(nm => { moOf(args, nm).keys += 1; });
       if (inWpComp(args)) {
         const wts = wpTargets(args), wn = (args.keys || []).length;
         for (const L of wts) wpKeys[L + "/" + cvProp(args.property)] = wn;
@@ -2675,10 +2700,13 @@ function cannedOk(tool, args) {
                    keysSet: args.keys.length, numKeys: args.keys.length };
         }
       }
-      // 9 layers x 2 keys for the batch step; one layer x its own keys
-      // for the single-layer ones.
-      return { keysSet: (args && args.layer && args.keys)
-        ? args.keys.length : 18 };
+      // 9 layers x 2 keys for the batch step; a named list gets its own
+      // arithmetic. Computed, not constant: the constant reported
+      // eighteen keys for a three-layer rig that had asked for two.
+      const skN = (args && Array.isArray(args.layers) && args.layers.length)
+        ? args.layers.length : 1;
+      return { keysSet: (args && args.keys) ? args.keys.length * skN : 18,
+               layers: skN };
     }
     case "add_null":
       leakNullSource();
@@ -2758,6 +2786,18 @@ function cannedOk(tool, args) {
       });
       out.placed = placed;
       out.spread = r3(gap * (n - 1));
+      // The receipt that started this: ok, six placements, nothing fades.
+      // A marker is deliberately NOT tracked as motion — in real AE it
+      // reads numKeys > 0 and a scan that counted it would fall silent on
+      // exactly the layers this warns about.
+      if (names.length && names.every(nm => moStatic(args, nm))) {
+        out.warning = "Start times moved, but nothing on these " + n +
+          " layers varies over time (no keyframe, expression, effect or " +
+          "moving source), so the stagger is invisible. stagger_layers " +
+          "RETIMES layers — it does not create the animation: add it " +
+          "with set_keyframes (property 'opacity', 0 -> 100) and pass " +
+          "relativeTo: 'inPoint' to keep the offsets just set.";
+      }
       if (hasStep || hasFrames) {
         out.step = r3(gap);
         out.stepFrames = Math.round((gap / fd) * 100) / 100;
@@ -3096,6 +3136,10 @@ function cannedOk(tool, args) {
       if (inCapAudio(args)) capAudio.push({ name: args.name, audio: false });
       return { name: (args && args.name) || "ST Square" };
     case "apply_effect":
+      // An effect is DOUBT, not animation: some animate on their own at
+      // zero keyframes (CC Particle World, Radio Waves), so the warning
+      // stays quiet once a target carries one.
+      moTargets(args).forEach(nm => { moOf(args, nm).fx += 1; });
       if (String((args && args.effect) || "") === "Drop Shadow") {
         dsOn = true;
         return { layer: args.layer, effect: "Drop Shadow",
@@ -3575,6 +3619,7 @@ function cannedOk(tool, args) {
                numKeys: ks.length };
     }
     case "remove_keyframes": {
+      moTargets(args).forEach(nm => { moOf(args, nm).keys = 0; });
       if (inWpComp(args)) {
         const wp = String((args && args.property) || "");
         const wts = wpTargets(args);
@@ -4959,7 +5004,7 @@ SelfTest.run({
     ordStack = [];
     mattes = {};
     mtRig = {};
-    maskKeys = {};
+    maskKeys = {}; motion = {};
     mkMasks = {}; mkSizes = {};
     batchLayers = 0; batchFx = {}; batchBlur = null;
     dsOn = false; dsDistance = 5;
@@ -4993,7 +5038,7 @@ SelfTest.run({
         ordStack = [];
         mattes = {};
         mtRig = {};
-        maskKeys = {};
+        maskKeys = {}; motion = {};
         mkMasks = {}; mkSizes = {};
         batchLayers = 0; batchFx = {}; batchBlur = null;
     dsOn = false; dsDistance = 5;

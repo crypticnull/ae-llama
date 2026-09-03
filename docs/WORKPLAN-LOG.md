@@ -14861,3 +14861,118 @@ does not answer "which of these is the thing you asked for".
 AE running, project untouched and open, no dialog raised. AE was never
 closed and its project was never closed. Both probes removed the comp
 and the solid source they made. No ComfyUI, no llama-server.
+
+## 2026-09-03 (later pass) — section 8, row 32: `stagger_layers` alone on unanimated layers reported `ok` (0.11.20)
+
+Harness GREEN on arrival (610/610), so this pass took the workplan's next
+ranked item.
+
+### The defect
+
+Field run 2026-09-03, row 32 ("cascade the entrances"): **three of four
+phrasings called `stagger_layers` ALONE**. It moved six start times,
+answered `ok {layers:6, spread:2.5, placed:[…]}` — and nothing fades,
+because there were no opacity keys to stagger. Only the TYPO phrasing did
+both halves. The receipt is a success message for a comp where nothing
+animates, so the model has no reason to do the other half.
+
+The workplan offered two fixes: say it in the DOC, or have the tool warn.
+The tool warns. A doc sentence costs prompt on every turn and only
+reminds; the warning costs nothing until the failure happens, and then it
+lands on the exact call that failed.
+
+### Measured first: scripts/stagger-motion-probe.jsx + .js (NEW, AE 26.3x87)
+
+Every clause of "this layer does nothing over time" was a guess about AE
+until it was measured:
+
+- **Marker is root property 1 on EVERY layer type, and it is a LEAF**
+  (`ADBE Marker`). A marker reads `numKeys > 0`, so a walk that counted
+  it would call a merely-MARKED layer animated and fall silent on exactly
+  the layers this exists for. **Time Remap** (`ADBE Time Remapping`) is a
+  root leaf too, and its keys DO count — the two cannot be told apart by
+  position, only by match name.
+- **Node cost:** 162 for a bare solid, 196 with three effects, 169 text,
+  154 shape, 30 camera, 29 light; a keyed layer exits at 7. **6480 nodes
+  across 40 layers ran in 53 ms — 0.008 ms/node**, so a 20000-node budget
+  covers ~120 layers for well under a fifth of a second.
+- **`source.duration` separates a still from something that plays**: a
+  solid's source reports **0**, a precomp's reports **4**. Text, shape,
+  camera and light layers have no `source` at all.
+- **M5 is the field failure through the real tool**: six bare solids,
+  `stagger_layers {spread: 2.5}` — the receipt verbatim, before and
+  after. After the fix the same call carries the warning, and the same
+  call once the six DO fade carries none.
+
+### The fix, at the root
+
+`AELL_scanMotion` + `AELL_layerIsStatic` + `AELL_staggerNoMotion` in
+`extension/jsx/hostscript.jsx`; `stagger_layers` sets `res.warning` when
+every target it just retimed is provably static.
+
+- The verdict is **deliberately one-sided**: it says "static" only where
+  it has proved it, and every doubt reads as motion. An **expression** is
+  doubt (it may be reading a keyframed slider two layers away, which no
+  walk of THIS layer can see) and so is **any effect at all** (CC Particle
+  World, Radio Waves and friends animate with zero keyframes). A warning
+  that says nothing animates has to be right, so it is cheap to stay
+  quiet. An **exhausted budget is UNPROVED**, not proof of nothing.
+- Cheap gates run first (source duration, `hasAudio`, effect count), so
+  the 162-node walk is only spent on real candidates.
+- **Zero prompt cost**: host string only, no tool doc touched. Full prompt
+  58967 of 59000, unchanged.
+
+### Verification
+
+- `tests/test-curve-tools.js`: **13 new assertions** (88 -> 101), and the
+  stub was itself the reason this class was invisible — its layers
+  answered `property()` by NAME only, with no root list to walk, so no
+  stubbed run could see a whole-layer scan at all. It now models the
+  measured tree: an index-addressable `Group`, `PropertyType`, match
+  names, Marker and Time Remap as root LEAVES, an Effect Parade, and a
+  source that reports duration 0. Two STUB FIDELITY assertions pin that.
+  **4 assertions go RED against the reverted hostscript.**
+- `tests/test-self-test.js`'s canned host answered `stagger_layers` from
+  a constant and `set_keyframes` with a hard-coded `keysSet: 18`, which
+  is the same blindness one level up. It now tracks which layers anything
+  has animated (`motion`, keyed by comp+layer), computes `keysSet`, and
+  reproduces the warning under the same rule — markers deliberately NOT
+  counted.
+- **Twelve new real-AE self-test steps** in `extension/js/selftest.js`: a
+  fresh comp of three untouched solids (every other comp in the suite has
+  been keyframed by then), the warning fires and names both the finding
+  and the next call, the placement it warns about still happened, a
+  marker does not silence it, two opacity keys on ONE of the three do,
+  and so does an unkeyed effect. The existing 9-square curve stagger
+  gained the other half: those layers carry scale AND opacity keys, so it
+  asserts there is **no** warning.
+- **Real AE harness 610 -> 622/622 PASSED.** Full stub sweep: 0 red files.
+  `docs/CAPABILITIES.md` regenerated.
+- `extension/` changed, so BUMPED: 0.11.19 -> **0.11.20**.
+
+### Notes / assumptions
+
+- Scope held to what the bullet asked: the warning fires only when EVERY
+  target is static, which is the shape the workplan filed. A mixed comp
+  (five static layers and one animated) says nothing. Naming the static
+  few is a louder, noisier message and a separate call.
+- A video FOOTAGE source is treated as moving on the same
+  `source.duration > 0` rule that the precomp measurement established;
+  only the solid (0) and the precomp (4) were measured directly, as the
+  probe imports no media.
+- Known and accepted false negative: layers gridded by `grid_layout` and
+  then staggered carry rig expressions, so they buy silence. That is the
+  one-sidedness working as intended, and it is not the filed case — the
+  row 32 rig is bare solids with no expressions.
+- No `scripts/chat-probe.js` field run this pass. The probe plus twelve
+  real-AE steps pin the behaviour; whether the warning actually makes the
+  model add the fade is a variants run for a later pass.
+- Next in the workplan: row 35 ("soften"/"too sharp" reaches `add_mask`,
+  2 of 4 phrasings), then row 30 casual (`grid_layout` with no `layers`
+  grids the BACKGROUND in).
+
+### Machine state
+
+AE running, project untouched and open, no dialog raised. AE was never
+closed and its project was never closed. The probe removed every comp and
+solid source it made. No ComfyUI, no llama-server.

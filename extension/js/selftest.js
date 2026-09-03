@@ -79,6 +79,11 @@
   // caller named EVERY layer in this comp", so the comp has to hold a
   // roster nothing else in the suite adds to.
   var WPCOMP = "AELL Self-Test Wipe";
+  // And the "nothing to stagger" rig. Every other comp in the suite has
+  // been keyframed by the time stagger_layers runs, and the class this
+  // measures is a comp where NOTHING is animated — so it needs solids
+  // nobody else has touched.
+  var SMCOMP = "AELL Self-Test Stagger";
   var running = false;
 
   /**
@@ -391,7 +396,12 @@
                    bezier: [0, 0, 0.58, 1], startAt: 0 };
         },
         check: function (d) {
-          return d.layers === 9 || "layers " + d.layers;
+          if (d.layers !== 9) return "layers " + d.layers;
+          // These nine carry scale AND opacity keyframes from the batch
+          // steps above, so the "nothing animates" warning must stay
+          // silent here. A warning that fires on animated layers would
+          // cost a round on every real stagger.
+          return !d.warning || "warned on animated layers: " + d.warning;
         } },
 
       { name: "ellipse mask",
@@ -4434,6 +4444,148 @@
         check: function (d) {
           return d.removed === 0 || "removed " + d.removed;
         } },
+
+      // ---- "nothing to stagger" rig. Field run 2026-09-03, row 32:
+      // three of four phrasings called stagger_layers ALONE on layers
+      // with no keyframes. It moved six start times and answered
+      // ok {layers:6, spread:2.5, placed:[…]} — a success receipt for a
+      // comp where nothing fades. The tool now scans its targets and
+      // says so, and every clause of that scan is an AE fact worth
+      // pinning in real AE (see scripts/stagger-motion-probe.jsx).
+      { name: "stagger rig: a comp nothing has animated",
+        tool: "create_comp",
+        args: { name: SMCOMP, width: 320, height: 240, duration: 4,
+                frameRate: 30 },
+        check: function (d, ctx) {
+          ctx.smComp = d.name;
+          ctx.smLayers = ["ST Stag A", "ST Stag B", "ST Stag C"];
+          return typeof d.name === "string" || "no comp name";
+        } },
+      { name: "stagger rig: solid A",
+        tool: "add_solid",
+        args: function (ctx) {
+          return { comp: ctx.smComp, name: "ST Stag A", color: [1, 0, 0],
+                   width: 60, height: 60 };
+        },
+        check: function (d) { return d.name === "ST Stag A" || d.name; } },
+      { name: "stagger rig: solid B",
+        tool: "add_solid",
+        args: function (ctx) {
+          return { comp: ctx.smComp, name: "ST Stag B", color: [0, 1, 0],
+                   width: 60, height: 60 };
+        },
+        check: function (d) { return d.name === "ST Stag B" || d.name; } },
+      { name: "stagger rig: solid C",
+        tool: "add_solid",
+        args: function (ctx) {
+          return { comp: ctx.smComp, name: "ST Stag C", color: [0, 0, 1],
+                   width: 60, height: 60 };
+        },
+        check: function (d) { return d.name === "ST Stag C" || d.name; } },
+
+      { name: "staggering unanimated layers WARNS that nothing moves",
+        tool: "stagger_layers",
+        args: function (ctx) {
+          return { comp: ctx.smComp, layers: ctx.smLayers, spread: 2,
+                   startAt: 0 };
+        },
+        check: function (d) {
+          if (d.layers !== 3) return "layers " + d.layers;
+          if (!d.warning) return "no warning at all";
+          if (d.warning.indexOf("nothing on these 3 layers varies over " +
+                                "time") === -1) {
+            return "warning does not name the finding: " + d.warning;
+          }
+          if (d.warning.indexOf("set_keyframes") === -1 ||
+              d.warning.indexOf("relativeTo") === -1) {
+            return "warning does not say what to do next: " + d.warning;
+          }
+          // …and the placement it warns about still happened, so the
+          // warning is a warning and not a silent refusal.
+          return (d.placed && d.placed.length === 3 &&
+                  Math.abs(d.placed[2].startTime - 2) < 0.01) ||
+                 "the stagger itself did not land: " +
+                 JSON.stringify(d.placed);
+        } },
+
+      // A MARKER reads numKeys > 0 in real AE (measured: Marker is root
+      // property 1 on every layer type, and it is a LEAF). A scan that
+      // counted it would go quiet on exactly the layers this is for.
+      { name: "…a marker is not animation",
+        tool: "add_marker",
+        args: function (ctx) {
+          return { comp: ctx.smComp, layer: "ST Stag A", time: 1,
+                   comment: "not animation" };
+        },
+        check: function () { return true; } },
+      { name: "…so the warning survives a marked layer",
+        tool: "stagger_layers",
+        args: function (ctx) {
+          return { comp: ctx.smComp, layers: ctx.smLayers, spread: 2,
+                   startAt: 0 };
+        },
+        check: function (d) {
+          return (d.warning &&
+                  d.warning.indexOf("varies over time") !== -1) ||
+                 "a marker silenced it: " + (d.warning || "(no warning)");
+        } },
+
+      // One keyframe anywhere and it goes quiet: the warning speaks only
+      // when EVERY target is static.
+      { name: "…two opacity keys on ONE of the three",
+        tool: "set_keyframes",
+        args: function (ctx) {
+          return { comp: ctx.smComp, layers: ["ST Stag B"],
+                   property: "opacity",
+                   keys: [{ time: 0, value: 0 }, { time: 1, value: 100 }] };
+        },
+        check: function (d) {
+          return d.keysSet === 2 || "keysSet " + d.keysSet;
+        } },
+      { name: "…and one animated layer among three silences the warning",
+        tool: "stagger_layers",
+        args: function (ctx) {
+          return { comp: ctx.smComp, layers: ctx.smLayers, spread: 2,
+                   startAt: 0 };
+        },
+        check: function (d) {
+          return !d.warning || "still warned: " + d.warning;
+        } },
+
+      // An EFFECT with no keyframes silences it too. Some effects animate
+      // on their own at zero keys (CC Particle World, Radio Waves), so an
+      // effect is doubt — and a warning that says nothing animates has to
+      // be right.
+      { name: "…keys off again, and an unkeyed effect on one layer",
+        batch: function (ctx) {
+          return [
+            { tool: "remove_keyframes",
+              args: { comp: ctx.smComp, layers: ["ST Stag B"],
+                      property: "opacity" } },
+            { tool: "apply_effect",
+              args: { comp: ctx.smComp, layer: "ST Stag C",
+                      effect: "Fast Box Blur" } }
+          ];
+        },
+        check: function (rows) {
+          if (rows.length !== 2) return "rows " + rows.length;
+          if (!rows[0].ok) return "remove_keyframes: " + rows[0].error;
+          return rows[1].ok || "apply_effect: " + rows[1].error;
+        } },
+      { name: "…an unkeyed EFFECT is doubt enough to stay quiet",
+        tool: "stagger_layers",
+        args: function (ctx) {
+          return { comp: ctx.smComp, layers: ctx.smLayers, spread: 2,
+                   startAt: 0 };
+        },
+        check: function (d) {
+          return !d.warning || "warned past an effect: " + d.warning;
+        } },
+
+      { name: "cleanup: delete the stagger rig comp",
+        tool: "delete_item",
+        args: function (ctx) { return { item: ctx.smComp }; },
+        check: function () { return true; } },
 
       // set_layer_3d, and the two AE facts underneath it. Measured
       // 2026-08-28: the Transform group hands out the SAME children for a

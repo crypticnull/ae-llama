@@ -5518,6 +5518,96 @@ AELL_TOOLS.reorder_layers = function (args) {
   return AELL_okay(res);
 };
 
+/*
+ * Does anything about this layer VARY over time?
+ *
+ * stagger_layers only moves start times, so a target with nothing on it
+ * is retimed and still does nothing — and the tool answered
+ * `ok {layers:6, spread:2.5, placed:[…]}` for a comp where nothing
+ * fades. Field run 2026-09-03, row 32: three of four phrasings called
+ * stagger_layers ALONE on layers with no keyframes, and the receipt
+ * agreed with all three.
+ *
+ * Measured in AE 26.3x87 (scripts/stagger-motion-probe.jsx):
+ *  - Marker is a root-level LEAF property (`ADBE Marker`) on EVERY layer
+ *    type, and a marker reads numKeys > 0. Counting it would call a
+ *    merely MARKED layer animated, so it is skipped by match name. Time
+ *    Remap (`ADBE Time Remapping`) is a root leaf too and does count.
+ *  - the whole-layer walk visits 162 nodes on a bare solid, 196 with
+ *    three effects, 169 on text, 154 on a shape, 29 on a light — and
+ *    6480 nodes across 40 layers ran in 53 ms (0.008 ms/node), so a
+ *    budget big enough for ~120 layers still costs under a fifth of a
+ *    second.
+ *  - a solid's source reports duration 0 where a precomp's reports 4, so
+ *    source.duration is what separates a still from something that plays.
+ *
+ * The verdict is deliberately ONE-SIDED: it reports "static" only where
+ * it has proved it, and every doubt reads as motion. An expression is
+ * doubt — it may be reading a keyframed slider two layers away — and so
+ * is any effect at all, because some effects animate on their own at
+ * zero keyframes (CC Particle World, Radio Waves). A warning that says
+ * nothing animates has to be right, so it is cheap to stay quiet.
+ */
+function AELL_scanMotion(grp, budget, depth, found) {
+  var i, p, mn, leaf, n = 0;
+  try { n = grp.numProperties; } catch (eN) { return; }
+  for (i = 1; i <= n; i++) {
+    if (found.moves) return;
+    if (budget.left <= 0) { budget.exhausted = true; return; }
+    budget.left--;
+    p = null;
+    try { p = grp.property(i); } catch (eP) { continue; }
+    if (!p) continue;
+    mn = "";
+    try { mn = String(p.matchName); } catch (eM) { mn = ""; }
+    if (mn === "ADBE Marker") continue;
+    leaf = false;
+    try { leaf = (p.propertyType === PropertyType.PROPERTY); } catch (eT) {}
+    if (leaf) {
+      try { if (p.numKeys > 0) { found.moves = true; return; } } catch (eK) {}
+      try {
+        if (p.expressionEnabled && p.expression) { found.moves = true; return; }
+      } catch (eE) {}
+      continue;
+    }
+    if (depth < 8) AELL_scanMotion(p, budget, depth + 1, found);
+  }
+}
+
+/* True only when this layer PROVABLY does nothing over time. The cheap
+ * gates run first so the node walk is spent on real candidates. */
+function AELL_layerIsStatic(layer, budget) {
+  var src = null, dur = 0, parade = null;
+  try { src = layer.source; } catch (eS) { src = null; }
+  if (src) {
+    try { dur = Number(src.duration) || 0; } catch (eD) { dur = 0; }
+    if (dur > 0) return false;      // a precomp or a clip plays by itself
+  }
+  try { if (layer.hasAudio) return false; } catch (eA) {}
+  try { parade = layer.property("ADBE Effect Parade"); } catch (eF) {}
+  try { if (parade && parade.numProperties > 0) return false; } catch (eP) {}
+  var found = { moves: false };
+  AELL_scanMotion(layer, budget, 0, found);
+  if (budget.exhausted) return false;   // ran out of room — unproved
+  return !found.moves;
+}
+
+/* Every target static => the stagger is invisible. Returns the sentence
+ * to warn with, or "" when at least one layer really does animate. */
+function AELL_staggerNoMotion(layers) {
+  var budget = { left: 20000, exhausted: false };
+  var i;
+  for (i = 0; i < layers.length; i++) {
+    if (!AELL_layerIsStatic(layers[i], budget)) return "";
+  }
+  return "Start times moved, but nothing on these " + layers.length +
+    " layers varies over time (no keyframe, expression, effect or moving " +
+    "source), so the stagger is invisible. stagger_layers RETIMES layers " +
+    "— it does not create the animation: add it with set_keyframes " +
+    "(property 'opacity', 0 -> 100) and pass relativeTo: 'inPoint' to " +
+    "keep the offsets just set.";
+}
+
 AELL_TOOLS.stagger_layers = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var bez = AELL_bezierArgs(args);
@@ -5635,6 +5725,8 @@ AELL_TOOLS.stagger_layers = function (args) {
   }
   if (usedWorkArea) res.usedWorkArea = true;
   if (notes.length) res.note = notes.join(". ");
+  var noMotion = AELL_staggerNoMotion(layers);
+  if (noMotion) res.warning = noMotion;
   return AELL_okay(res);
 };
 

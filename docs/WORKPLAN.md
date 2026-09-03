@@ -1905,13 +1905,33 @@ this order, one bullet per pass:
     separators the way remove_effect and the render-template picker
     already do, and the receipt reports AE's spelling. Zero prompt cost
     (host strings only, 58967 unchanged). Harness 602 -> 610.
-  - THEN, in priority order: row 32 (`stagger_layers` alone on layers
-    with NO keyframes reports `ok` and animates nothing — 3 of 4
-    phrasings), row 35 ("soften"/"too sharp" reaches `add_mask`, 2 of
-    4), and row 30 casual (`grid_layout` with no `layers` grids the
-    BACKGROUND in). `link_property {layer: [six names]}` ->
-    "invalid numeric result (divide by zero?)" is CLOSED by 0.11.15
-    above (grounded, and pinned by a real-AE self-test step).
+  - ~~**row 32: `stagger_layers` alone on layers with NO keyframes
+    reports `ok` and animates nothing**~~ DONE 2026-09-03 (0.11.20).
+    Three of four phrasings called it alone; it moved six start times,
+    answered `ok {layers:6, spread:2.5, placed:[…]}` and nothing faded.
+    Fixed as BEHAVIOUR, not wording: `AELL_staggerNoMotion` scans the
+    targets it just retimed and adds a `warning` when EVERY one is
+    provably static — no keyframe, no expression, no effect, no moving
+    source. Deliberately one-sided, so an expression (it may read a
+    keyed slider elsewhere) or ANY effect (CC Particle World and Radio
+    Waves animate at zero keys) buys silence. Measured first
+    (`scripts/stagger-motion-probe.jsx`, AE 26.3x87): **Marker is root
+    property 1 and a LEAF on every layer type**, so a numKeys walk that
+    did not skip it would call a merely-marked layer animated; Time
+    Remap is a root leaf too and DOES count; a solid's source reports
+    duration 0 where a precomp's reports 4; the walk costs 162 nodes on
+    a bare solid and ran 6480 nodes in 53 ms (0.008 ms/node), so the
+    20000-node budget covers ~120 layers and an exhausted budget stays
+    quiet. Zero prompt cost (host string only, 58967 unchanged).
+    The stub could not see this class at all — its layers answered
+    `property()` by NAME only, with no root list to walk — so
+    tests/test-curve-tools.js grew an index-addressable property tree
+    with Marker, Time Remap, Masks and Effects on it. Harness 610 -> 622.
+  - THEN, in priority order: row 35 ("soften"/"too sharp" reaches
+    `add_mask`, 2 of 4), and row 30 casual (`grid_layout` with no
+    `layers` grids the BACKGROUND in). `link_property {layer: [six
+    names]}` -> "invalid numeric result (divide by zero?)" is CLOSED by
+    0.11.15 above (grounded, and pinned by a real-AE self-test step).
 - **DEFERRED until a sandbox design exists:** D/F/H3 rows (project
   mutation, renders, mass-delete) — wiring them against the live
   project is the harm the whitelist cannot contain. Also deferred:
