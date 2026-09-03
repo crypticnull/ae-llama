@@ -18158,3 +18158,134 @@ final 765 with the fixed host restored) and one run of the new
 parade-ellipse probe, which removes its own comp and
 solid source and reported `cleanup + cleaned`. No Premiere, no ComfyUI,
 no llama-server left running.
+
+---
+
+## 2026-09-03 — the no-op that waited to be asked, over a layer already hidden (0.11.36)
+
+**Item:** the top entry on the previous pass's "still open" list —
+`add_mask {mode: "subtract"}` with NO bounds over a layer whose masks
+already hide everything answered a bare ok, because the no-op sentence
+sits behind the `asked` gate.
+
+Baseline harness before touching anything: **765/765 PASSED**, so the
+workplan's item 1 was already green and this was the highest-priority
+unfinished item.
+
+### What the gate is for, and why it was wrong here
+
+`asked` exists for a good reason and it keeps it: with no `bounds` and no
+`vertices`, add_mask's own default region IS the layer's box, and that is
+the deliberate placeholder an `add_mask` + `set_mask_path` pair opens
+with. Warning "your region cuts nothing away" on a placeholder is a nag,
+and a no-op is cheap where a vanished layer is not.
+
+That argument does not reach ONE case, and it is the case that was filed.
+Over masks that already hide every pixel (`aboveShows === "none"`), a
+mode that can only ever TAKE pixels away — `subtract`, `intersect`,
+`darken`, inverted or not — leaves the layer at nothing WHATEVER region
+it is handed: subtract removes from nothing, intersect and darken take
+the smaller of nothing and anything. So no bounds, no shape, and no path
+a later `set_mask_path` writes could make that call do something. Waiting
+to be asked waits forever.
+
+The same reading kills the OTHER half of the branch's guard. `covers` is
+not what makes the call a no-op either, so a NAMED half-layer subtract
+over the same hidden layer was just as silent — and fixing only the
+unasked half would have left the sillier call the quiet one. Both went
+together; leaving one would have been an incoherence, not a smaller
+change.
+
+The inverted `add` / `lighten` / `difference` twins KEEP the gate, and
+that asymmetry is the point: those really do reveal pixels at a smaller
+region, so their no-op is a fact about the region left to the default and
+the placeholder argument still holds for them.
+
+### The fix
+
+`AELL_TOOLS.add_mask` grows one branch ahead of the gated one, on
+`aboveShows === "none" && subtractive && !overflow`, needing neither
+`asked` nor `covers`. Its reason is the existing sentence with one word
+changed (`nothing left for this one to take`), and its FIX line is new,
+because the one every other no-op in the tool offers is false here:
+
+> No region can change that: it is the masking already on the layer that
+> hides it (ST ABlank, ST ABlank2) — set_mask {mask: "ST ABlank", mode:
+> "none"} switches one off, or delete_mask {mask: "ST ABlank"} removes it.
+
+Offered as a switch, not as the cure — with several masks hiding it,
+turning one off need not bring the picture back, the same hedge
+`delete_mask` already makes about its survivors. The names are read with
+`AELL_maskNames` BEFORE the append, so the receipt never blames the mask
+it just made; a stub assertion pins that.
+
+The old branch's `aboveShows === "none"` sub-clause is gone rather than
+left standing: with the subtractive modes diverted, the only callers it
+had left were the inverted ones, whose own clause is the truer reason for
+them, and a branch whose stated reason no longer describes its occupants
+is the next pass's trap.
+
+### Verification
+
+- **Real AE harness 765 -> 768/768 PASSED**, three new steps in
+  `extension/js/selftest.js` on the already-hidden `ST Above` layer.
+- **TWO of them are RED against the reverted host in REAL AE**
+  (766/768), reproducing the filed silence verbatim — `(none)` where the
+  warning belongs, for both the no-bounds call and the half-layer one.
+  The third is a negative control (an inverted `add` at the default
+  region must stay quiet) and passes either way on purpose: it is what
+  stops the next pass widening the gate off its hinges.
+- `tests/test-shape-mask-tools.js` section 6d: 10 new assertions, **6 of
+  them RED** against the reverted host.
+- **Stub faithfulness:** `tests/test-self-test.js`'s canned host models
+  the new branch, including `mkPrior` (the masks read before the append)
+  and a minimal `mkOver`. With that branch switched off it fails exactly
+  the steps real AE fails — three of them, since the canned host also
+  reaches the older step through the retired sub-clause.
+- Full stubbed suite green; `docs/CAPABILITIES.md` regenerated (add_mask
+  69 -> 72 steps).
+- **Zero prompt cost** — `extension/js/tools.js` untouched. This is a
+  receipt, not a doc.
+
+### Notes / assumptions
+
+- **Assumed a mask spanning past the layer keeps its own note and not
+  this sentence.** `!overflow` is carried over from the gated branch
+  unchanged. An overflowing subtract over a hidden layer is still a
+  no-op and still gets only "the part outside the layer does nothing",
+  which is a true sentence about the wrong thing. Left as filed below
+  rather than widened in the same pass.
+- **Assumed `aboveShows === "none"` implies masks exist.**
+  `AELL_paradeShows` answers `"nothing"` for an empty parade, so it does
+  — but the fix line degrades to a sentence without names rather than
+  indexing an empty list, and the stub covers the named path only.
+
+### Still open, in priority order
+
+1. An overflowing subtract over an already-hidden layer: no-op, and only
+   the overflow note is said (see the assumption above).
+2. TWO ellipses, and a feathered mask anywhere, still make the parade
+   unreadable — both deliberate, both measurable if they ever earn a pass.
+3. `comp.saveFrameToPng` writing nothing is still unexplained.
+4. Row 30's typo still burns six `center_anchor_point` calls before the
+   grid_layout that works. Cost, not harm.
+5. Everything else from the 2026-09-03 lists is unchanged: the
+   `distribute_property` mutate-then-throw hole, a bad VALUE not being
+   `argFault`, widening the `errArg` rollback exemption to thrown
+   lookups, step 2's naming flake, the destructive-refusal wording on
+   `delete_layer` / `delete_mask`, `property: string` in TOOL_DEFS,
+   `POST /tokenize`, the `comfyUrl` 8188/8000 mismatch on this machine,
+   the harness answering a modal with WORDS, `starved` wording,
+   delete_mask warning on a live expression, the unmeasured controller
+   GROUP and non-en_US locale, and `capParams`.
+
+Section 8 still has no open HARM and no open miss in the variant matrix.
+
+### Machine state
+
+**After Effects was never closed and its project was never closed.**
+Four harness runs (baseline 765, green 768, reverted-host red 766, and a
+final 768 with the fixed host restored). No probes were needed — the
+claim this pass makes is algebra over the parade reader that the last
+three passes measured, not a new measurement. No Premiere, no ComfyUI,
+no llama-server left running.

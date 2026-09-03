@@ -1324,6 +1324,73 @@ assert(r.ok && !r.data.warning,
        "vanished layer is expensive, a no-op is cheap, and that " +
        "asymmetry is deliberate: " + JSON.stringify(r.ok ? r.data : r.error));
 soloMasks._children.length = 0;
+// …with ONE exception, and it is the exception because its cause is not
+// the region. Over masks that already hide every pixel, a mode that can
+// only ever TAKE pixels away leaves the layer at nothing whatever region
+// it is handed — so no bounds, no shape and no set_mask_path written
+// afterwards would make the call do something, and waiting to be asked
+// waits forever. Filed by the 0.11.35 pass as its top open item.
+r = call("add_mask", { layer: "Solo", name: "Blind", shape: "rectangle",
+                       bounds: [0, 0, 100, 100], mode: "subtract" });
+assert(r.ok && /hides ALL of 'Solo'/.test(r.data.warning || ""),
+       "the setup: one full-coverage subtract, and the layer is gone: " +
+       JSON.stringify(r.ok ? r.data : r.error));
+r = call("add_mask", { layer: "Solo", name: "SubDefault", mode: "subtract" });
+assert(r.ok && /changes nothing on 'Solo'/.test(r.data.warning || "") &&
+       /nothing left for this one to take/.test(r.data.warning || ""),
+       "a DEFAULT-region subtract over an already-hidden layer is not " +
+       "waved through — the placeholder cannot rescue it: " +
+       JSON.stringify(r.ok ? r.data : r.error));
+assert(!/Pass 'bounds'/.test(r.data.warning || "") &&
+       /No region can change that/.test(r.data.warning || ""),
+       "…and it does not offer the fix every other no-op offers, because " +
+       "for this one that fix is false: " + r.data.warning);
+assert(/\(Blind\)/.test(r.data.warning || "") &&
+       /set_mask \{mask: "Blind", mode: "none"\}/.test(r.data.warning || "") &&
+       /delete_mask \{mask: "Blind"\}/.test(r.data.warning || ""),
+       "…it names the mask that IS hiding the layer and the two tool " +
+       "calls that reach it: " + r.data.warning);
+assert(!/SubDefault/.test(r.data.warning || ""),
+       "…and never the mask it just made, which is read BEFORE the " +
+       "append for exactly that reason: " + r.data.warning);
+// The same silence with a region NAMED and only PART of the layer under
+// it — `covers` is not what makes this a no-op, so fixing only the
+// unasked half would have left the sillier call the quiet one.
+r = call("add_mask", { layer: "Solo", name: "SubHalf", shape: "rectangle",
+                       bounds: [0, 0, 50, 100], mode: "subtract" });
+assert(r.ok && /changes nothing on 'Solo'/.test(r.data.warning || ""),
+       "a HALF-layer subtract over an already-hidden layer takes nothing " +
+       "either, and used to answer a bare ok: " +
+       JSON.stringify(r.ok ? r.data : r.error));
+// 'intersect' and 'darken' are the other two that can only reduce.
+r = call("add_mask", { layer: "Solo", name: "IntDefault", mode: "intersect" });
+assert(r.ok && /changes nothing on 'Solo'/.test(r.data.warning || ""),
+       "…and so does a default-region 'intersect': " +
+       JSON.stringify(r.ok ? r.data : r.error));
+r = call("add_mask", { layer: "Solo", name: "DarkHalf", shape: "rectangle",
+                       bounds: [0, 50, 100, 50], mode: "darken" });
+assert(r.ok && /changes nothing on 'Solo'/.test(r.data.warning || ""),
+       "…and a part-layer 'darken': " +
+       JSON.stringify(r.ok ? r.data : r.error));
+// But the gate STAYS for the modes that would reveal at a smaller
+// region: their no-op really is a fact about the region left to the
+// default, and the placeholder argument still holds for them.
+r = call("add_mask", { layer: "Solo", name: "AddInvDefault", mode: "add",
+                       inverted: true });
+assert(r.ok && !r.data.warning,
+       "an inverted 'add' at the default region stays quiet — a later " +
+       "set_mask_path really would reveal something: " +
+       JSON.stringify(r.ok ? r.data : r.error));
+soloMasks._children.length = 0;
+// And the boundary the widening must not cross: over a layer that still
+// SHOWS something, the same default-region subtract is the erasure, not
+// a no-op.
+r = call("add_mask", { layer: "Solo", name: "CutAll", mode: "subtract" });
+assert(r.ok && /hides ALL of 'Solo'/.test(r.data.warning || "") &&
+       !/changes nothing/.test(r.data.warning || ""),
+       "the default-region subtract over a VISIBLE layer still empties " +
+       "it, and still says so: " + JSON.stringify(r.ok ? r.data : r.error));
+soloMasks._children.length = 0;
 // A partly covering mask under the same mode really does something.
 r = call("add_mask", { layer: "Solo", name: "SubInvHalf", shape: "rectangle",
                        bounds: [0, 0, 100, 50], mode: "subtract",

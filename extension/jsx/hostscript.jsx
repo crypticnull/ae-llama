@@ -8082,8 +8082,51 @@ AELL_TOOLS.add_mask = function (args) {
      * the erasure warning: with no region named, this tool's own default
      * IS the layer's box, and add_mask + set_mask_path opens with
      * exactly that placeholder. A no-op is cheap; a vanished layer is
-     * not. That asymmetry is the whole reason the two are separate. */
-    if (asked && !plain && !overflow && covers && modeWord !== "none") {
+     * not. That asymmetry is the whole reason the two are separate.
+     *
+     * THE ONE NO-OP THAT GATE MUST NOT SILENCE is the branch immediately
+     * below, because its cause is not the caller's region at all. Over
+     * masks that already hide every pixel, a mode that can only ever
+     * TAKE pixels away — subtract, intersect, darken, inverted or not —
+     * leaves the layer at "none" WHATEVER region it is handed: subtract
+     * removes from nothing, and intersect/darken take the smaller of
+     * nothing and anything. No bounds, no shape, and no set_mask_path
+     * written afterwards can make that call do something, so waiting to
+     * be asked waits forever — and `covers` is not what makes it a no-op
+     * either, so a NAMED half-layer region was just as silent. Fixing
+     * only the unasked half would have left the sillier call the quiet
+     * one. Filed by the 0.11.35 pass as its top open item: `add_mask
+     * {mode: "subtract"}` with no bounds over an already-hidden layer
+     * answered a bare ok.
+     *
+     * The inverted add / lighten / difference twins keep the gate: those
+     * DO reveal pixels at a smaller region, so their no-op really is a
+     * fact about the region that was left to the default, and the branch
+     * under this one still answers them. */
+    var subtractive = (modeWord === "subtract" || modeWord === "intersect" ||
+                       modeWord === "darken");
+    // Read BEFORE the new mask is appended, so the list is the masks that
+    // are doing the hiding and not the one being blamed for it.
+    var hiding = (aboveShows === "none") ? AELL_maskNames(layer) : [];
+    if (aboveShows === "none" && subtractive && !overflow) {
+      noop = true;
+      noopWhy = "the " + ((maskCount === 1) ? "mask" : maskCount + " masks") +
+        " already on it " + ((maskCount === 1) ? "hides" : "hide") +
+        " all of it, so there is nothing left for this one to take";
+      /* "Pass 'bounds' …" is the fix every other no-op in this tool
+       * offers, and for this one it is FALSE — no region works. What CAN
+       * be changed is the masking already there, so name it, the way
+       * delete_mask names the survivors it cannot promise will reveal the
+       * layer. Offered as a switch, not as the cure: with several masks
+       * hiding it, turning one off need not bring the picture back. */
+      noopFix = "No region can change that: it is the masking already on " +
+        "the layer that hides it" +
+        ((hiding.length)
+          ? " (" + AELL_capJoin(hiding, 4) + ") — set_mask {mask: \"" +
+            hiding[0] + "\", mode: \"none\"} switches one off, or " +
+            "delete_mask {mask: \"" + hiding[0] + "\"} removes it."
+          : ".");
+    } else if (asked && !plain && !overflow && covers && modeWord !== "none") {
       /* mode 'none' is excluded here and nowhere else: it changes nothing
        * at ANY region, so full coverage is not what makes it a no-op and
        * this sentence would blame the wrong thing — and a 'none' mask is
@@ -8091,16 +8134,7 @@ AELL_TOOLS.add_mask = function (args) {
        * technique this must not nag about. */
       noop = !!(outcome && outcome.noop);
       if (noop) {
-        if (aboveShows === "none") {
-          /* Measured: over masks that already hide everything, a
-           * full-coverage subtract/intersect/darken has nothing left to
-           * take. Naming the mask that IS hiding it is the only useful
-           * thing to say — this one is not the reason the layer is
-           * blank. */
-          noopWhy = "the " + (maskCount === 1 ? "mask" : maskCount + " masks") +
-            " already on it " + (maskCount === 1 ? "hides" : "hide") +
-            " all of it, so there is nothing left for this one to change";
-        } else if (args.inverted) {
+        if (args.inverted) {
           /* 'subtract' says "takes nothing away" whatever is above it,
            * because that IS its own reason — an inverted subtract removes
            * the region it is handed and the region is empty. Every other

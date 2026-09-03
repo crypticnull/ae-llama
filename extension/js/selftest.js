@@ -3604,6 +3604,63 @@
                  "it does not name what is really hiding it: " + w;
         } },
 
+      // …and it says it with NO bounds too, which the no-op sentence used
+      // to wait for. That gate is about the caller's region, and over
+      // masks that already hide every pixel the region is not the reason:
+      // subtract/intersect/darken take nothing whatever they are handed,
+      // so no default region and no set_mask_path written afterwards
+      // could make the call do something.
+      { name: "…and so does one with no bounds at all",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Above", name: "ST ADefault",
+                   mode: "subtract" };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (!/changes nothing on 'ST Above'/.test(w)) {
+            return "the default region was waved through: " + (w || "(none)");
+          }
+          if (!/nothing left for this one to take/.test(w)) {
+            return "warning: " + w;
+          }
+          if (/Pass 'bounds'/.test(w)) {
+            return "it offers a fix that cannot work here: " + w;
+          }
+          if (/ST ADefault/.test(w)) {
+            return "it blames the mask it just made: " + w;
+          }
+          return /ST ABlank/.test(w) ||
+                 "it does not name the masks that are hiding it: " + w;
+        } },
+
+      { name: "…and so does one over only half of it",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Above", name: "ST AHalf",
+                   shape: "rectangle", bounds: [0, 0, 100, 200],
+                   mode: "subtract" };
+        },
+        check: function (d) {
+          return /changes nothing on 'ST Above'/.test(d.warning || "") ||
+                 "a half-layer subtract over a hidden layer took nothing " +
+                 "and said nothing: " + (d.warning || "(none)");
+        } },
+
+      // The gate STAYS for the modes that would reveal at a smaller
+      // region: their no-op really is a fact about the region left to the
+      // default, and add_mask + set_mask_path opens with that placeholder.
+      { name: "…while an inverted 'add' at the default region stays quiet",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Above", name: "ST AInv",
+                   mode: "add", inverted: true };
+        },
+        check: function (d) {
+          return !d.warning ||
+                 "the placeholder gate was widened too far: " + d.warning;
+        } },
+
       { name: "…and the layer that carried all that goes away",
         tool: "delete_layer",
         args: function (ctx) {

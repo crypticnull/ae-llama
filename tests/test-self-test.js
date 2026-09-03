@@ -3247,6 +3247,11 @@ function cannedOk(tool, args) {
       };
       const mkAbove = mkParade(mkShapes[mkKey], mkSz);
       const mkCount = (mkMasks[mkKey] || []).length;
+      // The masks that are ALREADY there, read before this call appends
+      // its own — the host reads them in the same place and for the same
+      // reason: a receipt that blamed the mask it just made would name
+      // the wrong thing.
+      const mkPrior = (mkMasks[mkKey] || []).slice();
       const mkErases = (covered) => {
         const o = mkOutcome(args && args.mode, args && args.inverted,
                             covered, mkAbove);
@@ -3510,16 +3515,45 @@ function cannedOk(tool, args) {
             "the part you want to KEEP.";
         return mkOut;
       }
+      // THE NO-OP THE `mkAsked` GATE MUST NOT SILENCE, modelled because a
+      // canned host that kept the gate would PASS the three real-AE steps
+      // below while proving nothing — the same vacuous-step class the last
+      // three passes each had to fix. Over masks that already hide every
+      // pixel, subtract/intersect/darken leave the layer at nothing
+      // WHATEVER region they are handed, so neither the default region
+      // nor a set_mask_path written later could rescue the call; and
+      // `mkCovers` is not what makes it a no-op either, so a NAMED
+      // half-layer region was just as silent.
+      const mkSubtractive = (mkWord === "subtract" || mkWord === "intersect" ||
+                             mkWord === "darken");
+      // The host drops both no-op sentences when the mask spans past the
+      // layer — that region has its own note.
+      const mkOver = !!(mkSz && mkHit &&
+        (mkHit.l < 0 || mkHit.t < 0 ||
+         mkHit.r > mkSz.width || mkHit.b > mkSz.height));
+      let nWhy = "", nFix = "";
+      if (mkAbove === "none" && mkSubtractive && !mkOver) {
+        nWhy = "the " + mkPhrase("mask", mkCount + " masks") +
+          " already on it " + mkPhrase("hides", "hide") + " all of it, " +
+          "so there is nothing left for this one to take";
+        // "Pass 'bounds'" is false here — no region works — so the fix
+        // names the masking that IS hiding the layer instead.
+        nFix = "No region can change that: it is the masking already on " +
+          "the layer that hides it" +
+          (mkPrior.length
+            ? " (" + mkPrior.slice(0, 4).join(", ") +
+              (mkPrior.length > 4
+                ? " … and " + (mkPrior.length - 4) + " more"
+                : "") +
+              ") — set_mask {mask: \"" + mkPrior[0] + "\", mode: \"none\"} " +
+              "switches one off, or delete_mask {mask: \"" + mkPrior[0] +
+              "\"} removes it."
+            : ".");
       // mode 'none' is out of this branch and nowhere else: it changes
       // nothing at ANY region, and it is a path carrier.
-      if (mkCovers && !mkPlain && mkAsked && mkWord !== "none" &&
-          mkOut2 && mkOut2.noop) {
-        let nWhy;
-        if (mkAbove === "none") {
-          nWhy = "the " + mkPhrase("mask", mkCount + " masks") +
-            " already on it " + mkPhrase("hides", "hide") + " all of it, " +
-            "so there is nothing left for this one to change";
-        } else if (args && args.inverted) {
+      } else if (mkCovers && !mkPlain && mkAsked && mkWord !== "none" &&
+                 !mkOver && mkOut2 && mkOut2.noop) {
+        if (args && args.inverted) {
           nWhy = "'inverted' turns a mask covering the whole layer into one " +
             "covering NONE of it, so '" + mkWord + "' " +
             ((mkWord === "subtract" || mkAbove === "nothing")
@@ -3529,10 +3563,12 @@ function cannedOk(tool, args) {
           nWhy = "'" + mkWord + "' over the whole layer keeps everything " +
             "that already showed";
         }
-        const nFix = (args && args.inverted &&
-                      String(args.mode).toLowerCase() !== "subtract")
+        nFix = (args && args.inverted &&
+                String(args.mode).toLowerCase() !== "subtract")
           ? "Pass 'bounds' for the part you want to CUT AWAY."
           : "Pass 'bounds' for the part you want to KEEP.";
+      }
+      if (nWhy) {
         mkOut.warning = "That mask changes nothing on '" + args.layer +
           "' (" + mkSz.width + "x" + mkSz.height + " at x 0 to " +
           mkSz.width + ", y 0 to " + mkSz.height + "): " + nWhy +
