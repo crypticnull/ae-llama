@@ -53,11 +53,11 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `export_mogrt` | Write a comp out as a .mogrt Motion Graphics template | yes | host | 1 | 6 |
 | `export_social` | Export a comp as an H.264 .mp4 (or .mov) sized for posting, AUDIO INCLUDED when the comp has any | yes | panel | — | — |
 | `expose_property` | Expose one property in the comp's ESSENTIAL GRAPHICS panel, so an editor can change it in Premiere | yes | host | 1 | 5 |
-| `for_each_layer` | Run a PER-LAYER tool once per target layer in ONE call (max 200 layers) — the batch executor for anything without its own layers arg: {tool: 'apply_effect', args: {effect: 'Gaussian Blur'}} blurs every target | yes | host | 1 | 6 |
+| `for_each_layer` | Run a PER-LAYER tool once per target layer in ONE call (max 200 layers) — the batch executor for anything without its own layers arg: {tool: 'apply_effect', args: {effect: 'Gaussian Blur'}} blurs every target | yes | host | 1 | 8 |
 | `get_bounds` | MEASURE a layer's rendered content without touching it — how wide the text actually is, where the shape sits in the frame, whether anything overflows | no | host | 1 | 32 |
 | `get_comp_details` | Layers of a comp with index, name, type, timing, effects, track matte | no | host | 4 | 36 |
 | `get_project_info` | List project items (comps/footage/folders) and the active comp | no | host | 2 | 16 |
-| `get_property` | Read ANY property by path: value, keyframes, expression | no | host | 3 | 96 |
+| `get_property` | Read ANY property by path: value, keyframes, expression | no | host | 3 | 97 |
 | `grid_layout` | Arrange layers into a grid rigged to a control null: its 'Grid X Spacing'/'Grid Y Spacing'/'Grid Columns' sliders drive spacing AND column count live, and the grid centers on the null's position (all expressions generated host-side) | yes | host | 1 | 2 |
 | `import_as_layer` | Import a file AND place it in a comp as a layer, scaled to the comp | yes | host | 1 | 8 |
 | `import_file` | Import a footage/image/video file into the PROJECT PANEL only — it does not appear in any comp | yes | host | 1 | 2 |
@@ -78,7 +78,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `reorder_layers` | Restack layers WITHOUT changing their timing | yes | host | 1 | 12 |
 | `scale_comp` | Resize a comp AND scale its content to match, re-centered — like the native 'Scale Composition' script | yes | host | 2 | 2 |
 | `set_comp_setting` | Change a comp setting: duration, frame rate, bg color, the WORK AREA (workAreaStart with workAreaDuration or workAreaEnd, in seconds — or workArea: 'comp' to reset it to the whole comp) and preview resolution | yes | host | 2 | 10 |
-| `set_effect_param` | Set a parameter on an effect already applied to a layer | yes | host | 1 | 4 |
+| `set_effect_param` | Set a parameter on an effect already applied to a layer | yes | host | 1 | 6 |
 | `set_expression` | LAST RESORT: set a raw expression (or clear with '') | yes | host | 1 | 14 |
 | `set_keyframes` | Set the SAME keyframes on MANY layers in ONE call | yes | host | 2 | 13 |
 | `set_layer_3d` | Enable/disable a layer's 3D switch | yes | host | 1 | 8 |

@@ -363,6 +363,20 @@ let batchLayers = 0;
 let batchFx = {};
 let batchBlur = null;
 
+// Per-layer failures reported the way for_each_layer reports them: one
+// copy of each distinct message, prefixed by every layer that hit it.
+// Measured 2026-09-03 — the same refusal printed once per layer put
+// ~2.2 KB in a single result and the panel dropped history to fit it.
+function groupFailures(list) {
+  const msgs = [], names = [];
+  for (const f of list) {
+    let at = msgs.indexOf(f.error);
+    if (at < 0) { at = msgs.length; msgs.push(f.error); names.push([]); }
+    names[at].push(f.name);
+  }
+  return msgs.map((m, i) => names[i].join(", ") + ": " + m).join(" | ");
+}
+
 // A value AE will not take, refused the way AELL_writeValue refuses it.
 // Measured in real AE 2026 (scripts/param-value-probe.jsx): setValue
 // COERCES a numeric string ("50" reads back 50, ["10","20"] reads back
@@ -1510,12 +1524,38 @@ function cannedOk(tool, args) {
       }
       if (t === "set_effect_param") {
         // Only layers that really carry the effect can take the param —
-        // that is what makes "reaches all 60" mean anything.
-        const hit = L.filter(nm => batchFx[nm] === sub.effect);
-        if (hit.length) batchBlur = sub.value;
-        return { tool: t, layers: L.length, succeeded: hit.length,
-                 failures: hit.length === L.length ? ""
-                   : (L.length - hit.length) + " layers lack " + sub.effect };
+        // that is what makes "reaches all 60" mean anything. Each layer
+        // gets the sub-tool's REAL refusal, because the thing under test
+        // is how N of those are reported: identical ones collapse to one
+        // copy prefixed by every layer that hit it, differing ones each
+        // print in full. A canned host that summarised them ("N layers
+        // lack X") could not see either.
+        let okCount = 0;
+        const fails = [];
+        for (const nm of L) {
+          let why = "";
+          if (batchFx[nm] !== sub.effect) {
+            why = "Effect not found on layer: " + sub.effect +
+              ". Effects on '" + nm + "': " +
+              (batchFx[nm] || "(none)") +
+              ". apply_effect adds one that is missing.";
+          } else {
+            why = badValueRefusal(sub.value,
+              String(sub.effect || "") + "/" + String(sub.param || ""),
+              "number", batchBlur === null ? null : batchBlur,
+              "effect." + String(sub.effect || "") + "." +
+              String(sub.param || ""));
+          }
+          if (!why) { okCount++; batchBlur = sub.value; continue; }
+          fails.push({ name: nm, error: why });
+          if (fails.length >= 5) {
+            return { __err: "Stopped after 5 failures (" + okCount +
+              " layers were already changed before that). Failures: " +
+              groupFailures(fails) };
+          }
+        }
+        return { tool: t, layers: L.length, succeeded: okCount,
+                 failures: fails.length ? groupFailures(fails) : "" };
       }
       return { tool: t, layers: L.length, succeeded: L.length,
                failures: "" };

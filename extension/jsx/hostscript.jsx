@@ -10299,6 +10299,40 @@ function AELL_whyNotPerLayer(toolName) {
 }
 
 /*
+ * Collapse per-layer failures to ONE copy of each distinct message,
+ * prefixed by every layer that hit it: "A, B, C: <message>".
+ *
+ * This is a CONTEXT fix, not a cosmetic one. Measured 2026-09-03: a
+ * for_each_layer over seven layers whose sub-tool refused the same way
+ * every time printed that ~450-char refusal five times — ~2.2 KB in a
+ * single tool result against a default 16384 ctx — and the very next
+ * line of the transcript was "context trimmed — 2 earlier message(s)
+ * dropped". The panel drops HISTORY when the window overflows, so a
+ * repeated refusal does not just waste room, it deletes the turns the
+ * model needs to act on the refusal it is being handed.
+ *
+ * Messages that genuinely differ (they name the layer, or the layers
+ * failed for different reasons) still print in full — one group each,
+ * in first-seen order. A single failure formats exactly as before.
+ */
+function AELL_groupFailures(failures) {
+  var msgs = [], names = [], i, j, at;
+  for (i = 0; i < failures.length; i++) {
+    at = -1;
+    for (j = 0; j < msgs.length; j++) {
+      if (msgs[j] === failures[i].error) { at = j; break; }
+    }
+    if (at < 0) { at = msgs.length; msgs.push(failures[i].error); names.push([]); }
+    names[at].push(failures[i].name);
+  }
+  var parts = [];
+  for (i = 0; i < msgs.length; i++) {
+    parts.push(names[i].join(", ") + ": " + msgs[i]);
+  }
+  return parts.join(" | ");
+}
+
+/*
  * Run ANY layer tool once per target layer, host-side — the "script"
  * for batch requests: one model call, hundreds of layers, no per-layer
  * inference. The layer is injected by INDEX (names can repeat).
@@ -10334,20 +10368,21 @@ AELL_TOOLS.for_each_layer = function (args) {
     if (r && r.ok) {
       okCount++;
     } else {
-      failures.push(layers[i].name + ": " + (r ? r.error : "unknown error"));
+      failures.push({ name: layers[i].name,
+                      error: r ? r.error : "unknown error" });
       if (failures.length >= 5) {
         // Partial, not plain, failure: okCount layers were already
         // changed. If the round is rollback-armed those go with it; if
         // it is not, they stay. Either way the caller is told which.
         return AELL_errPartial("Stopped after 5 failures (" + okCount +
           " layers were already changed before that). Failures: " +
-          failures.join(" | "));
+          AELL_groupFailures(failures));
       }
     }
   }
   return AELL_okay({ tool: toolName, layers: layers.length,
     succeeded: okCount,
-    failures: failures.length ? failures.join(" | ") : "" });
+    failures: failures.length ? AELL_groupFailures(failures) : "" });
 };
 
 AELL_TOOLS.set_track_matte = function (args) {

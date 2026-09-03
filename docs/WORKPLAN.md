@@ -1871,14 +1871,22 @@ this order, one bullet per pass:
     One doc change and it was a CUT: `set_effect_param`'s
     `value: number|[..]|string` invited the failure, now
     `number|[..]` (prompt 58974 -> 58967). See the log.
-  - NEXT, and it is the context bill this fix ran up: **`for_each_layer`
-    prints an identical failure once PER LAYER.** Measured 2026-09-03 —
-    its "Stopped after 5 failures" summary repeated the same ~450-char
-    refusal five times, ~2.2 KB in ONE result against a 16384 ctx, and
-    the next transcript line is `context trimmed — 2 earlier message(s)
-    dropped`. Pre-existing, measurably worse now that refusals carry a
-    route. Collapse identical failures to one copy plus the layer list.
-  - THEN: **the `Parameter not found` lever is a CONCEPT map, not a
+  - ~~**`for_each_layer` prints an identical failure once PER LAYER**~~
+    DONE 2026-09-03 (0.11.18). Its "Stopped after 5 failures" summary
+    repeated the same ~450-char refusal five times, ~2.2 KB in ONE
+    result against a 16384 ctx, and the next transcript line was
+    `context trimmed — 2 earlier message(s) dropped` — the panel drops
+    HISTORY on overflow, so a repeated refusal deletes the turns the
+    model needs in order to act on it. `AELL_groupFailures` now prints
+    ONE copy of each distinct message prefixed by every layer that hit
+    it (`A, B, C: <msg>`), at BOTH report sites; messages that really
+    differ still print in full, and a lone failure keeps the old
+    `Name: error` shape. Measured on the same five-layer refusal:
+    **1692 chars -> 420**. Zero prompt cost (host strings only). The
+    canned host in tests/test-self-test.js used to SUMMARISE batch
+    failures, which is why no stub could see this class; it now runs
+    the sub-tool per layer. Harness 599 -> 602.
+  - NEXT: **the `Parameter not found` lever is a CONCEPT map, not a
     ranking** (measured 2026-09-03). The model guessed `Offset` ->
     `Offset X` -> `Offset Y` -> `Blurriness` on Drop Shadow across four
     calls, shown the complete correct roster every time. What is missing

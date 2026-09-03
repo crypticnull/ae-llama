@@ -14679,3 +14679,79 @@ Two `--variants --steps 36` runs against the real 32B in real AE.
 AE running, project untouched and open, no dialog raised. No ComfyUI and
 no llama-server were left running (chat-probe stops the server it
 starts). AE was never closed and its project was never closed.
+
+## 2026-09-03 (later pass) — section 8, the filed NEXT: `for_each_layer` printed an identical failure once PER LAYER
+
+Harness was already green (599/599) at the start of the pass, so this is
+the workplan's explicit `NEXT:` bullet, filed by the previous pass as
+"the context bill this fix ran up".
+
+### The defect
+
+`for_each_layer` pushed `layer.name + ": " + error` per failing layer and
+joined the list with `" | "`. When the sub-tool refuses the SAME way on
+every layer — which is the common case, because most refusals describe
+the ARGUMENTS, not the layer — the whole refusal was repeated once per
+layer. Measured in the previous pass's field run: the ~450-char
+bad-value refusal appeared five times in the "Stopped after 5 failures"
+summary, ~2.2 KB in ONE tool result against a default 16384 ctx, and the
+very next transcript line was `context trimmed — 2 earlier message(s)
+dropped`. The panel drops HISTORY on overflow, so a repeated refusal
+does not merely waste room: it deletes the turns the model needs in
+order to act on the refusal it is being handed.
+
+### The fix, at the root
+
+`AELL_groupFailures` in `extension/jsx/hostscript.jsx`, used by BOTH
+report sites in `for_each_layer` (the give-up summary and the ok-with-
+failures result). Failures are collected as `{name, error}` and printed
+as one copy of each DISTINCT message prefixed by every layer that hit
+it: `A, B, C: <message>`, groups in first-seen order. Messages that
+genuinely differ still print in full — merging those would hide four
+real problems behind one layer's message — and a single failure keeps
+the exact `Name: error` shape the panel and the model already read.
+Zero prompt cost: host strings only, no tool doc touched.
+
+Measured on the stub, same five-layer refusal: **1692 chars -> 420**.
+
+### Verification
+
+- `tests/test-for-each-layer.js`: 4 new assertions built on a 315-char
+  refusal — the message appears exactly ONCE, all five layers are named
+  together in order, the whole result stays under two copies long, five
+  DIFFERENT failures still print five lines, and a lone failure among
+  successes is byte-for-byte the old shape. **3 of them go RED against
+  the reverted hostscript** (5 copies, 1692 chars).
+- `tests/test-self-test.js`'s canned host previously summarised the
+  batch failures ("N layers lack X"), which is exactly why no stubbed
+  run could see this class. It now runs the sub-tool per layer, produces
+  the real per-layer refusal (missing effect, or the bad-value message
+  from `badValueRefusal`), stops at 5 and groups the same way.
+- **Three new real-AE self-test steps** in `extension/js/selftest.js`
+  (batch group, after the value-shape steps, where all 60 layers hold
+  Blurriness 12 so six refusals are character-identical): the collapsed
+  summary carries one copy and names the five layers, it wrote nothing,
+  and a pair of DIFFERING failures still prints one line each.
+- **Real AE harness 599 -> 602/602 PASSED.** Full stub sweep: 0 red
+  files. `docs/CAPABILITIES.md` regenerated (step counts moved).
+- `extension/` changed, so BUMPED: 0.11.17 -> **0.11.18**.
+
+### Notes / assumptions
+
+- Scope held to what the bullet asked. The give-up cap stays at 5 —
+  identical failures now cost one copy, so stopping earlier would only
+  lose information. Layer names, not indexes, still prefix a group; the
+  old format used names too, and changing that is a separate call.
+- No re-run of `scripts/chat-probe.js` this pass: the fix is a size
+  change to a message whose wording is unchanged, and the two stub
+  suites plus real AE pin the size. Row 36 vague is still HARM for the
+  reason the last pass filed (the model adds a `CTRL` null, layer count
+  8 -> 9).
+- Next in the workplan is unchanged: the `Parameter not found` CONCEPT
+  map ("offset"/"distance" -> Distance + Direction, "blur"/"soften" ->
+  Softness on Drop Shadow).
+
+### Machine state
+
+AE running, project untouched and open, no dialog raised. AE was never
+closed and its project was never closed. No ComfyUI, no llama-server.

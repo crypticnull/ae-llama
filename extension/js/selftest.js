@@ -2716,6 +2716,80 @@
           return Number(d.value) === 12 || "wrote " + d.value;
         } },
 
+      // The CONTEXT bill of the refusal above. Measured 2026-09-03 in the
+      // same field round: for_each_layer printed that ~450-char refusal
+      // once PER LAYER, so its "Stopped after 5 failures" summary carried
+      // ~2.2 KB in ONE result against a default 16384 ctx — and the very
+      // next transcript line was "context trimmed — 2 earlier message(s)
+      // dropped". The panel drops HISTORY on overflow, so a repeated
+      // refusal deletes the turns the model needs in order to act on it.
+      // All six layers hold Blurriness 12, so all six refusals are
+      // character-identical: exactly the case that must collapse.
+      { name: "batch: an identical per-layer failure is printed ONCE",
+        tool: "for_each_layer",
+        args: function (ctx) {
+          return { comp: ctx.btComp,
+                   layers: ["ST Batch 2", "ST Batch 3", "ST Batch 4",
+                            "ST Batch 5", "ST Batch 6", "ST Batch 7"],
+                   tool: "set_effect_param",
+                   args: { effect: "Gaussian Blur", param: "Blurriness",
+                           value: 'thisComp.layer("ST Batch").effect("Slider")(1)' } };
+        },
+        expectError: true,
+        check: function (err) {
+          if (!/Stopped after 5 failures/.test(err)) {
+            return "it did not stop at the failure cap: " + err;
+          }
+          var copies = String(err).split("link_property").length - 1;
+          if (copies !== 1) {
+            return "the same refusal is repeated " + copies + " times (" +
+                   String(err).length + " chars in one result): " + err;
+          }
+          if (err.indexOf("ST Batch 2, ST Batch 3, ST Batch 4, ST Batch 5, " +
+                          "ST Batch 6: ") === -1) {
+            return "the five layers that hit it are not listed together: " +
+                   err;
+          }
+          return String(err).length < 900 ||
+                 "one refusal, five layers, still " + String(err).length +
+                 " chars: " + err;
+        } },
+
+      { name: "batch: and that collapsed failure wrote nothing",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.btComp, layer: "ST Batch 6",
+                   property: "effects/Gaussian Blur/Blurriness" };
+        },
+        check: function (d) {
+          return Math.abs(Number(d.value) - 12) < 1e-6 ||
+                 "Blurriness reads " + d.value + ", not the 12 it held";
+        } },
+
+      // Failures that differ are NOT merged — collapsing those would hide
+      // real problems behind one layer's message. 'Vibrance' is on no
+      // layer here, so each refusal names its own layer and stands alone.
+      { name: "batch: failures that DIFFER still print one line each",
+        tool: "for_each_layer",
+        args: function (ctx) {
+          return { comp: ctx.btComp,
+                   layers: ["ST Batch 8", "ST Batch 9"],
+                   tool: "set_effect_param",
+                   args: { effect: "Vibrance", param: "Vibrance", value: 20 } };
+        },
+        check: function (d) {
+          // Two failures is under the give-up cap, so this comes back as
+          // an ok result carrying a failures string — the OTHER place the
+          // grouping runs.
+          var f = String(d.failures || "");
+          if (d.succeeded !== 0) return "succeeded " + d.succeeded + " of 2";
+          if (!/ST Batch 8:/.test(f) || !/ST Batch 9:/.test(f)) {
+            return "the two differing failures were merged: " + f;
+          }
+          return f.indexOf("Effect not found") !== -1 ||
+                 "failures do not carry the real reason: " + f;
+        } },
+
       // ---- what the MODEL is told about a big comp -----------------
       // A 200-layer comp serialized to 30 KB against a 6 KB prompt
       // budget, so the panel's byte-slice dropped the comp out of the
