@@ -17028,3 +17028,114 @@ rig inside the probe's own namespace, and each printed its cleanup line
 (`cleanup: removed N project item(s)`). The harness's bottom-of-run check
 confirmed nothing of the suite remains. llama-server was started and
 stopped by the probe five times. No Premiere this pass, no ComfyUI.
+
+## 2026-09-03 (local, real AE + real Premiere) - WORKPLAN 12b: the last clip on the track was the SEED (no bump)
+
+### The item
+
+Harness first: **710/710 PASSED**, so the pass took a backlog item. The
+previous log entry was a section 8 AE pass, and 12b's alternation rule
+says the next one is Premiere. Its single open failure was `mogrt`.
+
+### What was wrong
+
+Run `-0413` had measured it for the first time: `importMGT` LANDED
+(track 0 grew 1 -> 2) and then `getMGTComponent` answered null, which
+reads exactly like "this build cannot read a MOGRT's controllers back".
+It was not about Premiere at all. The probe read the landed clip as
+`clips[after - 1]` and got `icon-normal.png` - the seed still the
+sequence had been built from. A graphic lands at its INSERTION TIME, so
+it can take any index and push the rest down; measured this pass, it
+took index **0** and moved the seed to index 1. The last index is not
+"the one just added", and asking the wrong clip a question gets an
+answer that looks like a platform limit.
+
+### What changed
+
+`probe/com.cptk.aellama.probe/jsx/probe.jsx` (probe only - `extension/`
+untouched, so **no version bump**, per 12b's rule):
+
+- `AELLP_clipSnap(seq, track)` photographs a video track's clips -
+  `name`, `start.ticks`, `nodeId` - each read through `AELLP_safe`.
+- `AELLP_clipId(c)` returns the usable identity: `nodeId` when the build
+  exposes one, else `name@ticks`. `AELLP_safe` hands back `"throws: ..."`
+  for a read that failed and `null` for one that was not there, and
+  neither may be matched against as though it were an id.
+- `AELLP_newClip(before, after)` returns the one clip the BEFORE picture
+  cannot account for, as a MULTISET compare so a clip that merely shares
+  a name with a neighbour is not called new. Two candidates is
+  `ambiguous`, none is `no-new-clip`, and both REFUSE - the receipt says
+  the round-trip was not measured rather than falling back to an index,
+  because an index guess is what produced the wrong answer.
+- `mogrtAccept` uses it and records `pickedBy`, `clipIndex`,
+  `trackBefore` and `trackAfter`, so a reader can tell a clean diff from
+  a fallback and can see the track it was taken from.
+
+### Verification
+
+- **Field re-run in real Premiere 26.3.2**, `docs/measured/ppro-probe-
+  2026-09-03-0510.json`: `pickedBy: "diff"`, `clipIndex: 0`,
+  **4 controllers, names readable** - `Headline Size`, `Card Position`,
+  `BG Opacity`, `Headline Text` - and the Source Text is NOT blanked
+  (`"textEditValue":"HELLO"`). **Every battery step passed**, the first
+  fully green unattended run. Premiere accepts what AE writes;
+  `docs/SELF-VERIFY-PLANS.md` step 7 is retired on this build.
+- The track, measured: before `[icon-normal.png @0 node 000f4241]`,
+  after `[Untitled @0 node 000f4242, icon-normal.png @1008604396800 node
+  000f4241]`. `nodeId` EXISTS on a TrackItem on 26.3.2 and survived the
+  seed being pushed down the track.
+- `tests/test-probe-bundle.js` **§9, 13 new assertions**, all **RED
+  against the reverted probe.jsx** and green with it. It drives the real
+  helpers out of probe.jsx against tracks built in the test: the exact
+  field shape, a build with no readable `nodeId`, a `nodeId` read that
+  THROWS, same-named neighbours, and all three refusals. The
+  "went back to indexing" assertions run FIRST so they still report on a
+  tree where the helpers are gone entirely instead of being swallowed by
+  a ReferenceError.
+- The five 12b lints (`test-es3-syntax`, `test-es3-ternary`,
+  `test-powershell-syntax`, `test-probe-bundle`, `test-manifest-xml`):
+  all green. **Real AE harness 710/710 PASSED** (unchanged - this pass
+  touched no AE code).
+- `docs/PREMIERE-PLATFORM.md`: `importMGT` and the new `nodeId` row
+  flipped to MEASURED in section 3; full entry added to section 4.
+
+### Notes / assumptions
+
+- **Assumed a refusal beats a fallback pick.** When the diff cannot
+  name exactly one new clip the probe reports NOT MEASURED. Falling
+  back to `clips[after - 1]` would have "worked" on this run and is
+  precisely the guess that cost a launch; a measurement taken off a
+  guess is not evidence.
+- **Assumed the clip name is not an identity.** The graphic's clip is
+  named `Untitled`, not after the `.mogrt` - so anything that looks for
+  an imported graphic BY NAME will not find it. Worth knowing before
+  any Premiere-side MOGRT tool is built.
+- Judgement call: `nodeId` is preferred but not required. It is present
+  on 26.3.2 and absent from Adobe's older docs, so the fallback is what
+  keeps the probe honest on a build that lacks it.
+
+### Filed as the NEXT 12b item (blocked nothing this pass)
+
+**`scripts/ppro-probe-report.js` does not grade an unattended run.**
+Every row comes from `runtime-<HOST>.json`, which only the VISIBLE panel
+writes when a human clicks its buttons; `job-result.json` - where
+`run-ppro-probe.ps1` puts the whole battery - is read into
+`collected.jobResult` and then used by no row at all. After the
+all-green run above the grader printed `FAIL MOGRT ... clip count did
+not grow (1 -> 1)`, from a stale 2026-09-02 click, and `G0: NOT
+MEASURED`. The runner's printout tells the reader to run that grader, so
+a reader who trusts it gets a confident answer about a DIFFERENT
+artifact - the same failure class as the last-index guess this pass
+fixed. Not folded in here: 12b says one root cause per pass, and this
+one is in the reporting, not the battery. Filed in WORKPLAN 12b with the
+fix shape (grade the job result too, prefer the newer, name the source
+per row).
+
+### Machine state
+
+**After Effects was never closed and its project was never closed.** One
+harness run in AE. Premiere was launched and closed by
+`run-ppro-probe.ps1` itself, once; it worked only in its own scratch
+`AELL_PROBE_SCRATCH.prproj` under `%APPDATA%\AE-Llama\probes\` and its
+cleanup step removed all four things it made (`AELL PROBE 1/2/3`,
+`AELL PROBE SEQ`). No ComfyUI, no llama-server this pass.

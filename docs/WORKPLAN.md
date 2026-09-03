@@ -2579,15 +2579,36 @@ has been running it by hand all day and should not have to again.
   whitelist maintained in two files is what lost `seedMedia`, and
   `tests/test-probe-bundle.js` §8 now goes red if either door returns
   to one.
-- `mogrt`: **MEASURED AND FAILING 2026-09-03**, the next 12b pass's
-  item. `importMGT` landed (track clip count 1 -> 2) but
-  `mogrtAccept` reads the clip back as `clips[after - 1]` and got
-  **`icon-normal.png`** - the seed still that the sequence was built
-  from - so `getMGTComponent` was asked of the wrong clip and returned
-  null. The last index is not "the one just added". Identify the new
-  clip by diffing the track before and after (name plus
-  `start`/`nodeId`), do not assume position, and only then judge
-  whether the controller round-trip is readable on this build.
+- ~~`mogrt`~~ **PASSES 2026-09-03** (run `-0510`), and with it **every
+  battery step passed for the first time**. The diagnosis held: the
+  graphic lands at its insertion TIME, so it took index 0 and pushed
+  the seed to index 1 - `clips[after - 1]` was asking the SEED for a
+  MOGRT component. The probe now photographs the track before and
+  after (`AELLP_clipSnap`) and takes the one clip the before picture
+  cannot account for (`AELLP_newClip`), by `nodeId` where the build has
+  one - measured, 26.3.2 does - and by name + `start.ticks` as a
+  multiset otherwise. Read back: **4 controllers, all named, Source
+  Text still `HELLO`**, so Premiere accepts what AE writes and
+  `docs/SELF-VERIFY-PLANS.md` step 7 is retired on this build. Receipt
+  carries `pickedBy` so a fallback pick can never be mistaken for a
+  clean diff; `tests/test-probe-bundle.js` §9 holds the class without
+  Premiere.
+
+### The battery is green; the GRADER is the item now
+
+`scripts/ppro-probe-report.js` builds every row from
+`runtime-<HOST>.json`, which only the VISIBLE panel writes when a human
+clicks its buttons. `job-result.json` - where an unattended
+`run-ppro-probe.ps1` puts the whole battery - is read into
+`collected.jobResult` and then never used by a single row. So after the
+all-green run above the grader still printed `FAIL MOGRT ... clip count
+did not grow (1 -> 1)` from a stale 2026-09-02 click, and `G0: NOT
+MEASURED`. A report that is confidently about a different artifact is
+the same failure class as the last-index guess it just contradicted.
+Next 12b pass: grade the job result too, prefer the NEWER of the two,
+and say which one each row came from. Until then the runner's own
+printout is the authority for an unattended run - `docs/PREMIERE-
+PLATFORM.md` section 4 says so.
 
 ## Out of scope for the local session (remote builds these)
 

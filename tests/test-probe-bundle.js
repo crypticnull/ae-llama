@@ -665,5 +665,144 @@ function hostsIn(xml) {
     });
 }
 
+// --------------- 9. the clip just added is found by DIFF, not by index
+//
+// FIELD FAILURE 2026-09-03 (Premiere 26.3.2, run -0413): `importMGT`
+// landed -- track 0 grew 1 -> 2 -- and the probe then read the clip back
+// as `clips[after - 1]` and got `icon-normal.png`, the seed still the
+// sequence had been built from. `getMGTComponent` on that clip answers
+// null, and null there reads exactly like "this build cannot read a
+// MOGRT's controllers back": a conclusion about Premiere drawn from
+// asking the wrong clip. The graphic lands at its insertion TIME, so the
+// new clip can be anywhere in the collection and the LAST index is not
+// "the one just added".
+//
+// This drives the REAL diff out of probe.jsx against a track built here.
+{
+  const psrc = read(path.join(PROBE, "jsx", "probe.jsx"));
+
+  // The caller may not quietly go back to indexing. This runs FIRST so
+  // it still reports on a tree where the helpers are gone altogether --
+  // "went back to indexing" is the regression, and it must not be
+  // swallowed by the drive-out below failing to evaluate.
+  const mogrt = /AELLP_PROBES\.mogrtAccept = function[\s\S]*?\n\};/.exec(psrc);
+  assert(!!mogrt, "probe.jsx still defines mogrtAccept as one function");
+  const mbody = stripJs(mogrt ? mogrt[0] : "");
+  assert(!/clips\s*\[\s*after\s*-\s*1\s*\]/.test(mbody),
+         "mogrtAccept does not read the landed clip as clips[after - 1]");
+  assert(/AELLP_newClip\s*\(/.test(mbody),
+         "it identifies the clip with AELLP_newClip");
+  assert(/pickedBy/.test(mbody),
+         "and the receipt records HOW the clip was picked -- a fact " +
+         "measured off a fallback pick is weaker evidence than one off " +
+         "a clean diff, and the reader has to be able to tell");
+
+  const grab = function (name) {
+    const re = new RegExp("function " + name + "\\([^)]*\\) \\{[\\s\\S]*?\\n\\}");
+    const m = re.exec(psrc);
+    assert(!!m, "probe.jsx defines " + name);
+    return m ? m[0] : "";
+  };
+  const bundle = [grab("AELLP_say"), grab("AELLP_safe"),
+                  grab("AELLP_clipSnap"), grab("AELLP_clipId"),
+                  grab("AELLP_newClip")].join("\n");
+  let api = null;
+  try {
+    api = new Function(bundle +
+      "\nreturn { snap: AELLP_clipSnap, id: AELLP_clipId, diff: AELLP_newClip };")();
+  } catch (e) {
+    assert(false, "the clip-diff helpers evaluate on their own: " + e.message);
+  }
+
+  // A track whose clips answer the way Premiere's TrackItems do:
+  // `.name`, `.start.ticks`, and `.nodeId` where the build has one.
+  function seqOf(clips) {
+    const coll = { numItems: clips.length };
+    clips.forEach(function (c, i) {
+      coll[i] = {
+        get name() {
+          if (c.name === undefined) { throw new Error("no name"); }
+          return c.name;
+        },
+        get start() {
+          if (c.ticks === undefined) { throw new Error("no start"); }
+          return { ticks: c.ticks };
+        },
+        get nodeId() {
+          if (c.node === "throws") { throw new Error("no nodeId"); }
+          return c.node;
+        }
+      };
+    });
+    return { videoTracks: [{ clips: coll }] };
+  }
+  function newOf(before, after) {
+    if (!api) { return { how: "helpers-missing", clip: null, added: [] }; }
+    return api.diff(api.snap(seqOf(before), 0), api.snap(seqOf(after), 0));
+  }
+
+  // (a) the exact shape that failed in the field: the graphic went in at
+  //     time 0 and the seed slid to the END of the collection.
+  {
+    const seed = { name: "icon-normal.png", ticks: "0", node: "n-seed" };
+    const seedMoved = { name: "icon-normal.png", ticks: "8467200000",
+                        node: "n-seed" };
+    const gfx = { name: "AELL MOGRT Probe", ticks: "0", node: "n-gfx" };
+    const got = newOf([seed], [gfx, seedMoved]);
+    assert(got.how === "diff" && got.clip && got.clip.index === 0,
+           "the new clip is the one the BEFORE picture cannot account " +
+           "for, even when it is not last (got index " +
+           String(got.clip && got.clip.index) + ")");
+    assert(got.clip && got.clip.name === "AELL MOGRT Probe",
+           "and it is the graphic, not the seed that clips[after - 1] " +
+           "handed back in run -0413");
+  }
+
+  // (b) identity survives a build with no readable nodeId: name + start
+  //     ticks is the fallback, and it is a MULTISET compare, so a clip
+  //     that merely SHARES a name with an existing one is not new.
+  {
+    const got = newOf(
+      [{ name: "A.png", ticks: "0" }, { name: "A.png", ticks: "200" }],
+      [{ name: "A.png", ticks: "0" }, { name: "A.png", ticks: "100" },
+       { name: "A.png", ticks: "200" }]);
+    assert(got.how === "diff" && got.clip && got.clip.index === 1,
+           "with no nodeId, name+start finds the inserted clip among " +
+           "same-named neighbours");
+    const thrown = newOf(
+      [{ name: "A.png", ticks: "0", node: "throws" }],
+      [{ name: "A.png", ticks: "0", node: "throws" },
+       { name: "G", ticks: "50", node: "throws" }]);
+    assert(thrown.how === "diff" && thrown.clip && thrown.clip.name === "G",
+           "a nodeId read that THROWS falls back too -- AELLP_safe's " +
+           "\"throws: ...\" string is not an identity");
+  }
+
+  // (c) the honest refusal. If two clips are unaccounted for, or none
+  //     is, there is no measurement -- and the probe has to SAY that
+  //     rather than fall back to an index, because an index guess is
+  //     what produced the wrong answer in the first place.
+  {
+    const ambiguous = newOf(
+      [{ name: "A", ticks: "0" }],
+      [{ name: "A", ticks: "0" }, { name: "G1", ticks: "10" },
+       { name: "G2", ticks: "20" }]);
+    assert(/^ambiguous/.test(ambiguous.how) && ambiguous.clip === null,
+           "two unaccounted-for clips is 'ambiguous', not a guess");
+    const none = newOf(
+      [{ name: "A", ticks: "0" }, { name: "B", ticks: "10" }],
+      [{ name: "A", ticks: "0" }, { name: "B", ticks: "10" }]);
+    assert(none.how === "no-new-clip" && none.clip === null,
+           "and a track whose clips are all accounted for yields no clip");
+    const blind = newOf(
+      [{ ticks: "0", node: "throws" }],
+      [{ ticks: "0", node: "throws" }, { ticks: "10", node: "throws" }]);
+    assert(blind.clip === null,
+           "a build where NOTHING identifies a clip refuses too, rather " +
+           "than calling every clip new");
+  }
+
+}
+
 console.log(failed ? "\nTESTS FAILED" : "\nALL TESTS PASSED");
 process.exitCode = failed ? 1 : 0;

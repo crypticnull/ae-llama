@@ -82,7 +82,8 @@ a native gap.
 | BridgeTalk AE→Premiere delivery | target `premierepro` is LISTED from AE (measured); delivery still unproven | P0 step 4, door 1 |
 | `/C es.processFile` + `extendscriptprqe.txt` on 26.x | SNIPPET (confirmed only CC2019 / 2024) | P0 step 4, door 2 |
 | Invisible `StartOn` extension fires in Premiere | ADOBE-SRC (sample) + SNIPPET; Adobe's own manifest comments the event as firing on **every OS focus gain** | P0 step 4, door 3 |
-| `importMGT` still works on 26.x; text set blanks the value | SNIPPET | P0 step 5 |
+| `importMGT` still works on 26.x; text set blanks the value | **MEASURED: works, and the text does NOT blank** — 4 controllers read back by name, Source Text still `HELLO` | done |
+| A TrackItem carries a stable `nodeId` on 26.3.2 | **MEASURED: yes** (`000f4241`), and it survives the clip being pushed down the track | done |
 | `exportAsMediaDirect` on 26.x | SNIPPET (a "not working on 2025" thread title, unread) | P1 |
 | QE mutates (razor/ripple/effect params) on 26.3.2 | QE is reachable and lists 236 effects (**measured**); whether it MUTATES is not | P1 |
 | A hybrid `.uxpaddon` can spawn a process | UNVERIFIED | P2 spike |
@@ -370,6 +371,59 @@ Unattended run `docs/measured/ppro-probe-2026-09-03-0413.json`, **26.3.2
   the last index is not the clip just added, and `getMGTComponent`
   returned null on the wrong clip. Next 12b pass; controller read-back
   on this build stays UNMEASURED until then.
+
+### 2026-09-03 - Premiere ACCEPTS what AE writes, and the last clip is not the new one
+
+Unattended run `docs/measured/ppro-probe-2026-09-03-0510.json`, **26.3.2
+/ CEP 12.0.1**. **Every battery step passed** - the first fully green
+unattended run. MEASURED:
+
+- **The MOGRT round-trip is readable.** A `.mogrt` written by AE
+  (`logs/mogrt-verify/AELL MOGRT Probe.mogrt`) imported with
+  `seq.importMGT(path, "0", 0, 0)`, and `getMGTComponent()` on the
+  landed clip returned **4 controllers, all named**: `Headline Size`,
+  `Card Position`, `BG Opacity`, `Headline Text`. The Source Text is
+  NOT blanked, which the snippet sources warned of - it reads back as a
+  text-run JSON blob still carrying `"textEditValue":"HELLO"` and
+  `"fontEditValue":["PowerCentra-Book"]`, so the controller a panel
+  would drive is intact. That retires `docs/SELF-VERIFY-PLANS.md` step 7
+  on this build: Premiere accepts what AE writes.
+- **`clips[after - 1]` is not the clip that was just added**, and this
+  is the fact the previous run got wrong. The graphic lands at its
+  INSERTION TIME, so it can take any index and push the rest down.
+  Measured here, track 0:
+
+  | | before | after |
+  |---|---|---|
+  | index 0 | `icon-normal.png` @ `0` (node `000f4241`) | **`Untitled` @ `0` (node `000f4242`)** - the graphic |
+  | index 1 | - | `icon-normal.png` @ `1008604396800` (node `000f4241`) - the seed, MOVED |
+
+  The old code read index 1 and asked the SEED for its MOGRT
+  component; null there reads exactly like "this build cannot read
+  controllers back". The probe now diffs the track: `AELLP_clipSnap`
+  photographs it before and after, `AELLP_newClip` returns the one clip
+  the BEFORE picture cannot account for, and the receipt records
+  `pickedBy` so a reader can tell a clean diff from a fallback. It was
+  `pickedBy: "diff"` on this run.
+- **`nodeId` exists on a TrackItem on 26.3.2** and is the identity to
+  use: `000f4241` named the same clip before and after it moved.
+  `name` + `start.ticks` is the fallback for a build without it, and it
+  is compared as a MULTISET so a clip that merely shares a name with an
+  existing one is not called new.
+- **The graphic's clip name is `Untitled`, not the .mogrt's file name.**
+  Anything that tries to find an imported graphic BY NAME will not find
+  it.
+
+Not measured, and now the next 12b item: **`scripts/ppro-probe-report.js`
+does not grade an unattended run at all.** It builds every row from
+`runtime-<HOST>.json`, which only the VISIBLE panel writes when a human
+clicks its buttons; `job-result.json` - where `run-ppro-probe.ps1` puts
+the whole battery - is read into `collected.jobResult` and then never
+used. So after this all-green run the grader still printed
+`FAIL MOGRT ... clip count did not grow (1 -> 1)` from a stale
+2026-09-02 manual click, and `G0: NOT MEASURED`. The runner's own
+printout is the authority for an unattended run; the grader is only
+about the panel-clicked one until it is taught to read the job result.
 
 ### The rest
 
