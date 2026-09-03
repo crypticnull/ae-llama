@@ -14446,3 +14446,43 @@ Nothing else was left unattempted this pass. Nothing is blocked.
   AE's buttons actually report. The geometric click is the fallback for
   every answer to that question, not a guess at a particular one.
 - No `extension/` change, so NO BUMP.
+
+## 2026-09-03 (remote session) — stop needing the button to exist
+
+- Owner, correctly: eight attempts, each fixing one hypothesis, each
+  leaving the next one open. That is the process error, not any single
+  bug. The remaining ways this could STILL have failed, all left open by
+  the previous fix:
+  1. the buttons may carry no readable text either, so label-matching
+     finds nothing;
+  2. they may not be child windows at all -- AE drawing them onto the
+     dialog surface means there is no HWND to click;
+  3. the dialog may not be class `#32770`.
+  Any one of those and the same photo comes back.
+- FIX 1 -- an escape hatch that needs no button. When a dialog's TEXT
+  matches a rule but no pressable control is found, `AnswerDialog` now
+  posts `WM_CLOSE` to the dialog instead of walking away. On a
+  save-changes prompt that is CANCEL: it calls off the quit, keeps every
+  unsaved change, and unblocks the host so the next `-r` script runs --
+  which is the only thing that actually matters. It needs no child
+  window, no readable label and no button class, so it works whatever AE
+  built the dialog out of. Gated per-rule (`CancelIfNoButton`) so it can
+  never stand in for an answer that was supposed to DISCARD.
+- FIX 2 -- class breadth. `IsDialogClass` accepts `#32770` OR any
+  `DroverLord*` class, since AE draws its own windows with those. The
+  real safety was never the class; it is the text match in the caller.
+- FIX 3 -- the watchdog now says it is ALIVE. It logs on start, on every
+  answer, on a failed sweep, and a heartbeat every ~5 minutes. Twice now
+  "the watchdog did not work" and "the watchdog never ran" have been
+  indistinguishable in the log, and each time that ambiguity cost a
+  round trip to the owner.
+- The pattern under all eight failures, written down so it stops
+  repeating: EVERY layer returned the same value for "nothing was
+  there" and "I could not act on what was there". Empty string from
+  AnswerDialog, zero from the sweep, an empty buttons list from the
+  diagnostic. A negative result that cannot distinguish absence from
+  incapacity is not a result, and it is why each fix looked like it had
+  worked.
+- Verified: pwsh parses; C# compiles (259 lines); RAIL HOLDS against all
+  three owner-lists; harness 72/74.
+- No `extension/` change, so NO BUMP.

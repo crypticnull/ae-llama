@@ -298,13 +298,27 @@ if ($UntilHour -ge 0) {
 $watchdog = $null
 if (-not $NoDialogWatchdog) {
     $watchdog = Start-Job -Name 'AellDialogWatchdog' -ScriptBlock {
-        param($lib, $owned, $procs, $everySec)
+        param($lib, $owned, $procs, $everySec, $log)
         . $lib
+        function Note([string]$m) {
+            $line = ((Get-Date -Format 'HH:mm:ss') + '  [watchdog] ' + $m)
+            try { Add-Content -Path $log -Value $line -Encoding ASCII } catch { }
+        }
+        Note 'started'
+        $sweeps = 0
         while ($true) {
             try {
-                [void](Answer-AellKnownDialogs -ProcessNames $procs `
-                         -OwnedProjects $owned)
-            } catch { }
+                $n = Answer-AellKnownDialogs -ProcessNames $procs `
+                       -OwnedProjects $owned
+                if ($n -gt 0) { Note ('answered ' + $n + ' dialog(s)') }
+            } catch {
+                Note ('sweep failed: ' + $_.Exception.Message)
+            }
+            $sweeps++
+            # A heartbeat every ~5 minutes. Without one, "the watchdog
+            # did not work" and "the watchdog never ran" look identical
+            # in the log, and this has already cost a night twice.
+            if (($sweeps % 60) -eq 0) { Note ('alive, ' + $sweeps + ' sweeps') }
             Start-Sleep -Seconds $everySec
         }
     } -ArgumentList `
@@ -315,7 +329,8 @@ if (-not $NoDialogWatchdog) {
         # windows and only reads text out of an actual #32770 -- and
         # the window that matters is the one between a pass asking AE
         # to close and that pass giving up on it.
-        5
+        5,
+        $logFile
     Write-Log ('Dialog watchdog running (job ' + $watchdog.Id + '): a ' +
                'save-changes prompt on a project this harness owns is ' +
                'answered Do not Save; anything else is cancelled, which ' +
