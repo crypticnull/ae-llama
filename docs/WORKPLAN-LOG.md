@@ -14210,3 +14210,71 @@ Nothing else was left unattempted this pass. Nothing is blocked.
   `Add-Type`d on Linux (DllImport resolves at call time) -- 495 lines,
   compiles clean. Harness 70/72 (the two container-only failures).
 - No `extension/` change, so NO BUMP.
+
+## 2026-09-03 (remote session) — "untitled" was never the same question as "ours"
+
+- Owner, on the rule shipped an hour earlier: "youre naming these
+  projects though, i dont think theyre untitled". Then, after checking:
+  "I spotted the named file in AE btw". Both correct.
+- The rule gated the save-changes prompt on the literal word `Untitled`,
+  reasoning that an untitled project is one the harness made and a named
+  one is somebody's work. The SECOND half is right and is the rail this
+  keeps. The first half was wrong, in both hosts:
+  - `scripts/run-ppro-probe.ps1` saves its scratch project with `saveAs`
+    to `%APPDATA%\AE-Llama\probes\AELL_PROBE_SCRATCH.prproj`. Premiere's
+    prompt carries THAT name, never "Untitled", so the rule could not
+    answer the one dialog the Premiere probe raises. `Stop-OurPremiere`
+    then did what it does with any prompt it cannot answer: burned its
+    20 s grace and forced the process — and a forced close is precisely
+    what makes the NEXT launch open a crash-recovery prompt. One
+    unanswerable dialog cost a pass 20 s AND started the next pass
+    behind a second dialog.
+  - `scripts/mogrt-verify-probe.jsx` does `app.project.save(scratch)`
+    into `logs/.../mogrt-probe-scratch.aep` — it has to, because
+    `export_mogrt` cannot run from a project that was never saved. From
+    that point on AE's quit prompt names THAT file. This is the one the
+    owner spotted.
+- NEW `scripts/lib/host-dialogs.ps1`, shared by both runners (class
+  `AellDlg`, distinct from the AE runner's `AellWin` so both can load).
+  The identity test is no longer a word: `Get-AellDialogRules` takes the
+  project names the CALLER declares it owns, and the caller is the
+  script that created them, which is the only thing that can know. AE
+  passes `Untitled Project` and `mogrt-probe-scratch`; the Premiere
+  probe derives its name from `$scratch`, so the two cannot drift.
+- And a project on NEITHER list is no longer a hang. A LAST rule cancels
+  that prompt: Cancel calls off the quit and changes nothing, so the
+  host unblocks and every unsaved change survives. Discarding needs
+  proof of ownership; cancelling needs none, because it cannot lose
+  anything. Ordered after the owned rule so a project we DO own still
+  gets the answer that resolves it permanently.
+- The guard keys on an explicit `RequiresOwned` flag, NOT on the rule's
+  name — the cancelling rule is also a save-changes rule and must still
+  run with no owned names. A name-based guard would have disarmed the
+  very rule that protects the owner's work.
+- `Stop-OurPremiere` and the start-of-run close now answer before they
+  give up, and both print the dialog's real text and every button label
+  before forcing or exiting. The force is now the last resort it was
+  always described as rather than the usual path.
+- The AE runner keeps no private copy: its duplicated C# and rule table
+  were deleted (-8.5k chars) and it dot-sources the library. Two tables
+  that can drift is how the Premiere gap survived in the first place.
+- NEW `tests/test-host-dialogs.js` — CI-enforced: every discarding rule
+  is flagged `RequiresOwned` and takes its names from the caller; the
+  guard exists and does not key on a rule name; the Cancel rule exists
+  and is ordered last; each declared owned name matches the script that
+  actually writes that file; neither runner keeps a private copy. Its
+  first version reported "found 1 rule" and passed everything it then
+  did not look at — a rule's closing brace sits on the same line as its
+  last field, so a newline-anchored pattern swallowed the whole table.
+  Brace-counted now.
+- Verified: pwsh 7 parses all three `.ps1`; the extracted C# compiles
+  under `Add-Type` (175 lines); the rule table was executed under pwsh
+  against all three owner-lists and the rail asserted directly — a
+  caller declaring nothing SKIPS the discarding rule and still RUNS the
+  cancelling one. Harness 71/72 with the new test (the two failures are
+  the known container-only ones).
+- Still unmeasured, and marked as such in the file: the crash-recovery
+  and unexpected-quit wordings. `Write-AellUnknownDialogs` now runs on
+  every dead end in both runners, so the first one to appear puts its
+  real strings in the log.
+- No `extension/` change, so NO BUMP.

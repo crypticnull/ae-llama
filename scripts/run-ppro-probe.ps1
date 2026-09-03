@@ -47,6 +47,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 . (Join-Path $PSScriptRoot 'lib\json-io.ps1')
+. (Join-Path $PSScriptRoot 'lib\host-dialogs.ps1')
 
 $repoRoot  = Split-Path -Parent $PSScriptRoot
 $probeData = Join-Path $env:APPDATA 'AE-Llama\probes'
@@ -62,17 +63,32 @@ function Good([string]$m) { Write-Host $m -ForegroundColor Green }
 function Bad([string]$m) { Write-Host $m -ForegroundColor Red }
 function Warn([string]$m) { Write-Host $m -ForegroundColor Yellow }
 
+# The projects THIS script may answer a save-changes prompt for. Note
+# that it is a NAME, not "untitled": this script saves its scratch
+# project with saveAs to $scratch, on purpose, so Premiere's prompt
+# carries AELL_PROBE_SCRATCH and never the word Untitled. That is the
+# whole reason Get-AellDialogRules takes the owned names from the caller
+# instead of hardcoding a word -- the AE runner's projects genuinely are
+# untitled, and this one's genuinely are not.
+$script:AellOwnedProjects = @([System.IO.Path]::GetFileNameWithoutExtension($scratch))
+$script:AellHostProcesses = @('Adobe Premiere Pro', 'Adobe Premiere')
+
 <#
   Close the Premiere WE started, and do not sit on a modal.
 
   CloseMainWindow() is polite: if Premiere asks "save changes?" it waits
   for an answer that is never coming, and an unattended pass just burns
-  its whole budget staring at a dialog. So: ask nicely, wait, then kill.
+  its whole budget staring at a dialog.
 
-  Killing is safe HERE and only here, because the only instance this
-  ever touches is the one this script launched itself, containing
-  nothing but a throwaway scratch project. A Premiere the owner started
-  is never passed to this function.
+  Forcing it was the old answer, and it was a bad one: a forced close is
+  precisely what makes the NEXT launch open a crash-recovery prompt, so
+  one unanswerable dialog cost this pass 20 s AND started the next pass
+  behind a second dialog. Now the prompt gets ANSWERED -- Don't Save, on
+  a dialog that names this script's own scratch project and nothing
+  else. The grace wait and the force are still there behind it, because
+  a dialog no rule matches must not become a hang either; but the force
+  is now the last resort it was always described as, rather than the
+  usual path.
 #>
 function Stop-OurPremiere {
     param($Proc, [int]$GraceSec = 20)
@@ -81,14 +97,27 @@ function Stop-OurPremiere {
 
     try { [void]$Proc.CloseMainWindow() } catch {}
     $deadline = (Get-Date).AddSeconds($GraceSec)
+    $tried = 0
     while ((Get-Date) -lt $deadline) {
         try { if ($Proc.HasExited) { Say 'Premiere closed.'; return } } catch { return }
         Start-Sleep -Milliseconds 500
+        # Give the prompt a moment to appear before reaching for it, and
+        # cap the attempts so a dialog that regenerates cannot spin out
+        # the whole grace window clicking at it.
+        if ($tried -lt 3 -and ((Get-Date) -gt $deadline.AddSeconds(-$GraceSec + 3))) {
+            $n = Answer-AellKnownDialogs `
+                   -ProcessNames $script:AellHostProcesses `
+                   -OwnedProjects $script:AellOwnedProjects
+            if ($n -gt 0) { $tried++ }
+        }
     }
 
-    Say ("Premiere did not close in " + $GraceSec + "s (a save-changes modal" +
-         " with nobody to answer it). Forcing OUR instance, PID " +
-         $Proc.Id + ".")
+    Say ("Premiere did not close in " + $GraceSec + "s and no rule matched " +
+         "what it is showing. Forcing OUR instance, PID " + $Proc.Id + ".")
+    # Say what it IS before killing it: a forced close leaves a recovery
+    # prompt for the next launch, so the dialog that caused this needs to
+    # reach the log as real strings, not as an inference.
+    Write-AellUnknownDialogs -ProcessNames $script:AellHostProcesses
     try {
         Stop-Process -Id $Proc.Id -Force -ErrorAction Stop
         Say 'Forced.'
@@ -217,12 +246,26 @@ if ($running.Count -gt 0) {
     Say 'Premiere is running; asking it to quit (it will prompt if unsaved)...'
     foreach ($p in $running) { [void]$p.CloseMainWindow() }
     $deadline = (Get-Date).AddSeconds(45)
+    $tried = 0
     while ((Get-Date) -lt $deadline -and (Get-PremiereProcesses).Count -gt 0) {
         Start-Sleep -Milliseconds 700
+        # A save prompt naming OUR scratch project is one a previous pass
+        # left, so answering it is not a liberty. Deliberately still no
+        # force here, unlike Stop-OurPremiere: this instance may be one
+        # the owner started, holding their work, and a prompt naming
+        # THEIR project matches no rule and is left alone for them.
+        if ($tried -lt 3) {
+            $n = Answer-AellKnownDialogs `
+                   -ProcessNames $script:AellHostProcesses `
+                   -OwnedProjects $script:AellOwnedProjects
+            if ($n -gt 0) { $tried++ }
+        }
     }
     if ((Get-PremiereProcesses).Count -gt 0) {
         Bad 'Premiere did not quit - it is probably asking to save something.'
         Bad 'Answer that dialog, then re-run this script. Nothing was forced.'
+        Bad 'What it is showing, in its own words:'
+        Write-AellUnknownDialogs -ProcessNames $script:AellHostProcesses
         exit 4
     }
     Good 'Premiere closed.'
