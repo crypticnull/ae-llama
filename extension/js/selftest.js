@@ -3647,6 +3647,59 @@
                  "and said nothing: " + (d.warning || "(none)");
         } },
 
+      // …and so does one that SPILLS PAST the layer, which used to get
+      // the overflow note and nothing else: "the part outside the layer
+      // does nothing" is true and is about the wrong part — the part
+      // inside did nothing either. A region that overflows is still a
+      // region, and subtract takes nothing from a layer already hidden
+      // wherever it is pointed. The note stays: it is the only place the
+      // span is named, and comp coordinates on a layer-space argument are
+      // what put a mask out there.
+      { name: "…and so does one that spills past the layer",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Above", name: "ST AOver",
+                   shape: "rectangle", bounds: [-50, 0, 300, 100],
+                   mode: "subtract" };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (!/changes nothing on 'ST Above'/.test(w)) {
+            return "an overflowing subtract over a hidden layer said only " +
+                   "the note: warning " + (w || "(none)") + ", note " +
+                   (d.note || "(none)");
+          }
+          if (!/nothing left for this one to take/.test(w)) {
+            return "warning: " + w;
+          }
+          if (/Pass 'bounds'/.test(w)) {
+            return "it offers a fix that cannot work here: " + w;
+          }
+          return /past 'ST Above'/.test(d.note || "") ||
+                 "the span it overflowed by was dropped: " +
+                 (d.note || "(none)");
+        } },
+
+      // The widening is confined to the modes that can only TAKE. An
+      // overflowing 'add' over the same hidden layer really does reveal
+      // the pixels inside its region, so it is not a no-op and must not
+      // borrow this sentence.
+      { name: "…while an overflowing 'add' over it is no no-op",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Above", name: "ST AOverAdd",
+                   shape: "rectangle", bounds: [-50, 0, 300, 100],
+                   mode: "add" };
+        },
+        check: function (d) {
+          if (/changes nothing/.test(d.warning || "")) {
+            return "a mask that reveals pixels was called a no-op: " +
+                   d.warning;
+          }
+          return /past 'ST Above'/.test(d.note || "") ||
+                 "note: " + (d.note || "(none)");
+        } },
+
       // The gate STAYS for the modes that would reveal at a smaller
       // region: their no-op really is a fact about the region left to the
       // default, and add_mask + set_mask_path opens with that placeholder.

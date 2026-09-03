@@ -18289,3 +18289,121 @@ final 768 with the fixed host restored). No probes were needed — the
 claim this pass makes is algebra over the parade reader that the last
 three passes measured, not a new measurement. No Premiere, no ComfyUI,
 no llama-server left running.
+
+## 2026-09-03 — the no-op that spilled past the layer, and said only that (0.11.37)
+
+**Item:** WORKPLAN section 1 was green on the first run of the pass
+(768/768), so the item is the top entry of the previous pass's "still
+open, in priority order" list: *an overflowing subtract over an
+already-hidden layer is a no-op, and only the overflow note is said.*
+
+### What was wrong
+
+The 0.11.36 pass gave `add_mask` a branch for the no-op that no region
+can rescue: over masks that already hide every pixel (`aboveShows ===
+"none"`), a mode that can only ever TAKE — `subtract`, `intersect`,
+`darken` — leaves the layer at nothing whatever region it is handed. It
+carried `!overflow` over from the branch it was split out of, and that
+condition does not belong to it.
+
+`!overflow` guards the sentences that read `covers`, and it guards them
+for a real reason: a mask spilling past the layer has its own note
+("the part outside the layer does nothing") and a claim about the whole
+layer would be arguing with it. But this branch does not read `covers`
+at all — its reason is the PARADE, not the region — and a region that
+spills past the layer is still a region. Subtract removes from nothing
+whether it is aimed at the layer or half a screen to the left of it.
+
+So the receipt for `add_mask {bounds: [-50, 0, 300, 100], mode:
+"subtract"}` on a layer whose masks already hid it was the overflow note
+and nothing else: a true sentence about the *outside* part doing
+nothing, which reads exactly like the inside part having worked. Same
+silent-lie shape as the call the last pass fixed, one condition along.
+
+### The fix
+
+One condition removed from `AELL_TOOLS.add_mask`, with the reasoning
+written where the next pass will find it. Nothing else moved, and the
+comment records why nothing needed to: whenever `overflow` survives to
+that point, `covers` is false, because a mask that sticks out on a side
+AND still contains the whole layer box is bigger than it on that axis —
+which the "far bigger than" refusal above already turns away. So
+`erases`, `undoes`, `coversAll` and the branch under this one are all
+silent there and no warning is being stolen.
+
+**The overflow NOTE is left standing beside the warning, deliberately.**
+It is the only place the mask's own span is named, and a span out in
+comp coordinates is the diagnosis when comp numbers reached a
+layer-space argument. It also makes the weaker of the two claims, so a
+reader taking the stronger one is not misled. Suppressing it would have
+cost the coordinates to buy tidiness.
+
+### Verification
+
+- **Real AE harness 768 -> 770/770 PASSED**, two new steps in
+  `extension/js/selftest.js` on the already-hidden `ST Above` layer.
+- **One of them is RED against the reverted host in REAL AE** (769/770),
+  reproducing the filed silence verbatim: `warning (none), note The mask
+  spans x -50 to 250, y 0 to 100, past 'ST Above' …`. The second is a
+  negative control — an overflowing `add` over the same hidden layer
+  really does reveal the pixels inside its region, so it must NOT borrow
+  the sentence, and it passes either way on purpose.
+- `tests/test-shape-mask-tools.js` section 6d: 6 new assertions, **2 of
+  them RED** against the reverted host. Three are boundary controls: the
+  note must survive; an overflowing `add` over the hidden layer is no
+  no-op; and over a layer that still SHOWS something the same
+  overflowing subtract cuts a real hole and stays quiet — that last one
+  is what goes red if the branch is ever widened off its `aboveShows`
+  hinge.
+- **Stub faithfulness:** `tests/test-self-test.js`'s canned host had the
+  `mkOver` flag and had never emitted the note at all, so a real-AE step
+  that reads `d.note` would have passed on an absent one. It emits the
+  note now, and set ABOVE the four branches that return early, matching
+  where the host sets `out.note`. With the canned branch's gate restored
+  it fails **exactly the one step real AE fails, with the identical
+  message** (769/770).
+- Full stubbed suite green (74 files); `docs/CAPABILITIES.md`
+  regenerated (add_mask 72 -> 74 steps).
+- **Zero prompt cost** — `extension/js/tools.js` untouched.
+
+### Notes / assumptions
+
+- **Assumed the note and the warning may both be said.** The alternative
+  was folding the span into the warning and dropping the note, which is
+  more code for no fact gained; the two fields keep separate jobs (where
+  the mask is / what it does). If a later pass measures the model acting
+  on the note's implication anyway, that is the change to make.
+- **Assumed `overflow` and `covers` cannot coexist** — argued above from
+  the "far bigger than" refusal, not measured. The canned host emits the
+  note above the early returns precisely so that a future edit breaking
+  that argument shows up as a stub failure rather than a lost sentence.
+
+### Still open, in priority order
+
+1. TWO ellipses, and a feathered mask anywhere, still make the parade
+   unreadable — both deliberate, both measurable if they ever earn a
+   pass.
+2. `comp.saveFrameToPng` writing nothing is still unexplained.
+3. Row 30's typo still burns six `center_anchor_point` calls before the
+   grid_layout that works. Cost, not harm.
+4. Everything else from the 2026-09-03 lists is unchanged: the
+   `distribute_property` mutate-then-throw hole, a bad VALUE not being
+   `argFault`, widening the `errArg` rollback exemption to thrown
+   lookups, step 2's naming flake, the destructive-refusal wording on
+   `delete_layer` / `delete_mask`, `property: string` in TOOL_DEFS,
+   `POST /tokenize`, the `comfyUrl` 8188/8000 mismatch on this machine,
+   the harness answering a modal with WORDS, `starved` wording,
+   delete_mask warning on a live expression, the unmeasured controller
+   GROUP and non-en_US locale, and `capParams`.
+
+Section 8 still has no open HARM and no open miss in the variant matrix.
+
+### Machine state
+
+**After Effects was never closed and its project was never closed.**
+Four harness runs (baseline 768, reverted-host red 769/770, and 770/770
+green with the fixed host, plus the final post-bump run). No probes were
+needed: the claim is algebra over the parade reader the last three
+passes measured, and the one new geometric fact — that an overflowing
+mask cannot also cover the layer — is a property of a refusal already in
+the file. No Premiere, no ComfyUI, no llama-server left running.

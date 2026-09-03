@@ -3407,6 +3407,23 @@ function cannedOk(tool, args) {
                              mkHit.r >= mkSz.width && mkHit.b >= mkSz.height);
       const mkCovers = !!(mkHit && mkShapeCovers(mkShapeKind, mkHit.l,
         mkHit.t, mkHit.r, mkHit.b, mkSz, mkV));
+      // A region that spills PAST the layer. The canned host had the flag
+      // and never the sentence, so every real-AE step that reads the note
+      // passed on an absent one. Set here, above the four branches that
+      // return early, because the host sets `out.note` unconditionally —
+      // they cannot in fact coexist (a mask that sticks out AND contains
+      // the layer box is refused as "far bigger"), and a canned host that
+      // relies on that is one edit away from being wrong quietly.
+      const mkOver = !!(mkSz && mkHit &&
+        (mkHit.l < 0 || mkHit.t < 0 ||
+         mkHit.r > mkSz.width || mkHit.b > mkSz.height));
+      if (mkOver) {
+        mkOut.note = "The mask spans x " + mkHit.l + " to " + mkHit.r +
+          ", y " + mkHit.t + " to " + mkHit.b + ", past '" + args.layer +
+          "' (" + mkSz.width + "x" + mkSz.height + " at x 0 to " +
+          mkSz.width + ", y 0 to " + mkSz.height + ") — the part outside " +
+          "the layer does nothing.";
+      }
       // The other end of that same coverage: the mask that leaves NOTHING.
       // A layer vanishing on an `ok` is the expensive direction, so unlike
       // "cuts nothing away" this one does not wait to be asked — the
@@ -3526,13 +3543,13 @@ function cannedOk(tool, args) {
       // half-layer region was just as silent.
       const mkSubtractive = (mkWord === "subtract" || mkWord === "intersect" ||
                              mkWord === "darken");
-      // The host drops both no-op sentences when the mask spans past the
-      // layer — that region has its own note.
-      const mkOver = !!(mkSz && mkHit &&
-        (mkHit.l < 0 || mkHit.t < 0 ||
-         mkHit.r > mkSz.width || mkHit.b > mkSz.height));
+      // `mkOver` gates the no-op sentence BELOW, which reads `mkCovers`,
+      // and not this one, which reads the parade: a region that spills
+      // past the layer is still a region, and subtract takes nothing from
+      // an already-hidden layer wherever it is pointed. The note stays
+      // beside the warning — it is the only place the span is named.
       let nWhy = "", nFix = "";
-      if (mkAbove === "none" && mkSubtractive && !mkOver) {
+      if (mkAbove === "none" && mkSubtractive) {
         nWhy = "the " + mkPhrase("mask", mkCount + " masks") +
           " already on it " + mkPhrase("hides", "hide") + " all of it, " +
           "so there is nothing left for this one to take";

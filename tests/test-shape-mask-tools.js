@@ -1372,6 +1372,37 @@ r = call("add_mask", { layer: "Solo", name: "DarkHalf", shape: "rectangle",
 assert(r.ok && /changes nothing on 'Solo'/.test(r.data.warning || ""),
        "…and a part-layer 'darken': " +
        JSON.stringify(r.ok ? r.data : r.error));
+// …and a region that SPILLS PAST the layer, which the first version of
+// this branch still gated out. `!overflow` guards the sentences that
+// read `covers`, and this one does not read it: the reason is the
+// parade, not the region, so an overflowing subtract takes nothing from
+// an already-hidden layer exactly as an aimed one does. Before this it
+// got the overflow note alone — "the part outside the layer does
+// nothing", which is true of the wrong part.
+r = call("add_mask", { layer: "Solo", name: "SubOver", shape: "rectangle",
+                       bounds: [-20, 0, 140, 50], mode: "subtract" });
+assert(r.ok && /changes nothing on 'Solo'/.test(r.data.warning || "") &&
+       /nothing left for this one to take/.test(r.data.warning || ""),
+       "an OVERFLOWING subtract over an already-hidden layer said only " +
+       "the overflow note: " + JSON.stringify(r.ok ? r.data : r.error));
+assert(!/Pass 'bounds'/.test(r.data.warning || "") &&
+       /No region can change that/.test(r.data.warning || ""),
+       "…and a region that overflows is still a region, so the fix that " +
+       "cannot work is still not offered: " + r.data.warning);
+assert(/past 'Solo'/.test(r.data.note || "") &&
+       /the part outside the layer does nothing/.test(r.data.note || ""),
+       "…while the note keeps its own job — it is the only place the " +
+       "mask's span is named, and comp coordinates on a layer-space " +
+       "argument are what put a mask out there: " +
+       JSON.stringify(r.data.note || null));
+// The widening is confined to the modes that can only TAKE. An
+// overflowing 'add' really does reveal the pixels inside its region.
+r = call("add_mask", { layer: "Solo", name: "AddOver", shape: "rectangle",
+                       bounds: [-20, 0, 140, 50], mode: "add" });
+assert(r.ok && !/changes nothing/.test(r.data.warning || "") &&
+       /past 'Solo'/.test(r.data.note || ""),
+       "an overflowing 'add' over the same hidden layer is no no-op, and " +
+       "still gets its note: " + JSON.stringify(r.ok ? r.data : r.error));
 // But the gate STAYS for the modes that would reveal at a smaller
 // region: their no-op really is a fact about the region left to the
 // default, and the placeholder argument still holds for them.
@@ -1390,6 +1421,16 @@ assert(r.ok && /hides ALL of 'Solo'/.test(r.data.warning || "") &&
        !/changes nothing/.test(r.data.warning || ""),
        "the default-region subtract over a VISIBLE layer still empties " +
        "it, and still says so: " + JSON.stringify(r.ok ? r.data : r.error));
+soloMasks._children.length = 0;
+// …and over a bare layer an overflowing subtract cuts a real hole, so it
+// gets the note and nothing else. This is the row that would go red if
+// the parade branch were ever widened off the `aboveShows` hinge.
+r = call("add_mask", { layer: "Solo", name: "SubOverBare", shape: "rectangle",
+                       bounds: [-20, 0, 140, 50], mode: "subtract" });
+assert(r.ok && !r.data.warning && /past 'Solo'/.test(r.data.note || ""),
+       "an overflowing subtract over a layer that still SHOWS something " +
+       "cuts a real hole and is not a no-op: " +
+       JSON.stringify(r.ok ? r.data : r.error));
 soloMasks._children.length = 0;
 // A partly covering mask under the same mode really does something.
 r = call("add_mask", { layer: "Solo", name: "SubInvHalf", shape: "rectangle",

@@ -8108,7 +8108,31 @@ AELL_TOOLS.add_mask = function (args) {
     // Read BEFORE the new mask is appended, so the list is the masks that
     // are doing the hiding and not the one being blamed for it.
     var hiding = (aboveShows === "none") ? AELL_maskNames(layer) : [];
-    if (aboveShows === "none" && subtractive && !overflow) {
+    /* `!overflow` is NOT a condition here, and it is the only branch in
+     * this tool that goes without it. Every other sentence below reads
+     * `covers`, so overflow really does undercut them — but this one's
+     * reason is the PARADE, not the region, and a region that spills past
+     * the layer is still a region. Subtract removes from nothing,
+     * intersect and darken take the smaller of nothing and anything,
+     * inside the layer box and outside it alike. Filed by the 0.11.36
+     * pass as its top open item: an overflowing subtract over an already-
+     * hidden layer said only "the part outside the layer does nothing",
+     * which is a true sentence about the wrong thing — the part INSIDE
+     * did nothing either, and the receipt implied it had worked.
+     *
+     * No other warning is being stolen by this: overflow means the mask
+     * sticks out on some side, and one that sticks out AND still contains
+     * the whole layer box is bigger than it on that axis, which the
+     * "far bigger than" refusal above already turned away. So whenever
+     * `overflow` survives to here, `covers` is false and `erases`,
+     * `undoes`, `coversAll` and the branch under this one are all silent.
+     *
+     * The overflow NOTE is deliberately left standing beside the warning
+     * rather than suppressed. It is the only place the mask's own span is
+     * named, which is the diagnosis when comp coordinates reached a
+     * layer-space argument, and it makes the weaker claim of the two — a
+     * reader that takes the stronger one is not misled. */
+    if (aboveShows === "none" && subtractive) {
       noop = true;
       noopWhy = "the " + ((maskCount === 1) ? "mask" : maskCount + " masks") +
         " already on it " + ((maskCount === 1) ? "hides" : "hide") +
