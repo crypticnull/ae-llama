@@ -1031,5 +1031,285 @@ function hostsIn(xml) {
   }
 }
 
+// ----------- 11. the soak is DRIVEN BY THE DOOR, and a partial one is
+//                 never a pass
+//
+// THE HOLE, filed 2026-09-03: G0 was three-of-four rows ok and NOT
+// MEASURED on the fourth forever. The 500-round-trip engine soak lived
+// ONLY as a click handler in the visible panel's index.html, so however
+// green the unattended battery came back, no unattended run could ever
+// close the gate. "Add it to the battery" is the obvious fix and it is
+// the wrong one: the degradation being measured ("InternalError: Stack
+// overrun" on a long-lived engine) accumulates per evalScript ENTRY, so
+// 500 iterations INSIDE one evalScript would measure nothing and report
+// green -- a false pass on the one row the gate was still honest about.
+//
+// So the loop lives on the CEP side, shared by both doors, and this
+// section drives the REAL implementation out of the page.
+{
+  const BEGIN = "/* SOAK-SHARED-BEGIN";
+  const END = "/* SOAK-SHARED-END */";
+  function shared(file) {
+    const src = read(file);
+    const a = src.indexOf(BEGIN);
+    const b = src.indexOf(END);
+    return (a === -1 || b === -1) ? null : src.slice(a, b + END.length);
+  }
+  const panelBlock = shared(path.join(PROBE, "index.html"));
+  const door3Block = shared(path.join(HARNESS, "index.html"));
+
+  assert(panelBlock && door3Block, "both doors carry the shared soak block");
+  assert(panelBlock === door3Block,
+         "and the two copies are byte-identical -- the same rule the " +
+         "battArgs block learned: a thing maintained twice goes stale once");
+
+  // The soak must NOT be a step inside probe.jsx: a loop that never
+  // crosses the CEP boundary cannot see the degradation, and a step
+  // named "soak" in the battery would read as if it had.
+  const probeJsx = read(path.join(PROBE, "jsx", "probe.jsx"));
+  assert(!/step\("soak"/.test(probeJsx),
+         "probe.jsx has no soak STEP -- 500 iterations inside one " +
+         "evalScript would measure nothing and grade green");
+  assert(/AELLP_PROBES\.echo\s*=/.test(probeJsx),
+         "it carries only the echo PAYLOAD, which the door calls once " +
+         "per round trip");
+
+  const api = new Function(
+    panelBlock +
+    "\nreturn { soak: AELLP_soak, args: AELLP_soakArgs, " +
+    "check: AELLP_soakCheck, pad: AELLP_SOAK_PAD };")();
+
+  /** Drive the real loop synchronously with a fake clock and callback. */
+  function run(opts, oneRound) {
+    let clock = 0;
+    let out = null;
+    const pending = [];
+    api.soak(
+      Object.assign({ now: function () { return clock; },
+                      later: function (fn) { pending.push(fn); } }, opts),
+      function (round, cb) { clock += (opts.msPerRound || 1); oneRound(round, cb); },
+      opts.onProgress || null,
+      function (res) { out = res; });
+    // The loop hands its continuation to `later`; drain it here instead
+    // of waiting on a real event loop.
+    let guard = 0;
+    while (pending.length && guard++ < 100000) { pending.shift()(); }
+    return out;
+  }
+
+  // (a) the happy path: every round answers, the verdict is the claim.
+  {
+    const seen = [];
+    const res = run({ rounds: 500 }, function (round, cb) {
+      seen.push(round);
+      cb(api.check(null, { round: round, pad: api.pad }));
+    });
+    assert(res.rounds === 500 && res.total === 500 && res.failedAt === null,
+           "500 answered round trips is 500 rounds and no failure");
+    assert(seen.length === 500 && seen[0] === 1 && seen[499] === 500,
+           "and the door really made 500 SEPARATE round trips, numbered " +
+           "1..500 -- the whole point of not looping inside the engine");
+    assert(res.verdict === "survived 500 round-trips",
+           "the verdict is the sentence the gate grades");
+    assert(!res.skipped, "and it claims no skip");
+  }
+
+  // (b) a degraded engine is named by its round, not by a boolean.
+  {
+    const res = run({ rounds: 500 }, function (round, cb) {
+      cb(round === 137 ? "InternalError: Stack overrun" : null);
+    });
+    assert(res.failedAt === 137 && res.rounds === 136,
+           "the round that died is the one reported, and the rounds that " +
+           "survived are counted separately");
+    assert(res.verdict === "DEGRADED at round 137" &&
+           /Stack overrun/.test(res.error),
+           "the verdict names the round and keeps the engine's own words");
+  }
+
+  // (c) A SHORT REPLY IS A DEGRADED ENGINE, not a passing round. This is
+  //     the check that makes the payload size worth having: an engine
+  //     that answers but truncates has failed, and a soak that only
+  //     asked "did it throw" would call that survival.
+  {
+    assert(api.check(null, { pad: api.pad }) === null,
+           "a full payload passes the round");
+    assert(/short payload/.test(String(api.check(null, { pad: 12 }))),
+           "a truncated one does not");
+    assert(/no data/.test(String(api.check(null, null))),
+           "and an empty reply is a failure with its own words");
+    assert(api.check("evalScript itself failed", null) ===
+             "evalScript itself failed",
+           "an error from the door is passed through unchanged");
+    const res = run({ rounds: 10 }, function (round, cb) {
+      cb(api.check(null, { round: round, pad: round === 4 ? 12 : api.pad }));
+    });
+    assert(res.failedAt === 4 && /short payload/.test(res.error),
+           "so a short reply at round 4 DEGRADES the soak there");
+  }
+
+  // (d) THE ONE THIS SECTION EXISTS FOR: a soak that ran out of wall
+  //     clock is UNMEASURED, never survival. The gate's claim is "500
+  //     round-trips"; 137 of them does not support it, and reporting
+  //     "survived" for a truncated run would be exactly the false pass
+  //     the whole grader exists to refuse.
+  {
+    const res = run({ rounds: 500, budgetMs: 200, msPerRound: 1 },
+                    function (round, cb) { cb(null); });
+    assert(res.rounds < 500 && res.failedAt === null,
+           "the budget stopped it early without blaming the engine");
+    assert(typeof res.skipped === "string" && /budget/.test(res.skipped) &&
+           /not the claim/.test(res.skipped),
+           "and it says SKIPPED with the reason, which the grader reads " +
+           "as unmeasured");
+    assert(/^STOPPED at round /.test(res.verdict) &&
+           res.verdict.indexOf("survived") === -1,
+           "the verdict never contains the word 'survived'");
+
+    const rep11 = require("../scripts/ppro-probe-report.js");
+    const gated = {
+      dir: "d",
+      hosts: { PPRO: {
+        panel: { cepPresent: true, appName: "PPRO", appVersion: "26.3",
+                 node: { child_process: true, fs: true, http: true } },
+        evalScript: { ok: true, ping: { engineName: "NewWorld" } },
+        soak: res
+      } }
+    };
+    const g = rep11.gradeG0(gated);
+    assert(g.measured === false && g.pass === false,
+           "G0 over a budget-truncated soak is NOT MEASURED -- the run " +
+           "that stopped at round " + res.rounds + " must not close the gate");
+  }
+
+  // (e) progress is reported so a hang can name its round. Without this
+  //     breadcrumb the soak runs after the battery's LAST flush, and a
+  //     hang would print an all-ok battery and no reason at all.
+  {
+    const ticks = [];
+    run({ rounds: 100, progressEvery: 25,
+          onProgress: function (ran, total) { ticks.push(ran + "/" + total); } },
+        function (round, cb) { cb(null); });
+    assert(ticks.join(" ") === "25/100 50/100 75/100 100/100",
+           "the soak ticks every 25 rounds, which is what the runner " +
+           "writes to job-soak-progress.json");
+  }
+
+  // (f) the door-3 runner really wires it: asked for, run after the
+  //     battery, and refused rather than faked when the probe never
+  //     loaded.
+  {
+    const h = stripJs(read(path.join(HARNESS, "index.html")));
+    assert(/job\.soakRounds/.test(h),
+           "the runner takes the round count from the JOB, so an " +
+           "unattended run controls it");
+    assert(/runSoak\(ok,/.test(h) && /soak: soak/.test(h),
+           "it runs the soak with the battery's verdict in hand and puts " +
+           "the result in job-result.json beside the battery");
+    assert(/job-soak-progress\.json/.test(h),
+           "with its own breadcrumb file, not the battery's");
+    assert(/AELLP_soakArgs\(round\)/.test(h) &&
+           /AELLP_soakCheck\(err, data\)/.test(h),
+           "and it uses the shared payload and the shared check, so both " +
+           "doors grade a round trip by one rule");
+
+    // The refusal that keeps a load failure from reading as degradation:
+    // the visible panel once logged "DEGRADED at round 1" when probe.jsx
+    // had simply never been evaluated.
+    assert(/if \(!batteryOk\) \{/.test(h) &&
+           /nothing[\s\S]{0,40}to soak/.test(h),
+           "a run whose battery never came back reports SKIPPED, never " +
+           "DEGRADED -- a probe that did not load is not a broken engine");
+
+    const p = stripJs(read(path.join(PROBE, "index.html")));
+    assert(/AELLP_soak\(\{ rounds: 500 \}/.test(p),
+           "and the panel's button drives the same shared loop, so the " +
+           "click and the unattended run cannot drift apart");
+  }
+
+  // (g) A RUN THAT NEVER TRIED must not answer the row. The picker takes
+  //     the NEWEST source that has a value, so an unattended run writing
+  //     `soak: {skipped:"we did not ask"}` would displace a real
+  //     measurement from the panel file with our own silence.
+  {
+    const rep11 = require("../scripts/ppro-probe-report.js");
+    const h = stripJs(read(path.join(HARNESS, "index.html")));
+    assert(/whenDone\(null\);/.test(h),
+           "with soakRounds 0 the runner reports NO soak reading at all");
+    assert(/soakNote = /.test(h) && /soakNote: soakNote/.test(h),
+           "the reason lives in soakNote, which no row grades");
+
+    const noSoak = rep11.fromJobResult({
+      host: { appName: "PPRO" }, finishedAt: "2026-09-03T10:00:00.000Z",
+      parsed: { ok: true }, ok: true,
+      soak: null, soakNote: "this run did not ask for a soak",
+      battery: { steps: [{ step: "ping", ok: true, data: { pong: true } }] }
+    });
+    assert(noSoak.soak === null,
+           "so the adapter offers nothing for that row");
+
+    const withSoak = rep11.fromJobResult({
+      host: { appName: "PPRO" }, finishedAt: "2026-09-03T10:00:00.000Z",
+      parsed: { ok: true }, ok: true,
+      soak: { rounds: 500, total: 500, failedAt: null,
+              verdict: "survived 500 round-trips" },
+      battery: { steps: [{ step: "ping", ok: true, data: { pong: true } }] }
+    });
+    assert(withSoak.soak && withSoak.soak.failedAt === null,
+           "and a soak the runner DID take reaches the grader from " +
+           "job-result.json -- the whole point of the change");
+
+    // End to end, in the shape the field produces: an OLD panel file
+    // with no soak and a NEW unattended run that took one closes G0.
+    const r = rep11.report({
+      dir: "d", exists: true,
+      hosts: { PPRO: {
+        takenAt: "2026-09-02T20:51:46.828Z",
+        panel: { cepPresent: true, appName: "PPRO", appVersion: "26.3.2",
+                 node: { fs: true, http: true, child_process: true } }
+      } },
+      jobResult: {
+        host: { appName: "PPRO", appVersion: "26.3.2" },
+        finishedAt: "2026-09-03T10:00:00.000Z",
+        parsed: { ok: true }, ok: true, via: "invisible runner (door 3)",
+        soak: { rounds: 500, total: 500, failedAt: null, ms: 7100,
+                verdict: "survived 500 round-trips" },
+        battery: { steps: [
+          { step: "ping", ok: true, data: { pong: true, engineName: "NewWorld",
+              fileName: "/x/probe.jsx" } }
+        ] }
+      }
+    });
+    assert(r.g0.measured === true && r.g0.pass === true,
+           "G0 PASSES on an unattended run for the first time -- the row " +
+           "that was structurally unclosable is closed");
+    const soakCheck = r.g0.checks.filter(function (c) {
+      return /soak/.test(c.name);
+    })[0];
+    assert(soakCheck.from === "job-result.json",
+           "and the report names the unattended artifact as its source, " +
+           "not the panel click that never happened");
+  }
+
+  // (h) the PowerShell runner is the only author of a real job, so it
+  //     has to ask for the soak and budget it inside its own timeout.
+  {
+    const ps = read(path.join(ROOT, "scripts", "run-ppro-probe.ps1"));
+    assert(/soakRounds\s*=\s*\$SoakRounds/.test(ps) &&
+           /soakBudgetMs\s*=\s*\(\$SoakBudgetSec \* 1000\)/.test(ps),
+           "run-ppro-probe.ps1 writes soakRounds and soakBudgetMs into " +
+           "the job");
+    assert(/\[int\]\$SoakRounds = 500/.test(ps),
+           "and asks for 500 by default, which is the claim G0 grades");
+    assert(/job-soak-progress\.json/.test(ps),
+           "it reads the soak's breadcrumb when there is no result, so a " +
+           "hang in round 300 names itself");
+    assert(/\$res\.soak\.skipped/.test(ps) && /UNMEASURED/.test(ps),
+           "and a skipped soak prints UNMEASURED rather than passing");
+    assert(/\$res\.soak\.failedAt\) \{[\s\S]{0,80}\$failedSteps\+\+/.test(ps),
+           "a DEGRADED engine makes the whole run exit non-zero");
+  }
+}
+
 console.log(failed ? "\nTESTS FAILED" : "\nALL TESTS PASSED");
 process.exitCode = failed ? 1 : 0;

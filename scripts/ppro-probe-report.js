@@ -86,10 +86,16 @@ function stepOf(steps, name) {
  *
  * What the runner CANNOT see is left absent rather than guessed: it
  * never enumerates Node modules, APPDATA, the CEP API version, the
- * manifest shape, localStorage scoping or the soak, so those rows fall
- * back to the panel file. What its own existence proves -- a CEP
- * runtime answered getHostEnvironment(), and evalScript round-tripped a
- * JSON envelope -- is recorded.
+ * manifest shape or localStorage scoping, so those rows fall back to
+ * the panel file. What its own existence proves -- a CEP runtime
+ * answered getHostEnvironment(), and evalScript round-tripped a JSON
+ * envelope -- is recorded.
+ *
+ * The SOAK is now one of the things it DOES see. It used to be a click
+ * handler in the visible panel and nowhere else, so no unattended run
+ * could close G0's fourth row however green the battery was; the door-3
+ * runner drives it on the CEP side now (the shared block in both doors
+ * says why it cannot be a battery step inside probe.jsx).
  */
 function fromJobResult(job) {
   if (!job || job.__unreadable) { return null; }
@@ -128,6 +134,10 @@ function fromJobResult(job) {
            (ping.data.fileName || "(unnamed)")
     } : null,
     hostFacts: dataOf(facts),
+    // The runner writes the soak BESIDE the battery, not inside it.
+    // Absent stays absent: a run whose job asked for no soak must fall
+    // through to the panel file rather than answer the row with null.
+    soak: job.soak || null,
     qe: dataOf(qe),
     history: dataOf(history),
     mogrtAccept: dataOf(mogrt),
@@ -432,8 +442,9 @@ function gradeG0(collected) {
   check("the engine survives a realistic session (soak)",
         (soak && !soak.skipped) ? soak.failedAt === null : null,
         soak ? (soak.skipped || soak.verdict)
-             : "soak not run -- it is a button in the VISIBLE panel, not a " +
-               "battery step, so an unattended run can never supply it",
+             : "soak not run -- neither the panel's button nor an " +
+               "unattended run with soakRounds set has measured this " +
+               "host's engine over a long session",
         soakGot.source);
   const anyUnmeasured = checks.some(function (c) { return c.unmeasured; });
   return {

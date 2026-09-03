@@ -17571,3 +17571,166 @@ Four harness runs (baseline 715, green 722, reverted-host red 716, final
 by item ID before it builds anything and removed the one stray it made
 (a null's own footage source) on each run, leaving 396 items. No Premiere, no
 ComfyUI, no llama-server this pass.
+## 2026-09-03 (local, real AE + real Premiere) - WORKPLAN 12b: GATE G0 PASSES UNATTENDED (no bump)
+
+The last log entry was a section 8 pass, so 12b was this pass by its own
+alternation rule. Its named item: **"The GATE is the item now: the soak
+is a button, not a step."** AE harness green at the top of the pass:
+**722/722**, and green again at the end.
+
+**`node scripts/ppro-probe-report.js` now exits 0 with `G0: PASS`,**
+three of its four rows from `job-result.json` - a run nobody watched.
+First time the gate has closed without a human clicking anything.
+
+### The item said to add a soak step to the battery. That would have been a false pass.
+
+The workplan's own instruction was the wrong fix and it is worth writing
+down why, because it would have LOOKED right: the payload builder
+(`AELLP_PROBES.echo`) is already in `probe.jsx` with a comment calling
+itself "the soak's payload", so making a `step("soak", ...)` beside it is
+a five-line change that would have printed `ok soak / survived 500
+round-trips` on the first run.
+
+It would have measured nothing. What degrades is the ExtendScript engine
+across evalScript **entries** - the third-party report is
+`InternalError: Stack overrun` on a long-lived engine, after which every
+call dies opaquely - and 500 iterations inside ONE evalScript return to
+the same stack depth every time. A battery step named `soak` would have
+crossed the CEP boundary exactly once and reported survival of 500
+crossings: a false pass on the last row the gate was still honest about,
+which is the one thing this grader exists to refuse. The battery could
+not host it; the DOOR had to.
+
+### What changed
+
+- **`SOAK-SHARED-BEGIN` block, byte-identical in both doors**
+  (`probe/com.cptk.aellama.probe/index.html`,
+  `probe/com.cptk.aellama.harness/index.html`) - the same rule the
+  `battArgs` block learned when a whitelist maintained twice lost
+  `seedMedia`. `AELLP_soak(opts, callOne, onProgress, whenDone)` owns the
+  loop, the budget and the verdict; `callOne` is one whole round trip,
+  supplied by whichever door owns the CEP side. `AELLP_SOAK_PAD` (2000),
+  `AELLP_soakArgs` and `AELLP_soakCheck` are shared too, so the click and
+  the unattended run grade a round trip by one rule and cannot drift.
+- **The visible panel's button now drives that same loop** instead of its
+  own copy. Same JSON out; one implementation.
+- **The door-3 runner runs it after the battery**, from `job.soakRounds`,
+  with `callProbe()` for the round trip. After, on purpose: an engine
+  that has just built a project, a sequence and a MOGRT is the long-lived
+  one the report is about, not a fresh one. It refuses rather than fakes
+  when the battery envelope never came back - a probe that did not load
+  is not a broken engine, which is the mistake the panel's first run made
+  ("DEGRADED at round 1").
+- **`run-ppro-probe.ps1`**: `-SoakRounds` (500) and `-SoakBudgetSec`
+  (120) into the job, a warning when the budget plus the battery's own
+  ~40 s could outlast `-TimeoutSec`, the soak printed on its own after
+  the battery, `job-soak-progress.json` cleared with the other
+  breadcrumbs and READ on the no-result path, and a DEGRADED engine
+  counted into the non-zero exit.
+- **`ppro-probe-report.js`**: `fromJobResult` forwards `job.soak`, and
+  the two comments that said an unattended run can never supply a soak
+  are corrected rather than left to mislead the next pass.
+
+### Measured, Premiere 26.3.2, run `-0630`
+
+**500 of 500 round trips survived, 8190 ms** (~16 ms each, engine + CEP),
+2000-byte payload checked whole every round, taken after the full 9-step
+mutating battery in the same engine. AE 26.3 for comparison: 500/500 in
+6607 ms. **Premiere's ExtendScript engine does not degrade over 500 round
+trips of a realistic payload on this build** - the "Stack overrun" report
+is not reproduced here. All nine battery steps passed as well, so the run
+was green end to end.
+
+### Three ways to get the ANSWER's shape wrong, all closed
+
+- **A SHORT reply is a degraded engine, not a passing round.** The round
+  is graded on the payload coming back whole, never on the call failing
+  to throw.
+- **A soak that ran out of wall clock is SKIPPED, never survival.** The
+  claim graded is "500 round-trips"; 137 of them does not support it. It
+  reports `STOPPED at round N of 500` with a `skipped` reason, and the
+  grader already reads `skipped` as unmeasured.
+- **A run that never ASKED writes no soak reading at all.** The picker
+  takes the newest source that HAS a value, so an unattended run
+  recording `{skipped: "we did not ask"}` would displace a real panel
+  measurement with its own silence. The reason goes to `soakNote`, which
+  no row grades; `-SoakRounds 0` leaves the row unmeasured instead of
+  answering it.
+
+A soak that HANGS names itself too: it runs after the battery's last
+flush, so it writes `job-soak-progress.json` every 25 rounds and the
+runner reads that when no result arrives. Without it a hang at round 300
+would have printed an all-ok battery and no reason at all.
+
+### Verification
+
+- **Real Premiere**: one launch, battery 9/9, soak 500/500,
+  `docs/measured/ppro-probe-2026-09-03-0630.json` +
+  `ppro-report-2026-09-03-0630.json`. Premiere closed itself; nothing
+  outside `%APPDATA%\AE-Llama\probes\` was touched.
+- **Real AE harness 722/722** before and after (this pass changed no
+  `extension/` file, but the rule is the rule).
+- `tests/test-probe-bundle.js` **section 11, +37 assertions**. It drives
+  the REAL shared block out of the page with a fake clock and a fake
+  round trip - 500 separately-numbered calls, a degradation at round 137,
+  a short payload at round 4, a budget stop, the 25-round progress ticks
+  - then grades the results through the real `gradeG0`. Four assertions
+  go RED with the grader's one-line `soak:` forward removed; the block
+  asserts fail outright against a page that has no shared soak.
+  It also refuses a `step("soak"` in `probe.jsx`, so the fix the workplan
+  originally asked for cannot be re-introduced by a later pass.
+- Full stubbed suite green. All five 12b lints green
+  (`test-es3-syntax`, `test-es3-ternary`, `test-powershell-syntax` -
+  which confirmed `run-ppro-probe.ps1` parses, is BOM-less and pure ASCII
+  - `test-probe-bundle`, `test-manifest-xml`).
+- **No version bump**, per 12b's rules: `extension/` is untouched and the
+  probe is not shipped.
+
+### Notes / assumptions
+
+- **Assumed 500 rounds and a 120 s budget.** 500 is the number G0's row
+  has always claimed and the panel's AE measurement used; 120 s plus the
+  battery's ~40 s fits inside the default `-TimeoutSec 300` with margin,
+  and the measured 8.2 s means the budget is nowhere near binding.
+- **Assumed `soakRounds` stays OUT of `AELLP_RUNNER_KEYS`.** The shared
+  forwarder hands it to the battery too, which ignores it. Editing a
+  block whose whole point is being byte-identical, to exclude a field
+  that costs nothing, is the larger risk.
+- **Assumed the soak belongs after the battery, not before.** A fresh
+  engine is not the thing the report is about. This does mean a battery
+  that hangs takes the soak with it - the no-result path is what names
+  which of the two.
+- The `-0630` MOGRT read-back shows a controller named
+  `Headline Size <?>` - a non-ASCII glyph in a name AE wrote, surviving
+  the round trip into Premiere. Not a defect in anything measured here,
+  but it is the first non-ASCII controller name seen and worth a look if
+  MOGRT naming is ever graded.
+
+### Still open
+
+12b's own step 3 is now the live question: G0 is closed, so what is left
+in section 12b is bookkeeping, not gate work. Filed at the end of
+section 12b -
+
+1. The three PPRO rows still unmeasured are the installed **manifest
+   shape**, **`$.fileName` inside `ScriptPath`**, and (for AEFT) QE.
+   The first two are read only by the VISIBLE panel; either teach the
+   door-3 runner to read them - it has `fs`, and the manifest is a file -
+   or record them as click-only and stop printing them as gaps.
+2. **`doors.json` is still MISSING**: `ppro-door-probe.ps1` has not run
+   since the door-3 runner started working, so the report's "headless
+   doors" block says nothing at all.
+
+If both are bookkeeping, close section 12b outright and hand Premiere
+back to the owner-gated section 12. Everything on the AE side from the
+2026-09-03 lists is unchanged - this pass touched no `extension/` file.
+
+### Machine state
+
+**After Effects was never closed and its project was never closed.** Two
+AE harness runs (722/722 both). One Premiere launch, closed by the runner
+on its own way out; all its work was in the scratch
+`AELL_PROBE_SCRATCH.prproj` under `%APPDATA%\AE-Llama\probes\`, and the
+battery's cleanup removed the three bins and the sequence it made. No
+ComfyUI, no llama-server this pass.
+

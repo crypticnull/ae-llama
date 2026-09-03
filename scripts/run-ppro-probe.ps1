@@ -41,7 +41,17 @@ param(
     [string]$MogrtPath = '',
     # Names of battery steps to skip, for when a previous run reported one
     # of them as HUNG. e.g. -Skip mogrt,history
-    [string[]]$Skip = @()
+    [string[]]$Skip = @(),
+    # The engine soak: CEP -> ExtendScript round trips, run AFTER the
+    # battery by the door itself. It cannot be a battery step - the
+    # shared block in both doors says why - so the job asks the door for
+    # it. 0 turns it off, and OFF leaves the gate row UNMEASURED, which
+    # is the honest reading and never a pass.
+    [int]$SoakRounds = 500,
+    # A hard wall-clock cap, so the soak can never outlast -TimeoutSec and
+    # turn a green run into "no result". A soak stopped by this reports
+    # SKIPPED, not survived.
+    [int]$SoakBudgetSec = 120
 )
 
 $ErrorActionPreference = 'Stop'
@@ -210,6 +220,7 @@ if ($MogrtPath) {
 # run's result.
 Remove-Item $resFile, $runFile,
             (Join-Path $probeData 'job-claimed.json'),
+            (Join-Path $probeData 'job-soak-progress.json'),
             (Join-Path $probeData 'job-progress.json') -ErrorAction SilentlyContinue
 $job = [ordered]@{
     probeJsx       = ((Join-Path $repoRoot 'probe\com.cptk.aellama.probe\jsx\probe.jsx') -replace '\\', '/')
@@ -225,7 +236,20 @@ $job = [ordered]@{
     readyTimeoutMs = 30000
     skip           = $Skip
     mogrtPath      = $(if ($MogrtPath) { $MogrtPath -replace '\\', '/' } else { $null })
+    # Read by the DOOR, not by the battery: the round trip being measured
+    # is the one across the CEP boundary, so only the CEP side can drive
+    # it. The shared forwarder hands it to the battery as well, which
+    # ignores it - a field the battery does not read costs nothing.
+    soakRounds     = $SoakRounds
+    soakBudgetMs   = ($SoakBudgetSec * 1000)
     createdAt      = (Get-Date).ToString('o')
+}
+# The soak runs INSIDE the window this script waits in, so its budget has
+# to fit with the battery's own ~40s beside it. Warn rather than clamp:
+# the caller may know something this check does not.
+if ($SoakRounds -gt 0 -and ($SoakBudgetSec + 90) -gt $TimeoutSec) {
+    Warn ("-SoakBudgetSec " + $SoakBudgetSec + " plus the battery's own time")
+    Warn ("may outlast -TimeoutSec " + $TimeoutSec + ", which reads as 'no result'.")
 }
 # Write-AellJson, never Set-Content -Encoding UTF8: on Windows
 # PowerShell 5.1 that writes a BOM, JSON.parse throws on it, and the CEP
@@ -376,6 +400,20 @@ if (-not (Test-Path $resFile)) {
         Say 'No progress file - the battery never started a step.'
     }
 
+    # The soak has a breadcrumb of its own because it runs AFTER the
+    # battery's last flush: without this a hang in round 300 would print
+    # the battery's all-ok list and no reason at all.
+    $soakProg = Join-Path $probeData 'job-soak-progress.json'
+    if (Test-Path $soakProg) {
+        try {
+            $sp = Read-AellJson -Path $soakProg
+            Bad ("  HUNG  soak at round " + $sp.soakingRound + " of " + $sp.of +
+                 "  (last seen " + $sp.at + ")")
+            Say ''
+            Say 'Re-run without it:  ... run-ppro-probe.ps1 -SoakRounds 0'
+        } catch { Say "Soak progress file present but unreadable: $soakProg" }
+    }
+
     Say ''
     Say 'What to check:'
     if (Test-Path $runFile) {
@@ -519,6 +557,30 @@ if ($battery -and $battery.steps) {
 } else {
     Warn 'The result carries no battery steps - see the raw file.'
     $failedSteps++
+}
+
+# The soak is not a battery step, so it prints on its own. A DEGRADED
+# engine is a run failure; a soak that was never attempted or that ran
+# out of budget is UNMEASURED and says so - it must never read as
+# survival, which is the one thing this whole gate exists to refuse.
+if ($res.soak) {
+    Say ''
+    Say '-- engine soak (CEP -> ExtendScript round trips)'
+    if ($res.soak.failedAt) {
+        $failedSteps++
+        Bad ("  FAIL  " + $res.soak.verdict)
+        Show-Fact 'rounds survived' $res.soak.rounds
+        Show-Fact 'error' $res.soak.error
+    } elseif ($res.soak.skipped) {
+        Warn ("  ----  UNMEASURED: " + $res.soak.skipped)
+    } else {
+        Good ("  ok    " + $res.soak.verdict)
+        Show-Fact 'took (ms)' $res.soak.ms
+        Show-Fact 'payload bytes' $res.soak.payloadBytes
+    }
+} elseif ($res.soakNote) {
+    Say ''
+    Warn ('-- engine soak: UNMEASURED. ' + $res.soakNote)
 }
 
 # And keep a copy in the repo, so the measurements are committed with

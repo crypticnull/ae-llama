@@ -2655,20 +2655,45 @@ also stopped grading an ABSENT reading as a measured FAIL. Held by
 `docs/PREMIERE-PLATFORM.md` section 4. The GRADER, not the runner's own
 printout, is the authority for an unattended run from here.
 
-### The GATE is the item now: the soak is a button, not a step
+### ~~The GATE is the item now: the soak is a button, not a step~~ DONE 2026-09-03
 
-G0 is three-of-four rows ok and NOT MEASURED on the fourth. The
-500-round-trip engine soak lives in the VISIBLE panel's `index.html` as
-a click handler; `probe.jsx`'s battery has no soak step, so **no
-unattended run can ever close G0**, however green the battery is.
+**`node scripts/ppro-probe-report.js` exits 0 with `G0: PASS`**, three
+of its four rows from `job-result.json` - a run nobody watched. Run
+`-0630`, Premiere 26.3.2: **500 of 500 round trips survived in 8190 ms**
+with a 2000-byte payload checked whole each round, taken AFTER the full
+9-step mutating battery in the same engine.
 
-Next 12b pass: add a soak step to the battery (the payload builder is
-already in `probe.jsx`, at the "the soak's payload" comment), have the
-door-3 job request it, and confirm `node scripts/ppro-probe-report.js`
-exits 0 with `G0: PASS`. Watch the runner's timeout - 500 round-trips
-is the one step that could outlast it - and record the verdict in
-`docs/PREMIERE-PLATFORM.md` section 4 either way. A soak that was
-SKIPPED is unmeasured, never a pass; the grader already enforces that.
+The item said "add a soak step to the battery" and that was the wrong
+fix, which is worth keeping: what degrades is the engine across
+evalScript ENTRIES, so 500 iterations inside ONE evalScript would have
+reported "survived" while never crossing the boundary - a false pass on
+the last row the gate was still honest about. The loop lives on the CEP
+side instead, in a `SOAK-SHARED-BEGIN` block both doors keep
+byte-identical (the `battArgs` rule again), driven by the door-3 runner
+from `job.soakRounds`. `-SoakBudgetSec` (120) keeps it inside
+`-TimeoutSec`; a soak it stops reports `STOPPED at round N of 500` with
+a `skipped` reason, and a run that never asked writes no soak reading at
+all rather than displacing the panel's with its own silence. Held by
+`tests/test-probe-bundle.js` section 11 (it drives the real shared loop),
+measurements in `docs/PREMIERE-PLATFORM.md` section 4.
+
+### The next 12b item
+
+G0 is closed, so section 12b's step 3 applies: the remaining P0 work is
+the three PPRO rows still unmeasured in the per-host table, none of
+which the battery can answer -
+
+1. **the installed manifest shape** and **`$.fileName` inside
+   `ScriptPath`** - both read by the VISIBLE panel's `shapeInUse()` /
+   ScriptPath probe, which no unattended run touches. Either teach the
+   door-3 runner to read them (the manifest is a file; the runner has
+   `fs`), or record them as click-only and stop showing them as gaps.
+2. **`doors.json` is still MISSING** - `scripts/ppro-door-probe.ps1`
+   has not been run since the door-3 runner started working, so the
+   report's "headless doors" block says nothing.
+
+Neither blocks G0. If both turn out to be bookkeeping, close section 12b
+outright and hand Premiere back to the owner-gated section 12.
 
 ## Out of scope for the local session (remote builds these)
 

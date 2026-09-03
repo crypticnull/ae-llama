@@ -456,11 +456,82 @@ rule said all along.
 fourth: the soak.** The 500-round-trip soak is a BUTTON in the visible
 panel (`probe/com.cptk.aellama.probe/index.html`), not a step in
 `probe.jsx`'s battery, so no unattended run can ever supply it and the
-loop cannot close G0 by itself. Making the soak a battery step is the
-next 12b item.
+loop cannot close G0 by itself.
+
+*(Closed the same day - but NOT the way this paragraph proposed. "Make
+the soak a battery step" would have measured the wrong thing; see the
+next entry.)*
 
 The grader is the authority for an unattended run from here; the note
 that pointed at the runner's own printout instead is withdrawn.
+
+### 2026-09-03 - GATE G0 PASSES UNATTENDED: the soak, measured where it has to be
+
+**G0: PASS.** All four rows ok, three of them from `job-result.json` -
+a run nobody watched. This is the first time the gate closed without a
+human clicking anything.
+
+The row that had been structurally unclosable was the soak, and the
+obvious fix was the wrong one. **A soak inside `probe.jsx`'s battery
+would measure nothing.** What degrades is the engine across evalScript
+ENTRIES - the reported failure mode is `InternalError: Stack overrun`
+on a long-lived engine, after which every call dies opaquely - and 500
+iterations inside ONE evalScript return to the same stack depth every
+time. A battery step called `soak` would therefore have reported
+"survived 500 round-trips" while never crossing the boundary once: a
+false pass on the last row the gate was still honest about, which is
+the exact failure class this whole grader exists to refuse.
+
+So the loop lives on the CEP side, in a block both doors keep
+byte-identical (`SOAK-SHARED-BEGIN` in
+`probe/com.cptk.aellama.probe/index.html` and
+`probe/com.cptk.aellama.harness/index.html`), the same rule the
+`battArgs` block learned. The door-3 runner drives it from
+`job.soakRounds`, AFTER the battery on purpose - an engine that has
+just built a project, a sequence and a MOGRT is the long-lived one the
+report is about, not a fresh one.
+
+**Measured, Premiere 26.3.2, run `-0630`:**
+
+| | |
+|---|---|
+| rounds | **500 of 500, survived, `failedAt` null** |
+| payload | 2000 bytes echoed and checked each round |
+| elapsed | **8190 ms** (~16 ms per round trip, engine + CEP) |
+| when | after the full 9-step mutating battery, in the same engine |
+| AE 26.3 for comparison | 500/500 in 6607 ms (panel click, 2026-09-02) |
+
+So Premiere's ExtendScript engine does NOT degrade over 500 round trips
+of a realistic payload on this build. The third-party "Stack overrun"
+report is not reproduced here.
+
+Three things about the shape of the answer, each of which was a way to
+get it wrong:
+
+- **A SHORT reply is a degraded engine, not a passing round.** The
+  round is graded on the payload coming back whole, not on the call
+  failing to throw.
+- **A soak that ran out of wall clock is SKIPPED, never survival.** The
+  claim being graded is "500 round-trips"; 137 of them does not support
+  it. `-SoakBudgetSec` (120 by default) caps it so it can never outlast
+  `-TimeoutSec` and turn a green run into "no result", and a run it
+  stops reports `STOPPED at round N of 500` with a `skipped` reason -
+  which the grader reads as unmeasured.
+- **A run that never ASKED for a soak writes no soak reading at all.**
+  The grader takes the newest source that HAS a value, so an unattended
+  run recording `{skipped: "we did not ask"}` would displace a real
+  measurement from the panel file with its own silence. The reason goes
+  in `soakNote`, which no row grades. `-SoakRounds 0` therefore leaves
+  the row unmeasured rather than answering it.
+
+A soak that hangs also names itself now: it runs after the battery's
+last flush, so it writes `job-soak-progress.json` every 25 rounds and
+`run-ppro-probe.ps1` reads that file when no result arrives. Without
+it, a hang at round 300 would have printed an all-ok battery and no
+reason at all.
+
+`tests/test-probe-bundle.js` section 11 drives the real shared loop out
+of the page and holds every one of these without Premiere.
 
 ### The rest
 

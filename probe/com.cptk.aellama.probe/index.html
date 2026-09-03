@@ -332,35 +332,105 @@ of the panel. Read-only unless you press a button marked MUTATES.</p>
   }
 
   function soakLoop() {
-    var total = 500;
-    var done = 0, failedAt = null, started = Date.now();
-    note("soaking: 0/" + total);
-    function step() {
-      if (done >= total || failedAt !== null) {
-        results.soak = {
-          rounds: done, total: total, failedAt: failedAt,
-          ms: Date.now() - started,
-          verdict: failedAt === null
-            ? "survived " + total + " round-trips"
-            : "DEGRADED at round " + failedAt
-        };
+    note("soaking: 0/500");
+    AELLP_soak({ rounds: 500 },
+      function (round, cb) {
+        probe("echo", AELLP_soakArgs(round), function (err, data) {
+          cb(AELLP_soakCheck(err, data));
+        });
+      },
+      function (ran, total) { note("soaking: " + ran + "/" + total); },
+      function (res) {
+        results.soak = res;
+        if (res.error) { results.soakError = res.error; }
         render();
         autoSave();
-        return;
+      });
+  }
+
+  /* SOAK-SHARED-BEGIN (both doors keep this block byte-identical) */
+  /*
+   * THE ENGINE SOAK, in ONE implementation both doors run.
+   *
+   * What it measures is the CEP -> ExtendScript ROUND TRIP, and that is
+   * the whole point: the degradation a third party reported on a
+   * long-lived Premiere engine ("InternalError: Stack overrun", after
+   * which every call dies opaquely) accumulates per evalScript ENTRY.
+   * A loop of 500 iterations INSIDE one evalScript would therefore
+   * measure nothing at all and report green -- which is why this is not
+   * a battery step in probe.jsx. `callOne(round, cb)` is one whole
+   * round trip, supplied by the door that owns the CEP side.
+   *
+   * A soak that ran out of wall clock is SKIPPED, never a pass: the
+   * claim being graded is "500 round-trips survived", and 137 of them
+   * does not support it. The grader reads `skipped` as unmeasured.
+   */
+  function AELLP_soak(opts, callOne, onProgress, whenDone) {
+    opts = opts || {};
+    var total = opts.rounds > 0 ? opts.rounds : 500;
+    var budgetMs = opts.budgetMs > 0 ? opts.budgetMs : 0;
+    var every = opts.progressEvery > 0 ? opts.progressEvery : 25;
+    var now = opts.now || function () { return new Date().getTime(); };
+    var later = opts.later || function (fn) { setTimeout(fn, 0); };
+    var started = now();
+    var ran = 0, failedAt = null, failure = null, ranOut = false;
+
+    function stop() {
+      var res = { rounds: ran, total: total, failedAt: failedAt,
+                  ms: now() - started, payloadBytes: AELLP_SOAK_PAD };
+      if (failure) { res.error = failure; }
+      if (ranOut) {
+        res.skipped = "the soak budget (" + budgetMs + "ms) ran out after " +
+                      ran + " of " + total + " round-trips; a partial soak " +
+                      "is not the claim being graded, so it is unmeasured";
       }
-      probe("echo", { round: done + 1, pad: 2000 }, function (err, data) {
-        if (err || !data || data.pad !== 2000) {
-          failedAt = done + 1;
-          results.soakError = err || "short payload";
+      res.verdict = failedAt !== null
+        ? "DEGRADED at round " + failedAt
+        : (ranOut ? "STOPPED at round " + ran + " of " + total
+                  : "survived " + total + " round-trips");
+      whenDone(res);
+    }
+
+    function step() {
+      if (failedAt !== null || ran >= total) { stop(); return; }
+      if (budgetMs && (now() - started) >= budgetMs) { ranOut = true; stop(); return; }
+      callOne(ran + 1, function (err) {
+        if (err) {
+          failedAt = ran + 1;
+          failure = String(err);
         } else {
-          done++;
-          if (done % 25 === 0) { note("soaking: " + done + "/" + total); }
+          ran++;
+          if (onProgress && ran % every === 0) { onProgress(ran, total); }
         }
-        setTimeout(step, 0);
+        later(step);
       });
     }
     step();
   }
+
+  /*
+   * The payload size, in ONE place, because the round trip and the
+   * check that it survived have to agree. A reply that comes back
+   * SHORT is a degraded engine, not a passing round.
+   */
+  var AELLP_SOAK_PAD = 2000;
+
+  /** The echo arguments AELLP_call takes, as the door will send them. */
+  function AELLP_soakArgs(round) {
+    return { round: round, pad: AELLP_SOAK_PAD };
+  }
+
+  /** cb(null) only when the engine really echoed the whole payload. */
+  function AELLP_soakCheck(err, data) {
+    if (err) { return String(err); }
+    if (!data) { return "no data came back"; }
+    if (data.pad !== AELLP_SOAK_PAD) {
+      return "short payload: asked for " + AELLP_SOAK_PAD +
+             " bytes, got " + String(data.pad);
+    }
+    return null;
+  }
+  /* SOAK-SHARED-END */
 
   // ------------------------------------------------------------- saving
   function probeDir() {
