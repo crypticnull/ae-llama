@@ -16340,3 +16340,215 @@ was Premiere's own, not a forced kill. Everything mutating happened in
 `%APPDATA%\AE-Llama\probes\AELL_PROBE_SCRATCH.prproj`; the earlier
 scratch files are in `probes\stale`, moved rather than deleted. No
 llama-server, no ComfyUI.
+## 2026-09-03 — the mask above was a COUNT, and it had to be a picture (0.11.28)
+
+WORKPLAN section 8, the top item filed by the 0.11.27 pass: **"neither
+mask table can see the mask ABOVE, only whether one exists"**. It was
+filed as a MEASUREMENT pass before a code pass, and that was the right
+call — the measurement moved three rows nobody had predicted.
+
+Harness green at the top of the pass (674/674), and the last log entry
+was a 12b Premiere pass, so 12b's own alternation rule sends this one to
+the AE backlog.
+
+### What was wrong
+
+`AELL_maskErases` and `AELL_maskNoOp` both took a BOOLEAN `alone` — "did
+this layer already have masks". Both had only ever been measured against
+two worlds: no mask at all, and ONE add mask on the left half. The
+0.11.27 pass noticed the gap by deduction and filed it rather than
+guessing, because a false "the layer is gone" costs more than the
+sentence is worth.
+
+### The measurement
+
+New `scripts/mask-above-probe.js` / `.jsx`, same instrument as the erase
+probe (a slider expression reading `sampleImage(postEffect)` alpha —
+`comp.saveFrameToPng` still writes no file on AE 26.3x87). What it
+varies is the thing the old probe held FIXED: the parade already on the
+layer. Six of them, chosen so that "what they show" and "how many there
+are" come apart — no mask; one add mask over the whole box; one over the
+left half; one entirely off the layer; two halves that meet; add-all
+plus subtract-left. Every mode x inverted x region over every one of
+them: 216 readings, seven sample points each.
+
+**Both filed defects reproduced against the SHIPPED tool** (the probe
+calls `add_mask` itself in its last stage):
+
+    parade        difference over the whole layer     add over the whole layer
+    no mask       1.0 -> 1.0  "changes nothing"       1.0 -> 1.0  "cuts nothing away"
+    shows all     1.0 -> 0.0  ***NO WARNING***        1.0 -> 1.0  "cuts nothing away"
+    two halves    1.0 -> 0.0  ***NO WARNING***        1.0 -> 1.0  "cuts nothing away"
+    shows half    0.429 -> 0.571 (silent, correct)    0.429 -> 1.0  "cuts nothing away
+                                                                    — every pixel of it
+                                                                    still shows"
+    shows none    0.0 -> 1.0  (silent)                0.0 -> 1.0   ditto
+
+The second column is a layer going black on a bare `ok`. The fourth
+column is the sentence being true about the new mask and silent about
+the two that just stopped working.
+
+**Three more rows the probe moved, none of them predicted:**
+
+1. **"No mask at all" is not the same state as "masks that show
+   everything."** AE composites the FIRST mask against an empty canvas
+   (add/lighten/difference/intersect/darken) or a full one (subtract), so
+   a full-coverage `difference` is a no-op on a bare layer and an
+   ERASURE over a mask that shows everything. That pair is the whole
+   proof that a count cannot answer this.
+2. **The inverted/miss mirror is FALSE once masks exist.** The old
+   helpers folded "inverted, covering everything" and "covering nothing"
+   into one `eff`. Measured: over a mask that keeps something, an
+   off-layer `intersect` or `darken` leaves the layer exactly as it was,
+   where its inverted full-coverage twin empties it. AE appears to drop
+   a mask lying wholly outside the layer once something else composites;
+   alone it does not, and it empties the layer.
+3. **A `subtract` over a layer whose masks already hide everything takes
+   nothing.** The old table said "always erases", which is a sentence
+   about the wrong mask.
+
+### The fix
+
+Both tables are GONE, replaced by one small algebra and one reader:
+
+- `AELL_maskApply(state, mode, region)` — the set algebra the two probes
+  agree with on every row: add unions, subtract takes away,
+  intersect/darken keep the overlap, difference inverts, 'none' does not
+  composite, and the first mask composites against empty (or full, for
+  subtract). Nine lines, and it reproduces both old tables exactly.
+- `AELL_paradeShows(masks, box)` — what the masks already there show:
+  `"nothing"` / `"all"` / `"some"` / `"none"` / `""`. **Exact, not
+  sampled**: the masks it will answer for are axis-aligned rectangles, so
+  the composite is constant inside every cell of the grid their edges cut
+  the layer box into, and one point per cell decides it. That is what
+  gets `twoHalves` right — two masks that cover the layer BETWEEN them
+  behave like one that covers it, and a rule looking for "one mask
+  covering all" would have let that layer go blank in silence.
+- `AELL_maskRect(mask)` is deliberately narrow, because every caller uses
+  the answer to make a claim about pixels: static, unfeathered, fully
+  opaque, closed, four vertices, zero tangents, and each vertex on a
+  corner of its own box (a diamond has the same bounding box and covers
+  half as much). Anything else abandons the reading.
+- `AELL_maskOutcome` answers `erases` / `noop` / `undoes` / `blank`.
+
+**A fourth receipt, `undoes`:** "That mask covers all of 'X' (...), so
+every pixel of it shows again: the 2 masks already on it stop hiding
+anything." UNASKED, like the erasure warning and unlike the no-op one —
+the layer visibly changes, and add_mask's own default region IS the whole
+layer box, so `add_mask {layer: 'X'}` with no bounds on a masked layer is
+exactly the call that trips it. Not for an ellipse: its four vertices
+bound the layer but the shape leaves the corners, so "every pixel" would
+be false.
+
+**And the erasure warning learned the row it was filed for:**
+"'difference' over the whole layer INVERTS what the 2 masks already on it
+show, and they were showing every pixel — so nothing is left."
+
+**An unreadable parade fails quiet in one direction and loud in the
+other.** With no reading available, `AELL_maskOutcome` answers only what
+EVERY reading agrees on — but for the "layer is gone" sentence it falls
+back to the END STATE rather than the change, because a full-coverage
+subtract leaves the layer blank whatever was above it, and silence about
+a blank layer is the one failure this whole branch exists to stop.
+
+### One bug the suite caught in my own algebra
+
+`difference` over the whole layer inverts what is above it, and "some"
+inverted is a DIFFERENT some — but the coarse three-state model compares
+them equal, so the first cut reported a no-op for the ordinary way to
+punch a hole. Measured 0.429 -> 0.571, i.e. it plainly works. The guard
+is exactly `was === "some"`: inverting "all" or "none" is exact, and over
+a bare layer the first-mask rule applies and no inversion happens at all.
+Caught by a real-AE step and a stub assertion within one run of writing
+it, which is the loop working.
+
+### Verification
+
+- **Real AE harness 674 -> 698/698 PASSED.** 21 new steps in
+  `extension/js/selftest.js`: a new `ST Above` layer for what the parade
+  shows (the undo receipt, the default region doing it unasked, the
+  difference-over-half that must stay silent, the difference-over-all
+  erasure, the subtract with nothing left to take, the off-layer
+  intersect refusal over masks) and a new `ST Blind` layer whose one
+  feathered mask cannot be read at all — which must NOT get the "shows
+  again" claim and MUST still get "hides ALL" under a subtract.
+- **Two existing fixtures repaired, not deleted.** The `ST Erase` rows
+  say "over an existing mask" and meant the rig that was MEASURED — one
+  mask on the left half — but the steps had stacked five erasers by then,
+  so they were running over a layer that showed nothing. Two
+  `delete_mask` steps and a left-half base put them back on the world
+  their comments describe. Same repair in the stub's `Solo` fixture.
+- **5 of the new steps are RED against the reverted canned host**
+  (693/698, checked by reverting `tests/test-self-test.js` alone).
+- `tests/test-shape-mask-tools.js` +18 assertions, **10 RED against the
+  reverted host**. Six old assertions rewritten because they pinned the
+  blindness — the loudest being "…and the tool's OWN default is never
+  warned about", which required SILENCE for a call that switched two
+  masks off. It is now split: silent on a bare layer (the placeholder it
+  was written to protect), loud over masks that were hiding something.
+- The canned host in `tests/test-self-test.js` grew the parade model —
+  mask GEOMETRY alongside the names, and the same algebra worked out from
+  it rather than answered by name, which is the rule the 0.11.20 pass set
+  after a canned host that knew its verdicts could not see a host that
+  stopped computing them.
+- Full stub sweep by exit code: 0 red. `docs/CAPABILITIES.md`
+  regenerated (step counts).
+- **Zero prompt cost** — host strings and selftest only, no `tools.js`
+  change.
+- `extension/` changed, so BUMPED: 0.11.27 -> **0.11.28**.
+
+### Notes / assumptions
+
+- **Assumed: the `undoes` warning fires UNASKED.** Same cost asymmetry
+  the erasure warning uses — the layer changes on screen — and the
+  opposite of the no-op warning beside it. It does make the add_mask +
+  set_mask_path placeholder noisier on a layer that already has masks,
+  which is stated in the code with its reason and reversible in one
+  condition if the owner disagrees.
+- **Assumed: eight masks is the cost guard** for reading a parade, and a
+  layer with more of them goes silent. A real parade is one to four.
+- The `covers` test still treats an ELLIPSE as covering its own bounding
+  box, which it does not — see the filed list.
+
+### Filed for later passes, in priority order
+
+1. **An ELLIPSE is not its bounding box, and three sentences assume it
+   is.** `covers` comes from `AELL_boxOfPoints(shape.vertices)`, so
+   `add_mask {shape: 'ellipse', mode: 'subtract'}` at the default region
+   is told it "hides ALL of the layer" when it plainly leaves the
+   corners, and the no-op and "cuts nothing away" sentences have the same
+   hole. The new `undoes` warning is already gated against it; the other
+   three are not, and unpicking them needs its own measurement (how much
+   does an inscribed ellipse actually leave?) plus a look at which
+   shipped steps would flip.
+2. **Row 36 vague is still the last open HARM in the section 8 matrix** —
+   the model over-builds a `CTRL` null rig for a one-line shadow ask,
+   layer count 8 -> 9. Prompt-side, headroom 161.
+3. Mask OPACITY is still not read anywhere: `add_mask` never sets it,
+   `set_mask` can lower it afterwards, nothing re-checks. It is one of
+   the reasons `AELL_paradeShows` abandons a reading, so it is now a
+   silence rather than a wrong answer.
+4. `comp.saveFrameToPng` writing nothing is still unexplained (0.11.26
+   filed it; nothing calls it, but it is the natural instrument for any
+   pixel check).
+5. Row 30's typo still burns six `center_anchor_point` calls before the
+   grid_layout that works. Passes, so it is cost and not harm.
+6. Everything else from the 2026-09-03 lists is unchanged: the
+   `distribute_property` mutate-then-throw hole, a bad VALUE not being
+   `argFault`, widening the `errArg` rollback exemption, step 2's naming
+   flake, the destructive-refusal wording on `delete_layer` /
+   `delete_mask` / `remove_effect`, `property: string` in TOOL_DEFS,
+   `POST /tokenize`, the `comfyUrl` 8188/8000 mismatch on this machine,
+   the harness answering a modal with WORDS, `starved` wording,
+   delete_mask warning on a live expression, the unmeasured controller
+   GROUP and non-en_US locale, and `capParams`.
+
+### Machine state
+
+**After Effects was never closed and its project was never closed.** The
+probe created `AELL Mask Above Probe` and removed it again (comp and
+solid source both), and the harness runs live entirely in the suite's own
+`ST ` namespace with its bottom-of-run check confirming nothing remains.
+No Premiere this pass. A llama-server was started briefly by
+`context-budget-probe.js` and is gone — checked, no `llama-server`
+process is running. No ComfyUI.

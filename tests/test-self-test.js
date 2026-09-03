@@ -341,6 +341,14 @@ let mtRig = {};
 // answers from what add_mask really put there and the mask refusals
 // ("no masks", "Mask not found ... Masks here:") are measurements.
 let mkMasks = {};
+// ...and the GEOMETRY of each one, in the same order, because "what do
+// the masks already there SHOW" is what decides whether one more of them
+// empties the layer, changes nothing, or switches all of them off. A
+// count could not tell those apart, which is exactly the blindness the
+// above-probe measured: the same full-coverage 'difference' is a no-op
+// over a bare layer and an ERASURE over masks that were showing every
+// pixel, and this canned host answered a bare ok for both.
+let mkShapes = {};
 // How big each layer really is, "comp|layer" -> {width, height}. add_mask
 // refuses a mask that misses the layer entirely and get_comp_details puts
 // the layer's own size on its row, and NEITHER can be answered from the
@@ -2916,53 +2924,123 @@ function cannedOk(tool, args) {
       // nothing). A canned host that accepted it would let that ship again.
       const mkSz = mkSizes[mkKey];
       const mkB = args && args.bounds;
-      /* Which masks EMPTY a layer, measured in AE 26.3x87 by
-       * scripts/mask-erase-probe.js. Same three-way answer as the host's
-       * AELL_maskErases, worked out here rather than answered from a
-       * constant: a canned host that knows the verdicts by name cannot
-       * catch a host that stops computing them. `covered` is what the
-       * region is worth against the layer, "all" or "none"; `inverted`
-       * swaps the two; `alone` is "no mask above this one". */
-      const mkAlone = !(mkMasks[mkKey] || []).length;
-      const mkErases = (covered) => {
-        const m = String((args && args.mode) || "add").toLowerCase();
-        let eff = covered;
-        if (args && args.inverted) {
-          eff = covered === "all" ? "none" : (covered === "none" ? "all" : "");
+      /* WHAT ONE MORE MASK DOES, worked out from the same geometry the
+       * host works it out from — never answered from a constant, which
+       * is the rule the stagger pass set after a canned host that knew
+       * its verdicts by name could not see a host that stopped computing
+       * them. Measured in AE 26.3x87 by scripts/mask-erase-probe.js and
+       * scripts/mask-above-probe.js.
+       *
+       * The thing this models, and the reason it is not a boolean any
+       * more: what the masks ALREADY there SHOW decides the answer. A
+       * full-coverage 'difference' changes nothing over a bare layer and
+       * EMPTIES one whose masks were showing every pixel; a full-coverage
+       * 'add' changes nothing over a bare layer and switches every mask
+       * off over one that was hiding something. */
+      const mkNot = (s) => (s === "all" ? "none" : (s === "none" ? "all" : "some"));
+      const mkApply = (state, mode, region) => {
+        const m = String(mode || "add").toLowerCase();
+        if (m === "none") return state;
+        // AE composites the FIRST mask against an empty canvas, except
+        // 'subtract', which starts from a full one.
+        if (state === null) return (m === "subtract") ? mkNot(region) : region;
+        if (m === "add" || m === "lighten") return region === "all" ? "all" : state;
+        if (m === "subtract") return region === "all" ? "none" : state;
+        if (m === "intersect" || m === "darken") {
+          return region === "all" ? state : "none";
         }
-        if (eff === "all") return m === "subtract";
-        if (eff === "none") {
-          if (m === "intersect" || m === "darken") return true;
-          return mkAlone && (m === "add" || m === "lighten" ||
-                             m === "difference");
-        }
-        return false;
+        if (m === "difference") return region === "all" ? mkNot(state) : state;
+        return null;
       };
-      /* The OTHER end of the same measured run: which full-coverage
-       * masks change NOTHING. Worked out here for the same reason, and
-       * the gap it closes is the one the erase pass filed — an inverted
-       * SUBTRACT over the whole layer is a provable no-op and used to
-       * answer a bare ok, here as well as in real AE. 'none' is out
-       * (it changes nothing at any region, and it is a path carrier);
-       * so are 'add'/'lighten' with the region worth everything, which
-       * the wider "cuts nothing away" sentence below answers instead. */
-      const mkNoOp = (covered) => {
-        const m = String((args && args.mode) || "add").toLowerCase();
-        if (m === "none") return "";
-        let eff = covered;
-        if (args && args.inverted) {
-          eff = covered === "all" ? "none" : (covered === "none" ? "all" : "");
+      // What the masks already on this layer show: "nothing" (none of
+      // them composites), "all", "some", "none", or "" for a parade this
+      // cannot read. Exact, not sampled — with axis-aligned rectangles
+      // the composite is constant inside every cell their edges cut the
+      // layer into.
+      const mkParade = (list, sz) => {
+        if (!sz) return "";
+        const rects = (list || []).filter(r => r.mode !== "none");
+        if (!rects.length) return "nothing";
+        if (rects.some(r => !r.readable) || rects.length > 8) return "";
+        const xs = [0, sz.width], ys = [0, sz.height];
+        const push = (a, v, hi) => {
+          if (v > 0 && v < hi && a.indexOf(v) === -1) a.push(v);
+        };
+        rects.forEach(r => {
+          push(xs, r.l, sz.width); push(xs, r.r, sz.width);
+          push(ys, r.t, sz.height); push(ys, r.b, sz.height);
+        });
+        xs.sort((a, b) => a - b); ys.sort((a, b) => a - b);
+        let anyAll = false, anyNone = false;
+        for (let a = 0; a + 1 < xs.length; a++) {
+          for (let b = 0; b + 1 < ys.length; b++) {
+            const cx = (xs[a] + xs[a + 1]) / 2, cy = (ys[b] + ys[b + 1]) / 2;
+            let state = null;
+            rects.forEach(r => {
+              let inside = (cx > r.l && cx < r.r && cy > r.t && cy < r.b);
+              if (r.inverted) inside = !inside;
+              state = mkApply(state, r.mode, inside ? "all" : "none");
+            });
+            if (state === null) continue;
+            if (state === "none") anyNone = true; else anyAll = true;
+          }
         }
-        if (eff === "all") {
-          if (m === "intersect" || m === "darken") return "always";
-          return (mkAlone && m === "difference") ? "alone" : "";
+        if (!anyAll && !anyNone) return "nothing";
+        if (anyAll && anyNone) return "some";
+        return anyAll ? "all" : "none";
+      };
+      const mkOutcome1 = (mode, inverted, covered, above, readable) => {
+        const m = String(mode || "add").toLowerCase();
+        const state = above === "nothing" ? null : above;
+        const was = state === null ? "all" : state;
+        // The one measured departure from the algebra: an off-layer
+        // 'intersect'/'darken' empties a bare layer and leaves a masked
+        // one exactly as it was.
+        if (covered === "none" && !inverted && state !== null &&
+            (m === "intersect" || m === "darken")) {
+          return { result: was, erases: false, blank: was === "none",
+                   noop: true, undoes: false, readable };
         }
-        if (eff === "none") {
-          if (m === "subtract") return "always";
-          if (!mkAlone && (m === "add" || m === "lighten" ||
-                           m === "difference")) return "notAlone";
+        const region = inverted ? mkNot(covered) : covered;
+        const res = mkApply(state, m, region);
+        if (res === null) return null;
+        // 'difference' over the whole layer INVERTS what is above it.
+        // "all" and "none" invert exactly; "some" inverted is a DIFFERENT
+        // some, so the coarse states compare equal and it is not a no-op
+        // (measured 0.429 -> 0.571).
+        const inverts = (m === "difference" && region === "all" &&
+                         was === "some");
+        return { result: res, erases: res === "none" && was !== "none",
+                 blank: res === "none" && was !== "none",
+                 noop: !inverts && res === was,
+                 undoes: res === "all" && was !== "all", readable };
+      };
+      const mkOutcome = (mode, inverted, covered, above) => {
+        if (covered !== "all" && covered !== "none") return null;
+        if (above) return mkOutcome1(mode, inverted, covered, above, true);
+        // Unreadable parade: answer only what every reading agrees on,
+        // and fall back to the END STATE for the "layer is gone" sentence
+        // — silence about a blank layer is the failure this exists to
+        // stop.
+        let agreed = null;
+        for (const st of ["nothing", "all", "some", "none"]) {
+          const one = mkOutcome1(mode, inverted, covered, st, false);
+          if (!one) return null;
+          if (!agreed) { agreed = one; continue; }
+          if (agreed.result !== one.result) agreed.result = "";
+          if (!one.erases) agreed.erases = false;
+          if (!one.noop) agreed.noop = false;
+          if (!one.undoes) agreed.undoes = false;
         }
-        return "";
+        agreed.blank = agreed.result === "none";
+        return agreed;
+      };
+      const mkAbove = mkParade(mkShapes[mkKey], mkSz);
+      const mkCount = (mkMasks[mkKey] || []).length;
+      const mkErases = (covered) => {
+        const o = mkOutcome(args && args.mode, args && args.inverted,
+                            covered, mkAbove);
+        return !!(o && o.blank);
       };
       if (mkSz && Array.isArray(mkB) && mkB.length >= 4) {
         const bl = Math.min(mkB[0], mkB[0] + mkB[2]);
@@ -2997,6 +3075,7 @@ function cannedOk(tool, args) {
       const held = mkMasks[mkKey] || (mkMasks[mkKey] = []);
       const mkName = (args && args.name) || ("Mask " + (held.length + 1));
       held.push(mkName);
+      const heldShapes = mkShapes[mkKey] || (mkShapes[mkKey] = []);
       const mkOut = { layer: args && args.layer, mask: mkName,
                       shape: (args && args.shape) || "rectangle" };
       // ...and faithful to the host's warning too: a region the caller
@@ -3024,6 +3103,27 @@ function cannedOk(tool, args) {
         // emptied the layer in real AE.
         mkHit = { l: 0, t: 0, r: mkSz.width, b: mkSz.height };
       }
+      // Only a static, unfeathered, axis-aligned RECTANGLE can be read
+      // back — the same narrowness AELL_maskRect has, and for the same
+      // reason: an ellipse does not cover the corners of its own bounding
+      // box and a feather hides by degrees, so neither can be described
+      // as all / some / none.
+      const mkShapeKind = (args && args.shape) || "rectangle";
+      let mkReadable = !(args && args.feather > 0) && !!mkHit;
+      if (mkShapeKind === "ellipse") mkReadable = false;
+      if (mkShapeKind === "custom") {
+        // A custom mask counts only when its points really are the four
+        // corners of their own box — a diamond has the same box.
+        mkReadable = mkReadable && Array.isArray(mkV) && mkV.length === 4 &&
+          mkV.every(v => (v[0] === mkHit.l || v[0] === mkHit.r) &&
+                         (v[1] === mkHit.t || v[1] === mkHit.b));
+      }
+      heldShapes.push(mkHit
+        ? { l: mkHit.l, t: mkHit.t, r: mkHit.r, b: mkHit.b,
+            mode: String((args && args.mode) || "add").toLowerCase(),
+            inverted: !!(args && args.inverted), readable: mkReadable }
+        : { l: 0, t: 0, r: 0, b: 0, mode: "add", inverted: false,
+            readable: false });
       const mkAsked = (Array.isArray(mkB) && mkB.length >= 4) ||
                       (args && args.shape === "custom" && Array.isArray(mkV));
       // 'lighten' sits with 'add' on a measurement: over the whole layer
@@ -3039,17 +3139,37 @@ function cannedOk(tool, args) {
       // A layer vanishing on an `ok` is the expensive direction, so unlike
       // "cuts nothing away" this one does not wait to be asked — the
       // tool's own default region under 'subtract' erases the layer.
+      const mkWord = String((args && args.mode) || "add").toLowerCase();
+      const mkOut2 = mkCovers
+        ? mkOutcome(args && args.mode, args && args.inverted, "all", mkAbove)
+        : null;
+      const mkPhrase = (one, many) => (mkCount === 1 ? one : many);
       if (mkCovers && mkErases("all")) {
-        const why = (args && args.inverted)
-          ? "'inverted' turns a mask covering the whole layer into one " +
-            "covering none of it, so '" +
-            String((args && args.mode) || "add").toLowerCase() +
-            "' keeps nothing"
-          : "a 'subtract' mask over the whole layer cuts every pixel away";
-        const fix = (args && args.inverted)
-          ? "Drop 'inverted', or pass 'bounds' for the part to KEEP."
-          : "Pass 'bounds' for the part to CUT AWAY, or mode 'add' with " +
+        let why;
+        if (!(args && args.inverted) && mkWord === "difference") {
+          // The row the above-probe was written for: 'difference' inverts
+          // what the masks above it show, so over masks showing every
+          // pixel it leaves none.
+          why = "'difference' over the whole layer INVERTS what the " +
+            mkPhrase("mask", mkCount + " masks") + " already on it show" +
+            mkPhrase("s", "") + ", and " + mkPhrase("it was", "they were") +
+            " showing every pixel — so nothing is left";
+        } else if (args && args.inverted) {
+          why = "'inverted' turns a mask covering the whole layer into one " +
+            "covering none of it, so '" + mkWord + "' keeps nothing";
+        } else {
+          why = "a 'subtract' mask over the whole layer cuts every pixel away";
+        }
+        let fix;
+        if (!(args && args.inverted) && mkWord === "difference") {
+          fix = "Leave this mask out, or pass 'bounds' for the part to " +
+            "CUT AWAY.";
+        } else if (args && args.inverted) {
+          fix = "Drop 'inverted', or pass 'bounds' for the part to KEEP.";
+        } else {
+          fix = "Pass 'bounds' for the part to CUT AWAY, or mode 'add' with " +
             "the part to KEEP.";
+        }
         mkOut.warning = "That mask hides ALL of '" + args.layer + "'" +
           (args && args.feather > 0 ? " except a soft fringe at its edge" : "") +
           ": " + why + (args && args.feather > 0
@@ -3057,6 +3177,30 @@ function cannedOk(tool, args) {
               "blur the picture. To blur the picture: apply_effect {layer: " +
               "\"" + args.layer + "\", effect: \"Gaussian Blur\"}. "
             : ". ") + fix;
+        return mkOut;
+      }
+      // The FOURTH outcome: the mask that switches the others off. It
+      // does not wait to be asked — the layer visibly changes, and the
+      // tool's own default region is the whole layer box. Not for an
+      // ellipse, whose four vertices bound the layer but whose shape
+      // leaves the corners.
+      if (mkCovers && (args && args.shape) !== "ellipse" &&
+          mkOut2 && mkOut2.undoes) {
+        mkOut.warning = "That mask covers all of '" + args.layer + "' (" +
+          mkSz.width + "x" + mkSz.height + " at x 0 to " + mkSz.width +
+          ", y 0 to " + mkSz.height + "), so every pixel of it shows " +
+          "again: the " + mkPhrase("mask", mkCount + " masks") +
+          " already on it " + mkPhrase("stops", "stop") + " hiding " +
+          "anything" +
+          ((!(args && args.inverted) && mkWord === "difference")
+            ? " ('difference' over the whole layer INVERTS what they show)"
+            : "") + ". Pass 'bounds' for the part you want to KEEP, or " +
+          "leave this mask out to keep the masking already there." +
+          ((args && args.feather > 0)
+            ? " Its feather has no cut edge to fade — it does not blur " +
+              "the picture. To blur the picture: apply_effect {layer: \"" +
+              args.layer + "\", effect: \"Gaussian Blur\"}."
+            : "");
         return mkOut;
       }
       if (mkCovers && mkPlain && mkAsked) {
@@ -3071,16 +3215,25 @@ function cannedOk(tool, args) {
             "the part you want to KEEP.";
         return mkOut;
       }
-      if (mkCovers && !mkPlain && mkAsked && mkNoOp("all")) {
-        const nWhy = (args && args.inverted)
-          ? "'inverted' turns a mask covering the whole layer into one " +
-            "covering NONE of it, so '" +
-            String((args && args.mode) || "add").toLowerCase() + "' " +
-            (mkNoOp("all") === "notAlone"
-              ? "leaves the mask above it exactly as it was"
-              : "takes nothing away")
-          : "'" + String((args && args.mode) || "add").toLowerCase() +
-            "' over the whole layer keeps everything that already showed";
+      // mode 'none' is out of this branch and nowhere else: it changes
+      // nothing at ANY region, and it is a path carrier.
+      if (mkCovers && !mkPlain && mkAsked && mkWord !== "none" &&
+          mkOut2 && mkOut2.noop) {
+        let nWhy;
+        if (mkAbove === "none") {
+          nWhy = "the " + mkPhrase("mask", mkCount + " masks") +
+            " already on it " + mkPhrase("hides", "hide") + " all of it, " +
+            "so there is nothing left for this one to change";
+        } else if (args && args.inverted) {
+          nWhy = "'inverted' turns a mask covering the whole layer into one " +
+            "covering NONE of it, so '" + mkWord + "' " +
+            ((mkWord === "subtract" || mkAbove === "nothing")
+              ? "takes nothing away"
+              : "leaves the mask above it exactly as it was");
+        } else {
+          nWhy = "'" + mkWord + "' over the whole layer keeps everything " +
+            "that already showed";
+        }
         const nFix = (args && args.inverted &&
                       String(args.mode).toLowerCase() !== "subtract")
           ? "Pass 'bounds' for the part you want to CUT AWAY."
@@ -3187,6 +3340,7 @@ function cannedOk(tool, args) {
           ". Masks here: " + dm.join(", ") };
       }
       const gone = dm.splice(at, 1)[0];
+      if (mkShapes[dmKey]) mkShapes[dmKey].splice(at, 1);
       return { layer: args.layer, removed: gone, remainingMasks: dm.slice() };
     }
     case "set_mask_path": {
@@ -5386,7 +5540,7 @@ SelfTest.run({
     mattes = {};
     mtRig = {};
     maskKeys = {}; motion = {};
-    mkMasks = {}; mkSizes = {}; gridStack = {}; gridExpr = {};
+    mkMasks = {}; mkShapes = {}; mkSizes = {}; gridStack = {}; gridExpr = {};
     batchLayers = 0; batchFx = {}; batchBlur = null;
     dsOn = false; dsDistance = 5;
     batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetWpRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetBoundsRig(); resetPresetRig(); resetRqRig(); resetAuRig(); resetFrRig(); resetCapRig(); resetMgRig();
@@ -5426,7 +5580,7 @@ SelfTest.run({
         mattes = {};
         mtRig = {};
         maskKeys = {}; motion = {};
-        mkMasks = {}; mkSizes = {}; gridStack = {}; gridExpr = {};
+        mkMasks = {}; mkShapes = {}; mkSizes = {}; gridStack = {}; gridExpr = {};
         batchLayers = 0; batchFx = {}; batchBlur = null;
     dsOn = false; dsDistance = 5;
         batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetWpRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetBoundsRig(); resetPresetRig(); resetRqRig(); resetAuRig(); resetFrRig(); resetCapRig(); resetMgRig();

@@ -885,10 +885,29 @@ const whole = betaMasks.property("Whole").property("ADBE Mask Shape").value;
 assert(JSON.stringify(whole.vertices) === "[[0,0],[100,0],[100,100],[0,100]]",
        "…and they are 100x100, not the comp's 1920x1080: " +
        JSON.stringify(whole.vertices));
-assert(!r.data.warning,
-       "…and the tool's OWN default is never warned about — add_mask then " +
-       "set_mask_path opens with exactly this placeholder: " +
-       JSON.stringify(r.data));
+// Beta already carries 'Half' and 'Over', which hide part of it — so
+// this default-region mask is not the harmless placeholder it is on a
+// bare layer: it covers the whole layer under mode 'add', and measured
+// (scripts/mask-above-probe.js) that switches every mask above it off,
+// taking the layer from mean alpha 0.429 back to 1.0. The old assertion
+// here required SILENCE for that, on the reasoning that the tool's own
+// default should never be nagged about — true of a bare layer, and the
+// exact blindness this pass closes.
+assert(/every pixel of it shows again/.test(r.data.warning || "") &&
+       /stop hiding anything/.test(r.data.warning || ""),
+       "…and the same default over masks that WERE hiding something says " +
+       "they have stopped: " + JSON.stringify(r.data));
+assert(!/cuts nothing away/.test(r.data.warning || ""),
+       "…and does not fall back to the half-true sentence, which is about " +
+       "the new mask and not about the two it just switched off: " +
+       r.data.warning);
+betaMasks._children.length = 0;
+r = call("add_mask", { layer: "Beta", name: "WholeBare", shape: "rectangle" });
+assert(r.ok && !r.data.warning,
+       "…while on a BARE layer the same call is exactly the placeholder " +
+       "add_mask + set_mask_path opens with, and stays silent: " +
+       JSON.stringify(r.ok ? r.data : r.error));
+betaMasks._children.length = 0;
 
 // ---------------------------------------------------------------------
 // 6b. A feather is not a blur.
@@ -1019,6 +1038,17 @@ assert(r.ok && /hides ALL of 'Solo'/.test(r.data.warning || "") &&
 // ERASURE warning must not fire (a false alarm on a legitimate
 // multi-mask build is how a warning stops being read), but the call is
 // still a provable no-op and gets the third receipt instead.
+//
+// "Over an existing add mask" is the rig that was MEASURED — one mask on
+// the left half, i.e. a layer that still shows something. 'Inv' emptied
+// it, and a mask above that keeps NOTHING is a different world with its
+// own right answer (below), so the eraser comes off first.
+soloMasks._children.length = 0;
+r = call("add_mask", { layer: "Solo", name: "Keep", shape: "rectangle",
+                       bounds: [0, 0, 50, 100] });
+assert(r.ok && !r.data.warning,
+       "the measured base — one add mask on the left half — lands with " +
+       "nothing to say: " + JSON.stringify(r.ok ? r.data : r.error));
 r = call("add_mask", { layer: "Solo", name: "Inv2", shape: "rectangle",
                        bounds: [0, 0, 100, 100], inverted: true });
 assert(r.ok && !/hides ALL of/.test(r.data.warning || ""),
@@ -1037,13 +1067,31 @@ r = call("add_mask", { layer: "Solo", name: "Sub2", shape: "rectangle",
 assert(r.ok && /hides ALL of 'Solo'/.test(r.data.warning || ""),
        "'subtract' empties the layer whatever else is masked on it: " +
        JSON.stringify(r.ok ? r.data : r.error));
+// …but not over a layer that already shows NOTHING. The old table said
+// "always" there too, which is a sentence about the wrong mask: this one
+// took nothing, because there was nothing left to take.
+r = call("add_mask", { layer: "Solo", name: "Sub3", shape: "rectangle",
+                       bounds: [0, 0, 100, 100], mode: "subtract" });
+assert(r.ok && !/hides ALL of/.test(r.data.warning || ""),
+       "…except over masks that already hide everything, where blaming " +
+       "this mask would be false: " + JSON.stringify(r.ok ? r.data : r.error));
+assert(/changes nothing on 'Solo'/.test(r.data.warning || "") &&
+       /already on it hide all of it/.test(r.data.warning || ""),
+       "…and it names the masks that ARE hiding it: " +
+       JSON.stringify(r.data));
 // …and so do the two inverted modes that intersect down to nothing.
+soloMasks._children.length = 0;
+call("add_mask", { layer: "Solo", name: "Keep2", shape: "rectangle",
+                   bounds: [0, 0, 50, 100] });
 r = call("add_mask", { layer: "Solo", name: "Int", shape: "rectangle",
                        bounds: [0, 0, 100, 100], mode: "intersect",
                        inverted: true });
 assert(r.ok && /hides ALL of 'Solo'/.test(r.data.warning || ""),
        "an inverted 'intersect' keeps nothing, whatever is above it: " +
        JSON.stringify(r.ok ? r.data : r.error));
+soloMasks._children.length = 0;
+call("add_mask", { layer: "Solo", name: "Keep3", shape: "rectangle",
+                   bounds: [0, 0, 50, 100] });
 r = call("add_mask", { layer: "Solo", name: "Dark", shape: "rectangle",
                        bounds: [0, 0, 100, 100], mode: "darken",
                        inverted: true });
@@ -1118,18 +1166,136 @@ r = call("add_mask", { layer: "Solo", name: "DiffAlone", shape: "rectangle",
 assert(r.ok && /changes nothing on 'Solo'/.test(r.data.warning || ""),
        "a lone full-coverage 'difference' keeps every pixel: " +
        JSON.stringify(r.ok ? r.data : r.error));
-// …and says nothing once there is a mask above it to invert. What it
-// then DOES depends on what that mask kept — measured 0.667 over a
-// left-half add mask, and a base that shows everything would come out
-// empty — and neither table can see the base, only whether one exists.
-// Silence is the honest answer for the no-op question; the erasure
-// question is left open and filed.
+// …and what it does once there is a mask above it to invert depends on
+// what THAT mask shows, which is the whole of this pass. Measured
+// (mask-above-probe.js): over a mask showing every pixel it leaves NONE,
+// alpha 1.0 -> 0.0 — and this assertion used to require silence for it,
+// because neither table could see the base and the erasure question was
+// filed open.
 r = call("add_mask", { layer: "Solo", name: "DiffSecond", shape: "rectangle",
                        bounds: [0, 0, 100, 100], mode: "difference" });
-assert(r.ok && !r.data.warning,
-       "…but over an existing mask it really does change the layer, so " +
-       "the no-op warning must not fire: " +
+assert(/hides ALL of 'Solo'/.test(r.data.warning || ""),
+       "…and over a mask that was showing every pixel, the same call " +
+       "empties the layer and now says so: " +
        JSON.stringify(r.ok ? r.data : r.error));
+assert(/'difference' over the whole layer INVERTS/.test(r.data.warning || "") &&
+       /showing every pixel/.test(r.data.warning || ""),
+       "…naming what it inverted, not blaming a 'subtract' nobody " +
+       "passed: " + r.data.warning);
+soloMasks._children.length = 0;
+// The other half of the same measurement, and the reason this is a
+// warning and not a refusal: over a mask that keeps HALF, 'difference'
+// inverts that half (0.429 -> 0.571). It really works, so nothing is
+// said — the one-sidedness checked from its quiet side.
+call("add_mask", { layer: "Solo", name: "KeepD", shape: "rectangle",
+                   bounds: [0, 0, 50, 100] });
+r = call("add_mask", { layer: "Solo", name: "DiffHalf", shape: "rectangle",
+                       bounds: [0, 0, 100, 100], mode: "difference" });
+assert(r.ok && !r.data.warning,
+       "…while over a mask that keeps half, it inverts that half and is " +
+       "left alone: " + JSON.stringify(r.ok ? r.data : r.error));
+soloMasks._children.length = 0;
+// And the mirror of the erasure: a full-coverage ADD over masks that
+// were hiding something switches them all off (0.429 -> 1.0). The old
+// receipt said "cuts nothing away — every pixel of it still shows",
+// which is true of the new mask and silent about the ones that stopped.
+call("add_mask", { layer: "Solo", name: "KeepU", shape: "rectangle",
+                   bounds: [0, 0, 50, 100] });
+r = call("add_mask", { layer: "Solo", name: "Undo", shape: "rectangle",
+                       bounds: [0, 0, 100, 100] });
+assert(!/cuts nothing away/.test(r.data.warning || ""),
+       "a full-coverage add over a mask that was hiding something is not " +
+       "'cuts nothing away': " + JSON.stringify(r.ok ? r.data : r.error));
+assert(/every pixel of it shows again/.test(r.data.warning || "") &&
+       /the mask already on it stops hiding anything/
+         .test(r.data.warning || ""),
+       "…it says the masking stopped, and how many masks it stopped: " +
+       JSON.stringify(r.data));
+soloMasks._children.length = 0;
+// An ellipse bounds the layer with its four vertices and still leaves
+// the corners, so "every pixel shows again" would be false — the one
+// place this warning is deliberately blind.
+call("add_mask", { layer: "Solo", name: "KeepE", shape: "rectangle",
+                   bounds: [0, 0, 50, 100] });
+r = call("add_mask", { layer: "Solo", name: "UndoE", shape: "ellipse",
+                       bounds: [0, 0, 100, 100] });
+assert(r.ok && !/shows again/.test(r.data.warning || ""),
+       "…and an ELLIPSE over the same mask does not claim it: it leaves " +
+       "the corners: " + JSON.stringify(r.ok ? r.data : r.error));
+soloMasks._children.length = 0;
+
+// What the parade SHOWS, not how many masks are in it. Two add masks on
+// opposite halves show every pixel between them, and measured they behave
+// exactly like one mask that covers the layer: a 'difference' over them
+// empties it. A rule that looked for "one mask covering all" would miss
+// this and let the layer go blank in silence.
+call("add_mask", { layer: "Solo", name: "HalfL", shape: "rectangle",
+                   bounds: [0, 0, 50, 100] });
+call("add_mask", { layer: "Solo", name: "HalfR", shape: "rectangle",
+                   bounds: [50, 0, 50, 100] });
+r = call("add_mask", { layer: "Solo", name: "DiffTwo", shape: "rectangle",
+                       bounds: [0, 0, 100, 100], mode: "difference" });
+assert(/hides ALL of 'Solo'/.test(r.data.warning || "") &&
+       /2 masks already on it show/.test(r.data.warning || ""),
+       "two half masks between them show everything, so a 'difference' " +
+       "over them empties the layer and the receipt counts them: " +
+       JSON.stringify(r.ok ? r.data : r.error));
+soloMasks._children.length = 0;
+
+// A parade this cannot READ has to fail quiet in one direction and loud
+// in the other. A feather hides by degrees, so "all / some / none" cannot
+// describe it and the reading is abandoned — but "a full-coverage
+// subtract leaves the layer blank" is true whatever the feather did.
+call("add_mask", { layer: "Solo", name: "Soft", shape: "rectangle",
+                   bounds: [0, 0, 50, 100], feather: 20 });
+r = call("add_mask", { layer: "Solo", name: "BlindAdd", shape: "rectangle",
+                       bounds: [0, 0, 100, 100] });
+assert(!/shows again/.test(r.data.warning || ""),
+       "an unreadable parade is never claimed to have stopped working: " +
+       JSON.stringify(r.ok ? r.data : r.error));
+assert(/cuts nothing away/.test(r.data.warning || ""),
+       "…and the wider sentence, which is true whatever it showed, still " +
+       "arrives: " + JSON.stringify(r.data));
+r = call("add_mask", { layer: "Solo", name: "BlindSub", shape: "rectangle",
+                       bounds: [0, 0, 100, 100], mode: "subtract" });
+assert(/hides ALL of 'Solo'/.test(r.data.warning || ""),
+       "…and a layer that comes out blank is still said to be blank, " +
+       "readable parade or not: " + JSON.stringify(r.ok ? r.data : r.error));
+soloMasks._children.length = 0;
+
+// A 'none' mask is a path carrier and does not composite, so it neither
+// hides anything nor stops the parade being read — its own shape does
+// not even have to be readable.
+call("add_mask", { layer: "Solo", name: "Carrier", shape: "ellipse",
+                   bounds: [10, 10, 30, 30], mode: "none" });
+r = call("add_mask", { layer: "Solo", name: "AfterCarrier",
+                       shape: "rectangle", bounds: [0, 0, 100, 100],
+                       mode: "difference" });
+assert(/changes nothing on 'Solo'/.test(r.data.warning || ""),
+       "a path carrier leaves the layer as good as unmasked, so the mask " +
+       "after it is read against a bare layer: " +
+       JSON.stringify(r.ok ? r.data : r.error));
+soloMasks._children.length = 0;
+
+// The "misses it completely" refusal, over a layer that HAS masks.
+// Measured this pass and it moved the row: an off-layer 'intersect'
+// empties a bare layer and leaves a masked one exactly as it was, where
+// the old table said "hide the whole layer" for both.
+r = call("add_mask", { layer: "Solo", shape: "rectangle", mode: "intersect",
+                       bounds: [0, 540, 1920, 540] });
+assert(!r.ok && /misses 'Solo' completely, so it would hide the whole layer/
+         .test(r.error),
+       "a lone off-layer intersect really does empty the layer: " +
+       (r.ok ? JSON.stringify(r.data) : r.error));
+call("add_mask", { layer: "Solo", name: "KeepM", shape: "rectangle",
+                   bounds: [0, 0, 50, 100] });
+r = call("add_mask", { layer: "Solo", shape: "rectangle", mode: "intersect",
+                       bounds: [0, 540, 1920, 540] });
+assert(!r.ok && /misses 'Solo' completely, so it would change nothing/
+         .test(r.error),
+       "…but over a mask that keeps something it changes nothing, and " +
+       "the refusal's REASON is all the model gets to act on: " +
+       (r.ok ? JSON.stringify(r.data) : r.error));
 soloMasks._children.length = 0;
 // mode 'none' is deliberately OUT of the table: it changes nothing at
 // any region, so full coverage is not what makes it a no-op, and a

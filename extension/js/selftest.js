@@ -2831,11 +2831,38 @@
           return /Drop 'inverted'/.test(w) || "no way out offered: " + w;
         } },
 
-      // The same call, now with ST InvA above it: measured, it keeps
-      // whatever that mask kept, so the ERASURE warning must NOT fire. A
-      // false alarm on a legitimate multi-mask build is how a warning
-      // stops being read at all. What it IS, though, is a mask that
-      // changed nothing, and that is its own receipt.
+      // The steps from here down say "over an existing mask", and they
+      // mean the rig that was MEASURED: one add mask on the left half,
+      // i.e. a layer that still shows something. ST InvA emptied it, and
+      // a mask above that keeps NOTHING is a different world with a
+      // different right answer (the tool says so now, in its own
+      // sentence) — so the eraser comes off and the measured base goes on.
+      { name: "the eraser comes off before the multi-mask rows",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", mask: "ST InvA" };
+        },
+        check: function (d) {
+          return d.removed === "ST InvA" || "removed " + d.removed;
+        } },
+
+      { name: "…and the measured base goes on: an add mask on the left half",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", name: "ST Keep",
+                   shape: "rectangle", bounds: [0, 0, 100, 200] };
+        },
+        check: function (d) {
+          return !d.warning || "a real half-layer mask was warned about: " +
+                 d.warning;
+        } },
+
+      // The same call as ST InvA, now with a mask above it that KEEPS
+      // something: measured, it keeps exactly what that mask kept, so the
+      // ERASURE warning must NOT fire. A false alarm on a legitimate
+      // multi-mask build is how a warning stops being read at all. What
+      // it IS, though, is a mask that changed nothing, and that is its
+      // own receipt.
       { name: "…but the same call under a mask is a no-op, not an erasure",
         tool: "add_mask",
         args: function (ctx) {
@@ -2865,6 +2892,18 @@
         check: function (d) {
           return /hides ALL of 'ST Erase'/.test(d.warning || "") ||
                  "warning: " + (d.warning || "(none)");
+        } },
+
+      // …and off again, for the same reason ST InvA came off: it emptied
+      // the layer, and every row below is about a layer that still shows
+      // something.
+      { name: "the inverted intersect comes off too",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", mask: "ST IntI" };
+        },
+        check: function (d) {
+          return d.removed === "ST IntI" || "removed " + d.removed;
         } },
 
       // ---- the THIRD outcome: the mask that changes NOTHING -----------
@@ -3054,6 +3093,296 @@
         },
         check: function (d) {
           return d.removed === "ST Erase" || "removed " + d.removed;
+        } },
+
+      // ---- the FOURTH outcome: the mask that switches the others off --
+      //
+      // Filed by the no-op pass as its top item: both mask tables could
+      // see WHETHER the layer had masks and never what they SHOWED, and
+      // one measured row needed the difference. Measured this pass
+      // (scripts/mask-above-probe.js, AE 26.3x87, six different parades
+      // read through sampleImage at seven points each):
+      //
+      //   full-coverage 'difference' over masks showing every pixel
+      //     -> mean alpha 1.0 -> 0.0, the layer is GONE, no warning
+      //   full-coverage 'add' over an add mask on the left half
+      //     -> 0.429 -> 1.0, the masking stops working, and the receipt
+      //        said "cuts nothing away — every pixel of it still shows"
+      //
+      // The second sentence is true of the new mask and says nothing
+      // about the ones that stopped hiding, which is the half that
+      // matters. A fresh layer, because what is above is the whole
+      // subject and 'ST Erase' had a dozen by the end.
+      { name: "a clean layer for what the masks above it show",
+        tool: "add_solid",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, name: "ST Above", color: [0.2, 0.3, 0.4],
+                   width: 200, height: 200 };
+        },
+        check: function (d) { return d.name === "ST Above" || d.name; } },
+
+      { name: "a mask on the left half is the ordinary thing, and silent",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Above", name: "ST AHalf",
+                   shape: "rectangle", bounds: [0, 0, 100, 200] };
+        },
+        check: function (d) {
+          return !d.warning || "an ordinary half mask was warned about: " +
+                 d.warning;
+        } },
+
+      { name: "…and a full-coverage ADD over it says the masking stopped",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Above", name: "ST AUndo",
+                   shape: "rectangle", bounds: [0, 0, 200, 200] };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (/cuts nothing away/.test(w)) {
+            return "the old half-true sentence is still here: " + w;
+          }
+          if (!/every pixel of it shows again/.test(w)) {
+            return "warning: " + (w || "(none)");
+          }
+          return /the mask already on it stops hiding anything/.test(w) ||
+                 "it does not say what stopped working: " + w;
+        } },
+
+      { name: "…the undo mask comes off",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Above", mask: "ST AUndo" };
+        },
+        check: function (d) {
+          return d.removed === "ST AUndo" || "removed " + d.removed;
+        } },
+
+      { name: "…and the default region does it too, without being asked",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Above", name: "ST AUndoD" };
+        },
+        check: function (d) {
+          // Unasked, unlike the no-op warning: add_mask's own default
+          // region IS the whole layer, so "add another mask" with no
+          // bounds is exactly the call that switches the masking off.
+          return /every pixel of it shows again/.test(d.warning || "") ||
+                 "the placeholder switched the masking off in silence: " +
+                 (d.warning || "(none)");
+        } },
+
+      { name: "…and the placeholder comes off",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Above", mask: "ST AUndoD" };
+        },
+        check: function (d) {
+          return d.removed === "ST AUndoD" || "removed " + d.removed;
+        } },
+
+      // A 'difference' over a mask that keeps HALF really does change the
+      // layer — measured, it inverts what that mask kept (0.429 -> 0.571)
+      // — so it is neither an erasure nor a no-op and there is nothing
+      // provable to say. One-sidedness, checked from the quiet side.
+      { name: "…a DIFFERENCE over a half-mask inverts it, and says nothing",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Above", name: "ST ADiffH",
+                   shape: "rectangle", bounds: [0, 0, 200, 200],
+                   mode: "difference" };
+        },
+        check: function (d) {
+          return !d.warning || "a mask that really works was warned " +
+                 "about: " + d.warning;
+        } },
+
+      { name: "…and that one comes off",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Above", mask: "ST ADiffH" };
+        },
+        check: function (d) {
+          return d.removed === "ST ADiffH" || "removed " + d.removed;
+        } },
+
+      // The "misses it completely" refusal, over a layer that HAS masks.
+      // Measured this pass and it moved the row: an off-layer 'intersect'
+      // empties a bare layer, and leaves a masked one exactly as it was
+      // (AE appears to drop a mask lying wholly outside the layer once
+      // something else composites). The old table said "hide the whole
+      // layer" for both.
+      { name: "…and an off-layer INTERSECT over masks changes nothing",
+        tool: "add_mask",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Above", shape: "rectangle",
+                   mode: "intersect", bounds: [0, 540, 1920, 540] };
+        },
+        check: function (e) {
+          return /misses 'ST Above' completely, so it would change nothing/
+                   .test(e) || "message was: " + e;
+        } },
+
+      { name: "…leaving the half mask, which comes off last",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Above", mask: "ST AHalf" };
+        },
+        check: function (d) {
+          return d.removed === "ST AHalf" || "removed " + d.removed;
+        } },
+
+      // THE ROW THIS PASS WAS WRITTEN FOR. A full-coverage add mask
+      // leaves every pixel showing, and a full-coverage 'difference' over
+      // it inverts that to nothing — measured 1.0 -> 0.0 over two
+      // different parades that both showed everything. The same call on a
+      // BARE layer changes nothing at all, which is why no count of masks
+      // could ever have told them apart.
+      { name: "a full-coverage add mask, alone: every pixel still shows",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Above", name: "ST AAll",
+                   shape: "rectangle", bounds: [0, 0, 200, 200] };
+        },
+        check: function (d) {
+          return /cuts nothing away/.test(d.warning || "") ||
+                 "warning: " + (d.warning || "(none)");
+        } },
+
+      { name: "…and a DIFFERENCE over it empties the layer, and says so",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Above", name: "ST ADiffAll",
+                   shape: "rectangle", bounds: [0, 0, 200, 200],
+                   mode: "difference" };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (!/hides ALL of 'ST Above'/.test(w)) {
+            return "the layer went blank in silence: " + (w || "(none)");
+          }
+          if (!/'difference' over the whole layer INVERTS/.test(w)) {
+            return "it does not name what did it: " + w;
+          }
+          return /showing every pixel/.test(w) ||
+                 "it does not say what they were showing: " + w;
+        } },
+
+      { name: "…and comes off again",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Above", mask: "ST ADiffAll" };
+        },
+        check: function (d) {
+          return d.removed === "ST ADiffAll" || "removed " + d.removed;
+        } },
+
+      // Over masks that already hide everything, a full-coverage subtract
+      // takes nothing — there is nothing left to take. The old table
+      // called this an erasure whatever was above it, which is a sentence
+      // about the wrong mask.
+      { name: "a subtract blanks the layer while something still shows",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Above", name: "ST ABlank",
+                   shape: "rectangle", bounds: [0, 0, 200, 200],
+                   mode: "subtract" };
+        },
+        check: function (d) {
+          return /hides ALL of 'ST Above'/.test(d.warning || "") ||
+                 "warning: " + (d.warning || "(none)");
+        } },
+
+      { name: "…and the next one has nothing left to take, and says that",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Above", name: "ST ABlank2",
+                   shape: "rectangle", bounds: [0, 0, 200, 200],
+                   mode: "subtract" };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (/hides ALL of/.test(w)) {
+            return "it blames this mask for a layer that was already " +
+                   "hidden: " + w;
+          }
+          if (!/changes nothing on 'ST Above'/.test(w)) {
+            return "warning: " + (w || "(none)");
+          }
+          return /already on it hide all of it/.test(w) ||
+                 "it does not name what is really hiding it: " + w;
+        } },
+
+      { name: "…and the layer that carried all that goes away",
+        tool: "delete_layer",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Above" };
+        },
+        check: function (d) {
+          return d.removed === "ST Above" || "removed " + d.removed;
+        } },
+
+      // A parade this cannot READ is the other one-sidedness, and it has
+      // to fail quiet in one direction and loud in the other. A mask
+      // feather hides by degrees, so "all / some / none" cannot describe
+      // it and the reading is abandoned — but "a full-coverage subtract
+      // leaves the layer blank" is true whatever the feather did, and
+      // that sentence still has to arrive.
+      { name: "a layer whose masks cannot be read at all",
+        tool: "add_solid",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, name: "ST Blind", color: [0.4, 0.3, 0.2],
+                   width: 200, height: 200 };
+        },
+        check: function (d) { return d.name === "ST Blind" || d.name; } },
+
+      { name: "…its one mask is feathered, so what it shows is a degree",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Blind", name: "ST BSoft",
+                   shape: "rectangle", bounds: [0, 0, 100, 200],
+                   feather: 20 };
+        },
+        check: function (d) {
+          return !d.warning || "warning: " + d.warning;
+        } },
+
+      { name: "…so a full-coverage ADD does not claim the masking stopped",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Blind", name: "ST BAdd",
+                   shape: "rectangle", bounds: [0, 0, 200, 200] };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (/shows again/.test(w)) {
+            return "it claimed to know what an unreadable parade shows: " + w;
+          }
+          return /cuts nothing away/.test(w) ||
+                 "the wider sentence went missing too: " + (w || "(none)");
+        } },
+
+      { name: "…but a full-coverage SUBTRACT still says the layer is gone",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Blind", name: "ST BSub",
+                   shape: "rectangle", bounds: [0, 0, 200, 200],
+                   mode: "subtract" };
+        },
+        check: function (d) {
+          return /hides ALL of 'ST Blind'/.test(d.warning || "") ||
+                 "a blank layer in silence: " + (d.warning || "(none)");
+        } },
+
+      { name: "…and the unreadable layer goes away too",
+        tool: "delete_layer",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Blind" };
+        },
+        check: function (d) {
+          return d.removed === "ST Blind" || "removed " + d.removed;
         } },
 
       // --- the batch executor, at the scale it is actually used at.

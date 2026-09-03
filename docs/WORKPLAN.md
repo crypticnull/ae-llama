@@ -2115,6 +2115,36 @@ this order, one bullet per pass:
     the reverted canned host, and THREE old assertions plus TWO old
     suite steps rewritten because they pinned the defect — each proved
     "not an erasure" and then required a bare ok for it.
+  - ~~**neither mask table can see the mask ABOVE, only whether one
+    exists**~~ DONE 2026-09-03 (0.11.28). Filed by the 0.11.27 pass as
+    its top item and correctly called a MEASUREMENT pass first: the two
+    tables took a boolean `alone`, and both had only ever been measured
+    against two worlds (no mask, and one add mask on the left half). New
+    `scripts/mask-above-probe.js/.jsx` varies the thing the old probe
+    held fixed — six parades, chosen so that "what they SHOW" and "how
+    many there are" come apart — and reproduced both filed defects with
+    the shipped tool: a full-coverage `difference` over masks showing
+    every pixel takes the layer from alpha 1.0 to **0.0 with no warning
+    at all**, and a full-coverage `add` over masks that hid something
+    takes it 0.429 -> 1.0 on "cuts nothing away — every pixel of it
+    still shows". Both tables are gone, replaced by ONE algebra
+    (`AELL_maskApply`) plus `AELL_paradeShows`, which reads what the
+    existing masks show EXACTLY (coordinate compression over the layer
+    box; axis-aligned rectangles only, and it bails to silence on a
+    feather, a bezier, part-opacity or an animated shape). Four
+    outcomes now, not two: erases / no-op / **undoes** (new — the
+    masking stopped working, unasked like the erasure because the layer
+    visibly changes) / nothing to say. Three measured corrections fell
+    out: an off-layer `intersect` empties a BARE layer and leaves a
+    masked one alone (the inverted/miss mirror is false once masks
+    exist), a `subtract` over a layer whose masks already hide
+    everything takes nothing rather than erasing, and an unreadable
+    parade still gets the sentence every reading agrees on ("a
+    full-coverage subtract leaves the layer blank"). Zero prompt cost
+    (host strings only). Harness 674 -> **698**; +18 stub assertions
+    with 10 RED against the reverted host, 5 of the new real-AE steps
+    RED against the reverted canned host, and six old assertions plus
+    two suite fixtures repaired because they pinned the blindness.
 - **DEFERRED until a sandbox design exists:** D/F/H3 rows (project
   mutation, renders, mass-delete) — wiring them against the live
   project is the harm the whitelist cannot contain. Also deferred:
