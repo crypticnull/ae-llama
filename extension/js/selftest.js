@@ -2790,6 +2790,136 @@
                  "failures do not carry the real reason: " + f;
         } },
 
+      // ---- "Parameter not found" is a CONCEPT map -------------------
+      // Measured 2026-09-03 in the same field round: the model asked
+      // Drop Shadow for Offset -> Offset X -> Offset Y -> Blurriness
+      // across FOUR calls and was shown the complete, correct seven-name
+      // roster every time. The list was never hiding the answer and
+      // there was nothing to rank; what it never said is that on THIS
+      // effect an "offset" IS Distance at a Direction, and a "blur" IS
+      // Softness. Drop Shadow is the effect that failure happened on and
+      // its roster is measured (scripts/param-concept-probe.jsx).
+      { name: "batch: Drop Shadow for the concept-map steps",
+        tool: "apply_effect",
+        args: function (ctx) {
+          return { comp: ctx.btComp, layer: "ST Batch 60",
+                   effect: "Drop Shadow" };
+        },
+        check: function () { return true; } },
+
+      { name: "batch: 'Offset' is answered with Distance and Direction",
+        tool: "set_effect_param",
+        args: function (ctx) {
+          return { comp: ctx.btComp, layer: "ST Batch 60",
+                   effect: "Drop Shadow", param: "Offset", value: 10 };
+        },
+        expectError: true,
+        check: function (err) {
+          if (!/Parameter not found: Offset/.test(err)) {
+            return "the name that missed is not named: " + err;
+          }
+          if (!/that is: Direction, Distance\./.test(err)) {
+            return "an 'offset' is not mapped to the two names that " +
+                   "mean it here: " + err;
+          }
+          return (/'Drop Shadow' has: Shadow Color, Opacity, Direction/
+                    .test(err) && /list_properties/.test(err)) ||
+                 "the grounded roster or the lister was lost: " + err;
+        } },
+
+      { name: "batch: 'Blurriness' is answered with Softness, alone",
+        tool: "set_effect_param",
+        args: function (ctx) {
+          return { comp: ctx.btComp, layer: "ST Batch 60",
+                   effect: "Drop Shadow", param: "Blurriness", value: 4 };
+        },
+        expectError: true,
+        check: function (err) {
+          if (!/that is: Softness\./.test(err)) {
+            return "a 'blur' is not mapped to Softness: " + err;
+          }
+          return String(err).split("has:")[0].indexOf("Compositing") === -1 ||
+                 "the concept clause offered Compositing Options: " + err;
+        } },
+
+      // The map may not INVENT. A word that means nothing on this effect
+      // has to leave the refusal exactly as it was.
+      { name: "batch: an unmappable word gets no suggestion at all",
+        tool: "set_effect_param",
+        args: function (ctx) {
+          return { comp: ctx.btComp, layer: "ST Batch 60",
+                   effect: "Drop Shadow", param: "Wobble", value: 1 };
+        },
+        expectError: true,
+        check: function (err) {
+          return (/Parameter not found: Wobble\. 'Drop Shadow' has:/
+                    .test(err) && !/that is:/.test(err)) ||
+                 "a suggestion was invented for a word that means " +
+                 "nothing here: " + err;
+        } },
+
+      // The other half, and it is AE's own arbitrariness: measured on
+      // Drop Shadow, fx.property("distance") RESOLVES and
+      // fx.property("DISTANCE") does not, nor does "shadow color". A
+      // name that differs only in case or a separator is the SAME name,
+      // so the host folds it rather than refusing - the way remove_effect
+      // and the render-template picker already do.
+      { name: "batch: a shouted parameter name still writes",
+        tool: "set_effect_param",
+        args: function (ctx) {
+          return { comp: ctx.btComp, layer: "ST Batch 60",
+                   effect: "Drop Shadow", param: "DISTANCE", value: 30 };
+        },
+        check: function (d) {
+          return d.param === "Distance" ||
+                 "the receipt reports '" + d.param + "', not AE's spelling";
+        } },
+
+      { name: "batch: and AE really took it on Distance",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.btComp, layer: "ST Batch 60",
+                   property: "effects/Drop Shadow/Distance" };
+        },
+        check: function (d) {
+          return Math.abs(Number(d.value) - 30) < 1e-6 ||
+                 "Distance reads " + d.value + ", not the 30 that was " +
+                 "written through the folded name";
+        } },
+
+      // The OTHER place a caller names a parameter: the dotted spec that
+      // add_keyframe / link_property / set_expression all resolve
+      // through. It used to refuse with the name and nothing else - no
+      // roster, no concept, nothing to retry from.
+      { name: "batch: the dotted property path refuses the same way",
+        tool: "add_keyframe",
+        args: function (ctx) {
+          return { comp: ctx.btComp, layer: "ST Batch 60", time: 0,
+                   value: 4, property: "effect.Drop Shadow.Blurriness" };
+        },
+        expectError: true,
+        check: function (err) {
+          if (!/that is: Softness/.test(err)) {
+            return "no concept on the dotted path: " + err;
+          }
+          if (!/'Drop Shadow' has: Shadow Color/.test(err)) {
+            return "no roster on the dotted path: " + err;
+          }
+          return /effect\.Drop Shadow\.<one of those>/.test(err) ||
+                 "it never says how to spell the path it wants: " + err;
+        } },
+
+      { name: "batch: take the concept-map Drop Shadow back off",
+        tool: "remove_effect",
+        args: function (ctx) {
+          return { comp: ctx.btComp, layer: "ST Batch 60",
+                   effect: "Drop Shadow" };
+        },
+        check: function (d) {
+          return d.removed === "Drop Shadow" ||
+                 "removed '" + d.removed + "'";
+        } },
+
       // ---- what the MODEL is told about a big comp -----------------
       // A 200-layer comp serialized to 30 KB against a 6 KB prompt
       // budget, so the panel's byte-slice dropped the comp out of the

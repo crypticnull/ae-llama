@@ -614,6 +614,145 @@ function AELL_keyedProps(layer) {
   return out;
 }
 
+/*
+ * What the caller's WORD means on the effect in front of it.
+ *
+ * Measured 2026-09-03 (AE 26.3x87, scripts/param-concept-probe.jsx): the
+ * model asked Drop Shadow for Offset -> Offset X -> Offset Y ->
+ * Blurriness across four calls and was shown the complete, correct
+ * seven-name roster every single time. So the refusal was not hiding the
+ * answer and there was nothing to RANK: the list already said Distance
+ * and Direction. What it never said is that on THIS effect an "offset" IS
+ * a distance at an angle, and a "blur" IS Softness. A roster answers
+ * "what exists"; this answers "which of those is the thing you asked for".
+ *
+ * Each row is one concept. A row fires when the caller's word contains
+ * any of its words, and then every roster name containing any of the same
+ * row's words is a hit. Both halves are grounded in real rosters
+ * (measured, in that probe's output) - no word is in here that AE does
+ * not actually use somewhere.
+ */
+var AELL_PARAM_CONCEPTS = [
+  ["offset", "distance", "direction", "angle", "shift", "displace",
+   "displacement", "position", "move", "translate"],
+  ["blur", "blurriness", "soften", "softness", "sharp", "sharpness",
+   "feather", "smooth", "radius", "hardness", "fuzzy"],
+  ["opacity", "alpha", "transparency", "transparent", "opaque",
+   "strength", "intensity", "amount", "power", "density"],
+  ["color", "colour", "tint", "hue", "shade"],
+  ["size", "scale", "width", "height", "radius", "thickness", "length",
+   "border"],
+  ["speed", "rate", "frequency", "evolution", "phase", "cycle"],
+  ["seed", "random", "randomness", "variation", "jitter"],
+  ["brightness", "bright", "exposure", "lightness", "luminance",
+   "gamma", "level"],
+  /* No "shadow" in here on purpose: on Drop Shadow it fires on every
+   * name at once (Shadow Color, Shadow Only) and buries the answer, and
+   * Tritone's Shadows is already reached by plain containment. */
+  ["contrast", "gamma", "level", "midtone", "highlight"],
+  ["threshold", "tolerance", "cutoff", "clip", "limit"],
+  ["center", "centre", "anchor", "origin", "point", "pivot"],
+  ["progress", "completion", "complete", "transition", "reveal", "wipe",
+   "percent"],
+  ["saturation", "saturate", "vibrance", "vividness"],
+  ["edge", "border", "stroke", "outline", "brush"]
+];
+
+/*
+ * The concept names on THIS roster, best first, "" when nothing matched.
+ * Never invents a name: every string it returns came out of `names`.
+ */
+function AELL_paramConcept(wanted, names) {
+  var want = String(wanted === null || typeof wanted === "undefined"
+    ? "" : wanted).toLowerCase();
+  if (!want) return "";
+  var hits = [], seen = {}, i, j, k, low;
+  function take(n) {
+    if (!n || seen[n]) return;
+    seen[n] = 1;
+    hits.push(n);
+  }
+  /* Containment first, in both directions: "Shadow Distance" holds
+   * Distance, and "Blur" is held by Blurriness / Blur Radius. Measured:
+   * AE refuses both spellings outright, and both name the right
+   * parameter in full. */
+  for (i = 0; i < names.length; i++) {
+    low = String(names[i]).toLowerCase();
+    if (!low || low === want) continue;
+    if (want.indexOf(low) !== -1 || low.indexOf(want) !== -1) take(names[i]);
+  }
+  for (i = 0; i < AELL_PARAM_CONCEPTS.length; i++) {
+    var row = AELL_PARAM_CONCEPTS[i], fired = false;
+    for (j = 0; j < row.length; j++) {
+      if (want.indexOf(row[j]) !== -1) { fired = true; break; }
+    }
+    if (!fired) continue;
+    for (k = 0; k < names.length; k++) {
+      low = String(names[k]).toLowerCase();
+      if (!low || low === "compositing options") continue;
+      for (j = 0; j < row.length; j++) {
+        if (low.indexOf(row[j]) !== -1) { take(names[k]); break; }
+      }
+    }
+  }
+  if (hits.length === 0) return "";
+  if (hits.length > 4) hits = hits.slice(0, 4);
+  return hits.join(", ");
+}
+
+/* Every parameter name on an effect, in AE's own order and spelling. */
+function AELL_paramNames(fx) {
+  var out = [], i, p;
+  for (i = 1; i <= fx.numProperties; i++) {
+    p = null;
+    try { p = fx.property(i); } catch (eP) {}
+    if (p && p.name) out.push(String(p.name));
+  }
+  return out;
+}
+
+/*
+ * Find a parameter the way the rest of this file finds an effect or a
+ * render template: AE's exact lookup first, then one case- and
+ * separator-folded pass over the real roster. Measured in the same probe:
+ * fx.property("distance") already resolves but fx.property("DISTANCE")
+ * does NOT, so AE's own leniency is arbitrary and a caller who shouts a
+ * name it accepts in lowercase gets nothing. A fold is not a guess - the
+ * name has to be the SAME name - so this resolves it instead of refusing,
+ * and the receipt reports p.name, which is AE's spelling.
+ */
+function AELL_paramIn(fx, wanted) {
+  if (wanted === null || typeof wanted === "undefined" || wanted === "") {
+    return null;
+  }
+  var p = null;
+  try { p = fx.property(String(wanted)); } catch (eE) {}
+  if (p) return p;
+  var want = String(wanted).toLowerCase().replace(/[\s_\-]/g, ""), i, q, low;
+  if (!want) return null;
+  for (i = 1; i <= fx.numProperties; i++) {
+    q = null;
+    try { q = fx.property(i); } catch (eI) {}
+    if (!q || !q.name) continue;
+    low = String(q.name).toLowerCase().replace(/[\s_\-]/g, "");
+    if (low === want) return q;
+  }
+  return null;
+}
+
+/*
+ * The one "Parameter not found" sentence, so both places a caller can
+ * name a parameter refuse the same way. `tail` is whatever the call site
+ * wants to add about itself.
+ */
+function AELL_paramMissMsg(fx, wanted, names, tail) {
+  var concept = AELL_paramConcept(wanted, names);
+  return "Parameter not found: " + wanted +
+    (concept ? " — on '" + fx.name + "' that is: " + concept + "." : ".") +
+    " '" + fx.name + "' has: " + AELL_capJoin(names, 20) + "." +
+    (tail ? " " + tail : "");
+}
+
 /* Resolve "position" | "scale" | ... | "effect.<Effect>.<Param>" */
 function AELL_resolveProperty(layer, spec) {
   if (!spec) throw new Error(AELL_missingProperty(layer, ""));
@@ -635,10 +774,11 @@ function AELL_resolveProperty(layer, spec) {
       var fx = effects.property(effectName);
       if (fx) {
         var paramName = parts.slice(cut).join(".");
-        var param = fx.property(paramName);
+        var param = AELL_paramIn(fx, paramName);
         if (!param) {
-          throw new Error("Effect parameter not found: " + paramName +
-                          " (on effect " + effectName + ")");
+          throw new Error(AELL_paramMissMsg(fx, paramName,
+            AELL_paramNames(fx), "Name it as effect." + fx.name +
+            ".<one of those>."));
         }
         return param;
       }
@@ -4778,17 +4918,11 @@ AELL_TOOLS.set_effect_param = function (args) {
       AELL_capJoin(AELL_effectNames(layer), 15) +
       ". apply_effect adds one that is missing.");
   }
-  var p = fx.property(args.param);
+  var p = AELL_paramIn(fx, args.param);
   if (!p) {
-    var pnames = [];
-    for (var pi = 1; pi <= fx.numProperties; pi++) {
-      var pn = fx.property(pi);
-      if (pn && pn.name) pnames.push(pn.name);
-    }
-    return AELL_err("Parameter not found: " + args.param + ". '" +
-      fx.name + "' has: " + AELL_capJoin(pnames, 20) +
-      ". list_properties {layer: \"" + layer.name + "\", path: " +
-      "\"effects/" + fx.name + "\"} shows types and current values.");
+    return AELL_err(AELL_paramMissMsg(fx, args.param, AELL_paramNames(fx),
+      "list_properties {layer: \"" + layer.name + "\", path: " +
+      "\"effects/" + fx.name + "\"} shows types and current values."));
   }
   var warn;
   try {

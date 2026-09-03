@@ -19,7 +19,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `add_camera` | Add a camera | yes | host | — | 5 |
 | `add_captions` | Build MANY timed captions in one call: one text layer per segment (trimmed to its own start/end), or one marker per segment with {as: 'markers'} | yes | host | 1 | 7 |
 | `add_control` | Add a named expression control (Slider/Angle/Checkbox/Color/Point Control effect) to a layer — usually a null | yes | host | 1 | 4 |
-| `add_keyframe` | Add a keyframe on a layer property at a time (seconds) | yes | host | 1 | 10 |
+| `add_keyframe` | Add a keyframe on a layer property at a time (seconds) | yes | host | 1 | 11 |
 | `add_light` | Add a light | yes | host | 1 | 13 |
 | `add_marker` | Add a marker to the comp (omit 'layer') or to a layer | yes | host | 1 | 9 |
 | `add_mask` | Add a mask to a layer | yes | host | 1 | 7 |
@@ -30,7 +30,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `add_text_animator` | Animate a text layer PER CHARACTER (typewriter, cascade, wiggle) — an animator holds the properties, a selector picks which characters get them | yes | host | 1 | 10 |
 | `add_text_layer` | Add a text layer to a comp | yes | host | 1 | 8 |
 | `add_to_render_queue` | Add a comp to the render queue WITHOUT rendering it | yes | host | 1 | 3 |
-| `apply_effect` | Apply an effect to a layer | yes | host | 2 | 11 |
+| `apply_effect` | Apply an effect to a layer | yes | host | 2 | 12 |
 | `apply_expression_preset` | Apply a known-good expression | yes | host | 1 | 5 |
 | `apply_keyframe_ease` | Apply a bezier as TEMPORAL easing between keyframes on one property across MANY layers in ONE call (converts to AE speed/influence ease) | yes | host | 1 | 3 |
 | `apply_preset` | Apply an installed .ffx animation preset to layer(s) | yes | host | 1 | 5 |
@@ -57,7 +57,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `get_bounds` | MEASURE a layer's rendered content without touching it — how wide the text actually is, where the shape sits in the frame, whether anything overflows | no | host | 1 | 32 |
 | `get_comp_details` | Layers of a comp with index, name, type, timing, effects, track matte | no | host | 4 | 36 |
 | `get_project_info` | List project items (comps/footage/folders) and the active comp | no | host | 2 | 16 |
-| `get_property` | Read ANY property by path: value, keyframes, expression | no | host | 3 | 97 |
+| `get_property` | Read ANY property by path: value, keyframes, expression | no | host | 3 | 98 |
 | `grid_layout` | Arrange layers into a grid rigged to a control null: its 'Grid X Spacing'/'Grid Y Spacing'/'Grid Columns' sliders drive spacing AND column count live, and the grid centers on the null's position (all expressions generated host-side) | yes | host | 1 | 2 |
 | `import_as_layer` | Import a file AND place it in a comp as a layer, scaled to the comp | yes | host | 1 | 8 |
 | `import_file` | Import a footage/image/video file into the PROJECT PANEL only — it does not appear in any comp | yes | host | 1 | 2 |
@@ -69,7 +69,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `move_to_folder` | Move project items into a folder (batch) | yes | host | 1 | 2 |
 | `organize_project` | File loose root-level items into Comps/Footage/Solids/Audio/Images folders at the project ROOT | yes | host | 1 | 3 |
 | `precompose` | Move layers into a new nested comp (precompose) | yes | host | 1 | 5 |
-| `remove_effect` | REMOVE one effect from a layer by display name or matchName ('get rid of the blur') | yes | host | 1 | 4 |
+| `remove_effect` | REMOVE one effect from a layer by display name or matchName ('get rid of the blur') | yes | host | 1 | 5 |
 | `remove_keyframes` | Remove keyframes from a property on many layers at once — specific times or all ('stop it moving' = this, times omitted) | yes | host | 1 | 9 |
 | `rename_comps` | Rename MANY comps in one call, on the org convention (REVyy_ from a year in the old name, else REV_NO-YEAR_) | yes | host | 1 | 3 |
 | `rename_item` | Rename any project item (comp, footage, folder) | yes | host | 1 | 3 |
@@ -78,7 +78,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `reorder_layers` | Restack layers WITHOUT changing their timing | yes | host | 1 | 12 |
 | `scale_comp` | Resize a comp AND scale its content to match, re-centered — like the native 'Scale Composition' script | yes | host | 2 | 2 |
 | `set_comp_setting` | Change a comp setting: duration, frame rate, bg color, the WORK AREA (workAreaStart with workAreaDuration or workAreaEnd, in seconds — or workArea: 'comp' to reset it to the whole comp) and preview resolution | yes | host | 2 | 10 |
-| `set_effect_param` | Set a parameter on an effect already applied to a layer | yes | host | 1 | 6 |
+| `set_effect_param` | Set a parameter on an effect already applied to a layer | yes | host | 1 | 10 |
 | `set_expression` | LAST RESORT: set a raw expression (or clear with '') | yes | host | 1 | 14 |
 | `set_keyframes` | Set the SAME keyframes on MANY layers in ONE call | yes | host | 2 | 13 |
 | `set_layer_3d` | Enable/disable a layer's 3D switch | yes | host | 1 | 8 |

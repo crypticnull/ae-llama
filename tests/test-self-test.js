@@ -362,6 +362,43 @@ let stagStart = {};
 let batchLayers = 0;
 let batchFx = {};
 let batchBlur = null;
+// Drop Shadow, for the concept-map steps. The roster is the REAL one
+// (measured 2026-09-03, AE 26.3x87, scripts/param-concept-probe.jsx,
+// Compositing Options and all) because those steps check the sentence
+// the host builds out of it — an invented roster would let a wrong
+// suggestion pass here and fail in front of a user.
+const DS_ROSTER = ["Shadow Color", "Opacity", "Direction", "Distance",
+                   "Softness", "Shadow Only", "Compositing Options"];
+let dsOn = false;
+let dsDistance = 5;
+// AE's own lookup, measured on this effect: the exact display name
+// resolves, an all-lowercase SINGLE word resolves ("distance",
+// "softness", "opacity"), and nothing else does — "DISTANCE",
+// "dIsTaNcE", "shadow color" and "Distance " are every one of them null.
+// The host folds case and separators on top of that; the fold is what
+// these steps exercise, so the canned host has to fold too.
+function dsFold(param) {
+  const want = String(param === undefined || param === null ? "" : param)
+    .toLowerCase().replace(/[\s_-]/g, "");
+  if (!want) return null;
+  return DS_ROSTER.filter(
+    (n) => n.toLowerCase().replace(/[\s_-]/g, "") === want)[0] || null;
+}
+// The concept answers the field round needed, in the host's wording. A
+// word that is not in here gets the old, plain refusal — the map may not
+// invent, and one of the steps checks exactly that.
+const DS_CONCEPT = { offset: "Direction, Distance",
+                     "offset x": "Direction, Distance",
+                     "offset y": "Direction, Distance",
+                     blur: "Softness", blurriness: "Softness",
+                     alpha: "Opacity" };
+function dsMiss(param, tail) {
+  const c = DS_CONCEPT[String(param || "").toLowerCase()];
+  return "Parameter not found: " + param +
+    (c ? " — on 'Drop Shadow' that is: " + c + "." : ".") +
+    " 'Drop Shadow' has: " + DS_ROSTER.join(", ") + "." +
+    (tail ? " " + tail : "");
+}
 
 // Per-layer failures reported the way for_each_layer reports them: one
 // copy of each distinct message, prefixed by every layer that hit it.
@@ -2556,6 +2593,9 @@ function cannedOk(tool, args) {
       if (args && /^ST Ord/.test((args && args.layer) || "")) {
         return { value: [ordX[args.layer], 300, 0] };
       }
+      if (args && /Drop Shadow\/Distance$/.test(args.property || "")) {
+        return { value: dsDistance };
+      }
       // Read back what for_each_layer wrote through set_effect_param.
       if (args && /Blurriness/.test(args.property || "")) {
         return { value: batchBlur };
@@ -3056,6 +3096,11 @@ function cannedOk(tool, args) {
       if (inCapAudio(args)) capAudio.push({ name: args.name, audio: false });
       return { name: (args && args.name) || "ST Square" };
     case "apply_effect":
+      if (String((args && args.effect) || "") === "Drop Shadow") {
+        dsOn = true;
+        return { layer: args.layer, effect: "Drop Shadow",
+                 matchName: "ADBE Drop Shadow", params: DS_ROSTER };
+      }
       if (inCapAudio(args)) {
         if (String(args.effect) !== "Tone") {
           return { __err: "Effect not available: " + args.effect };
@@ -3101,6 +3146,12 @@ function cannedOk(tool, args) {
       }
       return { done: true };
     case "remove_effect": {
+      if (String((args && args.effect) || "") === "Drop Shadow" && dsOn) {
+        dsOn = false;
+        return { layer: args.layer, removed: "Drop Shadow",
+                 matchName: "ADBE Drop Shadow",
+                 remainingEffects: ["Gaussian Blur"] };
+      }
       // The coverage rig's parade: the controls add_control put there
       // (AE lists them as effects too) then the blurs, in AE's order.
       // Every blur shares the one matchName, so a matchName call matches
@@ -3142,6 +3193,18 @@ function cannedOk(tool, args) {
       return out;
     }
     case "set_effect_param": {
+      if (String((args && args.effect) || "") === "Drop Shadow") {
+        const dsName = dsFold(args && args.param);
+        if (!dsName) {
+          return { __err: dsMiss(args && args.param,
+            'list_properties {layer: "' + (args && args.layer) +
+            '", path: "effects/Drop Shadow"} shows types and current ' +
+            'values.') };
+        }
+        if (dsName === "Distance") dsDistance = Number(args.value);
+        return { layer: args && args.layer, effect: "Drop Shadow",
+                 param: dsName, value: Number(args && args.value) };
+      }
       // Only the batch comp's Gaussian Blur is modelled by name; that is
       // where the value-shape steps run, and a roster invented for the
       // other comps would be a lie.
@@ -3488,6 +3551,16 @@ function cannedOk(tool, args) {
                      "\"}" };
     }
     case "add_keyframe": {
+      if (args && /^effect\.Drop Shadow\./.test(String(args.property || ""))) {
+        const dotted = String(args.property).slice("effect.Drop Shadow.".length);
+        const hit = dsFold(dotted);
+        if (!hit) {
+          return { __err: dsMiss(dotted,
+            "Name it as effect.Drop Shadow.<one of those>.") };
+        }
+        return { layer: args.layer, property: args.property,
+                 time: args.time, numKeys: 1 };
+      }
       if (!args || typeof args.time !== "number") {
         return { __err: "'time' (seconds) required" };
       }
@@ -4889,6 +4962,7 @@ SelfTest.run({
     maskKeys = {};
     mkMasks = {}; mkSizes = {};
     batchLayers = 0; batchFx = {}; batchBlur = null;
+    dsOn = false; dsDistance = 5;
     batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetWpRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetBoundsRig(); resetPresetRig(); resetRqRig(); resetAuRig(); resetFrRig(); resetCapRig(); resetMgRig();
     SelfTest.run({
       callHostTool(tool, args, cb) {
@@ -4922,6 +4996,7 @@ SelfTest.run({
         maskKeys = {};
         mkMasks = {}; mkSizes = {};
         batchLayers = 0; batchFx = {}; batchBlur = null;
+    dsOn = false; dsDistance = 5;
         batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetWpRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetBoundsRig(); resetPresetRig(); resetRqRig(); resetAuRig(); resetFrRig(); resetCapRig(); resetMgRig();
         SelfTest.run({
           callHostTool(tool, args, cb) {

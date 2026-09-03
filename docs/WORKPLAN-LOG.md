@@ -14755,3 +14755,109 @@ Measured on the stub, same five-layer refusal: **1692 chars -> 420**.
 
 AE running, project untouched and open, no dialog raised. AE was never
 closed and its project was never closed. No ComfyUI, no llama-server.
+
+## 2026-09-03 (later pass) — section 8, the filed NEXT: `Parameter not found` is a CONCEPT map, not a ranking (0.11.19)
+
+Harness GREEN on arrival (602/602), so this pass took the workplan's
+explicit `NEXT:` bullet, filed by the previous pass out of a field run.
+
+### The defect
+
+Verbatim from that run: the model asked Drop Shadow for `Offset` ->
+`Offset X` -> `Offset Y` -> `Blurriness` across FOUR calls, and each time
+it was shown the complete, correct seven-name roster with Distance and
+Direction in it. So the list was never hiding the answer and there was
+nothing to RANK. What the refusal never said is the only thing that
+would have helped: on THIS effect an "offset" IS a Distance at a
+Direction, and a "blur" IS Softness. A roster answers "what exists"; it
+does not answer "which of these is the thing you asked for".
+
+### Measured first: scripts/param-concept-probe.jsx (NEW, AE 26.3x87)
+
+- **29 real parameter rosters** (Drop Shadow, Gaussian/Fast Box/
+  Directional Blur, Glow, Fill, Tint, Levels, Transform, Bevel Alpha,
+  wipes, Turbulent Displace, Fractal Noise, Stroke, Roughen Edges,
+  Motion Tile, Exposure, Tritone, 4-Color Gradient…), so every word in
+  the concept map is a word AE actually uses somewhere. Drop Shadow's
+  real roster is SEVEN: Shadow Color, Opacity, Direction, Distance,
+  Softness, Shadow Only, Compositing Options.
+- **AE's own name lookup is arbitrary** (second probe,
+  `logs/case-probe.json`): `fx.property("distance")` RESOLVES,
+  `"softness"` and `"opacity"` resolve — but `"DISTANCE"`,
+  `"dIsTaNcE"`, `"Distance "` (one trailing space), `"shadow color"`,
+  `"Shadow color"` and `"shadowcolor"` are every one of them **null**.
+  The leniency is all-lowercase SINGLE WORDS only. A caller who shouts a
+  name AE takes in lowercase gets nothing.
+- All ten guessed spellings were re-run through the real tool; the
+  refusal was character-identical each time, which is the failure.
+
+### The fix, at the root
+
+`AELL_PARAM_CONCEPTS` (14 rows) + `AELL_paramConcept` + `AELL_paramNames`
++ `AELL_paramIn` + `AELL_paramMissMsg` in `extension/jsx/hostscript.jsx`.
+
+- The map fires on plain containment first, in BOTH directions
+  ("Shadow Distance" holds Distance; "Blur" is held by Blurriness), then
+  on the concept rows, and it **never invents**: every name it returns
+  came out of the roster in front of it, `Compositing Options` is
+  excluded, and a word that maps to nothing leaves the message exactly
+  as it was. Capped at four names.
+- `"shadow"` is deliberately NOT a row word: on Drop Shadow it fires on
+  every name at once (Shadow Color, Shadow Only) and buries the answer,
+  and Tritone's Shadows is already reached by containment.
+- **Both** places a caller can name a parameter now refuse the same
+  way. `AELL_resolveProperty`'s dotted `effect.<Fx>.<Param>` path — what
+  add_keyframe, link_property, set_expression and distribute_property
+  all resolve through — used to throw "Effect parameter not found: X (on
+  effect Y)" with **no roster at all**. It now carries the concept, the
+  full roster and how to spell the path.
+- The other half of the measurement becomes the other half of the fix:
+  a name that differs from AE's only in CASE or a separator is the SAME
+  name, so `AELL_paramIn` folds and resolves it instead of refusing —
+  the way `remove_effect` and `AELL_rqPickTemplate` already do. The
+  receipt reports `p.name`, so the model sees AE's spelling.
+- **Zero prompt cost**: host strings only, no tool doc touched. Full
+  prompt 58967 of 59000, unchanged.
+
+### Verification
+
+- `tests/test-property-access.js`: **21 new assertions**, and the stub
+  itself was the reason this class was invisible — `PGroup.property()`
+  matched exactly, so it modelled neither AE's lowercase leniency nor
+  its refusal of everything else. It now models the measured rule, with
+  a STUB FIDELITY assertion pinning it. **11 assertions go RED against
+  the reverted hostscript.**
+- `tests/test-self-test.js`'s canned host gained the real Drop Shadow
+  roster, the fold and the concept sentence (`dsFold` / `dsMiss`).
+- **Eight new real-AE self-test steps** in `extension/js/selftest.js`
+  (batch group): the Offset refusal names Direction + Distance, the
+  Blurriness refusal names Softness alone, an unmappable word gets no
+  suggestion, a SHOUTED name writes and the receipt says `Distance`,
+  AE really took 30 on Distance, the dotted path refuses with concept +
+  roster + path spelling, and the rig comes back off.
+- **Real AE harness 602 -> 610/610 PASSED.** Full stub sweep: 0 red
+  files. `docs/CAPABILITIES.md` regenerated (per-tool step counts).
+- `extension/` changed, so BUMPED: 0.11.18 -> **0.11.19**.
+
+### Notes / assumptions
+
+- No `scripts/chat-probe.js` field run this pass. The two probes plus
+  eight real-AE steps pin the behaviour, and row 36 vague's remaining
+  HARM is the CTRL-null over-build (layer count 8 -> 9), which this does
+  not touch. Whether the map cuts the four-guess loop in the field is
+  worth a variants run on a later pass, but it is not evidence this
+  change needs in order to be correct.
+- Judgement call: the fold RESOLVES rather than refusing-with-a-hint.
+  AE itself accepts `distance`, so a case/separator difference is not a
+  guess about intent — and there is precedent in two other tools. Where
+  intent really is being guessed (Offset -> Distance) it still refuses.
+- `add_shape`'s "Param not found on the new …" (shape contents, not
+  effect params) is a different domain and was left alone.
+- Next in the workplan is unchanged: row 32 (`stagger_layers` alone on
+  layers with NO keyframes reports `ok` and animates nothing).
+
+### Machine state
+
+AE running, project untouched and open, no dialog raised. AE was never
+closed and its project was never closed. Both probes removed the comp
+and the solid source they made. No ComfyUI, no llama-server.

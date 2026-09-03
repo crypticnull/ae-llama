@@ -1886,12 +1886,25 @@ this order, one bullet per pass:
     canned host in tests/test-self-test.js used to SUMMARISE batch
     failures, which is why no stub could see this class; it now runs
     the sub-tool per layer. Harness 599 -> 602.
-  - NEXT: **the `Parameter not found` lever is a CONCEPT map, not a
-    ranking** (measured 2026-09-03). The model guessed `Offset` ->
-    `Offset X` -> `Offset Y` -> `Blurriness` on Drop Shadow across four
-    calls, shown the complete correct roster every time. What is missing
-    is that "offset"/"distance" means Distance + Direction on this
-    effect and "blur"/"soften" means Softness.
+  - ~~**the `Parameter not found` lever is a CONCEPT map, not a
+    ranking**~~ DONE 2026-09-03 (0.11.19). `AELL_paramConcept` +
+    `AELL_paramMissMsg` in hostscript answer "which of these names is
+    the thing you asked for": an `Offset` on Drop Shadow now reads
+    `— on 'Drop Shadow' that is: Direction, Distance.` before the same
+    grounded roster, `Blurriness` reads `that is: Softness`, and a word
+    that means nothing there (`Wobble`) gets the OLD message with no
+    invented suggestion. 14 concept rows, every word taken from a
+    roster measured in real AE (`scripts/param-concept-probe.jsx`, 29
+    effects). The same helper serves BOTH places a caller names a
+    parameter — the dotted `effect.<Fx>.<Param>` spec that
+    add_keyframe / link_property / set_expression resolve through used
+    to refuse with the name and nothing else, no roster at all. Second
+    measurement, second half of the fix: AE's own lookup takes
+    `distance` but NOT `DISTANCE`, `dIsTaNcE`, `shadow color` or
+    `Distance ` — arbitrary, so `AELL_paramIn` folds case and
+    separators the way remove_effect and the render-template picker
+    already do, and the receipt reports AE's spelling. Zero prompt cost
+    (host strings only, 58967 unchanged). Harness 602 -> 610.
   - THEN, in priority order: row 32 (`stagger_layers` alone on layers
     with NO keyframes reports `ok` and animates nothing — 3 of 4
     phrasings), row 35 ("soften"/"too sharp" reaches `add_mask`, 2 of

@@ -72,10 +72,24 @@ PGroup.prototype.property = function (ref) {
   if (typeof ref === "number") {
     return aeRevalidate(this._children[ref - 1]) || null;
   }
-  return aeRevalidate(this._children.find((c) =>
+  // AE's own name lookup is exact, with ONE arbitrary exception, measured
+  // 2026-09-03 on Drop Shadow (AE 26.3x87, logs/case-probe.json): an
+  // all-lowercase SINGLE-WORD name resolves ("distance", "softness",
+  // "opacity" all answer), and nothing else does — "DISTANCE",
+  // "dIsTaNcE", "shadow color", "Shadow color", "shadowcolor" and
+  // "Distance " (one trailing space) are every one of them null. A stub
+  // that matched case-insensitively would hide the whole class; a stub
+  // that matched exact-only would make AE look stricter than it is and
+  // let a "fix" ship that AE contradicts.
+  const isRef = (c) =>
     (c._invalid ? c._realName : c.name) === ref ||
     (c._invalid ? c._realMatch : c.matchName) === ref ||
-    (c._aliases || []).indexOf(ref) !== -1)) || null;
+    (c._aliases || []).indexOf(ref) !== -1;
+  const loneLower = typeof ref === "string" && ref === ref.toLowerCase() &&
+    !/[\s_-]/.test(ref) && ref !== "";
+  return aeRevalidate(this._children.find((c) => isRef(c) || (loneLower &&
+    String(c._invalid ? c._realName : c.name).toLowerCase() === ref))) ||
+    null;
 };
 // What addProperty("ADBE Slider Control") really hands back: a GROUP whose
 // single child is the value, matchName'd "<class>-0001". add_control writes
@@ -1712,5 +1726,118 @@ assert(r.ok && r.data.removed === seq0Before,
 
 $.global.AELL_newRequest();
 comp._layers.forEach(l => { l.selected = false; });
+
+// ------------------------------- "Parameter not found" is a CONCEPT map
+// Field round, chat-probe row 36 vague: the model asked Drop Shadow for
+// Offset -> Offset X -> Offset Y -> Blurriness across FOUR calls and was
+// shown the complete, correct seven-name roster every time. So the list
+// was never hiding the answer and there was nothing to rank -- what it
+// never said is that on this effect an "offset" IS Distance + Direction
+// and a "blur" IS Softness. Roster measured 2026-09-03 in real AE
+// (scripts/param-concept-probe.jsx), Compositing Options included
+// because AE really puts it there and the map must not offer it.
+const ds = new PGroup("Drop Shadow", "ADBE Drop Shadow");
+ds.add(new Prop("Shadow Color", "ADBE Drop Shadow-0001", [0, 0, 0, 1]));
+ds.add(new Prop("Opacity", "ADBE Drop Shadow-0002", 128));
+ds.add(new Prop("Direction", "ADBE Drop Shadow-0003", 135));
+ds.add(new Prop("Distance", "ADBE Drop Shadow-0004", 5));
+ds.add(new Prop("Softness", "ADBE Drop Shadow-0005", 0));
+ds.add(new Prop("Shadow Only", "ADBE Drop Shadow-0006", 0));
+ds.add(new Prop("Compositing Options", "ADBE Effect Built In Params", 0));
+B.property("Effects").add(ds);
+
+// Stub fidelity first: without AE's real lookup rule underneath, every
+// assertion below would be testing the stub instead of the fix.
+assert(ds.property("Distance") && ds.property("distance") &&
+       ds.property("DISTANCE") === null &&
+       ds.property("shadow color") === null &&
+       ds.property("Shadow Color") !== null,
+       "STUB FIDELITY: AE takes 'Distance' and 'distance' but not " +
+       "'DISTANCE' and not 'shadow color' (measured)");
+
+const dsDist = ds.property("Distance");
+const dsSoft = ds.property("Softness");
+
+r = call("set_effect_param", { layer: "B", effect: "Drop Shadow",
+                               param: "Offset", value: 10 });
+assert(!r.ok && /Parameter not found: Offset/.test(r.error),
+       "the name that missed is still named first");
+assert(/on 'Drop Shadow' that is: Direction, Distance\./.test(r.error),
+       "and an 'offset' is answered with the two names that mean it " +
+       "here: " + (r.error || ""));
+assert(/'Drop Shadow' has: Shadow Color, Opacity, Direction/
+         .test(r.error) && /list_properties/.test(r.error),
+       "without losing the grounded roster or the lister: " +
+       (r.error || ""));
+assert(dsDist.value === 5, "and nothing was written");
+
+r = call("set_effect_param", { layer: "B", effect: "Drop Shadow",
+                               param: "Blurriness", value: 3 });
+assert(!r.ok && /that is: Softness\./.test(r.error),
+       "a 'blur' is answered with Softness, the one name that means it: " +
+       (r.error || ""));
+assert(!/Shadow Only/.test(r.error.split("has:")[0]),
+       "and the concept clause offers nothing else: " + (r.error || ""));
+assert(dsSoft.value === 0, "and nothing was written");
+
+r = call("set_effect_param", { layer: "B", effect: "Drop Shadow",
+                               param: "Alpha", value: 50 });
+assert(!r.ok && /that is: Opacity\./.test(r.error),
+       "'Alpha' resolves to Opacity: " + (r.error || ""));
+
+// A name that CONTAINS the real one -- measured as a hard AE refusal.
+r = call("set_effect_param", { layer: "B", effect: "Drop Shadow",
+                               param: "Shadow Distance", value: 9 });
+assert(!r.ok && /that is: Distance/.test(r.error) &&
+       r.error.indexOf("Distance") < r.error.indexOf("has:"),
+       "'Shadow Distance' is answered with Distance, first: " +
+       (r.error || ""));
+
+// The map may not invent: a word that means nothing here leaves the
+// message exactly as it was before this fix.
+r = call("set_effect_param", { layer: "B", effect: "Drop Shadow",
+                               param: "Wobble", value: 1 });
+assert(!r.ok && /Parameter not found: Wobble\. 'Drop Shadow' has:/
+         .test(r.error) && !/that is:/.test(r.error),
+       "an unmappable word gets the old message, with no invented " +
+       "suggestion: " + (r.error || ""));
+
+// The other half: a name AE itself refuses only over CASE or a
+// separator is the SAME name, so it resolves instead of refusing --
+// remove_effect and the render-template picker already work this way.
+r = call("set_effect_param", { layer: "B", effect: "Drop Shadow",
+                               param: "DISTANCE", value: 30 });
+assert(r.ok && dsDist.value === 30,
+       "a shouted name writes, though AE's own lookup answers null " +
+       "to it: " + (r.error || ""));
+assert(r.ok && r.data.param === "Distance",
+       "and the receipt reports AE's spelling, not the caller's: " +
+       (r.ok ? r.data.param : r.error));
+r = call("set_effect_param", { layer: "B", effect: "Drop Shadow",
+                               param: "shadow_only", value: 1 });
+assert(r.ok && ds.property("Shadow Only").value === 1,
+       "a separator-folded multi-word name writes too: " + (r.error || ""));
+dsDist.setValue(5);
+
+// Both places a caller can name a parameter: the dotted spec that
+// add_keyframe / link_property / set_expression resolve through
+// AELL_resolveProperty used to refuse with the name and NOTHING else.
+r = call("add_keyframe", { layer: "B", time: 0, value: 3,
+                           property: "effect.Drop Shadow.Blurriness" });
+assert(!r.ok && /Parameter not found: Blurriness/.test(r.error),
+       "the dotted path refuses by the same sentence: " + (r.error || ""));
+assert(/that is: Softness/.test(r.error) &&
+       /'Drop Shadow' has: Shadow Color/.test(r.error),
+       "with the concept AND the roster it never printed before: " +
+       (r.error || ""));
+assert(/effect\.Drop Shadow\.<one of those>/.test(r.error),
+       "and says how to spell the path it wants: " + (r.error || ""));
+assert(dsSoft.numKeys === 0, "and no key was written");
+r = call("add_keyframe", { layer: "B", time: 0, value: 3,
+                           property: "effect.Drop Shadow.SOFTNESS" });
+assert(r.ok && dsSoft.numKeys === 1,
+       "and the same fold resolves a dotted path: " + (r.error || ""));
+call("remove_keyframes", { layer: "B",
+                           property: "effect.Drop Shadow.Softness" });
 
 console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");
