@@ -94,6 +94,24 @@ function AELL_errPartial(msg) {
   return { ok: false, error: String(msg), mutated: true };
 }
 
+/* A NAMING refusal: the caller named an effect or a parameter that is
+ * not there, nothing was written, and the error already says what is.
+ *
+ * The opposite pole from AELL_errPartial. That one forces a rollback
+ * because half the work landed; this one FORBIDS one, because none of
+ * it did and the fix is a single corrected command. Measured in the
+ * field (WORKPLAN-LOG 2026-09-03, row 35 canonical): apply_effect
+ * 'Fast Box Blur' succeeded, set_effect_param 'Radius' came back with
+ * the properly grounded "'Fast Box Blur' has: Blur Radius, ..." — and
+ * the round rolled back, taking the blur with it. The grounding worked
+ * and the rollback threw away what it bought.
+ *
+ * Only ever returned from a point where the tool provably has not
+ * touched the project yet. */
+function AELL_errArg(msg) {
+  return { ok: false, error: String(msg), argFault: true };
+}
+
 function AELL_resolveComp(name) {
   var proj = app.project;
   if (!proj) throw new Error("No project open");
@@ -4967,9 +4985,9 @@ AELL_TOOLS.apply_expression_preset = function (args) {
 AELL_TOOLS.apply_effect = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var layer = AELL_resolveLayer(comp, args.layer);
-  if (!args.effect) return AELL_err("'effect' is required");
+  if (!args.effect) return AELL_errArg("'effect' is required");
   var effects = layer.property("ADBE Effect Parade");
-  if (!effects) return AELL_err("This layer type cannot take effects");
+  if (!effects) return AELL_errArg("This layer type cannot take effects");
   if (!effects.canAddProperty(args.effect)) {
     // Grounded: AE tried the string as a display name AND a matchName,
     // so the miss means "not installed" or "misspelled" — and when the
@@ -4993,7 +5011,7 @@ AELL_TOOLS.apply_effect = function (args) {
         AELL_capJoin(have, 15) + " — set_effect_param changes those; " +
         "apply_effect only adds new ones.";
     }
-    return AELL_err(msg);
+    return AELL_errArg(msg);
   }
   var fx = effects.addProperty(args.effect);
   var params = [];
@@ -5009,20 +5027,20 @@ AELL_TOOLS.set_effect_param = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var layer = AELL_resolveLayer(comp, args.layer);
   if (!args.effect || !args.param) {
-    return AELL_err("'effect' and 'param' are required");
+    return AELL_errArg("'effect' and 'param' are required");
   }
   var effects = layer.property("ADBE Effect Parade");
-  if (!effects) return AELL_err("This layer type cannot take effects");
+  if (!effects) return AELL_errArg("This layer type cannot take effects");
   var fx = effects.property(args.effect);
   if (!fx) {
-    return AELL_err("Effect not found on layer: " + args.effect +
+    return AELL_errArg("Effect not found on layer: " + args.effect +
       ". Effects on '" + layer.name + "': " +
       AELL_capJoin(AELL_effectNames(layer), 15) +
       ". apply_effect adds one that is missing.");
   }
   var p = AELL_paramIn(fx, args.param);
   if (!p) {
-    return AELL_err(AELL_paramMissMsg(fx, args.param, AELL_paramNames(fx),
+    return AELL_errArg(AELL_paramMissMsg(fx, args.param, AELL_paramNames(fx),
       "list_properties {layer: \"" + layer.name + "\", path: " +
       "\"effects/" + fx.name + "\"} shows types and current values."));
   }
@@ -10721,6 +10739,7 @@ AELL_TOOLS.for_each_layer = function (args) {
   }
   var failures = [];
   var okCount = 0;
+  var allArgFault = true;   // did every failure so far just refuse a NAME?
   for (var i = 0; i < layers.length; i++) {
     var sub = {};
     var src = args.args || {};
@@ -10734,15 +10753,21 @@ AELL_TOOLS.for_each_layer = function (args) {
     if (r && r.ok) {
       okCount++;
     } else {
+      if (!r || !r.argFault) allArgFault = false;
       failures.push({ name: layers[i].name,
                       error: r ? r.error : "unknown error" });
       if (failures.length >= 5) {
-        // Partial, not plain, failure: okCount layers were already
-        // changed. If the round is rollback-armed those go with it; if
-        // it is not, they stay. Either way the caller is told which.
-        return AELL_errPartial("Stopped after 5 failures (" + okCount +
+        var stopMsg = "Stopped after 5 failures (" + okCount +
           " layers were already changed before that). Failures: " +
-          AELL_groupFailures(failures));
+          AELL_groupFailures(failures);
+        // All five refused a NAME (AELL_errArg is only ever returned
+        // from a point that provably wrote nothing) and none succeeded,
+        // so this call changed nothing: calling it partial would undo
+        // the rest of the round over a spelling. EVERY other shape stays
+        // partial — the conservative reading, because a sub-tool that
+        // changed something and did not say so must not escape the undo.
+        if (okCount === 0 && allArgFault) return AELL_errArg(stopMsg);
+        return AELL_errPartial(stopMsg);
       }
     }
   }
@@ -12150,19 +12175,57 @@ function AELL_sentinel() {
  * thing guaranteed to send the model down the wrong path.
  */
 function AELL_maybeRollback(cmds, results, armed, before, aliasesBefore) {
-  var okMut = 0, badMut = 0, firstError = "", i, name, r;
+  var okMut = 0, badMut = 0, argBad = 0, firstError = "", i, name, r;
   for (i = 0; i < cmds.length; i++) {
     name = String((cmds[i] || {}).tool || "");
     if (!AELL_MUTATING[name]) continue;
     r = results[i] || {};
     if (r.ok) { okMut++; continue; }
     badMut++;
+    // A NAMING refusal wrote nothing and already says what does exist,
+    // so the successes around it are not debris (AELL_errArg).
+    if (r.argFault && !r.mutated) argBad++;
     if (!firstError) firstError = name + ": " + (r.error || "failed");
     // A tool that failed AFTER changing things (for_each_layer giving up
     // partway) is both halves of the trigger by itself.
     if (r.mutated) okMut++;
   }
   if (!okMut || !badMut) return null;
+
+  /*
+   * Every failure in this round is a name the caller can correct, and
+   * not one of them touched the project. Undoing here would throw away
+   * work the user asked for in order to punish a spelling — which is
+   * exactly what happened in the field on 2026-09-03: the blur that
+   * apply_effect had just applied went with set_effect_param's
+   * "Parameter not found: Radius".
+   *
+   * The nine-squares round this whole mechanism exists for is untouched:
+   * duplicate_layer failing because its source does not exist is NOT a
+   * naming refusal from a tool that wrote nothing — it is a command
+   * whose prerequisite the round failed to build, and its successes ARE
+   * debris.
+   */
+  if (argBad === badMut) {
+    // The model's instinct on a failed round is to redo it whole, so
+    // the one sentence it needs is on the failure it can act on. First
+    // one only: the rest of the round reads as ok, which it is.
+    var kept = " The other commands in this round were APPLIED and are " +
+      "still there — do NOT send them again. Re-send only this one, " +
+      "with the name corrected.";
+    for (i = 0; i < results.length; i++) {
+      r = results[i] || {};
+      if (!r.ok && r.argFault) {
+        r.error = String(r.error || "") + kept;
+        results[i] = r;
+        break;
+      }
+    }
+    return { rolledBack: false, kept: true, failed: firstError,
+      why: "Not rolled back: the failure names something that does not " +
+           "exist and changed nothing, so the commands that succeeded " +
+           "still stand." };
+  }
 
   if (!armed) {
     return { rolledBack: false, failed: firstError,

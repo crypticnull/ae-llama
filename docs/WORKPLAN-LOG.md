@@ -15323,3 +15323,203 @@ AE running, project untouched and open, no dialog raised. AE was never
 closed and its project was never closed. The suite cleans up its own rig
 comp (`AELL Self-Test Grid BG`) and the bottom-of-suite check confirmed
 nothing of the run's remains. No ComfyUI, no llama-server.
+
+## 2026-09-03 (local) - a rollback that ate a correct call (0.11.23)
+
+Workplan section 8, the row filed as finding 4 on 2026-09-03: **a
+rollback throws away the calls that WORKED when a later one fails on a
+parameter name.** Harness was green at 639/639 before the pass started,
+so the workplan item was the pass.
+
+### The defect
+
+Row 35 canonical, in the field: `apply_effect {effect: 'Fast Box Blur'}`
+succeeded, then `set_effect_param {param: 'Radius'}` failed with a
+properly grounded refusal - "'Fast Box Blur' has: Blur Radius,
+Iterations, ..." - and the WHOLE round rolled back, taking the blur with
+it. The model read the grounded error, relayed it to the user and
+stopped. The grounding worked; the rollback threw away what it bought,
+and the user who typed "the background is too sharp" got nothing.
+
+The rollback exists because a failed round's successes are DEBRIS: the
+model's instinct is to redo the round whole, which is how "make nine red
+squares" once made ten. That reasoning does not reach this shape. Nothing
+was written by the failing command, the error names its own correction,
+and the successful command is not debris - it is the ground the corrected
+retry stands on. `apply_effect` had to run before `set_effect_param`
+could be corrected at all.
+
+### The fix, at the trigger rather than per tool
+
+`AELL_errArg(msg)` -> `{ok: false, error, argFault: true}`. It is the
+opposite pole from `AELL_errPartial`: that one FORCES a rollback because
+half the work landed, this one FORBIDS one because none of it did.
+Returned only from a point where the tool provably has not touched the
+project yet - seven refusals, all pre-write:
+
+- `apply_effect`: missing `effect`, a layer type that takes no effects,
+  and "Effect not available" (AE matched neither display name nor
+  matchName).
+- `set_effect_param`: missing `effect`/`param`, a layer type that takes
+  no effects, "Effect not found on layer", and "Parameter not found" -
+  the one from the field.
+
+`AELL_maybeRollback` counts them. When EVERY failing mutating command in
+the round is `argFault` and none is `mutated`, the round is not rolled
+back: the verdict comes back `{rolledBack: false, kept: true, ...}` and
+the FIRST such failure gets one sentence appended - "The other commands
+in this round were APPLIED and are still there - do NOT send them again.
+Re-send only this one, with the name corrected." First one only, because
+repeating 130 chars per failure is the context bill 0.11.18 measured.
+
+**Narrow on purpose.** One non-naming failure in the round, or any
+`mutated` result, and the round still goes whole. The nine-squares round
+is untouched: `duplicate_layer` failing because its source does not exist
+is not a naming refusal from a tool that wrote nothing, it is a command
+whose prerequisite the round failed to build - and its successes ARE
+debris. Both directions are asserted.
+
+### The same defect one level down
+
+`for_each_layer` returned `AELL_errPartial` for its "Stopped after 5
+failures" summary unconditionally - including when `okCount` was ZERO.
+Five layers whose sub-tool refused a parameter NAME wrote nothing at all,
+yet the call reported itself as half-applied, which by itself arms the
+rollback and takes the rest of the round with it. That is exactly row
+36's shape (`for_each_layer` driving `set_effect_param` over seven
+layers). It is `AELL_errArg` now when `okCount === 0` AND every failure
+so far was `argFault`; **every other shape stays partial**, deliberately
+- a sub-tool that changed something and did not say so must not escape
+the undo, so the conservative reading is kept everywhere it might matter.
+
+### What was left OUT, and why
+
+A bad VALUE (`set_effect_param {param: 'Blurriness', value: 'quite
+blurry'}`) is the same shape by eye - nothing written, caller can
+correct it - and is NOT flagged. `argFault` means a NAME that is not
+there; whether the value guard runs before or after AE sees the write is
+unmeasured, and the conservative side is the one where the round still
+rolls back. Pinned as a boundary assertion rather than left to drift.
+
+The THROW channel was considered and rejected: `AELL_resolveProperty`
+throws the same "Parameter not found" for the dotted
+`effect.<Fx>.<Param>` spec, but `distribute_property` calls it inside its
+per-layer loop with no try, so a mid-loop throw after earlier layers had
+been written would have turned a genuinely partial round into an exempt
+one. Return sites only this pass. Filed below.
+
+### Verification
+
+- **Real AE harness 639 -> 644/644 PASSED.** Five new steps in the
+  rollback section of `extension/js/selftest.js`, replaying the field
+  round against real AE on `ST RB Survivor`: the armed round
+  `apply_effect 'Fast Box Blur'` + `set_effect_param {param: 'Radius'}`
+  comes back with neither row `rolledBack`, the grounded roster intact
+  and the keep-sentence on it; the corrected re-send (`Blur Radius`)
+  lands; `get_property {property: "effect.Fast Box Blur.Blur Radius"}`
+  reads 12, so the blur really was never undone; and the contrast round
+  (`apply_effect 'Glow'` + `duplicate_layer` on a missing layer) still
+  goes whole, with `list_properties {path: "effects"}` showing the Glow
+  gone and the blur still there. Real AE confirms in passing that Fast
+  Box Blur has no parameter called `Radius`.
+- `tests/test-round-rollback.js` 133 -> 149 checks. New `__nameFail`
+  scenario tool built on the real `AELL_errArg`: the round is not rolled
+  back, the square survives, no Undo is issued at all, the successful row
+  still reads `ok`, the roster survives verbatim, the keep-sentence is
+  written ONCE across two refusals, a naming refusal alongside
+  `__failMut` still rolls the round back, `__partial` outranks the
+  exemption, and a round that ONLY refused gets no promise about
+  successes it never had. **8 go RED against the reverted branch.**
+- `tests/test-for-each-layer.js` +5 checks: five naming refusals are
+  `argFault` and NOT `mutated`; one real success among them puts the call
+  back to partial; one failure that is not a naming refusal does the
+  same. **2 go RED against the reverted branch.** The pre-existing
+  "flagged as having mutated" assertion for a plain failing sub-tool is
+  untouched and still green - the exemption needs BOTH halves.
+- `tests/test-property-access.js` +7 checks on the real tools: all four
+  naming refusals carry `argFault`, a bad VALUE does not, a successful
+  call carries nothing. **4 go RED against HEAD's hostscript.**
+- `tests/test-self-test.js`: the canned host was blind to this class -
+  it accepted any parameter name and answered `list_properties` with a
+  generic tree - so it grew the rollback comp's effect parade (`rbFx`,
+  `rbFxParams`, Fast Box Blur's real roster), refuses an unknown
+  parameter with AE's own sentence shape, restores the parade on a
+  rollback, and its batch runner mirrors the exemption. Plus one
+  anti-drift assertion: the runner COPIES the rule rather than deriving
+  it, so it now fails if hostscript drops `AELL_errArg` or the
+  `argBad === badMut` branch.
+- Full stub sweep: 0 red. `docs/CAPABILITIES.md` regenerated (it was
+  stale from the new self-test steps).
+- **Zero prompt cost** - host strings only, nothing in `tools.js`
+  changed.
+- `extension/` changed, so BUMPED: 0.11.22 -> **0.11.23**.
+
+### The field run, honestly
+
+`node scripts/chat-probe.js --isolate --steps 35` was run against the
+real model and **passed - but it did not reproduce the failing shape.**
+The model chose `apply_effect {effect: 'Gaussian Blur'}` then
+`set_effect_param {param: 'Blurriness'}` - the RIGHT parameter, first
+shot, two rounds, no refusal - so the rollback never armed and the fix
+was never exercised. That is 0.11.21's routing bullet working, not
+evidence for this pass. The flip is therefore **unproven in the field**;
+what proves the behaviour is the five real-AE steps, which replay the
+exact round deterministically instead of hoping the model mistypes again.
+Transcript: `logs/chat-probe-2026-09-03T05-26-32.md`.
+
+### Notes / assumptions
+
+- **`kept`, not `warning` or `rolledBack`.** The panel keys on
+  `result.rolledBack` per row to print its one red "this round was
+  undone" line and to spend the per-request rollback budget. A kept round
+  sets neither, so the rows render the way any ordinary round does -
+  successes `ok`, the refusal muted as "adjusting" - and the budget is
+  not spent on a round that was never undone. That is correct: nothing
+  went wrong with the round, one command named something that is not
+  there.
+- **The keep-sentence is wording aimed at the model, and it is
+  unmeasured.** The rollback note's wording was measured against the
+  model on 2026-08-25 (the first version made it claim work that had been
+  undone). This one has not been - see the field run above, which never
+  got the model into the state. If a later `--variants` run shows the
+  model redoing a kept round whole, the sentence is the lever.
+
+### Filed for later passes, in priority order
+
+1. **The dotted `effect.<Fx>.<Param>` spec still rolls a round back.**
+   `AELL_resolveProperty` THROWS the same "Parameter not found" that
+   `set_effect_param` returns, and a throw reaches `AELL_runTool` as a
+   plain error, so `add_keyframe` / `link_property` / `set_expression` /
+   `set_keyframes` naming a bad parameter still cost the round its
+   successes. Needs the throw channel (`e.aellArgFault` read in
+   `AELL_runTool`) AND the `distribute_property` loop hole below closed
+   first.
+2. **`distribute_property` can mutate and then throw un-flagged.** Its
+   per-layer `AELL_resolveProperty` is inside the loop with no try, so a
+   layer whose renamed effect lacks the parameter throws AFTER earlier
+   layers were written - a plain `AELL_err`, no `mutated`, so the round
+   is not rolled back and half a spread survives. Pre-existing, found
+   while scoping this pass, not caused by it.
+3. **A bad VALUE is not `argFault`.** Deliberate this pass (see above);
+   measure whether `AELL_writeValue` can write before it throws, then
+   decide.
+4. **A `--variants` re-run of rows 30 and 35** - unchanged, still the
+   next workplan bullet, and now also the only thing that could measure
+   the keep-sentence.
+5. Everything else from the 2026-09-03 list is unchanged: step 2's
+   naming flake, the destructive-refusal wording on `delete_layer` /
+   `delete_mask` / `remove_effect`, the prompt's remaining headroom,
+   `property: string` in TOOL_DEFS, the add_mask COMP-coordinates habit,
+   `POST /tokenize`, the `comfyUrl` 8188/8000 mismatch on this machine,
+   the harness answering a modal with WORDS, `starved` wording,
+   delete_mask warning on a live expression, the unmeasured controller
+   GROUP and non-en_US locale, and `capParams`.
+
+### Machine state
+
+AE running, project untouched and open, no dialog raised. AE was never
+closed and its project was never closed. The self-test cleans up its own
+`ST Rollback` comp, the chat probe reported "cleanup: removed 1 project
+item(s)", and the bottom-of-suite check confirmed nothing of the run's
+remains. The probe's llama-server was started and stopped by the probe
+itself. No ComfyUI.

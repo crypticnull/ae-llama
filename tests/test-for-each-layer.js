@@ -105,13 +105,14 @@ const $ = { global: {} };
 // the test drives directly back across that boundary.
 const host = eval(source + ";\n({ AELL_TOOLS: AELL_TOOLS, " +
   "AELL_okay: AELL_okay, AELL_err: AELL_err, " +
+  "AELL_errArg: AELL_errArg, " +
   "AELL_PER_LAYER: AELL_PER_LAYER, " +
   "AELL_PER_LAYER_READ: AELL_PER_LAYER_READ, " +
   "AELL_ALREADY_BATCHED: AELL_ALREADY_BATCHED, " +
   "AELL_PER_LAYER_LIST: AELL_PER_LAYER_LIST, " +
   "AELL_PER_LAYER_READ_LIST: AELL_PER_LAYER_READ_LIST, " +
   "AELL_ALREADY_BATCHED_LIST: AELL_ALREADY_BATCHED_LIST })");
-const { AELL_TOOLS, AELL_okay, AELL_err, AELL_PER_LAYER,
+const { AELL_TOOLS, AELL_okay, AELL_err, AELL_errArg, AELL_PER_LAYER,
         AELL_PER_LAYER_READ, AELL_ALREADY_BATCHED, AELL_PER_LAYER_LIST,
         AELL_PER_LAYER_READ_LIST, AELL_ALREADY_BATCHED_LIST } = host;
 
@@ -305,6 +306,61 @@ assert(rFail.mutated === true,
        "and is flagged as having mutated before failing (rollback trigger)");
 delete AELL_TOOLS.__fail;
 delete AELL_PER_LAYER.__fail;
+
+// ...but "partial" has to be TRUE. Five sub-tools that refused a NAME
+// wrote nothing at all, and calling that partial makes the round rollback
+// undo the rest of the round over a spelling — the 0.11.23 class, one
+// level down. Measured shape: apply_effect lands the blur, for_each_layer
+// set_effect_param refuses 'Radius' on every layer, and the blur goes.
+AELL_TOOLS.__nameFail = function () {
+  return AELL_errArg("Parameter not found: Radius. 'Fast Box Blur' has: " +
+                     "Blur Radius, Iterations, Blur Dimensions.");
+};
+AELL_PER_LAYER.__nameFail = true;
+const rName = call("for_each_layer",
+                   { layers: names, tool: "__nameFail", args: {} });
+assert(!rName.ok, "five naming refusals still fail the batch");
+assert(rName.mutated === undefined,
+       "but are NOT flagged as having mutated — nothing was written: " +
+       JSON.stringify(rName).slice(0, 100));
+assert(rName.argFault === true,
+       "they are flagged argFault instead, so the round survives them");
+assert(/'Fast Box Blur' has: Blur Radius/.test(rName.error || ""),
+       "and the grounded roster still reaches the model: " + rName.error);
+
+// The exemption needs BOTH halves. One layer that really changed puts the
+// call back to partial, because that layer's work has to go with the undo.
+let nOk = 0;
+AELL_TOOLS.__mixed = function (a) {
+  if (a.layer === 1) { nOk++; return AELL_okay({}); }
+  return AELL_errArg("Parameter not found: Radius.");
+};
+AELL_PER_LAYER.__mixed = true;
+const rMixed = call("for_each_layer",
+                    { layers: names, tool: "__mixed", args: {} });
+assert(!rMixed.ok && rMixed.mutated === true && !rMixed.argFault,
+       "one real success among the refusals makes it partial again: " +
+       JSON.stringify(rMixed).slice(0, 110));
+assert(nOk === 1, "and that one layer really did run");
+delete AELL_TOOLS.__mixed;
+delete AELL_PER_LAYER.__mixed;
+
+// A refusal of any OTHER kind keeps the conservative reading: a sub-tool
+// that changed something and did not say so must not escape the undo.
+AELL_TOOLS.__oneOther = function (a) {
+  if (a.layer === 3) return AELL_err("something else went wrong");
+  return AELL_errArg("Parameter not found: Radius.");
+};
+AELL_PER_LAYER.__oneOther = true;
+const rOther = call("for_each_layer",
+                    { layers: names, tool: "__oneOther", args: {} });
+assert(!rOther.ok && rOther.mutated === true && !rOther.argFault,
+       "one failure that is not a naming refusal is enough to keep the " +
+       "whole call partial: " + JSON.stringify(rOther).slice(0, 110));
+delete AELL_TOOLS.__oneOther;
+delete AELL_PER_LAYER.__oneOther;
+delete AELL_TOOLS.__nameFail;
+delete AELL_PER_LAYER.__nameFail;
 
 // ------------------------------- 4b. identical failures collapse to ONE
 //

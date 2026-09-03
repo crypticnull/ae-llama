@@ -3538,6 +3538,101 @@
                  "survivor missing, comp holds " + (names.join(", ") || "nothing");
         } },
 
+      // ---- a NAMING refusal is not debris (0.11.23) ----
+      //
+      // The exact field round, replayed against real AE: chat-probe row 35
+      // canonical said "the background is too sharp", the model applied
+      // Fast Box Blur and then asked for a parameter called 'Radius'. AE
+      // has no such parameter there, the refusal named the real ones — and
+      // the round rollback undid BOTH, so the grounding worked and the
+      // blur it bought was thrown away. A refusal that wrote nothing and
+      // says what does exist leaves nothing to redo, so the successes
+      // around it are not debris either.
+      { name: "a naming refusal does not throw away the round that earned it",
+        batchOpts: { rollback: true },
+        batch: function (ctx) {
+          return [
+            { tool: "apply_effect",
+              args: { comp: ctx.rbComp, layer: "ST RB Survivor",
+                      effect: "Fast Box Blur" } },
+            { tool: "set_effect_param",
+              args: { comp: ctx.rbComp, layer: "ST RB Survivor",
+                      effect: "Fast Box Blur", param: "Radius", value: 20 } }
+          ];
+        },
+        check: function (rows) {
+          if (rows.length !== 2) return "rows " + rows.length;
+          if (!rows[0].ok) return "apply_effect failed: " + rows[0].error;
+          if (rows[1].ok) return "AE accepted a parameter called 'Radius'";
+          if (rows[0].rolledBack || rows[1].rolledBack) {
+            return "the round was rolled back over a parameter NAME — the " +
+                   "blur that succeeded went with it";
+          }
+          if (!/Blur Radius/.test(String(rows[1].error))) {
+            return "the grounded roster is gone: " + rows[1].error;
+          }
+          return /do NOT send them again/.test(String(rows[1].error)) ||
+                 "nothing tells the model the rest of the round stands: " +
+                 rows[1].error;
+        } },
+
+      { name: "…so the corrected re-send lands on the blur that survived",
+        tool: "set_effect_param",
+        args: function (ctx) {
+          return { comp: ctx.rbComp, layer: "ST RB Survivor",
+                   effect: "Fast Box Blur", param: "Blur Radius", value: 12 };
+        },
+        check: function (d) {
+          return d.param === "Blur Radius" ||
+                 "wrote " + JSON.stringify(d);
+        } },
+
+      { name: "…and the value really is on the layer AE never undid",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.rbComp, layer: "ST RB Survivor",
+                   property: "effect.Fast Box Blur.Blur Radius" };
+        },
+        check: function (d) {
+          return Number(d.value) === 12 ||
+                 "expected 12, read " + JSON.stringify(d.value);
+        } },
+
+      // The exemption is narrow on purpose: a round that failed for a
+      // REAL reason still goes whole. This is the nine-squares round.
+      { name: "but a round with a real failure in it still goes whole",
+        batchOpts: { rollback: true },
+        batch: function (ctx) {
+          return [
+            { tool: "apply_effect",
+              args: { comp: ctx.rbComp, layer: "ST RB Survivor",
+                      effect: "Glow" } },
+            { tool: "duplicate_layer",
+              args: { comp: ctx.rbComp, layer: "ST RB No Such Layer" } }
+          ];
+        },
+        check: function (rows) {
+          if (rows.length !== 2) return "rows " + rows.length;
+          if (rows[1].ok) return "duplicate_layer should have failed";
+          return (rows[0].rolledBack && rows[1].rolledBack) ||
+                 "a genuinely partial round was left standing: " +
+                 JSON.stringify(rows[0]).slice(0, 140);
+        } },
+
+      { name: "…so the Glow is gone and the earlier blur is not",
+        tool: "list_properties",
+        args: function (ctx) {
+          return { comp: ctx.rbComp, layer: "ST RB Survivor",
+                   path: "effects" };
+        },
+        check: function (d) {
+          var names = JSON.stringify(d);
+          if (/Glow/.test(names)) return "the rolled-back Glow survived";
+          return /Fast Box Blur/.test(names) ||
+                 "the blur went with an unrelated rollback: " +
+                 names.slice(0, 160);
+        } },
+
       // ---- what the rollback reaches, and what its check can SEE ----
       //
       // Two questions the log carried for four passes, both answered in

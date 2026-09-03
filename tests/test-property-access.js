@@ -1234,6 +1234,52 @@ assert(/list_properties/.test(r.error) &&
        /effects\/Gaussian Blur/.test(r.error),
        "and the lister that shows types/values is named with its path");
 
+// ------------------------------ a NAMING refusal must not cost the round
+//
+// Field round, chat-probe row 35 canonical (WORKPLAN-LOG 2026-09-03):
+// apply_effect 'Fast Box Blur' succeeded, then set_effect_param 'Radius'
+// came back with exactly the grounded message above — and the round
+// rollback undid BOTH, so the grounding worked and the blur it bought was
+// thrown away. These three refusals write nothing and already say what
+// does exist, so they carry `argFault` and AELL_maybeRollback leaves the
+// round's real work alone. (The rollback half is proved end to end in
+// tests/test-round-rollback.js.)
+assert(r.argFault === true,
+       "a param-name miss is flagged argFault so it cannot roll a round " +
+       "back: " + JSON.stringify(r).slice(0, 120));
+
+r = call("set_effect_param", { layer: "A", effect: "Glow",
+                               param: "Threshold" });
+assert(!r.ok && r.argFault === true,
+       "so is an effect that is not on the layer");
+
+r = call("apply_effect", { layer: "A", effect: "CC Particle World" });
+assert(!r.ok && r.argFault === true,
+       "so is an effect name AE does not know");
+
+r = call("set_effect_param", { layer: "A", effect: "Gaussian Blur" });
+assert(!r.ok && r.argFault === true,
+       "so is a call that leaves 'param' out altogether");
+
+// The boundary, on purpose: `argFault` means a NAME that is not there,
+// nothing written. A bad VALUE is a different question (does the guard
+// below run before or after AE sees it), so it is NOT flagged until that
+// is measured — the conservative side, where the round still rolls back.
+r = call("set_effect_param", { layer: "A", effect: "Gaussian Blur",
+                               param: "Blurriness",
+                               value: "quite blurry indeed" });
+assert(!r.ok && !r.argFault,
+       "but a bad VALUE is not flagged — argFault is naming only: " +
+       JSON.stringify(r).slice(0, 120));
+
+// A call that WORKS never carries the flag, or every green round would
+// look like one that had been corrected.
+r = call("set_effect_param", { layer: "A", effect: "Gaussian Blur",
+                               param: "Blurriness", value: 4 });
+assert(r.ok && r.argFault === undefined,
+       "a successful call carries no flag at all: " +
+       JSON.stringify(r).slice(0, 120));
+
 // -------------------------------- an EXPRESSION handed over as a VALUE
 // Field round, chat-probe row 36 vague ("everything should sit off the
 // background a bit — shadow them, not it"): the model built a slider rig

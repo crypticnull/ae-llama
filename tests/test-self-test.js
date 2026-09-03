@@ -744,6 +744,18 @@ let batSolids = [];
 // The rollback comp: the canned host has to model the UNDO too, or a
 // step could "pass" while the debris it is checking for never existed.
 let rbLayers = [];
+// ...and its EFFECT parade. 0.11.23 asks whether a round survives a
+// parameter-NAME refusal, so the canned host has to refuse the name the
+// way AE does (roster and all) and remember the blur that must still be
+// there afterwards. The roster is Fast Box Blur's, in AE 2026's order.
+let rbFx = [];                  // effect display names, in AE's order
+let rbFxParams = {};            // "<Effect>/<Param>" -> value written
+const RB_FBB = ["Blur Radius", "Iterations", "Blur Dimensions",
+                "Repeat Edge Pixels", "Compositing Options"];
+function rbRoster(name) {
+  if (name === "Fast Box Blur") return RB_FBB.slice();
+  return ["Compositing Options"];
+}
 // The comp-rename rig, and the rename the canned host remembers making.
 const RN = { host: "ST RN Host 2021", util: "ST RN Util 2019",
              linked: "ST RN Linked 2020", plain: "ST RN Plain 2019" };
@@ -2497,6 +2509,20 @@ function cannedOk(tool, args) {
                                   String(args.property || "")),
                  value: 100 };
       }
+      if (inRbComp(args)) {
+        const rbM = /^effect\.(.+)\.([^.]+)$/
+          .exec(String((args && args.property) || ""));
+        if (rbM) {
+          if (rbFx.indexOf(rbM[1]) === -1) {
+            return { __err: "Effect not found on layer: " + rbM[1] +
+              ". Effects on '" + args.layer + "': " +
+              (rbFx.join(", ") || "(none)"), __argFault: true };
+          }
+          return { layer: args.layer, property: rbM[2],
+                   matchName: "ADBE " + rbM[2],
+                   value: rbFxParams[rbM[1] + "/" + rbM[2]], numKeys: 0 };
+        }
+      }
       const SLg = shapeLayerOf(args && args.layer);
       if (SLg && /^contents\//i.test(String((args && args.property) || ""))) {
         const hit = shapeResolve(SLg, args.layer, args.property);
@@ -3296,6 +3322,12 @@ function cannedOk(tool, args) {
         batSolidFx[args.layer] = args.effect;
         return { layer: args.layer, effect: args.effect };
       }
+      if (inRbComp(args)) {
+        const rbAdd = String((args && args.effect) || "");
+        rbFx.push(rbAdd);
+        return { layer: args.layer, effect: rbAdd,
+                 matchName: "ADBE " + rbAdd, params: rbRoster(rbAdd) };
+      }
       return { done: true };
     case "remove_effect": {
       if (String((args && args.effect) || "") === "Drop Shadow" && dsOn) {
@@ -3360,6 +3392,34 @@ function cannedOk(tool, args) {
       // Only the batch comp's Gaussian Blur is modelled by name; that is
       // where the value-shape steps run, and a roster invented for the
       // other comps would be a lie.
+      if (inRbComp(args)) {
+        const rbE = String((args && args.effect) || "");
+        const rbP = String((args && args.param) || "");
+        if (rbFx.indexOf(rbE) === -1) {
+          return { __err: "Effect not found on layer: " + rbE +
+            ". Effects on '" + args.layer + "': " +
+            (rbFx.join(", ") || "(none)") +
+            ". apply_effect adds one that is missing.", __argFault: true };
+        }
+        const rbNames = rbRoster(rbE);
+        if (rbNames.indexOf(rbP) === -1) {
+          // The same sentence AELL_paramMissMsg builds: the concept map
+          // first ("Radius" means Blur Radius here), then the roster.
+          const near = rbNames.filter(n => n.toLowerCase()
+            .indexOf(rbP.toLowerCase()) !== -1);
+          let msg = "Parameter not found: " + rbP;
+          if (near.length) msg += " — on '" + rbE + "' that is: " +
+            near.join(", ") + ".";
+          else msg += ".";
+          msg += " '" + rbE + "' has: " + rbNames.join(", ") + ". " +
+            'list_properties {layer: "' + args.layer + '", path: ' +
+            '"effects/' + rbE + '"} shows types and current values.';
+          return { __err: msg, __argFault: true };
+        }
+        rbFxParams[rbE + "/" + rbP] = Number(args && args.value);
+        return { layer: args.layer, effect: rbE, param: rbP,
+                 value: Number(args && args.value) };
+      }
       const bad = badValueRefusal(args && args.value,
         String((args && args.effect) || "") + "/" +
         String((args && args.param) || ""), "number",
@@ -3986,6 +4046,11 @@ function cannedOk(tool, args) {
         }
         return { layer: args.layer, root: "effects", count: n,
                  properties: rows, note: "" };
+      }
+      if (/^effects$/i.test(P) && inRbComp(args)) {
+        return { layer: args.layer, root: "effects", count: rbFx.length,
+                 properties: rbFx.map(n => ({ path: "effects/" + n,
+                   matchName: "ADBE " + n, kind: "group" })), note: "" };
       }
       if (inTx(args)) {
         if (P === "Text/Animators") {
@@ -4986,7 +5051,12 @@ function cannedOk(tool, args) {
 function cannedResult(tool, args) {
   if (!documented(tool)) return { ok: false, error: "Unknown tool: " + tool };
   const d = cannedOk(tool, args);
-  return d && d.__err ? { ok: false, error: d.__err } : { ok: true, data: d };
+  if (!d || !d.__err) return { ok: true, data: d };
+  // A NAMING refusal wrote nothing and says what does exist, so the round
+  // rollback leaves the rest of the round alone (AELL_errArg, 0.11.23).
+  const out = { ok: false, error: d.__err };
+  if (d.__argFault) out.argFault = true;
+  return out;
 }
 
 // Which tools mutate, read out of hostscript.jsx rather than copied, so
@@ -5000,6 +5070,12 @@ const MUTATING_NAMES = (function () {
 assert(MUTATING_NAMES.has("add_solid") && !MUTATING_NAMES.has("get_property"),
        "the mutating list parses out of hostscript (" +
        MUTATING_NAMES.size + " tools)");
+// The one rule the canned batch runner below COPIES rather than derives.
+// If hostscript drops the exemption, the copy would keep the suite green
+// against a panel that had gone back to eating its own successful work.
+assert(/function AELL_errArg\(msg\)/.test(hostSrc) &&
+       /if \(argBad === badMut\) \{/.test(hostSrc),
+       "hostscript still exempts NAMING refusals from the round rollback");
 
 // Many tools in ONE host call. Faithful to AELL_callBatch on three points
 // the suite measures: one row per command, in order; a failing row does
@@ -5019,6 +5095,8 @@ function cannedBatch(cmds, opts, cb) {
   // canned host that only rewound layers let a step assert an item-level
   // rollback that never happened.
   const rbBefore = rbLayers.slice();
+  const rbFxBefore = rbFx.slice();
+  const rbFxParamsBefore = Object.assign({}, rbFxParams);
   const itemsBefore = {
     comps: createdComps.slice(),
     createCount,
@@ -5031,15 +5109,30 @@ function cannedBatch(cmds, opts, cb) {
     })()
   };
   const rows = cmds.map(c => cannedResult(c.tool, c.args || {}));
-  let okMut = 0, badMut = 0, firstError = "";
+  let okMut = 0, badMut = 0, argBad = 0, firstError = "";
   cmds.forEach((c, i) => {
     if (!MUTATING_NAMES.has(c.tool)) return;
     if (rows[i].ok) { okMut++; return; }
     badMut++;
+    if (rows[i].argFault) argBad++;
     if (!firstError) firstError = c.tool + ": " + rows[i].error;
   });
-  if (opts.rollback && okMut && badMut) {
+  // 0.11.23: a round whose ONLY failures are NAMING refusals wrote
+  // nothing that needs undoing, so it keeps its successes and the first
+  // refusal carries the sentence that stops the model redoing the round.
+  if (opts.rollback && okMut && badMut && argBad === badMut) {
+    for (let i = 0; i < rows.length; i++) {
+      if (!rows[i].ok && rows[i].argFault) {
+        rows[i].error += " The other commands in this round were APPLIED " +
+          "and are still there — do NOT send them again. Re-send only " +
+          "this one, with the name corrected.";
+        break;
+      }
+    }
+  } else if (opts.rollback && okMut && badMut) {
     rbLayers = rbBefore;
+    rbFx = rbFxBefore;
+    rbFxParams = rbFxParamsBefore;
     createdComps.length = 0;
     Array.prototype.push.apply(createdComps, itemsBefore.comps);
     createCount = itemsBefore.createCount;

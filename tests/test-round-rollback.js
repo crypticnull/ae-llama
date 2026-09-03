@@ -341,10 +341,11 @@ const $ = { global: {} };
 
 const host = eval(hostSrc + ";\n({ AELL_TOOLS: AELL_TOOLS, " +
   "AELL_MUTATING: AELL_MUTATING, AELL_okay: AELL_okay, AELL_err: AELL_err, " +
-  "AELL_errPartial: AELL_errPartial, AELL_fingerprint: AELL_fingerprint, " +
+  "AELL_errPartial: AELL_errPartial, AELL_errArg: AELL_errArg, " +
+  "AELL_fingerprint: AELL_fingerprint, " +
   "AELL_sentinel: AELL_sentinel })");
 const { AELL_TOOLS, AELL_MUTATING, AELL_okay, AELL_err, AELL_errPartial,
-        AELL_fingerprint, AELL_sentinel } = host;
+        AELL_errArg, AELL_fingerprint, AELL_sentinel } = host;
 
 // ------------------------------------------------------- scenario tools
 
@@ -402,6 +403,13 @@ AELL_TOOLS.__partial = function () {
 };
 // mutates nothing, just fails
 AELL_TOOLS.__failMut = function () { return AELL_err("mutating tool failed"); };
+// stands in for set_effect_param refusing a parameter NAME: nothing is
+// written, and the error already says what the effect really has. This is
+// the shape that used to cost a round its successful apply_effect.
+AELL_TOOLS.__nameFail = function () {
+  return AELL_errArg("Parameter not found: Radius. 'Fast Box Blur' has: " +
+                     "Blur Radius, Iterations, Blur Dimensions.");
+};
 // changes something the undo system cannot reverse (a torn write)
 AELL_TOOLS.__ghost = function () {
   const L = new Layer("Ghost", comp);
@@ -461,6 +469,7 @@ AELL_MUTATING.__square = true;
 AELL_MUTATING.__dup = true;
 AELL_MUTATING.__partial = true;
 AELL_MUTATING.__failMut = true;
+AELL_MUTATING.__nameFail = true;
 AELL_MUTATING.__ghost = true;
 AELL_MUTATING.__dim = true;
 
@@ -608,6 +617,90 @@ const r6 = batch([{ tool: "__read", args: {} },
                   { tool: "__readFail", args: {} }], ROLL);
 assert(!r6.data.rollback && undo.opened.length === 0,
        "a read-only batch opens no undo group and costs no fingerprint");
+
+// ------------------------- 2b. a NAMING refusal is not debris (0.11.23)
+//
+// Field round, chat-probe row 35 canonical (WORKPLAN-LOG 2026-09-03):
+// apply_effect 'Fast Box Blur' succeeded, set_effect_param 'Radius' came
+// back with the properly grounded "'Fast Box Blur' has: Blur Radius, ..."
+// -- and the whole round rolled back, taking the blur with it. The
+// grounding worked; the rollback threw away what it bought, and the model
+// relayed the error and stopped, so the user got nothing.
+//
+// A refusal that wrote NOTHING and names its own correction leaves no
+// debris to redo, so the successes around it are not debris either. That
+// is the only exception; a round with any other kind of failure in it
+// still goes whole.
+
+reset();
+const rN = batch([{ tool: "__square", args: {} },
+                  { tool: "__nameFail", args: {} }], ROLL);
+assert(rN.data.rollback && rN.data.rollback.rolledBack === false &&
+       rN.data.rollback.kept === true,
+       "a round whose only failure is a NAMING refusal is not rolled " +
+       "back: " + JSON.stringify(rN.data.rollback));
+assert(squares().length === 1,
+       "the work that succeeded is still there (got " + squares().length +
+       " square(s))");
+assert(undo.undos === 0 && undo.redos === 0,
+       "and no Undo was issued at all");
+assert(rN.data.results[0].ok === true && !rN.data.results[0].rolledBack,
+       "the successful result still reads ok, because it still exists");
+assert(!rN.data.results[1].ok && !rN.data.results[1].rolledBack,
+       "and the refusal is still a failure, just not a round-killing one");
+assert(/'Fast Box Blur' has: Blur Radius/.test(rN.data.results[1].error),
+       "the grounded roster survives verbatim: " +
+       rN.data.results[1].error.slice(0, 60));
+assert(/do NOT send them again/.test(rN.data.results[1].error) &&
+       /Re-send only this one/.test(rN.data.results[1].error),
+       "with the one sentence the model needs — the round's instinct is " +
+       "to redo itself whole: " + rN.data.results[1].error.slice(-120));
+
+// Only the FIRST refusal carries the sentence. Repeating it per failure
+// is the context bill 0.11.18 measured and fixed elsewhere.
+reset();
+const rN2 = batch([{ tool: "__square", args: {} },
+                   { tool: "__nameFail", args: {} },
+                   { tool: "__nameFail", args: {} }], ROLL);
+assert(rN2.data.rollback && rN2.data.rollback.kept === true,
+       "two naming refusals together are still not rolled back");
+assert(/do NOT send them again/.test(rN2.data.results[1].error) &&
+       !/do NOT send them again/.test(rN2.data.results[2].error),
+       "the instruction is written once, not once per refusal");
+
+// The exception is narrow ON PURPOSE. A naming refusal alongside a real
+// failure must not buy the round an exemption -- the other failure's
+// successes ARE debris, and this is the nine-squares round again.
+reset();
+const rN3 = batch([{ tool: "__square", args: {} },
+                   { tool: "__nameFail", args: {} },
+                   { tool: "__failMut", args: {} }], ROLL);
+assert(rN3.data.rollback && rN3.data.rollback.rolledBack === true,
+       "one naming refusal does not immunise a round that also failed " +
+       "for a real reason");
+assert(squares().length === 0, "so that round goes whole");
+assert(undo.undos === 1, "exactly one Undo");
+
+// Same for a tool that failed AFTER changing things: `mutated` outranks
+// the exemption, because its half-applied work has to go.
+reset();
+const rN4 = batch([{ tool: "__nameFail", args: {} },
+                   { tool: "__partial", args: {} }], ROLL);
+assert(rN4.data.rollback && rN4.data.rollback.rolledBack === true,
+       "a partial mutation still rolls the round back, naming refusal " +
+       "or not");
+assert(comp._layers.length === 0, "and its half-done work is gone");
+
+// A naming refusal with nothing to keep is not a verdict at all -- the
+// model gets the grounded error and no extra sentence about commands
+// that do not exist.
+reset();
+const rN5 = batch([{ tool: "__nameFail", args: {} }], ROLL);
+assert(!rN5.data.rollback,
+       "a round that ONLY refused has nothing to decide");
+assert(!/do NOT send them again/.test(rN5.data.results[0].error),
+       "so no promise is made about successes there were none of: " +
+       rN5.data.results[0].error);
 
 // ----------------------------- 3. a tool that failed AFTER changing things
 

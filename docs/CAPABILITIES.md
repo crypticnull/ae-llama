@@ -30,7 +30,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `add_text_animator` | Animate a text layer PER CHARACTER (typewriter, cascade, wiggle) — an animator holds the properties, a selector picks which characters get them | yes | host | 1 | 10 |
 | `add_text_layer` | Add a text layer to a comp | yes | host | 1 | 8 |
 | `add_to_render_queue` | Add a comp to the render queue WITHOUT rendering it | yes | host | 1 | 3 |
-| `apply_effect` | Apply an effect to a layer | yes | host | 2 | 13 |
+| `apply_effect` | Apply an effect to a layer | yes | host | 2 | 15 |
 | `apply_expression_preset` | Apply a known-good expression | yes | host | 1 | 5 |
 | `apply_keyframe_ease` | Apply a bezier as TEMPORAL easing between keyframes on one property across MANY layers in ONE call (converts to AE speed/influence ease) | yes | host | 1 | 3 |
 | `apply_preset` | Apply an installed .ffx animation preset to layer(s) | yes | host | 1 | 5 |
@@ -48,7 +48,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `delete_mask` | REMOVE one mask from a layer by name or 1-based index ('remove that mask'); omit 'mask' when the layer has exactly one | yes | host | 1 | 7 |
 | `distribute_property` | Distribute a property VALUE across layers | yes | host | 1 | 5 |
 | `duplicate_comp` | Duplicate a composition | yes | host | 2 | 5 |
-| `duplicate_layer` | Duplicate a LAYER inside its comp (use duplicate_comp only for whole compositions) | yes | host | 2 | 10 |
+| `duplicate_layer` | Duplicate a LAYER inside its comp (use duplicate_comp only for whole compositions) | yes | host | 2 | 11 |
 | `export_gif` | Export a comp as an animated GIF | yes | panel | — | — |
 | `export_mogrt` | Write a comp out as a .mogrt Motion Graphics template | yes | host | 1 | 6 |
 | `export_social` | Export a comp as an H.264 .mp4 (or .mov) sized for posting, AUDIO INCLUDED when the comp has any | yes | panel | — | — |
@@ -57,14 +57,14 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `get_bounds` | MEASURE a layer's rendered content without touching it — how wide the text actually is, where the shape sits in the frame, whether anything overflows | no | host | 1 | 32 |
 | `get_comp_details` | Layers of a comp with index, name, type, timing, effects, track matte | no | host | 4 | 36 |
 | `get_project_info` | List project items (comps/footage/folders) and the active comp | no | host | 2 | 16 |
-| `get_property` | Read ANY property by path: value, keyframes, expression | no | host | 3 | 100 |
+| `get_property` | Read ANY property by path: value, keyframes, expression | no | host | 3 | 101 |
 | `grid_layout` | Arrange layers into a grid rigged to a control null: its 'Grid X Spacing'/'Grid Y Spacing'/'Grid Columns' sliders drive spacing AND column count live, and the grid centers on the null's position (all expressions generated host-side) | yes | host | 1 | 4 |
 | `import_as_layer` | Import a file AND place it in a comp as a layer, scaled to the comp | yes | host | 1 | 8 |
 | `import_file` | Import a footage/image/video file into the PROJECT PANEL only — it does not appear in any comp | yes | host | 1 | 2 |
 | `link_property` | Drive a layer property from a control | yes | host | 1 | 3 |
 | `list_effects` | Enumerate effects INSTALLED in this AE (name, matchName, category), filtered and paged | no | host | 1 | 2 |
 | `list_presets` | Enumerate the ANIMATION PRESETS (.ffx) installed in this AE — AE ships ~679 (Behaviors, Text, Backgrounds, Transitions, Image, Shapes…) plus the user's own | no | host | 1 | 3 |
-| `list_properties` | DISCOVER a layer's real property tree — names, paths, types, current values | no | host | 2 | 9 |
+| `list_properties` | DISCOVER a layer's real property tree — names, paths, types, current values | no | host | 2 | 10 |
 | `list_render_templates` | List this machine's render-settings and output-module template names for render_comp | no | host | 1 | 3 |
 | `move_to_folder` | Move project items into a folder (batch) | yes | host | 1 | 2 |
 | `organize_project` | File loose root-level items into Comps/Footage/Solids/Audio/Images folders at the project ROOT | yes | host | 1 | 3 |
@@ -78,7 +78,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `reorder_layers` | Restack layers WITHOUT changing their timing | yes | host | 1 | 12 |
 | `scale_comp` | Resize a comp AND scale its content to match, re-centered — like the native 'Scale Composition' script | yes | host | 2 | 2 |
 | `set_comp_setting` | Change a comp setting: duration, frame rate, bg color, the WORK AREA (workAreaStart with workAreaDuration or workAreaEnd, in seconds — or workArea: 'comp' to reset it to the whole comp) and preview resolution | yes | host | 2 | 10 |
-| `set_effect_param` | Set a parameter on an effect already applied to a layer | yes | host | 1 | 10 |
+| `set_effect_param` | Set a parameter on an effect already applied to a layer | yes | host | 1 | 12 |
 | `set_expression` | LAST RESORT: set a raw expression (or clear with '') | yes | host | 1 | 14 |
 | `set_keyframes` | Set the SAME keyframes on MANY layers in ONE call | yes | host | 2 | 14 |
 | `set_layer_3d` | Enable/disable a layer's 3D switch | yes | host | 1 | 8 |

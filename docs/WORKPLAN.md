@@ -1990,11 +1990,33 @@ this order, one bullet per pass:
     string as evidence, so a one-line shift turned a tool's args line
     into a failure — `^\s*args: "` lines are now excluded, proved by two
     assertions.
-  - THEN, in priority order: a rollback throwing away the calls that
-    WORKED when a later one fails on a parameter name, then a
-    `--variants` re-run of rows 30 and 35 — the phrase-list additions
-    for both are unmeasured in the field, and that run is what would
-    close either of them for real.
+  - ~~**a rollback throwing away the calls that WORKED when a later one
+    fails on a parameter name**~~ DONE 2026-09-03 (0.11.23). Row 35
+    canonical: `apply_effect 'Fast Box Blur'` succeeded, then
+    `set_effect_param {param: 'Radius'}` came back properly grounded
+    ("'Fast Box Blur' has: Blur Radius, ...") — and the round rolled back,
+    so the grounding worked and the blur it bought was thrown away. Fixed
+    at the trigger, not per tool: `AELL_errArg` is the opposite pole from
+    `AELL_errPartial` — a NAMING refusal that provably wrote nothing and
+    already says what does exist — and `AELL_maybeRollback` leaves a round
+    whose failures are ALL of that class alone, annotating the first one
+    with the sentence that stops the model redoing the round whole. Seven
+    pre-write refusals in apply_effect / set_effect_param carry it. Same
+    defect one level down: `for_each_layer` called five naming refusals
+    with ZERO successes `errPartial`, which armed the rollback over a call
+    that had written nothing; it is `errArg` now, and every other shape
+    stays partial (the conservative reading). Narrow ON PURPOSE — one
+    non-naming failure, or any `mutated` result, still takes the round
+    whole, so the nine-squares round is untouched. A bad VALUE is left
+    OUT and pinned as a boundary assertion. Zero prompt cost (host
+    strings only). Harness 639 -> 644; 26 new stub assertions across
+    test-round-rollback / test-for-each-layer / test-property-access,
+    10 of them RED against the reverted branches. The field run did NOT
+    reproduce the failing shape (see the log) — that receipt is still
+    open.
+  - THEN: a `--variants` re-run of rows 30 and 35 — the phrase-list
+    additions for both are unmeasured in the field, and that run is what
+    would close either of them for real.
 - **DEFERRED until a sandbox design exists:** D/F/H3 rows (project
   mutation, renders, mass-delete) — wiring them against the live
   project is the harm the whitelist cannot contain. Also deferred:
