@@ -936,22 +936,6 @@ assert(r.ok && /covers all of 'Beta'/.test(r.data.warning || "") &&
 assert(!/Gaussian Blur/.test(r.data.warning || ""),
        "…and does NOT offer a blur nobody asked for: " + r.data.warning);
 
-// One-sided, like every other verdict here: it says "cuts nothing away"
-// only where that is PROVED. Inverted and subtract both cut the whole
-// layer away at full coverage, which is a change, not a no-op.
-r = call("add_mask", { layer: "Beta", name: "Inv", shape: "rectangle",
-                       bounds: [0, 0, 100, 100], inverted: true,
-                       feather: 50 });
-assert(r.ok && !r.data.warning,
-       "an INVERTED full-layer mask hides everything — no warning: " +
-       JSON.stringify(r.ok ? r.data : r.error));
-r = call("add_mask", { layer: "Beta", name: "Sub", shape: "rectangle",
-                       bounds: [0, 0, 100, 100], mode: "subtract",
-                       feather: 50 });
-assert(r.ok && !r.data.warning,
-       "…and so does a SUBTRACT one: " +
-       JSON.stringify(r.ok ? r.data : r.error));
-
 // A feather on a real region is the vignette the rules send here. Silent.
 r = call("add_mask", { layer: "Beta", name: "Vignette", shape: "ellipse",
                        bounds: [10, 10, 80, 80], feather: 20 });
@@ -959,6 +943,173 @@ assert(r.ok && !r.data.warning,
        "a feathered mask that DOES cut something away is left alone — " +
        "that is the vignette the rules route here: " +
        JSON.stringify(r.ok ? r.data : r.error));
+
+// ---------------------------------------------------------------------
+// 6c. The other end of full coverage: the mask that ERASES the layer.
+//
+// This block replaces two assertions that pinned the defect. They read
+// "an INVERTED full-layer mask hides everything — no warning" and "…and
+// so does a SUBTRACT one", i.e. they knew the layer disappeared and
+// required the receipt to say nothing about it, because the coversAll
+// branch was one-sided towards "cuts nothing away". A layer vanishing on
+// an `ok` is the expensive direction of the same mistake.
+//
+// Every verdict below is measured in real AE 26.3x87 by
+// scripts/mask-erase-probe.js, which reads the layer's alpha at nine
+// points through sampleImage(postEffect) — not inferred from AE's docs.
+// With the region covering the whole layer, only 'subtract' empties it;
+// 'inverted' makes the region worth NOTHING instead, and then
+// 'intersect'/'darken' empty the layer whatever is above them while
+// 'add'/'lighten'/'difference' empty it only when there is nothing above
+// to keep. That last distinction is the reason "does this layer already
+// have masks" is read before the new one is appended.
+const solo = new Layer("Solo", comp, false, { width: 100, height: 100 });
+comp._layers.push(solo);
+const soloMasks = solo.property("ADBE Mask Parade");
+
+// The call that was filed, verbatim in shape: the whole layer, subtract,
+// a big feather. Real AE reads alpha 0 through the middle of it.
+r = call("add_mask", { layer: "Solo", name: "Wipe", shape: "rectangle",
+                       bounds: [0, 0, 100, 100], mode: "subtract",
+                       feather: 100 });
+assert(r.ok, "the erasing mask still LANDS — an animated reveal opens " +
+       "with exactly this, so it is a warning and not a refusal: " +
+       (r.error || ""));
+assert(/hides ALL of 'Solo'/.test(r.data.warning || ""),
+       "…and the receipt says the layer is gone: " + JSON.stringify(r.data));
+assert(/subtract' mask over the whole layer cuts every pixel away/
+         .test(r.data.warning || ""),
+       "…naming which of the mask's settings did it: " + r.data.warning);
+assert(/soft fringe/.test(r.data.warning || "") &&
+       /does not blur the picture/.test(r.data.warning || "") &&
+       /Gaussian Blur/.test(r.data.warning || ""),
+       "…and, because a feather is what a 'soften it' ask reaches for, " +
+       "says the feather only fades the CUT edge and names the call that " +
+       "does blur: " + r.data.warning);
+assert(/CUT AWAY/.test(r.data.warning || "") && /mode 'add'/.test(r.data.warning || ""),
+       "…and offers both ways out: " + r.data.warning);
+assert(!!soloMasks.property("Wipe"),
+       "…and the mask it warns about was really created");
+soloMasks._children.length = 0;
+
+// Unlike "cuts nothing away", this fires even when the caller named no
+// region at all: the tool's own default region IS the whole layer, so
+// `add_mask {mode: 'subtract'}` erases the layer without being asked to.
+r = call("add_mask", { layer: "Solo", name: "Default", mode: "subtract" });
+assert(r.ok && /hides ALL of 'Solo'/.test(r.data.warning || "") &&
+       !/fringe/.test(r.data.warning || ""),
+       "the DEFAULT region under 'subtract' erases the layer too, and is " +
+       "warned about even though nobody passed bounds: " +
+       JSON.stringify(r.ok ? r.data : r.error));
+soloMasks._children.length = 0;
+
+// 'inverted' turns full coverage into no coverage, so a plain add mask
+// becomes an eraser — but only while it is alone (measured).
+r = call("add_mask", { layer: "Solo", name: "Inv", shape: "rectangle",
+                       bounds: [0, 0, 100, 100], inverted: true });
+assert(r.ok && /hides ALL of 'Solo'/.test(r.data.warning || "") &&
+       /inverted' turns a mask covering the whole layer/
+         .test(r.data.warning || "") &&
+       /Drop 'inverted'/.test(r.data.warning || ""),
+       "an INVERTED full-layer mask empties the layer, and the warning " +
+       "blames the flag that did it: " + JSON.stringify(r.ok ? r.data : r.error));
+
+// …and now it is NOT alone. Measured: over an existing add mask, an
+// inverted full-coverage add leaves exactly what that mask kept, so the
+// warning must not fire — a false alarm on a legitimate multi-mask build
+// is how a warning stops being read.
+r = call("add_mask", { layer: "Solo", name: "Inv2", shape: "rectangle",
+                       bounds: [0, 0, 100, 100], inverted: true });
+assert(r.ok && !r.data.warning,
+       "…but with a mask already above it, the same call keeps whatever " +
+       "that mask kept, so it says nothing: " +
+       JSON.stringify(r.ok ? r.data : r.error));
+
+// 'subtract' does not care what is above it — measured ERASED with the
+// left-half add mask still in place.
+r = call("add_mask", { layer: "Solo", name: "Sub2", shape: "rectangle",
+                       bounds: [0, 0, 100, 100], mode: "subtract" });
+assert(r.ok && /hides ALL of 'Solo'/.test(r.data.warning || ""),
+       "'subtract' empties the layer whatever else is masked on it: " +
+       JSON.stringify(r.ok ? r.data : r.error));
+// …and so do the two inverted modes that intersect down to nothing.
+r = call("add_mask", { layer: "Solo", name: "Int", shape: "rectangle",
+                       bounds: [0, 0, 100, 100], mode: "intersect",
+                       inverted: true });
+assert(r.ok && /hides ALL of 'Solo'/.test(r.data.warning || ""),
+       "an inverted 'intersect' keeps nothing, whatever is above it: " +
+       JSON.stringify(r.ok ? r.data : r.error));
+r = call("add_mask", { layer: "Solo", name: "Dark", shape: "rectangle",
+                       bounds: [0, 0, 100, 100], mode: "darken",
+                       inverted: true });
+assert(r.ok && /hides ALL of 'Solo'/.test(r.data.warning || ""),
+       "…and so does an inverted 'darken': " +
+       JSON.stringify(r.ok ? r.data : r.error));
+soloMasks._children.length = 0;
+
+// One-sided, the same way the rest of this tool is. Measured untouched:
+// an inverted SUBTRACT subtracts nothing, a plain 'intersect' keeps
+// everything. Neither empties the layer, so neither is warned about here.
+r = call("add_mask", { layer: "Solo", name: "SubInv", shape: "rectangle",
+                       bounds: [0, 0, 100, 100], mode: "subtract",
+                       inverted: true });
+assert(r.ok && !r.data.warning,
+       "an inverted 'subtract' at full coverage subtracts nothing — no " +
+       "erasure warning: " + JSON.stringify(r.ok ? r.data : r.error));
+soloMasks._children.length = 0;
+r = call("add_mask", { layer: "Solo", name: "IntPlain", shape: "rectangle",
+                       bounds: [0, 0, 100, 100], mode: "intersect" });
+assert(r.ok && !r.data.warning,
+       "…and a plain 'intersect' over the whole layer keeps all of it: " +
+       JSON.stringify(r.ok ? r.data : r.error));
+soloMasks._children.length = 0;
+
+// A subtract mask over PART of the layer is the ordinary hole. Silent.
+r = call("add_mask", { layer: "Solo", name: "Hole", shape: "ellipse",
+                       bounds: [20, 20, 40, 40], mode: "subtract" });
+assert(r.ok && !r.data.warning,
+       "a subtract mask that cuts a real hole is left alone: " +
+       JSON.stringify(r.ok ? r.data : r.error));
+soloMasks._children.length = 0;
+
+// The two REFUSALS either side of this carried the same additive
+// assumption in their reasons, and a refusal's reason is the whole of
+// what the model gets to act on.
+r = call("add_mask", { layer: "Solo", shape: "rectangle", mode: "subtract",
+                       bounds: [0, 0, 1920, 1080] });
+assert(!r.ok && /covers ALL of 'Solo', so it hides the WHOLE layer/
+         .test(r.error),
+       "a comp-sized SUBTRACT is not 'hides nothing' — it hides " +
+       "everything, and the refusal now says so: " +
+       (r.ok ? JSON.stringify(r.data) : r.error));
+assert(/To cut away only the top half/.test(r.error),
+       "…and the worked example is cut-shaped, not show-shaped, so " +
+       "following it does what the caller asked: " + r.error);
+r = call("add_mask", { layer: "Solo", shape: "rectangle",
+                       bounds: [0, 0, 1920, 1080] });
+assert(!r.ok && /so it hides nothing/.test(r.error) &&
+       /To show only the top half/.test(r.error),
+       "…while the same bounds under the default 'add' keep the old " +
+       "wording, which was right for them: " +
+       (r.ok ? JSON.stringify(r.data) : r.error));
+
+// Same correction on the "misses it completely" refusal: measured, a
+// lone subtract region the layer never touches subtracts NOTHING.
+r = call("add_mask", { layer: "Solo", shape: "rectangle", mode: "subtract",
+                       bounds: [0, 540, 1920, 540] });
+assert(!r.ok && /misses 'Solo' completely, so it would change nothing/
+         .test(r.error),
+       "an off-layer SUBTRACT would change nothing, not hide everything: " +
+       (r.ok ? JSON.stringify(r.data) : r.error));
+r = call("add_mask", { layer: "Solo", shape: "rectangle",
+                       bounds: [0, 540, 1920, 540] });
+assert(!r.ok && /misses 'Solo' completely, so it would hide the whole layer/
+         .test(r.error),
+       "…where an off-layer ADD really would hide the whole layer: " +
+       (r.ok ? JSON.stringify(r.data) : r.error));
+assert(soloMasks.numProperties === 0,
+       "and every one of those refusals wrote NOTHING (" +
+       soloMasks.numProperties + ")");
 
 // A TEXT layer is the case where .width/.height cannot be used at all:
 // AE answers with the comp's dimensions, and the layer's origin is the

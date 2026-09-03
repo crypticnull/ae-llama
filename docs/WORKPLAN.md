@@ -2057,6 +2057,39 @@ this order, one bullet per pass:
     real AE cannot see it — the field matrix is its instrument).
     tests/test-chat-probe.js +10 assertions pinning BOTH halves,
     separation and order; all 10 RED against the reverted prompt.
+  - ~~**a full-frame SUBTRACT mask erases the layer and says nothing**~~
+    DONE 2026-09-03 (0.11.26). Filed by the 0.11.24/0.11.25 passes as
+    the top item: `add_mask {bounds: [0,0,1920,1080], mode: 'subtract',
+    feather: 100}` empties a layer on a bare `ok`. The one-sidedness
+    argument the bullet asked for turned out to be a MEASUREMENT, and
+    the tool's own comment was the thing under test — it claimed
+    "'subtract', 'intersect' and inverted:true all cut SOMETHING away at
+    full coverage", and some of them cut EVERYTHING away. New
+    `scripts/mask-erase-probe.js/.jsx` reads the layer's alpha at nine
+    points through `sampleImage(postEffect)` (the obvious instrument
+    does not work: `comp.saveFrameToPng` exists on AE 26.3x87, throws
+    nothing and WRITES NO FILE, with or without the comp in a viewer —
+    a byte compare against it calls every case identical, which is the
+    same silent-success shape). Measured, mode by mode: with the region
+    covering the whole layer only `subtract` empties it; `inverted`
+    makes the region worth NOTHING instead, and then `intersect` and
+    `darken` empty it whatever is above them while `add`, `lighten` and
+    `difference` empty it only when nothing is. The miss matrix is the
+    exact mirror. `AELL_maskErases` is that table; the receipt now warns
+    (never refuses — an animated reveal opens with exactly this mask),
+    and unlike "cuts nothing away" it warns even when the caller named
+    no region, because the tool's own default region under `subtract`
+    erases the layer. Same correction to BOTH neighbouring refusals,
+    whose reasons carried the same additive assumption: a comp-sized
+    `subtract` "hides nothing" was really "hides the WHOLE layer" with
+    show-shaped advice, and an off-layer `subtract` "would hide the
+    whole layer" really changes nothing. Zero prompt cost (host strings
+    only). Harness 653 -> **667**; +21 stub assertions, 12 of them RED
+    against the reverted host, and two OLD assertions deleted because
+    they pinned the defect ("an INVERTED full-layer mask hides
+    everything — no warning"). The canned host in tests/test-self-test.js
+    had no model of the default region at all, which is part of why no
+    stub could see this.
 - **DEFERRED until a sandbox design exists:** D/F/H3 rows (project
   mutation, renders, mass-delete) — wiring them against the live
   project is the harm the whitelist cannot contain. Also deferred:

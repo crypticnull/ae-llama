@@ -2916,6 +2916,28 @@ function cannedOk(tool, args) {
       // nothing). A canned host that accepted it would let that ship again.
       const mkSz = mkSizes[mkKey];
       const mkB = args && args.bounds;
+      /* Which masks EMPTY a layer, measured in AE 26.3x87 by
+       * scripts/mask-erase-probe.js. Same three-way answer as the host's
+       * AELL_maskErases, worked out here rather than answered from a
+       * constant: a canned host that knows the verdicts by name cannot
+       * catch a host that stops computing them. `covered` is what the
+       * region is worth against the layer, "all" or "none"; `inverted`
+       * swaps the two; `alone` is "no mask above this one". */
+      const mkAlone = !(mkMasks[mkKey] || []).length;
+      const mkErases = (covered) => {
+        const m = String((args && args.mode) || "add").toLowerCase();
+        let eff = covered;
+        if (args && args.inverted) {
+          eff = covered === "all" ? "none" : (covered === "none" ? "all" : "");
+        }
+        if (eff === "all") return m === "subtract";
+        if (eff === "none") {
+          if (m === "intersect" || m === "darken") return true;
+          return mkAlone && (m === "add" || m === "lighten" ||
+                             m === "difference");
+        }
+        return false;
+      };
       if (mkSz && Array.isArray(mkB) && mkB.length >= 4) {
         const bl = Math.min(mkB[0], mkB[0] + mkB[2]);
         const br = Math.max(mkB[0], mkB[0] + mkB[2]);
@@ -2923,18 +2945,22 @@ function cannedOk(tool, args) {
         const bb = Math.max(mkB[1], mkB[1] + mkB[3]);
         if (bl <= 0 && bt <= 0 && br >= mkSz.width && bb >= mkSz.height &&
             (br - bl > mkSz.width || bb - bt > mkSz.height)) {
+          const bigE = mkErases("all");
           return { __err: "That mask covers ALL of '" + args.layer + "', " +
-            "so it hides nothing: the mask spans x " + bl + " to " + br +
+            "so it " + (bigE ? "hides the WHOLE layer" : "hides nothing") +
+            ": the mask spans x " + bl + " to " + br +
             ", y " + bt + " to " + bb + " and the layer is only " +
             mkSz.width + "x" + mkSz.height + " at x 0 to " + mkSz.width +
             ", y 0 to " + mkSz.height + ". Mask coordinates are in LAYER " +
-            "space, not comp space. To show only the top half of this " +
-            "layer, mask bounds [0, 0, " + mkSz.width + ", " +
-            (mkSz.height / 2) + "]." };
+            "space, not comp space. To " + (bigE ? "cut away" : "show") +
+            " only the top half of this layer, mask bounds [0, 0, " +
+            mkSz.width + ", " + (mkSz.height / 2) + "]." };
         }
         if (br <= 0 || bl >= mkSz.width || bb <= 0 || bt >= mkSz.height) {
           return { __err: "That mask misses '" + args.layer + "' completely, " +
-            "so it would hide the whole layer: the mask spans x " + bl +
+            "so it would " + (mkErases("none") ? "hide the whole layer"
+                                               : "change nothing") +
+            ": the mask spans x " + bl +
             " to " + br + ", y " + bt + " to " + bb + " and the layer is " +
             mkSz.width + "x" + mkSz.height + " at x 0 to " + mkSz.width +
             ", y 0 to " + mkSz.height + ". Mask coordinates are in LAYER " +
@@ -2965,13 +2991,45 @@ function cannedOk(tool, args) {
         const xs = mkV.map(v => v[0]), ys = mkV.map(v => v[1]);
         mkHit = { l: Math.min.apply(null, xs), r: Math.max.apply(null, xs),
                   t: Math.min.apply(null, ys), b: Math.max.apply(null, ys) };
+      } else if (mkSz) {
+        // With no region named the host's own default IS the layer's box,
+        // and the canned host had no model of that at all — which is why
+        // `add_mask {mode: 'subtract'}` looked harmless here while it
+        // emptied the layer in real AE.
+        mkHit = { l: 0, t: 0, r: mkSz.width, b: mkSz.height };
       }
+      const mkAsked = (Array.isArray(mkB) && mkB.length >= 4) ||
+                      (args && args.shape === "custom" && Array.isArray(mkV));
       const mkPlain = !(args && args.inverted) &&
                       (!(args && args.mode) ||
                        String(args.mode).toLowerCase() === "add");
-      if (mkSz && mkHit && mkPlain &&
-          mkHit.l <= 0 && mkHit.t <= 0 &&
-          mkHit.r >= mkSz.width && mkHit.b >= mkSz.height) {
+      const mkCovers = !!(mkSz && mkHit && mkHit.l <= 0 && mkHit.t <= 0 &&
+                          mkHit.r >= mkSz.width && mkHit.b >= mkSz.height);
+      // The other end of that same coverage: the mask that leaves NOTHING.
+      // A layer vanishing on an `ok` is the expensive direction, so unlike
+      // "cuts nothing away" this one does not wait to be asked — the
+      // tool's own default region under 'subtract' erases the layer.
+      if (mkCovers && mkErases("all")) {
+        const why = (args && args.inverted)
+          ? "'inverted' turns a mask covering the whole layer into one " +
+            "covering none of it, so '" +
+            String((args && args.mode) || "add").toLowerCase() +
+            "' keeps nothing"
+          : "a 'subtract' mask over the whole layer cuts every pixel away";
+        const fix = (args && args.inverted)
+          ? "Drop 'inverted', or pass 'bounds' for the part to KEEP."
+          : "Pass 'bounds' for the part to CUT AWAY, or mode 'add' with " +
+            "the part to KEEP.";
+        mkOut.warning = "That mask hides ALL of '" + args.layer + "'" +
+          (args && args.feather > 0 ? " except a soft fringe at its edge" : "") +
+          ": " + why + (args && args.feather > 0
+            ? ", and the feather only fades that CUT edge — it does not " +
+              "blur the picture. To blur the picture: apply_effect {layer: " +
+              "\"" + args.layer + "\", effect: \"Gaussian Blur\"}. "
+            : ". ") + fix;
+        return mkOut;
+      }
+      if (mkCovers && mkPlain && mkAsked) {
         const mkAll = "That mask covers all of '" + args.layer + "' (" +
           mkSz.width + "x" + mkSz.height + " at x 0 to " + mkSz.width +
           ", y 0 to " + mkSz.height + "), so it cuts nothing away";

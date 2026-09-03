@@ -7054,6 +7054,45 @@ function AELL_maskMode(name) {
   return AELL_MASK_MODES[String(name).toLowerCase()];
 }
 
+/*
+ * Does this mask EMPTY the layer? Measured in AE 26.3x87 by
+ * scripts/mask-erase-probe.js, which reads the layer's own alpha at nine
+ * points through sampleImage(postEffect) rather than inferring it.
+ *
+ * `covered` is what the mask's region is worth against the layer box:
+ * "all" (it covers the whole thing) or "none" (it misses it entirely).
+ * `inverted` SWAPS those two — measured, the miss matrix is the exact
+ * mirror of the covers-all matrix — because an inverted mask is its own
+ * complement. `alone` means no mask sits above this one, i.e. the layer
+ * carried no masks before.
+ *
+ * With the region worth EVERYTHING, only 'subtract' empties the layer.
+ * With it worth NOTHING, 'intersect' and 'darken' empty it whatever is
+ * above them, while 'add', 'lighten' and 'difference' empty it only when
+ * there is nothing above to keep.
+ *
+ * Returns "always" / "alone" / "" — and "" is the answer for everything
+ * not on that list, on purpose. A partly covering mask, mask opacity, a
+ * mode this build does not know and a layer whose box cannot be read are
+ * all silent: this is a warning about a layer that VANISHED, and a false
+ * one costs more than the sentence is worth.
+ */
+function AELL_maskErases(mode, inverted, covered, alone) {
+  var m = String(mode || "add").toLowerCase();
+  var eff = covered;
+  if (inverted) {
+    eff = (covered === "all") ? "none" : ((covered === "none") ? "all" : "");
+  }
+  if (eff === "all") return (m === "subtract") ? "always" : "";
+  if (eff === "none") {
+    if (m === "intersect" || m === "darken") return "always";
+    if (alone && (m === "add" || m === "lighten" || m === "difference")) {
+      return "alone";
+    }
+  }
+  return "";
+}
+
 /* Bounding box of a vertex list. Exact for the ellipse too: the four
  * points add_mask generates for one ARE its extremes. */
 function AELL_boxOfPoints(pts) {
@@ -7078,6 +7117,11 @@ AELL_TOOLS.add_mask = function (args) {
   var layer = AELL_resolveLayer(comp, args.layer);
   var masks = layer.property("ADBE Mask Parade");
   if (!masks) return AELL_err("This layer type cannot take masks");
+  // Read BEFORE the new mask is appended: "is there anything above this
+  // one to keep" is what separates the modes that empty a layer always
+  // from the ones that only empty it when alone (AELL_maskErases).
+  var aloneOnLayer = false;
+  try { aloneOnLayer = (masks.numProperties === 0); } catch (eAlone) {}
   var shape = new Shape();
   shape.closed = true;
   var kind = args.shape ? String(args.shape) : "rectangle";
@@ -7117,7 +7161,7 @@ AELL_TOOLS.add_mask = function (args) {
    * ok. The layer's own box is the only thing that can tell an aimed
    * mask from a comp-space one, so refuse with the box in hand — the
    * same grounded shape as every other failed lookup here. */
-  var overflow = "", coversAll = "";
+  var overflow = "", coversAll = "", erases = "", eraseWhy = "", eraseFix = "";
   var hit = AELL_boxOfPoints(shape.vertices);
   if (box && hit) {
     var bRight = AELL_r3(box.left + box.width);
@@ -7130,8 +7174,18 @@ AELL_TOOLS.add_mask = function (args) {
                bRight + ", y " + box.top + " to " + bBottom;
     if (hit.right <= box.left || hit.left >= bRight ||
         hit.bottom <= box.top || hit.top >= bBottom) {
+      /* WHICH of the two things it would do depends on the mode, and the
+       * old wording only ever named one of them. Measured (M5): a lone
+       * 'subtract' region the layer never touches subtracts nothing and
+       * the layer is untouched, where an 'add' one keeps nothing and the
+       * layer is gone. Both are worth refusing — comp coordinates on a
+       * layer-space argument — but the reason has to be the true one. */
+      var missEffect = AELL_maskErases(args.mode, args.inverted, "none",
+                                       aloneOnLayer)
+        ? "so it would hide the whole layer"
+        : "so it would change nothing";
       return AELL_err("That mask misses '" + layer.name + "' completely, " +
-        "so it would hide the whole layer: the mask spans " + span +
+        missEffect + ": the mask spans " + span +
         " and the layer is " + mine + ". Mask coordinates are in LAYER " +
         "space, not comp space — the comp is " + comp.width + "x" +
         comp.height + " and this layer is not. The whole layer is bounds [" +
@@ -7150,11 +7204,19 @@ AELL_TOOLS.add_mask = function (args) {
         hit.right >= bRight && hit.bottom >= bBottom &&
         (hit.right - hit.left > box.width ||
          hit.bottom - hit.top > box.height)) {
+      /* Same correction as the refusal above, the other way round: a
+       * comp-sized 'subtract' does not hide nothing, it hides
+       * EVERYTHING (M1), and "to show only the top half" is add-shaped
+       * advice that would cut the top half away instead. */
+      var bigErases = AELL_maskErases(args.mode, args.inverted, "all",
+                                      aloneOnLayer);
       return AELL_err("That mask covers ALL of '" + layer.name + "', so it " +
-        "hides nothing: the mask spans " + span + " and the layer is only " +
+        (bigErases ? "hides the WHOLE layer" : "hides nothing") +
+        ": the mask spans " + span + " and the layer is only " +
         mine + ". Mask coordinates are in LAYER space, not comp space — " +
         "the comp is " + comp.width + "x" + comp.height + " and this layer " +
-        "is not. To show only the top half of this layer, mask bounds [" +
+        "is not. To " + (bigErases ? "cut away" : "show") + " only the top " +
+        "half of this layer, mask bounds [" +
         box.left + ", " + box.top + ", " + box.width + ", " +
         AELL_r3(box.height / 2) + "].");
     }
@@ -7179,18 +7241,47 @@ AELL_TOOLS.add_mask = function (args) {
      * Silent unless the caller named the region: with no bounds and no
      * vertices this tool's own default IS the layer's box, and that is
      * the deliberate placeholder an add_mask + set_mask_path pair opens
-     * with. One-sided the same way everywhere else here — 'subtract',
-     * 'intersect' and inverted:true all cut something away at full
-     * coverage, so only plain additive coverage is provably nothing. */
+     * with. */
     var asked = (AELLJSON.isArray(args.bounds) && args.bounds.length >= 4) ||
                 (kind === "custom" && AELLJSON.isArray(args.vertices));
     var plain = (!args.inverted) &&
                 (!args.mode || String(args.mode).toLowerCase() === "add");
-    if (asked && plain && !overflow &&
-        hit.left <= box.left && hit.top <= box.top &&
-        hit.right >= bRight && hit.bottom >= bBottom) {
+    var covers = (hit.left <= box.left && hit.top <= box.top &&
+                  hit.right >= bRight && hit.bottom >= bBottom);
+    if (asked && plain && !overflow && covers) {
       coversAll = "That mask covers all of '" + layer.name + "' (" + mine +
         "), so it cuts nothing away";
+    }
+    /* The OTHER end of the same coverage, and the one this branch used to
+     * wave through. Its old comment claimed "'subtract', 'intersect' and
+     * inverted:true all cut something away at full coverage" — measured
+     * (scripts/mask-erase-probe.js), some of them cut EVERYTHING away:
+     *   add_mask {bounds: the whole layer, mode: 'subtract', feather: 100}
+     * on a 1920x1080 BG leaves an empty layer and answered a bare ok,
+     * which is the silent-lie shape this project refuses everywhere else.
+     *
+     * WARN, do not refuse, and warn even when the region was NOT named.
+     * A full-coverage subtract is a real technique — it is what an
+     * animated reveal opens with, and it is this tool's own default
+     * region under mode 'subtract' — so refusing would break work that
+     * means it. But "the layer is gone" is not a thing a receipt may
+     * leave out, whoever chose the region: that asymmetry against the
+     * "cuts nothing away" warning above is deliberate, because a layer
+     * that vanished is the expensive direction of the same mistake. */
+    if (covers) {
+      erases = AELL_maskErases(args.mode, args.inverted, "all", aloneOnLayer);
+      if (erases) {
+        eraseWhy = args.inverted
+          ? ("'inverted' turns a mask covering the whole layer into one " +
+             "covering none of it, so '" +
+             (args.mode ? String(args.mode).toLowerCase() : "add") +
+             "' keeps nothing")
+          : "a 'subtract' mask over the whole layer cuts every pixel away";
+        eraseFix = args.inverted
+          ? "Drop 'inverted', or pass 'bounds' for the part to KEEP."
+          : "Pass 'bounds' for the part to CUT AWAY, or mode 'add' with " +
+            "the part to KEEP.";
+      }
     }
   }
 
@@ -7211,7 +7302,21 @@ AELL_TOOLS.add_mask = function (args) {
   }
   var out = { layer: layer.name, mask: mask.name, shape: kind };
   if (overflow) out.note = overflow;
-  if (coversAll && args.feather > 0) {
+  if (erases) {
+    /* The feather does NOT rescue it, and the numbers say by how little:
+     * on a 400x300 layer a full-coverage subtract reads alpha 0 at every
+     * one of nine sample points at feather 0 and 5, and at feather 100
+     * the middle is still 0 while the edge points reach only 0.42-0.45.
+     * So the picture is gone either way and a fringe survives — which is
+     * also the answer to the "soften it" ask that produced this call. */
+    out.warning = "That mask hides ALL of '" + layer.name + "'" +
+      (args.feather > 0 ? " except a soft fringe at its edge" : "") + ": " +
+      eraseWhy + (args.feather > 0
+        ? ", and the feather only fades that CUT edge — it does not blur " +
+          "the picture. To blur the picture: apply_effect {layer: \"" +
+          layer.name + "\", effect: \"Gaussian Blur\"}. "
+        : ". ") + eraseFix;
+  } else if (coversAll && args.feather > 0) {
     out.warning = coversAll + " — its feather only fades the layer's " +
       "OUTER EDGE, it does not blur the picture. To blur the picture: " +
       "apply_effect {layer: \"" + layer.name + "\", effect: " +

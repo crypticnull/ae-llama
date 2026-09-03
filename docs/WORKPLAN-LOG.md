@@ -15852,3 +15852,165 @@ reported "cleanup: removed 1 project item(s)" and the harness's
 bottom-of-suite check confirmed nothing of the suite's remains. The
 probe's llama-server was started and stopped by the probe itself. No
 ComfyUI.
+
+## 2026-09-03 — the mask that erases the layer and says nothing (0.11.26)
+
+**Item:** the top item filed by the 0.11.24 and 0.11.25 passes — "a
+full-frame SUBTRACT mask hides the entire layer and says nothing".
+
+**Harness at the start of the pass: 653/653 PASSED**, so the workplan
+picked the item rather than a repair. Section 8's in-flight row list is
+now entirely struck, which is why this pass took the log's filed queue.
+
+### The instrument was the first thing that had to be measured
+
+The obvious way to ask "is this layer still visible" is to render a
+frame and compare it. It does not work, and it fails in the shape this
+whole item is about: **`comp.saveFrameToPng` exists on AE 26.3x87, is a
+function, throws nothing, and WRITES NO FILE** — `f.exists` false and
+`f.length` -1 every time, measured both with the comp open in a viewer
+and without. The first cut of the probe compared bytes against a file
+that was never written, so every PNG was 0 bytes, every case compared
+equal, and it reported a confident matrix of nonsense (`deterministic=
+true` is vacuous when both sides are empty). It is written down at the
+top of `scripts/mask-erase-probe.jsx` because a probe that cannot fail
+is worse than no probe.
+
+What works is `sampleImage` through an expression: a slider on a null
+carrying `thisComp.layer(L).sampleImage(pt, [0.5,0.5], true, time)[3]`,
+read back off `.value`. `postEffect: true` means the alpha comes back
+AFTER the masks, so it measures the layer itself rather than the
+composite, and it returns a NUMBER per point instead of a yes/no — which
+is what made the feather finding visible at all.
+
+### What AE actually does (26.3x87, nine sample points per case)
+
+The tool's own comment was the assumption under test. It said
+"'subtract', 'intersect' and inverted:true all cut something away at
+full coverage, so only plain additive coverage is provably nothing."
+Some of them cut EVERYTHING away:
+
+- **Region covering the whole layer:** only `subtract` empties it. `add`,
+  `intersect`, `lighten`, `darken`, `difference`, `none` all leave the
+  layer whole.
+- **`inverted` makes the region worth NOTHING instead** — and then
+  `intersect` and `darken` empty the layer *whatever is above them*,
+  while `add`, `lighten` and `difference` empty it only when there is
+  nothing above to keep. Measured both ways: alone, and added second
+  over an add mask on the left half.
+- **The miss matrix is the exact mirror of the covers-all matrix**, which
+  is the tell that "inverted" and "misses the layer" are the same fact.
+- **A feather does not rescue it, and does not blur anything either.** On
+  a 400x300 layer a full-coverage subtract reads alpha 0 at all nine
+  points at feather 0 and 5; at feather 100 the middle is STILL 0 and
+  only the edge points reach 0.42-0.45. So the picture is gone either
+  way and a soft fringe survives — the filed call carried feather 100,
+  which is a "soften it" ask, and it softened nothing.
+
+### The change
+
+`AELL_maskErases(mode, inverted, covered, alone)` is that table and
+nothing more; it returns "" for everything not on it. Three call sites,
+all in `add_mask`:
+
+1. **The receipt** (the filed defect). A mask that provably empties the
+   layer now carries a warning naming which setting did it, the fringe
+   the feather leaves, `apply_effect {effect: "Gaussian Blur"}` when a
+   feather was passed, and both ways out. **WARN, never refuse** — a
+   full-coverage subtract is what an animated reveal opens with, and it
+   is this tool's own default region under `subtract`. But it warns even
+   when the caller named NO region, which is the deliberate asymmetry
+   against the "cuts nothing away" warning beside it: that one waits to
+   be asked, because a no-op is cheap; a layer that vanished is not.
+2. **"covers ALL … so it hides nothing"** — false for `subtract`, which
+   hides everything, and its worked example ("to SHOW only the top
+   half") would have cut the top half away instead. Both branch now.
+3. **"misses it completely, so it would hide the whole layer"** — false
+   for `subtract`, which subtracts nothing. Says "would change nothing"
+   there. Both refusals still refuse: comp coordinates on a layer-space
+   argument is the mistake either way. Only the REASON was wrong, and a
+   reason is all the model gets to act on.
+
+### Verification
+
+- **Real AE harness 653 -> 667/667 PASSED.** 14 new steps in
+  `extension/js/selftest.js`, covering the erasure warning (subtract,
+  the default region, inverted-alone), the silences that keep it honest
+  (inverted under a mask that keeps something, inverted subtract), and
+  both corrected refusals.
+- One EXISTING suite step was re-justified rather than left: "…nor is an
+  inverted one, which hides everything" asserted the right outcome for a
+  reason now measured false — by that point the layer carries two masks,
+  so the inverted mask keeps what they kept. Renamed and re-commented.
+- `tests/test-shape-mask-tools.js` +21 assertions, **12 RED against the
+  reverted host**, each naming the exact defect. **Two OLD assertions
+  were DELETED, not adjusted**: they read "an INVERTED full-layer mask
+  hides everything — no warning" and "…and so does a SUBTRACT one",
+  i.e. they knew the layer disappeared and required the receipt to stay
+  silent about it. That is the defect pinned as a rule.
+- The canned host in `tests/test-self-test.js` had **no model of the
+  default region at all** (no bounds => no geometry => no verdict), so
+  `add_mask {mode: 'subtract'}` looked harmless there while it emptied
+  the layer in real AE. It computes the box now, and it works the
+  erasure out from the same geometry instead of knowing the answers by
+  name.
+- Full stub sweep: 0 red. `docs/CAPABILITIES.md` regenerated (step
+  counts moved).
+- `extension/` changed, so BUMPED: 0.11.25 -> **0.11.26**.
+- Zero prompt cost — host strings only, no tools.js change.
+
+### Notes / assumptions
+
+- **Assumed, and stated in the code: WARN rather than REFUSE.** The
+  filed bullet asked for a one-sidedness argument before anything was
+  built. The argument is that a full-coverage subtract is a real
+  technique (the opening frame of a reveal) and that this tool's own
+  default region produces one, so refusing would break work that means
+  it — while the receipt saying nothing is the failure this project
+  does not allow. No human was available to confirm; it is reversible in
+  one line if the owner disagrees.
+- **Mask OPACITY is not read.** `add_mask` never sets it, so it is 100
+  on every mask this tool makes, but `set_mask` can lower it afterwards
+  and nothing here re-checks. Silent by design, not by oversight.
+- The probe is re-runnable: `node scripts/mask-erase-probe.js`, and
+  `--read` re-prints the last run from `logs/mask-erase-probe.json`.
+
+### Filed for later passes, in priority order
+
+1. **An inverted SUBTRACT at full coverage is a provable no-op and is
+   still silent.** Measured untouched this pass. It is the "cuts nothing
+   away" warning's case, but that branch requires `plain` (uninverted
+   add), so it never fires. Small, and it needs the same asked/unasked
+   judgement the warning above it uses. Left out deliberately to keep
+   this pass's change set attributable.
+2. **`comp.saveFrameToPng` writing nothing is unexplained.** It costs
+   nothing today (no shipped code calls it) but it is the natural
+   instrument for any future pixel check — captions boxes, inpainting
+   tolerances, the self-verify track's comparators — so whatever is
+   wrong with it will be found again by a pass that needs it. Recorded
+   here rather than chased.
+3. **Row 30's typo still burns six `center_anchor_point` calls** before
+   the grid_layout that works. Passes, so it is cost and not harm.
+4. **The prompt ceiling is still the constraint on the section 8 track.**
+   Headroom 161; unchanged this pass, which spent nothing.
+5. Everything else from the 2026-09-03 lists is unchanged: the dotted
+   `effect.<Fx>.<Param>` spec still rolling a round back, the
+   `distribute_property` mutate-then-throw hole, a bad VALUE not being
+   `argFault`, widening the `errArg` rollback exemption, step 2's naming
+   flake, the destructive-refusal wording on `delete_layer` /
+   `delete_mask` / `remove_effect`, `property: string` in TOOL_DEFS,
+   `POST /tokenize`, the `comfyUrl` 8188/8000 mismatch on this machine,
+   the harness answering a modal with WORDS, `starved` wording,
+   delete_mask warning on a live expression, the unmeasured controller
+   GROUP and non-en_US locale, and `capParams`.
+
+### Machine state
+
+AE running, project untouched and open, no dialog raised. **AE was never
+closed and its project was never closed.** The probe built and removed
+its own `AELL Mask Probe` comp and solid source; the suite's new
+`ST Erase` solid is deleted by its own step, and the bottom-of-suite
+check confirmed nothing of the run's remains. No llama-server, no
+ComfyUI. The throwaway `saveFrameToPng` diagnostics (`aell-png-diag*.jsx`
+in %TEMP%, `logs/png-diag.txt`) were deleted at the end of the pass; the
+probe's own `logs/mask-erase-probe.json` is kept for `--read`.

@@ -2658,8 +2658,14 @@
                  d.warning;
         } },
 
-      // Inverted, that same full coverage hides the WHOLE layer.
-      { name: "…nor is an inverted one, which hides everything",
+      // Inverted, that same full coverage covers NOTHING -- so what
+      // survives is whatever the masks above it kept, and by this point
+      // 'ST Mask Off' carries 'ST Flat' and 'ST Default'. Measured in AE
+      // 26.3x87 (scripts/mask-erase-probe.js, M3): alpha is unchanged
+      // from those masks' own result. The step used to be justified by
+      // "which hides everything", which is only true when the inverted
+      // mask is ALONE -- that case is its own steps below.
+      { name: "…nor is an inverted one under masks that already keep some",
         tool: "add_mask",
         args: function (ctx) {
           return { comp: ctx.mkComp, layer: "ST Mask Off", name: "ST Inv",
@@ -2684,6 +2690,212 @@
         check: function (d) {
           return !d.warning || "a real vignette was warned about: " +
                  d.warning;
+        } },
+
+      // ---- the mask that ERASES the layer -----------------------------
+      // The other end of the same coverage. Filed 2026-09-03: add_mask
+      // {bounds: [0,0,1920,1080], mode: 'subtract', feather: 100} on a
+      // 1920x1080 BG empties the layer and answered a bare ok, because
+      // the coversAll branch above only ever proved "cuts NOTHING away".
+      //
+      // Which combinations really empty a layer was measured in AE
+      // 26.3x87 by scripts/mask-erase-probe.js, reading the layer's own
+      // alpha at nine points through sampleImage(postEffect): with the
+      // region covering the whole layer only 'subtract' empties it, and
+      // 'inverted' makes the region worth NOTHING instead -- then
+      // 'intersect'/'darken' empty it whatever is above them, while
+      // 'add'/'lighten'/'difference' empty it only when nothing is.
+      // A fresh solid, because "is anything above this mask" is the
+      // whole distinction and 'ST Mask Off' has four by now.
+      { name: "a clean layer to erase",
+        tool: "add_solid",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, name: "ST Erase", color: [0.3, 0.2, 0.2],
+                   width: 200, height: 200 };
+        },
+        check: function (d) { return d.name === "ST Erase" || d.name; } },
+
+      // The "misses it completely" refusal, while the parade is still
+      // EMPTY -- which is the state its two answers differ in. Measured:
+      // a lone off-layer 'add' region keeps nothing and the layer is
+      // gone, where a lone off-layer 'subtract' subtracts nothing and the
+      // layer is untouched. The old wording only ever named the first.
+      { name: "an off-layer subtract would change nothing, not hide all",
+        tool: "add_mask",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", shape: "rectangle",
+                   mode: "subtract", bounds: [0, 540, 1920, 540] };
+        },
+        check: function (e) {
+          return /misses 'ST Erase' completely, so it would change nothing/
+                   .test(e) || "message was: " + e;
+        } },
+
+      { name: "…where an off-layer ADD really would hide the whole layer",
+        tool: "add_mask",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", shape: "rectangle",
+                   bounds: [0, 540, 1920, 540] };
+        },
+        check: function (e) {
+          return /misses 'ST Erase' completely, so it would hide the whole layer/
+                   .test(e) || "message was: " + e;
+        } },
+
+      { name: "a full-layer SUBTRACT says the layer is gone",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", name: "ST Wipe",
+                   shape: "rectangle", bounds: [0, 0, 200, 200],
+                   mode: "subtract", feather: 100 };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (!/hides ALL of 'ST Erase'/.test(w)) return "warning: " + w;
+          if (!/cuts every pixel away/.test(w)) {
+            return "it does not name what did it: " + w;
+          }
+          // Measured: at feather 100 the middle still reads alpha 0 and
+          // only the edge band survives, so the feather is a fringe and
+          // not a rescue -- and a feather here is a 'soften it' ask.
+          if (!/soft fringe/.test(w) || !/does not blur the picture/.test(w)) {
+            return "it lets the feather look like a blur: " + w;
+          }
+          if (!/Gaussian Blur/.test(w)) return "no way out offered: " + w;
+          return /CUT AWAY/.test(w) || "no way to keep part of it: " + w;
+        } },
+
+      { name: "…and the erasing mask was really created",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", mask: "ST Wipe" };
+        },
+        check: function (d) {
+          return d.removed === "ST Wipe" || "removed " + d.removed;
+        } },
+
+      // Unlike "cuts nothing away", this fires with no bounds passed:
+      // the tool's own default region IS the whole layer, so 'subtract'
+      // alone erases it without anyone naming a region.
+      { name: "…the DEFAULT region under subtract erases it too",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", name: "ST WipeD",
+                   mode: "subtract" };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (!/hides ALL of 'ST Erase'/.test(w)) return "warning: " + w;
+          return !/fringe/.test(w) || "no feather was passed: " + w;
+        } },
+
+      { name: "…and it goes away again",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", mask: "ST WipeD" };
+        },
+        check: function (d) {
+          return d.removed === "ST WipeD" || "removed " + d.removed;
+        } },
+
+      { name: "an ALONE inverted mask blames the flag that emptied it",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", name: "ST InvA",
+                   shape: "rectangle", bounds: [0, 0, 200, 200],
+                   inverted: true };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (!/hides ALL of 'ST Erase'/.test(w)) return "warning: " + w;
+          if (!/'inverted' turns a mask covering the whole layer/.test(w)) {
+            return "it blames the wrong setting: " + w;
+          }
+          return /Drop 'inverted'/.test(w) || "no way out offered: " + w;
+        } },
+
+      // The same call, now with ST InvA above it: measured, it keeps
+      // whatever that mask kept, so the warning must NOT fire. A false
+      // alarm on a legitimate multi-mask build is how a warning stops
+      // being read at all.
+      { name: "…but the same call under a mask says nothing",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", name: "ST InvB",
+                   shape: "rectangle", bounds: [0, 0, 200, 200],
+                   inverted: true };
+        },
+        check: function (d) {
+          return !d.warning || "warned on a mask that keeps what is " +
+                 "above it: " + d.warning;
+        } },
+
+      { name: "…while an inverted INTERSECT empties it whatever is above",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", name: "ST IntI",
+                   shape: "rectangle", bounds: [0, 0, 200, 200],
+                   mode: "intersect", inverted: true };
+        },
+        check: function (d) {
+          return /hides ALL of 'ST Erase'/.test(d.warning || "") ||
+                 "warning: " + (d.warning || "(none)");
+        } },
+
+      // One-sided, like every other verdict in this file. Measured
+      // untouched: an inverted 'subtract' subtracts nothing at all.
+      { name: "…and an inverted SUBTRACT, which empties nothing, is silent",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", name: "ST SubI",
+                   shape: "rectangle", bounds: [0, 0, 200, 200],
+                   mode: "subtract", inverted: true };
+        },
+        check: function (d) {
+          return !d.warning || "warned about a mask that changes nothing: " +
+                 d.warning;
+        } },
+
+      // The two REFUSALS either side carried the same additive
+      // assumption in their REASONS, and a reason is all the model has.
+      { name: "a comp-sized subtract is refused for the right reason",
+        tool: "add_mask",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", shape: "rectangle",
+                   mode: "subtract", bounds: [0, 0, 1920, 1080] };
+        },
+        check: function (e) {
+          if (!/covers ALL of 'ST Erase', so it hides the WHOLE layer/
+                .test(e)) {
+            return "message was: " + e;
+          }
+          return /To cut away only the top half/.test(e) ||
+                 "the worked example is still show-shaped: " + e;
+        } },
+
+      { name: "…and the same bounds under 'add' keep the old wording",
+        tool: "add_mask",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", shape: "rectangle",
+                   bounds: [0, 0, 1920, 1080] };
+        },
+        check: function (e) {
+          if (!/so it hides nothing/.test(e)) return "message was: " + e;
+          return /To show only the top half/.test(e) ||
+                 "the worked example changed under 'add': " + e;
+        } },
+
+      { name: "…and the erase layer goes away again",
+        tool: "delete_layer",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase" };
+        },
+        check: function (d) {
+          return d.removed === "ST Erase" || "removed " + d.removed;
         } },
 
       // --- the batch executor, at the scale it is actually used at.
