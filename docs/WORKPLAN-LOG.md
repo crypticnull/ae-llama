@@ -14405,3 +14405,44 @@ Nothing else was left unattempted this pass. Nothing is blocked.
   selected. Skips with an install hint when no pwsh is present.
 - Harness 72/72 locally minus the two container-only failures (74 tests).
 - No `extension/` change, so NO BUMP.
+
+## 2026-09-03 (remote session) — the button was never a Button
+
+- Owner, on a fresh run with the watchdog live, photographing the same
+  prompt again: "Why is this fucking box sitting here still on a fresh
+  run?????"
+- ROOT CAUSE: `OnWantedButton` required `ClassOf(h) == "Button"`. AE
+  2026's save prompt has none. The measured note in
+  `scripts/lib/ae-dialog-triage.ps1` has said so all along — the dialog
+  is "a #32770 with an empty title, three DroverLord containers that
+  report their own class, and one `Edit` child" — but only its TEXT had
+  ever been read, so nobody had ever asked what class its BUTTONS are. I
+  assumed Win32 Buttons and never verified it.
+- The failure was silent by construction: the answering found the
+  dialog, matched "Save changes", matched "Untitled Project", then found
+  no control it was willing to press and returned "" — indistinguishable
+  from "no dialog was up".
+- And the diagnostic could not have shown it either: `DescribeDialogs`
+  ALSO filtered to class "Button", so its dump printed "buttons:" with
+  nothing after it. That reads as "this dialog has no buttons" when it
+  meant "I am only willing to look at one kind of control". A diagnostic
+  that shares the bug's assumption cannot find the bug.
+- FIX: match on the LABEL, any class. A child whose own text is
+  "Don't Save" IS the Don't Save button whatever it calls itself. The
+  rail is unchanged — the label still has to be one the rule named.
+  The class is recorded and used to deliver the click the way that
+  control understands: `BM_CLICK` for a real Button, and posted
+  `WM_LBUTTONDOWN`/`WM_LBUTTONUP` at the child's client-rect centre for
+  a custom-drawn one, which ignores BM_CLICK. Both posted, never sent.
+- `DescribeDialogs` now dumps EVERY child that has text, with the class
+  each one reports (OS_-prefixed container self-names still skipped),
+  so the next unknown dialog cannot hide behind a filter.
+- The answered-log line now carries the class it clicked, so the first
+  real run says what AE actually uses.
+- Verified: pwsh parses; the C# compiles (217 lines); the rule table
+  still executes correctly against all three owner-lists (RAIL HOLDS);
+  `tests/test-host-dialogs.js` green.
+- STILL UNVERIFIED, and it is the whole point of the dump: what class
+  AE's buttons actually report. The geometric click is the fallback for
+  every answer to that question, not a guess at a particular one.
+- No `extension/` change, so NO BUMP.

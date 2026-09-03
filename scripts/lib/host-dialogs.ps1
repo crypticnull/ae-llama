@@ -66,6 +66,8 @@ public class AellDlg {
     [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr h);
     [DllImport("user32.dll")] private static extern bool PostMessageW(IntPtr h, uint msg, IntPtr w, IntPtr l);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern IntPtr SendMessageTimeoutW(IntPtr h, uint msg, IntPtr w, StringBuilder l, uint flags, uint timeout, out UIntPtr res);
+    [DllImport("user32.dll")] private static extern bool GetClientRect(IntPtr h, out RECT r);
+    public struct RECT { public int Left, Top, Right, Bottom; }
 
     private static readonly string NL = Environment.NewLine;
     private static int target = 0;
@@ -166,9 +168,8 @@ public class AellDlg {
         EnumChildWindows(h, new EnumProc(OnWantedButton), IntPtr.Zero);
         if (wantedButton == IntPtr.Zero) { return true; }
 
-        // BM_CLICK, posted rather than sent, for the same reason as above.
-        PostMessageW(wantedButton, 0x00F5, IntPtr.Zero, IntPtr.Zero);
-        clickedText = wantedLabel;
+        ClickIt(wantedButton);
+        clickedText = wantedLabel + " [" + wantedClass + "]";
         return false;
     }
 
@@ -177,18 +178,52 @@ public class AellDlg {
         return true;
     }
 
+    // Match on the LABEL, not the window class.
+    //
+    // This required ClassOf(h) == "Button" and found nothing on AE 2026.
+    // The measured note in scripts/lib/ae-dialog-triage.ps1 describes
+    // the save prompt as three DroverLord containers plus one Edit
+    // child -- nobody ever measured a Win32 Button on it, because only
+    // its TEXT had ever been read. So the answering matched the dialog,
+    // matched the sentence, then found nothing it was willing to press
+    // and gave up without a word. The owner watched that happen on a
+    // fresh run, twice.
+    //
+    // A child whose own text IS "Don't Save" is the Don't Save button
+    // whatever class it reports. The rail is unchanged -- the label
+    // still has to be one the rule named -- and the class is recorded
+    // so the click can be delivered the way that control understands.
     private static bool OnWantedButton(IntPtr h, IntPtr lp) {
-        if (ClassOf(h) != "Button") { return true; }
         string t = ReadText(h).Trim();
         if (t.Length == 0) { return true; }
         for (int i = 0; i < wantButtons.Length; i++) {
             if (Flatten(t) == Flatten(wantButtons[i])) {
                 wantedButton = h;
                 wantedLabel = t;
+                wantedClass = ClassOf(h);
                 return false;
             }
         }
         return true;
+    }
+    private static string wantedClass = "";
+
+    // BM_CLICK is only understood by a real Button. A custom-drawn
+    // control ignores it and needs the mouse messages a click actually
+    // produces, aimed at its own centre in CLIENT coordinates. Both are
+    // POSTED, so a wedged dialog thread cannot wedge us.
+    private static void ClickIt(IntPtr h) {
+        if (wantedClass == "Button") {
+            PostMessageW(h, 0x00F5, IntPtr.Zero, IntPtr.Zero);  // BM_CLICK
+            return;
+        }
+        RECT r;
+        if (!GetClientRect(h, out r)) { return; }
+        int x = (r.Right - r.Left) / 2;
+        int y = (r.Bottom - r.Top) / 2;
+        IntPtr pos = (IntPtr)((y << 16) | (x & 0xFFFF));
+        PostMessageW(h, 0x0201, (IntPtr)1, pos);   // WM_LBUTTONDOWN
+        PostMessageW(h, 0x0202, IntPtr.Zero, pos); // WM_LBUTTONUP
     }
 
     // Every dialog this process is showing, with its text and the exact
@@ -217,14 +252,21 @@ public class AellDlg {
         describe.Append("dialog: ").Append(dlgText.ToString().Trim()).Append(NL);
         buttonList = new StringBuilder();
         EnumChildWindows(h, new EnumProc(OnListButton), IntPtr.Zero);
-        describe.Append("  buttons: ").Append(buttonList.ToString()).Append(NL);
+        describe.Append("  clickable children: ").Append(buttonList.ToString()).Append(NL);
         return true;
     }
 
+    // EVERY child with text, and the class each one reports. Listing
+    // only class-"Button" children is what hid the bug above: the dump
+    // said "buttons:" and nothing followed, which read as "this dialog
+    // has no buttons" rather than "I am only willing to look at one
+    // kind of control".
     private static bool OnListButton(IntPtr h, IntPtr lp) {
-        if (ClassOf(h) != "Button") { return true; }
         string t = ReadText(h).Trim();
-        if (t.Length > 0) { buttonList.Append("[").Append(t).Append("] "); }
+        if (t.Length == 0) { return true; }
+        if (t.StartsWith("OS_")) { return true; }
+        buttonList.Append("[").Append(t).Append(" {")
+                  .Append(ClassOf(h)).Append("}] ");
         return true;
     }
 }
