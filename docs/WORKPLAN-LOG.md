@@ -14158,3 +14158,55 @@ Nothing else was left unattempted this pass. Nothing is blocked.
   unless `-KeepCurrentPass`, then prints what is LEFT running. "It did
   nothing" can no longer be a silent outcome. run-local-agent.ps1's
   launch message points at it instead of at a bare PID.
+
+## 2026-09-03 (remote session) — AE answers its own modals now
+
+- Owner, with a photo of AE parked on "Save changes to 'Untitled
+  Project.aep' before closing?": "Its hanging still". Then: "AE also
+  opens a crash repair modal after forced closes like this, make sure it
+  can bypass those as well."
+- Why the previous fix did not cover this. `CloseWordlessDialogs` posts
+  `WM_CLOSE`, and the code's own comment says what that is on the save
+  prompt: CANCEL. The window goes away, the project stays dirty, and the
+  next quit asks the same question. The harness also refused on purpose
+  to answer any dialog it could READ (`Get-AellStaleDialogPlan` gates on
+  the `unreadable` verdict), so a dialog it had just harvested the text
+  of was still answered blind.
+- NEW, in the embedded `AellWin` C#: `AnswerDialog(pid, mustContain[],
+  buttonLabels[])` clicks a button only when EVERY text fragment appears
+  in that dialog's own WM_GETTEXT harvest AND the button's own label
+  matches. `Flatten()` compares letters and digits only, so AE's U+2019
+  apostrophe in "Don't Save" matches either spelling and a localised
+  build fails to match rather than matching the WRONG button. The click
+  is a POSTED `BM_CLICK`, so a wedged dialog thread cannot wedge us.
+- NEW `DescribeDialogs(pid)`: every dialog's text plus the exact label of
+  every button on it. This is the part that stops the next round trip --
+  an unmatched dialog now prints its real strings instead of costing
+  another guess.
+- The rules live in PowerShell (`$AellDialogRules`), where they are
+  readable next to the decision, and the C# cannot click anything a rule
+  did not name. Three rules: the save prompt (answered ONLY when the
+  text says UNTITLED -- a NAMED project is someone's work and is never
+  answered for), crash/auto-save recovery, and the unexpected-quit
+  notice.
+- MID-RUN, not just before the launch. `Clear-AellStaleDialog` runs once
+  before AE starts, so it can only ever see what a PREVIOUS run left --
+  and the crash prompt appears on the launch THIS run just made. The
+  wait loop now tries the rules too, but only on the `startup` /
+  `unreadable` / `blocked` verdicts, only after something has been up
+  for two consecutive polls, and at most four times per run. AE's own
+  windows ("Executing Script", "Auto-Save Project") match no rule, so
+  the healthy path cannot be clicked at all. Each answer gives 60 s back
+  to the deadline, because the time a modal ate was never time the suite
+  got to run in.
+- HONEST CAVEAT: the save-prompt rule is written from measured strings
+  (harvested 2026-08-28 on AE 2026). The crash-recovery and
+  unexpected-quit rules are CANDIDATES -- their wording on AE 2026 has
+  not been measured here. That is exactly why `DescribeDialogs` logs the
+  real text and buttons of anything unmatched, on both the blocked path
+  and the startup-timeout path.
+- Verified: `node tests/test-powershell-syntax.js` parses the script
+  under the real pwsh 7 parser; the embedded C# block was extracted and
+  `Add-Type`d on Linux (DllImport resolves at call time) -- 495 lines,
+  compiles clean. Harness 70/72 (the two container-only failures).
+- No `extension/` change, so NO BUMP.

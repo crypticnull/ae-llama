@@ -340,6 +340,140 @@ public class AellWin {
         if (s.Length > 0 && !s.StartsWith("OS_")) { hasWords = true; return false; }
         return true;
     }
+    // Answer a KNOWN-SAFE dialog by clicking a named button.
+    //
+    // WM_CLOSE (CloseWordlessDialogs above) is CANCEL on the save-changes
+    // prompt: the window goes away, the project stays dirty, and the next
+    // quit asks again. That is what the owner hit - After Effects parked
+    // on "Save changes to Untitled Project.aep before closing?" while an
+    // unattended pass waited on it. A forced close then brings up the
+    // crash-recovery prompt on the NEXT launch, so both need answering.
+    //
+    // Deliberately table-driven from PowerShell rather than hardcoded
+    // here: the rules are readable where they are decided, and this
+    // method cannot click anything a caller did not name. It clicks only
+    // when EVERY fragment in mustContain appears in the dialog's own
+    // text, and only a button whose own label is in buttonLabels.
+    //
+    // Returns the label it clicked, or "" if it clicked nothing.
+    public static string AnswerDialog(int processId, string[] mustContain,
+                                      string[] buttonLabels) {
+        target = processId;
+        wantText = mustContain;
+        wantButtons = buttonLabels;
+        clickedText = "";
+        EnumWindows(new EnumProc(OnKnownDialog), IntPtr.Zero);
+        return clickedText;
+    }
+    private static string[] wantText = new string[0];
+    private static string[] wantButtons = new string[0];
+    private static string clickedText = "";
+
+    private static bool OnKnownDialog(IntPtr h, IntPtr lp) {
+        uint wid;
+        GetWindowThreadProcessId(h, out wid);
+        if ((int)wid != target) { return true; }
+        if (!IsWindowVisible(h)) { return true; }
+        if (ClassOf(h) != "#32770") { return true; }
+
+        // What does it SAY? GetWindowTextW is empty across processes, so
+        // the sentence only comes back through WM_GETTEXT.
+        dlgText = new StringBuilder();
+        EnumChildWindows(h, new EnumProc(OnCollectText), IntPtr.Zero);
+        string said = dlgText.ToString();
+        for (int i = 0; i < wantText.Length; i++) {
+            if (said.IndexOf(wantText[i], StringComparison.OrdinalIgnoreCase) < 0) {
+                return true;
+            }
+        }
+
+        wantedButton = IntPtr.Zero;
+        wantedLabel = "";
+        EnumChildWindows(h, new EnumProc(OnWantedButton), IntPtr.Zero);
+        if (wantedButton == IntPtr.Zero) { return true; }
+
+        // BM_CLICK, posted: a wedged dialog thread must not wedge this.
+        PostMessageW(wantedButton, 0x00F5, IntPtr.Zero, IntPtr.Zero);
+        clickedText = wantedLabel;
+        return false;
+    }
+
+    private static StringBuilder dlgText = new StringBuilder();
+    private static bool OnCollectText(IntPtr h, IntPtr lp) {
+        dlgText.Append(ReadText(h)).Append(" ");
+        return true;
+    }
+
+    private static IntPtr wantedButton = IntPtr.Zero;
+    private static string wantedLabel = "";
+    private static bool OnWantedButton(IntPtr h, IntPtr lp) {
+        if (ClassOf(h) != "Button") { return true; }
+        string t = ReadText(h).Trim();
+        if (t.Length == 0) { return true; }
+        for (int i = 0; i < wantButtons.Length; i++) {
+            if (Flatten(t) == Flatten(wantButtons[i])) {
+                wantedButton = h;
+                wantedLabel = t;
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // AE renders the apostrophe in "Don't Save" as U+2019, not ASCII, and
+    // pads labels with spaces. Compare on letters only, so either
+    // spelling matches and a localised build simply fails to match
+    // rather than matching the WRONG button.
+    private static string Flatten(string s) {
+        StringBuilder o = new StringBuilder();
+        foreach (char c in s) {
+            if (char.IsLetterOrDigit(c)) { o.Append(char.ToLowerInvariant(c)); }
+        }
+        return o.ToString();
+    }
+
+    // Every dialog this process is showing, with its text and the exact
+    // label of every button on it. This is how an UNKNOWN dialog stops
+    // costing a guess: the first time one appears its real strings are
+    // in the log, and a rule can be written from them.
+    public static string DescribeDialogs(int processId) {
+        target = processId;
+        describe = new StringBuilder();
+        EnumWindows(new EnumProc(OnDescribe), IntPtr.Zero);
+        return describe.ToString();
+    }
+    private static StringBuilder describe = new StringBuilder();
+    private static bool OnDescribe(IntPtr h, IntPtr lp) {
+        uint wid;
+        GetWindowThreadProcessId(h, out wid);
+        if ((int)wid != target) { return true; }
+        if (!IsWindowVisible(h)) { return true; }
+        if (ClassOf(h) != "#32770") { return true; }
+        dlgText = new StringBuilder();
+        EnumChildWindows(h, new EnumProc(OnCollectText), IntPtr.Zero);
+        describe.Append("dialog: ").Append(dlgText.ToString().Trim()).Append(NL);
+        buttonList = new StringBuilder();
+        EnumChildWindows(h, new EnumProc(OnListButton), IntPtr.Zero);
+        describe.Append("  buttons: ").Append(buttonList.ToString()).Append(NL);
+        return true;
+    }
+    private static StringBuilder buttonList = new StringBuilder();
+    private static bool OnListButton(IntPtr h, IntPtr lp) {
+        if (ClassOf(h) != "Button") { return true; }
+        string t = ReadText(h).Trim();
+        if (t.Length > 0) { buttonList.Append("[").Append(t).Append("] "); }
+        return true;
+    }
+
+    private static string ReadText(IntPtr h) {
+        StringBuilder sb = new StringBuilder(1024);
+        UIntPtr res;
+        IntPtr ok = SendMessageTimeoutW(h, 0x000D, (IntPtr)1024, sb,
+                                        0x0002, 400, out res);
+        if (ok == IntPtr.Zero) { return ""; }
+        return sb.ToString();
+    }
+
     // --- reading a dialog, instead of guessing at it -----------------
     // GetWindowTextW returns EMPTY for a control owned by ANOTHER
     // process, which is why every AE dialog has always reached the
@@ -618,6 +752,73 @@ function Write-AellDialogEvidence {
 # what stops this. Runs BEFORE the launch, so a dialog it sees cannot be
 # ours; and it never runs on the wait loop's findings, where a wordless
 # popup may still be our own progress window tearing down.
+<#
+  KNOWN-SAFE dialogs, and the button to click on each.
+
+  Two of these cost the owner real time on 2026-09-02. WM_CLOSE below is
+  CANCEL on the save-changes prompt: the window goes, the project stays
+  dirty, and the next quit asks the same question, so an unattended pass
+  can sit on it indefinitely. And once a forced close happens, the NEXT
+  launch opens the crash-recovery prompt instead.
+
+  Every rule is narrow on purpose:
+   - the save prompt is answered ONLY when the dialog's own text says
+     UNTITLED. An untitled project here is a scratch project the suite
+     made; a NAMED project is someone's work and is never answered for.
+   - the crash prompt's exact wording on AE 2026 has not been measured
+     here, so its fragments and buttons are candidates, and an unmatched
+     dialog gets DESCRIBED into the log (text plus every button label)
+     rather than guessed at again. The first time one appears, its real
+     strings are in the log and a rule can be written from them.
+#>
+$script:AellDialogRules = @(
+  @{ Name    = 'save-changes on an untitled project'
+     Contains = @('Save changes', 'Untitled')
+     Buttons  = @("Don't Save", 'Dont Save', 'No') },
+  @{ Name    = 'crash / auto-save recovery'
+     Contains = @('recover')
+     Buttons  = @("Don't Recover", 'Dont Recover', 'No', 'Cancel') },
+  @{ Name    = 'unexpected quit notice'
+     Contains = @('unexpectedly')
+     Buttons  = @('OK', 'Close', 'Continue') }
+)
+
+# Try every rule against every AE process. Returns the number answered.
+function Answer-AellKnownDialogs {
+  $answered = 0
+  foreach ($proc in @(Get-Process AfterFX -ErrorAction SilentlyContinue)) {
+    foreach ($rule in $script:AellDialogRules) {
+      try {
+        $clicked = [AellWin]::AnswerDialog($proc.Id, $rule.Contains,
+                                           $rule.Buttons)
+      } catch { $clicked = '' }
+      if ($clicked) {
+        Write-Host ("  clicked [" + $clicked + "] on the " + $rule.Name +
+                    " dialog")
+        $answered++
+        Start-Sleep -Milliseconds 600
+      }
+    }
+  }
+  return $answered
+}
+
+# Whatever is on screen that no rule matched, in full, so the next
+# session can write a rule instead of another guess.
+function Write-AellUnknownDialogs {
+  foreach ($proc in @(Get-Process AfterFX -ErrorAction SilentlyContinue)) {
+    $desc = ''
+    try { $desc = [AellWin]::DescribeDialogs($proc.Id) } catch { }
+    if ($desc -and $desc.Trim()) {
+      Write-Host '  a dialog is up that no rule matched. Its exact text and'
+      Write-Host '  buttons follow - add a rule to $AellDialogRules from these:'
+      foreach ($line in ($desc -split "`r?`n")) {
+        if ($line.Trim()) { Write-Host ("    " + $line.Trim()) }
+      }
+    }
+  }
+}
+
 function Clear-AellStaleDialog {
   $announced = $false
   for ($round = 1; $round -le 2; $round++) {
@@ -643,8 +844,17 @@ function Clear-AellStaleDialog {
     # to: the harvest above already named the dialog, and this line used
     # to announce "the save-changes prompt" over the top of an error
     # alert it had just read out loud.
-    Write-Host ("Answering it with WM_CLOSE, which on the save-changes " +
-      "prompt is Cancel and only calls off the quit.")
+    # A KNOWN dialog is answered properly first: clicking Don't Save
+    # actually resolves the save prompt, where WM_CLOSE only cancels the
+    # quit and leaves it to ask again on the next one.
+    $named = Answer-AellKnownDialogs
+    if ($named -gt 0) {
+      Start-Sleep -Seconds 2
+      continue
+    }
+
+    Write-Host ("No rule matched it. Falling back to WM_CLOSE, which on " +
+      "the save-changes prompt is Cancel and only calls off the quit.")
     $n = 0
     foreach ($proc in @(Get-Process AfterFX -ErrorAction SilentlyContinue)) {
       try { $n = $n + [AellWin]::CloseWordlessDialogs($proc.Id) } catch { }
@@ -652,6 +862,7 @@ function Clear-AellStaleDialog {
     Write-Host ("  answered " + $n + " dialog(s)")
     Start-Sleep -Seconds 2
   }
+  Write-AellUnknownDialogs
   Write-Host ("  it did not clear -- running anyway, and the wait loop " +
     "below will report it.")
 }
@@ -676,13 +887,69 @@ Start-Process -FilePath $AfterFXPath -ArgumentList @("-r", $wrapper) |
 # window from a popup nobody asked for, and a verdict only stops the run
 # once it has survived several consecutive polls: a modal waits forever,
 # a teardown flicker does not.
+#
+# A known-safe dialog is also answered DURING the wait, not only before
+# the launch. Clear-AellStaleDialog above runs once, before AE starts,
+# so it can only see what a PREVIOUS run left behind -- and the two
+# dialogs that actually cost the owner time come up after that point:
+# the crash-recovery prompt appears on the launch this run just made
+# (AE was force-closed, so its next start offers to recover), and the
+# save-changes prompt can be raised by the suite itself. Neither was
+# answerable here, so a run that met one burned the whole -TimeoutSec
+# and exited 3 with nothing done. That is the "just sitting there" the
+# owner reported on 2026-09-02.
+#
+# Narrow by construction, in three ways, because this clicks buttons in
+# a run that may be perfectly healthy:
+#   - only when something has been up for two consecutive polls (~4s),
+#     so a teardown flicker is never clicked;
+#   - only on the verdicts that mean "AE is behind something", never on
+#     `running` or `progress`, which are AE working on our script;
+#   - only a rule whose every text fragment is in the dialog and whose
+#     button label is on the dialog. AE's progress windows say
+#     "Executing Script", auto-save says "Auto-Save Project": no rule
+#     matches either, so the healthy path cannot be clicked at all.
+# And capped, so a rule that somehow matches something regenerating
+# cannot spin for the whole timeout.
+$midRunAnswers = 0
 $deadline = (Get-Date).AddSeconds($TimeoutSec)
 $state = New-AellWaitState
 while (-not (Test-Path $out) -and (Get-Date) -lt $deadline) {
   Start-Sleep -Seconds 2
   $state = Update-AellWaitState -State $state `
     -ProbeText (Get-BlockingDialog) -ScriptName $wrapperName
+
+  if ($canProbe -and -not $NoDismissStale -and $midRunAnswers -lt 4 -and
+      $state.Streak -ge 2 -and
+      ($state.LastVerdict -eq 'startup' -or
+       $state.LastVerdict -eq 'unreadable' -or
+       $state.LastVerdict -eq 'blocked')) {
+    $answered = Answer-AellKnownDialogs
+    if ($answered -gt 0) {
+      $midRunAnswers = $midRunAnswers + $answered
+      # The time this dialog ate is not time the suite got to run in,
+      # so give it back rather than failing a run that was only ever
+      # waiting on a prompt. Once per answer, capped with the answers.
+      $deadline = $deadline.AddSeconds(60)
+      # And forget the streak: it was counted against a dialog that no
+      # longer exists, and carrying it forward would trip StopNow on
+      # the poll right after we cleared the thing. Only the streak --
+      # SawProgress and WorkingText are the run's history, and the
+      # timeout messages below are written from them.
+      $state.Streak = 0
+      $state.LastVerdict = ''
+      $state.StopNow = $false
+      $state.BlockingText = ''
+      continue
+    }
+  }
+
   if ($state.StopNow) { break }
+}
+if ($midRunAnswers -gt 0) {
+  Write-Host ("Answered " + $midRunAnswers + " dialog(s) while waiting; " +
+    "the deadline was extended by " + (60 * $midRunAnswers) + "s to " +
+    "cover the time they held AE up.")
 }
 $blocking = $state.BlockingText
 $sawRunning = $state.SawProgress
@@ -704,6 +971,11 @@ if ($blocking -and -not (Test-Path $out)) {
   # a dialog that named its own cause in one WM_GETTEXT call.
   Write-AellDialogEvidence -Context 'blocking this run' -AlwaysShoot |
     Out-Null
+  # The harvest says what it SAYS; this says what you could CLICK. A
+  # rule in $AellDialogRules needs both, and without the button labels
+  # the next attempt at one is a guess -- which is how the crash-prompt
+  # rule below started life.
+  Write-AellUnknownDialogs
   Write-Host '----'
   Write-Host 'This is not the scripting-file-access preference. Until the'
   Write-Host 'dialog is dismissed AE ignores every -r script while still'
@@ -753,6 +1025,13 @@ if (-not (Test-Path $out)) {
       "until that is dismissed AE never gets far enough to run a -r " +
       "script. Nothing to do with the scripting-file-access " +
       "preference: dismiss it and re-run.")
+    if ($midRunAnswers -eq 0) {
+      Write-Host ("  The recovery prompt is meant to be answered " +
+        "automatically (see `$AellDialogRules). Nothing matched it, so " +
+        "its real text and buttons follow -- write a rule from these " +
+        "and it will never cost a run again.")
+      Write-AellUnknownDialogs
+    }
   } else {
     Write-Host ("No results after " + $TimeoutSec + "s, and no blocking " +
       "dialog found. Checks: is AE running/launching? Is 'Allow Scripts " +
