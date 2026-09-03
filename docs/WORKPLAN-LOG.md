@@ -18765,3 +18765,85 @@ Buyers on 8-12 GB cards are the common case; the compact prompt form
 exists for them, and assuming 24K+ would strand most of the market.
 
 No `extension/` change, so NO BUMP.
+
+## 2026-09-03 (remote session) — 13a rewritten: fully automated, manifest-served
+
+**Owner:** completely automated. Scan the hardware, download the right
+things, install them. The only thing a user sees is "here's what you're
+running, and Triton and SageAttention have been successfully installed",
+alongside the model downloads and ComfyUI install that already happen.
+Env paths in Advanced Settings for niche setups, never necessary.
+
+That is a design change, not a scope change, and it made the section
+much smaller — because **almost every piece already exists**:
+
+- `Setup.detectGpu` already returns `computeCap` alongside `cudaVersion`
+  and `vramGB`. Compute capability is precisely what kernel selection
+  needs, and it is already measured on the owner's 5090.
+- `Setup.findComfyInstall` gives an interpreter WE installed
+  (`python_embeded/python.exe`), so nothing touches the user's Python.
+- The hosted `update.json` manifest already serves `modelCatalog` and
+  `comfyCatalog`, and `recommendSetup(manifest, gpu)` is already a PURE
+  hardware-to-install decision, stub-tested.
+- `downloadToFile` (progress + cancel), `extractZip`, and
+  `pickAssets`/`pickReleaseAssets` (which already pick a build by CUDA
+  version for llama.cpp) are all in place.
+- `comfy.js` owns the launch line, so `--use-sage-attention` is a flag
+  we add, not something a user types.
+
+**The one architectural decision: wheel URLs live in the hosted
+manifest, never in the panel.** Wheel availability moves constantly —
+new torch, new Python minor, new GPU architecture, new SageAttention
+release. Hardcoded in the panel, each of those needs a panel release and
+strands everyone who has not updated; in the manifest it is a JSON edit
+that reaches every installed panel at once. `modelCatalog` and
+`comfyCatalog` already work this way, so it is precedent rather than
+invention. Proposed `accelCatalog` shape is in the section, marked to be
+confirmed against the step-1 measurement rather than assumed.
+
+**Two things the owner's requirement settled that I had left open:**
+
+1. **No compile-from-source route, ever.** I had filed "whether to offer
+   a compiler route" as an owner decision. Hands-off answers it: MSVC
+   plus a CUDA toolkit is not hands-off, so no matching wheel means no
+   install and a quiet fall back.
+2. **The install is hermetic** — `pip install --no-index --no-deps` into
+   the embedded interpreter only. A hands-off installer must never
+   resolve dependencies off the network into an environment the user
+   depends on, and must never silently upgrade the torch ComfyUI is
+   pinned to. If a wheel needs something absent, the manifest is wrong
+   and `pickAccel` should have refused.
+
+**The part I weighted hardest: the sentence has to be EARNED.** The
+owner's required message is "successfully installed". Printed off a pip
+exit code that is the silent-success class this repo has spent weeks
+removing — and worse than usual here, because the user would believe
+they were on the fast path while every generation ran slow. Gated on
+three things: the module imports in the embedded interpreter, ComfyUI's
+own startup log confirms it, and one fixed workflow at a fixed seed
+moves on seconds and peak VRAM, recorded in `docs/measured/`. If the
+numbers do not move it did not load, whatever anything claims.
+
+**Failure is invisible and non-blocking**: launch without the flag,
+install nothing further, never retry in a loop, name the attention
+backend actually in use. Not presented as an error, because nothing the
+user did was wrong.
+
+`pickAccel(manifest, env, gpu)` is specified pure for the same reason
+`recommendSetup` is: it is the only way a hardware matrix this wide gets
+covered without hardware. Named test shapes: 5090 (sm120), a 12 GB
+40-series, a 3060, a GTX below the INT8 kernel floor, AMD/Intel, and no
+GPU at all.
+
+**Every capability the plan leans on was checked against source**, not
+recalled: computeCap/cudaVersion/vramGB in `detectGpu`, `recommendSetup`'s
+signature, the two manifest catalogs, `downloadToFile`'s progress and
+cancel, the embedded-python path, comfy.js owning the launch args, and
+that no sage flag exists yet.
+
+One self-correction: my own verification of the section initially
+reported a FAIL on "requires earned verification". The doc was right and
+the check was wrong — the phrase is line-wrapped and my regex was not
+newline-tolerant. Fixed the check.
+
+No `extension/` change, so NO BUMP.

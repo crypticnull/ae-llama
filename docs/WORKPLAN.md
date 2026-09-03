@@ -2778,81 +2778,133 @@ difference between video generation being usable and not.
 
 Both are MEASURE-FIRST. Neither should be landed from reasoning.
 
-### 13a. SageAttention for the hidden ComfyUI backend
+### 13a. SageAttention + Triton, fully automated (owner-specified 2026-09-03)
 
-**Why the panel is unusually well placed to do this.** SageAttention is
-famously painful to install by hand on Windows: it needs a Triton build,
-a torch/CUDA pairing that matches, MSVC for anything that compiles, and
-a kernel path that matches the GPU's compute capability. A new user will
-not get there alone, and the ones who need it most (small cards) are the
-least likely to manage it.
+**The owner's requirement, verbatim in effect:** completely hands off.
+Scan the hardware, download the right things for it, install them, and
+the only thing a user ever sees is *"here's what you're running, and
+Triton and SageAttention have been successfully installed"*, shown
+alongside the model downloads and the ComfyUI install that already
+happen at first run. Environment paths get exposed in Advanced Settings
+for someone with a niche setup, but reaching for them must never be
+necessary.
 
-But this panel does not use the user's Python. `Setup.findComfyInstall`
-downloads a **portable ComfyUI** into `vendor/comfy/` with an **embedded
-interpreter** (`python_embeded/python.exe`), and `comfy.js` spawns it
-with arguments we choose. So the environment is one we installed and can
-inspect exactly, and the launch flag is a line we own. That turns "tell
-the user to follow a forum thread" into a deterministic install.
+This is not a research task. **Almost every piece already exists**, and
+the job is mostly wiring them together:
 
-**Step 1 — MEASURE the shipped environment. Nothing else until this is
-done, and nothing here may be assumed from memory: wheel availability
-and compute-capability requirements both move.**
+| Need | Already in the repo |
+|---|---|
+| Scan the hardware | `Setup.detectGpu` returns `{hasNvidia, name, cudaVersion, computeCap, vramGB}` — `computeCap` is exactly what kernel selection needs, and it is already measured on a 5090 |
+| A Python we control | `Setup.findComfyInstall` → portable ComfyUI with `python_embeded/python.exe` |
+| Serve the right file per machine | The hosted `update.json` manifest already carries `modelCatalog` and `comfyCatalog` |
+| Decide install from hardware, testably | `Setup.recommendSetup(manifest, gpu)` — pure over its inputs, stub-tested |
+| Pick a build by CUDA version | `pickAssets` / `pickReleaseAssets` already do this for llama.cpp |
+| Download with progress + cancel | `downloadToFile` |
+| Own the launch line | `comfy.js` spawns `install.python` with args we choose |
 
-Against the embedded interpreter, record into `docs/measured/`:
+**The one architectural decision, and it is the whole design.**
+
+**Wheel URLs live in the hosted manifest, never in the panel.** Wheel
+availability moves constantly — a new torch, a new Python minor, a new
+GPU architecture, a new SageAttention release. If the panel hardcodes
+them, every one of those needs a panel release and every user who has
+not updated is stranded. In the manifest it is a JSON edit on our side,
+and it reaches every installed panel immediately. This is exactly how
+`modelCatalog` and `comfyCatalog` already work, so it is a precedent,
+not an invention.
+
+Proposed shape, to be confirmed against a real measurement first:
+
+```
+"accelCatalog": [
+  { "kind": "triton",        "python": "3.12", "torch": "2.x",
+    "cuda": "12.x", "minComputeCap": "7.5", "url": "...", "sha256": "..." },
+  { "kind": "sageattention", "python": "3.12", "torch": "2.x",
+    "cuda": "12.x", "minComputeCap": "8.0", "url": "...", "sha256": "..." }
+]
+```
+
+**Step 1 — MEASURE the shipped environment. Nothing is chosen before
+this, and nothing here may be written from memory: wheel availability
+and kernel requirements both move, and a confident guess here strands a
+paying user on a broken generation backend.**
+
+One command against the interpreter the panel installed, recorded into
+`docs/measured/`:
 
 ```
 <vendor>\python_embeded\python.exe -c "import sys, torch; print(sys.version); print(torch.__version__); print(torch.version.cuda); print(torch.cuda.get_device_name(0)); print(torch.cuda.get_device_capability(0))"
 ```
 
-That gives the four things every install decision depends on: the Python
-minor version (wheels are per-version), the torch version, the CUDA
-version torch was built against, and the GPU's compute capability. Record
-the ComfyUI release the portable build came from too.
+Python minor, torch version, the CUDA torch was **built against** (not
+the driver's — `detectGpu` reports the driver's, and they differ), the
+device, and the compute capability. Also record which ComfyUI portable
+release the build came from, since that is what pins torch.
 
-**Step 2 — decide the route from the measurement**, not before. The
-routes, in preference order:
+**Step 2 — `pickAccel(manifest, env, gpu)`, pure and stub-tested.**
+Same shape as `recommendSetup`: given the manifest, the measured
+interpreter environment, and the GPU, return the wheels to install, or
+an explicit "nothing matches this machine" with the reason. Purity is
+what lets this be tested for a dozen machine shapes with no hardware —
+which is the only way a matrix this wide gets covered at all. Test the
+5090 (sm120), a 12 GB 40-series, a 3060, a GTX card below the INT8
+kernel floor, an AMD/Intel card, and a machine with no GPU.
 
-1. a prebuilt wheel matching (python, torch, CUDA) exactly — no
-   compiler on the user's machine, which is the only route that scales
-   to non-technical buyers;
-2. build from source — needs a CUDA toolkit and MSVC, so it is a
-   fallback for a machine that already has them, never the default;
-3. do nothing and say so — see step 4.
+**Step 3 — install, offline and hermetic.** Download the wheels
+(verifying `sha256`), then install into the embedded interpreter only:
 
-Triton is a dependency of the kernels and has its own Windows wheel
-story; measure whether the shipped torch already satisfies it.
+```
+python_embeded\python.exe -m pip install --no-index --no-deps <wheel> ...
+```
 
-**Step 3 — the launch flag.** ComfyUI takes `--use-sage-attention`. It
-goes in `comfy.js`'s spawn (currently `-s main.py
---windows-standalone-build --port ... --listen 127.0.0.1
---disable-auto-launch`). It must be **conditional on step 4 passing**.
+`--no-index` and `--no-deps` on purpose: a hands-off installer must not
+resolve dependencies from the network into an environment the user
+depends on, and must never silently upgrade the torch ComfyUI is pinned
+to. If a wheel needs something the environment lacks, the manifest is
+wrong and step 2 should have refused. **There is no compile-from-source
+route** — the owner's requirement settles the question I previously
+filed as open: a route needing MSVC and a CUDA toolkit is not hands off,
+so no wheel means no install, and see step 5.
 
-**Step 4 — VERIFY IT LOADED, and never claim it otherwise.** This is the
-part that matters most, and it is this repo's oldest lesson: a backend
-that silently falls back to the default attention while the panel says
-"SageAttention enabled" is exactly the silent-success class every mask
-pass has been fixing. Requirements:
+**Step 4 — VERIFY IT ACTUALLY LOADED. The user-facing sentence has to be
+earned.** "Successfully installed" printed off a pip exit code is the
+silent-success class this repo has spent weeks removing, and here it
+would be worse than silence: the user would believe they are on the fast
+path while every generation runs slow. Required before that sentence is
+shown:
 
-- a probe that runs a real generation and reads ComfyUI's own startup log
-  for the confirmation line, rather than inferring from "pip said ok";
-- a measured before/after on one fixed workflow and seed — seconds and
-  peak VRAM — written into `docs/measured/`. If the numbers do not move,
-  it did not load, whatever the log says;
-- on any failure, the panel launches WITHOUT the flag and the receipt
-  says which attention backend is actually in use. A user on a small card
-  needs to know they are on the slow path.
+- import the module in the embedded interpreter and confirm it loads;
+- launch ComfyUI **with** `--use-sage-attention` and read ComfyUI's own
+  startup log for its confirmation line, rather than inferring;
+- run one fixed workflow at a fixed seed and record seconds and peak
+  VRAM, before and after, into `docs/measured/`. If the numbers do not
+  move, it did not load, whatever anything claims.
 
-**Step 5 — `tiers.js` consequences.** The VRAM arithmetic that decides
-whether a generation can run alongside the chat model (`comfyPauseLlm:
-"auto"`) is calibrated on the current attention path. If SageAttention
-changes peak VRAM, those thresholds are stale and a card that could now
-run both will still be told to pause the LLM. Re-measure the tiers that
-move; do not adjust them by reasoning.
+**Step 5 — degrade honestly and invisibly.** Any failure at any step:
+launch ComfyUI without the flag, install nothing further, and never
+retry in a loop. The status line then names the attention backend
+actually in use. A user on a small card is entitled to know they are on
+the slow path — but they are not asked to do anything about it, and
+nothing is presented as an error, because nothing they did was wrong.
 
-**Owner decision this section deliberately does NOT take:** whether an
-install that needs a compiler is offered at all. Route 1 ships to
-everyone; route 2 is a support burden on a commercial product. Measure
-first, then ask.
+**Step 6 — the surface.** First-run shows one line among the existing
+model/ComfyUI steps, in the shape the owner asked for: what is running,
+and that Triton and SageAttention are installed. Advanced Settings
+exposes the interpreter path, the resolved wheel URLs, the detected
+env/GPU facts, and a re-run button — read-only escape hatches for a
+niche setup, never a required step. Nothing here may become a prompt a
+normal user has to answer.
+
+**Step 7 — `tiers.js` consequences.** The VRAM arithmetic behind
+`comfyPauseLlm: "auto"` is calibrated on the current attention path. If
+peak VRAM moves, those thresholds are stale, and a card that could now
+run generation alongside the chat model will still be told to pause it.
+Re-measure the tiers that move; do not adjust them by reasoning.
+
+**Why this is worth the passes:** on 8-12 GB cards — the common case for
+aescripts buyers, not the exception — this is the difference between
+video generation being usable and being unusable. It is a gating
+feature for most of the market, not an optimisation for enthusiasts.
 
 ### 13b. KV-cache quantization for llama-server
 
