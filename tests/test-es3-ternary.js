@@ -426,6 +426,13 @@ ok(findChainedTernaries(embeddedEs3(
 var AE_OBJECT_MODEL =
   /app\.project|\$\.global\.AELL|numLayers|beginUndoGroup|ADBE |MaskMode|CompItem/;
 
+var ARGS_DOC_LINE = /^\s*args: "/;
+
+ok(ARGS_DOC_LINE.test('      args: "{comp?: string, layer: name|index}" },'),
+   "the args-doc exclusion recognises a tool doc line");
+ok(!ARGS_DOC_LINE.test('    var expr = "a ? 1 : b ? 2 : 3";'),
+   "…and never a line that BUILDS ExtendScript");
+
 var EMBED = jsIn("scripts").concat(jsIn("extension/js")).filter(function (rel) {
   var t = embeddedEs3(fs.readFileSync(path.join(ROOT, rel), "utf8"));
   return AE_OBJECT_MODEL.test(t);
@@ -438,6 +445,7 @@ for (var m = 0; m < EMBED.length; m++) {
   var mtext = fs.readFileSync(path.join(ROOT, mrel), "utf8");
   var mbody = embeddedEs3(mtext);
   var mbodyLines = mbody.split("\n");
+  var mlines = mtext.split("\n");
   // A .js file that embeds ExtendScript also holds ordinary Node strings,
   // and some of those are REGEX sources — "(?:need|have) to|without(?:
   // having to)?" reads as a chained conditional to any scanner and is not
@@ -446,11 +454,20 @@ for (var m = 0; m < EMBED.length; m++) {
   // because these bodies are written as one concatenation dozens of
   // lines long.
   var mhits = findChainedTernaries(mbody).filter(function (h) {
+    // …and a TOOL DOC is never that. A tool's `args: "{...}"` line is
+    // prose for the model — `layers?: [name|index] | layer?: name|index
+    // (omit = selection), property: path` reads as a chained conditional
+    // to any scanner, and no interpreter ever sees it. The window alone
+    // cannot keep those out: an edit that shifted tools.js by ONE line
+    // slid `effect: ... (e.g. 'ADBE Gaussian Blur 2')` — an EXAMPLE 25
+    // lines away — into range, and apply_keyframe_ease's args line was
+    // suddenly a failure. Only tools.js has these (79 of them); nothing
+    // that is really evalled does.
+    if (ARGS_DOC_LINE.test(mlines[h.line - 1] || "")) return false;
     var from = Math.max(0, h.line - 26);
     return AE_OBJECT_MODEL.test(
       mbodyLines.slice(from, h.line + 25).join("\n"));
   });
-  var mlines = mtext.split("\n");
   var mdetail = mhits.slice(0, 12).map(function (h) {
     return "\n    " + mrel + ":" + h.line + " [" + h.where + "] " +
            (mlines[h.line - 1] || "").trim().slice(0, 90);

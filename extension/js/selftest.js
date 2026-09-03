@@ -84,6 +84,11 @@
   // measures is a comp where NOTHING is animated — so it needs solids
   // nobody else has touched.
   var SMCOMP = "AELL Self-Test Stagger";
+  // And the "grid guessed the layer list" rig. grid_layout's fallback
+  // only fires with NOTHING selected, and every other comp in the suite
+  // has layers selected by the time it runs — so this needs its own comp
+  // whose selection nobody has touched.
+  var GBCOMP = "AELL Self-Test Grid BG";
   var running = false;
 
   /**
@@ -4697,6 +4702,125 @@
       { name: "cleanup: delete the stagger rig comp",
         tool: "delete_item",
         args: function (ctx) { return { item: ctx.smComp }; },
+        check: function () { return true; } },
+
+      // ---- "the grid guessed the layer list" rig. Field run
+      // 2026-09-02, row 30: "line the Icon layers up in a neat 3 by 2
+      // grid" arrived as grid_layout {spacingX: 40, spacingY: 40} with
+      // no 'layers'. Headless there is no selection, so the fallback did
+      // what its doc promised and gridded every content layer — and the
+      // comp's full-frame BACKGROUND went into a cell with a rig
+      // expression on its Position. A layer that covers the whole frame
+      // is a backdrop, not grid content; it now stays out of a GUESSED
+      // grid and is named in the receipt.
+      //
+      // Nothing may be selected here, which is why this is its own comp:
+      // create_comp leaves an empty selection and add_solid restores it
+      // (AELL_keepSelection), so the fallback is reached for real.
+      { name: "grid rig: a comp with a full-frame backdrop",
+        tool: "create_comp",
+        args: { name: GBCOMP, width: 640, height: 360, duration: 4,
+                frameRate: 30 },
+        check: function (d, ctx) {
+          ctx.gbComp = d.name;
+          return typeof d.name === "string" || "no comp name";
+        } },
+      { name: "grid rig: the backdrop, exactly comp-sized",
+        tool: "add_solid",
+        args: function (ctx) {
+          return { comp: ctx.gbComp, name: "ST Grid BG", color: [0, 0, 0.4],
+                   width: 640, height: 360 };
+        },
+        check: function (d) { return d.name === "ST Grid BG" || d.name; } },
+      { name: "grid rig: icon A",
+        tool: "add_solid",
+        args: function (ctx) {
+          return { comp: ctx.gbComp, name: "ST Grid A", color: [1, 0, 0],
+                   width: 60, height: 60 };
+        },
+        check: function (d) { return d.name === "ST Grid A" || d.name; } },
+      { name: "grid rig: icon B",
+        tool: "add_solid",
+        args: function (ctx) {
+          return { comp: ctx.gbComp, name: "ST Grid B", color: [0, 1, 0],
+                   width: 60, height: 60 };
+        },
+        check: function (d) { return d.name === "ST Grid B" || d.name; } },
+      { name: "grid rig: icon C",
+        tool: "add_solid",
+        args: function (ctx) {
+          return { comp: ctx.gbComp, name: "ST Grid C", color: [0, 0, 1],
+                   width: 60, height: 60 };
+        },
+        check: function (d) { return d.name === "ST Grid C" || d.name; } },
+
+      { name: "a guessed grid leaves the full-frame backdrop out",
+        tool: "grid_layout",
+        args: function (ctx) {
+          return { comp: ctx.gbComp, spacingX: 40, spacingY: 40 };
+        },
+        check: function (d) {
+          var i, names = [];
+          for (i = 0; i < d.placed.length; i++) names.push(d.placed[i].layer);
+          if (names.length !== 3) return "placed " + names.join(", ");
+          for (i = 0; i < names.length; i++) {
+            if (names[i] === "ST Grid BG") return "backdrop gridded";
+          }
+          if (!d.skipped || d.skipped.length !== 1 ||
+              d.skipped[0] !== "ST Grid BG") {
+            return "skipped: " + JSON.stringify(d.skipped);
+          }
+          var n = d.skippedNote || "";
+          if (n.indexOf("640x360") === -1) return "note has no size: " + n;
+          if (n.indexOf("layers: [\"ST Grid BG\"") === -1) {
+            return "note has no way back in: " + n;
+          }
+          return true;
+        } },
+      { name: "…and the backdrop carries no rig expression",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.gbComp, layer: "ST Grid BG",
+                   property: "position" };
+        },
+        check: function (d) {
+          return !d.expression || "backdrop was rigged: " + d.expression;
+        } },
+      { name: "…while an icon does",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.gbComp, layer: "ST Grid A",
+                   property: "position" };
+        },
+        check: function (d) {
+          // get_property caps `expression` at 200 chars and the grid rig
+          // is longer than that, so the check keys on its HEAD — the
+          // control-null lookup and the Columns slider, both inside the
+          // cut. 'Grid X Spacing' is not (measured, AE 2026).
+          return (d.expression &&
+                  d.expression.indexOf('thisComp.layer("GRID CTRL")') !== -1 &&
+                  d.expression.indexOf("Grid Columns") !== -1) ||
+                 "icon not rigged: " + (d.expression || "(none)");
+        } },
+      // One-sided: a backdrop the CALLER names is gridded, silently.
+      { name: "a NAMED backdrop is gridded and nothing is said",
+        tool: "grid_layout",
+        args: function (ctx) {
+          return { comp: ctx.gbComp,
+                   layers: ["ST Grid BG", "ST Grid A"], columns: 2 };
+        },
+        check: function (d) {
+          var i, hit = false;
+          for (i = 0; i < d.placed.length; i++) {
+            if (d.placed[i].layer === "ST Grid BG") hit = true;
+          }
+          if (!hit) return "named backdrop still skipped";
+          return !d.skipped || "warned about a layer the caller named";
+        } },
+
+      { name: "cleanup: delete the grid backdrop rig comp",
+        tool: "delete_item",
+        args: function (ctx) { return { item: ctx.gbComp }; },
         check: function () { return true; } },
 
       // set_layer_3d, and the two AE facts underneath it. Measured

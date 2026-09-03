@@ -2474,6 +2474,43 @@ for (const name of ["reorder_layers", "remove_effect", "delete_mask",
          defsByName.delete_mask.desc.length + ")");
 }
 {
+  // A NAMED subset is not "everything in the comp".
+  //
+  // Measured 2026-09-02, real AE + the real 32B, row 30 casual: "line the
+  // Icon layers up in a neat 3 by 2 grid" reached grid_layout {spacingX:
+  // 40, spacingY: 40} — no 'layers', no 'columns'. Headless there is no
+  // selection, so the fallback gridded every content layer and the comp's
+  // BACKGROUND went into a cell. Two misses in one call, and the class
+  // rule's phrase list is where the first one is fixed: it listed 'each X'
+  // / 'every X' / 'all the Xs' and not the shape the user actually typed.
+  const flat = rules.replace(/\s+/g, " ");
+  assert(flat.indexOf("'the X layers' names a CLASS of layers") !== -1,
+         "the class-of-layers rule carries 'the X layers'");
+  assert(/'the X layers' names a CLASS of layers — pass \{layers: \[\.\.\.\]\}/
+           .test(flat),
+         "…and routes it to an explicit {layers: [...]}");
+  // The column count is the second miss, and it belongs on the args line:
+  // compact mode never touches an args line, and it is what the model
+  // copies from.
+  assert(defsByName.grid_layout.args.indexOf("'3 by 2' = 3") !== -1,
+         "grid_layout's args line reads '3 by 2' as a column count");
+  // The rule may not promise more than the tool does: a full-frame
+  // backdrop now stays out of a GUESSED grid, so the bullet says so.
+  assert(/grids ALL content layers except a full-frame backdrop/.test(flat),
+         "the grid bullet no longer promises the backdrop goes in");
+  // Paid for with two cuts, measured with buildSystemPrompt().length —
+  // 58947 -> 58926, a net cut. grid_layout's doc dropped its second
+  // sentence ("Creates its OWN control null — never add_null first"),
+  // which the rules bullet already says word for word, and the
+  // "(nulls/cameras/lights excluded)" roster, which the receipt now
+  // reports by name whenever the grid leaves something out.
+  assert(defsByName.grid_layout.desc.indexOf("never add_null") === -1 &&
+         /NEVER call add_null before gridding/.test(flat),
+         "add_null is ruled out once, in the rules, not twice");
+  assert(defsByName.grid_layout.desc.indexOf("cameras/lights excluded") === -1,
+         "…and the doc no longer lists what was never grid content");
+}
+{
   // A cheap-feeling entrance is an EASING complaint, not a restaging job.
   //
   // Measured 2026-09-02, real AE + the real 32B, --variants on "smooth a

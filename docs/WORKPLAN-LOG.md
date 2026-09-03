@@ -15143,3 +15143,183 @@ AE running, project untouched and open, no dialog raised. AE was never
 closed and its project was never closed. The one-off sweep removed only
 the ten leaked `AELL Self-Test Wipe` comps; the probe and sweep scripts
 were deleted from `logs/`. No ComfyUI, no llama-server.
+
+
+## 2026-09-03 — row 30: a guessed grid swept the backdrop in (0.11.22)
+
+**Item:** the next one in the queue — row 30 casual, `grid_layout` with
+no `layers`.
+
+Harness was GREEN at the start (629/629), so the workplan item stood.
+
+### The failure
+
+Field run 2026-09-02: "line the Icon layers up in a neat 3 by 2 grid"
+reached `grid_layout {spacingX: 40, spacingY: 40}` — no `layers`, no
+`columns`. Headless there is no selection, so the tool did exactly what
+its doc promised and gridded ALL content layers: the comp's full-frame
+BACKGROUND and the HEADLINE went into cells with rig expressions on
+their Positions. The user named a subset in words and got the whole
+comp.
+
+Two misses in one call, and three levers between them.
+
+### 1. Behaviour (the host) — the half that is PROVABLE
+
+A layer that covers the WHOLE frame is a backdrop, not grid content —
+the same judgement the fallback already made about nulls, cameras and
+lights, applied to the one other thing nobody grids. `AELL_compBoxOf`
+(new; the corner-mapping `get_bounds` already reports, factored for
+callers inside the host) plus `AELL_fillsFrame` answer it, and the
+guessed grid now leaves those layers out and NAMES them:
+
+    skipped: ["ST Grid BG"]
+    skippedNote: Left out of the grid: ST Grid BG — it fills the whole
+    640x360 frame, so it is a backdrop, not grid content. No 'layers'
+    list was given and nothing was selected, so the grid used the comp's
+    content. To grid it too, re-call with layers: ["ST Grid BG", ...]
+    naming every layer you want in the grid.
+
+Skipped rather than warned, because a warning arrives too late to be
+acted on: `grid_layout` cannot un-rig a layer it already rigged, and
+re-running with a subset leaves the backdrop's expression behind. The
+way out is a `layers` list, and the note is paste-ready.
+
+One-sided, and only where the tool GUESSED:
+
+- an explicit `layers` list is never filtered — the caller chose;
+- a live selection is never filtered — the user chose;
+- a 3D layer, or one whose box AE will not measure, is KEPT:
+  `AELL_compBoxOf` returns null for any 3D chain rather than a wrong
+  answer (`sourcePointToComp` ignores Z, the camera and a 3D parent's
+  rotation — measured 2026-08-29, and get_bounds already refuses there);
+- if dropping backdrops would leave fewer than 2 layers, nothing is
+  dropped. A comp of full-frame stills IS a grid of stills;
+- half a pixel of slack on each edge, because a 1920x1080 solid centred
+  on 960,540 comes back through the transform math as 1919.9999 often
+  enough to matter;
+- the scan costs one `sourceRectAtTime` and a parent walk per layer, so
+  it stops at 200 layers and stays quiet beyond that (grid_layout was
+  measured at 872 ms on 200 layers, 2026-08-28).
+
+**The HEADLINE half is NOT covered and this pass does not pretend it
+is.** A text layer that is not full-frame is indistinguishable from a
+tile; there is nothing provable to say, so nothing is said.
+
+Zero prompt cost (host strings only).
+
+### 2. Routing (the prompt) — a NET CUT, 58947 -> 58926
+
+The rule that should have fired already existed and its phrase list was
+one shape short: `'each X' / 'every X' / 'all the Xs'` — not "the Icon
+layers", which is what the user typed. It now reads
+`'each X' / 'every X' / 'all the Xs' / 'the X layers' names a CLASS of
+layers — pass {layers: [...]}`.
+
+The column count is the second miss and it went on the ARGS line, which
+compact mode never touches and which is what the model copies:
+`columns?: int ('3 by 2' = 3; default ~square; 1 = column, n = row)`.
+
+And the grid bullet may not promise more than the tool now does, so
+"grids ALL content layers" became "grids ALL content layers except a
+full-frame backdrop" — otherwise the fix becomes a new silent surprise
+for a user who really does want the backdrop in.
+
+Paid for by two cuts, both duplicates:
+
+- `grid_layout`'s doc dropped "Creates its OWN control null — never
+  add_null first." The rules bullet says it word for word, and the
+  rules block is what a compact prompt keeps.
+- …and its "(nulls/cameras/lights excluded)" roster. The receipt now
+  reports what the grid left out, by name, at the point of use.
+
+**Full 58947 -> 58926, a net cut of 21. Honest second number: compact
+went 39498 -> 39562 (+64)** — both cuts landed in the descs a compact
+prompt already drops, so compact pays for the rules addition in full.
+Written down as growth, the way the mask pass wrote down its +184.
+
+### 3. A lint that was one line away from a false alarm (found here)
+
+`tests/test-es3-ternary.js` went red on `apply_keyframe_ease`'s ARGS
+line — a doc string, never handed to an interpreter. Nothing about it
+had changed. Its hit only counts when AE object-model text sits within
+25 lines, and removing ONE line from grid_layout's desc slid
+`effect: display name or match name (e.g. 'ADBE Gaussian Blur 2')` — an
+EXAMPLE — into range.
+
+The lint's own comment says tool docs are what the window exists to keep
+out, so the window got the exclusion it was missing: a hit whose source
+line matches `^\s*args: "` is a tool doc and is dropped. Narrow on
+purpose — only `tools.js` has those lines (79 of them), nothing that is
+really evalled has any, and two new assertions prove the predicate
+matches a doc line and never a line that BUILDS ExtendScript.
+`AE_OBJECT_MODEL` itself was left alone: `selftest.js` earns its place
+in EMBED through `ADBE ` in arg strings, and tightening it would have
+taken the ES3 guard off the file CLAUDE.md explicitly binds.
+
+### Verification
+
+- `tests/test-grid-layout.js`: the stub was blind to this class — its
+  layers had no `sourceRectAtTime`, no `valueAtTime` and an anchor of
+  [0,0] on everything, so nothing in it had a position in the frame at
+  all. It now models AE's real geometry (a layer with a SOURCE has a box
+  at 0,0 the size of its source, and AE centres such a layer's anchor in
+  it) and the bystander is a real full-frame backdrop. **12 new
+  assertions**: the backdrop is not gridded and gets no expression, the
+  skip is reported by name with the frame size and the way back in, the
+  3D full-frame Cube is kept, an explicitly-named backdrop is gridded
+  silently, a SELECTED backdrop is gridded silently, and an
+  all-backdrop comp grids all three and drops none. **5 go RED against
+  the reverted hostscript.**
+- `tests/test-chat-probe.js`: the prompt accounting — the new phrase on
+  the class rule, that it routes to `{layers: [...]}`, the args line's
+  '3 by 2', the bullet's corrected promise, and both cuts.
+- `tests/test-self-test.js`'s canned host answered `grid_layout` with a
+  slider list and nothing else, so no stub could see the new steps. It
+  now keeps a per-comp layer stack and solid sizes (it already had
+  `mkSizes` and `compProps`) and works the backdrop out from the same
+  geometry the host does, scoped to the rig comp. Its failure-path
+  fixture also had to stop failing every `grid_layout` call and fail
+  only the FIRST — the suite now grids twice, and "one failing step
+  surfaces and the run still finishes its cleanup" is what that
+  assertion is for.
+- **Ten new real-AE self-test steps** in `extension/js/selftest.js` on a
+  new 640x360 rig comp (`AELL Self-Test Grid BG`, deleted by its own
+  cleanup step): the guessed grid places three icons and not the
+  backdrop, the note carries the frame size and the paste-ready
+  `layers:` list, the backdrop's Position carries NO expression while an
+  icon's does, and a NAMED backdrop is gridded with nothing said. The
+  comp is its own because grid_layout's fallback only fires with an
+  empty selection, and every other comp in the suite has layers selected
+  by the time it runs.
+- **Real AE harness 629 -> 639/639 PASSED.** Full stub sweep: 0 red
+  files. `docs/CAPABILITIES.md` regenerated.
+- `extension/` changed, so BUMPED: 0.11.21 -> **0.11.22**.
+
+### Notes / assumptions
+
+- One real-AE fact fell out of the first harness run, which came back
+  638/639 on a step of my own: **`get_property` caps `expression` at 200
+  chars**, and the grid rig's expression is longer than that, so
+  "Grid X Spacing" is past the cut. A read-back check has to key on the
+  HEAD — the control-null lookup and the Columns slider. Both the real
+  step and the canned host now do.
+- `skipped` / `skippedNote`, not `warning`. Nothing went wrong: the tool
+  did the right thing and is reporting what it chose. `warning` is
+  reserved for "this is probably not what you wanted", which the prompt
+  already defines.
+- No `scripts/chat-probe.js` field run this pass. Ten real-AE steps and
+  twelve stub assertions pin the behaviour; whether the phrase-list
+  addition actually turns row 30 casual around is a `--variants` run for
+  a later pass — the same open receipt row 35 left.
+- Next in the workplan: a rollback throwing away the calls that WORKED
+  when a later one fails on a parameter name (findings 4), and a
+  `--variants` re-run of rows 30 and 35, which is what would close
+  either of them for real.
+
+### Machine state
+
+AE running, project untouched and open, no dialog raised. AE was never
+closed and its project was never closed. The suite cleans up its own rig
+comp (`AELL Self-Test Grid BG`) and the bottom-of-suite check confirmed
+nothing of the run's remains. No ComfyUI, no llama-server.

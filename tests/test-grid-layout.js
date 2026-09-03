@@ -17,6 +17,9 @@ Object.defineProperty(Prop.prototype, "value", {
   get() { return this._value; }
 });
 Prop.prototype.setValue = function (v) { this._value = v; };
+// Real AE properties answer valueAtTime; the comp-space box math reads
+// Position/Scale/Rotation/Anchor through it, never through .value.
+Prop.prototype.valueAtTime = function () { return this._value; };
 
 function Effect(matchName) {
   this.matchName = matchName;
@@ -42,12 +45,24 @@ Object.defineProperty(EffectParade.prototype, "numProperties", {
 });
 
 let LAYER_SEQ = 0;
-function Layer(name, comp, pos) {
+// `size` makes the layer a solid of that pixel size. FAITHFUL TO REAL AE:
+// a layer with a SOURCE has a box that starts at 0,0 and is the source's
+// size, and AE centers such a layer's anchor point in it — which is why a
+// full-frame solid sitting at the comp's center covers the whole frame.
+function Layer(name, comp, pos, size) {
   this.name = name;
   this.comp = comp;
   this.selected = false;
   this.threeDLayer = false;      // the real 3D switch
+  this.startTime = 0;
+  this.stretch = 100;
   this.index = ++LAYER_SEQ;      // reassigned by comp
+  if (size) {
+    this.source = { width: size[0], height: size[1] };
+    this.sourceRectAtTime = function () {
+      return { left: 0, top: 0, width: size[0], height: size[1] };
+    };
+  }
   // FAITHFUL TO REAL AE: the scripting API pads a 2D layer's Position to
   // THREE components ([x, y, 0]) — value.length is NOT a 3D test. This
   // padding is exactly what broke every grid rig in the field.
@@ -57,7 +72,8 @@ function Layer(name, comp, pos) {
     "ADBE Scale": new Prop([100, 100, 100]),
     "ADBE Rotate Z": new Prop(0),
     "ADBE Opacity": new Prop(100),
-    "ADBE Anchor Point": new Prop([0, 0, 0])
+    "ADBE Anchor Point": new Prop(size ? [size[0] / 2, size[1] / 2, 0]
+                                         : [0, 0, 0])
   };
   this._effects = new EffectParade();
 }
@@ -135,15 +151,16 @@ Object.setPrototypeOf(comp, Object.create(CompItem.prototype,
 const app = { project, beginUndoGroup() {}, endUndoGroup() {} };
 const $ = { global: {} };
 
-// five tiles + one unselected bystander
+// five tiles + one unselected bystander. The bystander is a FULL-FRAME
+// solid at the comp's center — the backdrop shape row 30 gridded in.
 const tiles = [];
 for (let i = 1; i <= 5; i++) {
-  const l = new Layer("Tile " + i, comp, [100 * i, 100]);
+  const l = new Layer("Tile " + i, comp, [100 * i, 100], [120, 120]);
   l.selected = true;
   comp._layers.push(l);
   tiles.push(l);
 }
-const bystander = new Layer("Background", comp, [960, 540]);
+const bystander = new Layer("Background", comp, [960, 540], [1920, 1080]);
 comp._layers.push(bystander);
 comp._reindex();
 
@@ -228,7 +245,7 @@ assert(comp._layers.some(l => l.name === "ROW CTRL"),
 // though scripting reports [x, y, 0]); real 3D layers keep z.
 assert(!/value\[2\]/.test(e1),
        "2D layer expression has no value[2] despite the padded API value");
-const l3d = new Layer("Cube", comp, [10, 20, 30]);
+const l3d = new Layer("Cube", comp, [10, 20, 30], [1920, 1080]);
 l3d.threeDLayer = true;
 comp._layers.push(l3d);
 comp._reindex();
@@ -240,18 +257,78 @@ assert(!/value\[2\]/.test(tiles[0]._transform["ADBE Position"].expression),
        "2D layer in the same grid still gets no value[2]");
 
 // 6. selection empty -> "all layers" fallback grids every content layer
-// (nulls like the two control layers are excluded automatically)
+// (nulls like the two control layers are excluded automatically), EXCEPT
+// a layer that covers the whole frame: that is a backdrop, not grid
+// content. Field row 30: "line the Icon layers up in a neat 3 by 2 grid"
+// arrived as grid_layout {spacingX, spacingY} with no 'layers', and the
+// comp's BACKGROUND went into a cell with a rig expression on Position.
 comp._layers.forEach(l => { l.selected = false; });
+bystander._transform["ADBE Position"].expression = "";
 const r5 = call("grid_layout", {});
 assert(r5.ok, "empty selection grids all content layers: " +
        (r5.error || ""));
 assert(!r5.data.placed.some(p => /CTRL/.test(p.layer)),
        "control nulls excluded from the all-layers grid");
-assert(r5.data.placed.length === 7,
-       "all 7 content layers gridded (5 tiles + Background + Cube), got " +
+assert(!r5.data.placed.some(p => p.layer === "Background"),
+       "the full-frame backdrop is NOT gridded when nobody named it");
+assert(bystander._transform["ADBE Position"].expression === "",
+       "and it gets no rig expression on its Position");
+assert(r5.data.placed.length === 6,
+       "6 content layers gridded (5 tiles + the 3D Cube), got " +
        r5.data.placed.length);
+assert(Array.isArray(r5.data.skipped) && r5.data.skipped.length === 1 &&
+       r5.data.skipped[0] === "Background",
+       "the skip is REPORTED by name, never silent: " +
+       JSON.stringify(r5.data.skipped));
+assert(/1920x1080/.test(r5.data.skippedNote || "") &&
+       /layers:/.test(r5.data.skippedNote || "") &&
+       /"Background"/.test(r5.data.skippedNote || ""),
+       "the note names the frame it fills and the paste-ready way to " +
+       "include it: " + r5.data.skippedNote);
+// The 3D Cube is full-frame too, and is KEPT: AELL_compBoxOf refuses to
+// answer for a 3D chain (sourcePointToComp ignores Z and the camera), so
+// there is nothing proved and nothing dropped.
+assert(r5.data.placed.some(p => p.layer === "Cube"),
+       "a 3D full-frame layer is kept — its comp box is unknowable");
+
+// 6b. one-sided: a backdrop the CALLER named is gridded, silently.
+const r5b = call("grid_layout", { layers: ["Background", "Tile 1"],
+                                  columns: 2 });
+assert(r5b.ok && r5b.data.placed.length === 2 &&
+       r5b.data.placed.some(p => p.layer === "Background"),
+       "an explicit 'layers' list grids the backdrop — the caller chose");
+assert(typeof r5b.data.skipped === "undefined",
+       "and says nothing about it");
+
+// 6c. one-sided: a SELECTED backdrop is gridded too — the user chose.
+comp._layers.forEach(l => { l.selected = false; });
+bystander.selected = true;
+tiles[0].selected = true;
+const r5c = call("grid_layout", {});
+assert(r5c.ok && r5c.data.placed.some(p => p.layer === "Background"),
+       "a selected backdrop is gridded — the user chose it");
+assert(typeof r5c.data.skipped === "undefined",
+       "and says nothing about it either");
+
+// 6d. one-sided: when EVERY layer fills the frame, nothing is dropped —
+// a comp of full-frame stills IS a grid of stills.
+const allComp = new Comp("Stills", 1920, 1080);
+Object.setPrototypeOf(allComp, Object.getPrototypeOf(comp));
+for (let i = 1; i <= 3; i++) {
+  allComp._layers.push(
+    new Layer("Still " + i, allComp, [960, 540], [1920, 1080]));
+}
+allComp._reindex();
+project.activeItem = allComp;
+const r5d = call("grid_layout", {});
+project.activeItem = comp;
+assert(r5d.ok && r5d.data.placed.length === 3 &&
+       typeof r5d.data.skipped === "undefined",
+       "all-backdrop comp grids all three, drops none: " +
+       (r5d.error || JSON.stringify(r5d.data.placed)));
 
 // 7. creating layers must not destroy the user's selection
+comp._layers.forEach(l => { l.selected = false; });
 tiles.forEach(t => { t.selected = true; });
 const r6 = call("add_null", { name: "SEL TEST" });
 assert(r6.ok, "add_null succeeds");

@@ -4040,6 +4040,56 @@ function AELL_threeDInChain(layer) {
   return hits;
 }
 
+/*
+ * The layer's rendered box in COMP space as {left, top, right, bottom},
+ * or null when there is no honest answer: no pixels at all, nothing
+ * rendered at this time, or ANY 3D layer in the parent chain (get_bounds
+ * above documents why AE's own sourcePointToComp cannot be trusted
+ * there — it ignores Z, the camera and a 3D parent's rotation).
+ *
+ * Same corner-mapping get_bounds reports; this is the callers-inside-the
+ * -host form, for tools that need to know where a layer LANDS rather
+ * than to report it.
+ */
+function AELL_compBoxOf(layer, t) {
+  if (typeof layer.sourceRectAtTime !== "function") return null;
+  if (AELL_threeDInChain(layer).length) return null;
+  var rect;
+  try {
+    rect = layer.sourceRectAtTime(AELL_sourceTime(layer, Number(t) || 0),
+                                  false);
+  } catch (eR) { return null; }
+  if (!rect || !(rect.width > 0) || !(rect.height > 0)) return null;
+  var corners = [[rect.left, rect.top],
+                 [rect.left + rect.width, rect.top],
+                 [rect.left + rect.width, rect.top + rect.height],
+                 [rect.left, rect.top + rect.height]];
+  var minX = null, maxX = null, minY = null, maxY = null, i, pt;
+  for (i = 0; i < corners.length; i++) {
+    try { pt = AELL_compPoint(layer, corners[i], Number(t) || 0); }
+    catch (eC) { return null; }
+    if (minX === null || pt[0] < minX) minX = pt[0];
+    if (maxX === null || pt[0] > maxX) maxX = pt[0];
+    if (minY === null || pt[1] < minY) minY = pt[1];
+    if (maxY === null || pt[1] > maxY) maxY = pt[1];
+  }
+  return { left: minX, top: minY, right: maxX, bottom: maxY };
+}
+
+/*
+ * Does this layer cover the WHOLE frame at comp time t? Half a pixel of
+ * slack, because a 1920x1080 solid centered on 960,540 comes back
+ * through the transform math as 1919.9999 often enough to matter.
+ *
+ * Only ever asked of a layer NOBODY named — see grid_layout.
+ */
+function AELL_fillsFrame(layer, comp) {
+  var b = AELL_compBoxOf(layer, comp.time);
+  if (!b) return false;
+  return b.left <= 0.5 && b.top <= 0.5 &&
+         b.right >= comp.width - 0.5 && b.bottom >= comp.height - 0.5;
+}
+
 AELL_TOOLS.get_bounds = function (args) {
   if (AELLJSON.isArray(args.layers)) {
     return AELL_err("get_bounds reads ONE layer. Call it once per " +
@@ -4658,6 +4708,7 @@ AELL_TOOLS.grid_layout = function (args) {
   // Explicit layer list wins; else the user's live selection; else ALL
   // content layers in the comp ("arrange all layers in a grid") — nulls,
   // cameras and lights are riggers, not grid content, so they're skipped.
+  var guessed = false;
   if (AELLJSON.isArray(args.layers) && args.layers.length > 0) {
     for (i = 0; i < args.layers.length; i++) {
       layers.push(AELL_resolveLayer(comp, args.layers[i], "layers"));
@@ -4666,6 +4717,7 @@ AELL_TOOLS.grid_layout = function (args) {
     var sel = comp.selectedLayers;
     for (i = 0; i < sel.length; i++) layers.push(sel[i]);
     if (layers.length === 0) {
+      guessed = true;
       for (i = 1; i <= comp.numLayers; i++) {
         var cand = comp.layer(i);
         var isNull = false;
@@ -4694,6 +4746,42 @@ AELL_TOOLS.grid_layout = function (args) {
   }
   layers = filtered;
   layers.sort(function (a, b) { return a.index - b.index; });
+
+  /* The backdrop the caller never asked for.
+   *
+   * Field run 2026-09-02, row 30: "line the Icon layers up in a neat
+   * 3 by 2 grid" reached grid_layout {spacingX: 40, spacingY: 40} with
+   * no 'layers'. Headless there is no selection, so the fallback above
+   * did what its doc promises and gridded every content layer — and the
+   * comp's full-frame BACKGROUND went into a grid cell with a rig
+   * expression on its Position. The user named a subset in words and
+   * got the whole comp.
+   *
+   * A layer that covers the WHOLE frame is a backdrop, not grid content
+   * — the same judgement the fallback already makes about nulls,
+   * cameras and lights, applied to the one other thing nobody grids.
+   * It is reported, never silent, and naming the layer in 'layers'
+   * always overrides it.
+   *
+   * One-sided, and only where the tool GUESSED:
+   *   - an explicit 'layers' list is never filtered (the caller chose);
+   *   - a live selection is never filtered (the user chose);
+   *   - a 3D layer, or one whose box AE will not measure, is kept —
+   *     AELL_compBoxOf returns null there rather than a wrong answer;
+   *   - if dropping backdrops would leave fewer than 2 layers, nothing
+   *     is dropped: a comp of full-frame stills IS a grid of stills.
+   * The scan costs one sourceRectAtTime and a parent walk per layer, so
+   * it stops at 200 and stays quiet beyond that. */
+  var backdrops = [];
+  if (guessed && layers.length <= 200) {
+    var keep = [];
+    for (i = 0; i < layers.length; i++) {
+      if (AELL_fillsFrame(layers[i], comp)) backdrops.push(layers[i].name);
+      else keep.push(layers[i]);
+    }
+    if (backdrops.length > 0 && keep.length >= 2) layers = keep;
+    else backdrops = [];
+  }
 
   var n = layers.length;
   if (n < 2) return AELL_err("Need at least 2 layers for a grid (got " + n + ")");
@@ -4777,13 +4865,27 @@ AELL_TOOLS.grid_layout = function (args) {
     }
     placed.push({ layer: layer.name, row: row, col: col });
   }
-  return AELL_okay({
+  var res = {
     control: ctrl.name, columns: cols, rows: rows,
     sliders: ["Grid X Spacing", "Grid Y Spacing", "Grid Columns"],
     initialSpacing: [defX, defY], placed: placed,
     note: "Move '" + ctrl.name + "' to move the whole grid; its sliders " +
           "control X/Y spacing AND column count live"
-  });
+  };
+  if (backdrops.length > 0) {
+    var one = backdrops.length === 1;
+    res.skipped = backdrops;
+    res.skippedNote = "Left out of the grid: " + backdrops.join(", ") +
+      " — " + (one ? "it fills" : "they fill") + " the whole " +
+      comp.width + "x" + comp.height + " frame, so " +
+      (one ? "it is a backdrop" : "they are backdrops") + ", not grid " +
+      "content. No 'layers' list was given and nothing was selected, so " +
+      "the grid used the comp's content. To grid " +
+      (one ? "it" : "them") + " too, re-call with layers: [\"" +
+      backdrops.join("\", \"") + "\", ...] naming every layer you want " +
+      "in the grid.";
+  }
+  return AELL_okay(res);
 };
 
 AELL_TOOLS.apply_expression_preset = function (args) {

@@ -249,11 +249,10 @@
             "'Grid X Spacing'/'Grid Y Spacing'/'Grid Columns' sliders " +
             "drive spacing AND column count live, and the grid centers " +
             "on the null's position (all expressions generated " +
-            "host-side). Creates its OWN control null — never add_null " +
-            "first. Omit 'layers' to use the selection; with nothing " +
-            "selected it grids ALL content layers in the comp (nulls/" +
-            "cameras/lights excluded). Re-running re-flows the rig.",
-      args: "{comp?: string, layers?: [name|index] (omit = user's selection), columns?: int (default ~square; 1 = column, n = row), spacingX?: px, spacingY?: px, controlLayer?: string = 'GRID CTRL'}" },
+            "host-side). Omit 'layers' to use the selection; with nothing " +
+            "selected it grids ALL content layers in the comp. " +
+            "Re-running re-flows the rig.",
+      args: "{comp?: string, layers?: [name|index] (omit = user's selection), columns?: int ('3 by 2' = 3; default ~square; 1 = column, n = row), spacingX?: px, spacingY?: px, controlLayer?: string = 'GRID CTRL'}" },
     { name: "apply_expression_preset", mutating: true,
       desc: "Apply a known-good expression. Presets: wiggle (frequency/" +
             "amplitude as numbers OR freqControl/ampControl {layer, effect} " +
@@ -795,8 +794,9 @@
       "  stagger_layers {} with no arguments.",
       "- grid_layout creates its own control null (controlLayer only",
       "  names it) — NEVER call add_null before gridding. With nothing",
-      "  selected it grids ALL content layers, so 'arrange all layers in",
-      "  a grid' is ONE grid_layout call with 'layers' omitted. Never",
+      "  selected it grids ALL content layers except a full-frame",
+      "  backdrop, so 'arrange all layers in a grid' is ONE",
+      "  grid_layout call with 'layers' omitted. Never",
       "  pass layers: [] — omit the argument instead.",
       "- SCOPE: do ONLY what the user asked, then stop. Never bolt on",
       "  extra steps they did not request (grids, effects, styling,",
@@ -819,10 +819,11 @@
       "- Emit AT MOST 8 commands per reply and keep them compact — output",
       "  space is limited and an oversized reply gets cut off. More work?",
       "  Stop after 8 and continue after TOOL RESULTS.",
-      "- 'each X' / 'every X' / 'all the Xs' names a CLASS of layers —",
-      "  pass {layers: [...]} with those exact names from the project",
-      "  state (e.g. every \"Square*\" layer), NEVER the selection: the",
-      "  user may have a control null selected from inspecting sliders.",
+      "- 'each X' / 'every X' / 'all the Xs' / 'the X layers' names a",
+      "  CLASS of layers — pass {layers: [...]} with those exact names",
+      "  from the project state (e.g. every \"Square*\" layer), NEVER the",
+      "  selection: the user may have a control null selected from",
+      "  inspecting sliders.",
       "  Control nulls (GRID CTRL etc.) are never animation targets",
       "  unless the user names them.",
       "- BATCH, NEVER LOOP: when many layers need the same change, one",

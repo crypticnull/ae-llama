@@ -1961,14 +1961,40 @@ this order, one bullet per pass:
     and the tenth leaked comp pushed the comp that step looks for off
     the end of it — 627/628. Cleanup step added; the final check now
     also flags any un-baselined `AELL Self-Test…` item.
-  - THEN, in priority order: row 30 casual (`grid_layout` with no
-    `layers` grids the BACKGROUND in), then a rollback throwing away the
-    calls that WORKED when a later one fails on a parameter name.
-    `link_property {layer: [six names]}` -> "invalid numeric result
-    (divide by zero?)" is CLOSED by 0.11.15 above (grounded, and pinned
-    by a real-AE self-test step). A `--variants` re-run of row 35 is
-    what would actually close it: the rules bullet is unmeasured in the
-    field.
+  - ~~**row 30 casual: `grid_layout` with no `layers` grids the
+    BACKGROUND in**~~ DONE 2026-09-03 (0.11.22), with the HEADLINE half
+    left open on purpose. "line the Icon layers up in a neat 3 by 2
+    grid" arrived as `grid_layout {spacingX: 40, spacingY: 40}` — no
+    `layers`, no `columns` — and headless there is no selection, so the
+    fallback gridded every content layer and the comp's full-frame
+    BACKGROUND took a cell with a rig expression on its Position.
+    BEHAVIOUR: a layer that covers the WHOLE frame is a backdrop, not
+    grid content, so a GUESSED grid now leaves it out and NAMES it
+    (`skipped` + a paste-ready `layers: [...]` note). Skipped rather
+    than warned because grid_layout cannot un-rig what it already
+    rigged. New `AELL_compBoxOf` / `AELL_fillsFrame` (the corner mapping
+    get_bounds already reports). One-sided: an explicit `layers` list, a
+    live selection, a 3D chain (no honest comp box exists there) and a
+    comp where dropping backdrops would leave under 2 layers are all
+    untouched; the scan stops at 200 layers. ROUTING: the class-of-
+    layers rule's phrase list was one shape short — `'the X layers'`
+    added — and '3 by 2' = columns: 3 went on the ARGS line, which
+    compact never touches. A NET CUT, 58947 -> 58926, paid by
+    grid_layout's doc dropping its "never add_null first" sentence (the
+    rules bullet says it word for word) and its "(nulls/cameras/lights
+    excluded)" roster (the receipt now names what was left out); compact
+    +64, written down in the log. A non-full-frame text layer is
+    indistinguishable from a tile, so the HEADLINE half says nothing.
+    Harness 629 -> 639. It found a lint false alarm on the way: the ES3
+    ternary lint's ±25-line window counted an `ADBE ` EXAMPLE in a doc
+    string as evidence, so a one-line shift turned a tool's args line
+    into a failure — `^\s*args: "` lines are now excluded, proved by two
+    assertions.
+  - THEN, in priority order: a rollback throwing away the calls that
+    WORKED when a later one fails on a parameter name, then a
+    `--variants` re-run of rows 30 and 35 — the phrase-list additions
+    for both are unmeasured in the field, and that run is what would
+    close either of them for real.
 - **DEFERRED until a sandbox design exists:** D/F/H3 rows (project
   mutation, renders, mass-delete) — wiring them against the live
   project is the harm the whitelist cannot contain. Also deferred:

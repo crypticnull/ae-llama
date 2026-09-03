@@ -348,6 +348,12 @@ let mkMasks = {};
 // numbers the model had, so four phrasings masked a 100x100 layer with
 // 1920x1080 and the tool said ok.
 let mkSizes = {};
+// grid_layout's fallback picks the layer list ITSELF, so the canned host
+// has to hold the same two facts the real one reads out of AE: what is in
+// the comp (in stacking order) and how big each one is. Without them no
+// stub could see a backdrop being gridded in — the blindness row 30 hit.
+let gridStack = {};
+let gridExpr = {};
 // The mask rig reads back what it just wrote (numKeys after a refusal),
 // so the canned host has to remember how many keys each mask carries.
 let maskKeys = {};
@@ -2390,13 +2396,63 @@ function cannedOk(tool, args) {
       out.renamedCount = renamed.length;
       return out;
     }
-    case "grid_layout":
+    case "grid_layout": {
       // The rig it builds DRIVES Position and ignores whatever value sits
       // underneath — every later write to those layers is swallowed.
-      (((args && args.layers) || SQUARES)).forEach((nm, i) =>
-        markDriven(nm, "position", [320 + (i % 3) * 320, 180, 0]));
-      return { sliders: ["Grid X Spacing", "Grid Y Spacing",
-                         "Grid Columns"] };
+      const gComp = String((args && args.comp) || "");
+      const gNamed = args && args.layers;
+      // Only the backdrop rig comp is modelled layer-by-layer; every
+      // other grid in the suite is the nine squares.
+      const gRig = /Self-Test Grid BG/.test(gComp);
+      let gCand = gNamed ? gNamed.map(String)
+                         : ((gRig && gridStack[gComp]) || SQUARES).slice();
+      // Work the backdrop out from the same geometry the host does, or
+      // this stub is blind to the whole class: a layer that covers the
+      // WHOLE frame is not grid content, and only a GUESSED list is
+      // judged (an explicit 'layers' is the caller's own choice).
+      const gSkipped = [];
+      const gProps = compProps[gComp];
+      if (gRig && !gNamed && gProps) {
+        const gKeep = [];
+        for (const nm of gCand) {
+          const sz = mkSizes[gComp + "|" + nm];
+          if (sz && sz.width >= gProps.width && sz.height >= gProps.height) {
+            gSkipped.push(nm);
+          } else gKeep.push(nm);
+        }
+        if (gSkipped.length > 0 && gKeep.length >= 2) gCand = gKeep;
+        else gSkipped.length = 0;
+      }
+      const gCtrl = String((args && args.controlLayer) || "GRID CTRL");
+      const gPlaced = [];
+      gCand.forEach((nm, i) => {
+        markDriven(nm, "position", [320 + (i % 3) * 320, 180, 0]);
+        // The real rig's expression is longer than get_property's
+        // 200-char cap, so what a caller can actually read back is the
+        // HEAD of it — the control-null lookup and the Columns slider.
+        if (gRig) gridExpr[gComp + "|" + nm] =
+          'var cols = Math.max(1, Math.min(3, Math.round(thisComp.layer("' +
+          gCtrl + '").effect("Grid Columns")(1))));';
+        gPlaced.push({ layer: nm, row: Math.floor(i / 3), col: i % 3 });
+      });
+      const gOut = { sliders: ["Grid X Spacing", "Grid Y Spacing",
+                               "Grid Columns"], placed: gPlaced,
+                     control: gCtrl };
+      if (gSkipped.length > 0) {
+        const one = gSkipped.length === 1;
+        gOut.skipped = gSkipped;
+        gOut.skippedNote = "Left out of the grid: " + gSkipped.join(", ") +
+          " — " + (one ? "it fills" : "they fill") + " the whole " +
+          gProps.width + "x" + gProps.height + " frame, so " +
+          (one ? "it is a backdrop" : "they are backdrops") + ", not grid " +
+          "content. No 'layers' list was given and nothing was selected, " +
+          "so the grid used the comp's content. To grid " +
+          (one ? "it" : "them") + ' too, re-call with layers: ["' +
+          gSkipped.join('", "') + '", ...] naming every layer you want ' +
+          "in the grid.";
+      }
+      return gOut;
+    }
     case "link_property": {
       // Same shape: the linked property now reads from the slider.
       markDriven(args && args.layer, args && args.property, 22.2);
@@ -2415,6 +2471,18 @@ function cannedOk(tool, args) {
       return out;
     }
     case "get_property": {
+      // A gridded layer's Position carries the rig expression; a layer
+      // the grid left OUT carries none. Reading that back is the only
+      // proof the backdrop was really spared.
+      if (String((args && args.property) || "") === "position" &&
+          /Self-Test Grid BG/.test(String((args && args.comp) || ""))) {
+        const gx = gridExpr[String(args.comp) + "|" + String(args.layer)];
+        const gRead = { layer: args.layer, property: "Position",
+                        matchName: "ADBE Position", value: [320, 180, 0],
+                        numKeys: 0 };
+        if (gx) gRead.expression = gx;
+        return gRead;
+      }
       // What import_as_layer wrote, read back the way the suite reads it:
       // the report is not evidence, the property is.
       const frS = frScales[((args && args.comp) || "") + "|" +
@@ -3152,6 +3220,10 @@ function cannedOk(tool, args) {
       mkSizes[((args && args.comp) || "") + "|" + ((args && args.name) || "")] =
         { width: (args && args.width) || 100,
           height: (args && args.height) || 100 };
+      // Adding a layer puts it on TOP, which is index 1 in AE.
+      gridStack[(args && args.comp) || ""] =
+        [String((args && args.name) || "solid")].concat(
+          gridStack[(args && args.comp) || ""] || []);
       if (args && /Self-Test Frame/.test(String(args.comp || ""))) {
         frLayers[args.comp] = (frLayers[args.comp] || []);
         frLayers[args.comp].unshift(String(args.name || "solid"));
@@ -5041,13 +5113,19 @@ SelfTest.run({
     mattes = {};
     mtRig = {};
     maskKeys = {}; motion = {};
-    mkMasks = {}; mkSizes = {};
+    mkMasks = {}; mkSizes = {}; gridStack = {}; gridExpr = {};
     batchLayers = 0; batchFx = {}; batchBlur = null;
     dsOn = false; dsDistance = 5;
     batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetWpRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetBoundsRig(); resetPresetRig(); resetRqRig(); resetAuRig(); resetFrRig(); resetCapRig(); resetMgRig();
+    // ONE call fails, not one TOOL: the suite grids more than once (the
+    // nine squares, then the backdrop rig), and failing every grid_layout
+    // would fail four steps and stop measuring what this asserts — that a
+    // single failing step surfaces and the run still finishes its cleanup.
+    let boomLeft = 1;
     SelfTest.run({
       callHostTool(tool, args, cb) {
-        if (tool === "grid_layout") {
+        if (tool === "grid_layout" && boomLeft > 0) {
+          boomLeft--;
           cb({ ok: false, error: "boom" });
           return;
         }
@@ -5075,7 +5153,7 @@ SelfTest.run({
         mattes = {};
         mtRig = {};
         maskKeys = {}; motion = {};
-        mkMasks = {}; mkSizes = {};
+        mkMasks = {}; mkSizes = {}; gridStack = {}; gridExpr = {};
         batchLayers = 0; batchFx = {}; batchBlur = null;
     dsOn = false; dsDistance = 5;
         batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetWpRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetBoundsRig(); resetPresetRig(); resetRqRig(); resetAuRig(); resetFrRig(); resetCapRig(); resetMgRig();
