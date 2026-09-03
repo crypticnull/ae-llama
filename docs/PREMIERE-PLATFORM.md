@@ -338,6 +338,39 @@ Consequence for anything that has to drive Premiere unattended: get the
 project from ExtendScript, never from the command line, and never
 inherit the last run's project file.
 
+### 2026-09-03 - a sequence WITHOUT a dialog, and how the route was lost
+
+Unattended run `docs/measured/ppro-probe-2026-09-03-0413.json`, **26.3.2
+/ CEP 12.0.1**. MEASURED:
+
+- **`importFiles` + `createNewSequenceFromClips` makes a sequence with
+  no dialog and no preset.** Importing one still
+  (`extension/icons/icon-normal.png`) and handing that project item to
+  `createNewSequenceFromClips("AELL PROBE SEQ", [item])` produced an
+  active sequence with **3 video tracks**, first try. This is the route
+  to use unattended: `createNewSequence(name, "")` opens the New
+  Sequence dialog and `newBarsAndTone` answered `Illegal Parameter type`
+  at every timebase tried.
+- **The bars route was never the problem.** The step's earlier
+  `Illegal Parameter type` was attributed to
+  `createNewSequenceFromClips`; with a real imported clip that same call
+  succeeds, so the rejected parameter was whatever `newBarsAndTone`
+  returns (or does not return) on this build, not the sequence call.
+- **How it stayed unmeasured for a day:** the job carried `seedMedia`,
+  and BOTH doors built the battery's arguments from a hand-maintained
+  whitelist that did not name it. The route never ran, and because the
+  guard is `if (args.seedMedia)` it did not appear in the step's own
+  `tried` list either - so the evidence said "not applicable" where the
+  truth was "never delivered". Both doors now forward every job field
+  they do not own themselves; `tests/test-probe-bundle.js` §8 fails if
+  either one goes back to a list.
+- **`mogrt` is measured for the first time and FAILS**: `importMGT`
+  landed (track clip count 1 -> 2) but the probe read back
+  `clips[after - 1]` and got **`icon-normal.png`**, the seed still - so
+  the last index is not the clip just added, and `getMGTComponent`
+  returned null on the wrong clip. Next 12b pass; controller read-back
+  on this build stays UNMEASURED until then.
+
 ### The rest
 
 Not yet run. P0 writes into `%APPDATA%\AE-Llama\probes\`:

@@ -578,5 +578,92 @@ function hostsIn(xml) {
          "hostFacts records whether each of the two routes exists at all");
 }
 
+// ------------------------------------ 8. the job reaches the battery
+//
+// Both doors used to build the battery's arguments from a hand-written
+// whitelist, and there were two copies of it. The job grew `seedMedia`
+// and `readyTimeoutMs`; neither whitelist grew with it; the dialog-free
+// sequence route never ran on a single unattended run and never showed
+// up in the step's own `tried` list, so the failure read as "that route
+// does not apply here" instead of "that route was never given its
+// argument". This section makes a dropped field a red test rather than
+// a wasted Premiere launch.
+{
+  const BEGIN = "/* BATTARGS-SHARED-BEGIN";
+  const END = "/* BATTARGS-SHARED-END */";
+  function shared(file) {
+    const src = read(file);
+    const a = src.indexOf(BEGIN);
+    const b = src.indexOf(END);
+    return (a === -1 || b === -1) ? null : src.slice(a, b + END.length);
+  }
+  const doorPanel = shared(path.join(PROBE, "index.html"));
+  const door3 = shared(path.join(HARNESS, "index.html"));
+
+  assert(doorPanel && door3,
+         "both doors carry the shared battArgs block");
+  assert(doorPanel && door3 && doorPanel === door3,
+         "and the two copies are byte-identical: a whitelist maintained " +
+         "twice is a whitelist that goes stale once");
+
+  // The PowerShell runner is the only author of a real job, so it -- not
+  // this test's imagination -- says which fields have to survive.
+  const ps = read(path.join(ROOT, "scripts", "run-ppro-probe.ps1"));
+  const jobBlock = /\$job\s*=\s*\[ordered\]@\{([\s\S]*?)\n\}/.exec(ps);
+  assert(jobBlock, "run-ppro-probe.ps1 still builds the job as one literal");
+  const jobKeys = (jobBlock ? jobBlock[1].split(/\r?\n/) : [])
+    .filter(function (l) { return !/^\s*#/.test(l); })
+    .map(function (l) { const m = /^\s*([A-Za-z_]\w*)\s*=/.exec(l); return m && m[1]; })
+    .filter(Boolean);
+  assert(jobKeys.indexOf("seedMedia") !== -1 &&
+         jobKeys.indexOf("readyTimeoutMs") !== -1,
+         "the job it writes carries seedMedia and readyTimeoutMs -- the " +
+         "two the old whitelist lost");
+
+  if (door3) {
+    // Run the real block, not a regex impression of it.
+    const battArgsOf = new Function(door3 + "\nreturn AELLP_battArgs;")();
+    const job = {};
+    jobKeys.forEach(function (k, i) { job[k] = "v" + i; });
+    const out = battArgsOf(job, "P:/progress.json", "M:/fallback.mogrt");
+
+    const runnerOwned = ["probeJsx", "probe", "args", "createdAt", "__claimed"];
+    const lost = jobKeys.filter(function (k) {
+      return runnerOwned.indexOf(k) === -1 && !(k in out);
+    });
+    assert(lost.length === 0,
+           "every job field the runner does not own reaches the battery" +
+           (lost.length ? " (lost: " + lost.join(", ") + ")" : ""));
+    assert(out.seedMedia === job.seedMedia &&
+           out.readyTimeoutMs === job.readyTimeoutMs,
+           "including seedMedia and readyTimeoutMs, by value");
+    assert(!("probeJsx" in out) && !("args" in out),
+           "and the runner's own fields stay with the runner");
+    assert(out.progressPath === "P:/progress.json",
+           "progressPath comes from the door, which is the only one that " +
+           "knows where the breadcrumb goes");
+    assert(battArgsOf({}, null, "M:/fallback.mogrt").mogrtPath ===
+             "M:/fallback.mogrt" &&
+           battArgsOf({ mogrtPath: "J:/from-job.mogrt" }, null,
+                      "M:/fallback.mogrt").mogrtPath === "J:/from-job.mogrt",
+           "the panel's found .mogrt is a FALLBACK, never an override");
+
+    // A future field must not need either door edited, which is the
+    // whole point of dropping the whitelist.
+    assert(battArgsOf({ somethingNew: 7 }, null, null).somethingNew === 7,
+           "a field neither door has heard of is forwarded anyway");
+  }
+
+  [[PROBE, "the visible panel"], [HARNESS, "the door-3 runner"]]
+    .forEach(function (pair) {
+      const code = stripJs(read(path.join(pair[0], "index.html")));
+      assert(/battArgs\s*=\s*(job\.args\s*\|\|\s*)?AELLP_battArgs\(/.test(code),
+             pair[1] + " builds battArgs with the shared function");
+      assert(!/battArgs\s*=\s*(job\.args\s*\|\|\s*)?\{/.test(code),
+             "and not from an object literal listing the fields it " +
+             "remembered (" + pair[1] + ")");
+    });
+}
+
 console.log(failed ? "\nTESTS FAILED" : "\nALL TESTS PASSED");
 process.exitCode = failed ? 1 : 0;

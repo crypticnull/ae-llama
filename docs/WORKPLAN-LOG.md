@@ -16552,3 +16552,108 @@ solid source both), and the harness runs live entirely in the suite's own
 No Premiere this pass. A llama-server was started briefly by
 `context-budget-probe.js` and is gone — checked, no `llama-server`
 process is running. No ComfyUI.
+
+## 2026-09-03 (local, real AE + real Premiere) - WORKPLAN 12b: the `sequence` step was never given its argument (no bump)
+
+**Item:** section 12b, the one named open failure - `sequence` STILL
+FAILING, first root cause "door 3 drops half the job". Alternation rule
+satisfied: the previous entry was a mask pass, not a 12b pass.
+
+**The AE harness was green before I touched anything (698/698)**, so
+this was not a harness-repair pass.
+
+### What was actually wrong
+
+Both doors built the battery's arguments from a hand-maintained
+whitelist naming six job fields - `probe/com.cptk.aellama.harness/
+index.html` and a SECOND copy in `probe/com.cptk.aellama.probe/
+index.html`. The job had grown `seedMedia` and `readyTimeoutMs`; neither
+whitelist grew with it. So the dialog-free primary route (`importFiles`
++ `createNewSequenceFromClips`) had never run on any unattended run.
+
+The nastiest part is the shape of the evidence. The route is guarded by
+`if (args.seedMedia)`, so with the field dropped it did not appear in
+the step's own `tried` list AT ALL - and a route missing from `tried`
+reads as "not applicable to this host", which is the opposite of the
+truth, "never delivered". The failure that WAS listed then got blamed on
+the wrong call (see below).
+
+### The fix
+
+One shared block, byte-identical in both doors, marked
+`BATTARGS-SHARED-BEGIN` / `-END`: copy every job field and name only
+what the RUNNER owns (`probeJsx`, `probe`, `args`, `createdAt`,
+`__claimed`). `progressPath` still comes from the door, because only the
+door knows where its breadcrumb goes, and the panel's auto-found `.mogrt`
+stays a FALLBACK rather than an override. A future job field now reaches
+the battery with neither door edited.
+
+### What the re-run measured
+
+`docs/measured/ppro-probe-2026-09-03-0413.json`, 26.3.2 / CEP 12.0.1:
+
+- **`sequence` ok** - `via: created`, `AELL PROBE SEQ`, **3 video
+  tracks**, and the WORKED row is `importFiles(seed still) +
+  createNewSequenceFromClips` on the FIRST try. No dialog.
+- **The second suspected cause did not exist.** The workplan note said
+  `createNewSequenceFromClips` was what answered `Illegal Parameter
+  type` and warned that forwarding `seedMedia` might not be enough.
+  Given a real imported clip that same call succeeds, so the rejected
+  parameter was whatever `newBarsAndTone` hands back on this build. The
+  bars route was not even reached this run.
+- `hostFacts`, `qe`, `project`, `history`, `cleanup` all still ok;
+  Premiere closed by itself.
+
+### The new failure this unblocked (next 12b pass's item)
+
+`mogrt` ran for the first time and FAILED: `importMGT` landed (track
+clip count 1 -> 2) but `mogrtAccept` reads the clip back as
+`clips[after - 1]` and got **`icon-normal.png`** - the seed still the
+sequence was built from. So the last index is not the clip just added,
+and `getMGTComponent` was asked of the wrong clip and returned null.
+Filed in WORKPLAN 12b with the fix direction: diff the track before and
+after instead of assuming position. Controller read-back on 26.3.2 stays
+UNMEASURED.
+
+### Verification
+
+- **`tests/test-probe-bundle.js` §8 is new and 6 assertions of it are
+  RED against the reverted doors** (checked by `git stash push --
+  probe/`). It extracts the shared block from both files, asserts they
+  are byte-identical, `new Function`s the REAL block and runs it against
+  a job built from the keys `run-ppro-probe.ps1` actually writes - so
+  the PowerShell runner, not the test's imagination, says which fields
+  must survive. A field lost in future names itself in the failure.
+- Required 12b lints green: `test-es3-syntax`, `test-es3-ternary`,
+  `test-powershell-syntax`, `test-manifest-xml`, `test-probe-bundle`.
+- Full stub sweep by exit code: **0 red**.
+- **Real AE harness 698/698 PASSED**, before and after.
+- `docs/PREMIERE-PLATFORM.md` section 4 has the new measurement.
+- **No version bump**, per 12b's rule: `extension/` was not touched, and
+  bumping would push a no-op update to every installed panel.
+
+### Notes / assumptions
+
+- **Assumed the runner-owned key list is those five.** `args` stays on
+  it because it is the explicit-override escape hatch and forwarding it
+  into itself would be circular; the other four are provenance or the
+  door's own plumbing. Anything else is the battery's business.
+- **Assumed a byte-identical duplicated block beats a shared file.** The
+  two bundles are junctioned separately and a relative path across them
+  would break; the test enforcing identity is what makes the duplication
+  safe, and it is the enforcement that was missing before, not the
+  single source.
+- The panel door's `battArgs` now also honours `job.args` as an
+  override, which only door 3 did before. Same job, same behaviour,
+  whichever door claims the file - which is what the door-3 comment
+  always claimed.
+
+### Machine state
+
+**After Effects was never closed and its project was never closed.** The
+AE harness ran twice in its own `ST ` namespace and its end-of-run check
+confirmed nothing was left behind. Premiere WAS launched and closed by
+`run-ppro-probe.ps1` (that is the script's own design) and worked only in
+the scratch `%APPDATA%\AE-Llama\probes\AELL_PROBE_SCRATCH.prproj`; the
+cleanup step removed `AELL PROBE 1/2/3` and `AELL PROBE SEQ`. No
+llama-server, no ComfyUI.

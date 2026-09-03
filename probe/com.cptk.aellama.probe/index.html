@@ -611,6 +611,42 @@ of the panel. Read-only unless you press a button marked MUTATES.</p>
     }
   }
 
+  /* BATTARGS-SHARED-BEGIN (both doors keep this block byte-identical) */
+  /*
+   * THE JOB'S FIELDS ARE THE BATTERY'S ARGUMENTS. What stood here was a
+   * hand-maintained whitelist naming six of them, in two copies, and it
+   * silently dropped `seedMedia` and `readyTimeoutMs` the day the job
+   * grew them: the dialog-free sequence route (importFiles +
+   * createNewSequenceFromClips) therefore never ran on ANY unattended
+   * run, and did not even appear in the step's own `tried` list -- the
+   * worst shape a loss can take, because it reads as "not applicable"
+   * rather than "never delivered".
+   *
+   * So copy everything and name only what the RUNNER itself owns. A new
+   * job field then reaches the battery without either door being
+   * edited, and a field the battery ignores costs nothing.
+   */
+  var AELLP_RUNNER_KEYS = {
+    probeJsx: 1,    /* which .jsx to evalFile: the runner's own business */
+    probe: 1,       /* which probe to call */
+    args: 1,        /* an explicit override, handled at the call site */
+    createdAt: 1,   /* provenance */
+    __claimed: 1    /* the claim path, added after the file was read */
+  };
+  function AELLP_battArgs(job, progressPath, mogrtFallback) {
+    var out = {}, k;
+    for (k in job) {
+      if (Object.prototype.hasOwnProperty.call(job, k) &&
+          !AELLP_RUNNER_KEYS[k]) {
+        out[k] = job[k];
+      }
+    }
+    out.progressPath = progressPath || null;
+    if (!out.mogrtPath) { out.mogrtPath = mogrtFallback || null; }
+    return out;
+  }
+  /* BATTARGS-SHARED-END */
+
   function runJob(job) {
     note("unattended run: job claimed, measuring...");
     results.job = { via: "visible panel", args: job };
@@ -636,15 +672,9 @@ of the panel. Read-only unless you press a button marked MUTATES.</p>
         .join(probeDir(), "job-progress.json").replace(/\\/g, "/");
     } catch (eP) {}
 
-    var battArgs = {
-      allowMutate: job.allowMutate === true,
-      scratchProject: job.scratchProject || null,
-      makeSequence: job.makeSequence === true,
-      skip: job.skip || null,
-      progressPath: progressPath,
-      mogrtPath: job.mogrtPath ||
-                 (results.mogrtSearch && results.mogrtSearch.picked) || null
-    };
+    var battArgs = job.args || AELLP_battArgs(
+      job, progressPath,
+      results.mogrtSearch && results.mogrtSearch.picked);
     probe("battery", battArgs, function (err, data) {
       results.battery = err ? { error: err } : data;
       // The ScriptPath measurement costs nothing and is a fact this

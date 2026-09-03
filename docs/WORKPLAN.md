@@ -2508,23 +2508,25 @@ has been running it by hand all day and should not have to again.
   `project`): three `rootItem.createBin` calls, bins created, and the
   cleanup removed them. The 1-vs-3-undo-entries question still needs a
   human to look at the History panel - the step says so itself.
-- `sequence`: STILL FAILING, and the next 12b pass's item. Two causes,
-  and the first is new: **door 3 drops half the job.** The job carries
-  `seedMedia` and `readyTimeoutMs`, but the `battArgs` whitelist in
-  `probe/com.cptk.aellama.harness/index.html:110` (and the same
-  hand-maintained copy in `probe/com.cptk.aellama.probe/index.html:639`)
-  forwards neither - so the dialog-free primary route
-  (`importFiles` + `createNewSequenceFromClips`) has NEVER RUN on any
-  unattended run, and does not even appear in the step's `tried` list.
-  Second: the bars route's error is misattributed. The cleanup removes
-  three `AELL PROBE BARS` items every run, so `newBarsAndTone`
-  SUCCEEDS at all three timebases and **`createNewSequenceFromClips`
-  is what answers "Illegal Parameter type"** - which means forwarding
-  `seedMedia` alone may not be enough, because the seed route ends in
-  that same call. Fix the dropped args first (a whitelist that silently
-  loses fields is the defect either way), then measure what
-  `createNewSequenceFromClips` actually wants.
-- `mogrt` is blocked by `sequence`, not measured.
+- ~~`sequence`~~ **PASSES 2026-09-03** (run `-0413`), and forwarding the
+  dropped args was the whole fix: the seed route worked first try,
+  3 video tracks, so the second suspected cause did not exist.
+  `createNewSequenceFromClips` was NOT what answered "Illegal Parameter
+  type" - given a real imported clip it succeeds, so the rejected
+  parameter was `newBarsAndTone`'s own. Both doors now forward every
+  job field they do not own instead of naming six of them twice; a
+  whitelist maintained in two files is what lost `seedMedia`, and
+  `tests/test-probe-bundle.js` §8 now goes red if either door returns
+  to one.
+- `mogrt`: **MEASURED AND FAILING 2026-09-03**, the next 12b pass's
+  item. `importMGT` landed (track clip count 1 -> 2) but
+  `mogrtAccept` reads the clip back as `clips[after - 1]` and got
+  **`icon-normal.png`** - the seed still that the sequence was built
+  from - so `getMGTComponent` was asked of the wrong clip and returned
+  null. The last index is not "the one just added". Identify the new
+  clip by diffing the track before and after (name plus
+  `start`/`nodeId`), do not assume position, and only then judge
+  whether the controller round-trip is readable on this build.
 
 ## Out of scope for the local session (remote builds these)
 
