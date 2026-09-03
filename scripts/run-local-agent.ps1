@@ -204,6 +204,16 @@ and write down what you assumed.
 
 Hard limits for this session:
 - Do exactly ONE item, then stop. The loop will start you again.
+- NEVER quit or close After Effects, and never close its project. Not as
+  cleanup, not to "leave the machine tidy", not between steps. Leave AE
+  running exactly as you found it: the suite already deletes the scratch
+  comps it made, and that is the whole of the cleanup you owe.
+  Quitting it costs the next pass a cold launch, and -- because the
+  project is dirty by design -- raises "Save changes to Untitled
+  Project.aep before closing?", which is a MODAL: no -r script runs
+  while it is up, so the pass after yours does nothing at all. Two
+  nights were lost to exactly this. If AE is wedged, say so in the log
+  and stop; do not close it.
 - One failed attempt per item per night: if the log shows an item was
   already attempted tonight and blocked, do NOT retry it -- pick the
   next unfinished item instead. A blocked item is a log entry and a
@@ -296,7 +306,11 @@ if (-not $NoDialogWatchdog) {
         (Join-Path $PSScriptRoot 'lib\host-dialogs.ps1'),
         @('Untitled Project', 'mogrt-probe-scratch', 'AELL_PROBE_SCRATCH'),
         @('AfterFX', 'Adobe Premiere Pro', 'Adobe Premiere'),
-        10
+        # 5s, not 10. A sweep is cheap -- it enumerates top-level
+        # windows and only reads text out of an actual #32770 -- and
+        # the window that matters is the one between a pass asking AE
+        # to close and that pass giving up on it.
+        5
     Write-Log ('Dialog watchdog running (job ' + $watchdog.Id + '): a ' +
                'save-changes prompt on a project this harness owns is ' +
                'answered Do not Save; anything else is cancelled, which ' +

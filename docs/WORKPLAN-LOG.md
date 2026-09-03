@@ -14324,3 +14324,37 @@ Nothing else was left unattempted this pass. Nothing is blocked.
   teardown, its off-switch, the detach forwarding, and that every owned
   name is one a script here really writes. Harness 71/72.
 - No `extension/` change, so NO BUMP.
+
+## 2026-09-03 (remote session) — who was closing After Effects: the pass
+
+- Owner, naming the sequence exactly: "It ran the self test, closed the
+  comps, and then trued to close the app resulting in the hanging box."
+  That is the missing half of the previous entry. I had established that
+  no SCRIPT in this repo quits AE and stopped there, treating the cause
+  as unknown and only handling the symptom. The cause is the `claude`
+  PASS itself: it finishes the suite and closes AE as cleanup.
+- Confirmed by elimination, not assumption: `scripts/ae-selftest.jsx` has
+  no quit (its only `close()` calls are on file handles);
+  `extension/js/selftest.js` has none; `hostscript.jsx`'s only
+  `executeCommand` calls are 16/17 (Undo/Redo) and the audio-to-keyframes
+  command; nothing under `scripts/*.ps1` closes AfterFX. The one actor
+  left is the pass.
+- Why it costs the NEXT pass and not this one: the suite leaves the
+  project dirty by design, so quitting raises the save prompt, and no
+  `-r` script runs while a modal is up. The pass that quits AE finishes
+  fine; the one after it does nothing at all.
+- FIX, at the cause: the per-iteration brief in `run-local-agent.ps1`
+  now forbids it outright — never quit or close After Effects, never
+  close its project, not as cleanup, not to leave the machine tidy. It
+  says WHY (cold launch for the next pass, and the modal that stops it),
+  because a rule a pass can reason its way around is not a rule. If AE
+  is wedged, log it and stop.
+- The watchdog from the previous entry stays and is now the belt to this
+  braces: it answers whoever raises the prompt, including a pass that
+  ignores the brief. Its sweep is 5 s rather than 10 — a sweep only
+  reads text out of an actual #32770, so it is cheap, and the interval
+  that matters is between a pass asking AE to close and that pass giving
+  up on it.
+- `tests/test-host-dialogs.js` asserts the brief carries the rule and
+  its reasoning. Harness 71/72.
+- No `extension/` change, so NO BUMP.

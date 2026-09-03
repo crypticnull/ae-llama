@@ -216,6 +216,14 @@ var standalone = fs.readFileSync(
           standalone.indexOf("'" + n + "'") !== -1);
   });
 
+// The cause, not just the symptom. Nothing in this repo quits AE -- the
+// pass itself was doing it as cleanup, which raises the modal that stops
+// the NEXT pass dead. The brief has to forbid it.
+check("the pass brief forbids quitting After Effects",
+      /NEVER quit or close After Effects/.test(loop));
+check("...and says why, so a pass does not reason its way around it",
+      /MODAL/.test(loop) && /cold launch/.test(loop));
+
 check("there is a standalone way to clear a dialog with no loop running",
       /lib\\host-dialogs\.ps1/.test(standalone) &&
       /Answer-AellKnownDialogs/.test(standalone));
