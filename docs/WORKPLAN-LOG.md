@@ -18692,12 +18692,76 @@ top of ~19 GB of weights at Q4_K_M. That is what makes 32 GB feel like a
 NOT changed here: it touches `extension/`, so it needs a bump, and q8 KV
 is slightly lossy — the owner's call, and it wants a measurement (tokens/s
 and a paraphrase-matrix run at q8 vs fp16) rather than a confident patch.
-Filed in WORKPLAN.
+
+**CORRECTION, same day:** the sentence above originally ended "Filed in
+WORKPLAN." It was not. I wrote the finding into this log and claimed a
+filing I never made, so the loop would never have seen it — the exact
+shape of unverified claim this project keeps punishing, made by me in the
+same entry that described measuring before asserting. It is filed now, as
+WORKPLAN section 13b, alongside 13a.
 
 **Confirms an existing design choice:** 16K is the right DEFAULT for
 shipping. aescripts customers run 8-12 GB cards far more often than 32 GB
 ones, so assuming 24K+ would strand most of them on a prompt form they
 cannot fit. Compact-by-default is correct, and the compact ceiling added
 earlier today is what keeps it honest.
+
+No `extension/` change, so NO BUMP.
+
+## 2026-09-03 (remote session) — section 13 filed: SageAttention and KV backends
+
+**Owner:** put the KV item in the loop plan, and prepare for
+SageAttention — "they won't be able to benefit from that without it and
+on lower cards it's basically a requirement". Correct on both counts.
+
+**First, a correction.** The previous entry said the KV-cache finding was
+"Filed in WORKPLAN." It was not. I wrote it into this log only, so the
+loop would never have seen it — an unverified claim of exactly the kind
+this project keeps punishing, made in the same entry that argued for
+measuring before asserting. Both items are filed now as section 13.
+
+**Why 13a (SageAttention) is more tractable here than it looks.**
+Installing SageAttention by hand on Windows is genuinely awful — Triton,
+a matching torch/CUDA pairing, MSVC for anything that compiles, and a
+kernel path that matches the GPU's compute capability. A motion designer
+will not get there. But this panel does not use the user's Python:
+`Setup.findComfyInstall` downloads a PORTABLE ComfyUI into `vendor/comfy/`
+with an embedded interpreter, and `comfy.js` spawns it with arguments we
+choose. We own the environment and the launch line, so this is a
+deterministic install rather than a support thread.
+
+Filed as five steps, measure-first: read the shipped interpreter's
+python/torch/CUDA/compute-capability into `docs/measured/` before any
+decision; pick the install route from that (prebuilt wheel preferred —
+it is the only route that scales to non-technical buyers); add
+`--use-sage-attention` conditionally; and then the step that matters
+most — VERIFY IT LOADED, with a real generation timed before and after,
+because a backend that silently falls back while the panel claims
+SageAttention is the same silent-success class the mask passes have spent
+weeks removing. Falling back must name the attention path actually in
+use. Also flagged: `tiers.js`'s VRAM arithmetic is calibrated on the
+current attention path and goes stale if peak VRAM moves.
+
+**13b** is the KV item: `spawnServer` passes `-m --host --port -c -ngl`
+and nothing else, so KV runs fp16 (~256 KiB/token for a 32B GQA model:
+~4 GiB at 16K, ~8 GiB at 32K, over ~19 GB of weights). `--flash-attn`
+with `q8_0` K/V roughly halves it. Gated on a paraphrase-matrix run at
+fp16 vs q8, since routing degrades first and no stub can see it, plus a
+tokens/sec reading and a fallback for llama-server builds that reject the
+flags. It BUMPS.
+
+**Wired into the rotation** so it does not starve: section 13 counts as
+"the rest of the backlog" for 12b's alternation rule, and the first pass
+should be 13a step 1, which costs one command.
+
+**Every code claim in the new section was checked against source**, not
+written from memory: the embedded-python install exists, comfy.js spawns
+with exactly the args quoted and carries no sage flag today, llama.js
+passes only the five flags described, and `comfyPauseLlm` exists so the
+tiers consequence is real.
+
+**Also recorded:** 16384 stays the shipping default whatever 13b finds.
+Buyers on 8-12 GB cards are the common case; the compact prompt form
+exists for them, and assuming 24K+ would strand most of the market.
 
 No `extension/` change, so NO BUMP.

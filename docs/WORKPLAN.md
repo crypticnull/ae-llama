@@ -2600,6 +2600,13 @@ priority: AE is the shipping product and Premiere is an unfunded probe.
 A Premiere pass launches and closes Premiere and takes ~5 minutes, so
 it is not free; that is the other reason not to run them back to back.
 
+**Section 13 (attention/KV backends) counts as "the rest of the
+backlog" for this rule**, and its first pass should be 13a step 1 — the
+environment measurement — because every later decision in that section
+depends on it and it costs one command. Do not let 13 starve behind the
+paraphrase matrix: it is the section that decides whether the product
+works on the cards most buyers own.
+
 Everything needed already works unattended: `run-ppro-probe.ps1`
 launches Premiere, the invisible door-3 runner claims the job with
 nobody at the keyboard, every battery step reports its own verdict, and
@@ -2759,6 +2766,123 @@ rows the per-host table could not answer.
 Neither blocks G0. Item 2 is the last one; if it turns out to be
 bookkeeping, close section 12b outright and hand Premiere back to the
 owner-gated section 12.
+
+## 13. Attention + KV backends — the low-VRAM gate (owner-raised 2026-09-03)
+
+**Why this is one section and not two optimisations.** Both items below
+buy back VRAM, and VRAM is the thing that decides whether this product
+works at all on the cards most buyers own. The owner's own 32 GB card
+is limited to a 16K context today; an 8-12 GB card is the common case on
+aescripts. On those cards SageAttention is not a speed tweak, it is the
+difference between video generation being usable and not.
+
+Both are MEASURE-FIRST. Neither should be landed from reasoning.
+
+### 13a. SageAttention for the hidden ComfyUI backend
+
+**Why the panel is unusually well placed to do this.** SageAttention is
+famously painful to install by hand on Windows: it needs a Triton build,
+a torch/CUDA pairing that matches, MSVC for anything that compiles, and
+a kernel path that matches the GPU's compute capability. A new user will
+not get there alone, and the ones who need it most (small cards) are the
+least likely to manage it.
+
+But this panel does not use the user's Python. `Setup.findComfyInstall`
+downloads a **portable ComfyUI** into `vendor/comfy/` with an **embedded
+interpreter** (`python_embeded/python.exe`), and `comfy.js` spawns it
+with arguments we choose. So the environment is one we installed and can
+inspect exactly, and the launch flag is a line we own. That turns "tell
+the user to follow a forum thread" into a deterministic install.
+
+**Step 1 — MEASURE the shipped environment. Nothing else until this is
+done, and nothing here may be assumed from memory: wheel availability
+and compute-capability requirements both move.**
+
+Against the embedded interpreter, record into `docs/measured/`:
+
+```
+<vendor>\python_embeded\python.exe -c "import sys, torch; print(sys.version); print(torch.__version__); print(torch.version.cuda); print(torch.cuda.get_device_name(0)); print(torch.cuda.get_device_capability(0))"
+```
+
+That gives the four things every install decision depends on: the Python
+minor version (wheels are per-version), the torch version, the CUDA
+version torch was built against, and the GPU's compute capability. Record
+the ComfyUI release the portable build came from too.
+
+**Step 2 — decide the route from the measurement**, not before. The
+routes, in preference order:
+
+1. a prebuilt wheel matching (python, torch, CUDA) exactly — no
+   compiler on the user's machine, which is the only route that scales
+   to non-technical buyers;
+2. build from source — needs a CUDA toolkit and MSVC, so it is a
+   fallback for a machine that already has them, never the default;
+3. do nothing and say so — see step 4.
+
+Triton is a dependency of the kernels and has its own Windows wheel
+story; measure whether the shipped torch already satisfies it.
+
+**Step 3 — the launch flag.** ComfyUI takes `--use-sage-attention`. It
+goes in `comfy.js`'s spawn (currently `-s main.py
+--windows-standalone-build --port ... --listen 127.0.0.1
+--disable-auto-launch`). It must be **conditional on step 4 passing**.
+
+**Step 4 — VERIFY IT LOADED, and never claim it otherwise.** This is the
+part that matters most, and it is this repo's oldest lesson: a backend
+that silently falls back to the default attention while the panel says
+"SageAttention enabled" is exactly the silent-success class every mask
+pass has been fixing. Requirements:
+
+- a probe that runs a real generation and reads ComfyUI's own startup log
+  for the confirmation line, rather than inferring from "pip said ok";
+- a measured before/after on one fixed workflow and seed — seconds and
+  peak VRAM — written into `docs/measured/`. If the numbers do not move,
+  it did not load, whatever the log says;
+- on any failure, the panel launches WITHOUT the flag and the receipt
+  says which attention backend is actually in use. A user on a small card
+  needs to know they are on the slow path.
+
+**Step 5 — `tiers.js` consequences.** The VRAM arithmetic that decides
+whether a generation can run alongside the chat model (`comfyPauseLlm:
+"auto"`) is calibrated on the current attention path. If SageAttention
+changes peak VRAM, those thresholds are stale and a card that could now
+run both will still be told to pause the LLM. Re-measure the tiers that
+move; do not adjust them by reasoning.
+
+**Owner decision this section deliberately does NOT take:** whether an
+install that needs a compiler is offered at all. Route 1 ships to
+everyone; route 2 is a support burden on a commercial product. Measure
+first, then ask.
+
+### 13b. KV-cache quantization for llama-server
+
+`llama.js`'s `spawnServer` passes `-m --host --port -c -ngl` and nothing
+else, so the KV cache runs at fp16. For a 32B GQA model that is roughly
+256 KiB per token: about 4 GiB at the default 16K context and 8 GiB at
+32K, on top of ~19 GB of weights at Q4_K_M. That is why the owner's
+32 GB card behaves like a 16K card once ComfyUI also wants VRAM.
+
+`--flash-attn` with `--cache-type-k q8_0 --cache-type-v q8_0` roughly
+halves the KV cost, which would put 32K within reach of the VRAM 16K
+occupies today.
+
+**Not a free win, and not landable without measurement:**
+
+- q8 KV is lossy. The instrument that can see whether it costs accuracy
+  is the paraphrase matrix (`scripts/chat-probe.js --variants`), because
+  routing is what degrades first and no stub can see it. Run the same
+  rows at fp16 and at q8 and compare pass/miss/HARM.
+- Record tokens/sec both ways as well; flash-attention usually helps, but
+  "usually" is not this repo's standard.
+- Older llama-server builds reject these flags. Detect and fall back
+  rather than failing to start — a panel that will not launch its model
+  is worse than a slow one.
+- This touches `extension/`, so it BUMPS.
+
+**If it lands, the context default is worth revisiting** — but 16384
+stays the shipping default regardless (see §7 and `docs/ORIENTATION.md`):
+buyers on 8-12 GB cards are the common case, and the compact prompt form
+is built for them.
 
 ## Out of scope for the local session (remote builds these)
 
