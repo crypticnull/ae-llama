@@ -18660,3 +18660,44 @@ previous entry (mask concentration, hostscript growth) — those were
 observations, not problems, and I should not have filed them as decisions.
 
 No `extension/` change, so NO BUMP.
+
+## 2026-09-03 (remote session) — an orientation doc, and the KV-cache finding
+
+**Owner asked for** a context document another chat can read to
+understand the product, and asked whether 16K ctx is right for a 5090.
+
+**NEW `docs/ORIENTATION.md`.** There was no single door into this repo:
+`CAPABILITIES.md` is mostly a generated 79-row table, `WORKPLAN.md` is a
+2.7k-line backlog and `WORKPLAN-LOG.md` is 18k lines of history. A fresh
+session had nothing to read that said what the product IS. The new doc
+covers: what it is and the three things that shape every decision (local
+model, SMALL model, commercial product); the request flow end to end
+through the CEP boundary; the file layout with sizes; all 79 tools
+grouped by what a user would ask for; the grounded-receipt thesis with
+the silent-success failure class that most of this repo's fixes belong
+to; the three verification layers; the context budget; and the rules that
+bite. Every checkable claim in it was verified against source (tool
+count, ctxSize, port, the 24576 compact threshold, maxRounds, and that
+all 78 tool references name real tools).
+
+**The VRAM answer, and a finding worth acting on.** `spawnServer` in
+`extension/js/llama.js` launches llama-server with `-m --host --port -c
+-ngl` and nothing else. There is **no KV-cache quantization and no
+flash-attention flag**, so the KV cache runs at fp16. For a 32B model
+with GQA that is roughly 256 KiB/token: ~4 GiB at 16K, ~8 GiB at 32K, on
+top of ~19 GB of weights at Q4_K_M. That is what makes 32 GB feel like a
+16K card once ComfyUI also wants VRAM. `--flash-attn` with
+`--cache-type-k q8_0 --cache-type-v q8_0` roughly halves the KV cost.
+
+NOT changed here: it touches `extension/`, so it needs a bump, and q8 KV
+is slightly lossy — the owner's call, and it wants a measurement (tokens/s
+and a paraphrase-matrix run at q8 vs fp16) rather than a confident patch.
+Filed in WORKPLAN.
+
+**Confirms an existing design choice:** 16K is the right DEFAULT for
+shipping. aescripts customers run 8-12 GB cards far more often than 32 GB
+ones, so assuming 24K+ would strand most of them on a prompt form they
+cannot fit. Compact-by-default is correct, and the compact ceiling added
+earlier today is what keeps it honest.
+
+No `extension/` change, so NO BUMP.
