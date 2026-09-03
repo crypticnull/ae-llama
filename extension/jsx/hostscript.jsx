@@ -4282,7 +4282,50 @@ function AELL_escapeExprName(s) {
  * broken one never lingers) on failure — the model sees the real reason
  * and can correct itself instead of guessing.
  */
-function AELL_setExpr(prop, expr) {
+/*
+ * What is on a property before anything writes over it. `enabled` is
+ * part of the state, not decoration: an expression whose expressionEnabled
+ * is false still reads back in full (measured), and any new write turns
+ * expressions back ON (measured), so a disabled one loses its OFF switch
+ * as well as its text.
+ */
+function AELL_exprState(prop) {
+  var st = { text: "", enabled: true };
+  try { st.text = String(prop.expression || ""); } catch (e) {}
+  try { st.enabled = prop.expressionEnabled !== false; } catch (e2) {}
+  return st;
+}
+
+/* An expression the user cannot get back if we drop it, capped for the
+ * result budget but never silently — the tail says how much was cut. */
+function AELL_exprBrief(text) {
+  var s = String(text || "");
+  if (s.length <= 240) return s;
+  return s.substring(0, 237) + "... (" + s.length + " chars)";
+}
+
+/*
+ * Set an expression WITHOUT losing the one that was already there.
+ *
+ * Measured in AE 2026 by scripts/link-overwrite-probe.js: assigning a bad
+ * expression does not throw — AE takes the text and fills expressionError
+ * — so the old cleanup (`prop.expression = ""`) threw the user's WORKING
+ * expression away as the price of a rejected write, on all four failure
+ * classes (missing layer, missing effect, syntax garbage, out-of-range
+ * subscript). Re-assigning the captured text puts it back exactly: error
+ * cleared and value restored, all four.
+ *
+ * `out`, when given, comes back carrying `prior` / `priorEnabled` /
+ * `restored` so the caller's receipt can name what it replaced. Nothing
+ * disappears quietly, and that includes the property's own contents.
+ */
+function AELL_setExpr(prop, expr, out) {
+  var was = AELL_exprState(prop);
+  if (out) {
+    out.prior = was.text;
+    out.priorEnabled = was.enabled;
+    out.restored = false;
+  }
   try {
     prop.expression = expr;
   } catch (e) {
@@ -4291,10 +4334,47 @@ function AELL_setExpr(prop, expr) {
   var err = "";
   try { err = String(prop.expressionError || ""); } catch (e2) {}
   if (err !== "") {
-    try { prop.expression = ""; } catch (e3) {}
+    // Put back exactly what was there, including an OFF switch. A prior
+    // that was itself erroring is restored as it was — that is the user's
+    // state, not ours to tidy.
+    try { prop.expression = was.text; } catch (e3) {}
+    if (was.text !== "" && was.enabled === false) {
+      try { prop.expressionEnabled = false; } catch (e4) {}
+    }
+    if (out) out.restored = was.text !== "";
     return err;
   }
   return null;
+}
+
+/* The half-sentence a rejected write owes the caller. */
+function AELL_exprKeptNote(out) {
+  if (out && out.restored) {
+    return " Nothing was lost: the expression already on that property " +
+           "was put back.";
+  }
+  return "";
+}
+
+/*
+ * Add to a SUCCESSFUL write's receipt what that write replaced. The user
+ * asked for the new expression, so this never refuses and never restores
+ * — it only refuses to be quiet about the one it overwrote.
+ */
+function AELL_replacedInto(res, out, newExpr) {
+  if (!out || !out.prior) return res;
+  if (out.prior === String(newExpr)) {
+    res.unchanged = "That property already had this exact expression; " +
+                    "nothing changed.";
+    return res;
+  }
+  res.replaced = AELL_exprBrief(out.prior);
+  res.replacedNote = "That expression is GONE — this write took its " +
+    "place. To put it back, set_expression with the text above." +
+    (out.priorEnabled === false
+      ? " It was also switched OFF, and expressions are ON again now."
+      : "");
+  return res;
 }
 
 AELL_TOOLS.set_expression = function (args) {
@@ -4306,18 +4386,32 @@ AELL_TOOLS.set_expression = function (args) {
   }
   var expr = typeof args.expression === "string" ? args.expression : "";
   if (expr === "") {
+    // A clear is the one write whose whole content is what it removed.
+    var gone = AELL_exprState(prop);
     prop.expression = "";
-    return AELL_okay({ layer: layer.name, property: args.property,
-                       expression: "cleared" });
+    var cleared = { layer: layer.name, property: args.property,
+                    expression: "cleared" };
+    if (gone.text !== "") {
+      cleared.removed = AELL_exprBrief(gone.text);
+      cleared.removedNote = "That expression is GONE. To put it back, " +
+        "set_expression with the text above.";
+    } else {
+      cleared.note = "There was no expression on that property; nothing " +
+        "was removed.";
+    }
+    return AELL_okay(cleared);
   }
-  var err = AELL_setExpr(prop, expr);
+  var wasExpr = {};
+  var err = AELL_setExpr(prop, expr, wasExpr);
   if (err) {
     return AELL_err("After Effects rejected the expression (" + err +
       "). Do not invent syntax — prefer link_property or " +
-      "apply_expression_preset, or fix the reported problem and retry.");
+      "apply_expression_preset, or fix the reported problem and retry." +
+      AELL_exprKeptNote(wasExpr));
   }
-  return AELL_okay({ layer: layer.name, property: args.property,
-                     expressionEnabled: prop.expressionEnabled });
+  return AELL_okay(AELL_replacedInto(
+    { layer: layer.name, property: args.property,
+      expressionEnabled: prop.expressionEnabled }, wasExpr, expr));
 };
 
 // ------------------------------------------------------- rigging (controls)
@@ -4460,11 +4554,16 @@ AELL_TOOLS.link_property = function (args) {
       "for 2D targets.");
   }
 
-  var err = AELL_setExpr(prop, expr);
-  if (err) return AELL_err("Link failed — AE rejected the expression: " + err);
-  return AELL_okay({ layer: layer.name, property: args.property,
-                     linkedTo: ctrlLayer.name + " > " + fx.name,
-                     expression: expr });
+  var wasLink = {};
+  var err = AELL_setExpr(prop, expr, wasLink);
+  if (err) {
+    return AELL_err("Link failed — AE rejected the expression: " + err +
+                    AELL_exprKeptNote(wasLink));
+  }
+  return AELL_okay(AELL_replacedInto(
+    { layer: layer.name, property: args.property,
+      linkedTo: ctrlLayer.name + " > " + fx.name,
+      expression: expr }, wasLink, expr));
 };
 
 /*
@@ -4851,6 +4950,7 @@ AELL_TOOLS.grid_layout = function (args) {
 
   var escCtrl = AELL_escapeExprName(ctrl.name);
   var placed = [];
+  var overwritten = [];
   for (i = 0; i < n; i++) {
     var layer = layers[i];
     var col = i % cols;
@@ -4879,7 +4979,8 @@ AELL_TOOLS.grid_layout = function (args) {
       ref + '.transform.position[1] + (row - (rows - 1) / 2) * ' +
       ref + '.effect("Grid Y Spacing")(1)' +
       (is3d ? ', value[2]' : '') + ']';
-    var err = AELL_setExpr(posProp, expr);
+    var wasGrid = {};
+    var err = AELL_setExpr(posProp, expr, wasGrid);
     if (err) {
       // Full diagnostics — if AE still rejects this, the error must show
       // exactly what was evaluated and under which engine.
@@ -4888,7 +4989,14 @@ AELL_TOOLS.grid_layout = function (args) {
       catch (eE) {}
       return AELL_err("Grid expression rejected on '" + layer.name +
         "': " + err + (engine ? " [engine: " + engine + "]" : "") +
-        " [expression was: " + expr + "]");
+        " [expression was: " + expr + "]" + AELL_exprKeptNote(wasGrid));
+    }
+    // A grid rig OWNS Position, so any expression that was driving it is
+    // gone. Named per layer, with the text, because that text is the only
+    // copy there was.
+    if (wasGrid.prior && wasGrid.prior !== expr) {
+      overwritten.push({ layer: layer.name,
+                         expression: AELL_exprBrief(wasGrid.prior) });
     }
     placed.push({ layer: layer.name, row: row, col: col });
   }
@@ -4911,6 +5019,22 @@ AELL_TOOLS.grid_layout = function (args) {
       (one ? "it" : "them") + " too, re-call with layers: [\"" +
       backdrops.join("\", \"") + "\", ...] naming every layer you want " +
       "in the grid.";
+  }
+  if (overwritten.length > 0) {
+    // Three with their text, then names only — the same budget rule as
+    // AELL_capJoin: the list must not push the state out of the window.
+    var shownOw = [], owNames = [];
+    for (var ow = 0; ow < overwritten.length; ow++) {
+      owNames.push(overwritten[ow].layer);
+      if (ow < 3) shownOw.push(overwritten[ow]);
+    }
+    res.replaced = shownOw;
+    res.replacedNote = "Position on " + AELL_capJoin(owNames, 8) +
+      " already had an expression and the grid rig took its place — " +
+      (overwritten.length > 3
+        ? "the first three texts are above and the rest are GONE"
+        : "the text is above") +
+      ". Undo, or re-send it with set_expression, if that was not meant.";
   }
   return AELL_okay(res);
 };
@@ -4983,12 +5107,15 @@ AELL_TOOLS.apply_expression_preset = function (args) {
       "wiggle, loop_cycle, loop_pingpong, loop_offset, time_linear");
   }
 
-  var err = AELL_setExpr(prop, expr);
+  var wasPreset = {};
+  var err = AELL_setExpr(prop, expr, wasPreset);
   if (err) {
-    return AELL_err("AE rejected the '" + preset + "' expression: " + err);
+    return AELL_err("AE rejected the '" + preset + "' expression: " + err +
+                    AELL_exprKeptNote(wasPreset));
   }
-  return AELL_okay({ layer: layer.name, property: args.property,
-                     preset: preset, expression: expr });
+  return AELL_okay(AELL_replacedInto(
+    { layer: layer.name, property: args.property,
+      preset: preset, expression: expr }, wasPreset, expr));
 };
 
 AELL_TOOLS.apply_effect = function (args) {

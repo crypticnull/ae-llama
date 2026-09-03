@@ -17409,3 +17409,165 @@ harness runs (baseline and final), each built and removed its own rig.
 Premiere was NOT launched this pass - the grader reads artifacts already
 on disk, so no Premiere launch was needed to verify it. No ComfyUI, no
 llama-server.
+
+## 2026-09-03 (local, real AE) - a link that took the last one with it, and a refusal that took one too (0.11.32)
+
+WORKPLAN section 8, the top open item filed by the 0.11.31 pass. The last
+log entry was a 12b pass, so 12b is skipped this pass per its own
+alternation rule. Harness green at the top of the pass: **715/715**.
+
+### The defect as filed, and the one measuring it found
+
+Filed: two `link_property` calls drove `effect.Drop Shadow.Distance` from
+two different sliders, both answered `ok`, and nothing said the first link
+was gone.
+
+Measured first, before any change, by the new re-runnable
+`scripts/link-overwrite-probe.js` + `.jsx` (AE 26.3x87, raw API rows and
+shipped-tool rows side by side so a receipt can be checked against what
+the property really holds):
+
+- **A1** a plain overwrite: the old text is gone and recoverable from
+  nowhere in the API.
+- **A2** an invalid write landing on a VALID expression: AE **does not
+  throw**. It takes the text, keeps it on the property and fills
+  `expressionError` - all four classes measured (a layer that is not
+  there, an effect that is not there, syntax garbage, an out-of-range
+  subscript). Re-assigning the captured text puts it back exactly:
+  error cleared, value restored, all four.
+- **A2b** what the SHIPPED helper did with the same four inputs:
+  `PRIOR LOST: YES` on every one. `AELL_setExpr`'s cleanup was
+  `prop.expression = ""`, so **a REJECTED write cost the user the
+  working expression that was already there** - a refusal that destroys
+  something is worse than the silent overwrite the item was filed for,
+  and no stubbed test could reach it (see stub faithfulness below).
+- **A3** a DISABLED expression (`expressionEnabled = false`) still reads
+  back in full, and ANY new write turns expressions back ON - so a
+  disabled one loses its OFF switch as well as its text.
+- **A4** keyframes survive under an expression (2 before, 2 under, 2
+  after clearing), so a receipt must NOT claim they went.
+- **A5** writing the identical text again is accepted with no error, so
+  "already linked to this" is a distinguishable case, not a loss.
+- **A6** the shipped receipts: SILENT LOSS on `link_property` over a
+  link, `link_property` over a hand-written `wiggle`, `set_expression`
+  over a link, and `set_expression` CLEARING a link.
+
+### The fix, at the helper the four doors share
+
+`AELL_setExpr(prop, expr, out)` now captures `AELL_exprState(prop)` before
+it writes.
+
+- **On rejection it RESTORES** the captured text instead of clearing,
+  and restores the OFF switch with it. A prior that was ITSELF erroring
+  comes back exactly as broken - that is the user's state, not ours to
+  tidy. `AELL_exprKeptNote` appends "Nothing was lost: the expression
+  already on that property was put back" to the refusal, and only when
+  something really was put back.
+- **On success it names what it replaced.** `AELL_replacedInto` adds
+  `replaced` (capped by `AELL_exprBrief` at 240 chars, with the real
+  length in the tail so a truncation cannot read as the whole text) and
+  `replacedNote` - "That expression is GONE - this write took its place.
+  To put it back, set_expression with the text above", plus the OFF
+  clause when the replaced one was disabled. Identical text answers
+  `unchanged` and claims no loss.
+- **The clear is the one write whose whole content is what it removed**:
+  `set_expression {expression: ""}` reports `removed` + `removedNote`,
+  and says outright when there was nothing to remove.
+- **grid_layout** owns Position, so it reports what its rig displaced:
+  three layers with their text, the rest by name via `AELL_capJoin`, and
+  the note says which is which. Its mid-rig failure carries the kept
+  note too.
+- Deliberately does NOT refuse and does NOT restore on success. The user
+  asked for the new expression; the same call the `set_layer_3d`
+  discard report makes.
+
+### Verification
+
+- **Real AE harness 715 -> 722/722 PASSED**, seven new steps in
+  `extension/js/selftest.js` on ST Square 7's opacity (which the step
+  above it leaves free).
+- **Six of the seven are RED against the reverted host in REAL AE**
+  (716/722), including the field defect verbatim and the sharper half:
+  `…and AE really still carries it - the rejected write cleared the
+  property`. The seventh (a link onto a BARE property claims no
+  replacement) passes both ways on purpose - it is the boundary that
+  stops the fix inventing a loss.
+- **The probe re-run against the fixed host**: `PRIOR LOST: no` on all
+  four classes, `set_expression REJECTED over a link` now reads
+  `was` == `now`, and every overwrite row names what it replaced while
+  the bare and identical rows still say nothing.
+- `tests/test-property-access.js` **+19 assertions, 12 RED** against the
+  reverted host. They cover both halves plus the boundaries: a rejected
+  write onto a BARE property must leave it bare (never carrying the
+  rejected text) and must not claim it saved anything, a broken prior
+  comes back broken, and the cap prints its own length.
+- Full stubbed suite green; `docs/CAPABILITIES.md` regenerated.
+- **Zero prompt cost** - host strings only. `buildSystemPrompt()`
+  58973 full / 39843 compact, byte-identical before and after.
+
+### Stub faithfulness (both stubs were wrong in the same place)
+
+- `tests/test-property-access.js`: `Prop.expression` was a plain writable
+  string and `expressionError` was written NOWHERE, so no stubbed test
+  could ever reach the clearing branch. It is an accessor now, with an
+  `aeExprError` modelled on the measured classes (an unknown
+  `thisComp.layer("X")`, an `.effect("Y")` that layer does not carry, an
+  out-of-range `value[n]`, and a real `new Function` parse), and
+  `expressionEnabled` is its own switch that a write turns back on.
+- `tests/test-self-test.js`: the canned host answered `link_property` and
+  `set_expression` from their ARGUMENTS alone, so a first link and a
+  fifth read identically and six of the seven new steps passed against it
+  while proving nothing. It now carries `exprHere` (what is on each
+  property), refuses an expression naming a layer the run has never
+  handled (`seenLayerNames`, populated from every call's own arguments),
+  and reads the grid rig's expressions back through `get_property`.
+
+### Notes / assumptions
+
+- **Assumed report, never refuse.** A tool that refused to overwrite an
+  expression would break every legitimate re-rig and force a second
+  round; the project's precedent (`set_layer_3d`'s `discarded`) is to
+  say what went. Destructive-refusal WORDING on delete_layer /
+  delete_mask remains its own filed item.
+- **Assumed the 240-char cap.** Long enough for any generated link and
+  most hand-written expressions, short enough that a replaced text
+  cannot push the state out of the window; the tail names the real
+  length so the cut is never invisible.
+- The A2b rows in the FIRST probe run measured nothing -
+  `$.global.AELL_setExpr` is undefined (hostscript exports only
+  `AELL_call`), so it read `THREW: ... is undefined` four times. Fixed to
+  the bare identifier and re-run before any host change; the numbers
+  above are from that second run.
+- `apply_expression_preset`'s row in the probe's crude "names what it
+  replaced" column was a FALSE POSITIVE before the fix (it matched
+  `wiggle(2` in the NEW text). The receipt itself carried nothing.
+
+### Still open, in priority order
+
+1. **Mask OPACITY is still not read anywhere** (was 2).
+2. An ellipse ALREADY on the layer still makes the mask parade
+   unreadable (`AELL_maskRect` takes rectangles only).
+3. `comp.saveFrameToPng` writing nothing is still unexplained.
+4. Row 30's typo still burns six `center_anchor_point` calls before the
+   grid_layout that works. Cost, not harm.
+5. Everything else from the 2026-09-03 lists is unchanged: the
+   `distribute_property` mutate-then-throw hole, a bad VALUE not being
+   `argFault`, widening the `errArg` rollback exemption to thrown
+   lookups, step 2's naming flake, the destructive-refusal wording on
+   `delete_layer` / `delete_mask`, `property: string` in TOOL_DEFS,
+   `POST /tokenize`, the `comfyUrl` 8188/8000 mismatch on this machine,
+   the harness answering a modal with WORDS, `starved` wording,
+   delete_mask warning on a live expression, the unmeasured controller
+   GROUP and non-en_US locale, and `capParams`.
+
+Section 8 still has no open HARM and no open miss in the variant matrix;
+this was a defect the matrix FOUND, not one it scores.
+
+### Machine state
+
+**After Effects was never closed and its project was never closed.**
+Four harness runs (baseline 715, green 722, reverted-host red 716, final
+722 after the bump) and three probe runs; the probe photographs the project
+by item ID before it builds anything and removed the one stray it made
+(a null's own footage source) on each run, leaving 396 items. No Premiere, no
+ComfyUI, no llama-server this pass.

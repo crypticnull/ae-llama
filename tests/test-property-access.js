@@ -120,7 +120,8 @@ function Prop(name, matchName, value) {
   this.name = name;
   this.matchName = matchName || name;
   this._value = value;
-  this.expression = "";
+  this._expr = "";
+  this._exprOn = true;
   this.expressionError = "";
   this.canSetExpression = true;
   this._keys = [];   // sorted [{time, value}]
@@ -128,8 +129,60 @@ function Prop(name, matchName, value) {
 Object.defineProperty(Prop.prototype, "value", {
   get() { return this._value; }
 });
+// AE's expression checker, measured 2026-09-03 by
+// scripts/link-overwrite-probe.js on AE 26.3x87. Assigning a BAD
+// expression does NOT throw: AE takes the text, KEEPS it on the property
+// and fills expressionError — all four classes measured (a layer that is
+// not there, an effect that is not there, syntax garbage, an
+// out-of-range subscript) behave identically. The old stub wrote
+// expressionError NOWHERE and let `expression` be a plain string, so no
+// stubbed test could reach the branch where a tool clears a rejected
+// write — the branch that was throwing away the user's own working
+// expression as the price of a refusal.
+let AE_COMP = null;
+function aeExprError(text) {
+  const t = String(text || "");
+  if (t === "") return "";
+  const line = (what) => "Expression disabled. Error at line 1 in property: " +
+                         what;
+  const refs = /thisComp\.layer\("([^"]*)"\)(\.effect\("([^"]*)"\))?/g;
+  let m;
+  while ((m = refs.exec(t))) {
+    let L = null;
+    try { L = AE_COMP ? AE_COMP.layer(m[1]) : null; } catch (e) { L = null; }
+    if (!L) return line("there is no layer named '" + m[1] + "'");
+    if (m[3]) {
+      let fx = null;
+      try { fx = L.property("ADBE Effect Parade").property(m[3]); }
+      catch (e) { fx = null; }
+      if (!fx) return line("'" + L.name + "' has no effect '" + m[3] + "'");
+    }
+  }
+  // An out-of-range subscript is valid JS and fails only when AE runs it
+  // — the 2D-layer `value[2]` trap that killed every grid rig once.
+  const sub = /value\[(\d+)\]/.exec(t);
+  if (sub && Number(sub[1]) > 2) {
+    return line("index out of range: value[" + sub[1] + "]");
+  }
+  try { new Function(t); } catch (e) { return line(String(e.message)); }
+  return "";
+}
+Object.defineProperty(Prop.prototype, "expression", {
+  get() { return this._expr; },
+  set(text) {
+    const t = String(text === undefined || text === null ? "" : text);
+    this._expr = t;                    // AE keeps the text either way
+    this.expressionError = aeExprError(t);
+    // Measured: ANY new write turns expressions back ON, so a disabled
+    // expression loses its OFF switch as well as its text.
+    if (t !== "") this._exprOn = true;
+  }
+});
+// Measured: a DISABLED expression still reads back in full, so
+// expressionEnabled is its own switch and not "is there any text".
 Object.defineProperty(Prop.prototype, "expressionEnabled", {
-  get() { return this.expression !== ""; }
+  get() { return this._expr !== "" && this._exprOn; },
+  set(on) { this._exprOn = !!on; }
 });
 // Measured in real AE 2026 by scripts/param-value-probe.jsx, and the old
 // stub modelled neither half: setValue COERCES a numeric string --
@@ -561,6 +614,8 @@ const A = new Layer("A", comp);
 const B = new Layer("B", comp);
 const CTRL = new Layer("CTRL", comp);
 comp._layers.push(A, B, CTRL);
+
+AE_COMP = comp;   // the expression checker resolves layer refs through it
 
 const project = { rootFolder: { name: "(root)" }, numItems: 0,
                   item() { return null; }, items: {}, activeItem: comp };
@@ -1923,5 +1978,136 @@ assert(r.ok && dsSoft.numKeys === 1,
        "and the same fold resolves a dotted path: " + (r.error || ""));
 call("remove_keyframes", { layer: "B",
                            property: "effect.Drop Shadow.Softness" });
+
+// 21. An expression that is ALREADY on the property. Filed by the 0.11.31
+// pass and measured 2026-09-03 in real AE by scripts/link-overwrite-probe.js:
+// two link_property calls drove one property from two different sliders,
+// BOTH answered ok, and nothing said the first link was gone. The probe
+// then found the sharper half of the same class on the FAILING path — a
+// rejected write cleared the property, so a refusal cost the user the
+// working expression that was already there.
+const AOP = A.property("Transform").property("Opacity");
+const EA = 'thisComp.layer("A").effect("Amp")(1);';
+call("set_expression", { layer: "A", property: "opacity", expression: "" });
+
+r = call("link_property", { layer: "A", property: "opacity",
+                            controlLayer: "A", controlEffect: "Amp" });
+assert(r.ok && r.data.replaced === undefined && r.data.unchanged === undefined,
+       "a link onto a bare property reports no replacement: " +
+       JSON.stringify(r.data || r.error));
+assert(AOP.expression === EA, "…and the link is really on the property");
+
+r = call("link_property", { layer: "A", property: "opacity",
+                            controlLayer: "A", controlEffect: "Amp" });
+assert(r.ok && r.data.unchanged &&
+       /already had this exact/.test(r.data.unchanged) &&
+       r.data.replaced === undefined,
+       "the SAME link again says nothing changed, and claims no loss: " +
+       JSON.stringify(r.data || r.error));
+
+// The field defect itself: a second control over the first.
+call("add_control", { layer: "A", type: "slider", name: "Amp2", value: 7 });
+r = call("link_property", { layer: "A", property: "opacity",
+                            controlLayer: "A", controlEffect: "Amp2" });
+assert(r.ok && r.data.replaced === EA,
+       "a link over a link NAMES the expression it replaced: " +
+       JSON.stringify(r.data || r.error));
+assert(/GONE/.test(r.data.replacedNote) &&
+       /set_expression/.test(r.data.replacedNote),
+       "…and says how to put it back: " + r.data.replacedNote);
+assert(/Amp2/.test(AOP.expression), "…and the new link really landed");
+
+// A hand-written expression is the same class — the user did not rig it,
+// which makes it MORE their own, not less.
+AOP.expression = "wiggle(2, 30);";
+r = call("link_property", { layer: "A", property: "opacity",
+                            controlLayer: "A", controlEffect: "Amp" });
+assert(r.ok && r.data.replaced === "wiggle(2, 30);",
+       "a link over a hand-written expression names it too: " +
+       JSON.stringify(r.data || r.error));
+
+// Measured: a DISABLED expression still reads back in full and ANY write
+// turns expressions back ON, so it loses its OFF switch as well as its text.
+AOP.expression = "wiggle(9, 9);";
+AOP.expressionEnabled = false;
+r = call("link_property", { layer: "A", property: "opacity",
+                            controlLayer: "A", controlEffect: "Amp" });
+assert(r.ok && r.data.replaced === "wiggle(9, 9);" &&
+       /switched OFF/.test(r.data.replacedNote),
+       "a replaced expression that was switched OFF says both: " +
+       JSON.stringify(r.data || r.error));
+assert(AOP.expressionEnabled === true,
+       "…and expressions really are back on");
+
+// THE FAILING PATH. Before the fix, AE's expressionError branch cleared
+// the property — so a rejected write took the working link with it.
+AOP.expression = EA;
+r = call("set_expression", { layer: "A", property: "opacity",
+                             expression: 'thisComp.layer("GHOST").opacity;' });
+assert(!r.ok, "a bad expression is still refused: " + JSON.stringify(r.data));
+assert(AOP.expression === EA,
+       "…and the expression that was already there SURVIVES the refusal: " +
+       JSON.stringify(AOP.expression));
+assert(AOP.expressionError === "" && AOP.expressionEnabled === true,
+       "…live, not left carrying the rejected text's error");
+assert(/Nothing was lost/.test(r.error),
+       "…and the refusal says so: " + r.error);
+
+// Same on the preset door, since they share the helper.
+AOP.expression = "wiggle(4, 4);";
+r = call("apply_expression_preset", { layer: "A", property: "opacity",
+  preset: "wiggle", ampControl: { layer: "A", effect: "Amp" } });
+assert(r.ok && r.data.replaced === "wiggle(4, 4);",
+       "apply_expression_preset names what it replaced: " +
+       JSON.stringify(r.data || r.error));
+
+// A rejected write onto a property that had NOTHING must leave nothing —
+// never the rejected text.
+const BOP = B.property("Transform").property("Opacity");
+call("set_expression", { layer: "B", property: "opacity", expression: "" });
+r = call("set_expression", { layer: "B", property: "opacity",
+                             expression: 'thisComp.layer("GHOST").opacity;' });
+assert(!r.ok && BOP.expression === "",
+       "a rejected write leaves a bare property bare: " +
+       JSON.stringify(BOP.expression));
+assert(!/Nothing was lost/.test(r.error),
+       "…and does not claim it saved something that was never there: " +
+       r.error);
+
+// A prior that was ITSELF erroring is restored as it was. The user's
+// broken expression is the user's, not ours to tidy away.
+BOP.expression = 'thisComp.layer("ALSO GHOST").opacity;';
+r = call("set_expression", { layer: "B", property: "opacity",
+                             expression: "value[7];" });
+assert(!r.ok && BOP.expression === 'thisComp.layer("ALSO GHOST").opacity;',
+       "a broken prior comes back exactly as broken: " +
+       JSON.stringify(BOP.expression));
+BOP.expression = "";
+
+// Clearing is the one write whose whole content is what it removed.
+AOP.expression = EA;
+r = call("set_expression", { layer: "A", property: "opacity",
+                             expression: "" });
+assert(r.ok && r.data.removed === EA && /GONE/.test(r.data.removedNote),
+       "clearing names the expression it removed: " +
+       JSON.stringify(r.data || r.error));
+r = call("set_expression", { layer: "A", property: "opacity",
+                             expression: "" });
+assert(r.ok && r.data.removed === undefined &&
+       /no expression on that property/.test(r.data.note),
+       "…and clearing nothing says nothing was removed: " +
+       JSON.stringify(r.data || r.error));
+
+// The cap has to be visible: a replaced expression too long to print is
+// still evidence, and a silent truncation reads as the whole text.
+const LONG = "wiggle(2, 3); // " + new Array(400).join("x");
+AOP.expression = LONG;
+r = call("link_property", { layer: "A", property: "opacity",
+                            controlLayer: "A", controlEffect: "Amp" });
+assert(r.ok && r.data.replaced.length < 300 &&
+       r.data.replaced.indexOf("(" + LONG.length + " chars)") !== -1,
+       "a long replaced expression is capped, and says how long it was: " +
+       JSON.stringify(r.data.replaced));
+call("set_expression", { layer: "A", property: "opacity", expression: "" });
 
 console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");

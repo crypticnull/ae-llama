@@ -640,6 +640,116 @@
           return d.expression === "cleared" || "expression: " + d.expression;
         } },
 
+      // ---- What was ALREADY on the property (0.11.32) -----------------
+      // Filed by the 0.11.31 pass and measured in real AE 2026 by
+      // scripts/link-overwrite-probe.js: two link_property calls drove one
+      // property from two different sliders, BOTH answered ok, and nothing
+      // said the first link was gone. The probe found the sharper half on
+      // the FAILING path — AE does not throw a bad expression, it keeps the
+      // text and fills expressionError, and the old cleanup cleared the
+      // property — so a REFUSAL cost the user the working expression that
+      // was already there. ST Square 7's opacity is free again here (the
+      // step above cleared it), so this group owns it.
+      { name: "a link onto a bare property claims no replacement",
+        tool: "link_property",
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: "ST Square 7",
+                   property: "opacity", controlLayer: "GRID CTRL",
+                   controlEffect: "Grid X Spacing", scale: 0.1 };
+        },
+        check: function (d) {
+          if (d.replaced !== undefined) {
+            return "invented a replacement: " + d.replaced;
+          }
+          return d.unchanged === undefined ||
+                 "called a first link unchanged: " + d.unchanged;
+        } },
+
+      { name: "…a SECOND link over it names the expression it replaced",
+        tool: "link_property",
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: "ST Square 7",
+                   property: "opacity", controlLayer: "GRID CTRL",
+                   controlEffect: "Grid Y Spacing", scale: 0.1 };
+        },
+        check: function (d) {
+          if (!d.replaced) return "said nothing about the link it replaced";
+          if (d.replaced.indexOf("Grid X Spacing") === -1) {
+            return "named the wrong one: " + d.replaced;
+          }
+          return /GONE/.test(d.replacedNote || "") ||
+                 "no note saying it is gone: " + (d.replacedNote || "");
+        } },
+
+      { name: "…and the same link again is a no-op, not a loss",
+        tool: "link_property",
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: "ST Square 7",
+                   property: "opacity", controlLayer: "GRID CTRL",
+                   controlEffect: "Grid Y Spacing", scale: 0.1 };
+        },
+        check: function (d) {
+          if (d.replaced !== undefined) {
+            return "claimed a loss on an identical write: " + d.replaced;
+          }
+          return !!d.unchanged || "did not say nothing changed";
+        } },
+
+      { name: "a REJECTED expression keeps the link that was there",
+        tool: "set_expression",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: "ST Square 7",
+                   property: "opacity",
+                   expression: 'thisComp.layer("ST NO SUCH LAYER").opacity;' };
+        },
+        check: function (err) {
+          return /Nothing was lost/.test(err) ||
+                 "the refusal does not say the old expression was kept: " +
+                 err;
+        } },
+
+      { name: "…and AE really still carries it",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: "ST Square 7",
+                   property: "opacity" };
+        },
+        check: function (d) {
+          var e = String(d.expression || "");
+          if (e === "") return "the rejected write cleared the property";
+          if (e.indexOf("Grid Y Spacing") === -1) {
+            return "the property carries something else: " + e;
+          }
+          return true;
+        } },
+
+      { name: "clearing an expression names what it removed",
+        tool: "set_expression",
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: "ST Square 7",
+                   property: "opacity", expression: "" };
+        },
+        check: function (d) {
+          if (!d.removed) return "cleared it in silence";
+          return d.removed.indexOf("Grid Y Spacing") !== -1 ||
+                 "named the wrong expression: " + d.removed;
+        } },
+
+      { name: "…and clearing nothing says nothing was removed",
+        tool: "set_expression",
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: "ST Square 7",
+                   property: "opacity", expression: "" };
+        },
+        check: function (d) {
+          if (d.removed !== undefined) {
+            return "invented a removal: " + d.removed;
+          }
+          return /nothing was removed/.test(d.note || "") ||
+                 "no note: " + (d.note || "");
+        } },
+
       { name: "reorder layers (stacking only)",
         tool: "reorder_layers",
         args: function (ctx) {

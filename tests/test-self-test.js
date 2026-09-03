@@ -739,6 +739,59 @@ const SQUARES = ["ST Square"];
 for (let i = 2; i <= 9; i++) SQUARES.push("ST Square " + i);
 const drivenKey = (layer, prop) => layer + "/" + String(prop || "")
   .replace(/^position_[xy]$/, "position").toLowerCase();
+
+// What is ALREADY on a property. The canned host had no notion of it at
+// all: link_property and set_expression each answered from their
+// arguments alone, so a first link and a fifth read the same, and the
+// branch where a REJECTED write clears the expression that was there
+// could not be reached at all. Six of the seven 0.11.32 steps passed
+// against that host while proving nothing.
+//
+// Faithful to AE 2026 as measured by scripts/link-overwrite-probe.js: a
+// bad expression does NOT throw — AE keeps the text and fills
+// expressionError — and any write over an existing expression replaces
+// it with no way back.
+let exprHere = {};
+const exprKey = (a) => String((a && a.layer) || "") + "/" +
+  String((a && a.property) || "").toLowerCase();
+// Every layer name this run has handled. The suite builds its layers
+// through the tools, so anything an expression may legitimately name has
+// passed through here first — and a name that never did is the one AE
+// would refuse.
+let seenLayerNames = {};
+function noteLayerNames(a) {
+  if (!a) return;
+  const keys = ["layer", "name", "controlLayer", "parent", "matteLayer",
+                "trackMatteLayer", "text", "target", "from", "to"];
+  for (const k of keys) {
+    if (typeof a[k] === "string" && a[k]) seenLayerNames[a[k]] = true;
+  }
+  if (Array.isArray(a.layers)) {
+    for (const n of a.layers) {
+      if (typeof n === "string") seenLayerNames[n] = true;
+    }
+  }
+}
+function exprRejects(text) {
+  const m = /thisComp\.layer\("([^"]*)"\)/.exec(String(text || ""));
+  if (!m) return "";
+  if (seenLayerNames[m[1]] || SQUARES.indexOf(m[1]) !== -1) return "";
+  return "Expression disabled. Error at line 1: there is no layer named '" +
+         m[1] + "'";
+}
+/* What every successful expression write owes its receipt. */
+function exprReplacedInto(out, prior, next) {
+  if (!prior) return out;
+  if (prior === next) {
+    out.unchanged = "That property already had this exact expression; " +
+                    "nothing changed.";
+    return out;
+  }
+  out.replaced = prior;
+  out.replacedNote = "That expression is GONE — this write took its " +
+    "place. To put it back, set_expression with the text above.";
+  return out;
+}
 function markDriven(layer, prop, shows) { driven[drivenKey(layer, prop)] = shows; }
 function drivenShows(layer, prop) {
   const v = driven[drivenKey(layer, prop)];
@@ -1553,6 +1606,7 @@ function singularLayerGate(tool, args) {
 }
 
 function cannedOk(tool, args) {
+  noteLayerNames(args);
   const gated = singularLayerGate(tool, args);
   if (gated) return gated;
   if (inBnComp(args)) {
@@ -2501,6 +2555,9 @@ function cannedOk(tool, args) {
         out.linkedTo = cl + " > " + ce;
         out.expression = 'thisComp.layer("' + cl + '").effect("' + ce +
                          '")(1)' + (sc !== 1 ? " * " + sc : "") + ";";
+        const lk = exprKey(args);
+        exprReplacedInto(out, exprHere[lk] || "", out.expression);
+        exprHere[lk] = out.expression;
       }
       return out;
     }
@@ -2516,6 +2573,15 @@ function cannedOk(tool, args) {
                         numKeys: 0 };
         if (gx) gRead.expression = gx;
         return gRead;
+      }
+      // The scratch comp's own squares: what link_property or
+      // set_expression last wrote is what AE carries. Reading it back is
+      // the only proof a REJECTED write left it alone (0.11.32).
+      if (args && SQUARES.indexOf(String(args.layer)) !== -1 &&
+          exprHere[exprKey(args)]) {
+        return { layer: args.layer, property: args.property,
+                 value: 22.2, numKeys: 0,
+                 expression: exprHere[exprKey(args)] };
       }
       // What import_as_layer wrote, read back the way the suite reads it:
       // the report is not evidence, the property is.
@@ -2829,14 +2895,38 @@ function cannedOk(tool, args) {
       return { index: 1, name: (args && args.name) || "Null 1" };
     case "set_expression": {
       const expr = (args && args.expression) || "";
+      const sk = exprKey(args);
+      const priorExpr = exprHere[sk] || "";
       if (inCvComp(args) && args.layer) {
         const ck = args.layer + "/" + cvProp(args.property);
         if (expr === "") delete cvExpr[ck]; else cvExpr[ck] = expr;
       }
       if (expr === "") {
         delete driven[drivenKey(args && args.layer, args && args.property)];
-        return { layer: args && args.layer, property: args && args.property,
-                 expression: "cleared" };
+        delete exprHere[sk];
+        const clr = { layer: args && args.layer,
+                      property: args && args.property,
+                      expression: "cleared" };
+        if (priorExpr) {
+          clr.removed = priorExpr;
+          clr.removedNote = "That expression is GONE. To put it back, " +
+                            "set_expression with the text above.";
+        } else {
+          clr.note = "There was no expression on that property; nothing " +
+                     "was removed.";
+        }
+        return clr;
+      }
+      // AE takes a bad expression's TEXT and reports the error, so a
+      // property that carried a working one loses it unless the tool puts
+      // it back. That is the whole of the 0.11.32 defect.
+      const rej = exprRejects(expr);
+      if (rej) {
+        return { __err: "After Effects rejected the expression (" + rej +
+          "). Do not invent syntax — prefer link_property or " +
+          "apply_expression_preset, or fix the reported problem and retry." +
+          (priorExpr ? " Nothing was lost: the expression already on that " +
+                       "property was put back." : "") };
       }
       // An expression that reads the property's own value passes writes
       // through; anything else computes the property from scratch and
@@ -2844,7 +2934,10 @@ function cannedOk(tool, args) {
       markDriven(args && args.layer, args && args.property,
                  /\bvalue\b/.test(expr) ? "passthru" : 999);
       if (inPcComp(args) && args.layer) pcExpr[args.layer] = expr;
-      return { expressionEnabled: true, expression: expr };
+      const seOut = { expressionEnabled: true, expression: expr };
+      exprReplacedInto(seOut, priorExpr, expr);
+      exprHere[sk] = expr;
+      return seOut;
     }
     case "center_anchor_point": {
       // On a shape layer built above, the anchor is the CENTRE OF THE
@@ -5668,7 +5761,7 @@ SelfTest.run({
     mkMasks = {}; mkShapes = {}; mkSizes = {}; gridStack = {}; gridExpr = {};
     batchLayers = 0; batchFx = {}; batchBlur = null;
     dsOn = false; dsDistance = 5;
-    batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rbFx = {}; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetWpRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetBoundsRig(); resetPresetRig(); resetRqRig(); resetAuRig(); resetFrRig(); resetCapRig(); resetMgRig();
+    batSolids = []; batSolidFx = {}; batSolidPos = {}; exprHere = {}; seenLayerNames = {}; rbLayers = []; rbFx = {}; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetWpRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetBoundsRig(); resetPresetRig(); resetRqRig(); resetAuRig(); resetFrRig(); resetCapRig(); resetMgRig();
     // ONE call fails, not one TOOL: the suite grids more than once (the
     // nine squares, then the backdrop rig), and failing every grid_layout
     // would fail four steps and stop measuring what this asserts — that a
@@ -5708,7 +5801,7 @@ SelfTest.run({
         mkMasks = {}; mkShapes = {}; mkSizes = {}; gridStack = {}; gridExpr = {};
         batchLayers = 0; batchFx = {}; batchBlur = null;
     dsOn = false; dsDistance = 5;
-        batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rbFx = {}; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetWpRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetBoundsRig(); resetPresetRig(); resetRqRig(); resetAuRig(); resetFrRig(); resetCapRig(); resetMgRig();
+        batSolids = []; batSolidFx = {}; batSolidPos = {}; exprHere = {}; seenLayerNames = {}; rbLayers = []; rbFx = {}; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetWpRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetBoundsRig(); resetPresetRig(); resetRqRig(); resetAuRig(); resetFrRig(); resetCapRig(); resetMgRig();
         SelfTest.run({
           callHostTool(tool, args, cb) {
             // Never refuse anything -- the old permissive host.

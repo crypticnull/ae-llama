@@ -2228,6 +2228,33 @@ this order, one bullet per pass:
     canned host's rb-comp effect parade is PER LAYER now (it was one
     flat list for the whole comp, which is why no stub could tell "this
     layer carries none" from "the comp carries none").
+  - ~~**`link_property` silently overwrites the expression that is
+    already there**~~ DONE 2026-09-03 (0.11.32). The top item the 0.11.31
+    pass filed: two calls drove one property from two different sliders,
+    BOTH answered ok, and nothing said the first link was gone. Measured
+    first, in real AE, by the new re-runnable
+    `scripts/link-overwrite-probe.js` — which found the sharper half of
+    the same class on the FAILING path: AE does NOT throw a bad
+    expression (it keeps the text and fills `expressionError`, all four
+    classes), so `AELL_setExpr`'s cleanup — `prop.expression = ""` —
+    threw the user's WORKING expression away as the price of a REJECTED
+    write. Fixed at the helper, so all four doors that write expressions
+    inherit it: the prior text is captured before the write, RESTORED on
+    rejection (with its OFF switch, since a disabled expression still
+    reads back in full and any write re-enables it), and named on
+    success — `replaced` + a note saying it is gone and how to put it
+    back, `unchanged` when the same text is written twice, `removed`
+    when a clear is what removed it. grid_layout reports the Position
+    expressions its rig displaces, three with their text and the rest by
+    name. Zero prompt cost (host strings only; prompt 58973 / compact
+    39843, unchanged). Harness 715 -> **722**, six of the seven new
+    steps RED against the reverted host in REAL AE; +19 stub assertions
+    in tests/test-property-access.js, 12 RED. Both stubs were unfaithful
+    in the same place and that is why the class hid: the `Prop` stub let
+    `expression` be a plain string and wrote `expressionError` NOWHERE,
+    and the canned host answered link_property/set_expression from their
+    arguments alone, so a first link and a fifth read identically.
+
 - **DEFERRED until a sandbox design exists:** D/F/H3 rows (project
   mutation, renders, mass-delete) — wiring them against the live
   project is the harm the whitelist cannot contain. Also deferred:
