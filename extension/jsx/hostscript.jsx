@@ -10045,7 +10045,19 @@ function AELL_wipeGate(comp, args, layers) {
   } else if (shown.key !== key) {
     block = "the comp has changed since the last preview, so this is not " +
       "the list the user agreed to";
-  } else if (seq > 0 && shown.seq === seq) {
+  } else if (shown.seq === seq) {
+    // NOT gated on seq > 0, and that is the difference from
+    // clean_project / organize_project. Those two can degrade safely for
+    // a caller that never announces a request, because their preview is
+    // a SEPARATE, deliberate call (dryRun:true) — a seq-0 caller still
+    // has to make it. This tool has no dryRun: the preview IS the
+    // refusal of the very same call, so "seq 0 disables the same-reply
+    // test" means the whole ceremony is "send the identical call twice",
+    // which no user ever sees. Measured 2026-09-03: the CLI self-test
+    // runner announces no request, seq stayed 0, and the retry deleted
+    // all six keys the step exists to protect. A caller with no request
+    // boundary is permanently inside one reply, which is exactly true of
+    // a raw -r script; it opts in by calling $.global.AELL_newRequest().
     block = "that preview was taken in THIS same reply, so the user has " +
       "not seen it yet";
   }

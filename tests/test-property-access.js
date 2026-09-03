@@ -1548,6 +1548,51 @@ $.global.AELL_newRequest();
 call("remove_keyframes", { layers: wipeNames, property: "opacity" });
 $.global.AELL_newRequest();
 call("remove_keyframes", { layers: wipeNames, property: "opacity" });
+
+// (c) A caller that never announces a request at all -- requestSeq 0.
+//
+// Everything above calls AELL_newRequest between the refusal and the
+// retry, which is what the PANEL does; that is why this hole was
+// invisible here for a day. The CLI self-test runner (and any raw
+// AfterFX -r script) announces nothing, so seq stays 0, and the gate's
+// same-reply test used to read `seq > 0 && shown.seq === seq` -- false
+// at 0, branch dead, retry executed. Measured in real AE 2026-09-03:
+// the retry deleted all six keys, and the two steps after it failed on
+// keys that were already gone.
+//
+// The ceremony this tool has is "call it twice", because its preview IS
+// its refusal. So a caller with no request boundary has to stay blocked,
+// not be waved through. It opts in by announcing a request, like the
+// panel does -- that is the line below the assertions.
+comp._layers.forEach(l => { l.selected = false; });
+delete $.global.AELL_wipeShown;
+$.global.AELL_requestSeq = 0;
+call("set_keyframes", { layers: wipeNames, property: "opacity",
+  keys: [{ time: 0, value: 0 }, { time: 1, value: 100 }] });
+const seq0Before = wipeKeys();
+assert(seq0Before === wipeNames.length * 2,
+       "seq-0 rig: every layer has two opacity keys again (" +
+       seq0Before + ")");
+r = call("remove_keyframes", { layers: wipeNames, property: "opacity" });
+assert(!r.ok && /refused to wipe every layer/.test(r.error),
+       "with no request announced, the first wipe is still refused: " +
+       (r.ok ? "IT RAN" : r.error));
+r = call("remove_keyframes", { layers: wipeNames, property: "opacity" });
+assert(!r.ok && /THIS same reply/.test(r.error),
+       "...and so is the retry -- a caller that announces no request is " +
+       "permanently inside one reply, it is not exempt: " +
+       (r.ok ? "IT RAN" : r.error));
+assert(wipeKeys() === seq0Before,
+       "...and nothing was removed by either call (" + wipeKeys() +
+       " of " + seq0Before + " keys left)");
+// The escape hatch is explicit, not incidental: announce a request.
+$.global.AELL_newRequest();
+r = call("remove_keyframes", { layers: wipeNames, property: "opacity" });
+assert(r.ok && r.data.removed === seq0Before,
+       "announcing a request releases it: " +
+       (r.ok ? r.data.removed : r.error));
+
+$.global.AELL_newRequest();
 comp._layers.forEach(l => { l.selected = false; });
 
 console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");

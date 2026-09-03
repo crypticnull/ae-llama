@@ -14486,3 +14486,72 @@ Nothing else was left unattempted this pass. Nothing is blocked.
 - Verified: pwsh parses; C# compiles (259 lines); RAIL HOLDS against all
   three owner-lists; harness 72/74.
 - No `extension/` change, so NO BUMP.
+
+## 2026-09-03 (local session) — the wipe gate was off for every caller that never announces a request (0.11.16)
+
+- Harness RED on arrival: 590/593. Three failures, all one cause —
+  `...and retrying it in the same reply is refused too` ("expected a
+  refusal, but the tool accepted the call"), then `...and the keys
+  survived the retry as well` (numKeys 0) and `a named SUBSET is not
+  gated` (removed 0), both of which were failing on keys the retry had
+  already deleted. So one bug, three red steps.
+- ROOT CAUSE in `AELL_wipeGate` (`extension/jsx/hostscript.jsx`): the
+  same-reply test read `seq > 0 && shown.seq === seq`. `AELL_requestSeq`
+  is only ever bumped by `AELL_newRequest`, which the PANEL calls per
+  chat turn (`main.js:557`) and which **`scripts/ae-selftest.jsx` never
+  calls at all**. seq stayed 0, the `&&` short-circuited, the branch was
+  dead, and the identical retry wiped all six keys.
+- Why that is a product hole and not just a runner quirk: the same
+  degradation is deliberate and SAFE in `clean_project` /
+  `organize_project`, because their preview is a separate, deliberate
+  call (`dryRun:true`) that a seq-0 caller still has to make.
+  `remove_keyframes` has no dryRun — its preview IS the refusal of the
+  very same call — so at seq 0 the entire ceremony was "send the
+  identical call twice", which no user ever sees. A gate that switches
+  itself off for anyone who does not opt in is not a gate.
+- FIX: `shown.seq === seq`, with no `seq > 0` guard, so a caller with no
+  request boundary is permanently inside ONE reply — which is exactly
+  true of a raw `-r` script. The escape hatch is explicit rather than
+  incidental: call `$.global.AELL_newRequest()`, the same announcement
+  the panel makes. Comment at the site says why this gate cannot degrade
+  the way the other two can, so nobody "restores symmetry" later.
+- DELIBERATELY NOT DONE: adding `AELL_newRequest()` to
+  `scripts/ae-selftest.jsx`. It would also have turned the harness green
+  — and that is the argument against it. Leaving seq at 0 in the CLI run
+  makes the real-AE harness itself the seq-0 regression test, in the one
+  configuration that just caught this. (Checked first that seq's value
+  changes no other step: the suite previews `clean_project` /
+  `organize_project` but never executes either non-dry, on purpose, so
+  those gates never read seq during a run.) The runner header's claim
+  that the two runners "can never drift apart" is therefore still not
+  quite true — they share the step list, not the request boundary — and
+  a future pass may want to make the panel-side self-test button
+  announce a request too, so both runners agree at seq 0.
+- BACK-FILL `tests/test-property-access.js` section 20(c): the whole
+  wipe sequence with `AELL_requestSeq = 0` and no `newRequest` — first
+  call refused, RETRY refused, zero keys lost, and then announcing a
+  request releases it. The gap was that every existing assertion in that
+  section calls `newRequest` between refusal and retry (the panel's
+  behaviour), so seq 0 was never exercised. Verified the new block goes
+  RED against the old `seq > 0 &&` line with exactly the three real-AE
+  failures ("IT RAN", "0 of 10 keys left"), then green with the fix.
+- Verified: all `tests/test-*.js` green (0 red files); real AE harness
+  **593/593 PASSED**.
+- FIELD DATA for the dialog work in the entry above, which landed while
+  this pass ran (283933c and 2e3b7fb): this run, on the code BEFORE
+  both of them, found a
+  `Save changes to "Untitled Project.aep" before closing?` prompt
+  already blocking AE and logged **"No rule matched it"**, then cleared
+  it with the WM_CLOSE fallback (= Cancel). That is the failure 283933c
+  diagnose, seen from outside — and the unmatched-dialog WM_CLOSE
+  branch that already existed is what saved it. One thing to note while
+  someone is in there: the log line said "No rule matched it" about a
+  dialog whose text and project name are BOTH on the owned list, so per
+  283933c the rule did match and then found no control it would press.
+  The message names the wrong half of the failure, which is the same
+  absence-vs-incapacity confusion 2e3b7fb writes up. Neither commit is
+  re-verified here; both landed after this run.
+- Also worth a human eye: the prompt was up at all. Something between
+  passes still asks After Effects to quit. This pass did not — it
+  never closed AE or its project.
+- `extension/jsx/hostscript.jsx` changed, so BUMPED: 0.11.15 -> 0.11.16.
