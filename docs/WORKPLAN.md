@@ -2616,21 +2616,32 @@ has been running it by hand all day and should not have to again.
   clean diff; `tests/test-probe-bundle.js` §9 holds the class without
   Premiere.
 
-### The battery is green; the GRADER is the item now
+### ~~The battery is green; the GRADER is the item now~~ DONE 2026-09-03
 
-`scripts/ppro-probe-report.js` builds every row from
-`runtime-<HOST>.json`, which only the VISIBLE panel writes when a human
-clicks its buttons. `job-result.json` - where an unattended
-`run-ppro-probe.ps1` puts the whole battery - is read into
-`collected.jobResult` and then never used by a single row. So after the
-all-green run above the grader still printed `FAIL MOGRT ... clip count
-did not grow (1 -> 1)` from a stale 2026-09-02 click, and `G0: NOT
-MEASURED`. A report that is confidently about a different artifact is
-the same failure class as the last-index guess it just contradicted.
-Next 12b pass: grade the job result too, prefer the NEWER of the two,
-and say which one each row came from. Until then the runner's own
-printout is the authority for an unattended run - `docs/PREMIERE-
-PLATFORM.md` section 4 says so.
+`scripts/ppro-probe-report.js` grades `job-result.json` too. Every row
+takes the NEWEST source that has its value and prints which file that
+was (`[job]` / `[pnl]`, `*` = the older artifact); a `sources:` line
+dates both. The stale `FAIL MOGRT ... clip count did not grow (1 -> 1)`
+is gone and the PPRO block went 13-of-23 rows unmeasured to 3-of-27. G0
+also stopped grading an ABSENT reading as a measured FAIL. Held by
+`tests/test-probe-bundle.js` section 10; measurements in
+`docs/PREMIERE-PLATFORM.md` section 4. The GRADER, not the runner's own
+printout, is the authority for an unattended run from here.
+
+### The GATE is the item now: the soak is a button, not a step
+
+G0 is three-of-four rows ok and NOT MEASURED on the fourth. The
+500-round-trip engine soak lives in the VISIBLE panel's `index.html` as
+a click handler; `probe.jsx`'s battery has no soak step, so **no
+unattended run can ever close G0**, however green the battery is.
+
+Next 12b pass: add a soak step to the battery (the payload builder is
+already in `probe.jsx`, at the "the soak's payload" comment), have the
+door-3 job request it, and confirm `node scripts/ppro-probe-report.js`
+exits 0 with `G0: PASS`. Watch the runner's timeout - 500 round-trips
+is the one step that could outlast it - and record the verdict in
+`docs/PREMIERE-PLATFORM.md` section 4 either way. A soak that was
+SKIPPED is unmeasured, never a pass; the grader already enforces that.
 
 ## Out of scope for the local session (remote builds these)
 

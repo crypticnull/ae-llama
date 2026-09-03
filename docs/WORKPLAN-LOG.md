@@ -17267,3 +17267,145 @@ Three harness runs (baseline, reverted-host red, final green); each
 built and removed its own rig and the bottom-of-run check confirmed
 nothing of the suite remains. No Premiere, no ComfyUI, no llama-server
 this pass.
+
+## 2026-09-03 (local, real AE) - WORKPLAN 12b: the grader read one artifact and it was the wrong one (no bump)
+
+Harness green at the top of the pass (**715/715**), and the last log
+entry was an AE pass (0.11.31), so 12b's alternation rule sends this one
+to Premiere. 12b's battery has been all-green since run `-0510`; the
+item it filed for itself was the GRADER.
+
+### What was wrong
+
+`scripts/ppro-probe-report.js` built every row from
+`runtime-<HOST>.json`, which only the VISIBLE panel writes when a human
+clicks its buttons. `job-result.json` - where an unattended
+`run-ppro-probe.ps1` puts the WHOLE battery - was read into
+`collected.jobResult` by `collect()` and then never used by a single
+row.
+
+Measured against the folder as it stood this morning, with the 05:10
+all-green battery sitting beside a 2026-09-02 manual click:
+
+    OLD GRADER, PPRO: 13 of 23 rows not measured
+    MISSING  evalScript round-trips a JSON envelope
+    MISSING  ExtendScript engine name
+    MISSING  BridgeTalk.appName / btTargets
+    MISSING  undo grouping / executeCommand / enableQE / QE reachable
+    MISSING  History entries for 3 scripted mutations
+    FAILED   MOGRT: Premiere accepted what AE wrote
+             "importMGT returned ... clip count did not grow (1 -> 1)"
+
+Every one of those had been measured seven hours earlier. The MOGRT row
+is the sharp end: it printed a confident FAILURE, from yesterday, about
+the exact thing the `-0510` run had just proved works. A report
+confidently about a different artifact is the same class as the
+last-index clip guess that run had removed.
+
+### The fix
+
+The grader now reads BOTH artifacts, per ROW and by DATE.
+
+- `fromJobResult()` re-shapes a battery result into the same keys the
+  panel writes (`hostFacts`, `qe`, `history`, `mogrtAccept`,
+  `evalScript`, `probeLoad`, `panel`), so one grader reads either.
+  Two facts are taken from the runner's own existence: a CEP runtime
+  answered `getHostEnvironment()`, and a parsed envelope plus an
+  answering `ping` IS an evalScript round-trip and IS proof `probe.jsx`
+  loaded. The runner has no separate row for either.
+- `sourcesFor()` returns every artifact that speaks for one host,
+  NEWEST FIRST; `picker()` gives each row the newest source that
+  actually HAS its value. Neither file is a superset of the other and
+  either can be the older one, so the merge had to be per row, not per
+  file.
+- **What the runner cannot see is left ABSENT, never guessed.** It does
+  not enumerate Node modules, `APPDATA`, the CEP API version, the
+  manifest shape, `localStorage` scoping or the soak, so those rows
+  fall back to the panel file - and say so.
+- Every row now carries `from` / `fromAt` / `stale` and prints a tag:
+  `[job]`, `[pnl]`, `*` for "this could only come from the older
+  artifact". A `sources:` line above each host block dates both. That
+  is the part that makes the fallback honest: "measured yesterday" and
+  "measured in the run you just watched" are different claims and the
+  reader has to be able to tell.
+- Four rows that never existed: the battery's own steps had no grader
+  representation at all. `battery: every step passed` (with the failing
+  step named), the scratch project, the sequence, the cleanup.
+- **G0 stopped grading an ABSENT reading as a measured FAIL.** It
+  printed `FAIL evalScript reaches Premiere's ExtendScript engine
+  envelope parsed` when there was no evalScript result at all - wrong in
+  both halves of one line. Absent is UNMEASURED now for the evalScript,
+  Node and CEP-present rows alike, which is what the file's own standing
+  rule always said. Each G0 row also names the artifact it was answered
+  from.
+- A `runtime-<HOST>.json` that will not PARSE is still a FAILED row, but
+  it no longer swallows a battery result for the same host - that would
+  have been this pass's own bug, one layer down.
+
+### Verification
+
+- **PPRO went from 13-of-23 rows unmeasured to 3-of-27**, and the MOGRT
+  row now reads `landed, 4 controllers, names readable: true` from
+  `job-result.json` while the Node rows still read from the panel file
+  marked `[pnl*]`. Graded report committed as
+  `docs/measured/ppro-report-2026-09-03-0547.json`.
+- `tests/test-probe-bundle.js` section 10, **30 new assertions** (113 -> 143), all
+  stubbed - no Premiere needed. They cover the adapter, newest-wins in
+  BOTH directions (a fresh click beats an old battery too), the stale
+  flag, a job result from a DIFFERENT host not answering this host's
+  rows, a failed battery step grading FAILED, G0 reading both files in
+  one report, an absent reading being UNMEASURED rather than a measured
+  FAIL, and the corrupt-panel-file case. Against the reverted grader the
+  section dies at its first line - `TypeError: rep.fromJobResult is not
+  a function` - and the row-level defect reproduces exactly as printed
+  above.
+- Full stubbed suite green. All five 12b lints green (`es3-syntax`,
+  `es3-ternary`, `powershell-syntax`, `probe-bundle`, `manifest-xml`).
+  `capability-report --check` fresh.
+- **Real AE harness re-run at the bottom of the pass: 715/715 PASSED.**
+  Nothing in `extension/` was touched, so this is a no-regression check,
+  not a coverage change.
+
+### No version bump, on purpose
+
+12b's own rule: the probe is not shipped and `extension/` is not
+touched. Bumping would push a no-op update to every installed panel.
+
+### The next 12b item, and why the gate still cannot close
+
+**G0 is three-of-four rows ok and NOT MEASURED on the fourth: the
+soak.** The 500-round-trip engine soak is a click handler in the
+VISIBLE panel's `index.html`; `probe.jsx`'s battery has no soak step. So
+no unattended run can ever supply that row, however green the battery
+is, and the loop cannot close G0 by itself. Filed as the next 12b pass:
+make the soak a battery step (the payload builder is already in
+`probe.jsx`), have the door-3 job request it, and check the runner's
+timeout - 500 round-trips is the one step that could outlast it.
+
+Deliberately NOT done in this pass, and why: `run-ppro-probe.ps1` still
+only PRINTS `Grade it with: node scripts\ppro-probe-report.js` rather
+than running it. Wiring that in is three lines, but it is a `.ps1`
+change on the unattended path and "a fix that was not re-run is not a
+fix" - re-running it costs a Premiere launch, and this pass's item did
+not need one. Filed, not attempted.
+
+### Notes / assumptions
+
+- **Assumed the two artifacts are the only sources.** `doors.json` and
+  `csxs-keys.json` are graded separately and were left alone.
+- **Assumed the battery rows should appear only when a battery exists.**
+  They have no panel equivalent, so printing them as MISSING for AEFT
+  would be a missing measurement of something AEFT never claimed. The
+  `sources:` line says whether a battery spoke for the host, so the
+  absence is visible without a fake row.
+- `%APPDATA%\AE-Llama\probes\` still holds `AELL_PROBE_SCRATCH.prproj`
+  from the 05:10 run. That is the runner's own design - it archives
+  stale scratch files on the way IN - and was not touched here.
+
+### Machine state
+
+**After Effects was never closed and its project was never closed.** Two
+harness runs (baseline and final), each built and removed its own rig.
+Premiere was NOT launched this pass - the grader reads artifacts already
+on disk, so no Premiere launch was needed to verify it. No ComfyUI, no
+llama-server.

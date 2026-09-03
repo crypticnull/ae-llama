@@ -414,16 +414,53 @@ unattended run. MEASURED:
   Anything that tries to find an imported graphic BY NAME will not find
   it.
 
-Not measured, and now the next 12b item: **`scripts/ppro-probe-report.js`
-does not grade an unattended run at all.** It builds every row from
-`runtime-<HOST>.json`, which only the VISIBLE panel writes when a human
-clicks its buttons; `job-result.json` - where `run-ppro-probe.ps1` puts
-the whole battery - is read into `collected.jobResult` and then never
-used. So after this all-green run the grader still printed
-`FAIL MOGRT ... clip count did not grow (1 -> 1)` from a stale
-2026-09-02 manual click, and `G0: NOT MEASURED`. The runner's own
-printout is the authority for an unattended run; the grader is only
-about the panel-clicked one until it is taught to read the job result.
+### 2026-09-03 - the grader reads the unattended run too
+
+The paragraph the run above filed - **the grader does not grade an
+unattended run at all** - is closed. `scripts/ppro-probe-report.js` now
+reads BOTH artifacts a probes folder can hold, per ROW and by DATE:
+
+- `job-result.json` (the whole battery, written by an unattended
+  `run-ppro-probe.ps1` through the invisible door-3 runner) is
+  re-shaped into the same keys the visible panel writes to
+  `runtime-<HOST>.json`, so one grader reads either.
+- Every row takes the NEWEST source that actually HAS its value, and
+  prints which file that was: `[job]` or `[pnl]`, with a `*` when the
+  value could only come from the older artifact. A `sources:` line
+  above each host block dates both. The merge is by date in both
+  directions - a fresh click beats an old battery exactly as an old
+  click loses to a fresh one.
+- What the runner cannot see is left ABSENT rather than guessed. It
+  never enumerates Node modules, `APPDATA`, the CEP API version, the
+  manifest shape, `localStorage` scoping or the soak, so those rows
+  still come from the panel file and are marked stale when they do.
+
+Graded against the 05:10 all-green run and the 2026-09-02 click that
+had been outvoting it, the PPRO block went from **13 of 23 rows
+unmeasured - including the stale `FAIL MOGRT ... clip count did not
+grow (1 -> 1)`** - to **3 of 27**, with the MOGRT row now reading
+`landed, 4 controllers, names readable: true`. The four new rows are
+the battery's own steps, which had no grader representation at all:
+`9/9 steps ok`, the scratch project, the sequence, the cleanup. The
+three still unmeasured for PPRO are the `ScriptPath` `$.fileName`, the
+installed manifest shape, and the soak.
+
+Gate G0 also stopped reporting an ABSENT reading as a measured FAIL. It
+used to print `FAIL evalScript reaches Premiere's ExtendScript engine
+envelope parsed` when there was no evalScript result at all - wrong in
+both halves of one line. Absent is UNMEASURED now, for the evalScript,
+Node and CEP-present rows alike, which is what this file's standing
+rule said all along.
+
+**G0 now stands at three of four rows ok, and NOT MEASURED on the
+fourth: the soak.** The 500-round-trip soak is a BUTTON in the visible
+panel (`probe/com.cptk.aellama.probe/index.html`), not a step in
+`probe.jsx`'s battery, so no unattended run can ever supply it and the
+loop cannot close G0 by itself. Making the soak a battery step is the
+next 12b item.
+
+The grader is the authority for an unattended run from here; the note
+that pointed at the runner's own printout instead is withdrawn.
 
 ### The rest
 

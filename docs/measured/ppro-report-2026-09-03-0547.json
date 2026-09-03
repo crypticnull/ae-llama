@@ -1,0 +1,579 @@
+{
+  "takenAt": "2026-09-03T09:47:20.312Z",
+  "dir": "C:\\Users\\mr\\AppData\\Roaming\\AE-Llama\\probes",
+  "dirExists": true,
+  "csxsKeys": [
+    {
+      "csxs": 9,
+      "existedBefore": true,
+      "playerDebugModeBefore": "0"
+    },
+    {
+      "csxs": 10,
+      "existedBefore": true,
+      "playerDebugModeBefore": "1"
+    },
+    {
+      "csxs": 11,
+      "existedBefore": true,
+      "playerDebugModeBefore": "1"
+    },
+    {
+      "csxs": 12,
+      "existedBefore": true,
+      "playerDebugModeBefore": "1"
+    },
+    {
+      "csxs": 13,
+      "existedBefore": true,
+      "playerDebugModeBefore": "1"
+    },
+    {
+      "csxs": 14,
+      "existedBefore": true,
+      "playerDebugModeBefore": "1"
+    },
+    {
+      "csxs": 15,
+      "existedBefore": false,
+      "playerDebugModeBefore": null
+    }
+  ],
+  "hosts": [
+    {
+      "host": "AEFT",
+      "present": true,
+      "sources": [
+        {
+          "tag": "pnl",
+          "file": "runtime-AEFT.json",
+          "takenAt": "2026-09-02T20:44:18.516Z"
+        }
+      ],
+      "rows": [
+        {
+          "claim": "CEP runtime present (__adobe_cep__)",
+          "state": "MEASURED",
+          "value": "yes",
+          "from": "runtime-AEFT.json",
+          "fromTag": "pnl",
+          "fromAt": "2026-09-02T20:44:18.516Z",
+          "stale": false
+        },
+        {
+          "claim": "appName the panel must branch on",
+          "state": "MEASURED",
+          "value": "AEFT",
+          "from": "runtime-AEFT.json",
+          "fromTag": "pnl",
+          "fromAt": "2026-09-02T20:44:18.516Z",
+          "stale": false
+        },
+        {
+          "claim": "appVersion",
+          "state": "MEASURED",
+          "value": "26.3",
+          "from": "runtime-AEFT.json",
+          "fromTag": "pnl",
+          "fromAt": "2026-09-02T20:44:18.516Z",
+          "stale": false
+        },
+        {
+          "claim": "CEP API version",
+          "state": "MEASURED",
+          "value": "{\"minor\":\"0\",\"micro\":\"1\",\"major\":\"12\"}",
+          "from": "runtime-AEFT.json",
+          "fromTag": "pnl",
+          "fromAt": "2026-09-02T20:44:18.516Z",
+          "stale": false
+        },
+        {
+          "claim": "Node: child_process (llama-server, ComfyUI, ffmpeg)",
+          "state": "MEASURED",
+          "value": "yes",
+          "from": "runtime-AEFT.json",
+          "fromTag": "pnl",
+          "fromAt": "2026-09-02T20:44:18.516Z",
+          "stale": false
+        },
+        {
+          "claim": "Node: fs",
+          "state": "MEASURED",
+          "value": "yes",
+          "from": "runtime-AEFT.json",
+          "fromTag": "pnl",
+          "fromAt": "2026-09-02T20:44:18.516Z",
+          "stale": false
+        },
+        {
+          "claim": "Node: http",
+          "state": "MEASURED",
+          "value": "yes",
+          "from": "runtime-AEFT.json",
+          "fromTag": "pnl",
+          "fromAt": "2026-09-02T20:44:18.516Z",
+          "stale": false
+        },
+        {
+          "claim": "APPDATA visible to the panel",
+          "state": "MEASURED",
+          "value": "C:\\Users\\mr\\AppData\\Roaming",
+          "from": "runtime-AEFT.json",
+          "fromTag": "pnl",
+          "fromAt": "2026-09-02T20:44:18.516Z",
+          "stale": false
+        },
+        {
+          "claim": "probe.jsx loaded into the host engine",
+          "state": "MEASURED",
+          "value": "via panel $.evalFile",
+          "from": "runtime-AEFT.json",
+          "fromTag": "pnl",
+          "fromAt": "2026-09-02T20:44:18.516Z",
+          "stale": false
+        },
+        {
+          "claim": "$.fileName inside the manifest's ScriptPath",
+          "state": "MEASURED",
+          "value": "8",
+          "from": "runtime-AEFT.json",
+          "fromTag": "pnl",
+          "fromAt": "2026-09-02T20:44:18.516Z",
+          "stale": false
+        },
+        {
+          "claim": "evalScript round-trips a JSON envelope",
+          "state": "MEASURED",
+          "value": "yes",
+          "from": "runtime-AEFT.json",
+          "fromTag": "pnl",
+          "fromAt": "2026-09-02T20:44:18.516Z",
+          "stale": false
+        },
+        {
+          "claim": "ExtendScript engine name",
+          "state": "MEASURED",
+          "value": "main",
+          "from": "runtime-AEFT.json",
+          "fromTag": "pnl",
+          "fromAt": "2026-09-02T20:44:18.516Z",
+          "stale": false
+        },
+        {
+          "claim": "BridgeTalk.appName (the door-1 target)",
+          "state": "MEASURED",
+          "value": "aftereffects",
+          "from": "runtime-AEFT.json",
+          "fromTag": "pnl",
+          "fromAt": "2026-09-02T20:44:18.516Z",
+          "stale": false
+        },
+        {
+          "claim": "BridgeTalk targets this host can see",
+          "state": "MEASURED",
+          "value": "aftereffects bridge photoshop illustrator indesign premierepro ame",
+          "from": "runtime-AEFT.json",
+          "fromTag": "pnl",
+          "fromAt": "2026-09-02T20:44:18.516Z",
+          "stale": false
+        },
+        {
+          "claim": "undo grouping (app.beginUndoGroup)",
+          "state": "MEASURED",
+          "value": "function",
+          "from": "runtime-AEFT.json",
+          "fromTag": "pnl",
+          "fromAt": "2026-09-02T20:44:18.516Z",
+          "stale": false
+        },
+        {
+          "claim": "app.executeCommand (AE's undo/redo menu ids)",
+          "state": "MEASURED",
+          "value": "function",
+          "from": "runtime-AEFT.json",
+          "fromTag": "pnl",
+          "fromAt": "2026-09-02T20:44:18.516Z",
+          "stale": false
+        },
+        {
+          "claim": "app.enableQE",
+          "state": "MEASURED",
+          "value": "undefined",
+          "from": "runtime-AEFT.json",
+          "fromTag": "pnl",
+          "fromAt": "2026-09-02T20:44:18.516Z",
+          "stale": false
+        },
+        {
+          "claim": "QE reachable after enableQE",
+          "state": "MISSING",
+          "value": null,
+          "from": null,
+          "fromTag": null,
+          "fromAt": null,
+          "stale": false
+        },
+        {
+          "claim": "manifest shape installed",
+          "state": "MEASURED",
+          "value": "B (one HostList, loader)",
+          "from": "runtime-AEFT.json",
+          "fromTag": "pnl",
+          "fromAt": "2026-09-02T20:44:18.516Z",
+          "stale": false
+        },
+        {
+          "claim": "localStorage scoping across hosts",
+          "state": "MEASURED",
+          "value": "no other host's key visible -- either per-host storage, or the other panel has not been opened yet. Open the OTHER host's probe panel first, then re-run this one.",
+          "from": "runtime-AEFT.json",
+          "fromTag": "pnl",
+          "fromAt": "2026-09-02T20:44:18.516Z",
+          "stale": false
+        },
+        {
+          "claim": "engine soak (500 round-trips)",
+          "state": "MEASURED",
+          "value": "survived 500 round-trips",
+          "from": "runtime-AEFT.json",
+          "fromTag": "pnl",
+          "fromAt": "2026-09-02T20:44:18.516Z",
+          "stale": false
+        },
+        {
+          "claim": "History entries for 3 scripted mutations",
+          "state": "MISSING",
+          "value": null,
+          "from": null,
+          "fromTag": null,
+          "fromAt": null,
+          "stale": false
+        },
+        {
+          "claim": "MOGRT: Premiere accepted what AE wrote",
+          "state": "MISSING",
+          "value": null,
+          "from": null,
+          "fromTag": null,
+          "fromAt": null,
+          "stale": false
+        }
+      ]
+    },
+    {
+      "host": "PPRO",
+      "present": true,
+      "sources": [
+        {
+          "tag": "job",
+          "file": "job-result.json",
+          "takenAt": "2026-09-03T09:10:20.961Z"
+        },
+        {
+          "tag": "pnl",
+          "file": "runtime-PPRO.json",
+          "takenAt": "2026-09-02T20:51:46.828Z"
+        }
+      ],
+      "rows": [
+        {
+          "claim": "CEP runtime present (__adobe_cep__)",
+          "state": "MEASURED",
+          "value": "yes",
+          "from": "job-result.json",
+          "fromTag": "job",
+          "fromAt": "2026-09-03T09:10:20.961Z",
+          "stale": false
+        },
+        {
+          "claim": "appName the panel must branch on",
+          "state": "MEASURED",
+          "value": "PPRO",
+          "from": "job-result.json",
+          "fromTag": "job",
+          "fromAt": "2026-09-03T09:10:20.961Z",
+          "stale": false
+        },
+        {
+          "claim": "appVersion",
+          "state": "MEASURED",
+          "value": "26.3.2",
+          "from": "job-result.json",
+          "fromTag": "job",
+          "fromAt": "2026-09-03T09:10:20.961Z",
+          "stale": false
+        },
+        {
+          "claim": "CEP API version",
+          "state": "MEASURED",
+          "value": "{\"minor\":\"0\",\"micro\":\"1\",\"major\":\"12\"}",
+          "from": "runtime-PPRO.json",
+          "fromTag": "pnl",
+          "fromAt": "2026-09-02T20:51:46.828Z",
+          "stale": true
+        },
+        {
+          "claim": "Node: child_process (llama-server, ComfyUI, ffmpeg)",
+          "state": "MEASURED",
+          "value": "yes",
+          "from": "runtime-PPRO.json",
+          "fromTag": "pnl",
+          "fromAt": "2026-09-02T20:51:46.828Z",
+          "stale": true
+        },
+        {
+          "claim": "Node: fs",
+          "state": "MEASURED",
+          "value": "yes",
+          "from": "runtime-PPRO.json",
+          "fromTag": "pnl",
+          "fromAt": "2026-09-02T20:51:46.828Z",
+          "stale": true
+        },
+        {
+          "claim": "Node: http",
+          "state": "MEASURED",
+          "value": "yes",
+          "from": "runtime-PPRO.json",
+          "fromTag": "pnl",
+          "fromAt": "2026-09-02T20:51:46.828Z",
+          "stale": true
+        },
+        {
+          "claim": "APPDATA visible to the panel",
+          "state": "MEASURED",
+          "value": "C:\\Users\\mr\\AppData\\Roaming",
+          "from": "runtime-PPRO.json",
+          "fromTag": "pnl",
+          "fromAt": "2026-09-02T20:51:46.828Z",
+          "stale": true
+        },
+        {
+          "claim": "probe.jsx loaded into the host engine",
+          "state": "MEASURED",
+          "value": "via invisible runner (door 3), probe.jsx at /x/_CLAUDE/26_08_19_AE_Llama/cptk_claude/probe/com.cptk.aellama.probe/jsx/probe.jsx",
+          "from": "job-result.json",
+          "fromTag": "job",
+          "fromAt": "2026-09-03T09:10:20.961Z",
+          "stale": false
+        },
+        {
+          "claim": "$.fileName inside the manifest's ScriptPath",
+          "state": "MISSING",
+          "value": null,
+          "from": null,
+          "fromTag": null,
+          "fromAt": null,
+          "stale": false
+        },
+        {
+          "claim": "evalScript round-trips a JSON envelope",
+          "state": "MEASURED",
+          "value": "yes",
+          "from": "job-result.json",
+          "fromTag": "job",
+          "fromAt": "2026-09-03T09:10:20.961Z",
+          "stale": false
+        },
+        {
+          "claim": "ExtendScript engine name",
+          "state": "MEASURED",
+          "value": "NewWorld",
+          "from": "job-result.json",
+          "fromTag": "job",
+          "fromAt": "2026-09-03T09:10:20.961Z",
+          "stale": false
+        },
+        {
+          "claim": "BridgeTalk.appName (the door-1 target)",
+          "state": "MEASURED",
+          "value": "premierepro",
+          "from": "job-result.json",
+          "fromTag": "job",
+          "fromAt": "2026-09-03T09:10:20.961Z",
+          "stale": false
+        },
+        {
+          "claim": "BridgeTalk targets this host can see",
+          "state": "MEASURED",
+          "value": "aftereffects bridge photoshop illustrator indesign premierepro ame",
+          "from": "job-result.json",
+          "fromTag": "job",
+          "fromAt": "2026-09-03T09:10:20.961Z",
+          "stale": false
+        },
+        {
+          "claim": "undo grouping (app.beginUndoGroup)",
+          "state": "MEASURED",
+          "value": "undefined",
+          "from": "job-result.json",
+          "fromTag": "job",
+          "fromAt": "2026-09-03T09:10:20.961Z",
+          "stale": false
+        },
+        {
+          "claim": "app.executeCommand (AE's undo/redo menu ids)",
+          "state": "MEASURED",
+          "value": "undefined",
+          "from": "job-result.json",
+          "fromTag": "job",
+          "fromAt": "2026-09-03T09:10:20.961Z",
+          "stale": false
+        },
+        {
+          "claim": "app.enableQE",
+          "state": "MEASURED",
+          "value": "function",
+          "from": "job-result.json",
+          "fromTag": "job",
+          "fromAt": "2026-09-03T09:10:20.961Z",
+          "stale": false
+        },
+        {
+          "claim": "QE reachable after enableQE",
+          "state": "MEASURED",
+          "value": "object",
+          "from": "job-result.json",
+          "fromTag": "job",
+          "fromAt": "2026-09-03T09:10:20.961Z",
+          "stale": false
+        },
+        {
+          "claim": "manifest shape installed",
+          "state": "MISSING",
+          "value": null,
+          "from": null,
+          "fromTag": null,
+          "fromAt": null,
+          "stale": false
+        },
+        {
+          "claim": "localStorage scoping across hosts",
+          "state": "MEASURED",
+          "value": "no other host's key visible -- either per-host storage, or the other panel has not been opened yet. Open the OTHER host's probe panel first, then re-run this one.",
+          "from": "runtime-PPRO.json",
+          "fromTag": "pnl",
+          "fromAt": "2026-09-02T20:51:46.828Z",
+          "stale": true
+        },
+        {
+          "claim": "engine soak (500 round-trips)",
+          "state": "MISSING",
+          "value": null,
+          "from": null,
+          "fromTag": null,
+          "fromAt": null,
+          "stale": false
+        },
+        {
+          "claim": "History entries for 3 scripted mutations",
+          "state": "MEASURED",
+          "value": "ran; owner reads the History panel",
+          "from": "job-result.json",
+          "fromTag": "job",
+          "fromAt": "2026-09-03T09:10:20.961Z",
+          "stale": false
+        },
+        {
+          "claim": "MOGRT: Premiere accepted what AE wrote",
+          "state": "MEASURED",
+          "value": "landed, 4 controllers, names readable: true",
+          "from": "job-result.json",
+          "fromTag": "job",
+          "fromAt": "2026-09-03T09:10:20.961Z",
+          "stale": false
+        },
+        {
+          "claim": "battery: every step passed",
+          "state": "MEASURED",
+          "value": "9/9 steps ok: waitForReady ping hostFacts qe project sequence history mogrt cleanup",
+          "from": "job-result.json",
+          "fromTag": "job",
+          "fromAt": "2026-09-03T09:10:20.961Z",
+          "stale": false
+        },
+        {
+          "claim": "scratch project (created or opened)",
+          "state": "MEASURED",
+          "value": "created AELL_PROBE_SCRATCH.prproj",
+          "from": "job-result.json",
+          "fromTag": "job",
+          "fromAt": "2026-09-03T09:10:20.961Z",
+          "stale": false
+        },
+        {
+          "claim": "a sequence to work in",
+          "state": "MEASURED",
+          "value": "created AELL PROBE SEQ, 3 video tracks",
+          "from": "job-result.json",
+          "fromTag": "job",
+          "fromAt": "2026-09-03T09:10:20.961Z",
+          "stale": false
+        },
+        {
+          "claim": "the probe removed what it made",
+          "state": "MEASURED",
+          "value": "AELL PROBE 3, AELL PROBE 2, AELL PROBE 1, AELL PROBE SEQ",
+          "from": "job-result.json",
+          "fromTag": "job",
+          "fromAt": "2026-09-03T09:10:20.961Z",
+          "stale": false
+        }
+      ]
+    }
+  ],
+  "doors": {
+    "state": "MISSING",
+    "detail": "doors.json not found -- run scripts\\ppro-door-probe.ps1"
+  },
+  "g0": {
+    "pass": false,
+    "measured": false,
+    "checks": [
+      {
+        "name": "the probe panel opened in Premiere",
+        "pass": true,
+        "unmeasured": false,
+        "detail": "appName=PPRO appVersion=26.3.2",
+        "from": "job-result.json",
+        "fromAt": "2026-09-03T09:10:20.961Z"
+      },
+      {
+        "name": "evalScript reaches Premiere's ExtendScript engine",
+        "pass": true,
+        "unmeasured": false,
+        "detail": "envelope parsed",
+        "from": "job-result.json",
+        "fromAt": "2026-09-03T09:10:20.961Z"
+      },
+      {
+        "name": "CEP Node is available (the whole engine/ComfyUI stack needs it)",
+        "pass": true,
+        "unmeasured": false,
+        "detail": "child_process=true fs=true http=true",
+        "from": "runtime-PPRO.json",
+        "fromAt": "2026-09-02T20:51:46.828Z"
+      },
+      {
+        "name": "the engine survives a realistic session (soak)",
+        "pass": false,
+        "unmeasured": true,
+        "detail": "soak not run -- it is a button in the VISIBLE panel, not a battery step, so an unattended run can never supply it",
+        "from": null,
+        "fromAt": null
+      }
+    ],
+    "sources": [
+      {
+        "tag": "job",
+        "file": "job-result.json",
+        "takenAt": "2026-09-03T09:10:20.961Z"
+      },
+      {
+        "tag": "pnl",
+        "file": "runtime-PPRO.json",
+        "takenAt": "2026-09-02T20:51:46.828Z"
+      }
+    ]
+  }
+}

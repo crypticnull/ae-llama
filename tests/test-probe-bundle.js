@@ -804,5 +804,232 @@ function hostsIn(xml) {
 
 }
 
+// ------- 10. the grader reads BOTH artifacts, newest row wins, and says
+//             which file every row came from
+//
+// The defect: `ppro-probe-report.js` built every row from
+// runtime-<HOST>.json, which only the VISIBLE panel writes when a human
+// clicks its buttons. job-result.json -- where an unattended
+// run-ppro-probe.ps1 puts the WHOLE battery -- was read into
+// `collected.jobResult` and then never used by a single row. So after
+// the first all-green unattended run the report still printed
+// `FAIL MOGRT ... clip count did not grow (1 -> 1)` off a click from
+// the previous day, and `G0: NOT MEASURED`. A report confidently about
+// a different artifact is the same failure class as the last-index
+// guess §9 above just removed.
+{
+  const rep = require("../scripts/ppro-probe-report.js");
+
+  // A minimal unattended result, shaped exactly like the real one.
+  function jobResult(over) {
+    const j = {
+      door: 3,
+      startedAt: "2026-09-03T09:09:41.632Z",
+      finishedAt: "2026-09-03T09:10:20.961Z",
+      host: { appName: "PPRO", appVersion: "26.3.2", appLocale: "en_US" },
+      via: "invisible runner (door 3)",
+      ok: true,
+      parsed: { ok: true },
+      battery: { steps: [
+        { step: "ping", ok: true, data: { pong: true, engineName: "NewWorld",
+            fileName: "/x/probe/jsx/probe.jsx" } },
+        { step: "hostFacts", ok: true, data: { engineName: "NewWorld",
+            btAppName: "premierepro", beginUndoGroup: "undefined",
+            executeCommand: "undefined", enableQE: "function" } },
+        { step: "qe", ok: true, data: { qeProject: "object", effectCount: 236 } },
+        { step: "project", ok: true, data: { via: "created",
+            name: "AELL_PROBE_SCRATCH.prproj" } },
+        { step: "sequence", ok: true, data: { via: "created",
+            active: "AELL PROBE SEQ", videoTracks: 3 } },
+        { step: "history", ok: true, data: { mutated: true,
+            instruction: "count the entries" } },
+        { step: "mogrt", ok: true, data: { before: 1, after: 2, landed: true,
+            pickedBy: "diff", controllerCount: 4, namesReadable: true } },
+        { step: "cleanup", ok: true, data: { removed: ["AELL PROBE SEQ"] } }
+      ] }
+    };
+    if (over) { Object.keys(over).forEach(function (k) { j[k] = over[k]; }); }
+    return j;
+  }
+
+  // The panel file the field failure was graded from: OLDER, and its
+  // MOGRT attempt failed.
+  function panelFile(takenAt) {
+    return {
+      takenAt: takenAt || "2026-09-02T20:51:46.828Z",
+      panel: { cepPresent: true, appName: "PPRO", appVersion: "26.3.2",
+               appdata: "C:\\Users\\mr\\AppData\\Roaming",
+               cepApiVersion: { major: "12" },
+               node: { fs: true, http: true, child_process: true } },
+      storage: { note: "no other host's key visible" },
+      mogrtAccept: { before: 1, after: 1, landed: false,
+                     error: "clip count did not grow (1 -> 1)" }
+    };
+  }
+
+  function rowOf(graded, claimStart) {
+    return graded.rows.filter(function (r) {
+      return r.claim.indexOf(claimStart) === 0;
+    })[0];
+  }
+
+  // (a) the adapter: an unattended battery reads as a runtime result.
+  {
+    const asRuntime = rep.fromJobResult(jobResult());
+    assert(asRuntime && asRuntime.host === "PPRO",
+           "fromJobResult attributes the battery to the host it names");
+    assert(asRuntime.takenAt === "2026-09-03T09:10:20.961Z",
+           "and is dated by when the battery FINISHED, so it can be " +
+           "compared with the panel file's takenAt");
+    assert(asRuntime.hostFacts.btAppName === "premierepro" &&
+           asRuntime.qe.qeProject === "object" &&
+           asRuntime.mogrtAccept.landed === true,
+           "the battery's steps land under the keys the grader reads");
+    assert(asRuntime.evalScript.ok === true && asRuntime.probeLoad,
+           "a parsed envelope plus an answering ping IS an evalScript " +
+           "round-trip and IS proof probe.jsx loaded -- the runner has no " +
+           "separate row for either");
+    assert(asRuntime.panel.node === undefined &&
+           asRuntime.panel.appdata === undefined,
+           "what the runner never measures stays ABSENT rather than " +
+           "guessed: Node modules and APPDATA are panel-side rows");
+    assert(rep.fromJobResult({ battery: { steps: [] } }) === null,
+           "a job result that does not name a host is not attributed to one");
+    assert(rep.fromJobResult(null) === null &&
+           rep.fromJobResult({ __unreadable: "bad json" }) === null,
+           "no job result, or an unreadable one, is not a source");
+  }
+
+  // (b) newest wins per ROW, and the older artifact still fills the gaps.
+  {
+    const collected = { dir: "d", hosts: { PPRO: panelFile() },
+                        jobResult: jobResult() };
+    const g = rep.gradeHost("PPRO", rep.sourcesFor("PPRO", collected));
+    const mogrt = rowOf(g, "MOGRT");
+    assert(mogrt.state === "MEASURED" && /^landed/.test(String(mogrt.value)),
+           "the MOGRT row comes from the NEWER battery, not from " +
+           "yesterday's failed click -- the field defect verbatim");
+    assert(mogrt.from === "job-result.json" && mogrt.stale === false,
+           "and the row says which artifact it came from");
+    const node = rowOf(g, "Node: child_process");
+    assert(node.state === "MEASURED" && node.from === "runtime-PPRO.json" &&
+           node.stale === true,
+           "a fact only the older panel file has is still MEASURED -- but " +
+           "flagged as coming from the older artifact, because 'measured " +
+           "yesterday' and 'measured in the run you just watched' are " +
+           "different claims");
+    const soak = rowOf(g, "engine soak");
+    assert(soak.state === "MISSING" && soak.from === null,
+           "a row NEITHER artifact measures is MISSING with no source");
+    assert(rowOf(g, "battery: every step passed").value.indexOf("8/8") === 0,
+           "the battery's own steps are graded too");
+    assert(rowOf(g, "a sequence to work in").value ===
+           "created AELL PROBE SEQ, 3 video tracks",
+           "including the ones with no panel equivalent at all");
+  }
+
+  // (c) the merge is by DATE, not by file: a fresh click beats an old
+  //     battery just as surely as the other way round.
+  {
+    const stale = jobResult({ finishedAt: "2026-09-01T00:00:00.000Z" });
+    const g = rep.gradeHost("PPRO", rep.sourcesFor("PPRO",
+      { dir: "d", hosts: { PPRO: panelFile("2026-09-02T20:51:46.828Z") },
+        jobResult: stale }));
+    const mogrt = rowOf(g, "MOGRT");
+    assert(mogrt.from === "runtime-PPRO.json" && mogrt.state === "FAILED",
+           "with the battery OLDER, the newer panel file wins the same row " +
+           "-- and its failure is reported, not hidden by the older pass");
+    assert(rowOf(g, "BridgeTalk.appName").stale === true,
+           "and the older battery's exclusive facts are marked stale");
+  }
+
+  // (d) a battery from a DIFFERENT host is never merged into this one.
+  {
+    const aeJob = jobResult({ host: { appName: "AEFT", appVersion: "26.3" } });
+    const g = rep.gradeHost("PPRO", rep.sourcesFor("PPRO",
+      { dir: "d", hosts: { PPRO: panelFile() }, jobResult: aeJob }));
+    assert(rowOf(g, "MOGRT").from === "runtime-PPRO.json",
+           "an AEFT job result does not answer a PPRO row");
+    assert(!rowOf(g, "battery: every step passed"),
+           "and contributes no battery rows to PPRO");
+  }
+
+  // (e) a failed battery step is a measured FAIL, never a quiet pass.
+  {
+    const broken = jobResult();
+    broken.battery.steps[4] = { step: "sequence", ok: false,
+                                data: { error: "Illegal Parameter type" } };
+    const g = rep.gradeHost("PPRO", rep.sourcesFor("PPRO",
+      { dir: "d", hosts: {}, jobResult: broken }));
+    assert(rowOf(g, "battery: every step passed").state === "FAILED",
+           "one failed step fails the battery row");
+    assert(rowOf(g, "a sequence to work in").state === "FAILED",
+           "and the step's own row carries its error");
+  }
+
+  // (f) G0 reads both artifacts, and an ABSENT reading is UNMEASURED --
+  //     never a measured FAIL. The old gate printed
+  //     "FAIL evalScript ... envelope parsed" when there was no
+  //     evalScript result at all: wrong in both halves of one line.
+  {
+    const g0 = rep.gradeG0({ dir: "d", hosts: { PPRO: panelFile() },
+                             jobResult: jobResult() });
+    const es = g0.checks.filter(function (c) {
+      return c.name.indexOf("evalScript") === 0; })[0];
+    assert(es.pass === true && es.from === "job-result.json",
+           "G0's evalScript row is answered by the unattended battery");
+    const node = g0.checks.filter(function (c) {
+      return c.name.indexOf("CEP Node") === 0; })[0];
+    assert(node.pass === true && node.from === "runtime-PPRO.json",
+           "and its Node row by the panel file, in the same report");
+
+    const bare = rep.gradeG0({ dir: "d", hosts: { PPRO: { takenAt: "x",
+      panel: { cepPresent: true, appName: "PPRO" } } } });
+    const bareEs = bare.checks.filter(function (c) {
+      return c.name.indexOf("evalScript") === 0; })[0];
+    assert(bareEs.unmeasured === true && bareEs.pass === false,
+           "no evalScript result anywhere is UNMEASURED, not a measured FAIL");
+    assert(!/envelope parsed/.test(String(bareEs.detail)),
+           "and the detail beside it does not claim an envelope parsed");
+    const bareNode = bare.checks.filter(function (c) {
+      return c.name.indexOf("CEP Node") === 0; })[0];
+    assert(bareNode.unmeasured === true,
+           "an unTAKEN Node inventory is unmeasured too");
+    assert(bare.measured === false && bare.pass === false,
+           "so the gate as a whole is NOT MEASURED");
+  }
+
+  // (g) the whole report still builds off a folder holding only a job
+  //     result -- the exact state an unattended run leaves behind.
+  {
+    const r = rep.report({ dir: "d", exists: true, hosts: {},
+                           jobResult: jobResult() });
+    const ppro = r.hosts.filter(function (h) { return h.host === "PPRO"; })[0];
+    assert(ppro.present === true,
+           "a host with no panel file but a battery result is PRESENT");
+    assert(ppro.sources.length === 1 && ppro.sources[0].file ===
+           "job-result.json",
+           "and its sources line names the one artifact that spoke");
+    const aeft = r.hosts.filter(function (h) { return h.host === "AEFT"; })[0];
+    assert(aeft.present === false,
+           "while AEFT, which nothing measured, is still reported absent");
+  }
+
+  // (h) a panel file that will not parse is a finding, and must not
+  //     swallow the battery result standing beside it.
+  {
+    const r = rep.report({ dir: "d", exists: true,
+      hosts: { PPRO: { __unreadable: "Unexpected end of JSON input" } },
+      jobResult: jobResult() });
+    const ppro = r.hosts.filter(function (h) { return h.host === "PPRO"; })[0];
+    assert(ppro.rows[0].state === "FAILED" &&
+           /JSON/.test(String(ppro.rows[0].value)),
+           "an unreadable runtime-PPRO.json is reported as a FAILED row");
+    assert(rowOf(ppro, "MOGRT").from === "job-result.json",
+           "and the battery beside it is still graded -- a corrupt panel " +
+           "file is not a reason to lose the run nobody watched");
+  }
+}
+
 console.log(failed ? "\nTESTS FAILED" : "\nALL TESTS PASSED");
 process.exitCode = failed ? 1 : 0;
