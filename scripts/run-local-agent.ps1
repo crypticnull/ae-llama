@@ -45,7 +45,10 @@ param(
     # cheaper tier; the expensive one is for daytime design and review.
     [string]$Model = '',
     [switch]$SkipPermissions = $true,
-    [switch]$Detached
+    [switch]$Detached,
+    # Leave the hosts' dialogs alone. For watching what AE or Premiere
+    # actually puts up, without anything answering it first.
+    [switch]$NoDialogWatchdog
 )
 
 # --- detach: the loop must be nobody's child -------------------------
@@ -68,6 +71,7 @@ if (-not $Detached) {
     if ($ClaudePath) { $fwd = $fwd + ' -ClaudePath "' + $ClaudePath + '"' }
     if ($Model)      { $fwd = $fwd + ' -Model "' + $Model + '"' }
     if (-not $SkipPermissions) { $fwd = $fwd + ' -SkipPermissions:$false' }
+    if ($NoDialogWatchdog) { $fwd = $fwd + ' -NoDialogWatchdog' }
     $spawn = $null
     try {
         $spawn = Invoke-CimMethod -ClassName Win32_Process `
@@ -248,6 +252,57 @@ if ($UntilHour -ge 0) {
     Write-Log ('Will stop at ' + $stopAt.ToString('yyyy-MM-dd HH:mm'))
 }
 
+# ---------------------------------------------------------------- watchdog
+#
+# Answer the hosts' modal dialogs for the WHOLE life of the loop, in a
+# background job, not just while a particular script happens to be
+# running.
+#
+# This exists because the first two attempts at the save-changes prompt
+# both put the answering INSIDE run-ae-selftest.ps1 -- once before its
+# launch, then also during its wait loop. Both are real improvements and
+# both miss the case the owner kept hitting, for a simple reason:
+# NOTHING IN THIS REPO ASKS AFTER EFFECTS TO QUIT. Grep it. So the
+# prompt in the owner's photo was not raised by the self-test at all,
+# and a self-test that is not running cannot answer it. AE sat on
+#
+#     Save changes to "Untitled Project.aep" before closing?
+#
+# with the panel visible behind it, between passes, where no code of
+# ours was looking. The answering had to stop being a feature of one
+# script and become a property of the loop.
+#
+# The job runs the same shared rules (scripts/lib/host-dialogs.ps1) and
+# so inherits the same rail: it may DISCARD changes only on a project
+# this harness declares it owns, and on anything else it clicks Cancel,
+# which unblocks the host and keeps every unsaved change. It also never
+# consults the wait-loop triage, which is a second reason the in-run
+# answering could miss: a save prompt that AE's script-progress window
+# owns reads as the verdict `running`, and `running` means keep
+# waiting.
+$watchdog = $null
+if (-not $NoDialogWatchdog) {
+    $watchdog = Start-Job -Name 'AellDialogWatchdog' -ScriptBlock {
+        param($lib, $owned, $procs, $everySec)
+        . $lib
+        while ($true) {
+            try {
+                [void](Answer-AellKnownDialogs -ProcessNames $procs `
+                         -OwnedProjects $owned)
+            } catch { }
+            Start-Sleep -Seconds $everySec
+        }
+    } -ArgumentList `
+        (Join-Path $PSScriptRoot 'lib\host-dialogs.ps1'),
+        @('Untitled Project', 'mogrt-probe-scratch', 'AELL_PROBE_SCRATCH'),
+        @('AfterFX', 'Adobe Premiere Pro', 'Adobe Premiere'),
+        10
+    Write-Log ('Dialog watchdog running (job ' + $watchdog.Id + '): a ' +
+               'save-changes prompt on a project this harness owns is ' +
+               'answered Do not Save; anything else is cancelled, which ' +
+               'unblocks the host and keeps its changes.')
+}
+
 # Consecutive waits spent on a usage limit (see the check below). Reset
 # whenever a pass actually lands a commit.
 $limitWaits = 0
@@ -368,6 +423,20 @@ for ($i = 1; $i -le $Iterations; $i++) {
     }
 
     Start-Sleep -Seconds $PauseSec
+}
+
+if ($watchdog) {
+    # The job holds no state worth keeping; it exists only while the
+    # loop does. Left running it would answer dialogs on a machine
+    # nobody is driving any more.
+    try {
+        Stop-Job -Job $watchdog -ErrorAction Stop
+        Remove-Job -Job $watchdog -Force -ErrorAction SilentlyContinue
+        Write-Log 'Dialog watchdog stopped.'
+    } catch {
+        Write-Log ('Could not stop the dialog watchdog: ' +
+                   $_.Exception.Message)
+    }
 }
 
 Write-Log 'Loop finished.'

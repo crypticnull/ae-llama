@@ -179,6 +179,50 @@ check("the AE runner keeps no private copy of the rules",
       ae.indexOf("$script:AellDialogRules") === -1 &&
       ae.indexOf("public static string AnswerDialog") === -1);
 
+// --- the watchdog -------------------------------------------------------
+// The answering was built twice inside run-ae-selftest.ps1 and missed
+// the owner's case both times, because NOTHING in this repo asks After
+// Effects to quit -- so the prompt appeared when no self-test was
+// running and no code of ours was looking. Answering therefore cannot
+// be a feature of one script; the loop has to carry it.
+var loop = fs.readFileSync(
+  path.join(__dirname, "..", "scripts", "run-local-agent.ps1"), "utf8");
+
+check("the overnight loop starts a dialog watchdog",
+      /Start-Job[\s\S]{0,120}AellDialogWatchdog/.test(loop));
+check("the watchdog uses the shared rules, not a copy of its own",
+      /lib\\host-dialogs\.ps1/.test(loop) &&
+      /Answer-AellKnownDialogs/.test(loop));
+check("the watchdog is stopped when the loop finishes",
+      /Stop-Job[\s\S]{0,120}\$watchdog|Stop-Job -Job \$watchdog/.test(loop));
+check("the watchdog can be turned off",
+      /\[switch\]\$NoDialogWatchdog/.test(loop));
+// The loop relaunches itself detached through WMI, rebuilding its own
+// command line by hand. A switch missing from that string is a switch
+// that silently does nothing in the run that actually happens.
+check("-NoDialogWatchdog survives the detached relaunch",
+      /\$NoDialogWatchdog\)\s*\{\s*\$fwd = \$fwd \+ ' -NoDialogWatchdog'/
+        .test(loop));
+
+// Every owned name the watchdog and the standalone script declare must
+// be one some script here really writes; a name that drifts silently
+// disarms the rule for that project.
+var standalone = fs.readFileSync(
+  path.join(__dirname, "..", "scripts", "answer-host-dialogs.ps1"), "utf8");
+["Untitled Project", "mogrt-probe-scratch", "AELL_PROBE_SCRATCH"]
+  .forEach(function (n) {
+    check("the watchdog claims '" + n + "'", loop.indexOf("'" + n + "'") !== -1);
+    check("answer-host-dialogs.ps1 claims '" + n + "'",
+          standalone.indexOf("'" + n + "'") !== -1);
+  });
+
+check("there is a standalone way to clear a dialog with no loop running",
+      /lib\\host-dialogs\.ps1/.test(standalone) &&
+      /Answer-AellKnownDialogs/.test(standalone));
+check("...and a read-only mode that clicks nothing",
+      /\[switch\]\$WhatIsUp/.test(standalone) &&
+      /Write-AellUnknownDialogs/.test(standalone));
+
 // --- ASCII (CLAUDE.md: Windows PowerShell 5.1, BOM-less) ----------------
 var bytes = fs.readFileSync(LIB);
 var nonAscii = [];

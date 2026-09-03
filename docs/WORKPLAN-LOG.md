@@ -14278,3 +14278,49 @@ Nothing else was left unattempted this pass. Nothing is blocked.
   every dead end in both runners, so the first one to appear puts its
   real strings in the log.
 - No `extension/` change, so NO BUMP.
+
+## 2026-09-03 (remote session) — the answering had to leave the self-test
+
+- Owner, third time, with a photo: "STILL hanging". The dialog is
+  `Save changes to "Untitled Project.aep" before closing?` with
+  Cancel / Don't Save / Save — an UNTITLED project, which the rule
+  shipped an hour earlier already claimed. So why did nothing answer it?
+- ROOT CAUSE, and it invalidates both previous attempts: **nothing in
+  this repo asks After Effects to quit.** Grep it — no
+  `CloseMainWindow`, no `Stop-Process`, no `app.project.close` on the AE
+  side anywhere. The prompt in the photo was therefore NOT raised by the
+  self-test, and a self-test that is not running cannot answer it. Both
+  earlier fixes put the answering inside `run-ae-selftest.ps1` — once
+  before its launch, once during its wait loop — and both are real
+  improvements that could never have covered this: AE was sitting on the
+  prompt BETWEEN passes, with the panel visible behind it, where no code
+  of ours was looking.
+- A second, independent hole in the in-run answering, worth recording
+  because it would have bitten later: the mid-run attempt is gated on
+  the triage verdict, and a wordless dialog OWNED by AE's script-progress
+  window is graded `running` — "AE is working on our script, keep
+  waiting". A save prompt arriving during a run could read as `running`
+  and never be offered to a rule at all.
+- FIX: answering is no longer a feature of one script. `run-local-agent.ps1`
+  starts a WATCHDOG (`Start-Job`, 10 s sweep) that runs for the whole
+  life of the loop, in both hosts, whatever is or is not mid-pass. It
+  loads the same `scripts/lib/host-dialogs.ps1`, so it inherits the same
+  rail — discard only on a project the harness owns, Cancel on anything
+  else — and it never consults the triage verdict, which is what makes
+  it immune to the `running` hole above. `-NoDialogWatchdog` turns it
+  off, and that switch is forwarded through the WMI detach (a switch
+  missing from that hand-built command line is a switch that silently
+  does nothing in the run that actually happens; the test enforces it).
+- NEW `scripts/answer-host-dialogs.ps1` — the same thing for a machine
+  that is NOT in a loop: one sweep by default, `-Watch` to keep
+  sweeping, `-WhatIsUp` to print what each host is showing with every
+  button label and click NOTHING. That last mode is the one to run
+  before writing any new rule.
+- Verified: the `Start-Job` wiring was executed under pwsh 7 with the
+  real ArgumentList — the library loads in the child runspace and
+  `Answer-AellKnownDialogs` sweeps twice without throwing (it answers 0
+  here, there being no AfterFX on Linux). pwsh parses every `.ps1`.
+  `tests/test-host-dialogs.js` extended to cover the watchdog, its
+  teardown, its off-switch, the detach forwarding, and that every owned
+  name is one a script here really writes. Harness 71/72.
+- No `extension/` change, so NO BUMP.
