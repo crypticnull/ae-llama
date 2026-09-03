@@ -14125,3 +14125,24 @@ Nothing else was left unattempted this pass. Nothing is blocked.
 - The WMI relaunch formats it with InvariantCulture, so a comma decimal
   separator on a non-English locale cannot come back unparseable.
 - Verified the arithmetic under pwsh for 7, 9.5, 0.25 and 23.75.
+
+## 2026-09-02 (remote session) — the save-changes modal, from both ends
+
+- Owner: the run "always hangs on the save before quitting modal and
+  this loses time while its just sitting there". Two causes, and the
+  second one was self-inflicted.
+- CAUSE 1: `CloseMainWindow()` is polite. If Premiere asks "save
+  changes?" it waits for an answer that is never coming, so an
+  unattended pass burns its whole budget on a dialog. NEW
+  `Stop-OurPremiere`: ask nicely, wait 20 s, then force. It takes the
+  process object from `Start-Process -PassThru`, so the only instance it
+  can ever kill is the one this script launched itself, holding nothing
+  but a throwaway scratch project. A Premiere the owner started is never
+  passed to it, and the start-of-run close stays polite and gives up.
+- CAUSE 2, and worse: the cleanup step called `app.project.save()`, and
+  on an UNTITLED project that opens the SAVE AS dialog. The step written
+  to prevent the modal was capable of creating it. It now reads
+  `app.project.path` first: `save()` only when there is a path,
+  `saveAs()` to the scratch path when there is not, and it says so in
+  its receipt when it can do neither.
+- Harness 70/72. No `extension/` change, so NO BUMP.

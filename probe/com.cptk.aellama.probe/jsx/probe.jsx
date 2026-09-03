@@ -804,15 +804,33 @@ AELLP_PROBES.battery = function (args) {
         }
       } catch (eC) {}
     }
-    // SAVE the scratch project. A dirty project makes Premiere put up a
-    // "save changes?" modal when the runner tries to close it, which
-    // then blocks the NEXT unattended run before it starts. Saving a
-    // throwaway file costs nothing and removes that whole failure.
+    /*
+     * SAVE, but NEVER with save() on an untitled project.
+     *
+     * A dirty project makes Premiere put up "save changes?" when the
+     * runner closes it, which hangs an unattended run. But the obvious
+     * fix is worse than the bug: app.project.save() on a project with
+     * no path opens the SAVE AS dialog -- so the cleanup step was
+     * capable of creating the very modal it existed to prevent.
+     *
+     * saveAs() to a known throwaway path has no dialog and no ambiguity.
+     */
     var saved = null;
     try {
-      if (app.project && typeof app.project.save === "function") {
+      var curPath = AELLP_safe(function () { return app.project.path; });
+      var hasPath = (curPath && typeof curPath === "string" &&
+                     curPath.length > 0);
+      if (hasPath && typeof app.project.save === "function") {
         app.project.save();
-        saved = true;
+        saved = "save() to " + curPath;
+      } else if (args.scratchProject &&
+                 typeof app.project.saveAs === "function") {
+        app.project.saveAs(args.scratchProject);
+        saved = "saveAs() to " + args.scratchProject;
+      } else {
+        saved = "NOT SAVED: the project has no path and saveAs is " +
+                "unavailable, so save() would have opened the Save As " +
+                "dialog and hung the run";
       }
     } catch (eS) { saved = "save threw: " + AELLP_say(eS); }
 

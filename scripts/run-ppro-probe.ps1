@@ -62,6 +62,42 @@ function Good([string]$m) { Write-Host $m -ForegroundColor Green }
 function Bad([string]$m) { Write-Host $m -ForegroundColor Red }
 function Warn([string]$m) { Write-Host $m -ForegroundColor Yellow }
 
+<#
+  Close the Premiere WE started, and do not sit on a modal.
+
+  CloseMainWindow() is polite: if Premiere asks "save changes?" it waits
+  for an answer that is never coming, and an unattended pass just burns
+  its whole budget staring at a dialog. So: ask nicely, wait, then kill.
+
+  Killing is safe HERE and only here, because the only instance this
+  ever touches is the one this script launched itself, containing
+  nothing but a throwaway scratch project. A Premiere the owner started
+  is never passed to this function.
+#>
+function Stop-OurPremiere {
+    param($Proc, [int]$GraceSec = 20)
+    if (-not $Proc) { return }
+    try { if ($Proc.HasExited) { return } } catch { return }
+
+    try { [void]$Proc.CloseMainWindow() } catch {}
+    $deadline = (Get-Date).AddSeconds($GraceSec)
+    while ((Get-Date) -lt $deadline) {
+        try { if ($Proc.HasExited) { Say 'Premiere closed.'; return } } catch { return }
+        Start-Sleep -Milliseconds 500
+    }
+
+    Say ("Premiere did not close in " + $GraceSec + "s (a save-changes modal" +
+         " with nobody to answer it). Forcing OUR instance, PID " +
+         $Proc.Id + ".")
+    try {
+        Stop-Process -Id $Proc.Id -Force -ErrorAction Stop
+        Say 'Forced.'
+    } catch {
+        Warn ("Could not force-close PID " + $Proc.Id + ": " +
+              $_.Exception.Message)
+    }
+}
+
 function Get-PremiereProcesses {
     return @(Get-Process -Name 'Adobe Premiere Pro' -ErrorAction SilentlyContinue) +
            @(Get-Process -Name 'Adobe Premiere' -ErrorAction SilentlyContinue)
@@ -225,12 +261,15 @@ if (Test-Path $scratch) {
         $haveScratch = $true
     }
 }
+# -PassThru so the PID is known. Everything that force-closes below
+# targets THIS process and no other: an instance the owner started, with
+# their own work in it, must never be killed by this script.
 if ($haveScratch) {
     Say 'Launching Premiere with the scratch project...'
-    Start-Process -FilePath $PremierePath -ArgumentList @($scratch) | Out-Null
+    $ours = Start-Process -FilePath $PremierePath -ArgumentList @($scratch) -PassThru
 } else {
     Say 'Launching Premiere (no scratch project yet: the battery makes one)...'
-    Start-Process -FilePath $PremierePath | Out-Null
+    $ours = Start-Process -FilePath $PremierePath -PassThru
 }
 
 # ------------------------------------------------------------- wait
@@ -302,9 +341,7 @@ if (-not (Test-Path $resFile)) {
         Say '    fire on this build.'
     }
     Say '  - scripts\probe-doctor.ps1 reads what CEP logged about both.'
-    if (-not $KeepOpen) {
-        foreach ($p in (Get-PremiereProcesses)) { [void]$p.CloseMainWindow() }
-    }
+    if (-not $KeepOpen) { Stop-OurPremiere -Proc $ours }
     exit 3
 }
 
@@ -457,7 +494,7 @@ Say 'Grade it with:  node scripts\ppro-probe-report.js'
 if (-not $KeepOpen) {
     Say ''
     Say 'Closing Premiere...'
-    foreach ($p in (Get-PremiereProcesses)) { [void]$p.CloseMainWindow() }
+    Stop-OurPremiere -Proc $ours
 }
 
 if ($failedSteps -gt 0) {
