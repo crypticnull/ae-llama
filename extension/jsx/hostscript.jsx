@@ -8293,6 +8293,29 @@ AELL_TOOLS.set_mask = function (args) {
   return AELL_okay(setOut);
 };
 
+/*
+ * What REMOVING a mask did to the picture. The same reading set_mask
+ * takes (AELL_maskEditKind), with the one difference that is the whole
+ * reason this is its own function: for a REMOVAL, "nothing" and "all" are
+ * the same picture.
+ *
+ * Measured 2026-09-03, AE 26.3x87 (scripts/mask-delete-probe.js), by the
+ * layer's own alpha: deleting a layer's only 'add' mask took it from mean
+ * 0.429 to 1.0 while the reader went "some" -> "nothing", and deleting
+ * the last COMPOSITING mask with a 'none' carrier still on the layer did
+ * exactly the same (0.429 -> 1.0, "some" -> "nothing") with a mask still
+ * listed in remainingMasks. set_mask has to keep the two words apart — a
+ * mask switched to 'none' over a layer that already showed every pixel
+ * changes nothing anybody can see — but a removal cannot ADD masking, so
+ * a parade that ends with nothing compositing shows every pixel, which is
+ * what "all" says.
+ */
+function AELL_maskGoneKind(before, after) {
+  var b = (before === "nothing") ? "all" : before;
+  var a = (after === "nothing") ? "all" : after;
+  return AELL_maskEditKind(b, a);
+}
+
 /* Mask names on a layer, in AE's order — the receipt half of delete_mask. */
 function AELL_maskNames(layer) {
   var names = [];
@@ -8351,14 +8374,65 @@ AELL_TOOLS.delete_mask = function (args) {
   try { mask = AELL_findMask(layer, args.mask); }
   catch (eF) { return AELL_err(eF.message); }
   var removedName = String(mask.name);
+  /* The picture BEFORE the removal. Measured (scripts/mask-delete-probe.js,
+   * AE 26.3x87): taking ONE mask out of a parade emptied the layer in one
+   * row (0.429 -> 0, the 'add' window above a full-coverage 'subtract')
+   * and handed it back in three (0 -> 1.0), and this receipt said neither.
+   * `remainingMasks` cannot tell those apart — the emptied row and one of
+   * the handed-back rows both leave exactly one mask on the layer. */
+  var delBox = AELL_layerBox(layer, comp.time);
+  var showedBefore = AELL_paradeShows(masks, delBox);
   try {
     mask.remove();
   } catch (eR) {
     return AELL_err("AE refused to delete mask '" + removedName +
       "' on '" + layer.name + "': " + (eR && eR.message ? eR.message : eR));
   }
-  return AELL_okay({ layer: layer.name, removed: removedName,
-                     remainingMasks: AELL_maskNames(layer) });
+  /* The same group object, across the removal that invalidated one of its
+   * children — measured to read the same as a fresh lookup on all nine
+   * probe rows. */
+  var showedAfter = AELL_paradeShows(masks, delBox);
+  var delOut = { layer: layer.name, removed: removedName,
+                 remainingMasks: AELL_maskNames(layer) };
+  var left = delOut.remainingMasks;
+  var leftList = left.join(", ");
+  var leftPlural = "masks", leftVerb = "hide";
+  if (left.length === 1) { leftPlural = "mask"; leftVerb = "hides"; }
+  var goneKind = AELL_maskGoneKind(showedBefore, showedAfter);
+  if (goneKind === "erases" && left.length) {
+    /* The first survivor is not promised to be the one holding the layer
+     * shut — with several masks left it may take more than one — so it is
+     * offered as a switch, not as the cure. Ctrl+Z is the cure and it is
+     * exact; there is no undo TOOL, so the tool-side routes are named too. */
+    delOut.warning = "Nothing of '" + layer.name + "' shows now: with '" +
+      removedName + "' gone, the " + leftPlural + " left on it (" +
+      leftList + ") " + leftVerb + " every pixel of it. Ctrl+Z puts '" +
+      removedName +
+      "' back; add_mask can draw a new one that reveals it, or set_mask " +
+      "{mask: \"" + left[0] + "\", mode: \"none\"} switches one of the " +
+      "survivors off.";
+  } else if (goneKind === "undoes" && left.length) {
+    /* Gated on a survivor for the same reason add_mask gates its own
+     * no-op on `asked`: deleting a layer's LAST mask and getting the
+     * whole layer back is the tool working, and `remainingMasks: []` on
+     * the receipt already says it. A mask that stayed while the masking
+     * stopped is the surprising half — measured, one of them was a 'none'
+     * carrier that never composited at all. */
+    delOut.warning = "Every pixel of '" + layer.name + "' shows again: " +
+      "with '" + removedName + "' gone, the " + leftPlural + " left on it (" +
+      leftList + ") " + leftVerb + " nothing of it.";
+  } else if (goneKind === "noop") {
+    delOut.warning = "That changed nothing about what '" + layer.name +
+      "' shows: ";
+    if (showedAfter === "none") {
+      delOut.warning = delOut.warning + "it was already masked out " +
+        "completely and still is.";
+    } else {
+      delOut.warning = delOut.warning + "every pixel of it showed before " +
+        "'" + removedName + "' went, and still does.";
+    }
+  }
+  return AELL_okay(delOut);
 };
 
 /*

@@ -17898,3 +17898,126 @@ and solid source each time), one interrupted context-budget probe cleaned
 up by hand as described above, and two small read-only audit scripts. The
 project audits clean: **398 items, nothing under any probe namespace**.
 No Premiere, no ComfyUI, no llama-server left running.
+
+## 2026-09-03 07:33 — delete_mask had the blindness set_mask just lost (0.11.34)
+
+The top item the 0.11.33 pass filed: `set_mask` learned to read the
+picture before and after its own edit; `delete_mask` kept exactly the same
+silence, and its receipt (`{layer, removed, remainingMasks}`) can never
+answer the question by itself.
+
+### Measured first (scripts/mask-delete-probe.js/.jsx, new, AE 26.3x87)
+
+Nine parades, the layer's own alpha through `sampleImage(postEffect)`,
+each one deleted through the shipped tool. Every row answered a bare ok:
+
+- **the layer is GONE** — delete the `add` WINDOW above a full-coverage
+  `subtract`: 0.429 -> 0
+- **the layer is BACK** — delete the `subtract` above a full `add`:
+  0 -> 1.0; a PART subtract: 0.571 -> 1.0; a layer's only half-mask:
+  0.429 -> 1.0
+- **the row `remainingMasks` can never answer** — delete the last
+  COMPOSITING mask off a layer that keeps a `none` path carrier:
+  0.429 -> 1.0 with a mask still listed. The emptied row and that one
+  both leave exactly ONE mask behind.
+- **nothing moved** — a redundant duplicate 1.0 -> 1.0; one of two full
+  subtracts EMPTY -> EMPTY (the "I deleted it and the layer is still
+  gone" case)
+- **not readable** — a feathered survivor: 0 -> 0.991, which is not
+  "all" either, so nothing is said
+- Also measured: the parade group object reads the SAME after
+  `MaskPropertyGroup.remove()` invalidates one of its children as a fresh
+  lookup does, on all nine rows. That is what lets the tool hold one
+  reference across the removal.
+
+### The fix
+
+`AELL_maskGoneKind` is `AELL_maskEditKind` with one difference that is
+the whole reason it exists: for a REMOVAL, **"nothing" and "all" are the
+same picture**. A delete cannot ADD masking, so a parade left with
+nothing compositing shows every pixel. `set_mask` must keep the two words
+apart (a mask switched to `none` over a layer that already showed
+everything changes nothing anybody can see); `delete_mask` must not, or
+deleting a lone full-coverage add reads as a change and the `none`-carrier
+row reads as nothing at all.
+
+`delete_mask` now reads `AELL_paradeShows` before and after its own
+removal and says `erases` / `undoes` / `noop`, naming the masks left
+behind. The erasure sentence carries the way back: Ctrl+Z (exact),
+`add_mask` (draw a new revealing mask), and `set_mask {mode: "none"}` on
+a survivor — offered as a switch, not as the cure, because with several
+masks left it may take more than one.
+
+### Verification
+
+- **Real AE harness 736 -> 753/753 PASSED**, seventeen new steps in
+  `extension/js/selftest.js` (ST Del).
+- **Five of them are RED against the reverted host in REAL AE**
+  (748/753), reproducing the filed silence verbatim.
+- **The probe re-run against the fixed host**: all nine sentences agree
+  with the alpha beside them.
+- `tests/test-shape-mask-tools.js` section 6g, **10 assertions RED**
+  against the reverted host: the nine measured parades plus the
+  survivor-naming and way-back clauses.
+- Full stubbed suite green; `docs/CAPABILITIES.md` regenerated.
+- **Zero prompt cost** — host strings only. 58933 full / 39803 compact,
+  unchanged (headroom 67).
+
+### Stub faithfulness
+
+`tests/test-self-test.js` answered `delete_mask` from its list of names
+alone, so it would have passed five of the new steps while proving
+nothing — the same class as last pass's `set_mask`. It now reads the
+parade before and after the splice (`mkGoneKind`), and with that reverted
+the canned host fails exactly the five steps real AE fails.
+
+### Notes / assumptions
+
+- **Assumed the `undoes` sentence is gated on a SURVIVOR.** Deleting a
+  layer's last mask and getting the whole layer back is the tool working,
+  and `remainingMasks: []` already says it; a warning on every ordinary
+  delete would be noise. The `none`-carrier row is the surprising half
+  and it is not gated out — a mask remains there.
+- **Assumed `noop` is NOT gated the same way**, because "I deleted the
+  mask and the layer is still masked out completely" is the sentence a
+  caller needs most, and its twin ("every pixel showed before and still
+  does") is what stops the reader calling a lone full-coverage add's
+  removal a change.
+- Deliberately NOT touched: the destructive-refusal WORDING on
+  `delete_mask`, which is filed separately. This is the receipt, not the
+  refusal.
+- `delete_mask` warning on a live expression pointing at the deleted mask
+  is still open and still unrelated (AE reports nothing at all there —
+  see the comment above the tool).
+
+### Still open, in priority order
+
+1. An ellipse or a feather ALREADY on the layer still makes the parade
+   unreadable (`AELL_maskRect` takes rectangles only). Measured again
+   this pass: a feathered survivor reads 0.991, so the narrowness is
+   earning its keep — but the algebra could carry an ellipse cell.
+2. `add_mask {mode: "subtract"}` with NO bounds over a layer whose masks
+   already hide everything is silent, because the no-op sentence waits to
+   be asked.
+3. `comp.saveFrameToPng` writing nothing is still unexplained.
+4. Row 30's typo still burns six `center_anchor_point` calls before the
+   grid_layout that works. Cost, not harm.
+5. Everything else from the 2026-09-03 lists is unchanged: the
+   `distribute_property` mutate-then-throw hole, a bad VALUE not being
+   `argFault`, widening the `errArg` rollback exemption to thrown
+   lookups, step 2's naming flake, the destructive-refusal wording on
+   `delete_layer` / `delete_mask`, `property: string` in TOOL_DEFS,
+   `POST /tokenize`, the `comfyUrl` 8188/8000 mismatch on this machine,
+   the harness answering a modal with WORDS, `starved` wording,
+   delete_mask warning on a live expression, the unmeasured controller
+   GROUP and non-en_US locale, and `capParams`.
+
+Section 8 still has no open HARM and no open miss in the variant matrix.
+
+### Machine state
+
+**After Effects was never closed and its project was never closed.**
+Three harness runs (baseline 736, green 753, reverted-host red 748) and
+two runs of the new mask-delete probe, which removes its own comp and
+solid source each time and reported `cleanup + cleaned` on both. No
+Premiere, no ComfyUI, no llama-server left running.

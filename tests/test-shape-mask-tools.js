@@ -1640,6 +1640,10 @@ function opMask(spec) {
   if (typeof spec.expansion === "number") {
     m.property("ADBE Mask Offset").setValue(spec.expansion);
   }
+  if (typeof spec.feather === "number") {
+    m.property("ADBE Mask Feather").setValue([spec.feather, spec.feather]);
+  }
+  if (spec.name) m.name = spec.name;
   return m;
 }
 function paradeReads(specs) {
@@ -1848,6 +1852,117 @@ assert(r.ok && !/hides ALL of 'Solo'/.test(r.data.warning || ""),
        "a subtract over a layer whose masks already hide everything does " +
        "not get to claim the erasure: " +
        JSON.stringify(r.ok ? r.data : r.error));
+opMasks._children.length = 0;
+
+// 6g. REMOVING a mask is a claim about pixels too.
+//
+// set_mask learned to read the picture before and after its own edit;
+// delete_mask kept exactly the same blindness, and its receipt
+// ({layer, removed, remainingMasks}) can never answer the question —
+// measured, the row where the layer is EMPTIED and one of the rows where
+// it is HANDED BACK both leave precisely one mask on the layer.
+//
+// Every row below is measured: scripts/mask-delete-probe.js, AE 26.3x87,
+// layer alpha through sampleImage(postEffect), rows scaled from the
+// probe's 400x300 layer to this fixture's 100x100.
+const BANDL = [0, 0, 25, 100], BANDR = [50, 0, 25, 100];
+function deleteFrom(specs, target) {
+  opMasks._children.length = 0;
+  specs.forEach(opMask);
+  return call("delete_mask", { layer: "Solo", mask: target });
+}
+// The layer is GONE and the old receipt was a bare ok. Measured
+// 0.429 -> 0: the 'add' window above a full-coverage subtract was the
+// only thing letting the layer through.
+r = deleteFrom([{ mode: "subtract", name: "Cut" },
+                { mode: "add", bounds: HALF, name: "Win" }], "Win");
+assert(r.ok && /Nothing of 'Solo' shows now/.test(r.data.warning || ""),
+       "deleting the window above a full subtract EMPTIES the layer " +
+       "(measured 0.429 -> 0) and used to answer a bare ok: " +
+       JSON.stringify(r.ok ? r.data : r.error));
+assert(/\(Cut\)/.test(r.data.warning || ""),
+       "…naming what is hiding the layer now: " + r.data.warning);
+assert(/Ctrl\+Z/.test(r.data.warning || "") &&
+       /set_mask \{mask: "Cut", mode: "none"\}/.test(r.data.warning || ""),
+       "…with the way back and a switch that is a TOOL call, since " +
+       "nothing here can undo: " + r.data.warning);
+assert(opMasks.numProperties === 1 && opMasks.property(1).name === "Cut",
+       "…and it WARNS, it does not refuse: the mask really went");
+// The other direction, with a mask left behind — the surprising half.
+// Measured 0 -> 1.0.
+r = deleteFrom([{ mode: "add", name: "Keep" },
+                { mode: "subtract", name: "Cut" }], "Cut");
+assert(r.ok && /Every pixel of 'Solo' shows again/.test(r.data.warning || ""),
+       "deleting the subtract hands the layer back (measured 0 -> 1.0): " +
+       JSON.stringify(r.ok ? r.data : r.error));
+assert(/\(Keep\)/.test(r.data.warning || ""),
+       "…naming the mask that stayed and now hides nothing: " +
+       r.data.warning);
+// Measured 0.571 -> 1.0: a PART subtract is the same sentence.
+r = deleteFrom([{ mode: "add", name: "Keep" },
+                { mode: "subtract", bounds: HALF, name: "Cut" }], "Cut");
+assert(r.ok && /Every pixel of 'Solo' shows again/.test(r.data.warning || ""),
+       "…and so does deleting a PART subtract (measured 0.571 -> 1.0): " +
+       JSON.stringify(r.ok ? r.data : r.error));
+// The row remainingMasks could never answer: a mask REMAINS, and it is a
+// 'none' carrier that never composited. Measured 0.429 -> 1.0.
+r = deleteFrom([{ mode: "add", bounds: HALF, name: "One" },
+                { mode: "none", name: "Path" }], "One");
+assert(r.ok && /Every pixel of 'Solo' shows again/.test(r.data.warning || "") &&
+       /\(Path\)/.test(r.data.warning || ""),
+       "deleting the last COMPOSITING mask reveals the layer even though " +
+       "a mask remains (measured 0.429 -> 1.0): " +
+       JSON.stringify(r.ok ? r.data : r.error));
+// Deleting a layer's LAST mask and getting the whole layer back is the
+// tool working — remainingMasks: [] already says it, and a warning on
+// every ordinary delete is noise on the tool working. Measured
+// 0.429 -> 1.0, the same picture change as the row above.
+r = deleteFrom([{ mode: "add", bounds: HALF, name: "One" }], "One");
+assert(r.ok && !r.data.warning && r.data.remainingMasks.length === 0,
+       "the ordinary delete — a layer's only mask — stays quiet: " +
+       JSON.stringify(r.ok ? r.data : r.error));
+// "some" is never compared to "some": both readings are exact about which
+// pixels show, the coarse word is not. Measured 0.286 -> 0.143.
+r = deleteFrom([{ mode: "add", bounds: BANDL, name: "One" },
+                { mode: "add", bounds: BANDR, name: "Two" }], "Two");
+assert(r.ok && !r.data.warning,
+       "deleting one of two separate bands leaves part of the layer " +
+       "showing either way, and 'some' -> 'some' is not a claim: " +
+       JSON.stringify(r.ok ? r.data : r.error));
+// A no-op delete: the mask was not affecting the picture. Measured
+// 1.0 -> 1.0 for a redundant duplicate, and this is also where "nothing
+// composites" must read as the same picture as "everything shows" —
+// otherwise deleting a lone full-coverage add reads as a change.
+r = deleteFrom([{ mode: "add", name: "A1" },
+                { mode: "add", name: "A2" }], "A2");
+assert(r.ok && /changed nothing about what 'Solo' shows/.test(r.data.warning || "") &&
+       /showed before 'A2' went/.test(r.data.warning || ""),
+       "a redundant duplicate says it moved no pixels (measured " +
+       "1.0 -> 1.0): " + JSON.stringify(r.ok ? r.data : r.error));
+r = deleteFrom([{ mode: "add", name: "Only" }], "Only");
+assert(r.ok && /changed nothing about what 'Solo' shows/.test(r.data.warning || ""),
+       "…and so does taking the only full-coverage add off a layer that " +
+       "keeps showing every pixel — 'nothing composites' is not a " +
+       "different picture from 'everything shows' after a REMOVAL: " +
+       JSON.stringify(r.ok ? r.data : r.error));
+// The sentence a caller needs most: I deleted the mask and the layer is
+// STILL gone. Measured EMPTY -> EMPTY.
+r = deleteFrom([{ mode: "subtract", name: "CutA" },
+                { mode: "subtract", name: "CutB" }], "CutB");
+assert(r.ok && /already masked out completely and still is/.test(r.data.warning || ""),
+       "deleting one of two full subtracts does NOT bring the layer back " +
+       "(measured EMPTY -> EMPTY) and says so: " +
+       JSON.stringify(r.ok ? r.data : r.error));
+// And the narrowness that keeps all of it honest: a feather on a survivor
+// hides by degrees, so there is no reading to compare and nothing is
+// said. Measured 0 -> 0.991 — near-white, and NOT the 1.0 an "all"
+// reading would have claimed.
+r = deleteFrom([{ mode: "add", feather: 10, name: "Soft" },
+                { mode: "subtract", name: "Cut" }], "Cut");
+assert(r.ok && !r.data.warning,
+       "a feathered survivor makes the parade unreadable, and an " +
+       "unreadable picture is not judged (measured 0 -> 0.991, which is " +
+       "not 'all' either): " + JSON.stringify(r.ok ? r.data : r.error));
 opMasks._children.length = 0;
 
 assert(AE_MODALS.length === 0,

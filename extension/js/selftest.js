@@ -3886,6 +3886,235 @@
           return d.removed === "ST Exp" || "removed " + d.removed;
         } },
 
+      // ---- REMOVING a mask is a claim about pixels too ----------------
+      // set_mask learned to read the picture before and after its own
+      // edit in 0.11.33; delete_mask had exactly the same blindness and
+      // its receipt ({layer, removed, remainingMasks}) said neither of
+      // the two things a removal can do. Measured 2026-09-03,
+      // scripts/mask-delete-probe.js, AE 26.3x87, by the layer's own
+      // alpha through sampleImage:
+      //
+      //   delete the 'add' WINDOW above a full-coverage 'subtract'
+      //     0.429 -> 0        the layer is GONE, and it answered ok
+      //   delete the 'subtract' above a full-coverage 'add'
+      //     0    -> 1.0       the layer is BACK, and it answered ok
+      //   delete a layer's only 'add' half-mask
+      //     0.429 -> 1.0      reader "some" -> "nothing"
+      //   delete the last COMPOSITING mask, a 'none' carrier remaining
+      //     0.429 -> 1.0      a mask REMAINS and nothing masks the layer
+      //
+      // The last row is why remainingMasks cannot answer this: the
+      // emptied row and that one both leave exactly one mask behind.
+      { name: "a clean layer for the delete_mask rows",
+        tool: "add_solid",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, name: "ST Del", color: [0.1, 0.6, 0.9],
+                   width: 200, height: 200 };
+        },
+        check: function (d) { return d.name === "ST Del" || d.name; } },
+
+      { name: "…with one ordinary half mask on it",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Del", name: "ST DHalf",
+                   shape: "rectangle", bounds: [0, 0, 100, 200] };
+        },
+        check: function (d) {
+          return !d.warning || "an ordinary half mask was warned about: " +
+                 d.warning;
+        } },
+
+      // Deleting a layer's LAST mask and getting the whole layer back is
+      // the tool working — remainingMasks: [] already says it — so this
+      // one must stay quiet. The gate, from the "some" side.
+      { name: "deleting the only mask hands the layer back without a fuss",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Del", mask: "ST DHalf" };
+        },
+        check: function (d) {
+          if (d.remainingMasks.length) {
+            return "masks left: " + d.remainingMasks.join(", ");
+          }
+          return !d.warning || "the ordinary delete was warned about: " +
+                 d.warning;
+        } },
+
+      { name: "…now a full add and a subtract that blanks the layer",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Del", name: "ST DKeep",
+                   shape: "rectangle", bounds: [0, 0, 200, 200] };
+        },
+        check: function () { return true; } },
+
+      { name: "…and the subtract that empties it",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Del", name: "ST DCut",
+                   shape: "rectangle", bounds: [0, 0, 200, 200],
+                   mode: "subtract" };
+        },
+        check: function (d) {
+          return /hides ALL of 'ST Del'/.test(d.warning || "") ||
+                 "warning: " + (d.warning || "(none)");
+        } },
+
+      // Measured 0 -> 1.0. A mask REMAINS, so this is the surprising half
+      // and the receipt has to name it.
+      { name: "deleting the subtract hands the layer back, and says so",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Del", mask: "ST DCut" };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (!/Every pixel of 'ST Del' shows again/.test(w)) {
+            return "the masking stopped working in silence: " +
+                   (w || "(none)");
+          }
+          return w.indexOf("ST DKeep") !== -1 ||
+                 "it does not name the mask that stayed: " + w;
+        } },
+
+      // A full-coverage add is the same picture as no mask at all, so
+      // taking it off changes nothing — and the reader must not call
+      // "nothing composites" a different picture from "everything shows".
+      { name: "…and taking the full-coverage add off changes no pixel",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Del", mask: "ST DKeep" };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (!/changed nothing about what 'ST Del' shows/.test(w)) {
+            return "warning: " + (w || "(none)");
+          }
+          return /showed before/.test(w) ||
+                 "it does not say what the layer looked like: " + w;
+        } },
+
+      { name: "a full subtract, then the window that lets the layer through",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Del", name: "ST DCut2",
+                   shape: "rectangle", bounds: [0, 0, 200, 200],
+                   mode: "subtract" };
+        },
+        check: function () { return true; } },
+
+      { name: "…the window itself",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Del", name: "ST DWin",
+                   shape: "rectangle", bounds: [0, 0, 100, 200] };
+        },
+        check: function () { return true; } },
+
+      // THE ROW THIS BLOCK WAS WRITTEN FOR. Measured 0.429 -> 0: the
+      // layer is gone and the old receipt was a bare ok.
+      { name: "deleting the window EMPTIES the layer, and says so",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Del", mask: "ST DWin" };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (!/Nothing of 'ST Del' shows now/.test(w)) {
+            return "the layer went blank in silence: " + (w || "(none)");
+          }
+          if (w.indexOf("ST DCut2") === -1) {
+            return "it does not name what is hiding the layer: " + w;
+          }
+          if (!/Ctrl\+Z/.test(w)) return "no way back: " + w;
+          return /mode: "none"/.test(w) ||
+                 "no way to switch a survivor off: " + w;
+        } },
+
+      { name: "…a second subtract over the already-empty layer",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Del", name: "ST DCut3",
+                   shape: "rectangle", bounds: [0, 0, 200, 200],
+                   mode: "subtract" };
+        },
+        check: function () { return true; } },
+
+      // Measured EMPTY -> EMPTY. "I deleted the mask and the layer is
+      // still gone" is the sentence a caller needs most here.
+      { name: "…deleting it does NOT bring the layer back, and says that",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Del", mask: "ST DCut3" };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (!/changed nothing about what 'ST Del' shows/.test(w)) {
+            return "warning: " + (w || "(none)");
+          }
+          return /already masked out completely/.test(w) ||
+                 "it does not say the layer is still gone: " + w;
+        } },
+
+      { name: "…and the last subtract goes quietly (nothing left to name)",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Del", mask: "ST DCut2" };
+        },
+        check: function (d) {
+          if (d.remainingMasks.length) {
+            return "masks left: " + d.remainingMasks.join(", ");
+          }
+          return !d.warning || "the last-mask delete was warned about: " +
+                 d.warning;
+        } },
+
+      { name: "a half mask plus a 'none' PATH CARRIER",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Del", name: "ST DHalf2",
+                   shape: "rectangle", bounds: [0, 0, 100, 200] };
+        },
+        check: function () { return true; } },
+
+      { name: "…the carrier, which composites nothing at all",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Del", name: "ST DPath",
+                   shape: "rectangle", bounds: [0, 0, 200, 200],
+                   mode: "none" };
+        },
+        check: function () { return true; } },
+
+      // Measured 0.429 -> 1.0 with a mask still on the layer: the row
+      // that proves remainingMasks cannot answer this question.
+      { name: "deleting the half mask reveals the layer, carrier notwithstanding",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Del", mask: "ST DHalf2" };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (d.remainingMasks.join(",") !== "ST DPath") {
+            return "masks left: " + d.remainingMasks.join(", ");
+          }
+          if (!/Every pixel of 'ST Del' shows again/.test(w)) {
+            return "a mask remained and the masking stopped in silence: " +
+                   (w || "(none)");
+          }
+          return w.indexOf("ST DPath") !== -1 ||
+                 "it does not name the mask that stayed: " + w;
+        } },
+
+      { name: "…and the delete_mask layer goes away",
+        tool: "delete_layer",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Del" };
+        },
+        check: function (d) {
+          return d.removed === "ST Del" || "removed " + d.removed;
+        } },
+
       // --- the batch executor, at the scale it is actually used at.
       // for_each_layer used to run ANY tool name, so {tool: "create_comp"}
       // over N layers reported {succeeded: N} and left N junk comps in the

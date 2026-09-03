@@ -436,6 +436,16 @@ const mkEditKind = (before, after) => {
   if (before === after && before !== "some") return "noop";
   return "";
 };
+// The same reading for a REMOVAL, where "nothing" and "all" are the same
+// picture: a delete cannot ADD masking, so a parade left with nothing
+// compositing shows every pixel. Measured 2026-09-03
+// (scripts/mask-delete-probe.js, AE 26.3x87): deleting a layer's only
+// 'add' mask went 0.429 -> 1.0 reading "some" -> "nothing", and so did
+// deleting the last COMPOSITING mask off a layer that kept a 'none'
+// carrier. set_mask must keep the two words apart; delete_mask must not.
+const mkGoneKind = (before, after) =>
+  mkEditKind(before === "nothing" ? "all" : before,
+             after === "nothing" ? "all" : after);
 // How big each layer really is, "comp|layer" -> {width, height}. add_mask
 // refuses a mask that misses the layer entirely and get_comp_details puts
 // the layer's own size on its row, and NEITHER can be answered from the
@@ -3628,9 +3638,43 @@ function cannedOk(tool, args) {
           (ref ? ": " + ref : " (several masks — pass {mask: name|index})") +
           ". Masks here: " + dm.join(", ") };
       }
+      // Read as a PICTURE before and after, the same way the host does —
+      // a canned host that answered a bare ok here would let four of the
+      // new steps pass while proving nothing, which is exactly what this
+      // file did for set_mask one pass ago.
+      const dmSz = mkSizes[dmKey];
+      const dmBefore = mkParade(mkShapes[dmKey], dmSz);
       const gone = dm.splice(at, 1)[0];
       if (mkShapes[dmKey]) mkShapes[dmKey].splice(at, 1);
-      return { layer: args.layer, removed: gone, remainingMasks: dm.slice() };
+      const dmAfter = mkParade(mkShapes[dmKey], dmSz);
+      const dmOut = { layer: args.layer, removed: gone,
+                      remainingMasks: dm.slice() };
+      const dmPlural = dm.length === 1 ? "mask" : "masks";
+      const dmVerb = dm.length === 1 ? "hides" : "hide";
+      const dmKind = mkGoneKind(dmBefore, dmAfter);
+      if (dmKind === "erases" && dm.length) {
+        dmOut.warning = "Nothing of '" + args.layer + "' shows now: with '" +
+          gone + "' gone, the " + dmPlural + " left on it (" +
+          dm.join(", ") + ") " + dmVerb + " every pixel of it. Ctrl+Z " +
+          "puts '" + gone +
+          "' back; add_mask can draw a new one that reveals it, or " +
+          "set_mask {mask: \"" + dm[0] + "\", mode: \"none\"} switches one " +
+          "of the survivors off.";
+      } else if (dmKind === "undoes" && dm.length) {
+        // Gated on a survivor: deleting a layer's LAST mask and getting
+        // the whole layer back is the tool working, and remainingMasks
+        // already says it.
+        dmOut.warning = "Every pixel of '" + args.layer + "' shows again: " +
+          "with '" + gone + "' gone, the " + dmPlural + " left on it (" +
+          dm.join(", ") + ") " + dmVerb + " nothing of it.";
+      } else if (dmKind === "noop") {
+        dmOut.warning = "That changed nothing about what '" + args.layer +
+          "' shows: " + (dmAfter === "none"
+            ? "it was already masked out completely and still is."
+            : "every pixel of it showed before '" + gone +
+              "' went, and still does.");
+      }
+      return dmOut;
     }
     case "set_mask_path": {
       // Faithful to the host's rules, not to its happy path: keys that
