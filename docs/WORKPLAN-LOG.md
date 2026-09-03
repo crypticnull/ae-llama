@@ -13699,3 +13699,709 @@ Nothing else was left unattempted this pass. Nothing is blocked.
   read the plan was built on was true in April and stale by June, when
   Adobe's AI Assistant beta landed, so no "Adobe does not do X" phrase
   may ship until the owner fills that table from their own install.
+
+## 2026-09-02 (remote session) — shape A did not load; default switched
+
+- FIRST FIELD RUN of the probe. `install-probe.ps1` reported a clean
+  install (PlayerDebugMode already 1 on CSXS.10/11/12, junction made)
+  and the panel was NOT in After Effects' Window > Extensions.
+- That is a bug in what shipped, not a measurement of Adobe. Shape A
+  (per-extension `HostList`) was documented by Adobe and had ZERO field
+  evidence; every shipped multi-host manifest anyone found uses shape B.
+  Defaulting the probe to the unverified shape was a guess, and it cost
+  the owner a round trip. Two sessions in a row have now framed a
+  self-inflicted failure as "a real result" — the owner called it, and
+  the ledger entry says plainly what is and is not established.
+- Changed: shape B is now `manifest.xml` and the `install-probe.ps1`
+  default; shape A stays in `manifest-shape-a.xml` for a deliberate
+  re-test once the probe is known to work. `-Shape A` prints a warning.
+- Changed: install-probe.ps1 now reads the menu label back OUT of the
+  manifest it just installed instead of printing an assumed one. Its
+  first version told the owner to look for "AE Llama P0 Probe (AE)"
+  under a shape whose menu string was different, which is the least
+  useful possible instruction.
+- NEW `scripts/probe-doctor.ps1` — read-only. Separates the six causes
+  that look identical from the Extensions menu (not pulled, not
+  installed, junction wrong, manifest rejected, PlayerDebugMode unset,
+  host not restarted), validates the manifest as XML, lists what else
+  is in the CEP folder as a control (the panel itself loads from there),
+  and prints what CEP logged about our bundle ids. Section 6 is the only
+  thing that settles WHY shape A was dropped: a malformed manifest and a
+  rejected-but-valid one look identical from the menu, and that has not
+  been read yet.
+- `tests/test-probe-bundle.js` now pins shape B as the default and the
+  install script's default flag. Harness 68/70 (the two known
+  Windows-only suites). No `extension/` change, so NO BUMP.
+
+## 2026-09-02 (remote session) — the real cause: `--` in an XML comment
+
+- The doctor found it on its first run, which is the entire reason it
+  exists. ALL FOUR probe manifests contained `--` inside an XML comment
+  (used as a dash). XML 1.0 forbids it, the file does not parse, and CEP
+  reports that NOWHERE a user can see: the extension is simply absent
+  from Window > Extensions.
+- **The previous entry's diagnosis was wrong and is retracted.** "Shape
+  A does not load" was a claim about Adobe drawn from a self-inflicted
+  typo. Both shapes were malformed, so NEITHER has ever been parsed and
+  the manifest-shape question is completely open. Shape B stays the
+  default on its original evidence (every shipped multi-host manifest
+  uses one HostList), not on this failure.
+- The failure mode is the lesson: a malformed manifest and a
+  rejected-but-valid one are indistinguishable from the Extensions menu,
+  and each guess costs a full quit-and-relaunch on the one machine that
+  can test. NEW `tests/test-manifest-xml.js` refuses unparseable XML
+  repo-wide in milliseconds: comment legality (the exact character that
+  shipped, named as such), tag balance, attribute quoting, plus CEP
+  basics (bundle id, every listed extension dispatched, a host named).
+  Its own checker is tested against each defect, including the fixture
+  trap that a comment written with two trailing dashes tests nothing.
+  CLAUDE.md carries the rule.
+- Also fixed: the doctor used `[xml]$raw`, whose cast failure embeds the
+  WHOLE file in its message, so a one-character error printed 60
+  unreadable lines twice. It uses `XmlDocument.LoadXml` now, which names
+  the line, and adds the double-dash hint when the parser mentions a
+  comment. `install-probe.ps1` no longer claims shape A was measured to
+  fail.
+- Harness 69/71 (the two known Windows-only suites). No `extension/`
+  change, so NO BUMP.
+
+## 2026-09-02 (remote session) — the probe LOADS; two facts measured
+
+- With the XML fixed, the panel listed and opened in AE 26.3. First real
+  measurements, in `docs/PREMIERE-PLATFORM.md`: `appName` is `AEFT` (the
+  string host.js will branch on, confirmed for AE), CEP API **12.0.1**
+  on AE 26.3 (Adobe's own table stops at "AE 25.0 = CEP 12"), CEP Node
+  **17.7.2** with `child_process` requirable — which is what the whole
+  llama-server / ComfyUI / ffmpeg / whisper stack rests on — and
+  `cep.fs` present. Manifest shape B parses and lists.
+- SECOND FACT, and it reaches past the probe: **`$.fileName` inside a
+  CEP `ScriptPath` reports the HOST's folder**
+  (`...\Adobe After Effects 2026\Support Files\`), not the script's own.
+  ScriptPath IS evaluated, but a loader there cannot resolve its
+  siblings, so shape B's "branch on host and evalFile the right body"
+  premise is measured FALSE as written. `AELLP_call` was never defined
+  and every probe returned an empty string.
+- Fixed the way `extension/js/main.js` has always done it: the PANEL
+  `$.evalFile`s the jsx by the absolute path from
+  `getSystemPath("extension")`. Worth carrying into the P2 seam — if
+  each host's page loads its own jsx, `ScriptPath` does not need to
+  branch at all, which weakens the case for shape A (two extensions
+  purely so each gets its own ScriptPath).
+- Two honesty repairs the same run forced: the soak reported "DEGRADED
+  at round 1" when the truth was that probe.jsx had never been
+  evaluated — it now refuses to run rather than blame the engine — and
+  `ppro-probe-report.js` grades a skipped soak as UNMEASURED instead of
+  failed. An empty evalScript reply is also now its own error ("probably
+  not defined in this engine") rather than "unparseable reply: ".
+- `loader.jsx` is kept as the measurement: it records what `$.fileName`
+  actually said, so the next session does not re-derive it. CLAUDE.md
+  carries the rule. Harness 69/71. No `extension/` change, NO BUMP.
+
+## 2026-09-02 (remote session) — GATE G0 PASSED
+
+- The probe panel loads and works in **Premiere 26.3.2** as well as AE
+  26.3, from ONE bundle, shape B. Full table in
+  `docs/PREMIERE-PLATFORM.md`; the load-bearing results:
+  - `appName` = `PPRO` / `AEFT`, both confirmed.
+  - CEP API **12.0.1 in both**. Premiere 26.x is CEP 12 — the
+    third-party "CSXS.13/14 required for Premiere 2026" claim is not
+    borne out, and Adobe's own host table was right.
+  - CEP Node **17.7.2** with `child_process` in BOTH hosts. The whole
+    llama-server / ComfyUI / ffmpeg / whisper stack is viable in
+    Premiere. This was the single biggest unknown.
+  - ExtendScript is the **same build in both** (4.5.6, 80.1060872), so
+    every ES3 hard-won fact in CLAUDE.md — no `JSON`, left-associative
+    `?:` — binds Premiere code too. `tests/test-es3-*.js` should scope
+    any future Premiere jsx without a second thought.
+  - 500-round-trip soak survived in both (5.5 s AE, 6.7 s Premiere). No
+    sign of the "InternalError: Stack overrun" degradation a third party
+    reported on 26.2.2, at this size.
+- **Premiere has NO undo API, measured**: `beginUndoGroup`,
+  `endUndoGroup`, `executeCommand` and `findMenuCommandId` are all
+  `undefined` there and all `function` in AE. Adobe's docs said so; it
+  is now a measurement. STOPPED AT #k is the permanent batch contract
+  and the deleted `Host.supportsRollback` branch stays deleted.
+- QE on 26.3.2: `enableQE` works, `qe.project` resolves, version
+  `26.3.2`, `getVideoEffectList()` returned **236 effects**. That
+  contradicts the third-party "26.3 breaks QE" report — but only for
+  ENTERING and LISTING. Whether QE MUTATES is still unmeasured and stays
+  a P1 row; the tier plan does not move on this.
+- `localStorage` is **per-host**: AE wrote its key at 20:31:51, Premiere
+  opened at 20:32:42 and saw only its own. So no cross-kill through PID
+  records — and no cross-panel discovery either, which makes the lease
+  file under `dataRoot()` REQUIRED rather than a nicety.
+- BridgeTalk lists `premierepro` from AE and `aftereffects` from
+  Premiere, specifiers `premierepro-26.0` / `aftereffects-26.0`,
+  `getStatus("ame")` = `ISNOTRUNNING`. Door 1 has a real target; a
+  listed target proves addressing, not delivery.
+- CORRECTION to the previous entry: `$.fileName` in a ScriptPath does
+  not "name the host's folder". It returned **`"7"`** in AE and **`""`**
+  in Premiere; `new File()` treats both as RELATIVE and resolves them
+  against the host's working directory, which is what produced the
+  install-folder path. The earlier wording was an inference from the
+  symptom. CLAUDE.md and the ledger now carry the measured table.
+- Also fixed: the probe read its two ScriptPath globals by joining them
+  with `|` and splitting, which is one embedded delimiter away from a
+  wrong measurement; they are read separately now.
+- Still owed in P0: MOGRT accept read-back (needs a sequence open),
+  History granularity, the three doors, shape A re-test now that XML
+  parses, the aescripts installer path, the 27.0 beta, transcript
+  exports, and the AI Assistant census.
+
+## 2026-09-02 (remote session) — importMGT fails silently; the picker did too
+
+- The MOGRT button auto-filled with the NEWEST `.mogrt` in
+  `logs/mogrt-verify/` and picked `truncated.mogrt` — a deliberately
+  damaged fixture that lives there because the reader tests need one.
+  My bug: ranking by mtime with no check that the file is a capsule.
+- It produced a real finding anyway, and a load-bearing one:
+  **`sequence.importMGT()` did NOT throw on a corrupt capsule.** It
+  returned normally and changed nothing (V1 clip count `1 -> 1`). Only
+  the read-back caught it. A tool that try/catches `importMGT` and
+  calls no-exception success would have reported importing a broken
+  file. That is the same shape as the third-party QE razor/ripple
+  reports, now measured on a VANILLA documented API — the strongest
+  argument yet for "a mutator's return value is never the receipt",
+  native tools included.
+- Fixed: the picker validates a candidate is really a zip with a
+  `definition.json` (local header 50 4B 03 04, an end-of-central-
+  directory record, and the entry name in the central directory) before
+  choosing, and records EVERY candidate with its verdict so a wrong
+  pick is visible rather than silent.
+- The first version of that validator compared a 4-byte buffer against
+  the string `"PK"`, which never matches — it would have rejected every
+  file including good ones. The second version fixed the comparison but
+  embedded RAW control bytes (0x03 0x04, 0x05 0x06) in string literals
+  in the page source: invisible, unreviewable, and the same hazard class
+  as the NUL bytes that bit this repo before. Now byte comparisons, and
+  `tests/test-probe-bundle.js` asserts no such literal comes back.
+- The test that proves it drives the REAL function out of the page
+  against four capsules built in the test: good, truncated, non-zip, and
+  a valid zip with no definition. Each must be rejected BY ITS OWN RULE,
+  not by the size floor — the first draft's fixtures were so
+  compressible that deflate put them under 200 bytes and three verdicts
+  were right for the wrong reason.
+- Also corrected in the page: a stale comment still said `$.fileName`
+  "reports the HOST's folder". It reports `"7"`/`"8"` in AE and `""` in
+  Premiere; `new File()` resolving those relatively is what produces the
+  host folder.
+- STILL OWED: the acceptance measurement against a REAL AE export. What
+  is measured is the failure path, not the success path.
+- Harness 69/71 (the two known Windows-only suites). No `extension/`
+  change, so NO BUMP.
+
+## 2026-09-02 (remote session) — one command, unattended; and the class fix
+
+- Owner: "I WANT IT FULLY AUTOMATED I DONT WANT TO TOUCH PREMIERE AT
+  ALL". Fair. Five round trips in one day, each teaching exactly one
+  defect, is the failure — not any individual bug.
+- NEW `scripts/run-ppro-probe.ps1`: one command, one Premiere launch,
+  one report. It installs, validates and picks a real `.mogrt`, writes a
+  job file, restarts Premiere and waits. TWO independent things race to
+  claim the job so a failure in either still yields a result: the
+  visible panel (Premiere restores workspace panels) and the invisible
+  door-3 runner (fires on the startup event with no panel at all).
+  `renameSync` makes the claim atomic so exactly one wins.
+- NEW `battery` probe in probe.jsx runs EVERY measurement in one call —
+  ping, hostFacts, QE, scratch project, sequence, History, MOGRT accept,
+  cleanup. **No step may abort the run**: each is try/caught and
+  recorded with its own ok/error, so one pass reports ALL failures.
+  That is the whole design goal.
+- Sequence creation tries three routes in order and records which
+  answered (existing activeSequence, newBarsAndTone +
+  createNewSequenceFromClips, bare createNewSequence). Adobe's own docs
+  disagree on the signatures, so measuring beats picking one and hoping.
+- Two runtime hazards removed before they could cost a trip: the
+  battery SAVES the scratch project (a dirty project makes Premiere
+  raise a save-changes modal when the runner closes it, which blocks the
+  NEXT run before it starts), and the launcher opens the scratch project
+  directly once it exists (so Premiere never reopens the owner's last
+  project and never asks about it).
+- THE CLASS FIX: `pwsh` 7 is cross-platform, so this container CAN parse
+  PowerShell. NEW `tests/test-powershell-syntax.js` runs the real
+  parser over every `.ps1` in the repo, plus BOM and pure-ASCII checks
+  that need no shell. Verified it catches a real error by breaking a
+  brace and watching it fail. It SKIPS loudly when no pwsh is present
+  rather than pretending. CLAUDE.md carries the install command.
+  A parse error found here costs seconds; found by the owner it costs a
+  launch of AE or Premiere. All 23 scripts parse today.
+- Harness 70/72 (the two known Windows-only suites). No `extension/`
+  change, so NO BUMP.
+
+## 2026-09-02 (remote session) — the first unattended run hung; flush fix
+
+- First real run of `run-ppro-probe.ps1`: the job was claimed inside 20
+  seconds and then hung for the full 300 s timeout, producing NOTHING.
+  The script could only report "it hung somewhere".
+- That is a design failure I had no excuse for. This repo's own
+  `scripts/mogrt-verify-probe.jsx` already carries the pattern —
+  "Every measurement is flushed to disk as it is taken" — because an
+  export can put a window up and stop the script dead. The battery held
+  everything in memory and wrote once at the end.
+- Fixed: the battery names each step in a progress file BEFORE running
+  it and writes the row after, so a hang leaves a file naming the exact
+  step that never returned, plus every measurement taken before it.
+  Both claimers write a `job-claimed.json` breadcrumb the instant they
+  claim, so a hang names its claimer instead of leaving two suspects.
+  `run-ppro-probe.ps1` prints all of that on timeout and suggests the
+  `-Skip <step>` re-run.
+- Also reduced the most likely cause rather than only instrumenting it.
+  `app.newProject` was the first mutating step and is a strong suspect
+  for raising a New Project dialog, which with nobody at the keyboard is
+  a hang rather than an error. It is also usually unnecessary: measured
+  on this machine, Premiere launches with an EMPTY `Untitled.prproj`
+  already open (rootItem 0 children). The step now REUSES an empty open
+  project and only calls `newProject` when a project with real content
+  is open — and refuses outright rather than touching a project that has
+  content in it when no scratch path is given.
+- Harness 70/72. No `extension/` change, so NO BUMP.
+
+## 2026-09-02 (remote session) — ROOT CAUSE: a UTF-8 BOM ate the job
+
+- Two unattended runs, five minutes each, produced nothing. The second
+  one's own instrumentation gave the answer: the ticker said "job
+  claimed" (the atomic rename happened) but no claim breadcrumb and no
+  progress file were written. The claimer died BETWEEN the rename and
+  its first write, and there is exactly one statement there.
+- **`Set-Content -Encoding UTF8` on Windows PowerShell 5.1 writes a
+  UTF-8 BOM.** Node's `readFileSync(p, "utf8")` returns it as a leading
+  U+FEFF and `JSON.parse` THROWS on it. The CEP claimer renamed the job
+  to claim it, threw inside `JSON.parse`, and returned from a SILENT
+  catch. The job was consumed so no other claimer could take it, and
+  nothing was written anywhere. It looked exactly like "Premiere hung".
+- PowerShell 6+ defaults to BOM-less UTF-8, so this would have been
+  invisible on any dev box with pwsh while breaking every 5.1 user.
+- Fixed at both ends, because a format that only works when both ends
+  agree has two chances to break. NEW `scripts/lib/json-io.ps1` writes
+  with `UTF8Encoding($false)` and strips a BOM on read;
+  `run-ppro-probe.ps1`, `install-probe.ps1` and `ppro-door-probe.ps1`
+  all route through it, and the two `.jsx` writes in the door probe are
+  BOM-less now too. Both CEP claimers strip `﻿` before parsing.
+- The second defect was worse than the BOM: **a silent catch after
+  consuming the job**. Both claimers now write a `job-claimed.json`
+  breadcrumb naming what failed before they started, so this shape of
+  failure can never again report "nothing happened" with no reason.
+- Guarded: `tests/test-probe-bundle.js` reproduces the throw, proves the
+  strip fixes it, asserts both claimers strip and neither contains a
+  LITERAL BOM character (the escape is used so the guard is reviewable),
+  asserts the non-silent breadcrumb, and lints every `.ps1` in the repo
+  for `Set-Content -Encoding UTF8`.
+- Caught while writing the fix: the first version of the strip put a
+  raw U+FEFF into the page source - the same invisible-byte hazard as
+  the control bytes earlier today. The test now forbids it explicitly.
+- Harness 70/72. No `extension/` change, so NO BUMP.
+
+## 2026-09-02 (remote session) — the unattended run WORKED: 8/8 steps
+
+- `run-ppro-probe.ps1` completed in one launch: ping, hostFacts, qe,
+  project, sequence, history, mogrt, cleanup all ok. The MOGRT accept
+  read-back that has been owed since docs/SELF-VERIFY-PLANS.md step 7
+  was written finally ran unattended.
+- ONE modal still appeared: Premiere asked for a sequence PRESET. Cause
+  found and fixed. `newBarsAndTone`'s third argument is TIMEBASE IN
+  TICKS PER FRAME (Premiere counts 254016000000 ticks/second), and the
+  first version passed `1`, which is not a frame rate in any unit. That
+  call failed, the step fell through to `createNewSequence(name, "")`,
+  and an EMPTY preset id means "ask the user" -- the dialog.
+- Fixed twice over: `newBarsAndTone` now computes a real timebase and
+  tries 25/24/30 fps in turn, and `createNewSequence(name, "")` is
+  NEVER called unless the caller passes `allowDialogs:true`. A dialog
+  with nobody at the keyboard is a hang, and this runner exists so that
+  nobody touches Premiere.
+- Also fixed: the summary printed a blank `host:   claimed by:` line.
+  The two claimers write different shapes (the visible panel nests host
+  facts under `.panel`, the invisible runner under `.host`) and the
+  report read only one of them.
+- Harness 70/72. No `extension/` change, so NO BUMP.
+
+## 2026-09-02 (remote session) — print the measurements, not the step names
+
+- The first successful unattended run printed eight "ok" lines and
+  nothing else, so the actual findings still had to be dug out of a JSON
+  file by hand. That is precisely the extra step this script exists to
+  remove, and the owner said so.
+- `run-ppro-probe.ps1` now prints WHAT WAS MEASURED under each step:
+  ExtendScript build and engine name, BridgeTalk name/specifier/targets,
+  whether beginUndoGroup and executeCommand exist, AME status, QE
+  version and effect count, which sequence route WORKED and which
+  failed with why, the History bins created, and for the MOGRT step the
+  before/after clip counts, whether it LANDED, and every controller read
+  back by name and value.
+- It also copies the result into `docs/measured/ppro-probe-<stamp>.json`
+  so the measurements are committed with the repo instead of living
+  only in AppData.
+- Verified the rendering here against a realistic fake result rather
+  than shipping it blind: the block was extracted and executed under
+  pwsh 7 with a fixture covering all eight steps.
+- Harness 70/72. No `extension/` change, so NO BUMP.
+
+## 2026-09-02 (remote session) — DOOR 3 IS ALIVE; and a false green
+
+- **The run was fully unattended and the INVISIBLE RUNNER claimed it**:
+  `claimed by: invisible runner (door 3)`. That is the headless door
+  WORKPLAN item 11 asked for. Premiere can be driven with nobody at the
+  keyboard, which is the prerequisite for an overnight Premiere leg.
+- Facts re-confirmed unattended: ExtendScript 4.5.6/80.1060872 and
+  engine `NewWorld` in Premiere; `beginUndoGroup` and `executeCommand`
+  both `undefined` (no undo API, measured a third time); BridgeTalk
+  specifier `premierepro-26.0` with `aftereffects` in its target list;
+  QE enters, `qe.project` resolves, version 26.3.2, 236 effects;
+  `BridgeTalk.getStatus("ame")` = ISNOTRUNNING.
+- **A FALSE GREEN, and it was mine.** The summary said "Every battery
+  step passed" on a run where the sequence was never created, History
+  was skipped for a missing API, and MOGRT refused for want of a
+  sequence. `step()` counted only a THROW as failure, so three dead
+  measurements reported ok. Fixed: a step whose data carries `error`
+  fails, one carrying `skipped` is reported as skipped, and `via:"none"`
+  or `"refused"` fails as "did not achieve its purpose". This project
+  exists to refuse exactly this shape of report.
+- ROOT CAUSE of the three real failures, and it was ONE cause: the
+  invisible runner fires on the host's startup event, which is BEFORE
+  Premiere has finished opening a project. `app.project.name` and
+  `.path` both read null, so the project step fell through to
+  `app.newProject`, `newBarsAndTone` answered "Illegal Parameter type"
+  to every timebase, `rootItem.createBin` looked absent, and MOGRT had
+  no sequence. We asked too early. NEW first step `waitForReady` polls
+  `app.project.name` up to 30 s and reports how long it waited.
+- Sequence creation gained a route that cannot open a dialog and cannot
+  be ambiguous: import a still the repo already ships
+  (`extension/icons/icon-normal.png`) and call
+  `createNewSequenceFromClips`, which derives the sequence from the clip
+  and needs no preset. `newBarsAndTone` stays as a fallback but its
+  signature is not worth more guessing after three rejected timebases.
+- Harness 70/72. No `extension/` change, so NO BUMP.
+
+## 2026-09-02 (remote session) — hand the probe to the loop
+
+- Owner, after running the probe by hand all day: "Should we just set
+  the harness to figuring this shit out on its own?" Yes, and it should
+  have been proposed sooner. Everything the loop needs now exists: the
+  probe runs unattended (door 3 claims it), every step reports its own
+  verdict honestly, and results land in `docs/measured/`.
+- NEW WORKPLAN section 12b: drive the Premiere P0 probe to green, one
+  root cause per pass, re-run in the same pass to confirm before
+  committing, no version bump, no dialogs, lints before every push.
+  Highest priority until done.
+- Two fixes go in with it, both UNCONFIRMED and named as such in 12b:
+  - `project` step: Premiere launched with no argument sits on the Home
+    screen and never opens a project (`app.project.name` empty after the
+    full 30 s wait), and `app.newProject` returned without writing a
+    file - which is what left a dead path in Premiere's recent list and
+    produced "the file path does not exist at this location" as a modal
+    ON OPEN. The step now tries `app.newProject`, then
+    `qe.project.newProject` (QE is measured alive here), VERIFIES by
+    reading the project name back rather than trusting a return value,
+    and saves so later runs launch straight into it. The launcher passes
+    the scratch project only when the file really exists and is over 1
+    KB, and deletes a stale one.
+  - `waitForReady` no longer reports a FAILURE when Premiere simply has
+    no project yet: that is the `project` step's verdict to give, and
+    blaming the wait for a condition it only observed is the same false
+    attribution this project keeps having to correct.
+- Harness 70/72. No `extension/` change, so NO BUMP.
+
+## 2026-09-02 (remote session) — 12b alternates instead of monopolising
+
+- Owner: not dedicating the machine to Premiere for 12 hours. Correct
+  call, and 12b said "take it before anything else in this file", which
+  would have spent the whole night on an unfunded probe while the AE
+  product - the thing that actually ships - sat still.
+- 12b now ALTERNATES: read the log first (which every pass does anyway),
+  and if the last entry was a 12b pass, skip it and take the next normal
+  backlog item. Never two Premiere passes in a row. Roughly half the
+  night each way, with the AE product getting the other half.
+
+## 2026-09-02 (remote session) — -UntilHour takes fractions, and cannot be stepped over
+
+- `-UntilHour` was `[int]`, so `9.5` was rejected outright. Now
+  `[double]`: 7 = 07:00, 9.5 = 09:30, 0.25 = 00:15.
+- Found while changing it: the stop check was
+  `(Get-Date).Hour -eq $UntilHour`, which only matched if a pass
+  happened to START inside that one hour. A pass that ran long could
+  step straight over it and the loop would keep going all day on the
+  owner's machine. The stop time is now computed ONCE as a real
+  timestamp (tomorrow if it has already passed today) and compared with
+  `-ge`, which cannot be jumped.
+- The WMI relaunch formats it with InvariantCulture, so a comma decimal
+  separator on a non-English locale cannot come back unparseable.
+- Verified the arithmetic under pwsh for 7, 9.5, 0.25 and 23.75.
+
+## 2026-09-02 (remote session) — the save-changes modal, from both ends
+
+- Owner: the run "always hangs on the save before quitting modal and
+  this loses time while its just sitting there". Two causes, and the
+  second one was self-inflicted.
+- CAUSE 1: `CloseMainWindow()` is polite. If Premiere asks "save
+  changes?" it waits for an answer that is never coming, so an
+  unattended pass burns its whole budget on a dialog. NEW
+  `Stop-OurPremiere`: ask nicely, wait 20 s, then force. It takes the
+  process object from `Start-Process -PassThru`, so the only instance it
+  can ever kill is the one this script launched itself, holding nothing
+  but a throwaway scratch project. A Premiere the owner started is never
+  passed to it, and the start-of-run close stays polite and gives up.
+- CAUSE 2, and worse: the cleanup step called `app.project.save()`, and
+  on an UNTITLED project that opens the SAVE AS dialog. The step written
+  to prevent the modal was capable of creating it. It now reads
+  `app.project.path` first: `save()` only when there is a path,
+  `saveAs()` to the scratch path when there is not, and it says so in
+  its receipt when it can do neither.
+- Harness 70/72. No `extension/` change, so NO BUMP.
+
+## 2026-09-02 (remote session) — stopping the loop actually stops it
+
+- `Stop-Process -Id <printed PID>` reported success and killed nothing.
+  Two reasons: the PID printed at launch comes from the WMI spawn and
+  can be stale by the time anyone reads it, and killing the loop's shell
+  leaves the `claude` pass it launched running to completion anyway.
+- NEW `scripts/stop-local-agent.ps1`: finds the loop by COMMAND LINE
+  (which cannot go stale), stops it, stops any claude pass in flight
+  unless `-KeepCurrentPass`, then prints what is LEFT running. "It did
+  nothing" can no longer be a silent outcome. run-local-agent.ps1's
+  launch message points at it instead of at a bare PID.
+
+## 2026-09-03 (remote session) — AE answers its own modals now
+
+- Owner, with a photo of AE parked on "Save changes to 'Untitled
+  Project.aep' before closing?": "Its hanging still". Then: "AE also
+  opens a crash repair modal after forced closes like this, make sure it
+  can bypass those as well."
+- Why the previous fix did not cover this. `CloseWordlessDialogs` posts
+  `WM_CLOSE`, and the code's own comment says what that is on the save
+  prompt: CANCEL. The window goes away, the project stays dirty, and the
+  next quit asks the same question. The harness also refused on purpose
+  to answer any dialog it could READ (`Get-AellStaleDialogPlan` gates on
+  the `unreadable` verdict), so a dialog it had just harvested the text
+  of was still answered blind.
+- NEW, in the embedded `AellWin` C#: `AnswerDialog(pid, mustContain[],
+  buttonLabels[])` clicks a button only when EVERY text fragment appears
+  in that dialog's own WM_GETTEXT harvest AND the button's own label
+  matches. `Flatten()` compares letters and digits only, so AE's U+2019
+  apostrophe in "Don't Save" matches either spelling and a localised
+  build fails to match rather than matching the WRONG button. The click
+  is a POSTED `BM_CLICK`, so a wedged dialog thread cannot wedge us.
+- NEW `DescribeDialogs(pid)`: every dialog's text plus the exact label of
+  every button on it. This is the part that stops the next round trip --
+  an unmatched dialog now prints its real strings instead of costing
+  another guess.
+- The rules live in PowerShell (`$AellDialogRules`), where they are
+  readable next to the decision, and the C# cannot click anything a rule
+  did not name. Three rules: the save prompt (answered ONLY when the
+  text says UNTITLED -- a NAMED project is someone's work and is never
+  answered for), crash/auto-save recovery, and the unexpected-quit
+  notice.
+- MID-RUN, not just before the launch. `Clear-AellStaleDialog` runs once
+  before AE starts, so it can only ever see what a PREVIOUS run left --
+  and the crash prompt appears on the launch THIS run just made. The
+  wait loop now tries the rules too, but only on the `startup` /
+  `unreadable` / `blocked` verdicts, only after something has been up
+  for two consecutive polls, and at most four times per run. AE's own
+  windows ("Executing Script", "Auto-Save Project") match no rule, so
+  the healthy path cannot be clicked at all. Each answer gives 60 s back
+  to the deadline, because the time a modal ate was never time the suite
+  got to run in.
+- HONEST CAVEAT: the save-prompt rule is written from measured strings
+  (harvested 2026-08-28 on AE 2026). The crash-recovery and
+  unexpected-quit rules are CANDIDATES -- their wording on AE 2026 has
+  not been measured here. That is exactly why `DescribeDialogs` logs the
+  real text and buttons of anything unmatched, on both the blocked path
+  and the startup-timeout path.
+- Verified: `node tests/test-powershell-syntax.js` parses the script
+  under the real pwsh 7 parser; the embedded C# block was extracted and
+  `Add-Type`d on Linux (DllImport resolves at call time) -- 495 lines,
+  compiles clean. Harness 70/72 (the two container-only failures).
+- No `extension/` change, so NO BUMP.
+
+## 2026-09-03 (remote session) — "untitled" was never the same question as "ours"
+
+- Owner, on the rule shipped an hour earlier: "youre naming these
+  projects though, i dont think theyre untitled". Then, after checking:
+  "I spotted the named file in AE btw". Both correct.
+- The rule gated the save-changes prompt on the literal word `Untitled`,
+  reasoning that an untitled project is one the harness made and a named
+  one is somebody's work. The SECOND half is right and is the rail this
+  keeps. The first half was wrong, in both hosts:
+  - `scripts/run-ppro-probe.ps1` saves its scratch project with `saveAs`
+    to `%APPDATA%\AE-Llama\probes\AELL_PROBE_SCRATCH.prproj`. Premiere's
+    prompt carries THAT name, never "Untitled", so the rule could not
+    answer the one dialog the Premiere probe raises. `Stop-OurPremiere`
+    then did what it does with any prompt it cannot answer: burned its
+    20 s grace and forced the process — and a forced close is precisely
+    what makes the NEXT launch open a crash-recovery prompt. One
+    unanswerable dialog cost a pass 20 s AND started the next pass
+    behind a second dialog.
+  - `scripts/mogrt-verify-probe.jsx` does `app.project.save(scratch)`
+    into `logs/.../mogrt-probe-scratch.aep` — it has to, because
+    `export_mogrt` cannot run from a project that was never saved. From
+    that point on AE's quit prompt names THAT file. This is the one the
+    owner spotted.
+- NEW `scripts/lib/host-dialogs.ps1`, shared by both runners (class
+  `AellDlg`, distinct from the AE runner's `AellWin` so both can load).
+  The identity test is no longer a word: `Get-AellDialogRules` takes the
+  project names the CALLER declares it owns, and the caller is the
+  script that created them, which is the only thing that can know. AE
+  passes `Untitled Project` and `mogrt-probe-scratch`; the Premiere
+  probe derives its name from `$scratch`, so the two cannot drift.
+- And a project on NEITHER list is no longer a hang. A LAST rule cancels
+  that prompt: Cancel calls off the quit and changes nothing, so the
+  host unblocks and every unsaved change survives. Discarding needs
+  proof of ownership; cancelling needs none, because it cannot lose
+  anything. Ordered after the owned rule so a project we DO own still
+  gets the answer that resolves it permanently.
+- The guard keys on an explicit `RequiresOwned` flag, NOT on the rule's
+  name — the cancelling rule is also a save-changes rule and must still
+  run with no owned names. A name-based guard would have disarmed the
+  very rule that protects the owner's work.
+- `Stop-OurPremiere` and the start-of-run close now answer before they
+  give up, and both print the dialog's real text and every button label
+  before forcing or exiting. The force is now the last resort it was
+  always described as rather than the usual path.
+- The AE runner keeps no private copy: its duplicated C# and rule table
+  were deleted (-8.5k chars) and it dot-sources the library. Two tables
+  that can drift is how the Premiere gap survived in the first place.
+- NEW `tests/test-host-dialogs.js` — CI-enforced: every discarding rule
+  is flagged `RequiresOwned` and takes its names from the caller; the
+  guard exists and does not key on a rule name; the Cancel rule exists
+  and is ordered last; each declared owned name matches the script that
+  actually writes that file; neither runner keeps a private copy. Its
+  first version reported "found 1 rule" and passed everything it then
+  did not look at — a rule's closing brace sits on the same line as its
+  last field, so a newline-anchored pattern swallowed the whole table.
+  Brace-counted now.
+- Verified: pwsh 7 parses all three `.ps1`; the extracted C# compiles
+  under `Add-Type` (175 lines); the rule table was executed under pwsh
+  against all three owner-lists and the rail asserted directly — a
+  caller declaring nothing SKIPS the discarding rule and still RUNS the
+  cancelling one. Harness 71/72 with the new test (the two failures are
+  the known container-only ones).
+- Still unmeasured, and marked as such in the file: the crash-recovery
+  and unexpected-quit wordings. `Write-AellUnknownDialogs` now runs on
+  every dead end in both runners, so the first one to appear puts its
+  real strings in the log.
+- No `extension/` change, so NO BUMP.
+
+## 2026-09-03 (remote session) — the answering had to leave the self-test
+
+- Owner, third time, with a photo: "STILL hanging". The dialog is
+  `Save changes to "Untitled Project.aep" before closing?` with
+  Cancel / Don't Save / Save — an UNTITLED project, which the rule
+  shipped an hour earlier already claimed. So why did nothing answer it?
+- ROOT CAUSE, and it invalidates both previous attempts: **nothing in
+  this repo asks After Effects to quit.** Grep it — no
+  `CloseMainWindow`, no `Stop-Process`, no `app.project.close` on the AE
+  side anywhere. The prompt in the photo was therefore NOT raised by the
+  self-test, and a self-test that is not running cannot answer it. Both
+  earlier fixes put the answering inside `run-ae-selftest.ps1` — once
+  before its launch, once during its wait loop — and both are real
+  improvements that could never have covered this: AE was sitting on the
+  prompt BETWEEN passes, with the panel visible behind it, where no code
+  of ours was looking.
+- A second, independent hole in the in-run answering, worth recording
+  because it would have bitten later: the mid-run attempt is gated on
+  the triage verdict, and a wordless dialog OWNED by AE's script-progress
+  window is graded `running` — "AE is working on our script, keep
+  waiting". A save prompt arriving during a run could read as `running`
+  and never be offered to a rule at all.
+- FIX: answering is no longer a feature of one script. `run-local-agent.ps1`
+  starts a WATCHDOG (`Start-Job`, 10 s sweep) that runs for the whole
+  life of the loop, in both hosts, whatever is or is not mid-pass. It
+  loads the same `scripts/lib/host-dialogs.ps1`, so it inherits the same
+  rail — discard only on a project the harness owns, Cancel on anything
+  else — and it never consults the triage verdict, which is what makes
+  it immune to the `running` hole above. `-NoDialogWatchdog` turns it
+  off, and that switch is forwarded through the WMI detach (a switch
+  missing from that hand-built command line is a switch that silently
+  does nothing in the run that actually happens; the test enforces it).
+- NEW `scripts/answer-host-dialogs.ps1` — the same thing for a machine
+  that is NOT in a loop: one sweep by default, `-Watch` to keep
+  sweeping, `-WhatIsUp` to print what each host is showing with every
+  button label and click NOTHING. That last mode is the one to run
+  before writing any new rule.
+- Verified: the `Start-Job` wiring was executed under pwsh 7 with the
+  real ArgumentList — the library loads in the child runspace and
+  `Answer-AellKnownDialogs` sweeps twice without throwing (it answers 0
+  here, there being no AfterFX on Linux). pwsh parses every `.ps1`.
+  `tests/test-host-dialogs.js` extended to cover the watchdog, its
+  teardown, its off-switch, the detach forwarding, and that every owned
+  name is one a script here really writes. Harness 71/72.
+- No `extension/` change, so NO BUMP.
+
+## 2026-09-03 (remote session) — who was closing After Effects: the pass
+
+- Owner, naming the sequence exactly: "It ran the self test, closed the
+  comps, and then trued to close the app resulting in the hanging box."
+  That is the missing half of the previous entry. I had established that
+  no SCRIPT in this repo quits AE and stopped there, treating the cause
+  as unknown and only handling the symptom. The cause is the `claude`
+  PASS itself: it finishes the suite and closes AE as cleanup.
+- Confirmed by elimination, not assumption: `scripts/ae-selftest.jsx` has
+  no quit (its only `close()` calls are on file handles);
+  `extension/js/selftest.js` has none; `hostscript.jsx`'s only
+  `executeCommand` calls are 16/17 (Undo/Redo) and the audio-to-keyframes
+  command; nothing under `scripts/*.ps1` closes AfterFX. The one actor
+  left is the pass.
+- Why it costs the NEXT pass and not this one: the suite leaves the
+  project dirty by design, so quitting raises the save prompt, and no
+  `-r` script runs while a modal is up. The pass that quits AE finishes
+  fine; the one after it does nothing at all.
+- FIX, at the cause: the per-iteration brief in `run-local-agent.ps1`
+  now forbids it outright — never quit or close After Effects, never
+  close its project, not as cleanup, not to leave the machine tidy. It
+  says WHY (cold launch for the next pass, and the modal that stops it),
+  because a rule a pass can reason its way around is not a rule. If AE
+  is wedged, log it and stop.
+- The watchdog from the previous entry stays and is now the belt to this
+  braces: it answers whoever raises the prompt, including a pass that
+  ignores the brief. Its sweep is 5 s rather than 10 — a sweep only
+  reads text out of an actual #32770, so it is cheap, and the interval
+  that matters is between a pass asking AE to close and that pass giving
+  up on it.
+- `tests/test-host-dialogs.js` asserts the brief carries the rule and
+  its reasoning. Harness 71/72.
+- No `extension/` change, so NO BUMP.
+
+## 2026-09-03 (remote session) — the loop could kill the owner's desktop app
+
+- Owner: "it always starts saying 11 claude instances are running, and
+  I'm pretty sure 10 of those are the claude desktop app we're chatting
+  in". Correct, and the count was the least of it.
+- `Get-Process claude` matches the DESKTOP APP. It is Electron, so one
+  running copy is a main process plus renderer, GPU, utility and
+  crashpad children, all named claude. Two places killed on that name:
+  - `run-local-agent.ps1` snapshotted every claude process before a pass
+    and force-killed any that appeared during it, as the pass's leak.
+    Electron spawns children in normal use, so opening a tab in the
+    desktop app mid-pass could get it shot, logged as "Reaped lingering
+    claude pid N". Electron restarts its children quietly, which is why
+    this never looked like a crash.
+  - `stop-local-agent.ps1` killed EVERY process named claude. That does
+    not risk the desktop app, it closes it.
+- The reap itself is still wanted (2026-08-29: ten passes, ten zombies,
+  loop dead at pass 11), so the fix is to identify the leak precisely.
+- NEW `scripts/lib/claude-procs.ps1`: identification by DESCENT. A leak
+  of ours is a descendant of the loop's own shell; the desktop app is
+  not, and its Electron markers (`--type=`, the AnthropicClaude install
+  folder) are excluded on top. `Get-AellClaudeCensus` gives the log line
+  the owner reads, so "11 claude processes" now says how many are ours.
+  The old documented caveat -- do not run your own claude session while
+  the loop works -- is gone with the old test: an interactive session
+  the owner starts is not our descendant.
+- `stop-local-agent.ps1` now collects the in-flight passes BEFORE it
+  kills the loop shells. Afterwards their children are reparented and
+  the walk cannot find them, which would have turned "stopped both" into
+  "stopped the loop, left the pass running" -- the exact failure that
+  script was written for.
+- CAUGHT BEFORE SHIPPING, and the reason the behavioural test exists:
+  the first desktop-app guard included `$exe -match '\\Claude\.exe$'`,
+  meant for the app's capitalised binary. PowerShell's `-match` is
+  case-INSENSITIVE, so it matched the CLI's own claude.exe and excluded
+  every process from the reap -- leak-reaping silently off. The
+  synthetic-table run found it immediately.
+- NEW `tests/test-claude-procs.js` + `scripts/lib/claude-procs.selftest.ps1`:
+  static half refuses a kill-by-name in either script and refuses a
+  guard that keys on the executable NAME; behavioural half runs the
+  library under pwsh against a table shaped like the owner's machine
+  (loop -> cmd shim -> CLI pass, plus a five-process desktop app and an
+  interactive CLI of the owner's) and asserts exactly the pass is
+  selected. Skips with an install hint when no pwsh is present.
+- Harness 72/72 locally minus the two container-only failures (74 tests).
+- No `extension/` change, so NO BUMP.

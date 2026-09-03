@@ -109,6 +109,18 @@ function gradeHost(hostKey, r) {
   rows.push(measured("Node: fs", node.fs === true ? "yes" : node.fs));
   rows.push(measured("Node: http", node.http === true ? "yes" : node.http));
   rows.push(measured("APPDATA visible to the panel", panel.appdata));
+  rows.push(measured("probe.jsx loaded into the host engine",
+                     r.probeLoad && (r.probeLoad.typeofCall
+                       ? ("FAILED: typeof AELLP_call was " +
+                          r.probeLoad.typeofCall)
+                       : ("via " + r.probeLoad.via)),
+                     function (v) { return /^FAILED/.test(String(v)); }));
+  // The manifest's ScriptPath is evaluated, but $.fileName inside it
+  // names the HOST's folder, so a ScriptPath loader cannot resolve its
+  // own siblings. Recorded because it decides whether a dual-host panel
+  // can branch in ScriptPath at all (docs/PREMIERE-PLATFORM.md).
+  rows.push(measured("$.fileName inside the manifest's ScriptPath",
+                     r.scriptPath && r.scriptPath.dollarFileName));
   rows.push(measured("evalScript round-trips a JSON envelope",
                      r.evalScript && r.evalScript.ok === true ? "yes" : null,
                      function () { return r.evalScript && r.evalScript.ok === false; }));
@@ -180,9 +192,15 @@ function gradeG0(collected) {
         node.child_process === true && node.fs === true && node.http === true,
         "child_process=" + String(node.child_process) + " fs=" +
         String(node.fs) + " http=" + String(node.http));
+  // A soak that was SKIPPED (the probe never loaded) is unmeasured, not
+  // a degraded engine. The panel's first run reported "DEGRADED at
+  // round 1" when probe.jsx had simply never been evaluated, and a gate
+  // that cannot tell those apart would have failed G0 for the wrong
+  // reason.
   check("the engine survives a realistic session (soak)",
-        ppro.soak ? ppro.soak.failedAt === null : null,
-        ppro.soak ? ppro.soak.verdict : "soak not run -- press \"Engine soak\"");
+        (ppro.soak && !ppro.soak.skipped) ? ppro.soak.failedAt === null : null,
+        ppro.soak ? (ppro.soak.skipped || ppro.soak.verdict)
+                  : "soak not run -- press \"Engine soak\"");
   const anyUnmeasured = checks.some(function (c) { return c.unmeasured; });
   return {
     pass: checks.every(function (c) { return c.pass; }),

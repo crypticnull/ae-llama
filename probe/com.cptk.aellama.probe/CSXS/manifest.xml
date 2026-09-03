@@ -1,19 +1,18 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <!--
-  SHAPE A -- two <Extension> entries, each with its OWN <HostList>.
+  SHAPE B: ONE <Extension> whose single HostList names both hosts.
 
-  This is the shape docs/PREMIERE_PLAN.md recommends for the real panel,
-  because CEP auto-loads ScriptPath in every host an extension lists and
-  the AE hostscript is 11.8k lines of AE DOM. It is also the shape with
-  the LEAST field evidence: Adobe's XSD and the CEP 12 Cookbook document
-  per-extension HostLists, but every shipped multi-host manifest found in
-  the wild uses one HostList with several hosts (shape B). P0 installs
-  both and lets the machine decide.
+  THIS IS THE DEFAULT, the file install-probe.ps1 installs unless
+  -Shape A is passed. It is the shape every shipped multi-host CEP
+  manifest found in the wild actually uses. Its cost is that CEP
+  auto-loads the one ScriptPath in BOTH hosts, so it must point at a
+  loader that branches before touching any app.* API (./jsx/loader.jsx).
 
-  This bundle is a THROWAWAY. It has its own ExtensionBundleId so it can
-  never collide with com.cptk.aellama, and it lives outside extension/ so
-  scripts/package-zxp.ps1 (which stages extension\ wholesale) cannot ship
-  it. Nothing here is ever signed or published.
+  EDITING THIS FILE: an XML comment may not contain a double dash, and
+  may not end with a dash. Every probe manifest shipped with one on
+  2026-09-02; CEP dropped the whole bundle silently, and the failure
+  looked exactly like a rejected manifest SHAPE, which cost a wrong
+  diagnosis and a round trip. tests/test-manifest-xml.js now refuses it.
 -->
 <ExtensionManifest ExtensionBundleId="com.cptk.aellama.probe"
                    ExtensionBundleName="AE Llama P0 Probe"
@@ -21,14 +20,12 @@
                    Version="7.0"
                    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
   <ExtensionList>
-    <Extension Id="com.cptk.aellama.probe.aeft" Version="0.0.1"/>
-    <Extension Id="com.cptk.aellama.probe.ppro" Version="0.0.1"/>
+    <Extension Id="com.cptk.aellama.probe.both" Version="0.0.1"/>
   </ExtensionList>
   <ExecutionEnvironment>
-    <!-- Deliberately narrow: the per-extension HostLists below override
-         this, and leaving it broad would hide which one CEP honoured. -->
     <HostList>
       <Host Name="AEFT" Version="[24.0,99.9]"/>
+      <Host Name="PPRO" Version="[25.0,99.9]"/>
     </HostList>
     <LocaleList>
       <Locale Code="All"/>
@@ -38,14 +35,11 @@
     </RequiredRuntimeList>
   </ExecutionEnvironment>
   <DispatchInfoList>
-    <Extension Id="com.cptk.aellama.probe.aeft">
-      <HostList>
-        <Host Name="AEFT" Version="[24.0,99.9]"/>
-      </HostList>
+    <Extension Id="com.cptk.aellama.probe.both">
       <DispatchInfo>
         <Resources>
           <MainPath>./index.html</MainPath>
-          <ScriptPath>./jsx/probe.jsx</ScriptPath>
+          <ScriptPath>./jsx/loader.jsx</ScriptPath>
           <CEFCommandLine>
             <Parameter>--enable-nodejs</Parameter>
             <Parameter>--mixed-context</Parameter>
@@ -56,41 +50,7 @@
         </Lifecycle>
         <UI>
           <Type>Panel</Type>
-          <Menu>AE Llama P0 Probe (AE)</Menu>
-          <Geometry>
-            <Size>
-              <Height>700</Height>
-              <Width>560</Width>
-            </Size>
-            <MinSize>
-              <Height>320</Height>
-              <Width>320</Width>
-            </MinSize>
-          </Geometry>
-        </UI>
-      </DispatchInfo>
-    </Extension>
-    <Extension Id="com.cptk.aellama.probe.ppro">
-      <HostList>
-        <!-- Premiere Pro 25.0+ is CEP 12 per Adobe's own host table.
-             Deliberately open-ended so a 27.x beta is covered. -->
-        <Host Name="PPRO" Version="[25.0,99.9]"/>
-      </HostList>
-      <DispatchInfo>
-        <Resources>
-          <MainPath>./index.html</MainPath>
-          <ScriptPath>./jsx/probe.jsx</ScriptPath>
-          <CEFCommandLine>
-            <Parameter>--enable-nodejs</Parameter>
-            <Parameter>--mixed-context</Parameter>
-          </CEFCommandLine>
-        </Resources>
-        <Lifecycle>
-          <AutoVisible>true</AutoVisible>
-        </Lifecycle>
-        <UI>
-          <Type>Panel</Type>
-          <Menu>AE Llama P0 Probe (Premiere)</Menu>
+          <Menu>AE Llama P0 Probe</Menu>
           <Geometry>
             <Size>
               <Height>700</Height>

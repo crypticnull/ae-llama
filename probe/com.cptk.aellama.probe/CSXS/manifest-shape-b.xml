@@ -1,16 +1,18 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <!--
-  SHAPE B -- ONE <Extension> whose single HostList names both hosts.
+  SHAPE B: ONE <Extension> whose single HostList names both hosts.
 
-  This is the shape every shipped multi-host CEP manifest found in the
-  wild actually uses. Its cost is that CEP auto-loads the one ScriptPath
-  in BOTH hosts, so it must point at a loader that branches before
-  touching any app.* API (./jsx/loader.jsx here).
+  THIS IS THE DEFAULT, the file install-probe.ps1 installs unless
+  -Shape A is passed. It is the shape every shipped multi-host CEP
+  manifest found in the wild actually uses. Its cost is that CEP
+  auto-loads the one ScriptPath in BOTH hosts, so it must point at a
+  loader that branches before touching any app.* API (./jsx/loader.jsx).
 
-  scripts/install-probe.ps1 -Shape B copies this over CSXS\manifest.xml
-  in the installed junction target. Both shapes carry the same
-  ExtensionBundleId so only one can be installed at a time -- which is
-  the point: whichever shape is present is the one being measured.
+  EDITING THIS FILE: an XML comment may not contain a double dash, and
+  may not end with a dash. Every probe manifest shipped with one on
+  2026-09-02; CEP dropped the whole bundle silently, and the failure
+  looked exactly like a rejected manifest SHAPE, which cost a wrong
+  diagnosis and a round trip. tests/test-manifest-xml.js now refuses it.
 -->
 <ExtensionManifest ExtensionBundleId="com.cptk.aellama.probe"
                    ExtensionBundleName="AE Llama P0 Probe"

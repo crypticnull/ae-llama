@@ -101,6 +101,16 @@ function AELLP_say(e) {
   return (e && e.message) ? String(e.message) : String(e);
 }
 
+/** ES3 has no Array.indexOf. */
+function AELLP_inList(list, name) {
+  var i;
+  if (!list || typeof list.length !== "number") { return false; }
+  for (i = 0; i < list.length; i++) {
+    if (String(list[i]) === String(name)) { return true; }
+  }
+  return false;
+}
+
 /** typeof without throwing on a host that has no such global at all. */
 function AELLP_typeOf(expr) {
   var t;
@@ -365,6 +375,471 @@ AELLP_PROBES.echo = function (args) {
   while (s.length < n) { s += "x"; }
   return { round: (args && args.round) ? args.round : 0, pad: s.length,
            payload: s };
+};
+
+// ------------------------------------------------------------ battery
+/*
+ * EVERY measurement in one call, so an unattended run costs ONE host
+ * launch instead of one per fact.
+ *
+ * The rule that makes it worth having: no step may abort the run. Each
+ * one is try/caught and recorded with its own ok/error, so a pass
+ * reports ALL of its failures at once. That is the whole point -- the
+ * alternative is what this project just spent a day doing, learning one
+ * defect per round trip on the only machine that can test.
+ *
+ * args: { scratchProject: "<abs .prproj>", makeSequence: true,
+ *         mogrtPath: "<abs .mogrt>", allowMutate: true }
+ */
+AELLP_PROBES.battery = function (args) {
+  args = args || {};
+  var out = { steps: [], mutating: args.allowMutate === true, current: null };
+  var i, seq, item, made;
+  var progress = args.progressPath || null;
+
+  /*
+   * FLUSH AFTER EVERY STEP, and name the step BEFORE running it.
+   *
+   * Measured the hard way 2026-09-02: the first version of this battery
+   * held everything in memory and wrote once at the end. It claimed its
+   * job, hung inside some step, and produced NOTHING -- 300 seconds of
+   * waiting that said only "it hung somewhere". This repo's own
+   * scripts/mogrt-verify-probe.jsx already had the right pattern
+   * ("Every measurement is flushed to disk as it is taken") and this
+   * ignored it.
+   *
+   * With `current` written before the call and the row written after,
+   * a hang leaves a file naming the exact step that never returned.
+   */
+  function flush() {
+    if (!progress) { return; }
+    try {
+      var f = new File(progress);
+      f.encoding = "UTF-8";
+      f.open("w");
+      f.write(AELLP_JSON.stringify(out));
+      f.close();
+    } catch (e) { /* a failed flush must never stop the run */ }
+  }
+
+  function step(name, fn) {
+    var row = { step: name };
+    if (args.skip && AELLP_inList(args.skip, name)) {
+      row.ok = true;
+      row.skipped = "asked to skip";
+      out.steps.push(row);
+      flush();
+      return row;
+    }
+    out.current = name;
+    flush();
+    try {
+      row.data = fn();
+      /*
+       * A step that RETURNS an error is not a step that passed.
+       *
+       * Measured 2026-09-02: the runner printed "Every battery step
+       * passed" on a run where the sequence was never created, History
+       * was skipped for a missing API, and the MOGRT step refused for
+       * want of a sequence. Only a THROW was counted as failure, so
+       * three dead measurements reported green. That is the exact false
+       * success this project exists to refuse.
+       */
+      if (row.data && typeof row.data === "object") {
+        if (row.data.error) {
+          row.ok = false;
+          row.error = String(row.data.error);
+        } else if (row.data.skipped) {
+          row.ok = true;
+          row.skipped = String(row.data.skipped);
+        } else if (row.data.via === "none" || row.data.via === "refused") {
+          row.ok = false;
+          row.error = "did not achieve its purpose (via: " +
+                      String(row.data.via) + ")";
+        } else {
+          row.ok = true;
+        }
+      } else {
+        row.ok = true;
+      }
+    } catch (e) {
+      row.ok = false;
+      row.error = AELLP_say(e);
+    }
+    out.steps.push(row);
+    out.current = null;
+    flush();
+    return row;
+  }
+
+  out.startedAt = String(new Date());
+  flush();
+
+  /*
+   * WAIT FOR THE HOST TO BE READY before measuring anything that needs a
+   * project.
+   *
+   * Measured 2026-09-02: the invisible runner fires on the host's
+   * startup event, which happens BEFORE Premiere has finished opening a
+   * project. app.project.name and .path both read back null, so the
+   * project step fell through to app.newProject, newBarsAndTone raised
+   * "Illegal Parameter type", rootItem.createBin looked absent, and the
+   * MOGRT step had no sequence to import into. Four failures, one cause:
+   * we asked too early.
+   */
+  step("waitForReady", function () {
+    var waited = 0;
+    var stepMs = 500;
+    var maxMs = (typeof args.readyTimeoutMs === "number")
+      ? args.readyTimeoutMs : 30000;
+    var name = null;
+    while (waited < maxMs) {
+      name = AELLP_safe(function () { return app.project.name; });
+      if (name && typeof name === "string" && name.length > 0) {
+        return { ready: true, waitedMs: waited, projectName: name };
+      }
+      try { $.sleep(stepMs); } catch (eSleep) { break; }
+      waited += stepMs;
+    }
+    // NOT an error: Premiere launched without a project argument simply
+    // has none, and the `project` step below is what creates one and
+    // carries the real verdict. Reporting a failure here would blame the
+    // wait for a condition it only observed.
+    return { ready: false, waitedMs: waited,
+             note: "app.project.name was still empty after " + waited +
+                   "ms; the project step will try to create one" };
+  });
+
+  step("ping", function () { return AELLP_PROBES.ping(); });
+  step("hostFacts", function () { return AELLP_PROBES.hostFacts(); });
+  step("qe", function () { return AELLP_PROBES.qeProbe(); });
+
+  if (!args.allowMutate) {
+    out.note = "read-only pass; pass allowMutate:true for the rest";
+    return out;
+  }
+
+  /*
+   * A project to work in, WITHOUT calling app.newProject when we can
+   * avoid it.
+   *
+   * Why the care: app.newProject was the first mutating step of the
+   * first unattended run, and that run claimed its job and then hung for
+   * 300 seconds. It is a strong suspect for raising a New Project dialog
+   * on this build, and a dialog with nobody at the keyboard is a hang,
+   * not an error.
+   *
+   * It is also usually unnecessary. Measured on this machine: Premiere
+   * launches with an EMPTY Untitled.prproj already open (rootItem had 0
+   * children). An empty project is a scratch project, so reuse it and
+   * never open the dialog at all. Only a project with real content in it
+   * is worth stepping around.
+   */
+  step("project", function () {
+    var proj = AELLP_safe(function () { return app.project; });
+    if (proj && typeof proj !== "string") {
+      var kids = AELLP_safe(function () {
+        return app.project.rootItem.children.numItems;
+      });
+      var pname = AELLP_safe(function () { return app.project.name; });
+      var ppath = AELLP_safe(function () { return app.project.path; });
+      if (kids === 0) {
+        return { via: "reused the open EMPTY project",
+                 name: pname, path: ppath, items: kids,
+                 note: "no app.newProject call, so no dialog risk" };
+      }
+      // A project with content: do not touch it.
+      if (!args.scratchProject) {
+        return { via: "refused", name: pname, items: kids,
+                 note: "a project with " + String(kids) + " item(s) is open " +
+                       "and no scratch path was given, so nothing was " +
+                       "created and nothing will be mutated" };
+      }
+    }
+    if (!args.scratchProject) {
+      throw new Error("no project open and no scratchProject path given");
+    }
+
+    /*
+     * Premiere launched with no argument sits on the HOME SCREEN and
+     * never opens a project: measured 2026-09-02, app.project.name was
+     * still empty after a full 30 s wait. So one has to be made, and
+     * then VERIFIED -- app.newProject returned without writing a file
+     * once already, which left a dead path in Premiere's recent list.
+     *
+     * Every route is recorded, and success means the project NAME reads
+     * back, not that the call failed to throw.
+     */
+    var tried = [];
+    var got = null;
+
+    function nameNow() {
+      var n = AELLP_safe(function () { return app.project.name; });
+      return (n && typeof n === "string" && n.length > 0) ? n : null;
+    }
+
+    /** Creating a project is not instant; give it a bounded moment. */
+    function settle(ms) {
+      var waited = 0;
+      var n = null;
+      while (waited < ms) {
+        n = nameNow();
+        if (n) { return n; }
+        try { $.sleep(250); } catch (eS) { return null; }
+        waited += 250;
+      }
+      return nameNow();
+    }
+
+    if (typeof app.newProject === "function") {
+      try {
+        var ret = app.newProject(args.scratchProject);
+        got = settle(8000);
+        tried.push({ how: "app.newProject", ok: !!got,
+                     error: got ? null
+                                : ("returned " + String(ret) +
+                                   " but app.project.name is still empty") });
+      } catch (eNew) {
+        tried.push({ how: "app.newProject", ok: false,
+                     error: AELLP_say(eNew) });
+      }
+    } else {
+      tried.push({ how: "app.newProject", ok: false,
+                   error: "not a function in this host" });
+    }
+
+    // QE is measured alive on this build (236 effects), and it has its
+    // own project creator. Undocumented and unsupported, so it is a
+    // fallback and it is labelled as one.
+    if (!got && typeof app.enableQE === "function") {
+      try {
+        app.enableQE();
+        if (qe && qe.project && typeof qe.project.newProject === "function") {
+          qe.project.newProject(args.scratchProject);
+          got = settle(8000);
+          tried.push({ how: "qe.project.newProject [unsupported API]",
+                       ok: !!got });
+        } else {
+          tried.push({ how: "qe.project.newProject [unsupported API]",
+                       ok: false, error: "qe.project.newProject absent" });
+        }
+      } catch (eQe) {
+        tried.push({ how: "qe.project.newProject [unsupported API]",
+                     ok: false, error: AELLP_say(eQe) });
+      }
+    }
+
+    // Save it, so the NEXT run can be launched straight into it and this
+    // whole dance never happens again.
+    var savedTo = null;
+    if (got) {
+      try {
+        if (typeof app.project.saveAs === "function") {
+          app.project.saveAs(args.scratchProject);
+          savedTo = args.scratchProject;
+        } else if (typeof app.project.save === "function") {
+          app.project.save();
+          savedTo = AELLP_safe(function () { return app.project.path; });
+        }
+      } catch (eSave) { savedTo = "save failed: " + AELLP_say(eSave); }
+    }
+
+    return { via: got ? "created" : "none",
+             name: got,
+             path: AELLP_safe(function () { return app.project.path; }),
+             items: AELLP_safe(function () {
+               return app.project.rootItem.children.numItems;
+             }),
+             savedTo: savedTo,
+             tried: tried,
+             error: got ? null
+                        : "no project could be opened or created; Premiere " +
+                          "is on the Home screen and every project-dependent " +
+                          "step below cannot run" };
+  });
+
+  /*
+   * A sequence, by whichever route this build accepts. Three strategies
+   * in order, each recorded: an existing sequence, bars-and-tone plus
+   * createNewSequenceFromClips, and the bare createNewSequence. Adobe's
+   * docs disagree with each other on the signatures, so the honest move
+   * is to try them and write down which one answered.
+   */
+  if (args.makeSequence) {
+    step("sequence", function () {
+      var tried = [];
+      var got = null;
+
+      var existing = AELLP_safe(function () { return app.project.activeSequence; });
+      if (existing && typeof existing !== "string") {
+        tried.push({ how: "activeSequence already open", ok: true });
+        return { via: "existing", name: String(existing.name), tried: tried };
+      }
+      tried.push({ how: "activeSequence already open", ok: false });
+
+      /*
+       * SEED MEDIA FIRST. createNewSequenceFromClips derives the whole
+       * sequence from a clip, so it needs no preset and opens no dialog.
+       * Importing a still the repo already ships is the least exotic way
+       * to get a clip: newBarsAndTone answered "Illegal Parameter type"
+       * to every timebase tried on 26.3.2, and its signature is not
+       * worth more guessing when an import cannot be ambiguous.
+       */
+      if (args.seedMedia) {
+        try {
+          var beforeN = app.project.rootItem.children.numItems;
+          app.project.importFiles([args.seedMedia], true,
+                                  app.project.rootItem, false);
+          var afterN = app.project.rootItem.children.numItems;
+          if (afterN > beforeN) {
+            item = app.project.rootItem.children[afterN - 1];
+            got = app.project.createNewSequenceFromClips("AELL PROBE SEQ",
+                                                         [item]);
+          }
+          tried.push({ how: "importFiles(seed still) + " +
+                            "createNewSequenceFromClips",
+                       ok: !!got,
+                       error: got ? null
+                                  : ("import left " + String(beforeN) + " -> " +
+                                     String(afterN) + " items") });
+        } catch (eSeed) {
+          tried.push({ how: "importFiles(seed still) + " +
+                            "createNewSequenceFromClips",
+                       ok: false, error: AELLP_say(eSeed) });
+        }
+      }
+
+      /*
+       * TIMEBASE IS IN TICKS PER FRAME, not frames per second.
+       * Premiere counts 254016000000 ticks per second, so 25 fps is
+       * 254016000000 / 25. The first version passed 1, which is not a
+       * frame rate in any unit, and the call failed -- dropping through
+       * to createNewSequence and raising the dialog described below.
+       */
+      var TICKS_PER_SECOND = 254016000000;
+      var rates = [25, 24, 30];
+      var r;
+      for (r = 0; r < rates.length && !got; r++) {   /* skipped once got */
+        try {
+          item = app.project.newBarsAndTone(
+            1920, 1080, TICKS_PER_SECOND / rates[r], 1, 1, 48000,
+            "AELL PROBE BARS");
+          got = app.project.createNewSequenceFromClips("AELL PROBE SEQ",
+                                                       [item]);
+          tried.push({ how: "newBarsAndTone " + rates[r] +
+                            "fps + createNewSequenceFromClips",
+                       ok: !!got });
+        } catch (e1) {
+          tried.push({ how: "newBarsAndTone " + rates[r] +
+                            "fps + createNewSequenceFromClips",
+                       ok: false, error: AELLP_say(e1) });
+        }
+      }
+
+      /*
+       * createNewSequence(name, "") is DELIBERATELY NOT CALLED unattended.
+       * An empty sequenceID means "ask the user which preset", and it
+       * raised exactly that modal on 2026-09-02 -- a dialog with nobody
+       * at the keyboard is a hang, and the whole point of this runner is
+       * that nobody touches Premiere. It is available only when the
+       * caller says dialogs are acceptable.
+       */
+      if (!got) {
+        if (args.allowDialogs === true) {
+          try {
+            got = app.project.createNewSequence("AELL PROBE SEQ", "");
+            tried.push({ how: "createNewSequence(name, \"\") [may prompt]",
+                         ok: !!got });
+          } catch (e2) {
+            tried.push({ how: "createNewSequence(name, \"\") [may prompt]",
+                         ok: false, error: AELLP_say(e2) });
+          }
+        } else {
+          tried.push({ how: "createNewSequence(name, \"\")",
+                       ok: false,
+                       error: "NOT ATTEMPTED: an empty preset id opens the " +
+                              "New Sequence dialog, which blocks an " +
+                              "unattended run. Pass allowDialogs:true to " +
+                              "try it with a human present." });
+        }
+      }
+
+      seq = AELLP_safe(function () { return app.project.activeSequence; });
+      return {
+        via: got ? "created" : "none",
+        active: (seq && typeof seq !== "string") ? String(seq.name) : null,
+        videoTracks: (seq && typeof seq !== "string")
+          ? AELLP_safe(function () { return seq.videoTracks.numTracks; }) : null,
+        tried: tried
+      };
+    });
+  }
+
+  step("history", function () {
+    return AELLP_PROBES.historyProbe({ allowMutate: true });
+  });
+
+  if (args.mogrtPath) {
+    step("mogrt", function () {
+      return AELLP_PROBES.mogrtAccept({ allowMutate: true,
+                                        path: args.mogrtPath,
+                                        videoTrack: 0 });
+    });
+  }
+
+  // Best effort: put back what the mutating steps made. A cleanup that
+  // throws must not lose the measurements above it.
+  step("cleanup", function () {
+    var removed = [];
+    var root = AELLP_safe(function () { return app.project.rootItem; });
+    if (!root || typeof root === "string") { return { removed: removed }; }
+    var n = AELLP_safe(function () { return root.children.numItems; });
+    if (typeof n !== "number") { return { removed: removed }; }
+    for (i = n - 1; i >= 0; i--) {
+      try {
+        var child = root.children[i];
+        if (child && /^AELL PROBE/.test(String(child.name))) {
+          if (typeof child.deleteBin === "function") { child.deleteBin(); }
+          removed.push(String(child.name));
+        }
+      } catch (eC) {}
+    }
+    /*
+     * SAVE, but NEVER with save() on an untitled project.
+     *
+     * A dirty project makes Premiere put up "save changes?" when the
+     * runner closes it, which hangs an unattended run. But the obvious
+     * fix is worse than the bug: app.project.save() on a project with
+     * no path opens the SAVE AS dialog -- so the cleanup step was
+     * capable of creating the very modal it existed to prevent.
+     *
+     * saveAs() to a known throwaway path has no dialog and no ambiguity.
+     */
+    var saved = null;
+    try {
+      var curPath = AELLP_safe(function () { return app.project.path; });
+      var hasPath = (curPath && typeof curPath === "string" &&
+                     curPath.length > 0);
+      if (hasPath && typeof app.project.save === "function") {
+        app.project.save();
+        saved = "save() to " + curPath;
+      } else if (args.scratchProject &&
+                 typeof app.project.saveAs === "function") {
+        app.project.saveAs(args.scratchProject);
+        saved = "saveAs() to " + args.scratchProject;
+      } else {
+        saved = "NOT SAVED: the project has no path and saveAs is " +
+                "unavailable, so save() would have opened the Save As " +
+                "dialog and hung the run";
+      }
+    } catch (eS) { saved = "save threw: " + AELLP_say(eS); }
+
+    return { removed: removed, savedScratchProject: saved,
+             note: "the scratch project is a throwaway file; nothing else " +
+                   "was touched" };
+  });
+
+  return out;
 };
 
 // --------------------------------------------------------------- call

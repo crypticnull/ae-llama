@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <!--
-  DOOR 3 -- an invisible CEP extension that runs a job at host launch.
-  DEV-ONLY. This is never signed, never packaged, never installed on a
+  DOOR 3: an invisible CEP extension that runs a job at host launch.
+  DEV ONLY. This is never signed, never packaged, never installed on a
   customer machine: an always-on invisible extension in someone else's
   Premiere is not acceptable even when it is inert.
 
@@ -9,7 +9,7 @@
    - Adobe's own CEP 12 invisible-extension sample names
      com.adobe.csxs.events.ApplicationActivate as the event Premiere
      dispatches, and PProPanel's manifest comments it as "whenever it
-     gains focus from the OS" -- i.e. it fires MANY times, not once at
+     gains focus from the OS", i.e. it fires MANY times, not once at
      startup. So the page must be idempotent and sentinel-gated.
    - No ScriptPath: nothing auto-loads into the host's ExtendScript
      engine. The job file names the .jsx to evaluate, so there is one

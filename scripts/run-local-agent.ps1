@@ -17,7 +17,8 @@
 .EXAMPLE
   .\scripts\run-local-agent.ps1
   .\scripts\run-local-agent.ps1 -Iterations 40 -PauseSec 15
-  .\scripts\run-local-agent.ps1 -UntilHour 7   # stop at 7am
+  .\scripts\run-local-agent.ps1 -UntilHour 7     # stop at 07:00
+  .\scripts\run-local-agent.ps1 -UntilHour 9.5   # stop at 09:30
 
 .NOTES
   Unattended means no one is there to answer permission prompts, so the
@@ -33,7 +34,9 @@
 param(
     [int]$Iterations = 20,
     [int]$PauseSec = 20,
-    [int]$UntilHour = -1,
+    # Stop time as an hour of the day, fractions allowed: 7 = 07:00,
+    # 9.5 = 09:30. -1 = run all Iterations.
+    [double]$UntilHour = -1,
     [string]$RepoRoot = '',
     [string]$Branch = 'claude/ae-plugin-llama-cpp-f13g3x',
     [string]$ClaudePath = '',
@@ -42,7 +45,10 @@ param(
     # cheaper tier; the expensive one is for daytime design and review.
     [string]$Model = '',
     [switch]$SkipPermissions = $true,
-    [switch]$Detached
+    [switch]$Detached,
+    # Leave the hosts' dialogs alone. For watching what AE or Premiere
+    # actually puts up, without anything answering it first.
+    [switch]$NoDialogWatchdog
 )
 
 # --- detach: the loop must be nobody's child -------------------------
@@ -58,12 +64,14 @@ if (-not $Detached) {
            $PSCommandPath + '" -Detached'
     $fwd = $fwd + ' -Iterations ' + $Iterations
     $fwd = $fwd + ' -PauseSec ' + $PauseSec
-    $fwd = $fwd + ' -UntilHour ' + $UntilHour
+    $fwd = $fwd + ' -UntilHour ' + $UntilHour.ToString(
+        [System.Globalization.CultureInfo]::InvariantCulture)
     if ($RepoRoot)   { $fwd = $fwd + ' -RepoRoot "' + $RepoRoot + '"' }
     if ($Branch)     { $fwd = $fwd + ' -Branch "' + $Branch + '"' }
     if ($ClaudePath) { $fwd = $fwd + ' -ClaudePath "' + $ClaudePath + '"' }
     if ($Model)      { $fwd = $fwd + ' -Model "' + $Model + '"' }
     if (-not $SkipPermissions) { $fwd = $fwd + ' -SkipPermissions:$false' }
+    if ($NoDialogWatchdog) { $fwd = $fwd + ' -NoDialogWatchdog' }
     $spawn = $null
     try {
         $spawn = Invoke-CimMethod -ClassName Win32_Process `
@@ -76,8 +84,12 @@ if (-not $Detached) {
         Write-Host ('Loop DETACHED as PID ' + $spawn.ProcessId +
                     ' -- closing this window or session cannot stop it.')
         Write-Host 'Live log: newest logs\local-agent-*.log in the repo.'
-        Write-Host ('To stop it early: Stop-Process -Id ' + $spawn.ProcessId +
-                    '  (PID also saved to logs\local-agent.pid)')
+        # Not "Stop-Process -Id <that number>": the WMI PID can be stale
+        # by the time anyone reads it, and killing this shell leaves the
+        # claude pass it launched still running. stop-local-agent.ps1
+        # finds the loop by command line and stops both.
+        Write-Host ('To stop it: powershell -ExecutionPolicy Bypass -File ' +
+                    'scripts\stop-local-agent.ps1')
         exit 0
     }
     Write-Host 'Detach unavailable -- running ATTACHED in this window.'
@@ -94,6 +106,11 @@ $ErrorActionPreference = 'Continue'
 if (-not $RepoRoot) { $RepoRoot = Split-Path -Parent $PSScriptRoot }
 $RepoRoot = (Resolve-Path $RepoRoot).Path
 Set-Location $RepoRoot
+
+# Telling OUR CLI passes apart from the Claude desktop app, which is
+# Electron and runs many processes named claude. Loaded here because the
+# reap below must never kill by name.
+. (Join-Path $PSScriptRoot 'lib\claude-procs.ps1')
 
 # --- locate the CLI -------------------------------------------------
 if (-not $ClaudePath) {
@@ -192,6 +209,16 @@ and write down what you assumed.
 
 Hard limits for this session:
 - Do exactly ONE item, then stop. The loop will start you again.
+- NEVER quit or close After Effects, and never close its project. Not as
+  cleanup, not to "leave the machine tidy", not between steps. Leave AE
+  running exactly as you found it: the suite already deletes the scratch
+  comps it made, and that is the whole of the cleanup you owe.
+  Quitting it costs the next pass a cold launch, and -- because the
+  project is dirty by design -- raises "Save changes to Untitled
+  Project.aep before closing?", which is a MODAL: no -r script runs
+  while it is up, so the pass after yours does nothing at all. Two
+  nights were lost to exactly this. If AE is wedged, say so in the log
+  and stop; do not close it.
 - One failed attempt per item per night: if the log shows an item was
   already attempted tonight and blocked, do NOT retry it -- pick the
   next unfinished item instead. A blocked item is a log entry and a
@@ -223,14 +250,86 @@ Write-Log ('branch : ' + $Branch)
 Write-Log ('log    : ' + $logFile)
 Write-Log ('plan   : ' + $Iterations + ' iterations, ' + $PauseSec + 's pause')
 
+# The stop time, computed once.
+#
+# The old check was `(Get-Date).Hour -eq $UntilHour`, which only matched
+# if a pass happened to START inside that one hour. A pass that ran long
+# could step straight over it and the loop would keep going all day. A
+# real timestamp cannot be jumped over.
+$stopAt = $null
+if ($UntilHour -ge 0) {
+    $h = [int][Math]::Floor($UntilHour)
+    $m = [int][Math]::Round(($UntilHour - $h) * 60)
+    if ($m -ge 60) { $h = $h + 1; $m = 0 }
+    $today = (Get-Date).Date.AddHours($h).AddMinutes($m)
+    # Overnight: a stop time that has already passed means tomorrow.
+    $stopAt = if ($today -gt (Get-Date)) { $today } else { $today.AddDays(1) }
+    Write-Log ('Will stop at ' + $stopAt.ToString('yyyy-MM-dd HH:mm'))
+}
+
+# ---------------------------------------------------------------- watchdog
+#
+# Answer the hosts' modal dialogs for the WHOLE life of the loop, in a
+# background job, not just while a particular script happens to be
+# running.
+#
+# This exists because the first two attempts at the save-changes prompt
+# both put the answering INSIDE run-ae-selftest.ps1 -- once before its
+# launch, then also during its wait loop. Both are real improvements and
+# both miss the case the owner kept hitting, for a simple reason:
+# NOTHING IN THIS REPO ASKS AFTER EFFECTS TO QUIT. Grep it. So the
+# prompt in the owner's photo was not raised by the self-test at all,
+# and a self-test that is not running cannot answer it. AE sat on
+#
+#     Save changes to "Untitled Project.aep" before closing?
+#
+# with the panel visible behind it, between passes, where no code of
+# ours was looking. The answering had to stop being a feature of one
+# script and become a property of the loop.
+#
+# The job runs the same shared rules (scripts/lib/host-dialogs.ps1) and
+# so inherits the same rail: it may DISCARD changes only on a project
+# this harness declares it owns, and on anything else it clicks Cancel,
+# which unblocks the host and keeps every unsaved change. It also never
+# consults the wait-loop triage, which is a second reason the in-run
+# answering could miss: a save prompt that AE's script-progress window
+# owns reads as the verdict `running`, and `running` means keep
+# waiting.
+$watchdog = $null
+if (-not $NoDialogWatchdog) {
+    $watchdog = Start-Job -Name 'AellDialogWatchdog' -ScriptBlock {
+        param($lib, $owned, $procs, $everySec)
+        . $lib
+        while ($true) {
+            try {
+                [void](Answer-AellKnownDialogs -ProcessNames $procs `
+                         -OwnedProjects $owned)
+            } catch { }
+            Start-Sleep -Seconds $everySec
+        }
+    } -ArgumentList `
+        (Join-Path $PSScriptRoot 'lib\host-dialogs.ps1'),
+        @('Untitled Project', 'mogrt-probe-scratch', 'AELL_PROBE_SCRATCH'),
+        @('AfterFX', 'Adobe Premiere Pro', 'Adobe Premiere'),
+        # 5s, not 10. A sweep is cheap -- it enumerates top-level
+        # windows and only reads text out of an actual #32770 -- and
+        # the window that matters is the one between a pass asking AE
+        # to close and that pass giving up on it.
+        5
+    Write-Log ('Dialog watchdog running (job ' + $watchdog.Id + '): a ' +
+               'save-changes prompt on a project this harness owns is ' +
+               'answered Do not Save; anything else is cancelled, which ' +
+               'unblocks the host and keeps its changes.')
+}
+
 # Consecutive waits spent on a usage limit (see the check below). Reset
 # whenever a pass actually lands a commit.
 $limitWaits = 0
 
 for ($i = 1; $i -le $Iterations; $i++) {
 
-    if ($UntilHour -ge 0 -and (Get-Date).Hour -eq $UntilHour) {
-        Write-Log ('Reached stop hour ' + $UntilHour + '. Done.')
+    if ($stopAt -and (Get-Date) -ge $stopAt) {
+        Write-Log ('Reached stop time ' + $stopAt.ToString('HH:mm') + '. Done.')
         break
     }
 
@@ -282,16 +381,28 @@ for ($i = 1; $i -le $Iterations; $i++) {
     # LIMIT exits fast with a message instead of doing work, and only
     # the text tells that apart from a genuinely idle pass.
     #
-    # And snapshot the claude processes alive BEFORE the pass: each pass
-    # leaks one lingering claude.exe (measured 2026-08-29 -- ten passes,
-    # ten zombies, and the loop died of the pile at pass 11). Any claude
-    # process born during the pass is the pass's leak and is reaped once
-    # the pass returns. Consequence, documented: do not run your own
-    # interactive claude session while the loop is working -- a session
-    # started mid-pass is indistinguishable from a leak.
-    $claudeBefore = @(Get-Process claude -ErrorAction SilentlyContinue |
-                      Select-Object -ExpandProperty Id)
-    Write-Log ('claude processes before pass: ' + $claudeBefore.Count)
+    # Each pass leaks one lingering CLI process (measured 2026-08-29 --
+    # ten passes, ten zombies, and the loop died of the pile at pass
+    # 11), so a leak is reaped once the pass returns.
+    #
+    # Identified by DESCENT, never by name. `Get-Process claude` also
+    # matches the Claude DESKTOP APP, which is Electron and so runs a
+    # main process plus renderer, GPU and utility children all named
+    # claude -- the owner sees ten or eleven while chatting in it. The
+    # old code snapshotted that list and killed anything new, so opening
+    # a tab in the desktop app mid-pass could get it shot and logged as
+    # "Reaped lingering claude pid N". A leak of ours is a DESCENDANT of
+    # this shell; the desktop app is not, and its Electron markers are
+    # excluded on top. See scripts/lib/claude-procs.ps1.
+    #
+    # The old caveat is gone with the old test: an interactive claude
+    # session the owner starts is not our descendant, so the loop no
+    # longer has any claim on it.
+    $census = Get-AellClaudeCensus -RootId $PID
+    Write-Log ('claude-named processes on this machine: ' +
+               $census.NamedTotal + ' (' + $census.Ours + ' of them ours; ' +
+               'the rest are the Claude desktop app, which is an Electron ' +
+               'app and runs many processes under that name)')
     $passLines = New-Object System.Collections.Generic.List[string]
     try {
         & $ClaudePath @claudeArgs 2>&1 | ForEach-Object {
@@ -303,15 +414,13 @@ for ($i = 1; $i -le $Iterations; $i++) {
     } catch {
         Write-Log ('Session error: ' + $_.Exception.Message)
     }
-    foreach ($cp in @(Get-Process claude -ErrorAction SilentlyContinue)) {
-        if ($claudeBefore -notcontains $cp.Id) {
-            try {
-                Stop-Process -Id $cp.Id -Force -ErrorAction Stop
-                Write-Log ('Reaped lingering claude pid ' + $cp.Id)
-            } catch {
-                Write-Log ('Could not reap claude pid ' + $cp.Id + ': ' +
-                           $_.Exception.Message)
-            }
+    foreach ($cp in @(Get-AellCliPassProcesses -RootId $PID)) {
+        try {
+            Stop-Process -Id $cp.ProcessId -Force -ErrorAction Stop
+            Write-Log ('Reaped lingering CLI pass pid ' + $cp.ProcessId)
+        } catch {
+            Write-Log ('Could not reap CLI pass pid ' + $cp.ProcessId + ': ' +
+                       $_.Exception.Message)
         }
     }
 
@@ -343,6 +452,20 @@ for ($i = 1; $i -le $Iterations; $i++) {
     }
 
     Start-Sleep -Seconds $PauseSec
+}
+
+if ($watchdog) {
+    # The job holds no state worth keeping; it exists only while the
+    # loop does. Left running it would answer dialogs on a machine
+    # nobody is driving any more.
+    try {
+        Stop-Job -Job $watchdog -ErrorAction Stop
+        Remove-Job -Job $watchdog -Force -ErrorAction SilentlyContinue
+        Write-Log 'Dialog watchdog stopped.'
+    } catch {
+        Write-Log ('Could not stop the dialog watchdog: ' +
+                   $_.Exception.Message)
+    }
 }
 
 Write-Log 'Loop finished.'

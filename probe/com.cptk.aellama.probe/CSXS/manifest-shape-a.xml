@@ -1,19 +1,23 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <!--
-  SHAPE A -- two <Extension> entries, each with its OWN <HostList>.
+  SHAPE A: two <Extension> entries, each with its OWN <HostList>.
 
-  This is the shape docs/PREMIERE_PLAN.md recommends for the real panel,
-  because CEP auto-loads ScriptPath in every host an extension lists and
-  the AE hostscript is 11.8k lines of AE DOM. It is also the shape with
-  the LEAST field evidence: Adobe's XSD and the CEP 12 Cookbook document
-  per-extension HostLists, but every shipped multi-host manifest found in
-  the wild uses one HostList with several hosts (shape B). P0 installs
-  both and lets the machine decide.
+  NOT the default. docs/PREMIERE_PLAN.md recommends this shape for the
+  real panel, because CEP auto-loads ScriptPath in every host an
+  extension lists and the AE hostscript is 11.8k lines of AE DOM. But it
+  is also the shape with the LEAST field evidence: Adobe's XSD and the
+  CEP 12 Cookbook document per-extension HostLists, while every shipped
+  multi-host manifest found in the wild uses shape B. Install it with
+  -Shape A once the probe is known to work, and the comparison is real.
+
+  It has never had a fair test: it shipped with an illegal double dash
+  in this comment on 2026-09-02, so CEP rejected the file before it
+  could judge the shape.
 
   This bundle is a THROWAWAY. It has its own ExtensionBundleId so it can
-  never collide with com.cptk.aellama, and it lives outside extension/ so
-  scripts/package-zxp.ps1 (which stages extension\ wholesale) cannot ship
-  it. Nothing here is ever signed or published.
+  never collide with com.cptk.aellama, and it lives outside extension/
+  so scripts/package-zxp.ps1 (which stages extension\ wholesale) cannot
+  ship it. Nothing here is ever signed or published.
 -->
 <ExtensionManifest ExtensionBundleId="com.cptk.aellama.probe"
                    ExtensionBundleName="AE Llama P0 Probe"

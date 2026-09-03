@@ -160,7 +160,7 @@ function hostsIn(xml) {
 }
 
 {
-  const a = stripXml(read(path.join(PROBE, "CSXS", "manifest.xml")));
+  const a = stripXml(read(path.join(PROBE, "CSXS", "manifest-shape-a.xml")));
   const b = stripXml(read(path.join(PROBE, "CSXS", "manifest-shape-b.xml")));
 
   assert((a.match(/<HostList>/g) || []).length >= 2,
@@ -182,13 +182,23 @@ function hostsIn(xml) {
          "file directly");
 
   // CEP demands the active file be CSXS\manifest.xml, so install-probe.ps1
-  // overwrites it to switch shapes. Both shapes are committed beside it
-  // and manifest.xml starts as shape A, so -Shape A restores byte for
-  // byte and a dirty manifest.xml means a shape-B install is still on.
-  const pristineA = read(path.join(PROBE, "CSXS", "manifest-shape-a.xml"));
-  assert(pristineA === read(path.join(PROBE, "CSXS", "manifest.xml")),
-         "manifest.xml is byte-identical to the committed shape-A copy " +
-         "(if this fails, a -Shape B install is still in place)");
+  // overwrites it to switch shapes. Both shapes are committed beside it.
+  //
+  // The DEFAULT is shape B, on the evidence that every shipped
+  // multi-host CEP manifest anyone found uses one HostList.
+  //
+  // It is NOT the default because shape A was measured to fail. Both
+  // shapes shipped with an illegal XML comment on 2026-09-02 and
+  // neither was ever parsed by CEP; the "shape A does not load"
+  // diagnosis drawn from that was wrong, and the shape question is
+  // still open. tests/test-manifest-xml.js is what stops a repeat.
+  assert(read(path.join(PROBE, "CSXS", "manifest-shape-b.xml")) ===
+         read(path.join(PROBE, "CSXS", "manifest.xml")),
+         "manifest.xml is byte-identical to shape B, the default that " +
+         "actually loads (if this fails, a -Shape A install is still on)");
+  const install = read(path.join(ROOT, "scripts", "install-probe.ps1"));
+  assert(/\[string\]\$Shape = 'B'/.test(install),
+         "install-probe.ps1 defaults to -Shape B");
 
   const idA = /ExtensionBundleId="([^"]+)"/.exec(a)[1];
   const idB = /ExtensionBundleId="([^"]+)"/.exec(b)[1];
@@ -307,6 +317,202 @@ function hostsIn(xml) {
     { door: 3, verdict: "ALIVE", detail: "runner answered" }
   ] });
   assert(alive.state === "ALIVE", "an ALIVE door is reported as such");
+}
+
+// ------------------- 7. the .mogrt picker rejects damaged fixtures
+//
+// FIELD FAILURE 2026-09-02: the panel auto-filled the MOGRT path with
+// the NEWEST .mogrt in logs\mogrt-verify\ and landed on
+// truncated.mogrt - a deliberately damaged fixture that lives in that
+// folder precisely because the reader tests need one. Premiere refused
+// it, and without the read-back receipt that would have read as
+// "Premiere rejects what AE writes": a conclusion about Adobe drawn
+// from picking the wrong file.
+//
+// So the picker validates before it picks, and this drives the REAL
+// function out of the page against capsules built here.
+{
+  const zlib = require("zlib");
+  const crypto = require("crypto");
+
+  const html = read(path.join(PROBE, "index.html"));
+  const m = /function looksLikeCapsule\(fs, full\) \{[\s\S]*?\n  \}/.exec(html);
+  assert(!!m, "the page defines looksLikeCapsule");
+  const looksLikeCapsule = m ? eval("(" + m[0] + ")") : null;
+
+  assert(!/"PK[ -]/.test(html),
+         "the zip signature is compared as BYTES, not as a string literal " +
+         "holding raw control characters (invisible bytes in source are " +
+         "the hazard class that already bit this repo once)");
+
+  function le16(n) { const b = Buffer.alloc(2); b.writeUInt16LE(n, 0); return b; }
+  function le32(n) { const b = Buffer.alloc(4); b.writeUInt32LE(n >>> 0, 0); return b; }
+  function crc32(buf) {
+    let c = 0xFFFFFFFF;
+    for (const b of buf) {
+      c ^= b;
+      for (let k = 0; k < 8; k++) { c = (c & 1) ? ((c >>> 1) ^ 0xEDB88320) : (c >>> 1); }
+    }
+    return (c ^ 0xFFFFFFFF) >>> 0;
+  }
+  function zip(entries) {
+    const parts = [], cent = [];
+    let off = 0;
+    entries.forEach(function (e) {
+      const data = Buffer.from(e.data);
+      const body = zlib.deflateRawSync(data);
+      const crc = crc32(data);
+      const nb = Buffer.from(e.name);
+      const loc = Buffer.concat([le32(0x04034b50), le16(20), le16(0), le16(8),
+        le16(0), le16(0), le32(crc), le32(body.length), le32(data.length),
+        le16(nb.length), le16(0), nb]);
+      parts.push(loc, body);
+      cent.push(Buffer.concat([le32(0x02014b50), le16(20), le16(20), le16(0),
+        le16(8), le16(0), le16(0), le32(crc), le32(body.length),
+        le32(data.length), le16(nb.length), le16(0), le16(0), le16(0),
+        le16(0), le32(0), le32(off), nb]));
+      off += loc.length + body.length;
+    });
+    const cd = Buffer.concat(cent);
+    return Buffer.concat(parts.concat([cd, Buffer.concat([le32(0x06054b50),
+      le16(0), le16(0), le16(entries.length), le16(entries.length),
+      le32(cd.length), le32(off), le16(0)])]));
+  }
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "aell-caps-"));
+  // Random payloads on purpose: deflate squashes repeated characters
+  // below the picker's 200-byte floor, and a fixture that trips the
+  // SIZE guard never exercises the signature check it was written for.
+  const good = zip([
+    { name: "definition.json",
+      data: JSON.stringify({ capsuleName: "Untitled", clientControls: [] }) },
+    { name: "project.aegraphic", data: crypto.randomBytes(8000) }
+  ]);
+  const files = {
+    "good.mogrt": good,
+    "truncated.mogrt": good.slice(0, Math.floor(good.length * 0.6)),
+    "notzip.mogrt": crypto.randomBytes(5000),
+    "nodefinition.mogrt": zip([{ name: "readme.txt",
+                                 data: crypto.randomBytes(3000) }]),
+    "tiny.mogrt": Buffer.from("PK")
+  };
+  Object.keys(files).forEach(function (n) {
+    fs.writeFileSync(path.join(dir, n), files[n]);
+  });
+
+  if (looksLikeCapsule) {
+    const verdicts = {};
+    Object.keys(files).forEach(function (n) {
+      verdicts[n] = looksLikeCapsule(fs, path.join(dir, n));
+    });
+    assert(verdicts["good.mogrt"].ok === true,
+           "a real capsule is USABLE: " + verdicts["good.mogrt"].why);
+    assert(verdicts["truncated.mogrt"].ok === false &&
+           /central-directory/.test(verdicts["truncated.mogrt"].why),
+           "the exact file that shipped a wrong conclusion is rejected, " +
+           "and the reason names the defect: " + verdicts["truncated.mogrt"].why);
+    assert(verdicts["notzip.mogrt"].ok === false &&
+           /not a zip/.test(verdicts["notzip.mogrt"].why),
+           "a non-zip is rejected: " + verdicts["notzip.mogrt"].why);
+    assert(verdicts["nodefinition.mogrt"].ok === false &&
+           /definition\.json/.test(verdicts["nodefinition.mogrt"].why),
+           "a valid zip that is not a capsule is rejected: " +
+           verdicts["nodefinition.mogrt"].why);
+    assert(verdicts["tiny.mogrt"].ok === false,
+           "an empty stub is rejected: " + verdicts["tiny.mogrt"].why);
+
+    // The three real defects must be caught by their OWN rule, not by
+    // the size floor happening to fire first.
+    ["truncated.mogrt", "notzip.mogrt", "nodefinition.mogrt"].forEach(
+      function (n) {
+        assert(!/^only \d+ bytes$/.test(verdicts[n].why),
+               n + " is rejected by its real defect, not by the size " +
+               "floor: " + verdicts[n].why);
+      });
+  }
+
+  assert(/usable/.test(read(path.join(PROBE, "index.html"))) &&
+         /candidates/.test(read(path.join(PROBE, "index.html"))),
+         "the page records EVERY candidate and its verdict, so a wrong " +
+         "pick is visible rather than silent");
+
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+// ------------- 8. the BOM that ate two unattended runs
+//
+// Windows PowerShell 5.1's `Set-Content -Encoding UTF8` writes a UTF-8
+// BOM. Node's readFileSync(p, "utf8") returns it as a leading U+FEFF and
+// JSON.parse THROWS. The probe's job file was written that way, so the
+// CEP claimer renamed the job to claim it, threw inside JSON.parse, and
+// returned from a silent catch. The job was consumed, nothing ran,
+// nothing was written, and two 5-minute unattended runs reported only
+// "it hung". PowerShell 6+ defaults to BOM-less and would have hidden
+// this on a dev box forever while breaking every 5.1 user.
+{
+  // The failure, reproduced, so the reason this code exists is provable
+  // rather than a story in a comment.
+  const withBom = "﻿{\"a\":1}";
+  let threw = false;
+  try { JSON.parse(withBom); } catch (e) { threw = true; }
+  assert(threw, "JSON.parse THROWS on a BOM-prefixed document");
+  assert(JSON.parse(withBom.replace(/^﻿/, "")).a === 1,
+         "and stripping the BOM makes it parse");
+
+  const claimers = {
+    "probe/index.html": read(path.join(PROBE, "index.html")),
+    "harness/index.html": read(path.join(HARNESS, "index.html"))
+  };
+  Object.keys(claimers).forEach(function (name) {
+    const src = claimers[name];
+    assert(/replace\(\/\^\\uFEFF\/, ""\)/.test(src),
+           name + " strips a BOM before JSON.parse");
+    assert(!/﻿/.test(src),
+           name + " contains no LITERAL BOM character (the escape is used, " +
+           "so the guard is visible to a reviewer)");
+    assert(/failedBeforeStarting/.test(src),
+           name + " writes a breadcrumb when the claim fails instead of " +
+           "returning silently - a silent catch after consuming the job is " +
+           "what made the failure invisible");
+  });
+
+  // The write side. Every JSON file a Node/CEP reader consumes must be
+  // written BOM-less, so no future script can reintroduce this.
+  const scriptsDir = path.join(ROOT, "scripts");
+  const psFiles = [];
+  (function walk(d) {
+    fs.readdirSync(d, { withFileTypes: true }).forEach(function (e) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) { walk(p); }
+      else if (/\.ps1$/i.test(e.name)) { psFiles.push(p); }
+    });
+  })(scriptsDir);
+
+  const offenders = [];
+  psFiles.forEach(function (f) {
+    const rel = path.relative(ROOT, f).replace(/\\/g, "/");
+    if (rel === "scripts/lib/json-io.ps1") { return; }   // documents it
+    const src = fs.readFileSync(f, "utf8");
+    src.split(/\r?\n/).forEach(function (line, i) {
+      if (/^\s*#/.test(line)) { return; }                // a comment about it
+      if (/Set-Content[^|]*-Encoding\s+UTF8/i.test(line)) {
+        offenders.push(rel + ":" + (i + 1));
+      }
+    });
+  });
+  assert(offenders.length === 0,
+         "no script writes with Set-Content -Encoding UTF8, which BOMs on " +
+         "Windows PowerShell 5.1" +
+         (offenders.length ? " (" + offenders.join(", ") + ")" : ""));
+
+  const jsonIo = path.join(ROOT, "scripts", "lib", "json-io.ps1");
+  assert(fs.existsSync(jsonIo), "scripts/lib/json-io.ps1 exists");
+  const io = read(jsonIo);
+  assert(/UTF8Encoding\(\$false\)/.test(io),
+         "and writes with UTF8Encoding($false), i.e. no BOM");
+  assert(/65279/.test(io),
+         "and strips a BOM on read too - a format that only works when " +
+         "both ends agree has two chances to break");
 }
 
 console.log(failed ? "\nTESTS FAILED" : "\nALL TESTS PASSED");

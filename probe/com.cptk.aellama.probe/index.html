@@ -18,6 +18,11 @@
          padding:8px; margin-top:8px; max-height:60vh; overflow:auto; }
   .row { margin-bottom:6px; }
   .ok { color:#7ec97e; } .bad { color:#e08a8a; } .warnc { color:#e0c07a; }
+  .hint { color:#e0c07a; font-size:11px; margin-left:4px; }
+  #mogrt-path { width:100%; box-sizing:border-box; background:#1b1b1b;
+                color:#d8d8d8; border:1px solid #3a3a3a; border-radius:3px;
+                padding:5px 7px; font-family:Consolas,monospace;
+                font-size:11px; }
 </style>
 </head>
 <body>
@@ -34,6 +39,11 @@ of the panel. Read-only unless you press a button marked MUTATES.</p>
 <div class="row">
   <button id="b-history" class="warn">MUTATES: History granularity</button>
   <button id="b-mogrt" class="warn">MUTATES: MOGRT accept read-back</button>
+  <span id="arm-hint" class="hint"></span>
+</div>
+<div class="row">
+  <input id="mogrt-path" type="text" spellcheck="false"
+         placeholder="path to a .mogrt (found automatically if it is in logs\mogrt-verify)">
 </div>
 
 <div id="out">Press "Run all read-only probes".</div>
@@ -61,19 +71,73 @@ of the panel. Read-only unless you press a button marked MUTATES.</p>
     c.evalScript(src, function (r) { cb(r, r === "EvalScript error."); });
   }
 
+  /*
+   * Load probe.jsx by the absolute path CEP hands the PANEL, exactly as
+   * extension/js/main.js has always loaded hostscript.jsx.
+   *
+   * Measured 2026-09-02 (CEP 12.0.1): the manifest's ScriptPath IS
+   * evaluated, but $.fileName inside it is not a path - AE returned "7"
+   * then "8" on the next launch, Premiere returned "". new File() treats
+   * those as RELATIVE and resolves them against the host's working
+   * directory, so a loader "finds" the host's own install folder and
+   * looks for its siblings there. Relying on ScriptPath alone left
+   * AELLP_call undefined and every probe returned an empty string.
+   */
+  var probeLoaded = false;
+
+  function ensureProbe(cb) {
+    if (probeLoaded) { cb(null); return; }
+    var jsx = extPath() + "/jsx/probe.jsx";
+    var literal = JSON.stringify(jsx);
+    evalScript('(function(){try{$.evalFile(new File(' + literal +
+               '));}catch(e){return "throw: "+e;}' +
+               'return typeof AELLP_call;})()',
+      function (raw, isErr) {
+        if (isErr) {
+          cb("evalScript itself failed loading the probe - this host is " +
+             "not reachable from CEP at all");
+          return;
+        }
+        var s = String(raw || "");
+        if (s === "function") {
+          probeLoaded = true;
+          results.probeLoad = { via: "panel $.evalFile", path: jsx };
+          cb(null);
+          return;
+        }
+        results.probeLoad = { via: "panel $.evalFile", path: jsx,
+                              typeofCall: s || "(empty reply)" };
+        cb("probe.jsx did not define AELLP_call (typeof came back " +
+           (s ? '"' + s + '"' : "EMPTY") + "). Looked for: " + jsx);
+      });
+  }
+
   /** AELLP_call through evalScript, parsed. cb(err, data). */
   function probe(name, args, cb) {
-    var argsJson = JSON.stringify(args || {});
-    var literal = JSON.stringify(argsJson);   // a JS string literal
-    evalScript('AELLP_call("' + name + '", ' + literal + ')',
-      function (raw, isErr) {
-        if (isErr) { cb("evalScript failed: " + raw); return; }
-        var parsed;
-        try { parsed = JSON.parse(raw); }
-        catch (e) { cb("unparseable reply: " + String(raw).slice(0, 400)); return; }
-        if (!parsed.ok) { cb(parsed.error); return; }
-        cb(null, parsed.data);
-      });
+    ensureProbe(function (loadErr) {
+      if (loadErr) { cb(loadErr); return; }
+      var argsJson = JSON.stringify(args || {});
+      var literal = JSON.stringify(argsJson);   // a JS string literal
+      evalScript('AELLP_call("' + name + '", ' + literal + ')',
+        function (raw, isErr) {
+          if (isErr) { cb("evalScript failed: " + raw); return; }
+          // An EMPTY reply is the signature of a call into a host where
+          // the function does not exist, not of a malformed result.
+          if (raw === null || typeof raw === "undefined" || raw === "") {
+            cb("empty reply from the host - AELLP_call returned nothing, " +
+               "so it is probably not defined in this engine");
+            return;
+          }
+          var parsed;
+          try { parsed = JSON.parse(raw); }
+          catch (e) {
+            cb("unparseable reply: " + String(raw).slice(0, 400));
+            return;
+          }
+          if (!parsed.ok) { cb(parsed.error); return; }
+          cb(null, parsed.data);
+        });
+    });
   }
 
   function extPath() {
@@ -199,12 +263,30 @@ of the panel. Read-only unless you press a button marked MUTATES.</p>
         results.hostFacts = err2 ? { error: err2 } : facts;
         probe("qeProbe", {}, function (err3, qe) {
           results.qe = err3 ? { error: err3 } : qe;
-          // Loader marker only exists under manifest shape B.
-          evalScript("String($.global.AELLP_LOADER)", function (raw) {
-            results.loaderMarker = (raw && raw !== "undefined") ? raw : null;
-            render();
-            autoSave();
-          });
+          // What the manifest's ScriptPath managed on its own. Shape B's
+          // loader.jsx is expected to FAIL here (see its header): the
+          // measurement is what $.fileName reported, not whether it won.
+          // Read the two globals SEPARATELY. Joining them with a
+          // delimiter and splitting is one embedded delimiter away from
+          // a wrong answer, and this value is a measurement.
+          evalScript("String($.global.AELLP_LOADER_FILENAME)",
+            function (fname) {
+              evalScript("String($.global.AELLP_LOADER)", function (said) {
+                results.scriptPath = {
+                  loaderSaid: (said && said !== "undefined") ? said : null,
+                  dollarFileName: (fname && fname !== "undefined")
+                    ? fname : null,
+                  note: "ScriptPath IS evaluated, but $.fileName inside it " +
+                        "is not a path (AE 26.3 returned \"7\"). new File() " +
+                        "on that is a RELATIVE path, so it resolves against " +
+                        "the host's working directory - which is why it " +
+                        "looks like the host's own folder. The panel loads " +
+                        "probe.jsx by absolute path instead."
+                };
+                render();
+                autoSave();
+              });
+            });
         });
       });
     });
@@ -233,6 +315,23 @@ of the panel. Read-only unless you press a button marked MUTATES.</p>
    * long session; better to hit it here, with a count.
    */
   function runSoak() {
+    // Refuse rather than report a degraded engine. The first run of this
+    // panel logged "DEGRADED at round 1" when the real story was that
+    // probe.jsx had never loaded - a soak that cannot tell those apart
+    // is worse than no soak.
+    ensureProbe(function (loadErr) {
+      if (loadErr) {
+        results.soak = { skipped: "the probe is not loaded, so there is " +
+                                  "nothing to soak: " + loadErr };
+        render();
+        autoSave();
+        return;
+      }
+      soakLoop();
+    });
+  }
+
+  function soakLoop() {
     var total = 500;
     var done = 0, failedAt = null, started = Date.now();
     note("soaking: 0/" + total);
@@ -308,38 +407,275 @@ of the panel. Read-only unless you press a button marked MUTATES.</p>
     note("copied to clipboard");
   });
 
+  /*
+   * The two MUTATES buttons ARM on the first click and FIRE on the
+   * second, instead of calling window.confirm. Two reasons: a CEP panel
+   * can suppress the native dialogs (so a confirm() that never appears
+   * reads as "the button does nothing"), and an arm step is visible in
+   * the panel itself rather than in a modal that may be behind the app.
+   */
+  var armed = null, armTimer = null;
+  var hint = document.getElementById("arm-hint");
+
+  function disarm() {
+    armed = null;
+    hint.textContent = "";
+    if (armTimer) { clearTimeout(armTimer); armTimer = null; }
+  }
+
+  function arm(id, what, go) {
+    if (armed === id) { disarm(); go(); return; }
+    armed = id;
+    hint.textContent = "click again to confirm: " + what;
+    if (armTimer) { clearTimeout(armTimer); }
+    armTimer = setTimeout(disarm, 8000);
+  }
+
   document.getElementById("b-history").addEventListener("click", function () {
-    if (!window.confirm(
-      "MUTATES the open project: creates three bins named 'AELL PROBE 1..3'.\n\n" +
-      "Only run this on a scratch project. Continue?")) { return; }
-    probe("historyProbe", { allowMutate: true }, function (err, data) {
-      results.history = err ? { error: err } : data;
-      render();
-      autoSave();
-    });
+    arm("history", "creates 3 bins named AELL PROBE in the OPEN project",
+      function () {
+        probe("historyProbe", { allowMutate: true }, function (err, data) {
+          results.history = err ? { error: err } : data;
+          render();
+          autoSave();
+        });
+      });
   });
 
   document.getElementById("b-mogrt").addEventListener("click", function () {
-    var p = window.prompt(
-      "Absolute path to a .mogrt exported by the AE panel:",
-      (results.mogrtPath || ""));
-    if (!p) { return; }
-    if (!window.confirm(
-      "MUTATES the active sequence: imports that graphic onto V1 at 0.\n\n" +
-      "Only run this on a scratch sequence. Continue?")) { return; }
-    results.mogrtPath = p;
-    probe("mogrtAccept", { allowMutate: true, path: p, videoTrack: 0 },
-      function (err, data) {
-        results.mogrtAccept = err ? { error: err } : data;
-        render();
-        autoSave();
+    var field = document.getElementById("mogrt-path");
+    var p = (field.value || "").trim();
+    if (!p) {
+      note("No .mogrt path. The box below the buttons is empty and nothing " +
+           "was found automatically.\n\nPut an absolute path to a .mogrt in " +
+           "it (the AE panel writes one to <repo>\\logs\\mogrt-verify\\), " +
+           "then click again.");
+      return;
+    }
+    arm("mogrt", "imports that graphic into the ACTIVE sequence at 0",
+      function () {
+        results.mogrtPath = p;
+        probe("mogrtAccept", { allowMutate: true, path: p, videoTrack: 0 },
+          function (err, data) {
+            results.mogrtAccept = err ? { error: err } : data;
+            render();
+            autoSave();
+          });
       });
   });
+
+  /*
+   * Find a .mogrt without asking anyone to type an absolute path. The
+   * install is a junction, so realpathSync gives the repo copy of this
+   * bundle; the repo root is two levels up, and the AE panel's mogrt
+   * probe writes into <repo>\logs\mogrt-verify\.
+   */
+  /*
+   * Is this file plausibly a real capsule? logs\mogrt-verify\ is a TEST
+   * folder: it holds deliberately damaged fixtures next to real exports,
+   * and the first version of this picked the newest file by mtime and
+   * landed on truncated.mogrt. Premiere then refused it, which would
+   * have read as "Premiere rejects what AE writes" if the receipt had
+   * not said otherwise.
+   *
+   * A .mogrt is a zip. Checking the local-file signature, the
+   * end-of-central-directory record and a definition.json entry costs
+   * two reads and separates a real export from a damaged fixture.
+   */
+  function looksLikeCapsule(fs, full) {
+    var fd = null;
+    try {
+      var st = fs.statSync(full);
+      if (st.size < 200) { return { ok: false, why: "only " + st.size + " bytes" }; }
+      fd = fs.openSync(full, "r");
+      // Byte comparisons, never string ones. A zip signature contains
+      // control characters, so writing it as a string literal puts raw
+      // invisible bytes into this file - the same hazard class as the
+      // NUL bytes that bit this repo before, and impossible to review.
+      var head = Buffer.alloc(4);
+      fs.readSync(fd, head, 0, 4, 0);
+      if (!(head[0] === 0x50 && head[1] === 0x4B &&
+            head[2] === 0x03 && head[3] === 0x04)) {
+        return { ok: false, why: "not a zip (header bytes " + head[0] + " " +
+                 head[1] + " " + head[2] + " " + head[3] + ")" };
+      }
+      var tailLen = Math.min(st.size, 65536);
+      var tail = Buffer.alloc(tailLen);
+      fs.readSync(fd, tail, 0, tailLen, st.size - tailLen);
+      // End-of-central-directory signature: 50 4B 05 06, searched from
+      // the end because that is where it lives.
+      var eocd = -1, i;
+      for (i = tail.length - 4; i >= 0; i--) {
+        if (tail[i] === 0x50 && tail[i + 1] === 0x4B &&
+            tail[i + 2] === 0x05 && tail[i + 3] === 0x06) { eocd = i; break; }
+      }
+      if (eocd === -1) {
+        return { ok: false, why: "no end-of-central-directory (truncated)" };
+      }
+      if (tail.toString("latin1").indexOf("definition.json") === -1) {
+        return { ok: false, why: "no definition.json entry" };
+      }
+      return { ok: true, why: "zip with a definition.json entry" };
+    } catch (e) {
+      return { ok: false, why: String(e.message || e) };
+    } finally {
+      if (fd !== null) { try { fs.closeSync(fd); } catch (e2) {} }
+    }
+  }
+
+  function autofillMogrt() {
+    var field = document.getElementById("mogrt-path");
+    try {
+      var fs = nodeRequire("fs");
+      var path = nodeRequire("path");
+      var real = fs.realpathSync(extPath());
+      var repo = path.resolve(real, "..", "..");
+      var dir = path.join(repo, "logs", "mogrt-verify");
+      if (!fs.existsSync(dir)) {
+        results.mogrtSearch = { looked: dir, found: 0 };
+        return;
+      }
+      var hits = fs.readdirSync(dir)
+        .filter(function (n) { return /\.mogrt$/i.test(n); })
+        .map(function (n) {
+          var full = path.join(dir, n);
+          var v = looksLikeCapsule(fs, full);
+          return { full: full, name: n, mtime: fs.statSync(full).mtimeMs,
+                   usable: v.ok, why: v.why };
+        })
+        .sort(function (a, b) { return b.mtime - a.mtime; });
+
+      // Every candidate is recorded, so a wrong pick is visible rather
+      // than silent - the whole reason this needed fixing.
+      results.mogrtSearch = {
+        looked: dir,
+        found: hits.length,
+        candidates: hits.map(function (h) {
+          return { name: h.name, usable: h.usable, why: h.why };
+        })
+      };
+      var good = hits.filter(function (h) { return h.usable; });
+      if (good.length) {
+        field.value = good[0].full;
+        results.mogrtSearch.picked = good[0].full;
+      } else if (hits.length) {
+        results.mogrtSearch.picked = null;
+        results.mogrtSearch.note = "found .mogrt files but NONE is a " +
+          "readable capsule - they look like damaged test fixtures. " +
+          "Export one from the AE panel, or type a path.";
+      }
+    } catch (e) {
+      results.mogrtSearch = { error: String(e.message || e) };
+    }
+  }
+
+  /*
+   * UNATTENDED MODE. scripts/run-ppro-probe.ps1 drops a job file, then
+   * launches the host. Premiere restores the panels that were open in
+   * the workspace, so this page comes up on its own and runs the whole
+   * battery with nobody at the keyboard.
+   *
+   * The job is CLAIMED (renameSync, atomic) before any work starts:
+   * this page can be reopened, and the invisible door-3 runner may be
+   * installed alongside it, so exactly one of them must win.
+   */
+  function claimJob() {
+    var fs, path, dir, jobFile, claimed, job;
+    try {
+      fs = nodeRequire("fs");
+      path = nodeRequire("path");
+      dir = probeDir();
+      jobFile = path.join(dir, "job.json");
+      if (!fs.existsSync(jobFile)) { return null; }
+      claimed = path.join(dir, "job.running.json");
+      fs.renameSync(jobFile, claimed);
+      // Strip the BOM: Windows PowerShell 5.1 writes one and JSON.parse
+      // throws on it. See the note in the harness runner - this exact
+      // line, failing into a silent catch, ate two unattended runs.
+      job = JSON.parse(String(fs.readFileSync(claimed, "utf8"))
+                         .replace(/^\uFEFF/, ""));
+      job.__claimed = claimed;
+      return job;
+    } catch (e) {
+      // Never die silently after consuming the job.
+      try {
+        fs.writeFileSync(path.join(dir, "job-claimed.json"),
+          JSON.stringify({ via: "visible panel",
+                           at: new Date().toISOString(),
+                           failedBeforeStarting: String(e && e.message ? e.message : e),
+                           hint: "the job could not be parsed after being " +
+                                 "claimed; a UTF-8 BOM from PowerShell does " +
+                                 "exactly this" }, null, 2), "utf8");
+      } catch (e2) {}
+      return null;
+    }
+  }
+
+  function runJob(job) {
+    note("unattended run: job claimed, measuring...");
+    results.job = { via: "visible panel", args: job };
+    // Breadcrumb the instant we claim, before any host call. A hang
+    // after this point is then attributable to a named claimer rather
+    // than to "something, somewhere".
+    try {
+      var fsC = nodeRequire("fs");
+      var pathC = nodeRequire("path");
+      fsC.writeFileSync(pathC.join(probeDir(), "job-claimed.json"),
+        JSON.stringify({ via: "visible panel",
+                         host: results.panel && results.panel.appName,
+                         at: new Date().toISOString() }, null, 2), "utf8");
+    } catch (eB) {}
+    results.panel = panelFacts();
+    results.storage = storageProbe(results.panel.appName);
+    results.shape = shapeInUse();
+    autofillMogrt();
+
+    var progressPath = null;
+    try {
+      progressPath = nodeRequire("path")
+        .join(probeDir(), "job-progress.json").replace(/\\/g, "/");
+    } catch (eP) {}
+
+    var battArgs = {
+      allowMutate: job.allowMutate === true,
+      scratchProject: job.scratchProject || null,
+      makeSequence: job.makeSequence === true,
+      skip: job.skip || null,
+      progressPath: progressPath,
+      mogrtPath: job.mogrtPath ||
+                 (results.mogrtSearch && results.mogrtSearch.picked) || null
+    };
+    probe("battery", battArgs, function (err, data) {
+      results.battery = err ? { error: err } : data;
+      // The ScriptPath measurement costs nothing and is a fact this
+      // project already had to learn twice.
+      evalScript("String($.global.AELLP_LOADER_FILENAME)", function (fname) {
+        results.scriptPath = {
+          dollarFileName: (fname && fname !== "undefined") ? fname : null
+        };
+        results.finishedAt = new Date().toISOString();
+        var where = save();
+        results.savedTo = where;
+        try {
+          var fs2 = nodeRequire("fs");
+          var path2 = nodeRequire("path");
+          fs2.writeFileSync(path2.join(probeDir(), "job-result.json"),
+                            JSON.stringify(results, null, 2), "utf8");
+          if (job.__claimed) { fs2.unlinkSync(job.__claimed); }
+        } catch (e) {}
+        note("unattended run finished. Saved to " + where);
+      });
+    });
+  }
 
   // First paint: enough to tell whether the panel even reached a host.
   results.panel = panelFacts();
   results.storage = storageProbe(results.panel.appName);
+  autofillMogrt();
   render();
+
+  var pending = claimJob();
+  if (pending) { runJob(pending); }
 })();
 </script>
 </body>

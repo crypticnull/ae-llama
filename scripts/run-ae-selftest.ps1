@@ -48,6 +48,31 @@ if (-not $AfterFXPath -or -not (Test-Path $AfterFXPath)) {
 }
 
 . (Join-Path $PSScriptRoot "lib\ae-dialog-triage.ps1")
+. (Join-Path $PSScriptRoot "lib\host-dialogs.ps1")
+
+# The projects THIS script may answer a save-changes prompt for, by
+# DISCARDING their changes. Both are the harness's own:
+#
+#   Untitled Project        AE's cold-launch project. The self-test never
+#                           saves (extension/js/selftest.js holds the
+#                           export_mogrt refusal wall precisely so it
+#                           never has to touch the user's project), so a
+#                           cold-launched AE sits on this one.
+#   mogrt-probe-scratch     NAMED, and ours. scripts/mogrt-verify-probe.jsx
+#                           does app.project.save(scratch) into the repo's
+#                           logs/ folder -- it has to, because
+#                           export_mogrt cannot run from a project that
+#                           was never saved. From that point on AE's quit
+#                           prompt carries THIS name and not "Untitled",
+#                           which is why the first version of this rule
+#                           (gated on the word "Untitled") could not
+#                           answer it. Spotted by the owner, 2026-09-03.
+#
+# Anything else is somebody's work. It is not discarded -- the last rule
+# in Get-AellDialogRules cancels that prompt instead, which unblocks AE
+# and keeps every unsaved change.
+$script:AellOwnedProjects = @('Untitled Project', 'mogrt-probe-scratch')
+$script:AellHostProcesses = @('AfterFX')
 
 $out = Join-Path $env:TEMP "aell-selftest-results.json"
 Remove-Item $out -ErrorAction SilentlyContinue
@@ -643,8 +668,19 @@ function Clear-AellStaleDialog {
     # to: the harvest above already named the dialog, and this line used
     # to announce "the save-changes prompt" over the top of an error
     # alert it had just read out loud.
-    Write-Host ("Answering it with WM_CLOSE, which on the save-changes " +
-      "prompt is Cancel and only calls off the quit.")
+    # A KNOWN dialog is answered properly first: clicking Don't Save
+    # actually resolves the save prompt, where WM_CLOSE only cancels the
+    # quit and leaves it to ask again on the next one.
+    $named = Answer-AellKnownDialogs `
+      -ProcessNames $script:AellHostProcesses `
+      -OwnedProjects $script:AellOwnedProjects
+    if ($named -gt 0) {
+      Start-Sleep -Seconds 2
+      continue
+    }
+
+    Write-Host ("No rule matched it. Falling back to WM_CLOSE, which on " +
+      "the save-changes prompt is Cancel and only calls off the quit.")
     $n = 0
     foreach ($proc in @(Get-Process AfterFX -ErrorAction SilentlyContinue)) {
       try { $n = $n + [AellWin]::CloseWordlessDialogs($proc.Id) } catch { }
@@ -652,6 +688,7 @@ function Clear-AellStaleDialog {
     Write-Host ("  answered " + $n + " dialog(s)")
     Start-Sleep -Seconds 2
   }
+  Write-AellUnknownDialogs -ProcessNames $script:AellHostProcesses
   Write-Host ("  it did not clear -- running anyway, and the wait loop " +
     "below will report it.")
 }
@@ -676,13 +713,71 @@ Start-Process -FilePath $AfterFXPath -ArgumentList @("-r", $wrapper) |
 # window from a popup nobody asked for, and a verdict only stops the run
 # once it has survived several consecutive polls: a modal waits forever,
 # a teardown flicker does not.
+#
+# A known-safe dialog is also answered DURING the wait, not only before
+# the launch. Clear-AellStaleDialog above runs once, before AE starts,
+# so it can only see what a PREVIOUS run left behind -- and the two
+# dialogs that actually cost the owner time come up after that point:
+# the crash-recovery prompt appears on the launch this run just made
+# (AE was force-closed, so its next start offers to recover), and the
+# save-changes prompt can be raised by the suite itself. Neither was
+# answerable here, so a run that met one burned the whole -TimeoutSec
+# and exited 3 with nothing done. That is the "just sitting there" the
+# owner reported on 2026-09-02.
+#
+# Narrow by construction, in three ways, because this clicks buttons in
+# a run that may be perfectly healthy:
+#   - only when something has been up for two consecutive polls (~4s),
+#     so a teardown flicker is never clicked;
+#   - only on the verdicts that mean "AE is behind something", never on
+#     `running` or `progress`, which are AE working on our script;
+#   - only a rule whose every text fragment is in the dialog and whose
+#     button label is on the dialog. AE's progress windows say
+#     "Executing Script", auto-save says "Auto-Save Project": no rule
+#     matches either, so the healthy path cannot be clicked at all.
+# And capped, so a rule that somehow matches something regenerating
+# cannot spin for the whole timeout.
+$midRunAnswers = 0
 $deadline = (Get-Date).AddSeconds($TimeoutSec)
 $state = New-AellWaitState
 while (-not (Test-Path $out) -and (Get-Date) -lt $deadline) {
   Start-Sleep -Seconds 2
   $state = Update-AellWaitState -State $state `
     -ProbeText (Get-BlockingDialog) -ScriptName $wrapperName
+
+  if ($canProbe -and -not $NoDismissStale -and $midRunAnswers -lt 4 -and
+      $state.Streak -ge 2 -and
+      ($state.LastVerdict -eq 'startup' -or
+       $state.LastVerdict -eq 'unreadable' -or
+       $state.LastVerdict -eq 'blocked')) {
+    $answered = Answer-AellKnownDialogs `
+      -ProcessNames $script:AellHostProcesses `
+      -OwnedProjects $script:AellOwnedProjects
+    if ($answered -gt 0) {
+      $midRunAnswers = $midRunAnswers + $answered
+      # The time this dialog ate is not time the suite got to run in,
+      # so give it back rather than failing a run that was only ever
+      # waiting on a prompt. Once per answer, capped with the answers.
+      $deadline = $deadline.AddSeconds(60)
+      # And forget the streak: it was counted against a dialog that no
+      # longer exists, and carrying it forward would trip StopNow on
+      # the poll right after we cleared the thing. Only the streak --
+      # SawProgress and WorkingText are the run's history, and the
+      # timeout messages below are written from them.
+      $state.Streak = 0
+      $state.LastVerdict = ''
+      $state.StopNow = $false
+      $state.BlockingText = ''
+      continue
+    }
+  }
+
   if ($state.StopNow) { break }
+}
+if ($midRunAnswers -gt 0) {
+  Write-Host ("Answered " + $midRunAnswers + " dialog(s) while waiting; " +
+    "the deadline was extended by " + (60 * $midRunAnswers) + "s to " +
+    "cover the time they held AE up.")
 }
 $blocking = $state.BlockingText
 $sawRunning = $state.SawProgress
@@ -704,6 +799,11 @@ if ($blocking -and -not (Test-Path $out)) {
   # a dialog that named its own cause in one WM_GETTEXT call.
   Write-AellDialogEvidence -Context 'blocking this run' -AlwaysShoot |
     Out-Null
+  # The harvest says what it SAYS; this says what you could CLICK. A
+  # rule in Get-AellDialogRules needs both, and without the button labels
+  # the next attempt at one is a guess -- which is how the crash-prompt
+  # rule below started life.
+  Write-AellUnknownDialogs -ProcessNames $script:AellHostProcesses
   Write-Host '----'
   Write-Host 'This is not the scripting-file-access preference. Until the'
   Write-Host 'dialog is dismissed AE ignores every -r script while still'
@@ -753,6 +853,13 @@ if (-not (Test-Path $out)) {
       "until that is dismissed AE never gets far enough to run a -r " +
       "script. Nothing to do with the scripting-file-access " +
       "preference: dismiss it and re-run.")
+    if ($midRunAnswers -eq 0) {
+      Write-Host ("  The recovery prompt is meant to be answered " +
+        "automatically (see Get-AellDialogRules). Nothing matched it, so " +
+        "its real text and buttons follow -- write a rule from these " +
+        "and it will never cost a run again.")
+      Write-AellUnknownDialogs -ProcessNames $script:AellHostProcesses
+    }
   } else {
     Write-Host ("No results after " + $TimeoutSec + "s, and no blocking " +
       "dialog found. Checks: is AE running/launching? Is 'Allow Scripts " +
