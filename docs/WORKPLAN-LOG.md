@@ -18617,3 +18617,46 @@ one.
   hazard the 0.11.17 pass fixed. Noted for maintenance weight only.
 
 No `extension/` change, so NO BUMP.
+
+## 2026-09-03 (remote session) — the prompt ratchet was guarding the wrong number
+
+Correction to the entry above, which called prompt headroom an owner
+decision. It is not a decision; it was a measurement error on my part,
+and the fix is a test.
+
+**What I said:** "prompt headroom is 67 bytes, the next routing fix has
+nothing to spend, this needs an owner call."
+
+**What is actually true.** The 59000 ceiling is a self-imposed ratchet in
+`tests/test-context-budget.js`, not a technical limit — and it guards the
+FULL prompt. But `ctxSize` defaults to **16384**
+(`extension/js/settings.js`), the panel runs COMPACT under 24K, so
+compact (39803) is the prompt a default user actually gets. Full (58933)
+only reaches someone running 24K or more, where 32K leaves 34982 chars of
+history — no crisis there at all.
+
+**The real defect, which is subtler and worth having found.** The cuts
+that paid for the last several routing additions came from tool-doc
+SECOND SENTENCES — and compact mode discards those anyway. So each pass
+satisfied the full-form ratchet while handing the 16K user back nothing.
+Two of them said so in this log, honestly and in passing: "Compact grew
++184" and "Compact grew +64". No test objected, because the only guard on
+compact was the RATIO `compact < full * 0.72` — which scales with a
+`full` pinned near its own ceiling, leaving compact ~2.6K chars of
+unexamined room to grow.
+
+Meanwhile the rules block, where the routing phrase lists live, is
+byte-identical in both forms (the suite asserts it). So a routing
+addition costs the default user every byte, while its "payment" often
+cost them nothing.
+
+**Fixed:** `COMPACT_CEILING = 40000`, absolute, alongside the full one.
+The number is not the point — the point is that the next routing addition
+has to pay in the currency the default user spends, which makes a
+cosmetic cut fail immediately instead of silently.
+
+**Nothing is needed from the owner** for this or for the two notes in the
+previous entry (mask concentration, hostscript growth) — those were
+observations, not problems, and I should not have filed them as decisions.
+
+No `extension/` change, so NO BUMP.

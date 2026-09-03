@@ -369,6 +369,32 @@ Tools.fetchProjectState(function (json) {
   assert(compact.length < full.length * 0.72,
          "compact docs cut the prompt by more than a quarter (" +
          compact.length + " vs " + full.length + ")");
+
+  // The COMPACT form needs its own ABSOLUTE ceiling, and this is why.
+  //
+  // The ratchet above guards `full`. But the default ctxSize is 16384
+  // (extension/js/settings.js), the panel runs compact under 24K, so
+  // compact is the prompt a real user actually gets. And the cuts that
+  // have paid for the last several routing additions came from tool-doc
+  // SECOND SENTENCES — which compact discards anyway. So each of those
+  // passes satisfied the full-form ratchet while handing the 16K user
+  // back nothing: the log records "Compact grew +184" and "Compact grew
+  // +64" in successive passes, honestly, and no test objected.
+  //
+  // A ratio is not a ratchet either: `compact < full * 0.72` scales with
+  // a `full` that is pinned near its own ceiling, so compact had ~2.6K
+  // chars of room to grow with nothing failing.
+  //
+  // Set just above today's measured size, the same shape as FULL_CEILING.
+  // The point is not the exact number — it is that the next routing
+  // addition has to pay in the currency the default user spends, which
+  // immediately shows whether a proposed cut is real or cosmetic.
+  const COMPACT_CEILING = 40000;
+  assert(compact.length <= COMPACT_CEILING,
+         "the compact prompt stays under its own ceiling (" +
+         compact.length + " of " + COMPACT_CEILING + ") — this is the " +
+         "form a default 16K window gets, so a cut that only shrinks " +
+         "the full form does not count as paying for growth");
   for (const t of Tools.TOOL_DEFS) {
     if (compact.indexOf("- " + t.name + " " + t.args) === -1) {
       assert(false, "compact mode keeps every tool's args line: " + t.name);
