@@ -1927,11 +1927,48 @@ this order, one bullet per pass:
     `property()` by NAME only, with no root list to walk — so
     tests/test-curve-tools.js grew an index-addressable property tree
     with Marker, Time Remap, Masks and Effects on it. Harness 610 -> 622.
-  - THEN, in priority order: row 35 ("soften"/"too sharp" reaches
-    `add_mask`, 2 of 4), and row 30 casual (`grid_layout` with no
-    `layers` grids the BACKGROUND in). `link_property {layer: [six
-    names]}` -> "invalid numeric result (divide by zero?)" is CLOSED by
-    0.11.15 above (grounded, and pinned by a real-AE self-test step).
+  - ~~**row 35: "soften"/"too sharp" reaches `add_mask`**~~ DONE
+    2026-09-03 (0.11.21), with the typo phrasing's ellipse left open on
+    purpose. Two of four phrasings masked the BG instead of blurring it,
+    both HARM. Fixed on both levers the failure has. ROUTING: the choice
+    happens before any tool call, so no receipt can reach it — and the
+    prompt taught how to REMOVE a blur and never how to ADD one, while
+    its only soft-sounding words were the mask bullet's own "a vignette
+    is a big feathered ellipse". That bullet now carries
+    `'soften it / blur it / too sharp / out of focus' = apply_effect
+    {effect: 'Gaussian Blur'} — a mask feather softens the mask EDGE,
+    never the picture`, and it is a NET CUT: 58967 -> 58947, paid by
+    dropping add_mask's worked "bottom half" example and its wrong
+    `sizes from get_comp_details` pointer plus delete_mask's description
+    of its own grounded refusal (compact +184, written down in the log).
+    BEHAVIOUR: the vague call's region was the layer's own four corners,
+    which falls BETWEEN add_mask's two refusals (it neither misses the
+    layer nor exceeds it), so `add_mask` now warns that the mask cuts
+    nothing away and that a feather fades the OUTER EDGE, naming
+    apply_effect 'Gaussian Blur'. One-sided: the tool's own default
+    region, inverted, subtract, and a feather on a region that really
+    does cut something away are all silent. The typo phrasing's ellipse
+    hides ~90% of the layer, which is indistinguishable from a spotlight
+    — nothing provable to say, so nothing said. Harness 622 -> 629, and
+    it found a leak on the way (below).
+  - ~~**the suite leaked its carpet-bomb rig comp, one per run**~~ DONE
+    2026-09-03 (0.11.21). `AELL Self-Test Wipe` was the one rig comp
+    with no cleanup step, so ten harness runs left `…Wipe` through
+    `…Wipe 10` in the owner's project, and the bottom-of-suite "nothing
+    of the suite's remains" check could not see them (it looks for the
+    `ST ` namespace and for new FOOTAGE). It surfaced ten runs later and
+    a long way off: `reduce_project`'s refusal TRUNCATES its comp list,
+    and the tenth leaked comp pushed the comp that step looks for off
+    the end of it — 627/628. Cleanup step added; the final check now
+    also flags any un-baselined `AELL Self-Test…` item.
+  - THEN, in priority order: row 30 casual (`grid_layout` with no
+    `layers` grids the BACKGROUND in), then a rollback throwing away the
+    calls that WORKED when a later one fails on a parameter name.
+    `link_property {layer: [six names]}` -> "invalid numeric result
+    (divide by zero?)" is CLOSED by 0.11.15 above (grounded, and pinned
+    by a real-AE self-test step). A `--variants` re-run of row 35 is
+    what would actually close it: the rules bullet is unmeasured in the
+    field.
 - **DEFERRED until a sandbox design exists:** D/F/H3 rows (project
   mutation, renders, mass-delete) — wiring them against the live
   project is the harm the whitelist cannot contain. Also deferred:

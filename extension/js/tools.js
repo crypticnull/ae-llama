@@ -384,17 +384,14 @@
       desc: "Add a shape layer (rectangle, ellipse, polygon, or star).",
       args: "{comp?: string, name?: string, shape?: 'rectangle'|'ellipse'|'polygon'|'star', size?: [w,h], position?: [x,y], fillColor?: [r,g,b] 0..1, strokeColor?: [r,g,b], strokeWidth?: px, roundness?: px (rectangle), points?: int (polygon/star)}" },
     { name: "add_mask", mutating: true,
-      desc: "Add a mask to a layer. Coordinates are in LAYER space " +
-            "('hide the bottom half' = a rectangle over the top half, " +
-            "bounds [0, 0, w, h/2]; sizes from get_comp_details, never " +
-            "guessed).",
+      desc: "Add a mask to a layer ('hide the bottom half'). " +
+            "Coordinates are in LAYER space, sized from get_bounds — " +
+            "never guessed.",
       args: "{comp?: string, layer: name|index, shape?: 'rectangle'|'ellipse'|'custom', bounds?: [x,y,w,h], vertices?: [[x,y],...] (custom), mode?: 'add'|'subtract'|'intersect'|..., inverted?: bool, feather?: px, name?: string}" },
     { name: "delete_mask", mutating: true,
       desc: "REMOVE one mask from a layer by name or 1-based index " +
             "('remove that mask'); omit 'mask' when the layer has exactly " +
-            "one. An unknown mask is refused listing the masks the layer " +
-            "really has; the result names what was removed and what " +
-            "remains.",
+            "one.",
       args: "{comp?: string, layer?: name|index (omit = selected layer), mask?: name|1-based index (omit when the layer has one)}" },
     { name: "set_mask", mutating: true,
       desc: "Edit an EXISTING mask: mode, feather, expansion, opacity, " +
@@ -919,7 +916,10 @@
       "- 'crop / chop off the lower half / hide the bottom half / only",
       "  the top shows / cut a hole / vignette' = add_mask — never",
       "  set_layer_timing (that trims TIME), scale or anchor. A hole is",
-      "  mode 'subtract'; a vignette is a big feathered ellipse.",
+      "  mode 'subtract'; a vignette is a big feathered ellipse. But",
+      "  'soften it / blur it / too sharp / out of focus' = apply_effect",
+      "  {effect: 'Gaussian Blur'} — a mask feather softens the mask",
+      "  EDGE, never the picture.",
       "- 'stop it moving / un-animate it / no more fading' =",
       "  remove_keyframes, times omitted. Motion from an EXPRESSION is",
       "  cleared with set_expression {expression: ''} — remove_keyframes",

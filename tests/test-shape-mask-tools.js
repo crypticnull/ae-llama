@@ -808,6 +808,80 @@ const whole = betaMasks.property("Whole").property("ADBE Mask Shape").value;
 assert(JSON.stringify(whole.vertices) === "[[0,0],[100,0],[100,100],[0,100]]",
        "…and they are 100x100, not the comp's 1920x1080: " +
        JSON.stringify(whole.vertices));
+assert(!r.data.warning,
+       "…and the tool's OWN default is never warned about — add_mask then " +
+       "set_mask_path opens with exactly this placeholder: " +
+       JSON.stringify(r.data));
+
+// ---------------------------------------------------------------------
+// 6b. A feather is not a blur.
+//
+// Measured in real AE 2026 through the chat probe, row 35 ("the
+// background is too sharp behind the icons"): the model reached
+// add_mask {shape: 'custom', vertices: the layer's own four corners,
+// feather: 50} on a 1920x1080 BG, got a bare `ok`, and told the user the
+// background had been softened. Nothing was softened — a mask feather
+// fades the mask EDGE and never touches a pixel inside the region, so a
+// region that IS the whole layer cannot blur anything.
+//
+// This falls between the two refusals above: it does not MISS the layer
+// and it is not BIGGER than the layer on any side, so neither fires. It
+// is not refused either — a full-layer feather is a real edge fade — so
+// the receipt carries the warning instead.
+r = call("add_mask", { layer: "Beta", name: "Soft", shape: "custom",
+                       vertices: [[0, 0], [100, 0], [100, 100], [0, 100]],
+                       feather: 50 });
+assert(r.ok, "the field's own call still lands (it is a warning, not a " +
+       "refusal): " + (r.error || ""));
+assert(/covers all of 'Beta'/.test(r.data.warning || "") &&
+       /100x100/.test(r.data.warning || ""),
+       "…carrying a warning that names the layer and its real size: " +
+       JSON.stringify(r.data));
+assert(/OUTER EDGE/.test(r.data.warning || "") &&
+       /does not blur the picture/.test(r.data.warning || ""),
+       "…and says what the feather actually did: " + r.data.warning);
+assert(/apply_effect/.test(r.data.warning || "") &&
+       /Gaussian Blur/.test(r.data.warning || ""),
+       "…and names the call that DOES blur the picture, the way every " +
+       "other grounded message here offers a way out: " + r.data.warning);
+assert(!!betaMasks.property("Soft"),
+       "…and the mask it warns about was really created");
+
+// The same coverage with no feather is the other half: a pure no-op, and
+// the way out is a real region, not a blur.
+r = call("add_mask", { layer: "Beta", name: "Flat", shape: "rectangle",
+                       bounds: [0, 0, 100, 100] });
+assert(r.ok && /covers all of 'Beta'/.test(r.data.warning || "") &&
+       /still shows/.test(r.data.warning || "") &&
+       /bounds/.test(r.data.warning || ""),
+       "an unfeathered full-layer mask is warned about too, pointing at " +
+       "bounds: " + JSON.stringify(r.ok ? r.data : r.error));
+assert(!/Gaussian Blur/.test(r.data.warning || ""),
+       "…and does NOT offer a blur nobody asked for: " + r.data.warning);
+
+// One-sided, like every other verdict here: it says "cuts nothing away"
+// only where that is PROVED. Inverted and subtract both cut the whole
+// layer away at full coverage, which is a change, not a no-op.
+r = call("add_mask", { layer: "Beta", name: "Inv", shape: "rectangle",
+                       bounds: [0, 0, 100, 100], inverted: true,
+                       feather: 50 });
+assert(r.ok && !r.data.warning,
+       "an INVERTED full-layer mask hides everything — no warning: " +
+       JSON.stringify(r.ok ? r.data : r.error));
+r = call("add_mask", { layer: "Beta", name: "Sub", shape: "rectangle",
+                       bounds: [0, 0, 100, 100], mode: "subtract",
+                       feather: 50 });
+assert(r.ok && !r.data.warning,
+       "…and so does a SUBTRACT one: " +
+       JSON.stringify(r.ok ? r.data : r.error));
+
+// A feather on a real region is the vignette the rules send here. Silent.
+r = call("add_mask", { layer: "Beta", name: "Vignette", shape: "ellipse",
+                       bounds: [10, 10, 80, 80], feather: 20 });
+assert(r.ok && !r.data.warning,
+       "a feathered mask that DOES cut something away is left alone — " +
+       "that is the vignette the rules route here: " +
+       JSON.stringify(r.ok ? r.data : r.error));
 
 // A TEXT layer is the case where .width/.height cannot be used at all:
 // AE answers with the comp's dimensions, and the layer's origin is the

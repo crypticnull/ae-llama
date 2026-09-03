@@ -22,7 +22,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `add_keyframe` | Add a keyframe on a layer property at a time (seconds) | yes | host | 1 | 11 |
 | `add_light` | Add a light | yes | host | 1 | 13 |
 | `add_marker` | Add a marker to the comp (omit 'layer') or to a layer | yes | host | 1 | 10 |
-| `add_mask` | Add a mask to a layer | yes | host | 1 | 7 |
+| `add_mask` | Add a mask to a layer ('hide the bottom half') | yes | host | 1 | 12 |
 | `add_null` | Add a null layer (use as a controller or parent) | yes | host | 1 | 8 |
 | `add_shape_content` | Add content INSIDE a shape layer: kinds group, rectangle, ellipse, star, polygon, path, fill, stroke, gradient_fill, gradient_stroke, repeater, trim_paths, merge_paths, offset_paths, rounded_corners, pucker_bloat, twist, zigzag | yes | host | 1 | 12 |
 | `add_shape_layer` | Add a shape layer (rectangle, ellipse, polygon, or star) | yes | host | — | 4 |
@@ -43,9 +43,9 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `comfy_status` | Check the local ComfyUI instance (online? queue depth?) | no | panel | — | — |
 | `create_comp` | Create a composition and open it | yes | host | 1 | 35 |
 | `create_folder` | Create a project-panel folder | yes | host | 1 | 10 |
-| `delete_item` | Delete a project item | yes | host | 1 | 43 |
+| `delete_item` | Delete a project item | yes | host | 1 | 44 |
 | `delete_layer` | Delete a layer from a comp | yes | host | — | 19 |
-| `delete_mask` | REMOVE one mask from a layer by name or 1-based index ('remove that mask'); omit 'mask' when the layer has exactly one | yes | host | 1 | 6 |
+| `delete_mask` | REMOVE one mask from a layer by name or 1-based index ('remove that mask'); omit 'mask' when the layer has exactly one | yes | host | 1 | 7 |
 | `distribute_property` | Distribute a property VALUE across layers | yes | host | 1 | 5 |
 | `duplicate_comp` | Duplicate a composition | yes | host | 2 | 5 |
 | `duplicate_layer` | Duplicate a LAYER inside its comp (use duplicate_comp only for whole compositions) | yes | host | 2 | 10 |

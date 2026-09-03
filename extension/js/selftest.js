@@ -2461,6 +2461,104 @@
           return rem === "ST Path" || "remainingMasks " + rem;
         } },
 
+      // ---- a feather is not a blur (row 35) ---------------------------
+      // Measured 2026-09-02 through the chat probe, "the background is
+      // too sharp behind the icons": the model sent add_mask with the
+      // layer's OWN four corners as custom vertices and feather 50, got
+      // a bare ok, and told the user the background had been softened.
+      // Nothing was. A mask feather fades the mask EDGE and never
+      // touches a pixel inside the region, so a region that IS the whole
+      // layer cannot blur anything. 'ST Mask Off' is a 200x200 solid
+      // with no masks left on it by now.
+      { name: "a full-layer feathered mask is warned about, not refused",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Mask Off", name: "ST Soft",
+                   shape: "custom",
+                   vertices: [[0, 0], [200, 0], [200, 200], [0, 200]],
+                   feather: 50 };
+        },
+        check: function (d) {
+          if (d.mask !== "ST Soft") return "mask named " + d.mask;
+          var w = d.warning || "";
+          if (!/covers all of 'ST Mask Off'/.test(w)) return "warning: " + w;
+          if (!/200x200/.test(w)) return "the real size is missing: " + w;
+          if (!/OUTER EDGE/.test(w) || !/does not blur the picture/.test(w)) {
+            return "it does not say what the feather did: " + w;
+          }
+          // Grounded the way every refusal here is: it names the call
+          // that WOULD have done what the sentence asked for.
+          return (/apply_effect/.test(w) && /Gaussian Blur/.test(w)) ||
+                 "no way out offered: " + w;
+        } },
+
+      { name: "…and the mask it warned about was really created",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Mask Off", mask: "ST Soft" };
+        },
+        check: function (d) {
+          return d.removed === "ST Soft" || "removed " + d.removed;
+        } },
+
+      { name: "…the same coverage with no feather is a plain no-op",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Mask Off", name: "ST Flat",
+                   shape: "rectangle", bounds: [0, 0, 200, 200] };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (!/covers all of 'ST Mask Off'/.test(w)) return "warning: " + w;
+          if (!/still shows/.test(w) || !/bounds/.test(w)) {
+            return "it does not point at a real region: " + w;
+          }
+          return !/Gaussian Blur/.test(w) ||
+                 "it offered a blur nobody asked for: " + w;
+        } },
+
+      // One-sided, like every other verdict in this file: silent wherever
+      // "cuts nothing away" is not PROVED. The tool's own default region
+      // is the layer's box, and add_mask + set_mask_path opens with it.
+      { name: "…but the tool's own default region is never warned about",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Mask Off",
+                   name: "ST Default", shape: "rectangle" };
+        },
+        check: function (d) {
+          return !d.warning || "the placeholder was warned about: " +
+                 d.warning;
+        } },
+
+      // Inverted, that same full coverage hides the WHOLE layer.
+      { name: "…nor is an inverted one, which hides everything",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Mask Off", name: "ST Inv",
+                   shape: "rectangle", bounds: [0, 0, 200, 200],
+                   inverted: true, feather: 50 };
+        },
+        check: function (d) {
+          return !d.warning || "an inverted mask was warned about: " +
+                 d.warning;
+        } },
+
+      // ...and a feather on a region that DOES cut something away is the
+      // vignette the prompt routes to add_mask. It has to stay silent or
+      // the warning is noise on the tool's best use.
+      { name: "…nor a feathered mask that really does cut something away",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Mask Off",
+                   name: "ST Vignette", shape: "ellipse",
+                   bounds: [20, 20, 160, 160], feather: 20 };
+        },
+        check: function (d) {
+          return !d.warning || "a real vignette was warned about: " +
+                 d.warning;
+        } },
+
       // --- the batch executor, at the scale it is actually used at.
       // for_each_layer used to run ANY tool name, so {tool: "create_comp"}
       // over N layers reported {succeeded: N} and left N junk comps in the
@@ -4444,6 +4542,20 @@
         check: function (d) {
           return d.removed === 0 || "removed " + d.removed;
         } },
+
+      // Every other rig comp in this suite is deleted by the step that
+      // finishes with it; this one never was, so ten runs on this machine
+      // left "AELL Self-Test Wipe" through "…Wipe 10" in the user's
+      // project. The check at the bottom could not see them either — it
+      // looks for the "ST " namespace and for new FOOTAGE, and a comp
+      // called "AELL Self-Test …" is neither. It turned the harness red
+      // in the end, from a long way off: reduce_project's refusal lists
+      // the project's comps and TRUNCATES the list, and the tenth leaked
+      // Wipe comp pushed the comp that step looks for off the end of it.
+      { name: "cleanup: delete the carpet-bomb rig comp",
+        tool: "delete_item",
+        args: function (ctx) { return { item: ctx.wpComp }; },
+        check: function () { return true; } },
 
       // ---- "nothing to stagger" rig. Field run 2026-09-03, row 32:
       // three of four phrasings called stagger_layers ALONE on layers
@@ -9796,6 +9908,15 @@
           for (i = 0; i < d.items.length; i++) {
             var it = d.items[i];
             if (it.name.indexOf("ST ") === 0) stale.push(it.name);
+            // The rig comps are named for the suite, not in its "ST "
+            // namespace, so this check used to walk straight past a
+            // leaked one — which is how ten "AELL Self-Test Wipe" comps
+            // accumulated in the user's project unremarked. Scoped by ID
+            // to THIS run, so a rig comp the user has kept on purpose
+            // from an earlier one is never blamed on this run.
+            else if (!base[it.id] && it.name.indexOf("AELL Self-Test") === 0) {
+              stale.push(it.name);
+            }
             // AE's "Solids" folder is created on demand and kept: it is
             // AE's, not the suite's, and the user's next solid wants it.
             else if (!base[it.id] && it.type === "footage") {

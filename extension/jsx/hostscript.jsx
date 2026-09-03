@@ -6997,7 +6997,7 @@ AELL_TOOLS.add_mask = function (args) {
    * ok. The layer's own box is the only thing that can tell an aimed
    * mask from a comp-space one, so refuse with the box in hand — the
    * same grounded shape as every other failed lookup here. */
-  var overflow = "";
+  var overflow = "", coversAll = "";
   var hit = AELL_boxOfPoints(shape.vertices);
   if (box && hit) {
     var bRight = AELL_r3(box.left + box.width);
@@ -7043,6 +7043,35 @@ AELL_TOOLS.add_mask = function (args) {
       overflow = "The mask spans " + span + ", past '" + layer.name +
         "' (" + mine + ") — the part outside the layer does nothing.";
     }
+    /* What is LEFT once the two refusals above have run: a region the
+     * caller asked for EXPLICITLY that comes out exactly the layer's own
+     * box. It is not the comp-coordinates mistake (that is bigger on a
+     * side and refused), so it is not refused — but it cuts nothing
+     * away, and the receipt used to be a bare ok.
+     *
+     * Field run 2026-09-02, row 35 "the background is too sharp behind
+     * the icons": add_mask {shape: 'custom', vertices: the layer's four
+     * corners, feather: 50} on a 1920x1080 BG, ok, and the model told
+     * the user the background was softened. A mask feather softens the
+     * mask EDGE; it never touches a pixel inside the region, so a
+     * region that IS the whole layer cannot blur anything.
+     *
+     * Silent unless the caller named the region: with no bounds and no
+     * vertices this tool's own default IS the layer's box, and that is
+     * the deliberate placeholder an add_mask + set_mask_path pair opens
+     * with. One-sided the same way everywhere else here — 'subtract',
+     * 'intersect' and inverted:true all cut something away at full
+     * coverage, so only plain additive coverage is provably nothing. */
+    var asked = (AELLJSON.isArray(args.bounds) && args.bounds.length >= 4) ||
+                (kind === "custom" && AELLJSON.isArray(args.vertices));
+    var plain = (!args.inverted) &&
+                (!args.mode || String(args.mode).toLowerCase() === "add");
+    if (asked && plain && !overflow &&
+        hit.left <= box.left && hit.top <= box.top &&
+        hit.right >= bRight && hit.bottom >= bBottom) {
+      coversAll = "That mask covers all of '" + layer.name + "' (" + mine +
+        "), so it cuts nothing away";
+    }
   }
 
   var mask = masks.addProperty("ADBE Mask Atom");
@@ -7062,6 +7091,15 @@ AELL_TOOLS.add_mask = function (args) {
   }
   var out = { layer: layer.name, mask: mask.name, shape: kind };
   if (overflow) out.note = overflow;
+  if (coversAll && args.feather > 0) {
+    out.warning = coversAll + " — its feather only fades the layer's " +
+      "OUTER EDGE, it does not blur the picture. To blur the picture: " +
+      "apply_effect {layer: \"" + layer.name + "\", effect: " +
+      "\"Gaussian Blur\"}.";
+  } else if (coversAll) {
+    out.warning = coversAll + " — every pixel of it still shows. Pass " +
+      "'bounds' for the part you want to KEEP.";
+  }
   return AELL_okay(out);
 };
 

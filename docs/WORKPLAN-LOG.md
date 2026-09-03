@@ -14976,3 +14976,170 @@ every target it just retimed is provably static.
 AE running, project untouched and open, no dialog raised. AE was never
 closed and its project was never closed. The probe removed every comp and
 solid source it made. No ComfyUI, no llama-server.
+
+## 2026-09-03 (third pass) — section 8, row 35: "soften"/"too sharp" reached `add_mask` (0.11.21)
+
+Harness GREEN on arrival (622/622), so this pass took the workplan's next
+ranked item. It went red MID-pass for an unrelated reason and that is
+fixed here too — see "The harness leak" below.
+
+### The defect
+
+Field run 2026-09-02, row 35 ("soften the background"): **2 of 4
+phrasings reached `add_mask`**, both scored HARM.
+
+- vague, "the background is too sharp behind the icons" ->
+  `add_mask {shape: 'custom', vertices: the layer's own four corners,
+  feather: 50}` on the 1920x1080 BG, `ok`, "the background now has a
+  feathered mask to appear less sharp".
+- typo, "sofetn the backgrond layer a touch" -> `add_mask {shape:
+  'ellipse', bounds: [500,400,920,280], feather: 50}` + `set_mask`,
+  `ok`, "softened with a feathered mask".
+
+Nothing was softened either time. A mask feather fades the mask EDGE and
+never touches a pixel inside the region.
+
+### Two levers, because the failure has two halves
+
+**1. Routing (the prompt).** The choice happens BEFORE any tool call, so
+no receipt can reach it. The prompt taught how to REMOVE a blur ("get rid
+of the blur" = remove_effect) and never once how to ADD one, and the only
+soft-sounding words in the whole prompt were the mask bullet's own "a
+vignette is a big feathered ellipse" — the prompt was pointing the wrong
+way. The probe runs at ctx 16384, which is COMPACT mode, and compact
+keeps the rules block and the first sentence of each doc, so the fix had
+to live in the rules. The mask bullet now carries the anti-target:
+`'soften it / blur it / too sharp / out of focus' = apply_effect
+{effect: 'Gaussian Blur'} — a mask feather softens the mask EDGE, never
+the picture.`
+
+**Paid for, measured with `buildSystemPrompt().length`: 58967 -> 58947,
+a NET CUT of 20 with the phrase list in.** Two cuts funded it, and both
+were things the model already gets elsewhere:
+
+- `add_mask`'s doc dropped its worked "bottom half" example (the bullet
+  above carries that phrase; the convention is one phrase per doc, and
+  that one phrase is kept) and its `sizes from get_comp_details`
+  pointer, which is now simply WRONG — get_bounds superseded it and the
+  tool's own refusal names the layer's real box.
+- `delete_mask`'s doc dropped a description of its own refusal. The
+  grounded refusal says it at the point of failure, which is the whole
+  design.
+- Honest second number: **compact went 39314 -> 39498 (+184)**. The
+  descs a compact prompt drops are where both cuts landed, so compact
+  pays for the phrase list in full. That is the rules block doing the job
+  it exists for, but it is not free and is written down here as growth.
+
+**2. Behaviour (the host), for the half that IS provable.** The vague
+call's region was the layer's own four corners. That falls between
+`add_mask`'s two existing refusals — it does not MISS the layer, and it
+is not BIGGER than it on any side — so both walked past it and the
+receipt was a bare `ok`. `add_mask` now sets `res.warning` there:
+
+    That mask covers all of 'BG' (1920x1080 at x 0 to 1920, y 0 to 1080),
+    so it cuts nothing away — its feather only fades the layer's OUTER
+    EDGE, it does not blur the picture. To blur the picture:
+    apply_effect {layer: "BG", effect: "Gaussian Blur"}.
+
+Unfeathered, the same coverage is a plain no-op and the way out is a real
+region (`Pass 'bounds' for the part you want to KEEP`), with no blur
+offered that nobody asked for.
+
+**Warned, not refused** — a full-layer feather IS a real edge fade, so
+refusing would take a capability away. And one-sided the way every other
+verdict in this file is, silent wherever "cuts nothing away" is not
+PROVED:
+
+- **no bounds and no vertices is silent.** The tool's own default region
+  IS the layer's box, and `add_mask` + `set_mask_path` opens with exactly
+  that placeholder. Only a region the caller NAMED is judged.
+- **inverted, or mode subtract/intersect, is silent.** At full coverage
+  those cut the whole layer away — a change, not a no-op.
+- **a feather on a region that really does cut something away is
+  silent.** That is the vignette the rules route here; a warning there
+  would be noise on the tool's best use.
+
+Zero prompt cost for this half (host string only).
+
+**The typo phrasing's ellipse is NOT covered and this pass does not
+pretend it is.** It hides ~90% of the BG, which is a real, visible change
+and indistinguishable from a spotlight or a vignette. There is nothing
+provable to say about it, and the prompt says a `warning` means "probably
+not what the user wanted", so inventing one there would be a false
+verdict. Whether the rules bullet alone turns that phrasing around is a
+`--variants` run for a later pass.
+
+### The harness leak (found by this pass, not caused by it)
+
+The second harness run came back **627/628**, failing
+`reduce_project will not guess which comps matter` — "the refusal did not
+list real comps". A read-only probe of the open project (68 items) found
+the reason at the top of it: **`AELL Self-Test Wipe` through `…Wipe 10`.**
+
+The carpet-bomb rig comp is the ONE rig comp in the suite with no
+cleanup step — every other one is deleted by the step that finishes with
+it (the stagger rig added last pass does this correctly). So each harness
+run left another, `create_comp` auto-numbering them. The
+bottom-of-suite check "nothing of the suite's remains in the project"
+could not see them either: it looks for the `ST ` namespace and for new
+FOOTAGE, and a comp called `AELL Self-Test …` is neither.
+
+It surfaced ten runs later and a long way from the cause:
+`reduce_project`'s refusal lists the project's comps and TRUNCATES the
+list, and the tenth leaked Wipe comp pushed the comp that step looks for
+off the end of it.
+
+Both halves fixed: the missing `cleanup: delete the carpet-bomb rig comp`
+step, and the final check now also flags any item named `AELL Self-Test…`
+that is not in the run's baseline — scoped by ID, so a rig comp a user
+kept on purpose from an earlier run is never blamed on this one. The ten
+leftovers were removed from the open project by an exactly-named one-off
+(10 removed, 58 items kept, nothing else touched).
+
+### Verification
+
+- `tests/test-shape-mask-tools.js`: **13 new assertions** — the field's
+  own call warns and names Gaussian Blur, the mask it warns about is
+  really created, the unfeathered no-op points at `bounds` and offers no
+  blur, and the four silences (default region, inverted, subtract, a real
+  feathered vignette). **4 go RED against the reverted hostscript.**
+- `tests/test-chat-probe.js`: the prompt accounting — the four new
+  phrases on the mask bullet, that they route to `apply_effect` /
+  `Gaussian Blur`, the EDGE clause, and that both mask docs stayed short
+  enough to have paid for it.
+- `tests/test-self-test.js`'s canned host answered `add_mask` without
+  ever computing the warning, which is the same blindness one level up
+  that row 32 hit. It now works the coverage out from the same geometry
+  the host does, vertices included, and reproduces both messages.
+- **Six new real-AE self-test steps** in `extension/js/selftest.js` on
+  `ST Mask Off` (a 200x200 solid with no masks left on it by then): the
+  warning fires with the layer's real size and the way out, the mask
+  survives it, the unfeathered variant reads differently, and the three
+  silences.
+- **Real AE harness 622 -> 629/629 PASSED** (+6 mask steps, +1 cleanup
+  step). Full stub sweep: 0 red files, `test-comfy-backend.js` included
+  this time. `docs/CAPABILITIES.md` regenerated.
+- `extension/` changed, so BUMPED: 0.11.20 -> **0.11.21**.
+
+### Notes / assumptions
+
+- The warning uses `warning`, not add_mask's existing `note`. The prompt
+  already says a `warning` field means the result is probably not what
+  the user wanted; `note` stays for the informational overflow message.
+- `Gaussian Blur` / `Blurriness` are the AE 2026 display names the probe
+  measured on the row-35 casual phrasing that PASSED, not names picked
+  from memory.
+- No `scripts/chat-probe.js` field run this pass. Six real-AE steps and
+  the stub pin the behaviour; whether the rules bullet actually moves the
+  vague and typo phrasings is a `--variants` run for a later pass, and it
+  is the one thing that would close row 35 for real.
+- Next in the workplan: row 30 casual (`grid_layout` with no `layers`
+  grids the BACKGROUND in), then finding 4 (a rollback throws away the
+  calls that WORKED when a later one fails on a parameter name).
+
+### Machine state
+
+AE running, project untouched and open, no dialog raised. AE was never
+closed and its project was never closed. The one-off sweep removed only
+the ten leaked `AELL Self-Test Wipe` comps; the probe and sweep scripts
+were deleted from `logs/`. No ComfyUI, no llama-server.

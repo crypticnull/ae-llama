@@ -2435,6 +2435,43 @@ for (const name of ["reorder_layers", "remove_effect", "delete_mask",
   // and the model loses the enum entirely.
   assert(/'rectangle'\|'ellipse'\|'custom'/.test(defsByName.add_mask.args),
          "add_mask's args line names the shapes the rules no longer repeat");
+
+  // Softening is not masking, and nothing in the prompt said so.
+  //
+  // Measured 2026-09-02, real AE + the real 32B, row 35 ("soften the
+  // background"): 2 of 4 phrasings reached add_mask. "The background is
+  // too sharp behind the icons" made a full-layer feathered mask and
+  // "sofetn the backgrond layer a touch" made a feathered ellipse — both
+  // HARM, the BG cut about instead of blurred. The prompt taught how to
+  // REMOVE a blur ("get rid of the blur" = remove_effect) and never once
+  // how to ADD one, while the only soft-sounding word anywhere in it was
+  // this bullet's own "a vignette is a big feathered ellipse". So the
+  // fix is where the gap is: the same bullet, with the anti-target on it.
+  for (const phrase of ["soften it", "blur it", "too sharp",
+                        "out of focus"]) {
+    assert(flow.indexOf(phrase) !== -1,
+           "the mask bullet carries the softening phrase '" + phrase + "'");
+  }
+  assert(/apply_effect/.test(flow) && /Gaussian Blur/.test(flow),
+         "…and routes them to apply_effect, not add_mask");
+  assert(/feather softens the mask\s+EDGE, never the picture/.test(
+           flow.replace(/\s+/g, " ")),
+         "…and says why the mask reading is wrong: a feather is an EDGE");
+  // Paid for, both halves measured with buildSystemPrompt().length:
+  // add_mask's doc dropped the worked "bottom half" example (the bullet
+  // above already carries the phrase, and the doc keeps one copy of it)
+  // and its "sizes from get_comp_details" pointer, which get_bounds
+  // superseded; delete_mask's doc dropped a description of its own
+  // refusal, which the grounded refusal says at the point of failure.
+  // 58967 -> 58947 with the new phrase list in: a net cut.
+  assert(defsByName.add_mask.desc.indexOf("get_comp_details") === -1 &&
+         /get_bounds/.test(defsByName.add_mask.desc),
+         "add_mask's doc sizes from get_bounds, not get_comp_details");
+  assert(defsByName.add_mask.desc.length < 130 &&
+         defsByName.delete_mask.desc.length < 130,
+         "…and both mask docs stay short enough to have paid for it (" +
+         defsByName.add_mask.desc.length + ", " +
+         defsByName.delete_mask.desc.length + ")");
 }
 {
   // A cheap-feeling entrance is an EASING complaint, not a restaging job.

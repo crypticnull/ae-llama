@@ -2851,8 +2851,44 @@ function cannedOk(tool, args) {
       const held = mkMasks[mkKey] || (mkMasks[mkKey] = []);
       const mkName = (args && args.name) || ("Mask " + (held.length + 1));
       held.push(mkName);
-      return { layer: args && args.layer, mask: mkName,
-               shape: (args && args.shape) || "rectangle" };
+      const mkOut = { layer: args && args.layer, mask: mkName,
+                      shape: (args && args.shape) || "rectangle" };
+      // ...and faithful to the host's warning too: a region the caller
+      // named EXPLICITLY that comes out exactly the layer's own box cuts
+      // nothing away, and a feather on it fades the layer's edge rather
+      // than blurring the picture. A canned host that answered from a
+      // constant here is how the class stayed invisible for row 32; this
+      // one works it out from the same geometry the host does.
+      const mkV = args && args.vertices;
+      let mkHit = null;
+      if (Array.isArray(mkB) && mkB.length >= 4) {
+        mkHit = { l: Math.min(mkB[0], mkB[0] + mkB[2]),
+                  r: Math.max(mkB[0], mkB[0] + mkB[2]),
+                  t: Math.min(mkB[1], mkB[1] + mkB[3]),
+                  b: Math.max(mkB[1], mkB[1] + mkB[3]) };
+      } else if (args && args.shape === "custom" && Array.isArray(mkV) &&
+                 mkV.length) {
+        const xs = mkV.map(v => v[0]), ys = mkV.map(v => v[1]);
+        mkHit = { l: Math.min.apply(null, xs), r: Math.max.apply(null, xs),
+                  t: Math.min.apply(null, ys), b: Math.max.apply(null, ys) };
+      }
+      const mkPlain = !(args && args.inverted) &&
+                      (!(args && args.mode) ||
+                       String(args.mode).toLowerCase() === "add");
+      if (mkSz && mkHit && mkPlain &&
+          mkHit.l <= 0 && mkHit.t <= 0 &&
+          mkHit.r >= mkSz.width && mkHit.b >= mkSz.height) {
+        const mkAll = "That mask covers all of '" + args.layer + "' (" +
+          mkSz.width + "x" + mkSz.height + " at x 0 to " + mkSz.width +
+          ", y 0 to " + mkSz.height + "), so it cuts nothing away";
+        mkOut.warning = (args && args.feather > 0)
+          ? mkAll + " — its feather only fades the layer's OUTER EDGE, it " +
+            "does not blur the picture. To blur the picture: apply_effect " +
+            "{layer: \"" + args.layer + "\", effect: \"Gaussian Blur\"}."
+          : mkAll + " — every pixel of it still shows. Pass 'bounds' for " +
+            "the part you want to KEEP.";
+      }
+      return mkOut;
     }
     case "delete_mask": {
       // Faithful to the host's three refusals and to AELL_findMask: one
