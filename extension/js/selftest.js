@@ -2619,6 +2619,103 @@
                  "Blurriness reads " + d.value + ", not 12";
         } },
 
+      // An EXPRESSION handed over as a VALUE. Measured 2026-09-03
+      // (chat-probe row 36 vague, "everything should sit off the
+      // background a bit — shadow them, not it"): the model built a
+      // slider rig, passed the expression that READS it as
+      // set_effect_param's value, and AE answered 'Unable to call
+      // "setValue" ... is not a number' — true, and naming no way to do
+      // what was asked. The round rolled back and six of seven layers
+      // were skipped on an "ok" reply. A rig plus an expression IS how
+      // you drive a parameter from a control; the tool that does it was
+      // the only missing piece, so the refusal names it.
+      { name: "batch: an expression as a VALUE is refused, not passed to AE",
+        tool: "set_effect_param",
+        args: function (ctx) {
+          return { comp: ctx.btComp, layer: "ST Batch 60",
+                   effect: "Gaussian Blur", param: "Blurriness",
+                   value: 'thisComp.layer("ST Batch").effect("Slider")(1)' };
+        },
+        expectError: true,
+        check: function (err) {
+          if (/is not a number/.test(err)) {
+            return "AE's raw sentence surfaced instead of ours: " + err;
+          }
+          if (!/takes a number/.test(err) || err.indexOf("holds 12") === -1) {
+            return "the refusal names neither the shape nor the current " +
+                   "value: " + err;
+          }
+          if (!/link_property/.test(err) || !/controlLayer/.test(err)) {
+            return "it never names the tool that DOES this: " + err;
+          }
+          return err.indexOf(
+            'property: "effect.Gaussian Blur.Blurriness"') !== -1 ||
+            "the link_property path is not paste-ready: " + err;
+        } },
+
+      { name: "batch: and that refusal wrote nothing",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.btComp, layer: "ST Batch 60",
+                   property: "effects/Gaussian Blur/Blurriness" };
+        },
+        check: function (d) {
+          return Math.abs(Number(d.value) - 12) < 1e-6 ||
+                 "Blurriness reads " + d.value + ", not the 12 it held";
+        } },
+
+      // The half that keeps this a fix and not a new refusal: real AE
+      // ACCEPTS a number written as text (measured, setValue("50") reads
+      // back 50), so the guard may not reject one.
+      { name: "batch: a NUMERIC string still writes",
+        tool: "set_effect_param",
+        args: function (ctx) {
+          return { comp: ctx.btComp, layer: "ST Batch 60",
+                   effect: "Gaussian Blur", param: "Blurriness",
+                   value: "9" };
+        },
+        check: function () { return true; } },
+
+      { name: "batch: and AE really took it as the number 9",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.btComp, layer: "ST Batch 60",
+                   property: "effects/Gaussian Blur/Blurriness" };
+        },
+        check: function (d) {
+          return Math.abs(Number(d.value) - 9) < 1e-6 ||
+                 "Blurriness reads " + d.value + ", not 9";
+        } },
+
+      // Same root (AELL_writeValue), so the same guard has to hold for
+      // the transform tools the model reaches for just as often.
+      { name: "batch: set_transform refuses an expression value too",
+        tool: "set_transform",
+        args: function (ctx) {
+          return { comp: ctx.btComp, layer: "ST Batch 60",
+                   property: "opacity",
+                   value: 'thisComp.layer("ST Batch").effect("Slider")(1)' };
+        },
+        expectError: true,
+        check: function (err) {
+          if (/is not a number/.test(err)) {
+            return "AE's raw sentence surfaced instead of ours: " + err;
+          }
+          return (/'opacity' takes a number/.test(err) &&
+                  /set_expression/.test(err)) ||
+                 "error was: " + err;
+        } },
+
+      { name: "batch: put the 60 back to 12 for the steps that follow",
+        tool: "set_effect_param",
+        args: function (ctx) {
+          return { comp: ctx.btComp, layer: "ST Batch 60",
+                   effect: "Gaussian Blur", param: "Blurriness", value: 12 };
+        },
+        check: function (d) {
+          return Number(d.value) === 12 || "wrote " + d.value;
+        } },
+
       // ---- what the MODEL is told about a big comp -----------------
       // A 200-layer comp serialized to 30 KB against a 6 KB prompt
       // budget, so the panel's byte-slice dropped the comp out of the

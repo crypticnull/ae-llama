@@ -117,8 +117,45 @@ Object.defineProperty(Prop.prototype, "value", {
 Object.defineProperty(Prop.prototype, "expressionEnabled", {
   get() { return this.expression !== ""; }
 });
-Prop.prototype.setValue = function (v) { this._value = v; };
+// Measured in real AE 2026 by scripts/param-value-probe.jsx, and the old
+// stub modelled neither half: setValue COERCES a numeric string --
+// setValue("50") reads back the NUMBER 50, and ["10", "20"] on a Position
+// reads back [10, 20] -- while anything else throws, in two different
+// sentences depending on the property's shape:
+//   one-dimensional: 'Unable to call "setValue" because of parameter 1.
+//                     <the whole value> is not a number.'
+//   array-valued:    'Unable to call "setValue" because of parameter 1.
+//                     Value is not an array.'
+// A stub that swallowed every value in silence is exactly why no stubbed
+// test could see an EXPRESSION arriving as a set_effect_param value.
+function aeNum(x) {
+  if (typeof x === "number") return isNaN(x) ? null : x;
+  if (typeof x === "string" && x !== "" && !isNaN(Number(x))) return Number(x);
+  return null;
+}
+function aeSetValue(prop, v) {
+  let bad = null;
+  if (Array.isArray(v)) {
+    for (const el of v) {
+      if (typeof el === "string" && aeNum(el) === null) { bad = el; break; }
+    }
+  } else if (typeof v === "string" && aeNum(v) === null) {
+    bad = v;
+  }
+  if (bad !== null) {
+    throw new Error("After Effects error: Unable to call “setValue” " +
+      "because of parameter 1. " +
+      (Array.isArray(prop._value) ? "Value is not an array."
+                                  : bad + " is not a number."));
+  }
+  if (Array.isArray(v)) {
+    return v.map((el) => (typeof el === "string" ? Number(el) : el));
+  }
+  return typeof v === "string" ? Number(v) : v;
+}
+Prop.prototype.setValue = function (v) { this._value = aeSetValue(this, v); };
 Prop.prototype.setValueAtTime = function (t, v) {
+  v = aeSetValue(this, v);
   const hit = this._keys.find(k => Math.abs(k.time - t) < 1e-9);
   if (hit) { hit.value = v; return; }
   this._keys.push({ time: t, value: v });
@@ -1182,6 +1219,87 @@ assert(/'Gaussian Blur' has: Blurriness/.test(r.error),
 assert(/list_properties/.test(r.error) &&
        /effects\/Gaussian Blur/.test(r.error),
        "and the lister that shows types/values is named with its path");
+
+// -------------------------------- an EXPRESSION handed over as a VALUE
+// Field round, chat-probe row 36 vague ("everything should sit off the
+// background a bit — shadow them, not it"): the model built a slider rig
+// and passed the expression that reads it as set_effect_param's `value`.
+// AE answered 'Unable to call "setValue" ... is not a number', which is
+// true and names no way to do what was asked — so the round rolled back
+// and six of seven layers were skipped on an "ok" reply.
+
+const blurAmt = A.property("ADBE Effect Parade")
+  .property("Gaussian Blur").property("Blurriness");
+blurAmt.setValue(4);
+const rigExpr = 'thisComp.layer("Shadow Null").effect("Shadow Distance")(1)';
+r = call("set_effect_param", { layer: "A", effect: "Gaussian Blur",
+                               param: "Blurriness", value: rigExpr });
+assert(!r.ok, "an expression string is refused, not handed to AE");
+assert(!/is not a number/.test(r.error),
+       "and NOT with AE's bare sentence: " + (r.error || ""));
+assert(/'Gaussian Blur\/Blurriness' takes a number/.test(r.error) &&
+       /holds 4 now/.test(r.error),
+       "the refusal names the property, the shape it wants and what it " +
+       "holds: " + (r.error || ""));
+assert(/EXPRESSION code/.test(r.error) && /link_property/.test(r.error) &&
+       /property: "effect\.Gaussian Blur\.Blurriness"/.test(r.error),
+       "and hands back a paste-ready link_property property path: " +
+       (r.error || ""));
+assert(/controlLayer/.test(r.error) && /set_expression/.test(r.error),
+       "naming both routes — the control rig it was building, and raw " +
+       "code: " + (r.error || ""));
+assert(blurAmt.value === 4,
+       "and nothing was written (Blurriness still 4, not NaN)");
+
+// The half that makes this a fix and not a new refusal: AE ACCEPTS a
+// number written as text, measured, so the guard may not reject one.
+r = call("set_effect_param", { layer: "A", effect: "Gaussian Blur",
+                               param: "Blurriness", value: "17" });
+assert(r.ok && blurAmt.value === 17,
+       "a NUMERIC string still writes, the way real AE takes it: " +
+       (r.error || String(blurAmt.value)));
+
+// A plain word is refused too, but without the expression pointer — a
+// caller that typed "red" is not reaching for link_property.
+r = call("set_effect_param", { layer: "A", effect: "Gaussian Blur",
+                               param: "Blurriness", value: "quite blurry" });
+assert(!r.ok && /is not one/.test(r.error) && !/link_property/.test(r.error),
+       "a plain word is refused without the expression advice: " +
+       (r.error || ""));
+assert(/A number written as text, "50", is fine/.test(r.error),
+       "and says which strings DO work: " + (r.error || ""));
+
+// Same root, so the same guard: set_transform and add_keyframe reached
+// AE raw with the identical class of argument.
+r = call("set_transform", { layer: "A", property: "opacity",
+                            value: 'thisComp.layer("Ctrl").opacity' });
+assert(!r.ok && /'opacity' takes a number/.test(r.error) &&
+       /link_property/.test(r.error) &&
+       /property: "opacity"/.test(r.error),
+       "set_transform refuses an expression value the same way: " +
+       (r.error || ""));
+r = call("add_keyframe", { layer: "A", property: "opacity", time: 1,
+                           value: 'thisComp.layer("Ctrl").opacity' });
+assert(!r.ok && /link_property/.test(r.error),
+       "and so does add_keyframe, which wrote through setValueAtTime: " +
+       (r.error || ""));
+r = call("add_keyframe", { layer: "A", property: "opacity", time: 1,
+                           value: "80" });
+assert(r.ok, "a numeric string still keyframes: " + (r.error || ""));
+r = call("remove_keyframes", { layer: "A", property: "opacity" });
+
+// An array carrying a string is the position-shaped version of the same
+// mistake, and AE's own words for it ("Value is not an array.") name the
+// wrong problem entirely.
+r = call("set_transform", { layer: "A", property: "position",
+                            value: [100, "thisComp.width/2"] });
+assert(!r.ok && /'position' takes an array of \d numbers/.test(r.error) &&
+       /link_property/.test(r.error),
+       "one bad element in an array is caught with the rest: " +
+       (r.error || ""));
+r = call("set_transform", { layer: "A", property: "position",
+                            value: ["120", "140"] });
+assert(r.ok, "an array of numeric strings still writes: " + (r.error || ""));
 
 // ------------------------------- set_track_matte wraps AE's raw message
 // AE's throw alone ("Object is invalid" and friends) tells the model

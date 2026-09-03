@@ -14555,3 +14555,127 @@ Nothing else was left unattempted this pass. Nothing is blocked.
   passes still asks After Effects to quit. This pass did not — it
   never closed AE or its project.
 - `extension/jsx/hostscript.jsx` changed, so BUMPED: 0.11.15 -> 0.11.16.
+
+## 2026-09-03 (local, real AE) — WORKPLAN 8, row 36 vague: an EXPRESSION handed over as a VALUE (0.11.17)
+
+- Harness GREEN on arrival (593/593), so the pass took the first
+  unfinished workplan item that this machine can actually do. Section 7 /
+  7b is ahead of it in the file and is **BLOCKED**: nothing is listening
+  on 8188 or 8000 and no ComfyUI process is running at all, so the H3
+  un-blind, the template authoring and every catalog VRAM measurement
+  have no backend. Not started, not half-done. That leaves section 8's
+  explicit `NEXT:` — row 36 vague.
+
+### Measured first: scripts/param-value-probe.jsx (NEW, AE 2026 26.3x87)
+
+Both filed candidates were guesses about AE, and the probe answered them
+in opposite directions:
+
+- **`setValue` COERCES a numeric string.** `setValue("50")` reads back
+  the NUMBER 50, and `["10", "20"]` on a Position reads back `[10, 20]`.
+  So a blanket refusal of strings would have rejected values real AE
+  takes — the guard has to key on *a string that is not a number*, never
+  on *a string*. This is the measurement that decided the fix's shape.
+- AE's own refusals name no way forward and come in TWO sentences:
+  one-dimensional gets `Unable to call "setValue" because of parameter 1.
+  <the entire expression> is not a number.`, array-valued (Position, a
+  colour) gets `Value is not an array.` — which names the wrong problem
+  entirely for a caller who passed an array with one bad element.
+- A checkbox is a number too: `setValue(true)` reads back 1, and
+  `setValue("off")` throws "off is not a number".
+- **The second filed candidate is a NON-FIX and was not built.**
+  "`Parameter not found` should rank the near miss (Distance, Direction)
+  the way `AELL_compsHere` ranks comps" assumed the list was hiding them.
+  It is not: Drop Shadow has exactly 7 properties, the refusal prints all
+  7 uncapped, and Distance and Direction are both already in it. Ranking
+  by shared word would not match "Offset" to "Distance" either. See the
+  field finding below for what the real lever there turns out to be.
+
+### The fix, at the root
+
+`AELL_badValueMsg` + `AELL_looksLikeExpr` in `extension/jsx/hostscript.jsx`,
+called from `AELL_writeValue` (which is set_transform, set_effect_param
+and distribute_property) and from `add_keyframe`, the one other place a
+caller's raw value reached `setValueAtTime` unchecked. It names the
+property, the shape it wants, what it holds now, and — when the string
+reads as expression code — hands back a PASTE-READY
+`link_property {property: "effect.Drop Shadow.Opacity", ...}` with
+controlLayer + controlEffect, plus set_expression for raw code. A rig
+plus an expression IS how you drive a parameter from a control; the only
+thing missing was the tool that does it.
+
+One doc change, and it is a CUT: `set_effect_param`'s args said
+`value: number|[..]|string`, which is the sentence that invited the
+failure. Now `value: number|[..]`. Prompt full 58974 -> **58967**,
+compact 39321 -> 39314 (ceiling 59000, headroom 26 -> 33).
+
+### The field result: the refusal fired and the model ACTED ON IT
+
+Two `--variants --steps 36` runs against the real 32B in real AE.
+
+- **Run 1: 4 pass, 0 miss, 0 HARM.** The vague phrasing took the direct
+  route and never built a rig, so it never reached the new refusal —
+  that run proves nothing about the fix and is recorded as noise.
+- **Run 2: 3 pass, 0 miss, 1 HARM**, and this is the run that matters,
+  because the vague phrasing DID build the rig. Verbatim from
+  `logs/chat-probe-2026-09-03T03-02-49.md`: the model sent
+  `set_effect_param {param: "Opacity", value:
+  "{thisComp.layer('CTRL').effect('Shadow Opacity')(1)}"}`, took the new
+  refusal, and on its NEXT round called
+  `link_property {property: "effect.Drop Shadow.Opacity", controlLayer:
+  "CTRL", controlEffect: "Shadow Opacity"}` — the exact call the refusal
+  handed it — and got `ok`. The filed failure ("the round rolls back and
+  the retry shadows HEADLINE alone, **6 of 7 layers skipped on an ok**")
+  did NOT recur: all seven non-BG layers carry Drop Shadow and BG carries
+  none.
+- **Row 36 vague is still graded HARM, for a different and lesser
+  defect**: the model adds a `CTRL` null, so the layer count goes 8 -> 9
+  and the step's "an effect pass should not add or remove layers" check
+  fires. That is over-building a rig for a one-line ask, not a
+  wrong-target mutation, and it is the next lever on this row.
+
+### Filed by this run, both measured, neither fixed here
+
+- **The `Parameter not found` lever is a CONCEPT map, not a ranking.**
+  Run 2 shows the model guessing `Offset` -> `Offset X` -> `Offset Y` ->
+  `Blurriness` on Drop Shadow across four calls, each time shown the
+  complete, correct 7-name roster, before it found Distance / Direction /
+  Softness on its own. So the list is not the problem and neither is its
+  order: what is missing is that "offset"/"distance" means **Distance +
+  Direction** on this effect and "blur"/"soften" means **Softness**.
+  Worth a pass; the filed "rank it like AELL_compsHere" wording is not.
+- **`for_each_layer` prints an identical failure once PER LAYER**, and
+  this change made each copy longer. Its "Stopped after 5 failures"
+  summary repeated the same ~450-char refusal five times — ~2.2 KB in one
+  result against a 16384 ctx — and the very next line of the transcript
+  is `context trimmed — 2 earlier message(s) dropped`. Pre-existing (the
+  old shorter messages repeated the same way) but measurably worse now.
+  CLAUDE.md's "context is a functional resource" makes this a real
+  regression: the fan-out summary should collapse identical failures to
+  one copy plus the layer list. **Recommended as the next pass.**
+
+### Verification
+
+- `scripts/param-value-probe.jsx` in real AE: 8 measurements, project
+  left item-for-item as found (comp + its solid footage removed).
+- **Stub back-fill, and the stubs were the reason this class was
+  invisible.** `tests/test-property-access.js`'s `Prop.setValue` took
+  every value in silence; it now models what AE measured (coerce a
+  numeric string, throw AE's two real sentences otherwise), which is why
+  no stubbed test could ever have seen an expression reaching AE.
+  16 new assertions; **9 go RED against the reverted hostscript**, each
+  with the exact field string. `tests/test-self-test.js`'s canned host
+  gained the same modelling for set_effect_param / set_transform.
+- **Six new real-AE self-test steps** in `extension/js/selftest.js`
+  (batch group): the refusal fires with the right wording, it wrote
+  nothing, a NUMERIC string still writes and AE really takes it as 9,
+  set_transform refuses the same way, and the value is put back.
+- **Real AE harness 593 -> 599/599 PASSED.** Full stub sweep: 0 red
+  files. `docs/CAPABILITIES.md` regenerated (per-tool step counts moved).
+- `extension/` changed, so BUMPED: 0.11.16 -> **0.11.17**.
+
+### Machine state
+
+AE running, project untouched and open, no dialog raised. No ComfyUI and
+no llama-server were left running (chat-probe stops the server it
+starts). AE was never closed and its project was never closed.

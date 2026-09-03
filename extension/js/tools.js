@@ -272,7 +272,7 @@
       args: "{comp?: string, layer: name|index, effect: display name or match name (e.g. 'Gaussian Blur' or 'ADBE Gaussian Blur 2')}" },
     { name: "set_effect_param", mutating: true,
       desc: "Set a parameter on an effect already applied to a layer.",
-      args: "{comp?: string, layer: name|index, effect: string, param: string, value: number|[..]|string}" },
+      args: "{comp?: string, layer: name|index, effect: string, param: string, value: number|[..]}" },
     { name: "remove_effect", mutating: true,
       desc: "REMOVE one effect from a layer by display name or matchName " +
             "('get rid of the blur'). An unknown name is refused listing " +

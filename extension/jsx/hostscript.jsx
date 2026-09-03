@@ -3626,7 +3626,7 @@ AELL_TOOLS.set_transform = function (args) {
 
   var drivenWarn;
   try {
-    drivenWarn = AELL_writeValue(prop, value, propName);
+    drivenWarn = AELL_writeValue(prop, value, propName, propName);
   } catch (eW) {
     return AELL_err(eW.message);
   }
@@ -4041,6 +4041,14 @@ AELL_TOOLS.add_keyframe = function (args) {
   var layer = AELL_resolveLayer(comp, args.layer);
   var prop = AELL_anyProperty(layer, args.property);
   if (typeof args.time !== "number") return AELL_err("'time' (seconds) required");
+  // Same class as AELL_writeValue's, and reached the same way: a model
+  // that means "drive this from the slider" hands the expression over as
+  // the VALUE. setValueAtTime answers with AE's bare "... is not a
+  // number", which names no way forward.
+  var shapeProblem = AELL_badValueMsg(prop, args.value,
+                                      layer.name + "/" + args.property,
+                                      String(args.property));
+  if (shapeProblem) return AELL_err(shapeProblem);
   prop.setValueAtTime(args.time, args.value);
   return AELL_okay({ layer: layer.name, property: args.property,
                      time: args.time, numKeys: prop.numKeys });
@@ -4784,7 +4792,8 @@ AELL_TOOLS.set_effect_param = function (args) {
   }
   var warn;
   try {
-    warn = AELL_writeValue(p, args.value, args.effect + "/" + p.name);
+    warn = AELL_writeValue(p, args.value, args.effect + "/" + p.name,
+                           "effect." + fx.name + "." + p.name);
   } catch (eP) {
     return AELL_err(eP.message);
   }
@@ -6053,6 +6062,88 @@ function AELL_showValue(v) {
 }
 
 /*
+ * Does this string read as AE EXPRESSION code rather than as a value?
+ * Only ever used to add a sentence to a refusal, so a false positive
+ * costs a pointer the caller can ignore and a false negative costs
+ * nothing at all.
+ */
+function AELL_looksLikeExpr(s) {
+  return /thisComp|thisLayer|thisProperty|\b(?:comp|layer|effect|mask|content|wiggle|linear|ease|random|valueAtTime|sourceRectAtTime|loopOut|loopIn|time|index|value)\b\s*[.(\[]|[-+*\/]\s*\d|\)\s*\(/
+    .test(String(s));
+}
+
+/*
+ * A value AE will refuse, said so the caller can act — "" when the value
+ * is fine.
+ *
+ * Measured in real AE 2026 by scripts/param-value-probe.jsx, and both
+ * halves matter:
+ *   - setValue("50") IS accepted and reads back 50, and so is
+ *     ["10", "20"] on a Position. So a blanket refusal of strings would
+ *     reject values AE takes, which is a regression, not a fix.
+ *   - what AE refuses is a string that is not a number, and its own
+ *     words for it are 'Unable to call "setValue" because of parameter
+ *     1. <the entire expression> is not a number.' on a one-dimensional
+ *     property, and 'Value is not an array.' on a colour or a position.
+ *
+ * Neither of those names a way to do what the caller was asking for.
+ * The field round this comes from (chat-probe row 36 vague, "everything
+ * should sit off the background a bit — shadow them, not it"): the
+ * model built a `Shadow Null` slider rig, handed set_effect_param
+ * `thisComp.layer("Shadow Null").effect("Shadow Distance")(1)` as the
+ * VALUE, took AE's sentence, went looking for a Drop Shadow parameter
+ * called "Offset", and the round rolled back — six of seven layers
+ * skipped on an "ok" reply. A rig plus an expression IS how you drive a
+ * parameter from a control; the only thing missing was the tool that
+ * does it, so the refusal names it.
+ *
+ * `linkPath` is the caller's own `property:` spelling for link_property
+ * / set_expression when it has one, because a pointer the caller can
+ * paste is worth more than the tool's name alone.
+ */
+function AELL_badValueMsg(prop, value, label, linkPath) {
+  var bad = null, i;
+  if (AELLJSON.isArray(value)) {
+    for (i = 0; i < value.length; i++) {
+      if (typeof value[i] === "string" && AELL_numArg(value[i]) === null) {
+        bad = value[i];
+        break;
+      }
+    }
+  } else if (typeof value === "string" && AELL_numArg(value) === null) {
+    bad = value;
+  }
+  if (bad === null) return "";
+
+  var shown = String(bad);
+  if (shown.length > 90) shown = shown.substring(0, 87) + "...";
+
+  var shape = "a number", now = "";
+  try {
+    var cur = prop.value;
+    if (AELLJSON.isArray(cur)) {
+      shape = "an array of " + cur.length + " numbers";
+    }
+    now = AELL_showValue(cur);
+  } catch (eC) {}
+
+  var msg = "'" + label + "' takes " + shape + ", and the text \"" +
+    shown + "\" is not one" + (now ? " — it holds " + now + " now" : "") +
+    ". (A number written as text, \"50\", is fine.)";
+  if (AELL_looksLikeExpr(bad)) {
+    var where = linkPath
+      ? "{layer: \"...\", property: \"" + linkPath + "\", ...}"
+      : "{layer: \"...\", property: \"...\", ...}";
+    msg += " That is EXPRESSION code, and a value is never one. To drive " +
+      "this property from a control use link_property " + where +
+      " with controlLayer + controlEffect — it writes the expression " +
+      "itself, dimension-aware. For raw code use set_expression " +
+      "{..., expression: \"" + shown + "\"}.";
+  }
+  return msg;
+}
+
+/*
  * Write a plain value to a property, turning AE's two silent refusals
  * into something the model can act on:
  *   - a KEYFRAMED property rejects setValue outright (raw AE throw),
@@ -6067,7 +6158,9 @@ function AELL_showValue(v) {
  * shape grid_layout builds). Only AE knows which, and on a driven property
  * `.value` is the EVALUATED result — so ask it, and quote the answer.
  */
-function AELL_writeValue(prop, value, label) {
+function AELL_writeValue(prop, value, label, linkPath) {
+  var shapeProblem = AELL_badValueMsg(prop, value, label, linkPath);
+  if (shapeProblem) throw new Error(shapeProblem);
   var keys = 0;
   try { keys = prop.numKeys; } catch (eK) {}
   if (keys > 0) {

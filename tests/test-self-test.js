@@ -363,6 +363,41 @@ let batchLayers = 0;
 let batchFx = {};
 let batchBlur = null;
 
+// A value AE will not take, refused the way AELL_writeValue refuses it.
+// Measured in real AE 2026 (scripts/param-value-probe.jsx): setValue
+// COERCES a numeric string ("50" reads back 50, ["10","20"] reads back
+// [10, 20]) and throws on anything else, so the guard keys on "a string
+// that is not a number", never on "a string". Returns "" when the value
+// is fine.
+function badValueRefusal(value, label, shape, holds, linkPath) {
+  let bad = null;
+  const num = (x) => (typeof x === "number" ? (isNaN(x) ? null : x)
+    : (typeof x === "string" && x !== "" && !isNaN(Number(x))
+        ? Number(x) : null));
+  if (Array.isArray(value)) {
+    for (const el of value) {
+      if (typeof el === "string" && num(el) === null) { bad = el; break; }
+    }
+  } else if (typeof value === "string" && num(value) === null) {
+    bad = value;
+  }
+  if (bad === null) return "";
+  const shown = bad.length > 90 ? bad.slice(0, 87) + "..." : bad;
+  const wants = shape === "array" ? "an array of 3 numbers" : "a number";
+  let msg = "'" + label + "' takes " + wants + ", and the text \"" + shown +
+    "\" is not one" + (holds === null ? "" : " — it holds " + holds + " now") +
+    ". (A number written as text, \"50\", is fine.)";
+  if (/thisComp|thisLayer|thisProperty|\b(?:comp|layer|effect|mask|content|wiggle|linear|ease|random|valueAtTime|sourceRectAtTime|loopOut|loopIn|time|index|value)\b\s*[.([]|[-+*/]\s*\d|\)\s*\(/
+        .test(bad)) {
+    msg += " That is EXPRESSION code, and a value is never one. To drive " +
+      "this property from a control use link_property {layer: \"...\", " +
+      "property: \"" + linkPath + "\", ...} with controlLayer + " +
+      "controlEffect — it writes the expression itself, dimension-aware. " +
+      "For raw code use set_expression {..., expression: \"" + shown + "\"}.";
+  }
+  return msg;
+}
+
 // ---- the coverage rig: a miniature property model for the tools no
 // other step in the suite calls. Faithful to what the probe measured in
 // AE 2026 (WORKPLAN-LOG 2026-08-28) on the four points its steps turn on:
@@ -3066,7 +3101,31 @@ function cannedOk(tool, args) {
       }
       return out;
     }
+    case "set_effect_param": {
+      // Only the batch comp's Gaussian Blur is modelled by name; that is
+      // where the value-shape steps run, and a roster invented for the
+      // other comps would be a lie.
+      const bad = badValueRefusal(args && args.value,
+        String((args && args.effect) || "") + "/" +
+        String((args && args.param) || ""), "number",
+        batchBlur === null ? null : batchBlur,
+        "effect." + String((args && args.effect) || "") + "." +
+        String((args && args.param) || ""));
+      if (bad) return { __err: bad };
+      if (/Batch/.test(String((args && args.comp) || "")) &&
+          /Blurriness/.test(String((args && args.param) || ""))) {
+        batchBlur = Number(args.value);
+      }
+      return { layer: args && args.layer, effect: args && args.effect,
+               param: args && args.param,
+               value: Number(args && args.value) };
+    }
     case "set_transform": {
+      const badT = badValueRefusal(args && args.value,
+        String((args && args.property) || ""),
+        args && args.property === "position" ? "array" : "number",
+        null, String((args && args.property) || ""));
+      if (badT) return { __err: badT };
       const shows = drivenShows(args && args.layer, args && args.property);
       if (shows !== null) {
         // Accepted and invisible: the honest answer names the value that

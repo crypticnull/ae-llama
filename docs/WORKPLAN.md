@@ -1615,6 +1615,16 @@ GPU. This item is that touch, one pass per bullet, smallest first:
 
 ## 7b. OWNER-APPROVED 2026-08-30: finish the catalog measurements
 
+**BLOCKED 2026-09-03: there is no ComfyUI running at all.** Neither 8188
+nor 8000 answered and no ComfyUI process existed, so every bullet in this
+section — the H3 un-blind, the three templates, the downloads and every
+catalog VRAM measurement — has no backend to work against. A pass cannot
+start the owner's instance for them: 0.10.9 established
+`Comfy.ensureRunning` cannot start the working 0.32.0 here, and an
+unattended restart risks leaving the machine with no backend at all.
+**Needs the owner to bring ComfyUI up** (and to confirm the port). Until
+then this whole section is skipped and passes fall through to section 8.
+
 **THIS MACHINE'S ComfyUI LISTENS ON PORT 8000** (owner, 2026-09-01).
 Every probe script under `scripts/` defaults to
 `http://127.0.0.1:8188` and will find nothing without
@@ -1839,17 +1849,41 @@ this order, one bullet per pass:
     **2 pass / 1 miss / 1 HARM -> 3 pass, 0 miss, 1 HARM** — the casual
     phrasing is a clean seven-call first shot. Zero prompt cost (host
     strings only). Harness 589 -> 593.
-  - NEXT: row 36 vague, "everything should sit off the background a bit
-    — shadow them, not it" — the remaining HARM, and a different defect
-    from the one just fixed. The model builds a `Shadow Null` slider rig
-    and passes an EXPRESSION STRING as a `set_effect_param` value
-    ("... is not a number"), then asks Drop Shadow for an `Offset`
-    param it does not have; the round rolls back, and the retry shadows
-    HEADLINE alone — 6 of 7 layers skipped on an "ok". Two candidates:
-    set_effect_param should say that a string value belongs in
-    `link_property` / `set_expression`, and `Parameter not found` should
-    name the near miss (Distance/Direction) the way `AELL_compsHere`
-    ranks comps.
+  - ~~row 36 vague, "everything should sit off the background a bit —
+    shadow them, not it" — the model passes an EXPRESSION STRING as a
+    `set_effect_param` value~~ DONE 2026-09-03 (0.11.17). The first of
+    the two filed candidates was built at the root
+    (`AELL_badValueMsg`, called from `AELL_writeValue` AND from
+    `add_keyframe`), and the shape came from a measurement that
+    contradicted the obvious fix: **real AE COERCES a numeric string** —
+    `setValue("50")` reads back 50 and `["10","20"]` reads back
+    `[10, 20]` — so the guard keys on "a string that is not a number",
+    never on "a string". The refusal hands back a paste-ready
+    `link_property {property: "effect.<Fx>.<Param>", ...}`, and the
+    field run shows the model taking it and calling exactly that on its
+    next round, `ok`. The filed failure (round rolls back, **6 of 7
+    layers skipped on an "ok"**) did not recur — all seven non-BG layers
+    carry the shadow. **The second candidate was measured and NOT built:
+    `Parameter not found` already prints Drop Shadow's complete 7-name
+    roster with Distance and Direction in it**, so there is nothing to
+    rank. Row 36 vague is still HARM for a lesser, different reason (the
+    model adds a `CTRL` null, layer count 8 -> 9). Harness 593 -> 599.
+    One doc change and it was a CUT: `set_effect_param`'s
+    `value: number|[..]|string` invited the failure, now
+    `number|[..]` (prompt 58974 -> 58967). See the log.
+  - NEXT, and it is the context bill this fix ran up: **`for_each_layer`
+    prints an identical failure once PER LAYER.** Measured 2026-09-03 —
+    its "Stopped after 5 failures" summary repeated the same ~450-char
+    refusal five times, ~2.2 KB in ONE result against a 16384 ctx, and
+    the next transcript line is `context trimmed — 2 earlier message(s)
+    dropped`. Pre-existing, measurably worse now that refusals carry a
+    route. Collapse identical failures to one copy plus the layer list.
+  - THEN: **the `Parameter not found` lever is a CONCEPT map, not a
+    ranking** (measured 2026-09-03). The model guessed `Offset` ->
+    `Offset X` -> `Offset Y` -> `Blurriness` on Drop Shadow across four
+    calls, shown the complete correct roster every time. What is missing
+    is that "offset"/"distance" means Distance + Direction on this
+    effect and "blur"/"soften" means Softness.
   - THEN, in priority order: row 32 (`stagger_layers` alone on layers
     with NO keyframes reports `ok` and animates nothing — 3 of 4
     phrasings), row 35 ("soften"/"too sharp" reaches `add_mask`, 2 of
