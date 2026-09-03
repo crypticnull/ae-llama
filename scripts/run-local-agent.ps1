@@ -80,8 +80,12 @@ if (-not $Detached) {
         Write-Host ('Loop DETACHED as PID ' + $spawn.ProcessId +
                     ' -- closing this window or session cannot stop it.')
         Write-Host 'Live log: newest logs\local-agent-*.log in the repo.'
-        Write-Host ('To stop it early: Stop-Process -Id ' + $spawn.ProcessId +
-                    '  (PID also saved to logs\local-agent.pid)')
+        # Not "Stop-Process -Id <that number>": the WMI PID can be stale
+        # by the time anyone reads it, and killing this shell leaves the
+        # claude pass it launched still running. stop-local-agent.ps1
+        # finds the loop by command line and stops both.
+        Write-Host ('To stop it: powershell -ExecutionPolicy Bypass -File ' +
+                    'scripts\stop-local-agent.ps1')
         exit 0
     }
     Write-Host 'Detach unavailable -- running ATTACHED in this window.'

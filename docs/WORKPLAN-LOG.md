@@ -14146,3 +14146,15 @@ Nothing else was left unattempted this pass. Nothing is blocked.
   `saveAs()` to the scratch path when there is not, and it says so in
   its receipt when it can do neither.
 - Harness 70/72. No `extension/` change, so NO BUMP.
+
+## 2026-09-02 (remote session) — stopping the loop actually stops it
+
+- `Stop-Process -Id <printed PID>` reported success and killed nothing.
+  Two reasons: the PID printed at launch comes from the WMI spawn and
+  can be stale by the time anyone reads it, and killing the loop's shell
+  leaves the `claude` pass it launched running to completion anyway.
+- NEW `scripts/stop-local-agent.ps1`: finds the loop by COMMAND LINE
+  (which cannot go stale), stops it, stops any claude pass in flight
+  unless `-KeepCurrentPass`, then prints what is LEFT running. "It did
+  nothing" can no longer be a silent outcome. run-local-agent.ps1's
+  launch message points at it instead of at a bare PID.
