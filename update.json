@@ -1,7 +1,7 @@
 {
-  "panelVersion": "0.11.21",
+  "panelVersion": "0.11.22",
   "panelUrl": "https://aescripts.com/",
-  "panelPackageUrl": "https://raw.githubusercontent.com/crypticnull/ae-llama-updates/main/AE-Llama.zxp?v=0.11.21",
+  "panelPackageUrl": "https://raw.githubusercontent.com/crypticnull/ae-llama-updates/main/AE-Llama.zxp?v=0.11.22",
   "notes": "0.11: manage generation models from Settings (per-model download and remove with sizes measured on disk), the hidden backend now sees models the ComfyUI Desktop app already downloaded (no duplicate downloads), honest VRAM math measured on real hardware, faster exports with GPU encoder detection, and captions, text animators, and MOGRT export from chat.",
   "llamaTag": "latest",
   "modelCatalog": [
