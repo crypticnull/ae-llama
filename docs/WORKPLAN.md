@@ -2145,6 +2145,36 @@ this order, one bullet per pass:
     with 10 RED against the reverted host, 5 of the new real-AE steps
     RED against the reverted canned host, and six old assertions plus
     two suite fixtures repaired because they pinned the blindness.
+  - ~~**an ELLIPSE is not its bounding box, and three sentences assume
+    it is**~~ DONE 2026-09-03 (0.11.29). Filed by the 0.11.28 pass as
+    its top item and correctly called a MEASUREMENT pass first. New
+    `scripts/mask-ellipse-probe.js/.jsx` puts every ellipse row next to
+    its RECTANGLE twin built from the identical numbers, and the twins
+    read OPPOSITE alpha at the four corners in all twelve compositing
+    rows: an 11x9 grid leaves **0.202** of the layer showing under a
+    full-box ellipse `subtract` where the rectangle leaves **0.000**,
+    and 0.798 under an ellipse `add` where the rectangle leaves 1.000.
+    So `add_mask {shape: 'ellipse', mode: 'subtract'}` at the tool's own
+    default region was answering "hides ALL of the layer" about a layer
+    still showing four corner slivers, an `add` was told it "cuts
+    nothing away" having just cut those corners off, and an inverted
+    `subtract` "changes nothing" having done the same. Fixed at the one
+    place coverage is decided: `AELL_shapeCoversBox` answers the
+    ELLIPSE exactly (an ellipse is convex and a rectangle is the hull of
+    its four corners, so containment is four corner tests), and every
+    other shape it cannot prove answers false — which closed the same
+    hole for a custom TRIANGLE that had the layer's bounding box and
+    covered half of it. The two coordinate refusals drop the coverage
+    CLAIM when the shape does not back it and keep the coordinates,
+    which are the diagnosis. One new sentence replaces the false one,
+    because silence would be worse than the old lie for a layer left
+    showing four slivers: "hides all of 'X' EXCEPT the four corners of
+    its box … about a fifth of the layer", gated on the parade being
+    empty — measured, over one add mask on the left half only two
+    corners survive. Zero prompt cost (host strings only). Harness
+    698 -> **710**; +23 stub assertions with 11 RED against the reverted
+    host, and 5 of the new real-AE steps RED against the reverted canned
+    host.
 - **DEFERRED until a sandbox design exists:** D/F/H3 rows (project
   mutation, renders, mass-delete) — wiring them against the live
   project is the harm the whitelist cannot contain. Also deferred:

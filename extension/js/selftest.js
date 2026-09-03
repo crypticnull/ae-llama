@@ -2815,6 +2815,159 @@
           return d.removed === "ST WipeD" || "removed " + d.removed;
         } },
 
+      // ---- an ELLIPSE is not its bounding box -------------------------
+      // Measured 2026-09-03 (scripts/mask-ellipse-probe.js, AE 26.3x87):
+      // at this tool's own default region the ellipse and its RECTANGLE
+      // twin read opposite alpha at the four corners in all twelve
+      // compositing rows, and an 11x9 grid puts 0.202 of the layer still
+      // showing under an ellipse 'subtract' where the rectangle leaves
+      // 0.000. Coverage used to be read off the bounding box of the four
+      // points the ellipse is drawn from, so the three sentences above
+      // were each false about one -- and each in the reassuring
+      // direction. The parade on 'ST Erase' is EMPTY here, which is the
+      // state the corner sentence is gated on.
+      { name: "an ellipse 'subtract' leaves the corners, and says so",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", name: "ST EllSub",
+                   shape: "ellipse", mode: "subtract" };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (/hides ALL of 'ST Erase'/.test(w)) {
+            return "the corners read alpha 1, so this is false: " + w;
+          }
+          if (!/hides all of 'ST Erase' EXCEPT the four corners/.test(w)) {
+            return "a layer left showing four slivers said nothing: " +
+                   (w || "(no warning)");
+          }
+          if (!/about a fifth/.test(w)) return "no measured share: " + w;
+          return /shape 'rectangle'/.test(w) ||
+                 "no way to really take the whole layer: " + w;
+        } },
+
+      { name: "…and that ellipse comes off again",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", mask: "ST EllSub" };
+        },
+        check: function (d) {
+          return d.removed === "ST EllSub" || "removed " + d.removed;
+        } },
+
+      // The mirror row: an ellipse 'add' over the whole box CUTS the
+      // corners away (measured alpha 0 at all four), so "cuts nothing
+      // away -- every pixel of it still shows" was false. Nothing
+      // replaces it: an ellipse keeping the middle is a spotlight, which
+      // is what an ellipse mask is FOR.
+      { name: "…an ellipse 'add' is not told it cuts nothing away",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", name: "ST EllAdd",
+                   shape: "ellipse", bounds: [0, 0, 200, 200] };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (/cuts nothing away/.test(w)) {
+            return "it cut the four corners away: " + w;
+          }
+          return !w || "a spotlight is not a mistake: " + w;
+        } },
+
+      { name: "…and so does that one",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", mask: "ST EllAdd" };
+        },
+        check: function (d) {
+          return d.removed === "ST EllAdd" || "removed " + d.removed;
+        } },
+
+      // The third sentence: an inverted ellipse 'subtract' takes the
+      // corners (measured 0), so it is not the no-op its rectangle twin
+      // is.
+      { name: "…and an inverted ellipse subtract is not called a no-op",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", name: "ST EllInv",
+                   shape: "ellipse", bounds: [0, 0, 200, 200],
+                   mode: "subtract", inverted: true };
+        },
+        check: function (d) {
+          return !/changes nothing/.test(d.warning || "") ||
+                 "it cut the corners away: " + d.warning;
+        } },
+
+      { name: "…and it comes off too",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", mask: "ST EllInv" };
+        },
+        check: function (d) {
+          return d.removed === "ST EllInv" || "removed " + d.removed;
+        } },
+
+      // A custom polygon has the same hole and closes the same way: a
+      // triangle has the layer's bounding box and covers half of it.
+      { name: "…and a TRIANGLE with the layer's box does not cover it",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", name: "ST Tri",
+                   shape: "custom",
+                   vertices: [[0, 0], [200, 0], [200, 200]] };
+        },
+        check: function (d) {
+          return !/covers all of 'ST Erase'/.test(d.warning || "") ||
+                 "a triangle covers half its box: " + d.warning;
+        } },
+
+      { name: "…and the triangle comes off",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", mask: "ST Tri" };
+        },
+        check: function (d) {
+          return d.removed === "ST Tri" || "removed " + d.removed;
+        } },
+
+      // The comp-coordinates REFUSAL carried the same reading in its
+      // reason. A comp-sized ellipse over a 200x200 layer does not cover
+      // it -- it can even miss it entirely -- so the refusal keeps the
+      // coordinates, which are the diagnosis, and drops the claim.
+      { name: "a comp-sized ELLIPSE is refused without claiming coverage",
+        tool: "add_mask",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", shape: "ellipse",
+                   mode: "subtract", bounds: [0, 0, 1920, 1080] };
+        },
+        check: function (e) {
+          if (/covers ALL of 'ST Erase'/.test(e)) {
+            return "it does not cover the layer: " + e;
+          }
+          if (!/is far bigger than 'ST Erase'/.test(e) ||
+              !/middle of its own bounds/.test(e)) {
+            return "message was: " + e;
+          }
+          return /To cut away only the top half/.test(e) ||
+                 "the worked example lost its mode: " + e;
+        } },
+
+      // …and an ellipse big enough to really contain the layer box gets
+      // the coverage sentence back: every corner of the layer is inside
+      // this one, so it is not "an ellipse never covers".
+      { name: "…while an ellipse that really contains the layer still does",
+        tool: "add_mask",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", shape: "ellipse",
+                   mode: "subtract", bounds: [-142, -142, 484, 484] };
+        },
+        check: function (e) {
+          return /covers ALL of 'ST Erase', so it hides the WHOLE layer/
+                   .test(e) || "message was: " + e;
+        } },
+
       { name: "an ALONE inverted mask blames the flag that emptied it",
         tool: "add_mask",
         args: function (ctx) {
@@ -2855,6 +3008,32 @@
         check: function (d) {
           return !d.warning || "a real half-layer mask was warned about: " +
                  d.warning;
+        } },
+
+      // The corner sentence is gated on the layer carrying no
+      // compositing mask yet, and that gate is a measurement too: over
+      // this very base the same ellipse 'subtract' reads corners 0.5 --
+      // only the two corners 'ST Keep' was showing survive -- so "except
+      // its four corners" would be false here. Added and removed again
+      // so the rows below still see the base they were measured on.
+      { name: "…over which the ellipse sentence goes quiet, not wrong",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", name: "ST EllOver",
+                   shape: "ellipse", mode: "subtract" };
+        },
+        check: function (d) {
+          return !/four corners/.test(d.warning || "") ||
+                 "only two of them survive over this base: " + d.warning;
+        } },
+
+      { name: "…and that probe mask comes off",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", mask: "ST EllOver" };
+        },
+        check: function (d) {
+          return d.removed === "ST EllOver" || "removed " + d.removed;
         } },
 
       // The same call as ST InvA, now with a mask above it that KEEPS

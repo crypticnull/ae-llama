@@ -3042,6 +3042,40 @@ function cannedOk(tool, args) {
                             covered, mkAbove);
         return !!(o && o.blank);
       };
+      /* Does the SHAPE cover every pixel of the layer box, rather than
+       * its bounding box? Measured 2026-09-03 (mask-ellipse-probe.js): at
+       * add_mask's default region an ellipse and its rectangle twin read
+       * OPPOSITE alpha at the four corners in all twelve compositing
+       * rows, and the ellipse leaves 0.202 of the layer showing under a
+       * 'subtract' where the rectangle leaves 0.000. Worked out from the
+       * geometry, not answered by name: a canned host that knows the
+       * verdicts cannot see a host that stopped computing them. */
+      const mkShapeCovers = (kind, l, t, r, b, sz, verts) => {
+        if (!sz) return false;
+        if (!(l <= 0 && t <= 0 && r >= sz.width && b >= sz.height)) {
+          return false;
+        }
+        if (kind === "ellipse") {
+          // An ellipse is convex and a rectangle is the hull of its four
+          // corners, so containment is exactly the four corner tests.
+          const cx = (l + r) / 2, cy = (t + b) / 2;
+          const rx = (r - l) / 2, ry = (b - t) / 2;
+          if (!(rx > 0) || !(ry > 0)) return false;
+          for (const x of [0, sz.width]) {
+            for (const y of [0, sz.height]) {
+              const dx = (x - cx) / rx, dy = (y - cy) / ry;
+              if (dx * dx + dy * dy > 1 + 1e-9) return false;
+            }
+          }
+          return true;
+        }
+        if (kind === "custom") {
+          if (!Array.isArray(verts) || verts.length !== 4) return false;
+          return verts.every(v => (v[0] === l || v[0] === r) &&
+                                  (v[1] === t || v[1] === b));
+        }
+        return true;
+      };
       if (mkSz && Array.isArray(mkB) && mkB.length >= 4) {
         const bl = Math.min(mkB[0], mkB[0] + mkB[2]);
         const br = Math.max(mkB[0], mkB[0] + mkB[2]);
@@ -3050,8 +3084,21 @@ function cannedOk(tool, args) {
         if (bl <= 0 && bt <= 0 && br >= mkSz.width && bb >= mkSz.height &&
             (br - bl > mkSz.width || bb - bt > mkSz.height)) {
           const bigE = mkErases("all");
-          return { __err: "That mask covers ALL of '" + args.layer + "', " +
-            "so it " + (bigE ? "hides the WHOLE layer" : "hides nothing") +
+          // The effect clause is a claim about pixels, so it is only made
+          // when the SHAPE covers the layer: a comp-sized ellipse does
+          // not, and can even miss the layer while its box contains it.
+          const bigKind = (args && args.shape) || "rectangle";
+          const bigCovers = mkShapeCovers(bigKind, bl, bt, br, bb, mkSz,
+                                          args && args.vertices);
+          return { __err: "That mask " +
+            (bigCovers
+              ? "covers ALL of '" + args.layer + "', so it " +
+                (bigE ? "hides the WHOLE layer" : "hides nothing")
+              : "is far bigger than '" + args.layer + "'" +
+                (bigKind === "ellipse"
+                  ? " (and an ellipse covers only the middle of its own " +
+                    "bounds)"
+                  : "")) +
             ": the mask spans x " + bl + " to " + br +
             ", y " + bt + " to " + bb + " and the layer is only " +
             mkSz.width + "x" + mkSz.height + " at x 0 to " + mkSz.width +
@@ -3133,8 +3180,14 @@ function cannedOk(tool, args) {
                       (!(args && args.mode) ||
                        String(args.mode).toLowerCase() === "add" ||
                        String(args.mode).toLowerCase() === "lighten");
-      const mkCovers = !!(mkSz && mkHit && mkHit.l <= 0 && mkHit.t <= 0 &&
-                          mkHit.r >= mkSz.width && mkHit.b >= mkSz.height);
+      // The SHAPE's coverage, not its bounding box's. `mkBoxCovers` is
+      // the weaker fact and is worth exactly one sentence: an ellipse
+      // whose box is the layer's leaves the four corners, so a call that
+      // would have emptied the layer empties all but those.
+      const mkBoxCovers = !!(mkSz && mkHit && mkHit.l <= 0 && mkHit.t <= 0 &&
+                             mkHit.r >= mkSz.width && mkHit.b >= mkSz.height);
+      const mkCovers = !!(mkHit && mkShapeCovers(mkShapeKind, mkHit.l,
+        mkHit.t, mkHit.r, mkHit.b, mkSz, mkV));
       // The other end of that same coverage: the mask that leaves NOTHING.
       // A layer vanishing on an `ok` is the expensive direction, so unlike
       // "cuts nothing away" this one does not wait to be asked — the
@@ -3179,12 +3232,40 @@ function cannedOk(tool, args) {
             : ". ") + fix;
         return mkOut;
       }
+      // The ELLIPSE twin of that erasure. Measured: the ellipse inscribed
+      // in the layer box under 'subtract' leaves the four corners at full
+      // alpha and 0.202 of the layer showing, where the rectangle twin
+      // leaves 0.000 — so "hides ALL" was false, and silence would be
+      // worse, because what the caller gets is four corner slivers.
+      // Gated on the layer carrying no compositing mask yet: over one add
+      // mask on the left half the same call reads corners 0.5.
+      if (!mkCovers && mkBoxCovers && mkShapeKind === "ellipse" &&
+          mkAbove === "nothing" &&
+          (() => {
+            const o = mkOutcome(args && args.mode, args && args.inverted,
+                                "all", mkAbove);
+            return !!(o && o.blank);
+          })()) {
+        mkOut.warning = "That mask hides all of '" + args.layer + "' EXCEPT " +
+          "the four corners of its box (" + mkSz.width + "x" + mkSz.height +
+          " at x 0 to " + mkSz.width + ", y 0 to " + mkSz.height + "): an " +
+          "ellipse only covers the middle of the bounds it is given, so " +
+          "about a fifth of the layer is left showing in the corners. For " +
+          "a clean cut pass 'bounds' for the part to CUT AWAY, or shape " +
+          "'rectangle' to take the whole layer." +
+          ((args && args.feather > 0)
+            ? " The feather only fades that cut edge — it does not blur " +
+              "the picture. To blur the picture: apply_effect {layer: \"" +
+              args.layer + "\", effect: \"Gaussian Blur\"}."
+            : "");
+        return mkOut;
+      }
       // The FOURTH outcome: the mask that switches the others off. It
       // does not wait to be asked — the layer visibly changes, and the
       // tool's own default region is the whole layer box. Not for an
       // ellipse, whose four vertices bound the layer but whose shape
-      // leaves the corners.
-      if (mkCovers && (args && args.shape) !== "ellipse" &&
+      // leaves the corners — which `mkCovers` now says by itself.
+      if (mkCovers &&
           mkOut2 && mkOut2.undoes) {
         mkOut.warning = "That mask covers all of '" + args.layer + "' (" +
           mkSz.width + "x" + mkSz.height + " at x 0 to " + mkSz.width +

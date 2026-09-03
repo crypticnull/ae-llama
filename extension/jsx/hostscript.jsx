@@ -7347,7 +7347,8 @@ function AELL_maskOutcome1(mode, inverted, covered, above, readable) {
 }
 
 /* Bounding box of a vertex list. Exact for the ellipse too: the four
- * points add_mask generates for one ARE its extremes. */
+ * points add_mask generates for one ARE its extremes — but its BOX is not
+ * its SHAPE, which is what AELL_shapeCoversBox is for. */
 function AELL_boxOfPoints(pts) {
   if (!AELLJSON.isArray(pts) || !pts.length) return null;
   var l = null, t = null, r = null, b = null, i;
@@ -7363,6 +7364,75 @@ function AELL_boxOfPoints(pts) {
   }
   if (l === null) return null;
   return { left: l, top: t, right: r, bottom: b };
+}
+
+/*
+ * Does the mask's SHAPE cover every pixel of the layer box? That is a
+ * different question from "does its bounding box", and for three of
+ * add_mask's sentences it was being answered with the wrong one.
+ *
+ * Measured 2026-09-03, AE 26.3x87 (scripts/mask-ellipse-probe.js), at
+ * this tool's own default region — the ellipse inscribed in the layer's
+ * box — with the RECTANGLE twin built from the identical numbers:
+ *
+ *   mode                 ellipse corners/mids   rectangle corners/mids
+ *   add                        0 / 1                  1 / 1
+ *   subtract                   1 / 0                  0 / 0
+ *   add + inverted             1 / 0                  0 / 0
+ *   subtract + inverted        0 / 1                  1 / 1
+ *
+ * — opposite readings at the corners in all TWELVE compositing rows, and
+ * only the non-compositing 'none' agreed. An 11x9 grid puts the layer at
+ * 0.202 still showing under a full-box ellipse 'subtract' where the
+ * rectangle leaves 0.000, and at 0.798 under an ellipse 'add' where the
+ * rectangle leaves 1.000 (the inscribed ellipse is pi/4 = 0.785 of the
+ * box, and the grid's own calibration row reads 0.798).
+ *
+ * The ellipse is answered EXACTLY, not sampled: an ellipse is convex and
+ * a rectangle is the convex hull of its four corners, so the ellipse
+ * contains the layer box exactly when it contains all four of them.
+ *
+ * Everything this cannot prove answers FALSE and every caller goes quiet
+ * — the same narrowness AELL_maskRect has, and for the same reason: each
+ * answer becomes a claim about pixels. A custom polygon counts only when
+ * its points really are the four corners of their own box, because a
+ * triangle or a diamond has the same bounding box and covers half as
+ * much.
+ */
+function AELL_shapeCoversBox(kind, shape, box) {
+  if (!box || !shape) return false;
+  var hit = AELL_boxOfPoints(shape.vertices);
+  if (!hit) return false;
+  var right = box.left + box.width, bottom = box.top + box.height;
+  if (!(hit.left <= box.left && hit.top <= box.top &&
+        hit.right >= right && hit.bottom >= bottom)) return false;
+  if (kind === "ellipse") {
+    var cx = (hit.left + hit.right) / 2, cy = (hit.top + hit.bottom) / 2;
+    var rx = (hit.right - hit.left) / 2, ry = (hit.bottom - hit.top) / 2;
+    if (!(rx > 0) || !(ry > 0)) return false;
+    var xs = [box.left, right], ys = [box.top, bottom], i, j;
+    for (i = 0; i < 2; i++) {
+      for (j = 0; j < 2; j++) {
+        var dx = (xs[i] - cx) / rx, dy = (ys[j] - cy) / ry;
+        // A corner exactly ON the ellipse is covered; floating point does
+        // not get to decide that one.
+        if (dx * dx + dy * dy > 1 + 1e-9) return false;
+      }
+    }
+    return true;
+  }
+  if (kind === "custom") {
+    var v = shape.vertices;
+    if (!AELLJSON.isArray(v) || v.length !== 4) return false;
+    for (var k = 0; k < 4; k++) {
+      if (!AELLJSON.isArray(v[k]) || v[k].length < 2) return false;
+      var x = Number(v[k][0]), y = Number(v[k][1]);
+      if ((x !== hit.left && x !== hit.right) ||
+          (y !== hit.top && y !== hit.bottom)) return false;
+    }
+    return true;
+  }
+  return true;      // 'rectangle' — the shape IS its box
 }
 
 AELL_TOOLS.add_mask = function (args) {
@@ -7421,8 +7491,12 @@ AELL_TOOLS.add_mask = function (args) {
    * mask from a comp-space one, so refuse with the box in hand — the
    * same grounded shape as every other failed lookup here. */
   var overflow = "", coversAll = "", erases = "", eraseWhy = "", eraseFix = "";
-  var noop = "", noopWhy = "", noopFix = "", undoes = "";
+  var noop = "", noopWhy = "", noopFix = "", undoes = "", corners = "";
   var hit = AELL_boxOfPoints(shape.vertices);
+  /* The SHAPE's coverage, not its bounding box's — see
+   * AELL_shapeCoversBox for the measurement. Every sentence below that
+   * claims something about "the whole layer" reads this one. */
+  var covers = AELL_shapeCoversBox(kind, shape, box);
   if (box && hit) {
     var bRight = AELL_r3(box.left + box.width);
     var bBottom = AELL_r3(box.top + box.height);
@@ -7483,8 +7557,23 @@ AELL_TOOLS.add_mask = function (args) {
       var bigOut = AELL_maskOutcome(args.mode, args.inverted, "all",
                                     aboveShows);
       var bigErases = !!(bigOut && bigOut.blank);
-      return AELL_err("That mask covers ALL of '" + layer.name + "', so it " +
-        (bigErases ? "hides the WHOLE layer" : "hides nothing") +
+      /* The effect clause is a claim about pixels, so it is only made
+       * when the SHAPE covers the layer. A comp-sized ellipse over a
+       * 400x300 layer does not (measured: the layer's near corner is
+       * outside it and its far corner inside), and it can even miss the
+       * layer altogether while its box contains it — so for anything the
+       * box over-reports, the refusal keeps the coordinates, which are
+       * the diagnosis, and drops the claim. The worked example still
+       * follows the MODE: that is advice about the call the caller meant,
+       * not a statement about the one they made. */
+      return AELL_err("That mask " +
+        (covers
+          ? "covers ALL of '" + layer.name + "', so it " +
+            (bigErases ? "hides the WHOLE layer" : "hides nothing")
+          : "is far bigger than '" + layer.name + "'" +
+            (kind === "ellipse"
+              ? " (and an ellipse covers only the middle of its own bounds)"
+              : "")) +
         ": the mask spans " + span + " and the layer is only " +
         mine + ". Mask coordinates are in LAYER space, not comp space — " +
         "the comp is " + comp.width + "x" + comp.height + " and this layer " +
@@ -7526,8 +7615,13 @@ AELL_TOOLS.add_mask = function (args) {
      * "changes nothing" below, which does. */
     var plain = (!args.inverted) &&
                 (modeWord === "add" || modeWord === "lighten");
-    var covers = (hit.left <= box.left && hit.top <= box.top &&
-                  hit.right >= bRight && hit.bottom >= bBottom);
+    /* `covers` is the SHAPE's coverage and was read above. What the
+     * BOUNDING BOX covers is a second, weaker fact, and it is worth
+     * exactly one sentence: an ellipse whose box is the layer's leaves
+     * the four corners, so a call that would have emptied the layer
+     * empties all but those. */
+    var boxCovers = (hit.left <= box.left && hit.top <= box.top &&
+                     hit.right >= bRight && hit.bottom >= bBottom);
     /* ONE reading of what this mask does to THIS layer, shared by all
      * four sentences below. It needs what the masks already there show,
      * not how many there are: measured, the same full-coverage 'add'
@@ -7563,8 +7657,11 @@ AELL_TOOLS.add_mask = function (args) {
      * the call that trips it.
      *
      * NOT for an ellipse: its four vertices bound the layer but the shape
-     * leaves the corners, so "every pixel shows again" would be false. */
-    if (covers && kind !== "ellipse" && outcome && outcome.undoes) {
+     * leaves the corners, so "every pixel shows again" would be false.
+     * That used to be spelled out here as `kind !== "ellipse"`; it is
+     * `covers` itself now, which is where it always belonged — the same
+     * hole was open in the three sentences below this one. */
+    if (covers && outcome && outcome.undoes) {
       undoes = "That mask covers all of '" + layer.name + "' (" + mine +
         "), so every pixel of it shows again: the " +
         (maskCount === 1 ? "mask" : maskCount + " masks") +
@@ -7678,6 +7775,37 @@ AELL_TOOLS.add_mask = function (args) {
           "with the part to KEEP.";
       }
     }
+    /* The ELLIPSE twin of that erasure, and the reason this branch could
+     * not simply go quiet once `covers` learned about shapes. Measured
+     * (scripts/mask-ellipse-probe.js): the ellipse inscribed in the layer
+     * box under 'subtract' — this tool's own default region — leaves the
+     * four corners at full alpha and 0.202 of the layer showing, where
+     * the rectangle twin leaves 0.000. The old sentence called that
+     * "hides ALL", which is false; silence would be worse than the old
+     * sentence, because what the caller gets is a layer showing four
+     * corner slivers and nothing else.
+     *
+     * Gated on the layer carrying no compositing mask yet, and that is a
+     * measurement too: over one add mask on the left half the same call
+     * reads corners 0.5, i.e. only the two corners that mask was showing
+     * survive, so "except its four corners" would be false there. Over a
+     * parade this stays quiet.
+     *
+     * Unasked, like the erasure warning it stands in for: 'subtract' at
+     * the default region is exactly the call that trips it. */
+    if (!covers && boxCovers && kind === "ellipse" &&
+        aboveShows === "nothing") {
+      var cornerOut = AELL_maskOutcome(args.mode, args.inverted, "all",
+                                       aboveShows);
+      if (cornerOut && cornerOut.blank) {
+        corners = "That mask hides all of '" + layer.name + "' EXCEPT the " +
+          "four corners of its box (" + mine + "): an ellipse only covers " +
+          "the middle of the bounds it is given, so about a fifth of the " +
+          "layer is left showing in the corners. For a clean cut pass " +
+          "'bounds' for the part to CUT AWAY, or shape 'rectangle' to " +
+          "take the whole layer.";
+      }
+    }
   }
 
   var mask = masks.addProperty("ADBE Mask Atom");
@@ -7711,6 +7839,17 @@ AELL_TOOLS.add_mask = function (args) {
           "the picture. To blur the picture: apply_effect {layer: \"" +
           layer.name + "\", effect: \"Gaussian Blur\"}. "
         : ". ") + eraseFix;
+  } else if (corners) {
+    /* Directly under the erasure it is the ellipse twin of, and above
+     * every sentence that talks about the layer as a whole. The feather
+     * is named for the same reason as in all three of its neighbours: a
+     * feather is what a "soften it" ask reaches for, and it fades the
+     * CUT edge rather than the picture. */
+    out.warning = corners + (args.feather > 0
+      ? " The feather only fades that cut edge — it does not blur the " +
+        "picture. To blur the picture: apply_effect {layer: \"" +
+        layer.name + "\", effect: \"Gaussian Blur\"}."
+      : "");
   } else if (undoes) {
     /* Second in the chain, under the erasure and above "cuts nothing
      * away": those two are the same question about the layer, and this is

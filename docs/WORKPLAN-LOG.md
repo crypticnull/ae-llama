@@ -16657,3 +16657,179 @@ confirmed nothing was left behind. Premiere WAS launched and closed by
 the scratch `%APPDATA%\AE-Llama\probes\AELL_PROBE_SCRATCH.prproj`; the
 cleanup step removed `AELL PROBE 1/2/3` and `AELL PROBE SEQ`. No
 llama-server, no ComfyUI.
+
+## 2026-09-03 — an ellipse is not its bounding box (0.11.29)
+
+WORKPLAN section 8, the top item filed by the 0.11.28 pass: **"an
+ELLIPSE is not its bounding box, and three sentences assume it is."**
+Filed as needing its own measurement first, and that was right — the
+measurement moved a row nobody had filed (the custom TRIANGLE) and
+settled what the replacement sentence may claim.
+
+Harness green at the top of the pass (698/698), and the last log entry
+was a 12b Premiere pass, so 12b's alternation rule sends this one to the
+AE backlog.
+
+### What was wrong
+
+`covers` in `add_mask` came from `AELL_boxOfPoints(shape.vertices)` — the
+BOUNDING BOX of the four points an ellipse is drawn from. An ellipse at
+the tool's own default region has exactly the layer's box, so it was
+treated as covering every pixel of the layer, which it plainly does not:
+it leaves the four corners. Three sentences and both coordinate refusals
+rested on that reading, and every one of them failed in the reassuring
+direction.
+
+### The measurement
+
+New `scripts/mask-ellipse-probe.js` / `.jsx`, same instrument as the two
+mask probes before it (a slider expression reading
+`sampleImage(postEffect)` alpha — `comp.saveFrameToPng` still writes no
+file on AE 26.3x87). What it adds is the CONTROL the other two never had:
+every ellipse row has its RECTANGLE TWIN at the identical region, built
+from the identical numbers. Nine sample points chosen so the two shapes
+cannot read the same — four corners inside the layer box and outside the
+inscribed ellipse, four edge midpoints inside both — plus an 11x9 area
+grid for the rows a sentence talks about.
+
+    mode                  ellipse corners/mids   rectangle corners/mids
+    add                         0 / 1                   1 / 1
+    subtract                    1 / 0                   0 / 0
+    add + inverted              1 / 0                   0 / 0
+    subtract + inverted         0 / 1                   1 / 1
+
+**Opposite at the corners in all TWELVE compositing rows.** Only the
+non-compositing 'none' agreed. Area still showing: **0.202** under a
+full-box ellipse `subtract` where the rectangle leaves **0.000**, 0.798
+under an ellipse `add` where the rectangle leaves 1.000 (the grid's own
+calibration row reads the inscribed ellipse at 0.798 against pi/4 =
+0.785).
+
+All three filed defects reproduced against the SHIPPED tool, which the
+probe calls itself in its last stage:
+
+- `add_mask {shape: 'ellipse', mode: 'subtract'}` — "That mask hides ALL
+  of 'ME solid'" on a layer reading **corners 1, mean 0.444**.
+- `{shape: 'ellipse', bounds: the whole layer}` — "cuts nothing away —
+  every pixel of it still shows" having just cut the corners off
+  (**corners 0**).
+- the same bounds with `subtract` + `inverted` — "changes nothing",
+  **corners 0**.
+
+Two rows the probe moved that were not filed:
+
+1. **An inverted `add` is the fourth call in the same family** — corners
+   1, mids 0, the same four slivers as `subtract`. It was getting the
+   erasure sentence too.
+2. **Over a parade the corners do NOT all survive.** Over one add mask on
+   the left half the same ellipse `subtract` reads **corners 0.5**: only
+   the two corners that mask was showing. That is what the new sentence's
+   gate is built from, rather than a guess.
+
+### The fix
+
+One function, at the one place coverage is decided:
+`AELL_shapeCoversBox(kind, shape, box)`.
+
+- **The ellipse is answered EXACTLY, not sampled.** An ellipse is convex
+  and a rectangle is the convex hull of its four corners, so the ellipse
+  contains the layer box exactly when it contains all four of them — four
+  tests, no tolerance beyond 1e-9 for a corner sitting on the boundary.
+- **Everything it cannot prove answers false and every caller goes
+  quiet**, the same narrowness `AELL_maskRect` has and for the same
+  reason. That closed a hole nobody had filed: a custom **TRIANGLE** with
+  the layer's bounding box was being told it "covers all of the layer, so
+  it cuts nothing away", and it covers half.
+- The two coordinate REFUSALS keep the coordinates — which are the
+  diagnosis — and drop the coverage CLAIM when the shape does not back
+  it: a comp-sized ellipse over a 400x300 layer does not cover it
+  (measured: near corner outside, far corner inside) and can even miss it
+  entirely while its box contains it. The worked example still follows the
+  MODE, because that is advice about the call the caller meant. An ellipse
+  that really does contain the layer box gets the old sentence back.
+- The `undoes` warning's private `kind !== "ellipse"` gate is gone: it is
+  `covers` itself now, which is where it always belonged — the same hole
+  was open in the three sentences below it.
+
+**One new sentence, because silence would be worse than the old lie.**
+What the caller gets is a layer showing four corner slivers and nothing
+else, so: "That mask hides all of 'X' EXCEPT the four corners of its box
+(...): an ellipse only covers the middle of the bounds it is given, so
+about a fifth of the layer is left showing in the corners." Unasked, like
+the erasure warning it stands in for — `subtract` at the default region is
+exactly the call that trips it — and gated on the parade being EMPTY,
+which is the measured row above. The mirror direction stays silent: an
+ellipse that keeps the middle is a spotlight, which is what an ellipse
+mask is FOR (0.11.21 settled that).
+
+### Verification
+
+- **Real AE harness 698 -> 710/710 PASSED.** 12 new steps in
+  `extension/js/selftest.js`: the three false sentences, the inverted
+  `add` twin, the feather clause, the triangle, both refusals (the one
+  that must drop its claim and the big ellipse that keeps it), and the
+  parade gate — added and removed again so the rows below still see the
+  base they were measured on.
+- **5 of the new steps are RED against the reverted canned host**
+  (705/710, checked by reverting `tests/test-self-test.js` alone).
+- `tests/test-shape-mask-tools.js` §6e, +23 assertions, **11 RED against
+  the reverted host** — and the reverted run prints the defect verbatim,
+  including the triangle.
+- The canned host grew the same shape-aware coverage, worked out from the
+  geometry rather than answered by name (the rule the 0.11.20 pass set).
+- Full stub sweep by exit code: 0 red. `docs/CAPABILITIES.md` regenerated
+  (step counts).
+- **Zero prompt cost** — host strings and selftest only, no `tools.js`
+  change.
+- `extension/` changed, so BUMPED: 0.11.28 -> **0.11.29**.
+
+### Notes / assumptions
+
+- **Assumed "about a fifth" is the right precision.** The geometry says
+  21.5% and the grid says 20.2%; a number with a decimal point would
+  claim more than the reading supports, and the sentence is about whether
+  to redo the call.
+- **Assumed the corner sentence stays out of the parade case entirely.**
+  It could be widened to a parade that shows everything, but that row was
+  not measured this pass and the half-covering row proves the naive
+  version wrong — so it is silence, not a guess.
+- **Assumed a custom polygon that is not an axis-aligned rectangle is
+  silence, not a new sentence.** A general polygon-covers-rectangle test
+  is answerable, but nothing has measured what those masks DO, and this
+  file's rule is that a claim about pixels needs a measurement behind it.
+
+### Filed for later passes, in priority order
+
+1. **Row 36 vague is still the last open HARM in the section 8 matrix** —
+   the model over-builds a `CTRL` null rig for a one-line shadow ask,
+   layer count 8 -> 9. Prompt-side, headroom 161.
+2. Mask OPACITY is still not read anywhere: `add_mask` never sets it,
+   `set_mask` can lower it afterwards, nothing re-checks. It is one of the
+   reasons `AELL_paradeShows` abandons a reading, so it is a silence
+   rather than a wrong answer.
+3. The ellipse is exact for the NEW mask now, but an ellipse ALREADY on
+   the layer still makes the parade unreadable (`AELL_maskRect` takes
+   rectangles only). The algebra could carry an ellipse cell the same way
+   it carries a rectangle one; nothing measured says it must yet.
+4. `comp.saveFrameToPng` writing nothing is still unexplained (0.11.26
+   filed it; nothing calls it, but it is the natural instrument for any
+   pixel check).
+5. Row 30's typo still burns six `center_anchor_point` calls before the
+   grid_layout that works. Passes, so it is cost and not harm.
+6. Everything else from the 2026-09-03 lists is unchanged: the
+   `distribute_property` mutate-then-throw hole, a bad VALUE not being
+   `argFault`, widening the `errArg` rollback exemption, step 2's naming
+   flake, the destructive-refusal wording on `delete_layer` /
+   `delete_mask` / `remove_effect`, `property: string` in TOOL_DEFS,
+   `POST /tokenize`, the `comfyUrl` 8188/8000 mismatch on this machine,
+   the harness answering a modal with WORDS, `starved` wording,
+   delete_mask warning on a live expression, the unmeasured controller
+   GROUP and non-en_US locale, and `capParams`.
+
+### Machine state
+
+**After Effects was never closed and its project was never closed.** The
+probe created `AELL Mask Ellipse Probe` and removed it again (comp and
+solid source both), and the harness ran twice entirely in the suite's own
+`ST ` namespace with its bottom-of-run check confirming nothing remains.
+No Premiere this pass. No llama-server, no ComfyUI.

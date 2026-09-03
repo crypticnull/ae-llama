@@ -1377,6 +1377,162 @@ assert(!r.ok && /so it hides nothing/.test(r.error) &&
        "wording, which was right for them: " +
        (r.ok ? JSON.stringify(r.data) : r.error));
 
+// ---------------------------------------------------------------------
+// 6e. An ELLIPSE is not its bounding box.
+//
+// Every sentence above this one used to read coverage off
+// AELL_boxOfPoints(shape.vertices) — the BOX of the four points an
+// ellipse is drawn from — so an ellipse at the tool's own default region
+// was treated as covering every pixel of the layer. Measured
+// 2026-09-03 (scripts/mask-ellipse-probe.js, AE 26.3x87), with the
+// rectangle twin built from the identical numbers:
+//
+//   mode                  ellipse corners/mids   rectangle corners/mids
+//   add                         0 / 1                   1 / 1
+//   subtract                    1 / 0                   0 / 0
+//   add + inverted              1 / 0                   0 / 0
+//   subtract + inverted         0 / 1                   1 / 1
+//
+// — opposite at the corners in all twelve compositing rows, and an 11x9
+// grid reads 0.202 of the layer still showing under a full-box ellipse
+// 'subtract' where the rectangle leaves 0.000. So "hides ALL", "cuts
+// nothing away" and "changes nothing" were each false about an ellipse,
+// and each in the direction that reads as reassurance.
+soloMasks._children.length = 0;
+r = call("add_mask", { layer: "Solo", name: "EllSub", shape: "ellipse",
+                       mode: "subtract" });
+assert(r.ok && !/hides ALL of 'Solo'/.test(r.data.warning || ""),
+       "an ellipse 'subtract' at the default region does NOT hide all of " +
+       "the layer — the corners read alpha 1: " +
+       JSON.stringify(r.ok ? r.data : r.error));
+assert(/hides all of 'Solo' EXCEPT the four corners/
+         .test(r.data.warning || "") &&
+       /about a fifth/.test(r.data.warning || ""),
+       "…and silence would be worse than the old lie: what the caller " +
+       "gets is a layer showing four corner slivers, so the receipt says " +
+       "so, with the measured share: " + JSON.stringify(r.data));
+assert(/shape 'rectangle'/.test(r.data.warning || "") &&
+       /bounds/.test(r.data.warning || ""),
+       "…and it names both ways out — a real region, or the shape that " +
+       "really does take the whole layer: " + r.data.warning);
+soloMasks._children.length = 0;
+r = call("add_mask", { layer: "Solo", name: "RectSub", shape: "rectangle",
+                       mode: "subtract" });
+assert(/hides ALL of 'Solo'/.test(r.data.warning || ""),
+       "…while the RECTANGLE twin of that call is untouched: it really " +
+       "does empty the layer: " + JSON.stringify(r.ok ? r.data : r.error));
+soloMasks._children.length = 0;
+
+// The mirror row: an ellipse 'add' over the whole box CUTS the corners
+// away (measured 0 at all four), so "cuts nothing away — every pixel of
+// it still shows" was false. Nothing replaces it: an ellipse that keeps
+// the middle of the layer is a spotlight, which is what an ellipse mask
+// is FOR, and 0.11.21 already settled that there is nothing provable to
+// say about one.
+r = call("add_mask", { layer: "Solo", name: "EllAdd", shape: "ellipse",
+                       bounds: [0, 0, 100, 100] });
+assert(r.ok && !/cuts nothing away/.test(r.data.warning || ""),
+       "an ellipse 'add' over the whole box cuts the corners away, so " +
+       "'cuts nothing away' is false: " +
+       JSON.stringify(r.ok ? r.data : r.error));
+assert(!r.data.warning,
+       "…and an ellipse keeping the middle is a spotlight, not a " +
+       "mistake — nothing provable to say: " + JSON.stringify(r.data));
+soloMasks._children.length = 0;
+
+// The third sentence, same shape of error: an inverted 'subtract' over
+// the whole box takes the corners away (measured 0), so it is not the
+// no-op its rectangle twin is.
+r = call("add_mask", { layer: "Solo", name: "EllSubInv", shape: "ellipse",
+                       bounds: [0, 0, 100, 100], mode: "subtract",
+                       inverted: true });
+assert(r.ok && !/changes nothing/.test(r.data.warning || ""),
+       "an inverted ellipse 'subtract' cuts the corners, so it did not " +
+       "change nothing: " + JSON.stringify(r.ok ? r.data : r.error));
+soloMasks._children.length = 0;
+
+// The other call that would empty the layer as a rectangle: inverted
+// 'add'. Measured corners 1, mids 0 — the same four slivers.
+r = call("add_mask", { layer: "Solo", name: "EllAddInv", shape: "ellipse",
+                       bounds: [0, 0, 100, 100], inverted: true });
+assert(/hides all of 'Solo' EXCEPT the four corners/
+         .test(r.data.warning || ""),
+       "an inverted ellipse 'add' leaves the same four slivers and is " +
+       "named the same way: " + JSON.stringify(r.ok ? r.data : r.error));
+soloMasks._children.length = 0;
+
+// The feather is named here for the reason it is named in all three
+// neighbours: a feather is what a "soften it" ask reaches for.
+r = call("add_mask", { layer: "Solo", name: "EllSoft", shape: "ellipse",
+                       mode: "subtract", feather: 50 });
+assert(/EXCEPT the four corners/.test(r.data.warning || "") &&
+       /does not blur the picture/.test(r.data.warning || "") &&
+       /Gaussian Blur/.test(r.data.warning || ""),
+       "…and a feather on it fades the CUT edge, not the picture: " +
+       JSON.stringify(r.ok ? r.data : r.error));
+soloMasks._children.length = 0;
+
+// The corner sentence is gated on the layer having no compositing mask
+// yet, and that gate is a measurement: over one add mask on the left
+// half the same call reads corners 0.5 — only the two corners that mask
+// was showing survive — so "except its four corners" would be false.
+call("add_mask", { layer: "Solo", name: "HalfL", shape: "rectangle",
+                   bounds: [0, 0, 50, 100] });
+r = call("add_mask", { layer: "Solo", name: "EllOver", shape: "ellipse",
+                       mode: "subtract" });
+assert(r.ok && !/four corners/.test(r.data.warning || ""),
+       "over a mask that already hides half the layer, only two corners " +
+       "survive — so the sentence goes quiet rather than guessing: " +
+       JSON.stringify(r.ok ? r.data : r.error));
+soloMasks._children.length = 0;
+
+// The comp-coordinates REFUSAL carried the same reading in its reason.
+// A comp-sized ellipse over a 100x100 layer does not cover it (measured:
+// the near corner is outside it, the far corner inside) and can even
+// miss it entirely, so the refusal keeps the coordinates — which are the
+// diagnosis — and drops the claim.
+r = call("add_mask", { layer: "Solo", shape: "ellipse", mode: "subtract",
+                       bounds: [0, 0, 1920, 1080] });
+assert(!r.ok && !/covers ALL of 'Solo'/.test(r.error),
+       "a comp-sized ELLIPSE does not cover the layer, so the refusal " +
+       "may not say it does: " + (r.ok ? JSON.stringify(r.data) : r.error));
+assert(/is far bigger than 'Solo'/.test(r.error) &&
+       /middle of its own bounds/.test(r.error),
+       "…it says what IS true of it: " + r.error);
+assert(/Mask coordinates are in LAYER space/.test(r.error) &&
+       /To cut away only the top half/.test(r.error),
+       "…and keeps the diagnosis and the mode-shaped worked example, " +
+       "which are what the model acts on: " + r.error);
+// …and an ellipse big enough to really contain the layer box gets the
+// coverage sentence back. It is not hardcoded to "an ellipse never
+// covers": here every corner of the layer is inside it.
+r = call("add_mask", { layer: "Solo", shape: "ellipse", mode: "subtract",
+                       bounds: [-71, -71, 242, 242] });
+assert(!r.ok && /covers ALL of 'Solo', so it hides the WHOLE layer/
+         .test(r.error),
+       "an ellipse whose four corner-tests all pass really does cover " +
+       "the layer: " + (r.ok ? JSON.stringify(r.data) : r.error));
+
+// The same hole was open for a custom polygon, and closes the same way:
+// a triangle has the layer's bounding box and covers half of it.
+r = call("add_mask", { layer: "Solo", name: "Tri", shape: "custom",
+                       vertices: [[0, 0], [100, 0], [100, 100]] });
+assert(r.ok && !/covers all of 'Solo'/.test(r.data.warning || ""),
+       "a triangle with the layer's bounding box does not cover the " +
+       "layer: " + JSON.stringify(r.ok ? r.data : r.error));
+soloMasks._children.length = 0;
+// …while the field's own four-corner call — row 35, 2026-09-02 — still
+// gets the sentence it was fixed for. This is the boundary the custom
+// rule is drawn at.
+r = call("add_mask", { layer: "Solo", name: "Quad", shape: "custom",
+                       vertices: [[0, 0], [100, 0], [100, 100], [0, 100]],
+                       feather: 50 });
+assert(r.ok && /covers all of 'Solo'/.test(r.data.warning || "") &&
+       /OUTER EDGE/.test(r.data.warning || ""),
+       "…and four points that really are the corners still do: " +
+       JSON.stringify(r.ok ? r.data : r.error));
+soloMasks._children.length = 0;
+
 // Same correction on the "misses it completely" refusal: measured, a
 // lone subtract region the layer never touches subtracts NOTHING.
 r = call("add_mask", { layer: "Solo", shape: "rectangle", mode: "subtract",
