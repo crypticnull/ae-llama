@@ -95,7 +95,8 @@ function AELL_errPartial(msg) {
 }
 
 /* A NAMING refusal: the caller named an effect or a parameter that is
- * not there, nothing was written, and the error already says what is.
+ * not there — or asked to take one off a layer that has none at all —
+ * nothing was written, and the error already says what is.
  *
  * The opposite pole from AELL_errPartial. That one forces a rollback
  * because half the work landed; this one FORBIDS one, because none of
@@ -105,6 +106,14 @@ function AELL_errPartial(msg) {
  * the properly grounded "'Fast Box Blur' has: Blur Radius, ..." — and
  * the round rolled back, taking the blur with it. The grounding worked
  * and the rollback threw away what it bought.
+ *
+ * Same class measured again 2026-09-03 (chat-probe row 36 vague, run 1):
+ * the model sent for_each_layer {apply_effect Drop Shadow} — 7 of 7 ok —
+ * together with a belt-and-braces remove_effect {layer: "BG"}, whose
+ * "no effects at all" refusal was NOT tagged, and the rollback threw the
+ * seven shadows away. Note that refusal has no name to correct: the fix
+ * is to DROP the command, which is why the sentence AELL_maybeRollback
+ * appends offers both.
  *
  * Only ever returned from a point where the tool provably has not
  * touched the project yet. */
@@ -5101,7 +5110,7 @@ AELL_TOOLS.remove_effect = function (args) {
   var effects = null;
   try { effects = layer.property("ADBE Effect Parade"); } catch (eP) {}
   if (!effects) {
-    return AELL_err("'" + layer.name + "' is a " + AELL_layerType(layer) +
+    return AELL_errArg("'" + layer.name + "' is a " + AELL_layerType(layer) +
       " layer and cannot carry effects, so there is nothing to remove.");
   }
   var have = AELL_effectNames(layer);
@@ -5129,12 +5138,13 @@ AELL_TOOLS.remove_effect = function (args) {
         : " Text animators are not effects, and there are none here " +
           "either.";
     }
-    return AELL_err("'" + layer.name + "' has no effects at all — nothing " +
-      "to remove, and no other effect name will match either." + elsewhere);
+    return AELL_errArg("'" + layer.name + "' has no effects at all — " +
+      "nothing to remove, and no other effect name will match either." +
+      elsewhere);
   }
   if (args.effect === null || typeof args.effect === "undefined" ||
       args.effect === "") {
-    return AELL_err("'effect' is required (display name or matchName). " +
+    return AELL_errArg("'effect' is required (display name or matchName). " +
       "Effects on '" + layer.name + "': " + AELL_capJoin(have, 15));
   }
   var want = String(args.effect);
@@ -5154,7 +5164,7 @@ AELL_TOOLS.remove_effect = function (args) {
   }
   var matches = exact.length ? exact : loose;
   if (matches.length === 0) {
-    return AELL_err("No effect '" + want + "' on '" + layer.name +
+    return AELL_errArg("No effect '" + want + "' on '" + layer.name +
       "'. Effects here: " + AELL_capJoin(have, 15) + " — pass one of " +
       "those display names (or its matchName). apply_effect adds one " +
       "that is missing.");
@@ -12910,8 +12920,9 @@ function AELL_maybeRollback(cmds, results, armed, before, aliasesBefore) {
     // the one sentence it needs is on the failure it can act on. First
     // one only: the rest of the round reads as ok, which it is.
     var kept = " The other commands in this round were APPLIED and are " +
-      "still there — do NOT send them again. Re-send only this one, " +
-      "with the name corrected.";
+      "still there — do NOT send them again. Only THIS command did " +
+      "nothing: re-send just it with the name corrected, or drop it if " +
+      "what it asked for is not there at all.";
     for (i = 0; i < results.length; i++) {
       r = results[i] || {};
       if (!r.ok && r.argFault) {

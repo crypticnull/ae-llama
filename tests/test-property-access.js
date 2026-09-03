@@ -1615,6 +1615,44 @@ r = call("remove_effect", { layer: "Key", effect: "Glow" });
 assert(!r.ok && /'Key' is a \w+ layer and cannot carry effects/.test(r.error),
        "a light (no Effect Parade at all) is refused by type: " + r.error);
 
+// ---- every one of those four refusals is the argFault class (0.11.31)
+//
+// Field round, chat-probe row 36 vague run 1 (WORKPLAN-LOG 2026-09-03):
+// for_each_layer {apply_effect Drop Shadow} succeeded 7 of 7, a
+// belt-and-braces remove_effect {layer: "BG"} hit "no effects at all",
+// and AELL_maybeRollback threw the seven shadows away. None of these
+// four touches the project and each already says what IS there, so the
+// successes around them are not debris. The rollback half is proved end
+// to end in tests/test-round-rollback.js.
+r = call("remove_effect", { layer: "Bare", effect: "Glow" });
+assert(!r.ok && r.argFault === true,
+       "a layer with no effects at all cannot roll a round back: " +
+       JSON.stringify(r).slice(0, 120));
+assert(!r.mutated,
+       "…and it is not ALSO flagged mutated, which would re-arm it");
+
+r = call("remove_effect", { layer: "Key", effect: "Glow" });
+assert(!r.ok && r.argFault === true,
+       "so is a layer type that cannot carry effects");
+
+r = call("remove_effect", { layer: "A", effect: "Glow" });
+assert(!r.ok && r.argFault === true,
+       "so is an effect name that is not in the parade");
+
+r = call("remove_effect", { layer: "A" });
+assert(!r.ok && r.argFault === true,
+       "so is a call that leaves 'effect' out altogether");
+
+// The boundary: a removal that REALLY happened is a mutation like any
+// other. Flagging it would exempt a round that has debris in it.
+const gone = new Layer("Gone", comp);
+comp._layers.push(gone);
+r = call("remove_effect", { layer: "Gone", effect: "Gaussian Blur" });
+assert(r.ok && r.argFault === undefined,
+       "a removal that succeeded carries no flag: " +
+       JSON.stringify(r).slice(0, 120));
+comp._layers.splice(comp._layers.indexOf(gone), 1);
+
 // {layer} omitted = the selection, and the selection survives the call.
 comp._layers.forEach(l => { l.selected = l.name === "B"; });
 r = call("remove_effect", { effect: "Gaussian Blur" });

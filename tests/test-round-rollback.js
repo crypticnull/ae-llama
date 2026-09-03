@@ -652,9 +652,18 @@ assert(/'Fast Box Blur' has: Blur Radius/.test(rN.data.results[1].error),
        "the grounded roster survives verbatim: " +
        rN.data.results[1].error.slice(0, 60));
 assert(/do NOT send them again/.test(rN.data.results[1].error) &&
-       /Re-send only this one/.test(rN.data.results[1].error),
+       /re-send just it with the name corrected/.test(rN.data.results[1].error),
        "with the one sentence the model needs — the round's instinct is " +
        "to redo itself whole: " + rN.data.results[1].error.slice(-120));
+// 0.11.31: not every argFault refusal has a name to correct. remove_effect
+// meeting a layer with no effects at all is the same class — nothing
+// written, and the message already says what is there — but the only fix
+// is to DROP the command, so the sentence has to offer that too or it
+// sends the model looking for a spelling that was never wrong.
+assert(/drop it if what it asked for is not there/
+         .test(rN.data.results[1].error),
+       "…and the other way out, for a refusal with no name to correct: " +
+       rN.data.results[1].error.slice(-90));
 
 // Only the FIRST refusal carries the sentence. Repeating it per failure
 // is the context bill 0.11.18 measured and fixed elsewhere.

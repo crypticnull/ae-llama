@@ -17139,3 +17139,131 @@ harness run in AE. Premiere was launched and closed by
 `AELL_PROBE_SCRATCH.prproj` under `%APPDATA%\AE-Llama\probes\` and its
 cleanup step removed all four things it made (`AELL PROBE 1/2/3`,
 `AELL PROBE SEQ`). No ComfyUI, no llama-server this pass.
+
+## 2026-09-03 (local, real AE) - the refusal that took seven shadows with it (0.11.31)
+
+WORKPLAN section 8, the top item filed by the 0.11.30 pass. Last log
+entry was a 12b pass, so 12b was skipped this pass per its own
+alternation rule.
+
+### The defect
+
+Measured in the field on 2026-09-03 (chat-probe row 36 vague, run 1):
+the model sent `for_each_layer {apply_effect Drop Shadow}` - **7 of 7
+ok** - in the same round as a belt-and-braces
+`remove_effect {layer: "BG"}`. BG carries no effects, so the tool
+answered `'BG' has no effects at all`, and `AELL_maybeRollback` saw one
+mutating success plus one mutating failure and undid the round. The
+seven shadows the user asked for went with a command that had written
+nothing.
+
+That is exactly the class 0.11.23 built `AELL_errArg` for - a NAMING
+refusal that provably touched nothing and already says what does exist -
+and remove_effect was simply never tagged with it. apply_effect and
+set_effect_param carry it on seven refusals; remove_effect carried it on
+none.
+
+### The fix, both halves
+
+- **All four of remove_effect's PRE-WRITE refusals are `AELL_errArg`
+  now**: no parade at all, a layer type that cannot carry effects, a
+  missing `effect` arg, and a name that is not in the parade. Each reads
+  the layer before touching it and each already prints what is there.
+- **The post-`remove()` "AE refused to remove" failure is deliberately
+  left plain `AELL_err`.** AE threw from inside the mutation; whether
+  anything moved is not provable from here, and the conservative side is
+  the one where the round still rolls back.
+- **The sentence the rollback appends assumed a name to correct.** It
+  said "Re-send only this one, with the name corrected" - which is right
+  for `Parameter not found: Radius` and wrong for `has no effects at
+  all`, where nothing is misspelled and the only fix is to DROP the
+  command. It now offers both: "Only THIS command did nothing: re-send
+  just it with the name corrected, or drop it if what it asked for is
+  not there at all." Host string, so zero prompt cost - `buildSystemPrompt()`
+  is unchanged at 58933.
+
+### Verification
+
+- **Real AE harness 710 -> 715/715 PASSED.** Five new steps in
+  `extension/js/selftest.js`, in the rollback rig beside the 0.11.23
+  ones: the empty-parade round survives and the Glow it earned is still
+  on the layer; a remove_effect NAME miss is the same class and its
+  refusal still names what the layer really carries; and the boundary -
+  a remove_effect that REALLY removed one is a mutation like any other,
+  so a round it shares with a real failure still goes whole and the Tint
+  comes back.
+- **All five are RED against the reverted host in REAL AE** (710/715),
+  and the failure text is the field defect verbatim: `apply_effect
+  failed: ROLLED BACK: a command in this round failed (remove_effect:
+  'ST RB Keep B' has no effects at all...)`.
+- `tests/test-property-access.js` +7 assertions, **4 RED** against the
+  reverted host. They cover all four refusals plus two boundaries: the
+  empty-parade refusal must not ALSO be `mutated` (that would re-arm the
+  rollback it just escaped), and a removal that really succeeded carries
+  no flag at all.
+- `tests/test-round-rollback.js` pins both halves of the new sentence.
+- Full stubbed suite green; `docs/CAPABILITIES.md` regenerated (the
+  self-test step counts moved).
+
+### Stub faithfulness
+
+The canned host in `tests/test-self-test.js` kept the rollback comp's
+effect parade as **one flat list for the whole comp**. So it answered
+"does this LAYER carry any effects" with the parade of a different one,
+and no stub could tell "this layer has none" from "the comp has none" -
+which is part of why the class stayed invisible. It is a per-layer map
+now (`rbFxOf`), with a per-layer `remove_effect` branch that refuses the
+three ways the real tool does, `argFault` and all. `rbFxParams` is still
+keyed by `<Effect>/<Param>` only; the steps use distinct effects per
+layer, so nothing collides, but a per-layer key is the honest shape if
+another step ever needs it.
+
+### Notes / assumptions
+
+- **Assumed Glow and Tint, not Drop Shadow, for the new steps.** The
+  field round used Drop Shadow, but the canned host has a separate
+  Drop Shadow rig (`dsOn`) in another comp and a name collision there
+  would have made the steps test the stub. The class is the subject,
+  not the effect name.
+- **Assumed the exemption must stay narrow.** Only refusals taken before
+  the tool touches anything are tagged. `AELL_resolveLayer` /
+  `AELL_layerOrSelection` still THROW for a layer that is not there, and
+  a thrown error is not `argFault` - so a round whose prerequisite the
+  round itself failed to build (the nine-squares case) is untouched.
+  Left that way on purpose; widening it is still on the filed list.
+- `delete_mask` and `delete_layer` have refusals of the same shape and
+  are NOT changed here - one root cause per pass, and they are already
+  filed.
+
+### Still open, in priority order (unchanged but for item 1)
+
+1. **`link_property` silently overwrites an existing link on the same
+   property** (was 2). Two calls drove `effect.Drop Shadow.Distance`
+   from two different sliders, both `ok`, and nothing said the first
+   link was gone. Needs a real-AE measurement first.
+2. Mask OPACITY is still not read anywhere.
+3. An ellipse ALREADY on the layer still makes the mask parade
+   unreadable (`AELL_maskRect` takes rectangles only).
+4. `comp.saveFrameToPng` writing nothing is still unexplained.
+5. Row 30's typo still burns six `center_anchor_point` calls before the
+   grid_layout that works. Cost, not harm.
+6. Everything else from the 2026-09-03 lists is unchanged: the
+   `distribute_property` mutate-then-throw hole, a bad VALUE not being
+   `argFault`, widening the `errArg` rollback exemption to thrown
+   lookups, step 2's naming flake, the destructive-refusal wording on
+   `delete_layer` / `delete_mask`, `property: string` in TOOL_DEFS,
+   `POST /tokenize`, the `comfyUrl` 8188/8000 mismatch on this machine,
+   the harness answering a modal with WORDS, `starved` wording,
+   delete_mask warning on a live expression, the unmeasured controller
+   GROUP and non-en_US locale, and `capParams`.
+
+Section 8 still has no open HARM and no open miss in the variant matrix;
+this was a defect the matrix FOUND, not one it scores.
+
+### Machine state
+
+**After Effects was never closed and its project was never closed.**
+Three harness runs (baseline, reverted-host red, final green); each
+built and removed its own rig and the bottom-of-run check confirmed
+nothing of the suite remains. No Premiere, no ComfyUI, no llama-server
+this pass.

@@ -2206,6 +2206,28 @@ this order, one bullet per pass:
     real AE cannot see it. tests/test-chat-probe.js +14 assertions, 9 of
     them RED against the reverted prompt, plus the first check-side
     assertion for the CTRL-null shape itself.
+  - ~~**`remove_effect`'s "no effects at all" refusal takes a whole
+    correct round down with it**~~ DONE 2026-09-03 (0.11.31). Filed by
+    the 0.11.30 pass as its top item and measured in the field: row 36
+    vague run 1 sent `for_each_layer {apply_effect Drop Shadow}` (7 of 7
+    ok) together with a belt-and-braces `remove_effect {layer: "BG"}`,
+    that refusal fired, and `AELL_maybeRollback` threw the seven shadows
+    away. It is exactly the `AELL_errArg` class 0.11.23 built and it was
+    simply not tagged. All FOUR of remove_effect's pre-write refusals
+    carry it now (no parade at all, a layer type that cannot take
+    effects, a missing `effect` arg, a name that is not in the parade);
+    the post-`remove()` "AE refused" failure is deliberately left plain,
+    because AE threw inside the mutation. Second half, and the reason
+    this is not a one-word change: the sentence the rollback appends
+    said "Re-send only this one, with the name corrected", and THIS
+    refusal has no name to correct — the fix is to drop the command, so
+    it now offers both. Zero prompt cost (host strings only). Harness
+    710 -> **715**, all five new steps RED against the reverted host in
+    real AE and reproducing the field failure verbatim; +7 stub
+    assertions in tests/test-property-access.js, 4 of them RED, and the
+    canned host's rb-comp effect parade is PER LAYER now (it was one
+    flat list for the whole comp, which is why no stub could tell "this
+    layer carries none" from "the comp carries none").
 - **DEFERRED until a sandbox design exists:** D/F/H3 rows (project
   mutation, renders, mass-delete) — wiring them against the live
   project is the harm the whitelist cannot contain. Also deferred:

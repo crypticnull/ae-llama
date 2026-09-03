@@ -756,8 +756,22 @@ let rbLayers = [];
 // parameter-NAME refusal, so the canned host has to refuse the name the
 // way AE does (roster and all) and remember the blur that must still be
 // there afterwards. The roster is Fast Box Blur's, in AE 2026's order.
-let rbFx = [];                  // effect display names, in AE's order
+// PER LAYER, because effects are: a flat list for the whole comp
+// answered "does this LAYER carry any" with the parade of a different
+// one, which is exactly the blindness that let remove_effect's "no
+// effects at all" refusal go untagged (0.11.31).
+let rbFx = {};                  // layer -> effect display names, AE's order
 let rbFxParams = {};            // "<Effect>/<Param>" -> value written
+function rbFxOf(layer) {
+  const k = String(layer || "");
+  if (!rbFx[k]) rbFx[k] = [];
+  return rbFx[k];
+}
+function rbFxCopy(src) {
+  const o = {};
+  for (const k in src) o[k] = src[k].slice();
+  return o;
+}
 const RB_FBB = ["Blur Radius", "Iterations", "Blur Dimensions",
                 "Repeat Edge Pixels", "Compositing Options"];
 function rbRoster(name) {
@@ -2521,10 +2535,10 @@ function cannedOk(tool, args) {
         const rbM = /^effect\.(.+)\.([^.]+)$/
           .exec(String((args && args.property) || ""));
         if (rbM) {
-          if (rbFx.indexOf(rbM[1]) === -1) {
+          if (rbFxOf(args.layer).indexOf(rbM[1]) === -1) {
             return { __err: "Effect not found on layer: " + rbM[1] +
               ". Effects on '" + args.layer + "': " +
-              (rbFx.join(", ") || "(none)"), __argFault: true };
+              (rbFxOf(args.layer).join(", ") || "(none)"), __argFault: true };
           }
           return { layer: args.layer, property: rbM[2],
                    matchName: "ADBE " + rbM[2],
@@ -3739,12 +3753,39 @@ function cannedOk(tool, args) {
       }
       if (inRbComp(args)) {
         const rbAdd = String((args && args.effect) || "");
-        rbFx.push(rbAdd);
+        rbFxOf(args.layer).push(rbAdd);
         return { layer: args.layer, effect: rbAdd,
                  matchName: "ADBE " + rbAdd, params: rbRoster(rbAdd) };
       }
       return { done: true };
     case "remove_effect": {
+      // The rollback comp, per LAYER. Every refusal here is the argFault
+      // class -- nothing written, and the message already says what is
+      // there -- which is the whole point of the 0.11.31 steps.
+      if (inRbComp(args)) {
+        const rbPar = rbFxOf(args.layer);
+        if (!rbPar.length) {
+          return { __err: "'" + args.layer + "' has no effects at all — " +
+            "nothing to remove, and no other effect name will match " +
+            "either.", __argFault: true };
+        }
+        const rbWant = String((args && args.effect) || "");
+        if (!rbWant) {
+          return { __err: "'effect' is required (display name or " +
+            "matchName). Effects on '" + args.layer + "': " +
+            rbPar.join(", "), __argFault: true };
+        }
+        if (rbPar.indexOf(rbWant) === -1) {
+          return { __err: "No effect '" + rbWant + "' on '" + args.layer +
+            "'. Effects here: " + rbPar.join(", ") + " — pass one of " +
+            "those display names (or its matchName). apply_effect adds " +
+            "one that is missing.", __argFault: true };
+        }
+        rbPar.splice(rbPar.indexOf(rbWant), 1);
+        return { layer: args.layer, removed: rbWant,
+                 matchName: "ADBE " + rbWant,
+                 remainingEffects: rbPar.slice() };
+      }
       if (String((args && args.effect) || "") === "Drop Shadow" && dsOn) {
         dsOn = false;
         return { layer: args.layer, removed: "Drop Shadow",
@@ -3810,10 +3851,10 @@ function cannedOk(tool, args) {
       if (inRbComp(args)) {
         const rbE = String((args && args.effect) || "");
         const rbP = String((args && args.param) || "");
-        if (rbFx.indexOf(rbE) === -1) {
+        if (rbFxOf(args.layer).indexOf(rbE) === -1) {
           return { __err: "Effect not found on layer: " + rbE +
             ". Effects on '" + args.layer + "': " +
-            (rbFx.join(", ") || "(none)") +
+            (rbFxOf(args.layer).join(", ") || "(none)") +
             ". apply_effect adds one that is missing.", __argFault: true };
         }
         const rbNames = rbRoster(rbE);
@@ -4463,8 +4504,9 @@ function cannedOk(tool, args) {
                  properties: rows, note: "" };
       }
       if (/^effects$/i.test(P) && inRbComp(args)) {
-        return { layer: args.layer, root: "effects", count: rbFx.length,
-                 properties: rbFx.map(n => ({ path: "effects/" + n,
+        const rbPar = rbFxOf(args.layer);
+        return { layer: args.layer, root: "effects", count: rbPar.length,
+                 properties: rbPar.map(n => ({ path: "effects/" + n,
                    matchName: "ADBE " + n, kind: "group" })), note: "" };
       }
       if (inTx(args)) {
@@ -5510,7 +5552,7 @@ function cannedBatch(cmds, opts, cb) {
   // canned host that only rewound layers let a step assert an item-level
   // rollback that never happened.
   const rbBefore = rbLayers.slice();
-  const rbFxBefore = rbFx.slice();
+  const rbFxBefore = rbFxCopy(rbFx);
   const rbFxParamsBefore = Object.assign({}, rbFxParams);
   const itemsBefore = {
     comps: createdComps.slice(),
@@ -5539,14 +5581,16 @@ function cannedBatch(cmds, opts, cb) {
     for (let i = 0; i < rows.length; i++) {
       if (!rows[i].ok && rows[i].argFault) {
         rows[i].error += " The other commands in this round were APPLIED " +
-          "and are still there — do NOT send them again. Re-send only " +
-          "this one, with the name corrected.";
+          "and are still there — do NOT send them again. Only THIS " +
+          "command did nothing: re-send just it with the name " +
+          "corrected, or drop it if what it asked for is not there at " +
+          "all.";
         break;
       }
     }
   } else if (opts.rollback && okMut && badMut) {
     rbLayers = rbBefore;
-    rbFx = rbFxBefore;
+    rbFx = rbFxCopy(rbFxBefore);
     rbFxParams = rbFxParamsBefore;
     createdComps.length = 0;
     Array.prototype.push.apply(createdComps, itemsBefore.comps);
@@ -5624,7 +5668,7 @@ SelfTest.run({
     mkMasks = {}; mkShapes = {}; mkSizes = {}; gridStack = {}; gridExpr = {};
     batchLayers = 0; batchFx = {}; batchBlur = null;
     dsOn = false; dsDistance = 5;
-    batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetWpRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetBoundsRig(); resetPresetRig(); resetRqRig(); resetAuRig(); resetFrRig(); resetCapRig(); resetMgRig();
+    batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rbFx = {}; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetWpRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetBoundsRig(); resetPresetRig(); resetRqRig(); resetAuRig(); resetFrRig(); resetCapRig(); resetMgRig();
     // ONE call fails, not one TOOL: the suite grids more than once (the
     // nine squares, then the backdrop rig), and failing every grid_layout
     // would fail four steps and stop measuring what this asserts — that a
@@ -5664,7 +5708,7 @@ SelfTest.run({
         mkMasks = {}; mkShapes = {}; mkSizes = {}; gridStack = {}; gridExpr = {};
         batchLayers = 0; batchFx = {}; batchBlur = null;
     dsOn = false; dsDistance = 5;
-        batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetWpRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetBoundsRig(); resetPresetRig(); resetRqRig(); resetAuRig(); resetFrRig(); resetCapRig(); resetMgRig();
+        batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rbFx = {}; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetWpRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetBoundsRig(); resetPresetRig(); resetRqRig(); resetAuRig(); resetFrRig(); resetCapRig(); resetMgRig();
         SelfTest.run({
           callHostTool(tool, args, cb) {
             // Never refuse anything -- the old permissive host.

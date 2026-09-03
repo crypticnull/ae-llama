@@ -4633,6 +4633,121 @@
                  names.slice(0, 160);
         } },
 
+      // ---- and a refusal with NO name to correct is the same class ----
+      //
+      // The field round, 2026-09-03 (chat-probe row 36 vague, run 1):
+      // for_each_layer {apply_effect Drop Shadow} put a shadow on all
+      // seven layers, and a belt-and-braces remove_effect {layer: "BG"}
+      // met "'BG' has no effects at all" — a refusal that writes nothing
+      // and already says what is there, exactly like the parameter miss
+      // above. It was NOT tagged, so the rollback threw the seven shadows
+      // away. The tell is that this one has nothing to SPELL correctly:
+      // the fix is to drop the command, which is why the sentence the
+      // rollback appends has to offer both.
+      //
+      // Glow, not Drop Shadow, to keep the round clear of the coverage
+      // rig's own shadow — the class is the subject, not the effect name.
+      { name: "an empty parade refuses without taking the round down",
+        batchOpts: { rollback: true },
+        batch: function (ctx) {
+          return [
+            { tool: "apply_effect",
+              args: { comp: ctx.rbComp, layer: "ST RB Keep A",
+                      effect: "Glow" } },
+            { tool: "remove_effect",
+              args: { comp: ctx.rbComp, layer: "ST RB Keep B" } }
+          ];
+        },
+        check: function (rows) {
+          if (rows.length !== 2) return "rows " + rows.length;
+          if (!rows[0].ok) return "apply_effect failed: " + rows[0].error;
+          if (rows[1].ok) return "remove_effect accepted a bare layer";
+          if (rows[0].rolledBack || rows[1].rolledBack) {
+            return "the round was rolled back over a layer that had " +
+                   "nothing to remove — the Glow went with it";
+          }
+          if (!/has no effects at all/.test(String(rows[1].error))) {
+            return "the grounded refusal is gone: " + rows[1].error;
+          }
+          if (!/do NOT send them again/.test(String(rows[1].error))) {
+            return "nothing tells the model the rest of the round " +
+                   "stands: " + rows[1].error;
+          }
+          return /drop it/.test(String(rows[1].error)) ||
+                 "the sentence still assumes a NAME to correct, and " +
+                 "this refusal has none: " + rows[1].error;
+        } },
+
+      { name: "…and the Glow really is still on the layer",
+        tool: "list_properties",
+        args: function (ctx) {
+          return { comp: ctx.rbComp, layer: "ST RB Keep A",
+                   path: "effects" };
+        },
+        check: function (d) {
+          return /Glow/.test(JSON.stringify(d)) ||
+                 "the Glow went with the refusal: " +
+                 JSON.stringify(d).slice(0, 160);
+        } },
+
+      { name: "naming an effect the layer does not carry is the same class",
+        batchOpts: { rollback: true },
+        batch: function (ctx) {
+          return [
+            { tool: "apply_effect",
+              args: { comp: ctx.rbComp, layer: "ST RB Keep B",
+                      effect: "Tint" } },
+            { tool: "remove_effect",
+              args: { comp: ctx.rbComp, layer: "ST RB Keep A",
+                      effect: "Tint" } }
+          ];
+        },
+        check: function (rows) {
+          if (rows.length !== 2) return "rows " + rows.length;
+          if (!rows[0].ok) return "apply_effect failed: " + rows[0].error;
+          if (rows[1].ok) return "AE removed a Tint that was never there";
+          if (rows[0].rolledBack || rows[1].rolledBack) {
+            return "a remove_effect NAME miss rolled the round back";
+          }
+          return /Glow/.test(String(rows[1].error)) ||
+                 "the refusal does not say what the layer really " +
+                 "carries: " + rows[1].error;
+        } },
+
+      // The boundary that keeps the exemption honest: a remove_effect
+      // that really REMOVED one is a mutation like any other, and a
+      // round it shares with a real failure still goes whole.
+      { name: "but a remove_effect that really removed one rolls back",
+        batchOpts: { rollback: true },
+        batch: function (ctx) {
+          return [
+            { tool: "remove_effect",
+              args: { comp: ctx.rbComp, layer: "ST RB Keep B",
+                      effect: "Tint" } },
+            { tool: "duplicate_layer",
+              args: { comp: ctx.rbComp, layer: "ST RB No Such Layer" } }
+          ];
+        },
+        check: function (rows) {
+          if (rows.length !== 2) return "rows " + rows.length;
+          if (rows[1].ok) return "duplicate_layer should have failed";
+          return (rows[0].rolledBack && rows[1].rolledBack) ||
+                 "a real removal was left standing in a broken round: " +
+                 JSON.stringify(rows[0]).slice(0, 140);
+        } },
+
+      { name: "…so the Tint AE took off is back on the layer",
+        tool: "list_properties",
+        args: function (ctx) {
+          return { comp: ctx.rbComp, layer: "ST RB Keep B",
+                   path: "effects" };
+        },
+        check: function (d) {
+          return /Tint/.test(JSON.stringify(d)) ||
+                 "the rollback did not put the Tint back: " +
+                 JSON.stringify(d).slice(0, 160);
+        } },
+
       // ---- what the rollback reaches, and what its check can SEE ----
       //
       // Two questions the log carried for four passes, both answered in
