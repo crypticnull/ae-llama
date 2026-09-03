@@ -94,7 +94,6 @@ function report(data) {
   for (const r of by("0-baseline")) {
     say("  layer " + r.layerW + "x" + r.layerH + " in comp " + r.compW + "x" +
         r.compH + "  max=" + r.max + " min=" + r.min + " mean=" + r.mean);
-    say("  saveFrameToPng writes a file: " + r.saveFrameToPngWrites);
   }
 
   say("");

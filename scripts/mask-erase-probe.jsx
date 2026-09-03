@@ -21,13 +21,31 @@
  *   M4  the receipts the shipped tool gives today for the filed call and
  *       its neighbours
  *
- * THE INSTRUMENT. The obvious one does not work: comp.saveFrameToPng
- * exists on AE 26.3x87, throws nothing, and WRITES NO FILE -- measured
- * both with the comp open in a viewer and without (f.exists false,
- * f.length -1 every time). A byte compare against a file that was never
- * written calls every case identical, which is exactly the silent-success
- * shape this whole item is about, so it is recorded here rather than
- * quietly worked around. What does work is sampleImage through an
+ * THE INSTRUMENT. The first cut of this probe used comp.saveFrameToPng
+ * and got nothing back -- throws nothing, f.exists false, f.length -1 --
+ * and this header used to conclude from that that the API WRITES NO FILE
+ * on AE 26.3x87. That conclusion was almost certainly WRONG, and it is
+ * retracted here rather than left to be inherited:
+ *
+ *   - an earlier pass measured the same call WORKING on this machine:
+ *     407 bytes for a 160x120 frame, resolutionFactor honoured (227 at
+ *     half res), no viewer needed (WORKPLAN-LOG, item 5.8 prep);
+ *   - the SAME log records the failure mode this probe almost certainly
+ *     hit: "a folder that does not exist is a SILENT no-op -- no throw,
+ *     no file";
+ *   - the shipped save_frame tool calls saveFrameToPng and guards that
+ *     exact case up front (AELL_rqCheckOutput), which is why it works.
+ *
+ * So the honest state is CONTRADICTED, not measured: two real-AE
+ * readings disagree and one of them never ruled out a documented cause.
+ * Whoever next has AE should spend one minute on it -- create the folder,
+ * call it once, read f.length -- because save_frame is NOT in the real-AE
+ * suite, so nothing else re-measures it. It matters beyond tidiness: a
+ * frame comparator is the natural instrument for the self-verify track,
+ * and the retracted claim reads as a blocker on it.
+ *
+ * What this probe uses instead, and what its readings rest on, is
+ * sampleImage through an
  * expression: a slider on a null reads
  *   thisComp.layer(L).sampleImage(pt, [0.5,0.5], true, time)[3]
  * and postEffect:true means the alpha comes back AFTER the masks. That
@@ -175,7 +193,11 @@
     slider = fx.property("ADBE Slider Control-0001");
 
     var bare = readLayer();
-    record({ id: "0-baseline", saveFrameToPngWrites: false,
+    /* NOT a reading -- this was a hardcoded literal asserting the
+       retracted claim above, which made it unfalsifiable by the very
+       probe that printed it. Dropped rather than re-measured, because
+       this probe no longer calls saveFrameToPng at all. */
+    record({ id: "0-baseline",
              layerW: LW, layerH: LH, compW: comp.width, compH: comp.height,
              max: bare.max, min: bare.min, mean: bare.mean,
              points: bare.points });

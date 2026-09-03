@@ -18542,3 +18542,78 @@ AE harness run (770/770, green). Premiere was launched and closed by
 (`AELL PROBE 1..3`, `AELL PROBE SEQ`) and worked only in the scratch
 project under `%APPDATA%\AE-Llama\probes\`. No ComfyUI, no llama-server
 left running.
+
+## 2026-09-03 (remote session) — RETRACTION: saveFrameToPng is not broken
+
+Re-read of the overnight run's 27 passes on a higher-tier model. The run
+was good — 20 correct bumps, 6 correct non-bumps (the 12b passes, none
+of which touched `extension/`), harness 593 → 770/770, gate G0 closed
+unattended. One thing in it is wrong, and it propagated.
+
+**The false fact.** The 0.11.26 pass (mask erasure) built its probe on
+`comp.saveFrameToPng`, got nothing back — throws nothing, `f.exists`
+false, `f.length` -1 — and concluded that **the API writes no file on
+AE 26.3x87**. It wrote that into the log, the probe header, and its
+filed follow-up ("the `saveFrameToPng` failure is unexplained"). The
+0.11.33 and 0.11.35 passes then repeated it as settled ("still writes no
+file"), and pass 28 began building `save-frame-hazard-probe.*` to chase
+it (that work is in the owner's `loop-salvage-20260903-092915` stash).
+
+**Why it is wrong.** This same log already contains both halves of the
+answer, ~11 000 lines earlier:
+
+- item 5.8's prep measured the call **working** on this machine: 407
+  bytes for a 160x120 frame, `resolutionFactor` honoured (227 at half
+  res), no viewer needed, `comp.time` untouched;
+- and, in the list of what AE does silently, **"a folder that does not
+  exist is a SILENT no-op — `saveFrameToPng` returns normally and writes
+  nothing"** — which is exactly the symptom the probe reported.
+
+The shipped `save_frame` tool calls `saveFrameToPng` and passes
+`AELL_rqCheckOutput` first *specifically* to catch that case; its
+comment says so. So a tool in the product depends on the API the log now
+calls broken.
+
+**What was corrected here, and what was not.** The probe header is
+retracted in place and `scripts/mask-erase-probe.jsx`'s
+`saveFrameToPngWrites: false` is gone — it was a hardcoded literal, not
+a reading, which made the claim unfalsifiable by the probe that printed
+it. The API itself is graded **CONTRADICTED, not measured**: two
+real-AE readings disagree and the newer one never ruled out a documented
+cause. Nothing here re-measures it, because this session has no AE.
+
+**Why it is worth a minute of the next AE pass.** `save_frame` has 106
+stubbed assertions and **zero real-AE steps** (`grep -c save_frame
+extension/js/selftest.js` → 0), so the stub — which fakes the write — is
+the only thing exercising it every run. And a frame comparator is the
+natural instrument for the self-verify track, so a retracted "it writes
+nothing" reads as a blocker on that whole line of work. One minute:
+create the folder, call it once, read `f.length`. Then add a real-AE
+step so it can never drift again.
+
+**The process lesson, which is the durable part.** The log is now ~16 000
+lines and a pass reads it as an index, not end to end. A pass that
+measures something surprising has to grep the log for the same API
+before writing the surprise down as a platform fact — otherwise a
+throwaway probe's environment error becomes a product-level truth in one
+hop and is inherited by every pass after it. Three passes inherited this
+one.
+
+**Also flagged, not fixed** (needs an owner decision, not a pass):
+
+- **Prompt headroom is 67 bytes** (58933 of 59000). The 0.11.25 pass
+  already warned the "doc second sentence" seam it had been mining for
+  four wording passes was nearly exhausted; it is now. Routing fixes are
+  where the field HARM results come from, and the next one has nothing
+  to spend. This needs a structural saving, not another trim.
+- **Concentration**: 10 of 27 passes went to mask receipts, because each
+  mask pass filed the next mask item and the queue is served top-down.
+  Every defect was real and measured — this is a queue-shape question,
+  not a quality one.
+- **`hostscript.jsx` grew 11 953 → 13 731 lines in one night** (+15%),
+  much of it mask geometry (16 `AELL_mask*`/`AELL_parade*` functions).
+  Receipt *strings* were checked and are fine — 26–292 chars each, and
+  `for_each_layer` dedupes identical ones — so this is not the context
+  hazard the 0.11.17 pass fixed. Noted for maintenance weight only.
+
+No `extension/` change, so NO BUMP.

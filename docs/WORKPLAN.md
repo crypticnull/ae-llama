@@ -1697,6 +1697,23 @@ asked, answered from the 0.10.17 measurements — it is a per-call
 `maxIntermediateGB` disk guard now, not a format limit; no render test
 needed).
 
+
+### NEXT (one minute of real AE, from the 2026-09-03 retraction)
+
+- **Re-measure `comp.saveFrameToPng` and add a real-AE step.** The log
+  currently contains two contradictory real-AE readings: item 5.8's prep
+  measured it writing 407 bytes with `resolutionFactor` honoured, and the
+  0.11.26 pass concluded it writes nothing — without ruling out the
+  silent no-op this same log documents for a **folder that does not
+  exist**. The shipped `save_frame` tool guards exactly that case and
+  depends on the call. Create the folder, call it once, read `f.length`.
+  Then add a `save_frame` step to `extension/js/selftest.js`: it has 106
+  stubbed assertions and **zero** real-AE steps, and the stub fakes the
+  write, so nothing re-measures it. Unblocks the frame-comparator
+  instrument the self-verify track wants. Do NOT build
+  `save-frame-hazard-probe` from the salvage stash before doing this —
+  it was written to chase the retracted claim.
+
 ## 8. Natural-language robustness — the paraphrase matrix (local; owner-requested 2026-08-30)
 
 The owner's words: "a full natural language pass ensuring that
