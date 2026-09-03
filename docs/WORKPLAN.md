@@ -2037,15 +2037,26 @@ this order, one bullet per pass:
     strings only). Harness 644 -> 653; +19 stub checks, 8 RED against
     the reverted host, and the canned host grew the `set_mask` case it
     never had (which is why no stub could see this class).
-  - THEN, and row 35 stays OPEN for it: **the `vague` phrasing routes
-    "too sharp" to a MASK.** Three runs, three different mask shapes
-    (full-frame add, full-frame subtract, a centred 400x400 ellipse) —
-    its one pass came from hitting the single shape 0.11.21's add_mask
-    warning covers, so it was luck, not routing. The lever is ORDER, the
-    0.11.13 lesson: the soften/blur clause lives INSIDE the crop/mask
-    bullet, which opens by naming add_mask. Lift it into a bullet of its
-    own; it needs a paired cut (58926 against a 59000 ceiling). Gate:
-    `--variants --steps 35` at 4 pass.
+  - ~~the `vague` phrasing routes "too sharp" to a MASK~~ DONE
+    2026-09-03 (0.11.25). **ROW 35 IS CLOSED — 4 pass, 0 miss, 0 HARM,
+    in BOTH re-runs**, every phrasing a clean apply_effect
+    {effect: 'Gaussian Blur'} and not one mask anywhere. The lever was
+    ORDER, exactly as filed and exactly the 0.11.13 lesson: the
+    soften/blur clause already carried 'too sharp' but lived INSIDE the
+    crop/mask bullet, behind a "But", in a bullet that OPENS by naming
+    add_mask — so the model filed a blur as a sub-case of masking and
+    stopped reading at the first tool. It is its own plain-English
+    bullet now, placed BEFORE the crop bullet, and it names add_mask as
+    the anti-target outright. A NET CUT: 58926 -> **58839**. Paid by
+    grid_layout's doc dropping "with nothing selected it grids ALL
+    content layers in the comp", which had been WRONG since 0.11.22
+    stopped a guessed grid taking the backdrop and which the rules
+    bullet above already says correctly — so the cut is a correction
+    too. Row 30 re-run to prove the cut is safe: still 4 pass, 0 miss,
+    0 HARM. Harness 653/653 unchanged (a routing fix is prompt-side;
+    real AE cannot see it — the field matrix is its instrument).
+    tests/test-chat-probe.js +10 assertions pinning BOTH halves,
+    separation and order; all 10 RED against the reverted prompt.
 - **DEFERRED until a sandbox design exists:** D/F/H3 rows (project
   mutation, renders, mass-delete) — wiring them against the live
   project is the harm the whitelist cannot contain. Also deferred:

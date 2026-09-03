@@ -2436,7 +2436,7 @@ for (const name of ["reorder_layers", "remove_effect", "delete_mask",
   assert(/'rectangle'\|'ellipse'\|'custom'/.test(defsByName.add_mask.args),
          "add_mask's args line names the shapes the rules no longer repeat");
 
-  // Softening is not masking, and nothing in the prompt said so.
+  // Softening is not masking, and a blur may not be a SUB-CASE of masking.
   //
   // Measured 2026-09-02, real AE + the real 32B, row 35 ("soften the
   // background"): 2 of 4 phrasings reached add_mask. "The background is
@@ -2445,18 +2445,46 @@ for (const name of ["reorder_layers", "remove_effect", "delete_mask",
   // HARM, the BG cut about instead of blurred. The prompt taught how to
   // REMOVE a blur ("get rid of the blur" = remove_effect) and never once
   // how to ADD one, while the only soft-sounding word anywhere in it was
-  // this bullet's own "a vignette is a big feathered ellipse". So the
-  // fix is where the gap is: the same bullet, with the anti-target on it.
+  // the mask bullet's own "a vignette is a big feathered ellipse". 0.11.21
+  // put the phrase list in — INSIDE the crop/mask bullet, after a "But".
+  //
+  // Re-measured 2026-09-03 (0.11.24's row-35 re-run): the vague phrasing
+  // was HARM in two of three runs and its one pass came from landing on
+  // the single mask shape add_mask can honestly warn about — luck, not
+  // routing. The remaining lever is ORDER, the 0.11.13 lesson: a bullet
+  // that OPENS by naming add_mask is read as "this is about masks", and
+  // the model stops there. So the softening clause is its OWN bullet now,
+  // and it comes FIRST. Both halves are pinned — separation and order —
+  // because either one alone lets the old shape back in.
+  const blurRule = bullets.filter(b => /^- 'soften it/.test(b))[0];
+  assert(!!blurRule,
+         "softening is its own plain-English bullet, not a tail clause " +
+         "on the crop/mask bullet");
+  const blurFlow = (blurRule || "").replace(/\s+/g, " ");
   for (const phrase of ["soften it", "blur it", "too sharp",
                         "out of focus"]) {
-    assert(flow.indexOf(phrase) !== -1,
-           "the mask bullet carries the softening phrase '" + phrase + "'");
+    assert(blurFlow.indexOf(phrase) !== -1,
+           "the blur bullet carries the softening phrase '" + phrase + "'");
   }
-  assert(/apply_effect/.test(flow) && /Gaussian Blur/.test(flow),
+  assert(/apply_effect/.test(blurFlow) && /Gaussian Blur/.test(blurFlow),
          "…and routes them to apply_effect, not add_mask");
-  assert(/feather softens the mask\s+EDGE, never the picture/.test(
-           flow.replace(/\s+/g, " ")),
+  assert(/feather softens the mask EDGE, never the picture/.test(blurFlow),
          "…and says why the mask reading is wrong: a feather is an EDGE");
+  assert(/never add_mask/.test(blurFlow),
+         "…and names add_mask as the measured wrong turn, outright");
+  // ORDER. The crop bullet opens with add_mask, so a model reading top-down
+  // must meet the blur bullet BEFORE it — otherwise "too sharp" is filed
+  // under masking again and the 0.11.13 failure repeats verbatim.
+  const blurAt = rules.indexOf("- 'soften it");
+  const cropAt = rules.indexOf("- 'crop");
+  assert(blurAt !== -1 && cropAt !== -1 && blurAt < cropAt,
+         "…and it is read BEFORE the bullet that opens by naming add_mask " +
+         "(blur at " + blurAt + ", crop at " + cropAt + ")");
+  // The crop bullet may not quietly take the clause back: one home per
+  // phrase, or the model gets two answers to one question.
+  assert(flow.indexOf("too sharp") === -1 &&
+         flow.indexOf("Gaussian Blur") === -1,
+         "the crop/mask bullet no longer carries the blur routing itself");
   // Paid for, both halves measured with buildSystemPrompt().length:
   // add_mask's doc dropped the worked "bottom half" example (the bullet
   // above already carries the phrase, and the doc keeps one copy of it)
@@ -2509,6 +2537,19 @@ for (const name of ["reorder_layers", "remove_effect", "delete_mask",
          "add_null is ruled out once, in the rules, not twice");
   assert(defsByName.grid_layout.desc.indexOf("cameras/lights excluded") === -1,
          "…and the doc no longer lists what was never grid content");
+  // Third cut, and this one is a CORRECTION as well as a saving. It paid
+  // for lifting the softening clause into a bullet of its own (+12):
+  // 58926 -> 58839, measured with buildSystemPrompt().length. The doc's
+  // "with nothing selected it grids ALL content layers in the comp" had
+  // been WRONG since 0.11.22 stopped a guessed grid taking the backdrop,
+  // and the rules bullet above already says the same thing correctly, so
+  // the doc was promising the model something the tool would not do.
+  assert(defsByName.grid_layout.desc.indexOf("ALL content layers") === -1,
+         "grid_layout's doc no longer promises a guessed grid takes " +
+         "every content layer — 0.11.22 made that false");
+  assert(defsByName.grid_layout.args.indexOf("omit = user's selection") !== -1,
+         "…and the selection fallback survives on the args line, which " +
+         "compact mode keeps");
 }
 {
   // A cheap-feeling entrance is an EASING complaint, not a restaging job.

@@ -15695,3 +15695,160 @@ sweeps; all three chat-probe runs reported "cleanup: removed 1 project
 item(s)" and the bottom-of-suite check confirmed nothing of the run's
 remains. The probe's llama-server was started and stopped by the probe
 itself. No ComfyUI.
+
+## 2026-09-03 — row 35 `vague`: a blur read as a sub-case of masking (0.11.25)
+
+**Item:** section 8, the last open row-35 bullet — "the `vague` phrasing
+routes 'too sharp' to a MASK". Filed by the 0.11.24 pass as priority 1.
+
+**Harness at the start of the pass: 653/653 PASSED**, so the workplan
+picked the item rather than a repair.
+
+### The defect was ORDER, and the phrase list was already right
+
+0.11.21 put `'soften it / blur it / too sharp / out of focus' =
+apply_effect {effect: 'Gaussian Blur'}` into the prompt, and 0.11.24's
+re-run still measured the vague phrasing at HARM in two of three runs.
+That is the tell: the WORDS the user typed were in the prompt verbatim
+and the model still reached for a mask. So nothing was missing — the
+clause was in the wrong PLACE. It sat inside the crop/mask bullet,
+behind a "But", in a bullet whose first line reads
+`'crop / chop off the lower half / ... / vignette' = add_mask`.
+
+This is the 0.11.13 lesson a second time, and it is worth stating in the
+general form because it has now cost three passes: **a model reading a
+bullet stops at the first tool the bullet names.** 0.11.13 measured it
+on the clean-up bullet (five removal tools listed before the "ask"
+clause, all four phrasings stopped at the tools). Here the bullet opens
+with add_mask, so everything under it is read as being ABOUT masks —
+including the sentence that says not to use one.
+
+The 0.11.24 evidence that this was routing and not behaviour: three runs
+produced three DIFFERENT mask shapes (full-frame add, full-frame
+subtract, a centred 400x400 ellipse) and the single pass came from
+landing on the one shape 0.11.21's add_mask warning can honestly cover.
+No receipt can fix that, because the wrong choice is made before any
+tool is called.
+
+### The change
+
+The softening clause is its own plain-English bullet, and it comes
+FIRST — before the bullet that opens by naming add_mask:
+
+    - 'soften it / blur it / too sharp / out of focus' = apply_effect
+      {effect: 'Gaussian Blur'} — never add_mask: a mask feather
+      softens the mask EDGE, never the picture.
+    - 'crop / chop off the lower half / hide the bottom half / only
+      the top shows / cut a hole / vignette' = add_mask — never
+      set_layer_timing (that trims TIME), scale or anchor. A hole is
+      mode 'subtract'; a vignette is a big feathered ellipse.
+
+`never add_mask` is now stated outright rather than implied by the EDGE
+sentence, and the crop bullet keeps its own anti-targets untouched. One
+wording change, per the section 8 rule.
+
+### The cut, which is also a correction
+
+Splitting the bullet cost +12 (58926 -> 58938, headroom 62 against the
+59000 ceiling). Paid by deleting a sentence from `grid_layout`'s doc:
+
+    Omit 'layers' to use the selection; with nothing selected it grids
+    ALL content layers in the comp.
+
+Both halves were dead. The first is on the args line
+(`layers?: [name|index] (omit = user's selection)`), which compact mode
+keeps. The second had been **factually wrong since 0.11.22**, which
+stopped a guessed grid taking a full-frame backdrop — and the rules
+bullet above it already carries the corrected wording ("grids ALL
+content layers except a full-frame backdrop"). So the doc was promising
+the model something the tool would refuse to do. Deleting it is a
+correction that happens to pay for the bullet.
+
+**Prompt full 58926 -> 58839** (a net cut of 87, headroom 74 -> 161).
+Compact 39562 -> 39574: the +12 lands there too because the rules block
+is never compacted, while the doc cut does not, because compactDesc
+keeps only a doc's FIRST sentence. That asymmetry is the reason a
+second-sentence cut is the right currency for a rules addition.
+
+### Verification
+
+- **Field, the gate the workplan named (`--variants --steps 35` at 4
+  pass) — met, and met TWICE. 4 pass, 0 miss, 0 HARM in both runs.**
+  Every one of the four phrasings called `apply_effect {layer: 'BG',
+  effect: 'Gaussian Blur'}` as its first tool; not one mask was created
+  in eight runs. **Row 35 is CLOSED.** Transcripts:
+  `logs/chat-probe-2026-09-03T06-01-17.md` and `...T06-01-53.md`.
+- **Row 30 re-run to prove the CUT is safe** — the sentence deleted is
+  grid_layout's, and row 30 is the grid row. Still **4 pass, 0 miss,
+  0 HARM**. Transcript: `logs/chat-probe-2026-09-03T06-02-30.md`.
+- **Real AE harness 653/653 PASSED**, unchanged before and after. That
+  is the honest result and not a gap: this pass changed a prompt string
+  and a tool doc, and `selftest.js` drives host tools directly with no
+  model in the loop, so there is nothing in real AE for it to see. The
+  field matrix is this class's instrument.
+- `tests/test-chat-probe.js` +10 assertions, **all 10 RED against the
+  reverted prompt**, naming the exact defect. They pin BOTH halves,
+  because either alone lets the old shape back in: SEPARATION (the
+  softening clause is its own bullet, carries all four phrases, routes
+  to apply_effect, says `never add_mask`, and the crop bullet no longer
+  carries 'too sharp' or 'Gaussian Blur' itself) and ORDER (the blur
+  bullet's index is a real index and is less than the crop bullet's).
+- Full stub sweep: 0 red. `docs/CAPABILITIES.md` regenerated — no diff,
+  its table does not carry the sentence that went.
+- `extension/` changed, so BUMPED: 0.11.24 -> **0.11.25**.
+
+### Notes / assumptions
+
+- **The order assertion I nearly shipped was vacuous**, and the shape
+  recurs, so it is written down: `rules.indexOf(a) < rules.indexOf(b)`
+  is TRUE when `a` is ABSENT, because -1 is less than everything. It
+  passed against the reverted prompt in the red run — 9 of 10 failed,
+  that one did not — which is how it was caught. It is now
+  `blurAt !== -1 && cropAt !== -1 && blurAt < cropAt`. Any order
+  assertion needs an existence check on both operands.
+- **Row 35's canonical was a ONE-call round in the second run**
+  (apply_effect alone, no set_effect_param). Scored pass and correctly
+  so — "a touch" of softening is served by Gaussian Blur's default —
+  but noted because the verdict function accepts either shape and a
+  future tightening should not read the one-call form as a miss.
+
+### Filed for later passes, in priority order
+
+1. **A full-frame SUBTRACT mask hides the entire layer and says
+   nothing.** Unchanged from the 0.11.24 filing, and now the top item:
+   `add_mask {bounds: [0,0,1920,1080], mode: 'subtract', feather: 100}`
+   erases a layer on an `ok` receipt. 0.11.21 left subtract and inverted
+   silent deliberately ("that is a deliberate wipe"), defensible for a
+   small subtract mask and much weaker for one covering the WHOLE layer.
+   Needs its own one-sidedness argument before anything is built. Note
+   that row 35 no longer PRODUCES this shape, so it needs a direct probe
+   rather than a variants run.
+2. **Row 30 typo burns six `center_anchor_point` calls before the
+   grid_layout that works.** Passes, so it is cost and not harm.
+3. **The prompt ceiling is the real constraint on this whole track.**
+   Headroom is 161 and the last four wording passes have each needed a
+   paired cut. The doc-second-sentence seam is nearly mined out (this
+   pass took the last obviously-dead one). Before the next rules
+   addition, consider whether a structural saving exists — e.g. the
+   tool table's args lines are never compacted and several repeat their
+   own doc.
+4. Everything else from the 2026-09-03 lists is unchanged: the dotted
+   `effect.<Fx>.<Param>` spec still rolling a round back, the
+   `distribute_property` mutate-then-throw hole, a bad VALUE not being
+   `argFault`, widening the `errArg` rollback exemption (filed item 1 of
+   the 0.11.24 pass), step 2's naming flake, the destructive-refusal
+   wording on `delete_layer` / `delete_mask` / `remove_effect`,
+   `property: string` in TOOL_DEFS, `POST /tokenize`, the `comfyUrl`
+   8188/8000 mismatch on this machine, the harness answering a modal
+   with WORDS, `starved` wording, delete_mask warning on a live
+   expression, the unmeasured controller GROUP and non-en_US locale,
+   and `capParams`.
+
+### Machine state
+
+AE running, project untouched and open, no dialog raised. **AE was never
+closed and its project was never closed.** All three chat-probe runs
+reported "cleanup: removed 1 project item(s)" and the harness's
+bottom-of-suite check confirmed nothing of the suite's remains. The
+probe's llama-server was started and stopped by the probe itself. No
+ComfyUI.

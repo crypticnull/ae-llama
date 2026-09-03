@@ -249,9 +249,7 @@
             "'Grid X Spacing'/'Grid Y Spacing'/'Grid Columns' sliders " +
             "drive spacing AND column count live, and the grid centers " +
             "on the null's position (all expressions generated " +
-            "host-side). Omit 'layers' to use the selection; with nothing " +
-            "selected it grids ALL content layers in the comp. " +
-            "Re-running re-flows the rig.",
+            "host-side). Re-running re-flows the rig.",
       args: "{comp?: string, layers?: [name|index] (omit = user's selection), columns?: int ('3 by 2' = 3; default ~square; 1 = column, n = row), spacingX?: px, spacingY?: px, controlLayer?: string = 'GRID CTRL'}" },
     { name: "apply_expression_preset", mutating: true,
       desc: "Apply a known-good expression. Presets: wiggle (frequency/" +
@@ -914,13 +912,13 @@
       "  trim). Never fake timing with opacity keyframes.",
       "- 'attach / stick / pin it to X', 'make it follow / ride along",
       "  with X' = set_layer_parent {layer, parent: 'X'}.",
+      "- 'soften it / blur it / too sharp / out of focus' = apply_effect",
+      "  {effect: 'Gaussian Blur'} — never add_mask: a mask feather",
+      "  softens the mask EDGE, never the picture.",
       "- 'crop / chop off the lower half / hide the bottom half / only",
       "  the top shows / cut a hole / vignette' = add_mask — never",
       "  set_layer_timing (that trims TIME), scale or anchor. A hole is",
-      "  mode 'subtract'; a vignette is a big feathered ellipse. But",
-      "  'soften it / blur it / too sharp / out of focus' = apply_effect",
-      "  {effect: 'Gaussian Blur'} — a mask feather softens the mask",
-      "  EDGE, never the picture.",
+      "  mode 'subtract'; a vignette is a big feathered ellipse.",
       "- 'stop it moving / un-animate it / no more fading' =",
       "  remove_keyframes, times omitted. Motion from an EXPRESSION is",
       "  cleared with set_expression {expression: ''} — remove_keyframes",
