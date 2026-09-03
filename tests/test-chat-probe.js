@@ -1680,6 +1680,16 @@ function everySquare(state, fn) {
     assert(v && /never reached the user/.test(v), "a swallowed refusal fails");
   }
   {
+    // A refusal does not have to be phrased as a negation. Verbatim from
+    // the 2026-09-03 --variants run of this row: the model relayed the
+    // missing audio in full and the check called it a FAIL because
+    // 'lacks' was not on the word list.
+    assert(s.check(before, { before, tools: [refused],
+      replies: ["The comp 'Probe Room' lacks audio. Import an audio file " +
+                "first to proceed with making 'Beta' throb."] }) === null,
+      "'lacks audio' is a refusal relayed to the user, not a false claim");
+  }
+  {
     const v = s.check(before, { before, tools: [refused],
       replies: ["Beta now throbs in time with the music!"] });
     assert(v && /does not tell the user/.test(v),
@@ -2550,6 +2560,67 @@ for (const name of ["reorder_layers", "remove_effect", "delete_mask",
   assert(defsByName.grid_layout.args.indexOf("omit = user's selection") !== -1,
          "…and the selection fallback survives on the args line, which " +
          "compact mode keeps");
+}
+{
+  // An effect ask is not a request for a slider rig.
+  //
+  // Measured 2026-09-03, real AE + the real 32B, row 36 vague ("everything
+  // should sit off the background a bit — shadow them, not it"): the very
+  // first round was add_control {layer: "CTRL"} three times over — a layer
+  // that did not exist — and after the rollback the model built the null
+  // for real. Every non-BG layer ended up shadowed, so the routing was
+  // right; what was wrong was the SIZE of the answer. Layer count 8 -> 9,
+  // graded HARM. The SCOPE bullet already listed what may not be bolted on
+  // (grids, effects, styling, animation) and a control rig was not in it.
+  const flat = rules.replace(/\s+/g, " ");
+  const scope = (flat.split("- SCOPE: do ONLY")[1] || "").split("- ")[0];
+  assert(scope.length > 0, "the rules still carry the SCOPE bullet");
+  assert(/never an unasked CONTROL RIG/.test(scope),
+         "SCOPE names the unasked control rig as an over-build");
+  assert(/an effect ask \('shadow them \/ blur these'\) is apply_effect/
+           .test(scope),
+         "…carries the measured vocabulary and routes it to apply_effect");
+  assert(/many: for_each_layer/.test(scope),
+         "…names the plural tool, so 'them' does not become a rig");
+  for (const anti of ["no add_null", "no add_control sliders",
+                      "no link_property",
+                      "no set_effect_param values they did not ask for"]) {
+    assert(scope.indexOf(anti) !== -1,
+           "…and names '" + anti + "' as an anti-target");
+  }
+  // set_effect_param is on the anti-list rather than in the route on
+  // purpose. Measured 2026-09-03 with an earlier cut of this bullet that
+  // read "apply_effect (many: for_each_layer) + set_effect_param": both
+  // field runs then had the model inventing settings nobody asked for
+  // (Shadow Color [0,0,0], Opacity 50, Distance 20, Angle 120). Naming a
+  // tool in the ROUTE of a scope rule reads as permission to use it.
+  assert(!/for_each_layer\) \+ set_effect_param/.test(scope),
+         "…and the route itself does not invite unasked parameter values");
+  // The exemption has to travel WITH the ban, or the rule reads as a
+  // blanket refusal and the audio/beat bullet below it loses its link.
+  assert(/Rig only when they ask to steer it/.test(scope) &&
+         /explicit request always outranks this/.test(scope),
+         "…while an explicit request to steer it still outranks the rule");
+  // Paid for: the MACRO bullet carried the same exemption in its own
+  // words, and audio_to_keyframes' doc repeated the link_property recipe
+  // the beat bullet already spells out in full. 58839 -> 58901 with the
+  // ban in, measured with buildSystemPrompt().length.
+  const macro = (flat.split("- MACRO TOOLS ARE COMPLETE")[1] || "")
+                  .split("- '")[0];
+  assert(macro.length > 0, "the rules still carry the MACRO bullet");
+  assert(macro.indexOf("WHEN THE USER ASKS") === -1 &&
+         macro.indexOf("outranks") === -1,
+         "the macro bullet no longer states the exemption a second time");
+  assert(defsByName.audio_to_keyframes.desc.indexOf("controlEffect") === -1 &&
+         /controlEffect: 'Both Channels'/.test(flat),
+         "the beat recipe is spelled once, in the rules, not twice");
+  // ORDER, the 0.11.13/0.11.25 lesson: SCOPE must be met BEFORE the
+  // bullets that name add_null and link_property approvingly.
+  const scopeAt = rules.indexOf("- SCOPE: do ONLY");
+  const beatAt = rules.indexOf("- 'dance to the music");
+  assert(scopeAt !== -1 && beatAt !== -1 && scopeAt < beatAt,
+         "…and SCOPE is read before the bullet that prescribes " +
+         "link_property (scope at " + scopeAt + ", beat at " + beatAt + ")");
 }
 {
   // A cheap-feeling entrance is an EASING complaint, not a restaging job.
@@ -3471,6 +3542,22 @@ function icons(state) {
     const v = each.check(after, { before: before, tools: [] });
     assert(/no layer carries a drop shadow/.test(v || ""),
            "no shadow anywhere is a fail (got: " + v + ")");
+  }
+  {
+    // The measured 2026-09-03 HARM: every layer shadowed AND a CTRL null
+    // built to drive it. The effect half is perfect, so a check that
+    // stopped at "is it shadowed?" would call this a pass — the count is
+    // the only thing that sees an answer bigger than the question.
+    uid = 0; const after = iconWorld();
+    icons(after).forEach(shadow);
+    shadow(after.layers[0]);
+    after.layers.unshift({ name: "CTRL", index: 1, effects: 4,
+                           effectNames: ["Shadow Offset X", "Shadow Offset Y",
+                                         "Shadow Blur", "Shadow Opacity"] });
+    const v = each.check(after, { before: before });
+    assert(/layer count went from 8 to 9/.test(v || ""),
+           "a control rig bolted onto a correct effect pass is a fail " +
+           "(got: " + v + ")");
   }
 }
 

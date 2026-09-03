@@ -2175,6 +2175,37 @@ this order, one bullet per pass:
     698 -> **710**; +23 stub assertions with 11 RED against the reverted
     host, and 5 of the new real-AE steps RED against the reverted canned
     host.
+  - ~~**row 36 vague over-builds a CTRL null rig for a one-line shadow
+    ask**~~ DONE 2026-09-03 (0.11.30). **ROW 36 IS CLOSED — 4 pass, 0
+    miss, 0 HARM, in every one of four field runs.** The last open HARM
+    in the section 8 matrix, and the routing was never wrong: all seven
+    non-BG layers got their Drop Shadow. What was wrong was the SIZE of
+    the answer — the model opened with `add_control {layer: "CTRL"}`
+    three times over on a layer that did not exist, built the null for
+    real after the rollback, and the comp went 8 layers to 9. Prompt-side
+    by nature (the choice happens before any tool call, so no receipt can
+    reach it), and the lever was an omission rather than an order
+    problem: the SCOPE bullet already listed what may not be bolted on —
+    grids, effects, styling, animation — and a CONTROL RIG was not in it.
+    It is now, with the measured vocabulary and the three anti-targets
+    named outright (`no add_null, no add_control sliders, no
+    link_property`), and the exemption travels with the ban so the
+    audio/beat bullet below it keeps its link. **A first cut of the
+    bullet routed the ask to "apply_effect (many: for_each_layer) +
+    set_effect_param" and both field runs under it had the model
+    inventing settings nobody asked for** (Shadow Color [0,0,0], Opacity
+    50, Distance 20, Angle 120) — naming a tool in the ROUTE of a scope
+    rule reads as permission to use it, so set_effect_param moved to the
+    anti-list and the last two runs invented nothing. Paid for by the
+    MACRO bullet's second copy of the same exemption and by
+    audio_to_keyframes' doc repeating the link_property recipe the beat
+    bullet spells out in full: prompt 58839 -> **58933** (ceiling 59000),
+    compact 39574 -> 39803. Step 24 (the beat row, the one that needs
+    link_property AFTER audio_to_keyframes) re-run to prove the cuts are
+    safe. Harness 710/710 unchanged — a routing fix is prompt-side and
+    real AE cannot see it. tests/test-chat-probe.js +14 assertions, 9 of
+    them RED against the reverted prompt, plus the first check-side
+    assertion for the CTRL-null shape itself.
 - **DEFERRED until a sandbox design exists:** D/F/H3 rows (project
   mutation, renders, mass-delete) — wiring them against the live
   project is the harm the whitelist cannot contain. Also deferred:

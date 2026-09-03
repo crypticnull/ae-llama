@@ -199,11 +199,9 @@
     { name: "audio_to_keyframes", mutating: true,
       desc: "Convert audio amplitude to keyframes: adds a null carrying " +
             "Left/Right/Both Channels sliders keyframed to the loudness, " +
-            "one key per frame. Use it for anything beat-driven — then " +
-            "link_property {controlLayer: <the null>, controlEffect: " +
-            "'Both Channels', scale: n} drives scale/opacity/position " +
-            "from the music ('sync to the beat' = this then " +
-            "link_property). AE's own command reads the WHOLE comp mix " +
+            "one key per frame. Use it for anything beat-driven " +
+            "('sync to the beat' = this then link_property). " +
+            "AE's own command reads the WHOLE comp mix " +
             "and only inside the work area; this tool isolates 'layer' " +
             "by muting the others for the conversion and covers the " +
             "whole comp unless range says otherwise, and says so in the " +
@@ -798,17 +796,21 @@
       "  pass layers: [] — omit the argument instead.",
       "- SCOPE: do ONLY what the user asked, then stop. Never bolt on",
       "  extra steps they did not request (grids, effects, styling,",
-      "  animation). Defaults decide HOW a requested step runs — never",
-      "  WHAT gets done.",
+      "  animation) and never an unasked CONTROL RIG: an effect ask",
+      "  ('shadow them / blur these') is apply_effect (many:",
+      "  for_each_layer) and NOTHING else — no add_null, no add_control",
+      "  sliders, no link_property, no set_effect_param values they did",
+      "  not ask for. Rig only when they ask to steer it ('one slider",
+      "  for all of them'); an explicit request always outranks this.",
+      "  Defaults decide HOW a requested step runs — never WHAT gets",
+      "  done.",
       "- MACRO TOOLS ARE COMPLETE: when grid_layout /",
       "  split_layer_into_chunks / stagger_layers succeeds, the request",
       "  it covers is DONE — grid_layout's null ALREADY has the X/Y",
       "  spacing and Columns sliders ('controllers'). Do not rebuild or",
-      "  augment what a macro just delivered on your own initiative;",
-      "  extra nulls, controls, or links are fine WHEN THE USER ASKS for",
-      "  them (an explicit request always outranks this rule). Never",
-      "  drive a control null's own Transform with expressions as a",
-      "  workaround for a failed call — report the failure instead.",
+      "  augment what a macro just delivered on your own initiative.",
+      "  Never drive a control null's own Transform with expressions",
+      "  as a workaround for a failed call — report the failure.",
       "- 'put N copies/shapes in a comp' = create ONE layer, then ONE",
       "  duplicate_layer call with {count: N-1}. Never chain single",
       "  duplicates, and NEVER give two layers the same name.",

@@ -16833,3 +16833,198 @@ probe created `AELL Mask Ellipse Probe` and removed it again (comp and
 solid source both), and the harness ran twice entirely in the suite's own
 `ST ` namespace with its bottom-of-run check confirming nothing remains.
 No Premiere this pass. No llama-server, no ComfyUI.
+
+## 2026-09-03 - an effect ask is not a request for a slider rig (0.11.30)
+
+WORKPLAN section 8, the top item filed by the 0.11.29 pass and the LAST
+OPEN HARM in the whole paraphrase matrix: **row 36 vague over-builds a
+`CTRL` null rig for a one-line shadow ask.** Closed.
+
+Harness green at the top of the pass (710/710), so the workplan's own
+rule sends this one to the section 8 backlog.
+
+### What was wrong
+
+Row 36 vague is "everything should sit off the background a bit - shadow
+them, not it". Read back from `logs/chat-probe-2026-09-03T03-02-49.md`,
+the model's VERY FIRST round was
+
+    add_control {type: "slider", name: "Shadow Offset X", layer: "CTRL"}
+    add_control {type: "slider", name: "Shadow Offset Y", layer: "CTRL"}
+    add_control {type: "slider", name: "Shadow Opacity",  layer: "CTRL"}
+
+on a layer that did not exist. It took the grounded roster, created the
+null for real on the next round, hung four sliders on it, shadowed the
+seven non-BG layers correctly - and the comp went from 8 layers to 9, so
+the step's "an effect pass should not add or remove layers" check fired.
+
+The ROUTING was never wrong: every phrasing of this row lands the Drop
+Shadow on the right seven layers. What was wrong was the SIZE of the
+answer, and the lever for that is prompt-side by nature - the decision
+happens before any tool call, so no receipt can reach it.
+
+The lever turned out to be an OMISSION, not the order problem the last
+two routing passes found. The SCOPE bullet already existed and already
+listed what may not be bolted on - "grids, effects, styling, animation" -
+and a CONTROL RIG was not on the list. Nothing else in the prompt says
+"do not build one". The `MACRO TOOLS ARE COMPLETE` bullet comes closest,
+and it is scoped to what happens AFTER grid_layout / stagger_layers
+succeeds; a bare shadow ask never reaches it.
+
+### The change (ONE rules change, as the bullet requires)
+
+SCOPE now carries the ban, the measured vocabulary and the exemption:
+
+    ... and never an unasked CONTROL RIG: an effect ask ('shadow them /
+    blur these') is apply_effect (many: for_each_layer) and NOTHING else
+    - no add_null, no add_control sliders, no link_property, no
+    set_effect_param values they did not ask for. Rig only when they ask
+    to steer it ('one slider for all of them'); an explicit request
+    always outranks this.
+
+**A first cut of that sentence made things worse, and the field caught
+it.** It read `is apply_effect (many: for_each_layer) + set_effect_param
+and NOTHING else`, and under that wording both runs had the model
+inventing settings nobody asked for - `Shadow Color [0,0,0]`,
+`Opacity 50`, `Distance 20`, `Angle 120`. Naming a tool in the ROUTE of a
+scope rule reads as permission to use it. set_effect_param moved to the
+anti-list with "values they did not ask for", and the last two runs
+invented nothing. That is pinned as its own assertion so the wording
+cannot drift back.
+
+Paid for with two cuts, both second copies:
+
+- the MACRO bullet's "extra nulls, controls, or links are fine WHEN THE
+  USER ASKS for them (an explicit request always outranks this rule)" -
+  SCOPE now states that exemption once, above it, and MACRO keeps "on
+  your own initiative", which implies it;
+- `audio_to_keyframes`' doc repeating the whole `link_property
+  {controlLayer, controlEffect: 'Both Channels', scale}` recipe that the
+  beat rules bullet spells out in full. The doc keeps its ONE phrase
+  ('sync to the beat'), which is the rule CLAUDE.md states and which
+  test-chat-probe enforces per tool.
+
+Prompt full 58839 -> **58933** (ceiling 59000, headroom 161 -> 67);
+compact 39574 -> 39803. The addition lives in the rules block, which
+compact never touches, so compact could only be paid for from the rules
+themselves - the MACRO cut is the whole of that payment.
+
+### The field result: ROW 36 IS CLOSED
+
+Four `--variants --steps 36` runs against the real 32B in real AE, all
+four **4 pass, 0 miss, 0 HARM** (runs 1-2 under the first cut of the
+bullet, runs 3-4 under the shipped wording):
+
+    run 1  canonical/casual/vague/typo   pass pass pass pass
+    run 2  canonical/casual/vague/typo   pass pass pass pass
+    run 3  canonical/casual/vague/typo   pass pass pass pass
+    run 4  canonical/casual/vague/typo   pass pass pass pass
+
+`add_control`, `add_null` and `link_property` appear **zero times in all
+sixteen runs**. Every phrasing is now apply_effect or for_each_layer and
+nothing else. Transcripts: `logs/chat-probe-2026-09-03T08-52-24.md`,
+`08-53-19`, `08-54-35`, `08-55-19`.
+
+### The safety row, and a false FAIL it found
+
+The two cuts both touch the rig vocabulary, so step 24 - "sync a layer to
+the music", the one row that NEEDS link_property after
+audio_to_keyframes - was re-run as the control: **3 pass, 1 miss, 0
+HARM**, and all three paraphrases still went `audio_to_keyframes` ->
+`link_property` in one shot. Neither the ban nor the doc cut suppressed
+the rig that is asked for.
+
+The one miss is the step's own CHECK, not the product. Verbatim, the
+model answered "The comp 'Probe Room' lacks audio. Import an audio file
+first to proceed with making 'Beta' throb" - an honest refusal, relayed
+in full - and the check called it a FAIL because every word on its
+`declined` list is a NEGATION and that sentence has none. `lack\w*` added
+to the list, with the sentence itself as a stub assertion (RED against
+the reverted probe). Fixed here rather than filed because it sits in the
+acceptance gate: left alone it would fail the next pass that touches this
+row for a reason that is not about that pass.
+
+### Verification
+
+- **Four field runs of row 36** as above; the safety row re-run.
+- **Real AE harness 710/710 PASSED**, unchanged - a routing fix is
+  prompt-side and real AE cannot see it. The field matrix is its
+  instrument, which is why four runs and not one.
+- `tests/test-chat-probe.js` +16 checks over 13 new assert sites, **10
+  RED against the reverted prompt** (every clause of the new rule, both
+  cuts) and 1 RED against the reverted probe.
+- Also new: the first CHECK-side assertion for the shape this row was
+  actually failing on - every layer correctly shadowed AND a CTRL null
+  built to drive it. A check that stopped at "is it shadowed?" would have
+  scored that a pass; the layer count is the only thing that sees an
+  answer bigger than the question.
+- Full stub sweep by exit code: 0 red. `docs/CAPABILITIES.md` regenerated
+  (no change - the generated table carries no doc text).
+- `extension/` changed, so BUMPED: 0.11.29 -> **0.11.30**.
+
+### Notes / assumptions
+
+- **Assumed four field runs is the right amount of evidence.** The
+  0.11.17 pass recorded a run of this row that passed for the wrong
+  reason (the vague phrasing happened to go direct and never reached the
+  fix), so one green run proves nothing here. Four runs, sixteen
+  sentences, zero rig calls is the smallest result that is not luck.
+- **Assumed the exemption belongs in SCOPE and not beside each rig
+  tool.** A ban with its escape hatch in another bullet is the 0.11.13
+  failure shape: the model stops reading at the first tool named.
+- **Judgement call: set_effect_param is an anti-target with a
+  qualifier, not a plain ban.** "Make the shadow softer" is a legitimate
+  set_effect_param ask, and the qualifier is what keeps it legal. The
+  field runs under the final wording show the model still reaching for it
+  when a phrasing invites it and not otherwise.
+- The `--variants` acceptance gate is unchanged; the probe fix only
+  widens a word list it was already using.
+
+### Filed for later passes, in priority order
+
+1. **`remove_effect`'s "no effects at all" refusal takes a whole correct
+   round down with it.** Measured this pass, run 1 vague: the model sent
+   `for_each_layer {apply_effect Drop Shadow}` (7/7 ok) together with a
+   belt-and-braces `remove_effect {layer: "BG"}`, that refusal fired, and
+   `AELL_maybeRollback` threw away the shadows too. It is exactly the
+   `AELL_errArg` class 0.11.23 built - a naming refusal that provably
+   wrote nothing and already says what exists - and this refusal is not
+   tagged with it. Cost the run a full round; on a slower model it costs
+   the answer.
+2. **`link_property` silently overwrites an existing link on the same
+   property.** From `logs/chat-probe-2026-09-03T03-02-49.md`: two calls
+   drove `effect.Drop Shadow.Distance` from two different sliders
+   (`Shadow Offset X`, then `Shadow Offset Y`), both answered `ok`, and
+   the receipt for the second says only what it wrote - nothing says the
+   first link is gone. Same silent-overwrite family as the matte and mask
+   work; needs a real-AE measurement first.
+3. Mask OPACITY is still not read anywhere (0.11.29's item 2, unchanged).
+4. An ellipse ALREADY on the layer still makes the mask parade unreadable
+   (`AELL_maskRect` takes rectangles only).
+5. `comp.saveFrameToPng` writing nothing is still unexplained.
+6. Row 30's typo still burns six `center_anchor_point` calls before the
+   grid_layout that works. Passes, so it is cost and not harm.
+7. Everything else from the 2026-09-03 lists is unchanged: the
+   `distribute_property` mutate-then-throw hole, a bad VALUE not being
+   `argFault`, widening the `errArg` rollback exemption, step 2's naming
+   flake, the destructive-refusal wording on `delete_layer` /
+   `delete_mask` / `remove_effect`, `property: string` in TOOL_DEFS,
+   `POST /tokenize`, the `comfyUrl` 8188/8000 mismatch on this machine,
+   the harness answering a modal with WORDS, `starved` wording,
+   delete_mask warning on a live expression, the unmeasured controller
+   GROUP and non-en_US locale, and `capParams`.
+
+**With row 36 closed, section 8 has no open HARM and no open miss.** The
+next section 8 work is a decision, not a defect: the DEFERRED bullet
+(D/F/H3 rows, the nightly 75-125-variant matrix, the doc anti-drift
+assertion) all wait on a sandbox design, so the next pass should take its
+item from elsewhere in the workplan.
+
+### Machine state
+
+**After Effects was never closed and its project was never closed.** Five
+chat-probe runs and two harness runs; every one built and removed its own
+rig inside the probe's own namespace, and each printed its cleanup line
+(`cleanup: removed N project item(s)`). The harness's bottom-of-run check
+confirmed nothing of the suite remains. llama-server was started and
+stopped by the probe five times. No Premiere this pass, no ComfyUI.
