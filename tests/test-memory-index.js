@@ -91,6 +91,33 @@ check("every published range starts on a real entry header",
       badStart === 0, badStart + " of " + ranges.length + " do not");
 check("every published range is well-ordered", badOrder === 0);
 
+// --- CRLF safety --------------------------------------------------------
+// CI runs on windows-latest and git checks the log out with CRLF, so the
+// generator must produce a byte-identical index either way. It did not:
+// PR #68 went red with "docs/MEMORY.md is STALE" because every heading
+// carried a trailing \r under the Windows checkout. Regenerate from a
+// CRLF copy of the real log and require the same bytes.
+{
+  const lf = fs.readFileSync(LOG, "utf8");
+  const before = fs.readFileSync(DOC, "utf8");
+  let same = false, detail = "";
+  try {
+    fs.writeFileSync(LOG, lf.replace(/\r?\n/g, "\r\n"));
+    cp.spawnSync(process.execPath, [GEN], { cwd: ROOT, encoding: "utf8" });
+    const after = fs.readFileSync(DOC, "utf8");
+    same = after === before;
+    if (!same) { detail = before.length + " chars from LF vs " + after.length + " from CRLF"; }
+  } finally {
+    // Always put the working tree back, even if an assertion throws.
+    fs.writeFileSync(LOG, lf);
+    cp.spawnSync(process.execPath, [GEN], { cwd: ROOT, encoding: "utf8" });
+  }
+  check("the index is byte-identical from an LF and a CRLF checkout",
+        same, detail);
+  check("the working tree was restored after the CRLF probe",
+        fs.readFileSync(DOC, "utf8") === before);
+}
+
 // --- the routing rule that caused a real miss ---------------------------
 // 2026-09-03: a finding was written into the log alone, with the words
 // "Filed in WORKPLAN" while no such filing existed. The loop takes work

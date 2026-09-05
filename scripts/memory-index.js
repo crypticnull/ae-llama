@@ -82,7 +82,24 @@ const TAGS = [
 const RETRACTION =
   /\bretract|\bsupersed|CORRECTION|was wrong|is now simply WRONG|no longer true|I had it backwards/i;
 
-function read(p) { return fs.readFileSync(p, "utf8"); }
+/**
+ * Read a file with its line endings NORMALISED to LF.
+ *
+ * CI runs on windows-latest, where git checks the log out with CRLF
+ * (no .gitattributes pins it). Every one of the log's 19,282 lines then
+ * carries an extra byte, so the same log measures 267,841 tokens here
+ * and 272,662 there — and `split("\n")` leaves a trailing \r on every
+ * heading, so the generated index differs from the LF-generated one
+ * that was committed and `--check` fails.
+ *
+ * Measured 2026-09-05: that is exactly what turned PR #68 red, and it
+ * would have hit the owner's Windows machine the same way. Normalising
+ * on read makes the generator platform-independent, so the committed
+ * index is byte-identical whichever checkout produced it.
+ */
+function read(p) {
+  return fs.readFileSync(p, "utf8").replace(/\r\n/g, "\n");
+}
 
 /** Parse the log into entries with line ranges. */
 function parseLog(text) {

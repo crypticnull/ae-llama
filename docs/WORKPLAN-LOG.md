@@ -19280,3 +19280,42 @@ decision 5. The refuted finding (routing bytes are args not
 descriptions) had correct numbers and a wrong headline.
 
 No `extension/` change, so NO BUMP.
+
+## 2026-09-05 (remote session) — the index generator was not CRLF-safe
+
+**Found by CI, on a PR I had just opened.** PR #68 went red with
+`docs/MEMORY.md is STALE — run: node scripts/memory-index.js` when the
+file was, locally, freshly generated and byte-identical to a re-run.
+
+**The tell was in the failure output itself:** the test printed the log
+at **272,662 tokens** where this container measures **267,841**. That is
++19,282 — and the log has exactly **19,282 lines**. One byte per line.
+CI runs on `windows-latest`, the repo has no `.gitattributes`, so git
+checks the log out with **CRLF**.
+
+`memory-index.js` split on `"\n"` and left a trailing `\r` on every
+heading, so the Windows checkout generated a different index from the
+LF one that was committed, and `--check` compared them and failed.
+Nothing was actually stale.
+
+**Fixed at the read**, not at the test: `read()` normalises `\r\n` to
+`\n`, so the generator is platform-independent and the committed index
+is byte-identical whichever checkout produced it. Verified by generating
+from the real log and from a CRLF copy of it — 7,871 chars both ways.
+
+`tests/test-memory-index.js` now pins it: rewrite the log as CRLF,
+regenerate, require the same bytes, and restore the working tree in a
+`finally` so a failure cannot leave the repo dirty. It asserts the
+restore too.
+
+**Worth noting for anything else that parses repo files.** This would
+have hit the owner's Windows machine identically — the loop regenerates
+the index on every pass, so a Windows checkout with `core.autocrlf`
+would have failed the same check every night. The class is wider than
+this one script: any generator that reads a repo file, splits on `\n`
+and writes a derived artifact has it. `scripts/capability-report.js` is
+the other generated-doc pair; it reads `tools.js` and `hostscript.jsx`
+through the same shape and is worth the same check.
+
+No `extension/` change, so NO BUMP. Harness 73/75 (the two
+container-only failures).
