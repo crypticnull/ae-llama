@@ -66,6 +66,8 @@ public class AellDlg {
     [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr h);
     [DllImport("user32.dll")] private static extern bool PostMessageW(IntPtr h, uint msg, IntPtr w, IntPtr l);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern IntPtr SendMessageTimeoutW(IntPtr h, uint msg, IntPtr w, StringBuilder l, uint flags, uint timeout, out UIntPtr res);
+    [DllImport("user32.dll")] private static extern bool GetClientRect(IntPtr h, out RECT r);
+    public struct RECT { public int Left, Top, Right, Bottom; }
 
     private static readonly string NL = Environment.NewLine;
     private static int target = 0;
@@ -74,6 +76,22 @@ public class AellDlg {
         StringBuilder c = new StringBuilder(256);
         GetClassNameW(h, c, 256);
         return c.ToString();
+    }
+
+    // Is this top-level window a DIALOG of ours to consider?
+    //
+    // #32770 is the standard dialog class and is what AE's save prompt
+    // has measured as. But this must not be the ONLY class accepted:
+    // AE draws its own windows with DroverLord classes, and a filter
+    // that rejects everything else fails in the exact silent way this
+    // whole mechanism has already failed twice -- it finds nothing and
+    // reports the same "nothing" it reports when no dialog exists.
+    // The real safety is the TEXT match in the caller, not the class.
+    private static bool IsDialogClass(IntPtr h) {
+        string c = ClassOf(h);
+        if (c == "#32770") { return true; }
+        if (c.StartsWith("DroverLord")) { return true; }
+        return false;
     }
 
     // GetWindowTextW returns EMPTY for a control owned by ANOTHER
@@ -124,8 +142,10 @@ public class AellDlg {
     // Returns the label it clicked, or "" if it clicked nothing.
     public static string AnswerDialog(int processId, string[] mustContain,
                                       string[] mustContainAny,
-                                      string[] buttonLabels) {
+                                      string[] buttonLabels,
+                                      bool cancelIfNoButton) {
         target = processId;
+        allowCancel = cancelIfNoButton;
         wantText = mustContain == null ? new string[0] : mustContain;
         wantAny = mustContainAny == null ? new string[0] : mustContainAny;
         wantButtons = buttonLabels == null ? new string[0] : buttonLabels;
@@ -139,7 +159,7 @@ public class AellDlg {
         GetWindowThreadProcessId(h, out wid);
         if ((int)wid != target) { return true; }
         if (!IsWindowVisible(h)) { return true; }
-        if (ClassOf(h) != "#32770") { return true; }
+        if (!IsDialogClass(h)) { return true; }
 
         dlgText = new StringBuilder();
         EnumChildWindows(h, new EnumProc(OnCollectText), IntPtr.Zero);
@@ -164,11 +184,33 @@ public class AellDlg {
         wantedButton = IntPtr.Zero;
         wantedLabel = "";
         EnumChildWindows(h, new EnumProc(OnWantedButton), IntPtr.Zero);
-        if (wantedButton == IntPtr.Zero) { return true; }
 
-        // BM_CLICK, posted rather than sent, for the same reason as above.
-        PostMessageW(wantedButton, 0x00F5, IntPtr.Zero, IntPtr.Zero);
-        clickedText = wantedLabel;
+        if (wantedButton == IntPtr.Zero) {
+            // No control we could press. Do NOT walk away -- that is
+            // the failure mode that has cost this whole day: the
+            // dialog is positively identified by its own sentence, and
+            // returning "" here is indistinguishable from "no dialog
+            // was up", so the harness reports success and the modal
+            // stays forever.
+            //
+            // WM_CLOSE on a save-changes prompt is CANCEL: it calls off
+            // the quit, keeps every unsaved change, and -- the only
+            // thing that actually matters -- unblocks the host so the
+            // next -r script runs. It needs no child window, no
+            // readable label and no button class, so it works whatever
+            // AE built that dialog out of.
+            //
+            // Allowed only when the caller says cancelling is an
+            // acceptable outcome for this rule, so it can never stand
+            // in for an answer that was supposed to DISCARD.
+            if (!allowCancel) { return true; }
+            PostMessageW(h, 0x0010, IntPtr.Zero, IntPtr.Zero); // WM_CLOSE
+            clickedText = "(no button found; cancelled with WM_CLOSE)";
+            return false;
+        }
+
+        ClickIt(wantedButton);
+        clickedText = wantedLabel + " [" + wantedClass + "]";
         return false;
     }
 
@@ -177,18 +219,53 @@ public class AellDlg {
         return true;
     }
 
+    // Match on the LABEL, not the window class.
+    //
+    // This required ClassOf(h) == "Button" and found nothing on AE 2026.
+    // The measured note in scripts/lib/ae-dialog-triage.ps1 describes
+    // the save prompt as three DroverLord containers plus one Edit
+    // child -- nobody ever measured a Win32 Button on it, because only
+    // its TEXT had ever been read. So the answering matched the dialog,
+    // matched the sentence, then found nothing it was willing to press
+    // and gave up without a word. The owner watched that happen on a
+    // fresh run, twice.
+    //
+    // A child whose own text IS "Don't Save" is the Don't Save button
+    // whatever class it reports. The rail is unchanged -- the label
+    // still has to be one the rule named -- and the class is recorded
+    // so the click can be delivered the way that control understands.
     private static bool OnWantedButton(IntPtr h, IntPtr lp) {
-        if (ClassOf(h) != "Button") { return true; }
         string t = ReadText(h).Trim();
         if (t.Length == 0) { return true; }
         for (int i = 0; i < wantButtons.Length; i++) {
             if (Flatten(t) == Flatten(wantButtons[i])) {
                 wantedButton = h;
                 wantedLabel = t;
+                wantedClass = ClassOf(h);
                 return false;
             }
         }
         return true;
+    }
+    private static string wantedClass = "";
+    private static bool allowCancel = false;
+
+    // BM_CLICK is only understood by a real Button. A custom-drawn
+    // control ignores it and needs the mouse messages a click actually
+    // produces, aimed at its own centre in CLIENT coordinates. Both are
+    // POSTED, so a wedged dialog thread cannot wedge us.
+    private static void ClickIt(IntPtr h) {
+        if (wantedClass == "Button") {
+            PostMessageW(h, 0x00F5, IntPtr.Zero, IntPtr.Zero);  // BM_CLICK
+            return;
+        }
+        RECT r;
+        if (!GetClientRect(h, out r)) { return; }
+        int x = (r.Right - r.Left) / 2;
+        int y = (r.Bottom - r.Top) / 2;
+        IntPtr pos = (IntPtr)((y << 16) | (x & 0xFFFF));
+        PostMessageW(h, 0x0201, (IntPtr)1, pos);   // WM_LBUTTONDOWN
+        PostMessageW(h, 0x0202, IntPtr.Zero, pos); // WM_LBUTTONUP
     }
 
     // Every dialog this process is showing, with its text and the exact
@@ -211,20 +288,27 @@ public class AellDlg {
         GetWindowThreadProcessId(h, out wid);
         if ((int)wid != target) { return true; }
         if (!IsWindowVisible(h)) { return true; }
-        if (ClassOf(h) != "#32770") { return true; }
+        if (!IsDialogClass(h)) { return true; }
         dlgText = new StringBuilder();
         EnumChildWindows(h, new EnumProc(OnCollectText), IntPtr.Zero);
         describe.Append("dialog: ").Append(dlgText.ToString().Trim()).Append(NL);
         buttonList = new StringBuilder();
         EnumChildWindows(h, new EnumProc(OnListButton), IntPtr.Zero);
-        describe.Append("  buttons: ").Append(buttonList.ToString()).Append(NL);
+        describe.Append("  clickable children: ").Append(buttonList.ToString()).Append(NL);
         return true;
     }
 
+    // EVERY child with text, and the class each one reports. Listing
+    // only class-"Button" children is what hid the bug above: the dump
+    // said "buttons:" and nothing followed, which read as "this dialog
+    // has no buttons" rather than "I am only willing to look at one
+    // kind of control".
     private static bool OnListButton(IntPtr h, IntPtr lp) {
-        if (ClassOf(h) != "Button") { return true; }
         string t = ReadText(h).Trim();
-        if (t.Length > 0) { buttonList.Append("[").Append(t).Append("] "); }
+        if (t.Length == 0) { return true; }
+        if (t.StartsWith("OS_")) { return true; }
+        buttonList.Append("[").Append(t).Append(" {")
+                  .Append(ClassOf(h)).Append("}] ");
         return true;
     }
 }
@@ -268,16 +352,23 @@ function Get-AellDialogRules {
        # name to match on. Flagged rather than inferred from the rule's
        # name: this is the one property that must not be got wrong.
        RequiresOwned = $true
+       # If no pressable control can be found, WM_CLOSE (= Cancel) still
+       # unblocks the host and keeps every change. Worse than Don't Save
+       # -- it will be asked again -- but infinitely better than a modal
+       # nobody can clear.
+       CancelIfNoButton = $true
        Buttons  = @("Don't Save", 'Dont Save', 'No') },
     @{ Name     = 'crash / auto-save recovery'
        Contains = @('recover')
        Any      = @()
        RequiresOwned = $false
+       CancelIfNoButton = $true
        Buttons  = @("Don't Recover", 'Dont Recover', 'No', 'Cancel') },
     @{ Name     = 'unexpected quit notice'
        Contains = @('unexpectedly')
        Any      = @()
        RequiresOwned = $false
+       CancelIfNoButton = $true
        Buttons  = @('OK', 'Close', 'Continue') },
 
     # LAST, and it must stay last: a save prompt naming a project that
@@ -301,6 +392,7 @@ function Get-AellDialogRules {
        Contains = @('Save changes')
        Any      = @()
        RequiresOwned = $false
+       CancelIfNoButton = $true
        Buttons  = @('Cancel') }
   )
 }
@@ -329,7 +421,8 @@ function Answer-AellKnownDialogs {
         if ($rule.RequiresOwned -and @($rule.Any).Count -eq 0) { continue }
         try {
           $clicked = [AellDlg]::AnswerDialog($proc.Id, $rule.Contains,
-                                             $rule.Any, $rule.Buttons)
+                                             $rule.Any, $rule.Buttons,
+                                             [bool]$rule.CancelIfNoButton)
         } catch { $clicked = '' }
         if ($clicked) {
           Write-Host ("  clicked [" + $clicked + "] on the " + $rule.Name +

@@ -105,13 +105,14 @@ const $ = { global: {} };
 // the test drives directly back across that boundary.
 const host = eval(source + ";\n({ AELL_TOOLS: AELL_TOOLS, " +
   "AELL_okay: AELL_okay, AELL_err: AELL_err, " +
+  "AELL_errArg: AELL_errArg, " +
   "AELL_PER_LAYER: AELL_PER_LAYER, " +
   "AELL_PER_LAYER_READ: AELL_PER_LAYER_READ, " +
   "AELL_ALREADY_BATCHED: AELL_ALREADY_BATCHED, " +
   "AELL_PER_LAYER_LIST: AELL_PER_LAYER_LIST, " +
   "AELL_PER_LAYER_READ_LIST: AELL_PER_LAYER_READ_LIST, " +
   "AELL_ALREADY_BATCHED_LIST: AELL_ALREADY_BATCHED_LIST })");
-const { AELL_TOOLS, AELL_okay, AELL_err, AELL_PER_LAYER,
+const { AELL_TOOLS, AELL_okay, AELL_err, AELL_errArg, AELL_PER_LAYER,
         AELL_PER_LAYER_READ, AELL_ALREADY_BATCHED, AELL_PER_LAYER_LIST,
         AELL_PER_LAYER_READ_LIST, AELL_ALREADY_BATCHED_LIST } = host;
 
@@ -305,6 +306,119 @@ assert(rFail.mutated === true,
        "and is flagged as having mutated before failing (rollback trigger)");
 delete AELL_TOOLS.__fail;
 delete AELL_PER_LAYER.__fail;
+
+// ...but "partial" has to be TRUE. Five sub-tools that refused a NAME
+// wrote nothing at all, and calling that partial makes the round rollback
+// undo the rest of the round over a spelling — the 0.11.23 class, one
+// level down. Measured shape: apply_effect lands the blur, for_each_layer
+// set_effect_param refuses 'Radius' on every layer, and the blur goes.
+AELL_TOOLS.__nameFail = function () {
+  return AELL_errArg("Parameter not found: Radius. 'Fast Box Blur' has: " +
+                     "Blur Radius, Iterations, Blur Dimensions.");
+};
+AELL_PER_LAYER.__nameFail = true;
+const rName = call("for_each_layer",
+                   { layers: names, tool: "__nameFail", args: {} });
+assert(!rName.ok, "five naming refusals still fail the batch");
+assert(rName.mutated === undefined,
+       "but are NOT flagged as having mutated — nothing was written: " +
+       JSON.stringify(rName).slice(0, 100));
+assert(rName.argFault === true,
+       "they are flagged argFault instead, so the round survives them");
+assert(/'Fast Box Blur' has: Blur Radius/.test(rName.error || ""),
+       "and the grounded roster still reaches the model: " + rName.error);
+
+// The exemption needs BOTH halves. One layer that really changed puts the
+// call back to partial, because that layer's work has to go with the undo.
+let nOk = 0;
+AELL_TOOLS.__mixed = function (a) {
+  if (a.layer === 1) { nOk++; return AELL_okay({}); }
+  return AELL_errArg("Parameter not found: Radius.");
+};
+AELL_PER_LAYER.__mixed = true;
+const rMixed = call("for_each_layer",
+                    { layers: names, tool: "__mixed", args: {} });
+assert(!rMixed.ok && rMixed.mutated === true && !rMixed.argFault,
+       "one real success among the refusals makes it partial again: " +
+       JSON.stringify(rMixed).slice(0, 110));
+assert(nOk === 1, "and that one layer really did run");
+delete AELL_TOOLS.__mixed;
+delete AELL_PER_LAYER.__mixed;
+
+// A refusal of any OTHER kind keeps the conservative reading: a sub-tool
+// that changed something and did not say so must not escape the undo.
+AELL_TOOLS.__oneOther = function (a) {
+  if (a.layer === 3) return AELL_err("something else went wrong");
+  return AELL_errArg("Parameter not found: Radius.");
+};
+AELL_PER_LAYER.__oneOther = true;
+const rOther = call("for_each_layer",
+                    { layers: names, tool: "__oneOther", args: {} });
+assert(!rOther.ok && rOther.mutated === true && !rOther.argFault,
+       "one failure that is not a naming refusal is enough to keep the " +
+       "whole call partial: " + JSON.stringify(rOther).slice(0, 110));
+delete AELL_TOOLS.__oneOther;
+delete AELL_PER_LAYER.__oneOther;
+delete AELL_TOOLS.__nameFail;
+delete AELL_PER_LAYER.__nameFail;
+
+// ------------------------------- 4b. identical failures collapse to ONE
+//
+// The context bill, measured 2026-09-03 in a real field round: a sub-tool
+// that refuses the SAME way on every layer had its ~450-char refusal
+// printed five times in one result — ~2.2 KB against a default 16384 ctx
+// — and the next transcript line was "context trimmed — 2 earlier
+// message(s) dropped". The panel drops HISTORY on overflow, so repeating
+// a refusal deletes the turns the model needs in order to act on it.
+const LONG = "'Opacity' takes a number, and the text \"" + "x".repeat(200) +
+  "\" is not one — it holds 100 now. (A number written as text, \"50\", " +
+  "is fine.)";
+AELL_TOOLS.__same = function () { return AELL_err(LONG); };
+AELL_PER_LAYER.__same = true;
+const rSame = call("for_each_layer",
+                   { layers: names, tool: "__same", args: {} });
+delete AELL_TOOLS.__same;
+delete AELL_PER_LAYER.__same;
+assert(!rSame.ok, "five identical failures still fail the batch");
+const copies = (rSame.error || "").split(LONG).length - 1;
+assert(copies === 1,
+       "the identical refusal is printed ONCE, not once per layer (got " +
+       copies + " copies)");
+assert(/B 1, B 2, B 3, B 4, B 5: /.test(rSame.error || ""),
+       "and every layer that hit it is named, in order: " + rSame.error);
+assert((rSame.error || "").length < LONG.length * 2,
+       "so the whole result stays near one copy long (" +
+       (rSame.error || "").length + " chars for a " + LONG.length +
+       "-char refusal)");
+
+// Failures that genuinely differ are NOT merged — collapsing those would
+// hide four real problems behind one layer's message.
+let nth = 0;
+AELL_TOOLS.__vary = function () { return AELL_err("reason " + (++nth)); };
+AELL_PER_LAYER.__vary = true;
+const rVary = call("for_each_layer",
+                   { layers: names, tool: "__vary", args: {} });
+delete AELL_TOOLS.__vary;
+delete AELL_PER_LAYER.__vary;
+assert(!rVary.ok && [1, 2, 3, 4, 5].every(
+         n => new RegExp("B " + n + ": reason " + n).test(rVary.error || "")),
+       "five DIFFERENT failures each print in full: " + rVary.error);
+
+// One failure among successes formats exactly as it always has — the
+// grouping must not change the single-failure shape the panel and the
+// model already read.
+AELL_TOOLS.__one = function (a) {
+  return a.layer === 2 ? AELL_err("just this one") : AELL_okay({});
+};
+AELL_PER_LAYER.__one = true;
+const rOne = call("for_each_layer",
+                  { layers: names.slice(0, 3), tool: "__one", args: {} });
+delete AELL_TOOLS.__one;
+delete AELL_PER_LAYER.__one;
+assert(rOne.ok && rOne.data.succeeded === 2 &&
+       rOne.data.failures === "B 2: just this one",
+       "a lone failure keeps the plain 'Name: error' shape: " +
+       JSON.stringify(rOne.data));
 
 const big = makeComp("Huge", 0);
 for (let i = 0; i < 201; i++) big._layers.push(new Layer("H " + i, big));

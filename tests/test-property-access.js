@@ -72,10 +72,24 @@ PGroup.prototype.property = function (ref) {
   if (typeof ref === "number") {
     return aeRevalidate(this._children[ref - 1]) || null;
   }
-  return aeRevalidate(this._children.find((c) =>
+  // AE's own name lookup is exact, with ONE arbitrary exception, measured
+  // 2026-09-03 on Drop Shadow (AE 26.3x87, logs/case-probe.json): an
+  // all-lowercase SINGLE-WORD name resolves ("distance", "softness",
+  // "opacity" all answer), and nothing else does — "DISTANCE",
+  // "dIsTaNcE", "shadow color", "Shadow color", "shadowcolor" and
+  // "Distance " (one trailing space) are every one of them null. A stub
+  // that matched case-insensitively would hide the whole class; a stub
+  // that matched exact-only would make AE look stricter than it is and
+  // let a "fix" ship that AE contradicts.
+  const isRef = (c) =>
     (c._invalid ? c._realName : c.name) === ref ||
     (c._invalid ? c._realMatch : c.matchName) === ref ||
-    (c._aliases || []).indexOf(ref) !== -1)) || null;
+    (c._aliases || []).indexOf(ref) !== -1;
+  const loneLower = typeof ref === "string" && ref === ref.toLowerCase() &&
+    !/[\s_-]/.test(ref) && ref !== "";
+  return aeRevalidate(this._children.find((c) => isRef(c) || (loneLower &&
+    String(c._invalid ? c._realName : c.name).toLowerCase() === ref))) ||
+    null;
 };
 // What addProperty("ADBE Slider Control") really hands back: a GROUP whose
 // single child is the value, matchName'd "<class>-0001". add_control writes
@@ -106,7 +120,8 @@ function Prop(name, matchName, value) {
   this.name = name;
   this.matchName = matchName || name;
   this._value = value;
-  this.expression = "";
+  this._expr = "";
+  this._exprOn = true;
   this.expressionError = "";
   this.canSetExpression = true;
   this._keys = [];   // sorted [{time, value}]
@@ -114,11 +129,100 @@ function Prop(name, matchName, value) {
 Object.defineProperty(Prop.prototype, "value", {
   get() { return this._value; }
 });
-Object.defineProperty(Prop.prototype, "expressionEnabled", {
-  get() { return this.expression !== ""; }
+// AE's expression checker, measured 2026-09-03 by
+// scripts/link-overwrite-probe.js on AE 26.3x87. Assigning a BAD
+// expression does NOT throw: AE takes the text, KEEPS it on the property
+// and fills expressionError — all four classes measured (a layer that is
+// not there, an effect that is not there, syntax garbage, an
+// out-of-range subscript) behave identically. The old stub wrote
+// expressionError NOWHERE and let `expression` be a plain string, so no
+// stubbed test could reach the branch where a tool clears a rejected
+// write — the branch that was throwing away the user's own working
+// expression as the price of a refusal.
+let AE_COMP = null;
+function aeExprError(text) {
+  const t = String(text || "");
+  if (t === "") return "";
+  const line = (what) => "Expression disabled. Error at line 1 in property: " +
+                         what;
+  const refs = /thisComp\.layer\("([^"]*)"\)(\.effect\("([^"]*)"\))?/g;
+  let m;
+  while ((m = refs.exec(t))) {
+    let L = null;
+    try { L = AE_COMP ? AE_COMP.layer(m[1]) : null; } catch (e) { L = null; }
+    if (!L) return line("there is no layer named '" + m[1] + "'");
+    if (m[3]) {
+      let fx = null;
+      try { fx = L.property("ADBE Effect Parade").property(m[3]); }
+      catch (e) { fx = null; }
+      if (!fx) return line("'" + L.name + "' has no effect '" + m[3] + "'");
+    }
+  }
+  // An out-of-range subscript is valid JS and fails only when AE runs it
+  // — the 2D-layer `value[2]` trap that killed every grid rig once.
+  const sub = /value\[(\d+)\]/.exec(t);
+  if (sub && Number(sub[1]) > 2) {
+    return line("index out of range: value[" + sub[1] + "]");
+  }
+  try { new Function(t); } catch (e) { return line(String(e.message)); }
+  return "";
+}
+Object.defineProperty(Prop.prototype, "expression", {
+  get() { return this._expr; },
+  set(text) {
+    const t = String(text === undefined || text === null ? "" : text);
+    this._expr = t;                    // AE keeps the text either way
+    this.expressionError = aeExprError(t);
+    // Measured: ANY new write turns expressions back ON, so a disabled
+    // expression loses its OFF switch as well as its text.
+    if (t !== "") this._exprOn = true;
+  }
 });
-Prop.prototype.setValue = function (v) { this._value = v; };
+// Measured: a DISABLED expression still reads back in full, so
+// expressionEnabled is its own switch and not "is there any text".
+Object.defineProperty(Prop.prototype, "expressionEnabled", {
+  get() { return this._expr !== "" && this._exprOn; },
+  set(on) { this._exprOn = !!on; }
+});
+// Measured in real AE 2026 by scripts/param-value-probe.jsx, and the old
+// stub modelled neither half: setValue COERCES a numeric string --
+// setValue("50") reads back the NUMBER 50, and ["10", "20"] on a Position
+// reads back [10, 20] -- while anything else throws, in two different
+// sentences depending on the property's shape:
+//   one-dimensional: 'Unable to call "setValue" because of parameter 1.
+//                     <the whole value> is not a number.'
+//   array-valued:    'Unable to call "setValue" because of parameter 1.
+//                     Value is not an array.'
+// A stub that swallowed every value in silence is exactly why no stubbed
+// test could see an EXPRESSION arriving as a set_effect_param value.
+function aeNum(x) {
+  if (typeof x === "number") return isNaN(x) ? null : x;
+  if (typeof x === "string" && x !== "" && !isNaN(Number(x))) return Number(x);
+  return null;
+}
+function aeSetValue(prop, v) {
+  let bad = null;
+  if (Array.isArray(v)) {
+    for (const el of v) {
+      if (typeof el === "string" && aeNum(el) === null) { bad = el; break; }
+    }
+  } else if (typeof v === "string" && aeNum(v) === null) {
+    bad = v;
+  }
+  if (bad !== null) {
+    throw new Error("After Effects error: Unable to call “setValue” " +
+      "because of parameter 1. " +
+      (Array.isArray(prop._value) ? "Value is not an array."
+                                  : bad + " is not a number."));
+  }
+  if (Array.isArray(v)) {
+    return v.map((el) => (typeof el === "string" ? Number(el) : el));
+  }
+  return typeof v === "string" ? Number(v) : v;
+}
+Prop.prototype.setValue = function (v) { this._value = aeSetValue(this, v); };
 Prop.prototype.setValueAtTime = function (t, v) {
+  v = aeSetValue(this, v);
   const hit = this._keys.find(k => Math.abs(k.time - t) < 1e-9);
   if (hit) { hit.value = v; return; }
   this._keys.push({ time: t, value: v });
@@ -510,6 +614,8 @@ const A = new Layer("A", comp);
 const B = new Layer("B", comp);
 const CTRL = new Layer("CTRL", comp);
 comp._layers.push(A, B, CTRL);
+
+AE_COMP = comp;   // the expression checker resolves layer refs through it
 
 const project = { rootFolder: { name: "(root)" }, numItems: 0,
                   item() { return null; }, items: {}, activeItem: comp };
@@ -1183,6 +1289,133 @@ assert(/list_properties/.test(r.error) &&
        /effects\/Gaussian Blur/.test(r.error),
        "and the lister that shows types/values is named with its path");
 
+// ------------------------------ a NAMING refusal must not cost the round
+//
+// Field round, chat-probe row 35 canonical (WORKPLAN-LOG 2026-09-03):
+// apply_effect 'Fast Box Blur' succeeded, then set_effect_param 'Radius'
+// came back with exactly the grounded message above — and the round
+// rollback undid BOTH, so the grounding worked and the blur it bought was
+// thrown away. These three refusals write nothing and already say what
+// does exist, so they carry `argFault` and AELL_maybeRollback leaves the
+// round's real work alone. (The rollback half is proved end to end in
+// tests/test-round-rollback.js.)
+assert(r.argFault === true,
+       "a param-name miss is flagged argFault so it cannot roll a round " +
+       "back: " + JSON.stringify(r).slice(0, 120));
+
+r = call("set_effect_param", { layer: "A", effect: "Glow",
+                               param: "Threshold" });
+assert(!r.ok && r.argFault === true,
+       "so is an effect that is not on the layer");
+
+r = call("apply_effect", { layer: "A", effect: "CC Particle World" });
+assert(!r.ok && r.argFault === true,
+       "so is an effect name AE does not know");
+
+r = call("set_effect_param", { layer: "A", effect: "Gaussian Blur" });
+assert(!r.ok && r.argFault === true,
+       "so is a call that leaves 'param' out altogether");
+
+// The boundary, on purpose: `argFault` means a NAME that is not there,
+// nothing written. A bad VALUE is a different question (does the guard
+// below run before or after AE sees it), so it is NOT flagged until that
+// is measured — the conservative side, where the round still rolls back.
+r = call("set_effect_param", { layer: "A", effect: "Gaussian Blur",
+                               param: "Blurriness",
+                               value: "quite blurry indeed" });
+assert(!r.ok && !r.argFault,
+       "but a bad VALUE is not flagged — argFault is naming only: " +
+       JSON.stringify(r).slice(0, 120));
+
+// A call that WORKS never carries the flag, or every green round would
+// look like one that had been corrected.
+r = call("set_effect_param", { layer: "A", effect: "Gaussian Blur",
+                               param: "Blurriness", value: 4 });
+assert(r.ok && r.argFault === undefined,
+       "a successful call carries no flag at all: " +
+       JSON.stringify(r).slice(0, 120));
+
+// -------------------------------- an EXPRESSION handed over as a VALUE
+// Field round, chat-probe row 36 vague ("everything should sit off the
+// background a bit — shadow them, not it"): the model built a slider rig
+// and passed the expression that reads it as set_effect_param's `value`.
+// AE answered 'Unable to call "setValue" ... is not a number', which is
+// true and names no way to do what was asked — so the round rolled back
+// and six of seven layers were skipped on an "ok" reply.
+
+const blurAmt = A.property("ADBE Effect Parade")
+  .property("Gaussian Blur").property("Blurriness");
+blurAmt.setValue(4);
+const rigExpr = 'thisComp.layer("Shadow Null").effect("Shadow Distance")(1)';
+r = call("set_effect_param", { layer: "A", effect: "Gaussian Blur",
+                               param: "Blurriness", value: rigExpr });
+assert(!r.ok, "an expression string is refused, not handed to AE");
+assert(!/is not a number/.test(r.error),
+       "and NOT with AE's bare sentence: " + (r.error || ""));
+assert(/'Gaussian Blur\/Blurriness' takes a number/.test(r.error) &&
+       /holds 4 now/.test(r.error),
+       "the refusal names the property, the shape it wants and what it " +
+       "holds: " + (r.error || ""));
+assert(/EXPRESSION code/.test(r.error) && /link_property/.test(r.error) &&
+       /property: "effect\.Gaussian Blur\.Blurriness"/.test(r.error),
+       "and hands back a paste-ready link_property property path: " +
+       (r.error || ""));
+assert(/controlLayer/.test(r.error) && /set_expression/.test(r.error),
+       "naming both routes — the control rig it was building, and raw " +
+       "code: " + (r.error || ""));
+assert(blurAmt.value === 4,
+       "and nothing was written (Blurriness still 4, not NaN)");
+
+// The half that makes this a fix and not a new refusal: AE ACCEPTS a
+// number written as text, measured, so the guard may not reject one.
+r = call("set_effect_param", { layer: "A", effect: "Gaussian Blur",
+                               param: "Blurriness", value: "17" });
+assert(r.ok && blurAmt.value === 17,
+       "a NUMERIC string still writes, the way real AE takes it: " +
+       (r.error || String(blurAmt.value)));
+
+// A plain word is refused too, but without the expression pointer — a
+// caller that typed "red" is not reaching for link_property.
+r = call("set_effect_param", { layer: "A", effect: "Gaussian Blur",
+                               param: "Blurriness", value: "quite blurry" });
+assert(!r.ok && /is not one/.test(r.error) && !/link_property/.test(r.error),
+       "a plain word is refused without the expression advice: " +
+       (r.error || ""));
+assert(/A number written as text, "50", is fine/.test(r.error),
+       "and says which strings DO work: " + (r.error || ""));
+
+// Same root, so the same guard: set_transform and add_keyframe reached
+// AE raw with the identical class of argument.
+r = call("set_transform", { layer: "A", property: "opacity",
+                            value: 'thisComp.layer("Ctrl").opacity' });
+assert(!r.ok && /'opacity' takes a number/.test(r.error) &&
+       /link_property/.test(r.error) &&
+       /property: "opacity"/.test(r.error),
+       "set_transform refuses an expression value the same way: " +
+       (r.error || ""));
+r = call("add_keyframe", { layer: "A", property: "opacity", time: 1,
+                           value: 'thisComp.layer("Ctrl").opacity' });
+assert(!r.ok && /link_property/.test(r.error),
+       "and so does add_keyframe, which wrote through setValueAtTime: " +
+       (r.error || ""));
+r = call("add_keyframe", { layer: "A", property: "opacity", time: 1,
+                           value: "80" });
+assert(r.ok, "a numeric string still keyframes: " + (r.error || ""));
+r = call("remove_keyframes", { layer: "A", property: "opacity" });
+
+// An array carrying a string is the position-shaped version of the same
+// mistake, and AE's own words for it ("Value is not an array.") name the
+// wrong problem entirely.
+r = call("set_transform", { layer: "A", property: "position",
+                            value: [100, "thisComp.width/2"] });
+assert(!r.ok && /'position' takes an array of \d numbers/.test(r.error) &&
+       /link_property/.test(r.error),
+       "one bad element in an array is caught with the rest: " +
+       (r.error || ""));
+r = call("set_transform", { layer: "A", property: "position",
+                            value: ["120", "140"] });
+assert(r.ok, "an array of numeric strings still writes: " + (r.error || ""));
+
 // ------------------------------- set_track_matte wraps AE's raw message
 // AE's throw alone ("Object is invalid" and friends) tells the model
 // nothing about mattes; the wrap keeps the raw text and adds the
@@ -1437,6 +1670,44 @@ r = call("remove_effect", { layer: "Key", effect: "Glow" });
 assert(!r.ok && /'Key' is a \w+ layer and cannot carry effects/.test(r.error),
        "a light (no Effect Parade at all) is refused by type: " + r.error);
 
+// ---- every one of those four refusals is the argFault class (0.11.31)
+//
+// Field round, chat-probe row 36 vague run 1 (WORKPLAN-LOG 2026-09-03):
+// for_each_layer {apply_effect Drop Shadow} succeeded 7 of 7, a
+// belt-and-braces remove_effect {layer: "BG"} hit "no effects at all",
+// and AELL_maybeRollback threw the seven shadows away. None of these
+// four touches the project and each already says what IS there, so the
+// successes around them are not debris. The rollback half is proved end
+// to end in tests/test-round-rollback.js.
+r = call("remove_effect", { layer: "Bare", effect: "Glow" });
+assert(!r.ok && r.argFault === true,
+       "a layer with no effects at all cannot roll a round back: " +
+       JSON.stringify(r).slice(0, 120));
+assert(!r.mutated,
+       "…and it is not ALSO flagged mutated, which would re-arm it");
+
+r = call("remove_effect", { layer: "Key", effect: "Glow" });
+assert(!r.ok && r.argFault === true,
+       "so is a layer type that cannot carry effects");
+
+r = call("remove_effect", { layer: "A", effect: "Glow" });
+assert(!r.ok && r.argFault === true,
+       "so is an effect name that is not in the parade");
+
+r = call("remove_effect", { layer: "A" });
+assert(!r.ok && r.argFault === true,
+       "so is a call that leaves 'effect' out altogether");
+
+// The boundary: a removal that REALLY happened is a mutation like any
+// other. Flagging it would exempt a round that has debris in it.
+const gone = new Layer("Gone", comp);
+comp._layers.push(gone);
+r = call("remove_effect", { layer: "Gone", effect: "Gaussian Blur" });
+assert(r.ok && r.argFault === undefined,
+       "a removal that succeeded carries no flag: " +
+       JSON.stringify(r).slice(0, 120));
+comp._layers.splice(comp._layers.indexOf(gone), 1);
+
 // {layer} omitted = the selection, and the selection survives the call.
 comp._layers.forEach(l => { l.selected = l.name === "B"; });
 r = call("remove_effect", { effect: "Gaussian Blur" });
@@ -1548,6 +1819,295 @@ $.global.AELL_newRequest();
 call("remove_keyframes", { layers: wipeNames, property: "opacity" });
 $.global.AELL_newRequest();
 call("remove_keyframes", { layers: wipeNames, property: "opacity" });
+
+// (c) A caller that never announces a request at all -- requestSeq 0.
+//
+// Everything above calls AELL_newRequest between the refusal and the
+// retry, which is what the PANEL does; that is why this hole was
+// invisible here for a day. The CLI self-test runner (and any raw
+// AfterFX -r script) announces nothing, so seq stays 0, and the gate's
+// same-reply test used to read `seq > 0 && shown.seq === seq` -- false
+// at 0, branch dead, retry executed. Measured in real AE 2026-09-03:
+// the retry deleted all six keys, and the two steps after it failed on
+// keys that were already gone.
+//
+// The ceremony this tool has is "call it twice", because its preview IS
+// its refusal. So a caller with no request boundary has to stay blocked,
+// not be waved through. It opts in by announcing a request, like the
+// panel does -- that is the line below the assertions.
 comp._layers.forEach(l => { l.selected = false; });
+delete $.global.AELL_wipeShown;
+$.global.AELL_requestSeq = 0;
+call("set_keyframes", { layers: wipeNames, property: "opacity",
+  keys: [{ time: 0, value: 0 }, { time: 1, value: 100 }] });
+const seq0Before = wipeKeys();
+assert(seq0Before === wipeNames.length * 2,
+       "seq-0 rig: every layer has two opacity keys again (" +
+       seq0Before + ")");
+r = call("remove_keyframes", { layers: wipeNames, property: "opacity" });
+assert(!r.ok && /refused to wipe every layer/.test(r.error),
+       "with no request announced, the first wipe is still refused: " +
+       (r.ok ? "IT RAN" : r.error));
+r = call("remove_keyframes", { layers: wipeNames, property: "opacity" });
+assert(!r.ok && /THIS same reply/.test(r.error),
+       "...and so is the retry -- a caller that announces no request is " +
+       "permanently inside one reply, it is not exempt: " +
+       (r.ok ? "IT RAN" : r.error));
+assert(wipeKeys() === seq0Before,
+       "...and nothing was removed by either call (" + wipeKeys() +
+       " of " + seq0Before + " keys left)");
+// The escape hatch is explicit, not incidental: announce a request.
+$.global.AELL_newRequest();
+r = call("remove_keyframes", { layers: wipeNames, property: "opacity" });
+assert(r.ok && r.data.removed === seq0Before,
+       "announcing a request releases it: " +
+       (r.ok ? r.data.removed : r.error));
+
+$.global.AELL_newRequest();
+comp._layers.forEach(l => { l.selected = false; });
+
+// ------------------------------- "Parameter not found" is a CONCEPT map
+// Field round, chat-probe row 36 vague: the model asked Drop Shadow for
+// Offset -> Offset X -> Offset Y -> Blurriness across FOUR calls and was
+// shown the complete, correct seven-name roster every time. So the list
+// was never hiding the answer and there was nothing to rank -- what it
+// never said is that on this effect an "offset" IS Distance + Direction
+// and a "blur" IS Softness. Roster measured 2026-09-03 in real AE
+// (scripts/param-concept-probe.jsx), Compositing Options included
+// because AE really puts it there and the map must not offer it.
+const ds = new PGroup("Drop Shadow", "ADBE Drop Shadow");
+ds.add(new Prop("Shadow Color", "ADBE Drop Shadow-0001", [0, 0, 0, 1]));
+ds.add(new Prop("Opacity", "ADBE Drop Shadow-0002", 128));
+ds.add(new Prop("Direction", "ADBE Drop Shadow-0003", 135));
+ds.add(new Prop("Distance", "ADBE Drop Shadow-0004", 5));
+ds.add(new Prop("Softness", "ADBE Drop Shadow-0005", 0));
+ds.add(new Prop("Shadow Only", "ADBE Drop Shadow-0006", 0));
+ds.add(new Prop("Compositing Options", "ADBE Effect Built In Params", 0));
+B.property("Effects").add(ds);
+
+// Stub fidelity first: without AE's real lookup rule underneath, every
+// assertion below would be testing the stub instead of the fix.
+assert(ds.property("Distance") && ds.property("distance") &&
+       ds.property("DISTANCE") === null &&
+       ds.property("shadow color") === null &&
+       ds.property("Shadow Color") !== null,
+       "STUB FIDELITY: AE takes 'Distance' and 'distance' but not " +
+       "'DISTANCE' and not 'shadow color' (measured)");
+
+const dsDist = ds.property("Distance");
+const dsSoft = ds.property("Softness");
+
+r = call("set_effect_param", { layer: "B", effect: "Drop Shadow",
+                               param: "Offset", value: 10 });
+assert(!r.ok && /Parameter not found: Offset/.test(r.error),
+       "the name that missed is still named first");
+assert(/on 'Drop Shadow' that is: Direction, Distance\./.test(r.error),
+       "and an 'offset' is answered with the two names that mean it " +
+       "here: " + (r.error || ""));
+assert(/'Drop Shadow' has: Shadow Color, Opacity, Direction/
+         .test(r.error) && /list_properties/.test(r.error),
+       "without losing the grounded roster or the lister: " +
+       (r.error || ""));
+assert(dsDist.value === 5, "and nothing was written");
+
+r = call("set_effect_param", { layer: "B", effect: "Drop Shadow",
+                               param: "Blurriness", value: 3 });
+assert(!r.ok && /that is: Softness\./.test(r.error),
+       "a 'blur' is answered with Softness, the one name that means it: " +
+       (r.error || ""));
+assert(!/Shadow Only/.test(r.error.split("has:")[0]),
+       "and the concept clause offers nothing else: " + (r.error || ""));
+assert(dsSoft.value === 0, "and nothing was written");
+
+r = call("set_effect_param", { layer: "B", effect: "Drop Shadow",
+                               param: "Alpha", value: 50 });
+assert(!r.ok && /that is: Opacity\./.test(r.error),
+       "'Alpha' resolves to Opacity: " + (r.error || ""));
+
+// A name that CONTAINS the real one -- measured as a hard AE refusal.
+r = call("set_effect_param", { layer: "B", effect: "Drop Shadow",
+                               param: "Shadow Distance", value: 9 });
+assert(!r.ok && /that is: Distance/.test(r.error) &&
+       r.error.indexOf("Distance") < r.error.indexOf("has:"),
+       "'Shadow Distance' is answered with Distance, first: " +
+       (r.error || ""));
+
+// The map may not invent: a word that means nothing here leaves the
+// message exactly as it was before this fix.
+r = call("set_effect_param", { layer: "B", effect: "Drop Shadow",
+                               param: "Wobble", value: 1 });
+assert(!r.ok && /Parameter not found: Wobble\. 'Drop Shadow' has:/
+         .test(r.error) && !/that is:/.test(r.error),
+       "an unmappable word gets the old message, with no invented " +
+       "suggestion: " + (r.error || ""));
+
+// The other half: a name AE itself refuses only over CASE or a
+// separator is the SAME name, so it resolves instead of refusing --
+// remove_effect and the render-template picker already work this way.
+r = call("set_effect_param", { layer: "B", effect: "Drop Shadow",
+                               param: "DISTANCE", value: 30 });
+assert(r.ok && dsDist.value === 30,
+       "a shouted name writes, though AE's own lookup answers null " +
+       "to it: " + (r.error || ""));
+assert(r.ok && r.data.param === "Distance",
+       "and the receipt reports AE's spelling, not the caller's: " +
+       (r.ok ? r.data.param : r.error));
+r = call("set_effect_param", { layer: "B", effect: "Drop Shadow",
+                               param: "shadow_only", value: 1 });
+assert(r.ok && ds.property("Shadow Only").value === 1,
+       "a separator-folded multi-word name writes too: " + (r.error || ""));
+dsDist.setValue(5);
+
+// Both places a caller can name a parameter: the dotted spec that
+// add_keyframe / link_property / set_expression resolve through
+// AELL_resolveProperty used to refuse with the name and NOTHING else.
+r = call("add_keyframe", { layer: "B", time: 0, value: 3,
+                           property: "effect.Drop Shadow.Blurriness" });
+assert(!r.ok && /Parameter not found: Blurriness/.test(r.error),
+       "the dotted path refuses by the same sentence: " + (r.error || ""));
+assert(/that is: Softness/.test(r.error) &&
+       /'Drop Shadow' has: Shadow Color/.test(r.error),
+       "with the concept AND the roster it never printed before: " +
+       (r.error || ""));
+assert(/effect\.Drop Shadow\.<one of those>/.test(r.error),
+       "and says how to spell the path it wants: " + (r.error || ""));
+assert(dsSoft.numKeys === 0, "and no key was written");
+r = call("add_keyframe", { layer: "B", time: 0, value: 3,
+                           property: "effect.Drop Shadow.SOFTNESS" });
+assert(r.ok && dsSoft.numKeys === 1,
+       "and the same fold resolves a dotted path: " + (r.error || ""));
+call("remove_keyframes", { layer: "B",
+                           property: "effect.Drop Shadow.Softness" });
+
+// 21. An expression that is ALREADY on the property. Filed by the 0.11.31
+// pass and measured 2026-09-03 in real AE by scripts/link-overwrite-probe.js:
+// two link_property calls drove one property from two different sliders,
+// BOTH answered ok, and nothing said the first link was gone. The probe
+// then found the sharper half of the same class on the FAILING path — a
+// rejected write cleared the property, so a refusal cost the user the
+// working expression that was already there.
+const AOP = A.property("Transform").property("Opacity");
+const EA = 'thisComp.layer("A").effect("Amp")(1);';
+call("set_expression", { layer: "A", property: "opacity", expression: "" });
+
+r = call("link_property", { layer: "A", property: "opacity",
+                            controlLayer: "A", controlEffect: "Amp" });
+assert(r.ok && r.data.replaced === undefined && r.data.unchanged === undefined,
+       "a link onto a bare property reports no replacement: " +
+       JSON.stringify(r.data || r.error));
+assert(AOP.expression === EA, "…and the link is really on the property");
+
+r = call("link_property", { layer: "A", property: "opacity",
+                            controlLayer: "A", controlEffect: "Amp" });
+assert(r.ok && r.data.unchanged &&
+       /already had this exact/.test(r.data.unchanged) &&
+       r.data.replaced === undefined,
+       "the SAME link again says nothing changed, and claims no loss: " +
+       JSON.stringify(r.data || r.error));
+
+// The field defect itself: a second control over the first.
+call("add_control", { layer: "A", type: "slider", name: "Amp2", value: 7 });
+r = call("link_property", { layer: "A", property: "opacity",
+                            controlLayer: "A", controlEffect: "Amp2" });
+assert(r.ok && r.data.replaced === EA,
+       "a link over a link NAMES the expression it replaced: " +
+       JSON.stringify(r.data || r.error));
+assert(/GONE/.test(r.data.replacedNote) &&
+       /set_expression/.test(r.data.replacedNote),
+       "…and says how to put it back: " + r.data.replacedNote);
+assert(/Amp2/.test(AOP.expression), "…and the new link really landed");
+
+// A hand-written expression is the same class — the user did not rig it,
+// which makes it MORE their own, not less.
+AOP.expression = "wiggle(2, 30);";
+r = call("link_property", { layer: "A", property: "opacity",
+                            controlLayer: "A", controlEffect: "Amp" });
+assert(r.ok && r.data.replaced === "wiggle(2, 30);",
+       "a link over a hand-written expression names it too: " +
+       JSON.stringify(r.data || r.error));
+
+// Measured: a DISABLED expression still reads back in full and ANY write
+// turns expressions back ON, so it loses its OFF switch as well as its text.
+AOP.expression = "wiggle(9, 9);";
+AOP.expressionEnabled = false;
+r = call("link_property", { layer: "A", property: "opacity",
+                            controlLayer: "A", controlEffect: "Amp" });
+assert(r.ok && r.data.replaced === "wiggle(9, 9);" &&
+       /switched OFF/.test(r.data.replacedNote),
+       "a replaced expression that was switched OFF says both: " +
+       JSON.stringify(r.data || r.error));
+assert(AOP.expressionEnabled === true,
+       "…and expressions really are back on");
+
+// THE FAILING PATH. Before the fix, AE's expressionError branch cleared
+// the property — so a rejected write took the working link with it.
+AOP.expression = EA;
+r = call("set_expression", { layer: "A", property: "opacity",
+                             expression: 'thisComp.layer("GHOST").opacity;' });
+assert(!r.ok, "a bad expression is still refused: " + JSON.stringify(r.data));
+assert(AOP.expression === EA,
+       "…and the expression that was already there SURVIVES the refusal: " +
+       JSON.stringify(AOP.expression));
+assert(AOP.expressionError === "" && AOP.expressionEnabled === true,
+       "…live, not left carrying the rejected text's error");
+assert(/Nothing was lost/.test(r.error),
+       "…and the refusal says so: " + r.error);
+
+// Same on the preset door, since they share the helper.
+AOP.expression = "wiggle(4, 4);";
+r = call("apply_expression_preset", { layer: "A", property: "opacity",
+  preset: "wiggle", ampControl: { layer: "A", effect: "Amp" } });
+assert(r.ok && r.data.replaced === "wiggle(4, 4);",
+       "apply_expression_preset names what it replaced: " +
+       JSON.stringify(r.data || r.error));
+
+// A rejected write onto a property that had NOTHING must leave nothing —
+// never the rejected text.
+const BOP = B.property("Transform").property("Opacity");
+call("set_expression", { layer: "B", property: "opacity", expression: "" });
+r = call("set_expression", { layer: "B", property: "opacity",
+                             expression: 'thisComp.layer("GHOST").opacity;' });
+assert(!r.ok && BOP.expression === "",
+       "a rejected write leaves a bare property bare: " +
+       JSON.stringify(BOP.expression));
+assert(!/Nothing was lost/.test(r.error),
+       "…and does not claim it saved something that was never there: " +
+       r.error);
+
+// A prior that was ITSELF erroring is restored as it was. The user's
+// broken expression is the user's, not ours to tidy away.
+BOP.expression = 'thisComp.layer("ALSO GHOST").opacity;';
+r = call("set_expression", { layer: "B", property: "opacity",
+                             expression: "value[7];" });
+assert(!r.ok && BOP.expression === 'thisComp.layer("ALSO GHOST").opacity;',
+       "a broken prior comes back exactly as broken: " +
+       JSON.stringify(BOP.expression));
+BOP.expression = "";
+
+// Clearing is the one write whose whole content is what it removed.
+AOP.expression = EA;
+r = call("set_expression", { layer: "A", property: "opacity",
+                             expression: "" });
+assert(r.ok && r.data.removed === EA && /GONE/.test(r.data.removedNote),
+       "clearing names the expression it removed: " +
+       JSON.stringify(r.data || r.error));
+r = call("set_expression", { layer: "A", property: "opacity",
+                             expression: "" });
+assert(r.ok && r.data.removed === undefined &&
+       /no expression on that property/.test(r.data.note),
+       "…and clearing nothing says nothing was removed: " +
+       JSON.stringify(r.data || r.error));
+
+// The cap has to be visible: a replaced expression too long to print is
+// still evidence, and a silent truncation reads as the whole text.
+const LONG = "wiggle(2, 3); // " + new Array(400).join("x");
+AOP.expression = LONG;
+r = call("link_property", { layer: "A", property: "opacity",
+                            controlLayer: "A", controlEffect: "Amp" });
+assert(r.ok && r.data.replaced.length < 300 &&
+       r.data.replaced.indexOf("(" + LONG.length + " chars)") !== -1,
+       "a long replaced expression is capped, and says how long it was: " +
+       JSON.stringify(r.data.replaced));
+call("set_expression", { layer: "A", property: "opacity", expression: "" });
 
 console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");

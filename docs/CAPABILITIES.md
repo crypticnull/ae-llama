@@ -19,18 +19,18 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `add_camera` | Add a camera | yes | host | — | 5 |
 | `add_captions` | Build MANY timed captions in one call: one text layer per segment (trimmed to its own start/end), or one marker per segment with {as: 'markers'} | yes | host | 1 | 7 |
 | `add_control` | Add a named expression control (Slider/Angle/Checkbox/Color/Point Control effect) to a layer — usually a null | yes | host | 1 | 4 |
-| `add_keyframe` | Add a keyframe on a layer property at a time (seconds) | yes | host | 1 | 10 |
+| `add_keyframe` | Add a keyframe on a layer property at a time (seconds) | yes | host | 1 | 11 |
 | `add_light` | Add a light | yes | host | 1 | 13 |
-| `add_marker` | Add a marker to the comp (omit 'layer') or to a layer | yes | host | 1 | 9 |
-| `add_mask` | Add a mask to a layer | yes | host | 1 | 7 |
+| `add_marker` | Add a marker to the comp (omit 'layer') or to a layer | yes | host | 1 | 10 |
+| `add_mask` | Add a mask to a layer ('hide the bottom half') | yes | host | 1 | 74 |
 | `add_null` | Add a null layer (use as a controller or parent) | yes | host | 1 | 8 |
 | `add_shape_content` | Add content INSIDE a shape layer: kinds group, rectangle, ellipse, star, polygon, path, fill, stroke, gradient_fill, gradient_stroke, repeater, trim_paths, merge_paths, offset_paths, rounded_corners, pucker_bloat, twist, zigzag | yes | host | 1 | 12 |
 | `add_shape_layer` | Add a shape layer (rectangle, ellipse, polygon, or star) | yes | host | — | 4 |
-| `add_solid` | Add a solid layer | yes | host | — | 49 |
+| `add_solid` | Add a solid layer | yes | host | — | 64 |
 | `add_text_animator` | Animate a text layer PER CHARACTER (typewriter, cascade, wiggle) — an animator holds the properties, a selector picks which characters get them | yes | host | 1 | 10 |
 | `add_text_layer` | Add a text layer to a comp | yes | host | 1 | 8 |
 | `add_to_render_queue` | Add a comp to the render queue WITHOUT rendering it | yes | host | 1 | 3 |
-| `apply_effect` | Apply an effect to a layer | yes | host | 2 | 11 |
+| `apply_effect` | Apply an effect to a layer | yes | host | 2 | 17 |
 | `apply_expression_preset` | Apply a known-good expression | yes | host | 1 | 5 |
 | `apply_keyframe_ease` | Apply a bezier as TEMPORAL easing between keyframes on one property across MANY layers in ONE call (converts to AE speed/influence ease) | yes | host | 1 | 3 |
 | `apply_preset` | Apply an installed .ffx animation preset to layer(s) | yes | host | 1 | 5 |
@@ -41,36 +41,36 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `comfy_generate` | Generate an image/video with local ComfyUI and import it into the AE project | yes | panel | — | — |
 | `comfy_list_workflows` | List available ComfyUI generation workflow templates by name | no | panel | — | — |
 | `comfy_status` | Check the local ComfyUI instance (online? queue depth?) | no | panel | — | — |
-| `create_comp` | Create a composition and open it | yes | host | 1 | 34 |
+| `create_comp` | Create a composition and open it | yes | host | 1 | 36 |
 | `create_folder` | Create a project-panel folder | yes | host | 1 | 10 |
-| `delete_item` | Delete a project item | yes | host | 1 | 42 |
-| `delete_layer` | Delete a layer from a comp | yes | host | — | 19 |
-| `delete_mask` | REMOVE one mask from a layer by name or 1-based index ('remove that mask'); omit 'mask' when the layer has exactly one | yes | host | 1 | 6 |
+| `delete_item` | Delete a project item | yes | host | 1 | 45 |
+| `delete_layer` | Delete a layer from a comp | yes | host | — | 27 |
+| `delete_mask` | REMOVE one mask from a layer by name or 1-based index ('remove that mask'); omit 'mask' when the layer has exactly one | yes | host | 1 | 31 |
 | `distribute_property` | Distribute a property VALUE across layers | yes | host | 1 | 5 |
 | `duplicate_comp` | Duplicate a composition | yes | host | 2 | 5 |
-| `duplicate_layer` | Duplicate a LAYER inside its comp (use duplicate_comp only for whole compositions) | yes | host | 2 | 10 |
+| `duplicate_layer` | Duplicate a LAYER inside its comp (use duplicate_comp only for whole compositions) | yes | host | 2 | 12 |
 | `export_gif` | Export a comp as an animated GIF | yes | panel | — | — |
 | `export_mogrt` | Write a comp out as a .mogrt Motion Graphics template | yes | host | 1 | 6 |
 | `export_social` | Export a comp as an H.264 .mp4 (or .mov) sized for posting, AUDIO INCLUDED when the comp has any | yes | panel | — | — |
 | `expose_property` | Expose one property in the comp's ESSENTIAL GRAPHICS panel, so an editor can change it in Premiere | yes | host | 1 | 5 |
-| `for_each_layer` | Run a PER-LAYER tool once per target layer in ONE call (max 200 layers) — the batch executor for anything without its own layers arg: {tool: 'apply_effect', args: {effect: 'Gaussian Blur'}} blurs every target | yes | host | 1 | 6 |
+| `for_each_layer` | Run a PER-LAYER tool once per target layer in ONE call (max 200 layers) — the batch executor for anything without its own layers arg: {tool: 'apply_effect', args: {effect: 'Gaussian Blur'}} blurs every target | yes | host | 1 | 8 |
 | `get_bounds` | MEASURE a layer's rendered content without touching it — how wide the text actually is, where the shape sits in the frame, whether anything overflows | no | host | 1 | 32 |
 | `get_comp_details` | Layers of a comp with index, name, type, timing, effects, track matte | no | host | 4 | 36 |
 | `get_project_info` | List project items (comps/footage/folders) and the active comp | no | host | 2 | 16 |
-| `get_property` | Read ANY property by path: value, keyframes, expression | no | host | 3 | 94 |
-| `grid_layout` | Arrange layers into a grid rigged to a control null: its 'Grid X Spacing'/'Grid Y Spacing'/'Grid Columns' sliders drive spacing AND column count live, and the grid centers on the null's position (all expressions generated host-side) | yes | host | 1 | 2 |
+| `get_property` | Read ANY property by path: value, keyframes, expression | no | host | 3 | 102 |
+| `grid_layout` | Arrange layers into a grid rigged to a control null: its 'Grid X Spacing'/'Grid Y Spacing'/'Grid Columns' sliders drive spacing AND column count live, and the grid centers on the null's position (all expressions generated host-side) | yes | host | 1 | 4 |
 | `import_as_layer` | Import a file AND place it in a comp as a layer, scaled to the comp | yes | host | 1 | 8 |
 | `import_file` | Import a footage/image/video file into the PROJECT PANEL only — it does not appear in any comp | yes | host | 1 | 2 |
-| `link_property` | Drive a layer property from a control | yes | host | 1 | 3 |
+| `link_property` | Drive a layer property from a control | yes | host | 2 | 6 |
 | `list_effects` | Enumerate effects INSTALLED in this AE (name, matchName, category), filtered and paged | no | host | 1 | 2 |
 | `list_presets` | Enumerate the ANIMATION PRESETS (.ffx) installed in this AE — AE ships ~679 (Behaviors, Text, Backgrounds, Transitions, Image, Shapes…) plus the user's own | no | host | 1 | 3 |
-| `list_properties` | DISCOVER a layer's real property tree — names, paths, types, current values | no | host | 2 | 9 |
+| `list_properties` | DISCOVER a layer's real property tree — names, paths, types, current values | no | host | 2 | 12 |
 | `list_render_templates` | List this machine's render-settings and output-module template names for render_comp | no | host | 1 | 3 |
 | `move_to_folder` | Move project items into a folder (batch) | yes | host | 1 | 2 |
 | `organize_project` | File loose root-level items into Comps/Footage/Solids/Audio/Images folders at the project ROOT | yes | host | 1 | 3 |
 | `precompose` | Move layers into a new nested comp (precompose) | yes | host | 1 | 5 |
-| `remove_effect` | REMOVE one effect from a layer by display name or matchName ('get rid of the blur') | yes | host | 1 | 4 |
-| `remove_keyframes` | Remove keyframes from a property on many layers at once — specific times or all ('stop it moving' = this, times omitted) | yes | host | 1 | 9 |
+| `remove_effect` | REMOVE one effect from a layer by display name or matchName ('get rid of the blur') | yes | host | 1 | 8 |
+| `remove_keyframes` | Remove keyframes from a property on many layers at once — specific times or all ('stop it moving' = this, times omitted) | yes | host | 1 | 10 |
 | `rename_comps` | Rename MANY comps in one call, on the org convention (REVyy_ from a year in the old name, else REV_NO-YEAR_) | yes | host | 1 | 3 |
 | `rename_item` | Rename any project item (comp, footage, folder) | yes | host | 1 | 3 |
 | `render_comp` | Actually RENDER a comp to a file | yes | host | 1 | 11 |
@@ -78,22 +78,22 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `reorder_layers` | Restack layers WITHOUT changing their timing | yes | host | 1 | 12 |
 | `scale_comp` | Resize a comp AND scale its content to match, re-centered — like the native 'Scale Composition' script | yes | host | 2 | 2 |
 | `set_comp_setting` | Change a comp setting: duration, frame rate, bg color, the WORK AREA (workAreaStart with workAreaDuration or workAreaEnd, in seconds — or workArea: 'comp' to reset it to the whole comp) and preview resolution | yes | host | 2 | 10 |
-| `set_effect_param` | Set a parameter on an effect already applied to a layer | yes | host | 1 | 1 |
-| `set_expression` | LAST RESORT: set a raw expression (or clear with '') | yes | host | 1 | 14 |
-| `set_keyframes` | Set the SAME keyframes on MANY layers in ONE call | yes | host | 2 | 13 |
+| `set_effect_param` | Set a parameter on an effect already applied to a layer | yes | host | 1 | 12 |
+| `set_expression` | LAST RESORT: set a raw expression (or clear with '') | yes | host | 1 | 17 |
+| `set_keyframes` | Set the SAME keyframes on MANY layers in ONE call | yes | host | 2 | 14 |
 | `set_layer_3d` | Enable/disable a layer's 3D switch | yes | host | 1 | 8 |
 | `set_layer_parent` | Parent layers to another layer (omit/null parent to unparent) | yes | host | 4 | 18 |
 | `set_layer_timing` | Retime a layer on the TIMELINE, in comp seconds: startTime slides the whole layer ('push it back two seconds' = startTime: current + 2), inPoint/outPoint TRIM its ends without sliding it | yes | host | — | 5 |
-| `set_mask` | Edit an EXISTING mask: mode, feather, expansion, opacity, inverted, rename | yes | host | 1 | 1 |
+| `set_mask` | Edit an EXISTING mask: mode, feather, expansion, opacity, inverted, rename | yes | host | 1 | 13 |
 | `set_mask_path` | Replace or ANIMATE a mask's path | yes | host | 1 | 7 |
 | `set_property` | Set ANY property by path — the universal fallback when no dedicated tool fits | yes | host | 4 | 10 |
 | `set_solid_color` | Change a SOLID layer's colour (this is the ONLY way — a solid's colour is not a property you can set_property) | yes | host | 1 | 5 |
 | `set_text_style` | Restyle an existing text layer (any subset of fields) | yes | host | 1 | 2 |
 | `set_track_matte` | Use one layer as another's track matte (alpha or luma, optionally inverted), or remove it with mode 'none' | yes | host | 1 | 8 |
-| `set_transform` | Set a transform property | yes | host | 1 | 38 |
+| `set_transform` | Set a transform property | yes | host | 2 | 39 |
 | `snapshot_frame` | Write one frame of a comp to a PNG on disk | yes | host | 1 | 7 |
 | `split_layer_into_chunks` | Cut a layer into chunks, each on its own layer trimmed to its own window — ONE call does the whole edit | yes | host | 1 | 2 |
-| `stagger_layers` | Distribute layer START TIMES | yes | host | 1 | 4 |
+| `stagger_layers` | Distribute layer START TIMES | yes | host | 1 | 8 |
 | `transcribe_to_captions` | TRANSCRIBE the comp's own audio with the local speech model and put the result on the timeline as timed text layers (or markers) | yes | panel | — | — |
 
 **Coverage gaps (computed):**

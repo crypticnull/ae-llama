@@ -14405,3 +14405,4952 @@ Nothing else was left unattempted this pass. Nothing is blocked.
   selected. Skips with an install hint when no pwsh is present.
 - Harness 72/72 locally minus the two container-only failures (74 tests).
 - No `extension/` change, so NO BUMP.
+
+## 2026-09-03 (remote session) — the button was never a Button
+
+- Owner, on a fresh run with the watchdog live, photographing the same
+  prompt again: "Why is this fucking box sitting here still on a fresh
+  run?????"
+- ROOT CAUSE: `OnWantedButton` required `ClassOf(h) == "Button"`. AE
+  2026's save prompt has none. The measured note in
+  `scripts/lib/ae-dialog-triage.ps1` has said so all along — the dialog
+  is "a #32770 with an empty title, three DroverLord containers that
+  report their own class, and one `Edit` child" — but only its TEXT had
+  ever been read, so nobody had ever asked what class its BUTTONS are. I
+  assumed Win32 Buttons and never verified it.
+- The failure was silent by construction: the answering found the
+  dialog, matched "Save changes", matched "Untitled Project", then found
+  no control it was willing to press and returned "" — indistinguishable
+  from "no dialog was up".
+- And the diagnostic could not have shown it either: `DescribeDialogs`
+  ALSO filtered to class "Button", so its dump printed "buttons:" with
+  nothing after it. That reads as "this dialog has no buttons" when it
+  meant "I am only willing to look at one kind of control". A diagnostic
+  that shares the bug's assumption cannot find the bug.
+- FIX: match on the LABEL, any class. A child whose own text is
+  "Don't Save" IS the Don't Save button whatever it calls itself. The
+  rail is unchanged — the label still has to be one the rule named.
+  The class is recorded and used to deliver the click the way that
+  control understands: `BM_CLICK` for a real Button, and posted
+  `WM_LBUTTONDOWN`/`WM_LBUTTONUP` at the child's client-rect centre for
+  a custom-drawn one, which ignores BM_CLICK. Both posted, never sent.
+- `DescribeDialogs` now dumps EVERY child that has text, with the class
+  each one reports (OS_-prefixed container self-names still skipped),
+  so the next unknown dialog cannot hide behind a filter.
+- The answered-log line now carries the class it clicked, so the first
+  real run says what AE actually uses.
+- Verified: pwsh parses; the C# compiles (217 lines); the rule table
+  still executes correctly against all three owner-lists (RAIL HOLDS);
+  `tests/test-host-dialogs.js` green.
+- STILL UNVERIFIED, and it is the whole point of the dump: what class
+  AE's buttons actually report. The geometric click is the fallback for
+  every answer to that question, not a guess at a particular one.
+- No `extension/` change, so NO BUMP.
+
+## 2026-09-03 (remote session) — stop needing the button to exist
+
+- Owner, correctly: eight attempts, each fixing one hypothesis, each
+  leaving the next one open. That is the process error, not any single
+  bug. The remaining ways this could STILL have failed, all left open by
+  the previous fix:
+  1. the buttons may carry no readable text either, so label-matching
+     finds nothing;
+  2. they may not be child windows at all -- AE drawing them onto the
+     dialog surface means there is no HWND to click;
+  3. the dialog may not be class `#32770`.
+  Any one of those and the same photo comes back.
+- FIX 1 -- an escape hatch that needs no button. When a dialog's TEXT
+  matches a rule but no pressable control is found, `AnswerDialog` now
+  posts `WM_CLOSE` to the dialog instead of walking away. On a
+  save-changes prompt that is CANCEL: it calls off the quit, keeps every
+  unsaved change, and unblocks the host so the next `-r` script runs --
+  which is the only thing that actually matters. It needs no child
+  window, no readable label and no button class, so it works whatever AE
+  built the dialog out of. Gated per-rule (`CancelIfNoButton`) so it can
+  never stand in for an answer that was supposed to DISCARD.
+- FIX 2 -- class breadth. `IsDialogClass` accepts `#32770` OR any
+  `DroverLord*` class, since AE draws its own windows with those. The
+  real safety was never the class; it is the text match in the caller.
+- FIX 3 -- the watchdog now says it is ALIVE. It logs on start, on every
+  answer, on a failed sweep, and a heartbeat every ~5 minutes. Twice now
+  "the watchdog did not work" and "the watchdog never ran" have been
+  indistinguishable in the log, and each time that ambiguity cost a
+  round trip to the owner.
+- The pattern under all eight failures, written down so it stops
+  repeating: EVERY layer returned the same value for "nothing was
+  there" and "I could not act on what was there". Empty string from
+  AnswerDialog, zero from the sweep, an empty buttons list from the
+  diagnostic. A negative result that cannot distinguish absence from
+  incapacity is not a result, and it is why each fix looked like it had
+  worked.
+- Verified: pwsh parses; C# compiles (259 lines); RAIL HOLDS against all
+  three owner-lists; harness 72/74.
+- No `extension/` change, so NO BUMP.
+
+## 2026-09-03 (local session) — the wipe gate was off for every caller that never announces a request (0.11.16)
+
+- Harness RED on arrival: 590/593. Three failures, all one cause —
+  `...and retrying it in the same reply is refused too` ("expected a
+  refusal, but the tool accepted the call"), then `...and the keys
+  survived the retry as well` (numKeys 0) and `a named SUBSET is not
+  gated` (removed 0), both of which were failing on keys the retry had
+  already deleted. So one bug, three red steps.
+- ROOT CAUSE in `AELL_wipeGate` (`extension/jsx/hostscript.jsx`): the
+  same-reply test read `seq > 0 && shown.seq === seq`. `AELL_requestSeq`
+  is only ever bumped by `AELL_newRequest`, which the PANEL calls per
+  chat turn (`main.js:557`) and which **`scripts/ae-selftest.jsx` never
+  calls at all**. seq stayed 0, the `&&` short-circuited, the branch was
+  dead, and the identical retry wiped all six keys.
+- Why that is a product hole and not just a runner quirk: the same
+  degradation is deliberate and SAFE in `clean_project` /
+  `organize_project`, because their preview is a separate, deliberate
+  call (`dryRun:true`) that a seq-0 caller still has to make.
+  `remove_keyframes` has no dryRun — its preview IS the refusal of the
+  very same call — so at seq 0 the entire ceremony was "send the
+  identical call twice", which no user ever sees. A gate that switches
+  itself off for anyone who does not opt in is not a gate.
+- FIX: `shown.seq === seq`, with no `seq > 0` guard, so a caller with no
+  request boundary is permanently inside ONE reply — which is exactly
+  true of a raw `-r` script. The escape hatch is explicit rather than
+  incidental: call `$.global.AELL_newRequest()`, the same announcement
+  the panel makes. Comment at the site says why this gate cannot degrade
+  the way the other two can, so nobody "restores symmetry" later.
+- DELIBERATELY NOT DONE: adding `AELL_newRequest()` to
+  `scripts/ae-selftest.jsx`. It would also have turned the harness green
+  — and that is the argument against it. Leaving seq at 0 in the CLI run
+  makes the real-AE harness itself the seq-0 regression test, in the one
+  configuration that just caught this. (Checked first that seq's value
+  changes no other step: the suite previews `clean_project` /
+  `organize_project` but never executes either non-dry, on purpose, so
+  those gates never read seq during a run.) The runner header's claim
+  that the two runners "can never drift apart" is therefore still not
+  quite true — they share the step list, not the request boundary — and
+  a future pass may want to make the panel-side self-test button
+  announce a request too, so both runners agree at seq 0.
+- BACK-FILL `tests/test-property-access.js` section 20(c): the whole
+  wipe sequence with `AELL_requestSeq = 0` and no `newRequest` — first
+  call refused, RETRY refused, zero keys lost, and then announcing a
+  request releases it. The gap was that every existing assertion in that
+  section calls `newRequest` between refusal and retry (the panel's
+  behaviour), so seq 0 was never exercised. Verified the new block goes
+  RED against the old `seq > 0 &&` line with exactly the three real-AE
+  failures ("IT RAN", "0 of 10 keys left"), then green with the fix.
+- Verified: all `tests/test-*.js` green (0 red files); real AE harness
+  **593/593 PASSED**.
+- FIELD DATA for the dialog work in the entry above, which landed while
+  this pass ran (283933c and 2e3b7fb): this run, on the code BEFORE
+  both of them, found a
+  `Save changes to "Untitled Project.aep" before closing?` prompt
+  already blocking AE and logged **"No rule matched it"**, then cleared
+  it with the WM_CLOSE fallback (= Cancel). That is the failure 283933c
+  diagnose, seen from outside — and the unmatched-dialog WM_CLOSE
+  branch that already existed is what saved it. One thing to note while
+  someone is in there: the log line said "No rule matched it" about a
+  dialog whose text and project name are BOTH on the owned list, so per
+  283933c the rule did match and then found no control it would press.
+  The message names the wrong half of the failure, which is the same
+  absence-vs-incapacity confusion 2e3b7fb writes up. Neither commit is
+  re-verified here; both landed after this run.
+- Also worth a human eye: the prompt was up at all. Something between
+  passes still asks After Effects to quit. This pass did not — it
+  never closed AE or its project.
+- `extension/jsx/hostscript.jsx` changed, so BUMPED: 0.11.15 -> 0.11.16.
+
+## 2026-09-03 (local, real AE) — WORKPLAN 8, row 36 vague: an EXPRESSION handed over as a VALUE (0.11.17)
+
+- Harness GREEN on arrival (593/593), so the pass took the first
+  unfinished workplan item that this machine can actually do. Section 7 /
+  7b is ahead of it in the file and is **BLOCKED**: nothing is listening
+  on 8188 or 8000 and no ComfyUI process is running at all, so the H3
+  un-blind, the template authoring and every catalog VRAM measurement
+  have no backend. Not started, not half-done. That leaves section 8's
+  explicit `NEXT:` — row 36 vague.
+
+### Measured first: scripts/param-value-probe.jsx (NEW, AE 2026 26.3x87)
+
+Both filed candidates were guesses about AE, and the probe answered them
+in opposite directions:
+
+- **`setValue` COERCES a numeric string.** `setValue("50")` reads back
+  the NUMBER 50, and `["10", "20"]` on a Position reads back `[10, 20]`.
+  So a blanket refusal of strings would have rejected values real AE
+  takes — the guard has to key on *a string that is not a number*, never
+  on *a string*. This is the measurement that decided the fix's shape.
+- AE's own refusals name no way forward and come in TWO sentences:
+  one-dimensional gets `Unable to call "setValue" because of parameter 1.
+  <the entire expression> is not a number.`, array-valued (Position, a
+  colour) gets `Value is not an array.` — which names the wrong problem
+  entirely for a caller who passed an array with one bad element.
+- A checkbox is a number too: `setValue(true)` reads back 1, and
+  `setValue("off")` throws "off is not a number".
+- **The second filed candidate is a NON-FIX and was not built.**
+  "`Parameter not found` should rank the near miss (Distance, Direction)
+  the way `AELL_compsHere` ranks comps" assumed the list was hiding them.
+  It is not: Drop Shadow has exactly 7 properties, the refusal prints all
+  7 uncapped, and Distance and Direction are both already in it. Ranking
+  by shared word would not match "Offset" to "Distance" either. See the
+  field finding below for what the real lever there turns out to be.
+
+### The fix, at the root
+
+`AELL_badValueMsg` + `AELL_looksLikeExpr` in `extension/jsx/hostscript.jsx`,
+called from `AELL_writeValue` (which is set_transform, set_effect_param
+and distribute_property) and from `add_keyframe`, the one other place a
+caller's raw value reached `setValueAtTime` unchecked. It names the
+property, the shape it wants, what it holds now, and — when the string
+reads as expression code — hands back a PASTE-READY
+`link_property {property: "effect.Drop Shadow.Opacity", ...}` with
+controlLayer + controlEffect, plus set_expression for raw code. A rig
+plus an expression IS how you drive a parameter from a control; the only
+thing missing was the tool that does it.
+
+One doc change, and it is a CUT: `set_effect_param`'s args said
+`value: number|[..]|string`, which is the sentence that invited the
+failure. Now `value: number|[..]`. Prompt full 58974 -> **58967**,
+compact 39321 -> 39314 (ceiling 59000, headroom 26 -> 33).
+
+### The field result: the refusal fired and the model ACTED ON IT
+
+Two `--variants --steps 36` runs against the real 32B in real AE.
+
+- **Run 1: 4 pass, 0 miss, 0 HARM.** The vague phrasing took the direct
+  route and never built a rig, so it never reached the new refusal —
+  that run proves nothing about the fix and is recorded as noise.
+- **Run 2: 3 pass, 0 miss, 1 HARM**, and this is the run that matters,
+  because the vague phrasing DID build the rig. Verbatim from
+  `logs/chat-probe-2026-09-03T03-02-49.md`: the model sent
+  `set_effect_param {param: "Opacity", value:
+  "{thisComp.layer('CTRL').effect('Shadow Opacity')(1)}"}`, took the new
+  refusal, and on its NEXT round called
+  `link_property {property: "effect.Drop Shadow.Opacity", controlLayer:
+  "CTRL", controlEffect: "Shadow Opacity"}` — the exact call the refusal
+  handed it — and got `ok`. The filed failure ("the round rolls back and
+  the retry shadows HEADLINE alone, **6 of 7 layers skipped on an ok**")
+  did NOT recur: all seven non-BG layers carry Drop Shadow and BG carries
+  none.
+- **Row 36 vague is still graded HARM, for a different and lesser
+  defect**: the model adds a `CTRL` null, so the layer count goes 8 -> 9
+  and the step's "an effect pass should not add or remove layers" check
+  fires. That is over-building a rig for a one-line ask, not a
+  wrong-target mutation, and it is the next lever on this row.
+
+### Filed by this run, both measured, neither fixed here
+
+- **The `Parameter not found` lever is a CONCEPT map, not a ranking.**
+  Run 2 shows the model guessing `Offset` -> `Offset X` -> `Offset Y` ->
+  `Blurriness` on Drop Shadow across four calls, each time shown the
+  complete, correct 7-name roster, before it found Distance / Direction /
+  Softness on its own. So the list is not the problem and neither is its
+  order: what is missing is that "offset"/"distance" means **Distance +
+  Direction** on this effect and "blur"/"soften" means **Softness**.
+  Worth a pass; the filed "rank it like AELL_compsHere" wording is not.
+- **`for_each_layer` prints an identical failure once PER LAYER**, and
+  this change made each copy longer. Its "Stopped after 5 failures"
+  summary repeated the same ~450-char refusal five times — ~2.2 KB in one
+  result against a 16384 ctx — and the very next line of the transcript
+  is `context trimmed — 2 earlier message(s) dropped`. Pre-existing (the
+  old shorter messages repeated the same way) but measurably worse now.
+  CLAUDE.md's "context is a functional resource" makes this a real
+  regression: the fan-out summary should collapse identical failures to
+  one copy plus the layer list. **Recommended as the next pass.**
+
+### Verification
+
+- `scripts/param-value-probe.jsx` in real AE: 8 measurements, project
+  left item-for-item as found (comp + its solid footage removed).
+- **Stub back-fill, and the stubs were the reason this class was
+  invisible.** `tests/test-property-access.js`'s `Prop.setValue` took
+  every value in silence; it now models what AE measured (coerce a
+  numeric string, throw AE's two real sentences otherwise), which is why
+  no stubbed test could ever have seen an expression reaching AE.
+  16 new assertions; **9 go RED against the reverted hostscript**, each
+  with the exact field string. `tests/test-self-test.js`'s canned host
+  gained the same modelling for set_effect_param / set_transform.
+- **Six new real-AE self-test steps** in `extension/js/selftest.js`
+  (batch group): the refusal fires with the right wording, it wrote
+  nothing, a NUMERIC string still writes and AE really takes it as 9,
+  set_transform refuses the same way, and the value is put back.
+- **Real AE harness 593 -> 599/599 PASSED.** Full stub sweep: 0 red
+  files. `docs/CAPABILITIES.md` regenerated (per-tool step counts moved).
+- `extension/` changed, so BUMPED: 0.11.16 -> **0.11.17**.
+
+### Machine state
+
+AE running, project untouched and open, no dialog raised. No ComfyUI and
+no llama-server were left running (chat-probe stops the server it
+starts). AE was never closed and its project was never closed.
+
+## 2026-09-03 (later pass) — section 8, the filed NEXT: `for_each_layer` printed an identical failure once PER LAYER
+
+Harness was already green (599/599) at the start of the pass, so this is
+the workplan's explicit `NEXT:` bullet, filed by the previous pass as
+"the context bill this fix ran up".
+
+### The defect
+
+`for_each_layer` pushed `layer.name + ": " + error` per failing layer and
+joined the list with `" | "`. When the sub-tool refuses the SAME way on
+every layer — which is the common case, because most refusals describe
+the ARGUMENTS, not the layer — the whole refusal was repeated once per
+layer. Measured in the previous pass's field run: the ~450-char
+bad-value refusal appeared five times in the "Stopped after 5 failures"
+summary, ~2.2 KB in ONE tool result against a default 16384 ctx, and the
+very next transcript line was `context trimmed — 2 earlier message(s)
+dropped`. The panel drops HISTORY on overflow, so a repeated refusal
+does not merely waste room: it deletes the turns the model needs in
+order to act on the refusal it is being handed.
+
+### The fix, at the root
+
+`AELL_groupFailures` in `extension/jsx/hostscript.jsx`, used by BOTH
+report sites in `for_each_layer` (the give-up summary and the ok-with-
+failures result). Failures are collected as `{name, error}` and printed
+as one copy of each DISTINCT message prefixed by every layer that hit
+it: `A, B, C: <message>`, groups in first-seen order. Messages that
+genuinely differ still print in full — merging those would hide four
+real problems behind one layer's message — and a single failure keeps
+the exact `Name: error` shape the panel and the model already read.
+Zero prompt cost: host strings only, no tool doc touched.
+
+Measured on the stub, same five-layer refusal: **1692 chars -> 420**.
+
+### Verification
+
+- `tests/test-for-each-layer.js`: 4 new assertions built on a 315-char
+  refusal — the message appears exactly ONCE, all five layers are named
+  together in order, the whole result stays under two copies long, five
+  DIFFERENT failures still print five lines, and a lone failure among
+  successes is byte-for-byte the old shape. **3 of them go RED against
+  the reverted hostscript** (5 copies, 1692 chars).
+- `tests/test-self-test.js`'s canned host previously summarised the
+  batch failures ("N layers lack X"), which is exactly why no stubbed
+  run could see this class. It now runs the sub-tool per layer, produces
+  the real per-layer refusal (missing effect, or the bad-value message
+  from `badValueRefusal`), stops at 5 and groups the same way.
+- **Three new real-AE self-test steps** in `extension/js/selftest.js`
+  (batch group, after the value-shape steps, where all 60 layers hold
+  Blurriness 12 so six refusals are character-identical): the collapsed
+  summary carries one copy and names the five layers, it wrote nothing,
+  and a pair of DIFFERING failures still prints one line each.
+- **Real AE harness 599 -> 602/602 PASSED.** Full stub sweep: 0 red
+  files. `docs/CAPABILITIES.md` regenerated (step counts moved).
+- `extension/` changed, so BUMPED: 0.11.17 -> **0.11.18**.
+
+### Notes / assumptions
+
+- Scope held to what the bullet asked. The give-up cap stays at 5 —
+  identical failures now cost one copy, so stopping earlier would only
+  lose information. Layer names, not indexes, still prefix a group; the
+  old format used names too, and changing that is a separate call.
+- No re-run of `scripts/chat-probe.js` this pass: the fix is a size
+  change to a message whose wording is unchanged, and the two stub
+  suites plus real AE pin the size. Row 36 vague is still HARM for the
+  reason the last pass filed (the model adds a `CTRL` null, layer count
+  8 -> 9).
+- Next in the workplan is unchanged: the `Parameter not found` CONCEPT
+  map ("offset"/"distance" -> Distance + Direction, "blur"/"soften" ->
+  Softness on Drop Shadow).
+
+### Machine state
+
+AE running, project untouched and open, no dialog raised. AE was never
+closed and its project was never closed. No ComfyUI, no llama-server.
+
+## 2026-09-03 (later pass) — section 8, the filed NEXT: `Parameter not found` is a CONCEPT map, not a ranking (0.11.19)
+
+Harness GREEN on arrival (602/602), so this pass took the workplan's
+explicit `NEXT:` bullet, filed by the previous pass out of a field run.
+
+### The defect
+
+Verbatim from that run: the model asked Drop Shadow for `Offset` ->
+`Offset X` -> `Offset Y` -> `Blurriness` across FOUR calls, and each time
+it was shown the complete, correct seven-name roster with Distance and
+Direction in it. So the list was never hiding the answer and there was
+nothing to RANK. What the refusal never said is the only thing that
+would have helped: on THIS effect an "offset" IS a Distance at a
+Direction, and a "blur" IS Softness. A roster answers "what exists"; it
+does not answer "which of these is the thing you asked for".
+
+### Measured first: scripts/param-concept-probe.jsx (NEW, AE 26.3x87)
+
+- **29 real parameter rosters** (Drop Shadow, Gaussian/Fast Box/
+  Directional Blur, Glow, Fill, Tint, Levels, Transform, Bevel Alpha,
+  wipes, Turbulent Displace, Fractal Noise, Stroke, Roughen Edges,
+  Motion Tile, Exposure, Tritone, 4-Color Gradient…), so every word in
+  the concept map is a word AE actually uses somewhere. Drop Shadow's
+  real roster is SEVEN: Shadow Color, Opacity, Direction, Distance,
+  Softness, Shadow Only, Compositing Options.
+- **AE's own name lookup is arbitrary** (second probe,
+  `logs/case-probe.json`): `fx.property("distance")` RESOLVES,
+  `"softness"` and `"opacity"` resolve — but `"DISTANCE"`,
+  `"dIsTaNcE"`, `"Distance "` (one trailing space), `"shadow color"`,
+  `"Shadow color"` and `"shadowcolor"` are every one of them **null**.
+  The leniency is all-lowercase SINGLE WORDS only. A caller who shouts a
+  name AE takes in lowercase gets nothing.
+- All ten guessed spellings were re-run through the real tool; the
+  refusal was character-identical each time, which is the failure.
+
+### The fix, at the root
+
+`AELL_PARAM_CONCEPTS` (14 rows) + `AELL_paramConcept` + `AELL_paramNames`
++ `AELL_paramIn` + `AELL_paramMissMsg` in `extension/jsx/hostscript.jsx`.
+
+- The map fires on plain containment first, in BOTH directions
+  ("Shadow Distance" holds Distance; "Blur" is held by Blurriness), then
+  on the concept rows, and it **never invents**: every name it returns
+  came out of the roster in front of it, `Compositing Options` is
+  excluded, and a word that maps to nothing leaves the message exactly
+  as it was. Capped at four names.
+- `"shadow"` is deliberately NOT a row word: on Drop Shadow it fires on
+  every name at once (Shadow Color, Shadow Only) and buries the answer,
+  and Tritone's Shadows is already reached by containment.
+- **Both** places a caller can name a parameter now refuse the same
+  way. `AELL_resolveProperty`'s dotted `effect.<Fx>.<Param>` path — what
+  add_keyframe, link_property, set_expression and distribute_property
+  all resolve through — used to throw "Effect parameter not found: X (on
+  effect Y)" with **no roster at all**. It now carries the concept, the
+  full roster and how to spell the path.
+- The other half of the measurement becomes the other half of the fix:
+  a name that differs from AE's only in CASE or a separator is the SAME
+  name, so `AELL_paramIn` folds and resolves it instead of refusing —
+  the way `remove_effect` and `AELL_rqPickTemplate` already do. The
+  receipt reports `p.name`, so the model sees AE's spelling.
+- **Zero prompt cost**: host strings only, no tool doc touched. Full
+  prompt 58967 of 59000, unchanged.
+
+### Verification
+
+- `tests/test-property-access.js`: **21 new assertions**, and the stub
+  itself was the reason this class was invisible — `PGroup.property()`
+  matched exactly, so it modelled neither AE's lowercase leniency nor
+  its refusal of everything else. It now models the measured rule, with
+  a STUB FIDELITY assertion pinning it. **11 assertions go RED against
+  the reverted hostscript.**
+- `tests/test-self-test.js`'s canned host gained the real Drop Shadow
+  roster, the fold and the concept sentence (`dsFold` / `dsMiss`).
+- **Eight new real-AE self-test steps** in `extension/js/selftest.js`
+  (batch group): the Offset refusal names Direction + Distance, the
+  Blurriness refusal names Softness alone, an unmappable word gets no
+  suggestion, a SHOUTED name writes and the receipt says `Distance`,
+  AE really took 30 on Distance, the dotted path refuses with concept +
+  roster + path spelling, and the rig comes back off.
+- **Real AE harness 602 -> 610/610 PASSED.** Full stub sweep: 0 red
+  files. `docs/CAPABILITIES.md` regenerated (per-tool step counts).
+- `extension/` changed, so BUMPED: 0.11.18 -> **0.11.19**.
+
+### Notes / assumptions
+
+- No `scripts/chat-probe.js` field run this pass. The two probes plus
+  eight real-AE steps pin the behaviour, and row 36 vague's remaining
+  HARM is the CTRL-null over-build (layer count 8 -> 9), which this does
+  not touch. Whether the map cuts the four-guess loop in the field is
+  worth a variants run on a later pass, but it is not evidence this
+  change needs in order to be correct.
+- Judgement call: the fold RESOLVES rather than refusing-with-a-hint.
+  AE itself accepts `distance`, so a case/separator difference is not a
+  guess about intent — and there is precedent in two other tools. Where
+  intent really is being guessed (Offset -> Distance) it still refuses.
+- `add_shape`'s "Param not found on the new …" (shape contents, not
+  effect params) is a different domain and was left alone.
+- Next in the workplan is unchanged: row 32 (`stagger_layers` alone on
+  layers with NO keyframes reports `ok` and animates nothing).
+
+### Machine state
+
+AE running, project untouched and open, no dialog raised. AE was never
+closed and its project was never closed. Both probes removed the comp
+and the solid source they made. No ComfyUI, no llama-server.
+
+## 2026-09-03 (later pass) — section 8, row 32: `stagger_layers` alone on unanimated layers reported `ok` (0.11.20)
+
+Harness GREEN on arrival (610/610), so this pass took the workplan's next
+ranked item.
+
+### The defect
+
+Field run 2026-09-03, row 32 ("cascade the entrances"): **three of four
+phrasings called `stagger_layers` ALONE**. It moved six start times,
+answered `ok {layers:6, spread:2.5, placed:[…]}` — and nothing fades,
+because there were no opacity keys to stagger. Only the TYPO phrasing did
+both halves. The receipt is a success message for a comp where nothing
+animates, so the model has no reason to do the other half.
+
+The workplan offered two fixes: say it in the DOC, or have the tool warn.
+The tool warns. A doc sentence costs prompt on every turn and only
+reminds; the warning costs nothing until the failure happens, and then it
+lands on the exact call that failed.
+
+### Measured first: scripts/stagger-motion-probe.jsx + .js (NEW, AE 26.3x87)
+
+Every clause of "this layer does nothing over time" was a guess about AE
+until it was measured:
+
+- **Marker is root property 1 on EVERY layer type, and it is a LEAF**
+  (`ADBE Marker`). A marker reads `numKeys > 0`, so a walk that counted
+  it would call a merely-MARKED layer animated and fall silent on exactly
+  the layers this exists for. **Time Remap** (`ADBE Time Remapping`) is a
+  root leaf too, and its keys DO count — the two cannot be told apart by
+  position, only by match name.
+- **Node cost:** 162 for a bare solid, 196 with three effects, 169 text,
+  154 shape, 30 camera, 29 light; a keyed layer exits at 7. **6480 nodes
+  across 40 layers ran in 53 ms — 0.008 ms/node**, so a 20000-node budget
+  covers ~120 layers for well under a fifth of a second.
+- **`source.duration` separates a still from something that plays**: a
+  solid's source reports **0**, a precomp's reports **4**. Text, shape,
+  camera and light layers have no `source` at all.
+- **M5 is the field failure through the real tool**: six bare solids,
+  `stagger_layers {spread: 2.5}` — the receipt verbatim, before and
+  after. After the fix the same call carries the warning, and the same
+  call once the six DO fade carries none.
+
+### The fix, at the root
+
+`AELL_scanMotion` + `AELL_layerIsStatic` + `AELL_staggerNoMotion` in
+`extension/jsx/hostscript.jsx`; `stagger_layers` sets `res.warning` when
+every target it just retimed is provably static.
+
+- The verdict is **deliberately one-sided**: it says "static" only where
+  it has proved it, and every doubt reads as motion. An **expression** is
+  doubt (it may be reading a keyframed slider two layers away, which no
+  walk of THIS layer can see) and so is **any effect at all** (CC Particle
+  World, Radio Waves and friends animate with zero keyframes). A warning
+  that says nothing animates has to be right, so it is cheap to stay
+  quiet. An **exhausted budget is UNPROVED**, not proof of nothing.
+- Cheap gates run first (source duration, `hasAudio`, effect count), so
+  the 162-node walk is only spent on real candidates.
+- **Zero prompt cost**: host string only, no tool doc touched. Full prompt
+  58967 of 59000, unchanged.
+
+### Verification
+
+- `tests/test-curve-tools.js`: **13 new assertions** (88 -> 101), and the
+  stub was itself the reason this class was invisible — its layers
+  answered `property()` by NAME only, with no root list to walk, so no
+  stubbed run could see a whole-layer scan at all. It now models the
+  measured tree: an index-addressable `Group`, `PropertyType`, match
+  names, Marker and Time Remap as root LEAVES, an Effect Parade, and a
+  source that reports duration 0. Two STUB FIDELITY assertions pin that.
+  **4 assertions go RED against the reverted hostscript.**
+- `tests/test-self-test.js`'s canned host answered `stagger_layers` from
+  a constant and `set_keyframes` with a hard-coded `keysSet: 18`, which
+  is the same blindness one level up. It now tracks which layers anything
+  has animated (`motion`, keyed by comp+layer), computes `keysSet`, and
+  reproduces the warning under the same rule — markers deliberately NOT
+  counted.
+- **Twelve new real-AE self-test steps** in `extension/js/selftest.js`: a
+  fresh comp of three untouched solids (every other comp in the suite has
+  been keyframed by then), the warning fires and names both the finding
+  and the next call, the placement it warns about still happened, a
+  marker does not silence it, two opacity keys on ONE of the three do,
+  and so does an unkeyed effect. The existing 9-square curve stagger
+  gained the other half: those layers carry scale AND opacity keys, so it
+  asserts there is **no** warning.
+- **Real AE harness 610 -> 622/622 PASSED.** Full stub sweep: 0 red files.
+  `docs/CAPABILITIES.md` regenerated.
+- `extension/` changed, so BUMPED: 0.11.19 -> **0.11.20**.
+
+### Notes / assumptions
+
+- Scope held to what the bullet asked: the warning fires only when EVERY
+  target is static, which is the shape the workplan filed. A mixed comp
+  (five static layers and one animated) says nothing. Naming the static
+  few is a louder, noisier message and a separate call.
+- A video FOOTAGE source is treated as moving on the same
+  `source.duration > 0` rule that the precomp measurement established;
+  only the solid (0) and the precomp (4) were measured directly, as the
+  probe imports no media.
+- Known and accepted false negative: layers gridded by `grid_layout` and
+  then staggered carry rig expressions, so they buy silence. That is the
+  one-sidedness working as intended, and it is not the filed case — the
+  row 32 rig is bare solids with no expressions.
+- No `scripts/chat-probe.js` field run this pass. The probe plus twelve
+  real-AE steps pin the behaviour; whether the warning actually makes the
+  model add the fade is a variants run for a later pass.
+- Next in the workplan: row 35 ("soften"/"too sharp" reaches `add_mask`,
+  2 of 4 phrasings), then row 30 casual (`grid_layout` with no `layers`
+  grids the BACKGROUND in).
+
+### Machine state
+
+AE running, project untouched and open, no dialog raised. AE was never
+closed and its project was never closed. The probe removed every comp and
+solid source it made. No ComfyUI, no llama-server.
+
+## 2026-09-03 (third pass) — section 8, row 35: "soften"/"too sharp" reached `add_mask` (0.11.21)
+
+Harness GREEN on arrival (622/622), so this pass took the workplan's next
+ranked item. It went red MID-pass for an unrelated reason and that is
+fixed here too — see "The harness leak" below.
+
+### The defect
+
+Field run 2026-09-02, row 35 ("soften the background"): **2 of 4
+phrasings reached `add_mask`**, both scored HARM.
+
+- vague, "the background is too sharp behind the icons" ->
+  `add_mask {shape: 'custom', vertices: the layer's own four corners,
+  feather: 50}` on the 1920x1080 BG, `ok`, "the background now has a
+  feathered mask to appear less sharp".
+- typo, "sofetn the backgrond layer a touch" -> `add_mask {shape:
+  'ellipse', bounds: [500,400,920,280], feather: 50}` + `set_mask`,
+  `ok`, "softened with a feathered mask".
+
+Nothing was softened either time. A mask feather fades the mask EDGE and
+never touches a pixel inside the region.
+
+### Two levers, because the failure has two halves
+
+**1. Routing (the prompt).** The choice happens BEFORE any tool call, so
+no receipt can reach it. The prompt taught how to REMOVE a blur ("get rid
+of the blur" = remove_effect) and never once how to ADD one, and the only
+soft-sounding words in the whole prompt were the mask bullet's own "a
+vignette is a big feathered ellipse" — the prompt was pointing the wrong
+way. The probe runs at ctx 16384, which is COMPACT mode, and compact
+keeps the rules block and the first sentence of each doc, so the fix had
+to live in the rules. The mask bullet now carries the anti-target:
+`'soften it / blur it / too sharp / out of focus' = apply_effect
+{effect: 'Gaussian Blur'} — a mask feather softens the mask EDGE, never
+the picture.`
+
+**Paid for, measured with `buildSystemPrompt().length`: 58967 -> 58947,
+a NET CUT of 20 with the phrase list in.** Two cuts funded it, and both
+were things the model already gets elsewhere:
+
+- `add_mask`'s doc dropped its worked "bottom half" example (the bullet
+  above carries that phrase; the convention is one phrase per doc, and
+  that one phrase is kept) and its `sizes from get_comp_details`
+  pointer, which is now simply WRONG — get_bounds superseded it and the
+  tool's own refusal names the layer's real box.
+- `delete_mask`'s doc dropped a description of its own refusal. The
+  grounded refusal says it at the point of failure, which is the whole
+  design.
+- Honest second number: **compact went 39314 -> 39498 (+184)**. The
+  descs a compact prompt drops are where both cuts landed, so compact
+  pays for the phrase list in full. That is the rules block doing the job
+  it exists for, but it is not free and is written down here as growth.
+
+**2. Behaviour (the host), for the half that IS provable.** The vague
+call's region was the layer's own four corners. That falls between
+`add_mask`'s two existing refusals — it does not MISS the layer, and it
+is not BIGGER than it on any side — so both walked past it and the
+receipt was a bare `ok`. `add_mask` now sets `res.warning` there:
+
+    That mask covers all of 'BG' (1920x1080 at x 0 to 1920, y 0 to 1080),
+    so it cuts nothing away — its feather only fades the layer's OUTER
+    EDGE, it does not blur the picture. To blur the picture:
+    apply_effect {layer: "BG", effect: "Gaussian Blur"}.
+
+Unfeathered, the same coverage is a plain no-op and the way out is a real
+region (`Pass 'bounds' for the part you want to KEEP`), with no blur
+offered that nobody asked for.
+
+**Warned, not refused** — a full-layer feather IS a real edge fade, so
+refusing would take a capability away. And one-sided the way every other
+verdict in this file is, silent wherever "cuts nothing away" is not
+PROVED:
+
+- **no bounds and no vertices is silent.** The tool's own default region
+  IS the layer's box, and `add_mask` + `set_mask_path` opens with exactly
+  that placeholder. Only a region the caller NAMED is judged.
+- **inverted, or mode subtract/intersect, is silent.** At full coverage
+  those cut the whole layer away — a change, not a no-op.
+- **a feather on a region that really does cut something away is
+  silent.** That is the vignette the rules route here; a warning there
+  would be noise on the tool's best use.
+
+Zero prompt cost for this half (host string only).
+
+**The typo phrasing's ellipse is NOT covered and this pass does not
+pretend it is.** It hides ~90% of the BG, which is a real, visible change
+and indistinguishable from a spotlight or a vignette. There is nothing
+provable to say about it, and the prompt says a `warning` means "probably
+not what the user wanted", so inventing one there would be a false
+verdict. Whether the rules bullet alone turns that phrasing around is a
+`--variants` run for a later pass.
+
+### The harness leak (found by this pass, not caused by it)
+
+The second harness run came back **627/628**, failing
+`reduce_project will not guess which comps matter` — "the refusal did not
+list real comps". A read-only probe of the open project (68 items) found
+the reason at the top of it: **`AELL Self-Test Wipe` through `…Wipe 10`.**
+
+The carpet-bomb rig comp is the ONE rig comp in the suite with no
+cleanup step — every other one is deleted by the step that finishes with
+it (the stagger rig added last pass does this correctly). So each harness
+run left another, `create_comp` auto-numbering them. The
+bottom-of-suite check "nothing of the suite's remains in the project"
+could not see them either: it looks for the `ST ` namespace and for new
+FOOTAGE, and a comp called `AELL Self-Test …` is neither.
+
+It surfaced ten runs later and a long way from the cause:
+`reduce_project`'s refusal lists the project's comps and TRUNCATES the
+list, and the tenth leaked Wipe comp pushed the comp that step looks for
+off the end of it.
+
+Both halves fixed: the missing `cleanup: delete the carpet-bomb rig comp`
+step, and the final check now also flags any item named `AELL Self-Test…`
+that is not in the run's baseline — scoped by ID, so a rig comp a user
+kept on purpose from an earlier run is never blamed on this one. The ten
+leftovers were removed from the open project by an exactly-named one-off
+(10 removed, 58 items kept, nothing else touched).
+
+### Verification
+
+- `tests/test-shape-mask-tools.js`: **13 new assertions** — the field's
+  own call warns and names Gaussian Blur, the mask it warns about is
+  really created, the unfeathered no-op points at `bounds` and offers no
+  blur, and the four silences (default region, inverted, subtract, a real
+  feathered vignette). **4 go RED against the reverted hostscript.**
+- `tests/test-chat-probe.js`: the prompt accounting — the four new
+  phrases on the mask bullet, that they route to `apply_effect` /
+  `Gaussian Blur`, the EDGE clause, and that both mask docs stayed short
+  enough to have paid for it.
+- `tests/test-self-test.js`'s canned host answered `add_mask` without
+  ever computing the warning, which is the same blindness one level up
+  that row 32 hit. It now works the coverage out from the same geometry
+  the host does, vertices included, and reproduces both messages.
+- **Six new real-AE self-test steps** in `extension/js/selftest.js` on
+  `ST Mask Off` (a 200x200 solid with no masks left on it by then): the
+  warning fires with the layer's real size and the way out, the mask
+  survives it, the unfeathered variant reads differently, and the three
+  silences.
+- **Real AE harness 622 -> 629/629 PASSED** (+6 mask steps, +1 cleanup
+  step). Full stub sweep: 0 red files, `test-comfy-backend.js` included
+  this time. `docs/CAPABILITIES.md` regenerated.
+- `extension/` changed, so BUMPED: 0.11.20 -> **0.11.21**.
+
+### Notes / assumptions
+
+- The warning uses `warning`, not add_mask's existing `note`. The prompt
+  already says a `warning` field means the result is probably not what
+  the user wanted; `note` stays for the informational overflow message.
+- `Gaussian Blur` / `Blurriness` are the AE 2026 display names the probe
+  measured on the row-35 casual phrasing that PASSED, not names picked
+  from memory.
+- No `scripts/chat-probe.js` field run this pass. Six real-AE steps and
+  the stub pin the behaviour; whether the rules bullet actually moves the
+  vague and typo phrasings is a `--variants` run for a later pass, and it
+  is the one thing that would close row 35 for real.
+- Next in the workplan: row 30 casual (`grid_layout` with no `layers`
+  grids the BACKGROUND in), then finding 4 (a rollback throws away the
+  calls that WORKED when a later one fails on a parameter name).
+
+### Machine state
+
+AE running, project untouched and open, no dialog raised. AE was never
+closed and its project was never closed. The one-off sweep removed only
+the ten leaked `AELL Self-Test Wipe` comps; the probe and sweep scripts
+were deleted from `logs/`. No ComfyUI, no llama-server.
+
+
+## 2026-09-03 — row 30: a guessed grid swept the backdrop in (0.11.22)
+
+**Item:** the next one in the queue — row 30 casual, `grid_layout` with
+no `layers`.
+
+Harness was GREEN at the start (629/629), so the workplan item stood.
+
+### The failure
+
+Field run 2026-09-02: "line the Icon layers up in a neat 3 by 2 grid"
+reached `grid_layout {spacingX: 40, spacingY: 40}` — no `layers`, no
+`columns`. Headless there is no selection, so the tool did exactly what
+its doc promised and gridded ALL content layers: the comp's full-frame
+BACKGROUND and the HEADLINE went into cells with rig expressions on
+their Positions. The user named a subset in words and got the whole
+comp.
+
+Two misses in one call, and three levers between them.
+
+### 1. Behaviour (the host) — the half that is PROVABLE
+
+A layer that covers the WHOLE frame is a backdrop, not grid content —
+the same judgement the fallback already made about nulls, cameras and
+lights, applied to the one other thing nobody grids. `AELL_compBoxOf`
+(new; the corner-mapping `get_bounds` already reports, factored for
+callers inside the host) plus `AELL_fillsFrame` answer it, and the
+guessed grid now leaves those layers out and NAMES them:
+
+    skipped: ["ST Grid BG"]
+    skippedNote: Left out of the grid: ST Grid BG — it fills the whole
+    640x360 frame, so it is a backdrop, not grid content. No 'layers'
+    list was given and nothing was selected, so the grid used the comp's
+    content. To grid it too, re-call with layers: ["ST Grid BG", ...]
+    naming every layer you want in the grid.
+
+Skipped rather than warned, because a warning arrives too late to be
+acted on: `grid_layout` cannot un-rig a layer it already rigged, and
+re-running with a subset leaves the backdrop's expression behind. The
+way out is a `layers` list, and the note is paste-ready.
+
+One-sided, and only where the tool GUESSED:
+
+- an explicit `layers` list is never filtered — the caller chose;
+- a live selection is never filtered — the user chose;
+- a 3D layer, or one whose box AE will not measure, is KEPT:
+  `AELL_compBoxOf` returns null for any 3D chain rather than a wrong
+  answer (`sourcePointToComp` ignores Z, the camera and a 3D parent's
+  rotation — measured 2026-08-29, and get_bounds already refuses there);
+- if dropping backdrops would leave fewer than 2 layers, nothing is
+  dropped. A comp of full-frame stills IS a grid of stills;
+- half a pixel of slack on each edge, because a 1920x1080 solid centred
+  on 960,540 comes back through the transform math as 1919.9999 often
+  enough to matter;
+- the scan costs one `sourceRectAtTime` and a parent walk per layer, so
+  it stops at 200 layers and stays quiet beyond that (grid_layout was
+  measured at 872 ms on 200 layers, 2026-08-28).
+
+**The HEADLINE half is NOT covered and this pass does not pretend it
+is.** A text layer that is not full-frame is indistinguishable from a
+tile; there is nothing provable to say, so nothing is said.
+
+Zero prompt cost (host strings only).
+
+### 2. Routing (the prompt) — a NET CUT, 58947 -> 58926
+
+The rule that should have fired already existed and its phrase list was
+one shape short: `'each X' / 'every X' / 'all the Xs'` — not "the Icon
+layers", which is what the user typed. It now reads
+`'each X' / 'every X' / 'all the Xs' / 'the X layers' names a CLASS of
+layers — pass {layers: [...]}`.
+
+The column count is the second miss and it went on the ARGS line, which
+compact mode never touches and which is what the model copies:
+`columns?: int ('3 by 2' = 3; default ~square; 1 = column, n = row)`.
+
+And the grid bullet may not promise more than the tool now does, so
+"grids ALL content layers" became "grids ALL content layers except a
+full-frame backdrop" — otherwise the fix becomes a new silent surprise
+for a user who really does want the backdrop in.
+
+Paid for by two cuts, both duplicates:
+
+- `grid_layout`'s doc dropped "Creates its OWN control null — never
+  add_null first." The rules bullet says it word for word, and the
+  rules block is what a compact prompt keeps.
+- …and its "(nulls/cameras/lights excluded)" roster. The receipt now
+  reports what the grid left out, by name, at the point of use.
+
+**Full 58947 -> 58926, a net cut of 21. Honest second number: compact
+went 39498 -> 39562 (+64)** — both cuts landed in the descs a compact
+prompt already drops, so compact pays for the rules addition in full.
+Written down as growth, the way the mask pass wrote down its +184.
+
+### 3. A lint that was one line away from a false alarm (found here)
+
+`tests/test-es3-ternary.js` went red on `apply_keyframe_ease`'s ARGS
+line — a doc string, never handed to an interpreter. Nothing about it
+had changed. Its hit only counts when AE object-model text sits within
+25 lines, and removing ONE line from grid_layout's desc slid
+`effect: display name or match name (e.g. 'ADBE Gaussian Blur 2')` — an
+EXAMPLE — into range.
+
+The lint's own comment says tool docs are what the window exists to keep
+out, so the window got the exclusion it was missing: a hit whose source
+line matches `^\s*args: "` is a tool doc and is dropped. Narrow on
+purpose — only `tools.js` has those lines (79 of them), nothing that is
+really evalled has any, and two new assertions prove the predicate
+matches a doc line and never a line that BUILDS ExtendScript.
+`AE_OBJECT_MODEL` itself was left alone: `selftest.js` earns its place
+in EMBED through `ADBE ` in arg strings, and tightening it would have
+taken the ES3 guard off the file CLAUDE.md explicitly binds.
+
+### Verification
+
+- `tests/test-grid-layout.js`: the stub was blind to this class — its
+  layers had no `sourceRectAtTime`, no `valueAtTime` and an anchor of
+  [0,0] on everything, so nothing in it had a position in the frame at
+  all. It now models AE's real geometry (a layer with a SOURCE has a box
+  at 0,0 the size of its source, and AE centres such a layer's anchor in
+  it) and the bystander is a real full-frame backdrop. **12 new
+  assertions**: the backdrop is not gridded and gets no expression, the
+  skip is reported by name with the frame size and the way back in, the
+  3D full-frame Cube is kept, an explicitly-named backdrop is gridded
+  silently, a SELECTED backdrop is gridded silently, and an
+  all-backdrop comp grids all three and drops none. **5 go RED against
+  the reverted hostscript.**
+- `tests/test-chat-probe.js`: the prompt accounting — the new phrase on
+  the class rule, that it routes to `{layers: [...]}`, the args line's
+  '3 by 2', the bullet's corrected promise, and both cuts.
+- `tests/test-self-test.js`'s canned host answered `grid_layout` with a
+  slider list and nothing else, so no stub could see the new steps. It
+  now keeps a per-comp layer stack and solid sizes (it already had
+  `mkSizes` and `compProps`) and works the backdrop out from the same
+  geometry the host does, scoped to the rig comp. Its failure-path
+  fixture also had to stop failing every `grid_layout` call and fail
+  only the FIRST — the suite now grids twice, and "one failing step
+  surfaces and the run still finishes its cleanup" is what that
+  assertion is for.
+- **Ten new real-AE self-test steps** in `extension/js/selftest.js` on a
+  new 640x360 rig comp (`AELL Self-Test Grid BG`, deleted by its own
+  cleanup step): the guessed grid places three icons and not the
+  backdrop, the note carries the frame size and the paste-ready
+  `layers:` list, the backdrop's Position carries NO expression while an
+  icon's does, and a NAMED backdrop is gridded with nothing said. The
+  comp is its own because grid_layout's fallback only fires with an
+  empty selection, and every other comp in the suite has layers selected
+  by the time it runs.
+- **Real AE harness 629 -> 639/639 PASSED.** Full stub sweep: 0 red
+  files. `docs/CAPABILITIES.md` regenerated.
+- `extension/` changed, so BUMPED: 0.11.21 -> **0.11.22**.
+
+### Notes / assumptions
+
+- One real-AE fact fell out of the first harness run, which came back
+  638/639 on a step of my own: **`get_property` caps `expression` at 200
+  chars**, and the grid rig's expression is longer than that, so
+  "Grid X Spacing" is past the cut. A read-back check has to key on the
+  HEAD — the control-null lookup and the Columns slider. Both the real
+  step and the canned host now do.
+- `skipped` / `skippedNote`, not `warning`. Nothing went wrong: the tool
+  did the right thing and is reporting what it chose. `warning` is
+  reserved for "this is probably not what you wanted", which the prompt
+  already defines.
+- No `scripts/chat-probe.js` field run this pass. Ten real-AE steps and
+  twelve stub assertions pin the behaviour; whether the phrase-list
+  addition actually turns row 30 casual around is a `--variants` run for
+  a later pass — the same open receipt row 35 left.
+- Next in the workplan: a rollback throwing away the calls that WORKED
+  when a later one fails on a parameter name (findings 4), and a
+  `--variants` re-run of rows 30 and 35, which is what would close
+  either of them for real.
+
+### Machine state
+
+AE running, project untouched and open, no dialog raised. AE was never
+closed and its project was never closed. The suite cleans up its own rig
+comp (`AELL Self-Test Grid BG`) and the bottom-of-suite check confirmed
+nothing of the run's remains. No ComfyUI, no llama-server.
+
+## 2026-09-03 (local) - a rollback that ate a correct call (0.11.23)
+
+Workplan section 8, the row filed as finding 4 on 2026-09-03: **a
+rollback throws away the calls that WORKED when a later one fails on a
+parameter name.** Harness was green at 639/639 before the pass started,
+so the workplan item was the pass.
+
+### The defect
+
+Row 35 canonical, in the field: `apply_effect {effect: 'Fast Box Blur'}`
+succeeded, then `set_effect_param {param: 'Radius'}` failed with a
+properly grounded refusal - "'Fast Box Blur' has: Blur Radius,
+Iterations, ..." - and the WHOLE round rolled back, taking the blur with
+it. The model read the grounded error, relayed it to the user and
+stopped. The grounding worked; the rollback threw away what it bought,
+and the user who typed "the background is too sharp" got nothing.
+
+The rollback exists because a failed round's successes are DEBRIS: the
+model's instinct is to redo the round whole, which is how "make nine red
+squares" once made ten. That reasoning does not reach this shape. Nothing
+was written by the failing command, the error names its own correction,
+and the successful command is not debris - it is the ground the corrected
+retry stands on. `apply_effect` had to run before `set_effect_param`
+could be corrected at all.
+
+### The fix, at the trigger rather than per tool
+
+`AELL_errArg(msg)` -> `{ok: false, error, argFault: true}`. It is the
+opposite pole from `AELL_errPartial`: that one FORCES a rollback because
+half the work landed, this one FORBIDS one because none of it did.
+Returned only from a point where the tool provably has not touched the
+project yet - seven refusals, all pre-write:
+
+- `apply_effect`: missing `effect`, a layer type that takes no effects,
+  and "Effect not available" (AE matched neither display name nor
+  matchName).
+- `set_effect_param`: missing `effect`/`param`, a layer type that takes
+  no effects, "Effect not found on layer", and "Parameter not found" -
+  the one from the field.
+
+`AELL_maybeRollback` counts them. When EVERY failing mutating command in
+the round is `argFault` and none is `mutated`, the round is not rolled
+back: the verdict comes back `{rolledBack: false, kept: true, ...}` and
+the FIRST such failure gets one sentence appended - "The other commands
+in this round were APPLIED and are still there - do NOT send them again.
+Re-send only this one, with the name corrected." First one only, because
+repeating 130 chars per failure is the context bill 0.11.18 measured.
+
+**Narrow on purpose.** One non-naming failure in the round, or any
+`mutated` result, and the round still goes whole. The nine-squares round
+is untouched: `duplicate_layer` failing because its source does not exist
+is not a naming refusal from a tool that wrote nothing, it is a command
+whose prerequisite the round failed to build - and its successes ARE
+debris. Both directions are asserted.
+
+### The same defect one level down
+
+`for_each_layer` returned `AELL_errPartial` for its "Stopped after 5
+failures" summary unconditionally - including when `okCount` was ZERO.
+Five layers whose sub-tool refused a parameter NAME wrote nothing at all,
+yet the call reported itself as half-applied, which by itself arms the
+rollback and takes the rest of the round with it. That is exactly row
+36's shape (`for_each_layer` driving `set_effect_param` over seven
+layers). It is `AELL_errArg` now when `okCount === 0` AND every failure
+so far was `argFault`; **every other shape stays partial**, deliberately
+- a sub-tool that changed something and did not say so must not escape
+the undo, so the conservative reading is kept everywhere it might matter.
+
+### What was left OUT, and why
+
+A bad VALUE (`set_effect_param {param: 'Blurriness', value: 'quite
+blurry'}`) is the same shape by eye - nothing written, caller can
+correct it - and is NOT flagged. `argFault` means a NAME that is not
+there; whether the value guard runs before or after AE sees the write is
+unmeasured, and the conservative side is the one where the round still
+rolls back. Pinned as a boundary assertion rather than left to drift.
+
+The THROW channel was considered and rejected: `AELL_resolveProperty`
+throws the same "Parameter not found" for the dotted
+`effect.<Fx>.<Param>` spec, but `distribute_property` calls it inside its
+per-layer loop with no try, so a mid-loop throw after earlier layers had
+been written would have turned a genuinely partial round into an exempt
+one. Return sites only this pass. Filed below.
+
+### Verification
+
+- **Real AE harness 639 -> 644/644 PASSED.** Five new steps in the
+  rollback section of `extension/js/selftest.js`, replaying the field
+  round against real AE on `ST RB Survivor`: the armed round
+  `apply_effect 'Fast Box Blur'` + `set_effect_param {param: 'Radius'}`
+  comes back with neither row `rolledBack`, the grounded roster intact
+  and the keep-sentence on it; the corrected re-send (`Blur Radius`)
+  lands; `get_property {property: "effect.Fast Box Blur.Blur Radius"}`
+  reads 12, so the blur really was never undone; and the contrast round
+  (`apply_effect 'Glow'` + `duplicate_layer` on a missing layer) still
+  goes whole, with `list_properties {path: "effects"}` showing the Glow
+  gone and the blur still there. Real AE confirms in passing that Fast
+  Box Blur has no parameter called `Radius`.
+- `tests/test-round-rollback.js` 133 -> 149 checks. New `__nameFail`
+  scenario tool built on the real `AELL_errArg`: the round is not rolled
+  back, the square survives, no Undo is issued at all, the successful row
+  still reads `ok`, the roster survives verbatim, the keep-sentence is
+  written ONCE across two refusals, a naming refusal alongside
+  `__failMut` still rolls the round back, `__partial` outranks the
+  exemption, and a round that ONLY refused gets no promise about
+  successes it never had. **8 go RED against the reverted branch.**
+- `tests/test-for-each-layer.js` +5 checks: five naming refusals are
+  `argFault` and NOT `mutated`; one real success among them puts the call
+  back to partial; one failure that is not a naming refusal does the
+  same. **2 go RED against the reverted branch.** The pre-existing
+  "flagged as having mutated" assertion for a plain failing sub-tool is
+  untouched and still green - the exemption needs BOTH halves.
+- `tests/test-property-access.js` +7 checks on the real tools: all four
+  naming refusals carry `argFault`, a bad VALUE does not, a successful
+  call carries nothing. **4 go RED against HEAD's hostscript.**
+- `tests/test-self-test.js`: the canned host was blind to this class -
+  it accepted any parameter name and answered `list_properties` with a
+  generic tree - so it grew the rollback comp's effect parade (`rbFx`,
+  `rbFxParams`, Fast Box Blur's real roster), refuses an unknown
+  parameter with AE's own sentence shape, restores the parade on a
+  rollback, and its batch runner mirrors the exemption. Plus one
+  anti-drift assertion: the runner COPIES the rule rather than deriving
+  it, so it now fails if hostscript drops `AELL_errArg` or the
+  `argBad === badMut` branch.
+- Full stub sweep: 0 red. `docs/CAPABILITIES.md` regenerated (it was
+  stale from the new self-test steps).
+- **Zero prompt cost** - host strings only, nothing in `tools.js`
+  changed.
+- `extension/` changed, so BUMPED: 0.11.22 -> **0.11.23**.
+
+### The field run, honestly
+
+`node scripts/chat-probe.js --isolate --steps 35` was run against the
+real model and **passed - but it did not reproduce the failing shape.**
+The model chose `apply_effect {effect: 'Gaussian Blur'}` then
+`set_effect_param {param: 'Blurriness'}` - the RIGHT parameter, first
+shot, two rounds, no refusal - so the rollback never armed and the fix
+was never exercised. That is 0.11.21's routing bullet working, not
+evidence for this pass. The flip is therefore **unproven in the field**;
+what proves the behaviour is the five real-AE steps, which replay the
+exact round deterministically instead of hoping the model mistypes again.
+Transcript: `logs/chat-probe-2026-09-03T05-26-32.md`.
+
+### Notes / assumptions
+
+- **`kept`, not `warning` or `rolledBack`.** The panel keys on
+  `result.rolledBack` per row to print its one red "this round was
+  undone" line and to spend the per-request rollback budget. A kept round
+  sets neither, so the rows render the way any ordinary round does -
+  successes `ok`, the refusal muted as "adjusting" - and the budget is
+  not spent on a round that was never undone. That is correct: nothing
+  went wrong with the round, one command named something that is not
+  there.
+- **The keep-sentence is wording aimed at the model, and it is
+  unmeasured.** The rollback note's wording was measured against the
+  model on 2026-08-25 (the first version made it claim work that had been
+  undone). This one has not been - see the field run above, which never
+  got the model into the state. If a later `--variants` run shows the
+  model redoing a kept round whole, the sentence is the lever.
+
+### Filed for later passes, in priority order
+
+1. **The dotted `effect.<Fx>.<Param>` spec still rolls a round back.**
+   `AELL_resolveProperty` THROWS the same "Parameter not found" that
+   `set_effect_param` returns, and a throw reaches `AELL_runTool` as a
+   plain error, so `add_keyframe` / `link_property` / `set_expression` /
+   `set_keyframes` naming a bad parameter still cost the round its
+   successes. Needs the throw channel (`e.aellArgFault` read in
+   `AELL_runTool`) AND the `distribute_property` loop hole below closed
+   first.
+2. **`distribute_property` can mutate and then throw un-flagged.** Its
+   per-layer `AELL_resolveProperty` is inside the loop with no try, so a
+   layer whose renamed effect lacks the parameter throws AFTER earlier
+   layers were written - a plain `AELL_err`, no `mutated`, so the round
+   is not rolled back and half a spread survives. Pre-existing, found
+   while scoping this pass, not caused by it.
+3. **A bad VALUE is not `argFault`.** Deliberate this pass (see above);
+   measure whether `AELL_writeValue` can write before it throws, then
+   decide.
+4. **A `--variants` re-run of rows 30 and 35** - unchanged, still the
+   next workplan bullet, and now also the only thing that could measure
+   the keep-sentence.
+5. Everything else from the 2026-09-03 list is unchanged: step 2's
+   naming flake, the destructive-refusal wording on `delete_layer` /
+   `delete_mask` / `remove_effect`, the prompt's remaining headroom,
+   `property: string` in TOOL_DEFS, the add_mask COMP-coordinates habit,
+   `POST /tokenize`, the `comfyUrl` 8188/8000 mismatch on this machine,
+   the harness answering a modal with WORDS, `starved` wording,
+   delete_mask warning on a live expression, the unmeasured controller
+   GROUP and non-en_US locale, and `capParams`.
+
+### Machine state
+
+AE running, project untouched and open, no dialog raised. AE was never
+closed and its project was never closed. The self-test cleans up its own
+`ST Rollback` comp, the chat probe reported "cleanup: removed 1 project
+item(s)", and the bottom-of-suite check confirmed nothing of the run's
+remains. The probe's llama-server was started and stopped by the probe
+itself. No ComfyUI.
+
+## 2026-09-03 (local) - the --variants re-run of rows 30 and 35 (0.11.24)
+
+Workplan section 8, the bullet that read "THEN: a `--variants` re-run of
+rows 30 and 35 - the phrase-list additions for both are unmeasured in the
+field, and that run is what would close either of them for real."
+Harness was green at 644/644 before the pass, so the workplan item was
+the pass.
+
+### Row 30 is CLOSED: 4 pass, 0 miss, 0 HARM
+
+`node scripts/chat-probe.js --variants --steps 30,35`. All four
+phrasings of "arrange scattered layers into a grid" landed
+`grid_layout` on the six icons with the BACKGROUND left out, which is
+exactly what 0.11.22 built and could not prove. The phrase-list
+additions are now measured in the field. One observation, filed not
+fixed: the TYPO phrasing ("arrnage teh icon layers into a gird plz")
+spent six `center_anchor_point` calls before the `grid_layout` that did
+the work. It passes - centering an anchor is harmless and grid_layout
+did the job - but it is six calls of wasted round.
+
+### Row 35: the defect was the REFUSAL's own words
+
+Two of four phrasings were HARM, and both by the identical route:
+
+    !! set_mask {"layer":"BG","feather":10}
+       ERROR: Mask not found on 'BG' (several masks - pass {mask:
+              name|index}). Masks here: (none - add_mask creates one)
+    AI  The background layer does not have a mask. Adding a feathered
+        mask to soften it...
+    .. add_mask {"layer":"BG","feather":10}   -> ok
+
+`AELL_findMask`'s roster branch was answering a layer with ZERO masks,
+and it said two things wrong at once. "(several masks - pass {mask:
+name|index})" is FALSE on a maskless layer, and false in the worst
+direction: it reads as "there are masks, you just have not named one".
+Then it closed with "(none - add_mask creates one)", and the last clause
+of a refusal is an INSTRUCTION to this model - the same class 0.11.12
+fixed when distribute_property's refusal advised "delete the existing
+keyframes first" and the model wiped 18 keys. Here the model obeyed and
+feathered a full-frame mask, which softens nothing at all. Graded HARM
+twice: the CANONICAL sentence and its typo twin.
+
+`delete_mask` already knew the wording was wrong for zero - it carries
+its own up-front guard with a comment saying so ("the resolver's
+'several masks' wording would be wrong for zero"). The guard was never
+pushed down into the resolver, so `set_mask` and `set_mask_path` kept
+the broken message.
+
+### The fix, at the resolver
+
+`AELL_findMask(layer, ref, featherOnly)` gets a zero branch of its own:
+
+- **feather-only ask** (`AELL_featherOnly`: a feather and no mode /
+  inverted / expansion / opacity / name) -> `'BG' has no masks - and a
+  mask feather softens a mask EDGE, never the picture. To soften/blur
+  'BG' itself: apply_effect {layer: "BG", effect: "Gaussian Blur"}.`
+  **add_mask is deliberately NOT named** - the door-closing shape
+  0.11.13 gave remove_effect's empty parade, because the tail is the
+  part the model acts on.
+- **any other edit** -> `'BG' has no masks - nothing to change. add_mask
+  creates one.` That caller does want a mask, so it is told where to get
+  one. Same wording shape as delete_mask's.
+- **n > 0** is untouched: "several masks" is true with two of them and
+  the roster is real. The roster branch can no longer print an empty
+  "Masks here: " at all.
+
+`set_mask_path` shares the resolver and so shares the truth-telling half
+for free.
+
+### Verification
+
+- **Real AE harness 644 -> 653/653 PASSED.** Nine new steps in
+  selftest.js on a fresh maskless `ST Soften` solid: the feather-only
+  refusal carries no "several masks", no "add_mask", the EDGE sentence
+  and a paste-ready apply_effect naming the layer; a following
+  delete_mask proves the refusal wrote no mask; an `opacity` edit still
+  points at add_mask and offers no blur; a feather ALONGSIDE `mode` does
+  the same; and with two real masks the "several masks" roster branch is
+  proved intact.
+- **Field, and it flipped: canonical HARM -> pass and typo HARM -> pass,
+  in BOTH re-runs.** The canonical transcript is the receipt - the model
+  calls set_mask, reads the new refusal, and calls
+  `apply_effect {layer: "BG", effect: "Gaussian Blur"}` on the next
+  round. Row 35 went **2 pass / 2 HARM -> 3 pass / 0 miss / 1 HARM**.
+  Transcripts: `logs/chat-probe-2026-09-03T05-34-43.md` (before),
+  `...T05-46-32.md` and `...T05-47-27.md` (after).
+- `tests/test-shape-mask-tools.js` +19 checks (93 -> 112). **8 go RED
+  against the reverted hostscript**, naming the exact strings.
+- `tests/test-self-test.js`: the canned host had NO `set_mask` case at
+  all and answered permissively, which is why no stub could see this
+  class. It has one now, faithful to AELL_findMask's resolution rules
+  and its zero branch.
+- Full stub sweep: 0 red. `docs/CAPABILITIES.md` regenerated.
+- **Zero prompt cost** - host strings only, nothing in `tools.js`
+  changed (58926 unchanged).
+- `extension/` changed, so BUMPED: 0.11.23 -> **0.11.24**.
+
+### Row 35 is NOT closed, and the reason is a different defect
+
+The `vague` phrasing ("the background is too sharp behind the icons")
+passed in the run BEFORE the fix and was HARM in both runs after it.
+That is not a regression this pass caused - it cannot be, the vague run
+never calls set_mask and `AELL_findMask` is reachable only from
+set_mask / set_mask_path / delete_mask. What the three runs actually
+show is that its earlier pass was the lucky one:
+
+| run | vague call | why nothing was said |
+|-----|-----------|----------------------|
+| before fix | `add_mask` full-frame, mode unset | 0.11.21's warning FIRED, model followed it to Gaussian Blur - pass |
+| after, run 1 | `add_mask` full-frame, **mode: subtract** | 0.11.21 is one-sided: subtract is silent |
+| after, run 2 | `add_mask` **ellipse 400x400** at the centre | it cuts something away, so it is a vignette - silent |
+
+Three runs, three different mask shapes, and the single pass came from
+hitting the one shape the warning covers. So the vague phrasing's defect
+is ROUTING - "too sharp" reaches for a mask at all - and the mask then
+lands somewhere add_mask cannot honestly warn about. One wording change
+per pass is the section 8 rule and this pass spent its change on
+behaviour, so the lever is filed rather than pulled. Filed below.
+
+### Notes / assumptions
+
+- **The zero branch is not `AELL_errArg`.** 0.11.23's rollback exemption
+  would arguably fit (it is a pre-write naming refusal that says what
+  exists), and set_mask does `return AELL_err(e.message)` before
+  touching anything, so it is a return site. Left alone on purpose:
+  widening the exemption is filed workplan item 1 and wants its own
+  pass and its own evidence. This pass measured WORDS, not rollbacks.
+- **`featherOnly` is narrow on purpose.** A feather arriving with any
+  other mask edit means the caller wants a real mask, and gets add_mask.
+  Both directions are asserted in the stubs and in real AE.
+
+### Filed for later passes, in priority order
+
+1. **Row 35 vague: "too sharp / too crisp behind X" routes to a MASK.**
+   The rules bullet added in 0.11.21 carries the right phrases but lives
+   INSIDE the crop/mask bullet, which opens with
+   `'crop / chop off the lower half / ... / vignette' = add_mask` - the
+   0.11.13 ORDER lesson exactly, the model stops reading at the first
+   tool named. Candidate: lift the soften/blur clause out into a bullet
+   of its own so a blur is never read as a sub-case of masking. Costs
+   prompt bytes at 58926 against a 59000 ceiling, so it needs a paired
+   cut. Measure with `--variants --steps 35`; the gate is 4 pass.
+2. **A full-frame SUBTRACT mask hides the entire layer and says
+   nothing.** Measured this pass (run 1 above): `add_mask {bounds:
+   [0,0,1920,1080], mode: "subtract", feather: 100}` erased the BG
+   except a 100px fringe, on an `ok` receipt, in answer to "soften".
+   0.11.21 left subtract and inverted silent deliberately ("that is a
+   deliberate wipe"), which is defensible for a small subtract mask and
+   much weaker for one covering the WHOLE layer - there is nothing left.
+   Needs its own one-sidedness argument before anything is built.
+3. **Row 30 typo burns six `center_anchor_point` calls before the
+   grid_layout that works.** Passes, so it is cost and not harm.
+4. Everything else from the 2026-09-03 lists is unchanged: the dotted
+   `effect.<Fx>.<Param>` spec still rolling a round back, the
+   `distribute_property` mutate-then-throw hole, a bad VALUE not being
+   `argFault`, step 2's naming flake, the destructive-refusal wording on
+   `delete_layer` / `delete_mask` / `remove_effect`, `property: string`
+   in TOOL_DEFS, `POST /tokenize`, the `comfyUrl` 8188/8000 mismatch on
+   this machine, the harness answering a modal with WORDS, `starved`
+   wording, delete_mask warning on a live expression, the unmeasured
+   controller GROUP and non-en_US locale, and `capParams`.
+
+### Machine state
+
+AE running, project untouched and open, no dialog raised. AE was never
+closed and its project was never closed. The self-test cleans up its own
+`ST Soften` solid (a delete_layer step) inside the mask comp it already
+sweeps; all three chat-probe runs reported "cleanup: removed 1 project
+item(s)" and the bottom-of-suite check confirmed nothing of the run's
+remains. The probe's llama-server was started and stopped by the probe
+itself. No ComfyUI.
+
+## 2026-09-03 — row 35 `vague`: a blur read as a sub-case of masking (0.11.25)
+
+**Item:** section 8, the last open row-35 bullet — "the `vague` phrasing
+routes 'too sharp' to a MASK". Filed by the 0.11.24 pass as priority 1.
+
+**Harness at the start of the pass: 653/653 PASSED**, so the workplan
+picked the item rather than a repair.
+
+### The defect was ORDER, and the phrase list was already right
+
+0.11.21 put `'soften it / blur it / too sharp / out of focus' =
+apply_effect {effect: 'Gaussian Blur'}` into the prompt, and 0.11.24's
+re-run still measured the vague phrasing at HARM in two of three runs.
+That is the tell: the WORDS the user typed were in the prompt verbatim
+and the model still reached for a mask. So nothing was missing — the
+clause was in the wrong PLACE. It sat inside the crop/mask bullet,
+behind a "But", in a bullet whose first line reads
+`'crop / chop off the lower half / ... / vignette' = add_mask`.
+
+This is the 0.11.13 lesson a second time, and it is worth stating in the
+general form because it has now cost three passes: **a model reading a
+bullet stops at the first tool the bullet names.** 0.11.13 measured it
+on the clean-up bullet (five removal tools listed before the "ask"
+clause, all four phrasings stopped at the tools). Here the bullet opens
+with add_mask, so everything under it is read as being ABOUT masks —
+including the sentence that says not to use one.
+
+The 0.11.24 evidence that this was routing and not behaviour: three runs
+produced three DIFFERENT mask shapes (full-frame add, full-frame
+subtract, a centred 400x400 ellipse) and the single pass came from
+landing on the one shape 0.11.21's add_mask warning can honestly cover.
+No receipt can fix that, because the wrong choice is made before any
+tool is called.
+
+### The change
+
+The softening clause is its own plain-English bullet, and it comes
+FIRST — before the bullet that opens by naming add_mask:
+
+    - 'soften it / blur it / too sharp / out of focus' = apply_effect
+      {effect: 'Gaussian Blur'} — never add_mask: a mask feather
+      softens the mask EDGE, never the picture.
+    - 'crop / chop off the lower half / hide the bottom half / only
+      the top shows / cut a hole / vignette' = add_mask — never
+      set_layer_timing (that trims TIME), scale or anchor. A hole is
+      mode 'subtract'; a vignette is a big feathered ellipse.
+
+`never add_mask` is now stated outright rather than implied by the EDGE
+sentence, and the crop bullet keeps its own anti-targets untouched. One
+wording change, per the section 8 rule.
+
+### The cut, which is also a correction
+
+Splitting the bullet cost +12 (58926 -> 58938, headroom 62 against the
+59000 ceiling). Paid by deleting a sentence from `grid_layout`'s doc:
+
+    Omit 'layers' to use the selection; with nothing selected it grids
+    ALL content layers in the comp.
+
+Both halves were dead. The first is on the args line
+(`layers?: [name|index] (omit = user's selection)`), which compact mode
+keeps. The second had been **factually wrong since 0.11.22**, which
+stopped a guessed grid taking a full-frame backdrop — and the rules
+bullet above it already carries the corrected wording ("grids ALL
+content layers except a full-frame backdrop"). So the doc was promising
+the model something the tool would refuse to do. Deleting it is a
+correction that happens to pay for the bullet.
+
+**Prompt full 58926 -> 58839** (a net cut of 87, headroom 74 -> 161).
+Compact 39562 -> 39574: the +12 lands there too because the rules block
+is never compacted, while the doc cut does not, because compactDesc
+keeps only a doc's FIRST sentence. That asymmetry is the reason a
+second-sentence cut is the right currency for a rules addition.
+
+### Verification
+
+- **Field, the gate the workplan named (`--variants --steps 35` at 4
+  pass) — met, and met TWICE. 4 pass, 0 miss, 0 HARM in both runs.**
+  Every one of the four phrasings called `apply_effect {layer: 'BG',
+  effect: 'Gaussian Blur'}` as its first tool; not one mask was created
+  in eight runs. **Row 35 is CLOSED.** Transcripts:
+  `logs/chat-probe-2026-09-03T06-01-17.md` and `...T06-01-53.md`.
+- **Row 30 re-run to prove the CUT is safe** — the sentence deleted is
+  grid_layout's, and row 30 is the grid row. Still **4 pass, 0 miss,
+  0 HARM**. Transcript: `logs/chat-probe-2026-09-03T06-02-30.md`.
+- **Real AE harness 653/653 PASSED**, unchanged before and after. That
+  is the honest result and not a gap: this pass changed a prompt string
+  and a tool doc, and `selftest.js` drives host tools directly with no
+  model in the loop, so there is nothing in real AE for it to see. The
+  field matrix is this class's instrument.
+- `tests/test-chat-probe.js` +10 assertions, **all 10 RED against the
+  reverted prompt**, naming the exact defect. They pin BOTH halves,
+  because either alone lets the old shape back in: SEPARATION (the
+  softening clause is its own bullet, carries all four phrases, routes
+  to apply_effect, says `never add_mask`, and the crop bullet no longer
+  carries 'too sharp' or 'Gaussian Blur' itself) and ORDER (the blur
+  bullet's index is a real index and is less than the crop bullet's).
+- Full stub sweep: 0 red. `docs/CAPABILITIES.md` regenerated — no diff,
+  its table does not carry the sentence that went.
+- `extension/` changed, so BUMPED: 0.11.24 -> **0.11.25**.
+
+### Notes / assumptions
+
+- **The order assertion I nearly shipped was vacuous**, and the shape
+  recurs, so it is written down: `rules.indexOf(a) < rules.indexOf(b)`
+  is TRUE when `a` is ABSENT, because -1 is less than everything. It
+  passed against the reverted prompt in the red run — 9 of 10 failed,
+  that one did not — which is how it was caught. It is now
+  `blurAt !== -1 && cropAt !== -1 && blurAt < cropAt`. Any order
+  assertion needs an existence check on both operands.
+- **Row 35's canonical was a ONE-call round in the second run**
+  (apply_effect alone, no set_effect_param). Scored pass and correctly
+  so — "a touch" of softening is served by Gaussian Blur's default —
+  but noted because the verdict function accepts either shape and a
+  future tightening should not read the one-call form as a miss.
+
+### Filed for later passes, in priority order
+
+1. **A full-frame SUBTRACT mask hides the entire layer and says
+   nothing.** Unchanged from the 0.11.24 filing, and now the top item:
+   `add_mask {bounds: [0,0,1920,1080], mode: 'subtract', feather: 100}`
+   erases a layer on an `ok` receipt. 0.11.21 left subtract and inverted
+   silent deliberately ("that is a deliberate wipe"), defensible for a
+   small subtract mask and much weaker for one covering the WHOLE layer.
+   Needs its own one-sidedness argument before anything is built. Note
+   that row 35 no longer PRODUCES this shape, so it needs a direct probe
+   rather than a variants run.
+2. **Row 30 typo burns six `center_anchor_point` calls before the
+   grid_layout that works.** Passes, so it is cost and not harm.
+3. **The prompt ceiling is the real constraint on this whole track.**
+   Headroom is 161 and the last four wording passes have each needed a
+   paired cut. The doc-second-sentence seam is nearly mined out (this
+   pass took the last obviously-dead one). Before the next rules
+   addition, consider whether a structural saving exists — e.g. the
+   tool table's args lines are never compacted and several repeat their
+   own doc.
+4. Everything else from the 2026-09-03 lists is unchanged: the dotted
+   `effect.<Fx>.<Param>` spec still rolling a round back, the
+   `distribute_property` mutate-then-throw hole, a bad VALUE not being
+   `argFault`, widening the `errArg` rollback exemption (filed item 1 of
+   the 0.11.24 pass), step 2's naming flake, the destructive-refusal
+   wording on `delete_layer` / `delete_mask` / `remove_effect`,
+   `property: string` in TOOL_DEFS, `POST /tokenize`, the `comfyUrl`
+   8188/8000 mismatch on this machine, the harness answering a modal
+   with WORDS, `starved` wording, delete_mask warning on a live
+   expression, the unmeasured controller GROUP and non-en_US locale,
+   and `capParams`.
+
+### Machine state
+
+AE running, project untouched and open, no dialog raised. **AE was never
+closed and its project was never closed.** All three chat-probe runs
+reported "cleanup: removed 1 project item(s)" and the harness's
+bottom-of-suite check confirmed nothing of the suite's remains. The
+probe's llama-server was started and stopped by the probe itself. No
+ComfyUI.
+
+## 2026-09-03 — the mask that erases the layer and says nothing (0.11.26)
+
+**Item:** the top item filed by the 0.11.24 and 0.11.25 passes — "a
+full-frame SUBTRACT mask hides the entire layer and says nothing".
+
+**Harness at the start of the pass: 653/653 PASSED**, so the workplan
+picked the item rather than a repair. Section 8's in-flight row list is
+now entirely struck, which is why this pass took the log's filed queue.
+
+### The instrument was the first thing that had to be measured
+
+The obvious way to ask "is this layer still visible" is to render a
+frame and compare it. It does not work, and it fails in the shape this
+whole item is about: **`comp.saveFrameToPng` exists on AE 26.3x87, is a
+function, throws nothing, and WRITES NO FILE** — `f.exists` false and
+`f.length` -1 every time, measured both with the comp open in a viewer
+and without. The first cut of the probe compared bytes against a file
+that was never written, so every PNG was 0 bytes, every case compared
+equal, and it reported a confident matrix of nonsense (`deterministic=
+true` is vacuous when both sides are empty). It is written down at the
+top of `scripts/mask-erase-probe.jsx` because a probe that cannot fail
+is worse than no probe.
+
+What works is `sampleImage` through an expression: a slider on a null
+carrying `thisComp.layer(L).sampleImage(pt, [0.5,0.5], true, time)[3]`,
+read back off `.value`. `postEffect: true` means the alpha comes back
+AFTER the masks, so it measures the layer itself rather than the
+composite, and it returns a NUMBER per point instead of a yes/no — which
+is what made the feather finding visible at all.
+
+### What AE actually does (26.3x87, nine sample points per case)
+
+The tool's own comment was the assumption under test. It said
+"'subtract', 'intersect' and inverted:true all cut something away at
+full coverage, so only plain additive coverage is provably nothing."
+Some of them cut EVERYTHING away:
+
+- **Region covering the whole layer:** only `subtract` empties it. `add`,
+  `intersect`, `lighten`, `darken`, `difference`, `none` all leave the
+  layer whole.
+- **`inverted` makes the region worth NOTHING instead** — and then
+  `intersect` and `darken` empty the layer *whatever is above them*,
+  while `add`, `lighten` and `difference` empty it only when there is
+  nothing above to keep. Measured both ways: alone, and added second
+  over an add mask on the left half.
+- **The miss matrix is the exact mirror of the covers-all matrix**, which
+  is the tell that "inverted" and "misses the layer" are the same fact.
+- **A feather does not rescue it, and does not blur anything either.** On
+  a 400x300 layer a full-coverage subtract reads alpha 0 at all nine
+  points at feather 0 and 5; at feather 100 the middle is STILL 0 and
+  only the edge points reach 0.42-0.45. So the picture is gone either
+  way and a soft fringe survives — the filed call carried feather 100,
+  which is a "soften it" ask, and it softened nothing.
+
+### The change
+
+`AELL_maskErases(mode, inverted, covered, alone)` is that table and
+nothing more; it returns "" for everything not on it. Three call sites,
+all in `add_mask`:
+
+1. **The receipt** (the filed defect). A mask that provably empties the
+   layer now carries a warning naming which setting did it, the fringe
+   the feather leaves, `apply_effect {effect: "Gaussian Blur"}` when a
+   feather was passed, and both ways out. **WARN, never refuse** — a
+   full-coverage subtract is what an animated reveal opens with, and it
+   is this tool's own default region under `subtract`. But it warns even
+   when the caller named NO region, which is the deliberate asymmetry
+   against the "cuts nothing away" warning beside it: that one waits to
+   be asked, because a no-op is cheap; a layer that vanished is not.
+2. **"covers ALL … so it hides nothing"** — false for `subtract`, which
+   hides everything, and its worked example ("to SHOW only the top
+   half") would have cut the top half away instead. Both branch now.
+3. **"misses it completely, so it would hide the whole layer"** — false
+   for `subtract`, which subtracts nothing. Says "would change nothing"
+   there. Both refusals still refuse: comp coordinates on a layer-space
+   argument is the mistake either way. Only the REASON was wrong, and a
+   reason is all the model gets to act on.
+
+### Verification
+
+- **Real AE harness 653 -> 667/667 PASSED.** 14 new steps in
+  `extension/js/selftest.js`, covering the erasure warning (subtract,
+  the default region, inverted-alone), the silences that keep it honest
+  (inverted under a mask that keeps something, inverted subtract), and
+  both corrected refusals.
+- One EXISTING suite step was re-justified rather than left: "…nor is an
+  inverted one, which hides everything" asserted the right outcome for a
+  reason now measured false — by that point the layer carries two masks,
+  so the inverted mask keeps what they kept. Renamed and re-commented.
+- `tests/test-shape-mask-tools.js` +21 assertions, **12 RED against the
+  reverted host**, each naming the exact defect. **Two OLD assertions
+  were DELETED, not adjusted**: they read "an INVERTED full-layer mask
+  hides everything — no warning" and "…and so does a SUBTRACT one",
+  i.e. they knew the layer disappeared and required the receipt to stay
+  silent about it. That is the defect pinned as a rule.
+- The canned host in `tests/test-self-test.js` had **no model of the
+  default region at all** (no bounds => no geometry => no verdict), so
+  `add_mask {mode: 'subtract'}` looked harmless there while it emptied
+  the layer in real AE. It computes the box now, and it works the
+  erasure out from the same geometry instead of knowing the answers by
+  name.
+- Full stub sweep: 0 red. `docs/CAPABILITIES.md` regenerated (step
+  counts moved).
+- `extension/` changed, so BUMPED: 0.11.25 -> **0.11.26**.
+- Zero prompt cost — host strings only, no tools.js change.
+
+### Notes / assumptions
+
+- **Assumed, and stated in the code: WARN rather than REFUSE.** The
+  filed bullet asked for a one-sidedness argument before anything was
+  built. The argument is that a full-coverage subtract is a real
+  technique (the opening frame of a reveal) and that this tool's own
+  default region produces one, so refusing would break work that means
+  it — while the receipt saying nothing is the failure this project
+  does not allow. No human was available to confirm; it is reversible in
+  one line if the owner disagrees.
+- **Mask OPACITY is not read.** `add_mask` never sets it, so it is 100
+  on every mask this tool makes, but `set_mask` can lower it afterwards
+  and nothing here re-checks. Silent by design, not by oversight.
+- The probe is re-runnable: `node scripts/mask-erase-probe.js`, and
+  `--read` re-prints the last run from `logs/mask-erase-probe.json`.
+
+### Filed for later passes, in priority order
+
+1. **An inverted SUBTRACT at full coverage is a provable no-op and is
+   still silent.** Measured untouched this pass. It is the "cuts nothing
+   away" warning's case, but that branch requires `plain` (uninverted
+   add), so it never fires. Small, and it needs the same asked/unasked
+   judgement the warning above it uses. Left out deliberately to keep
+   this pass's change set attributable.
+2. **`comp.saveFrameToPng` writing nothing is unexplained.** It costs
+   nothing today (no shipped code calls it) but it is the natural
+   instrument for any future pixel check — captions boxes, inpainting
+   tolerances, the self-verify track's comparators — so whatever is
+   wrong with it will be found again by a pass that needs it. Recorded
+   here rather than chased.
+3. **Row 30's typo still burns six `center_anchor_point` calls** before
+   the grid_layout that works. Passes, so it is cost and not harm.
+4. **The prompt ceiling is still the constraint on the section 8 track.**
+   Headroom 161; unchanged this pass, which spent nothing.
+5. Everything else from the 2026-09-03 lists is unchanged: the dotted
+   `effect.<Fx>.<Param>` spec still rolling a round back, the
+   `distribute_property` mutate-then-throw hole, a bad VALUE not being
+   `argFault`, widening the `errArg` rollback exemption, step 2's naming
+   flake, the destructive-refusal wording on `delete_layer` /
+   `delete_mask` / `remove_effect`, `property: string` in TOOL_DEFS,
+   `POST /tokenize`, the `comfyUrl` 8188/8000 mismatch on this machine,
+   the harness answering a modal with WORDS, `starved` wording,
+   delete_mask warning on a live expression, the unmeasured controller
+   GROUP and non-en_US locale, and `capParams`.
+
+### Machine state
+
+AE running, project untouched and open, no dialog raised. **AE was never
+closed and its project was never closed.** The probe built and removed
+its own `AELL Mask Probe` comp and solid source; the suite's new
+`ST Erase` solid is deleted by its own step, and the bottom-of-suite
+check confirmed nothing of the run's remains. No llama-server, no
+ComfyUI. The throwaway `saveFrameToPng` diagnostics (`aell-png-diag*.jsx`
+in %TEMP%, `logs/png-diag.txt`) were deleted at the end of the pass; the
+probe's own `logs/mask-erase-probe.json` is kept for `--read`.
+
+## 2026-09-03 — the mask that changes nothing and says nothing (0.11.27)
+
+**WORKPLAN 8, the filed #1 from the 0.11.26 pass**, deliberately left out
+of that pass to keep its change set attributable: *"an inverted SUBTRACT
+at full coverage is a provable no-op and is still silent."*
+
+Harness at the start of the pass: **667/667 PASSED**, so the workplan
+item took it rather than a repair.
+
+### There was no new measurement to take — only one to read backwards
+
+`logs/mask-erase-probe.json` (AE 26.3x87, nine sample points per case,
+`sampleImage(postEffect)`) already carried the answer. Its M1 block reads
+each mode alone against a baseline mean alpha of **1.0**, and its M3
+block reads the same mode added SECOND over a left-half add mask against
+a baseline of **0.333**, with a `sameAsBase` flag already computed. The
+erase pass used the rows that came out 0. This pass used the rows that
+came out **identical to the baseline** — the same fourteen measurements,
+the other end:
+
+```
+mode        inv   ALONE          SECOND (base .333)
+add               1.0 no-op      1.0  changed  (reveals everything)
+add|inv           0.0 ERASES     .333 SAME  -> no-op
+subtract          0.0 ERASES     0.0  ERASES
+subtract|inv      1.0 no-op      .333 SAME  -> no-op   <- the filed row
+intersect         1.0 no-op      .333 SAME  -> no-op
+intersect|inv     0.0 ERASES     0.0  ERASES
+lighten           1.0 no-op      1.0  changed  (reveals everything)
+lighten|inv       0.0 ERASES     .333 SAME  -> no-op
+darken            1.0 no-op      .333 SAME  -> no-op
+darken|inv        0.0 ERASES     0.0  ERASES
+difference        1.0 no-op      .667 changed  (INVERTS what is above)
+difference|inv    0.0 ERASES     .333 SAME  -> no-op
+none              1.0 no-op      .333 SAME  -> no-op
+none|inv          1.0 no-op      .333 SAME  -> no-op
+```
+
+Two things fell out of reading it that a deduction would have got wrong:
+
+- **`add` and `lighten` at full coverage are NOT the same fact as the
+  rest.** They read mean 1.0 alone AND added second — the layer ends up
+  fully showing either way — so "every pixel of it still shows" is true
+  whether or not the layer already had masks, while "changes nothing" is
+  true only when alone. They are two different claims, and the existing
+  `coversAll` warning makes the wider one. It was therefore left alone
+  and **widened to `lighten`**, which measures identically and used to
+  fall through to silence.
+- **`difference` is the one mode whose no-op depends on being alone in
+  the eff-all direction** (1.0 alone, 0.667 second — it inverts what the
+  mask above it kept), which is why the table has an `alone` row and not
+  just `always`.
+
+### The change
+
+`AELL_maskNoOp(mode, inverted, covered, alone)` is that table, the exact
+counterpart of `AELL_maskErases` and shaped like it: same arguments, same
+inversion rule, `"always" / "alone" / "notAlone" / ""`, and `""` for
+everything not measured. Nothing answers both helpers.
+
+One new branch in `add_mask`, after the erasure check and the "cuts
+nothing away" check, producing the receipt this class never had:
+
+    That mask changes nothing on 'BG' (1920x1080 at x 0 to 1920, y 0 to
+    1080): 'inverted' turns a mask covering the whole layer into one
+    covering NONE of it, so 'subtract' takes nothing away. Pass 'bounds'
+    for the part you want to KEEP.
+
+- The **reason** names the setting that did it, not the mode alone —
+  the erasure warning's shape, because a reason is all the model acts on.
+- The **way out** is mode-aware and measured: inverted, everything except
+  `subtract` HIDES the region it is handed and everything else KEEPS it,
+  so the sentence says CUT AWAY or KEEP accordingly.
+- With a **feather**, it adds "the feather has no cut edge to fade" and
+  names `apply_effect {effect: "Gaussian Blur"}`. Same reasoning as its
+  two neighbours: "soften it" is the ask that produces this call.
+
+**Gated on `asked`** — the caller named `bounds` or `vertices` — which is
+the *opposite* one-sidedness from the erasure warning beside it, and
+deliberate. With no region named, the tool's own default IS the layer's
+box, and `add_mask` + `set_mask_path` opens with exactly that
+placeholder. A no-op is cheap; a vanished layer is not.
+
+**Two deliberate omissions, both silence, both in the code comment:**
+
+1. **mode `'none'`** changes nothing at ANY region, so full coverage is
+   not what makes it a no-op and this branch would blame the wrong thing.
+   A `none` mask is also a path CARRIER (Stroke, Scribble, a path
+   expression), which is a real technique and must not be nagged about.
+2. **plain `add`/`lighten` at full coverage** — answered by the wider,
+   older sentence, as above.
+
+### Verification
+
+- **Real AE harness 667 -> 674/674 PASSED.** 7 new steps in
+  `extension/js/selftest.js` (inverted subtract, plain intersect, plain
+  darken, the feathered no-op, the unasked default, a half-layer region,
+  `mode: 'none'`, and lighten's wider receipt), and **two existing steps
+  rewritten because they pinned the defect**: "…nor is an inverted one
+  under masks that already keep some" and "…and an inverted SUBTRACT,
+  which empties nothing, is silent" both required a bare `ok` for a call
+  measured to do nothing, on the grounds that not-an-erasure means
+  nothing-to-say.
+- **7 of those steps are RED against the reverted canned host**, checked
+  by reverting `tests/test-self-test.js` alone: the three silence steps
+  pass both ways (correctly), the seven that assert a receipt do not.
+- `tests/test-shape-mask-tools.js` +18 assertions, **9 RED against the
+  reverted host**. **Three OLD assertions were rewritten, not deleted**,
+  because each was half right — they proved the call is not an erasure,
+  which is still true and still worth pinning, and then asserted
+  `!r.data.warning`, which was the defect. They now assert
+  `!/hides ALL of/` AND the no-op receipt.
+- The canned host in `tests/test-self-test.js` grew `mkNoOp`, worked out
+  from the same geometry rather than answering by name — the rule the
+  0.11.20 pass set after the stub could not see the stagger class.
+- Full stub sweep by exit code: 0 red. `docs/CAPABILITIES.md`
+  regenerated (step count).
+- **Zero prompt cost** — host strings and selftest only, no `tools.js`
+  change, so the full prompt stays 58839 (ceiling 59000, headroom 161).
+- `extension/` changed, so BUMPED: 0.11.26 -> **0.11.27**.
+
+### Notes / assumptions
+
+- **Assumed: WARN, and only when asked.** The erasure warning fires
+  unasked; this one waits. Stated in the code with the reason (cost
+  asymmetry), reversible in one condition if the owner disagrees.
+- **`lighten` joining the `coversAll` sentence is a behaviour widening,
+  not just a new branch.** It is measured, but it is the one change here
+  that touches a message that already shipped.
+- Mask OPACITY is still not read, same as the erase pass: `add_mask`
+  never sets it, `set_mask` can lower it afterwards, nothing re-checks.
+
+### Filed for later passes, in priority order
+
+1. **Neither mask table can see the mask ABOVE, only whether one
+   exists** — and one measured row needs it. A plain full-coverage
+   `difference` added over a mask reads 0.667 over a left-half base
+   (it inverts it), but over a base that shows everything it would come
+   out EMPTY, and `AELL_maskErases` answers `""` for that row, so it
+   would be a silent erasure. Same shape for `add`/`lighten` at full
+   coverage, which silently UNDO whatever the masks above them hid —
+   today they get "every pixel still shows", which is true but does not
+   say that the other masks stopped working. Both need a base the probe
+   never varied (it used one left-half add mask), so this is a
+   measurement pass before it is a code pass.
+2. **Row 36 vague is the last open HARM in the section 8 matrix** — the
+   model over-builds a `CTRL` null rig for a one-line shadow ask, layer
+   count 8 -> 9. Prompt-side, and headroom is 161.
+3. `comp.saveFrameToPng` writing nothing is still unexplained (0.11.26
+   filed it; nothing calls it, but it is the natural instrument for any
+   pixel check).
+4. Row 30's typo still burns six `center_anchor_point` calls before the
+   grid_layout that works. Passes, so it is cost and not harm.
+5. Everything else from the 2026-09-03 lists is unchanged: the
+   `distribute_property` mutate-then-throw hole, a bad VALUE not being
+   `argFault`, widening the `errArg` rollback exemption, step 2's naming
+   flake, the destructive-refusal wording on `delete_layer` /
+   `delete_mask` / `remove_effect`, `property: string` in TOOL_DEFS,
+   `POST /tokenize`, the `comfyUrl` 8188/8000 mismatch on this machine,
+   the harness answering a modal with WORDS, `starved` wording,
+   delete_mask warning on a live expression, the unmeasured controller
+   GROUP and non-en_US locale, and `capParams`.
+
+### Machine state
+
+AE running, project untouched and open, no dialog raised. **AE was never
+closed and its project was never closed.** No probe was run this pass —
+the measurement already existed on disk — so nothing was created outside
+the suite's own `ST ` namespace, and the suite's bottom-of-run check
+confirmed nothing of it remains (the new masks all live on `ST Erase`
+and `ST Mask Off`, which the suite deletes itself). No llama-server, no
+ComfyUI.
+
+## 2026-09-03 (local, real AE + real Premiere) - WORKPLAN 12b: the probe could only ever run ONCE (no bump)
+
+**Item:** section 12b, drive the Premiere P0 probe to green. Taken
+because the alternation rule says so: the last log entry (0.11.27) was
+an AE pass, not a 12b one. Harness first, as always -
+`scripts/run-ae-selftest.ps1` **674/674 PASSED**, so section 1 was
+green and the queue moved on.
+
+### What the first run showed
+
+`project` FAIL, `sequence` FAIL, `history` skipped, `mogrt` FAIL - and
+the close timed out on a dialog no rule matched:
+
+    This file path does not exist on disk at this location.
+    C:\Users\mr\AppData\Roaming\AE-Llama\probes\AELL_PROBE_SCRATCH.prproj
+
+The file was on disk: 14216 bytes, first four bytes `1F 8B 08 00`, a
+valid gzip. So the message is false on its face, and the instance had
+to be forced.
+
+### The measurement, before any fix
+
+The obvious deduction - "the scratch project is corrupt, a killed
+instance left it half-written" - is WRONG, and one run settled it.
+Three runs, changing one thing at a time:
+
+| run | scratch on disk | launched with it | `project` |
+|---|---|---|---|
+| 0311 | yes, left by a killed instance | yes | FAIL |
+| 0314 | no, moved aside by hand | no | **ok** (created + saved) |
+| 0316 | yes, written by run 0314's CLEAN close | yes | FAIL |
+
+0311 and 0316 differ only in who wrote the file, and they fail
+identically. So the file's history is not the discriminator:
+**Premiere 26.3.2 does not open a project handed to it as a
+command-line argument at all.** `app.project.name` stayed empty for the
+full 30 s `waitForReady` and `app.project.rootItem` threw
+`null is not an object` - it sits on the Home screen and eventually
+raises that modal.
+
+Two more facts fell out of the same three runs:
+
+- **`app.newProject(path)` refuses a path that is already taken.** It
+  returns `false`, leaves the project name empty, and drops an
+  `AELL_PROBE_SCRATCH<guid>` sidecar next to the target. The folder had
+  three of those, one per failed run, which is what pointed at the
+  cause in the first place.
+- Against a FREE path it works, and `save()` writes it (run 0314).
+
+So the design in the runner's own comment - "create it once, and from
+then on hand it to Premiere directly" - is what broke every run after
+the first. The probe poisoned its own next run: the first pass of the
+night passes and no later one can. That is exactly the shape an
+unattended loop must never inherit, and it is why the owner saw it fail
+by hand all day.
+
+### The fix
+
+One root cause, both halves of it:
+
+- `scripts/run-ppro-probe.ps1` **launches Premiere PLAIN, always**, and
+  **frees the scratch path first** - every `AELL_PROBE_SCRATCH*` file
+  (the project and the guid sidecars) is MOVED into `probes\stale`, not
+  deleted, and the count is printed. The old size heuristic
+  (`< 1024 bytes = stale`) is gone: it passed a 14216-byte file that
+  Premiere then refused, so it was never the discriminator.
+- `probe/com.cptk.aellama.probe/jsx/probe.jsx`'s `project` step no
+  longer treats `newProject` as the only route. When the scratch path
+  is already taken it tries **`app.openDocument(path, true, true, true,
+  true)`** - four suppress-the-dialog flags, which is the whole reason
+  to prefer it unattended - and only then moves the file aside and
+  creates. The probe is self-sufficient again: a human running the
+  visible panel does not go through the PowerShell runner and would hit
+  the same wall.
+- `hostFacts` now records `app.newProject` and `app.openDocument`.
+  **`openDocument` EXISTS on 26.3.2** (`function`) - a route nobody had
+  measured.
+- Two smaller honesty fixes in the same step: `via` reports how the
+  project was actually obtained (`created` / `opened the existing
+  scratch project` / `created via QE`) instead of always saying
+  "created", and the `app.newProject: not a function in this host` row
+  is now gated on actually having needed it - after `openDocument`
+  answers, that row was a false statement about the host.
+
+### Verification
+
+- **Confirm run 0320, from the exact state that had failed twice** (the
+  stale scratch still on disk): `Archived 3 scratch file(s)`,
+  `project` **ok** (created + saved), **`history` ok** - measured for
+  the first time, three `createBin` bins, cleanup removed them - and
+  **`Premiere closed.`** by itself, no modal, no forced kill.
+- The five lints 12b requires before a push: `test-es3-syntax`,
+  `test-es3-ternary`, `test-powershell-syntax` (pwsh present, so it did
+  NOT skip), `test-probe-bundle`, `test-manifest-xml` - all green.
+- **Stub back-fill: `tests/test-probe-bundle.js` +8 assertions**, a new
+  section 5, so this class is caught with no Premiere at all: the
+  runner never passes `-ArgumentList` on the Premiere launch; it frees
+  `AELL_PROBE_SCRATCH*` and does it BEFORE the launch; `probe.jsx`
+  reaches for `openDocument`, with all four flags, ahead of
+  `newProject`; and `hostFacts` records both routes. **6 of the 8 are
+  RED against the reverted sources** (checked by `git checkout HEAD --`
+  on the two files and re-running). The runner half is read
+  line-by-line with comment lines stripped, the idiom the Set-Content
+  check above it already uses - a comment explaining that we no longer
+  pass a project path reads, to a regex, exactly like a line passing
+  one.
+- AE harness re-checked at the top of the pass: **674/674**. Nothing in
+  `extension/` was touched, so it cannot have moved.
+
+### NOT bumped
+
+Deliberate, and it is 12b's own rule: the probe is not shipped and
+`extension/` is untouched, so a bump would push a no-op update to every
+installed panel.
+
+### Filed for the next 12b pass, in priority order
+
+1. **`sequence` still fails, and door 3 DROPS HALF THE JOB.** The job
+   file carries `seedMedia` and `readyTimeoutMs`; the `battArgs`
+   whitelist at `probe/com.cptk.aellama.harness/index.html:110`
+   forwards neither, and the visible panel keeps its own
+   hand-maintained copy of the same list at
+   `probe/com.cptk.aellama.probe/index.html:639`. So the step's
+   dialog-free PRIMARY route (`importFiles` +
+   `createNewSequenceFromClips`) has never run on any unattended run -
+   it does not even appear in the `tried` list, which is how it hid.
+   A whitelist that silently loses fields is the defect whatever it
+   costs, so fix it first, then re-measure.
+2. **The bars route's error is misattributed, and it changes the plan.**
+   `cleanup` removes three `AELL PROBE BARS` items every single run, so
+   `newBarsAndTone` SUCCEEDS at 25, 24 and 30 fps and
+   **`createNewSequenceFromClips` is the call that answers "Illegal
+   Parameter type"** - the `tried` rows blame the pair. That means (1)
+   alone may not turn `sequence` green, because the seed route ends in
+   the same call. Measure what `createNewSequenceFromClips` actually
+   wants before writing more routes.
+3. `mogrt` is blocked by `sequence` and stays unmeasured.
+4. **One thing that needs a human, not a pass:** whether three
+   `createBin` calls produce one History entry or three. The step
+   prints the instruction; nobody can read the History panel from a
+   script.
+
+### Machine state
+
+**After Effects was never closed and its project was never closed** -
+the only AE work this pass did was the read-only 674/674 harness run at
+the start. Premiere was launched and closed four times by
+`run-ppro-probe.ps1`, which is what that script does; the last close
+was Premiere's own, not a forced kill. Everything mutating happened in
+`%APPDATA%\AE-Llama\probes\AELL_PROBE_SCRATCH.prproj`; the earlier
+scratch files are in `probes\stale`, moved rather than deleted. No
+llama-server, no ComfyUI.
+## 2026-09-03 — the mask above was a COUNT, and it had to be a picture (0.11.28)
+
+WORKPLAN section 8, the top item filed by the 0.11.27 pass: **"neither
+mask table can see the mask ABOVE, only whether one exists"**. It was
+filed as a MEASUREMENT pass before a code pass, and that was the right
+call — the measurement moved three rows nobody had predicted.
+
+Harness green at the top of the pass (674/674), and the last log entry
+was a 12b Premiere pass, so 12b's own alternation rule sends this one to
+the AE backlog.
+
+### What was wrong
+
+`AELL_maskErases` and `AELL_maskNoOp` both took a BOOLEAN `alone` — "did
+this layer already have masks". Both had only ever been measured against
+two worlds: no mask at all, and ONE add mask on the left half. The
+0.11.27 pass noticed the gap by deduction and filed it rather than
+guessing, because a false "the layer is gone" costs more than the
+sentence is worth.
+
+### The measurement
+
+New `scripts/mask-above-probe.js` / `.jsx`, same instrument as the erase
+probe (a slider expression reading `sampleImage(postEffect)` alpha —
+`comp.saveFrameToPng` still writes no file on AE 26.3x87). What it
+varies is the thing the old probe held FIXED: the parade already on the
+layer. Six of them, chosen so that "what they show" and "how many there
+are" come apart — no mask; one add mask over the whole box; one over the
+left half; one entirely off the layer; two halves that meet; add-all
+plus subtract-left. Every mode x inverted x region over every one of
+them: 216 readings, seven sample points each.
+
+**Both filed defects reproduced against the SHIPPED tool** (the probe
+calls `add_mask` itself in its last stage):
+
+    parade        difference over the whole layer     add over the whole layer
+    no mask       1.0 -> 1.0  "changes nothing"       1.0 -> 1.0  "cuts nothing away"
+    shows all     1.0 -> 0.0  ***NO WARNING***        1.0 -> 1.0  "cuts nothing away"
+    two halves    1.0 -> 0.0  ***NO WARNING***        1.0 -> 1.0  "cuts nothing away"
+    shows half    0.429 -> 0.571 (silent, correct)    0.429 -> 1.0  "cuts nothing away
+                                                                    — every pixel of it
+                                                                    still shows"
+    shows none    0.0 -> 1.0  (silent)                0.0 -> 1.0   ditto
+
+The second column is a layer going black on a bare `ok`. The fourth
+column is the sentence being true about the new mask and silent about
+the two that just stopped working.
+
+**Three more rows the probe moved, none of them predicted:**
+
+1. **"No mask at all" is not the same state as "masks that show
+   everything."** AE composites the FIRST mask against an empty canvas
+   (add/lighten/difference/intersect/darken) or a full one (subtract), so
+   a full-coverage `difference` is a no-op on a bare layer and an
+   ERASURE over a mask that shows everything. That pair is the whole
+   proof that a count cannot answer this.
+2. **The inverted/miss mirror is FALSE once masks exist.** The old
+   helpers folded "inverted, covering everything" and "covering nothing"
+   into one `eff`. Measured: over a mask that keeps something, an
+   off-layer `intersect` or `darken` leaves the layer exactly as it was,
+   where its inverted full-coverage twin empties it. AE appears to drop
+   a mask lying wholly outside the layer once something else composites;
+   alone it does not, and it empties the layer.
+3. **A `subtract` over a layer whose masks already hide everything takes
+   nothing.** The old table said "always erases", which is a sentence
+   about the wrong mask.
+
+### The fix
+
+Both tables are GONE, replaced by one small algebra and one reader:
+
+- `AELL_maskApply(state, mode, region)` — the set algebra the two probes
+  agree with on every row: add unions, subtract takes away,
+  intersect/darken keep the overlap, difference inverts, 'none' does not
+  composite, and the first mask composites against empty (or full, for
+  subtract). Nine lines, and it reproduces both old tables exactly.
+- `AELL_paradeShows(masks, box)` — what the masks already there show:
+  `"nothing"` / `"all"` / `"some"` / `"none"` / `""`. **Exact, not
+  sampled**: the masks it will answer for are axis-aligned rectangles, so
+  the composite is constant inside every cell of the grid their edges cut
+  the layer box into, and one point per cell decides it. That is what
+  gets `twoHalves` right — two masks that cover the layer BETWEEN them
+  behave like one that covers it, and a rule looking for "one mask
+  covering all" would have let that layer go blank in silence.
+- `AELL_maskRect(mask)` is deliberately narrow, because every caller uses
+  the answer to make a claim about pixels: static, unfeathered, fully
+  opaque, closed, four vertices, zero tangents, and each vertex on a
+  corner of its own box (a diamond has the same bounding box and covers
+  half as much). Anything else abandons the reading.
+- `AELL_maskOutcome` answers `erases` / `noop` / `undoes` / `blank`.
+
+**A fourth receipt, `undoes`:** "That mask covers all of 'X' (...), so
+every pixel of it shows again: the 2 masks already on it stop hiding
+anything." UNASKED, like the erasure warning and unlike the no-op one —
+the layer visibly changes, and add_mask's own default region IS the whole
+layer box, so `add_mask {layer: 'X'}` with no bounds on a masked layer is
+exactly the call that trips it. Not for an ellipse: its four vertices
+bound the layer but the shape leaves the corners, so "every pixel" would
+be false.
+
+**And the erasure warning learned the row it was filed for:**
+"'difference' over the whole layer INVERTS what the 2 masks already on it
+show, and they were showing every pixel — so nothing is left."
+
+**An unreadable parade fails quiet in one direction and loud in the
+other.** With no reading available, `AELL_maskOutcome` answers only what
+EVERY reading agrees on — but for the "layer is gone" sentence it falls
+back to the END STATE rather than the change, because a full-coverage
+subtract leaves the layer blank whatever was above it, and silence about
+a blank layer is the one failure this whole branch exists to stop.
+
+### One bug the suite caught in my own algebra
+
+`difference` over the whole layer inverts what is above it, and "some"
+inverted is a DIFFERENT some — but the coarse three-state model compares
+them equal, so the first cut reported a no-op for the ordinary way to
+punch a hole. Measured 0.429 -> 0.571, i.e. it plainly works. The guard
+is exactly `was === "some"`: inverting "all" or "none" is exact, and over
+a bare layer the first-mask rule applies and no inversion happens at all.
+Caught by a real-AE step and a stub assertion within one run of writing
+it, which is the loop working.
+
+### Verification
+
+- **Real AE harness 674 -> 698/698 PASSED.** 21 new steps in
+  `extension/js/selftest.js`: a new `ST Above` layer for what the parade
+  shows (the undo receipt, the default region doing it unasked, the
+  difference-over-half that must stay silent, the difference-over-all
+  erasure, the subtract with nothing left to take, the off-layer
+  intersect refusal over masks) and a new `ST Blind` layer whose one
+  feathered mask cannot be read at all — which must NOT get the "shows
+  again" claim and MUST still get "hides ALL" under a subtract.
+- **Two existing fixtures repaired, not deleted.** The `ST Erase` rows
+  say "over an existing mask" and meant the rig that was MEASURED — one
+  mask on the left half — but the steps had stacked five erasers by then,
+  so they were running over a layer that showed nothing. Two
+  `delete_mask` steps and a left-half base put them back on the world
+  their comments describe. Same repair in the stub's `Solo` fixture.
+- **5 of the new steps are RED against the reverted canned host**
+  (693/698, checked by reverting `tests/test-self-test.js` alone).
+- `tests/test-shape-mask-tools.js` +18 assertions, **10 RED against the
+  reverted host**. Six old assertions rewritten because they pinned the
+  blindness — the loudest being "…and the tool's OWN default is never
+  warned about", which required SILENCE for a call that switched two
+  masks off. It is now split: silent on a bare layer (the placeholder it
+  was written to protect), loud over masks that were hiding something.
+- The canned host in `tests/test-self-test.js` grew the parade model —
+  mask GEOMETRY alongside the names, and the same algebra worked out from
+  it rather than answered by name, which is the rule the 0.11.20 pass set
+  after a canned host that knew its verdicts could not see a host that
+  stopped computing them.
+- Full stub sweep by exit code: 0 red. `docs/CAPABILITIES.md`
+  regenerated (step counts).
+- **Zero prompt cost** — host strings and selftest only, no `tools.js`
+  change.
+- `extension/` changed, so BUMPED: 0.11.27 -> **0.11.28**.
+
+### Notes / assumptions
+
+- **Assumed: the `undoes` warning fires UNASKED.** Same cost asymmetry
+  the erasure warning uses — the layer changes on screen — and the
+  opposite of the no-op warning beside it. It does make the add_mask +
+  set_mask_path placeholder noisier on a layer that already has masks,
+  which is stated in the code with its reason and reversible in one
+  condition if the owner disagrees.
+- **Assumed: eight masks is the cost guard** for reading a parade, and a
+  layer with more of them goes silent. A real parade is one to four.
+- The `covers` test still treats an ELLIPSE as covering its own bounding
+  box, which it does not — see the filed list.
+
+### Filed for later passes, in priority order
+
+1. **An ELLIPSE is not its bounding box, and three sentences assume it
+   is.** `covers` comes from `AELL_boxOfPoints(shape.vertices)`, so
+   `add_mask {shape: 'ellipse', mode: 'subtract'}` at the default region
+   is told it "hides ALL of the layer" when it plainly leaves the
+   corners, and the no-op and "cuts nothing away" sentences have the same
+   hole. The new `undoes` warning is already gated against it; the other
+   three are not, and unpicking them needs its own measurement (how much
+   does an inscribed ellipse actually leave?) plus a look at which
+   shipped steps would flip.
+2. **Row 36 vague is still the last open HARM in the section 8 matrix** —
+   the model over-builds a `CTRL` null rig for a one-line shadow ask,
+   layer count 8 -> 9. Prompt-side, headroom 161.
+3. Mask OPACITY is still not read anywhere: `add_mask` never sets it,
+   `set_mask` can lower it afterwards, nothing re-checks. It is one of
+   the reasons `AELL_paradeShows` abandons a reading, so it is now a
+   silence rather than a wrong answer.
+4. `comp.saveFrameToPng` writing nothing is still unexplained (0.11.26
+   filed it; nothing calls it, but it is the natural instrument for any
+   pixel check).
+5. Row 30's typo still burns six `center_anchor_point` calls before the
+   grid_layout that works. Passes, so it is cost and not harm.
+6. Everything else from the 2026-09-03 lists is unchanged: the
+   `distribute_property` mutate-then-throw hole, a bad VALUE not being
+   `argFault`, widening the `errArg` rollback exemption, step 2's naming
+   flake, the destructive-refusal wording on `delete_layer` /
+   `delete_mask` / `remove_effect`, `property: string` in TOOL_DEFS,
+   `POST /tokenize`, the `comfyUrl` 8188/8000 mismatch on this machine,
+   the harness answering a modal with WORDS, `starved` wording,
+   delete_mask warning on a live expression, the unmeasured controller
+   GROUP and non-en_US locale, and `capParams`.
+
+### Machine state
+
+**After Effects was never closed and its project was never closed.** The
+probe created `AELL Mask Above Probe` and removed it again (comp and
+solid source both), and the harness runs live entirely in the suite's own
+`ST ` namespace with its bottom-of-run check confirming nothing remains.
+No Premiere this pass. A llama-server was started briefly by
+`context-budget-probe.js` and is gone — checked, no `llama-server`
+process is running. No ComfyUI.
+
+## 2026-09-03 (local, real AE + real Premiere) - WORKPLAN 12b: the `sequence` step was never given its argument (no bump)
+
+**Item:** section 12b, the one named open failure - `sequence` STILL
+FAILING, first root cause "door 3 drops half the job". Alternation rule
+satisfied: the previous entry was a mask pass, not a 12b pass.
+
+**The AE harness was green before I touched anything (698/698)**, so
+this was not a harness-repair pass.
+
+### What was actually wrong
+
+Both doors built the battery's arguments from a hand-maintained
+whitelist naming six job fields - `probe/com.cptk.aellama.harness/
+index.html` and a SECOND copy in `probe/com.cptk.aellama.probe/
+index.html`. The job had grown `seedMedia` and `readyTimeoutMs`; neither
+whitelist grew with it. So the dialog-free primary route (`importFiles`
++ `createNewSequenceFromClips`) had never run on any unattended run.
+
+The nastiest part is the shape of the evidence. The route is guarded by
+`if (args.seedMedia)`, so with the field dropped it did not appear in
+the step's own `tried` list AT ALL - and a route missing from `tried`
+reads as "not applicable to this host", which is the opposite of the
+truth, "never delivered". The failure that WAS listed then got blamed on
+the wrong call (see below).
+
+### The fix
+
+One shared block, byte-identical in both doors, marked
+`BATTARGS-SHARED-BEGIN` / `-END`: copy every job field and name only
+what the RUNNER owns (`probeJsx`, `probe`, `args`, `createdAt`,
+`__claimed`). `progressPath` still comes from the door, because only the
+door knows where its breadcrumb goes, and the panel's auto-found `.mogrt`
+stays a FALLBACK rather than an override. A future job field now reaches
+the battery with neither door edited.
+
+### What the re-run measured
+
+`docs/measured/ppro-probe-2026-09-03-0413.json`, 26.3.2 / CEP 12.0.1:
+
+- **`sequence` ok** - `via: created`, `AELL PROBE SEQ`, **3 video
+  tracks**, and the WORKED row is `importFiles(seed still) +
+  createNewSequenceFromClips` on the FIRST try. No dialog.
+- **The second suspected cause did not exist.** The workplan note said
+  `createNewSequenceFromClips` was what answered `Illegal Parameter
+  type` and warned that forwarding `seedMedia` might not be enough.
+  Given a real imported clip that same call succeeds, so the rejected
+  parameter was whatever `newBarsAndTone` hands back on this build. The
+  bars route was not even reached this run.
+- `hostFacts`, `qe`, `project`, `history`, `cleanup` all still ok;
+  Premiere closed by itself.
+
+### The new failure this unblocked (next 12b pass's item)
+
+`mogrt` ran for the first time and FAILED: `importMGT` landed (track
+clip count 1 -> 2) but `mogrtAccept` reads the clip back as
+`clips[after - 1]` and got **`icon-normal.png`** - the seed still the
+sequence was built from. So the last index is not the clip just added,
+and `getMGTComponent` was asked of the wrong clip and returned null.
+Filed in WORKPLAN 12b with the fix direction: diff the track before and
+after instead of assuming position. Controller read-back on 26.3.2 stays
+UNMEASURED.
+
+### Verification
+
+- **`tests/test-probe-bundle.js` §8 is new and 6 assertions of it are
+  RED against the reverted doors** (checked by `git stash push --
+  probe/`). It extracts the shared block from both files, asserts they
+  are byte-identical, `new Function`s the REAL block and runs it against
+  a job built from the keys `run-ppro-probe.ps1` actually writes - so
+  the PowerShell runner, not the test's imagination, says which fields
+  must survive. A field lost in future names itself in the failure.
+- Required 12b lints green: `test-es3-syntax`, `test-es3-ternary`,
+  `test-powershell-syntax`, `test-manifest-xml`, `test-probe-bundle`.
+- Full stub sweep by exit code: **0 red**.
+- **Real AE harness 698/698 PASSED**, before and after.
+- `docs/PREMIERE-PLATFORM.md` section 4 has the new measurement.
+- **No version bump**, per 12b's rule: `extension/` was not touched, and
+  bumping would push a no-op update to every installed panel.
+
+### Notes / assumptions
+
+- **Assumed the runner-owned key list is those five.** `args` stays on
+  it because it is the explicit-override escape hatch and forwarding it
+  into itself would be circular; the other four are provenance or the
+  door's own plumbing. Anything else is the battery's business.
+- **Assumed a byte-identical duplicated block beats a shared file.** The
+  two bundles are junctioned separately and a relative path across them
+  would break; the test enforcing identity is what makes the duplication
+  safe, and it is the enforcement that was missing before, not the
+  single source.
+- The panel door's `battArgs` now also honours `job.args` as an
+  override, which only door 3 did before. Same job, same behaviour,
+  whichever door claims the file - which is what the door-3 comment
+  always claimed.
+
+### Machine state
+
+**After Effects was never closed and its project was never closed.** The
+AE harness ran twice in its own `ST ` namespace and its end-of-run check
+confirmed nothing was left behind. Premiere WAS launched and closed by
+`run-ppro-probe.ps1` (that is the script's own design) and worked only in
+the scratch `%APPDATA%\AE-Llama\probes\AELL_PROBE_SCRATCH.prproj`; the
+cleanup step removed `AELL PROBE 1/2/3` and `AELL PROBE SEQ`. No
+llama-server, no ComfyUI.
+
+## 2026-09-03 — an ellipse is not its bounding box (0.11.29)
+
+WORKPLAN section 8, the top item filed by the 0.11.28 pass: **"an
+ELLIPSE is not its bounding box, and three sentences assume it is."**
+Filed as needing its own measurement first, and that was right — the
+measurement moved a row nobody had filed (the custom TRIANGLE) and
+settled what the replacement sentence may claim.
+
+Harness green at the top of the pass (698/698), and the last log entry
+was a 12b Premiere pass, so 12b's alternation rule sends this one to the
+AE backlog.
+
+### What was wrong
+
+`covers` in `add_mask` came from `AELL_boxOfPoints(shape.vertices)` — the
+BOUNDING BOX of the four points an ellipse is drawn from. An ellipse at
+the tool's own default region has exactly the layer's box, so it was
+treated as covering every pixel of the layer, which it plainly does not:
+it leaves the four corners. Three sentences and both coordinate refusals
+rested on that reading, and every one of them failed in the reassuring
+direction.
+
+### The measurement
+
+New `scripts/mask-ellipse-probe.js` / `.jsx`, same instrument as the two
+mask probes before it (a slider expression reading
+`sampleImage(postEffect)` alpha — `comp.saveFrameToPng` still writes no
+file on AE 26.3x87). What it adds is the CONTROL the other two never had:
+every ellipse row has its RECTANGLE TWIN at the identical region, built
+from the identical numbers. Nine sample points chosen so the two shapes
+cannot read the same — four corners inside the layer box and outside the
+inscribed ellipse, four edge midpoints inside both — plus an 11x9 area
+grid for the rows a sentence talks about.
+
+    mode                  ellipse corners/mids   rectangle corners/mids
+    add                         0 / 1                   1 / 1
+    subtract                    1 / 0                   0 / 0
+    add + inverted              1 / 0                   0 / 0
+    subtract + inverted         0 / 1                   1 / 1
+
+**Opposite at the corners in all TWELVE compositing rows.** Only the
+non-compositing 'none' agreed. Area still showing: **0.202** under a
+full-box ellipse `subtract` where the rectangle leaves **0.000**, 0.798
+under an ellipse `add` where the rectangle leaves 1.000 (the grid's own
+calibration row reads the inscribed ellipse at 0.798 against pi/4 =
+0.785).
+
+All three filed defects reproduced against the SHIPPED tool, which the
+probe calls itself in its last stage:
+
+- `add_mask {shape: 'ellipse', mode: 'subtract'}` — "That mask hides ALL
+  of 'ME solid'" on a layer reading **corners 1, mean 0.444**.
+- `{shape: 'ellipse', bounds: the whole layer}` — "cuts nothing away —
+  every pixel of it still shows" having just cut the corners off
+  (**corners 0**).
+- the same bounds with `subtract` + `inverted` — "changes nothing",
+  **corners 0**.
+
+Two rows the probe moved that were not filed:
+
+1. **An inverted `add` is the fourth call in the same family** — corners
+   1, mids 0, the same four slivers as `subtract`. It was getting the
+   erasure sentence too.
+2. **Over a parade the corners do NOT all survive.** Over one add mask on
+   the left half the same ellipse `subtract` reads **corners 0.5**: only
+   the two corners that mask was showing. That is what the new sentence's
+   gate is built from, rather than a guess.
+
+### The fix
+
+One function, at the one place coverage is decided:
+`AELL_shapeCoversBox(kind, shape, box)`.
+
+- **The ellipse is answered EXACTLY, not sampled.** An ellipse is convex
+  and a rectangle is the convex hull of its four corners, so the ellipse
+  contains the layer box exactly when it contains all four of them — four
+  tests, no tolerance beyond 1e-9 for a corner sitting on the boundary.
+- **Everything it cannot prove answers false and every caller goes
+  quiet**, the same narrowness `AELL_maskRect` has and for the same
+  reason. That closed a hole nobody had filed: a custom **TRIANGLE** with
+  the layer's bounding box was being told it "covers all of the layer, so
+  it cuts nothing away", and it covers half.
+- The two coordinate REFUSALS keep the coordinates — which are the
+  diagnosis — and drop the coverage CLAIM when the shape does not back
+  it: a comp-sized ellipse over a 400x300 layer does not cover it
+  (measured: near corner outside, far corner inside) and can even miss it
+  entirely while its box contains it. The worked example still follows the
+  MODE, because that is advice about the call the caller meant. An ellipse
+  that really does contain the layer box gets the old sentence back.
+- The `undoes` warning's private `kind !== "ellipse"` gate is gone: it is
+  `covers` itself now, which is where it always belonged — the same hole
+  was open in the three sentences below it.
+
+**One new sentence, because silence would be worse than the old lie.**
+What the caller gets is a layer showing four corner slivers and nothing
+else, so: "That mask hides all of 'X' EXCEPT the four corners of its box
+(...): an ellipse only covers the middle of the bounds it is given, so
+about a fifth of the layer is left showing in the corners." Unasked, like
+the erasure warning it stands in for — `subtract` at the default region is
+exactly the call that trips it — and gated on the parade being EMPTY,
+which is the measured row above. The mirror direction stays silent: an
+ellipse that keeps the middle is a spotlight, which is what an ellipse
+mask is FOR (0.11.21 settled that).
+
+### Verification
+
+- **Real AE harness 698 -> 710/710 PASSED.** 12 new steps in
+  `extension/js/selftest.js`: the three false sentences, the inverted
+  `add` twin, the feather clause, the triangle, both refusals (the one
+  that must drop its claim and the big ellipse that keeps it), and the
+  parade gate — added and removed again so the rows below still see the
+  base they were measured on.
+- **5 of the new steps are RED against the reverted canned host**
+  (705/710, checked by reverting `tests/test-self-test.js` alone).
+- `tests/test-shape-mask-tools.js` §6e, +23 assertions, **11 RED against
+  the reverted host** — and the reverted run prints the defect verbatim,
+  including the triangle.
+- The canned host grew the same shape-aware coverage, worked out from the
+  geometry rather than answered by name (the rule the 0.11.20 pass set).
+- Full stub sweep by exit code: 0 red. `docs/CAPABILITIES.md` regenerated
+  (step counts).
+- **Zero prompt cost** — host strings and selftest only, no `tools.js`
+  change.
+- `extension/` changed, so BUMPED: 0.11.28 -> **0.11.29**.
+
+### Notes / assumptions
+
+- **Assumed "about a fifth" is the right precision.** The geometry says
+  21.5% and the grid says 20.2%; a number with a decimal point would
+  claim more than the reading supports, and the sentence is about whether
+  to redo the call.
+- **Assumed the corner sentence stays out of the parade case entirely.**
+  It could be widened to a parade that shows everything, but that row was
+  not measured this pass and the half-covering row proves the naive
+  version wrong — so it is silence, not a guess.
+- **Assumed a custom polygon that is not an axis-aligned rectangle is
+  silence, not a new sentence.** A general polygon-covers-rectangle test
+  is answerable, but nothing has measured what those masks DO, and this
+  file's rule is that a claim about pixels needs a measurement behind it.
+
+### Filed for later passes, in priority order
+
+1. **Row 36 vague is still the last open HARM in the section 8 matrix** —
+   the model over-builds a `CTRL` null rig for a one-line shadow ask,
+   layer count 8 -> 9. Prompt-side, headroom 161.
+2. Mask OPACITY is still not read anywhere: `add_mask` never sets it,
+   `set_mask` can lower it afterwards, nothing re-checks. It is one of the
+   reasons `AELL_paradeShows` abandons a reading, so it is a silence
+   rather than a wrong answer.
+3. The ellipse is exact for the NEW mask now, but an ellipse ALREADY on
+   the layer still makes the parade unreadable (`AELL_maskRect` takes
+   rectangles only). The algebra could carry an ellipse cell the same way
+   it carries a rectangle one; nothing measured says it must yet.
+4. `comp.saveFrameToPng` writing nothing is still unexplained (0.11.26
+   filed it; nothing calls it, but it is the natural instrument for any
+   pixel check).
+5. Row 30's typo still burns six `center_anchor_point` calls before the
+   grid_layout that works. Passes, so it is cost and not harm.
+6. Everything else from the 2026-09-03 lists is unchanged: the
+   `distribute_property` mutate-then-throw hole, a bad VALUE not being
+   `argFault`, widening the `errArg` rollback exemption, step 2's naming
+   flake, the destructive-refusal wording on `delete_layer` /
+   `delete_mask` / `remove_effect`, `property: string` in TOOL_DEFS,
+   `POST /tokenize`, the `comfyUrl` 8188/8000 mismatch on this machine,
+   the harness answering a modal with WORDS, `starved` wording,
+   delete_mask warning on a live expression, the unmeasured controller
+   GROUP and non-en_US locale, and `capParams`.
+
+### Machine state
+
+**After Effects was never closed and its project was never closed.** The
+probe created `AELL Mask Ellipse Probe` and removed it again (comp and
+solid source both), and the harness ran twice entirely in the suite's own
+`ST ` namespace with its bottom-of-run check confirming nothing remains.
+No Premiere this pass. No llama-server, no ComfyUI.
+
+## 2026-09-03 - an effect ask is not a request for a slider rig (0.11.30)
+
+WORKPLAN section 8, the top item filed by the 0.11.29 pass and the LAST
+OPEN HARM in the whole paraphrase matrix: **row 36 vague over-builds a
+`CTRL` null rig for a one-line shadow ask.** Closed.
+
+Harness green at the top of the pass (710/710), so the workplan's own
+rule sends this one to the section 8 backlog.
+
+### What was wrong
+
+Row 36 vague is "everything should sit off the background a bit - shadow
+them, not it". Read back from `logs/chat-probe-2026-09-03T03-02-49.md`,
+the model's VERY FIRST round was
+
+    add_control {type: "slider", name: "Shadow Offset X", layer: "CTRL"}
+    add_control {type: "slider", name: "Shadow Offset Y", layer: "CTRL"}
+    add_control {type: "slider", name: "Shadow Opacity",  layer: "CTRL"}
+
+on a layer that did not exist. It took the grounded roster, created the
+null for real on the next round, hung four sliders on it, shadowed the
+seven non-BG layers correctly - and the comp went from 8 layers to 9, so
+the step's "an effect pass should not add or remove layers" check fired.
+
+The ROUTING was never wrong: every phrasing of this row lands the Drop
+Shadow on the right seven layers. What was wrong was the SIZE of the
+answer, and the lever for that is prompt-side by nature - the decision
+happens before any tool call, so no receipt can reach it.
+
+The lever turned out to be an OMISSION, not the order problem the last
+two routing passes found. The SCOPE bullet already existed and already
+listed what may not be bolted on - "grids, effects, styling, animation" -
+and a CONTROL RIG was not on the list. Nothing else in the prompt says
+"do not build one". The `MACRO TOOLS ARE COMPLETE` bullet comes closest,
+and it is scoped to what happens AFTER grid_layout / stagger_layers
+succeeds; a bare shadow ask never reaches it.
+
+### The change (ONE rules change, as the bullet requires)
+
+SCOPE now carries the ban, the measured vocabulary and the exemption:
+
+    ... and never an unasked CONTROL RIG: an effect ask ('shadow them /
+    blur these') is apply_effect (many: for_each_layer) and NOTHING else
+    - no add_null, no add_control sliders, no link_property, no
+    set_effect_param values they did not ask for. Rig only when they ask
+    to steer it ('one slider for all of them'); an explicit request
+    always outranks this.
+
+**A first cut of that sentence made things worse, and the field caught
+it.** It read `is apply_effect (many: for_each_layer) + set_effect_param
+and NOTHING else`, and under that wording both runs had the model
+inventing settings nobody asked for - `Shadow Color [0,0,0]`,
+`Opacity 50`, `Distance 20`, `Angle 120`. Naming a tool in the ROUTE of a
+scope rule reads as permission to use it. set_effect_param moved to the
+anti-list with "values they did not ask for", and the last two runs
+invented nothing. That is pinned as its own assertion so the wording
+cannot drift back.
+
+Paid for with two cuts, both second copies:
+
+- the MACRO bullet's "extra nulls, controls, or links are fine WHEN THE
+  USER ASKS for them (an explicit request always outranks this rule)" -
+  SCOPE now states that exemption once, above it, and MACRO keeps "on
+  your own initiative", which implies it;
+- `audio_to_keyframes`' doc repeating the whole `link_property
+  {controlLayer, controlEffect: 'Both Channels', scale}` recipe that the
+  beat rules bullet spells out in full. The doc keeps its ONE phrase
+  ('sync to the beat'), which is the rule CLAUDE.md states and which
+  test-chat-probe enforces per tool.
+
+Prompt full 58839 -> **58933** (ceiling 59000, headroom 161 -> 67);
+compact 39574 -> 39803. The addition lives in the rules block, which
+compact never touches, so compact could only be paid for from the rules
+themselves - the MACRO cut is the whole of that payment.
+
+### The field result: ROW 36 IS CLOSED
+
+Four `--variants --steps 36` runs against the real 32B in real AE, all
+four **4 pass, 0 miss, 0 HARM** (runs 1-2 under the first cut of the
+bullet, runs 3-4 under the shipped wording):
+
+    run 1  canonical/casual/vague/typo   pass pass pass pass
+    run 2  canonical/casual/vague/typo   pass pass pass pass
+    run 3  canonical/casual/vague/typo   pass pass pass pass
+    run 4  canonical/casual/vague/typo   pass pass pass pass
+
+`add_control`, `add_null` and `link_property` appear **zero times in all
+sixteen runs**. Every phrasing is now apply_effect or for_each_layer and
+nothing else. Transcripts: `logs/chat-probe-2026-09-03T08-52-24.md`,
+`08-53-19`, `08-54-35`, `08-55-19`.
+
+### The safety row, and a false FAIL it found
+
+The two cuts both touch the rig vocabulary, so step 24 - "sync a layer to
+the music", the one row that NEEDS link_property after
+audio_to_keyframes - was re-run as the control: **3 pass, 1 miss, 0
+HARM**, and all three paraphrases still went `audio_to_keyframes` ->
+`link_property` in one shot. Neither the ban nor the doc cut suppressed
+the rig that is asked for.
+
+The one miss is the step's own CHECK, not the product. Verbatim, the
+model answered "The comp 'Probe Room' lacks audio. Import an audio file
+first to proceed with making 'Beta' throb" - an honest refusal, relayed
+in full - and the check called it a FAIL because every word on its
+`declined` list is a NEGATION and that sentence has none. `lack\w*` added
+to the list, with the sentence itself as a stub assertion (RED against
+the reverted probe). Fixed here rather than filed because it sits in the
+acceptance gate: left alone it would fail the next pass that touches this
+row for a reason that is not about that pass.
+
+### Verification
+
+- **Four field runs of row 36** as above; the safety row re-run.
+- **Real AE harness 710/710 PASSED**, unchanged - a routing fix is
+  prompt-side and real AE cannot see it. The field matrix is its
+  instrument, which is why four runs and not one.
+- `tests/test-chat-probe.js` +16 checks over 13 new assert sites, **10
+  RED against the reverted prompt** (every clause of the new rule, both
+  cuts) and 1 RED against the reverted probe.
+- Also new: the first CHECK-side assertion for the shape this row was
+  actually failing on - every layer correctly shadowed AND a CTRL null
+  built to drive it. A check that stopped at "is it shadowed?" would have
+  scored that a pass; the layer count is the only thing that sees an
+  answer bigger than the question.
+- Full stub sweep by exit code: 0 red. `docs/CAPABILITIES.md` regenerated
+  (no change - the generated table carries no doc text).
+- `extension/` changed, so BUMPED: 0.11.29 -> **0.11.30**.
+
+### Notes / assumptions
+
+- **Assumed four field runs is the right amount of evidence.** The
+  0.11.17 pass recorded a run of this row that passed for the wrong
+  reason (the vague phrasing happened to go direct and never reached the
+  fix), so one green run proves nothing here. Four runs, sixteen
+  sentences, zero rig calls is the smallest result that is not luck.
+- **Assumed the exemption belongs in SCOPE and not beside each rig
+  tool.** A ban with its escape hatch in another bullet is the 0.11.13
+  failure shape: the model stops reading at the first tool named.
+- **Judgement call: set_effect_param is an anti-target with a
+  qualifier, not a plain ban.** "Make the shadow softer" is a legitimate
+  set_effect_param ask, and the qualifier is what keeps it legal. The
+  field runs under the final wording show the model still reaching for it
+  when a phrasing invites it and not otherwise.
+- The `--variants` acceptance gate is unchanged; the probe fix only
+  widens a word list it was already using.
+
+### Filed for later passes, in priority order
+
+1. **`remove_effect`'s "no effects at all" refusal takes a whole correct
+   round down with it.** Measured this pass, run 1 vague: the model sent
+   `for_each_layer {apply_effect Drop Shadow}` (7/7 ok) together with a
+   belt-and-braces `remove_effect {layer: "BG"}`, that refusal fired, and
+   `AELL_maybeRollback` threw away the shadows too. It is exactly the
+   `AELL_errArg` class 0.11.23 built - a naming refusal that provably
+   wrote nothing and already says what exists - and this refusal is not
+   tagged with it. Cost the run a full round; on a slower model it costs
+   the answer.
+2. **`link_property` silently overwrites an existing link on the same
+   property.** From `logs/chat-probe-2026-09-03T03-02-49.md`: two calls
+   drove `effect.Drop Shadow.Distance` from two different sliders
+   (`Shadow Offset X`, then `Shadow Offset Y`), both answered `ok`, and
+   the receipt for the second says only what it wrote - nothing says the
+   first link is gone. Same silent-overwrite family as the matte and mask
+   work; needs a real-AE measurement first.
+3. Mask OPACITY is still not read anywhere (0.11.29's item 2, unchanged).
+4. An ellipse ALREADY on the layer still makes the mask parade unreadable
+   (`AELL_maskRect` takes rectangles only).
+5. `comp.saveFrameToPng` writing nothing is still unexplained.
+6. Row 30's typo still burns six `center_anchor_point` calls before the
+   grid_layout that works. Passes, so it is cost and not harm.
+7. Everything else from the 2026-09-03 lists is unchanged: the
+   `distribute_property` mutate-then-throw hole, a bad VALUE not being
+   `argFault`, widening the `errArg` rollback exemption, step 2's naming
+   flake, the destructive-refusal wording on `delete_layer` /
+   `delete_mask` / `remove_effect`, `property: string` in TOOL_DEFS,
+   `POST /tokenize`, the `comfyUrl` 8188/8000 mismatch on this machine,
+   the harness answering a modal with WORDS, `starved` wording,
+   delete_mask warning on a live expression, the unmeasured controller
+   GROUP and non-en_US locale, and `capParams`.
+
+**With row 36 closed, section 8 has no open HARM and no open miss.** The
+next section 8 work is a decision, not a defect: the DEFERRED bullet
+(D/F/H3 rows, the nightly 75-125-variant matrix, the doc anti-drift
+assertion) all wait on a sandbox design, so the next pass should take its
+item from elsewhere in the workplan.
+
+### Machine state
+
+**After Effects was never closed and its project was never closed.** Five
+chat-probe runs and two harness runs; every one built and removed its own
+rig inside the probe's own namespace, and each printed its cleanup line
+(`cleanup: removed N project item(s)`). The harness's bottom-of-run check
+confirmed nothing of the suite remains. llama-server was started and
+stopped by the probe five times. No Premiere this pass, no ComfyUI.
+
+## 2026-09-03 (local, real AE + real Premiere) - WORKPLAN 12b: the last clip on the track was the SEED (no bump)
+
+### The item
+
+Harness first: **710/710 PASSED**, so the pass took a backlog item. The
+previous log entry was a section 8 AE pass, and 12b's alternation rule
+says the next one is Premiere. Its single open failure was `mogrt`.
+
+### What was wrong
+
+Run `-0413` had measured it for the first time: `importMGT` LANDED
+(track 0 grew 1 -> 2) and then `getMGTComponent` answered null, which
+reads exactly like "this build cannot read a MOGRT's controllers back".
+It was not about Premiere at all. The probe read the landed clip as
+`clips[after - 1]` and got `icon-normal.png` - the seed still the
+sequence had been built from. A graphic lands at its INSERTION TIME, so
+it can take any index and push the rest down; measured this pass, it
+took index **0** and moved the seed to index 1. The last index is not
+"the one just added", and asking the wrong clip a question gets an
+answer that looks like a platform limit.
+
+### What changed
+
+`probe/com.cptk.aellama.probe/jsx/probe.jsx` (probe only - `extension/`
+untouched, so **no version bump**, per 12b's rule):
+
+- `AELLP_clipSnap(seq, track)` photographs a video track's clips -
+  `name`, `start.ticks`, `nodeId` - each read through `AELLP_safe`.
+- `AELLP_clipId(c)` returns the usable identity: `nodeId` when the build
+  exposes one, else `name@ticks`. `AELLP_safe` hands back `"throws: ..."`
+  for a read that failed and `null` for one that was not there, and
+  neither may be matched against as though it were an id.
+- `AELLP_newClip(before, after)` returns the one clip the BEFORE picture
+  cannot account for, as a MULTISET compare so a clip that merely shares
+  a name with a neighbour is not called new. Two candidates is
+  `ambiguous`, none is `no-new-clip`, and both REFUSE - the receipt says
+  the round-trip was not measured rather than falling back to an index,
+  because an index guess is what produced the wrong answer.
+- `mogrtAccept` uses it and records `pickedBy`, `clipIndex`,
+  `trackBefore` and `trackAfter`, so a reader can tell a clean diff from
+  a fallback and can see the track it was taken from.
+
+### Verification
+
+- **Field re-run in real Premiere 26.3.2**, `docs/measured/ppro-probe-
+  2026-09-03-0510.json`: `pickedBy: "diff"`, `clipIndex: 0`,
+  **4 controllers, names readable** - `Headline Size`, `Card Position`,
+  `BG Opacity`, `Headline Text` - and the Source Text is NOT blanked
+  (`"textEditValue":"HELLO"`). **Every battery step passed**, the first
+  fully green unattended run. Premiere accepts what AE writes;
+  `docs/SELF-VERIFY-PLANS.md` step 7 is retired on this build.
+- The track, measured: before `[icon-normal.png @0 node 000f4241]`,
+  after `[Untitled @0 node 000f4242, icon-normal.png @1008604396800 node
+  000f4241]`. `nodeId` EXISTS on a TrackItem on 26.3.2 and survived the
+  seed being pushed down the track.
+- `tests/test-probe-bundle.js` **§9, 13 new assertions**, all **RED
+  against the reverted probe.jsx** and green with it. It drives the real
+  helpers out of probe.jsx against tracks built in the test: the exact
+  field shape, a build with no readable `nodeId`, a `nodeId` read that
+  THROWS, same-named neighbours, and all three refusals. The
+  "went back to indexing" assertions run FIRST so they still report on a
+  tree where the helpers are gone entirely instead of being swallowed by
+  a ReferenceError.
+- The five 12b lints (`test-es3-syntax`, `test-es3-ternary`,
+  `test-powershell-syntax`, `test-probe-bundle`, `test-manifest-xml`):
+  all green. **Real AE harness 710/710 PASSED** (unchanged - this pass
+  touched no AE code).
+- `docs/PREMIERE-PLATFORM.md`: `importMGT` and the new `nodeId` row
+  flipped to MEASURED in section 3; full entry added to section 4.
+
+### Notes / assumptions
+
+- **Assumed a refusal beats a fallback pick.** When the diff cannot
+  name exactly one new clip the probe reports NOT MEASURED. Falling
+  back to `clips[after - 1]` would have "worked" on this run and is
+  precisely the guess that cost a launch; a measurement taken off a
+  guess is not evidence.
+- **Assumed the clip name is not an identity.** The graphic's clip is
+  named `Untitled`, not after the `.mogrt` - so anything that looks for
+  an imported graphic BY NAME will not find it. Worth knowing before
+  any Premiere-side MOGRT tool is built.
+- Judgement call: `nodeId` is preferred but not required. It is present
+  on 26.3.2 and absent from Adobe's older docs, so the fallback is what
+  keeps the probe honest on a build that lacks it.
+
+### Filed as the NEXT 12b item (blocked nothing this pass)
+
+**`scripts/ppro-probe-report.js` does not grade an unattended run.**
+Every row comes from `runtime-<HOST>.json`, which only the VISIBLE panel
+writes when a human clicks its buttons; `job-result.json` - where
+`run-ppro-probe.ps1` puts the whole battery - is read into
+`collected.jobResult` and then used by no row at all. After the
+all-green run above the grader printed `FAIL MOGRT ... clip count did
+not grow (1 -> 1)`, from a stale 2026-09-02 click, and `G0: NOT
+MEASURED`. The runner's printout tells the reader to run that grader, so
+a reader who trusts it gets a confident answer about a DIFFERENT
+artifact - the same failure class as the last-index guess this pass
+fixed. Not folded in here: 12b says one root cause per pass, and this
+one is in the reporting, not the battery. Filed in WORKPLAN 12b with the
+fix shape (grade the job result too, prefer the newer, name the source
+per row).
+
+### Machine state
+
+**After Effects was never closed and its project was never closed.** One
+harness run in AE. Premiere was launched and closed by
+`run-ppro-probe.ps1` itself, once; it worked only in its own scratch
+`AELL_PROBE_SCRATCH.prproj` under `%APPDATA%\AE-Llama\probes\` and its
+cleanup step removed all four things it made (`AELL PROBE 1/2/3`,
+`AELL PROBE SEQ`). No ComfyUI, no llama-server this pass.
+
+## 2026-09-03 (local, real AE) - the refusal that took seven shadows with it (0.11.31)
+
+WORKPLAN section 8, the top item filed by the 0.11.30 pass. Last log
+entry was a 12b pass, so 12b was skipped this pass per its own
+alternation rule.
+
+### The defect
+
+Measured in the field on 2026-09-03 (chat-probe row 36 vague, run 1):
+the model sent `for_each_layer {apply_effect Drop Shadow}` - **7 of 7
+ok** - in the same round as a belt-and-braces
+`remove_effect {layer: "BG"}`. BG carries no effects, so the tool
+answered `'BG' has no effects at all`, and `AELL_maybeRollback` saw one
+mutating success plus one mutating failure and undid the round. The
+seven shadows the user asked for went with a command that had written
+nothing.
+
+That is exactly the class 0.11.23 built `AELL_errArg` for - a NAMING
+refusal that provably touched nothing and already says what does exist -
+and remove_effect was simply never tagged with it. apply_effect and
+set_effect_param carry it on seven refusals; remove_effect carried it on
+none.
+
+### The fix, both halves
+
+- **All four of remove_effect's PRE-WRITE refusals are `AELL_errArg`
+  now**: no parade at all, a layer type that cannot carry effects, a
+  missing `effect` arg, and a name that is not in the parade. Each reads
+  the layer before touching it and each already prints what is there.
+- **The post-`remove()` "AE refused to remove" failure is deliberately
+  left plain `AELL_err`.** AE threw from inside the mutation; whether
+  anything moved is not provable from here, and the conservative side is
+  the one where the round still rolls back.
+- **The sentence the rollback appends assumed a name to correct.** It
+  said "Re-send only this one, with the name corrected" - which is right
+  for `Parameter not found: Radius` and wrong for `has no effects at
+  all`, where nothing is misspelled and the only fix is to DROP the
+  command. It now offers both: "Only THIS command did nothing: re-send
+  just it with the name corrected, or drop it if what it asked for is
+  not there at all." Host string, so zero prompt cost - `buildSystemPrompt()`
+  is unchanged at 58933.
+
+### Verification
+
+- **Real AE harness 710 -> 715/715 PASSED.** Five new steps in
+  `extension/js/selftest.js`, in the rollback rig beside the 0.11.23
+  ones: the empty-parade round survives and the Glow it earned is still
+  on the layer; a remove_effect NAME miss is the same class and its
+  refusal still names what the layer really carries; and the boundary -
+  a remove_effect that REALLY removed one is a mutation like any other,
+  so a round it shares with a real failure still goes whole and the Tint
+  comes back.
+- **All five are RED against the reverted host in REAL AE** (710/715),
+  and the failure text is the field defect verbatim: `apply_effect
+  failed: ROLLED BACK: a command in this round failed (remove_effect:
+  'ST RB Keep B' has no effects at all...)`.
+- `tests/test-property-access.js` +7 assertions, **4 RED** against the
+  reverted host. They cover all four refusals plus two boundaries: the
+  empty-parade refusal must not ALSO be `mutated` (that would re-arm the
+  rollback it just escaped), and a removal that really succeeded carries
+  no flag at all.
+- `tests/test-round-rollback.js` pins both halves of the new sentence.
+- Full stubbed suite green; `docs/CAPABILITIES.md` regenerated (the
+  self-test step counts moved).
+
+### Stub faithfulness
+
+The canned host in `tests/test-self-test.js` kept the rollback comp's
+effect parade as **one flat list for the whole comp**. So it answered
+"does this LAYER carry any effects" with the parade of a different one,
+and no stub could tell "this layer has none" from "the comp has none" -
+which is part of why the class stayed invisible. It is a per-layer map
+now (`rbFxOf`), with a per-layer `remove_effect` branch that refuses the
+three ways the real tool does, `argFault` and all. `rbFxParams` is still
+keyed by `<Effect>/<Param>` only; the steps use distinct effects per
+layer, so nothing collides, but a per-layer key is the honest shape if
+another step ever needs it.
+
+### Notes / assumptions
+
+- **Assumed Glow and Tint, not Drop Shadow, for the new steps.** The
+  field round used Drop Shadow, but the canned host has a separate
+  Drop Shadow rig (`dsOn`) in another comp and a name collision there
+  would have made the steps test the stub. The class is the subject,
+  not the effect name.
+- **Assumed the exemption must stay narrow.** Only refusals taken before
+  the tool touches anything are tagged. `AELL_resolveLayer` /
+  `AELL_layerOrSelection` still THROW for a layer that is not there, and
+  a thrown error is not `argFault` - so a round whose prerequisite the
+  round itself failed to build (the nine-squares case) is untouched.
+  Left that way on purpose; widening it is still on the filed list.
+- `delete_mask` and `delete_layer` have refusals of the same shape and
+  are NOT changed here - one root cause per pass, and they are already
+  filed.
+
+### Still open, in priority order (unchanged but for item 1)
+
+1. **`link_property` silently overwrites an existing link on the same
+   property** (was 2). Two calls drove `effect.Drop Shadow.Distance`
+   from two different sliders, both `ok`, and nothing said the first
+   link was gone. Needs a real-AE measurement first.
+2. Mask OPACITY is still not read anywhere.
+3. An ellipse ALREADY on the layer still makes the mask parade
+   unreadable (`AELL_maskRect` takes rectangles only).
+4. `comp.saveFrameToPng` writing nothing is still unexplained.
+5. Row 30's typo still burns six `center_anchor_point` calls before the
+   grid_layout that works. Cost, not harm.
+6. Everything else from the 2026-09-03 lists is unchanged: the
+   `distribute_property` mutate-then-throw hole, a bad VALUE not being
+   `argFault`, widening the `errArg` rollback exemption to thrown
+   lookups, step 2's naming flake, the destructive-refusal wording on
+   `delete_layer` / `delete_mask`, `property: string` in TOOL_DEFS,
+   `POST /tokenize`, the `comfyUrl` 8188/8000 mismatch on this machine,
+   the harness answering a modal with WORDS, `starved` wording,
+   delete_mask warning on a live expression, the unmeasured controller
+   GROUP and non-en_US locale, and `capParams`.
+
+Section 8 still has no open HARM and no open miss in the variant matrix;
+this was a defect the matrix FOUND, not one it scores.
+
+### Machine state
+
+**After Effects was never closed and its project was never closed.**
+Three harness runs (baseline, reverted-host red, final green); each
+built and removed its own rig and the bottom-of-run check confirmed
+nothing of the suite remains. No Premiere, no ComfyUI, no llama-server
+this pass.
+
+## 2026-09-03 (local, real AE) - WORKPLAN 12b: the grader read one artifact and it was the wrong one (no bump)
+
+Harness green at the top of the pass (**715/715**), and the last log
+entry was an AE pass (0.11.31), so 12b's alternation rule sends this one
+to Premiere. 12b's battery has been all-green since run `-0510`; the
+item it filed for itself was the GRADER.
+
+### What was wrong
+
+`scripts/ppro-probe-report.js` built every row from
+`runtime-<HOST>.json`, which only the VISIBLE panel writes when a human
+clicks its buttons. `job-result.json` - where an unattended
+`run-ppro-probe.ps1` puts the WHOLE battery - was read into
+`collected.jobResult` by `collect()` and then never used by a single
+row.
+
+Measured against the folder as it stood this morning, with the 05:10
+all-green battery sitting beside a 2026-09-02 manual click:
+
+    OLD GRADER, PPRO: 13 of 23 rows not measured
+    MISSING  evalScript round-trips a JSON envelope
+    MISSING  ExtendScript engine name
+    MISSING  BridgeTalk.appName / btTargets
+    MISSING  undo grouping / executeCommand / enableQE / QE reachable
+    MISSING  History entries for 3 scripted mutations
+    FAILED   MOGRT: Premiere accepted what AE wrote
+             "importMGT returned ... clip count did not grow (1 -> 1)"
+
+Every one of those had been measured seven hours earlier. The MOGRT row
+is the sharp end: it printed a confident FAILURE, from yesterday, about
+the exact thing the `-0510` run had just proved works. A report
+confidently about a different artifact is the same class as the
+last-index clip guess that run had removed.
+
+### The fix
+
+The grader now reads BOTH artifacts, per ROW and by DATE.
+
+- `fromJobResult()` re-shapes a battery result into the same keys the
+  panel writes (`hostFacts`, `qe`, `history`, `mogrtAccept`,
+  `evalScript`, `probeLoad`, `panel`), so one grader reads either.
+  Two facts are taken from the runner's own existence: a CEP runtime
+  answered `getHostEnvironment()`, and a parsed envelope plus an
+  answering `ping` IS an evalScript round-trip and IS proof `probe.jsx`
+  loaded. The runner has no separate row for either.
+- `sourcesFor()` returns every artifact that speaks for one host,
+  NEWEST FIRST; `picker()` gives each row the newest source that
+  actually HAS its value. Neither file is a superset of the other and
+  either can be the older one, so the merge had to be per row, not per
+  file.
+- **What the runner cannot see is left ABSENT, never guessed.** It does
+  not enumerate Node modules, `APPDATA`, the CEP API version, the
+  manifest shape, `localStorage` scoping or the soak, so those rows
+  fall back to the panel file - and say so.
+- Every row now carries `from` / `fromAt` / `stale` and prints a tag:
+  `[job]`, `[pnl]`, `*` for "this could only come from the older
+  artifact". A `sources:` line above each host block dates both. That
+  is the part that makes the fallback honest: "measured yesterday" and
+  "measured in the run you just watched" are different claims and the
+  reader has to be able to tell.
+- Four rows that never existed: the battery's own steps had no grader
+  representation at all. `battery: every step passed` (with the failing
+  step named), the scratch project, the sequence, the cleanup.
+- **G0 stopped grading an ABSENT reading as a measured FAIL.** It
+  printed `FAIL evalScript reaches Premiere's ExtendScript engine
+  envelope parsed` when there was no evalScript result at all - wrong in
+  both halves of one line. Absent is UNMEASURED now for the evalScript,
+  Node and CEP-present rows alike, which is what the file's own standing
+  rule always said. Each G0 row also names the artifact it was answered
+  from.
+- A `runtime-<HOST>.json` that will not PARSE is still a FAILED row, but
+  it no longer swallows a battery result for the same host - that would
+  have been this pass's own bug, one layer down.
+
+### Verification
+
+- **PPRO went from 13-of-23 rows unmeasured to 3-of-27**, and the MOGRT
+  row now reads `landed, 4 controllers, names readable: true` from
+  `job-result.json` while the Node rows still read from the panel file
+  marked `[pnl*]`. Graded report committed as
+  `docs/measured/ppro-report-2026-09-03-0547.json`.
+- `tests/test-probe-bundle.js` section 10, **30 new assertions** (113 -> 143), all
+  stubbed - no Premiere needed. They cover the adapter, newest-wins in
+  BOTH directions (a fresh click beats an old battery too), the stale
+  flag, a job result from a DIFFERENT host not answering this host's
+  rows, a failed battery step grading FAILED, G0 reading both files in
+  one report, an absent reading being UNMEASURED rather than a measured
+  FAIL, and the corrupt-panel-file case. Against the reverted grader the
+  section dies at its first line - `TypeError: rep.fromJobResult is not
+  a function` - and the row-level defect reproduces exactly as printed
+  above.
+- Full stubbed suite green. All five 12b lints green (`es3-syntax`,
+  `es3-ternary`, `powershell-syntax`, `probe-bundle`, `manifest-xml`).
+  `capability-report --check` fresh.
+- **Real AE harness re-run at the bottom of the pass: 715/715 PASSED.**
+  Nothing in `extension/` was touched, so this is a no-regression check,
+  not a coverage change.
+
+### No version bump, on purpose
+
+12b's own rule: the probe is not shipped and `extension/` is not
+touched. Bumping would push a no-op update to every installed panel.
+
+### The next 12b item, and why the gate still cannot close
+
+**G0 is three-of-four rows ok and NOT MEASURED on the fourth: the
+soak.** The 500-round-trip engine soak is a click handler in the
+VISIBLE panel's `index.html`; `probe.jsx`'s battery has no soak step. So
+no unattended run can ever supply that row, however green the battery
+is, and the loop cannot close G0 by itself. Filed as the next 12b pass:
+make the soak a battery step (the payload builder is already in
+`probe.jsx`), have the door-3 job request it, and check the runner's
+timeout - 500 round-trips is the one step that could outlast it.
+
+Deliberately NOT done in this pass, and why: `run-ppro-probe.ps1` still
+only PRINTS `Grade it with: node scripts\ppro-probe-report.js` rather
+than running it. Wiring that in is three lines, but it is a `.ps1`
+change on the unattended path and "a fix that was not re-run is not a
+fix" - re-running it costs a Premiere launch, and this pass's item did
+not need one. Filed, not attempted.
+
+### Notes / assumptions
+
+- **Assumed the two artifacts are the only sources.** `doors.json` and
+  `csxs-keys.json` are graded separately and were left alone.
+- **Assumed the battery rows should appear only when a battery exists.**
+  They have no panel equivalent, so printing them as MISSING for AEFT
+  would be a missing measurement of something AEFT never claimed. The
+  `sources:` line says whether a battery spoke for the host, so the
+  absence is visible without a fake row.
+- `%APPDATA%\AE-Llama\probes\` still holds `AELL_PROBE_SCRATCH.prproj`
+  from the 05:10 run. That is the runner's own design - it archives
+  stale scratch files on the way IN - and was not touched here.
+
+### Machine state
+
+**After Effects was never closed and its project was never closed.** Two
+harness runs (baseline and final), each built and removed its own rig.
+Premiere was NOT launched this pass - the grader reads artifacts already
+on disk, so no Premiere launch was needed to verify it. No ComfyUI, no
+llama-server.
+
+## 2026-09-03 (local, real AE) - a link that took the last one with it, and a refusal that took one too (0.11.32)
+
+WORKPLAN section 8, the top open item filed by the 0.11.31 pass. The last
+log entry was a 12b pass, so 12b is skipped this pass per its own
+alternation rule. Harness green at the top of the pass: **715/715**.
+
+### The defect as filed, and the one measuring it found
+
+Filed: two `link_property` calls drove `effect.Drop Shadow.Distance` from
+two different sliders, both answered `ok`, and nothing said the first link
+was gone.
+
+Measured first, before any change, by the new re-runnable
+`scripts/link-overwrite-probe.js` + `.jsx` (AE 26.3x87, raw API rows and
+shipped-tool rows side by side so a receipt can be checked against what
+the property really holds):
+
+- **A1** a plain overwrite: the old text is gone and recoverable from
+  nowhere in the API.
+- **A2** an invalid write landing on a VALID expression: AE **does not
+  throw**. It takes the text, keeps it on the property and fills
+  `expressionError` - all four classes measured (a layer that is not
+  there, an effect that is not there, syntax garbage, an out-of-range
+  subscript). Re-assigning the captured text puts it back exactly:
+  error cleared, value restored, all four.
+- **A2b** what the SHIPPED helper did with the same four inputs:
+  `PRIOR LOST: YES` on every one. `AELL_setExpr`'s cleanup was
+  `prop.expression = ""`, so **a REJECTED write cost the user the
+  working expression that was already there** - a refusal that destroys
+  something is worse than the silent overwrite the item was filed for,
+  and no stubbed test could reach it (see stub faithfulness below).
+- **A3** a DISABLED expression (`expressionEnabled = false`) still reads
+  back in full, and ANY new write turns expressions back ON - so a
+  disabled one loses its OFF switch as well as its text.
+- **A4** keyframes survive under an expression (2 before, 2 under, 2
+  after clearing), so a receipt must NOT claim they went.
+- **A5** writing the identical text again is accepted with no error, so
+  "already linked to this" is a distinguishable case, not a loss.
+- **A6** the shipped receipts: SILENT LOSS on `link_property` over a
+  link, `link_property` over a hand-written `wiggle`, `set_expression`
+  over a link, and `set_expression` CLEARING a link.
+
+### The fix, at the helper the four doors share
+
+`AELL_setExpr(prop, expr, out)` now captures `AELL_exprState(prop)` before
+it writes.
+
+- **On rejection it RESTORES** the captured text instead of clearing,
+  and restores the OFF switch with it. A prior that was ITSELF erroring
+  comes back exactly as broken - that is the user's state, not ours to
+  tidy. `AELL_exprKeptNote` appends "Nothing was lost: the expression
+  already on that property was put back" to the refusal, and only when
+  something really was put back.
+- **On success it names what it replaced.** `AELL_replacedInto` adds
+  `replaced` (capped by `AELL_exprBrief` at 240 chars, with the real
+  length in the tail so a truncation cannot read as the whole text) and
+  `replacedNote` - "That expression is GONE - this write took its place.
+  To put it back, set_expression with the text above", plus the OFF
+  clause when the replaced one was disabled. Identical text answers
+  `unchanged` and claims no loss.
+- **The clear is the one write whose whole content is what it removed**:
+  `set_expression {expression: ""}` reports `removed` + `removedNote`,
+  and says outright when there was nothing to remove.
+- **grid_layout** owns Position, so it reports what its rig displaced:
+  three layers with their text, the rest by name via `AELL_capJoin`, and
+  the note says which is which. Its mid-rig failure carries the kept
+  note too.
+- Deliberately does NOT refuse and does NOT restore on success. The user
+  asked for the new expression; the same call the `set_layer_3d`
+  discard report makes.
+
+### Verification
+
+- **Real AE harness 715 -> 722/722 PASSED**, seven new steps in
+  `extension/js/selftest.js` on ST Square 7's opacity (which the step
+  above it leaves free).
+- **Six of the seven are RED against the reverted host in REAL AE**
+  (716/722), including the field defect verbatim and the sharper half:
+  `…and AE really still carries it - the rejected write cleared the
+  property`. The seventh (a link onto a BARE property claims no
+  replacement) passes both ways on purpose - it is the boundary that
+  stops the fix inventing a loss.
+- **The probe re-run against the fixed host**: `PRIOR LOST: no` on all
+  four classes, `set_expression REJECTED over a link` now reads
+  `was` == `now`, and every overwrite row names what it replaced while
+  the bare and identical rows still say nothing.
+- `tests/test-property-access.js` **+19 assertions, 12 RED** against the
+  reverted host. They cover both halves plus the boundaries: a rejected
+  write onto a BARE property must leave it bare (never carrying the
+  rejected text) and must not claim it saved anything, a broken prior
+  comes back broken, and the cap prints its own length.
+- Full stubbed suite green; `docs/CAPABILITIES.md` regenerated.
+- **Zero prompt cost** - host strings only. `buildSystemPrompt()`
+  58973 full / 39843 compact, byte-identical before and after.
+
+### Stub faithfulness (both stubs were wrong in the same place)
+
+- `tests/test-property-access.js`: `Prop.expression` was a plain writable
+  string and `expressionError` was written NOWHERE, so no stubbed test
+  could ever reach the clearing branch. It is an accessor now, with an
+  `aeExprError` modelled on the measured classes (an unknown
+  `thisComp.layer("X")`, an `.effect("Y")` that layer does not carry, an
+  out-of-range `value[n]`, and a real `new Function` parse), and
+  `expressionEnabled` is its own switch that a write turns back on.
+- `tests/test-self-test.js`: the canned host answered `link_property` and
+  `set_expression` from their ARGUMENTS alone, so a first link and a
+  fifth read identically and six of the seven new steps passed against it
+  while proving nothing. It now carries `exprHere` (what is on each
+  property), refuses an expression naming a layer the run has never
+  handled (`seenLayerNames`, populated from every call's own arguments),
+  and reads the grid rig's expressions back through `get_property`.
+
+### Notes / assumptions
+
+- **Assumed report, never refuse.** A tool that refused to overwrite an
+  expression would break every legitimate re-rig and force a second
+  round; the project's precedent (`set_layer_3d`'s `discarded`) is to
+  say what went. Destructive-refusal WORDING on delete_layer /
+  delete_mask remains its own filed item.
+- **Assumed the 240-char cap.** Long enough for any generated link and
+  most hand-written expressions, short enough that a replaced text
+  cannot push the state out of the window; the tail names the real
+  length so the cut is never invisible.
+- The A2b rows in the FIRST probe run measured nothing -
+  `$.global.AELL_setExpr` is undefined (hostscript exports only
+  `AELL_call`), so it read `THREW: ... is undefined` four times. Fixed to
+  the bare identifier and re-run before any host change; the numbers
+  above are from that second run.
+- `apply_expression_preset`'s row in the probe's crude "names what it
+  replaced" column was a FALSE POSITIVE before the fix (it matched
+  `wiggle(2` in the NEW text). The receipt itself carried nothing.
+
+### Still open, in priority order
+
+1. **Mask OPACITY is still not read anywhere** (was 2).
+2. An ellipse ALREADY on the layer still makes the mask parade
+   unreadable (`AELL_maskRect` takes rectangles only).
+3. `comp.saveFrameToPng` writing nothing is still unexplained.
+4. Row 30's typo still burns six `center_anchor_point` calls before the
+   grid_layout that works. Cost, not harm.
+5. Everything else from the 2026-09-03 lists is unchanged: the
+   `distribute_property` mutate-then-throw hole, a bad VALUE not being
+   `argFault`, widening the `errArg` rollback exemption to thrown
+   lookups, step 2's naming flake, the destructive-refusal wording on
+   `delete_layer` / `delete_mask`, `property: string` in TOOL_DEFS,
+   `POST /tokenize`, the `comfyUrl` 8188/8000 mismatch on this machine,
+   the harness answering a modal with WORDS, `starved` wording,
+   delete_mask warning on a live expression, the unmeasured controller
+   GROUP and non-en_US locale, and `capParams`.
+
+Section 8 still has no open HARM and no open miss in the variant matrix;
+this was a defect the matrix FOUND, not one it scores.
+
+### Machine state
+
+**After Effects was never closed and its project was never closed.**
+Four harness runs (baseline 715, green 722, reverted-host red 716, final
+722 after the bump) and three probe runs; the probe photographs the project
+by item ID before it builds anything and removed the one stray it made
+(a null's own footage source) on each run, leaving 396 items. No Premiere, no
+ComfyUI, no llama-server this pass.
+## 2026-09-03 (local, real AE + real Premiere) - WORKPLAN 12b: GATE G0 PASSES UNATTENDED (no bump)
+
+The last log entry was a section 8 pass, so 12b was this pass by its own
+alternation rule. Its named item: **"The GATE is the item now: the soak
+is a button, not a step."** AE harness green at the top of the pass:
+**722/722**, and green again at the end.
+
+**`node scripts/ppro-probe-report.js` now exits 0 with `G0: PASS`,**
+three of its four rows from `job-result.json` - a run nobody watched.
+First time the gate has closed without a human clicking anything.
+
+### The item said to add a soak step to the battery. That would have been a false pass.
+
+The workplan's own instruction was the wrong fix and it is worth writing
+down why, because it would have LOOKED right: the payload builder
+(`AELLP_PROBES.echo`) is already in `probe.jsx` with a comment calling
+itself "the soak's payload", so making a `step("soak", ...)` beside it is
+a five-line change that would have printed `ok soak / survived 500
+round-trips` on the first run.
+
+It would have measured nothing. What degrades is the ExtendScript engine
+across evalScript **entries** - the third-party report is
+`InternalError: Stack overrun` on a long-lived engine, after which every
+call dies opaquely - and 500 iterations inside ONE evalScript return to
+the same stack depth every time. A battery step named `soak` would have
+crossed the CEP boundary exactly once and reported survival of 500
+crossings: a false pass on the last row the gate was still honest about,
+which is the one thing this grader exists to refuse. The battery could
+not host it; the DOOR had to.
+
+### What changed
+
+- **`SOAK-SHARED-BEGIN` block, byte-identical in both doors**
+  (`probe/com.cptk.aellama.probe/index.html`,
+  `probe/com.cptk.aellama.harness/index.html`) - the same rule the
+  `battArgs` block learned when a whitelist maintained twice lost
+  `seedMedia`. `AELLP_soak(opts, callOne, onProgress, whenDone)` owns the
+  loop, the budget and the verdict; `callOne` is one whole round trip,
+  supplied by whichever door owns the CEP side. `AELLP_SOAK_PAD` (2000),
+  `AELLP_soakArgs` and `AELLP_soakCheck` are shared too, so the click and
+  the unattended run grade a round trip by one rule and cannot drift.
+- **The visible panel's button now drives that same loop** instead of its
+  own copy. Same JSON out; one implementation.
+- **The door-3 runner runs it after the battery**, from `job.soakRounds`,
+  with `callProbe()` for the round trip. After, on purpose: an engine
+  that has just built a project, a sequence and a MOGRT is the long-lived
+  one the report is about, not a fresh one. It refuses rather than fakes
+  when the battery envelope never came back - a probe that did not load
+  is not a broken engine, which is the mistake the panel's first run made
+  ("DEGRADED at round 1").
+- **`run-ppro-probe.ps1`**: `-SoakRounds` (500) and `-SoakBudgetSec`
+  (120) into the job, a warning when the budget plus the battery's own
+  ~40 s could outlast `-TimeoutSec`, the soak printed on its own after
+  the battery, `job-soak-progress.json` cleared with the other
+  breadcrumbs and READ on the no-result path, and a DEGRADED engine
+  counted into the non-zero exit.
+- **`ppro-probe-report.js`**: `fromJobResult` forwards `job.soak`, and
+  the two comments that said an unattended run can never supply a soak
+  are corrected rather than left to mislead the next pass.
+
+### Measured, Premiere 26.3.2, run `-0630`
+
+**500 of 500 round trips survived, 8190 ms** (~16 ms each, engine + CEP),
+2000-byte payload checked whole every round, taken after the full 9-step
+mutating battery in the same engine. AE 26.3 for comparison: 500/500 in
+6607 ms. **Premiere's ExtendScript engine does not degrade over 500 round
+trips of a realistic payload on this build** - the "Stack overrun" report
+is not reproduced here. All nine battery steps passed as well, so the run
+was green end to end.
+
+### Three ways to get the ANSWER's shape wrong, all closed
+
+- **A SHORT reply is a degraded engine, not a passing round.** The round
+  is graded on the payload coming back whole, never on the call failing
+  to throw.
+- **A soak that ran out of wall clock is SKIPPED, never survival.** The
+  claim graded is "500 round-trips"; 137 of them does not support it. It
+  reports `STOPPED at round N of 500` with a `skipped` reason, and the
+  grader already reads `skipped` as unmeasured.
+- **A run that never ASKED writes no soak reading at all.** The picker
+  takes the newest source that HAS a value, so an unattended run
+  recording `{skipped: "we did not ask"}` would displace a real panel
+  measurement with its own silence. The reason goes to `soakNote`, which
+  no row grades; `-SoakRounds 0` leaves the row unmeasured instead of
+  answering it.
+
+A soak that HANGS names itself too: it runs after the battery's last
+flush, so it writes `job-soak-progress.json` every 25 rounds and the
+runner reads that when no result arrives. Without it a hang at round 300
+would have printed an all-ok battery and no reason at all.
+
+### Verification
+
+- **Real Premiere**: one launch, battery 9/9, soak 500/500,
+  `docs/measured/ppro-probe-2026-09-03-0630.json` +
+  `ppro-report-2026-09-03-0630.json`. Premiere closed itself; nothing
+  outside `%APPDATA%\AE-Llama\probes\` was touched.
+- **Real AE harness 722/722** before and after (this pass changed no
+  `extension/` file, but the rule is the rule).
+- `tests/test-probe-bundle.js` **section 11, +37 assertions**. It drives
+  the REAL shared block out of the page with a fake clock and a fake
+  round trip - 500 separately-numbered calls, a degradation at round 137,
+  a short payload at round 4, a budget stop, the 25-round progress ticks
+  - then grades the results through the real `gradeG0`. Four assertions
+  go RED with the grader's one-line `soak:` forward removed; the block
+  asserts fail outright against a page that has no shared soak.
+  It also refuses a `step("soak"` in `probe.jsx`, so the fix the workplan
+  originally asked for cannot be re-introduced by a later pass.
+- Full stubbed suite green. All five 12b lints green
+  (`test-es3-syntax`, `test-es3-ternary`, `test-powershell-syntax` -
+  which confirmed `run-ppro-probe.ps1` parses, is BOM-less and pure ASCII
+  - `test-probe-bundle`, `test-manifest-xml`).
+- **No version bump**, per 12b's rules: `extension/` is untouched and the
+  probe is not shipped.
+
+### Notes / assumptions
+
+- **Assumed 500 rounds and a 120 s budget.** 500 is the number G0's row
+  has always claimed and the panel's AE measurement used; 120 s plus the
+  battery's ~40 s fits inside the default `-TimeoutSec 300` with margin,
+  and the measured 8.2 s means the budget is nowhere near binding.
+- **Assumed `soakRounds` stays OUT of `AELLP_RUNNER_KEYS`.** The shared
+  forwarder hands it to the battery too, which ignores it. Editing a
+  block whose whole point is being byte-identical, to exclude a field
+  that costs nothing, is the larger risk.
+- **Assumed the soak belongs after the battery, not before.** A fresh
+  engine is not the thing the report is about. This does mean a battery
+  that hangs takes the soak with it - the no-result path is what names
+  which of the two.
+- The `-0630` MOGRT read-back shows a controller named
+  `Headline Size <?>` - a non-ASCII glyph in a name AE wrote, surviving
+  the round trip into Premiere. Not a defect in anything measured here,
+  but it is the first non-ASCII controller name seen and worth a look if
+  MOGRT naming is ever graded.
+
+### Still open
+
+12b's own step 3 is now the live question: G0 is closed, so what is left
+in section 12b is bookkeeping, not gate work. Filed at the end of
+section 12b -
+
+1. The three PPRO rows still unmeasured are the installed **manifest
+   shape**, **`$.fileName` inside `ScriptPath`**, and (for AEFT) QE.
+   The first two are read only by the VISIBLE panel; either teach the
+   door-3 runner to read them - it has `fs`, and the manifest is a file -
+   or record them as click-only and stop printing them as gaps.
+2. **`doors.json` is still MISSING**: `ppro-door-probe.ps1` has not run
+   since the door-3 runner started working, so the report's "headless
+   doors" block says nothing at all.
+
+If both are bookkeeping, close section 12b outright and hand Premiere
+back to the owner-gated section 12. Everything on the AE side from the
+2026-09-03 lists is unchanged - this pass touched no `extension/` file.
+
+### Machine state
+
+**After Effects was never closed and its project was never closed.** Two
+AE harness runs (722/722 both). One Premiere launch, closed by the runner
+on its own way out; all its work was in the scratch
+`AELL_PROBE_SCRATCH.prproj` under `%APPDATA%\AE-Llama\probes\`, and the
+battery's cleanup removed the three bins and the sequence it made. No
+ComfyUI, no llama-server this pass.
+
+
+## 2026-09-03 (local, real AE) - the mask property nothing read (0.11.33)
+
+WORKPLAN section 8, the top open item filed by the 0.11.32 pass and
+re-filed by every mask pass since 0.11.26. The last log entry was a 12b
+pass, so 12b is skipped this pass per its own alternation rule. Harness
+green at the top of the pass: **722/722**.
+
+### The defect as filed, and the two the measurement added
+
+Filed: `add_mask` never sets mask opacity, `set_mask` can lower it
+afterwards, nothing re-checks - and it is one of the reasons
+`AELL_paradeShows` abandons a reading.
+
+Measured first, before any change, by the new re-runnable
+`scripts/mask-opacity-probe.js` + `.jsx` (AE 26.3x87, layer alpha through
+`sampleImage(postEffect)` at seven points, the same instrument as the
+three mask probes before it):
+
+- **A lone mask at opacity 0 EMPTIES the layer** - every compositing
+  mode (add, subtract, intersect, lighten, darken, difference), at a
+  region worth everything, half or nothing, and inverted as well.
+- **The lone `subtract` row is what makes this its own rule.** "Opacity 0
+  means its region is worth nothing" predicts a subtract taking nothing
+  away leaves the layer WHOLE. It measures EMPTY. So the first mask is a
+  branch, not an instance of the algebra.
+- **Further up the parade it IS "region worth nothing"**, and that had to
+  be measured too because the first reading is so unlike it: over an add
+  mask on the left half, a later add at 0 leaves 0.429 unchanged, an
+  off-layer subtract leaves 0.429, a full-coverage difference leaves
+  0.429 - while `intersect` and `darken` EMPTY the layer, which is the
+  plain algebra and NOT the measured off-layer departure
+  `AELL_maskOutcome1` carries (an off-layer intersect leaves a masked
+  layer alone; an opacity-0 one does not).
+- **`inverted` is not applied to an opacity-0 mask.** An inverted
+  full-coverage subtract at 0 leaves the half base at 0.429, where
+  swapping the region would have emptied it.
+- **A part opacity is a degree** (0.502 for a full-coverage add at 50),
+  which all/some/none cannot say - so that one stays unreadable.
+- **EXPANSION, which nothing read at all**: an add mask over the left
+  half reads 0.429 at expansion 0, **0.571 at +25 and 1.0 at +300**, and
+  a full-coverage subtract stops erasing at -300. So the rectangle
+  `AELL_maskRect` returned from the SHAPE alone was a claim about pixels
+  AE disagrees with.
+- **The shipped receipts**: `set_mask {opacity: 0}` took the layer 1.0 ->
+  0.0 on a bare ok, 0.429 -> 0 on a bare ok, and 0.571 -> 0 on a bare ok;
+  `set_mask {mode: "subtract"}` took 1.0 -> 0.0 on a bare ok; and
+  add_mask over a parade holding one opacity-0 mask said nothing at all
+  where the layer went 0 -> 1.0, or said the WRONG thing (a subtract over
+  an already-blank layer was told it "hides ALL ... cuts every pixel
+  away" while the alpha went 0 -> 0).
+
+### The fix
+
+**Reading** - `AELL_maskZeroApply` is the measured rule (state `null` ->
+"none", otherwise the algebra at region "none", inversion ignored), and
+`AELL_maskRect` now answers for opacity 0 and 100, carries the opacity on
+the rect, and refuses a non-zero or animated EXPANSION the way it already
+refuses a feather. All 13 parades the probe builds now read what the
+alpha reads, and the three bases that were unreadable read `none`.
+
+**Writing** - `set_mask` reads `AELL_paradeShows` BEFORE and AFTER its own
+edit rather than deducing from the argument, which is why the same guard
+catches the mode change that empties a layer. `AELL_maskEditKind` names
+erases / undoes / no-op; "some" is never compared to "some" (both
+readings are exact about which pixels show, the coarse word is not, and
+an add flipped to subtract reads some -> some while the picture inverts).
+The opacity-0 refusal carries the measured way out - **mode 'none' is the
+off switch opacity 0 reads like**, and a 'none' mask leaves every pixel
+showing at any opacity. A rename is not judged at all.
+
+One wording seam fixed on the way, because the fix makes it reachable
+more often: the `undoes` sentence said "'difference' ... INVERTS what
+they show" over a single mask it had just called "the mask".
+
+### Verification
+
+- **Real AE harness 722 -> 736/736 PASSED**, fourteen new steps in
+  `extension/js/selftest.js` (ST Fade for opacity, ST Exp for expansion).
+- **Four of them are RED against the reverted host in REAL AE**
+  (732/736), reproducing the filed failures verbatim - including the
+  expansion row, where the shipped host really did tell a layer that
+  already showed every pixel that this mask had switched its masking off.
+- **The probe re-run against the fixed host**: every A4b/A6 reading now
+  agrees with the alpha beside it, and the three silent erasures name
+  themselves.
+- `tests/test-shape-mask-tools.js` **+34 assertions, 28 RED** against the
+  reverted host: the 13 measured parades as a table, the part-opacity and
+  expansion bails with their keyframed twins, and both ends of set_mask.
+- Full stubbed suite green; `docs/CAPABILITIES.md` regenerated.
+- **Zero prompt cost** - host strings only. 58933 full / 39803 compact,
+  unchanged (headroom 67).
+
+### Stub faithfulness (the canned host was blind in the same place)
+
+`tests/test-self-test.js` answered `set_mask` from its ARGUMENTS alone, so
+an edit that emptied the layer and one that changed nothing read
+identically and four of the new steps passed against it while proving
+nothing. Its mask rows carry opacity and expansion now, the mask algebra
+moved to module scope so `set_mask` reads the same parade `add_mask`
+does, and the edit is applied to the row before the picture is read back.
+Same class as the link_property pass's `Prop.expression`.
+
+### Notes / assumptions
+
+- **Assumed WARN, never refuse**, as everywhere else in these tools: a
+  mask at opacity 0 is a real technique (it is how an opacity keyframe on
+  a mask starts) and refusing would break work that means it.
+- **Assumed the no-op warning may fire for set_mask where add_mask gates
+  its own on `asked`.** Every set_mask argument except `name` is an
+  explicit ask about the picture, so there is no placeholder case to
+  protect - the asymmetry that gates add_mask does not exist here.
+- **Assumed expansion should make a mask unreadable rather than grow its
+  rectangle.** AE rounds the corners of an expanded rectangle, so a
+  bigger rectangle would be a second wrong claim; silence is the honest
+  answer and it is what the neighbouring bails do.
+- The context-budget probe was run for the prompt size and **killed by a
+  truncated pipe before its own cleanup**, so its comps were removed by
+  hand with its own rule (`Ctx Probe*` comps, plus only the solids it
+  names and only when unused). It took two OLDER `Ctx Probe` comps with
+  it - the ones the roster-cap entry above names as junk. The project
+  audits clean afterwards: 398 items, nothing under any probe namespace.
+  Next pass: read the prompt size from `node tests/test-context-budget.js`
+  (it prints "the full prompt stays under its ceiling"), which costs no
+  AE launch and no model.
+
+### Still open, in priority order
+
+1. **`delete_mask` has exactly the blindness `set_mask` just lost.**
+   Removing a mask can empty a layer or hand it back and the receipt says
+   neither; the before/after instrument built this pass reads it in two
+   lines. Its destructive-refusal WORDING is already filed separately -
+   this is the receipt, not the refusal.
+2. An ellipse or a feather ALREADY on the layer still makes the parade
+   unreadable (`AELL_maskRect` takes rectangles only). The algebra could
+   carry an ellipse cell; nothing measured says it must yet.
+3. `add_mask {mode: "subtract"}` with NO bounds over a layer whose masks
+   already hide everything is silent, because the no-op sentence waits to
+   be asked. Measured this pass (0 -> 0). It replaced a WRONG sentence,
+   so this is a smaller item than it was.
+4. `comp.saveFrameToPng` writing nothing is still unexplained.
+5. Row 30's typo still burns six `center_anchor_point` calls before the
+   grid_layout that works. Cost, not harm.
+6. Everything else from the 2026-09-03 lists is unchanged: the
+   `distribute_property` mutate-then-throw hole, a bad VALUE not being
+   `argFault`, widening the `errArg` rollback exemption to thrown
+   lookups, step 2's naming flake, the destructive-refusal wording on
+   `delete_layer` / `delete_mask`, `property: string` in TOOL_DEFS,
+   `POST /tokenize`, the `comfyUrl` 8188/8000 mismatch on this machine,
+   the harness answering a modal with WORDS, `starved` wording,
+   delete_mask warning on a live expression, the unmeasured controller
+   GROUP and non-en_US locale, and `capParams`.
+
+Section 8 still has no open HARM and no open miss in the variant matrix.
+
+### Machine state
+
+**After Effects was never closed and its project was never closed.**
+Three harness runs (baseline 722, green 736, reverted-host red 732),
+three probe runs of the new mask-opacity probe (it removes its own comp
+and solid source each time), one interrupted context-budget probe cleaned
+up by hand as described above, and two small read-only audit scripts. The
+project audits clean: **398 items, nothing under any probe namespace**.
+No Premiere, no ComfyUI, no llama-server left running.
+
+## 2026-09-03 07:33 — delete_mask had the blindness set_mask just lost (0.11.34)
+
+The top item the 0.11.33 pass filed: `set_mask` learned to read the
+picture before and after its own edit; `delete_mask` kept exactly the same
+silence, and its receipt (`{layer, removed, remainingMasks}`) can never
+answer the question by itself.
+
+### Measured first (scripts/mask-delete-probe.js/.jsx, new, AE 26.3x87)
+
+Nine parades, the layer's own alpha through `sampleImage(postEffect)`,
+each one deleted through the shipped tool. Every row answered a bare ok:
+
+- **the layer is GONE** — delete the `add` WINDOW above a full-coverage
+  `subtract`: 0.429 -> 0
+- **the layer is BACK** — delete the `subtract` above a full `add`:
+  0 -> 1.0; a PART subtract: 0.571 -> 1.0; a layer's only half-mask:
+  0.429 -> 1.0
+- **the row `remainingMasks` can never answer** — delete the last
+  COMPOSITING mask off a layer that keeps a `none` path carrier:
+  0.429 -> 1.0 with a mask still listed. The emptied row and that one
+  both leave exactly ONE mask behind.
+- **nothing moved** — a redundant duplicate 1.0 -> 1.0; one of two full
+  subtracts EMPTY -> EMPTY (the "I deleted it and the layer is still
+  gone" case)
+- **not readable** — a feathered survivor: 0 -> 0.991, which is not
+  "all" either, so nothing is said
+- Also measured: the parade group object reads the SAME after
+  `MaskPropertyGroup.remove()` invalidates one of its children as a fresh
+  lookup does, on all nine rows. That is what lets the tool hold one
+  reference across the removal.
+
+### The fix
+
+`AELL_maskGoneKind` is `AELL_maskEditKind` with one difference that is
+the whole reason it exists: for a REMOVAL, **"nothing" and "all" are the
+same picture**. A delete cannot ADD masking, so a parade left with
+nothing compositing shows every pixel. `set_mask` must keep the two words
+apart (a mask switched to `none` over a layer that already showed
+everything changes nothing anybody can see); `delete_mask` must not, or
+deleting a lone full-coverage add reads as a change and the `none`-carrier
+row reads as nothing at all.
+
+`delete_mask` now reads `AELL_paradeShows` before and after its own
+removal and says `erases` / `undoes` / `noop`, naming the masks left
+behind. The erasure sentence carries the way back: Ctrl+Z (exact),
+`add_mask` (draw a new revealing mask), and `set_mask {mode: "none"}` on
+a survivor — offered as a switch, not as the cure, because with several
+masks left it may take more than one.
+
+### Verification
+
+- **Real AE harness 736 -> 753/753 PASSED**, seventeen new steps in
+  `extension/js/selftest.js` (ST Del).
+- **Five of them are RED against the reverted host in REAL AE**
+  (748/753), reproducing the filed silence verbatim.
+- **The probe re-run against the fixed host**: all nine sentences agree
+  with the alpha beside them.
+- `tests/test-shape-mask-tools.js` section 6g, **10 assertions RED**
+  against the reverted host: the nine measured parades plus the
+  survivor-naming and way-back clauses.
+- Full stubbed suite green; `docs/CAPABILITIES.md` regenerated.
+- **Zero prompt cost** — host strings only. 58933 full / 39803 compact,
+  unchanged (headroom 67).
+
+### Stub faithfulness
+
+`tests/test-self-test.js` answered `delete_mask` from its list of names
+alone, so it would have passed five of the new steps while proving
+nothing — the same class as last pass's `set_mask`. It now reads the
+parade before and after the splice (`mkGoneKind`), and with that reverted
+the canned host fails exactly the five steps real AE fails.
+
+### Notes / assumptions
+
+- **Assumed the `undoes` sentence is gated on a SURVIVOR.** Deleting a
+  layer's last mask and getting the whole layer back is the tool working,
+  and `remainingMasks: []` already says it; a warning on every ordinary
+  delete would be noise. The `none`-carrier row is the surprising half
+  and it is not gated out — a mask remains there.
+- **Assumed `noop` is NOT gated the same way**, because "I deleted the
+  mask and the layer is still masked out completely" is the sentence a
+  caller needs most, and its twin ("every pixel showed before and still
+  does") is what stops the reader calling a lone full-coverage add's
+  removal a change.
+- Deliberately NOT touched: the destructive-refusal WORDING on
+  `delete_mask`, which is filed separately. This is the receipt, not the
+  refusal.
+- `delete_mask` warning on a live expression pointing at the deleted mask
+  is still open and still unrelated (AE reports nothing at all there —
+  see the comment above the tool).
+
+### Still open, in priority order
+
+1. An ellipse or a feather ALREADY on the layer still makes the parade
+   unreadable (`AELL_maskRect` takes rectangles only). Measured again
+   this pass: a feathered survivor reads 0.991, so the narrowness is
+   earning its keep — but the algebra could carry an ellipse cell.
+2. `add_mask {mode: "subtract"}` with NO bounds over a layer whose masks
+   already hide everything is silent, because the no-op sentence waits to
+   be asked.
+3. `comp.saveFrameToPng` writing nothing is still unexplained.
+4. Row 30's typo still burns six `center_anchor_point` calls before the
+   grid_layout that works. Cost, not harm.
+5. Everything else from the 2026-09-03 lists is unchanged: the
+   `distribute_property` mutate-then-throw hole, a bad VALUE not being
+   `argFault`, widening the `errArg` rollback exemption to thrown
+   lookups, step 2's naming flake, the destructive-refusal wording on
+   `delete_layer` / `delete_mask`, `property: string` in TOOL_DEFS,
+   `POST /tokenize`, the `comfyUrl` 8188/8000 mismatch on this machine,
+   the harness answering a modal with WORDS, `starved` wording,
+   delete_mask warning on a live expression, the unmeasured controller
+   GROUP and non-en_US locale, and `capParams`.
+
+Section 8 still has no open HARM and no open miss in the variant matrix.
+
+### Machine state
+
+**After Effects was never closed and its project was never closed.**
+Three harness runs (baseline 736, green 753, reverted-host red 748) and
+two runs of the new mask-delete probe, which removes its own comp and
+solid source each time and reported `cleanup + cleaned` on both. No
+Premiere, no ComfyUI, no llama-server left running.
+
+## 2026-09-03 08:02 — one ellipse in the parade, and three tools got their voice back (0.11.35)
+
+The top item the 0.11.34 pass filed. `AELL_maskRect` answered for
+axis-aligned RECTANGLES only, so ONE ellipse anywhere in a layer's mask
+parade made `AELL_paradeShows` return `""` — and with it every sentence
+`add_mask`, `set_mask` and `delete_mask` build on that reading went
+quiet. The narrowness was right about a feather (it hides by degrees, and
+"all / some / none" cannot say a degree) and wrong about an ellipse,
+which is exact algebra. The panel offers `shape: "ellipse"` by name, so
+this was the tool silencing itself with its own output.
+
+### Measured first (scripts/mask-parade-ellipse-probe.js/.jsx, new, AE 26.3x87)
+
+Seventeen parades each holding an ellipse, the layer's own alpha through
+`sampleImage(postEffect)` on nine points plus a 21x15 AREA grid (the
+coarse 11x9 the first ellipse probe used cannot tell "all" from "some" if
+the band is thin). Instrument calibrated on the same run: bare layer
+1.000, inscribed ellipse **0.784** against pi/4 = 0.785.
+
+**16 of the 17 were silent**, and the plan under test predicted all
+fourteen readable pictures correctly before the host was touched:
+
+- lone ellipse `add` 0.784 (the middle) / `subtract` 0.216 (the four
+  corners) / inverted `add` 0.216 — all `some`
+- a full rect `add` UNION an ellipse `add` reads **all** (1.000), and an
+  ellipse `add` under a full rect `subtract` reads **none** (0) — the two
+  rows that prove a split cell must be read BOTH ways rather than called
+  `some` on sight
+- over a half add 0.892; a half subtract under it 0.416; an ellipse
+  `intersect` over a full add 0.784; a lone `difference` 0.784
+- an OFF-LAYER ellipse subtract leaves a full add at **all**; an
+  off-layer ellipse `add` keeps **none**
+- an ellipse inscribed in the LEFT HALF 0.394 — the tangent case
+- an ellipse at opacity 0 reads **none** without its shape being read at
+  all, and a `none`-mode ellipse is a path carrier that decides nothing
+
+### The fix
+
+`AELL_maskRect` is `AELL_maskRegion` now and returns `{kind: "rect"}` or
+`{kind: "ellipse"}`. An ellipse is recognised by CONSTRUCTION, not by
+curvature: four vertices at the cardinal points of their own bounding
+box, axis-aligned tangents that are exact opposites, handle length within
+`AELL_MASK_KAPPA_LO..HI` (0.548..0.557) of the radius — the shape
+`add_mask` itself writes. A dragged handle misses the band and the reader
+stays silent, which is the safe direction.
+
+The exactness argument survives because a cell an ellipse SPLITS is read
+twice, once each way, and both readings vote (`AELL_ellipseVsCell`). That
+is only honest while both readings describe real pixels, so "split" needs
+a point provably inside AND a corner provably outside; anything less
+makes the whole parade unreadable rather than guessed. The 0.99 / 1.01
+slack is the cubic bezier's own quarter of a percent of radius across the
+kappa band. The bounding-box test comes FIRST and is exact, because the
+tangent case is the one that actually arises — a rect edge lined up with
+the ellipse's extreme touches it at one point, which the radius test
+alone can only call ambiguous.
+
+**ONE ellipse, not two.** Two would ask the reader to prove a cell can be
+inside both at once, and a branch describing no real pixel votes for a
+picture nobody can see. A second ellipse reads `""` exactly as before.
+
+Also closed, because the ellipse made it newly reachable: an existing
+mask lying wholly outside the layer in modes `intersect` / `darken` with
+company now makes the parade unreadable. Measured (the off-layer INTERSECT
+step in selftest.js), AE DROPS such a mask once something else composites,
+where "its region is worth nothing" says it empties the layer — and those
+are the only two modes the two readings differ on. That was a shipped
+false claim for rectangles too.
+
+### Verification
+
+- **Real AE harness 753 -> 765/765 PASSED**, twelve new steps in
+  `extension/js/selftest.js` (ST Ell).
+- **Three of them are RED against the reverted host in REAL AE**
+  (762/765), reproducing the filed silence verbatim: switching the
+  ellipse to `none` handed the layer back in silence, a full add over it
+  switched it off in silence, and deleting it revealed the layer in
+  silence.
+- `tests/test-shape-mask-tools.js` section 6h: 25 new assertions, **17 of
+  them RED** against the reverted host — the fourteen measured parades
+  plus the kappa band, the tangent cell and the off-layer intersect pair.
+- Full stubbed suite green; `docs/CAPABILITIES.md` regenerated.
+- **Zero prompt cost** — `extension/js/tools.js` is untouched: this is a
+  reader that was already wired into three tools' sentences.
+
+### Stub faithfulness
+
+`tests/test-self-test.js`'s canned host had `mkReadable = false` for every
+ellipse, so it would have PASSED three of the new steps while proving
+nothing — the same class as the last two passes. It now carries
+`mkEllipseVsCell` and the same one-ellipse rule, and with that reverted it
+fails exactly the three steps real AE fails.
+
+### Notes / assumptions
+
+- **Assumed the only ellipses worth reading are the ones `add_mask`
+  writes.** AE's own ellipse TOOL is a drag gesture and cannot be driven
+  from a script, so a hand-drawn ellipse's kappa is unmeasured on this
+  machine. The band is wide enough for any spelling of the standard
+  construction and the failure direction is silence, not a wrong claim.
+- **Assumed a feather stays unreadable.** It is a degree; the probe's X2
+  row measured `some` in AE and the reader still refuses it on purpose.
+- The tangent-from-INSIDE cell (a grid line touching the ellipse at a
+  corner distance) is still `""`. It needs a coincidence no natural
+  construction produces, and the answer is silence.
+
+### Still open, in priority order
+
+1. `add_mask {mode: "subtract"}` with NO bounds over a layer whose masks
+   already hide everything is silent, because the no-op sentence waits to
+   be asked (`asked` gate).
+2. TWO ellipses, and a feathered mask anywhere, still make the parade
+   unreadable — both deliberate, both measurable if they ever earn a pass.
+3. `comp.saveFrameToPng` writing nothing is still unexplained.
+4. Row 30's typo still burns six `center_anchor_point` calls before the
+   grid_layout that works. Cost, not harm.
+5. Everything else from the 2026-09-03 lists is unchanged: the
+   `distribute_property` mutate-then-throw hole, a bad VALUE not being
+   `argFault`, widening the `errArg` rollback exemption to thrown
+   lookups, step 2's naming flake, the destructive-refusal wording on
+   `delete_layer` / `delete_mask`, `property: string` in TOOL_DEFS,
+   `POST /tokenize`, the `comfyUrl` 8188/8000 mismatch on this machine,
+   the harness answering a modal with WORDS, `starved` wording,
+   delete_mask warning on a live expression, the unmeasured controller
+   GROUP and non-en_US locale, and `capParams`.
+
+Section 8 still has no open HARM and no open miss in the variant matrix.
+
+### Machine state
+
+**After Effects was never closed and its project was never closed.**
+Four harness runs (baseline 753, green 765, reverted-host red 762, and a
+final 765 with the fixed host restored) and one run of the new
+parade-ellipse probe, which removes its own comp and
+solid source and reported `cleanup + cleaned`. No Premiere, no ComfyUI,
+no llama-server left running.
+
+---
+
+## 2026-09-03 — the no-op that waited to be asked, over a layer already hidden (0.11.36)
+
+**Item:** the top entry on the previous pass's "still open" list —
+`add_mask {mode: "subtract"}` with NO bounds over a layer whose masks
+already hide everything answered a bare ok, because the no-op sentence
+sits behind the `asked` gate.
+
+Baseline harness before touching anything: **765/765 PASSED**, so the
+workplan's item 1 was already green and this was the highest-priority
+unfinished item.
+
+### What the gate is for, and why it was wrong here
+
+`asked` exists for a good reason and it keeps it: with no `bounds` and no
+`vertices`, add_mask's own default region IS the layer's box, and that is
+the deliberate placeholder an `add_mask` + `set_mask_path` pair opens
+with. Warning "your region cuts nothing away" on a placeholder is a nag,
+and a no-op is cheap where a vanished layer is not.
+
+That argument does not reach ONE case, and it is the case that was filed.
+Over masks that already hide every pixel (`aboveShows === "none"`), a
+mode that can only ever TAKE pixels away — `subtract`, `intersect`,
+`darken`, inverted or not — leaves the layer at nothing WHATEVER region
+it is handed: subtract removes from nothing, intersect and darken take
+the smaller of nothing and anything. So no bounds, no shape, and no path
+a later `set_mask_path` writes could make that call do something. Waiting
+to be asked waits forever.
+
+The same reading kills the OTHER half of the branch's guard. `covers` is
+not what makes the call a no-op either, so a NAMED half-layer subtract
+over the same hidden layer was just as silent — and fixing only the
+unasked half would have left the sillier call the quiet one. Both went
+together; leaving one would have been an incoherence, not a smaller
+change.
+
+The inverted `add` / `lighten` / `difference` twins KEEP the gate, and
+that asymmetry is the point: those really do reveal pixels at a smaller
+region, so their no-op is a fact about the region left to the default and
+the placeholder argument still holds for them.
+
+### The fix
+
+`AELL_TOOLS.add_mask` grows one branch ahead of the gated one, on
+`aboveShows === "none" && subtractive && !overflow`, needing neither
+`asked` nor `covers`. Its reason is the existing sentence with one word
+changed (`nothing left for this one to take`), and its FIX line is new,
+because the one every other no-op in the tool offers is false here:
+
+> No region can change that: it is the masking already on the layer that
+> hides it (ST ABlank, ST ABlank2) — set_mask {mask: "ST ABlank", mode:
+> "none"} switches one off, or delete_mask {mask: "ST ABlank"} removes it.
+
+Offered as a switch, not as the cure — with several masks hiding it,
+turning one off need not bring the picture back, the same hedge
+`delete_mask` already makes about its survivors. The names are read with
+`AELL_maskNames` BEFORE the append, so the receipt never blames the mask
+it just made; a stub assertion pins that.
+
+The old branch's `aboveShows === "none"` sub-clause is gone rather than
+left standing: with the subtractive modes diverted, the only callers it
+had left were the inverted ones, whose own clause is the truer reason for
+them, and a branch whose stated reason no longer describes its occupants
+is the next pass's trap.
+
+### Verification
+
+- **Real AE harness 765 -> 768/768 PASSED**, three new steps in
+  `extension/js/selftest.js` on the already-hidden `ST Above` layer.
+- **TWO of them are RED against the reverted host in REAL AE**
+  (766/768), reproducing the filed silence verbatim — `(none)` where the
+  warning belongs, for both the no-bounds call and the half-layer one.
+  The third is a negative control (an inverted `add` at the default
+  region must stay quiet) and passes either way on purpose: it is what
+  stops the next pass widening the gate off its hinges.
+- `tests/test-shape-mask-tools.js` section 6d: 10 new assertions, **6 of
+  them RED** against the reverted host.
+- **Stub faithfulness:** `tests/test-self-test.js`'s canned host models
+  the new branch, including `mkPrior` (the masks read before the append)
+  and a minimal `mkOver`. With that branch switched off it fails exactly
+  the steps real AE fails — three of them, since the canned host also
+  reaches the older step through the retired sub-clause.
+- Full stubbed suite green; `docs/CAPABILITIES.md` regenerated (add_mask
+  69 -> 72 steps).
+- **Zero prompt cost** — `extension/js/tools.js` untouched. This is a
+  receipt, not a doc.
+
+### Notes / assumptions
+
+- **Assumed a mask spanning past the layer keeps its own note and not
+  this sentence.** `!overflow` is carried over from the gated branch
+  unchanged. An overflowing subtract over a hidden layer is still a
+  no-op and still gets only "the part outside the layer does nothing",
+  which is a true sentence about the wrong thing. Left as filed below
+  rather than widened in the same pass.
+- **Assumed `aboveShows === "none"` implies masks exist.**
+  `AELL_paradeShows` answers `"nothing"` for an empty parade, so it does
+  — but the fix line degrades to a sentence without names rather than
+  indexing an empty list, and the stub covers the named path only.
+
+### Still open, in priority order
+
+1. An overflowing subtract over an already-hidden layer: no-op, and only
+   the overflow note is said (see the assumption above).
+2. TWO ellipses, and a feathered mask anywhere, still make the parade
+   unreadable — both deliberate, both measurable if they ever earn a pass.
+3. `comp.saveFrameToPng` writing nothing is still unexplained.
+4. Row 30's typo still burns six `center_anchor_point` calls before the
+   grid_layout that works. Cost, not harm.
+5. Everything else from the 2026-09-03 lists is unchanged: the
+   `distribute_property` mutate-then-throw hole, a bad VALUE not being
+   `argFault`, widening the `errArg` rollback exemption to thrown
+   lookups, step 2's naming flake, the destructive-refusal wording on
+   `delete_layer` / `delete_mask`, `property: string` in TOOL_DEFS,
+   `POST /tokenize`, the `comfyUrl` 8188/8000 mismatch on this machine,
+   the harness answering a modal with WORDS, `starved` wording,
+   delete_mask warning on a live expression, the unmeasured controller
+   GROUP and non-en_US locale, and `capParams`.
+
+Section 8 still has no open HARM and no open miss in the variant matrix.
+
+### Machine state
+
+**After Effects was never closed and its project was never closed.**
+Four harness runs (baseline 765, green 768, reverted-host red 766, and a
+final 768 with the fixed host restored). No probes were needed — the
+claim this pass makes is algebra over the parade reader that the last
+three passes measured, not a new measurement. No Premiere, no ComfyUI,
+no llama-server left running.
+
+## 2026-09-03 — the no-op that spilled past the layer, and said only that (0.11.37)
+
+**Item:** WORKPLAN section 1 was green on the first run of the pass
+(768/768), so the item is the top entry of the previous pass's "still
+open, in priority order" list: *an overflowing subtract over an
+already-hidden layer is a no-op, and only the overflow note is said.*
+
+### What was wrong
+
+The 0.11.36 pass gave `add_mask` a branch for the no-op that no region
+can rescue: over masks that already hide every pixel (`aboveShows ===
+"none"`), a mode that can only ever TAKE — `subtract`, `intersect`,
+`darken` — leaves the layer at nothing whatever region it is handed. It
+carried `!overflow` over from the branch it was split out of, and that
+condition does not belong to it.
+
+`!overflow` guards the sentences that read `covers`, and it guards them
+for a real reason: a mask spilling past the layer has its own note
+("the part outside the layer does nothing") and a claim about the whole
+layer would be arguing with it. But this branch does not read `covers`
+at all — its reason is the PARADE, not the region — and a region that
+spills past the layer is still a region. Subtract removes from nothing
+whether it is aimed at the layer or half a screen to the left of it.
+
+So the receipt for `add_mask {bounds: [-50, 0, 300, 100], mode:
+"subtract"}` on a layer whose masks already hid it was the overflow note
+and nothing else: a true sentence about the *outside* part doing
+nothing, which reads exactly like the inside part having worked. Same
+silent-lie shape as the call the last pass fixed, one condition along.
+
+### The fix
+
+One condition removed from `AELL_TOOLS.add_mask`, with the reasoning
+written where the next pass will find it. Nothing else moved, and the
+comment records why nothing needed to: whenever `overflow` survives to
+that point, `covers` is false, because a mask that sticks out on a side
+AND still contains the whole layer box is bigger than it on that axis —
+which the "far bigger than" refusal above already turns away. So
+`erases`, `undoes`, `coversAll` and the branch under this one are all
+silent there and no warning is being stolen.
+
+**The overflow NOTE is left standing beside the warning, deliberately.**
+It is the only place the mask's own span is named, and a span out in
+comp coordinates is the diagnosis when comp numbers reached a
+layer-space argument. It also makes the weaker of the two claims, so a
+reader taking the stronger one is not misled. Suppressing it would have
+cost the coordinates to buy tidiness.
+
+### Verification
+
+- **Real AE harness 768 -> 770/770 PASSED**, two new steps in
+  `extension/js/selftest.js` on the already-hidden `ST Above` layer.
+- **One of them is RED against the reverted host in REAL AE** (769/770),
+  reproducing the filed silence verbatim: `warning (none), note The mask
+  spans x -50 to 250, y 0 to 100, past 'ST Above' …`. The second is a
+  negative control — an overflowing `add` over the same hidden layer
+  really does reveal the pixels inside its region, so it must NOT borrow
+  the sentence, and it passes either way on purpose.
+- `tests/test-shape-mask-tools.js` section 6d: 6 new assertions, **2 of
+  them RED** against the reverted host. Three are boundary controls: the
+  note must survive; an overflowing `add` over the hidden layer is no
+  no-op; and over a layer that still SHOWS something the same
+  overflowing subtract cuts a real hole and stays quiet — that last one
+  is what goes red if the branch is ever widened off its `aboveShows`
+  hinge.
+- **Stub faithfulness:** `tests/test-self-test.js`'s canned host had the
+  `mkOver` flag and had never emitted the note at all, so a real-AE step
+  that reads `d.note` would have passed on an absent one. It emits the
+  note now, and set ABOVE the four branches that return early, matching
+  where the host sets `out.note`. With the canned branch's gate restored
+  it fails **exactly the one step real AE fails, with the identical
+  message** (769/770).
+- Full stubbed suite green (74 files); `docs/CAPABILITIES.md`
+  regenerated (add_mask 72 -> 74 steps).
+- **Zero prompt cost** — `extension/js/tools.js` untouched.
+
+### Notes / assumptions
+
+- **Assumed the note and the warning may both be said.** The alternative
+  was folding the span into the warning and dropping the note, which is
+  more code for no fact gained; the two fields keep separate jobs (where
+  the mask is / what it does). If a later pass measures the model acting
+  on the note's implication anyway, that is the change to make.
+- **Assumed `overflow` and `covers` cannot coexist** — argued above from
+  the "far bigger than" refusal, not measured. The canned host emits the
+  note above the early returns precisely so that a future edit breaking
+  that argument shows up as a stub failure rather than a lost sentence.
+
+### Still open, in priority order
+
+1. TWO ellipses, and a feathered mask anywhere, still make the parade
+   unreadable — both deliberate, both measurable if they ever earn a
+   pass.
+2. `comp.saveFrameToPng` writing nothing is still unexplained.
+3. Row 30's typo still burns six `center_anchor_point` calls before the
+   grid_layout that works. Cost, not harm.
+4. Everything else from the 2026-09-03 lists is unchanged: the
+   `distribute_property` mutate-then-throw hole, a bad VALUE not being
+   `argFault`, widening the `errArg` rollback exemption to thrown
+   lookups, step 2's naming flake, the destructive-refusal wording on
+   `delete_layer` / `delete_mask`, `property: string` in TOOL_DEFS,
+   `POST /tokenize`, the `comfyUrl` 8188/8000 mismatch on this machine,
+   the harness answering a modal with WORDS, `starved` wording,
+   delete_mask warning on a live expression, the unmeasured controller
+   GROUP and non-en_US locale, and `capParams`.
+
+Section 8 still has no open HARM and no open miss in the variant matrix.
+
+### Machine state
+
+**After Effects was never closed and its project was never closed.**
+Four harness runs (baseline 768, reverted-host red 769/770, and 770/770
+green with the fixed host, plus the final post-bump run). No probes were
+needed: the claim is algebra over the parade reader the last three
+passes measured, and the one new geometric fact — that an overflowing
+mask cannot also cover the layer — is a property of a refusal already in
+the file. No Premiere, no ComfyUI, no llama-server left running.
+
+## 2026-09-03 (local, real AE + real Premiere) - WORKPLAN 12b: two rows only a CLICK could answer (no bump)
+
+**Item:** WORKPLAN section 1 was green on the first run of the pass
+(**770/770**), and the previous log entry was an AE pass, so section
+12b's alternation rule takes this one. Its filed next item: the two PPRO
+rows still unmeasured in the per-host table - **the installed manifest
+shape** and **`$.fileName` inside the manifest's `ScriptPath`** - "either
+teach the door-3 runner to read them, or record them as click-only and
+stop showing them as gaps".
+
+### What was wrong
+
+Every battery step passed, the soak passed, G0 passed - and the PPRO
+block still printed two `----` rows. **Neither was about Premiere.**
+Both were read by the VISIBLE panel (`shapeInUse()` off the folder CEP
+handed it, and the ScriptPath globals) and by nothing else, so no
+unattended run could answer them however green it was. A gap whose cause
+is "nobody clicked" printed identically to a gap whose cause is "the
+host refuses to say", which is the same silent-lie shape this project
+keeps finding on the AE side.
+
+A third defect was sitting inside the second one, and it is the worse of
+the two. Premiere's answer for `$.fileName` inside a `ScriptPath` is the
+EMPTY STRING (measured 2026-09-02, in CLAUDE.md and PREMIERE-PLATFORM
+section 3). Both doors stored it as
+`(fname && fname !== "undefined") ? fname : null` - `""` is falsy, so
+that expression throws the answer away - and the grader's picker skips
+`""` exactly as it skips a missing key. The one host the row exists FOR
+would have graded itself unmeasured while holding the measurement.
+
+### What changed
+
+- **The manifest shape is measured unattended now.** The manifest is a
+  file and the door-3 runner has `fs`; that row never needed a click.
+  `readShape()` finds the bundle by `ExtensionBundleId` under every CEP
+  extensions root (`%APPDATA%`, both `CommonProgramFiles`), not by
+  folder name, and records `readFrom`. Two copies is a finding, not a
+  tie to break: when they disagree the shape is withheld and both paths
+  are named, because which root CEP loads from is not measured here.
+- **The ScriptPath row is CLICK-ONLY, measured rather than assumed.**
+  `loader.jsx` is the PROBE bundle's `ScriptPath`; CEP evaluates it when
+  that panel LOADS, and an unattended run opens no panel. Read from the
+  engine door 3 talks to, the global is absent.
+  **Door 3 was NOT given a `ScriptPath` of its own to close the row.**
+  "No ScriptPath: nothing auto-loads into the host's ExtendScript
+  engine" is the invariant that keeps the invisible runner inert in the
+  owner's AE and Premiere at every launch, `tests/test-probe-bundle.js`
+  section 5 asserts it, and buying one table cell by loosening a tested
+  invariant is the trade this repo does not make.
+- **The REPORT changed instead.** A row the newest run could not take
+  and SAID SO grades `EXPLAINED` and prints `n/a` with the reason.
+  `m()` looks for the note only once no source has the value at all, so
+  a note can never pass a row and can never displace an older run that
+  really measured - the same rule `soakNote` established.
+- **Two doors, one rule, twice.** `AELLP_shapeOfXml` and
+  `AELLP_scriptPathFact` are shared blocks both doors keep
+  byte-identical (the `battArgs` / soak pattern), because the report
+  merges the two artifacts per row and two rules would mean the row
+  quietly changing question the day a newer run answers it.
+- The ScriptPath reading is taken as THREE separate one-fact reads -
+  the type, the length counted in the HOST, the value - so `unset`,
+  `empty` and `named` stay apart, and a value that did not survive the
+  CEP round trip is a transport finding rather than a measurement of an
+  empty `$.fileName`.
+- Same rule, one more fix: an unreadable manifest used to grade
+  `B (one HostList, loader)`, because zero HostLists is not more than
+  one. A read that found nothing is not a measurement; it says what it
+  read, with the byte count, and the row grades FAILED.
+
+### Verification
+
+- **Real Premiere, run `-0902`** (26.3.2, unattended, ~5 min): battery
+  9/9, soak 500/500 in 8189 ms, and the two new readings taken for the
+  first time -
+  `shape: B (one HostList, loader)`, `readFrom …\com.cptk.aellama.probe\
+  CSXS\manifest.xml`, and
+  `scriptPathNote: "$.global.AELLP_LOADER_FILENAME is undefined in this
+  engine…"`.
+- `node scripts/ppro-probe-report.js` over that artifact: **PPRO has no
+  `----` row left** - 26 measured, 1 `n/a` with its reason (was 3
+  unmeasured). G0 still PASS, exit 0.
+- `tests/test-probe-bundle.js` section 12: **33 new assertions**, and
+  **10 of them go RED** against the reverted doors and grader (checked
+  by reverting each of the three sites in turn and restoring).
+- Full stubbed suite green (74 files), including the five lints section
+  12b requires before any Premiere push.
+- **Real AE harness 770/770** at the start of the pass; `extension/` was
+  not touched, so it is unchanged by construction.
+- **No version bump.** Nothing in `extension/` moved; the probe is not
+  shipped, and bumping would push a no-op update to every panel.
+
+### Notes / assumptions
+
+- **Assumed the shape row means "what is installed", not "what CEP
+  loaded".** The runner reads a file; only the panel can say what its
+  own host loaded. That is why the reading carries `via` and `readFrom`,
+  and why two disagreeing copies withhold the answer instead of picking
+  one.
+- **Assumed `EXPLAINED` must never reach G0.** It cannot today - no G0
+  row uses a note path - and a test pins that a note is not a
+  measurement. If a future gate row grows one, that assumption needs
+  re-checking.
+- The VISIBLE panel's half of the change (its `shapeInUse` and its two
+  ScriptPath call sites) was exercised only by the page-parses test and
+  the shared-block drive-out; an unattended run never opens that panel.
+  A click in either host would confirm it, and would also re-take the
+  ScriptPath reading that only a click can take.
+
+### Still open, in priority order
+
+1. **`doors.json` is still MISSING** - `scripts/ppro-door-probe.ps1`
+   has not been run since the door-3 runner started working, so the
+   report's "headless doors" block says nothing. That is the LAST filed
+   12b item; if it is bookkeeping, section 12b closes outright.
+2. The AE-side list is unchanged from the previous entry: two ellipses
+   and a feathered mask still make the parade unreadable (deliberate);
+   `comp.saveFrameToPng` writing nothing is unexplained; row 30's typo
+   burns six `center_anchor_point` calls; and everything else from the
+   2026-09-03 lists (the `distribute_property` mutate-then-throw hole, a
+   bad VALUE not being `argFault`, the `errArg` rollback exemption,
+   step 2's naming flake, the destructive-refusal wording, `property:
+   string` in TOOL_DEFS, `POST /tokenize`, the `comfyUrl` 8188/8000
+   mismatch, the harness answering a modal with WORDS, `starved`
+   wording, delete_mask warning on a live expression, the unmeasured
+   controller GROUP and non-en_US locale, and `capParams`).
+
+### Machine state
+
+**After Effects was never closed and its project was never closed.** One
+AE harness run (770/770, green). Premiere was launched and closed by
+`run-ppro-probe.ps1` itself, once; it removed everything it made
+(`AELL PROBE 1..3`, `AELL PROBE SEQ`) and worked only in the scratch
+project under `%APPDATA%\AE-Llama\probes\`. No ComfyUI, no llama-server
+left running.
+
+## 2026-09-03 (remote session) — RETRACTION: saveFrameToPng is not broken
+
+Re-read of the overnight run's 27 passes on a higher-tier model. The run
+was good — 20 correct bumps, 6 correct non-bumps (the 12b passes, none
+of which touched `extension/`), harness 593 → 770/770, gate G0 closed
+unattended. One thing in it is wrong, and it propagated.
+
+**The false fact.** The 0.11.26 pass (mask erasure) built its probe on
+`comp.saveFrameToPng`, got nothing back — throws nothing, `f.exists`
+false, `f.length` -1 — and concluded that **the API writes no file on
+AE 26.3x87**. It wrote that into the log, the probe header, and its
+filed follow-up ("the `saveFrameToPng` failure is unexplained"). The
+0.11.33 and 0.11.35 passes then repeated it as settled ("still writes no
+file"), and pass 28 began building `save-frame-hazard-probe.*` to chase
+it (that work is in the owner's `loop-salvage-20260903-092915` stash).
+
+**Why it is wrong.** This same log already contains both halves of the
+answer, ~11 000 lines earlier:
+
+- item 5.8's prep measured the call **working** on this machine: 407
+  bytes for a 160x120 frame, `resolutionFactor` honoured (227 at half
+  res), no viewer needed, `comp.time` untouched;
+- and, in the list of what AE does silently, **"a folder that does not
+  exist is a SILENT no-op — `saveFrameToPng` returns normally and writes
+  nothing"** — which is exactly the symptom the probe reported.
+
+The shipped `save_frame` tool calls `saveFrameToPng` and passes
+`AELL_rqCheckOutput` first *specifically* to catch that case; its
+comment says so. So a tool in the product depends on the API the log now
+calls broken.
+
+**What was corrected here, and what was not.** The probe header is
+retracted in place and `scripts/mask-erase-probe.jsx`'s
+`saveFrameToPngWrites: false` is gone — it was a hardcoded literal, not
+a reading, which made the claim unfalsifiable by the probe that printed
+it. The API itself is graded **CONTRADICTED, not measured**: two
+real-AE readings disagree and the newer one never ruled out a documented
+cause. Nothing here re-measures it, because this session has no AE.
+
+**Why it is worth a minute of the next AE pass.** `save_frame` has 106
+stubbed assertions and **zero real-AE steps** (`grep -c save_frame
+extension/js/selftest.js` → 0), so the stub — which fakes the write — is
+the only thing exercising it every run. And a frame comparator is the
+natural instrument for the self-verify track, so a retracted "it writes
+nothing" reads as a blocker on that whole line of work. One minute:
+create the folder, call it once, read `f.length`. Then add a real-AE
+step so it can never drift again.
+
+**The process lesson, which is the durable part.** The log is now ~16 000
+lines and a pass reads it as an index, not end to end. A pass that
+measures something surprising has to grep the log for the same API
+before writing the surprise down as a platform fact — otherwise a
+throwaway probe's environment error becomes a product-level truth in one
+hop and is inherited by every pass after it. Three passes inherited this
+one.
+
+**Also flagged, not fixed** (needs an owner decision, not a pass):
+
+- **Prompt headroom is 67 bytes** (58933 of 59000). The 0.11.25 pass
+  already warned the "doc second sentence" seam it had been mining for
+  four wording passes was nearly exhausted; it is now. Routing fixes are
+  where the field HARM results come from, and the next one has nothing
+  to spend. This needs a structural saving, not another trim.
+- **Concentration**: 10 of 27 passes went to mask receipts, because each
+  mask pass filed the next mask item and the queue is served top-down.
+  Every defect was real and measured — this is a queue-shape question,
+  not a quality one.
+- **`hostscript.jsx` grew 11 953 → 13 731 lines in one night** (+15%),
+  much of it mask geometry (16 `AELL_mask*`/`AELL_parade*` functions).
+  Receipt *strings* were checked and are fine — 26–292 chars each, and
+  `for_each_layer` dedupes identical ones — so this is not the context
+  hazard the 0.11.17 pass fixed. Noted for maintenance weight only.
+
+No `extension/` change, so NO BUMP.
+
+## 2026-09-03 (remote session) — the prompt ratchet was guarding the wrong number
+
+Correction to the entry above, which called prompt headroom an owner
+decision. It is not a decision; it was a measurement error on my part,
+and the fix is a test.
+
+**What I said:** "prompt headroom is 67 bytes, the next routing fix has
+nothing to spend, this needs an owner call."
+
+**What is actually true.** The 59000 ceiling is a self-imposed ratchet in
+`tests/test-context-budget.js`, not a technical limit — and it guards the
+FULL prompt. But `ctxSize` defaults to **16384**
+(`extension/js/settings.js`), the panel runs COMPACT under 24K, so
+compact (39803) is the prompt a default user actually gets. Full (58933)
+only reaches someone running 24K or more, where 32K leaves 34982 chars of
+history — no crisis there at all.
+
+**The real defect, which is subtler and worth having found.** The cuts
+that paid for the last several routing additions came from tool-doc
+SECOND SENTENCES — and compact mode discards those anyway. So each pass
+satisfied the full-form ratchet while handing the 16K user back nothing.
+Two of them said so in this log, honestly and in passing: "Compact grew
++184" and "Compact grew +64". No test objected, because the only guard on
+compact was the RATIO `compact < full * 0.72` — which scales with a
+`full` pinned near its own ceiling, leaving compact ~2.6K chars of
+unexamined room to grow.
+
+Meanwhile the rules block, where the routing phrase lists live, is
+byte-identical in both forms (the suite asserts it). So a routing
+addition costs the default user every byte, while its "payment" often
+cost them nothing.
+
+**Fixed:** `COMPACT_CEILING = 40000`, absolute, alongside the full one.
+The number is not the point — the point is that the next routing addition
+has to pay in the currency the default user spends, which makes a
+cosmetic cut fail immediately instead of silently.
+
+**Nothing is needed from the owner** for this or for the two notes in the
+previous entry (mask concentration, hostscript growth) — those were
+observations, not problems, and I should not have filed them as decisions.
+
+No `extension/` change, so NO BUMP.
+
+## 2026-09-03 (remote session) — an orientation doc, and the KV-cache finding
+
+**Owner asked for** a context document another chat can read to
+understand the product, and asked whether 16K ctx is right for a 5090.
+
+**NEW `docs/ORIENTATION.md`.** There was no single door into this repo:
+`CAPABILITIES.md` is mostly a generated 79-row table, `WORKPLAN.md` is a
+2.7k-line backlog and `WORKPLAN-LOG.md` is 18k lines of history. A fresh
+session had nothing to read that said what the product IS. The new doc
+covers: what it is and the three things that shape every decision (local
+model, SMALL model, commercial product); the request flow end to end
+through the CEP boundary; the file layout with sizes; all 79 tools
+grouped by what a user would ask for; the grounded-receipt thesis with
+the silent-success failure class that most of this repo's fixes belong
+to; the three verification layers; the context budget; and the rules that
+bite. Every checkable claim in it was verified against source (tool
+count, ctxSize, port, the 24576 compact threshold, maxRounds, and that
+all 78 tool references name real tools).
+
+**The VRAM answer, and a finding worth acting on.** `spawnServer` in
+`extension/js/llama.js` launches llama-server with `-m --host --port -c
+-ngl` and nothing else. There is **no KV-cache quantization and no
+flash-attention flag**, so the KV cache runs at fp16. For a 32B model
+with GQA that is roughly 256 KiB/token: ~4 GiB at 16K, ~8 GiB at 32K, on
+top of ~19 GB of weights at Q4_K_M. That is what makes 32 GB feel like a
+16K card once ComfyUI also wants VRAM. `--flash-attn` with
+`--cache-type-k q8_0 --cache-type-v q8_0` roughly halves the KV cost.
+
+NOT changed here: it touches `extension/`, so it needs a bump, and q8 KV
+is slightly lossy — the owner's call, and it wants a measurement (tokens/s
+and a paraphrase-matrix run at q8 vs fp16) rather than a confident patch.
+
+**CORRECTION, same day:** the sentence above originally ended "Filed in
+WORKPLAN." It was not. I wrote the finding into this log and claimed a
+filing I never made, so the loop would never have seen it — the exact
+shape of unverified claim this project keeps punishing, made by me in the
+same entry that described measuring before asserting. It is filed now, as
+WORKPLAN section 13b, alongside 13a.
+
+**Confirms an existing design choice:** 16K is the right DEFAULT for
+shipping. aescripts customers run 8-12 GB cards far more often than 32 GB
+ones, so assuming 24K+ would strand most of them on a prompt form they
+cannot fit. Compact-by-default is correct, and the compact ceiling added
+earlier today is what keeps it honest.
+
+No `extension/` change, so NO BUMP.
+
+## 2026-09-03 (remote session) — section 13 filed: SageAttention and KV backends
+
+**Owner:** put the KV item in the loop plan, and prepare for
+SageAttention — "they won't be able to benefit from that without it and
+on lower cards it's basically a requirement". Correct on both counts.
+
+**First, a correction.** The previous entry said the KV-cache finding was
+"Filed in WORKPLAN." It was not. I wrote it into this log only, so the
+loop would never have seen it — an unverified claim of exactly the kind
+this project keeps punishing, made in the same entry that argued for
+measuring before asserting. Both items are filed now as section 13.
+
+**Why 13a (SageAttention) is more tractable here than it looks.**
+Installing SageAttention by hand on Windows is genuinely awful — Triton,
+a matching torch/CUDA pairing, MSVC for anything that compiles, and a
+kernel path that matches the GPU's compute capability. A motion designer
+will not get there. But this panel does not use the user's Python:
+`Setup.findComfyInstall` downloads a PORTABLE ComfyUI into `vendor/comfy/`
+with an embedded interpreter, and `comfy.js` spawns it with arguments we
+choose. We own the environment and the launch line, so this is a
+deterministic install rather than a support thread.
+
+Filed as five steps, measure-first: read the shipped interpreter's
+python/torch/CUDA/compute-capability into `docs/measured/` before any
+decision; pick the install route from that (prebuilt wheel preferred —
+it is the only route that scales to non-technical buyers); add
+`--use-sage-attention` conditionally; and then the step that matters
+most — VERIFY IT LOADED, with a real generation timed before and after,
+because a backend that silently falls back while the panel claims
+SageAttention is the same silent-success class the mask passes have spent
+weeks removing. Falling back must name the attention path actually in
+use. Also flagged: `tiers.js`'s VRAM arithmetic is calibrated on the
+current attention path and goes stale if peak VRAM moves.
+
+**13b** is the KV item: `spawnServer` passes `-m --host --port -c -ngl`
+and nothing else, so KV runs fp16 (~256 KiB/token for a 32B GQA model:
+~4 GiB at 16K, ~8 GiB at 32K, over ~19 GB of weights). `--flash-attn`
+with `q8_0` K/V roughly halves it. Gated on a paraphrase-matrix run at
+fp16 vs q8, since routing degrades first and no stub can see it, plus a
+tokens/sec reading and a fallback for llama-server builds that reject the
+flags. It BUMPS.
+
+**Wired into the rotation** so it does not starve: section 13 counts as
+"the rest of the backlog" for 12b's alternation rule, and the first pass
+should be 13a step 1, which costs one command.
+
+**Every code claim in the new section was checked against source**, not
+written from memory: the embedded-python install exists, comfy.js spawns
+with exactly the args quoted and carries no sage flag today, llama.js
+passes only the five flags described, and `comfyPauseLlm` exists so the
+tiers consequence is real.
+
+**Also recorded:** 16384 stays the shipping default whatever 13b finds.
+Buyers on 8-12 GB cards are the common case; the compact prompt form
+exists for them, and assuming 24K+ would strand most of the market.
+
+No `extension/` change, so NO BUMP.
+
+## 2026-09-03 (remote session) — 13a rewritten: fully automated, manifest-served
+
+**Owner:** completely automated. Scan the hardware, download the right
+things, install them. The only thing a user sees is "here's what you're
+running, and Triton and SageAttention have been successfully installed",
+alongside the model downloads and ComfyUI install that already happen.
+Env paths in Advanced Settings for niche setups, never necessary.
+
+That is a design change, not a scope change, and it made the section
+much smaller — because **almost every piece already exists**:
+
+- `Setup.detectGpu` already returns `computeCap` alongside `cudaVersion`
+  and `vramGB`. Compute capability is precisely what kernel selection
+  needs, and it is already measured on the owner's 5090.
+- `Setup.findComfyInstall` gives an interpreter WE installed
+  (`python_embeded/python.exe`), so nothing touches the user's Python.
+- The hosted `update.json` manifest already serves `modelCatalog` and
+  `comfyCatalog`, and `recommendSetup(manifest, gpu)` is already a PURE
+  hardware-to-install decision, stub-tested.
+- `downloadToFile` (progress + cancel), `extractZip`, and
+  `pickAssets`/`pickReleaseAssets` (which already pick a build by CUDA
+  version for llama.cpp) are all in place.
+- `comfy.js` owns the launch line, so `--use-sage-attention` is a flag
+  we add, not something a user types.
+
+**The one architectural decision: wheel URLs live in the hosted
+manifest, never in the panel.** Wheel availability moves constantly —
+new torch, new Python minor, new GPU architecture, new SageAttention
+release. Hardcoded in the panel, each of those needs a panel release and
+strands everyone who has not updated; in the manifest it is a JSON edit
+that reaches every installed panel at once. `modelCatalog` and
+`comfyCatalog` already work this way, so it is precedent rather than
+invention. Proposed `accelCatalog` shape is in the section, marked to be
+confirmed against the step-1 measurement rather than assumed.
+
+**Two things the owner's requirement settled that I had left open:**
+
+1. **No compile-from-source route, ever.** I had filed "whether to offer
+   a compiler route" as an owner decision. Hands-off answers it: MSVC
+   plus a CUDA toolkit is not hands-off, so no matching wheel means no
+   install and a quiet fall back.
+2. **The install is hermetic** — `pip install --no-index --no-deps` into
+   the embedded interpreter only. A hands-off installer must never
+   resolve dependencies off the network into an environment the user
+   depends on, and must never silently upgrade the torch ComfyUI is
+   pinned to. If a wheel needs something absent, the manifest is wrong
+   and `pickAccel` should have refused.
+
+**The part I weighted hardest: the sentence has to be EARNED.** The
+owner's required message is "successfully installed". Printed off a pip
+exit code that is the silent-success class this repo has spent weeks
+removing — and worse than usual here, because the user would believe
+they were on the fast path while every generation ran slow. Gated on
+three things: the module imports in the embedded interpreter, ComfyUI's
+own startup log confirms it, and one fixed workflow at a fixed seed
+moves on seconds and peak VRAM, recorded in `docs/measured/`. If the
+numbers do not move it did not load, whatever anything claims.
+
+**Failure is invisible and non-blocking**: launch without the flag,
+install nothing further, never retry in a loop, name the attention
+backend actually in use. Not presented as an error, because nothing the
+user did was wrong.
+
+`pickAccel(manifest, env, gpu)` is specified pure for the same reason
+`recommendSetup` is: it is the only way a hardware matrix this wide gets
+covered without hardware. Named test shapes: 5090 (sm120), a 12 GB
+40-series, a 3060, a GTX below the INT8 kernel floor, AMD/Intel, and no
+GPU at all.
+
+**Every capability the plan leans on was checked against source**, not
+recalled: computeCap/cudaVersion/vramGB in `detectGpu`, `recommendSetup`'s
+signature, the two manifest catalogs, `downloadToFile`'s progress and
+cancel, the embedded-python path, comfy.js owning the launch args, and
+that no sage flag exists yet.
+
+One self-correction: my own verification of the section initially
+reported a FAIL on "requires earned verification". The doc was right and
+the check was wrong — the phrase is line-wrapped and my regex was not
+newline-tolerant. Fixed the check.
+
+No `extension/` change, so NO BUMP.
+
+## 2026-09-05 (remote session) — the log stopped being memory a while ago
+
+SUPERSEDES: CLAUDE.md and the loop brief both said "read
+docs/WORKPLAN-LOG.md first" — that instruction was impossible and is
+replaced by reading `docs/MEMORY.md` and retrieving by line range.
+
+**Owner raised the design:** without a durable store, compaction is
+amnesia with better manners; but writing files is the easy half and
+retrieval is the hard half. A directory of history is not memory if the
+reader cannot work out which three pages to open.
+
+**Measured before designing anything, 2026-09-05:**
+
+| file | size | tokens |
+|---|---|---|
+| `docs/WORKPLAN-LOG.md` | 1,047,226 B | ~262k |
+| `docs/WORKPLAN.md` | 183,232 B | ~46k |
+| `CLAUDE.md` | 11,001 B | ~2.7k |
+
+211 entries, first on 2026-08-20, growing ~16k tokens a night (41 and 38
+commits on the last two active days). Against a 16384 default window,
+**"read the log first" has been physically impossible for weeks** — it
+has quietly meant "read an arbitrary part of it", and no pass knew what
+it was missing.
+
+**The failure is not theoretical; the file contains its own evidence.**
+37 entries announce a correction, INTERLEAVED with what they overturn:
+line 15023 says an earlier pointer "is now simply WRONG", 13743 retracts
+the previous entry's diagnosis, 18546 is a retraction of a whole claim.
+A pass grepping for a fact can land on the dead version and cannot tell.
+And the routing failure has already bitten: on 2026-09-03 a finding was
+written to the log with the words "Filed in WORKPLAN" while no such
+filing existed — a fact in the audit tier, where nothing reads for work.
+
+**Built: `scripts/memory-index.js` → `docs/MEMORY.md`,** 1963 tokens,
+always resident. Generated, for the reason `CAPABILITIES.md` is: a
+hand-maintained index of a file that grows nightly is stale by the
+second night, and a stale index is worse than none because it is
+believed. It carries a corrections table, the recent entries, and a
+subsystem map — every row with a LINE RANGE, so retrieval is
+`sed -n 'START,ENDp'` rather than a guess. `tests/test-memory-index.js`
+runs `--check` plus a resident-budget assertion and, most importantly,
+**resolves every published line range against the log** — a routing
+table with wrong pointers retrieves confidently, which is the worst
+failure available here.
+
+**Two defects in my own first output, fixed rather than shipped:**
+
+1. *Tags were noise.* Matching the whole body gave nearly every entry six
+   to eight tags — these entries are long enough to mention every
+   subsystem in passing. Now scored against the title and opening
+   paragraphs only, top two kept. And the generator now DROPS any tag
+   covering more than a third of the corpus: `harness` hit 110 of 211,
+   not because those entries are about the harness but because every pass
+   reports its harness score up top. A universal is not a category.
+2. *Corrections were over-listed and unreadable.* Line-by-line extraction
+   from hard-wrapped markdown returned fragments ("keeps. The first half
+   was wrong, in both hosts:"), and a whole-body test flagged design
+   statements as corrections. Now paragraph-based, and an entry must
+   ANNOUNCE the correction (title, opening clause, or an explicit
+   marker). 44 → 16, and the section states what it deliberately omits.
+   **Under-listing is safe; over-listing is not** — a padded section gets
+   skimmed, and then the one real correction goes unread.
+
+**The tiers, now explicit** in `docs/MEMORY.md`: pinned facts
+(`CLAUDE.md`), orientation, the queue (read by SECTION), the index
+(always resident), the audit trail (never resident). `CLAUDE.md` and the
+loop brief both updated to match, and the brief now asks a pass to
+regenerate the index, mark corrections with `SUPERSEDES:`, and file
+work-implying findings in the QUEUE.
+
+**Deliberately NOT built:** SQLite/FTS5 and embeddings. For 1 MB of
+markdown, `grep -n` is the full-text search, and the index gives it a
+starting point. Adding a database now would be infrastructure ahead of a
+measured need. What IS still open: a scheduled compaction pass that rolls
+old entries into the semantic tier — filed rather than built, because the
+index makes the growth survivable and compaction is destructive enough to
+want its own pass.
+
+Harness 73/75 (the two container-only failures). No `extension/` change,
+so NO BUMP.
+
+## 2026-09-05 (remote session) — memory-layer proposal: confirmation pass, no code
+
+**Owner:** do not build this yet; improve this side of the project from
+the recommendations, and verify with Fable 5.1 next week.
+
+So this pass did the confirmation the build prompt itself asks for
+("Confirm each of these against the current code before building") and
+wrote nothing else. Original preserved verbatim at
+`docs/proposals/memory-layer-BUILD-PROMPT.md`; findings in
+`docs/proposals/memory-layer-REVIEW.md`; filed as WORKPLAN section 15,
+marked OWNER-GATED / DO NOT START so the loop leaves it alone.
+
+**First, a distinction worth stating loudly:** this is NOT the same
+system as `docs/MEMORY.md` built earlier today. That one is the
+DEVELOPMENT loop's memory (an index into this log, for unattended
+passes). This is the PRODUCT's memory (the panel remembering a user's
+conventions across projects). Same principles, different consumers, and
+they should share no code.
+
+**Stale premises, all verified:** the prompt says v0.11.0 (actual
+0.11.37), ~77 tools (79), a 533-step self-test (770/770). And the one
+that is not just a number — "Nothing leaves the machine. No network
+calls" is FALSE as written: `setup.js` has `fetchJson` and
+`downloadToFile` for the update manifest, llama.cpp builds, GGUF models,
+portable ComfyUI, ffmpeg and whisper, and §13a would add wheels. The
+defensible claim is "no user CONTENT leaves the machine; the only
+outbound traffic is first-run installs and update checks". Worth fixing
+before review, because a reviewer who accepts the stronger claim will
+design around a constraint the product does not have — and because that
+sentence is the one most likely to end up in marketing.
+
+**Integration points: three exist, two do not.**
+
+- IP1 `buildSystemPrompt` ✅ — but the prompt is CI-ratcheted at 59000
+  (full, 58933 used) and 40000 (compact, 39803 used). **67 chars of
+  headroom** against a resident index needing 1,600-3,200. The proposal
+  does not know this constraint exists and it is the one most likely to
+  sink the design.
+- IP2 `history` + push ✅ (`main.js:252`, `:748`, assembled at `:643`).
+- IP3 `executeCommands` ✅ (`tools.js:3086`, 6-round cap).
+- IP4 project-change events ❌ — every `addEventListener` in main.js is
+  DOM/UI; there is no CEP host event, and **nothing anywhere reads
+  `app.project.file`**. The storage layout is anchored to a directory
+  the panel cannot locate. Also: the UNSAVED project is the common case
+  (AE cold-launches to `Untitled Project.aep`, the suite never saves),
+  so the APPDATA fallback is the first-run path, not an edge case.
+- IP5 the arbiter ⚠️ — `tiers.js` holds PURE recommendation functions,
+  not a live gate; the live part is `comfyPauseLlm` plus an
+  `unload_models` free-memory call in `comfy.js` with a resume at
+  `:1672`. So "route through the arbiter" has no object to route
+  through; the real requirement is "never issue a model call while the
+  LLM is unloaded for a generation", which is a sequencing constraint on
+  the resume path.
+
+**Section E is a replacement, not an addition.** `historyBudget()` and
+the trim at `main.js:615` (with its visible `trimNoticeShown` notice)
+already manage context. Compaction swaps drop-oldest for
+summarize-oldest and inherits a tested budget calculation; a fresh "65%"
+threshold would create two disagreeing notions of "full". The notice
+should stay VISIBLE — silent compaction is the failure class this repo
+has spent weeks removing everywhere else.
+
+**Recorded what NOT to relitigate** so a reviewer spends its credits on
+the open questions: memory-stores-intent-never-state is the most
+important line in the document (this panel's worst failure is confident
+action on stale structure, shipped repeatedly as `trackMatteType` read
+as existence and `remainingMasks` read as visibility); edit-in-place is
+confirmed the hard way by this very log; no-embeddings-for-v1 is right
+twice (small vocabulary, and an embedding model competes for the VRAM
+`tiers.js` already arbitrates).
+
+**Six questions drafted for the Fable pass**, chosen to be ones where a
+second opinion changes the build rather than confirming it — including
+whether the sidecar-beside-the-.aep layout survives the unsaved-project
+reality, where the resident index's tokens come from, and whether
+markdown-plus-parallel-FTS is two sources of truth once a user
+hand-edits the markdown the design invites them to edit.
+
+Every claim in the review was verified against source (11 checks). No
+`extension/` change, so NO BUMP.
+
+## 2026-09-05 (remote session) — memory system prompt: synthesis, still no code
+
+**Owner:** synthesise the new memory/planning system prompt with the old
+structure of the project. Still not building — §15 stays gated.
+
+Written to `docs/proposals/memory-layer-SYSTEM-PROMPT.md`; the draft is
+preserved verbatim beside it. §15 now indexes all four documents in
+reading order.
+
+**The budget, measured rather than estimated:** full 58,933 / 59,000
+(67 spare), compact 39,803 / 40,000 (197 spare), rules block 19,043 and
+BYTE-IDENTICAL in both forms. The draft budgets ~600 tokens (~2,400
+chars), which is over by 2,333 full / 2,203 compact.
+
+**The trap the draft could not have known:** a memory block is a RULES
+addition, and compact never touches the rules block — so it costs its
+full size in the prompt a default 16K user actually gets. Meanwhile
+every previous addition here was paid for by cutting tool-doc SECOND
+SENTENCES, which compact already discards. The bytes for this cannot
+come from where the last several passes took them. `COMPACT_CEILING`,
+added this morning, is the thing that will bind it.
+
+**Placement corrected.** The draft says "after the tool definitions".
+The prompt is ordered preamble -> Rules -> Available tools -> state, so
+that would put memory rules 19k chars from every other rule, behind 79
+tool descriptions. Two measured findings say no: 0.11.25 (a clause was
+in the prompt verbatim and ignored because it sat behind a bullet naming
+another tool — a model reading a bullet stops at the first tool it
+names) and 0.11.30 (naming a tool in a scope rule's route read as
+permission to use it). Memory rules belong IN the Rules block; the
+resident index belongs after the tool defs, with the project state,
+because both are things the model looks up rather than rules it follows.
+
+**Two of the draft's five sections already exist in the prompt** and
+were folded rather than restated: "never recall what you can ask" is the
+existing inspect-first rule, and "stay quiet about mechanics" is four
+words on the existing reply-brevity bullet. That placement is also
+better than the draft's, which ENDS its block on a prohibition —
+0.11.24 measured that the last clause of a rule is an instruction this
+model obeys, so ending on "carry on" wastes the strongest position.
+
+**Result: 1,499 chars / ~375 tokens, 37% under the draft**, with phrase
+lists kept because that is how routing works here. Still over by 1,432
+(full) / 1,302 (compact), and three honest ways to pay are argued rather
+than one asserted — real deletion (the rules block's largest bullet is
+`comfy_generate` at 691 chars, which is tool documentation living in the
+rules block), a deliberate ceiling raise that is measured and re-pinned
+rather than done quietly, or conditional injection once the store is
+non-empty, which has a bootstrap problem worth putting to review.
+
+**Verification mapped, not invented:** seven of the draft's eight
+failure modes are `chat-probe.js --variants` rows; the eighth (stacked
+contradicting records) is a store invariant and belongs in a stub. Noted
+the repo's own caution that a prompt change leaving the harness number
+unmoved is not evidence of nothing — 2026-09-03 closed a HARM row in the
+field at 653/653 unchanged.
+
+Four more review questions added, including the one that worries me
+most: "if memory and the project disagree, update the record" is a WRITE
+triggered by the model's own inference rather than by the user, and it
+is the only rule here that could corrupt a store rather than merely fail
+to use it.
+
+Every number and every quoted rule verified against the real
+`buildSystemPrompt` (11 checks). No `extension/` change, so NO BUMP.
+
+## 2026-09-05 (remote session) — the tiers promise more than the arithmetic allows
+
+**Owner:** get stricter with the tiers and more realistic about what is
+offered. Filed as WORKPLAN §16, owner-gated — tier copy and boundaries
+are commercial text, so this pass supplies the arithmetic, not the
+decision.
+
+**The external analysis's central claim was right, and measurably so:**
+"measure your assembled prompt token count first; that number, not the
+card size, determines where your floor sits." It estimated 9-10k of
+permanent overhead. Measured here: **compact 10,758 tokens**, full
+15,928. Run through the repo's own `historyBudget()`, ctx 4096, 6144 and
+**8192 all return 0 chars of history — STARVED**. The first context size
+at which this product works at all is **16,384**. A card that cannot hold
+its model at 16k never gets a conversation, only a system prompt, and no
+amount of model quality changes that.
+
+**The finding neither the analysis nor the tier table states.** Every
+tier allows `headroomGB: 1`, and NOTHING in `tiers.js` reserves memory
+for After Effects — the application this panel lives inside, which holds
+2-3 GB with GPU acceleration. Every rung is under-reserved by 1-2 GB.
+The ladder was computed as though the panel were standalone.
+
+**Against this repo's own measured number** (`test-tier-ladder.js`: the
+7B chat model holds **6,002 MB**, dev machine 2026-08-30):
+
+| card | 7B + AE (2.0-3.0 GB) | left |
+|---|---|---|
+| **8 GB** | 6,002 + 2,048..3,072 | **-882 .. +142 MB** |
+| 12 GB | same | 3,214 .. 4,238 MB |
+
+T3 currently tells an 8 GB buyer they get "solid 7B chat plus SDXL
+images and short video clips". The 7B alone does not fit beside AE,
+before a single image is generated. T1 (4 GB) and T2 (6 GB) promise a
+"light chat model" at card sizes whose context cannot reach 16k.
+
+**Third confirmation:** tiering reads `--query-gpu=memory.total` — the
+card sticker. `queryVramUsedMB` exists and is used by the per-job
+generation arithmetic in `tools.js`, but never for choosing a tier. A
+user is assigned a tier by what they bought and finds out at run time
+what they actually have.
+
+**Recommended, with reasoning rather than a menu:** honest floor TODAY is
+**12 GB**. 8 GB becomes defensible only after §13b (KV quantization,
+which roughly halves KV cost) and tool routing land — which makes §13b a
+PREREQUISITE for the 8 GB floor rather than an optimization, and the two
+sections now say so. Below the floor, ship the custom-endpoint escape
+hatch (a config field and docs) instead of certifying a tier we cannot
+stand behind; the privacy claim survives if the copy is precise that it
+means the user's own machines and network.
+
+**Tool routing (§16e) is the lever**, and worth building wherever the
+floor lands: all 79 schemas go into every prompt, nothing routes, and
+79-way selection is hard for every model size — it should improve
+accuracy on a 5090 too. It also interacts with §15: a smaller tool block
+is where the memory block's 1,499 chars could come from without raising
+a ceiling.
+
+**Named the load-bearing UNMEASURED number rather than hiding it:** AE's
+2-3 GB footprint is an estimate taken from outside this repo, and it
+carries both 16b and 16d. `Setup.queryVramUsedMB` already exists to
+measure it — idle, real project, mid-render. That measurement plus a
+re-measure of the 7B at 16k with and without q8_0 KV are the loop's next
+useful steps, and must happen before any tier copy is rewritten.
+
+Ten claims verified against source. No `extension/` change, so NO BUMP.
+
+## 2026-09-05 (remote session) — packaged for review; one gap left open on purpose
+
+**Owner asked: what next, is this ready for Fable?** Mostly. Two things
+done to make the review worth its credits, and one gap named rather than
+papered over.
+
+**1. A placement bug in my own filing, caught before it cost a night.**
+§16's "these measurements are loop work" sentence was at line 3165 — the
+BOTTOM of a 130-line section whose header read "owner decides the
+floor". A pass scanning that section would have hit the gate and skipped
+the whole thing, measurements included. This is the same lesson 0.11.25
+measured in the panel's prompt (a clause present verbatim was ignored
+because it sat behind a bullet naming another tool): a reader stops at
+the first gate it sees, and placement is load-bearing. The section is now
+titled "TWO MEASUREMENTS ARE LOOP WORK" and splits its halves in the
+first four lines. Filed as §16f.
+
+**2. NEW `docs/proposals/README.md`** — one entry point rather than four
+files across two sections. Reading order, the numbers everything rests
+on in one table (re-derivable with `node tests/test-context-budget.js`),
+the five questions worth the credits, and — deliberately — a list of
+what NOT to ask, because arguments against settled decisions (no
+embeddings, never store project state, edit in place) would spend
+credits the ten open questions use better.
+
+**The gap, stated rather than hidden: §16's conclusion rests on an
+estimate.** AE's 2-3 GB VRAM footprint came from outside this repo and
+carries two of that section's four findings. If AE actually holds 1 GB,
+the 8 GB tier is fine and most of §16 is wrong. `Setup.queryVramUsedMB`
+already exists to take the reading — the panel's own generation
+arithmetic uses it — so this is a read of something already wired up,
+not new work.
+
+**So the recommended order is: loop first, Fable second.** One overnight
+run taking §16f (AE's footprint at three points; the 7B at 16k with and
+without q8_0 KV, which §13b needs anyway) turns the tier half of the
+review from "review my estimate" into "review my measurement". The
+memory-layer half is ready now either way — its numbers are all measured
+and re-derivable.
+
+No `extension/` change, so NO BUMP.
+
+## 2026-09-05 (remote session) — the memory-layer review ran; four of my own claims fall
+
+SUPERSEDES: the "IP4 does not exist / nothing reads app.project.file"
+claim (LOG entries at 18973-18976 and the two after; REVIEW.md §2;
+WORKPLAN §15 item 2; README q2), the "main.js:615 trims with the string
+'context trimmed — N earlier message(s) dropped'" claim (REVIEW.md §3),
+the "7B holds 6,002 MB (measured)" label (WORKPLAN §16d, README table),
+and §16a's "first context that works is 16,384 with 4,704 chars" table
+(computed on an EMPTY project). All four corrected in place; reasoning in
+`docs/proposals/memory-layer-REFINED.md` §0.
+
+**Owner:** "review the proposed plan above and implement your refined
+plan into the overall workplan." Ultracode on, so the review was an
+adversarial workflow rather than me agreeing with my own documents:
+seven grounded skeptics (budget, storage, writes, tiers, routing, the
+"do not relitigate" list, plan-and-value), each finding verified by two
+independent lenses — *is it true in the code*, *is the recommendation
+actually better* — then a completeness critic over what survived. 22
+agents, 669 tool uses. 56 findings confirmed by both lenses, 26
+contested, 1 refuted. Then 22 hand re-verifications against source of
+everything that changed the plan, all passing, before a word went into
+the workplan.
+
+**What was wrong, and how it propagated.** The worst was IP4: I grepped
+`app.project.file`, got zero hits, and wrote "nothing reads it" into the
+log, the review, the workplan and the brief. The code aliases `var proj
+= app.project` and `get_project_info` returns `projectFile` on every
+send. Four documents carried a false blocker for two days. The
+`SUPERSEDES` marker above is what `docs/MEMORY.md` was built for.
+
+**Settled (REFINED §1-§9, WORKPLAN §15):** strike the inference-
+triggered "project is right, update the record" — it contradicts its own
+bullet and was shown destroying correct memory two ways; markdown is the
+only truth (no SQLite/FTS5 — a native or WASM dependency for a 50 KB
+store, and §14 already said so); key = (scope, topic, subject) because
+(scope, topic) allowed 14 records total; APPDATA primary with the session
+log and plan.md NEVER in a hand-off folder (the original shipped the
+user's transcript to their client); import explicit and previewed
+(travelling memory is an injection channel); the block staged with the
+tools it names, not shipped as one unit describing tools that do not
+exist; the resident index is runtime data capped like STATE_BUDGET, not
+a ceiling problem, and ~57 tokens with subject keys rather than 400-800;
+drop the handle store (a cached snapshot of project state, principle 1's
+forbidden thing one layer down); the LOOP owns plan check-off (the last
+round has no model call), steps carry receipts (aliases die at
+sendMessage), resume verifies via one host lookup never the budgeted
+state block, Clear chat deletes the plan; compaction collapses into the
+ledger that already exists (`rollupHistory` — deterministic, re-derived
+from raw, inside historyBudget); chat-probe must run against a temp
+store or the 770/770 baseline stops reproducing.
+
+**Contested calls I made** (marked in REFINED): no automatic adoption of
+Untitled-era intent (the null→path transition is ambiguous with
+"discard, open another"); seven topics for v1; writes NOT rollback-aware
+(couples a durable preference to a transient host failure); no per-write
+appendMsg (every command already renders in the transcript — what is
+missing is revert); no loop-side continuation regex (no precedent, no
+instrument; the model decides from an injected "A plan exists" line).
+
+**Tiers (WORKPLAN §16), three corrections in place.** 16a restated WITH
+state: 16K leaves 2,682 chars on the probe's real project and 309 —
+starved — at the state cap; the first comfortable ctx with a real
+project is 20,480 compact, ×1.25 on the KV term. 16d: 6,002 is the
+arbiter's formula (4,466 + 1,536), corroborated by the log's own
+3,255→9,724 MB delta, ctx/KV unrecorded — and using the measured idle
+3,255 MB for AE the 8 GB row is −1,065 MB, worse than my estimate. 16e:
+routing CANNOT reach 8K (rules block alone + reply reserve = 8,480
+tokens); it moves the floor exactly one rung to 12,288 and is no longer
+cited as a floor lever; designed as a second axis with its own ceiling
+and a rules-closure assertion, with the two silent decisions (closure vs
+route-the-rules; enum narrow vs wide) named. 16f re-queued honestly:
+two of the three readings I marked "loop work" are forbidden by the
+loop's own brief (never close AE's project). Loop = persist the
+`_floorMB` the arbiter already computes and discards at tools.js:1862,
+one launch-time read, mid-render in the harness comp, and the 7B
+fp16-vs-q8 via a STANDALONE launcher (touching llama.js to measure would
+ship the flags unguarded); owner = the real-project reading. The
+dependency in §13b runs 13b-fallback → 16f#2. The 12 GB floor is a CHAT
+floor; §13a moves the generation half — one owner decision, after both.
+
+**Escape hatch is a small feature, not a config field:** five
+assumptions the chat path makes about its own server, listed in §16.
+
+**Loop-takeable now (§15):** the four Option A deletions (~850 chars in
+BOTH forms — prose duplicated on args lines, which compact keeps; my
+earlier "helps compact but not full" was wrong for these), the starve
+test row, and a `--store-root` on chat-probe.
+
+**Bookkeeping:** model-identity strings scrubbed from the non-log docs
+on the conservative reading of CLAUDE.md's rule; scope filed as owner
+decision 5. The refuted finding (routing bytes are args not
+descriptions) had correct numbers and a wrong headline.
+
+No `extension/` change, so NO BUMP.
+
+## 2026-09-05 (remote session) — the index generator was not CRLF-safe
+
+**Found by CI, on a PR I had just opened.** PR #68 went red with
+`docs/MEMORY.md is STALE — run: node scripts/memory-index.js` when the
+file was, locally, freshly generated and byte-identical to a re-run.
+
+**The tell was in the failure output itself:** the test printed the log
+at **272,662 tokens** where this container measures **267,841**. That is
++19,282 — and the log has exactly **19,282 lines**. One byte per line.
+CI runs on `windows-latest`, the repo has no `.gitattributes`, so git
+checks the log out with **CRLF**.
+
+`memory-index.js` split on `"\n"` and left a trailing `\r` on every
+heading, so the Windows checkout generated a different index from the
+LF one that was committed, and `--check` compared them and failed.
+Nothing was actually stale.
+
+**Fixed at the read**, not at the test: `read()` normalises `\r\n` to
+`\n`, so the generator is platform-independent and the committed index
+is byte-identical whichever checkout produced it. Verified by generating
+from the real log and from a CRLF copy of it — 7,871 chars both ways.
+
+`tests/test-memory-index.js` now pins it: rewrite the log as CRLF,
+regenerate, require the same bytes, and restore the working tree in a
+`finally` so a failure cannot leave the repo dirty. It asserts the
+restore too.
+
+**Worth noting for anything else that parses repo files.** This would
+have hit the owner's Windows machine identically — the loop regenerates
+the index on every pass, so a Windows checkout with `core.autocrlf`
+would have failed the same check every night. The class is wider than
+this one script: any generator that reads a repo file, splits on `\n`
+and writes a derived artifact has it. `scripts/capability-report.js` is
+the other generated-doc pair; it reads `tools.js` and `hostscript.jsx`
+through the same shape and is worth the same check.
+
+No `extension/` change, so NO BUMP. Harness 73/75 (the two
+container-only failures).
+
+## 2026-09-05 (remote session) — the CRLF test was itself not CRLF-safe
+
+SUPERSEDES: the previous entry's claim that the CRLF fix was verified.
+The GENERATOR fix was right and CI confirms it ("docs/MEMORY.md is
+regenerated from the current log" now passes). The regression TEST I
+added alongside it was wrong, and it turned PR #68 red a second time.
+
+**What it got wrong.** It compared RAW BYTES of the committed index
+against a freshly generated one. On Windows the checked-out
+`docs/MEMORY.md` is CRLF while the generator writes LF, so the two
+differed by 96 bytes — exactly the index's 96 lines — with nothing wrong
+on either side. The generator's own `--check` had it right all along: it
+compares NORMALISED content.
+
+**The property that actually matters** is that the generator's OUTPUT
+does not depend on its INPUT's line endings. Line endings on disk are
+git's business. The test normalises both sides now, which is the same
+thing `--check` does.
+
+**Verified three ways rather than one**, because the first fix was
+verified only one way and that is how this recurred:
+1. green on a normal LF checkout;
+2. green with `docs/MEMORY.md` rewritten as CRLF — the CI case,
+   reproduced locally first and matching CI's numbers exactly (7,943 vs
+   7,847);
+3. still RED when the generator fix is reverted, so the test has not
+   been softened into passing.
+
+**Checked the one other generated-doc pair** rather than assuming:
+`scripts/capability-report.js` produces byte-identical
+`docs/CAPABILITIES.md` from LF and CRLF sources (39,468 chars either
+way). No latent bug there.
+
+No `extension/` change, so NO BUMP.

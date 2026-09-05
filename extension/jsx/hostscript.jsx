@@ -94,6 +94,33 @@ function AELL_errPartial(msg) {
   return { ok: false, error: String(msg), mutated: true };
 }
 
+/* A NAMING refusal: the caller named an effect or a parameter that is
+ * not there — or asked to take one off a layer that has none at all —
+ * nothing was written, and the error already says what is.
+ *
+ * The opposite pole from AELL_errPartial. That one forces a rollback
+ * because half the work landed; this one FORBIDS one, because none of
+ * it did and the fix is a single corrected command. Measured in the
+ * field (WORKPLAN-LOG 2026-09-03, row 35 canonical): apply_effect
+ * 'Fast Box Blur' succeeded, set_effect_param 'Radius' came back with
+ * the properly grounded "'Fast Box Blur' has: Blur Radius, ..." — and
+ * the round rolled back, taking the blur with it. The grounding worked
+ * and the rollback threw away what it bought.
+ *
+ * Same class measured again 2026-09-03 (chat-probe row 36 vague, run 1):
+ * the model sent for_each_layer {apply_effect Drop Shadow} — 7 of 7 ok —
+ * together with a belt-and-braces remove_effect {layer: "BG"}, whose
+ * "no effects at all" refusal was NOT tagged, and the rollback threw the
+ * seven shadows away. Note that refusal has no name to correct: the fix
+ * is to DROP the command, which is why the sentence AELL_maybeRollback
+ * appends offers both.
+ *
+ * Only ever returned from a point where the tool provably has not
+ * touched the project yet. */
+function AELL_errArg(msg) {
+  return { ok: false, error: String(msg), argFault: true };
+}
+
 function AELL_resolveComp(name) {
   var proj = app.project;
   if (!proj) throw new Error("No project open");
@@ -614,6 +641,145 @@ function AELL_keyedProps(layer) {
   return out;
 }
 
+/*
+ * What the caller's WORD means on the effect in front of it.
+ *
+ * Measured 2026-09-03 (AE 26.3x87, scripts/param-concept-probe.jsx): the
+ * model asked Drop Shadow for Offset -> Offset X -> Offset Y ->
+ * Blurriness across four calls and was shown the complete, correct
+ * seven-name roster every single time. So the refusal was not hiding the
+ * answer and there was nothing to RANK: the list already said Distance
+ * and Direction. What it never said is that on THIS effect an "offset" IS
+ * a distance at an angle, and a "blur" IS Softness. A roster answers
+ * "what exists"; this answers "which of those is the thing you asked for".
+ *
+ * Each row is one concept. A row fires when the caller's word contains
+ * any of its words, and then every roster name containing any of the same
+ * row's words is a hit. Both halves are grounded in real rosters
+ * (measured, in that probe's output) - no word is in here that AE does
+ * not actually use somewhere.
+ */
+var AELL_PARAM_CONCEPTS = [
+  ["offset", "distance", "direction", "angle", "shift", "displace",
+   "displacement", "position", "move", "translate"],
+  ["blur", "blurriness", "soften", "softness", "sharp", "sharpness",
+   "feather", "smooth", "radius", "hardness", "fuzzy"],
+  ["opacity", "alpha", "transparency", "transparent", "opaque",
+   "strength", "intensity", "amount", "power", "density"],
+  ["color", "colour", "tint", "hue", "shade"],
+  ["size", "scale", "width", "height", "radius", "thickness", "length",
+   "border"],
+  ["speed", "rate", "frequency", "evolution", "phase", "cycle"],
+  ["seed", "random", "randomness", "variation", "jitter"],
+  ["brightness", "bright", "exposure", "lightness", "luminance",
+   "gamma", "level"],
+  /* No "shadow" in here on purpose: on Drop Shadow it fires on every
+   * name at once (Shadow Color, Shadow Only) and buries the answer, and
+   * Tritone's Shadows is already reached by plain containment. */
+  ["contrast", "gamma", "level", "midtone", "highlight"],
+  ["threshold", "tolerance", "cutoff", "clip", "limit"],
+  ["center", "centre", "anchor", "origin", "point", "pivot"],
+  ["progress", "completion", "complete", "transition", "reveal", "wipe",
+   "percent"],
+  ["saturation", "saturate", "vibrance", "vividness"],
+  ["edge", "border", "stroke", "outline", "brush"]
+];
+
+/*
+ * The concept names on THIS roster, best first, "" when nothing matched.
+ * Never invents a name: every string it returns came out of `names`.
+ */
+function AELL_paramConcept(wanted, names) {
+  var want = String(wanted === null || typeof wanted === "undefined"
+    ? "" : wanted).toLowerCase();
+  if (!want) return "";
+  var hits = [], seen = {}, i, j, k, low;
+  function take(n) {
+    if (!n || seen[n]) return;
+    seen[n] = 1;
+    hits.push(n);
+  }
+  /* Containment first, in both directions: "Shadow Distance" holds
+   * Distance, and "Blur" is held by Blurriness / Blur Radius. Measured:
+   * AE refuses both spellings outright, and both name the right
+   * parameter in full. */
+  for (i = 0; i < names.length; i++) {
+    low = String(names[i]).toLowerCase();
+    if (!low || low === want) continue;
+    if (want.indexOf(low) !== -1 || low.indexOf(want) !== -1) take(names[i]);
+  }
+  for (i = 0; i < AELL_PARAM_CONCEPTS.length; i++) {
+    var row = AELL_PARAM_CONCEPTS[i], fired = false;
+    for (j = 0; j < row.length; j++) {
+      if (want.indexOf(row[j]) !== -1) { fired = true; break; }
+    }
+    if (!fired) continue;
+    for (k = 0; k < names.length; k++) {
+      low = String(names[k]).toLowerCase();
+      if (!low || low === "compositing options") continue;
+      for (j = 0; j < row.length; j++) {
+        if (low.indexOf(row[j]) !== -1) { take(names[k]); break; }
+      }
+    }
+  }
+  if (hits.length === 0) return "";
+  if (hits.length > 4) hits = hits.slice(0, 4);
+  return hits.join(", ");
+}
+
+/* Every parameter name on an effect, in AE's own order and spelling. */
+function AELL_paramNames(fx) {
+  var out = [], i, p;
+  for (i = 1; i <= fx.numProperties; i++) {
+    p = null;
+    try { p = fx.property(i); } catch (eP) {}
+    if (p && p.name) out.push(String(p.name));
+  }
+  return out;
+}
+
+/*
+ * Find a parameter the way the rest of this file finds an effect or a
+ * render template: AE's exact lookup first, then one case- and
+ * separator-folded pass over the real roster. Measured in the same probe:
+ * fx.property("distance") already resolves but fx.property("DISTANCE")
+ * does NOT, so AE's own leniency is arbitrary and a caller who shouts a
+ * name it accepts in lowercase gets nothing. A fold is not a guess - the
+ * name has to be the SAME name - so this resolves it instead of refusing,
+ * and the receipt reports p.name, which is AE's spelling.
+ */
+function AELL_paramIn(fx, wanted) {
+  if (wanted === null || typeof wanted === "undefined" || wanted === "") {
+    return null;
+  }
+  var p = null;
+  try { p = fx.property(String(wanted)); } catch (eE) {}
+  if (p) return p;
+  var want = String(wanted).toLowerCase().replace(/[\s_\-]/g, ""), i, q, low;
+  if (!want) return null;
+  for (i = 1; i <= fx.numProperties; i++) {
+    q = null;
+    try { q = fx.property(i); } catch (eI) {}
+    if (!q || !q.name) continue;
+    low = String(q.name).toLowerCase().replace(/[\s_\-]/g, "");
+    if (low === want) return q;
+  }
+  return null;
+}
+
+/*
+ * The one "Parameter not found" sentence, so both places a caller can
+ * name a parameter refuse the same way. `tail` is whatever the call site
+ * wants to add about itself.
+ */
+function AELL_paramMissMsg(fx, wanted, names, tail) {
+  var concept = AELL_paramConcept(wanted, names);
+  return "Parameter not found: " + wanted +
+    (concept ? " — on '" + fx.name + "' that is: " + concept + "." : ".") +
+    " '" + fx.name + "' has: " + AELL_capJoin(names, 20) + "." +
+    (tail ? " " + tail : "");
+}
+
 /* Resolve "position" | "scale" | ... | "effect.<Effect>.<Param>" */
 function AELL_resolveProperty(layer, spec) {
   if (!spec) throw new Error(AELL_missingProperty(layer, ""));
@@ -635,10 +801,11 @@ function AELL_resolveProperty(layer, spec) {
       var fx = effects.property(effectName);
       if (fx) {
         var paramName = parts.slice(cut).join(".");
-        var param = fx.property(paramName);
+        var param = AELL_paramIn(fx, paramName);
         if (!param) {
-          throw new Error("Effect parameter not found: " + paramName +
-                          " (on effect " + effectName + ")");
+          throw new Error(AELL_paramMissMsg(fx, paramName,
+            AELL_paramNames(fx), "Name it as effect." + fx.name +
+            ".<one of those>."));
         }
         return param;
       }
@@ -3626,7 +3793,7 @@ AELL_TOOLS.set_transform = function (args) {
 
   var drivenWarn;
   try {
-    drivenWarn = AELL_writeValue(prop, value, propName);
+    drivenWarn = AELL_writeValue(prop, value, propName, propName);
   } catch (eW) {
     return AELL_err(eW.message);
   }
@@ -3900,6 +4067,56 @@ function AELL_threeDInChain(layer) {
   return hits;
 }
 
+/*
+ * The layer's rendered box in COMP space as {left, top, right, bottom},
+ * or null when there is no honest answer: no pixels at all, nothing
+ * rendered at this time, or ANY 3D layer in the parent chain (get_bounds
+ * above documents why AE's own sourcePointToComp cannot be trusted
+ * there — it ignores Z, the camera and a 3D parent's rotation).
+ *
+ * Same corner-mapping get_bounds reports; this is the callers-inside-the
+ * -host form, for tools that need to know where a layer LANDS rather
+ * than to report it.
+ */
+function AELL_compBoxOf(layer, t) {
+  if (typeof layer.sourceRectAtTime !== "function") return null;
+  if (AELL_threeDInChain(layer).length) return null;
+  var rect;
+  try {
+    rect = layer.sourceRectAtTime(AELL_sourceTime(layer, Number(t) || 0),
+                                  false);
+  } catch (eR) { return null; }
+  if (!rect || !(rect.width > 0) || !(rect.height > 0)) return null;
+  var corners = [[rect.left, rect.top],
+                 [rect.left + rect.width, rect.top],
+                 [rect.left + rect.width, rect.top + rect.height],
+                 [rect.left, rect.top + rect.height]];
+  var minX = null, maxX = null, minY = null, maxY = null, i, pt;
+  for (i = 0; i < corners.length; i++) {
+    try { pt = AELL_compPoint(layer, corners[i], Number(t) || 0); }
+    catch (eC) { return null; }
+    if (minX === null || pt[0] < minX) minX = pt[0];
+    if (maxX === null || pt[0] > maxX) maxX = pt[0];
+    if (minY === null || pt[1] < minY) minY = pt[1];
+    if (maxY === null || pt[1] > maxY) maxY = pt[1];
+  }
+  return { left: minX, top: minY, right: maxX, bottom: maxY };
+}
+
+/*
+ * Does this layer cover the WHOLE frame at comp time t? Half a pixel of
+ * slack, because a 1920x1080 solid centered on 960,540 comes back
+ * through the transform math as 1919.9999 often enough to matter.
+ *
+ * Only ever asked of a layer NOBODY named — see grid_layout.
+ */
+function AELL_fillsFrame(layer, comp) {
+  var b = AELL_compBoxOf(layer, comp.time);
+  if (!b) return false;
+  return b.left <= 0.5 && b.top <= 0.5 &&
+         b.right >= comp.width - 0.5 && b.bottom >= comp.height - 0.5;
+}
+
 AELL_TOOLS.get_bounds = function (args) {
   if (AELLJSON.isArray(args.layers)) {
     return AELL_err("get_bounds reads ONE layer. Call it once per " +
@@ -4041,6 +4258,14 @@ AELL_TOOLS.add_keyframe = function (args) {
   var layer = AELL_resolveLayer(comp, args.layer);
   var prop = AELL_anyProperty(layer, args.property);
   if (typeof args.time !== "number") return AELL_err("'time' (seconds) required");
+  // Same class as AELL_writeValue's, and reached the same way: a model
+  // that means "drive this from the slider" hands the expression over as
+  // the VALUE. setValueAtTime answers with AE's bare "... is not a
+  // number", which names no way forward.
+  var shapeProblem = AELL_badValueMsg(prop, args.value,
+                                      layer.name + "/" + args.property,
+                                      String(args.property));
+  if (shapeProblem) return AELL_err(shapeProblem);
   prop.setValueAtTime(args.time, args.value);
   return AELL_okay({ layer: layer.name, property: args.property,
                      time: args.time, numKeys: prop.numKeys });
@@ -4057,7 +4282,50 @@ function AELL_escapeExprName(s) {
  * broken one never lingers) on failure — the model sees the real reason
  * and can correct itself instead of guessing.
  */
-function AELL_setExpr(prop, expr) {
+/*
+ * What is on a property before anything writes over it. `enabled` is
+ * part of the state, not decoration: an expression whose expressionEnabled
+ * is false still reads back in full (measured), and any new write turns
+ * expressions back ON (measured), so a disabled one loses its OFF switch
+ * as well as its text.
+ */
+function AELL_exprState(prop) {
+  var st = { text: "", enabled: true };
+  try { st.text = String(prop.expression || ""); } catch (e) {}
+  try { st.enabled = prop.expressionEnabled !== false; } catch (e2) {}
+  return st;
+}
+
+/* An expression the user cannot get back if we drop it, capped for the
+ * result budget but never silently — the tail says how much was cut. */
+function AELL_exprBrief(text) {
+  var s = String(text || "");
+  if (s.length <= 240) return s;
+  return s.substring(0, 237) + "... (" + s.length + " chars)";
+}
+
+/*
+ * Set an expression WITHOUT losing the one that was already there.
+ *
+ * Measured in AE 2026 by scripts/link-overwrite-probe.js: assigning a bad
+ * expression does not throw — AE takes the text and fills expressionError
+ * — so the old cleanup (`prop.expression = ""`) threw the user's WORKING
+ * expression away as the price of a rejected write, on all four failure
+ * classes (missing layer, missing effect, syntax garbage, out-of-range
+ * subscript). Re-assigning the captured text puts it back exactly: error
+ * cleared and value restored, all four.
+ *
+ * `out`, when given, comes back carrying `prior` / `priorEnabled` /
+ * `restored` so the caller's receipt can name what it replaced. Nothing
+ * disappears quietly, and that includes the property's own contents.
+ */
+function AELL_setExpr(prop, expr, out) {
+  var was = AELL_exprState(prop);
+  if (out) {
+    out.prior = was.text;
+    out.priorEnabled = was.enabled;
+    out.restored = false;
+  }
   try {
     prop.expression = expr;
   } catch (e) {
@@ -4066,10 +4334,47 @@ function AELL_setExpr(prop, expr) {
   var err = "";
   try { err = String(prop.expressionError || ""); } catch (e2) {}
   if (err !== "") {
-    try { prop.expression = ""; } catch (e3) {}
+    // Put back exactly what was there, including an OFF switch. A prior
+    // that was itself erroring is restored as it was — that is the user's
+    // state, not ours to tidy.
+    try { prop.expression = was.text; } catch (e3) {}
+    if (was.text !== "" && was.enabled === false) {
+      try { prop.expressionEnabled = false; } catch (e4) {}
+    }
+    if (out) out.restored = was.text !== "";
     return err;
   }
   return null;
+}
+
+/* The half-sentence a rejected write owes the caller. */
+function AELL_exprKeptNote(out) {
+  if (out && out.restored) {
+    return " Nothing was lost: the expression already on that property " +
+           "was put back.";
+  }
+  return "";
+}
+
+/*
+ * Add to a SUCCESSFUL write's receipt what that write replaced. The user
+ * asked for the new expression, so this never refuses and never restores
+ * — it only refuses to be quiet about the one it overwrote.
+ */
+function AELL_replacedInto(res, out, newExpr) {
+  if (!out || !out.prior) return res;
+  if (out.prior === String(newExpr)) {
+    res.unchanged = "That property already had this exact expression; " +
+                    "nothing changed.";
+    return res;
+  }
+  res.replaced = AELL_exprBrief(out.prior);
+  res.replacedNote = "That expression is GONE — this write took its " +
+    "place. To put it back, set_expression with the text above." +
+    (out.priorEnabled === false
+      ? " It was also switched OFF, and expressions are ON again now."
+      : "");
+  return res;
 }
 
 AELL_TOOLS.set_expression = function (args) {
@@ -4081,18 +4386,32 @@ AELL_TOOLS.set_expression = function (args) {
   }
   var expr = typeof args.expression === "string" ? args.expression : "";
   if (expr === "") {
+    // A clear is the one write whose whole content is what it removed.
+    var gone = AELL_exprState(prop);
     prop.expression = "";
-    return AELL_okay({ layer: layer.name, property: args.property,
-                       expression: "cleared" });
+    var cleared = { layer: layer.name, property: args.property,
+                    expression: "cleared" };
+    if (gone.text !== "") {
+      cleared.removed = AELL_exprBrief(gone.text);
+      cleared.removedNote = "That expression is GONE. To put it back, " +
+        "set_expression with the text above.";
+    } else {
+      cleared.note = "There was no expression on that property; nothing " +
+        "was removed.";
+    }
+    return AELL_okay(cleared);
   }
-  var err = AELL_setExpr(prop, expr);
+  var wasExpr = {};
+  var err = AELL_setExpr(prop, expr, wasExpr);
   if (err) {
     return AELL_err("After Effects rejected the expression (" + err +
       "). Do not invent syntax — prefer link_property or " +
-      "apply_expression_preset, or fix the reported problem and retry.");
+      "apply_expression_preset, or fix the reported problem and retry." +
+      AELL_exprKeptNote(wasExpr));
   }
-  return AELL_okay({ layer: layer.name, property: args.property,
-                     expressionEnabled: prop.expressionEnabled });
+  return AELL_okay(AELL_replacedInto(
+    { layer: layer.name, property: args.property,
+      expressionEnabled: prop.expressionEnabled }, wasExpr, expr));
 };
 
 // ------------------------------------------------------- rigging (controls)
@@ -4235,11 +4554,16 @@ AELL_TOOLS.link_property = function (args) {
       "for 2D targets.");
   }
 
-  var err = AELL_setExpr(prop, expr);
-  if (err) return AELL_err("Link failed — AE rejected the expression: " + err);
-  return AELL_okay({ layer: layer.name, property: args.property,
-                     linkedTo: ctrlLayer.name + " > " + fx.name,
-                     expression: expr });
+  var wasLink = {};
+  var err = AELL_setExpr(prop, expr, wasLink);
+  if (err) {
+    return AELL_err("Link failed — AE rejected the expression: " + err +
+                    AELL_exprKeptNote(wasLink));
+  }
+  return AELL_okay(AELL_replacedInto(
+    { layer: layer.name, property: args.property,
+      linkedTo: ctrlLayer.name + " > " + fx.name,
+      expression: expr }, wasLink, expr));
 };
 
 /*
@@ -4510,6 +4834,7 @@ AELL_TOOLS.grid_layout = function (args) {
   // Explicit layer list wins; else the user's live selection; else ALL
   // content layers in the comp ("arrange all layers in a grid") — nulls,
   // cameras and lights are riggers, not grid content, so they're skipped.
+  var guessed = false;
   if (AELLJSON.isArray(args.layers) && args.layers.length > 0) {
     for (i = 0; i < args.layers.length; i++) {
       layers.push(AELL_resolveLayer(comp, args.layers[i], "layers"));
@@ -4518,6 +4843,7 @@ AELL_TOOLS.grid_layout = function (args) {
     var sel = comp.selectedLayers;
     for (i = 0; i < sel.length; i++) layers.push(sel[i]);
     if (layers.length === 0) {
+      guessed = true;
       for (i = 1; i <= comp.numLayers; i++) {
         var cand = comp.layer(i);
         var isNull = false;
@@ -4546,6 +4872,42 @@ AELL_TOOLS.grid_layout = function (args) {
   }
   layers = filtered;
   layers.sort(function (a, b) { return a.index - b.index; });
+
+  /* The backdrop the caller never asked for.
+   *
+   * Field run 2026-09-02, row 30: "line the Icon layers up in a neat
+   * 3 by 2 grid" reached grid_layout {spacingX: 40, spacingY: 40} with
+   * no 'layers'. Headless there is no selection, so the fallback above
+   * did what its doc promises and gridded every content layer — and the
+   * comp's full-frame BACKGROUND went into a grid cell with a rig
+   * expression on its Position. The user named a subset in words and
+   * got the whole comp.
+   *
+   * A layer that covers the WHOLE frame is a backdrop, not grid content
+   * — the same judgement the fallback already makes about nulls,
+   * cameras and lights, applied to the one other thing nobody grids.
+   * It is reported, never silent, and naming the layer in 'layers'
+   * always overrides it.
+   *
+   * One-sided, and only where the tool GUESSED:
+   *   - an explicit 'layers' list is never filtered (the caller chose);
+   *   - a live selection is never filtered (the user chose);
+   *   - a 3D layer, or one whose box AE will not measure, is kept —
+   *     AELL_compBoxOf returns null there rather than a wrong answer;
+   *   - if dropping backdrops would leave fewer than 2 layers, nothing
+   *     is dropped: a comp of full-frame stills IS a grid of stills.
+   * The scan costs one sourceRectAtTime and a parent walk per layer, so
+   * it stops at 200 and stays quiet beyond that. */
+  var backdrops = [];
+  if (guessed && layers.length <= 200) {
+    var keep = [];
+    for (i = 0; i < layers.length; i++) {
+      if (AELL_fillsFrame(layers[i], comp)) backdrops.push(layers[i].name);
+      else keep.push(layers[i]);
+    }
+    if (backdrops.length > 0 && keep.length >= 2) layers = keep;
+    else backdrops = [];
+  }
 
   var n = layers.length;
   if (n < 2) return AELL_err("Need at least 2 layers for a grid (got " + n + ")");
@@ -4588,6 +4950,7 @@ AELL_TOOLS.grid_layout = function (args) {
 
   var escCtrl = AELL_escapeExprName(ctrl.name);
   var placed = [];
+  var overwritten = [];
   for (i = 0; i < n; i++) {
     var layer = layers[i];
     var col = i % cols;
@@ -4616,7 +4979,8 @@ AELL_TOOLS.grid_layout = function (args) {
       ref + '.transform.position[1] + (row - (rows - 1) / 2) * ' +
       ref + '.effect("Grid Y Spacing")(1)' +
       (is3d ? ', value[2]' : '') + ']';
-    var err = AELL_setExpr(posProp, expr);
+    var wasGrid = {};
+    var err = AELL_setExpr(posProp, expr, wasGrid);
     if (err) {
       // Full diagnostics — if AE still rejects this, the error must show
       // exactly what was evaluated and under which engine.
@@ -4625,17 +4989,54 @@ AELL_TOOLS.grid_layout = function (args) {
       catch (eE) {}
       return AELL_err("Grid expression rejected on '" + layer.name +
         "': " + err + (engine ? " [engine: " + engine + "]" : "") +
-        " [expression was: " + expr + "]");
+        " [expression was: " + expr + "]" + AELL_exprKeptNote(wasGrid));
+    }
+    // A grid rig OWNS Position, so any expression that was driving it is
+    // gone. Named per layer, with the text, because that text is the only
+    // copy there was.
+    if (wasGrid.prior && wasGrid.prior !== expr) {
+      overwritten.push({ layer: layer.name,
+                         expression: AELL_exprBrief(wasGrid.prior) });
     }
     placed.push({ layer: layer.name, row: row, col: col });
   }
-  return AELL_okay({
+  var res = {
     control: ctrl.name, columns: cols, rows: rows,
     sliders: ["Grid X Spacing", "Grid Y Spacing", "Grid Columns"],
     initialSpacing: [defX, defY], placed: placed,
     note: "Move '" + ctrl.name + "' to move the whole grid; its sliders " +
           "control X/Y spacing AND column count live"
-  });
+  };
+  if (backdrops.length > 0) {
+    var one = backdrops.length === 1;
+    res.skipped = backdrops;
+    res.skippedNote = "Left out of the grid: " + backdrops.join(", ") +
+      " — " + (one ? "it fills" : "they fill") + " the whole " +
+      comp.width + "x" + comp.height + " frame, so " +
+      (one ? "it is a backdrop" : "they are backdrops") + ", not grid " +
+      "content. No 'layers' list was given and nothing was selected, so " +
+      "the grid used the comp's content. To grid " +
+      (one ? "it" : "them") + " too, re-call with layers: [\"" +
+      backdrops.join("\", \"") + "\", ...] naming every layer you want " +
+      "in the grid.";
+  }
+  if (overwritten.length > 0) {
+    // Three with their text, then names only — the same budget rule as
+    // AELL_capJoin: the list must not push the state out of the window.
+    var shownOw = [], owNames = [];
+    for (var ow = 0; ow < overwritten.length; ow++) {
+      owNames.push(overwritten[ow].layer);
+      if (ow < 3) shownOw.push(overwritten[ow]);
+    }
+    res.replaced = shownOw;
+    res.replacedNote = "Position on " + AELL_capJoin(owNames, 8) +
+      " already had an expression and the grid rig took its place — " +
+      (overwritten.length > 3
+        ? "the first three texts are above and the rest are GONE"
+        : "the text is above") +
+      ". Undo, or re-send it with set_expression, if that was not meant.";
+  }
+  return AELL_okay(res);
 };
 
 AELL_TOOLS.apply_expression_preset = function (args) {
@@ -4706,20 +5107,23 @@ AELL_TOOLS.apply_expression_preset = function (args) {
       "wiggle, loop_cycle, loop_pingpong, loop_offset, time_linear");
   }
 
-  var err = AELL_setExpr(prop, expr);
+  var wasPreset = {};
+  var err = AELL_setExpr(prop, expr, wasPreset);
   if (err) {
-    return AELL_err("AE rejected the '" + preset + "' expression: " + err);
+    return AELL_err("AE rejected the '" + preset + "' expression: " + err +
+                    AELL_exprKeptNote(wasPreset));
   }
-  return AELL_okay({ layer: layer.name, property: args.property,
-                     preset: preset, expression: expr });
+  return AELL_okay(AELL_replacedInto(
+    { layer: layer.name, property: args.property,
+      preset: preset, expression: expr }, wasPreset, expr));
 };
 
 AELL_TOOLS.apply_effect = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var layer = AELL_resolveLayer(comp, args.layer);
-  if (!args.effect) return AELL_err("'effect' is required");
+  if (!args.effect) return AELL_errArg("'effect' is required");
   var effects = layer.property("ADBE Effect Parade");
-  if (!effects) return AELL_err("This layer type cannot take effects");
+  if (!effects) return AELL_errArg("This layer type cannot take effects");
   if (!effects.canAddProperty(args.effect)) {
     // Grounded: AE tried the string as a display name AND a matchName,
     // so the miss means "not installed" or "misspelled" — and when the
@@ -4743,7 +5147,7 @@ AELL_TOOLS.apply_effect = function (args) {
         AELL_capJoin(have, 15) + " — set_effect_param changes those; " +
         "apply_effect only adds new ones.";
     }
-    return AELL_err(msg);
+    return AELL_errArg(msg);
   }
   var fx = effects.addProperty(args.effect);
   var params = [];
@@ -4759,32 +5163,27 @@ AELL_TOOLS.set_effect_param = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var layer = AELL_resolveLayer(comp, args.layer);
   if (!args.effect || !args.param) {
-    return AELL_err("'effect' and 'param' are required");
+    return AELL_errArg("'effect' and 'param' are required");
   }
   var effects = layer.property("ADBE Effect Parade");
-  if (!effects) return AELL_err("This layer type cannot take effects");
+  if (!effects) return AELL_errArg("This layer type cannot take effects");
   var fx = effects.property(args.effect);
   if (!fx) {
-    return AELL_err("Effect not found on layer: " + args.effect +
+    return AELL_errArg("Effect not found on layer: " + args.effect +
       ". Effects on '" + layer.name + "': " +
       AELL_capJoin(AELL_effectNames(layer), 15) +
       ". apply_effect adds one that is missing.");
   }
-  var p = fx.property(args.param);
+  var p = AELL_paramIn(fx, args.param);
   if (!p) {
-    var pnames = [];
-    for (var pi = 1; pi <= fx.numProperties; pi++) {
-      var pn = fx.property(pi);
-      if (pn && pn.name) pnames.push(pn.name);
-    }
-    return AELL_err("Parameter not found: " + args.param + ". '" +
-      fx.name + "' has: " + AELL_capJoin(pnames, 20) +
-      ". list_properties {layer: \"" + layer.name + "\", path: " +
-      "\"effects/" + fx.name + "\"} shows types and current values.");
+    return AELL_errArg(AELL_paramMissMsg(fx, args.param, AELL_paramNames(fx),
+      "list_properties {layer: \"" + layer.name + "\", path: " +
+      "\"effects/" + fx.name + "\"} shows types and current values."));
   }
   var warn;
   try {
-    warn = AELL_writeValue(p, args.value, args.effect + "/" + p.name);
+    warn = AELL_writeValue(p, args.value, args.effect + "/" + p.name,
+                           "effect." + fx.name + "." + p.name);
   } catch (eP) {
     return AELL_err(eP.message);
   }
@@ -4838,7 +5237,7 @@ AELL_TOOLS.remove_effect = function (args) {
   var effects = null;
   try { effects = layer.property("ADBE Effect Parade"); } catch (eP) {}
   if (!effects) {
-    return AELL_err("'" + layer.name + "' is a " + AELL_layerType(layer) +
+    return AELL_errArg("'" + layer.name + "' is a " + AELL_layerType(layer) +
       " layer and cannot carry effects, so there is nothing to remove.");
   }
   var have = AELL_effectNames(layer);
@@ -4866,12 +5265,13 @@ AELL_TOOLS.remove_effect = function (args) {
         : " Text animators are not effects, and there are none here " +
           "either.";
     }
-    return AELL_err("'" + layer.name + "' has no effects at all — nothing " +
-      "to remove, and no other effect name will match either." + elsewhere);
+    return AELL_errArg("'" + layer.name + "' has no effects at all — " +
+      "nothing to remove, and no other effect name will match either." +
+      elsewhere);
   }
   if (args.effect === null || typeof args.effect === "undefined" ||
       args.effect === "") {
-    return AELL_err("'effect' is required (display name or matchName). " +
+    return AELL_errArg("'effect' is required (display name or matchName). " +
       "Effects on '" + layer.name + "': " + AELL_capJoin(have, 15));
   }
   var want = String(args.effect);
@@ -4891,7 +5291,7 @@ AELL_TOOLS.remove_effect = function (args) {
   }
   var matches = exact.length ? exact : loose;
   if (matches.length === 0) {
-    return AELL_err("No effect '" + want + "' on '" + layer.name +
+    return AELL_errArg("No effect '" + want + "' on '" + layer.name +
       "'. Effects here: " + AELL_capJoin(have, 15) + " — pass one of " +
       "those display names (or its matchName). apply_effect adds one " +
       "that is missing.");
@@ -5375,6 +5775,96 @@ AELL_TOOLS.reorder_layers = function (args) {
   return AELL_okay(res);
 };
 
+/*
+ * Does anything about this layer VARY over time?
+ *
+ * stagger_layers only moves start times, so a target with nothing on it
+ * is retimed and still does nothing — and the tool answered
+ * `ok {layers:6, spread:2.5, placed:[…]}` for a comp where nothing
+ * fades. Field run 2026-09-03, row 32: three of four phrasings called
+ * stagger_layers ALONE on layers with no keyframes, and the receipt
+ * agreed with all three.
+ *
+ * Measured in AE 26.3x87 (scripts/stagger-motion-probe.jsx):
+ *  - Marker is a root-level LEAF property (`ADBE Marker`) on EVERY layer
+ *    type, and a marker reads numKeys > 0. Counting it would call a
+ *    merely MARKED layer animated, so it is skipped by match name. Time
+ *    Remap (`ADBE Time Remapping`) is a root leaf too and does count.
+ *  - the whole-layer walk visits 162 nodes on a bare solid, 196 with
+ *    three effects, 169 on text, 154 on a shape, 29 on a light — and
+ *    6480 nodes across 40 layers ran in 53 ms (0.008 ms/node), so a
+ *    budget big enough for ~120 layers still costs under a fifth of a
+ *    second.
+ *  - a solid's source reports duration 0 where a precomp's reports 4, so
+ *    source.duration is what separates a still from something that plays.
+ *
+ * The verdict is deliberately ONE-SIDED: it reports "static" only where
+ * it has proved it, and every doubt reads as motion. An expression is
+ * doubt — it may be reading a keyframed slider two layers away — and so
+ * is any effect at all, because some effects animate on their own at
+ * zero keyframes (CC Particle World, Radio Waves). A warning that says
+ * nothing animates has to be right, so it is cheap to stay quiet.
+ */
+function AELL_scanMotion(grp, budget, depth, found) {
+  var i, p, mn, leaf, n = 0;
+  try { n = grp.numProperties; } catch (eN) { return; }
+  for (i = 1; i <= n; i++) {
+    if (found.moves) return;
+    if (budget.left <= 0) { budget.exhausted = true; return; }
+    budget.left--;
+    p = null;
+    try { p = grp.property(i); } catch (eP) { continue; }
+    if (!p) continue;
+    mn = "";
+    try { mn = String(p.matchName); } catch (eM) { mn = ""; }
+    if (mn === "ADBE Marker") continue;
+    leaf = false;
+    try { leaf = (p.propertyType === PropertyType.PROPERTY); } catch (eT) {}
+    if (leaf) {
+      try { if (p.numKeys > 0) { found.moves = true; return; } } catch (eK) {}
+      try {
+        if (p.expressionEnabled && p.expression) { found.moves = true; return; }
+      } catch (eE) {}
+      continue;
+    }
+    if (depth < 8) AELL_scanMotion(p, budget, depth + 1, found);
+  }
+}
+
+/* True only when this layer PROVABLY does nothing over time. The cheap
+ * gates run first so the node walk is spent on real candidates. */
+function AELL_layerIsStatic(layer, budget) {
+  var src = null, dur = 0, parade = null;
+  try { src = layer.source; } catch (eS) { src = null; }
+  if (src) {
+    try { dur = Number(src.duration) || 0; } catch (eD) { dur = 0; }
+    if (dur > 0) return false;      // a precomp or a clip plays by itself
+  }
+  try { if (layer.hasAudio) return false; } catch (eA) {}
+  try { parade = layer.property("ADBE Effect Parade"); } catch (eF) {}
+  try { if (parade && parade.numProperties > 0) return false; } catch (eP) {}
+  var found = { moves: false };
+  AELL_scanMotion(layer, budget, 0, found);
+  if (budget.exhausted) return false;   // ran out of room — unproved
+  return !found.moves;
+}
+
+/* Every target static => the stagger is invisible. Returns the sentence
+ * to warn with, or "" when at least one layer really does animate. */
+function AELL_staggerNoMotion(layers) {
+  var budget = { left: 20000, exhausted: false };
+  var i;
+  for (i = 0; i < layers.length; i++) {
+    if (!AELL_layerIsStatic(layers[i], budget)) return "";
+  }
+  return "Start times moved, but nothing on these " + layers.length +
+    " layers varies over time (no keyframe, expression, effect or moving " +
+    "source), so the stagger is invisible. stagger_layers RETIMES layers " +
+    "— it does not create the animation: add it with set_keyframes " +
+    "(property 'opacity', 0 -> 100) and pass relativeTo: 'inPoint' to " +
+    "keep the offsets just set.";
+}
+
 AELL_TOOLS.stagger_layers = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var bez = AELL_bezierArgs(args);
@@ -5492,6 +5982,8 @@ AELL_TOOLS.stagger_layers = function (args) {
   }
   if (usedWorkArea) res.usedWorkArea = true;
   if (notes.length) res.note = notes.join(". ");
+  var noMotion = AELL_staggerNoMotion(layers);
+  if (noMotion) res.warning = noMotion;
   return AELL_okay(res);
 };
 
@@ -6053,6 +6545,88 @@ function AELL_showValue(v) {
 }
 
 /*
+ * Does this string read as AE EXPRESSION code rather than as a value?
+ * Only ever used to add a sentence to a refusal, so a false positive
+ * costs a pointer the caller can ignore and a false negative costs
+ * nothing at all.
+ */
+function AELL_looksLikeExpr(s) {
+  return /thisComp|thisLayer|thisProperty|\b(?:comp|layer|effect|mask|content|wiggle|linear|ease|random|valueAtTime|sourceRectAtTime|loopOut|loopIn|time|index|value)\b\s*[.(\[]|[-+*\/]\s*\d|\)\s*\(/
+    .test(String(s));
+}
+
+/*
+ * A value AE will refuse, said so the caller can act — "" when the value
+ * is fine.
+ *
+ * Measured in real AE 2026 by scripts/param-value-probe.jsx, and both
+ * halves matter:
+ *   - setValue("50") IS accepted and reads back 50, and so is
+ *     ["10", "20"] on a Position. So a blanket refusal of strings would
+ *     reject values AE takes, which is a regression, not a fix.
+ *   - what AE refuses is a string that is not a number, and its own
+ *     words for it are 'Unable to call "setValue" because of parameter
+ *     1. <the entire expression> is not a number.' on a one-dimensional
+ *     property, and 'Value is not an array.' on a colour or a position.
+ *
+ * Neither of those names a way to do what the caller was asking for.
+ * The field round this comes from (chat-probe row 36 vague, "everything
+ * should sit off the background a bit — shadow them, not it"): the
+ * model built a `Shadow Null` slider rig, handed set_effect_param
+ * `thisComp.layer("Shadow Null").effect("Shadow Distance")(1)` as the
+ * VALUE, took AE's sentence, went looking for a Drop Shadow parameter
+ * called "Offset", and the round rolled back — six of seven layers
+ * skipped on an "ok" reply. A rig plus an expression IS how you drive a
+ * parameter from a control; the only thing missing was the tool that
+ * does it, so the refusal names it.
+ *
+ * `linkPath` is the caller's own `property:` spelling for link_property
+ * / set_expression when it has one, because a pointer the caller can
+ * paste is worth more than the tool's name alone.
+ */
+function AELL_badValueMsg(prop, value, label, linkPath) {
+  var bad = null, i;
+  if (AELLJSON.isArray(value)) {
+    for (i = 0; i < value.length; i++) {
+      if (typeof value[i] === "string" && AELL_numArg(value[i]) === null) {
+        bad = value[i];
+        break;
+      }
+    }
+  } else if (typeof value === "string" && AELL_numArg(value) === null) {
+    bad = value;
+  }
+  if (bad === null) return "";
+
+  var shown = String(bad);
+  if (shown.length > 90) shown = shown.substring(0, 87) + "...";
+
+  var shape = "a number", now = "";
+  try {
+    var cur = prop.value;
+    if (AELLJSON.isArray(cur)) {
+      shape = "an array of " + cur.length + " numbers";
+    }
+    now = AELL_showValue(cur);
+  } catch (eC) {}
+
+  var msg = "'" + label + "' takes " + shape + ", and the text \"" +
+    shown + "\" is not one" + (now ? " — it holds " + now + " now" : "") +
+    ". (A number written as text, \"50\", is fine.)";
+  if (AELL_looksLikeExpr(bad)) {
+    var where = linkPath
+      ? "{layer: \"...\", property: \"" + linkPath + "\", ...}"
+      : "{layer: \"...\", property: \"...\", ...}";
+    msg += " That is EXPRESSION code, and a value is never one. To drive " +
+      "this property from a control use link_property " + where +
+      " with controlLayer + controlEffect — it writes the expression " +
+      "itself, dimension-aware. For raw code use set_expression " +
+      "{..., expression: \"" + shown + "\"}.";
+  }
+  return msg;
+}
+
+/*
  * Write a plain value to a property, turning AE's two silent refusals
  * into something the model can act on:
  *   - a KEYFRAMED property rejects setValue outright (raw AE throw),
@@ -6067,7 +6641,9 @@ function AELL_showValue(v) {
  * shape grid_layout builds). Only AE knows which, and on a driven property
  * `.value` is the EVALUATED result — so ask it, and quote the answer.
  */
-function AELL_writeValue(prop, value, label) {
+function AELL_writeValue(prop, value, label, linkPath) {
+  var shapeProblem = AELL_badValueMsg(prop, value, label, linkPath);
+  if (shapeProblem) throw new Error(shapeProblem);
   var keys = 0;
   try { keys = prop.numKeys; } catch (eK) {}
   if (keys > 0) {
@@ -6615,8 +7191,554 @@ function AELL_maskMode(name) {
   return AELL_MASK_MODES[String(name).toLowerCase()];
 }
 
+/*
+ * WHAT ONE MORE MASK DOES TO A LAYER, and it is not a question about the
+ * new mask alone. Measured in AE 26.3x87 by scripts/mask-erase-probe.js
+ * and scripts/mask-above-probe.js, both of which read the layer's own
+ * alpha through sampleImage(postEffect) rather than inferring it.
+ *
+ * `state` is what the masks ALREADY on the layer show, one of "all" /
+ * "some" / "none", or null for a layer that carries no mask yet. That
+ * null is a fourth answer and not a synonym for "all": AE composites the
+ * FIRST mask against an empty canvas (add/lighten/difference/intersect/
+ * darken) or a full one (subtract), so an unmasked layer and a layer
+ * whose masks happen to show every pixel react differently to the same
+ * next mask. Measured, over the whole layer:
+ *
+ *              no mask yet   masks showing all
+ *   add        shows all     shows all
+ *   subtract   EMPTY         EMPTY
+ *   difference shows all     EMPTY          <-- the pair that proves it
+ *
+ * `region` is what the new mask's region is worth against the layer,
+ * "all" or "none" (its coverage, then swapped if it is inverted).
+ *
+ * The two probes agree with plain set algebra on every row where the
+ * region really is worth all or nothing, which is why this is one small
+ * function instead of a hand-copied truth table: add unions, subtract
+ * takes away, intersect/darken keep the overlap, difference inverts, and
+ * 'none' is not a compositing mode at all. The ONE measured departure is
+ * handled by its caller (AELL_maskOutcome), not here.
+ */
+function AELL_maskNot(s) {
+  return (s === "all") ? "none" : ((s === "none") ? "all" : "some");
+}
+
+function AELL_maskApply(state, mode, region) {
+  var m = String(mode || "add").toLowerCase();
+  if (m === "none") return state;
+  // The first compositing mask on the layer: measured lone, a subtract
+  // over the whole layer empties it and one that misses it leaves the
+  // layer whole, while every other mode renders its own region.
+  if (state === null) {
+    return (m === "subtract") ? AELL_maskNot(region) : region;
+  }
+  if (m === "add" || m === "lighten") {
+    return (region === "all") ? "all" : state;
+  }
+  if (m === "subtract") {
+    return (region === "all") ? "none" : state;
+  }
+  if (m === "intersect" || m === "darken") {
+    return (region === "all") ? state : "none";
+  }
+  if (m === "difference") {
+    return (region === "all") ? AELL_maskNot(state) : state;
+  }
+  return null;   // a mode this build cannot model — say nothing
+}
+
+/*
+ * WHAT A MASK AT OPACITY 0 DOES, and it is not "nothing" and not "the
+ * mask is switched off". Measured 2026-09-03, AE 26.3x87
+ * (scripts/mask-opacity-probe.js), by the alpha the layer really carries:
+ *
+ *   ALONE (or first in the parade) every compositing mode empties the
+ *   layer — add, subtract, intersect, lighten, darken and difference, at
+ *   a region worth everything, half, or nothing, and inverted as well:
+ *   18+ rows, all alpha 0. A lone 'subtract' at opacity 0 is the row that
+ *   makes this its own rule rather than "its region is worth nothing":
+ *   THAT reading says a subtract taking nothing away leaves the layer
+ *   whole, and the layer measures EMPTY.
+ *
+ *   FURTHER UP the parade it behaves exactly as a region worth NOTHING:
+ *   over an add mask showing the left half, a second 'add' at opacity 0
+ *   leaves 0.429 (unchanged), an off-layer 'subtract' leaves 0.429, a
+ *   full-coverage 'difference' leaves 0.429, and 'intersect' and 'darken'
+ *   EMPTY the layer — which is the plain algebra, not the measured
+ *   off-layer departure AELL_maskOutcome1 carries (an off-layer intersect
+ *   leaves a masked layer alone; an opacity-0 one does not).
+ *
+ *   INVERSION does not apply to it. Measured: an inverted full-coverage
+ *   'subtract' at opacity 0 over the same base leaves 0.429, where
+ *   swapping the region to "everything" would have emptied it, and a lone
+ *   inverted 'add' at opacity 0 empties the layer like every other mode.
+ *
+ * A 'none'-mode mask is not routed here at all — it does not composite at
+ * any opacity (measured: 0.429 unchanged), and AELL_paradeShows skips it
+ * before the shape is ever read.
+ */
+function AELL_maskZeroApply(state, mode) {
+  if (state === null) return "none";
+  return AELL_maskApply(state, mode, "none");
+}
+
+var AELL_MASK_MODE_NAMES = null;
+function AELL_maskModeName(v) {
+  if (!AELL_MASK_MODE_NAMES) {
+    AELL_MASK_MODE_NAMES = [
+      { v: MaskMode.NONE, n: "none" }, { v: MaskMode.ADD, n: "add" },
+      { v: MaskMode.SUBTRACT, n: "subtract" },
+      { v: MaskMode.INTERSECT, n: "intersect" },
+      { v: MaskMode.LIGHTEN, n: "lighten" },
+      { v: MaskMode.DARKEN, n: "darken" },
+      { v: MaskMode.DIFFERENCE, n: "difference" }
+    ];
+  }
+  for (var i = 0; i < AELL_MASK_MODE_NAMES.length; i++) {
+    if (AELL_MASK_MODE_NAMES[i].v === v) return AELL_MASK_MODE_NAMES[i].n;
+  }
+  return "";
+}
+
+/*
+ * The layer-space REGION an EXISTING mask covers, or null when this build
+ * cannot prove one. Deliberately narrow, because every caller uses the
+ * answer to make a claim about pixels: only a static, unfeathered,
+ * un-expanded, closed shape at opacity 0 or 100 answers, and only in one
+ * of two forms — an axis-aligned RECTANGLE ({kind: "rect"}) or an
+ * axis-aligned ELLIPSE ({kind: "ellipse"}). Everything else is a guess: a
+ * general bezier can bulge outside the hull of its own vertices, a
+ * feather and a PART opacity hide by degrees, which "all / some / none"
+ * cannot say, and an animated shape is a different answer at every frame.
+ *
+ * THE ELLIPSE was added 2026-09-03 (scripts/mask-parade-ellipse-probe.js,
+ * AE 26.3x87) because it was costing every mask receipt its voice: one
+ * ellipse anywhere in a parade made AELL_paradeShows return "" and
+ * add_mask, set_mask and delete_mask all went quiet. Unlike a feather it
+ * is not a degree — it is exact algebra — and 13 of the probe's 14
+ * readable parades came back agreeing with the layer's own alpha to the
+ * measurement (a lone full-coverage ellipse add leaves 0.784 of the
+ * layer, pi/4, in the middle; its subtract twin leaves 0.216 in the four
+ * corners).
+ *
+ * Recognised by CONSTRUCTION, not by curvature: four vertices at the
+ * cardinal points of their own bounding box, each with axis-aligned
+ * tangents that are exact opposites of one another and a handle length
+ * within AELL_MASK_KAPPA_LO..HI of the radius. That is the shape add_mask
+ * itself writes (kappa 0.5523, the standard 4/3*(sqrt(2)-1) rounded).
+ * A hand-dragged bezier that merely LOOKS round misses the band and the
+ * reader stays silent, which is the safe direction.
+ *
+ * OPACITY 0 is not a degree, it is an absolute, so it answers rather than
+ * bailing — see AELL_maskZeroApply for what it does and for the two
+ * measurements that shape it. Carried on the rect because the parade
+ * reader has to apply it per mask.
+ *
+ * EXPANSION is read here and answered with silence, which it was not
+ * before: measured 2026-09-03 (scripts/mask-opacity-probe.js, AE
+ * 26.3x87), an 'add' mask over the LEFT HALF of a 400x300 layer reads
+ * mean alpha 0.429 at expansion 0, 0.571 at +25 and 1.0 at +300, and a
+ * full-coverage 'subtract' stops erasing the layer at -300. So the shape
+ * alone was never the whole coverage, and every rect this returned for an
+ * expanded mask was a claim about pixels that AE disagreed with. AE
+ * rounds the corners of an expanded rectangle too, so the honest answer
+ * is not a bigger rectangle — it is no rectangle.
+ */
+function AELL_maskRegion(mask) {
+  var r = null;
+  try {
+    if (mask.enabled === false) return null;
+    var sp = mask.property("ADBE Mask Shape");
+    var fp = mask.property("ADBE Mask Feather");
+    var op = mask.property("ADBE Mask Opacity");
+    var xp = mask.property("ADBE Mask Offset");
+    if (!sp || !fp || !op || !xp) return null;
+    if (sp.numKeys > 0 || sp.expressionEnabled) return null;
+    if (fp.numKeys > 0 || fp.expressionEnabled) return null;
+    if (op.numKeys > 0 || op.expressionEnabled) return null;
+    if (xp.numKeys > 0 || xp.expressionEnabled) return null;
+    var fv = fp.value;
+    if (fv && (fv[0] || fv[1])) return null;
+    if (Number(xp.value) !== 0) return null;
+    var opv = Number(op.value);
+    if (opv !== 0 && opv !== 100) return null;
+    var sh = sp.value;
+    if (!sh || !sh.closed || !sh.vertices || sh.vertices.length !== 4) {
+      return null;
+    }
+    var i, j, straight = true;
+    for (i = 0; i < 4; i++) {
+      var it = sh.inTangents ? sh.inTangents[i] : null;
+      var ot = sh.outTangents ? sh.outTangents[i] : null;
+      for (j = 0; j < 2; j++) {
+        if (it && it[j]) straight = false;
+        if (ot && ot[j]) straight = false;
+      }
+    }
+    var box = AELL_boxOfPoints(sh.vertices);
+    if (!box) return null;
+    if (straight) {
+      // Four points inside a box are only a RECTANGLE when each one sits
+      // on a corner of it: a diamond has the same bounding box and covers
+      // half as much.
+      for (i = 0; i < 4; i++) {
+        var x = Number(sh.vertices[i][0]), y = Number(sh.vertices[i][1]);
+        if ((x !== box.left && x !== box.right) ||
+            (y !== box.top && y !== box.bottom)) return null;
+      }
+      r = { kind: "rect",
+            left: box.left, top: box.top,
+            right: box.right, bottom: box.bottom };
+    } else {
+      r = AELL_ellipseOfShape(sh, box);
+      if (!r) return null;
+    }
+    r.inverted = !!mask.inverted;
+    r.opacity = opv;
+    r.mode = AELL_maskModeName(mask.maskMode);
+    if (!r.mode) return null;
+  } catch (e) { return null; }
+  return r;
+}
+
+/*
+ * The kappa band an ELLIPSE's handles must fall in. The exact value for a
+ * circular arc is 4/3*(sqrt(2)-1) = 0.552285, and add_mask writes 0.5523.
+ * The band is +/-0.005 around it, which is wide enough for any spelling
+ * of the same construction and narrow enough that the bezier never leaves
+ * the true ellipse by more than a quarter of a percent of the radius:
+ * the arc's midpoint sits at r*(4+3k)*sqrt(2)/8, i.e. 1.00000 r at
+ * k=0.55228, 0.99772 r at 0.548 and 1.00250 r at 0.557. That quarter of a
+ * percent is what AELL_MASK_R2_IN / _OUT below leave as slack, and it is
+ * why they are not both 1.
+ */
+var AELL_MASK_KAPPA_LO = 0.548, AELL_MASK_KAPPA_HI = 0.557;
+var AELL_MASK_R2_IN = 0.99;     // radius 0.995 — provably inside
+var AELL_MASK_R2_OUT = 1.01;    // radius 1.005 — provably outside
+
+/*
+ * An axis-aligned ELLIPSE read off a four-point closed shape, or null.
+ * See AELL_maskRegion for why this is recognised by construction rather
+ * than by curvature, and scripts/mask-parade-ellipse-probe.js for the
+ * measurements the reading is checked against.
+ *
+ * The four vertices must be the four CARDINAL points of their own
+ * bounding box, one each, with the tangents at a vertex axis-aligned
+ * along the box edge it sits on, equal and opposite, and kappa*radius
+ * long. Anything else — a dragged handle, a rotated ellipse, three
+ * points, a squashed blob — is not proved and gets no answer.
+ */
+function AELL_ellipseOfShape(sh, box) {
+  var rx = (box.right - box.left) / 2, ry = (box.bottom - box.top) / 2;
+  if (!(rx > 0) || !(ry > 0)) return null;
+  var cx = box.left + rx, cy = box.top + ry;
+  // Tolerances are absolute at the pixel scale a mask lives at; the
+  // values come straight out of setValue and round-trip exactly, so this
+  // is slack for float noise, not for a different shape.
+  var tol = 1e-4 * (1 + (rx > ry ? rx : ry));
+  function near(a, b) { return Math.abs(a - b) <= tol; }
+  var seen = { N: false, S: false, E: false, W: false }, i;
+  for (i = 0; i < 4; i++) {
+    var v = sh.vertices[i];
+    if (!AELLJSON.isArray(v) || v.length < 2) return null;
+    var x = Number(v[0]), y = Number(v[1]);
+    var slot = "", axis = -1, arm = 0;
+    if (near(x, cx) && near(y, box.top)) { slot = "N"; axis = 0; arm = rx; }
+    else if (near(x, cx) && near(y, box.bottom)) {
+      slot = "S"; axis = 0; arm = rx;
+    } else if (near(y, cy) && near(x, box.right)) {
+      slot = "E"; axis = 1; arm = ry;
+    } else if (near(y, cy) && near(x, box.left)) {
+      slot = "W"; axis = 1; arm = ry;
+    } else return null;
+    if (seen[slot]) return null;       // two vertices on one cardinal point
+    seen[slot] = true;
+    var it = sh.inTangents ? sh.inTangents[i] : null;
+    var ot = sh.outTangents ? sh.outTangents[i] : null;
+    if (!AELLJSON.isArray(it) || !AELLJSON.isArray(ot)) return null;
+    var other = 1 - axis;
+    // The handle runs ALONG the box edge the vertex sits on: any
+    // component across it would tip the shape out of its own bounds.
+    if (!near(Number(it[other]), 0) || !near(Number(ot[other]), 0)) {
+      return null;
+    }
+    var a = Number(it[axis]), b = Number(ot[axis]);
+    if (!near(a, -b)) return null;     // equal and opposite, or it is a cusp
+    var k = Math.abs(b) / arm;
+    if (k < AELL_MASK_KAPPA_LO || k > AELL_MASK_KAPPA_HI) return null;
+  }
+  if (!seen.N || !seen.S || !seen.E || !seen.W) return null;
+  return { kind: "ellipse", left: box.left, top: box.top,
+           right: box.right, bottom: box.bottom,
+           cx: cx, cy: cy, rx: rx, ry: ry };
+}
+
+/*
+ * Where one grid CELL sits relative to an ellipse: "in" (every point of
+ * it is inside), "out" (no point of its interior is), "split" (both, and
+ * both provably have area), or "" — which makes the whole parade
+ * unreadable rather than guessed.
+ *
+ * This is what lets an ellipse into a reader whose exactness comes from
+ * cells being CONSTANT: a rectangle's coverage is constant inside every
+ * cell its edges cut, an ellipse's is not, so a split cell is read twice
+ * — once as if the ellipse covered it, once as if it did not — and both
+ * readings vote. That is only honest while both readings describe real
+ * pixels, which is why "split" needs a point provably inside AND a corner
+ * provably outside, and why anything less is "".
+ *
+ * The bounding-box test comes FIRST and is exact, because the tangent
+ * case is the one that actually arises: a rect mask edge that lines up
+ * with the ellipse's own extreme touches it at a single point, and the
+ * radius test alone can only call that ambiguous.
+ */
+function AELL_ellipseVsCell(e, x0, x1, y0, y1) {
+  if (x1 <= e.left || x0 >= e.right || y1 <= e.top || y0 >= e.bottom) {
+    return "out";
+  }
+  var nx0 = (x0 - e.cx) / e.rx, nx1 = (x1 - e.cx) / e.rx;
+  var ny0 = (y0 - e.cy) / e.ry, ny1 = (y1 - e.cy) / e.ry;
+  var fx = nx0 * nx0 > nx1 * nx1 ? nx0 * nx0 : nx1 * nx1;
+  var fy = ny0 * ny0 > ny1 * ny1 ? ny0 * ny0 : ny1 * ny1;
+  var far2 = fx + fy;                  // the cell's farthest corner
+  // The closest point of the cell to the centre, in normalised space:
+  // clamp the centre into the cell.
+  var qx = nx0 > 0 ? nx0 : (nx1 < 0 ? nx1 : 0);
+  var qy = ny0 > 0 ? ny0 : (ny1 < 0 ? ny1 : 0);
+  var near2 = qx * qx + qy * qy;
+  // An ellipse is convex, so a cell whose farthest corner is inside it
+  // is inside it whole.
+  if (far2 <= AELL_MASK_R2_IN) return "in";
+  if (near2 >= AELL_MASK_R2_OUT) return "out";
+  if (near2 <= AELL_MASK_R2_IN && far2 >= AELL_MASK_R2_OUT) return "split";
+  return "";
+}
+
+/*
+ * What the masks already on this layer SHOW:
+ *   "nothing"  no mask composites on it at all — every pixel shows
+ *              because nothing is masking it (see AELL_maskApply for why
+ *              that is not the same answer as "all")
+ *   "all"      masks exist and every pixel still shows
+ *   "some"     masks exist and part of the layer is hidden
+ *   "none"     masks exist and nothing of it shows
+ *   ""         cannot be proved — every caller stays silent
+ *
+ * EXACT, not sampled: the masks it will answer for are axis-aligned
+ * rectangles, so the composite is constant inside every cell of the grid
+ * their edges cut the layer box into, and one point per cell decides it.
+ * Bails to "" on anything it cannot model, which is the whole design —
+ * this exists to let add_mask say "the layer is gone" or "the masks above
+ * just stopped working", and a false one of those costs more than the
+ * sentence is worth.
+ *
+ * ONE ELLIPSE may join them, and the exactness survives it because a
+ * split cell is read BOTH ways and both readings vote — see
+ * AELL_ellipseVsCell. One, not two: with a single ellipse every branch
+ * the cells offer is a real region of the layer, where two ellipses would
+ * ask this to prove a cell can be inside both at once, and an unreachable
+ * branch votes for a picture that is not on screen. A second ellipse
+ * therefore reads "" exactly as it did before, and so does an ellipse
+ * this cannot prove is one.
+ */
+function AELL_paradeShows(masks, box) {
+  var n = 0;
+  try { n = masks.numProperties; } catch (eN) { return ""; }
+  if (n === 0) return "nothing";
+  if (!box || n > 8) return "";      // cost guard; 8 covers real parades
+  var rects = [], i, ell = null, offRisk = false;
+  for (i = 1; i <= n; i++) {
+    var mk = null;
+    try { mk = masks.property(i); } catch (eP) { return ""; }
+    // A 'none' mask does not composite — it is a path CARRIER (Stroke,
+    // Scribble, a path expression) — so it neither hides nor reveals and
+    // its shape does not have to be readable.
+    var modeName = "";
+    try { modeName = AELL_maskModeName(mk.maskMode); } catch (eM) {}
+    if (modeName === "none") continue;
+    var r = AELL_maskRegion(mk);
+    if (!r) return "";
+    /* An ellipse at opacity 0 never has its region read (AELL_maskZeroApply
+     * is an absolute, not a shape), so it does not spend the one slot. */
+    if (r.kind === "ellipse" && r.opacity !== 0) {
+      if (ell) return "";            // the second one — see the note above
+      ell = r;
+    }
+    /* The one place the algebra and AE part company, and the cells cannot
+     * see it because it is not about a region at all: measured (the
+     * off-layer INTERSECT row in selftest.js), AE drops a mask whose
+     * shape lies wholly outside the layer once something else composites,
+     * where "its region is worth nothing" says intersect and darken
+     * EMPTY the layer. Alone it does not drop, and every other mode reads
+     * the same either way — an off-layer add/subtract/lighten/difference
+     * changes nothing under both readings — so this is exactly two modes,
+     * uninverted, with company. Silence, not a guess. */
+    if (r.opacity !== 0 && !r.inverted &&
+        (r.mode === "intersect" || r.mode === "darken") &&
+        (r.right <= box.left || r.left >= box.left + box.width ||
+         r.bottom <= box.top || r.top >= box.top + box.height)) {
+      offRisk = true;
+    }
+    rects.push(r);
+  }
+  if (offRisk && rects.length > 1) return "";
+  if (!rects.length) return "nothing";
+  var right = box.left + box.width, bottom = box.top + box.height;
+  var xs = [box.left, right], ys = [box.top, bottom];
+  for (i = 0; i < rects.length; i++) {
+    AELL_pushEdge(xs, rects[i].left, box.left, right);
+    AELL_pushEdge(xs, rects[i].right, box.left, right);
+    AELL_pushEdge(ys, rects[i].top, box.top, bottom);
+    AELL_pushEdge(ys, rects[i].bottom, box.top, bottom);
+  }
+  xs.sort(AELL_numAsc);
+  ys.sort(AELL_numAsc);
+  var anyAll = false, anyNone = false, sawState = false, a, b, k;
+  for (a = 0; a + 1 < xs.length; a++) {
+    if (xs[a + 1] <= xs[a]) continue;
+    for (b = 0; b + 1 < ys.length; b++) {
+      if (ys[b + 1] <= ys[b]) continue;
+      var cx = (xs[a] + xs[a + 1]) / 2, cy = (ys[b] + ys[b + 1]) / 2;
+      /* The branches this cell has to be read as. A cell with no ellipse
+       * in play, or one the ellipse covers whole or misses whole, is the
+       * single reading it always was; a SPLIT cell is two, and both are
+       * real pixels of the layer. */
+      var branches = [true];
+      if (ell) {
+        var where = AELL_ellipseVsCell(ell, xs[a], xs[a + 1],
+                                       ys[b], ys[b + 1]);
+        if (where === "") return "";
+        if (where === "in") branches = [true];
+        else if (where === "out") branches = [false];
+        else branches = [true, false];
+      }
+      for (k = 0; k < branches.length; k++) {
+        var state = null;
+        for (i = 0; i < rects.length; i++) {
+          var rr = rects[i];
+          /* A mask at opacity 0 has its own rule and does not read its
+           * region or its 'inverted' switch at all — see
+           * AELL_maskZeroApply, where the measurements are. */
+          if (rr.opacity === 0) {
+            state = AELL_maskZeroApply(state, rr.mode);
+            continue;
+          }
+          var inside;
+          if (rr === ell) {
+            inside = branches[k];
+          } else {
+            inside = (cx > rr.left && cx < rr.right &&
+                      cy > rr.top && cy < rr.bottom);
+          }
+          if (rr.inverted) inside = !inside;
+          state = AELL_maskApply(state, rr.mode, inside ? "all" : "none");
+        }
+        // Defensive: every mode here came back from AELL_maskModeName, so
+        // AELL_maskApply always answers. A null would mean nothing
+        // composited, and that cell must not vote.
+        if (state === null) continue;
+        sawState = true;
+        if (state === "none") anyNone = true; else anyAll = true;
+      }
+    }
+  }
+  if (!sawState) return "nothing";
+  if (anyAll && anyNone) return "some";
+  return anyAll ? "all" : "none";
+}
+
+function AELL_numAsc(x, y) { return x - y; }
+
+function AELL_pushEdge(list, v, lo, hi) {
+  if (v <= lo || v >= hi) return;
+  for (var i = 0; i < list.length; i++) if (list[i] === v) return;
+  list.push(v);
+}
+
+/*
+ * What a NEW mask does to the layer, given what the masks above it show.
+ * Returns null (say nothing) when the region is not provably worth all or
+ * nothing, or when the parade could not be read.
+ *
+ *   erases  the layer showed something and now shows nothing
+ *   noop    the layer looks exactly as it did
+ *   undoes  every pixel shows again — the masks above stopped working
+ *
+ * Exactly one of the three can be true, and often none is.
+ *
+ * THE ONE MEASURED DEPARTURE from the algebra: a mask that misses the
+ * layer ENTIRELY is not the same as an inverted one covering all of it,
+ * even though both regions are worth nothing. Over a layer that already
+ * carries a mask, an off-layer 'intersect' or 'darken' leaves it exactly
+ * as it was (measured, four different parades) where the inverted
+ * full-coverage twin empties it. AE appears to drop a mask whose shape
+ * lies wholly outside the layer once something else composites; alone it
+ * does not, and it empties the layer. Only the "misses the layer"
+ * refusal reaches this, and its whole job is to say which of the two
+ * things would happen.
+ */
+function AELL_maskOutcome(mode, inverted, covered, above) {
+  if (covered !== "all" && covered !== "none") return null;
+  if (above) return AELL_maskOutcome1(mode, inverted, covered, above, true);
+  /* The parade could not be read (a feather, a bezier, an animated shape
+   * — see AELL_maskRect). Answer only what EVERY reading of it agrees on,
+   * which is not nothing: a full-coverage 'subtract' leaves the layer
+   * blank whatever was there, and a full-coverage 'add' leaves every
+   * pixel showing whatever was there. What disagrees goes quiet. */
+  var states = ["nothing", "all", "some", "none"], agreed = null, i;
+  for (i = 0; i < states.length; i++) {
+    var one = AELL_maskOutcome1(mode, inverted, covered, states[i], false);
+    if (!one) return null;
+    if (!agreed) { agreed = one; continue; }
+    if (agreed.result !== one.result) agreed.result = "";
+    if (!one.erases) agreed.erases = false;
+    if (!one.noop) agreed.noop = false;
+    if (!one.undoes) agreed.undoes = false;
+  }
+  if (agreed) {
+    /* `blank` is the END STATE, `erases` the CHANGE, and they part company
+     * on exactly one reading: a layer whose masks already hid everything.
+     * The refusals talk about the end state ("it would hide the whole
+     * layer"), and so does the warning when there is no reading to
+     * prefer — silence about a layer that comes out invisible is the one
+     * failure this whole branch exists to stop. */
+    agreed.blank = (agreed.result === "none");
+  }
+  return agreed;
+}
+
+function AELL_maskOutcome1(mode, inverted, covered, above, readable) {
+  var m = String(mode || "add").toLowerCase();
+  var state = (above === "nothing") ? null : above;
+  var was = (state === null) ? "all" : state;
+  if (covered === "none" && !inverted && state !== null &&
+      (m === "intersect" || m === "darken")) {
+    return { result: was, erases: false, noop: true, undoes: false,
+             blank: (was === "none"), readable: readable };
+  }
+  var region = inverted ? AELL_maskNot(covered) : covered;
+  var res = AELL_maskApply(state, m, region);
+  if (res === null) return null;
+  /* 'difference' over the whole layer is the one op here that is neither
+   * the identity nor a constant: it INVERTS what the masks above show.
+   * Inverting "all" or "none" is exact, but "some" inverted is a
+   * DIFFERENT some (measured: over an add mask on the left half the layer
+   * goes 0.429 -> 0.571) — the coarse states compare equal and the call
+   * is not a no-op. It is the ordinary way to punch a hole, and warning
+   * about it would be a false alarm on the tool working. */
+  var inverts = (m === "difference" && region === "all" && was === "some");
+  return { result: res,
+           erases: (res === "none" && was !== "none"),
+           blank: (res === "none" && was !== "none"),
+           noop: (!inverts && res === was),
+           undoes: (res === "all" && was !== "all"),
+           readable: readable };
+}
+
 /* Bounding box of a vertex list. Exact for the ellipse too: the four
- * points add_mask generates for one ARE its extremes. */
+ * points add_mask generates for one ARE its extremes — but its BOX is not
+ * its SHAPE, which is what AELL_shapeCoversBox is for. */
 function AELL_boxOfPoints(pts) {
   if (!AELLJSON.isArray(pts) || !pts.length) return null;
   var l = null, t = null, r = null, b = null, i;
@@ -6634,17 +7756,97 @@ function AELL_boxOfPoints(pts) {
   return { left: l, top: t, right: r, bottom: b };
 }
 
+/*
+ * Does the mask's SHAPE cover every pixel of the layer box? That is a
+ * different question from "does its bounding box", and for three of
+ * add_mask's sentences it was being answered with the wrong one.
+ *
+ * Measured 2026-09-03, AE 26.3x87 (scripts/mask-ellipse-probe.js), at
+ * this tool's own default region — the ellipse inscribed in the layer's
+ * box — with the RECTANGLE twin built from the identical numbers:
+ *
+ *   mode                 ellipse corners/mids   rectangle corners/mids
+ *   add                        0 / 1                  1 / 1
+ *   subtract                   1 / 0                  0 / 0
+ *   add + inverted             1 / 0                  0 / 0
+ *   subtract + inverted        0 / 1                  1 / 1
+ *
+ * — opposite readings at the corners in all TWELVE compositing rows, and
+ * only the non-compositing 'none' agreed. An 11x9 grid puts the layer at
+ * 0.202 still showing under a full-box ellipse 'subtract' where the
+ * rectangle leaves 0.000, and at 0.798 under an ellipse 'add' where the
+ * rectangle leaves 1.000 (the inscribed ellipse is pi/4 = 0.785 of the
+ * box, and the grid's own calibration row reads 0.798).
+ *
+ * The ellipse is answered EXACTLY, not sampled: an ellipse is convex and
+ * a rectangle is the convex hull of its four corners, so the ellipse
+ * contains the layer box exactly when it contains all four of them.
+ *
+ * Everything this cannot prove answers FALSE and every caller goes quiet
+ * — the same narrowness AELL_maskRect has, and for the same reason: each
+ * answer becomes a claim about pixels. A custom polygon counts only when
+ * its points really are the four corners of their own box, because a
+ * triangle or a diamond has the same bounding box and covers half as
+ * much.
+ */
+function AELL_shapeCoversBox(kind, shape, box) {
+  if (!box || !shape) return false;
+  var hit = AELL_boxOfPoints(shape.vertices);
+  if (!hit) return false;
+  var right = box.left + box.width, bottom = box.top + box.height;
+  if (!(hit.left <= box.left && hit.top <= box.top &&
+        hit.right >= right && hit.bottom >= bottom)) return false;
+  if (kind === "ellipse") {
+    var cx = (hit.left + hit.right) / 2, cy = (hit.top + hit.bottom) / 2;
+    var rx = (hit.right - hit.left) / 2, ry = (hit.bottom - hit.top) / 2;
+    if (!(rx > 0) || !(ry > 0)) return false;
+    var xs = [box.left, right], ys = [box.top, bottom], i, j;
+    for (i = 0; i < 2; i++) {
+      for (j = 0; j < 2; j++) {
+        var dx = (xs[i] - cx) / rx, dy = (ys[j] - cy) / ry;
+        // A corner exactly ON the ellipse is covered; floating point does
+        // not get to decide that one.
+        if (dx * dx + dy * dy > 1 + 1e-9) return false;
+      }
+    }
+    return true;
+  }
+  if (kind === "custom") {
+    var v = shape.vertices;
+    if (!AELLJSON.isArray(v) || v.length !== 4) return false;
+    for (var k = 0; k < 4; k++) {
+      if (!AELLJSON.isArray(v[k]) || v[k].length < 2) return false;
+      var x = Number(v[k][0]), y = Number(v[k][1]);
+      if ((x !== hit.left && x !== hit.right) ||
+          (y !== hit.top && y !== hit.bottom)) return false;
+    }
+    return true;
+  }
+  return true;      // 'rectangle' — the shape IS its box
+}
+
 AELL_TOOLS.add_mask = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var layer = AELL_resolveLayer(comp, args.layer);
   var masks = layer.property("ADBE Mask Parade");
   if (!masks) return AELL_err("This layer type cannot take masks");
+  var aboveShows = "";
   var shape = new Shape();
   shape.closed = true;
   var kind = args.shape ? String(args.shape) : "rectangle";
   // The layer's OWN box, not layer.width/height — those report the COMP's
   // size on a text or shape layer (measured AE 2026).
   var box = AELL_layerBox(layer, comp.time);
+  /* Read BEFORE the new mask is appended, and read as a PICTURE rather
+   * than a count. "Does this layer already have masks" was the old
+   * question and it is the wrong one: measured, a full-coverage
+   * 'difference' over masks that show every pixel EMPTIES the layer,
+   * where over no masks at all it changes nothing, and a full-coverage
+   * 'add' over masks that hide something switches them all off. Both
+   * answered a bare ok, and a count cannot tell any of those apart. */
+  aboveShows = AELL_paradeShows(masks, box);
+  var maskCount = 0;
+  try { maskCount = masks.numProperties; } catch (eCount) {}
   if (kind === "custom") {
     if (!AELLJSON.isArray(args.vertices) || args.vertices.length < 3) {
       return AELL_err("'vertices' ([[x,y],...] in LAYER space, >= 3 points) " +
@@ -6678,8 +7880,13 @@ AELL_TOOLS.add_mask = function (args) {
    * ok. The layer's own box is the only thing that can tell an aimed
    * mask from a comp-space one, so refuse with the box in hand — the
    * same grounded shape as every other failed lookup here. */
-  var overflow = "";
+  var overflow = "", coversAll = "", erases = "", eraseWhy = "", eraseFix = "";
+  var noop = "", noopWhy = "", noopFix = "", undoes = "", corners = "";
   var hit = AELL_boxOfPoints(shape.vertices);
+  /* The SHAPE's coverage, not its bounding box's — see
+   * AELL_shapeCoversBox for the measurement. Every sentence below that
+   * claims something about "the whole layer" reads this one. */
+  var covers = AELL_shapeCoversBox(kind, shape, box);
   if (box && hit) {
     var bRight = AELL_r3(box.left + box.width);
     var bBottom = AELL_r3(box.top + box.height);
@@ -6691,8 +7898,30 @@ AELL_TOOLS.add_mask = function (args) {
                bRight + ", y " + box.top + " to " + bBottom;
     if (hit.right <= box.left || hit.left >= bRight ||
         hit.bottom <= box.top || hit.top >= bBottom) {
-      return AELL_err("That mask misses '" + layer.name + "' completely, " +
-        "so it would hide the whole layer: the mask spans " + span +
+      /* WHICH of the two things it would do depends on the mode, and the
+       * old wording only ever named one of them. Measured (M5): a lone
+       * 'subtract' region the layer never touches subtracts nothing and
+       * the layer is untouched, where an 'add' one keeps nothing and the
+       * layer is gone. Both are worth refusing — comp coordinates on a
+       * layer-space argument — but the reason has to be the true one.
+       * Measured again by mask-above-probe.js with a mask ALREADY on the
+       * layer, which moved this row: an off-layer 'intersect' or 'darken'
+       * empties a bare layer and leaves a masked one exactly as it was. */
+      var missOut = AELL_maskOutcome(args.mode, args.inverted, "none",
+                                     aboveShows);
+      // No outcome means the masks already there could not be read, and
+      // then the clause is dropped rather than guessed — the refusal
+      // stands on the coordinates either way.
+      var missEffect = "";
+      if (missOut && missOut.blank) {
+        missEffect = ", so it would hide the whole layer";
+      } else if (missOut && missOut.undoes) {
+        missEffect = ", so it would switch off the masks already on it";
+      } else if (missOut) {
+        missEffect = ", so it would change nothing";
+      }
+      return AELL_err("That mask misses '" + layer.name + "' completely" +
+        missEffect + ": the mask spans " + span +
         " and the layer is " + mine + ". Mask coordinates are in LAYER " +
         "space, not comp space — the comp is " + comp.width + "x" +
         comp.height + " and this layer is not. The whole layer is bounds [" +
@@ -6711,11 +7940,35 @@ AELL_TOOLS.add_mask = function (args) {
         hit.right >= bRight && hit.bottom >= bBottom &&
         (hit.right - hit.left > box.width ||
          hit.bottom - hit.top > box.height)) {
-      return AELL_err("That mask covers ALL of '" + layer.name + "', so it " +
-        "hides nothing: the mask spans " + span + " and the layer is only " +
+      /* Same correction as the refusal above, the other way round: a
+       * comp-sized 'subtract' does not hide nothing, it hides
+       * EVERYTHING (M1), and "to show only the top half" is add-shaped
+       * advice that would cut the top half away instead. */
+      var bigOut = AELL_maskOutcome(args.mode, args.inverted, "all",
+                                    aboveShows);
+      var bigErases = !!(bigOut && bigOut.blank);
+      /* The effect clause is a claim about pixels, so it is only made
+       * when the SHAPE covers the layer. A comp-sized ellipse over a
+       * 400x300 layer does not (measured: the layer's near corner is
+       * outside it and its far corner inside), and it can even miss the
+       * layer altogether while its box contains it — so for anything the
+       * box over-reports, the refusal keeps the coordinates, which are
+       * the diagnosis, and drops the claim. The worked example still
+       * follows the MODE: that is advice about the call the caller meant,
+       * not a statement about the one they made. */
+      return AELL_err("That mask " +
+        (covers
+          ? "covers ALL of '" + layer.name + "', so it " +
+            (bigErases ? "hides the WHOLE layer" : "hides nothing")
+          : "is far bigger than '" + layer.name + "'" +
+            (kind === "ellipse"
+              ? " (and an ellipse covers only the middle of its own bounds)"
+              : "")) +
+        ": the mask spans " + span + " and the layer is only " +
         mine + ". Mask coordinates are in LAYER space, not comp space — " +
         "the comp is " + comp.width + "x" + comp.height + " and this layer " +
-        "is not. To show only the top half of this layer, mask bounds [" +
+        "is not. To " + (bigErases ? "cut away" : "show") + " only the top " +
+        "half of this layer, mask bounds [" +
         box.left + ", " + box.top + ", " + box.width + ", " +
         AELL_r3(box.height / 2) + "].");
     }
@@ -6723,6 +7976,284 @@ AELL_TOOLS.add_mask = function (args) {
         hit.right > bRight || hit.bottom > bBottom) {
       overflow = "The mask spans " + span + ", past '" + layer.name +
         "' (" + mine + ") — the part outside the layer does nothing.";
+    }
+    /* What is LEFT once the two refusals above have run: a region the
+     * caller asked for EXPLICITLY that comes out exactly the layer's own
+     * box. It is not the comp-coordinates mistake (that is bigger on a
+     * side and refused), so it is not refused — but it cuts nothing
+     * away, and the receipt used to be a bare ok.
+     *
+     * Field run 2026-09-02, row 35 "the background is too sharp behind
+     * the icons": add_mask {shape: 'custom', vertices: the layer's four
+     * corners, feather: 50} on a 1920x1080 BG, ok, and the model told
+     * the user the background was softened. A mask feather softens the
+     * mask EDGE; it never touches a pixel inside the region, so a
+     * region that IS the whole layer cannot blur anything.
+     *
+     * Silent unless the caller named the region: with no bounds and no
+     * vertices this tool's own default IS the layer's box, and that is
+     * the deliberate placeholder an add_mask + set_mask_path pair opens
+     * with. */
+    var asked = (AELLJSON.isArray(args.bounds) && args.bounds.length >= 4) ||
+                (kind === "custom" && AELLJSON.isArray(args.vertices));
+    var modeWord = args.mode ? String(args.mode).toLowerCase() : "add";
+    /* 'lighten' joins 'add' here on a measurement, not a guess: over the
+     * whole layer BOTH read mean alpha 1.0 alone AND added second over
+     * an add mask (M1/M3), i.e. every pixel shows either way. That is
+     * what this sentence claims, and it is why the claim does not need
+     * to know whether the layer already had masks — unlike the narrower
+     * "changes nothing" below, which does. */
+    var plain = (!args.inverted) &&
+                (modeWord === "add" || modeWord === "lighten");
+    /* `covers` is the SHAPE's coverage and was read above. What the
+     * BOUNDING BOX covers is a second, weaker fact, and it is worth
+     * exactly one sentence: an ellipse whose box is the layer's leaves
+     * the four corners, so a call that would have emptied the layer
+     * empties all but those. */
+    var boxCovers = (hit.left <= box.left && hit.top <= box.top &&
+                     hit.right >= bRight && hit.bottom >= bBottom);
+    /* ONE reading of what this mask does to THIS layer, shared by all
+     * four sentences below. It needs what the masks already there show,
+     * not how many there are: measured, the same full-coverage 'add'
+     * changes nothing over a bare layer and switches every mask off over
+     * a masked one, and the same 'difference' changes nothing over a bare
+     * layer and EMPTIES one whose masks were showing everything. */
+    var outcome = covers
+      ? AELL_maskOutcome(args.mode, args.inverted, "all", aboveShows)
+      : null;
+    /* "cuts nothing away" is still true of the mask itself when it
+     * switches the others off, but it is the wrong headline for a layer
+     * that just changed on screen — the `undoes` sentence takes that
+     * case. With an unreadable parade there is no outcome and this stays
+     * exactly as it shipped. */
+    if (asked && plain && !overflow && covers &&
+        !(outcome && outcome.undoes)) {
+      coversAll = "That mask covers all of '" + layer.name + "' (" + mine +
+        "), so it cuts nothing away";
+    }
+    /* THE FOURTH OUTCOME, and the last one this branch waved through: the
+     * new mask does not empty the layer and does not leave it alone, it
+     * CANCELS the masks that were already doing the hiding. Measured
+     * (scripts/mask-above-probe.js): a full-coverage 'add' over an add
+     * mask on the left half takes the layer from mean alpha 0.429 to 1.0,
+     * and over masks that hid everything from 0 to 1.0 — and the receipt
+     * said "covers all … so it cuts nothing away — every pixel of it
+     * still shows", which is true of the new mask and says nothing about
+     * the three that stopped working.
+     *
+     * Unasked, like the erasure warning and unlike the no-op one: the
+     * layer visibly changes, and add_mask's own default region is the
+     * whole layer box, so "add another mask" with no bounds is exactly
+     * the call that trips it.
+     *
+     * NOT for an ellipse: its four vertices bound the layer but the shape
+     * leaves the corners, so "every pixel shows again" would be false.
+     * That used to be spelled out here as `kind !== "ellipse"`; it is
+     * `covers` itself now, which is where it always belonged — the same
+     * hole was open in the three sentences below this one. */
+    if (covers && outcome && outcome.undoes) {
+      undoes = "That mask covers all of '" + layer.name + "' (" + mine +
+        "), so every pixel of it shows again: the " +
+        (maskCount === 1 ? "mask" : maskCount + " masks") +
+        " already on it " + (maskCount === 1 ? "stops" : "stop") +
+        " hiding anything" +
+        ((!args.inverted && modeWord === "difference")
+          ? " ('difference' over the whole layer INVERTS what " +
+            (maskCount === 1 ? "it shows" : "they show") + ")"
+          : "") + ". Pass 'bounds' for the part you want to KEEP, or " +
+        "leave this mask out to keep the masking already there.";
+    }
+    /* THE THIRD OUTCOME, and the one this branch used to wave through
+     * with a bare ok. A full-coverage mask either empties the layer
+     * (below), leaves it fully showing (above), or changes NOTHING —
+     * and the third was silent, because the "cuts nothing away" branch
+     * requires an uninverted add and so could never reach it.
+     *
+     * Filed by the 0.11.26 pass as its top item, measured in the same
+     * run: `add_mask {bounds: the whole layer, mode: 'subtract',
+     * inverted: true}` is a provable no-op (mean alpha 1.0 alone, and
+     * identical to the mask above it when not alone) and answered ok.
+     * A tool that reports success for a call that did nothing is the
+     * silent-lie shape this project refuses everywhere else, and it is
+     * worse than the erasing twin in one way: nothing on screen changes,
+     * so nobody finds out.
+     *
+     * Gated on `asked`, the same way "cuts nothing away" is and unlike
+     * the erasure warning: with no region named, this tool's own default
+     * IS the layer's box, and add_mask + set_mask_path opens with
+     * exactly that placeholder. A no-op is cheap; a vanished layer is
+     * not. That asymmetry is the whole reason the two are separate.
+     *
+     * THE ONE NO-OP THAT GATE MUST NOT SILENCE is the branch immediately
+     * below, because its cause is not the caller's region at all. Over
+     * masks that already hide every pixel, a mode that can only ever
+     * TAKE pixels away — subtract, intersect, darken, inverted or not —
+     * leaves the layer at "none" WHATEVER region it is handed: subtract
+     * removes from nothing, and intersect/darken take the smaller of
+     * nothing and anything. No bounds, no shape, and no set_mask_path
+     * written afterwards can make that call do something, so waiting to
+     * be asked waits forever — and `covers` is not what makes it a no-op
+     * either, so a NAMED half-layer region was just as silent. Fixing
+     * only the unasked half would have left the sillier call the quiet
+     * one. Filed by the 0.11.35 pass as its top open item: `add_mask
+     * {mode: "subtract"}` with no bounds over an already-hidden layer
+     * answered a bare ok.
+     *
+     * The inverted add / lighten / difference twins keep the gate: those
+     * DO reveal pixels at a smaller region, so their no-op really is a
+     * fact about the region that was left to the default, and the branch
+     * under this one still answers them. */
+    var subtractive = (modeWord === "subtract" || modeWord === "intersect" ||
+                       modeWord === "darken");
+    // Read BEFORE the new mask is appended, so the list is the masks that
+    // are doing the hiding and not the one being blamed for it.
+    var hiding = (aboveShows === "none") ? AELL_maskNames(layer) : [];
+    /* `!overflow` is NOT a condition here, and it is the only branch in
+     * this tool that goes without it. Every other sentence below reads
+     * `covers`, so overflow really does undercut them — but this one's
+     * reason is the PARADE, not the region, and a region that spills past
+     * the layer is still a region. Subtract removes from nothing,
+     * intersect and darken take the smaller of nothing and anything,
+     * inside the layer box and outside it alike. Filed by the 0.11.36
+     * pass as its top open item: an overflowing subtract over an already-
+     * hidden layer said only "the part outside the layer does nothing",
+     * which is a true sentence about the wrong thing — the part INSIDE
+     * did nothing either, and the receipt implied it had worked.
+     *
+     * No other warning is being stolen by this: overflow means the mask
+     * sticks out on some side, and one that sticks out AND still contains
+     * the whole layer box is bigger than it on that axis, which the
+     * "far bigger than" refusal above already turned away. So whenever
+     * `overflow` survives to here, `covers` is false and `erases`,
+     * `undoes`, `coversAll` and the branch under this one are all silent.
+     *
+     * The overflow NOTE is deliberately left standing beside the warning
+     * rather than suppressed. It is the only place the mask's own span is
+     * named, which is the diagnosis when comp coordinates reached a
+     * layer-space argument, and it makes the weaker claim of the two — a
+     * reader that takes the stronger one is not misled. */
+    if (aboveShows === "none" && subtractive) {
+      noop = true;
+      noopWhy = "the " + ((maskCount === 1) ? "mask" : maskCount + " masks") +
+        " already on it " + ((maskCount === 1) ? "hides" : "hide") +
+        " all of it, so there is nothing left for this one to take";
+      /* "Pass 'bounds' …" is the fix every other no-op in this tool
+       * offers, and for this one it is FALSE — no region works. What CAN
+       * be changed is the masking already there, so name it, the way
+       * delete_mask names the survivors it cannot promise will reveal the
+       * layer. Offered as a switch, not as the cure: with several masks
+       * hiding it, turning one off need not bring the picture back. */
+      noopFix = "No region can change that: it is the masking already on " +
+        "the layer that hides it" +
+        ((hiding.length)
+          ? " (" + AELL_capJoin(hiding, 4) + ") — set_mask {mask: \"" +
+            hiding[0] + "\", mode: \"none\"} switches one off, or " +
+            "delete_mask {mask: \"" + hiding[0] + "\"} removes it."
+          : ".");
+    } else if (asked && !plain && !overflow && covers && modeWord !== "none") {
+      /* mode 'none' is excluded here and nowhere else: it changes nothing
+       * at ANY region, so full coverage is not what makes it a no-op and
+       * this sentence would blame the wrong thing — and a 'none' mask is
+       * a path CARRIER (Stroke, Scribble, a path expression), a real
+       * technique this must not nag about. */
+      noop = !!(outcome && outcome.noop);
+      if (noop) {
+        if (args.inverted) {
+          /* 'subtract' says "takes nothing away" whatever is above it,
+           * because that IS its own reason — an inverted subtract removes
+           * the region it is handed and the region is empty. Every other
+           * mode is a no-op here only BECAUSE something above it is doing
+           * the keeping, so it names that instead. */
+          noopWhy = "'inverted' turns a mask covering the whole layer into " +
+            "one covering NONE of it, so '" + modeWord + "' " +
+            ((modeWord === "subtract" || aboveShows === "nothing")
+              ? "takes nothing away"
+              : "leaves the mask above it exactly as it was");
+        } else {
+          noopWhy = "'" + modeWord + "' over the whole layer keeps " +
+            "everything that already showed";
+        }
+        /* Which argument fixes it depends on which way the mode reads a
+         * region: inverted, everything except 'subtract' HIDES the
+         * region it is given, and everything else KEEPS it. */
+        noopFix = (args.inverted && modeWord !== "subtract")
+          ? "Pass 'bounds' for the part you want to CUT AWAY."
+          : "Pass 'bounds' for the part you want to KEEP.";
+      }
+    }
+    /* The OTHER end of the same coverage, and the one this branch used to
+     * wave through. Its old comment claimed "'subtract', 'intersect' and
+     * inverted:true all cut something away at full coverage" — measured
+     * (scripts/mask-erase-probe.js), some of them cut EVERYTHING away:
+     *   add_mask {bounds: the whole layer, mode: 'subtract', feather: 100}
+     * on a 1920x1080 BG leaves an empty layer and answered a bare ok,
+     * which is the silent-lie shape this project refuses everywhere else.
+     *
+     * WARN, do not refuse, and warn even when the region was NOT named.
+     * A full-coverage subtract is a real technique — it is what an
+     * animated reveal opens with, and it is this tool's own default
+     * region under mode 'subtract' — so refusing would break work that
+     * means it. But "the layer is gone" is not a thing a receipt may
+     * leave out, whoever chose the region: that asymmetry against the
+     * "cuts nothing away" warning above is deliberate, because a layer
+     * that vanished is the expensive direction of the same mistake. */
+    if (covers) {
+      erases = !!(outcome && outcome.blank);
+      if (erases && !args.inverted && modeWord === "difference") {
+        /* The row this pass was written for, and the one no count could
+         * reach: 'difference' inverts what the masks above it show, so
+         * over masks that were showing every pixel it leaves NONE — the
+         * layer goes to alpha 0 at every sample point and the tool used
+         * to answer a bare ok. Over a bare layer the same call changes
+         * nothing, which is why the sentence has to name the masks. */
+        eraseWhy = "'difference' over the whole layer INVERTS what the " +
+          (maskCount === 1 ? "mask" : maskCount + " masks") +
+          " already on it show" + (maskCount === 1 ? "s" : "") + ", and " +
+          (maskCount === 1 ? "it was" : "they were") +
+          " showing every pixel — so nothing is left";
+        eraseFix = "Leave this mask out, or pass 'bounds' for the part to " +
+          "CUT AWAY.";
+      } else if (erases && args.inverted) {
+        eraseWhy = "'inverted' turns a mask covering the whole layer into " +
+          "one covering none of it, so '" + modeWord + "' keeps nothing";
+        eraseFix = "Drop 'inverted', or pass 'bounds' for the part to KEEP.";
+      } else if (erases) {
+        eraseWhy = "a 'subtract' mask over the whole layer cuts every " +
+          "pixel away";
+        eraseFix = "Pass 'bounds' for the part to CUT AWAY, or mode 'add' " +
+          "with the part to KEEP.";
+      }
+    }
+    /* The ELLIPSE twin of that erasure, and the reason this branch could
+     * not simply go quiet once `covers` learned about shapes. Measured
+     * (scripts/mask-ellipse-probe.js): the ellipse inscribed in the layer
+     * box under 'subtract' — this tool's own default region — leaves the
+     * four corners at full alpha and 0.202 of the layer showing, where
+     * the rectangle twin leaves 0.000. The old sentence called that
+     * "hides ALL", which is false; silence would be worse than the old
+     * sentence, because what the caller gets is a layer showing four
+     * corner slivers and nothing else.
+     *
+     * Gated on the layer carrying no compositing mask yet, and that is a
+     * measurement too: over one add mask on the left half the same call
+     * reads corners 0.5, i.e. only the two corners that mask was showing
+     * survive, so "except its four corners" would be false there. Over a
+     * parade this stays quiet.
+     *
+     * Unasked, like the erasure warning it stands in for: 'subtract' at
+     * the default region is exactly the call that trips it. */
+    if (!covers && boxCovers && kind === "ellipse" &&
+        aboveShows === "nothing") {
+      var cornerOut = AELL_maskOutcome(args.mode, args.inverted, "all",
+                                       aboveShows);
+      if (cornerOut && cornerOut.blank) {
+        corners = "That mask hides all of '" + layer.name + "' EXCEPT the " +
+          "four corners of its box (" + mine + "): an ellipse only covers " +
+          "the middle of the bounds it is given, so about a fifth of the " +
+          "layer is left showing in the corners. For a clean cut pass " +
+          "'bounds' for the part to CUT AWAY, or shape 'rectangle' to " +
+          "take the whole layer.";
+      }
     }
   }
 
@@ -6743,14 +8274,98 @@ AELL_TOOLS.add_mask = function (args) {
   }
   var out = { layer: layer.name, mask: mask.name, shape: kind };
   if (overflow) out.note = overflow;
+  if (erases) {
+    /* The feather does NOT rescue it, and the numbers say by how little:
+     * on a 400x300 layer a full-coverage subtract reads alpha 0 at every
+     * one of nine sample points at feather 0 and 5, and at feather 100
+     * the middle is still 0 while the edge points reach only 0.42-0.45.
+     * So the picture is gone either way and a fringe survives — which is
+     * also the answer to the "soften it" ask that produced this call. */
+    out.warning = "That mask hides ALL of '" + layer.name + "'" +
+      (args.feather > 0 ? " except a soft fringe at its edge" : "") + ": " +
+      eraseWhy + (args.feather > 0
+        ? ", and the feather only fades that CUT edge — it does not blur " +
+          "the picture. To blur the picture: apply_effect {layer: \"" +
+          layer.name + "\", effect: \"Gaussian Blur\"}. "
+        : ". ") + eraseFix;
+  } else if (corners) {
+    /* Directly under the erasure it is the ellipse twin of, and above
+     * every sentence that talks about the layer as a whole. The feather
+     * is named for the same reason as in all three of its neighbours: a
+     * feather is what a "soften it" ask reaches for, and it fades the
+     * CUT edge rather than the picture. */
+    out.warning = corners + (args.feather > 0
+      ? " The feather only fades that cut edge — it does not blur the " +
+        "picture. To blur the picture: apply_effect {layer: \"" +
+        layer.name + "\", effect: \"Gaussian Blur\"}."
+      : "");
+  } else if (undoes) {
+    /* Second in the chain, under the erasure and above "cuts nothing
+     * away": those two are the same question about the layer, and this is
+     * the one whose old answer was the misleading half of a true
+     * sentence. The feather is named for the same reason it is named in
+     * both neighbours — a mask that cuts nothing has no cut edge for its
+     * feather to fade, so a "soften it" ask has not been answered. */
+    out.warning = undoes + (args.feather > 0
+      ? " Its feather has no cut edge to fade — it does not blur the " +
+        "picture. To blur the picture: apply_effect {layer: \"" +
+        layer.name + "\", effect: \"Gaussian Blur\"}."
+      : "");
+  } else if (coversAll && args.feather > 0) {
+    out.warning = coversAll + " — its feather only fades the layer's " +
+      "OUTER EDGE, it does not blur the picture. To blur the picture: " +
+      "apply_effect {layer: \"" + layer.name + "\", effect: " +
+      "\"Gaussian Blur\"}.";
+  } else if (coversAll) {
+    out.warning = coversAll + " — every pixel of it still shows. Pass " +
+      "'bounds' for the part you want to KEEP.";
+  } else if (noop) {
+    /* The feather is worth naming for the same reason it is named in the
+     * erasure warning: a feather is what a "soften it" ask reaches for,
+     * and a mask that changes nothing does not change what its feather
+     * does either — there is no cut edge for it to fade. */
+    out.warning = "That mask changes nothing on '" + layer.name + "' (" +
+      mine + "): " + noopWhy + (args.feather > 0
+        ? ", and the feather has no cut edge to fade — it does not blur " +
+          "the picture. To blur the picture: apply_effect {layer: \"" +
+          layer.name + "\", effect: \"Gaussian Blur\"}. "
+        : ". ") + noopFix;
+  }
   return AELL_okay(out);
 };
 
 /*
+ * True when the only mask edit the caller asked for is a FEATHER. That is
+ * the "soften it" shape, and on a layer with NO masks it is the one ask a
+ * mask cannot answer — see AELL_findMask's zero branch.
+ */
+function AELL_featherOnly(args) {
+  if (!args) return false;
+  var wantsFeather = (typeof args.feather === "number" ||
+                      AELLJSON.isArray(args.feather));
+  if (!wantsFeather) return false;
+  return !(args.mode || typeof args.inverted === "boolean" ||
+           typeof args.expansion === "number" ||
+           typeof args.opacity === "number" || args.name);
+}
+
+/*
  * Resolve a mask by name or 1-based index. With one mask on the layer and
  * no ref, that mask wins. Failures list the real masks — grounded.
+ *
+ * ZERO masks is its own answer, not a roster of nothing. The old message
+ * said "(several masks — pass {mask: name|index})" on a layer that had
+ * none — false in the direction that reads as "there ARE masks, name one"
+ * — and closed with "(none — add_mask creates one)", which the model took
+ * as INSTRUCTION: measured 2026-09-03, "Soften the background a touch."
+ * and its typo twin both called set_mask {feather} here, read that tail
+ * and went on to add_mask, feathering a full-frame mask that softens
+ * nothing. So a feather-only ask on a maskless layer is sent where the
+ * picture actually gets softened and add_mask is NOT offered — the same
+ * door-closing shape as remove_effect's empty parade (0.11.13). Any other
+ * edit still names add_mask: there the caller does want a mask.
  */
-function AELL_findMask(layer, ref) {
+function AELL_findMask(layer, ref, featherOnly) {
   var masks = layer.property("ADBE Mask Parade");
   if (!masks) throw new Error("Layer '" + layer.name + "' cannot have masks");
   var n = 0;
@@ -6770,21 +8385,66 @@ function AELL_findMask(layer, ref) {
   } else if (n === 1) {
     return masks.property(1);
   }
+  if (n === 0) {
+    if (featherOnly) {
+      throw new Error("'" + layer.name + "' has no masks — and a mask " +
+        "feather softens a mask EDGE, never the picture. To soften/blur " +
+        "'" + layer.name + "' itself: apply_effect {layer: \"" +
+        layer.name + "\", effect: \"Gaussian Blur\"}.");
+    }
+    throw new Error("'" + layer.name + "' has no masks — nothing to " +
+      "change. add_mask creates one.");
+  }
   var names = [];
   for (i = 1; i <= n; i++) {
     try { names.push(masks.property(i).name); } catch (e3) {}
   }
   throw new Error("Mask not found on '" + layer.name + "'" +
     (ref ? ": " + ref : " (several masks — pass {mask: name|index})") +
-    ". Masks here: " + (names.join(", ") || "(none — add_mask creates one)"));
+    ". Masks here: " + names.join(", "));
+}
+
+/*
+ * What an EDIT to a mask did to the layer, read as the picture BEFORE and
+ * the picture AFTER rather than deduced from the argument. add_mask has
+ * to deduce (its mask does not exist yet); set_mask does not, and the
+ * before/after reading catches every argument at once — the opacity this
+ * was built for, but the mode and the inversion too.
+ *
+ * "some" is never compared to "some": both readings are exact about which
+ * pixels show, but the coarse word is not, and a mask flipped from 'add'
+ * to 'subtract' reads "some" -> "some" while the picture inverts. Same
+ * reason AELL_maskOutcome1 refuses to call a full-coverage 'difference'
+ * over a part-masked layer a no-op.
+ *
+ * "nothing" (no mask composites on the layer) -> "all" is not a change
+ * anybody can see, so it is not `undoes`: every pixel showed either way.
+ */
+function AELL_maskEditKind(before, after) {
+  if (!before || !after) return "";
+  if (after === "none" && before !== "none") return "erases";
+  if (after === "all" && (before === "some" || before === "none")) {
+    return "undoes";
+  }
+  if (before === after && before !== "some") return "noop";
+  return "";
 }
 
 AELL_TOOLS.set_mask = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var layer = AELL_layerOrSelection(comp, args.layer);
   var mask;
-  try { mask = AELL_findMask(layer, args.mask); }
+  try { mask = AELL_findMask(layer, args.mask, AELL_featherOnly(args)); }
   catch (e) { return AELL_err(e.message); }
+  /* Read the layer's masking BEFORE the edit — this tool writes the one
+   * mask property nothing here has ever read back (measured: `set_mask
+   * {opacity: 0}` on the only mask of a layer takes it from alpha 1.0 to
+   * 0.0 and answered a bare ok), and the same silence covered a mode
+   * change that empties the layer. */
+  var maskParade = null;
+  try { maskParade = layer.property("ADBE Mask Parade"); } catch (ePar) {}
+  var editBox = AELL_layerBox(layer, comp.time);
+  var showedBefore = maskParade ? AELL_paradeShows(maskParade, editBox) : "";
   var changed = [];
   if (args.mode) {
     var mode = AELL_maskMode(args.mode);
@@ -6822,9 +8482,88 @@ AELL_TOOLS.set_mask = function (args) {
     return AELL_err("Nothing to change — pass mode, feather, expansion, " +
                     "opacity, inverted and/or name");
   }
-  return AELL_okay({ layer: layer.name, mask: mask.name,
-                     changed: changed.join(", ") });
+  var setOut = { layer: layer.name, mask: mask.name,
+                 changed: changed.join(", ") };
+  var showedAfter = maskParade ? AELL_paradeShows(maskParade, editBox) : "";
+  /* A rename moves no pixels, so a "changed nothing" sentence about one
+   * would be noise. Every other argument here is a claim about what the
+   * layer looks like. A feather or a non-zero expansion makes the parade
+   * unreadable (AELL_maskRect) and the reading below goes quiet on its
+   * own — this list is about which edits may be JUDGED, not which are
+   * readable. */
+  var visualEdit = !!(args.mode || typeof args.inverted === "boolean" ||
+                      typeof args.opacity === "number" ||
+                      typeof args.feather === "number" ||
+                      AELLJSON.isArray(args.feather) ||
+                      typeof args.expansion === "number");
+  var kind = visualEdit
+    ? AELL_maskEditKind(showedBefore, showedAfter)
+    : "";
+  var zeroOp = (typeof args.opacity === "number" &&
+                Number(args.opacity) === 0);
+  /* The sentence opacity 0 needs and no other argument does: it reads
+   * like an OFF switch and it is not one. Measured — a lone mask at
+   * opacity 0 empties the layer whatever its mode, region or inversion,
+   * while mode 'none' leaves every pixel showing, so 'none' is the switch
+   * the caller was reaching for. */
+  var offSwitch = " Mask opacity 0 is not an off switch: it drops what " +
+    "'" + mask.name + "' lets through to zero. To switch a mask off and " +
+    "leave the layer showing, set_mask {mask: \"" + mask.name + "\", " +
+    "mode: \"none\"}; to undo this, opacity 100.";
+  if (kind === "erases") {
+    setOut.warning = "Nothing of '" + layer.name + "' shows now: " +
+      setOut.changed + " leaves every pixel of it masked out.";
+    if (zeroOp) {
+      setOut.warning = setOut.warning + offSwitch;
+    } else {
+      setOut.warning = setOut.warning + " Set it back to undo this, or " +
+        "delete_mask {mask: \"" + mask.name + "\"} to remove the mask.";
+    }
+  } else if (kind === "undoes") {
+    setOut.warning = "Every pixel of '" + layer.name + "' shows again: " +
+      "after " + setOut.changed + " the masks on it stop hiding anything.";
+    if (zeroOp) {
+      setOut.warning = setOut.warning + " Mask opacity 0 drops what '" +
+        mask.name + "' lets through to zero, so it takes nothing away.";
+    }
+  } else if (kind === "noop") {
+    setOut.warning = "That changed nothing on '" + layer.name + "': " +
+      setOut.changed + ", and ";
+    if (showedAfter === "all") {
+      setOut.warning = setOut.warning + "every pixel of it already showed.";
+    } else if (showedAfter === "none") {
+      setOut.warning = setOut.warning + "it was already masked out " +
+        "completely.";
+    } else {
+      setOut.warning = setOut.warning + "no mask on it composites — every " +
+        "mask here is mode 'none', a path carrier.";
+    }
+  }
+  return AELL_okay(setOut);
 };
+
+/*
+ * What REMOVING a mask did to the picture. The same reading set_mask
+ * takes (AELL_maskEditKind), with the one difference that is the whole
+ * reason this is its own function: for a REMOVAL, "nothing" and "all" are
+ * the same picture.
+ *
+ * Measured 2026-09-03, AE 26.3x87 (scripts/mask-delete-probe.js), by the
+ * layer's own alpha: deleting a layer's only 'add' mask took it from mean
+ * 0.429 to 1.0 while the reader went "some" -> "nothing", and deleting
+ * the last COMPOSITING mask with a 'none' carrier still on the layer did
+ * exactly the same (0.429 -> 1.0, "some" -> "nothing") with a mask still
+ * listed in remainingMasks. set_mask has to keep the two words apart — a
+ * mask switched to 'none' over a layer that already showed every pixel
+ * changes nothing anybody can see — but a removal cannot ADD masking, so
+ * a parade that ends with nothing compositing shows every pixel, which is
+ * what "all" says.
+ */
+function AELL_maskGoneKind(before, after) {
+  var b = (before === "nothing") ? "all" : before;
+  var a = (after === "nothing") ? "all" : after;
+  return AELL_maskEditKind(b, a);
+}
 
 /* Mask names on a layer, in AE's order — the receipt half of delete_mask. */
 function AELL_maskNames(layer) {
@@ -6884,14 +8623,65 @@ AELL_TOOLS.delete_mask = function (args) {
   try { mask = AELL_findMask(layer, args.mask); }
   catch (eF) { return AELL_err(eF.message); }
   var removedName = String(mask.name);
+  /* The picture BEFORE the removal. Measured (scripts/mask-delete-probe.js,
+   * AE 26.3x87): taking ONE mask out of a parade emptied the layer in one
+   * row (0.429 -> 0, the 'add' window above a full-coverage 'subtract')
+   * and handed it back in three (0 -> 1.0), and this receipt said neither.
+   * `remainingMasks` cannot tell those apart — the emptied row and one of
+   * the handed-back rows both leave exactly one mask on the layer. */
+  var delBox = AELL_layerBox(layer, comp.time);
+  var showedBefore = AELL_paradeShows(masks, delBox);
   try {
     mask.remove();
   } catch (eR) {
     return AELL_err("AE refused to delete mask '" + removedName +
       "' on '" + layer.name + "': " + (eR && eR.message ? eR.message : eR));
   }
-  return AELL_okay({ layer: layer.name, removed: removedName,
-                     remainingMasks: AELL_maskNames(layer) });
+  /* The same group object, across the removal that invalidated one of its
+   * children — measured to read the same as a fresh lookup on all nine
+   * probe rows. */
+  var showedAfter = AELL_paradeShows(masks, delBox);
+  var delOut = { layer: layer.name, removed: removedName,
+                 remainingMasks: AELL_maskNames(layer) };
+  var left = delOut.remainingMasks;
+  var leftList = left.join(", ");
+  var leftPlural = "masks", leftVerb = "hide";
+  if (left.length === 1) { leftPlural = "mask"; leftVerb = "hides"; }
+  var goneKind = AELL_maskGoneKind(showedBefore, showedAfter);
+  if (goneKind === "erases" && left.length) {
+    /* The first survivor is not promised to be the one holding the layer
+     * shut — with several masks left it may take more than one — so it is
+     * offered as a switch, not as the cure. Ctrl+Z is the cure and it is
+     * exact; there is no undo TOOL, so the tool-side routes are named too. */
+    delOut.warning = "Nothing of '" + layer.name + "' shows now: with '" +
+      removedName + "' gone, the " + leftPlural + " left on it (" +
+      leftList + ") " + leftVerb + " every pixel of it. Ctrl+Z puts '" +
+      removedName +
+      "' back; add_mask can draw a new one that reveals it, or set_mask " +
+      "{mask: \"" + left[0] + "\", mode: \"none\"} switches one of the " +
+      "survivors off.";
+  } else if (goneKind === "undoes" && left.length) {
+    /* Gated on a survivor for the same reason add_mask gates its own
+     * no-op on `asked`: deleting a layer's LAST mask and getting the
+     * whole layer back is the tool working, and `remainingMasks: []` on
+     * the receipt already says it. A mask that stayed while the masking
+     * stopped is the surprising half — measured, one of them was a 'none'
+     * carrier that never composited at all. */
+    delOut.warning = "Every pixel of '" + layer.name + "' shows again: " +
+      "with '" + removedName + "' gone, the " + leftPlural + " left on it (" +
+      leftList + ") " + leftVerb + " nothing of it.";
+  } else if (goneKind === "noop") {
+    delOut.warning = "That changed nothing about what '" + layer.name +
+      "' shows: ";
+    if (showedAfter === "none") {
+      delOut.warning = delOut.warning + "it was already masked out " +
+        "completely and still is.";
+    } else {
+      delOut.warning = delOut.warning + "every pixel of it showed before " +
+        "'" + removedName + "' went, and still does.";
+    }
+  }
+  return AELL_okay(delOut);
 };
 
 /*
@@ -10045,7 +11835,19 @@ function AELL_wipeGate(comp, args, layers) {
   } else if (shown.key !== key) {
     block = "the comp has changed since the last preview, so this is not " +
       "the list the user agreed to";
-  } else if (seq > 0 && shown.seq === seq) {
+  } else if (shown.seq === seq) {
+    // NOT gated on seq > 0, and that is the difference from
+    // clean_project / organize_project. Those two can degrade safely for
+    // a caller that never announces a request, because their preview is
+    // a SEPARATE, deliberate call (dryRun:true) — a seq-0 caller still
+    // has to make it. This tool has no dryRun: the preview IS the
+    // refusal of the very same call, so "seq 0 disables the same-reply
+    // test" means the whole ceremony is "send the identical call twice",
+    // which no user ever sees. Measured 2026-09-03: the CLI self-test
+    // runner announces no request, seq stayed 0, and the retry deleted
+    // all six keys the step exists to protect. A caller with no request
+    // boundary is permanently inside one reply, which is exactly true of
+    // a raw -r script; it opts in by calling $.global.AELL_newRequest().
     block = "that preview was taken in THIS same reply, so the user has " +
       "not seen it yet";
   }
@@ -10194,6 +11996,40 @@ function AELL_whyNotPerLayer(toolName) {
 }
 
 /*
+ * Collapse per-layer failures to ONE copy of each distinct message,
+ * prefixed by every layer that hit it: "A, B, C: <message>".
+ *
+ * This is a CONTEXT fix, not a cosmetic one. Measured 2026-09-03: a
+ * for_each_layer over seven layers whose sub-tool refused the same way
+ * every time printed that ~450-char refusal five times — ~2.2 KB in a
+ * single tool result against a default 16384 ctx — and the very next
+ * line of the transcript was "context trimmed — 2 earlier message(s)
+ * dropped". The panel drops HISTORY when the window overflows, so a
+ * repeated refusal does not just waste room, it deletes the turns the
+ * model needs to act on the refusal it is being handed.
+ *
+ * Messages that genuinely differ (they name the layer, or the layers
+ * failed for different reasons) still print in full — one group each,
+ * in first-seen order. A single failure formats exactly as before.
+ */
+function AELL_groupFailures(failures) {
+  var msgs = [], names = [], i, j, at;
+  for (i = 0; i < failures.length; i++) {
+    at = -1;
+    for (j = 0; j < msgs.length; j++) {
+      if (msgs[j] === failures[i].error) { at = j; break; }
+    }
+    if (at < 0) { at = msgs.length; msgs.push(failures[i].error); names.push([]); }
+    names[at].push(failures[i].name);
+  }
+  var parts = [];
+  for (i = 0; i < msgs.length; i++) {
+    parts.push(names[i].join(", ") + ": " + msgs[i]);
+  }
+  return parts.join(" | ");
+}
+
+/*
  * Run ANY layer tool once per target layer, host-side — the "script"
  * for batch requests: one model call, hundreds of layers, no per-layer
  * inference. The layer is injected by INDEX (names can repeat).
@@ -10216,6 +12052,7 @@ AELL_TOOLS.for_each_layer = function (args) {
   }
   var failures = [];
   var okCount = 0;
+  var allArgFault = true;   // did every failure so far just refuse a NAME?
   for (var i = 0; i < layers.length; i++) {
     var sub = {};
     var src = args.args || {};
@@ -10229,20 +12066,27 @@ AELL_TOOLS.for_each_layer = function (args) {
     if (r && r.ok) {
       okCount++;
     } else {
-      failures.push(layers[i].name + ": " + (r ? r.error : "unknown error"));
+      if (!r || !r.argFault) allArgFault = false;
+      failures.push({ name: layers[i].name,
+                      error: r ? r.error : "unknown error" });
       if (failures.length >= 5) {
-        // Partial, not plain, failure: okCount layers were already
-        // changed. If the round is rollback-armed those go with it; if
-        // it is not, they stay. Either way the caller is told which.
-        return AELL_errPartial("Stopped after 5 failures (" + okCount +
+        var stopMsg = "Stopped after 5 failures (" + okCount +
           " layers were already changed before that). Failures: " +
-          failures.join(" | "));
+          AELL_groupFailures(failures);
+        // All five refused a NAME (AELL_errArg is only ever returned
+        // from a point that provably wrote nothing) and none succeeded,
+        // so this call changed nothing: calling it partial would undo
+        // the rest of the round over a spelling. EVERY other shape stays
+        // partial — the conservative reading, because a sub-tool that
+        // changed something and did not say so must not escape the undo.
+        if (okCount === 0 && allArgFault) return AELL_errArg(stopMsg);
+        return AELL_errPartial(stopMsg);
       }
     }
   }
   return AELL_okay({ tool: toolName, layers: layers.length,
     succeeded: okCount,
-    failures: failures.length ? failures.join(" | ") : "" });
+    failures: failures.length ? AELL_groupFailures(failures) : "" });
 };
 
 AELL_TOOLS.set_track_matte = function (args) {
@@ -11644,19 +13488,58 @@ function AELL_sentinel() {
  * thing guaranteed to send the model down the wrong path.
  */
 function AELL_maybeRollback(cmds, results, armed, before, aliasesBefore) {
-  var okMut = 0, badMut = 0, firstError = "", i, name, r;
+  var okMut = 0, badMut = 0, argBad = 0, firstError = "", i, name, r;
   for (i = 0; i < cmds.length; i++) {
     name = String((cmds[i] || {}).tool || "");
     if (!AELL_MUTATING[name]) continue;
     r = results[i] || {};
     if (r.ok) { okMut++; continue; }
     badMut++;
+    // A NAMING refusal wrote nothing and already says what does exist,
+    // so the successes around it are not debris (AELL_errArg).
+    if (r.argFault && !r.mutated) argBad++;
     if (!firstError) firstError = name + ": " + (r.error || "failed");
     // A tool that failed AFTER changing things (for_each_layer giving up
     // partway) is both halves of the trigger by itself.
     if (r.mutated) okMut++;
   }
   if (!okMut || !badMut) return null;
+
+  /*
+   * Every failure in this round is a name the caller can correct, and
+   * not one of them touched the project. Undoing here would throw away
+   * work the user asked for in order to punish a spelling — which is
+   * exactly what happened in the field on 2026-09-03: the blur that
+   * apply_effect had just applied went with set_effect_param's
+   * "Parameter not found: Radius".
+   *
+   * The nine-squares round this whole mechanism exists for is untouched:
+   * duplicate_layer failing because its source does not exist is NOT a
+   * naming refusal from a tool that wrote nothing — it is a command
+   * whose prerequisite the round failed to build, and its successes ARE
+   * debris.
+   */
+  if (argBad === badMut) {
+    // The model's instinct on a failed round is to redo it whole, so
+    // the one sentence it needs is on the failure it can act on. First
+    // one only: the rest of the round reads as ok, which it is.
+    var kept = " The other commands in this round were APPLIED and are " +
+      "still there — do NOT send them again. Only THIS command did " +
+      "nothing: re-send just it with the name corrected, or drop it if " +
+      "what it asked for is not there at all.";
+    for (i = 0; i < results.length; i++) {
+      r = results[i] || {};
+      if (!r.ok && r.argFault) {
+        r.error = String(r.error || "") + kept;
+        results[i] = r;
+        break;
+      }
+    }
+    return { rolledBack: false, kept: true, failed: firstError,
+      why: "Not rolled back: the failure names something that does not " +
+           "exist and changed nothing, so the commands that succeeded " +
+           "still stand." };
+  }
 
   if (!armed) {
     return { rolledBack: false, failed: firstError,

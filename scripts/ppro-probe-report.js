@@ -14,7 +14,12 @@
  * a pass. The panel already shipped one field failure of exactly that
  * shape -- an unattended probe read pure defaults with no APPDATA and
  * filed them as the owner's setting -- so every row here is one of
- * MEASURED / MISSING / FAILED, and G0 can only pass on MEASURED rows.
+ * MEASURED / MISSING / EXPLAINED / FAILED, and G0 can only pass on
+ * MEASURED rows. EXPLAINED is a row the newest run could not take and
+ * SAID SO -- "nobody has run this" and "this run cannot answer this,
+ * here is why" are different reports, and printing them the same way
+ * is how a gap that was never about Premiere sat in the PPRO table
+ * looking like one.
  *
  * Exit codes: 0 = G0 PASS, 1 = G0 FAIL (measured), 2 = nothing measured.
  */
@@ -63,9 +68,182 @@ function collect(dir) {
   };
 }
 
+/** One named step out of a battery result, or null. */
+function stepOf(steps, name) {
+  for (let i = 0; i < steps.length; i++) {
+    if (steps[i] && steps[i].step === name) { return steps[i]; }
+  }
+  return null;
+}
+
+/**
+ * Re-shape an UNATTENDED battery result (job-result.json, written by
+ * run-ppro-probe.ps1 through the invisible door-3 runner) into the same
+ * shape the VISIBLE panel writes to runtime-<HOST>.json, so one grader
+ * reads either.
+ *
+ * This exists because the grader used to read the panel file only. On
+ * 2026-09-03 that made it print `FAIL MOGRT ... clip count did not grow
+ * (1 -> 1)` from a 2026-09-02 click while an all-green battery from the
+ * same morning sat unread beside it -- a report confidently about a
+ * different artifact, which is the very failure class the probe's own
+ * clip-diff fix had just removed.
+ *
+ * What the runner CANNOT see is left absent rather than guessed: it
+ * never enumerates Node modules, APPDATA, the CEP API version or
+ * localStorage scoping, so those rows fall back to the panel file. The
+ * manifest shape and the ScriptPath reading used to be on that list
+ * for no better reason than that only the visible panel took them --
+ * the manifest is a file and the runner has fs, and the ScriptPath
+ * globals live in the engine it already talks to, so it takes both now
+ * and PPRO stopped showing two gaps that were never about Premiere. What its own existence proves -- a CEP runtime
+ * answered getHostEnvironment(), and evalScript round-tripped a JSON
+ * envelope -- is recorded.
+ *
+ * The SOAK is now one of the things it DOES see. It used to be a click
+ * handler in the visible panel and nowhere else, so no unattended run
+ * could close G0's fourth row however green the battery was; the door-3
+ * runner drives it on the CEP side now (the shared block in both doors
+ * says why it cannot be a battery step inside probe.jsx).
+ */
+function fromJobResult(job) {
+  if (!job || job.__unreadable) { return null; }
+  const hostEnv = job.host || {};
+  const appName = hostEnv.appName || hostEnv.appId || null;
+  if (!appName) { return null; }
+  const battery = job.battery || (job.parsed && job.parsed.data) || {};
+  const steps = Array.isArray(battery.steps) ? battery.steps : [];
+  const ping = stepOf(steps, "ping");
+  const facts = stepOf(steps, "hostFacts");
+  const qe = stepOf(steps, "qe");
+  const history = stepOf(steps, "history");
+  const mogrt = stepOf(steps, "mogrt");
+  const envelopeOk = !!(job.parsed && job.parsed.ok === true);
+  const pinged = !!(ping && ping.ok !== false && ping.data && ping.data.pong);
+  function dataOf(s) { return s && s.data ? s.data : null; }
+  return {
+    host: appName,
+    takenAt: job.finishedAt || job.startedAt || null,
+    panel: {
+      cepPresent: true,
+      appName: appName,
+      appVersion: hostEnv.appVersion || null,
+      appLocale: hostEnv.appLocale || null
+    },
+    evalScript: (job.parsed || job.raw) ? {
+      ok: envelopeOk && pinged,
+      ping: dataOf(ping),
+      error: envelopeOk ? (pinged ? null : "the envelope parsed but the " +
+                           "ping step did not answer")
+                        : ((job.parsed && job.parsed.error) ||
+                           "the battery envelope did not parse")
+    } : null,
+    probeLoad: pinged ? {
+      via: (job.via || "the unattended runner") + ", probe.jsx at " +
+           (ping.data.fileName || "(unnamed)")
+    } : null,
+    hostFacts: dataOf(facts),
+    // The runner writes the soak BESIDE the battery, not inside it.
+    // Absent stays absent: a run whose job asked for no soak must fall
+    // through to the panel file rather than answer the row with null.
+    soak: job.soak || null,
+    // Read from disk / from the engine by the runner itself. Absent
+    // stays absent: a runner that could not take the reading writes
+    // job.scriptPathNote instead, and no row grades a note.
+    shape: job.shape || null,
+    scriptPath: job.scriptPath || null,
+    scriptPathNote: job.scriptPathNote || null,
+    qe: dataOf(qe),
+    history: dataOf(history),
+    mogrtAccept: dataOf(mogrt),
+    battery: steps.length ? {
+      door: job.door === undefined ? null : job.door,
+      steps: steps.map(function (s) {
+        return { step: s.step, ok: s.ok !== false,
+                 error: (s.data && s.data.error) || null };
+      }),
+      project: dataOf(stepOf(steps, "project")),
+      sequence: dataOf(stepOf(steps, "sequence")),
+      cleanup: dataOf(stepOf(steps, "cleanup"))
+    } : null
+  };
+}
+
+/** Read one dotted path out of a nested object; undefined if any hop misses. */
+function dig(obj, dotted) {
+  const parts = dotted.split(".");
+  let cur = obj;
+  for (let i = 0; i < parts.length; i++) {
+    if (cur === null || typeof cur !== "object") { return undefined; }
+    cur = cur[parts[i]];
+  }
+  return cur;
+}
+
+/**
+ * Every artifact that says something about one host, NEWEST FIRST.
+ *
+ * Neither artifact is a superset of the other and either can be the
+ * older one, so the merge is per ROW, not per file: each row takes the
+ * newest source that actually has its value and REPORTS WHICH ONE. An
+ * older row is still a measurement -- it just has to be labelled as
+ * one, because "we measured this yesterday" and "we measured this in
+ * the run you just watched" are different claims.
+ */
+function sourcesFor(hostKey, collected) {
+  const out = [];
+  const panelFile = collected.hosts ? collected.hosts[hostKey] : null;
+  if (panelFile && !panelFile.__unreadable) {
+    out.push({ tag: "pnl", file: "runtime-" + hostKey + ".json",
+               takenAt: panelFile.takenAt || null, data: panelFile });
+  }
+  const job = fromJobResult(collected.jobResult);
+  if (job && job.host === hostKey) {
+    out.push({ tag: "job", file: "job-result.json",
+               takenAt: job.takenAt, data: job });
+  }
+  out.sort(function (a, b) {
+    const ta = Date.parse(a.takenAt || "") || 0;
+    const tb = Date.parse(b.takenAt || "") || 0;
+    return tb - ta;
+  });
+  return out;
+}
+
+/**
+ * A per-row reader over those sources: the newest source that HAS the
+ * value wins. A row may name several paths (the same fact is recorded
+ * under different keys by the panel and by the battery); the SOURCE is
+ * chosen first and the paths tried within it, so a newer artifact's
+ * second-choice key still beats an older artifact's first-choice one.
+ */
+function picker(sources) {
+  return function pick(dotted) {
+    const paths = Array.isArray(dotted) ? dotted : [dotted];
+    for (let i = 0; i < sources.length; i++) {
+      for (let p = 0; p < paths.length; p++) {
+        const v = dig(sources[i].data, paths[p]);
+        if (v !== null && typeof v !== "undefined" && v !== "") {
+          return { value: v, source: sources[i], stale: i > 0 };
+        }
+      }
+    }
+    return { value: null, source: null, stale: false };
+  };
+}
+
 // A row is what the plan's "unverified" table asked for, one per line.
 function row(claim, state, value) {
   return { claim: claim, state: state, value: value === undefined ? null : value };
+}
+
+/** Stamp a row with the artifact its value came from (null when MISSING). */
+function from(r, got) {
+  r.from = got && got.source ? got.source.file : null;
+  r.fromTag = got && got.source ? got.source.tag : null;
+  r.fromAt = got && got.source ? got.source.takenAt : null;
+  r.stale = !!(got && got.stale);
+  return r;
 }
 
 /** MEASURED only when the value is really there; null/undefined is MISSING. */
@@ -82,81 +260,170 @@ function measured(claim, value, badWhen) {
   return row(claim, "MEASURED", value);
 }
 
-function gradeHost(hostKey, r) {
+function gradeHost(hostKey, given) {
   const rows = [];
-  if (!r) {
-    return { host: hostKey, present: false, rows: [
+  // Callers outside this file (and the tests) may still hand over one
+  // plain runtime object; treat it as a single source.
+  let sources;
+  if (Array.isArray(given)) {
+    sources = given;
+  } else if (given && given.__unreadable) {
+    return { host: hostKey, present: false, sources: [], rows: [
+      row("the probe panel's result file parses", "FAILED", given.__unreadable)
+    ] };
+  } else if (given) {
+    sources = [{ tag: "pnl", file: "runtime-" + hostKey + ".json",
+                 takenAt: given.takenAt || null, data: given }];
+  } else {
+    sources = [];
+  }
+  if (!sources.length) {
+    return { host: hostKey, present: false, sources: [], rows: [
       row("the probe panel ran in this host", "MISSING", null)
     ] };
   }
-  if (r.__unreadable) {
-    return { host: hostKey, present: false, rows: [
-      row("the probe panel's result file parses", "FAILED", r.__unreadable)
-    ] };
+  const pick = picker(sources);
+  /**
+   * One row, tagged with the artifact its value came from.
+   *
+   * `noteAt` is where a run RECORDS THAT IT COULD NOT TAKE THIS
+   * READING. A note is never a value -- it cannot pass, and it cannot
+   * displace an older run that really measured, because it is only
+   * looked for once no source has the value at all.
+   */
+  function m(claim, dotted, shape, badWhen, noteAt) {
+    const got = pick(dotted);
+    const value = got.value === null ? null :
+                  (typeof shape === "function" ? shape(got.value) : got.value);
+    if (value === null && noteAt) {
+      const note = pick(noteAt);
+      if (note.value !== null) {
+        return from(row(claim, "EXPLAINED", String(note.value)), note);
+      }
+    }
+    return from(measured(claim, value, badWhen), value === null ? null : got);
   }
-  const panel = r.panel || {};
-  const facts = r.hostFacts || {};
-  const node = panel.node || {};
+  rows.push(m("CEP runtime present (__adobe_cep__)", "panel.cepPresent",
+              function (v) { return v === true ? "yes" : null; }));
+  rows.push(m("appName the panel must branch on", "panel.appName"));
+  rows.push(m("appVersion", "panel.appVersion"));
+  rows.push(m("CEP API version", "panel.cepApiVersion", JSON.stringify));
+  rows.push(m("Node: child_process (llama-server, ComfyUI, ffmpeg)",
+              "panel.node.child_process",
+              function (v) { return v === true ? "yes" : v; }));
+  rows.push(m("Node: fs", "panel.node.fs",
+              function (v) { return v === true ? "yes" : v; }));
+  rows.push(m("Node: http", "panel.node.http",
+              function (v) { return v === true ? "yes" : v; }));
+  rows.push(m("APPDATA visible to the panel", "panel.appdata"));
+  rows.push(m("probe.jsx loaded into the host engine", "probeLoad",
+              function (v) {
+                return v.typeofCall
+                  ? ("FAILED: typeof AELLP_call was " + v.typeofCall)
+                  : ("via " + v.via);
+              },
+              function (v) { return /^FAILED/.test(String(v)); }));
+  // The manifest's ScriptPath IS evaluated, but $.fileName inside it is
+  // not a path, so a ScriptPath loader cannot resolve its own siblings.
+  // Recorded because it decides whether a dual-host panel can branch in
+  // ScriptPath at all (docs/PREMIERE-PLATFORM.md).
+  //
+  // `dollarFileNameSaid` comes first because Premiere's answer is the
+  // EMPTY STRING, and the picker skips "" the same way it skips a
+  // missing key -- so the one host this row exists for graded itself
+  // unmeasured for as long as the raw value was the only path.
+  //
+  // MEASURED 2026-09-03, run -0902: the reading is CLICK-ONLY on an
+  // unattended run. loader.jsx is the PROBE bundle's ScriptPath and
+  // CEP evaluates it when that panel loads; an unattended run opens
+  // no panel, so the global does not exist in the engine door 3 talks
+  // to. The runner records that as a note rather than a reading -- and
+  // the note is what this row prints, so an absence with a reason
+  // stops looking like Premiere refusing to answer. Door 3 does not
+  // grow a ScriptPath of its own to close it: "nothing auto-loads"
+  // is the invariant that keeps the invisible runner inert, and it is
+  // worth more than one row (tests/test-probe-bundle.js section 5).
+  rows.push(m("$.fileName inside the manifest's ScriptPath",
+              ["scriptPath.dollarFileNameSaid",
+               "scriptPath.dollarFileName"],
+              null, null, "scriptPathNote"));
+  rows.push(m("evalScript round-trips a JSON envelope", "evalScript",
+              function (v) { return v.ok === true ? "yes" : (v.error ||
+                                                             "did not parse"); },
+              function (v) { return v !== "yes"; }));
+  rows.push(m("ExtendScript engine name",
+              ["hostFacts.engineName", "evalScript.ping.engineName"]));
+  rows.push(m("BridgeTalk.appName (the door-1 target)", "hostFacts.btAppName"));
+  rows.push(m("BridgeTalk targets this host can see", "hostFacts.btTargets",
+              function (v) { return v.join(" "); }));
+  rows.push(m("undo grouping (app.beginUndoGroup)", "hostFacts.beginUndoGroup"));
+  rows.push(m("app.executeCommand (AE's undo/redo menu ids)",
+              "hostFacts.executeCommand"));
+  rows.push(m("app.enableQE", "hostFacts.enableQE"));
+  rows.push(m("QE reachable after enableQE", "qe",
+              function (v) { return v.qeProject || v.error || null; }));
+  // A shape is A or B. Anything else is the READ having failed, and a
+  // failed read that prints as a value is the report saying "measured"
+  // about a sentence describing why it could not measure.
+  rows.push(m("manifest shape installed", "shape",
+              function (v) { return v.guess || v.error || null; },
+              function (v) { return !/^[AB] \(/.test(String(v)); }));
+  rows.push(m("localStorage scoping across hosts", "storage.note"));
+  rows.push(m("engine soak (500 round-trips)", "soak",
+              function (v) { return v.verdict || v.skipped || null; },
+              function (v) { return /DEGRADED/.test(String(v)); }));
+  rows.push(m("History entries for 3 scripted mutations", "history",
+              function (v) {
+                return v.instruction ? "ran; owner reads the History panel"
+                                     : (v.skipped || v.error || null);
+              }));
+  rows.push(m("MOGRT: Premiere accepted what AE wrote", "mogrtAccept",
+              function (v) {
+                return v.landed === true
+                  ? ("landed, " + v.controllerCount + " controllers, names " +
+                     "readable: " + v.namesReadable)
+                  : (v.error || null);
+              },
+              function (v) { return !/^landed/.test(String(v)); }));
 
-  rows.push(measured("CEP runtime present (__adobe_cep__)",
-                     panel.cepPresent === true ? "yes" : null));
-  rows.push(measured("appName the panel must branch on", panel.appName));
-  rows.push(measured("appVersion", panel.appVersion));
-  rows.push(measured("CEP API version", panel.cepApiVersion &&
-                     JSON.stringify(panel.cepApiVersion)));
-  rows.push(measured("Node: child_process (llama-server, ComfyUI, ffmpeg)",
-                     node.child_process === true ? "yes" : node.child_process));
-  rows.push(measured("Node: fs", node.fs === true ? "yes" : node.fs));
-  rows.push(measured("Node: http", node.http === true ? "yes" : node.http));
-  rows.push(measured("APPDATA visible to the panel", panel.appdata));
-  rows.push(measured("probe.jsx loaded into the host engine",
-                     r.probeLoad && (r.probeLoad.typeofCall
-                       ? ("FAILED: typeof AELLP_call was " +
-                          r.probeLoad.typeofCall)
-                       : ("via " + r.probeLoad.via)),
-                     function (v) { return /^FAILED/.test(String(v)); }));
-  // The manifest's ScriptPath is evaluated, but $.fileName inside it
-  // names the HOST's folder, so a ScriptPath loader cannot resolve its
-  // own siblings. Recorded because it decides whether a dual-host panel
-  // can branch in ScriptPath at all (docs/PREMIERE-PLATFORM.md).
-  rows.push(measured("$.fileName inside the manifest's ScriptPath",
-                     r.scriptPath && r.scriptPath.dollarFileName));
-  rows.push(measured("evalScript round-trips a JSON envelope",
-                     r.evalScript && r.evalScript.ok === true ? "yes" : null,
-                     function () { return r.evalScript && r.evalScript.ok === false; }));
-  rows.push(measured("ExtendScript engine name", facts.engineName ||
-                     (r.evalScript && r.evalScript.ping &&
-                      r.evalScript.ping.engineName)));
-  rows.push(measured("BridgeTalk.appName (the door-1 target)",
-                     facts.btAppName));
-  rows.push(measured("BridgeTalk targets this host can see",
-                     facts.btTargets && facts.btTargets.join(" ")));
-  rows.push(measured("undo grouping (app.beginUndoGroup)",
-                     facts.beginUndoGroup));
-  rows.push(measured("app.executeCommand (AE's undo/redo menu ids)",
-                     facts.executeCommand));
-  rows.push(measured("app.enableQE", facts.enableQE));
-  rows.push(measured("QE reachable after enableQE",
-                     r.qe && (r.qe.qeProject || r.qe.error)));
-  rows.push(measured("manifest shape installed",
-                     r.shape && (r.shape.guess || r.shape.error)));
-  rows.push(measured("localStorage scoping across hosts",
-                     r.storage && r.storage.note));
-  rows.push(measured("engine soak (500 round-trips)",
-                     r.soak && r.soak.verdict,
-                     function (v) { return /DEGRADED/.test(String(v)); }));
-  rows.push(measured("History entries for 3 scripted mutations",
-                     r.history && (r.history.instruction ? "ran; owner reads " +
-                       "the History panel" : (r.history.skipped ||
-                       r.history.error))));
-  rows.push(measured("MOGRT: Premiere accepted what AE wrote",
-                     r.mogrtAccept && (r.mogrtAccept.error ||
-                       (r.mogrtAccept.landed === true ?
-                        ("landed, " + r.mogrtAccept.controllerCount +
-                         " controllers, names readable: " +
-                         r.mogrtAccept.namesReadable) : null)),
-                     function (v) { return !/^landed/.test(String(v)); }));
-  return { host: hostKey, present: true, rows: rows, raw: r };
+  // The unattended battery's own steps. They have no equivalent in the
+  // visible panel, so they are only graded when a job result exists --
+  // and their absence is stated in the sources line above the block,
+  // not faked as a MISSING measurement of the panel.
+  if (pick("battery").value) {
+    rows.push(m("battery: every step passed", "battery.steps",
+                function (v) {
+                  const bad = v.filter(function (s) { return !s.ok; });
+                  return bad.length
+                    ? ("FAILED at " + bad.map(function (s) {
+                        return s.step + (s.error ? " (" + s.error + ")" : "");
+                      }).join(", "))
+                    : (v.length + "/" + v.length + " steps ok: " +
+                       v.map(function (s) { return s.step; }).join(" "));
+                },
+                function (v) { return /^FAILED/.test(String(v)); }));
+    rows.push(m("scratch project (created or opened)", "battery.project",
+                function (v) {
+                  return v.error ? ("FAILED: " + v.error)
+                                 : (v.via + " " + v.name);
+                },
+                function (v) { return /^FAILED/.test(String(v)); }));
+    rows.push(m("a sequence to work in", "battery.sequence",
+                function (v) {
+                  return v.error ? ("FAILED: " + v.error)
+                    : (v.via + " " + v.active + ", " + v.videoTracks +
+                       " video tracks");
+                },
+                function (v) { return /^FAILED/.test(String(v)); }));
+    rows.push(m("the probe removed what it made", "battery.cleanup",
+                function (v) {
+                  return v.removed && v.removed.length
+                    ? v.removed.join(", ") : (v.error || "nothing removed");
+                }));
+  }
+  return { host: hostKey, present: true, sources: sources.map(function (s) {
+    return { tag: s.tag, file: s.file, takenAt: s.takenAt };
+  }), rows: rows };
 }
 
 /**
@@ -165,47 +432,78 @@ function gradeHost(hostKey, r) {
  * the report is information; these four are the gate.
  */
 function gradeG0(collected) {
-  const ppro = collected.hosts.PPRO || collected.hosts.ppro || null;
+  const sources = sourcesFor("PPRO", collected);
+  if (!sources.length && collected.hosts && collected.hosts.ppro) {
+    sources.push({ tag: "pnl", file: "runtime-ppro.json",
+                   takenAt: collected.hosts.ppro.takenAt || null,
+                   data: collected.hosts.ppro });
+  }
   const checks = [];
-  function check(name, pass, detail) {
+  function check(name, pass, detail, source) {
     checks.push({ name: name, pass: pass === true, unmeasured: pass === null,
-                  detail: detail });
+                  detail: detail,
+                  from: source ? source.file : null,
+                  fromAt: source ? source.takenAt : null });
   }
-  if (!ppro || ppro.__unreadable) {
+  if (!sources.length) {
     check("the probe panel opened in Premiere", null,
-          "no runtime-PPRO.json in " + collected.dir + " -- either the " +
-          "panel is not listed under Window > Extensions in Premiere, or " +
-          "it was never opened and pressed. Those are different answers: " +
-          "look at the menu before recording a verdict.");
-    return { pass: false, measured: false, checks: checks };
+          "no runtime-PPRO.json and no job-result.json in " + collected.dir +
+          " -- either the panel is not listed under Window > Extensions in " +
+          "Premiere, or it was never opened and pressed, or the unattended " +
+          "runner never wrote a result. Those are different answers: look " +
+          "at the menu before recording a verdict.");
+    return { pass: false, measured: false, checks: checks, sources: [] };
   }
-  const panel = ppro.panel || {};
-  const node = panel.node || {};
-  check("the probe panel opened in Premiere", panel.cepPresent === true,
-        "appName=" + String(panel.appName) + " appVersion=" +
-        String(panel.appVersion));
+  const pick = picker(sources);
+  // Every gate row below is one of pass / measured-FAIL / UNMEASURED, and
+  // an ABSENT reading is always the third. The gate used to read a
+  // missing evalScript result as a measured FAIL and print "envelope
+  // parsed" beside it -- confidently wrong in both halves.
+  const cep = pick("panel.cepPresent");
+  check("the probe panel opened in Premiere",
+        cep.value === null ? null : cep.value === true,
+        "appName=" + String(pick("panel.appName").value) + " appVersion=" +
+        String(pick("panel.appVersion").value), cep.source);
+  const es = pick("evalScript");
   check("evalScript reaches Premiere's ExtendScript engine",
-        !!(ppro.evalScript && ppro.evalScript.ok === true),
-        ppro.evalScript && ppro.evalScript.error ? ppro.evalScript.error :
-        "envelope parsed");
+        es.value === null ? null : es.value.ok === true,
+        es.value ? (es.value.ok === true ? "envelope parsed"
+                                         : (es.value.error || "did not parse"))
+                 : "no evalScript result -- the round-trip was never run",
+        es.source);
+  const nodeGot = pick("panel.node");
+  const node = nodeGot.value || {};
   check("CEP Node is available (the whole engine/ComfyUI stack needs it)",
-        node.child_process === true && node.fs === true && node.http === true,
-        "child_process=" + String(node.child_process) + " fs=" +
-        String(node.fs) + " http=" + String(node.http));
+        nodeGot.value === null ? null
+          : (node.child_process === true && node.fs === true &&
+             node.http === true),
+        nodeGot.value ? ("child_process=" + String(node.child_process) +
+                         " fs=" + String(node.fs) + " http=" +
+                         String(node.http))
+                      : "the Node inventory was never taken",
+        nodeGot.source);
   // A soak that was SKIPPED (the probe never loaded) is unmeasured, not
   // a degraded engine. The panel's first run reported "DEGRADED at
   // round 1" when probe.jsx had simply never been evaluated, and a gate
   // that cannot tell those apart would have failed G0 for the wrong
   // reason.
+  const soakGot = pick("soak");
+  const soak = soakGot.value;
   check("the engine survives a realistic session (soak)",
-        (ppro.soak && !ppro.soak.skipped) ? ppro.soak.failedAt === null : null,
-        ppro.soak ? (ppro.soak.skipped || ppro.soak.verdict)
-                  : "soak not run -- press \"Engine soak\"");
+        (soak && !soak.skipped) ? soak.failedAt === null : null,
+        soak ? (soak.skipped || soak.verdict)
+             : "soak not run -- neither the panel's button nor an " +
+               "unattended run with soakRounds set has measured this " +
+               "host's engine over a long session",
+        soakGot.source);
   const anyUnmeasured = checks.some(function (c) { return c.unmeasured; });
   return {
     pass: checks.every(function (c) { return c.pass; }),
     measured: !anyUnmeasured,
-    checks: checks
+    checks: checks,
+    sources: sources.map(function (s) {
+      return { tag: s.tag, file: s.file, takenAt: s.takenAt };
+    })
   };
 }
 
@@ -238,15 +536,22 @@ function gradeDoors(doors) {
 
 function report(collected) {
   const hosts = Object.keys(collected.hosts).sort();
-  const graded = hosts.map(function (h) { return gradeHost(h, collected.hosts[h]); });
   // AE is graded too: the seam must not regress the shipping product,
   // and an AE row that changes is the first sign it did.
-  if (hosts.indexOf("AEFT") === -1) {
-    graded.unshift(gradeHost("AEFT", null));
-  }
-  if (hosts.indexOf("PPRO") === -1) {
-    graded.push(gradeHost("PPRO", null));
-  }
+  if (hosts.indexOf("AEFT") === -1) { hosts.unshift("AEFT"); }
+  if (hosts.indexOf("PPRO") === -1) { hosts.push("PPRO"); }
+  const graded = hosts.map(function (h) {
+    const g = gradeHost(h, sourcesFor(h, collected));
+    // A panel file that will not parse is a finding in its own right --
+    // but it must not HIDE a battery result for the same host, which is
+    // the mistake this whole pass is about. Report both.
+    const raw = collected.hosts[h];
+    if (raw && raw.__unreadable) {
+      g.rows.unshift(row("the probe panel's result file parses", "FAILED",
+                         raw.__unreadable));
+    }
+    return g;
+  });
   return {
     takenAt: new Date().toISOString(),
     dir: collected.dir,
@@ -279,10 +584,24 @@ function print(rep) {
 
   rep.hosts.forEach(function (h) {
     console.log("== " + h.host + (h.present ? "" : "   (no result file)"));
+    // Which artifacts spoke for this host, newest first. Without this
+    // line a row read as "the probe says X" when it meant "a click from
+    // yesterday said X".
+    if (h.sources && h.sources.length) {
+      console.log("   sources: " + h.sources.map(function (s, i) {
+        return "[" + s.tag + "] " + s.file + " " + (s.takenAt || "(undated)") +
+               (i === 0 && h.sources.length > 1 ? " <- newest" : "");
+      }).join("\n            "));
+    }
     h.rows.forEach(function (r) {
+      // n/a is not ----: the run said why it could not take this one.
       const mark = r.state === "MEASURED" ? "ok  " :
-                   (r.state === "FAILED" ? "FAIL" : "----");
-      console.log("  " + mark + " " + pad(r.claim) +
+                   (r.state === "FAILED" ? "FAIL" :
+                    (r.state === "EXPLAINED" ? "n/a " : "----"));
+      // [job] / [pnl] is where the value came from; a * means it came
+      // from the OLDER artifact because the newer one does not measure it.
+      const tag = "[" + (r.fromTag || " - ") + (r.stale ? "*" : " ") + "]";
+      console.log("  " + mark + " " + tag + " " + pad(r.claim) +
                   (r.value === null ? "" : String(r.value).slice(0, 90)));
     });
     console.log("");
@@ -296,6 +615,9 @@ function print(rep) {
   rep.g0.checks.forEach(function (c) {
     const mark = c.pass ? "ok  " : (c.unmeasured ? "----" : "FAIL");
     console.log("  " + mark + " " + pad(c.name) + String(c.detail).slice(0, 90));
+    if (c.from) {
+      console.log("       from " + c.from + " " + (c.fromAt || "(undated)"));
+    }
   });
   console.log("");
   if (!rep.g0.measured) {
@@ -336,4 +658,5 @@ function main() {
 }
 
 if (require.main === module) { main(); }
-module.exports = { collect, report, gradeHost, gradeG0, gradeDoors, measured };
+module.exports = { collect, report, gradeHost, gradeG0, gradeDoors, measured,
+                   fromJobResult, sourcesFor, picker };

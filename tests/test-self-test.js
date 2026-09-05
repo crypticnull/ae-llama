@@ -341,6 +341,164 @@ let mtRig = {};
 // answers from what add_mask really put there and the mask refusals
 // ("no masks", "Mask not found ... Masks here:") are measurements.
 let mkMasks = {};
+// ...and the GEOMETRY of each one, in the same order, because "what do
+// the masks already there SHOW" is what decides whether one more of them
+// empties the layer, changes nothing, or switches all of them off. A
+// count could not tell those apart, which is exactly the blindness the
+// above-probe measured: the same full-coverage 'difference' is a no-op
+// over a bare layer and an ERASURE over masks that were showing every
+// pixel, and this canned host answered a bare ok for both.
+let mkShapes = {};
+// The mask algebra, shared by add_mask (what one MORE mask would do) and
+// set_mask (what an EDIT to one did). Worked out from the geometry every
+// time, never answered from a constant: a canned host that knows its
+// verdicts by name cannot see a host that stopped computing them.
+const mkNot = (s) => (s === "all" ? "none" : (s === "none" ? "all" : "some"));
+const mkApply = (state, mode, region) => {
+  const m = String(mode || "add").toLowerCase();
+  if (m === "none") return state;
+  // AE composites the FIRST mask against an empty canvas, except
+  // 'subtract', which starts from a full one.
+  if (state === null) return (m === "subtract") ? mkNot(region) : region;
+  if (m === "add" || m === "lighten") return region === "all" ? "all" : state;
+  if (m === "subtract") return region === "all" ? "none" : state;
+  if (m === "intersect" || m === "darken") {
+    return region === "all" ? state : "none";
+  }
+  if (m === "difference") return region === "all" ? mkNot(state) : state;
+  return null;
+};
+// A mask at OPACITY 0, which is neither "switched off" nor "its region is
+// worth nothing". Measured 2026-09-03 (scripts/mask-opacity-probe.js, AE
+// 26.3x87): alone it EMPTIES the layer whatever its mode, region or
+// inversion — the lone 'subtract' row is what makes this its own rule,
+// because "region worth nothing" says that one leaves the layer whole and
+// it measures empty. Further up the parade it behaves exactly as a region
+// worth nothing (a later add/subtract/difference at 0 leaves the picture
+// alone; intersect and darken empty it), and 'inverted' is not applied.
+const mkZeroApply = (state, mode) =>
+  (state === null ? "none" : mkApply(state, mode, "none"));
+// A mask row can be READ only when its shape is an axis-aligned rectangle
+// AND the two properties that scale or move what it covers are absolute:
+// opacity 0/100 (a part opacity fades by degrees, measured 0.502) and
+// expansion 0 (measured: +25 takes a half mask from 0.429 to 0.571 and
+// +300 to 1.0, so the shape alone is not the coverage).
+const mkRowReadable = (r) => !!r.readable &&
+  (r.opacity === 0 || r.opacity === 100 || r.opacity === undefined) &&
+  !r.expansion;
+// Where one grid CELL sits relative to an ELLIPSE row: "in" (all of it is
+// inside), "out" (none of its interior is), "split" (both, and both
+// provably have area), or "" — which makes the parade unreadable rather
+// than guessed. This is what lets an ellipse into a reader whose
+// exactness comes from cells being CONSTANT: a split cell is read twice,
+// once each way, and both readings vote. The bounding-box test comes
+// first and is exact, because a rect edge lined up with the ellipse's own
+// extreme touches it at one point and the radius test alone can only call
+// that ambiguous. The 0.99/1.01 slack is the cubic bezier's quarter of a
+// percent of radius — see AELL_MASK_KAPPA_LO in hostscript.jsx.
+const mkEllipseVsCell = (e, x0, x1, y0, y1) => {
+  if (x1 <= e.l || x0 >= e.r || y1 <= e.t || y0 >= e.b) return "out";
+  const cx = (e.l + e.r) / 2, cy = (e.t + e.b) / 2;
+  const rx = (e.r - e.l) / 2, ry = (e.b - e.t) / 2;
+  if (!(rx > 0) || !(ry > 0)) return "";
+  const nx0 = (x0 - cx) / rx, nx1 = (x1 - cx) / rx;
+  const ny0 = (y0 - cy) / ry, ny1 = (y1 - cy) / ry;
+  const far2 = Math.max(nx0 * nx0, nx1 * nx1) +
+               Math.max(ny0 * ny0, ny1 * ny1);
+  const qx = nx0 > 0 ? nx0 : (nx1 < 0 ? nx1 : 0);
+  const qy = ny0 > 0 ? ny0 : (ny1 < 0 ? ny1 : 0);
+  const near2 = qx * qx + qy * qy;
+  if (far2 <= 0.99) return "in";
+  if (near2 >= 1.01) return "out";
+  if (near2 <= 0.99 && far2 >= 1.01) return "split";
+  return "";
+};
+// What the masks already on this layer show: "nothing" (none of them
+// composites), "all", "some", "none", or "" for a parade this cannot
+// read. Exact, not sampled — with axis-aligned rectangles the composite
+// is constant inside every cell their edges cut the layer into, and ONE
+// ellipse may join them because a cell it splits can be read both ways.
+// Two may not: that would ask this to prove a cell can be inside both at
+// once, and an unreachable branch votes for a picture nobody can see.
+const mkParade = (list, sz) => {
+  if (!sz) return "";
+  const rects = (list || []).filter(r => r.mode !== "none");
+  if (!rects.length) return "nothing";
+  if (rects.some(r => !mkRowReadable(r)) || rects.length > 8) return "";
+  const ells = rects.filter(r => r.kind === "ellipse" && r.opacity !== 0);
+  if (ells.length > 1) return "";
+  const ell = ells[0] || null;
+  // The one place the algebra and AE part company, and no cell can see
+  // it: measured, AE drops a mask lying wholly outside the layer once
+  // something else composites, where "its region is worth nothing" says
+  // intersect and darken EMPTY the layer. Alone it does not drop, and
+  // every other mode reads the same either way.
+  const offRisk = rects.some(r => r.opacity !== 0 && !r.inverted &&
+    (r.mode === "intersect" || r.mode === "darken") &&
+    (r.r <= 0 || r.l >= sz.width || r.b <= 0 || r.t >= sz.height));
+  if (offRisk && rects.length > 1) return "";
+  const xs = [0, sz.width], ys = [0, sz.height];
+  const push = (a, v, hi) => {
+    if (v > 0 && v < hi && a.indexOf(v) === -1) a.push(v);
+  };
+  rects.forEach(r => {
+    push(xs, r.l, sz.width); push(xs, r.r, sz.width);
+    push(ys, r.t, sz.height); push(ys, r.b, sz.height);
+  });
+  xs.sort((a, b) => a - b); ys.sort((a, b) => a - b);
+  let anyAll = false, anyNone = false, unreadable = false;
+  for (let a = 0; a + 1 < xs.length; a++) {
+    for (let b = 0; b + 1 < ys.length; b++) {
+      const cx = (xs[a] + xs[a + 1]) / 2, cy = (ys[b] + ys[b + 1]) / 2;
+      let branches = [true];
+      if (ell) {
+        const where = mkEllipseVsCell(ell, xs[a], xs[a + 1], ys[b], ys[b + 1]);
+        if (where === "") { unreadable = true; continue; }
+        branches = where === "split" ? [true, false] : [where === "in"];
+      }
+      branches.forEach(bin => {
+        let state = null;
+        rects.forEach(r => {
+          if (r.opacity === 0) { state = mkZeroApply(state, r.mode); return; }
+          let inside = r === ell
+            ? bin
+            : (cx > r.l && cx < r.r && cy > r.t && cy < r.b);
+          if (r.inverted) inside = !inside;
+          state = mkApply(state, r.mode, inside ? "all" : "none");
+        });
+        if (state === null) return;
+        if (state === "none") anyNone = true; else anyAll = true;
+      });
+    }
+  }
+  if (unreadable) return "";
+  if (!anyAll && !anyNone) return "nothing";
+  if (anyAll && anyNone) return "some";
+  return anyAll ? "all" : "none";
+};
+// What an EDIT did, read as the picture before and after. "some" is never
+// compared to "some": both readings are exact about which pixels show,
+// the coarse word is not, and an 'add' flipped to 'subtract' reads
+// "some" -> "some" while the picture inverts.
+const mkEditKind = (before, after) => {
+  if (!before || !after) return "";
+  if (after === "none" && before !== "none") return "erases";
+  if (after === "all" && (before === "some" || before === "none")) {
+    return "undoes";
+  }
+  if (before === after && before !== "some") return "noop";
+  return "";
+};
+// The same reading for a REMOVAL, where "nothing" and "all" are the same
+// picture: a delete cannot ADD masking, so a parade left with nothing
+// compositing shows every pixel. Measured 2026-09-03
+// (scripts/mask-delete-probe.js, AE 26.3x87): deleting a layer's only
+// 'add' mask went 0.429 -> 1.0 reading "some" -> "nothing", and so did
+// deleting the last COMPOSITING mask off a layer that kept a 'none'
+// carrier. set_mask must keep the two words apart; delete_mask must not.
+const mkGoneKind = (before, after) =>
+  mkEditKind(before === "nothing" ? "all" : before,
+             after === "nothing" ? "all" : after);
 // How big each layer really is, "comp|layer" -> {width, height}. add_mask
 // refuses a mask that misses the layer entirely and get_comp_details puts
 // the layer's own size on its row, and NEITHER can be answered from the
@@ -348,6 +506,12 @@ let mkMasks = {};
 // numbers the model had, so four phrasings masked a 100x100 layer with
 // 1920x1080 and the tool said ok.
 let mkSizes = {};
+// grid_layout's fallback picks the layer list ITSELF, so the canned host
+// has to hold the same two facts the real one reads out of AE: what is in
+// the comp (in stacking order) and how big each one is. Without them no
+// stub could see a backdrop being gridded in — the blindness row 30 hit.
+let gridStack = {};
+let gridExpr = {};
 // The mask rig reads back what it just wrote (numKeys after a refusal),
 // so the canned host has to remember how many keys each mask carries.
 let maskKeys = {};
@@ -355,6 +519,28 @@ let maskKeys = {};
 // really land 4 frames apart"), so the canned host has to remember where
 // it put them rather than answering with a constant list.
 let stagStart = {};
+// ...and stagger_layers now warns when EVERY target it just retimed is
+// static, so the canned host has to know which layers anything has
+// animated. Answering from a constant is precisely how the class stayed
+// invisible: the real tool reported six cheerful placements for a comp
+// where nothing faded, and a stub with no notion of "is this layer
+// animated" agrees with it every time.
+let motion = {};                       // "comp|layer" -> {keys, fx, expr}
+function moKey(a, nm) { return ((a && a.comp) || "") + "|" + nm; }
+function moOf(a, nm) {
+  const k = moKey(a, nm);
+  if (!motion[k]) motion[k] = { keys: 0, fx: 0, expr: 0 };
+  return motion[k];
+}
+function moTargets(a) {
+  if (a && Array.isArray(a.layers) && a.layers.length) return a.layers.slice();
+  if (a && a.layer) return [String(a.layer)];
+  return [];
+}
+function moStatic(a, nm) {
+  const m = motion[moKey(a, nm)];
+  return !m || (!m.keys && !m.fx && !m.expr);
+}
 // The batch rig checks that for_each_layer really touched all 60 layers
 // and that the tools it must refuse changed nothing, so the canned host
 // tracks which layers carry the blur, what value it holds, and whether a
@@ -362,6 +548,92 @@ let stagStart = {};
 let batchLayers = 0;
 let batchFx = {};
 let batchBlur = null;
+// Drop Shadow, for the concept-map steps. The roster is the REAL one
+// (measured 2026-09-03, AE 26.3x87, scripts/param-concept-probe.jsx,
+// Compositing Options and all) because those steps check the sentence
+// the host builds out of it — an invented roster would let a wrong
+// suggestion pass here and fail in front of a user.
+const DS_ROSTER = ["Shadow Color", "Opacity", "Direction", "Distance",
+                   "Softness", "Shadow Only", "Compositing Options"];
+let dsOn = false;
+let dsDistance = 5;
+// AE's own lookup, measured on this effect: the exact display name
+// resolves, an all-lowercase SINGLE word resolves ("distance",
+// "softness", "opacity"), and nothing else does — "DISTANCE",
+// "dIsTaNcE", "shadow color" and "Distance " are every one of them null.
+// The host folds case and separators on top of that; the fold is what
+// these steps exercise, so the canned host has to fold too.
+function dsFold(param) {
+  const want = String(param === undefined || param === null ? "" : param)
+    .toLowerCase().replace(/[\s_-]/g, "");
+  if (!want) return null;
+  return DS_ROSTER.filter(
+    (n) => n.toLowerCase().replace(/[\s_-]/g, "") === want)[0] || null;
+}
+// The concept answers the field round needed, in the host's wording. A
+// word that is not in here gets the old, plain refusal — the map may not
+// invent, and one of the steps checks exactly that.
+const DS_CONCEPT = { offset: "Direction, Distance",
+                     "offset x": "Direction, Distance",
+                     "offset y": "Direction, Distance",
+                     blur: "Softness", blurriness: "Softness",
+                     alpha: "Opacity" };
+function dsMiss(param, tail) {
+  const c = DS_CONCEPT[String(param || "").toLowerCase()];
+  return "Parameter not found: " + param +
+    (c ? " — on 'Drop Shadow' that is: " + c + "." : ".") +
+    " 'Drop Shadow' has: " + DS_ROSTER.join(", ") + "." +
+    (tail ? " " + tail : "");
+}
+
+// Per-layer failures reported the way for_each_layer reports them: one
+// copy of each distinct message, prefixed by every layer that hit it.
+// Measured 2026-09-03 — the same refusal printed once per layer put
+// ~2.2 KB in a single result and the panel dropped history to fit it.
+function groupFailures(list) {
+  const msgs = [], names = [];
+  for (const f of list) {
+    let at = msgs.indexOf(f.error);
+    if (at < 0) { at = msgs.length; msgs.push(f.error); names.push([]); }
+    names[at].push(f.name);
+  }
+  return msgs.map((m, i) => names[i].join(", ") + ": " + m).join(" | ");
+}
+
+// A value AE will not take, refused the way AELL_writeValue refuses it.
+// Measured in real AE 2026 (scripts/param-value-probe.jsx): setValue
+// COERCES a numeric string ("50" reads back 50, ["10","20"] reads back
+// [10, 20]) and throws on anything else, so the guard keys on "a string
+// that is not a number", never on "a string". Returns "" when the value
+// is fine.
+function badValueRefusal(value, label, shape, holds, linkPath) {
+  let bad = null;
+  const num = (x) => (typeof x === "number" ? (isNaN(x) ? null : x)
+    : (typeof x === "string" && x !== "" && !isNaN(Number(x))
+        ? Number(x) : null));
+  if (Array.isArray(value)) {
+    for (const el of value) {
+      if (typeof el === "string" && num(el) === null) { bad = el; break; }
+    }
+  } else if (typeof value === "string" && num(value) === null) {
+    bad = value;
+  }
+  if (bad === null) return "";
+  const shown = bad.length > 90 ? bad.slice(0, 87) + "..." : bad;
+  const wants = shape === "array" ? "an array of 3 numbers" : "a number";
+  let msg = "'" + label + "' takes " + wants + ", and the text \"" + shown +
+    "\" is not one" + (holds === null ? "" : " — it holds " + holds + " now") +
+    ". (A number written as text, \"50\", is fine.)";
+  if (/thisComp|thisLayer|thisProperty|\b(?:comp|layer|effect|mask|content|wiggle|linear|ease|random|valueAtTime|sourceRectAtTime|loopOut|loopIn|time|index|value)\b\s*[.([]|[-+*/]\s*\d|\)\s*\(/
+        .test(bad)) {
+    msg += " That is EXPRESSION code, and a value is never one. To drive " +
+      "this property from a control use link_property {layer: \"...\", " +
+      "property: \"" + linkPath + "\", ...} with controlLayer + " +
+      "controlEffect — it writes the expression itself, dimension-aware. " +
+      "For raw code use set_expression {..., expression: \"" + shown + "\"}.";
+  }
+  return msg;
+}
 
 // ---- the coverage rig: a miniature property model for the tools no
 // other step in the suite calls. Faithful to what the probe measured in
@@ -617,6 +889,59 @@ const SQUARES = ["ST Square"];
 for (let i = 2; i <= 9; i++) SQUARES.push("ST Square " + i);
 const drivenKey = (layer, prop) => layer + "/" + String(prop || "")
   .replace(/^position_[xy]$/, "position").toLowerCase();
+
+// What is ALREADY on a property. The canned host had no notion of it at
+// all: link_property and set_expression each answered from their
+// arguments alone, so a first link and a fifth read the same, and the
+// branch where a REJECTED write clears the expression that was there
+// could not be reached at all. Six of the seven 0.11.32 steps passed
+// against that host while proving nothing.
+//
+// Faithful to AE 2026 as measured by scripts/link-overwrite-probe.js: a
+// bad expression does NOT throw — AE keeps the text and fills
+// expressionError — and any write over an existing expression replaces
+// it with no way back.
+let exprHere = {};
+const exprKey = (a) => String((a && a.layer) || "") + "/" +
+  String((a && a.property) || "").toLowerCase();
+// Every layer name this run has handled. The suite builds its layers
+// through the tools, so anything an expression may legitimately name has
+// passed through here first — and a name that never did is the one AE
+// would refuse.
+let seenLayerNames = {};
+function noteLayerNames(a) {
+  if (!a) return;
+  const keys = ["layer", "name", "controlLayer", "parent", "matteLayer",
+                "trackMatteLayer", "text", "target", "from", "to"];
+  for (const k of keys) {
+    if (typeof a[k] === "string" && a[k]) seenLayerNames[a[k]] = true;
+  }
+  if (Array.isArray(a.layers)) {
+    for (const n of a.layers) {
+      if (typeof n === "string") seenLayerNames[n] = true;
+    }
+  }
+}
+function exprRejects(text) {
+  const m = /thisComp\.layer\("([^"]*)"\)/.exec(String(text || ""));
+  if (!m) return "";
+  if (seenLayerNames[m[1]] || SQUARES.indexOf(m[1]) !== -1) return "";
+  return "Expression disabled. Error at line 1: there is no layer named '" +
+         m[1] + "'";
+}
+/* What every successful expression write owes its receipt. */
+function exprReplacedInto(out, prior, next) {
+  if (!prior) return out;
+  if (prior === next) {
+    out.unchanged = "That property already had this exact expression; " +
+                    "nothing changed.";
+    return out;
+  }
+  out.replaced = prior;
+  out.replacedNote = "That expression is GONE — this write took its " +
+    "place. To put it back, set_expression with the text above.";
+  return out;
+}
 function markDriven(layer, prop, shows) { driven[drivenKey(layer, prop)] = shows; }
 function drivenShows(layer, prop) {
   const v = driven[drivenKey(layer, prop)];
@@ -630,6 +955,32 @@ let batSolids = [];
 // The rollback comp: the canned host has to model the UNDO too, or a
 // step could "pass" while the debris it is checking for never existed.
 let rbLayers = [];
+// ...and its EFFECT parade. 0.11.23 asks whether a round survives a
+// parameter-NAME refusal, so the canned host has to refuse the name the
+// way AE does (roster and all) and remember the blur that must still be
+// there afterwards. The roster is Fast Box Blur's, in AE 2026's order.
+// PER LAYER, because effects are: a flat list for the whole comp
+// answered "does this LAYER carry any" with the parade of a different
+// one, which is exactly the blindness that let remove_effect's "no
+// effects at all" refusal go untagged (0.11.31).
+let rbFx = {};                  // layer -> effect display names, AE's order
+let rbFxParams = {};            // "<Effect>/<Param>" -> value written
+function rbFxOf(layer) {
+  const k = String(layer || "");
+  if (!rbFx[k]) rbFx[k] = [];
+  return rbFx[k];
+}
+function rbFxCopy(src) {
+  const o = {};
+  for (const k in src) o[k] = src[k].slice();
+  return o;
+}
+const RB_FBB = ["Blur Radius", "Iterations", "Blur Dimensions",
+                "Repeat Edge Pixels", "Compositing Options"];
+function rbRoster(name) {
+  if (name === "Fast Box Blur") return RB_FBB.slice();
+  return ["Compositing Options"];
+}
 // The comp-rename rig, and the rename the canned host remembers making.
 const RN = { host: "ST RN Host 2021", util: "ST RN Util 2019",
              linked: "ST RN Linked 2020", plain: "ST RN Plain 2019" };
@@ -1405,6 +1756,7 @@ function singularLayerGate(tool, args) {
 }
 
 function cannedOk(tool, args) {
+  noteLayerNames(args);
   const gated = singularLayerGate(tool, args);
   if (gated) return gated;
   if (inBnComp(args)) {
@@ -1475,12 +1827,38 @@ function cannedOk(tool, args) {
       }
       if (t === "set_effect_param") {
         // Only layers that really carry the effect can take the param —
-        // that is what makes "reaches all 60" mean anything.
-        const hit = L.filter(nm => batchFx[nm] === sub.effect);
-        if (hit.length) batchBlur = sub.value;
-        return { tool: t, layers: L.length, succeeded: hit.length,
-                 failures: hit.length === L.length ? ""
-                   : (L.length - hit.length) + " layers lack " + sub.effect };
+        // that is what makes "reaches all 60" mean anything. Each layer
+        // gets the sub-tool's REAL refusal, because the thing under test
+        // is how N of those are reported: identical ones collapse to one
+        // copy prefixed by every layer that hit it, differing ones each
+        // print in full. A canned host that summarised them ("N layers
+        // lack X") could not see either.
+        let okCount = 0;
+        const fails = [];
+        for (const nm of L) {
+          let why = "";
+          if (batchFx[nm] !== sub.effect) {
+            why = "Effect not found on layer: " + sub.effect +
+              ". Effects on '" + nm + "': " +
+              (batchFx[nm] || "(none)") +
+              ". apply_effect adds one that is missing.";
+          } else {
+            why = badValueRefusal(sub.value,
+              String(sub.effect || "") + "/" + String(sub.param || ""),
+              "number", batchBlur === null ? null : batchBlur,
+              "effect." + String(sub.effect || "") + "." +
+              String(sub.param || ""));
+          }
+          if (!why) { okCount++; batchBlur = sub.value; continue; }
+          fails.push({ name: nm, error: why });
+          if (fails.length >= 5) {
+            return { __err: "Stopped after 5 failures (" + okCount +
+              " layers were already changed before that). Failures: " +
+              groupFailures(fails) };
+          }
+        }
+        return { tool: t, layers: L.length, succeeded: okCount,
+                 failures: fails.length ? groupFailures(fails) : "" };
       }
       return { tool: t, layers: L.length, succeeded: L.length,
                failures: "" };
@@ -2256,13 +2634,63 @@ function cannedOk(tool, args) {
       out.renamedCount = renamed.length;
       return out;
     }
-    case "grid_layout":
+    case "grid_layout": {
       // The rig it builds DRIVES Position and ignores whatever value sits
       // underneath — every later write to those layers is swallowed.
-      (((args && args.layers) || SQUARES)).forEach((nm, i) =>
-        markDriven(nm, "position", [320 + (i % 3) * 320, 180, 0]));
-      return { sliders: ["Grid X Spacing", "Grid Y Spacing",
-                         "Grid Columns"] };
+      const gComp = String((args && args.comp) || "");
+      const gNamed = args && args.layers;
+      // Only the backdrop rig comp is modelled layer-by-layer; every
+      // other grid in the suite is the nine squares.
+      const gRig = /Self-Test Grid BG/.test(gComp);
+      let gCand = gNamed ? gNamed.map(String)
+                         : ((gRig && gridStack[gComp]) || SQUARES).slice();
+      // Work the backdrop out from the same geometry the host does, or
+      // this stub is blind to the whole class: a layer that covers the
+      // WHOLE frame is not grid content, and only a GUESSED list is
+      // judged (an explicit 'layers' is the caller's own choice).
+      const gSkipped = [];
+      const gProps = compProps[gComp];
+      if (gRig && !gNamed && gProps) {
+        const gKeep = [];
+        for (const nm of gCand) {
+          const sz = mkSizes[gComp + "|" + nm];
+          if (sz && sz.width >= gProps.width && sz.height >= gProps.height) {
+            gSkipped.push(nm);
+          } else gKeep.push(nm);
+        }
+        if (gSkipped.length > 0 && gKeep.length >= 2) gCand = gKeep;
+        else gSkipped.length = 0;
+      }
+      const gCtrl = String((args && args.controlLayer) || "GRID CTRL");
+      const gPlaced = [];
+      gCand.forEach((nm, i) => {
+        markDriven(nm, "position", [320 + (i % 3) * 320, 180, 0]);
+        // The real rig's expression is longer than get_property's
+        // 200-char cap, so what a caller can actually read back is the
+        // HEAD of it — the control-null lookup and the Columns slider.
+        if (gRig) gridExpr[gComp + "|" + nm] =
+          'var cols = Math.max(1, Math.min(3, Math.round(thisComp.layer("' +
+          gCtrl + '").effect("Grid Columns")(1))));';
+        gPlaced.push({ layer: nm, row: Math.floor(i / 3), col: i % 3 });
+      });
+      const gOut = { sliders: ["Grid X Spacing", "Grid Y Spacing",
+                               "Grid Columns"], placed: gPlaced,
+                     control: gCtrl };
+      if (gSkipped.length > 0) {
+        const one = gSkipped.length === 1;
+        gOut.skipped = gSkipped;
+        gOut.skippedNote = "Left out of the grid: " + gSkipped.join(", ") +
+          " — " + (one ? "it fills" : "they fill") + " the whole " +
+          gProps.width + "x" + gProps.height + " frame, so " +
+          (one ? "it is a backdrop" : "they are backdrops") + ", not grid " +
+          "content. No 'layers' list was given and nothing was selected, " +
+          "so the grid used the comp's content. To grid " +
+          (one ? "it" : "them") + ' too, re-call with layers: ["' +
+          gSkipped.join('", "') + '", ...] naming every layer you want ' +
+          "in the grid.";
+      }
+      return gOut;
+    }
     case "link_property": {
       // Same shape: the linked property now reads from the slider.
       markDriven(args && args.layer, args && args.property, 22.2);
@@ -2277,10 +2705,34 @@ function cannedOk(tool, args) {
         out.linkedTo = cl + " > " + ce;
         out.expression = 'thisComp.layer("' + cl + '").effect("' + ce +
                          '")(1)' + (sc !== 1 ? " * " + sc : "") + ";";
+        const lk = exprKey(args);
+        exprReplacedInto(out, exprHere[lk] || "", out.expression);
+        exprHere[lk] = out.expression;
       }
       return out;
     }
     case "get_property": {
+      // A gridded layer's Position carries the rig expression; a layer
+      // the grid left OUT carries none. Reading that back is the only
+      // proof the backdrop was really spared.
+      if (String((args && args.property) || "") === "position" &&
+          /Self-Test Grid BG/.test(String((args && args.comp) || ""))) {
+        const gx = gridExpr[String(args.comp) + "|" + String(args.layer)];
+        const gRead = { layer: args.layer, property: "Position",
+                        matchName: "ADBE Position", value: [320, 180, 0],
+                        numKeys: 0 };
+        if (gx) gRead.expression = gx;
+        return gRead;
+      }
+      // The scratch comp's own squares: what link_property or
+      // set_expression last wrote is what AE carries. Reading it back is
+      // the only proof a REJECTED write left it alone (0.11.32).
+      if (args && SQUARES.indexOf(String(args.layer)) !== -1 &&
+          exprHere[exprKey(args)]) {
+        return { layer: args.layer, property: args.property,
+                 value: 22.2, numKeys: 0,
+                 expression: exprHere[exprKey(args)] };
+      }
       // What import_as_layer wrote, read back the way the suite reads it:
       // the report is not evidence, the property is.
       const frS = frScales[((args && args.comp) || "") + "|" +
@@ -2294,6 +2746,20 @@ function cannedOk(tool, args) {
                  numKeys: wpCount(String(args.layer),
                                   String(args.property || "")),
                  value: 100 };
+      }
+      if (inRbComp(args)) {
+        const rbM = /^effect\.(.+)\.([^.]+)$/
+          .exec(String((args && args.property) || ""));
+        if (rbM) {
+          if (rbFxOf(args.layer).indexOf(rbM[1]) === -1) {
+            return { __err: "Effect not found on layer: " + rbM[1] +
+              ". Effects on '" + args.layer + "': " +
+              (rbFxOf(args.layer).join(", ") || "(none)"), __argFault: true };
+          }
+          return { layer: args.layer, property: rbM[2],
+                   matchName: "ADBE " + rbM[2],
+                   value: rbFxParams[rbM[1] + "/" + rbM[2]], numKeys: 0 };
+        }
       }
       const SLg = shapeLayerOf(args && args.layer);
       if (SLg && /^contents\//i.test(String((args && args.property) || ""))) {
@@ -2481,6 +2947,9 @@ function cannedOk(tool, args) {
       if (args && /^ST Ord/.test((args && args.layer) || "")) {
         return { value: [ordX[args.layer], 300, 0] };
       }
+      if (args && /Drop Shadow\/Distance$/.test(args.property || "")) {
+        return { value: dsDistance };
+      }
       // Read back what for_each_layer wrote through set_effect_param.
       if (args && /Blurriness/.test(args.property || "")) {
         return { value: batchBlur };
@@ -2527,6 +2996,9 @@ function cannedOk(tool, args) {
       return { value: 3 };
     }
     case "set_keyframes": {
+      // Recorded before the branches, because every branch below that
+      // returns a count has just animated the layers it names.
+      moTargets(args).forEach(nm => { moOf(args, nm).keys += 1; });
       if (inWpComp(args)) {
         const wts = wpTargets(args), wn = (args.keys || []).length;
         for (const L of wts) wpKeys[L + "/" + cvProp(args.property)] = wn;
@@ -2560,24 +3032,51 @@ function cannedOk(tool, args) {
                    keysSet: args.keys.length, numKeys: args.keys.length };
         }
       }
-      // 9 layers x 2 keys for the batch step; one layer x its own keys
-      // for the single-layer ones.
-      return { keysSet: (args && args.layer && args.keys)
-        ? args.keys.length : 18 };
+      // 9 layers x 2 keys for the batch step; a named list gets its own
+      // arithmetic. Computed, not constant: the constant reported
+      // eighteen keys for a three-layer rig that had asked for two.
+      const skN = (args && Array.isArray(args.layers) && args.layers.length)
+        ? args.layers.length : 1;
+      return { keysSet: (args && args.keys) ? args.keys.length * skN : 18,
+               layers: skN };
     }
     case "add_null":
       leakNullSource();
       return { index: 1, name: (args && args.name) || "Null 1" };
     case "set_expression": {
       const expr = (args && args.expression) || "";
+      const sk = exprKey(args);
+      const priorExpr = exprHere[sk] || "";
       if (inCvComp(args) && args.layer) {
         const ck = args.layer + "/" + cvProp(args.property);
         if (expr === "") delete cvExpr[ck]; else cvExpr[ck] = expr;
       }
       if (expr === "") {
         delete driven[drivenKey(args && args.layer, args && args.property)];
-        return { layer: args && args.layer, property: args && args.property,
-                 expression: "cleared" };
+        delete exprHere[sk];
+        const clr = { layer: args && args.layer,
+                      property: args && args.property,
+                      expression: "cleared" };
+        if (priorExpr) {
+          clr.removed = priorExpr;
+          clr.removedNote = "That expression is GONE. To put it back, " +
+                            "set_expression with the text above.";
+        } else {
+          clr.note = "There was no expression on that property; nothing " +
+                     "was removed.";
+        }
+        return clr;
+      }
+      // AE takes a bad expression's TEXT and reports the error, so a
+      // property that carried a working one loses it unless the tool puts
+      // it back. That is the whole of the 0.11.32 defect.
+      const rej = exprRejects(expr);
+      if (rej) {
+        return { __err: "After Effects rejected the expression (" + rej +
+          "). Do not invent syntax — prefer link_property or " +
+          "apply_expression_preset, or fix the reported problem and retry." +
+          (priorExpr ? " Nothing was lost: the expression already on that " +
+                       "property was put back." : "") };
       }
       // An expression that reads the property's own value passes writes
       // through; anything else computes the property from scratch and
@@ -2585,7 +3084,10 @@ function cannedOk(tool, args) {
       markDriven(args && args.layer, args && args.property,
                  /\bvalue\b/.test(expr) ? "passthru" : 999);
       if (inPcComp(args) && args.layer) pcExpr[args.layer] = expr;
-      return { expressionEnabled: true, expression: expr };
+      const seOut = { expressionEnabled: true, expression: expr };
+      exprReplacedInto(seOut, priorExpr, expr);
+      exprHere[sk] = expr;
+      return seOut;
     }
     case "center_anchor_point": {
       // On a shape layer built above, the anchor is the CENTRE OF THE
@@ -2643,6 +3145,18 @@ function cannedOk(tool, args) {
       });
       out.placed = placed;
       out.spread = r3(gap * (n - 1));
+      // The receipt that started this: ok, six placements, nothing fades.
+      // A marker is deliberately NOT tracked as motion — in real AE it
+      // reads numKeys > 0 and a scan that counted it would fall silent on
+      // exactly the layers this warns about.
+      if (names.length && names.every(nm => moStatic(args, nm))) {
+        out.warning = "Start times moved, but nothing on these " + n +
+          " layers varies over time (no keyframe, expression, effect or " +
+          "moving source), so the stagger is invisible. stagger_layers " +
+          "RETIMES layers — it does not create the animation: add it " +
+          "with set_keyframes (property 'opacity', 0 -> 100) and pass " +
+          "relativeTo: 'inPoint' to keep the offsets just set.";
+      }
       if (hasStep || hasFrames) {
         out.step = r3(gap);
         out.stepFrames = Math.round((gap / fd) * 100) / 100;
@@ -2667,6 +3181,116 @@ function cannedOk(tool, args) {
       // nothing). A canned host that accepted it would let that ship again.
       const mkSz = mkSizes[mkKey];
       const mkB = args && args.bounds;
+      /* WHAT ONE MORE MASK DOES, worked out from the same geometry the
+       * host works it out from — never answered from a constant, which
+       * is the rule the stagger pass set after a canned host that knew
+       * its verdicts by name could not see a host that stopped computing
+       * them. Measured in AE 26.3x87 by scripts/mask-erase-probe.js and
+       * scripts/mask-above-probe.js.
+       *
+       * The thing this models, and the reason it is not a boolean any
+       * more: what the masks ALREADY there SHOW decides the answer. A
+       * full-coverage 'difference' changes nothing over a bare layer and
+       * EMPTIES one whose masks were showing every pixel; a full-coverage
+       * 'add' changes nothing over a bare layer and switches every mask
+       * off over one that was hiding something.
+       *
+       * mkNot / mkApply / mkZeroApply / mkParade live at module scope now
+       * because set_mask needs the same reading: it EDITS a mask, and a
+       * host that judged its own edits from the arguments alone is the
+       * blindness this file keeps re-learning. */
+      const mkOutcome1 = (mode, inverted, covered, above, readable) => {
+        const m = String(mode || "add").toLowerCase();
+        const state = above === "nothing" ? null : above;
+        const was = state === null ? "all" : state;
+        // The one measured departure from the algebra: an off-layer
+        // 'intersect'/'darken' empties a bare layer and leaves a masked
+        // one exactly as it was.
+        if (covered === "none" && !inverted && state !== null &&
+            (m === "intersect" || m === "darken")) {
+          return { result: was, erases: false, blank: was === "none",
+                   noop: true, undoes: false, readable };
+        }
+        const region = inverted ? mkNot(covered) : covered;
+        const res = mkApply(state, m, region);
+        if (res === null) return null;
+        // 'difference' over the whole layer INVERTS what is above it.
+        // "all" and "none" invert exactly; "some" inverted is a DIFFERENT
+        // some, so the coarse states compare equal and it is not a no-op
+        // (measured 0.429 -> 0.571).
+        const inverts = (m === "difference" && region === "all" &&
+                         was === "some");
+        return { result: res, erases: res === "none" && was !== "none",
+                 blank: res === "none" && was !== "none",
+                 noop: !inverts && res === was,
+                 undoes: res === "all" && was !== "all", readable };
+      };
+      const mkOutcome = (mode, inverted, covered, above) => {
+        if (covered !== "all" && covered !== "none") return null;
+        if (above) return mkOutcome1(mode, inverted, covered, above, true);
+        // Unreadable parade: answer only what every reading agrees on,
+        // and fall back to the END STATE for the "layer is gone" sentence
+        // — silence about a blank layer is the failure this exists to
+        // stop.
+        let agreed = null;
+        for (const st of ["nothing", "all", "some", "none"]) {
+          const one = mkOutcome1(mode, inverted, covered, st, false);
+          if (!one) return null;
+          if (!agreed) { agreed = one; continue; }
+          if (agreed.result !== one.result) agreed.result = "";
+          if (!one.erases) agreed.erases = false;
+          if (!one.noop) agreed.noop = false;
+          if (!one.undoes) agreed.undoes = false;
+        }
+        agreed.blank = agreed.result === "none";
+        return agreed;
+      };
+      const mkAbove = mkParade(mkShapes[mkKey], mkSz);
+      const mkCount = (mkMasks[mkKey] || []).length;
+      // The masks that are ALREADY there, read before this call appends
+      // its own — the host reads them in the same place and for the same
+      // reason: a receipt that blamed the mask it just made would name
+      // the wrong thing.
+      const mkPrior = (mkMasks[mkKey] || []).slice();
+      const mkErases = (covered) => {
+        const o = mkOutcome(args && args.mode, args && args.inverted,
+                            covered, mkAbove);
+        return !!(o && o.blank);
+      };
+      /* Does the SHAPE cover every pixel of the layer box, rather than
+       * its bounding box? Measured 2026-09-03 (mask-ellipse-probe.js): at
+       * add_mask's default region an ellipse and its rectangle twin read
+       * OPPOSITE alpha at the four corners in all twelve compositing
+       * rows, and the ellipse leaves 0.202 of the layer showing under a
+       * 'subtract' where the rectangle leaves 0.000. Worked out from the
+       * geometry, not answered by name: a canned host that knows the
+       * verdicts cannot see a host that stopped computing them. */
+      const mkShapeCovers = (kind, l, t, r, b, sz, verts) => {
+        if (!sz) return false;
+        if (!(l <= 0 && t <= 0 && r >= sz.width && b >= sz.height)) {
+          return false;
+        }
+        if (kind === "ellipse") {
+          // An ellipse is convex and a rectangle is the hull of its four
+          // corners, so containment is exactly the four corner tests.
+          const cx = (l + r) / 2, cy = (t + b) / 2;
+          const rx = (r - l) / 2, ry = (b - t) / 2;
+          if (!(rx > 0) || !(ry > 0)) return false;
+          for (const x of [0, sz.width]) {
+            for (const y of [0, sz.height]) {
+              const dx = (x - cx) / rx, dy = (y - cy) / ry;
+              if (dx * dx + dy * dy > 1 + 1e-9) return false;
+            }
+          }
+          return true;
+        }
+        if (kind === "custom") {
+          if (!Array.isArray(verts) || verts.length !== 4) return false;
+          return verts.every(v => (v[0] === l || v[0] === r) &&
+                                  (v[1] === t || v[1] === b));
+        }
+        return true;
+      };
       if (mkSz && Array.isArray(mkB) && mkB.length >= 4) {
         const bl = Math.min(mkB[0], mkB[0] + mkB[2]);
         const br = Math.max(mkB[0], mkB[0] + mkB[2]);
@@ -2674,18 +3298,35 @@ function cannedOk(tool, args) {
         const bb = Math.max(mkB[1], mkB[1] + mkB[3]);
         if (bl <= 0 && bt <= 0 && br >= mkSz.width && bb >= mkSz.height &&
             (br - bl > mkSz.width || bb - bt > mkSz.height)) {
-          return { __err: "That mask covers ALL of '" + args.layer + "', " +
-            "so it hides nothing: the mask spans x " + bl + " to " + br +
+          const bigE = mkErases("all");
+          // The effect clause is a claim about pixels, so it is only made
+          // when the SHAPE covers the layer: a comp-sized ellipse does
+          // not, and can even miss the layer while its box contains it.
+          const bigKind = (args && args.shape) || "rectangle";
+          const bigCovers = mkShapeCovers(bigKind, bl, bt, br, bb, mkSz,
+                                          args && args.vertices);
+          return { __err: "That mask " +
+            (bigCovers
+              ? "covers ALL of '" + args.layer + "', so it " +
+                (bigE ? "hides the WHOLE layer" : "hides nothing")
+              : "is far bigger than '" + args.layer + "'" +
+                (bigKind === "ellipse"
+                  ? " (and an ellipse covers only the middle of its own " +
+                    "bounds)"
+                  : "")) +
+            ": the mask spans x " + bl + " to " + br +
             ", y " + bt + " to " + bb + " and the layer is only " +
             mkSz.width + "x" + mkSz.height + " at x 0 to " + mkSz.width +
             ", y 0 to " + mkSz.height + ". Mask coordinates are in LAYER " +
-            "space, not comp space. To show only the top half of this " +
-            "layer, mask bounds [0, 0, " + mkSz.width + ", " +
-            (mkSz.height / 2) + "]." };
+            "space, not comp space. To " + (bigE ? "cut away" : "show") +
+            " only the top half of this layer, mask bounds [0, 0, " +
+            mkSz.width + ", " + (mkSz.height / 2) + "]." };
         }
         if (br <= 0 || bl >= mkSz.width || bb <= 0 || bt >= mkSz.height) {
           return { __err: "That mask misses '" + args.layer + "' completely, " +
-            "so it would hide the whole layer: the mask spans x " + bl +
+            "so it would " + (mkErases("none") ? "hide the whole layer"
+                                               : "change nothing") +
+            ": the mask spans x " + bl +
             " to " + br + ", y " + bt + " to " + bb + " and the layer is " +
             mkSz.width + "x" + mkSz.height + " at x 0 to " + mkSz.width +
             ", y 0 to " + mkSz.height + ". Mask coordinates are in LAYER " +
@@ -2696,8 +3337,390 @@ function cannedOk(tool, args) {
       const held = mkMasks[mkKey] || (mkMasks[mkKey] = []);
       const mkName = (args && args.name) || ("Mask " + (held.length + 1));
       held.push(mkName);
-      return { layer: args && args.layer, mask: mkName,
-               shape: (args && args.shape) || "rectangle" };
+      const heldShapes = mkShapes[mkKey] || (mkShapes[mkKey] = []);
+      const mkOut = { layer: args && args.layer, mask: mkName,
+                      shape: (args && args.shape) || "rectangle" };
+      // ...and faithful to the host's warning too: a region the caller
+      // named EXPLICITLY that comes out exactly the layer's own box cuts
+      // nothing away, and a feather on it fades the layer's edge rather
+      // than blurring the picture. A canned host that answered from a
+      // constant here is how the class stayed invisible for row 32; this
+      // one works it out from the same geometry the host does.
+      const mkV = args && args.vertices;
+      let mkHit = null;
+      if (Array.isArray(mkB) && mkB.length >= 4) {
+        mkHit = { l: Math.min(mkB[0], mkB[0] + mkB[2]),
+                  r: Math.max(mkB[0], mkB[0] + mkB[2]),
+                  t: Math.min(mkB[1], mkB[1] + mkB[3]),
+                  b: Math.max(mkB[1], mkB[1] + mkB[3]) };
+      } else if (args && args.shape === "custom" && Array.isArray(mkV) &&
+                 mkV.length) {
+        const xs = mkV.map(v => v[0]), ys = mkV.map(v => v[1]);
+        mkHit = { l: Math.min.apply(null, xs), r: Math.max.apply(null, xs),
+                  t: Math.min.apply(null, ys), b: Math.max.apply(null, ys) };
+      } else if (mkSz) {
+        // With no region named the host's own default IS the layer's box,
+        // and the canned host had no model of that at all — which is why
+        // `add_mask {mode: 'subtract'}` looked harmless here while it
+        // emptied the layer in real AE.
+        mkHit = { l: 0, t: 0, r: mkSz.width, b: mkSz.height };
+      }
+      // A static, unfeathered, axis-aligned RECTANGLE or ELLIPSE can be
+      // read back — the same narrowness AELL_maskRegion has, and for the
+      // same reason: a feather hides by degrees, which all / some / none
+      // cannot say, while an ellipse is exact algebra and only needs the
+      // cells to be read both ways where it splits one (mkEllipseVsCell).
+      const mkShapeKind = (args && args.shape) || "rectangle";
+      let mkReadable = !(args && args.feather > 0) && !!mkHit;
+      if (mkShapeKind === "custom") {
+        // A custom mask counts only when its points really are the four
+        // corners of their own box — a diamond has the same box.
+        mkReadable = mkReadable && Array.isArray(mkV) && mkV.length === 4 &&
+          mkV.every(v => (v[0] === mkHit.l || v[0] === mkHit.r) &&
+                         (v[1] === mkHit.t || v[1] === mkHit.b));
+      }
+      // add_mask never sets opacity or expansion, so a mask it makes
+      // starts at 100 / 0 — but set_mask can move both afterwards, and
+      // the row has to carry them or no stub can see what that did.
+      heldShapes.push(mkHit
+        ? { l: mkHit.l, t: mkHit.t, r: mkHit.r, b: mkHit.b,
+            kind: mkShapeKind === "ellipse" ? "ellipse" : "rect",
+            mode: String((args && args.mode) || "add").toLowerCase(),
+            inverted: !!(args && args.inverted), opacity: 100, expansion: 0,
+            readable: mkReadable }
+        : { l: 0, t: 0, r: 0, b: 0, mode: "add", inverted: false,
+            opacity: 100, expansion: 0, readable: false });
+      const mkAsked = (Array.isArray(mkB) && mkB.length >= 4) ||
+                      (args && args.shape === "custom" && Array.isArray(mkV));
+      // 'lighten' sits with 'add' on a measurement: over the whole layer
+      // both read mean alpha 1.0 alone AND added second, so "every pixel
+      // still shows" holds whether or not the layer already had masks.
+      const mkPlain = !(args && args.inverted) &&
+                      (!(args && args.mode) ||
+                       String(args.mode).toLowerCase() === "add" ||
+                       String(args.mode).toLowerCase() === "lighten");
+      // The SHAPE's coverage, not its bounding box's. `mkBoxCovers` is
+      // the weaker fact and is worth exactly one sentence: an ellipse
+      // whose box is the layer's leaves the four corners, so a call that
+      // would have emptied the layer empties all but those.
+      const mkBoxCovers = !!(mkSz && mkHit && mkHit.l <= 0 && mkHit.t <= 0 &&
+                             mkHit.r >= mkSz.width && mkHit.b >= mkSz.height);
+      const mkCovers = !!(mkHit && mkShapeCovers(mkShapeKind, mkHit.l,
+        mkHit.t, mkHit.r, mkHit.b, mkSz, mkV));
+      // A region that spills PAST the layer. The canned host had the flag
+      // and never the sentence, so every real-AE step that reads the note
+      // passed on an absent one. Set here, above the four branches that
+      // return early, because the host sets `out.note` unconditionally —
+      // they cannot in fact coexist (a mask that sticks out AND contains
+      // the layer box is refused as "far bigger"), and a canned host that
+      // relies on that is one edit away from being wrong quietly.
+      const mkOver = !!(mkSz && mkHit &&
+        (mkHit.l < 0 || mkHit.t < 0 ||
+         mkHit.r > mkSz.width || mkHit.b > mkSz.height));
+      if (mkOver) {
+        mkOut.note = "The mask spans x " + mkHit.l + " to " + mkHit.r +
+          ", y " + mkHit.t + " to " + mkHit.b + ", past '" + args.layer +
+          "' (" + mkSz.width + "x" + mkSz.height + " at x 0 to " +
+          mkSz.width + ", y 0 to " + mkSz.height + ") — the part outside " +
+          "the layer does nothing.";
+      }
+      // The other end of that same coverage: the mask that leaves NOTHING.
+      // A layer vanishing on an `ok` is the expensive direction, so unlike
+      // "cuts nothing away" this one does not wait to be asked — the
+      // tool's own default region under 'subtract' erases the layer.
+      const mkWord = String((args && args.mode) || "add").toLowerCase();
+      const mkOut2 = mkCovers
+        ? mkOutcome(args && args.mode, args && args.inverted, "all", mkAbove)
+        : null;
+      const mkPhrase = (one, many) => (mkCount === 1 ? one : many);
+      if (mkCovers && mkErases("all")) {
+        let why;
+        if (!(args && args.inverted) && mkWord === "difference") {
+          // The row the above-probe was written for: 'difference' inverts
+          // what the masks above it show, so over masks showing every
+          // pixel it leaves none.
+          why = "'difference' over the whole layer INVERTS what the " +
+            mkPhrase("mask", mkCount + " masks") + " already on it show" +
+            mkPhrase("s", "") + ", and " + mkPhrase("it was", "they were") +
+            " showing every pixel — so nothing is left";
+        } else if (args && args.inverted) {
+          why = "'inverted' turns a mask covering the whole layer into one " +
+            "covering none of it, so '" + mkWord + "' keeps nothing";
+        } else {
+          why = "a 'subtract' mask over the whole layer cuts every pixel away";
+        }
+        let fix;
+        if (!(args && args.inverted) && mkWord === "difference") {
+          fix = "Leave this mask out, or pass 'bounds' for the part to " +
+            "CUT AWAY.";
+        } else if (args && args.inverted) {
+          fix = "Drop 'inverted', or pass 'bounds' for the part to KEEP.";
+        } else {
+          fix = "Pass 'bounds' for the part to CUT AWAY, or mode 'add' with " +
+            "the part to KEEP.";
+        }
+        mkOut.warning = "That mask hides ALL of '" + args.layer + "'" +
+          (args && args.feather > 0 ? " except a soft fringe at its edge" : "") +
+          ": " + why + (args && args.feather > 0
+            ? ", and the feather only fades that CUT edge — it does not " +
+              "blur the picture. To blur the picture: apply_effect {layer: " +
+              "\"" + args.layer + "\", effect: \"Gaussian Blur\"}. "
+            : ". ") + fix;
+        return mkOut;
+      }
+      // The ELLIPSE twin of that erasure. Measured: the ellipse inscribed
+      // in the layer box under 'subtract' leaves the four corners at full
+      // alpha and 0.202 of the layer showing, where the rectangle twin
+      // leaves 0.000 — so "hides ALL" was false, and silence would be
+      // worse, because what the caller gets is four corner slivers.
+      // Gated on the layer carrying no compositing mask yet: over one add
+      // mask on the left half the same call reads corners 0.5.
+      if (!mkCovers && mkBoxCovers && mkShapeKind === "ellipse" &&
+          mkAbove === "nothing" &&
+          (() => {
+            const o = mkOutcome(args && args.mode, args && args.inverted,
+                                "all", mkAbove);
+            return !!(o && o.blank);
+          })()) {
+        mkOut.warning = "That mask hides all of '" + args.layer + "' EXCEPT " +
+          "the four corners of its box (" + mkSz.width + "x" + mkSz.height +
+          " at x 0 to " + mkSz.width + ", y 0 to " + mkSz.height + "): an " +
+          "ellipse only covers the middle of the bounds it is given, so " +
+          "about a fifth of the layer is left showing in the corners. For " +
+          "a clean cut pass 'bounds' for the part to CUT AWAY, or shape " +
+          "'rectangle' to take the whole layer." +
+          ((args && args.feather > 0)
+            ? " The feather only fades that cut edge — it does not blur " +
+              "the picture. To blur the picture: apply_effect {layer: \"" +
+              args.layer + "\", effect: \"Gaussian Blur\"}."
+            : "");
+        return mkOut;
+      }
+      // The FOURTH outcome: the mask that switches the others off. It
+      // does not wait to be asked — the layer visibly changes, and the
+      // tool's own default region is the whole layer box. Not for an
+      // ellipse, whose four vertices bound the layer but whose shape
+      // leaves the corners — which `mkCovers` now says by itself.
+      if (mkCovers &&
+          mkOut2 && mkOut2.undoes) {
+        mkOut.warning = "That mask covers all of '" + args.layer + "' (" +
+          mkSz.width + "x" + mkSz.height + " at x 0 to " + mkSz.width +
+          ", y 0 to " + mkSz.height + "), so every pixel of it shows " +
+          "again: the " + mkPhrase("mask", mkCount + " masks") +
+          " already on it " + mkPhrase("stops", "stop") + " hiding " +
+          "anything" +
+          ((!(args && args.inverted) && mkWord === "difference")
+            ? " ('difference' over the whole layer INVERTS what they show)"
+            : "") + ". Pass 'bounds' for the part you want to KEEP, or " +
+          "leave this mask out to keep the masking already there." +
+          ((args && args.feather > 0)
+            ? " Its feather has no cut edge to fade — it does not blur " +
+              "the picture. To blur the picture: apply_effect {layer: \"" +
+              args.layer + "\", effect: \"Gaussian Blur\"}."
+            : "");
+        return mkOut;
+      }
+      if (mkCovers && mkPlain && mkAsked) {
+        const mkAll = "That mask covers all of '" + args.layer + "' (" +
+          mkSz.width + "x" + mkSz.height + " at x 0 to " + mkSz.width +
+          ", y 0 to " + mkSz.height + "), so it cuts nothing away";
+        mkOut.warning = (args && args.feather > 0)
+          ? mkAll + " — its feather only fades the layer's OUTER EDGE, it " +
+            "does not blur the picture. To blur the picture: apply_effect " +
+            "{layer: \"" + args.layer + "\", effect: \"Gaussian Blur\"}."
+          : mkAll + " — every pixel of it still shows. Pass 'bounds' for " +
+            "the part you want to KEEP.";
+        return mkOut;
+      }
+      // THE NO-OP THE `mkAsked` GATE MUST NOT SILENCE, modelled because a
+      // canned host that kept the gate would PASS the three real-AE steps
+      // below while proving nothing — the same vacuous-step class the last
+      // three passes each had to fix. Over masks that already hide every
+      // pixel, subtract/intersect/darken leave the layer at nothing
+      // WHATEVER region they are handed, so neither the default region
+      // nor a set_mask_path written later could rescue the call; and
+      // `mkCovers` is not what makes it a no-op either, so a NAMED
+      // half-layer region was just as silent.
+      const mkSubtractive = (mkWord === "subtract" || mkWord === "intersect" ||
+                             mkWord === "darken");
+      // `mkOver` gates the no-op sentence BELOW, which reads `mkCovers`,
+      // and not this one, which reads the parade: a region that spills
+      // past the layer is still a region, and subtract takes nothing from
+      // an already-hidden layer wherever it is pointed. The note stays
+      // beside the warning — it is the only place the span is named.
+      let nWhy = "", nFix = "";
+      if (mkAbove === "none" && mkSubtractive) {
+        nWhy = "the " + mkPhrase("mask", mkCount + " masks") +
+          " already on it " + mkPhrase("hides", "hide") + " all of it, " +
+          "so there is nothing left for this one to take";
+        // "Pass 'bounds'" is false here — no region works — so the fix
+        // names the masking that IS hiding the layer instead.
+        nFix = "No region can change that: it is the masking already on " +
+          "the layer that hides it" +
+          (mkPrior.length
+            ? " (" + mkPrior.slice(0, 4).join(", ") +
+              (mkPrior.length > 4
+                ? " … and " + (mkPrior.length - 4) + " more"
+                : "") +
+              ") — set_mask {mask: \"" + mkPrior[0] + "\", mode: \"none\"} " +
+              "switches one off, or delete_mask {mask: \"" + mkPrior[0] +
+              "\"} removes it."
+            : ".");
+      // mode 'none' is out of this branch and nowhere else: it changes
+      // nothing at ANY region, and it is a path carrier.
+      } else if (mkCovers && !mkPlain && mkAsked && mkWord !== "none" &&
+                 !mkOver && mkOut2 && mkOut2.noop) {
+        if (args && args.inverted) {
+          nWhy = "'inverted' turns a mask covering the whole layer into one " +
+            "covering NONE of it, so '" + mkWord + "' " +
+            ((mkWord === "subtract" || mkAbove === "nothing")
+              ? "takes nothing away"
+              : "leaves the mask above it exactly as it was");
+        } else {
+          nWhy = "'" + mkWord + "' over the whole layer keeps everything " +
+            "that already showed";
+        }
+        nFix = (args && args.inverted &&
+                String(args.mode).toLowerCase() !== "subtract")
+          ? "Pass 'bounds' for the part you want to CUT AWAY."
+          : "Pass 'bounds' for the part you want to KEEP.";
+      }
+      if (nWhy) {
+        mkOut.warning = "That mask changes nothing on '" + args.layer +
+          "' (" + mkSz.width + "x" + mkSz.height + " at x 0 to " +
+          mkSz.width + ", y 0 to " + mkSz.height + "): " + nWhy +
+          (args && args.feather > 0
+            ? ", and the feather has no cut edge to fade — it does not " +
+              "blur the picture. To blur the picture: apply_effect " +
+              "{layer: \"" + args.layer + "\", effect: \"Gaussian Blur\"}. "
+            : ". ") + nFix;
+      }
+      return mkOut;
+    }
+    case "set_mask": {
+      // The canned host had NO set_mask case at all, so it answered every
+      // call permissively — which is exactly why no stub could see the
+      // class the chat probe measured on 2026-09-03: set_mask {feather}
+      // on a MASKLESS layer answered "(several masks — pass {mask:
+      // name|index}). Masks here: (none — add_mask creates one)", and the
+      // model took the last clause as an instruction. Faithful to
+      // AELL_findMask now, zero branch and all.
+      const smKey = ((args && args.comp) || "") + "|" +
+                    ((args && args.layer) || "");
+      const sm = mkMasks[smKey] || [];
+      let smRef = args && args.mask;
+      if (typeof smRef === "string" && /^\d+$/.test(smRef)) smRef = Number(smRef);
+      let smAt = -1;
+      if (typeof smRef === "number") smAt = Math.round(smRef) - 1;
+      else if (smRef !== undefined && smRef !== null && smRef !== "") {
+        smAt = sm.indexOf(String(smRef));
+      } else if (sm.length === 1) smAt = 0;
+      if (smAt < 0 || smAt >= sm.length) {
+        if (sm.length === 0) {
+          // Feather ALONE is the "soften it" ask, and it is the one a mask
+          // cannot answer on a layer that has none — so it goes to the
+          // blur and add_mask is deliberately NOT named.
+          const smFeather = (args &&
+            (typeof args.feather === "number" || Array.isArray(args.feather)));
+          const smOther = !!(args && (args.mode ||
+            typeof args.inverted === "boolean" ||
+            typeof args.expansion === "number" ||
+            typeof args.opacity === "number" || args.name));
+          if (smFeather && !smOther) {
+            return { __err: "'" + args.layer + "' has no masks — and a " +
+              "mask feather softens a mask EDGE, never the picture. To " +
+              "soften/blur '" + args.layer + "' itself: apply_effect " +
+              "{layer: \"" + args.layer + "\", effect: \"Gaussian Blur\"}." };
+          }
+          return { __err: "'" + args.layer + "' has no masks — nothing to " +
+            "change. add_mask creates one." };
+        }
+        return { __err: "Mask not found on '" + args.layer + "'" +
+          (smRef ? ": " + smRef : " (several masks — pass {mask: name|index})") +
+          ". Masks here: " + sm.join(", ") };
+      }
+      /* THE EDIT ITSELF, applied to the row this host holds for that
+       * mask — it used to answer straight from the arguments, so a
+       * `set_mask {opacity: 0}` that empties the layer and one that
+       * changes nothing read identically and no stub could tell them
+       * apart. That is the same unfaithfulness the link_property pass
+       * found one file over. */
+      const smRow = (mkShapes[smKey] || [])[smAt] || null;
+      const smSz = mkSizes[smKey];
+      const smBefore = mkParade(mkShapes[smKey], smSz);
+      const smChanged = [];
+      if (args && args.mode) {
+        if (smRow) smRow.mode = String(args.mode).toLowerCase();
+        smChanged.push("mode=" + args.mode);
+      }
+      if (args && typeof args.inverted === "boolean") {
+        if (smRow) smRow.inverted = args.inverted;
+        smChanged.push("inverted=" + args.inverted);
+      }
+      if (args && (typeof args.feather === "number" ||
+                   Array.isArray(args.feather))) {
+        // A feather hides by degrees, so the row stops being readable —
+        // the same narrowness the shape and the opacity have.
+        const smF = Array.isArray(args.feather) ? args.feather[0]
+                                                : args.feather;
+        if (smRow && smF > 0) smRow.readable = false;
+        smChanged.push("feather=" + args.feather);
+      }
+      if (args && typeof args.expansion === "number") {
+        if (smRow) smRow.expansion = args.expansion;
+        smChanged.push("expansion=" + args.expansion);
+      }
+      if (args && typeof args.opacity === "number") {
+        if (smRow) smRow.opacity = args.opacity;
+        smChanged.push("opacity=" + args.opacity);
+      }
+      if (args && args.name) {
+        sm[smAt] = String(args.name);
+        smChanged.push("name=" + args.name);
+      }
+      if (!smChanged.length) {
+        return { __err: "Nothing to change — pass mode, feather, " +
+          "expansion, opacity, inverted and/or name" };
+      }
+      const smOut = { layer: args.layer, mask: sm[smAt],
+                      changed: smChanged.join(", ") };
+      const smAfter = mkParade(mkShapes[smKey], smSz);
+      // A rename moves no pixels; every other argument is a claim about
+      // what the layer looks like.
+      const smVisual = !!(args && (args.mode ||
+        typeof args.inverted === "boolean" ||
+        typeof args.opacity === "number" ||
+        typeof args.feather === "number" || Array.isArray(args.feather) ||
+        typeof args.expansion === "number"));
+      const smKind = smVisual ? mkEditKind(smBefore, smAfter) : "";
+      const smZero = !!(args && typeof args.opacity === "number" &&
+                        Number(args.opacity) === 0);
+      if (smKind === "erases") {
+        smOut.warning = "Nothing of '" + args.layer + "' shows now: " +
+          smOut.changed + " leaves every pixel of it masked out." +
+          (smZero
+            ? " Mask opacity 0 is not an off switch: it drops what '" +
+              sm[smAt] + "' lets through to zero. To switch a mask off " +
+              "and leave the layer showing, set_mask {mask: \"" +
+              sm[smAt] + "\", mode: \"none\"}; to undo this, opacity 100."
+            : " Set it back to undo this, or delete_mask {mask: \"" +
+              sm[smAt] + "\"} to remove the mask.");
+      } else if (smKind === "undoes") {
+        smOut.warning = "Every pixel of '" + args.layer + "' shows again: " +
+          "after " + smOut.changed + " the masks on it stop hiding " +
+          "anything." + (smZero
+            ? " Mask opacity 0 drops what '" + sm[smAt] + "' lets " +
+              "through to zero, so it takes nothing away."
+            : "");
+      } else if (smKind === "noop") {
+        let smWhy = "no mask on it composites — every mask here is mode " +
+          "'none', a path carrier.";
+        if (smAfter === "all") smWhy = "every pixel of it already showed.";
+        if (smAfter === "none") smWhy = "it was already masked out completely.";
+        smOut.warning = "That changed nothing on '" + args.layer + "': " +
+          smOut.changed + ", and " + smWhy;
+      }
+      return smOut;
     }
     case "delete_mask": {
       // Faithful to the host's three refusals and to AELL_findMask: one
@@ -2721,8 +3744,43 @@ function cannedOk(tool, args) {
           (ref ? ": " + ref : " (several masks — pass {mask: name|index})") +
           ". Masks here: " + dm.join(", ") };
       }
+      // Read as a PICTURE before and after, the same way the host does —
+      // a canned host that answered a bare ok here would let four of the
+      // new steps pass while proving nothing, which is exactly what this
+      // file did for set_mask one pass ago.
+      const dmSz = mkSizes[dmKey];
+      const dmBefore = mkParade(mkShapes[dmKey], dmSz);
       const gone = dm.splice(at, 1)[0];
-      return { layer: args.layer, removed: gone, remainingMasks: dm.slice() };
+      if (mkShapes[dmKey]) mkShapes[dmKey].splice(at, 1);
+      const dmAfter = mkParade(mkShapes[dmKey], dmSz);
+      const dmOut = { layer: args.layer, removed: gone,
+                      remainingMasks: dm.slice() };
+      const dmPlural = dm.length === 1 ? "mask" : "masks";
+      const dmVerb = dm.length === 1 ? "hides" : "hide";
+      const dmKind = mkGoneKind(dmBefore, dmAfter);
+      if (dmKind === "erases" && dm.length) {
+        dmOut.warning = "Nothing of '" + args.layer + "' shows now: with '" +
+          gone + "' gone, the " + dmPlural + " left on it (" +
+          dm.join(", ") + ") " + dmVerb + " every pixel of it. Ctrl+Z " +
+          "puts '" + gone +
+          "' back; add_mask can draw a new one that reveals it, or " +
+          "set_mask {mask: \"" + dm[0] + "\", mode: \"none\"} switches one " +
+          "of the survivors off.";
+      } else if (dmKind === "undoes" && dm.length) {
+        // Gated on a survivor: deleting a layer's LAST mask and getting
+        // the whole layer back is the tool working, and remainingMasks
+        // already says it.
+        dmOut.warning = "Every pixel of '" + args.layer + "' shows again: " +
+          "with '" + gone + "' gone, the " + dmPlural + " left on it (" +
+          dm.join(", ") + ") " + dmVerb + " nothing of it.";
+      } else if (dmKind === "noop") {
+        dmOut.warning = "That changed nothing about what '" + args.layer +
+          "' shows: " + (dmAfter === "none"
+            ? "it was already masked out completely and still is."
+            : "every pixel of it showed before '" + gone +
+              "' went, and still does.");
+      }
+      return dmOut;
     }
     case "set_mask_path": {
       // Faithful to the host's rules, not to its happy path: keys that
@@ -2961,6 +4019,10 @@ function cannedOk(tool, args) {
       mkSizes[((args && args.comp) || "") + "|" + ((args && args.name) || "")] =
         { width: (args && args.width) || 100,
           height: (args && args.height) || 100 };
+      // Adding a layer puts it on TOP, which is index 1 in AE.
+      gridStack[(args && args.comp) || ""] =
+        [String((args && args.name) || "solid")].concat(
+          gridStack[(args && args.comp) || ""] || []);
       if (args && /Self-Test Frame/.test(String(args.comp || ""))) {
         frLayers[args.comp] = (frLayers[args.comp] || []);
         frLayers[args.comp].unshift(String(args.name || "solid"));
@@ -2981,6 +4043,15 @@ function cannedOk(tool, args) {
       if (inCapAudio(args)) capAudio.push({ name: args.name, audio: false });
       return { name: (args && args.name) || "ST Square" };
     case "apply_effect":
+      // An effect is DOUBT, not animation: some animate on their own at
+      // zero keyframes (CC Particle World, Radio Waves), so the warning
+      // stays quiet once a target carries one.
+      moTargets(args).forEach(nm => { moOf(args, nm).fx += 1; });
+      if (String((args && args.effect) || "") === "Drop Shadow") {
+        dsOn = true;
+        return { layer: args.layer, effect: "Drop Shadow",
+                 matchName: "ADBE Drop Shadow", params: DS_ROSTER };
+      }
       if (inCapAudio(args)) {
         if (String(args.effect) !== "Tone") {
           return { __err: "Effect not available: " + args.effect };
@@ -3024,8 +4095,47 @@ function cannedOk(tool, args) {
         batSolidFx[args.layer] = args.effect;
         return { layer: args.layer, effect: args.effect };
       }
+      if (inRbComp(args)) {
+        const rbAdd = String((args && args.effect) || "");
+        rbFxOf(args.layer).push(rbAdd);
+        return { layer: args.layer, effect: rbAdd,
+                 matchName: "ADBE " + rbAdd, params: rbRoster(rbAdd) };
+      }
       return { done: true };
     case "remove_effect": {
+      // The rollback comp, per LAYER. Every refusal here is the argFault
+      // class -- nothing written, and the message already says what is
+      // there -- which is the whole point of the 0.11.31 steps.
+      if (inRbComp(args)) {
+        const rbPar = rbFxOf(args.layer);
+        if (!rbPar.length) {
+          return { __err: "'" + args.layer + "' has no effects at all — " +
+            "nothing to remove, and no other effect name will match " +
+            "either.", __argFault: true };
+        }
+        const rbWant = String((args && args.effect) || "");
+        if (!rbWant) {
+          return { __err: "'effect' is required (display name or " +
+            "matchName). Effects on '" + args.layer + "': " +
+            rbPar.join(", "), __argFault: true };
+        }
+        if (rbPar.indexOf(rbWant) === -1) {
+          return { __err: "No effect '" + rbWant + "' on '" + args.layer +
+            "'. Effects here: " + rbPar.join(", ") + " — pass one of " +
+            "those display names (or its matchName). apply_effect adds " +
+            "one that is missing.", __argFault: true };
+        }
+        rbPar.splice(rbPar.indexOf(rbWant), 1);
+        return { layer: args.layer, removed: rbWant,
+                 matchName: "ADBE " + rbWant,
+                 remainingEffects: rbPar.slice() };
+      }
+      if (String((args && args.effect) || "") === "Drop Shadow" && dsOn) {
+        dsOn = false;
+        return { layer: args.layer, removed: "Drop Shadow",
+                 matchName: "ADBE Drop Shadow",
+                 remainingEffects: ["Gaussian Blur"] };
+      }
       // The coverage rig's parade: the controls add_control put there
       // (AE lists them as effects too) then the blurs, in AE's order.
       // Every blur shares the one matchName, so a matchName call matches
@@ -3066,7 +4176,71 @@ function cannedOk(tool, args) {
       }
       return out;
     }
+    case "set_effect_param": {
+      if (String((args && args.effect) || "") === "Drop Shadow") {
+        const dsName = dsFold(args && args.param);
+        if (!dsName) {
+          return { __err: dsMiss(args && args.param,
+            'list_properties {layer: "' + (args && args.layer) +
+            '", path: "effects/Drop Shadow"} shows types and current ' +
+            'values.') };
+        }
+        if (dsName === "Distance") dsDistance = Number(args.value);
+        return { layer: args && args.layer, effect: "Drop Shadow",
+                 param: dsName, value: Number(args && args.value) };
+      }
+      // Only the batch comp's Gaussian Blur is modelled by name; that is
+      // where the value-shape steps run, and a roster invented for the
+      // other comps would be a lie.
+      if (inRbComp(args)) {
+        const rbE = String((args && args.effect) || "");
+        const rbP = String((args && args.param) || "");
+        if (rbFxOf(args.layer).indexOf(rbE) === -1) {
+          return { __err: "Effect not found on layer: " + rbE +
+            ". Effects on '" + args.layer + "': " +
+            (rbFxOf(args.layer).join(", ") || "(none)") +
+            ". apply_effect adds one that is missing.", __argFault: true };
+        }
+        const rbNames = rbRoster(rbE);
+        if (rbNames.indexOf(rbP) === -1) {
+          // The same sentence AELL_paramMissMsg builds: the concept map
+          // first ("Radius" means Blur Radius here), then the roster.
+          const near = rbNames.filter(n => n.toLowerCase()
+            .indexOf(rbP.toLowerCase()) !== -1);
+          let msg = "Parameter not found: " + rbP;
+          if (near.length) msg += " — on '" + rbE + "' that is: " +
+            near.join(", ") + ".";
+          else msg += ".";
+          msg += " '" + rbE + "' has: " + rbNames.join(", ") + ". " +
+            'list_properties {layer: "' + args.layer + '", path: ' +
+            '"effects/' + rbE + '"} shows types and current values.';
+          return { __err: msg, __argFault: true };
+        }
+        rbFxParams[rbE + "/" + rbP] = Number(args && args.value);
+        return { layer: args.layer, effect: rbE, param: rbP,
+                 value: Number(args && args.value) };
+      }
+      const bad = badValueRefusal(args && args.value,
+        String((args && args.effect) || "") + "/" +
+        String((args && args.param) || ""), "number",
+        batchBlur === null ? null : batchBlur,
+        "effect." + String((args && args.effect) || "") + "." +
+        String((args && args.param) || ""));
+      if (bad) return { __err: bad };
+      if (/Batch/.test(String((args && args.comp) || "")) &&
+          /Blurriness/.test(String((args && args.param) || ""))) {
+        batchBlur = Number(args.value);
+      }
+      return { layer: args && args.layer, effect: args && args.effect,
+               param: args && args.param,
+               value: Number(args && args.value) };
+    }
     case "set_transform": {
+      const badT = badValueRefusal(args && args.value,
+        String((args && args.property) || ""),
+        args && args.property === "position" ? "array" : "number",
+        null, String((args && args.property) || ""));
+      if (badT) return { __err: badT };
       const shows = drivenShows(args && args.layer, args && args.property);
       if (shows !== null) {
         // Accepted and invisible: the honest answer names the value that
@@ -3389,6 +4563,16 @@ function cannedOk(tool, args) {
                      "\"}" };
     }
     case "add_keyframe": {
+      if (args && /^effect\.Drop Shadow\./.test(String(args.property || ""))) {
+        const dotted = String(args.property).slice("effect.Drop Shadow.".length);
+        const hit = dsFold(dotted);
+        if (!hit) {
+          return { __err: dsMiss(dotted,
+            "Name it as effect.Drop Shadow.<one of those>.") };
+        }
+        return { layer: args.layer, property: args.property,
+                 time: args.time, numKeys: 1 };
+      }
       if (!args || typeof args.time !== "number") {
         return { __err: "'time' (seconds) required" };
       }
@@ -3403,6 +4587,7 @@ function cannedOk(tool, args) {
                numKeys: ks.length };
     }
     case "remove_keyframes": {
+      moTargets(args).forEach(nm => { moOf(args, nm).keys = 0; });
       if (inWpComp(args)) {
         const wp = String((args && args.property) || "");
         const wts = wpTargets(args);
@@ -3661,6 +4846,12 @@ function cannedOk(tool, args) {
         }
         return { layer: args.layer, root: "effects", count: n,
                  properties: rows, note: "" };
+      }
+      if (/^effects$/i.test(P) && inRbComp(args)) {
+        const rbPar = rbFxOf(args.layer);
+        return { layer: args.layer, root: "effects", count: rbPar.length,
+                 properties: rbPar.map(n => ({ path: "effects/" + n,
+                   matchName: "ADBE " + n, kind: "group" })), note: "" };
       }
       if (inTx(args)) {
         if (P === "Text/Animators") {
@@ -4661,7 +5852,12 @@ function cannedOk(tool, args) {
 function cannedResult(tool, args) {
   if (!documented(tool)) return { ok: false, error: "Unknown tool: " + tool };
   const d = cannedOk(tool, args);
-  return d && d.__err ? { ok: false, error: d.__err } : { ok: true, data: d };
+  if (!d || !d.__err) return { ok: true, data: d };
+  // A NAMING refusal wrote nothing and says what does exist, so the round
+  // rollback leaves the rest of the round alone (AELL_errArg, 0.11.23).
+  const out = { ok: false, error: d.__err };
+  if (d.__argFault) out.argFault = true;
+  return out;
 }
 
 // Which tools mutate, read out of hostscript.jsx rather than copied, so
@@ -4675,6 +5871,12 @@ const MUTATING_NAMES = (function () {
 assert(MUTATING_NAMES.has("add_solid") && !MUTATING_NAMES.has("get_property"),
        "the mutating list parses out of hostscript (" +
        MUTATING_NAMES.size + " tools)");
+// The one rule the canned batch runner below COPIES rather than derives.
+// If hostscript drops the exemption, the copy would keep the suite green
+// against a panel that had gone back to eating its own successful work.
+assert(/function AELL_errArg\(msg\)/.test(hostSrc) &&
+       /if \(argBad === badMut\) \{/.test(hostSrc),
+       "hostscript still exempts NAMING refusals from the round rollback");
 
 // Many tools in ONE host call. Faithful to AELL_callBatch on three points
 // the suite measures: one row per command, in order; a failing row does
@@ -4694,6 +5896,8 @@ function cannedBatch(cmds, opts, cb) {
   // canned host that only rewound layers let a step assert an item-level
   // rollback that never happened.
   const rbBefore = rbLayers.slice();
+  const rbFxBefore = rbFxCopy(rbFx);
+  const rbFxParamsBefore = Object.assign({}, rbFxParams);
   const itemsBefore = {
     comps: createdComps.slice(),
     createCount,
@@ -4706,15 +5910,32 @@ function cannedBatch(cmds, opts, cb) {
     })()
   };
   const rows = cmds.map(c => cannedResult(c.tool, c.args || {}));
-  let okMut = 0, badMut = 0, firstError = "";
+  let okMut = 0, badMut = 0, argBad = 0, firstError = "";
   cmds.forEach((c, i) => {
     if (!MUTATING_NAMES.has(c.tool)) return;
     if (rows[i].ok) { okMut++; return; }
     badMut++;
+    if (rows[i].argFault) argBad++;
     if (!firstError) firstError = c.tool + ": " + rows[i].error;
   });
-  if (opts.rollback && okMut && badMut) {
+  // 0.11.23: a round whose ONLY failures are NAMING refusals wrote
+  // nothing that needs undoing, so it keeps its successes and the first
+  // refusal carries the sentence that stops the model redoing the round.
+  if (opts.rollback && okMut && badMut && argBad === badMut) {
+    for (let i = 0; i < rows.length; i++) {
+      if (!rows[i].ok && rows[i].argFault) {
+        rows[i].error += " The other commands in this round were APPLIED " +
+          "and are still there — do NOT send them again. Only THIS " +
+          "command did nothing: re-send just it with the name " +
+          "corrected, or drop it if what it asked for is not there at " +
+          "all.";
+        break;
+      }
+    }
+  } else if (opts.rollback && okMut && badMut) {
     rbLayers = rbBefore;
+    rbFx = rbFxCopy(rbFxBefore);
+    rbFxParams = rbFxParamsBefore;
     createdComps.length = 0;
     Array.prototype.push.apply(createdComps, itemsBefore.comps);
     createCount = itemsBefore.createCount;
@@ -4787,13 +6008,20 @@ SelfTest.run({
     ordStack = [];
     mattes = {};
     mtRig = {};
-    maskKeys = {};
-    mkMasks = {}; mkSizes = {};
+    maskKeys = {}; motion = {};
+    mkMasks = {}; mkShapes = {}; mkSizes = {}; gridStack = {}; gridExpr = {};
     batchLayers = 0; batchFx = {}; batchBlur = null;
-    batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetWpRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetBoundsRig(); resetPresetRig(); resetRqRig(); resetAuRig(); resetFrRig(); resetCapRig(); resetMgRig();
+    dsOn = false; dsDistance = 5;
+    batSolids = []; batSolidFx = {}; batSolidPos = {}; exprHere = {}; seenLayerNames = {}; rbLayers = []; rbFx = {}; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetWpRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetBoundsRig(); resetPresetRig(); resetRqRig(); resetAuRig(); resetFrRig(); resetCapRig(); resetMgRig();
+    // ONE call fails, not one TOOL: the suite grids more than once (the
+    // nine squares, then the backdrop rig), and failing every grid_layout
+    // would fail four steps and stop measuring what this asserts — that a
+    // single failing step surfaces and the run still finishes its cleanup.
+    let boomLeft = 1;
     SelfTest.run({
       callHostTool(tool, args, cb) {
-        if (tool === "grid_layout") {
+        if (tool === "grid_layout" && boomLeft > 0) {
+          boomLeft--;
           cb({ ok: false, error: "boom" });
           return;
         }
@@ -4820,10 +6048,11 @@ SelfTest.run({
         ordStack = [];
         mattes = {};
         mtRig = {};
-        maskKeys = {};
-        mkMasks = {}; mkSizes = {};
+        maskKeys = {}; motion = {};
+        mkMasks = {}; mkShapes = {}; mkSizes = {}; gridStack = {}; gridExpr = {};
         batchLayers = 0; batchFx = {}; batchBlur = null;
-        batSolids = []; batSolidFx = {}; batSolidPos = {}; rbLayers = []; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetWpRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetBoundsRig(); resetPresetRig(); resetRqRig(); resetAuRig(); resetFrRig(); resetCapRig(); resetMgRig();
+    dsOn = false; dsDistance = 5;
+        batSolids = []; batSolidFx = {}; batSolidPos = {}; exprHere = {}; seenLayerNames = {}; rbLayers = []; rbFx = {}; rnRenamedTo = null; scUnique = []; lights = {}; resetCoverRig(); resetWpRig(); resetPcRig(); resetTxRig(); resetShapeRig(); resetBoundsRig(); resetPresetRig(); resetRqRig(); resetAuRig(); resetFrRig(); resetCapRig(); resetMgRig();
         SelfTest.run({
           callHostTool(tool, args, cb) {
             // Never refuse anything -- the old permissive host.

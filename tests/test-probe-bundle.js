@@ -515,5 +515,1054 @@ function hostsIn(xml) {
          "both ends agree has two chances to break");
 }
 
+// ------------------------- 5. the probe has to survive its OWN last run
+//
+// Measured 2026-09-03 on Premiere 26.3.2, three unattended runs back to
+// back:
+//
+//   * a scratch .prproj handed to Premiere on the command line is NOT
+//     opened. app.project.name was still empty after the full 30s wait,
+//     and on the way out Premiere raised "This file path does not exist
+//     on disk at this location. <that path>" about a 14216-byte file
+//     that WAS on disk. Nobody can answer that modal unattended, so the
+//     close timed out and the instance had to be forced.
+//   * the same with a scratch written by a CLEAN close: identical, so
+//     the file's history is not the discriminator.
+//   * the same run with the file moved aside: app.newProject created
+//     the project, `history` measured for the first time, and Premiere
+//     closed by itself.
+//
+// app.newProject will not overwrite a taken path (it returns false and
+// leaves an AELL_PROBE_SCRATCH<guid> sidecar), so a probe that saves a
+// scratch project for "next time" poisons its own next run: the first
+// run of the night passes and every one after it fails. That is the
+// exact shape an unattended loop must never inherit, and it is what
+// these assertions hold shut.
+{
+  const runner = read(path.join(ROOT, "scripts", "run-ppro-probe.ps1"));
+  // Line-based, like the Set-Content check above: a comment EXPLAINING
+  // that we no longer pass a project path reads, to a regex, exactly
+  // like a line passing one.
+  const runnerCode = runner.split(/\r?\n/)
+    .filter(function (l) { return !/^\s*#/.test(l); }).join("\n");
+
+  const launches = runnerCode.match(/Start-Process[^\n]*\$PremierePath[^\n]*/g) || [];
+  assert(launches.length > 0, "run-ppro-probe.ps1 launches Premiere");
+  assert(launches.filter(function (l) { return /-ArgumentList/.test(l); }).length === 0,
+         "and never hands it a project path: Premiere does not open one " +
+         "given on the command line, it raises a modal nobody can answer");
+
+  const idxFree = runnerCode.indexOf("AELL_PROBE_SCRATCH*");
+  const idxLaunch = runnerCode.indexOf("Start-Process -FilePath $PremierePath");
+  assert(idxFree !== -1,
+         "it clears the scratch path it is about to ask for");
+  assert(idxFree !== -1 && idxLaunch !== -1 && idxFree < idxLaunch,
+         "and does it BEFORE the launch, so app.newProject meets a free " +
+         "path instead of returning false against a taken one");
+
+  const jsx = stripJs(read(path.join(PROBE, "jsx", "probe.jsx")));
+  const flat = jsx.replace(/\s+/g, " ");
+  assert(/app\.openDocument\(/.test(flat),
+         "probe.jsx opens an EXISTING scratch project with openDocument, " +
+         "the call newProject cannot stand in for");
+  const call = /app\.openDocument\(([^)]*)\)/.exec(flat);
+  assert(call && (call[1].match(/true/g) || []).length === 4,
+         "and passes all four suppress-the-dialog flags, because a modal " +
+         "with nobody at the keyboard is a hang, not an error");
+  assert(flat.indexOf("app.openDocument(") !== -1 &&
+         flat.indexOf("app.openDocument(") < flat.indexOf("app.newProject("),
+         "and tries it BEFORE creating, which is the order the failure " +
+         "was measured in");
+  assert(/d\.openDocument = AELLP_typeOf/.test(jsx) &&
+         /d\.newProject = AELLP_typeOf/.test(jsx),
+         "hostFacts records whether each of the two routes exists at all");
+}
+
+// ------------------------------------ 8. the job reaches the battery
+//
+// Both doors used to build the battery's arguments from a hand-written
+// whitelist, and there were two copies of it. The job grew `seedMedia`
+// and `readyTimeoutMs`; neither whitelist grew with it; the dialog-free
+// sequence route never ran on a single unattended run and never showed
+// up in the step's own `tried` list, so the failure read as "that route
+// does not apply here" instead of "that route was never given its
+// argument". This section makes a dropped field a red test rather than
+// a wasted Premiere launch.
+{
+  const BEGIN = "/* BATTARGS-SHARED-BEGIN";
+  const END = "/* BATTARGS-SHARED-END */";
+  function shared(file) {
+    const src = read(file);
+    const a = src.indexOf(BEGIN);
+    const b = src.indexOf(END);
+    return (a === -1 || b === -1) ? null : src.slice(a, b + END.length);
+  }
+  const doorPanel = shared(path.join(PROBE, "index.html"));
+  const door3 = shared(path.join(HARNESS, "index.html"));
+
+  assert(doorPanel && door3,
+         "both doors carry the shared battArgs block");
+  assert(doorPanel && door3 && doorPanel === door3,
+         "and the two copies are byte-identical: a whitelist maintained " +
+         "twice is a whitelist that goes stale once");
+
+  // The PowerShell runner is the only author of a real job, so it -- not
+  // this test's imagination -- says which fields have to survive.
+  const ps = read(path.join(ROOT, "scripts", "run-ppro-probe.ps1"));
+  const jobBlock = /\$job\s*=\s*\[ordered\]@\{([\s\S]*?)\n\}/.exec(ps);
+  assert(jobBlock, "run-ppro-probe.ps1 still builds the job as one literal");
+  const jobKeys = (jobBlock ? jobBlock[1].split(/\r?\n/) : [])
+    .filter(function (l) { return !/^\s*#/.test(l); })
+    .map(function (l) { const m = /^\s*([A-Za-z_]\w*)\s*=/.exec(l); return m && m[1]; })
+    .filter(Boolean);
+  assert(jobKeys.indexOf("seedMedia") !== -1 &&
+         jobKeys.indexOf("readyTimeoutMs") !== -1,
+         "the job it writes carries seedMedia and readyTimeoutMs -- the " +
+         "two the old whitelist lost");
+
+  if (door3) {
+    // Run the real block, not a regex impression of it.
+    const battArgsOf = new Function(door3 + "\nreturn AELLP_battArgs;")();
+    const job = {};
+    jobKeys.forEach(function (k, i) { job[k] = "v" + i; });
+    const out = battArgsOf(job, "P:/progress.json", "M:/fallback.mogrt");
+
+    const runnerOwned = ["probeJsx", "probe", "args", "createdAt", "__claimed"];
+    const lost = jobKeys.filter(function (k) {
+      return runnerOwned.indexOf(k) === -1 && !(k in out);
+    });
+    assert(lost.length === 0,
+           "every job field the runner does not own reaches the battery" +
+           (lost.length ? " (lost: " + lost.join(", ") + ")" : ""));
+    assert(out.seedMedia === job.seedMedia &&
+           out.readyTimeoutMs === job.readyTimeoutMs,
+           "including seedMedia and readyTimeoutMs, by value");
+    assert(!("probeJsx" in out) && !("args" in out),
+           "and the runner's own fields stay with the runner");
+    assert(out.progressPath === "P:/progress.json",
+           "progressPath comes from the door, which is the only one that " +
+           "knows where the breadcrumb goes");
+    assert(battArgsOf({}, null, "M:/fallback.mogrt").mogrtPath ===
+             "M:/fallback.mogrt" &&
+           battArgsOf({ mogrtPath: "J:/from-job.mogrt" }, null,
+                      "M:/fallback.mogrt").mogrtPath === "J:/from-job.mogrt",
+           "the panel's found .mogrt is a FALLBACK, never an override");
+
+    // A future field must not need either door edited, which is the
+    // whole point of dropping the whitelist.
+    assert(battArgsOf({ somethingNew: 7 }, null, null).somethingNew === 7,
+           "a field neither door has heard of is forwarded anyway");
+  }
+
+  [[PROBE, "the visible panel"], [HARNESS, "the door-3 runner"]]
+    .forEach(function (pair) {
+      const code = stripJs(read(path.join(pair[0], "index.html")));
+      assert(/battArgs\s*=\s*(job\.args\s*\|\|\s*)?AELLP_battArgs\(/.test(code),
+             pair[1] + " builds battArgs with the shared function");
+      assert(!/battArgs\s*=\s*(job\.args\s*\|\|\s*)?\{/.test(code),
+             "and not from an object literal listing the fields it " +
+             "remembered (" + pair[1] + ")");
+    });
+}
+
+// --------------- 9. the clip just added is found by DIFF, not by index
+//
+// FIELD FAILURE 2026-09-03 (Premiere 26.3.2, run -0413): `importMGT`
+// landed -- track 0 grew 1 -> 2 -- and the probe then read the clip back
+// as `clips[after - 1]` and got `icon-normal.png`, the seed still the
+// sequence had been built from. `getMGTComponent` on that clip answers
+// null, and null there reads exactly like "this build cannot read a
+// MOGRT's controllers back": a conclusion about Premiere drawn from
+// asking the wrong clip. The graphic lands at its insertion TIME, so the
+// new clip can be anywhere in the collection and the LAST index is not
+// "the one just added".
+//
+// This drives the REAL diff out of probe.jsx against a track built here.
+{
+  const psrc = read(path.join(PROBE, "jsx", "probe.jsx"));
+
+  // The caller may not quietly go back to indexing. This runs FIRST so
+  // it still reports on a tree where the helpers are gone altogether --
+  // "went back to indexing" is the regression, and it must not be
+  // swallowed by the drive-out below failing to evaluate.
+  const mogrt = /AELLP_PROBES\.mogrtAccept = function[\s\S]*?\n\};/.exec(psrc);
+  assert(!!mogrt, "probe.jsx still defines mogrtAccept as one function");
+  const mbody = stripJs(mogrt ? mogrt[0] : "");
+  assert(!/clips\s*\[\s*after\s*-\s*1\s*\]/.test(mbody),
+         "mogrtAccept does not read the landed clip as clips[after - 1]");
+  assert(/AELLP_newClip\s*\(/.test(mbody),
+         "it identifies the clip with AELLP_newClip");
+  assert(/pickedBy/.test(mbody),
+         "and the receipt records HOW the clip was picked -- a fact " +
+         "measured off a fallback pick is weaker evidence than one off " +
+         "a clean diff, and the reader has to be able to tell");
+
+  const grab = function (name) {
+    const re = new RegExp("function " + name + "\\([^)]*\\) \\{[\\s\\S]*?\\n\\}");
+    const m = re.exec(psrc);
+    assert(!!m, "probe.jsx defines " + name);
+    return m ? m[0] : "";
+  };
+  const bundle = [grab("AELLP_say"), grab("AELLP_safe"),
+                  grab("AELLP_clipSnap"), grab("AELLP_clipId"),
+                  grab("AELLP_newClip")].join("\n");
+  let api = null;
+  try {
+    api = new Function(bundle +
+      "\nreturn { snap: AELLP_clipSnap, id: AELLP_clipId, diff: AELLP_newClip };")();
+  } catch (e) {
+    assert(false, "the clip-diff helpers evaluate on their own: " + e.message);
+  }
+
+  // A track whose clips answer the way Premiere's TrackItems do:
+  // `.name`, `.start.ticks`, and `.nodeId` where the build has one.
+  function seqOf(clips) {
+    const coll = { numItems: clips.length };
+    clips.forEach(function (c, i) {
+      coll[i] = {
+        get name() {
+          if (c.name === undefined) { throw new Error("no name"); }
+          return c.name;
+        },
+        get start() {
+          if (c.ticks === undefined) { throw new Error("no start"); }
+          return { ticks: c.ticks };
+        },
+        get nodeId() {
+          if (c.node === "throws") { throw new Error("no nodeId"); }
+          return c.node;
+        }
+      };
+    });
+    return { videoTracks: [{ clips: coll }] };
+  }
+  function newOf(before, after) {
+    if (!api) { return { how: "helpers-missing", clip: null, added: [] }; }
+    return api.diff(api.snap(seqOf(before), 0), api.snap(seqOf(after), 0));
+  }
+
+  // (a) the exact shape that failed in the field: the graphic went in at
+  //     time 0 and the seed slid to the END of the collection.
+  {
+    const seed = { name: "icon-normal.png", ticks: "0", node: "n-seed" };
+    const seedMoved = { name: "icon-normal.png", ticks: "8467200000",
+                        node: "n-seed" };
+    const gfx = { name: "AELL MOGRT Probe", ticks: "0", node: "n-gfx" };
+    const got = newOf([seed], [gfx, seedMoved]);
+    assert(got.how === "diff" && got.clip && got.clip.index === 0,
+           "the new clip is the one the BEFORE picture cannot account " +
+           "for, even when it is not last (got index " +
+           String(got.clip && got.clip.index) + ")");
+    assert(got.clip && got.clip.name === "AELL MOGRT Probe",
+           "and it is the graphic, not the seed that clips[after - 1] " +
+           "handed back in run -0413");
+  }
+
+  // (b) identity survives a build with no readable nodeId: name + start
+  //     ticks is the fallback, and it is a MULTISET compare, so a clip
+  //     that merely SHARES a name with an existing one is not new.
+  {
+    const got = newOf(
+      [{ name: "A.png", ticks: "0" }, { name: "A.png", ticks: "200" }],
+      [{ name: "A.png", ticks: "0" }, { name: "A.png", ticks: "100" },
+       { name: "A.png", ticks: "200" }]);
+    assert(got.how === "diff" && got.clip && got.clip.index === 1,
+           "with no nodeId, name+start finds the inserted clip among " +
+           "same-named neighbours");
+    const thrown = newOf(
+      [{ name: "A.png", ticks: "0", node: "throws" }],
+      [{ name: "A.png", ticks: "0", node: "throws" },
+       { name: "G", ticks: "50", node: "throws" }]);
+    assert(thrown.how === "diff" && thrown.clip && thrown.clip.name === "G",
+           "a nodeId read that THROWS falls back too -- AELLP_safe's " +
+           "\"throws: ...\" string is not an identity");
+  }
+
+  // (c) the honest refusal. If two clips are unaccounted for, or none
+  //     is, there is no measurement -- and the probe has to SAY that
+  //     rather than fall back to an index, because an index guess is
+  //     what produced the wrong answer in the first place.
+  {
+    const ambiguous = newOf(
+      [{ name: "A", ticks: "0" }],
+      [{ name: "A", ticks: "0" }, { name: "G1", ticks: "10" },
+       { name: "G2", ticks: "20" }]);
+    assert(/^ambiguous/.test(ambiguous.how) && ambiguous.clip === null,
+           "two unaccounted-for clips is 'ambiguous', not a guess");
+    const none = newOf(
+      [{ name: "A", ticks: "0" }, { name: "B", ticks: "10" }],
+      [{ name: "A", ticks: "0" }, { name: "B", ticks: "10" }]);
+    assert(none.how === "no-new-clip" && none.clip === null,
+           "and a track whose clips are all accounted for yields no clip");
+    const blind = newOf(
+      [{ ticks: "0", node: "throws" }],
+      [{ ticks: "0", node: "throws" }, { ticks: "10", node: "throws" }]);
+    assert(blind.clip === null,
+           "a build where NOTHING identifies a clip refuses too, rather " +
+           "than calling every clip new");
+  }
+
+}
+
+// ------- 10. the grader reads BOTH artifacts, newest row wins, and says
+//             which file every row came from
+//
+// The defect: `ppro-probe-report.js` built every row from
+// runtime-<HOST>.json, which only the VISIBLE panel writes when a human
+// clicks its buttons. job-result.json -- where an unattended
+// run-ppro-probe.ps1 puts the WHOLE battery -- was read into
+// `collected.jobResult` and then never used by a single row. So after
+// the first all-green unattended run the report still printed
+// `FAIL MOGRT ... clip count did not grow (1 -> 1)` off a click from
+// the previous day, and `G0: NOT MEASURED`. A report confidently about
+// a different artifact is the same failure class as the last-index
+// guess §9 above just removed.
+{
+  const rep = require("../scripts/ppro-probe-report.js");
+
+  // A minimal unattended result, shaped exactly like the real one.
+  function jobResult(over) {
+    const j = {
+      door: 3,
+      startedAt: "2026-09-03T09:09:41.632Z",
+      finishedAt: "2026-09-03T09:10:20.961Z",
+      host: { appName: "PPRO", appVersion: "26.3.2", appLocale: "en_US" },
+      via: "invisible runner (door 3)",
+      ok: true,
+      parsed: { ok: true },
+      battery: { steps: [
+        { step: "ping", ok: true, data: { pong: true, engineName: "NewWorld",
+            fileName: "/x/probe/jsx/probe.jsx" } },
+        { step: "hostFacts", ok: true, data: { engineName: "NewWorld",
+            btAppName: "premierepro", beginUndoGroup: "undefined",
+            executeCommand: "undefined", enableQE: "function" } },
+        { step: "qe", ok: true, data: { qeProject: "object", effectCount: 236 } },
+        { step: "project", ok: true, data: { via: "created",
+            name: "AELL_PROBE_SCRATCH.prproj" } },
+        { step: "sequence", ok: true, data: { via: "created",
+            active: "AELL PROBE SEQ", videoTracks: 3 } },
+        { step: "history", ok: true, data: { mutated: true,
+            instruction: "count the entries" } },
+        { step: "mogrt", ok: true, data: { before: 1, after: 2, landed: true,
+            pickedBy: "diff", controllerCount: 4, namesReadable: true } },
+        { step: "cleanup", ok: true, data: { removed: ["AELL PROBE SEQ"] } }
+      ] }
+    };
+    if (over) { Object.keys(over).forEach(function (k) { j[k] = over[k]; }); }
+    return j;
+  }
+
+  // The panel file the field failure was graded from: OLDER, and its
+  // MOGRT attempt failed.
+  function panelFile(takenAt) {
+    return {
+      takenAt: takenAt || "2026-09-02T20:51:46.828Z",
+      panel: { cepPresent: true, appName: "PPRO", appVersion: "26.3.2",
+               appdata: "C:\\Users\\mr\\AppData\\Roaming",
+               cepApiVersion: { major: "12" },
+               node: { fs: true, http: true, child_process: true } },
+      storage: { note: "no other host's key visible" },
+      mogrtAccept: { before: 1, after: 1, landed: false,
+                     error: "clip count did not grow (1 -> 1)" }
+    };
+  }
+
+  function rowOf(graded, claimStart) {
+    return graded.rows.filter(function (r) {
+      return r.claim.indexOf(claimStart) === 0;
+    })[0];
+  }
+
+  // (a) the adapter: an unattended battery reads as a runtime result.
+  {
+    const asRuntime = rep.fromJobResult(jobResult());
+    assert(asRuntime && asRuntime.host === "PPRO",
+           "fromJobResult attributes the battery to the host it names");
+    assert(asRuntime.takenAt === "2026-09-03T09:10:20.961Z",
+           "and is dated by when the battery FINISHED, so it can be " +
+           "compared with the panel file's takenAt");
+    assert(asRuntime.hostFacts.btAppName === "premierepro" &&
+           asRuntime.qe.qeProject === "object" &&
+           asRuntime.mogrtAccept.landed === true,
+           "the battery's steps land under the keys the grader reads");
+    assert(asRuntime.evalScript.ok === true && asRuntime.probeLoad,
+           "a parsed envelope plus an answering ping IS an evalScript " +
+           "round-trip and IS proof probe.jsx loaded -- the runner has no " +
+           "separate row for either");
+    assert(asRuntime.panel.node === undefined &&
+           asRuntime.panel.appdata === undefined,
+           "what the runner never measures stays ABSENT rather than " +
+           "guessed: Node modules and APPDATA are panel-side rows");
+    assert(rep.fromJobResult({ battery: { steps: [] } }) === null,
+           "a job result that does not name a host is not attributed to one");
+    assert(rep.fromJobResult(null) === null &&
+           rep.fromJobResult({ __unreadable: "bad json" }) === null,
+           "no job result, or an unreadable one, is not a source");
+  }
+
+  // (b) newest wins per ROW, and the older artifact still fills the gaps.
+  {
+    const collected = { dir: "d", hosts: { PPRO: panelFile() },
+                        jobResult: jobResult() };
+    const g = rep.gradeHost("PPRO", rep.sourcesFor("PPRO", collected));
+    const mogrt = rowOf(g, "MOGRT");
+    assert(mogrt.state === "MEASURED" && /^landed/.test(String(mogrt.value)),
+           "the MOGRT row comes from the NEWER battery, not from " +
+           "yesterday's failed click -- the field defect verbatim");
+    assert(mogrt.from === "job-result.json" && mogrt.stale === false,
+           "and the row says which artifact it came from");
+    const node = rowOf(g, "Node: child_process");
+    assert(node.state === "MEASURED" && node.from === "runtime-PPRO.json" &&
+           node.stale === true,
+           "a fact only the older panel file has is still MEASURED -- but " +
+           "flagged as coming from the older artifact, because 'measured " +
+           "yesterday' and 'measured in the run you just watched' are " +
+           "different claims");
+    const soak = rowOf(g, "engine soak");
+    assert(soak.state === "MISSING" && soak.from === null,
+           "a row NEITHER artifact measures is MISSING with no source");
+    assert(rowOf(g, "battery: every step passed").value.indexOf("8/8") === 0,
+           "the battery's own steps are graded too");
+    assert(rowOf(g, "a sequence to work in").value ===
+           "created AELL PROBE SEQ, 3 video tracks",
+           "including the ones with no panel equivalent at all");
+  }
+
+  // (c) the merge is by DATE, not by file: a fresh click beats an old
+  //     battery just as surely as the other way round.
+  {
+    const stale = jobResult({ finishedAt: "2026-09-01T00:00:00.000Z" });
+    const g = rep.gradeHost("PPRO", rep.sourcesFor("PPRO",
+      { dir: "d", hosts: { PPRO: panelFile("2026-09-02T20:51:46.828Z") },
+        jobResult: stale }));
+    const mogrt = rowOf(g, "MOGRT");
+    assert(mogrt.from === "runtime-PPRO.json" && mogrt.state === "FAILED",
+           "with the battery OLDER, the newer panel file wins the same row " +
+           "-- and its failure is reported, not hidden by the older pass");
+    assert(rowOf(g, "BridgeTalk.appName").stale === true,
+           "and the older battery's exclusive facts are marked stale");
+  }
+
+  // (d) a battery from a DIFFERENT host is never merged into this one.
+  {
+    const aeJob = jobResult({ host: { appName: "AEFT", appVersion: "26.3" } });
+    const g = rep.gradeHost("PPRO", rep.sourcesFor("PPRO",
+      { dir: "d", hosts: { PPRO: panelFile() }, jobResult: aeJob }));
+    assert(rowOf(g, "MOGRT").from === "runtime-PPRO.json",
+           "an AEFT job result does not answer a PPRO row");
+    assert(!rowOf(g, "battery: every step passed"),
+           "and contributes no battery rows to PPRO");
+  }
+
+  // (e) a failed battery step is a measured FAIL, never a quiet pass.
+  {
+    const broken = jobResult();
+    broken.battery.steps[4] = { step: "sequence", ok: false,
+                                data: { error: "Illegal Parameter type" } };
+    const g = rep.gradeHost("PPRO", rep.sourcesFor("PPRO",
+      { dir: "d", hosts: {}, jobResult: broken }));
+    assert(rowOf(g, "battery: every step passed").state === "FAILED",
+           "one failed step fails the battery row");
+    assert(rowOf(g, "a sequence to work in").state === "FAILED",
+           "and the step's own row carries its error");
+  }
+
+  // (f) G0 reads both artifacts, and an ABSENT reading is UNMEASURED --
+  //     never a measured FAIL. The old gate printed
+  //     "FAIL evalScript ... envelope parsed" when there was no
+  //     evalScript result at all: wrong in both halves of one line.
+  {
+    const g0 = rep.gradeG0({ dir: "d", hosts: { PPRO: panelFile() },
+                             jobResult: jobResult() });
+    const es = g0.checks.filter(function (c) {
+      return c.name.indexOf("evalScript") === 0; })[0];
+    assert(es.pass === true && es.from === "job-result.json",
+           "G0's evalScript row is answered by the unattended battery");
+    const node = g0.checks.filter(function (c) {
+      return c.name.indexOf("CEP Node") === 0; })[0];
+    assert(node.pass === true && node.from === "runtime-PPRO.json",
+           "and its Node row by the panel file, in the same report");
+
+    const bare = rep.gradeG0({ dir: "d", hosts: { PPRO: { takenAt: "x",
+      panel: { cepPresent: true, appName: "PPRO" } } } });
+    const bareEs = bare.checks.filter(function (c) {
+      return c.name.indexOf("evalScript") === 0; })[0];
+    assert(bareEs.unmeasured === true && bareEs.pass === false,
+           "no evalScript result anywhere is UNMEASURED, not a measured FAIL");
+    assert(!/envelope parsed/.test(String(bareEs.detail)),
+           "and the detail beside it does not claim an envelope parsed");
+    const bareNode = bare.checks.filter(function (c) {
+      return c.name.indexOf("CEP Node") === 0; })[0];
+    assert(bareNode.unmeasured === true,
+           "an unTAKEN Node inventory is unmeasured too");
+    assert(bare.measured === false && bare.pass === false,
+           "so the gate as a whole is NOT MEASURED");
+  }
+
+  // (g) the whole report still builds off a folder holding only a job
+  //     result -- the exact state an unattended run leaves behind.
+  {
+    const r = rep.report({ dir: "d", exists: true, hosts: {},
+                           jobResult: jobResult() });
+    const ppro = r.hosts.filter(function (h) { return h.host === "PPRO"; })[0];
+    assert(ppro.present === true,
+           "a host with no panel file but a battery result is PRESENT");
+    assert(ppro.sources.length === 1 && ppro.sources[0].file ===
+           "job-result.json",
+           "and its sources line names the one artifact that spoke");
+    const aeft = r.hosts.filter(function (h) { return h.host === "AEFT"; })[0];
+    assert(aeft.present === false,
+           "while AEFT, which nothing measured, is still reported absent");
+  }
+
+  // (h) a panel file that will not parse is a finding, and must not
+  //     swallow the battery result standing beside it.
+  {
+    const r = rep.report({ dir: "d", exists: true,
+      hosts: { PPRO: { __unreadable: "Unexpected end of JSON input" } },
+      jobResult: jobResult() });
+    const ppro = r.hosts.filter(function (h) { return h.host === "PPRO"; })[0];
+    assert(ppro.rows[0].state === "FAILED" &&
+           /JSON/.test(String(ppro.rows[0].value)),
+           "an unreadable runtime-PPRO.json is reported as a FAILED row");
+    assert(rowOf(ppro, "MOGRT").from === "job-result.json",
+           "and the battery beside it is still graded -- a corrupt panel " +
+           "file is not a reason to lose the run nobody watched");
+  }
+}
+
+// ----------- 11. the soak is DRIVEN BY THE DOOR, and a partial one is
+//                 never a pass
+//
+// THE HOLE, filed 2026-09-03: G0 was three-of-four rows ok and NOT
+// MEASURED on the fourth forever. The 500-round-trip engine soak lived
+// ONLY as a click handler in the visible panel's index.html, so however
+// green the unattended battery came back, no unattended run could ever
+// close the gate. "Add it to the battery" is the obvious fix and it is
+// the wrong one: the degradation being measured ("InternalError: Stack
+// overrun" on a long-lived engine) accumulates per evalScript ENTRY, so
+// 500 iterations INSIDE one evalScript would measure nothing and report
+// green -- a false pass on the one row the gate was still honest about.
+//
+// So the loop lives on the CEP side, shared by both doors, and this
+// section drives the REAL implementation out of the page.
+{
+  const BEGIN = "/* SOAK-SHARED-BEGIN";
+  const END = "/* SOAK-SHARED-END */";
+  function shared(file) {
+    const src = read(file);
+    const a = src.indexOf(BEGIN);
+    const b = src.indexOf(END);
+    return (a === -1 || b === -1) ? null : src.slice(a, b + END.length);
+  }
+  const panelBlock = shared(path.join(PROBE, "index.html"));
+  const door3Block = shared(path.join(HARNESS, "index.html"));
+
+  assert(panelBlock && door3Block, "both doors carry the shared soak block");
+  assert(panelBlock === door3Block,
+         "and the two copies are byte-identical -- the same rule the " +
+         "battArgs block learned: a thing maintained twice goes stale once");
+
+  // The soak must NOT be a step inside probe.jsx: a loop that never
+  // crosses the CEP boundary cannot see the degradation, and a step
+  // named "soak" in the battery would read as if it had.
+  const probeJsx = read(path.join(PROBE, "jsx", "probe.jsx"));
+  assert(!/step\("soak"/.test(probeJsx),
+         "probe.jsx has no soak STEP -- 500 iterations inside one " +
+         "evalScript would measure nothing and grade green");
+  assert(/AELLP_PROBES\.echo\s*=/.test(probeJsx),
+         "it carries only the echo PAYLOAD, which the door calls once " +
+         "per round trip");
+
+  const api = new Function(
+    panelBlock +
+    "\nreturn { soak: AELLP_soak, args: AELLP_soakArgs, " +
+    "check: AELLP_soakCheck, pad: AELLP_SOAK_PAD };")();
+
+  /** Drive the real loop synchronously with a fake clock and callback. */
+  function run(opts, oneRound) {
+    let clock = 0;
+    let out = null;
+    const pending = [];
+    api.soak(
+      Object.assign({ now: function () { return clock; },
+                      later: function (fn) { pending.push(fn); } }, opts),
+      function (round, cb) { clock += (opts.msPerRound || 1); oneRound(round, cb); },
+      opts.onProgress || null,
+      function (res) { out = res; });
+    // The loop hands its continuation to `later`; drain it here instead
+    // of waiting on a real event loop.
+    let guard = 0;
+    while (pending.length && guard++ < 100000) { pending.shift()(); }
+    return out;
+  }
+
+  // (a) the happy path: every round answers, the verdict is the claim.
+  {
+    const seen = [];
+    const res = run({ rounds: 500 }, function (round, cb) {
+      seen.push(round);
+      cb(api.check(null, { round: round, pad: api.pad }));
+    });
+    assert(res.rounds === 500 && res.total === 500 && res.failedAt === null,
+           "500 answered round trips is 500 rounds and no failure");
+    assert(seen.length === 500 && seen[0] === 1 && seen[499] === 500,
+           "and the door really made 500 SEPARATE round trips, numbered " +
+           "1..500 -- the whole point of not looping inside the engine");
+    assert(res.verdict === "survived 500 round-trips",
+           "the verdict is the sentence the gate grades");
+    assert(!res.skipped, "and it claims no skip");
+  }
+
+  // (b) a degraded engine is named by its round, not by a boolean.
+  {
+    const res = run({ rounds: 500 }, function (round, cb) {
+      cb(round === 137 ? "InternalError: Stack overrun" : null);
+    });
+    assert(res.failedAt === 137 && res.rounds === 136,
+           "the round that died is the one reported, and the rounds that " +
+           "survived are counted separately");
+    assert(res.verdict === "DEGRADED at round 137" &&
+           /Stack overrun/.test(res.error),
+           "the verdict names the round and keeps the engine's own words");
+  }
+
+  // (c) A SHORT REPLY IS A DEGRADED ENGINE, not a passing round. This is
+  //     the check that makes the payload size worth having: an engine
+  //     that answers but truncates has failed, and a soak that only
+  //     asked "did it throw" would call that survival.
+  {
+    assert(api.check(null, { pad: api.pad }) === null,
+           "a full payload passes the round");
+    assert(/short payload/.test(String(api.check(null, { pad: 12 }))),
+           "a truncated one does not");
+    assert(/no data/.test(String(api.check(null, null))),
+           "and an empty reply is a failure with its own words");
+    assert(api.check("evalScript itself failed", null) ===
+             "evalScript itself failed",
+           "an error from the door is passed through unchanged");
+    const res = run({ rounds: 10 }, function (round, cb) {
+      cb(api.check(null, { round: round, pad: round === 4 ? 12 : api.pad }));
+    });
+    assert(res.failedAt === 4 && /short payload/.test(res.error),
+           "so a short reply at round 4 DEGRADES the soak there");
+  }
+
+  // (d) THE ONE THIS SECTION EXISTS FOR: a soak that ran out of wall
+  //     clock is UNMEASURED, never survival. The gate's claim is "500
+  //     round-trips"; 137 of them does not support it, and reporting
+  //     "survived" for a truncated run would be exactly the false pass
+  //     the whole grader exists to refuse.
+  {
+    const res = run({ rounds: 500, budgetMs: 200, msPerRound: 1 },
+                    function (round, cb) { cb(null); });
+    assert(res.rounds < 500 && res.failedAt === null,
+           "the budget stopped it early without blaming the engine");
+    assert(typeof res.skipped === "string" && /budget/.test(res.skipped) &&
+           /not the claim/.test(res.skipped),
+           "and it says SKIPPED with the reason, which the grader reads " +
+           "as unmeasured");
+    assert(/^STOPPED at round /.test(res.verdict) &&
+           res.verdict.indexOf("survived") === -1,
+           "the verdict never contains the word 'survived'");
+
+    const rep11 = require("../scripts/ppro-probe-report.js");
+    const gated = {
+      dir: "d",
+      hosts: { PPRO: {
+        panel: { cepPresent: true, appName: "PPRO", appVersion: "26.3",
+                 node: { child_process: true, fs: true, http: true } },
+        evalScript: { ok: true, ping: { engineName: "NewWorld" } },
+        soak: res
+      } }
+    };
+    const g = rep11.gradeG0(gated);
+    assert(g.measured === false && g.pass === false,
+           "G0 over a budget-truncated soak is NOT MEASURED -- the run " +
+           "that stopped at round " + res.rounds + " must not close the gate");
+  }
+
+  // (e) progress is reported so a hang can name its round. Without this
+  //     breadcrumb the soak runs after the battery's LAST flush, and a
+  //     hang would print an all-ok battery and no reason at all.
+  {
+    const ticks = [];
+    run({ rounds: 100, progressEvery: 25,
+          onProgress: function (ran, total) { ticks.push(ran + "/" + total); } },
+        function (round, cb) { cb(null); });
+    assert(ticks.join(" ") === "25/100 50/100 75/100 100/100",
+           "the soak ticks every 25 rounds, which is what the runner " +
+           "writes to job-soak-progress.json");
+  }
+
+  // (f) the door-3 runner really wires it: asked for, run after the
+  //     battery, and refused rather than faked when the probe never
+  //     loaded.
+  {
+    const h = stripJs(read(path.join(HARNESS, "index.html")));
+    assert(/job\.soakRounds/.test(h),
+           "the runner takes the round count from the JOB, so an " +
+           "unattended run controls it");
+    assert(/runSoak\(ok,/.test(h) && /soak: soak/.test(h),
+           "it runs the soak with the battery's verdict in hand and puts " +
+           "the result in job-result.json beside the battery");
+    assert(/job-soak-progress\.json/.test(h),
+           "with its own breadcrumb file, not the battery's");
+    assert(/AELLP_soakArgs\(round\)/.test(h) &&
+           /AELLP_soakCheck\(err, data\)/.test(h),
+           "and it uses the shared payload and the shared check, so both " +
+           "doors grade a round trip by one rule");
+
+    // The refusal that keeps a load failure from reading as degradation:
+    // the visible panel once logged "DEGRADED at round 1" when probe.jsx
+    // had simply never been evaluated.
+    assert(/if \(!batteryOk\) \{/.test(h) &&
+           /nothing[\s\S]{0,40}to soak/.test(h),
+           "a run whose battery never came back reports SKIPPED, never " +
+           "DEGRADED -- a probe that did not load is not a broken engine");
+
+    const p = stripJs(read(path.join(PROBE, "index.html")));
+    assert(/AELLP_soak\(\{ rounds: 500 \}/.test(p),
+           "and the panel's button drives the same shared loop, so the " +
+           "click and the unattended run cannot drift apart");
+  }
+
+  // (g) A RUN THAT NEVER TRIED must not answer the row. The picker takes
+  //     the NEWEST source that has a value, so an unattended run writing
+  //     `soak: {skipped:"we did not ask"}` would displace a real
+  //     measurement from the panel file with our own silence.
+  {
+    const rep11 = require("../scripts/ppro-probe-report.js");
+    const h = stripJs(read(path.join(HARNESS, "index.html")));
+    assert(/whenDone\(null\);/.test(h),
+           "with soakRounds 0 the runner reports NO soak reading at all");
+    assert(/soakNote = /.test(h) && /soakNote: soakNote/.test(h),
+           "the reason lives in soakNote, which no row grades");
+
+    const noSoak = rep11.fromJobResult({
+      host: { appName: "PPRO" }, finishedAt: "2026-09-03T10:00:00.000Z",
+      parsed: { ok: true }, ok: true,
+      soak: null, soakNote: "this run did not ask for a soak",
+      battery: { steps: [{ step: "ping", ok: true, data: { pong: true } }] }
+    });
+    assert(noSoak.soak === null,
+           "so the adapter offers nothing for that row");
+
+    const withSoak = rep11.fromJobResult({
+      host: { appName: "PPRO" }, finishedAt: "2026-09-03T10:00:00.000Z",
+      parsed: { ok: true }, ok: true,
+      soak: { rounds: 500, total: 500, failedAt: null,
+              verdict: "survived 500 round-trips" },
+      battery: { steps: [{ step: "ping", ok: true, data: { pong: true } }] }
+    });
+    assert(withSoak.soak && withSoak.soak.failedAt === null,
+           "and a soak the runner DID take reaches the grader from " +
+           "job-result.json -- the whole point of the change");
+
+    // End to end, in the shape the field produces: an OLD panel file
+    // with no soak and a NEW unattended run that took one closes G0.
+    const r = rep11.report({
+      dir: "d", exists: true,
+      hosts: { PPRO: {
+        takenAt: "2026-09-02T20:51:46.828Z",
+        panel: { cepPresent: true, appName: "PPRO", appVersion: "26.3.2",
+                 node: { fs: true, http: true, child_process: true } }
+      } },
+      jobResult: {
+        host: { appName: "PPRO", appVersion: "26.3.2" },
+        finishedAt: "2026-09-03T10:00:00.000Z",
+        parsed: { ok: true }, ok: true, via: "invisible runner (door 3)",
+        soak: { rounds: 500, total: 500, failedAt: null, ms: 7100,
+                verdict: "survived 500 round-trips" },
+        battery: { steps: [
+          { step: "ping", ok: true, data: { pong: true, engineName: "NewWorld",
+              fileName: "/x/probe.jsx" } }
+        ] }
+      }
+    });
+    assert(r.g0.measured === true && r.g0.pass === true,
+           "G0 PASSES on an unattended run for the first time -- the row " +
+           "that was structurally unclosable is closed");
+    const soakCheck = r.g0.checks.filter(function (c) {
+      return /soak/.test(c.name);
+    })[0];
+    assert(soakCheck.from === "job-result.json",
+           "and the report names the unattended artifact as its source, " +
+           "not the panel click that never happened");
+  }
+
+  // (h) the PowerShell runner is the only author of a real job, so it
+  //     has to ask for the soak and budget it inside its own timeout.
+  {
+    const ps = read(path.join(ROOT, "scripts", "run-ppro-probe.ps1"));
+    assert(/soakRounds\s*=\s*\$SoakRounds/.test(ps) &&
+           /soakBudgetMs\s*=\s*\(\$SoakBudgetSec \* 1000\)/.test(ps),
+           "run-ppro-probe.ps1 writes soakRounds and soakBudgetMs into " +
+           "the job");
+    assert(/\[int\]\$SoakRounds = 500/.test(ps),
+           "and asks for 500 by default, which is the claim G0 grades");
+    assert(/job-soak-progress\.json/.test(ps),
+           "it reads the soak's breadcrumb when there is no result, so a " +
+           "hang in round 300 names itself");
+    assert(/\$res\.soak\.skipped/.test(ps) && /UNMEASURED/.test(ps),
+           "and a skipped soak prints UNMEASURED rather than passing");
+    assert(/\$res\.soak\.failedAt\) \{[\s\S]{0,80}\$failedSteps\+\+/.test(ps),
+           "a DEGRADED engine makes the whole run exit non-zero");
+  }
+}
+
+// ------- 12. the two rows only a CLICK could ever answer
+//
+// FIELD STATE 2026-09-03: every battery step passed, the soak passed,
+// G0 passed -- and the PPRO table still showed two gaps. Neither was
+// about Premiere. `manifest shape installed` and `$.fileName inside the
+// manifest's ScriptPath` were read by the VISIBLE panel and by nothing
+// else, so an unattended run could not answer them however green it
+// was, and the report printed them exactly like something Premiere had
+// refused to say.
+//
+// Two defects, one shape: a reading nobody takes, and a reading taken
+// and then thrown away. Premiere's answer for $.fileName IS the empty
+// string, both doors stored it as `(fname && ...) ? fname : null`, and
+// the grader skips "" the same way it skips a missing key -- so the one
+// host the row exists for graded itself unmeasured while holding the
+// answer.
+{
+  function sharedBlock(file, name) {
+    const src = read(file);
+    const BEGIN = "/* " + name + "-SHARED-BEGIN";
+    const END = "/* " + name + "-SHARED-END */";
+    const a = src.indexOf(BEGIN);
+    const b = src.indexOf(END);
+    return (a === -1 || b === -1) ? null : src.slice(a, b + END.length);
+  }
+  const panelShape = sharedBlock(path.join(PROBE, "index.html"), "SHAPE");
+  const door3Shape = sharedBlock(path.join(HARNESS, "index.html"), "SHAPE");
+  const panelSp = sharedBlock(path.join(PROBE, "index.html"), "SCRIPTPATH");
+  const door3Sp = sharedBlock(path.join(HARNESS, "index.html"), "SCRIPTPATH");
+
+  assert(panelShape && door3Shape && panelShape === door3Shape,
+         "both doors carry the shared manifest-shape block, byte-identical");
+  assert(panelSp && door3Sp && panelSp === door3Sp,
+         "and the shared ScriptPath-reading block, byte-identical -- two " +
+         "doors grading one row by two rules is the row changing question");
+
+  // (a) the shape rule, driven over the REAL manifests in this repo.
+  if (panelShape) {
+    const shapeOf = new Function(panelShape + "\nreturn AELLP_shapeOfXml;")();
+    const shapeA = shapeOf(read(path.join(PROBE, "CSXS", "manifest-shape-a.xml")));
+    const shapeB = shapeOf(read(path.join(PROBE, "CSXS", "manifest-shape-b.xml")));
+    assert(/^A \(/.test(shapeA.guess), "shape A grades as A");
+    assert(/^B \(/.test(shapeB.guess), "shape B grades as B");
+    assert(shapeOf(read(path.join(PROBE, "CSXS", "manifest.xml"))).guess ===
+             shapeB.guess,
+           "and the installed default grades as the same shape as the " +
+           "file it is a copy of");
+
+    // THE BUG THE OLD RULE HAD: zero HostLists is not more than one, so
+    // an unreadable file came back "B (one HostList, loader)" -- a
+    // measurement produced by a read that found nothing.
+    const nothing = shapeOf("");
+    assert(nothing.guess === null,
+           "an empty read is NOT graded shape B: zero HostLists is not " +
+           "one, and a read that found nothing is not a measurement");
+    assert(/not a CEP manifest/.test(String(nothing.error)),
+           "it says what it read instead, with the byte count");
+    assert(shapeOf(null).guess === null && shapeOf(undefined).guess === null,
+           "and a missing file reads the same way, not as a throw");
+  }
+
+  // (b) the ScriptPath rule: three states, and the empty one is a value.
+  if (panelSp) {
+    const factOf = new Function(panelSp + "\nreturn AELLP_scriptPathFact;")();
+
+    const unset = factOf("undefined", 0, "", null);
+    assert(!unset.scriptPath && /did not run here/.test(String(unset.note)),
+           "a global that does not exist yields a NOTE and no reading -- " +
+           "loader.jsx never ran in that engine, so this run has nothing " +
+           "to say and must not displace a run that did");
+
+    // Premiere 26.3.2, measured: $.fileName inside ScriptPath is "".
+    const empty = factOf("string", "0", "", "missing X ($.fileName reported )");
+    assert(!!empty.scriptPath, "an EMPTY value is still a reading");
+    assert(empty.scriptPath.dollarFileName === "",
+           "the raw answer is kept verbatim, empty and all");
+    assert(empty.scriptPath.dollarFileNameSaid === "(the empty string)",
+           "and it is ALSO said in a form the report can print: \"\" is " +
+           "skipped by the grader exactly like a missing key, which is " +
+           "how Premiere's own answer read as unmeasured");
+    assert(empty.scriptPath.loaderSaid === "missing X ($.fileName reported )",
+           "the loader's own sentence rides along");
+
+    const named = factOf("string", "1", "7", "undefined");
+    assert(named.scriptPath.dollarFileNameSaid === "7" &&
+           named.scriptPath.loaderSaid === null,
+           "AE's answer (\"7\") is passed through, and an absent loader " +
+           "sentence is null rather than the string \"undefined\"");
+
+    // The two ways of getting "" apart: the host counted characters and
+    // the round trip delivered none.
+    const lost = factOf("string", "42", "", null);
+    assert(/42 characters/.test(lost.scriptPath.dollarFileNameSaid) &&
+           !!lost.scriptPath.transport,
+           "a value the HOST counted but evalScript did not deliver is a " +
+           "transport finding, not a measurement of an empty $.fileName");
+  }
+
+  // (c) the door-3 runner takes both readings, and fabricates neither.
+  {
+    const code = stripJs(read(path.join(HARNESS, "index.html")));
+    assert(/shape:\s*readShape\(\)/.test(code),
+           "the runner puts a manifest-shape reading in its result");
+    assert(/ExtensionBundleId=/.test(code) && /readdirSync/.test(code),
+           "found by BUNDLE ID under the CEP roots, not by trusting a " +
+           "folder name the installer happened to choose");
+    assert(/scriptPath:\s*fact\.scriptPath \|\| null/.test(code) &&
+           /scriptPathNote:\s*fact\.note \|\| null/.test(code),
+           "and a ScriptPath reading only when there is one -- the reason " +
+           "goes in a note, which no row grades");
+    assert(/typeof \$\.global\.AELLP_LOADER_FILENAME/.test(code) &&
+           /AELLP_LOADER_FILENAME\)\.length/.test(code),
+           "it asks the type and the host-side length separately, so an " +
+           "empty reply and an empty value stay different findings");
+  }
+
+  // (d) the panel takes them the same way, through the same blocks.
+  {
+    const code = stripJs(read(path.join(PROBE, "index.html")));
+    assert(/AELLP_shapeOfXml\(/.test(code),
+           "the visible panel grades its manifest with the shared rule");
+    assert(!/hostLists > 1 \?[\s\S]{0,120}guess/.test(
+             code.split(stripJs(panelShape || "x")).join("")),
+           "and has no second copy of the rule left in it");
+    assert((code.match(/readScriptPath\(function/g) || []).length === 2,
+           "both of the panel's runs take the ScriptPath reading through " +
+           "the shared block (the click and the unattended job)");
+    assert(!/dollarFileName: \(fname && fname !== "undefined"\)/.test(code),
+           "and the expression that threw Premiere's answer away is gone");
+  }
+
+  // (e) the grader: both rows close off an unattended run, and a note
+  //     does not displace an older click that really measured.
+  {
+    const rep = require("../scripts/ppro-probe-report.js");
+    function jobWith(over) {
+      const j = {
+        door: 3, startedAt: "2026-09-03T11:00:00.000Z",
+        finishedAt: "2026-09-03T11:05:00.000Z",
+        host: { appName: "PPRO", appVersion: "26.3.2" },
+        via: "invisible runner (door 3)", ok: true, parsed: { ok: true },
+        battery: { steps: [{ step: "ping", ok: true,
+                             data: { pong: true, fileName: "/x/probe.jsx" } }] },
+        shape: { extensionEntries: 1, hostLists: 1,
+                 guess: "B (one HostList, loader)",
+                 readFrom: "C:/x/CSXS/manifest.xml" },
+        scriptPath: { dollarFileName: "", dollarFileNameChars: 0,
+                      dollarFileNameSaid: "(the empty string)" }
+      };
+      if (over) { Object.keys(over).forEach(function (k) { j[k] = over[k]; }); }
+      return j;
+    }
+    const older = {
+      takenAt: "2026-09-02T20:51:46.828Z",
+      panel: { cepPresent: true, appName: "PPRO" },
+      shape: { guess: "A (per-extension HostList)" },
+      scriptPath: { dollarFileName: "8" }
+    };
+    function rowOf(graded, start) {
+      return graded.rows.filter(function (r) {
+        return r.claim.indexOf(start) === 0;
+      })[0];
+    }
+    const asRuntime = rep.fromJobResult(jobWith());
+    assert(!!asRuntime.shape &&
+           asRuntime.shape.guess === "B (one HostList, loader)",
+           "the adapter carries the runner's manifest-shape reading");
+    assert(!!asRuntime.scriptPath &&
+           asRuntime.scriptPath.dollarFileNameSaid === "(the empty string)",
+           "and its ScriptPath reading");
+
+    const graded = rep.gradeHost("PPRO", [
+      { tag: "job", file: "job-result.json", takenAt: asRuntime.takenAt,
+        data: asRuntime },
+      { tag: "pnl", file: "runtime-PPRO.json", takenAt: older.takenAt,
+        data: older }
+    ]);
+    const shapeRow = rowOf(graded, "manifest shape installed");
+    const spRow = rowOf(graded, "$.fileName inside");
+    assert(shapeRow.state === "MEASURED" && shapeRow.from === "job-result.json",
+           "an unattended run closes the manifest-shape row on its own");
+    assert(spRow.state === "MEASURED" && spRow.value === "(the empty string)" &&
+           spRow.from === "job-result.json",
+           "and the ScriptPath row, with Premiere's empty answer PRINTED " +
+           "rather than skipped -- the whole defect in one row");
+
+    // A run that could not take the reading must fall through, not win.
+    const noReading = rep.fromJobResult(jobWith({
+      scriptPath: null, shape: null,
+      scriptPathNote: "loader.jsx did not run in this engine" }));
+    const graded2 = rep.gradeHost("PPRO", [
+      { tag: "job", file: "job-result.json", takenAt: noReading.takenAt,
+        data: noReading },
+      { tag: "pnl", file: "runtime-PPRO.json", takenAt: older.takenAt,
+        data: older }
+    ]);
+    assert(rowOf(graded2, "$.fileName inside").value === "8" &&
+           rowOf(graded2, "$.fileName inside").from === "runtime-PPRO.json",
+           "a run with nothing to say leaves the older click's answer " +
+           "standing instead of overwriting it with silence");
+    assert(rowOf(graded2, "manifest shape installed").from ===
+             "runtime-PPRO.json",
+           "same for the shape row");
+
+    // A failed READ is not a measurement.
+    const broken = rep.fromJobResult(jobWith({
+      shape: { guess: null, lookedIn: ["C:/a", "C:/b"],
+               error: "no bundle with ExtensionBundleId " +
+                      "com.cptk.aellama.probe is installed under any CEP " +
+                      "extensions root" } }));
+    const graded3 = rep.gradeHost("PPRO", [
+      { tag: "job", file: "job-result.json", takenAt: broken.takenAt,
+        data: broken }
+    ]);
+    const bad = rowOf(graded3, "manifest shape installed");
+    assert(bad.state === "FAILED",
+           "a shape read that found nothing grades FAILED, not MEASURED: " +
+           "the sentence explaining why is not a shape");
+    assert(/ExtensionBundleId/.test(String(bad.value)),
+           "and it names what it looked for");
+
+    // (f) EXPLAINED: a reading no unattended run can take.
+    //
+    // MEASURED 2026-09-03 (run -0902): loader.jsx is the PROBE bundle's
+    // ScriptPath, an unattended run opens no panel, so CEP never
+    // evaluates it and the global is absent from the engine door 3
+    // talks to. Door 3 does NOT grow a ScriptPath of its own to close
+    // the row -- "nothing auto-loads" is what keeps the invisible
+    // runner inert (section 5 above) and it outranks one table cell.
+    // What changes is the REPORT: a run that said why it could not
+    // answer must not print like a run that was never made.
+    const clickOnly = rep.fromJobResult(jobWith({
+      scriptPath: null,
+      scriptPathNote: "$.global.AELLP_LOADER_FILENAME is undefined in " +
+                      "this engine: the probe bundle's ScriptPath " +
+                      "(jsx/loader.jsx) did not run here" }));
+    const graded4 = rep.gradeHost("PPRO", [
+      { tag: "job", file: "job-result.json", takenAt: clickOnly.takenAt,
+        data: clickOnly }
+    ]);
+    const explained = rowOf(graded4, "$.fileName inside");
+    assert(explained.state === "EXPLAINED",
+           "with no reading anywhere, the row prints the run's own " +
+           "reason instead of an empty MISSING -- an absence with a " +
+           "cause is not the same report as a probe nobody ran");
+    assert(/did not run here/.test(String(explained.value)) &&
+           explained.from === "job-result.json",
+           "and it names the artifact the reason came from");
+    assert(explained.state !== "MEASURED",
+           "a note is still not a measurement: it can never pass a row");
+  }
+}
+
 console.log(failed ? "\nTESTS FAILED" : "\nALL TESTS PASSED");
 process.exitCode = failed ? 1 : 0;

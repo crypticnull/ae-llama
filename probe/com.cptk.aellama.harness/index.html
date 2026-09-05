@@ -102,28 +102,426 @@
   var jsx = String(job.probeJsx || "").replace(/\\/g, "/");
   var loadSrc = jsx ? '$.evalFile(new File("' + jsx + '"))' : '"no jsx"';
 
+  /* SHAPE-SHARED-BEGIN (both doors keep this block byte-identical) */
+  /*
+   * WHICH MANIFEST SHAPE IS INSTALLED, graded from the manifest's own
+   * bytes.
+   *
+   * Shape A gives every <Extension> its own HostList; shape B gives one
+   * <Extension> one HostList and branches in a ScriptPath loader. The
+   * two counts are the discriminator, and both doors have to grade them
+   * by the SAME rule: the report merges the two artifacts row by row and
+   * takes the newest source that has a value, so two rules would mean
+   * the row quietly changes question the day a newer run answers it.
+   *
+   * An unreadable or non-manifest file used to grade "B (one HostList,
+   * loader)" -- zero HostLists is not more than one -- so a read that
+   * found nothing at all came back as a measurement. There is no shape
+   * without an <Extension>, and saying so is what keeps a miss out of
+   * the report.
+   */
+  function AELLP_shapeOfXml(xml) {
+    var s = String(xml === null || xml === undefined ? "" : xml);
+    var extensions = (s.match(/<Extension\s+Id=/g) || []).length;
+    var hostLists = (s.match(/<HostList>/g) || []).length;
+    if (!extensions && !hostLists) {
+      return { extensionEntries: 0, hostLists: 0, guess: null,
+               error: "no <Extension Id=...> and no <HostList> in " +
+                      s.length + " bytes: this is not a CEP manifest" };
+    }
+    return { extensionEntries: extensions, hostLists: hostLists,
+             guess: (hostLists > 1 ? "A (per-extension HostList)"
+                                   : "B (one HostList, loader)") };
+  }
+  /* SHAPE-SHARED-END */
+
+  /* SCRIPTPATH-SHARED-BEGIN (both doors keep this block byte-identical) */
+  /*
+   * WHAT $.fileName SAID INSIDE THE MANIFEST'S ScriptPath, recorded the
+   * same way by whichever door took the reading.
+   *
+   * The answer is short and it is the whole point: AE 26.3 returned "7"
+   * and then "8" on the next launch, Premiere 26.3.2 returned "". Both
+   * doors stored it as `(fname && fname !== "undefined") ? fname : null`
+   * -- an expression that throws Premiere's answer away, because "" is
+   * falsy -- so the one host the measurement exists FOR reported the row
+   * unmeasured. Three states, kept apart:
+   *
+   *   unset   the global does not exist, so loader.jsx never ran in this
+   *           engine and THIS RUN has nothing to say. The caller records
+   *           a NOTE and no reading: a reading that says nothing would
+   *           still be the newest source for the row, and would displace
+   *           an older run's real answer with our silence.
+   *   empty   the global exists and is "". That IS the measurement.
+   *   named   whatever it said.
+   *
+   * `chars` is counted in the HOST (String(...).length) because an empty
+   * reply DELIVERED over evalScript cannot otherwise be told apart from
+   * a value that is itself empty -- and those are different findings.
+   */
+  function AELLP_scriptPathFact(typeName, chars, raw, loaderSaid) {
+    var n = parseInt(chars, 10);
+    var text = String(raw === null || raw === undefined ? "" : raw);
+    var said = (loaderSaid && loaderSaid !== "undefined")
+      ? String(loaderSaid) : null;
+    var out;
+    if (String(typeName) !== "string") {
+      return { note: "$.global.AELLP_LOADER_FILENAME is " +
+                     String(typeName || "(no reply)") + " in this engine: " +
+                     "the probe bundle's ScriptPath (jsx/loader.jsx) did " +
+                     "not run here, so this run cannot say what $.fileName " +
+                     "reported inside it" };
+    }
+    if (isNaN(n)) { n = text.length; }
+    out = { dollarFileName: text,
+            dollarFileNameChars: n,
+            dollarFileNameSaid: n === 0 ? "(the empty string)" : text,
+            loaderSaid: said,
+            note: "ScriptPath IS evaluated, but $.fileName inside it is " +
+                  "not a path (AE 26.3 returned \"7\", Premiere 26.3.2 " +
+                  "\"\"). new File() treats that as RELATIVE and resolves " +
+                  "it against the host's working directory, which is why " +
+                  "it reads back like the host's own install folder. Both " +
+                  "doors load probe.jsx by absolute path instead." };
+    if (n > 0 && text === "") {
+      out.dollarFileNameSaid = "(" + n + " characters the host counted, " +
+                               "but evalScript delivered an empty reply)";
+      out.transport = "the value did not survive the CEP round trip";
+    }
+    return { scriptPath: out };
+  }
+  /* SCRIPTPATH-SHARED-END */
+
+  /*
+   * THE TWO ROWS NO UNATTENDED RUN COULD EVER CLOSE. Both were read only
+   * by the VISIBLE panel -- shapeInUse() off the folder CEP handed it,
+   * and the ScriptPath globals -- so a green battery still left the
+   * report showing PPRO gaps that nothing about Premiere was hiding:
+   * nobody had clicked the button. Neither needs a click. The manifest
+   * is a FILE and this runner has fs; the ScriptPath globals live in the
+   * host engine this runner already talks to.
+   */
+  var PROBE_BUNDLE = "com.cptk.aellama.probe";
+
+  /** Every CEP extensions root this machine could have installed into. */
+  function cepRoots() {
+    var roots = [], seen = {};
+    function add(base) {
+      if (!base) { return; }
+      var p = path.join(base, "Adobe", "CEP", "extensions");
+      var k = p.toLowerCase();
+      if (!seen[k]) { seen[k] = 1; roots.push(p); }
+    }
+    add(proc.env.APPDATA);
+    add(proc.env["CommonProgramFiles(x86)"]);
+    add(proc.env.CommonProgramFiles);
+    return roots;
+  }
+
+  /*
+   * The probe bundle's INSTALLED manifest, found by its bundle id rather
+   * than by folder name: install-probe.ps1 junctions it under its id,
+   * but a hand-installed copy need not be, and a name match that missed
+   * would report "not installed" about a bundle that is.
+   *
+   * Two copies is a finding, not a tie to break: which root CEP loads
+   * from is not measured here, so when they disagree the shape is
+   * withheld and both paths are named.
+   */
+  function readShape() {
+    var roots = cepRoots(), found = [], i, j, names, manifest, xml, out;
+    for (i = 0; i < roots.length; i++) {
+      try { names = fs.readdirSync(roots[i]); } catch (e) { continue; }
+      for (j = 0; j < names.length; j++) {
+        manifest = path.join(roots[i], names[j], "CSXS", "manifest.xml");
+        try {
+          if (!fs.existsSync(manifest)) { continue; }
+          xml = String(fs.readFileSync(manifest, "utf8"));
+        } catch (e2) { continue; }
+        if (xml.indexOf("ExtensionBundleId=\"" + PROBE_BUNDLE + "\"") === -1) {
+          continue;
+        }
+        found.push({ at: manifest, shape: AELLP_shapeOfXml(xml) });
+      }
+    }
+    if (!found.length) {
+      return { guess: null, lookedIn: roots,
+               error: "no bundle with ExtensionBundleId " + PROBE_BUNDLE +
+                      " is installed under any CEP extensions root" };
+    }
+    out = found[0].shape;
+    out.readFrom = found[0].at;
+    out.via = "the door-3 runner, from the probe bundle's installed manifest";
+    if (found.length > 1) {
+      out.alsoAt = [];
+      for (i = 1; i < found.length; i++) {
+        out.alsoAt.push(found[i].at + " => " + String(found[i].shape.guess));
+        if (found[i].shape.guess !== found[0].shape.guess) {
+          out.error = "installed " + found.length + " times and the copies " +
+                      "are not the same shape; which one CEP loads is not " +
+                      "measured here";
+          out.guess = null;
+        }
+      }
+    }
+    return out;
+  }
+
+  /** One evalScript, one fact, as a string. */
+  function evalOne(src, cb) {
+    window.__adobe_cep__.evalScript(src, function (r) {
+      cb((r === null || typeof r === "undefined") ? "" : String(r));
+    });
+  }
+
+  /*
+   * THREE separate one-fact reads: the type, the length counted in the
+   * host, and the value. Joining them into one reply and splitting it is
+   * one embedded delimiter away from a wrong answer, and these are
+   * measurements.
+   */
+  function readScriptPath(cb) {
+    evalOne("typeof $.global.AELLP_LOADER_FILENAME", function (t) {
+      if (t !== "string") { cb(AELLP_scriptPathFact(t, 0, "", null)); return; }
+      evalOne("String($.global.AELLP_LOADER_FILENAME).length", function (n) {
+        evalOne("String($.global.AELLP_LOADER_FILENAME)", function (raw) {
+          evalOne("typeof $.global.AELLP_LOADER === 'undefined' ? ''" +
+                  " : String($.global.AELLP_LOADER)", function (said) {
+            cb(AELLP_scriptPathFact("string", n, raw, said));
+          });
+        });
+      });
+    });
+  }
+
+  /* BATTARGS-SHARED-BEGIN (both doors keep this block byte-identical) */
+  /*
+   * THE JOB'S FIELDS ARE THE BATTERY'S ARGUMENTS. What stood here was a
+   * hand-maintained whitelist naming six of them, in two copies, and it
+   * silently dropped `seedMedia` and `readyTimeoutMs` the day the job
+   * grew them: the dialog-free sequence route (importFiles +
+   * createNewSequenceFromClips) therefore never ran on ANY unattended
+   * run, and did not even appear in the step's own `tried` list -- the
+   * worst shape a loss can take, because it reads as "not applicable"
+   * rather than "never delivered".
+   *
+   * So copy everything and name only what the RUNNER itself owns. A new
+   * job field then reaches the battery without either door being
+   * edited, and a field the battery ignores costs nothing.
+   */
+  var AELLP_RUNNER_KEYS = {
+    probeJsx: 1,    /* which .jsx to evalFile: the runner's own business */
+    probe: 1,       /* which probe to call */
+    args: 1,        /* an explicit override, handled at the call site */
+    createdAt: 1,   /* provenance */
+    __claimed: 1    /* the claim path, added after the file was read */
+  };
+  function AELLP_battArgs(job, progressPath, mogrtFallback) {
+    var out = {}, k;
+    for (k in job) {
+      if (Object.prototype.hasOwnProperty.call(job, k) &&
+          !AELLP_RUNNER_KEYS[k]) {
+        out[k] = job[k];
+      }
+    }
+    out.progressPath = progressPath || null;
+    if (!out.mogrtPath) { out.mogrtPath = mogrtFallback || null; }
+    return out;
+  }
+  /* BATTARGS-SHARED-END */
+
+  /* SOAK-SHARED-BEGIN (both doors keep this block byte-identical) */
+  /*
+   * THE ENGINE SOAK, in ONE implementation both doors run.
+   *
+   * What it measures is the CEP -> ExtendScript ROUND TRIP, and that is
+   * the whole point: the degradation a third party reported on a
+   * long-lived Premiere engine ("InternalError: Stack overrun", after
+   * which every call dies opaquely) accumulates per evalScript ENTRY.
+   * A loop of 500 iterations INSIDE one evalScript would therefore
+   * measure nothing at all and report green -- which is why this is not
+   * a battery step in probe.jsx. `callOne(round, cb)` is one whole
+   * round trip, supplied by the door that owns the CEP side.
+   *
+   * A soak that ran out of wall clock is SKIPPED, never a pass: the
+   * claim being graded is "500 round-trips survived", and 137 of them
+   * does not support it. The grader reads `skipped` as unmeasured.
+   */
+  function AELLP_soak(opts, callOne, onProgress, whenDone) {
+    opts = opts || {};
+    var total = opts.rounds > 0 ? opts.rounds : 500;
+    var budgetMs = opts.budgetMs > 0 ? opts.budgetMs : 0;
+    var every = opts.progressEvery > 0 ? opts.progressEvery : 25;
+    var now = opts.now || function () { return new Date().getTime(); };
+    var later = opts.later || function (fn) { setTimeout(fn, 0); };
+    var started = now();
+    var ran = 0, failedAt = null, failure = null, ranOut = false;
+
+    function stop() {
+      var res = { rounds: ran, total: total, failedAt: failedAt,
+                  ms: now() - started, payloadBytes: AELLP_SOAK_PAD };
+      if (failure) { res.error = failure; }
+      if (ranOut) {
+        res.skipped = "the soak budget (" + budgetMs + "ms) ran out after " +
+                      ran + " of " + total + " round-trips; a partial soak " +
+                      "is not the claim being graded, so it is unmeasured";
+      }
+      res.verdict = failedAt !== null
+        ? "DEGRADED at round " + failedAt
+        : (ranOut ? "STOPPED at round " + ran + " of " + total
+                  : "survived " + total + " round-trips");
+      whenDone(res);
+    }
+
+    function step() {
+      if (failedAt !== null || ran >= total) { stop(); return; }
+      if (budgetMs && (now() - started) >= budgetMs) { ranOut = true; stop(); return; }
+      callOne(ran + 1, function (err) {
+        if (err) {
+          failedAt = ran + 1;
+          failure = String(err);
+        } else {
+          ran++;
+          if (onProgress && ran % every === 0) { onProgress(ran, total); }
+        }
+        later(step);
+      });
+    }
+    step();
+  }
+
+  /*
+   * The payload size, in ONE place, because the round trip and the
+   * check that it survived have to agree. A reply that comes back
+   * SHORT is a degraded engine, not a passing round.
+   */
+  var AELLP_SOAK_PAD = 2000;
+
+  /** The echo arguments AELLP_call takes, as the door will send them. */
+  function AELLP_soakArgs(round) {
+    return { round: round, pad: AELLP_SOAK_PAD };
+  }
+
+  /** cb(null) only when the engine really echoed the whole payload. */
+  function AELLP_soakCheck(err, data) {
+    if (err) { return String(err); }
+    if (!data) { return "no data came back"; }
+    if (data.pad !== AELLP_SOAK_PAD) {
+      return "short payload: asked for " + AELLP_SOAK_PAD +
+             " bytes, got " + String(data.pad);
+    }
+    return null;
+  }
+  /* SOAK-SHARED-END */
+
+  /*
+   * One AELLP_call round trip, parsed. cb(err, data) -- the same shape
+   * the visible panel's probe() hands to AELLP_soakCheck, so the soak
+   * grades both doors' round trips by one rule.
+   */
+  function callProbe(probeName, probeArgs, cb) {
+    var literal = JSON.stringify(JSON.stringify(probeArgs || {}));
+    window.__adobe_cep__.evalScript(
+      "AELLP_call(" + JSON.stringify(String(probeName)) + ", " + literal + ")",
+      function (raw) {
+        if (raw === "EvalScript error.") {
+          cb("evalScript itself failed"); return;
+        }
+        if (raw === null || typeof raw === "undefined" || raw === "") {
+          cb("empty reply from the host - AELLP_call returned nothing"); return;
+        }
+        var parsed;
+        try { parsed = JSON.parse(raw); }
+        catch (e) { cb("unparseable reply: " + String(raw).slice(0, 200)); return; }
+        if (!parsed.ok) { cb(parsed.error || "the envelope reported no error"); return; }
+        cb(null, parsed.data);
+      });
+  }
+
+  /*
+   * The soak is the ONE gate row no unattended run could ever close: it
+   * lived only as a click handler in the visible panel, so every green
+   * battery still graded G0 NOT MEASURED. It belongs on this side of
+   * the boundary rather than in the battery -- see the shared block.
+   *
+   * It runs AFTER the battery on purpose: an engine that has just built
+   * a project, a sequence and a MOGRT is the long-lived one the report
+   * is about, not a fresh one.
+   */
+  var soakNote = null;
+
+  function runSoak(batteryOk, whenDone) {
+    var rounds = (typeof job.soakRounds === "number") ? job.soakRounds : 0;
+    if (rounds <= 0) {
+      // NOT a `soak` reading. A run that never attempted one has nothing
+      // to say about the engine, and an object saying so would be the
+      // NEWEST source for that row -- it would displace a real
+      // measurement from the panel file with our own silence.
+      soakNote = "this run did not ask for a soak (soakRounds was " +
+                 String(job.soakRounds) + ")";
+      whenDone(null);
+      return;
+    }
+    // Refuse rather than report a degraded engine: the visible panel
+    // once logged "DEGRADED at round 1" when the real story was that
+    // probe.jsx had never loaded, and a soak that cannot tell those
+    // apart is worse than no soak.
+    if (!batteryOk) {
+      whenDone({ skipped: "the battery envelope did not come back, so " +
+                          "probe.jsx is not loaded and there is nothing " +
+                          "to soak" });
+      return;
+    }
+    AELLP_soak(
+      { rounds: rounds,
+        budgetMs: (typeof job.soakBudgetMs === "number")
+          ? job.soakBudgetMs : 120000 },
+      function (round, cb) {
+        callProbe("echo", AELLP_soakArgs(round), function (err, data) {
+          cb(AELLP_soakCheck(err, data));
+        });
+      },
+      // A breadcrumb of its own, never the battery's: a soak that hangs
+      // must name itself and its round, the same way `current` names a
+      // battery step. Its own file, so it cannot overwrite the battery's
+      // last flush.
+      function (ran, total) {
+        write(path.join(dir, "job-soak-progress.json"),
+              { soakingRound: ran, of: total,
+                at: new Date().toISOString() });
+      },
+      whenDone);
+  }
+
   window.__adobe_cep__.evalScript(loadSrc, function () {
     // Same job shape the visible panel understands, so whichever of the
     // two claims the file first produces the same result document.
     var name = JSON.stringify(String(job.probe || "battery"));
-    var battArgs = job.args || {
-      allowMutate: job.allowMutate === true,
-      scratchProject: job.scratchProject || null,
-      makeSequence: job.makeSequence === true,
-      skip: job.skip || null,
-      progressPath: path.join(dir, "job-progress.json").replace(/\\/g, "/"),
-      mogrtPath: job.mogrtPath || null
-    };
+    var battArgs = job.args || AELLP_battArgs(
+      job, path.join(dir, "job-progress.json").replace(/\\/g, "/"), null);
     var args = JSON.stringify(JSON.stringify(battArgs));
     window.__adobe_cep__.evalScript(
       "AELLP_call(" + name + ", " + args + ")",
       function (raw) {
         var parsed = null;
         try { parsed = JSON.parse(raw); } catch (e) {}
-        finish({ via: "invisible runner (door 3)",
-                 raw: String(raw).slice(0, 20000), parsed: parsed,
-                 battery: (parsed && parsed.ok) ? parsed.data : null,
-                 ok: !!(parsed && parsed.ok) });
+        var ok = !!(parsed && parsed.ok);
+        runSoak(ok, function (soak) {
+          readScriptPath(function (fact) {
+            finish({ via: "invisible runner (door 3)",
+                     raw: String(raw).slice(0, 20000), parsed: parsed,
+                     battery: ok ? parsed.data : null,
+                     soak: soak, soakNote: soakNote,
+                     shape: readShape(),
+                     // A run whose engine never saw loader.jsx records a
+                     // NOTE, never an empty reading: the report takes the
+                     // newest source that HAS the row, so a reading that
+                     // says nothing would displace an older run's answer.
+                     scriptPath: fact.scriptPath || null,
+                     scriptPathNote: fact.note || null,
+                     ok: ok });
+          });
+        });
       });
   });
 })();

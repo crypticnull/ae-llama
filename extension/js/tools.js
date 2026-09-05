@@ -199,11 +199,9 @@
     { name: "audio_to_keyframes", mutating: true,
       desc: "Convert audio amplitude to keyframes: adds a null carrying " +
             "Left/Right/Both Channels sliders keyframed to the loudness, " +
-            "one key per frame. Use it for anything beat-driven — then " +
-            "link_property {controlLayer: <the null>, controlEffect: " +
-            "'Both Channels', scale: n} drives scale/opacity/position " +
-            "from the music ('sync to the beat' = this then " +
-            "link_property). AE's own command reads the WHOLE comp mix " +
+            "one key per frame. Use it for anything beat-driven " +
+            "('sync to the beat' = this then link_property). " +
+            "AE's own command reads the WHOLE comp mix " +
             "and only inside the work area; this tool isolates 'layer' " +
             "by muting the others for the conversion and covers the " +
             "whole comp unless range says otherwise, and says so in the " +
@@ -249,11 +247,8 @@
             "'Grid X Spacing'/'Grid Y Spacing'/'Grid Columns' sliders " +
             "drive spacing AND column count live, and the grid centers " +
             "on the null's position (all expressions generated " +
-            "host-side). Creates its OWN control null — never add_null " +
-            "first. Omit 'layers' to use the selection; with nothing " +
-            "selected it grids ALL content layers in the comp (nulls/" +
-            "cameras/lights excluded). Re-running re-flows the rig.",
-      args: "{comp?: string, layers?: [name|index] (omit = user's selection), columns?: int (default ~square; 1 = column, n = row), spacingX?: px, spacingY?: px, controlLayer?: string = 'GRID CTRL'}" },
+            "host-side). Re-running re-flows the rig.",
+      args: "{comp?: string, layers?: [name|index] (omit = user's selection), columns?: int ('3 by 2' = 3; default ~square; 1 = column, n = row), spacingX?: px, spacingY?: px, controlLayer?: string = 'GRID CTRL'}" },
     { name: "apply_expression_preset", mutating: true,
       desc: "Apply a known-good expression. Presets: wiggle (frequency/" +
             "amplitude as numbers OR freqControl/ampControl {layer, effect} " +
@@ -272,7 +267,7 @@
       args: "{comp?: string, layer: name|index, effect: display name or match name (e.g. 'Gaussian Blur' or 'ADBE Gaussian Blur 2')}" },
     { name: "set_effect_param", mutating: true,
       desc: "Set a parameter on an effect already applied to a layer.",
-      args: "{comp?: string, layer: name|index, effect: string, param: string, value: number|[..]|string}" },
+      args: "{comp?: string, layer: name|index, effect: string, param: string, value: number|[..]}" },
     { name: "remove_effect", mutating: true,
       desc: "REMOVE one effect from a layer by display name or matchName " +
             "('get rid of the blur'). An unknown name is refused listing " +
@@ -384,17 +379,14 @@
       desc: "Add a shape layer (rectangle, ellipse, polygon, or star).",
       args: "{comp?: string, name?: string, shape?: 'rectangle'|'ellipse'|'polygon'|'star', size?: [w,h], position?: [x,y], fillColor?: [r,g,b] 0..1, strokeColor?: [r,g,b], strokeWidth?: px, roundness?: px (rectangle), points?: int (polygon/star)}" },
     { name: "add_mask", mutating: true,
-      desc: "Add a mask to a layer. Coordinates are in LAYER space " +
-            "('hide the bottom half' = a rectangle over the top half, " +
-            "bounds [0, 0, w, h/2]; sizes from get_comp_details, never " +
-            "guessed).",
+      desc: "Add a mask to a layer ('hide the bottom half'). " +
+            "Coordinates are in LAYER space, sized from get_bounds — " +
+            "never guessed.",
       args: "{comp?: string, layer: name|index, shape?: 'rectangle'|'ellipse'|'custom', bounds?: [x,y,w,h], vertices?: [[x,y],...] (custom), mode?: 'add'|'subtract'|'intersect'|..., inverted?: bool, feather?: px, name?: string}" },
     { name: "delete_mask", mutating: true,
       desc: "REMOVE one mask from a layer by name or 1-based index " +
             "('remove that mask'); omit 'mask' when the layer has exactly " +
-            "one. An unknown mask is refused listing the masks the layer " +
-            "really has; the result names what was removed and what " +
-            "remains.",
+            "one.",
       args: "{comp?: string, layer?: name|index (omit = selected layer), mask?: name|1-based index (omit when the layer has one)}" },
     { name: "set_mask", mutating: true,
       desc: "Edit an EXISTING mask: mode, feather, expansion, opacity, " +
@@ -798,22 +790,27 @@
       "  stagger_layers {} with no arguments.",
       "- grid_layout creates its own control null (controlLayer only",
       "  names it) — NEVER call add_null before gridding. With nothing",
-      "  selected it grids ALL content layers, so 'arrange all layers in",
-      "  a grid' is ONE grid_layout call with 'layers' omitted. Never",
+      "  selected it grids ALL content layers except a full-frame",
+      "  backdrop, so 'arrange all layers in a grid' is ONE",
+      "  grid_layout call with 'layers' omitted. Never",
       "  pass layers: [] — omit the argument instead.",
       "- SCOPE: do ONLY what the user asked, then stop. Never bolt on",
       "  extra steps they did not request (grids, effects, styling,",
-      "  animation). Defaults decide HOW a requested step runs — never",
-      "  WHAT gets done.",
+      "  animation) and never an unasked CONTROL RIG: an effect ask",
+      "  ('shadow them / blur these') is apply_effect (many:",
+      "  for_each_layer) and NOTHING else — no add_null, no add_control",
+      "  sliders, no link_property, no set_effect_param values they did",
+      "  not ask for. Rig only when they ask to steer it ('one slider",
+      "  for all of them'); an explicit request always outranks this.",
+      "  Defaults decide HOW a requested step runs — never WHAT gets",
+      "  done.",
       "- MACRO TOOLS ARE COMPLETE: when grid_layout /",
       "  split_layer_into_chunks / stagger_layers succeeds, the request",
       "  it covers is DONE — grid_layout's null ALREADY has the X/Y",
       "  spacing and Columns sliders ('controllers'). Do not rebuild or",
-      "  augment what a macro just delivered on your own initiative;",
-      "  extra nulls, controls, or links are fine WHEN THE USER ASKS for",
-      "  them (an explicit request always outranks this rule). Never",
-      "  drive a control null's own Transform with expressions as a",
-      "  workaround for a failed call — report the failure instead.",
+      "  augment what a macro just delivered on your own initiative.",
+      "  Never drive a control null's own Transform with expressions",
+      "  as a workaround for a failed call — report the failure.",
       "- 'put N copies/shapes in a comp' = create ONE layer, then ONE",
       "  duplicate_layer call with {count: N-1}. Never chain single",
       "  duplicates, and NEVER give two layers the same name.",
@@ -822,10 +819,11 @@
       "- Emit AT MOST 8 commands per reply and keep them compact — output",
       "  space is limited and an oversized reply gets cut off. More work?",
       "  Stop after 8 and continue after TOOL RESULTS.",
-      "- 'each X' / 'every X' / 'all the Xs' names a CLASS of layers —",
-      "  pass {layers: [...]} with those exact names from the project",
-      "  state (e.g. every \"Square*\" layer), NEVER the selection: the",
-      "  user may have a control null selected from inspecting sliders.",
+      "- 'each X' / 'every X' / 'all the Xs' / 'the X layers' names a",
+      "  CLASS of layers — pass {layers: [...]} with those exact names",
+      "  from the project state (e.g. every \"Square*\" layer), NEVER the",
+      "  selection: the user may have a control null selected from",
+      "  inspecting sliders.",
       "  Control nulls (GRID CTRL etc.) are never animation targets",
       "  unless the user names them.",
       "- BATCH, NEVER LOOP: when many layers need the same change, one",
@@ -916,6 +914,9 @@
       "  trim). Never fake timing with opacity keyframes.",
       "- 'attach / stick / pin it to X', 'make it follow / ride along",
       "  with X' = set_layer_parent {layer, parent: 'X'}.",
+      "- 'soften it / blur it / too sharp / out of focus' = apply_effect",
+      "  {effect: 'Gaussian Blur'} — never add_mask: a mask feather",
+      "  softens the mask EDGE, never the picture.",
       "- 'crop / chop off the lower half / hide the bottom half / only",
       "  the top shows / cut a hole / vignette' = add_mask — never",
       "  set_layer_timing (that trims TIME), scale or anchor. A hole is",

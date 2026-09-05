@@ -41,7 +41,17 @@ param(
     [string]$MogrtPath = '',
     # Names of battery steps to skip, for when a previous run reported one
     # of them as HUNG. e.g. -Skip mogrt,history
-    [string[]]$Skip = @()
+    [string[]]$Skip = @(),
+    # The engine soak: CEP -> ExtendScript round trips, run AFTER the
+    # battery by the door itself. It cannot be a battery step - the
+    # shared block in both doors says why - so the job asks the door for
+    # it. 0 turns it off, and OFF leaves the gate row UNMEASURED, which
+    # is the honest reading and never a pass.
+    [int]$SoakRounds = 500,
+    # A hard wall-clock cap, so the soak can never outlast -TimeoutSec and
+    # turn a green run into "no result". A soak stopped by this reports
+    # SKIPPED, not survived.
+    [int]$SoakBudgetSec = 120
 )
 
 $ErrorActionPreference = 'Stop'
@@ -210,6 +220,7 @@ if ($MogrtPath) {
 # run's result.
 Remove-Item $resFile, $runFile,
             (Join-Path $probeData 'job-claimed.json'),
+            (Join-Path $probeData 'job-soak-progress.json'),
             (Join-Path $probeData 'job-progress.json') -ErrorAction SilentlyContinue
 $job = [ordered]@{
     probeJsx       = ((Join-Path $repoRoot 'probe\com.cptk.aellama.probe\jsx\probe.jsx') -replace '\\', '/')
@@ -225,7 +236,20 @@ $job = [ordered]@{
     readyTimeoutMs = 30000
     skip           = $Skip
     mogrtPath      = $(if ($MogrtPath) { $MogrtPath -replace '\\', '/' } else { $null })
+    # Read by the DOOR, not by the battery: the round trip being measured
+    # is the one across the CEP boundary, so only the CEP side can drive
+    # it. The shared forwarder hands it to the battery as well, which
+    # ignores it - a field the battery does not read costs nothing.
+    soakRounds     = $SoakRounds
+    soakBudgetMs   = ($SoakBudgetSec * 1000)
     createdAt      = (Get-Date).ToString('o')
+}
+# The soak runs INSIDE the window this script waits in, so its budget has
+# to fit with the battery's own ~40s beside it. Warn rather than clamp:
+# the caller may know something this check does not.
+if ($SoakRounds -gt 0 -and ($SoakBudgetSec + 90) -gt $TimeoutSec) {
+    Warn ("-SoakBudgetSec " + $SoakBudgetSec + " plus the battery's own time")
+    Warn ("may outlast -TimeoutSec " + $TimeoutSec + ", which reads as 'no result'.")
 }
 # Write-AellJson, never Set-Content -Encoding UTF8: on Windows
 # PowerShell 5.1 that writes a BOM, JSON.parse throws on it, and the CEP
@@ -271,49 +295,54 @@ if ($running.Count -gt 0) {
     Good 'Premiere closed.'
 }
 
-# Launch Premiere PLAIN, with no project argument.
+# Launch Premiere PLAIN, and FREE THE SCRATCH PATH before doing it.
 #
-# Measured 2026-09-02: app.newProject returned but wrote no file (its
-# name and path both read back empty), so Premiere kept a path in its
-# recent list that does not exist and greeted the NEXT launch with
-# "the file path does not exist at this location" - a modal, on open,
-# with nobody there. Handing Premiere a project path is a liability with
-# no upside now: waitForReady plus the reuse-the-open-empty-project rule
-# gets a usable project without creating one.
-# A scratch project that REALLY EXISTS is passed on the command line; a
-# stale or empty one is deleted first.
+# Measured 2026-09-03 on 26.3.2, three runs back to back, which settled
+# an argument the comment here used to have with itself:
 #
-# Both halves were learned the hard way on 2026-09-02. app.newProject
-# returned without writing a file, so Premiere kept a dead path in its
-# recent list and greeted the next launch with "the file path does not
-# exist at this location" - a modal, on open, with nobody there. Then
-# launching PLAIN turned out to be worse: Premiere sits on the Home
-# screen and never opens a project at all, so app.project.name stayed
-# empty for the full 30s wait and every project-dependent step failed.
+#   A. scratch file present, handed to Premiere on the command line ->
+#      Premiere does NOT open it. app.project.name was still empty
+#      after the full 30s wait, every project-dependent step failed
+#      with it, and on the way out Premiere put up "This file path
+#      does not exist on disk at this location. <that path>" - about a
+#      14216-byte file that WAS on disk. Nobody can answer that modal
+#      unattended, so the close timed out and the instance was forced.
+#   B. the SAME thing with a scratch written by a clean close, not by a
+#      killed one -> identical. So the file's history is not the
+#      discriminator; handing Premiere a project path simply does not
+#      open it here.
+#   C. the same run with the file moved aside -> app.newProject created
+#      the project, save() wrote it, `history` measured for the first
+#      time (3 bins), and Premiere closed by itself.
 #
-# So: create it once (the battery does that and saves it), and from then
-# on hand it to Premiere directly.
-$haveScratch = $false
-if (Test-Path $scratch) {
-    $size = (Get-Item $scratch).Length
-    if ($size -lt 1024) {
-        Say "Deleting a stale scratch project ($size bytes) - Premiere would"
-        Say 'greet the next launch with a "file path does not exist" modal.'
-        Remove-Item $scratch -Force -ErrorAction SilentlyContinue
-    } else {
-        $haveScratch = $true
+# app.newProject will not overwrite a path that is taken (it returned
+# FALSE and left an AELL_PROBE_SCRATCH<guid> sidecar behind), so the
+# scratch file is not an asset to carry forward - it is the thing that
+# breaks the NEXT run. Archive it, never reuse it, and let the battery
+# create a fresh one every time.
+$stale = Join-Path $probeData 'stale'
+$leftovers = @(Get-ChildItem -LiteralPath $probeData -File -ErrorAction SilentlyContinue |
+               Where-Object { $_.Name -like 'AELL_PROBE_SCRATCH*' })
+if ($leftovers.Count -gt 0) {
+    New-Item -ItemType Directory -Force -Path $stale | Out-Null
+    foreach ($f in $leftovers) {
+        # These are this script's own throwaways in its own folder, and
+        # they are MOVED, not deleted, so a run that wants to look at
+        # what the last one wrote still can.
+        try {
+            Move-Item -LiteralPath $f.FullName `
+                      -Destination (Join-Path $stale $f.Name) -Force -ErrorAction Stop
+        } catch {
+            Remove-Item -LiteralPath $f.FullName -Force -ErrorAction SilentlyContinue
+        }
     }
+    Say ('Archived ' + $leftovers.Count + ' scratch file(s) from an earlier run into ' + $stale)
 }
 # -PassThru so the PID is known. Everything that force-closes below
 # targets THIS process and no other: an instance the owner started, with
 # their own work in it, must never be killed by this script.
-if ($haveScratch) {
-    Say 'Launching Premiere with the scratch project...'
-    $ours = Start-Process -FilePath $PremierePath -ArgumentList @($scratch) -PassThru
-} else {
-    Say 'Launching Premiere (no scratch project yet: the battery makes one)...'
-    $ours = Start-Process -FilePath $PremierePath -PassThru
-}
+Say 'Launching Premiere (plain: the battery creates the scratch project).'
+$ours = Start-Process -FilePath $PremierePath -PassThru
 
 # ------------------------------------------------------------- wait
 Say ("Waiting up to " + $TimeoutSec + "s for a result (first launch is slow)...")
@@ -369,6 +398,20 @@ if (-not (Test-Path $resFile)) {
         } catch { Say "Progress file present but unreadable: $progFile" }
     } else {
         Say 'No progress file - the battery never started a step.'
+    }
+
+    # The soak has a breadcrumb of its own because it runs AFTER the
+    # battery's last flush: without this a hang in round 300 would print
+    # the battery's all-ok list and no reason at all.
+    $soakProg = Join-Path $probeData 'job-soak-progress.json'
+    if (Test-Path $soakProg) {
+        try {
+            $sp = Read-AellJson -Path $soakProg
+            Bad ("  HUNG  soak at round " + $sp.soakingRound + " of " + $sp.of +
+                 "  (last seen " + $sp.at + ")")
+            Say ''
+            Say 'Re-run without it:  ... run-ppro-probe.ps1 -SoakRounds 0'
+        } catch { Say "Soak progress file present but unreadable: $soakProg" }
     }
 
     Say ''
@@ -514,6 +557,30 @@ if ($battery -and $battery.steps) {
 } else {
     Warn 'The result carries no battery steps - see the raw file.'
     $failedSteps++
+}
+
+# The soak is not a battery step, so it prints on its own. A DEGRADED
+# engine is a run failure; a soak that was never attempted or that ran
+# out of budget is UNMEASURED and says so - it must never read as
+# survival, which is the one thing this whole gate exists to refuse.
+if ($res.soak) {
+    Say ''
+    Say '-- engine soak (CEP -> ExtendScript round trips)'
+    if ($res.soak.failedAt) {
+        $failedSteps++
+        Bad ("  FAIL  " + $res.soak.verdict)
+        Show-Fact 'rounds survived' $res.soak.rounds
+        Show-Fact 'error' $res.soak.error
+    } elseif ($res.soak.skipped) {
+        Warn ("  ----  UNMEASURED: " + $res.soak.skipped)
+    } else {
+        Good ("  ok    " + $res.soak.verdict)
+        Show-Fact 'took (ms)' $res.soak.ms
+        Show-Fact 'payload bytes' $res.soak.payloadBytes
+    }
+} elseif ($res.soakNote) {
+    Say ''
+    Warn ('-- engine soak: UNMEASURED. ' + $res.soakNote)
 }
 
 # And keep a copy in the repo, so the measurements are committed with

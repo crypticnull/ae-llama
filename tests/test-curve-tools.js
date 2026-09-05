@@ -4,8 +4,16 @@
 const fs = require("fs");
 const path = require("path");
 
-function Prop(value) {
+// AE's own enum values, so `p.propertyType === PropertyType.PROPERTY`
+// means here what it means in the host.
+const PropertyType = { PROPERTY: 6270, INDEXED_GROUP: 6271,
+                       NAMED_GROUP: 6272 };
+
+function Prop(value, matchName, name) {
   this._value = value;
+  this.matchName = matchName || "";
+  this.name = name || matchName || "";
+  this.propertyType = PropertyType.PROPERTY;
   this.canSetExpression = true;
   this.expression = "";
   this.expressionError = "";
@@ -75,27 +83,71 @@ function KeyframeEase(speed, influence) {
 }
 const KeyframeInterpolationType = { BEZIER: "bezier" };
 
+// A property GROUP, reachable by match name AND by 1-based index — the
+// index half is what a whole-layer walk uses, and the old stub had only
+// the name half, so no stubbed run could see a walk at all.
+function Group(name, matchName, kids) {
+  this.name = name; this.matchName = matchName;
+  this.propertyType = PropertyType.NAMED_GROUP;
+  this._kids = kids || [];   // [[matchName, prop], ...]
+}
+Object.defineProperty(Group.prototype, "numProperties", {
+  get() { return this._kids.length; }
+});
+Group.prototype.property = function (ref) {
+  if (typeof ref === "number") {
+    const k = this._kids[ref - 1];
+    return k ? k[1] : null;
+  }
+  const hit = this._kids.find(k => k[0] === ref || k[1].name === ref);
+  return hit ? hit[1] : null;
+};
+Group.prototype.push = function (matchName, prop) {
+  this._kids.push([matchName, prop]);
+  return prop;
+};
+
 function Layer(name, comp, inP) {
   this.name = name; this.comp = comp; this.selected = true;
   this.inPoint = inP; this.outPoint = inP + 1; this.startTime = 0;
   this._transform = {
-    "ADBE Position": new Prop([100, 100]),
+    "ADBE Position": new Prop([100, 100], "ADBE Position", "Position"),
     // faithful to AE: 2D scale is PADDED to 3 components via scripting
-    "ADBE Scale": new Prop([100, 100, 100]),
-    "ADBE Rotate Z": new Prop(0),
-    "ADBE Opacity": new Prop(100),
-    "ADBE Anchor Point": new Prop([0, 0])
+    "ADBE Scale": new Prop([100, 100, 100], "ADBE Scale", "Scale"),
+    "ADBE Rotate Z": new Prop(0, "ADBE Rotate Z", "Rotation"),
+    "ADBE Opacity": new Prop(100, "ADBE Opacity", "Opacity"),
+    "ADBE Anchor Point": new Prop([0, 0], "ADBE Anchor Point", "Anchor Point")
   };
+  const xform = new Group("Transform", "ADBE Transform Group",
+    Object.keys(this._transform).map(k => [k, this._transform[k]]));
+  this._effects = new Group("Effects", "ADBE Effect Parade", []);
+  this._masks = new Group("Masks", "ADBE Mask Parade", []);
+  // Measured AE 26.3x87 (scripts/stagger-motion-probe.jsx): a layer's
+  // ROOT property list starts with Marker and Time Remap, and BOTH are
+  // LEAF properties — a marker reads numKeys > 0 and is not animation.
+  this._marker = new Prop(null, "ADBE Marker", "Marker");
+  this._timeRemap = new Prop(0, "ADBE Time Remapping", "Time Remap");
+  this._root = new Group(name, "", [
+    ["ADBE Marker", this._marker],
+    ["ADBE Time Remapping", this._timeRemap],
+    ["ADBE Mask Parade", this._masks],
+    ["ADBE Effect Parade", this._effects],
+    ["ADBE Transform Group", xform]
+  ]);
+  // Measured: a SOLID's source reports duration 0, a precomp's reports
+  // its real length — that is what separates a still from something
+  // that plays on its own.
+  this.source = { name: name + " Solid", duration: 0 };
+  this.hasAudio = false;
 }
 Object.defineProperty(Layer.prototype, "index", {
   get() { return this.comp._layers.indexOf(this) + 1; }
 });
-Layer.prototype.property = function (name) {
-  if (name === "ADBE Transform Group") {
-    const t = this._transform;
-    return { property(n) { return t[n]; } };
-  }
-  return null;
+Object.defineProperty(Layer.prototype, "numProperties", {
+  get() { return this._root.numProperties; }
+});
+Layer.prototype.property = function (ref) {
+  return this._root.property(ref);
 };
 
 function Comp(name) {
@@ -724,5 +776,134 @@ assert(!r.ok && /Nothing on this layer is keyframed/.test(r.error) &&
        /set_keyframes first/.test(r.error),
        "an unanimated layer is told there is nothing to ease yet (" +
        r.error + ")");
+
+// 7c. A stagger on layers with NOTHING on them. Field run 2026-09-03,
+// row 32: three of four phrasings called stagger_layers ALONE, it moved
+// six start times and answered ok {layers:6, spread:2.5, placed:[…]} —
+// and nothing faded, because there were no keyframes to stagger. A
+// success receipt for a comp where nothing animates.
+//
+// Runs LAST and starts from clean: every section above leaves keyframes
+// and rigs on these layers, and the subject here is a comp with none.
+comp._layers.forEach(l => {
+  Object.keys(l._transform).forEach(k => {
+    const p = l._transform[k];
+    p.numKeys = 0; p._keyTimes = []; p._keyValues = []; p._eases = {};
+    if (p.expressionEnabled) p.expression = "";
+  });
+  l._marker.numKeys = 0;
+  l._timeRemap.numKeys = 0;
+  l._effects._kids.length = 0;
+  l._masks._kids.length = 0;
+  l.startTime = 0;
+  l.source = { name: l.name + " Solid", duration: 0 };
+});
+const staggerFive = { layers: ["L1", "L2", "L3", "L4", "L5"], spread: 4,
+                      startAt: 0 };
+
+// STUB FIDELITY, measured AE 26.3x87 (scripts/stagger-motion-probe.jsx):
+// a layer's ROOT property 1 is Marker and it is a LEAF. The old stub had
+// no root list at all — `property()` answered by name only — so no
+// stubbed run could see a whole-layer walk, which is why this class was
+// invisible here.
+const rootOne = comp.layer("L1").property(1);
+assert(rootOne && rootOne.matchName === "ADBE Marker" &&
+       rootOne.propertyType === PropertyType.PROPERTY,
+       "stub fidelity: root property 1 is Marker, and it is a LEAF");
+assert(comp.layer("L1").property("ADBE Transform Group").numProperties === 5,
+       "stub fidelity: a group answers by INDEX as well as by name");
+
+r = call("stagger_layers", staggerFive);
+assert(r.ok &&
+       /nothing on these 5 layers varies over time/.test(r.data.warning || ""),
+       "staggering layers with no animation warns the stagger is " +
+       "invisible: " + (r.ok ? (r.data.warning || "(NO WARNING)") : r.error));
+assert(r.ok && /set_keyframes/.test(r.data.warning || "") &&
+       /relativeTo/.test(r.data.warning || ""),
+       "...and names the tool that adds the animation and the argument " +
+       "that keeps these offsets");
+
+// A MARKER is not animation. It reads numKeys > 0 in real AE, so a walk
+// that counted it would fall silent on exactly the layers this is for.
+comp._layers.forEach(l => { l._marker.numKeys = 1; });
+r = call("stagger_layers", staggerFive);
+assert(r.ok && /varies over time/.test(r.data.warning || ""),
+       "a marker on every layer does NOT count as animation");
+comp._layers.forEach(l => { l._marker.numKeys = 0; });
+
+// One keyframe anywhere and it goes quiet: the warning speaks only when
+// EVERY target is static.
+const kOpa = comp.layer("L3")._transform["ADBE Opacity"];
+kOpa.numKeys = 2; kOpa._keyTimes = [0, 1]; kOpa._keyValues = [0, 100];
+r = call("stagger_layers", staggerFive);
+assert(r.ok && !r.data.warning,
+       "one keyframed layer among five silences the warning (got: " +
+       (r.ok ? r.data.warning : r.error) + ")");
+kOpa.numKeys = 0; kOpa._keyTimes = []; kOpa._keyValues = [];
+
+// ...and the keyframe is found however deep it sits. An effect param is
+// three levels below the layer root, past groups the old stub could not
+// even enumerate.
+const blurFx = new Group("Gaussian Blur", "ADBE Gaussian Blur 2", []);
+const blurriness = blurFx.push("ADBE Gaussian Blur 2-0001",
+  new Prop(0, "ADBE Gaussian Blur 2-0001", "Blurriness"));
+comp.layer("L2")._effects.push("ADBE Gaussian Blur 2", blurFx);
+blurriness.numKeys = 2;
+r = call("stagger_layers", staggerFive);
+assert(r.ok && !r.data.warning,
+       "a keyframe on an EFFECT parameter counts as animation");
+
+// An effect with NO keys silences it too: some effects animate on their
+// own at zero keyframes (CC Particle World, Radio Waves), so an effect
+// is doubt — and a warning that says nothing animates has to be right.
+blurriness.numKeys = 0;
+r = call("stagger_layers", staggerFive);
+assert(r.ok && !r.data.warning,
+       "an unkeyed EFFECT is doubt enough to stay quiet");
+comp.layer("L2")._effects._kids.length = 0;
+
+// An expression is doubt for the same reason: it may be reading a
+// keyframed slider on another layer, which no walk of THIS layer sees.
+comp.layer("L4")._transform["ADBE Position"].expression =
+  "thisComp.layer(\"CTRL\").effect(\"Spacing X\")(1)";
+r = call("stagger_layers", staggerFive);
+assert(r.ok && !r.data.warning,
+       "an expression anywhere is doubt enough to stay quiet");
+comp.layer("L4")._transform["ADBE Position"].expression = "";
+
+// A source that PLAYS is motion without a single keyframe. Measured: a
+// solid's source reports duration 0 where a precomp's reports 4.
+comp.layer("L5").source = { name: "Sub", duration: 4 };
+r = call("stagger_layers", staggerFive);
+assert(r.ok && !r.data.warning,
+       "a moving source (precomp or clip) counts as animation");
+comp.layer("L5").source = { name: "L5 Solid", duration: 0 };
+
+// Time Remap is a root LEAF exactly like Marker — and unlike Marker its
+// keys ARE animation, so the two cannot be handled by position.
+comp.layer("L1")._timeRemap.numKeys = 2;
+r = call("stagger_layers", staggerFive);
+assert(r.ok && !r.data.warning, "Time Remap keys count as animation");
+comp.layer("L1")._timeRemap.numKeys = 0;
+
+// The walk is budgeted (measured 162 nodes for a bare solid at 0.008 ms
+// each), and a budget that runs out is UNPROVED — not proof of nothing.
+const fatGroup = new Group("Fat", "ADBE Fat", []);
+for (let i = 0; i < 21000; i++) {
+  fatGroup.push("ADBE Fat-" + i, new Prop(0, "ADBE Fat-" + i, "F" + i));
+}
+comp.layer("L1")._root.push("ADBE Fat", fatGroup);
+r = call("stagger_layers", staggerFive);
+assert(r.ok && !r.data.warning,
+       "an exhausted scan budget says nothing rather than guessing");
+comp.layer("L1")._root._kids.pop();
+
+// ...and with every fixture removed the warning comes back, so none of
+// the silences above passed by accident.
+r = call("stagger_layers", staggerFive);
+assert(r.ok && /varies over time/.test(r.data.warning || ""),
+       "the warning returns once the fixtures are taken away");
+comp._layers.forEach(l => { l.startTime = 0; });
+
 
 console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");

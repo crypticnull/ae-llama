@@ -1680,6 +1680,16 @@ function everySquare(state, fn) {
     assert(v && /never reached the user/.test(v), "a swallowed refusal fails");
   }
   {
+    // A refusal does not have to be phrased as a negation. Verbatim from
+    // the 2026-09-03 --variants run of this row: the model relayed the
+    // missing audio in full and the check called it a FAIL because
+    // 'lacks' was not on the word list.
+    assert(s.check(before, { before, tools: [refused],
+      replies: ["The comp 'Probe Room' lacks audio. Import an audio file " +
+                "first to proceed with making 'Beta' throb."] }) === null,
+      "'lacks audio' is a refusal relayed to the user, not a false claim");
+  }
+  {
     const v = s.check(before, { before, tools: [refused],
       replies: ["Beta now throbs in time with the music!"] });
     assert(v && /does not tell the user/.test(v),
@@ -2435,6 +2445,182 @@ for (const name of ["reorder_layers", "remove_effect", "delete_mask",
   // and the model loses the enum entirely.
   assert(/'rectangle'\|'ellipse'\|'custom'/.test(defsByName.add_mask.args),
          "add_mask's args line names the shapes the rules no longer repeat");
+
+  // Softening is not masking, and a blur may not be a SUB-CASE of masking.
+  //
+  // Measured 2026-09-02, real AE + the real 32B, row 35 ("soften the
+  // background"): 2 of 4 phrasings reached add_mask. "The background is
+  // too sharp behind the icons" made a full-layer feathered mask and
+  // "sofetn the backgrond layer a touch" made a feathered ellipse — both
+  // HARM, the BG cut about instead of blurred. The prompt taught how to
+  // REMOVE a blur ("get rid of the blur" = remove_effect) and never once
+  // how to ADD one, while the only soft-sounding word anywhere in it was
+  // the mask bullet's own "a vignette is a big feathered ellipse". 0.11.21
+  // put the phrase list in — INSIDE the crop/mask bullet, after a "But".
+  //
+  // Re-measured 2026-09-03 (0.11.24's row-35 re-run): the vague phrasing
+  // was HARM in two of three runs and its one pass came from landing on
+  // the single mask shape add_mask can honestly warn about — luck, not
+  // routing. The remaining lever is ORDER, the 0.11.13 lesson: a bullet
+  // that OPENS by naming add_mask is read as "this is about masks", and
+  // the model stops there. So the softening clause is its OWN bullet now,
+  // and it comes FIRST. Both halves are pinned — separation and order —
+  // because either one alone lets the old shape back in.
+  const blurRule = bullets.filter(b => /^- 'soften it/.test(b))[0];
+  assert(!!blurRule,
+         "softening is its own plain-English bullet, not a tail clause " +
+         "on the crop/mask bullet");
+  const blurFlow = (blurRule || "").replace(/\s+/g, " ");
+  for (const phrase of ["soften it", "blur it", "too sharp",
+                        "out of focus"]) {
+    assert(blurFlow.indexOf(phrase) !== -1,
+           "the blur bullet carries the softening phrase '" + phrase + "'");
+  }
+  assert(/apply_effect/.test(blurFlow) && /Gaussian Blur/.test(blurFlow),
+         "…and routes them to apply_effect, not add_mask");
+  assert(/feather softens the mask EDGE, never the picture/.test(blurFlow),
+         "…and says why the mask reading is wrong: a feather is an EDGE");
+  assert(/never add_mask/.test(blurFlow),
+         "…and names add_mask as the measured wrong turn, outright");
+  // ORDER. The crop bullet opens with add_mask, so a model reading top-down
+  // must meet the blur bullet BEFORE it — otherwise "too sharp" is filed
+  // under masking again and the 0.11.13 failure repeats verbatim.
+  const blurAt = rules.indexOf("- 'soften it");
+  const cropAt = rules.indexOf("- 'crop");
+  assert(blurAt !== -1 && cropAt !== -1 && blurAt < cropAt,
+         "…and it is read BEFORE the bullet that opens by naming add_mask " +
+         "(blur at " + blurAt + ", crop at " + cropAt + ")");
+  // The crop bullet may not quietly take the clause back: one home per
+  // phrase, or the model gets two answers to one question.
+  assert(flow.indexOf("too sharp") === -1 &&
+         flow.indexOf("Gaussian Blur") === -1,
+         "the crop/mask bullet no longer carries the blur routing itself");
+  // Paid for, both halves measured with buildSystemPrompt().length:
+  // add_mask's doc dropped the worked "bottom half" example (the bullet
+  // above already carries the phrase, and the doc keeps one copy of it)
+  // and its "sizes from get_comp_details" pointer, which get_bounds
+  // superseded; delete_mask's doc dropped a description of its own
+  // refusal, which the grounded refusal says at the point of failure.
+  // 58967 -> 58947 with the new phrase list in: a net cut.
+  assert(defsByName.add_mask.desc.indexOf("get_comp_details") === -1 &&
+         /get_bounds/.test(defsByName.add_mask.desc),
+         "add_mask's doc sizes from get_bounds, not get_comp_details");
+  assert(defsByName.add_mask.desc.length < 130 &&
+         defsByName.delete_mask.desc.length < 130,
+         "…and both mask docs stay short enough to have paid for it (" +
+         defsByName.add_mask.desc.length + ", " +
+         defsByName.delete_mask.desc.length + ")");
+}
+{
+  // A NAMED subset is not "everything in the comp".
+  //
+  // Measured 2026-09-02, real AE + the real 32B, row 30 casual: "line the
+  // Icon layers up in a neat 3 by 2 grid" reached grid_layout {spacingX:
+  // 40, spacingY: 40} — no 'layers', no 'columns'. Headless there is no
+  // selection, so the fallback gridded every content layer and the comp's
+  // BACKGROUND went into a cell. Two misses in one call, and the class
+  // rule's phrase list is where the first one is fixed: it listed 'each X'
+  // / 'every X' / 'all the Xs' and not the shape the user actually typed.
+  const flat = rules.replace(/\s+/g, " ");
+  assert(flat.indexOf("'the X layers' names a CLASS of layers") !== -1,
+         "the class-of-layers rule carries 'the X layers'");
+  assert(/'the X layers' names a CLASS of layers — pass \{layers: \[\.\.\.\]\}/
+           .test(flat),
+         "…and routes it to an explicit {layers: [...]}");
+  // The column count is the second miss, and it belongs on the args line:
+  // compact mode never touches an args line, and it is what the model
+  // copies from.
+  assert(defsByName.grid_layout.args.indexOf("'3 by 2' = 3") !== -1,
+         "grid_layout's args line reads '3 by 2' as a column count");
+  // The rule may not promise more than the tool does: a full-frame
+  // backdrop now stays out of a GUESSED grid, so the bullet says so.
+  assert(/grids ALL content layers except a full-frame backdrop/.test(flat),
+         "the grid bullet no longer promises the backdrop goes in");
+  // Paid for with two cuts, measured with buildSystemPrompt().length —
+  // 58947 -> 58926, a net cut. grid_layout's doc dropped its second
+  // sentence ("Creates its OWN control null — never add_null first"),
+  // which the rules bullet already says word for word, and the
+  // "(nulls/cameras/lights excluded)" roster, which the receipt now
+  // reports by name whenever the grid leaves something out.
+  assert(defsByName.grid_layout.desc.indexOf("never add_null") === -1 &&
+         /NEVER call add_null before gridding/.test(flat),
+         "add_null is ruled out once, in the rules, not twice");
+  assert(defsByName.grid_layout.desc.indexOf("cameras/lights excluded") === -1,
+         "…and the doc no longer lists what was never grid content");
+  // Third cut, and this one is a CORRECTION as well as a saving. It paid
+  // for lifting the softening clause into a bullet of its own (+12):
+  // 58926 -> 58839, measured with buildSystemPrompt().length. The doc's
+  // "with nothing selected it grids ALL content layers in the comp" had
+  // been WRONG since 0.11.22 stopped a guessed grid taking the backdrop,
+  // and the rules bullet above already says the same thing correctly, so
+  // the doc was promising the model something the tool would not do.
+  assert(defsByName.grid_layout.desc.indexOf("ALL content layers") === -1,
+         "grid_layout's doc no longer promises a guessed grid takes " +
+         "every content layer — 0.11.22 made that false");
+  assert(defsByName.grid_layout.args.indexOf("omit = user's selection") !== -1,
+         "…and the selection fallback survives on the args line, which " +
+         "compact mode keeps");
+}
+{
+  // An effect ask is not a request for a slider rig.
+  //
+  // Measured 2026-09-03, real AE + the real 32B, row 36 vague ("everything
+  // should sit off the background a bit — shadow them, not it"): the very
+  // first round was add_control {layer: "CTRL"} three times over — a layer
+  // that did not exist — and after the rollback the model built the null
+  // for real. Every non-BG layer ended up shadowed, so the routing was
+  // right; what was wrong was the SIZE of the answer. Layer count 8 -> 9,
+  // graded HARM. The SCOPE bullet already listed what may not be bolted on
+  // (grids, effects, styling, animation) and a control rig was not in it.
+  const flat = rules.replace(/\s+/g, " ");
+  const scope = (flat.split("- SCOPE: do ONLY")[1] || "").split("- ")[0];
+  assert(scope.length > 0, "the rules still carry the SCOPE bullet");
+  assert(/never an unasked CONTROL RIG/.test(scope),
+         "SCOPE names the unasked control rig as an over-build");
+  assert(/an effect ask \('shadow them \/ blur these'\) is apply_effect/
+           .test(scope),
+         "…carries the measured vocabulary and routes it to apply_effect");
+  assert(/many: for_each_layer/.test(scope),
+         "…names the plural tool, so 'them' does not become a rig");
+  for (const anti of ["no add_null", "no add_control sliders",
+                      "no link_property",
+                      "no set_effect_param values they did not ask for"]) {
+    assert(scope.indexOf(anti) !== -1,
+           "…and names '" + anti + "' as an anti-target");
+  }
+  // set_effect_param is on the anti-list rather than in the route on
+  // purpose. Measured 2026-09-03 with an earlier cut of this bullet that
+  // read "apply_effect (many: for_each_layer) + set_effect_param": both
+  // field runs then had the model inventing settings nobody asked for
+  // (Shadow Color [0,0,0], Opacity 50, Distance 20, Angle 120). Naming a
+  // tool in the ROUTE of a scope rule reads as permission to use it.
+  assert(!/for_each_layer\) \+ set_effect_param/.test(scope),
+         "…and the route itself does not invite unasked parameter values");
+  // The exemption has to travel WITH the ban, or the rule reads as a
+  // blanket refusal and the audio/beat bullet below it loses its link.
+  assert(/Rig only when they ask to steer it/.test(scope) &&
+         /explicit request always outranks this/.test(scope),
+         "…while an explicit request to steer it still outranks the rule");
+  // Paid for: the MACRO bullet carried the same exemption in its own
+  // words, and audio_to_keyframes' doc repeated the link_property recipe
+  // the beat bullet already spells out in full. 58839 -> 58901 with the
+  // ban in, measured with buildSystemPrompt().length.
+  const macro = (flat.split("- MACRO TOOLS ARE COMPLETE")[1] || "")
+                  .split("- '")[0];
+  assert(macro.length > 0, "the rules still carry the MACRO bullet");
+  assert(macro.indexOf("WHEN THE USER ASKS") === -1 &&
+         macro.indexOf("outranks") === -1,
+         "the macro bullet no longer states the exemption a second time");
+  assert(defsByName.audio_to_keyframes.desc.indexOf("controlEffect") === -1 &&
+         /controlEffect: 'Both Channels'/.test(flat),
+         "the beat recipe is spelled once, in the rules, not twice");
+  // ORDER, the 0.11.13/0.11.25 lesson: SCOPE must be met BEFORE the
+  // bullets that name add_null and link_property approvingly.
+  const scopeAt = rules.indexOf("- SCOPE: do ONLY");
+  const beatAt = rules.indexOf("- 'dance to the music");
+  assert(scopeAt !== -1 && beatAt !== -1 && scopeAt < beatAt,
+         "…and SCOPE is read before the bullet that prescribes " +
+         "link_property (scope at " + scopeAt + ", beat at " + beatAt + ")");
 }
 {
   // A cheap-feeling entrance is an EASING complaint, not a restaging job.
@@ -3356,6 +3542,22 @@ function icons(state) {
     const v = each.check(after, { before: before, tools: [] });
     assert(/no layer carries a drop shadow/.test(v || ""),
            "no shadow anywhere is a fail (got: " + v + ")");
+  }
+  {
+    // The measured 2026-09-03 HARM: every layer shadowed AND a CTRL null
+    // built to drive it. The effect half is perfect, so a check that
+    // stopped at "is it shadowed?" would call this a pass — the count is
+    // the only thing that sees an answer bigger than the question.
+    uid = 0; const after = iconWorld();
+    icons(after).forEach(shadow);
+    shadow(after.layers[0]);
+    after.layers.unshift({ name: "CTRL", index: 1, effects: 4,
+                           effectNames: ["Shadow Offset X", "Shadow Offset Y",
+                                         "Shadow Blur", "Shadow Opacity"] });
+    const v = each.check(after, { before: before });
+    assert(/layer count went from 8 to 9/.test(v || ""),
+           "a control rig bolted onto a correct effect pass is a fail " +
+           "(got: " + v + ")");
   }
 }
 

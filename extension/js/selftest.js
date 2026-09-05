@@ -79,6 +79,16 @@
   // caller named EVERY layer in this comp", so the comp has to hold a
   // roster nothing else in the suite adds to.
   var WPCOMP = "AELL Self-Test Wipe";
+  // And the "nothing to stagger" rig. Every other comp in the suite has
+  // been keyframed by the time stagger_layers runs, and the class this
+  // measures is a comp where NOTHING is animated — so it needs solids
+  // nobody else has touched.
+  var SMCOMP = "AELL Self-Test Stagger";
+  // And the "grid guessed the layer list" rig. grid_layout's fallback
+  // only fires with NOTHING selected, and every other comp in the suite
+  // has layers selected by the time it runs — so this needs its own comp
+  // whose selection nobody has touched.
+  var GBCOMP = "AELL Self-Test Grid BG";
   var running = false;
 
   /**
@@ -391,7 +401,12 @@
                    bezier: [0, 0, 0.58, 1], startAt: 0 };
         },
         check: function (d) {
-          return d.layers === 9 || "layers " + d.layers;
+          if (d.layers !== 9) return "layers " + d.layers;
+          // These nine carry scale AND opacity keyframes from the batch
+          // steps above, so the "nothing animates" warning must stay
+          // silent here. A warning that fires on animated layers would
+          // cost a round on every real stagger.
+          return !d.warning || "warned on animated layers: " + d.warning;
         } },
 
       { name: "ellipse mask",
@@ -623,6 +638,116 @@
         },
         check: function (d) {
           return d.expression === "cleared" || "expression: " + d.expression;
+        } },
+
+      // ---- What was ALREADY on the property (0.11.32) -----------------
+      // Filed by the 0.11.31 pass and measured in real AE 2026 by
+      // scripts/link-overwrite-probe.js: two link_property calls drove one
+      // property from two different sliders, BOTH answered ok, and nothing
+      // said the first link was gone. The probe found the sharper half on
+      // the FAILING path — AE does not throw a bad expression, it keeps the
+      // text and fills expressionError, and the old cleanup cleared the
+      // property — so a REFUSAL cost the user the working expression that
+      // was already there. ST Square 7's opacity is free again here (the
+      // step above cleared it), so this group owns it.
+      { name: "a link onto a bare property claims no replacement",
+        tool: "link_property",
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: "ST Square 7",
+                   property: "opacity", controlLayer: "GRID CTRL",
+                   controlEffect: "Grid X Spacing", scale: 0.1 };
+        },
+        check: function (d) {
+          if (d.replaced !== undefined) {
+            return "invented a replacement: " + d.replaced;
+          }
+          return d.unchanged === undefined ||
+                 "called a first link unchanged: " + d.unchanged;
+        } },
+
+      { name: "…a SECOND link over it names the expression it replaced",
+        tool: "link_property",
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: "ST Square 7",
+                   property: "opacity", controlLayer: "GRID CTRL",
+                   controlEffect: "Grid Y Spacing", scale: 0.1 };
+        },
+        check: function (d) {
+          if (!d.replaced) return "said nothing about the link it replaced";
+          if (d.replaced.indexOf("Grid X Spacing") === -1) {
+            return "named the wrong one: " + d.replaced;
+          }
+          return /GONE/.test(d.replacedNote || "") ||
+                 "no note saying it is gone: " + (d.replacedNote || "");
+        } },
+
+      { name: "…and the same link again is a no-op, not a loss",
+        tool: "link_property",
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: "ST Square 7",
+                   property: "opacity", controlLayer: "GRID CTRL",
+                   controlEffect: "Grid Y Spacing", scale: 0.1 };
+        },
+        check: function (d) {
+          if (d.replaced !== undefined) {
+            return "claimed a loss on an identical write: " + d.replaced;
+          }
+          return !!d.unchanged || "did not say nothing changed";
+        } },
+
+      { name: "a REJECTED expression keeps the link that was there",
+        tool: "set_expression",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: "ST Square 7",
+                   property: "opacity",
+                   expression: 'thisComp.layer("ST NO SUCH LAYER").opacity;' };
+        },
+        check: function (err) {
+          return /Nothing was lost/.test(err) ||
+                 "the refusal does not say the old expression was kept: " +
+                 err;
+        } },
+
+      { name: "…and AE really still carries it",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: "ST Square 7",
+                   property: "opacity" };
+        },
+        check: function (d) {
+          var e = String(d.expression || "");
+          if (e === "") return "the rejected write cleared the property";
+          if (e.indexOf("Grid Y Spacing") === -1) {
+            return "the property carries something else: " + e;
+          }
+          return true;
+        } },
+
+      { name: "clearing an expression names what it removed",
+        tool: "set_expression",
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: "ST Square 7",
+                   property: "opacity", expression: "" };
+        },
+        check: function (d) {
+          if (!d.removed) return "cleared it in silence";
+          return d.removed.indexOf("Grid Y Spacing") !== -1 ||
+                 "named the wrong expression: " + d.removed;
+        } },
+
+      { name: "…and clearing nothing says nothing was removed",
+        tool: "set_expression",
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: "ST Square 7",
+                   property: "opacity", expression: "" };
+        },
+        check: function (d) {
+          if (d.removed !== undefined) {
+            return "invented a removal: " + d.removed;
+          }
+          return /nothing was removed/.test(d.note || "") ||
+                 "no note: " + (d.note || "");
         } },
 
       { name: "reorder layers (stacking only)",
@@ -2173,6 +2298,128 @@
                  "remainingMasks " + JSON.stringify(rem);
         } },
 
+      // ZERO masks is its own answer, not a roster of nothing. Measured
+      // in real AE through the chat probe 2026-09-03: "Soften the
+      // background a touch." and its typo twin both called
+      // set_mask {layer: "BG", feather: 10} on a maskless layer, and the
+      // refusal told them two untrue-or-unhelpful things -- "(several
+      // masks - pass {mask: name|index})" on a layer with none, and
+      // "(none - add_mask creates one)" as its last word. The model
+      // obeyed that last word and feathered a full-frame mask, which
+      // softens nothing. Both runs graded HARM.
+      { name: "a maskless layer to soften",
+        tool: "add_solid",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, name: "ST Soften", color: [0.2, 0.2, 0.3],
+                   width: 200, height: 200 };
+        },
+        check: function (d) { return d.name === "ST Soften" || d.name; } },
+
+      { name: "set_mask {feather} with no masks routes to a BLUR",
+        tool: "set_mask",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Soften", feather: 10 };
+        },
+        check: function (e) {
+          if (/several masks/.test(e)) {
+            return "still claims 'several masks' on a layer with none: " + e;
+          }
+          if (/add_mask/.test(e)) {
+            return "still offers add_mask -- the tail the model obeyed: " + e;
+          }
+          if (!/has no masks/.test(e)) return "message was: " + e;
+          if (!/feather softens a mask EDGE/.test(e)) {
+            return "does not say what a feather actually does: " + e;
+          }
+          if (!/apply_effect/.test(e) || !/Gaussian Blur/.test(e)) {
+            return "no paste-ready blur offered: " + e;
+          }
+          if (!/ST Soften/.test(e)) return "does not name the layer: " + e;
+          return true;
+        } },
+
+      { name: "…and the refusal wrote no mask",
+        tool: "delete_mask",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Soften" };
+        },
+        check: function (e) {
+          return /has no masks/.test(e) || "message was: " + e;
+        } },
+
+      { name: "any OTHER edit still points at add_mask",
+        tool: "set_mask",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Soften", opacity: 50 };
+        },
+        check: function (e) {
+          if (!/has no masks/.test(e)) return "message was: " + e;
+          if (!/add_mask creates one/.test(e)) {
+            return "a caller who wants a mask is not told where to get " +
+                   "one: " + e;
+          }
+          if (/Gaussian Blur/.test(e)) {
+            return "a blur was offered to a caller who asked for opacity: " + e;
+          }
+          return true;
+        } },
+
+      { name: "…and so does a feather ALONGSIDE a real mask edit",
+        tool: "set_mask",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Soften", feather: 10,
+                   mode: "subtract" };
+        },
+        check: function (e) {
+          if (!/add_mask creates one/.test(e)) return "message was: " + e;
+          return !/Gaussian Blur/.test(e) ||
+                 "that caller does want a mask: " + e;
+        } },
+
+      { name: "two masks and no ref: 'several masks' is TRUE",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Soften", name: "ST S1",
+                   shape: "rectangle", bounds: [0, 0, 50, 50] };
+        },
+        check: function (d) { return d.mask === "ST S1" || "mask " + d.mask; } },
+
+      { name: "…a second one",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Soften", name: "ST S2",
+                   shape: "rectangle", bounds: [10, 10, 50, 50] };
+        },
+        check: function (d) { return d.mask === "ST S2" || "mask " + d.mask; } },
+
+      { name: "…so the roster branch is untouched",
+        tool: "set_mask",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Soften", feather: 10 };
+        },
+        check: function (e) {
+          if (!/several masks/.test(e)) return "message was: " + e;
+          if (!/ST S1/.test(e) || !/ST S2/.test(e)) {
+            return "the roster is not the real one: " + e;
+          }
+          return !/Gaussian Blur/.test(e) ||
+                 "a layer WITH masks was sent to a blur: " + e;
+        } },
+
+      { name: "…and the soften layer goes away again",
+        tool: "delete_layer",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Soften" };
+        },
+        check: function (d) {
+          return d.removed === "ST Soften" || "removed " + d.removed;
+        } },
+
       { name: "animate the mask path (keys on whole frames)",
         tool: "set_mask_path",
         args: function (ctx) {
@@ -2451,6 +2698,1705 @@
           return rem === "ST Path" || "remainingMasks " + rem;
         } },
 
+      // ---- a feather is not a blur (row 35) ---------------------------
+      // Measured 2026-09-02 through the chat probe, "the background is
+      // too sharp behind the icons": the model sent add_mask with the
+      // layer's OWN four corners as custom vertices and feather 50, got
+      // a bare ok, and told the user the background had been softened.
+      // Nothing was. A mask feather fades the mask EDGE and never
+      // touches a pixel inside the region, so a region that IS the whole
+      // layer cannot blur anything. 'ST Mask Off' is a 200x200 solid
+      // with no masks left on it by now.
+      { name: "a full-layer feathered mask is warned about, not refused",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Mask Off", name: "ST Soft",
+                   shape: "custom",
+                   vertices: [[0, 0], [200, 0], [200, 200], [0, 200]],
+                   feather: 50 };
+        },
+        check: function (d) {
+          if (d.mask !== "ST Soft") return "mask named " + d.mask;
+          var w = d.warning || "";
+          if (!/covers all of 'ST Mask Off'/.test(w)) return "warning: " + w;
+          if (!/200x200/.test(w)) return "the real size is missing: " + w;
+          if (!/OUTER EDGE/.test(w) || !/does not blur the picture/.test(w)) {
+            return "it does not say what the feather did: " + w;
+          }
+          // Grounded the way every refusal here is: it names the call
+          // that WOULD have done what the sentence asked for.
+          return (/apply_effect/.test(w) && /Gaussian Blur/.test(w)) ||
+                 "no way out offered: " + w;
+        } },
+
+      { name: "…and the mask it warned about was really created",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Mask Off", mask: "ST Soft" };
+        },
+        check: function (d) {
+          return d.removed === "ST Soft" || "removed " + d.removed;
+        } },
+
+      { name: "…the same coverage with no feather is a plain no-op",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Mask Off", name: "ST Flat",
+                   shape: "rectangle", bounds: [0, 0, 200, 200] };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (!/covers all of 'ST Mask Off'/.test(w)) return "warning: " + w;
+          if (!/still shows/.test(w) || !/bounds/.test(w)) {
+            return "it does not point at a real region: " + w;
+          }
+          return !/Gaussian Blur/.test(w) ||
+                 "it offered a blur nobody asked for: " + w;
+        } },
+
+      // One-sided, like every other verdict in this file: silent wherever
+      // "cuts nothing away" is not PROVED. The tool's own default region
+      // is the layer's box, and add_mask + set_mask_path opens with it.
+      { name: "…but the tool's own default region is never warned about",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Mask Off",
+                   name: "ST Default", shape: "rectangle" };
+        },
+        check: function (d) {
+          return !d.warning || "the placeholder was warned about: " +
+                 d.warning;
+        } },
+
+      // Inverted, that same full coverage covers NOTHING -- so what
+      // survives is whatever the masks above it kept, and by this point
+      // 'ST Mask Off' carries 'ST Flat' and 'ST Default'. Measured in AE
+      // 26.3x87 (scripts/mask-erase-probe.js, M3): alpha is unchanged
+      // from those masks' own result. The step used to be justified by
+      // "which hides everything", which is only true when the inverted
+      // mask is ALONE -- that case is its own steps below.
+      { name: "…nor is an inverted one under masks that already keep some",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Mask Off", name: "ST Inv",
+                   shape: "rectangle", bounds: [0, 0, 200, 200],
+                   inverted: true, feather: 50 };
+        },
+        check: function (d) {
+          // Not an ERASURE -- that is what this step was written to
+          // prove. But "alpha is unchanged from those masks' own result"
+          // is the definition of a no-op, and the step used to require a
+          // bare ok for it, which is the silent-lie shape one flag over
+          // from the one above. It is named now.
+          var w = d.warning || "";
+          if (/hides ALL of/.test(w)) return "called an erasure: " + w;
+          if (!/changes nothing on 'ST Mask Off'/.test(w)) {
+            return "the no-op was not named: " + w;
+          }
+          if (!/leaves the mask above it exactly as it was/.test(w)) {
+            return "it does not say WHY nothing changed: " + w;
+          }
+          // The feather cannot fade an edge that was never cut, and
+          // "soften it" is the ask that produces this call.
+          return (/no cut edge to fade/.test(w) &&
+                  /Gaussian Blur/.test(w)) || "no way out offered: " + w;
+        } },
+
+      // ...and a feather on a region that DOES cut something away is the
+      // vignette the prompt routes to add_mask. It has to stay silent or
+      // the warning is noise on the tool's best use.
+      { name: "…nor a feathered mask that really does cut something away",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Mask Off",
+                   name: "ST Vignette", shape: "ellipse",
+                   bounds: [20, 20, 160, 160], feather: 20 };
+        },
+        check: function (d) {
+          return !d.warning || "a real vignette was warned about: " +
+                 d.warning;
+        } },
+
+      // ---- the mask that ERASES the layer -----------------------------
+      // The other end of the same coverage. Filed 2026-09-03: add_mask
+      // {bounds: [0,0,1920,1080], mode: 'subtract', feather: 100} on a
+      // 1920x1080 BG empties the layer and answered a bare ok, because
+      // the coversAll branch above only ever proved "cuts NOTHING away".
+      //
+      // Which combinations really empty a layer was measured in AE
+      // 26.3x87 by scripts/mask-erase-probe.js, reading the layer's own
+      // alpha at nine points through sampleImage(postEffect): with the
+      // region covering the whole layer only 'subtract' empties it, and
+      // 'inverted' makes the region worth NOTHING instead -- then
+      // 'intersect'/'darken' empty it whatever is above them, while
+      // 'add'/'lighten'/'difference' empty it only when nothing is.
+      // A fresh solid, because "is anything above this mask" is the
+      // whole distinction and 'ST Mask Off' has four by now.
+      { name: "a clean layer to erase",
+        tool: "add_solid",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, name: "ST Erase", color: [0.3, 0.2, 0.2],
+                   width: 200, height: 200 };
+        },
+        check: function (d) { return d.name === "ST Erase" || d.name; } },
+
+      // The "misses it completely" refusal, while the parade is still
+      // EMPTY -- which is the state its two answers differ in. Measured:
+      // a lone off-layer 'add' region keeps nothing and the layer is
+      // gone, where a lone off-layer 'subtract' subtracts nothing and the
+      // layer is untouched. The old wording only ever named the first.
+      { name: "an off-layer subtract would change nothing, not hide all",
+        tool: "add_mask",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", shape: "rectangle",
+                   mode: "subtract", bounds: [0, 540, 1920, 540] };
+        },
+        check: function (e) {
+          return /misses 'ST Erase' completely, so it would change nothing/
+                   .test(e) || "message was: " + e;
+        } },
+
+      { name: "…where an off-layer ADD really would hide the whole layer",
+        tool: "add_mask",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", shape: "rectangle",
+                   bounds: [0, 540, 1920, 540] };
+        },
+        check: function (e) {
+          return /misses 'ST Erase' completely, so it would hide the whole layer/
+                   .test(e) || "message was: " + e;
+        } },
+
+      { name: "a full-layer SUBTRACT says the layer is gone",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", name: "ST Wipe",
+                   shape: "rectangle", bounds: [0, 0, 200, 200],
+                   mode: "subtract", feather: 100 };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (!/hides ALL of 'ST Erase'/.test(w)) return "warning: " + w;
+          if (!/cuts every pixel away/.test(w)) {
+            return "it does not name what did it: " + w;
+          }
+          // Measured: at feather 100 the middle still reads alpha 0 and
+          // only the edge band survives, so the feather is a fringe and
+          // not a rescue -- and a feather here is a 'soften it' ask.
+          if (!/soft fringe/.test(w) || !/does not blur the picture/.test(w)) {
+            return "it lets the feather look like a blur: " + w;
+          }
+          if (!/Gaussian Blur/.test(w)) return "no way out offered: " + w;
+          return /CUT AWAY/.test(w) || "no way to keep part of it: " + w;
+        } },
+
+      { name: "…and the erasing mask was really created",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", mask: "ST Wipe" };
+        },
+        check: function (d) {
+          return d.removed === "ST Wipe" || "removed " + d.removed;
+        } },
+
+      // Unlike "cuts nothing away", this fires with no bounds passed:
+      // the tool's own default region IS the whole layer, so 'subtract'
+      // alone erases it without anyone naming a region.
+      { name: "…the DEFAULT region under subtract erases it too",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", name: "ST WipeD",
+                   mode: "subtract" };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (!/hides ALL of 'ST Erase'/.test(w)) return "warning: " + w;
+          return !/fringe/.test(w) || "no feather was passed: " + w;
+        } },
+
+      { name: "…and it goes away again",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", mask: "ST WipeD" };
+        },
+        check: function (d) {
+          return d.removed === "ST WipeD" || "removed " + d.removed;
+        } },
+
+      // ---- an ELLIPSE is not its bounding box -------------------------
+      // Measured 2026-09-03 (scripts/mask-ellipse-probe.js, AE 26.3x87):
+      // at this tool's own default region the ellipse and its RECTANGLE
+      // twin read opposite alpha at the four corners in all twelve
+      // compositing rows, and an 11x9 grid puts 0.202 of the layer still
+      // showing under an ellipse 'subtract' where the rectangle leaves
+      // 0.000. Coverage used to be read off the bounding box of the four
+      // points the ellipse is drawn from, so the three sentences above
+      // were each false about one -- and each in the reassuring
+      // direction. The parade on 'ST Erase' is EMPTY here, which is the
+      // state the corner sentence is gated on.
+      { name: "an ellipse 'subtract' leaves the corners, and says so",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", name: "ST EllSub",
+                   shape: "ellipse", mode: "subtract" };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (/hides ALL of 'ST Erase'/.test(w)) {
+            return "the corners read alpha 1, so this is false: " + w;
+          }
+          if (!/hides all of 'ST Erase' EXCEPT the four corners/.test(w)) {
+            return "a layer left showing four slivers said nothing: " +
+                   (w || "(no warning)");
+          }
+          if (!/about a fifth/.test(w)) return "no measured share: " + w;
+          return /shape 'rectangle'/.test(w) ||
+                 "no way to really take the whole layer: " + w;
+        } },
+
+      { name: "…and that ellipse comes off again",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", mask: "ST EllSub" };
+        },
+        check: function (d) {
+          return d.removed === "ST EllSub" || "removed " + d.removed;
+        } },
+
+      // The mirror row: an ellipse 'add' over the whole box CUTS the
+      // corners away (measured alpha 0 at all four), so "cuts nothing
+      // away -- every pixel of it still shows" was false. Nothing
+      // replaces it: an ellipse keeping the middle is a spotlight, which
+      // is what an ellipse mask is FOR.
+      { name: "…an ellipse 'add' is not told it cuts nothing away",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", name: "ST EllAdd",
+                   shape: "ellipse", bounds: [0, 0, 200, 200] };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (/cuts nothing away/.test(w)) {
+            return "it cut the four corners away: " + w;
+          }
+          return !w || "a spotlight is not a mistake: " + w;
+        } },
+
+      { name: "…and so does that one",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", mask: "ST EllAdd" };
+        },
+        check: function (d) {
+          return d.removed === "ST EllAdd" || "removed " + d.removed;
+        } },
+
+      // The third sentence: an inverted ellipse 'subtract' takes the
+      // corners (measured 0), so it is not the no-op its rectangle twin
+      // is.
+      { name: "…and an inverted ellipse subtract is not called a no-op",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", name: "ST EllInv",
+                   shape: "ellipse", bounds: [0, 0, 200, 200],
+                   mode: "subtract", inverted: true };
+        },
+        check: function (d) {
+          return !/changes nothing/.test(d.warning || "") ||
+                 "it cut the corners away: " + d.warning;
+        } },
+
+      { name: "…and it comes off too",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", mask: "ST EllInv" };
+        },
+        check: function (d) {
+          return d.removed === "ST EllInv" || "removed " + d.removed;
+        } },
+
+      // A custom polygon has the same hole and closes the same way: a
+      // triangle has the layer's bounding box and covers half of it.
+      { name: "…and a TRIANGLE with the layer's box does not cover it",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", name: "ST Tri",
+                   shape: "custom",
+                   vertices: [[0, 0], [200, 0], [200, 200]] };
+        },
+        check: function (d) {
+          return !/covers all of 'ST Erase'/.test(d.warning || "") ||
+                 "a triangle covers half its box: " + d.warning;
+        } },
+
+      { name: "…and the triangle comes off",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", mask: "ST Tri" };
+        },
+        check: function (d) {
+          return d.removed === "ST Tri" || "removed " + d.removed;
+        } },
+
+      // The comp-coordinates REFUSAL carried the same reading in its
+      // reason. A comp-sized ellipse over a 200x200 layer does not cover
+      // it -- it can even miss it entirely -- so the refusal keeps the
+      // coordinates, which are the diagnosis, and drops the claim.
+      { name: "a comp-sized ELLIPSE is refused without claiming coverage",
+        tool: "add_mask",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", shape: "ellipse",
+                   mode: "subtract", bounds: [0, 0, 1920, 1080] };
+        },
+        check: function (e) {
+          if (/covers ALL of 'ST Erase'/.test(e)) {
+            return "it does not cover the layer: " + e;
+          }
+          if (!/is far bigger than 'ST Erase'/.test(e) ||
+              !/middle of its own bounds/.test(e)) {
+            return "message was: " + e;
+          }
+          return /To cut away only the top half/.test(e) ||
+                 "the worked example lost its mode: " + e;
+        } },
+
+      // …and an ellipse big enough to really contain the layer box gets
+      // the coverage sentence back: every corner of the layer is inside
+      // this one, so it is not "an ellipse never covers".
+      { name: "…while an ellipse that really contains the layer still does",
+        tool: "add_mask",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", shape: "ellipse",
+                   mode: "subtract", bounds: [-142, -142, 484, 484] };
+        },
+        check: function (e) {
+          return /covers ALL of 'ST Erase', so it hides the WHOLE layer/
+                   .test(e) || "message was: " + e;
+        } },
+
+      { name: "an ALONE inverted mask blames the flag that emptied it",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", name: "ST InvA",
+                   shape: "rectangle", bounds: [0, 0, 200, 200],
+                   inverted: true };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (!/hides ALL of 'ST Erase'/.test(w)) return "warning: " + w;
+          if (!/'inverted' turns a mask covering the whole layer/.test(w)) {
+            return "it blames the wrong setting: " + w;
+          }
+          return /Drop 'inverted'/.test(w) || "no way out offered: " + w;
+        } },
+
+      // The steps from here down say "over an existing mask", and they
+      // mean the rig that was MEASURED: one add mask on the left half,
+      // i.e. a layer that still shows something. ST InvA emptied it, and
+      // a mask above that keeps NOTHING is a different world with a
+      // different right answer (the tool says so now, in its own
+      // sentence) — so the eraser comes off and the measured base goes on.
+      { name: "the eraser comes off before the multi-mask rows",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", mask: "ST InvA" };
+        },
+        check: function (d) {
+          return d.removed === "ST InvA" || "removed " + d.removed;
+        } },
+
+      { name: "…and the measured base goes on: an add mask on the left half",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", name: "ST Keep",
+                   shape: "rectangle", bounds: [0, 0, 100, 200] };
+        },
+        check: function (d) {
+          return !d.warning || "a real half-layer mask was warned about: " +
+                 d.warning;
+        } },
+
+      // The corner sentence is gated on the layer carrying no
+      // compositing mask yet, and that gate is a measurement too: over
+      // this very base the same ellipse 'subtract' reads corners 0.5 --
+      // only the two corners 'ST Keep' was showing survive -- so "except
+      // its four corners" would be false here. Added and removed again
+      // so the rows below still see the base they were measured on.
+      { name: "…over which the ellipse sentence goes quiet, not wrong",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", name: "ST EllOver",
+                   shape: "ellipse", mode: "subtract" };
+        },
+        check: function (d) {
+          return !/four corners/.test(d.warning || "") ||
+                 "only two of them survive over this base: " + d.warning;
+        } },
+
+      { name: "…and that probe mask comes off",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", mask: "ST EllOver" };
+        },
+        check: function (d) {
+          return d.removed === "ST EllOver" || "removed " + d.removed;
+        } },
+
+      // The same call as ST InvA, now with a mask above it that KEEPS
+      // something: measured, it keeps exactly what that mask kept, so the
+      // ERASURE warning must NOT fire. A false alarm on a legitimate
+      // multi-mask build is how a warning stops being read at all. What
+      // it IS, though, is a mask that changed nothing, and that is its
+      // own receipt.
+      { name: "…but the same call under a mask is a no-op, not an erasure",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", name: "ST InvB",
+                   shape: "rectangle", bounds: [0, 0, 200, 200],
+                   inverted: true };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (/hides ALL of/.test(w)) {
+            return "warned on a mask that keeps what is above it: " + w;
+          }
+          if (!/changes nothing on 'ST Erase'/.test(w)) {
+            return "the no-op was not named: " + w;
+          }
+          return /leaves the mask above it exactly as it was/.test(w) ||
+                 "it does not say WHY nothing changed: " + w;
+        } },
+
+      { name: "…while an inverted INTERSECT empties it whatever is above",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", name: "ST IntI",
+                   shape: "rectangle", bounds: [0, 0, 200, 200],
+                   mode: "intersect", inverted: true };
+        },
+        check: function (d) {
+          return /hides ALL of 'ST Erase'/.test(d.warning || "") ||
+                 "warning: " + (d.warning || "(none)");
+        } },
+
+      // …and off again, for the same reason ST InvA came off: it emptied
+      // the layer, and every row below is about a layer that still shows
+      // something.
+      { name: "the inverted intersect comes off too",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", mask: "ST IntI" };
+        },
+        check: function (d) {
+          return d.removed === "ST IntI" || "removed " + d.removed;
+        } },
+
+      // ---- the THIRD outcome: the mask that changes NOTHING -----------
+      // Filed by the erase pass as its top item, and this step used to BE
+      // the defect: it asserted a bare ok for a call measured to do
+      // nothing at all, on the grounds that not-an-erasure means
+      // nothing-to-say. A tool reporting success for a call that changed
+      // nothing is the silent-lie shape, and it is the harder half to
+      // catch — the screen does not change either, so nobody finds out.
+      //
+      // Every verdict below is the same measured run
+      // (scripts/mask-erase-probe.js, AE 26.3x87) read from its other
+      // end: alone against a baseline mean alpha of 1.0, and added
+      // second over a left-half add mask against a baseline of 0.333.
+      { name: "…and an inverted SUBTRACT, which empties nothing, says so",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", name: "ST SubI",
+                   shape: "rectangle", bounds: [0, 0, 200, 200],
+                   mode: "subtract", inverted: true };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (/hides ALL of/.test(w)) return "called an erasure: " + w;
+          if (!/changes nothing on 'ST Erase'/.test(w)) {
+            return "the no-op was not named: " + w;
+          }
+          if (!/200x200/.test(w)) return "the real size is missing: " + w;
+          if (!/covering NONE of it, so 'subtract' takes nothing away/
+                .test(w)) {
+            return "it blames the wrong setting: " + w;
+          }
+          // An inverted subtract KEEPS the region it is given, so that is
+          // the way out — the mirror of what an inverted add would say.
+          return /part you want to KEEP/.test(w) || "no way out: " + w;
+        } },
+
+      { name: "…a plain INTERSECT over the whole layer says it too",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", name: "ST IntP",
+                   shape: "rectangle", bounds: [0, 0, 200, 200],
+                   mode: "intersect" };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (!/changes nothing on 'ST Erase'/.test(w)) {
+            return "the no-op was not named: " + w;
+          }
+          if (!/'intersect' over the whole layer keeps everything/.test(w)) {
+            return "the reason is wrong: " + w;
+          }
+          return !/inverted/.test(w) ||
+                 "it blames a flag nobody passed: " + w;
+        } },
+
+      { name: "…and so does a plain DARKEN, one flag from an erasure",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", name: "ST DarkP",
+                   shape: "rectangle", bounds: [0, 0, 200, 200],
+                   mode: "darken" };
+        },
+        check: function (d) {
+          return /changes nothing on 'ST Erase'/.test(d.warning || "") ||
+                 "warning: " + (d.warning || "(none)");
+        } },
+
+      // The feather is named for the same reason the erasure warning
+      // names it: "soften it" is the ask that produces this call, and a
+      // mask that cut nothing has no edge for a feather to fade.
+      { name: "…a feather on a no-op mask fades nothing, and says what does",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", name: "ST SubIF",
+                   shape: "rectangle", bounds: [0, 0, 200, 200],
+                   mode: "subtract", inverted: true, feather: 40 };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (!/changes nothing on 'ST Erase'/.test(w)) return "warning: " + w;
+          if (!/no cut edge to fade/.test(w)) {
+            return "it lets the feather look like it worked: " + w;
+          }
+          return (/apply_effect/.test(w) && /Gaussian Blur/.test(w)) ||
+                 "no way out offered: " + w;
+        } },
+
+      // The no-op warning WAITS TO BE ASKED, unlike the erasure warning
+      // beside it. With no region named the region is this tool's own
+      // default, which is the add_mask + set_mask_path placeholder — and
+      // a no-op is cheap where a vanished layer is not. That asymmetry
+      // is the whole reason the two tables are separate.
+      { name: "…but the tool's OWN default region is never called a no-op",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", name: "ST SubID",
+                   mode: "subtract", inverted: true };
+        },
+        check: function (d) {
+          return !d.warning || "the placeholder was warned about: " +
+                 d.warning;
+        } },
+
+      // …and a region that really does something stays silent, or the
+      // warning is noise on the tool's ordinary use.
+      { name: "…nor is an inverted subtract that keeps a real half",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", name: "ST SubIH",
+                   shape: "rectangle", bounds: [0, 0, 200, 100],
+                   mode: "subtract", inverted: true };
+        },
+        check: function (d) {
+          return !d.warning || "a real region was warned about: " +
+                 d.warning;
+        } },
+
+      // mode 'none' is deliberately OUT of the table: it changes nothing
+      // at ANY region, so full coverage is not what makes it a no-op,
+      // and a 'none' mask is a path carrier (Stroke, Scribble, a path
+      // expression) that this must not nag about.
+      { name: "…and a 'none' mask, a path carrier, is left alone",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", name: "ST NoneM",
+                   shape: "rectangle", bounds: [0, 0, 200, 200],
+                   mode: "none" };
+        },
+        check: function (d) {
+          return !d.warning || "a path carrier was warned about: " +
+                 d.warning;
+        } },
+
+      // 'lighten' joins 'add' in the WIDER sentence, on a measurement:
+      // over the whole layer both read mean alpha 1.0 alone AND added
+      // second, so "every pixel of it still shows" holds either way.
+      { name: "…while a full-coverage LIGHTEN gets the same receipt as 'add'",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", name: "ST LightA",
+                   shape: "rectangle", bounds: [0, 0, 200, 200],
+                   mode: "lighten" };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (!/covers all of 'ST Erase'/.test(w)) return "warning: " + w;
+          return /every pixel of it still shows/.test(w) ||
+                 "it does not say what survives: " + w;
+        } },
+
+      // The two REFUSALS either side carried the same additive
+      // assumption in their REASONS, and a reason is all the model has.
+      { name: "a comp-sized subtract is refused for the right reason",
+        tool: "add_mask",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", shape: "rectangle",
+                   mode: "subtract", bounds: [0, 0, 1920, 1080] };
+        },
+        check: function (e) {
+          if (!/covers ALL of 'ST Erase', so it hides the WHOLE layer/
+                .test(e)) {
+            return "message was: " + e;
+          }
+          return /To cut away only the top half/.test(e) ||
+                 "the worked example is still show-shaped: " + e;
+        } },
+
+      { name: "…and the same bounds under 'add' keep the old wording",
+        tool: "add_mask",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase", shape: "rectangle",
+                   bounds: [0, 0, 1920, 1080] };
+        },
+        check: function (e) {
+          if (!/so it hides nothing/.test(e)) return "message was: " + e;
+          return /To show only the top half/.test(e) ||
+                 "the worked example changed under 'add': " + e;
+        } },
+
+      { name: "…and the erase layer goes away again",
+        tool: "delete_layer",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Erase" };
+        },
+        check: function (d) {
+          return d.removed === "ST Erase" || "removed " + d.removed;
+        } },
+
+      // ---- the FOURTH outcome: the mask that switches the others off --
+      //
+      // Filed by the no-op pass as its top item: both mask tables could
+      // see WHETHER the layer had masks and never what they SHOWED, and
+      // one measured row needed the difference. Measured this pass
+      // (scripts/mask-above-probe.js, AE 26.3x87, six different parades
+      // read through sampleImage at seven points each):
+      //
+      //   full-coverage 'difference' over masks showing every pixel
+      //     -> mean alpha 1.0 -> 0.0, the layer is GONE, no warning
+      //   full-coverage 'add' over an add mask on the left half
+      //     -> 0.429 -> 1.0, the masking stops working, and the receipt
+      //        said "cuts nothing away — every pixel of it still shows"
+      //
+      // The second sentence is true of the new mask and says nothing
+      // about the ones that stopped hiding, which is the half that
+      // matters. A fresh layer, because what is above is the whole
+      // subject and 'ST Erase' had a dozen by the end.
+      { name: "a clean layer for what the masks above it show",
+        tool: "add_solid",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, name: "ST Above", color: [0.2, 0.3, 0.4],
+                   width: 200, height: 200 };
+        },
+        check: function (d) { return d.name === "ST Above" || d.name; } },
+
+      { name: "a mask on the left half is the ordinary thing, and silent",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Above", name: "ST AHalf",
+                   shape: "rectangle", bounds: [0, 0, 100, 200] };
+        },
+        check: function (d) {
+          return !d.warning || "an ordinary half mask was warned about: " +
+                 d.warning;
+        } },
+
+      { name: "…and a full-coverage ADD over it says the masking stopped",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Above", name: "ST AUndo",
+                   shape: "rectangle", bounds: [0, 0, 200, 200] };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (/cuts nothing away/.test(w)) {
+            return "the old half-true sentence is still here: " + w;
+          }
+          if (!/every pixel of it shows again/.test(w)) {
+            return "warning: " + (w || "(none)");
+          }
+          return /the mask already on it stops hiding anything/.test(w) ||
+                 "it does not say what stopped working: " + w;
+        } },
+
+      { name: "…the undo mask comes off",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Above", mask: "ST AUndo" };
+        },
+        check: function (d) {
+          return d.removed === "ST AUndo" || "removed " + d.removed;
+        } },
+
+      { name: "…and the default region does it too, without being asked",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Above", name: "ST AUndoD" };
+        },
+        check: function (d) {
+          // Unasked, unlike the no-op warning: add_mask's own default
+          // region IS the whole layer, so "add another mask" with no
+          // bounds is exactly the call that switches the masking off.
+          return /every pixel of it shows again/.test(d.warning || "") ||
+                 "the placeholder switched the masking off in silence: " +
+                 (d.warning || "(none)");
+        } },
+
+      { name: "…and the placeholder comes off",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Above", mask: "ST AUndoD" };
+        },
+        check: function (d) {
+          return d.removed === "ST AUndoD" || "removed " + d.removed;
+        } },
+
+      // A 'difference' over a mask that keeps HALF really does change the
+      // layer — measured, it inverts what that mask kept (0.429 -> 0.571)
+      // — so it is neither an erasure nor a no-op and there is nothing
+      // provable to say. One-sidedness, checked from the quiet side.
+      { name: "…a DIFFERENCE over a half-mask inverts it, and says nothing",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Above", name: "ST ADiffH",
+                   shape: "rectangle", bounds: [0, 0, 200, 200],
+                   mode: "difference" };
+        },
+        check: function (d) {
+          return !d.warning || "a mask that really works was warned " +
+                 "about: " + d.warning;
+        } },
+
+      { name: "…and that one comes off",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Above", mask: "ST ADiffH" };
+        },
+        check: function (d) {
+          return d.removed === "ST ADiffH" || "removed " + d.removed;
+        } },
+
+      // The "misses it completely" refusal, over a layer that HAS masks.
+      // Measured this pass and it moved the row: an off-layer 'intersect'
+      // empties a bare layer, and leaves a masked one exactly as it was
+      // (AE appears to drop a mask lying wholly outside the layer once
+      // something else composites). The old table said "hide the whole
+      // layer" for both.
+      { name: "…and an off-layer INTERSECT over masks changes nothing",
+        tool: "add_mask",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Above", shape: "rectangle",
+                   mode: "intersect", bounds: [0, 540, 1920, 540] };
+        },
+        check: function (e) {
+          return /misses 'ST Above' completely, so it would change nothing/
+                   .test(e) || "message was: " + e;
+        } },
+
+      { name: "…leaving the half mask, which comes off last",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Above", mask: "ST AHalf" };
+        },
+        check: function (d) {
+          return d.removed === "ST AHalf" || "removed " + d.removed;
+        } },
+
+      // THE ROW THIS PASS WAS WRITTEN FOR. A full-coverage add mask
+      // leaves every pixel showing, and a full-coverage 'difference' over
+      // it inverts that to nothing — measured 1.0 -> 0.0 over two
+      // different parades that both showed everything. The same call on a
+      // BARE layer changes nothing at all, which is why no count of masks
+      // could ever have told them apart.
+      { name: "a full-coverage add mask, alone: every pixel still shows",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Above", name: "ST AAll",
+                   shape: "rectangle", bounds: [0, 0, 200, 200] };
+        },
+        check: function (d) {
+          return /cuts nothing away/.test(d.warning || "") ||
+                 "warning: " + (d.warning || "(none)");
+        } },
+
+      { name: "…and a DIFFERENCE over it empties the layer, and says so",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Above", name: "ST ADiffAll",
+                   shape: "rectangle", bounds: [0, 0, 200, 200],
+                   mode: "difference" };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (!/hides ALL of 'ST Above'/.test(w)) {
+            return "the layer went blank in silence: " + (w || "(none)");
+          }
+          if (!/'difference' over the whole layer INVERTS/.test(w)) {
+            return "it does not name what did it: " + w;
+          }
+          return /showing every pixel/.test(w) ||
+                 "it does not say what they were showing: " + w;
+        } },
+
+      { name: "…and comes off again",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Above", mask: "ST ADiffAll" };
+        },
+        check: function (d) {
+          return d.removed === "ST ADiffAll" || "removed " + d.removed;
+        } },
+
+      // Over masks that already hide everything, a full-coverage subtract
+      // takes nothing — there is nothing left to take. The old table
+      // called this an erasure whatever was above it, which is a sentence
+      // about the wrong mask.
+      { name: "a subtract blanks the layer while something still shows",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Above", name: "ST ABlank",
+                   shape: "rectangle", bounds: [0, 0, 200, 200],
+                   mode: "subtract" };
+        },
+        check: function (d) {
+          return /hides ALL of 'ST Above'/.test(d.warning || "") ||
+                 "warning: " + (d.warning || "(none)");
+        } },
+
+      { name: "…and the next one has nothing left to take, and says that",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Above", name: "ST ABlank2",
+                   shape: "rectangle", bounds: [0, 0, 200, 200],
+                   mode: "subtract" };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (/hides ALL of/.test(w)) {
+            return "it blames this mask for a layer that was already " +
+                   "hidden: " + w;
+          }
+          if (!/changes nothing on 'ST Above'/.test(w)) {
+            return "warning: " + (w || "(none)");
+          }
+          return /already on it hide all of it/.test(w) ||
+                 "it does not name what is really hiding it: " + w;
+        } },
+
+      // …and it says it with NO bounds too, which the no-op sentence used
+      // to wait for. That gate is about the caller's region, and over
+      // masks that already hide every pixel the region is not the reason:
+      // subtract/intersect/darken take nothing whatever they are handed,
+      // so no default region and no set_mask_path written afterwards
+      // could make the call do something.
+      { name: "…and so does one with no bounds at all",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Above", name: "ST ADefault",
+                   mode: "subtract" };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (!/changes nothing on 'ST Above'/.test(w)) {
+            return "the default region was waved through: " + (w || "(none)");
+          }
+          if (!/nothing left for this one to take/.test(w)) {
+            return "warning: " + w;
+          }
+          if (/Pass 'bounds'/.test(w)) {
+            return "it offers a fix that cannot work here: " + w;
+          }
+          if (/ST ADefault/.test(w)) {
+            return "it blames the mask it just made: " + w;
+          }
+          return /ST ABlank/.test(w) ||
+                 "it does not name the masks that are hiding it: " + w;
+        } },
+
+      { name: "…and so does one over only half of it",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Above", name: "ST AHalf",
+                   shape: "rectangle", bounds: [0, 0, 100, 200],
+                   mode: "subtract" };
+        },
+        check: function (d) {
+          return /changes nothing on 'ST Above'/.test(d.warning || "") ||
+                 "a half-layer subtract over a hidden layer took nothing " +
+                 "and said nothing: " + (d.warning || "(none)");
+        } },
+
+      // …and so does one that SPILLS PAST the layer, which used to get
+      // the overflow note and nothing else: "the part outside the layer
+      // does nothing" is true and is about the wrong part — the part
+      // inside did nothing either. A region that overflows is still a
+      // region, and subtract takes nothing from a layer already hidden
+      // wherever it is pointed. The note stays: it is the only place the
+      // span is named, and comp coordinates on a layer-space argument are
+      // what put a mask out there.
+      { name: "…and so does one that spills past the layer",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Above", name: "ST AOver",
+                   shape: "rectangle", bounds: [-50, 0, 300, 100],
+                   mode: "subtract" };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (!/changes nothing on 'ST Above'/.test(w)) {
+            return "an overflowing subtract over a hidden layer said only " +
+                   "the note: warning " + (w || "(none)") + ", note " +
+                   (d.note || "(none)");
+          }
+          if (!/nothing left for this one to take/.test(w)) {
+            return "warning: " + w;
+          }
+          if (/Pass 'bounds'/.test(w)) {
+            return "it offers a fix that cannot work here: " + w;
+          }
+          return /past 'ST Above'/.test(d.note || "") ||
+                 "the span it overflowed by was dropped: " +
+                 (d.note || "(none)");
+        } },
+
+      // The widening is confined to the modes that can only TAKE. An
+      // overflowing 'add' over the same hidden layer really does reveal
+      // the pixels inside its region, so it is not a no-op and must not
+      // borrow this sentence.
+      { name: "…while an overflowing 'add' over it is no no-op",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Above", name: "ST AOverAdd",
+                   shape: "rectangle", bounds: [-50, 0, 300, 100],
+                   mode: "add" };
+        },
+        check: function (d) {
+          if (/changes nothing/.test(d.warning || "")) {
+            return "a mask that reveals pixels was called a no-op: " +
+                   d.warning;
+          }
+          return /past 'ST Above'/.test(d.note || "") ||
+                 "note: " + (d.note || "(none)");
+        } },
+
+      // The gate STAYS for the modes that would reveal at a smaller
+      // region: their no-op really is a fact about the region left to the
+      // default, and add_mask + set_mask_path opens with that placeholder.
+      { name: "…while an inverted 'add' at the default region stays quiet",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Above", name: "ST AInv",
+                   mode: "add", inverted: true };
+        },
+        check: function (d) {
+          return !d.warning ||
+                 "the placeholder gate was widened too far: " + d.warning;
+        } },
+
+      { name: "…and the layer that carried all that goes away",
+        tool: "delete_layer",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Above" };
+        },
+        check: function (d) {
+          return d.removed === "ST Above" || "removed " + d.removed;
+        } },
+
+      // A parade this cannot READ is the other one-sidedness, and it has
+      // to fail quiet in one direction and loud in the other. A mask
+      // feather hides by degrees, so "all / some / none" cannot describe
+      // it and the reading is abandoned — but "a full-coverage subtract
+      // leaves the layer blank" is true whatever the feather did, and
+      // that sentence still has to arrive.
+      { name: "a layer whose masks cannot be read at all",
+        tool: "add_solid",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, name: "ST Blind", color: [0.4, 0.3, 0.2],
+                   width: 200, height: 200 };
+        },
+        check: function (d) { return d.name === "ST Blind" || d.name; } },
+
+      { name: "…its one mask is feathered, so what it shows is a degree",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Blind", name: "ST BSoft",
+                   shape: "rectangle", bounds: [0, 0, 100, 200],
+                   feather: 20 };
+        },
+        check: function (d) {
+          return !d.warning || "warning: " + d.warning;
+        } },
+
+      { name: "…so a full-coverage ADD does not claim the masking stopped",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Blind", name: "ST BAdd",
+                   shape: "rectangle", bounds: [0, 0, 200, 200] };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (/shows again/.test(w)) {
+            return "it claimed to know what an unreadable parade shows: " + w;
+          }
+          return /cuts nothing away/.test(w) ||
+                 "the wider sentence went missing too: " + (w || "(none)");
+        } },
+
+      { name: "…but a full-coverage SUBTRACT still says the layer is gone",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Blind", name: "ST BSub",
+                   shape: "rectangle", bounds: [0, 0, 200, 200],
+                   mode: "subtract" };
+        },
+        check: function (d) {
+          return /hides ALL of 'ST Blind'/.test(d.warning || "") ||
+                 "a blank layer in silence: " + (d.warning || "(none)");
+        } },
+
+      { name: "…and the unreadable layer goes away too",
+        tool: "delete_layer",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Blind" };
+        },
+        check: function (d) {
+          return d.removed === "ST Blind" || "removed " + d.removed;
+        } },
+
+      // ---- the mask property nothing read: OPACITY --------------------
+      //
+      // set_mask writes it and has never said a word about what it did,
+      // and AELL_maskRect REFUSED any mask carrying one, so a single
+      // opacity-0 mask made the whole parade unreadable and every
+      // sentence above went quiet. Measured 2026-09-03
+      // (scripts/mask-opacity-probe.js, AE 26.3x87, layer alpha through
+      // sampleImage at seven points):
+      //
+      //   ALONE, every compositing mode at opacity 0 EMPTIES the layer —
+      //   add, subtract, intersect, lighten, darken, difference, at a
+      //   region worth everything / half / nothing, and inverted too. A
+      //   lone 'subtract' at opacity 0 is the row that makes this its own
+      //   rule: "its region is worth nothing" says the layer stays whole
+      //   there, and it measures EMPTY.
+      //
+      //   FURTHER UP the parade it behaves as a region worth NOTHING: a
+      //   later add/subtract/difference at opacity 0 leaves the picture
+      //   alone (0.429 unchanged), while intersect and darken empty it.
+      //   'inverted' is not applied to it at all, and a 'none' carrier
+      //   ignores opacity entirely.
+      //
+      //   set_mask {opacity: 0} on the only mask of a layer took it from
+      //   alpha 1.0 to 0.0 and answered a bare ok.
+      { name: "a clean layer for the opacity rows",
+        tool: "add_solid",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, name: "ST Fade", color: [0.5, 0.4, 0.2],
+                   width: 200, height: 200 };
+        },
+        check: function (d) { return d.name === "ST Fade" || d.name; } },
+
+      { name: "…a full-coverage add mask, then a subtract that blanks it",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Fade", name: "ST FAll",
+                   shape: "rectangle", bounds: [0, 0, 200, 200] };
+        },
+        check: function (d) {
+          return /cuts nothing away/.test(d.warning || "") ||
+                 "warning: " + (d.warning || "(none)");
+        } },
+
+      { name: "…and the subtract that takes it away",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Fade", name: "ST FCut",
+                   shape: "rectangle", bounds: [0, 0, 200, 200],
+                   mode: "subtract" };
+        },
+        check: function (d) {
+          return /hides ALL of 'ST Fade'/.test(d.warning || "") ||
+                 "warning: " + (d.warning || "(none)");
+        } },
+
+      // Measured: a LATER mask at opacity 0 takes nothing away, so the
+      // layer comes back. set_mask said nothing about that either.
+      { name: "opacity 0 on the cutting mask hands the layer back, and says so",
+        tool: "set_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Fade", mask: "ST FCut",
+                   opacity: 0 };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (!/Every pixel of 'ST Fade' shows again/.test(w)) {
+            return "the masking stopped working in silence: " +
+                   (w || "(none)");
+          }
+          return /takes nothing away/.test(w) ||
+                 "it does not say what opacity 0 did: " + w;
+        } },
+
+      // The same call twice: proof the first one really wrote, and the
+      // no-op receipt that add_mask has and set_mask never did.
+      { name: "…and sending it again is a no-op, which it now says",
+        tool: "set_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Fade", mask: "ST FCut",
+                   opacity: 0 };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (!/changed nothing on 'ST Fade'/.test(w)) {
+            return "warning: " + (w || "(none)");
+          }
+          return /already showed/.test(w) ||
+                 "it does not say what the layer looked like: " + w;
+        } },
+
+      // THE ROW THIS BLOCK WAS WRITTEN FOR. Both masks at opacity 0: the
+      // first one empties the layer whatever its mode, and the receipt
+      // used to be a bare ok.
+      { name: "opacity 0 on the KEEPING mask empties the layer, and says so",
+        tool: "set_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Fade", mask: "ST FAll",
+                   opacity: 0 };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (!/Nothing of 'ST Fade' shows now/.test(w)) {
+            return "the layer went blank in silence: " + (w || "(none)");
+          }
+          if (!/not an off switch/.test(w)) {
+            return "it does not say why 0 is not what it reads like: " + w;
+          }
+          // The setting that IS an off switch — measured: a 'none' mask
+          // leaves every pixel showing at any opacity.
+          if (!/mode: "none"/.test(w)) return "no way to switch it off: " + w;
+          return /opacity 100/.test(w) || "no way back: " + w;
+        } },
+
+      // A PART opacity is a degree, and "all / some / none" cannot say a
+      // degree (measured 0.502 for a full-coverage add at 50). The
+      // reading is abandoned rather than guessed, so this stays silent.
+      { name: "…while a part opacity is a fade nobody has to be warned about",
+        tool: "set_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Fade", mask: "ST FAll",
+                   opacity: 50 };
+        },
+        check: function (d) {
+          return !d.warning || "a fade was called something: " + d.warning;
+        } },
+
+      // A rename moves no pixels, so a "changed nothing" sentence about
+      // one would be noise on the tool working.
+      { name: "…and a rename is not a claim about pixels",
+        tool: "set_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Fade", mask: "ST FAll",
+                   name: "ST FRen" };
+        },
+        check: function (d) {
+          if (d.mask !== "ST FRen") return "mask named " + d.mask;
+          return !d.warning || "a rename was warned about: " + d.warning;
+        } },
+
+      { name: "…and the opacity layer goes away",
+        tool: "delete_layer",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Fade" };
+        },
+        check: function (d) {
+          return d.removed === "ST Fade" || "removed " + d.removed;
+        } },
+
+      // ---- the OTHER unread property: EXPANSION -----------------------
+      // Measured in the same run: an 'add' mask over the left half of a
+      // 400x300 layer reads mean alpha 0.429 at expansion 0, 0.571 at
+      // +25 and 1.0 at +300, and a full-coverage 'subtract' stops erasing
+      // at -300. The reader took its rectangle from the SHAPE alone, so
+      // an expanded mask was read as the region it was drawn at — and
+      // then a full-coverage 'add' over a layer that already showed
+      // everything was told it had switched the masking off.
+      { name: "a clean layer for the expansion rows",
+        tool: "add_solid",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, name: "ST Exp", color: [0.2, 0.5, 0.4],
+                   width: 200, height: 200 };
+        },
+        check: function (d) { return d.name === "ST Exp" || d.name; } },
+
+      { name: "…with an ordinary half mask on it",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Exp", name: "ST EHalf",
+                   shape: "rectangle", bounds: [0, 0, 100, 200] };
+        },
+        check: function (d) {
+          return !d.warning || "an ordinary half mask was warned about: " +
+                 d.warning;
+        } },
+
+      { name: "…expanded until it covers the whole layer",
+        tool: "set_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Exp", mask: "ST EHalf",
+                   expansion: 300 };
+        },
+        check: function (d) {
+          // The picture after is a shape this cannot read, so there is
+          // nothing to compare and nothing to say.
+          return !d.warning || "an unreadable edit was judged: " + d.warning;
+        } },
+
+      { name: "…so a full-coverage add must not claim it undid the masking",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Exp", name: "ST EAll",
+                   shape: "rectangle", bounds: [0, 0, 200, 200] };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (/shows again/.test(w)) {
+            return "the expanded mask was already showing every pixel, " +
+                   "so nothing stopped working: " + w;
+          }
+          return /cuts nothing away/.test(w) ||
+                 "the wider sentence went missing too: " + (w || "(none)");
+        } },
+
+      { name: "…and the expansion layer goes away too",
+        tool: "delete_layer",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Exp" };
+        },
+        check: function (d) {
+          return d.removed === "ST Exp" || "removed " + d.removed;
+        } },
+
+      // ---- REMOVING a mask is a claim about pixels too ----------------
+      // set_mask learned to read the picture before and after its own
+      // edit in 0.11.33; delete_mask had exactly the same blindness and
+      // its receipt ({layer, removed, remainingMasks}) said neither of
+      // the two things a removal can do. Measured 2026-09-03,
+      // scripts/mask-delete-probe.js, AE 26.3x87, by the layer's own
+      // alpha through sampleImage:
+      //
+      //   delete the 'add' WINDOW above a full-coverage 'subtract'
+      //     0.429 -> 0        the layer is GONE, and it answered ok
+      //   delete the 'subtract' above a full-coverage 'add'
+      //     0    -> 1.0       the layer is BACK, and it answered ok
+      //   delete a layer's only 'add' half-mask
+      //     0.429 -> 1.0      reader "some" -> "nothing"
+      //   delete the last COMPOSITING mask, a 'none' carrier remaining
+      //     0.429 -> 1.0      a mask REMAINS and nothing masks the layer
+      //
+      // The last row is why remainingMasks cannot answer this: the
+      // emptied row and that one both leave exactly one mask behind.
+      { name: "a clean layer for the delete_mask rows",
+        tool: "add_solid",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, name: "ST Del", color: [0.1, 0.6, 0.9],
+                   width: 200, height: 200 };
+        },
+        check: function (d) { return d.name === "ST Del" || d.name; } },
+
+      { name: "…with one ordinary half mask on it",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Del", name: "ST DHalf",
+                   shape: "rectangle", bounds: [0, 0, 100, 200] };
+        },
+        check: function (d) {
+          return !d.warning || "an ordinary half mask was warned about: " +
+                 d.warning;
+        } },
+
+      // Deleting a layer's LAST mask and getting the whole layer back is
+      // the tool working — remainingMasks: [] already says it — so this
+      // one must stay quiet. The gate, from the "some" side.
+      { name: "deleting the only mask hands the layer back without a fuss",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Del", mask: "ST DHalf" };
+        },
+        check: function (d) {
+          if (d.remainingMasks.length) {
+            return "masks left: " + d.remainingMasks.join(", ");
+          }
+          return !d.warning || "the ordinary delete was warned about: " +
+                 d.warning;
+        } },
+
+      { name: "…now a full add and a subtract that blanks the layer",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Del", name: "ST DKeep",
+                   shape: "rectangle", bounds: [0, 0, 200, 200] };
+        },
+        check: function () { return true; } },
+
+      { name: "…and the subtract that empties it",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Del", name: "ST DCut",
+                   shape: "rectangle", bounds: [0, 0, 200, 200],
+                   mode: "subtract" };
+        },
+        check: function (d) {
+          return /hides ALL of 'ST Del'/.test(d.warning || "") ||
+                 "warning: " + (d.warning || "(none)");
+        } },
+
+      // Measured 0 -> 1.0. A mask REMAINS, so this is the surprising half
+      // and the receipt has to name it.
+      { name: "deleting the subtract hands the layer back, and says so",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Del", mask: "ST DCut" };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (!/Every pixel of 'ST Del' shows again/.test(w)) {
+            return "the masking stopped working in silence: " +
+                   (w || "(none)");
+          }
+          return w.indexOf("ST DKeep") !== -1 ||
+                 "it does not name the mask that stayed: " + w;
+        } },
+
+      // A full-coverage add is the same picture as no mask at all, so
+      // taking it off changes nothing — and the reader must not call
+      // "nothing composites" a different picture from "everything shows".
+      { name: "…and taking the full-coverage add off changes no pixel",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Del", mask: "ST DKeep" };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (!/changed nothing about what 'ST Del' shows/.test(w)) {
+            return "warning: " + (w || "(none)");
+          }
+          return /showed before/.test(w) ||
+                 "it does not say what the layer looked like: " + w;
+        } },
+
+      { name: "a full subtract, then the window that lets the layer through",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Del", name: "ST DCut2",
+                   shape: "rectangle", bounds: [0, 0, 200, 200],
+                   mode: "subtract" };
+        },
+        check: function () { return true; } },
+
+      { name: "…the window itself",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Del", name: "ST DWin",
+                   shape: "rectangle", bounds: [0, 0, 100, 200] };
+        },
+        check: function () { return true; } },
+
+      // THE ROW THIS BLOCK WAS WRITTEN FOR. Measured 0.429 -> 0: the
+      // layer is gone and the old receipt was a bare ok.
+      { name: "deleting the window EMPTIES the layer, and says so",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Del", mask: "ST DWin" };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (!/Nothing of 'ST Del' shows now/.test(w)) {
+            return "the layer went blank in silence: " + (w || "(none)");
+          }
+          if (w.indexOf("ST DCut2") === -1) {
+            return "it does not name what is hiding the layer: " + w;
+          }
+          if (!/Ctrl\+Z/.test(w)) return "no way back: " + w;
+          return /mode: "none"/.test(w) ||
+                 "no way to switch a survivor off: " + w;
+        } },
+
+      { name: "…a second subtract over the already-empty layer",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Del", name: "ST DCut3",
+                   shape: "rectangle", bounds: [0, 0, 200, 200],
+                   mode: "subtract" };
+        },
+        check: function () { return true; } },
+
+      // Measured EMPTY -> EMPTY. "I deleted the mask and the layer is
+      // still gone" is the sentence a caller needs most here.
+      { name: "…deleting it does NOT bring the layer back, and says that",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Del", mask: "ST DCut3" };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (!/changed nothing about what 'ST Del' shows/.test(w)) {
+            return "warning: " + (w || "(none)");
+          }
+          return /already masked out completely/.test(w) ||
+                 "it does not say the layer is still gone: " + w;
+        } },
+
+      { name: "…and the last subtract goes quietly (nothing left to name)",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Del", mask: "ST DCut2" };
+        },
+        check: function (d) {
+          if (d.remainingMasks.length) {
+            return "masks left: " + d.remainingMasks.join(", ");
+          }
+          return !d.warning || "the last-mask delete was warned about: " +
+                 d.warning;
+        } },
+
+      { name: "a half mask plus a 'none' PATH CARRIER",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Del", name: "ST DHalf2",
+                   shape: "rectangle", bounds: [0, 0, 100, 200] };
+        },
+        check: function () { return true; } },
+
+      { name: "…the carrier, which composites nothing at all",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Del", name: "ST DPath",
+                   shape: "rectangle", bounds: [0, 0, 200, 200],
+                   mode: "none" };
+        },
+        check: function () { return true; } },
+
+      // Measured 0.429 -> 1.0 with a mask still on the layer: the row
+      // that proves remainingMasks cannot answer this question.
+      { name: "deleting the half mask reveals the layer, carrier notwithstanding",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Del", mask: "ST DHalf2" };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (d.remainingMasks.join(",") !== "ST DPath") {
+            return "masks left: " + d.remainingMasks.join(", ");
+          }
+          if (!/Every pixel of 'ST Del' shows again/.test(w)) {
+            return "a mask remained and the masking stopped in silence: " +
+                   (w || "(none)");
+          }
+          return w.indexOf("ST DPath") !== -1 ||
+                 "it does not name the mask that stayed: " + w;
+        } },
+
+      { name: "…and the delete_mask layer goes away",
+        tool: "delete_layer",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Del" };
+        },
+        check: function (d) {
+          return d.removed === "ST Del" || "removed " + d.removed;
+        } },
+
+      // --- ONE ELLIPSE in the parade. Until 0.11.35 the reader answered
+      // for axis-aligned rectangles only, so an ellipse ANYWHERE in a
+      // layer's masks made AELL_paradeShows return "" and every sentence
+      // add_mask, set_mask and delete_mask build on it went quiet -- three
+      // tools losing their voice over a shape the panel offers by name.
+      // An ellipse is not a degree the way a feather is; it is exact
+      // algebra, and a cell an ellipse SPLITS can be read both ways with
+      // both readings voting.
+      //
+      // Measured 2026-09-03 (scripts/mask-parade-ellipse-probe.js, AE
+      // 26.3x87): fourteen parades holding an ellipse, layer alpha through
+      // sampleImage plus a 21x15 area grid, and every reading agreed --
+      // a lone full-coverage ellipse 'add' leaves 0.784 of the layer (pi/4)
+      // in the middle, its 'subtract' twin leaves 0.216 in the corners.
+      // Sixteen of the seventeen rows were silent before.
+      { name: "the ellipse-parade layer",
+        tool: "add_solid",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, name: "ST Ell", color: [0.3, 0.7, 0.4],
+                   width: 200, height: 200 };
+        },
+        check: function (d) { return d.name === "ST Ell" || d.name; } },
+
+      { name: "…a full-coverage add under everything",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Ell", name: "ST EllBase",
+                   shape: "rectangle", bounds: [0, 0, 200, 200] };
+        },
+        check: function () { return true; } },
+
+      { name: "…and the ellipse that cuts the middle out of it",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Ell", name: "ST EllCut",
+                   shape: "ellipse", mode: "subtract" };
+        },
+        check: function (d) {
+          // The ellipse leaves the four corners, so nothing here may say
+          // the layer is gone -- that gate predates this block and this
+          // row keeps it honest now that the parade around it can be read.
+          return !/Nothing of 'ST Ell' shows/.test(d.warning || "") ||
+                 "an ellipse subtract is not an empty layer: " + d.warning;
+        } },
+
+      // THE ROW THIS BLOCK WAS WRITTEN FOR. Switching the ellipse to the
+      // 'none' carrier mode hands the whole layer back (0.216 -> 1.0), and
+      // before the reader could see an ellipse this answered a bare ok.
+      { name: "switching the ellipse to 'none' hands the layer back, and says so",
+        tool: "set_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Ell", mask: "ST EllCut",
+                   mode: "none" };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (!/Every pixel of 'ST Ell' shows again/.test(w)) {
+            return "the masking stopped in silence: " + (w || "(none)");
+          }
+          return /showed before|hiding/.test(w) ||
+                 "it does not say what changed: " + w;
+        } },
+
+      { name: "…and putting it back to 'subtract' is an ordinary edit",
+        tool: "set_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Ell", mask: "ST EllCut",
+                   mode: "subtract" };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          return !/shows again|shows now/.test(w) ||
+                 "hiding the middle again is not an erasure or a reveal: " +
+                 w;
+        } },
+
+      // The add_mask half of the same silence: a full-coverage 'add' over
+      // an ellipse switches it off, and the receipt used to say nothing
+      // because the parade under it could not be read.
+      { name: "a full add over the ellipse switches it off, and says so",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Ell", name: "ST EllUndo",
+                   shape: "rectangle", bounds: [0, 0, 200, 200] };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (!/every pixel of it shows again/.test(w)) {
+            return "the masks below stopped working in silence: " +
+                   (w || "(none)");
+          }
+          return /2 masks/.test(w) ||
+                 "it does not count what it switched off: " + w;
+        } },
+
+      { name: "…which comes off again",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Ell", mask: "ST EllUndo" };
+        },
+        check: function (d) {
+          return d.removed === "ST EllUndo" || "removed " + d.removed;
+        } },
+
+      // The delete_mask half: taking the ellipse off a layer that keeps a
+      // full-coverage add reveals it whole, with a mask still listed --
+      // the case remainingMasks can never answer, now reachable through an
+      // ellipse too.
+      { name: "deleting the ellipse reveals the layer, and says so",
+        tool: "delete_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Ell", mask: "ST EllCut" };
+        },
+        check: function (d) {
+          var w = d.warning || "";
+          if (d.remainingMasks.join(",") !== "ST EllBase") {
+            return "masks left: " + d.remainingMasks.join(", ");
+          }
+          if (!/Every pixel of 'ST Ell' shows again/.test(w)) {
+            return "the masking stopped in silence: " + (w || "(none)");
+          }
+          return w.indexOf("ST EllBase") !== -1 ||
+                 "it does not name the mask that stayed: " + w;
+        } },
+
+      { name: "…the ellipse goes back on",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Ell", name: "ST EllCut2",
+                   shape: "ellipse", mode: "subtract" };
+        },
+        check: function () { return true; } },
+
+      { name: "…and a SECOND ellipse joins it",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Ell", name: "ST EllCut3",
+                   shape: "ellipse", bounds: [0, 0, 100, 200] };
+        },
+        check: function () { return true; } },
+
+      // The boundary, and it is deliberate: ONE ellipse is exact, two
+      // would ask the reader to prove a cell can be inside both at once,
+      // and a branch that describes no real pixel votes for a picture
+      // nobody can see. So the same call that spoke six rows up must go
+      // quiet here rather than guess.
+      { name: "…over TWO ellipses the same call goes quiet, not wrong",
+        tool: "add_mask",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Ell", name: "ST EllQuiet",
+                   shape: "rectangle", bounds: [0, 0, 200, 200] };
+        },
+        check: function (d) {
+          /* "cuts nothing away" is still allowed here: that sentence is
+           * about the NEW mask and is true whatever is under it. What may
+           * not appear is any claim about the LAYER -- those are the ones
+           * the reader has to have proved. */
+          var w = d.warning || "";
+          return !/shows again|hides the WHOLE layer|changes nothing on/
+                   .test(w) ||
+                 "two ellipses are not a readable parade: " + w;
+        } },
+
+      { name: "…and the ellipse-parade layer goes away",
+        tool: "delete_layer",
+        args: function (ctx) {
+          return { comp: ctx.mkComp, layer: "ST Ell" };
+        },
+        check: function (d) {
+          return d.removed === "ST Ell" || "removed " + d.removed;
+        } },
+
       // --- the batch executor, at the scale it is actually used at.
       // for_each_layer used to run ANY tool name, so {tool: "create_comp"}
       // over N layers reported {succeeded: N} and left N junk comps in the
@@ -2617,6 +4563,307 @@
         check: function (d) {
           return Math.abs(Number(d.value) - 12) < 1e-6 ||
                  "Blurriness reads " + d.value + ", not 12";
+        } },
+
+      // An EXPRESSION handed over as a VALUE. Measured 2026-09-03
+      // (chat-probe row 36 vague, "everything should sit off the
+      // background a bit — shadow them, not it"): the model built a
+      // slider rig, passed the expression that READS it as
+      // set_effect_param's value, and AE answered 'Unable to call
+      // "setValue" ... is not a number' — true, and naming no way to do
+      // what was asked. The round rolled back and six of seven layers
+      // were skipped on an "ok" reply. A rig plus an expression IS how
+      // you drive a parameter from a control; the tool that does it was
+      // the only missing piece, so the refusal names it.
+      { name: "batch: an expression as a VALUE is refused, not passed to AE",
+        tool: "set_effect_param",
+        args: function (ctx) {
+          return { comp: ctx.btComp, layer: "ST Batch 60",
+                   effect: "Gaussian Blur", param: "Blurriness",
+                   value: 'thisComp.layer("ST Batch").effect("Slider")(1)' };
+        },
+        expectError: true,
+        check: function (err) {
+          if (/is not a number/.test(err)) {
+            return "AE's raw sentence surfaced instead of ours: " + err;
+          }
+          if (!/takes a number/.test(err) || err.indexOf("holds 12") === -1) {
+            return "the refusal names neither the shape nor the current " +
+                   "value: " + err;
+          }
+          if (!/link_property/.test(err) || !/controlLayer/.test(err)) {
+            return "it never names the tool that DOES this: " + err;
+          }
+          return err.indexOf(
+            'property: "effect.Gaussian Blur.Blurriness"') !== -1 ||
+            "the link_property path is not paste-ready: " + err;
+        } },
+
+      { name: "batch: and that refusal wrote nothing",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.btComp, layer: "ST Batch 60",
+                   property: "effects/Gaussian Blur/Blurriness" };
+        },
+        check: function (d) {
+          return Math.abs(Number(d.value) - 12) < 1e-6 ||
+                 "Blurriness reads " + d.value + ", not the 12 it held";
+        } },
+
+      // The half that keeps this a fix and not a new refusal: real AE
+      // ACCEPTS a number written as text (measured, setValue("50") reads
+      // back 50), so the guard may not reject one.
+      { name: "batch: a NUMERIC string still writes",
+        tool: "set_effect_param",
+        args: function (ctx) {
+          return { comp: ctx.btComp, layer: "ST Batch 60",
+                   effect: "Gaussian Blur", param: "Blurriness",
+                   value: "9" };
+        },
+        check: function () { return true; } },
+
+      { name: "batch: and AE really took it as the number 9",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.btComp, layer: "ST Batch 60",
+                   property: "effects/Gaussian Blur/Blurriness" };
+        },
+        check: function (d) {
+          return Math.abs(Number(d.value) - 9) < 1e-6 ||
+                 "Blurriness reads " + d.value + ", not 9";
+        } },
+
+      // Same root (AELL_writeValue), so the same guard has to hold for
+      // the transform tools the model reaches for just as often.
+      { name: "batch: set_transform refuses an expression value too",
+        tool: "set_transform",
+        args: function (ctx) {
+          return { comp: ctx.btComp, layer: "ST Batch 60",
+                   property: "opacity",
+                   value: 'thisComp.layer("ST Batch").effect("Slider")(1)' };
+        },
+        expectError: true,
+        check: function (err) {
+          if (/is not a number/.test(err)) {
+            return "AE's raw sentence surfaced instead of ours: " + err;
+          }
+          return (/'opacity' takes a number/.test(err) &&
+                  /set_expression/.test(err)) ||
+                 "error was: " + err;
+        } },
+
+      { name: "batch: put the 60 back to 12 for the steps that follow",
+        tool: "set_effect_param",
+        args: function (ctx) {
+          return { comp: ctx.btComp, layer: "ST Batch 60",
+                   effect: "Gaussian Blur", param: "Blurriness", value: 12 };
+        },
+        check: function (d) {
+          return Number(d.value) === 12 || "wrote " + d.value;
+        } },
+
+      // The CONTEXT bill of the refusal above. Measured 2026-09-03 in the
+      // same field round: for_each_layer printed that ~450-char refusal
+      // once PER LAYER, so its "Stopped after 5 failures" summary carried
+      // ~2.2 KB in ONE result against a default 16384 ctx — and the very
+      // next transcript line was "context trimmed — 2 earlier message(s)
+      // dropped". The panel drops HISTORY on overflow, so a repeated
+      // refusal deletes the turns the model needs in order to act on it.
+      // All six layers hold Blurriness 12, so all six refusals are
+      // character-identical: exactly the case that must collapse.
+      { name: "batch: an identical per-layer failure is printed ONCE",
+        tool: "for_each_layer",
+        args: function (ctx) {
+          return { comp: ctx.btComp,
+                   layers: ["ST Batch 2", "ST Batch 3", "ST Batch 4",
+                            "ST Batch 5", "ST Batch 6", "ST Batch 7"],
+                   tool: "set_effect_param",
+                   args: { effect: "Gaussian Blur", param: "Blurriness",
+                           value: 'thisComp.layer("ST Batch").effect("Slider")(1)' } };
+        },
+        expectError: true,
+        check: function (err) {
+          if (!/Stopped after 5 failures/.test(err)) {
+            return "it did not stop at the failure cap: " + err;
+          }
+          var copies = String(err).split("link_property").length - 1;
+          if (copies !== 1) {
+            return "the same refusal is repeated " + copies + " times (" +
+                   String(err).length + " chars in one result): " + err;
+          }
+          if (err.indexOf("ST Batch 2, ST Batch 3, ST Batch 4, ST Batch 5, " +
+                          "ST Batch 6: ") === -1) {
+            return "the five layers that hit it are not listed together: " +
+                   err;
+          }
+          return String(err).length < 900 ||
+                 "one refusal, five layers, still " + String(err).length +
+                 " chars: " + err;
+        } },
+
+      { name: "batch: and that collapsed failure wrote nothing",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.btComp, layer: "ST Batch 6",
+                   property: "effects/Gaussian Blur/Blurriness" };
+        },
+        check: function (d) {
+          return Math.abs(Number(d.value) - 12) < 1e-6 ||
+                 "Blurriness reads " + d.value + ", not the 12 it held";
+        } },
+
+      // Failures that differ are NOT merged — collapsing those would hide
+      // real problems behind one layer's message. 'Vibrance' is on no
+      // layer here, so each refusal names its own layer and stands alone.
+      { name: "batch: failures that DIFFER still print one line each",
+        tool: "for_each_layer",
+        args: function (ctx) {
+          return { comp: ctx.btComp,
+                   layers: ["ST Batch 8", "ST Batch 9"],
+                   tool: "set_effect_param",
+                   args: { effect: "Vibrance", param: "Vibrance", value: 20 } };
+        },
+        check: function (d) {
+          // Two failures is under the give-up cap, so this comes back as
+          // an ok result carrying a failures string — the OTHER place the
+          // grouping runs.
+          var f = String(d.failures || "");
+          if (d.succeeded !== 0) return "succeeded " + d.succeeded + " of 2";
+          if (!/ST Batch 8:/.test(f) || !/ST Batch 9:/.test(f)) {
+            return "the two differing failures were merged: " + f;
+          }
+          return f.indexOf("Effect not found") !== -1 ||
+                 "failures do not carry the real reason: " + f;
+        } },
+
+      // ---- "Parameter not found" is a CONCEPT map -------------------
+      // Measured 2026-09-03 in the same field round: the model asked
+      // Drop Shadow for Offset -> Offset X -> Offset Y -> Blurriness
+      // across FOUR calls and was shown the complete, correct seven-name
+      // roster every time. The list was never hiding the answer and
+      // there was nothing to rank; what it never said is that on THIS
+      // effect an "offset" IS Distance at a Direction, and a "blur" IS
+      // Softness. Drop Shadow is the effect that failure happened on and
+      // its roster is measured (scripts/param-concept-probe.jsx).
+      { name: "batch: Drop Shadow for the concept-map steps",
+        tool: "apply_effect",
+        args: function (ctx) {
+          return { comp: ctx.btComp, layer: "ST Batch 60",
+                   effect: "Drop Shadow" };
+        },
+        check: function () { return true; } },
+
+      { name: "batch: 'Offset' is answered with Distance and Direction",
+        tool: "set_effect_param",
+        args: function (ctx) {
+          return { comp: ctx.btComp, layer: "ST Batch 60",
+                   effect: "Drop Shadow", param: "Offset", value: 10 };
+        },
+        expectError: true,
+        check: function (err) {
+          if (!/Parameter not found: Offset/.test(err)) {
+            return "the name that missed is not named: " + err;
+          }
+          if (!/that is: Direction, Distance\./.test(err)) {
+            return "an 'offset' is not mapped to the two names that " +
+                   "mean it here: " + err;
+          }
+          return (/'Drop Shadow' has: Shadow Color, Opacity, Direction/
+                    .test(err) && /list_properties/.test(err)) ||
+                 "the grounded roster or the lister was lost: " + err;
+        } },
+
+      { name: "batch: 'Blurriness' is answered with Softness, alone",
+        tool: "set_effect_param",
+        args: function (ctx) {
+          return { comp: ctx.btComp, layer: "ST Batch 60",
+                   effect: "Drop Shadow", param: "Blurriness", value: 4 };
+        },
+        expectError: true,
+        check: function (err) {
+          if (!/that is: Softness\./.test(err)) {
+            return "a 'blur' is not mapped to Softness: " + err;
+          }
+          return String(err).split("has:")[0].indexOf("Compositing") === -1 ||
+                 "the concept clause offered Compositing Options: " + err;
+        } },
+
+      // The map may not INVENT. A word that means nothing on this effect
+      // has to leave the refusal exactly as it was.
+      { name: "batch: an unmappable word gets no suggestion at all",
+        tool: "set_effect_param",
+        args: function (ctx) {
+          return { comp: ctx.btComp, layer: "ST Batch 60",
+                   effect: "Drop Shadow", param: "Wobble", value: 1 };
+        },
+        expectError: true,
+        check: function (err) {
+          return (/Parameter not found: Wobble\. 'Drop Shadow' has:/
+                    .test(err) && !/that is:/.test(err)) ||
+                 "a suggestion was invented for a word that means " +
+                 "nothing here: " + err;
+        } },
+
+      // The other half, and it is AE's own arbitrariness: measured on
+      // Drop Shadow, fx.property("distance") RESOLVES and
+      // fx.property("DISTANCE") does not, nor does "shadow color". A
+      // name that differs only in case or a separator is the SAME name,
+      // so the host folds it rather than refusing - the way remove_effect
+      // and the render-template picker already do.
+      { name: "batch: a shouted parameter name still writes",
+        tool: "set_effect_param",
+        args: function (ctx) {
+          return { comp: ctx.btComp, layer: "ST Batch 60",
+                   effect: "Drop Shadow", param: "DISTANCE", value: 30 };
+        },
+        check: function (d) {
+          return d.param === "Distance" ||
+                 "the receipt reports '" + d.param + "', not AE's spelling";
+        } },
+
+      { name: "batch: and AE really took it on Distance",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.btComp, layer: "ST Batch 60",
+                   property: "effects/Drop Shadow/Distance" };
+        },
+        check: function (d) {
+          return Math.abs(Number(d.value) - 30) < 1e-6 ||
+                 "Distance reads " + d.value + ", not the 30 that was " +
+                 "written through the folded name";
+        } },
+
+      // The OTHER place a caller names a parameter: the dotted spec that
+      // add_keyframe / link_property / set_expression all resolve
+      // through. It used to refuse with the name and nothing else - no
+      // roster, no concept, nothing to retry from.
+      { name: "batch: the dotted property path refuses the same way",
+        tool: "add_keyframe",
+        args: function (ctx) {
+          return { comp: ctx.btComp, layer: "ST Batch 60", time: 0,
+                   value: 4, property: "effect.Drop Shadow.Blurriness" };
+        },
+        expectError: true,
+        check: function (err) {
+          if (!/that is: Softness/.test(err)) {
+            return "no concept on the dotted path: " + err;
+          }
+          if (!/'Drop Shadow' has: Shadow Color/.test(err)) {
+            return "no roster on the dotted path: " + err;
+          }
+          return /effect\.Drop Shadow\.<one of those>/.test(err) ||
+                 "it never says how to spell the path it wants: " + err;
+        } },
+
+      { name: "batch: take the concept-map Drop Shadow back off",
+        tool: "remove_effect",
+        args: function (ctx) {
+          return { comp: ctx.btComp, layer: "ST Batch 60",
+                   effect: "Drop Shadow" };
+        },
+        check: function (d) {
+          return d.removed === "Drop Shadow" ||
+                 "removed '" + d.removed + "'";
         } },
 
       // ---- what the MODEL is told about a big comp -----------------
@@ -3122,6 +5369,216 @@
           for (var i = 0; i < d.layers.length; i++) names.push(d.layers[i].name);
           return names.join(",").indexOf("ST RB Survivor") !== -1 ||
                  "survivor missing, comp holds " + (names.join(", ") || "nothing");
+        } },
+
+      // ---- a NAMING refusal is not debris (0.11.23) ----
+      //
+      // The exact field round, replayed against real AE: chat-probe row 35
+      // canonical said "the background is too sharp", the model applied
+      // Fast Box Blur and then asked for a parameter called 'Radius'. AE
+      // has no such parameter there, the refusal named the real ones — and
+      // the round rollback undid BOTH, so the grounding worked and the
+      // blur it bought was thrown away. A refusal that wrote nothing and
+      // says what does exist leaves nothing to redo, so the successes
+      // around it are not debris either.
+      { name: "a naming refusal does not throw away the round that earned it",
+        batchOpts: { rollback: true },
+        batch: function (ctx) {
+          return [
+            { tool: "apply_effect",
+              args: { comp: ctx.rbComp, layer: "ST RB Survivor",
+                      effect: "Fast Box Blur" } },
+            { tool: "set_effect_param",
+              args: { comp: ctx.rbComp, layer: "ST RB Survivor",
+                      effect: "Fast Box Blur", param: "Radius", value: 20 } }
+          ];
+        },
+        check: function (rows) {
+          if (rows.length !== 2) return "rows " + rows.length;
+          if (!rows[0].ok) return "apply_effect failed: " + rows[0].error;
+          if (rows[1].ok) return "AE accepted a parameter called 'Radius'";
+          if (rows[0].rolledBack || rows[1].rolledBack) {
+            return "the round was rolled back over a parameter NAME — the " +
+                   "blur that succeeded went with it";
+          }
+          if (!/Blur Radius/.test(String(rows[1].error))) {
+            return "the grounded roster is gone: " + rows[1].error;
+          }
+          return /do NOT send them again/.test(String(rows[1].error)) ||
+                 "nothing tells the model the rest of the round stands: " +
+                 rows[1].error;
+        } },
+
+      { name: "…so the corrected re-send lands on the blur that survived",
+        tool: "set_effect_param",
+        args: function (ctx) {
+          return { comp: ctx.rbComp, layer: "ST RB Survivor",
+                   effect: "Fast Box Blur", param: "Blur Radius", value: 12 };
+        },
+        check: function (d) {
+          return d.param === "Blur Radius" ||
+                 "wrote " + JSON.stringify(d);
+        } },
+
+      { name: "…and the value really is on the layer AE never undid",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.rbComp, layer: "ST RB Survivor",
+                   property: "effect.Fast Box Blur.Blur Radius" };
+        },
+        check: function (d) {
+          return Number(d.value) === 12 ||
+                 "expected 12, read " + JSON.stringify(d.value);
+        } },
+
+      // The exemption is narrow on purpose: a round that failed for a
+      // REAL reason still goes whole. This is the nine-squares round.
+      { name: "but a round with a real failure in it still goes whole",
+        batchOpts: { rollback: true },
+        batch: function (ctx) {
+          return [
+            { tool: "apply_effect",
+              args: { comp: ctx.rbComp, layer: "ST RB Survivor",
+                      effect: "Glow" } },
+            { tool: "duplicate_layer",
+              args: { comp: ctx.rbComp, layer: "ST RB No Such Layer" } }
+          ];
+        },
+        check: function (rows) {
+          if (rows.length !== 2) return "rows " + rows.length;
+          if (rows[1].ok) return "duplicate_layer should have failed";
+          return (rows[0].rolledBack && rows[1].rolledBack) ||
+                 "a genuinely partial round was left standing: " +
+                 JSON.stringify(rows[0]).slice(0, 140);
+        } },
+
+      { name: "…so the Glow is gone and the earlier blur is not",
+        tool: "list_properties",
+        args: function (ctx) {
+          return { comp: ctx.rbComp, layer: "ST RB Survivor",
+                   path: "effects" };
+        },
+        check: function (d) {
+          var names = JSON.stringify(d);
+          if (/Glow/.test(names)) return "the rolled-back Glow survived";
+          return /Fast Box Blur/.test(names) ||
+                 "the blur went with an unrelated rollback: " +
+                 names.slice(0, 160);
+        } },
+
+      // ---- and a refusal with NO name to correct is the same class ----
+      //
+      // The field round, 2026-09-03 (chat-probe row 36 vague, run 1):
+      // for_each_layer {apply_effect Drop Shadow} put a shadow on all
+      // seven layers, and a belt-and-braces remove_effect {layer: "BG"}
+      // met "'BG' has no effects at all" — a refusal that writes nothing
+      // and already says what is there, exactly like the parameter miss
+      // above. It was NOT tagged, so the rollback threw the seven shadows
+      // away. The tell is that this one has nothing to SPELL correctly:
+      // the fix is to drop the command, which is why the sentence the
+      // rollback appends has to offer both.
+      //
+      // Glow, not Drop Shadow, to keep the round clear of the coverage
+      // rig's own shadow — the class is the subject, not the effect name.
+      { name: "an empty parade refuses without taking the round down",
+        batchOpts: { rollback: true },
+        batch: function (ctx) {
+          return [
+            { tool: "apply_effect",
+              args: { comp: ctx.rbComp, layer: "ST RB Keep A",
+                      effect: "Glow" } },
+            { tool: "remove_effect",
+              args: { comp: ctx.rbComp, layer: "ST RB Keep B" } }
+          ];
+        },
+        check: function (rows) {
+          if (rows.length !== 2) return "rows " + rows.length;
+          if (!rows[0].ok) return "apply_effect failed: " + rows[0].error;
+          if (rows[1].ok) return "remove_effect accepted a bare layer";
+          if (rows[0].rolledBack || rows[1].rolledBack) {
+            return "the round was rolled back over a layer that had " +
+                   "nothing to remove — the Glow went with it";
+          }
+          if (!/has no effects at all/.test(String(rows[1].error))) {
+            return "the grounded refusal is gone: " + rows[1].error;
+          }
+          if (!/do NOT send them again/.test(String(rows[1].error))) {
+            return "nothing tells the model the rest of the round " +
+                   "stands: " + rows[1].error;
+          }
+          return /drop it/.test(String(rows[1].error)) ||
+                 "the sentence still assumes a NAME to correct, and " +
+                 "this refusal has none: " + rows[1].error;
+        } },
+
+      { name: "…and the Glow really is still on the layer",
+        tool: "list_properties",
+        args: function (ctx) {
+          return { comp: ctx.rbComp, layer: "ST RB Keep A",
+                   path: "effects" };
+        },
+        check: function (d) {
+          return /Glow/.test(JSON.stringify(d)) ||
+                 "the Glow went with the refusal: " +
+                 JSON.stringify(d).slice(0, 160);
+        } },
+
+      { name: "naming an effect the layer does not carry is the same class",
+        batchOpts: { rollback: true },
+        batch: function (ctx) {
+          return [
+            { tool: "apply_effect",
+              args: { comp: ctx.rbComp, layer: "ST RB Keep B",
+                      effect: "Tint" } },
+            { tool: "remove_effect",
+              args: { comp: ctx.rbComp, layer: "ST RB Keep A",
+                      effect: "Tint" } }
+          ];
+        },
+        check: function (rows) {
+          if (rows.length !== 2) return "rows " + rows.length;
+          if (!rows[0].ok) return "apply_effect failed: " + rows[0].error;
+          if (rows[1].ok) return "AE removed a Tint that was never there";
+          if (rows[0].rolledBack || rows[1].rolledBack) {
+            return "a remove_effect NAME miss rolled the round back";
+          }
+          return /Glow/.test(String(rows[1].error)) ||
+                 "the refusal does not say what the layer really " +
+                 "carries: " + rows[1].error;
+        } },
+
+      // The boundary that keeps the exemption honest: a remove_effect
+      // that really REMOVED one is a mutation like any other, and a
+      // round it shares with a real failure still goes whole.
+      { name: "but a remove_effect that really removed one rolls back",
+        batchOpts: { rollback: true },
+        batch: function (ctx) {
+          return [
+            { tool: "remove_effect",
+              args: { comp: ctx.rbComp, layer: "ST RB Keep B",
+                      effect: "Tint" } },
+            { tool: "duplicate_layer",
+              args: { comp: ctx.rbComp, layer: "ST RB No Such Layer" } }
+          ];
+        },
+        check: function (rows) {
+          if (rows.length !== 2) return "rows " + rows.length;
+          if (rows[1].ok) return "duplicate_layer should have failed";
+          return (rows[0].rolledBack && rows[1].rolledBack) ||
+                 "a real removal was left standing in a broken round: " +
+                 JSON.stringify(rows[0]).slice(0, 140);
+        } },
+
+      { name: "…so the Tint AE took off is back on the layer",
+        tool: "list_properties",
+        args: function (ctx) {
+          return { comp: ctx.rbComp, layer: "ST RB Keep B",
+                   path: "effects" };
+        },
+        check: function (d) {
+          return /Tint/.test(JSON.stringify(d)) ||
+                 "the rollback did not put the Tint back: " +
+                 JSON.stringify(d).slice(0, 160);
         } },
 
       // ---- what the rollback reaches, and what its check can SEE ----
@@ -4133,6 +6590,281 @@
         check: function (d) {
           return d.removed === 0 || "removed " + d.removed;
         } },
+
+      // Every other rig comp in this suite is deleted by the step that
+      // finishes with it; this one never was, so ten runs on this machine
+      // left "AELL Self-Test Wipe" through "…Wipe 10" in the user's
+      // project. The check at the bottom could not see them either — it
+      // looks for the "ST " namespace and for new FOOTAGE, and a comp
+      // called "AELL Self-Test …" is neither. It turned the harness red
+      // in the end, from a long way off: reduce_project's refusal lists
+      // the project's comps and TRUNCATES the list, and the tenth leaked
+      // Wipe comp pushed the comp that step looks for off the end of it.
+      { name: "cleanup: delete the carpet-bomb rig comp",
+        tool: "delete_item",
+        args: function (ctx) { return { item: ctx.wpComp }; },
+        check: function () { return true; } },
+
+      // ---- "nothing to stagger" rig. Field run 2026-09-03, row 32:
+      // three of four phrasings called stagger_layers ALONE on layers
+      // with no keyframes. It moved six start times and answered
+      // ok {layers:6, spread:2.5, placed:[…]} — a success receipt for a
+      // comp where nothing fades. The tool now scans its targets and
+      // says so, and every clause of that scan is an AE fact worth
+      // pinning in real AE (see scripts/stagger-motion-probe.jsx).
+      { name: "stagger rig: a comp nothing has animated",
+        tool: "create_comp",
+        args: { name: SMCOMP, width: 320, height: 240, duration: 4,
+                frameRate: 30 },
+        check: function (d, ctx) {
+          ctx.smComp = d.name;
+          ctx.smLayers = ["ST Stag A", "ST Stag B", "ST Stag C"];
+          return typeof d.name === "string" || "no comp name";
+        } },
+      { name: "stagger rig: solid A",
+        tool: "add_solid",
+        args: function (ctx) {
+          return { comp: ctx.smComp, name: "ST Stag A", color: [1, 0, 0],
+                   width: 60, height: 60 };
+        },
+        check: function (d) { return d.name === "ST Stag A" || d.name; } },
+      { name: "stagger rig: solid B",
+        tool: "add_solid",
+        args: function (ctx) {
+          return { comp: ctx.smComp, name: "ST Stag B", color: [0, 1, 0],
+                   width: 60, height: 60 };
+        },
+        check: function (d) { return d.name === "ST Stag B" || d.name; } },
+      { name: "stagger rig: solid C",
+        tool: "add_solid",
+        args: function (ctx) {
+          return { comp: ctx.smComp, name: "ST Stag C", color: [0, 0, 1],
+                   width: 60, height: 60 };
+        },
+        check: function (d) { return d.name === "ST Stag C" || d.name; } },
+
+      { name: "staggering unanimated layers WARNS that nothing moves",
+        tool: "stagger_layers",
+        args: function (ctx) {
+          return { comp: ctx.smComp, layers: ctx.smLayers, spread: 2,
+                   startAt: 0 };
+        },
+        check: function (d) {
+          if (d.layers !== 3) return "layers " + d.layers;
+          if (!d.warning) return "no warning at all";
+          if (d.warning.indexOf("nothing on these 3 layers varies over " +
+                                "time") === -1) {
+            return "warning does not name the finding: " + d.warning;
+          }
+          if (d.warning.indexOf("set_keyframes") === -1 ||
+              d.warning.indexOf("relativeTo") === -1) {
+            return "warning does not say what to do next: " + d.warning;
+          }
+          // …and the placement it warns about still happened, so the
+          // warning is a warning and not a silent refusal.
+          return (d.placed && d.placed.length === 3 &&
+                  Math.abs(d.placed[2].startTime - 2) < 0.01) ||
+                 "the stagger itself did not land: " +
+                 JSON.stringify(d.placed);
+        } },
+
+      // A MARKER reads numKeys > 0 in real AE (measured: Marker is root
+      // property 1 on every layer type, and it is a LEAF). A scan that
+      // counted it would go quiet on exactly the layers this is for.
+      { name: "…a marker is not animation",
+        tool: "add_marker",
+        args: function (ctx) {
+          return { comp: ctx.smComp, layer: "ST Stag A", time: 1,
+                   comment: "not animation" };
+        },
+        check: function () { return true; } },
+      { name: "…so the warning survives a marked layer",
+        tool: "stagger_layers",
+        args: function (ctx) {
+          return { comp: ctx.smComp, layers: ctx.smLayers, spread: 2,
+                   startAt: 0 };
+        },
+        check: function (d) {
+          return (d.warning &&
+                  d.warning.indexOf("varies over time") !== -1) ||
+                 "a marker silenced it: " + (d.warning || "(no warning)");
+        } },
+
+      // One keyframe anywhere and it goes quiet: the warning speaks only
+      // when EVERY target is static.
+      { name: "…two opacity keys on ONE of the three",
+        tool: "set_keyframes",
+        args: function (ctx) {
+          return { comp: ctx.smComp, layers: ["ST Stag B"],
+                   property: "opacity",
+                   keys: [{ time: 0, value: 0 }, { time: 1, value: 100 }] };
+        },
+        check: function (d) {
+          return d.keysSet === 2 || "keysSet " + d.keysSet;
+        } },
+      { name: "…and one animated layer among three silences the warning",
+        tool: "stagger_layers",
+        args: function (ctx) {
+          return { comp: ctx.smComp, layers: ctx.smLayers, spread: 2,
+                   startAt: 0 };
+        },
+        check: function (d) {
+          return !d.warning || "still warned: " + d.warning;
+        } },
+
+      // An EFFECT with no keyframes silences it too. Some effects animate
+      // on their own at zero keys (CC Particle World, Radio Waves), so an
+      // effect is doubt — and a warning that says nothing animates has to
+      // be right.
+      { name: "…keys off again, and an unkeyed effect on one layer",
+        batch: function (ctx) {
+          return [
+            { tool: "remove_keyframes",
+              args: { comp: ctx.smComp, layers: ["ST Stag B"],
+                      property: "opacity" } },
+            { tool: "apply_effect",
+              args: { comp: ctx.smComp, layer: "ST Stag C",
+                      effect: "Fast Box Blur" } }
+          ];
+        },
+        check: function (rows) {
+          if (rows.length !== 2) return "rows " + rows.length;
+          if (!rows[0].ok) return "remove_keyframes: " + rows[0].error;
+          return rows[1].ok || "apply_effect: " + rows[1].error;
+        } },
+      { name: "…an unkeyed EFFECT is doubt enough to stay quiet",
+        tool: "stagger_layers",
+        args: function (ctx) {
+          return { comp: ctx.smComp, layers: ctx.smLayers, spread: 2,
+                   startAt: 0 };
+        },
+        check: function (d) {
+          return !d.warning || "warned past an effect: " + d.warning;
+        } },
+
+      { name: "cleanup: delete the stagger rig comp",
+        tool: "delete_item",
+        args: function (ctx) { return { item: ctx.smComp }; },
+        check: function () { return true; } },
+
+      // ---- "the grid guessed the layer list" rig. Field run
+      // 2026-09-02, row 30: "line the Icon layers up in a neat 3 by 2
+      // grid" arrived as grid_layout {spacingX: 40, spacingY: 40} with
+      // no 'layers'. Headless there is no selection, so the fallback did
+      // what its doc promised and gridded every content layer — and the
+      // comp's full-frame BACKGROUND went into a cell with a rig
+      // expression on its Position. A layer that covers the whole frame
+      // is a backdrop, not grid content; it now stays out of a GUESSED
+      // grid and is named in the receipt.
+      //
+      // Nothing may be selected here, which is why this is its own comp:
+      // create_comp leaves an empty selection and add_solid restores it
+      // (AELL_keepSelection), so the fallback is reached for real.
+      { name: "grid rig: a comp with a full-frame backdrop",
+        tool: "create_comp",
+        args: { name: GBCOMP, width: 640, height: 360, duration: 4,
+                frameRate: 30 },
+        check: function (d, ctx) {
+          ctx.gbComp = d.name;
+          return typeof d.name === "string" || "no comp name";
+        } },
+      { name: "grid rig: the backdrop, exactly comp-sized",
+        tool: "add_solid",
+        args: function (ctx) {
+          return { comp: ctx.gbComp, name: "ST Grid BG", color: [0, 0, 0.4],
+                   width: 640, height: 360 };
+        },
+        check: function (d) { return d.name === "ST Grid BG" || d.name; } },
+      { name: "grid rig: icon A",
+        tool: "add_solid",
+        args: function (ctx) {
+          return { comp: ctx.gbComp, name: "ST Grid A", color: [1, 0, 0],
+                   width: 60, height: 60 };
+        },
+        check: function (d) { return d.name === "ST Grid A" || d.name; } },
+      { name: "grid rig: icon B",
+        tool: "add_solid",
+        args: function (ctx) {
+          return { comp: ctx.gbComp, name: "ST Grid B", color: [0, 1, 0],
+                   width: 60, height: 60 };
+        },
+        check: function (d) { return d.name === "ST Grid B" || d.name; } },
+      { name: "grid rig: icon C",
+        tool: "add_solid",
+        args: function (ctx) {
+          return { comp: ctx.gbComp, name: "ST Grid C", color: [0, 0, 1],
+                   width: 60, height: 60 };
+        },
+        check: function (d) { return d.name === "ST Grid C" || d.name; } },
+
+      { name: "a guessed grid leaves the full-frame backdrop out",
+        tool: "grid_layout",
+        args: function (ctx) {
+          return { comp: ctx.gbComp, spacingX: 40, spacingY: 40 };
+        },
+        check: function (d) {
+          var i, names = [];
+          for (i = 0; i < d.placed.length; i++) names.push(d.placed[i].layer);
+          if (names.length !== 3) return "placed " + names.join(", ");
+          for (i = 0; i < names.length; i++) {
+            if (names[i] === "ST Grid BG") return "backdrop gridded";
+          }
+          if (!d.skipped || d.skipped.length !== 1 ||
+              d.skipped[0] !== "ST Grid BG") {
+            return "skipped: " + JSON.stringify(d.skipped);
+          }
+          var n = d.skippedNote || "";
+          if (n.indexOf("640x360") === -1) return "note has no size: " + n;
+          if (n.indexOf("layers: [\"ST Grid BG\"") === -1) {
+            return "note has no way back in: " + n;
+          }
+          return true;
+        } },
+      { name: "…and the backdrop carries no rig expression",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.gbComp, layer: "ST Grid BG",
+                   property: "position" };
+        },
+        check: function (d) {
+          return !d.expression || "backdrop was rigged: " + d.expression;
+        } },
+      { name: "…while an icon does",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.gbComp, layer: "ST Grid A",
+                   property: "position" };
+        },
+        check: function (d) {
+          // get_property caps `expression` at 200 chars and the grid rig
+          // is longer than that, so the check keys on its HEAD — the
+          // control-null lookup and the Columns slider, both inside the
+          // cut. 'Grid X Spacing' is not (measured, AE 2026).
+          return (d.expression &&
+                  d.expression.indexOf('thisComp.layer("GRID CTRL")') !== -1 &&
+                  d.expression.indexOf("Grid Columns") !== -1) ||
+                 "icon not rigged: " + (d.expression || "(none)");
+        } },
+      // One-sided: a backdrop the CALLER names is gridded, silently.
+      { name: "a NAMED backdrop is gridded and nothing is said",
+        tool: "grid_layout",
+        args: function (ctx) {
+          return { comp: ctx.gbComp,
+                   layers: ["ST Grid BG", "ST Grid A"], columns: 2 };
+        },
+        check: function (d) {
+          var i, hit = false;
+          for (i = 0; i < d.placed.length; i++) {
+            if (d.placed[i].layer === "ST Grid BG") hit = true;
+          }
+          if (!hit) return "named backdrop still skipped";
+          return !d.skipped || "warned about a layer the caller named";
+        } },
+
+      { name: "cleanup: delete the grid backdrop rig comp",
+        tool: "delete_item",
+        args: function (ctx) { return { item: ctx.gbComp }; },
+        check: function () { return true; } },
 
       // set_layer_3d, and the two AE facts underneath it. Measured
       // 2026-08-28: the Transform group hands out the SAME children for a
@@ -9343,6 +12075,15 @@
           for (i = 0; i < d.items.length; i++) {
             var it = d.items[i];
             if (it.name.indexOf("ST ") === 0) stale.push(it.name);
+            // The rig comps are named for the suite, not in its "ST "
+            // namespace, so this check used to walk straight past a
+            // leaked one — which is how ten "AELL Self-Test Wipe" comps
+            // accumulated in the user's project unremarked. Scoped by ID
+            // to THIS run, so a rig comp the user has kept on purpose
+            // from an earlier one is never blamed on this run.
+            else if (!base[it.id] && it.name.indexOf("AELL Self-Test") === 0) {
+              stale.push(it.name);
+            }
             // AE's "Solids" folder is created on demand and kept: it is
             // AE's, not the suite's, and the user's next solid wants it.
             else if (!base[it.id] && it.type === "footage") {

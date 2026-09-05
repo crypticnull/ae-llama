@@ -185,6 +185,12 @@ AELLP_PROBES.hostFacts = function () {
   // Premiere-shaped surface.
   d.enableQE = AELLP_typeOf("app.enableQE");
   d.project = AELLP_typeOf("app.project");
+  // The two routes to HAVING a project, and they are not
+  // interchangeable: newProject refuses a path that is already taken
+  // (measured 2026-09-03), openDocument is the one for a file that
+  // exists and the only one with suppress-the-dialog flags.
+  d.newProject = AELLP_typeOf("app.newProject");
+  d.openDocument = AELLP_typeOf("app.openDocument");
   d.projectName = AELLP_safe(function () { return app.project.name; });
   d.projectPath = AELLP_safe(function () { return app.project.path; });
   d.activeSequence = AELLP_safe(function () {
@@ -273,6 +279,99 @@ AELLP_PROBES.historyProbe = function (args) {
   return d;
 };
 
+// ------------------------------------------------- track clip snapshot
+/*
+ * A picture of one video track's clips, taken so the NEW clip can be
+ * found by DIFFING and not by guessing an index.
+ *
+ * Measured 2026-09-03 on 26.3.2: after `importMGT` grew track 0 from 1
+ * clip to 2, `clips[after - 1]` was still `icon-normal.png` -- the seed
+ * the sequence was built from. The last index is not "the one just
+ * added"; Premiere places the graphic at the insertion TIME, so the new
+ * clip can land anywhere in the collection. Asking the wrong clip for
+ * `getMGTComponent` answers null, which reads exactly like "this build
+ * cannot read controllers back".
+ *
+ * `nodeId` is the identity if the build exposes it; name + start ticks
+ * is the fallback, and it is a MULTISET compare so two clips that share
+ * a signature cannot both be called new.
+ */
+function AELLP_clipSnap(seq, track) {
+  var out = [];
+  var n, i;
+  n = AELLP_safe(function () { return seq.videoTracks[track].clips.numItems; });
+  if (typeof n !== "number") { return out; }
+  for (i = 0; i < n; i++) {
+    out.push((function (idx) {
+      var c = AELLP_safe(function () {
+        return seq.videoTracks[track].clips[idx];
+      });
+      if (!c || typeof c === "string") {
+        return { index: idx, name: null, start: null, nodeId: null };
+      }
+      return {
+        index: idx,
+        name: AELLP_safe(function () { return String(c.name); }),
+        start: AELLP_safe(function () { return String(c.start.ticks); }),
+        nodeId: AELLP_safe(function () { return String(c.nodeId); })
+      };
+    })(i));
+  }
+  return out;
+}
+
+// Usable identity only: AELLP_safe hands back "throws: ..." for a read
+// that failed and null for one that was not there, and neither may be
+// matched against as though it were an id.
+function AELLP_clipId(c) {
+  var id = c.nodeId;
+  if (id && typeof id === "string" && id.length > 0 &&
+      id !== "null" && id !== "undefined" &&
+      id.indexOf("throws:") !== 0) {
+    return "node:" + id;
+  }
+  if (c.name === null || c.start === null) { return null; }
+  if (String(c.name).indexOf("throws:") === 0) { return null; }
+  if (String(c.start).indexOf("throws:") === 0) { return null; }
+  return "sig:" + String(c.name) + "@" + String(c.start);
+}
+
+/*
+ * Which clip in `after` is not accounted for by `before`. Returns
+ * { clip, how, added } -- `how` is part of the receipt on purpose: a
+ * measurement taken from a FALLBACK pick is weaker evidence than one
+ * taken from a clean diff, and the reader has to be able to tell.
+ */
+function AELLP_newClip(before, after) {
+  var used = [];
+  var added = [];
+  var i, j, id, bid, matched;
+  for (i = 0; i < before.length; i++) { used.push(false); }
+  for (i = 0; i < after.length; i++) {
+    id = AELLP_clipId(after[i]);
+    matched = false;
+    if (id !== null) {
+      for (j = 0; j < before.length; j++) {
+        if (used[j]) { continue; }
+        bid = AELLP_clipId(before[j]);
+        if (bid !== null && bid === id) {
+          used[j] = true;
+          matched = true;
+          break;
+        }
+      }
+    }
+    if (!matched) { added.push(after[i]); }
+  }
+  if (added.length === 1) {
+    return { clip: added[0], how: "diff", added: added };
+  }
+  if (added.length === 0) {
+    return { clip: null, how: "no-new-clip", added: added };
+  }
+  return { clip: null, how: "ambiguous-" + added.length, added: added };
+}
+
 // -------------------------------------------------------- mogrtAccept
 // MUTATES. The measurement that retires docs/SELF-VERIFY-PLANS.md step 7:
 // does Premiere ACCEPT what AE wrote, and can the controllers be read
@@ -280,6 +379,7 @@ AELLP_PROBES.historyProbe = function (args) {
 AELLP_PROBES.mogrtAccept = function (args) {
   var d = {};
   var seq, f, before, after, clip, comp, props, i, p, n, track, k;
+  var beforeSnap, afterSnap, found;
   if (!args || args.allowMutate !== true) {
     return { skipped: "pass allowMutate:true to run the mutating probe" };
   }
@@ -299,9 +399,8 @@ AELLP_PROBES.mogrtAccept = function (args) {
   }
 
   track = (args.videoTrack === 0 || args.videoTrack) ? args.videoTrack : 0;
-  before = AELLP_safe(function () {
-    return seq.videoTracks[track].clips.numItems;
-  });
+  beforeSnap = AELLP_clipSnap(seq, track);
+  before = beforeSnap.length;
   try {
     // Adobe's own sample passes ticks; seconds are accepted by some
     // builds. Whichever this host takes, the receipt below is read back
@@ -311,13 +410,11 @@ AELLP_PROBES.mogrtAccept = function (args) {
   } catch (e) {
     return { error: "importMGT threw: " + AELLP_say(e), before: before };
   }
-  after = AELLP_safe(function () {
-    return seq.videoTracks[track].clips.numItems;
-  });
+  afterSnap = AELLP_clipSnap(seq, track);
+  after = afterSnap.length;
   d.before = before;
   d.after = after;
-  d.landed = (typeof before === "number" && typeof after === "number") ?
-             (after > before) : null;
+  d.landed = after > before;
   if (d.landed !== true) {
     d.error = "importMGT returned without throwing but the track's clip " +
               "count did not grow (" + String(before) + " -> " +
@@ -325,18 +422,40 @@ AELLP_PROBES.mogrtAccept = function (args) {
     return d;
   }
 
+  // The clip just added is the one the BEFORE picture cannot account
+  // for. Never clips[after - 1]: measured 26.3.2, that was the seed.
+  found = AELLP_newClip(beforeSnap, afterSnap);
+  d.pickedBy = found.how;
+  d.trackBefore = beforeSnap;
+  d.trackAfter = afterSnap;
+  if (!found.clip) {
+    d.error = "the track grew but no single clip could be identified as " +
+              "the new one (" + found.how + "); candidates: " +
+              String(found.added.length) + ". Clip identity on this " +
+              "build is not diffable, so the controller round-trip was " +
+              "NOT measured -- an index guess would report the seed.";
+    return d;
+  }
+  d.clipIndex = found.clip.index;
+  d.clipName = found.clip.name;
   clip = AELLP_safe(function () {
-    return seq.videoTracks[track].clips[after - 1];
+    return seq.videoTracks[track].clips[found.clip.index];
   });
-  d.clipName = AELLP_safe(function () { return String(clip.name); });
-  if (!clip || typeof clip.getMGTComponent !== "function") {
+  if (!clip || typeof clip === "string") {
+    d.error = "the new clip at index " + String(found.clip.index) +
+              " could not be re-read: " + String(clip);
+    return d;
+  }
+  if (typeof clip.getMGTComponent !== "function") {
     d.error = "the landed clip has no getMGTComponent -- controllers " +
               "cannot be read back on this build";
     return d;
   }
   comp = AELLP_safe(function () { return clip.getMGTComponent(); });
   if (!comp || typeof comp === "string") {
-    d.error = "getMGTComponent returned nothing: " + String(comp);
+    d.error = "getMGTComponent returned nothing for the clip the diff " +
+              "identified as new (index " + String(found.clip.index) +
+              ", name " + String(found.clip.name) + "): " + String(comp);
     return d;
   }
   props = [];
@@ -591,10 +710,74 @@ AELLP_PROBES.battery = function (args) {
       return nameNow();
     }
 
-    if (typeof app.newProject === "function") {
+    /*
+     * THE PATH MAY ALREADY BE TAKEN, and that is not a small detail:
+     * measured 2026-09-03 on 26.3.2, app.newProject against an existing
+     * file returns FALSE, leaves app.project.name empty, and drops an
+     * AELL_PROBE_SCRATCH<guid> sidecar in the folder. Three runs in a
+     * row failed that way before anyone looked at the folder.
+     *
+     * A file that exists wants openDocument, not newProject -- and
+     * openDocument is the better unattended call anyway, because it
+     * takes four suppress-the-dialog flags and this runner's whole
+     * contract is that no modal ever appears.
+     */
+    var scratchFile = null;
+    try { scratchFile = new File(args.scratchProject); } catch (eF) { scratchFile = null; }
+    var pathWasTaken = !!(scratchFile && scratchFile.exists);
+
+    if (pathWasTaken) {
+      if (typeof app.openDocument === "function") {
+        try {
+          /* (path, suppressConversion, bypassLocateFile, bypassWarning,
+              suppressLoadingProjectManager) - every one of them a modal
+              that would hang an unattended run. */
+          var opened = app.openDocument(args.scratchProject,
+                                        true, true, true, true);
+          got = settle(8000);
+          tried.push({ how: "app.openDocument [the file already existed]",
+                       ok: !!got,
+                       error: got ? null
+                                  : ("returned " + String(opened) +
+                                     " but app.project.name is still empty") });
+        } catch (eOpen) {
+          tried.push({ how: "app.openDocument [the file already existed]",
+                       ok: false, error: AELLP_say(eOpen) });
+        }
+      } else {
+        tried.push({ how: "app.openDocument [the file already existed]",
+                     ok: false, error: "not a function in this host" });
+      }
+
+      if (got) { gotVia = "opened the existing scratch project"; }
+
+      /*
+       * Still nothing, so the file is only in the way. It is THIS
+       * script's own throwaway at a path this script chose, never the
+       * owner's project, so move it aside and let the create route
+       * below run against a free path. Renamed and not deleted: the
+       * run that wrote it may be worth reading later.
+       */
+      if (!got) {
+        try {
+          var aside = scratchFile.name + ".stale-" +
+                      String(new Date().getTime());
+          var moved = scratchFile.rename(aside);
+          tried.push({ how: "moved the existing file aside as " + aside,
+                       ok: !!moved,
+                       error: moved ? null : "rename refused" });
+        } catch (eMove) {
+          tried.push({ how: "moved the existing file aside",
+                       ok: false, error: AELLP_say(eMove) });
+        }
+      }
+    }
+
+    if (!got && typeof app.newProject === "function") {
       try {
         var ret = app.newProject(args.scratchProject);
         got = settle(8000);
+        if (got) { gotVia = "created"; }
         tried.push({ how: "app.newProject", ok: !!got,
                      error: got ? null
                                 : ("returned " + String(ret) +
@@ -603,7 +786,9 @@ AELLP_PROBES.battery = function (args) {
         tried.push({ how: "app.newProject", ok: false,
                      error: AELLP_say(eNew) });
       }
-    } else {
+    } else if (!got) {
+      /* Only a REAL gap gets reported. Saying "not a function" after
+         openDocument has already answered would be a false row. */
       tried.push({ how: "app.newProject", ok: false,
                    error: "not a function in this host" });
     }
@@ -617,6 +802,7 @@ AELLP_PROBES.battery = function (args) {
         if (qe && qe.project && typeof qe.project.newProject === "function") {
           qe.project.newProject(args.scratchProject);
           got = settle(8000);
+          if (got) { gotVia = "created via QE"; }
           tried.push({ how: "qe.project.newProject [unsupported API]",
                        ok: !!got });
         } else {
@@ -644,7 +830,7 @@ AELLP_PROBES.battery = function (args) {
       } catch (eSave) { savedTo = "save failed: " + AELLP_say(eSave); }
     }
 
-    return { via: got ? "created" : "none",
+    return { via: gotVia,
              name: got,
              path: AELLP_safe(function () { return app.project.path; }),
              items: AELLP_safe(function () {

@@ -22,10 +22,31 @@ start). Never push tags (branch-scoped credentials reject them).
 ## Working the backlog
 
 `docs/WORKPLAN.md` is the queue; `docs/WORKPLAN-LOG.md` is what has
-already been done. Read the log FIRST — an unattended pass is a fresh
-session with no memory of the previous one, and the log is the only
-thing carrying state across passes. Append an entry before you stop,
-even when the pass accomplished nothing (say why).
+already been done. An unattended pass is a fresh session with no memory
+of the previous one, so that history is the only thing carrying state —
+but **do not read the log itself**. Measured 2026-09-05 it is 1.0 MB,
+~262k tokens, against a default context of 16384, and it grows ~16k
+tokens a night. "Read the log" has meant "read an arbitrary part of it"
+for weeks, and reading part of an append-only file is how a pass acts on
+a claim that was corrected 200 entries later.
+
+Read **`docs/MEMORY.md`** instead — the generated index. It carries the
+corrections table (so a superseded claim cannot be read as current), the
+recent entries, and a subsystem map, each with LINE RANGES. Retrieve
+what you need with `sed -n 'START,ENDp' docs/WORKPLAN-LOG.md`. Read the
+SECTION of the workplan you are working in, not all 46k tokens of it.
+
+Append an entry before you stop, even when the pass accomplished nothing
+(say why), then run `node scripts/memory-index.js` — the index is
+generated and CI fails if it is stale. If your entry CORRECTS an earlier
+one, open it with `SUPERSEDES: <lines> — <what changed>` so the index
+carries it.
+
+**A finding that implies WORK goes in `docs/WORKPLAN.md`, not only the
+log.** The loop takes work from the queue; a finding written only to the
+log is one nothing will ever act on. That has already happened (2026-09-03,
+a finding logged with the words "Filed in WORKPLAN" while no such filing
+existed).
 
 For long unattended runs the human starts `scripts/run-local-agent.ps1`,
 which loops: pull -> one headless pass -> commit -> repeat. A plain

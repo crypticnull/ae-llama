@@ -1,0 +1,409 @@
+{
+  "door": 3,
+  "startedAt": "2026-09-03T07:16:05.189Z",
+  "finishedAt": "2026-09-03T07:16:47.815Z",
+  "host": {
+    "appVersion": "26.3.2",
+    "appSkinInfo": {
+      "systemHighlightColor": {
+        "alpha": 255,
+        "green": 120,
+        "blue": 215,
+        "red": 0
+      },
+      "baseFontSize": 12,
+      "appBarBackgroundColorSRGB": {
+        "antialiasLevel": 0,
+        "type": 1,
+        "color": {
+          "alpha": 255,
+          "green": 29,
+          "blue": 29,
+          "red": 29
+        }
+      },
+      "appBarBackgroundColor": {
+        "antialiasLevel": 0,
+        "type": 1,
+        "color": {
+          "alpha": 255,
+          "green": 29,
+          "blue": 29,
+          "red": 29
+        }
+      },
+      "panelBackgroundColor": {
+        "antialiasLevel": 0,
+        "type": 1,
+        "color": {
+          "alpha": 255,
+          "green": 29,
+          "blue": 29,
+          "red": 29
+        }
+      },
+      "baseFontFamily": "Adobe Clean",
+      "panelBackgroundColorSRGB": {
+        "antialiasLevel": 0,
+        "type": 1,
+        "color": {
+          "alpha": 255,
+          "green": 29,
+          "blue": 29,
+          "red": 29
+        }
+      }
+    },
+    "appLocale": "en_US",
+    "isAppOnline": true,
+    "appUILocale": "en_US",
+    "appName": "PPRO",
+    "appId": "PPRO"
+  },
+  "job": {
+    "probeJsx": "X:/_CLAUDE/26_08_19_AE_Llama/cptk_claude/probe/com.cptk.aellama.probe/jsx/probe.jsx",
+    "probe": "battery",
+    "allowMutate": true,
+    "scratchProject": "C:/Users/mr/AppData/Roaming/AE-Llama/probes/AELL_PROBE_SCRATCH.prproj",
+    "makeSequence": true,
+    "seedMedia": "X:/_CLAUDE/26_08_19_AE_Llama/cptk_claude/extension/icons/icon-normal.png",
+    "readyTimeoutMs": 30000,
+    "skip": [],
+    "mogrtPath": "X:/_CLAUDE/26_08_19_AE_Llama/cptk_claude/logs/mogrt-verify/AELL MOGRT Probe.mogrt",
+    "createdAt": "2026-09-03T03:16:01.1316027-04:00"
+  },
+  "via": "invisible runner (door 3)",
+  "raw": "{\"ok\":true,\"data\":{\"steps\":[{\"step\":\"waitForReady\",\"data\":{\"ready\":false,\"waitedMs\":30000,\"note\":\"app.project.name was still empty after 30000ms; the project step will try to create one\"},\"ok\":true},{\"step\":\"ping\",\"data\":{\"pong\":true,\"engineName\":\"NewWorld\",\"esVersion\":\"4.5.6\",\"esBuild\":\"80.1060872\",\"os\":\"Windows 7/64 6.2  \",\"fileName\":\"/x/_CLAUDE/26_08_19_AE_Llama/cptk_claude/probe/com.cptk.aellama.probe/jsx/probe.jsx\"},\"ok\":true},{\"step\":\"hostFacts\",\"data\":{\"appVersion\":\"26.3.2\",\"appName\":null,\"appBuild\":null,\"engineName\":\"NewWorld\",\"bridgeTalk\":\"function\",\"btAppName\":\"premierepro\",\"btSpecifier\":\"premierepro-26.0\",\"btVersion\":\"26.0\",\"btTargets\":[\"aftereffects\",\"bridge\",\"photoshop\",\"illustrator\",\"indesign\",\"premierepro\",\"ame\"],\"beginUndoGroup\":\"undefined\",\"endUndoGroup\":\"undefined\",\"executeCommand\":\"undefined\",\"findMenuCommandId\":\"undefined\",\"enableQE\":\"function\",\"project\":\"object\",\"projectName\":\"\",\"projectPath\":\"\",\"activeSequence\":null,\"rootItemChildren\":\"throws: null is not an object\",\"importMGT\":\"throws: null is not an object\",\"exportAsMediaDirect\":\"throws: null is not an object\",\"encoder\":\"object\",\"ameStatus\":\"ISNOTRUNNING\",\"activeItem\":null,\"numItems\":null},\"ok\":true},{\"step\":\"qe\",\"data\":{\"enableQE\":\"function\",\"enabled\":true,\"qe\":\"object\",\"qeProject\":\"object\",\"qeVersion\":\"26.3.2\",\"getVideoEffectList\":\"function\",\"effectCount\":236},\"ok\":true},{\"step\":\"project\",\"data\":{\"via\":\"none\",\"name\":null,\"path\":\"\",\"items\":\"throws: null is not an object\",\"savedTo\":null,\"tried\":[{\"how\":\"app.newProject\",\"ok\":false,\"error\":\"returned false but app.project.name is still empty\"},{\"how\":\"qe.project.newProject [unsupported API]\",\"ok\":false,\"error\":\"qe.project.newProject absent\"}],\"error\":\"no project could be opened or created; Premiere is on the Home screen and every project-dependent step below cannot run\"},\"ok\":false,\"error\":\"no project could be opened or created; Premiere is on the Home screen and every project-dependent step below cannot run\"},{\"step\":\"sequence\",\"data\":{\"via\":\"none\",\"active\":null,\"videoTracks\":null,\"tried\":[{\"how\":\"activeSequence already open\",\"ok\":false},{\"how\":\"newBarsAndTone 25fps + createNewSequenceFromClips\",\"ok\":false,\"error\":\"Illegal Parameter type\"},{\"how\":\"newBarsAndTone 24fps + createNewSequenceFromClips\",\"ok\":false,\"error\":\"Illegal Parameter type\"},{\"how\":\"newBarsAndTone 30fps + createNewSequenceFromClips\",\"ok\":false,\"error\":\"Illegal Parameter type\"},{\"how\":\"createNewSequence(name, \\\"\\\")\",\"ok\":false,\"error\":\"NOT ATTEMPTED: an empty preset id opens the New Sequence dialog, which blocks an unattended run. Pass allowDialogs:true to try it with a human present.\"}]},\"ok\":false,\"error\":\"did not achieve its purpose (via: none)\"},{\"step\":\"history\",\"data\":{\"skipped\":\"no app.project.rootItem.createBin in this host (AE? then read the AE row instead)\"},\"ok\":true,\"skipped\":\"no app.project.rootItem.createBin in this host (AE? then read the AE row instead)\"},{\"step\":\"mogrt\",\"data\":{\"error\":\"no active sequence -- open one in Premiere first. app.project.activeSequence read back as: null\"},\"ok\":false,\"error\":\"no active sequence -- open one in Premiere first. app.project.activeSequence read back as: null\"},{\"step\":\"cleanup\",\"data\":{\"removed\":[]},\"ok\":true}],\"mutating\":true,\"current\":null,\"startedAt\":\"Thu Sep 03 2026 03:16:05 GMT-0400\"}}",
+  "parsed": {
+    "ok": true,
+    "data": {
+      "steps": [
+        {
+          "step": "waitForReady",
+          "data": {
+            "ready": false,
+            "waitedMs": 30000,
+            "note": "app.project.name was still empty after 30000ms; the project step will try to create one"
+          },
+          "ok": true
+        },
+        {
+          "step": "ping",
+          "data": {
+            "pong": true,
+            "engineName": "NewWorld",
+            "esVersion": "4.5.6",
+            "esBuild": "80.1060872",
+            "os": "Windows 7/64 6.2  ",
+            "fileName": "/x/_CLAUDE/26_08_19_AE_Llama/cptk_claude/probe/com.cptk.aellama.probe/jsx/probe.jsx"
+          },
+          "ok": true
+        },
+        {
+          "step": "hostFacts",
+          "data": {
+            "appVersion": "26.3.2",
+            "appName": null,
+            "appBuild": null,
+            "engineName": "NewWorld",
+            "bridgeTalk": "function",
+            "btAppName": "premierepro",
+            "btSpecifier": "premierepro-26.0",
+            "btVersion": "26.0",
+            "btTargets": [
+              "aftereffects",
+              "bridge",
+              "photoshop",
+              "illustrator",
+              "indesign",
+              "premierepro",
+              "ame"
+            ],
+            "beginUndoGroup": "undefined",
+            "endUndoGroup": "undefined",
+            "executeCommand": "undefined",
+            "findMenuCommandId": "undefined",
+            "enableQE": "function",
+            "project": "object",
+            "projectName": "",
+            "projectPath": "",
+            "activeSequence": null,
+            "rootItemChildren": "throws: null is not an object",
+            "importMGT": "throws: null is not an object",
+            "exportAsMediaDirect": "throws: null is not an object",
+            "encoder": "object",
+            "ameStatus": "ISNOTRUNNING",
+            "activeItem": null,
+            "numItems": null
+          },
+          "ok": true
+        },
+        {
+          "step": "qe",
+          "data": {
+            "enableQE": "function",
+            "enabled": true,
+            "qe": "object",
+            "qeProject": "object",
+            "qeVersion": "26.3.2",
+            "getVideoEffectList": "function",
+            "effectCount": 236
+          },
+          "ok": true
+        },
+        {
+          "step": "project",
+          "data": {
+            "via": "none",
+            "name": null,
+            "path": "",
+            "items": "throws: null is not an object",
+            "savedTo": null,
+            "tried": [
+              {
+                "how": "app.newProject",
+                "ok": false,
+                "error": "returned false but app.project.name is still empty"
+              },
+              {
+                "how": "qe.project.newProject [unsupported API]",
+                "ok": false,
+                "error": "qe.project.newProject absent"
+              }
+            ],
+            "error": "no project could be opened or created; Premiere is on the Home screen and every project-dependent step below cannot run"
+          },
+          "ok": false,
+          "error": "no project could be opened or created; Premiere is on the Home screen and every project-dependent step below cannot run"
+        },
+        {
+          "step": "sequence",
+          "data": {
+            "via": "none",
+            "active": null,
+            "videoTracks": null,
+            "tried": [
+              {
+                "how": "activeSequence already open",
+                "ok": false
+              },
+              {
+                "how": "newBarsAndTone 25fps + createNewSequenceFromClips",
+                "ok": false,
+                "error": "Illegal Parameter type"
+              },
+              {
+                "how": "newBarsAndTone 24fps + createNewSequenceFromClips",
+                "ok": false,
+                "error": "Illegal Parameter type"
+              },
+              {
+                "how": "newBarsAndTone 30fps + createNewSequenceFromClips",
+                "ok": false,
+                "error": "Illegal Parameter type"
+              },
+              {
+                "how": "createNewSequence(name, \"\")",
+                "ok": false,
+                "error": "NOT ATTEMPTED: an empty preset id opens the New Sequence dialog, which blocks an unattended run. Pass allowDialogs:true to try it with a human present."
+              }
+            ]
+          },
+          "ok": false,
+          "error": "did not achieve its purpose (via: none)"
+        },
+        {
+          "step": "history",
+          "data": {
+            "skipped": "no app.project.rootItem.createBin in this host (AE? then read the AE row instead)"
+          },
+          "ok": true,
+          "skipped": "no app.project.rootItem.createBin in this host (AE? then read the AE row instead)"
+        },
+        {
+          "step": "mogrt",
+          "data": {
+            "error": "no active sequence -- open one in Premiere first. app.project.activeSequence read back as: null"
+          },
+          "ok": false,
+          "error": "no active sequence -- open one in Premiere first. app.project.activeSequence read back as: null"
+        },
+        {
+          "step": "cleanup",
+          "data": {
+            "removed": []
+          },
+          "ok": true
+        }
+      ],
+      "mutating": true,
+      "current": null,
+      "startedAt": "Thu Sep 03 2026 03:16:05 GMT-0400"
+    }
+  },
+  "battery": {
+    "steps": [
+      {
+        "step": "waitForReady",
+        "data": {
+          "ready": false,
+          "waitedMs": 30000,
+          "note": "app.project.name was still empty after 30000ms; the project step will try to create one"
+        },
+        "ok": true
+      },
+      {
+        "step": "ping",
+        "data": {
+          "pong": true,
+          "engineName": "NewWorld",
+          "esVersion": "4.5.6",
+          "esBuild": "80.1060872",
+          "os": "Windows 7/64 6.2  ",
+          "fileName": "/x/_CLAUDE/26_08_19_AE_Llama/cptk_claude/probe/com.cptk.aellama.probe/jsx/probe.jsx"
+        },
+        "ok": true
+      },
+      {
+        "step": "hostFacts",
+        "data": {
+          "appVersion": "26.3.2",
+          "appName": null,
+          "appBuild": null,
+          "engineName": "NewWorld",
+          "bridgeTalk": "function",
+          "btAppName": "premierepro",
+          "btSpecifier": "premierepro-26.0",
+          "btVersion": "26.0",
+          "btTargets": [
+            "aftereffects",
+            "bridge",
+            "photoshop",
+            "illustrator",
+            "indesign",
+            "premierepro",
+            "ame"
+          ],
+          "beginUndoGroup": "undefined",
+          "endUndoGroup": "undefined",
+          "executeCommand": "undefined",
+          "findMenuCommandId": "undefined",
+          "enableQE": "function",
+          "project": "object",
+          "projectName": "",
+          "projectPath": "",
+          "activeSequence": null,
+          "rootItemChildren": "throws: null is not an object",
+          "importMGT": "throws: null is not an object",
+          "exportAsMediaDirect": "throws: null is not an object",
+          "encoder": "object",
+          "ameStatus": "ISNOTRUNNING",
+          "activeItem": null,
+          "numItems": null
+        },
+        "ok": true
+      },
+      {
+        "step": "qe",
+        "data": {
+          "enableQE": "function",
+          "enabled": true,
+          "qe": "object",
+          "qeProject": "object",
+          "qeVersion": "26.3.2",
+          "getVideoEffectList": "function",
+          "effectCount": 236
+        },
+        "ok": true
+      },
+      {
+        "step": "project",
+        "data": {
+          "via": "none",
+          "name": null,
+          "path": "",
+          "items": "throws: null is not an object",
+          "savedTo": null,
+          "tried": [
+            {
+              "how": "app.newProject",
+              "ok": false,
+              "error": "returned false but app.project.name is still empty"
+            },
+            {
+              "how": "qe.project.newProject [unsupported API]",
+              "ok": false,
+              "error": "qe.project.newProject absent"
+            }
+          ],
+          "error": "no project could be opened or created; Premiere is on the Home screen and every project-dependent step below cannot run"
+        },
+        "ok": false,
+        "error": "no project could be opened or created; Premiere is on the Home screen and every project-dependent step below cannot run"
+      },
+      {
+        "step": "sequence",
+        "data": {
+          "via": "none",
+          "active": null,
+          "videoTracks": null,
+          "tried": [
+            {
+              "how": "activeSequence already open",
+              "ok": false
+            },
+            {
+              "how": "newBarsAndTone 25fps + createNewSequenceFromClips",
+              "ok": false,
+              "error": "Illegal Parameter type"
+            },
+            {
+              "how": "newBarsAndTone 24fps + createNewSequenceFromClips",
+              "ok": false,
+              "error": "Illegal Parameter type"
+            },
+            {
+              "how": "newBarsAndTone 30fps + createNewSequenceFromClips",
+              "ok": false,
+              "error": "Illegal Parameter type"
+            },
+            {
+              "how": "createNewSequence(name, \"\")",
+              "ok": false,
+              "error": "NOT ATTEMPTED: an empty preset id opens the New Sequence dialog, which blocks an unattended run. Pass allowDialogs:true to try it with a human present."
+            }
+          ]
+        },
+        "ok": false,
+        "error": "did not achieve its purpose (via: none)"
+      },
+      {
+        "step": "history",
+        "data": {
+          "skipped": "no app.project.rootItem.createBin in this host (AE? then read the AE row instead)"
+        },
+        "ok": true,
+        "skipped": "no app.project.rootItem.createBin in this host (AE? then read the AE row instead)"
+      },
+      {
+        "step": "mogrt",
+        "data": {
+          "error": "no active sequence -- open one in Premiere first. app.project.activeSequence read back as: null"
+        },
+        "ok": false,
+        "error": "no active sequence -- open one in Premiere first. app.project.activeSequence read back as: null"
+      },
+      {
+        "step": "cleanup",
+        "data": {
+          "removed": []
+        },
+        "ok": true
+      }
+    ],
+    "mutating": true,
+    "current": null,
+    "startedAt": "Thu Sep 03 2026 03:16:05 GMT-0400"
+  },
+  "ok": true
+}

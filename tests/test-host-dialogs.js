@@ -231,6 +231,32 @@ check("...and a read-only mode that clicks nothing",
       /\[switch\]\$WhatIsUp/.test(standalone) &&
       /Write-AellUnknownDialogs/.test(standalone));
 
+// --- the call path, executed ---------------------------------------------
+// Static checks cannot see a signature that no longer binds. This runs
+// the real PowerShell -> C# path: every rule must call AnswerDialog
+// without a binding error, and every rule must be able to fall back to
+// WM_CLOSE -- a rule that cannot is a dialog that hangs when its button
+// is unfindable, which is exactly what cost eight rounds.
+var cpm = require("child_process");
+var shell = ["/opt/pwsh/pwsh", "pwsh", "powershell"].find(function (c) {
+  try { cpm.execSync(c + " -NoProfile -Command exit 0", { stdio: "ignore" });
+        return true; } catch (e) { return false; }
+});
+if (!shell) {
+  console.log("SKIP- no pwsh found; the call-path half needs one.");
+} else {
+  var rr = cpm.spawnSync(shell,
+    ["-NoProfile", "-File",
+     path.join(__dirname, "..", "scripts", "lib",
+               "host-dialogs.selftest.ps1")],
+    { cwd: path.join(__dirname, ".."), encoding: "utf8" });
+  ((rr.stdout || "") + (rr.stderr || "")).split("\n").forEach(function (l) {
+    if (l.trim()) { console.log("      " + l.trim()); }
+  });
+  check("the PowerShell -> C# call path executes", rr.status === 0,
+        "exit " + rr.status);
+}
+
 // --- ASCII (CLAUDE.md: Windows PowerShell 5.1, BOM-less) ----------------
 var bytes = fs.readFileSync(LIB);
 var nonAscii = [];

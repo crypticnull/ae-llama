@@ -2745,10 +2745,14 @@ const STEPS = [
       }
       const said = (ctx.replies || []).join(" ");
       if (!said.trim()) return "the refusal never reached the user";
+      // 'lacks' measured 2026-09-03: the model answered "The comp 'Probe
+      // Room' lacks audio. Import an audio file first" — an honest
+      // refusal, relayed in full, scored as a FAIL because every word on
+      // this list is a negation and that sentence has none.
       const declined = new RegExp(
         "\\b(?:can(?:no|')?t|cannot|could\\s?n['o]t|unable|no audio|" +
         "(?:there(?: is|'s)|is|has|have) no|isn'?t any|does ?n['o]t " +
-        "(?:have|contain)|without|missing|not (?:found|present)|" +
+        "(?:have|contain)|lack\\w*|without|missing|not (?:found|present)|" +
         "did\\s?n['o]t|refus\\w*)\\b", "i");
       if (!declined.test(said) || !/audio|music|sound|track/i.test(said)) {
         return "the reply does not tell the user the comp has no audio to " +
