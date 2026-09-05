@@ -92,30 +92,42 @@ check("every published range starts on a real entry header",
 check("every published range is well-ordered", badOrder === 0);
 
 // --- CRLF safety --------------------------------------------------------
-// CI runs on windows-latest and git checks the log out with CRLF, so the
-// generator must produce a byte-identical index either way. It did not:
-// PR #68 went red with "docs/MEMORY.md is STALE" because every heading
-// carried a trailing \r under the Windows checkout. Regenerate from a
-// CRLF copy of the real log and require the same bytes.
+// CI runs on windows-latest and git checks every text file out with CRLF
+// (no .gitattributes pins it), so the generator must produce the same
+// index whichever way the LOG arrives. It did not: PR #68 went red with
+// "docs/MEMORY.md is STALE" because split("\n") left a trailing \r on
+// every heading.
+//
+// Compare NORMALISED content, exactly as the generator's own --check
+// does, and not raw bytes. The first version of this test compared raw
+// bytes and failed on Windows for a second, unrelated reason: the
+// checked-out DOC is CRLF while the generator writes LF, so the two
+// differed by 96 bytes — one per line of the index — with nothing wrong
+// on either side. The property that matters is that the OUTPUT does not
+// depend on the INPUT's line endings; line endings on disk are git's
+// business.
 {
-  const lf = fs.readFileSync(LOG, "utf8");
-  const before = fs.readFileSync(DOC, "utf8");
+  const norm = (s) => s.replace(/\r\n/g, "\n");
+  const logLF = fs.readFileSync(LOG, "utf8");
+  const before = norm(fs.readFileSync(DOC, "utf8"));
   let same = false, detail = "";
   try {
-    fs.writeFileSync(LOG, lf.replace(/\r?\n/g, "\r\n"));
+    fs.writeFileSync(LOG, logLF.replace(/\r?\n/g, "\r\n"));
     cp.spawnSync(process.execPath, [GEN], { cwd: ROOT, encoding: "utf8" });
-    const after = fs.readFileSync(DOC, "utf8");
+    const after = norm(fs.readFileSync(DOC, "utf8"));
     same = after === before;
-    if (!same) { detail = before.length + " chars from LF vs " + after.length + " from CRLF"; }
+    if (!same) {
+      detail = before.length + " chars from the committed index vs " +
+               after.length + " regenerated from a CRLF log";
+    }
   } finally {
-    // Always put the working tree back, even if an assertion throws.
-    fs.writeFileSync(LOG, lf);
+    // Always put the working tree back, even if something above throws.
+    fs.writeFileSync(LOG, logLF);
     cp.spawnSync(process.execPath, [GEN], { cwd: ROOT, encoding: "utf8" });
   }
-  check("the index is byte-identical from an LF and a CRLF checkout",
-        same, detail);
+  check("the index does not depend on the log's line endings", same, detail);
   check("the working tree was restored after the CRLF probe",
-        fs.readFileSync(DOC, "utf8") === before);
+        norm(fs.readFileSync(DOC, "utf8")) === before);
 }
 
 // --- the routing rule that caused a real miss ---------------------------

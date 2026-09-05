@@ -19319,3 +19319,38 @@ through the same shape and is worth the same check.
 
 No `extension/` change, so NO BUMP. Harness 73/75 (the two
 container-only failures).
+
+## 2026-09-05 (remote session) — the CRLF test was itself not CRLF-safe
+
+SUPERSEDES: the previous entry's claim that the CRLF fix was verified.
+The GENERATOR fix was right and CI confirms it ("docs/MEMORY.md is
+regenerated from the current log" now passes). The regression TEST I
+added alongside it was wrong, and it turned PR #68 red a second time.
+
+**What it got wrong.** It compared RAW BYTES of the committed index
+against a freshly generated one. On Windows the checked-out
+`docs/MEMORY.md` is CRLF while the generator writes LF, so the two
+differed by 96 bytes — exactly the index's 96 lines — with nothing wrong
+on either side. The generator's own `--check` had it right all along: it
+compares NORMALISED content.
+
+**The property that actually matters** is that the generator's OUTPUT
+does not depend on its INPUT's line endings. Line endings on disk are
+git's business. The test normalises both sides now, which is the same
+thing `--check` does.
+
+**Verified three ways rather than one**, because the first fix was
+verified only one way and that is how this recurred:
+1. green on a normal LF checkout;
+2. green with `docs/MEMORY.md` rewritten as CRLF — the CI case,
+   reproduced locally first and matching CI's numbers exactly (7,943 vs
+   7,847);
+3. still RED when the generator fix is reverted, so the test has not
+   been softened into passing.
+
+**Checked the one other generated-doc pair** rather than assuming:
+`scripts/capability-report.js` produces byte-identical
+`docs/CAPABILITIES.md` from LF and CRLF sources (39,468 chars either
+way). No latent bug there.
+
+No `extension/` change, so NO BUMP.
