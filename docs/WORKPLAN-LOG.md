@@ -19076,3 +19076,70 @@ to use it.
 
 Every number and every quoted rule verified against the real
 `buildSystemPrompt` (11 checks). No `extension/` change, so NO BUMP.
+
+## 2026-09-05 (remote session) — the tiers promise more than the arithmetic allows
+
+**Owner:** get stricter with the tiers and more realistic about what is
+offered. Filed as WORKPLAN §16, owner-gated — tier copy and boundaries
+are commercial text, so this pass supplies the arithmetic, not the
+decision.
+
+**The external analysis's central claim was right, and measurably so:**
+"measure your assembled prompt token count first; that number, not the
+card size, determines where your floor sits." It estimated 9-10k of
+permanent overhead. Measured here: **compact 10,758 tokens**, full
+15,928. Run through the repo's own `historyBudget()`, ctx 4096, 6144 and
+**8192 all return 0 chars of history — STARVED**. The first context size
+at which this product works at all is **16,384**. A card that cannot hold
+its model at 16k never gets a conversation, only a system prompt, and no
+amount of model quality changes that.
+
+**The finding neither the analysis nor the tier table states.** Every
+tier allows `headroomGB: 1`, and NOTHING in `tiers.js` reserves memory
+for After Effects — the application this panel lives inside, which holds
+2-3 GB with GPU acceleration. Every rung is under-reserved by 1-2 GB.
+The ladder was computed as though the panel were standalone.
+
+**Against this repo's own measured number** (`test-tier-ladder.js`: the
+7B chat model holds **6,002 MB**, dev machine 2026-08-30):
+
+| card | 7B + AE (2.0-3.0 GB) | left |
+|---|---|---|
+| **8 GB** | 6,002 + 2,048..3,072 | **-882 .. +142 MB** |
+| 12 GB | same | 3,214 .. 4,238 MB |
+
+T3 currently tells an 8 GB buyer they get "solid 7B chat plus SDXL
+images and short video clips". The 7B alone does not fit beside AE,
+before a single image is generated. T1 (4 GB) and T2 (6 GB) promise a
+"light chat model" at card sizes whose context cannot reach 16k.
+
+**Third confirmation:** tiering reads `--query-gpu=memory.total` — the
+card sticker. `queryVramUsedMB` exists and is used by the per-job
+generation arithmetic in `tools.js`, but never for choosing a tier. A
+user is assigned a tier by what they bought and finds out at run time
+what they actually have.
+
+**Recommended, with reasoning rather than a menu:** honest floor TODAY is
+**12 GB**. 8 GB becomes defensible only after §13b (KV quantization,
+which roughly halves KV cost) and tool routing land — which makes §13b a
+PREREQUISITE for the 8 GB floor rather than an optimization, and the two
+sections now say so. Below the floor, ship the custom-endpoint escape
+hatch (a config field and docs) instead of certifying a tier we cannot
+stand behind; the privacy claim survives if the copy is precise that it
+means the user's own machines and network.
+
+**Tool routing (§16e) is the lever**, and worth building wherever the
+floor lands: all 79 schemas go into every prompt, nothing routes, and
+79-way selection is hard for every model size — it should improve
+accuracy on a 5090 too. It also interacts with §15: a smaller tool block
+is where the memory block's 1,499 chars could come from without raising
+a ceiling.
+
+**Named the load-bearing UNMEASURED number rather than hiding it:** AE's
+2-3 GB footprint is an estimate taken from outside this repo, and it
+carries both 16b and 16d. `Setup.queryVramUsedMB` already exists to
+measure it — idle, real project, mid-render. That measurement plus a
+re-measure of the 7B at 16k with and without q8_0 KV are the loop's next
+useful steps, and must happen before any tier copy is rewritten.
+
+Ten claims verified against source. No `extension/` change, so NO BUMP.

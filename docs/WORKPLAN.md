@@ -3033,6 +3033,139 @@ the default context rises past 24576, the prompt flips to its full form
 and every budget above changes. These two sections need to know about
 each other.
 
+## 16. Tiers are too generous — MEASURED, owner decides the floor
+
+Owner, 2026-09-05: "get more strict with the tiers and more realistic
+about what we're offering". Four findings, all arithmetic rather than
+opinion, all verified against this repo.
+
+### 16a. The system prompt is the cap, not the model
+
+Measured with the real `buildSystemPrompt`:
+
+| form | chars | tokens |
+|---|---|---|
+| compact (what ctx < 24576 gets) | 39,803 | **10,758** |
+| full | 58,933 | **15,928** |
+
+Run through the repo's own `historyBudget()`:
+
+| ctx | history left, compact |
+|---|---|
+| 4,096 | **0 — STARVED** |
+| 6,144 | **0 — STARVED** |
+| 8,192 | **0 — STARVED** |
+| 16,384 | 4,704 chars |
+| 24,576 | 26,823 chars |
+
+**The first context size at which the product works at all is 16,384.**
+A card that cannot hold its model at 16k cannot run this panel however
+good the model is — it never gets a conversation, only a system prompt.
+That is the floor-setting number, and it has nothing to do with model
+quality.
+
+### 16b. Nothing reserves VRAM for After Effects
+
+Every tier allows `headroomGB: 1`. Nothing anywhere in `tiers.js`
+reserves memory for **the application this panel lives inside**. AE with
+GPU acceleration and a real project holds 2-3 GB.
+
+So every tier is under-reserved by 1-2 GB. The ladder was computed as
+though the panel were a standalone app, which it is not and never has
+been.
+
+### 16c. Tiering reads the card sticker, not free VRAM
+
+`detectGpu` queries `--query-gpu=memory.total` and `effectiveVram` uses
+that number directly. `queryVramUsedMB` (free VRAM) EXISTS and is used
+by the per-job generation arithmetic in `tools.js` — but never for
+choosing a tier.
+
+So a user is assigned a tier by what they bought, then discovers at run
+time what they actually have. Whatever is published as a spec must be
+stated in FREE VRAM and detected at run time, or an 8 GB card that
+"technically qualifies" becomes a refund.
+
+### 16d. The arithmetic, against this repo's own measurement
+
+`tests/test-tier-ladder.js` records a real number: **the 7B chat model
+holds 6,002 MB** (dev machine, 2026-08-30).
+
+| card | 7B + AE (2.0-3.0 GB) | left |
+|---|---|---|
+| **8 GB** | 6,002 + 2,048..3,072 | **-882 .. +142 MB** |
+| 12 GB | same | 3,214 .. 4,238 MB |
+| 16 GB | same | 7,310 .. 8,334 MB |
+
+**T3 currently tells an 8 GB buyer they get "solid 7B chat plus SDXL
+images and short video clips".** The 7B alone does not fit beside AE.
+Before a single image is generated.
+
+T1 (4 GB) and T2 (6 GB) promise a "light chat model" — at those card
+sizes the context cannot reach 16k, so per 16a the model never sees a
+conversation at all.
+
+### What I would ship, and why
+
+**Honest floor TODAY: 12 GB.** It is the first rung where the measured
+7B fits beside AE with room for a 16k context.
+
+**8 GB becomes defensible only after two things land**, and both are
+already filed:
+- **§13b (KV-cache quantization).** `q8_0` K/V roughly halves KV cost,
+  which is what could bring a 7B at 16k under an 8 GB card with AE
+  resident. This makes §13b a **prerequisite for the 8 GB floor, not an
+  optimization** — the two sections need to know about each other.
+- **Tool routing** (below), which cuts the permanent prompt overhead.
+
+**Below the floor, sell the escape hatch rather than a bad tier.** A
+setting pointing the panel at a user's own endpoint — Ollama on another
+machine on their LAN, a desktop from a laptop — serves that segment
+without certifying an experience we cannot stand behind. It keeps the
+privacy claim intact provided the copy is precise: *their* machines,
+*their* network. This is a config field and documentation, versus
+building and supporting a reduced-capability tier.
+
+**Why the risk tolerance here is lower than a normal local-AI product:**
+the failure mode is not a wrong answer, it is a modified project. A
+chatbot that hallucinates wastes time; a panel that hallucinates renames
+forty layers in a client comp. One aescripts review saying "did nothing
+but break my project" outlives the marginal sales it came from.
+
+### 16e. Tool routing — the lever that moves the floor
+
+All 79 tool schemas go into every prompt. Nothing routes.
+
+A two-stage selection — a cheap keyword or classifier pass picks a tool
+group, and only those schemas are rendered — would cut the largest
+single line item in the prompt. Worth building **regardless of where the
+floor lands**, because 79-way tool selection is hard for every model
+size: it should improve accuracy on a 5090 as well as making smaller
+cards possible.
+
+It also interacts with §15: a smaller tool block is where the memory
+block's 1,499 chars could come from without raising a ceiling.
+
+**Verify with `scripts/chat-probe.js --variants`, not reasoning.**
+Routing is exactly what that instrument measures, and a routing change
+that improves the prompt budget while degrading tool choice is a loss.
+
+### Before any of this is changed
+
+1. **Measure AE's actual VRAM footprint** on the dev machine — idle, a
+   real project, and mid-render. The 2-3 GB figure above is an estimate
+   taken from outside this repo and is the load-bearing number in 16b
+   and 16d. `Setup.queryVramUsedMB` already exists to take it.
+2. **Re-measure the 7B at 16k with and without q8_0 KV** (§13b), since
+   that decides whether 8 GB is reachable at all.
+3. Only then rewrite the tier table. Tier copy is user-facing commercial
+   text and the boundaries are the owner's call; this section supplies
+   the arithmetic, not the decision.
+
+**Owner-gated. Do not rewrite tier copy or boundaries unattended.** The
+measurements in "Before any of this is changed" are loop work and are
+the useful next step.
+
 ## Out of scope for the local session (remote builds these)
 
 - ComfyUI bundled node-pack installer and wiring generation into
