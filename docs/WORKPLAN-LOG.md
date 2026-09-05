@@ -18929,3 +18929,84 @@ want its own pass.
 
 Harness 73/75 (the two container-only failures). No `extension/` change,
 so NO BUMP.
+
+## 2026-09-05 (remote session) — memory-layer proposal: confirmation pass, no code
+
+**Owner:** do not build this yet; improve this side of the project from
+the recommendations, and verify with Fable 5.1 next week.
+
+So this pass did the confirmation the build prompt itself asks for
+("Confirm each of these against the current code before building") and
+wrote nothing else. Original preserved verbatim at
+`docs/proposals/memory-layer-BUILD-PROMPT.md`; findings in
+`docs/proposals/memory-layer-REVIEW.md`; filed as WORKPLAN section 15,
+marked OWNER-GATED / DO NOT START so the loop leaves it alone.
+
+**First, a distinction worth stating loudly:** this is NOT the same
+system as `docs/MEMORY.md` built earlier today. That one is the
+DEVELOPMENT loop's memory (an index into this log, for unattended
+passes). This is the PRODUCT's memory (the panel remembering a user's
+conventions across projects). Same principles, different consumers, and
+they should share no code.
+
+**Stale premises, all verified:** the prompt says v0.11.0 (actual
+0.11.37), ~77 tools (79), a 533-step self-test (770/770). And the one
+that is not just a number — "Nothing leaves the machine. No network
+calls" is FALSE as written: `setup.js` has `fetchJson` and
+`downloadToFile` for the update manifest, llama.cpp builds, GGUF models,
+portable ComfyUI, ffmpeg and whisper, and §13a would add wheels. The
+defensible claim is "no user CONTENT leaves the machine; the only
+outbound traffic is first-run installs and update checks". Worth fixing
+before review, because a reviewer who accepts the stronger claim will
+design around a constraint the product does not have — and because that
+sentence is the one most likely to end up in marketing.
+
+**Integration points: three exist, two do not.**
+
+- IP1 `buildSystemPrompt` ✅ — but the prompt is CI-ratcheted at 59000
+  (full, 58933 used) and 40000 (compact, 39803 used). **67 chars of
+  headroom** against a resident index needing 1,600-3,200. The proposal
+  does not know this constraint exists and it is the one most likely to
+  sink the design.
+- IP2 `history` + push ✅ (`main.js:252`, `:748`, assembled at `:643`).
+- IP3 `executeCommands` ✅ (`tools.js:3086`, 6-round cap).
+- IP4 project-change events ❌ — every `addEventListener` in main.js is
+  DOM/UI; there is no CEP host event, and **nothing anywhere reads
+  `app.project.file`**. The storage layout is anchored to a directory
+  the panel cannot locate. Also: the UNSAVED project is the common case
+  (AE cold-launches to `Untitled Project.aep`, the suite never saves),
+  so the APPDATA fallback is the first-run path, not an edge case.
+- IP5 the arbiter ⚠️ — `tiers.js` holds PURE recommendation functions,
+  not a live gate; the live part is `comfyPauseLlm` plus an
+  `unload_models` free-memory call in `comfy.js` with a resume at
+  `:1672`. So "route through the arbiter" has no object to route
+  through; the real requirement is "never issue a model call while the
+  LLM is unloaded for a generation", which is a sequencing constraint on
+  the resume path.
+
+**Section E is a replacement, not an addition.** `historyBudget()` and
+the trim at `main.js:615` (with its visible `trimNoticeShown` notice)
+already manage context. Compaction swaps drop-oldest for
+summarize-oldest and inherits a tested budget calculation; a fresh "65%"
+threshold would create two disagreeing notions of "full". The notice
+should stay VISIBLE — silent compaction is the failure class this repo
+has spent weeks removing everywhere else.
+
+**Recorded what NOT to relitigate** so a reviewer spends its credits on
+the open questions: memory-stores-intent-never-state is the most
+important line in the document (this panel's worst failure is confident
+action on stale structure, shipped repeatedly as `trackMatteType` read
+as existence and `remainingMasks` read as visibility); edit-in-place is
+confirmed the hard way by this very log; no-embeddings-for-v1 is right
+twice (small vocabulary, and an embedding model competes for the VRAM
+`tiers.js` already arbitrates).
+
+**Six questions drafted for the Fable pass**, chosen to be ones where a
+second opinion changes the build rather than confirming it — including
+whether the sidecar-beside-the-.aep layout survives the unsaved-project
+reality, where the resident index's tokens come from, and whether
+markdown-plus-parallel-FTS is two sources of truth once a user
+hand-edits the markdown the design invites them to edit.
+
+Every claim in the review was verified against source (11 checks). No
+`extension/` change, so NO BUMP.

@@ -2978,6 +2978,48 @@ verification rather than being tacked onto this one.
 point. SQLite/FTS5 or embeddings are infrastructure ahead of a measured
 need; take them only once keyword search is shown to be missing things.
 
+## 15. Memory & planning layer — OWNER-GATED, DO NOT START
+
+**Status: not started, and the loop must not start it.** Awaiting an
+independent review (owner is scheduling a Fable 5.1 pass next week).
+This section exists so the work is filed rather than remembered, not so
+a pass picks it up.
+
+The proposal is `docs/proposals/memory-layer-BUILD-PROMPT.md`, preserved
+verbatim. The confirmation pass it asks for is already done and lives in
+`docs/proposals/memory-layer-REVIEW.md` — **read the review before the
+prompt**, because three of the prompt's premises are stale and two of
+its five named integration points do not exist.
+
+Do not confuse this with `docs/MEMORY.md`. That is the DEVELOPMENT
+loop's memory (indexing this log). This is the PRODUCT's memory — the
+panel remembering a user's conventions across projects. Same principles,
+different consumers, no shared code.
+
+**The three things that must be answered before any code**, from the
+review's §5:
+
+1. **Prompt budget.** The resident index needs 400-800 tokens
+   (1,600-3,200 chars). The full prompt has **67 chars** of headroom
+   under a CI ratchet, and compact has ~200. Either a named cut of equal
+   size, or a deliberate ceiling raise with the reasoning written down.
+   Unanswered, the work stops at step 3 of its own 7.
+2. **Project identity.** Nothing in the panel reads `app.project.file`,
+   and there is no CEP project-change event. The proposed storage layout
+   (`<AE project dir>/.aellama/`) is anchored to something the panel
+   cannot currently locate. And the UNSAVED project is the common case
+   here, not the edge — so the APPDATA fallback is the first-run path,
+   and "hash of what?" needs an answer.
+3. **One notion of "full".** `Tools.historyBudget()` and the trim at
+   `main.js:615` already manage context. Compaction REPLACES
+   drop-oldest with summarize-oldest; it must not introduce a second,
+   disagreeing threshold.
+
+**Cross-section dependency:** if §13b (KV-cache quantization) lands and
+the default context rises past 24576, the prompt flips to its full form
+and every budget above changes. These two sections need to know about
+each other.
+
 ## Out of scope for the local session (remote builds these)
 
 - ComfyUI bundled node-pack installer and wiring generation into
