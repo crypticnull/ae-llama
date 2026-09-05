@@ -18847,3 +18847,85 @@ the check was wrong — the phrase is line-wrapped and my regex was not
 newline-tolerant. Fixed the check.
 
 No `extension/` change, so NO BUMP.
+
+## 2026-09-05 (remote session) — the log stopped being memory a while ago
+
+SUPERSEDES: CLAUDE.md and the loop brief both said "read
+docs/WORKPLAN-LOG.md first" — that instruction was impossible and is
+replaced by reading `docs/MEMORY.md` and retrieving by line range.
+
+**Owner raised the design:** without a durable store, compaction is
+amnesia with better manners; but writing files is the easy half and
+retrieval is the hard half. A directory of history is not memory if the
+reader cannot work out which three pages to open.
+
+**Measured before designing anything, 2026-09-05:**
+
+| file | size | tokens |
+|---|---|---|
+| `docs/WORKPLAN-LOG.md` | 1,047,226 B | ~262k |
+| `docs/WORKPLAN.md` | 183,232 B | ~46k |
+| `CLAUDE.md` | 11,001 B | ~2.7k |
+
+211 entries, first on 2026-08-20, growing ~16k tokens a night (41 and 38
+commits on the last two active days). Against a 16384 default window,
+**"read the log first" has been physically impossible for weeks** — it
+has quietly meant "read an arbitrary part of it", and no pass knew what
+it was missing.
+
+**The failure is not theoretical; the file contains its own evidence.**
+37 entries announce a correction, INTERLEAVED with what they overturn:
+line 15023 says an earlier pointer "is now simply WRONG", 13743 retracts
+the previous entry's diagnosis, 18546 is a retraction of a whole claim.
+A pass grepping for a fact can land on the dead version and cannot tell.
+And the routing failure has already bitten: on 2026-09-03 a finding was
+written to the log with the words "Filed in WORKPLAN" while no such
+filing existed — a fact in the audit tier, where nothing reads for work.
+
+**Built: `scripts/memory-index.js` → `docs/MEMORY.md`,** 1963 tokens,
+always resident. Generated, for the reason `CAPABILITIES.md` is: a
+hand-maintained index of a file that grows nightly is stale by the
+second night, and a stale index is worse than none because it is
+believed. It carries a corrections table, the recent entries, and a
+subsystem map — every row with a LINE RANGE, so retrieval is
+`sed -n 'START,ENDp'` rather than a guess. `tests/test-memory-index.js`
+runs `--check` plus a resident-budget assertion and, most importantly,
+**resolves every published line range against the log** — a routing
+table with wrong pointers retrieves confidently, which is the worst
+failure available here.
+
+**Two defects in my own first output, fixed rather than shipped:**
+
+1. *Tags were noise.* Matching the whole body gave nearly every entry six
+   to eight tags — these entries are long enough to mention every
+   subsystem in passing. Now scored against the title and opening
+   paragraphs only, top two kept. And the generator now DROPS any tag
+   covering more than a third of the corpus: `harness` hit 110 of 211,
+   not because those entries are about the harness but because every pass
+   reports its harness score up top. A universal is not a category.
+2. *Corrections were over-listed and unreadable.* Line-by-line extraction
+   from hard-wrapped markdown returned fragments ("keeps. The first half
+   was wrong, in both hosts:"), and a whole-body test flagged design
+   statements as corrections. Now paragraph-based, and an entry must
+   ANNOUNCE the correction (title, opening clause, or an explicit
+   marker). 44 → 16, and the section states what it deliberately omits.
+   **Under-listing is safe; over-listing is not** — a padded section gets
+   skimmed, and then the one real correction goes unread.
+
+**The tiers, now explicit** in `docs/MEMORY.md`: pinned facts
+(`CLAUDE.md`), orientation, the queue (read by SECTION), the index
+(always resident), the audit trail (never resident). `CLAUDE.md` and the
+loop brief both updated to match, and the brief now asks a pass to
+regenerate the index, mark corrections with `SUPERSEDES:`, and file
+work-implying findings in the QUEUE.
+
+**Deliberately NOT built:** SQLite/FTS5 and embeddings. For 1 MB of
+markdown, `grep -n` is the full-text search, and the index gives it a
+starting point. Adding a database now would be infrastructure ahead of a
+measured need. What IS still open: a scheduled compaction pass that rolls
+old entries into the semantic tier — filed rather than built, because the
+index makes the growth survivable and compaction is destructive enough to
+want its own pass.
+
+Harness 73/75 (the two container-only failures). No `extension/` change,
+so NO BUMP.

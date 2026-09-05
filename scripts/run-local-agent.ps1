@@ -10,9 +10,11 @@
   commits, pushes, and exits. The loop then pulls and starts the next.
 
   Because every pass is a fresh session with no memory of the last one,
-  progress is tracked in docs/WORKPLAN-LOG.md (append-only). Each pass
-  reads the log first so it picks up where the previous pass stopped
-  instead of redoing item 1 forever.
+  progress is tracked in docs/WORKPLAN-LOG.md (append-only). That log is
+  now over a megabyte -- far past reading -- so each pass reads
+  docs/MEMORY.md, the generated INDEX into it, and retrieves only the
+  few entries it needs by line range. That is what stops a pass redoing
+  item 1 forever without pretending it can read 260k tokens.
 
 .EXAMPLE
   .\scripts\run-local-agent.ps1
@@ -188,10 +190,20 @@ You are the local agent on the machine with real After Effects. No human
 is watching this session -- do not ask questions, make the call yourself
 and write down what you assumed.
 
-1. Read CLAUDE.md, then docs/WORKPLAN.md.
-2. Read docs/WORKPLAN-LOG.md (create it if it does not exist). It is the
-   record of what earlier passes already finished. Do NOT redo finished
-   work.
+1. Read CLAUDE.md, then docs/MEMORY.md.
+2. docs/MEMORY.md is the INDEX into docs/WORKPLAN-LOG.md. Do NOT read
+   the log itself -- it is over a megabyte, roughly 260k tokens, and
+   reading "some of it" is how a pass ends up acting on a fact that was
+   corrected 200 entries later. Work from the index:
+     - its corrections table first, so you do not trust a superseded
+       claim;
+     - then retrieve the two or three entries it points at, by line
+       range: sed -n 'START,ENDp' docs/WORKPLAN-LOG.md
+     - its subsystem list tells you which entries touch what you are
+       about to change.
+   Read the SECTION of docs/WORKPLAN.md you are working in, not the
+   whole file (it is ~46k tokens).
+   Do NOT redo finished work.
 3. Run the harness once to see where things stand:
    powershell -ExecutionPolicy Bypass -File scripts/run-ae-selftest.ps1
    If it is red, fixing it IS this pass's item -- stop reading the
@@ -204,7 +216,18 @@ and write down what you assumed.
    the harness again. Both must pass before you commit.
 7. Append a dated entry to docs/WORKPLAN-LOG.md with: the item, what you
    changed, the harness result (passed/total), and anything you hit that
-   is blocked or needs a human eye.
+   is blocked or needs a human eye. Then:
+     - if the entry CORRECTS an earlier one, open with a marker line
+       "SUPERSEDES: <lines> -- <what changed>" so the index can carry it
+       (a correction only findable by reading the whole log is not a
+       correction);
+     - run: node scripts/memory-index.js
+       The index is generated and CI fails if it is stale.
+     - if you found anything that implies WORK, file it in
+       docs/WORKPLAN.md as well. The log is the audit trail; the loop
+       takes work from the QUEUE, so a finding written only to the log
+       is a finding nothing will ever act on. This has already happened
+       once.
 8. Commit and push to the development branch. Small, clear message.
 
 Hard limits for this session:

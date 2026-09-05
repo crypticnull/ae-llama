@@ -2936,6 +2936,48 @@ stays the shipping default regardless (see §7 and `docs/ORIENTATION.md`):
 buyers on 8-12 GB cards are the common case, and the compact prompt form
 is built for them.
 
+## 14. Memory compaction (filed 2026-09-05, not started)
+
+`docs/MEMORY.md` made the log's growth survivable — a pass now routes
+through a 2k-token index instead of pretending to read 262k tokens. But
+the log still grows ~16k tokens a night, and an index over an ever-larger
+corpus eventually routes to entries whose subsystem sections are
+themselves too long to scan.
+
+**The missing tier is compaction: rolling settled history out of the
+append-only log and into the semantic tier**, where it is short, curated
+and correctable.
+
+Not built yet, deliberately. The index removed the urgency, and
+compaction is destructive in a way that wants its own pass and its own
+verification rather than being tacked onto this one.
+
+**Shape when it is taken:**
+
+1. **Only settled entries.** An entry is a candidate when nothing has
+   superseded it and it is older than some window. A correction and the
+   thing it corrects must compact together or not at all — splitting them
+   recreates the exact contradiction rot the index exists to prevent.
+2. **Destination is the semantic tier, not a second archive.** A fact
+   worth keeping belongs in `CLAUDE.md`'s hard-won facts,
+   `docs/ORIENTATION.md`, or the relevant workplan section. If a
+   compacted entry produces no such fact, that is the finding: it was
+   working, not knowledge, and only the audit trail needs it.
+3. **The log is never edited in place.** It is the audit trail and its
+   line numbers are published by the index. Compaction moves entries to
+   `docs/archive/WORKPLAN-LOG-<range>.md` and leaves a stub, or it does
+   nothing. Rewriting history under a live index is how pointers start
+   lying.
+4. **Regenerate and re-verify.** `node scripts/memory-index.js`, and
+   `tests/test-memory-index.js` must still resolve every published range.
+5. **Measure the before/after** — corpus tokens, index tokens, and
+   whether any correction lost its partner. Record in `docs/measured/`.
+
+**Do not reach for a database first.** For a megabyte of markdown,
+`grep -n` is the full-text search and the index supplies its starting
+point. SQLite/FTS5 or embeddings are infrastructure ahead of a measured
+need; take them only once keyword search is shown to be missing things.
+
 ## Out of scope for the local session (remote builds these)
 
 - ComfyUI bundled node-pack installer and wiring generation into
