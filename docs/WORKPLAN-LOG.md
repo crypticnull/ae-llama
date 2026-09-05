@@ -19010,3 +19010,69 @@ hand-edits the markdown the design invites them to edit.
 
 Every claim in the review was verified against source (11 checks). No
 `extension/` change, so NO BUMP.
+
+## 2026-09-05 (remote session) — memory system prompt: synthesis, still no code
+
+**Owner:** synthesise the new memory/planning system prompt with the old
+structure of the project. Still not building — §15 stays gated.
+
+Written to `docs/proposals/memory-layer-SYSTEM-PROMPT.md`; the draft is
+preserved verbatim beside it. §15 now indexes all four documents in
+reading order.
+
+**The budget, measured rather than estimated:** full 58,933 / 59,000
+(67 spare), compact 39,803 / 40,000 (197 spare), rules block 19,043 and
+BYTE-IDENTICAL in both forms. The draft budgets ~600 tokens (~2,400
+chars), which is over by 2,333 full / 2,203 compact.
+
+**The trap the draft could not have known:** a memory block is a RULES
+addition, and compact never touches the rules block — so it costs its
+full size in the prompt a default 16K user actually gets. Meanwhile
+every previous addition here was paid for by cutting tool-doc SECOND
+SENTENCES, which compact already discards. The bytes for this cannot
+come from where the last several passes took them. `COMPACT_CEILING`,
+added this morning, is the thing that will bind it.
+
+**Placement corrected.** The draft says "after the tool definitions".
+The prompt is ordered preamble -> Rules -> Available tools -> state, so
+that would put memory rules 19k chars from every other rule, behind 79
+tool descriptions. Two measured findings say no: 0.11.25 (a clause was
+in the prompt verbatim and ignored because it sat behind a bullet naming
+another tool — a model reading a bullet stops at the first tool it
+names) and 0.11.30 (naming a tool in a scope rule's route read as
+permission to use it). Memory rules belong IN the Rules block; the
+resident index belongs after the tool defs, with the project state,
+because both are things the model looks up rather than rules it follows.
+
+**Two of the draft's five sections already exist in the prompt** and
+were folded rather than restated: "never recall what you can ask" is the
+existing inspect-first rule, and "stay quiet about mechanics" is four
+words on the existing reply-brevity bullet. That placement is also
+better than the draft's, which ENDS its block on a prohibition —
+0.11.24 measured that the last clause of a rule is an instruction this
+model obeys, so ending on "carry on" wastes the strongest position.
+
+**Result: 1,499 chars / ~375 tokens, 37% under the draft**, with phrase
+lists kept because that is how routing works here. Still over by 1,432
+(full) / 1,302 (compact), and three honest ways to pay are argued rather
+than one asserted — real deletion (the rules block's largest bullet is
+`comfy_generate` at 691 chars, which is tool documentation living in the
+rules block), a deliberate ceiling raise that is measured and re-pinned
+rather than done quietly, or conditional injection once the store is
+non-empty, which has a bootstrap problem worth putting to review.
+
+**Verification mapped, not invented:** seven of the draft's eight
+failure modes are `chat-probe.js --variants` rows; the eighth (stacked
+contradicting records) is a store invariant and belongs in a stub. Noted
+the repo's own caution that a prompt change leaving the harness number
+unmoved is not evidence of nothing — 2026-09-03 closed a HARM row in the
+field at 653/653 unchanged.
+
+Four more review questions added, including the one that worries me
+most: "if memory and the project disagree, update the record" is a WRITE
+triggered by the model's own inference rather than by the user, and it
+is the only rule here that could corrupt a store rather than merely fail
+to use it.
+
+Every number and every quoted rule verified against the real
+`buildSystemPrompt` (11 checks). No `extension/` change, so NO BUMP.

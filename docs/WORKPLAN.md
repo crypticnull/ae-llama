@@ -2985,11 +2985,17 @@ independent review (owner is scheduling a Fable 5.1 pass next week).
 This section exists so the work is filed rather than remembered, not so
 a pass picks it up.
 
-The proposal is `docs/proposals/memory-layer-BUILD-PROMPT.md`, preserved
-verbatim. The confirmation pass it asks for is already done and lives in
-`docs/proposals/memory-layer-REVIEW.md` — **read the review before the
-prompt**, because three of the prompt's premises are stale and two of
-its five named integration points do not exist.
+Four documents, in reading order:
+
+| File | What it is |
+|---|---|
+| `docs/proposals/memory-layer-REVIEW.md` | **Read first.** The confirmation pass — three stale premises, two integration points that do not exist. |
+| `docs/proposals/memory-layer-SYSTEM-PROMPT.md` | The synthesis: the memory rules reconciled with the panel's real prompt, its byte ceilings and its measured routing lessons. |
+| `docs/proposals/memory-layer-BUILD-PROMPT.md` | The original build proposal, verbatim. |
+| `docs/proposals/memory-layer-SYSTEM-PROMPT-DRAFT.md` | The original prompt draft, verbatim. |
+
+Both originals are kept unedited so a second reviewer sees what this
+pass reviewed, not a version already corrected by its own findings.
 
 Do not confuse this with `docs/MEMORY.md`. That is the DEVELOPMENT
 loop's memory (indexing this log). This is the PRODUCT's memory — the
@@ -2999,11 +3005,18 @@ different consumers, no shared code.
 **The three things that must be answered before any code**, from the
 review's §5:
 
-1. **Prompt budget.** The resident index needs 400-800 tokens
-   (1,600-3,200 chars). The full prompt has **67 chars** of headroom
-   under a CI ratchet, and compact has ~200. Either a named cut of equal
-   size, or a deliberate ceiling raise with the reasoning written down.
-   Unanswered, the work stops at step 3 of its own 7.
+1. **Prompt budget — now measured exactly.** The memory RULES block
+   synthesises to 1,499 chars (375 tokens, down from the draft's ~600),
+   and the resident index needs 400-800 tokens on top. Against 67 chars
+   of headroom in the full form and 197 in compact, the block alone is
+   over by 1,432 / 1,302.
+   The trap: a rules-block addition costs BOTH forms, because compact
+   never touches the rules block — while every previous addition here
+   was paid for by cutting tool-doc second sentences, which compact
+   already discards. The bytes cannot come from where they last came
+   from. Three ways to pay, argued in the synthesis doc: real deletion,
+   a deliberate re-pinned ceiling raise, or injecting the block only
+   once the store is non-empty (which has a bootstrap problem).
 2. **Project identity.** Nothing in the panel reads `app.project.file`,
    and there is no CEP project-change event. The proposed storage layout
    (`<AE project dir>/.aellama/`) is anchored to something the panel
