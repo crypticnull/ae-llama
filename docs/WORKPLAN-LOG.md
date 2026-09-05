@@ -19143,3 +19143,45 @@ re-measure of the 7B at 16k with and without q8_0 KV are the loop's next
 useful steps, and must happen before any tier copy is rewritten.
 
 Ten claims verified against source. No `extension/` change, so NO BUMP.
+
+## 2026-09-05 (remote session) — packaged for review; one gap left open on purpose
+
+**Owner asked: what next, is this ready for Fable?** Mostly. Two things
+done to make the review worth its credits, and one gap named rather than
+papered over.
+
+**1. A placement bug in my own filing, caught before it cost a night.**
+§16's "these measurements are loop work" sentence was at line 3165 — the
+BOTTOM of a 130-line section whose header read "owner decides the
+floor". A pass scanning that section would have hit the gate and skipped
+the whole thing, measurements included. This is the same lesson 0.11.25
+measured in the panel's prompt (a clause present verbatim was ignored
+because it sat behind a bullet naming another tool): a reader stops at
+the first gate it sees, and placement is load-bearing. The section is now
+titled "TWO MEASUREMENTS ARE LOOP WORK" and splits its halves in the
+first four lines. Filed as §16f.
+
+**2. NEW `docs/proposals/README.md`** — one entry point rather than four
+files across two sections. Reading order, the numbers everything rests
+on in one table (re-derivable with `node tests/test-context-budget.js`),
+the five questions worth the credits, and — deliberately — a list of
+what NOT to ask, because arguments against settled decisions (no
+embeddings, never store project state, edit in place) would spend
+credits the ten open questions use better.
+
+**The gap, stated rather than hidden: §16's conclusion rests on an
+estimate.** AE's 2-3 GB VRAM footprint came from outside this repo and
+carries two of that section's four findings. If AE actually holds 1 GB,
+the 8 GB tier is fine and most of §16 is wrong. `Setup.queryVramUsedMB`
+already exists to take the reading — the panel's own generation
+arithmetic uses it — so this is a read of something already wired up,
+not new work.
+
+**So the recommended order is: loop first, Fable second.** One overnight
+run taking §16f (AE's footprint at three points; the 7B at 16k with and
+without q8_0 KV, which §13b needs anyway) turns the tier half of the
+review from "review my estimate" into "review my measurement". The
+memory-layer half is ready now either way — its numbers are all measured
+and re-derivable.
+
+No `extension/` change, so NO BUMP.

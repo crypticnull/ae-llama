@@ -3033,7 +3033,17 @@ the default context rises past 24576, the prompt flips to its full form
 and every budget above changes. These two sections need to know about
 each other.
 
-## 16. Tiers are too generous — MEASURED, owner decides the floor
+## 16. Tiers are too generous — TWO MEASUREMENTS ARE LOOP WORK
+
+**Read this first, before deciding whether this section is yours.** It
+has two halves and they are gated differently:
+
+- **§16f — TAKE THIS. Two measurements, loop work, cheap.** They are the
+  load-bearing unmeasured numbers under everything else here, and
+  nothing further can be decided without them.
+- **§16a-16e — analysis only. Owner-gated.** Tier boundaries and tier
+  copy are user-facing commercial text and are the owner's call. Do not
+  rewrite them unattended.
 
 Owner, 2026-09-05: "get more strict with the tiers and more realistic
 about what we're offering". Four findings, all arithmetic rather than
@@ -3150,21 +3160,29 @@ block's 1,499 chars could come from without raising a ceiling.
 Routing is exactly what that instrument measures, and a routing change
 that improves the prompt budget while degrading tool choice is a loss.
 
-### Before any of this is changed
+### 16f. The two measurements — LOOP WORK, take these
 
-1. **Measure AE's actual VRAM footprint** on the dev machine — idle, a
-   real project, and mid-render. The 2-3 GB figure above is an estimate
-   taken from outside this repo and is the load-bearing number in 16b
-   and 16d. `Setup.queryVramUsedMB` already exists to take it.
-2. **Re-measure the 7B at 16k with and without q8_0 KV** (§13b), since
-   that decides whether 8 GB is reachable at all.
-3. Only then rewrite the tier table. Tier copy is user-facing commercial
-   text and the boundaries are the owner's call; this section supplies
-   the arithmetic, not the decision.
+Both are cheap, both are load-bearing, and everything above is an
+estimate until they exist. Record into `docs/measured/` and append the
+numbers to this section.
 
-**Owner-gated. Do not rewrite tier copy or boundaries unattended.** The
-measurements in "Before any of this is changed" are loop work and are
-the useful next step.
+1. **AE's actual VRAM footprint**, on the dev machine, at three points:
+   idle with no project, with a real project open, and mid-render.
+   `Setup.queryVramUsedMB` already exists to take it — the panel's own
+   generation arithmetic uses it, so this is a read of something already
+   wired up.
+   **This is the single most load-bearing number in the section.** The
+   2-3 GB figure in 16b and 16d is an estimate taken from OUTSIDE this
+   repo, and both findings rest on it. If AE turns out to hold 1 GB, the
+   8 GB tier is fine and most of this section is wrong.
+2. **The 7B at ctx 16384, with and without `q8_0` KV** (§13b): resident
+   MB each way, and tokens/sec each way. That decides whether 8 GB is
+   reachable at all, and it is the same measurement §13b needs, so
+   taking it here serves both sections.
+
+Do NOT rewrite the tier table, the tier copy or the boundaries in the
+same pass. Take the numbers, write them down, stop. The decision is the
+owner's and it is waiting on exactly these two readings.
 
 ## Out of scope for the local session (remote builds these)
 
