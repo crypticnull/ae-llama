@@ -1,3 +1,8 @@
+> **SUPERSEDED 2026-09-05 by `memory-layer-REFINED.md`.** Kept as the
+> record of the synthesised prompt block that was reviewed. Four claims in this
+> document are now known to be wrong — REFINED §0 lists them. Do not
+> build from this file.
+
 # Memory & planning system prompt — synthesis with the existing prompt
 
 **Status: proposal. Not built, not injected.** Companion to
@@ -193,7 +198,7 @@ writes the first memory, so the store stays empty forever. A workable
 shape is a two-line seed always present (write-trigger + the durability
 test) with the full block appearing once there is something to recall.
 Untested, and it is the option most likely to be wrong in an interesting
-way — worth putting to the Fable review.
+way — worth putting to the independent review.
 
 **Recommendation:** A and B together — take the deletions that measure
 clean, then raise the ceiling by whatever remains and record the number
@@ -233,7 +238,7 @@ matrix is the instrument here; the harness is the safety net.
 
 ---
 
-## 7. Open for the Fable review
+## 7. Open for the independent review
 
 Beyond the six questions in `memory-layer-REVIEW.md`:
 

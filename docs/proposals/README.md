@@ -1,19 +1,19 @@
 # Review brief — memory layer, and the tier floor
 
-**For a second reviewer.** Two related proposals, neither built. Both
-turn on the same constraint, which is why they are reviewed together:
-**the system prompt is 10,758 tokens in the form a default user gets,
-and it is already at a CI-enforced ceiling.**
+**Status 2026-09-05: the review has run.** Start with
+**`memory-layer-REFINED.md`** — it is the authoritative plan, and its §0
+lists four claims in the older documents that turned out to be wrong.
+The rest of this brief is kept as the record of what was asked.
 
-Read in this order. Roughly 25 minutes.
+Reading order now:
 
 | # | File | Why |
 |---|---|---|
-| 1 | `memory-layer-REVIEW.md` | The confirmation pass. Three stale premises, two integration points that do not exist. Read before the originals so you are not reasoning from corrected facts. |
-| 2 | `memory-layer-SYSTEM-PROMPT.md` | The synthesis: memory rules reconciled with the real prompt, its byte ceilings, and measured facts about how this 32B reads it. |
-| 3 | `memory-layer-BUILD-PROMPT.md` | The original build proposal, **verbatim**. |
-| 4 | `memory-layer-SYSTEM-PROMPT-DRAFT.md` | The original prompt draft, **verbatim**. |
-| 5 | `../WORKPLAN.md` §16 | The tier floor, with the arithmetic. |
+| 1 | `memory-layer-REFINED.md` | **The plan.** Settled decisions, corrected numbers, build order, the owner decisions that remain. |
+| 2 | `../WORKPLAN.md` §15, §16 | The same, as queue items — with what is loop-takeable marked. |
+| 3 | `memory-layer-REVIEW.md` | Superseded. The confirmation pass that was reviewed. |
+| 4 | `memory-layer-SYSTEM-PROMPT.md` | Superseded. The synthesised block that was reviewed. |
+| 5 | `memory-layer-BUILD-PROMPT.md`, `memory-layer-SYSTEM-PROMPT-DRAFT.md` | The originals, **verbatim**. |
 
 Both originals are unedited on purpose, so you see what was reviewed
 rather than a version already corrected by its own findings.
@@ -33,8 +33,8 @@ estimated. Re-derivable with `node tests/test-context-budget.js`.
 | **Headroom** | **197 chars compact · 67 chars full** |
 | Rules block | 19,043 chars — **byte-identical in both forms** |
 | History left at ctx 8192 | **0 — starved** |
-| History left at ctx 16384 | 4,704 chars |
-| 7B chat model, resident | **6,002 MB** (measured, dev machine) |
+| History left at ctx 16384 | 4,704 chars **empty project**; 2,682 on the probe's real state; 309 (starved) at the state cap |
+| 7B chat model, resident | **6,002 MB** — the arbiter's formula (4,466 file + 1,536), corroborated by a ~5,974 MB nvidia-smi delta (LOG:7428-7429); ctx/KV type unrecorded |
 | VRAM reserved for After Effects | **none** — every tier allows 1 GB total headroom |
 
 The asymmetry that matters: a **rules-block** addition costs both prompt
@@ -58,8 +58,9 @@ three that most change the build:
    SYSTEM-PROMPT §5 — is a fourth being missed?
 2. **Is the sidecar `.aellama/` beside the `.aep` right**, when the
    unsaved project is the *common* case here (AE cold-launches to
-   `Untitled Project.aep`) and nothing in the panel currently reads
-   `app.project.file` at all?
+   `Untitled Project.aep`)? (An earlier version of this question also
+   said nothing reads `app.project.file` — wrong; `get_project_info`
+   returns it on every send. See REFINED §0.)
 3. **"If memory and the project disagree, update the record"** is a
    write triggered by the model's own inference rather than by the user.
    It is the only rule in the block that could corrupt a store rather

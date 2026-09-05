@@ -1,6 +1,11 @@
+> **SUPERSEDED 2026-09-05 by `memory-layer-REFINED.md`.** Kept as the
+> record of the confirmation pass that was reviewed. Four claims in this
+> document are now known to be wrong — REFINED §0 lists them. Do not
+> build from this file.
+
 # Memory & planning layer — confirmation pass
 
-**Status: NOT STARTED. Do not build.** Owner-gated pending a Fable 5.1
+**Status: NOT STARTED. Do not build.** Owner-gated pending an independent
 review (next week, credits permitting). This document is the
 confirmation pass the build prompt itself asks for:
 
@@ -236,7 +241,7 @@ Ordered by how much they would cost if discovered mid-build.
 
 ---
 
-## 6. For the Fable 5.1 review
+## 6. For the independent review
 
 Give it the **original** prompt (`memory-layer-BUILD-PROMPT.md`) plus
 this file, and ask it to attack rather than agree. The questions worth

@@ -2936,6 +2936,21 @@ stays the shipping default regardless (see §7 and `docs/ORIENTATION.md`):
 buyers on 8-12 GB cards are the common case, and the compact prompt form
 is built for them.
 
+**Instrument, and the direction of the dependency (review, 2026-09-05).**
+No launcher in the repo can pass `--flash-attn` / `--cache-type-k`:
+every probe that starts llama-server goes through `Llama.start` →
+`spawnServer`, whose arg list is closed. A pass that adds the flags to
+`llama.js` to take a reading has changed `extension/` and must bump —
+shipping KV quantization to every buyer as the side effect of a
+measurement, before this section's own "detect and fall back" guard
+exists. So the measurement in §16f #2 is taken with a **standalone
+`scripts/` launcher** (`child_process.spawn` of `llama-server.exe` with
+explicit flags, nvidia-smi sampled the way `catalog-vram-probe.js:312`
+does), no `extension/` change, no bump. The dependency runs
+**13b-fallback → 16f#2**, not the other way. And "roughly halves" above
+is a 32B-shaped estimate; the 7B's KV arithmetic is what the reading
+establishes.
+
 ## 14. Memory compaction (filed 2026-09-05, not started)
 
 `docs/MEMORY.md` made the log's growth survivable — a pass now routes
@@ -2978,211 +2993,302 @@ verification rather than being tacked onto this one.
 point. SQLite/FTS5 or embeddings are infrastructure ahead of a measured
 need; take them only once keyword search is shown to be missing things.
 
-## 15. Memory & planning layer — OWNER-GATED, DO NOT START
+**Not to be confused with the PRODUCT's compaction.** That was proposed
+in §15 as "summarize-oldest replacing drop-oldest" and the review found
+the premise wrong: the panel already has a deterministic ledger
+(`rollupHistory`, no model call, budgeted inside `historyBudget`). §15's
+compaction collapses into extending that ledger to keep user turns
+verbatim. See `docs/proposals/memory-layer-REFINED.md` §8.
 
-**Status: not started, and the loop must not start it.** Awaiting an
-independent review (owner is scheduling a Fable 5.1 pass next week).
-This section exists so the work is filed rather than remembered, not so
-a pass picks it up.
+## 15. Memory & planning layer — REVIEWED; store and block OWNER-GATED
 
-Four documents, in reading order:
+**Authoritative document: `docs/proposals/memory-layer-REFINED.md`.**
+Read it before anything else in this section. It supersedes the earlier
+`memory-layer-REVIEW.md` and `memory-layer-SYSTEM-PROMPT.md` (kept, with
+banners, as the record of what was reviewed) and corrects four claims
+those documents made — one of which propagated into this section.
 
-| File | What it is |
-|---|---|
-| `docs/proposals/memory-layer-REVIEW.md` | **Read first.** The confirmation pass — three stale premises, two integration points that do not exist. |
-| `docs/proposals/memory-layer-SYSTEM-PROMPT.md` | The synthesis: the memory rules reconciled with the panel's real prompt, its byte ceilings and its measured routing lessons. |
-| `docs/proposals/memory-layer-BUILD-PROMPT.md` | The original build proposal, verbatim. |
-| `docs/proposals/memory-layer-SYSTEM-PROMPT-DRAFT.md` | The original prompt draft, verbatim. |
+Reviewed 2026-09-05 by an adversarial pass: seven grounded skeptics,
+every finding verified from two lenses, a completeness critic, and 22
+hand re-verifications against source of everything that changed the
+plan. 56 confirmed, 26 contested, 1 refuted.
 
-Both originals are kept unedited so a second reviewer sees what this
-pass reviewed, not a version already corrected by its own findings.
+Do not confuse this with `docs/MEMORY.md` — the DEVELOPMENT loop's
+memory. This is the PRODUCT's memory. No shared code.
 
-Do not confuse this with `docs/MEMORY.md`. That is the DEVELOPMENT
-loop's memory (indexing this log). This is the PRODUCT's memory — the
-panel remembering a user's conventions across projects. Same principles,
-different consumers, no shared code.
+### Corrected here, because it was wrong here
 
-**The three things that must be answered before any code**, from the
-review's §5:
+Item 2 of the previous version of this section said "Nothing in the
+panel reads `app.project.file`… the layout is anchored to something the
+panel cannot currently locate." **False.** `get_project_info` returns
+`projectFile` and `fetchProjectState` calls it on every send; it is in
+the state block already. A literal grep missed the `var proj =
+app.project` alias. No new host tool is needed; identity is a string
+compare at turn start.
 
-1. **Prompt budget — now measured exactly.** The memory RULES block
-   synthesises to 1,499 chars (375 tokens, down from the draft's ~600),
-   and the resident index needs 400-800 tokens on top. Against 67 chars
-   of headroom in the full form and 197 in compact, the block alone is
-   over by 1,432 / 1,302.
-   The trap: a rules-block addition costs BOTH forms, because compact
-   never touches the rules block — while every previous addition here
-   was paid for by cutting tool-doc second sentences, which compact
-   already discards. The bytes cannot come from where they last came
-   from. Three ways to pay, argued in the synthesis doc: real deletion,
-   a deliberate re-pinned ceiling raise, or injecting the block only
-   once the store is non-empty (which has a bootstrap problem).
-2. **Project identity.** Nothing in the panel reads `app.project.file`,
-   and there is no CEP project-change event. The proposed storage layout
-   (`<AE project dir>/.aellama/`) is anchored to something the panel
-   cannot currently locate. And the UNSAVED project is the common case
-   here, not the edge — so the APPDATA fallback is the first-run path,
-   and "hash of what?" needs an answer.
-3. **One notion of "full".** `Tools.historyBudget()` and the trim at
-   `main.js:615` already manage context. Compaction REPLACES
-   drop-oldest with summarize-oldest; it must not introduce a second,
-   disagreeing threshold.
+### Settled by the review (details and citations in REFINED)
 
-**Cross-section dependency:** if §13b (KV-cache quantization) lands and
-the default context rises past 24576, the prompt flips to its full form
-and every budget above changes. These two sections need to know about
-each other.
+- **Strike** "when memory and the project disagree, update the record" —
+  it contradicts its own bullet and destroys correct memory under two
+  constructed scenarios. Strike-only, no replacement clause.
+- **Markdown is the only truth.** No SQLite, no FTS5, no `index.md`.
+  Session log is JSONL. Key = (scope, topic, **subject**); the original
+  (scope, topic) key allowed 14 records total. Seven topics stay for v1.
+- **`remember`/`update` collapse to one upsert**; "one record per key"
+  is a store invariant and a stub test, not a prompt bullet.
+- **Dated prior-value journal** in APPDATA on every write. Memory tools
+  are `mutating: true`. Writes are NOT rollback-aware (rejected: it
+  couples a durable user preference to a transient host failure).
+- **APPDATA is primary. The session log and `plan.md` are never in a
+  hand-off folder.** Only `memory.md` may be exported beside the `.aep`,
+  by explicit action. Import is explicit and previewed, never on open —
+  a travelling hand-editable file injected into the prompt of a model
+  with 60+ mutating tools is an injection channel. Recalled records are
+  delivered as TOOL RESULTS, never spliced into `Rules:`.
+- **The unsaved project has no project scope.** No hash (nothing stable
+  to hash). No automatic adoption on `null → path` (owner decision 1).
+- **The block is staged with the tools it names**, not shipped as one
+  1,499-char unit: write rules permanent (~700 chars after the strike);
+  read rule becomes the index header, injected only when non-empty;
+  plan bullet ships with the plan tools; digest bullet is dropped.
+- **The resident index is runtime data, not a ceiling problem** — cap it
+  like `STATE_BUDGET`, not as a second reserve. With subject keys it is
+  ~57 tokens, not 400-800.
+- **Drop the handle store** — a stored payload is a cached snapshot of
+  project state, principle 1's forbidden thing one layer down. The
+  existing expansion is a re-query (`limit:0`).
+- **The loop owns plan check-off**, steps carry receipts, a checked step
+  is verified on resume by one host lookup (never by presence in the
+  budgeted state block), Clear chat deletes the plan, and the MODEL
+  decides resume from an injected "A plan exists" line — not a loop-side
+  phrase regex.
+- **Compaction collapses into the ledger** the panel already has:
+  `rollupHistory` is deterministic, re-derived from raw history, inside
+  `historyBudget`. Keep user turns verbatim under `LEDGER_BUDGET`.
+- **`chat-probe` must run against a temp store**, or the 770/770
+  baseline stops being reproducible the day memory ships.
 
-## 16. Tiers are too generous — TWO MEASUREMENTS ARE LOOP WORK
+### The budget, corrected
 
-**Read this first, before deciding whether this section is yours.** It
-has two halves and they are gated differently:
+The synthesis budgeted the rules block (1,499 chars, both forms) and
+nothing else. Two line items were missing, and one exit was.
 
-- **§16f — TAKE THIS. Two measurements, loop work, cheap.** They are the
-  load-bearing unmeasured numbers under everything else here, and
-  nothing further can be decided without them.
-- **§16a-16e — analysis only. Owner-gated.** Tier boundaries and tier
-  copy are user-facing commercial text and are the owner's call. Do not
-  rewrite them unattended.
+- **Tool docs cost both forms too**: every args line survives
+  compaction (asserted in CI). Four memory tools ≈ +539 compact / +603
+  full.
+- **Acceptance is the starve notice, not the ceiling.** On the probe's
+  measured real state the block alone flips `historyBudget().starved` at
+  16K, and `main.js:635` then tells every default user to raise their
+  context — advice §16 says the 8-12 GB buyer cannot follow. Test row:
+  `historyBudget(16384, compact + block + tools + index + 2682).chars ≥ 2000`.
+- **The missing fourth way to pay: ~850 chars of REAL deletion in both
+  forms.** Four rules passages are duplicated on args lines or first
+  sentences, which compact keeps — `comfy_generate` bullet (−459),
+  project-panel bullet (−223), Rigging closer (−127), line 741 ⊂ 752
+  (−41). The earlier claim that Option A "helps compact but not full"
+  was wrong for these.
 
-Owner, 2026-09-05: "get more strict with the tiers and more realistic
-about what we're offering". Four findings, all arithmetic rather than
-opinion, all verified against this repo.
+### Loop-takeable NOW (the rest waits on the gate)
 
-### 16a. The system prompt is the cap, not the model
+Preparatory, non-shipping-surface, each verified by its own instrument:
 
-Measured with the real `buildSystemPrompt`:
+1. **The four Option A deletions**, one per pass, each gated on
+   `scripts/chat-probe.js --variants` for the rows that name the
+   affected tool. These free bytes whether or not memory ships. Bumps
+   (prompt text is `extension/`).
+2. **`tests/test-context-budget.js`: the starve row.** Build compact +
+   a 2,682-char state fixture and assert `!starved` at 16384. Today this
+   passes (2,682 chars); it is the row the memory block must keep green.
+3. **A `--store-root` on `chat-probe.js`** defaulting to a temp
+   directory, with provenance printed the way `reportSettingsOrigin`
+   does. Harmless before the store exists; mandatory after.
+
+### Build order when the gate opens (REFINED §10)
+
+store + tests → inline global store when non-empty (capped, no index) →
+prompt (write rules + deletions + args lines, matrix-verified) → matrix
+rows → view/clear/revert UI → resident index → governor digest → plan
+file → ledger. First value (a font remembered on session two) is reached
+at step 4, not step 7.
+
+### Owner decisions (REFINED §11)
+
+No automatic adoption of unsaved-project intent; seven topics for v1;
+schema enum stays wide under routing; the ceiling re-pin number once
+deletions are measured; the scope of the model-identity rule.
+
+**Cross-section dependencies:** routing (§16e) is enabling work for
+this section's bytes and inherits this gate; §13b changes every budget
+here if it moves the default context past 24576.
+
+## 16. Tiers are too generous — CORRECTED; what is loop work is marked
+
+**Read this first.** Two halves, gated differently:
+
+- **§16f — loop work.** Marked per reading, because the review found the
+  previous version queued two readings the loop cannot take under its
+  own brief.
+- **§16a-16e — analysis, owner-gated.** Tier boundaries and copy are
+  commercial text. Do not rewrite unattended.
+
+Reviewed 2026-09-05 alongside §15. Three corrections to this section's
+own numbers are recorded in place below; the reasoning is in
+`docs/proposals/memory-layer-REFINED.md` §0 and §6.
+
+### 16a. The system prompt is the cap, not the model — WITH state
 
 | form | chars | tokens |
 |---|---|---|
-| compact (what ctx < 24576 gets) | 39,803 | **10,758** |
-| full | 58,933 | **15,928** |
+| compact (ctx < 24576) | 39,803 | **10,758** |
+| full | 58,933 | 15,928 |
 
-Run through the repo's own `historyBudget()`:
+**Correction.** The previous table was computed with an EMPTY project.
+`main.js:571` passes the state block and `STATE_BUDGET` caps it at
+6,000 chars; the real number a user gets depends on their project:
 
-| ctx | history left, compact |
-|---|---|
-| 4,096 | **0 — STARVED** |
-| 6,144 | **0 — STARVED** |
-| 8,192 | **0 — STARVED** |
-| 16,384 | 4,704 chars |
-| 24,576 | 26,823 chars |
+| ctx | empty project | probe's real state (2,682) | state at cap (6,000) |
+|---|---|---|---|
+| 8,192 | **0 — STARVED** | 0 | 0 |
+| 16,384 | 4,704 | **2,682** | **309 — STARVED** |
+| 20,480 | — | — | 11,368 |
+| 24,576 | 26,823 (flips to FULL docs: 8,468 with capped state) | | |
 
-**The first context size at which the product works at all is 16,384.**
-A card that cannot hold its model at 16k cannot run this panel however
-good the model is — it never gets a conversation, only a system prompt.
-That is the floor-setting number, and it has nothing to do with model
-quality.
+**16K works for an empty project. With a real project it is marginal,
+and a busy one trips the panel's own starve notice.** The first
+*comfortable* context with a real project is **20,480 compact** — which
+multiplies the KV term in every VRAM row below by 1.25. Note the FULL
+form kicks in at 24,576 and leaves *less* history than 20,480 compact.
+§16f #2 must be taken at 20,480 as well as 16,384, or it measures the
+wrong floor.
+
+Below 12,288 nothing helps — see 16e.
 
 ### 16b. Nothing reserves VRAM for After Effects
 
-Every tier allows `headroomGB: 1`. Nothing anywhere in `tiers.js`
-reserves memory for **the application this panel lives inside**. AE with
-GPU acceleration and a real project holds 2-3 GB.
-
-So every tier is under-reserved by 1-2 GB. The ladder was computed as
-though the panel were a standalone app, which it is not and never has
-been.
+Every tier allows `headroomGB: 1`. Nothing in `tiers.js` reserves memory
+for the application this panel lives inside. **The 2-3 GB figure used
+here was an estimate from outside the repo** — but the log already holds
+three AE-inclusive baselines on the dev 5090: **3,255 MB** idle with
+nothing loaded (LOG:7428), and two more in the 2.8-4.4 GB range with
+ComfyUI resident. §16f #1 makes it a persisted reading.
 
 ### 16c. Tiering reads the card sticker, not free VRAM
 
-`detectGpu` queries `--query-gpu=memory.total` and `effectiveVram` uses
-that number directly. `queryVramUsedMB` (free VRAM) EXISTS and is used
-by the per-job generation arithmetic in `tools.js` — but never for
-choosing a tier.
+`detectGpu` queries `memory.total`; `effectiveVram` uses it directly.
+`queryVramUsedMB` exists and is used by the per-job generation
+arithmetic — and, the review found, **the arbiter already samples the
+non-chat footprint at every handoff and throws it away**:
+`tools.js:1821-1827` reads `memory.used` before `Llama.stop()` and again
+after the drop (`settledMB → _floorMB`), and `:1862` nulls it. That
+`settledMB` is by construction "everything on the card that is not the
+chat model" (an upper bound — the drop-wait resolves on the first sample
+past a threshold, so some releasing chat memory may remain). The only
+free-VRAM gate on a load is the *resume* at `:1875`; the first
+`Llama.start` has none.
 
-So a user is assigned a tier by what they bought, then discovers at run
-time what they actually have. Whatever is published as a spec must be
-stated in FREE VRAM and detected at run time, or an 8 GB card that
-"technically qualifies" becomes a refund.
+### 16d. The arithmetic — with the 6,002 relabelled
 
-### 16d. The arithmetic, against this repo's own measurement
+**Correction.** "The 7B holds 6,002 MB (measured)" was wrong as
+labelled: 6,002 = 4,466 (the Q4_K_M file, `version.js:58`) + 1,536 (a
+flat constant, `tools.js:1177`) — the arbiter's *formula*, taken at no
+context size and no KV type. **But** it is corroborated: LOG:7428-7429
+records idle 3,255 MB → chat loaded **9,724 MB** on the 5090, a delta of
+~5,974 MB, within 28 MB of the formula. So: *formula, corroborated by one
+delta; ctx and KV type at that reading unrecorded.*
 
-`tests/test-tier-ladder.js` records a real number: **the 7B chat model
-holds 6,002 MB** (dev machine, 2026-08-30).
-
-| card | 7B + AE (2.0-3.0 GB) | left |
+| card | 7B (~6.0 GB) + AE (3.3 GB idle, measured; more with a project) | left |
 |---|---|---|
-| **8 GB** | 6,002 + 2,048..3,072 | **-882 .. +142 MB** |
-| 12 GB | same | 3,214 .. 4,238 MB |
-| 16 GB | same | 7,310 .. 8,334 MB |
+| **8 GB** | 6,002 + 3,255 | **−1,065 MB** |
+| 12 GB | same | 3,031 MB |
+| 16 GB | same | 7,127 MB |
 
-**T3 currently tells an 8 GB buyer they get "solid 7B chat plus SDXL
-images and short video clips".** The 7B alone does not fit beside AE.
-Before a single image is generated.
-
-T1 (4 GB) and T2 (6 GB) promise a "light chat model" — at those card
-sizes the context cannot reach 16k, so per 16a the model never sees a
-conversation at all.
+Using the *measured* idle figure the 8 GB row is worse than the estimate
+made it, before any project is open and before any image is generated.
+**T3 currently promises that buyer "solid 7B chat plus SDXL images and
+short video clips."**
 
 ### What I would ship, and why
 
-**Honest floor TODAY: 12 GB.** It is the first rung where the measured
-7B fits beside AE with room for a 16k context.
+**Honest CHAT floor today: 12 GB.** It is a *chat* floor: the review
+found §13a (SageAttention) moves peak generation VRAM and therefore the
+generation half of every tier's copy, which §16 never mentioned. **One
+owner decision on tiers, after §16f AND §13a step 4, not two.**
 
-**8 GB becomes defensible only after two things land**, and both are
-already filed:
-- **§13b (KV-cache quantization).** `q8_0` K/V roughly halves KV cost,
-  which is what could bring a 7B at 16k under an 8 GB card with AE
-  resident. This makes §13b a **prerequisite for the 8 GB floor, not an
-  optimization** — the two sections need to know about each other.
-- **Tool routing** (below), which cuts the permanent prompt overhead.
+**8 GB becomes defensible only after §13b (KV quantization) lands** —
+which makes §13b a prerequisite, not an optimization. **Tool routing is
+no longer cited here** (16e).
 
-**Below the floor, sell the escape hatch rather than a bad tier.** A
-setting pointing the panel at a user's own endpoint — Ollama on another
-machine on their LAN, a desktop from a laptop — serves that segment
-without certifying an experience we cannot stand behind. It keeps the
-privacy claim intact provided the copy is precise: *their* machines,
-*their* network. This is a config field and documentation, versus
-building and supporting a reduced-capability tier.
+**Below the floor, the custom-endpoint escape hatch is a small feature,
+not "a config field".** The review listed five assumptions the chat path
+makes about its own server: a literal `127.0.0.1` host; an identity
+check that rejects a server the panel did not spawn; the arbiter sizing
+the model by `statSync` on a local path and pausing it by killing a
+local PID; `ctxSize` set by the panel on its own server (a remote
+endpoint's real `-c` is unknown, so the HTTP-400 class returns); and
+`json_schema` + `cache_prompt`, which Ollama's compatibility layer only
+partly honours. List which are bypassed for a remote endpoint before
+selling it.
 
-**Why the risk tolerance here is lower than a normal local-AI product:**
-the failure mode is not a wrong answer, it is a modified project. A
-chatbot that hallucinates wastes time; a panel that hallucinates renames
-forty layers in a client comp. One aescripts review saying "did nothing
-but break my project" outlives the marginal sales it came from.
+**Why the risk tolerance is lower than a normal local-AI product:** the
+failure mode is a modified project, not a wrong answer.
 
-### 16e. Tool routing — the lever that moves the floor
+### 16e. Tool routing — bounded, and no longer a floor lever
 
-All 79 tool schemas go into every prompt. Nothing routes.
+**Routing cannot reach 8K.** Preamble + rules to `Available tools:` is
+19,060 chars = 5,152 tokens; plus the 3,328-token reply reserve = 8,480
+> 8,192. `historyBudget(8192, rules-only).chars === 0` — with ZERO tool
+docs rendered an 8K window is starved. Routing moves the context floor
+**exactly one rung, 16,384 → 12,288**, never to 8K. It is a
+16K-history and §15-bytes lever. §16's floor cites §13b and §16f only.
 
-A two-stage selection — a cheap keyword or classifier pass picks a tool
-group, and only those schemas are rendered — would cut the largest
-single line item in the prompt. Worth building **regardless of where the
-floor lands**, because 79-way tool selection is hard for every model
-size: it should improve accuracy on a 5090 as well as making smaller
-cards possible.
+**Designed as a second axis {all, routed} × {full, compact}** on the
+same opts object, with its own CI pins — a ceiling per worst-case group
+union and an assertion that the rendered set is closed under the rules
+block's references. Without them the existing ratchet goes slack the
+moment routing lands (a routed compact prompt sits 10-18K under
+`COMPACT_CEILING`), and "routing frees bytes for §15" is true only
+because the discipline stopped.
 
-It also interacts with §15: a smaller tool block is where the memory
-block's 1,499 chars could come from without raising a ceiling.
+**Two decisions before code:** the rules block names 57 of 79 tools, so
+"Use ONLY the tools listed below" contradicts "= apply_effect" when it
+is not rendered — closure or route-the-rules; the honestly routable set
+is the 22 un-named tools (7,137 compact chars). And the schema `enum` is
+all 79 names — narrow it (wrong group → un-emittable) or leave it wide
+(hidden tool still runs, grounded errors recover); wide is the default.
+Per user turn, round N+1's set is extended by tool names in round N's
+results (no model call) — the redirect lever that closed row 35. The
+router is an opt on `buildSystemPrompt` mirrored as a `chat-probe` flag,
+or the instrument cannot see it.
 
-**Verify with `scripts/chat-probe.js --variants`, not reasoning.**
-Routing is exactly what that instrument measures, and a routing change
-that improves the prompt budget while degrading tool choice is a loss.
+**Gate:** inherits §15's.
 
-### 16f. The two measurements — LOOP WORK, take these
+### 16f. The measurements — split by who can take them
 
-Both are cheap, both are load-bearing, and everything above is an
-estimate until they exist. Record into `docs/measured/` and append the
-numbers to this section.
+**Correction.** The previous version said "three points: idle with no
+project, a real project, mid-render — loop work". Two of the three are
+forbidden to the loop by its own brief (`run-local-agent.ps1:235-239`:
+never quit AE, never close its project — it raises the save modal that
+lost two nights), and the repo holds no `.aep` fixture. Re-queued:
 
-1. **AE's actual VRAM footprint**, on the dev machine, at three points:
-   idle with no project, with a real project open, and mid-render.
-   `Setup.queryVramUsedMB` already exists to take it — the panel's own
-   generation arithmetic uses it, so this is a read of something already
-   wired up.
-   **This is the single most load-bearing number in the section.** The
-   2-3 GB figure in 16b and 16d is an estimate taken from OUTSIDE this
-   repo, and both findings rest on it. If AE turns out to hold 1 GB, the
-   8 GB tier is fine and most of this section is wrong.
-2. **The 7B at ctx 16384, with and without `q8_0` KV** (§13b): resident
-   MB each way, and tokens/sec each way. That decides whether 8 GB is
-   reachable at all, and it is the same measurement §13b needs, so
-   taking it here serves both sections.
+**LOOP:**
+1. **Persist `_floorMB`.** `tools.js:1862` nulls the non-chat footprint
+   the arbiter computes at every handoff; log it instead, with the
+   ctxSize and whether a project was open. That is the mid-session,
+   real-project figure for free once it lands (bumps — `extension/`).
+2. **One launch-time `memory.used` read** before the first
+   `Llama.start`, logged — the non-panel baseline. Same change.
+3. **Mid-render reading** inside the harness's own scratch comp, with
+   llama-server and ComfyUI verified not resident (`memory.used` is all
+   processes). Standalone script.
+4. **The 7B at ctx 16,384 AND 20,480, fp16 vs `q8_0` KV** — resident MB
+   and tokens/sec each way — via a **standalone `scripts/` launcher**
+   (see §13b): no `extension/` change, no bump.
 
-Do NOT rewrite the tier table, the tier copy or the boundaries in the
-same pass. Take the numbers, write them down, stop. The decision is the
-owner's and it is waiting on exactly these two readings.
+**OWNER:** the real-project reading. Item 1 makes it automatic the first
+time a generation runs against a real project; until then §16d's AE
+figure is the measured *idle* 3,255 MB.
+
+Do NOT rewrite the tier table, copy or boundaries in the same pass.
 
 ## Out of scope for the local session (remote builds these)
 

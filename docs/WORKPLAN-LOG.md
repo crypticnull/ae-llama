@@ -19185,3 +19185,98 @@ memory-layer half is ready now either way — its numbers are all measured
 and re-derivable.
 
 No `extension/` change, so NO BUMP.
+
+## 2026-09-05 (remote session) — the memory-layer review ran; four of my own claims fall
+
+SUPERSEDES: the "IP4 does not exist / nothing reads app.project.file"
+claim (LOG entries at 18973-18976 and the two after; REVIEW.md §2;
+WORKPLAN §15 item 2; README q2), the "main.js:615 trims with the string
+'context trimmed — N earlier message(s) dropped'" claim (REVIEW.md §3),
+the "7B holds 6,002 MB (measured)" label (WORKPLAN §16d, README table),
+and §16a's "first context that works is 16,384 with 4,704 chars" table
+(computed on an EMPTY project). All four corrected in place; reasoning in
+`docs/proposals/memory-layer-REFINED.md` §0.
+
+**Owner:** "review the proposed plan above and implement your refined
+plan into the overall workplan." Ultracode on, so the review was an
+adversarial workflow rather than me agreeing with my own documents:
+seven grounded skeptics (budget, storage, writes, tiers, routing, the
+"do not relitigate" list, plan-and-value), each finding verified by two
+independent lenses — *is it true in the code*, *is the recommendation
+actually better* — then a completeness critic over what survived. 22
+agents, 669 tool uses. 56 findings confirmed by both lenses, 26
+contested, 1 refuted. Then 22 hand re-verifications against source of
+everything that changed the plan, all passing, before a word went into
+the workplan.
+
+**What was wrong, and how it propagated.** The worst was IP4: I grepped
+`app.project.file`, got zero hits, and wrote "nothing reads it" into the
+log, the review, the workplan and the brief. The code aliases `var proj
+= app.project` and `get_project_info` returns `projectFile` on every
+send. Four documents carried a false blocker for two days. The
+`SUPERSEDES` marker above is what `docs/MEMORY.md` was built for.
+
+**Settled (REFINED §1-§9, WORKPLAN §15):** strike the inference-
+triggered "project is right, update the record" — it contradicts its own
+bullet and was shown destroying correct memory two ways; markdown is the
+only truth (no SQLite/FTS5 — a native or WASM dependency for a 50 KB
+store, and §14 already said so); key = (scope, topic, subject) because
+(scope, topic) allowed 14 records total; APPDATA primary with the session
+log and plan.md NEVER in a hand-off folder (the original shipped the
+user's transcript to their client); import explicit and previewed
+(travelling memory is an injection channel); the block staged with the
+tools it names, not shipped as one unit describing tools that do not
+exist; the resident index is runtime data capped like STATE_BUDGET, not
+a ceiling problem, and ~57 tokens with subject keys rather than 400-800;
+drop the handle store (a cached snapshot of project state, principle 1's
+forbidden thing one layer down); the LOOP owns plan check-off (the last
+round has no model call), steps carry receipts (aliases die at
+sendMessage), resume verifies via one host lookup never the budgeted
+state block, Clear chat deletes the plan; compaction collapses into the
+ledger that already exists (`rollupHistory` — deterministic, re-derived
+from raw, inside historyBudget); chat-probe must run against a temp
+store or the 770/770 baseline stops reproducing.
+
+**Contested calls I made** (marked in REFINED): no automatic adoption of
+Untitled-era intent (the null→path transition is ambiguous with
+"discard, open another"); seven topics for v1; writes NOT rollback-aware
+(couples a durable preference to a transient host failure); no per-write
+appendMsg (every command already renders in the transcript — what is
+missing is revert); no loop-side continuation regex (no precedent, no
+instrument; the model decides from an injected "A plan exists" line).
+
+**Tiers (WORKPLAN §16), three corrections in place.** 16a restated WITH
+state: 16K leaves 2,682 chars on the probe's real project and 309 —
+starved — at the state cap; the first comfortable ctx with a real
+project is 20,480 compact, ×1.25 on the KV term. 16d: 6,002 is the
+arbiter's formula (4,466 + 1,536), corroborated by the log's own
+3,255→9,724 MB delta, ctx/KV unrecorded — and using the measured idle
+3,255 MB for AE the 8 GB row is −1,065 MB, worse than my estimate. 16e:
+routing CANNOT reach 8K (rules block alone + reply reserve = 8,480
+tokens); it moves the floor exactly one rung to 12,288 and is no longer
+cited as a floor lever; designed as a second axis with its own ceiling
+and a rules-closure assertion, with the two silent decisions (closure vs
+route-the-rules; enum narrow vs wide) named. 16f re-queued honestly:
+two of the three readings I marked "loop work" are forbidden by the
+loop's own brief (never close AE's project). Loop = persist the
+`_floorMB` the arbiter already computes and discards at tools.js:1862,
+one launch-time read, mid-render in the harness comp, and the 7B
+fp16-vs-q8 via a STANDALONE launcher (touching llama.js to measure would
+ship the flags unguarded); owner = the real-project reading. The
+dependency in §13b runs 13b-fallback → 16f#2. The 12 GB floor is a CHAT
+floor; §13a moves the generation half — one owner decision, after both.
+
+**Escape hatch is a small feature, not a config field:** five
+assumptions the chat path makes about its own server, listed in §16.
+
+**Loop-takeable now (§15):** the four Option A deletions (~850 chars in
+BOTH forms — prose duplicated on args lines, which compact keeps; my
+earlier "helps compact but not full" was wrong for these), the starve
+test row, and a `--store-root` on chat-probe.
+
+**Bookkeeping:** model-identity strings scrubbed from the non-log docs
+on the conservative reading of CLAUDE.md's rule; scope filed as owner
+decision 5. The refuted finding (routing bytes are args not
+descriptions) had correct numbers and a wrong headline.
+
+No `extension/` change, so NO BUMP.
