@@ -3719,7 +3719,7 @@ taken on what a buyer gets — so nothing measured after §17c needs a
 | # | who | what | bump | needs |
 |---|---|---|---|---|
 | **§17a** | remote | managed backend by default: `comfyBackend`, own port, refuse-not-attach, `findLocalComfy` as an offer, migration on `loadedFrom` | yes | — |
-| **§17c** | local | `node scripts/comfy-install.js --boot` (headless, ships in 0.12.0); then `comfyModelRoots` at the existing stores; record the extracted size and the python/torch it pins (= §13a step 1) | no | §17a; ~10 GB free; the ComfyUI release must carry a portable asset — UNVERIFIED, see below |
+| **§17c** | local, LOOP-TAKEABLE | `node scripts/comfy-install.js --boot` (headless, 0.12.0); then `comfyModelRoots` at the existing stores; record the extracted size and the python/torch it pins (= §13a step 1) | no | §17a; ~10 GB free. The release carries a portable asset (VERIFIED, below), and the detached loop now carries APPDATA (below), so gate 0 no longer refuses |
 | P0 | remote | ratchet tests (bundle test warn-mode, two allowlists, manifests walk) | no | — |
 | P1 | remote | `describeWorkflows` + `resolveWorkflow` (incl. the baseline tiebreak) + `_graphCarriesValue`; tools.js :1958/:2061; `comfyWorkflows` setting; `catalogEntry`; re-pins; bundle test → assert | yes | P0 |
 | P2 | remote | probe `--frames`/`--boot`/`--stop`, `download-gen-weight.js`, chat-probe kind verdict, `Settings.origin()` gate | no | P1, §17c |

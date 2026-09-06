@@ -19927,3 +19927,86 @@ to clean up there.
 
 Suite 74/76 (the two container-only failures). `scripts/` + `tests/`
 only, so NO BUMP; rides 0.12.0.
+
+## 2026-09-06 (remote session) — the detached loop never had APPDATA; now it does, and §17c became loop work
+
+Owner asked whether the overnight loop is ready for business as usual.
+Checked the loop script rather than answering from the plan, and found
+the one thing that would have made tonight a wasted night.
+
+**`Win32_Process.Create` passes no environment.** The detached child
+inherits the WMI HOST's environment, not the launching shell's, and the
+WMI host has no APPDATA. That is the 2026-09-02 finding — a pass in that
+state had `Settings.dataRoot()` fall through to a folder holding no
+settings.json, `load()` returned pure defaults, and the pass reported
+the DEFAULT ComfyUI port as THE OWNER'S SETTING; two later sessions
+repeated the claim. It has been an open follow-up ever since.
+
+It stopped being cosmetic today: `scripts/comfy-install.js` gate 0
+REFUSES when APPDATA is empty, on purpose (an installer that inherits
+that bug downloads gigabytes into a folder nobody will look in and calls
+it success). So the detached loop could not have taken §17c, and §17c
+gates every local pass in §18 — the loop would have found its top item
+blocked by a guard I added hours earlier.
+
+**Fixed at the detach.** `-AppData` / `-LocalAppData` / `-UserProfile`
+are forwarded on the WMI command line and restored in the detached
+branch, and only ever FILL a missing value — never overwrite a real one,
+so an attached run and a detached one behave identically. When none is
+available it now says so out loud rather than proceeding on defaults.
+
+**Verified with a real parser, not by reading.** The container had no
+pwsh, which means `tests/test-powershell-syntax.js` SKIPS — so a syntax
+error in a load-bearing script would have reached the owner's machine
+unseen, and CLAUDE.md says to install one before touching a `.ps1`.
+Installed PowerShell 7.4.6 per that file's own header; the script parses,
+is BOM-less ASCII, and the forwarded command line was built and checked.
+Then bound end to end against a stub: with APPDATA absent the value is
+picked up, with nothing passed it warns, and a REAL APPDATA is left
+alone.
+
+**Consequence:** §17c is now LOOP-TAKEABLE — marked as such in §18's pass
+table. The loop can install the managed backend itself, which unblocks
+P3 and P5-P10 without the owner at the keyboard.
+
+`scripts/` + docs only, so NO BUMP; rides 0.12.0.
+
+## 2026-09-06 (remote session) — one of the two "known container failures" was a hardcoded binary name
+
+SUPERSEDES the standing claim, repeated in many entries including my own
+today, that `test-engine-assets.js` and `test-ffmpeg-export.js` are
+"container-only failures" to be expected on Linux. **Half of it was not
+environmental at all.**
+
+`test-engine-assets.js:269` called `execFileSync("powershell", ...)` —
+a name that exists only on Windows. So the block that runs the shared
+PowerShell helpers FOR REAL ("the half a JS regex cannot prove") reported
+"powershell unavailable" on every Linux run, and the whole suite went in
+the expected-failures list. PowerShell 7 is cross-platform and runs those
+helpers fine; `test-powershell-syntax.js` has looked for `pwsh` all along.
+The two files disagreed and nobody noticed, because one of them was
+allowed to be red.
+
+That is the cost this repo has already written down twice: *a test that
+cannot fail for the right reason on one machine teaches everyone to skip
+its failures.* I skipped it myself in three entries today.
+
+Fixed by giving `test-engine-assets` the same `findShell()` the syntax
+test uses (pwsh, powershell, then the absolute paths), and by making the
+no-shell case a loud **SKIP** instead of a FAIL — a bare container should
+not go red, but it must not pretend the checks ran either. Verified in
+both directions: with pwsh present the eight helper assertions RUN and
+pass; with `/opt/pwsh` moved aside the suite prints SKIP and exits 0.
+
+**Also: the container had no pwsh at all**, so `test-powershell-syntax.js`
+was silently skipping every `.ps1` in the repo — including the loop
+script I edited in the entry above. CLAUDE.md says to install one before
+touching a `.ps1`; I had not been. Installed PowerShell 7.4.6 per that
+file's own header before making the change, which is how the loop-script
+edit got a real parse rather than a reading.
+
+**Suite is now 75/76 in this container** (was 74/76). The one remaining
+failure, `test-ffmpeg-export.js`, IS genuinely environmental — it asserts
+on Windows absolute paths.
+
+Tests only, so NO BUMP; rides 0.12.0.

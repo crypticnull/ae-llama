@@ -265,9 +265,31 @@ assert(/gpu-detect\.ps1/.test(whisperAssets) &&
        "whisper-assets.ps1 uses the shared copy rather than a second one");
 
 // Run the helpers for real -- they are the half a JS regex cannot prove.
+//
+// Find a shell the way test-powershell-syntax.js does rather than
+// hardcoding "powershell": that name exists only on Windows, so this
+// block reported "powershell unavailable" on every Linux run and the
+// whole suite sat in the known-container-failures list. PowerShell 7 is
+// cross-platform and parses/runs these helpers fine, so the checks CAN
+// run here -- and a suite that is expected to be red is a suite whose
+// real failures nobody reads (the same lesson test-comfy-backend.js
+// records about a test that cannot fail for the right reason).
+function findShell() {
+  const candidates = ["pwsh", "powershell", "/opt/pwsh/pwsh",
+                      "/usr/bin/pwsh", "/usr/local/bin/pwsh"];
+  for (const c of candidates) {
+    try {
+      execFileSync(c, ["-NoProfile", "-Command", "exit 0"],
+                   { stdio: "ignore", timeout: 30000 });
+      return c;
+    } catch (e) { /* try the next */ }
+  }
+  return null;
+}
+const SHELL = findShell();
 function ps(script) {
-  return execFileSync("powershell", ["-NoProfile", "-NonInteractive",
-                                     "-Command", script],
+  return execFileSync(SHELL, ["-NoProfile", "-NonInteractive",
+                              "-Command", script],
                       { encoding: "utf8", timeout: 60000 }).trim();
 }
 const dot = ". '" + psLib.replace(/'/g, "''") + "'\n";
@@ -290,8 +312,17 @@ try {
             "{ 'NOT newer' }") === "newer",
          "PowerShell: 13.4 is still newer than 13.3");
 } catch (e) {
-  assert("powershell unavailable: " + e.message,
-         "the PowerShell helpers run");
+  if (!SHELL) {
+    // No PowerShell anywhere: SKIP loudly, the way
+    // test-powershell-syntax.js does. A bare container should not turn
+    // red -- but it must not pretend these ran either.
+    console.log("SKIP- the PowerShell helpers run (no pwsh/powershell " +
+                "found; install per the header of " +
+                "tests/test-powershell-syntax.js)");
+  } else {
+    assert("ran " + SHELL + " but it failed: " + e.message,
+           "the PowerShell helpers run");
+  }
 }
 
 fs.rmSync(tmpRoot, { recursive: true, force: true });
