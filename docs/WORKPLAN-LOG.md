@@ -20018,3 +20018,63 @@ failure, `test-ffmpeg-export.js`, IS genuinely environmental — it asserts
 on Windows absolute paths.
 
 Tests only, so NO BUMP; rides 0.12.0.
+
+## 2026-09-06 (remote session) — §18 P0: the ratchet, and the checker that could not fail
+
+WORKPLAN §18 P0. Three test changes, no `extension/` change, no bump.
+
+**The defect P0 exists to close is in a TEST.** `test-model-catalog.js`
+opened its bundling check with `if (!e.workflowTemplate) return;` — so an
+entry with NO graph at all was silently skipped. Five of seven catalog
+entries were in that state: `recommendGen` offered them, `comfy_generate`
+could not render them, `catalog-vram-probe` refused to measure them, and
+the suite said nothing. That is this repo's recurring bug class — a check
+answering the same value for "this is fine" and "there is nothing here to
+check" — this time in the checker itself.
+
+Replaced by **two allowlists that fail in BOTH directions**, each verified
+by breaking it on purpose:
+
+- `ALLOW_NO_TEMPLATE` = sd15, sdxl, ltx-small, wan22-5b, minimax-h3-int8.
+  Dropping sd15 early -> RED naming allowlist vs actual; giving sd15 a
+  template without editing the list -> RED the other way.
+- `ALLOW_UNMEASURED` = minimax-h3, because **existence is not proof**. A
+  graph can be committed, named by `workflowTemplate`, and never have
+  rendered. Without this list P5-P10 could each "close" an entry by
+  adding a file. minimax-h3 HAS rendered (LOG 2445-2515) but carries no
+  measured block, so it is the one legitimate entry.
+
+ltx-small's seat is PERMANENT until the owner revisits Q1 — it has
+`urls: []`, so nothing to download and nothing to render.
+
+**New `tests/test-workflow-bundle.js`** walks the bundle rather than a
+list: API format not a UI export, a manifest sidecar, `kind` image|video
+(its FIRST consumer — both shipped manifests carried it unread),
+`models[].dir` read out of comfy.js's own `COMFY_MODEL_SUBS` rather than
+a second copy, non-optional weights ⊆ the catalog entry's urls/files,
+`procedural.*` pointing at nodes and inputs that exist, and a video
+template writing mp4/h264 (AE cannot import animated webp, so the wrong
+saver renders fine and then fails at the import). Verified against four
+deliberate breakages: a bogus `dir`, a weight the catalog does not name,
+a `procedural.nodeId` that does not exist, and a template with no
+manifest — one FAIL each.
+
+**The optional-weight exemption is load-bearing, not a nicety.** The
+shipped H3 manifest carries a turbo LoRA under a subfolder
+(`MiniMax_H3/...`) that appears in no catalog url list, and it is exactly
+the branch weight `genNeedMBFor` skips. The subset rule as first drafted
+in the plan would have gone red the day it landed; it compares basenames
+and exempts `optional: true`.
+
+`catalogEntry` WARNS rather than asserts here — P1 adds the key and flips
+it in the same pass.
+
+**`test-workflow-manifests.js`'s shipped half is now a directory walk.**
+A hardcoded list only covers what someone remembered to add, and §18 adds
+a template per entry. Verified: dropping an unattributed graph into the
+bundle turns it red. The AUTHORED half stays an explicit list — those are
+the owner's UI exports, they do not all ship (H3_R2V_V1 has no API
+counterpart), and under the §18 reframe they are a personal layer rather
+than a set that grows with the product.
+
+Suite 75/76 (only the Windows-path-bound `test-ffmpeg-export`).

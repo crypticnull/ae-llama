@@ -39,13 +39,37 @@ function assert(cond, label) {
 const REPO = path.join(__dirname, "..");
 
 // Every workflow the repo bundles, authored (UI) and adapted (API) alike.
-const PAIRS = [
+//
+// The SHIPPED half is a directory WALK, not a list. A hardcoded list only
+// covers what someone remembered to add to it, and WORKPLAN §18 adds a
+// template per catalog entry — a graph landing in the bundle without its
+// pack attribution is exactly the failure this file exists for (the H3
+// manifest once named four packs while the graph used seven, and the
+// graph simply would not load on a machine lacking the other three).
+//
+// The AUTHORED half stays an explicit list: those are the owner's own UI
+// exports, they do not all ship (H3_R2V_V1 has no API counterpart), and
+// under the §18 reframe they are a personal layer rather than a set that
+// grows with the product.
+const AUTHORED = [
   ["extension/workflows/AE_LLAMA_KREA2_V1.json", "authored"],
   ["extension/workflows/AE_LLAMA_H3_R2V_V1.json", "authored"],
-  ["extension/workflows/AE_LLAMA_H3_I2V_V1.json", "authored"],
-  ["extension/comfy-workflows/AE_LLAMA_H3_I2V_V1.json", "shipped"],
-  ["extension/comfy-workflows/AE_LLAMA_KREA2_V1.json", "shipped"]
+  ["extension/workflows/AE_LLAMA_H3_I2V_V1.json", "authored"]
 ];
+
+const SHIPPED_DIR = "extension/comfy-workflows";
+const SHIPPED = fs.readdirSync(path.join(REPO, SHIPPED_DIR))
+  .filter((n) => /\.json$/i.test(n))
+  .filter((n) => !/\.manifest\.json$/i.test(n))
+  .filter((n) => n.charAt(0) !== ".")
+  // The format example carries the CHANGE-ME placeholder and can never
+  // render, so it has no packs to attribute.
+  .filter((n) => fs.readFileSync(
+    path.join(REPO, SHIPPED_DIR, n), "utf8").indexOf("CHANGE-ME") === -1)
+  .sort()
+  .map((n) => [SHIPPED_DIR + "/" + n, "shipped"]);
+
+const PAIRS = AUTHORED.concat(SHIPPED);
 
 function read(rel) {
   return JSON.parse(fs.readFileSync(path.join(REPO, rel), "utf8"));

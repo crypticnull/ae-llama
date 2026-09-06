@@ -221,15 +221,70 @@ if (krea2) {
 }
 
 // A workflowTemplate an entry names must be a template the panel BUNDLES,
-// or the recommendation points at a graph that cannot be run. (The probe's
-// --list found four entries with no template at all; that is a known gap,
-// but a WRONG name is a different thing and is caught here.)
+// or the recommendation points at a graph that cannot be run.
 const wfDir = path.join(__dirname, "..", "extension", "comfy-workflows");
 window.AELL.COMFY_CATALOG.forEach((e) => {
   if (!e.workflowTemplate) return;
   assert(fs.existsSync(path.join(wfDir, e.workflowTemplate + ".json")),
          e.name + ": bundles its workflowTemplate " + e.workflowTemplate);
 });
+
+// ------------------------------------------------------------ WORKPLAN §18
+//
+// The line above used to open `if (!e.workflowTemplate) return;` — so an
+// entry with NO template at all was silently skipped, and five of seven
+// were in that state: recommendGen offered them, comfy_generate could not
+// render them, catalog-vram-probe refused to measure them, and no test
+// said a word. A check that returns the same answer for "this is fine"
+// and "there is nothing here to check" is the bug class this repo keeps
+// finding; here it was in the checker itself.
+//
+// Two allowlists replace the skip, and BOTH fail in both directions: a
+// name removed while the gap remains, and a name still listed once the
+// gap is closed. Shrinking them is the work; nothing may grow them
+// without an entry in docs/WORKPLAN-LOG.md saying why.
+
+// Entries that ship no graph yet. §18 P5-P10 empty this, except
+// ltx-small, whose seat is PERMANENT until the owner pins its weights or
+// drops the entry (Q1: postponed, 2026-09-06) — it has `urls: []`, so
+// there is nothing to download and nothing to render.
+const ALLOW_NO_TEMPLATE = ["sd15", "sdxl", "ltx-small", "wan22-5b",
+                           "minimax-h3-int8"];
+
+// Entries whose template has never been measured through
+// catalog-vram-probe. EXISTENCE IS NOT PROOF: a graph can be committed,
+// named by workflowTemplate, and never have rendered once. minimax-h3 is
+// exactly that today — it HAS rendered end to end (LOG 2445-2515,
+// 2026-08-27) but carries no measured block, so the arbiter still prices
+// it from `minVramGB` alone.
+const ALLOW_UNMEASURED = ["minimax-h3"];
+
+{
+  const noTemplate = window.AELL.COMFY_CATALOG
+    .filter((e) => !e.workflowTemplate).map((e) => e.name).sort();
+  assert(noTemplate.join(",") === ALLOW_NO_TEMPLATE.slice().sort().join(","),
+         "the entries with no bundled graph are exactly the allowlisted " +
+         "ones (add a template -> remove the name; add an entry -> give " +
+         "it a template or list it)");
+  if (noTemplate.join(",") !== ALLOW_NO_TEMPLATE.slice().sort().join(",")) {
+    console.error("       allowlist: " + ALLOW_NO_TEMPLATE.slice().sort()
+                  .join(", "));
+    console.error("       actual   : " + noTemplate.join(", "));
+  }
+
+  const unmeasured = window.AELL.COMFY_CATALOG
+    .filter((e) => e.workflowTemplate && !e.measured)
+    .map((e) => e.name).sort();
+  assert(unmeasured.join(",") === ALLOW_UNMEASURED.slice().sort().join(","),
+         "every entry that ships a graph is MEASURED, except the " +
+         "allowlisted ones — a committed template that never rendered is " +
+         "not proof that it can");
+  if (unmeasured.join(",") !== ALLOW_UNMEASURED.slice().sort().join(",")) {
+    console.error("       allowlist: " + ALLOW_UNMEASURED.slice().sort()
+                  .join(", "));
+    console.error("       actual   : " + unmeasured.join(", "));
+  }
+}
 
 // No consumer may do decimal-MB arithmetic on the field. main.js's model
 // dropdown divided by 1000 while the downloader's status line divided by
