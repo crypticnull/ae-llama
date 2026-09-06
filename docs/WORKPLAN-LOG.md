@@ -19763,3 +19763,57 @@ mode then ignores. Harmless, confusing, its own small pass.
 
 BUMPED 0.11.37 -> **0.12.0** (minor: new user-visible mode + setting).
 Unblocks §17c, which unblocks every local pass in §18.
+
+## 2026-09-06 (remote session) — §17c had no headless path at all; scripts/comfy-install.js is it
+
+Owner asked what is holding §17c up. Checked rather than answered from
+the plan, and the biggest holdup was not in the plan: **there was no way
+to install the managed backend except by hand.**
+`Setup.bootstrapComfy` had exactly ONE caller — `btn-comfy-install` in
+Settings (`main.js:1401`) — so the backend a buyer gets could only be
+installed by a human opening AE, opening the panel, opening Settings and
+clicking. An unattended pass could not take §17c, and §17c gates every
+template pass in §18.
+
+**`scripts/comfy-install.js`** runs the SHIPPED code through the same
+window shim `comfy-probe.js` uses (settings + tiers + comfy + setup):
+`--check` reports without downloading, bare installs if absent, `--boot`
+boots and confirms the port answers, `--stop` stops what it booted. It
+records the two numbers §17c and §13a want and nobody has: the
+**extracted size** of the portable build (the standing disk cost of the
+buyer's path) and the **python / torch / CUDA the build pins** — which is
+§13a step 1's measurement, taken for free, and exactly what the
+SageAttention wheel selection keys on.
+
+**Gate 0 is the part with the silent failure mode, so it is the part
+with a test.** Every path is `Settings.dataRoot()`-relative and dataRoot
+falls through APPDATA -> USERPROFILE -> the extension folder. Measured
+2026-09-02: an unattended pass with no APPDATA landed on a root holding
+no settings.json and reported the DEFAULT port as THE OWNER'S SETTING.
+An installer inheriting that bug does not misreport a number — it
+downloads gigabytes into a folder nobody will look in and calls it
+success. So it refuses (exit 2) and says which variable is missing.
+`tests/test-comfy-install.js` spawns it with a CLEANED env and pins
+that, plus "--check never downloads" and "the saved mode is read, not
+assumed". Verified non-vacuous: with the gate removed, 2 assertions go
+red.
+
+**One risk I could NOT settle from here, recorded rather than guessed.**
+`bootstrapComfy` reads `/releases/latest` and picks a portable asset
+from it. That is the OLD shape — 0.10.16 measured llama.cpp's
+`/releases/latest` returning v0.3.0 with no Windows binaries at all, so
+the one-click engine install ended at "No suitable Windows build found"
+for every user until it was replaced with a release WALK. Whether
+ComfyUI's latest non-prerelease carries the portable `.7z` could not be
+checked from this container: the agent proxy refused the GitHub API for
+a repo outside the session's scope, and `add_repo` grants git reads
+only, which do not carry release assets; the plain releases web page
+answered 403 as well. So the check moves to the machine that can make
+it, and `comfy-install.js` prints the exact one-line command when an
+install fails on a release/asset error, with the 0.10.16 precedent named.
+Fixing it now would be a speculative change to a shipped installer; one
+call settles it.
+
+Suite 76 files, 74 green (the two container-only failures). No
+`extension/` change in this entry — the script and its test are
+`scripts/`+`tests/`, so NO further bump; it rides 0.12.0.

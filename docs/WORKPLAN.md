@@ -3656,6 +3656,23 @@ bundle. Two consequences worth their own lines:
 
 ### Passes — one per night, smallest first (PLAN §6)
 
+**One risk on §17c that nobody has checked.** `bootstrapComfy`
+(`setup.js:1045`) reads GitHub's `/releases/latest` for ComfyUI and
+picks a portable asset from it. That endpoint returns the latest
+NON-prerelease, and this repo has already been bitten by exactly that:
+0.10.16 measured llama.cpp's `/releases/latest` answering with v0.3.0,
+whose entire asset list was one `nightly-tag.txt`, so **the panel's
+one-click engine install ended at "No suitable Windows build found" for
+every user** until it was replaced with a release WALK
+(`pickEngineRelease`). `bootstrapComfy` still has the OLD shape. Whether
+ComfyUI's latest non-prerelease carries the portable `.7z` could not be
+checked from the remote container (the proxy blocks the GitHub API and
+the releases web page for repos outside this session's scope). One call
+on the owner's machine settles it, and `comfy-install.js` prints that
+exact command when the install fails on a release/asset error. If it
+turns out to need the walk, that is a small pass against a measured
+failure — not a speculative fix.
+
 **Backend rule: ONE route.** §17a then §17c come first; after them the
 loop boots the MANAGED backend itself (`--boot`/`--stop`, non-8000
 port), ignores the owner's instance by design, and every reading is
@@ -3665,7 +3682,7 @@ taken on what a buyer gets — so nothing measured after §17c needs a
 | # | who | what | bump | needs |
 |---|---|---|---|---|
 | **§17a** | remote | managed backend by default: `comfyBackend`, own port, refuse-not-attach, `findLocalComfy` as an offer, migration on `loadedFrom` | yes | — |
-| **§17c** | local | install the vendor portable backend here; `comfyModelRoots` at the existing stores; record its extracted size | no | §17a |
+| **§17c** | local | `node scripts/comfy-install.js --boot` (headless, ships in 0.12.0); then `comfyModelRoots` at the existing stores; record the extracted size and the python/torch it pins (= §13a step 1) | no | §17a; ~10 GB free; the ComfyUI release must carry a portable asset — UNVERIFIED, see below |
 | P0 | remote | ratchet tests (bundle test warn-mode, two allowlists, manifests walk) | no | — |
 | P1 | remote | `describeWorkflows` + `resolveWorkflow` (incl. the baseline tiebreak) + `_graphCarriesValue`; tools.js :1958/:2061; `comfyWorkflows` setting; `catalogEntry`; re-pins; bundle test → assert | yes | P0 |
 | P2 | remote | probe `--frames`/`--boot`/`--stop`, `download-gen-weight.js`, chat-probe kind verdict, `Settings.origin()` gate | no | P1, §17c |
