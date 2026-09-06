@@ -1899,6 +1899,73 @@
     }
   };
 
+  /*
+   * Assemble the resolver's inputs. comfy.js stays pure - it knows about
+   * templates, not about tiers or the catalog - so the panel supplies the
+   * three predicates here, where both are already in scope.
+   *
+   * The catalog is read straight off the global: index.html loads
+   * version.js before tools.js, so AELL.COMFY_CATALOG is always there.
+   * The hosted feed can override it (Setup.comfyCatalog), but update.json
+   * carries modelCatalog only - no comfyCatalog producer exists - so
+   * plumbing the override through would be a hook with nothing on the
+   * other end.
+   */
+  function pickWorkflow(s, args) {
+    var descs = global.Comfy.describeWorkflows(s.comfyWorkflowsDir);
+    var catalog = [];
+    try { catalog = (global.AELL && global.AELL.COMFY_CATALOG) || []; }
+    catch (eC) { catalog = []; }
+
+    function entryOf(d) {
+      if (!d.catalogEntry) return null;
+      for (var i = 0; i < catalog.length; i++) {
+        if (catalog[i].name === d.catalogEntry) return catalog[i];
+      }
+      return null;
+    }
+
+    var ctx = null;
+    try {
+      ctx = global.Tiers.resolveTier(gpuCache, s);
+    } catch (eT) { ctx = null; }
+
+    return global.Comfy.resolveWorkflow(descs, {
+      // A length was asked for => a video was asked for. No new argument
+      // and no prompt bytes: the model already reaches these.
+      kind: (args.frames > 0 || args.durationSeconds > 0)
+        ? "video" : "image",
+      image: args.image,
+      disabled: s.comfyWorkflows || {}
+    }, ctx, {
+      // An entry with no catalog link, or a card we cannot size, is
+      // treated as fitting - refusing on an unknown is how a working
+      // template becomes unreachable.
+      fits: function (d) {
+        var e = entryOf(d);
+        if (!e || !ctx) return true;
+        try { return global.Tiers.entryFits(e, ctx); }
+        catch (eF) { return true; }
+      },
+      weightsPresent: function (d) {
+        var e = entryOf(d);
+        if (!e) return false;
+        try {
+          var st = catalogModelStatus(e, s);
+          return !!(st && st.files && st.files.length &&
+                    st.files.every(function (f) { return !!f.path; }));
+        } catch (eW) { return false; }
+      },
+      // The graph the catalog entry itself points at is the BASELINE.
+      // Without this the owner's own refined template and the shipped
+      // basic tie on every other axis and fall through to name order.
+      baseline: function (d) {
+        var e = entryOf(d);
+        return !!(e && e.workflowTemplate === d.name);
+      }
+    });
+  }
+
   var PANEL_TOOLS = {
 
     comfy_status: function (args, cb) {
@@ -1957,7 +2024,23 @@
       }
       var names = [];
       for (var j = 0; j < list.length; j++) names.push(list[j].name);
-      var chosen = list[0];
+      // No workflow named: ask the resolver rather than the alphabet.
+      // `list[0]` sent "a picture of a red apple" to AE_LLAMA_H3_I2V_V1 -
+      // a 40 GB Blackwell-only VIDEO graph - because ae_llama_h3 sorts
+      // before ae_llama_krea2.
+      var chosen = null;
+      if (!args.workflow) {
+        var pick = pickWorkflow(s, args);
+        if (!pick.chosen) {
+          cb({ ok: false, error: pick.why + ". Available: " +
+               names.join(", ") });
+          return;
+        }
+        for (var c = 0; c < list.length; c++) {
+          if (list[c].name === pick.chosen.name) { chosen = list[c]; break; }
+        }
+        if (!chosen) chosen = list[0];
+      }
       if (args.workflow) {
         var found = null, placeholder = null;
         for (var i = 0; i < all.length; i++) {
@@ -2060,7 +2143,11 @@
       // error before anything is churned.
       var manifest = global.Comfy.readManifest
         ? global.Comfy.readManifest(chosen.file) : null;
-      var plan = planEnhancement(s, args.workflow, args.prompt, manifest);
+      // Keyed on the template that WILL run, not on what the caller
+      // typed. args.workflow is empty on a nameless call and can differ
+      // in case on a named one, so an opt-out recorded against the real
+      // name was silently bypassed in both.
+      var plan = planEnhancement(s, chosen.name, args.prompt, manifest);
       var enhanceDone = function () {
         // Three preconditions, cheapest first, and every one of them
         // answered BEFORE the arbiter stops the chat model.

@@ -72,6 +72,17 @@ const window = {
   },
   Comfy: {
     listWorkflows: () => [{ name: "WF", file: "/wf/WF.json" }],
+    // WHICH template runs is test-workflow-resolve.js's subject, not
+    // this file's — but comfy_generate asks for it on every nameless
+    // call, so the stub has to answer or the arbiter is never reached.
+    // One template, described minimally, chosen unconditionally.
+    describeWorkflows: () => [{ name: "WF", file: "/wf/WF.json",
+                                example: false, kind: "image",
+                                catalogEntry: undefined, takesImage: false,
+                                requiresImage: false, lengthIn: "frames" }],
+    resolveWorkflow: (descs) => ({ chosen: descs[0] || null,
+                                   candidates: descs,
+                                   why: "stub: the only template" }),
     // The shape every SHIPPED manifest really has: a file and the model
     // dir it belongs in, and no size at all. The old stub handed the
     // arbiter sizeMB numbers no bundled template has ever carried, which

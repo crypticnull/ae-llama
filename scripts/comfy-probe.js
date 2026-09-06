@@ -19,8 +19,18 @@
  *   node scripts/comfy-probe.js                       # the default smoke
  *   node scripts/comfy-probe.js --url http://127.0.0.1:8188
  *   node scripts/comfy-probe.js --duration 0.2 --width 512 --height 288
- *   node scripts/comfy-probe.js --workflow AE_LLAMA_KREA2_V1  *        --prompt "..." --width 768 --height 768   # an IMAGE template
+ *   node scripts/comfy-probe.js --workflow AE_LLAMA_KREA2_V1 \
+ *        --prompt "..." --width 768 --height 768   # an IMAGE template
  *   node scripts/comfy-probe.js --image C:\ref.png    # i2v instead of t2v
+ *   node scripts/comfy-probe.js --frames 33           # templates whose
+ *                                                     # length is a literal
+ *                                                     # frame count, not
+ *                                                     # seconds
+ *   node scripts/comfy-probe.js --boot                # start the MANAGED
+ *                                                     # backend if nothing
+ *                                                     # answers
+ *   node scripts/comfy-probe.js --boot --stop         # ...and stop it again
+ *                                                     # afterwards
  *   node scripts/comfy-probe.js --no-ae               # generation only
  *   node scripts/comfy-probe.js --bare                # as if NO custom
  *                                                     # node pack were
@@ -64,6 +74,9 @@ const OPT = {
   prompt: argValue("--prompt", null),
   timeout: parseInt(argValue("--timeout", "1800"), 10),
   image: argValue("--image", null),
+  frames: argValue("--frames", null),
+  boot: argv.indexOf("--boot") !== -1,
+  stop: argv.indexOf("--stop") !== -1,
   noAe: argv.indexOf("--no-ae") !== -1,
   bare: argv.indexOf("--bare") !== -1,
   keep: argv.indexOf("--keep") !== -1,
@@ -186,20 +199,20 @@ function aeRead(expr, cb) {
 
 // -------------------------------------------------------- the panel, in Node
 
-const storage = {};
+// The managed backend's PID must survive this process, or a later
+// --stop finds nothing and silently kills nothing. See
+// scripts/lib/comfy-managed.js.
+const managed = require("./lib/comfy-managed.js");
+let pidFile = null;            // set once Settings.dataRoot() is loadable
+let bootedHere = false;        // did THIS run start the backend?
+const storage = managed.makeStorage(function () { return pidFile; });
 const window = {
   console: console,
   setTimeout: setTimeout,
   clearTimeout: clearTimeout,
   setInterval: setInterval,
   clearInterval: clearInterval,
-  localStorage: {
-    getItem(k) {
-      return Object.prototype.hasOwnProperty.call(storage, k) ? storage[k] : null;
-    },
-    setItem(k, v) { storage[k] = String(v); },
-    removeItem(k) { delete storage[k]; }
-  },
+  localStorage: storage,
   AEBridge: {
     nodeRequire: require,
     getExtensionPath() { return EXT; },
@@ -223,6 +236,12 @@ loadPanelFile("tools.js");
 const Settings = window.Settings;
 const Comfy = window.Comfy;
 const Tools = window.Tools;
+
+// Beside settings.json, by the panel's own dataRoot rule rather than a
+// second copy of it.
+try {
+  pidFile = require("path").join(Settings.dataRoot(), "comfy-managed.pid");
+} catch (e) { pidFile = null; }
 
 /* --bare: render as if NO custom node pack were installed.
  *
@@ -336,9 +355,31 @@ function stopVramWatch() {
 // ------------------------------------------------------------------- steps
 
 function stepStatus(next) {
-  say("info", "ComfyUI at " + S.comfyUrl);
-  Comfy.status(S.comfyUrl, function (err, st) {
+  // NOT S.comfyUrl. §17a put the choice of backend behind
+  // Comfy.backendUrl: in "managed" mode the panel talks to its OWN port
+  // and comfyUrl is not consulted at all. A probe reading comfyUrl
+  // checks one port while the generation it is about to run goes to
+  // another — and reports whichever answer it happens to get.
+  const URL = Comfy.backendUrl(S);
+  say("info", "ComfyUI at " + URL + "  (backend: " +
+              Comfy.backendMode(S) + ")");
+  Comfy.status(URL, function (err, st) {
     if (err) {
+      if (OPT.boot) {
+        say("info", "--boot: bringing the managed backend up…");
+        managed.boot(Comfy, URL, S, say, function (bErr) {
+          if (bErr) {
+            verdict(false, "ComfyUI reachable", bErr.message);
+            say("error", "Nothing to generate with — stopping.");
+            finish();
+            return;
+          }
+          bootedHere = true;
+          verdict(true, "ComfyUI reachable", "booted by --boot");
+          next();
+        });
+        return;
+      }
       verdict(false, "ComfyUI reachable", err.message);
       say("error", "Nothing to generate with — stopping.");
       finish();
@@ -372,12 +413,19 @@ function stepGenerate(next) {
             "in daylight. The camera pushes in with small amplitude at slow " +
             "speed. overall_soundscape: quiet room tone. " +
             "non_diegetic_music: N/A",
-    durationSeconds: OPT.duration,
+    // A template whose length is a literal FRAME COUNT cannot be driven
+    // by durationSeconds: injectParams reports "durationSeconds ignored
+    // (this template has no seconds input)" and renders at whatever the
+    // graph was authored for. This probe always sent seconds, so a
+    // frames-based template could not be exercised at a size of the
+    // caller's choosing at all — §18 P7 (wan22-5b) needs exactly that.
     width: OPT.width,
     height: OPT.height,
     seed: OPT.seed,
     "import": !OPT.noAe
   };
+  if (OPT.frames !== null) args.frames = parseInt(OPT.frames, 10);
+  else args.durationSeconds = OPT.duration;
   if (OPT.image) args.image = OPT.image;
   say("info", "comfy_generate " + JSON.stringify(args));
 
@@ -501,6 +549,11 @@ function stepImported(next) {
 
 function finish() {
   stopVramWatch();
+  // Only ever stop a backend THIS RUN booted. A probe that kills the
+  // one the owner already had running is a probe nobody runs twice.
+  if (OPT.stop || (OPT.boot && bootedHere)) {
+    managed.stop(Comfy, storage, Comfy.managedPort(S), say);
+  }
   const file = writeTranscript();
   say("info", "transcript: " + file);
   console.log(failures === 0 ? "\nCOMFY PROBE PASSED"

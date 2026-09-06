@@ -331,6 +331,14 @@ function loadPanelFile(rel) {
   // machine. Binding `this` too makes the loader work for both shapes.
   new Function("window", src).call(window, window);
 }
+// version.js FIRST, exactly as index.html loads it: it publishes
+// global.AELL, which carries COMFY_CATALOG. tools.js reads that catalog
+// to rank workflow templates (fit, weights on disk, which graph the
+// entry itself points at). Without it the read yields an empty list and
+// the ranking silently degrades to name order — the same alphabetical
+// choice §18 P1 replaced. Caught by test-chat-probe's own MODULE_FILE
+// guard the moment tools.js referenced global.AELL.
+loadPanelFile("version.js");
 loadPanelFile("settings.js");
 loadPanelFile("tiers.js");
 loadPanelFile("llama.js");
@@ -2153,6 +2161,28 @@ const STEPS = [
       if (!ok.length) {
         return "comfy_generate failed " + gen.length + " time(s), last " +
                "error: " + gen[gen.length - 1].error;
+      }
+      // WHICH template ran, not just that one did. §18 P1 made the
+      // nameless default kind-aware; before it, `list[0]` meant a
+      // picture request was handed to whichever graph sorted first —
+      // with the shipped bundle, a 40 GB Blackwell-only VIDEO template.
+      // The choice happens BEFORE any tool runs, so no stub and no
+      // real-AE harness can see it; only a real sentence through the
+      // real model can. A render that succeeds on the wrong kind is
+      // still a routing failure.
+      const ranKinds = ok.map(t => {
+        const wf = (t.args && t.args.workflow) || (t.data && t.data.workflow);
+        if (!wf) return null;
+        try {
+          const mf = Comfy.readManifest(
+            require("path").join(S.comfyWorkflowsDir, wf + ".json"));
+          return mf && mf.kind ? mf.kind : null;
+        } catch (eK) { return null; }
+      }).filter(Boolean);
+      if (ranKinds.length && ranKinds.indexOf("image") === -1) {
+        return "a PICTURE was asked for and the template that ran is " +
+               "kind '" + ranKinds.join("/") + "' — the nameless default " +
+               "picked the wrong kind";
       }
       const files = [];
       for (const t of ok) {

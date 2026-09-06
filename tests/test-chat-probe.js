@@ -998,7 +998,11 @@ const toolsSrc = fs2.readFileSync(
 const MODULE_FILE = {
   Comfy: "comfy.js", Setup: "setup.js", Llama: "llama.js",
   Settings: "settings.js", Tiers: "tiers.js", Tools: "tools.js",
-  Whisper: "whisper.js", Ffmpeg: "ffmpeg.js", MogrtRead: "mogrt-read.js"
+  Whisper: "whisper.js", Ffmpeg: "ffmpeg.js", MogrtRead: "mogrt-read.js",
+  // global.AELL is version.js's export (VERSION, COMFY_CATALOG,
+  // MODEL_CATALOG). tools.js reads the catalog to rank workflow
+  // templates; a probe without it ranks on nothing.
+  AELL: "version.js"
 };
 const needed = new Set(
   (toolsSrc.match(/global\.([A-Z][A-Za-z]+)/g) || [])

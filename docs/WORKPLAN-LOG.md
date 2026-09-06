@@ -20018,3 +20018,203 @@ failure, `test-ffmpeg-export.js`, IS genuinely environmental — it asserts
 on Windows absolute paths.
 
 Tests only, so NO BUMP; rides 0.12.0.
+
+## 2026-09-06 (remote session) — §18 P0: the ratchet, and the checker that could not fail
+
+WORKPLAN §18 P0. Three test changes, no `extension/` change, no bump.
+
+**The defect P0 exists to close is in a TEST.** `test-model-catalog.js`
+opened its bundling check with `if (!e.workflowTemplate) return;` — so an
+entry with NO graph at all was silently skipped. Five of seven catalog
+entries were in that state: `recommendGen` offered them, `comfy_generate`
+could not render them, `catalog-vram-probe` refused to measure them, and
+the suite said nothing. That is this repo's recurring bug class — a check
+answering the same value for "this is fine" and "there is nothing here to
+check" — this time in the checker itself.
+
+Replaced by **two allowlists that fail in BOTH directions**, each verified
+by breaking it on purpose:
+
+- `ALLOW_NO_TEMPLATE` = sd15, sdxl, ltx-small, wan22-5b, minimax-h3-int8.
+  Dropping sd15 early -> RED naming allowlist vs actual; giving sd15 a
+  template without editing the list -> RED the other way.
+- `ALLOW_UNMEASURED` = minimax-h3, because **existence is not proof**. A
+  graph can be committed, named by `workflowTemplate`, and never have
+  rendered. Without this list P5-P10 could each "close" an entry by
+  adding a file. minimax-h3 HAS rendered (LOG 2445-2515) but carries no
+  measured block, so it is the one legitimate entry.
+
+ltx-small's seat is PERMANENT until the owner revisits Q1 — it has
+`urls: []`, so nothing to download and nothing to render.
+
+**New `tests/test-workflow-bundle.js`** walks the bundle rather than a
+list: API format not a UI export, a manifest sidecar, `kind` image|video
+(its FIRST consumer — both shipped manifests carried it unread),
+`models[].dir` read out of comfy.js's own `COMFY_MODEL_SUBS` rather than
+a second copy, non-optional weights ⊆ the catalog entry's urls/files,
+`procedural.*` pointing at nodes and inputs that exist, and a video
+template writing mp4/h264 (AE cannot import animated webp, so the wrong
+saver renders fine and then fails at the import). Verified against four
+deliberate breakages: a bogus `dir`, a weight the catalog does not name,
+a `procedural.nodeId` that does not exist, and a template with no
+manifest — one FAIL each.
+
+**The optional-weight exemption is load-bearing, not a nicety.** The
+shipped H3 manifest carries a turbo LoRA under a subfolder
+(`MiniMax_H3/...`) that appears in no catalog url list, and it is exactly
+the branch weight `genNeedMBFor` skips. The subset rule as first drafted
+in the plan would have gone red the day it landed; it compares basenames
+and exempts `optional: true`.
+
+`catalogEntry` WARNS rather than asserts here — P1 adds the key and flips
+it in the same pass.
+
+**`test-workflow-manifests.js`'s shipped half is now a directory walk.**
+A hardcoded list only covers what someone remembered to add, and §18 adds
+a template per entry. Verified: dropping an unattributed graph into the
+bundle turns it red. The AUTHORED half stays an explicit list — those are
+the owner's UI exports, they do not all ship (H3_R2V_V1 has no API
+counterpart), and under the §18 reframe they are a personal layer rather
+than a set that grows with the product.
+
+Suite 75/76 (only the Windows-path-bound `test-ffmpeg-export`).
+
+## 2026-09-06 (remote session) — §18 P1: the alphabet stops choosing which template runs (0.12.1)
+
+WORKPLAN §18 P1. `comfy_generate` picked `list[0]` when the model named
+no workflow — the ALPHABET. With the shipped bundle that means "a
+picture of a red apple" was handed to `AE_LLAMA_H3_I2V_V1`: a 40 GB
+Blackwell-only VIDEO graph, chosen because `ae_llama_h3` sorts before
+`ae_llama_krea2`. `test-comfy-workflow-choice.js` pinned that outcome as
+CORRECT, because nothing better existed to pin.
+
+**Two pure functions in comfy.js, and everything else reads them.**
+
+`describeWorkflows(dir)` — name, file, example, `kind`, `catalogEntry`,
+`takesImage`, `requiresImage`, `lengthIn` — from the files plus their
+sidecars. `manifest.kind` gets its FIRST consumer here; both shipped
+manifests have carried it unread since they were written.
+
+`resolveWorkflow(descs, want, ctx, opts)` — pure, every input passed in,
+so the whole matrix is stub-testable. That purity is the point: the
+choice happens BEFORE any tool runs, so neither the real-AE harness nor
+comfy-probe can see it. Ordering: kind (from `frames`/`durationSeconds`,
+no new argument and no prompt bytes) → enabled → `requiresImage` when no
+image was given → then FIT first, weights-on-disk, **baseline**, name.
+
+**The baseline tiebreak is what the §18 reframe forces.** With the
+owner's authored graphs becoming a personal layer beside the shipped
+basics, a machine holds BOTH for one catalog entry — same kind, same
+fit, same weights. Everything ties and the old order falls through to
+NAME, where `AE_LLAMA_KREA2_T2I_V1` beats `AE_LLAMA_KREA2_V1` by
+alphabet. That is luck. The catalog entry's own `workflowTemplate` says
+which is the baseline, and it now wins the tie — pinned with the
+baseline deliberately being the name that sorts LAST, so the assertion
+cannot pass by accident.
+
+**A finding from writing the tests, fixed rather than noted.** With the
+only template filtered out for requiring an image, the refusal said "no
+runnable template is enabled" — which sends the user to the Workflows
+toggles when the answer is "give me an image". The empty-pool branch now
+counts WHY each candidate dropped and names that cause: needs an image
+(with the argument that fixes it), switched off in Settings, only format
+examples installed, or nothing installed at all.
+
+**A better finding, caught by an existing guard.** `test-chat-probe.js`
+asserts that every `global.X` in tools.js maps to a panel file the probe
+loads. Adding `global.AELL.COMFY_CATALOG` turned it red: **chat-probe.js
+never loaded version.js**, so the catalog would have read empty there and
+the whole ranking would have degraded silently to name order — the exact
+alphabetical choice this pass removes, reappearing in the one instrument
+that measures routing. `version.js` is loaded first now, as index.html
+does it, and `AELL` is in `MODULE_FILE`.
+
+Also: `planEnhancement` is keyed on `chosen.name` rather than
+`args.workflow`. On a nameless call that argument is empty and on a
+named one it can differ in case, so an opt-out recorded against the real
+name was silently bypassed both ways.
+
+`settings.comfyWorkflows: {name: {enabled}}` — absent means ENABLED,
+like `comfyEnhance`, so a template arriving in an update needs no
+migration. Both shipped manifests gained `catalogEntry`; hash history
+regenerated; the bundle test's `catalogEntry` check flipped from warn to
+assert.
+
+New `tests/test-workflow-resolve.js`: 22 rows over kind, the format
+example, disabled, `requiresImage` both ways, fit-first (and an unfit
+template still offered when it is all there is), weights-present, the
+baseline tiebreak, undescribed user exports staying candidates,
+wrong-kind fallback with an honest reason, and an empty bundle.
+`test-comfy-workflow-choice.js` re-pinned and wired to the REAL describer
+and resolver rather than a re-implementation — which template runs is the
+subject, so a stub of it would test nothing.
+
+Two other stubs needed the new functions (`test-vram-arbiter`). Prompt
+budget UNCHANGED (58,933 / 39,803): the kind is inferred from arguments
+the model already has.
+
+Suite 77/78. BUMPED 0.12.0 -> **0.12.1**.
+
+## 2026-09-06 (remote session) — §18 P2: the instruments, and an inconsistency §17a left in them
+
+WORKPLAN §18 P2. `scripts/` only, no `extension/` change, no bump — it
+rides 0.12.1.
+
+**First, a defect §17a left behind and this pass found.** §17a put the
+backend choice behind `Comfy.backendUrl(s)`: in "managed" mode the panel
+talks to its OWN port and `comfyUrl` is never consulted. But BOTH probes
+still read `S.comfyUrl` for their reachability check, so on a managed
+machine `comfy-probe` and `catalog-vram-probe` would check one port while
+the generation they then run goes to another — and report whichever
+answer they happened to get. Both read `Comfy.backendUrl(S)` now and
+print which backend they are talking to.
+
+**One shared library instead of a third copy.** `comfy-install.js` had
+grown its own PID store, recycled-PID guard and port fallback; both
+probes needed the same. `scripts/lib/comfy-managed.js` holds them once —
+the file-backed PID key (only that key: settings living there would make
+`origin()` report "localStorage" where the truth for a script is
+settings.json, and every local pass's gate 0 depends on that), the
+`pidIsComfy` check before any kill, and `stopByPort` with the same guard.
+comfy-install lost its duplicate (verified: zero `stopByPort` references
+left in it, its tests still green, and the shared guard still fires on a
+stale PID).
+
+**`--boot` / `--stop` on both probes.** Neither could start anything —
+`comfy-probe.js` and `catalog-vram-probe.js` both exited on an
+unreachable backend, the latter saying "this probe does not start ComfyUI
+... start it by hand". That was true of the owner's hand-built 0.32.0 and
+is no longer true of the managed install. Each only ever stops a backend
+THIS RUN booted: a probe that kills the one the owner already had running
+is a probe nobody runs twice. `catalog-vram-probe`'s post-reachability
+body became `afterStatus(st)` so the boot path reaches it instead of
+duplicating it.
+
+**`comfy-probe --frames N`.** It always sent `durationSeconds`, so a
+template whose length is a literal frame count reported "durationSeconds
+ignored (this template has no seconds input)" and rendered at whatever
+the graph was authored for. §18 P7 (wan22-5b) needs exactly that
+argument. Also fixed a pre-existing joined line in its usage header that
+made the `--workflow` example unreadable.
+
+**`scripts/download-gen-weight.js`.** `Setup.downloadGenWeight` had ONE
+caller — the Download button in Settings — so every §18 pass that says
+"download sd15, then measure it" contained a human click. It reports
+where each file WOULD land before fetching anything, and its only
+success verdict is the file being on disk afterwards: a downloader's exit
+code is not evidence the file arrived. Exercised in four modes; the
+`--check` on sd15 reproduced the review's predicted blocker verbatim —
+`No place to put it: set a Models folder ... or install the hidden
+backend first` — which is `genWeightDest` refusing when there is no
+managed install yet. Surfaced BEFORE the download rather than after.
+`ltx-small` reports "no pinned URLs — there is nothing to fetch" rather
+than "downloaded 0 files".
+
+**chat-probe step 13 grades WHICH template ran.** The kind of the graph
+`comfy_generate` actually used must be `image` for a picture request.
+The choice happens before any tool runs, so no stub and no real-AE
+harness can see it — only a real sentence through the real model. A
+render that succeeds on the wrong kind is still a routing failure.
+
+Suite 77/78 (the Windows-path-bound ffmpeg suite). All 20 `scripts/`
+files parse; the PowerShell suite is green with the real parser.

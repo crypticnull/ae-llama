@@ -38,11 +38,17 @@ fs.writeFileSync(path.join(dir, "AE_LLAMA_H3_I2V_V1.json"), JSON.stringify({
          inputs: { ckpt_name: "real-video.safetensors" } }
 }));
 fs.writeFileSync(path.join(dir, "AE_LLAMA_H3_I2V_V1.manifest.json"),
-                 JSON.stringify({ models: [] }));
+                 JSON.stringify({ kind: "video",
+                                  catalogEntry: "minimax-h3",
+                                  models: [] }));
 fs.writeFileSync(path.join(dir, "AE_LLAMA_KREA2_V1.json"), JSON.stringify({
   "1": { class_type: "CheckpointLoaderSimple",
          inputs: { ckpt_name: "real-image.safetensors" } }
 }));
+fs.writeFileSync(path.join(dir, "AE_LLAMA_KREA2_V1.manifest.json"),
+                 JSON.stringify({ kind: "image",
+                                  catalogEntry: "krea2",
+                                  models: [] }));
 fs.writeFileSync(path.join(dir, "example-txt2img.json"), JSON.stringify({
   "4": { class_type: "CheckpointLoaderSimple",
          inputs: { ckpt_name: "CHANGE-ME.safetensors" } }
@@ -92,15 +98,22 @@ assert(listed.map(w => w.name).indexOf("example-txt2img") !== -1,
 const window = {
   AEBridge: { nodeRequire: require },
   console: console, setTimeout, clearTimeout,
-  Settings: { get: () => ({ comfyWorkflowsDir: dir, comfyUrl: "u",
+  Settings: { get: () => Object.assign({
+                            comfyWorkflowsDir: dir, comfyUrl: "u",
                             comfyOutDir: dir, comfyTimeoutSec: 60,
                             comfyPauseLlm: "never", comfyEnhance: {},
-                            vramOverrideGB: 0 }) },
+                            comfyWorkflows: {},
+                            vramOverrideGB: 0 }, settingsPatch) },
   Llama: { getState: () => "stopped", chat: () => {} },
   Setup: { queryVramUsedMB: (cb) => cb(new Error("no smi")) },
   Comfy: {
     listWorkflows: comfyWindow.Comfy.listWorkflows,
-    readManifest: () => null,
+    // The REAL describer and resolver, not a re-implementation: which
+    // template a request runs is the thing under test, so a stub of it
+    // would test nothing. They are pure over the fixture directory.
+    describeWorkflows: comfyWindow.Comfy.describeWorkflows,
+    resolveWorkflow: comfyWindow.Comfy.resolveWorkflow,
+    readManifest: comfyWindow.Comfy.readManifest,
     // The panel asks comfy.js WHICH backend it is talking to (managed
     // vs the user's own) rather than reading comfyUrl — keep the stub
     // faithful to that, or every call site throws.
@@ -122,8 +135,13 @@ for (const f of ["tiers.js", "tools.js"]) {
 const Tools = window.Tools;
 Tools.setGpuInfo({ hasNvidia: true, vramGB: 32, computeCap: 8.9 });
 
-function run(cmd, cb) {
+// Settings the current step wants on top of the defaults above. Set
+// around one run and cleared after, so no step leaks into the next.
+let settingsPatch = {};
+function run(cmd, cb, patch) {
+  settingsPatch = patch || {};
   Tools.executeCommands([cmd], {}, null, function (results) {
+    settingsPatch = {};
     cb(results[0]);
   });
 }
@@ -150,19 +168,53 @@ step(function (done) {
 });
 
 step(function (done) {
-  // The default with no workflow named is list[0], which is decided by
-  // the alphabet alone. It must be the first RUNNABLE one — rename the
-  // example to "aaa-example" and the old code would have queued it.
+  // SUPERSEDES the old expectation. The default WAS list[0] — the
+  // alphabet — and this test pinned that as correct because nothing
+  // better existed. With the shipped bundle it means "a picture of a red
+  // apple" is handed to AE_LLAMA_H3_I2V_V1: a 40 GB Blackwell-only VIDEO
+  // graph, chosen because ae_llama_h3 sorts before ae_llama_krea2.
+  //
+  // Comfy.resolveWorkflow decides now, and a request with no frames and
+  // no durationSeconds is an IMAGE request.
   ranWith.length = 0;
   run({ tool: "comfy_generate", args: { prompt: "a red apple",
                                         "import": false } }, function (r) {
     assert(r.ok, "a generation with no workflow named still runs: " +
            (r.ok ? "" : r.error));
-    assert(/AE_LLAMA_H3_I2V_V1\.json$/.test(ranWith[0] || ""),
-           "and it defaults to the first RUNNABLE template, not the " +
-           "example that sorts above it (ran: " + ranWith[0] + ")");
+    assert(/AE_LLAMA_KREA2_V1\.json$/.test(ranWith[0] || ""),
+           "and a picture request goes to the IMAGE template, not the " +
+           "video graph that sorts above it (ran: " + ranWith[0] + ")");
     done();
   });
+});
+
+step(function (done) {
+  // ...and a length asked for is a VIDEO request. No new argument and no
+  // prompt bytes: durationSeconds and frames are already in the doc.
+  ranWith.length = 0;
+  run({ tool: "comfy_generate",
+        args: { prompt: "a red apple rolling", durationSeconds: 3,
+                "import": false } }, function (r) {
+    assert(r.ok, "a generation asking for a duration runs: " +
+           (r.ok ? "" : r.error));
+    assert(/AE_LLAMA_H3_I2V_V1\.json$/.test(ranWith[0] || ""),
+           "and goes to the VIDEO template (ran: " + ranWith[0] + ")");
+    done();
+  });
+});
+
+step(function (done) {
+  // A template the user switched off in Settings is never chosen, and
+  // the refusal names what is left rather than falling back silently.
+  ranWith.length = 0;
+  const off = { comfyWorkflows: { AE_LLAMA_KREA2_V1: { enabled: false } } };
+  run({ tool: "comfy_generate", args: { prompt: "a red apple",
+                                        "import": false } },
+      function (r) {
+        assert(/AE_LLAMA_KREA2_V1\.json$/.test(ranWith[0] || "") === false,
+               "a disabled template is not run (ran: " + ranWith[0] + ")");
+        done();
+      }, off);
 });
 
 step(function (done) {

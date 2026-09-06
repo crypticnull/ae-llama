@@ -1,9 +1,13 @@
 {
   "workflow": "AE_LLAMA_H3_I2V_V1",
   "kind": "video",
+  "catalogEntry": "minimax-h3",
   "notes": "MiniMax H3 image-to-video AND text-to-video in one graph: the fl2va weight does t2va when no image is connected (per the workflow's own note). This SUPERSEDES the r2v workflow as the first H3 catalog target. Ollama enhancer bypassed as always; the panel enhances with its own chat model.",
   "panelAdaptation": {
-    "dropNodes": [169, 170],
+    "dropNodes": [
+      169,
+      170
+    ],
     "reason": "Node 138's prompt input is LINKED from the Ollama rewriter (169 -> 170 -> link 313), so any value injected into the prompt widget is ignored. Dropping the two enhancer nodes hands the widget back its own value, which is what the panel injects. The panel enhances with its own chat model, so the Ollama round trip is dead weight either way.",
     "apiTemplate": "extension/comfy-workflows/AE_LLAMA_H3_I2V_V1.json",
     "regenerate": "node scripts/adapt-workflow.js extension/workflows/AE_LLAMA_H3_I2V_V1.json --out extension/comfy-workflows/AE_LLAMA_H3_I2V_V1.json"
@@ -43,7 +47,7 @@
       "class": "ModelPreviewOverrideKJ",
       "passthrough": "model",
       "when": "missing",
-      "reason": "a live-preview transport for ComfyUI's own canvas — it changes what a BROWSER draws mid-sample and nothing about the sampled result, and the panel never opens that canvas",
+      "reason": "a live-preview transport for ComfyUI's own canvas \u2014 it changes what a BROWSER draws mid-sample and nothing about the sampled result, and the panel never opens that canvas",
       "keptNote": "kept: it decodes preview frames during sampling, which costs a little VRAM and time for a picture nobody in the panel path looks at"
     },
     {
@@ -51,7 +55,7 @@
       "class": "ApplyMiniMaxH3FirstBlockCache",
       "passthrough": "model",
       "when": "missing",
-      "reason": "a step-skipping residual cache: pure latency, and its own mode names ('H3 Safe / Fast / Aggressive') are a fidelity-for-speed trade. Bypassed, every step is computed — slower and no less correct",
+      "reason": "a step-skipping residual cache: pure latency, and its own mode names ('H3 Safe / Fast / Aggressive') are a fidelity-for-speed trade. Bypassed, every step is computed \u2014 slower and no less correct",
       "keptNote": "kept on 'H3 Safe', so some steps reuse the cached first-block residual"
     },
     {
@@ -60,14 +64,14 @@
       "passthrough": "model",
       "when": "missing",
       "reason": "swaps in a memory-efficient attention kernel. Bypassed, attention falls back to whatever the installed torch provides, which is correct but hungrier",
-      "keptNote": "kept: this is the entry most worth having on a small card — it lowers attention VRAM, so a machine without kjnodes may need a shorter clip or fewer megapixels to fit"
+      "keptNote": "kept: this is the entry most worth having on a small card \u2014 it lowers attention VRAM, so a machine without kjnodes may need a shorter clip or fewer megapixels to fit"
     },
     {
       "nodeId": 162,
       "class": "MiniMaxH3ScheduledSolAttentionPatch",
       "passthrough": "model",
       "when": "missing",
-      "reason": "a scheduled sparse-attention approximation (tau_start 1.25 -> tau_end 0.8): faster sampling at some fidelity cost by construction. Bypassed, attention stays dense the whole way — the slower, more faithful path",
+      "reason": "a scheduled sparse-attention approximation (tau_start 1.25 -> tau_end 0.8): faster sampling at some fidelity cost by construction. Bypassed, attention stays dense the whole way \u2014 the slower, more faithful path",
       "keptNote": "kept: its second output (tau_graph, an IMAGE) is a diagnostic this template never wires up, so only the MODEL socket matters here"
     },
     {
@@ -83,7 +87,7 @@
       "class": "PlaySound|pysssss",
       "passthrough": "any",
       "when": "missing",
-      "reason": "plays notify.mp3 on the ComfyUI machine when the queue empties. It is a terminal node — nothing in the graph consumes its output — so dropping it removes a chime and nothing else",
+      "reason": "plays notify.mp3 on the ComfyUI machine when the queue empties. It is a terminal node \u2014 nothing in the graph consumes its output \u2014 so dropping it removes a chime and nothing else",
       "keptNote": "kept: the owner's ComfyUI will beep when a panel-driven render finishes. Left as the template author wrote it; making it unconditional is a product decision, not a portability one"
     },
     {
@@ -92,13 +96,16 @@
       "substitute": {
         "class": "PrimitiveFloat",
         "inputs": {
-          "value": { "from": "Number", "as": "number" }
+          "value": {
+            "from": "Number",
+            "as": "number"
+          }
         }
       },
       "when": "missing",
       "reason": "the megapixel source, and the one node here that CANNOT be bypassed: its only input is a literal, so its consumers (ResolutionSelector.megapixels) would have nothing to rewire to. Core PrimitiveFloat has the identical FLOAT output and is already used twice in this same graph (nodes 136, 150), so it is a swap, not a workaround",
       "substituteNote": "ComfyLiterals' Float declares Number as a STRING widget and the template carries \".98\"; PrimitiveFloat wants a FLOAT, hence the 'as: number' coercion. Both signatures measured from /object_info on 2026-08-28. The panel's resolution injection writes node 167 BEFORE optional nodes resolve, so an injected megapixel figure is carried across by the same rule",
-      "keptNote": "kept: identical behaviour either way — this substitution exists to delete a pack dependency, not to change a render"
+      "keptNote": "kept: identical behaviour either way \u2014 this substitution exists to delete a pack dependency, not to change a render"
     },
     {
       "nodeId": 168,
@@ -155,7 +162,7 @@
         "Float"
       ],
       "optional": true,
-      "optionalReason": "every class it contributes here (Float) is substituted by a core node when the pack is absent — see optionalNodes"
+      "optionalReason": "every class it contributes here (Float) is substituted by a core node when the pack is absent \u2014 see optionalNodes"
     },
     {
       "pack": "comfyui-custom-scripts",
@@ -164,7 +171,7 @@
         "PlaySound|pysssss"
       ],
       "optional": true,
-      "optionalReason": "every class it contributes here (PlaySound|pysssss) is bypassable — see optionalNodes",
+      "optionalReason": "every class it contributes here (PlaySound|pysssss) is bypassable \u2014 see optionalNodes",
       "note": "CORRECTION to the 2026-08-25 scan: there is no collision. This pack registers PlaySound|pysssss and ComfyUI-KJNodes registers PlaySoundKJ - different class names, both resolved at once on the scan machine. Measured 2026-08-27 from /object_info."
     },
     {
@@ -174,7 +181,7 @@
         "easy cleanGpuUsed"
       ],
       "optional": true,
-      "optionalReason": "every class it contributes here (easy cleanGpuUsed) is bypassable — see optionalNodes"
+      "optionalReason": "every class it contributes here (easy cleanGpuUsed) is bypassable \u2014 see optionalNodes"
     },
     {
       "pack": "comfyui-kjnodes",
@@ -184,7 +191,7 @@
         "ModelPreviewOverrideKJ"
       ],
       "optional": true,
-      "optionalReason": "every class it contributes here (ModelPreviewOverrideKJ, MiniMaxH3MemoryEfficientSageAttentionPatch) is bypassable — see optionalNodes. Bypassing the attention patch RAISES VRAM, so it is the one to install first on a small card"
+      "optionalReason": "every class it contributes here (ModelPreviewOverrideKJ, MiniMaxH3MemoryEfficientSageAttentionPatch) is bypassable \u2014 see optionalNodes. Bypassing the attention patch RAISES VRAM, so it is the one to install first on a small card"
     },
     {
       "pack": "ComfyUI-MiniMaxH3-FirstBlockCache",
@@ -193,7 +200,7 @@
         "ApplyMiniMaxH3FirstBlockCache"
       ],
       "optional": true,
-      "optionalReason": "every class it contributes here (ApplyMiniMaxH3FirstBlockCache) is bypassable — see optionalNodes",
+      "optionalReason": "every class it contributes here (ApplyMiniMaxH3FirstBlockCache) is bypassable \u2014 see optionalNodes",
       "note": "CORRECTION to the 2026-08-25 scan: only ApplyMiniMaxH3FirstBlockCache comes from this pack. ComfyMathExpression does NOT - the running loader reports it as comfy_extras.nodes_math, i.e. CORE in ComfyUI 0.32.0. Measured 2026-08-27 from /object_info."
     },
     {
@@ -203,7 +210,7 @@
         "MiniMaxH3ScheduledSolAttentionPatch"
       ],
       "optional": true,
-      "optionalReason": "every class it contributes here (MiniMaxH3ScheduledSolAttentionPatch) is bypassable — see optionalNodes"
+      "optionalReason": "every class it contributes here (MiniMaxH3ScheduledSolAttentionPatch) is bypassable \u2014 see optionalNodes"
     },
     {
       "pack": "comfyui_nvidia_rtx_nodes",
@@ -212,7 +219,7 @@
         "RTXVideoSuperResolution"
       ],
       "optional": true,
-      "note": "NVIDIA-app dependent. MUST be bypassable — the panel bypasses it unless the node resolves."
+      "note": "NVIDIA-app dependent. MUST be bypassable \u2014 the panel bypasses it unless the node resolves."
     },
     {
       "pack": "(comfy-core)",
