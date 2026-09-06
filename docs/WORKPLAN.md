@@ -3724,7 +3724,7 @@ taken on what a buyer gets — so nothing measured after §17c needs a
 | ~~P1~~ | remote | **DONE 2026-09-06 (0.12.1).** `describeWorkflows` + `resolveWorkflow` with the baseline tiebreak; the alphabet no longer picks; `comfyWorkflows` setting; `catalogEntry` on both manifests; `test-workflow-resolve.js` (22 rows) | yes | P0 |
 | ~~P2~~ | remote | **DONE 2026-09-06.** `--frames`/`--boot`/`--stop` on both probes, `scripts/lib/comfy-managed.js`, `download-gen-weight.js`, chat-probe kind verdict, gate 0. Also fixed: both probes read `comfyUrl` where §17a had moved the answer to `backendUrl` | no | P1 |
 | P3 | local | H3 t2v re-run + `catalog-vram-probe --entry minimax-h3` → measured block | no | §17c, P2, AE |
-| P4 | remote | **NEXT REMOTE PASS.** Settings **Workflows** rows (label, kind, "renders X", NEEDS phrase, enabled, enhancement; examples hidden) | yes | P1 |
+| ~~P4~~ | remote | **DONE 2026-09-06 (0.12.2).** Settings **Workflows** rows via the pure `Tools.workflowRows()`; `test-workflow-rows.js` (21 rows) | yes | P1 |
 | P5 | local | sd15 basic + manifest + `workflowTemplate` + allowlist −sd15; **measure whether the frontend opens an API graph editable** | yes | §17c, P0–P2, AE |
 | P6 | local | sdxl as P5 | yes | P5 |
 | P7 | local | wan22-5b as P5; `--frames`; floor re-pin rule | yes | P5; 17 GB |

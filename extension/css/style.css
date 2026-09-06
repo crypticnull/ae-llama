@@ -327,11 +327,30 @@ input:focus, select:focus, textarea:focus { outline: 1px solid #2d6ca2; }
 #chat-input { flex: 1 1 auto; resize: none; }
 #composer-buttons { display: flex; flex-direction: column; gap: 4px; }
 
-/* Per-workflow prompt-enhancement toggles (ComfyUI settings section) */
+/* Per-workflow rows (ComfyUI settings section): what each template
+   renders, what it needs, whether it is enabled. */
 .enhance-block { margin: 8px 0; }
 .enhance-title { display: block; color: #bbb; margin-bottom: 4px; }
 .enhance-hint { color: #777; font-size: 11px; }
 #comfy-enhance-list .check { margin: 2px 0 2px 12px; }
+.wf-row { margin: 6px 0 8px 12px; padding-left: 6px;
+          border-left: 2px solid #333; }
+.wf-off { opacity: 0.5; }
+.wf-head { display: flex; align-items: center; gap: 6px; }
+.wf-head .check { margin: 0; }
+.wf-name { font-family: inherit; }
+.wf-badge { font-size: 10px; text-transform: uppercase;
+            letter-spacing: 0.4px; padding: 1px 5px; border-radius: 3px;
+            background: #333; color: #bbb; }
+.wf-image { background: #24404a; color: #9fd7e8; }
+.wf-video { background: #40304a; color: #cbaee8; }
+.wf-baseline { background: #3a3a24; color: #ddd79f; }
+.wf-sub { color: #999; font-size: 11px; margin: 1px 0 0 22px; }
+.wf-needs { color: #8a8a8a; font-size: 11px; margin: 1px 0 0 22px; }
+/* A template this card cannot hold: the requirement is the point, so it
+   is not greyed into the background like the rest of the row. */
+.wf-needs-hard { color: #d29b6e; }
+.wf-enhance { margin: 3px 0 0 22px !important; font-size: 11px; }
 
 /* Per-model download/remove rows (ComfyUI settings section) */
 .genmodel-row { display: flex; align-items: center; gap: 8px;

@@ -967,7 +967,12 @@ const PANEL_ONLY = {
   catalogModelStatus: "settings UI rows (gen model manager), never a " +
     "chat round — covered by test-gen-model-manager.js",
   removeCatalogWeights: "settings Remove button, never a chat round — " +
-    "covered by test-gen-model-manager.js"
+    "covered by test-gen-model-manager.js",
+  workflowRows: "settings UI rows (Workflows list), never a chat round. " +
+    "The CHOOSER those rows describe — Comfy.resolveWorkflow, reached " +
+    "through comfy_generate — is on the chat path and IS exercised by " +
+    "the probe; this is only the presentation over the same facts. " +
+    "Covered by test-workflow-rows.js"
 };
 const used = src => new Set(
   (src.match(/Tools\.[a-zA-Z]+/g) || []).map(m => m.split(".")[1]));

@@ -21,11 +21,9 @@
   function renderEnhanceToggles(s) {
     if (!els.comfyEnhanceList) return;
     els.comfyEnhanceList.innerHTML = "";
-    var flows = [];
-    try {
-      flows = global.Comfy.listWorkflows(s.comfyWorkflowsDir) || [];
-    } catch (e) {}
-    if (!flows.length) {
+    var rows = [];
+    try { rows = global.Tools.workflowRows(s) || []; } catch (e) {}
+    if (!rows.length) {
       var none = document.createElement("div");
       none.className = "enhance-hint";
       none.textContent = "No workflows found yet — they appear here " +
@@ -33,20 +31,76 @@
       els.comfyEnhanceList.appendChild(none);
       return;
     }
-    var map = s.comfyEnhance || {};
-    for (var i = 0; i < flows.length; i++) {
-      var label = document.createElement("label");
-      label.className = "check";
-      var box = document.createElement("input");
-      box.type = "checkbox";
-      box.checked = map[flows[i].name] !== false;
-      box.setAttribute("data-workflow", flows[i].name);
-      var span = document.createElement("span");
-      span.textContent = flows[i].name;
-      label.appendChild(box);
-      label.appendChild(span);
-      els.comfyEnhanceList.appendChild(label);
+    for (var i = 0; i < rows.length; i++) buildWorkflowRow(rows[i]);
+  }
+
+  /* One Workflows row. The MODEL is Tools.workflowRows(); this only
+   * turns it into DOM, so the part with rules in it is stub-tested. */
+  function buildWorkflowRow(r) {
+    var wrap = document.createElement("div");
+    wrap.className = "wf-row" + (r.enabled ? "" : " wf-off") +
+                     (r.fits ? "" : " wf-unfit");
+
+    var head = document.createElement("div");
+    head.className = "wf-head";
+
+    var on = document.createElement("label");
+    on.className = "check";
+    var onBox = document.createElement("input");
+    onBox.type = "checkbox";
+    onBox.checked = r.enabled;
+    onBox.setAttribute("data-wf-enabled", r.name);
+    var nameSpan = document.createElement("span");
+    nameSpan.className = "wf-name";
+    nameSpan.textContent = r.name;
+    on.appendChild(onBox);
+    on.appendChild(nameSpan);
+    head.appendChild(on);
+
+    if (r.kind) {
+      var badge = document.createElement("span");
+      badge.className = "wf-badge wf-" + r.kind;
+      badge.textContent = r.kind;
+      head.appendChild(badge);
     }
+    // Which graph the catalog itself points at — the one a nameless
+    // request gets when everything else ties.
+    if (r.baseline) {
+      var base = document.createElement("span");
+      base.className = "wf-badge wf-baseline";
+      base.textContent = "default";
+      head.appendChild(base);
+    }
+    wrap.appendChild(head);
+
+    if (r.label) {
+      var renders = document.createElement("div");
+      renders.className = "wf-sub";
+      renders.textContent = "renders " + r.label;
+      wrap.appendChild(renders);
+    }
+    // What it NEEDS. Every phrase is derived from the catalog entry and
+    // the manifest, so a row can never promise what the chooser refuses.
+    if (r.needs.length) {
+      var needs = document.createElement("div");
+      needs.className = "wf-needs" + (r.fits ? "" : " wf-needs-hard");
+      needs.textContent = r.needs.join(" · ");
+      wrap.appendChild(needs);
+    }
+
+    var enh = document.createElement("label");
+    enh.className = "check wf-enhance";
+    var enhBox = document.createElement("input");
+    enhBox.type = "checkbox";
+    enhBox.checked = r.enhance;
+    enhBox.setAttribute("data-workflow", r.name);
+    var enhSpan = document.createElement("span");
+    enhSpan.textContent = "rewrite my prompt for this workflow";
+    enh.appendChild(enhBox);
+    enh.appendChild(enhSpan);
+    wrap.appendChild(enh);
+
+    els.comfyEnhanceList.appendChild(wrap);
   }
 
   /**
@@ -226,6 +280,21 @@
     // instead so it survives the refresh.
     if (parts.length) appendMsg("info", parts.join(" "));
     renderTierLine();
+  }
+
+  /* Only the opt-OUTs, same rule as enhancement: a template arriving in
+   * an update is enabled without a settings migration. */
+  function collectWorkflowEnabled() {
+    var map = {};
+    if (!els.comfyEnhanceList) return map;
+    var boxes = els.comfyEnhanceList.querySelectorAll(
+      "input[data-wf-enabled]");
+    for (var i = 0; i < boxes.length; i++) {
+      if (!boxes[i].checked) {
+        map[boxes[i].getAttribute("data-wf-enabled")] = { enabled: false };
+      }
+    }
+    return map;
   }
 
   function collectEnhanceToggles() {
@@ -1103,6 +1172,7 @@
       comfyPauseLlm: els.setComfyPauseLlm.value || "auto",
       vramOverrideGB: parseInt(els.setVramOverride.value, 10) || 0,
       comfyEnhance: collectEnhanceToggles(),
+      comfyWorkflows: collectWorkflowEnabled(),
       autoInstallUpdates: !!els.setAutoUpdate.checked
     });
     renderTierLine();

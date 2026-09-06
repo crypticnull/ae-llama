@@ -20218,3 +20218,51 @@ render that succeeds on the wrong kind is still a routing failure.
 
 Suite 77/78 (the Windows-path-bound ffmpeg suite). All 20 `scripts/`
 files parse; the PowerShell suite is green with the real parser.
+
+## 2026-09-06 (remote session) — §18 P4: the Workflows rows say what a template NEEDS (0.12.2)
+
+WORKPLAN §18 P4, the last remote pass §18 had. The owner's ask was that
+workflows be "arranged and accessible via the plugin UI"; the review's
+sharpest note on the first draft of the row was that it carried nothing
+about what a template REQUIRES — no VRAM floor, no architecture gate, no
+"needs an image", no missing-weight count — while all four already exist
+one hop away through the manifest's `catalogEntry` link.
+
+**Each row now carries:** kind badge, the catalog model it renders (by
+the catalog's own label, not the file name), a `default` badge on the
+graph a nameless request actually gets, the NEEDS line, an ENABLE
+toggle, and the per-workflow prompt-rewrite toggle that used to be the
+whole list.
+
+**The format example loses its row.** It had a checkbox of its own while
+`tools.js` hid it from the model — a control for something that can
+never render (it holds the CHANGE-ME placeholder).
+
+**`Tools.workflowRows()` is pure and exported, and that is the point.**
+main.js has NO executed coverage, so every rule lives in the model and
+the DOM builder is a dumb renderer over it. 21 assertions in
+`tests/test-workflow-rows.js`.
+
+**The invariant worth the most: a row may never promise what the CHOOSER
+would refuse.** Both now read one `workflowFacts(s)` — entry link, fit,
+weights on disk, baseline — instead of each deriving its own, and
+`pickWorkflow` lost its private copies of those three predicates in the
+process. The last test asserts it end to end: the template the row marks
+`default` is the one `resolveWorkflow` really picks for a nameless image
+request. Without that they could drift into a UI that says one thing
+while generation does another.
+
+**Caught by an existing guard, again.** `test-chat-probe.js` asserts the
+probe uses every `Tools.` helper main.js's chat path uses, or that the
+helper is in `PANEL_ONLY` with a REASON. `workflowRows` is settings UI,
+so it is listed with the reason — and the reason states the thing that
+matters: the CHOOSER those rows describe IS on the chat path and IS
+exercised by the probe; this is only presentation over the same facts.
+
+Suite 78/79 (the Windows-path-bound ffmpeg suite). Prompt budget
+untouched — no rule or tool-doc text changed. BUMPED 0.12.1 ->
+**0.12.2**.
+
+**§18 has no remote passes left.** P3 and P5-P10 are local and need only
+§17c (which the loop can now take itself) — the queue is the owner's and
+the loop's from here.

@@ -1911,11 +1911,21 @@
    * plumbing the override through would be a hook with nothing on the
    * other end.
    */
-  function pickWorkflow(s, args) {
-    var descs = global.Comfy.describeWorkflows(s.comfyWorkflowsDir);
+  /*
+   * The three facts a template is judged by, assembled once: which
+   * catalog entry it renders, whether this card can hold it, and whether
+   * its weights are on the disk. Both the nameless-default resolver and
+   * the Settings rows read them, so a row can never say something the
+   * chooser disagrees with.
+   */
+  function workflowFacts(s) {
     var catalog = [];
     try { catalog = (global.AELL && global.AELL.COMFY_CATALOG) || []; }
     catch (eC) { catalog = []; }
+
+    var ctx = null;
+    try { ctx = global.Tiers.resolveTier(gpuCache, s); }
+    catch (eT) { ctx = null; }
 
     function entryOf(d) {
       if (!d.catalogEntry) return null;
@@ -1924,12 +1934,103 @@
       }
       return null;
     }
+    function fits(d) {
+      var e = entryOf(d);
+      // An entry we cannot link, or a card we cannot size, is treated as
+      // fitting: refusing on an unknown is how a working template becomes
+      // unreachable.
+      if (!e || !ctx) return true;
+      try { return global.Tiers.entryFits(e, ctx); }
+      catch (eF) { return true; }
+    }
+    function weightStatus(d) {
+      var e = entryOf(d);
+      if (!e) return null;
+      try {
+        var st = catalogModelStatus(e, s);
+        if (!st || !st.files || !st.files.length) return null;
+        var have = 0;
+        for (var i = 0; i < st.files.length; i++) {
+          if (st.files[i].path) have++;
+        }
+        return { have: have, total: st.files.length };
+      } catch (eW) { return null; }
+    }
+    return {
+      catalog: catalog, ctx: ctx, entryOf: entryOf, fits: fits,
+      weightStatus: weightStatus,
+      weightsPresent: function (d) {
+        var w = weightStatus(d);
+        return !!(w && w.total > 0 && w.have === w.total);
+      },
+      baseline: function (d) {
+        var e = entryOf(d);
+        return !!(e && e.workflowTemplate === d.name);
+      }
+    };
+  }
 
-    var ctx = null;
-    try {
-      ctx = global.Tiers.resolveTier(gpuCache, s);
-    } catch (eT) { ctx = null; }
+  /*
+   * One row per installed template, for Settings > ComfyUI > Workflows.
+   * PURE over its inputs and exported, because main.js has no executed
+   * coverage at all — the row MODEL is testable even though the DOM it
+   * becomes is not.
+   *
+   * `needs` is the half the owner asked for: what a template requires,
+   * derived from facts that already exist one hop away rather than from
+   * anything new. A row that says only "AE_LLAMA_H3_I2V_V1" tells a user
+   * nothing about why it will not run on their card.
+   */
+  function workflowRows(s) {
+    if (!s) { try { s = global.Settings.get(); } catch (e) { s = {}; } }
+    var descs = [];
+    try { descs = global.Comfy.describeWorkflows(s.comfyWorkflowsDir) || []; }
+    catch (eD) { descs = []; }
+    var f = workflowFacts(s);
+    var enh = s.comfyEnhance || {};
+    var enabled = s.comfyWorkflows || {};
+    var rows = [];
+    for (var i = 0; i < descs.length; i++) {
+      var d = descs[i];
+      // The format example is hidden here for the same reason the model
+      // is never offered it: it holds the CHANGE-ME placeholder and can
+      // never render. It used to get a checkbox of its own.
+      if (d.example) continue;
+      var e = f.entryOf(d);
+      var w = f.weightStatus(d);
+      var needs = [];
+      if (e && typeof e.minVramGB === "number") {
+        needs.push("needs " + e.minVramGB + "+ GB VRAM");
+      }
+      if (e && e.requiresBlackwell) needs.push("RTX 50 series only");
+      if (e && e.requiresAda) needs.push("RTX 40 series or newer");
+      if (d.requiresImage) needs.push("needs a reference image");
+      if (w && w.have < w.total) {
+        needs.push((w.total - w.have) + " of " + w.total +
+                   " model file(s) missing");
+      }
+      rows.push({
+        name: d.name,
+        kind: d.kind || null,
+        label: e ? e.label : null,
+        catalogEntry: d.catalogEntry || null,
+        baseline: f.baseline(d),
+        fits: f.fits(d),
+        takesImage: !!d.takesImage,
+        requiresImage: !!d.requiresImage,
+        lengthIn: d.lengthIn,
+        weights: w,
+        needs: needs,
+        enhance: enh[d.name] !== false,
+        enabled: !(enabled[d.name] && enabled[d.name].enabled === false)
+      });
+    }
+    return rows;
+  }
 
+  function pickWorkflow(s, args) {
+    var descs = global.Comfy.describeWorkflows(s.comfyWorkflowsDir);
+    var f = workflowFacts(s);
     return global.Comfy.resolveWorkflow(descs, {
       // A length was asked for => a video was asked for. No new argument
       // and no prompt bytes: the model already reaches these.
@@ -1937,32 +2038,13 @@
         ? "video" : "image",
       image: args.image,
       disabled: s.comfyWorkflows || {}
-    }, ctx, {
-      // An entry with no catalog link, or a card we cannot size, is
-      // treated as fitting - refusing on an unknown is how a working
-      // template becomes unreachable.
-      fits: function (d) {
-        var e = entryOf(d);
-        if (!e || !ctx) return true;
-        try { return global.Tiers.entryFits(e, ctx); }
-        catch (eF) { return true; }
-      },
-      weightsPresent: function (d) {
-        var e = entryOf(d);
-        if (!e) return false;
-        try {
-          var st = catalogModelStatus(e, s);
-          return !!(st && st.files && st.files.length &&
-                    st.files.every(function (f) { return !!f.path; }));
-        } catch (eW) { return false; }
-      },
+    }, f.ctx, {
+      fits: f.fits,
+      weightsPresent: f.weightsPresent,
       // The graph the catalog entry itself points at is the BASELINE.
       // Without this the owner's own refined template and the shipped
       // basic tie on every other axis and fall through to name order.
-      baseline: function (d) {
-        var e = entryOf(d);
-        return !!(e && e.workflowTemplate === d.name);
-      }
+      baseline: f.baseline
     });
   }
 
@@ -3619,6 +3701,7 @@
     setProgressSink: function (fn) { progressSink = fn; },
     catalogModelStatus: catalogModelStatus,
     removeCatalogWeights: removeCatalogWeights,
+    workflowRows: workflowRows,       // Settings > ComfyUI > Workflows
     _verifyMogrtResult: verifyMogrtResult, // exposed for tests
     _vramArbiter: VramArbiter,        // exposed for tests and probes
     _genNeedMBFor: genNeedMBFor,      // exposed for tests
