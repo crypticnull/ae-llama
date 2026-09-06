@@ -3720,11 +3720,11 @@ taken on what a buyer gets — so nothing measured after §17c needs a
 |---|---|---|---|---|
 | **§17a** | remote | managed backend by default: `comfyBackend`, own port, refuse-not-attach, `findLocalComfy` as an offer, migration on `loadedFrom` | yes | — |
 | **§17c** | local, LOOP-TAKEABLE | `node scripts/comfy-install.js --boot` (headless, 0.12.0); then `comfyModelRoots` at the existing stores; record the extracted size and the python/torch it pins (= §13a step 1) | no | §17a; ~10 GB free. The release carries a portable asset (VERIFIED, below), and the detached loop now carries APPDATA (below), so gate 0 no longer refuses |
-| P0 | remote | ratchet tests (bundle test warn-mode, two allowlists, manifests walk) | no | — |
-| P1 | remote | `describeWorkflows` + `resolveWorkflow` (incl. the baseline tiebreak) + `_graphCarriesValue`; tools.js :1958/:2061; `comfyWorkflows` setting; `catalogEntry`; re-pins; bundle test → assert | yes | P0 |
-| P2 | remote | probe `--frames`/`--boot`/`--stop`, `download-gen-weight.js`, chat-probe kind verdict, `Settings.origin()` gate | no | P1, §17c |
+| ~~P0~~ | remote | **DONE 2026-09-06.** `test-workflow-bundle.js`, two both-directions allowlists in `test-model-catalog.js`, manifests walk | no | — |
+| ~~P1~~ | remote | **DONE 2026-09-06 (0.12.1).** `describeWorkflows` + `resolveWorkflow` with the baseline tiebreak; the alphabet no longer picks; `comfyWorkflows` setting; `catalogEntry` on both manifests; `test-workflow-resolve.js` (22 rows) | yes | P0 |
+| ~~P2~~ | remote | **DONE 2026-09-06.** `--frames`/`--boot`/`--stop` on both probes, `scripts/lib/comfy-managed.js`, `download-gen-weight.js`, chat-probe kind verdict, gate 0. Also fixed: both probes read `comfyUrl` where §17a had moved the answer to `backendUrl` | no | P1 |
 | P3 | local | H3 t2v re-run + `catalog-vram-probe --entry minimax-h3` → measured block | no | §17c, P2, AE |
-| P4 | remote | Settings **Workflows** rows (label, kind, "renders X", NEEDS phrase, enabled, enhancement; examples hidden) | yes | P1 |
+| P4 | remote | **NEXT REMOTE PASS.** Settings **Workflows** rows (label, kind, "renders X", NEEDS phrase, enabled, enhancement; examples hidden) | yes | P1 |
 | P5 | local | sd15 basic + manifest + `workflowTemplate` + allowlist −sd15; **measure whether the frontend opens an API graph editable** | yes | §17c, P0–P2, AE |
 | P6 | local | sdxl as P5 | yes | P5 |
 | P7 | local | wan22-5b as P5; `--frames`; floor re-pin rule | yes | P5; 17 GB |
