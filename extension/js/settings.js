@@ -12,6 +12,11 @@
 
   var STORAGE_KEY = "com.cptk.aellama.settings";
 
+  // The comfyUrl every install shipped with before comfyBackend existed.
+  // A saved value EQUAL to it is an untouched default, not a choice —
+  // see the migration at the end of load().
+  var LEGACY_COMFY_URL = "http://127.0.0.1:8188";
+
   function extPath() {
     return global.AEBridge.getExtensionPath();
   }
@@ -56,6 +61,25 @@
       maxRounds: 6,
       dryRun: false,
       // --- ComfyUI (image/video generation) ---
+      // WHICH backend the panel talks to. "managed" (the default) is the
+      // portable ComfyUI the panel installs and boots itself, on a port
+      // it owns; comfyUrl is not consulted at all in that mode. "own" is
+      // the deliberate bypass for a user who runs their own instance.
+      //
+      // The default used to be an ACCIDENT: comfyUrl shipped as
+      // 127.0.0.1:8188 — ComfyUI's OWN default port — and ensureRunning
+      // used whatever answered there. So every buyer who already ran
+      // ComfyUI became a bring-your-own user without deciding to be one,
+      // and the panel priced jobs and checked weights against a model
+      // set it does not manage. comfy.js refuses to reroute to an
+      // instance found on ANOTHER port for exactly that reason; the
+      // matching-port door had no such guard.
+      comfyBackend: "managed",   // "managed" | "own"
+      // The port the MANAGED backend owns. Deliberately outside
+      // LOCAL_COMFY_PORTS (8188/8189/8000) so the panel never collides
+      // with, or is mistaken for, a ComfyUI the user started.
+      comfyManagedPort: 8288,
+      // Only consulted when comfyBackend is "own".
       comfyUrl: "http://127.0.0.1:8188",
       comfyDir: "",            // definable install folder (for Launch)
       comfyWorkflowsDir: j("comfy-workflows"),
@@ -177,6 +201,25 @@
     // pauses whenever the fit is unprovable); false keeps its meaning.
     if (merged.comfyPauseLlm === true) merged.comfyPauseLlm = "auto";
     if (merged.comfyPauseLlm === false) merged.comfyPauseLlm = "never";
+    // comfyBackend is new. An EXISTING install has to be sorted into a
+    // mode, and the only evidence is whether the user ever touched the
+    // URL: one they set themselves means they run their own ComfyUI, so
+    // moving them to "managed" would silently stop talking to it.
+    //
+    // The trap, and why this reads `saved` rather than the merged value:
+    // a DEFAULT must never be mistaken for an answer. Measured
+    // 2026-09-02 — an unattended probe with no APPDATA fell through to a
+    // path holding no settings.json, load() returned pure defaults, and
+    // the pass reported comfyUrl 8188 as THE OWNER'S SETTING when it was
+    // 8000 and had never been touched. Two sessions repeated the claim.
+    // So only a value that was really SAVED, and really differs from the
+    // shipped default, counts as a choice.
+    if (saved && !Object.prototype.hasOwnProperty.call(saved,
+                                                       "comfyBackend")) {
+      var savedUrl = typeof saved.comfyUrl === "string" ? saved.comfyUrl : "";
+      merged.comfyBackend =
+        (savedUrl && savedUrl !== LEGACY_COMFY_URL) ? "own" : "managed";
+    }
     return merged;
   }
 

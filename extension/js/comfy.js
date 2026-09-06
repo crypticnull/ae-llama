@@ -55,6 +55,48 @@
     };
   }
 
+  // ------------------------------------------------- which backend, and where
+  //
+  // The panel talks to ONE of two things and the user chooses which:
+  // the MANAGED portable install it boots itself (default), or their
+  // OWN ComfyUI at comfyUrl. Everything downstream — status, generate,
+  // missingWeights, freeVram, the arbiter — asks backendUrl() rather
+  // than reading comfyUrl, so the mode is decided in one place.
+  //
+  // Managed owns a port outside LOCAL_COMFY_PORTS and never consults
+  // comfyUrl, because the old default WAS comfyUrl and it pointed at
+  // ComfyUI's own port: a user who already ran ComfyUI silently became
+  // a bring-your-own user, and the panel then priced jobs and checked
+  // weights against a model set it does not manage.
+  var MANAGED_PORT = 8288;
+
+  /** "managed" | "own". Absent = "own": a caller handing us an explicit
+   *  URL predates the setting and means the instance at that URL. */
+  function backendMode(settings) {
+    var s = settings;
+    if (!s) {
+      try { s = global.Settings.get() || {}; } catch (e) { s = {}; }
+    }
+    return s.comfyBackend === "managed" ? "managed" : "own";
+  }
+
+  /** The port the managed backend owns, defaulted and range-checked. */
+  function managedPort(settings) {
+    var s = settings || {};
+    var p = parseInt(s.comfyManagedPort, 10);
+    return (p > 0 && p < 65536) ? p : MANAGED_PORT;
+  }
+
+  /** The URL every caller should use. Never read comfyUrl directly. */
+  function backendUrl(settings) {
+    var s = settings;
+    if (!s) {
+      try { s = global.Settings.get() || {}; } catch (e) { s = {}; }
+    }
+    if (backendMode(s) === "own") return s.comfyUrl || "";
+    return "http://127.0.0.1:" + managedPort(s);
+  }
+
   function requestJson(base, method, urlPath, body, timeoutMs, cb) {
     ensureNode();
     var mod = base.isHttps ? https : http;
@@ -1775,7 +1817,12 @@
 
   // ---------------------------------------------------------------- status
 
-  function status(comfyUrl, cb) {
+  function status(comfyUrl, cb, settings) {
+    var s = settings;
+    if (!s) {
+      try { s = global.Settings.get() || {}; } catch (eS) { s = {}; }
+    }
+    var mode = backendMode(s);
     var base = parseBase(comfyUrl);
     requestJson(base, "GET", "/queue", null, 5000,
       function (err, statusCode, json) {
@@ -1787,13 +1834,16 @@
           } catch (eH) {}
           // A ComfyUI on this machine at another port outranks both
           // canned hints: it is the one thing the user can act on in one
-          // setting change.
+          // setting change. In MANAGED mode it is an OFFER — the panel
+          // has its own backend and will not switch on its own — and in
+          // OWN mode it is the URL correction it always was.
           findLocalComfy(base, function (found) {
             cb(null, { online: false, url: comfyUrl, target: base.label,
+                       backend: mode,
                        hiddenBackendInstalled: hasHidden,
                        foundAt: found ? found.url : null,
                        hint: found
-                         ? elsewhereHint(base, found)
+                         ? elsewhereHint(base, found, mode)
                          : (hasHidden
                              ? "Hidden backend installed — it boots " +
                                "automatically on the next generation request."
@@ -1809,7 +1859,7 @@
         var pending = json.queue_pending instanceof Array
           ? json.queue_pending.length : 0;
         cb(null, { online: true, url: comfyUrl, target: base.label,
-                   running: running, pending: pending });
+                   backend: mode, running: running, pending: pending });
       });
   }
 
@@ -1966,7 +2016,15 @@
   }
 
   /** The sentence a user can act on, once findLocalComfy has an answer. */
-  function elsewhereHint(base, found) {
+  function elsewhereHint(base, found, mode) {
+    if (mode === "managed") {
+      // The panel has its own backend; this is an offer, not a fix.
+      return "The panel's own ComfyUI is not running at " + base.label +
+        " yet — it boots on the next generation. A DIFFERENT ComfyUI is " +
+        "answering at " + found.label + ": to use that one instead, " +
+        "switch Settings → ComfyUI to 'Use my own ComfyUI' and set the " +
+        "URL to " + found.url + ". The panel will not switch on its own.";
+    }
     return "Nothing is listening at " + base.label + ", but a ComfyUI IS " +
       "answering at " + found.label + ". Set the ComfyUI URL in Settings " +
       "to " + found.url + " — the panel will not switch to it on its own.";
@@ -2096,16 +2154,49 @@
   }
 
   /**
-   * Make sure a ComfyUI answers at the configured URL. An already-running
-   * instance (the user's own) is used as-is; otherwise the hidden vendor
-   * install is booted invisibly on that port and health-polled up.
+   * Make sure a ComfyUI answers where this panel expects one.
+   *
+   * MANAGED mode: the panel owns its port. Something already answering
+   * there is ours only if we started it (this session, or a previous one
+   * whose PID we remembered) — anything else is REFUSED, never adopted.
+   * Adopting it would be the same defect the old default shipped: a
+   * server the panel did not start, silently deciding what models exist.
+   * Foreign instances on other ports are ignored here by design; status()
+   * offers them as a mode switch instead.
+   *
+   * OWN mode: unchanged. Whatever answers at comfyUrl is used as-is, a
+   * ComfyUI found on another local port is named rather than adopted,
+   * and the vendor install is the fallback.
    */
-  function ensureRunning(comfyUrl, onStatus, cb) {
+  function ensureRunning(comfyUrl, onStatus, cb, settings) {
     ensureNode();
+    var s = settings;
+    if (!s) {
+      try { s = global.Settings.get() || {}; } catch (eS0) { s = {}; }
+    }
+    var managed = backendMode(s) === "managed";
     var base = parseBase(comfyUrl);
     function say(t) { if (onStatus) onStatus(t); }
     isUp(base, function (up) {
-      if (up) { cb(null, { started: false }); return; }
+      if (up) {
+        if (!managed || ownsManagedBackend()) {
+          cb(null, { started: false });
+          return;
+        }
+        // Managed, the port answers, and it is not ours. Refusing is the
+        // whole point of owning a port: attaching here is the bug the
+        // mode exists to remove, wearing a different port number.
+        cb(new Error("Something is already answering on " + base.label +
+          ", the port this panel's own ComfyUI uses, and the panel did " +
+          "not start it. Change 'Managed backend port' in Settings → " +
+          "ComfyUI, or switch to 'Use my own ComfyUI' and point the URL " +
+          "at it."));
+        return;
+      }
+      if (managed) {
+        bootManaged(base, say, cb);
+        return;
+      }
       // Before refusing, look: a running ComfyUI at another local port
       // makes both refusals below wrong advice.
       findLocalComfy(base, function (found) {
@@ -2119,82 +2210,104 @@
           "or point the URL at 127.0.0.1 to use the hidden backend."));
         return;
       }
-      var install = global.Setup && global.Setup.findComfyInstall
-        ? global.Setup.findComfyInstall() : null;
-      if (!install) {
-        cb(new Error("ComfyUI is not running and the hidden backend is " +
-          "not installed. Install it in Settings → ComfyUI → 'Install " +
-          "hidden backend', or launch your own ComfyUI."));
-        return;
-      }
-      if (startWaiters) { startWaiters.push(cb); return; }
-      startWaiters = [cb];
-      applyExtraModelPaths(install);
-      say("Starting the hidden ComfyUI backend…");
-      var errTail = "";
-      var proc;
-      try {
-        proc = child_process.spawn(install.python,
-          ["-s", install.mainPy, "--windows-standalone-build",
-           "--port", String(base.port), "--listen", "127.0.0.1",
-           "--disable-auto-launch"],
-          { cwd: install.root, windowsHide: true });
-      } catch (eS) {
-        var early = startWaiters;
-        startWaiters = null;
-        for (var w = 0; w < early.length; w++) early[w](eS);
-        return;
-      }
-      managedProc = proc;
-      rememberPid(proc.pid);
-      function tail(d) {
-        errTail = (errTail + d.toString()).slice(-600);
-      }
-      proc.stdout.on("data", tail);
-      proc.stderr.on("data", tail);
-      var settledBoot = false;
-      function finishBoot(err) {
-        if (settledBoot) return;
-        settledBoot = true;
-        var ws = startWaiters || [];
-        startWaiters = null;
-        for (var i = 0; i < ws.length; i++) {
-          ws[i](err, err ? null : { started: true });
-        }
-      }
-      proc.on("error", function (e) {
-        managedProc = null;
-        forgetPid();
-        finishBoot(new Error("Backend failed to start: " + e.message));
-      });
-      proc.on("exit", function (code) {
-        managedProc = null;
-        forgetPid();
-        finishBoot(new Error("Backend exited during startup (code " +
-          code + ")" + (errTail ? " — " + errTail : "")));
-      });
-      // First boot can take a while (model scans, torch warm-up).
-      var deadline = new Date().getTime() + 240000;
-      (function poll() {
-        if (settledBoot) return;
-        isUp(base, function (nowUp) {
-          if (settledBoot) return;
-          if (nowUp) {
-            say("Hidden ComfyUI backend is up.");
-            finishBoot(null);
-            return;
-          }
-          if (new Date().getTime() > deadline) {
-            finishBoot(new Error("Backend did not come up within 4 " +
-              "minutes" + (errTail ? " — " + errTail : "")));
-            try { proc.kill(); } catch (eK) {}
-            return;
-          }
-          global.setTimeout(poll, 2500);
-        });
-      })();
+      bootManaged(base, say, cb);
       });   // findLocalComfy
     });
+  }
+
+  /**
+   * Is the thing answering on the managed port OURS? We started it this
+   * session (managedProc), or a previous session did and its PID is
+   * still remembered — reapOrphan clears that key at init when the PID
+   * is not a ComfyUI, so a stale one does not linger. There is no way to
+   * ask a server over HTTP who started it, which is exactly why the
+   * panel owns a port instead of asking.
+   */
+  function ownsManagedBackend() {
+    if (managedProc) return true;
+    var pid = null;
+    try { pid = parseInt(global.localStorage.getItem(COMFY_PID_KEY), 10); }
+    catch (e) {}
+    return !!pid;
+  }
+
+  /** Spawn the vendor install on `base`'s port and health-poll it up. */
+  function bootManaged(base, say, cb) {
+    ensureNode();
+    var install = global.Setup && global.Setup.findComfyInstall
+      ? global.Setup.findComfyInstall() : null;
+    if (!install) {
+      cb(new Error("ComfyUI is not running and the hidden backend is " +
+        "not installed. Install it in Settings → ComfyUI → 'Install " +
+        "hidden backend', or launch your own ComfyUI."));
+      return;
+    }
+    if (startWaiters) { startWaiters.push(cb); return; }
+    startWaiters = [cb];
+    applyExtraModelPaths(install);
+    say("Starting the hidden ComfyUI backend…");
+    var errTail = "";
+    var proc;
+    try {
+      proc = child_process.spawn(install.python,
+        ["-s", install.mainPy, "--windows-standalone-build",
+         "--port", String(base.port), "--listen", "127.0.0.1",
+         "--disable-auto-launch"],
+        { cwd: install.root, windowsHide: true });
+    } catch (eS) {
+      var early = startWaiters;
+      startWaiters = null;
+      for (var w = 0; w < early.length; w++) early[w](eS);
+      return;
+    }
+    managedProc = proc;
+    rememberPid(proc.pid);
+    function tail(d) {
+      errTail = (errTail + d.toString()).slice(-600);
+    }
+    proc.stdout.on("data", tail);
+    proc.stderr.on("data", tail);
+    var settledBoot = false;
+    function finishBoot(err) {
+      if (settledBoot) return;
+      settledBoot = true;
+      var ws = startWaiters || [];
+      startWaiters = null;
+      for (var i = 0; i < ws.length; i++) {
+        ws[i](err, err ? null : { started: true });
+      }
+    }
+    proc.on("error", function (e) {
+      managedProc = null;
+      forgetPid();
+      finishBoot(new Error("Backend failed to start: " + e.message));
+    });
+    proc.on("exit", function (code) {
+      managedProc = null;
+      forgetPid();
+      finishBoot(new Error("Backend exited during startup (code " +
+        code + ")" + (errTail ? " — " + errTail : "")));
+    });
+    // First boot can take a while (model scans, torch warm-up).
+    var deadline = new Date().getTime() + 240000;
+    (function poll() {
+      if (settledBoot) return;
+      isUp(base, function (nowUp) {
+        if (settledBoot) return;
+        if (nowUp) {
+          say("Hidden ComfyUI backend is up.");
+          finishBoot(null);
+          return;
+        }
+        if (new Date().getTime() > deadline) {
+          finishBoot(new Error("Backend did not come up within 4 " +
+            "minutes" + (errTail ? " — " + errTail : "")));
+          try { proc.kill(); } catch (eK) {}
+          return;
+        }
+        global.setTimeout(poll, 2500);
+      });
+    })();
   }
 
   /** Shut the hidden backend down (panel close frees its VRAM). */
@@ -2218,6 +2331,9 @@
   global.Comfy = {
     listWorkflows: listWorkflows,
     readManifest: readManifest,
+    backendUrl: backendUrl,
+    backendMode: backendMode,
+    managedPort: managedPort,
     loadWorkflow: loadWorkflow,
     injectParams: injectParams,
     outputScaleFrom: outputScaleFrom,

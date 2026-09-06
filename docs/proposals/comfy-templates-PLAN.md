@@ -78,6 +78,67 @@ Corrections to the synthesised draft:
 
 ---
 
+## 0.5 Owner decisions — ANSWERED 2026-09-06
+
+All six answered. Two of them change the plan's shape, not just a row.
+
+| # | question | answer |
+|---|---|---|
+| Q5 | backend route | **Build the portable first.** Route (a) — the owner's ComfyUI on 8000 — is REFUSED for unattended work. §17a then §17c are prerequisites for every local pass. |
+| Q1 | ltx-small | **Postpone.** Not pinned, not dropped. Stays in `ALLOW_NO_TEMPLATE` indefinitely; P9 is struck; P10 cannot empty that list. |
+| Q2 | minimax-h3-int8 | **Yes — download the 26 GB encoder** and prove it. |
+| Q3 | refinement round-trip | **Yes** — a refined graph is a NEW file, never an edit of a shipped one. |
+| Q4 | KREA2 `enhancerInstruction` | **Strip** the machine-specific lines. |
+| Q6 | core-only siblings | **Build basics for every entry, krea2 and h3 included** — and see the reframe below. |
+
+### The reframe, in the owner's words
+
+> "build basic ones and redefine my supplied one as alternate custom
+> additions just for me for now. I want to fully build the user's
+> environment and think of mine as another level on top of that that's
+> separate"
+
+**The product's baseline is the core-only basic set.** The owner's
+authored graphs (`AE_LLAMA_KREA2_V1`, `AE_LLAMA_H3_I2V_V1`, and the
+unshipped `AE_LLAMA_H3_R2V_V1`) stop being the shipped default and
+become a personal layer on top. This is not a demotion of their quality
+— it is the recognition that they were never evidence about a buyer's
+environment, the same finding §17c makes about the owner's ComfyUI.
+
+Consequences, each measured:
+
+1. **Per-entry, never wholesale.** An authored graph leaves the bundle
+   only once that entry's basic is shipped AND rendered. Removing
+   `AE_LLAMA_KREA2_V1` before `AE_LLAMA_KREA2_T2I_V1` exists would leave
+   krea2 with no graph — the defect §18 exists to close.
+2. **The owner keeps his.** `ensureDataDirs` (`setup.js:84-116`) seeds,
+   refreshes and preserves; it has **no delete path** — verified. A file
+   already in `%APPDATA%\AE-Llama\comfy-workflows` survives its removal
+   from the bundle, so the owner's machine ends up with both layers,
+   which is exactly what he asked for.
+3. **The UI sources stay** in `extension/workflows/` — nothing at
+   runtime reads that folder (verified: no reference in any
+   `extension/js/*.js`). But `package-zxp.ps1:72-77` excludes only
+   `.debug`, `vendor`, `models`, `generated`, so **~200 KB of the
+   owner's authored graphs ships inside every buyer's ZXP today and is
+   never read.** Add `workflows` to `$excludeDirs` — right on size
+   grounds before this reframe, and right on principle after it. New
+   pass P11.
+4. **The resolver needs a deliberate baseline tiebreak.** On the owner's
+   machine both `AE_LLAMA_KREA2_V1` and the basic will be present, same
+   entry, same fit, same weights on disk — §2's ordering would fall
+   through to NAME, and `..._T2I_V1` beating `..._V1` alphabetically is
+   luck, not design. So `resolveWorkflow` gains one ordering step before
+   name: **prefer the template the catalog entry's `workflowTemplate`
+   points at.** That uses data the plan already has, adds no manifest
+   key, and makes "the baseline wins unless asked otherwise" explicit.
+5. **Q4 gets easier.** Stripping KREA2's machine-specific enhancer lines
+   is no longer surgery on a shipped file — the basic carries no
+   `enhancerInstruction` at all (the generic one, `tools.js:3254-3258`),
+   and the authored graph keeps its own text in the owner's layer.
+
+---
+
 ## 1. Principle
 
 **Basic (ships now).** The smallest core-node API graph per catalog
@@ -183,15 +244,15 @@ opt-out is silently bypassed on a nameless or miscased call).
 |---|---|---|---|---|
 | **sd15** (:93) | `AE_LLAMA_SD15_T2I_V1`: the `example-txt2img.json` shape (`CheckpointLoaderSimple`, `KSampler`, `EmptyLatentImage`, 2× `CLIPTextEncode`, `VAEDecode`, `SaveImage`) with the real ckpt, 512². Neither loader nor sampler is in the harvest — confirm every input name | 2,034 MiB, `checkpoints` | VRAM | **1** — cheapest proof of the whole chain |
 | **sdxl** (:102) | same shape, ckpt swap, 1024² | 6,617 MiB | VRAM; whether `slowBelowGB: 8` is real | 2 |
-| **minimax-h3** (:168) | EXISTS and has RENDERED t2v (§0 #2). Add `catalogEntry`. Core-only sibling is owner-optional (Q6) | shipped | quality without a frame — rendered, never judged | 3 — a regression re-run + the missing measured block |
+| **minimax-h3** (:168) | `AE_LLAMA_H3_T2V_V1` — core-only, from the authored graph's `--bare` resolved shape read back against `/object_info`. The authored `AE_LLAMA_H3_I2V_V1` has RENDERED t2v (§0 #2) and stays until this is proven, then moves to the owner's layer | shipped | quality without a frame — rendered, never judged | 3 — regression re-run + the missing measured block, THEN the basic |
 | **wan22-5b** (:153) | `AE_LLAMA_WAN22_5B_T2V_V1`: `UNETLoader` / `CLIPLoader` / `VAELoader` (in harvest) + the 5B latent / sampler nodes — **class names unknown here, read them from `/object_info`**; literal numeric `length`; `CreateVideo` + `SaveVideo` mp4/h264. If `/object_info` marks the image input optional → ONE graph with `firstFrame.detachable`; if required → i2v is a second file later | 3 files, 17,304 MiB; `minVramGB: 8` (:155) | VRAM — if the delta exceeds 8 GiB, raise the floor and re-pin in the same commit | 4 — first new video graph |
-| **krea2** (:114) | EXISTS (authored; ran bare at 10 s in 0.9.23). Add `catalogEntry`. Core-only sibling owner-optional (Q6) | 3 files, urls unpinned | §17d re-take | done |
+| **krea2** (:114) | `AE_LLAMA_KREA2_T2I_V1` — core-only (UNETLoader + CLIPLoader + VAELoader are in the harvest; the sampler chain is not — read it from `/object_info`). The authored graph ran bare at 10 s vs 17 s (0.9.23), so the bare path is measured; it stays until the basic is proven, then moves to the owner's layer | 3 files, urls unpinned | §17d re-take | 5 |
 | **minimax-h3-int8** (:188) | almost certainly the H3 graph with one encoder swapped: a second API file from the H3 UI source via `adapt-workflow.js --manifest` (`:702`) with `panelAdaptation.setInputs` on the CLIPLoader (node 137, `clip_name`). **Confirm from the UI source; do not assume** | int8 encoder 25,884 MiB | "usable at all is a P4 measurement" (:191-193); no non-Blackwell card here | owner (Q2) |
-| **ltx-small** (:144) | none: `urls: []` (:148), so no Settings row either (`main.js:83-86`) | none | pin or drop | owner (Q1) |
+| **ltx-small** (:144) | **POSTPONED (Q1).** `urls: []` (:148), so no download, no graph, no Settings row (`main.js:83-86`). Stays in `ALLOW_NO_TEMPLATE` | none | pin or drop, later | — |
 
-The two authored graphs are **grandfathered** as their entries' basic
-tier: §2's contract binds NEW files. Whether a core-only sibling per
-entry is worth a pass is Q6 (default: no).
+Every entry gets a core-only basic (Q6). The two authored graphs are
+NOT the basic tier — they are the owner's layer (§0.5), and each leaves
+the bundle only after its entry's basic has rendered.
 
 ---
 
@@ -327,36 +388,39 @@ CheckpointLoaderSimple, Wan\*) first.
 
 ## 6. Passes — one item each, smallest first
 
-**Backend rule — two routes, both named per pass.**
-
-- **(a) attended, the owner's ComfyUI on 8000** (Q5). Until §17a lands
-  `ensureRunning` finds 8000 and refuses to boot anything else, and
-  `genWeightDest` has no vendor tree — so downloads need
-  `comfyModelsDir` SET (never to the owner's own store) and 8000
-  UN-BLINDED to read it (§7b bullet 1: `extra_model_paths.yaml` in
-  `Documents\ComfyUI`). Every VRAM number taken here is a §17d re-take.
-- **(b) unattended, after §17a + §17c:** the loop boots the managed
-  backend with `--boot`. This is the real unblock; §17a/§17c are rows
-  below with owners, not assumptions.
+**Backend rule — ONE route (Q5: "build the portable first").** The
+owner's ComfyUI on 8000 is refused for unattended work, so §17a then
+§17c are hard prerequisites for every local pass below. After them the
+loop boots the MANAGED backend itself with `--boot`/`--stop` on a
+non-8000 port, ignores the owner's instance by design, and every VRAM
+reading is taken on the environment a buyer actually gets — no §17d
+re-take needed for anything measured after §17c. Nothing local starts
+before §17c is green.
 
 **P0–P2 are remote and are pushed BEFORE the first overnight run** — P5
 depends on all three, and the loop reads the workplan fresh each pass.
 
 | # | who | files | bump | instrument | needs |
 |---|---|---|---|---|---|
+| **§17a** | remote | **managed backend by default** — `comfyBackend`, its own port, refuse-not-attach, `findLocalComfy` as an offer, migration on `loadedFrom` | **yes** | §17a's five-row matrix, stubbed | — |
+| **§17c** | local | install the vendor portable backend here; `comfyModelRoots` at the existing stores; record its extracted size | no | `weight-availability-probe`, `Comfy.missingWeights` empty for KREA2 | §17a |
 | P0 | remote | `test-workflow-bundle.js` (catalogEntry warn-mode), `test-model-catalog.js` two allowlists, `test-workflow-manifests.js` walk, §18 rewrite, memory index | no | `node tests/*` | — |
-| P1 | remote | `comfy.js` describe/resolve/`_graphCarriesValue`; `tools.js` :1958 :2061; `settings.js` `comfyWorkflows`; both manifests + `catalogEntry`; hash; choice + settings re-pins; bundle test → assert | **yes** | stub suite; budget unchanged | P0 |
-| P2 | remote | `comfy-probe` `--frames`/`--boot`/`--stop`; `catalog-vram-probe` `--boot`/`--stop`; `download-gen-weight.js`; chat-probe kind verdict; `Settings.origin()` gate | no | dry-run attended on 8000 | P1 |
-| P3 | local | H3 t2v regression re-run + `catalog-vram-probe --entry minimax-h3` → reading in LOG | no | `comfy-probe` (no `--image`), 9 verdicts | P2; route (a) Q5 or (b); AE |
+| P1 | remote | `comfy.js` describe/resolve/`_graphCarriesValue`; `tools.js` :1958 :2061; `settings.js` `comfyWorkflows`; both manifests + `catalogEntry`; hash; choice + settings re-pins; bundle test → assert. Resolver's baseline tiebreak (§0.5 #4) | **yes** | stub suite; budget unchanged | P0 |
+| P2 | remote | `comfy-probe` `--frames`/`--boot`/`--stop`; `catalog-vram-probe` `--boot`/`--stop`; `download-gen-weight.js`; chat-probe kind verdict; `Settings.origin()` gate | no | dry-run on the managed backend | P1, §17c |
+| P3 | local | H3 t2v regression re-run + `catalog-vram-probe --entry minimax-h3` → measured block | no | `comfy-probe` (no `--image`), 9 verdicts | §17c, P2, AE |
 | P4 | remote | `index.html:184-191`, `main.js:21-50` → Workflows rows via `describeWorkflows` + pure row model | **yes** | stub on the row model; owner eyeballs | P1 |
-| P5 | local | `AE_LLAMA_SD15_T2I_V1` + manifest; `version.js` `workflowTemplate`; `ALLOW_NO_TEMPLATE` −sd15; hash; the frontend-editable measurement | **yes** | download → (b)–(e) | P0–P2; route (a) or (b); AE |
+| P5 | local | `AE_LLAMA_SD15_T2I_V1` + manifest; `version.js` `workflowTemplate`; `ALLOW_NO_TEMPLATE` −sd15; hash; **the frontend-editable measurement** | **yes** | download → (b)–(e) | §17c, P0–P2, AE |
 | P6 | local | sdxl as P5 | **yes** | as P5 | P5 |
 | P7 | local | wan22-5b: `/object_info` decides one graph or two; `--frames` | **yes** | as P5 + ftyp / AE duration; floor re-pin rule | P5; 17 GB disk |
-| P8 | local | h3-int8: second API file via `adapt --manifest` setInputs — confirm from the H3 UI source first | **yes** | (a)–(c) on a non-Blackwell card | P1; owner Q2 |
-| P9 | owner → local | ltx-small pin or drop; `test-tiers.js:105-107` re-pin | **yes** | stub | owner Q1 |
-| P10 | remote | `ALLOW_NO_TEMPLATE → []`; `ALLOW_UNMEASURED → []` as vendor readings land; ratchet hard | tests only, unless `tiers.js` | CI | P5–P9; §17d |
-| §17a | remote | managed backend by default (filed) | **yes** | §17a's matrix | owner decision on port |
-| §17c | local | vendor install on this machine (filed) | no | `weight-availability-probe` | §17a, or owner stops 8000 |
+| P8 | local | `AE_LLAMA_KREA2_T2I_V1` core-only; on proof, `AE_LLAMA_KREA2_V1` leaves the bundle (owner's copy survives, §0.5 #2) | **yes** | as P5 + a bare-vs-authored timing note (0.9.23: 10 s vs 17 s) | P5 |
+| P9 | local | `AE_LLAMA_H3_T2V_V1` core-only; on proof, `AE_LLAMA_H3_I2V_V1` leaves the bundle | **yes** | as P5 | P3, P7 |
+| P10 | local | h3-int8: **download the 26 GB encoder (Q2: yes)**, second API file via `adapt --manifest` setInputs — confirm from the H3 UI source first | **yes** | (b)–(c); a Blackwell card answers "does 32 GB hold it", not "does it work without Blackwell" | P9; 26 GB disk |
+| P11 | remote | `package-zxp.ps1` `$excludeDirs` += `workflows` — ~200 KB of authored graphs ships to every buyer and nothing reads it (§0.5 #3) | **yes** | ZXP built and listed; `test-*` green | — |
+| P12 | remote | `ALLOW_UNMEASURED → []` as readings land; `ALLOW_NO_TEMPLATE → [ltx-small]` and **stops there** (Q1 postponed) | tests only | CI | P3–P10 |
+
+**Struck:** the old P9 (ltx-small pin-or-drop) — postponed by Q1. Its
+allowlist entry is now permanent until the owner revisits it, so P12
+cannot empty that list and must not try.
 
 Every pass: log entry, `node scripts/memory-index.js`,
 `capability-report.js` when CAPABILITIES changes. Every local pass: gate
@@ -364,28 +428,16 @@ Every pass: log entry, `node scripts/memory-index.js`,
 
 ---
 
-## 7. Owner decisions — the ones that change the build
+## 7. Owner decisions — ALL ANSWERED 2026-09-06
 
-1. **ltx-small:** pin files or drop the entry (drop removes the 6 GB
-   video pick — `test-tiers.js:105-107` and the T2 copy re-pin).
-2. **minimax-h3-int8:** download the 26 GB encoder to prove it on a
-   non-Blackwell card, or leave the entry unproven? There is no shipping
-   path for an unmeasured template.
-3. **Refinement round-trip:** a hand-improved graph comes back as a UI
-   export under a NEW name in `extension/workflows/` (regenerable via
-   `adapt-workflow.js` after re-harvest), never as an edit of the seeded
-   basic — confirm.
-4. **KREA2 `enhancerInstruction`** carries machine-specific lines
-   ("ACTIVE LORA TRIGGERS", "ASPECT: portrait", manifest :164) — strip
-   in the bundle, or keep?
-5. **Until §17c lands, may the loop probe your ComfyUI on 8000?** Route
-   (a) is attended by definition — nothing unattended may touch it
-   without this.
-6. **Core-only siblings for krea2 / h3** (`AE_LLAMA_KREA2_T2I_V1`,
-   `AE_LLAMA_H3_T2V_V1`), or grandfather the authored graphs as their
-   basic tier? Default: grandfather.
+See §0.5 for the answers and what each changed. Nothing in this plan is
+waiting on the owner any more; the next blocking question, if one
+appears, is §17a's managed port number.
 
----
+The one deferred item is **ltx-small** (Q1: postpone) — it keeps a
+permanent seat in `ALLOW_NO_TEMPLATE` until the owner decides to pin its
+weights or drop the entry, and until then the 6 GB tier's video pick
+points at a model with neither weights nor a graph.
 
 ## 8. Risks not mitigated, and why
 

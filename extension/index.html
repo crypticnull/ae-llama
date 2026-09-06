@@ -125,12 +125,24 @@
       <div id="comfy-settings" class="hidden">
         <h3>ComfyUI (image / video generation)</h3>
 
-        <label>Instance URL
+        <label>Backend
+          <select id="set-comfy-backend">
+            <option value="managed">Built-in (the panel installs and runs it)</option>
+            <option value="own">Use my own ComfyUI</option>
+          </select>
+        </label>
+
+        <label>Built-in backend port
+          <input id="set-comfy-managed-port" type="number" min="1"
+                 max="65535" step="1" placeholder="8288"/>
+        </label>
+
+        <label>Instance URL (only used with "Use my own ComfyUI")
           <input id="set-comfy-url" type="text" spellcheck="false"
                  placeholder="http://127.0.0.1:8188"/>
         </label>
 
-        <label>Install folder (for Launch button)
+        <label>My ComfyUI install folder (for the Launch button; only used with "Use my own ComfyUI")
           <div class="pathfield">
             <input id="set-comfy-dir" type="text" spellcheck="false"/>
             <button id="btn-browse-comfy-dir">&hellip;</button>

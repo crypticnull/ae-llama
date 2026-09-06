@@ -101,6 +101,10 @@ const window = {
   Comfy: {
     listWorkflows: comfyWindow.Comfy.listWorkflows,
     readManifest: () => null,
+    // The panel asks comfy.js WHICH backend it is talking to (managed
+    // vs the user's own) rather than reading comfyUrl — keep the stub
+    // faithful to that, or every call site throws.
+    backendUrl: (s) => (s && s.comfyUrl) || "http://127.0.0.1:8288",
     ensureRunning: (url, st, cb) => cb(null),
     freeVram: (url, cb) => cb(null),
     generate: (opts, prog, cb) => {

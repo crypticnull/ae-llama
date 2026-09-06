@@ -19606,3 +19606,265 @@ an owner behind it (§17a/§17c, or Q5); gate 0 of every local pass prints
 false-port claim).
 
 Planning only. No `extension/` change, so NO BUMP.
+
+## 2026-09-06 (remote session) — all six §18 decisions answered, and the owner's graphs are demoted to a personal layer
+
+The owner answered every open question in the §18 plan, and one answer
+reframes what the product IS.
+
+**Q5: "no, build the portable first."** The loop may NOT use the owner's
+ComfyUI on 8000 unattended. §17a then §17c are now the top of the queue
+and gate every local pass in §18. The upside is real: after §17c every
+VRAM reading is taken on the vendor backend a buyer gets, so nothing
+measured after it needs a §17d re-take.
+
+**Q1 ltx-small: postponed** — not pinned, not dropped. It keeps a
+PERMANENT seat in `ALLOW_NO_TEMPLATE`, so the old P9 is struck and the
+final pass must not try to empty that list. Until revisited, the 6 GB
+tier's video pick points at a model with neither weights nor a graph.
+
+**Q2 h3-int8: yes**, download the 26 GB encoder. **Q3: yes**, a refined
+graph is a new file. **Q4: strip** KREA2's machine-specific enhancer
+lines.
+
+**Q6, and the reframe that came with it.** The owner's words: *"build
+basic ones and redefine my supplied one as alternate custom additions
+just for me for now. I want to fully build the user's environment and
+think of mine as another level on top of that that's separate."*
+
+So the product's baseline is the core-only basic set, and the authored
+`AE_LLAMA_KREA2_V1` / `AE_LLAMA_H3_I2V_V1` (and the unshipped R2V)
+become a personal layer. This is the same finding §17c makes about the
+owner's ComfyUI, one level up: those graphs were never evidence about a
+buyer's environment.
+
+**Three things verified before writing it down rather than assumed:**
+
+1. **The seeder has no delete path.** `ensureDataDirs`
+   (`setup.js:84-116`) seeds, refreshes or preserves, and never removes
+   — so a file already in `%APPDATA%\AE-Llama\comfy-workflows` survives
+   its removal from the bundle. The owner keeps both layers on his
+   machine with no migration and no export step, which is exactly what
+   he asked for.
+2. **`extension/workflows/` is never read at runtime** (no reference in
+   any `extension/js/*.js`) but IS shipped: `package-zxp.ps1:72-77`
+   excludes only `.debug`, `vendor`, `models`, `generated`. So ~200 KB
+   of the owner's authored UI graphs currently rides inside every
+   buyer's ZXP as dead weight. Filed as P11 — right on size grounds
+   before this reframe, right on principle after it.
+3. **The removal must be per-entry, after proof.** Pulling
+   `AE_LLAMA_KREA2_V1` before `AE_LLAMA_KREA2_T2I_V1` exists and has
+   rendered would leave krea2 with no graph — the exact defect §18 was
+   filed to close.
+
+**One design consequence the reframe forces.** On the owner's machine
+both layers will be present, and for the same catalog entry they tie on
+fit and on weights-present, so §2's ordering falls through to NAME —
+where `AE_LLAMA_KREA2_T2I_V1` beats `AE_LLAMA_KREA2_V1` alphabetically
+by luck, not design. `resolveWorkflow` gains one ordering step before
+name: prefer the template the catalog entry's `workflowTemplate` points
+at. Uses data the plan already carries; no new manifest key.
+
+Pass list is now §17a → §17c → P0-P2 (remote, no backend) → P3-P10
+(local, each needing the managed backend) → P11 (ZXP exclusion) → P12
+(ratchet, stopping at ltx-small). krea2 and H3 gained basics of their
+own (P8, P9); the old ltx-small pass is struck.
+
+Decisions only. No `extension/` change, so NO BUMP.
+
+## 2026-09-06 (remote session) — §17a BUILT: the managed backend is the default, own install is an explicit bypass (0.12.0)
+
+Owner: *"no, build the portable first."* So §17a shipped as a MINOR —
+it is user-visible behaviour on a commercial surface and needed its own
+pass, not a corner of another.
+
+**The defect it closes, restated because the fix only makes sense
+against it.** `comfyUrl` shipped as `http://127.0.0.1:8188` — ComfyUI's
+OWN default port — and `ensureRunning` step 1 used whatever answered
+there. Every buyer already running ComfyUI silently became a
+bring-your-own user without deciding to be one, and the panel then
+priced jobs, checked weights and reported status against a model set it
+does not manage. `comfy.js` already refused to reroute to an instance on
+ANOTHER port for exactly that reason (`elsewhereHint`); the
+matching-port door had no such guard, and it is the door a default
+install walks through.
+
+**What shipped:**
+
+- `settings.js`: `comfyBackend` ("managed" | "own", default managed) and
+  `comfyManagedPort` (8288 — deliberately outside `LOCAL_COMFY_PORTS`
+  8188/8189/8000, so the panel can never collide with, or be mistaken
+  for, a ComfyUI the user started).
+- `comfy.js`: `backendUrl(settings)` is the single place the mode is
+  decided; `backendMode`, `managedPort` beside it. Managed resolves to
+  its own port and never reads `comfyUrl`. **Absent mode = "own"** inside
+  comfy.js, because a caller handing it an explicit URL predates the
+  setting and means the instance at that URL; `settings.js` is where new
+  installs get "managed".
+- `ensureRunning` is mode-aware. Managed: something already answering on
+  our port is ours only if we started it (`managedProc`, or a remembered
+  PID from a previous session — `reapOrphan` clears a PID that is not a
+  ComfyUI at init, so a stale one cannot linger); anything else is
+  REFUSED naming both ways out. Adopting it would be the original bug
+  wearing a different port number. Foreign instances on other ports are
+  ignored by design. Own mode: byte-for-byte the old behaviour.
+- The boot block became `bootManaged(base, say, cb)` so both modes share
+  one spawn/poll/reap path rather than growing a second copy.
+- `status()` reports `backend`, and in managed mode `elsewhereHint`
+  becomes an OFFER ("switch to 'Use my own ComfyUI'") rather than a URL
+  correction.
+- Every consumer routed through `Comfy.backendUrl(s)`: `missingWeights`,
+  the missing-weights refusal text, `freeVram`, `comfy_status`,
+  `comfy_generate`'s generate opts, `ensureRunning`, and main.js's Test
+  button. **No `s.comfyUrl` read survives outside the resolver** and the
+  settings form field itself (verified by grep).
+- Settings UI: a Backend selector and a managed-port field; the URL and
+  install-folder labels now say they apply to "Use my own ComfyUI".
+
+**Migration, and the trap it is written around.** An existing install is
+sorted by the only evidence there is — whether the user really changed
+the URL. It reads `saved`, NOT the merged value, because `comfyUrl`
+shipped as 8188: a saved value equal to the old default proves nothing,
+and reading it as a choice would strand every untouched install in "own"
+mode pointing at a ComfyUI they may not run. Same class as the
+2026-09-02 measurement where a probe with no APPDATA loaded pure
+defaults and reported `comfyUrl: 8188` as THE OWNER'S SETTING when it
+was 8000 and had never been touched. Four migration rows pin it,
+including "an explicit mode is never overwritten".
+
+**Verification.** Six new rows in `tests/test-comfy-backend.js` (the
+resolver in both modes plus the out-of-range port fallback; a foreign
+8188 IGNORED in managed mode; a stranger on the managed port REFUSED; our
+own backend from a previous session ADOPTED; status naming the mode and
+offering the switch; own mode keeping every word of its old refusal) and
+five in `tests/test-settings-migrate.js`. Suite 73/75 — the two failures
+are the usual container-only pair (`test-engine-assets` powershell
+ENOENT, `test-ffmpeg-export` Windows absolute paths). Prompt budget
+UNCHANGED (58,933 full / 39,803 compact) — no rule or tool-doc text
+moved, because `comfy_generate`'s "it BOOTS AUTOMATICALLY" is still true
+and is now true more often.
+
+**Three stubs had to learn the new function** — `test-comfy-workflow-choice`,
+`test-vram-arbiter`, `test-weight-availability` all stub `Comfy` and
+threw `backendUrl is not a function`. Caught by running the whole suite,
+not by reasoning; the stubs model a module that gained a function and
+now carry it.
+
+**One I found while adding the migration test and fixed rather than
+noted:** `test-settings-migrate.js` printed its pass/fail summary and set
+`process.exitCode` in the MIDDLE of the file, so anything appended after
+it could fail silently and still exit 0. Summary moved to the end and
+verified by deliberately breaking an assertion (exit 1).
+
+**Not done, filed rather than smuggled in:** the Launch button and
+install-folder field are still ACTIVE in managed mode (relabelled, not
+disabled) — pressing Launch there starts a foreign instance the managed
+mode then ignores. Harmless, confusing, its own small pass.
+
+BUMPED 0.11.37 -> **0.12.0** (minor: new user-visible mode + setting).
+Unblocks §17c, which unblocks every local pass in §18.
+
+## 2026-09-06 (remote session) — §17c had no headless path at all; scripts/comfy-install.js is it
+
+Owner asked what is holding §17c up. Checked rather than answered from
+the plan, and the biggest holdup was not in the plan: **there was no way
+to install the managed backend except by hand.**
+`Setup.bootstrapComfy` had exactly ONE caller — `btn-comfy-install` in
+Settings (`main.js:1401`) — so the backend a buyer gets could only be
+installed by a human opening AE, opening the panel, opening Settings and
+clicking. An unattended pass could not take §17c, and §17c gates every
+template pass in §18.
+
+**`scripts/comfy-install.js`** runs the SHIPPED code through the same
+window shim `comfy-probe.js` uses (settings + tiers + comfy + setup):
+`--check` reports without downloading, bare installs if absent, `--boot`
+boots and confirms the port answers, `--stop` stops what it booted. It
+records the two numbers §17c and §13a want and nobody has: the
+**extracted size** of the portable build (the standing disk cost of the
+buyer's path) and the **python / torch / CUDA the build pins** — which is
+§13a step 1's measurement, taken for free, and exactly what the
+SageAttention wheel selection keys on.
+
+**Gate 0 is the part with the silent failure mode, so it is the part
+with a test.** Every path is `Settings.dataRoot()`-relative and dataRoot
+falls through APPDATA -> USERPROFILE -> the extension folder. Measured
+2026-09-02: an unattended pass with no APPDATA landed on a root holding
+no settings.json and reported the DEFAULT port as THE OWNER'S SETTING.
+An installer inheriting that bug does not misreport a number — it
+downloads gigabytes into a folder nobody will look in and calls it
+success. So it refuses (exit 2) and says which variable is missing.
+`tests/test-comfy-install.js` spawns it with a CLEANED env and pins
+that, plus "--check never downloads" and "the saved mode is read, not
+assumed". Verified non-vacuous: with the gate removed, 2 assertions go
+red.
+
+**One risk I could NOT settle from here, recorded rather than guessed.**
+`bootstrapComfy` reads `/releases/latest` and picks a portable asset
+from it. That is the OLD shape — 0.10.16 measured llama.cpp's
+`/releases/latest` returning v0.3.0 with no Windows binaries at all, so
+the one-click engine install ended at "No suitable Windows build found"
+for every user until it was replaced with a release WALK. Whether
+ComfyUI's latest non-prerelease carries the portable `.7z` could not be
+checked from this container: the agent proxy refused the GitHub API for
+a repo outside the session's scope, and `add_repo` grants git reads
+only, which do not carry release assets; the plain releases web page
+answered 403 as well. So the check moves to the machine that can make
+it, and `comfy-install.js` prints the exact one-line command when an
+install fails on a release/asset error, with the 0.10.16 precedent named.
+Fixing it now would be a speculative change to a shipped installer; one
+call settles it.
+
+Suite 76 files, 74 green (the two container-only failures). No
+`extension/` change in this entry — the script and its test are
+`scripts/`+`tests/`, so NO further bump; it rides 0.12.0.
+
+## 2026-09-06 (remote session) — the ComfyUI release is fine; the non-NVIDIA branch is not (§17e)
+
+The one §17c risk I could not settle from the container — does ComfyUI's
+`/releases/latest` carry a portable asset, or is it the 0.10.16 shape
+where llama.cpp's latest answered with no Windows binaries at all — is
+answered. The owner ran the check.
+
+**SETTLED: ComfyUI v0.34.0, `prerelease: false`, four portable assets**
+(`amd` 1.69 GB, `intel` 1.62 GB, `nvidia` 2.0 GB, `nvidia_cu126` 1.95
+GB). So `bootstrapComfy`'s single-release read works as shipped and
+needs no release WALK. §17c is unblocked on that front; what remains is
+disk and time.
+
+**And the real list immediately found a shipped defect the invented one
+was hiding.** I ran the actual `pickComfyAsset` against the actual
+assets rather than eyeballing the regex:
+
+    NVIDIA machine picks : ComfyUI_windows_portable_nvidia.7z   <- correct
+    no-GPU machine picks : ComfyUI_windows_portable_amd.7z      <- WRONG
+
+`pickComfyAsset` (`setup.js:975-983`) looks for a `cpu` asset twice and
+then falls back to the first portable in list order. **ComfyUI ships no
+cpu build**, so every non-NVIDIA machine falls through to AMD — an Intel
+or GPU-less buyer downloads ~1.7 GB of the wrong runtime and nothing
+says so.
+
+**Why it survived: the test fixture invented the missing asset.**
+`tests/test-comfy-backend.js:44` shipped a `ComfyUI_windows_portable_cpu.7z`
+that does not exist upstream, then asserted the picker chose it. The
+stub was unfaithful in precisely the place that decides the branch —
+same class as every other stub-faithfulness finding here, and the reason
+the rule is "stubs model REAL behaviour". Both real-list outcomes are
+pinned now, the wrong one labelled as §17e rather than as correct, so a
+fix visibly flips it.
+
+**Filed as §17e, NOT fixed, because the right answer needs a fact this
+repo does not have.** `detectGpu` returns `hasNvidia` and nothing about
+AMD vs Intel vs none, so an Intel machine cannot be routed to the intel
+build today; and whether a wrong-vendor portable still runs on CPU is
+unmeasured — if it does, today's behaviour is undisclosed, if it does
+not, it is a dead install. Ordered in §17e: name the vendor in
+detectGpu, route by it, REFUSE with what is available when no GPU can be
+named (grounded errors beat a silent guess), and separately consider the
+`nvidia` vs `nvidia_cu126` sub-choice, which ignores `detectGpu`'s
+`cudaVersion` entirely — the same class 0.10.16 fixed for llama.cpp.
+
+Does not block §17c: the owner's machine is NVIDIA and picks correctly,
+which is now pinned by a test against the real asset list.
+
+No `extension/` change (tests + docs), so NO BUMP; rides 0.12.0.

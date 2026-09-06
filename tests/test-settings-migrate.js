@@ -158,5 +158,47 @@ function loadIn(env, fileContents) {
          "with an explicit opt-in for measuring the shipped defaults");
 }
 
+
+// ---------------------------------------------------------------- §17a
+// comfyBackend: which ComfyUI the panel talks to. New installs get the
+// MANAGED backend; existing installs have to be sorted into a mode from
+// the only evidence there is — whether the user ever touched the URL.
+{
+  const fresh = loadWith(null);
+  assert(fresh.comfyBackend === "managed",
+         "a fresh install defaults to the panel's own managed backend");
+  assert(fresh.comfyManagedPort === 8288,
+         "with a port outside the ones ComfyUI itself uses");
+}
+{
+  // The trap this migration is written around: comfyUrl SHIPPED as
+  // 127.0.0.1:8188, so a saved value equal to it proves nothing. Read as
+  // a choice it would strand every untouched install in "own" mode
+  // pointing at a ComfyUI they may not run. Measured 2026-09-02, the
+  // same class: a probe with no APPDATA loaded pure defaults and
+  // reported comfyUrl 8188 as THE OWNER'S SETTING when it was 8000.
+  const untouched = loadWith({ comfyUrl: "http://127.0.0.1:8188" });
+  assert(untouched.comfyBackend === "managed",
+         "a saved comfyUrl EQUAL to the old shipped default is not a " +
+         "choice — it migrates to managed");
+
+  const chosen = loadWith({ comfyUrl: "http://127.0.0.1:8000" });
+  assert(chosen.comfyBackend === "own",
+         "a comfyUrl the user really changed migrates to own");
+  assert(chosen.comfyUrl === "http://127.0.0.1:8000",
+         "and their URL survives the migration");
+
+  const noUrl = loadWith({ ctxSize: 16384 });
+  assert(noUrl.comfyBackend === "managed",
+         "an old install that never had a comfyUrl migrates to managed");
+
+  const explicit = loadWith({ comfyBackend: "own",
+                              comfyUrl: "http://127.0.0.1:8188" });
+  assert(explicit.comfyBackend === "own",
+         "an explicit mode is never overwritten by the migration, even " +
+         "when the URL looks like the default");
+}
+
+
 console.log(failed ? "\nTESTS FAILED" : "\nALL TESTS PASSED");
 process.exitCode = failed ? 1 : 0;
