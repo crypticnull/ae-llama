@@ -19671,3 +19671,95 @@ Pass list is now §17a → §17c → P0-P2 (remote, no backend) → P3-P10
 own (P8, P9); the old ltx-small pass is struck.
 
 Decisions only. No `extension/` change, so NO BUMP.
+
+## 2026-09-06 (remote session) — §17a BUILT: the managed backend is the default, own install is an explicit bypass (0.12.0)
+
+Owner: *"no, build the portable first."* So §17a shipped as a MINOR —
+it is user-visible behaviour on a commercial surface and needed its own
+pass, not a corner of another.
+
+**The defect it closes, restated because the fix only makes sense
+against it.** `comfyUrl` shipped as `http://127.0.0.1:8188` — ComfyUI's
+OWN default port — and `ensureRunning` step 1 used whatever answered
+there. Every buyer already running ComfyUI silently became a
+bring-your-own user without deciding to be one, and the panel then
+priced jobs, checked weights and reported status against a model set it
+does not manage. `comfy.js` already refused to reroute to an instance on
+ANOTHER port for exactly that reason (`elsewhereHint`); the
+matching-port door had no such guard, and it is the door a default
+install walks through.
+
+**What shipped:**
+
+- `settings.js`: `comfyBackend` ("managed" | "own", default managed) and
+  `comfyManagedPort` (8288 — deliberately outside `LOCAL_COMFY_PORTS`
+  8188/8189/8000, so the panel can never collide with, or be mistaken
+  for, a ComfyUI the user started).
+- `comfy.js`: `backendUrl(settings)` is the single place the mode is
+  decided; `backendMode`, `managedPort` beside it. Managed resolves to
+  its own port and never reads `comfyUrl`. **Absent mode = "own"** inside
+  comfy.js, because a caller handing it an explicit URL predates the
+  setting and means the instance at that URL; `settings.js` is where new
+  installs get "managed".
+- `ensureRunning` is mode-aware. Managed: something already answering on
+  our port is ours only if we started it (`managedProc`, or a remembered
+  PID from a previous session — `reapOrphan` clears a PID that is not a
+  ComfyUI at init, so a stale one cannot linger); anything else is
+  REFUSED naming both ways out. Adopting it would be the original bug
+  wearing a different port number. Foreign instances on other ports are
+  ignored by design. Own mode: byte-for-byte the old behaviour.
+- The boot block became `bootManaged(base, say, cb)` so both modes share
+  one spawn/poll/reap path rather than growing a second copy.
+- `status()` reports `backend`, and in managed mode `elsewhereHint`
+  becomes an OFFER ("switch to 'Use my own ComfyUI'") rather than a URL
+  correction.
+- Every consumer routed through `Comfy.backendUrl(s)`: `missingWeights`,
+  the missing-weights refusal text, `freeVram`, `comfy_status`,
+  `comfy_generate`'s generate opts, `ensureRunning`, and main.js's Test
+  button. **No `s.comfyUrl` read survives outside the resolver** and the
+  settings form field itself (verified by grep).
+- Settings UI: a Backend selector and a managed-port field; the URL and
+  install-folder labels now say they apply to "Use my own ComfyUI".
+
+**Migration, and the trap it is written around.** An existing install is
+sorted by the only evidence there is — whether the user really changed
+the URL. It reads `saved`, NOT the merged value, because `comfyUrl`
+shipped as 8188: a saved value equal to the old default proves nothing,
+and reading it as a choice would strand every untouched install in "own"
+mode pointing at a ComfyUI they may not run. Same class as the
+2026-09-02 measurement where a probe with no APPDATA loaded pure
+defaults and reported `comfyUrl: 8188` as THE OWNER'S SETTING when it
+was 8000 and had never been touched. Four migration rows pin it,
+including "an explicit mode is never overwritten".
+
+**Verification.** Six new rows in `tests/test-comfy-backend.js` (the
+resolver in both modes plus the out-of-range port fallback; a foreign
+8188 IGNORED in managed mode; a stranger on the managed port REFUSED; our
+own backend from a previous session ADOPTED; status naming the mode and
+offering the switch; own mode keeping every word of its old refusal) and
+five in `tests/test-settings-migrate.js`. Suite 73/75 — the two failures
+are the usual container-only pair (`test-engine-assets` powershell
+ENOENT, `test-ffmpeg-export` Windows absolute paths). Prompt budget
+UNCHANGED (58,933 full / 39,803 compact) — no rule or tool-doc text
+moved, because `comfy_generate`'s "it BOOTS AUTOMATICALLY" is still true
+and is now true more often.
+
+**Three stubs had to learn the new function** — `test-comfy-workflow-choice`,
+`test-vram-arbiter`, `test-weight-availability` all stub `Comfy` and
+threw `backendUrl is not a function`. Caught by running the whole suite,
+not by reasoning; the stubs model a module that gained a function and
+now carry it.
+
+**One I found while adding the migration test and fixed rather than
+noted:** `test-settings-migrate.js` printed its pass/fail summary and set
+`process.exitCode` in the MIDDLE of the file, so anything appended after
+it could fail silently and still exit 0. Summary moved to the end and
+verified by deliberately breaking an assertion (exit 1).
+
+**Not done, filed rather than smuggled in:** the Launch button and
+install-folder field are still ACTIVE in managed mode (relabelled, not
+disabled) — pressing Launch there starts a foreign instance the managed
+mode then ignores. Harmless, confusing, its own small pass.
+
+BUMPED 0.11.37 -> **0.12.0** (minor: new user-visible mode + setting).
+Unblocks §17c, which unblocks every local pass in §18.

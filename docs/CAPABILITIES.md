@@ -146,6 +146,16 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 
 - Local llama.cpp: llama-server spawned hidden, health-checked, PID
   tracked and reaped; VRAM-aware engine + model download on first run.
+- ComfyUI backend mode (`comfyBackend`, 0.12.0): **managed by default**
+  — the panel installs a portable ComfyUI, runs it on a port it owns
+  (8288, outside the ports ComfyUI itself uses) and never consults
+  `comfyUrl`. A server already answering on that port that the panel did
+  not start is REFUSED, never adopted. "Use my own ComfyUI" is the
+  explicit bypass, where `comfyUrl` and the Launch button apply; a
+  ComfyUI found on another local port is offered as a mode switch, never
+  taken automatically. Existing installs migrate on evidence: a
+  `comfyUrl` the user really changed means "own", an untouched default
+  means "managed".
 - Hidden ComfyUI backend: portable install bootstrap, spawn/reap
   lifecycle, external model dirs via extra_model_paths.yaml (multiple
   roots, per-kind mappings), and a VRAM arbiter (tiers.js): one

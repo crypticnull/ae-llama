@@ -1624,7 +1624,8 @@
         global.Comfy.loadWorkflow(workflowFile) : null;
     } catch (e) { cb(null); return; }
     if (!graph || !global.Comfy.missingWeights) { cb(null); return; }
-    global.Comfy.missingWeights(s.comfyUrl, graph, function (err, res) {
+    global.Comfy.missingWeights(global.Comfy.backendUrl(s), graph,
+                                function (err, res) {
       if (err || !res || !(res.missing instanceof Array) ||
           !res.missing.length) { cb(null); return; }
       cb({ ok: false,
@@ -1672,7 +1673,8 @@
           ? "Some are on this machine and some are not, so both the " +
             "download and the backend's model search path need checking."
           : "Download them into the models tree ComfyUI searches.");
-    return "ComfyUI at " + s.comfyUrl + " cannot load " + missing.length +
+    return "ComfyUI at " + global.Comfy.backendUrl(s) + " cannot load " +
+           missing.length +
            " of this workflow's weights, so the generation would fail even " +
            "after freeing VRAM for it. Missing from the backend's own model " +
            "list: " + lines.join("; ") + tail + ". " + advice;
@@ -1869,7 +1871,7 @@
       function atFloor(usedMB) {
         return typeof floor === "number" && usedMB <= floor + 512;
       }
-      global.Comfy.freeVram(s.comfyUrl, function () {
+      global.Comfy.freeVram(global.Comfy.backendUrl(s), function () {
         if (typeof need === "number" && typeof card === "number") {
           waitForVram(
             function (usedMB) { return card - usedMB >= need || atFloor(usedMB); },
@@ -1901,7 +1903,7 @@
 
     comfy_status: function (args, cb) {
       var s = global.Settings.get();
-      global.Comfy.status(s.comfyUrl, function (err, st) {
+      global.Comfy.status(global.Comfy.backendUrl(s), function (err, st) {
         cb({ ok: true, data: st });
       });
     },
@@ -1996,7 +1998,7 @@
       }
       function begin() {
       global.Comfy.generate({
-        comfyUrl: s.comfyUrl,
+        comfyUrl: global.Comfy.backendUrl(s),
         workflowFile: chosen.file,
         outDir: s.comfyOutDir,
         timeoutSec: s.comfyTimeoutSec,
@@ -2078,7 +2080,8 @@
             });
           return;
         }
-        global.Comfy.ensureRunning(s.comfyUrl, function (bootMsg) {
+        global.Comfy.ensureRunning(global.Comfy.backendUrl(s),
+                                   function (bootMsg) {
           if (progressSink) progressSink(bootMsg);
         }, function (bootErr) {
           if (bootErr) { finish({ ok: false, error: bootErr.message }); return; }

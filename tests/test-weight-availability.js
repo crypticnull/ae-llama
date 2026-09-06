@@ -344,6 +344,10 @@ function layer2(done) {
       readManifest: () => h3Manifest,
       loadWorkflow: (f) => JSON.parse(fs.readFileSync(f, "utf8")),
       missingWeights: null,          // set per scenario
+      // The panel asks comfy.js WHICH backend it is talking to (managed
+      // vs the user's own) rather than reading comfyUrl — keep the stub
+      // faithful to that, or every call site throws.
+      backendUrl: (s) => (s && s.comfyUrl) || "http://127.0.0.1:8288",
       ensureRunning: (u, st, cb) => { trace.push("comfy.ensure"); cb(null); },
       generate: (o, p, cb) => {
         trace.push("comfy.generate");

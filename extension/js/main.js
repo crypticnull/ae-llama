@@ -1040,6 +1040,8 @@
     els.setTemp.value = s.temperature;
     els.setRounds.value = s.maxRounds;
     els.setDryRun.checked = !!s.dryRun;
+    els.setComfyBackend.value = s.comfyBackend === "own" ? "own" : "managed";
+    els.setComfyManagedPort.value = s.comfyManagedPort || 8288;
     els.setComfyUrl.value = s.comfyUrl;
     els.setComfyDir.value = s.comfyDir;
     els.setComfyWorkflows.value = s.comfyWorkflowsDir;
@@ -1086,6 +1088,8 @@
         ? parseFloat(els.setTemp.value) : 0.7,
       maxRounds: parseInt(els.setRounds.value, 10) || 4,
       dryRun: !!els.setDryRun.checked,
+      comfyBackend: els.setComfyBackend.value === "own" ? "own" : "managed",
+      comfyManagedPort: parseInt(els.setComfyManagedPort.value, 10) || 8288,
       comfyUrl: els.setComfyUrl.value || "http://127.0.0.1:8188",
       comfyDir: els.setComfyDir.value,
       comfyWorkflowsDir: els.setComfyWorkflows.value,
@@ -1130,6 +1134,8 @@
       setTemp: $("set-temp"),
       setRounds: $("set-rounds"),
       setDryRun: $("set-dryrun"),
+      setComfyBackend: $("set-comfy-backend"),
+      setComfyManagedPort: $("set-comfy-managed-port"),
       setComfyUrl: $("set-comfy-url"),
       setComfyDir: $("set-comfy-dir"),
       setComfyWorkflows: $("set-comfy-workflows"),
@@ -1419,7 +1425,8 @@
     });
     $("btn-comfy-test").addEventListener("click", function () {
       formToSettings();
-      global.Comfy.status(global.Settings.get().comfyUrl, function (err, st) {
+      var cs = global.Settings.get();
+      global.Comfy.status(global.Comfy.backendUrl(cs), function (err, st) {
         if (st && st.online) {
           appendMsg("info", "ComfyUI online at " + st.url +
             " — running: " + st.running + ", queued: " + st.pending);

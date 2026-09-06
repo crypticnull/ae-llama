@@ -82,6 +82,10 @@ const window = {
       { file: "enc.safetensors", dir: "text_encoders", role: "text_encoder" },
       { file: "extra.safetensors", dir: "loras", optional: true }
     ] }),
+    // The panel asks comfy.js WHICH backend it is talking to (managed
+    // vs the user's own) rather than reading comfyUrl — keep the stub
+    // faithful to that, or every call site throws.
+    backendUrl: (s) => (s && s.comfyUrl) || "http://127.0.0.1:8288",
     ensureRunning: (url, st, cb) => { log.push("comfy.ensure"); cb(null); },
     generate: (opts, prog, cb) => {
       log.push("comfy.generate");

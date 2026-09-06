@@ -232,19 +232,30 @@ function makeHttp(listening, seen) {
 
 const comfySrc = fs.readFileSync(path.join(__dirname, "..", "extension",
                                            "js", "comfy.js"), "utf8");
-function comfyWith(listening, seen, hiddenInstalled) {
+function comfyWith(listening, seen, hiddenInstalled, settings, storedPid) {
   const httpStub = makeHttp(listening, seen);
+  // Every pre-existing step in this file predates comfyBackend and means
+  // "the instance at the URL I am handing you" — which is exactly what
+  // "own" is. Saying so explicitly keeps them testing a real, supported
+  // path instead of inheriting a default.
+  const s = settings || { comfyBackend: "own" };
+  const store = {};
+  if (storedPid) store["aell-comfy-pid"] = String(storedPid);
   const win = {
     AEBridge: {
       nodeRequire: n => (n === "http" || n === "https") ? httpStub
                                                         : require(n),
       getExtensionPath: () => tmpRoot
     },
-    Settings: { dataRoot: () => tmpRoot, get: () => ({}) },
+    Settings: { dataRoot: () => tmpRoot, get: () => s },
     Setup: { findComfyInstall: () => (hiddenInstalled ? { root: "x" }
                                                       : null) },
-    localStorage: { getItem() { return null; }, setItem() {},
-                    removeItem() {} },
+    localStorage: {
+      getItem(k) { return Object.prototype.hasOwnProperty.call(store, k)
+        ? store[k] : null; },
+      setItem(k, v) { store[k] = String(v); },
+      removeItem(k) { delete store[k]; }
+    },
     setTimeout, clearTimeout
   };
   new Function("window", comfySrc)(win);
@@ -347,6 +358,121 @@ step(function (next) {
     assert(seen.join(" ").indexOf("127.0.0.1:8188") <
            seen.join(" ").indexOf("127.0.0.1:8189"),
            "but 8188 is asked first");
+    next();
+  });
+});
+
+// ---------------------------------------------------------------- §17a
+// MANAGED backend by default, own install as an explicit bypass.
+//
+// The defect this closes: comfyUrl shipped as 127.0.0.1:8188 — ComfyUI's
+// OWN default port — and ensureRunning used whatever answered there. So
+// a buyer who already ran ComfyUI silently became a bring-your-own user
+// without deciding to, and the panel then priced jobs and checked
+// weights against a model set it does not manage. comfy.js already
+// refuses to reroute to an instance found on ANOTHER port for exactly
+// that reason (elsewhereHint); the matching-port door had no such guard.
+
+const MANAGED = { comfyBackend: "managed", comfyManagedPort: 8288 };
+
+// 1. The resolver: managed ignores comfyUrl entirely, own honours it.
+{
+  const C = comfyWith([], null, false, MANAGED);
+  assert(C.backendUrl({ comfyBackend: "managed", comfyManagedPort: 8288,
+                        comfyUrl: "http://127.0.0.1:8188" }) ===
+         "http://127.0.0.1:8288",
+         "managed mode resolves to its OWN port, never comfyUrl");
+  assert(C.backendUrl({ comfyBackend: "own",
+                        comfyUrl: "http://127.0.0.1:8000" }) ===
+         "http://127.0.0.1:8000",
+         "own mode resolves to comfyUrl");
+  assert(C.backendUrl({ comfyBackend: "managed" }) ===
+         "http://127.0.0.1:8288",
+         "a missing managed port falls back to the default 8288");
+  assert(C.backendUrl({ comfyBackend: "managed", comfyManagedPort: 0 }) ===
+         "http://127.0.0.1:8288" &&
+         C.backendUrl({ comfyBackend: "managed",
+                        comfyManagedPort: 99999 }) ===
+         "http://127.0.0.1:8288",
+         "an out-of-range managed port falls back rather than building a " +
+         "URL nothing can listen on");
+  // 8288 is deliberately outside the ports findLocalComfy scans, so the
+  // panel can never collide with, or be mistaken for, a user's own
+  // ComfyUI.
+  assert([8188, 8189, 8000].indexOf(C.managedPort(MANAGED)) === -1,
+         "the managed port sits outside the scanned ComfyUI ports");
+}
+
+// 2. Managed: a FOREIGN ComfyUI on 8188 is ignored, not adopted — the
+//    panel boots its own instead. This is the inversion.
+step(function (next) {
+  const C = comfyWith(["127.0.0.1:8188"], null, false, MANAGED);
+  C.ensureRunning("http://127.0.0.1:8288", null, function (err) {
+    assert(err && /hidden backend is not installed/.test(err.message),
+           "managed mode ignores a foreign ComfyUI on 8188 and goes to " +
+           "boot its own: " + (err && err.message));
+    assert(!/answering at 127\.0\.0\.1:8188/.test(err.message),
+           "it does not offer the foreign instance as the fix — that is " +
+           "own mode's refusal");
+    next();
+  });
+});
+
+// 3. Managed: something ALREADY on our port that we did not start is
+//    REFUSED, never attached to. Attaching is the original bug wearing a
+//    different port number.
+step(function (next) {
+  const C = comfyWith(["127.0.0.1:8288"], null, true, MANAGED);
+  C.ensureRunning("http://127.0.0.1:8288", null, function (err) {
+    assert(err && /did not start it/.test(err.message),
+           "a stranger on the managed port is refused: " +
+           (err && err.message));
+    assert(/Managed backend port/.test(err.message) &&
+           /own ComfyUI/.test(err.message),
+           "and the refusal names both ways out (change the port, or " +
+           "switch modes)");
+    next();
+  });
+});
+
+// 4. Managed: our OWN backend from a previous session — remembered PID —
+//    is used as-is. Without this the refusal above would fire on every
+//    second generation.
+step(function (next) {
+  const C = comfyWith(["127.0.0.1:8288"], null, true, MANAGED, 4242);
+  C.ensureRunning("http://127.0.0.1:8288", null, function (err, res) {
+    assert(!err && res && res.started === false,
+           "a backend WE started is adopted, not refused: " +
+           (err && err.message));
+    next();
+  });
+});
+
+// 5. status() reports the mode, and in managed mode a foreign instance
+//    is an OFFER rather than "change your URL".
+step(function (next) {
+  const C = comfyWith(["127.0.0.1:8188"], null, false, MANAGED);
+  C.status("http://127.0.0.1:8288", function (err, st) {
+    assert(st && st.backend === "managed",
+           "status names which backend the panel is talking to");
+    assert(st.foundAt === "http://127.0.0.1:8188",
+           "it still names the ComfyUI it can see: " + st.foundAt);
+    assert(/Use my own ComfyUI/.test(st.hint) &&
+           /will not switch on its own/.test(st.hint),
+           "as an offer to switch modes, not a URL correction: " + st.hint);
+    next();
+  });
+});
+
+// 6. own mode keeps every word of its old refusal — the bypass is a real
+//    supported path, not a deprecated one.
+step(function (next) {
+  const C = comfyWith(["127.0.0.1:8188"], null, false,
+                      { comfyBackend: "own" });
+  C.status("http://127.0.0.1:8000", function (err, st) {
+    assert(st.backend === "own", "own mode says so");
+    assert(/Set the ComfyUI URL in Settings/.test(st.hint),
+           "and keeps the URL-correction hint: " + st.hint);
     next();
   });
 });
