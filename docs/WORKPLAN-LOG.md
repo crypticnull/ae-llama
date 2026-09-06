@@ -19606,3 +19606,68 @@ an owner behind it (§17a/§17c, or Q5); gate 0 of every local pass prints
 false-port claim).
 
 Planning only. No `extension/` change, so NO BUMP.
+
+## 2026-09-06 (remote session) — all six §18 decisions answered, and the owner's graphs are demoted to a personal layer
+
+The owner answered every open question in the §18 plan, and one answer
+reframes what the product IS.
+
+**Q5: "no, build the portable first."** The loop may NOT use the owner's
+ComfyUI on 8000 unattended. §17a then §17c are now the top of the queue
+and gate every local pass in §18. The upside is real: after §17c every
+VRAM reading is taken on the vendor backend a buyer gets, so nothing
+measured after it needs a §17d re-take.
+
+**Q1 ltx-small: postponed** — not pinned, not dropped. It keeps a
+PERMANENT seat in `ALLOW_NO_TEMPLATE`, so the old P9 is struck and the
+final pass must not try to empty that list. Until revisited, the 6 GB
+tier's video pick points at a model with neither weights nor a graph.
+
+**Q2 h3-int8: yes**, download the 26 GB encoder. **Q3: yes**, a refined
+graph is a new file. **Q4: strip** KREA2's machine-specific enhancer
+lines.
+
+**Q6, and the reframe that came with it.** The owner's words: *"build
+basic ones and redefine my supplied one as alternate custom additions
+just for me for now. I want to fully build the user's environment and
+think of mine as another level on top of that that's separate."*
+
+So the product's baseline is the core-only basic set, and the authored
+`AE_LLAMA_KREA2_V1` / `AE_LLAMA_H3_I2V_V1` (and the unshipped R2V)
+become a personal layer. This is the same finding §17c makes about the
+owner's ComfyUI, one level up: those graphs were never evidence about a
+buyer's environment.
+
+**Three things verified before writing it down rather than assumed:**
+
+1. **The seeder has no delete path.** `ensureDataDirs`
+   (`setup.js:84-116`) seeds, refreshes or preserves, and never removes
+   — so a file already in `%APPDATA%\AE-Llama\comfy-workflows` survives
+   its removal from the bundle. The owner keeps both layers on his
+   machine with no migration and no export step, which is exactly what
+   he asked for.
+2. **`extension/workflows/` is never read at runtime** (no reference in
+   any `extension/js/*.js`) but IS shipped: `package-zxp.ps1:72-77`
+   excludes only `.debug`, `vendor`, `models`, `generated`. So ~200 KB
+   of the owner's authored UI graphs currently rides inside every
+   buyer's ZXP as dead weight. Filed as P11 — right on size grounds
+   before this reframe, right on principle after it.
+3. **The removal must be per-entry, after proof.** Pulling
+   `AE_LLAMA_KREA2_V1` before `AE_LLAMA_KREA2_T2I_V1` exists and has
+   rendered would leave krea2 with no graph — the exact defect §18 was
+   filed to close.
+
+**One design consequence the reframe forces.** On the owner's machine
+both layers will be present, and for the same catalog entry they tie on
+fit and on weights-present, so §2's ordering falls through to NAME —
+where `AE_LLAMA_KREA2_T2I_V1` beats `AE_LLAMA_KREA2_V1` alphabetically
+by luck, not design. `resolveWorkflow` gains one ordering step before
+name: prefer the template the catalog entry's `workflowTemplate` points
+at. Uses data the plan already carries; no new manifest key.
+
+Pass list is now §17a → §17c → P0-P2 (remote, no backend) → P3-P10
+(local, each needing the managed backend) → P11 (ZXP exclusion) → P12
+(ratchet, stopping at ltx-small). krea2 and H3 gained basics of their
+own (P8, P9); the old ltx-small pass is struck.
+
+Decisions only. No `extension/` change, so NO BUMP.

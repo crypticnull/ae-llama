@@ -3436,6 +3436,12 @@ degrades honestly rather than half-installing. Bumps (`extension/`).
 
 ### 17c. Dogfood the shipped backend HERE (owner-approved 2026-09-06)
 
+**PROMOTED 2026-09-06: this and §17a are now the top of the queue.** The
+owner answered §18's backend question with *"no, build the portable
+first"* — the loop may NOT use his ComfyUI on 8000 unattended. So §17a
+then §17c gate every local pass in §18, and after them the loop boots
+its own backend and takes every reading on the environment a buyer gets.
+
 **The owner's reasoning, which is the whole item:** *"how can we be sure
 comfy works on other users if we don't test it here? we should change my
 special bypass to just also install a portable comfy like a user would."*
@@ -3614,36 +3620,65 @@ the LOG; `measured: true` ONLY from the vendor backend, §17c/§17d) →
 --steps 12,13`. **Gate 0 of every local pass:** print `Settings.origin()`
 and refuse when `appdata` is empty.
 
+### OWNER DECISIONS — ALL ANSWERED 2026-09-06
+
+Q5 **build the portable backend first** — the owner's ComfyUI on 8000 is
+REFUSED for unattended work, so §17a then §17c gate every local pass
+here. Q1 ltx-small **postponed** (permanent seat in `ALLOW_NO_TEMPLATE`).
+Q2 h3-int8 **yes, download the 26 GB encoder**. Q3 refinement returns as
+a NEW file — **yes**. Q4 KREA2 enhancer lines — **strip**. Q6 **build
+basics for every entry**, krea2 and h3 included.
+
+**The reframe that came with Q6, and it is bigger than Q6** (owner's
+words): *"build basic ones and redefine my supplied one as alternate
+custom additions just for me for now. I want to fully build the user's
+environment and think of mine as another level on top of that that's
+separate."*
+
+The product's baseline is the core-only basic set. The owner's authored
+graphs become a personal layer, **per entry and only after that entry's
+basic has rendered** — removing one earlier would leave its entry with
+no graph, the defect this section exists to close. His copies survive:
+`ensureDataDirs` (`setup.js:84-116`) seeds, refreshes and preserves and
+has NO delete path (verified), so a file already in
+`%APPDATA%\AE-Llama\comfy-workflows` outlives its removal from the
+bundle. Two consequences worth their own lines:
+
+- **`resolveWorkflow` needs a deliberate baseline tiebreak.** On a
+  machine holding both layers, same entry / fit / weights, §2's ordering
+  falls through to NAME — `..._T2I_V1` beating `..._V1` alphabetically
+  is luck. Prefer the template the catalog entry's `workflowTemplate`
+  names. No new manifest key.
+- **`package-zxp.ps1:72-77` excludes only `.debug`, `vendor`, `models`,
+  `generated`** — so ~200 KB of the owner's authored UI graphs ships
+  inside every buyer's ZXP today and nothing at runtime reads that
+  folder (verified: no reference in any `extension/js/*.js`). P11.
+
 ### Passes — one per night, smallest first (PLAN §6)
 
-**Backend rule.** Route (a): attended, the owner's ComfyUI on 8000 —
-needs Q5, `comfyModelsDir` SET (never the owner's store) and 8000
-un-blinded (§7b bullet 1); every reading is a §17d re-take. Route (b):
-unattended after §17a + §17c, the probes boot the managed backend with
-`--boot` and stop it with `--stop`. **P0–P2 are pushed before the first
-overnight run.**
+**Backend rule: ONE route.** §17a then §17c come first; after them the
+loop boots the MANAGED backend itself (`--boot`/`--stop`, non-8000
+port), ignores the owner's instance by design, and every reading is
+taken on what a buyer gets — so nothing measured after §17c needs a
+§17d re-take. **Nothing local starts before §17c is green.**
 
 | # | who | what | bump | needs |
 |---|---|---|---|---|
+| **§17a** | remote | managed backend by default: `comfyBackend`, own port, refuse-not-attach, `findLocalComfy` as an offer, migration on `loadedFrom` | yes | — |
+| **§17c** | local | install the vendor portable backend here; `comfyModelRoots` at the existing stores; record its extracted size | no | §17a |
 | P0 | remote | ratchet tests (bundle test warn-mode, two allowlists, manifests walk) | no | — |
-| P1 | remote | `describeWorkflows` + `resolveWorkflow` + `_graphCarriesValue`; tools.js :1958/:2061; `comfyWorkflows` setting; `catalogEntry` on both manifests; re-pins; bundle test → assert | yes | P0 |
-| P2 | remote | `comfy-probe --frames/--boot/--stop`, `catalog-vram-probe --boot/--stop`, `download-gen-weight.js`, chat-probe kind verdict, `Settings.origin()` gate | no | P1 |
-| P3 | local | H3 t2v re-run + `catalog-vram-probe --entry minimax-h3` → LOG | no | P2; route (a) Q5 or (b); AE |
-| P4 | remote | Settings **Workflows** rows: label, kind, "renders X", NEEDS phrase (`entryFits`, `requiresImage`), enabled, enhancement; examples hidden; pure row model | yes | P1 |
-| P5 | local | sd15 basic + manifest + `workflowTemplate` + allowlist −sd15 + hash; **measure whether the frontend opens an API graph editable** | yes | P0–P2; route (a)/(b); AE |
+| P1 | remote | `describeWorkflows` + `resolveWorkflow` (incl. the baseline tiebreak) + `_graphCarriesValue`; tools.js :1958/:2061; `comfyWorkflows` setting; `catalogEntry`; re-pins; bundle test → assert | yes | P0 |
+| P2 | remote | probe `--frames`/`--boot`/`--stop`, `download-gen-weight.js`, chat-probe kind verdict, `Settings.origin()` gate | no | P1, §17c |
+| P3 | local | H3 t2v re-run + `catalog-vram-probe --entry minimax-h3` → measured block | no | §17c, P2, AE |
+| P4 | remote | Settings **Workflows** rows (label, kind, "renders X", NEEDS phrase, enabled, enhancement; examples hidden) | yes | P1 |
+| P5 | local | sd15 basic + manifest + `workflowTemplate` + allowlist −sd15; **measure whether the frontend opens an API graph editable** | yes | §17c, P0–P2, AE |
 | P6 | local | sdxl as P5 | yes | P5 |
-| P7 | local | wan22-5b as P5; `--frames`; floor re-pin rule | yes | P5; 17 GB disk |
-| P8 | local | h3-int8 second API file — confirm first | yes | P1; owner Q2 |
-| P9 | owner → local | ltx-small pin or drop | yes | owner Q1 |
-| P10 | remote | allowlists → `[]` as vendor readings land | tests only | P5–P9; §17d |
-
-### Owner decisions (PLAN §7)
-
-Q1 ltx-small pin or drop. Q2 h3-int8: prove on a non-Blackwell card or
-leave unproven. Q3 refinement returns as a UI export under a NEW name —
-confirm. Q4 KREA2 `enhancerInstruction` machine-specific lines — strip?
-Q5 until §17c, may the loop probe your ComfyUI on 8000? Q6 core-only
-siblings for krea2/h3, or grandfather the authored graphs (default).
+| P7 | local | wan22-5b as P5; `--frames`; floor re-pin rule | yes | P5; 17 GB |
+| P8 | local | krea2 basic; on proof the authored graph leaves the bundle | yes | P5 |
+| P9 | local | H3 basic; on proof the authored graph leaves the bundle | yes | P3, P7 |
+| P10 | local | h3-int8: download the 26 GB encoder, second API file — confirm from the UI source first | yes | P9; 26 GB |
+| P11 | remote | `package-zxp.ps1` `$excludeDirs` += `workflows` | yes | — |
+| P12 | remote | `ALLOW_UNMEASURED → []`; `ALLOW_NO_TEMPLATE → [ltx-small]` and STOPS there (Q1) | tests only | P3–P10 |
 
 ### Hooks, named so nobody builds them early
 
