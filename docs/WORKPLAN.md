@@ -1625,15 +1625,15 @@ unattended restart risks leaving the machine with no backend at all.
 **Needs the owner to bring ComfyUI up** (and to confirm the port). Until
 then this whole section is skipped and passes fall through to section 8.
 
-**THE UNBLOCK IS §17b, and it is better than "the owner starts it"**
+**THE UNBLOCK IS §17c, and it is better than "the owner starts it"**
 (owner, 2026-09-06). `ensureRunning` cannot start the owner's OWN
 ComfyUI — by design, it only ever spawns the vendor portable install
 under `<dataRoot>\vendor\comfy` (`comfy.js:2122-2141`,
 `setup.js:943-964`). Install that vendor backend on this machine and
 the loop can boot its own backend on demand, unattended, with no owner
 in the loop — **and it is then measuring the thing buyers actually
-get**, which the owner's hand-built 0.32.0 never was. §17b is the pass
-that does it. Until §17b lands this section stays blocked.
+get**, which the owner's hand-built 0.32.0 never was. §17c is the pass
+that does it. Until §17c lands this section stays blocked.
 
 **THIS MACHINE'S ComfyUI LISTENS ON PORT 8000** (owner, 2026-09-01).
 Every probe script under `scripts/` defaults to
@@ -2805,7 +2805,7 @@ first run" was wrong — it does not happen.** `autoBootstrap`
 else; `Setup.bootstrapComfy` has exactly one caller,
 `btn-comfy-install` in Settings (`main.js:1394`). So this section's
 step 3 installs wheels into `<vendor>\comfy\python_embeded`, an
-interpreter that exists only if the user pressed a button. **§17a is a
+interpreter that exists only if the user pressed a button. **§17b is a
 hard prerequisite for 13a** — until it lands, "hands off" has a button
 in the middle of it.
 
@@ -3310,13 +3310,13 @@ figure is the measured *idle* 3,255 MB.
 
 Do NOT rewrite the tier table, copy or boundaries in the same pass.
 
-## 17. The hidden ComfyUI backend — hands-off install, and DOGFOOD it here
+## 17. The ComfyUI backend — MANAGED by default, own install by explicit choice
 
 Filed 2026-09-06 after the owner asked the question this section exists
 to answer: *"will the user always need to start up an external ComfyUI
 instance before being able to image/video gen from the plugin?"*
 
-**The intended answer is no, and the machinery for it already ships.**
+**The intended answer is no, and most of the machinery already ships.**
 `comfy_generate` calls `Comfy.ensureRunning` before every generation
 (`tools.js:2081`), which in order: (1) uses whatever answers at the
 configured URL as-is; (2) scans 8188/8189/8000 and, if a ComfyUI is
@@ -3328,9 +3328,79 @@ health-polls it up, persists the PID and reaps it on panel close
 (`main.js:1460`) and on next launch (`main.js:1178`). A buyer sees no
 window, no launcher and no port.
 
-Two things stop that from being true today, and they are 17a and 17b.
+**The owner's design call (2026-09-06):** *"allow a user to bypass it
+using their own install if they want, but design it as a portable
+install by default."* That is an inversion of what ships, not a
+restatement of it — today the bypass is what you get by accident and
+the managed backend is the fallback. 17a is that inversion; it is the
+first item and the other three assume it.
 
-### 17a. The backend install is a BUTTON, not first-run (loop-takeable, BUMPS)
+### 17a. Managed is the default; "use my own" is an explicit setting
+
+**The defect, measured in the code.** `comfyUrl` defaults to
+`http://127.0.0.1:8188` (`settings.js:59`) — **ComfyUI's own default
+port.** `ensureRunning` step 1 uses whatever answers there, as-is, with
+no disclosure and no choice recorded. So every buyer who already runs
+ComfyUI on the standard port silently becomes a bring-your-own user
+without ever deciding to be one, and the panel prices jobs, checks
+weights and reports status against a model set it does not manage.
+
+**The inconsistency that names it as a bug rather than a preference.**
+Step 2 refuses to reroute to a ComfyUI found on another port, and the
+comment says why (`comfy.js:1926-1931`): *"silently rendering on a
+different ComfyUI than the user configured would swap the model set
+under them."* **Step 1 does exactly that whenever the port happens to
+match, and carries no such guard.** The panel's own stated reasoning is
+applied at one door and not at the other, and the unguarded door is the
+one a default install walks through.
+
+**Second defect, same root.** The managed backend spawns on the
+CONFIGURED port (`comfy.js:2137-2141`), so on a default install it
+targets 8188 too — the port the user's own ComfyUI will want the next
+time they start it. The panel would be squatting on it.
+
+**The shape:**
+
+- `comfyBackend: "managed" | "own"`, defaulting to **`"managed"`**.
+- **Managed owns its own port** and does not consult `comfyUrl` at all.
+  Pick a fixed default outside `LOCAL_COMFY_PORTS` (8188/8189/8000) so
+  the panel never collides with, or is mistaken for, a user's own
+  instance — 8288 unless something better turns up — with a settings
+  override for a genuine collision. **If that port is already answering,
+  fail honestly and say so; never attach to it.** Attaching is step 1's
+  bug wearing a different number.
+- `comfyUrl` belongs to `"own"` and is only reachable once that mode is
+  chosen. So does `comfyDir`, `Comfy.launch` and the Launch button.
+- `applyExtraModelPaths` only ever writes into the managed install —
+  the panel does not edit a config file it does not own.
+
+**`findLocalComfy` becomes an OFFER, not a refusal.** Its existing
+finding ("a ComfyUI is answering at 127.0.0.1:8188") stops being an
+error hint and becomes the bypass's front door: *use it instead of the
+built-in one?* — which flips `comfyBackend` to `"own"` and fills in the
+URL. That is the whole feature the owner asked for, and it costs one
+button on an existing measurement.
+
+**Migration, and the trap in it.** An existing install with a
+non-default `comfyUrl` is someone who configured it → `"own"`. An
+untouched default → `"managed"`. **Read `loadedFrom` before deciding**
+(`settings.js:135`): a value that is only a default must not be
+migrated as if it were an answer. That exact confusion already cost two
+sessions a false claim about the owner's port (measured 2026-09-02, the
+comment at `settings.js:122-133`).
+
+**Verification:** the matrix is small and every row is real — managed
+with nothing else running; managed with a foreign ComfyUI on 8188
+(must ignore it and boot its own); managed with something already on
+the managed port (must refuse, not attach); `"own"` pointing at a live
+instance; `"own"` pointing at a dead one (must not silently fall back
+to managed — the user chose). Stub-testable end to end; `comfy.js`
+already takes an injected `child_process` in `tests/test-comfy-backend.js`.
+
+Bumps (`extension/`). This is user-visible behaviour on a commercial
+surface — build it in one pass, not smuggled into another.
+
+### 17b. The backend install is a BUTTON, not first-run (loop-takeable, BUMPS)
 
 `Setup.bootstrapComfy` has exactly one caller: `btn-comfy-install`
 (`main.js:1394`). Compare `autoBootstrap` (`main.js:774`), which
@@ -3358,7 +3428,7 @@ stated requirement is that there are none.
    where the panel knows the backend is missing AND that the user just
    asked for a generation. Install there, with progress in chat, then
    boot and continue — instead of refusing. This is the half that also
-   covers a panel installed before 17a shipped, and a first-run install
+   covers a panel installed before 17b shipped, and a first-run install
    that failed or was cancelled.
 
 Verification: delete `<dataRoot>\vendor\comfy`, open the panel, ask for
@@ -3366,7 +3436,7 @@ a picture, and watch it install → boot → render with nothing pressed.
 Then re-run with the download cancelled mid-way and confirm the panel
 degrades honestly rather than half-installing. Bumps (`extension/`).
 
-### 17b. Dogfood the shipped backend HERE (owner-approved 2026-09-06)
+### 17c. Dogfood the shipped backend HERE (owner-approved 2026-09-06)
 
 **The owner's reasoning, which is the whole item:** *"how can we be sure
 comfy works on other users if we don't test it here? we should change my
@@ -3404,30 +3474,37 @@ libs), not the models. **Record its real extracted size in the log —
 nobody here has measured it**, and the number decides whether this is a
 permanent arrangement or a per-test one.
 
-**The one manual step, stated honestly:** the owner's own ComfyUI must
-be genuinely STOPPED for the shipped path to run at all. With it up,
-`ensureRunning` step 1 uses it (if it is on the configured port) or
-step 2 finds it on 8188/8189/8000 and refuses with a hint — either way
-the vendor backend never boots and nothing is being dogfooded. Stopping
-it is the owner's call and the loop must never do it.
+**17a makes this FREE, and that is the argument for doing 17a first.**
+Written before 17a existed, this item carried a manual step: the
+owner's own ComfyUI had to be genuinely stopped, or `ensureRunning`
+step 1 would use it (same port) or step 2 would refuse with a hint
+(other port) and the vendor backend would never boot. **Under 17a that
+step disappears** — managed mode owns its own port and ignores foreign
+instances by design, so the owner's ComfyUI can stay up on 8000 and the
+panel still exercises the shipped path beside it. The dev machine stops
+being a special arrangement and becomes a `"managed"` user like every
+buyer, with `"own"` one deliberate toggle away when the owner wants
+their install back.
 
-**The pass:**
+**The pass (assumes 17a; if taken before it, stop the owner's ComfyUI
+first and say so in the log):**
 
-1. Owner stops their own ComfyUI and confirms nothing answers on
-   8188/8189/8000.
-2. Settings → Install hidden backend (or, once 17a lands, just ask for
+1. Confirm `comfyBackend` is `"managed"` and note what the migration
+   chose, with `loadedFrom` — a default must not read as an answer.
+2. Settings → Install hidden backend (or, once 17b lands, just ask for
    a picture). Log the download size, the extracted size, the ComfyUI
    version, and the torch/python the build pins — the last is §13a
    step 1's measurement, taken for free here.
 3. Set `comfyModelRoots` to the existing stores; verify the written
    yaml and that `Comfy.missingWeights` answers empty for KREA2.
 4. Re-run `scripts/weight-availability-probe.js` and one real
-   `comfy_generate` end to end through the panel.
+   `comfy_generate` end to end through the panel — with the owner's own
+   ComfyUI still running, which is the row that proves 17a.
 5. Log what the buyer path does that the owner's install never did.
 
 After this, §7b's bullets are loop work: the loop boots its own backend.
 
-### 17c. What must be RE-measured once 17b lands
+### 17d. What must be RE-measured once 17c lands
 
 Not a rewrite of the numbers — a marked re-take, because the
 environment changed underneath them:

@@ -19415,3 +19415,56 @@ threshold calibrated on the owner's environment. By re-running the
 probes, never by reasoning about version differences.
 
 Filing only. No `extension/` change, so NO BUMP.
+
+## 2026-09-06 (remote session) — the ComfyUI bypass is what you get by ACCIDENT, and that is the bug
+
+SUPERSEDES: the previous entry's framing of §17. It filed the hands-off
+install and the dogfooding as the two problems. The owner's follow-up
+named the one underneath both — *"allow a user to bypass it using their
+own install if they want, but design it as a portable install by
+default"* — and checking it against the code turned a design preference
+into a measured defect.
+
+**`comfyUrl` defaults to `http://127.0.0.1:8188`** (`settings.js:59`) —
+ComfyUI's OWN default port. `ensureRunning` step 1 uses whatever answers
+there as-is, with no disclosure and no recorded choice. So every buyer
+who already runs ComfyUI on the standard port silently becomes a
+bring-your-own user without deciding to be one, and the panel prices
+jobs, checks weights and reports status against a model set it does not
+manage. The bypass is the default; the managed backend is the fallback.
+That is backwards.
+
+**What makes it a bug rather than a preference is the panel's own
+reasoning, applied at one door and not the other.** Step 2 refuses to
+reroute to a ComfyUI found on another port, and says why
+(`comfy.js:1926-1931`): *"silently rendering on a different ComfyUI than
+the user configured would swap the model set under them."* Step 1 does
+exactly that whenever the port happens to match, unguarded — and the
+unguarded door is the one a default install walks through.
+
+**Second defect, same root:** the managed backend spawns on the
+CONFIGURED port (`comfy.js:2137-2141`), so on a default install it
+targets 8188 as well — squatting on the port the user's own ComfyUI
+wants next launch.
+
+**Filed as §17a** and the other three items renumbered behind it
+(install → 17b, dogfood → 17c, re-measure → 17d), with cross-references
+in §7b and §13a updated: `comfyBackend: "managed" | "own"` defaulting to
+managed; managed owns a port outside `LOCAL_COMFY_PORTS` and never
+consults `comfyUrl`; **if that port is already answering, refuse rather
+than attach** — attaching is step 1's bug wearing a different number;
+`findLocalComfy`'s existing measurement becomes the bypass's front door
+(an offer to switch, not an error hint). Migration reads `loadedFrom`
+before treating a URL as an answer, because a default that cannot be
+told from a saved value already produced a false claim about this
+machine's port (`settings.js:122-133`, measured 2026-09-02).
+
+**§17a makes §17c free, which is the argument for its order.** The
+dogfooding item was written with a manual step — the owner had to stop
+their own ComfyUI or the vendor backend would never boot. Under 17a
+managed mode ignores foreign instances by design, so the owner's install
+can stay up on 8000 while the panel exercises the shipped path beside
+it. The dev machine stops being a special arrangement and becomes a
+`"managed"` user like every buyer, one toggle from `"own"`.
+
+Filing only. No `extension/` change, so NO BUMP.
