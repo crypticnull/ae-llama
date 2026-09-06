@@ -1669,17 +1669,15 @@ pass, smallest first:
   measure minimax-h3 with `scripts/catalog-vram-probe.js` (this card is
   Blackwell, so the shipped nvfp4 template applies) and write the
   reading into version.js the way krea2 carries its own.
-- **Templates for the template-less entries.** sd15, sdxl and wan22-5b
-  have no `workflowTemplate`, which both blocks the probe and lets
-  `recommendGen` offer models `comfy_generate` cannot render (the open
-  "smaller, for the remote session" item above — fix it HERE, the
-  running backend is what makes a template verifiable). Author minimal
-  API-format graphs (checkpoint -> sampler -> vae -> save; wan22 per its
-  repackaged workflow docs), name them `AE_LLAMA_SD15_V1` /
-  `AE_LLAMA_SDXL_V1` / `AE_LLAMA_WAN22_V1`, set `workflowTemplate` on
-  the catalog entries, and give each a models manifest with `file`+`dir`
-  so the arbiter can price it from the disk. Verify one real render each
-  through `comfy_generate` before calling the template shipped.
+- **Templates for the template-less entries.** ~~sd15, sdxl and
+  wan22-5b~~ **WIDENED AND MOVED TO §18 (owner, 2026-09-06).** The count
+  was wrong: FIVE of seven catalog entries have no `workflowTemplate`
+  (add `ltx-small` and `minimax-h3-int8`), and `minimax-h3`'s only
+  template is i2v. The owner asked for a basic working graph per model
+  as its own track — see **§18**, which carries the two-tier scheme, the
+  ratchet that would have caught this, and the authoring order. Every
+  VRAM measurement in this section is blocked on it
+  (`catalog-vram-probe.js:282` refuses an entry with no graph).
 - **Download + measure, one entry per pass: sd15 (2 GB), then sdxl
   (6.6 GB), then wan22-5b (17.3 GB).** Use the panel's own settings
   Download button path (`Setup.downloadGenWeight`) — that is field
@@ -3522,6 +3520,90 @@ environment changed underneath them:
 
 Do NOT re-measure by reasoning about version differences. Re-run the
 probes.
+
+## 18. A basic working graph for EVERY catalog model — PLAN DEFERRED
+
+**Owner, 2026-09-06:** *"be prepared to create workflows for all these
+other models for at least basic use I can later improve manually, but we
+should have those built alongside this loop. so like a basic wan t2v and
+h3 and krea2 and then we make more intricate ones from the basically
+functional ones."*
+
+**PLAN NOT WRITTEN ON PURPOSE.** The owner is handing the shape of this
+track — tiers, naming, authoring order, how a basic graph becomes a
+refined one — to a Fable 5.1 pass. This section is the INPUT to that
+pass: the measured gap and the constraints any plan has to satisfy.
+Nothing here is a design. Do not start building templates from it.
+
+### The gap, counted (2026-09-06)
+
+Seven catalog entries (`version.js:91-200`), two templates:
+
+| entry | kind | `workflowTemplate` |
+|---|---|---|
+| sd15 | image | **none** |
+| sdxl | image | **none** |
+| krea2 | image | `AE_LLAMA_KREA2_V1` — the owner's authored graph |
+| ltx-small | video | **none, and no pinned URLs either** |
+| wan22-5b | video | **none** |
+| minimax-h3 | video | `AE_LLAMA_H3_I2V_V1` — **i2v only, no t2v path** |
+| minimax-h3-int8 | video | **none** (same weights as h3 bar the encoder) |
+
+### Why it is not just a to-do
+
+- **`recommendGen` offers models `comfy_generate` cannot render.** A
+  shipped defect, already named in §7b and never closed.
+- **It blocks every open VRAM measurement.**
+  `catalog-vram-probe.js:282` refuses an entry with no graph, so §7b's
+  sd15 / sdxl / wan22-5b readings cannot be taken at all.
+- **No ratchet sees it.** `tests/test-model-catalog.js:229` opens with
+  `if (!e.workflowTemplate) return;` — an entry with no template passes
+  the check in silence. The one cheap thing that is unambiguous
+  regardless of the plan is making that gap explicit rather than
+  skipped, and even that should wait for the plan to name its shape.
+
+### Constraints any plan must satisfy (measured, not preferences)
+
+- **Author against the running backend's `/object_info`, never from
+  memory.** Node class and input names move between ComfyUI versions; a
+  graph written from recollection is the confident-wrong artifact class
+  this repo refuses.
+- **The panel's injection contract** (`extension/comfy-workflows/README.md`):
+  prompt/negative reachable by following the sampler's
+  `positive`/`negative` links; a node with numeric `width`+`height`;
+  video needs a numeric `length`/`frames`/`video_frames`/`num_frames`
+  and must end writing real mp4/H.264 — **AE cannot import animated
+  webp**. "Functional" means this, not "renders something".
+- **Manifests need `sizeMB`, not just `file`+`dir`.** Every shipped
+  manifest carries `file`+`dir` and no size, which made `genNeedMB` null
+  for every template ever shipped and paused chat on a 32 GB card for
+  jobs it could have run concurrently (0.10.9, measured).
+- **`.hash-history.json` is CI-enforced** — a bundled file whose current
+  hash is unrecorded fails `workflow-hash-history.js --check`.
+- **`example-txt2img.json` must never be listed as real.** It was
+  offered to the model as a workflow once and a generation ran the
+  placeholder (0.9.28).
+- **Verify through `comfy_generate`, not ComfyUI's UI** — the panel's
+  injection is the thing under test.
+- **Re-exports lose panel adaptations.** `AE_LLAMA_KREA2_V1.manifest.json`
+  carries a `panelAdaptation` block recording the absolute-path
+  `filename_prefix` that ComfyUI refuses; a hand-refined re-export needs
+  it re-applied.
+
+### Open questions the plan has to answer
+
+1. **H3 t2v may not exist.** H3 is `fl2va` (first/last frame → video +
+   audio). Whether it has a usable text-only path is a `/object_info`
+   question, not an assumption — the owner named "h3" in the ask and the
+   honest answer may be that its i2v graph is already its basic tier.
+2. **wan22-5b is `ti2v`** — text *and* image to video. "Basic wan t2v"
+   is one path through it; i2v is a second graph, not an argument.
+3. **`ltx-small` has no weights pinned.** Nothing to download, nothing
+   to render. Pin its files or drop the entry.
+4. **`minimax-h3-int8` may be the h3 graph with one encoder swapped** —
+   a `panelAdaptation` rather than a new file. Confirm, do not assume.
+5. **Backend dependency.** All of this needs a running ComfyUI, so it
+   inherits §17c: on the vendor build a buyer gets, not the owner's.
 
 ## Out of scope for the local session (remote builds these)
 

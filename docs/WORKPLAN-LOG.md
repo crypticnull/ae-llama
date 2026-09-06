@@ -19468,3 +19468,54 @@ it. The dev machine stops being a special arrangement and becomes a
 `"managed"` user like every buyer, one toggle from `"own"`.
 
 Filing only. No `extension/` change, so NO BUMP.
+
+## 2026-09-06 (remote session) — five of seven catalog models have no graph, and no test sees it
+
+Owner asked for basic working workflows for the rest of the catalog,
+buildable alongside the loop and refinable by hand later — *"a basic wan
+t2v and h3 and krea2 and then we make more intricate ones from the
+basically functional ones"* — and then, deliberately, told me to stop
+before designing the process: a Fable 5.1 pass gets that. So §18 is
+filed as INPUT, not a plan.
+
+**Counted rather than estimated.** `version.js:91-200` holds seven
+catalog entries and two templates. sd15, sdxl, ltx-small, wan22-5b and
+minimax-h3-int8 have no `workflowTemplate` at all; minimax-h3 has one
+and it is **i2v only**; krea2's is the owner's authored graph. §7b said
+"sd15, sdxl and wan22-5b" — that was three of five, and the entry it
+missed twice over is `ltx-small`, which has no pinned URLs either.
+Corrected in place, with the bullet moved to §18.
+
+**The part that makes it a defect and not a backlog item:**
+`tests/test-model-catalog.js:229` opens `if (!e.workflowTemplate)
+return;` — the bundling check is SKIPPED for an entry that has none. So
+a catalog entry with no graph passes the suite silently, while
+`recommendGen` offers it to users and `comfy_generate` cannot render it.
+Same shape as every other gap this repo has found: the check answers the
+same value for "this is fine" and "there is nothing here to check".
+
+**Second consequence, which reorders §7b:** `catalog-vram-probe.js:282`
+refuses an entry with no graph, so every open catalog VRAM measurement
+is blocked on §18, not on the backend alone.
+
+**Constraints recorded for the planning pass** rather than a design:
+author against the running backend's `/object_info` and never from
+memory (node names move between versions); the README's injection
+contract is what "functional" means (prompt/negative reachable through
+the sampler's links, numeric width/height, a frame-count input for
+video, mp4/H.264 out because AE cannot import animated webp); manifests
+need `sizeMB` and not only `file`+`dir` (0.10.9 — every shipped manifest
+lacks it, which nulls `genNeedMB`); `.hash-history.json` is CI-enforced;
+`example-txt2img.json` must never be listed as real (0.9.28 ran the
+placeholder); verify through `comfy_generate`, not ComfyUI's UI; and a
+hand re-export loses the `panelAdaptation` block krea2's manifest
+carries.
+
+**Four open questions handed over rather than answered:** whether H3 has
+a usable t2v path at all (it is `fl2va`, so its i2v graph may already be
+its basic tier); that wan22-5b is `ti2v`, so t2v is one path and i2v is
+a second graph; whether `ltx-small` should be pinned or dropped; and
+whether `minimax-h3-int8` is the h3 graph with one encoder swapped
+(a `panelAdaptation`) rather than a new file. Confirm, do not assume.
+
+Filing only. No `extension/` change, so NO BUMP.
