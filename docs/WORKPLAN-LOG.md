@@ -19817,3 +19817,54 @@ call settles it.
 Suite 76 files, 74 green (the two container-only failures). No
 `extension/` change in this entry — the script and its test are
 `scripts/`+`tests/`, so NO further bump; it rides 0.12.0.
+
+## 2026-09-06 (remote session) — the ComfyUI release is fine; the non-NVIDIA branch is not (§17e)
+
+The one §17c risk I could not settle from the container — does ComfyUI's
+`/releases/latest` carry a portable asset, or is it the 0.10.16 shape
+where llama.cpp's latest answered with no Windows binaries at all — is
+answered. The owner ran the check.
+
+**SETTLED: ComfyUI v0.34.0, `prerelease: false`, four portable assets**
+(`amd` 1.69 GB, `intel` 1.62 GB, `nvidia` 2.0 GB, `nvidia_cu126` 1.95
+GB). So `bootstrapComfy`'s single-release read works as shipped and
+needs no release WALK. §17c is unblocked on that front; what remains is
+disk and time.
+
+**And the real list immediately found a shipped defect the invented one
+was hiding.** I ran the actual `pickComfyAsset` against the actual
+assets rather than eyeballing the regex:
+
+    NVIDIA machine picks : ComfyUI_windows_portable_nvidia.7z   <- correct
+    no-GPU machine picks : ComfyUI_windows_portable_amd.7z      <- WRONG
+
+`pickComfyAsset` (`setup.js:975-983`) looks for a `cpu` asset twice and
+then falls back to the first portable in list order. **ComfyUI ships no
+cpu build**, so every non-NVIDIA machine falls through to AMD — an Intel
+or GPU-less buyer downloads ~1.7 GB of the wrong runtime and nothing
+says so.
+
+**Why it survived: the test fixture invented the missing asset.**
+`tests/test-comfy-backend.js:44` shipped a `ComfyUI_windows_portable_cpu.7z`
+that does not exist upstream, then asserted the picker chose it. The
+stub was unfaithful in precisely the place that decides the branch —
+same class as every other stub-faithfulness finding here, and the reason
+the rule is "stubs model REAL behaviour". Both real-list outcomes are
+pinned now, the wrong one labelled as §17e rather than as correct, so a
+fix visibly flips it.
+
+**Filed as §17e, NOT fixed, because the right answer needs a fact this
+repo does not have.** `detectGpu` returns `hasNvidia` and nothing about
+AMD vs Intel vs none, so an Intel machine cannot be routed to the intel
+build today; and whether a wrong-vendor portable still runs on CPU is
+unmeasured — if it does, today's behaviour is undisclosed, if it does
+not, it is a dead install. Ordered in §17e: name the vendor in
+detectGpu, route by it, REFUSE with what is available when no GPU can be
+named (grounded errors beat a silent guess), and separately consider the
+`nvidia` vs `nvidia_cu126` sub-choice, which ignores `detectGpu`'s
+`cudaVersion` entirely — the same class 0.10.16 fixed for llama.cpp.
+
+Does not block §17c: the owner's machine is NVIDIA and picks correctly,
+which is now pinned by a test against the real asset list.
+
+No `extension/` change (tests + docs), so NO BUMP; rides 0.12.0.

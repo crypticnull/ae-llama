@@ -3656,22 +3656,59 @@ bundle. Two consequences worth their own lines:
 
 ### Passes — one per night, smallest first (PLAN §6)
 
-**One risk on §17c that nobody has checked.** `bootstrapComfy`
-(`setup.js:1045`) reads GitHub's `/releases/latest` for ComfyUI and
-picks a portable asset from it. That endpoint returns the latest
-NON-prerelease, and this repo has already been bitten by exactly that:
-0.10.16 measured llama.cpp's `/releases/latest` answering with v0.3.0,
-whose entire asset list was one `nightly-tag.txt`, so **the panel's
-one-click engine install ended at "No suitable Windows build found" for
-every user** until it was replaced with a release WALK
-(`pickEngineRelease`). `bootstrapComfy` still has the OLD shape. Whether
-ComfyUI's latest non-prerelease carries the portable `.7z` could not be
-checked from the remote container (the proxy blocks the GitHub API and
-the releases web page for repos outside this session's scope). One call
-on the owner's machine settles it, and `comfy-install.js` prints that
-exact command when the install fails on a release/asset error. If it
-turns out to need the walk, that is a small pass against a measured
-failure — not a speculative fix.
+### 17e. A non-NVIDIA buyer is handed the AMD runtime, silently
+
+**MEASURED 2026-09-06** against ComfyUI v0.34.0's real asset list (read
+off the live release endpoint on the owner's machine while un-blocking
+§17c): the release publishes `..._amd.7z`, `..._intel.7z`,
+`..._nvidia.7z` and `..._nvidia_cu126.7z` — **and no cpu build at all.**
+
+`pickComfyAsset` (`setup.js:975-983`) looks for a `cpu` asset twice and
+then falls back to `/portable.*\.7z$/i`, which takes the FIRST portable
+in list order. Run against the real list, `hasNvidia:false` returns
+**`ComfyUI_windows_portable_amd.7z`**. So an Intel-GPU or GPU-less buyer
+downloads ~1.7 GB of the AMD runtime and nothing says so.
+
+It hid because the test fixture INVENTED the missing asset
+(`test-comfy-backend.js:44` shipped a `..._cpu.7z` that does not exist)
+and then asserted the picker chose it — a stub unfaithful in exactly the
+place that decides the branch. Both real-list outcomes are pinned there
+now, the wrong one labelled as this item rather than as correct, so a
+fix visibly flips it.
+
+**Not fixed on reasoning, because the right answer needs one fact this
+repo does not have.** `detectGpu` returns `hasNvidia` and nothing about
+AMD vs Intel vs none, so there is no way to route an Intel machine to
+the intel build today. And whether a wrong-vendor portable still runs on
+CPU is unmeasured — if it does, the current behaviour is merely
+undisclosed; if it does not, it is a dead install. Ordered:
+
+1. Extend `detectGpu` to name the vendor (it already shells to
+   nvidia-smi; a WMI `Win32_VideoController` query answers the rest).
+2. Route amd / intel / nvidia by that vendor.
+3. For "no GPU we can name", REFUSE with what IS available rather than
+   guessing — the grounded-error rule. A generation backend the buyer
+   cannot run is worse than an honest "this needs a supported GPU".
+4. NVIDIA sub-choice: the list carries `nvidia` AND `nvidia_cu126`, and
+   `pickComfyAsset` ignores `detectGpu`'s `cudaVersion` entirely. The
+   plain build is right for a recent driver (it is what the owner's 5090
+   gets, verified); an old driver may need cu126. Same class 0.10.16
+   fixed for llama.cpp, unmeasured here.
+
+Remote-buildable except step 4's verification, which needs an old
+driver. Does NOT block §17c: the owner's machine is NVIDIA and picks
+correctly.
+
+**The `/releases/latest` risk is SETTLED — no walk needed.** Measured
+2026-09-06 on the owner's machine: ComfyUI's latest is **v0.34.0,
+`prerelease: false`, carrying all four portable `.7z` assets.** So
+`bootstrapComfy`'s single-release read (`setup.js:1045`) works as
+shipped, unlike llama.cpp's, which 0.10.16 had to replace with a release
+WALK after `/releases/latest` answered v0.3.0 with no Windows binaries.
+Verified further by running the real `pickComfyAsset` against the real
+list: an NVIDIA machine gets `ComfyUI_windows_portable_nvidia.7z` (2 GB,
+the newest-CUDA build — right for the 5090), pinned in
+`test-comfy-backend.js`. The non-NVIDIA branch is NOT fine — see §17e.
 
 **Backend rule: ONE route.** §17a then §17c come first; after them the
 loop boots the MANAGED backend itself (`--boot`/`--stop`, non-8000

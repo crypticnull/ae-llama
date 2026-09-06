@@ -56,6 +56,32 @@ assert(Setup.pickComfyAsset(
        "generic portable 7z is the fallback either way");
 assert(Setup.pickComfyAsset([{ name: "Source code (zip)" }], true) === null,
        "no portable asset -> null (never grabs source archives)");
+
+// The REAL asset list, from ComfyUI v0.34.0 (not a prerelease), read off
+// the live release endpoint on the owner's machine 2026-09-06. The
+// fixture above is INVENTED, and it invents the one asset that decides
+// the non-NVIDIA branch: ComfyUI publishes amd / intel / nvidia /
+// nvidia_cu126 and NO cpu build at all.
+const REAL_V034 = [
+  { name: "ComfyUI_windows_portable_amd.7z", size: 1690000000 },
+  { name: "ComfyUI_windows_portable_intel.7z", size: 1620000000 },
+  { name: "ComfyUI_windows_portable_nvidia.7z", size: 2000000000 },
+  { name: "ComfyUI_windows_portable_nvidia_cu126.7z", size: 1950000000 }
+];
+assert(Setup.pickComfyAsset(REAL_V034, true).name ===
+       "ComfyUI_windows_portable_nvidia.7z",
+       "against the REAL v0.34.0 assets an NVIDIA machine gets the " +
+       "newest-CUDA nvidia build, not the cu126 fallback — this is the " +
+       "asset WORKPLAN 17c downloads");
+// Not asserted as CORRECT, recorded as MEASURED: with no cpu asset to
+// find, both cpu patterns miss and the bare portable fallback takes the
+// FIRST portable in list order, which is AMD. So an Intel or GPU-less
+// buyer is handed the AMD runtime silently. Filed as WORKPLAN 17e; when
+// that is fixed, this assertion is what flips.
+assert(Setup.pickComfyAsset(REAL_V034, false).name ===
+       "ComfyUI_windows_portable_amd.7z",
+       "MEASURED DEFECT (17e): a non-NVIDIA machine falls through to " +
+       "the AMD build because ComfyUI ships no cpu asset");
 assert(Setup.pickComfyAsset(
          [{ name: "comfyui_WINDOWS_PORTABLE_NVIDIA_cu128.7z" }], true) !==
        null, "asset matching is case-insensitive and suffix-tolerant");
