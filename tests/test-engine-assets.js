@@ -275,7 +275,14 @@ assert(/gpu-detect\.ps1/.test(whisperAssets) &&
 // real failures nobody reads (the same lesson test-comfy-backend.js
 // records about a test that cannot fail for the right reason).
 function findShell() {
-  const candidates = ["pwsh", "powershell", "/opt/pwsh/pwsh",
+  // "powershell" FIRST, deliberately, unlike test-powershell-syntax.js.
+  // That file only PARSES, where 7's parser is a fine stand-in; this one
+  // RUNS the helpers, and they ship against Windows PowerShell 5.1
+  // (CLAUDE.md: ".ps1 must be pure ASCII (Windows PowerShell 5.1)").
+  // CI is windows-latest and has both, so preferring pwsh there would
+  // quietly move the only real execution coverage off the runtime users
+  // actually have. pwsh is the FALLBACK, for Linux containers.
+  const candidates = ["powershell", "pwsh", "/opt/pwsh/pwsh",
                       "/usr/bin/pwsh", "/usr/local/bin/pwsh"];
   for (const c of candidates) {
     try {

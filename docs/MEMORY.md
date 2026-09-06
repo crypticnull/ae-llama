@@ -42,7 +42,7 @@ A correction sits next to the claim it overturns, so a grep can land on the dead
 
 | Date | Lines | What changed |
 |---|---|---|
-| 2026-09-06 | `19974,20013` | SUPERSEDES the standing claim, repeated in many entries including my own today, that test-engine-assets.js and test-ffmpeg-export.js are "container-only failures" to be expected on Linux |
+| 2026-09-06 | `19974,20021` | SUPERSEDES the standing claim, repeated in many entries including my own today, that test-engine-assets.js and test-ffmpeg-export.js are "container-only failures" to be expected on Linux |
 | 2026-09-06 | `19523,19609` | SUPERSEDES: the 2026-09-06 entry "five of seven catalog models have no graph" on two points |
 | 2026-09-06 | `19419,19471` | SUPERSEDES: the previous entry's framing of §17 |
 | 2026-09-05 | `19323,19357` | SUPERSEDES: the previous entry's claim that the CRLF fix was verified |
@@ -63,7 +63,7 @@ _8 older corrections not listed — `grep -niE 'retract|supersed|CORRECTION' doc
 
 | Date | Lines | Ver | Entry | Tags |
 |---|---|---|---|---|
-| 2026-09-06 | `19974,20013` | — | one of the two "known container failures" was a hardcoded binary name | render |
+| 2026-09-06 | `19974,20021` | — | one of the two "known container failures" was a hardcoded binary name | render |
 | 2026-09-06 | `19931,19973` | — | the detached loop never had APPDATA; now it does, and §17c became loop work | loop |
 | 2026-09-06 | `19872,19930` | — | --stop was a no-op across invocations, and would have killed a recycled PID | comfy, setup |
 | 2026-09-06 | `19821,19871` | — | the ComfyUI release is fine; the non-NVIDIA branch is not (§17e) | other |

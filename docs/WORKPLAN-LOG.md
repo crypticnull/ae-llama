@@ -19991,12 +19991,20 @@ That is the cost this repo has already written down twice: *a test that
 cannot fail for the right reason on one machine teaches everyone to skip
 its failures.* I skipped it myself in three entries today.
 
-Fixed by giving `test-engine-assets` the same `findShell()` the syntax
-test uses (pwsh, powershell, then the absolute paths), and by making the
-no-shell case a loud **SKIP** instead of a FAIL — a bare container should
+Fixed by giving `test-engine-assets` a `findShell()` like the syntax
+test's, and by making the no-shell case a loud **SKIP** instead of a FAIL — a bare container should
 not go red, but it must not pretend the checks ran either. Verified in
 both directions: with pwsh present the eight helper assertions RUN and
 pass; with `/opt/pwsh` moved aside the suite prints SKIP and exits 0.
+
+**The candidate ORDER differs from the syntax test's on purpose**, and
+getting it wrong first was my own near-miss. That file lists `pwsh`
+before `powershell`, which is right for a PARSER — 7's parser is a fine
+stand-in. This file RUNS the helpers, and they ship against Windows
+PowerShell 5.1. CI is windows-latest and has both, so pwsh-first would
+have quietly moved the only real execution coverage off the runtime
+users actually have, while looking like a portability fix. `powershell`
+is tried first; pwsh is the fallback that makes Linux work.
 
 **Also: the container had no pwsh at all**, so `test-powershell-syntax.js`
 was silently skipping every `.ps1` in the repo — including the loop
