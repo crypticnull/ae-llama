@@ -194,11 +194,14 @@
         <div id="tier-line" class="tier-line"><!-- filled by main.js:
           the combined hardware-tier line (chat + generation picks) --></div>
         <div class="enhance-block">
-          <span class="enhance-title">Prompt enhancement (per workflow)</span>
+          <span class="enhance-title">Workflows</span>
           <div id="comfy-enhance-list">
-            <!-- one checkbox per workflow, filled by main.js: the chat
-                 model rewrites the rough idea into that workflow's own
-                 prompt format before generating -->
+            <!-- one row per installed template, filled by main.js from
+                 Tools.workflowRows(): what it renders, what it needs,
+                 whether it is enabled, and whether the chat model
+                 rewrites the prompt for it before generating. Format
+                 examples are hidden — they hold a placeholder checkpoint
+                 and can never render. -->
           </div>
         </div>
 

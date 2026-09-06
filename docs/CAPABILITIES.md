@@ -146,6 +146,16 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 
 - Local llama.cpp: llama-server spawned hidden, health-checked, PID
   tracked and reaped; VRAM-aware engine + model download on first run.
+- Settings > ComfyUI > **Workflows** (0.12.2): one row per installed
+  template — its kind, the catalog model it renders, a `default` badge on
+  the graph a nameless request gets, what it NEEDS (VRAM floor,
+  architecture gate, "needs a reference image", how many model files are
+  missing), an ENABLE toggle and the per-workflow prompt-rewrite toggle.
+  Format examples get no row: they hold a placeholder checkpoint and can
+  never render. The row model is `Tools.workflowRows()` and is pure, so
+  what a row claims is stub-tested even though the DOM is not — and it
+  reads the same facts as the chooser, so a row cannot promise what a
+  generation would refuse.
 - ComfyUI backend mode (`comfyBackend`, 0.12.0): **managed by default**
   — the panel installs a portable ComfyUI, runs it on a port it owns
   (8288, outside the ports ComfyUI itself uses) and never consults
