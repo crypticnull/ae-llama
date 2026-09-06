@@ -19868,3 +19868,153 @@ Does not block §17c: the owner's machine is NVIDIA and picks correctly,
 which is now pinned by a test against the real asset list.
 
 No `extension/` change (tests + docs), so NO BUMP; rides 0.12.0.
+
+## 2026-09-06 (remote session) — --stop was a no-op across invocations, and would have killed a recycled PID
+
+Field-found within minutes of shipping it: the owner ran
+`comfy-install.js --boot`, went to play a game, and asked how to kill the
+backend. The answer should have been `--stop`. It would have done
+nothing.
+
+**Bug 1 — nothing persisted.** `Comfy.stopManaged()` finds the backend's
+PID through `global.localStorage`, which in the PANEL is CEP's and
+really survives (that is what makes it work across panel sessions). The
+script's shim was a plain object, so a SEPARATE `--stop` process started
+with an empty store, found no PID, killed nothing — and reported a stop.
+Fixed by giving exactly ONE key a file
+(`<dataRoot>\comfy-managed.pid`). Only that key: if settings lived there
+too, `Settings.set` would start writing them and `origin()` would report
+"localStorage" where the truth for a script is the settings.json on
+disk — and gate 0 depends on origin() telling that truth.
+
+**Bug 2, found while testing bug 1, and the more dangerous one.** Once
+the PID persists, a remembered PID can outlive the process it named —
+a crash, a reboot, or exactly what the owner just did: killing the
+backend by hand from PowerShell. **PIDs recycle**, so `--stop` would then
+`taskkill /T /F` whatever inherited the number. `reapOrphan` already
+guards this ("only kill if the process really is our backend"); the
+script's stop path did not. It does now: a remembered PID is verified as
+a live ComfyUI before anything is killed, and otherwise the record is
+CLEARED with a warning rather than acted on. `--stop` also falls back to
+the port, with the same command-line guard, so a backend booted before
+the PID file existed is still stoppable.
+
+**My own test was partly vacuous and the vacuity check caught it.** The
+first version asserted on a message built from `readPid()` — which reads
+the file DIRECTLY, bypassing the storage shim, so it proved nothing
+about whether comfy.js could see the PID. Reverting the shim's getItem
+left it green. Fixed by having the run read through
+`window.localStorage.getItem` exactly as `stopManaged` does. Now
+verified in both directions: reverting the file-backed READ fails 3
+assertions, reverting the file-backed DELETE fails 1.
+
+**Known limit, stated rather than papered over:** `pidIsComfy` shells to
+PowerShell, so on a non-Windows runner it always answers false and
+`--stop` takes the safe branch (clear the record, do not kill). That is
+the branch the tests pin. The kill path itself is only exercisable on
+Windows, which is where the panel runs.
+
+The immediate answer the owner needed did not depend on any of this —
+the port holds the truth:
+
+    $p = (Get-NetTCPConnection -LocalPort 8288 -State Listen `
+          -ErrorAction SilentlyContinue).OwningProcess
+    if ($p) { taskkill /PID $p /T /F }
+
+It worked, killing the tree (2 processes). No PID file existed on that
+machine — the boot ran the pre-fix script — so there is no stale record
+to clean up there.
+
+Suite 74/76 (the two container-only failures). `scripts/` + `tests/`
+only, so NO BUMP; rides 0.12.0.
+
+## 2026-09-06 (remote session) — the detached loop never had APPDATA; now it does, and §17c became loop work
+
+Owner asked whether the overnight loop is ready for business as usual.
+Checked the loop script rather than answering from the plan, and found
+the one thing that would have made tonight a wasted night.
+
+**`Win32_Process.Create` passes no environment.** The detached child
+inherits the WMI HOST's environment, not the launching shell's, and the
+WMI host has no APPDATA. That is the 2026-09-02 finding — a pass in that
+state had `Settings.dataRoot()` fall through to a folder holding no
+settings.json, `load()` returned pure defaults, and the pass reported
+the DEFAULT ComfyUI port as THE OWNER'S SETTING; two later sessions
+repeated the claim. It has been an open follow-up ever since.
+
+It stopped being cosmetic today: `scripts/comfy-install.js` gate 0
+REFUSES when APPDATA is empty, on purpose (an installer that inherits
+that bug downloads gigabytes into a folder nobody will look in and calls
+it success). So the detached loop could not have taken §17c, and §17c
+gates every local pass in §18 — the loop would have found its top item
+blocked by a guard I added hours earlier.
+
+**Fixed at the detach.** `-AppData` / `-LocalAppData` / `-UserProfile`
+are forwarded on the WMI command line and restored in the detached
+branch, and only ever FILL a missing value — never overwrite a real one,
+so an attached run and a detached one behave identically. When none is
+available it now says so out loud rather than proceeding on defaults.
+
+**Verified with a real parser, not by reading.** The container had no
+pwsh, which means `tests/test-powershell-syntax.js` SKIPS — so a syntax
+error in a load-bearing script would have reached the owner's machine
+unseen, and CLAUDE.md says to install one before touching a `.ps1`.
+Installed PowerShell 7.4.6 per that file's own header; the script parses,
+is BOM-less ASCII, and the forwarded command line was built and checked.
+Then bound end to end against a stub: with APPDATA absent the value is
+picked up, with nothing passed it warns, and a REAL APPDATA is left
+alone.
+
+**Consequence:** §17c is now LOOP-TAKEABLE — marked as such in §18's pass
+table. The loop can install the managed backend itself, which unblocks
+P3 and P5-P10 without the owner at the keyboard.
+
+`scripts/` + docs only, so NO BUMP; rides 0.12.0.
+
+## 2026-09-06 (remote session) — one of the two "known container failures" was a hardcoded binary name
+
+SUPERSEDES the standing claim, repeated in many entries including my own
+today, that `test-engine-assets.js` and `test-ffmpeg-export.js` are
+"container-only failures" to be expected on Linux. **Half of it was not
+environmental at all.**
+
+`test-engine-assets.js:269` called `execFileSync("powershell", ...)` —
+a name that exists only on Windows. So the block that runs the shared
+PowerShell helpers FOR REAL ("the half a JS regex cannot prove") reported
+"powershell unavailable" on every Linux run, and the whole suite went in
+the expected-failures list. PowerShell 7 is cross-platform and runs those
+helpers fine; `test-powershell-syntax.js` has looked for `pwsh` all along.
+The two files disagreed and nobody noticed, because one of them was
+allowed to be red.
+
+That is the cost this repo has already written down twice: *a test that
+cannot fail for the right reason on one machine teaches everyone to skip
+its failures.* I skipped it myself in three entries today.
+
+Fixed by giving `test-engine-assets` a `findShell()` like the syntax
+test's, and by making the no-shell case a loud **SKIP** instead of a FAIL — a bare container should
+not go red, but it must not pretend the checks ran either. Verified in
+both directions: with pwsh present the eight helper assertions RUN and
+pass; with `/opt/pwsh` moved aside the suite prints SKIP and exits 0.
+
+**The candidate ORDER differs from the syntax test's on purpose**, and
+getting it wrong first was my own near-miss. That file lists `pwsh`
+before `powershell`, which is right for a PARSER — 7's parser is a fine
+stand-in. This file RUNS the helpers, and they ship against Windows
+PowerShell 5.1. CI is windows-latest and has both, so pwsh-first would
+have quietly moved the only real execution coverage off the runtime
+users actually have, while looking like a portability fix. `powershell`
+is tried first; pwsh is the fallback that makes Linux work.
+
+**Also: the container had no pwsh at all**, so `test-powershell-syntax.js`
+was silently skipping every `.ps1` in the repo — including the loop
+script I edited in the entry above. CLAUDE.md says to install one before
+touching a `.ps1`; I had not been. Installed PowerShell 7.4.6 per that
+file's own header before making the change, which is how the loop-script
+edit got a real parse rather than a reading.
+
+**Suite is now 75/76 in this container** (was 74/76). The one remaining
+failure, `test-ffmpeg-export.js`, IS genuinely environmental — it asserts
+on Windows absolute paths.
+
+Tests only, so NO BUMP; rides 0.12.0.

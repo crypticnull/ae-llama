@@ -59,7 +59,28 @@ function say(kind, msg) { console.log("[" + kind + "] " + msg); }
 
 // -------------------------------------------------------- the panel, in Node
 
+// The panel's localStorage is CEP's and really persists, which is what
+// makes Comfy.stopManaged() and reapOrphan() work across panel sessions:
+// they look up the backend's PID by key. A script shim backed by a plain
+// object does NOT persist — it dies with the process — so a SEPARATE
+// `--stop` invocation would find no PID and silently kill nothing. Found
+// the hard way 2026-09-06: the owner booted a backend, went to play a
+// game, and --stop would have been a no-op.
+//
+// So exactly one key gets a file, and only that one. Everything else
+// stays in memory on purpose: if settings lived here too, Settings.set
+// would start writing them and `origin()` would report "localStorage"
+// where the truth for a script is the settings.json on disk — and gate 0
+// below depends on origin() telling that truth.
+const PID_KEY = "aell-comfy-pid";
 const storage = {};
+let pidFile = null;            // set once Settings.dataRoot() is loadable
+
+function readPid() {
+  if (!pidFile) return null;
+  try { return fs.readFileSync(pidFile, "utf8").trim() || null; }
+  catch (e) { return null; }
+}
 const window = {
   console: console,
   setTimeout: setTimeout,
@@ -68,11 +89,28 @@ const window = {
   clearInterval: clearInterval,
   localStorage: {
     getItem(k) {
+      if (k === PID_KEY) return readPid();
       return Object.prototype.hasOwnProperty.call(storage, k)
         ? storage[k] : null;
     },
-    setItem(k, v) { storage[k] = String(v); },
-    removeItem(k) { delete storage[k]; }
+    setItem(k, v) {
+      if (k === PID_KEY) {
+        if (!pidFile) return;
+        try {
+          fs.mkdirSync(path.dirname(pidFile), { recursive: true });
+          fs.writeFileSync(pidFile, String(v));
+        } catch (e) {}
+        return;
+      }
+      storage[k] = String(v);
+    },
+    removeItem(k) {
+      if (k === PID_KEY) {
+        if (pidFile) { try { fs.unlinkSync(pidFile); } catch (e) {} }
+        return;
+      }
+      delete storage[k];
+    }
   },
   AEBridge: {
     nodeRequire: require,
@@ -94,6 +132,13 @@ loadPanelFile("setup.js");
 const Settings = window.Settings;
 const Comfy = window.Comfy;
 const Setup = window.Setup;
+
+// Now that Settings is loaded, the PID key has somewhere durable to live
+// — beside settings.json, by the panel's own dataRoot rule rather than a
+// second copy of it.
+try {
+  pidFile = path.join(Settings.dataRoot(), "comfy-managed.pid");
+} catch (e) { pidFile = null; }
 
 // ------------------------------------------------------------- gate 0
 //
@@ -199,11 +244,88 @@ function step2Boot(inst, done) {
     }, { comfyBackend: "managed", comfyManagedPort: port });
 }
 
+/*
+ * Kill whatever is holding the managed port, when the PID file cannot
+ * answer (deleted, a backend booted before this file existed, or a
+ * machine that was rebooted). The PID-recycling guard is the same one
+ * reapOrphan uses: only kill a process whose command line really is
+ * ComfyUI's.
+ */
+function stopByPort(port) {
+  const cp = require("child_process");
+  let out = "";
+  try {
+    out = cp.execFileSync("powershell.exe",
+      ["-NoProfile", "-NonInteractive", "-Command",
+       "$p=(Get-NetTCPConnection -LocalPort " + port + " -State Listen " +
+       "-ErrorAction SilentlyContinue).OwningProcess; " +
+       "if ($p) { (Get-CimInstance Win32_Process -Filter " +
+       "\"ProcessId=$p\").CommandLine + '|' + $p }"],
+      { timeout: 30000, encoding: "utf8" }).trim();
+  } catch (e) { return false; }
+  if (!out) return false;
+  const cut = out.lastIndexOf("|");
+  const cmdline = cut === -1 ? "" : out.slice(0, cut);
+  const pid = cut === -1 ? "" : out.slice(cut + 1).trim();
+  if (!pid || !/ComfyUI/i.test(cmdline)) {
+    say("warn", "something holds port " + port + " but its command line " +
+                "is not ComfyUI — NOT killing it: " + cmdline.slice(0, 120));
+    return false;
+  }
+  try {
+    cp.execFileSync("taskkill", ["/PID", pid, "/T", "/F"],
+                    { timeout: 30000 });
+    say("info", "stopped the backend holding port " + port +
+                " (pid " + pid + ").");
+    return true;
+  } catch (e) {
+    say("warn", "taskkill failed for pid " + pid + ": " + e.message);
+    return false;
+  }
+}
+
+/* Is `pid` a LIVE ComfyUI? The same guard reapOrphan uses, and for the
+ * same reason: PIDs recycle, so a remembered one that has since died —
+ * a crash, a reboot, or the owner killing it by hand — names whatever
+ * inherited the number. Killing that is worse than not stopping. */
+function pidIsComfy(pid) {
+  try {
+    const out = require("child_process").execFileSync("powershell.exe",
+      ["-NoProfile", "-NonInteractive", "-Command",
+       "(Get-CimInstance Win32_Process -Filter 'ProcessId=" +
+       String(parseInt(pid, 10)) + "').CommandLine"],
+      { timeout: 30000, encoding: "utf8" });
+    return /ComfyUI/i.test(String(out || ""));
+  } catch (e) { return false; }
+}
+
 function finish() {
   if (OPT.stop) {
+    // Read it the way comfy.js does — through the storage shim, not the
+    // file — so this reports what stopManaged() will actually find.
+    const knownPid = window.localStorage.getItem(PID_KEY);
+    let stopped = false;
     try {
-      Comfy.stopManaged();
-      say("info", "stopped the managed backend (--stop).");
+      if (knownPid) {
+        if (pidIsComfy(knownPid)) {
+          Comfy.stopManaged();
+          say("info", "stopped the managed backend (pid " + knownPid + ").");
+          stopped = true;
+        } else {
+          say("warn", "the remembered PID " + knownPid + " is not a live " +
+                      "ComfyUI — already stopped, or the number was " +
+                      "recycled. Clearing the record instead of killing " +
+                      "whatever inherited it.");
+          window.localStorage.removeItem(PID_KEY);
+        }
+      }
+      // Either nothing was remembered, or what was remembered is gone.
+      // The port is the other place a live backend can be found.
+      if (!stopped && !stopByPort(port)) {
+        say("info", "no managed backend found to stop (nothing " +
+                    "remembered, and nothing ComfyUI-shaped on port " +
+                    port + ").");
+      }
     } catch (e) { say("warn", "stop failed: " + e.message); }
   } else if (OPT.boot) {
     say("info", "the backend is STILL RUNNING. Stop it with --stop, or " +

@@ -50,7 +50,18 @@ param(
     [switch]$Detached,
     # Leave the hosts' dialogs alone. For watching what AE or Premiere
     # actually puts up, without anything answering it first.
-    [switch]$NoDialogWatchdog
+    [switch]$NoDialogWatchdog,
+    # Carried across the WMI detach below. Win32_Process.Create takes no
+    # environment, so the detached child inherits the WMI HOST's, not
+    # this shell's -- and the WMI host has no APPDATA. Measured
+    # 2026-09-02: a pass in that state had Settings.dataRoot() fall
+    # through to a folder holding no settings.json, load() returned pure
+    # defaults, and the pass reported the DEFAULT ComfyUI port as THE
+    # OWNER'S SETTING. Two later sessions repeated the claim. Anything
+    # reading the panel's real settings from a detached pass needs these.
+    [string]$AppData = '',
+    [string]$LocalAppData = '',
+    [string]$UserProfile = ''
 )
 
 # --- detach: the loop must be nobody's child -------------------------
@@ -74,6 +85,16 @@ if (-not $Detached) {
     if ($Model)      { $fwd = $fwd + ' -Model "' + $Model + '"' }
     if (-not $SkipPermissions) { $fwd = $fwd + ' -SkipPermissions:$false' }
     if ($NoDialogWatchdog) { $fwd = $fwd + ' -NoDialogWatchdog' }
+    # Hand this shell's user folders to the detached child explicitly.
+    if ($env:APPDATA) {
+        $fwd = $fwd + ' -AppData "' + $env:APPDATA + '"'
+    }
+    if ($env:LOCALAPPDATA) {
+        $fwd = $fwd + ' -LocalAppData "' + $env:LOCALAPPDATA + '"'
+    }
+    if ($env:USERPROFILE) {
+        $fwd = $fwd + ' -UserProfile "' + $env:USERPROFILE + '"'
+    }
     $spawn = $null
     try {
         $spawn = Invoke-CimMethod -ClassName Win32_Process `
@@ -96,6 +117,25 @@ if (-not $Detached) {
     }
     Write-Host 'Detach unavailable -- running ATTACHED in this window.'
     Write-Host 'Do not close this window while the loop runs.'
+}
+
+# Restore the user folders the WMI host did not carry. Only ever FILLS a
+# missing one -- never overwrites a real value, so an attached run and a
+# detached one behave identically. Without this, everything that reads
+# the panel's settings from a pass (scripts\comfy-install.js, the
+# probes) either refuses at its own gate or, worse, quietly answers from
+# defaults; the 2026-09-02 entry is what that costs.
+if (-not $env:APPDATA -and $AppData) { $env:APPDATA = $AppData }
+if (-not $env:LOCALAPPDATA -and $LocalAppData) {
+    $env:LOCALAPPDATA = $LocalAppData
+}
+if (-not $env:USERPROFILE -and $UserProfile) {
+    $env:USERPROFILE = $UserProfile
+}
+if (-not $env:APPDATA) {
+    Write-Host ('WARNING: APPDATA is empty and none was passed in. ' +
+                'Passes that read the panel settings will refuse ' +
+                '(see scripts\comfy-install.js gate 0).')
 }
 
 # NOT 'Stop': git and the CLI both write ordinary progress to stderr, and

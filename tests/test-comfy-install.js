@@ -94,5 +94,49 @@ function run(env, args) {
          "and names the instance the panel is actually talking to");
 }
 
+// 4. The PID survives BETWEEN invocations.
+//
+// This is the bug this block exists for. The panel's localStorage is
+// CEP's and persists, which is what makes Comfy.stopManaged() work
+// across panel sessions — it looks the backend's PID up by key. The
+// script's shim was a plain object, so a SEPARATE `--stop` run started
+// with an empty store, found no PID, and silently killed nothing while
+// reporting a stop. Found the hard way 2026-09-06: a backend was booted,
+// the owner went to play a game, and --stop would have been a no-op.
+{
+  const fs = require("fs");
+  const os = require("os");
+  const tmp = path.join(os.tmpdir(), "aell-install-pid-" + process.pid);
+  const root = path.join(tmp, "AE-Llama");
+  fs.mkdirSync(root, { recursive: true });
+  // Exactly what a previous --boot leaves behind.
+  fs.writeFileSync(path.join(root, "comfy-managed.pid"), "424242");
+
+  const r = run({ APPDATA: tmp }, ["--check", "--stop"]);
+  // The PID reaches comfy.js through the storage shim — the run reads it
+  // the way stopManaged() does, so this failing means the shim is not
+  // file-backed, which is the whole bug.
+  assert(/424242/.test(r.out),
+         "a PID written by an earlier run is READ by a later one");
+
+  // 424242 is not a live ComfyUI here, so the run must say so and clear
+  // the record — never taskkill a number that has been recycled. This is
+  // the case the owner hit on 2026-09-06: they killed the backend by
+  // hand, which leaves exactly this state behind.
+  assert(/not a live ComfyUI/.test(r.out),
+         "a remembered PID that is not a running ComfyUI is NOT killed");
+  assert(!/stopped the managed backend/.test(r.out),
+         "and no stop is claimed for it");
+  assert(!fs.existsSync(path.join(root, "comfy-managed.pid")),
+         "the stale record is cleared rather than left for the next run");
+
+  // With nothing remembered it must NOT claim a stop it did not make.
+  const r2 = run({ APPDATA: tmp }, ["--check", "--stop"]);
+  assert(/no managed backend found to stop/.test(r2.out),
+         "with nothing remembered it says so rather than reporting success");
+  assert(!/stopped the managed backend/.test(r2.out),
+         "a stop is never reported without a PID behind it");
+}
+
 console.log(failures ? "\n" + failures + " FAILED" : "\nALL TESTS PASSED");
 process.exitCode = failures ? 1 : 0;
