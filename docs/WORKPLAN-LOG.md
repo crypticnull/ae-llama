@@ -19354,3 +19354,64 @@ verified only one way and that is how this recurred:
 way). No latent bug there.
 
 No `extension/` change, so NO BUMP.
+
+## 2026-09-06 (remote session) — no, the user never starts ComfyUI; but the panel does not install it either
+
+Owner asked whether a buyer will always need an external ComfyUI running
+before image/video generation works. Answered from the code, and the
+answer split in two.
+
+**The shipped design already says no.** `comfy_generate` calls
+`Comfy.ensureRunning` (`tools.js:2081`), which uses whatever answers at
+the configured URL, else reports a ComfyUI found on 8188/8189/8000
+WITHOUT rerouting to it, else spawns the vendor portable install hidden
+on the configured port (`comfy.js:2103-2141`), health-polls it, persists
+the PID and reaps it on panel close (`main.js:1460`) and next launch
+(`main.js:1178`). No window, no launcher, no port for the buyer.
+
+**But the vendor install is a BUTTON.** `Setup.bootstrapComfy` has
+exactly one caller — `btn-comfy-install` (`main.js:1394`). The engine
+gets `autoBootstrap` (`main.js:774`, "one time, fully automatic");
+ComfyUI gets nothing. A buyer who never opens Settings and asks for a
+picture hits a grounded dead end. Filed as **§17a**, with the placement
+argued rather than assumed: not on panel open (a multi-GB download for a
+feature many buyers never touch), but at `ensureRunning`'s own
+`if (!install)` branch, which is the exact point where the panel knows
+both that the backend is missing and that a generation was just asked
+for.
+
+**This falsifies a premise in §13a**, corrected in place: that section
+budgeted its wheel install against "the ComfyUI install that already
+happens at first run". It does not happen, so §13a step 3 targets an
+interpreter that may not exist. §17a is now a stated prerequisite.
+
+**Owner's second call, and it is the bigger one:** stop using the
+hand-built ComfyUI on the dev machine and install the portable one a
+buyer gets. Every ComfyUI number this repo holds — krea2's 24,160 MiB,
+the /free 0 MB delta, the handoff peak — was measured against a
+hand-launched 0.32.0 with `--base-directory` and a non-default port. No
+buyer runs that, and the vendor build pins its own python and torch,
+which is exactly what §13a's wheel selection keys on. Filed as **§17b**,
+with the space objection answered from the code rather than waved off:
+`applyExtraModelPaths` (`comfy.js:1985`) makes the vendor backend SEARCH
+the existing ~26 GB via `comfyModelRoots` without copying, new weights
+land in one deletable folder (`setup.js:669-694`), and
+`removeCatalogWeights` (`tools.js:1527`) refuses to delete anything
+outside a panel-managed folder, so the cleanup button cannot reach the
+owner's own store. The standing cost is the portable runtime, whose
+extracted size **nobody here has measured** — recording it is part of
+the pass.
+
+**Consequence for §7b**, updated in place: its blocker was "a pass
+cannot start the owner's instance". With a vendor install the loop boots
+its own backend on demand, so §7b becomes loop work the moment §17b
+lands. The one step that stays manual and stays the owner's: their own
+ComfyUI must be genuinely stopped, or `ensureRunning` finds it and the
+shipped path is never exercised.
+
+**§17c** marks what must be re-measured on the vendor build rather than
+carried over — the krea2 reading, the /free behaviour, and any tier
+threshold calibrated on the owner's environment. By re-running the
+probes, never by reasoning about version differences.
+
+Filing only. No `extension/` change, so NO BUMP.

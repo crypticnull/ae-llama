@@ -1625,6 +1625,16 @@ unattended restart risks leaving the machine with no backend at all.
 **Needs the owner to bring ComfyUI up** (and to confirm the port). Until
 then this whole section is skipped and passes fall through to section 8.
 
+**THE UNBLOCK IS §17b, and it is better than "the owner starts it"**
+(owner, 2026-09-06). `ensureRunning` cannot start the owner's OWN
+ComfyUI — by design, it only ever spawns the vendor portable install
+under `<dataRoot>\vendor\comfy` (`comfy.js:2122-2141`,
+`setup.js:943-964`). Install that vendor backend on this machine and
+the loop can boot its own backend on demand, unattended, with no owner
+in the loop — **and it is then measuring the thing buyers actually
+get**, which the owner's hand-built 0.32.0 never was. §17b is the pass
+that does it. Until §17b lands this section stays blocked.
+
 **THIS MACHINE'S ComfyUI LISTENS ON PORT 8000** (owner, 2026-09-01).
 Every probe script under `scripts/` defaults to
 `http://127.0.0.1:8188` and will find nothing without
@@ -2784,10 +2794,20 @@ Both are MEASURE-FIRST. Neither should be landed from reasoning.
 Scan the hardware, download the right things for it, install them, and
 the only thing a user ever sees is *"here's what you're running, and
 Triton and SageAttention have been successfully installed"*, shown
-alongside the model downloads and the ComfyUI install that already
-happen at first run. Environment paths get exposed in Advanced Settings
-for someone with a niche setup, but reaching for them must never be
+alongside the model downloads and the ComfyUI install that happen at
+first run. Environment paths get exposed in Advanced Settings for
+someone with a niche setup, but reaching for them must never be
 necessary.
+
+**CORRECTION 2026-09-06: "the ComfyUI install that ALREADY happens at
+first run" was wrong — it does not happen.** `autoBootstrap`
+(`main.js:774`) installs the llama.cpp engine hands-off and nothing
+else; `Setup.bootstrapComfy` has exactly one caller,
+`btn-comfy-install` in Settings (`main.js:1394`). So this section's
+step 3 installs wheels into `<vendor>\comfy\python_embeded`, an
+interpreter that exists only if the user pressed a button. **§17a is a
+hard prerequisite for 13a** — until it lands, "hands off" has a button
+in the middle of it.
 
 This is not a research task. **Almost every piece already exists**, and
 the job is mostly wiring them together:
@@ -3289,6 +3309,142 @@ time a generation runs against a real project; until then §16d's AE
 figure is the measured *idle* 3,255 MB.
 
 Do NOT rewrite the tier table, copy or boundaries in the same pass.
+
+## 17. The hidden ComfyUI backend — hands-off install, and DOGFOOD it here
+
+Filed 2026-09-06 after the owner asked the question this section exists
+to answer: *"will the user always need to start up an external ComfyUI
+instance before being able to image/video gen from the plugin?"*
+
+**The intended answer is no, and the machinery for it already ships.**
+`comfy_generate` calls `Comfy.ensureRunning` before every generation
+(`tools.js:2081`), which in order: (1) uses whatever answers at the
+configured URL as-is; (2) scans 8188/8189/8000 and, if a ComfyUI is
+answering elsewhere, **reports it and never reroutes** — silently
+rendering on a different backend would swap the model set under the
+user; (3) otherwise spawns the vendor portable install hidden
+(`windowsHide: true`, `--disable-auto-launch`, on the configured port),
+health-polls it up, persists the PID and reaps it on panel close
+(`main.js:1460`) and on next launch (`main.js:1178`). A buyer sees no
+window, no launcher and no port.
+
+Two things stop that from being true today, and they are 17a and 17b.
+
+### 17a. The backend install is a BUTTON, not first-run (loop-takeable, BUMPS)
+
+`Setup.bootstrapComfy` has exactly one caller: `btn-comfy-install`
+(`main.js:1394`). Compare `autoBootstrap` (`main.js:774`), which
+installs the inference engine on first run and says so — *"First-run
+setup: installing the local AI engine (one time, fully automatic)."*
+ComfyUI has no equivalent, so a fresh buyer who never opens Settings
+and asks for a picture gets a dead end:
+
+> "ComfyUI is not running and the hidden backend is not installed.
+> Install it in Settings → ComfyUI → 'Install hidden backend', or
+> launch your own ComfyUI."
+
+Grounded and actionable — and still a manual step in a product whose
+stated requirement is that there are none.
+
+**Two halves, and the second is the one that removes the dead end:**
+
+1. **First-run install**, alongside the engine, in the shape §13a
+   assumes. Do NOT simply extend `autoBootstrap`'s existing trigger:
+   it fires on panel open, and a multi-gigabyte download on open for a
+   feature many buyers never touch is a worse default than the button.
+   The engine is core (no chat without it); the backend is not.
+2. **Install-on-demand at the refusal.** `ensureRunning`'s
+   `if (!install)` branch (`comfy.js:2124-2130`) is the exact point
+   where the panel knows the backend is missing AND that the user just
+   asked for a generation. Install there, with progress in chat, then
+   boot and continue — instead of refusing. This is the half that also
+   covers a panel installed before 17a shipped, and a first-run install
+   that failed or was cancelled.
+
+Verification: delete `<dataRoot>\vendor\comfy`, open the panel, ask for
+a picture, and watch it install → boot → render with nothing pressed.
+Then re-run with the download cancelled mid-way and confirm the panel
+degrades honestly rather than half-installing. Bumps (`extension/`).
+
+### 17b. Dogfood the shipped backend HERE (owner-approved 2026-09-06)
+
+**The owner's reasoning, which is the whole item:** *"how can we be sure
+comfy works on other users if we don't test it here? we should change my
+special bypass to just also install a portable comfy like a user would."*
+
+Every ComfyUI measurement this repo holds — krea2's 24,160 MiB, the
+/free behaviour, the weight-availability verdicts, the handoff peak —
+was taken against the owner's own hand-built ComfyUI 0.32.0 in
+`Documents\ComfyUI`, launched by hand with `--base-directory` and a
+port a buyer will never have. **No buyer runs that.** The vendor
+portable build ships its own python and torch, and torch version is
+exactly what §13a's wheel selection keys on, so "it worked here" has
+never been evidence about the shipped path.
+
+**The space objection is answered, and it was the only real one.** The
+owner's stated reason for using their own install is disk space. The
+weights do not have to move or duplicate:
+
+- `applyExtraModelPaths` (`comfy.js:1985`) writes
+  `<vendor>\comfy\ComfyUI\extra_model_paths.yaml` from
+  `comfyModelsDir` + `comfyModelRoots` + the Comfy-Desktop shared store
+  it finds on its own. Point `comfyModelRoots` at
+  `Documents\ComfyUI\models` and the vendor backend SEARCHES the ~26 GB
+  already on this disk without copying a byte.
+- New weights land in `comfyModelsDir` if set, else
+  `<vendor>\comfy\ComfyUI\models` (`setup.js:669-694`) — one folder,
+  deletable.
+- `removeCatalogWeights` (`tools.js:1527`) **refuses to delete anything
+  outside a panel-managed folder**, so the Settings Remove button
+  cannot touch the owner's own store while cleaning up test downloads.
+  Exercising that refusal in the field is already §7b's fourth bullet.
+
+So the standing cost is the portable runtime (python + torch + CUDA
+libs), not the models. **Record its real extracted size in the log —
+nobody here has measured it**, and the number decides whether this is a
+permanent arrangement or a per-test one.
+
+**The one manual step, stated honestly:** the owner's own ComfyUI must
+be genuinely STOPPED for the shipped path to run at all. With it up,
+`ensureRunning` step 1 uses it (if it is on the configured port) or
+step 2 finds it on 8188/8189/8000 and refuses with a hint — either way
+the vendor backend never boots and nothing is being dogfooded. Stopping
+it is the owner's call and the loop must never do it.
+
+**The pass:**
+
+1. Owner stops their own ComfyUI and confirms nothing answers on
+   8188/8189/8000.
+2. Settings → Install hidden backend (or, once 17a lands, just ask for
+   a picture). Log the download size, the extracted size, the ComfyUI
+   version, and the torch/python the build pins — the last is §13a
+   step 1's measurement, taken for free here.
+3. Set `comfyModelRoots` to the existing stores; verify the written
+   yaml and that `Comfy.missingWeights` answers empty for KREA2.
+4. Re-run `scripts/weight-availability-probe.js` and one real
+   `comfy_generate` end to end through the panel.
+5. Log what the buyer path does that the owner's install never did.
+
+After this, §7b's bullets are loop work: the loop boots its own backend.
+
+### 17c. What must be RE-measured once 17b lands
+
+Not a rewrite of the numbers — a marked re-take, because the
+environment changed underneath them:
+
+- **krea2's 24,160 MiB** (`version.js`, `measured: true`) was taken on
+  the owner's torch build. Re-run `catalog-vram-probe.js` on the vendor
+  backend; if it moves, the entry carries the vendor reading and the
+  old one goes to the log with its environment named.
+- **The /free finding** ("0 MB delta, this backend drops the generation
+  on its own ~10 s before the round ends") is a property of a specific
+  ComfyUI version. Re-check on the vendor build before trusting the
+  resume path's floor logic there.
+- **§13a step 7's tier consequences** inherit this: any VRAM threshold
+  calibrated on the owner's environment is calibrated on the wrong one.
+
+Do NOT re-measure by reasoning about version differences. Re-run the
+probes.
 
 ## Out of scope for the local session (remote builds these)
 
