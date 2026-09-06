@@ -1,3 +1,15 @@
+# Proposals — reviewed plans, and the record of what was reviewed
+
+Two plans live here. Each has an authoritative document whose §0 lists
+the claims the review overturned; the queue view is in `../WORKPLAN.md`.
+
+| plan | authoritative | queue | status |
+|---|---|---|---|
+| ComfyUI templates — a basic graph per catalog model, on a UI-arranged foundation | **`comfy-templates-PLAN.md`** | §18 | planned 2026-09-06, not built |
+| Memory & planning layer, and the tier floor | **`memory-layer-REFINED.md`** | §15, §16 | reviewed 2026-09-05, owner-gated |
+
+---
+
 # Review brief — memory layer, and the tier floor
 
 **Status 2026-09-05: the review has run.** Start with

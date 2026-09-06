@@ -19519,3 +19519,90 @@ whether `minimax-h3-int8` is the h3 graph with one encoder swapped
 (a `panelAdaptation`) rather than a new file. Confirm, do not assume.
 
 Filing only. No `extension/` change, so NO BUMP.
+
+## 2026-09-06 (remote session) — §18 planned: basic graphs on a manifest-driven foundation, and two of my own claims overturned
+
+SUPERSEDES: the 2026-09-06 entry "five of seven catalog models have no
+graph" on two points. (1) It listed "manifests need `sizeMB`" as a
+constraint — STALE: `genNeedMBFor` (`tools.js:1579-1596`) prices off the
+disk since 0.10.9 and treats `sizeMB` as an optional override; what must
+be right is `file` + `dir`. (2) It asked "whether H3 has a usable t2v
+path at all" — it does, and it has RENDERED: `procedural.firstFrame.detachable`
+deletes the LoadImage node when no image is given (`comfy.js:495-525`,
+landed 2026-08-26, LOG 2226-2296), and the first end-to-end render on
+2026-08-27 (LOG 2445-2515) passed no image — 5 frames, 28,379 MiB peak,
+AE read it back. H3 lacks a MEASURED block, not a t2v path.
+
+**How the plan was made.** The owner asked for a plan that is "strict
+and basic proof of function for now, while laying the foundation for
+more complex workflows in the future arranged and accessible via the
+plugin UI". Run as an orchestrated pass: five grounded readers (437
+facts with file:line, 48 surprises), three drafts from distinct angles
+(proof-first, foundation-first, risk-first), three judges — all three
+picked foundation-first — one synthesis, then five skeptic lenses
+(true-in-code, scope-creep, verification-honesty, constraints,
+future-foundation) and a completeness critic: 79 findings, 35 confirmed,
+39 contested, 5 refuted, 3 blocking. Fourteen of the findings that
+changed the plan were re-verified by hand against source before being
+written in. Authoritative: `docs/proposals/comfy-templates-PLAN.md`
+(§0 lists everything overturned); queue view: WORKPLAN §18.
+
+**What the attack overturned in the draft, and the evidence:**
+
+- The ratchet `models[].file ⊆ catalog urls[]` would have gone RED on
+  night one — the shipped H3 manifest carries an OPTIONAL lora with a
+  subfolder path in no catalog list. Rule: non-optional entries only, by
+  basename.
+- A `/object_info` checker script was cut: `POST /prompt` refuses a bad
+  class or input name before execution and `comfy.js:1618-1630` surfaces
+  the server's message — `comfy-probe --no-ae` is that check.
+- A `setCatalog` push into tools.js was cut: `version.js` loads before
+  `tools.js` (`index.html:318`, `:327`); `update.json` carries no
+  `comfyCatalog`, so the feed override has no producer.
+- An `edited` marker was cut: `.hash-history.json` is a dotfile the
+  seeder skips (`setup.js:94`).
+- `comfy_list_workflows` keeps returning strings: its doc says "by name"
+  (`tools.js:647`) and `comfy_generate`'s args say "name from
+  comfy_list_workflows" (`:654`).
+- "No drift test for KREA2" was wrong — `test-workflow-adapt.js:652-658`.
+- Neither probe boots a backend (`comfy-probe.js:338-352`,
+  `catalog-vram-probe.js:609-616` exit on unreachable), and a
+  probe-booted backend nothing reaps would squat on the owner's port —
+  so P2 gives both probes `--boot`/`--stop`, and every local pass names
+  its backend route: attended on 8000 (owner Q5, `comfyModelsDir` set,
+  8000 un-blinded) or unattended after §17a + §17c.
+- Manifest-less user exports have no `kind`; README line 23 promises
+  they "work as-is", so the resolver keeps them as candidates after the
+  described ones instead of refusing.
+- The Settings row must say what a template NEEDS — the owner's words —
+  and the data exists one hop away (`minVramGB`, `requiresBlackwell`,
+  `requiresImage`); added as a pure derived phrase, no per-workflow disk
+  state (the model rows already show it, `main.js:62-142`).
+
+**The design that survived.** One pure `Comfy.describeWorkflows` (name,
+kind, `catalogEntry`, `takesImage`, `requiresImage`, `lengthIn`) feeding
+a pure `resolveWorkflow` that replaces `tools.js:1958`'s alphabetical
+default — today "a red apple" goes to the 40 GB H3 VIDEO graph because
+`ae_llama_h3` sorts first — with kind from `frames`/`durationSeconds`,
+then `Tiers.entryFits` FIRST, then weights on disk, then highest
+`minVramGB`, then name; and a Settings Workflows list built from the same
+describer. Zero prompt bytes. Two allowlists that fail both directions:
+`ALLOW_NO_TEMPLATE` (existence) and `ALLOW_UNMEASURED` (proof) — a graph
+committed and never rendered passes the first and fails the second.
+Basic templates are frozen; refinements are siblings under new names,
+because the hash-history seeder preserves an edited copy forever.
+
+**One measurement the owner's "improve manually" depends on and nobody
+has taken:** whether ComfyUI's frontend opens an API-format graph as an
+editable canvas. P5 takes it; if the answer is no, basics ship as UI
+exports + `adapt-workflow.js`, which forces a re-harvest of
+`scripts/comfy-node-defs.json` (KSampler, CheckpointLoaderSimple, Wan*
+are absent from it today).
+
+**Ordering that matters for the first night:** P0–P2 are remote and must
+be pushed before the loop takes P5; P3/P5–P8 need a backend route with
+an owner behind it (§17a/§17c, or Q5); gate 0 of every local pass prints
+`Settings.origin()` and refuses when APPDATA is empty (the 2026-09-02
+false-port claim).
+
+Planning only. No `extension/` change, so NO BUMP.

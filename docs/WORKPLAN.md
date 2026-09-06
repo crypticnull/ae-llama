@@ -3521,89 +3521,137 @@ environment changed underneath them:
 Do NOT re-measure by reasoning about version differences. Re-run the
 probes.
 
-## 18. A basic working graph for EVERY catalog model — PLAN DEFERRED
+## 18. A basic working graph for EVERY catalog model — PLANNED 2026-09-06
 
-**Owner, 2026-09-06:** *"be prepared to create workflows for all these
-other models for at least basic use I can later improve manually, but we
-should have those built alongside this loop. so like a basic wan t2v and
-h3 and krea2 and then we make more intricate ones from the basically
-functional ones."*
+**Authoritative document: `docs/proposals/comfy-templates-PLAN.md`.**
+Read it before starting any pass here — it carries the citations, the
+per-entry table, the verification chain and the reasoning. This section
+is the queue view. Planned by an adversarial pass (five readers, three
+drafts, three judges, five skeptic lenses + a critic; 79 findings) and
+re-verified by hand; PLAN §0 lists what it overturned.
 
-**PLAN NOT WRITTEN ON PURPOSE.** The owner is handing the shape of this
-track — tiers, naming, authoring order, how a basic graph becomes a
-refined one — to a Fable 5.1 pass. This section is the INPUT to that
-pass: the measured gap and the constraints any plan has to satisfy.
-Nothing here is a design. Do not start building templates from it.
+**Owner, 2026-09-06:** *"keep it strict and basic proof of function for
+now, while laying the foundation for more complex workflows in the
+future arranged and accessible via the plugin UI."* Two halves, kept
+distinct: BASIC templates that provably render NOW; a FOUNDATION (one
+manifest-driven describer feeding the default choice and a Settings
+Workflows list) that later complex workflows plug into by editing a
+manifest and a graph, not panel code.
 
-### The gap, counted (2026-09-06)
+### Two corrections to what this section said yesterday
 
-Seven catalog entries (`version.js:91-200`), two templates:
+- **"Manifests need `sizeMB`" was STALE.** `genNeedMBFor`
+  (`tools.js:1579-1596`) prices off the DISK since 0.10.9; `sizeMB` is an
+  optional override. What must be right is `file` + `dir`.
+- **"H3 may have no t2v path" was WRONG.** `procedural.firstFrame.detachable`
+  deletes the LoadImage node when no image is given and runs
+  text-to-video (`comfy.js:495-525`, landed 2026-08-26); the first
+  end-to-end render on 2026-08-27 (LOG 2445-2515) passed no image. H3
+  lacks a MEASURED block, not a t2v path.
 
-| entry | kind | `workflowTemplate` |
+### The gap (unchanged, counted)
+
+Seven entries, two templates: sd15, sdxl, ltx-small, wan22-5b,
+minimax-h3-int8 have none; minimax-h3 = `AE_LLAMA_H3_I2V_V1` (i2v AND
+t2v via detach); krea2 = the owner's authored graph. Nothing catches it:
+`test-model-catalog.js:229` skips entries with no template, `recommendGen`
+never checks renderability, and the nameless default is ALPHABETICAL
+(`tools.js:1958` `chosen = list[0]` — "a red apple" goes to the 40 GB H3
+video graph today). `catalog-vram-probe.js:282` refuses entries with no
+graph, so §7b's VRAM readings are blocked on this section.
+
+### The contract (PLAN §2)
+
+`AE_LLAMA_<MODEL>_<MODE>_V1`, API format, core nodes only, authored from
+the RUNNING backend's `/object_info` — never from memory. README
+injection contract: CLIPTextEncode via the sampler's links, exactly ONE
+width+height node, a literal numeric `length` for video, `SaveVideo`
+mp4/h264, seeds pinnable, relative `filename_prefix`, weight filenames =
+the entry's `urls[]` basenames. Manifest: `kind` (its first consumer),
+NEW `catalogEntry`, `models[{file, dir, role, optional?}]`,
+`procedural.firstFrame` only when `/object_info` says the image input is
+optional (detachable) or required (true i2v). Frozen once shipped;
+refinements are SIBLINGS under new names.
+
+Selection when the model names none: kind from `frames`/`durationSeconds`
+→ described workflows of that kind, enabled, `requiresImage` excluded
+without an image → ordered `Tiers.entryFits` first, then weights on
+disk, then highest `minVramGB`, then name → manifest-less templates
+after those → grounded error. Zero prompt bytes.
+
+### Per entry (PLAN §3)
+
+| entry | what | order |
 |---|---|---|
-| sd15 | image | **none** |
-| sdxl | image | **none** |
-| krea2 | image | `AE_LLAMA_KREA2_V1` — the owner's authored graph |
-| ltx-small | video | **none, and no pinned URLs either** |
-| wan22-5b | video | **none** |
-| minimax-h3 | video | `AE_LLAMA_H3_I2V_V1` — **i2v only, no t2v path** |
-| minimax-h3-int8 | video | **none** (same weights as h3 bar the encoder) |
+| sd15 | `AE_LLAMA_SD15_T2I_V1` — the `example-txt2img` shape with the real ckpt; KSampler / CheckpointLoaderSimple are NOT in the harvest, confirm every input from `/object_info` | 1 |
+| sdxl | same shape, ckpt swap | 2 |
+| minimax-h3 | exists; regression re-run + the missing measured block; `catalogEntry` | 3 |
+| wan22-5b | `AE_LLAMA_WAN22_5B_T2V_V1` — loaders are in the harvest, the 5B latent/sampler classes are not; `/object_info` decides one graph (detachable) or two | 4 |
+| krea2 | exists; `catalogEntry` only | done |
+| minimax-h3-int8 | probably the H3 graph with one encoder swapped via `adapt --manifest` setInputs — CONFIRM from the UI source | owner Q2 |
+| ltx-small | no urls, no graph — pin or drop | owner Q1 |
 
-### Why it is not just a to-do
+### Verification (PLAN §5) — the parts that run with no backend
 
-- **`recommendGen` offers models `comfy_generate` cannot render.** A
-  shipped defect, already named in §7b and never closed.
-- **It blocks every open VRAM measurement.**
-  `catalog-vram-probe.js:282` refuses an entry with no graph, so §7b's
-  sd15 / sdxl / wan22-5b readings cannot be taken at all.
-- **No ratchet sees it.** `tests/test-model-catalog.js:229` opens with
-  `if (!e.workflowTemplate) return;` — an entry with no template passes
-  the check in silence. The one cheap thing that is unambiguous
-  regardless of the plan is making that gap explicit rather than
-  skipped, and even that should wait for the plan to name its shape.
+`tests/test-workflow-bundle.js` (new): every non-example template has a
+manifest with `kind`, `catalogEntry`, `dir ∈ Comfy.MODEL_SUBS`,
+non-optional model basenames ⊆ the entry's urls/files (the shipped H3
+manifest's OPTIONAL lora is why "optional" is exempt — the draft rule
+would have gone red on night one); `procedural` targets exist; replay
+`injectParams` over the real file and assert prompt / seed / size landed
+via `_graphCarriesValue` (export it in P1); video graphs carry SaveVideo
+mp4/h264. `test-model-catalog.js:229` flips to assert with two allowlists
+that fail BOTH directions: `ALLOW_NO_TEMPLATE` (the five) and
+`ALLOW_UNMEASURED` (`minimax-h3`) — existence is not proof.
+`test-comfy-workflow-choice.js` re-pinned; a `comfyWorkflows.enabled`
+migration stub; context budget unchanged.
 
-### Constraints any plan must satisfy (measured, not preferences)
+Per template with a backend: `weight-availability-probe` (prices,
+refuses nothing) → `comfy-probe --no-ae` (the server's own validation IS
+the `/object_info` check) → `catalog-vram-probe --entry` (reading into
+the LOG; `measured: true` ONLY from the vendor backend, §17c/§17d) →
+`comfy-probe --workflow` (9 verdicts incl. AE import) → `chat-probe
+--steps 12,13`. **Gate 0 of every local pass:** print `Settings.origin()`
+and refuse when `appdata` is empty.
 
-- **Author against the running backend's `/object_info`, never from
-  memory.** Node class and input names move between ComfyUI versions; a
-  graph written from recollection is the confident-wrong artifact class
-  this repo refuses.
-- **The panel's injection contract** (`extension/comfy-workflows/README.md`):
-  prompt/negative reachable by following the sampler's
-  `positive`/`negative` links; a node with numeric `width`+`height`;
-  video needs a numeric `length`/`frames`/`video_frames`/`num_frames`
-  and must end writing real mp4/H.264 — **AE cannot import animated
-  webp**. "Functional" means this, not "renders something".
-- **Manifests need `sizeMB`, not just `file`+`dir`.** Every shipped
-  manifest carries `file`+`dir` and no size, which made `genNeedMB` null
-  for every template ever shipped and paused chat on a 32 GB card for
-  jobs it could have run concurrently (0.10.9, measured).
-- **`.hash-history.json` is CI-enforced** — a bundled file whose current
-  hash is unrecorded fails `workflow-hash-history.js --check`.
-- **`example-txt2img.json` must never be listed as real.** It was
-  offered to the model as a workflow once and a generation ran the
-  placeholder (0.9.28).
-- **Verify through `comfy_generate`, not ComfyUI's UI** — the panel's
-  injection is the thing under test.
-- **Re-exports lose panel adaptations.** `AE_LLAMA_KREA2_V1.manifest.json`
-  carries a `panelAdaptation` block recording the absolute-path
-  `filename_prefix` that ComfyUI refuses; a hand-refined re-export needs
-  it re-applied.
+### Passes — one per night, smallest first (PLAN §6)
 
-### Open questions the plan has to answer
+**Backend rule.** Route (a): attended, the owner's ComfyUI on 8000 —
+needs Q5, `comfyModelsDir` SET (never the owner's store) and 8000
+un-blinded (§7b bullet 1); every reading is a §17d re-take. Route (b):
+unattended after §17a + §17c, the probes boot the managed backend with
+`--boot` and stop it with `--stop`. **P0–P2 are pushed before the first
+overnight run.**
 
-1. **H3 t2v may not exist.** H3 is `fl2va` (first/last frame → video +
-   audio). Whether it has a usable text-only path is a `/object_info`
-   question, not an assumption — the owner named "h3" in the ask and the
-   honest answer may be that its i2v graph is already its basic tier.
-2. **wan22-5b is `ti2v`** — text *and* image to video. "Basic wan t2v"
-   is one path through it; i2v is a second graph, not an argument.
-3. **`ltx-small` has no weights pinned.** Nothing to download, nothing
-   to render. Pin its files or drop the entry.
-4. **`minimax-h3-int8` may be the h3 graph with one encoder swapped** —
-   a `panelAdaptation` rather than a new file. Confirm, do not assume.
-5. **Backend dependency.** All of this needs a running ComfyUI, so it
-   inherits §17c: on the vendor build a buyer gets, not the owner's.
+| # | who | what | bump | needs |
+|---|---|---|---|---|
+| P0 | remote | ratchet tests (bundle test warn-mode, two allowlists, manifests walk) | no | — |
+| P1 | remote | `describeWorkflows` + `resolveWorkflow` + `_graphCarriesValue`; tools.js :1958/:2061; `comfyWorkflows` setting; `catalogEntry` on both manifests; re-pins; bundle test → assert | yes | P0 |
+| P2 | remote | `comfy-probe --frames/--boot/--stop`, `catalog-vram-probe --boot/--stop`, `download-gen-weight.js`, chat-probe kind verdict, `Settings.origin()` gate | no | P1 |
+| P3 | local | H3 t2v re-run + `catalog-vram-probe --entry minimax-h3` → LOG | no | P2; route (a) Q5 or (b); AE |
+| P4 | remote | Settings **Workflows** rows: label, kind, "renders X", NEEDS phrase (`entryFits`, `requiresImage`), enabled, enhancement; examples hidden; pure row model | yes | P1 |
+| P5 | local | sd15 basic + manifest + `workflowTemplate` + allowlist −sd15 + hash; **measure whether the frontend opens an API graph editable** | yes | P0–P2; route (a)/(b); AE |
+| P6 | local | sdxl as P5 | yes | P5 |
+| P7 | local | wan22-5b as P5; `--frames`; floor re-pin rule | yes | P5; 17 GB disk |
+| P8 | local | h3-int8 second API file — confirm first | yes | P1; owner Q2 |
+| P9 | owner → local | ltx-small pin or drop | yes | owner Q1 |
+| P10 | remote | allowlists → `[]` as vendor readings land | tests only | P5–P9; §17d |
+
+### Owner decisions (PLAN §7)
+
+Q1 ltx-small pin or drop. Q2 h3-int8: prove on a non-Blackwell card or
+leave unproven. Q3 refinement returns as a UI export under a NEW name —
+confirm. Q4 KREA2 `enhancerInstruction` machine-specific lines — strip?
+Q5 until §17c, may the loop probe your ComfyUI on 8000? Q6 core-only
+siblings for krea2/h3, or grandfather the authored graphs (default).
+
+### Hooks, named so nobody builds them early
+
+`procedural.denoise` / `maskImage` / `audio`; `want.requiredInputs`;
+stored default per kind; feed `comfyCatalog` guard (no producer exists);
+`catalog-vram-probe --out docs/measured/` for §13a step 4; renderable
+predicate on `recommendGen`; `video: [names]` on `comfy_list_workflows`
+only if the chat-probe verdict shows the model needs it.
 
 ## Out of scope for the local session (remote builds these)
 
