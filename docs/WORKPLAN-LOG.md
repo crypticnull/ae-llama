@@ -19868,3 +19868,62 @@ Does not block §17c: the owner's machine is NVIDIA and picks correctly,
 which is now pinned by a test against the real asset list.
 
 No `extension/` change (tests + docs), so NO BUMP; rides 0.12.0.
+
+## 2026-09-06 (remote session) — --stop was a no-op across invocations, and would have killed a recycled PID
+
+Field-found within minutes of shipping it: the owner ran
+`comfy-install.js --boot`, went to play a game, and asked how to kill the
+backend. The answer should have been `--stop`. It would have done
+nothing.
+
+**Bug 1 — nothing persisted.** `Comfy.stopManaged()` finds the backend's
+PID through `global.localStorage`, which in the PANEL is CEP's and
+really survives (that is what makes it work across panel sessions). The
+script's shim was a plain object, so a SEPARATE `--stop` process started
+with an empty store, found no PID, killed nothing — and reported a stop.
+Fixed by giving exactly ONE key a file
+(`<dataRoot>\comfy-managed.pid`). Only that key: if settings lived there
+too, `Settings.set` would start writing them and `origin()` would report
+"localStorage" where the truth for a script is the settings.json on
+disk — and gate 0 depends on origin() telling that truth.
+
+**Bug 2, found while testing bug 1, and the more dangerous one.** Once
+the PID persists, a remembered PID can outlive the process it named —
+a crash, a reboot, or exactly what the owner just did: killing the
+backend by hand from PowerShell. **PIDs recycle**, so `--stop` would then
+`taskkill /T /F` whatever inherited the number. `reapOrphan` already
+guards this ("only kill if the process really is our backend"); the
+script's stop path did not. It does now: a remembered PID is verified as
+a live ComfyUI before anything is killed, and otherwise the record is
+CLEARED with a warning rather than acted on. `--stop` also falls back to
+the port, with the same command-line guard, so a backend booted before
+the PID file existed is still stoppable.
+
+**My own test was partly vacuous and the vacuity check caught it.** The
+first version asserted on a message built from `readPid()` — which reads
+the file DIRECTLY, bypassing the storage shim, so it proved nothing
+about whether comfy.js could see the PID. Reverting the shim's getItem
+left it green. Fixed by having the run read through
+`window.localStorage.getItem` exactly as `stopManaged` does. Now
+verified in both directions: reverting the file-backed READ fails 3
+assertions, reverting the file-backed DELETE fails 1.
+
+**Known limit, stated rather than papered over:** `pidIsComfy` shells to
+PowerShell, so on a non-Windows runner it always answers false and
+`--stop` takes the safe branch (clear the record, do not kill). That is
+the branch the tests pin. The kill path itself is only exercisable on
+Windows, which is where the panel runs.
+
+The immediate answer the owner needed did not depend on any of this —
+the port holds the truth:
+
+    $p = (Get-NetTCPConnection -LocalPort 8288 -State Listen `
+          -ErrorAction SilentlyContinue).OwningProcess
+    if ($p) { taskkill /PID $p /T /F }
+
+It worked, killing the tree (2 processes). No PID file existed on that
+machine — the boot ran the pre-fix script — so there is no stale record
+to clean up there.
+
+Suite 74/76 (the two container-only failures). `scripts/` + `tests/`
+only, so NO BUMP; rides 0.12.0.
