@@ -1625,6 +1625,16 @@ unattended restart risks leaving the machine with no backend at all.
 **Needs the owner to bring ComfyUI up** (and to confirm the port). Until
 then this whole section is skipped and passes fall through to section 8.
 
+**THE UNBLOCK IS §17c, and it is better than "the owner starts it"**
+(owner, 2026-09-06). `ensureRunning` cannot start the owner's OWN
+ComfyUI — by design, it only ever spawns the vendor portable install
+under `<dataRoot>\vendor\comfy` (`comfy.js:2122-2141`,
+`setup.js:943-964`). Install that vendor backend on this machine and
+the loop can boot its own backend on demand, unattended, with no owner
+in the loop — **and it is then measuring the thing buyers actually
+get**, which the owner's hand-built 0.32.0 never was. §17c is the pass
+that does it. Until §17c lands this section stays blocked.
+
 **THIS MACHINE'S ComfyUI LISTENS ON PORT 8000** (owner, 2026-09-01).
 Every probe script under `scripts/` defaults to
 `http://127.0.0.1:8188` and will find nothing without
@@ -1659,17 +1669,15 @@ pass, smallest first:
   measure minimax-h3 with `scripts/catalog-vram-probe.js` (this card is
   Blackwell, so the shipped nvfp4 template applies) and write the
   reading into version.js the way krea2 carries its own.
-- **Templates for the template-less entries.** sd15, sdxl and wan22-5b
-  have no `workflowTemplate`, which both blocks the probe and lets
-  `recommendGen` offer models `comfy_generate` cannot render (the open
-  "smaller, for the remote session" item above — fix it HERE, the
-  running backend is what makes a template verifiable). Author minimal
-  API-format graphs (checkpoint -> sampler -> vae -> save; wan22 per its
-  repackaged workflow docs), name them `AE_LLAMA_SD15_V1` /
-  `AE_LLAMA_SDXL_V1` / `AE_LLAMA_WAN22_V1`, set `workflowTemplate` on
-  the catalog entries, and give each a models manifest with `file`+`dir`
-  so the arbiter can price it from the disk. Verify one real render each
-  through `comfy_generate` before calling the template shipped.
+- **Templates for the template-less entries.** ~~sd15, sdxl and
+  wan22-5b~~ **WIDENED AND MOVED TO §18 (owner, 2026-09-06).** The count
+  was wrong: FIVE of seven catalog entries have no `workflowTemplate`
+  (add `ltx-small` and `minimax-h3-int8`), and `minimax-h3`'s only
+  template is i2v. The owner asked for a basic working graph per model
+  as its own track — see **§18**, which carries the two-tier scheme, the
+  ratchet that would have caught this, and the authoring order. Every
+  VRAM measurement in this section is blocked on it
+  (`catalog-vram-probe.js:282` refuses an entry with no graph).
 - **Download + measure, one entry per pass: sd15 (2 GB), then sdxl
   (6.6 GB), then wan22-5b (17.3 GB).** Use the panel's own settings
   Download button path (`Setup.downloadGenWeight`) — that is field
@@ -2784,10 +2792,20 @@ Both are MEASURE-FIRST. Neither should be landed from reasoning.
 Scan the hardware, download the right things for it, install them, and
 the only thing a user ever sees is *"here's what you're running, and
 Triton and SageAttention have been successfully installed"*, shown
-alongside the model downloads and the ComfyUI install that already
-happen at first run. Environment paths get exposed in Advanced Settings
-for someone with a niche setup, but reaching for them must never be
+alongside the model downloads and the ComfyUI install that happen at
+first run. Environment paths get exposed in Advanced Settings for
+someone with a niche setup, but reaching for them must never be
 necessary.
+
+**CORRECTION 2026-09-06: "the ComfyUI install that ALREADY happens at
+first run" was wrong — it does not happen.** `autoBootstrap`
+(`main.js:774`) installs the llama.cpp engine hands-off and nothing
+else; `Setup.bootstrapComfy` has exactly one caller,
+`btn-comfy-install` in Settings (`main.js:1394`). So this section's
+step 3 installs wheels into `<vendor>\comfy\python_embeded`, an
+interpreter that exists only if the user pressed a button. **§17b is a
+hard prerequisite for 13a** — until it lands, "hands off" has a button
+in the middle of it.
 
 This is not a research task. **Almost every piece already exists**, and
 the job is mostly wiring them together:
@@ -3289,6 +3307,303 @@ time a generation runs against a real project; until then §16d's AE
 figure is the measured *idle* 3,255 MB.
 
 Do NOT rewrite the tier table, copy or boundaries in the same pass.
+
+## 17. The ComfyUI backend — MANAGED by default, own install by explicit choice
+
+Filed 2026-09-06 after the owner asked the question this section exists
+to answer: *"will the user always need to start up an external ComfyUI
+instance before being able to image/video gen from the plugin?"*
+
+**The intended answer is no, and most of the machinery already ships.**
+`comfy_generate` calls `Comfy.ensureRunning` before every generation
+(`tools.js:2081`), which in order: (1) uses whatever answers at the
+configured URL as-is; (2) scans 8188/8189/8000 and, if a ComfyUI is
+answering elsewhere, **reports it and never reroutes** — silently
+rendering on a different backend would swap the model set under the
+user; (3) otherwise spawns the vendor portable install hidden
+(`windowsHide: true`, `--disable-auto-launch`, on the configured port),
+health-polls it up, persists the PID and reaps it on panel close
+(`main.js:1460`) and on next launch (`main.js:1178`). A buyer sees no
+window, no launcher and no port.
+
+**The owner's design call (2026-09-06):** *"allow a user to bypass it
+using their own install if they want, but design it as a portable
+install by default."* That is an inversion of what ships, not a
+restatement of it — today the bypass is what you get by accident and
+the managed backend is the fallback. 17a is that inversion; it is the
+first item and the other three assume it.
+
+### 17a. Managed is the default; "use my own" is an explicit setting
+
+**The defect, measured in the code.** `comfyUrl` defaults to
+`http://127.0.0.1:8188` (`settings.js:59`) — **ComfyUI's own default
+port.** `ensureRunning` step 1 uses whatever answers there, as-is, with
+no disclosure and no choice recorded. So every buyer who already runs
+ComfyUI on the standard port silently becomes a bring-your-own user
+without ever deciding to be one, and the panel prices jobs, checks
+weights and reports status against a model set it does not manage.
+
+**The inconsistency that names it as a bug rather than a preference.**
+Step 2 refuses to reroute to a ComfyUI found on another port, and the
+comment says why (`comfy.js:1926-1931`): *"silently rendering on a
+different ComfyUI than the user configured would swap the model set
+under them."* **Step 1 does exactly that whenever the port happens to
+match, and carries no such guard.** The panel's own stated reasoning is
+applied at one door and not at the other, and the unguarded door is the
+one a default install walks through.
+
+**Second defect, same root.** The managed backend spawns on the
+CONFIGURED port (`comfy.js:2137-2141`), so on a default install it
+targets 8188 too — the port the user's own ComfyUI will want the next
+time they start it. The panel would be squatting on it.
+
+**The shape:**
+
+- `comfyBackend: "managed" | "own"`, defaulting to **`"managed"`**.
+- **Managed owns its own port** and does not consult `comfyUrl` at all.
+  Pick a fixed default outside `LOCAL_COMFY_PORTS` (8188/8189/8000) so
+  the panel never collides with, or is mistaken for, a user's own
+  instance — 8288 unless something better turns up — with a settings
+  override for a genuine collision. **If that port is already answering,
+  fail honestly and say so; never attach to it.** Attaching is step 1's
+  bug wearing a different number.
+- `comfyUrl` belongs to `"own"` and is only reachable once that mode is
+  chosen. So does `comfyDir`, `Comfy.launch` and the Launch button.
+- `applyExtraModelPaths` only ever writes into the managed install —
+  the panel does not edit a config file it does not own.
+
+**`findLocalComfy` becomes an OFFER, not a refusal.** Its existing
+finding ("a ComfyUI is answering at 127.0.0.1:8188") stops being an
+error hint and becomes the bypass's front door: *use it instead of the
+built-in one?* — which flips `comfyBackend` to `"own"` and fills in the
+URL. That is the whole feature the owner asked for, and it costs one
+button on an existing measurement.
+
+**Migration, and the trap in it.** An existing install with a
+non-default `comfyUrl` is someone who configured it → `"own"`. An
+untouched default → `"managed"`. **Read `loadedFrom` before deciding**
+(`settings.js:135`): a value that is only a default must not be
+migrated as if it were an answer. That exact confusion already cost two
+sessions a false claim about the owner's port (measured 2026-09-02, the
+comment at `settings.js:122-133`).
+
+**Verification:** the matrix is small and every row is real — managed
+with nothing else running; managed with a foreign ComfyUI on 8188
+(must ignore it and boot its own); managed with something already on
+the managed port (must refuse, not attach); `"own"` pointing at a live
+instance; `"own"` pointing at a dead one (must not silently fall back
+to managed — the user chose). Stub-testable end to end; `comfy.js`
+already takes an injected `child_process` in `tests/test-comfy-backend.js`.
+
+Bumps (`extension/`). This is user-visible behaviour on a commercial
+surface — build it in one pass, not smuggled into another.
+
+### 17b. The backend install is a BUTTON, not first-run (loop-takeable, BUMPS)
+
+`Setup.bootstrapComfy` has exactly one caller: `btn-comfy-install`
+(`main.js:1394`). Compare `autoBootstrap` (`main.js:774`), which
+installs the inference engine on first run and says so — *"First-run
+setup: installing the local AI engine (one time, fully automatic)."*
+ComfyUI has no equivalent, so a fresh buyer who never opens Settings
+and asks for a picture gets a dead end:
+
+> "ComfyUI is not running and the hidden backend is not installed.
+> Install it in Settings → ComfyUI → 'Install hidden backend', or
+> launch your own ComfyUI."
+
+Grounded and actionable — and still a manual step in a product whose
+stated requirement is that there are none.
+
+**Two halves, and the second is the one that removes the dead end:**
+
+1. **First-run install**, alongside the engine, in the shape §13a
+   assumes. Do NOT simply extend `autoBootstrap`'s existing trigger:
+   it fires on panel open, and a multi-gigabyte download on open for a
+   feature many buyers never touch is a worse default than the button.
+   The engine is core (no chat without it); the backend is not.
+2. **Install-on-demand at the refusal.** `ensureRunning`'s
+   `if (!install)` branch (`comfy.js:2124-2130`) is the exact point
+   where the panel knows the backend is missing AND that the user just
+   asked for a generation. Install there, with progress in chat, then
+   boot and continue — instead of refusing. This is the half that also
+   covers a panel installed before 17b shipped, and a first-run install
+   that failed or was cancelled.
+
+Verification: delete `<dataRoot>\vendor\comfy`, open the panel, ask for
+a picture, and watch it install → boot → render with nothing pressed.
+Then re-run with the download cancelled mid-way and confirm the panel
+degrades honestly rather than half-installing. Bumps (`extension/`).
+
+### 17c. Dogfood the shipped backend HERE (owner-approved 2026-09-06)
+
+**The owner's reasoning, which is the whole item:** *"how can we be sure
+comfy works on other users if we don't test it here? we should change my
+special bypass to just also install a portable comfy like a user would."*
+
+Every ComfyUI measurement this repo holds — krea2's 24,160 MiB, the
+/free behaviour, the weight-availability verdicts, the handoff peak —
+was taken against the owner's own hand-built ComfyUI 0.32.0 in
+`Documents\ComfyUI`, launched by hand with `--base-directory` and a
+port a buyer will never have. **No buyer runs that.** The vendor
+portable build ships its own python and torch, and torch version is
+exactly what §13a's wheel selection keys on, so "it worked here" has
+never been evidence about the shipped path.
+
+**The space objection is answered, and it was the only real one.** The
+owner's stated reason for using their own install is disk space. The
+weights do not have to move or duplicate:
+
+- `applyExtraModelPaths` (`comfy.js:1985`) writes
+  `<vendor>\comfy\ComfyUI\extra_model_paths.yaml` from
+  `comfyModelsDir` + `comfyModelRoots` + the Comfy-Desktop shared store
+  it finds on its own. Point `comfyModelRoots` at
+  `Documents\ComfyUI\models` and the vendor backend SEARCHES the ~26 GB
+  already on this disk without copying a byte.
+- New weights land in `comfyModelsDir` if set, else
+  `<vendor>\comfy\ComfyUI\models` (`setup.js:669-694`) — one folder,
+  deletable.
+- `removeCatalogWeights` (`tools.js:1527`) **refuses to delete anything
+  outside a panel-managed folder**, so the Settings Remove button
+  cannot touch the owner's own store while cleaning up test downloads.
+  Exercising that refusal in the field is already §7b's fourth bullet.
+
+So the standing cost is the portable runtime (python + torch + CUDA
+libs), not the models. **Record its real extracted size in the log —
+nobody here has measured it**, and the number decides whether this is a
+permanent arrangement or a per-test one.
+
+**17a makes this FREE, and that is the argument for doing 17a first.**
+Written before 17a existed, this item carried a manual step: the
+owner's own ComfyUI had to be genuinely stopped, or `ensureRunning`
+step 1 would use it (same port) or step 2 would refuse with a hint
+(other port) and the vendor backend would never boot. **Under 17a that
+step disappears** — managed mode owns its own port and ignores foreign
+instances by design, so the owner's ComfyUI can stay up on 8000 and the
+panel still exercises the shipped path beside it. The dev machine stops
+being a special arrangement and becomes a `"managed"` user like every
+buyer, with `"own"` one deliberate toggle away when the owner wants
+their install back.
+
+**The pass (assumes 17a; if taken before it, stop the owner's ComfyUI
+first and say so in the log):**
+
+1. Confirm `comfyBackend` is `"managed"` and note what the migration
+   chose, with `loadedFrom` — a default must not read as an answer.
+2. Settings → Install hidden backend (or, once 17b lands, just ask for
+   a picture). Log the download size, the extracted size, the ComfyUI
+   version, and the torch/python the build pins — the last is §13a
+   step 1's measurement, taken for free here.
+3. Set `comfyModelRoots` to the existing stores; verify the written
+   yaml and that `Comfy.missingWeights` answers empty for KREA2.
+4. Re-run `scripts/weight-availability-probe.js` and one real
+   `comfy_generate` end to end through the panel — with the owner's own
+   ComfyUI still running, which is the row that proves 17a.
+5. Log what the buyer path does that the owner's install never did.
+
+After this, §7b's bullets are loop work: the loop boots its own backend.
+
+### 17d. What must be RE-measured once 17c lands
+
+Not a rewrite of the numbers — a marked re-take, because the
+environment changed underneath them:
+
+- **krea2's 24,160 MiB** (`version.js`, `measured: true`) was taken on
+  the owner's torch build. Re-run `catalog-vram-probe.js` on the vendor
+  backend; if it moves, the entry carries the vendor reading and the
+  old one goes to the log with its environment named.
+- **The /free finding** ("0 MB delta, this backend drops the generation
+  on its own ~10 s before the round ends") is a property of a specific
+  ComfyUI version. Re-check on the vendor build before trusting the
+  resume path's floor logic there.
+- **§13a step 7's tier consequences** inherit this: any VRAM threshold
+  calibrated on the owner's environment is calibrated on the wrong one.
+
+Do NOT re-measure by reasoning about version differences. Re-run the
+probes.
+
+## 18. A basic working graph for EVERY catalog model — PLAN DEFERRED
+
+**Owner, 2026-09-06:** *"be prepared to create workflows for all these
+other models for at least basic use I can later improve manually, but we
+should have those built alongside this loop. so like a basic wan t2v and
+h3 and krea2 and then we make more intricate ones from the basically
+functional ones."*
+
+**PLAN NOT WRITTEN ON PURPOSE.** The owner is handing the shape of this
+track — tiers, naming, authoring order, how a basic graph becomes a
+refined one — to a Fable 5.1 pass. This section is the INPUT to that
+pass: the measured gap and the constraints any plan has to satisfy.
+Nothing here is a design. Do not start building templates from it.
+
+### The gap, counted (2026-09-06)
+
+Seven catalog entries (`version.js:91-200`), two templates:
+
+| entry | kind | `workflowTemplate` |
+|---|---|---|
+| sd15 | image | **none** |
+| sdxl | image | **none** |
+| krea2 | image | `AE_LLAMA_KREA2_V1` — the owner's authored graph |
+| ltx-small | video | **none, and no pinned URLs either** |
+| wan22-5b | video | **none** |
+| minimax-h3 | video | `AE_LLAMA_H3_I2V_V1` — **i2v only, no t2v path** |
+| minimax-h3-int8 | video | **none** (same weights as h3 bar the encoder) |
+
+### Why it is not just a to-do
+
+- **`recommendGen` offers models `comfy_generate` cannot render.** A
+  shipped defect, already named in §7b and never closed.
+- **It blocks every open VRAM measurement.**
+  `catalog-vram-probe.js:282` refuses an entry with no graph, so §7b's
+  sd15 / sdxl / wan22-5b readings cannot be taken at all.
+- **No ratchet sees it.** `tests/test-model-catalog.js:229` opens with
+  `if (!e.workflowTemplate) return;` — an entry with no template passes
+  the check in silence. The one cheap thing that is unambiguous
+  regardless of the plan is making that gap explicit rather than
+  skipped, and even that should wait for the plan to name its shape.
+
+### Constraints any plan must satisfy (measured, not preferences)
+
+- **Author against the running backend's `/object_info`, never from
+  memory.** Node class and input names move between ComfyUI versions; a
+  graph written from recollection is the confident-wrong artifact class
+  this repo refuses.
+- **The panel's injection contract** (`extension/comfy-workflows/README.md`):
+  prompt/negative reachable by following the sampler's
+  `positive`/`negative` links; a node with numeric `width`+`height`;
+  video needs a numeric `length`/`frames`/`video_frames`/`num_frames`
+  and must end writing real mp4/H.264 — **AE cannot import animated
+  webp**. "Functional" means this, not "renders something".
+- **Manifests need `sizeMB`, not just `file`+`dir`.** Every shipped
+  manifest carries `file`+`dir` and no size, which made `genNeedMB` null
+  for every template ever shipped and paused chat on a 32 GB card for
+  jobs it could have run concurrently (0.10.9, measured).
+- **`.hash-history.json` is CI-enforced** — a bundled file whose current
+  hash is unrecorded fails `workflow-hash-history.js --check`.
+- **`example-txt2img.json` must never be listed as real.** It was
+  offered to the model as a workflow once and a generation ran the
+  placeholder (0.9.28).
+- **Verify through `comfy_generate`, not ComfyUI's UI** — the panel's
+  injection is the thing under test.
+- **Re-exports lose panel adaptations.** `AE_LLAMA_KREA2_V1.manifest.json`
+  carries a `panelAdaptation` block recording the absolute-path
+  `filename_prefix` that ComfyUI refuses; a hand-refined re-export needs
+  it re-applied.
+
+### Open questions the plan has to answer
+
+1. **H3 t2v may not exist.** H3 is `fl2va` (first/last frame → video +
+   audio). Whether it has a usable text-only path is a `/object_info`
+   question, not an assumption — the owner named "h3" in the ask and the
+   honest answer may be that its i2v graph is already its basic tier.
+2. **wan22-5b is `ti2v`** — text *and* image to video. "Basic wan t2v"
+   is one path through it; i2v is a second graph, not an argument.
+3. **`ltx-small` has no weights pinned.** Nothing to download, nothing
+   to render. Pin its files or drop the entry.
+4. **`minimax-h3-int8` may be the h3 graph with one encoder swapped** —
+   a `panelAdaptation` rather than a new file. Confirm, do not assume.
+5. **Backend dependency.** All of this needs a running ComfyUI, so it
+   inherits §17c: on the vendor build a buyer gets, not the owner's.
 
 ## Out of scope for the local session (remote builds these)
 
