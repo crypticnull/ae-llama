@@ -20154,3 +20154,67 @@ budget UNCHANGED (58,933 / 39,803): the kind is inferred from arguments
 the model already has.
 
 Suite 77/78. BUMPED 0.12.0 -> **0.12.1**.
+
+## 2026-09-06 (remote session) — §18 P2: the instruments, and an inconsistency §17a left in them
+
+WORKPLAN §18 P2. `scripts/` only, no `extension/` change, no bump — it
+rides 0.12.1.
+
+**First, a defect §17a left behind and this pass found.** §17a put the
+backend choice behind `Comfy.backendUrl(s)`: in "managed" mode the panel
+talks to its OWN port and `comfyUrl` is never consulted. But BOTH probes
+still read `S.comfyUrl` for their reachability check, so on a managed
+machine `comfy-probe` and `catalog-vram-probe` would check one port while
+the generation they then run goes to another — and report whichever
+answer they happened to get. Both read `Comfy.backendUrl(S)` now and
+print which backend they are talking to.
+
+**One shared library instead of a third copy.** `comfy-install.js` had
+grown its own PID store, recycled-PID guard and port fallback; both
+probes needed the same. `scripts/lib/comfy-managed.js` holds them once —
+the file-backed PID key (only that key: settings living there would make
+`origin()` report "localStorage" where the truth for a script is
+settings.json, and every local pass's gate 0 depends on that), the
+`pidIsComfy` check before any kill, and `stopByPort` with the same guard.
+comfy-install lost its duplicate (verified: zero `stopByPort` references
+left in it, its tests still green, and the shared guard still fires on a
+stale PID).
+
+**`--boot` / `--stop` on both probes.** Neither could start anything —
+`comfy-probe.js` and `catalog-vram-probe.js` both exited on an
+unreachable backend, the latter saying "this probe does not start ComfyUI
+... start it by hand". That was true of the owner's hand-built 0.32.0 and
+is no longer true of the managed install. Each only ever stops a backend
+THIS RUN booted: a probe that kills the one the owner already had running
+is a probe nobody runs twice. `catalog-vram-probe`'s post-reachability
+body became `afterStatus(st)` so the boot path reaches it instead of
+duplicating it.
+
+**`comfy-probe --frames N`.** It always sent `durationSeconds`, so a
+template whose length is a literal frame count reported "durationSeconds
+ignored (this template has no seconds input)" and rendered at whatever
+the graph was authored for. §18 P7 (wan22-5b) needs exactly that
+argument. Also fixed a pre-existing joined line in its usage header that
+made the `--workflow` example unreadable.
+
+**`scripts/download-gen-weight.js`.** `Setup.downloadGenWeight` had ONE
+caller — the Download button in Settings — so every §18 pass that says
+"download sd15, then measure it" contained a human click. It reports
+where each file WOULD land before fetching anything, and its only
+success verdict is the file being on disk afterwards: a downloader's exit
+code is not evidence the file arrived. Exercised in four modes; the
+`--check` on sd15 reproduced the review's predicted blocker verbatim —
+`No place to put it: set a Models folder ... or install the hidden
+backend first` — which is `genWeightDest` refusing when there is no
+managed install yet. Surfaced BEFORE the download rather than after.
+`ltx-small` reports "no pinned URLs — there is nothing to fetch" rather
+than "downloaded 0 files".
+
+**chat-probe step 13 grades WHICH template ran.** The kind of the graph
+`comfy_generate` actually used must be `image` for a picture request.
+The choice happens before any tool runs, so no stub and no real-AE
+harness can see it — only a real sentence through the real model. A
+render that succeeds on the wrong kind is still a routing failure.
+
+Suite 77/78 (the Windows-path-bound ffmpeg suite). All 20 `scripts/`
+files parse; the PowerShell suite is green with the real parser.

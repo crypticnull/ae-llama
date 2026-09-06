@@ -69,6 +69,8 @@ function argValue(name, dflt) {
   return i === -1 ? dflt : argv[i + 1];
 }
 const OPT = {
+  boot: process.argv.indexOf("--boot") !== -1,
+  stop: process.argv.indexOf("--stop") !== -1,
   entry: argValue("--entry", null),
   url: argValue("--url", null),
   prompt: argValue("--prompt", null),
@@ -84,20 +86,19 @@ const OPT = {
 
 // -------------------------------------------------------- the panel, in Node
 
-const storage = {};
+// Shared with comfy-probe and comfy-install: the PID must survive this
+// process or a later --stop kills nothing while reporting a stop.
+const managed = require("./lib/comfy-managed.js");
+let pidFile = null;
+let bootedHere = false;
+const storage = managed.makeStorage(function () { return pidFile; });
 const window = {
   console: console,
   setTimeout: setTimeout,
   clearTimeout: clearTimeout,
   setInterval: setInterval,
   clearInterval: clearInterval,
-  localStorage: {
-    getItem(k) {
-      return Object.prototype.hasOwnProperty.call(storage, k) ? storage[k] : null;
-    },
-    setItem(k, v) { storage[k] = String(v); },
-    removeItem(k) { delete storage[k]; }
-  },
+  localStorage: storage,
   /* No AE. `import: false` means the generate path never reaches the host,
    * and if it ever did, a silent empty answer is a bug this probe should
    * show rather than hide — so it is logged. */
@@ -127,6 +128,9 @@ loadPanelFile("tools.js");
 
 const AELL = window.AELL;
 const Settings = window.Settings;
+try {
+  pidFile = require("path").join(Settings.dataRoot(), "comfy-managed.pid");
+} catch (ePid) { pidFile = null; }
 const Setup = window.Setup;
 const Comfy = window.Comfy;
 const Ffmpeg = window.Ffmpeg;
@@ -566,6 +570,12 @@ function measure(plan, done) {
 // ---------------------------------------------------------------- sequence
 
 function finish() {
+  // Only ever stop a backend THIS RUN booted — never the one the owner
+  // already had running.
+  if (OPT.stop || (OPT.boot && bootedHere)) {
+    try { managed.stop(Comfy, storage, Comfy.managedPort(S), say); }
+    catch (eS) {}
+  }
   if (measurements.length) {
     say("info", "");
     say("info", "MEASURED on " + (cardName || "?") + ":");
@@ -606,16 +616,44 @@ readCard(function (card) {
   say("info", "card: " + card.name + ", " + card.used + " / " + card.total +
       " MiB in use before anything");
 
-  Comfy.status(S.comfyUrl, function (err, st) {
+  // NOT S.comfyUrl. §17a put the backend choice behind Comfy.backendUrl:
+  // in "managed" mode the panel talks to its OWN port and comfyUrl is
+  // never consulted, so a probe reading comfyUrl measures one instance
+  // while the generation runs on another.
+  const URL = Comfy.backendUrl(S);
+  Comfy.status(URL, function (err, st) {
     if (err) {
-      verdict(false, "ComfyUI reachable at " + S.comfyUrl, err.message);
-      say("error", "This probe does not start ComfyUI (0.10.9: ensureRunning " +
-                   "cannot start the working 0.32.0 here). Start it by hand.");
+      if (OPT.boot) {
+        say("info", "--boot: bringing the managed backend up…");
+        managed.boot(Comfy, URL, S, say, function (bErr) {
+          if (bErr) {
+            verdict(false, "ComfyUI reachable at " + URL, bErr.message);
+            finish();
+            return;
+          }
+          bootedHere = true;
+          verdict(true, "ComfyUI reachable", "booted by --boot");
+          afterStatus({ running: 0, pending: 0 });
+        });
+        return;
+      }
+      verdict(false, "ComfyUI reachable at " + URL, err.message);
+      say("error", "Nothing is answering. Pass --boot to start the " +
+                   "MANAGED backend (0.12.0+), or start one by hand. " +
+                   "0.10.9 measured that ensureRunning cannot start the " +
+                   "owner's own hand-built 0.32.0 — the managed install " +
+                   "is the one it CAN start.");
       finish();
       return;
     }
     verdict(true, "ComfyUI reachable",
             "queue running=" + (st.running || 0) + " pending=" + (st.pending || 0));
+    afterStatus(st);
+  });
+
+  // Everything past the reachability check, so the --boot path can reach
+  // it too instead of duplicating the body.
+  function afterStatus(st) {
     /* Someone else's job on the queue makes every reading below meaningless
      * — and 0.10.14 established this is the USER's ComfyUI, which they may
      * have queued their own work into. Refuse rather than measure noise. */
@@ -659,5 +697,5 @@ readCard(function (card) {
       if (i >= todo.length) { finish(); return; }
       measure(todo[i], function () { next(i + 1); });
     })(0);
-  });
+  }
 });
