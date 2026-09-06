@@ -108,6 +108,12 @@
       // that is absent means ON — enhancement is the default, opting
       // OUT is the choice a user records.
       comfyEnhance: {},
+      // Per-workflow enable: {workflowName: {enabled: bool}}. A name that
+      // is absent means ENABLED - like comfyEnhance, only the opt-OUT is
+      // recorded, so a template added by an update is available without a
+      // settings migration. Read by Comfy.resolveWorkflow and the
+      // Settings > Workflows rows.
+      comfyWorkflows: {},
       // Visualizer pane width (px), set by dragging the divider. 0 = the
       // stylesheet default.
       vizWidth: 0,

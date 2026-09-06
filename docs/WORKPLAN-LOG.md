@@ -20078,3 +20078,79 @@ counterpart), and under the §18 reframe they are a personal layer rather
 than a set that grows with the product.
 
 Suite 75/76 (only the Windows-path-bound `test-ffmpeg-export`).
+
+## 2026-09-06 (remote session) — §18 P1: the alphabet stops choosing which template runs (0.12.1)
+
+WORKPLAN §18 P1. `comfy_generate` picked `list[0]` when the model named
+no workflow — the ALPHABET. With the shipped bundle that means "a
+picture of a red apple" was handed to `AE_LLAMA_H3_I2V_V1`: a 40 GB
+Blackwell-only VIDEO graph, chosen because `ae_llama_h3` sorts before
+`ae_llama_krea2`. `test-comfy-workflow-choice.js` pinned that outcome as
+CORRECT, because nothing better existed to pin.
+
+**Two pure functions in comfy.js, and everything else reads them.**
+
+`describeWorkflows(dir)` — name, file, example, `kind`, `catalogEntry`,
+`takesImage`, `requiresImage`, `lengthIn` — from the files plus their
+sidecars. `manifest.kind` gets its FIRST consumer here; both shipped
+manifests have carried it unread since they were written.
+
+`resolveWorkflow(descs, want, ctx, opts)` — pure, every input passed in,
+so the whole matrix is stub-testable. That purity is the point: the
+choice happens BEFORE any tool runs, so neither the real-AE harness nor
+comfy-probe can see it. Ordering: kind (from `frames`/`durationSeconds`,
+no new argument and no prompt bytes) → enabled → `requiresImage` when no
+image was given → then FIT first, weights-on-disk, **baseline**, name.
+
+**The baseline tiebreak is what the §18 reframe forces.** With the
+owner's authored graphs becoming a personal layer beside the shipped
+basics, a machine holds BOTH for one catalog entry — same kind, same
+fit, same weights. Everything ties and the old order falls through to
+NAME, where `AE_LLAMA_KREA2_T2I_V1` beats `AE_LLAMA_KREA2_V1` by
+alphabet. That is luck. The catalog entry's own `workflowTemplate` says
+which is the baseline, and it now wins the tie — pinned with the
+baseline deliberately being the name that sorts LAST, so the assertion
+cannot pass by accident.
+
+**A finding from writing the tests, fixed rather than noted.** With the
+only template filtered out for requiring an image, the refusal said "no
+runnable template is enabled" — which sends the user to the Workflows
+toggles when the answer is "give me an image". The empty-pool branch now
+counts WHY each candidate dropped and names that cause: needs an image
+(with the argument that fixes it), switched off in Settings, only format
+examples installed, or nothing installed at all.
+
+**A better finding, caught by an existing guard.** `test-chat-probe.js`
+asserts that every `global.X` in tools.js maps to a panel file the probe
+loads. Adding `global.AELL.COMFY_CATALOG` turned it red: **chat-probe.js
+never loaded version.js**, so the catalog would have read empty there and
+the whole ranking would have degraded silently to name order — the exact
+alphabetical choice this pass removes, reappearing in the one instrument
+that measures routing. `version.js` is loaded first now, as index.html
+does it, and `AELL` is in `MODULE_FILE`.
+
+Also: `planEnhancement` is keyed on `chosen.name` rather than
+`args.workflow`. On a nameless call that argument is empty and on a
+named one it can differ in case, so an opt-out recorded against the real
+name was silently bypassed both ways.
+
+`settings.comfyWorkflows: {name: {enabled}}` — absent means ENABLED,
+like `comfyEnhance`, so a template arriving in an update needs no
+migration. Both shipped manifests gained `catalogEntry`; hash history
+regenerated; the bundle test's `catalogEntry` check flipped from warn to
+assert.
+
+New `tests/test-workflow-resolve.js`: 22 rows over kind, the format
+example, disabled, `requiresImage` both ways, fit-first (and an unfit
+template still offered when it is all there is), weights-present, the
+baseline tiebreak, undescribed user exports staying candidates,
+wrong-kind fallback with an honest reason, and an empty bundle.
+`test-comfy-workflow-choice.js` re-pinned and wired to the REAL describer
+and resolver rather than a re-implementation — which template runs is the
+subject, so a stub of it would test nothing.
+
+Two other stubs needed the new functions (`test-vram-arbiter`). Prompt
+budget UNCHANGED (58,933 / 39,803): the kind is inferred from arguments
+the model already has.
+
+Suite 77/78. BUMPED 0.12.0 -> **0.12.1**.

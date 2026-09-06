@@ -47,7 +47,6 @@ function assert(cond, label, detail) {
               (detail ? "  (" + detail + ")" : ""));
   if (!cond) failures++;
 }
-function warn(label) { console.log("warn- " + label); }
 
 // The catalog, read the way the panel reads it.
 const window = { AELL: {} };
@@ -132,16 +131,14 @@ shipped.forEach((t) => {
   assert(mf.kind === "image" || mf.kind === "video",
          t.base + ": declares kind image|video", String(mf.kind));
 
-  // catalogEntry is P1's key. Until it lands this WARNS rather than
-  // fails, so P0 can ship a ratchet that is green on the bundle as it
-  // stands; P1 flips this to an assert in the same pass that adds it.
-  if (mf.catalogEntry === undefined) {
-    warn(t.base + ": no catalogEntry yet (P1 adds it, then this asserts)");
-  } else {
-    assert(CATALOG_NAMES.indexOf(mf.catalogEntry) !== -1,
-           t.base + ": catalogEntry names a real catalog entry",
-           mf.catalogEntry);
-  }
+  // catalogEntry is the link the resolver ranks on: it is how a template
+  // is priced (entryFits), how its weights are checked
+  // (catalogModelStatus) and how the BASELINE tiebreak knows which graph
+  // the catalog itself points at. A template without it is invisible to
+  // all three and silently sorts last.
+  assert(CATALOG_NAMES.indexOf(mf.catalogEntry) !== -1,
+         t.base + ": catalogEntry names a real catalog entry",
+         String(mf.catalogEntry));
 
   assert(mf.models instanceof Array && mf.models.length > 0,
          t.base + ": lists the models it loads");

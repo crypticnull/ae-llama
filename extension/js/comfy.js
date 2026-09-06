@@ -295,6 +295,171 @@
     return out;
   }
 
+  /**
+   * Everything the panel knows about the templates in `dir`, from the
+   * files plus their manifest sidecars. ONE describer, so the nameless
+   * default, the Settings rows and (later) the compound tools all read
+   * the same facts instead of each deriving their own.
+   *
+   * Pure over the filesystem, so it is stub-testable — which matters
+   * because main.js has no executed coverage and the Settings rows are
+   * built from this.
+   *
+   *   kind          "image" | "video" | undefined
+   *   catalogEntry  the COMFY_CATALOG.name this graph renders, or undefined
+   *   takesImage    the manifest declares procedural.firstFrame at all
+   *   requiresImage ...and it is NOT detachable, so the graph cannot run
+   *                 without one (a true i2v/img2img template)
+   *   lengthIn      "seconds" when the manifest carries
+   *                 procedural.durationSeconds, else "frames"
+   *
+   * A template with NO manifest is described with everything undefined.
+   * That is deliberate and the README promises it: a user's own API
+   * export "works as-is", so it must stay a candidate rather than be
+   * refused for lacking a sidecar it was never asked to have.
+   */
+  function describeWorkflows(dir) {
+    var out = [];
+    var all = listWorkflows(dir);
+    for (var i = 0; i < all.length; i++) {
+      var mf = readManifest(all[i].file);
+      var proc = (mf && mf.procedural) || {};
+      var ff = proc.firstFrame;
+      out.push({
+        name: all[i].name,
+        file: all[i].file,
+        example: !!all[i].example,
+        kind: mf && (mf.kind === "image" || mf.kind === "video")
+          ? mf.kind : undefined,
+        catalogEntry: mf && mf.catalogEntry ? mf.catalogEntry : undefined,
+        takesImage: !!ff,
+        requiresImage: !!(ff && !ff.detachable),
+        lengthIn: proc.durationSeconds ? "seconds" : "frames"
+      });
+    }
+    return out;
+  }
+
+  /**
+   * WHICH template a generation runs when the model named none.
+   *
+   * It used to be `list[0]` — the alphabet. With the shipped bundle that
+   * means "a picture of a red apple" is handed to AE_LLAMA_H3_I2V_V1,
+   * a 40 GB Blackwell-only VIDEO graph, because ae_llama_h3 sorts before
+   * ae_llama_krea2. The regression test pinned that outcome as correct
+   * because nothing better existed.
+   *
+   * Pure: every input is passed in, nothing is read from globals, so the
+   * whole matrix is stub-testable with no ComfyUI and no GPU.
+   *
+   *   descs   describeWorkflows() output
+   *   want    {kind, image, disabled}  - disabled is settings.comfyWorkflows
+   *   ctx     Tiers.resolveTier() output {vramGB, arch} or null
+   *   catalog COMFY_CATALOG (for entryFits/weights), or null
+   *   opts    {fits, weightsPresent, baseline} - injected so this file
+   *           does not reach into tiers.js or tools.js
+   *
+   * Returns {chosen, why, candidates} or {chosen: null, why} - never
+   * throws, because the caller turns `why` into a grounded refusal.
+   */
+  function resolveWorkflow(descs, want, ctx, opts) {
+    want = want || {};
+    opts = opts || {};
+    var disabled = want.disabled || {};
+    var wantKind = want.kind === "video" ? "video" : "image";
+
+    // Count WHY each one dropped out. A refusal that names the wrong
+    // cause sends the user to the wrong setting, and this is the only
+    // place that knows the difference between "you turned them all off",
+    // "they all need an image" and "there is nothing installed".
+    var pool = [], dropped = { example: 0, disabled: 0, needsImage: 0 };
+    for (var i = 0; i < descs.length; i++) {
+      var d = descs[i];
+      if (d.example) { dropped.example++; continue; }   // never renders
+      var off = disabled[d.name];
+      if (off && off.enabled === false) { dropped.disabled++; continue; }
+      // A template that REQUIRES an image cannot run without one. The
+      // detach primitive can DELETE a LoadImage node but cannot rewire a
+      // sampler's latent, so without this the graph keeps its authored
+      // filename - a file that exists on one machine - and the run dies
+      // inside ComfyUI after the queue is already paid for.
+      if (d.requiresImage && !want.image) { dropped.needsImage++; continue; }
+      pool.push(d);
+    }
+    if (!pool.length) {
+      var why;
+      if (dropped.needsImage && !dropped.disabled) {
+        why = "every runnable template needs a reference image; pass " +
+              "image: <absolute path>, or install one that does not";
+      } else if (dropped.disabled && !dropped.needsImage) {
+        why = "every runnable template is switched off in Settings > " +
+              "ComfyUI > Workflows";
+      } else if (dropped.disabled || dropped.needsImage) {
+        why = "no template is both enabled and runnable without an image";
+      } else if (dropped.example) {
+        why = "the only templates installed are format examples with a " +
+              "placeholder checkpoint";
+      } else {
+        why = "no workflow templates are installed";
+      }
+      return { chosen: null, candidates: [], why: why };
+    }
+
+    // Described templates of the wanted kind first; UNDESCRIBED ones
+    // (no manifest) after them, never excluded - the README promises a
+    // user's own export works as-is, and it has no kind to match on.
+    var kinded = [], unknown = [], otherKind = [];
+    for (var j = 0; j < pool.length; j++) {
+      if (pool[j].kind === wantKind) kinded.push(pool[j]);
+      else if (pool[j].kind === undefined) unknown.push(pool[j]);
+      else otherKind.push(pool[j]);
+    }
+
+    function rank(list) {
+      var scored = [];
+      for (var k = 0; k < list.length; k++) {
+        var d = list[k];
+        scored.push({
+          d: d,
+          // Fit FIRST: never hand a card a graph it cannot hold while one
+          // it can is sitting there.
+          fits: opts.fits ? (opts.fits(d) ? 1 : 0) : 1,
+          // Then weights actually on this disk - a template whose files
+          // are missing is a refusal the user has to act on.
+          present: opts.weightsPresent ? (opts.weightsPresent(d) ? 1 : 0) : 0,
+          // Then the BASELINE: the graph the catalog entry itself points
+          // at. Without this the owner's own refined template and the
+          // shipped basic tie on everything and fall through to NAME,
+          // where the winner is whichever sorts first - luck, not design.
+          baseline: opts.baseline ? (opts.baseline(d) ? 1 : 0) : 0,
+          // Then the image the caller actually gave us.
+          usesImage: (want.image && d.takesImage) ? 1 : 0
+        });
+      }
+      scored.sort(function (a, b) {
+        if (a.fits !== b.fits) return b.fits - a.fits;
+        if (a.present !== b.present) return b.present - a.present;
+        if (a.baseline !== b.baseline) return b.baseline - a.baseline;
+        if (a.usesImage !== b.usesImage) return b.usesImage - a.usesImage;
+        return a.d.name.toLowerCase() < b.d.name.toLowerCase() ? -1 : 1;
+      });
+      var names = [];
+      for (var n = 0; n < scored.length; n++) names.push(scored[n].d);
+      return names;
+    }
+
+    var order = rank(kinded).concat(rank(unknown)).concat(rank(otherKind));
+    var pick = order[0];
+    var why = "no workflow named; picked " + pick.name + " for a " +
+              wantKind + " request";
+    if (pick.kind === undefined) {
+      why += " (it carries no manifest, so its kind is unknown)";
+    } else if (pick.kind !== wantKind) {
+      why += " (nothing of that kind is available)";
+    }
+    return { chosen: pick, candidates: order, why: why };
+  }
+
   /** Load and validate an API-format workflow graph. Throws with guidance. */
   function loadWorkflow(file) {
     ensureNode();
@@ -2334,6 +2499,9 @@
     backendUrl: backendUrl,
     backendMode: backendMode,
     managedPort: managedPort,
+    describeWorkflows: describeWorkflows,
+    resolveWorkflow: resolveWorkflow,
+    _graphCarriesValue: graphCarriesValue,   // exposed for tests
     loadWorkflow: loadWorkflow,
     injectParams: injectParams,
     outputScaleFrom: outputScaleFrom,

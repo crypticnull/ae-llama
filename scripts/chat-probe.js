@@ -331,6 +331,14 @@ function loadPanelFile(rel) {
   // machine. Binding `this` too makes the loader work for both shapes.
   new Function("window", src).call(window, window);
 }
+// version.js FIRST, exactly as index.html loads it: it publishes
+// global.AELL, which carries COMFY_CATALOG. tools.js reads that catalog
+// to rank workflow templates (fit, weights on disk, which graph the
+// entry itself points at). Without it the read yields an empty list and
+// the ranking silently degrades to name order — the same alphabetical
+// choice §18 P1 replaced. Caught by test-chat-probe's own MODULE_FILE
+// guard the moment tools.js referenced global.AELL.
+loadPanelFile("version.js");
 loadPanelFile("settings.js");
 loadPanelFile("tiers.js");
 loadPanelFile("llama.js");
