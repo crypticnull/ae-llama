@@ -20266,3 +20266,47 @@ untouched — no rule or tool-doc text changed. BUMPED 0.12.1 ->
 **§18 has no remote passes left.** P3 and P5-P10 are local and need only
 §17c (which the loop can now take itself) — the queue is the owner's and
 the loop's from here.
+
+## 2026-09-07 (remote session) — the install-folder label told users NOT to set the field that finds their models (0.12.3)
+
+SUPERSEDES my own §17a label change from 2026-09-06. Owner asked whether
+a user with ComfyUI already installed can point the panel at their
+models. Checking it found that the answer is YES and more complete than
+expected — and that a label I wrote the day before actively discouraged
+the step that unlocks it.
+
+**What actually works** (`tools.js:1274`, `comfyModelRoots`), search
+order: `comfyModelsDir`; each `comfyModelRoots` line with `kind=path`
+per-type support; the **Comfy-Desktop shared store** (auto-detected, no
+config); **`<comfyDir>\models`**; and every root parsed out of the user's
+OWN `extra_model_paths.yaml` plus the Desktop app's
+`extra_models_config.yaml` (`tools.js:1200-1221`, `parseComfyPathsYaml`).
+So the panel INHERITS a user's existing ComfyUI model configuration
+rather than asking them to restate it. Both halves are wired to the same
+roots: `catalogModelStatus` reports the exact path each weight was found
+at (driving the §18 P4 Workflows rows and the resolver's weights-present
+ranking), and `applyExtraModelPaths` writes the same roots into the
+managed backend's yaml so it can LOAD them.
+
+**The defect.** §17a relabelled the install-folder field "for the Launch
+button; only used with 'Use my own ComfyUI'". Measured: `comfyDir` is
+read at `tools.js:1205` (their `extra_model_paths.yaml`) and `:1311`
+(their `models` tree) with **no backend-mode gate at all** — it works in
+MANAGED mode, and it is the single field that unlocks inheriting their
+config. The label told exactly the users who would benefit most not to
+bother. Corrected to say what the field does.
+
+The lesson is narrow and worth keeping: a label written while thinking
+about ONE subsystem (§17a's backend modes) described a field owned by
+ANOTHER (the model search path). Nothing tested it, because a label is
+not behaviour — but it is the only instruction most users will ever read.
+
+**Filed, not built — the owner's actual ask.** Three gaps remain, all
+UX rather than plumbing: nothing DISCOVERS a standard
+`Documents\ComfyUI\models`; a typed root gets no validation or feedback
+(`formToSettings` trims and drops empties, nothing more), so a typo is
+stored silently; and nobody is ever ASKED whether they have models. The
+wizard is mostly assembly — `catalogModelStatus` already returns where
+each file was found and the yaml parser already exists.
+
+Suite 78/79. BUMPED 0.12.2 -> **0.12.3**.
