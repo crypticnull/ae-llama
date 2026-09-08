@@ -51,6 +51,12 @@ param(
     # the loop itself -- the probe is one small CLI call and it is what
     # stands between a misconfigured machine and a wasted night.
     [switch]$SkipPreflight,
+    # Run the preflight write-probe and STOP, without starting any
+    # passes. The point is that it takes the SAME path a real run does --
+    # including the WMI detach -- so it reproduces a pass's environment
+    # in one small CLI call instead of one night of them. Use it after
+    # anything changes about the machine, the CLI or the settings.
+    [switch]$PreflightOnly,
     [switch]$Detached,
     # Leave the hosts' dialogs alone. For watching what AE or Premiere
     # actually puts up, without anything answering it first.
@@ -89,6 +95,7 @@ if (-not $Detached) {
     if ($Model)      { $fwd = $fwd + ' -Model "' + $Model + '"' }
     if (-not $SkipPermissions) { $fwd = $fwd + ' -SkipPermissions:$false' }
     if ($SkipPreflight) { $fwd = $fwd + ' -SkipPreflight' }
+    if ($PreflightOnly) { $fwd = $fwd + ' -PreflightOnly' }
     if ($NoDialogWatchdog) { $fwd = $fwd + ' -NoDialogWatchdog' }
     # Hand this shell's user folders to the detached child explicitly.
     if ($env:APPDATA) {
@@ -489,6 +496,18 @@ if (-not $SkipPreflight) {
     if (Test-Path $probe) {
         Remove-Item -Path $probe -Force -ErrorAction SilentlyContinue
         Write-Log 'Preflight OK -- passes can write.'
+        if ($PreflightOnly) {
+            Write-Log 'PreflightOnly: not starting passes. Environment is good.'
+            Remove-Item -Path $styleFile -Force -ErrorAction SilentlyContinue
+            if ($watchdog) {
+                try {
+                    Stop-Job -Job $watchdog -ErrorAction Stop
+                    Remove-Job -Job $watchdog -Force -ErrorAction SilentlyContinue
+                } catch {}
+            }
+            Write-Log ('Full log: ' + $logFile)
+            exit 0
+        }
     } else {
         Write-Log ''
         Write-Log 'PREFLIGHT FAILED: the CLI could not write a file, so no'
