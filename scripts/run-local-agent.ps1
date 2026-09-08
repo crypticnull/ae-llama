@@ -354,7 +354,32 @@ try {
                 'whatever output style the user settings carry.')
 }
 
-$claudeArgs = @('-p', $prompt) + $claudeFlags
+# THE PROMPT GOES IN ON STDIN, NOT ON THE COMMAND LINE.
+#
+# Measured 2026-09-08, and it cost two nights. The brief above contains
+# seven double-quote characters ("NEXT UP", "needs", "some of it" ...).
+# Windows PowerShell 5.1 wraps a native argument in quotes WITHOUT
+# escaping the quotes inside it, so the command line it builds ends the
+# -p argument at the first interior quote and everything after it --
+# INCLUDING the trailing --dangerously-skip-permissions -- lands as
+# stray positional arguments that never register as flags. The session
+# then runs with no bypass: Read, Grep and Glob work, every Edit, Write
+# and Bash call is auto-denied, which is exactly what the passes
+# reported.
+#
+# The proof was in the loop's own log. The preflight, whose prompt has
+# NO quotes in it, wrote its file and reported "Preflight OK" -- and
+# pass 1, eight seconds later with the identical flag array, had no
+# bypass at all. Same flags, same directory, same process; the only
+# difference was the prompt.
+#
+# `claude -p` with no value reads the prompt from stdin, so this takes
+# the prompt off the command line entirely and no amount of quoting in
+# the brief can reach the argument parser. The flags also go FIRST now,
+# so they are parsed before anything else can go wrong.
+$promptFile = Join-Path $RepoRoot ('logs\pass-prompt-' + $PID + '.txt')
+Set-Content -Path $promptFile -Value $prompt -Encoding ASCII
+$claudeArgs = $claudeFlags + @('-p')
 
 Write-Log ('repo   : ' + $RepoRoot)
 Write-Log ('claude : ' + $ClaudePath)
@@ -478,12 +503,22 @@ if (-not $SkipPreflight) {
     $probe = Join-Path $RepoRoot ('logs\preflight-' + $PID + '.txt')
     Remove-Item -Path $probe -Force -ErrorAction SilentlyContinue
     Write-Log 'Preflight: checking that a pass can write a file...'
-    $probePrompt = 'Use the Write tool to create the file ' + $probe +
-                   ' containing exactly the word READY. Then reply DONE. ' +
-                   'Do nothing else.'
+    # The probe prompt carries DOUBLE QUOTES on purpose, and goes in the
+    # same way a pass's does. 2026-09-08: the first version of this
+    # probe used a quote-free prompt passed on the command line, so it
+    # sailed through while every real pass -- whose brief has seven
+    # quotes in it -- ran with no bypass. A preflight that exercises an
+    # easier path than the thing it is clearing is worse than none: it
+    # converts "broken" into "verified working".
+    $probePrompt = 'Use the Write tool to create the file "' + $probe +
+                   '" containing exactly the word READY. Then reply ' +
+                   '"DONE". Do nothing else.'
+    $probeFile = Join-Path $RepoRoot ('logs\preflight-prompt-' + $PID + '.txt')
+    Set-Content -Path $probeFile -Value $probePrompt -Encoding ASCII
     $probeOut = New-Object System.Collections.Generic.List[string]
     try {
-        & $ClaudePath @(@('-p', $probePrompt) + $claudeFlags) 2>&1 |
+        Get-Content -Raw $probeFile |
+            & $ClaudePath @($claudeFlags + @('-p')) 2>&1 |
             ForEach-Object {
                 $line = Clean-Line ([string]$_)
                 $probeOut.Add($line)
@@ -495,6 +530,7 @@ if (-not $SkipPreflight) {
     }
     if (Test-Path $probe) {
         Remove-Item -Path $probe -Force -ErrorAction SilentlyContinue
+        Remove-Item -Path $probeFile -Force -ErrorAction SilentlyContinue
         Write-Log 'Preflight OK -- passes can write.'
         if ($PreflightOnly) {
             Write-Log 'PreflightOnly: not starting passes. Environment is good.'
@@ -623,7 +659,8 @@ for ($i = 1; $i -le $Iterations; $i++) {
                'app and runs many processes under that name)')
     $passLines = New-Object System.Collections.Generic.List[string]
     try {
-        & $ClaudePath @claudeArgs 2>&1 | ForEach-Object {
+        Get-Content -Raw $promptFile |
+            & $ClaudePath @claudeArgs 2>&1 | ForEach-Object {
             $line = Clean-Line ([string]$_)
             $passLines.Add($line)
             Add-Content -Path $logFile -Value $line -Encoding ASCII
@@ -704,6 +741,7 @@ if ($watchdog) {
 }
 
 Remove-Item -Path $styleFile -Force -ErrorAction SilentlyContinue
+Remove-Item -Path $promptFile -Force -ErrorAction SilentlyContinue
 
 Write-Log 'Loop finished.'
 Write-Log ('Full log: ' + $logFile)
