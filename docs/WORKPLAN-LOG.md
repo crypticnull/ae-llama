@@ -20466,3 +20466,53 @@ than the one it fixes. The override is per-invocation.
 
 No `extension/` change, so **no version bump**. PowerShell parse green;
 pure ASCII, BOM-less.
+
+## 2026-09-08 (remote session) — the loop's bypass is FIXED; whether a pass completes is still unverified
+
+SUPERSEDES the stdin entry above on its CAUSE claim. That entry said
+PowerShell 5.1 quoting ate the bypass flag because the brief carries
+double quotes. Measured afterwards, the prompt already held **8** double
+quotes at `e7aecab` — the script version that ran the WORKING 2026-09-06
+nights — and 12 after the §19 brief edit. Quotes alone therefore did not
+break it, and that entry was written with more confidence than the
+evidence carried.
+
+**What IS established.** After taking the prompt off the command line
+(stdin) and moving the flags ahead of `-p`, a pass launched
+`AfterFX.exe` 18 seconds after starting — measured, PID 51048 at
+10:20:39 against a pass that began 10:20:21. The read-only passes could
+never do that: they were denied every Bash call. **The bypass reaches the
+CLI now.** Which of the two changes did it is unpinned; they landed
+together and it is not worth an experiment on the owner's nights.
+
+**What is NOT established: that a pass finishes and commits.** No pass
+has committed since the repair. Three single-pass runs were started and
+none reached a verdict — one was killed by closing its window, two were
+killed while being diagnosed.
+
+**The diagnostic mistake worth keeping.** Twice I read the pass's state
+off CPU: first calling it healthy because AE had launched, then calling
+it hung because CPU was flat. **CPU cannot answer this question.**
+`claude -p` is API-bound and burns almost no CPU while working — 8.66
+CPU-seconds across ten minutes is a NORMAL working pass — and the
+harness deliberately leaves AE open and idle between steps, so a flat
+`AfterFX` counter is the designed state, not a stall. Both readings were
+wrong in opposite directions off the same instrument.
+
+**The real defect underneath: a pass emits nothing until it ends.**
+`claude -p` returns its output in one block, so a working pass writes NO
+log lines for its entire 6-10 minute run. There is no heartbeat, which
+is why "working" and "hung" are indistinguishable to anyone watching —
+including the loop itself. That is now the top item in NEXT UP.
+
+Also confirmed by elimination and closed as candidates: the flag missing
+from the script (present at `66e9b9f:49,:314`), an elevated shell
+(measured False), a permissions block in the user settings (none — only
+`outputStyle`, `autoUpdatesChannel`, `theme`,
+`agentPushNotifEnabled`), managed policy (`managed-settings.json` does
+not exist), and the CLI gating the flag (a manual headless call from the
+repo root wrote a file AND ran node). The WMI detach is also NOT the
+cause: the 01:25 run was WMI-detached and the 01:44 run was in-window,
+and both failed identically.
+
+No `extension/` change, so **no version bump**.

@@ -39,6 +39,7 @@ the night retrying it.
 
 | # | item | where | needs | bumps |
 |---|---|---|---|---|
+| 0 | **Give the loop a heartbeat**, then verify one pass commits | §20 | nothing | no |
 | 1 | Install the managed ComfyUI backend: `node scripts/comfy-install.js --boot` | §17c | ~10 GB free, a 2 GB download. **Check free space first and log it.** | no |
 | 2 | H3 t2v regression + `catalog-vram-probe --entry minimax-h3` → measured block | §18 P3 | item 1, AE | no |
 | 3 | sd15 basic template (+ the frontend-editable measurement) | §18 P5 | item 1, AE, 2 GB | yes |
@@ -3883,6 +3884,49 @@ must never block first run, and it must never be the only way to reach
 19a then 19b are loop work and independent of everything Comfy-backend
 (they touch only the search path and Settings). 19c waits on the owner.
 None of it blocks §18.
+
+## 20. The loop cannot tell working from hung (filed 2026-09-08)
+
+`claude -p` returns its output in ONE block at the end, so a pass that is
+working normally writes no log line for its entire 6-10 minute run. The
+loop logs the pass start and then nothing until the pass ends.
+
+That is why two days were spent unable to answer "is it working?". CPU
+does not answer it either: `claude -p` is API-bound and burns almost no
+CPU while working (8.66 CPU-seconds over ten minutes is a NORMAL pass),
+and the harness deliberately leaves AE open and idle between steps, so a
+flat `AfterFX` counter is the designed state rather than a stall. Both
+readings were taken and both were wrong, in opposite directions, off the
+same instrument.
+
+### 20a. A heartbeat — takeable, no bump
+
+While a pass runs, the loop should write a line every 30s carrying
+something that PROVES progress rather than merely that time passed:
+the pass process still exists, its elapsed time, and the repo's dirty
+file count (`git status --porcelain | Measure-Object -Line`). A pass
+that has started editing shows a rising count; one that has not shows
+zero, and the two are then distinguishable from outside.
+
+Do NOT use CPU. It is measured to be uninformative here in both
+directions, which is the whole reason this item exists.
+
+### 20b. A per-pass timeout — takeable, no bump
+
+There is no upper bound on a pass. `run-ae-selftest.ps1` has
+`-TimeoutSec 240` and every other step has nothing, so a genuinely wedged
+pass holds the loop until a human notices. Kill a pass that exceeds a
+generous bound (30 minutes), log it as timed out with the last heartbeat,
+and take the next iteration.
+
+### 20c. Verify a pass completes and commits — DO THIS FIRST
+
+Nothing has committed since the bypass repair. Three single-pass runs
+were started and all three were killed before reaching a verdict. Run
+`-Iterations 1` and let it finish untouched; the pass is done when it
+prints `Pass committed <sha>` or `Pass produced no commit`. Until that
+has been seen once, the loop is not known to work end to end and no
+overnight run should be started.
 
 ## Out of scope for the local session (remote builds these)
 
