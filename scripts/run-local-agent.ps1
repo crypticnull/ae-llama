@@ -321,6 +321,32 @@ Hard limits for this session:
 $claudeFlags = @()
 if ($SkipPermissions) { $claudeFlags += '--dangerously-skip-permissions' }
 if ($Model) { $claudeFlags += @('--model', $Model) }
+
+# Force the OUTPUT STYLE back to default for passes.
+#
+# Measured 2026-09-08: the owner's %USERPROFILE%\.claude\settings.json
+# carries "outputStyle": "Learning", which asks the session to hand
+# design decisions back as TODO(human) blocks. That is a fine style for
+# a human at a keyboard and exactly wrong for an unattended pass -- the
+# brief tells a pass there is no human watching and not to ask
+# questions, so the two instructions contradict each other and the pass
+# has to notice and resolve it. One did, and said so; another may just
+# leave a TODO(human) in shipped code.
+#
+# Passed as a FILE rather than an inline JSON string: PowerShell 5.1
+# mangles embedded double quotes when it builds a native command line,
+# and a silently-corrupted --settings argument is worse than none.
+$styleFile = Join-Path $RepoRoot ('logs\pass-settings-' + $PID + '.json')
+try {
+    Set-Content -Path $styleFile -Encoding ASCII `
+        -Value '{"outputStyle":"default"}'
+    $claudeFlags += @('--settings', $styleFile)
+} catch {
+    Write-Host ('Could not write the pass settings file (' +
+                $_.Exception.Message + ') -- passes will run with ' +
+                'whatever output style the user settings carry.')
+}
+
 $claudeArgs = @('-p', $prompt) + $claudeFlags
 
 Write-Log ('repo   : ' + $RepoRoot)
@@ -657,6 +683,8 @@ if ($watchdog) {
                    $_.Exception.Message)
     }
 }
+
+Remove-Item -Path $styleFile -Force -ErrorAction SilentlyContinue
 
 Write-Log 'Loop finished.'
 Write-Log ('Full log: ' + $logFile)

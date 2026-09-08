@@ -20420,3 +20420,49 @@ green over the edited script; pure ASCII, BOM-less.
 **Still open, and it needs the owner's machine:** what is actually
 denying the permissions. The preflight now reports the three candidates
 rather than the loop discovering them one night at a time.
+
+## 2026-09-08 (remote session) — the Learning output style was reaching unattended passes
+
+SUPERSEDES part of the entry above: it named three candidates for the
+read-only passes and two are now ruled OUT. Measured on the owner's
+machine:
+
+- `%USERPROFILE%\.claude\settings.json` carries **no permissions block**
+  at all — only `outputStyle`, `autoUpdatesChannel`, `theme`,
+  `agentPushNotifEnabled`.
+- `C:\ProgramData\ClaudeCode\managed-settings.json` **does not exist**,
+  so managed policy is not overriding anything.
+- CLI is **2.1.260**, and `--dangerously-skip-permissions` WORKS there: a
+  manual headless call attempted a write and retried outside the sandbox,
+  which only happens when bypass is active.
+
+So the bypass flag is not the blocker, and the cause of pass 1's
+read-only state is still **unmeasured**. The test that would have settled
+it was run from `C:\WINDOWS\system32` (my command omitted the `cd`), so
+it hit a Windows ACL denial rather than the harness, and proved nothing
+about the repo directory. Re-testing from the repo is the open item.
+
+**What IS confirmed and is now fixed:** `"outputStyle": "Learning"` is
+set globally, and it reached the unattended passes. That style asks the
+session to hand design decisions back as `TODO(human)` blocks — fine for
+a human at a keyboard, exactly wrong for a pass whose brief says nobody
+is watching and not to ask questions. The two instructions contradict
+each other. Pass 1 noticed and resolved it by making the calls itself and
+writing down the assumptions; the next pass might just leave a
+`TODO(human)` in shipped code instead.
+
+Passes now run with `--settings <file>` pinning
+`{"outputStyle":"default"}`. Passed as a FILE, not an inline JSON string:
+PowerShell 5.1 mangles embedded double quotes when it builds a native
+command line, and a silently-corrupted `--settings` argument is worse
+than none. It lands in `logs/` (gitignored, so it cannot dirty the tree
+and confuse the did-this-pass-commit check) and is removed when the loop
+ends. Verified against CLI 2.1.263 that `--settings` with an output-style
+override is accepted.
+
+The global setting is the owner's and was NOT touched — a loop that
+edits a user's own Claude configuration to suit itself is a worse bug
+than the one it fixes. The override is per-invocation.
+
+No `extension/` change, so **no version bump**. PowerShell parse green;
+pure ASCII, BOM-less.
