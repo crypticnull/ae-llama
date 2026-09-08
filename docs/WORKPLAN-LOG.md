@@ -20310,3 +20310,53 @@ wizard is mostly assembly — `catalogModelStatus` already returns where
 each file was found and the yaml parser already exists.
 
 Suite 78/79. BUMPED 0.12.2 -> **0.12.3**.
+
+## 2026-09-07 (remote session) — §19 filed, and the loop was aiming at a workplan it is told not to read
+
+Two things, and the second is the one that would have wasted a night.
+
+**§19 filed — "I already have models".** The owner's ask was a wizard
+that lets a user with an existing ComfyUI say where their models are.
+Checking first (2026-09-07, above) found the PLUMBING is already complete
+and inherits their config: `comfyModelRoots(s)` (`tools.js:1274`) searches
+`comfyModelsDir`, each `kind=path` extra root, the auto-detected
+Comfy-Desktop store, `<comfyDir>\models`, and every root parsed out of
+their OWN `extra_model_paths.yaml` plus the Desktop's
+`extra_models_config.yaml`. So §19 is UX over existing search logic and
+files nothing that needs new plumbing: 19a `Setup.scanForModelRoots()`
+(probe a NAMED SHORTLIST — **never scan drives**: slow, alarming in a
+commercial product, and it would claim other applications' models),
+19b a Scan button plus per-line validation of typed roots, 19c a
+first-run prompt which is commercial copy and stays OWNER-GATED.
+
+**The defect: the queue had become unreachable.** The brief's step 2
+tells a pass NOT to read the whole workplan (~46k tokens against a 16,384
+context) and step 4 said "pick the SINGLE highest-priority unfinished
+workplan item". Those two instructions cannot both be followed. Every
+live item is in sections 17-19 — the LAST three of nineteen — while
+sections 1-16 are almost entirely struck through, so a fresh unattended
+pass reading "the top" reads a page of finished work and has no way to
+learn that §17c even exists. This is not hypothetical: it is why the
+queue kept looking empty from inside the loop while §18 P3-P10 sat
+unclaimed.
+
+Fixed on both sides. A **NEXT UP block** now sits at the top of
+`docs/WORKPLAN.md` (before §1): eight ordered backend items (§17c first —
+`node scripts/comfy-install.js --boot`, needs ~10 GB and a 2 GB download
+— then §18 P3, P5-P10) with explicit `needs` and `bumps` columns, plus a
+fallback table of nine items that need NOTHING but the repo (§19a/b, the
+four §15 prompt deletions, §16f 1-4) so a night with no disk, no network
+or no AE still produces work. Brief step 4 now points at that block, and
+says outright: if an item fails for an ENVIRONMENTAL reason, log it and
+take the NEXT one — **do not spend the whole night retrying one**. That
+sentence is the difference between a wasted pass and eight.
+
+Also corrected the workplan's own header, which still said "Before
+picking anything, read `docs/WORKPLAN-LOG.md`" — contradicting both
+CLAUDE.md and the brief, and pointing a 16,384-token context at a
+262k-token append-only file. It now points at `docs/MEMORY.md` and shows
+the `sed -n 'START,ENDp'` retrieval.
+
+No `extension/` change, so **no version bump** — this pass is the queue
+and the brief, not the panel. Suite 78/79 (the Windows-path-bound ffmpeg
+suite); PowerShell parse test green over the edited `.ps1`.

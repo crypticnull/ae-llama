@@ -6,13 +6,66 @@ bottom; commit small, tested fixes to the dev branch
 and releases stay with the remote session — flag them instead of
 building them.
 
-**Before picking anything, read `docs/WORKPLAN-LOG.md`** — it records
-what earlier passes already finished. Unattended passes are fresh
-sessions with no memory of each other, so without the log every pass
-would restart at item 1. Append your entry before you stop.
+**Before picking anything, read `docs/MEMORY.md`** — the generated index
+over `docs/WORKPLAN-LOG.md`. Unattended passes are fresh sessions with no
+memory of each other, so that history is the only thing carrying state —
+but do NOT read the log itself: it is ~262k tokens against a 16,384
+context, so "read the log" has meant "read an arbitrary part of an
+append-only file", which is how a pass acts on a claim that was corrected
+200 entries later. The index carries the corrections table, the recent
+entries and a subsystem map with LINE RANGES; pull what you need with
+`sed -n 'START,ENDp' docs/WORKPLAN-LOG.md`. Append your entry before you
+stop, then run `node scripts/memory-index.js`.
 
 Unattended runs are driven by `scripts/run-local-agent.ps1` (pull -> one
 item -> commit -> repeat). One item per pass, then stop.
+
+## NEXT UP — read this first, take the first item that is not blocked
+
+Maintained 2026-09-07. **This exists because the brief tells a pass NOT
+to read the whole workplan** (it is ~46k tokens) — so without an ordered
+list at the top, a fresh unattended session has to guess which of
+nineteen sections holds live work, and the live work is in the LAST
+three. Sections 1-16 are almost entirely struck.
+
+**The rule stays: the harness comes first.** If
+`scripts/run-ae-selftest.ps1` is red, fixing it IS the pass. Only when
+it is green does this list apply.
+
+Take the FIRST item whose "needs" are satisfied. If an item fails for an
+environmental reason (no disk, no network, a download that will not
+finish), say so in the log and **move to the next one** — do not spend
+the night retrying it.
+
+| # | item | where | needs | bumps |
+|---|---|---|---|---|
+| 1 | Install the managed ComfyUI backend: `node scripts/comfy-install.js --boot` | §17c | ~10 GB free, a 2 GB download. **Check free space first and log it.** | no |
+| 2 | H3 t2v regression + `catalog-vram-probe --entry minimax-h3` → measured block | §18 P3 | item 1, AE | no |
+| 3 | sd15 basic template (+ the frontend-editable measurement) | §18 P5 | item 1, AE, 2 GB | yes |
+| 4 | sdxl basic template | §18 P6 | item 3, 7 GB | yes |
+| 5 | wan22-5b basic t2v template | §18 P7 | item 3, 17 GB | yes |
+| 6 | krea2 core-only basic; the authored graph then leaves the bundle | §18 P8 | item 3 | yes |
+| 7 | H3 core-only basic; the authored graph then leaves the bundle | §18 P9 | items 2, 5 | yes |
+| 8 | minimax-h3-int8 second API file | §18 P10 | item 7, 26 GB | yes |
+
+**If items 1-8 are blocked** (no backend, no disk, no AE), these need
+NOTHING but the repo and are always takeable:
+
+| item | where | bumps |
+|---|---|---|
+| `Setup.scanForModelRoots()` — probe a named shortlist, never scan drives | §19a | yes |
+| "Scan for models" button + validate typed roots | §19b | yes |
+| The four Option A prompt deletions, one per pass, each gated on `chat-probe --variants` | §15 | yes |
+| `test-context-budget.js` starve row | §15 | no |
+| `--store-root` on `chat-probe.js` | §15 | no |
+| Persist `_floorMB`; launch-time `memory.used` read | §16f 1-2 | yes |
+| Mid-render VRAM reading in the scratch comp | §16f 3 | no |
+| The 7B at ctx 16,384 and 20,480, fp16 vs `q8_0` KV, via a standalone launcher | §16f 4 | no |
+
+**Gate 0 for every pass that touches settings or downloads:** print
+`Settings.origin()` and refuse when `appdata` is empty. The detached loop
+carries APPDATA now (2026-09-06), but a pass that finds it missing is
+reading someone else's defaults and must say so rather than proceed.
 
 ## 1. Make the harness green (always first)
 
@@ -3741,6 +3794,95 @@ stored default per kind; feed `comfyCatalog` guard (no producer exists);
 `catalog-vram-probe --out docs/measured/` for §13a step 4; renderable
 predicate on `recommendGen`; `video: [names]` on `comfy_list_workflows`
 only if the chat-probe verdict shows the model needs it.
+
+## 19. "I already have models" — discovery and confirmation (filed 2026-09-07)
+
+**Owner, 2026-09-07:** *"it would be nice if there was some kind of
+prompt or some kind of wizard that allows them to choose — hey, I have
+models, here's where they're at."*
+
+**The plumbing is DONE. This section is the UX over it**, and nothing
+here needs new search logic.
+
+### What already works (measured 2026-09-07, do not rebuild)
+
+`comfyModelRoots(s)` (`tools.js:1274`) is the panel's search path, most
+specific first:
+
+1. `comfyModelsDir` — the panel's own primary folder;
+2. every **Extra model folders** line, with per-type `kind=path`
+   (`checkpoints=D:\SD\ckpts`);
+3. the **Comfy-Desktop shared store**, auto-detected from
+   `%LOCALAPPDATA%`, needing no configuration at all;
+4. `<comfyDir>\models` — the user's own ComfyUI tree;
+5. every root parsed out of the user's OWN `extra_model_paths.yaml` and
+   the Desktop app's `extra_models_config.yaml`
+   (`tools.js:1200-1221`, `parseComfyPathsYaml`).
+
+So the panel **inherits an existing ComfyUI's model configuration**
+rather than asking the user to restate it. Both consumers read the same
+roots: `catalogModelStatus` reports the exact path each weight was found
+at (feeding §18 P4's Workflows rows and the resolver's weights-present
+ranking), and `applyExtraModelPaths` writes them into the managed
+backend's yaml so it can LOAD them.
+
+### The three gaps, in value order
+
+1. **Nothing DISCOVERS anything.** The only auto-detected location is
+   the Comfy-Desktop store. A standard `Documents\ComfyUI\models` — the
+   most common layout, and the one on the dev machine — is found only if
+   the user types it or sets `comfyDir`.
+2. **No feedback, no validation.** `formToSettings`
+   (`main.js:1167-1170`) trims each line and drops empties; nothing
+   else. A typo is stored silently and the only symptom is a Workflows
+   row still saying files are missing.
+3. **Nobody is ever ASKED.** There is no first-run prompt, so a user
+   with 200 GB of models has to go looking through Settings to find out
+   the panel can use them.
+
+### 19a. `Setup.scanForModelRoots()` — loop-takeable, BUMPS
+
+Pure over an injected fs + env so it is stub-testable. Probes a NAMED
+SHORTLIST and returns candidates with what is in them:
+
+    { path, source, counts: {checkpoints: 12, vae: 3, ...}, total }
+
+**Never scan drives.** A recursive sweep of a user's disks is slow,
+alarming on a commercial product, and would find other applications'
+models the panel has no business claiming. The shortlist:
+`%USERPROFILE%\Documents\ComfyUI\models`, `%USERPROFILE%\ComfyUI\models`,
+the Comfy-Desktop store, `<comfyDir>\models`, and every root already
+named by a parsed yaml. Anything else is the Browse button's job.
+
+Count by EXTENSION in the known sub-folders (`Comfy.MODEL_SUBS`), not by
+catalog membership: a user's own checkpoints are not catalog entries,
+and "found 47 model files" is the honest number. A candidate already
+covered by `comfyModelRoots(s)` is marked as such rather than offered
+again.
+
+### 19b. "Scan for models" in Settings — loop-takeable, BUMPS
+
+A button beside **Extra model folders**. Runs 19a, shows one line per
+candidate with its counts and an Add checkbox, appends the chosen ones.
+Plus the cheap half that is worth doing even alone: **validate what is
+typed** — after an edit, each line reports "12 model files" or "folder
+not found", so a typo is visible immediately instead of surfacing as a
+missing weight three screens away.
+
+### 19c. First-run prompt — OWNER-GATED
+
+Where it belongs in first-run, and what it says, is commercial copy.
+Draft shape: after the tier line, if 19a finds anything the panel is not
+already using — *"Found 47 model files in Documents\ComfyUI. Use them?
+[Use these] [Not now]"* — and nothing at all when it finds nothing. It
+must never block first run, and it must never be the only way to reach
+19b.
+
+### Order and gating
+
+19a then 19b are loop work and independent of everything Comfy-backend
+(they touch only the search path and Settings). 19c waits on the owner.
+None of it blocks §18.
 
 ## Out of scope for the local session (remote builds these)
 
