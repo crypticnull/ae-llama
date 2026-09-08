@@ -47,6 +47,10 @@ param(
     # cheaper tier; the expensive one is for daytime design and review.
     [string]$Model = '',
     [switch]$SkipPermissions = $true,
+    # Skip the write-probe that runs before pass 1. Only for debugging
+    # the loop itself -- the probe is one small CLI call and it is what
+    # stands between a misconfigured machine and a wasted night.
+    [switch]$SkipPreflight,
     [switch]$Detached,
     # Leave the hosts' dialogs alone. For watching what AE or Premiere
     # actually puts up, without anything answering it first.
@@ -84,6 +88,7 @@ if (-not $Detached) {
     if ($ClaudePath) { $fwd = $fwd + ' -ClaudePath "' + $ClaudePath + '"' }
     if ($Model)      { $fwd = $fwd + ' -Model "' + $Model + '"' }
     if (-not $SkipPermissions) { $fwd = $fwd + ' -SkipPermissions:$false' }
+    if ($SkipPreflight) { $fwd = $fwd + ' -SkipPreflight' }
     if ($NoDialogWatchdog) { $fwd = $fwd + ' -NoDialogWatchdog' }
     # Hand this shell's user folders to the detached child explicitly.
     if ($env:APPDATA) {
@@ -310,12 +315,23 @@ Hard limits for this session:
   Do not spend the pass guessing.
 '@
 
-$claudeArgs = @('-p', $prompt)
-if ($SkipPermissions) { $claudeArgs += '--dangerously-skip-permissions' }
-if ($Model) { $claudeArgs += @('--model', $Model) }
+# Flags only, kept apart from the prompt so the PREFLIGHT below can run
+# the CLI exactly the way a pass will. A preflight that ran with
+# different flags would prove nothing about the passes.
+$claudeFlags = @()
+if ($SkipPermissions) { $claudeFlags += '--dangerously-skip-permissions' }
+if ($Model) { $claudeFlags += @('--model', $Model) }
+$claudeArgs = @('-p', $prompt) + $claudeFlags
 
 Write-Log ('repo   : ' + $RepoRoot)
 Write-Log ('claude : ' + $ClaudePath)
+# LOG THE FLAGS. 2026-09-08: a night was lost to passes that could read
+# but not write or execute, and the log did not record what the CLI was
+# actually invoked with -- so the first question ("did the bypass flag
+# reach it?") could not be answered from the log at all. It costs one
+# line.
+Write-Log ('flags  : ' + $(if ($claudeFlags.Count) { $claudeFlags -join ' ' }
+                          else { '(none)' }))
 Write-Log ('model  : ' + $(if ($Model) { $Model } else { '(CLI default)' }))
 Write-Log ('branch : ' + $Branch)
 Write-Log ('log    : ' + $logFile)
@@ -406,6 +422,77 @@ if (-not $NoDialogWatchdog) {
                'save-changes prompt on a project this harness owns is ' +
                'answered Do not Save; anything else is cancelled, which ' +
                'unblocks the host and keeps its changes.')
+}
+
+# --- preflight: can a pass WRITE? ------------------------------------
+#
+# 2026-09-08: a full night's loop was started and every pass came back
+# read-only -- Edit, Write, Bash and git all auto-denied, while Read,
+# Grep and Glob worked. The passes were articulate about it and the loop
+# did not care: it logged "Pass produced no commit", slept 20 seconds,
+# and started the next one. Thirty iterations of essays.
+#
+# The loop cannot fix that condition, but it must never spend a night on
+# it. One tiny CLI call, with the SAME flags a pass gets, that has to
+# come back with a file on disk. No file means no pass can commit, so
+# there is nothing to run: stop and say what to check.
+#
+# It is deliberately a WRITE probe rather than a version or config read.
+# The failure is about what the CLI is permitted to do, and only doing
+# it proves anything -- a settings file that looks right and a session
+# that cannot write are the exact pair that cost the night.
+if (-not $SkipPreflight) {
+    $probe = Join-Path $RepoRoot ('logs\preflight-' + $PID + '.txt')
+    Remove-Item -Path $probe -Force -ErrorAction SilentlyContinue
+    Write-Log 'Preflight: checking that a pass can write a file...'
+    $probePrompt = 'Use the Write tool to create the file ' + $probe +
+                   ' containing exactly the word READY. Then reply DONE. ' +
+                   'Do nothing else.'
+    $probeOut = New-Object System.Collections.Generic.List[string]
+    try {
+        & $ClaudePath @(@('-p', $probePrompt) + $claudeFlags) 2>&1 |
+            ForEach-Object {
+                $line = Clean-Line ([string]$_)
+                $probeOut.Add($line)
+                Add-Content -Path $logFile -Value ('  probe| ' + $line) `
+                            -Encoding ASCII
+            }
+    } catch {
+        Write-Log ('Preflight error: ' + $_.Exception.Message)
+    }
+    if (Test-Path $probe) {
+        Remove-Item -Path $probe -Force -ErrorAction SilentlyContinue
+        Write-Log 'Preflight OK -- passes can write.'
+    } else {
+        Write-Log ''
+        Write-Log 'PREFLIGHT FAILED: the CLI could not write a file, so no'
+        Write-Log 'pass can edit code, run a test, or commit. Not starting'
+        Write-Log ('the loop -- ' + $Iterations + ' passes would each ' +
+                   'produce a report and no work.')
+        Write-Log ''
+        Write-Log ('Flags used: ' + $(if ($claudeFlags.Count) {
+                   $claudeFlags -join ' ' } else { '(none)' }))
+        Write-Log 'Check, in this order:'
+        Write-Log ('  1. ' + $env:USERPROFILE +
+                   '\.claude\settings.json  -- a permissions block, or an')
+        Write-Log '     outputStyle, will both change how a pass behaves.'
+        Write-Log '  2. C:\ProgramData\ClaudeCode\managed-settings.json'
+        Write-Log '     -- managed settings OVERRIDE command-line flags.'
+        Write-Log '  3. The CLI version: a newer one may gate the bypass'
+        Write-Log '     flag behind --allow-dangerously-skip-permissions.'
+        Write-Log 'Reproduce it by hand with the flags printed above:'
+        Write-Log ('  & "' + $ClaudePath + '" -p ' +
+                   $(if ($claudeFlags.Count) { ($claudeFlags -join ' ') + ' ' }
+                     else { '' }) + '"write ok.txt containing OK"')
+        if ($watchdog) {
+            try {
+                Stop-Job -Job $watchdog -ErrorAction Stop
+                Remove-Job -Job $watchdog -Force -ErrorAction SilentlyContinue
+            } catch {}
+        }
+        Write-Log ('Full log: ' + $logFile)
+        exit 3
+    }
 }
 
 # Consecutive waits spent on a usage limit (see the check below). Reset
@@ -530,6 +617,23 @@ for ($i = 1; $i -le $Iterations; $i++) {
             Start-Sleep -Seconds 1200
             $i--
             continue
+        }
+        # The preflight above catches a machine that is read-only BEFORE
+        # the loop starts. This catches the same thing appearing MID-RUN
+        # -- a settings change, an expired grant, a CLI self-update
+        # between passes. Same reasoning: the loop cannot fix it, so
+        # continuing only spends iterations producing reports.
+        if ($passText -match 'requires approval|permission not granted|' +
+                             'auto-denied|denied automatically|' +
+                             'permission to use|not permitted to') {
+            Write-Log ''
+            Write-Log 'Pass reported DENIED PERMISSIONS and committed'
+            Write-Log 'nothing. The preflight passed, so this appeared'
+            Write-Log 'mid-run. Stopping rather than spending the'
+            Write-Log 'remaining iterations on reports.'
+            Write-Log 'See the PREFLIGHT FAILED notes in this script for'
+            Write-Log 'what to check.'
+            break
         }
         Write-Log 'Pass produced no commit (nothing done, or it stopped early).'
     } else {

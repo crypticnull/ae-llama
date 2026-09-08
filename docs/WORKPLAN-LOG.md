@@ -20360,3 +20360,63 @@ the `sed -n 'START,ENDp'` retrieval.
 No `extension/` change, so **no version bump** — this pass is the queue
 and the brief, not the panel. Suite 78/79 (the Windows-path-bound ffmpeg
 suite); PowerShell parse test green over the edited `.ps1`.
+
+## 2026-09-08 (remote session) — the loop spent a night on a read-only machine and did not notice
+
+The loop was started at 01:25 for 30 passes. Pass 1 came back with a
+careful report that it could Read, Grep and Glob but that **every Edit,
+Write, Bash and git call was auto-denied** — so it could not run the
+harness, could not run a single stubbed test, could not append to this
+log, could not commit. The loop logged `Pass produced no commit (nothing
+done, or it stopped early)`, slept 20 seconds, and started pass 2.
+
+That is the defect. Not the permission state — the loop cannot fix a
+machine's configuration and should not try. The defect is that **thirty
+iterations of "produced no commit" is indistinguishable, to this script,
+from thirty iterations of ordinary quiet work**, so a condition that
+makes every pass impossible costs a whole night before a human reads a
+log.
+
+**What the CLI's own help says** (2.1.263): `--permission-prompts` with
+`--print` chooses who answers a prompt — `host`, or `none`, where
+"anything that would prompt is denied automatically". That is the
+observed symptom exactly. Measured here: `--permission-mode
+bypassPermissions` and `--dangerously-skip-permissions` reach the SAME
+gate (both refuse identically under the container's root check), so
+adding the former is not a second lever and was not added. The machine's
+actual gate is unmeasured — a `permissions` block in the user's
+`settings.json`, a `managed-settings.json` (which overrides command-line
+flags), or the newer `--allow-dangerously-skip-permissions` gating.
+The report also mentioned an output style asking for `TODO(human)`
+blocks, which is itself evidence that a settings file with non-default
+content exists.
+
+**Three changes, none of which guess at the cause.**
+
+1. **A PREFLIGHT write-probe before pass 1.** One small CLI call with the
+   SAME flags a pass gets, which must leave a file on disk. No file means
+   no pass can commit, so the loop exits 3 with the flags it used, the
+   three files to check in order, and the one-line command to reproduce
+   it by hand. It is deliberately a WRITE probe and not a config read:
+   the failure is about what the CLI is *permitted to do*, and a settings
+   file that looks right beside a session that cannot write is the exact
+   pair that cost the night.
+2. **The flags are LOGGED.** `flags  : --dangerously-skip-permissions`
+   now sits beside `claude :` and `model  :`. The first question anyone
+   asks — did the bypass flag reach the CLI? — could not be answered from
+   the log at all, which is why diagnosing this needed a round trip.
+3. **A mid-run denial guard.** A no-commit pass whose text carries
+   `requires approval` / `permission not granted` / `denied
+   automatically` now breaks the loop instead of continuing. The
+   preflight covers the start; this covers a settings change, an expired
+   grant, or a CLI self-update between passes.
+
+`-SkipPreflight` exists for debugging the loop itself and is forwarded
+across the WMI detach.
+
+No `extension/` change, so **no version bump**. PowerShell parse test
+green over the edited script; pure ASCII, BOM-less.
+
+**Still open, and it needs the owner's machine:** what is actually
+denying the permissions. The preflight now reports the three candidates
+rather than the loop discovering them one night at a time.
