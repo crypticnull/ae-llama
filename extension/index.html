@@ -142,7 +142,11 @@
                  placeholder="http://127.0.0.1:8188"/>
         </label>
 
-        <label>My ComfyUI install folder (for the Launch button; only used with "Use my own ComfyUI")
+        <label>My ComfyUI install folder (optional &mdash; set this even
+          when using the built-in backend: the panel reads its
+          <code>models</code> folder AND its
+          <code>extra_model_paths.yaml</code>, so every model you already
+          have is found)
           <div class="pathfield">
             <input id="set-comfy-dir" type="text" spellcheck="false"/>
             <button id="btn-browse-comfy-dir">&hellip;</button>

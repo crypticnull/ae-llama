@@ -248,7 +248,15 @@ and write down what you assumed.
    powershell -ExecutionPolicy Bypass -File scripts/run-ae-selftest.ps1
    If it is red, fixing it IS this pass's item -- stop reading the
    workplan and fix that.
-4. Otherwise pick the SINGLE highest-priority unfinished workplan item.
+4. Otherwise open docs/WORKPLAN.md and read the "NEXT UP" block at the
+   TOP of it. Take the FIRST item there whose "needs" are satisfied,
+   then read only that item's own section for the detail. That block
+   exists because step 2 tells you not to read the whole file: without
+   it you would be guessing which of nineteen sections holds live work,
+   and sections 1-16 are almost entirely struck through.
+   If an item fails for an ENVIRONMENTAL reason -- no disk, no network,
+   a download that will not finish, no backend -- write that in the log
+   and take the NEXT item. Do not spend the whole night retrying one.
 5. Do it. Fix at the host-tool root (extension/jsx/hostscript.jsx or the
    panel JS), never by loosening the test. Then back-fill the stubbed
    Node test in tests/ so the same bug class is caught without AE.
