@@ -5621,3 +5621,195 @@ Wanted by §18: those passes need a backend that stays up between them,
 and right now a pass that finds it gone has nothing to read.
 
 </details>
+
+## 23. Expansion roadmap — the six basics grow IN TANDEM (design pass, filed 2026-09-09)
+
+**Authoritative document: `docs/proposals/expansion-roadmap.md`.** Read
+it before taking anything here; it carries the reasoning, the context
+pricing and the "would not build" list. This section is the queue view.
+Filed by a read-only design pass at the owner's direction (no backend,
+no GPU, no AE were touched). Nothing here is started. **Does not touch
+NEXT UP** — items 1-15 there come first; take these when that table is
+exhausted or when an item there is blocked and one here needs nothing.
+
+The rule these items encode: a capability enters as an ARG on
+`comfy_generate` plus a handler in `injectParams` (shared, every
+template gains it), or as a SIBLING file under the §18 naming contract
+(per-template, measured, never an edit to a basic), or in the OPT-IN
+layer behind §22d (packs). The bundle stays strictly `(comfy-core)`;
+§22a's pin refuses `optionalNodes` in the bundle too.
+
+Measured today (`node tests/test-context-budget.js`): compact prompt
+39,803 of 40,000, full 58,933 of 59,000. **Nothing below that touches
+the prompt lands without a cut from 23a.**
+
+### 23a. Four stale prompt lines buy a refusal — cut them (takeable, bumps, chat-probe gated)
+
+Measured off `tools.js` 2026-09-09, all in BOTH prompt forms:
+
+| text | chars | why it is stale |
+|---|---|---|
+| rules block: "Pass image: <absolute path> to give a video template a first frame; omit it for text-to-video" | 121 | no shipped template accepts an image (§18 P9a); the panel REFUSES this with a grounded error |
+| rules block: "Some video templates set length in SECONDS (durationSeconds)... re-call with durationSeconds" | 126 | no shipped basic declares `procedural.durationSeconds`; all six carry a literal `length` |
+| `comfy_generate` args: the parenthetical "(the size the template GENERATES at, which is not always the size it saves: a template that upscales between passes...)" | 188 | describes the authored KREA2 graph, which left the bundle in 0.12.13 |
+| rules block: "Match width/height to the target comp when it makes sense" | ~55 | false once 23c lands (the panel does it) |
+
+Cut the first three now (replace the parenthetical with "(generation
+size; the result reports the size imported)"); the fourth goes with
+23c. Each cut is gated on `chat-probe --variants` like every prompt
+edit, and the ratchet in `tests/test-context-budget.js` moves DOWN with
+it so the bytes are banked, not spent by the next unrelated addition.
+The image line comes BACK, reworded to cover image AND video, in 23e.
+
+### 23b. The modes coverage matrix, the sibling measured-block rule, and the derive rule (takeable, tests only, no bump)
+
+Three rules in `tests/test-workflow-bundle.js`, all two-way so nothing
+joins or leaves quietly:
+
+1. **`MODES_SHIPPED`** — per catalog entry, the list of `<MODE>` tokens
+   the bundle ships (`T2I`/`T2V` today for all six). The §22e matrix
+   extended to modes; roadmap §4 is the target table.
+2. **A non-basic sibling carries its own measured block** in its
+   manifest (`measuredVramMB`, `measuredSeconds`, `measuredAt`,
+   `measuredOn`), and `workflowFacts.fits` (`tools.js`) reads an
+   optional manifest `minVramGB` that may only be HIGHER than the
+   entry's. A sibling may raise its entry's floor, never lower it.
+3. **`derivedFrom: {workflow, differs: ["<nodeId>.<input>", ...]}`** —
+   a manifest key whose consumer is a rule asserting the two graphs are
+   identical outside the listed inputs. Generalises the §18 P10 "H3
+   siblings differ in exactly the encoder and the prefix" pin. This is
+   what lets a fp8 Wan entry (§18 P7c) inherit Wan's siblings without
+   hand-authoring, and what stops a derived file drifting.
+
+Needs nothing. Lands before 23f's first sibling.
+
+### 23c. Generation lands in the COMP, at the comp's size (takeable, bumps)
+
+Roadmap group A. `comfy_generate` imports via `import_file`, which its
+own doc says puts the file "into the PROJECT PANEL only". Usefulness
+test G2 flags "the known gap is stopping at the project panel"; it was
+filed nowhere until now.
+
+- `comp?: string` on `comfy_generate` (+14 chars, paid by 23a's fourth
+  cut). When present, import through `import_as_layer` (reuse + reload,
+  fit to comp — §5.8 measured) instead of `import_file`.
+- When no `width`/`height` is named and a comp is known: IMAGE
+  templates get the comp's size snapped to the width/height input's
+  declared `step` from the backend's `/object_info` (fetched already by
+  `validateGraphInputs`); VIDEO templates get the template's AUTHORED
+  pixel count at the comp's ASPECT — the measured seconds were taken at
+  the authored size and time is the adherence constraint on video.
+  Convert the spec, never recompute it.
+- One selftest step for the placement; one chat-probe variant, G2
+  verbatim. The snap rule is checked against a running backend for all
+  six templates in one `comfy-probe --no-ae` pass (overnight, this
+  machine).
+
+### 23d. A pre-queue time line, labelled by card (takeable after 23c, bumps)
+
+Roadmap group B's one addition. Before the POST, say "about N s on an
+RTX 5090 at this size" from the entry's `measuredSeconds` scaled by
+pixels and frames. That scaling is REASONING from one reading, so it is
+labelled "on the reference card", never used to refuse, and on an
+unmeasured card the line says so. Zero prompt bytes (progress sink).
+§18 P3c (NEXT UP 4) and P3a(b) (owner) are the rest of group B and are
+not re-filed here.
+
+### 23e. "Start from a frame": the shared plumbing (takeable, bumps, needs backend for one measurement)
+
+Roadmap group C, shared half. One pass:
+
+1. `denoise?: number` on `comfy_generate` (+38, paid by 23a). Try the
+   GENERIC walk first — `KSampler.denoise` and `BasicScheduler.denoise`
+   are literal numerics like `seed`; add `procedural.denoise` (the hook
+   §18 named) only for a graph where the walk provably cannot land it.
+   Bundle test replays it.
+2. Reword the rules-block image line (23a) to cover image AND video at
+   the same byte count.
+3. **The §18 P9a placeholder measurement:** a `LoadImage` in an API
+   graph must name a file that exists in the backend's input folder or
+   `validateGraphInputs` refuses the template before it is queued. Find
+   a placeholder a FRESH managed install actually has. Measured, not
+   guessed; gates every sibling in 23f.
+4. `catalog-vram-probe` needs to measure a template by NAME, not only
+   by `--entry` (which runs the entry's `workflowTemplate`). Check
+   whether a `--workflow` flag already exists before writing one.
+
+### 23f. "Start from a frame": one sibling per pass, each measured (takeable after 23b + 23e; backend + disk; each bumps)
+
+In this order, one per pass, proven end to end, the §18 P9 rule:
+
+| # | sibling | shape | note |
+|---|---|---|---|
+| 1 | `AE_LLAMA_SD15_I2I_V1` | sd15 basic + `LoadImage -> VAEEncode` into `KSampler.latent_image`, denoise 0.6 | proves the whole sibling mechanism at 4 s per render |
+| 2 | `AE_LLAMA_H3_I2V_V1` | H3 basic + `LoadImage` into `MiniMaxH3ImageToVideo.first_frame` (OPTIONAL, measured §18 P9a) | §9 item 5 "animate this frame" |
+| 3 | `AE_LLAMA_WAN22_5B_I2V_V1` | Wan basic + `LoadImage` into `Wan22ImageToVideoLatent.start_image` (OPTIONAL, measured §18 P9a) | — |
+| 4 | `AE_LLAMA_SDXL_I2I_V1` | derived from #1, ckpt swap | `derivedFrom` |
+| 5 | `AE_LLAMA_KREA2_I2I_V1` | krea2 basic + `VAEEncode` into `SamplerCustomAdvanced.latent_image`, denoise on `BasicScheduler` | 4-step distilled at partial denoise: quality unmeasured too |
+| 6 | `AE_LLAMA_H3_INT8_I2V_V1` | derived from #2, encoder swap | `derivedFrom`; the P10 pattern |
+
+Every class name is confirmed against a RUNNING backend's
+`/object_info` at authoring time — not from the roadmap, not from
+`scripts/comfy-node-defs.json` (§17l). **All six are UNMEASURED
+today.** Two `catalog-vram-probe` runs each at the authored size and
+length, the reading into the sibling's manifest (23b rule 2), the
+`IMAGE_CAPABLE_SHIPPED` list in `test-workflow-bundle.js` grows by one
+per pass with its reason, `MODES_SHIPPED` with it. Closes §18 P9a
+(NEXT UP 10) as a side effect of #2 — do not also take P9a separately.
+
+### 23g. "Fix just this part": inpainting, core-only, siblings for the image entries (after 23f; backend, AE)
+
+Roadmap group D. The plan is `docs/SELF-VERIFY-PLANS.md` §3 and §9
+item 9; this item PLACES it and settles two costs:
+
+- **The mask comes from `snapshot_frame`, not a new tool, if AE lets
+  it.** An `alpha?: bool` (+13 chars) writing the comp's alpha as the
+  mask costs ~200 chars less than an `export_mask` tool definition.
+  Measure in real AE whether `saveFrameToPng` carries alpha for a comp
+  with a transparent background — §5.8 did not ask. If it does not,
+  `export_mask` as planned.
+- **`repaint_region` is built only if measured necessary.** Ship the
+  plumbing (`mask?: string`, +30, paid by 23a; second upload;
+  `procedural.maskImage`; mask-landed fail-fast; width/height stripped
+  when a mask is present) and the siblings `AE_LLAMA_SD15_INPAINT_V1`
+  -> `_SDXL_` -> `_KREA2_`, each measured; then put the three-call
+  chain in front of `chat-probe --variants`. The compound tool (~240
+  compact chars) lands only if the chain fails there, with its cut
+  named in the same commit. PLAN §8's `kind?` rule, applied again.
+
+Video inpainting is not built (roadmap §5).
+
+### 23h. The opt-in layer's first siblings (after §22d and 23c-23g; each measured or dropped)
+
+Roadmap group E. Packs, therefore never in the bundle; seeded into the
+opt-in folder only after §22d installs the pack; degrade through
+`resolveOptionalNodes`, the machinery that already ships. In order:
+
+1. `AE_LLAMA_H3_T2V_FAST_V1` — the five model-chain patches the H3
+   basic DROPPED (SageAttention / first-block cache / scheduled
+   attention). UNMEASURED against the basic at one seed and size; if
+   the delta is not a real fraction of 253 s, not shipped.
+2. Frame interpolation for the video entries (RIFE/FILM class packs).
+   UNMEASURED, and AE's Timewarp does this on the timeline; ship only
+   if the ComfyUI path measures faster end to end.
+3. `AE_LLAMA_SDXL_CTRL_V1` — ControlNet + preprocessor pack, "keep my
+   layout" from a `snapshot_frame`. UNMEASURED; a 2-3 GB control weight
+   to pin.
+
+### 23i. Stale copy the roadmap found, filed so it is not found again (takeable, docs/tests, no bump except tiers.js)
+
+- `tiers.js` TIERS copy: T3/T4 promise "short Wan clips" (Wan gates at
+  32, measured), T4 promises "Flux/Krea at 1024px" (krea2 gates at 24,
+  measured), T5-T7 promise "Wan 14B" (not a catalog entry). §16 knows;
+  §22b/§22c will put this copy in front of a buyer on first run, so it
+  becomes wrong the day §22c ships. Rewrite from the measured catalog
+  and pin a test that the copy names no entry the catalog lacks.
+- `docs/CAPABILITIES.md` curated half still says "the remaining blocker
+  is P4 ... measured on real hardware" and "the Krea 2 workflow now
+  ships adapted and runnable with a dependency manifest". P4 is done
+  (`ALLOW_UNMEASURED` is empty); the authored KREA2 left the bundle.
+- `docs/proposals/README.md` lists the templates plan as "not built".
+- Three manifests say `resolutionCeilingFrom: tier ceilings` and
+  `COMFY_TIERS_PLAN.md` says templates read per-kind ceilings; nothing
+  in `tools.js` or `comfy.js` reads one. Delete the manifest lines or
+  the plan sentence; 23c is the size rule that actually exists.
