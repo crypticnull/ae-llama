@@ -128,6 +128,270 @@
     req.end();
   }
 
+  // ------------------------------------------------- progress over /ws
+  /*
+   * How far along a generation is exists on exactly ONE channel: the
+   * websocket at /ws. Measured on the managed vendor build 2026-09-09 —
+   * /history is EMPTY until the job finishes, /queue says only "running",
+   * and /api/jobs (the newest route, and the one that sounds like it
+   * should) serialises status and outputs with no value/max anywhere. So
+   * without this the panel can report elapsed seconds and nothing else,
+   * and a 15-minute render is indistinguishable from a hang.
+   *
+   * Node has no WebSocket global (CEP's is 17.7.2; the browser one landed
+   * in Node 21), and reaching for a package would put a dependency in a
+   * panel that has none. RFC 6455 over the http Upgrade this file already
+   * has a client for is ~80 lines and runs identically in the panel and in
+   * a headless probe, which is what makes it testable without AE.
+   *
+   * Everything here is BEST EFFORT and must stay that way: a refused
+   * handshake, a build that never sends progress_state, a frame shape we
+   * do not know — every one of them leaves the caller with the elapsed
+   * seconds it already had. Progress must never be able to fail a render.
+   */
+
+  function wsClientKey() {
+    var raw = "";
+    for (var i = 0; i < 16; i++) {
+      raw += String.fromCharCode(Math.floor(Math.random() * 256));
+    }
+    return NodeBuffer.from(raw, "binary").toString("base64");
+  }
+
+  /**
+   * Read ONE frame off the head of buf. Returns null when the buffer does
+   * not yet hold a whole frame — the caller keeps the bytes and retries on
+   * the next chunk. `size` is how much of buf the frame consumed.
+   */
+  function wsReadFrame(buf) {
+    if (buf.length < 2) return null;
+    var b0 = buf[0], b1 = buf[1];
+    var masked = (b1 & 0x80) !== 0;
+    var len = b1 & 0x7f;
+    var off = 2;
+    if (len === 126) {
+      if (buf.length < off + 2) return null;
+      len = buf.readUInt16BE(off); off += 2;
+    } else if (len === 127) {
+      if (buf.length < off + 8) return null;
+      // A >4 GB frame cannot happen here, but the high word still has to be
+      // read or the payload offset is wrong.
+      len = buf.readUInt32BE(off) * 4294967296 + buf.readUInt32BE(off + 4);
+      off += 8;
+    }
+    var maskKey = null;
+    if (masked) {
+      if (buf.length < off + 4) return null;
+      maskKey = buf.slice(off, off + 4); off += 4;
+    }
+    if (buf.length < off + len) return null;
+    var payload = buf.slice(off, off + len);
+    if (maskKey) {
+      payload = NodeBuffer.from(payload);
+      for (var i = 0; i < payload.length; i++) payload[i] ^= maskKey[i % 4];
+    }
+    return { fin: (b0 & 0x80) !== 0, opcode: b0 & 0x0f,
+             payload: payload, size: off + len };
+  }
+
+  /** Client -> server frames MUST be masked (RFC 6455 5.3). */
+  function wsWriteFrame(socket, opcode, payload) {
+    var body = payload || NodeBuffer.alloc(0);
+    var len = body.length;
+    var header;
+    if (len < 126) {
+      header = NodeBuffer.alloc(2); header[1] = 0x80 | len;
+    } else if (len < 65536) {
+      header = NodeBuffer.alloc(4); header[1] = 0x80 | 126;
+      header.writeUInt16BE(len, 2);
+    } else {
+      header = NodeBuffer.alloc(10); header[1] = 0x80 | 127;
+      header.writeUInt32BE(0, 2); header.writeUInt32BE(len, 6);
+    }
+    header[0] = 0x80 | opcode;
+    var mask = NodeBuffer.alloc(4);
+    for (var i = 0; i < 4; i++) mask[i] = Math.floor(Math.random() * 256);
+    var out = NodeBuffer.from(body);
+    for (var j = 0; j < out.length; j++) out[j] ^= mask[j % 4];
+    try { socket.write(NodeBuffer.concat([header, mask, out])); } catch (e) {}
+  }
+
+  /**
+   * Subscribe to ComfyUI's event stream as `clientId`. onMessage receives
+   * every decoded TEXT event ({type, data}); binary frames (preview images)
+   * are parsed past and dropped. Returns {close}. Never throws.
+   */
+  function openEventSocket(base, clientId, onMessage) {
+    ensureNode();
+    var handle = { close: closeIt, opened: false };
+    var closed = false;
+    var sock = null;
+
+    function closeIt() {
+      closed = true;
+      if (sock) {
+        // A close FRAME first, so the backend logs a client that left
+        // rather than a connection that broke.
+        try { wsWriteFrame(sock, 0x8, NodeBuffer.alloc(0)); } catch (e) {}
+        try { sock.destroy(); } catch (e2) {}
+        sock = null;
+      }
+    }
+
+    var mod = base.isHttps ? https : http;
+    var req;
+    try {
+      req = mod.request({
+        host: base.host,
+        port: base.port,
+        path: "/ws?clientId=" + encodeURIComponent(String(clientId)),
+        method: "GET",
+        headers: {
+          "Connection": "Upgrade",
+          "Upgrade": "websocket",
+          "Sec-WebSocket-Version": "13",
+          "Sec-WebSocket-Key": wsClientKey()
+        }
+      });
+    } catch (e) { return handle; }
+
+    // A backend that answers HTTP but refuses the upgrade replies normally
+    // instead of emitting "upgrade". Drain it and stay silent.
+    req.on("response", function (res) { res.resume(); });
+    req.on("error", function () {});
+    req.on("upgrade", function (res, socket, head) {
+      if (closed) { try { socket.destroy(); } catch (e) {} return; }
+      sock = socket;
+      handle.opened = true;
+      socket.on("error", function () { closeIt(); });
+      socket.on("close", function () { sock = null; });
+      // `head` is not an optional nicety: ComfyUI sends its first event the
+      // instant the socket is up, so those bytes routinely arrive in the
+      // SAME TCP segment as the 101 and Node hands them over here rather
+      // than through "data". Dropping them loses whole frames and, worse,
+      // leaves the reader mid-frame for everything after.
+      var buf = (head && head.length) ? NodeBuffer.from(head) : NodeBuffer.alloc(0);
+      var fragOp = 0;
+      var fragParts = null;
+      function pump(chunk) {
+        if (closed) return;
+        if (chunk && chunk.length) buf = NodeBuffer.concat([buf, chunk]);
+        for (;;) {
+          var f = wsReadFrame(buf);
+          if (!f) break;
+          buf = buf.slice(f.size);
+          if (f.opcode === 0x8) { closeIt(); return; }   // close
+          if (f.opcode === 0x9) {                        // ping -> pong
+            wsWriteFrame(socket, 0xA, f.payload); continue;
+          }
+          if (f.opcode === 0xA) continue;                // pong
+          var op = f.opcode;
+          var body = f.payload;
+          if (op === 0x0) {                              // continuation
+            if (!fragParts) continue;
+            fragParts.push(body);
+            if (!f.fin) continue;
+            op = fragOp;
+            body = NodeBuffer.concat(fragParts);
+            fragParts = null;
+          } else if (!f.fin) {
+            fragOp = op; fragParts = [body]; continue;
+          }
+          if (op !== 0x1) continue;                      // binary preview
+          var msg = null;
+          try { msg = JSON.parse(body.toString("utf8")); } catch (e) {}
+          if (msg) { try { onMessage(msg); } catch (e2) {} }
+        }
+      }
+      socket.on("data", pump);
+      pump(null);   // whatever arrived alongside the 101
+    });
+    try { req.end(); } catch (e3) {}
+    return handle;
+  }
+
+  /**
+   * Turns ComfyUI's event stream into the one thing a waiting user needs:
+   * step k of N for the node that is running, and how long the rest of it
+   * should take.
+   *
+   * The projection is deliberately NOT elapsed/value. Elapsed includes
+   * model loading, which on the video templates here is most of a minute
+   * before the first step — dividing by it would quote an ETA far past the
+   * truth on exactly the renders that need one. It is anchored on the
+   * first step actually seen, so the rate quoted is the sampling rate.
+   */
+  function makeProgressTracker(promptId) {
+    var wantId = promptId || null;
+    var node = null, value = 0, max = 0;
+    var anchorAt = 0, anchorValue = 0;
+
+    function retarget(id, v, m) {
+      node = id; max = m; value = v;
+      anchorAt = Date.now(); anchorValue = v;
+    }
+
+    function advance(v) {
+      // A node that restarts its bar (a second pass on the same node id, at
+      // the same step count) must not project from a rate measured across
+      // the reset — the comparison is against the LAST value, not the
+      // anchor, or a bar that resets to above where it was anchored keeps
+      // quoting the old rate.
+      if (v < value) { anchorAt = Date.now(); anchorValue = v; }
+      value = v;
+    }
+
+    return {
+      /* The socket is opened before the POST that names the prompt, so
+       * the id it filters on arrives a moment later. */
+      setPromptId: function (id) { wantId = id || null; },
+      accept: function (msg) {
+        if (!msg || typeof msg !== "object") return;
+        var d = msg.data || {};
+        if (msg.type === "progress_state") {
+          if (wantId && d.prompt_id && d.prompt_id !== wantId) return;
+          var nodes = d.nodes || {};
+          // The sampler is the node with the most steps to run. A build
+          // that reports several at once (VAE tiles, an upscaler) would
+          // otherwise flip the fraction between them message by message.
+          var bestId = null, best = null;
+          for (var k in nodes) {
+            if (!nodes.hasOwnProperty(k)) continue;
+            var n = nodes[k] || {};
+            if (n.state !== "running") continue;
+            if (!(n.max > 1)) continue;
+            if (!best || n.max > best.max) { best = n; bestId = k; }
+          }
+          if (!best) return;
+          if (bestId !== node || best.max !== max) {
+            retarget(bestId, best.value || 0, best.max);
+          } else {
+            advance(best.value || 0);
+          }
+          return;
+        }
+        if (msg.type === "progress") {              // older builds
+          if (wantId && d.prompt_id && d.prompt_id !== wantId) return;
+          if (!(d.max > 1)) return;
+          var id = String(d.node);
+          if (id !== node || d.max !== max) retarget(id, d.value || 0, d.max);
+          else advance(d.value || 0);
+        }
+      },
+      /** {value, max, node, etaSec} or null before anything has reported. */
+      read: function () {
+        if (!(max > 1)) return null;
+        var out = { value: value, max: max, node: node, etaSec: 0 };
+        var done = value - anchorValue;
+        if (done > 0 && value < max) {
+          var per = (Date.now() - anchorAt) / done;
+          out.etaSec = Math.round(per * (max - value) / 1000);
+        }
+        return out;
+      }
+    };
+  }
+
   function downloadFile(base, urlPath, destPath, cb) {
     ensureNode();
     var mod = base.isHttps ? https : http;
@@ -1813,7 +2077,11 @@
   /**
    * End-to-end generation.
    * opts: {comfyUrl, workflowFile, params, outDir, timeoutSec}
-   * onProgress(secondsElapsed) fires periodically while waiting.
+   * onProgress(secondsElapsed, progress) fires periodically while waiting.
+   * progress is {value, max, node, etaSec} once ComfyUI has reported a step
+   * for the running node, and null until then — and on any build or network
+   * where the event socket never comes up, which is why no caller may
+   * depend on it.
    * cb(err, {files: [absolute paths], applied: [...], promptId})
    * cb fires exactly once.
    */
@@ -1910,10 +2178,22 @@
     }
 
     var clientId = "aellama-" + Math.floor(Math.random() * 1e9);
+
+    // Subscribed BEFORE the queue POST, not after: on a warm backend the
+    // first sampling steps land inside the same second the prompt is
+    // accepted, and a socket opened afterwards misses them. ComfyUI
+    // addresses these events to our clientId alone, so nothing another
+    // client queued can reach this tracker.
+    var tracker = makeProgressTracker(null);
+    var events = onProgress
+      ? openEventSocket(base, clientId, tracker.accept)
+      : { close: function () {} };
+
     requestJson(base, "POST", "/prompt",
       { prompt: graph, client_id: clientId }, 30000,
       function (err, statusCode, json, rawText) {
         if (err) {
+          events.close();
           cb(new Error("ComfyUI unreachable at " + base.label + " — " +
                        err.message));
           return;
@@ -1929,6 +2209,7 @@
           } else {
             detail = (rawText || "").slice(0, 200);
           }
+          events.close();
           cb(new Error("ComfyUI rejected the workflow: " + detail));
           return;
         }
@@ -1944,6 +2225,7 @@
         }
 
         var promptId = json.prompt_id;
+        tracker.setPromptId(promptId);
         var startedAt = Date.now();
         var lastProgressAt = startedAt;
         var POLL_MS = 2000;
@@ -1960,6 +2242,7 @@
           if (finished) return;
           finished = true;
           if (timer) global.clearInterval(timer);
+          events.close();
           cb(err2, res2);
         }
 
@@ -1968,7 +2251,7 @@
           var elapsed = Date.now() - startedAt;
           if (onProgress && Date.now() - lastProgressAt >= 10000) {
             lastProgressAt = Date.now();
-            onProgress(Math.round(elapsed / 1000));
+            onProgress(Math.round(elapsed / 1000), tracker.read());
           }
           if (elapsed >= timeoutMs) {
             // Stop looking AND stop the job — see cancelPrompt. The cancel
@@ -2043,6 +2326,11 @@
               if (finished) return;
               finished = true;
               global.clearInterval(timer);
+              // This path latches without going through settle(), so the
+              // event socket has to be released here too — otherwise every
+              // SUCCESSFUL generation leaks one for the life of the panel,
+              // and only the failures clean up after themselves.
+              events.close();
               try {
                 if (!fs.existsSync(opts.outDir)) {
                   fs.mkdirSync(opts.outDir, { recursive: true });
@@ -2733,6 +3021,8 @@
     validateGraphInputs: validateGraphInputs,
     resolveOptionalNodes: resolveOptionalNodes,
     MODEL_SUBS: COMFY_MODEL_SUBS,
+    _openEventSocket: openEventSocket,           // exposed for tests
+    _makeProgressTracker: makeProgressTracker,   // exposed for tests
     _applyExtraModelPaths: applyExtraModelPaths   // exposed for tests
   };
 

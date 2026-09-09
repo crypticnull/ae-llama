@@ -1150,6 +1150,37 @@
   // Progress sink so long generations can narrate into the chat UI.
   var progressSink = null;
 
+  function roughDuration(sec) {
+    if (sec < 60) return Math.max(1, Math.round(sec)) + "s";
+    var mins = Math.round(sec / 60);
+    if (mins < 60) return mins + "m";
+    var rem = mins % 60;
+    return Math.floor(mins / 60) + "h" + (rem ? " " + rem + "m" : "");
+  }
+
+  /**
+   * The line a user watches for fifteen minutes. Elapsed seconds ALONE
+   * cannot tell a job that is a tenth done from one that has wedged, and
+   * the reaction to “still generating… 600s” is to force-quit — which is
+   * exactly how the backend gets left holding the card. So whenever
+   * ComfyUI has said which step it is on, the fraction and a projection go
+   * in front of the user.
+   *
+   * Both halves are OMITTED rather than guessed: no progress event means
+   * no fraction (an old build, a refused websocket), and one step seen
+   * means no rate yet. A wrong estimate is worse than none here — it is
+   * the number the user decides to wait on.
+   */
+  function generatingLine(elapsed, progress) {
+    var line = "ComfyUI still generating… " + elapsed + "s";
+    if (!progress || !(progress.max > 1)) return line;
+    line += " — step " + progress.value + "/" + progress.max;
+    if (progress.etaSec > 0) {
+      line += ", about " + roughDuration(progress.etaSec) + " left";
+    }
+    return line;
+  }
+
   // ------------------------------------------------------ VRAM arbiter
   //
   // Chat (llama-server) and generation (ComfyUI) share one card. The
@@ -2256,10 +2287,8 @@
           durationSeconds: args.durationSeconds,
           image: args.image
         }
-      }, function (elapsed) {
-        if (progressSink) {
-          progressSink("ComfyUI still generating… " + elapsed + "s");
-        }
+      }, function (elapsed, progress) {
+        if (progressSink) progressSink(generatingLine(elapsed, progress));
       }, function (err, result) {
         if (err) { finish({ ok: false, error: err.message }); return; }
         if (args["import"] === false) {
@@ -3788,6 +3817,7 @@
     _describeMissingWeights: describeMissingWeights, // exposed for tests
     _describeBadValues: describeBadValues,        // exposed for tests
     _parseComfyPathsYaml: parseComfyPathsYaml,   // exposed for tests
+    _generatingLine: generatingLine,  // exposed for tests
     _panelTools: PANEL_TOOLS          // exposed for tests
   };
 

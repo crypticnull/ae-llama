@@ -22893,3 +22893,129 @@ the brief requires.
 Evidence left on disk by the probes' own design:
 `AELlama_MiniMaxH3int8__00002_.mp4` and `__00003_.mp4` in
 `logs/catalog-vram/`; the `comfy-probe` clip cleaned itself up.
+
+## 2026-09-09 (local session) — a long render finally says how far in it is, over a websocket the panel had to write itself (NEXT UP 2b / §18 P3b, 0.12.16)
+
+**Item: NEXT UP 2b (§18 P3b), the first unstruck row that is not the
+owner call.** Harness green first — `run-ae-selftest.ps1` **770/770** —
+so the list applied. Item 2a above it is marked OWNER CALL and was
+skipped, not attempted. Managed backend already up on 8288 from the
+previous pass (`/queue` 200, ComfyUI 0.34.0).
+
+**Where progress lives, measured rather than assumed — and three of the
+four obvious places do not have it.** Before writing anything I read the
+vendor backend's own `server.py` on disk. `/history/<id>` returns nothing
+at all until the job finishes (that is why the poll loop had only elapsed
+seconds to report). `/queue` says a prompt is running and no more.
+`/api/jobs/<id>` — the newest route, added since this panel was written,
+and the one whose name promises exactly this — serialises status, timing
+and outputs through `comfy_execution/jobs.py`, which has no `value`/`max`
+anywhere in it. The one publisher is `WebUIProgressHandler`
+(`comfy_execution/progress.py`), which `send_sync`s a `progress_state`
+message per node **to the websocket of the initiating client id only**.
+So there was no REST route to extend and the poll loop could not be made
+to carry this.
+
+**The panel now speaks RFC 6455 itself.** CEP's Node is 17.7.2 and has no
+`WebSocket` global (the browser one landed in Node 21), and a package
+would put the first runtime dependency into a panel that has none. The
+client is ~90 lines on the `http` Upgrade `comfy.js` already had:
+`wsReadFrame` / `wsWriteFrame` / `openEventSocket`. It runs identically in
+the panel and in a headless probe, which is the whole reason it is
+testable without AE.
+
+Three things in it are not obvious and each one was a bug first:
+
+- **Node hands over the bytes that arrived with the 101 in a `head`
+  argument, not through `"data"`.** ComfyUI sends its first event the
+  instant the socket is up, so those bytes routinely share a TCP segment
+  with the handshake response. Ignoring `head` did not merely lose that
+  event — it left the reader mid-frame, so the decoder test saw **zero**
+  of five messages, not four. Fixed by priming the buffer with `head` and
+  pumping it immediately.
+- **Client frames must be MASKED** (RFC 6455 §5.3); aiohttp drops the
+  connection over an unmasked one, which would have looked like "the
+  backend does not support this".
+- **A ping must be answered**, or a heartbeat-configured server closes the
+  socket mid-render.
+
+**The ETA rule, which is the part worth keeping.** It is measured from the
+first sampling STEP, never from elapsed time. Elapsed includes the model
+load, which on the video templates here is most of a minute before step 1
+— `elapsed / value` would quote an estimate far past the truth on exactly
+the renders that need one. And both halves are OMITTED rather than
+guessed: no progress event means no fraction (an old build, a refused
+upgrade), one step seen means no estimate. A wrong number here is not a
+cosmetic error; it is the number the user decides whether to keep waiting
+on.
+
+**Verified on the real backend, not only against the stub.**
+`node scripts/comfy-probe.js --no-ae --duration 2 --width 832 --height
+480` (H3 t2v, 66 s wall, VRAM peak 30 441 MiB over a 3625 idle):
+
+    .. ComfyUI still generating... 10s
+    .. ComfyUI still generating... 20s - step 4/20, about 42s left
+    .. ComfyUI still generating... 30s - step 8/20, about 31s left
+    .. ComfyUI still generating... 40s - step 13/20, about 16s left
+    .. ComfyUI still generating... 50s - step 17/20, about 7s left
+    .. ComfyUI still generating... 60s - step 20/20
+    == PASS generation completed - 66s
+
+The first line is bare because the model was still loading and no step had
+been reported — the designed behaviour, observed. The 42 s quoted at 20 s
+against sampling that ended around 57 s is the rule working.
+
+**Root defect found en route: `settle()` is not the single exit it looks
+like.** The terminal SUCCESS path of `Comfy.generate` latches `finished`
+and clears the timer BY HAND rather than calling `settle`, so everything
+`settle` is responsible for happens only when a generation FAILS. It had
+cost nothing so far because settle only cleared a timer that path cleared
+too — but it would have leaked one websocket per SUCCESSFUL generation for
+the life of the panel, and the failure path would have been the only one
+that cleaned up. Fixed there. Anyone adding cleanup to `settle` in future
+must add it to that path as well.
+
+**Back-fill: `tests/test-comfy-progress.js`**, 32 checks, no AE. It pins
+the four classes in the order they bite: the decoder (a ping, a 300-byte
+binary preview and a FRAGMENTED text event in one stream must not
+desynchronise it or drop what follows); the tracker (biggest-max running
+node wins so a VAE tile bar cannot make the fraction jump backwards;
+another prompt's progress is ignored; the ETA anchors on the first step,
+proved with a frozen clock against a fake 60 s model load; a bar that goes
+backwards re-anchors); the wiring (opened once, BEFORE the queue POST,
+under the same client id the prompt names, and CLOSED when the job
+settles); and the survival rule — **a backend that refuses the /ws upgrade
+still renders**, because progress may never be allowed to fail a
+generation. The fake ComfyUI writes its frames with its own hand-rolled
+server-side framer rather than reusing the client's, so a framing bug
+cannot cancel itself out.
+
+Two test-writing facts worth not relearning: an upgraded socket with
+nothing reading it stays PAUSED and never notices the peer going away, so
+a "was it closed?" assertion on it passes whatever the code did
+(`socket.resume()` first); and an upgraded socket is half-open, so the
+server side emits **`end`**, not `close`, when the client destroys it.
+
+`scripts/output-size-probe.js` drives `Comfy.generate` directly rather
+than through `Tools.comfy_generate`, so it does not inherit the panel's
+sentence — it now prints the step count itself.
+
+**§18 P3c FILED IN THE WORKPLAN as NEXT UP item 9** (not only here): the
+panel can now quote an ETA longer than `comfyTimeoutSec`, promising a
+finish it will then cancel at 600 s and report as a timeout — a
+contradiction it puts on screen itself, and the second half reads as a
+backend bug rather than a setting. Not hypothetical: H3's basic is 253 s
+at 1344x768 on a 5090, and the same graph at a larger size or on the
+slowest card its gate allows goes past 600. The section lays out three
+steps, the third (re-deriving the default from the now-measured catalog)
+marked owner.
+
+**Result: harness 770/770, stubbed suite 89/89 (the new file included),
+`comfy-probe` PASSED end to end. Bumped 0.12.15 -> 0.12.16** —
+`extension/js/comfy.js` and `extension/js/tools.js` both changed, so this
+one ships. `docs/CAPABILITIES.md` curated half updated (the progress line
+is user-visible); generated half regenerated and `test-capability-doc.js`
+green.
+
+Nothing blocked, nothing needing a human eye except §18 P3c step 3 and the
+still-open owner calls above it (§18 P3a(b) / item 2a, and §18 P7a).

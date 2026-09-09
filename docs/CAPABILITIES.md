@@ -186,6 +186,17 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
   model is touched and before anything is queued. (The curated model stack ships with the
   feed's comfyCatalog; built-in entries are PROVISIONAL until P4
   measures them.)
+- While a generation runs, the panel narrates **step k of N and an
+  estimate** (0.12.16), not just elapsed seconds. ComfyUI publishes
+  progress on its websocket alone — no REST route carries it — so the
+  panel speaks RFC 6455 to /ws itself rather than adding a dependency.
+  The estimate is measured from the first sampling STEP, never from
+  elapsed time, because elapsed includes a model load that is most of a
+  minute on the video templates. No progress event means no fraction and
+  one step means no estimate: a long render says what it knows and
+  nothing more. This is what stops a 15-minute job reading as a hang and
+  being force-quit mid-render, which is how the backend gets left holding
+  the card.
 - Auto-update: push → CI builds signed ZXP → feed branch → public repo →
   panels update and reload in place. Version-gated: the panel takes an
   update only when the feed is strictly newer (see CLAUDE.md

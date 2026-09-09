@@ -49,13 +49,14 @@ the night retrying it.
 | ~~1e~~ | ~~`node tests/test-comfy-install.js` KILLS the live managed backend~~ **DONE 2026-09-09.** The fixture now writes `comfyManagedPort` from an OS-allocated dead port, and the fall-through that had NO assertion at all (`stopped the backend holding port`) is checked in both directions plus a flat refusal of the string `8288`. Verified on the machine, against §17p's own reproduction: boot on 8288, run all 85 test files, backend STILL ALIVE on the same pid, `/queue` 200. New block 5 refuses any test that drives `--stop` without naming a port. No bump — nothing in `extension/` changed. | §17p | — | — |
 | ~~2~~ | ~~H3's measured block, at a length that can finish~~ **DONE 2026-09-09 (0.12.9).** Two runs at 2 s / 56 frames on the managed backend, 26 969 and 26 944 MiB over an established idle floor — 25 MiB apart, so repeatable; 80 s each, 1344x768 out. `minimax-h3` is measured, `ALLOW_UNMEASURED` is now EMPTY (§18 P12's first half). P3a answered **(a)**: the row quotes the 2 s reading and states the authored 15 s default beside it, so it cannot be read as the job the buyer gets; **(b), capping the default, stays owner-gated.** Root defect found en route — the probe could not name its own output size (`output ?`) because ffmpeg.js ended `})(this)`, which is Node's global inside `new Function`. | §18 P3 + P3a | — | — |
 | 2a | Cap the duration the panel injects when the user names none — **OWNER CALL**, the measurement behind it is now taken | §18 P3a (b) | — | yes |
-| 2b | A 15-minute generation reports elapsed seconds and no estimate, so it reads as a hang | §18 P3b | — | yes |
+| ~~2b~~ | ~~A 15-minute generation reports elapsed seconds and no estimate~~ **DONE 2026-09-09 (0.12.16).** The panel now says `still generating… 40s — step 13/20, about 16s left`. ComfyUI publishes progress on the WEBSOCKET alone — measured on the vendor build, /history is empty until the job ends, /queue says only "running", and /api/jobs carries no value/max — so comfy.js speaks RFC 6455 to /ws itself (Node 17 has no WebSocket global and the panel ships no dependencies). Verified against the real backend: a 66 s H3 render quoted 42 s left at 20 s and finished sampling at ~57 s. The estimate is anchored on the first sampling STEP, never on elapsed, because elapsed includes a model load worth most of a minute. Root defect found en route: the SUCCESS path of `generate` latches without going through `settle()`, so anything settle cleans up was cleaned up only on failure. **§18 P3c filed — the panel can now promise an ETA past its own timeout** | §18 P3b | — | 0.12.16 |
 | ~~3~~ | ~~sd15 basic template (+ the frontend-editable measurement)~~ **DONE 2026-09-09 (0.12.10).** `AE_LLAMA_SD15_T2I_V1` + manifest, `workflowTemplate`, hash history, `ALLOW_NO_TEMPLATE` −sd15, and a MEASURED block (2656 MiB / 4 s cold at 512x512, managed backend). Full chain green: weight probe, `comfy-probe --workflow` 9/9 incl. AE import, `catalog-vram-probe` x2, `chat-probe --steps 1,13` — and step 13 now picks sd15 for "a red apple", which is the §18 gap statement closed. **The frontend measurement is YES** (see §18 P5b). Two root defects found en route: §18 P5a and the chat-probe PID store. | §18 P5 | — | 0.12.10 |
 | ~~4~~ | ~~sdxl basic template~~ **DONE 2026-09-09 (0.12.11).** `AE_LLAMA_SDXL_T2I_V1` + manifest (the sd15 seven-node shape, ckpt swapped, 1024x1024 latent), `workflowTemplate`, hash history, `ALLOW_NO_TEMPLATE` −sdxl, MEASURED block (9472 MiB / 6 s cold at 1024x1024). **The measurement disproved the catalog's gate**: `minVramGB` was 6 while the checkpoint alone is 6617 MiB, so an 8 GB card was being recommended a grind — gate is 12 now, `slowBelowGB`/`slowNote` removed, three test pins moved WITH their reasons. §18 P6a filed (wan22-5b's gate is under its own biggest file) | §18 P6 | — | 0.12.11 |
 | ~~5~~ | ~~wan22-5b basic t2v template~~ **DONE 2026-09-09 (0.12.12).** `AE_LLAMA_WAN22_5B_T2V_V1` + manifest (the VENDOR'S own `video_wan2_2_5B_ti2v.json`, read off the managed backend's disk, with its bypassed LoadImage DELETED because an API graph has no "muted"), `workflowTemplate`, hash history, `ALLOW_NO_TEMPLATE` −wan22-5b, MEASURED block. **§18 P6a is CLOSED and it was not close**: gate 8 -> **32** on 26 187 MiB measured, and a third run at 704x480 still cost 21 536 MiB, so the floor is the 17 304 MiB of weights and no size rescues a small card. Two 8 GB pins moved with their reasons. Two roots found en route: the authored-length rule could not see a frames-based template at all (fixed + verified by reintroduction), and `recommendGen`'s tie was being broken by ARRAY ORDER. §18 P7a (owner call) and §18 P7b filed | §18 P7 | — | 0.12.12 |
 | ~~6~~ | ~~krea2 core-only basic; the authored graph then leaves the bundle~~ **DONE 2026-09-09 (0.12.13).** `AE_LLAMA_KREA2_T2I_V1` + manifest (12 core nodes: the authored graph's own FIRST pass with the four custom packs, the second upscale pass, the enhancer switch and two dead `ConditioningZeroOut` nodes dropped), `workflowTemplate`, hash history, and the entry **RE-MEASURED** because its graph changed: 18 848 / 18 560 MiB, 8 s, 1920x1080. Gate stays 24 — the smaller reading does not lower it, because the three weights are 18 109 MiB resident and the next standard card down is 16 GB. `AE_LLAMA_KREA2_V1` left `extension/comfy-workflows/` for `tests/fixtures/authored-krea2/` (five suites use it as their only custom-node-heavy graph; that folder's README says which and why). The owner's installed copy survives — **verified**, chat-probe's `comfy_list_workflows` still lists it from `%APPDATA%`. Root finding en route, now a rule: an entry's `measuredAt` was never checked against its OWN template's size. §18 P8a filed | §18 P8 | — | 0.12.13 |
 | ~~7~~ | ~~H3 core-only basic; the authored graph then leaves the bundle~~ **DONE 2026-09-09 (0.12.14).** `AE_LLAMA_H3_T2V_V1` + manifest (15 core nodes: the authored graph's sampling spine, with the five model-chain patches, the megapixel/seconds machinery and the RTX upscaler dropped -- eleven nodes and SEVEN custom packs gone), `workflowTemplate`, hash history, and the entry **RE-MEASURED** because its graph changed: 26 080 MiB and 253 s BOTH runs at 1344x768 x 124 frames. **The `authoredNote` is GONE and that is the win**: the basic is authored at 124 frames -- the node's own default and the bottom of the range /object_info calls trained -- so `measuredClipSeconds` == `authoredClipSeconds` == 5.17 and the catalog finally quotes the job the buyer gets, where the authored graph's 15 s default could only ever be quoted as a 2 s decomposition of a >15-minute render. Gate stays 32 (peak 29 646 of 32 607 MiB, and the nvfp4 encoder is Blackwell-only anyway). `AE_LLAMA_H3_I2V_V1` left `extension/comfy-workflows/` for `tests/fixtures/authored-h3/` (five suites use it; that folder's README says which and why -- it is now the repo's ONLY manifest with an `optionalNodes` block). The catalog's size rule, which SKIPPED H3 while its size arrived as megapixels, now applies to it and passes. §18 P9a filed | §18 P9 | items 2, 5 | 0.12.14 |
 | ~~8~~ | ~~minimax-h3-int8 second API file~~ **DONE 2026-09-09 (0.12.15).** `AE_LLAMA_H3_INT8_T2V_V1` + manifest (`AE_LLAMA_H3_T2V_V1` with node 137's `clip_name` and node 92's `filename_prefix` changed and NOTHING else — verified node by node), `workflowTemplate`, hash history, `ALLOW_NO_TEMPLATE` −minimax-h3-int8, MEASURED block. The 25 884 MiB encoder was downloaded (27.14 GB in 6m12s) and the backend listed it with no restart. **The "confirm from the UI source first" step came back NEGATIVE and that was the useful half**: all four vendor MiniMax H3 templates name only the nvfp4 encoder and the string `qwen3vl_32b_minimax_h3_int8_convrot` appears NOWHERE in the vendor tree, so there was no official graph to copy — the confirmation had to be a render, and it passed 9/9 into AE with audio. **The measurement overturned this entry's own note.** It said the int8 encoder being 11 GB larger made "whether H3 is usable here at all" an open question; measured, it costs 26 048 MiB / 259 s against the nvfp4 sibling's 26 080 / 253 — 32 MiB apart, twice — because ComfyUI evicts the text encoder before it samples, so 10.9 GB of encoder is a DOWNLOAD difference and not a VRAM one. Gate stays 32. `ALLOW_NO_TEMPLATE` is now `[ltx-small]`, the size §18 P12 Q1 asked for. **§18 P7a is NOT closed by this** — int8 is gated at 32 too. §18 P7b confirmed with a number en route | §18 P10 | — | 0.12.15 |
+| 9 | The panel now quotes an ETA that can be longer than the timeout it will then cancel at — warn when the estimate passes `comfyTimeoutSec`, and put the estimate into the timeout message | §18 P3c | item 2b | yes |
 
 **OWNER, READ THIS ONE FIRST: §18 P7a.** Measuring wan22-5b (item 5)
 moved its gate 8 -> 32, which leaves **every card under 32 GB with no
@@ -3819,7 +3820,8 @@ taken on what a buyer gets — so nothing measured after §17c needs a
 | ~~P2~~ | remote | **DONE 2026-09-06.** `--frames`/`--boot`/`--stop` on both probes, `scripts/lib/comfy-managed.js`, `download-gen-weight.js`, chat-probe kind verdict, gate 0. Also fixed: both probes read `comfyUrl` where §17a had moved the answer to `backendUrl` | no | P1 |
 | ~~P3~~ | local | **DONE 2026-09-09 (0.12.9).** t2v re-run 9/9 earlier the same day; the measured block is now written from two repeatable `--duration 2` runs (26 969 / 26 944 MiB, 80 s, 1344x768 x 56f) | 0.12.9 | — |
 | P3a | local + OWNER | **(a) DONE 2026-09-09** — the row quotes 2 s and states the authored 15 s beside it, enforced against the template itself. **(b) capping the injected default is the owner's** | (b) yes | — |
-| P3b | local | elapsed seconds is the only progress a 15-minute render reports; carry step k/N through `onProgress` | yes | — |
+| ~~P3b~~ | local | **DONE 2026-09-09 (0.12.16).** Step k/N and an ETA through `onProgress`, over a hand-rolled RFC 6455 client (no REST route carries progress). `tests/test-comfy-progress.js` pins the decoder, the tracker, the wiring and the survival rule. §18 P3c filed | 0.12.16 | — |
+| P3c | local | the ETA the panel now quotes can exceed `comfyTimeoutSec`, so it promises a finish it will then cancel | yes | P3b |
 | ~~P4~~ | remote | **DONE 2026-09-06 (0.12.2).** Settings **Workflows** rows via the pure `Tools.workflowRows()`; `test-workflow-rows.js` (21 rows) | yes | P1 |
 | ~~P5~~ | local | **DONE 2026-09-09 (0.12.10).** sd15 basic + manifest + `workflowTemplate` + hash + allowlist −sd15 + a measured block; the frontend measurement is **YES** (§18 P5b). §18 P5a filed | 0.12.10 | — |
 | ~~P6~~ | local | **DONE 2026-09-09 (0.12.11).** sdxl basic + manifest + `workflowTemplate` + hash + allowlist −sdxl + a measured block; the gate moved 6 -> 12 on the measurement and `slowBelowGB` went with it. §18 P6a filed | 0.12.11 | — |
@@ -4189,34 +4191,108 @@ on the card.
 **(b) — capping the injected default — is untouched and still needs the
 owner** (NEXT UP 2a). It changes what his authored graph renders.
 
-## 18 P3b. A 15-minute generation reports elapsed seconds and nothing
-else, so the panel's own default reads as a hang (filed 2026-09-09,
-local session)
+## 18 P3b. DONE 2026-09-09 (0.12.16) — a generation now says step k of N
+and how long is left
 
-Measured alongside P3. While a generation runs, `tools.js:2261` emits
-`"ComfyUI still generating… <n>s"` every ten seconds and that is the
-whole of the feedback. At H3's authored 15 s that is **ninety of those
-lines with no denominator** — no step count, no percentage, no estimate
-— and the user has no way to tell a job that is 10% done from one that
-has wedged. The obvious reaction to `still generating… 600s` is to
-force-quit, and force-quitting mid-generation is how the backend gets
-left in the states §17k is about.
+Was: elapsed seconds every ten seconds and nothing else, ninety times over
+on H3's authored 15 s clip, with no way to tell a job a tenth done from
+one that had wedged.
 
-ComfyUI already publishes what is needed: the websocket `progress`
-message carries `value`/`max` for the executing node, and `/history`
-carries the node list. So this is a plumbing item, not a research one:
-carry step k of N through `Comfy.generate`'s `onProgress` (which today
-takes only `secondsElapsed`, comfy.js:1816) and let the sink render a
-fraction plus a projection from the elapsed-per-step rate.
+**Where progress actually lives, measured on the managed vendor build
+(ComfyUI 0.34.0) rather than assumed:** the websocket at `/ws`, and
+nowhere else. `/history/<id>` is EMPTY until the job finishes; `/queue`
+says only that something is running; and `/api/jobs/<id>` — the newest
+route and the one that sounds like it should be the answer — serialises
+status, timing and outputs with no `value`/`max` anywhere. There is no
+REST route to poll, so the poll loop could not be extended and a socket
+was the only way.
 
-Worth doing **whatever (b) decides**: a 2-4 s default still takes 80 s
-on a 5090 and proportionally longer on the cards the catalog gates in.
-Bumps. Loop-takeable.
+`extension/js/comfy.js` therefore speaks RFC 6455 itself over the http
+Upgrade it already had a client for: Node 17 (CEP's) has no `WebSocket`
+global, the browser one landed in Node 21, and a package would put the
+first dependency into a panel that has none. ~90 lines, and it runs
+identically in the panel and in a headless probe, which is what makes it
+testable without AE.
 
-**Tooling already landed for it (2026-09-09):** `--duration <seconds>`
-on `catalog-vram-probe.js` (unexercised by a real generation — first act
-of the pass that takes this), gate 0 on the same probe, and the
-video-length rule in `tests/test-model-catalog.js`.
+What ships:
+
+- `openEventSocket(base, clientId, onMessage)` — subscribes as the SAME
+  client id the prompt is posted under, which is the only id ComfyUI
+  addresses these events to. Opened BEFORE the queue POST (on a warm
+  backend the first steps land in the same second) and closed on every
+  exit path.
+- `makeProgressTracker(promptId)` — `progress_state` (and the older flat
+  `progress`) into `{value, max, node, etaSec}`. Of several running bars
+  it takes the one with the most steps, so a VAE tile bar cannot make the
+  fraction jump backwards.
+- `Tools._generatingLine(elapsed, progress)` — the sentence.
+  `ComfyUI still generating… 40s — step 13/20, about 16s left`.
+
+Two rules that are the point of it, both pinned in
+`tests/test-comfy-progress.js`:
+
+1. **The ETA is measured from the first sampling STEP, never from
+   elapsed.** Elapsed includes the model load, which is most of a minute
+   on the video templates — `elapsed / value` would quote an estimate far
+   past the truth on exactly the renders that need one.
+2. **Both halves are omitted rather than guessed.** No progress event
+   means no fraction (an old build, a refused upgrade); one step seen
+   means no estimate. A wrong number here is the number the user decides
+   to wait on.
+
+Verified on the real backend, not just the stub: `comfy-probe --no-ae
+--duration 2 --width 832 --height 480` (H3, 66 s) printed 10s bare (still
+loading), then `20s — step 4/20, about 42s left`, `30s — step 8/20, about
+31s left`, `40s — step 13/20, about 16s left`, `50s — step 17/20, about 7s
+left`, `60s — step 20/20`. Sampling ended at ~57 s against the 42 s-left
+quoted at 20 s.
+
+**Root defect found en route:** the terminal SUCCESS path of
+`Comfy.generate` latches `finished`/`clearInterval` by hand instead of
+going through `settle()`, so anything `settle` is responsible for is done
+only when a generation FAILS. It cost nothing before, because settle only
+cleared a timer that path cleared too; it would have leaked one websocket
+per successful generation for the life of the panel. Fixed at that path;
+worth remembering that `settle` is not the single exit it looks like.
+
+Harness 770/770, stubbed suite 89/89 green.
+
+## 18 P3c. The ETA the panel now quotes can be longer than the timeout it will cancel at (filed 2026-09-09, local session)
+
+Found by P3b, and it is P3b's own doing: until 0.12.16 the panel made no
+promise about when a render would finish, so `comfyTimeoutSec` (600 by
+default) could quietly cancel a long job and the only thing the user had
+seen was a rising number. Now the panel says **"about 12m left"** and
+then, at 600 s, cancels the job and reports a timeout — a contradiction it
+put on screen itself, and the second half looks like a bug in the backend
+rather than a setting the user could have changed.
+
+The numbers are not hypothetical. H3's basic renders 124 frames in 253 s
+at 1344x768 on a 5090; the same graph on a 32 GB card at a larger size, or
+any of the video templates on the slowest hardware their gate allows, goes
+past 600 s. The default has simply never been tested against a template
+whose measured time is now known — every §18 P5-P10 entry carries one.
+
+What to do about it, cheapest first (a pass may take the first two; the
+third is an owner call):
+
+1. **Say it, at the moment it becomes true.** When
+   `elapsed + etaSec > timeoutSec`, the progress line stops promising and
+   starts warning: name the setting and the number, once, not every ten
+   seconds. Grounded-error rule — the refusal must say what the current
+   value is and where to change it.
+2. **Make the timeout's own message carry the estimate it had.** Today it
+   says "timed out after 600s"; it should say the job was N% in and was
+   projected to need M more, so the user knows they hit a limit rather
+   than a hang. Everything needed is already in the tracker.
+3. **Reconsider the 600 s default against the measured catalog** —
+   OWNER. Every catalog entry now has a measured render time; the
+   default could be derived from the chosen template's own measurement
+   plus a margin instead of being one number for all of them. That
+   changes behaviour for existing users, so it is not a pass's call.
+
+Bumps. Loop-takeable for (1) and (2).
+
 
 ## 18 P5a. A manifest's positional `widget: N` silently lands on the wrong input (filed 2026-09-09, local session)
 

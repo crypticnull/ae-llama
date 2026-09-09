@@ -199,8 +199,12 @@ function main() {
     timeoutSec: OPT.timeout,
     params: { prompt: OPT.prompt, width: OPT.width, height: OPT.height,
               seed: OPT.seed }
-  }, function (elapsed) {
-    say("row", "  still generating... " + elapsed + "s");
+  }, function (elapsed, progress) {
+    // This probe drives Comfy.generate directly rather than through
+    // Tools.comfy_generate, so it does not inherit the panel sentence.
+    say("row", "  still generating... " + elapsed + "s" +
+        (progress && progress.max > 1
+          ? " - step " + progress.value + "/" + progress.max : ""));
   }, function (err, result) {
     if (err) {
       verdict(false, "the generation itself failed: " + err.message);
