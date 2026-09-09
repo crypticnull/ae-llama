@@ -203,6 +203,10 @@ Model identity strings must never appear in committed artifacts.
 - `extension/js/{main,llama,comfy,setup,settings,visualizer,selftest}.js`
 - `tests/` — stubbed-AE regression suites (stubs model REAL AE quirks —
   keep them faithful, e.g. padded value arrays)
+- `docs/HANDOFF.md` — **read this on a fresh session.** State transfer
+  from the remote (cloud) session to the local one: what is in flight,
+  what is broken right now, the ComfyUI §17-§19 arc with the owner's
+  answered decisions, and the diagnostic traps that cost nights.
 - `docs/NATIVE_COVERAGE_PLAN.md` — the tool-coverage roadmap
 - `docs/CAPABILITIES.md` — the whole product in one place; tool table is
   GENERATED (`node scripts/capability-report.js`, CI-enforced fresh).
