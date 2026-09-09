@@ -55,16 +55,17 @@ every pass and finished work costs the same context as live work.
 | 2 | **fp8 Wan 2.2 5B as a second entry, then MEASURE it.** The §18 P10 pattern: the shipped Wan graph with the diffusion filename swapped and nothing else. Cheapest route to a video option under 32 GB. | §18 P7c step 1 | backend, disk | yes |
 | 3 | **Settle what `ltx-small` is, then measure it.** The vendor's LTX is 2.3-**22B** — larger than Wan, not smaller. Ask a RUNNING backend's `/object_info` whether LTXV 2B nodes exist; the repo fixture says zero and is wrong (§17l). | §18 P7c step 2 | backend, disk | yes |
 | 4 | The panel can quote an ETA LONGER than `comfyTimeoutSec` and then cancel the job at 600 s, having promised a finish. Warn when the estimate passes the timeout, and put the estimate into the timeout message. | §18 P3c | nothing | yes |
-| 5 | Tee the harness's stdout into the loop log. `Running self-test via` and `Crash flag:` appear ZERO times across the whole 2026-09-09 night, so a killed pass leaves no record of whether its self-test was green. | §20e | nothing | no |
-| 6 | A guard test for the pass invocation, so a future brief edit cannot re-inject a bare `--` and silently drop the bypass flag again. | §20d | nothing | no |
-| 7 | §21 leftovers: the watchdog rule keys on the word "recover" and can never match the real dialog; `Test-AellAeRunning` is version-blind; stale `CrashOccurred = 1` still sits on 26.2. | §21 | nothing | no |
-| 8 | The managed backend dies silently within the half hour — measure the cause before fixing it. | §17k | backend | maybe |
-| 9 | **No shipped template can take a reference image any more** — i2v left the bundle with the authored H3 graph. | §18 P9a | nothing | yes |
-| 10 | `download-gen-weight` re-downloads a weight already present in another `comfyModelRoots` root (6.4 GB wasted, measured; the next one is 26 GB). | §18 P7b | nothing | yes |
-| 11 | Decide llama-server's lifetime: give it the same detach seam, or delete the reap that can never fire. | §17i | nothing | yes |
-| 12 | The vendor-enum fixture is a hand-taken snapshot with nothing forcing a refresh when the vendor build moves. | §17l | nothing | no |
-| 13 | krea2 and ltx-small are the only entries EXEMPT from "a gate must hold its biggest weight file", because their files carry no sizes. | §18 P8a | nothing | yes |
-| 14 | `weight-availability-probe.js` defaults to `comfyUrl`, so it cannot see the managed backend without `--url`. | §17h | nothing | no |
+| 5 | Pin the invariant the whole install plan rests on: refuse a BUNDLED manifest that names a non-core node pack. True today, guaranteed by nothing. | §22a | nothing | no |
+| 6 | Tee the harness's stdout into the loop log. `Running self-test via` and `Crash flag:` appear ZERO times across the whole 2026-09-09 night, so a killed pass leaves no record of whether its self-test was green. | §20e | nothing | no |
+| 7 | A guard test for the pass invocation, so a future brief edit cannot re-inject a bare `--` and silently drop the bypass flag again. | §20d | nothing | no |
+| 8 | §21 leftovers: the watchdog rule keys on the word "recover" and can never match the real dialog; `Test-AellAeRunning` is version-blind; stale `CrashOccurred = 1` still sits on 26.2. | §21 | nothing | no |
+| 9 | The managed backend dies silently within the half hour — measure the cause before fixing it. | §17k | backend | maybe |
+| 10 | **No shipped template can take a reference image any more** — i2v left the bundle with the authored H3 graph. | §18 P9a | nothing | yes |
+| 11 | `download-gen-weight` re-downloads a weight already present in another `comfyModelRoots` root (6.4 GB wasted, measured; the next one is 26 GB). | §18 P7b | nothing | yes |
+| 12 | Decide llama-server's lifetime: give it the same detach seam, or delete the reap that can never fire. | §17i | nothing | yes |
+| 13 | The vendor-enum fixture is a hand-taken snapshot with nothing forcing a refresh when the vendor build moves. | §17l | nothing | no |
+| 14 | krea2 and ltx-small are the only entries EXEMPT from "a gate must hold its biggest weight file", because their files carry no sizes. | §18 P8a | nothing | yes |
+| 15 | `weight-availability-probe.js` defaults to `comfyUrl`, so it cannot see the managed backend without `--url`. | §17h | nothing | no |
 
 **§18 P7a is now HALF ANSWERED.** The owner approved options 1 AND 2 on
 2026-09-09 — "give even the lowest end cards an option here if they're
@@ -4795,6 +4796,94 @@ either corrected or deleted so it does not read as coverage that exists.
 
 **Human eye wanted on step 1.** An unattended pass must not press a
 blind key on a dialog whose wrong branch silently removes the panel.
+
+## 22. The install should hand a buyer exactly the setup their card can run (owner direction, filed 2026-09-09)
+
+**Owner, 2026-09-09:** *"when somebody's automatically downloading the
+plug in, I want it to be able to scan their hardware and apply the
+recommended installs for their machine, including the workflows that
+support those recommended installs. So we'll end up having quite a few
+basic workflows, but that's kind of the idea. And then from there, we can
+holistically and strategically expand on the functionality of all of
+those basic workflows in tandem."*
+
+The unit being shipped is therefore not a model, it is a **bundle**:
+chat model + gen entry + the workflow that renders it + whatever nodes
+that workflow needs. Hardware picks the bundle. Nothing that cannot run
+is installed or shown.
+
+### What already exists (checked 2026-09-09, not assumed)
+
+- `Setup.recommendSetup` / `recommendGen` already scan and choose: tier,
+  chat model, image entry, video entry, with `entryFits` gating on
+  `minVramGB` and `requiresBlackwell`.
+- Six basics ship and are **core-only BY CONSTRUCTION** (§18 P5-P10).
+  Checked: all six manifests carry `catalogEntry` and NO `optionalNodes`.
+  The only two manifests with `optionalNodes` are the owner's authored
+  KREA2 and H3 i2v, and both left the bundle for `tests/fixtures/`.
+- Manifests already attribute every node class to a PACK, and
+  `test-workflow-manifests.js` already asserts that every non-core pack
+  carries a repo URL. That is the foundation an installer would need.
+- §18 P4 already renders what a template NEEDS in Settings: VRAM floor,
+  architecture gate, needs-an-image, missing-weight count.
+
+**So the hard part is largely done.** The invariant that makes the whole
+plan work — a buyer's recommended set needs no custom nodes — is true
+today. It is just not GUARANTEED.
+
+### 22a. Nothing pins "a bundled template is core-only" — takeable, no bump
+
+The load-bearing invariant is unasserted. A future template could name a
+custom pack and every buyer without it would get a graph that cannot run,
+with nothing in CI objecting. Refuse, in `test-workflow-bundle.js`, any
+manifest under `extension/comfy-workflows/` whose packs are not
+`(comfy-core)`. Fixtures are exempt on purpose and the message must say
+so, or the next person deletes the wrong half.
+
+### 22b. Seeding is hardware-blind — takeable, bumps
+
+`Setup.ensureDataDirs` copies EVERY bundled template into
+`%APPDATA%\AE-Llama\comfy-workflows` with no reference to the card. An
+8 GB buyer is seeded the H3 and Wan graphs, which need 32, and the
+Workflows list then reads as capability. Seed what `entryFits` accepts;
+keep the rest available behind an explicit "install anyway".
+
+Careful: `ensureDataDirs` has NO delete path (verified §18 P8), which is
+what preserves a user's own files. Hardware-conditional seeding must stay
+additive — a card upgrade adds templates, and nothing is ever removed
+because a reading changed.
+
+### 22c. Nothing SEQUENCES the first run — takeable, bumps
+
+Every piece exists and no code path runs them in order: scan ->
+recommend -> download the recommended weights (`download-gen-weight`) ->
+seed the templates that fit (22b) -> inherit existing model roots (§19)
+-> report what was installed and what was skipped and why. That sequence
+is the product's first impression and today it does not exist.
+
+### 22d. A node-pack installer — for the EXPANSION layer only
+
+Needed for what the owner calls expanding functionality "in tandem", not
+for the basics. **The basics must stay core-only** (22a) so that a buyer
+never needs this to get working. Manifests already carry pack repo URLs.
+Was "out of scope, remote builds it" while there was a remote session;
+there is not one now.
+
+### 22e. A coverage matrix, kept true as the catalog grows
+
+Every tier must end with a runnable image AND video template, or an
+honest statement that it has none. **Today the video half is empty below
+32 GB** (§18 P7a), which is the first hole in this matrix and is being
+measured under §18 P7c. This is the item that stops the catalog growing
+into a set of recommendations nobody can execute.
+
+### Order, and the reference machine
+
+The owner tests the whole stack on this machine first — a 5090 runs every
+entry, so it is the reference for what "works" means before any tiering
+is trusted. That is also why §18 P7's finding matters here: the floor is
+RESIDENT WEIGHTS, not the frame, so this machine can measure whether a
+bundle fits a smaller card without owning one.
 
 ## Out of scope for the local session (remote builds these)
 

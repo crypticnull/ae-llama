@@ -23188,3 +23188,45 @@ image any more". If LTX is pinned for any reason, i2v may come with it.
 
 No `extension/` change, so **no version bump**. Docs only; suite not run
 locally at the owner's request (gaming), CI runs it on push.
+
+## 2026-09-09 (local session) — §22 filed: the install ships a BUNDLE, not a model
+
+Owner direction: the plugin should scan a buyer's hardware and install
+the recommended setup *including the workflows that support it*, ending
+with many basic workflows, then expand their functionality in tandem.
+
+So the shipped unit is chat model + gen entry + the workflow that renders
+it + the nodes that workflow needs, chosen by hardware. Nothing that
+cannot run is installed or shown.
+
+**Most of this already exists, which was worth checking before filing.**
+`recommendSetup`/`recommendGen` already scan and choose against
+`entryFits`. The six basics are core-only BY CONSTRUCTION — verified
+today, all six manifests carry `catalogEntry` and no `optionalNodes`, and
+the only two manifests with `optionalNodes` are the owner's authored
+graphs, both of which left the bundle for `tests/fixtures/` under §18
+P8/P9. Manifests already attribute every node class to a pack and
+`test-workflow-manifests.js` already requires a repo URL for every
+non-core pack, which is exactly what an installer would need.
+
+**The invariant the whole plan rests on is TRUE today and GUARANTEED by
+nothing.** No test refuses a bundled manifest that names a custom pack,
+so one future template could hand every buyer a graph they cannot run
+with CI silent. Filed as §22a and put in the queue at position 5 —
+it is cheap, and it protects everything above it.
+
+Also filed: §22b seeding is hardware-blind (`ensureDataDirs` copies all
+six regardless of the card, so an 8 GB buyer is seeded 32 GB graphs and
+the Workflows list reads as capability) — with the constraint that
+seeding must stay ADDITIVE, because `ensureDataDirs` has no delete path
+and that is what preserves a user's own files; §22c nothing sequences the
+first run, though every piece of it exists; §22d a node-pack installer
+for the EXPANSION layer only, never for the basics; §22e a coverage
+matrix, whose first hole is the sub-32 GB video gap already being
+measured under §18 P7c.
+
+Recorded because it will matter as the catalog grows: this machine can
+measure whether a bundle fits a smaller card without owning one, because
+§18 P7 established the floor is resident weights and not the frame.
+
+No `extension/` change, so **no version bump**. Docs only.
