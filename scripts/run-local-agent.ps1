@@ -657,6 +657,59 @@ for ($i = 1; $i -le $Iterations; $i++) {
                $census.NamedTotal + ' (' + $census.Ours + ' of them ours; ' +
                'the rest are the Claude desktop app, which is an Electron ' +
                'app and runs many processes under that name)')
+    # --- heartbeat while the pass runs (WORKPLAN 20a) ----------------
+    #
+    # `claude -p` hands back its output in ONE block at the end, so a
+    # pass that is working normally writes nothing here for 6-10
+    # minutes. The loop logged the pass start and then went silent, and
+    # a silent pass and a wedged pass looked exactly the same from
+    # outside -- two days were lost to that. Every 30s, say the three
+    # things a passing clock cannot fake: the CLI process still exists,
+    # how long it has run, and how many files the tree is dirty by. The
+    # tree was stashed clean above, so a pass that has started editing
+    # shows a RISING count and a pass that has not shows zero.
+    #
+    # NOT cpu. See the header of scripts/lib/loop-heartbeat.ps1: it was
+    # measured to be wrong in both directions here, which is the whole
+    # reason this exists.
+    $passStartedAt = Get-Date
+    $beat = $null
+    try {
+        $beat = Start-Job -Name 'AellPassHeartbeat' -ScriptBlock {
+            param($procLib, $beatLib, $rootId, $repo, $log, $label,
+                  $startedAt, $everySec)
+            . $procLib
+            . $beatLib
+            while ($true) {
+                # Sleep FIRST: the '===== pass N =====' line above
+                # already stamps t=0, and a beat at 00:00 says nothing.
+                Start-Sleep -Seconds $everySec
+                try {
+                    $line = Get-AellHeartbeatLine -RootId $rootId `
+                              -RepoRoot $repo -StartedAt $startedAt `
+                              -Label $label
+                } catch {
+                    $line = '[heartbeat] failed: ' + $_.Exception.Message
+                }
+                $stamped = ((Get-Date -Format 'HH:mm:ss') + '  ' + $line)
+                try {
+                    Add-Content -Path $log -Value $stamped -Encoding ASCII
+                } catch { }
+            }
+        } -ArgumentList `
+            (Join-Path $PSScriptRoot 'lib\claude-procs.ps1'),
+            (Join-Path $PSScriptRoot 'lib\loop-heartbeat.ps1'),
+            $PID,
+            $RepoRoot,
+            $logFile,
+            ('pass ' + $i + '/' + $Iterations),
+            $passStartedAt,
+            30
+    } catch {
+        # A missing heartbeat must never cost the pass. Say so and run.
+        Write-Log ('Heartbeat could not start: ' + $_.Exception.Message)
+    }
+
     $passLines = New-Object System.Collections.Generic.List[string]
     try {
         Get-Content -Raw $promptFile |
@@ -669,6 +722,16 @@ for ($i = 1; $i -le $Iterations; $i++) {
     } catch {
         Write-Log ('Session error: ' + $_.Exception.Message)
     }
+
+    # Stop the beat BEFORE the reap, or the last line can claim a cli
+    # process that is being killed as it is written.
+    if ($beat) {
+        $beatFor = [int]((Get-Date) - $passStartedAt).TotalSeconds
+        Stop-Job -Job $beat -ErrorAction SilentlyContinue
+        Remove-Job -Job $beat -Force -ErrorAction SilentlyContinue
+        Write-Log ('Pass ran ' + $beatFor + 's.')
+    }
+
     foreach ($cp in @(Get-AellCliPassProcesses -RootId $PID)) {
         try {
             Stop-Process -Id $cp.ProcessId -Force -ErrorAction Stop

@@ -20617,3 +20617,95 @@ broken this week, alongside the bypass above.
 `unref()` drops the three references without detaching the child; the
 poll timers still hold the loop open for as long as the boot needs. Suite
 79/79 including the ten `test-comfy-*.js`.
+
+## 2026-09-08 (local session) — the loop gets a heartbeat, and the harness is blocked by AE's crash prompt (§20a; §21 filed)
+
+**Item taken: §20a, the heartbeat.** NEXT UP item 0 is "give the loop a
+heartbeat, then verify one pass commits". The second half (§20c) needed
+no work from me: `Get-CimInstance Win32_Process` at the top of this pass
+showed I *am* the pass — pid 42336, `claude.exe
+--dangerously-skip-permissions --settings logs\pass-settings-52312.json
+-p`, a child of pid 52312 running `run-local-agent.ps1 -Detached
+-Iterations 1`. §20c is being executed by the run this entry is written
+inside, so starting another would have been a nested loop. Whether it
+commits is answered by this commit existing.
+
+### What the heartbeat carries, and what it refuses to
+
+New `scripts/lib/loop-heartbeat.ps1`; `run-local-agent.ps1` starts it as
+a job before the blocking `& $ClaudePath` pipeline and stops it after,
+before the reap. Every 30s:
+
+    20:42:18  [heartbeat] pass 1/1  elapsed 00:03  cli alive (pid 42336)  dirty 2 file(s)
+
+Three signals, because elapsed time alone is a clock and advances just
+as happily on a wedged pass. The dirty count is the load-bearing one:
+the loop stashes the tree clean before each pass, so a pass that has
+begun editing shows a RISING count and one that has not shows zero, and
+those two were previously indistinguishable from outside.
+
+Not CPU, per the item — measured uninformative in both directions
+(8.66 CPU-seconds over ten minutes is a NORMAL `claude -p` pass; a flat
+AfterFX counter is the harness's DESIGNED idle). The prohibition is now
+a test assertion rather than a comment, so it cannot be quietly undone.
+Existence is read by DESCENT (`Get-AellCliPassProcesses`), never by
+name — the desktop app is Electron and owns ten claude processes.
+
+Verified in real Windows PowerShell 5.1, not only on paper: the function
+run against the live loop returned `cli alive (pid 42336) dirty 2
+file(s)` — it found the actual running pass and the actual edit count —
+and the full job wiring (dot-source inside the job, DateTime arg, log
+append) was run for 11s at a 3s interval and wrote three correct lines.
+`tests/test-loop-heartbeat.js` is new: 20 assertions, 9 of which fail
+against HEAD~ (the strings did not exist), and it EXECUTES the real
+PowerShell function rather than re-implementing the format in JS — a
+copy of the thing under test is a copy that drifts.
+
+### Harness: RED, and not for a reason a pass can fix
+
+`scripts/run-ae-selftest.ps1` did not run a single step. AE never opened
+its main window in 240s; a popup was in front of it the whole time. Full
+detail and the fix plan are filed as **WORKPLAN §21**, promoted to a
+BLOCKER row above item 0 in NEXT UP. The short version, all measured
+tonight:
+
+- The popup is AE's crash-recovery prompt: *"We detected a crash in your
+  last session ... We recommend starting a Safe Mode session ..."*.
+- The `crash / auto-save recovery` rule matches on `Contains =
+  @('recover')`. **That word is not in the dialog** — it says
+  "recommend". The rule's own header admits it was a candidate wording;
+  this is that guess coming due.
+- Worse, and this is why fixing the fragment is not enough: the dialog
+  has **no pressable control by either mechanism**. It is a `#32770`
+  with an empty title whose entire content is one `DroverLord - Window
+  Class` / `OS_ViewContainer`, and UI Automation over
+  `TreeScope::Descendants` returns **exactly one element** — a Pane. No
+  button HWND, no UIA button. Every `Buttons = @(...)` list in
+  `host-dialogs.ps1` is unreachable here.
+
+I did NOT press anything. The wrong branch of this dialog is not a
+re-ask, it is a **Safe Mode session in which scripts and extensions are
+not loaded** — AE would run, the harness would launch, and the panel and
+`hostscript.jsx` would simply be absent, which reads as a code bug for
+however long it takes to notice. Blind Enter/Escape on that, unattended,
+is the kind of guess that costs a night and lies about it.
+
+AE (pid 82520) is left running and untouched, per the brief. Note that
+killing it does not help and is not a retry: killing AE is what arms the
+crash prompt for the next launch, so "kill and retry" is a loop rather
+than a fix. **Human eye wanted on §21 step 1.**
+
+### Result
+
+Stubbed suite **80/80 green**, judged by exit code the way CI judges it
+(79 before, plus the new file). `test-loop-heartbeat.js` 20 ok,
+`test-powershell-syntax.js` all parse. Harness: could not run — 0
+steps, blocked before startup (§21). No version bump: nothing under
+`extension/` changed, so a bump would publish an update that installs
+nothing.
+
+One note for whoever writes a quick suite runner next: do NOT judge a
+test by grepping its output for "ALL TESTS PASSED". Only some files
+print that; the rest end with "all passed", "60 checks", "tier ladder
+OK". A grep runner called 30 green files red on the first try here.
+Exit code is the only honest verdict, and it is what CI uses.

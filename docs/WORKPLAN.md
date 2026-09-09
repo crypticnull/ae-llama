@@ -39,7 +39,8 @@ the night retrying it.
 
 | # | item | where | needs | bumps |
 |---|---|---|---|---|
-| 0 | **Give the loop a heartbeat**, then verify one pass commits | §20 | nothing | no |
+| **B** | **BLOCKER — AE sits on the crash-recovery dialog, so the harness cannot run at all.** Read §21 before anything else; step 1 there wants a human eye. | §21 | nothing (but AE is currently wedged) | no |
+| 0 | ~~Give the loop a heartbeat~~ DONE 2026-09-08 (§20a, `scripts/lib/loop-heartbeat.ps1`). Still open: **verify one pass commits** (§20c), the per-pass timeout (§20b) and the bypass guard test (§20d) | §20 | nothing | no |
 | 1 | Install the managed ComfyUI backend: `node scripts/comfy-install.js --boot` | §17c | ~10 GB free, a 2 GB download. **Check free space first and log it.** | no |
 | 2 | H3 t2v regression + `catalog-vram-probe --entry minimax-h3` → measured block | §18 P3 | item 1, AE | no |
 | 3 | sd15 basic template (+ the frontend-editable measurement) | §18 P5 | item 1, AE, 2 GB | yes |
@@ -3969,6 +3970,92 @@ The brief lives in the `.ps1`, so the test has to reach into it rather
 than re-declare it; a copy of the prompt in the test is a copy that will
 drift, and a test that passes against a stale copy of the thing it
 guards is the preflight mistake again.
+
+## 21. AE's crash-recovery dialog blocks the harness, and no rule can press it (filed 2026-09-08)
+
+**This outranks everything in NEXT UP.** While it stands, no pass can
+run `scripts/run-ae-selftest.ps1` at all, so no pass can verify anything
+in real AE -- which is the only thing this session is for.
+
+Measured 2026-09-08 (local session), AE 2026.3, pid 82520 left blocked
+by a timed-out harness run:
+
+    Running self-test via ...\AfterFX.exe
+    No results after 240s: After Effects never opened its main window,
+    with a popup in front of it the whole time.
+
+The popup is AE's crash-recovery prompt. Its REAL text, harvested by
+`Write-AellUnknownDialogs`:
+
+> We detected a crash in your last session. Crashes can potentially be
+> caused by faulty plugins, scripts, extensions, or corrupt preferences.
+> We recommend starting a Safe Mode session in order to diagnose the
+> problem. During a Safe Mode session default preferences are used,
+> scripts and extensions are not loaded, custom workspaces are not
+> available, and 3rd party effect plugins can be disabled.
+
+### Two independent defects, both measured
+
+**21a. The rule's match fragment is wrong.** `Get-AellDialogRules`
+matches this dialog on `Contains = @('recover')`. The measured text has
+no "recover" in it anywhere -- it says "We **recommend** starting a Safe
+Mode session". The rule was written as a candidate and its own header
+says so ("their fragments and button labels are candidates"); this is
+that guess coming due. Match on `detected a crash` and `Safe Mode`,
+which are the measured strings.
+
+**21b. The dialog has no pressable control, by EITHER mechanism.** This
+is the one that makes 21a insufficient on its own. The window is a
+`#32770` with an EMPTY title, and its entire visible content is a single
+child:
+
+| probe | result |
+|---|---|
+| `EnumChildWindows` | 1 visible child: `DroverLord - Window Class` / `OS_ViewContainer`, plus 3 hidden (`OS_ViewContainer`, `OS_EditTextContainer`, `Edit`) |
+| UI Automation, `TreeScope::Descendants` | **1 descendant total**: `ControlType.Pane`, name `OS_ViewContainer`, no AutomationId |
+
+So there is no "Open Normally" HWND and no UIA button element -- the
+buttons are owner-drawn inside the pane. Every `Buttons = @(...)` list
+in `host-dialogs.ps1` is unreachable here, and the rule falls through to
+`CancelIfNoButton` / WM_CLOSE. **Do not assume WM_CLOSE is the safe
+answer on this one.** Unlike the save-changes prompt, "cancel" has no
+obvious meaning for a crash prompt, and the WRONG choice is not a
+re-ask -- it is a **Safe Mode session, in which scripts and extensions
+are not loaded**, i.e. AE runs, the harness launches, and the panel and
+`hostscript.jsx` are simply absent. That failure looks like a code bug
+for as long as it takes to notice.
+
+### Why this is self-perpetuating
+
+A harness run that times out leaves AE alive and blocked (that is what
+pid 82520 is). Killing it arms the crash prompt for the NEXT launch, so
+"kill it and retry" is a loop, not a fix. The pass that hits this can
+only report it -- which is what the brief already says to do -- so the
+condition survives every unattended night until the rule can actually
+answer it.
+
+### What to do, in order
+
+1. **Measure which key answers it, on a throwaway AE**, not on the
+   owner's session: `WM_CLOSE`, then `VK_ESCAPE`, then `VK_RETURN`, and
+   after each one check `Get-Process AfterFX | MainWindowTitle` for a
+   real main window AND run a one-line `-r` script that calls
+   `AELL_call` -- a Safe Mode session will fail that, which is exactly
+   how to tell the two outcomes apart. Record which key gives a NORMAL
+   session.
+2. Rewrite the `crash / auto-save recovery` rule on the measured
+   fragments (21a) with the measured key from step 1, and mark in its
+   comment that its control is keyboard, not a button, and why.
+3. Back-fill `tests/test-host-dialogs*.js` with the harvested text above
+   as a fixture, so the rule is proven to MATCH this exact wording
+   without AE. The current rule would pass any test written from its own
+   guessed wording -- that is how it shipped unmatched.
+4. Consider whether the harness should refuse to start when a
+   `#32770` with no pressable child is already up on AfterFX, and say
+   THIS, rather than spending 240s discovering it again.
+
+**Human eye wanted on step 1.** An unattended pass must not press a
+blind key on a dialog whose wrong branch silently removes the panel.
 
 ## Out of scope for the local session (remote builds these)
 
