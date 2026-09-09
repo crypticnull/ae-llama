@@ -23071,3 +23071,65 @@ Eight `loop-salvage-*` stashes have accumulated since 08-28; none has been
 reviewed. Dropping stashes is destructive, so it stays an owner decision.
 
 No `extension/` change in this entry, so **no version bump**.
+
+## 2026-09-09 (local session) — the loop's backend outlived the loop; queue rewritten for tonight
+
+**Found the way a product bug should never be found: the owner tried to
+play a game and it was laggy.** Measured 11:31, seventy-six minutes after
+the loop finished at 10:15:49 — the card was at 27,844 MiB of 32,607 at
+**zero percent utilisation**, held by pid 42796, the managed ComfyUI, up
+380 minutes. About 4.7 GB left for anything else. `--stop` released it:
+27,844 to **1,365 MiB**.
+
+**The shipped product does not do this, and pinning that down was most of
+the work.** The panel spawns non-detached, so Windows' job object takes
+the child when the panel process goes; `unload` calls `stopManaged()`;
+`reapOrphan()` at init is the net for when CEP does not fire unload.
+`llama.js` contains no `detached` at all. Three layers, strongest is the
+OS. The panel's non-detached default is already pinned by a test
+(`test-comfy-backend.js`), which is what stops this reaching a buyer.
+
+The SCRIPT path had no owner. `comfy-install.js --boot` opts into
+`setManagedDetached(true)` on purpose so a backend survives for the next
+pass — right during a run, wrong the moment the run ends. Filed as §17q
+and fixed: `run-local-agent.ps1` now calls `--stop` in its teardown,
+beside the dialog watchdog it already stops for the same stated reason.
+**Not yet verified** — the teardown has never run at the end of a real
+loop, so it is queue item 1 rather than a closed item.
+
+`comfy-managed.js:15` already carried "a backend was booted, the owner
+went to play a game, and --stop was a no-op" from 2026-09-06. That was
+the PID record not surviving. This was the same sentence from the other
+end: the record was fine and nothing ever called stop. Which is why the
+fix had to be a CALLER, not another guard.
+
+**NEXT UP rewritten.** Twelve completed rows with long completion notes
+had accumulated above the first live item, and the brief tells every pass
+to read this block first, so finished work was costing the same context
+as live work — on a 16k default context that is not a tidiness point.
+Compressed to one paragraph naming what landed and pointing at this log;
+twelve live items now sit at the top, and the fallback table lost the
+seven rows promoted into the queue. The state-of-the-loop note is rewritten
+for a loop that WORKS, listing what the log now says per pass and the one
+thing it still does not (§20e).
+
+**Two owner calls are blocking and neither is a pass's to make:**
+§18 P7a (measuring wan22-5b moved its gate 8 -> 32, leaving every card
+under 32 GB with no runnable video graph) and §18 P3a(b) (capping the
+injected duration). Passes have correctly skipped both.
+
+**A defect I made twice today, recorded because the pattern is the
+point.** Writing Windows paths inside non-raw Python strings put a BEL
+byte (0x07) into a dot-source path in `run-ae-selftest.ps1` and a
+vertical tab (0x0b) into this workplan, from `\a` and `\v`. Both files
+still parsed and rendered; the BEL would have failed only at run time on
+a cold launch. `tests/test-ae-crash-flag.js` catches the `.ps1` case now.
+Both docs scan clean for control characters.
+
+Suite NOT run locally — the owner is gaming and asked for light work
+only. Nothing here touches `extension/`; the `.ps1` change is verified by
+the real Windows PowerShell 5.1 parser and an ASCII scan, which is the
+only coverage `.ps1` files have locally anyway (`test-powershell-syntax.js`
+skips without pwsh). CI runs the full suite on push.
+
+No `extension/` change, so **no version bump**.

@@ -546,7 +546,40 @@ if (-not $SkipPreflight) {
         Write-Log 'Preflight OK -- passes can write.'
         if ($PreflightOnly) {
             Write-Log 'PreflightOnly: not starting passes. Environment is good.'
-            Remove-Item -Path $styleFile -Force -ErrorAction SilentlyContinue
+            # Stop a managed ComfyUI the night's passes booted (owner, 2026-09-09).
+#
+# `comfy-install.js --boot` opts into setManagedDetached(true) on purpose,
+# so the backend outlives the script that started it and is there for the
+# NEXT pass. That is right during a run and wrong the moment the run ends.
+#
+# Measured 2026-09-09: this loop finished at 10:15 and the backend was
+# still holding 27,844 MiB of the card's 32,607 at 11:31, at 0 percent
+# utilisation, leaving about 4.7 GB for anything else. The owner found it
+# by trying to play a game. Nothing in the product does this to a user
+# (the panel spawns non-detached, so Windows' job object takes the child
+# when the panel goes, and unload plus reapOrphan sit on top) -- it is
+# the SCRIPT path, and the script path had no owner once the loop ended.
+#
+# The same rule the dialog watchdog above follows: nothing this loop
+# started for its own convenience may outlive it on a machine nobody is
+# driving. --stop verifies the recorded PID is a live ComfyUI before
+# killing anything and exits 0 with "no managed backend found" when the
+# passes never booted one, so this is safe either way.
+try {
+    $stopOut = & node (Join-Path $RepoRoot 'scripts\comfy-install.js') --stop 2>&1
+    $said = @($stopOut) | Where-Object {
+        [string]$_ -match 'stopped the managed|no managed backend found'
+    }
+    if ($said) {
+        foreach ($line in $said) { Write-Log ('Backend: ' + [string]$line) }
+    } else {
+        Write-Log 'Backend: --stop said nothing recognisable; check by hand.'
+    }
+} catch {
+    Write-Log ('Could not stop the managed backend: ' + $_.Exception.Message)
+}
+
+Remove-Item -Path $styleFile -Force -ErrorAction SilentlyContinue
             if ($watchdog) {
                 try {
                     Stop-Job -Job $watchdog -ErrorAction Stop

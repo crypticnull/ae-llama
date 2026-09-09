@@ -22,7 +22,7 @@ item -> commit -> repeat). One item per pass, then stop.
 
 ## NEXT UP — read this first, take the first item that is not blocked
 
-Maintained 2026-09-08 (local session). **This exists because the brief tells a pass NOT
+Maintained 2026-09-09 (local session). **This exists because the brief tells a pass NOT
 to read the whole workplan** (it is ~46k tokens) — so without an ordered
 list at the top, a fresh unattended session has to guess which of
 nineteen sections holds live work, and the live work is in the LAST
@@ -37,26 +37,32 @@ environmental reason (no disk, no network, a download that will not
 finish), say so in the log and **move to the next one** — do not spend
 the night retrying it.
 
+**Landed overnight 2026-09-09 — do NOT redo any of it.** Items 1 through
+8 of the previous queue are all done: the managed backend installed
+(§17c), KREA2's sampler chosen by rendering (§17f), enum-value preflight
+(§17g), four dead probe branches (§17n), one backend-resolution rule
+across six scripts (§17m/h/o), the test suite no longer killing the live
+backend (§17p), and basic templates SHIPPED and MEASURED for sd15, sdxl,
+wan22-5b, krea2, H3 and h3-int8 (§18 P3, P5-P10). `ALLOW_UNMEASURED` is
+empty and `ALLOW_NO_TEMPLATE` is down to `[ltx-small]`. Version 0.12.4 to
+0.12.16. Every completion note is in `docs/WORKPLAN-LOG.md` under
+2026-09-09; they are not repeated here, because this block is read by
+every pass and finished work costs the same context as live work.
+
 | # | item | where | needs | bumps |
 |---|---|---|---|---|
-| ~~B~~ | ~~BLOCKER — AE sits on the crash-recovery dialog~~ **PREVENTED 2026-09-08.** `run-ae-selftest.ps1` now clears `CrashOccurred` in HKCU before every launch. If AE sits on that dialog again, that is a REGRESSION — log it, do not click past it and carry on. | §21 | — | no |
-| ~~0~~ | ~~heartbeat, verify a pass commits, per-pass timeout~~ **DONE 2026-09-08.** §20a heartbeat every 30s; §20c VERIFIED (`Pass committed 2d76fdf8`, the first end-to-end loop success since 09-02); §20b `-PassTimeoutMin 45`. Still open: **§20d**, the bypass guard test. | §20 | nothing | no |
-| ~~1~~ | ~~Install the managed ComfyUI backend~~ **DONE 2026-09-09.** Installed and booted; 4264 MB extracted, python 3.13.14, torch 2.13.0+cu130 (CUDA 13.0). `extra_model_paths.yaml` points at the owner's store and the vendor backend loads it: `weight-availability-probe --url http://127.0.0.1:8288` all verdicts PASS, 0 missing slots for both templates. Root defect found and fixed en route (the backend did not outlive its launcher). | §17c | — | — |
-| ~~1a~~ | ~~The shipped KREA2 template cannot render on the backend a buyer gets~~ **DONE 2026-09-09 (0.12.7).** All six candidates rendered at one seed: three of the four the original filing shortlisted are UNUSABLE at 4 steps, and the two it missed are the two that work. `exp_heun_2_x0` chosen, applied via the manifest's `panelAdaptation.setInputs`, verified end to end. §18 items 3-8 are unblocked. | §17f | — | — |
-| ~~1b~~ | ~~a preflight that checks weights but not enum VALUES says "ready" about a graph ComfyUI refuses~~ **DONE 2026-09-09 (0.12.8).** `Comfy.validateGraphInputs` asks both questions in one walk of /object_info and either one refuses, before the handoff and before anything is queued. NOT via `POST /prompt`: measured on the vendor build, it has no validate-only mode and QUEUES the graph the moment validation passes — see §17g. | §17g | — | — |
-| ~~1c~~ | ~~`comfy-probe.js` says "ComfyUI reachable" PASS when nothing is listening, and `--boot` sits inside that same dead branch~~ **DONE 2026-09-09.** FOUR probes had it, not one; `managed.reachable` is now the single place the question is asked, and the panel's own two callers audited clean. No bump — nothing in `extension/` changed. | §17n | — | — |
-| ~~1d~~ | ~~`comfy-probe.js --url` is silently ignored in managed mode~~ **DONE 2026-09-09.** SIX scripts, one rule: `managed.urlOverride(url)` sets the MODE as well as the address, because an explicit URL names an INSTANCE, and every probe resolves with `Comfy.backendUrl`. Verified on the real machine — `--url` moves the target (and generated end to end through it), and a bare `weight-availability-probe` finally measures the managed backend (all verdicts PASS). No bump: nothing in `extension/` changed. | §17m + §17h + §17o | — | — |
-| ~~1e~~ | ~~`node tests/test-comfy-install.js` KILLS the live managed backend~~ **DONE 2026-09-09.** The fixture now writes `comfyManagedPort` from an OS-allocated dead port, and the fall-through that had NO assertion at all (`stopped the backend holding port`) is checked in both directions plus a flat refusal of the string `8288`. Verified on the machine, against §17p's own reproduction: boot on 8288, run all 85 test files, backend STILL ALIVE on the same pid, `/queue` 200. New block 5 refuses any test that drives `--stop` without naming a port. No bump — nothing in `extension/` changed. | §17p | — | — |
-| ~~2~~ | ~~H3's measured block, at a length that can finish~~ **DONE 2026-09-09 (0.12.9).** Two runs at 2 s / 56 frames on the managed backend, 26 969 and 26 944 MiB over an established idle floor — 25 MiB apart, so repeatable; 80 s each, 1344x768 out. `minimax-h3` is measured, `ALLOW_UNMEASURED` is now EMPTY (§18 P12's first half). P3a answered **(a)**: the row quotes the 2 s reading and states the authored 15 s default beside it, so it cannot be read as the job the buyer gets; **(b), capping the default, stays owner-gated.** Root defect found en route — the probe could not name its own output size (`output ?`) because ffmpeg.js ended `})(this)`, which is Node's global inside `new Function`. | §18 P3 + P3a | — | — |
-| 2a | Cap the duration the panel injects when the user names none — **OWNER CALL**, the measurement behind it is now taken | §18 P3a (b) | — | yes |
-| ~~2b~~ | ~~A 15-minute generation reports elapsed seconds and no estimate~~ **DONE 2026-09-09 (0.12.16).** The panel now says `still generating… 40s — step 13/20, about 16s left`. ComfyUI publishes progress on the WEBSOCKET alone — measured on the vendor build, /history is empty until the job ends, /queue says only "running", and /api/jobs carries no value/max — so comfy.js speaks RFC 6455 to /ws itself (Node 17 has no WebSocket global and the panel ships no dependencies). Verified against the real backend: a 66 s H3 render quoted 42 s left at 20 s and finished sampling at ~57 s. The estimate is anchored on the first sampling STEP, never on elapsed, because elapsed includes a model load worth most of a minute. Root defect found en route: the SUCCESS path of `generate` latches without going through `settle()`, so anything settle cleans up was cleaned up only on failure. **§18 P3c filed — the panel can now promise an ETA past its own timeout** | §18 P3b | — | 0.12.16 |
-| ~~3~~ | ~~sd15 basic template (+ the frontend-editable measurement)~~ **DONE 2026-09-09 (0.12.10).** `AE_LLAMA_SD15_T2I_V1` + manifest, `workflowTemplate`, hash history, `ALLOW_NO_TEMPLATE` −sd15, and a MEASURED block (2656 MiB / 4 s cold at 512x512, managed backend). Full chain green: weight probe, `comfy-probe --workflow` 9/9 incl. AE import, `catalog-vram-probe` x2, `chat-probe --steps 1,13` — and step 13 now picks sd15 for "a red apple", which is the §18 gap statement closed. **The frontend measurement is YES** (see §18 P5b). Two root defects found en route: §18 P5a and the chat-probe PID store. | §18 P5 | — | 0.12.10 |
-| ~~4~~ | ~~sdxl basic template~~ **DONE 2026-09-09 (0.12.11).** `AE_LLAMA_SDXL_T2I_V1` + manifest (the sd15 seven-node shape, ckpt swapped, 1024x1024 latent), `workflowTemplate`, hash history, `ALLOW_NO_TEMPLATE` −sdxl, MEASURED block (9472 MiB / 6 s cold at 1024x1024). **The measurement disproved the catalog's gate**: `minVramGB` was 6 while the checkpoint alone is 6617 MiB, so an 8 GB card was being recommended a grind — gate is 12 now, `slowBelowGB`/`slowNote` removed, three test pins moved WITH their reasons. §18 P6a filed (wan22-5b's gate is under its own biggest file) | §18 P6 | — | 0.12.11 |
-| ~~5~~ | ~~wan22-5b basic t2v template~~ **DONE 2026-09-09 (0.12.12).** `AE_LLAMA_WAN22_5B_T2V_V1` + manifest (the VENDOR'S own `video_wan2_2_5B_ti2v.json`, read off the managed backend's disk, with its bypassed LoadImage DELETED because an API graph has no "muted"), `workflowTemplate`, hash history, `ALLOW_NO_TEMPLATE` −wan22-5b, MEASURED block. **§18 P6a is CLOSED and it was not close**: gate 8 -> **32** on 26 187 MiB measured, and a third run at 704x480 still cost 21 536 MiB, so the floor is the 17 304 MiB of weights and no size rescues a small card. Two 8 GB pins moved with their reasons. Two roots found en route: the authored-length rule could not see a frames-based template at all (fixed + verified by reintroduction), and `recommendGen`'s tie was being broken by ARRAY ORDER. §18 P7a (owner call) and §18 P7b filed | §18 P7 | — | 0.12.12 |
-| ~~6~~ | ~~krea2 core-only basic; the authored graph then leaves the bundle~~ **DONE 2026-09-09 (0.12.13).** `AE_LLAMA_KREA2_T2I_V1` + manifest (12 core nodes: the authored graph's own FIRST pass with the four custom packs, the second upscale pass, the enhancer switch and two dead `ConditioningZeroOut` nodes dropped), `workflowTemplate`, hash history, and the entry **RE-MEASURED** because its graph changed: 18 848 / 18 560 MiB, 8 s, 1920x1080. Gate stays 24 — the smaller reading does not lower it, because the three weights are 18 109 MiB resident and the next standard card down is 16 GB. `AE_LLAMA_KREA2_V1` left `extension/comfy-workflows/` for `tests/fixtures/authored-krea2/` (five suites use it as their only custom-node-heavy graph; that folder's README says which and why). The owner's installed copy survives — **verified**, chat-probe's `comfy_list_workflows` still lists it from `%APPDATA%`. Root finding en route, now a rule: an entry's `measuredAt` was never checked against its OWN template's size. §18 P8a filed | §18 P8 | — | 0.12.13 |
-| ~~7~~ | ~~H3 core-only basic; the authored graph then leaves the bundle~~ **DONE 2026-09-09 (0.12.14).** `AE_LLAMA_H3_T2V_V1` + manifest (15 core nodes: the authored graph's sampling spine, with the five model-chain patches, the megapixel/seconds machinery and the RTX upscaler dropped -- eleven nodes and SEVEN custom packs gone), `workflowTemplate`, hash history, and the entry **RE-MEASURED** because its graph changed: 26 080 MiB and 253 s BOTH runs at 1344x768 x 124 frames. **The `authoredNote` is GONE and that is the win**: the basic is authored at 124 frames -- the node's own default and the bottom of the range /object_info calls trained -- so `measuredClipSeconds` == `authoredClipSeconds` == 5.17 and the catalog finally quotes the job the buyer gets, where the authored graph's 15 s default could only ever be quoted as a 2 s decomposition of a >15-minute render. Gate stays 32 (peak 29 646 of 32 607 MiB, and the nvfp4 encoder is Blackwell-only anyway). `AE_LLAMA_H3_I2V_V1` left `extension/comfy-workflows/` for `tests/fixtures/authored-h3/` (five suites use it; that folder's README says which and why -- it is now the repo's ONLY manifest with an `optionalNodes` block). The catalog's size rule, which SKIPPED H3 while its size arrived as megapixels, now applies to it and passes. §18 P9a filed | §18 P9 | items 2, 5 | 0.12.14 |
-| ~~8~~ | ~~minimax-h3-int8 second API file~~ **DONE 2026-09-09 (0.12.15).** `AE_LLAMA_H3_INT8_T2V_V1` + manifest (`AE_LLAMA_H3_T2V_V1` with node 137's `clip_name` and node 92's `filename_prefix` changed and NOTHING else — verified node by node), `workflowTemplate`, hash history, `ALLOW_NO_TEMPLATE` −minimax-h3-int8, MEASURED block. The 25 884 MiB encoder was downloaded (27.14 GB in 6m12s) and the backend listed it with no restart. **The "confirm from the UI source first" step came back NEGATIVE and that was the useful half**: all four vendor MiniMax H3 templates name only the nvfp4 encoder and the string `qwen3vl_32b_minimax_h3_int8_convrot` appears NOWHERE in the vendor tree, so there was no official graph to copy — the confirmation had to be a render, and it passed 9/9 into AE with audio. **The measurement overturned this entry's own note.** It said the int8 encoder being 11 GB larger made "whether H3 is usable here at all" an open question; measured, it costs 26 048 MiB / 259 s against the nvfp4 sibling's 26 080 / 253 — 32 MiB apart, twice — because ComfyUI evicts the text encoder before it samples, so 10.9 GB of encoder is a DOWNLOAD difference and not a VRAM one. Gate stays 32. `ALLOW_NO_TEMPLATE` is now `[ltx-small]`, the size §18 P12 Q1 asked for. **§18 P7a is NOT closed by this** — int8 is gated at 32 too. §18 P7b confirmed with a number en route | §18 P10 | — | 0.12.15 |
-| 9 | The panel now quotes an ETA that can be longer than the timeout it will then cancel at — warn when the estimate passes `comfyTimeoutSec`, and put the estimate into the timeout message | §18 P3c | item 2b | yes |
+| 1 | **Confirm the backend did not outlive the loop.** The teardown added 2026-09-09 calls `comfy-install.js --stop` at loop exit. Check this morning's log for a `Backend:` line and that the card was released. If it is missing or the card is still held, that is the item. | §17q | nothing | no |
+| 2 | The panel can quote an ETA LONGER than `comfyTimeoutSec` and then cancel the job at 600 s, having promised a finish. Warn when the estimate passes the timeout, and put the estimate into the timeout message. | §18 P3c | nothing | yes |
+| 3 | Tee the harness's stdout into the loop log. `Running self-test via` and `Crash flag:` appear ZERO times across the whole 2026-09-09 night, so a killed pass leaves no record of whether its self-test was green. | §20e | nothing | no |
+| 4 | A guard test for the pass invocation, so a future brief edit cannot re-inject a bare `--` and silently drop the bypass flag again. | §20d | nothing | no |
+| 5 | §21 leftovers: the watchdog rule keys on the word "recover" and can never match the real dialog; `Test-AellAeRunning` is version-blind; stale `CrashOccurred = 1` still sits on 26.2. | §21 | nothing | no |
+| 6 | The managed backend dies silently within the half hour — measure the cause before fixing it. | §17k | backend | maybe |
+| 7 | **No shipped template can take a reference image any more** — i2v left the bundle with the authored H3 graph. | §18 P9a | nothing | yes |
+| 8 | `download-gen-weight` re-downloads a weight already present in another `comfyModelRoots` root (6.4 GB wasted, measured; the next one is 26 GB). | §18 P7b | nothing | yes |
+| 9 | Decide llama-server's lifetime: give it the same detach seam, or delete the reap that can never fire. | §17i | nothing | yes |
+| 10 | The vendor-enum fixture is a hand-taken snapshot with nothing forcing a refresh when the vendor build moves. | §17l | nothing | no |
+| 11 | krea2 and ltx-small are the only entries EXEMPT from "a gate must hold its biggest weight file", because their files carry no sizes. | §18 P8a | nothing | yes |
+| 12 | `weight-availability-probe.js` defaults to `comfyUrl`, so it cannot see the managed backend without `--url`. | §17h | nothing | no |
 
 **OWNER, READ THIS ONE FIRST: §18 P7a.** Measuring wan22-5b (item 5)
 moved its gate 8 -> 32, which leaves **every card under 32 GB with no
@@ -70,13 +76,7 @@ NOTHING but the repo and are always takeable:
 
 | item | where | bumps |
 |---|---|---|
-| The managed backend dies silently within the half hour — measure the cause before fixing it | §17k | maybe |
-| The vendor-enum fixture is a hand-taken snapshot with nothing forcing a refresh when the vendor build moves | §17l | no |
 | `download-gen-weight` re-downloads a weight that is already in another `comfyModelRoots` root and already listed by the backend (6.4 GB wasted, measured; the next one is 26 GB) | §18 P7b | yes |
-| krea2 and ltx-small are the only entries EXEMPT from the "a gate must hold its biggest weight file" rule, because their files carry no sizes | §18 P8a | yes |
-| **No shipped template can take a reference image any more** — i2v left the bundle with the authored H3 graph | §18 P9a | yes |
-| `weight-availability-probe.js` defaults to `comfyUrl`, so it cannot see the managed backend without `--url` | §17h | no |
-| Decide llama-server's lifetime: give it the same detach seam, or delete the reap that can never fire | §17i | yes |
 | `Setup.scanForModelRoots()` — probe a named shortlist, never scan drives | §19a | yes |
 | "Scan for models" button + validate typed roots | §19b | yes |
 | The four Option A prompt deletions, one per pass, each gated on `chat-probe --variants` | §15 | yes |
@@ -86,16 +86,26 @@ NOTHING but the repo and are always takeable:
 | Mid-render VRAM reading in the scratch comp | §16f 3 | no |
 | The 7B at ctx 16,384 and 20,480, fp16 vs `q8_0` KV, via a standalone launcher | §16f 4 | no |
 
-**State of the loop, 2026-09-08 (read this instead of re-diagnosing it).**
-A week of nights produced nothing and the cause is now fully understood
-and fixed, so do NOT spend a pass on it. The bypass flag was being eaten
-by a bare `--` shredded out of the brief by PS 5.1 (broken 09-05, fixed
-09-08; see §20 ROOT CAUSE FOUND). AE's crash-recovery dialog then blocked
-every launch and cannot be clicked by automation, so it is now PREVENTED
-at the registry (§21). A pass has since committed end to end. If a night
-produces nothing, the log will say which of these it was — heartbeat
-lines every 30s, `Crash flag:` before each AE launch, and
-`Pass TIMED OUT` if a pass ran past its bound.
+**State of the loop, 2026-09-09 (read this instead of re-diagnosing it).**
+The loop WORKS. Night of 2026-09-09: 18 passes, **16 commits**, one
+timeout, zero usage-limit waits, 03:15 to 10:15. Do not spend a pass
+re-investigating any of it. The week that produced nothing was two
+causes, both fixed: the bypass flag eaten by a bare `--` shredded out of
+the brief by PS 5.1 (broken 09-05, fixed 09-08 — §20 ROOT CAUSE FOUND),
+and AE's crash-recovery dialog, which cannot be clicked by automation and
+is now PREVENTED at the registry (§21).
+
+What the log now tells you, per pass: a heartbeat every 30s carrying
+elapsed time, the live pid and the dirty-file count; `Pass committed
+<sha>` or `Pass produced no commit`; `Pass TIMED OUT` if it ran past
+`-PassTimeoutMin` (45); and `Backend:` at loop exit. §20b fired on its
+first night at 45:48 and the loop took the next pass 20 seconds later,
+which is the only reason the last two passes ran at all.
+
+What it does NOT tell you is §20e: the harness's own stdout goes to the
+pass, not the loop, so `Running self-test via` and `Crash flag:` appear
+zero times. A pass killed mid-harness leaves no verdict behind. That is
+queue item 3.
 
 **Gate 0 for every pass that touches settings or downloads:** print
 `Settings.origin()` and refuse when `appdata` is empty. The detached loop
@@ -5300,6 +5310,54 @@ Consequence while it stands: every unattended pass that boots a backend
 and then runs the suite loses the backend, silently — and §18's measured
 blocks, which need a backend that survives between passes, cannot be
 taken.
+
+## 17q. The loop's own backend outlived the loop, and cost the owner his GPU all morning (filed 2026-09-09, local session)
+
+**Found the way product bugs should never be found: the owner tried to
+play a game and it was laggy.**
+
+Measured 2026-09-09 at 11:31, seventy-six minutes after the overnight
+loop finished at 10:15:49:
+
+    GPU  27,844 MiB used of 32,607   utilisation 0%
+    pid 42796  python.exe  10,433 MB RAM  7,040 CPU-seconds  up 380 min
+    (AppData\Roaming\AE-Llama\vendor\comfy\...\python_embeded\python.exe)
+
+85 percent of a 5090 held at zero utilisation, leaving about 4.7 GB for
+anything else. `comfy-install.js --stop` released it: **27,844 -> 1,365
+MiB**.
+
+**This is NOT the shipped product's behaviour, and that distinction is
+the whole of the fix.** The panel spawns the backend NON-detached, so
+Windows' job object takes the child when the panel process goes; `unload`
+calls `stopManaged()` on top of that, and `reapOrphan()` at init is the
+net for when CEP does not fire unload. `llama.js` has no `detached`
+anywhere either. Three layers, and the strongest is the OS.
+
+The SCRIPT path is the one with no owner. `comfy-install.js --boot` opts
+into `setManagedDetached(true)` deliberately, so a backend survives the
+script that started it and is there for the NEXT pass. Correct during a
+run. Wrong the second the run ends, and nothing was stopping it.
+
+**Fixed 2026-09-09:** `run-local-agent.ps1` calls
+`comfy-install.js --stop` in its teardown, beside the dialog watchdog it
+already stops for exactly the same stated reason — nothing this loop
+started for its own convenience may outlive it on a machine nobody is
+driving. `--stop` verifies the recorded PID is a live ComfyUI before
+killing anything and exits 0 saying `no managed backend found` when the
+passes never booted one, so it is safe on every path.
+
+**Not yet verified.** The teardown has never run at the end of a real
+overnight loop. That is NEXT UP item 1: the morning log must carry a
+`Backend:` line, and the card must be free. Until a night has shown it,
+this is a fix that has only been reasoned about.
+
+Worth keeping: `scripts/lib/comfy-managed.js:15` already recorded
+"a backend was booted, the owner went to play a game, and --stop was a
+no-op" from 2026-09-06. That was the PID RECORD not surviving, and it was
+fixed. This was the same symptom from the other end — the record was fine
+and nothing ever called stop. The same sentence describes both, which is
+why the fix has to be a caller, not another guard.
 
 ## 17i. llama-server has the same lifetime bug the managed backend just had (filed 2026-09-09, local session)
 
