@@ -5,7 +5,7 @@
  * WORKPLAN §18 P1. It used to be `list[0]` — the alphabet — and
  * test-comfy-workflow-choice.js pinned that as correct because nothing
  * better existed. With the shipped bundle it means "a picture of a red
- * apple" is handed to AE_LLAMA_H3_I2V_V1: a 40 GB Blackwell-only VIDEO
+ * apple" is handed to AE_LLAMA_H3_T2V_V1: a 40 GB Blackwell-only VIDEO
  * graph, chosen because ae_llama_h3 sorts before ae_llama_krea2.
  *
  * Comfy.resolveWorkflow is pure — descriptions, wants, tier context and
@@ -46,7 +46,7 @@ function d(name, kind, opts) {
 }
 
 const IMAGE = d("AE_LLAMA_KREA2_V1", "image");
-const VIDEO = d("AE_LLAMA_H3_I2V_V1", "video", { takesImage: true });
+const VIDEO = d("AE_LLAMA_H3_T2V_V1", "video", { takesImage: true });
 
 // 1. Kind decides, and it inverts the alphabet.
 {
@@ -56,7 +56,7 @@ const VIDEO = d("AE_LLAMA_H3_I2V_V1", "video", { takesImage: true });
          "that sorts first", r.chosen && r.chosen.name);
 
   const v = Comfy.resolveWorkflow([VIDEO, IMAGE], { kind: "video" }, null, {});
-  assert(v.chosen && v.chosen.name === "AE_LLAMA_H3_I2V_V1",
+  assert(v.chosen && v.chosen.name === "AE_LLAMA_H3_T2V_V1",
          "a clip request picks the VIDEO template", v.chosen && v.chosen.name);
 }
 
@@ -223,7 +223,7 @@ const VIDEO = d("AE_LLAMA_H3_I2V_V1", "video", { takesImage: true });
 //     than refusing a user who has one working template.
 {
   const r = Comfy.resolveWorkflow([VIDEO], { kind: "image" }, null, {});
-  assert(r.chosen && r.chosen.name === "AE_LLAMA_H3_I2V_V1",
+  assert(r.chosen && r.chosen.name === "AE_LLAMA_H3_T2V_V1",
          "with nothing of the wanted kind, the other kind is still run");
   assert(/nothing of that kind/.test(r.why),
          "and the reason names the mismatch", r.why);

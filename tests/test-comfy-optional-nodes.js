@@ -53,9 +53,16 @@ const window = {
 eval(fs.readFileSync(path.join(REPO, "extension", "js", "comfy.js"), "utf8"));
 const Comfy = window.Comfy;
 
-const TEMPLATE = path.join(REPO, "extension", "comfy-workflows",
+// (No longer SHIPPED either: WORKPLAN 18 P9 replaced the minimax-h3 entry's
+// graph with the core-only AE_LLAMA_H3_T2V_V1 and moved this one to a
+// fixture -- tests/fixtures/authored-h3/README.md. It is kept because it is
+// now the ONLY manifest in the repo with an optionalNodes block at all:
+// five bypasses, one substitution and a terminal node with no consumer.
+// Nothing core-only can stand in for it, and the rules it exercises are
+// still live code that any future authored graph will lean on.)
+const TEMPLATE = path.join(REPO, "tests", "fixtures", "authored-h3",
                            "AE_LLAMA_H3_I2V_V1.json");
-const MANIFEST = path.join(REPO, "extension", "comfy-workflows",
+const MANIFEST = path.join(REPO, "tests", "fixtures", "authored-h3",
                            "AE_LLAMA_H3_I2V_V1.manifest.json");
 const template = () => JSON.parse(fs.readFileSync(TEMPLATE, "utf8"));
 const manifest = JSON.parse(fs.readFileSync(MANIFEST, "utf8"));

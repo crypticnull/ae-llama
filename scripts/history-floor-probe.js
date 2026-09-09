@@ -79,7 +79,7 @@ function oversizedTail(resultChars) {
   const bigResult = JSON.stringify([{
     ok: true,
     data: {
-      workflow: "AE_LLAMA_H3_I2V_V1",
+      workflow: "AE_LLAMA_H3_T2V_V1",
       note: "x".repeat(resultChars),
       frames: 121
     }
@@ -89,7 +89,7 @@ function oversizedTail(resultChars) {
     { role: "assistant", content: JSON.stringify({
         reply: "Generating.",
         commands: [{ tool: "comfy_generate",
-                     args: { workflow: "AE_LLAMA_H3_I2V_V1" } }] }) },
+                     args: { workflow: "AE_LLAMA_H3_T2V_V1" } }] }) },
     { role: "user", content: "TOOL RESULTS:\n" + bigResult },
     { role: "assistant", content: JSON.stringify({
         reply: "Imported the clip.", commands: [] }) }

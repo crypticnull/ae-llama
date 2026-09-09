@@ -237,7 +237,11 @@ top of that that's separate."*
 
 So the product's baseline is the **core-only basic set**, and the owner's
 authored graphs (`AE_LLAMA_KREA2_V1`, `AE_LLAMA_H3_I2V_V1`) become a
-personal layer. Four measured consequences:
+personal layer. **BOTH have now left the bundle** — KREA2 in 0.12.13
+(§18 P8), H3 in 0.12.14 (§18 P9) — and live under
+`tests/fixtures/authored-krea2/` and `tests/fixtures/authored-h3/`,
+each with a README naming the suites that still need them. Four
+measured consequences:
 
 1. **Per-entry, never wholesale.** An authored graph leaves the bundle
    only once that entry's basic is shipped AND rendered.

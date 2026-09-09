@@ -44,7 +44,7 @@ const NODE = { "1": { class_type: "CheckpointLoaderSimple",
                       inputs: { ckpt_name: "real.safetensors" } } };
 put("AE_LLAMA_KREA2_T2I_V1", NODE, { kind: "image", catalogEntry: "krea2",
                                  models: [] });
-put("AE_LLAMA_H3_I2V_V1", NODE,
+put("AE_LLAMA_H3_T2V_V1", NODE,
     { kind: "video", catalogEntry: "minimax-h3", models: [],
       procedural: { firstFrame: { nodeId: 1, input: "image" } } });
 put("example-txt2img", { "4": { class_type: "CheckpointLoaderSimple",
@@ -98,7 +98,7 @@ function rows(patch, gpu) {
   const r = rows();
   assert(!r["example-txt2img"],
          "the format example is not offered a row");
-  assert(!!r["AE_LLAMA_KREA2_T2I_V1"] && !!r["AE_LLAMA_H3_I2V_V1"],
+  assert(!!r["AE_LLAMA_KREA2_T2I_V1"] && !!r["AE_LLAMA_H3_T2V_V1"],
          "the real templates are");
   assert(!!r["my-own-export"],
          "and so is a user's own export with no manifest — the bundle " +
@@ -109,7 +109,7 @@ function rows(patch, gpu) {
 {
   const r = rows();
   assert(r["AE_LLAMA_KREA2_T2I_V1"].kind === "image" &&
-         r["AE_LLAMA_H3_I2V_V1"].kind === "video",
+         r["AE_LLAMA_H3_T2V_V1"].kind === "video",
          "each row carries its kind");
   assert(r["AE_LLAMA_KREA2_T2I_V1"].label === "Krea 2 (turbo)",
          "and the catalog's own label, not the file name",
@@ -123,7 +123,7 @@ function rows(patch, gpu) {
 //    phrase comes from data that already existed one hop away.
 {
   const r = rows();
-  const h3 = r["AE_LLAMA_H3_I2V_V1"];
+  const h3 = r["AE_LLAMA_H3_T2V_V1"];
   assert(h3.needs.some((n) => /32\+ GB VRAM/.test(n)),
          "a row names the VRAM floor its catalog entry declares",
          h3.needs.join(" · "));
@@ -155,10 +155,10 @@ function rows(patch, gpu) {
 //    worse than no row.
 {
   const big = rows({}, { hasNvidia: true, vramGB: 8, computeCap: 8.9 });
-  assert(big["AE_LLAMA_H3_I2V_V1"].fits === false,
+  assert(big["AE_LLAMA_H3_T2V_V1"].fits === false,
          "on an 8 GB card the 32 GB template does not fit");
   const ok = rows({}, { hasNvidia: true, vramGB: 32, computeCap: 12.0 });
-  assert(ok["AE_LLAMA_H3_I2V_V1"].fits === true,
+  assert(ok["AE_LLAMA_H3_T2V_V1"].fits === true,
          "on a 32 GB Blackwell card it does");
 }
 
@@ -172,13 +172,13 @@ function rows(patch, gpu) {
 
   const off = rows({
     comfyWorkflows: { AE_LLAMA_KREA2_T2I_V1: { enabled: false } },
-    comfyEnhance: { AE_LLAMA_H3_I2V_V1: false }
+    comfyEnhance: { AE_LLAMA_H3_T2V_V1: false }
   });
   assert(off["AE_LLAMA_KREA2_T2I_V1"].enabled === false,
          "a recorded opt-out disables that row");
-  assert(off["AE_LLAMA_H3_I2V_V1"].enhance === false,
+  assert(off["AE_LLAMA_H3_T2V_V1"].enhance === false,
          "and the enhancement opt-out is independent of it");
-  assert(off["AE_LLAMA_H3_I2V_V1"].enabled === true,
+  assert(off["AE_LLAMA_H3_T2V_V1"].enabled === true,
          "disabling one template does not disable another");
 }
 

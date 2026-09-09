@@ -473,7 +473,10 @@ const uiFile = path.join(REPO, "extension", "workflows",
                          "AE_LLAMA_H3_I2V_V1.json");
 const manifestFile = path.join(REPO, "extension", "workflows",
                                "AE_LLAMA_H3_I2V_V1.manifest.json");
-const apiFile = path.join(REPO, "extension", "comfy-workflows",
+// The API half moved to tests/fixtures/authored-h3/ in 0.12.14 (WORKPLAN
+// 18 P9) rather than being deleted: it IS this converter's expected output
+// for the UI file above, which no core-only template can stand in for.
+const apiFile = path.join(REPO, "tests", "fixtures", "authored-h3",
                           "AE_LLAMA_H3_I2V_V1.json");
 const defsFile = path.join(REPO, "scripts", "comfy-node-defs.json");
 
@@ -560,10 +563,17 @@ assert(Comfy.readManifest(apiFile) !== null,
 const listed = Comfy.listWorkflows(path.join(REPO, "extension",
                                              "comfy-workflows"))
   .map((w) => w.name);
-assert(listed.indexOf("AE_LLAMA_H3_I2V_V1") !== -1,
+assert(listed.indexOf("AE_LLAMA_H3_T2V_V1") !== -1,
        "the seeded template is listed for the model to pick");
-assert(listed.indexOf("AE_LLAMA_H3_I2V_V1.manifest") === -1,
+assert(listed.indexOf("AE_LLAMA_H3_T2V_V1.manifest") === -1,
        "its sidecar is NOT listed as a workflow of its own");
+// The authored graph left the bundle in 0.12.14 (WORKPLAN 18 P9). Asserted
+// in the NEGATIVE as well, because "the basic is listed" passes just as
+// happily with both files present, and shipping both is what the move was
+// for: a buyer picking the authored one gets a graph needing seven packs.
+assert(listed.indexOf("AE_LLAMA_H3_I2V_V1") === -1,
+       "and the authored H3 graph is NOT in the shipped bundle any more " +
+       "(it is a fixture — tests/fixtures/authored-h3/README.md)");
 
 const applied = Comfy.injectParams(loaded, { prompt: "a red balloon", seed: 7 });
 assert(loaded["133"].inputs.noise_seed === 7,

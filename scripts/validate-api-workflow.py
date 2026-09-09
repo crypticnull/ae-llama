@@ -16,7 +16,7 @@ Usage (from the repo root, on a machine with ComfyUI):
         --comfy-code "<...>/ComfyUI-Installs/ComfyUI/ComfyUI" \
         --comfy-base "%USERPROFILE%/Documents/ComfyUI" \
         --extra-model-paths "%APPDATA%/ComfyUI/extra_models_config.yaml" \
-        extension/comfy-workflows/AE_LLAMA_H3_I2V_V1.json
+        extension/comfy-workflows/AE_LLAMA_H3_T2V_V1.json
 
 Exit 0 when valid; 1 when not, with every node error printed.
 """

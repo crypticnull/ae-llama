@@ -66,7 +66,7 @@ function argValue(name, dflt) {
 }
 const OPT = {
   url: argValue("--url", null),
-  workflow: argValue("--workflow", "AE_LLAMA_H3_I2V_V1"),
+  workflow: argValue("--workflow", "AE_LLAMA_H3_T2V_V1"),
   duration: parseFloat(argValue("--duration", "0.2")),
   width: parseInt(argValue("--width", "512"), 10),
   height: parseInt(argValue("--height", "288"), 10),

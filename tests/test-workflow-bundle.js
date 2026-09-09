@@ -312,6 +312,52 @@ shipped.forEach((t) => {
   });
 }
 
+// ------------------------------------- what the bundle can no longer do
+//
+// WORKPLAN 18 P9 replaced the minimax-h3 entry's graph with the core-only
+// AE_LLAMA_H3_T2V_V1 and moved the owner's authored AE_LLAMA_H3_I2V_V1 out
+// to tests/fixtures/authored-h3/. That graph was the LAST shipped template
+// declaring procedural.firstFrame, so as of 0.12.14 no bundled graph can
+// take a reference image at all: every image-to-video and image-to-image
+// path left the product with it.
+//
+// The panel is honest about it -- comfy.js refuses an image that lands on
+// no node and names the templates that would accept one, which is now the
+// branch that says "none of the templates alongside this one do"
+// (test-comfy-image-landed.js case 2 covers the branch, against a
+// synthetic folder). What nothing said is that the REAL bundle is now that
+// case. So the gap is pinned here, in BOTH directions, the way 18 P7a's
+// video-gate gap is pinned: a count that is not the expected one fails
+// whether it went up or down, and the day someone ships an i2v template
+// they update this line and the count with it.
+//
+// This is a GAP, not a rule. It is filed as WORKPLAN 18 P9a.
+{
+  const IMAGE_CAPABLE_SHIPPED = [];   // <- 18 P9a: should not stay empty
+  const capable = [];
+  fs.readdirSync(BUNDLE)
+    .filter((n) => /\.manifest\.json$/i.test(n))
+    .sort()
+    .forEach((n) => {
+      const mf = JSON.parse(fs.readFileSync(path.join(BUNDLE, n), "utf8"));
+      if ((mf.procedural || {}).firstFrame) {
+        capable.push(n.replace(/\.manifest\.json$/i, ""));
+      }
+    });
+  assert(capable.join(",") === IMAGE_CAPABLE_SHIPPED.slice().sort().join(","),
+         "the set of shipped templates that accept a reference image is " +
+         "exactly what this file says it is",
+         "found [" + (capable.join(", ") || "none") + "], expected [" +
+         (IMAGE_CAPABLE_SHIPPED.join(", ") || "none") + "]");
+  // Stated as its own assertion so the failure READS as the gap rather
+  // than as a list mismatch, and so it flips the moment 18 P9a is done.
+  assert(capable.length === 0,
+         "18 P9a is still open: no shipped template can take a reference " +
+         "image (if this fails, one now can -- close P9a and update the " +
+         "list above)",
+         capable.join(", ") || "none");
+}
+
 // --------------------------------------------- the catalog's own side
 
 // Every entry that NAMES a template must name one that is bundled AND

@@ -8,7 +8,7 @@
   "use strict";
 
   global.AELL = {
-    VERSION: "0.12.13",
+    VERSION: "0.12.14",
 
     // Release channel label, shown wherever the version is displayed.
     // Purely cosmetic — update comparisons use the numeric VERSION only.
@@ -268,45 +268,47 @@
       {
         name: "minimax-h3",
         label: "MiniMax H3 (RTX 50 series)",
-        // MEASURED 2026-09-09 on an RTX 5090 (32 607 MiB) by
+        // RE-MEASURED 2026-09-09 on an RTX 5090 (32 607 MiB) by
         // scripts/catalog-vram-probe.js, running the SHIPPED
-        // AE_LLAMA_H3_I2V_V1 through the panel's own comfy_generate on the
+        // AE_LLAMA_H3_T2V_V1 through the panel's own comfy_generate on the
         // MANAGED backend a buyer gets (ComfyUI 0.34.0, port 8288), with
-        // nvidia-smi streaming at 250 ms. Two runs at one seed, 26 969 and
-        // 26 944 MiB over an established idle floor — 25 MiB apart, so the
-        // reading is repeatable; the higher is published, as krea2's was.
+        // nvidia-smi streaming at 250 ms. Two runs at one seed: delta
+        // 26 080 MiB and 253 s BOTH times, peaks 2 MiB apart (29 646 /
+        // 29 648) over idle floors of 3566 / 3568 — the most repeatable
+        // reading in this catalog. Re-measured, and not optionally:
+        // WORKPLAN §18 P9 replaced this entry's graph with a core-only
+        // basic, and the previous reading (26 969 MiB / 80 s) was taken on
+        // the owner's authored AE_LLAMA_H3_I2V_V1, which no longer ships.
+        // A number kept across a change of graph prices a job the buyer is
+        // not given — the defect §18 P8 found on krea2 and the reason
+        // test-model-catalog.js now reads the size and the length out of
+        // the entry's OWN template.
         //
-        // READ measuredClipSeconds BEFORE THE NUMBER. This is a 2-second
-        // clip, and 2 seconds is NOT what the template renders. At its
-        // authored 15 s the same graph is a 362-frame latent that was
-        // still sampling at 901 s on this card when the probe cancelled it
-        // (peak 30 191 MiB, no OOM, 100% utilisation throughout) — so the
-        // authored length cannot be measured inside a pass at all, and a
-        // buyer who names no length waits over a quarter of an hour on the
-        // fastest card this catalog knows. Whether the panel should cap
-        // that default is a product call, filed as WORKPLAN 18 P3a; until
-        // it is answered the row states both lengths rather than quoting
-        // the short one as if it were the shipped job.
+        // measuredClipSeconds and authoredClipSeconds are EQUAL here, and
+        // that is the whole improvement. The authored graph asked for 15 s
+        // (362 frames) and was still sampling at 901 s on this card when
+        // the probe cancelled it, so the catalog could only ever hold a 2 s
+        // decomposition of a job nobody would wait for. The basic is
+        // authored at 124 frames — the frame count /object_info gives the
+        // node as its own default and the bottom of the range its tooltip
+        // calls trained (~124-362) — so the reading IS the shipped job:
+        // 5.17 s of video in 4m13s.
         //
-        // The gate holds either way: 32 GB covers the 26.3 GiB measured
-        // here AND the >=24.7 GiB the cancelled 15 s run had already put
-        // on the card before it was stopped.
+        // The gate stays 32 GB and the headroom is thin on purpose: peak
+        // 29 646 MiB of a 32 607 MiB card, over an idle floor of 3566, and
+        // the four weights are 40 503 MiB on disk. This entry is also
+        // Blackwell-only (the nvfp4 encoder), so 32 GB is the card it is
+        // offered to either way.
         kind: "video", sizeMB: 40503, minVramGB: 32, measured: true,
-        measuredVramMB: 26969, measuredSeconds: 80,
+        measuredVramMB: 26080, measuredSeconds: 253,
         measuredAt: "1344x768 (0.98 MP, the template's authored frame), " +
-                    "2 s / 56 frames, seed 12345",
-        measuredClipSeconds: 2,
-        authoredClipSeconds: 15,
-        authoredNote: "the template's own default is 15 s (362 frames), " +
-                      "which is what a request that names no length " +
-                      "renders: over 15 minutes on an RTX 5090, still " +
-                      "sampling at 901 s when the measurement was " +
-                      "cancelled. The figure above is a 2 s decomposition " +
-                      "of that job, not the job itself.",
+                    "5.17 s / 124 frames, seed 12345",
+        measuredClipSeconds: 5.17,
+        authoredClipSeconds: 5.17,
         measuredOn: "NVIDIA GeForce RTX 5090, ComfyUI 0.34.0 (managed), " +
                     "2026-09-09",
         requiresBlackwell: true,
-        workflowTemplate: "AE_LLAMA_H3_I2V_V1",
+        workflowTemplate: "AE_LLAMA_H3_T2V_V1",
         urls: [{
           url: "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
           sizeMB: 19999, dir: "diffusion_models"

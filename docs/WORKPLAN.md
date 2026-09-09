@@ -54,7 +54,7 @@ the night retrying it.
 | ~~4~~ | ~~sdxl basic template~~ **DONE 2026-09-09 (0.12.11).** `AE_LLAMA_SDXL_T2I_V1` + manifest (the sd15 seven-node shape, ckpt swapped, 1024x1024 latent), `workflowTemplate`, hash history, `ALLOW_NO_TEMPLATE` −sdxl, MEASURED block (9472 MiB / 6 s cold at 1024x1024). **The measurement disproved the catalog's gate**: `minVramGB` was 6 while the checkpoint alone is 6617 MiB, so an 8 GB card was being recommended a grind — gate is 12 now, `slowBelowGB`/`slowNote` removed, three test pins moved WITH their reasons. §18 P6a filed (wan22-5b's gate is under its own biggest file) | §18 P6 | — | 0.12.11 |
 | ~~5~~ | ~~wan22-5b basic t2v template~~ **DONE 2026-09-09 (0.12.12).** `AE_LLAMA_WAN22_5B_T2V_V1` + manifest (the VENDOR'S own `video_wan2_2_5B_ti2v.json`, read off the managed backend's disk, with its bypassed LoadImage DELETED because an API graph has no "muted"), `workflowTemplate`, hash history, `ALLOW_NO_TEMPLATE` −wan22-5b, MEASURED block. **§18 P6a is CLOSED and it was not close**: gate 8 -> **32** on 26 187 MiB measured, and a third run at 704x480 still cost 21 536 MiB, so the floor is the 17 304 MiB of weights and no size rescues a small card. Two 8 GB pins moved with their reasons. Two roots found en route: the authored-length rule could not see a frames-based template at all (fixed + verified by reintroduction), and `recommendGen`'s tie was being broken by ARRAY ORDER. §18 P7a (owner call) and §18 P7b filed | §18 P7 | — | 0.12.12 |
 | ~~6~~ | ~~krea2 core-only basic; the authored graph then leaves the bundle~~ **DONE 2026-09-09 (0.12.13).** `AE_LLAMA_KREA2_T2I_V1` + manifest (12 core nodes: the authored graph's own FIRST pass with the four custom packs, the second upscale pass, the enhancer switch and two dead `ConditioningZeroOut` nodes dropped), `workflowTemplate`, hash history, and the entry **RE-MEASURED** because its graph changed: 18 848 / 18 560 MiB, 8 s, 1920x1080. Gate stays 24 — the smaller reading does not lower it, because the three weights are 18 109 MiB resident and the next standard card down is 16 GB. `AE_LLAMA_KREA2_V1` left `extension/comfy-workflows/` for `tests/fixtures/authored-krea2/` (five suites use it as their only custom-node-heavy graph; that folder's README says which and why). The owner's installed copy survives — **verified**, chat-probe's `comfy_list_workflows` still lists it from `%APPDATA%`. Root finding en route, now a rule: an entry's `measuredAt` was never checked against its OWN template's size. §18 P8a filed | §18 P8 | — | 0.12.13 |
-| 7 | **START HERE.** H3 core-only basic; the authored graph then leaves the bundle | §18 P9 | items 2, 5 | yes |
+| ~~7~~ | ~~H3 core-only basic; the authored graph then leaves the bundle~~ **DONE 2026-09-09 (0.12.14).** `AE_LLAMA_H3_T2V_V1` + manifest (15 core nodes: the authored graph's sampling spine, with the five model-chain patches, the megapixel/seconds machinery and the RTX upscaler dropped -- eleven nodes and SEVEN custom packs gone), `workflowTemplate`, hash history, and the entry **RE-MEASURED** because its graph changed: 26 080 MiB and 253 s BOTH runs at 1344x768 x 124 frames. **The `authoredNote` is GONE and that is the win**: the basic is authored at 124 frames -- the node's own default and the bottom of the range /object_info calls trained -- so `measuredClipSeconds` == `authoredClipSeconds` == 5.17 and the catalog finally quotes the job the buyer gets, where the authored graph's 15 s default could only ever be quoted as a 2 s decomposition of a >15-minute render. Gate stays 32 (peak 29 646 of 32 607 MiB, and the nvfp4 encoder is Blackwell-only anyway). `AE_LLAMA_H3_I2V_V1` left `extension/comfy-workflows/` for `tests/fixtures/authored-h3/` (five suites use it; that folder's README says which and why -- it is now the repo's ONLY manifest with an `optionalNodes` block). The catalog's size rule, which SKIPPED H3 while its size arrived as megapixels, now applies to it and passes. §18 P9a filed | §18 P9 | items 2, 5 | 0.12.14 |
 | 8 | minimax-h3-int8 second API file | §18 P10 | item 7, 26 GB | yes |
 
 **OWNER, READ THIS ONE FIRST: §18 P7a.** Measuring wan22-5b (item 5)
@@ -73,6 +73,7 @@ NOTHING but the repo and are always takeable:
 | The vendor-enum fixture is a hand-taken snapshot with nothing forcing a refresh when the vendor build moves | §17l | no |
 | `download-gen-weight` re-downloads a weight that is already in another `comfyModelRoots` root and already listed by the backend (6.4 GB wasted, measured; the next one is 26 GB) | §18 P7b | yes |
 | krea2 and ltx-small are the only entries EXEMPT from the "a gate must hold its biggest weight file" rule, because their files carry no sizes | §18 P8a | yes |
+| **No shipped template can take a reference image any more** — i2v left the bundle with the authored H3 graph | §18 P9a | yes |
 | `weight-availability-probe.js` defaults to `comfyUrl`, so it cannot see the managed backend without `--url` | §17h | no |
 | Decide llama-server's lifetime: give it the same detach seam, or delete the reap that can never fire | §17i | yes |
 | `Setup.scanForModelRoots()` — probe a named shortlist, never scan drives | §19a | yes |
@@ -3646,6 +3647,12 @@ manifest and a graph, not panel code.
 Seven entries, two templates: sd15, sdxl, ltx-small, wan22-5b,
 minimax-h3-int8 have none; minimax-h3 = `AE_LLAMA_H3_I2V_V1` (i2v AND
 t2v via detach); krea2 = the owner's authored graph. Nothing catches it:
+**(As counted 2026-09-06. Closed since, except the two owner-gated
+seats: sd15 P5, sdxl P6, wan22-5b P7, krea2 P8 and minimax-h3 P9 all
+ship core-only basics now; `ALLOW_NO_TEMPLATE` is down to
+`[ltx-small, minimax-h3-int8]`. Both authored graphs have left the
+bundle. The count below is the original statement of the gap, kept
+because the reasoning under it is what the section is for.)**
 `test-model-catalog.js:229` skips entries with no template, `recommendGen`
 never checks renderability, and the nameless default is ALPHABETICAL
 (`tools.js:1958` `chosen = list[0]` — "a red apple" goes to the 40 GB H3
@@ -3817,7 +3824,7 @@ taken on what a buyer gets — so nothing measured after §17c needs a
 | ~~P6~~ | local | **DONE 2026-09-09 (0.12.11).** sdxl basic + manifest + `workflowTemplate` + hash + allowlist −sdxl + a measured block; the gate moved 6 -> 12 on the measurement and `slowBelowGB` went with it. §18 P6a filed | 0.12.11 | — |
 | ~~P7~~ | local | **DONE 2026-09-09 (0.12.12).** wan22-5b basic + manifest + `workflowTemplate` + hash + allowlist −wan22-5b + a MEASURED block; `--frames` verified through `comfy-probe --frames 25` (640x384, 1.042 s @ 24 fps, imported into AE); the floor re-pin moved BOTH 8 GB pins. §18 P6a closed, §18 P7a (owner) and §18 P7b filed | 0.12.12 | — |
 | ~~P8~~ | local | **DONE 2026-09-09 (0.12.13).** krea2 basic + manifest + `workflowTemplate` + hash + a RE-MEASURED block (18 848 MiB / 8 s at 1920x1080, gate unchanged at 24); the authored `AE_LLAMA_KREA2_V1` moved to `tests/fixtures/authored-krea2/` and the three probe scripts that DEFAULTED to it now default to the basic. §18 P8a filed | 0.12.13 | — |
-| P9 | local | H3 basic; on proof the authored graph leaves the bundle | yes | P3, P7 |
+| ~~P9~~ | local | **DONE 2026-09-09 (0.12.14).** H3 basic + manifest + `workflowTemplate` + hash + a RE-MEASURED block (26 080 MiB / 253 s at 1344x768 x 124 f, gate unchanged at 32); the authored `AE_LLAMA_H3_I2V_V1` moved to `tests/fixtures/authored-h3/` and the two probe scripts that DEFAULTED to it now default to the basic. `authoredNote` removed -- measured == authored at last. §18 P9a filed | 0.12.14 | — |
 | P10 | local | h3-int8: download the 26 GB encoder, second API file — confirm from the UI source first | yes | P9; 26 GB |
 | P11 | remote | `package-zxp.ps1` `$excludeDirs` += `workflows` | yes | — |
 | P12 | remote | **HALF DONE 2026-09-09:** `ALLOW_UNMEASURED` is `[]` (minimax-h3 was its last seat and is now measured). `ALLOW_NO_TEMPLATE` is down to `[ltx-small, minimax-h3-int8]` — sd15 left it in P5, sdxl in P6, wan22-5b in P7. Also EMPTY now: `GATE_UNDER_ITS_BIGGEST_FILE`, whose only seat was wan22-5b (§18 P6a, closed by measurement). Still open: `ALLOW_NO_TEMPLATE` must reach `[ltx-small]` and STOP there (Q1) | tests only | P5–P10 |
@@ -3903,7 +3910,7 @@ half of `COMFY_CATALOG` gates at:
 |---|---|---|
 | `ltx-small` | 6 | **none** (permanent `ALLOW_NO_TEMPLATE` seat, owner Q1) |
 | `wan22-5b` | **32** (was 8) | `AE_LLAMA_WAN22_5B_T2V_V1` |
-| `minimax-h3` | 32 | `AE_LLAMA_H3_I2V_V1` |
+| `minimax-h3` | 32 | `AE_LLAMA_H3_T2V_V1` (was the authored `AE_LLAMA_H3_I2V_V1`; §18 P9) |
 | `minimax-h3-int8` | 32 | none (§18 P10) |
 
 So a 4090, a 4080, a 3090, a 4060 — every card below 32 GB — is
@@ -4034,6 +4041,59 @@ to 8.
 
 No GPU, no backend, no AE — the sizes are already on this machine and
 `weight-availability-probe` prints them. Repo-only after that.
+
+## 18 P9a. No shipped template can take a reference image any more (filed 2026-09-09, local session)
+
+**Found by doing §18 P9, and it is that item's own cost.** The authored
+`AE_LLAMA_H3_I2V_V1` was the LAST bundled graph declaring
+`procedural.firstFrame`. It left the bundle for the core-only
+`AE_LLAMA_H3_T2V_V1`, and measured after the move: **zero** of the five
+shipped manifests declare `procedural.firstFrame`, and **no** shipped
+graph contains a `LoadImage` node at all. So image-to-video and
+image-to-image are both gone from the product as of 0.12.14.
+
+**The panel is honest about it, which is why this is a gap and not a
+bug.** `comfy.js:1882` refuses an image that lands on no node -- "the
+upload succeeded, so everything up to here looked right, and the render
+would finish as text-to-image, the reference silently ignored" -- and the
+refusal names the templates that would accept one. That branch now always
+takes its empty form: *"none of the templates alongside this one do"*.
+The user is told the truth; they just cannot do the thing.
+
+Pinned in BOTH directions so it cannot widen or close quietly
+(`tests/test-workflow-bundle.js`): `IMAGE_CAPABLE_SHIPPED = []` fails if
+the set changes either way, and a second assertion states the gap in
+words so the failure reads as "P9a is closed now" rather than as a list
+mismatch. Negative control run: declaring `procedural.firstFrame` on the
+H3 basic turns both red. `test-comfy-image-landed.js` case 2 already
+covered the empty-list REFUSAL, against a synthetic folder -- what
+nothing said was that the real bundle is now that case.
+
+**Two ways out, and they are not equal.**
+
+1. **A sibling i2v file per video entry** -- `AE_LLAMA_H3_I2V_V2` and
+   `AE_LLAMA_WAN22_5B_I2V_V1`, each a copy of its t2v basic with the
+   optional image input wired and `procedural.firstFrame` declared.
+   `first_frame` is OPTIONAL on `MiniMaxH3ImageToVideo` and `start_image`
+   is OPTIONAL on `Wan22ImageToVideoLatent` (both measured from
+   `/object_info`, 2026-09-09), so both models can do it today. The cost
+   is the one the wan22-5b basic already wrote down: a `LoadImage` in a
+   shipped API graph needs a filename that exists in the BACKEND's input
+   folder or `validateGraphInputs` refuses the template before it is
+   queued -- an API graph has no "muted". Whatever placeholder is chosen
+   has to be one a fresh managed install actually has, and that is a
+   measurement, not a guess.
+2. **`firstFrame.detachable` on the existing t2v basics** -- one file per
+   entry instead of two, the shape the authored H3 graph used: the panel
+   DELETES the LoadImage when no image is given. Fewer files, but it
+   makes every text-to-video render depend on a node that only exists to
+   be removed, and it re-introduces the placeholder-filename problem for
+   the t2v path as well, which is exactly what §18 P9 took out.
+
+Option 1 is the recommendation: it keeps each basic a basic, and the
+contract already says refinements arrive as SIBLINGS under new names.
+Not done in this pass because it needs the placeholder measurement above
+and §18 P9's rule is one template per pass, proven end to end.
 
 ## 18 P3a. H3's authored default is a >15-minute render, and that is what a
 user who names no length gets (filed 2026-09-09, local session)

@@ -168,14 +168,22 @@ const comfyWindow = {
 const Comfy = comfyWindow.Comfy;
 
 const WF_DIR = path.join(REPO, "extension", "comfy-workflows");
-const H3_FILE = path.join(WF_DIR, "AE_LLAMA_H3_I2V_V1.json");
+// The FIELD case (2026-08-30) was measured on the authored H3 graph, which
+// left the bundle in 0.12.14 for the core-only AE_LLAMA_H3_T2V_V1 -- see
+// tests/fixtures/authored-h3/README.md. It stays the graph replayed here on
+// purpose: its manifest carries NO sizeMB, so genNeedMBFor has to price it
+// off the disk, which is the arithmetic this file exists to pin. Every
+// shipped basic carries sizeMB and would take the override branch instead.
+const H3_FILE = path.join(REPO, "tests", "fixtures", "authored-h3",
+                          "AE_LLAMA_H3_I2V_V1.json");
 // Moved out of the bundle by WORKPLAN 18 P8 (fixture README says why).
 const K_FILE = path.join(REPO, "tests", "fixtures", "authored-krea2",
                          "AE_LLAMA_KREA2_V1.json");
 const h3Graph = () => JSON.parse(fs.readFileSync(H3_FILE, "utf8"));
 const kGraph = () => JSON.parse(fs.readFileSync(K_FILE, "utf8"));
 const h3Manifest = JSON.parse(fs.readFileSync(
-  path.join(WF_DIR, "AE_LLAMA_H3_I2V_V1.manifest.json"), "utf8"));
+  path.join(REPO, "tests", "fixtures", "authored-h3",
+            "AE_LLAMA_H3_I2V_V1.manifest.json"), "utf8"));
 
 let layer1Done;
 fakeComfy(FIELD_LISTS, (server, url, hits) => {

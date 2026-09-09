@@ -51,6 +51,13 @@
     ],
     "AE_LLAMA_KREA2_T2I_V1.manifest.json": [
       "41f61fd86bbef48bca37e7b05a8832a40c2bfae4"
+    ],
+    "AE_LLAMA_H3_T2V_V1.json": [
+      "9c65503ce164fbe87ef9bd4ab959da348951a25f"
+    ],
+    "AE_LLAMA_H3_T2V_V1.manifest.json": [
+      "f7c4678d736a63266743d3b7987ab77f8dc70906",
+      "4beb144d079688ae670df69b1fe89f6b56595bd5"
     ]
   }
 }

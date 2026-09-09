@@ -43,7 +43,12 @@ const window = {
 eval(fs.readFileSync(path.join(REPO, "extension", "js", "comfy.js"), "utf8"));
 const Comfy = window.Comfy;
 
-const TEMPLATE = path.join(REPO, "extension", "comfy-workflows",
+// The graph the field failure above was measured on. It left the bundle in
+// 0.12.14 (WORKPLAN 18 P9) for the core-only AE_LLAMA_H3_T2V_V1 and is kept
+// as a fixture — see tests/fixtures/authored-h3/README.md. It is still the
+// case worth replaying here because its prefix carries TWO %date:…% tokens
+// in one string, which no shipped template does.
+const TEMPLATE = path.join(REPO, "tests", "fixtures", "authored-h3",
                            "AE_LLAMA_H3_I2V_V1.json");
 const template = () => JSON.parse(fs.readFileSync(TEMPLATE, "utf8"));
 
@@ -76,6 +81,45 @@ const WHEN = new Date(2026, 7, 27, 4, 5, 9);
   // Idempotent — a second pass has nothing left to do.
   eq(Comfy.expandFilenameTokens(g, WHEN).length, 0,
      "running it twice changes nothing the second time");
+}
+
+// ------------------------------------------ every SHIPPED template
+//
+// The block above replays the graph the bug was FOUND on, and that graph is
+// now a fixture. Replaying only a fixture would leave the actual bundle
+// unchecked: the field failure was a token that reached the server
+// unexpanded, so what has to hold is that no file the panel ships can post
+// a colon. Walk them all rather than naming one, so a template added by a
+// later pass is covered on the day it lands.
+{
+  const dir = path.join(REPO, "extension", "comfy-workflows");
+  const names = fs.readdirSync(dir)
+    .filter((n) => /\.json$/i.test(n))
+    .filter((n) => !/\.manifest\.json$/i.test(n))
+    .filter((n) => n.charAt(0) !== ".")
+    .sort();
+  assert(names.length > 0, "there are shipped templates to check at all");
+  let withTokens = 0;
+  names.forEach((n) => {
+    const g = JSON.parse(fs.readFileSync(path.join(dir, n), "utf8"));
+    const prefixes = () => Object.keys(g)
+      .map((id) => ((g[id] || {}).inputs || {}).filename_prefix)
+      .filter((p) => typeof p === "string");
+    if (prefixes().some((p) => p.indexOf("%") !== -1)) withTokens++;
+    Comfy.expandFilenameTokens(g, WHEN);
+    const bad = prefixes().filter((p) => p.indexOf(":") !== -1);
+    assert(bad.length === 0,
+           n + ": no colon survives expansion into its filename_prefix" +
+           (bad.length ? " [" + bad.join("; ") + "]" : ""));
+    eq(Comfy.expandFilenameTokens(g, WHEN).length, 0,
+       n + ": expansion is idempotent");
+  });
+  // Otherwise the loop above passes by checking nothing — the failure mode
+  // this whole file exists to prevent needs at least one real token in the
+  // bundle to act on.
+  assert(withTokens > 0,
+         "at least one shipped template still carries a %date:…% token (" +
+         withTokens + " of " + names.length + ")");
 }
 
 // ------------------------------------------------- the date grammar

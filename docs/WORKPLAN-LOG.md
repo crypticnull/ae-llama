@@ -22508,3 +22508,211 @@ probes' own design: `AELlama_KREA2__00001_.png` / `__00004_.png` in
 `logs/comfy-probe/`, `__00002_.png` / `__00003_.png` in
 `logs/catalog-vram/`, and
 `%APPDATA%\AE-Llama\generated\AELlama_KREA2__00005_.png` from chat-probe.
+
+## 2026-09-09 (local session) — H3 has a core-only graph that renders, and its measurement is finally the job the buyer gets (NEXT UP 7 / §18 P9, 0.12.14)
+
+**Item: NEXT UP 7 (§18 P9), the "START HERE" row.** Harness green first —
+`run-ae-selftest.ps1` **770/770** — so the list applied. Managed backend
+already up on 8288 from the previous pass; all four H3 weights already on
+disk (40 503 MiB), so nothing had to be downloaded. The probes print gate 0
+themselves: `from=file saved=true
+dataRoot=C:\Users\mr\AppData\Roaming\AE-Llama`.
+
+**What shipped.** `extension/comfy-workflows/AE_LLAMA_H3_T2V_V1.json` plus
+its manifest: fifteen core nodes, which are the AUTHORED graph's sampling
+spine and nothing else — UNETLoader / CLIPLoader / VAELoader x2 /
+MiniMaxH3SigmaShift / MiniMaxH3ImageToVideo / RandomNoise / KSamplerSelect
+/ BasicScheduler / BasicGuider / SamplerCustomAdvanced / VAEDecode /
+VAEDecodeAudio / CreateVideo / SaveVideo. Every class and every input
+re-confirmed against the RUNNING backend's `/object_info`, which mattered:
+eleven of the fifteen are absent from `scripts/comfy-node-defs.json`, and
+`/object_info` reports `MiniMaxH3ImageToVideo` and `MiniMaxH3SigmaShift` as
+`comfy_extras.nodes_minimax_h3` — CORE, which is the easy thing to get
+backwards.
+
+Eleven nodes were dropped, in four groups, each with its reason written into
+the manifest:
+
+- **the five model-chain patches** — `ModelPreviewOverrideKJ`,
+  `ApplyMiniMaxH3FirstBlockCache`,
+  `MiniMaxH3MemoryEfficientSageAttentionPatch`,
+  `MiniMaxH3ScheduledSolAttentionPatch`, `easy cleanGpuUsed`. All pack
+  nodes, all speed-or-VRAM trades rather than part of the render. This is
+  the point of the item: **seven** custom packs a buyer does not have, and
+  the authored graph only survived a bare backend through the panel's
+  `optionalNodes` rescue.
+- **the size machinery** — `ResolutionSelector` + ComfyLiterals `Float`, a
+  megapixel float driving an aspect combo. `MiniMaxH3ImageToVideo` takes
+  literal `width`/`height` (INT, default 1344/768, step 32), so the basic
+  carries the literal **1344x768** the authored graph resolved to.
+- **the length machinery** — `ComfyMathExpression` + two `PrimitiveFloat`s,
+  seconds x fps snapped to the model's 17k+5 grid. `/object_info` gives
+  `length` a step of 17 and a default of 124 directly, so the basic carries
+  a literal frame count and the fps is a literal on `CreateVideo`.
+- **the two terminal extras** — `RTXVideoSuperResolution` (needs the NVIDIA
+  app video SDK, and rescaled the finished frames to a fixed 1920x1080) and
+  `PlaySound|pysssss` (a chime). Dropping the upscaler means the saved file
+  IS the sampled 1344x768, which is the honest thing for a basic to save.
+
+Kept: **`MiniMaxH3SigmaShift`**, because it is core AND it is model
+configuration rather than an optimisation — it sets the video/audio sigma
+schedule H3 samples on. Also kept: **both VAE loaders and
+`VAEDecodeAudio`**. fl2va generates video AND audio from one latent, so the
+single LATENT output is decoded twice and `CreateVideo` takes both;
+dropping the audio half would ship a silent clip from a model whose point is
+that it is not silent. Verified in the field — AE's own footage read of the
+imported mp4 says `hasAudio: true`.
+
+**THE LENGTH IS THE ITEM, and it closes the ugliest row in the catalog.**
+`/object_info`'s tooltip for `length` reads *"Frame count at 24 fps, snapped
+up to the model's 17k+5 grid (124 = ~5s; trained range is ~124-362, longer
+is untested)"*, and its default is **124**. The AUTHORED graph asked for
+15 s — 362 frames, the TOP of that range — which is why §18 P3a exists: that
+job was still sampling at 901 s on an RTX 5090 when the probe cancelled it,
+so the catalog could only ever hold a 2 s decomposition of a render nobody
+would wait for, plus an `authoredNote` apologising for the gap. The basic is
+authored at 124 frames instead: the node's own default and the BOTTOM of the
+range its author calls trained. So `measuredClipSeconds` ==
+`authoredClipSeconds` == **5.17**, the `authoredNote` is **deleted**, and the
+row now quotes the job a buyer who names no length actually gets.
+
+To be explicit, because it would be easy to read this as an owner call being
+taken: **§18 P3a (b) is untouched and still owner-gated.** That question is
+whether the PANEL should cap a duration, which is `injectParams` behaviour.
+What a template's own literal `length` is set to is template authoring, and
+it is what §18 P9 asked for.
+
+**The measurement, re-taken because the graph changed (the §18 P8 rule).**
+The old reading — 26 969 MiB / 80 s — was taken on `AE_LLAMA_H3_I2V_V1`,
+which no longer ships. Two runs of `catalog-vram-probe --entry minimax-h3`
+on the managed backend, `/free` before each:
+
+    run 1   idle 3566 -> peak 29 646, DELTA 26 080 MiB, 253 s, 1344x768 124f
+    run 2   idle 3568 -> peak 29 648, DELTA 26 080 MiB, 253 s, 1344x768 124f
+
+Identical deltas and identical wall clocks, peaks 2 MiB apart — the most
+repeatable reading in this catalog. **`minVramGB` stays 32** and the
+headroom is thin on purpose: peak 29 646 of a 32 607 MiB card, and the
+nvfp4 encoder is Blackwell-only, so 32 GB is the card this entry is offered
+to either way.
+
+**The chain, all of it green.**
+
+    weight-availability-probe        4 weight slots, 0 unloadable; 5 enums, 0 missing
+    comfy-probe --no-ae 512x288 22f  rendered, 24s
+    catalog-vram-probe x2            26 080 MiB / 253 s, both runs
+    comfy-probe --workflow           all verdicts; AE imported it, 640x384
+                                     0.917s @ 24fps, hasAudio true
+    chat-probe --steps 1,13          pass, 2/2, 4 rounds
+    86 stubbed test files            all green
+    run-ae-selftest.ps1              770/770
+
+**A COVERAGE GAIN worth naming, because §18 P8 predicted it.** That pass
+added a rule reading a template's literal `width`+`height` off its own latent
+node and requiring `measuredAt` to repeat it — and it recorded that H3 was
+SKIPPED by that rule, since its size arrived as MEGAPIXELS through a
+`ResolutionSelector` and there was no pixel pair in the graph to compare
+against. The basic carries a literal pair, so **the rule now applies to
+minimax-h3 and passes.** Negative controls run both ways: relabelling
+`measuredAt` as 1920x1080 fails with *"measuredAt names the size its OWN
+shipped template renders (1344x768, the literal width+height on its
+MiniMaxH3ImageToVideo)"*, and putting `authoredClipSeconds` back to 15 fails
+with *"the template's OWN default (5.17 s from 124 frames / 24 fps)"*. Every
+shipped template is now inside both halves of that rule.
+
+**THE FINDING — §18 P9a, filed in WORKPLAN, and it is this item's own
+cost.** `AE_LLAMA_H3_I2V_V1` was the LAST bundled graph declaring
+`procedural.firstFrame`. Measured after the move: **zero** of the five
+shipped manifests declare one and **no** shipped graph contains a
+`LoadImage` node at all, so image-to-video and image-to-image are both gone
+from the product as of 0.12.14. The panel is HONEST about it —
+`comfy.js:1882` refuses an image that lands on no node rather than rendering
+text-to-image and ignoring the reference, and that refusal now always takes
+its empty form, *"none of the templates alongside this one do"* — but the
+capability is gone. `test-comfy-image-landed.js` case 2 already covered that
+BRANCH against a synthetic folder; what nothing said was that the real
+bundle is now that case. Pinned in `test-workflow-bundle.js` in both
+directions (`IMAGE_CAPABLE_SHIPPED = []` plus a second assertion phrased so
+the failure reads *"18 P9a is closed now"*), negative control verified by
+declaring `firstFrame` on the H3 basic. P9a lays out two ways back with what
+each costs and recommends the sibling-file one; both need a placeholder
+`LoadImage` filename that a FRESH managed install really has, which is a
+measurement and not a guess, so it is not bundled into this pass.
+
+**The authored graph left the bundle, and did not get deleted.**
+`AE_LLAMA_H3_I2V_V1.json` + manifest moved to `tests/fixtures/authored-h3/`
+with a README naming what each suite needs it for: `test-workflow-adapt`
+(it IS the converter's expected output for the UI file in
+`extension/workflows/`), `test-comfy-optional-nodes` (**it is now the only
+manifest in the repo with an `optionalNodes` block at all** — five
+bypasses, one substitution `Float` -> core `PrimitiveFloat` with an
+`as: number` coercion, and a terminal node with no consumer),
+`test-workflow-manifests` (the three 2026-08-27 pack-attribution
+corrections), `test-comfy-filename-tokens` (a prefix carrying TWO `%date:%`
+tokens in one string) and `test-weight-availability` (its manifest carries
+NO `sizeMB`, so `genNeedMBFor` has to price it off the DISK, which is the
+arithmetic that file exists to pin — every shipped basic carries `sizeMB`
+and takes the override branch instead). Four synthetic-fixture suites had
+the old name as a plain string and were renamed to the new one. Two probe
+scripts DEFAULTED to the graph that left (`comfy-probe.js --workflow`,
+`history-floor-probe.js`) and would have failed on their next bare
+invocation — repointed, same class the krea2 pass found in three scripts.
+`test-comfy-filename-tokens` also GAINED a walk over every shipped
+template asserting no colon survives expansion, because it had been
+replaying only the one graph that has now become a fixture.
+
+**A DIAGNOSTIC TRAP THAT COST ME THE MANIFEST, written down so the next
+pass does not repeat it.** Doing a negative control the way earlier passes
+did — back up a file, break it, assert red, restore — I wrote the backup
+with Python to `/tmp/mf.bak` and restored it with `cp`. **Python on Windows
+does not resolve `/tmp`**: it resolved to `X:\tmp\`, which does not exist,
+so the backup was never written and the script died. Bash's `/tmp` IS
+`C:\Users\mr\AppData\Local\Temp`, which is SHARED BETWEEN PASSES — and a
+`/tmp/mf.bak` from an earlier night was still sitting there holding the
+**sd15** manifest. The `cp` "restored" that over the H3 manifest, and
+because the file was still untracked, git could not put it back; it had to
+be re-authored. Two rules out of it: keep scratch copies INSIDE the repo
+(`$FILE.negctl` next to the file) so a stale one cannot exist, and never
+restore from a path you did not just verify you wrote. One cosmetic
+consequence left on disk: `.hash-history.json` now holds two hashes for
+`AE_LLAMA_H3_T2V_V1.manifest.json`, the intermediate form and the shipped
+one. That file is append-only by design (the H3 authored manifest has six)
+and its job is only to recognise an unedited installed copy, so the extra
+entry is harmless — noted rather than pruned.
+
+**Verification.** All 86 stubbed test files pass. `node
+scripts/workflow-hash-history.js` recorded the new hashes; the authored
+graph's hashes STAY in that file forever, which is what tells
+`ensureDataDirs` an installed copy is an unedited shipped one.
+`capability-report.js` regenerated and `test-capability-doc.js` green; the
+curated half of `docs/CAPABILITIES.md` was rewritten where this arc had made
+it false (it still said "TWO of the three are panel-runnable" and still
+promised that with no image the reference `LoadImage` is detached — five
+basics now, and no template takes an image). `docs/HANDOFF.md` and two live
+statements in `docs/WORKPLAN.md` (§18's gap count and §18 P7a's template
+table) updated the same way. Harness re-run after every change: **770/770
+PASSED**. Bumped 0.12.13 -> **0.12.14** (`extension/` changed: version.js,
+two new bundle files, two removed, the hash history).
+
+**One reported failure that was MINE, not a regression.** My first
+`chat-probe --steps 12,13` went red on step 13 — and the reason is that
+step 13 imports into the comp step 1 creates, so running it without step 1
+has nowhere to put the file. Re-run as `--steps 1,13` (which is what the
+krea2 pass used) it is **2/2, 4 rounds**. Worth recording because the
+§18 verification chain is written as "`chat-probe --steps 12,13`" and taking
+that literally fails for a reason that has nothing to do with the item. En
+route a second, genuinely flaky failure appeared once: the small model
+invented `workflow: "simple_inpaint"`, got the grounded roster back, and
+gave up instead of re-calling with a real name. It did re-call correctly on
+both later runs, so it is model nondeterminism rather than a broken path —
+but a model that abandons after ONE grounded error is worth a look if it
+recurs.
+
+**State left behind.** AE running and untouched, project not closed —
+`chat-probe` and `comfy-probe` removed every item they made (`cleanup:
+removed 2 project item(s)`). Managed backend UP on 8288, queue empty.
+Evidence files left on disk by the probes' own design:
+`AELlama_MiniMaxH3__00001_.mp4` and `__00004_.mp4` in `logs/comfy-probe/`,
+`__00002_.mp4` / `__00003_.mp4` in `logs/catalog-vram/`, and
+`%APPDATA%\AE-Llama\generated\AELlama_KREA2__00006_.png` / `__00007_.png`
+from the chat-probe runs.

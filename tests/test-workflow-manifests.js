@@ -90,8 +90,10 @@ function read(rel) {
   assert(!krea.some((c) => /^[0-9a-f]{8}-[0-9a-f]{4}-/.test(c)),
          "the subgraph container UUID is not reported as a node class");
 
+  // Moved out of the bundle by WORKPLAN 18 P9 (tests/fixtures/authored-h3/
+  // README.md says why); still the repo's richest API-format graph.
   const api = attributor.classesOf(
-    path.join(REPO, "extension/comfy-workflows/AE_LLAMA_H3_I2V_V1.json"));
+    path.join(REPO, "tests/fixtures/authored-h3/AE_LLAMA_H3_I2V_V1.json"));
   assert(api.indexOf("SaveVideo") !== -1,
          "API-format graphs are enumerated by class_type");
 }
@@ -237,7 +239,7 @@ PAIRS.forEach(function ([rel, kind]) {
 {
   // These three pin measurements from the running loader on 2026-08-27. Each
   // replaced a claim that read entirely plausible and was wrong.
-  const mf = read("extension/comfy-workflows/AE_LLAMA_H3_I2V_V1.manifest.json");
+  const mf = read("tests/fixtures/authored-h3/AE_LLAMA_H3_I2V_V1.manifest.json");
   const packOf = (cls) => {
     const e = (mf.customNodes || []).find((e) => (e.nodes || []).indexOf(cls) !== -1);
     return e ? e.pack : null;

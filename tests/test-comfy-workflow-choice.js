@@ -33,11 +33,11 @@ function assert(cond, msg) {
 // A workflow dir shaped like the one the panel seeds: two real
 // templates, one format example, one manifest sidecar.
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "aell-wf-"));
-fs.writeFileSync(path.join(dir, "AE_LLAMA_H3_I2V_V1.json"), JSON.stringify({
+fs.writeFileSync(path.join(dir, "AE_LLAMA_H3_T2V_V1.json"), JSON.stringify({
   "1": { class_type: "CheckpointLoaderSimple",
          inputs: { ckpt_name: "real-video.safetensors" } }
 }));
-fs.writeFileSync(path.join(dir, "AE_LLAMA_H3_I2V_V1.manifest.json"),
+fs.writeFileSync(path.join(dir, "AE_LLAMA_H3_T2V_V1.manifest.json"),
                  JSON.stringify({ kind: "video",
                                   catalogEntry: "minimax-h3",
                                   models: [] }));
@@ -87,7 +87,7 @@ assert(listed[0].name !== ".hash-history",
 assert(byName["example-txt2img"].example === true,
        "a template holding CHANGE-ME is flagged as an example");
 assert(byName["AE_LLAMA_KREA2_V1"].example === false &&
-       byName["AE_LLAMA_H3_I2V_V1"].example === false,
+       byName["AE_LLAMA_H3_T2V_V1"].example === false,
        "and the real ones are not");
 assert(listed.map(w => w.name).indexOf("example-txt2img") !== -1,
        "it is still LISTED — the flag is what the tools go by, so the " +
@@ -171,7 +171,7 @@ step(function (done) {
   // SUPERSEDES the old expectation. The default WAS list[0] — the
   // alphabet — and this test pinned that as correct because nothing
   // better existed. With the shipped bundle it means "a picture of a red
-  // apple" is handed to AE_LLAMA_H3_I2V_V1: a 40 GB Blackwell-only VIDEO
+  // apple" is handed to AE_LLAMA_H3_T2V_V1: a 40 GB Blackwell-only VIDEO
   // graph, chosen because ae_llama_h3 sorts before ae_llama_krea2.
   //
   // Comfy.resolveWorkflow decides now, and a request with no frames and
@@ -197,7 +197,7 @@ step(function (done) {
                 "import": false } }, function (r) {
     assert(r.ok, "a generation asking for a duration runs: " +
            (r.ok ? "" : r.error));
-    assert(/AE_LLAMA_H3_I2V_V1\.json$/.test(ranWith[0] || ""),
+    assert(/AE_LLAMA_H3_T2V_V1\.json$/.test(ranWith[0] || ""),
            "and goes to the VIDEO template (ran: " + ranWith[0] + ")");
     done();
   });
