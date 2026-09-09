@@ -3887,6 +3887,31 @@ None of it blocks §18.
 
 ## 20. The loop cannot tell working from hung (filed 2026-09-08)
 
+### ROOT CAUSE FOUND 2026-09-08 (local session) — read this before 20a
+
+The bypass was lost to **a bare `--` inside the brief**, and the break
+dates from **2026-09-05 (`2d2e034`), not 09-08** — four nights, not two.
+PS 5.1 shreds the multi-line prompt into ~18 argv fragments; one is the
+`--` from `"SUPERSEDES: <lines> -- <what changed>"`; `claude.exe` 2.1.265
+honours a bare `--` as end-of-options, so the trailing
+`--dangerously-skip-permissions` became prompt text. The parser ignores
+unknown flags silently, so nothing errored. `-p` also got only ~350
+characters of the brief.
+
+**The "PS 5.1 quoting alone" candidate was retired on bad evidence.** It
+rested on "8 quotes ran the WORKING 09-06 nights" — but there were no
+loop runs on 09-06. The last loop log before 09-08 is 09-02; §18 P0-P2
+and P4 were pull-request merges `(#73)`, `(#74)`. Loop success was
+inferred from overnight commits. Quoting WAS the cause; quote COUNT was
+never the variable.
+
+Handoff item 4 ("which change fixed it") is answered: **both are
+independently sufficient**, so there is nothing to settle. Full working
+in `docs/WORKPLAN-LOG.md`, entry of 2026-09-08 (local session).
+
+20a and 20b are still exactly as needed as before — the loop still
+cannot tell working from hung. Only the cause narrative changes.
+
 `claude -p` returns its output in ONE block at the end, so a pass that is
 working normally writes no log line for its entire 6-10 minute run. The
 loop logs the pass start and then nothing until the pass ends.
@@ -3927,6 +3952,23 @@ were started and all three were killed before reaching a verdict. Run
 prints `Pass committed <sha>` or `Pass produced no commit`. Until that
 has been seen once, the loop is not known to work end to end and no
 overnight run should be started.
+
+### 20d. A guard test for the pass invocation — takeable, no bump
+
+Filed 2026-09-08 from the root cause above. Nothing stops a future brief
+edit from re-opening this: the failure is silent at every layer, and the
+repo's own pure-ASCII rule is what turns an em-dash into the `--` that
+does the damage.
+
+Add a stubbed Node test that builds the pass argument vector the way
+`run-local-agent.ps1` does and asserts the bypass survives as a REAL
+flag — not merely that the string appears somewhere in argv, which is
+what it did on all four broken nights. The distinction is the whole bug.
+
+The brief lives in the `.ps1`, so the test has to reach into it rather
+than re-declare it; a copy of the prompt in the test is a copy that will
+drift, and a test that passes against a stale copy of the thing it
+guards is the preflight mistake again.
 
 ## Out of scope for the local session (remote builds these)
 

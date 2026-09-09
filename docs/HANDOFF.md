@@ -32,12 +32,11 @@ plain English; the model calls tools; the panel executes them in AE.
 - `docs/CAPABILITIES.md` — the whole product in one place; the tool table
   is GENERATED (`node scripts/capability-report.js`) and CI-enforced fresh
 
-**Current version: 0.12.3.** Branch: `claude/ae-plugin-llama-cpp-f13g3x`.
-Suite is 78/79 green — the one failure, `test-ffmpeg-export.js`, is
-genuinely Windows-absolute-path-bound and passes on the owner's machine.
-It failed in the container only. **Verify that locally and, if it passes,
-say so in the log** — it has been carried as a "known container failure"
-for weeks and nobody has confirmed it from Windows.
+**Current version: 0.12.4.** Branch: `claude/ae-plugin-llama-cpp-f13g3x`.
+Suite is **79/79 green**. `test-ffmpeg-export.js`, carried for weeks as a
+"known container failure", was confirmed on Windows 2026-09-08 — 154
+checks, exit 0. It is genuinely Windows-absolute-path-bound and failed in
+the container only. The standing "78/79" is retired.
 
 ### Shipping — BUMP OR IT DOES NOT SHIP
 
@@ -123,7 +122,7 @@ exists for.
 | managed policy | `C:\ProgramData\ClaudeCode\managed-settings.json` does not exist |
 | the CLI gating the flag | a manual headless call from the repo root wrote a file AND ran node |
 | the WMI detach | the 01:25 run was WMI-detached, the 01:44 run was in-window; both failed identically |
-| PS 5.1 quoting alone | the prompt already carried **8** double quotes at `e7aecab`, the version that ran the WORKING 09-06 nights (12 after the §19 edit) |
+| ~~PS 5.1 quoting alone~~ | **WRONG — corrected 2026-09-08 (local). Quoting WAS the cause.** This row rested on "8 quotes ran the WORKING 09-06 nights"; there were no loop runs on 09-06 (last loop log 09-02; §18 P0-P2 and P4 were PR merges #73/#74). Quote COUNT was never the variable — a bare `--` shredded out of the brief was. See WORKPLAN §20 "ROOT CAUSE FOUND". |
 
 ### What is NOT established
 
@@ -373,9 +372,13 @@ cost real nights. They are not style preferences.
 2. **§20c** — run `-Iterations 1` and let it finish untouched. Confirm a
    pass reaches a verdict. This is the gate on everything else.
 3. **§20a/20b** — heartbeat and per-pass timeout.
-4. Settle which of the two invocation changes fixed the bypass (one
+4. ~~Settle which of the two invocation changes fixed the bypass~~
+   **DONE 2026-09-08: both are independently sufficient, so there is
+   nothing to settle. The real find was that the break dates from 09-05
+   and the cause is a bare `--` in the brief. See WORKPLAN §20.** (one
    minute locally; two days remotely).
-5. Confirm `test-ffmpeg-export.js` passes on Windows and log it.
+5. ~~Confirm `test-ffmpeg-export.js` passes on Windows and log it.~~
+   **DONE 2026-09-08: 154 checks, exit 0. Suite is 79/79.**
 6. Then **§17c** — install the managed backend, which unblocks §18.
 
 Everything below §20 in the queue is unchanged and still correct.

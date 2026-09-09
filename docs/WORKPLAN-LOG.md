@@ -20516,3 +20516,104 @@ cause: the 01:25 run was WMI-detached and the 01:44 run was in-window,
 and both failed identically.
 
 No `extension/` change, so **no version bump**.
+
+## 2026-09-08 (local session) — the bypass was lost to a bare `--` in the brief, and it broke on 09-05, not 09-08 (0.12.4)
+
+SUPERSEDES: 20364-20518 — PS 5.1 quoting WAS the cause; the evidence that
+retired it ("8 quotes worked on 09-06") was an attribution error. The
+break dates from 2026-09-05, not 2026-09-08, so four nights were lost,
+not two.
+
+First session on the owner's machine rather than in a container, which is
+what made this measurable in minutes.
+
+**The mechanism, end to end.** Windows PowerShell 5.1 wraps a native
+argument in quotes without escaping the quotes inside it, so the
+multi-line brief was shredded into ~18 argv fragments at whitespace
+wherever quote-state was open. One of those fragments was a bare `--`,
+which comes from the ASCII em-dash replacement inside the instruction
+`"SUPERSEDES: <lines> -- <what changed>"`. Measured against
+`claude.exe` 2.1.265: **a bare `--` is honoured as end-of-options**
+(`claude -- --version` prints no version — it opens a session and takes
+`--version` as a message), so the trailing
+`--dangerously-skip-permissions` was consumed as prompt text. Measured
+in the same pass: **the parser ignores unknown flags silently**
+(`claude --zzz-not-a-real-flag --version` prints the version, exit 0),
+so nothing ever errored. Read, Grep and Glob worked; every Edit, Write,
+Bash and git call was denied. Exactly what the passes reported.
+
+`-p` also received only ~350 characters — the brief was truncated at the
+first `"`. Those passes were not merely unprivileged, they were working
+from a fifth of their instructions.
+
+**Dated by bisect over all 22 historical versions of the prompt**, each
+run through a real argv printer with the era's own argument
+construction:
+
+| prompt version | quotes | argv | bare `--` | flag | bypass |
+|---|---|---|---|---|---|
+| 08-20 → 09-03 | 0 | 3 | none | 2 | intact |
+| 09-03 (three) | 4 | 12 | none | 11 | intact |
+| **09-05 `2d2e034`** | 8 | 18 | **@5** | 17 | **LOST** |
+| 09-06 `f190bf0` | 8 | 18 | @5 | 17 | LOST |
+| 09-08 pre-fix | 12 | 19 | @6 | 18 | LOST |
+
+`2d2e034` ("Index the log instead of pretending to read it") added both
+halves of the trap in one sentence: the quote that starts the shredding
+and the `--` that terminates the options.
+
+**Quote COUNT was never the variable** — four quotes was fine, because
+no bare `--` was exposed. The variable is whether the shredding leaves a
+bare `--` ahead of the flag. That is why the count-based reasoning in the
+superseded entry could not resolve it in either direction.
+
+**Why the wrong candidate was retired.** The superseded entry rules out
+PS 5.1 quoting on the grounds that `e7aecab` carried 8 quotes and ran the
+"WORKING 2026-09-06 nights". **There were no loop runs on 09-06.** The
+last loop log before 09-08 is `local-agent-20260902-224132.log`; §18
+P0-P2 and P4 landed as `(#73)` and `(#74)`, pull-request merges from the
+remote session. Loop success was inferred from commits appearing
+overnight, and that inference is what ruled out the correct theory. A
+run that leaves no log did not happen.
+
+**Item 4 of the handoff — which of the two changes fixed it — has no
+answer, because both are independently sufficient.** Stdin takes the
+prompt off the command line entirely; flags-first puts the flag ahead of
+anything the prompt can inject. The repair is belt and braces, which is
+how it worked without the cause being understood.
+
+This is argument injection: text crossing into a position where a parser
+reads it as structure. The defences map onto the SQL-injection ones —
+stdin is the out-of-band channel, flags-first is ordering. What made it
+cost four nights rather than four minutes is the permissive parser: a
+strict one would have died on the first stray positional.
+
+Filed as §20d: a guard test so a future brief edit cannot re-open this.
+No `extension/` change in this finding itself; the version above is the
+separate `unref` fix logged below.
+
+## 2026-09-08 (local session) — test-ffmpeg-export.js passes on Windows; the suite is 79/79, not 78/79
+
+Carried as a "known container failure" for weeks and never confirmed
+from Windows. Confirmed now: **154 checks, ALL TESTS PASSED, exit 0**,
+run from the repo root on the owner's machine. The whole suite is
+**79/79 green**, so the standing "78/79 with one environmental failure"
+is retired. It was genuinely Windows-absolute-path-bound and the
+container was the only thing failing it.
+
+## 2026-09-08 (local session) — unref the backend child so a CLI boot can exit (0.12.4)
+
+A spawned child with piped stdio holds three references on Node's event
+loop (the process handle and both pipes), and the data listener keeps the
+pipes active, so the parent cannot exit while the backend runs. Invisible
+in the panel, where the host process outlives everything; fatal in a CLI.
+Measured 2026-09-08: `scripts/comfy-install.js --boot` printed ALL CHECKS
+PASSED and then sat for eleven minutes until killed by hand.
+
+That is NEXT UP item 1, so an unattended pass taking it would have spent
+the night there — the second of the two things that made the loop look
+broken this week, alongside the bypass above.
+
+`unref()` drops the three references without detaching the child; the
+poll timers still hold the loop open for as long as the boot needs. Suite
+79/79 including the ten `test-comfy-*.js`.
