@@ -2432,6 +2432,22 @@
     }
     proc.stdout.on("data", tail);
     proc.stderr.on("data", tail);
+    // A spawned child with piped stdio holds THREE references on Node's
+    // event loop — the process handle and both pipes — and a data
+    // listener keeps the pipes active, so the parent cannot exit while
+    // the backend runs. In the panel that is invisible (the host process
+    // outlives everything). In a CLI it is fatal: measured 2026-09-08,
+    // `scripts/comfy-install.js --boot` printed ALL CHECKS PASSED and
+    // then sat at 100% of its work done for 11 minutes until it was
+    // killed by hand — an unattended pass taking NEXT UP item 1 would
+    // have spent the whole night there. unref() drops the three
+    // references without detaching the child, so the poll timers below
+    // still hold the loop open for as long as the boot actually needs.
+    try {
+      proc.unref();
+      if (proc.stdout) proc.stdout.unref();
+      if (proc.stderr) proc.stderr.unref();
+    } catch (eU) {}
     var settledBoot = false;
     function finishBoot(err) {
       if (settledBoot) return;
