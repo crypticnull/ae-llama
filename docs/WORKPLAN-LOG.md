@@ -23133,3 +23133,58 @@ only coverage `.ps1` files have locally anyway (`test-powershell-syntax.js`
 skips without pwsh). CI runs the full suite on push.
 
 No `extension/` change, so **no version bump**.
+
+## 2026-09-09 (local session) — §18 P7c filed: measure both low-VRAM video candidates, and the vendor's LTX is not what the catalog thinks
+
+Owner approved §18 P7a options 1 AND 2: *"I want to be able to give even
+the lowest end cards an option here if they're able to have one."* The
+last clause is recorded deliberately — if nothing fits, that is a result,
+and P7a option 3 becomes the answer rather than a fudge.
+
+**Split measuring from deciding.** P7a's "do not pick one in an
+unattended pass" stands; taking the numbers does not pick anything. §18
+P7c is takeable, and it exists so the owner's decision is arithmetic.
+
+**The measurement can be taken here.** §18 P7 established the floor is
+resident weights, not the frame — 704x480, a third of the pixels, still
+cost 21 536 MiB against 26 187. A resident-weight reading on the 5090
+therefore answers "does this fit 8 GB" without an 8 GB card.
+
+**The find that changes the plan: the vendor's LTX is a 22B model.**
+Inspected on the managed backend's own disk, 2026-09-09. It carries six
+LTX blueprints, all 2.0 or 2.3, and `Text to Video (LTX-2.3).json` names
+`ltx-2.3-22b-dev-fp8.safetensors` (22B diffusion) plus
+`gemma_3_12B_it_fp4_mixed.safetensors` (12B text encoder), a distilled
+LoRA and a spatial upscaler. **That is LARGER than Wan 2.2 5B.** It
+belongs in the 32 GB bracket and rescues nothing.
+
+So `ltx-small` — `minVramGB: 6, measured: false, sizeMB: null, urls: [],
+experimental: true`, no graph — corresponds to nothing the vendor ships.
+It is imagining the older LTX-Video 2B line, and its 6 has exactly the
+provenance that `wan22-5b`'s 8 had: written from training, never run,
+and that one was wrong by 4x. Nobody should treat the 6 as evidence.
+
+**A second instrument caught lying, and it is already a filed defect.**
+`scripts/comfy-node-defs.json` reports ZERO nodes matching "ltx", while
+the vendor's own blueprint uses `EmptyLTXVLatentVideo`. Both cannot be
+true. The fixture is §17l in the flesh — a hand-taken snapshot from the
+owner's install with nothing forcing a refresh when the vendor build
+moves. **P7c step 2 must ask a RUNNING backend's `/object_info`, never
+the fixture**, which also gives §17l a concrete reason to be taken.
+
+Not verified live: the backend was stopped at 11:31 to give the owner his
+GPU back, and he is gaming, so nothing was booted to confirm the node
+question. That is the pass's first move, not a gap in this filing.
+
+**Queue.** Items 2 and 3 of NEXT UP are now P7c steps 1 and 2, ahead of
+everything except the backend-teardown confirmation. Step 1 (fp8 Wan) is
+first because it is the §18 P10 pattern — a second entry whose graph is
+the shipped one with a filename swapped and nothing else — and h3-int8
+was built that way in a single pass. The remaining rows renumbered 4-14.
+
+**Noted, not widened:** the vendor also ships `Image to Video
+(LTX-2.3).json`, and §18 P9a is "no shipped template can take a reference
+image any more". If LTX is pinned for any reason, i2v may come with it.
+
+No `extension/` change, so **no version bump**. Docs only; suite not run
+locally at the owner's request (gaming), CI runs it on push.

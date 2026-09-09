@@ -52,17 +52,24 @@ every pass and finished work costs the same context as live work.
 | # | item | where | needs | bumps |
 |---|---|---|---|---|
 | 1 | **Confirm the backend did not outlive the loop.** The teardown added 2026-09-09 calls `comfy-install.js --stop` at loop exit. Check this morning's log for a `Backend:` line and that the card was released. If it is missing or the card is still held, that is the item. | §17q | nothing | no |
-| 2 | The panel can quote an ETA LONGER than `comfyTimeoutSec` and then cancel the job at 600 s, having promised a finish. Warn when the estimate passes the timeout, and put the estimate into the timeout message. | §18 P3c | nothing | yes |
-| 3 | Tee the harness's stdout into the loop log. `Running self-test via` and `Crash flag:` appear ZERO times across the whole 2026-09-09 night, so a killed pass leaves no record of whether its self-test was green. | §20e | nothing | no |
-| 4 | A guard test for the pass invocation, so a future brief edit cannot re-inject a bare `--` and silently drop the bypass flag again. | §20d | nothing | no |
-| 5 | §21 leftovers: the watchdog rule keys on the word "recover" and can never match the real dialog; `Test-AellAeRunning` is version-blind; stale `CrashOccurred = 1` still sits on 26.2. | §21 | nothing | no |
-| 6 | The managed backend dies silently within the half hour — measure the cause before fixing it. | §17k | backend | maybe |
-| 7 | **No shipped template can take a reference image any more** — i2v left the bundle with the authored H3 graph. | §18 P9a | nothing | yes |
-| 8 | `download-gen-weight` re-downloads a weight already present in another `comfyModelRoots` root (6.4 GB wasted, measured; the next one is 26 GB). | §18 P7b | nothing | yes |
-| 9 | Decide llama-server's lifetime: give it the same detach seam, or delete the reap that can never fire. | §17i | nothing | yes |
-| 10 | The vendor-enum fixture is a hand-taken snapshot with nothing forcing a refresh when the vendor build moves. | §17l | nothing | no |
-| 11 | krea2 and ltx-small are the only entries EXEMPT from "a gate must hold its biggest weight file", because their files carry no sizes. | §18 P8a | nothing | yes |
-| 12 | `weight-availability-probe.js` defaults to `comfyUrl`, so it cannot see the managed backend without `--url`. | §17h | nothing | no |
+| 2 | **fp8 Wan 2.2 5B as a second entry, then MEASURE it.** The §18 P10 pattern: the shipped Wan graph with the diffusion filename swapped and nothing else. Cheapest route to a video option under 32 GB. | §18 P7c step 1 | backend, disk | yes |
+| 3 | **Settle what `ltx-small` is, then measure it.** The vendor's LTX is 2.3-**22B** — larger than Wan, not smaller. Ask a RUNNING backend's `/object_info` whether LTXV 2B nodes exist; the repo fixture says zero and is wrong (§17l). | §18 P7c step 2 | backend, disk | yes |
+| 4 | The panel can quote an ETA LONGER than `comfyTimeoutSec` and then cancel the job at 600 s, having promised a finish. Warn when the estimate passes the timeout, and put the estimate into the timeout message. | §18 P3c | nothing | yes |
+| 5 | Tee the harness's stdout into the loop log. `Running self-test via` and `Crash flag:` appear ZERO times across the whole 2026-09-09 night, so a killed pass leaves no record of whether its self-test was green. | §20e | nothing | no |
+| 6 | A guard test for the pass invocation, so a future brief edit cannot re-inject a bare `--` and silently drop the bypass flag again. | §20d | nothing | no |
+| 7 | §21 leftovers: the watchdog rule keys on the word "recover" and can never match the real dialog; `Test-AellAeRunning` is version-blind; stale `CrashOccurred = 1` still sits on 26.2. | §21 | nothing | no |
+| 8 | The managed backend dies silently within the half hour — measure the cause before fixing it. | §17k | backend | maybe |
+| 9 | **No shipped template can take a reference image any more** — i2v left the bundle with the authored H3 graph. | §18 P9a | nothing | yes |
+| 10 | `download-gen-weight` re-downloads a weight already present in another `comfyModelRoots` root (6.4 GB wasted, measured; the next one is 26 GB). | §18 P7b | nothing | yes |
+| 11 | Decide llama-server's lifetime: give it the same detach seam, or delete the reap that can never fire. | §17i | nothing | yes |
+| 12 | The vendor-enum fixture is a hand-taken snapshot with nothing forcing a refresh when the vendor build moves. | §17l | nothing | no |
+| 13 | krea2 and ltx-small are the only entries EXEMPT from "a gate must hold its biggest weight file", because their files carry no sizes. | §18 P8a | nothing | yes |
+| 14 | `weight-availability-probe.js` defaults to `comfyUrl`, so it cannot see the managed backend without `--url`. | §17h | nothing | no |
+
+**§18 P7a is now HALF ANSWERED.** The owner approved options 1 AND 2 on
+2026-09-09 — "give even the lowest end cards an option here if they're
+able to have one" — so the MEASUREMENT is queue items 2 and 3 (§18 P7c).
+The ship/don't-ship decision is still his. Read on for the gap itself:
 
 **OWNER, READ THIS ONE FIRST: §18 P7a.** Measuring wan22-5b (item 5)
 moved its gate 8 -> 32, which leaves **every card under 32 GB with no
@@ -3965,6 +3972,88 @@ Each is a product decision about what a mid-range buyer is offered:
 
 Options 1 and 2 need a download and a measurement; 3 and 4 are repo-only.
 **Do not pick one in an unattended pass.**
+
+## 18 P7c. MEASURE both low-VRAM video candidates (owner-approved 2026-09-09, takeable)
+
+**Owner's call, 2026-09-09: do options 1 AND 2 of §18 P7a.** "I want to
+be able to give even the lowest end cards an option here if they're able
+to have one." The last clause is load-bearing: if nothing fits, that is a
+RESULT, not a failure, and §18 P7a option 3 becomes the answer.
+
+**Measuring is not deciding.** P7a says do not pick an option in an
+unattended pass, and that stands. This item takes the numbers so the
+owner's choice is arithmetic instead of judgement. Ship/don't-ship stays
+in P7a.
+
+**The 5090 answers the small-card question.** §18 P7 established the
+floor is RESIDENT WEIGHTS, not the frame: 704x480, a third of the pixels,
+still cost 21 536 MiB against 26 187. So a resident-weight measurement on
+this machine tells you whether a model fits 8 or 12 or 16 GB. No low-end
+card is needed, and none is available.
+
+**The rule that produced this whole item applies to its own output: the
+MEASUREMENT sets the gate.** `wan22-5b` shipped `minVramGB: 8` written
+from training and it was 32. Do not write a gate from a model card, a
+README, or a parameter count. If a candidate measures at 14 GB, the gate
+is 14.
+
+### Step 1 - fp8 Wan 2.2 5B (cheapest, do this first)
+
+Comfy-Org publishes `wan2.2_ti2v_5B_fp8_scaled` beside the fp16 this
+catalog names; `umt5_xxl_fp8_e4m3fn_scaled` is already the fp8 encoder.
+The fp16 diffusion term is 9536 MiB of the 17 304 MiB resident floor, so
+fp8 should roughly halve it.
+
+This is the §18 P10 pattern exactly: a SECOND catalog entry whose graph is
+the shipped `AE_LLAMA_WAN22_5B_T2V_V1` with the diffusion filename
+changed and NOTHING else, verified node by node, then measured with
+`catalog-vram-probe`. h3-int8 was built that way in one pass.
+
+Do NOT replace the fp16 entry. Both stay; `entryFits` and the tie-break
+already handle two entries of one kind at different floors.
+
+### Step 2 - settle what "ltx-small" even IS, before pinning anything
+
+`ltx-small` in `COMFY_CATALOG` is `minVramGB: 6, measured: false,
+sizeMB: null, urls: [], experimental: true` and has no graph. Measured
+2026-09-09, it does not correspond to anything the vendor backend ships:
+
+The vendor carries SIX LTX blueprints, all 2.0 or 2.3. Its
+`blueprints/Text to Video (LTX-2.3).json` names
+`ltx-2.3-22b-dev-fp8.safetensors` (a **22B** diffusion) plus
+`gemma_3_12B_it_fp4_mixed.safetensors` (a **12B** text encoder), a
+distilled LoRA and a spatial upscaler. **That is LARGER than Wan 2.2 5B,
+not smaller** — it belongs in the 32 GB bracket and rescues nothing.
+
+So the entry is imagining the older LTX-Video 2B line (0.9.x), which the
+vendor ships no blueprint for. Before pinning weights, answer in order:
+
+1. **Does this backend still have the LTXV nodes a 2B graph needs?**
+   `scripts/comfy-node-defs.json` reports ZERO nodes matching "ltx",
+   which CONTRADICTS the vendor's own blueprint using
+   `EmptyLTXVLatentVideo`. That fixture is the §17l defect in the flesh —
+   a hand-taken snapshot that has drifted. **Ask a RUNNING backend's
+   `/object_info`, never the fixture**, and fix or refresh the fixture
+   while you are there.
+2. If the nodes exist, pin a specific LTX-Video 2B build and author a
+   basic graph the same way §18 P5-P10 authored six others.
+3. Measure it. If it lands under 12 GB this closes the gap the owner
+   asked about; if it lands at 24, say so and stop.
+
+### Step 3 - report, do not choose
+
+Write both floors into the log and into P7a as a table. If neither
+candidate fits 8 GB, say that plainly — P7a option 3 (recommend nothing
+for video below the floor, and say why) is a legitimate outcome and the
+grounded-error rule already prefers an honest refusal to a
+recommendation that cannot execute.
+
+### Worth noting for a separate item
+
+The vendor also ships `Image to Video (LTX-2.3).json`. **§18 P9a** is
+"no shipped template can take a reference image any more". If LTX is
+pinned for any reason, i2v may come with it and close two gaps at once.
+Do not let that widen this item; note it and move on.
 
 ## 18 P7b. `download-gen-weight` re-downloads a file the backend already has (filed 2026-09-09, local session)
 
