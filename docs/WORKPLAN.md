@@ -54,18 +54,20 @@ every pass and finished work costs the same context as live work.
 | 1 | **Confirm the backend did not outlive the loop.** The teardown added 2026-09-09 calls `comfy-install.js --stop` at loop exit. Check this morning's log for a `Backend:` line and that the card was released. If it is missing or the card is still held, that is the item. | §17q | nothing | no |
 | 2 | **fp8 Wan 2.2 5B as a second entry, then MEASURE it.** The §18 P10 pattern: the shipped Wan graph with the diffusion filename swapped and nothing else. Cheapest route to a video option under 32 GB. | §18 P7c step 1 | backend, disk | yes |
 | 3 | **Settle what `ltx-small` is, then measure it.** The vendor's LTX is 2.3-**22B** — larger than Wan, not smaller. Ask a RUNNING backend's `/object_info` whether LTXV 2B nodes exist; the repo fixture says zero and is wrong (§17l). | §18 P7c step 2 | backend, disk | yes |
-| 4 | The panel can quote an ETA LONGER than `comfyTimeoutSec` and then cancel the job at 600 s, having promised a finish. Warn when the estimate passes the timeout, and put the estimate into the timeout message. | §18 P3c | nothing | yes |
-| 5 | Pin the invariant the whole install plan rests on: refuse a BUNDLED manifest that names a non-core node pack. True today, guaranteed by nothing. | §22a | nothing | no |
-| 6 | Tee the harness's stdout into the loop log. `Running self-test via` and `Crash flag:` appear ZERO times across the whole 2026-09-09 night, so a killed pass leaves no record of whether its self-test was green. | §20e | nothing | no |
-| 7 | A guard test for the pass invocation, so a future brief edit cannot re-inject a bare `--` and silently drop the bypass flag again. | §20d | nothing | no |
-| 8 | §21 leftovers: the watchdog rule keys on the word "recover" and can never match the real dialog; `Test-AellAeRunning` is version-blind; stale `CrashOccurred = 1` still sits on 26.2. | §21 | nothing | no |
-| 9 | The managed backend dies silently within the half hour — measure the cause before fixing it. | §17k | backend | maybe |
-| 10 | **No shipped template can take a reference image any more** — i2v left the bundle with the authored H3 graph. | §18 P9a | nothing | yes |
-| 11 | `download-gen-weight` re-downloads a weight already present in another `comfyModelRoots` root (6.4 GB wasted, measured; the next one is 26 GB). | §18 P7b | nothing | yes |
-| 12 | Decide llama-server's lifetime: give it the same detach seam, or delete the reap that can never fire. | §17i | nothing | yes |
-| 13 | The vendor-enum fixture is a hand-taken snapshot with nothing forcing a refresh when the vendor build moves. | §17l | nothing | no |
-| 14 | krea2 and ltx-small are the only entries EXEMPT from "a gate must hold its biggest weight file", because their files carry no sizes. | §18 P8a | nothing | yes |
-| 15 | `weight-availability-probe.js` defaults to `comfyUrl`, so it cannot see the managed backend without `--url`. | §17h | nothing | no |
+| 4 | **Cap the injected clip length at 6 s** when the user names none (owner decided 2026-09-09; 6 not 5 — the three shipped video templates are authored at 5.04/5.17 and a 5.00 cap invalidates their measured blocks). Spec in §18 P3a(b). | §18 P3a (b) | nothing | yes |
+| 5 | **Roadmap group A: generation lands in the COMP, at the comp's size.** Owner promoted 2026-09-09 as first of the expansion work. Shared, core-only, zero per-template cost. | §23c | AE | yes |
+| 6 | The panel can quote an ETA LONGER than `comfyTimeoutSec` and then cancel the job at 600 s, having promised a finish. Warn when the estimate passes the timeout, and put the estimate into the timeout message. | §18 P3c | nothing | yes |
+| 7 | Pin the invariant the whole install plan rests on: refuse a BUNDLED manifest that names a non-core node pack. True today, guaranteed by nothing. | §22a | nothing | no |
+| 8 | Tee the harness's stdout into the loop log. `Running self-test via` and `Crash flag:` appear ZERO times across the whole 2026-09-09 night, so a killed pass leaves no record of whether its self-test was green. | §20e | nothing | no |
+| 9 | A guard test for the pass invocation, so a future brief edit cannot re-inject a bare `--` and silently drop the bypass flag again. | §20d | nothing | no |
+| 10 | §21 leftovers: the watchdog rule keys on the word "recover" and can never match the real dialog; `Test-AellAeRunning` is version-blind; stale `CrashOccurred = 1` still sits on 26.2. | §21 | nothing | no |
+| 11 | The managed backend dies silently within the half hour — measure the cause before fixing it. | §17k | backend | maybe |
+| 12 | **No shipped template can take a reference image any more** — i2v left the bundle with the authored H3 graph. | §18 P9a | nothing | yes |
+| 13 | `download-gen-weight` re-downloads a weight already present in another `comfyModelRoots` root (6.4 GB wasted, measured; the next one is 26 GB). | §18 P7b | nothing | yes |
+| 14 | Decide llama-server's lifetime: give it the same detach seam, or delete the reap that can never fire. | §17i | nothing | yes |
+| 15 | The vendor-enum fixture is a hand-taken snapshot with nothing forcing a refresh when the vendor build moves. | §17l | nothing | no |
+| 16 | krea2 and ltx-small are the only entries EXEMPT from "a gate must hold its biggest weight file", because their files carry no sizes. | §18 P8a | nothing | yes |
+| 17 | `weight-availability-probe.js` defaults to `comfyUrl`, so it cannot see the managed backend without `--url`. | §17h | nothing | no |
 
 **§18 P7a is now HALF ANSWERED.** The owner approved options 1 AND 2 on
 2026-09-09 — "give even the lowest end cards an option here if they're
@@ -4288,7 +4290,41 @@ from the graph and a future short measurement cannot ship without one.
 measured here and the >=24.7 GiB the cancelled 15 s run had already put
 on the card.
 
-**(b) — capping the injected default — is untouched and still needs the
+### (b) DECIDED 2026-09-09 by the owner: cap at SIX seconds, not five
+
+Owner asked for "a maximum of, like, five seconds". **Implement it as 6.**
+
+A literal 5.00 s cap bites every shipped video template and silently
+invalidates three measured blocks taken last night:
+
+| entry | authoredClipSeconds | 5.00 cap? |
+|---|---|---|
+| `wan22-5b` | 5.04 | clipped |
+| `minimax-h3` | 5.17 | clipped |
+| `minimax-h3-int8` | 5.17 | clipped |
+
+Those are the exact lengths the VRAM readings were taken at. Clipping
+them means the catalog's measured blocks describe a job the panel no
+longer renders — the precise failure this whole section exists to stop.
+
+6 s sits above all three, so it never touches the shipped set or its
+measurements, and still catches what the owner means: the authored H3
+graph's 15 s default, a >15-minute render, and any future template that
+runs long. The user-facing reality stays "about five seconds", because
+that is what the templates are authored at.
+
+**Spec.** When the user names NO duration and no frames, and the
+template's `authoredClipSeconds` exceeds the cap, inject the cap instead
+of letting the graph keep its authored length. When the user DOES name a
+duration, honour it — this is a default, not a ceiling. A capped run must
+say so in the applied list, because a silently shortened clip is
+indistinguishable from a broken graph.
+
+Constant lives beside the catalog, not in a caller. Back-fill a stubbed
+test that pins the 6 against all three `authoredClipSeconds` values, so
+lowering it later fails loudly rather than re-clipping the fleet.
+
+~~(b) — capping the injected default — is untouched and still needs the
 owner** (NEXT UP 2a). It changes what his authored graph renders.
 
 ## 18 P3b. DONE 2026-09-09 (0.12.16) — a generation now says step k of N
@@ -5813,3 +5849,41 @@ opt-in folder only after §22d installs the pack; degrade through
   `COMFY_TIERS_PLAN.md` says templates read per-kind ceilings; nothing
   in `tools.js` or `comfy.js` reads one. Delete the manifest lines or
   the plan sentence; 23c is the size rule that actually exists.
+
+#### The tiers.js audit in full, and the fix is STRUCTURAL (local session, 2026-09-09)
+
+Full read of `TIERS` in `extension/js/tiers.js`. Every tier's `video:`
+claim is wrong, most `image:` claims are wrong, and **two models named in
+the copy are not in `COMFY_CATALOG` at all**:
+
+| tier | copy claims | measured reality |
+|---|---|---|
+| T3 8 GB | "SDXL comfortably", "short Wan clips" | sdxl gates **12** (§18 P6); wan22-5b gates **32** (§18 P7) |
+| T4 12 GB | "Flux/Krea at 1024px", "short Wan clips" | **no Flux entry exists**; krea2 gates **24**; Wan **32** |
+| T5 16 GB | "Flux/Krea dev", "Wan 14B (quantized)" | **no Flux entry, no 14B entry**; krea2 **24** |
+| T6 24 GB | "Krea full", "Wan 14B" | Krea correct; **no 14B entry** |
+| T7 32 GB | "Krea full precision", "Wan 14B, MiniMax H3" | H3 correct; the entry is wan22-**5B** |
+
+This copy predates the catalog being measured. It is the original
+hand-written table, and every measurement since has moved a gate away
+from it without anything objecting.
+
+**Do not fix the strings.** A hand-written claim beside a computed one
+drifts again the next time a gate moves, and this section exists because
+it already did. `recommendGen` ALREADY computes what fits a tier, from
+`entryFits` against `minVramGB` and `requiresBlackwell`. Derive the
+`image:` and `video:` fields from that instead of storing them, the same
+rule the repo already applies to weights ("the file IS the weights — an
+authored number would go stale the first time one moved").
+
+**Pin it:** a test asserting no tier names a model absent from
+`COMFY_CATALOG`, and that each tier's stated model is one `entryFits`
+accepts at that tier's `minGB`. That is the assertion that makes the
+whole class impossible rather than fixing five instances of it.
+
+**Blocked on the owner for ONE field only.** What T3-T6 say for VIDEO
+depends on the §18 P7a posture, which is undecided: refuse honestly, or
+offer a slow path with a disclosure. Everything else here is a falsehood
+fix and needs no decision. §22c will surface this copy on first run, so
+it wants doing before that lands.
+

@@ -23271,3 +23271,58 @@ same no-local-resources constraint. Its deliverable is
 is reviewed here before it lands.
 
 No `extension/` change, so **no version bump**.
+
+## 2026-09-09 (local session) — owner decisions taken: the 6 s cap, group A promoted, and tiers.js is worse than reported
+
+**The cap: owner said "a maximum of, like, five seconds"; implement 6.**
+A literal 5.00 s cap bites all three shipped video templates —
+`wan22-5b` is authored at 5.04, both H3 entries at 5.17 — and those are
+the exact lengths last night's VRAM readings were taken at. Clipping them
+means the measured blocks describe a job the panel no longer renders,
+which is the precise failure §18 P3a exists to stop. 6 sits above all
+three, never touches the shipped set, and still catches the case the
+owner means: the authored H3 graph's 15 s default, a >15-minute render.
+Spec written into §18 P3a(b), queued as NEXT UP item 4.
+
+**Group A promoted** to NEXT UP item 5 — generation lands in the comp at
+the comp's size. Shared, core-only, zero per-template cost, and the
+roadmap's own top rank.
+
+**tiers.js is worse than the design pass reported, and the fix is
+structural.** Reading the whole `TIERS` array rather than the lines that
+grepped: EVERY tier's `video:` claim is wrong, most `image:` claims are
+wrong, and two models named in buyer-facing copy are **not in
+`COMFY_CATALOG` at all** — "Flux" (T4, T5) and "Wan 14B" (T5, T6, T7).
+T3 offers "SDXL comfortably" at 8 GB against a measured gate of 12, and
+"short Wan clips" at 8 and 12 GB against a measured gate of 32.
+
+This is the original hand-written tier table from before anything was
+measured, and every measurement since has moved a gate away from it with
+nothing objecting.
+
+**So do not fix the strings.** A hand-written claim beside a computed one
+drifts again the next time a gate moves, which is exactly what happened
+here. `recommendGen` already computes what fits a tier from `entryFits`;
+derive the copy from that and pin it with a test that no tier names a
+model absent from the catalog. Same rule the repo already applies to
+weights: the file IS the weights, an authored number goes stale the first
+time one moves. Only ONE field is blocked on the owner — what T3-T6 say
+for VIDEO, which depends on the undecided §18 P7a posture.
+
+**Bump ownership written into CLAUDE.md** at the owner's request, now
+that the remote session is retired and both roles are this one's: PATCH
+for a verified fix or a behaviour-changing measurement (overnight passes
+take these unasked), MINOR at a capability boundary with release notes,
+MAJOR reserved, and merging to `main` as bookkeeping that gates nothing
+because CI publishes the feed from `claude/**` too.
+
+**Nothing was implemented today.** The cap, group A and the tiers fix all
+change shipped behaviour and need a real render or the full suite to
+verify, which under the rule filed this morning is overnight work. The
+decisions are specified so tonight's passes do not have to guess.
+
+**Still open and still the owner's:** the §18 P7a posture — refuse
+honestly, or offer a slow path with a disclosure — and the eight
+`loop-salvage-*` stashes.
+
+No `extension/` change, so **no version bump**.

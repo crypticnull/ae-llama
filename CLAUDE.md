@@ -219,6 +219,20 @@ while the installed panel ran the old code.
 
     node scripts/bump-version.js patch     # one command, all four files
 
+**Who owns which bump, since 2026-09-09 (the remote session is retired
+and both roles are this one's):**
+
+- **PATCH** — a fix, or a measurement that changes shipped behaviour,
+  verified. Overnight passes take these themselves and push. This is the
+  common case and needs nobody's permission.
+- **MINOR** — a capability the user would notice arriving: a new catalog
+  entry with its template, or a roadmap group landing. Batch the patches
+  that built it and bump once at the boundary, with release notes.
+- **MAJOR** — reserved; ask.
+- **Merge to `main`** — bookkeeping, batched whenever. CI publishes the
+  feed from `claude/**` too, so merging gates nothing and a push has
+  already shipped. Do not let an unmerged branch read as unshipped work.
+
 **The local session bumps PATCH itself** whenever it pushes a fix it has
 verified in real AE. That is the whole point: a fix you proved works
 should reach the panel without waiting on anyone. The remote session
