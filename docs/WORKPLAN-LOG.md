@@ -21594,3 +21594,77 @@ hypotheses there are unnecessary for every death measured so far.
 **State left behind.** AE running and untouched, harness 770/770, managed
 backend DOWN — killed by `test-comfy-install.js`, which is the finding,
 not an accident. Working tree committed; NEXT UP 1d struck, 1e promoted.
+
+## 2026-09-09 (local session) — the test suite no longer kills the backend it was killing (NEXT UP 1e / §17p)
+
+**Item: NEXT UP 1e.** Harness green first (770/770), so the list applied
+and 1e was START HERE.
+
+**Fixed in the fixture, exactly where §17p said to put it.** Block 4 of
+`tests/test-comfy-install.js` drives the real `comfy-install.js --check
+--stop` against a temp APPDATA. That APPDATA carried no
+`comfyManagedPort`, so after `managed.stop()` correctly declined to kill
+the stale PID it planted, the fall-through `stopByPort(port)` resolved
+`port` to the DEFAULT 8288 — the owner's live backend — and taskkilled
+it, `/T /F`, which is why four deaths left no last line in
+`comfy-managed.log`. The fixture now writes a `settings.json` carrying
+`comfyBackend: managed` and a `comfyManagedPort` taken from the OS
+(`net.createServer().listen(0)`, bound, read back, released), the same
+way `tests/test-probe-backend-url.js` and `tests/test-probe-reachability.js`
+already did it. Never a hardcoded number: that is how a test starts
+passing for the wrong reason on the one machine running something there.
+
+**The missing assertion was the real defect, and it is now three.** The
+kill printed `stopped the backend holding port 8288 (pid N)` in full,
+next to an assertion that only forbade `stopped the managed backend` — a
+DIFFERENT string. So the block asserted about one of the two stop paths
+and was silent about the other, and the `r2` assertion after it (`no
+managed backend found to stop`) then passed BECAUSE the backend had just
+been killed. Now: `stopped the backend holding port` must not appear on
+either run; the run must POSITIVELY say it looked at the fixture's own
+port (`nothing ComfyUI-shaped on port <deadPort>`); and the literal
+string `8288` must not appear anywhere in the output of a run that
+stops.
+
+**Negative control**, backend deliberately down so the control could not
+itself kill anything: deleting the `settings.json` write fails exactly
+those three and nothing else.
+
+**Verified against §17p's own reproduction, on the machine.** The filing
+was reproduced by boot / run the test / read the port. Same three steps,
+opposite result:
+
+    node scripts/comfy-install.js --boot     # pid 42796 on 8288
+    for t in tests/test-*.js; node $t        # 85 files, 0 failed
+    Get-NetTCPConnection -LocalPort 8288     # ALIVE pid 42796
+    curl /queue                              # HTTP 200
+
+Same pid before and after, still serving. The WHOLE suite was run, not
+just the one file — the §17p claim was about the suite, and this is the
+form of it that can be believed.
+
+**Block 5: the answer to the filing's last question, kept true.** §17p
+asked whether any other test can reach `stopByPort`/`taskkill` with a
+port it never chose. Audited: no — `test-probe-reachability.js` and
+`test-probe-backend-url.js` both allocate a dead port already and
+neither passes `--stop`; `test-comfy-backend.js` is stubbed. But that is
+a fact about today, and the next probe test un-answers it. So block 5
+scans `tests/test-*.js` and fails on any file that hands a script
+`--stop` while naming no port. **Its first draft was satisfied by a
+PROSE mention** of `comfyManagedPort` in a comment — the same shape of
+hole as the assertion §17p came through — so it requires
+`comfyManagedPort` followed by `:` or `=`. Negative-controlled by hiding
+the key behind a computed property: the guard names the offending file.
+
+**Results.** Stubbed suite 85/85 files green. Real-AE harness 770/770
+before and after — nothing here touches the AE half. **NO version bump:
+nothing under `extension/` changed** (one test file, docs).
+
+**State left behind.** AE running and untouched. Managed backend UP on
+8288, pid 42796 — left running deliberately: it is the evidence, and
+§18's measured blocks (NEXT UP 2 onward) need a backend that survives
+between passes, which is what this item was for. NEXT UP 1e struck, 2
+promoted to START HERE. §17k's "cause found" note upgraded to "cause
+found and fixed", with the standing instruction that its job-object and
+idle-timer hypotheses stay unpursued unless a death is measured AFTER
+this fix — one measured now would be a NEW bug, not the old one.

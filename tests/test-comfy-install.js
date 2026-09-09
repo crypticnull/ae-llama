@@ -25,6 +25,9 @@
  */
 "use strict";
 
+const fs = require("fs");
+const net = require("net");
+const os = require("os");
 const path = require("path");
 const { spawnSync } = require("child_process");
 
@@ -94,6 +97,19 @@ function run(env, args) {
          "and names the instance the panel is actually talking to");
 }
 
+/* A TCP port nothing is listening on: bound, read back, released. Asking
+ * the OS beats picking a number — a hardcoded one is how this file spent
+ * a week killing the machine's REAL backend (WORKPLAN §17p). */
+function withDeadPort(fn) {
+  const srv = net.createServer();
+  srv.listen(0, "127.0.0.1", function () {
+    const port = srv.address().port;
+    srv.close(function () { fn(port); });
+  });
+}
+
+withDeadPort(function (deadPort) {
+
 // 4. The PID survives BETWEEN invocations.
 //
 // This is the bug this block exists for. The panel's localStorage is
@@ -103,12 +119,24 @@ function run(env, args) {
 // with an empty store, found no PID, and silently killed nothing while
 // reporting a stop. Found the hard way 2026-09-06: a backend was booted,
 // the owner went to play a game, and --stop would have been a no-op.
+//
+// THE PORT IS NOT DECORATION HERE (§17p, measured 2026-09-09). After
+// managed.stop() clears the stale PID it FALLS THROUGH to
+// stopByPort(port) — and with no `comfyManagedPort` in these temp
+// settings the port defaulted to 8288, which on the machine that runs
+// this test is the live managed backend. stopByPort's command-line guard
+// cannot help: the victim really is ComfyUI, so it was really killed,
+// `taskkill /T /F`, which is why its log ended mid-line with no last
+// words. Four unexplained backend deaths were this test passing. So the
+// fixture names a port the OS has just told us nothing owns.
 {
-  const fs = require("fs");
-  const os = require("os");
   const tmp = path.join(os.tmpdir(), "aell-install-pid-" + process.pid);
   const root = path.join(tmp, "AE-Llama");
   fs.mkdirSync(root, { recursive: true });
+  fs.writeFileSync(path.join(root, "settings.json"), JSON.stringify({
+    comfyBackend: "managed",
+    comfyManagedPort: deadPort
+  }), "utf8");
   // Exactly what a previous --boot leaves behind.
   fs.writeFileSync(path.join(root, "comfy-managed.pid"), "424242");
 
@@ -130,13 +158,58 @@ function run(env, args) {
   assert(!fs.existsSync(path.join(root, "comfy-managed.pid")),
          "the stale record is cleared rather than left for the next run");
 
+  // Now the fall-through, which had NO assertion at all. `stopped the
+  // managed backend` above is a DIFFERENT string from the one stopByPort
+  // prints, which is exactly how the kill hid: it was reported in full,
+  // beside an assertion that could not see it. Both halves are checked
+  // now — nothing was killed BY PORT, and the port it reached for is the
+  // dead one this fixture chose.
+  assert(!/stopped the backend holding port/.test(r.out),
+         "and nothing is killed by PORT either — the hole §17p came through");
+  assert(new RegExp("nothing ComfyUI-shaped on port " + deadPort).test(r.out),
+         "the stop looked at the port the fixture named", "want " + deadPort);
+  assert(!/8288/.test(r.out),
+         "the DEFAULT managed port is never reached by a run that stops — " +
+         "on the machine this test runs on, 8288 is a real backend");
+
   // With nothing remembered it must NOT claim a stop it did not make.
   const r2 = run({ APPDATA: tmp }, ["--check", "--stop"]);
   assert(/no managed backend found to stop/.test(r2.out),
          "with nothing remembered it says so rather than reporting success");
   assert(!/stopped the managed backend/.test(r2.out),
          "a stop is never reported without a PID behind it");
+  assert(!/stopped the backend holding port/.test(r2.out),
+         "nor by port on the second run");
+  assert(!/8288/.test(r2.out),
+         "and the second run cannot reach the default port either");
+}
+
+// 5. No test in this repo may drive a stop path on a DEFAULTED port.
+//
+// §17p asked whether any other test could reach stopByPort or taskkill
+// with a port it never chose. Today only this file can — and a fact like
+// that decays the moment someone writes the next probe test. A test that
+// hands a real script `--stop` is choosing which process dies; if it
+// names no port, the default chooses, and the default is a live backend.
+{
+  const all = fs.readdirSync(__dirname).filter(function (f) {
+    return /^test-.*\.js$/.test(f);
+  });
+  const offenders = all.filter(function (f) {
+    const src = fs.readFileSync(path.join(__dirname, f), "utf8");
+    // The port must be SET, not merely mentioned: a prose `comfyManagedPort`
+    // in a comment satisfied the first draft of this guard, which is the
+    // same shape of hole as the assertion §17p came through.
+    return /["']--stop["']/.test(src) &&
+           !/comfyManagedPort\s*[:=]|["']--port["']/.test(src);
+  });
+  assert(offenders.length === 0,
+         "every test that drives --stop also names the port it may kill",
+         offenders.length ? offenders.join(", ")
+                          : all.length + " test files scanned");
 }
 
 console.log(failures ? "\n" + failures + " FAILED" : "\nALL TESTS PASSED");
 process.exitCode = failures ? 1 : 0;
+
+});

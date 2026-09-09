@@ -46,8 +46,8 @@ the night retrying it.
 | ~~1b~~ | ~~a preflight that checks weights but not enum VALUES says "ready" about a graph ComfyUI refuses~~ **DONE 2026-09-09 (0.12.8).** `Comfy.validateGraphInputs` asks both questions in one walk of /object_info and either one refuses, before the handoff and before anything is queued. NOT via `POST /prompt`: measured on the vendor build, it has no validate-only mode and QUEUES the graph the moment validation passes — see §17g. | §17g | — | — |
 | ~~1c~~ | ~~`comfy-probe.js` says "ComfyUI reachable" PASS when nothing is listening, and `--boot` sits inside that same dead branch~~ **DONE 2026-09-09.** FOUR probes had it, not one; `managed.reachable` is now the single place the question is asked, and the panel's own two callers audited clean. No bump — nothing in `extension/` changed. | §17n | — | — |
 | ~~1d~~ | ~~`comfy-probe.js --url` is silently ignored in managed mode~~ **DONE 2026-09-09.** SIX scripts, one rule: `managed.urlOverride(url)` sets the MODE as well as the address, because an explicit URL names an INSTANCE, and every probe resolves with `Comfy.backendUrl`. Verified on the real machine — `--url` moves the target (and generated end to end through it), and a bare `weight-availability-probe` finally measures the managed backend (all verdicts PASS). No bump: nothing in `extension/` changed. | §17m + §17h + §17o | — | — |
-| 1e | **START HERE.** **`node tests/test-comfy-install.js` KILLS the live managed backend** and passes every assertion while doing it — measured twice 2026-09-09, and it is §17k's silent death. Its temp APPDATA carries no `comfyManagedPort`, so the run defaults to 8288 and `stopByPort(8288)` taskkills the real one. Give the fixture a port nothing owns. | §17p | nothing | no |
-| 2 | H3 t2v regression + `catalog-vram-probe --entry minimax-h3` → measured block | §18 P3 | item 1, AE | no |
+| ~~1e~~ | ~~`node tests/test-comfy-install.js` KILLS the live managed backend~~ **DONE 2026-09-09.** The fixture now writes `comfyManagedPort` from an OS-allocated dead port, and the fall-through that had NO assertion at all (`stopped the backend holding port`) is checked in both directions plus a flat refusal of the string `8288`. Verified on the machine, against §17p's own reproduction: boot on 8288, run all 85 test files, backend STILL ALIVE on the same pid, `/queue` 200. New block 5 refuses any test that drives `--stop` without naming a port. No bump — nothing in `extension/` changed. | §17p | — | — |
+| 2 | **START HERE.** H3 t2v regression + `catalog-vram-probe --entry minimax-h3` → measured block | §18 P3 | item 1, AE | no |
 | 3 | sd15 basic template (+ the frontend-editable measurement) | §18 P5 | item 1, AE, 2 GB | yes |
 | 4 | sdxl basic template | §18 P6 | item 3, 7 GB | yes |
 | 5 | wan22-5b basic t2v template | §18 P7 | item 3, 17 GB | yes |
@@ -4361,8 +4361,11 @@ run that could not render.
 
 ## 17k. The managed backend dies SILENTLY within the half hour (filed 2026-09-09, local session)
 
-**CAUSE FOUND 2026-09-09 (local session) — see §17p, and read it before
-acting on anything below.** The killer is in this repo: the stubbed test
+**CAUSE FOUND, AND FIXED, 2026-09-09 (local session) — see §17p, and
+read it before acting on anything below.** The fix is in; a backend has
+since survived the entire 85-file suite on the same pid. If a death is
+measured AFTER that, it is a NEW one and the hypotheses below become
+live again — until then they explain nothing that has actually happened. The killer is in this repo: the stubbed test
 suite. `tests/test-comfy-install.js` runs the real `comfy-install.js
 --check --stop` against a temp APPDATA that carries no
 `comfyManagedPort`, so it defaults to 8288 and `stopByPort(8288)`
@@ -4657,7 +4660,36 @@ without `--url` measures nothing and reports a failure that says nothing
 about the weights. It should default to the backend the settings
 actually select, and `--url` should stay an override.
 
-## 17p. The stubbed test suite kills the live managed backend (filed 2026-09-09, local session)
+## ~~17p. The stubbed test suite kills the live managed backend~~ DONE 2026-09-09 (local session)
+
+**DONE.** Fixed exactly where this filing said to — in the fixture, not
+in `stopByPort`. Block 4 of `tests/test-comfy-install.js` now writes
+`comfyManagedPort` into its temp `settings.json` from an OS-allocated
+dead port (`net.createServer().listen(0)`, bound, read back, released),
+and the fall-through that had no assertion at all is covered three ways:
+`stopped the backend holding port` must not appear, the run must say it
+looked at the FIXTURE's port, and the string `8288` must not appear
+anywhere in the output of a run that stops. Negative control: dropping
+the `settings.json` write fails all three.
+
+**Verified against this filing's own reproduction**, not just the stub:
+`comfy-install.js --boot` (pid 42796 on 8288) → all 85 test files →
+`Get-NetTCPConnection -LocalPort 8288` still names **pid 42796**, and
+`/queue` answers 200. The suite no longer kills the backend, and the
+whole suite was run, not only the one file.
+
+The filing's last question — whether any OTHER test can reach
+`stopByPort`/`taskkill` with a defaulted port — is answered NO today
+(`test-probe-reachability.js` and `test-probe-backend-url.js` both name
+a dead port already, and neither passes `--stop`), and block 5 keeps the
+answer true: any `tests/test-*.js` that hands a script `--stop` must
+also name a port. Its first draft was satisfied by a PROSE mention of
+`comfyManagedPort` in a comment — the same shape of hole this section
+is about — so it requires `comfyManagedPort` followed by `:` or `=`.
+
+The original filing follows.
+
+## 17p (as filed). The stubbed test suite kills the live managed backend (filed 2026-09-09, local session)
 
 **This is §17k's cause, measured rather than hypothesised.** Found while
 closing §17m: a backend booted at 08:52 and still serving a full H3
