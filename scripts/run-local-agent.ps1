@@ -47,6 +47,17 @@ param(
     # cheaper tier; the expensive one is for daytime design and review.
     [string]$Model = '',
     [switch]$SkipPermissions = $true,
+    # Upper bound on ONE pass (WORKPLAN 20b). A normal pass is 6-10
+    # minutes. Before this there was no bound at all: run-ae-selftest.ps1
+    # carries -TimeoutSec 240 and every other step carried nothing, so a
+    # genuinely wedged pass held the loop until a human noticed. On an
+    # overnight run that means the rest of the night.
+    #
+    # 45 rather than the 30 first proposed, because NEXT UP item 1
+    # installs the managed ComfyUI backend -- a ~2 GB download -- and a
+    # timeout that kills the item it exists to protect is worse than no
+    # timeout. Lower it once that item is done.
+    [int]$PassTimeoutMin = 45,
     # Skip the write-probe that runs before pass 1. Only for debugging
     # the loop itself -- the probe is one small CLI call and it is what
     # stands between a misconfigured machine and a wasted night.
@@ -87,6 +98,7 @@ if (-not $Detached) {
            $PSCommandPath + '" -Detached'
     $fwd = $fwd + ' -Iterations ' + $Iterations
     $fwd = $fwd + ' -PauseSec ' + $PauseSec
+    $fwd = $fwd + ' -PassTimeoutMin ' + $PassTimeoutMin
     $fwd = $fwd + ' -UntilHour ' + $UntilHour.ToString(
         [System.Globalization.CultureInfo]::InvariantCulture)
     if ($RepoRoot)   { $fwd = $fwd + ' -RepoRoot "' + $RepoRoot + '"' }
@@ -710,6 +722,50 @@ for ($i = 1; $i -le $Iterations; $i++) {
         Write-Log ('Heartbeat could not start: ' + $_.Exception.Message)
     }
 
+    # --- per-pass timeout (WORKPLAN 20b) ------------------------------
+    #
+    # The pass below is a BLOCKING pipeline. If `claude -p` wedges, this
+    # loop waits forever, and nothing bounded it before now.
+    #
+    # A job rather than a timer on the pipeline, and the pass is found by
+    # DESCENT from this process (Get-AellCliPassProcesses), never by
+    # name: the Claude desktop app is Electron and owns a dozen processes
+    # called claude, so killing by name would take the owner's own editor
+    # down with the pass.
+    #
+    # Killing the child is what unblocks the pipeline, so the loop
+    # resumes on its own once this fires. The sentinel file is how the
+    # code after the pipeline tells "timed out" from "finished" -- a job
+    # that has been stopped cannot be asked.
+    $timeoutFlag = Join-Path $RepoRoot ('logs\pass-timeout-' + $PID + '-' + $i + '.flag')
+    Remove-Item -LiteralPath $timeoutFlag -Force -ErrorAction SilentlyContinue
+    $guard = $null
+    try {
+        $guard = Start-Job -Name 'AellPassTimeout' -ScriptBlock {
+            param($procLib, $rootId, $flag, $limitSec)
+            . $procLib
+            Start-Sleep -Seconds $limitSec
+            $killed = @()
+            foreach ($cp in @(Get-AellCliPassProcesses -RootId $rootId)) {
+                try {
+                    Stop-Process -Id $cp.ProcessId -Force -ErrorAction Stop
+                    $killed += $cp.ProcessId
+                } catch { }
+            }
+            $what = 'nothing'
+            if ($killed.Count) { $what = ($killed -join ',') }
+            Set-Content -Path $flag -Encoding ASCII -Value (
+                'ran past ' + $limitSec + 's; killed pid ' + $what)
+        } -ArgumentList `
+            (Join-Path $PSScriptRoot 'lib\claude-procs.ps1'),
+            $PID,
+            $timeoutFlag,
+            ($PassTimeoutMin * 60)
+    } catch {
+        # A missing guard must never cost the pass, same as the beat.
+        Write-Log ('Pass timeout guard could not start: ' + $_.Exception.Message)
+    }
+
     $passLines = New-Object System.Collections.Generic.List[string]
     try {
         Get-Content -Raw $promptFile |
@@ -730,6 +786,18 @@ for ($i = 1; $i -le $Iterations; $i++) {
         Stop-Job -Job $beat -ErrorAction SilentlyContinue
         Remove-Job -Job $beat -Force -ErrorAction SilentlyContinue
         Write-Log ('Pass ran ' + $beatFor + 's.')
+    }
+
+    if ($guard) {
+        Stop-Job -Job $guard -ErrorAction SilentlyContinue
+        Remove-Job -Job $guard -Force -ErrorAction SilentlyContinue
+    }
+    if (Test-Path -LiteralPath $timeoutFlag) {
+        $why = (Get-Content -LiteralPath $timeoutFlag -Raw).Trim()
+        Write-Log ('Pass TIMED OUT: ' + $why + '. The bound is ' +
+                   '-PassTimeoutMin ' + $PassTimeoutMin +
+                   '. Taking the next iteration.')
+        Remove-Item -LiteralPath $timeoutFlag -Force -ErrorAction SilentlyContinue
     }
 
     foreach ($cp in @(Get-AellCliPassProcesses -RootId $PID)) {

@@ -22,7 +22,7 @@ item -> commit -> repeat). One item per pass, then stop.
 
 ## NEXT UP — read this first, take the first item that is not blocked
 
-Maintained 2026-09-07. **This exists because the brief tells a pass NOT
+Maintained 2026-09-08 (local session). **This exists because the brief tells a pass NOT
 to read the whole workplan** (it is ~46k tokens) — so without an ordered
 list at the top, a fresh unattended session has to guess which of
 nineteen sections holds live work, and the live work is in the LAST
@@ -39,9 +39,9 @@ the night retrying it.
 
 | # | item | where | needs | bumps |
 |---|---|---|---|---|
-| **B** | **BLOCKER — AE sits on the crash-recovery dialog, so the harness cannot run at all.** Read §21 before anything else; step 1 there wants a human eye. | §21 | nothing (but AE is currently wedged) | no |
-| 0 | ~~Give the loop a heartbeat~~ DONE 2026-09-08 (§20a, `scripts/lib/loop-heartbeat.ps1`). Still open: **verify one pass commits** (§20c), the per-pass timeout (§20b) and the bypass guard test (§20d) | §20 | nothing | no |
-| 1 | Install the managed ComfyUI backend: `node scripts/comfy-install.js --boot` | §17c | ~10 GB free, a 2 GB download. **Check free space first and log it.** | no |
+| ~~B~~ | ~~BLOCKER — AE sits on the crash-recovery dialog~~ **PREVENTED 2026-09-08.** `run-ae-selftest.ps1` now clears `CrashOccurred` in HKCU before every launch. If AE sits on that dialog again, that is a REGRESSION — log it, do not click past it and carry on. | §21 | — | no |
+| ~~0~~ | ~~heartbeat, verify a pass commits, per-pass timeout~~ **DONE 2026-09-08.** §20a heartbeat every 30s; §20c VERIFIED (`Pass committed 2d76fdf8`, the first end-to-end loop success since 09-02); §20b `-PassTimeoutMin 45`. Still open: **§20d**, the bypass guard test. | §20 | nothing | no |
+| 1 | **START HERE.** Install the managed ComfyUI backend: `node scripts/comfy-install.js --boot` | §17c | ~10 GB free — measured 2026-09-08: C 921 GB, X 1096 GB, so this is satisfied. Log what you measure anyway. | no |
 | 2 | H3 t2v regression + `catalog-vram-probe --entry minimax-h3` → measured block | §18 P3 | item 1, AE | no |
 | 3 | sd15 basic template (+ the frontend-editable measurement) | §18 P5 | item 1, AE, 2 GB | yes |
 | 4 | sdxl basic template | §18 P6 | item 3, 7 GB | yes |
@@ -63,6 +63,17 @@ NOTHING but the repo and are always takeable:
 | Persist `_floorMB`; launch-time `memory.used` read | §16f 1-2 | yes |
 | Mid-render VRAM reading in the scratch comp | §16f 3 | no |
 | The 7B at ctx 16,384 and 20,480, fp16 vs `q8_0` KV, via a standalone launcher | §16f 4 | no |
+
+**State of the loop, 2026-09-08 (read this instead of re-diagnosing it).**
+A week of nights produced nothing and the cause is now fully understood
+and fixed, so do NOT spend a pass on it. The bypass flag was being eaten
+by a bare `--` shredded out of the brief by PS 5.1 (broken 09-05, fixed
+09-08; see §20 ROOT CAUSE FOUND). AE's crash-recovery dialog then blocked
+every launch and cannot be clicked by automation, so it is now PREVENTED
+at the registry (§21). A pass has since committed end to end. If a night
+produces nothing, the log will say which of these it was — heartbeat
+lines every 30s, `Crash flag:` before each AE launch, and
+`Pass TIMED OUT` if a pass ran past its bound.
 
 **Gate 0 for every pass that touches settings or downloads:** print
 `Settings.origin()` and refuse when `appdata` is empty. The detached loop
@@ -3937,7 +3948,24 @@ zero, and the two are then distinguishable from outside.
 Do NOT use CPU. It is measured to be uninformative here in both
 directions, which is the whole reason this item exists.
 
-### 20b. A per-pass timeout — takeable, no bump
+### 20b. A per-pass timeout — DONE 2026-09-08 (local session)
+
+`-PassTimeoutMin`, default **45**, forwarded across the WMI detach. A
+background job sleeps the bound, then kills the pass by DESCENT from the
+loop process (`Get-AellCliPassProcesses`) and drops a sentinel file;
+killing the child unblocks the pipeline, so the loop takes the next
+iteration on its own and logs `Pass TIMED OUT: ...`.
+
+45 rather than the 30 proposed below, because NEXT UP item 1 is a ~2 GB
+download and a bound that kills the work it protects is worse than none.
+
+Never by process NAME: the Claude desktop app is Electron and owns 21
+processes called claude on this machine (measured), so a name match would
+kill the owner's editor. `tests/test-pass-timeout.js` asserts exactly
+that, and checks live that a process with no pass beneath it nominates
+nothing.
+
+The original filing follows.
 
 There is no upper bound on a pass. `run-ae-selftest.ps1` has
 `-TimeoutSec 240` and every other step has nothing, so a genuinely wedged

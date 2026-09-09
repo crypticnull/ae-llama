@@ -20768,3 +20768,45 @@ load-bearing, but it should be corrected or deleted rather than left
 reading as coverage.
 
 No `extension/` change, so **no version bump**.
+
+## 2026-09-08 (local session) — §20b: a per-pass timeout, and the queue teed up for an overnight run
+
+Owner's context, and the reason this matters more than it looks: After
+Effects is heavy enough that he does not run it during the day, so the
+overnight loop is the ONLY window this project moves in. A week of nights
+was lost, which is a week of project time, not a week of inconvenience.
+
+**§20b shipped.** `-PassTimeoutMin`, default 45, forwarded across the WMI
+detach so it binds the detached child too (the bound would otherwise
+apply only to a run nobody uses). A background job sleeps the bound, kills
+the pass by DESCENT from the loop process, and drops a sentinel; killing
+the child is what unblocks the blocking pipeline, so the loop resumes by
+itself and logs `Pass TIMED OUT`.
+
+**45 rather than 30.** NEXT UP item 1 is a ~2 GB download. A bound that
+kills the item it exists to protect is worse than no bound, and this is
+the same shape as the preflight lesson: a guard that fires on the wrong
+thing is not a weaker guard, it is a misleading one.
+
+**Never by name.** Measured on this machine: 21 processes are called
+`claude`, nearly all of them the Claude desktop app, which is Electron.
+A name-matching reaper would kill the owner's editor mid-session.
+`Get-AellCliPassProcesses` finds passes by descent and excludes the
+desktop app; `tests/test-pass-timeout.js` asserts the guard never reaches
+for a name, and checks live that a process with no pass beneath it
+nominates nothing to kill.
+
+**The queue was refreshed**, which is the part most likely to waste a
+night if skipped. The pass takes the FIRST unblocked item, so a stale
+NEXT UP sends it at finished work. Row B (the AE dialog blocker) is
+struck as PREVENTED, row 0 is struck as done, and item 1 is marked START
+HERE with free space measured (C 921 GB, X 1096 GB) so the pass does not
+have to discover the gate is satisfied. A "state of the loop" note now
+sits above Gate 0 telling a fresh pass NOT to re-diagnose the week: the
+bare-`--` bypass loss and the AE dialog are both understood and fixed,
+and the log now says which one it was if a night goes quiet.
+
+**Still open in §20:** 20d, the bypass guard test. Everything else in the
+section is closed.
+
+Suite **82/82**. No `extension/` change, so **no version bump**.
