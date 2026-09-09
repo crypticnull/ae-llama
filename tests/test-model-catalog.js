@@ -77,13 +77,32 @@ assert(cOver.length === 1 && cOver[0].name === "y",
 // recommending a grind. The gate is 12 now and this card gets sd15
 // (measured 2656 MiB), the largest image entry that actually fits it.
 // See WORKPLAN 18 P6.
+//
+// The VIDEO pick moved the same way one day later and it is the bigger
+// move: it was "wan22-5b" and it is now "ltx-small". wan22-5b's gate was
+// 8, written from training; measured through the shipped
+// AE_LLAMA_WAN22_5B_T2V_V1 on the managed backend the authored job costs
+// 26 187 MiB, and a third run at 704x480 -- a third of the pixels -- still
+// cost 21 536 MiB, because the floor is the 17 304 MiB of resident weights
+// and not the frame. So no size this panel can inject fits Wan 2.2 5B on
+// an 8 GB card, the gate is 32, and this row now asserts what an 8 GB
+// buyer is actually offered.
+//
+// That is NOT the same as asserting it is a good offer. ltx-small is
+// flagged experimental and has no bundled graph at all (a permanent
+// ALLOW_NO_TEMPLATE seat, owner Q1), so as of 2026-09-09 every card under
+// 32 GB has no runnable video template. This row pins the truth so the
+// gap is visible; closing it is a PRODUCT decision, filed as WORKPLAN
+// 18 P7a. See WORKPLAN 18 P7 and 18 P6a.
 const combo = window.Setup.recommendSetup(null,
   { hasNvidia: true, name: "RTX 4060", vramGB: 8, computeCap: 8.9 });
 assert(combo.tier.id === "T3" && combo.chat &&
        combo.chat.name.indexOf("7B") > 0 &&
        combo.gen.image && combo.gen.image.name === "sd15" &&
-       combo.gen.video && combo.gen.video.name === "wan22-5b",
-       "recommendSetup(8GB): T3, 7B chat, sd15 images, Wan video (got " +
+       combo.gen.video && combo.gen.video.name === "ltx-small",
+       "recommendSetup(8GB): T3, 7B chat, sd15 images, and the " +
+       "experimental LTX for video because Wan 2.2 5B's measured " +
+       "26 187 MiB does not fit (got " +
        JSON.stringify({ t: combo.tier.id,
                         c: combo.chat && combo.chat.name,
                         i: combo.gen.image && combo.gen.image.name,
@@ -252,12 +271,55 @@ window.AELL.COMFY_CATALOG.forEach((e) => {
         const mf = JSON.parse(fs.readFileSync(mfp, "utf8"));
         const ptr = (mf.procedural || {}).durationSeconds;
         const node = ptr && graph[String(ptr.nodeId)];
-        const authored = node
+        let authored = node
           ? Number((node.inputs || {})[ptr.input || "value"]) : 0;
+        // Named on BOTH paths. The message used to interpolate ptr.nodeId,
+        // which is undefined the moment the length is read from the graph
+        // instead of a durationSeconds pointer — so the failure this rule
+        // exists to report arrived as a TypeError that killed the run
+        // before the remaining assertions ever executed.
+        let where = node ? ("node " + ptr.nodeId) : "";
+        // A manifest's procedural.durationSeconds was the ONLY way this
+        // check could read a template's authored length, and most video
+        // graphs do not have one. H3 does because its own math node
+        // converts seconds to a frame grid; the wan22-5b basic does not,
+        // because its latent node carries a literal frame COUNT — which is
+        // the shape injectParams' generic frame walk expects, so declaring
+        // durationSeconds there would be wrong (comfy.js frameKeys, and
+        // that manifest's whyNoDurationSeconds).
+        //
+        // The hole that left: for every frames-based video template the
+        // block above silently measured nothing, so an entry could quote a
+        // short reading with no authoredNote and pass — the exact defect
+        // this rule exists to catch, exempting the majority of the graphs
+        // it is meant to police. Verified by reintroducing it: dropping
+        // wan22-5b's authoredClipSeconds passes without this and fails
+        // with it. Fall back to the graph's own frame key over the
+        // CreateVideo fps, which is where the length physically lives.
+        if (!(authored > 0)) {
+          const FRAME_KEYS = ["length", "frames", "video_frames", "num_frames"];
+          let frames = 0, fps = 0;
+          Object.keys(graph).forEach((id) => {
+            const n = graph[id] || {};
+            const ins = n.inputs || {};
+            if (!frames) {
+              FRAME_KEYS.forEach((k) => {
+                if (!frames && typeof ins[k] === "number") frames = ins[k];
+              });
+            }
+            if (!fps && typeof ins.fps === "number") fps = ins.fps;
+          });
+          if (frames > 0 && fps > 0) {
+            // Two decimals, because that is the precision a catalog row
+            // can state and measuredAt has to repeat it verbatim.
+            authored = Math.round((frames / fps) * 100) / 100;
+            where = frames + " frames / " + fps + " fps";
+          }
+        }
         if (authored > 0) {
           assert(e.authoredClipSeconds === authored,
                  e.name + ": authoredClipSeconds is the template's OWN " +
-                 "default (" + authored + " s at node " + ptr.nodeId + "), " +
+                 "default (" + authored + " s from " + where + "), " +
                  "so the row says what a user who names no length gets");
           if (authored !== e.measuredClipSeconds) {
             assert(typeof e.authoredNote === "string" &&
@@ -320,7 +382,13 @@ if (krea2) {
 //
 // Entries whose files carry no per-file size (krea2, ltx-small) cannot
 // be checked here and are skipped rather than assumed innocent.
-const GATE_UNDER_ITS_BIGGEST_FILE = ["wan22-5b"];
+// EMPTY as of 2026-09-09. wan22-5b was this list's only seat and it is
+// gone the way the item asked for: measured, not argued. Its gate was 8
+// against a 9536 MiB single file; the shipped graph costs 26 187 MiB and
+// the gate is 32 (WORKPLAN 18 P7). The list stays, and stays checked in
+// BOTH directions, because the rule it encodes is the cheap one — it
+// needs no GPU, and it is what caught wan22-5b before any card did.
+const GATE_UNDER_ITS_BIGGEST_FILE = [];
 {
   const offenders = [];
   window.AELL.COMFY_CATALOG.forEach((e) => {
@@ -378,9 +446,10 @@ window.AELL.COMFY_CATALOG.forEach((e) => {
 // there is nothing to download and nothing to render.
 // sd15 left this list 2026-09-09 (WORKPLAN 18 P5): it ships
 // AE_LLAMA_SD15_T2I_V1 and that graph has rendered on the managed
-// backend and imported into AE.
-const ALLOW_NO_TEMPLATE = ["ltx-small", "wan22-5b",
-                           "minimax-h3-int8"];
+// backend and imported into AE. sdxl left it the same day (P6), and
+// wan22-5b the same day (P7) with AE_LLAMA_WAN22_5B_T2V_V1, which
+// rendered 1280x704 x 121 frames twice on the managed backend.
+const ALLOW_NO_TEMPLATE = ["ltx-small", "minimax-h3-int8"];
 
 // Entries whose template has never been measured through
 // catalog-vram-probe. EXISTENCE IS NOT PROOF: a graph can be committed,

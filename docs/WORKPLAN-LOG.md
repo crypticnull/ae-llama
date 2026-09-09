@@ -22190,3 +22190,159 @@ backend UP on 8288, queue empty. Evidence files left on disk by the
 probes' own design: `AELlama_SDXL__00001_.png` / `__00002_.png` in
 `logs/catalog-vram/`, and
 `%APPDATA%\AE-Llama\generated\AELlama_SD15__00006_.png` from chat-probe.
+
+## 2026-09-09 (local session) — wan22-5b renders, and the measurement it needed leaves every card under 32 GB with no video graph (NEXT UP 5 / §18 P7, 0.12.12)
+
+**Item: NEXT UP 5 (§18 P7), the "START HERE" row.** Harness green first —
+`run-ae-selftest.ps1` **770/770** — so the list applied. Gate 0:
+`from=file saved=true dataRoot=C:\Users\mr\AppData\Roaming\AE-Llama`.
+Managed backend already up on 8288 from the previous pass. Weights: two of
+the three were missing and were fetched through the panel's own downloader
+(`download-gen-weight.js --entry wan22-5b`), 17 304 MiB total; disk was
+never close to tight.
+
+**What shipped.** `extension/comfy-workflows/AE_LLAMA_WAN22_5B_T2V_V1.json`
+plus its manifest. Authored the way the contract demands and then some: the
+managed backend ships the vendor's OWN template for this model inside its
+python env
+(`comfyui_workflow_templates_json/templates/video_wan2_2_5B_ti2v.json`), so
+the graph was read off that file on disk rather than recalled, node ids
+kept, and then every input re-confirmed against the running backend's
+`/object_info` — `Wan22ImageToVideoLatent`, `ModelSamplingSD3`,
+`CreateVideo` and `SaveVideo` are none of them in
+`scripts/comfy-node-defs.json`, so the offline harvest could not have
+answered for them.
+
+**Three deliberate departures from the vendor's file, all contract, none
+taste**, written into the manifest as `whatChangedFromTheVendorTemplate`:
+
+1. **The vendor's `LoadImage` is DELETED, not carried.** Its template ships
+   that node in `mode: 4` (bypassed) because one graph serves t2v and i2v.
+   **An API-format graph has no "muted"** — a bypassed node copied into the
+   API dict is a node ComfyUI will try to run, against a filename that
+   exists only on the author's machine. `start_image` is an OPTIONAL input
+   on `Wan22ImageToVideoLatent` (measured from `/object_info`), so deleting
+   it IS the text-to-video path.
+2. `SaveVideo` is mp4/h264, not the vendor's auto/auto — auto picks WebM
+   for an AV1 stream, and AE imports the mp4.
+3. `filename_prefix` is this panel's RELATIVE prefix.
+
+Sampler, scheduler, steps, cfg, shift, size, length and fps are the
+vendor's values untouched: a basic is the shape ComfyUI itself ships.
+
+**No `procedural.durationSeconds`, and that is the difference from H3.**
+H3 needed it because its own math node converts seconds to a frame grid.
+This graph carries a literal numeric `length` on node 55, which is exactly
+what `injectParams`' generic frame walk writes (`comfy.js` frameKeys).
+Declaring it would flip `lengthIn` to "seconds" and make the panel REFUSE a
+frames request against a graph that takes frames.
+
+**The measurement, and §18 P6a closed — not close.** Two runs at one seed
+on the managed backend, `catalog-vram-probe --entry wan22-5b`: **26 187 and
+24 576 MiB** over an established idle floor, **127 s each**, 1280x704 x 121
+frames out. Published the higher, as krea2 and H3 did. `minVramGB` was
+**8**; it is **32**, `measured: true`, and the `GATE_UNDER_ITS_BIGGEST_FILE`
+allowlist is now EMPTY (wan22-5b was its only seat).
+
+P6a asked for a gate. What settles the PRODUCT question is a third run
+nobody asked for: **704x480 — a third of the pixels — still cost 21 536
+MiB**, in 38 s. That is the number that makes the answer non-negotiable.
+The floor here is the 17 304 MiB of resident weights (fp16 diffusion 9536 +
+fp8 encoder 6424 + vae 1344), not the frame, so **no width, height or
+length the panel can inject fits this entry on a 24 GB card, let alone an
+8 GB one.** Re-measuring will not move it and a smaller default will not
+rescue it.
+
+**The consequence, and it needs the owner: §18 P7a is FILED.** With the
+gate at 32, every card below 32 GB — 4090, 4080, 3090, 4060 — is
+recommended `ltx-small` for video: `experimental`, `urls: []`, **no graph
+at all** (a permanent `ALLOW_NO_TEMPLATE` seat, owner Q1). It can neither
+download nor render. P6a's step 3 said to say so and flag it rather than
+decide it, so both 8 GB pins moved to `ltx-small` WITH their reasons inline
+(`test-tiers.js`, and recommendSetup in `test-model-catalog.js`) — the gap
+is now asserted, which makes it visible and un-widenable, but asserting a
+gap is not closing it. P7a lays out four ways out (pin the fp8 Wan build as
+a second entry; give ltx-small a real graph, reopening Q1; recommend
+nothing for video below 32 and say why; or re-admit `slowBelowGB` with a
+disclosure, noting that §18 P6 deliberately REMOVED that mechanism the day
+before) with what each costs. **Unattended passes must not pick one.**
+
+**Root defect 1 — the authored-length rule could not see most of the
+graphs it polices.** `test-model-catalog.js`'s "a short reading must
+disclose the authored job" check (added for H3's 15-minute default, §18
+P3a) read the authored length ONLY through
+`manifest.procedural.durationSeconds`. Most video templates do not have one
+— this new one deliberately does not — so for them `authored` was 0 and the
+whole block silently measured nothing. An entry could quote a 2 s
+decomposition of a 15-minute render with no `authoredNote` and pass. It now
+falls back to the graph's own frame key over the `CreateVideo` fps, which
+is where the length physically lives. Verified by reintroduction in BOTH
+forms: dropping `authoredClipSeconds` fails, and re-labelling the row as a
+2 s reading with no note fails with the sentence that explains why. Writing
+it also surfaced a bug in the fix itself — the failure message interpolated
+`ptr.nodeId`, which is `undefined` on the new path, so the first real
+failure arrived as a **TypeError that killed the run before the remaining
+assertions executed.** Named on both paths now.
+
+**Root defect 2 — `recommendGen`'s tie was being broken by ARRAY ORDER.**
+Moving wan22-5b to 32 created the catalog's first same-kind tie (wan22-5b /
+minimax-h3 / minimax-h3-int8, all gate 32), and `better()` compared
+`minVramGB` with a strict `>`, so the winner was whichever sat earlier in
+`COMFY_CATALOG`. The 32 GB video recommendation silently changed from
+MiniMax H3 to Wan as a side effect of a VRAM measurement, and nobody had
+chosen that — the same defect §18 P1 fixed for `resolveWorkflow`, where the
+ALPHABET was picking. Fixed at the root in `tiers.js`: on an equal floor,
+an entry gated on this card's own architecture wins first (which is the
+entire reason the catalog carries both minimax-h3 and minimax-h3-int8 — the
+nvfp4 build is Blackwell-native and the int8 one is the FALLBACK, and it is
+the LARGER file, so size alone would invert that pair), then the larger
+download. Both 32 GB pins hold again without being touched.
+
+**Finding filed as §18 P7b: `download-gen-weight` re-downloads a file the
+backend already has.** `umt5_xxl_fp8_e4m3fn_scaled.safetensors` was already
+in `comfyModelRoots`, already reachable through `extra_model_paths.yaml`,
+and already LISTED by the running backend in `/object_info/CLIPLoader` —
+and 6424 MiB were downloaded again into the vendor tree. Cause is
+`setup.js:714`: `fs.existsSync(dest)` asks about the ONE chosen path while
+the backend searches several. That is the same two-sources split
+`genNeedMBFor`'s comment already documents for SIZE, reappearing for
+EXISTENCE. `minimax-h3-int8` (§18 P10) names a **26 GB** encoder, so this
+stops being a rounding error next pass. Filed with the fix, the two traps
+in it, and a stub design that needs no GPU and no network.
+
+**Verification chain, all of it on the machine.**
+`weight-availability-probe` — 3 weight slots, 0 unloadable; 5 enum values,
+0 unoffered; all verdicts PASS.
+`comfy-probe --workflow AE_LLAMA_WAN22_5B_T2V_V1 --frames 25 --width 640
+--height 384` — **9/9**, including AE importing the mp4 (640x384, 1.042 s @
+24 fps), which is `--frames` verified end to end.
+`catalog-vram-probe --entry wan22-5b` x3 as above.
+`chat-probe --steps 1,12,13` — **3/3**; step 13 still picks sd15 for "a red
+apple", so the image side is undisturbed.
+Stubbed suite **86/86**. Harness **770/770** after the changes.
+
+**Two things that cost time and were my own error, recorded so the next
+pass does not repeat them.** (a) `node scripts/download-gen-weight.js ... |
+head -40` KILLS the download: `head` closes the pipe at line 40, the
+downloader dies on SIGPIPE mid-file leaving a `.part`, and the surrounding
+shell still reports exit 0 — which reads exactly like a completed run whose
+verdicts scrolled past. Do not pipe a long downloader into `head`. (b)
+`--dry-run` is not a flag on that script (`--check` is) and an unrecognised
+flag is IGNORED rather than refused, so a "dry run" downloaded 17 GB.
+Neither is filed as work. A third, smaller one: `chat-probe --steps 13`
+alone fails with "Comp not found: Probe Room" because step 1 is what
+creates that comp — run `--steps 1,13`, as the §18 P5 entry did. That is
+the probe working correctly, not a defect; it cost a stash-and-bisect
+against the previous commit to prove.
+
+**AE and the backend left as found.** AE running, project not closed, no
+modal. The self-test deleted its own scratch comps; `chat-probe` and
+`comfy-probe` cleaned up every item they made (`comfy-probe` reported "the
+probe cleaned up after itself"). Managed backend UP on 8288, queue empty.
+Evidence files left on disk by the probes' own design:
+`AELlama_Wan22_5B__00001_.mp4` / `__00002_.mp4` / `__00003_.mp4` in
+`logs/catalog-vram/`, and `AELlama_SD15__00007_.png` through `__00010_.png`
+in `%APPDATA%\AE-Llama\generated\` from chat-probe.
+
+**Bumped 0.12.11 -> 0.12.12** — `extension/` changed (two new bundled
+template files, plus `version.js` and `tiers.js`), so the bump is owed.

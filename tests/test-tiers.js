@@ -119,8 +119,26 @@ const T = window.Tiers;
   assert(t3.image && t3.image.name === "sd15",
          "8 GB image default is SD 1.5 — SDXL's gate is 12 GB since it " +
          "was measured (got " + (t3.image && t3.image.name) + ")");
-  assert(t3.video && t3.video.name === "wan22-5b",
-         "8 GB video is Wan 2.2 5B, not the experimental LTX");
+  // This row said "8 GB video is Wan 2.2 5B, not the experimental LTX"
+  // until 2026-09-09, and it moved because the card disagreed. wan22-5b's
+  // minVramGB was 8, written from training. Measured through the shipped
+  // AE_LLAMA_WAN22_5B_T2V_V1 on the managed backend, the authored job costs
+  // 26 187 MiB — and a third run at 704x480, a third of the pixels, still
+  // cost 21 536 MiB, because the floor is the 17 304 MiB of resident
+  // weights and not the frame. No width, height or length the panel can
+  // inject fits this entry on an 8 GB card, so the gate is 32 (18 P7).
+  //
+  // What the row asserts now is deliberately uncomfortable: an 8 GB buyer's
+  // video default is the EXPERIMENTAL entry, and ltx-small has no bundled
+  // graph at all (permanent ALLOW_NO_TEMPLATE seat, owner Q1). So every
+  // card under 32 GB currently has no runnable video template. That is the
+  // consequence WORKPLAN 18 P6a said to flag rather than decide, and it is
+  // filed as 18 P7a. Pinned so the gap cannot close or widen unnoticed.
+  assert(t3.video && t3.video.name === "ltx-small" &&
+         t3.video.experimental === true,
+         "8 GB video falls to the experimental LTX entry — Wan 2.2 5B's " +
+         "measured 26 187 MiB does not fit 8 GB at any size (got " +
+         (t3.video && t3.video.name) + ")");
 
   const t7bl = rec(32, 12.0);
   assert(t7bl.image && t7bl.image.name === "krea2",

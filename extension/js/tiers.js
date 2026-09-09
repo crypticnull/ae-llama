@@ -202,7 +202,35 @@
     var demotedPick = { image: false, video: false };
     function better(a, b) {   // highest VRAM floor = the most this card can do
       if (!b) return true;
-      return (a.minVramGB || 0) > (b.minVramGB || 0);
+      var af = a.minVramGB || 0, bf = b.minVramGB || 0;
+      if (af !== bf) return af > bf;
+      // TIES ARE DECIDED, not inherited from array order. Until 2026-09-09
+      // no two entries of one kind shared a floor, so a tie fell through to
+      // "whichever came first in COMFY_CATALOG" and nobody had chosen that.
+      // Measuring wan22-5b (WORKPLAN 18 P7) moved its gate 8 -> 32 and made
+      // a three-way video tie with minimax-h3 and minimax-h3-int8 — and the
+      // 32 GB recommendation silently changed to Wan purely because it sits
+      // earlier in the array. That is the defect 18 P1 fixed for
+      // resolveWorkflow, where the ALPHABET was doing the picking.
+      //
+      // On an equal floor, prefer the larger download. It carries the same
+      // intent the floor does ("the most this card can do"), it is a number
+      // every entry either has or has not, and it keeps the 32 GB pick at
+      // MiniMax H3 instead of moving a buyer-facing default as a side
+      // effect of a VRAM measurement. An entry with no sizeMB (krea2,
+      // ltx-small) scores 0 and so LOSES a tie rather than winning one by
+      // accident.
+      //
+      // Before the size, one rule that is about FIT rather than bulk: an
+      // entry gated on this card's own architecture beats one that is not.
+      // That is the whole reason the catalog carries minimax-h3 AND
+      // minimax-h3-int8 at the same floor — the nvfp4 encoder is the
+      // Blackwell-native build and the int8 one is the fallback for cards
+      // that cannot run it (entryFits, requiresBlackwell). Size alone would
+      // invert that pair, because the FALLBACK is the larger file.
+      var aArch = !!a.requiresBlackwell, bArch = !!b.requiresBlackwell;
+      if (aArch !== bArch) return aArch;
+      return (a.sizeMB || 0) > (b.sizeMB || 0);
     }
     for (var i = 0; i < catalog.length; i++) {
       var e = catalog[i];

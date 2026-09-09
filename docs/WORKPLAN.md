@@ -52,10 +52,17 @@ the night retrying it.
 | 2b | A 15-minute generation reports elapsed seconds and no estimate, so it reads as a hang | §18 P3b | — | yes |
 | ~~3~~ | ~~sd15 basic template (+ the frontend-editable measurement)~~ **DONE 2026-09-09 (0.12.10).** `AE_LLAMA_SD15_T2I_V1` + manifest, `workflowTemplate`, hash history, `ALLOW_NO_TEMPLATE` −sd15, and a MEASURED block (2656 MiB / 4 s cold at 512x512, managed backend). Full chain green: weight probe, `comfy-probe --workflow` 9/9 incl. AE import, `catalog-vram-probe` x2, `chat-probe --steps 1,13` — and step 13 now picks sd15 for "a red apple", which is the §18 gap statement closed. **The frontend measurement is YES** (see §18 P5b). Two root defects found en route: §18 P5a and the chat-probe PID store. | §18 P5 | — | 0.12.10 |
 | ~~4~~ | ~~sdxl basic template~~ **DONE 2026-09-09 (0.12.11).** `AE_LLAMA_SDXL_T2I_V1` + manifest (the sd15 seven-node shape, ckpt swapped, 1024x1024 latent), `workflowTemplate`, hash history, `ALLOW_NO_TEMPLATE` −sdxl, MEASURED block (9472 MiB / 6 s cold at 1024x1024). **The measurement disproved the catalog's gate**: `minVramGB` was 6 while the checkpoint alone is 6617 MiB, so an 8 GB card was being recommended a grind — gate is 12 now, `slowBelowGB`/`slowNote` removed, three test pins moved WITH their reasons. §18 P6a filed (wan22-5b's gate is under its own biggest file) | §18 P6 | — | 0.12.11 |
-| 5 | **START HERE.** wan22-5b basic t2v template — note §18 P6a: its `minVramGB` 8 is already under its 9536 MiB diffusion file, so this pass must settle its gate as well as its graph | §18 P7 | item 3, 17 GB | yes |
-| 6 | krea2 core-only basic; the authored graph then leaves the bundle | §18 P8 | item 3 | yes |
+| ~~5~~ | ~~wan22-5b basic t2v template~~ **DONE 2026-09-09 (0.12.12).** `AE_LLAMA_WAN22_5B_T2V_V1` + manifest (the VENDOR'S own `video_wan2_2_5B_ti2v.json`, read off the managed backend's disk, with its bypassed LoadImage DELETED because an API graph has no "muted"), `workflowTemplate`, hash history, `ALLOW_NO_TEMPLATE` −wan22-5b, MEASURED block. **§18 P6a is CLOSED and it was not close**: gate 8 -> **32** on 26 187 MiB measured, and a third run at 704x480 still cost 21 536 MiB, so the floor is the 17 304 MiB of weights and no size rescues a small card. Two 8 GB pins moved with their reasons. Two roots found en route: the authored-length rule could not see a frames-based template at all (fixed + verified by reintroduction), and `recommendGen`'s tie was being broken by ARRAY ORDER. §18 P7a (owner call) and §18 P7b filed | §18 P7 | — | 0.12.12 |
+| 6 | **START HERE.** krea2 core-only basic; the authored graph then leaves the bundle | §18 P8 | item 3 | yes |
 | 7 | H3 core-only basic; the authored graph then leaves the bundle | §18 P9 | items 2, 5 | yes |
 | 8 | minimax-h3-int8 second API file | §18 P10 | item 7, 26 GB | yes |
+
+**OWNER, READ THIS ONE FIRST: §18 P7a.** Measuring wan22-5b (item 5)
+moved its gate 8 -> 32, which leaves **every card under 32 GB with no
+runnable video graph** — the recommendation falls to `ltx-small`, which
+is experimental and ships no template. Four ways out are laid out in
+§18 P7a with what each costs; picking one is yours, not a pass's. The
+gap is pinned in two tests so it cannot widen quietly in the meantime.
 
 **If items 1-8 are blocked** (no backend, no disk, no AE), these need
 NOTHING but the repo and are always takeable:
@@ -64,6 +71,7 @@ NOTHING but the repo and are always takeable:
 |---|---|---|
 | The managed backend dies silently within the half hour — measure the cause before fixing it | §17k | maybe |
 | The vendor-enum fixture is a hand-taken snapshot with nothing forcing a refresh when the vendor build moves | §17l | no |
+| `download-gen-weight` re-downloads a weight that is already in another `comfyModelRoots` root and already listed by the backend (6.4 GB wasted, measured; the next one is 26 GB) | §18 P7b | yes |
 | `weight-availability-probe.js` defaults to `comfyUrl`, so it cannot see the managed backend without `--url` | §17h | no |
 | Decide llama-server's lifetime: give it the same detach seam, or delete the reap that can never fire | §17i | yes |
 | `Setup.scanForModelRoots()` — probe a named shortlist, never scan drives | §19a | yes |
@@ -3806,12 +3814,12 @@ taken on what a buyer gets — so nothing measured after §17c needs a
 | ~~P4~~ | remote | **DONE 2026-09-06 (0.12.2).** Settings **Workflows** rows via the pure `Tools.workflowRows()`; `test-workflow-rows.js` (21 rows) | yes | P1 |
 | ~~P5~~ | local | **DONE 2026-09-09 (0.12.10).** sd15 basic + manifest + `workflowTemplate` + hash + allowlist −sd15 + a measured block; the frontend measurement is **YES** (§18 P5b). §18 P5a filed | 0.12.10 | — |
 | ~~P6~~ | local | **DONE 2026-09-09 (0.12.11).** sdxl basic + manifest + `workflowTemplate` + hash + allowlist −sdxl + a measured block; the gate moved 6 -> 12 on the measurement and `slowBelowGB` went with it. §18 P6a filed | 0.12.11 | — |
-| P7 | local | wan22-5b as P5; `--frames`; floor re-pin rule | yes | P5; 17 GB |
+| ~~P7~~ | local | **DONE 2026-09-09 (0.12.12).** wan22-5b basic + manifest + `workflowTemplate` + hash + allowlist −wan22-5b + a MEASURED block; `--frames` verified through `comfy-probe --frames 25` (640x384, 1.042 s @ 24 fps, imported into AE); the floor re-pin moved BOTH 8 GB pins. §18 P6a closed, §18 P7a (owner) and §18 P7b filed | 0.12.12 | — |
 | P8 | local | krea2 basic; on proof the authored graph leaves the bundle | yes | P5 |
 | P9 | local | H3 basic; on proof the authored graph leaves the bundle | yes | P3, P7 |
 | P10 | local | h3-int8: download the 26 GB encoder, second API file — confirm from the UI source first | yes | P9; 26 GB |
 | P11 | remote | `package-zxp.ps1` `$excludeDirs` += `workflows` | yes | — |
-| P12 | remote | **HALF DONE 2026-09-09:** `ALLOW_UNMEASURED` is `[]` (minimax-h3 was its last seat and is now measured). `ALLOW_NO_TEMPLATE` is down to `[ltx-small, wan22-5b, minimax-h3-int8]` — sd15 left it in P5, sdxl in P6. Still open: it must reach `[ltx-small]` and STOP there (Q1) | tests only | P5–P10 |
+| P12 | remote | **HALF DONE 2026-09-09:** `ALLOW_UNMEASURED` is `[]` (minimax-h3 was its last seat and is now measured). `ALLOW_NO_TEMPLATE` is down to `[ltx-small, minimax-h3-int8]` — sd15 left it in P5, sdxl in P6, wan22-5b in P7. Also EMPTY now: `GATE_UNDER_ITS_BIGGEST_FILE`, whose only seat was wan22-5b (§18 P6a, closed by measurement). Still open: `ALLOW_NO_TEMPLATE` must reach `[ltx-small]` and STOP there (Q1) | tests only | P5–P10 |
 
 ### Hooks, named so nobody builds them early
 
@@ -3821,7 +3829,25 @@ stored default per kind; feed `comfyCatalog` guard (no producer exists);
 predicate on `recommendGen`; `video: [names]` on `comfy_list_workflows`
 only if the chat-probe verdict shows the model needs it.
 
-## 18 P6a. wan22-5b's VRAM gate is under its own biggest weight file (filed 2026-09-09, local session)
+## ~~18 P6a. wan22-5b's VRAM gate is under its own biggest weight file~~ DONE 2026-09-09 (filed and closed the same day, local session)
+
+**CLOSED by §18 P7's measurement, and the answer was worse than the
+filing guessed.** Two runs of the shipped `AE_LLAMA_WAN22_5B_T2V_V1` on
+the managed backend cost **26 187 and 24 576 MiB** (127 s each, 1280x704
+x 121 frames) — not "a gate slightly under one file" but a gate under
+the job by a factor of three. `minVramGB` is **32**, `measured: true`,
+and the `GATE_UNDER_ITS_BIGGEST_FILE` seat is gone (the list is empty and
+stays checked in both directions).
+
+**Step 3's last clause happened, so it is now its own item: §18 P7a.** A
+third run settled it with evidence rather than argument — at 704x480, a
+THIRD of the pixels, the same graph still cost 21 536 MiB, because the
+floor is the 17 304 MiB of resident weights and not the frame. So no
+width, height or length the panel can inject fits this entry on a card
+under 24 GB, and both 8 GB pins moved to `ltx-small` with their reasons.
+
+_Original filing below, kept because it is the reasoning that found it._
+
 
 **Found by the stub written for §18 P6, not by a GPU.** `wan22-5b` ships
 `minVramGB: 8` (8192 MiB) and three weight files of 9536 / 6424 / 1344
@@ -3865,6 +3891,97 @@ number now:
    flag it rather than deciding it.
 
 Step 3's last clause is the part that needs a human eye.
+
+## 18 P7a. Every card under 32 GB now has NO runnable video graph — OWNER CALL (filed 2026-09-09, local session)
+
+**This is the consequence §18 P6a step 3 said to flag rather than decide,
+and the measurement that forced it is taken.** As of 0.12.12 the video
+half of `COMFY_CATALOG` gates at:
+
+| entry | minVramGB | template |
+|---|---|---|
+| `ltx-small` | 6 | **none** (permanent `ALLOW_NO_TEMPLATE` seat, owner Q1) |
+| `wan22-5b` | **32** (was 8) | `AE_LLAMA_WAN22_5B_T2V_V1` |
+| `minimax-h3` | 32 | `AE_LLAMA_H3_I2V_V1` |
+| `minimax-h3-int8` | 32 | none (§18 P10) |
+
+So a 4090, a 4080, a 3090, a 4060 — every card below 32 GB — is
+recommended `ltx-small` for video: an entry flagged `experimental`, with
+`urls: []` and no graph. It cannot download and it cannot render. Both
+8 GB pins (`test-tiers.js` and `test-model-catalog.js` recommendSetup)
+now assert exactly that, with the reason inline, so the gap is visible
+and cannot widen unnoticed — but asserting a gap is not closing it.
+
+**The gate is not negotiable and re-measuring will not move it.** Three
+runs, 2026-09-09, managed backend, RTX 5090: 26 187 MiB and 24 576 MiB at
+the authored 1280x704 x 121, and **21 536 MiB at 704x480** — a third of
+the pixels for a 20% saving, because this graph holds 17 304 MiB of
+weights resident (fp16 diffusion 9536 + fp8 encoder 6424 + vae 1344) and
+the frame is the small term. There is no size or length the panel can
+inject that rescues a 24 GB card, let alone an 8 GB one.
+
+**Four ways out, and choosing between them is the owner's, not a pass's.**
+Each is a product decision about what a mid-range buyer is offered:
+
+1. **Pin a smaller Wan build as a second entry.** Comfy-Org publishes
+   `wan2.2_ti2v_5B_fp8_scaled` alongside the fp16 this catalog names, and
+   `umt5_xxl_fp8_e4m3fn_scaled` is already the fp8 encoder. An fp8
+   diffusion file roughly halves the 9536 MiB term. UNMEASURED — nothing
+   here has run it, and the same "measure it, do not reason about it"
+   rule that produced this item applies to that number too.
+2. **Give `ltx-small` a real graph and real urls**, which is owner Q1
+   reopened: it was postponed on 2026-09-06 when it was the fallback for
+   6 GB cards only, and it is now the fallback for everything under 32.
+3. **Recommend nothing for video below 32 GB** and say why. The
+   grounded-error rule prefers an honest "your card cannot run any video
+   model this panel ships" to a recommendation that cannot execute — and
+   `recommendGen` returning `null` for video is already a supported shape
+   (`test-tiers.js` pins it for a 4 GB card).
+4. **Accept the grind and gate Wan lower with a disclosure**, the way
+   `slowBelowGB`/`slowNote` used to. Note that §18 P6 deliberately
+   REMOVED that pair from sdxl rather than re-tune it, so bringing the
+   mechanism back is itself a reversal that needs saying out loud.
+
+Options 1 and 2 need a download and a measurement; 3 and 4 are repo-only.
+**Do not pick one in an unattended pass.**
+
+## 18 P7b. `download-gen-weight` re-downloads a file the backend already has (filed 2026-09-09, local session)
+
+**Measured while taking §18 P7's weights.** `wan22-5b` names
+`umt5_xxl_fp8_e4m3fn_scaled.safetensors`, and that file was ALREADY on
+this machine — in `comfyModelRoots`
+(`C:UsersmrDocumentsComfyUImodels	ext_encoders`), where
+`extra_model_paths.yaml` points the managed backend, and the running
+backend was already LISTING it in `/object_info/CLIPLoader`. It was
+downloaded again anyway: 6424 MiB, into the vendor's own models tree.
+
+The cause is one line. `Setup.downloadGenWeight` (`setup.js:714`) asks
+`fs.existsSync(dest)` about the ONE path it chose and nothing about the
+roots the backend actually searches:
+
+    if (fs.existsSync(dest)) { cb(null, dest); return null; }
+
+So "do I have this weight" is answered against one folder while "can the
+backend load this weight" is answered against several — the same
+two-sources split `genNeedMBFor`'s neighbouring comment already
+describes for SIZE (`tools.js:1598-1620`), reappearing for EXISTENCE.
+
+Cost, per buyer with a pre-existing ComfyUI: a duplicated download and a
+duplicated copy on disk, silently. `minimax-h3-int8` (§18 P10) names a
+**26 GB** encoder, so this is not a rounding error for long.
+
+The fix is small and needs no backend: check every configured root for
+`dir/basename` before choosing `dest`, and when a copy is found, say
+where it is and skip. Two traps for whoever takes it — (a) a root may be
+a whole `models` tree OR a per-kind `kind=path` line (`comfy.js`
+`applyExtraModelPaths`), so resolution must go through the same rule, not
+a hand-rolled join; (b) skipping on NAME alone is what the panel already
+does elsewhere and is right here, because ComfyUI itself resolves by
+name — a same-named different file is already indistinguishable to the
+backend, so this changes nothing about that.
+
+Stub-testable end to end: two fake roots, one holding the file, and
+assert no download is attempted. No GPU, no network.
 
 ## 18 P3a. H3's authored default is a >15-minute render, and that is what a
 user who names no length gets (filed 2026-09-09, local session)

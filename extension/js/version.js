@@ -8,7 +8,7 @@
   "use strict";
 
   global.AELL = {
-    VERSION: "0.12.11",
+    VERSION: "0.12.12",
 
     // Release channel label, shown wherever the version is displayed.
     // Purely cosmetic — update comparisons use the numeric VERSION only.
@@ -206,7 +206,42 @@
       {
         name: "wan22-5b",
         label: "Wan 2.2 5B",
-        kind: "video", sizeMB: 17304, minVramGB: 8, measured: false,
+        // MEASURED 2026-09-09 on an RTX 5090 (32 607 MiB) by
+        // scripts/catalog-vram-probe.js, running the SHIPPED
+        // AE_LLAMA_WAN22_5B_T2V_V1 through the panel's own comfy_generate
+        // on the MANAGED backend a buyer gets (ComfyUI 0.34.0, port 8288),
+        // with nvidia-smi streaming at 250 ms. Two runs at one seed:
+        // 26 187 and 24 576 MiB over an established idle floor, 127 s each,
+        // 1280x704 x 121 frames out. The higher is published, as krea2's
+        // and H3's were.
+        //
+        // minVramGB was 8, and 8 is not off by a little. A THIRD run at
+        // 704x480 -- a third of the pixels -- still cost 21 536 MiB in
+        // 38 s, which is the number that settles it: the floor here is the
+        // WEIGHTS, not the frame. This graph holds all three files
+        // resident (17 304 MiB) and no width, height or length the panel
+        // can inject brings that under a 24 GB card, let alone an 8 GB
+        // one. 0.10.14 measured what this backend does when a job outgrows
+        // the card -- it does not OOM, it GRINDS -- so an 8 GB buyer was
+        // being offered this as their VIDEO DEFAULT and would have got
+        // minutes per frame with no warning.
+        //
+        // 32 rather than 24: the authored job's own delta is 25.6 GiB, so
+        // a 24 GB card cannot hold it even before its desktop.
+        // See WORKPLAN 18 P7 and 18 P6a. The consequence for cards under
+        // 32 GB is a PRODUCT question, filed as 18 P7a, not a catalog one.
+        kind: "video", sizeMB: 17304, minVramGB: 32, measured: true,
+        measuredVramMB: 26187, measuredSeconds: 127,
+        measuredAt: "1280x704 x 121 frames (the template's authored " +
+                    "default, 5.04 s at 24 fps), seed 12345",
+        // Unlike minimax-h3, the reading IS the authored job: 121 frames is
+        // the template's own default and 127 s is what a buyer waits, so
+        // these two are equal and the row needs no authoredNote.
+        measuredClipSeconds: 5.04,
+        authoredClipSeconds: 5.04,
+        measuredOn: "NVIDIA GeForce RTX 5090, ComfyUI 0.34.0 (managed), " +
+                    "2026-09-09",
+        workflowTemplate: "AE_LLAMA_WAN22_5B_T2V_V1",
         urls: [{
           url: "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/diffusion_models/wan2.2_ti2v_5B_fp16.safetensors",
           sizeMB: 9536, dir: "diffusion_models"

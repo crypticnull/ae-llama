@@ -1,0 +1,65 @@
+{
+  "workflow": "AE_LLAMA_WAN22_5B_T2V_V1",
+  "kind": "video",
+  "catalogEntry": "wan22-5b",
+  "notes": "The BASIC text-to-video graph for the wan22-5b catalog entry (WORKPLAN 18 P7). Core nodes only -- UNETLoader / CLIPLoader / VAELoader / ModelSamplingSD3 / CLIPTextEncode x2 / Wan22ImageToVideoLatent / KSampler / VAEDecode / CreateVideo / SaveVideo -- so it runs on the backend the panel installs with nothing added. It is the VENDOR'S OWN default workflow for this model, node for node: comfyui_workflow_templates_json/templates/video_wan2_2_5B_ti2v.json as shipped inside the managed backend (ComfyUI 0.34.0), read off disk on 2026-09-09 rather than recalled. Node ids are the vendor template's own ids, deliberately, so the correspondence stays auditable. Every input was then re-confirmed against the RUNNING backend's /object_info on the same day -- Wan22ImageToVideoLatent, ModelSamplingSD3, CreateVideo and SaveVideo are not in scripts/comfy-node-defs.json, so the offline harvest could not have answered for them.",
+  "whatChangedFromTheVendorTemplate": "Three things, all of them required by this panel's README injection contract rather than by taste. (1) The vendor's LoadImage node is GONE, not muted: its template ships that node in mode 4 (bypassed) because the same graph serves t2v and i2v, and an API-format graph has no 'muted' -- a bypassed node in the API dict is a node ComfyUI will try to run, against a filename that only exists on the author's machine. start_image is an OPTIONAL input on Wan22ImageToVideoLatent (measured from /object_info), so deleting it IS the text-to-video path, which is what the _T2V_ in the name means. (2) SaveVideo's format/codec are mp4/h264 instead of the vendor's auto/auto: the contract names mp4/h264 because that is what AE imports, and 'auto' picks WebM for an AV1 stream. (3) filename_prefix is this panel's relative prefix (an ABSOLUTE prefix is refused by folder_paths.get_save_image_path and kills the render at its last node; see the KREA2 manifest's node 474). Sampler, scheduler, steps, cfg, shift, size, length and fps are the vendor's values untouched -- a basic is the shape ComfyUI itself ships, not a tuned one.",
+  "whyTheNegativeIsThis": "The negative prompt is the English rendering of the Chinese default the vendor template ships, which is Wan's own recommended negative and not a generic one. It is translated rather than copied so that a reader of this repo can see what it says before the panel overwrites it; the panel replaces it whenever the request carries a negative.",
+  "procedural": {
+    "prompt": {
+      "nodeId": 6,
+      "input": "text",
+      "note": "reached by introspection anyway (the panel follows KSampler.positive/negative to the CLIPTextEncode pair, comfy-workflows/README.md); named here so a reader does not have to derive it. Note the NAMED input rather than a widget INDEX -- see whyNoResolution/whyNoDurationSeconds."
+    }
+  },
+  "whyNoResolution": "No procedural.resolution, for the reason measured on the sd15 basic and written up as WORKPLAN 18 P5a. procedural.resolution means 'this template derives its pixel dimensions from a MEGAPIXEL widget' (comfy.js injectProcedural), which is true of H3's ResolutionSelector and false of a Wan22ImageToVideoLatent that takes literal width and height -- those are injected by introspection, which is what the README contract promises.",
+  "whyNoDurationSeconds": "No procedural.durationSeconds either, and that is the difference from the H3 manifest. H3 carries a seconds widget that its own ComfyMathExpression converts to a frame grid, so seconds had to be declared. This graph carries a literal numeric `length` on node 55, which is exactly what injectParams' generic frame walk writes to (comfy.js frameKeys = length/frames/video_frames/num_frames). Declaring durationSeconds here would flip lengthIn to 'seconds' and make the panel REFUSE a frames request against a graph that takes frames.",
+  "lengthIsOnAGridOfFour": "Wan 2.2 samples 4n+1 frames and /object_info gives node 55's `length` a step of 4 (min 1, max 16384, default 121). ComfyUI does not enforce the step server-side, so a frames request that is not 4n+1 is accepted and rounded by the model rather than refused. 121 frames at the CreateVideo fps of 24 is 5.04 s, which is the clip a request naming no length gets -- unlike minimax-h3, whose authored default is a >15-minute job (WORKPLAN 18 P3a).",
+  "models": [
+    {
+      "file": "wan2.2_ti2v_5B_fp16.safetensors",
+      "role": "diffusion",
+      "dir": "diffusion_models",
+      "sizeMB": 9536,
+      "url": "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/diffusion_models/wan2.2_ti2v_5B_fp16.safetensors"
+    },
+    {
+      "file": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+      "role": "text_encoder",
+      "dir": "text_encoders",
+      "sizeMB": 6424,
+      "url": "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors"
+    },
+    {
+      "file": "wan2.2_vae.safetensors",
+      "role": "vae",
+      "dir": "vae",
+      "sizeMB": 1344,
+      "url": "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/vae/wan2.2_vae.safetensors"
+    }
+  ],
+  "customNodes": [
+    {
+      "pack": "(comfy-core)",
+      "nodes": [
+        "CLIPLoader",
+        "CLIPTextEncode",
+        "CreateVideo",
+        "KSampler",
+        "ModelSamplingSD3",
+        "SaveVideo",
+        "UNETLoader",
+        "VAEDecode",
+        "VAELoader",
+        "Wan22ImageToVideoLatent"
+      ]
+    }
+  ],
+  "panelIntegration": {
+    "promptInjection": "introspection: KSampler.positive -> node 6, KSampler.negative -> node 7",
+    "frameInjection": "introspection: node 55's literal `length` (comfy.js frameKeys)",
+    "resolutionCeilingFrom": "tier ceilings (COMFY_TIERS_PLAN)",
+    "saveNode": "SaveVideo 58 -- mp4/h264 so AE can import it; filename_prefix is RELATIVE, so ComfyUI joins it onto its own output dir"
+  },
+  "nodeAttributionScannedOn": "2026-09-09 (managed backend, /object_info on 127.0.0.1:8288)"
+}

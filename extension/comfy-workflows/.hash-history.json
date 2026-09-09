@@ -39,6 +39,12 @@
     ],
     "AE_LLAMA_SDXL_T2I_V1.manifest.json": [
       "4db1f442f1114e896e1052e7aea667d8dcf14db6"
+    ],
+    "AE_LLAMA_WAN22_5B_T2V_V1.json": [
+      "96b65bf47a1dcbc6132f25b7845c735864b132f2"
+    ],
+    "AE_LLAMA_WAN22_5B_T2V_V1.manifest.json": [
+      "c23760807adeff3c1e29da27b829898741a21387"
     ]
   }
 }
