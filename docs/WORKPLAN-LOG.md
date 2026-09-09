@@ -21098,3 +21098,125 @@ changed. I did not act on it — this pass's item was §17j and it is done,
 and §17j is itself the standing lesson about recording a plausible
 mechanism as a cause. Also added to the always-takeable list, so the
 loop can pick it up.
+
+## 2026-09-09 (local session) — KREA2's sampler chosen by rendering all six, not by argument (NEXT UP 1a / §17f, 0.12.7)
+
+**Item: NEXT UP 1a (§17f)** — the shipped KREA2 template names `res_2s`,
+a sampler the RES4LYF pack adds to a CORE node's enum, so the backend a
+buyer gets drops every output branch at validation. Harness was green
+first (770/770), so the list applied.
+
+**A trap worth writing down before anything else.** The repo has TWO
+copies of each template: `extension/workflows/` holds the UI exports and
+`extension/comfy-workflows/` holds the API-format graphs the panel and
+the probes actually READ. My first sweep edited the UI source, and all
+six runs came back with the same `res_2s` validation error — six renders
+that measured nothing. The two directories are not duplication (one is
+generated from the other by `scripts/adapt-workflow.js`), but a pass that
+patches "the template" by name will patch the one nothing reads and will
+get a plausible-looking failure for it.
+
+**The measurement.** Six candidates, seed 12345, 768x768 (saved
+1232x1232), one prompt, vendor backend 0.34.0, comparing the renders side
+by side:
+
+| sampler | result |
+|---|---|
+| `res_multistep` | coherent, hazy — blown highlights, weak spoke detail |
+| `res_multistep_cfg_pp` | **unusable** — flat colour noise |
+| `res_multistep_ancestral` | **unusable** — flat colour noise |
+| `res_multistep_ancestral_cfg_pp` | **unusable** — flat colour noise |
+| **`exp_heun_2_x0`** | **clean, correct exposure, crisp detail — CHOSEN** |
+| `exp_heun_2_x0_sde` | clean and detailed, slightly more contrast/grain |
+
+**Three of the four samplers the original filing shortlisted are
+unusable, and the two it MISSED are the two that work.** This is the
+whole reason the item insisted on renders: `res_multistep` shares a
+prefix with `res_2s` and is a different method, while `res_2s` is
+RES4LYF's Refined Exponential Solver — 2nd-order SINGLE-step and
+deterministic. `exp_heun_2_x0` is the core build's deterministic
+2nd-order exponential Heun on x0-prediction, i.e. the actual analogue,
+and it also rendered best; its `_sde` twin lost on adding stochasticity
+the authored sampler did not have. Yesterday's entry called
+`res_multistep` "coherent and well-formed", which it is — next to the
+alternatives it is also the weakest of the three that work. Reasoning
+from the name would have picked a worse sampler and could have picked an
+unusable one.
+
+**Where the fix lives.** The manifest's `panelAdaptation.setInputs`, next
+to the `filename_prefix` adaptation already there — the same defect
+shape (an authored value true on exactly one machine), so the same seam.
+The UI source stays a faithful export and `adapt-workflow.js` re-applies
+the substitution on regeneration, so a re-export cannot silently undo it.
+`extension/comfy-workflows/.hash-history.json` records the new hash
+(CI enforces it; that is what refreshes an unedited installed copy).
+
+**Verified in real life.** The shipped path with no hand edits —
+`comfy-probe.js` → adapted template → vendor backend → real AE import —
+passed every verdict, and the output was BYTE-IDENTICAL (2,075,630 bytes)
+to the sweep's `exp_heun_2_x0` render, so the manifest route reproduces
+exactly the graph that was measured.
+
+**Stub back-fill, and the finding underneath it (§17l).** The obvious
+reference for "does the build have this value" is
+`scripts/comfy-node-defs.json` — and it would have PASSED `res_2s`. It
+was harvested from the AUTHOR's ComfyUI: 63 samplers including `res_2s`,
+against the vendor's 44. It is a picture of the one machine where the bug
+is invisible, and it must keep its real job (widget ORDER for the
+adapter) without becoming that reference. So:
+`scripts/harvest-core-enums.js` snapshots the vendor build's
+build-constant enums into `tests/fixtures/comfy-core-enums.json`, and new
+`tests/test-comfy-enum-values.js` checks every literal in every shipped
+API template against it with no network and no ComfyUI. Proved it
+catches the real thing: reverting node 278 to `res_2s` fails the test
+with a grounded error naming all 44 samplers. It also asserts the fixture
+itself does NOT contain `res_2s` — without that, someone re-harvesting on
+the author's machine would silently restore the blind spot.
+
+Only BUILD-CONSTANT enums are pinned. `LoadImage.image` proved that
+necessary: the i2v template ships an author-machine PNG filename the
+panel overwrites at runtime, and my first filter let that enum through,
+which would have failed the test everywhere for the wrong reason. Model
+slots (`ckpt_name`, `vae_name`, ...) are one disk's files and stay the
+weight preflight's job; the fixture records what it skipped, so the gap
+is visible rather than implied.
+
+**Two more defects found and NOT fixed here (§17m, §17n), both filed in
+WORKPLAN and both put on the NEXT UP list as 1c/1d.**
+
+- `comfy-probe.js --url` is silently ignored in managed mode. It sets
+  `OVERRIDE.comfyUrl`, but the probe resolves with `Comfy.backendUrl(S)`,
+  which in managed mode never consults `comfyUrl`. The resolution is
+  correct and deliberate; the override is wired to the field it ignores.
+  So any measurement believed to have been taken "against the other
+  backend" was taken against the managed one. Note this qualifies §17h,
+  which cites comfy-probe as the example to copy — correct about
+  resolution, but `--url` is not an override there yet.
+- `comfy-probe.js` prints `PASS ComfyUI reachable` when nothing is
+  listening, in the same run as `FAIL ... ComfyUI is not running`.
+  `Comfy.status()` deliberately calls back `cb(null, {online:false,
+  hint})` rather than erroring, because the panel wants the hint;
+  `stepStatus` tests only `if (err)`, so the down case takes the success
+  path and prints counts that are `|| 0` defaults, not readings. The
+  worse half: **`--boot` lives inside that same dead branch**, so
+  `comfy-probe.js --boot` cannot boot a backend that is down — the only
+  case it exists for. Any other caller of `Comfy.status` testing only
+  `err` has this bug, and the panel's own callers want auditing, since a
+  false "reachable" in the UI is the same defect with a user in front of
+  it.
+
+Filing rather than bundling is §17j's lesson applied: this pass's item
+was §17f, and §17j is the standing example in this repo of what happens
+when a plausible fix rides along with a measurement.
+
+**Results.** Stubbed suite 83/83 (82 before; the new test is the 83rd —
+CI globs `tests/test-*.js`, so it is picked up with no registration).
+Real-AE harness 770/770, before and after; nothing here touches the AE
+half. `extension/` changed, so bumped 0.12.6 → 0.12.7.
+
+**State left behind.** The managed backend is UP on 8288 and rendering.
+AE left running and untouched — the probe removed the item it imported.
+§17k (the backend dying silently within the half hour) was NOT
+investigated this pass and is still open; the backend survived the whole
+of this pass, which is one more data point for the "dies when the booting
+session ends" hypothesis and not evidence for anything on its own.

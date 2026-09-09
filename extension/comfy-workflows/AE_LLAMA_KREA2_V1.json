@@ -121,7 +121,7 @@
  },
  "278": {
   "inputs": {
-   "sampler_name": "res_2s"
+   "sampler_name": "exp_heun_2_x0"
   },
   "class_type": "KSamplerSelect",
   "_meta": {

@@ -42,8 +42,10 @@ the night retrying it.
 | ~~B~~ | ~~BLOCKER — AE sits on the crash-recovery dialog~~ **PREVENTED 2026-09-08.** `run-ae-selftest.ps1` now clears `CrashOccurred` in HKCU before every launch. If AE sits on that dialog again, that is a REGRESSION — log it, do not click past it and carry on. | §21 | — | no |
 | ~~0~~ | ~~heartbeat, verify a pass commits, per-pass timeout~~ **DONE 2026-09-08.** §20a heartbeat every 30s; §20c VERIFIED (`Pass committed 2d76fdf8`, the first end-to-end loop success since 09-02); §20b `-PassTimeoutMin 45`. Still open: **§20d**, the bypass guard test. | §20 | nothing | no |
 | ~~1~~ | ~~Install the managed ComfyUI backend~~ **DONE 2026-09-09.** Installed and booted; 4264 MB extracted, python 3.13.14, torch 2.13.0+cu130 (CUDA 13.0). `extra_model_paths.yaml` points at the owner's store and the vendor backend loads it: `weight-availability-probe --url http://127.0.0.1:8288` all verdicts PASS, 0 missing slots for both templates. Root defect found and fixed en route (the backend did not outlive its launcher). | §17c | — | — |
-| 1a | **START HERE.** The shipped KREA2 template CANNOT RENDER on the backend a buyer gets — `res_2s` is a RES4LYF sampler and the vendor build has 44 samplers without it. This is the §17c finding, and it blocks items 3-8. **Unblocked and half-measured 2026-09-09**: `res_multistep` renders correctly; three (or five) more renders and a choice finish it. | §17f | item 1 (done) | yes |
-| 1b | `missingWeights` passed that template anyway — a preflight that checks weights but not enum VALUES says "ready" about a graph ComfyUI refuses | §17g | 1a | yes |
+| ~~1a~~ | ~~The shipped KREA2 template cannot render on the backend a buyer gets~~ **DONE 2026-09-09 (0.12.7).** All six candidates rendered at one seed: three of the four the original filing shortlisted are UNUSABLE at 4 steps, and the two it missed are the two that work. `exp_heun_2_x0` chosen, applied via the manifest's `panelAdaptation.setInputs`, verified end to end. §18 items 3-8 are unblocked. | §17f | — | — |
+| 1b | **START HERE.** `missingWeights` passed that template anyway — a preflight that checks weights but not enum VALUES says "ready" about a graph ComfyUI refuses. `POST /prompt` with `validate_prompt` is the honest check. | §17g | 1a (done) | yes |
+| 1c | `comfy-probe.js` says "ComfyUI reachable" PASS when nothing is listening, and `--boot` sits inside that same dead branch so it can never boot. Two contradictory verdicts in one run; measured. | §17n | nothing | maybe |
+| 1d | `comfy-probe.js --url` is silently ignored in managed mode — it sets `comfyUrl`, which `Comfy.backendUrl` never consults. Fix with §17h, which asks the weight probe for the same override. | §17m + §17h | nothing | no |
 | 2 | H3 t2v regression + `catalog-vram-probe --entry minimax-h3` → measured block | §18 P3 | item 1, AE | no |
 | 3 | sd15 basic template (+ the frontend-editable measurement) | §18 P5 | item 1, AE, 2 GB | yes |
 | 4 | sdxl basic template | §18 P6 | item 3, 7 GB | yes |
@@ -58,6 +60,7 @@ NOTHING but the repo and are always takeable:
 | item | where | bumps |
 |---|---|---|
 | The managed backend dies silently within the half hour — measure the cause before fixing it | §17k | maybe |
+| The vendor-enum fixture is a hand-taken snapshot with nothing forcing a refresh when the vendor build moves | §17l | no |
 | `weight-availability-probe.js` defaults to `comfyUrl`, so it cannot see the managed backend without `--url` | §17h | no |
 | Decide llama-server's lifetime: give it the same detach seam, or delete the reap that can never fire | §17i | yes |
 | `Setup.scanForModelRoots()` — probe a named shortlist, never scan drives | §19a | yes |
@@ -4142,6 +4145,56 @@ blind key on a dialog whose wrong branch silently removes the panel.
   are YOURS: `node scripts/bump-version.js patch` before pushing a fix
   you verified in real AE, or it never reaches a panel (see CLAUDE.md).
 
+## ~~17f. The shipped KREA2 template cannot render on the vendor backend~~ DONE 2026-09-09 (0.12.7)
+
+**DONE. Substitute chosen by rendering all six candidates, not by
+argument: `exp_heun_2_x0`.** Node 278's `sampler_name` is now set by the
+manifest's `panelAdaptation.setInputs`, alongside the filename_prefix
+adaptation that was already there - the same shape of defect (an
+authored value true on exactly one machine), so the same seam. The UI
+source stays a faithful export of the author's graph and
+`scripts/adapt-workflow.js` applies the substitution on regeneration,
+so a re-export cannot silently undo it.
+
+**The measurement** (2026-09-09, vendor backend 0.34.0, seed 12345,
+768x768 -> saved 1232x1232, one prompt for all six). This is why the
+item insisted on renders rather than reasoning - the shortlist in the
+original filing was actively misleading:
+
+| sampler | result |
+|---|---|
+| `res_multistep` | coherent, but hazy - blown highlights, weak spoke detail |
+| `res_multistep_cfg_pp` | **unusable** - collapses into flat colour noise |
+| `res_multistep_ancestral` | **unusable** - collapses into flat colour noise |
+| `res_multistep_ancestral_cfg_pp` | **unusable** - collapses into flat colour noise |
+| **`exp_heun_2_x0`** | **clean, correct exposure, crisp detail - CHOSEN** |
+| `exp_heun_2_x0_sde` | clean and detailed; slightly more contrast/grain |
+
+**Three of the four samplers the original filing shortlisted are
+unusable at this template's 4 steps**, and the two it MISSED are the two
+that work. The name match on `res_*` was the wrong instinct: `res_2s` is
+RES4LYF's Refined Exponential Solver, 2nd-order SINGLE-step and
+deterministic, and `res_multistep` shares its prefix while being a
+different method. `exp_heun_2_x0` is the core build's deterministic
+2nd-order exponential Heun on x0-prediction - the actual analogue - and
+it also rendered best. `exp_heun_2_x0_sde` is its stochastic twin and
+was passed over for adding randomness the authored sampler did not have.
+(The `cfg_pp` collapse is consistent with those samplers expecting
+cfg near 1 while this graph's guider does not; not chased further, since
+they lost on the render.)
+
+**Verified end to end**, not only in the sweep: the shipped path with no
+hand edits - `comfy-probe.js` -> adapted template -> vendor backend ->
+real AE import - passes every verdict, and the output file is
+BYTE-IDENTICAL to the sweep's `exp_heun_2_x0` render, so the manifest
+route reproduces exactly the graph that was measured.
+
+**Stub back-fill: `tests/test-comfy-enum-values.js`** (new), which is the
+part that outlives this one template. See 17l for why the repo's
+existing offline node definitions could not be used for it.
+
+<details><summary>Original filing</summary>
+
 ## 17f. The shipped KREA2 template cannot render on the vendor backend (filed 2026-09-09, local session)
 
 **This is the finding §17c was created to produce**, and it lands exactly
@@ -4219,6 +4272,8 @@ instance is already up.
 
 Blocks §18 items 3-8: authoring more templates against a sampler set the
 shipped backend does not have would multiply this bug.
+
+</details>
 
 ## 17g. A preflight that checks weights but not enum values reports "ready" about a graph that cannot run (filed 2026-09-09, local session)
 
@@ -4300,6 +4355,102 @@ retracted — and about how a test can be sound and its conclusion still
 too broad.
 
 Wanted by §18: those passes need a backend that stays up between them.
+
+## 17l. The repo's offline node definitions come from the author's install, so they cannot answer "will this run for a buyer" (filed 2026-09-09, local session)
+
+Found while back-filling the stub for §17f. `scripts/comfy-node-defs.json`
+is the only offline record of ComfyUI's INPUT_TYPES the repo has, and it
+was harvested from the AUTHOR's ComfyUI. Measured 2026-09-09: its
+`KSamplerSelect.sampler_name` carries **63** samplers **including
+`res_2s`**; the vendor backend offers **44** and does not. So a check
+written against that file would have PASSED the exact template ComfyUI
+refused to run — it is a picture of the one machine where the bug is
+invisible.
+
+Its own job (recovering positional widget ORDER for
+`scripts/adapt-workflow.js`) is unaffected, and it should keep doing it.
+What it must not become is the reference for "does the shipped build
+have this value".
+
+**Done in this pass** — `scripts/harvest-core-enums.js` writes
+`tests/fixtures/comfy-core-enums.json` from a VENDOR backend, and
+`tests/test-comfy-enum-values.js` checks every literal in every shipped
+API template against it, offline. Only BUILD-CONSTANT enums are pinned;
+an enum populated from the user's model folders is one disk's files, so
+those are detected and skipped (and the skip list is written into the
+fixture, so what is NOT covered is visible). The `LoadImage.image` case
+proved that necessary: the i2v template ships an author-machine PNG
+filename that the panel overwrites at runtime, and pinning that enum
+would have failed the test everywhere for the wrong reason.
+
+**What is left here, and it needs a human decision** — the fixture is a
+snapshot taken by hand against a running backend (`node
+scripts/comfy-install.js --boot` then `node scripts/harvest-core-enums.js
+--url ...`). Nothing forces it to be refreshed when the vendor build is
+upgraded, so it will drift, and a stale fixture fails SAFE in one
+direction (it can reject a value a newer build added) and unsafe in the
+other. Options: record the vendor version it was taken from and warn when
+`comfy-install.js` installs a different one; or re-harvest as part of the
+install check. Not chosen tonight — the fixture does carry
+`harvestedOn`/`comfyuiVersion` (0.34.0), so the drift is at least
+legible.
+
+## 17m. `comfy-probe.js --url` is silently ignored in managed mode (filed 2026-09-09, local session)
+
+Measured 2026-09-09:
+
+    node scripts/comfy-probe.js --no-ae --url http://127.0.0.1:8299 ...
+    -- ComfyUI at http://127.0.0.1:8288  (backend: managed)
+
+The flag was accepted, printed nothing, and the probe went somewhere
+else. Cause: line 292 does `if (OPT.url) OVERRIDE.comfyUrl = OPT.url;`,
+but the probe resolves its target with `Comfy.backendUrl(S)` — which in
+managed mode returns the managed port and **never consults `comfyUrl`**.
+That resolution is correct and deliberate (the comment above it explains
+why, and it is what §17h asks the weight probe to copy); the override is
+simply wired to the field the resolution ignores.
+
+Consequence: every measurement anyone believes they took "against the
+other backend" with `--url` was taken against the managed one. Every
+`--url http://127.0.0.1:8288` in this workplan happens to be harmless
+only because managed already resolves to 8288.
+
+Note for §17h: it praises `comfy-probe.js` for resolving the backend
+correctly, which is true, and then asks that "`--url` should stay an
+override" — in comfy-probe `--url` is not an override at all yet. Fix
+both together: `--url` should set the RESOLVED target, not `comfyUrl`.
+
+## 17n. `comfy-probe.js` reports "ComfyUI reachable" PASS when nothing is listening, and `--boot` therefore never boots (filed 2026-09-09, local session)
+
+Measured 2026-09-09 with nothing on the port:
+
+    == PASS ComfyUI reachable — queue running=0 pending=0
+    == FAIL generation completed — ComfyUI is not running and the hidden
+       backend is not installed.
+
+Two verdicts, one run, flatly contradicting each other. `Comfy.status()`
+does **not** call back with an error when the backend is down — it calls
+`cb(null, {online: false, hint: ...})`, deliberately, because the panel
+wants the hint text rather than an exception. `stepStatus` only tests
+`if (err)`, so the down case takes the SUCCESS path and prints a PASS
+built from `undefined` counts (`running=0 pending=0` is the `|| 0`, not a
+reading).
+
+**The worse half: `--boot` lives inside that same `if (err)` branch.** So
+`comfy-probe.js --boot` cannot boot a backend that is down — the only
+situation it exists for. It sails past into a generation failure whose
+message is about installing a hidden backend.
+
+Fix: `stepStatus` must fail (and `--boot` must trigger) on
+`err || !st.online`. Then check the same pattern elsewhere — any caller
+of `Comfy.status` that tests only `err` has this bug, and the panel's own
+callers should be audited alongside, since a false "reachable" in the UI
+is the same defect with a user in front of it.
+
+A stubbed test belongs with the fix: a `Comfy.status` stub returning
+`{online:false}` must make the probe's reachability verdict FAIL. This
+pass did not write it — the fix is a probe/panel change and the item was
+§17f; filing it rather than bundling it is the §17j lesson applied.
 
 ## 17h. `weight-availability-probe.js` cannot see the managed backend without being told (filed 2026-09-09, local session)
 
