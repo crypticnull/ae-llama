@@ -23326,3 +23326,55 @@ honestly, or offer a slow path with a disclosure — and the eight
 `loop-salvage-*` stashes.
 
 No `extension/` change, so **no version bump**.
+
+## 2026-09-09 (local session) — §18 P7a DECIDED, and the low-VRAM levers were already filed and never queued
+
+**The decision.** Owner takes option 3: when no video entry fits a card,
+say so plainly. Option 4 is rejected outright — 0.10.14 measured that
+this backend GRINDS rather than failing when a job outgrows the card, and
+a buyer cannot tell minutes-per-frame from a broken plugin. An honest
+refusal costs a sale; a grind costs a refund and a review.
+
+**But the refusal is the FLOOR, not the plan**, and that half matters
+more. Owner: *"we wanna be able to offer the video to as many people as
+possible that can run it. And that means twelve gigabyte cards as well.
+And, again, even lower, if there's a way to run a video model on an eight
+gigabyte card."* So option 3 is what a card gets after every lever has
+been tried, not instead of trying them.
+
+**The miss this exposed.** §13 — "Attention + KV backends, the low-VRAM
+gate" — was filed 2026-09-03 at the owner's own request and its header
+already says the thing he said today: *"On those cards SageAttention is
+not a speed tweak, it is the difference between video generation being
+usable and not."* It was never linked to §18 P7a and never entered NEXT
+UP, so the section that answers the gap sat idle while the gap was queued
+as items 2 and 3. Now queue item 5. **A filed section nothing points at
+is only marginally better than an unfiled one** — the repo already knows
+this about the LOG (a finding written only there is one nothing acts on);
+it turns out to be true of WORKPLAN sections too.
+
+**The architectural consequence, filed but NOT acted on.** Quantized
+loaders (`UnetLoaderGGUF` and siblings) are, as far as anyone here knows,
+CUSTOM nodes rather than comfy-core. If that holds, serving 8-12 GB cards
+REQUIRES the node-pack installer, and §22d moves from "expansion layer,
+last" to the critical path for the cards most buyers own. Both things
+stay true at once: the basics remain core-only (§22a), and the LOW-END
+path becomes the opt-in layer's first legitimate customer.
+
+That is explicitly unverified. The repo's node fixture cannot answer it —
+§17l, and it said zero LTX nodes today while the vendor's own blueprint
+used `EmptyLTXVLatentVideo`. Queued as item 4: ask a RUNNING backend's
+`/object_info` which GGUF loaders exist and which pack owns them, and
+REPORT rather than pin.
+
+**The product thesis is now in CLAUDE.md**, in the owner's words: *"This
+is a gateway into the open source world for the layman who only knows
+After Effects."* It decides arguments no measurement can — the buyer will
+never clone a repo, read a model card or pick a quantization, so the
+panel does that for them. Two rules follow and are written beside it:
+reach is a feature, so **shrinking a VRAM floor ranks equal with adding
+one**; and the ecosystem IS the supply, so using quantizations, attention
+backends and community packs is the job rather than a detour — bounded
+only by §22a keeping the basics core-only.
+
+No `extension/` change, so **no version bump**.

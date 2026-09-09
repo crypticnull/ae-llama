@@ -54,20 +54,22 @@ every pass and finished work costs the same context as live work.
 | 1 | **Confirm the backend did not outlive the loop.** The teardown added 2026-09-09 calls `comfy-install.js --stop` at loop exit. Check this morning's log for a `Backend:` line and that the card was released. If it is missing or the card is still held, that is the item. | §17q | nothing | no |
 | 2 | **fp8 Wan 2.2 5B as a second entry, then MEASURE it.** The §18 P10 pattern: the shipped Wan graph with the diffusion filename swapped and nothing else. Cheapest route to a video option under 32 GB. | §18 P7c step 1 | backend, disk | yes |
 | 3 | **Settle what `ltx-small` is, then measure it.** The vendor's LTX is 2.3-**22B** — larger than Wan, not smaller. Ask a RUNNING backend's `/object_info` whether LTXV 2B nodes exist; the repo fixture says zero and is wrong (§17l). | §18 P7c step 2 | backend, disk | yes |
-| 4 | **Cap the injected clip length at 6 s** when the user names none (owner decided 2026-09-09; 6 not 5 — the three shipped video templates are authored at 5.04/5.17 and a 5.00 cap invalidates their measured blocks). Spec in §18 P3a(b). | §18 P3a (b) | nothing | yes |
-| 5 | **Roadmap group A: generation lands in the COMP, at the comp's size.** Owner promoted 2026-09-09 as first of the expansion work. Shared, core-only, zero per-template cost. | §23c | AE | yes |
-| 6 | The panel can quote an ETA LONGER than `comfyTimeoutSec` and then cancel the job at 600 s, having promised a finish. Warn when the estimate passes the timeout, and put the estimate into the timeout message. | §18 P3c | nothing | yes |
-| 7 | Pin the invariant the whole install plan rests on: refuse a BUNDLED manifest that names a non-core node pack. True today, guaranteed by nothing. | §22a | nothing | no |
-| 8 | Tee the harness's stdout into the loop log. `Running self-test via` and `Crash flag:` appear ZERO times across the whole 2026-09-09 night, so a killed pass leaves no record of whether its self-test was green. | §20e | nothing | no |
-| 9 | A guard test for the pass invocation, so a future brief edit cannot re-inject a bare `--` and silently drop the bypass flag again. | §20d | nothing | no |
-| 10 | §21 leftovers: the watchdog rule keys on the word "recover" and can never match the real dialog; `Test-AellAeRunning` is version-blind; stale `CrashOccurred = 1` still sits on 26.2. | §21 | nothing | no |
-| 11 | The managed backend dies silently within the half hour — measure the cause before fixing it. | §17k | backend | maybe |
-| 12 | **No shipped template can take a reference image any more** — i2v left the bundle with the authored H3 graph. | §18 P9a | nothing | yes |
-| 13 | `download-gen-weight` re-downloads a weight already present in another `comfyModelRoots` root (6.4 GB wasted, measured; the next one is 26 GB). | §18 P7b | nothing | yes |
-| 14 | Decide llama-server's lifetime: give it the same detach seam, or delete the reap that can never fire. | §17i | nothing | yes |
-| 15 | The vendor-enum fixture is a hand-taken snapshot with nothing forcing a refresh when the vendor build moves. | §17l | nothing | no |
-| 16 | krea2 and ltx-small are the only entries EXEMPT from "a gate must hold its biggest weight file", because their files carry no sizes. | §18 P8a | nothing | yes |
-| 17 | `weight-availability-probe.js` defaults to `comfyUrl`, so it cannot see the managed backend without `--url`. | §17h | nothing | no |
+| 4 | **Quantized video weights: survey what exists and what NODES it needs.** GGUF Q4/Q5 builds are how an 8 GB card runs a model this size. Ask a RUNNING backend's `/object_info` which GGUF loaders exist and which pack owns them — if they are custom, §22d is on the critical path for low-end video (see §18 P7a DECIDED). Report, do not pin. | §18 P7c step 4 | backend | no |
+| 5 | **SageAttention + Triton (§13a).** Owner-specified 2026-09-03 and never queued. §13's own header: on 8-12 GB cards this is the difference between video being usable and not. Measure-first; it is a VRAM lever on the §18 P7a gap. | §13a | backend, disk | maybe |
+| 6 | **Cap the injected clip length at 6 s** when the user names none (owner decided 2026-09-09; 6 not 5 — the three shipped video templates are authored at 5.04/5.17 and a 5.00 cap invalidates their measured blocks). Spec in §18 P3a(b). | §18 P3a (b) | nothing | yes |
+| 7 | **Roadmap group A: generation lands in the COMP, at the comp's size.** Owner promoted 2026-09-09 as first of the expansion work. Shared, core-only, zero per-template cost. | §23c | AE | yes |
+| 8 | The panel can quote an ETA LONGER than `comfyTimeoutSec` and then cancel the job at 600 s, having promised a finish. Warn when the estimate passes the timeout, and put the estimate into the timeout message. | §18 P3c | nothing | yes |
+| 9 | Pin the invariant the whole install plan rests on: refuse a BUNDLED manifest that names a non-core node pack. True today, guaranteed by nothing. | §22a | nothing | no |
+| 10 | Tee the harness's stdout into the loop log. `Running self-test via` and `Crash flag:` appear ZERO times across the whole 2026-09-09 night, so a killed pass leaves no record of whether its self-test was green. | §20e | nothing | no |
+| 11 | A guard test for the pass invocation, so a future brief edit cannot re-inject a bare `--` and silently drop the bypass flag again. | §20d | nothing | no |
+| 12 | §21 leftovers: the watchdog rule keys on the word "recover" and can never match the real dialog; `Test-AellAeRunning` is version-blind; stale `CrashOccurred = 1` still sits on 26.2. | §21 | nothing | no |
+| 13 | The managed backend dies silently within the half hour — measure the cause before fixing it. | §17k | backend | maybe |
+| 14 | **No shipped template can take a reference image any more** — i2v left the bundle with the authored H3 graph. | §18 P9a | nothing | yes |
+| 15 | `download-gen-weight` re-downloads a weight already present in another `comfyModelRoots` root (6.4 GB wasted, measured; the next one is 26 GB). | §18 P7b | nothing | yes |
+| 16 | Decide llama-server's lifetime: give it the same detach seam, or delete the reap that can never fire. | §17i | nothing | yes |
+| 17 | The vendor-enum fixture is a hand-taken snapshot with nothing forcing a refresh when the vendor build moves. | §17l | nothing | no |
+| 18 | krea2 and ltx-small are the only entries EXEMPT from "a gate must hold its biggest weight file", because their files carry no sizes. | §18 P8a | nothing | yes |
+| 19 | `weight-availability-probe.js` defaults to `comfyUrl`, so it cannot see the managed backend without `--url`. | §17h | nothing | no |
 
 **§18 P7a is now HALF ANSWERED.** The owner approved options 1 AND 2 on
 2026-09-09 — "give even the lowest end cards an option here if they're
@@ -3950,6 +3952,54 @@ the pixels for a 20% saving, because this graph holds 17 304 MiB of
 weights resident (fp16 diffusion 9536 + fp8 encoder 6424 + vae 1344) and
 the frame is the small term. There is no size or length the panel can
 inject that rescues a 24 GB card, let alone an 8 GB one.
+
+### DECIDED 2026-09-09 by the owner: option 3 is the FLOOR, not the plan
+
+**"Let's just tell them that it's not gonna work. We want it to be a
+usable product."** So when no video entry fits a card, the panel says so
+plainly. `recommendGen` returning `null` for video is already a supported
+shape and `test-tiers.js` already pins it for a 4 GB card. No silent
+grind, ever — option 4 is rejected: 0.10.14 measured that this backend
+does not OOM when a job outgrows the card, it GRINDS, and a buyer cannot
+tell that from a broken plugin.
+
+**But the refusal is the floor, and the ambition is to shrink who hits
+it.** Owner, same breath:
+
+> "we wanna be able to offer the video to as many people as possible
+> that can run it. And that means twelve gigabyte cards as well. And,
+> again, even lower, if there's a way to run a video model on an eight
+> gigabyte card, we should look at that... we should look at every
+> available opportunity to make it easier on people."
+
+So option 3 is what a card gets *after* every lever has been tried, not
+instead of trying them. The levers, in the order they are cheap:
+
+1. **Smaller weights.** fp8 first (§18 P7c step 1), then quantized
+   builds — GGUF Q4/Q5 video models exist in the open-source ecosystem
+   and are the standard way an 8 GB card runs something this size.
+2. **SageAttention + Triton (§13a).** Already filed, already
+   owner-specified 2026-09-03, and §13's own header says it: on 8-12 GB
+   cards this "is not a speed tweak, it is the difference between video
+   generation being usable and not." It was never linked to this gap and
+   was never queued. It is now.
+3. **KV-cache quantization (§13b)** for the chat side, which buys back
+   the headroom a concurrent generation needs.
+
+**The consequence nobody has priced yet, and it may reorder §22.**
+Quantized loaders are, as far as anyone here knows, CUSTOM NODES —
+`UnetLoaderGGUF` and its siblings ship in a pack, not in comfy-core. If
+that holds, then **serving 8-12 GB cards requires the node-pack
+installer (§22d)**, which the roadmap put last on the grounds that the
+basics stay core-only. Both can be true: the basics stay core-only, and
+the LOW-END path is the first legitimate customer for the opt-in layer.
+That promotes §22d from "expansion, later" to "on the critical path for
+the cards most buyers own".
+
+**Do not act on that until it is checked.** Ask a running backend's
+`/object_info` whether any GGUF loader is present and which pack owns it.
+The repo's node fixture cannot answer (§17l) and said zero for LTX while
+the vendor's own blueprint used an LTXV node.
 
 **Four ways out, and choosing between them is the owner's, not a pass's.**
 Each is a product decision about what a mid-range buyer is offered:
