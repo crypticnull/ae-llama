@@ -23230,3 +23230,44 @@ measure whether a bundle fits a smaller card without owning one, because
 §18 P7 established the floor is resident weights and not the frame.
 
 No `extension/` change, so **no version bump**. Docs only.
+
+## 2026-09-09 (local session) — the machine is the owner's during the day; CLAUDE.md says so now
+
+**Owner, 2026-09-09:** local testing happens overnight only unless he
+says otherwise, and a session should stay on work that costs him nothing
+"before ever touching the local resources."
+
+Written into `CLAUDE.md` as its own section rather than left in a log
+entry, because a standing operating rule that only exists in an
+append-only file is one nobody will read. A daytime session must not boot
+the managed backend, launch AE, run `run-ae-selftest.ps1`, run the full
+Node suite, run a GPU probe, or download weights. It binds subagents too.
+
+The rule is cheap to keep. The four-night loop failure of 09-05 to 09-08
+was diagnosed entirely with file reads, a git bisect across 22 versions
+of one string, and three sub-second CLI probes — no AE, no backend, no
+suite. Daytime is not a crippled mode.
+
+**Why it exists is measured, and the measurement is the whole argument.**
+The 2026-09-09 run left the backend up; at 11:31, 76 minutes after the
+loop ended, it held 27,844 MiB of 32,607 at zero percent utilisation. He
+found it by trying to play a game. §17q fixes that specific leak; this
+rule covers the class.
+
+The overnight loop is explicitly unaffected — it launches AE, boots the
+backend and runs the harness by design. That is the window.
+
+**Also corrected while in the file:** `CLAUDE.md`'s "Two agents, two
+roles" still described a remote session that owns merges and minor/major
+bumps. It was retired 2026-09-09 and `docs/HANDOFF.md` §2 says the roles
+collapse into the local session. A fresh session reads `CLAUDE.md` before
+the handoff, so it was being told the wrong thing first.
+
+**A design pass was started in the background** on the owner's approval:
+the in-tandem expansion roadmap, briefed by
+`docs/proposals/expansion-roadmap-BUILD-PROMPT.md`, running under the
+same no-local-resources constraint. Its deliverable is
+`docs/proposals/expansion-roadmap.md`; it does not commit, so the result
+is reviewed here before it lands.
+
+No `extension/` change, so **no version bump**.

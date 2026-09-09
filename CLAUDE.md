@@ -6,9 +6,11 @@ video generation. Windows 11 + AE 2024+ (field-tested on AE 2026).
 
 ## Two agents, two roles
 
-- **Remote session** (claude.ai/code): builds features, owns minor/major
-  version bumps and the merges into `main`, reviews what the local
-  session pushes.
+- **Remote session** (claude.ai/code): RETIRED 2026-09-09. It built
+  features and owned merges while the local session had no machine
+  access. Both roles are the local session's now, including minor and
+  major bumps and the merges into `main` -- see `docs/HANDOFF.md` §2.
+  Its last act was that handoff; read it on a fresh session.
 - **Local session** (this machine, has real After Effects): its superpower
   is RUNNING the panel's tool suite inside real AE and reporting/fixing
   what the stubs can't see. It ships its own verified fixes — patch bump,
@@ -51,6 +53,35 @@ existed).
 For long unattended runs the human starts `scripts/run-local-agent.ps1`,
 which loops: pull -> one headless pass -> commit -> repeat. A plain
 interactive session does NOT self-start; it answers one prompt and waits.
+
+## The machine belongs to the owner during the day
+
+**Owner, 2026-09-09: local testing happens OVERNIGHT only, unless he says
+otherwise.** He is a motion designer using this PC for paid work, and
+After Effects plus a generation backend is most of a workstation. The
+overnight loop is not a convenience, it is the only window this project
+moves in.
+
+In a DAYTIME session, do not: boot the managed ComfyUI backend, launch
+After Effects, run `scripts/run-ae-selftest.ps1`, run the full Node
+suite, run any GPU probe (`catalog-vram-probe`, `comfy-probe`,
+`weight-availability-probe`, `nvidia-smi` sampling), or download weights.
+Ask first. This binds subagents too.
+
+Daytime work is reading, reasoning, docs, filing and light git, and that
+is not a small allowance: the four-night loop failure of 2026-09-05 to
+09-08 was diagnosed entirely with file reads, a git bisect over 22
+versions of one string, and three sub-second CLI probes.
+
+**Why the rule exists, measured.** The 2026-09-09 overnight run left the
+managed backend running after it finished. At 11:31, seventy-six minutes
+past the loop's end, it held **27,844 MiB of 32,607** at zero percent
+utilisation, leaving about 4.7 GB for anything else. The owner found it
+by trying to play a game. `run-local-agent.ps1` now stops it in teardown
+(§17q), but the general rule is the durable fix.
+
+None of this constrains the overnight loop itself. That IS the window:
+it launches AE, boots the backend and runs the harness by design.
 
 ## Verify changes
 
