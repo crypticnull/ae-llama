@@ -21762,3 +21762,149 @@ probe script and one Node test and nothing under `extension/` or in
 released to 4911 MiB. The cancelled prompt
 (79ee5e9a-ed0a-4774-a03c-6c6271ffa04a) was cancelled by the probe, not
 left running.
+
+## 2026-09-09 (local session) — H3 has a measured block, and the probe could not name its own output because ffmpeg.js closed over `this` (NEXT UP 2 / §18 P3 + P3a(a), 0.12.9)
+
+SUPERSEDES: 21735-21748 — that entry's stub back-fill ("a measured
+`kind: "video"` entry must now name seconds or frames as well") reached
+disk as a regex that can never match anything. It was written as
+`/\b\d+(\.\d+)?\s*(s\b|sec|seconds|f\b|frames)/i` and landed as
+`/<0x08>d+...(s<0x08>|...)/i` — every `\b` word boundary turned into a
+literal BACKSPACE byte by the tool that wrote the file. The rule that
+entry describes was enforcing NOTHING. It could not be seen: it parses,
+it runs, and its negative control still passed (a dead regex fails a
+hand-added video entry for the wrong reason), so only the first pass to
+actually MEASURE a video could notice. Repaired here, and
+`tests/test-source-control-chars.js` now refuses any literal control
+character repo-wide.
+
+**Item: NEXT UP 2 (§18 P3 + P3a).** Harness green first —
+`run-ae-selftest.ps1` **770/770** — so the list applied. Backend up from
+the previous pass on 8288, `/queue` 200, ComfyUI 0.34.0. Gate 0:
+`from=file saved=true dataRoot=C:\Users\mr\AppData\Roaming\AE-Llama`.
+
+**The reading, and it is repeatable.** Two runs of
+`catalog-vram-probe --entry minimax-h3 --duration 2`, one seed, on the
+MANAGED backend:
+
+    run 1: idle 4768 -> peak 31737, delta 26969 MiB, 80s
+    run 2: idle 4761 -> peak 31705, delta 26944 MiB, 80s
+    output 1344x768, 56 frames, 0.98 MP (the template's authored frame)
+
+25 MiB apart (0.09%), so this is a measurement and not a sample. The
+higher is published, the way krea2's two runs were. `minimax-h3` is
+`measured: true` and **`ALLOW_UNMEASURED` is now EMPTY** — its last seat
+was this entry, which is the first half of §18 P12.
+
+**Why the first run had to be thrown away, and what that turned out to
+be.** Run 1 printed `OUTPUT ?`. A video entry's `measuredAt` must name
+the pixel size it was taken at, so a `?` is the difference between a
+publishable reading and an unpublishable one — and the probe was giving
+no reason for it, which sent me looking. ffprobe was present and
+answered `1344 768 56` by hand. The probe's `describeOutput` reaches for
+`Ffmpeg.find({})` inside a bare `try/catch`, and **`Ffmpeg` was not
+defined at all**: ffmpeg.js ended `})(this)` while the other ten panel
+modules end `})(window)`. Identical in a browser, where `this` at the
+top of a classic script IS window. Not identical inside
+`new Function("window", src)(window)`, where `this` is **Node's
+global** — so `global.Ffmpeg` was published somewhere nothing looks,
+`window.Ffmpeg` stayed undefined, the catch ate the ReferenceError, and
+every video the probe ever measured printed `output ?` as if the FILE
+had no geometry.
+
+**This bug was already known, fixed in one place, and left standing
+everywhere else.** `chat-probe.js` hit it in 2026-08 (Whisper landing on
+globalThis, `transcribe_to_captions` answering "not available in this
+panel build") and worked around it *in its own loader* with
+`.call(window, window)`, with a good comment explaining why. That fixed
+one of TWELVE loaders. Eleven scripts under `scripts/` still used the
+plain form, and `catalog-vram-probe.js` — the one whose readings go into
+the CATALOG — was one of them. So the fix went to the two MODULES
+instead: ffmpeg.js and whisper.js now end `})(window)` like the other
+ten, and no loader has to know anything.
+
+**Fixed, all of it root-side:**
+
+- `extension/js/ffmpeg.js`, `extension/js/whisper.js` — `})(window)`.
+- `scripts/catalog-vram-probe.js` — `describeOutput` now SAYS why it
+  cannot answer instead of printing a bare `?` (grounded errors: a `?`
+  that means "the probe never looked" reads exactly like "the file has
+  no geometry"). Its loader also binds `this`, which costs one word and
+  survives either module shape.
+- `tests/test-captions.js`, `tests/test-ffmpeg-export.js` — both loaded
+  their module with `new Function(src).call(obj)`, i.e. built around the
+  odd shape; now `new Function("window", src)(obj)` like everything else.
+
+**Verified in the field, which is the point of this session:** re-ran
+the probe and it printed `OUTPUT 1344x768 56f`. Same 80 s, delta 26944.
+
+**P3a is answered (a); (b) is still the owner's.** The filing's own
+objection to (a) alone was that "the catalog then describes a job the
+user is not the one being given" — H3's AUTHORED default is 15 s (362
+frames), which on this 5090 was still sampling at 901 s when yesterday's
+probe cancelled it. So the disclosure is STRUCTURAL, not prose: the
+entry carries `measuredClipSeconds: 2`, `authoredClipSeconds: 15` and an
+`authoredNote` naming the 15-minute default, and the test reads the
+authored length **out of the entry's own shipped API template** (node
+136, via the manifest's `procedural.durationSeconds` pointer) rather
+than trusting the number typed into version.js. A future short
+measurement therefore cannot ship without saying what the default
+renders, and the disclosure cannot drift from the graph it describes.
+The gate is safe either way: 32 GB covers the 26.3 GiB measured here and
+the >=24.7 GiB the cancelled 15 s run had already put on the card.
+**(b), capping the duration the panel injects, changes what the owner's
+authored graph renders and stays owner-gated** (NEXT UP 2a).
+
+**Stub back-fill, three rules, each a bug class rather than an
+instance:**
+
+1. `tests/test-source-control-chars.js` (new) — no source file may carry
+   a literal ASCII control character. This is the class that produced
+   the dead regex above: a mangled escape parses, runs, throws nothing,
+   and looks correct in a diff; `cat -A` is the only way to see it, and
+   a regex that can never match reads exactly like a rule being obeyed.
+   256 files walked. It found a second instance immediately —
+   `tests/test-probe-bundle.js:343`, whose assertion message is *"invisible
+   bytes in source are the hazard class that already bit this repo
+   once"* and which was itself written with three raw bytes where
+   `[\x00-\x1f]` was meant. That one WORKED (a literal NUL-to-US range
+   is the same character class), so it was fragile rather than dead;
+   rewritten as escapes.
+2. `tests/test-chat-probe.js` — the existing module-landing loop only
+   ever loaded with `.call(win, win)`, which papers over exactly the
+   shape that was broken. It now ALSO loads each module the PLAIN way
+   (the form eleven scripts use) and asserts it lands, plus a repo-wide
+   ratchet that no `extension/js/*.js` closes its IIFE over `this`.
+   Negative control run: both fail on the old shape, both pass on the
+   new.
+3. `tests/test-model-catalog.js` — the repaired length rule, plus
+   `measuredClipSeconds` as a NUMBER (prose in `measuredAt` cannot be
+   compared with anything), a cross-check that the two agree, and the
+   authored-length rule described above.
+
+**Results.** Full stubbed suite **86 files, 0 failing**. Real-AE harness
+**770/770** before and after. Two of those 86 (`test-captions.js`,
+`test-ffmpeg-export.js`) broke on the module change and were fixed at
+the loader, not by loosening anything — worth noting because
+`test-ffmpeg-export.js` was long labelled a "container-only failure";
+it passes here.
+
+**Bumped to 0.12.9** — `extension/js/{version,ffmpeg,whisper}.js` all
+changed, so this one ships.
+
+**Filed as work, not just logged: §18 P3b (NEXT UP 2b).** While a
+generation runs the panel emits `"ComfyUI still generating… <n>s"` every
+ten seconds and nothing else — at H3's authored default that is ninety
+lines with no denominator, no step count and no estimate, so the user
+cannot tell 10% done from wedged. The obvious reaction to
+`still generating… 600s` is to force-quit, which is how the backend ends
+up in the states §17k is about. ComfyUI already publishes `value`/`max`
+on its websocket `progress` message, so this is plumbing: carry step
+k of N through `Comfy.generate`'s `onProgress` (comfy.js:1816, which
+today takes only `secondsElapsed`). Worth doing whatever P3a(b)
+decides — a 2 s clip is still 80 s on a 5090.
+
+**State left behind.** AE running and untouched, project not closed.
+Managed backend UP on 8288, queue empty, card released to 4761 MiB
+(idle floor was 4761 — it gave everything back). Two probe transcripts
+and two 2 s H3 clips under `logs/`.

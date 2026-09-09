@@ -111,7 +111,12 @@ const fglobal = {
   Settings: { dataRoot: () => DATA_ROOT },
   AEBridge: { nodeRequire: nodeShim }
 };
-new Function(ffmpegSrc).call(fglobal);
+// Passed as an ARGUMENT, not bound as `this`: ffmpeg.js used to end
+// `})(this)` and now ends `})(window)` like the other ten panel modules,
+// because `this` inside new Function is Node's global — which is where
+// Ffmpeg was landing while every probe looked for it on the window it
+// handed in (2026-09-09).
+new Function("window", ffmpegSrc)(fglobal);
 const F = fglobal.Ffmpeg;
 
 // ================================================== 1. the pure half

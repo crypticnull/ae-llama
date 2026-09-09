@@ -8,7 +8,7 @@
   "use strict";
 
   global.AELL = {
-    VERSION: "0.12.8",
+    VERSION: "0.12.9",
 
     // Release channel label, shown wherever the version is displayed.
     // Purely cosmetic — update comparisons use the numeric VERSION only.
@@ -81,13 +81,24 @@
     // bug. All twelve URLs were alive on 2026-08-30 and every size below is
     // that day's measurement (x-linked-size, or the file already on this
     // machine); `measured` is about the VRAM figure, which is measured
-    // for `krea2` alone (2026-08-30) and still a guess everywhere else.
+    // for `krea2` (2026-08-30) and `minimax-h3` (2026-09-09) and still a
+    // guess for everything that ships no graph.
     // An entry with measured: true carries the reading that earned it --
     // measuredVramMB (nvidia-smi peak minus an established idle floor),
     // measuredSeconds, measuredAt (the SIZE it was measured at, which is
     // half the number) and measuredOn (the card). minVramGB must cover
     // measuredVramMB or the entry is offered to a card that cannot hold
     // it; tests/test-model-catalog.js enforces exactly that.
+    //
+    // A VIDEO entry needs one more thing, because for a clip the frame is
+    // only half the size: the latent is frames x pixels, so the same graph
+    // at two lengths is two different jobs on the card. It carries
+    // measuredClipSeconds (the length the reading was taken at) and
+    // authoredClipSeconds (the length the TEMPLATE renders when the user
+    // names none), and when those differ an authoredNote saying so -- the
+    // catalog must not quote a two-second decomposition as if it were the
+    // job the buyer is handed. The test reads the authored length out of
+    // the shipped API template rather than trusting the number here.
     COMFY_CATALOG: [
       {
         name: "sd15",
@@ -167,7 +178,43 @@
       {
         name: "minimax-h3",
         label: "MiniMax H3 (RTX 50 series)",
-        kind: "video", sizeMB: 40503, minVramGB: 32, measured: false,
+        // MEASURED 2026-09-09 on an RTX 5090 (32 607 MiB) by
+        // scripts/catalog-vram-probe.js, running the SHIPPED
+        // AE_LLAMA_H3_I2V_V1 through the panel's own comfy_generate on the
+        // MANAGED backend a buyer gets (ComfyUI 0.34.0, port 8288), with
+        // nvidia-smi streaming at 250 ms. Two runs at one seed, 26 969 and
+        // 26 944 MiB over an established idle floor — 25 MiB apart, so the
+        // reading is repeatable; the higher is published, as krea2's was.
+        //
+        // READ measuredClipSeconds BEFORE THE NUMBER. This is a 2-second
+        // clip, and 2 seconds is NOT what the template renders. At its
+        // authored 15 s the same graph is a 362-frame latent that was
+        // still sampling at 901 s on this card when the probe cancelled it
+        // (peak 30 191 MiB, no OOM, 100% utilisation throughout) — so the
+        // authored length cannot be measured inside a pass at all, and a
+        // buyer who names no length waits over a quarter of an hour on the
+        // fastest card this catalog knows. Whether the panel should cap
+        // that default is a product call, filed as WORKPLAN 18 P3a; until
+        // it is answered the row states both lengths rather than quoting
+        // the short one as if it were the shipped job.
+        //
+        // The gate holds either way: 32 GB covers the 26.3 GiB measured
+        // here AND the >=24.7 GiB the cancelled 15 s run had already put
+        // on the card before it was stopped.
+        kind: "video", sizeMB: 40503, minVramGB: 32, measured: true,
+        measuredVramMB: 26969, measuredSeconds: 80,
+        measuredAt: "1344x768 (0.98 MP, the template's authored frame), " +
+                    "2 s / 56 frames, seed 12345",
+        measuredClipSeconds: 2,
+        authoredClipSeconds: 15,
+        authoredNote: "the template's own default is 15 s (362 frames), " +
+                      "which is what a request that names no length " +
+                      "renders: over 15 minutes on an RTX 5090, still " +
+                      "sampling at 901 s when the measurement was " +
+                      "cancelled. The figure above is a 2 s decomposition " +
+                      "of that job, not the job itself.",
+        measuredOn: "NVIDIA GeForce RTX 5090, ComfyUI 0.34.0 (managed), " +
+                    "2026-09-09",
         requiresBlackwell: true,
         workflowTemplate: "AE_LLAMA_H3_I2V_V1",
         urls: [{

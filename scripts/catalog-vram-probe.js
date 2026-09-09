@@ -117,7 +117,14 @@ window.window = window;
 
 function loadPanelFile(rel) {
   const src = fs.readFileSync(path.join(EXT, "js", rel), "utf8");
-  new Function("window", src)(window);
+  /* `.call(window, ...)` as well as passing it, the same way chat-probe.js
+   * loads: ffmpeg.js and whisper.js used to end `})(this)`, which is window
+   * in a browser and NODE'S GLOBAL in here. That published Ffmpeg where
+   * nothing looked, and describeOutput below then printed `output ?` for
+   * every video it measured. Both modules now end `})(window)` so the plain
+   * form works too; this stays because a loader that survives either shape
+   * costs one word. */
+  new Function("window", src).call(window, window);
 }
 loadPanelFile("version.js");
 loadPanelFile("settings.js");
@@ -471,9 +478,24 @@ function describeOutput(file, cb) {
     cb(null);
     return;
   }
-  let bin = null;
-  try { bin = Ffmpeg.find({}); } catch (e) {}
-  if (!bin || !bin.ok) { cb(null); return; }
+  /* Say WHY when it cannot answer. This swallowed its own reason for
+   * weeks: `Ffmpeg` was undefined (the loader bug above), the catch ate
+   * the ReferenceError, and the transcript read `output ?` — which looks
+   * like "the file had no geometry" and is really "the probe never
+   * looked". A video entry's measuredAt has to name a pixel size, so a
+   * silent ? here is the difference between a publishable reading and an
+   * unpublishable one. */
+  let bin = null, why = "";
+  try { bin = Ffmpeg.find({}); }
+  catch (e) { why = "Ffmpeg module not loaded: " + e.message; }
+  if (!bin || !bin.ok) {
+    say("info", "cannot read this file's geometry — " +
+        (why || (bin && bin.reason) || "no ffprobe found") +
+        ". Install one with scripts/get-ffmpeg.ps1; without it a video " +
+        "reading cannot name the size it was taken at.");
+    cb(null);
+    return;
+  }
   const p = spawn(bin.ffprobe, ["-v", "error", "-select_streams", "v:0",
     "-show_entries", "stream=width,height,nb_frames",
     "-of", "default=nw=1:nk=1", file]);

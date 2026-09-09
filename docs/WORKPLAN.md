@@ -47,9 +47,10 @@ the night retrying it.
 | ~~1c~~ | ~~`comfy-probe.js` says "ComfyUI reachable" PASS when nothing is listening, and `--boot` sits inside that same dead branch~~ **DONE 2026-09-09.** FOUR probes had it, not one; `managed.reachable` is now the single place the question is asked, and the panel's own two callers audited clean. No bump — nothing in `extension/` changed. | §17n | — | — |
 | ~~1d~~ | ~~`comfy-probe.js --url` is silently ignored in managed mode~~ **DONE 2026-09-09.** SIX scripts, one rule: `managed.urlOverride(url)` sets the MODE as well as the address, because an explicit URL names an INSTANCE, and every probe resolves with `Comfy.backendUrl`. Verified on the real machine — `--url` moves the target (and generated end to end through it), and a bare `weight-availability-probe` finally measures the managed backend (all verdicts PASS). No bump: nothing in `extension/` changed. | §17m + §17h + §17o | — | — |
 | ~~1e~~ | ~~`node tests/test-comfy-install.js` KILLS the live managed backend~~ **DONE 2026-09-09.** The fixture now writes `comfyManagedPort` from an OS-allocated dead port, and the fall-through that had NO assertion at all (`stopped the backend holding port`) is checked in both directions plus a flat refusal of the string `8288`. Verified on the machine, against §17p's own reproduction: boot on 8288, run all 85 test files, backend STILL ALIVE on the same pid, `/queue` 200. New block 5 refuses any test that drives `--stop` without naming a port. No bump — nothing in `extension/` changed. | §17p | — | — |
-| 2 | **START HERE.** H3's measured block, at a length that can finish. The t2v REGRESSION half is DONE 2026-09-09 (9/9, managed backend, detached first frame, AE import). The reading half is not: at the template's AUTHORED 15 s / 0.98 MP / 20 steps (a 362-frame latent) the 5090 was still sampling at 901 s and the probe cancelled it — peak 30191 MiB under a 32607 MiB card, so this is WALL CLOCK, not VRAM. Take the reading with the new `--duration` (2 s = 56 frames, minutes not quarter-hours), then answer P3a before writing the catalog block. | §18 P3 + P3a | item 1, AE | yes, with the block |
-| 2a | The panel's DEFAULT H3 render is a >15-minute job on the fastest card the catalog knows | §18 P3a | — | maybe |
-| 3 | sd15 basic template (+ the frontend-editable measurement) | §18 P5 | item 1, AE, 2 GB | yes |
+| ~~2~~ | ~~H3's measured block, at a length that can finish~~ **DONE 2026-09-09 (0.12.9).** Two runs at 2 s / 56 frames on the managed backend, 26 969 and 26 944 MiB over an established idle floor — 25 MiB apart, so repeatable; 80 s each, 1344x768 out. `minimax-h3` is measured, `ALLOW_UNMEASURED` is now EMPTY (§18 P12's first half). P3a answered **(a)**: the row quotes the 2 s reading and states the authored 15 s default beside it, so it cannot be read as the job the buyer gets; **(b), capping the default, stays owner-gated.** Root defect found en route — the probe could not name its own output size (`output ?`) because ffmpeg.js ended `})(this)`, which is Node's global inside `new Function`. | §18 P3 + P3a | — | — |
+| 2a | Cap the duration the panel injects when the user names none — **OWNER CALL**, the measurement behind it is now taken | §18 P3a (b) | — | yes |
+| 2b | A 15-minute generation reports elapsed seconds and no estimate, so it reads as a hang | §18 P3b | — | yes |
+| 3 | **START HERE.** sd15 basic template (+ the frontend-editable measurement) | §18 P5 | item 1, AE, 2 GB | yes |
 | 4 | sdxl basic template | §18 P6 | item 3, 7 GB | yes |
 | 5 | wan22-5b basic t2v template | §18 P7 | item 3, 17 GB | yes |
 | 6 | krea2 core-only basic; the authored graph then leaves the bundle | §18 P8 | item 3 | yes |
@@ -3799,8 +3800,9 @@ taken on what a buyer gets — so nothing measured after §17c needs a
 | ~~P0~~ | remote | **DONE 2026-09-06.** `test-workflow-bundle.js`, two both-directions allowlists in `test-model-catalog.js`, manifests walk | no | — |
 | ~~P1~~ | remote | **DONE 2026-09-06 (0.12.1).** `describeWorkflows` + `resolveWorkflow` with the baseline tiebreak; the alphabet no longer picks; `comfyWorkflows` setting; `catalogEntry` on both manifests; `test-workflow-resolve.js` (22 rows) | yes | P0 |
 | ~~P2~~ | remote | **DONE 2026-09-06.** `--frames`/`--boot`/`--stop` on both probes, `scripts/lib/comfy-managed.js`, `download-gen-weight.js`, chat-probe kind verdict, gate 0. Also fixed: both probes read `comfyUrl` where §17a had moved the answer to `backendUrl` | no | P1 |
-| P3 | local | H3 t2v re-run **DONE 2026-09-09** (9/9); the measured block is NOT taken — see P3a and take it with `--duration` | with the block | §17c, P2, AE |
-| P3a | local | the AUTHORED H3 default cannot be measured in a pass, and a buyer waits it out — decide the length the catalog quotes, or cap the default | maybe | P3 |
+| ~~P3~~ | local | **DONE 2026-09-09 (0.12.9).** t2v re-run 9/9 earlier the same day; the measured block is now written from two repeatable `--duration 2` runs (26 969 / 26 944 MiB, 80 s, 1344x768 x 56f) | 0.12.9 | — |
+| P3a | local + OWNER | **(a) DONE 2026-09-09** — the row quotes 2 s and states the authored 15 s beside it, enforced against the template itself. **(b) capping the injected default is the owner's** | (b) yes | — |
+| P3b | local | elapsed seconds is the only progress a 15-minute render reports; carry step k/N through `onProgress` | yes | — |
 | ~~P4~~ | remote | **DONE 2026-09-06 (0.12.2).** Settings **Workflows** rows via the pure `Tools.workflowRows()`; `test-workflow-rows.js` (21 rows) | yes | P1 |
 | P5 | local | sd15 basic + manifest + `workflowTemplate` + allowlist −sd15; **measure whether the frontend opens an API graph editable** | yes | §17c, P0–P2, AE |
 | P6 | local | sdxl as P5 | yes | P5 |
@@ -3809,7 +3811,7 @@ taken on what a buyer gets — so nothing measured after §17c needs a
 | P9 | local | H3 basic; on proof the authored graph leaves the bundle | yes | P3, P7 |
 | P10 | local | h3-int8: download the 26 GB encoder, second API file — confirm from the UI source first | yes | P9; 26 GB |
 | P11 | remote | `package-zxp.ps1` `$excludeDirs` += `workflows` | yes | — |
-| P12 | remote | `ALLOW_UNMEASURED → []`; `ALLOW_NO_TEMPLATE → [ltx-small]` and STOPS there (Q1) | tests only | P3–P10 |
+| P12 | remote | **HALF DONE 2026-09-09:** `ALLOW_UNMEASURED` is `[]` (minimax-h3 was its last seat and is now measured). Still open: `ALLOW_NO_TEMPLATE → [ltx-small]` and STOPS there (Q1) | tests only | P5–P10 |
 
 ### Hooks, named so nobody builds them early
 
@@ -3863,6 +3865,56 @@ cancelled it. 3511 nvidia-smi samples: idle floor 4857 MiB, peak
 Nothing here should be guessed at by an unattended pass on its own; but
 (a) is takeable NOW and blocks nothing, and P3's measured block should
 not be written from a run that never produced a file.
+
+### (a) TAKEN 2026-09-09 (local session, 0.12.9). (b) is still the owner's.
+
+The reading exists and it is repeatable: two runs at `--duration 2`, one
+seed, on the managed backend — **26 969 and 26 944 MiB** over an
+established idle floor (25 MiB apart), **80 s** each, 1344x768 / 56
+frames out, peak 31 705 of 32 607 MiB. The higher is published, as
+krea2's was. `minimax-h3` is now `measured: true` and
+`ALLOW_UNMEASURED` is EMPTY.
+
+**The (a)-only gap the filing warned about is closed structurally, not
+by prose.** "The catalog then describes a job the user is not the one
+being given" was the honest objection to (a) on its own, so the entry
+carries `measuredClipSeconds: 2` AND `authoredClipSeconds: 15` and an
+`authoredNote` naming the 15-minute default — and
+`tests/test-model-catalog.js` reads the authored length out of the
+entry's **own shipped API template** (node 136 via the manifest's
+`procedural.durationSeconds` pointer), so the disclosure cannot drift
+from the graph and a future short measurement cannot ship without one.
+
+**The gate is unaffected either way.** 32 GB covers the 26.3 GiB
+measured here and the >=24.7 GiB the cancelled 15 s run had already put
+on the card.
+
+**(b) — capping the injected default — is untouched and still needs the
+owner** (NEXT UP 2a). It changes what his authored graph renders.
+
+## 18 P3b. A 15-minute generation reports elapsed seconds and nothing
+else, so the panel's own default reads as a hang (filed 2026-09-09,
+local session)
+
+Measured alongside P3. While a generation runs, `tools.js:2261` emits
+`"ComfyUI still generating… <n>s"` every ten seconds and that is the
+whole of the feedback. At H3's authored 15 s that is **ninety of those
+lines with no denominator** — no step count, no percentage, no estimate
+— and the user has no way to tell a job that is 10% done from one that
+has wedged. The obvious reaction to `still generating… 600s` is to
+force-quit, and force-quitting mid-generation is how the backend gets
+left in the states §17k is about.
+
+ComfyUI already publishes what is needed: the websocket `progress`
+message carries `value`/`max` for the executing node, and `/history`
+carries the node list. So this is a plumbing item, not a research one:
+carry step k of N through `Comfy.generate`'s `onProgress` (which today
+takes only `secondsElapsed`, comfy.js:1816) and let the sink render a
+fraction plus a projection from the elapsed-per-step rate.
+
+Worth doing **whatever (b) decides**: a 2-4 s default still takes 80 s
+on a 5090 and proportionally longer on the cards the catalog gates in.
+Bumps. Loop-takeable.
 
 **Tooling already landed for it (2026-09-09):** `--duration <seconds>`
 on `catalog-vram-probe.js` (unexercised by a real generation — first act

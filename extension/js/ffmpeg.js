@@ -795,4 +795,14 @@
     buildSocialArgs: buildSocialArgs,
     checkOutput: checkOutput
   };
-})(this);
+/* `window`, not `this` — the other ten panel modules end this way and
+ * these two did not. In a browser the difference is invisible (`this` at
+ * the top of a classic script IS window), but every Node harness loads a
+ * panel file with `new Function("window", src)(window)`, where `this` is
+ * NODE'S global. So `global.Ffmpeg` landed somewhere nothing looks and
+ * `window.Ffmpeg` stayed undefined. chat-probe.js worked around it in its
+ * own loader in 2026-08; catalog-vram-probe.js did not, and every video
+ * measurement it took printed `output ?` because describeOutput's
+ * ffprobe branch could not reach Ffmpeg.find. Fixed at the file instead
+ * of in eleven loaders. */
+})(window);

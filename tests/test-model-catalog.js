@@ -175,10 +175,15 @@ window.AELL.COMFY_CATALOG.forEach((e) => {
 // sit below what was measured through it.
 const MEASURED_FIELDS = ["measuredVramMB", "measuredSeconds", "measuredAt",
                          "measuredOn"];
+// Video-only companions to the four above: same rule, an entry that has not
+// been measured may not carry any of them either.
+const MEASURED_VIDEO_FIELDS = ["measuredClipSeconds", "authoredClipSeconds",
+                               "authoredNote"];
+const BUNDLE_DIR = path.join(__dirname, "..", "extension", "comfy-workflows");
 let measuredEntries = 0;
 window.AELL.COMFY_CATALOG.forEach((e) => {
   if (!e.measured) {
-    MEASURED_FIELDS.forEach((f) => {
+    MEASURED_FIELDS.concat(MEASURED_VIDEO_FIELDS).forEach((f) => {
       assert(!(f in e), e.name + ": measured:false, so it carries no " + f);
     });
     return;
@@ -203,10 +208,59 @@ window.AELL.COMFY_CATALOG.forEach((e) => {
   // cannot say which one it is. The pixel-size rule above passes either
   // way, which is exactly how that gap would ship.
   if (e.kind === "video") {
-    assert(/\d+(\.\d+)?\s*(s|sec|seconds|f|frames)/i
+    assert(/\b\d+(\.\d+)?\s*(s\b|sec|seconds|f\b|frames)/i
              .test(String(e.measuredAt)),
            e.name + ": a video entry's measuredAt names the clip LENGTH " +
            "as well (seconds or frames)");
+    // Prose is for the human reading the catalog; this is for the check.
+    // A length only spelled out in a sentence cannot be compared with the
+    // template it came from.
+    assert(typeof e.measuredClipSeconds === "number" &&
+           e.measuredClipSeconds > 0,
+           e.name + ": a measured video entry carries measuredClipSeconds " +
+           "(the clip length the reading was taken at, as a number)");
+    assert(String(e.measuredAt).indexOf(String(e.measuredClipSeconds)) !== -1,
+           e.name + ": and measuredAt states the same length that number does");
+
+    // THE ONE THAT MATTERS, and the reason this rule exists at all.
+    // `catalog-vram-probe --duration` lets a pass measure a video at a
+    // length that finishes: H3's AUTHORED 15 s was still sampling at 901 s
+    // on an RTX 5090 and had to be cancelled, so the only completed reading
+    // this catalog can hold is a 2 s decomposition of it. Publishing that
+    // is honest ONLY if the row also says what the panel renders when the
+    // user names no length, because THAT is the job the buyer is given.
+    // Without this, the catalog quotes a render nobody gets and nothing in
+    // the repo notices. The authored length is not a matter of opinion — it
+    // is the widget value in the entry's own shipped API template, reached
+    // through that template's manifest, so this reads it rather than
+    // trusting a number typed into version.js.
+    if (e.workflowTemplate) {
+      const api = path.join(BUNDLE_DIR, e.workflowTemplate + ".json");
+      const mfp = path.join(BUNDLE_DIR, e.workflowTemplate + ".manifest.json");
+      if (fs.existsSync(api) && fs.existsSync(mfp)) {
+        const graph = JSON.parse(fs.readFileSync(api, "utf8"));
+        const mf = JSON.parse(fs.readFileSync(mfp, "utf8"));
+        const ptr = (mf.procedural || {}).durationSeconds;
+        const node = ptr && graph[String(ptr.nodeId)];
+        const authored = node
+          ? Number((node.inputs || {})[ptr.input || "value"]) : 0;
+        if (authored > 0) {
+          assert(e.authoredClipSeconds === authored,
+                 e.name + ": authoredClipSeconds is the template's OWN " +
+                 "default (" + authored + " s at node " + ptr.nodeId + "), " +
+                 "so the row says what a user who names no length gets");
+          if (authored !== e.measuredClipSeconds) {
+            assert(typeof e.authoredNote === "string" &&
+                   e.authoredNote.length > 20,
+                   e.name + ": the reading was taken at " +
+                   e.measuredClipSeconds + " s but the panel's default " +
+                   "renders " + authored + " s, so the entry must carry an " +
+                   "authoredNote saying so — a shorter measurement quoted " +
+                   "without it describes a job the buyer is not given");
+          }
+        }
+      }
+    }
   }
   assert(typeof e.minVramGB === "number",
          e.name + ": a measured entry still has a gate");
@@ -265,11 +319,14 @@ const ALLOW_NO_TEMPLATE = ["sd15", "sdxl", "ltx-small", "wan22-5b",
 
 // Entries whose template has never been measured through
 // catalog-vram-probe. EXISTENCE IS NOT PROOF: a graph can be committed,
-// named by workflowTemplate, and never have rendered once. minimax-h3 is
-// exactly that today — it HAS rendered end to end (LOG 2445-2515,
-// 2026-08-27) but carries no measured block, so the arbiter still prices
-// it from `minVramGB` alone.
-const ALLOW_UNMEASURED = ["minimax-h3"];
+// named by workflowTemplate, and never have rendered once.
+//
+// EMPTY as of 2026-09-09 (§18 P3): minimax-h3 was the last seat and it now
+// carries a measured block taken on the managed backend. §18 P12 asked for
+// exactly this, so the list stays empty — a new entry with a graph must be
+// measured before it ships, not allowlisted. Adding a name back needs an
+// entry in docs/WORKPLAN-LOG.md saying why.
+const ALLOW_UNMEASURED = [];
 
 {
   const noTemplate = window.AELL.COMFY_CATALOG

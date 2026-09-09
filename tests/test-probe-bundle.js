@@ -340,7 +340,7 @@ function hostsIn(xml) {
   assert(!!m, "the page defines looksLikeCapsule");
   const looksLikeCapsule = m ? eval("(" + m[0] + ")") : null;
 
-  assert(!/"PK[ -]/.test(html),
+  assert(!/"PK[\x00-\x1f]/.test(html),
          "the zip signature is compared as BYTES, not as a string literal " +
          "holding raw control characters (invisible bytes in source are " +
          "the hazard class that already bit this repo once)");

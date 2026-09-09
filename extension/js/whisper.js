@@ -266,4 +266,9 @@
     transcribe: transcribe,
     SILENCE_WORDS: SILENCE_WORDS
   };
-})(this);
+/* `window`, not `this` — same fix, same reason as ffmpeg.js: inside
+ * `new Function("window", src)(window)` a `})(this)` module publishes
+ * onto Node's global, so tools.js looked for window.Whisper, found
+ * nothing, and transcribe_to_captions answered "not available in this
+ * panel build" — a refusal that says nothing about the machine. */
+})(window);

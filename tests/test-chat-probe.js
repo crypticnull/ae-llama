@@ -1061,6 +1061,43 @@ for (const mod of [...needed].sort()) {
     assert(!threw && typeof win[mod] !== "undefined",
            "and publishes global." + mod + " onto the probe's window, " +
            "which is where tools.js dispatches through");
+
+    /* And the PLAIN form, which is what the other eleven scripts under
+     * scripts/ use. The `.call` above is a workaround living in ONE
+     * loader; it left the trap standing for every other one, and
+     * catalog-vram-probe.js walked into it — its ffprobe branch could not
+     * reach Ffmpeg.find, so every video it measured printed `output ?`
+     * with no reason given, and a video catalog entry cannot be written
+     * without the pixel size that ? was standing in for. Fixed at the two
+     * modules (2026-09-09) rather than in eleven loaders, so this asserts
+     * a module lands when loaded the ordinary way. */
+    const winPlain = { console, setTimeout, clearTimeout,
+                       localStorage: { getItem: () => null, setItem: () => {},
+                                       removeItem: () => {} },
+                       AEBridge: { nodeRequire: require,
+                                   getExtensionPath: () => EXT2,
+                                   evalScript: () => {} } };
+    winPlain.window = winPlain;
+    let threwPlain = null;
+    try { new Function("window", src)(winPlain); }
+    catch (e) { threwPlain = e; }
+    assert(!threwPlain && typeof winPlain[mod] !== "undefined",
+           "and publishes global." + mod + " with the PLAIN " +
+           "new Function(\"window\", src)(window) too, which is how " +
+           "every other probe loads it");
+  }
+
+  /* The ratchet, so the class cannot come back by a new module copying an
+   * old one: a panel module may not close over `this`. Ten did it right,
+   * ffmpeg.js and whisper.js did not, and nothing said so until a probe
+   * measured the wrong thing quietly. */
+  for (const file of fs2.readdirSync(path2.join(EXT2, "js"))) {
+    if (!file.endsWith(".js")) continue;
+    const src = fs2.readFileSync(path2.join(EXT2, "js", file), "utf8");
+    assert(!/\}\)\(this\)\s*;?\s*$/.test(src.replace(/\s*$/, "")),
+           file + ": the module IIFE closes over `window`, not `this` " +
+           "(`this` is Node's global inside new Function, so the module " +
+           "publishes where no harness looks)");
   }
 }
 

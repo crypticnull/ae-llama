@@ -813,7 +813,11 @@ const wglobal = {
   AEBridge: { nodeRequire: (m) => require(m) }
 };
 let WHISPER_ROOT = path.join(os.tmpdir(), "aell-captions-test-" + process.pid);
-new Function(whisperSrc).call(wglobal);
+// Passed as an ARGUMENT, not bound as `this`: whisper.js used to end
+// `})(this)` and now ends `})(window)` like the other ten panel modules —
+// `this` inside new Function is Node's global, so the module published
+// where nothing that loaded it was looking (2026-09-09).
+new Function("window", whisperSrc)(wglobal);
 const Whisper = wglobal.Whisper;
 
 // ----------------------------------------------------- the parser
