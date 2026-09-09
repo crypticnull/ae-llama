@@ -4034,6 +4034,46 @@ only report it -- which is what the brief already says to do -- so the
 condition survives every unattended night until the rule can actually
 answer it.
 
+
+### PREVENTION LANDED 2026-09-08 (local session) — owner chose "prevent it"
+
+The dialog is not answered; the flag that arms it is cleared before AE
+is launched. Measured on the live machine:
+
+    HKCU:\Software\Adobe\After Effects\<ProductVersion>\CrashOccurred
+
+a DWord. Stale 26.2 carried `CrashOccurred = 1`; healthy running 26.3
+carried no such value, so ABSENT is the state AE itself writes and the
+value is REMOVED rather than set to 0.
+
+`<ProductVersion>` comes from `AfterFX.exe` itself — 26.3 reports
+`ProductVersion` "26.3", which is exactly the registry subkey. The
+install folder is "Adobe After Effects 2026"; deriving the key from that
+would clear a key that does not exist and report success.
+
+`scripts/lib/ae-crash-flag.ps1` (owner's policy: remove the value, refuse
+while AE runs), dot-sourced from `run-ae-selftest.ps1` immediately before
+`Start-Process`. Guarded by `tests/test-ae-crash-flag.js`. Suite 81/81.
+
+**The refusal is not a limitation.** Only a COLD launch can meet the
+prompt: when AE is already up, `-r` hands the script to that instance.
+And AE owns the key for its whole session and rewrites it on exit, so a
+clear applied underneath a live AE is silently undone — success reported
+while being reverted, which is the §20 preflight lesson again.
+
+Two things this does NOT fix, left open deliberately:
+
+1. `Test-AellAeRunning` is version-blind: any running `AfterFX` blocks a
+   clear for every version key. Conservative and wrong-safe, but a 26.3
+   session currently blocks clearing stale 26.2.
+2. The stale `CrashOccurred = 1` still sitting on 26.2 on this machine.
+   Harmless while 26.3 is the version in use; it will fire on the first
+   26.2 launch.
+
+The watchdog rule that keys on "recover" is still wrong and still cannot
+match. It is now unreachable rather than load-bearing, but it should be
+either corrected or deleted so it does not read as coverage that exists.
+
 ### What to do, in order
 
 1. **Measure which key answers it, on a throwaway AE**, not on the

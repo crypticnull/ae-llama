@@ -703,6 +703,27 @@ if ($canProbe -and -not $NoDismissStale) { Clear-AellStaleDialog }
 # its 109/109 results file in 24s and the harness was still blocked ten
 # minutes later, never reaching the wait loop below. That is the exact
 # case an unattended pass runs in.
+# PREVENT AE's crash-recovery prompt rather than trying to answer it
+# (WORKPLAN section 21). Measured 2026-09-08: that dialog exposes no
+# button HWND and no UIA element, so no rule in host-dialogs.ps1 can
+# reach it, and it blocks AE's main window until a HUMAN clicks it --
+# 240s of timeout, then a pass reporting a code fault that is not there.
+#
+# The trap is self-sustaining: this harness kills AE on timeout, and
+# killing AE is what arms the prompt for the next launch.
+#
+# Only a COLD launch can hit it. When AE is already up, `-r` hands the
+# script to that instance, and the clear both refuses and is unnecessary
+# -- AE owns the key while it runs and rewrites it on exit.
+. (Join-Path $PSScriptRoot "lib\ae-crash-flag.ps1")
+$aeKey = Get-AellAeVersionKey -ExePath $AfterFXPath
+if ($null -eq $aeKey) {
+  Write-Host "Crash flag: could not read AfterFX.exe ProductVersion; skipping"
+} else {
+  $aeClear = Clear-AellAeCrashFlag -VersionKey $aeKey
+  Write-Host ("Crash flag: " + $aeClear.Reason)
+}
+
 Write-Host ("Running self-test via " + $AfterFXPath)
 Start-Process -FilePath $AfterFXPath -ArgumentList @("-r", $wrapper) |
   Out-Null

@@ -20709,3 +20709,62 @@ test by grepping its output for "ALL TESTS PASSED". Only some files
 print that; the rest end with "all passed", "60 checks", "tier ladder
 OK". A grep runner called 30 green files red on the first try here.
 Exit code is the only honest verdict, and it is what CI uses.
+
+## 2026-09-08 (local session) — §21: prevent AE's crash prompt instead of answering it
+
+Owner's call, after the pass filed §21 and manually cleared the dialog to
+unblock the machine: **prevent it. Clear the crash before launch.**
+
+**The flag, measured on the live machine.**
+
+    HKCU:\Software\Adobe\After Effects\<ProductVersion>\CrashOccurred
+
+a DWord. Stale 26.2 carried `CrashOccurred = 1` from an old crash;
+healthy running 26.3 carried no such value at all. Absent is therefore
+the state AE itself writes, so the value is REMOVED, not set to 0.
+
+`<ProductVersion>` is read from `AfterFX.exe` and is exactly the registry
+subkey name — 26.3 reports "26.3". The install folder is "Adobe After
+Effects 2026". Deriving the key from the folder would have cleared
+nothing and reported success, so the mapping is measured rather than
+assumed.
+
+**Shipped.** `scripts/lib/ae-crash-flag.ps1` — version-key resolution,
+flag read, running check, and a clear that REFUSES while AE is running.
+Dot-sourced from `run-ae-selftest.ps1` immediately before `Start-Process`
+and logged as `Crash flag: <reason>`. Guarded by
+`tests/test-ae-crash-flag.js`, which exercises the real PowerShell
+functions against a scratch HKCU key rather than re-implementing them in
+JS. Suite **81/81**.
+
+**Why refusing under a live AE is right rather than a gap.** Only a COLD
+launch can meet the prompt — with AE already up, `-r` hands the script to
+that instance. And AE owns the key for its whole session and rewrites it
+on exit, so a clear applied underneath a running AE is silently undone. A
+fix that reports success while being reverted is the §20 preflight lesson
+in different clothes.
+
+**Two defects introduced and caught during this change**, both worth
+recording because both were invisible to the thing that should have
+caught them:
+
+1. `Set-StrictMode -Version 2.0` at file scope in a DOT-SOURCED library
+   lands in the caller's scope. It broke an unrelated caller's exit-code
+   epilogue immediately. Nothing else in `scripts/` sets it; removed, and
+   the test now forbids an executable `Set-StrictMode` in this lib.
+2. A stray escape put a **BEL byte** (0x07) inside the dot-source path in
+   `run-ae-selftest.ps1`. It **parsed clean** — the PowerShell parser has
+   no opinion about it — and would have failed only at run time, on a
+   cold launch, in the dark. CLAUDE.md's pure-ASCII rule for `.ps1` is
+   exactly this hazard, and nothing was enforcing it on these two files.
+   The test now checks both for non-ASCII bytes.
+
+**Left open deliberately.** `Test-AellAeRunning` is version-blind, so a
+running 26.3 blocks clearing stale 26.2 (conservative, wrong-safe). The
+stale `CrashOccurred = 1` on 26.2 is still there and will fire on the
+first 26.2 launch. And the watchdog rule keying on the word "recover"
+still cannot match the dialog; it is now unreachable rather than
+load-bearing, but it should be corrected or deleted rather than left
+reading as coverage.
+
+No `extension/` change, so **no version bump**.
