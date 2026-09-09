@@ -85,12 +85,20 @@ if (!shell) {
     ". '" + LIB.replace(/'/g, "''") + "'",
     "$k = '" + key + "'",
     "New-Item -Path $k -Force | Out-Null",
-    "New-ItemProperty -Path $k -Name CrashOccurred -Value 1 -PropertyType DWord -Force | Out-Null",
+    // Re-arm before EVERY clear. The first version of this test set the
+    // value once and assumed the unforced call would refuse, which is
+    // only true while AE happens to be running -- it passed the night it
+    // was written and failed the next morning once AE was closed, with
+    // the unforced call quietly consuming the value the -Force case
+    // needed. A test that reads ambient machine state as fixture is the
+    // same class of mistake as diagnosing a pass off CPU.
+    "function Arm { New-ItemProperty -Path $k -Name CrashOccurred -Value 1 -PropertyType DWord -Force | Out-Null }",
+    "Arm",
     "Write-Output ('READ=' + (Get-AellAeCrashFlag -VersionKey $k))",
-    // AE is typically running on this machine, so the unforced call must refuse.
     "$refuse = Clear-AellAeCrashFlag -VersionKey $k",
     "Write-Output ('AERUNNING=' + (Test-AellAeRunning))",
     "Write-Output ('REFUSED=' + (-not $refuse.Cleared) + '|' + $refuse.Reason)",
+    "Arm",
     "$done = Clear-AellAeCrashFlag -VersionKey $k -Force",
     "Write-Output ('CLEARED=' + $done.Cleared + '|BEFORE=' + $done.Before)",
     "Write-Output ('AFTER=' + $(if ($null -eq (Get-AellAeCrashFlag -VersionKey $k)) { 'ABSENT' } else { 'STILLTHERE' }))",
@@ -111,13 +119,16 @@ if (!shell) {
 
   assert(field("READ") === "1", "it reads a DWord CrashOccurred of 1");
 
+  // The refusal only happens while AE is up, so which branch is checked
+  // depends on the machine. Both are asserted, neither is skipped.
   if (field("AERUNNING") === "True") {
     assert(/^True\|/.test(field("REFUSED") || ""),
       "it REFUSES to clear while After Effects is running");
     assert(/rewrites it on exit/.test(field("REFUSED") || ""),
       "and the reason says why, because that string lands in the loop log");
   } else {
-    console.log("ok  - (AE not running; the refusal path is not exercisable here)");
+    assert(/^False\|removed CrashOccurred/.test(field("REFUSED") || ""),
+      "with AE closed the unforced call clears it - no -Force needed on a cold machine");
   }
 
   assert(field("CLEARED") === "True|BEFORE=1",

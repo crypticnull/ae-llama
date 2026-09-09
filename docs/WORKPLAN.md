@@ -4534,6 +4534,26 @@ prints `Pass committed <sha>` or `Pass produced no commit`. Until that
 has been seen once, the loop is not known to work end to end and no
 overnight run should be started.
 
+### 20e. The harness's own output never reaches the loop log — takeable, no bump
+
+Filed 2026-09-09 (local session) from the first full overnight run.
+
+Grepping the 2026-09-09 log: `Running self-test via` appears **0** times,
+and so does the `Crash flag:` line added in §21. The pass runs
+`run-ae-selftest.ps1` as its own subprocess, so the harness's stdout goes
+to the PASS, and only whatever the pass chooses to summarise reaches the
+loop log.
+
+That is fine while a pass finishes and writes a summary. It is exactly
+wrong when one does not: pass 16 on 2026-09-09 was killed by the §20b
+timeout at 45:48 and its summary died with it, so nothing in the loop log
+says whether its self-test was even green. The heartbeat proves a pass is
+alive; it cannot say what the harness found.
+
+Tee the harness's output into the loop log (or a per-pass file the loop
+names), so a killed pass still leaves the two lines that matter: the
+self-test verdict and the crash-flag result.
+
 ### 20d. A guard test for the pass invocation — takeable, no bump
 
 Filed 2026-09-08 from the root cause above. Nothing stops a future brief

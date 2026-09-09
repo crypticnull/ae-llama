@@ -23019,3 +23019,55 @@ green.
 
 Nothing blocked, nothing needing a human eye except §18 P3c step 3 and the
 still-open owner calls above it (§18 P3a(b) / item 2a, and §18 P7a).
+
+## 2026-09-09 (local session) — the first full overnight run, and the timeout earning its keep on night one
+
+**The run.** 03:15:02 to 10:15:49, `-Iterations 40 -UntilHour 10`.
+Eighteen passes started, **sixteen committed**, two produced no commit,
+one timed out. Zero usage-limit waits. 811 heartbeat lines. Version went
+0.12.4 to **0.12.16**, and every one of the eight NEXT UP items landed,
+plus §17j/k/m/o/p and §18 P3a/P3b and a filed P3c.
+
+**§20b fired on its first night and saved the rest of it.** Pass 16 ran
+45:48 against the 45-minute bound, was killed by pid (51956), and the
+loop logged it and took pass 17 twenty seconds later. Passes 17 and 18
+then ran, and 18 shipped the websocket progress work as `8298ee5`.
+Without the bound written the evening before, pass 16 would have held the
+loop from 08:23 and the night would have ended there. The bound was set
+to 45 rather than 30 to protect a ~2 GB download; the pass it actually
+caught ran 45:48, which 30 would also have caught, so that call cost
+nothing.
+
+**`-UntilHour` behaved as specified.** The last pass began before 10:00
+and ran to 10:15:29, committed, and only then did the loop stop —
+`Reached stop time 10:00. Done.` at 10:15:49. It bounds when a pass may
+START, never interrupting one in flight, which is what the owner asked
+for.
+
+**A defect in my own test from the night before.**
+`tests/test-ae-crash-flag.js` set `CrashOccurred` once and assumed the
+unforced clear would refuse. That is only true while AE happens to be
+running. It passed the night it was written, with AE up, and failed the
+next morning once AE was closed: the unforced call cleared the value, and
+the `-Force` case then found nothing. Fixed by re-arming before every
+clear, and both branches of the AE-running fork are now asserted rather
+than one being skipped. **A test that reads ambient machine state as its
+fixture is the same class of error as diagnosing a pass off CPU** — it
+answers a question about the machine while appearing to answer one about
+the code. Suite 87/87.
+
+**Filed as §20e:** the harness's own stdout never reaches the loop log —
+`Running self-test via` and the §21 `Crash flag:` line both appear zero
+times in the whole night. It goes to the pass, and only the pass's
+summary is logged. Harmless when a pass finishes; exactly wrong when one
+is killed, as pass 16 was, because its summary died with it and nothing
+records whether its self-test was green.
+
+**Left for the owner:** `stash@{0}` (`loop-salvage-20260909-090927`) is
+pass 16's killed work — 265 lines of an earlier websocket attempt against
+a 1959-line `comfy.js`. HEAD is now 3029 lines and pass 18 rewrote the
+feature from scratch, so it is superseded and would conflict heavily.
+Eight `loop-salvage-*` stashes have accumulated since 08-28; none has been
+reviewed. Dropping stashes is destructive, so it stays an owner decision.
+
+No `extension/` change in this entry, so **no version bump**.
