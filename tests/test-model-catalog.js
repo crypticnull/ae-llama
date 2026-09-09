@@ -67,13 +67,23 @@ assert(cOver.length === 1 && cOver[0].name === "y",
        "manifest comfyCatalog overrides the built-in list");
 
 // The combined first-run recommendation: one tier, both picks, honest copy.
+//
+// The image pick was "sdxl" until 2026-09-09 and that was WRONG on this
+// card, which is why the row moved rather than the assertion loosening.
+// SDXL's minVramGB was 6, written from training; measured through the
+// shipped AE_LLAMA_SDXL_T2I_V1 on the managed backend it costs 9472 MiB
+// cold, and its checkpoint alone is 6617 MiB of resident weights. An 8 GB
+// RTX 4060 cannot hold either number, so recommending SDXL to it was
+// recommending a grind. The gate is 12 now and this card gets sd15
+// (measured 2656 MiB), the largest image entry that actually fits it.
+// See WORKPLAN 18 P6.
 const combo = window.Setup.recommendSetup(null,
   { hasNvidia: true, name: "RTX 4060", vramGB: 8, computeCap: 8.9 });
 assert(combo.tier.id === "T3" && combo.chat &&
        combo.chat.name.indexOf("7B") > 0 &&
-       combo.gen.image && combo.gen.image.name === "sdxl" &&
+       combo.gen.image && combo.gen.image.name === "sd15" &&
        combo.gen.video && combo.gen.video.name === "wan22-5b",
-       "recommendSetup(8GB): T3, 7B chat, SDXL images, Wan video (got " +
+       "recommendSetup(8GB): T3, 7B chat, sd15 images, Wan video (got " +
        JSON.stringify({ t: combo.tier.id,
                         c: combo.chat && combo.chat.name,
                         i: combo.gen.image && combo.gen.image.name,
@@ -286,6 +296,58 @@ if (krea2) {
          "krea2: the gate at least holds the weights it names");
 }
 
+// ---------------------------------------------------------------------
+// A gate has to hold the biggest single file the graph loads — and this
+// is checked for UNMEASURED entries too.
+//
+// The rule above ("minVramGB covers measuredVramMB") is the right rule
+// and it is why sdxl's gate was wrong for months without anything
+// noticing: it only fires on `measured: true`, so an entry written from
+// training was exempt from the one check that would have caught it.
+// sdxl shipped minVramGB 6 while its checkpoint alone is 6617 MiB —
+// larger than the whole 6144 MiB card it was being offered to — and the
+// contradiction needed no GPU, no backend and no measurement to see.
+// Measured 2026-09-09 it costs 9472 MiB cold and the gate is 12 now
+// (WORKPLAN 18 P6).
+//
+// The LARGEST file rather than the total, deliberately. A multi-file
+// entry may free its text encoder before sampling, so "the sum must fit"
+// is not true of minimax-h3 (40 503 MiB across four files, gate 32) and
+// a rule that says it is would be a rule this catalog has to be exempted
+// from. But nothing lets a sampler hold less than its one biggest
+// tensor file, and 0.10.14 measured what this backend does when a job
+// outgrows the card: it does not OOM, it GRINDS.
+//
+// Entries whose files carry no per-file size (krea2, ltx-small) cannot
+// be checked here and are skipped rather than assumed innocent.
+const GATE_UNDER_ITS_BIGGEST_FILE = ["wan22-5b"];
+{
+  const offenders = [];
+  window.AELL.COMFY_CATALOG.forEach((e) => {
+    const sizes = (e.urls || []).map((u) => u.sizeMB)
+      .filter((n) => typeof n === "number" && n > 0);
+    if (!sizes.length || typeof e.minVramGB !== "number") return;
+    let biggest = 0;
+    sizes.forEach((n) => { if (n > biggest) biggest = n; });
+    if (e.minVramGB * 1024 < biggest) {
+      offenders.push(e.name + " (gate " + (e.minVramGB * 1024) +
+                     " MiB < biggest file " + biggest + " MiB)");
+    }
+  });
+  const seen = offenders.map((o) => o.split(" ")[0]).sort();
+  // Both directions: fixing wan22-5b's gate must REMOVE its seat, and a
+  // new entry may not quietly join the list.
+  assert(seen.join(",") === GATE_UNDER_ITS_BIGGEST_FILE.slice().sort().join(","),
+         "the entries whose gate is under their own biggest weight file " +
+         "are exactly the allowlisted ones",
+         offenders.join("; ") || "none");
+  if (seen.join(",") !== GATE_UNDER_ITS_BIGGEST_FILE.slice().sort().join(",")) {
+    console.error("       allowlist: " +
+                  GATE_UNDER_ITS_BIGGEST_FILE.slice().sort().join(", "));
+    console.error("       actual   : " + (offenders.join("; ") || "none"));
+  }
+}
+
 // A workflowTemplate an entry names must be a template the panel BUNDLES,
 // or the recommendation points at a graph that cannot be run.
 const wfDir = path.join(__dirname, "..", "extension", "comfy-workflows");
@@ -317,7 +379,7 @@ window.AELL.COMFY_CATALOG.forEach((e) => {
 // sd15 left this list 2026-09-09 (WORKPLAN 18 P5): it ships
 // AE_LLAMA_SD15_T2I_V1 and that graph has rendered on the managed
 // backend and imported into AE.
-const ALLOW_NO_TEMPLATE = ["sdxl", "ltx-small", "wan22-5b",
+const ALLOW_NO_TEMPLATE = ["ltx-small", "wan22-5b",
                            "minimax-h3-int8"];
 
 // Entries whose template has never been measured through

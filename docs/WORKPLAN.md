@@ -51,8 +51,8 @@ the night retrying it.
 | 2a | Cap the duration the panel injects when the user names none — **OWNER CALL**, the measurement behind it is now taken | §18 P3a (b) | — | yes |
 | 2b | A 15-minute generation reports elapsed seconds and no estimate, so it reads as a hang | §18 P3b | — | yes |
 | ~~3~~ | ~~sd15 basic template (+ the frontend-editable measurement)~~ **DONE 2026-09-09 (0.12.10).** `AE_LLAMA_SD15_T2I_V1` + manifest, `workflowTemplate`, hash history, `ALLOW_NO_TEMPLATE` −sd15, and a MEASURED block (2656 MiB / 4 s cold at 512x512, managed backend). Full chain green: weight probe, `comfy-probe --workflow` 9/9 incl. AE import, `catalog-vram-probe` x2, `chat-probe --steps 1,13` — and step 13 now picks sd15 for "a red apple", which is the §18 gap statement closed. **The frontend measurement is YES** (see §18 P5b). Two root defects found en route: §18 P5a and the chat-probe PID store. | §18 P5 | — | 0.12.10 |
-| 4 | **START HERE.** sdxl basic template — its checkpoint (`sd_xl_base_1.0.safetensors`) is ALREADY on this machine's backend, so the 7 GB download in the "needs" column is already paid | §18 P6 | item 3, 7 GB | yes |
-| 5 | wan22-5b basic t2v template | §18 P7 | item 3, 17 GB | yes |
+| ~~4~~ | ~~sdxl basic template~~ **DONE 2026-09-09 (0.12.11).** `AE_LLAMA_SDXL_T2I_V1` + manifest (the sd15 seven-node shape, ckpt swapped, 1024x1024 latent), `workflowTemplate`, hash history, `ALLOW_NO_TEMPLATE` −sdxl, MEASURED block (9472 MiB / 6 s cold at 1024x1024). **The measurement disproved the catalog's gate**: `minVramGB` was 6 while the checkpoint alone is 6617 MiB, so an 8 GB card was being recommended a grind — gate is 12 now, `slowBelowGB`/`slowNote` removed, three test pins moved WITH their reasons. §18 P6a filed (wan22-5b's gate is under its own biggest file) | §18 P6 | — | 0.12.11 |
+| 5 | **START HERE.** wan22-5b basic t2v template — note §18 P6a: its `minVramGB` 8 is already under its 9536 MiB diffusion file, so this pass must settle its gate as well as its graph | §18 P7 | item 3, 17 GB | yes |
 | 6 | krea2 core-only basic; the authored graph then leaves the bundle | §18 P8 | item 3 | yes |
 | 7 | H3 core-only basic; the authored graph then leaves the bundle | §18 P9 | items 2, 5 | yes |
 | 8 | minimax-h3-int8 second API file | §18 P10 | item 7, 26 GB | yes |
@@ -3805,13 +3805,13 @@ taken on what a buyer gets — so nothing measured after §17c needs a
 | P3b | local | elapsed seconds is the only progress a 15-minute render reports; carry step k/N through `onProgress` | yes | — |
 | ~~P4~~ | remote | **DONE 2026-09-06 (0.12.2).** Settings **Workflows** rows via the pure `Tools.workflowRows()`; `test-workflow-rows.js` (21 rows) | yes | P1 |
 | ~~P5~~ | local | **DONE 2026-09-09 (0.12.10).** sd15 basic + manifest + `workflowTemplate` + hash + allowlist −sd15 + a measured block; the frontend measurement is **YES** (§18 P5b). §18 P5a filed | 0.12.10 | — |
-| P6 | local | sdxl as P5 | yes | P5 |
+| ~~P6~~ | local | **DONE 2026-09-09 (0.12.11).** sdxl basic + manifest + `workflowTemplate` + hash + allowlist −sdxl + a measured block; the gate moved 6 -> 12 on the measurement and `slowBelowGB` went with it. §18 P6a filed | 0.12.11 | — |
 | P7 | local | wan22-5b as P5; `--frames`; floor re-pin rule | yes | P5; 17 GB |
 | P8 | local | krea2 basic; on proof the authored graph leaves the bundle | yes | P5 |
 | P9 | local | H3 basic; on proof the authored graph leaves the bundle | yes | P3, P7 |
 | P10 | local | h3-int8: download the 26 GB encoder, second API file — confirm from the UI source first | yes | P9; 26 GB |
 | P11 | remote | `package-zxp.ps1` `$excludeDirs` += `workflows` | yes | — |
-| P12 | remote | **HALF DONE 2026-09-09:** `ALLOW_UNMEASURED` is `[]` (minimax-h3 was its last seat and is now measured). `ALLOW_NO_TEMPLATE` is down to `[sdxl, ltx-small, wan22-5b, minimax-h3-int8]` — sd15 left it in P5. Still open: it must reach `[ltx-small]` and STOP there (Q1) | tests only | P5–P10 |
+| P12 | remote | **HALF DONE 2026-09-09:** `ALLOW_UNMEASURED` is `[]` (minimax-h3 was its last seat and is now measured). `ALLOW_NO_TEMPLATE` is down to `[ltx-small, wan22-5b, minimax-h3-int8]` — sd15 left it in P5, sdxl in P6. Still open: it must reach `[ltx-small]` and STOP there (Q1) | tests only | P5–P10 |
 
 ### Hooks, named so nobody builds them early
 
@@ -3820,6 +3820,51 @@ stored default per kind; feed `comfyCatalog` guard (no producer exists);
 `catalog-vram-probe --out docs/measured/` for §13a step 4; renderable
 predicate on `recommendGen`; `video: [names]` on `comfy_list_workflows`
 only if the chat-probe verdict shows the model needs it.
+
+## 18 P6a. wan22-5b's VRAM gate is under its own biggest weight file (filed 2026-09-09, local session)
+
+**Found by the stub written for §18 P6, not by a GPU.** `wan22-5b` ships
+`minVramGB: 8` (8192 MiB) and three weight files of 9536 / 6424 / 1344
+MiB. Its largest single file is **9536 MiB — larger than the entire card
+the gate admits.** Nothing lets a sampler hold less than its one biggest
+tensor file, and 0.10.14 measured what this backend does when a job
+outgrows the card: it does not OOM, it GRINDS. So an 8 GB buyer is
+offered Wan as their *video* default (pinned in `test-tiers.js`) and gets
+minutes-per-frame.
+
+This is the same class as sdxl's, which §18 P6 measured and fixed the
+same day: a `minVramGB` written from training, exempt from the one check
+that would have caught it because that check only fires on
+`measured: true`. `tests/test-model-catalog.js` now checks it for
+UNMEASURED entries too, via the largest-single-file rule, and wan22-5b
+holds the list's only seat:
+
+    const GATE_UNDER_ITS_BIGGEST_FILE = ["wan22-5b"];
+
+**The seat is both-directions, so this item cannot be closed by forgetting
+it** — correcting the gate must also remove the name, and no new entry can
+quietly join the list.
+
+**Not fixed on reasoning, deliberately.** The right gate is a
+measurement, and item 5 (§18 P7) is already going to boot this entry to
+author its basic t2v graph. Fold it in there rather than guessing a
+number now:
+
+1. Author `AE_LLAMA_WAN22_5B_T2V_V1` as P7 says.
+2. `catalog-vram-probe --entry wan22-5b` twice; take the larger delta and
+   the cold wall clock, as sd15 and sdxl did.
+3. Set `minVramGB` from that reading, remove the `wan22-5b` seat from
+   `GATE_UNDER_ITS_BIGGEST_FILE`, and move the `test-tiers.js` 8 GB video
+   pin WITH ITS REASON if the gate now excludes an 8 GB card — the pin
+   currently asserts "8 GB video is Wan 2.2 5B, not the experimental LTX",
+   and if Wan no longer fits, an 8 GB buyer's video default becomes
+   `ltx-small`, which is flagged `experimental` and has **no template at
+   all** (a permanent `ALLOW_NO_TEMPLATE` seat, owner Q1). That would
+   leave an 8 GB card with no runnable video graph, which is an
+   OWNER-facing product question, not a test edit. Say so in the log and
+   flag it rather than deciding it.
+
+Step 3's last clause is the part that needs a human eye.
 
 ## 18 P3a. H3's authored default is a >15-minute render, and that is what a
 user who names no length gets (filed 2026-09-09, local session)

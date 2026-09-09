@@ -98,18 +98,27 @@ const T = window.Tiers;
   const rec = (vram, cc) => T.recommendGen(cat,
     { hasNvidia: true, vramGB: vram, computeCap: cc }, {});
 
+  // These two rows moved on 2026-09-09 and the REASON moved with them.
+  // SDXL's minVramGB was 6, written from training. Measured through the
+  // shipped AE_LLAMA_SDXL_T2I_V1 on the managed backend it costs 9472 MiB
+  // cold, and its checkpoint alone is 6617 MiB — more than a 6 GB card
+  // has in total. So SDXL does not "merely FIT at minutes per image" on
+  // 6 GB, which is what this row used to say and what slowBelowGB used to
+  // encode; it does not fit at all, and the gate is 12 now. An 8 GB card
+  // therefore gets sd15 too (measured 2656 MiB), which is the largest
+  // image entry that actually fits it. See WORKPLAN 18 P6.
   const t2 = rec(6, 7.5);
   assert(t2.image && t2.image.name === "sd15",
-         "6 GB default image is SD 1.5 — SDXL merely FITS there, at " +
-         "minutes per image (got " + (t2.image && t2.image.name) + ")");
+         "6 GB default image is SD 1.5 — SDXL's measured 9472 MiB does " +
+         "not fit a 6 GB card (got " + (t2.image && t2.image.name) + ")");
   assert(t2.video && t2.video.name === "ltx-small" &&
          t2.video.experimental === true,
          "6 GB video is the experimental LTX entry, flagged as such");
 
   const t3 = rec(8, 8.9);
-  assert(t3.image && t3.image.name === "sdxl",
-         "8 GB image default is SDXL (got " +
-         (t3.image && t3.image.name) + ")");
+  assert(t3.image && t3.image.name === "sd15",
+         "8 GB image default is SD 1.5 — SDXL's gate is 12 GB since it " +
+         "was measured (got " + (t3.image && t3.image.name) + ")");
   assert(t3.video && t3.video.name === "wan22-5b",
          "8 GB video is Wan 2.2 5B, not the experimental LTX");
 

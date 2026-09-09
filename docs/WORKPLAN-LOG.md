@@ -22055,3 +22055,138 @@ measurement used ran on a throwaway profile and is gone (checked by
 command line — the owner's own Chrome was not touched). One evidence
 file left on disk by chat-probe's own design:
 `%APPDATA%\AE-Llama\generated\AELlama_SD15__00004_.png`.
+
+## 2026-09-09 (local session) — sdxl has a basic graph that renders, and rendering it disproved the catalog's own VRAM gate (NEXT UP 4 / §18 P6, 0.12.11)
+
+**Item: NEXT UP 4 (§18 P6), the "START HERE" row.** Harness green first —
+`run-ae-selftest.ps1` **770/770** — so the list applied. Gate 0:
+`from=file saved=true dataRoot=C:\Users\mr\AppData\Roaming\AE-Llama`.
+Backend already up on 8288 from the previous pass; `sd_xl_base_1.0.safetensors`
+was already on disk, so P6's "7 GB" need was already paid, exactly as the
+P5 entry predicted.
+
+**What shipped.** `extension/comfy-workflows/AE_LLAMA_SDXL_T2I_V1.json`
+plus its manifest — deliberately the SAME seven-node shape as the sd15
+basic with the checkpoint swapped, which is what P6 asked for. Every
+input re-confirmed against the RUNNING backend's `/object_info` rather
+than from memory. Two authored values are SDXL-specific and both are
+written down in the manifest with their reasons:
+
+- **1024x1024, not 512x512.** SDXL is trained at ~1 MP; a 512 latent
+  renders but composes visibly badly, which would ship a graph that
+  "works" and still fails the basic proof of function it exists to give.
+- **One `CLIPTextEncode`, not `CLIPTextEncodeSDXL`.** An SDXL checkpoint's
+  CLIP output from `CheckpointLoaderSimple` IS the dual encoder and
+  `CLIPTextEncode` tokenizes for both towers; the SDXL-specific node only
+  exists to give the two towers DIFFERENT text, which a basic does not do.
+
+Sampler/scheduler/steps/cfg are unchanged from sd15 (the vendor's own
+`basic_api_example.py`: euler, normal, 20, cfg 8) for the same reason as
+sd15 — a basic is the shape ComfyUI itself ships, not a tuned one. The
+SDXL refiner is deliberately absent: a second model and a second sampler
+pass is not a basic.
+
+**The chain, all of it green.**
+
+    weight-availability-probe    1 weight slot, 0 unloadable; 2 enums, 0 missing
+    catalog-vram-probe --entry sdxl   run 1 (cold): idle 4188 -> peak 13660,
+                                        delta 9472 MiB, 6s, 1024x1024
+                                      run 2 (warm): delta 7072 MiB, 4s
+    comfy-probe --workflow AE_LLAMA_SDXL_T2I_V1   all verdicts incl. AE
+                                                  imported it at 512x288
+    chat-probe --steps 1,13      pass, 2/2, 4 rounds
+    86 stubbed test files        all green
+    run-ae-selftest.ps1          770/770
+
+**THE FINDING, and it is bigger than the template: the measurement
+disproved the catalog's gate for sdxl.** `catalog-vram-probe` went RED on
+its own verdict — *"minVramGB 6 covers the measured delta — needs 9.3 GiB,
+claims 6 GiB"* — on BOTH runs. Two independent disproofs of the same
+number:
+
+- the cold job costs **9472 MiB**, against a 6 GB card's 6144;
+- the **checkpoint alone is 6617 MiB** of resident weights, already more
+  than the whole card the gate admitted.
+
+`minVramGB` is **12** now (the smallest standard card that holds the cold
+delta with room for the desktop). Same class as krea2's 12 -> 24 on
+2026-08-30, and the same conclusion 0.10.14 measured: this backend does
+not OOM when a job outgrows the card, it GRINDS.
+
+`slowBelowGB: 8` and its `slowNote` ("under 8 GB this offloads: typically
+2-4 minutes per image on 6 GB cards") were **removed rather than
+re-tuned**, and the reason is in the catalog: they warn about 6-8 GB
+cards, which the new gate refuses outright, so the warning could never
+fire — and nothing measured says a 12 GB card offloads. If one does, it
+comes back with a number.
+
+**Three test pins moved, each WITH its reason, none of them loosened.**
+The gate change propagates into what the panel RECOMMENDS, and two pins
+were encoding the disproved number:
+
+- `test-model-catalog.js` — an 8 GB RTX 4060's first-run image pick was
+  `sdxl`; it is `sd15` now. Recommending SDXL to an 8 GB card was
+  recommending a grind.
+- `test-tiers.js` 8 GB row — same flip.
+- `test-tiers.js` 6 GB row — still asserts `sd15` and still passes, but
+  its stated reason ("SDXL merely FITS there, at minutes per image") was
+  the `slowBelowGB` story and is now false: SDXL does not fit 6 GB at
+  all. The comment was corrected rather than left to mislead the next
+  reader.
+
+**Stub back-fill, verified by reintroducing the bug.** The rule
+"minVramGB covers measuredVramMB" ALREADY existed in
+`test-model-catalog.js` — and it is exactly why this shipped wrong for
+months: **it only fires on `measured: true`**, so an entry written from
+training was exempt from the one check that would have caught it. The
+back-fill makes the question askable of an UNMEASURED entry, with no GPU,
+no backend and no measurement, via the fact that is knowable offline:
+**a gate must hold the biggest single file the graph loads.**
+
+The LARGEST file rather than the total, deliberately. A multi-file entry
+may free its text encoder before sampling, so "the sum must fit" is NOT
+true of minimax-h3 (40 503 MiB across four files, gate 32) and a rule
+saying it is would be a rule this catalog has to be exempted from —
+worthless. But nothing lets a sampler hold less than its one biggest
+tensor file. Entries whose files carry no per-file size (krea2,
+ltx-small) are skipped rather than assumed innocent.
+
+Negative control run: put the shipped sdxl entry back verbatim
+(`minVramGB: 6, measured: false`, measured block stripped) and the suite
+reports `FAIL: the entries whose gate is under their own biggest weight
+file are exactly the allowlisted ones` — plus the two recommendation pins.
+Restored, all 86 green.
+
+**ROOT FINDING FOR THE NEXT PASS — §18 P6a, filed in WORKPLAN.** The new
+rule immediately found a second offender, and it is the entry item 5 is
+about to touch: **`wan22-5b` ships `minVramGB: 8` with a 9536 MiB
+diffusion file** — its biggest single weight is larger than the entire
+card its gate admits. An 8 GB buyer is offered Wan as their video default
+(`test-tiers.js` pins it) and gets a grind. It holds the only seat in
+`GATE_UNDER_ITS_BIGGEST_FILE`, which is a both-directions list, so the
+item cannot be closed by forgetting it.
+
+NOT fixed on reasoning: the right gate is a measurement, and §18 P7
+(item 5) is already going to boot this entry. Folded in there as three
+ordered steps.
+
+**NEEDS A HUMAN EYE (flagged, not decided).** If wan22-5b's measured gate
+turns out to exclude an 8 GB card, that card's video default falls to
+`ltx-small` — which is flagged `experimental` and has **no template at
+all** (a permanent `ALLOW_NO_TEMPLATE` seat by owner Q1). That leaves an
+8 GB buyer with no runnable video graph. That is an owner-facing product
+question, not a test edit, and P7 should flag it rather than decide it.
+
+**Verification.** All 86 stubbed test files pass. Two went red on the way
+and both were the same missing P6 deliverable — a new bundled template
+with no recorded hash; `node scripts/workflow-hash-history.js` recorded
+2 new hashes. Harness re-run after every change: **770/770 PASSED**.
+Bumped 0.12.10 -> **0.12.11** (extension/ changed: version.js, two new
+bundle files, the hash history). `capability-report.js` regenerated.
+
+**State left behind.** AE running and untouched, project not closed —
+`chat-probe` and `comfy-probe` cleaned up every item they made. Managed
+backend UP on 8288, queue empty. Evidence files left on disk by the
+probes' own design: `AELlama_SDXL__00001_.png` / `__00002_.png` in
+`logs/catalog-vram/`, and
+`%APPDATA%\AE-Llama\generated\AELlama_SD15__00006_.png` from chat-probe.

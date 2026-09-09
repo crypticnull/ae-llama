@@ -1,0 +1,43 @@
+{
+  "workflow": "AE_LLAMA_SDXL_T2I_V1",
+  "kind": "image",
+  "catalogEntry": "sdxl",
+  "notes": "The BASIC text-to-image graph for the sdxl catalog entry (WORKPLAN 18 P6). Deliberately the SAME seven-node shape as AE_LLAMA_SD15_T2I_V1 with the checkpoint swapped, which is what P6 asked for: core nodes only -- CheckpointLoaderSimple / CLIPTextEncode x2 / EmptyLatentImage / KSampler / VAEDecode / SaveImage -- so it runs on the backend the panel installs with nothing added. One SDXL-specific note that is NOT cosmetic: a single CLIPTextEncode is correct here even though SDXL has two text encoders. CheckpointLoaderSimple's CLIP output from an SDXL checkpoint is the DUAL encoder, and CLIPTextEncode tokenizes for both -- CLIPTextEncodeSDXL only exists to give the two towers DIFFERENT text, which a basic does not do. Every input was re-confirmed against the RUNNING managed backend's /object_info on 2026-09-09 (KSampler and CheckpointLoaderSimple are not in scripts/comfy-node-defs.json, so the offline harvest could not have answered for them). The sampler/scheduler/steps/cfg values are the vendor's OWN default workflow (ComfyUI script_examples/basic_api_example.py: euler, normal, 20 steps, cfg 8, denoise 1), unchanged from the sd15 basic for the same reason: a basic is the shape ComfyUI itself ships, not a tuned one.",
+  "whyThisLatent": "1024x1024, not the sd15 basic's 512x512. This is the one authored value that HAD to change with the checkpoint: SDXL is trained at ~1 megapixel and a 512 latent produces visibly broken composition, so 512 would ship a graph that renders and still fails the 'basic proof of function' it exists to give. The panel overrides it whenever the user names a size.",
+  "procedural": {
+    "prompt": {
+      "nodeId": 2,
+      "input": "text",
+      "note": "reached by introspection anyway (the panel follows KSampler.positive/negative to the CLIPTextEncode pair, comfy-workflows/README.md); named here so a reader does not have to derive it. Note the NAMED input rather than a widget INDEX -- see whyNoResolution."
+    }
+  },
+  "whyNoResolution": "There is deliberately no procedural.resolution here, for the reason measured on the sd15 basic and written up as WORKPLAN 18 P5a. procedural.resolution means 'this template derives its pixel dimensions from a MEGAPIXEL widget' (comfy.js injectProcedural), which is true of H3's ResolutionSelector and false of an EmptyLatentImage that takes literal width and height -- those are injected by introspection, which is what the README contract promises. Authoring it anyway in the positional form {nodeId: 4, widget: 0} resolves widget 0 to the node's FIRST settable input in key order, which is batch_size, and ComfyUI then refuses the whole graph before sampling a step. The positional widget form is the hazard; prefer a named input.",
+  "models": [
+    {
+      "file": "sd_xl_base_1.0.safetensors",
+      "role": "checkpoint",
+      "dir": "checkpoints",
+      "sizeMB": 6617,
+      "note": "one file carries unet + both CLIP towers + VAE, which is why this graph needs no separate encoder or vae loader. The SDXL REFINER is deliberately not here: it is a second model and a second sampler pass, which is not a basic."
+    }
+  ],
+  "customNodes": [
+    {
+      "pack": "(comfy-core)",
+      "nodes": [
+        "CheckpointLoaderSimple",
+        "CLIPTextEncode",
+        "EmptyLatentImage",
+        "KSampler",
+        "SaveImage",
+        "VAEDecode"
+      ]
+    }
+  ],
+  "panelIntegration": {
+    "promptInjection": "introspection: KSampler.positive -> node 2, KSampler.negative -> node 3",
+    "resolutionCeilingFrom": "tier ceilings (COMFY_TIERS_PLAN)",
+    "saveNode": "SaveImage 7 -- filename_prefix is RELATIVE, so ComfyUI joins it onto its own output dir (an absolute prefix is refused by folder_paths.get_save_image_path and kills the render at its last node; see the KREA2 manifest's node 474)"
+  },
+  "nodeAttributionScannedOn": "2026-09-09 (managed backend, /object_info on 127.0.0.1:8288)"
+}

@@ -33,6 +33,12 @@
     ],
     "AE_LLAMA_SD15_T2I_V1.manifest.json": [
       "0cf0f5728c93e1b434a0bfde2a950a943e2965a2"
+    ],
+    "AE_LLAMA_SDXL_T2I_V1.json": [
+      "22d47966e6ec372d2e131f1d63ade54e40995eaa"
+    ],
+    "AE_LLAMA_SDXL_T2I_V1.manifest.json": [
+      "4db1f442f1114e896e1052e7aea667d8dcf14db6"
     ]
   }
 }

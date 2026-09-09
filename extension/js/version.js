@@ -8,7 +8,7 @@
   "use strict";
 
   global.AELL = {
-    VERSION: "0.12.10",
+    VERSION: "0.12.11",
 
     // Release channel label, shown wherever the version is displayed.
     // Purely cosmetic — update comparisons use the numeric VERSION only.
@@ -130,10 +130,35 @@
       {
         name: "sdxl",
         label: "SDXL",
-        kind: "image", sizeMB: 6617, minVramGB: 6, measured: false,
-        slowBelowGB: 8,
-        slowNote: "under 8 GB this offloads: typically 2-4 minutes per " +
-                  "image on 6 GB cards",
+        // MEASURED 2026-09-09 on an RTX 5090 by scripts/catalog-vram-probe.js,
+        // running the shipped AE_LLAMA_SDXL_T2I_V1 through the panel's own
+        // comfy_generate on the MANAGED backend (ComfyUI portable, python
+        // 3.13.14, torch 2.13.0+cu130), nvidia-smi streaming at 250 ms. Two
+        // runs at the template's authored 1024x1024, seed 12345: 9472 MiB in
+        // 6 s COLD (the checkpoint still coming off disk) and 7072 MiB in
+        // 4 s warm. The larger delta is the figure here and the cold wall
+        // clock is the seconds, because a buyer's first generation is the
+        // cold one.
+        //
+        // minVramGB was 6 and the measurement disproves it in two independent
+        // ways: the cold job costs 9.3 GiB, and the checkpoint alone is
+        // 6617 MiB of resident weights on a card that would have 6144. So a
+        // 6 GB card cannot hold this, and 0.10.14 measured what this backend
+        // does when a job outgrows the card -- it does not OOM, it GRINDS. 12
+        // is the smallest standard card that holds the cold delta with room
+        // left for the desktop. Same class as krea2's 12 -> 24.
+        //
+        // slowBelowGB/slowNote ("under 8 GB this offloads, 2-4 minutes per
+        // image on 6 GB cards") were REMOVED rather than re-tuned. They warn
+        // about 6-8 GB cards, which the gate above now refuses outright, so
+        // the warning could never fire; and nothing measured says a 12 GB
+        // card offloads. If one turns out to, it comes back with a number.
+        kind: "image", sizeMB: 6617, minVramGB: 12, measured: true,
+        measuredVramMB: 9472, measuredSeconds: 6,
+        measuredAt: "1024x1024 (the template's authored latent), seed 12345",
+        measuredOn: "NVIDIA GeForce RTX 5090, managed ComfyUI backend " +
+                    "(torch 2.13.0+cu130), 2026-09-09",
+        workflowTemplate: "AE_LLAMA_SDXL_T2I_V1",
         urls: [{
           url: "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/main/sd_xl_base_1.0.safetensors",
           sizeMB: 6617, dir: "checkpoints"
