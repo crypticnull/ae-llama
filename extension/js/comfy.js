@@ -2125,6 +2125,60 @@
   var managedDetached = false;
   function setManagedDetached(on) { managedDetached = !!on; }
 
+  /*
+   * A DETACHED backend needs a real stdio sink, and this is a
+   * correctness fix before it is a diagnostic one.
+   *
+   * Measured 2026-09-09: with the default PIPED stdio, a backend that
+   * outlives its launcher inherits pipes whose reader is gone. ComfyUI's
+   * progress bar calls sys.stderr.flush() the moment sampling starts,
+   * Windows answers a dead pipe with OSError [Errno 22] Invalid
+   * argument, and the prompt dies at the first sampler node — so EVERY
+   * generation on a script-booted backend failed, in the one
+   * configuration no buyer's panel uses and every unattended pass does.
+   * The §17f sampler bug HID this: it stopped KREA2 at validation, so
+   * nothing had ever reached a sampler on a detached backend.
+   *
+   * `stdio: "ignore"` would fix that alone and leave §17j's other half
+   * (a backend that dies half an hour later leaves no evidence at all)
+   * exactly as it was. A FILE fixes both. The panel path keeps its
+   * in-memory errTail — there the host process is alive to read it.
+   */
+  function managedLogPath() {
+    var root = null;
+    try { root = global.Settings.dataRoot(); } catch (e) { return null; }
+    if (!root) return null;
+    return path.join(root, "comfy-managed.log");
+  }
+
+  /* One generation of rotation, so the boot that comes to investigate a
+   * death does not erase it. Two bounded files; appending forever grows
+   * without limit across months of launches. */
+  function openManagedLog(p) {
+    if (!p) return null;
+    try {
+      try { fs.mkdirSync(path.dirname(p), { recursive: true }); } catch (eD) {}
+      if (fs.existsSync(p)) {
+        var prev = p.replace(/\.log$/, ".prev.log");
+        try { if (fs.existsSync(prev)) fs.unlinkSync(prev); } catch (e1) {}
+        try { fs.renameSync(p, prev); } catch (e2) {}
+      }
+      var fd = fs.openSync(p, "a");
+      fs.writeSync(fd, "=== AE Llama managed backend, booted " +
+                       new Date().toISOString() + " ===\r\n");
+      return fd;
+    } catch (e) { return null; }
+  }
+
+  /** The last `n` bytes of the managed log — the detached errTail. */
+  function managedLogTail(p, n) {
+    if (!p) return "";
+    try {
+      var txt = String(fs.readFileSync(p, "utf8") || "");
+      return txt.length > n ? txt.slice(-n) : txt;
+    } catch (e) { return ""; }
+  }
+
   function rememberPid(pid) {
     try { global.localStorage.setItem(COMFY_PID_KEY, String(pid)); }
     catch (e) {}
@@ -2437,6 +2491,13 @@
     applyExtraModelPaths(install);
     say("Starting the hidden ComfyUI backend…");
     var errTail = "";
+    // Detached: a file the child owns for its whole life (see
+    // managedLogPath). Piped: the panel is alive to read the pipes.
+    var logPath = managedDetached ? managedLogPath() : null;
+    var logFd = logPath === null ? null : openManagedLog(logPath);
+    function bootTail() {
+      return logFd === null ? errTail : managedLogTail(logPath, 600);
+    }
     var proc;
     try {
       proc = child_process.spawn(install.python,
@@ -2444,8 +2505,12 @@
          "--port", String(base.port), "--listen", "127.0.0.1",
          "--disable-auto-launch"],
         { cwd: install.root, windowsHide: true,
-          detached: managedDetached });
+          detached: managedDetached,
+          stdio: logFd === null
+            ? ["ignore", "pipe", "pipe"]
+            : ["ignore", logFd, logFd] });
     } catch (eS) {
+      if (logFd !== null) { try { fs.closeSync(logFd); } catch (eC) {} }
       var early = startWaiters;
       startWaiters = null;
       for (var w = 0; w < early.length; w++) early[w](eS);
@@ -2453,11 +2518,14 @@
     }
     managedProc = proc;
     rememberPid(proc.pid);
+    // Our own copy of the fd; the child inherited its own handle at
+    // spawn, so this one is dead weight the moment spawn returns.
+    if (logFd !== null) { try { fs.closeSync(logFd); } catch (eC2) {} }
     function tail(d) {
       errTail = (errTail + d.toString()).slice(-600);
     }
-    proc.stdout.on("data", tail);
-    proc.stderr.on("data", tail);
+    if (proc.stdout) proc.stdout.on("data", tail);
+    if (proc.stderr) proc.stderr.on("data", tail);
     // A spawned child with piped stdio holds THREE references on Node's
     // event loop — the process handle and both pipes — and a data
     // listener keeps the pipes active, so the parent cannot exit while
@@ -2492,8 +2560,10 @@
     proc.on("exit", function (code) {
       managedProc = null;
       forgetPid();
+      var t = bootTail();
       finishBoot(new Error("Backend exited during startup (code " +
-        code + ")" + (errTail ? " — " + errTail : "")));
+        code + ")" + (t ? " — " + t : "") +
+        (logPath ? " [log: " + logPath + "]" : "")));
     });
     // First boot can take a while (model scans, torch warm-up).
     var deadline = new Date().getTime() + 240000;
@@ -2502,13 +2572,16 @@
       isUp(base, function (nowUp) {
         if (settledBoot) return;
         if (nowUp) {
-          say("Hidden ComfyUI backend is up.");
+          say("Hidden ComfyUI backend is up." +
+              (logPath ? " Log: " + logPath : ""));
           finishBoot(null);
           return;
         }
         if (new Date().getTime() > deadline) {
+          var t2 = bootTail();
           finishBoot(new Error("Backend did not come up within 4 " +
-            "minutes" + (errTail ? " — " + errTail : "")));
+            "minutes" + (t2 ? " — " + t2 : "") +
+            (logPath ? " [log: " + logPath + "]" : "")));
           try { proc.kill(); } catch (eK) {}
           return;
         }

@@ -502,8 +502,17 @@ function spawnRecorder(seenOpts) {
   return {
     spawn(cmd, args, opts) {
       seenOpts.push(opts || {});
+      // Faithful to real Node: a stdio slot given a FILE DESCRIPTOR has
+      // no pipe object behind it, so child.stdout/.stderr are null. The
+      // old recorder handed out streams unconditionally, which would let
+      // an unguarded `proc.stdout.on(...)` pass here and throw in the
+      // field on the one path that uses fds.
+      const io = (opts && opts.stdio) || ["ignore", "pipe", "pipe"];
+      const piped = i => (Array.isArray(io) ? io[i] : io) === "pipe";
       const proc = {
-        pid: 4242, stdout: stream, stderr: stream,
+        pid: 4242,
+        stdout: piped(1) ? stream : null,
+        stderr: piped(2) ? stream : null,
         unref() {}, kill() {},
         on(ev, fn) {
           // Fail the boot immediately so the health poll does not run
@@ -599,3 +608,66 @@ step(function (next) {
 });
 
 runSteps(0);
+
+// 4d. A DETACHED backend gets a FILE for stdout/stderr, never a pipe.
+//
+// This is the other half of 4b, and it is a correctness fix before it is
+// a diagnostic one. Measured 2026-09-09 on the real vendor backend:
+// `detached: true` with the default PIPED stdio leaves the child holding
+// pipes whose reader dies with the launcher. ComfyUI's tqdm progress bar
+// calls sys.stderr.flush() the moment sampling starts, Windows answers a
+// dead pipe with OSError [Errno 22] Invalid argument, and the prompt dies
+// at the first sampler node. So EVERY generation on a script-booted
+// backend failed — in the one configuration no buyer's panel uses and
+// every unattended pass does. The identical comfy-probe run went from
+// "execution error [Errno 22]" at 4s to a 2.1 MB PNG at 14s with only
+// this changed.
+//
+// `stdio: "ignore"` would fix the crash and leave the backend's deaths
+// with no evidence anywhere (§17j). A file fixes both, so a file is what
+// is pinned — plus the PANEL's pipes, because errTail is how a failed
+// boot explains itself there and the host process is alive to read it.
+step(function (next) {
+  const panelOpts = [];
+  const C = comfyWith([], null, true, MANAGED, null,
+                      spawnRecorder(panelOpts));
+  C.ensureRunning("http://127.0.0.1:8288", null, function () {
+    const pio = panelOpts[0].stdio;
+    assert(Array.isArray(pio) && pio[1] === "pipe" && pio[2] === "pipe",
+           "the PANEL still pipes, so errTail can explain a failed boot");
+
+    const scriptOpts = [];
+    const C2 = comfyWith([], null, true, MANAGED, null,
+                         spawnRecorder(scriptOpts));
+    C2.setManagedDetached(true);
+    C2.ensureRunning("http://127.0.0.1:8288", null, function () {
+      const sio = scriptOpts[0].stdio;
+      assert(Array.isArray(sio),
+             "the detached path names its three stdio slots explicitly");
+      assert(typeof sio[1] === "number" && typeof sio[2] === "number",
+             "and gives stdout AND stderr real file descriptors — a pipe " +
+             "in either slot is the [Errno 22] bug, because tqdm flushes " +
+             "stderr and ComfyUI's own logger writes both");
+      assert(sio[1] === sio[2],
+             "one file, so the interleaving survives");
+
+      const log = path.join(tmpRoot, "comfy-managed.log");
+      assert(fs.existsSync(log),
+             "the file lands under Settings.dataRoot() as comfy-managed.log " +
+             "— a backend that dies half an hour later must leave evidence");
+
+      // Rotate one generation: the boot that comes to investigate a death
+      // must not be the thing that erases it.
+      const again = [];
+      const C3 = comfyWith([], null, true, MANAGED, null,
+                           spawnRecorder(again));
+      C3.setManagedDetached(true);
+      C3.ensureRunning("http://127.0.0.1:8288", null, function () {
+        assert(fs.existsSync(path.join(tmpRoot, "comfy-managed.prev.log")),
+               "and the previous run's log is kept as .prev.log, so " +
+               "rebooting to look at a crash does not destroy it");
+        next();
+      });
+    });
+  });
+});

@@ -42,7 +42,7 @@ the night retrying it.
 | ~~B~~ | ~~BLOCKER — AE sits on the crash-recovery dialog~~ **PREVENTED 2026-09-08.** `run-ae-selftest.ps1` now clears `CrashOccurred` in HKCU before every launch. If AE sits on that dialog again, that is a REGRESSION — log it, do not click past it and carry on. | §21 | — | no |
 | ~~0~~ | ~~heartbeat, verify a pass commits, per-pass timeout~~ **DONE 2026-09-08.** §20a heartbeat every 30s; §20c VERIFIED (`Pass committed 2d76fdf8`, the first end-to-end loop success since 09-02); §20b `-PassTimeoutMin 45`. Still open: **§20d**, the bypass guard test. | §20 | nothing | no |
 | ~~1~~ | ~~Install the managed ComfyUI backend~~ **DONE 2026-09-09.** Installed and booted; 4264 MB extracted, python 3.13.14, torch 2.13.0+cu130 (CUDA 13.0). `extra_model_paths.yaml` points at the owner's store and the vendor backend loads it: `weight-availability-probe --url http://127.0.0.1:8288` all verdicts PASS, 0 missing slots for both templates. Root defect found and fixed en route (the backend did not outlive its launcher). | §17c | — | — |
-| 1a | **START HERE.** The shipped KREA2 template CANNOT RENDER on the backend a buyer gets — `res_2s` is a RES4LYF sampler and the vendor build has 44 samplers without it. This is the §17c finding, and it blocks items 3-8. | §17f | item 1 (done) | yes |
+| 1a | **START HERE.** The shipped KREA2 template CANNOT RENDER on the backend a buyer gets — `res_2s` is a RES4LYF sampler and the vendor build has 44 samplers without it. This is the §17c finding, and it blocks items 3-8. **Unblocked and half-measured 2026-09-09**: `res_multistep` renders correctly; three (or five) more renders and a choice finish it. | §17f | item 1 (done) | yes |
 | 1b | `missingWeights` passed that template anyway — a preflight that checks weights but not enum VALUES says "ready" about a graph ComfyUI refuses | §17g | 1a | yes |
 | 2 | H3 t2v regression + `catalog-vram-probe --entry minimax-h3` → measured block | §18 P3 | item 1, AE | no |
 | 3 | sd15 basic template (+ the frontend-editable measurement) | §18 P5 | item 1, AE, 2 GB | yes |
@@ -4184,6 +4184,38 @@ the general rule — does the panel SUBSTITUTE a missing enum value and
 say so, or refuse and name what the backend has? Grounded-error practice
 here means naming the 44, not "invalid sampler".
 
+**Unblocked 2026-09-09 (0.12.6), and one of the four is already
+rendered.** Taking this item is what found §17j's real severity: with
+`res_2s` swapped out the graph reached execution for the first time and
+died on the DETACHED backend's dead stderr pipe, so no sampler could
+have been measured before that was fixed. It now is. One render exists —
+`res_multistep`, seed 12345, 768x768 (saved 1232x1232), on the vendor
+backend with all five optional-node rules firing:
+`logs/comfy-probe/2026-09-09_CRPTK-KREA2__00001_.png` — on the AE
+machine only, since `logs/` is gitignored; a remote session cannot open
+it and should not go looking. It is a coherent,
+well-formed image at the model's 4 steps, which is the load-bearing
+question (a turbo model falls apart under a sampler that needs more).
+That is ONE data point, not the comparison this item asks for.
+
+To finish it, render the other three at the SAME seed/prompt/size and
+compare:
+
+    node scripts/comfy-probe.js --no-ae --url http://127.0.0.1:8288       --workflow AE_LLAMA_KREA2_V1 --width 768 --height 768 --seed 12345       --prompt "<the same prompt each time>"
+
+editing node 278's `sampler_name` between runs. Note also that the
+vendor build carries `exp_heun_2_x0` and `exp_heun_2_x0_sde`, which the
+original filing's list of four missed — `res_2s` is a 2nd-order
+EXPONENTIAL single-step method, so those are worth a render too rather
+than assuming the `res_*` name match is the closest behaviour.
+
+A `res_2s` reference render was NOT taken: the owner's own ComfyUI (the
+one with RES4LYF) was not running, and booting a second backend on an
+unattended night risks a port fight with the managed one for a
+nice-to-have. Judge the candidates against each other and against the
+prompt; if a reference is wanted, take it on a pass where the owner's
+instance is already up.
+
 Blocks §18 items 3-8: authoring more templates against a sampler set the
 shipped backend does not have would multiply this bug.
 
@@ -4249,7 +4281,40 @@ either give llama the same opt-in seam, or delete the reap and say
 plainly that the server dies with the panel. What must not stand is code
 that reads as coverage for a case that cannot occur.
 
-## 17j. The detached backend leaves no log, so its deaths are undiagnosable (filed 2026-09-09, local session)
+## ~~17j. The detached backend leaves no log, so its deaths are undiagnosable~~ DONE 2026-09-09 (0.12.6)
+
+**DONE, and it was never only a logging item — the piped stdio was
+BREAKING every generation.** With `detached: true` and the default piped
+stdio, the child holds pipes whose reader dies with the launcher.
+ComfyUI's tqdm progress bar calls `sys.stderr.flush()` the moment
+sampling starts, Windows answers a dead pipe with `OSError [Errno 22]
+Invalid argument`, and the prompt dies at the first sampler node. So
+EVERY generation on a script-booted backend failed — the one
+configuration no buyer's panel uses and every unattended pass does.
+
+The refutation quoted below is not wrong, it is answering a different
+question: the backend does keep SERVING (`/queue`, `/history`,
+`/object_info` all answer 200 indefinitely, because nothing on those
+paths writes to stderr). It is EXECUTION that cannot survive, and §17f
+hid that — `res_2s` stopped KREA2 at validation, so until today nothing
+had ever reached a sampler on a detached backend.
+
+`bootManaged` now opens `<dataRoot>/comfy-managed.log` when
+`managedDetached` is set and passes its fd as both stdout and stderr,
+rotating one generation to `comfy-managed.prev.log` so the boot that
+comes to investigate a death does not erase it. Boot-failure messages
+read that file's tail and name its path; the panel path keeps its
+in-memory `errTail` unchanged. Verified in the field: the identical
+`comfy-probe` run went from `execution error [Errno 22]` at 4s to a
+2.1 MB 1232x1232 PNG at 14s with only this changed. Stub back-fill is
+test 4d in `tests/test-comfy-backend.js`, and `spawnRecorder` there now
+models real Node (an fd stdio slot has no pipe object, so
+`child.stdout` is null).
+
+Still OPEN and NOT answered by this: whether the backend stays up for
+half an hour. There is now a log to read when it does not.
+
+<details><summary>Original filing</summary>
 
 Measured 2026-09-09: the managed backend, booted detached by a script,
 served two later independent processes and answered six polls over two
@@ -4278,3 +4343,5 @@ the real cause; it is not itself the cause.
 
 Wanted by §18: those passes need a backend that stays up between them,
 and right now a pass that finds it gone has nothing to read.
+
+</details>

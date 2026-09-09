@@ -20969,3 +20969,105 @@ since there the host process is alive to read it.
 
 Nothing re-verified after this note beyond the port check; the suite and
 harness results in the entry above stand (82/82, 770/770).
+
+## 2026-09-09 (local session) — the detached backend's dead stderr pipe was killing every generation (§17j, 0.12.6)
+
+SUPERSEDES: 20939-20972 and the "Do NOT bundle a survival fix into this"
+paragraph of the §17j filing, both of which said the broken-pipe theory
+had been TESTED and REFUTED. The test was sound and its conclusion was
+too narrow: it proved the backend keeps SERVING with a dead pipe, and
+was read as proving the pipe was harmless. Serving and EXECUTING are
+different — `/queue`, `/history` and `/object_info` answer 200 forever
+because nothing on those paths writes to stderr. A sampler does.
+
+**The item I took was NEXT UP 1a (§17f, the `res_2s` sampler).** Taking
+it is what found this. Harness was green first (770/770), so the list
+applied.
+
+**What happened.** Patched node 278 from `res_2s` to `res_multistep` and
+ran the shipped path:
+
+    node scripts/comfy-probe.js --no-ae --url http://127.0.0.1:8288 \
+      --workflow AE_LLAMA_KREA2_V1 --width 768 --height 768 --seed 12345
+
+The `res_2s` validation error was gone, so for the FIRST TIME a graph
+reached execution on a detached backend. It died at 4s:
+
+    FAIL generation completed — ComfyUI reported an execution error:
+    [Errno 22] Invalid argument
+
+`/history` carried the traceback, 23 frames, and the last four are the
+whole story:
+
+    comfy/k_diffusion/sampling.py:1417  in res_multistep -> trange(...)
+    tqdm/std.py:446  in status_printer
+        getattr(sys.stderr, 'flush', lambda: None)()
+    ComfyUI/app/logger.py:73  in flush -> super().flush()
+    OSError: [Errno 22] Invalid argument
+
+Not the sampler. `bootManaged` spawned the child with the DEFAULT piped
+stdio and `detached: true`; `comfy-install.js --boot` then exited, and
+the pipes lost their reader. Windows answers a flush on a dead pipe with
+Errno 22, tqdm flushes stderr the instant sampling starts, and the
+prompt dies at the first sampler node. **Every generation on a
+script-booted backend has been failing** — the one configuration no
+buyer's panel uses (the panel stays alive and reads its pipes) and every
+unattended pass does. §17f hid it perfectly: `res_2s` stopped KREA2 at
+VALIDATION, before execution, so nothing had ever got far enough to
+touch stderr.
+
+**The fix (§17j, which turns out to be a correctness item, not only a
+diagnostic one).** `extension/js/comfy.js`, `bootManaged`: when
+`managedDetached` is set, open `<Settings.dataRoot()>/comfy-managed.log`
+and pass its fd as BOTH stdout and stderr, rotating one generation to
+`comfy-managed.prev.log` first — so the boot that comes to investigate a
+death is not the thing that erases it. Our own fd is closed right after
+spawn (the child inherited its own handle). Boot-failure messages read
+that file's tail instead of `errTail` and name the path; the "backend is
+up" line names it too. The PANEL path is untouched and still pipes,
+because `errTail` is how a failed boot explains itself there and the
+host process is alive to read it. `proc.stdout`/`proc.stderr` are now
+null-guarded, since a slot given an fd has no pipe object.
+
+`stdio: "ignore"` would have fixed the crash and left the original §17j
+complaint (a backend that dies half an hour later leaves no evidence)
+exactly as it was. A file fixes both, which is why it is a file.
+
+**Verified in real life, not only in stubs.** Stopped the backend,
+rebooted it on the fixed code, re-ran the IDENTICAL probe: PASS at 14s,
+a 2,116,191-byte 1232x1232 PNG, all five optional-node rules firing
+(rgthree Any Switch / Power Lora Loader / Image Comparer bypassed, easy
+cleanGpuUsed bypassed, SesquiLatentUpscale substituted by core
+LatentUpscaleBy). Looked at the image: coherent and well-formed, not
+noise. `C:\Users\mr\AppData\Roaming\AE-Llama\comfy-managed.log` is 7.8 KB
+of real ComfyUI startup output — the first time this repo has had one.
+
+**Stub back-fill**: test 4d in `tests/test-comfy-backend.js` pins the
+detached path to numeric fds in both slots, the same fd for both, the log
+under dataRoot, and the `.prev.log` rotation — and pins the PANEL to
+pipes, so this is not read as "more detaching is better". `spawnRecorder`
+there also now models real Node: an fd stdio slot has no pipe object, so
+`child.stdout` is null. The old recorder handed out streams
+unconditionally, which would have let an unguarded `proc.stdout.on(...)`
+pass in CI and throw in the field on the one path that uses fds.
+
+**Results.** Stubbed suite 82/82. Real-AE harness 770/770 (before and
+after; nothing here touches the AE half). `extension/` changed, so
+bumped: 0.12.5 -> 0.12.6.
+
+**State left behind.** The managed backend IS running on 8288 (pid
+61904) as of this entry, and it can now render — but see the entry above
+about it not staying up for half an hour; that is still unexplained and
+is NOT claimed fixed here. There is now a log to read when it goes. AE
+left running and untouched. The KREA2 template is restored to `res_2s`
+exactly as shipped — the `res_multistep` edit was a measurement, not a
+commit.
+
+**What this leaves for the next pass**: §17f (NEXT UP 1a) is now
+genuinely takeable and half done. One of the candidate samplers is
+rendered; three more renders at the same seed finish the comparison. I
+also noticed the original filing's shortlist of four missed
+`exp_heun_2_x0` and `exp_heun_2_x0_sde`, which the vendor build does
+carry — `res_2s` is a 2nd-order EXPONENTIAL single-step method, so a
+name match on `res_*` is not obviously the closest behaviour. Both notes
+are filed in §17f, not only here.
