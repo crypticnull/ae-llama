@@ -8,7 +8,7 @@
   "use strict";
 
   global.AELL = {
-    VERSION: "0.12.14",
+    VERSION: "0.12.15",
 
     // Release channel label, shown wherever the version is displayed.
     // Purely cosmetic — update comparisons use the numeric VERSION only.
@@ -81,9 +81,10 @@
     // bug. All twelve URLs were alive on 2026-08-30 and every size below is
     // that day's measurement (x-linked-size, or the file already on this
     // machine); `measured` is about the VRAM figure, which is measured
-    // for every entry that ships a graph (krea2, sd15, sdxl, wan22-5b and
-    // minimax-h3, all re-measured on the managed backend) and still a
-    // guess only for the two that ship none.
+    // for every entry that ships a graph (krea2, sd15, sdxl, wan22-5b,
+    // minimax-h3 and minimax-h3-int8, all measured or re-measured on the
+    // managed backend) and still a guess only for ltx-small, the one
+    // entry that ships none because it has no weights to ship.
     // An entry with measured: true carries the reading that earned it --
     // measuredVramMB (nvidia-smi peak minus an established idle floor),
     // measuredSeconds, measuredAt (the SIZE it was measured at, which is
@@ -326,10 +327,49 @@
       {
         name: "minimax-h3-int8",
         label: "MiniMax H3 (32 GB, non-Blackwell encoder)",
-        kind: "video", sizeMB: 51427, minVramGB: 32, measured: false,
-        note: "the int8 text encoder is 11 GB larger than the " +
-              "Blackwell-only nvfp4 one; whether H3 is usable here at " +
-              "all is a P4 measurement",
+        // MEASURED 2026-09-09 on an RTX 5090 (32 607 MiB) by
+        // scripts/catalog-vram-probe.js, running the shipped
+        // AE_LLAMA_H3_INT8_T2V_V1 through the panel's own comfy_generate
+        // on the MANAGED backend a buyer gets (ComfyUI 0.34.0, port
+        // 8288), nvidia-smi streaming at 250 ms, /free before each run.
+        // Two runs at one seed: delta 26 048 MiB BOTH times, peaks 1 MiB
+        // apart (29 642 / 29 643) over idle floors of 3594 / 3595, 257
+        // and 259 s, 1344x768 x 124 frames out.
+        //
+        // THE READING IS THE SIBLING'S. minimax-h3 measured 26 080 MiB /
+        // 253 s on the same card at the same size and length, so this
+        // encoder costs 32 MiB and 6 s MORE — inside the noise of two
+        // runs. That is not what the old note here predicted ("the int8
+        // text encoder is 11 GB larger... whether H3 is usable here at
+        // all is a P4 measurement"), and the reason is worth keeping:
+        // the 10 924 MiB the encoders differ by is a DOWNLOAD difference,
+        // not a VRAM one. ComfyUI evicts the text encoder before it
+        // samples, so the peak on this graph is set by the diffusion
+        // model and the two VAEs — which are the same four files here as
+        // in the sibling. Pricing this entry as "11 GB heavier" off
+        // sizeMB would have been wrong in the only place it matters.
+        //
+        // minVramGB stays 32, unchanged from the guess, for the sibling's
+        // reasons: peak 29 642 of 32 607 MiB is thin, and the entry
+        // exists for cards that cannot load the Blackwell-native nvfp4
+        // encoder at all — which is a format question, not a size one, so
+        // it does not soften the floor.
+        kind: "video", sizeMB: 51427, minVramGB: 32, measured: true,
+        measuredVramMB: 26048, measuredSeconds: 259,
+        measuredAt: "1344x768 (0.98 MP, the template's authored frame), " +
+                    "5.17 s / 124 frames, seed 12345",
+        // As with the nvfp4 sibling, the reading IS the authored job:
+        // 124 frames is the template's own literal length, so these are
+        // equal and the row needs no authoredNote.
+        measuredClipSeconds: 5.17,
+        authoredClipSeconds: 5.17,
+        measuredOn: "NVIDIA GeForce RTX 5090, ComfyUI 0.34.0 (managed), " +
+                    "2026-09-09",
+        note: "the same four-file H3 stack as minimax-h3 with the int8 " +
+              "text encoder in place of the Blackwell-only nvfp4 one: " +
+              "10 924 MiB more to download, measured the same VRAM and " +
+              "the same wall clock to render",
+        workflowTemplate: "AE_LLAMA_H3_INT8_T2V_V1",
         urls: [{
           url: "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
           sizeMB: 19999, dir: "diffusion_models"

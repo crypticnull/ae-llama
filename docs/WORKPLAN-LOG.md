@@ -22716,3 +22716,180 @@ Evidence files left on disk by the probes' own design:
 `__00002_.mp4` / `__00003_.mp4` in `logs/catalog-vram/`, and
 `%APPDATA%\AE-Llama\generated\AELlama_KREA2__00006_.png` / `__00007_.png`
 from the chat-probe runs.
+
+---
+
+## 2026-09-09 (local session) — h3-int8 has a graph, and measuring it showed the 11 GB encoder costs nothing on the card (NEXT UP 8 / §18 P10, 0.12.15)
+
+**Item: NEXT UP 8 (§18 P10), the first unstruck row.** Harness green first
+— `run-ae-selftest.ps1` **770/770** — so the list applied. Gate 0 printed
+by the probes themselves: `from=file saved=true
+dataRoot=C:\Users\mr\AppData\Roaming\AE-Llama`. Managed backend already up
+on 8288 from the previous pass. Disk: 893 GB free on C:.
+
+**"Confirm from the UI source first" — and the answer was NO, which is the
+useful half.** The item's own instruction was to check the vendor before
+authoring anything. The vendor frontend (`comfyui_workflow_templates`
+0.11.48, on the managed backend's own disk) ships four MiniMax H3
+templates — `video_minimax_h3_{t2v,i2v,i2v_continuation,r2v}.json` — and
+**every one of them names `qwen3vl_32b_minimax_h3_nvfp4_awq`**. The string
+`qwen3vl_32b_minimax_h3_int8_convrot` appears **nowhere** in the vendor
+tree: not in a template, not in `comfy/text_encoders/minimax.py`, not in
+`comfy_extras/nodes_minimax_h3.py` (grepped over the whole of
+site-packages). So there is no official int8 graph to copy and no vendor
+statement that the encoder is a drop-in. The confirmation the item wanted
+could only come from a render, and that reframes the pass: the download
+was not the risky part, the assumption was.
+
+**What shipped.** `extension/comfy-workflows/AE_LLAMA_H3_INT8_T2V_V1.json`
+plus its manifest. It is `AE_LLAMA_H3_T2V_V1` with **two inputs changed
+and nothing else** — node 137's `clip_name` (the encoder) and node 92's
+`filename_prefix` (so the two entries' clips do not land in one output
+folder under one stem). Same fifteen core nodes, same ids, same links,
+same literal 1344x768 x 124 frames, same sampler, same sigma shift.
+Verified node by node, not by eye. Plus: `workflowTemplate` on the
+catalog entry, two hash-history records, `ALLOW_NO_TEMPLATE`
+−minimax-h3-int8, and a measured block.
+
+**A sibling file, not a `setInputs` swap, and the reason is in the
+manifest.** The tempting shortcut is one graph with the encoder pinned at
+run time the way §17f pinned KREA2's sampler. It is a separate file
+because the CATALOG ENTRY is what the panel prices, gates and recommends
+on: `minimax-h3` is `requiresBlackwell` (nvfp4 is a Blackwell-native
+weight format) and `minimax-h3-int8` is the fallback for cards that are
+not, and each entry's `workflowTemplate` has to name a graph that runs
+with THAT entry's weights on disk. One shared graph would make
+weight-availability, `catalogModelStatus` and `resolveWorkflow` all answer
+for the wrong file on half the machines.
+
+**The download.** Three of the four weights were already on this machine,
+so only the encoder was fetched: **27 141 342 152 bytes (25 884 MiB) in
+6m12s at 73 MB/s**, into
+`C:\Users\mr\AppData\Local\Comfy-Desktop\ComfyUI-Shared\models\text_encoders`,
+next to its nvfp4 sibling — a `comfyModelRoots` root the managed backend
+loads through `extra_model_paths.yaml`. Downloaded to `.part` and renamed
+on completion. **The running backend listed it in
+`/object_info/CLIPLoader` with no restart**, which is worth knowing: the
+enum is rescanned per request on ComfyUI 0.34.0, so adding a weight does
+not cost a backend bounce.
+
+**THE MEASUREMENT OVERTURNED THIS ENTRY'S OWN NOTE.** The note said: *"the
+int8 text encoder is 11 GB larger than the Blackwell-only nvfp4 one;
+whether H3 is usable here at all is a P4 measurement."* Measured, twice,
+on the managed backend with `/free` before each run and nvidia-smi
+streaming at 250 ms:
+
+| | delta | wall clock | peak / card | idle floor | output |
+|---|---|---|---|---|---|
+| run 1 | 26 048 MiB | 257 s | 29 642 / 32 607 | 3594 | 1344x768 x 124 f |
+| run 2 | 26 048 MiB | 259 s | 29 643 / 32 607 | 3595 | 1344x768 x 124 f |
+| `minimax-h3` (nvfp4, §18 P9) | 26 080 MiB | 253 s | 29 646 / 32 607 | 3566 | identical |
+
+**32 MiB apart, on the same card at the same size and length.** The two
+runs gave the byte-identical delta twice, which makes this and the nvfp4
+sibling the two most repeatable readings in the catalog. The reason is
+the finding: **the 10 924 MiB the two encoders differ by is a DOWNLOAD
+difference, not a VRAM one.** ComfyUI evicts the text encoder before it
+samples, so the peak on this graph is set by the diffusion model and the
+two VAEs — the same four files in both entries. Pricing this entry as "11
+GB heavier" off `sizeMB` (51 427 vs 40 503) would have been wrong in the
+only place a gate matters. `minVramGB` stays 32 for the sibling's
+reasons: peak 29 642 of 32 607 MiB is thin, and the entry exists for
+cards that cannot load an nvfp4 weight AT ALL — a format question, not a
+size one, so it does not soften the floor.
+
+**Rendered end to end before it was measured.** `comfy-probe --workflow
+AE_LLAMA_H3_INT8_T2V_V1 --frames 25 --width 512 --height 288`: **9/9
+PASS**, including the AE import — `512x288 1.625s @ 24fps`, `hasAudio
+true`, so the fl2va audio half survives the encoder swap. `frames(length)`
+landed on node 138 and the prompt landed via the manifest's
+`procedural.prompt`, as the sibling's does.
+`weight-availability-probe --url http://127.0.0.1:8288`: 4 weight slots
+and 5 build-constant enum values checked for this template, **0 it cannot
+load, 0 it does not offer**.
+
+**Stub back-fill — two new rules in `tests/test-workflow-bundle.js`, both
+reintroduction-tested.** This is the first time the bundle has held two
+templates for ONE model, and both rules exist because of what that makes
+possible:
+
+1. **No two shipped templates may share a `filename_prefix`.** A relative
+   prefix is joined onto ComfyUI's own output dir, so two templates
+   sharing one write into the same folder under the same stem, told apart
+   only by ComfyUI's `_00001_` counter. This template was authored by
+   COPYING its sibling, and a copy inherits the prefix — the kind of input
+   a reviewer's eye slides over because it is a long string that looks
+   right.
+2. **The two H3 siblings may differ in exactly `137.clip_name` and
+   `92.filename_prefix`, and in nothing else.** The bug class is DRIFT,
+   and it is silent in the direction that matters: a fix to the H3 render
+   path — a sampler, a step count, a sigma shift, a frame count — applied
+   to the file someone had open and not to its sibling. The nvfp4 graph is
+   the one every probe defaults to and the one a Blackwell dev machine
+   runs, so the UNFIXED half would be the one that only ever ships to
+   buyers whose cards cannot run the other. Nothing else in that file
+   compares two templates to each other. The allowed differences are
+   ENUMERATED rather than pattern-matched, so a third difference fails and
+   must be either declared or removed.
+
+   Reintroduced both: changing `142.steps` to 18 on the int8 copy alone
+   fails rule 2 (`found [137.clip_name, 142.steps, 92.filename_prefix]`);
+   restoring the sibling's prefix fails rule 1 AND rule 2 (in the other
+   direction — a difference that is expected and now absent). Restored,
+   green.
+
+**`ALLOW_NO_TEMPLATE` is `[ltx-small]` and §18 P12 is DONE.** All three
+of that item's lists have reached the size it asked for:
+`ALLOW_UNMEASURED` `[]`, `GATE_UNDER_ITS_BIGGEST_FILE` `[]`,
+`ALLOW_NO_TEMPLATE` `[ltx-small]`. ltx-small's seat is the one owner Q1
+covers — it has `urls: []`, so there is nothing to download and nothing to
+render — and emptying it is the owner's call. Every list fails in both
+directions, so none can grow without a log entry saying why. §18 P12
+struck through in the queue.
+
+**§18 P7a is NOT closed by this, and the row now says so.** `minimax-h3-int8`
+gates at 32 as well, so every card under 32 GB still has no runnable video
+graph. The P7a table row was updated to name the new template AND to state
+that it does not narrow the gap, because a reader scanning that table for
+"which entries have graphs now" would otherwise read a filled-in cell as
+progress on the question the section is about.
+
+**§18 P7b confirmed with a number, and the sharpest statement of it is not
+the one already filed.** P7b is filed as "`download-gen-weight`
+re-downloads a file the backend already has." What this pass measured is
+that **two scripts in this repo disagree about whether a file exists.**
+Within one minute, on one machine: `catalog-probe.js` reported three of
+`minimax-h3-int8`'s four weights as `[disk]` and printed their paths under
+the Comfy-Desktop shared root, while `download-gen-weight.js --entry
+minimax-h3-int8 --check` reported **all four as MISSING**. Both read the
+same disk; only one knows about `comfyModelRoots`. The panel's own
+downloader would therefore have fetched **51 427 MiB where 25 884 was
+needed** — 25 543 MiB of it a second copy of files the backend was
+already listing. This pass avoided that by fetching the one missing file
+directly instead of through the panel, **which is the wrong way round**
+and is exactly why it is worth writing down rather than being pleased
+about. Filed into §18 P7b with the numbers, plus a free oracle for
+whoever takes it: `catalog-probe.js` already resolves a catalog file
+against every root correctly, so a stub test can assert the two answers
+agree for every catalog entry — a rule that keeps holding after the bug
+is gone.
+
+**Verification.** All **86** stubbed suites green (`node tests/test-*.js`,
+every one by exit code, not by grepping for the word FAIL — which matches
+inside passing lines in this repo). Real-AE harness **770/770 PASSED**,
+before the work and after it. `comfy-probe` 9/9, `weight-availability-probe`
+all verdicts pass, `catalog-vram-probe --entry minimax-h3-int8` all
+verdicts pass twice. `capability-report.js` regenerated;
+`workflow-hash-history.js` regenerated (14 files, 2 new hashes).
+
+**Bumped 0.12.14 -> 0.12.15**, because `extension/` changed: a new
+template, a new manifest, the catalog entry and the hash history.
+
+**Nothing blocked, nothing needs a human eye except what was already
+owner-gated** (§18 P3a(b) the duration cap, §18 P7a the sub-32 GB video
+gap, §18 P12 Q1 ltx-small). AE was left running with its project open, as
+the brief requires.
+
+Evidence left on disk by the probes' own design:
+`AELlama_MiniMaxH3int8__00002_.mp4` and `__00003_.mp4` in
+`logs/catalog-vram/`; the `comfy-probe` clip cleaned itself up.

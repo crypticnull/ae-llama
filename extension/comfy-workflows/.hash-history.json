@@ -58,6 +58,12 @@
     "AE_LLAMA_H3_T2V_V1.manifest.json": [
       "f7c4678d736a63266743d3b7987ab77f8dc70906",
       "4beb144d079688ae670df69b1fe89f6b56595bd5"
+    ],
+    "AE_LLAMA_H3_INT8_T2V_V1.json": [
+      "a1348965f88f8a66a421e00165ab523b61babfff"
+    ],
+    "AE_LLAMA_H3_INT8_T2V_V1.manifest.json": [
+      "91508de50ef635cb8ecb54a35514d2b001728d95"
     ]
   }
 }

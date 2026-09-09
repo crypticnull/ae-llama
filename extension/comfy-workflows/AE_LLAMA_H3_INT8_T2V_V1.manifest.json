@@ -1,0 +1,78 @@
+{
+  "workflow": "AE_LLAMA_H3_INT8_T2V_V1",
+  "kind": "video",
+  "catalogEntry": "minimax-h3-int8",
+  "notes": "The BASIC text-to-video graph for the minimax-h3-int8 catalog entry (WORKPLAN 18 P10). It is AE_LLAMA_H3_T2V_V1 with the TEXT ENCODER swapped and nothing else: same fifteen core nodes, same node ids, same links, same literal 1344x768 x 124 frames, same sampler and sigma shift. Two inputs differ -- node 137's clip_name (qwen3vl_32b_minimax_h3_int8_convrot instead of qwen3vl_32b_minimax_h3_nvfp4_awq) and node 92's filename_prefix, so the two entries' outputs do not land in one folder. Everything the sibling manifest says about the fifteen nodes, the 124-frame length, the 17k+5 grid, the audio VAE chain and the missing CLIPTextEncode applies here unchanged; read AE_LLAMA_H3_T2V_V1.manifest.json for it rather than trusting a paraphrase.",
+  "whyItIsASiblingAndNotASetting": "The two H3 catalog entries differ in exactly one weight file, so the temptation is to ship one graph and swap the encoder at run time via panelAdaptation.setInputs (the way 17f pinned KREA2's sampler). It is a SEPARATE FILE because the catalog entry is what the panel prices, gates and recommends on: minimax-h3 is requiresBlackwell (the nvfp4 encoder is a Blackwell-native format) and minimax-h3-int8 is the fallback for cards that are not, and each entry's workflowTemplate has to name a graph that runs with THAT entry's weights on disk. One shared graph would make weight-availability, catalogModelStatus and resolveWorkflow all answer for the wrong file on half the machines. The contract in WORKPLAN 18 says refinements are siblings under new names; this is the first pair where the sibling is the point.",
+  "whatWasConfirmedFromTheUISource": "WORKPLAN 18 P10 said 'confirm from the UI source first', and the confirmation came back NEGATIVE, which is the useful half. The vendor frontend ships four MiniMax H3 templates (comfyui_workflow_templates_json/templates/video_minimax_h3_{t2v,i2v,i2v_continuation,r2v}.json on comfyui_workflow_templates 0.11.48) and every one of them names qwen3vl_32b_minimax_h3_nvfp4_awq. The string 'qwen3vl_32b_minimax_h3_int8_convrot' appears NOWHERE in the vendor tree -- not in a template, not in comfy/text_encoders/minimax.py, not in comfy_extras/nodes_minimax_h3.py (grepped over site-packages on the managed backend, 2026-09-09). So there is no official int8 graph to copy and no vendor statement that the int8 encoder is a drop-in. What makes it one is measured, not read: CLIPLoader type 'minimax' takes the file by name off the text_encoders enum and infers its dtype from the file, and this graph rendered end to end on the managed backend. The catalog's measured block is the evidence.",
+  "procedural": {
+    "prompt": {
+      "nodeId": 138,
+      "input": "prompt",
+      "note": "REQUIRED here for the same reason as the nvfp4 sibling: H3 carries its prompt as a STRING widget on the sampler-conditioning node and this graph has no CLIPTextEncode, so the panel's generic encoder walk finds nothing to write to and a generated clip would silently ignore the user's words."
+    }
+  },
+  "whyNoDurationSecondsResolutionOrFirstFrame": "Same three answers as AE_LLAMA_H3_T2V_V1 and for the same reasons, since it is the same graph: `length` is a literal number on node 138 so frames go in as frames (declaring durationSeconds would flip lengthIn to 'seconds' and make injectParams REFUSE a frames request); width and height are literal INTs on node 138 so the panel injects them by introspection and procedural.resolution would send them through a megapixel conversion onto a widget that does not exist (WORKPLAN 18 P5a); and `first_frame` is OPTIONAL on MiniMaxH3ImageToVideo, so omitting it IS the text-to-video path the _T2V_ in the name means. i2v for this entry, as for its sibling, is a future file under a new name -- see WORKPLAN 18 P9a.",
+  "models": [
+    {
+      "file": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+      "role": "diffusion",
+      "dir": "diffusion_models",
+      "sizeMB": 19999,
+      "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+      "note": "the SAME file the minimax-h3 entry loads -- only the encoder differs between the two entries, which is why a machine that already ran the nvfp4 graph downloads one file, not four"
+    },
+    {
+      "file": "qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+      "role": "text_encoder",
+      "dir": "text_encoders",
+      "sizeMB": 25884,
+      "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/text_encoders/qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+      "note": "10 924 MiB larger than the nvfp4 encoder its sibling loads. That is the whole trade this entry exists to offer: nvfp4 is a Blackwell-native weight format, so a card that is not Blackwell cannot load the sibling's encoder at all and loads this one instead."
+    },
+    {
+      "file": "minimax_h3_video_vae_fp16.safetensors",
+      "role": "vae",
+      "dir": "vae",
+      "sizeMB": 4967,
+      "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_video_vae_fp16.safetensors"
+    },
+    {
+      "file": "minimax_h3_audio_vae_fp32.safetensors",
+      "role": "audio_vae",
+      "dir": "vae",
+      "sizeMB": 577,
+      "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_audio_vae_fp32.safetensors"
+    }
+  ],
+  "customNodes": [
+    {
+      "pack": "(comfy-core)",
+      "nodes": [
+        "BasicGuider",
+        "BasicScheduler",
+        "CLIPLoader",
+        "CreateVideo",
+        "KSamplerSelect",
+        "MiniMaxH3ImageToVideo",
+        "MiniMaxH3SigmaShift",
+        "RandomNoise",
+        "SamplerCustomAdvanced",
+        "SaveVideo",
+        "UNETLoader",
+        "VAEDecode",
+        "VAEDecodeAudio",
+        "VAELoader"
+      ],
+      "note": "The same fourteen classes as AE_LLAMA_H3_T2V_V1, all core on ComfyUI 0.34.0 -- swapping a weight FILE cannot change which node classes a graph needs. No optionalNodes, because it needs none."
+    }
+  ],
+  "panelIntegration": {
+    "promptInjection": "manifest: procedural.prompt -> node 138's `prompt` widget (the generic encoder walk cannot reach it -- there is no CLIPTextEncode)",
+    "sizeInjection": "introspection: node 138's literal width + height",
+    "frameInjection": "introspection: node 138's literal `length` (comfy.js frameKeys)",
+    "seedInjection": "introspection: node 133's `noise_seed`",
+    "saveNode": "SaveVideo 92 -- mp4/h264 so AE can import it; filename_prefix is RELATIVE and distinct from the sibling's, so the two H3 entries' clips do not share an output folder"
+  },
+  "nodeAttributionScannedOn": "2026-09-09 (managed backend, /object_info on 127.0.0.1:8288)"
+}

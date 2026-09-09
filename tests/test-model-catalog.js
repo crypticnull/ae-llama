@@ -513,7 +513,12 @@ window.AELL.COMFY_CATALOG.forEach((e) => {
 // backend and imported into AE. sdxl left it the same day (P6), and
 // wan22-5b the same day (P7) with AE_LLAMA_WAN22_5B_T2V_V1, which
 // rendered 1280x704 x 121 frames twice on the managed backend.
-const ALLOW_NO_TEMPLATE = ["ltx-small", "minimax-h3-int8"];
+// minimax-h3-int8 left it 2026-09-09 (P10) with AE_LLAMA_H3_INT8_T2V_V1,
+// the nvfp4 sibling's graph with the text encoder swapped, rendered on
+// the managed backend. So ltx-small is the ONLY seat left and this list
+// has reached the size §18 P12 asked for: it may now only shrink to zero
+// by the owner answering Q1, never grow.
+const ALLOW_NO_TEMPLATE = ["ltx-small"];
 
 // Entries whose template has never been measured through
 // catalog-vram-probe. EXISTENCE IS NOT PROOF: a graph can be committed,

@@ -471,15 +471,20 @@ Queued (see WORKPLAN for owners/order):
   (extension/comfy-workflows/) with a dependency manifest; video repos
   are pinned (Wan 2.2, MiniMax H3); the remaining blocker is P4, which
   is every VRAM figure and catalog URL measured on real hardware.
-- Bundled ComfyUI templates: **FIVE core-only basics, one per catalog
+- Bundled ComfyUI templates: **SIX core-only basics, one per catalog
   entry that has weights** — `AE_LLAMA_SD15_T2I_V1`,
   `AE_LLAMA_SDXL_T2I_V1`, `AE_LLAMA_KREA2_T2I_V1` (image),
-  `AE_LLAMA_WAN22_5B_T2V_V1`, `AE_LLAMA_H3_T2V_V1` (video). Each was
+  `AE_LLAMA_WAN22_5B_T2V_V1`, `AE_LLAMA_H3_T2V_V1`,
+  `AE_LLAMA_H3_INT8_T2V_V1` (video). Each was
   authored from a RUNNING backend's `/object_info`, uses core nodes
   only (no custom packs), and has been rendered end to end into AE and
   had its VRAM measured on the managed backend a buyer installs. Only
-  `ltx-small` (no weights published) and `minimax-h3-int8` (a 26 GB
-  encoder download) still ship none. **Both of the owner's authored
+  `ltx-small` (no weights published) ships none. The last two are the
+  same MiniMax H3 graph with the text encoder swapped — nvfp4 for
+  Blackwell cards, int8 for everything else — and measuring both
+  showed the 10.9 GB the encoders differ by is a DOWNLOAD difference
+  and not a VRAM one (26 080 vs 26 048 MiB, 253 vs 259 s), because
+  ComfyUI evicts the encoder before it samples. **Both of the owner's authored
   graphs have LEFT the bundle** (WORKPLAN §18 P8, P9) and are kept as
   test fixtures; a copy already installed under `%APPDATA%` survives.
   **Text-to-image and text-to-video only: no shipped template accepts

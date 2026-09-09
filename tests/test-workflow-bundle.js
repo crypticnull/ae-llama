@@ -358,6 +358,100 @@ shipped.forEach((t) => {
          capable.join(", ") || "none");
 }
 
+// -------------------------------------- two templates, one output folder
+//
+// A relative filename_prefix is joined onto ComfyUI's own output dir, so
+// two templates that share one write their clips into the same folder
+// under the same stem and are told apart only by ComfyUI's _00001_
+// counter. Nothing downstream can then say which entry produced which
+// file -- not the owner reading the folder, and not a probe that greps
+// for its own output by name.
+//
+// This became reachable on 2026-09-09 (WORKPLAN 18 P10), the first time
+// the bundle held two templates for ONE model: AE_LLAMA_H3_INT8_T2V_V1 is
+// AE_LLAMA_H3_T2V_V1 with the text encoder swapped, and it was authored
+// by copying the file. A copy inherits the prefix, and the prefix is the
+// kind of input a reviewer's eye slides over because it is a long string
+// that looks right. The int8 template writes to MiniMaxH3int8/; this pins
+// that no future sibling arrives without doing the same.
+{
+  const seen = {};
+  shipped.forEach((t) => {
+    const graph = JSON.parse(fs.readFileSync(t.file, "utf8"));
+    Object.keys(graph).forEach((k) => {
+      const n = graph[k];
+      const p = n && n.inputs && n.inputs.filename_prefix;
+      if (typeof p !== "string" || p === "") return;
+      (seen[p] = seen[p] || []).push(t.base + " node " + k);
+    });
+  });
+  const shared = Object.keys(seen).filter((p) => seen[p].length > 1);
+  assert(shared.length === 0,
+         "no two shipped templates write to the same filename_prefix",
+         shared.map((p) => p + " <- " + seen[p].join(", ")).join("; ") ||
+         "every prefix is unique");
+}
+
+// ---------------------------- the two H3 siblings may not drift apart
+//
+// minimax-h3 and minimax-h3-int8 are ONE model offered with two text
+// encoders: nvfp4 (Blackwell-native) and int8 (everything else). Their
+// graphs are therefore the same fifteen nodes with one input different,
+// and measurement backs that up -- 26 080 vs 26 048 MiB, 253 vs 259 s on
+// the same card at the same size and length (WORKPLAN 18 P9, 18 P10).
+//
+// The bug class this pins is drift, and it is silent in the direction
+// that matters: a fix to the H3 render path -- a sampler, a step count, a
+// sigma shift, a frame count -- applied to the file someone had open and
+// not to its sibling. The nvfp4 graph is the one every probe defaults to
+// and the one a Blackwell dev machine runs, so the UNFIXED half is the
+// one that only ships to buyers whose cards cannot run the other. Nothing
+// else in this file compares two templates to each other.
+//
+// The allowed differences are enumerated, not pattern-matched: exactly
+// the encoder file and the output prefix. A third difference fails here
+// and is either a real divergence (say so, and list it) or the drift.
+{
+  const A = "AE_LLAMA_H3_T2V_V1", B = "AE_LLAMA_H3_INT8_T2V_V1";
+  const fa = path.join(BUNDLE, A + ".json");
+  const fb = path.join(BUNDLE, B + ".json");
+  const both = fs.existsSync(fa) && fs.existsSync(fb);
+  assert(both, "both H3 siblings are bundled", A + " + " + B);
+  if (both) {
+    const ga = JSON.parse(fs.readFileSync(fa, "utf8"));
+    const gb = JSON.parse(fs.readFileSync(fb, "utf8"));
+    const ka = Object.keys(ga).sort(), kb = Object.keys(gb).sort();
+    assert(ka.join() === kb.join(),
+           "the H3 siblings hold the same node ids",
+           ka.length + " vs " + kb.length);
+
+    // _meta.title is documentation and may differ; class_type and inputs
+    // are the render.
+    const diffs = [];
+    ka.forEach((k) => {
+      const na = ga[k] || {}, nb = gb[k] || {};
+      if (na.class_type !== nb.class_type) {
+        diffs.push(k + ".class_type");
+        return;
+      }
+      const ia = na.inputs || {}, ib = nb.inputs || {};
+      const keys = Object.keys(ia).concat(Object.keys(ib))
+        .filter((x, i, all) => all.indexOf(x) === i).sort();
+      keys.forEach((ik) => {
+        if (JSON.stringify(ia[ik]) !== JSON.stringify(ib[ik])) {
+          diffs.push(k + "." + ik);
+        }
+      });
+    });
+    const ALLOWED = ["137.clip_name", "92.filename_prefix"].sort();
+    assert(diffs.sort().join(", ") === ALLOWED.join(", "),
+           "the H3 siblings differ in exactly the encoder and the output " +
+           "prefix, and in nothing else",
+           "found [" + (diffs.join(", ") || "nothing") + "], expected [" +
+           ALLOWED.join(", ") + "]");
+  }
+}
+
 // --------------------------------------------- the catalog's own side
 
 // Every entry that NAMES a template must name one that is bundled AND
