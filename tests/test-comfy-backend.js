@@ -258,7 +258,8 @@ function makeHttp(listening, seen) {
 
 const comfySrc = fs.readFileSync(path.join(__dirname, "..", "extension",
                                            "js", "comfy.js"), "utf8");
-function comfyWith(listening, seen, hiddenInstalled, settings, storedPid) {
+function comfyWith(listening, seen, hiddenInstalled, settings, storedPid,
+                   cpStub) {
   const httpStub = makeHttp(listening, seen);
   // Every pre-existing step in this file predates comfyBackend and means
   // "the instance at the URL I am handing you" — which is exactly what
@@ -270,6 +271,7 @@ function comfyWith(listening, seen, hiddenInstalled, settings, storedPid) {
   const win = {
     AEBridge: {
       nodeRequire: n => (n === "http" || n === "https") ? httpStub
+                      : (n === "child_process" && cpStub) ? cpStub
                                                         : require(n),
       getExtensionPath: () => tmpRoot
     },
@@ -472,6 +474,99 @@ step(function (next) {
            (err && err.message));
     next();
   });
+});
+
+// 4b. The managed backend's LIFETIME is a spawn option, and the two
+//     callers want opposite answers.
+//
+// Measured on this machine 2026-09-09: a Node child spawned WITHOUT
+// `detached: true` dies the instant its parent exits — libuv puts it in
+// the parent's Windows job object. `unref()` does not change that; the
+// probe ran both ways with identical unref() calls and only the detached
+// child survived. So `comfy-install.js --boot` booted a backend, printed
+// "the backend is STILL RUNNING", and exited 0 leaving nothing on the
+// port. The 2026-09-06 fix made the PID RECORD outlive the script (test
+// 4 in test-comfy-install.js); the record then named a corpse.
+//
+// The panel wants the default. `unload` calls stopManaged() so closing
+// AE frees the backend's VRAM, and reapOrphan() at init is the net for
+// when CEP does not fire unload. Flipping this globally would leave
+// ComfyUI holding VRAM after every AE close, so the panel's default is
+// asserted here too — this is not a "more detached is better" fix.
+//
+// Cross-platform on purpose: what is pinned is the OPTION reaching
+// spawn, not the job-object semantics, which differ on Linux (where CI
+// runs) and would make this untestable there.
+function spawnRecorder(seenOpts) {
+  const stream = { on() { return stream; }, unref() {} };
+  return {
+    spawn(cmd, args, opts) {
+      seenOpts.push(opts || {});
+      const proc = {
+        pid: 4242, stdout: stream, stderr: stream,
+        unref() {}, kill() {},
+        on(ev, fn) {
+          // Fail the boot immediately so the health poll does not run
+          // its four-minute deadline against a port nothing listens on.
+          if (ev === "exit") setImmediate(function () { fn(1); });
+          return proc;
+        }
+      };
+      return proc;
+    },
+    execFile(f, a, o, cb) { if (typeof cb === "function") cb(null, ""); },
+    execFileSync() { return ""; }
+  };
+}
+step(function (next) {
+  const panelOpts = [];
+  const C = comfyWith([], null, true, MANAGED, null,
+                      spawnRecorder(panelOpts));
+  C.ensureRunning("http://127.0.0.1:8288", null, function () {
+    assert(panelOpts.length === 1,
+           "the panel path spawns the managed backend once");
+    assert(panelOpts[0] && panelOpts[0].detached !== true,
+           "the PANEL spawns it attached, so closing AE frees its VRAM");
+
+    // A script opts in explicitly. Nothing is written to the user's
+    // settings: the lifetime belongs to the launcher, not the install.
+    const scriptOpts = [];
+    const C2 = comfyWith([], null, true, MANAGED, null,
+                         spawnRecorder(scriptOpts));
+    C2.setManagedDetached(true);
+    C2.ensureRunning("http://127.0.0.1:8288", null, function () {
+      assert(scriptOpts.length === 1, "the script path spawns it once");
+      assert(scriptOpts[0] && scriptOpts[0].detached === true,
+             "setManagedDetached(true) makes the backend OUTLIVE the " +
+             "script that booted it");
+      assert(scriptOpts[0].windowsHide === true,
+             "and it stays hidden — detached must not pop a console");
+      next();
+    });
+  });
+});
+
+// 4c. The script path actually ASKS for that, and only through the lib.
+//
+// scripts/lib/comfy-managed.js exists so three scripts share one boot.
+// comfy-install.js had drifted to calling Comfy.ensureRunning directly,
+// so it missed the opt-in above and its backend evaporated — the exact
+// divergence that lib's header was written to prevent. Pinned as source
+// checks because the alternative is booting a real 4 GB backend.
+step(function (next) {
+  const libSrc = fs.readFileSync(path.join(__dirname, "..", "scripts",
+                                           "lib", "comfy-managed.js"), "utf8");
+  assert(/setManagedDetached\(true\)/.test(libSrc),
+         "the shared script boot() marks the backend detached");
+
+  const instSrc = fs.readFileSync(path.join(__dirname, "..", "scripts",
+                                            "comfy-install.js"), "utf8");
+  assert(/managed\.boot\(/.test(instSrc),
+         "comfy-install.js boots through the shared lib");
+  assert(!/Comfy\.ensureRunning\(/.test(instSrc),
+         "and never calls Comfy.ensureRunning directly, which would " +
+         "silently skip the detach and strand the backend");
+  next();
 });
 
 // 5. status() reports the mode, and in managed mode a foreign instance

@@ -20810,3 +20810,128 @@ and the log now says which one it was if a night goes quiet.
 section is closed.
 
 Suite **82/82**. No `extension/` change, so **no version bump**.
+
+## 2026-09-09 (local session) — NEXT UP item 1 / §17c: the managed backend did not outlive its launcher (0.12.5)
+
+SUPERSEDES: 20604-20620 — that entry fixed `comfy-install.js --boot`
+hanging for eleven minutes by calling `unref()`, and concluded the CLI
+boot path worked. It exits promptly now, but it left NOTHING running:
+`unref()` drops event-loop references, it does not detach the child.
+Measured today, the backend was dead by the time the script's own
+success message was printed.
+
+**Harness 770/770, exit 0**, both before the change and after.
+
+**The item.** NEXT UP item 1 was §17c, dogfood the shipped backend. The
+install was already present from an earlier pass, so this pass was the
+rest of §17c — and the first thing it found was that item 1's own
+command had been reporting a state that was not true.
+
+**What was measured, in order.**
+
+1. `comfy-install.js --check`: installed, **4264 MB (4.2 GB) extracted**,
+   its own **python 3.13.14**, **torch 2.13.0+cu130, CUDA 13.0**. That
+   torch line is §13a step 1, taken for free as §17c said it would be.
+   Gate 0 clean: `from=file dataRoot=C:\Users\mr\AppData\Roaming\AE-Llama`.
+2. `--boot` printed `ALL CHECKS PASSED` and `the backend is STILL
+   RUNNING`. Nothing was listening on 8288 afterwards.
+
+**Root cause, measured rather than reasoned.** A Node child spawned
+WITHOUT `detached: true` is killed when its parent exits — libuv puts it
+in the parent's Windows job object. A probe spawned two children with
+IDENTICAL `unref()` calls and differing only in `detached`; the plain one
+was gone, the detached one alive. So `unref()` was never the variable.
+
+**Two defects, and the second is why the first survived a fix.**
+
+1. `bootManaged` (`comfy.js`) spawned attached. The whole managed
+   lifecycle assumes otherwise: the PID is persisted to localStorage,
+   `ownsManagedBackend()` contemplates *"a previous session"*, and
+   `reapOrphan()` is documented as killing a backend *"left over from a
+   previous panel session"*. None of that could ever fire.
+2. `comfy-install.js` called `Comfy.ensureRunning` DIRECTLY while
+   `comfy-probe.js` and `catalog-vram-probe.js` both went through
+   `scripts/lib/comfy-managed.js`. That lib's header exists to prevent
+   exactly this divergence. Because of it, my first fix — the opt-in
+   placed in the lib's `boot()` — changed nothing, and the field check
+   still showed a dead backend. The drift, not the spawn, is what made
+   this expensive.
+
+**Not "more detached is better".** The PANEL keeps the attached default
+on purpose: `main.js` `unload` calls `stopManaged()` so closing AE frees
+the backend's VRAM, and `reapOrphan()` at init is the net for CEP not
+firing unload. Flipping it globally would leave ComfyUI holding VRAM
+after every AE close. Scripts opt in through `Comfy.setManagedDetached()`
+and nothing is written to the user's settings — the lifetime belongs to
+the launcher, not to their install.
+
+**The success message is no longer an assertion.** It verifies the
+recorded PID is a live ComfyUI and FAILS the run otherwise. It had been
+claiming a running backend that the job object had already killed, which
+is the "reports success while being reverted" class §21 recorded.
+
+**Verified in the field**: launched from an independent process, node
+exited 0 and pid 55048 was still listening on 8288. It then served the
+weight probe and a full generation attempt as separate later processes,
+and answered 200 across six polls over two minutes with its launcher long
+gone. A broken-pipe theory for a later death was tested and REFUTED, so
+no stdio redirect was built for it.
+
+**Back-fill** in `tests/test-comfy-backend.js` (4b, 4c): a spawn recorder
+pins the panel's attached default AND the script's detached opt-in, plus
+`windowsHide`; and source checks pin that the lib asks for the detach and
+that `comfy-install.js` never calls `ensureRunning` directly again. What
+is asserted is the OPTION reaching spawn, not job-object semantics, which
+differ on the Linux CI. Confirmed non-vacuous: with the option removed
+the run prints `FAIL: ... makes the backend OUTLIVE the script`.
+
+**§17c's remaining steps, now that the backend stays up.**
+
+- Step 3 PASSES and it is the item's best result. `extra_model_paths.yaml`
+  is written with the owner's `Documents\ComfyUI\models` plus a
+  Comfy-Desktop shared store it found itself, and the vendor backend
+  READS it: `weight-availability-probe --url http://127.0.0.1:8288` →
+  all verdicts passed, **0 unloadable slots** for both templates (H3 4/4,
+  KREA2 3/3). The space objection is answered in the field — the buyer
+  backend uses the ~26 GB already on this disk without copying a byte.
+- Step 4 FAILED, and it is the finding §17c exists to produce. Filed as
+  **§17f**: `AE_LLAMA_KREA2_V1` node 278 is a core `KSamplerSelect` set
+  to **`res_2s`**, a sampler the RES4LYF pack ADDS to that core node's
+  enum. The vendor build has 44 samplers and that is not one of them, so
+  ComfyUI dropped every output branch at validation and nothing rendered.
+  The optional-NODE machinery cannot help: the node is core and present;
+  one enum VALUE is missing. Every KREA2 number this repo holds was taken
+  where `res_2s` existed.
+- Step 5, what the buyer path does that the owner's never did: it
+  refuses the shipped template.
+
+**Three more filed rather than fixed** (one item per pass):
+
+- **§17f** — KREA2 cannot render on the vendor backend. Now NEXT UP 1a;
+  blocks §18 items 3-8. The four core `res_multistep*` samplers the
+  vendor build DOES have are named there, but the substitute must be
+  chosen by rendering a comparison, not by argument.
+- **§17g** — `missingWeights` said "0 it cannot load" about that same
+  template minutes before ComfyUI refused it. A weight check read as a
+  readiness check. ComfyUI's `validate_prompt` is the honest one and
+  already produced the real message.
+- **§17h** — `weight-availability-probe.js` goes to `comfyUrl` even in
+  managed mode, so a bare run hit 8188 (the "own" setting), got
+  ECONNREFUSED and reported a failure about nothing. `comfy-probe.js`
+  resolves the backend correctly; this one should too.
+- **§17i** — `llama.js:274` spawns llama-server with the same missing
+  `detached`, so `llama.js:247`'s "kill a survivor from an earlier
+  session" can never fire. NOT fixed: llama has no script caller needing
+  survival, and flipping it would leave a 32B model holding RAM after AE
+  closes. The work is to decide, not to copy the ComfyUI fix.
+
+**State left behind.** The managed backend is RUNNING on 8288 — booted by
+this pass, deliberately not stopped, since §18 passes want it and the
+panel reaps it at next launch. It died once earlier, after the KREA2
+generation attempt; cause unmeasured, and its stdout goes to a dead
+parent's pipes so there was nothing to read. If a later pass finds it
+gone, that is the thing to look at, and the refuted pipe theory above is
+not the answer.
+
+`extension/js/comfy.js` changed, so **0.12.4 -> 0.12.5**. Stubbed suite
+82/82; harness 770/770.

@@ -2100,6 +2100,31 @@
   var managedProc = null;
   var startWaiters = null;   // non-null while a boot is in flight
 
+  /*
+   * Does the backend outlive the process that spawned it? Measured
+   * 2026-09-09 on this machine: a Node child spawned WITHOUT
+   * `detached: true` is killed the moment its parent exits — libuv puts
+   * it in the parent's Windows job object, and `unref()` does not change
+   * that (the probe ran both ways with identical unref() calls; the
+   * plain child was gone, the detached one alive).
+   *
+   * The PANEL wants the default, false: `unload` calls stopManaged() so
+   * closing AE frees the backend's VRAM, and reapOrphan() at init is the
+   * safety net for when CEP does not fire unload.
+   *
+   * A SCRIPT wants true. `comfy-install.js --boot` exists to leave a
+   * backend up for later passes and prints "the backend is STILL
+   * RUNNING"; measured 2026-09-09 it was already dead, killed by the job
+   * object as the script exited. The 2026-09-06 fix in
+   * scripts/lib/comfy-managed.js made the PID RECORD survive the
+   * process, which is only half of it — the record then named a corpse.
+   * Scripts opt in through setManagedDetached(); nothing is written to
+   * the user's settings, because this is a property of the launcher and
+   * not of their install.
+   */
+  var managedDetached = false;
+  function setManagedDetached(on) { managedDetached = !!on; }
+
   function rememberPid(pid) {
     try { global.localStorage.setItem(COMFY_PID_KEY, String(pid)); }
     catch (e) {}
@@ -2418,7 +2443,8 @@
         ["-s", install.mainPy, "--windows-standalone-build",
          "--port", String(base.port), "--listen", "127.0.0.1",
          "--disable-auto-launch"],
-        { cwd: install.root, windowsHide: true });
+        { cwd: install.root, windowsHide: true,
+          detached: managedDetached });
     } catch (eS) {
       var early = startWaiters;
       startWaiters = null;
@@ -2528,6 +2554,7 @@
     freeVram: freeVram,
     ensureRunning: ensureRunning,
     stopManaged: stopManaged,
+    setManagedDetached: setManagedDetached,
     reapOrphan: reapOrphan,
     bypassNode: bypassNode,
     substituteNode: substituteNode,

@@ -174,6 +174,13 @@ function stop(Comfy, storage, port, say) {
  * nothing.
  */
 function boot(Comfy, url, settings, say, cb) {
+  // A script's backend must outlive the script. Without this the child
+  // dies inside the Windows job object the moment node exits, so
+  // `--boot` reported a running backend that was already gone and the
+  // file-backed PID above named a corpse (measured 2026-09-09; the PID
+  // half of this was fixed 2026-09-06). The panel does NOT set it: there
+  // `unload` stops the backend so closing AE frees its VRAM.
+  try { Comfy.setManagedDetached(true); } catch (e) {}
   Comfy.ensureRunning(url, function (m) { if (say) say("boot", m); },
     function (err, res) { cb(err, res); }, settings);
 }

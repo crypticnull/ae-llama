@@ -41,7 +41,9 @@ the night retrying it.
 |---|---|---|---|---|
 | ~~B~~ | ~~BLOCKER — AE sits on the crash-recovery dialog~~ **PREVENTED 2026-09-08.** `run-ae-selftest.ps1` now clears `CrashOccurred` in HKCU before every launch. If AE sits on that dialog again, that is a REGRESSION — log it, do not click past it and carry on. | §21 | — | no |
 | ~~0~~ | ~~heartbeat, verify a pass commits, per-pass timeout~~ **DONE 2026-09-08.** §20a heartbeat every 30s; §20c VERIFIED (`Pass committed 2d76fdf8`, the first end-to-end loop success since 09-02); §20b `-PassTimeoutMin 45`. Still open: **§20d**, the bypass guard test. | §20 | nothing | no |
-| 1 | **START HERE.** Install the managed ComfyUI backend: `node scripts/comfy-install.js --boot` | §17c | ~10 GB free — measured 2026-09-08: C 921 GB, X 1096 GB, so this is satisfied. Log what you measure anyway. | no |
+| ~~1~~ | ~~Install the managed ComfyUI backend~~ **DONE 2026-09-09.** Installed and booted; 4264 MB extracted, python 3.13.14, torch 2.13.0+cu130 (CUDA 13.0). `extra_model_paths.yaml` points at the owner's store and the vendor backend loads it: `weight-availability-probe --url http://127.0.0.1:8288` all verdicts PASS, 0 missing slots for both templates. Root defect found and fixed en route (the backend did not outlive its launcher). | §17c | — | — |
+| 1a | **START HERE.** The shipped KREA2 template CANNOT RENDER on the backend a buyer gets — `res_2s` is a RES4LYF sampler and the vendor build has 44 samplers without it. This is the §17c finding, and it blocks items 3-8. | §17f | item 1 (done) | yes |
+| 1b | `missingWeights` passed that template anyway — a preflight that checks weights but not enum VALUES says "ready" about a graph ComfyUI refuses | §17g | 1a | yes |
 | 2 | H3 t2v regression + `catalog-vram-probe --entry minimax-h3` → measured block | §18 P3 | item 1, AE | no |
 | 3 | sd15 basic template (+ the frontend-editable measurement) | §18 P5 | item 1, AE, 2 GB | yes |
 | 4 | sdxl basic template | §18 P6 | item 3, 7 GB | yes |
@@ -55,6 +57,8 @@ NOTHING but the repo and are always takeable:
 
 | item | where | bumps |
 |---|---|---|
+| `weight-availability-probe.js` defaults to `comfyUrl`, so it cannot see the managed backend without `--url` | §17h | no |
+| Decide llama-server's lifetime: give it the same detach seam, or delete the reap that can never fire | §17i | yes |
 | `Setup.scanForModelRoots()` — probe a named shortlist, never scan drives | §19a | yes |
 | "Scan for models" button + validate typed roots | §19b | yes |
 | The four Option A prompt deletions, one per pass, each gated on `chat-probe --variants` | §15 | yes |
@@ -4136,3 +4140,111 @@ blind key on a dialog whose wrong branch silently removes the panel.
 - Minor/major version bumps, PRs into main, release notes. PATCH bumps
   are YOURS: `node scripts/bump-version.js patch` before pushing a fix
   you verified in real AE, or it never reaches a panel (see CLAUDE.md).
+
+## 17f. The shipped KREA2 template cannot render on the vendor backend (filed 2026-09-09, local session)
+
+**This is the finding §17c was created to produce**, and it lands exactly
+where the owner predicted: *"how can we be sure comfy works on other
+users if we don't test it here?"*
+
+Measured 2026-09-09 on the managed vendor backend (ComfyUI portable,
+python 3.13.14, torch 2.13.0+cu130):
+
+    node scripts/comfy-probe.js --url http://127.0.0.1:8288 \
+         --workflow AE_LLAMA_KREA2_V1 --width 512 --height 512
+
+    FAIL generation completed - ComfyUI dropped every output branch of
+    this workflow when it validated it, so nothing was rendered:
+    node 278 (KSamplerSelect): Value not in list -
+    sampler_name: 'res_2s' not in (list of length 44)
+
+`AE_LLAMA_KREA2_V1.json` node 278 is a **core** `KSamplerSelect` whose
+`sampler_name` is **`res_2s`** — a sampler that the RES4LYF custom node
+pack ADDS to that core node's enum. The owner's hand-built ComfyUI has
+RES4LYF; the vendor portable build does not. Queried live, the vendor
+build offers 44 samplers and `res_2s` is not one of them. The nearest
+core equivalents it DOES have:
+
+    res_multistep, res_multistep_cfg_pp,
+    res_multistep_ancestral, res_multistep_ancestral_cfg_pp
+
+Every KREA2 measurement this repo holds was taken where `res_2s`
+existed, so "KREA2 works" has never been a statement about a buyer.
+
+**Why the optional-node machinery did not save it.** The panel can drop
+custom NODES it cannot find (`tests/test-comfy-optional-nodes.js`). This
+is not a missing node — the node is core and present. What is missing is
+one VALUE in that core node's enum, which is contributed by a pack. No
+node-type check can see that, which is why it reached a real render.
+
+**The work.** Pick a substitute from the four above and re-measure KREA2
+rather than reasoning about which is closest: a sampler change moves the
+image, so this needs a rendered comparison, not an argument. Then decide
+the general rule — does the panel SUBSTITUTE a missing enum value and
+say so, or refuse and name what the backend has? Grounded-error practice
+here means naming the 44, not "invalid sampler".
+
+Blocks §18 items 3-8: authoring more templates against a sampler set the
+shipped backend does not have would multiply this bug.
+
+## 17g. A preflight that checks weights but not enum values reports "ready" about a graph that cannot run (filed 2026-09-09, local session)
+
+Same run as §17f, and the more general defect. Immediately before the
+generation that ComfyUI refused outright:
+
+    weight-availability-probe --url http://127.0.0.1:8288
+    AE_LLAMA_KREA2_V1: backend checked 3 weight slot(s), 0 it cannot
+    load; panel prices it off disk at 18110 MiB
+    == PASS a template whose weights the backend LISTS is not refused
+
+So `Comfy.missingWeights` gave a clean bill of health to a template
+ComfyUI then dropped every output branch of. The check is not wrong
+about weights; it is being READ as "this template will run", which it
+cannot answer. A user is told a generation is ready and then watches it
+fail — the "complete-LOOKING answer that does not contain the truth"
+class this repo has already paid for once (§1, the truncated comp
+roster).
+
+ComfyUI already has the honest check: **`POST /prompt` with
+`validate_prompt`**, which is what produced the `res_2s` message. The
+work is to run the graph past validation as part of the preflight, and
+report what it says, instead of inferring readiness from weight slots
+alone.
+
+## 17h. `weight-availability-probe.js` cannot see the managed backend without being told (filed 2026-09-09, local session)
+
+Measured 2026-09-09: with `comfyBackend: "managed"` and
+`comfyManagedPort: 8288`, a bare
+
+    node scripts/weight-availability-probe.js
+
+went to `comfyUrl` — `http://127.0.0.1:8188`, the **"own"** setting —
+got ECONNREFUSED, and reported `1 verdict(s) FAILED`. In managed mode
+`comfyUrl` is not the backend; `Comfy.backendUrl(settings)` is, and
+`comfy-probe.js` already resolves it that way (it printed
+`backend: managed`).
+
+Small fix, real consequence: an unattended §18 pass that runs this probe
+without `--url` measures nothing and reports a failure that says nothing
+about the weights. It should default to the backend the settings
+actually select, and `--url` should stay an override.
+
+## 17i. llama-server has the same lifetime bug the managed backend just had (filed 2026-09-09, local session)
+
+`extension/js/llama.js:274` spawns `llama-server` with
+`{ cwd, windowsHide: true }` and no `detached`, which on Windows puts it
+in the parent's job object — measured 2026-09-09, such a child dies the
+moment its parent exits, and `unref()` does not change that.
+
+So `llama.js:247`'s reap, commented *"kill a survivor from an earlier
+session"*, can never find one: there are no survivors. The reap is
+unreachable rather than load-bearing — the same shape as the §21
+watchdog rule keyed on "recover".
+
+Deliberately NOT fixed alongside the ComfyUI one (2026-09-09): the
+managed backend had a script path that needed survival, and llama has no
+equivalent caller yet. Flipping it would leave a 32B model holding RAM
+after AE closes, for no current benefit. The work here is to DECIDE:
+either give llama the same opt-in seam, or delete the reap and say
+plainly that the server dies with the panel. What must not stand is code
+that reads as coverage for a case that cannot occur.

@@ -188,7 +188,12 @@ function step2Boot(inst, done) {
   if (!OPT.boot) { done(); return; }
   if (!inst) { verdict(false, "boot skipped — nothing installed"); done(); return; }
   say("info", "booting the managed backend on " + url + "…");
-  Comfy.ensureRunning(url, function (m) { say("boot", m); },
+  // Through managed.boot(), NOT Comfy.ensureRunning directly: the lib is
+  // what marks the child detached so it outlives this script, and the two
+  // other scripts already go through it. This one had drifted, which is
+  // precisely the divergence that lib's header exists to prevent.
+  managed.boot(Comfy, url, { comfyBackend: "managed",
+                             comfyManagedPort: port }, say,
     function (err, res) {
       if (err) {
         verdict(false, "the managed backend boots", err.message);
@@ -202,15 +207,28 @@ function step2Boot(inst, done) {
                 st ? st.target : String(sErr));
         done();
       });
-    }, { comfyBackend: "managed", comfyManagedPort: port });
+    });
 }
 
 function finish() {
   if (OPT.stop) {
     managed.stop(Comfy, storage, port, say);
   } else if (OPT.boot) {
-    say("info", "the backend is STILL RUNNING. Stop it with --stop, or " +
-                "leave it — the panel reaps it on next launch.");
+    // Do not ASSERT it is running — verify the PID we recorded is a live
+    // ComfyUI and say what is actually true. Measured 2026-09-09, this
+    // line claimed a running backend that the Windows job object had
+    // already killed, which is the "reports success while being
+    // reverted" class this repo keeps paying for.
+    var pid = storage.getItem(managed.PID_KEY);
+    if (pid && managed.pidIsComfy(pid)) {
+      say("info", "the backend is STILL RUNNING (pid " + pid + ") and " +
+                  "outlives this script. Stop it with --stop, or leave " +
+                  "it — the panel reaps it on next launch.");
+    } else {
+      verdict(false, "the backend outlives this script",
+              "nothing ComfyUI-shaped at the recorded pid " +
+              (pid || "(none recorded)"));
+    }
   }
   console.log(failures ? "\n" + failures + " FAILED" : "\nALL CHECKS PASSED");
   process.exitCode = failures ? 1 : 0;
