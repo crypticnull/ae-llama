@@ -233,7 +233,9 @@ const upscaleBy = () => ({ class_type: "LatentUpscaleBy",
 // catalog VRAM probe measured the authored template producing.
 
 {
-  const file = path.join(REPO, "extension", "comfy-workflows",
+  // Moved out of the bundle by WORKPLAN 18 P8; kept as a fixture because
+  // it is the only graph here whose output size is not its latent size.
+  const file = path.join(REPO, "tests", "fixtures", "authored-krea2",
                          "AE_LLAMA_KREA2_V1.json");
   const load = () => JSON.parse(fs.readFileSync(file, "utf8"));
 

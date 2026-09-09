@@ -1,0 +1,59 @@
+{
+  "workflow": "AE_LLAMA_KREA2_T2I_V1",
+  "kind": "image",
+  "catalogEntry": "krea2",
+  "notes": "The BASIC text-to-image graph for the krea2 catalog entry (WORKPLAN 18 P8), and the graph the panel ships for that entry from 0.12.13 on. Core nodes only -- UNETLoader / CLIPLoader / VAELoader / CLIPTextEncode / EmptyLatentImage / KSamplerSelect / BasicScheduler / BasicGuider / RandomNoise / SamplerCustomAdvanced / VAEDecode / SaveImage -- so it runs on the backend the panel installs with nothing added. It REPLACES the owner's authored AE_LLAMA_KREA2_V1, which needed four custom packs a buyer does not have (rgthree's Power Lora Loader / Any Switch / Image Comparer, easy cleanGpuUsed, SesquiLatentUpscale) and which leaves the bundle with this file (WORKPLAN 18, the owner's Q6 reframe: the product's baseline is the core-only basic set, his authored graphs are a personal layer on top). His installed copy survives the removal: setup.js ensureDataDirs seeds, refreshes and preserves and has no delete path, so a file already in %APPDATA%\\AE-Llama\\comfy-workflows outlives its removal from the bundle. Every input was re-confirmed against the RUNNING managed backend's /object_info on 2026-09-09 (UNETLoader, CLIPLoader, BasicScheduler, BasicGuider, RandomNoise, SamplerCustomAdvanced and KSamplerSelect are not all in scripts/comfy-node-defs.json, so the offline harvest could not have answered for them).",
+  "whyThisSampler": "sampler exp_heun_2_x0 / scheduler simple / 4 steps / denoise 1 are the authored graph's own FIRST pass, and the sampler in particular is MEASURED rather than inherited: WORKPLAN 17f rendered all six candidates at one seed on this backend and found three of the four originally shortlisted unusable at 4 steps. Krea 2 turbo is a distilled model -- 4 steps is its design point, not a corner cut -- and guidance is disabled, which is why there is a BasicGuider and no CFG.",
+  "whyNoNegative": "There is deliberately no negative CLIPTextEncode. BasicGuider takes ONE conditioning input and no negative at all, so a negative encoder here would be a node whose output goes nowhere -- which is exactly what the authored graph's two ConditioningZeroOut nodes (260, 272) were: dead ends feeding nothing. Dropping them changes no pixel. The panel therefore injects a prompt and no negative for this template, and the enhancer instruction on the old manifest already told the model to express exclusions positively.",
+  "whyThisLatent": "1920x1080. This is the authored graph's OWN first-pass latent, i.e. the one size this model is already measured to render at on this machine, and it is the aspect the panel imports into an AE comp. The authored graph then latent-upscaled 1.6x to 3072x1728 for a second refine pass at denoise 0.25; a basic does not do a second model pass, so the first pass IS the output here. The panel overrides both numbers whenever the user names a size.",
+  "procedural": {
+    "promptNote": "NOT a procedural entry, and it needs a word because this graph has no sampler with positive/negative inputs. classifyEncoders (comfy.js) seeds its polarity walk from nodes carrying `positive`/`negative` links; SamplerCustomAdvanced carries neither, so node 4 is reachable from no chain -- and injectParams' documented fall-back for an unreachable encoder is the node TITLE: /neg/i means negative, anything else means positive. The title here is 'Positive', so the prompt lands by introspection with no manifest help. A procedural entry would write the same string twice.",
+    "resolutionNote": "NOT a procedural entry either, for the reason measured on the sd15 basic and written up as WORKPLAN 18 P5a. procedural.resolution means 'this template derives its pixels from a MEGAPIXEL widget', which is true of H3's ResolutionSelector and false of an EmptyLatentImage taking literal width and height -- those land through injectParams' generic width/height walk. Authoring it anyway in the positional {nodeId, widget: N} form resolves widget 0 to the node's first settable input in key order, which is batch_size, and ComfyUI then refuses the whole graph.",
+    "seedNote": "Also generic: RandomNoise node 9 carries a numeric `noise_seed`, which injectParams randomises or pins. Unlike the authored graph there is only ONE noise node now, because there is only one sampler pass."
+  },
+  "models": [
+    {
+      "file": "krea2_turbo_int8_convrot.safetensors",
+      "role": "diffusion",
+      "dir": "diffusion_models",
+      "node": "1 (UNETLoader)"
+    },
+    {
+      "file": "qwen3vl_4b_fp8_scaled.safetensors",
+      "role": "text_encoder",
+      "dir": "text_encoders",
+      "node": "2 (CLIPLoader, type 'krea2' -- confirmed present in the running backend's CLIPLoader type enum, which lists exactly ['qwen_image', 'krea2'])"
+    },
+    {
+      "file": "qwen_image_vae.safetensors",
+      "role": "vae",
+      "dir": "vae",
+      "node": "3 (VAELoader)"
+    }
+  ],
+  "customNodes": [
+    {
+      "pack": "(comfy-core)",
+      "nodes": [
+        "BasicGuider",
+        "BasicScheduler",
+        "CLIPLoader",
+        "CLIPTextEncode",
+        "EmptyLatentImage",
+        "KSamplerSelect",
+        "RandomNoise",
+        "SamplerCustomAdvanced",
+        "SaveImage",
+        "UNETLoader",
+        "VAEDecode",
+        "VAELoader"
+      ]
+    }
+  ],
+  "panelIntegration": {
+    "promptInjection": "introspection via the title fall-back: node 4 is titled 'Positive' and is the graph's only CLIPTextEncode (see procedural.promptNote)",
+    "resolutionCeilingFrom": "tier ceilings (COMFY_TIERS_PLAN)",
+    "saveNode": "SaveImage 12 -- filename_prefix is RELATIVE, so ComfyUI joins it onto its own output dir. The authored graph's prefix was an ABSOLUTE path on the owner's machine and needed a panelAdaptation.setInputs to survive anywhere else (folder_paths.get_save_image_path refuses anything landing outside the output folder, and it refuses it at the LAST node, after every GPU second is spent). This template needs no adaptation at all."
+  },
+  "nodeAttributionScannedOn": "2026-09-09 (managed backend, /object_info on 127.0.0.1:8288)"
+}

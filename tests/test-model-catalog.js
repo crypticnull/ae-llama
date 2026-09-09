@@ -334,6 +334,52 @@ window.AELL.COMFY_CATALOG.forEach((e) => {
       }
     }
   }
+  /* The SIZE half of the same rule, and the defect it was written from.
+   * A video entry's clip length is read out of its own template above; its
+   * PIXEL size, and every image entry's, was taken on trust from a string
+   * typed into version.js. WORKPLAN 18 P8 is what that costs: krea2's graph
+   * was replaced (the owner's authored two-pass AE_LLAMA_KREA2_V1 left the
+   * bundle for the core-only AE_LLAMA_KREA2_T2I_V1) and the entry kept a
+   * measuredAt of "3072x1728 (the template's authored size)" -- a size the
+   * shipped template no longer renders, attached to a VRAM figure for a
+   * graph nobody runs. Nothing in the repo could have said so.
+   *
+   * The authored size is not a matter of opinion either: it is the literal
+   * width+height on the template's own latent/video node, the same pair
+   * injectParams overwrites when the user names a size (comfy.js). Read it
+   * and require measuredAt to repeat it.
+   *
+   * A template with NO literal width+height node is SKIPPED rather than
+   * assumed innocent -- H3 is one, because its size arrives as MEGAPIXELS
+   * through a ResolutionSelector and there is no pixel pair in the graph to
+   * compare against. So is a template whose nodes disagree on the size:
+   * that is a real shape (a two-pass graph rendering at one size and
+   * upscaling to another) and guessing which one was measured would be the
+   * same trust this rule exists to remove. */
+  if (e.workflowTemplate) {
+    const sizeApi = path.join(BUNDLE_DIR, e.workflowTemplate + ".json");
+    if (fs.existsSync(sizeApi)) {
+      const g = JSON.parse(fs.readFileSync(sizeApi, "utf8"));
+      const pairs = {};
+      Object.keys(g).forEach((id) => {
+        const ins = (g[id] || {}).inputs || {};
+        if (typeof ins.width === "number" && typeof ins.height === "number") {
+          pairs[ins.width + "x" + ins.height] = (g[id] || {}).class_type;
+        }
+      });
+      const sizes = Object.keys(pairs);
+      if (sizes.length === 1) {
+        const stated = String(e.measuredAt).replace(/\s*x\s*/gi, "x");
+        assert(stated.indexOf(sizes[0]) !== -1,
+               e.name + ": measuredAt names the size its OWN shipped " +
+               "template renders (" + sizes[0] + ", the literal " +
+               "width+height on its " + pairs[sizes[0]] + "), not " +
+               String(e.measuredAt) + " -- a reading taken at another size, " +
+               "or kept across a change of graph, prices a job the buyer " +
+               "is not given");
+      }
+    }
+  }
   assert(typeof e.minVramGB === "number",
          e.name + ": a measured entry still has a gate");
   assert(e.minVramGB * 1024 >= e.measuredVramMB,
@@ -389,11 +435,23 @@ if (krea2) {
 // BOTH directions, because the rule it encodes is the cheap one — it
 // needs no GPU, and it is what caught wan22-5b before any card did.
 const GATE_UNDER_ITS_BIGGEST_FILE = [];
+
+/* The entries the rule below cannot ask the question OF, named rather than
+ * silently skipped (WORKPLAN 18 P8a). Both carry `urls: []`, so there are no
+ * per-file sizes to compare a gate against: ltx-small has no weights pinned
+ * at all (owner Q1, postponed) and krea2's are owner-supplied, listed in
+ * `files` as bare names. An unnamed skip is the same defect as the one the
+ * comment below this block describes -- a check answering "fine" and
+ * "nothing here to check" identically -- so this fails in BOTH directions
+ * too: give krea2's files their sizes and its seat must go. */
+const NO_FILE_SIZES_TO_CHECK = ["krea2", "ltx-small"];
 {
   const offenders = [];
+  const unaskable = [];
   window.AELL.COMFY_CATALOG.forEach((e) => {
     const sizes = (e.urls || []).map((u) => u.sizeMB)
       .filter((n) => typeof n === "number" && n > 0);
+    if (!sizes.length) unaskable.push(e.name);
     if (!sizes.length || typeof e.minVramGB !== "number") return;
     let biggest = 0;
     sizes.forEach((n) => { if (n > biggest) biggest = n; });
@@ -414,6 +472,12 @@ const GATE_UNDER_ITS_BIGGEST_FILE = [];
                   GATE_UNDER_ITS_BIGGEST_FILE.slice().sort().join(", "));
     console.error("       actual   : " + (offenders.join("; ") || "none"));
   }
+
+  assert(unaskable.slice().sort().join(",") ===
+         NO_FILE_SIZES_TO_CHECK.slice().sort().join(","),
+         "the entries the biggest-file rule cannot ask about are exactly " +
+         "the ones named as such",
+         unaskable.join(", ") || "none");
 }
 
 // A workflowTemplate an entry names must be a template the panel BUNDLES,

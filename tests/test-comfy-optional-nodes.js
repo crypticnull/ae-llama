@@ -63,9 +63,13 @@ const manifest = JSON.parse(fs.readFileSync(MANIFEST, "utf8"));
 // KREA2 is the second shipped template and the one that needed the rules to
 // grow: rgthree's Power Lora Loader emits MODEL on slot 0 and CLIP on slot 1
 // from two different inputs, so a single passthrough cannot answer for it.
-const K_TEMPLATE = path.join(REPO, "extension", "comfy-workflows",
+// (No longer SHIPPED: WORKPLAN 18 P8 replaced the krea2 entry's graph with
+// the core-only AE_LLAMA_KREA2_T2I_V1 and moved this one to a fixture --
+// tests/fixtures/authored-krea2/README.md. Kept because nothing core-only
+// has a two-output pack node to test against.)
+const K_TEMPLATE = path.join(REPO, "tests", "fixtures", "authored-krea2",
                              "AE_LLAMA_KREA2_V1.json");
-const K_MANIFEST = path.join(REPO, "extension", "comfy-workflows",
+const K_MANIFEST = path.join(REPO, "tests", "fixtures", "authored-krea2",
                              "AE_LLAMA_KREA2_V1.manifest.json");
 const kTemplate = () => JSON.parse(fs.readFileSync(K_TEMPLATE, "utf8"));
 const kManifest = JSON.parse(fs.readFileSync(K_MANIFEST, "utf8"));

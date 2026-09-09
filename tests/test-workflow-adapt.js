@@ -650,8 +650,12 @@ assert(kreaClasses.indexOf("OllamaGenerateV2") === -1 &&
          before + ")");
 
   const fixed = adapt(JSON.parse(JSON.stringify(kreaUi)), defs, authored);
+  // Was extension/comfy-workflows/ until WORKPLAN 18 P8 took it out of the
+  // shipped bundle; it is still the converter's expected output, so it moved
+  // to tests/fixtures/authored-krea2/ rather than being deleted.
   const shippedKrea = JSON.parse(fs.readFileSync(path.join(
-    REPO, "extension", "comfy-workflows", "AE_LLAMA_KREA2_V1.json"), "utf8"));
+    REPO, "tests", "fixtures", "authored-krea2",
+    "AE_LLAMA_KREA2_V1.json"), "utf8"));
   assert(JSON.stringify(fixed.api) === JSON.stringify(shippedKrea),
          "the checked-in KREA2 API template is exactly what the converter " +
          "produces from the checked-in UI template and its sidecar (edit " +

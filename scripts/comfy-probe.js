@@ -19,7 +19,7 @@
  *   node scripts/comfy-probe.js                       # the default smoke
  *   node scripts/comfy-probe.js --url http://127.0.0.1:8188
  *   node scripts/comfy-probe.js --duration 0.2 --width 512 --height 288
- *   node scripts/comfy-probe.js --workflow AE_LLAMA_KREA2_V1 \
+ *   node scripts/comfy-probe.js --workflow AE_LLAMA_KREA2_T2I_V1 \
  *        --prompt "..." --width 768 --height 768   # an IMAGE template
  *   node scripts/comfy-probe.js --image C:\ref.png    # i2v instead of t2v
  *   node scripts/comfy-probe.js --frames 33           # templates whose

@@ -53,8 +53,8 @@ the night retrying it.
 | ~~3~~ | ~~sd15 basic template (+ the frontend-editable measurement)~~ **DONE 2026-09-09 (0.12.10).** `AE_LLAMA_SD15_T2I_V1` + manifest, `workflowTemplate`, hash history, `ALLOW_NO_TEMPLATE` −sd15, and a MEASURED block (2656 MiB / 4 s cold at 512x512, managed backend). Full chain green: weight probe, `comfy-probe --workflow` 9/9 incl. AE import, `catalog-vram-probe` x2, `chat-probe --steps 1,13` — and step 13 now picks sd15 for "a red apple", which is the §18 gap statement closed. **The frontend measurement is YES** (see §18 P5b). Two root defects found en route: §18 P5a and the chat-probe PID store. | §18 P5 | — | 0.12.10 |
 | ~~4~~ | ~~sdxl basic template~~ **DONE 2026-09-09 (0.12.11).** `AE_LLAMA_SDXL_T2I_V1` + manifest (the sd15 seven-node shape, ckpt swapped, 1024x1024 latent), `workflowTemplate`, hash history, `ALLOW_NO_TEMPLATE` −sdxl, MEASURED block (9472 MiB / 6 s cold at 1024x1024). **The measurement disproved the catalog's gate**: `minVramGB` was 6 while the checkpoint alone is 6617 MiB, so an 8 GB card was being recommended a grind — gate is 12 now, `slowBelowGB`/`slowNote` removed, three test pins moved WITH their reasons. §18 P6a filed (wan22-5b's gate is under its own biggest file) | §18 P6 | — | 0.12.11 |
 | ~~5~~ | ~~wan22-5b basic t2v template~~ **DONE 2026-09-09 (0.12.12).** `AE_LLAMA_WAN22_5B_T2V_V1` + manifest (the VENDOR'S own `video_wan2_2_5B_ti2v.json`, read off the managed backend's disk, with its bypassed LoadImage DELETED because an API graph has no "muted"), `workflowTemplate`, hash history, `ALLOW_NO_TEMPLATE` −wan22-5b, MEASURED block. **§18 P6a is CLOSED and it was not close**: gate 8 -> **32** on 26 187 MiB measured, and a third run at 704x480 still cost 21 536 MiB, so the floor is the 17 304 MiB of weights and no size rescues a small card. Two 8 GB pins moved with their reasons. Two roots found en route: the authored-length rule could not see a frames-based template at all (fixed + verified by reintroduction), and `recommendGen`'s tie was being broken by ARRAY ORDER. §18 P7a (owner call) and §18 P7b filed | §18 P7 | — | 0.12.12 |
-| 6 | **START HERE.** krea2 core-only basic; the authored graph then leaves the bundle | §18 P8 | item 3 | yes |
-| 7 | H3 core-only basic; the authored graph then leaves the bundle | §18 P9 | items 2, 5 | yes |
+| ~~6~~ | ~~krea2 core-only basic; the authored graph then leaves the bundle~~ **DONE 2026-09-09 (0.12.13).** `AE_LLAMA_KREA2_T2I_V1` + manifest (12 core nodes: the authored graph's own FIRST pass with the four custom packs, the second upscale pass, the enhancer switch and two dead `ConditioningZeroOut` nodes dropped), `workflowTemplate`, hash history, and the entry **RE-MEASURED** because its graph changed: 18 848 / 18 560 MiB, 8 s, 1920x1080. Gate stays 24 — the smaller reading does not lower it, because the three weights are 18 109 MiB resident and the next standard card down is 16 GB. `AE_LLAMA_KREA2_V1` left `extension/comfy-workflows/` for `tests/fixtures/authored-krea2/` (five suites use it as their only custom-node-heavy graph; that folder's README says which and why). The owner's installed copy survives — **verified**, chat-probe's `comfy_list_workflows` still lists it from `%APPDATA%`. Root finding en route, now a rule: an entry's `measuredAt` was never checked against its OWN template's size. §18 P8a filed | §18 P8 | — | 0.12.13 |
+| 7 | **START HERE.** H3 core-only basic; the authored graph then leaves the bundle | §18 P9 | items 2, 5 | yes |
 | 8 | minimax-h3-int8 second API file | §18 P10 | item 7, 26 GB | yes |
 
 **OWNER, READ THIS ONE FIRST: §18 P7a.** Measuring wan22-5b (item 5)
@@ -72,6 +72,7 @@ NOTHING but the repo and are always takeable:
 | The managed backend dies silently within the half hour — measure the cause before fixing it | §17k | maybe |
 | The vendor-enum fixture is a hand-taken snapshot with nothing forcing a refresh when the vendor build moves | §17l | no |
 | `download-gen-weight` re-downloads a weight that is already in another `comfyModelRoots` root and already listed by the backend (6.4 GB wasted, measured; the next one is 26 GB) | §18 P7b | yes |
+| krea2 and ltx-small are the only entries EXEMPT from the "a gate must hold its biggest weight file" rule, because their files carry no sizes | §18 P8a | yes |
 | `weight-availability-probe.js` defaults to `comfyUrl`, so it cannot see the managed backend without `--url` | §17h | no |
 | Decide llama-server's lifetime: give it the same detach seam, or delete the reap that can never fire | §17i | yes |
 | `Setup.scanForModelRoots()` — probe a named shortlist, never scan drives | §19a | yes |
@@ -3815,7 +3816,7 @@ taken on what a buyer gets — so nothing measured after §17c needs a
 | ~~P5~~ | local | **DONE 2026-09-09 (0.12.10).** sd15 basic + manifest + `workflowTemplate` + hash + allowlist −sd15 + a measured block; the frontend measurement is **YES** (§18 P5b). §18 P5a filed | 0.12.10 | — |
 | ~~P6~~ | local | **DONE 2026-09-09 (0.12.11).** sdxl basic + manifest + `workflowTemplate` + hash + allowlist −sdxl + a measured block; the gate moved 6 -> 12 on the measurement and `slowBelowGB` went with it. §18 P6a filed | 0.12.11 | — |
 | ~~P7~~ | local | **DONE 2026-09-09 (0.12.12).** wan22-5b basic + manifest + `workflowTemplate` + hash + allowlist −wan22-5b + a MEASURED block; `--frames` verified through `comfy-probe --frames 25` (640x384, 1.042 s @ 24 fps, imported into AE); the floor re-pin moved BOTH 8 GB pins. §18 P6a closed, §18 P7a (owner) and §18 P7b filed | 0.12.12 | — |
-| P8 | local | krea2 basic; on proof the authored graph leaves the bundle | yes | P5 |
+| ~~P8~~ | local | **DONE 2026-09-09 (0.12.13).** krea2 basic + manifest + `workflowTemplate` + hash + a RE-MEASURED block (18 848 MiB / 8 s at 1920x1080, gate unchanged at 24); the authored `AE_LLAMA_KREA2_V1` moved to `tests/fixtures/authored-krea2/` and the three probe scripts that DEFAULTED to it now default to the basic. §18 P8a filed | 0.12.13 | — |
 | P9 | local | H3 basic; on proof the authored graph leaves the bundle | yes | P3, P7 |
 | P10 | local | h3-int8: download the 26 GB encoder, second API file — confirm from the UI source first | yes | P9; 26 GB |
 | P11 | remote | `package-zxp.ps1` `$excludeDirs` += `workflows` | yes | — |
@@ -3982,6 +3983,57 @@ backend, so this changes nothing about that.
 
 Stub-testable end to end: two fake roots, one holding the file, and
 assert no download is attempted. No GPU, no network.
+
+## 18 P8a. Two catalog entries are exempt from the gate rule, because their weights carry no sizes (filed 2026-09-09, local session)
+
+**Found while re-measuring krea2 for §18 P8.** §18 P6's back-fill gave
+`test-model-catalog.js` a rule that can price a gate with no GPU and no
+backend: **`minVramGB` must hold the biggest single weight file the graph
+loads.** It is the check that caught sdxl's 6 GB gate under a 6617 MiB
+checkpoint, and wan22-5b's 8 GB gate under a 9536 MiB diffusion file.
+
+It cannot ask the question of `krea2` or `ltx-small`: both carry
+`sizeMB: null`, an empty `urls: []`, and `files:` as a list of BARE
+NAMES with no sizes attached, so there is nothing for the rule to compare
+a gate against. It prices off `urls[].sizeMB` and returns early
+(`if (!sizes.length ...) return;`) when there is none.
+
+That skip was SILENT until tonight, which is the repo's own recurring
+defect — a check that answers "this is fine" and "there is nothing here
+to check" identically. **Half of this is already done (0.12.13):**
+`NO_FILE_SIZES_TO_CHECK = ["krea2", "ltx-small"]` in
+`tests/test-model-catalog.js` now names them and fails in BOTH
+directions, so an entry cannot join them quietly and krea2's seat must go
+the moment its files carry sizes. Negative control run: giving krea2 a
+`urls[]` entry fails four assertions including this one.
+
+What is left is the hole itself, and krea2 is the entry that shows why it
+matters: its weights are **18 109 MiB** (measured off this disk by
+`weight-availability-probe`, three files), its biggest single file is the
+diffusion model, and its gate is 24 GB. It happens to pass. Nothing in
+the repo knows that, and nothing would notice if the gate were edited
+to 8.
+
+**The work, in order:**
+
+1. Give `krea2`'s three files their real sizes. The shape question comes
+   first and it is not cosmetic: every other entry carries sizes on
+   `urls[]`, and krea2 has no urls (owner-supplied weights, "download
+   links ship via the update feed once pinned"). So either `files[]`
+   grows from `["name.safetensors", ...]` to
+   `[{file, sizeMB, dir}, ...]`, or the entry gains a parallel map.
+   Whichever is chosen, `tools.js` `genNeedMBFor` / `catalogModelStatus`
+   and `tests/test-workflow-bundle.js` read `files` today — check every
+   reader before changing the shape.
+2. Then delete krea2's seat in the rule's skip list, so the entry is
+   policed like the others.
+3. `ltx-small` KEEPS its seat in `NO_FILE_SIZES_TO_CHECK`: owner Q1
+   postponed it, it ships no graph and no urls, and an entry with no
+   files cannot have a biggest file. It is the permanent case; krea2 is
+   the accidental one.
+
+No GPU, no backend, no AE — the sizes are already on this machine and
+`weight-availability-probe` prints them. Repo-only after that.
 
 ## 18 P3a. H3's authored default is a >15-minute render, and that is what a
 user who names no length gets (filed 2026-09-09, local session)

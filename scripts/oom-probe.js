@@ -67,7 +67,7 @@ function argValue(name, dflt) {
 }
 const OPT = {
   model: argValue("--model", null),
-  workflow: argValue("--workflow", "AE_LLAMA_KREA2_V1"),
+  workflow: argValue("--workflow", "AE_LLAMA_KREA2_T2I_V1"),
   // Measured on this machine: pass one alone is 2 m 19 s at this size and
   // pass two runs at 92 s/it, so no timeout under ~10 minutes can be met.
   width: parseInt(argValue("--width", "4096"), 10),

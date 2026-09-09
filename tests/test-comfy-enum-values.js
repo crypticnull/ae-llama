@@ -105,16 +105,43 @@ ok(checked > 0,
  * reintroduces res_2s fails HERE with the story attached rather than in a
  * buyer's render. */
 const krea = templates.filter((t) => /KREA2/i.test(t.file))[0];
-ok(!!krea, "the KREA2 template is present");
+ok(!!krea, "a KREA2 template is shipped");
 if (krea) {
-  const n278 = krea.graph["278"];
+  const picks = Object.keys(krea.graph).filter(
+    (id) => krea.graph[id].class_type === "KSamplerSelect");
+  ok(picks.length > 0,
+    "the shipped KREA2 template still chooses its sampler with a " +
+    "KSamplerSelect, which is the node this regression is about — has: " +
+    Object.keys(krea.graph).map((id) => krea.graph[id].class_type).join(", "));
+  picks.forEach(function (id) {
+    ok(krea.graph[id].inputs.sampler_name !== "res_2s",
+      "shipped KREA2 node " + id + " is not on res_2s — that is a RES4LYF " +
+      "value the shipped backend does not have, and it stops the graph at " +
+      "validation");
+  });
+}
+
+/* The AUTHORED graph is no longer shipped (WORKPLAN 18 P8 replaced the krea2
+ * entry's template with the core-only AE_LLAMA_KREA2_T2I_V1), so the loop
+ * above no longer reaches it — but it is still checked in, still the expected
+ * output of scripts/adapt-workflow.js, and a re-export from the author's
+ * machine is still the exact event that put res_2s in the repo. Pin it where
+ * it lives now, or this regression quietly stops being tested. */
+const AUTHORED = path.join(ROOT, "tests", "fixtures", "authored-krea2",
+                           "AE_LLAMA_KREA2_V1.json");
+ok(fs.existsSync(AUTHORED),
+  "the authored KREA2 graph is still checked in at " + AUTHORED +
+  " — see that folder's README for why it is a fixture and not a template");
+if (fs.existsSync(AUTHORED)) {
+  const authored = JSON.parse(fs.readFileSync(AUTHORED, "utf8"));
+  const n278 = authored["278"];
   ok(n278 && n278.class_type === "KSamplerSelect",
-    "KREA2 node 278 is still the KSamplerSelect this regression is about");
+    "authored KREA2 node 278 is still the KSamplerSelect this regression " +
+    "is about");
   ok(n278 && n278.inputs.sampler_name !== "res_2s",
-    "KREA2 node 278 is not back on res_2s — that is a RES4LYF value the " +
-    "shipped backend does not have, and it stops the graph at validation. " +
-    "The manifest's panelAdaptation.setInputs is where the substitution " +
-    "lives; re-run scripts/adapt-workflow.js after any re-export");
+    "authored KREA2 node 278 is not back on res_2s. The manifest's " +
+    "panelAdaptation.setInputs is where the substitution lives; re-run " +
+    "scripts/adapt-workflow.js after any re-export");
 }
 
 /* --------------------------------------- 4. the guard the harvester needs

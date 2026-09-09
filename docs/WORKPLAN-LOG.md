@@ -22346,3 +22346,165 @@ in `%APPDATA%\AE-Llama\generated\` from chat-probe.
 
 **Bumped 0.12.11 -> 0.12.12** — `extension/` changed (two new bundled
 template files, plus `version.js` and `tiers.js`), so the bump is owed.
+
+## 2026-09-09 (local session) — krea2 has a core-only graph that renders, and the catalog was pricing a job the buyer no longer gets (NEXT UP 6 / §18 P8, 0.12.13)
+
+**Item: NEXT UP 6 (§18 P8), the "START HERE" row.** Harness green first —
+`run-ae-selftest.ps1` **770/770** — so the list applied. Gate 0:
+`from=file saved=true dataRoot=C:\Users\mr\AppData\Roaming\AE-Llama`.
+Managed backend already up on 8288 from the previous pass; all three krea2
+weights already on disk (18 109 MiB), so nothing had to be downloaded.
+
+**What shipped.** `extension/comfy-workflows/AE_LLAMA_KREA2_T2I_V1.json`
+plus its manifest: twelve core nodes, which are the AUTHORED graph's own
+FIRST pass and nothing else — UNETLoader / CLIPLoader / VAELoader /
+CLIPTextEncode / EmptyLatentImage / KSamplerSelect / BasicScheduler /
+BasicGuider / RandomNoise / SamplerCustomAdvanced / VAEDecode / SaveImage.
+Every input re-confirmed against the RUNNING backend's `/object_info`
+rather than from memory; that mattered more here than for sd15/sdxl,
+because seven of these twelve classes are not in
+`scripts/comfy-node-defs.json` at all.
+
+Four things were dropped and each has a reason written into the manifest:
+
+- **the four custom node packs** — rgthree's Power Lora Loader / Any
+  Switch / Image Comparer, `easy cleanGpuUsed`, `SesquiLatentUpscale`.
+  This is the whole point of the item: a buyer's backend has none of
+  them. The LoRA loader and the Any Switch were pure pass-throughs here
+  (no LoRA enabled, enhancer bypassed), so the basic wires MODEL and CLIP
+  straight from the loaders.
+- **the second sampler pass** — a 1.6x `SesquiLatentUpscale` re-sampled at
+  denoise 0.25. A second model pass is not a basic.
+- **both `ConditioningZeroOut` nodes (260, 272)** — and this one is worth
+  recording because it is not obvious from the picture: their outputs go
+  NOWHERE. `BasicGuider` takes one `conditioning` input and no negative
+  at all, so those two nodes were already dead ends in the authored
+  graph. Dropping them changes no pixel.
+- **the `panelAdaptation.setInputs`** the authored file needed. Its
+  SaveImage prefix was an absolute path on one machine; this template is
+  authored relative and needs no adaptation at all.
+
+Kept, and measured rather than inherited: **sampler `exp_heun_2_x0`**,
+scheduler `simple`, 4 steps, denoise 1. §17f rendered all six candidates
+at one seed on this backend on 2026-09-09 and found three of the four
+originally shortlisted unusable at 4 steps; krea2 turbo is a distilled
+model, so 4 steps is its design point. Latent **1920x1080**: the authored
+graph's own first-pass size, the one size this model is already measured
+to render at here, and the aspect the panel imports into.
+
+**The chain, all of it green.**
+
+    weight-availability-probe        3 weight slots, 0 unloadable; 5 enums, 0 missing
+    comfy-probe --no-ae 768x768      rendered, 10s, output looks like the prompt
+    catalog-vram-probe --entry krea2 run 1: idle 3234 -> peak 22082, delta 18848 MiB, 8s
+                                     run 2: delta 18560 MiB, 8s  (288 MiB apart)
+    comfy-probe --workflow           all verdicts incl. AE imported it at 768x768
+    chat-probe --steps 1,13          pass, 2/2, 4 rounds, 1920x1080 into Probe Room
+    86 stubbed test files            all green
+    run-ae-selftest.ps1              770/770
+
+**THE FINDING, and it is the reason the item could not stop at "add a
+template": swapping an entry's graph silently invalidates its
+measurement, and nothing in the repo could say so.** krea2's catalog block
+read `measuredVramMB: 24160, measuredSeconds: 32, measuredAt: "3072x1728
+(the template's authored size)"` — taken 2026-08-30 on the AUTHORED
+two-pass graph. The moment `workflowTemplate` moved to the basic, every
+one of those numbers described a job the panel no longer runs: 3072x1728
+is the second pass's output, and the basic has no second pass. Re-measured
+on the managed backend, `/free` before each run: **18 848 and 18 560 MiB,
+8 s each, 1920x1080** — so the basic is 5.3 GiB and 24 s cheaper.
+
+**`minVramGB` stays 24, and the smaller reading does NOT lower it.** The
+three weights are 18 109 MiB and all three are resident, so the floor is
+the weights, not the frame; the next standard card down is 16 GB, which
+cannot hold an 18.4 GiB delta, and 0.10.14 measured that this backend
+grinds rather than OOMs. A gate move here would have been the sdxl
+finding run backwards.
+
+**Stub back-fill, verified by reintroducing the bug — and the hole it
+closes is a real asymmetry.** `test-model-catalog.js` already read a VIDEO
+entry's authored clip LENGTH out of its own shipped template rather than
+trusting version.js (§18 P3a/P7). The PIXEL size — every image entry's,
+and the video entries' too — was taken on trust from a string. So the new
+rule reads the literal `width`+`height` off the template's own latent
+node (the same pair `injectParams` overwrites) and requires `measuredAt`
+to repeat it. Negative controls: restoring krea2's old `3072x1728` fails
+with *"measuredAt names the size its OWN shipped template renders
+(1920x1080 ...)"*, and re-labelling sdxl's 1024x1024 as 512x512 fails the
+same way. A template with no literal width+height pair is SKIPPED and
+said to be — H3 is one, its size arrives as MEGAPIXELS through a
+ResolutionSelector — and so is a graph whose nodes disagree on the size,
+because guessing which one was measured is exactly the trust the rule
+exists to remove.
+
+**The authored graph left the bundle, and did not get deleted.**
+`AE_LLAMA_KREA2_V1.json` + manifest moved to
+`tests/fixtures/authored-krea2/`, with a README naming the five suites
+that use it and what each proves that no core-only template can:
+`test-workflow-adapt` (it IS the converter's expected output, subgraph
+expansion and all), `test-comfy-inject` (the case where the generic
+encoder walk finds NOTHING and only a manifest reaches the text),
+`test-comfy-optional-nodes` (a pack node with two outputs from two
+different inputs), `test-comfy-output-size` (a graph whose output size is
+not its latent size), `test-weight-availability` (three weights, three
+loaders). `test-comfy-enum-values`' `res_2s` regression moved with it and
+now pins BOTH sides — the shipped krea2 template's KSamplerSelect by
+whatever node id it has, and the authored fixture's node 278, because a
+re-export from the author's machine is still the exact event that put
+`res_2s` in the repo.
+
+**Verified, not assumed: the owner's installed copy survives.** The claim
+in §18 was that `ensureDataDirs` seeds, refreshes and preserves and has no
+delete path. `chat-probe`'s own `comfy_list_workflows` this run answered
+`["AE_LLAMA_H3_I2V_V1","AE_LLAMA_KREA2_T2I_V1","AE_LLAMA_KREA2_V1",...]`
+— the authored graph is still there in `%APPDATA%`, one pass after it left
+the bundle.
+
+**Behaviour change worth knowing about, and it is the designed order, not
+a defect.** A nameless image request on this 32 GB card now resolves to
+krea2, where the §18 P5 entry recorded sd15. That is §18's own ordering
+working as written — `entryFits`, then weights on disk, then HIGHEST
+`minVramGB` — and krea2 (gate 24) is now the biggest image entry that
+both fits and ships a runnable graph, where before it shipped a graph
+needing four packs. The cost is visible in the transcript: the panel
+pauses the chat model for 17.7 GB of generation weights. On a smaller
+card the same rule still lands on sdxl or sd15.
+
+**Three probe scripts DEFAULTED to the graph that left**
+(`handoff-probe`, `oom-probe`, `output-size-probe` all carried
+`argValue("--workflow", "AE_LLAMA_KREA2_V1")`), so each would have failed
+on its next bare invocation. Repointed at the basic.
+
+**ROOT FINDING FOR A LATER PASS — §18 P8a, filed in WORKPLAN.** §18 P6's
+"a gate must hold its biggest weight file" rule cannot ask the question of
+`krea2` or `ltx-small`: both have `urls: []`, so it returns early. That
+skip was SILENT, which is this repo's recurring defect — a check that
+answers "fine" and "nothing to check" identically. Half is done here:
+`NO_FILE_SIZES_TO_CHECK = ["krea2", "ltx-small"]` names them and fails in
+both directions (negative control: give krea2 a sized url and four
+assertions go red). The rest is giving krea2's three files their real
+sizes, which is a SHAPE decision — every other entry carries sizes on
+`urls[]` and krea2 has none, listing bare names in `files` — so it needs a
+reader audit (`genNeedMBFor`, `catalogModelStatus`, `test-workflow-bundle`)
+rather than an edit.
+
+**Verification.** All 86 stubbed test files pass. Two went red on the way
+and both were this item's own consequence, not collateral:
+`test-comfy-enum-values` pinned node 278 of "the KREA2 template" (now a
+different file) and `test-workflow-rows` built its fixture under the old
+template name while the catalog pointed at the new one. Both were fixed by
+following the change, not by loosening. `node
+scripts/workflow-hash-history.js` recorded 2 new hashes; the authored
+graph's hashes STAY in that file forever, which is what tells
+`ensureDataDirs` an installed copy is an unedited shipped one. Harness
+re-run after every change: **770/770 PASSED**. Bumped 0.12.12 ->
+**0.12.13** (`extension/` changed: version.js, two new bundle files, one
+removed, the hash history). `capability-report.js` regenerated (no diff).
+
+**State left behind.** AE running and untouched, project not closed —
+`chat-probe` and `comfy-probe` removed every item they made. Managed
+backend UP on 8288, queue empty. Evidence files left on disk by the
+probes' own design: `AELlama_KREA2__00001_.png` / `__00004_.png` in
+`logs/comfy-probe/`, `__00002_.png` / `__00003_.png` in
+`logs/catalog-vram/`, and
+`%APPDATA%\AE-Llama\generated\AELlama_KREA2__00005_.png` from chat-probe.

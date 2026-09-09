@@ -45,6 +45,12 @@
     ],
     "AE_LLAMA_WAN22_5B_T2V_V1.manifest.json": [
       "c23760807adeff3c1e29da27b829898741a21387"
+    ],
+    "AE_LLAMA_KREA2_T2I_V1.json": [
+      "a47d8e158de522d0e221630eabd6789854b3d8c1"
+    ],
+    "AE_LLAMA_KREA2_T2I_V1.manifest.json": [
+      "41f61fd86bbef48bca37e7b05a8832a40c2bfae4"
     ]
   }
 }

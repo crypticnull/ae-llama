@@ -30,7 +30,7 @@
  *
  *   node scripts/handoff-probe.js
  *   node scripts/handoff-probe.js --model <path.gguf>   # chat model to use
- *   node scripts/handoff-probe.js --workflow AE_LLAMA_KREA2_V1
+ *   node scripts/handoff-probe.js --workflow AE_LLAMA_KREA2_T2I_V1
  *   node scripts/handoff-probe.js --width 768 --height 768
  *   node scripts/handoff-probe.js --rounds a            # a, b or ab
  *   node scripts/handoff-probe.js --override 8          # round B's budget
@@ -60,7 +60,7 @@ function argValue(name, dflt) {
 }
 const OPT = {
   model: argValue("--model", null),
-  workflow: argValue("--workflow", "AE_LLAMA_KREA2_V1"),
+  workflow: argValue("--workflow", "AE_LLAMA_KREA2_T2I_V1"),
   prompt: argValue("--prompt", null),
   width: parseInt(argValue("--width", "768"), 10),
   height: parseInt(argValue("--height", "768"), 10),

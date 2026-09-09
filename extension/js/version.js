@@ -8,7 +8,7 @@
   "use strict";
 
   global.AELL = {
-    VERSION: "0.12.12",
+    VERSION: "0.12.13",
 
     // Release channel label, shown wherever the version is displayed.
     // Purely cosmetic — update comparisons use the numeric VERSION only.
@@ -81,8 +81,9 @@
     // bug. All twelve URLs were alive on 2026-08-30 and every size below is
     // that day's measurement (x-linked-size, or the file already on this
     // machine); `measured` is about the VRAM figure, which is measured
-    // for `krea2` (2026-08-30) and `minimax-h3` (2026-09-09) and still a
-    // guess for everything that ships no graph.
+    // for every entry that ships a graph (krea2, sd15, sdxl, wan22-5b and
+    // minimax-h3, all re-measured on the managed backend) and still a
+    // guess only for the two that ship none.
     // An entry with measured: true carries the reading that earned it --
     // measuredVramMB (nvidia-smi peak minus an established idle floor),
     // measuredSeconds, measuredAt (the SIZE it was measured at, which is
@@ -167,26 +168,37 @@
       {
         name: "krea2",
         label: "Krea 2 (turbo)",
-        // MEASURED 2026-08-30 on an RTX 5090 (32 607 MiB) by
-        // scripts/catalog-vram-probe.js, running the SHIPPED
-        // AE_LLAMA_KREA2_V1 through the panel's own comfy_generate with
-        // nvidia-smi streaming at 250 ms. Two runs at the template's
-        // AUTHORED size, different seeds: 24 036 and 24 160 MiB over an
-        // established idle floor, 32 s each. A third at a 1024 latent
-        // (1640x1640 out, the template upscales 1.6x) still cost
-        // 20 800 MiB in 18 s -- the floor is the weights, not the frame.
+        // RE-MEASURED 2026-09-09 on an RTX 5090 (32 607 MiB) by
+        // scripts/catalog-vram-probe.js, because the graph this entry
+        // ships CHANGED: AE_LLAMA_KREA2_V1 (the owner's authored two-pass
+        // graph, four custom node packs) left the bundle and
+        // AE_LLAMA_KREA2_T2I_V1 (core-only, one pass) replaced it --
+        // WORKPLAN 18 P8. A measured block that describes a graph the
+        // panel no longer ships is worse than none, so the reading was
+        // retaken on the MANAGED backend a buyer gets (ComfyUI 0.34.0,
+        // port 8288), nvidia-smi streaming at 250 ms, /free before each
+        // run so the weights come back cold. Two runs at one seed:
+        // 18 848 and 18 560 MiB over an established idle floor, 8 s each,
+        // 1920x1080 out. The higher is published, as krea2's own earlier
+        // reading and H3's and Wan's were.
         //
-        // minVramGB was 12, which the three weights alone disprove: they
-        // are 18 109 MiB and all three are resident. A 12 GB card must
-        // page ~6 GiB of weights every step, and 0.10.14 measured what
-        // this backend does when a job outgrows the card -- it does not
-        // OOM, it GRINDS. So 24 is the smallest card that holds the job
-        // the panel actually ships.
+        // The previous reading was 24 160 MiB / 32 s at 3072x1728 -- the
+        // authored graph's second pass, a 1.6x latent upscale re-sampled
+        // at denoise 0.25, which the basic does not do. So the basic is
+        // 5.3 GiB and 24 s cheaper for one pass at 1920x1080.
+        //
+        // minVramGB stays 24 and the smaller reading does NOT lower it.
+        // The three weights are 18 109 MiB and all three are resident, so
+        // the floor here is the weights, not the frame: the next standard
+        // card down is 16 GB, which cannot hold 18.4 GiB of delta, and
+        // 0.10.14 measured what this backend does when a job outgrows the
+        // card -- it does not OOM, it GRINDS.
         kind: "image", sizeMB: null, minVramGB: 24, measured: true,
-        measuredVramMB: 24160, measuredSeconds: 32,
-        measuredAt: "3072x1728 (the template's authored size), seed 4242",
-        measuredOn: "NVIDIA GeForce RTX 5090, ComfyUI 0.32.0, 2026-08-30",
-        workflowTemplate: "AE_LLAMA_KREA2_V1",
+        measuredVramMB: 18848, measuredSeconds: 8,
+        measuredAt: "1920x1080 (the template's authored latent), seed 12345",
+        measuredOn: "NVIDIA GeForce RTX 5090, ComfyUI 0.34.0 (managed), " +
+                    "2026-09-09",
+        workflowTemplate: "AE_LLAMA_KREA2_T2I_V1",
         files: ["krea2_turbo_int8_convrot.safetensors",
                 "qwen3vl_4b_fp8_scaled.safetensors",
                 "qwen_image_vae.safetensors"],

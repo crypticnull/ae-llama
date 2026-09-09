@@ -57,7 +57,7 @@ const OPT = {
   height: parseInt(argValue("--height", "512"), 10),
   seed: parseInt(argValue("--seed", "424242"), 10),
   timeout: parseInt(argValue("--timeout", "900"), 10),
-  workflow: argValue("--workflow", "AE_LLAMA_KREA2_V1"),
+  workflow: argValue("--workflow", "AE_LLAMA_KREA2_T2I_V1"),
   prompt: argValue("--prompt", "a plain grey studio backdrop, soft light")
 };
 

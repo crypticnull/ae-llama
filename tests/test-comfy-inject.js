@@ -229,7 +229,10 @@ assert(g["138"].inputs.prompt === "(neutral example)",
 // render would have used the template's placeholder text.
 
 {
-  const kWf = path.join(REPO, "extension", "comfy-workflows",
+  // The owner's authored graph, moved out of the shipped bundle by
+  // WORKPLAN 18 P8 and kept as a fixture (tests/fixtures/authored-krea2/
+  // README.md). It is still the only graph that proves this case.
+  const kWf = path.join(REPO, "tests", "fixtures", "authored-krea2",
                         "AE_LLAMA_KREA2_V1.json");
   const kMf = JSON.parse(fs.readFileSync(
     kWf.replace(/\.json$/, ".manifest.json"), "utf8"));

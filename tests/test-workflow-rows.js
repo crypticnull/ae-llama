@@ -42,7 +42,7 @@ function put(name, graph, manifest) {
 }
 const NODE = { "1": { class_type: "CheckpointLoaderSimple",
                       inputs: { ckpt_name: "real.safetensors" } } };
-put("AE_LLAMA_KREA2_V1", NODE, { kind: "image", catalogEntry: "krea2",
+put("AE_LLAMA_KREA2_T2I_V1", NODE, { kind: "image", catalogEntry: "krea2",
                                  models: [] });
 put("AE_LLAMA_H3_I2V_V1", NODE,
     { kind: "video", catalogEntry: "minimax-h3", models: [],
@@ -98,7 +98,7 @@ function rows(patch, gpu) {
   const r = rows();
   assert(!r["example-txt2img"],
          "the format example is not offered a row");
-  assert(!!r["AE_LLAMA_KREA2_V1"] && !!r["AE_LLAMA_H3_I2V_V1"],
+  assert(!!r["AE_LLAMA_KREA2_T2I_V1"] && !!r["AE_LLAMA_H3_I2V_V1"],
          "the real templates are");
   assert(!!r["my-own-export"],
          "and so is a user's own export with no manifest — the bundle " +
@@ -108,12 +108,12 @@ function rows(patch, gpu) {
 // 2. Kind, the catalog link and the label a user recognises.
 {
   const r = rows();
-  assert(r["AE_LLAMA_KREA2_V1"].kind === "image" &&
+  assert(r["AE_LLAMA_KREA2_T2I_V1"].kind === "image" &&
          r["AE_LLAMA_H3_I2V_V1"].kind === "video",
          "each row carries its kind");
-  assert(r["AE_LLAMA_KREA2_V1"].label === "Krea 2 (turbo)",
+  assert(r["AE_LLAMA_KREA2_T2I_V1"].label === "Krea 2 (turbo)",
          "and the catalog's own label, not the file name",
-         r["AE_LLAMA_KREA2_V1"].label);
+         r["AE_LLAMA_KREA2_T2I_V1"].label);
   assert(r["my-own-export"].kind === null &&
          r["my-own-export"].label === null,
          "an undescribed export claims neither");
@@ -141,7 +141,7 @@ function rows(patch, gpu) {
 //    difference between "this will not run" and "this is not installed".
 {
   const r = rows();
-  const krea = r["AE_LLAMA_KREA2_V1"];
+  const krea = r["AE_LLAMA_KREA2_T2I_V1"];
   assert(krea.weights && krea.weights.total === 3,
          "the row knows how many model files its entry names",
          JSON.stringify(krea.weights));
@@ -166,15 +166,15 @@ function rows(patch, gpu) {
 //    template arriving in an update needs no settings migration.
 {
   const plain = rows();
-  assert(plain["AE_LLAMA_KREA2_V1"].enabled === true &&
-         plain["AE_LLAMA_KREA2_V1"].enhance === true,
+  assert(plain["AE_LLAMA_KREA2_T2I_V1"].enabled === true &&
+         plain["AE_LLAMA_KREA2_T2I_V1"].enhance === true,
          "absent from both maps means ON");
 
   const off = rows({
-    comfyWorkflows: { AE_LLAMA_KREA2_V1: { enabled: false } },
+    comfyWorkflows: { AE_LLAMA_KREA2_T2I_V1: { enabled: false } },
     comfyEnhance: { AE_LLAMA_H3_I2V_V1: false }
   });
-  assert(off["AE_LLAMA_KREA2_V1"].enabled === false,
+  assert(off["AE_LLAMA_KREA2_T2I_V1"].enabled === false,
          "a recorded opt-out disables that row");
   assert(off["AE_LLAMA_H3_I2V_V1"].enhance === false,
          "and the enhancement opt-out is independent of it");
@@ -187,7 +187,7 @@ function rows(patch, gpu) {
 //    default that the resolver would not pick.
 {
   const r = rows();
-  assert(r["AE_LLAMA_KREA2_V1"].baseline === true,
+  assert(r["AE_LLAMA_KREA2_T2I_V1"].baseline === true,
          "the graph its catalog entry points at is marked as the default");
   assert(r["my-own-export"].baseline === false,
          "and a template no entry points at is not");

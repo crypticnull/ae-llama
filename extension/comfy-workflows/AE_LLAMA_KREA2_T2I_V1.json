@@ -1,0 +1,68 @@
+{
+  "1": {
+    "class_type": "UNETLoader",
+    "inputs": { "unet_name": "krea2_turbo_int8_convrot.safetensors", "weight_dtype": "default" },
+    "_meta": { "title": "Load Diffusion Model (Krea 2 turbo)" }
+  },
+  "2": {
+    "class_type": "CLIPLoader",
+    "inputs": { "clip_name": "qwen3vl_4b_fp8_scaled.safetensors", "device": "default", "type": "krea2" },
+    "_meta": { "title": "Load CLIP (krea2)" }
+  },
+  "3": {
+    "class_type": "VAELoader",
+    "inputs": { "vae_name": "qwen_image_vae.safetensors" },
+    "_meta": { "title": "Load VAE" }
+  },
+  "4": {
+    "class_type": "CLIPTextEncode",
+    "inputs": { "clip": ["2", 0], "text": "a red toy car on a white table in daylight" },
+    "_meta": { "title": "Positive" }
+  },
+  "5": {
+    "class_type": "EmptyLatentImage",
+    "inputs": { "batch_size": 1, "height": 1080, "width": 1920 },
+    "_meta": { "title": "Empty Latent Image" }
+  },
+  "6": {
+    "class_type": "KSamplerSelect",
+    "inputs": { "sampler_name": "exp_heun_2_x0" },
+    "_meta": { "title": "KSamplerSelect" }
+  },
+  "7": {
+    "class_type": "BasicScheduler",
+    "inputs": { "denoise": 1, "model": ["1", 0], "scheduler": "simple", "steps": 4 },
+    "_meta": { "title": "BasicScheduler" }
+  },
+  "8": {
+    "class_type": "BasicGuider",
+    "inputs": { "conditioning": ["4", 0], "model": ["1", 0] },
+    "_meta": { "title": "BasicGuider" }
+  },
+  "9": {
+    "class_type": "RandomNoise",
+    "inputs": { "noise_seed": 12345 },
+    "_meta": { "title": "RandomNoise" }
+  },
+  "10": {
+    "class_type": "SamplerCustomAdvanced",
+    "inputs": {
+      "guider": ["8", 0],
+      "latent_image": ["5", 0],
+      "noise": ["9", 0],
+      "sampler": ["6", 0],
+      "sigmas": ["7", 0]
+    },
+    "_meta": { "title": "SamplerCustomAdvanced" }
+  },
+  "11": {
+    "class_type": "VAEDecode",
+    "inputs": { "samples": ["10", 0], "vae": ["3", 0] },
+    "_meta": { "title": "VAE Decode" }
+  },
+  "12": {
+    "class_type": "SaveImage",
+    "inputs": { "filename_prefix": "AE-Llama/KREA2/%date:yyyy-MM-dd%/AELlama_KREA2_", "images": ["11", 0] },
+    "_meta": { "title": "Save Image" }
+  }
+}

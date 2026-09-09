@@ -169,7 +169,9 @@ const Comfy = comfyWindow.Comfy;
 
 const WF_DIR = path.join(REPO, "extension", "comfy-workflows");
 const H3_FILE = path.join(WF_DIR, "AE_LLAMA_H3_I2V_V1.json");
-const K_FILE = path.join(WF_DIR, "AE_LLAMA_KREA2_V1.json");
+// Moved out of the bundle by WORKPLAN 18 P8 (fixture README says why).
+const K_FILE = path.join(REPO, "tests", "fixtures", "authored-krea2",
+                         "AE_LLAMA_KREA2_V1.json");
 const h3Graph = () => JSON.parse(fs.readFileSync(H3_FILE, "utf8"));
 const kGraph = () => JSON.parse(fs.readFileSync(K_FILE, "utf8"));
 const h3Manifest = JSON.parse(fs.readFileSync(
